@@ -114,6 +114,14 @@ def _server_proxy_base() -> str:
     return (settings.auth_server_base or "").strip().rstrip("/") or _LOBSTER_SERVER_PUBLIC
 
 
+def _server_api_url(path: str) -> str:
+    base = _server_proxy_base()
+    p = str(path or "").strip()
+    if not p.startswith("/"):
+        p = f"/{p}"
+    return f"{base}{p}"
+
+
 def _installation_id_from_request(request: Request, user_id: int) -> str:
     xi = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip()
     return xi or f"lobster-internal-{int(user_id)}"
@@ -554,7 +562,7 @@ async def _generate_image_comfly_legacy(request: Request, user: _ServerUser, pro
     return image_url
 
 
-async def _generate_image(
+async def _generate_image_legacy_mcp(
     request: Request,
     user: _ServerUser,
     prompt: str,
@@ -674,6 +682,177 @@ async def _generate_image(
     except Exception as exc:
         logger.warning(
             "[creative_film_studio] sutui image generation exception user_id=%s model=%s err=%s",
+            user.id,
+            payload["model"],
+            str(exc)[:500],
+        )
+        raise HTTPException(status_code=502, detail=_public_image_generation_error()) from exc
+
+
+async def _generate_image(
+    request: Request,
+    user: _ServerUser,
+    prompt: str,
+    model: str,
+    aspect_ratio: str,
+    reference_image_urls: List[str] | None = None,
+) -> str:
+    token = _raw_token_from_request(request)
+    if not token:
+        raise HTTPException(status_code=401, detail="需要登录后才能生成图片")
+
+    ratio = _image_size_for_sutui(aspect_ratio)
+    final_prompt = (
+        f"{prompt.strip()}\n\n"
+        f"画面比例：{_image_ratio_instruction(aspect_ratio)}。\n"
+        "用于内容平台首图或短视频封面，主体明确，商业质感，真实可信，"
+        "不要文字、不要水印、不要按钮、不要二维码。"
+    )
+    payload: Dict[str, Any] = {
+        "prompt": final_prompt,
+        "model": _sutui_image_model(model),
+        "image_size": ratio,
+        "aspect_ratio": ratio,
+        "size": _image_pixel_size_for_sutui(aspect_ratio),
+        "num_images": 1,
+        "n": 1,
+        "quality": "high",
+        "response_format": "url",
+    }
+    refs = _clean_reference_image_urls(reference_image_urls or [], limit=8)
+    if refs:
+        payload["image_url"] = refs[0]
+        payload["image"] = refs[0]
+        payload["image_urls"] = refs
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+        "X-Installation-Id": _installation_id_from_request(request, user.id),
+    }
+    timeout = httpx.Timeout(
+        _SUTUI_IMAGE_SUBMIT_TIMEOUT_SECONDS,
+        connect=45.0,
+        read=_SUTUI_IMAGE_POLL_TIMEOUT_SECONDS,
+        write=120.0,
+        pool=60.0,
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            submit_resp = await client.post(
+                _server_api_url("/api/comfly-proxy/v1/images/generations/start"),
+                json=payload,
+                headers=headers,
+            )
+            if submit_resp.status_code >= 400:
+                detail = _image_response_error_detail(submit_resp)
+                logger.warning(
+                    "[creative_film_studio] server image proxy submit failed user_id=%s model=%s http=%s err=%s",
+                    user.id,
+                    payload["model"],
+                    submit_resp.status_code,
+                    detail[:500],
+                )
+                raise HTTPException(status_code=502, detail=_public_image_generation_error())
+            try:
+                submit_data = submit_resp.json() if submit_resp.content else {}
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=_public_image_generation_error()) from exc
+
+            poll_path = str(submit_data.get("poll_path") or "").strip()
+            job_id = str(submit_data.get("job_id") or "").strip()
+            if not submit_data.get("async") or not poll_path or not job_id:
+                image_url = _extract_image_url(submit_data)
+                if image_url:
+                    return image_url
+                logger.warning(
+                    "[creative_film_studio] server image proxy returned no async job user_id=%s model=%s body=%s",
+                    user.id,
+                    payload["model"],
+                    str(submit_data)[:800],
+                )
+                raise HTTPException(status_code=502, detail=_public_image_generation_error())
+
+            logger.info(
+                "[creative_film_studio] server image proxy job submitted user_id=%s model=%s job_id=%s refs=%s",
+                user.id,
+                payload["model"],
+                job_id,
+                len(refs),
+            )
+            deadline = asyncio.get_running_loop().time() + _SUTUI_IMAGE_SUBMIT_TIMEOUT_SECONDS
+            interval = 2.0
+            last_poll_error = ""
+            while asyncio.get_running_loop().time() < deadline:
+                try:
+                    poll_resp = await client.get(_server_api_url(poll_path), headers=headers)
+                except (httpx.TimeoutException, httpx.RequestError) as exc:
+                    last_poll_error = str(exc)
+                    logger.warning(
+                        "[creative_film_studio] server image proxy poll retry user_id=%s model=%s job_id=%s err=%s",
+                        user.id,
+                        payload["model"],
+                        job_id,
+                        last_poll_error[:300],
+                    )
+                    await asyncio.sleep(5)
+                    continue
+                if poll_resp.status_code >= 400:
+                    last_poll_error = _image_response_error_detail(poll_resp)
+                    logger.warning(
+                        "[creative_film_studio] server image proxy poll failed user_id=%s model=%s job_id=%s http=%s err=%s",
+                        user.id,
+                        payload["model"],
+                        job_id,
+                        poll_resp.status_code,
+                        last_poll_error[:500],
+                    )
+                    raise HTTPException(status_code=502, detail=_public_image_generation_error())
+                try:
+                    poll_data = poll_resp.json() if poll_resp.content else {}
+                except Exception as exc:
+                    raise HTTPException(status_code=502, detail=_public_image_generation_error()) from exc
+                status = str(poll_data.get("status") or "").strip().lower()
+                if status == "completed":
+                    result = poll_data.get("result") if isinstance(poll_data.get("result"), dict) else poll_data
+                    image_url = _extract_image_url(result if isinstance(result, dict) else poll_data)
+                    if image_url:
+                        return image_url
+                    logger.warning(
+                        "[creative_film_studio] server image proxy completed without image user_id=%s model=%s job_id=%s body=%s",
+                        user.id,
+                        payload["model"],
+                        job_id,
+                        str(poll_data)[:800],
+                    )
+                    raise HTTPException(status_code=502, detail=_public_image_generation_error())
+                if status == "failed":
+                    logger.warning(
+                        "[creative_film_studio] server image proxy job failed user_id=%s model=%s job_id=%s err=%s",
+                        user.id,
+                        payload["model"],
+                        job_id,
+                        str(poll_data.get("error") or "")[:500],
+                    )
+                    raise HTTPException(status_code=502, detail=_public_image_generation_error())
+                await asyncio.sleep(interval)
+                interval = min(interval + 1.0, 8.0)
+
+            logger.warning(
+                "[creative_film_studio] server image proxy polling timeout user_id=%s model=%s job_id=%s last_err=%s",
+                user.id,
+                payload["model"],
+                job_id,
+                last_poll_error[:500],
+            )
+            raise HTTPException(status_code=502, detail=_public_image_generation_error())
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning(
+            "[creative_film_studio] server image proxy exception user_id=%s model=%s err=%s",
             user.id,
             payload["model"],
             str(exc)[:500],

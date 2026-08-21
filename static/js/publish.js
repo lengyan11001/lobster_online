@@ -1723,6 +1723,7 @@ function closeAddPublishAccountModal() {
 /** 关闭发布管理下所有全屏遮罩；未关时 fixed 层会盖住主区导致「整页点不动」 */
 function closeAllPublishModals() {
   closeAddPublishAccountModal();
+  _closeAssetPublishModal();
   closeCreatorScheduleModal();
   closeCreatorScheduleTasksModal();
 }
@@ -1827,6 +1828,7 @@ var _assetCreativeGroupsCache = [];
 var _assetCreativeGroupEditingAssetId = '';
 var _currentAssetOrigin = 'generated';
 var _assetPreviewState = null;
+var _assetPublishModalState = { asset: null, accounts: [], busy: false };
 var _assetListCache = {};
 var _assetActiveCacheKey = '';
 var _CONTENT_RECORD_TYPE_OPTIONS = [
@@ -2183,7 +2185,10 @@ function _assetContentActionDefinitions(asset) {
   }
   if (mediaType === 'video') add('generate_avatar', '生成数字人');
   if (momentsRecord && momentsImageCount > 0) add('publish_moments', '发布到朋友圈');
-  if ((mediaType === 'image' || mediaType === 'video' || kind === 'ppt') && String(asset.source_url || asset.open_url || asset.file_url || asset.asset_id || '').trim()) add('publish', '发布');
+  if (
+    (mediaType === 'image' || mediaType === 'video' || kind === 'ppt') &&
+    (_assetPublishExistingAssetId(asset) || _assetPublishUrlCandidate(asset).url)
+  ) add('publish', '发布');
   return actions;
 }
 
@@ -2418,30 +2423,315 @@ function _assetOpenAvatarClone(asset) {
   });
 }
 
-function _assetOpenPublish(asset) {
+function _assetPublishMsgShow(text, isErr) {
+  var msg = document.getElementById('assetPublishModalMsg');
+  if (!msg) return;
+  msg.textContent = text || '';
+  msg.className = 'msg' + (isErr ? ' err' : ' ok');
+  msg.style.display = text ? 'block' : 'none';
+}
+
+function _assetPublishIsOnlineAccount(account) {
+  var status = String(account && account.status || '').trim().toLowerCase();
+  return status === 'active' || status === 'online';
+}
+
+function _assetPublishAccountList(accounts) {
+  return (accounts || []).filter(function(account) {
+    var platform = String(account && account.platform || '').trim();
+    return platform && !ECOMMERCE_PLATFORMS[platform] && PUBLISH_ACCOUNT_PLATFORMS.indexOf(platform) >= 0 && _assetPublishIsOnlineAccount(account);
+  }).sort(function(a, b) {
+    return String(a.platform || '').localeCompare(String(b.platform || '')) || String(a.nickname || '').localeCompare(String(b.nickname || ''));
+  });
+}
+
+function _assetPublishAccountLabel(account) {
+  var platform = PLATFORM_NAMES[account.platform] || account.platform || '平台';
+  var name = account.nickname || ('账号 ' + account.id);
+  var status = STATUS_LABELS[account.status] || account.status || '';
+  return platform + ' · ' + name + (status ? ' · ' + status : '');
+}
+
+function _assetPublishSelectedAccount() {
+  var select = document.getElementById('assetPublishAccountSelect');
+  var id = select ? String(select.value || '') : '';
+  return (_assetPublishModalState.accounts || []).filter(function(account) {
+    return String(account.id) === id;
+  })[0] || null;
+}
+
+function _assetPublishUpdateAccountMeta() {
+  var meta = document.getElementById('assetPublishAccountMeta');
+  var account = _assetPublishSelectedAccount();
+  if (!meta) return;
+  if (!account) {
+    meta.textContent = '';
+    return;
+  }
+  var status = STATUS_LABELS[account.status] || account.status || '';
+  meta.textContent = (PLATFORM_NAMES[account.platform] || account.platform || '平台') +
+    (status ? ' · ' + status : '') +
+    (account.origin_account_id ? ' · 抖音账号' + account.origin_account_id : '');
+}
+
+function _assetPublishRenderAccounts(accounts, preferredAccountId) {
+  var select = document.getElementById('assetPublishAccountSelect');
+  if (!select) return;
+  var list = _assetPublishAccountList(accounts);
+  _assetPublishModalState.accounts = list;
+  if (!list.length) {
+    select.innerHTML = '<option value="">暂无可发布账号</option>';
+    select.disabled = true;
+    _assetPublishUpdateAccountMeta();
+    return;
+  }
+  select.disabled = false;
+  select.innerHTML = list.map(function(account) {
+    return '<option value="' + escapeAttr(String(account.id)) + '">' + escapeHtml(_assetPublishAccountLabel(account)) + '</option>';
+  }).join('');
+  var selected = '';
+  if (preferredAccountId && list.some(function(account) { return String(account.id) === String(preferredAccountId); })) {
+    selected = String(preferredAccountId);
+  } else {
+    var online = list.filter(_assetPublishIsOnlineAccount)[0];
+    selected = String((online || list[0]).id);
+  }
+  select.value = selected;
+  _assetPublishUpdateAccountMeta();
+}
+
+function _assetPublishLoadAccounts(preferredAccountId) {
+  var select = document.getElementById('assetPublishAccountSelect');
+  if (select) {
+    select.disabled = true;
+    select.innerHTML = '<option value="">正在加载账号...</option>';
+  }
+  return fetch(publishLocalBase() + '/api/accounts', { headers: authHeaders() })
+    .then(_publishParseResponse)
+    .then(function(x) {
+      if (!x.ok) throw new Error((x.d && (x.d.detail || x.d.message)) || ('HTTP ' + x.status));
+      var accounts = (x.d && Array.isArray(x.d.accounts)) ? x.d.accounts : [];
+      _allAccounts = accounts;
+      _assetPublishRenderAccounts(accounts, preferredAccountId);
+      return accounts;
+    });
+}
+
+function _assetPublishSourcePrompt(asset) {
+  asset = asset && typeof asset === 'object' ? asset : {};
+  var meta = asset.meta && typeof asset.meta === 'object' ? asset.meta : {};
+  var values = [
+    _assetCreativePrompt(asset),
+    _assetContentText(asset),
+    asset.summary,
+    asset.prompt,
+    meta.prompt,
+    meta.description,
+    asset.title,
+    asset.filename
+  ];
+  for (var i = 0; i < values.length; i += 1) {
+    var text = String(values[i] || '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function _assetPublishMediaTypeFromUrl(url, fallback) {
+  var ext = String(url || '').split('?')[0].split('#')[0].split('.').pop().toLowerCase();
+  if (['mp4', 'mov', 'webm', 'm4v', 'avi', 'mkv'].indexOf(ext) >= 0) return 'video';
+  if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'].indexOf(ext) >= 0) return 'image';
+  var fb = String(fallback || '').toLowerCase();
+  return fb === 'video' ? 'video' : 'image';
+}
+
+function _assetPublishUrlCandidate(asset) {
+  asset = asset && typeof asset === 'object' ? asset : {};
+  if (asset._content_record) {
+    var imageRefs = Array.isArray(asset.image_refs) && asset.image_refs.length ? asset.image_refs : _contentRecordImageRefs(asset);
+    for (var i = 0; i < imageRefs.length; i += 1) {
+      var imageUrl = String(imageRefs[i] && imageRefs[i].image_url || '').trim();
+      if (_isAbsoluteHttpUrl(imageUrl)) return { url: imageUrl, media_type: 'image' };
+    }
+  }
   var mediaType = String(asset.media_type || '').toLowerCase();
-  var url = _assetPrimaryMediaUrl(asset);
-  if (!url && !asset.asset_id) return Promise.reject(new Error('当前记录没有可发布的素材'));
-  if (typeof addChatAttachment === 'function' && asset.asset_id && !asset._content_record) {
-    addChatAttachment(asset.asset_id, mediaType || 'file', !!url);
+  var values = [asset.source_url, asset.file_url, asset.open_url, asset.preview_url, asset.cover_url];
+  for (var j = 0; j < values.length; j += 1) {
+    var url = _resolvePossiblyRelativeMediaUrl(values[j]);
+    if (_isAbsoluteHttpUrl(url)) {
+      return { url: url, media_type: _assetPublishMediaTypeFromUrl(url, mediaType) };
+    }
   }
-  var nav = document.querySelector('.nav-left-item[data-view="chat"]');
-  if (nav) nav.click();
-  var input = document.getElementById('chatInput');
-  if (input) {
-    var text = _assetContentText(asset);
-    var tags = _assetContentTags(asset);
-    input.value = [
-      '请发布这条内容。',
-      asset.title ? '标题：' + asset.title : '',
-      text ? '正文：' + text : '',
-      tags ? '标签：' + tags : '',
-      asset._content_record ? url : ''
-    ].filter(Boolean).join('\n\n');
-    input.dispatchEvent(new Event('input', { bubbles: true }));
-    input.focus();
+  return { url: '', media_type: mediaType === 'video' ? 'video' : 'image' };
+}
+
+function _assetPublishExistingAssetId(asset) {
+  asset = asset && typeof asset === 'object' ? asset : {};
+  if (!asset._content_record) return String(asset.asset_id || '').trim();
+  var imageIds = Array.isArray(asset.image_asset_ids) && asset.image_asset_ids.length
+    ? asset.image_asset_ids
+    : _contentRecordImageAssetIds(asset);
+  if (imageIds.length) return String(imageIds[0] || '').trim();
+  var kind = String(asset.kind || '').toLowerCase();
+  var sourceId = String(asset.source_id || '').trim();
+  if (kind === 'ppt' && sourceId) return sourceId;
+  return '';
+}
+
+function _assetPublishResolveTarget(asset) {
+  var existingId = _assetPublishExistingAssetId(asset);
+  if (existingId) return Promise.resolve({ asset_id: existingId, saved_from_url: false });
+  var candidate = _assetPublishUrlCandidate(asset);
+  if (!candidate.url) return Promise.reject(new Error('当前记录没有可发布的素材 ID 或公网素材链接'));
+  if (candidate.media_type !== 'image' && candidate.media_type !== 'video') {
+    return Promise.reject(new Error('当前记录不是图片或视频素材，不能直接发布'));
   }
-  return Promise.resolve();
+  var sourcePrompt = _assetPublishSourcePrompt(asset);
+  return fetch(publishLocalBase() + '/api/assets/save-url', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+    body: JSON.stringify({
+      url: candidate.url,
+      media_type: candidate.media_type,
+      name: String(asset.filename || asset.title || '').slice(0, 180),
+      prompt: sourcePrompt.slice(0, 2000),
+      tags: _assetContentTags(asset)
+    })
+  }).then(_publishParseResponse).then(function(x) {
+    if (!x.ok) throw new Error((x.d && (x.d.detail || x.d.message)) || ('HTTP ' + x.status));
+    if (!x.d || !x.d.asset_id) throw new Error('素材转存未返回 asset_id');
+    return { asset_id: x.d.asset_id, saved_from_url: true, source_url: candidate.url };
+  });
+}
+
+function _assetPublishSetBusy(busy) {
+  _assetPublishModalState.busy = !!busy;
+  var submit = document.getElementById('assetPublishModalSubmit');
+  var cancel = document.getElementById('assetPublishModalCancel');
+  var close = document.getElementById('assetPublishModalClose');
+  var select = document.getElementById('assetPublishAccountSelect');
+  if (submit) {
+    submit.disabled = !!busy;
+    submit.textContent = busy ? '发布中...' : '确认发布';
+  }
+  if (cancel) cancel.disabled = !!busy;
+  if (close) close.disabled = !!busy;
+  if (select) select.disabled = !!busy || !(_assetPublishModalState.accounts || []).length;
+}
+
+function _closeAssetPublishModal() {
+  if (_assetPublishModalState.busy) return;
+  var modal = document.getElementById('assetPublishModal');
+  if (modal) modal.style.display = 'none';
+  _assetPublishModalState.asset = null;
+  _assetPublishMsgShow('', false);
+}
+
+function _assetShowPublishModal(asset) {
+  var existingId = _assetPublishExistingAssetId(asset);
+  var candidate = existingId ? { url: '', media_type: '' } : _assetPublishUrlCandidate(asset);
+  if (!existingId && !candidate.url) return Promise.reject(new Error('当前记录没有可发布的素材'));
+  _assetPublishModalState.asset = asset;
+  _assetPublishModalState.accounts = [];
+  _assetPublishModalState.busy = false;
+
+  var modal = document.getElementById('assetPublishModal');
+  var title = document.getElementById('assetPublishModalTitle');
+  var meta = document.getElementById('assetPublishModalMeta');
+  var info = document.getElementById('assetPublishAssetInfo');
+  var titleInput = document.getElementById('assetPublishTitleInput');
+  var descInput = document.getElementById('assetPublishDescriptionInput');
+  var tagsInput = document.getElementById('assetPublishTagsInput');
+  var mediaType = String(asset.media_type || '').toLowerCase();
+  var label = asset._content_record ? _contentRecordDisplayLabel(asset) : (_MEDIA_TYPE_LABELS[mediaType] || mediaType || '素材');
+  var sourcePrompt = _assetPublishSourcePrompt(asset);
+
+  if (title) title.textContent = '发布' + label;
+  if (meta) meta.textContent = String(asset.title || asset.filename || label || '素材').trim();
+  if (titleInput) titleInput.value = '';
+  if (descInput) descInput.value = '';
+  if (tagsInput) tagsInput.value = '';
+  if (info) {
+    var targetId = existingId || '提交时自动转存';
+    var promptLine = sourcePrompt ? sourcePrompt.slice(0, 180) + (sourcePrompt.length > 180 ? '...' : '') : '暂无提示词';
+    info.innerHTML =
+      '<div><span style="color:var(--text-muted);">素材：</span>' + escapeHtml(targetId) + '</div>' +
+      '<div><span style="color:var(--text-muted);">类型：</span>' + escapeHtml(label) + '</div>' +
+      '<div><span style="color:var(--text-muted);">提示词：</span>' + escapeHtml(promptLine) + '</div>';
+  }
+  _assetPublishMsgShow('', false);
+  if (modal) modal.style.display = 'flex';
+  return _assetPublishLoadAccounts().catch(function(error) {
+    _assetPublishMsgShow('账号加载失败：' + ((error && error.message) || error), true);
+  });
+}
+
+function _submitAssetPublishModal() {
+  if (_assetPublishModalState.busy) return;
+  var asset = _assetPublishModalState.asset;
+  if (!asset) return _assetPublishMsgShow('当前发布素材已失效，请重新选择。', true);
+  var account = _assetPublishSelectedAccount();
+  if (!account) return _assetPublishMsgShow('请选择发布账号。', true);
+  var titleInput = document.getElementById('assetPublishTitleInput');
+  var descInput = document.getElementById('assetPublishDescriptionInput');
+  var tagsInput = document.getElementById('assetPublishTagsInput');
+  var userTitle = String(titleInput && titleInput.value || '').trim();
+  var userDesc = String(descInput && descInput.value || '').trim();
+  var userTags = String(tagsInput && tagsInput.value || '').trim();
+  var sourcePrompt = _assetPublishSourcePrompt(asset);
+  var autoCopy = !userTitle && !userDesc && !userTags;
+
+  _assetPublishSetBusy(true);
+  _assetPublishMsgShow('正在准备素材...', false);
+  _assetPublishResolveTarget(asset).then(function(target) {
+    var payload = {
+      asset_id: target.asset_id,
+      account_id: parseInt(account.id, 10) || undefined,
+      account_nickname: account.nickname || '',
+      title: userTitle,
+      description: userDesc,
+      tags: userTags,
+      options: {
+        _source_prompt: sourcePrompt.slice(0, 2000),
+        _source_title: String(asset.title || asset.filename || '').slice(0, 240)
+      }
+    };
+    if (autoCopy) {
+      payload.ai_publish_copy = true;
+      payload.description = sourcePrompt.slice(0, 2000) || String(asset.title || asset.filename || '作品发布').slice(0, 240);
+      payload.tags = _assetContentTags(asset);
+    }
+    if (target.saved_from_url) payload.options._saved_from_url = String(target.source_url || '').slice(0, 300);
+    _assetPublishMsgShow('正在发布到 ' + _assetPublishAccountLabel(account) + '...', false);
+    return fetch(publishLocalBase() + '/api/publish', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+      body: JSON.stringify(payload)
+    }).then(_publishParseResponse);
+  }).then(function(x) {
+    var data = x.d || {};
+    if (!x.ok) throw new Error(data.detail || data.message || ('HTTP ' + x.status));
+    if (data.need_login) {
+      _assetPublishMsgShow('账号需要登录，浏览器已打开，请登录后重试。', true);
+      return;
+    }
+    if (data.status === 'success') {
+      _assetPublishMsgShow('发布成功。' + (data.result_url ? ' ' + data.result_url : ''), false);
+    } else if (data.status === 'pending' || data.status === 'publishing') {
+      _assetPublishMsgShow('发布任务已提交，任务 ID：' + (data.task_id || '-'), false);
+    } else {
+      _assetPublishMsgShow(data.error || data.detail || '发布失败', true);
+    }
+    if (_currentPubTab === 'tasks') loadTasks();
+  }).catch(function(error) {
+    _assetPublishMsgShow((error && error.message) || '发布失败', true);
+  }).finally(function() {
+    _assetPublishSetBusy(false);
+  });
+}
+
+function _assetOpenPublish(asset) {
+  return _assetShowPublishModal(asset);
 }
 
 function _performAssetContentAction(asset, action) {
@@ -4059,6 +4349,34 @@ function bindAssetLibraryUi() {
     assetPreviewDownload.addEventListener('click', function() {
       _downloadAssetToLibrary(_assetPreviewState, { button: assetPreviewDownload, usePreviewMsg: true });
     });
+  }
+
+  var assetPublishClose = document.getElementById('assetPublishModalClose');
+  if (assetPublishClose && !assetPublishClose._assetLibraryBound) {
+    assetPublishClose._assetLibraryBound = true;
+    assetPublishClose.addEventListener('click', _closeAssetPublishModal);
+  }
+  var assetPublishCancel = document.getElementById('assetPublishModalCancel');
+  if (assetPublishCancel && !assetPublishCancel._assetLibraryBound) {
+    assetPublishCancel._assetLibraryBound = true;
+    assetPublishCancel.addEventListener('click', _closeAssetPublishModal);
+  }
+  var assetPublishMask = document.getElementById('assetPublishModal');
+  if (assetPublishMask && !assetPublishMask._assetLibraryBound) {
+    assetPublishMask._assetLibraryBound = true;
+    assetPublishMask.addEventListener('click', function(e) {
+      if (e.target === assetPublishMask) _closeAssetPublishModal();
+    });
+  }
+  var assetPublishSubmit = document.getElementById('assetPublishModalSubmit');
+  if (assetPublishSubmit && !assetPublishSubmit._assetLibraryBound) {
+    assetPublishSubmit._assetLibraryBound = true;
+    assetPublishSubmit.addEventListener('click', _submitAssetPublishModal);
+  }
+  var assetPublishAccountSelect = document.getElementById('assetPublishAccountSelect');
+  if (assetPublishAccountSelect && !assetPublishAccountSelect._assetLibraryBound) {
+    assetPublishAccountSelect._assetLibraryBound = true;
+    assetPublishAccountSelect.addEventListener('change', _assetPublishUpdateAccountMeta);
   }
 
   // Upload local files; prepare a public URL only when a later action needs one.

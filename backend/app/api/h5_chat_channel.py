@@ -3749,19 +3749,30 @@ def _scheduled_douyin_keyword_looks_like_workflow_title(value: Any) -> bool:
     return any(pattern.search(text) for pattern in _DOUYIN_WORKFLOW_TITLE_PATTERNS)
 
 
-def _scheduled_douyin_search_keyword(source: Dict[str, Any]) -> str:
-    # Node titles such as "抖音自己评论区接管" are task labels, not search queries.
-    for keyword in _scheduled_douyin_keyword_values(source.get("keywords")):
-        if not _scheduled_douyin_keyword_looks_like_workflow_title(keyword):
-            return keyword
+def _scheduled_douyin_search_keywords(source: Dict[str, Any]) -> List[str]:
+    # Node titles can leak into old keyword fields. Keep only real search terms.
+    candidates: List[str] = []
+    candidates.extend(_scheduled_douyin_keyword_values(source.get("keywords")))
     for key in ("keyword", "search_keyword", "query"):
-        values = _scheduled_douyin_keyword_values(source.get(key))
-        if values and not _scheduled_douyin_keyword_looks_like_workflow_title(values[0]):
-            return values[0]
-    values = _scheduled_douyin_keyword_values(source.get("prompt"))
-    if values and not _scheduled_douyin_keyword_looks_like_workflow_title(values[0]):
-        return values[0]
-    return ""
+        candidates.extend(_scheduled_douyin_keyword_values(source.get(key)))
+    candidates.extend(_scheduled_douyin_keyword_values(source.get("prompt")))
+
+    keywords: List[str] = []
+    seen: set[str] = set()
+    for keyword in candidates:
+        if _scheduled_douyin_keyword_looks_like_workflow_title(keyword):
+            continue
+        normalized = keyword.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        keywords.append(keyword)
+    return keywords[:12]
+
+
+def _scheduled_douyin_search_keyword(source: Dict[str, Any]) -> str:
+    keywords = _scheduled_douyin_search_keywords(source)
+    return keywords[0] if keywords else ""
 
 
 def _scheduled_douyin_sales_action_from_text(value: Any) -> str:
@@ -3861,9 +3872,32 @@ def _scheduled_douyin_online_config_params(
     if action_key == "search_collect":
         plan = _scheduled_douyin_latest_config(plans, row_type="collect_precise")
         session = _scheduled_douyin_latest_config(search_sessions)
-        keyword = str(plan.get("keyword") or session.get("keyword") or "").strip()
-        if keyword:
-            params["keyword"] = keyword
+        keyword_sources: List[Any] = []
+        collect_plans = [
+            row for row in (plans if isinstance(plans, list) else [])
+            if isinstance(row, dict)
+            and str(row.get("type") or "").strip() == "collect_precise"
+            and bool(row.get("enabled", True))
+        ]
+        collect_plans.sort(
+            key=lambda row: str(row.get("updated_at") or row.get("created_at") or row.get("id") or ""),
+            reverse=True,
+        )
+        sessions = [row for row in (search_sessions if isinstance(search_sessions, list) else []) if isinstance(row, dict)]
+        sessions.sort(
+            key=lambda row: str(row.get("updated_at") or row.get("created_at") or row.get("id") or ""),
+            reverse=True,
+        )
+        keyword_sources.extend(row.get("keyword") for row in collect_plans)
+        keyword_sources.extend(row.get("keyword") for row in sessions)
+        keywords = _scheduled_douyin_search_keywords({"keywords": keyword_sources})
+        if keywords:
+            params["keywords"] = keywords
+            params["keyword"] = keywords[0]
+        else:
+            keyword = str(plan.get("keyword") or session.get("keyword") or "").strip()
+            if keyword:
+                params["keyword"] = keyword
         params["max_results"] = _safe_int(plan.get("max_results") or 50) or 50
         params["max_videos_per_run"] = _safe_int(plan.get("max_videos_per_run") or 1) or 1
         params["comment_scroll_rounds"] = _safe_int(
@@ -4081,7 +4115,15 @@ def _scheduled_douyin_result_payload(
     if selected_ids:
         payload.update(_scheduled_douyin_task_snapshot(selected_ids))
     if isinstance(result, dict):
-        for key in ("search_total", "session_id", "keyword", "search_mode"):
+        for key in (
+            "search_total",
+            "session_id",
+            "session_ids",
+            "keyword",
+            "keywords",
+            "keyword_summaries",
+            "search_mode",
+        ):
             value = result.get(key)
             if value not in (None, "", []):
                 payload[key] = value
@@ -4194,7 +4236,7 @@ def _scheduled_douyin_collect_result_payload(
     return payload
 
 
-async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     source = params if isinstance(params, dict) else {}
     keyword = _scheduled_douyin_search_keyword(source)
     if not keyword:
@@ -4366,6 +4408,104 @@ async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str,
     return result
 
 
+async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    source = dict(params) if isinstance(params, dict) else {}
+    keywords = _scheduled_douyin_search_keywords(source)
+    if len(keywords) <= 1:
+        return await _run_scheduled_douyin_single_search_collect_action(source)
+
+    keyword_summaries: List[Dict[str, Any]] = []
+    successful_results: List[Dict[str, Any]] = []
+    selected_task_ids: List[int] = []
+    selected_item_keys: List[str] = []
+    items: List[Dict[str, Any]] = []
+    session_ids: List[str] = []
+    account_ids: List[int] = []
+
+    for index, keyword in enumerate(keywords, start=1):
+        logger.info(
+            "[SCHEDULED-TASK] douyin search_collect keyword %s/%s: %s",
+            index,
+            len(keywords),
+            keyword,
+        )
+        keyword_params = dict(source)
+        keyword_params["keywords"] = [keyword]
+        keyword_params["keyword"] = keyword
+        result = await _run_scheduled_douyin_single_search_collect_action(keyword_params)
+        code = _safe_int(result.get("code") if isinstance(result, dict) else 0)
+        summary = {
+            "keyword": keyword,
+            "code": code,
+            "message": str((result or {}).get("msg") or (result or {}).get("message") or "").strip(),
+            "search_total": _safe_int((result or {}).get("search_total")),
+            "selected_videos_total": _safe_int((result or {}).get("selected_videos_total")),
+        }
+        keyword_summaries.append(summary)
+        if code != 200:
+            continue
+
+        successful_results.append(result)
+        keyword_task_ids = _scheduled_douyin_selected_task_ids(result)
+        for task_id in keyword_task_ids:
+            if task_id not in selected_task_ids:
+                selected_task_ids.append(task_id)
+        for item_key in result.get("selected_item_keys") or []:
+            text_value = str(item_key or "").strip()
+            if text_value and text_value not in selected_item_keys:
+                selected_item_keys.append(text_value)
+        for row in result.get("items") or []:
+            if isinstance(row, dict):
+                items.append(dict(row))
+        session_id = str(result.get("session_id") or "").strip()
+        if session_id and session_id not in session_ids:
+            session_ids.append(session_id)
+        for account_id in result.get("account_ids") or [result.get("account_id")]:
+            normalized_account_id = _safe_int(account_id)
+            if normalized_account_id > 0 and normalized_account_id not in account_ids:
+                account_ids.append(normalized_account_id)
+
+        # The collector is single-flight. Finish this keyword before starting
+        # the next one, then return the complete batch to the workflow runner.
+        if keyword_task_ids:
+            final_state = await _wait_for_douyin_collect_completion(keyword_task_ids)
+            summary["collection_status"] = str(final_state.get("status") or "").strip()
+
+    if not successful_results:
+        first = keyword_summaries[0] if keyword_summaries else {}
+        return {
+            "code": _safe_int(first.get("code")) or 400,
+            "msg": str(first.get("message") or "No configured keyword produced usable videos."),
+            "keywords": keywords,
+            "keyword_summaries": keyword_summaries,
+        }
+
+    combined = dict(successful_results[0])
+    combined.update(
+        {
+            "code": 200,
+            "msg": (
+                f"Completed {len(successful_results)}/{len(keywords)} configured keywords; "
+                f"found {sum(_safe_int(row.get('search_total')) for row in successful_results)} videos "
+                f"and started {len(selected_task_ids)} collection tasks."
+            ),
+            "keyword": keywords[0],
+            "keywords": keywords,
+            "keyword_summaries": keyword_summaries,
+            "search_total": sum(_safe_int(row.get("search_total")) for row in successful_results),
+            "selected_task_ids": selected_task_ids,
+            "selected_videos_total": len(selected_task_ids),
+            "selected_item_keys": selected_item_keys,
+            "items": items[:100],
+            "session_ids": session_ids,
+            "session_id": session_ids[0] if session_ids else "",
+            "account_ids": account_ids,
+            "account_id": account_ids[0] if account_ids else combined.get("account_id", ""),
+        }
+    )
+    return combined
+
+
 def _scheduled_douyin_account_id(params: Optional[Dict[str, Any]]) -> int:
     source = params if isinstance(params, dict) else {}
     for key in ("douyin_account_id", "account_id", "account_key"):
@@ -4446,9 +4586,15 @@ def _merge_scheduled_douyin_collection_params(
 ) -> Dict[str, Any]:
     merged = dict(online_params) if isinstance(online_params, dict) else {}
     workflow = dict(workflow_params) if isinstance(workflow_params, dict) else {}
-    for key in ("keyword", "regions", "max_results", "max_videos_per_run", "mode"):
+    for key in ("regions", "max_results", "max_videos_per_run", "mode"):
         if key in workflow and workflow.get(key) not in (None, "", []):
             merged[key] = workflow.get(key)
+    explicit_keywords = _scheduled_douyin_search_keywords(
+        {key: workflow.get(key) for key in ("keywords", "keyword", "search_keyword", "query")}
+    )
+    if explicit_keywords:
+        merged["keywords"] = explicit_keywords
+        merged["keyword"] = explicit_keywords[0]
     merged["followup_actions"] = _scheduled_douyin_followup_actions(
         workflow.get("followup_actions"),
         default_all="followup_actions" not in workflow,
@@ -5044,7 +5190,11 @@ async def _run_scheduled_douyin_leads(
         if action == "search_collect":
             params = _merge_scheduled_douyin_collection_params(params, workflow_params)
     elif not params or (action == "search_collect" and not _scheduled_douyin_search_keyword(params)):
-        params = _load_scheduled_douyin_online_config_params(action)
+        online_params = _load_scheduled_douyin_online_config_params(action)
+        if action == "search_collect":
+            params = _merge_scheduled_douyin_collection_params(online_params, workflow_params)
+        else:
+            params = online_params
     if h5_one_shot:
         # Shared Online settings may provide the text and account, but they
         # must not change the H5 task into a persistent monitor.
@@ -5143,6 +5293,11 @@ async def _run_scheduled_douyin_leads(
                     _safe_int(result_payload.get("total_high_intent")),
                 )
                 search_total = _safe_int(result.get("search_total") or result_payload.get("search_total"))
+                keyword_total = len(_scheduled_douyin_search_keywords(result)) or 1
+                selected_video_total = max(
+                    len(selected_task_ids),
+                    _safe_int(result_payload.get("selected_videos_total")),
+                )
                 final_status = str((final_state or {}).get("status") or "").strip().lower()
                 followup_results: List[Dict[str, Any]] = []
                 followup_actions = _scheduled_douyin_followup_actions(params.get("followup_actions"))
@@ -5160,8 +5315,9 @@ async def _run_scheduled_douyin_leads(
                     result_payload["followup_results"] = followup_results
                 if final_status == "done":
                     result_text = (
-                        f"搜索完成，找到 {search_total} 个视频；"
-                        f"已采集第 1 个视频的客户 {comments_collected} 人，精准客户 {precise_total} 人。"
+                        f"搜索完成，共执行 {keyword_total} 个关键词，找到 {search_total} 个视频；"
+                        f"已采集 {selected_video_total} 个视频的客户 {comments_collected} 人，"
+                        f"精准客户 {precise_total} 人。"
                     )
                     if followup_results:
                         success_count = len([

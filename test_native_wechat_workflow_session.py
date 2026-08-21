@@ -345,7 +345,7 @@ def test_recent_local_reply_with_missing_self_attr_stays_outbound(tmp_path, monk
     assert item["direction"] == "out"
 
 
-def test_auto_reply_history_is_a_record_not_a_filter(tmp_path, monkeypatch):
+def test_auto_reply_history_refuses_a_duplicate_inbound(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     engine.init_db()
     inbound = {
@@ -369,7 +369,7 @@ def test_auto_reply_history_is_a_record_not_a_filter(tmp_path, monkeypatch):
         {**inbound, "auto_reply_inbound_id": "provider-id-a"},
         reply="second reply",
         status="sent",
-    ) is True
+    ) is False
     with engine._connect() as conn:
         row = conn.execute(
             """
@@ -379,7 +379,48 @@ def test_auto_reply_history_is_a_record_not_a_filter(tmp_path, monkeypatch):
             (engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a", "provider-id-a"),
         ).fetchone()
 
-    assert row["reply_content"] == "second reply"
+    assert row["reply_content"] == "first reply"
+
+
+def test_wxauto_repeated_read_uses_stable_hash_for_same_message(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+
+    first = engine._persist_message_obj(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        {"id": "transient-id-a", "hash": "stable-message-hash", "attr": "friend", "content": "?"},
+        download_attachments=False,
+    )
+    second = engine._persist_message_obj(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        {"id": "transient-id-b", "hash": "stable-message-hash", "attr": "friend", "content": "?"},
+        download_attachments=False,
+    )
+
+    assert first["deduped"] is False
+    assert second["deduped"] is True
+    assert engine._latest_auto_reply_candidate(engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a")["auto_reply_inbound_id"] == "wxhash:stable-message-hash"
+
+
+def test_auto_reply_requires_customer_to_have_the_actual_last_message(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    engine._persist_message_obj(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        {"id": "inbound-id", "hash": "inbound-hash", "attr": "friend", "content": "?"},
+        download_attachments=False,
+    )
+    engine._persist_message_obj(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        {"id": "outbound-id", "hash": "outbound-hash", "attr": "self", "content": "您好，请问有什么可以帮您？"},
+        download_attachments=False,
+    )
+
+    assert engine._latest_auto_reply_candidate(engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a") is None
 
 
 def test_auto_reply_candidate_rejects_self_message_even_if_direction_was_stored_as_in(tmp_path, monkeypatch):
@@ -1092,10 +1133,93 @@ def test_uia_session_cell_parses_inline_unread_badge_and_mute_label():
     assert item["last_content"] == "李华健: [文件] 8.14号 外贸实单采购.pdf"
 
 
+def test_uia_session_cell_preserves_explicit_pinned_marker():
+    class FakeCell:
+        Name = "customer-a\n\u5df2\u7f6e\u9876\nold message\n\u6628\u5929 18:26"
+        ClassName = "mmui::ChatSessionCell"
+
+    item = engine._session_from_uia_cell(FakeCell())
+
+    assert item["raw"]["pinned"] is True
+    assert item["last_content"] == "old message"
+    assert engine._session_is_pinned(item) is True
+    assert engine._session_time_over_24h(
+        item["session_time"],
+        now=datetime(2026, 8, 20, 20, 0),
+    ) is True
+    assert engine._session_stops_recent_scan(item) is False
+    assert engine._session_stops_recent_scan({
+        "peer_id": "customer-b",
+        "session_time": "08/18 18:26",
+        "raw": {"pinned": False},
+    }) is True
+
+
+def test_current_chat_info_uses_lightweight_chatbox_reader():
+    calls = []
+
+    class ChatBox:
+        def get_info(self):
+            calls.append("chatbox")
+            return {"chat_type": "group", "chat_name": "group-a", "group_member_count": 12}
+
+    class FakeWx:
+        def ChatInfo(self):
+            raise AssertionError("ChatInfo fallback must not run")
+
+    wx = FakeWx()
+    wx.ChatBox = ChatBox()
+    info = engine._current_local_chat_info(wx)
+
+    assert calls == ["chatbox"]
+    assert info["chat_type"] == "group"
+    assert info["group_member_count"] == 12
+
+
 def test_auto_reply_skips_non_private_sessions_before_opening_chat():
     assert engine._looks_like_group_session({"peer_id": "服务号", "last_content": "通知", "unread_count": 2}) is True
     assert engine._looks_like_group_session({"peer_id": "客户交流群", "last_content": "你好", "unread_count": 1}) is True
     assert engine._looks_like_group_session({"peer_id": "客户A", "last_content": "你好", "unread_count": 1}) is False
+
+
+def test_non_private_session_entry_recognizes_official_account_containers():
+    assert engine._is_non_private_session_entry({"peer_id": "服务号"}) is True
+    assert engine._is_non_private_session_entry({"peer_id": "公众号"}) is True
+    assert engine._is_non_private_session_entry({"peer_id": "订阅号"}) is True
+    assert engine._is_non_private_session_entry({"peer_id": "文件传输助手"}) is True
+    assert engine._is_non_private_session_entry({"peer_id": "折叠的聊天"}) is True
+    assert engine._is_non_private_session_entry({"peer_id": "客户A"}) is False
+    assert engine._is_non_private_session_entry({
+        "peer_id": "折叠入口",
+        "raw": {"ui_class": "mmui::BrandSessionCell"},
+    }) is True
+
+
+def test_open_next_visible_session_skips_official_container(monkeypatch):
+    class FakeCell:
+        def __init__(self, name):
+            self.Name = name
+            self.ClassName = "mmui::ChatSessionCell"
+            self.BoundingRectangle = None
+
+    official = FakeCell("服务号\n通知\n10:00")
+    customer = FakeCell("客户A\n你好\n09:30")
+    clicked = []
+    processed = set()
+    fake_uia = types.SimpleNamespace(ControlFromHandle=lambda _hwnd: object())
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_uia)
+    monkeypatch.setattr(engine, "_module_available", lambda _name: True)
+    monkeypatch.setattr(engine, "_local_wechat_hwnd", lambda _account_id: 123)
+    monkeypatch.setattr(engine, "_restore_local_chat_session_list", lambda _account_id: {"ok": True})
+    monkeypatch.setattr(engine, "_uia_session_cells", lambda _root: [official, customer])
+    monkeypatch.setattr(engine, "_uia_click", lambda node: clicked.append(node.Name))
+    monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
+
+    item = engine._open_next_visible_session("pc-wechat-default", processed, {})
+
+    assert item["peer_id"] == "客户A"
+    assert clicked == [customer.Name]
+    assert "服务号" in processed
 
 
 @pytest.mark.asyncio
@@ -2034,7 +2158,7 @@ async def test_unexecutable_group_invite_suppresses_promised_reply(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_verified_group_skips_before_llm_or_conversation_context(tmp_path, monkeypatch):
+async def test_verified_group_replies_normally_without_repeating_group_invite(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     engine.init_db()
     monkeypatch.setattr(
@@ -2065,6 +2189,12 @@ async def test_verified_group_skips_before_llm_or_conversation_context(tmp_path,
         "scroll_rounds": 1,
     })
     monkeypatch.setattr(engine, "_enrich_sessions_with_message_counts", lambda _account_id, items: items)
+    opened = []
+    monkeypatch.setattr(
+        engine,
+        "_open_next_visible_session",
+        lambda *_args, **_kwargs: None if opened else opened.append(True) or {"peer_id": "customer-a", "display_name": "Customer A", "unread_count": 1},
+    )
     monkeypatch.setattr(
         engine,
         "sync_local_messages",
@@ -2082,26 +2212,23 @@ async def test_verified_group_skips_before_llm_or_conversation_context(tmp_path,
     )
     monkeypatch.setattr(engine, "_resolve_local_contact_wx_no", lambda *_args, **_kwargs: "wx-sales")
     monkeypatch.setattr(engine, "_has_verified_group_invite", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        engine,
-        "_recent_conversation_text",
-        lambda *_args, **_kwargs: pytest.fail("verified group must not load conversation context"),
-    )
-    monkeypatch.setattr(
-        engine,
-        "_load_wechat_intelligence_context",
-        lambda *_args, **_kwargs: pytest.fail("verified group must not query intelligence context"),
-    )
-    monkeypatch.setattr(
-        engine,
-        "_call_auto_reply_llm",
-        lambda **_kwargs: pytest.fail("verified group must not call the LLM"),
-    )
-    monkeypatch.setattr(
-        engine,
-        "_send_text_local_slow",
-        lambda *_args, **_kwargs: pytest.fail("verified group must not send a reply"),
-    )
+    monkeypatch.setattr(engine, "_recent_conversation_text", lambda *_args, **_kwargs: "对方: please invite me")
+
+    async def intelligence(*_args, **_kwargs):
+        return {"available": False}
+
+    monkeypatch.setattr(engine, "_load_wechat_intelligence_context", intelligence)
+    llm_args = {}
+
+    async def reply(**kwargs):
+        llm_args.update(kwargs)
+        # The runner must still suppress this if the model ignores its flag.
+        return {"should_reply": True, "reply": "当然，先和您聊聊具体需求。", "category": "casual", "should_invite_group": True}
+
+    sent = []
+    monkeypatch.setattr(engine, "_call_auto_reply_llm", reply)
+    monkeypatch.setattr(engine, "_send_text_local_slow", lambda *args, **kwargs: sent.append((args, kwargs)) or {"ok": True})
+    monkeypatch.setattr(engine, "_queue_auto_reply_group_invite", lambda *_args, **_kwargs: pytest.fail("verified group must not invite again"))
 
     result = await engine.run_auto_reply_once(
         engine.LOCAL_DEFAULT_ACCOUNT_ID,
@@ -2109,10 +2236,16 @@ async def test_verified_group_skips_before_llm_or_conversation_context(tmp_path,
         check_friend_requests=False,
     )
 
-    assert result["replied"] == 0
-    assert result["skipped"] == 1
-    assert result["items"][0]["status"] == "group_already_verified"
+    assert result["replied"] == 1
+    assert result["items"][0]["status"] == "sent"
     assert result["items"][0]["verification_source"] == "local_task"
+    assert llm_args["group_invite_already_verified"] is True
+    assert sent == [
+        (
+            ("pc-wechat-default", "customer-a", "当然，先和您聊聊具体需求。", {"driver": "native_wechat_auto_reply", "trigger": "manual", "category": "casual"}),
+            {"use_current_chat": True},
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -2151,6 +2284,17 @@ async def test_group_session_is_skipped_before_reply_or_group_decision(tmp_path,
                     "unread_count": 1,
                 }
             ]
+        },
+    )
+    opened = []
+    monkeypatch.setattr(
+        engine,
+        "_open_next_visible_session",
+        lambda *_args, **_kwargs: None if opened else opened.append(True) or {
+            "peer_id": "peer-unknown-chat-type",
+            "display_name": "customer-session",
+            "last_content": "please introduce",
+            "unread_count": 1,
         },
     )
     read_info_calls = []

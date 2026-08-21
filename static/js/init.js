@@ -1391,7 +1391,9 @@ function loadOnlineH5Employees() {
     return Promise.resolve([]);
   }
   var brand = typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo';
-  var url = String(API_BASE).replace(/\/$/, '') + '/api/h5-workflows/templates?brand=' + encodeURIComponent(brand);
+  var installationId = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
+  var url = String(API_BASE).replace(/\/$/, '') + '/api/h5-workflows/templates?brand=' + encodeURIComponent(brand)
+    + (installationId ? '&installation_id=' + encodeURIComponent(installationId) : '');
   return fetch(url, { headers: typeof authHeaders === 'function' ? authHeaders() : { 'Authorization': 'Bearer ' + token } })
     .then(function(response) {
       return response.json().catch(function() { return {}; }).then(function(data) {
@@ -1578,7 +1580,6 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   'x-leads': 'x_leads_access',
   'tiktok-leads': 'tiktok_leads_access',
   'social-leads': ['reddit_leads_access', 'x_leads_access', 'tiktok_leads_access', 'reddit_leads', 'x_leads', 'tiktok_leads'],
-  'openclaw-skill-chat': ['browser_use_skill', 'computer_use_skill']
 };
 
 function _normalizeLobsterFeatureFlags(features) {

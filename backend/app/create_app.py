@@ -4,7 +4,6 @@ import logging
 import os
 import subprocess
 import sys
-import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -22,11 +21,8 @@ from .api.capabilities import router as capabilities_router
 from .api.skills import router as skills_router
 from .api.settings_api import router as settings_router
 from .api.mcp_gateway import router as mcp_gateway_router
-from .api.openclaw_sutui_llm_proxy import router as openclaw_sutui_llm_proxy_router
-from .api.openclaw_config import router as openclaw_config_router
 from .api.openclaw_memory import router as openclaw_memory_router
 from .api.personal_settings import router as personal_settings_router
-from .api.openclaw_skill_chat import router as openclaw_skill_chat_router
 from .api.h5_chat_channel import router as h5_chat_channel_router
 from .api.audio_transcription_local import router as audio_transcription_local_router
 from .api.custom_config import router as custom_config_router
@@ -96,7 +92,6 @@ from .db import Base, engine, SessionLocal
 from . import models  # noqa: F401
 
 logger = logging.getLogger(__name__)
-_OPENCLAW_AUTOSTART_THREAD: threading.Thread | None = None
 
 
 def _add_no_store_headers(response):
@@ -173,7 +168,7 @@ def _ensure_default_user():
                 hashed_password=get_password_hash(settings.default_user_password),
                 credits=99999,
                 role="user",
-                preferred_model="openclaw",
+                preferred_model="sutui",
             )
             db.add(user)
             db.commit()
@@ -474,6 +469,8 @@ def _sync_missing_capabilities_from_catalog():
 
 
 def _auto_start_openclaw_blocking():
+    # Retired compatibility stub: never launch a Gateway child process.
+    return
     """若本机已有 openclaw 入口则尝试拉起 Gateway；不会在启动时下载 npm/node 依赖（依赖仅在微信点授权时安装）。"""
     try:
         from .api.openclaw_config import (
@@ -500,29 +497,6 @@ def _auto_start_openclaw_blocking():
             logger.info("OpenClaw Gateway already running")
     except Exception as e:
         logger.warning("OpenClaw auto-start skipped: %s", e)
-
-
-def _auto_start_openclaw():
-    """Schedule OpenClaw startup without blocking the FastAPI app startup."""
-    global _OPENCLAW_AUTOSTART_THREAD
-    if _OPENCLAW_AUTOSTART_THREAD and _OPENCLAW_AUTOSTART_THREAD.is_alive():
-        logger.info("OpenClaw Gateway auto-start already scheduled")
-        return
-    _OPENCLAW_AUTOSTART_THREAD = threading.Thread(
-        target=_auto_start_openclaw_blocking,
-        name="openclaw-autostart",
-        daemon=True,
-    )
-    _OPENCLAW_AUTOSTART_THREAD.start()
-    logger.info("OpenClaw Gateway auto-start scheduled in background")
-
-
-async def _auto_start_openclaw_later(delay_seconds: float = 8.0):
-    try:
-        await asyncio.sleep(max(0.0, float(delay_seconds)))
-        _auto_start_openclaw()
-    except Exception as e:
-        logger.warning("OpenClaw Gateway delayed auto-start skipped: %s", e)
 
 
 def _migrate_kf_customer_group():
@@ -942,8 +916,6 @@ def _sync_global_openclaw_workspace():
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     _sync_global_openclaw_workspace()
-    asyncio.create_task(_auto_start_openclaw_later())
-    logger.info("OpenClaw Gateway delayed auto-start scheduled")
     if wecom_router is not None:
         try:
             from .api.wecom import wecom_poll_loop
@@ -1072,11 +1044,8 @@ def create_app() -> FastAPI:
     app.include_router(chat_router, prefix="")
     app.include_router(workbench_chat_router, prefix="")
     app.include_router(mcp_gateway_router, prefix="")
-    app.include_router(openclaw_sutui_llm_proxy_router, prefix="")
-    app.include_router(openclaw_config_router, prefix="")
     app.include_router(openclaw_memory_router, prefix="")
     app.include_router(personal_settings_router, prefix="")
-    app.include_router(openclaw_skill_chat_router, prefix="")
     app.include_router(h5_chat_channel_router, prefix="")
     app.include_router(audio_transcription_local_router, prefix="")
     app.include_router(custom_config_router, prefix="")

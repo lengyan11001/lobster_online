@@ -143,8 +143,8 @@
   });
 
   window.registerLobsterView('sys-config', {
-    html: '/static/views/sys-config.html?v=20260813-signed-slot-v1',
-    scripts: '/static/js/views/sysconfig.js?v=20260813-signed-slot-v1'
+    html: '/static/views/sys-config.html?v=20260818-device-alias-v1',
+    scripts: '/static/js/views/sysconfig.js?v=20260818-device-alias-v1'
   });
 
   window.registerLobsterView('agent', {
@@ -157,8 +157,8 @@
   });
 
   window.registerLobsterView('h5-employees', {
-    html: '/static/views/h5-employees.html?v=20260816-workflow-parity-demo-v1',
-    scripts: '/static/js/views/h5-employees.js?v=20260816-workflow-parity-demo-v1',
+    html: '/static/views/h5-employees.html?v=20260819-employee-server-params-v3',
+    scripts: '/static/js/views/h5-employees.js?v=20260819-employee-server-params-v3',
     init: 'initOnlineH5EmployeesView',
     cache: 'reload'
   });

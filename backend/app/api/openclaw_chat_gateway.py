@@ -233,7 +233,9 @@ def _chat_route_mode() -> str:
 
 
 def openclaw_only_chat_enabled() -> bool:
-    return _chat_route_mode() == CHAT_ROUTE_MODE_OPENCLAW
+    # OpenClaw Gateway has been retired from the product chat path. Keep this
+    # helper for compatibility with older callers, but never select the route.
+    return False
 
 
 def openclaw_chat_prefix_patterns() -> List[str]:
@@ -243,21 +245,8 @@ def openclaw_chat_prefix_patterns() -> List[str]:
 
 
 def strip_openclaw_chat_prefix(raw_message: str) -> Tuple[str, bool]:
-    """Return (message_without_prefix, matched). Empty prefix body is ignored."""
-    orig = raw_message if raw_message is not None else ""
-    s = orig.strip()
-    if not s:
-        return orig, False
-    for p in openclaw_chat_prefix_patterns():
-        pl = len(p)
-        if pl == 0 or len(s) < pl:
-            continue
-        if s[:pl].lower() == p.lower():
-            rest = s[pl:].strip()
-            if not rest:
-                return orig, False
-            return rest, True
-    return orig, False
+    """OpenClaw chat prefixes are retired; treat the message as ordinary text."""
+    return raw_message if raw_message is not None else "", False
 
 
 def want_openclaw_first_this_turn(
@@ -265,15 +254,8 @@ def want_openclaw_first_this_turn(
     direct_llm: bool,
     openclaw_from_message_prefix: bool,
 ) -> bool:
-    if review_drafts_only:
-        return False
-    # UI setting is authoritative. Legacy env switches do not decide chat route.
-    if openclaw_only_chat_enabled():
-        return True
-    if direct_llm:
-        return False
-    if openclaw_from_message_prefix:
-        return True
+    # OpenClaw Gateway is retired. Keep the signature for compatibility with
+    # the old chat endpoint, but never route a turn through it.
     return False
 
 
@@ -1098,6 +1080,9 @@ async def try_openclaw(
     chat_turn_id: str = "",
     chat_turn_precharged: bool = False,
 ) -> Optional[str]:
+    """Retired compatibility stub; the product no longer starts or calls Gateway."""
+    return None
+
     """Attempt to get a reply via OpenClaw Gateway. Returns None on failure."""
     _OPENCLAW_LAST_FAILURE.set("")
     user_requests_generation = _openclaw_user_requests_generation(msgs)

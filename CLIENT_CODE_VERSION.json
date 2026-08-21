@@ -1,7 +1,7 @@
 {
-  "version": "1.0.202",
-  "build": 246,
-  "applied_at": "2026-08-21T17:38:03+08:00",
-  "note": "encrypted website code update",
-  "bundle_sha256": "eb75a1e76feeac99ed1d099b4e38e37600269069e485311d30bc0d6648664f2b"
+  "version": "1.0.205",
+  "build": 249,
+  "applied_at": "2026-08-21T19:16:25+08:00",
+  "note": "preserve precise lead follow-up actions",
+  "bundle_sha256": "e4b078ee510dfcf33ddf1f56bc8dd38702fdd8fc6436a1505ff7af710bb7bef7"
 }

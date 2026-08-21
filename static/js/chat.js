@@ -4125,27 +4125,12 @@ function setChatOpenClawStatusData(data) {
 }
 
 function refreshChatOpenClawStatus() {
-  if (chatOpenClawStatusInFlight) return;
-  if (!document.getElementById('chatOpenClawStatus')) return;
-  chatOpenClawStatusInFlight = true;
-  fetch((typeof LOCAL_API_BASE !== 'undefined' ? LOCAL_API_BASE : '') + '/api/openclaw/status', { headers: authHeaders() })
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      setChatOpenClawStatusData(d);
-    })
-    .catch(function() {
-      setChatOpenClawStatus(false);
-    })
-    .finally(function() {
-      chatOpenClawStatusInFlight = false;
-    });
+  // OpenClaw Gateway status is retired from the chat UI.
+  return;
 }
 
 function startChatOpenClawStatusWatcher() {
-  setChatOpenClawStatus(false);
-  refreshChatOpenClawStatus();
-  if (chatOpenClawStatusTimer) clearInterval(chatOpenClawStatusTimer);
-  chatOpenClawStatusTimer = setInterval(refreshChatOpenClawStatus, 5000);
+  return;
 }
 
 startChatOpenClawStatusWatcher();

@@ -1,3 +1,6 @@
+import asyncio
+
+import backend.app.api.h5_chat_channel as h5_chat_channel
 from backend.app.api.h5_chat_channel import (
     _merge_scheduled_douyin_collection_params,
     _merge_scheduled_douyin_stranger_params,
@@ -6,6 +9,7 @@ from backend.app.api.h5_chat_channel import (
     _scheduled_douyin_online_config_params,
     _scheduled_douyin_result_payload,
     _scheduled_douyin_sales_action_from_context,
+    _scheduled_douyin_search_keywords,
 )
 
 
@@ -75,6 +79,35 @@ def test_collection_node_explicit_empty_actions_remains_empty():
     assert params["followup_actions"] == []
 
 
+def test_collection_workflow_title_keeps_online_keywords_and_followups():
+    params = _merge_scheduled_douyin_collection_params(
+        {
+            "keyword": "AI赚钱",
+            "keywords": ["AI赚钱", "AI直播", "AI短视频", "AI获客", "AI智能体", "AI"],
+            "max_results": 50,
+        },
+        {
+            "keyword": "抖音获客·关键词抓取精准客户",
+            "followup_actions": [
+                "reply_comments",
+                "mention_comment",
+                "follow_comment",
+                "direct_message",
+            ],
+        },
+    )
+
+    assert params["keyword"] == "AI赚钱"
+    assert params["keywords"] == ["AI赚钱", "AI直播", "AI短视频", "AI获客", "AI智能体", "AI"]
+    assert params["followup_actions"] == [
+        "reply_comments",
+        "mention_comment",
+        "follow_comment",
+        "direct_message",
+    ]
+    assert params["customer_scope"] == "current_collection_batch"
+
+
 def test_stranger_workflow_explicit_false_overrides_online_config():
     params = _merge_scheduled_douyin_stranger_params(
         {"wechat_add_friend_enabled": True, "message": "saved reply"},
@@ -109,6 +142,7 @@ def test_search_action_uses_online_plan_instead_of_ip_persona_fields():
 
     assert params == {
         "account_id": 3,
+        "keywords": ["本机配置关键词", "旧搜索关键词"],
         "keyword": "本机配置关键词",
         "max_results": 36,
         "max_videos_per_run": 4,
@@ -116,6 +150,61 @@ def test_search_action_uses_online_plan_instead_of_ip_persona_fields():
         "comment_max_comments": 166,
         "mode": "script",
     }
+
+
+def test_search_action_uses_all_enabled_online_keywords():
+    params = _scheduled_douyin_online_config_params(
+        "search_collect",
+        plans=[
+            {"type": "collect_precise", "keyword": "工业机器人", "enabled": True, "updated_at": "2"},
+            {"type": "collect_precise", "keyword": "数控加工", "enabled": True, "updated_at": "1"},
+            {"type": "collect_precise", "keyword": "已停用", "enabled": False, "updated_at": "3"},
+        ],
+        search_sessions=[
+            {"keyword": "精密零件", "updated_at": 3},
+            {"keyword": "工业机器人", "updated_at": 2},
+        ],
+    )
+
+    assert params["keywords"] == ["工业机器人", "数控加工", "精密零件"]
+    assert _scheduled_douyin_search_keywords(params) == ["工业机器人", "数控加工", "精密零件"]
+
+
+def test_multi_keyword_collection_runs_each_keyword_and_merges_tasks(monkeypatch):
+    calls = []
+
+    async def fake_single(params):
+        keyword = params["keyword"]
+        calls.append(keyword)
+        task_id = len(calls)
+        return {
+            "code": 200,
+            "msg": "ok",
+            "keyword": keyword,
+            "search_total": 10,
+            "selected_task_ids": [task_id],
+            "selected_videos_total": 1,
+            "selected_item_keys": [f"video:{task_id}"],
+            "session_id": f"session:{task_id}",
+            "items": [{"title": keyword}],
+        }
+
+    async def fake_wait(task_ids):
+        return {"status": "done", "tasks": [{"id": task_ids[0], "status": "completed"}]}
+
+    monkeypatch.setattr(h5_chat_channel, "_run_scheduled_douyin_single_search_collect_action", fake_single)
+    monkeypatch.setattr(h5_chat_channel, "_wait_for_douyin_collect_completion", fake_wait)
+
+    result = asyncio.run(
+        h5_chat_channel._run_scheduled_douyin_search_collect_action(
+            {"keywords": ["工业机器人", "数控加工", "精密零件"]}
+        )
+    )
+
+    assert calls == ["工业机器人", "数控加工", "精密零件"]
+    assert result["selected_task_ids"] == [1, 2, 3]
+    assert result["search_total"] == 30
+    assert [row["collection_status"] for row in result["keyword_summaries"]] == ["done", "done", "done"]
 
 
 def test_direct_message_action_uses_online_interaction_plan():

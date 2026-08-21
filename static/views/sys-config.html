@@ -4,10 +4,6 @@
     <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;">
       <h3 style="margin:0;">系统配置</h3>
       <div style="display:flex;align-items:center;justify-content:flex-end;gap:0.5rem;flex-wrap:wrap;">
-        <span class="status-dot" id="ocStatusDot"></span>
-        <span id="ocStatusText" style="font-size:0.82rem;">检查中...</span>
-        <button type="button" id="refreshOcStatusBtn" class="btn btn-ghost btn-sm">刷新状态</button>
-        <button type="button" id="restartOcBtn" class="btn btn-primary btn-sm">重启 OpenClaw</button>
       </div>
     </div>
     <span id="ocSaveMsg" class="msg" style="display:none;margin-top:0.6rem;"></span>
@@ -34,12 +30,8 @@
             <input type="radio" name="chatRouteMode" value="direct" checked>
             <span>直连 + MCP（默认）</span>
           </label>
-          <label style="display:inline-flex;align-items:center;gap:0.35rem;padding:0.45rem 0.65rem;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;">
-            <input type="radio" name="chatRouteMode" value="openclaw">
-            <span>OpenClaw Gateway</span>
-          </label>
         </div>
-        <div class="form-hint">控制智能对话主路径；保存后立即生效，不需要改 .env 或重启。选 OpenClaw 后，主对话直接走 Gateway。</div>
+        <div class="form-hint">智能对话统一使用服务器直连模型和 MCP 能力。</div>
         <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-top:0.35rem;">
           <button type="button" id="saveChatRouteModeBtn" class="btn btn-ghost btn-sm">保存对话路由</button>
           <span id="chatRouteModeMsg" class="msg" style="display:none;"></span>
@@ -52,6 +44,10 @@
           <code id="installationSlotIdText" style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.5rem 0.6rem;background:rgba(15,23,42,0.04);font-size:0.78rem;">加载中...</code>
           <button type="button" id="copyInstallationSlotIdBtn" class="btn btn-ghost btn-sm">复制</button>
           <button type="button" id="randomizeInstallationSlotIdBtn" class="btn btn-ghost btn-sm">随机更换</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap;margin-top:0.55rem;max-width:58rem;">
+          <input type="text" id="installationSlotAliasInput" maxlength="128" placeholder="例如：演示机、办公室电脑" style="flex:1 1 18rem;min-width:12rem;">
+          <button type="button" id="saveInstallationSlotAliasBtn" class="btn btn-ghost btn-sm">保存系统别名</button>
         </div>
         <div class="form-hint" id="installationSlotHint" style="margin-top:0.4rem;">首次生成和随机更换都会向服务器确认唯一性。</div>
         <span id="installationSlotMsg" class="msg" style="display:none;margin-top:0.5rem;"></span>

@@ -29,6 +29,56 @@ def test_employee_mutations_are_single_flight():
     assert "runSubmission('save'" in script
     assert "runSubmission('activate'" in script
     assert "runSubmission('stop'" in script
+    assert "runSubmission('delete'" in script
+
+
+def test_douyin_private_message_editor_preserves_add_friend_switch():
+    script = _script()
+    start = script.index("if (row.key === 'douyin_leads')")
+    end = script.index("throw new Error", start)
+    douyin_plan = script[start:end]
+
+    assert "Object.assign({}, row.params || {}" in douyin_plan
+    assert "baseScheduleParams(row,douyinParams)" in douyin_plan
+    assert "delete douyinParams.wechat_add_friend_enabled" in douyin_plan
+    assert "if (action !== 'stranger_message')" in douyin_plan
+    assert "wechat_add_friend_targets_source='douyin_private_message_phone'" in script
+    assert "action === 'stranger_message'" in script
+    assert "isDouyinPrivate({ability_key:key,ability_label:label,note:note})" in script
+
+
+def test_employee_editor_uses_server_as_the_only_persisted_source():
+    script = _script()
+
+    assert "drafts: {}" not in script
+    assert "state.drafts" not in script
+    assert "function restoreDraft" not in script
+    assert "function selectTemplate(id)" in script
+    assert "return loadTemplates().then(function(){return applyServerTemplate(selected);});" in script
+    assert "state.selectedTemplate=base" in script
+
+
+def test_node_modal_saves_to_server_and_uses_strict_false_default():
+    script = _script()
+    last_save = script.rindex("function saveNodeFromModal()")
+    save_source = script[last_save:script.index("function saveChildFromModal()", last_save)]
+
+    assert "boolParam(params.wechat_add_friend_enabled,false)" in script
+    assert "return saveTemplate().then" in save_source
+    assert "节点参数已保存到服务器" in save_source
+    assert "saveNodeFromModal().catch" in script
+
+
+def test_online_employee_editor_deletes_saved_custom_employee_from_server():
+    script = _script()
+    html = (ROOT / "static" / "views" / "h5-employees.html").read_text(encoding="utf-8")
+
+    assert 'data-oe-action="delete-template"' in html
+    assert "function deleteTemplate()" in script
+    assert "/api/h5-workflows/templates/" in script
+    assert "method:'DELETE'" in script
+    assert "只能删除自己创建的员工" in script
+    assert "删除后服务器模板会移除" in script
 
 
 def test_online_employee_editor_manages_supported_child_actions():
@@ -61,7 +111,7 @@ def test_online_employee_editor_manages_supported_child_actions():
     assert "state.editingId || template && template.id" in script
     assert ".oe-form-label[hidden] { display:none; }" in html
     assert "100dvh" in html
-    assert "20260816-workflow-parity-demo-v1" in registry
+    assert "20260819-employee-server-params-v3" in registry
 
 
 def test_moments_nodes_save_paginated_contact_selection_as_wechat_ids():

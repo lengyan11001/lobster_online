@@ -770,7 +770,7 @@ async def get_me(
         return resp.json()
     current_user = await get_current_user(token=token, db=db)
     edition = (getattr(settings, "lobster_edition", None) or "online").strip().lower()
-    preferred = "sutui" if edition == "online" else (getattr(current_user, "preferred_model", "openclaw") or "openclaw")
+    preferred = "sutui" if edition == "online" else (getattr(current_user, "preferred_model", "sutui") or "sutui")
     return UserOut(
         id=current_user.id,
         email=current_user.email,

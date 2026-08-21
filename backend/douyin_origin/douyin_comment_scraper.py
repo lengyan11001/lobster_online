@@ -4,7 +4,7 @@ import asyncio
 import os
 import random
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Awaitable, Callable, Dict, List, Optional
 from urllib.parse import quote, urlparse
 
@@ -12,6 +12,61 @@ import requests
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
 from douyin_client import DouyinClient, is_port_open
+
+
+def conversation_time_is_older_than_24h(value: object, now: Optional[datetime] = None) -> bool:
+    """Return whether a conversation has reached the per-list scan cutoff.
+
+    Douyin renders prior-day rows as ``\u6628\u5929`` even when their clock time is
+    less than 24 hours ago. The inbox is ordered by that display date, so a
+    prior-day row is the boundary for the current list and must not depend on
+    a rolling 24-hour comparison.
+    """
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return False
+    current = now or datetime.now()
+    if text == "\u6628\u5929" or text.startswith("\u6628\u5929 "):
+        return True
+    if text == "\u524d\u5929" or text.startswith("\u524d\u5929 "):
+        return True
+    parsed: Optional[datetime] = None
+    if text in {"\u521a\u521a", "\u5212\u521a", "now"}:
+        return False
+    match = re.fullmatch(r"(\d+)\s*\u5206\u949f\u524d", text)
+    if match:
+        parsed = current - timedelta(minutes=int(match.group(1)))
+    else:
+        match = re.fullmatch(r"(\d+)\s*\u5c0f\u65f6\u524d", text)
+        if match:
+            parsed = current - timedelta(hours=int(match.group(1)))
+    if parsed is None:
+        match = re.fullmatch(r"\u6628\u5929\s*(\d{1,2}):(\d{2})", text)
+        if match:
+            parsed = (current - timedelta(days=1)).replace(
+                hour=int(match.group(1)), minute=int(match.group(2)), second=0, microsecond=0
+            )
+    if parsed is None:
+        match = re.fullmatch(r"\u524d\u5929\s*(\d{1,2}):(\d{2})", text)
+        if match:
+            parsed = (current - timedelta(days=2)).replace(
+                hour=int(match.group(1)), minute=int(match.group(2)), second=0, microsecond=0
+            )
+    if parsed is None:
+        for pattern, fmt in ((r"\d{4}-\d{1,2}-\d{1,2}", "%Y-%m-%d"), (r"\d{1,2}-\d{1,2}", "%m-%d"), (r"\d{1,2}:\d{2}", "%H:%M")):
+            if re.fullmatch(pattern, text):
+                try:
+                    parsed = datetime.strptime(text, fmt)
+                    if fmt == "%m-%d":
+                        parsed = parsed.replace(year=current.year)
+                    elif fmt == "%H:%M":
+                        parsed = parsed.replace(year=current.year, month=current.month, day=current.day)
+                        if parsed > current:
+                            parsed -= timedelta(days=1)
+                except ValueError:
+                    parsed = None
+                break
+    return bool(parsed and parsed < current - timedelta(hours=24))
 
 
 class DouyinMentionCommentStopped(RuntimeError):
@@ -3701,9 +3756,12 @@ class DouyinCommentScraper:
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         include_details: bool = False,
         item_callback: Optional[Callable[[Dict, Page], Awaitable[Optional[Dict]]]] = None,
+        page: Optional[Page] = None,
     ) -> List[Dict]:
-        limit = max(1, min(int(max_conversations or 100), 100))
-        page = await self._new_page(logger=logger)
+        limit = max(1, int(max_conversations or 10000))
+        owns_page = page is None
+        reuse_page = not owns_page
+        page = page or await self._new_page(logger=logger)
         try:
             async def open_or_refresh_chat_page(is_retry: bool = False):
                 if is_retry:
@@ -3729,7 +3787,7 @@ class DouyinCommentScraper:
                         "warning",
                     )
 
-                initial_wait_ms = random.randint(9000, 15000)
+                initial_wait_ms = random.randint(1200, 2500) if reuse_page else random.randint(9000, 15000)
                 self._emit(
                     logger,
                     (
@@ -3881,7 +3939,8 @@ class DouyinCommentScraper:
                 if await is_stranger_panel_visible(target_page):
                     return True, ""
                 last_debug = await capture_chat_sidebar_debug(target_page)
-                for attempt in range(1, 7):
+                attempt_limit = 2 if reuse_page else 6
+                for attempt in range(1, attempt_limit + 1):
                     click_result = await target_page.evaluate(
                         r"""
                         () => {
@@ -4398,6 +4457,7 @@ class DouyinCommentScraper:
 
             collected_map: Dict[str, Dict] = {}
             stagnant_rounds = 0
+            reached_time_cutoff = False
             while len(collected_map) < limit and stagnant_rounds < 4:
                 if should_stop and should_stop():
                     break
@@ -4406,6 +4466,9 @@ class DouyinCommentScraper:
                 for row in visible_rows or []:
                     if not isinstance(row, dict):
                         continue
+                    if conversation_time_is_older_than_24h(row.get("time_text")):
+                        reached_time_cutoff = True
+                        break
                     key = str(row.get("conversation_key", "") or row.get("profile_url", "") or row.get("username", "")).strip()
                     if not key or key in collected_map:
                         continue
@@ -4413,6 +4476,8 @@ class DouyinCommentScraper:
                     if len(collected_map) >= limit:
                         break
                 stagnant_rounds = stagnant_rounds + 1 if len(collected_map) == before_count else 0
+                if reached_time_cutoff:
+                    break
                 if len(collected_map) >= limit:
                     break
                 moved = await scroll_conversation_sidebar(page)
@@ -4420,6 +4485,8 @@ class DouyinCommentScraper:
                     break
                 await page.wait_for_timeout(1200)
 
+            if reached_time_cutoff:
+                self._emit(logger, "[抖音私信引流] 会话列表已到昨天或更早记录，结束陌生人列表本轮扫描", "info")
             candidates = list(collected_map.values())[:limit]
             results: List[Dict] = []
             total = len(candidates)
@@ -4460,8 +4527,9 @@ class DouyinCommentScraper:
                                         "has_user_message": bool(detail.get("has_user_message")),
                                     }
                                 )
-                                merged["detail_read_status"] = "ok"
-                                merged["detail_read_error"] = ""
+                                has_messages = bool(merged.get("messages")) or bool(merged.get("last_message_text"))
+                                merged["detail_read_status"] = "ok" if has_messages else "no_message"
+                                merged["detail_read_error"] = "" if has_messages else "未读取到右侧消息气泡，按无新消息处理"
                             else:
                                 merged["detail_read_status"] = "failed"
                                 merged["detail_read_error"] = "详情返回为空"
@@ -4502,7 +4570,8 @@ class DouyinCommentScraper:
             self._emit(logger, f"[抖音私信引流] 共提取 {len(results)} 条陌生人私信", "success")
             return results
         finally:
-            await page.close()
+            if owns_page:
+                await page.close()
 
     async def collect_chat_page_private_messages(
         self,
@@ -4511,9 +4580,11 @@ class DouyinCommentScraper:
         logger: Optional[Callable[[str, str], None]] = None,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         item_callback: Optional[Callable[[Dict, Page], Awaitable[Optional[Dict]]]] = None,
+        page: Optional[Page] = None,
     ) -> List[Dict]:
-        limit = max(1, min(int(max_conversations or 100), 100))
-        page = await self._new_page(logger=logger)
+        limit = max(1, int(max_conversations or 10000))
+        owns_page = page is None
+        page = page or await self._new_page(logger=logger)
         try:
             self._emit(logger, "[抖音私信聚合] 打开当前消息页：https://www.douyin.com/chat")
             await page.goto("https://www.douyin.com/chat", wait_until="domcontentloaded", timeout=60000)
@@ -4664,6 +4735,7 @@ class DouyinCommentScraper:
 
             collected_map: Dict[str, Dict] = {}
             stagnant_rounds = 0
+            reached_time_cutoff = False
             while len(collected_map) < limit and stagnant_rounds < 4:
                 if should_stop and should_stop():
                     break
@@ -4672,6 +4744,9 @@ class DouyinCommentScraper:
                 for row in visible_rows or []:
                     if not isinstance(row, dict):
                         continue
+                    if conversation_time_is_older_than_24h(row.get("time_text")):
+                        reached_time_cutoff = True
+                        break
                     key = str(row.get("conversation_key", "") or row.get("profile_url", "") or row.get("username", "")).strip()
                     if not key or key in collected_map:
                         continue
@@ -4679,6 +4754,8 @@ class DouyinCommentScraper:
                     if len(collected_map) >= limit:
                         break
                 stagnant_rounds = stagnant_rounds + 1 if len(collected_map) == before_count else 0
+                if reached_time_cutoff:
+                    break
                 if len(collected_map) >= limit:
                     break
                 moved = await scroll_conversation_sidebar(page)
@@ -4686,6 +4763,8 @@ class DouyinCommentScraper:
                     break
                 await page.wait_for_timeout(1200)
 
+            if reached_time_cutoff:
+                self._emit(logger, "[抖音私信聚合] 会话列表已到昨天或更早记录，结束当前消息列表本轮扫描", "info")
             candidates = list(collected_map.values())[:limit]
             results: List[Dict] = []
             total = len(candidates)
@@ -4754,7 +4833,7 @@ class DouyinCommentScraper:
                         if detail_attempt < 3:
                             await page.wait_for_timeout(700)
                     if not isinstance(detail_messages, list) or not detail_messages:
-                        row["detail_read_status"] = "failed"
+                        row["detail_read_status"] = "no_message"
                         row["detail_read_error"] = "已打开会话，但没有读取到右侧消息气泡"
                         self._emit(
                             logger,
@@ -4834,7 +4913,8 @@ class DouyinCommentScraper:
             self._emit(logger, f"[抖音私信聚合] 共提取 {len(results)} 条当前消息会话", "success")
             return results
         finally:
-            await page.close()
+            if owns_page:
+                await page.close()
 
     async def collect_chat_page_conversation_detail(
         self,

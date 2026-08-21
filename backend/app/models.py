@@ -18,7 +18,7 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     credits: Mapped[int] = mapped_column(Integer, default=99999, nullable=False)
     role: Mapped[str] = mapped_column(String(32), default="user", nullable=False)
-    preferred_model: Mapped[str] = mapped_column(String(128), default="openclaw", nullable=False)
+    preferred_model: Mapped[str] = mapped_column(String(128), default="sutui", nullable=False)
     """在线版：速推登录后下发的 token，用于调用速推统一接口。单机版为空。"""
     sutui_token: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     """服务号网页授权 openid，用于微信登录绑定"""

@@ -177,7 +177,7 @@
 
   function kindText(k) {
     return {
-      openclaw_message: 'OpenClaw 消息',
+      chat_message: '聊天消息',
       chat_message: '本地对话',
       capability: '能力调用',
       ip_content_daily: 'IP日更文案'

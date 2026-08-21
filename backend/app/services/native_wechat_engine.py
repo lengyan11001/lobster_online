@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import concurrent.futures
+import functools
 import hashlib
 import io
 import importlib.util
@@ -20,7 +22,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -97,6 +99,7 @@ DEFAULT_STRATEGY: Dict[str, Any] = {
     "auto_reply_interval_seconds": 15,
     "auto_reply_session_sleep_min": 0.0,
     "auto_reply_session_sleep_max": 0.0,
+    "auto_reply_private_sessions_per_round": 10,
     "auto_reply_char_sleep_min": 0.08,
     "auto_reply_char_sleep_max": 0.22,
     "auto_reply_punctuation_sleep_min": 0.35,
@@ -121,10 +124,31 @@ _LOCAL_WECHAT_UI_LOCK = threading.RLock()
 _LOCAL_WECHAT_THREAD_STATE = threading.local()
 _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID = 0
 _LOCAL_WECHAT_DRIVER_RECOVERY: Dict[str, Dict[str, Any]] = {}
+_LOCAL_WXAUTO4_CLIENTS: Dict[tuple[str, int], Any] = {}
+# wxauto4 and the WeChat UIA handles are thread-affine.  asyncio.to_thread()
+# may choose a different pool worker after each LLM/network wait, which forces
+# the driver cache to be rebuilt and makes WeChat steal focus between chats.
+# Keep the entire local-WeChat operation stream on one worker instead.
+_LOCAL_WECHAT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="lobster-wechat",
+)
+
+# Friend additions have deliberately long anti-spam pauses. Keep them out of
+# the account task queue so those pauses cannot delay message, group, or media
+# tasks. The actual UI operation still uses the shared thread-affine executor.
+_ADD_FRIEND_TASKS: Dict[str, asyncio.Task[Any]] = {}
 
 
 def _now_iso() -> str:
     return datetime.utcnow().isoformat()
+
+
+async def _run_local_wechat_async(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Run a local WeChat UI operation on the single thread-affine worker."""
+    loop = asyncio.get_running_loop()
+    call = functools.partial(func, *args, **kwargs)
+    return await loop.run_in_executor(_LOCAL_WECHAT_EXECUTOR, call)
 
 
 def _json_dumps(value: Any) -> str:
@@ -2215,6 +2239,7 @@ def _auto_reply_default_config(account_id: str) -> Dict[str, Any]:
         "account_id": account_id,
         "enabled": False,
         "interval_seconds": int(DEFAULT_STRATEGY["auto_reply_interval_seconds"]),
+        "private_sessions_per_round": int(DEFAULT_STRATEGY["auto_reply_private_sessions_per_round"]),
         "group_invite_enabled": False,
         "language": "zh-CN",
         "user_id": None,
@@ -2249,6 +2274,16 @@ def _normalize_auto_reply_config(row: Optional[sqlite3.Row], account_id: str) ->
         cfg["interval_seconds"] = int(DEFAULT_STRATEGY["auto_reply_interval_seconds"])
     if cfg["interval_seconds"] == 1800:
         cfg["interval_seconds"] = int(DEFAULT_STRATEGY["auto_reply_interval_seconds"])
+    try:
+        cfg["private_sessions_per_round"] = max(
+            1,
+            min(
+                int(cfg.get("private_sessions_per_round") or DEFAULT_STRATEGY["auto_reply_private_sessions_per_round"]),
+                100,
+            ),
+        )
+    except Exception:
+        cfg["private_sessions_per_round"] = int(DEFAULT_STRATEGY["auto_reply_private_sessions_per_round"])
     if not isinstance(cfg.get("last_result"), dict):
         cfg["last_result"] = _safe_json_loads(str(cfg.get("last_result") or ""), {})
     for key in ("memory_doc_ids", "group_invite_contacts"):
@@ -2560,6 +2595,76 @@ def _auto_reply_content_key(content: Any) -> str:
     return re.sub(r"\s+", "", str(content or "")).strip().lower()
 
 
+def _local_message_provider_id(raw: Dict[str, Any], peer_id: str, msg_type: str, content: str) -> str:
+    """Build an identity that survives repeated wxauto4 history reads.
+
+    wxauto4's ``id`` is regenerated for the same visible message on some
+    versions, while ``hash`` remains stable. Prefer that stable value so a
+    takeover round cannot turn one old inbound message into a new event.
+    """
+    stable = str(raw.get("hash") or raw.get("hash_text") or "").strip()
+    if stable:
+        return f"wxhash:{stable}"
+    source = str(raw.get("id") or raw.get("client_id") or "").strip()
+    if source:
+        return source
+    return _stable_key(peer_id, msg_type, content, str(raw.get("time") or ""))
+
+
+def _auto_reply_inbound_id(peer_id: str, inbound: Dict[str, Any]) -> str:
+    raw = inbound.get("raw_json") if isinstance(inbound.get("raw_json"), dict) else {}
+    stable = str(raw.get("hash") or raw.get("hash_text") or "").strip()
+    if stable:
+        return f"wxhash:{stable}"
+    return str(
+        inbound.get("auto_reply_inbound_id")
+        or inbound.get("provider_message_id")
+        or inbound.get("id")
+        or _stable_key(peer_id, inbound.get("content"), inbound.get("created_at"))
+    )
+
+
+def _auto_reply_history_exists(account_id: str, peer_id: str, inbound: Dict[str, Any]) -> bool:
+    """Check current and pre-stable-hash history for an already handled message."""
+    inbound_id = _auto_reply_inbound_id(peer_id, inbound)
+    raw = inbound.get("raw_json") if isinstance(inbound.get("raw_json"), dict) else {}
+    stable_hash = str(raw.get("hash") or raw.get("hash_text") or "").strip()
+    with _connect() as conn:
+        row = conn.execute(
+            """
+            select 1 from wechat_auto_reply_history
+            where account_id=? and peer_id=? and inbound_message_id=?
+            limit 1
+            """,
+            (account_id, peer_id, inbound_id),
+        ).fetchone()
+        if row:
+            return True
+        if not stable_hash:
+            return False
+        # Before the stable-hash fix, history used wxauto4's regenerated id.
+        # Link those rows back to the persisted message raw payload so an OTA
+        # upgrade does not answer the same old message one more time.
+        rows = conn.execute(
+            """
+            select m.raw_json
+            from wechat_auto_reply_history h
+            join wechat_messages m
+              on m.account_id=h.account_id
+             and m.peer_id=h.peer_id
+             and m.provider_message_id=h.inbound_message_id
+            where h.account_id=? and h.peer_id=?
+              and m.direction='in'
+            """,
+            (account_id, peer_id),
+        ).fetchall()
+        for candidate in rows:
+            raw_json = _safe_json_loads(str(candidate["raw_json"] or ""), {})
+            if isinstance(raw_json, dict) and str(raw_json.get("hash") or "").strip() == stable_hash:
+                return True
+        return False
+
+
 def _latest_auto_reply_candidate(account_id: str, peer_id: str) -> Optional[Dict[str, Any]]:
     latest = _latest_message_record(account_id, peer_id, include_system=True)
     if not latest or latest.get("direction") != "in":
@@ -2578,8 +2683,7 @@ def _latest_auto_reply_candidate(account_id: str, peer_id: str) -> Optional[Dict
     content = str(latest.get("content") or "").strip()
     if not content:
         return None
-    inbound_id = str(latest.get("provider_message_id") or latest.get("id") or _stable_key(peer_id, content, latest.get("created_at")))
-    latest["auto_reply_inbound_id"] = inbound_id
+    latest["auto_reply_inbound_id"] = _auto_reply_inbound_id(peer_id, latest)
     return latest
 
 
@@ -2593,25 +2697,19 @@ def _record_auto_reply_history(
     status: str,
     error: str = "",
 ) -> bool:
-    inbound_id = str(inbound.get("auto_reply_inbound_id") or inbound.get("provider_message_id") or inbound.get("id") or "")
-    if not inbound_id:
-        inbound_id = _stable_key(peer_id, inbound.get("content"), inbound.get("created_at"))
+    inbound_id = _auto_reply_inbound_id(peer_id, inbound)
+    if _auto_reply_history_exists(account_id, peer_id, {**inbound, "auto_reply_inbound_id": inbound_id}):
+        return False
     now = _now_iso()
     with _connect() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             insert into wechat_auto_reply_history(
                 id, account_id, peer_id, inbound_message_id, inbound_content, reply_content,
                 category, status, error_message, created_at, updated_at
             )
             values(?,?,?,?,?,?,?,?,?,?,?)
-            on conflict(account_id, peer_id, inbound_message_id) do update set
-                inbound_content=excluded.inbound_content,
-                reply_content=excluded.reply_content,
-                category=excluded.category,
-                status=excluded.status,
-                error_message=excluded.error_message,
-                updated_at=excluded.updated_at
+            on conflict(account_id, peer_id, inbound_message_id) do nothing
             """,
             (
                 uuid.uuid4().hex,
@@ -2627,7 +2725,7 @@ def _record_auto_reply_history(
                 now,
             ),
         )
-        return True
+        return bool(cursor.rowcount == 1)
 
 
 def _update_auto_reply_history(
@@ -2640,9 +2738,7 @@ def _update_auto_reply_history(
     status: str,
     error: str = "",
 ) -> None:
-    inbound_id = str(inbound.get("auto_reply_inbound_id") or inbound.get("provider_message_id") or inbound.get("id") or "")
-    if not inbound_id:
-        inbound_id = _stable_key(peer_id, inbound.get("content"), inbound.get("created_at"))
+    inbound_id = _auto_reply_inbound_id(peer_id, inbound)
     with _connect() as conn:
         conn.execute(
             """
@@ -2906,6 +3002,7 @@ async def _call_auto_reply_llm(
         "只有客户真实诉求明确符合文件规则时 should_invite_group 才能为 true，不能只因出现相近字词就判定。没有提供规则时必须为 false。"
         "群聊状态只能以系统提供的核验结果为准；历史摘要、历史回复或客户画像中的‘已拉群/已在群里’都不能作为事实。"
         "如果系统标记为未核验，回复中禁止声称客户已经在群里；符合拉群规则时必须把 should_invite_group 设为 true。"
+        "如果系统已核验客户已经在群里，禁止再次拉群或把拉群作为回复主题，但仍要正常回复客户当前新消息，按自然闲聊方式接话。"
         "如果最近上下文中我方已经明确提出帮客户对接负责人、拉群或进入服务群，而客户回复可以、好的、同意、没问题等肯定答复，"
         "应结合此前已表达的业务兴趣判定为明确同意对接；符合规则时 should_invite_group 必须为 true，回复中不要再重复追问已经问过的问题。"
         "要结合客户历史画像延续上下文，不能重复问已经确认的信息，也不能在对方没有继续回复时自说自话。"
@@ -3190,6 +3287,7 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         "started_at": result.get("started_at") or result.get("checked_at"),
         "finished_at": result.get("finished_at"),
         "duration_seconds": result.get("duration_seconds") or 0,
+        "stop_reason": str(result.get("stop_reason") or ""),
         "session_count": int(result.get("session_count") or 0),
         "private_session_count": int(result.get("unread_private_count") or 0),
         "unread_message_count": int(result.get("unread_message_count") or 0),
@@ -3221,6 +3319,10 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         f"- 命中拉群条件：{report['group_invite_match_count']} 个",
         f"- 跳过：{report['skipped']} 个；群聊/公众号排除：{report['skipped_groups']} 个；失败：{report['failed']} 个",
     ]
+    if report["stop_reason"] == "last_message_over_24h":
+        lines.append("- 已读到最后消息超过 24 小时的会话，本轮停止继续往后检查")
+    elif report["stop_reason"] == "cancelled":
+        lines.append("- 本轮接管已取消")
     if memory_titles:
         lines.append(f"- 回复依据：个人记忆 {report['memory_document_count']} 份（{'、'.join(memory_titles[:5])}）")
     else:
@@ -3315,6 +3417,14 @@ async def run_auto_reply_once(
         ][:20]
         if "group_invite_enabled" in config_override:
             cfg["group_invite_enabled"] = bool(config_override.get("group_invite_enabled"))
+        private_limit = config_override.get(
+            "private_sessions_per_round",
+            config_override.get("max_private_sessions_per_round", cfg.get("private_sessions_per_round")),
+        )
+        try:
+            cfg["private_sessions_per_round"] = max(1, min(int(private_limit or 10), 100))
+        except Exception:
+            cfg["private_sessions_per_round"] = int(DEFAULT_STRATEGY["auto_reply_private_sessions_per_round"])
     effective_user_id = int(cfg.get("user_id") or (auth_context or {}).get("user_id") or 0) or None
     if not force and not cfg.get("enabled"):
         return {"ok": True, "skipped": True, "reason": "disabled", "config": cfg}
@@ -3388,7 +3498,7 @@ async def run_auto_reply_once(
         )
         if check_friend_requests:
             try:
-                friend_requests = await asyncio.to_thread(
+                friend_requests = await _run_local_wechat_async(
                     accept_local_friend_requests,
                     account_id,
                     max_accepts=10,
@@ -3412,7 +3522,7 @@ async def run_auto_reply_once(
             result["summary_text"] = report.get("summary_text") or ""
             _finish_auto_reply_run(account_id, result)
             return {**result, "config": get_auto_reply_config(account_id)}
-        session_data = await asyncio.to_thread(
+        session_data = await _run_local_wechat_async(
             sync_local_sessions,
             account_id,
             passive=False,
@@ -3422,31 +3532,41 @@ async def run_auto_reply_once(
         sessions = _enrich_sessions_with_message_counts(account_id, list(session_data.get("items") or []))
         result["session_count"] = len(sessions)
         result["session_scan_rounds"] = int(session_data.get("scroll_rounds") or 0)
-        result["session_scan_limit"] = 20
-        unread = [item for item in sessions if _session_is_scan_candidate(item)]
-        private_unread = []
-        for item in unread:
-            if _looks_like_group_session(item):
-                result["skipped_groups"] += 1
-                continue
-            private_unread.append(item)
-        result["unread_private_count"] = len(private_unread)
-        result["unread_message_count"] = sum(
-            max(0, int(item.get("unread_count") or 0))
-            for item in private_unread
+        result["session_scan_limit"] = 50
+        private_session_limit = max(
+            1,
+            min(
+                int(cfg.get("private_sessions_per_round") or DEFAULT_STRATEGY["auto_reply_private_sessions_per_round"]),
+                100,
+            ),
         )
-        # The scan is intentionally bounded by 20 UIA scroll rounds, not by an
-        # unrelated session-count cap. Process every eligible private session
-        # collected by those rounds so later pages cannot be silently skipped.
-        for idx, session in enumerate(private_unread):
+        result["private_session_limit"] = private_session_limit
+        result["unread_private_count"] = 0
+        result["unread_message_count"] = 0
+        processed_peer_ids: set[str] = set()
+        session_scroll_state: Dict[str, Any] = {"scroll_rounds": 0, "at_end": False}
+        personal_sessions_checked = 0
+        # Each round starts at the first visible row.  We click one row,
+        # inspect the current chat, and then take the next unprocessed visible
+        # row. Once the current page is exhausted, advance one page and keep
+        # going; never search or repeatedly scroll at the bottom.
+        while personal_sessions_checked < private_session_limit:
             if _auto_reply_stop_requested(account_id):
                 result["stop_reason"] = "cancelled"
+                break
+            session = await _run_local_wechat_async(
+                _open_next_visible_session,
+                account_id,
+                processed_peer_ids,
+                session_scroll_state,
+            )
+            if not session:
                 break
             peer_id = str(session.get("peer_id") or "").strip()
             display_name = str(session.get("display_name") or peer_id).strip()
             if not peer_id:
-                result["skipped"] += 1
                 continue
+            processed_peer_ids.add(peer_id)
             item_result: Dict[str, Any] = {"peer_id": peer_id, "display_name": display_name, "status": "skipped"}
             current_inbound: Optional[Dict[str, Any]] = None
             current_reply = ""
@@ -3456,12 +3576,12 @@ async def run_auto_reply_once(
             intelligence_context: Dict[str, Any] = {}
             skip_intelligence_observation = False
             try:
-                sync_result = await asyncio.to_thread(
+                sync_result = await _run_local_wechat_async(
                     sync_local_messages,
                     account_id,
-                    peer_id,
+                    "",
                     load_more_pages=0,
-                    select_via_uia=True,
+                    select_via_uia=False,
                     read_chat_info=True,
                     download_attachments=False,
                 )
@@ -3482,6 +3602,21 @@ async def run_auto_reply_once(
                     result["items"].append(item_result)
                     continue
                 current_peer = actual_peer
+                processed_peer_ids.add(actual_peer)
+                personal_sessions_checked += 1
+                result["unread_private_count"] += 1
+                result["unread_message_count"] += max(0, int(session.get("unread_count") or 0))
+                if _session_stops_recent_scan(session):
+                    result["stop_reason"] = "last_message_over_24h"
+                    item_result.update(
+                        {
+                            "status": "stopped_old_session",
+                            "session_time": str(session.get("session_time") or ""),
+                            "stop_reason": "last_message_over_24h",
+                        }
+                    )
+                    result["items"].append(item_result)
+                    break
                 configured_primary_contact = str(
                     cfg.get("group_invite_primary_contact")
                     or next(
@@ -3515,24 +3650,15 @@ async def run_auto_reply_once(
                     primary_contact,
                 )
                 if local_group_invite_verified:
-                    skip_intelligence_observation = True
-                    _record_auto_reply_history(
-                        account_id,
-                        actual_peer,
-                        inbound,
-                        reply="",
-                        status="skipped",
-                        error="group already verified locally",
-                    )
-                    result["skipped"] += 1
                     item_result.update(
                         {
-                            "status": "group_already_verified",
                             "group_invite_already_verified": True,
-                            "reply_suppressed": True,
                             "verification_source": "local_task",
                         }
                     )
+                if _auto_reply_history_exists(account_id, actual_peer, inbound):
+                    result["skipped"] += 1
+                    item_result.update({"status": "duplicate", "reply_suppressed": True})
                     result["items"].append(item_result)
                     continue
                 intelligence_context = await _load_wechat_intelligence_context(
@@ -3548,27 +3674,13 @@ async def run_auto_reply_once(
                     local_group_invite_verified
                     or (isinstance(server_contact, dict) and server_contact.get("group_invite_verified"))
                 )
-                if group_invite_already_verified:
-                    skip_intelligence_observation = True
-                    _record_auto_reply_history(
-                        account_id,
-                        actual_peer,
-                        inbound,
-                        reply="",
-                        status="skipped",
-                        error="group already verified",
-                    )
-                    result["skipped"] += 1
+                if group_invite_already_verified and not local_group_invite_verified:
                     item_result.update(
                         {
-                            "status": "group_already_verified",
                             "group_invite_already_verified": True,
-                            "reply_suppressed": True,
                             "verification_source": "server_intelligence",
                         }
                     )
-                    result["items"].append(item_result)
-                    continue
                 recent = _recent_conversation_text(account_id, actual_peer, limit=8)
                 if not group_invite_already_verified:
                     contact_intelligence = str(_strip_unverified_group_claims(contact_intelligence) or "")
@@ -3587,6 +3699,11 @@ async def run_auto_reply_once(
                     contact_intelligence=contact_intelligence,
                     strategy_context=strategy_context,
                 )
+                # A verified group relationship only disables another invite.
+                # It must not suppress an ordinary reply to the customer's
+                # new message, even if a model ignores the supplied flag.
+                if group_invite_already_verified:
+                    llm_reply["should_invite_group"] = False
                 if not group_invite_already_verified:
                     llm_reply["conversation_summary"] = _strip_unverified_group_claims(
                         llm_reply.get("conversation_summary") or ""
@@ -3728,13 +3845,13 @@ async def run_auto_reply_once(
                     item_result.update({"status": "duplicate"})
                     result["items"].append(item_result)
                     continue
-                await asyncio.to_thread(
+                await _run_local_wechat_async(
                     _send_text_local_slow,
                     account_id,
                     actual_peer,
                     reply_text,
                     {"driver": "native_wechat_auto_reply", "trigger": trigger, "category": llm_reply.get("category")},
-                    True,
+                    use_current_chat=True,
                 )
                 _update_auto_reply_history(
                     account_id,
@@ -3828,10 +3945,13 @@ async def run_auto_reply_once(
                                 },
                             },
                         )
-            if idx < len(private_unread) - 1:
+            if personal_sessions_checked < private_session_limit:
                 low = float(DEFAULT_STRATEGY["auto_reply_session_sleep_min"])
                 high = max(low, float(DEFAULT_STRATEGY["auto_reply_session_sleep_max"]))
                 await asyncio.sleep(random.uniform(low, high))
+        result["session_scan_rounds"] = int(result.get("session_scan_rounds") or 0) + int(
+            session_scroll_state.get("scroll_rounds") or 0
+        )
         result["finished_at"] = _now_iso()
         result["duration_seconds"] = round(max(0.0, time.monotonic() - started_monotonic), 2)
         report = _build_auto_reply_report(result, memory)
@@ -4047,7 +4167,7 @@ async def poll_updates(account_id: str, *, timeout_ms: Optional[int] = None) -> 
     if _is_local_account_id(account_id):
         _find_local_account(account_id)
         try:
-            session_data = await asyncio.to_thread(
+            session_data = await _run_local_wechat_async(
                 sync_local_sessions,
                 account_id,
                 passive=False,
@@ -4065,7 +4185,12 @@ async def poll_updates(account_id: str, *, timeout_ms: Optional[int] = None) -> 
             current_left_unread_count = int((target_session or {}).get("unread_count") or 0)
             session = None
             if peer_id:
-                data = await asyncio.to_thread(sync_local_messages, account_id, peer_id, load_more_pages=0)
+                data = await _run_local_wechat_async(
+                    sync_local_messages,
+                    account_id,
+                    peer_id,
+                    load_more_pages=0,
+                )
                 peer_id = str(data.get("peer_id") or peer_id)
                 message_data = list_messages(account_id, peer_id, limit=50, offset=0) if peer_id else {"items": [], "real_message_count": 0}
                 messages = message_data.get("items") or []
@@ -4980,7 +5105,7 @@ def _persist_message_obj(
     else:
         direction = "in"
     created_at = _now_iso()
-    message_id = str(raw.get("id") or raw.get("hash") or _stable_key(peer_id, msg_type, content, str(raw.get("time") or "")))
+    message_id = _local_message_provider_id(raw, peer_id, msg_type, content)
     attachment = (
         _download_message_attachment(account_id, peer_id, msg, raw, msg_type)
         if download_attachments
@@ -4997,6 +5122,22 @@ def _persist_message_obj(
             """,
             (account_id, peer_id, message_id),
         ).fetchone()
+        if not existing:
+            stable_hash = str(raw.get("hash") or raw.get("hash_text") or "").strip()
+            if stable_hash:
+                for legacy in conn.execute(
+                    """
+                    select * from wechat_messages
+                    where account_id=? and peer_id=?
+                    order by created_at desc
+                    limit 200
+                    """,
+                    (account_id, peer_id),
+                ).fetchall():
+                    legacy_raw = _safe_json_loads(str(legacy["raw_json"] or ""), {})
+                    if isinstance(legacy_raw, dict) and str(legacy_raw.get("hash") or "").strip() == stable_hash:
+                        existing = legacy
+                        break
         if existing:
             existing_item = _normalize_message_public(_row_to_dict(existing))
             if attachment and not existing_item.get("attachments"):
@@ -5112,6 +5253,7 @@ def _reset_local_automation_clients() -> Dict[str, Any]:
 
     reset: List[str] = []
     errors: List[str] = []
+    _LOCAL_WXAUTO4_CLIENTS.clear()
     for module_name in ("uiautomation.uiautomation", "wxauto4.uia.uiautomation"):
         try:
             module = importlib.import_module(module_name)
@@ -5313,10 +5455,18 @@ def _new_wxauto4_client(account_id: str = "", *, ensure_chat_tab: bool = True) -
 def _get_wxauto4_client(account_id: str = "", *, ensure_chat_tab: bool = True) -> Any:
     with _LOCAL_WECHAT_UI_LOCK:
         _prepare_local_automation_thread()
+        cache_key = (str(account_id or "").strip(), threading.get_ident())
+        cached = _LOCAL_WXAUTO4_CLIENTS.get(cache_key)
+        if cached is not None:
+            return cached
         if bool(getattr(_LOCAL_WECHAT_THREAD_STATE, "operation_handles_recovery", False)):
-            return _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
+            client = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
+            _LOCAL_WXAUTO4_CLIENTS[cache_key] = client
+            return client
         try:
-            return _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
+            client = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
+            _LOCAL_WXAUTO4_CLIENTS[cache_key] = client
+            return client
         except Exception as initial_exc:
             recovery = _recover_local_wechat_driver(
                 account_id,
@@ -5328,6 +5478,7 @@ def _get_wxauto4_client(account_id: str = "", *, ensure_chat_tab: bool = True) -
                 try:
                     wx = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
                     _mark_local_driver_recovery(account_id, recovery, recovered=True)
+                    _LOCAL_WXAUTO4_CLIENTS[cache_key] = wx
                     return wx
                 except Exception as retry_exc:
                     _mark_local_driver_recovery(
@@ -5444,8 +5595,101 @@ def _session_from_uia_cell(cell: Any) -> Dict[str, Any]:
         "unread_count": unread_count,
         "is_new": unread_count > 0,
         "is_muted": is_muted,
-        "raw": {"name": raw_text, "source": "pc_wechat_uia_sessions", "pinned": pinned},
+        "raw": {
+            "name": raw_text,
+            "source": "pc_wechat_uia_sessions",
+            "pinned": pinned,
+            "ui_class": _uia_control_class(cell),
+        },
     }
+
+
+def _session_time_over_24h(label: Any, *, now: Optional[datetime] = None) -> bool:
+    """Return True only when the list timestamp clearly predates 24 hours."""
+    value = re.sub(r"\s+", "", str(label or "")).strip()
+    if not value:
+        return False
+    current = now or datetime.now()
+    if re.fullmatch(r"(刚刚|刚才|今天|\d+秒前|\d+分钟前)", value):
+        return False
+    hour_match = re.fullmatch(r"(\d+)小时前", value)
+    if hour_match:
+        return int(hour_match.group(1)) >= 24
+    day_match = re.fullmatch(r"(\d+)天前", value)
+    if day_match:
+        return int(day_match.group(1)) >= 1
+
+    time_match = re.search(r"(\d{1,2}):(\d{2})", value)
+    clock_hour: Optional[int] = None
+    clock_minute: Optional[int] = None
+    if time_match:
+        clock_hour = int(time_match.group(1))
+        clock_minute = int(time_match.group(2))
+        # WeChat may expose localized clock labels such as “下午 3:00”.
+        # Normalize them before comparing against the 24-hour cutoff.
+        if re.search(r"(下午|晚上|中午)", value) and clock_hour < 12:
+            clock_hour += 12
+        elif re.search(r"凌晨", value) and clock_hour == 12:
+            clock_hour = 0
+    date_value: Optional[datetime] = None
+    if value.startswith("昨天") or value.startswith("前天"):
+        offset = 1 if value.startswith("昨天") else 2
+        if clock_hour is not None and clock_minute is not None:
+            date_value = (current - timedelta(days=offset)).replace(
+                hour=clock_hour,
+                minute=clock_minute,
+                second=0,
+                microsecond=0,
+            )
+        elif offset >= 2:
+            return True
+    else:
+        date_match = re.search(r"(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日", value)
+        slash_match = re.search(r"(?:(\d{4})[/-])?(\d{1,2})[/-](\d{1,2})", value)
+        match = date_match or slash_match
+        if match:
+            year = int(match.group(1) or current.year)
+            month = int(match.group(2))
+            day = int(match.group(3))
+            try:
+                date_value = datetime(year, month, day)
+                if clock_hour is not None and clock_minute is not None:
+                    date_value = date_value.replace(
+                        hour=clock_hour,
+                        minute=clock_minute,
+                    )
+            except ValueError:
+                return False
+        elif time_match and re.fullmatch(r"(?:上午|下午|晚上|凌晨|中午)?\d{1,2}:\d{2}", value):
+            # A bare clock time belongs to today in the WeChat list.  If it
+            # is later than now, it belongs to yesterday and is definitely
+            # not yet safe to stop on without another date marker.
+            date_value = current.replace(
+                hour=clock_hour if clock_hour is not None else int(time_match.group(1)),
+                minute=clock_minute if clock_minute is not None else int(time_match.group(2)),
+                second=0,
+                microsecond=0,
+            )
+
+    if date_value is None:
+        return False
+    return current - date_value >= timedelta(hours=24)
+
+
+def _session_is_pinned(item: Dict[str, Any]) -> bool:
+    """Read WeChat's explicit pinned marker from a parsed session row."""
+    if bool(item.get("pinned")):
+        return True
+    raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+    if bool(raw.get("pinned")):
+        return True
+    raw_name = str(raw.get("name") or "")
+    return any(line.strip() == "已置顶" for line in raw_name.splitlines())
+
+
+def _session_stops_recent_scan(item: Dict[str, Any]) -> bool:
+    """Only an old, non-pinned personal session is a chronological boundary."""
+    return _session_time_over_24h(item.get("session_time")) and not _session_is_pinned(item)
 
 
 def _looks_like_uia_session_candidate(node: Any, root_rect: Optional[tuple[float, float, float, float]]) -> bool:
@@ -5525,6 +5769,101 @@ def _uia_collect_visible_sessions(root: Any) -> List[Dict[str, Any]]:
     return [item for item in (_session_from_uia_cell(cell) for cell in _uia_session_cells(root)) if item.get("peer_id")]
 
 
+_NON_PRIVATE_SESSION_PEER_IDS = {
+    "公众号",
+    "服务号",
+    "订阅号",
+    "文件传输助手",
+    "折叠的聊天",
+}
+
+
+def _is_non_private_session_entry(item: Dict[str, Any]) -> bool:
+    """Return true for WeChat system/official-account entries that are not personal chats."""
+    peer_id = str(item.get("peer_id") or "").strip()
+    chat_type = str(item.get("chat_type") or "").strip().lower()
+    raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+    ui_class = str(raw.get("ui_class") or item.get("ui_class") or "").strip().lower()
+    normalized = re.sub(r"\s+", "", peer_id).lower()
+    official_names = {
+        re.sub(r"\s+", "", value).lower()
+        for value in _NON_PRIVATE_SESSION_PEER_IDS
+    }
+    return (
+        peer_id in _NON_PRIVATE_SESSION_PEER_IDS
+        or normalized in official_names
+        or ui_class in {"mmui::brandsessioncell", "mmui::officialaccountsessionscell"}
+        or "brandsession" in ui_class
+        or chat_type in {"official", "subscription", "system"}
+    )
+
+
+def _restore_local_chat_session_list(account_id: str) -> Dict[str, Any]:
+    """Leave official-account pages and restore the top-level personal chat list.
+
+    WeChat exposes both the official-account list and its detail page through the
+    same ``ChatBackwardView`` control.  A single click only moves detail ->
+    official list; a second click moves official list -> personal sessions.
+    """
+    if not _module_available("uiautomation"):
+        return {"ok": False, "clicks": 0, "reason": "uiautomation_unavailable"}
+    import uiautomation as auto  # type: ignore
+
+    hwnd = _local_wechat_hwnd(account_id)
+    if not hwnd:
+        return {"ok": False, "clicks": 0, "reason": "window_not_found"}
+    clicks = 0
+    for _ in range(3):
+        root = auto.ControlFromHandle(int(hwnd))
+        cells = _uia_session_cells(root)
+        brand_cells = [
+            node for node in _uia_walk(root, max_depth=18, max_nodes=1800)
+            if _uia_control_class(node) == "mmui::BrandSessionCell"
+        ]
+        # The normal top-level list contains ChatSessionCell rows and no
+        # BrandSessionCell rows.  Do not click an unrelated back button there.
+        if cells and not brand_cells:
+            return {"ok": True, "clicks": clicks, "restored": clicks > 0}
+        back = next(
+            (
+                node for node in _uia_walk(root, max_depth=18, max_nodes=1800)
+                if _uia_control_class(node) == "mmui::ChatBackwardView"
+            ),
+            None,
+        )
+        if back is None:
+            # A detail view can briefly expose no back control while the
+            # navigation animation is running; retry once after a short wait.
+            time.sleep(0.35)
+            continue
+        _uia_click(back)
+        clicks += 1
+        time.sleep(0.65)
+    root = auto.ControlFromHandle(int(hwnd))
+    cells = _uia_session_cells(root)
+    brand_cells = [
+        node for node in _uia_walk(root, max_depth=18, max_nodes=1800)
+        if _uia_control_class(node) == "mmui::BrandSessionCell"
+    ]
+    return {"ok": bool(cells and not brand_cells), "clicks": clicks, "restored": bool(cells and not brand_cells)}
+
+
+def _uia_reset_session_list_to_top(root: Any, cells: List[Any]) -> None:
+    """Position the session list at its first visible page before a reply pass."""
+    if not cells:
+        return
+    scroll_target = _uia_scroll_target_from_cells(cells, root)
+    try:
+        scroll_target.SetFocus()
+    except Exception:
+        pass
+    try:
+        scroll_target.WheelUp(wheelTimes=60)
+        time.sleep(0.35)
+    except Exception:
+        pass
+
+
 def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 20) -> Dict[str, Any]:
     import uiautomation as auto  # type: ignore
 
@@ -5532,39 +5871,15 @@ def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 20) -> Dict[str
     cells = _uia_session_cells(root)
     if not cells:
         return {"items": [], "rounds": 0, "completed": False}
-    scroll_target = _uia_scroll_target_from_cells(cells, root)
-    try:
-        scroll_target.WheelUp(wheelTimes=30)
-        time.sleep(0.35)
-    except Exception:
-        pass
-
-    seen: Dict[str, Dict[str, Any]] = {}
-    rounds = 0
-    for idx in range(max(1, min(int(max_rounds or 20), 20))):
-        rounds = idx + 1
-        root = auto.ControlFromHandle(int(hwnd))
-        cells = _uia_session_cells(root)
-        visible = [_session_from_uia_cell(cell) for cell in cells]
-        visible = [item for item in visible if item.get("peer_id")]
-        before = len(seen)
-        for item in visible:
-            peer_id = str(item.get("peer_id") or "")
-            if peer_id:
-                seen[peer_id] = item
-        if len(seen) == before or idx + 1 >= max_rounds or not cells:
-            break
-        scroll_target = _uia_scroll_target_from_cells(cells, root)
-        try:
-            scroll_target.WheelDown(wheelTimes=4)
-            time.sleep(0.22)
-        except Exception:
-            break
-    try:
-        scroll_target.WheelUp(wheelTimes=30)
-    except Exception:
-        pass
-    return {"items": list(seen.values()), "rounds": rounds, "completed": False}
+    # "Recent" establishes the first visible page. The reply pass walks these
+    # rows in order, then advances one page at a time when they are exhausted;
+    # the next polling round resets to the top rather than inheriting a cursor.
+    _uia_reset_session_list_to_top(root, cells)
+    root = auto.ControlFromHandle(int(hwnd))
+    cells = _uia_session_cells(root)
+    visible = [_session_from_uia_cell(cell) for cell in cells]
+    visible = [item for item in visible if item.get("peer_id")]
+    return {"items": visible, "rounds": 1, "completed": False}
 
 
 def _find_uia_session_cell(root: Any, peer_id: str) -> Optional[Any]:
@@ -5579,11 +5894,88 @@ def _find_uia_session_cell(root: Any, peer_id: str) -> Optional[Any]:
     return None
 
 
+def _open_next_visible_session(
+    account_id: str,
+    processed_peer_ids: Optional[set[str]] = None,
+    scroll_state: Optional[Dict[str, Any]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Click the next row, advancing one visible page when the current page is exhausted."""
+    if not _module_available("uiautomation"):
+        raise RuntimeError("uiautomation is required to open a local WeChat session")
+    import uiautomation as auto  # type: ignore
+
+    hwnd = _local_wechat_hwnd(account_id)
+    if not hwnd:
+        raise RuntimeError("local WeChat window not found")
+    _restore_local_chat_session_list(account_id)
+    root = auto.ControlFromHandle(int(hwnd))
+    cells = _uia_session_cells(root)
+    if not cells:
+        return None
+    processed = processed_peer_ids if processed_peer_ids is not None else set()
+    state = scroll_state if isinstance(scroll_state, dict) else {}
+
+    def visible_signature(items: List[Any]) -> tuple[str, ...]:
+        signature: List[str] = []
+        for cell in items:
+            peer_id = str(_session_from_uia_cell(cell).get("peer_id") or "").strip()
+            if peer_id:
+                signature.append(peer_id)
+        return tuple(signature)
+
+    def click_next(items: List[Any]) -> Optional[Dict[str, Any]]:
+        for cell in items:
+            item = _session_from_uia_cell(cell)
+            peer_id = str(item.get("peer_id") or "").strip()
+            if not peer_id or peer_id in processed:
+                continue
+            if _is_non_private_session_entry(item):
+                # Official accounts open a nested BrandSessionCell list and
+                # are not eligible for personal-message takeover.
+                processed.add(peer_id)
+                continue
+            _uia_click(cell)
+            time.sleep(random.uniform(0.35, 0.65))
+            return item
+        return None
+
+    while True:
+        next_item = click_next(cells)
+        if next_item is not None:
+            return next_item
+        if bool(state.get("at_end")):
+            return None
+
+        # The current visible page has been consumed. Move down once and
+        # refresh UIA handles; WeChat may reuse the same row objects after a
+        # scroll, and an overlapping page can contain only processed rows.
+        current_signature = visible_signature(cells)
+        scroll_target = _uia_scroll_target_from_cells(cells, root)
+        try:
+            scroll_target.SetFocus()
+            scroll_target.WheelDown(wheelTimes=4)
+            time.sleep(0.35)
+        except Exception:
+            state["at_end"] = True
+            return None
+        root = auto.ControlFromHandle(int(hwnd))
+        next_cells = _uia_session_cells(root)
+        next_signature = visible_signature(next_cells)
+        if not next_cells or next_signature == current_signature:
+            state["at_end"] = True
+            return None
+        state["scroll_rounds"] = int(state.get("scroll_rounds") or 0) + 1
+        if int(state["scroll_rounds"]) >= 50:
+            state["at_end"] = True
+            return None
+        cells = next_cells
+
+
 def _open_local_session_by_uia(
     account_id: str,
     peer_id: str,
     *,
-    max_rounds: int = 20,
+    max_rounds: int = 1,
 ) -> Dict[str, Any]:
     """Open one conversation by clicking its session row, without ChatWith search."""
     if not _module_available("uiautomation"):
@@ -5597,12 +5989,13 @@ def _open_local_session_by_uia(
     cells = _uia_session_cells(root)
     if not cells:
         raise RuntimeError("未读取到微信会话列表")
-    scroll_target = _uia_scroll_target_from_cells(cells, root)
     target = str(peer_id or "").strip()
     rounds = 0
-    # run_auto_reply processes sessions in the same order as this scan, so the
-    # cursor can keep moving down instead of resetting and reopening the list.
-    for index in range(max(1, min(int(max_rounds or 20), 20))):
+    # Auto-reply processes the visible session snapshot from top to bottom.
+    # Do not scroll as a fallback: accepting a friend can reorder the list,
+    # and scrolling here would send the cursor to the bottom indefinitely.
+    round_limit = max(1, min(int(max_rounds or 1), 20))
+    for index in range(round_limit):
         rounds = index + 1
         root = auto.ControlFromHandle(int(hwnd))
         cell = _find_uia_session_cell(root, target)
@@ -5617,12 +6010,6 @@ def _open_local_session_by_uia(
             }
         cells = _uia_session_cells(root)
         if not cells:
-            break
-        scroll_target = _uia_scroll_target_from_cells(cells, root)
-        try:
-            scroll_target.WheelDown(wheelTimes=4)
-            time.sleep(0.22)
-        except Exception:
             break
     raise RuntimeError(f"未在微信会话列表找到联系人：{target}")
 
@@ -5809,6 +6196,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     if contact_list is None:
         raise RuntimeError("local WeChat contact list not found")
 
+    existing_before = _contact_count(account_id)
     try:
         contact_list.WheelUp(wheelTimes=40)
         time.sleep(0.35)
@@ -6726,12 +7114,42 @@ def sync_local_messages_legacy(account_id: str) -> Dict[str, Any]:
     return {"ok": True, "items": items, "count": len(items)}
 
 
+def _current_local_chat_info(wx: Any, *, fallback_name: str = "") -> Dict[str, Any]:
+    """Read the selected chat identity without opening its profile panel."""
+    chat_box = getattr(wx, "ChatBox", None)
+    get_info = getattr(chat_box, "get_info", None)
+    if callable(get_info):
+        try:
+            info = get_info()
+            if not isinstance(info, dict):
+                info = _obj_dict(info)
+            if isinstance(info, dict) and info:
+                result = dict(info)
+                if fallback_name and not str(result.get("chat_name") or "").strip():
+                    result["chat_name"] = fallback_name
+                return result
+        except Exception:
+            pass
+    # Older wxauto4 versions do not expose ChatBox.get_info().
+    chat_info = getattr(wx, "ChatInfo", None)
+    if callable(chat_info):
+        info = chat_info()
+        if not isinstance(info, dict):
+            info = _obj_dict(info)
+        result = dict(info or {})
+        if fallback_name and not str(result.get("chat_name") or "").strip():
+            result["chat_name"] = fallback_name
+        return result
+    return {"chat_name": fallback_name or "current", "chat_type": "unknown"}
+
+
 def _sync_local_messages_once(
     account_id: str,
     peer_id: str = "",
     *,
     load_more_pages: int = 0,
     select_via_uia: bool = False,
+    uia_session_max_rounds: int = 1,
     read_chat_info: bool = True,
     download_attachments: bool = True,
 ) -> Dict[str, Any]:
@@ -6741,13 +7159,13 @@ def _sync_local_messages_once(
     target = str(peer_id or "").strip()
     if target:
         if select_via_uia:
-            _open_local_session_by_uia(account_id, target)
+            _open_local_session_by_uia(account_id, target, max_rounds=uia_session_max_rounds)
         else:
             wx.ChatWith(target, exact=True, force=False)
             time.sleep(random.uniform(0.45, 0.9))
     info = (
-        wx.ChatInfo()
-        if read_chat_info and hasattr(wx, "ChatInfo")
+        _current_local_chat_info(wx, fallback_name=target)
+        if read_chat_info
         else {"chat_name": target or "current", "chat_type": "unknown"}
     )
     actual_peer = str((info or {}).get("chat_name") or target or "").strip() or "current"
@@ -6816,6 +7234,7 @@ def sync_local_messages(
     *,
     load_more_pages: int = 0,
     select_via_uia: bool = False,
+    uia_session_max_rounds: int = 1,
     read_chat_info: bool = True,
     download_attachments: bool = True,
 ) -> Dict[str, Any]:
@@ -6827,6 +7246,7 @@ def sync_local_messages(
             peer_id,
             load_more_pages=load_more_pages,
             select_via_uia=select_via_uia,
+            uia_session_max_rounds=uia_session_max_rounds,
             read_chat_info=read_chat_info,
             download_attachments=download_attachments,
         ),
@@ -7742,14 +8162,18 @@ def add_local_friend(
     error = ""
     raw: Dict[str, Any] = {}
     try:
-        raw = _prepare_local_add_friend_form(
+        raw = _run_local_driver_operation(
             account_id,
-            keyword,
-            apply_message=apply_message,
-            remark=remark,
-            tags=tags,
-            permission=permission,
-            submit_final=not prepare_only,
+            "添加微信好友",
+            lambda: _prepare_local_add_friend_form(
+                account_id,
+                keyword,
+                apply_message=apply_message,
+                remark=remark,
+                tags=tags,
+                permission=permission,
+                submit_final=not prepare_only,
+            ),
         )
         status = "prepared" if prepare_only else "submitted"
     except Exception as exc:
@@ -9579,7 +10003,7 @@ async def _process_add_friend_task(task: Dict[str, Any]) -> None:
         for attempt in range(int(strategy.get("retry_max") or 0) + 1):
             try:
                 _enforce_local_friend_add_rate(account_id)
-                await asyncio.to_thread(
+                await _run_local_wechat_async(
                     add_local_friend,
                     account_id,
                     target,
@@ -12247,12 +12671,19 @@ def _ensure_task_worker(account_id: str) -> None:
     _TASK_WORKERS[account_id] = loop.create_task(_run_account_task_queue(account_id))
 
 
-def _claim_next_pending_task(account_id: str) -> Optional[Dict[str, Any]]:
+def _claim_next_pending_task(
+    account_id: str,
+    *,
+    skip_add_friend: bool = False,
+) -> Optional[Dict[str, Any]]:
     with _connect() as conn:
+        task_filter = ""
+        if skip_add_friend:
+            task_filter = " and task_type <> 'add_friend'"
         row = conn.execute(
-            """
+            f"""
             select * from wechat_tasks
-            where account_id=? and status='pending'
+            where account_id=? and status='pending'{task_filter}
             order by created_at asc limit 1
             """,
             (account_id,),
@@ -12268,31 +12699,100 @@ def _claim_next_pending_task(account_id: str) -> Optional[Dict[str, Any]]:
     return _row_to_dict(row) if row else None
 
 
-def _has_pending_task(account_id: str) -> bool:
+def _has_runnable_pending_task(account_id: str) -> bool:
+    """Return whether the account queue has work it can claim right now."""
+    friend_worker = _ADD_FRIEND_TASKS.get(str(account_id or "").strip())
+    skip_add_friend = friend_worker is not None and not friend_worker.done()
     with _connect() as conn:
-        row = conn.execute(
-            "select id from wechat_tasks where account_id=? and status='pending' limit 1",
-            (account_id,),
-        ).fetchone()
+        if skip_add_friend:
+            row = conn.execute(
+                """
+                select id from wechat_tasks
+                where account_id=? and status='pending' and task_type <> 'add_friend'
+                limit 1
+                """,
+                (account_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "select id from wechat_tasks where account_id=? and status='pending' limit 1",
+                (account_id,),
+            ).fetchone()
     return bool(row)
+
+
+def _active_add_friend_worker(account_id: str) -> Optional[asyncio.Task[Any]]:
+    key = str(account_id or "").strip()
+    task = _ADD_FRIEND_TASKS.get(key)
+    if task is not None and task.done():
+        _ADD_FRIEND_TASKS.pop(key, None)
+        return None
+    return task
+
+
+async def _run_add_friend_task_background(task: Dict[str, Any]) -> None:
+    account_id = str(task.get("account_id") or "").strip()
+    task_id = str(task.get("id") or "")
+    try:
+        await _process_add_friend_task(task)
+    except asyncio.CancelledError:
+        _finish_task(
+            task_id,
+            "cancelled",
+            int(task.get("processed") or 0),
+            int(task.get("success") or 0),
+            int(task.get("failed") or 0),
+            "friend-add worker cancelled",
+        )
+        raise
+    except Exception as exc:
+        _finish_task(
+            task_id,
+            "failed",
+            int(task.get("processed") or 0),
+            int(task.get("success") or 0),
+            int(task.get("failed") or 0) or int(task.get("planned_total") or 0),
+            str(exc),
+        )
+    finally:
+        if account_id:
+            current = _ADD_FRIEND_TASKS.get(account_id)
+            if current is asyncio.current_task():
+                _ADD_FRIEND_TASKS.pop(account_id, None)
+            if _has_runnable_pending_task(account_id):
+                _ensure_task_worker(account_id)
 
 
 async def _run_account_task_queue(account_id: str) -> None:
     try:
         while True:
-            task = _claim_next_pending_task(account_id)
+            friend_worker = _active_add_friend_worker(account_id)
+            task = _claim_next_pending_task(
+                account_id,
+                skip_add_friend=friend_worker is not None,
+            )
             if not task:
                 return
             try:
-                if task.get("task_type") in {"send_text", "send_message"}:
+                task_type = str(task.get("task_type") or "").strip().lower()
+                if task_type == "add_friend":
+                    # Do not hold the account queue during 60-180 second and
+                    # batch pauses. Only one friend task may run per account;
+                    # other task types can continue through the queue.
+                    if _active_add_friend_worker(account_id) is None:
+                        background = asyncio.create_task(
+                            _run_add_friend_task_background(task),
+                            name=f"wechat-add-friend-{str(task.get('id') or '')[:8]}",
+                        )
+                        _ADD_FRIEND_TASKS[account_id] = background
+                    continue
+                if task_type in {"send_text", "send_message"}:
                     await _process_send_task(task)
-                elif task.get("task_type") == "add_friend":
-                    await _process_add_friend_task(task)
-                elif task.get("task_type") == "moments_like":
+                elif task_type == "moments_like":
                     await _process_moments_like_task(task)
-                elif task.get("task_type") == "moments_comment":
+                elif task_type == "moments_comment":
                     await _process_moments_comment_task(task)
-                elif task.get("task_type") == "moments_engage":
+                elif task_type == "moments_engage":
                     # UIA traversals and mouse actions are synchronous. Keep the
                     # whole combined task off the API event loop so health checks
                     # and task polling remain responsive while WeChat is busy.
@@ -12300,9 +12800,9 @@ async def _run_account_task_queue(account_id: str) -> None:
                         asyncio.run,
                         _process_moments_engage_task(task),
                     )
-                elif task.get("task_type") == "moments_publish":
+                elif task_type == "moments_publish":
                     await _process_moments_publish_task(task)
-                elif task.get("task_type") == "create_group":
+                elif task_type == "create_group":
                     await _process_create_group_task(task)
                 else:
                     _finish_task(str(task.get("id") or ""), "failed", 0, 0, int(task.get("planned_total") or 0), "unsupported task type")
@@ -12319,7 +12819,7 @@ async def _run_account_task_queue(account_id: str) -> None:
         current = _TASK_WORKERS.get(account_id)
         if current is asyncio.current_task():
             _TASK_WORKERS.pop(account_id, None)
-        if _has_pending_task(account_id):
+        if _has_runnable_pending_task(account_id):
             _ensure_task_worker(account_id)
 
 
@@ -12601,14 +13101,14 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
         if bool(payload.get("use_current_chat")):
             customer_target = str(payload.get("customer_wx_no") or (targets[0] if targets else "")).strip()
             added_targets = [target for target in targets if target != customer_target]
-            result = await asyncio.to_thread(
+            result = await _run_local_wechat_async(
                 create_local_group_from_current,
                 account_id,
                 targets,
                 added_targets,
             )
         else:
-            result = await asyncio.to_thread(create_local_group, account_id, targets)
+            result = await _run_local_wechat_async(create_local_group, account_id, targets)
         if not bool(result.get("group_verified")):
             raise RuntimeError("微信建群结果未通过群聊和成员校验")
         selected = int(result.get("selected") or len(targets))
@@ -12629,7 +13129,7 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
                     )
                     if bool(payload.get("use_current_chat")):
                         welcome_args = (*welcome_args, True)
-                    welcome_result = await asyncio.to_thread(_send_text_local_slow, *welcome_args)
+                    welcome_result = await _run_local_wechat_async(_send_text_local_slow, *welcome_args)
                 except Exception as exc:
                     welcome_error = f"群已创建，但默认欢迎话术发送失败：{exc}"
         _update_task_payload(

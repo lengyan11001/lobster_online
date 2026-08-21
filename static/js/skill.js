@@ -3182,8 +3182,9 @@ function loadSkillStore() {
       }
       var needYoutube = !!pkgById('youtube_publish');
       var ecommercePkg = pkgById('comfly_ecommerce_detail_skill');
-      var browserUsePkg = pkgById('browser_use_skill');
-      var computerUsePkg = pkgById('computer_use_skill');
+      // OpenClaw Browser Use / Computer Use are retired.
+      var browserUsePkg = null;
+      var computerUsePkg = null;
       var sutuiPkg = pkgById('sutui_mcp');
       var comflyPkg = pkgById('comfly_veo_skill');
       var seedancePkg = pkgById('comfly_seedance_tvc_skill') || pkgById('seedance_tvc_studio');
@@ -3252,7 +3253,7 @@ function loadSkillStore() {
             desc: '独立 OpenClaw 电脑操作工作台'
           });
         }
-        var wxPkg = pkgById('openclaw_weixin_channel');
+        var wxPkg = null;
         if (wxPkg) {
           var hasLocal = !!(typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE);
           html += _renderOpenclawWeixinCard({

@@ -100,6 +100,76 @@ function renderInstallationSlotId(status) {
   }
 }
 
+function installationSlotCloudBase() {
+  return String((typeof API_BASE !== 'undefined' && API_BASE) || window.__API_BASE || '').replace(/\/$/, '');
+}
+
+function loadInstallationSlotAlias() {
+  var input = document.getElementById('installationSlotAliasInput');
+  if (!input) return Promise.resolve(null);
+  var iid = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
+  var base = installationSlotCloudBase();
+  if (!iid || !base) {
+    input.value = '';
+    return Promise.resolve(null);
+  }
+  input.disabled = true;
+  return fetch(base + '/api/h5-chat/devices/status', {
+    method: 'GET',
+    headers: authHeaders()
+  }).then(function(response) {
+    return response.json().catch(function() { return {}; }).then(function(data) {
+      if (!response.ok) throw new Error(data.detail || data.message || '系统别名读取失败');
+      var devices = Array.isArray(data.devices) ? data.devices : [];
+      var current = devices.find(function(device) {
+        return String(device && device.installation_id || '').trim() === iid;
+      });
+      input.value = String(current && current.display_name || '').trim();
+      return current || null;
+    });
+  }).finally(function() {
+    input.disabled = false;
+  });
+}
+
+function saveInstallationSlotAlias() {
+  var input = document.getElementById('installationSlotAliasInput');
+  var btn = document.getElementById('saveInstallationSlotAliasBtn');
+  var iid = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
+  var base = installationSlotCloudBase();
+  if (!input || !iid || !base) {
+    showInstallationSlotMsg('当前槽位或服务器地址不可用', true);
+    return;
+  }
+  var alias = String(input.value || '').trim().slice(0, 128);
+  var oldText = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '保存中...';
+  }
+  input.disabled = true;
+  fetch(base + '/api/h5-chat/devices/' + encodeURIComponent(iid) + '/display-name', {
+    method: 'PATCH',
+    headers: authHeaders(),
+    body: JSON.stringify({ display_name: alias })
+  }).then(function(response) {
+    return response.json().catch(function() { return {}; }).then(function(data) {
+      if (!response.ok) throw new Error(data.detail || data.message || '系统别名保存失败');
+      var saved = String(data.device && data.device.display_name || '').trim();
+      input.value = saved;
+      showInstallationSlotMsg(saved ? '系统别名已保存，H5 设备列表将优先显示该名称' : '系统别名已清除', false);
+    });
+  }).catch(function(err) {
+    showInstallationSlotMsg((err && err.message) || '系统别名保存失败', true);
+  }).finally(function() {
+    input.disabled = false;
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || '保存系统别名';
+    }
+  });
+}
+
 function syncLocalInstallationSlotId(iid) {
   if (!iid || !LOCAL_API_BASE) return Promise.resolve({ ok: false, skipped: true });
   return fetch((LOCAL_API_BASE || '') + '/api/settings/installation-id/sync', {
@@ -126,7 +196,10 @@ function loadInstallationSlotStatus() {
   })
     .then(function(status) {
       renderInstallationSlotId(status || {});
-      showInstallationSlotMsg('', false);
+      return loadInstallationSlotAlias().then(function() {
+        showInstallationSlotMsg('', false);
+        return status;
+      });
     })
     .catch(function(err) {
       renderInstallationSlotId();
@@ -423,33 +496,17 @@ function loadOpenClawConfig() {
   var sutuiBlock = document.getElementById('sutuiTokenBlock');
   if (sutuiBlock) sutuiBlock.style.display = (EDITION !== 'online') ? '' : 'none';
   if (EDITION !== 'online') loadSutuiConfig();
-  checkOcStatus();
   loadLanInfo();
   loadInstallationSlotStatus();
   loadAssetPathSettings();
   loadChatRouteMode();
   if (_currentSysTab === 'custom') loadCustomConfigs();
-  if (ocConfigLoaded && EDITION !== 'online') return;
-  if (EDITION === 'online' && !allowModel) { return; }
-  fetch((LOCAL_API_BASE || '') + '/api/openclaw/config', { headers: authHeaders() })
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      ocConfigLoaded = true;
-      var modelSel = document.getElementById('ocPrimaryModel');
-      if (modelSel && d.primary_model) {
-        for (var i = 0; i < modelSel.options.length; i++) {
-          if (modelSel.options[i].value === d.primary_model) {
-            modelSel.selectedIndex = i;
-            break;
-          }
-        }
-      }
-      ocProviderData = [];
-    })
-    .catch(function() {});
+  ocConfigLoaded = true;
 }
 
 function checkOcStatus() {
+  return;
+  /*
   var dot = document.getElementById('ocStatusDot');
   var text = document.getElementById('ocStatusText');
   var msgEl = document.getElementById('ocSaveMsg');
@@ -481,6 +538,7 @@ function checkOcStatus() {
       dot.className = 'status-dot offline';
       text.textContent = 'OpenClaw Gateway 无法连接';
     });
+  */
 }
 
 function saveOcConfig() {
@@ -649,6 +707,10 @@ if (copyInstallationSlotIdBtn) copyInstallationSlotIdBtn.addEventListener('click
   } else {
     showInstallationSlotMsg('当前浏览器不支持自动复制', true);
   }
+});
+var saveInstallationSlotAliasBtn = document.getElementById('saveInstallationSlotAliasBtn');
+if (saveInstallationSlotAliasBtn) saveInstallationSlotAliasBtn.addEventListener('click', function() {
+  saveInstallationSlotAlias();
 });
 var randomizeInstallationSlotIdBtn = document.getElementById('randomizeInstallationSlotIdBtn');
 if (randomizeInstallationSlotIdBtn) randomizeInstallationSlotIdBtn.addEventListener('click', function() {

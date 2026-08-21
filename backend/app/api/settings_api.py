@@ -376,7 +376,7 @@ def update_settings(
     db: Session = Depends(get_db),
 ):
     if body.preferred_model is not None:
-        current_user.preferred_model = body.preferred_model.strip() or "openclaw"
+        current_user.preferred_model = body.preferred_model.strip() or "sutui"
     db.commit()
     return {"preferred_model": current_user.preferred_model}
 
@@ -461,7 +461,6 @@ def get_chat_route_settings(
         "default_mode": DEFAULT_CHAT_ROUTE_MODE,
         "modes": [
             {"value": CHAT_ROUTE_MODE_DIRECT, "label": "直连 + MCP"},
-            {"value": CHAT_ROUTE_MODE_OPENCLAW, "label": "OpenClaw Gateway"},
         ],
     }
 

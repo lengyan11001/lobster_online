@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 CHAT_ROUTE_MODE_DIRECT = "direct"
 CHAT_ROUTE_MODE_OPENCLAW = "openclaw"
 DEFAULT_CHAT_ROUTE_MODE = CHAT_ROUTE_MODE_DIRECT
-VALID_CHAT_ROUTE_MODES = {CHAT_ROUTE_MODE_DIRECT, CHAT_ROUTE_MODE_OPENCLAW}
+VALID_CHAT_ROUTE_MODES = {CHAT_ROUTE_MODE_DIRECT}
 
 _BASE_DIR = Path(__file__).resolve().parents[3]
 _CUSTOM_CONFIGS_FILE = _BASE_DIR / "custom_configs.json"
@@ -28,7 +28,7 @@ def normalize_chat_route_mode(value: Any) -> str:
     if raw in ("", CHAT_ROUTE_MODE_DIRECT, "llm", "local", "local_llm", "direct_llm"):
         return CHAT_ROUTE_MODE_DIRECT
     if raw in (CHAT_ROUTE_MODE_OPENCLAW, "open_claw", "oc", "gateway"):
-        return CHAT_ROUTE_MODE_OPENCLAW
+        return ""
     return ""
 
 
@@ -61,6 +61,8 @@ def get_chat_route_mode() -> str:
 
 def set_chat_route_mode(mode: Any) -> str:
     normalized = normalize_chat_route_mode(mode)
+    if not normalized and str(mode or "").strip().lower() in {"openclaw", "open_claw", "oc", "gateway"}:
+        normalized = CHAT_ROUTE_MODE_DIRECT
     if normalized not in VALID_CHAT_ROUTE_MODES:
         raise ValueError(f"Invalid chat route mode: {mode!r}")
 
