@@ -1,7 +1,7 @@
 {
-  "version": "1.0.199",
-  "build": 243,
-  "applied_at": "2026-08-21T15:46:41+08:00",
-  "note": "precision lead node parameter sync",
-  "bundle_sha256": "b5ded19808deac2359daeb8b3ee6b2ef5e1c04c23ef6511f01d37466a8c87813"
+  "version": "1.0.200",
+  "build": 244,
+  "applied_at": "2026-08-21T16:56:13+08:00",
+  "note": "all local online changes including running task center",
+  "bundle_sha256": "e83e1d55154153c128b72eb86e2ea2f7b7cf230492ae3bc366e29907c45a8855"
 }
