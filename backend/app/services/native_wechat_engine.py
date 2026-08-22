@@ -1002,6 +1002,84 @@ def _restore_hidden_wechat_windows() -> Dict[str, Any]:
     return result
 
 
+def _dismiss_local_wechat_session_ghost_windows(main_hwnd: int) -> Dict[str, Any]:
+    """Close stale Qt session-card overlays left behind by WeChat UI clicks."""
+    result: Dict[str, Any] = {"found": 0, "dismissed": 0, "hwnds": [], "errors": []}
+    try:
+        import win32con  # type: ignore
+        import win32gui  # type: ignore
+        import win32process  # type: ignore
+    except Exception as exc:
+        result["errors"].append(f"missing win32 window dependency: {exc}")
+        return result
+
+    try:
+        if not main_hwnd or not win32gui.IsWindow(int(main_hwnd)):
+            return result
+        _thread_id, main_pid = win32process.GetWindowThreadProcessId(int(main_hwnd))
+        main_pid = int(main_pid or 0)
+    except Exception as exc:
+        result["errors"].append(str(exc))
+        return result
+    if not main_pid:
+        return result
+
+    candidates: List[int] = []
+
+    def _enum(hwnd: int, _extra: Any) -> None:
+        try:
+            if not win32gui.IsWindowVisible(hwnd):
+                return
+            _candidate_thread, candidate_pid = win32process.GetWindowThreadProcessId(hwnd)
+            if int(candidate_pid or 0) != main_pid:
+                return
+            class_name = str(win32gui.GetClassName(hwnd) or "").lower()
+            if "qwindowtoolsavebits" not in class_name:
+                return
+            if int(win32gui.GetParent(hwnd) or 0) or int(win32gui.GetWindow(hwnd, win32con.GW_OWNER) or 0):
+                return
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            width = max(0, int(right) - int(left))
+            height = max(0, int(bottom) - int(top))
+            if not (120 <= width <= 420 and 36 <= height <= 180):
+                return
+            ex_style = int(win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE) or 0)
+            required = int(win32con.WS_EX_LAYERED | win32con.WS_EX_TOOLWINDOW | win32con.WS_EX_TOPMOST)
+            if ex_style & required != required:
+                return
+            candidates.append(int(hwnd))
+        except Exception:
+            return
+
+    try:
+        win32gui.EnumWindows(_enum, None)
+    except Exception as exc:
+        result["errors"].append(str(exc))
+        return result
+
+    result["found"] = len(candidates)
+    for hwnd in candidates:
+        try:
+            # Cancel a pending Qt drag first, hide synchronously so the card
+            # leaves the desktop immediately, then let Qt destroy the widget.
+            win32gui.PostMessage(hwnd, win32con.WM_CANCELMODE, 0, 0)
+            win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+            win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+            result["dismissed"] += 1
+            result["hwnds"].append(hwnd)
+        except Exception as exc:
+            result["errors"].append(f"{hwnd}: {exc}")
+    return result
+
+
+def _dismiss_local_wechat_session_ghosts_for_account(account_id: str) -> Dict[str, Any]:
+    if not _is_local_account_id(account_id):
+        return {"found": 0, "dismissed": 0, "hwnds": [], "errors": []}
+    windows = _scan_local_wechat_windows(max_age_seconds=0)
+    hwnd = int((windows[0] if windows else {}).get("hwnd") or 0)
+    return _dismiss_local_wechat_session_ghost_windows(hwnd)
+
+
 def _launch_wechat_single_instance() -> Dict[str, Any]:
     result: Dict[str, Any] = {"launched": False, "path": "", "errors": []}
     for exe in _known_wechat_exe_paths():
@@ -2515,6 +2593,12 @@ def _clear_auto_reply_stop(account_id: str) -> None:
 
 
 def _finish_auto_reply_run(account_id: str, result: Dict[str, Any], error: str = "") -> None:
+    try:
+        ghost_cleanup = _dismiss_local_wechat_session_ghosts_for_account(account_id)
+    except Exception as exc:
+        ghost_cleanup = {"found": 0, "dismissed": 0, "hwnds": [], "errors": [str(exc)]}
+    if ghost_cleanup.get("found") or ghost_cleanup.get("errors"):
+        result["session_ghost_cleanup"] = ghost_cleanup
     now = _now_iso()
     try:
         with _connect() as conn:
@@ -2589,6 +2673,41 @@ def _looks_like_group_session(item: Dict[str, Any]) -> bool:
     if re.match(r"^[^:：]{1,40}[:：]", first_line):
         return True
     return False
+
+
+def _known_local_peer_chat_type(account_id: str, peer_id: str) -> str:
+    """Return a previously persisted chat type without touching the UI."""
+    account_key = str(account_id or "").strip()
+    peer_key = str(peer_id or "").strip()
+    if not account_key or not peer_key:
+        return ""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                select chat_type from wechat_peers
+                where account_id=? and peer_id=? and chat_type is not null
+                limit 1
+                """,
+                (account_key, peer_key),
+            ).fetchone()
+            value = str((row[0] if row else "") or "").strip().lower()
+            return value if value not in {"", "unknown"} else ""
+    except Exception:
+        return ""
+
+
+def _raw_local_message_is_group(raw: Dict[str, Any]) -> bool:
+    """Detect group messages from wxauto4 data without opening a profile."""
+    if not isinstance(raw, dict):
+        return False
+    raw_type = str(raw.get("chat_type") or raw.get("conversation_type") or raw.get("type") or "").strip().lower()
+    if raw_type in {"group", "chatroom"}:
+        return True
+    if raw.get("is_group") or raw.get("group_id") or raw.get("chatroom_id"):
+        return True
+    peer = str(raw.get("peer_id") or raw.get("session_id") or "").strip().lower()
+    return "@chatroom" in peer
 
 
 def _auto_reply_content_key(content: Any) -> str:
@@ -3166,6 +3285,130 @@ async def _call_auto_reply_llm(
     }
 
 
+async def _generate_new_friend_welcome(
+    *,
+    auth_context: Optional[Dict[str, Any]],
+    user_id: Optional[int],
+    contact_name: str,
+    memory_context: str = "",
+    reply_language: str = "zh-CN",
+) -> str:
+    auth_context = auth_context or {}
+    token = str(auth_context.get("token") or getattr(settings, "openclaw_sutui_fallback_jwt", None) or "").strip()
+    if not token:
+        raise RuntimeError("missing login token for AI friend welcome")
+    installation_id = str(
+        auth_context.get("installation_id")
+        or getattr(settings, "openclaw_sutui_fallback_installation_id", None)
+        or f"native-wechat-friend-welcome-{int(user_id or 0)}"
+    )
+    model = (
+        getattr(settings, "lobster_orchestration_sutui_chat_model", None)
+        or getattr(settings, "lobster_default_sutui_chat_model", None)
+        or "deepseek-chat"
+    )
+    language_code = _normalize_auto_reply_language(reply_language)
+    language_label = _auto_reply_language_label(language_code)
+    system_prompt = (
+        "\u4f60\u662f\u4e2a\u4eba\u5fae\u4fe1\u7684\u65b0\u597d\u53cb\u6b22\u8fce\u8bed\u52a9\u624b\u3002"
+        "\u53ea\u751f\u6210\u4e00\u6761\u53ef\u76f4\u63a5\u53d1\u9001\u7684\u7b80\u77ed\u6b22\u8fce\u8bed\uff0c\u50cf\u771f\u4eba\u521a\u901a\u8fc7\u597d\u53cb\u540e\u6253\u62db\u547c\u3002"
+        "\u8bed\u6c14\u81ea\u7136\u3001\u53cb\u597d\u3001\u4e0d\u786c\u9500\uff0c\u4e0d\u7f16\u9020\u4ef7\u683c\u3001\u627f\u8bfa\u6216\u5bf9\u65b9\u9700\u6c42\u3002"
+        "\u53ef\u4ee5\u7ed3\u5408\u8d44\u6599\u7b80\u5355\u4ecb\u7ecd\u81ea\u5df1\u80fd\u63d0\u4f9b\u7684\u5e2e\u52a9\uff0c\u4f46\u4e0d\u8981\u4e00\u6b21\u8bb2\u592a\u591a\u3002"
+        f"\u5fc5\u987b\u4f7f\u7528{language_label}\uff08{language_code}\uff09\uff0c\u6700\u591a 80 \u4e2a\u5b57\u7b26\u3002"
+        "\u53ea\u8fd4\u56de JSON\uff1a{\"welcome\":\"...\"}\u3002"
+    )
+    contact_label = contact_name or "\u672a\u77e5"
+    memory_label = str(memory_context or "").strip()[:6000] or "(\u6682\u65e0\u8d44\u6599)"
+    user_prompt = (
+        f"\u65b0\u597d\u53cb\u6635\u79f0\uff1a{contact_label}\n\n"
+        f"\u4e2a\u4eba\u8d44\u6599\u4e0e\u4e1a\u52a1\u8bb0\u5fc6\uff1a\n{memory_label}"
+    )
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+        "temperature": 0.45,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+        "X-Installation-Id": installation_id,
+    }
+    async with httpx.AsyncClient(timeout=90.0, trust_env=False) as client:
+        response = await client.post(f"{_server_proxy_base()}/api/sutui-chat/completions", json=payload, headers=headers)
+    if response.status_code >= 400:
+        raise RuntimeError(f"sutui-chat HTTP {response.status_code}: {(response.text or '')[:500]}")
+    data = response.json() if response.content else {}
+    try:
+        content = str(data["choices"][0]["message"]["content"] or "").strip()
+    except Exception:
+        content = ""
+    parsed = _json_from_text(content)
+    welcome = str(parsed.get("welcome") or parsed.get("reply") or parsed.get("content") or "").strip()
+    if not welcome and content and not content.startswith("{"):
+        welcome = re.sub(r"^```.*?```$", "", content, flags=re.S).strip()
+    welcome = re.sub(r"\s+", " ", welcome).strip()[:240]
+    if not welcome or _looks_like_auto_reply_control_payload(welcome):
+        raise RuntimeError("AI did not generate a sendable friend welcome")
+    return welcome
+
+
+async def _welcome_accepted_friend_requests(
+    account_id: str,
+    friend_requests: Dict[str, Any],
+    *,
+    auth_context: Optional[Dict[str, Any]],
+    user_id: Optional[int],
+    memory_context: str,
+    reply_language: str,
+) -> Dict[str, int]:
+    generated = 0
+    sent = 0
+    failed = 0
+    seen_names: set[str] = set()
+    items = [item for item in (friend_requests.get("items") or []) if isinstance(item, dict)]
+    for item in items:
+        if str(item.get("status") or "").lower() != "accepted":
+            continue
+        contact_name = str(item.get("display_name") or "").strip()
+        normalized_name = contact_name.casefold()
+        if not contact_name or normalized_name in seen_names:
+            item["welcome_status"] = "failed"
+            item["welcome_error"] = "missing or duplicate exact contact name"
+            failed += 1
+            continue
+        seen_names.add(normalized_name)
+        try:
+            welcome = await _generate_new_friend_welcome(
+                auth_context=auth_context,
+                user_id=user_id,
+                contact_name=contact_name,
+                memory_context=memory_context,
+                reply_language=reply_language,
+            )
+            generated += 1
+            send_result = await _run_local_wechat_async(
+                _send_text_local_slow,
+                account_id,
+                contact_name,
+                welcome,
+                {"driver": "native_wechat_friend_welcome", "friend_request_key": str(item.get("key") or "")},
+            )
+            item["welcome_status"] = "sent"
+            item["welcome_text"] = welcome
+            item["welcome_result"] = send_result
+            sent += 1
+        except Exception as exc:
+            item["welcome_status"] = "failed"
+            item["welcome_error"] = str(exc)[:500]
+            failed += 1
+    return {"generated": generated, "sent": sent, "failed": failed}
+
+
 def _auto_reply_report_line(value: Any, max_chars: int = 240) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
     return text[:max_chars]
@@ -3298,6 +3541,8 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         "friend_requests_checked": int(result.get("friend_requests_checked") or 0),
         "friend_requests_accepted": int(result.get("friend_requests_accepted") or 0),
         "friend_requests_failed": int(result.get("friend_requests_failed") or 0),
+        "friend_welcome_sent": int(result.get("friend_welcome_sent") or 0),
+        "friend_welcome_failed": int(result.get("friend_welcome_failed") or 0),
         "high_intent_count": high_intent_count,
         "group_invite_match_count": group_invite_match_count,
         "category_counts": category_counts,
@@ -3319,6 +3564,10 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         f"- 命中拉群条件：{report['group_invite_match_count']} 个",
         f"- 跳过：{report['skipped']} 个；群聊/公众号排除：{report['skipped_groups']} 个；失败：{report['failed']} 个",
     ]
+    lines.append(
+        f"- \u65b0\u597d\u53cb\u6b22\u8fce\u8bed\uff1a\u5df2\u53d1\u9001 {report['friend_welcome_sent']} \u6761\uff0c"
+        f"\u5931\u8d25 {report['friend_welcome_failed']} \u6761"
+    )
     if report["stop_reason"] == "last_message_over_24h":
         lines.append("- 已读到最后消息超过 24 小时的会话，本轮停止继续往后检查")
     elif report["stop_reason"] == "cancelled":
@@ -3469,6 +3718,9 @@ async def run_auto_reply_once(
         "friend_requests_checked": 0,
         "friend_requests_accepted": 0,
         "friend_requests_failed": 0,
+        "friend_welcome_generated": 0,
+        "friend_welcome_sent": 0,
+        "friend_welcome_failed": 0,
         "friend_requests": {
             "ok": True,
             "skipped": not check_friend_requests,
@@ -3509,6 +3761,18 @@ async def run_auto_reply_once(
                 result["friend_requests_checked"] = int(friend_requests.get("checked") or 0)
                 result["friend_requests_accepted"] = int(friend_requests.get("accepted") or 0)
                 result["friend_requests_failed"] = int(friend_requests.get("failed") or 0)
+                welcome_stats = await _welcome_accepted_friend_requests(
+                    account_id,
+                    friend_requests,
+                    auth_context=_AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
+                    user_id=effective_user_id,
+                    memory_context=str(memory.get("text") or ""),
+                    reply_language=str(cfg.get("language") or "zh-CN"),
+                )
+                friend_requests["welcome"] = welcome_stats
+                result["friend_welcome_generated"] = int(welcome_stats.get("generated") or 0)
+                result["friend_welcome_sent"] = int(welcome_stats.get("sent") or 0)
+                result["friend_welcome_failed"] = int(welcome_stats.get("failed") or 0)
             except Exception as friend_exc:
                 result["friend_requests"] = {"ok": False, "error": str(friend_exc)[:500]}
                 result["friend_requests_failed"] = 1
@@ -3579,16 +3843,24 @@ async def run_auto_reply_once(
                 sync_result = await _run_local_wechat_async(
                     sync_local_messages,
                     account_id,
-                    "",
+                    peer_id,
                     load_more_pages=0,
                     select_via_uia=False,
-                    read_chat_info=True,
+                    current_selected=True,
+                    # The session row was already clicked above.  Do not ask
+                    # wxauto4 for ChatBox.get_info() here: wxauto4 41.x opens
+                    # the contact/avatar area while resolving chat identity.
+                    read_chat_info=False,
                     download_attachments=False,
                 )
                 _collect_local_driver_recovery(result, sync_result)
                 chat_info = sync_result.get("chat_info") if isinstance(sync_result.get("chat_info"), dict) else {}
                 actual_peer = str(sync_result.get("peer_id") or peer_id)
                 chat_type = str((chat_info or {}).get("chat_type") or "").strip().lower()
+                if chat_type in {"", "unknown"}:
+                    chat_type = str(sync_result.get("message_chat_type") or "").strip().lower()
+                if chat_type in {"", "unknown"}:
+                    chat_type = _known_local_peer_chat_type(account_id, actual_peer)
                 if chat_type in {"group", "chatroom", "official", "subscription"} or _looks_like_group_session(
                     {
                         "peer_id": actual_peer,
@@ -5934,8 +6206,10 @@ def _open_next_visible_session(
                 # are not eligible for personal-message takeover.
                 processed.add(peer_id)
                 continue
+            _dismiss_local_wechat_session_ghost_windows(hwnd)
             _uia_click(cell)
             time.sleep(random.uniform(0.35, 0.65))
+            _dismiss_local_wechat_session_ghost_windows(hwnd)
             return item
         return None
 
@@ -6000,8 +6274,10 @@ def _open_local_session_by_uia(
         root = auto.ControlFromHandle(int(hwnd))
         cell = _find_uia_session_cell(root, target)
         if cell is not None:
+            _dismiss_local_wechat_session_ghost_windows(hwnd)
             _uia_click(cell)
             time.sleep(random.uniform(0.35, 0.65))
+            _dismiss_local_wechat_session_ghost_windows(hwnd)
             return {
                 "ok": True,
                 "peer_id": target,
@@ -7151,13 +7427,14 @@ def _sync_local_messages_once(
     select_via_uia: bool = False,
     uia_session_max_rounds: int = 1,
     read_chat_info: bool = True,
+    current_selected: bool = False,
     download_attachments: bool = True,
 ) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
     wx = _get_wxauto4_client(account_id)
     target = str(peer_id or "").strip()
-    if target:
+    if target and not current_selected:
         if select_via_uia:
             _open_local_session_by_uia(account_id, target, max_rounds=uia_session_max_rounds)
         else:
@@ -7180,6 +7457,9 @@ def _sync_local_messages_once(
             except Exception:
                 break
     messages = wx.GetAllMessage() if hasattr(wx, "GetAllMessage") else []
+    message_chat_type = "group" if any(
+        _raw_local_message_is_group(_obj_dict(msg)) for msg in (messages or [])
+    ) else ""
     items = [
         _persist_message_obj(
             account_id,
@@ -7207,7 +7487,11 @@ def _sync_local_messages_once(
                 "clear_unread": True,
                 "raw": {"source": "current_selected_message_sync", "chat_info": info or {}},
             },
-            chat_type=str((info or {}).get("chat_type") or "unknown"),
+            chat_type=(
+                str((info or {}).get("chat_type") or "").strip().lower()
+                if str((info or {}).get("chat_type") or "").strip().lower() not in {"", "unknown"}
+                else message_chat_type or _known_local_peer_chat_type(account_id, actual_peer) or "unknown"
+            ),
         )
     has_new_message = _message_compare_key(previous_latest) != _message_compare_key(latest)
     if previous_latest is None and latest is None:
@@ -7216,6 +7500,7 @@ def _sync_local_messages_once(
         "ok": True,
         "peer_id": actual_peer,
         "chat_info": info or {},
+        "message_chat_type": message_chat_type,
         "items": inserted,
         "count": len(inserted),
         "new_message_count": len(inserted),
@@ -7236,6 +7521,7 @@ def sync_local_messages(
     select_via_uia: bool = False,
     uia_session_max_rounds: int = 1,
     read_chat_info: bool = True,
+    current_selected: bool = False,
     download_attachments: bool = True,
 ) -> Dict[str, Any]:
     return _run_local_driver_operation(
@@ -7248,6 +7534,7 @@ def sync_local_messages(
             select_via_uia=select_via_uia,
             uia_session_max_rounds=uia_session_max_rounds,
             read_chat_info=read_chat_info,
+            current_selected=current_selected,
             download_attachments=download_attachments,
         ),
     )
@@ -7283,8 +7570,9 @@ def _uia_find_by_names(root: Any, names: List[str], *, contains: bool = False, m
 
 
 def _uia_click(node: Any) -> None:
+    is_session_cell = _uia_control_class(node) == "mmui::ChatSessionCell"
     try:
-        node.Click(simulateMove=True)
+        node.Click(simulateMove=not is_session_cell)
     except Exception:
         node.Click(simulateMove=False)
     _human_pause(floor=0.45)
@@ -7519,6 +7807,52 @@ def _friend_request_key(value: Any, action: str = "") -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest() if text else ""
 
 
+def _friend_request_display_name(item: Dict[str, Any]) -> str:
+    """Extract an exact chat target from a visible friend-request row."""
+    row_text = str(item.get("text") or item.get("preview") or "").strip()
+    action = str(item.get("action") or _friend_request_action_label(row_text)).strip()
+    ignored = {
+        action.lower(),
+        "accept",
+        "confirm",
+        "done",
+        "\u63a5\u53d7",
+        "\u540c\u610f",
+        "\u7b49\u5f85\u9a8c\u8bc1",
+        "\u524d\u5f80\u9a8c\u8bc1",
+    }
+    node = item.get("node")
+    if node is not None:
+        for child in _uia_walk(node, max_depth=5, max_nodes=80)[1:]:
+            value = re.sub(r"\s+", " ", _uia_control_text(child)).strip()
+            lowered = value.lower()
+            if not value or lowered in ignored or value == row_text or len(value) > 80:
+                continue
+            if _friend_request_action_label(value):
+                continue
+            return value
+
+    value = row_text
+    if action and value.lower().endswith(action.lower()):
+        value = value[: -len(action)].rstrip()
+    lines = [re.sub(r"\s+", " ", line).strip() for line in value.splitlines() if line.strip()]
+    if len(lines) > 1:
+        return lines[0][:80]
+    value = lines[0] if lines else value
+    for marker in (
+        "\u6211\u662f",
+        "\u8bf7\u6c42\u6dfb\u52a0",
+        "\u7533\u8bf7\u6dfb\u52a0",
+        "requested to connect",
+        "wants to add",
+    ):
+        index = value.lower().find(marker.lower())
+        if index > 0:
+            value = value[:index].strip()
+            break
+    return value[:80].strip()
+
+
 def _visible_pending_friend_requests(root: Any) -> List[Dict[str, Any]]:
     request_list = _uia_primary_contact_list(root)
     if request_list is None:
@@ -7544,16 +7878,16 @@ def _visible_pending_friend_requests(root: Any) -> List[Dict[str, Any]]:
         key = _friend_request_key(text, action)
         if not key:
             continue
-        out.append(
-            {
-                "node": child,
-                "key": key,
-                "action": action,
-                "text": text,
-                "preview": text[:120],
-                "rect": rect,
-            }
-        )
+        item = {
+            "node": child,
+            "key": key,
+            "action": action,
+            "text": text,
+            "preview": text[:120],
+            "rect": rect,
+        }
+        item["display_name"] = _friend_request_display_name(item)
+        out.append(item)
     return out
 
 
@@ -7768,6 +8102,7 @@ def _accept_local_friend_requests_once(
                         {
                             "key": request_key,
                             "status": "accepted",
+                            "display_name": str(item.get("display_name") or "")[:80],
                             "preview": str(item.get("preview") or "")[:120],
                             "steps": steps,
                         }
@@ -7778,6 +8113,7 @@ def _accept_local_friend_requests_once(
                         {
                             "key": request_key,
                             "status": "failed",
+                            "display_name": str(item.get("display_name") or "")[:80],
                             "preview": str(item.get("preview") or "")[:120],
                             "error": str(exc)[:300],
                         }

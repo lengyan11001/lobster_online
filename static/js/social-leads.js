@@ -548,6 +548,7 @@
           state.activeSourceId = '';
         }
         renderJobs();
+        if (state.activeJobId) loadJobDetail(state.activeJobId);
         autoResumeQueuedJobs();
         scheduleAutoRefresh();
         if (!silent) setMsg('', false);
@@ -640,10 +641,22 @@
         state.activeSourceId = '';
         renderJobs();
         renderActiveJob();
+        loadJobDetail(state.activeJobId);
         switchTab('runs');
       });
     });
     renderActiveJob();
+  }
+
+  function loadJobDetail(jobId) {
+    if (!jobId) return Promise.resolve();
+    return apiJson('/api/social-leads/jobs/' + encodeURIComponent(jobId))
+      .then(function(data) {
+        if (!data || !data.job) return;
+        replaceJob(data.job);
+        renderJobs();
+      })
+      .catch(function() {});
   }
 
   function renderActiveJob() {

@@ -1019,7 +1019,7 @@
           type: 'reply',
           title: '语音结果',
           text: (run && isMediaRun(run) && pickPrimaryMedia(run))
-            ? '宸插姞鍏ョ礌鏉愬簱锛屽彲鐩存帴鍦ㄧ礌鏉愬簱涓户缁煡鐪嬪拰浣跨敤銆?'
+            ? '已加入素材库，可直接在素材库中继续查看和使用。'
             : compactText(message.replyText, ''),
           time: message.updatedAt || '',
           status: ''
@@ -1390,7 +1390,7 @@
     var activeItem = syncSelectedSwarm(snapshot.swarmItems || []);
     var activeTimeline = activeItem && activeItem.timeline ? activeItem.timeline : snapshot.timeline;
     var activeResultRows = activeItem && activeItem.resultRows ? activeItem.resultRows : snapshot.resultRows;
-    var activeHeadline = activeItem && activeItem.title ? activeItem.title + '姝ｅ湪鑷姩澶勭悊' : snapshot.headline;
+    var activeHeadline = activeItem && activeItem.title ? activeItem.title + '正在自动处理' : snapshot.headline;
     var activeStageLabel = activeItem && activeItem.subtitle ? activeItem.subtitle : snapshot.stageLabel;
     var activeStageDetail = activeItem && activeItem.detail ? activeItem.detail : snapshot.stageDetail;
     var summaryFp = fingerprint({

@@ -18,7 +18,9 @@
     momentContactPage: 1,
     momentContactSearch: '',
     momentContactSelected: {},
-    childMomentContactSelected: {}
+    childMomentContactSelected: {},
+    contextGeneration: 0,
+    installationId: ''
   };
 
   var SALES_ROWS = [
@@ -583,9 +585,13 @@
     });
   }
   function render() { renderDevices(); renderList(); renderEditor(); }
-  function loadTemplates() {
-    var iid=selectedDeviceId(), query=iid ? '?installation_id=' + encodeURIComponent(iid) : '';
-    return api('/api/h5-workflows/templates' + query).then(function(data){ state.templates=(Array.isArray(data.templates) ? data.templates : []).map(normalizeTemplate); return state.templates; });
+  function loadTemplates(expectedInstallationId) {
+    var iid=String(expectedInstallationId || selectedDeviceId()).trim(), query=iid ? '?installation_id=' + encodeURIComponent(iid) : '';
+    return api('/api/h5-workflows/templates' + query).then(function(data){
+      if (iid !== selectedDeviceId()) return [];
+      state.templates=(Array.isArray(data.templates) ? data.templates : []).map(normalizeTemplate);
+      return state.templates;
+    });
   }
   function loadLocalWechatContacts() {
     var base=localBaseUrl();
@@ -607,7 +613,14 @@
       return state.devices;
     });
   }
-  function loadActive() { var iid=selectedDeviceId(); if (!iid) { state.active=null; renderStatus(); return Promise.resolve(null); } return api('/api/h5-workflows/active?installation_id=' + encodeURIComponent(iid)).then(function(data){state.active=data.activation || null; renderStatus(); return state.active;}); }
+  function loadActive(expectedInstallationId) {
+    var iid=String(expectedInstallationId || selectedDeviceId()).trim();
+    if (!iid) { state.active=null; renderStatus(); return Promise.resolve(null); }
+    return api('/api/h5-workflows/active?installation_id=' + encodeURIComponent(iid)).then(function(data){
+      if (iid !== selectedDeviceId()) return null;
+      state.active=data.activation || null; renderStatus(); return state.active;
+    });
+  }
   function applyServerTemplate(id) { state.selectedId=String(id || 'system_sales'); var base=normalizeTemplate(templateForSelected()); state.editingId=base.source === 'own' ? String(base.id || '') : ''; state.editingMeta=Object.assign({},base.meta || {}); state.nodes=normalizeWorkflowTimeline(base.nodes || []); if (state.selectedId === 'system_sales' && !ownSalesMirror()) { base=normalizeTemplate(Object.assign({},base,{nodes:salesNodes()})); state.nodes=normalizeWorkflowTimeline(base.nodes || []); } state.selectedTemplate=base; if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey; render(); loadActive().catch(function(){}); return base; }
   function selectTemplate(id) { var selected=String(id || 'system_sales'); return loadTemplates().then(function(){return applyServerTemplate(selected);}); }
   function resetNew() { state.selectedId=''; state.selectedTemplate={id:'',source:'own',name:'新员工',nodes:[],meta:{}}; state.editingId=''; state.editingMeta={}; state.nodes=[]; if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey; render(); }
@@ -717,7 +730,40 @@
       if(event.target.id==='oeNodeMomentSearch' || event.target.id==='oeChildMomentSearch') {state.momentContactSearch=String(event.target.value || '');state.momentContactPage=1;renderMomentPicker(event.target.id.indexOf('Child')>=0?'child':'node');}
     });
   }
-  function initialize(force) { var root=el('content-h5-employees'); if(!root) return; bind(root); clearError(); var requested=String(window.__onlineEmployeeSelectedId || '').trim(); if(requested) {state.selectedId=requested; window.__onlineEmployeeSelectedId='';} state.loading=true; Promise.all([loadTemplates(),loadDevices()]).then(function(){ if(!state.selectedId) state.selectedId='system_sales'; applyServerTemplate(state.selectedId); }).catch(function(err){showError(err.message || '员工数据加载失败'); if(!state.selectedId) {state.selectedId='system_sales';state.selectedTemplate={id:'system_sales',source:'system',name:'销售员工',meta:{system_template_key:'system_sales'},nodes:salesNodes()};state.nodes=clone(state.selectedTemplate.nodes);render();} }).finally(function(){state.loading=false;}); }
+  function resetForInstallationChange() {
+    state.contextGeneration += 1;
+    state.installationId = selectedDeviceId();
+    state.templates=[]; state.devices=[]; state.selectedId=''; state.selectedTemplate=null;
+    state.editingId=''; state.editingMeta={}; state.nodes=[]; state.active=null;
+    if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey;
+    render();
+  }
+  function initialize(force) {
+    var root=el('content-h5-employees'); if(!root) return;
+    bind(root); clearError();
+    var generation=++state.contextGeneration, iid=selectedDeviceId();
+    state.installationId=iid;
+    var requested=String(window.__onlineEmployeeSelectedId || '').trim();
+    if(requested) {state.selectedId=requested; window.__onlineEmployeeSelectedId='';}
+    state.loading=true;
+    Promise.all([loadTemplates(iid),loadDevices()]).then(function(){
+      if (generation !== state.contextGeneration || iid !== selectedDeviceId()) return;
+      if(!state.selectedId) state.selectedId='system_sales';
+      applyServerTemplate(state.selectedId);
+    }).catch(function(err){
+      if (generation !== state.contextGeneration || iid !== selectedDeviceId()) return;
+      showError(err.message || '员工数据加载失败');
+      if(!state.selectedId) {state.selectedId='system_sales';state.selectedTemplate={id:'system_sales',source:'system',name:'销售员工',meta:{system_template_key:'system_sales'},nodes:salesNodes()};state.nodes=clone(state.selectedTemplate.nodes);render();}
+    }).finally(function(){if (generation === state.contextGeneration) state.loading=false;});
+  }
+  function handleInstallationContextChange() {
+    if (!el('content-h5-employees')) return;
+    resetForInstallationChange();
+    initialize(true);
+    if (typeof loadOnlineH5Employees === 'function') loadOnlineH5Employees();
+  }
+  window.addEventListener('lobster:installation-id-changed', handleInstallationContextChange);
+  window.addEventListener('lobster:device-seed-changed', handleInstallationContextChange);
   function syncNodeModalFields() {
     var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), label=String((el('oeNodeLabel') || {}).value || ''), note=String((el('oeNodeNote') || {}).value || ''), takeover=key === 'native_wechat_poll', douyinPrivate=isDouyinPrivate({ability_key:key,ability_label:label,note:note}), douyinCollection=key === 'douyin_leads' && salesAction(note || label) === 'search_collect';
     if (el('oeNodeGroupInviteField')) el('oeNodeGroupInviteField').hidden=!takeover;

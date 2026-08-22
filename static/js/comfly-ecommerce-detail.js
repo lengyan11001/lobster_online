@@ -505,7 +505,7 @@
     var panel = byId('ecomTaskDrawer');
     var btn = byId('ecomToggleTaskDrawerBtn');
     if (panel) panel.classList.toggle('open', !!state.taskDrawerOpen);
-    if (btn) btn.textContent = state.taskDrawerOpen ? '鏀惰捣浠诲姟' : '鍏ㄩ儴浠诲姟';
+    if (btn) btn.textContent = state.taskDrawerOpen ? '收起任务' : '全部任务';
   }
 
   function _rehydrateRecentJobResult(record) {

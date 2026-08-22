@@ -67,8 +67,8 @@
     root.innerHTML =
       '<button id="lobsterTaskFab" class="lobster-task-fab" type="button" aria-label="执行任务" title="执行任务">' +
         '<svg viewBox="0 0 24 24" aria-hidden="true">' +
-          '<path d="M5 6h9M5 12h7M5 18h8"></path>' +
-          '<path d="m17 10 3 2-3 2z"></path>' +
+          '<path d="M5.5 17.5 4 21l4.2-1.35A9 9 0 1 0 5.5 17.5Z"></path>' +
+          '<path d="M8.5 12h.01M12 12h.01M15.5 12h.01"></path>' +
         '</svg><i></i>' +
       '</button>' +
       '<section id="lobsterTaskPanel" class="lobster-task-panel" hidden>' +

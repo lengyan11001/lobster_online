@@ -694,6 +694,25 @@
       padding: 0.35rem 1rem;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     }
+    .header-language-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.45rem 1rem;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+    .header-language-row select {
+      min-width: 96px;
+      padding: 0.3rem 1.8rem 0.3rem 0.5rem;
+      border: 1px solid rgba(255,255,255,0.14);
+      border-radius: 6px;
+      background: #20232b;
+      color: var(--text);
+      font: inherit;
+      cursor: pointer;
+    }
     .chat-msg a { color: var(--accent); text-decoration: underline; }
     .chat-msg a:hover { color: var(--accent-hover); }
     .chat-msg.typing { opacity: 0.9; }
@@ -1134,3 +1153,7 @@
     .help-hint-body code { font-size: 0.85em; }
     #helpHintModal { z-index: 12000; }
     #helpHintModal .modal { max-width: 440px; }
+
+html[data-language="en-US"] .logo-primary {
+  margin-right: 0.25em;
+}

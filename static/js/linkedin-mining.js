@@ -9,7 +9,10 @@
     docs: [],
     pollTimer: null,
     templates: [],
-    templatesLoading: false
+    templatesLoading: false,
+    jobsRequestInFlight: false,
+    jobsRequestSeq: 0,
+    jobsRequestPromise: null
   };
   var DRAFT_KEY = 'linkedinMining.inputDraft.v1';
   var LEAD_STATE_PREFIX = 'linkedinMining.leadState.';
@@ -310,6 +313,7 @@
     raw = raw || {};
     var contact = raw.contact && typeof raw.contact === 'object' ? raw.contact : contactFromText(raw.contact || raw.contact_status || '');
     var name = raw.name || raw.candidate_key || raw.author || raw.username || '-';
+    if (/^\d{6,}$/.test(String(name))) name = 'LinkedIn 用户（待补全姓名）';
     var role = raw.role || raw.headline || raw.title || '';
     var company = raw.company || raw.company_name || '';
     var score = Number(raw.score || raw.rank_score || 0);
@@ -441,7 +445,11 @@
       host.innerHTML = '<div class="li-meta">请选择一个任务。</div>';
       return;
     }
-    var steps = job.steps || [];
+    var steps = (job.steps || []).filter(function(step) {
+      // Empty optional branches are recorded as skipped for auditability but
+      // should not occupy the user's execution flow.
+      return (step.status || 'pending') !== 'skipped';
+    });
     host.innerHTML = steps.map(function(step, idx) {
       var st = step.status || 'pending';
       return '<div class="li-step is-' + esc(st) + '">'
@@ -657,11 +665,31 @@
     var limitations = Array.isArray(report.limitations) ? report.limitations : [];
     var overview = report.lead_overview || {};
     var actionWorkbench = report.action_workbench && typeof report.action_workbench === 'object' ? report.action_workbench : {};
+    function safeContact(value) {
+      if (value && typeof value === 'object') {
+        var fields = [];
+        if (value.email) fields.push(value.email);
+        ['phone_numbers', 'websites', 'twitter'].forEach(function(key) {
+          if (Array.isArray(value[key])) fields = fields.concat(value[key]);
+        });
+        if (value.wechat) fields.push(value.wechat);
+        value = fields.join(', ');
+      }
+      var text = String(value || '').trim();
+      if (!text) return '';
+      var values = [];
+      var email = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig) || [];
+      var urls = text.match(/https?:\/\/[^\s,，]+/ig) || [];
+      var phones = text.match(/(?:\+?\d[\d\s().-]{6,}\d)/g) || [];
+      values = email.concat(urls, phones).map(function(x) { return String(x).trim(); }).filter(function(x, i, all) { return x && all.indexOf(x) === i; });
+      return values.slice(0, 8).join(', ');
+    }
     return '<div class="li-report">'
       + block('执行摘要', paragraph(report.executive_summary))
       + block('线索概览', '<div class="li-stats">' + statCard('候选人', overview.candidate_count || '-') + statCard('有公开联系方式', overview.with_public_contact || '-') + statCard('建议', overview.recommendation || '-') + '</div>')
       + block('联系方式列表', contactList.length ? '<div class="li-table-wrap"><table class="li-table"><thead><tr><th>姓名</th><th>角色/公司</th><th>联系方式</th><th>下一步</th></tr></thead><tbody>' + contactList.map(function(item) {
-          return '<tr><td>' + esc(item.name || '-') + '</td><td>' + esc([item.role, item.company].filter(Boolean).join(' / ') || '-') + '</td><td>' + esc(item.contact || '-') + '</td><td>' + esc(item.next_action || '-') + '</td></tr>';
+          var displayName = /^\d{6,}$/.test(String(item.name || '')) ? 'LinkedIn 用户（待补全姓名）' : (item.name || '-');
+          return '<tr><td>' + esc(displayName) + '</td><td>' + esc([item.role, item.company].filter(Boolean).join(' / ') || '-') + '</td><td>' + esc(safeContact(item.contact) || '-') + '</td><td>' + esc(item.next_action || '-') + '</td></tr>';
         }).join('') + '</tbody></table></div>' : '<div class="li-meta">本轮没有可直接展示的公开联系方式。</div>')
       + block('优先跟进线索', priority.length ? '<div class="li-output-cards">' + priority.map(function(item) {
           return '<div class="li-output-card"><div class="li-output-head"><strong>' + esc(item.name || '-') + '</strong><span class="li-score">' + esc(item.score || '-') + '</span></div>'
@@ -974,14 +1002,28 @@
   }
 
   function loadJobs(silent) {
-    return apiJson('/api/linkedin-mining/jobs?limit=50').then(function(data) {
-      state.jobs = data.items || [];
+    if (state.jobsRequestInFlight && state.jobsRequestPromise) return state.jobsRequestPromise;
+    var requestSeq = ++state.jobsRequestSeq;
+    state.jobsRequestInFlight = true;
+    state.jobsRequestPromise = apiJson('/api/linkedin-mining/jobs?limit=50').then(function(data) {
+      // A slower response from an older poll must never roll back a newer state.
+      if (requestSeq !== state.jobsRequestSeq) return;
+      var incoming = Array.isArray(data.items) ? data.items : [];
+      // Do not erase the workbench on a transient empty response during a
+      // restart or auth refresh; the next poll will reconcile the list.
+      if (incoming.length || !state.jobs.length) state.jobs = incoming;
       if (!state.activeJobId && state.jobs.length) state.activeJobId = state.jobs[0].job_id;
       renderJobs();
       if (!silent) setMsg('', false);
     }).catch(function(err) {
       setMsg(err.message || '任务加载失败', true);
+    }).finally(function() {
+      if (requestSeq === state.jobsRequestSeq) {
+        state.jobsRequestInFlight = false;
+        state.jobsRequestPromise = null;
+      }
     });
+    return state.jobsRequestPromise;
   }
 
   function loadDocs() {
@@ -1137,7 +1179,7 @@
     if (state.pollTimer) clearInterval(state.pollTimer);
     state.pollTimer = setInterval(function() {
       var job = activeJob();
-      if (!job || ['completed', 'failed', 'canceled', 'stale'].indexOf(job.status) >= 0) return;
+      if (state.jobsRequestInFlight || !job) return;
       loadJobs(true);
     }, 3500);
   }
