@@ -1,7 +1,7 @@
 {
-  "version": "1.0.207",
-  "build": 251,
-  "applied_at": "2026-08-22T23:57:59+08:00",
+  "version": "1.0.208",
+  "build": 252,
+  "applied_at": "2026-08-22T23:59:50+08:00",
   "note": "complete bilingual Online and H5 account language",
-  "bundle_sha256": "6a4b45e1e121164ae9526fc3c421c4d643147d3449e8dc4ca91227bc7122ae0d"
+  "bundle_sha256": "8bcf2c7853f2be06b6b1238b7b393d614fadb09279cc8a4f9ed64697d6a839cb"
 }
