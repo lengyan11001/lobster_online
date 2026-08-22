@@ -405,6 +405,8 @@ def _normalize_video_channel(raw: str) -> str:
         return "openmind"
     if s in {"xai", "x-ai", "official-xai", "official_xai"}:
         return "xai"
+    if s in {"xing", "xingapi", "xing-seedance", "xing_seedance", "星链"}:
+        return "xing"
     if s in {"yunwu", "yw", "cloudmist", "cloud-mist", "云雾", "雲霧"}:
         return "yunwu"
     if s in {"comfly", "veo", "veo3", "veo3.1", "veo31"}:
@@ -433,6 +435,8 @@ def _default_video_model(channel: str) -> str:
         return "veo31-fast"
     if normalized == "xai":
         return "grok-imagine-video-1.5"
+    if normalized == "xing":
+        return "seedance-2.5"
     if normalized == "yunwu":
         return "veo3.1"
     if normalized == "comfly":
@@ -1342,6 +1346,54 @@ class ComflySeedanceClient:
 
             return _retry(action, self.config.video_submit_retries, self.config.network_retry_delay_seconds, self.logger, call_xai)
 
+        if video_channel == "xing":
+            images = [url for url in reference_urls if url]
+            if segment_reference_url and segment_reference_url not in images:
+                images.append(segment_reference_url)
+            body = {
+                "model": video_model or "seedance-2.5",
+                "prompt": prompt,
+                "duration": int(duration_seconds),
+                "resolution": "720p",
+                "ratio": _normalize_aspect_ratio(self.config.aspect_ratio),
+            }
+            if images:
+                # The proxy currently accepts a single reference image for Xing.
+                body["image"] = images[0]
+                body["image_url"] = images[0]
+
+            def call_xing() -> Dict[str, Any]:
+                vid_url = f"{video_base_url}/xing/v1/videos/generations"
+                self._trace_request("xing_seedance_submit", vid_url, body)
+                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=180)
+                payload = self._check(r)
+                data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+                task_id = str(
+                    payload.get("id")
+                    or payload.get("task_id")
+                    or payload.get("request_id")
+                    or data.get("id")
+                    or data.get("task_id")
+                    or data.get("request_id")
+                    or ""
+                ).strip()
+                if not task_id:
+                    raise PipelineError(f"Xing Seedance submit returned no task id: {payload}")
+                payload["_request"] = body
+                payload["task_id"] = task_id
+                payload["video_channel"] = "xing"
+                payload["video_base_url"] = video_base_url
+                payload["video_model"] = video_model or "seedance-2.5"
+                return payload
+
+            return _retry(
+                action,
+                self.config.video_submit_retries,
+                self.config.network_retry_delay_seconds,
+                self.logger,
+                call_xing,
+            )
+
         if video_channel == "yunwu":
             images = [segment_reference_url] if segment_reference_url else []
             body = {
@@ -1466,6 +1518,9 @@ class ComflySeedanceClient:
                 elif video_channel == "xai":
                     poll_url = f"{video_base_url}/xai/v1/videos/{task_id}"
                     phase = "xai_video_poll"
+                elif video_channel == "xing":
+                    poll_url = f"{video_base_url}/xing/v1/videos/{task_id}"
+                    phase = "xing_seedance_poll"
                 elif video_channel == "yunwu":
                     poll_url = f"{video_base_url}/v1/video/query?{urlencode({'id': task_id})}"
                     phase = "yunwu_video_poll"

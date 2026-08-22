@@ -65,7 +65,15 @@
     return value === 'grok-imagine-video-1.5-preview' || value === 'yingmeng1.5plus' || value === '影梦1.5plus';
   }
 
+  function isXingSeedance25Model(model) {
+    var value = String(model || '').toLowerCase().replace(/\s+/g, '');
+    return value === 'seedance-2.5' || value === 'seedance2.5' || value === 'yingmeng2.5' || value === '影梦2.5';
+  }
+
   function videoRequestForModel(model) {
+    if (isXingSeedance25Model(model)) {
+      return { model: 'seedance-2.5', channel: 'xing' };
+    }
     if (isOpenMindGrokModel(model)) {
       return { model: 'grok-imagine-video-1.5-preview', channel: 'openmind' };
     }

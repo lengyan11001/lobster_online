@@ -103,6 +103,13 @@
       "comfly_model": "seedance2.0-900",
       "note": "Xing Seedance2.0 group. 720p video generation, no image/audio references. User charge is 1000 credits with the default 2x multiplier."
     },
+    "seedance-2.5": {
+      "price_type": "per_call",
+      "price_per_unit": 500,
+      "api_format": "xing_seedance",
+      "comfly_model": "seedance-2.5",
+      "note": "Xing Seedance2.5 group. 720p video generation. User charge follows the same 2x multiplier as Seedance2.0."
+    },
     "sdols-2.0": {
       "price_type": "per_call",
       "price_per_unit": 30,
@@ -171,14 +178,15 @@
     "grok-imagine-video-1.5": {
       "price_type": "per_call",
       "price_per_unit": 80,
-      "api_format": "xai_official",
+      "api_format": "grok",
       "comfly_model": "grok-imagine-video-1.5",
+      "token_group": "comfyui_video",
       "sutui_equivalent": [
         "grok-imagine-video-1.5",
         "xai/grok-imagine-video/image-to-video",
         "xai/grok-imagine-video/text-to-video"
       ],
-      "note": "Official xAI Grok Imagine Video 1.5 fallback channel; same user charge as the existing Grok video provider."
+      "note": "ComfyUI-style Grok Imagine Video 1.5 direct JSON channel with dedicated COMFLY_API_KEY_COMFYUI_VIDEO routing; same user charge as the existing Grok video provider."
     },
     "sora2": {
       "enabled": false,

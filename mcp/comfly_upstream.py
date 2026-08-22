@@ -788,6 +788,15 @@ async def call_comfly_video_generate(
             body["resolution"] = payload.get("resolution")
         if payload.get("seed") is not None:
             body["seed"] = payload.get("seed")
+    elif api_format == "xing_seedance":
+        url = f"{base}/api/comfly-proxy/xing/v1/videos/generations"
+        body = {
+            "model": comfly_model,
+            "prompt": prompt,
+            "duration": duration,
+            "resolution": str(payload.get("resolution") or "720p"),
+            "ratio": payload.get("ratio") or payload.get("aspect_ratio") or "9:16",
+        }
     elif api_format == "sora2":
         url = f"{base}/v1/videos"
         request_mode = "multipart"
@@ -862,6 +871,8 @@ async def call_comfly_task_query(task_id: str, token_group: str = "", api_format
         url = f"{base}/v2/videos/generations/{task_id}"
     elif api_format == "sora2":
         url = f"{base}/v1/videos/{task_id}"
+    elif api_format == "xing_seedance":
+        url = f"{base}/api/comfly-proxy/xing/v1/videos/{task_id}"
     elif api_format == "seedance_legacy":
         url = f"{base}/seedance/v3/contents/generations/tasks/{task_id}"
     else:

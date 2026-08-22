@@ -1010,7 +1010,7 @@ def _xing_seedance_body(body: Dict[str, Any], model: str) -> Dict[str, Any]:
     if ratio not in {"16:9", "9:16"}:
         ratio = "9:16"
     return {
-        "model": (os.environ.get("XING_SEEDANCE_MODEL") or model or "seedance2.0-900").strip(),
+        "model": (model or os.environ.get("XING_SEEDANCE_MODEL") or "seedance2.0-900").strip(),
         "prompt": prompt,
         "duration": duration,
         "resolution": str(source.get("resolution") or "720p").strip() or "720p",
@@ -2469,9 +2469,9 @@ def _video_provider_policy(model: str, channel: str = "") -> Dict[str, Any]:
             "ok": True,
             "model_family": "grok",
             "providers": [
+                {"channel": "comfly", "model": "grok-imagine-video-1.5", "base_url": proxy_base},
                 {"channel": "xai", "model": "grok-imagine-video-1.5", "base_url": proxy_base},
                 {"channel": "openmind", "model": "grok-video-3", "base_url": proxy_base},
-                {"channel": "comfly", "model": "grok-video-3", "base_url": proxy_base},
                 {"channel": "yunwu", "model": "grok-video-3", "base_url": proxy_base},
             ],
         }
@@ -2484,6 +2484,15 @@ def _video_provider_policy(model: str, channel: str = "") -> Dict[str, Any]:
                 {"channel": "openmind", "model": "veo3.1-fast", "base_url": proxy_base},
                 {"channel": "comfly", "model": "veo3.1-fast", "base_url": proxy_base},
                 {"channel": "yunwu", "model": "veo3.1", "base_url": proxy_base},
+            ],
+        }
+
+    if low_model in {"seedance-2.5", "seedance2.5", "seedance2-5", "yingmeng2.5", "影梦2.5"}:
+        return {
+            "ok": True,
+            "model_family": "seedance25",
+            "providers": [
+                {"channel": "xing", "model": "seedance-2.5", "base_url": proxy_base},
             ],
         }
 
