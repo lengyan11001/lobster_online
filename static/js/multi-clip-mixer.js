@@ -1327,6 +1327,9 @@
     var templateBeforeRun = templateStateSnapshot();
     var template = selectedTemplateForRun(options.useTemplate);
     if (options.useTemplate && template) selectTemplate(template);
+    var overlayDescription = options.useTemplate && template && currentTemplateProvider() === 'shanjian'
+      ? String((($('mcmShanjianDescription') || {}).value || '').trim()).slice(0, 240)
+      : '';
     progress('merge', 'active', '正在处理第 ' + runIndex + '/' + totalRuns + ' 条，' + state.clips.length + ' 个视频片段');
     return post('/api/multi-clip-mixer/render', {
       title: totalRuns > 1 ? ('多段视频混剪 ' + runIndex) : '多段视频混剪',
@@ -1339,7 +1342,8 @@
       output_index: runIndex,
       bgm_url: music ? music.bgm_url : '',
       bgm_name: music ? music.music_name : '',
-      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24))
+      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24)),
+      overlay_description: overlayDescription
     }).then(function(baseResult) {
       state.lastBaseResult = baseResult;
       progress('merge', 'done', '第 ' + runIndex + '/' + totalRuns + ' 条基础成片完成，共 ' + formatSeconds(baseResult.duration));
