@@ -1,7 +1,7 @@
 {
-  "version": "1.0.208",
-  "build": 252,
-  "applied_at": "2026-08-22T23:59:50+08:00",
-  "note": "complete bilingual Online and H5 account language",
-  "bundle_sha256": "8bcf2c7853f2be06b6b1238b7b393d614fadb09279cc8a4f9ed64697d6a839cb"
+  "version": "1.0.209",
+  "build": 253,
+  "applied_at": "2026-08-23T14:26:16+08:00",
+  "note": "H5 Douyin all keywords and video mixer fixes",
+  "bundle_sha256": "bd05177f9513e6d275c75e98953c8a9916880fb21af511689a9a1ac3b6726465"
 }
