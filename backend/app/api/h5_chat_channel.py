@@ -3731,15 +3731,16 @@ def _scheduled_douyin_keyword_values(value: Any) -> List[str]:
     out: List[str] = []
     seen: set[str] = set()
     for item in raw_values:
-        text = re.sub(r"\s+", " ", str(item or "")).strip()
-        if not text:
-            continue
-        key = text.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(text[:120])
-    return out[:12]
+        for part in re.split(r"[，,、;；\r\n]+", str(item or "")):
+            text = re.sub(r"\s+", " ", part).strip()
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(text[:120])
+    return out
 
 
 def _scheduled_douyin_keyword_looks_like_workflow_title(value: Any) -> bool:
@@ -3767,7 +3768,7 @@ def _scheduled_douyin_search_keywords(source: Dict[str, Any]) -> List[str]:
             continue
         seen.add(normalized)
         keywords.append(keyword)
-    return keywords[:12]
+    return keywords
 
 
 def _scheduled_douyin_search_keyword(source: Dict[str, Any]) -> str:

@@ -805,9 +805,8 @@
     else { delete row.params.wechat_add_friend_enabled; delete row.params.wechat_add_friend_targets_source; delete row.params.wechat_add_friend_rules; delete row.params.reply_mode; }
     if (key === 'douyin_leads' && salesAction(note || label) === 'search_collect') {
       var keyword=String((el('oeNodeDouyinKeyword') || {}).value || '').trim();
-      if (!keyword) throw new Error('请填写采集关键词');
       var regions=String((el('oeNodeDouyinRegions') || {}).value || '全国').split(/[，,\n]+/).map(function(value){return value.trim();}).filter(Boolean);
-      row.params.keyword=keyword;
+      if (keyword) row.params.keyword=keyword; else { delete row.params.keyword; delete row.params.keywords; delete row.params.query; delete row.params.search_keyword; }
       row.params.regions=regions.length ? regions : ['全国'];
       row.params.max_results=Math.max(10,Math.min(100,Number((el('oeNodeDouyinMaxResults') || {}).value || 50)));
       row.params.mode=['script','api'].indexOf(String((el('oeNodeDouyinMode') || {}).value || '').toLowerCase()) >= 0 ? String(el('oeNodeDouyinMode').value).toLowerCase() : 'script';

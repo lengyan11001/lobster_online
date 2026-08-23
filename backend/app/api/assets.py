@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
@@ -1089,6 +1089,50 @@ def _asset_local_path(asset: Asset) -> Optional[Path]:
         return None
     path = ASSETS_DIR / asset.filename
     return path if path.exists() else None
+
+
+def _stream_local_asset(path: Path, media_type: str, request: Request) -> StreamingResponse | FileResponse:
+    """Serve local media with byte ranges so browsers can start/seek playback."""
+    size = path.stat().st_size
+    range_header = (request.headers.get("range") or "").strip()
+    headers = {"Accept-Ranges": "bytes"}
+    if not range_header or not range_header.lower().startswith("bytes="):
+        return FileResponse(path, media_type=media_type, headers=headers, content_disposition_type="inline")
+
+    match = re.fullmatch(r"(\d*)-(\d*)", range_header[6:].strip())
+    if not match or size <= 0:
+        raise HTTPException(status_code=416, detail="Invalid byte range", headers={"Content-Range": f"bytes */{size}"})
+    raw_start, raw_end = match.groups()
+    if raw_start:
+        start = int(raw_start)
+        end = int(raw_end) if raw_end else size - 1
+    else:
+        suffix = int(raw_end or 0)
+        if suffix <= 0:
+            raise HTTPException(status_code=416, detail="Invalid byte range", headers={"Content-Range": f"bytes */{size}"})
+        start = max(0, size - suffix)
+        end = size - 1
+    if start >= size or start > end:
+        raise HTTPException(status_code=416, detail="Invalid byte range", headers={"Content-Range": f"bytes */{size}"})
+    end = min(end, size - 1)
+    length = end - start + 1
+
+    def iterator():
+        with path.open("rb") as handle:
+            handle.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = handle.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    headers.update({
+        "Content-Length": str(length),
+        "Content-Range": f"bytes {start}-{end}/{size}",
+    })
+    return StreamingResponse(iterator(), status_code=206, media_type=media_type, headers=headers)
 
 
 def _safe_download_filename(name: str, fallback: str = "lobster-asset") -> str:
@@ -2638,6 +2682,13 @@ async def upload_asset(
         "media_type": mtype,
         "file_size": fsize,
         "source_url": None,
+        # Let media elements stream local uploads directly instead of waiting
+        # for the frontend to download the whole file into a Blob first.
+        "open_url": build_asset_file_url(
+            request,
+            aid,
+            expiry_sec=_ASSET_LIST_OPEN_FALLBACK_EXPIRY_SEC,
+        ),
         "local_only": True,
         "public_url_status": public_url_status,
     }
@@ -2872,6 +2923,7 @@ def add_asset_to_creative_candidate_group(
 @router.get("/api/assets/{asset_id}/content", summary="素材文件内容（需登录，用于前端预览）")
 def get_asset_content(
     asset_id: str,
+    request: Request,
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
@@ -2888,12 +2940,7 @@ def get_asset_content(
         "document": _content_type_for_asset_filename(a.filename),
     }
     ct = mt_map.get((a.media_type or "").lower(), "application/octet-stream")
-    return FileResponse(
-        path,
-        media_type=ct,
-        filename=a.filename,
-        content_disposition_type="inline",
-    )
+    return _stream_local_asset(path, ct, request)
 
 
 @router.post("/api/assets/{asset_id}/save-to-downloads", summary="保存素材到本机下载目录")
@@ -2985,6 +3032,7 @@ def save_chat_sessions_backup(
 @router.get("/api/assets/file/{asset_id}", summary="素材文件（带签名公开访问，供速推等拉取）")
 def serve_asset_file(
     asset_id: str,
+    request: Request,
     token: str = Query(..., description="签名 token"),
     expiry: int = Query(..., description="过期时间戳"),
     db: Session = Depends(get_db),
@@ -3011,12 +3059,9 @@ def serve_asset_file(
     }
     ct = mt_map.get(media_type, _content_type_for_asset_filename(a.filename))
     disposition = "attachment" if media_type == "document" else "inline"
-    return FileResponse(
-        path,
-        media_type=ct,
-        filename=a.filename,
-        content_disposition_type=disposition,
-    )
+    if disposition == "attachment":
+        return FileResponse(path, media_type=ct, filename=a.filename, content_disposition_type=disposition)
+    return _stream_local_asset(path, ct, request)
 
 
 @router.get("/api/assets/{asset_id}", summary="获取素材详情")

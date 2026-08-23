@@ -210,18 +210,23 @@
 
   function playableClipUrl(clip) {
     if (!clip) return Promise.resolve('');
-    if (clip.sourceUrl) return Promise.resolve(resolveUrl(clip.sourceUrl, apiBase()));
     if (clip.playObjectUrl) return Promise.resolve(clip.playObjectUrl);
-    var previewUrl = clip.previewUrl || (clip.assetId ? ('/api/assets/' + encodeURIComponent(clip.assetId) + '/content') : '');
-    if (!previewUrl) return Promise.resolve('');
-    if (clip.playLoading) return Promise.resolve('');
-    clip.playLoading = true;
-    return fetchObjectUrl(previewUrl).then(function(objectUrl) {
-      clip.playObjectUrl = objectUrl;
-      return objectUrl;
-    }).finally(function() {
-      clip.playLoading = false;
-    });
+    // Uploaded phone videos are commonly HEVC/H.265, which Chromium/WebView
+    // cannot decode. The playback endpoint returns a cached H.264 proxy.
+    var previewUrl = clip.assetId ? assetPlaybackUrl(clip.assetId) : (clip.previewUrl || '');
+    if (clip.playPromise) return clip.playPromise;
+    if (previewUrl) {
+      // Always prefer the authenticated local asset endpoint. A stored source_url
+      // may be a deferred/remote URL that the video element cannot read directly.
+      clip.playPromise = fetchObjectUrl(previewUrl).then(function(objectUrl) {
+        clip.playObjectUrl = objectUrl;
+        return objectUrl;
+      }).finally(function() {
+        clip.playPromise = null;
+      });
+      return clip.playPromise;
+    }
+    return clip.sourceUrl ? Promise.resolve(resolveUrl(clip.sourceUrl, apiBase())) : Promise.resolve('');
   }
 
   function randomSegmentForClip(clip, seconds) {
@@ -361,6 +366,10 @@
     return apiBase() + '/api/multi-clip-mixer/assets/' + encodeURIComponent(assetId) + '/poster.jpg';
   }
 
+  function assetPlaybackUrl(assetId) {
+    return apiBase() + '/api/multi-clip-mixer/assets/' + encodeURIComponent(assetId) + '/playback.mp4';
+  }
+
   function addVideoClip(clip) {
     clip = clip || {};
     var duration = Number(clip.duration || 0);
@@ -381,6 +390,7 @@
       assetId: assetId,
       name: (file && file.name) || ('视频 ' + (state.clips.length + 1)),
       sourceUrl: data.source_url || '',
+      streamUrl: data.open_url || '',
       previewUrl: assetContentUrl(assetId),
       posterUrl: assetPosterUrl(assetId),
       duration: Number(info.duration || data.duration || 0),
@@ -398,6 +408,7 @@
       assetId: assetId,
       name: item.name || item.title || item.filename || ('素材视频 ' + (state.clips.length + 1)),
       sourceUrl: item.source_url || item.sourceUrl || item.open_url || item.openUrl || '',
+      streamUrl: item.open_url || item.openUrl || '',
       previewUrl: item.preview_url || item.previewUrl || assetContentUrl(assetId),
       posterUrl: item.poster_url || item.posterUrl || item.cover_url || item.coverUrl || assetPosterUrl(assetId),
       duration: Number(item.duration || item.video_duration || item.duration_sec || (item.meta && (item.meta.duration || item.meta.duration_sec)) || 0),
@@ -429,6 +440,9 @@
     handlers = handlers || {};
     video.onerror = handlers.error || null;
     video.onloadedmetadata = handlers.loadedmetadata || null;
+    video.controls = true;
+    video.preload = 'auto';
+    video.playsInline = true;
     if (poster) video.poster = poster;
     if (src) video.src = src;
     video.load();
@@ -1225,6 +1239,8 @@
         source_url: task.video_url || '',
         preview_url: task.video_url || '',
         duration: Number(task.duration || baseResult.duration || 0),
+        introduce_name: title,
+        introduce_description: description,
         completion_message: '闪剪模板成片已完成，可打开预览。'
       };
       progress('template', 'done', '闪剪模板处理完成');
@@ -1311,6 +1327,13 @@
     var templateBeforeRun = templateStateSnapshot();
     var template = selectedTemplateForRun(options.useTemplate);
     if (options.useTemplate && template) selectTemplate(template);
+    var burnShanjianCopy = !!(options.useTemplate && template && currentTemplateProvider() === 'shanjian');
+    var overlayTitle = burnShanjianCopy
+      ? String((($('mcmShanjianTitle') || {}).value || '').trim()).slice(0, 80)
+      : '';
+    var overlayDescription = burnShanjianCopy
+      ? String((($('mcmShanjianDescription') || {}).value || '').trim()).slice(0, 240)
+      : '';
     progress('merge', 'active', '正在处理第 ' + runIndex + '/' + totalRuns + ' 条，' + state.clips.length + ' 个视频片段');
     return post('/api/multi-clip-mixer/render', {
       title: totalRuns > 1 ? ('多段视频混剪 ' + runIndex) : '多段视频混剪',
@@ -1323,7 +1346,9 @@
       output_index: runIndex,
       bgm_url: music ? music.bgm_url : '',
       bgm_name: music ? music.music_name : '',
-      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24))
+      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24)),
+      overlay_title: overlayTitle,
+      overlay_description: overlayDescription
     }).then(function(baseResult) {
       state.lastBaseResult = baseResult;
       progress('merge', 'done', '第 ' + runIndex + '/' + totalRuns + ' 条基础成片完成，共 ' + formatSeconds(baseResult.duration));

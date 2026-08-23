@@ -35,6 +35,8 @@ def test_h5_employee_editor_exposes_collection_followup_actions():
     ):
         assert f'id="{field_id}"' in html
     assert "row.params.keyword=keyword" in script
+    assert "if (!keyword) throw new Error('请填写采集关键词')" not in script
+    assert "留空使用当前设备 Online 已配置的全部关键词" in html
     assert "el('oeNodeDouyinKeyword').value" in script
     assert "return saveTemplate().then" in script
 
@@ -168,6 +170,15 @@ def test_search_action_uses_all_enabled_online_keywords():
 
     assert params["keywords"] == ["工业机器人", "数控加工", "精密零件"]
     assert _scheduled_douyin_search_keywords(params) == ["工业机器人", "数控加工", "精密零件"]
+
+
+def test_search_keywords_split_manual_input_and_keep_all_online_values():
+    online_keywords = [f"行业词{i}" for i in range(1, 16)]
+
+    assert _scheduled_douyin_search_keywords(
+        {"keyword": "深圳装修、口腔种植, 母婴门店\n工业机器人；数控加工"}
+    ) == ["深圳装修", "口腔种植", "母婴门店", "工业机器人", "数控加工"]
+    assert _scheduled_douyin_search_keywords({"keywords": online_keywords}) == online_keywords
 
 
 def test_multi_keyword_collection_runs_each_keyword_and_merges_tasks(monkeypatch):

@@ -13,6 +13,9 @@
 
   var GENERATED_EN = window.LobsterGeneratedEn || {};
   var CURATED_EN = {
+    '采集关键词（可选）': 'Collection Keywords (Optional)',
+    '留空使用当前设备 Online 已配置的全部关键词；手动填写可用逗号或换行分隔': 'Leave blank to use all keywords configured in Online for the current device. Separate custom keywords with commas or line breaks.',
+    '抖音获客 - Online 全部关键词': 'Douyin Leads - All Online Keywords',
     '首页': 'Home', '技能商店': 'Skills', '发布中心': 'Publishing', '内容记录': 'Content',
     '素材库': 'Assets', '客资线索': 'Leads', '定时任务': 'Schedules', '消费记录': 'Billing',
     '系统配置': 'System Settings', '日志': 'Logs', '个人设置': 'Personal Settings',

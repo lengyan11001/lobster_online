@@ -25,6 +25,7 @@ from .auth import _ServerUser, get_current_user_for_local
 logger = logging.getLogger(__name__)
 router = APIRouter()
 _POSTER_CACHE_DIR = Path(__file__).resolve().parents[3] / "cache" / "multi_clip_mixer_posters"
+_PLAYBACK_CACHE_DIR = Path(__file__).resolve().parents[3] / "cache" / "multi_clip_mixer_playback"
 
 
 class ClipSegment(BaseModel):
@@ -45,6 +46,8 @@ class MultiClipRenderBody(BaseModel):
     bgm_volume: float = Field(0.24, ge=0, le=1)
     clip_mode: str = Field("fixed", max_length=32)
     output_index: int = Field(1, ge=1, le=50)
+    overlay_title: str = Field("", max_length=80)
+    overlay_description: str = Field("", max_length=240)
 
 
 def _find_ffprobe(ffmpeg: str) -> str:
@@ -76,6 +79,108 @@ def _run_process(args: List[str], *, timeout: int = 3600) -> None:
 def _safe_cache_key(value: str) -> str:
     raw = str(value or "").strip()
     return "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in raw)[:96] or "asset"
+
+
+def _ass_escape(value: str) -> str:
+    return str(value or "").replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}")
+
+
+def _wrap_overlay_text(value: str, *, width: int, max_lines: int) -> List[str]:
+    compact = " ".join(str(value or "").split())
+    if not compact:
+        return []
+    lines = [compact[index : index + width] for index in range(0, len(compact), width)]
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = lines[-1][:-1] + "…" if lines[-1] else "…"
+    return lines
+
+
+def _apply_text_overlay(
+    ffmpeg: str,
+    input_path: Path,
+    work_dir: Path,
+    *,
+    width: int,
+    height: int,
+    title: str,
+    description: str,
+) -> Path:
+    title_lines = _wrap_overlay_text(title, width=18, max_lines=2)
+    description_lines = _wrap_overlay_text(description, width=24, max_lines=3)
+    if not title_lines and not description_lines:
+        return input_path
+
+    title_size = max(34, round(width * 0.054))
+    description_size = max(26, round(width * 0.038))
+    title_margin = max(48, round(height * 0.095))
+    description_margin = (
+        title_margin + max(74, round(title_size * 1.55 * len(title_lines)))
+        if title_lines
+        else title_margin
+    )
+    ass_path = work_dir / "overlay-copy.ass"
+    events: List[str] = []
+    if title_lines:
+        events.append(
+            "Dialogue: 0,0:00:00.00,9:59:59.00,Title,,0,0,0,,"
+            + r"\N".join(_ass_escape(line) for line in title_lines)
+        )
+    if description_lines:
+        events.append(
+            "Dialogue: 0,0:00:00.00,9:59:59.00,Description,,0,0,0,,"
+            + r"\N".join(_ass_escape(line) for line in description_lines)
+        )
+    ass_path.write_text(
+        "\n".join(
+            [
+                "[Script Info]",
+                "ScriptType: v4.00+",
+                f"PlayResX: {width}",
+                f"PlayResY: {height}",
+                "ScaledBorderAndShadow: yes",
+                "",
+                "[V4+ Styles]",
+                "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+                f"Style: Title,Microsoft YaHei,{title_size},&H00FFFFFF,&H00FFFFFF,&H00202020,&H70000000,-1,0,0,0,100,100,0,0,3,2,0,8,48,48,{title_margin},1",
+                f"Style: Description,Microsoft YaHei,{description_size},&H00FFFFFF,&H00FFFFFF,&H00202020,&H70000000,0,0,0,0,100,100,0,0,3,2,0,8,56,56,{description_margin},1",
+                "",
+                "[Events]",
+                "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+                *events,
+            ]
+        )
+        + "\n",
+        encoding="utf-8-sig",
+    )
+    escaped_ass_path = ass_path.resolve().as_posix().replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+    output_path = work_dir / "merged_with_overlay.mp4"
+    _run_process(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(input_path),
+            "-vf",
+            f"subtitles=filename='{escaped_ass_path}'",
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "21",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+    )
+    return output_path
 
 
 def _video_poster_path(asset_id: str, path: Path) -> Path:
@@ -137,6 +242,62 @@ def _ensure_video_poster(asset_id: str, path: Path) -> Path:
     return target
 
 
+def _video_playback_path(asset_id: str, path: Path) -> Path:
+    stat = path.stat()
+    _PLAYBACK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    safe_id = _safe_cache_key(asset_id)
+    current = _PLAYBACK_CACHE_DIR / f"{safe_id}_{stat.st_size}_{int(stat.st_mtime)}.mp4"
+    for old in _PLAYBACK_CACHE_DIR.glob(f"{safe_id}_*.mp4"):
+        if old != current:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+    return current
+
+
+def _ensure_video_playback(asset_id: str, path: Path) -> Path:
+    """Create an H.264/AAC proxy that Chromium/WebView can always decode."""
+    target = _video_playback_path(asset_id, path)
+    if target.is_file() and target.stat().st_size > 0:
+        return target
+    ffmpeg = find_ffmpeg()
+    _run_process(
+        [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(path),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0?",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "24",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            str(target),
+        ],
+        timeout=900,
+    )
+    if not target.is_file() or target.stat().st_size <= 0:
+        raise RuntimeError("视频兼容预览生成失败")
+    return target
+
+
 @router.get("/api/multi-clip-mixer/assets/{asset_id}/poster.jpg")
 def multi_clip_asset_poster(
     asset_id: str,
@@ -161,6 +322,36 @@ def multi_clip_asset_poster(
     except Exception as exc:
         logger.warning("[multi-clip-mixer] poster failed asset_id=%s user_id=%s err=%s", asset_id, current_user.id, exc)
         raise HTTPException(status_code=500, detail=f"视频封面生成失败：{exc}") from exc
+    finally:
+        db.close()
+        if download_dir:
+            shutil.rmtree(download_dir, ignore_errors=True)
+
+
+@router.get("/api/multi-clip-mixer/assets/{asset_id}/playback.mp4")
+def multi_clip_asset_playback(
+    asset_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    db = SessionLocal()
+    download_dir: Optional[Path] = None
+    try:
+        path, _, media_type = resolve_asset_path(db, current_user.id, asset_id)
+        if media_type != "video":
+            raise HTTPException(status_code=400, detail="该素材不是视频，无法预览")
+        if path.parent.name.startswith("media_edit_dl_"):
+            download_dir = path.parent
+        playback = _ensure_video_playback(asset_id, path)
+        return FileResponse(
+            str(playback),
+            media_type="video/mp4",
+            headers={"Cache-Control": "private, max-age=86400", "Accept-Ranges": "bytes"},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[multi-clip-mixer] playback proxy failed asset_id=%s user_id=%s", asset_id, current_user.id)
+        raise HTTPException(status_code=500, detail=f"视频兼容预览生成失败：{exc}") from exc
     finally:
         db.close()
         if download_dir:
@@ -481,6 +672,16 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
             )
             final_path = mixed_path
 
+        final_path = _apply_text_overlay(
+            ffmpeg,
+            final_path,
+            work_dir,
+            width=target_width,
+            height=target_height,
+            title=body.overlay_title,
+            description=body.overlay_description,
+        )
+
         output_info = _probe_video(final_path, ffprobe)
         return {
             "data": final_path.read_bytes(),
@@ -554,6 +755,8 @@ async def render_multi_clip_video(
             "bgm_name": (body.bgm_name or "").strip()[:120],
             "bgm_url": (body.bgm_url or "").strip()[:1000],
             "bgm_volume": body.bgm_volume,
+            "overlay_title": (body.overlay_title or "").strip()[:80],
+            "overlay_description": (body.overlay_description or "").strip()[:240],
         },
     )
     try:

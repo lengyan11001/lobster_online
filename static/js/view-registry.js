@@ -157,16 +157,16 @@
   });
 
   window.registerLobsterView('h5-employees', {
-    html: '/static/views/h5-employees.html?v=20260819-employee-server-params-v3',
-    scripts: '/static/js/views/h5-employees.js?v=20260819-employee-server-params-v3',
+    html: '/static/views/h5-employees.html?v=20260823-douyin-online-keywords-v1',
+    scripts: '/static/js/views/h5-employees.js?v=20260823-douyin-online-keywords-v1',
     init: 'initOnlineH5EmployeesView',
     cache: 'reload'
   });
 
   window.registerLobsterView('multi-clip-mixer', {
-    html: '/static/views/multi-clip-mixer.html?v=20260814-v2',
+    html: '/static/views/multi-clip-mixer.html?v=20260823-copy-overlay-v1',
     css: '/static/css/multi-clip-mixer.css?v=20260814-v2',
-    scripts: '/static/js/multi-clip-mixer.js?v=20260814-v2',
+    scripts: '/static/js/multi-clip-mixer.js?v=20260823-copy-overlay-v1',
     init: 'initMultiClipMixerView',
     cache: 'reload'
   });

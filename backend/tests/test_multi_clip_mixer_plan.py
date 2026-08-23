@@ -74,3 +74,17 @@ def test_multi_clip_shanjian_calls_follow_digital_human_cloud_routing():
     assert "function shanjianApiBase(path)" in js
     assert "requestTo(shanjianApiBase(path), path" in js
     assert "indexOf('/api/shanjian-') === 0" in js
+
+
+def test_shanjian_copy_is_burned_into_base_video_request():
+    root = Path(__file__).resolve().parents[2]
+    js = (root / "static" / "js" / "multi-clip-mixer.js").read_text(encoding="utf-8")
+
+    assert "burnShanjianCopy" in js
+    assert "overlay_title: overlayTitle" in js
+    assert "overlay_description: overlayDescription" in js
+
+
+def test_overlay_copy_wraps_and_truncates_without_losing_short_text():
+    assert multi_clip_mixer._wrap_overlay_text("介绍文案", width=8, max_lines=2) == ["介绍文案"]
+    assert multi_clip_mixer._wrap_overlay_text("一二三四五六七八九十", width=4, max_lines=2) == ["一二三四", "五六七…"]
