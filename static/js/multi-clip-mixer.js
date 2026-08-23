@@ -1033,7 +1033,7 @@
     }
     if (provider === 'shanjian') {
       return post('/api/shanjian-smart-clip/templates', {
-        scene: 'newsMixCutting',
+        scene: 'realMan',
         page_size: 36,
         sort_by: 'desc'
       }).then(function(data) {
@@ -1218,12 +1218,10 @@
     progress('template', 'active', '正在提交闪剪模板任务');
     return post('/api/shanjian-smart-clip/submit', {
       title: title,
-      scene: 'newsMixCutting',
+      scene: 'realMan',
       style_id: state.selectedTemplate.id,
-      materials: [{ type: 'video', fileUrl: videoUrl }],
+      video_url: videoUrl,
       material_sound_switch: true,
-      material_composition: 'order',
-      video_duration: Math.max(5, Math.round(Number(baseResult.duration || 30))),
       introduce_name: title,
       introduce_description: description,
       header_switch: true,
@@ -1327,13 +1325,6 @@
     var templateBeforeRun = templateStateSnapshot();
     var template = selectedTemplateForRun(options.useTemplate);
     if (options.useTemplate && template) selectTemplate(template);
-    var burnShanjianCopy = !!(options.useTemplate && template && currentTemplateProvider() === 'shanjian');
-    var overlayTitle = burnShanjianCopy
-      ? String((($('mcmShanjianTitle') || {}).value || '').trim()).slice(0, 80)
-      : '';
-    var overlayDescription = burnShanjianCopy
-      ? String((($('mcmShanjianDescription') || {}).value || '').trim()).slice(0, 240)
-      : '';
     progress('merge', 'active', '正在处理第 ' + runIndex + '/' + totalRuns + ' 条，' + state.clips.length + ' 个视频片段');
     return post('/api/multi-clip-mixer/render', {
       title: totalRuns > 1 ? ('多段视频混剪 ' + runIndex) : '多段视频混剪',
@@ -1346,9 +1337,7 @@
       output_index: runIndex,
       bgm_url: music ? music.bgm_url : '',
       bgm_name: music ? music.music_name : '',
-      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24)),
-      overlay_title: overlayTitle,
-      overlay_description: overlayDescription
+      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24))
     }).then(function(baseResult) {
       state.lastBaseResult = baseResult;
       progress('merge', 'done', '第 ' + runIndex + '/' + totalRuns + ' 条基础成片完成，共 ' + formatSeconds(baseResult.duration));

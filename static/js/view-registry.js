@@ -164,9 +164,9 @@
   });
 
   window.registerLobsterView('multi-clip-mixer', {
-    html: '/static/views/multi-clip-mixer.html?v=20260823-copy-overlay-v1',
+    html: '/static/views/multi-clip-mixer.html?v=20260823-template-copy-v2',
     css: '/static/css/multi-clip-mixer.css?v=20260814-v2',
-    scripts: '/static/js/multi-clip-mixer.js?v=20260823-copy-overlay-v1',
+    scripts: '/static/js/multi-clip-mixer.js?v=20260823-template-copy-v2',
     init: 'initMultiClipMixerView',
     cache: 'reload'
   });

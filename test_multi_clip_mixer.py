@@ -35,8 +35,8 @@ def test_template_customization_uses_the_existing_local_cutcli_pipeline():
     assert "'/api/shanjian-smart-clip/submit'" in script
     assert "'/api/shanjian-smart-clip/task'" in script
     assert "function normalizeShanjianTitle" in script
-    assert "material_composition: 'order'" in script
-    assert "material_composition: 'sequential'" not in script
+    assert "scene: 'realMan'" in script
+    assert "video_url: videoUrl" in script
     assert "overlay_texts: readTemplateOverlayTexts()" in script
     assert "templateOverlayFields(state.selectedTemplate)" in script
     assert "overlayFieldMaxLength(field)" in script
