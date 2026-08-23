@@ -1033,7 +1033,7 @@
     }
     if (provider === 'shanjian') {
       return post('/api/shanjian-smart-clip/templates', {
-        scene: 'realMan',
+        scene: 'newsMixCutting',
         page_size: 36,
         sort_by: 'desc'
       }).then(function(data) {
@@ -1218,10 +1218,12 @@
     progress('template', 'active', '正在提交闪剪模板任务');
     return post('/api/shanjian-smart-clip/submit', {
       title: title,
-      scene: 'realMan',
+      scene: 'newsMixCutting',
       style_id: state.selectedTemplate.id,
-      video_url: videoUrl,
+      materials: [{ type: 'video', fileUrl: videoUrl }],
       material_sound_switch: true,
+      material_composition: 'order',
+      video_duration: Math.max(5, Math.round(Number(baseResult.duration || 30))),
       introduce_name: title,
       introduce_description: description,
       header_switch: true,
