@@ -1216,21 +1216,32 @@
     var title = normalizeShanjianTitle((($('mcmShanjianTitle') || {}).value || ''));
     var description = String((($('mcmShanjianDescription') || {}).value || '').trim()).slice(0, 240);
     progress('template', 'active', '正在提交闪剪模板任务');
-    return post('/api/shanjian-smart-clip/submit', {
+    return post('/api/shanjian-smart-clip/template-detail', {
+      template_id: state.selectedTemplate.id
+    }).then(function(detailResponse) {
+      var editInfo = detailResponse && detailResponse.item && detailResponse.item.videoStructInfo
+        ? detailResponse.item.videoStructInfo.editInfo || {}
+        : {};
+      var structLayers = [];
+      if (editInfo.headerLayer) structLayers.push({ markCode: 'headerLayer', show: true });
+      if (editInfo.ipLayer && (description || title)) structLayers.push({ markCode: 'ipLayer', show: true });
+      return post('/api/shanjian-smart-clip/submit', {
       title: title,
       scene: 'newsMixCutting',
       style_id: state.selectedTemplate.id,
-      materials: [{ type: 'video', fileUrl: videoUrl }],
+      materials: [{ type: 'video', fileUrl: videoUrl, soundSwitch: true }],
       material_sound_switch: true,
       material_composition: 'order',
       video_duration: Math.max(5, Math.round(Number(baseResult.duration || 30))),
-      introduce_name: title,
+      introduce_name: '',
       introduce_description: description,
+      struct_layers: structLayers,
       header_switch: true,
       material_switch: true,
       subtitle_switch: true,
       keyword_switch: true,
       watermark_show: true
+      });
     }).then(function(submitted) {
       if (!submitted.task_id) throw new Error('闪剪没有返回任务编号');
       return pollShanjianTask(submitted.task_id);
@@ -1327,9 +1338,6 @@
     var templateBeforeRun = templateStateSnapshot();
     var template = selectedTemplateForRun(options.useTemplate);
     if (options.useTemplate && template) selectTemplate(template);
-    var overlayDescription = options.useTemplate && template && currentTemplateProvider() === 'shanjian'
-      ? String((($('mcmShanjianDescription') || {}).value || '').trim()).slice(0, 240)
-      : '';
     progress('merge', 'active', '正在处理第 ' + runIndex + '/' + totalRuns + ' 条，' + state.clips.length + ' 个视频片段');
     return post('/api/multi-clip-mixer/render', {
       title: totalRuns > 1 ? ('多段视频混剪 ' + runIndex) : '多段视频混剪',
@@ -1342,8 +1350,7 @@
       output_index: runIndex,
       bgm_url: music ? music.bgm_url : '',
       bgm_name: music ? music.music_name : '',
-      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24)),
-      overlay_description: overlayDescription
+      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24))
     }).then(function(baseResult) {
       state.lastBaseResult = baseResult;
       progress('merge', 'done', '第 ' + runIndex + '/' + totalRuns + ' 条基础成片完成，共 ' + formatSeconds(baseResult.duration));

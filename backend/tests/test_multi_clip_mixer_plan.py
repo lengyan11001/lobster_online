@@ -82,13 +82,13 @@ def test_shanjian_copy_is_only_rendered_by_the_followup_template():
 
     assert "burnShanjianCopy" not in js
     assert "overlay_title: overlayTitle" not in js
-    assert "overlay_description: overlayDescription" in js
     assert "scene: 'newsMixCutting'" in js
-    assert "materials: [{ type: 'video', fileUrl: videoUrl }]" in js
-    assert "introduce_name: title" in js
+    assert "materials: [{ type: 'video', fileUrl: videoUrl, soundSwitch: true }]" in js
+    assert "introduce_name: ''" in js
     assert "introduce_description: description" in js
+    assert "struct_layers: structLayers" in js
 
 
-def test_description_overlay_wraps_without_reintroducing_a_title_overlay():
+def test_mixer_request_has_no_local_overlay_fields():
     assert not hasattr(multi_clip_mixer.MultiClipRenderBody, "overlay_title")
-    assert multi_clip_mixer._wrap_overlay_text("介绍文案", width=8, max_lines=2) == ["介绍文案"]
+    assert not hasattr(multi_clip_mixer.MultiClipRenderBody, "overlay_description")
