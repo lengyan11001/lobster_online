@@ -67,12 +67,17 @@ OTA_PATHS_WITH_NODEJS_DEPS: tuple[str, ...] = OTA_PATHS + (
     "nodejs/node_modules",
 )
 
-# Production OTA is intentionally limited to the web application.  Desktop,
-# MCP, OpenClaw and skills are distributed by their dedicated installers or
-# separate updates; including them here makes every web update unnecessarily
-# slow to extract.
+# Production OTA is intentionally limited to the web application plus the
+# small OEM switcher runtime. Desktop, MCP, OpenClaw and skills are distributed
+# by their dedicated installers or separate updates; including them here makes
+# every web update unnecessarily slow to extract.
 WEBSITE_OTA_PATHS: tuple[str, ...] = (
     "backend",
+    # OEM switcher runtime. The configurator is launched by the bundled
+    # OEM配置启动器.exe and must be updated together with its branding helper.
+    "desktop/oem_branding.py",
+    "desktop/oem_configurator.py",
+    "OEM配置启动器.exe",
     "static/css",
     "static/js",
     "static/views",
@@ -831,6 +836,26 @@ def _prepare_encrypted_ota_root(root: Path, paths_tuple: tuple[str, ...]) -> tup
     return enc_root, tmp
 
 
+def _staged_manifest_paths(
+    paths_tuple: tuple[str, ...],
+    pack_root: Path,
+    *,
+    encrypted: bool,
+) -> tuple[str, ...]:
+    """Add generated sibling bytecode files to an encrypted OTA manifest."""
+    if not encrypted:
+        return paths_tuple
+    expanded: list[str] = []
+    for rel in paths_tuple:
+        normalized = rel.replace("\\", "/")
+        expanded.append(normalized)
+        if normalized.lower().endswith(".py"):
+            pyc = normalized[:-3] + ".pyc"
+            if (pack_root / pyc.replace("/", os.sep)).is_file():
+                expanded.append(pyc)
+    return tuple(expanded)
+
+
 def main() -> int:
     global _INCLUDE_RUNTIME_WHEEL_DIRS, _INCLUDE_PYC_FILES, _PACK_OVERSEAS, _PACK_BRAND
     ap = argparse.ArgumentParser(description="Pack client-code OTA zip")
@@ -1051,6 +1076,8 @@ def main() -> int:
         _INCLUDE_PYC_FILES = True
         pack_root, encrypted_tmp = _prepare_encrypted_ota_root(root, paths_tuple)
         print(f"[encrypted] staging root: {pack_root}")
+
+    paths_tuple = _staged_manifest_paths(paths_tuple, pack_root, encrypted=args.encrypted)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     if out.exists():

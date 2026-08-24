@@ -1,7 +1,7 @@
 {
-  "version": "1.0.209",
-  "build": 253,
-  "applied_at": "2026-08-23T14:26:16+08:00",
-  "note": "H5 Douyin all keywords and video mixer fixes",
-  "bundle_sha256": "bd05177f9513e6d275c75e98953c8a9916880fb21af511689a9a1ac3b6726465"
+  "version": "1.0.210",
+  "build": 254,
+  "applied_at": "2026-08-24T16:08:34+08:00",
+  "note": "OEM switcher runtime and latest client code",
+  "bundle_sha256": "55af2d04b1cceaecaf21c6e9bb59b837409e5b860e2ae51ef5060c87316b5e45"
 }
