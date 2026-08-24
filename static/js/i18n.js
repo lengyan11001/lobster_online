@@ -251,7 +251,7 @@
     // Main workspace, sidebar and conversation chrome.
     'AI调度助手': 'AI Assistant', 'IP人设定位': 'IP Persona', 'AI秘书': 'AI Secretary',
     '我的AI员工': 'My AI Employees', 'AI营销创作': 'AI Marketing', 'AI获客': 'AI Lead Generation',
-    '私域销管': 'Private-domain CRM', 'AI海外平台': 'Global Platforms', '会话': 'Conversations',
+    '私域销冠': 'Private-domain Sales Champion', 'AI海外平台': 'Global Platforms', '会话': 'Conversations',
     '搜索会话...': 'Search conversations...', '搜索会话': 'Search conversations', '系统任务': 'System Task',
     '需要确认': 'Confirmation Required', '完全访问': 'Full Access', '执行任务前询问': 'Ask before running tasks',
     '直接执行任务': 'Run tasks automatically', '与 H5 共享会话': 'Shared with H5', '当前会话': 'Current conversation',
