@@ -1751,6 +1751,77 @@
   align-items: start;
 }
 
+.personal-settings-view .ps-dh-summary {
+  min-width: 0;
+  border: 1px solid #edf0f4;
+  border-radius: 14px;
+  background: #fff;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.personal-settings-view .ps-dh-summary.is-empty {
+  grid-template-columns: 1fr;
+  color: #98a2b2;
+}
+
+.personal-settings-view .ps-dh-summary-cover {
+  width: 56px;
+  height: 72px;
+  min-width: 56px;
+  overflow: hidden;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, rgba(67,131,236,.15), rgba(15,143,122,.14));
+  color: #4383ec;
+  font-weight: 700;
+}
+
+.personal-settings-view .ps-dh-summary-cover img {
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.personal-settings-view .ps-dh-summary-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.personal-settings-view .ps-dh-summary-copy strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #344054;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personal-settings-view .ps-dh-summary-copy small,
+.personal-settings-view .ps-dh-summary-note {
+  color: #98a2b2;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.personal-settings-view .ps-dh-summary-note {
+  max-width: 180px;
+  text-align: right;
+}
+
+.personal-settings-view .ps-dh-summary.is-empty .ps-dh-summary-note {
+  max-width: none;
+  text-align: left;
+}
+
 .personal-settings-view .ps-memory-preview {
   min-height: 88px;
   max-height: 420px;
@@ -2329,6 +2400,207 @@ html.ps-dh-modal-open body {
   opacity: 0.45;
 }
 
+.personal-settings-view .ps-resource-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.personal-settings-view .ps-resource-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.personal-settings-view .ps-resource-heading-actions > span {
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: #2f7a62;
+  background: #eaf8f1;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.personal-settings-view .ps-resource-heading-actions b { font: inherit; }
+
+.personal-settings-view .ps-resource-summary-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.personal-settings-view .ps-resource-summary-item {
+  min-width: 0;
+  align-items: center;
+  border-color: rgba(15, 143, 122, 0.28);
+  background: #f2fbf7;
+}
+
+.personal-settings-view .ps-resource-empty,
+.personal-settings-view .ps-resource-more {
+  grid-column: 1 / -1;
+  min-height: 40px;
+  border: 1px dashed rgba(15, 143, 122, 0.34);
+  border-radius: 8px;
+  color: #0f8f7a;
+  background: #f4fcf9;
+  box-shadow: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ps-resource-modal-dialog {
+  width: min(860px, calc(100vw - 40px));
+  grid-template-rows: auto auto auto minmax(180px, 1fr) auto;
+}
+
+.ps-resource-modal-heading {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.ps-resource-modal-heading span {
+  color: #8994a6;
+  font-size: 12px;
+}
+
+.ps-resource-tabs {
+  margin: 14px 18px 0;
+  padding: 4px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f1f5f4;
+}
+
+.ps-resource-tabs button {
+  min-height: 38px;
+  border: 0;
+  border-radius: 6px;
+  color: #64748b;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ps-resource-tabs button.active {
+  color: #fff;
+  background: #0f8f7a;
+}
+
+.ps-resource-tools {
+  padding: 10px 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+}
+
+.ps-resource-tools input {
+  min-width: 0;
+  min-height: 40px;
+  padding: 9px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  outline: none;
+  color: #273347;
+  background: #f9fbfd;
+}
+
+.ps-resource-tools input:focus {
+  border-color: #0f8f7a;
+  box-shadow: 0 0 0 3px rgba(15, 143, 122, 0.11);
+}
+
+.ps-resource-modal-list {
+  min-width: 0;
+  min-height: 0;
+  padding: 0 18px 18px;
+  overflow: hidden auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 9px;
+}
+
+.ps-resource-option {
+  min-width: 0;
+  min-height: 62px;
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: 18px 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #e7ebf1;
+  border-radius: 8px;
+  color: #273347;
+  background: #fff;
+  cursor: pointer;
+}
+
+.ps-resource-option.selected {
+  border-color: rgba(15, 143, 122, 0.48);
+  background: #eefaf6;
+  box-shadow: inset 3px 0 0 #0f8f7a;
+}
+
+.ps-resource-option input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #0f8f7a;
+}
+
+.ps-resource-thumb {
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: #0f8f7a;
+  background: #e8f6f2;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ps-resource-thumb img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.ps-resource-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.ps-resource-copy strong,
+.ps-resource-copy small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ps-resource-copy strong { font-size: 13px; font-weight: 600; }
+.ps-resource-copy small { color: #8994a6; font-size: 11px; }
+
+.ps-resource-empty-state {
+  grid-column: 1 / -1;
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed #dfe5ed;
+  border-radius: 8px;
+  color: #8994a6;
+}
+
 @keyframes ps-dh-skeleton {
   0% { background-position: 100% 0; }
   100% { background-position: 0 0; }
@@ -2359,6 +2631,15 @@ html.ps-dh-modal-open body {
   .ps-dh-pagination,
   .ps-dh-modal-actions {
     justify-content: space-between;
+  }
+
+  .personal-settings-view .ps-resource-summary-list,
+  .ps-resource-modal-list {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ps-resource-tools {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -2427,6 +2708,16 @@ html.ps-dh-modal-open body {
 
   .personal-settings-view .ps-survey-item {
     border-right: 0;
+  }
+
+  .personal-settings-view .ps-dh-summary {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .personal-settings-view .ps-dh-summary-note {
+    grid-column: 1 / -1;
+    max-width: none;
+    text-align: left;
   }
 }
 

@@ -44,6 +44,14 @@
     personalDigitalHumanTemplatePage: 1,
     personalDigitalHumanTemplateDraft: null,
     personalSelectedDigitalHumanTemplate: null,
+    personalDigitalHumanResources: { avatars: [], voices: [] },
+    personalDigitalHumanAvatarOptions: [],
+    personalDigitalHumanVoiceOptions: [],
+    personalDigitalHumanResourcesLoading: false,
+    personalDigitalHumanResourcePickerKind: 'avatar',
+    personalDigitalHumanResourceQuery: '',
+    personalDigitalHumanResourcePage: 1,
+    personalDigitalHumanResourceDraft: null,
     personalDigitalHumanTemplateExplicitlyCleared: false
   };
 
@@ -1583,8 +1591,11 @@
       return '<article class="ps-template-card">' +
         '<div><strong>' + esc(templateName(row)) + '</strong><div class="ps-template-meta">语种 ' + esc(languageLabel) + ' · 关键词 ' + k + ' · 同行 ' + c + ' · 记忆 ' + m + ' · 数字人 ' + esc(dh) + '</div></div>' +
         '<div class="ps-item-actions">' +
-          '<button type="button" class="btn btn-primary btn-sm" data-use-template="' + escAttr(id) + '">设为当前</button>' +
-          '<button type="button" class="btn btn-ghost btn-sm" data-edit-template="' + escAttr(id) + '">编辑</button>' +
+          '<button type="button" class="btn btn-primary btn-sm" data-use-template="' + escAttr(id) + '">' + (row.source === 'agent' ? '套用' : '设为当前') + '</button>' +
+          (row.source === 'agent'
+            ? ''
+            : '<button type="button" class="btn btn-ghost btn-sm" data-edit-template="' + escAttr(id) + '">编辑</button>' +
+              '<button type="button" class="btn btn-ghost btn-sm" data-delete-template="' + escAttr(id) + '">删除</button>') +
         '</div>' +
       '</article>';
     }).join('') + page.pager;
@@ -1597,6 +1608,230 @@
         var row = (state.templates || []).find(function(item) { return String(item.id || '') === id; });
         if (row) applyTemplate(row, true);
       });
+    });
+    list.querySelectorAll('[data-delete-template]').forEach(function(btn) {
+      btn.addEventListener('click', function() { deleteTemplate(btn.getAttribute('data-delete-template') || '', btn); });
+    });
+  }
+
+  function digitalHumanResourceKey(item, kind) {
+    item = item && typeof item === 'object' ? item : {};
+    var provider = String(item.provider || item.source || '').trim().toLowerCase();
+    var id = kind === 'voice'
+      ? String(item.voice || item.voice_id || item.speaker_id || item.speakerId || item.id || '').trim()
+      : String(item.virtualman_id || item.virtualmanId || item.avatar || item.avatar_id || item.id || '').trim();
+    return provider + ':' + id;
+  }
+
+  function normalizePersonalDigitalHumanResources(value) {
+    value = value && typeof value === 'object' ? value : {};
+    function normalizeList(list, kind) {
+      var seen = {};
+      return (Array.isArray(list) ? list : []).map(function(item) {
+        if (!item || typeof item !== 'object') return null;
+        var row = Object.assign({}, item);
+        var key = digitalHumanResourceKey(row, kind);
+        if (!key || key.endsWith(':')) return null;
+        if (seen[key]) return null;
+        seen[key] = true;
+        row.provider = String(row.provider || row.source || (kind === 'avatar' && (row.virtualman_id || row.virtualmanId) ? 'shanjian' : 'hifly')).trim().toLowerCase();
+        if (kind === 'avatar') {
+          row.virtualman_id = String(row.virtualman_id || row.virtualmanId || ((row.provider === 'shanjian' || row.provider === 'shanjian_v2' || row.provider === 'digital_human') ? (row.avatar || '') : '')).trim();
+          row.avatar = String(row.avatar || row.avatar_id || row.avatarId || '').trim();
+        } else {
+          row.voice = String(row.voice || row.voice_id || row.speaker_id || row.speakerId || '').trim();
+        }
+        row.title = String(row.title || row.name || '未命名资源').trim() || '未命名资源';
+        return row;
+      }).filter(Boolean);
+    }
+    return { avatars: normalizeList(value.avatars, 'avatar'), voices: normalizeList(value.voices, 'voice') };
+  }
+
+  function clonePersonalDigitalHumanResources(value) {
+    var normalized = normalizePersonalDigitalHumanResources(value);
+    return {
+      avatars: normalized.avatars.map(function(row) { return Object.assign({}, row); }),
+      voices: normalized.voices.map(function(row) { return Object.assign({}, row); })
+    };
+  }
+
+  function resourceTitle(row) {
+    return String(row && (row.title || row.name || row.virtualman_id || row.avatar || row.voice) || '未命名资源');
+  }
+
+  function resourceSubtitle(row, kind) {
+    if (kind === 'voice') return String(row && (row.voice || row.voice_id || row.speaker_id) || '');
+    return String(row && (row.virtualman_id || row.avatar || row.avatar_id) || '');
+  }
+
+  function personalDigitalHumanResourceOptions(kind, value) {
+    var resources = normalizePersonalDigitalHumanResources(value || state.personalDigitalHumanResources);
+    var selectedRows = resources[kind === 'avatar' ? 'avatars' : 'voices'];
+    var loadedRows = kind === 'avatar' ? state.personalDigitalHumanAvatarOptions : state.personalDigitalHumanVoiceOptions;
+    var rows = [];
+    var seen = {};
+    loadedRows.concat(selectedRows).forEach(function(row) {
+      var key = digitalHumanResourceKey(row, kind);
+      if (!key || key.endsWith(':') || seen[key]) return;
+      seen[key] = true;
+      rows.push(row);
+    });
+    return rows;
+  }
+
+  function renderPersonalDigitalHumanResources() {
+    var resources = normalizePersonalDigitalHumanResources(state.personalDigitalHumanResources);
+    state.personalDigitalHumanResources = resources;
+    ['avatar', 'voice'].forEach(function(kind) {
+      var el = $(kind === 'avatar' ? 'psDigitalHumanAvatarList' : 'psDigitalHumanVoiceList');
+      var count = $(kind === 'avatar' ? 'psDigitalHumanAvatarCount' : 'psDigitalHumanVoiceCount');
+      if (!el) return;
+      var selectedRows = resources[kind === 'avatar' ? 'avatars' : 'voices'];
+      if (count) count.textContent = String(selectedRows.length);
+      if (state.personalDigitalHumanResourcesLoading && !selectedRows.length) {
+        el.innerHTML = '<div class="ps-empty">正在加载资源...</div>';
+        return;
+      }
+      if (!selectedRows.length) {
+        el.innerHTML = '<button type="button" class="ps-resource-empty" data-open-ps-resource="' + escAttr(kind) + '">尚未选择，点击添加</button>';
+        return;
+      }
+      var visible = selectedRows.slice(0, 4);
+      el.innerHTML = visible.map(function(row) {
+        return '<div class="ps-option ps-resource-summary-item"><span><strong>' + esc(resourceTitle(row)) + '</strong><small>' +
+          esc(resourceSubtitle(row, kind) + (row.provider ? ' · ' + row.provider : '')) + '</small></span></div>';
+      }).join('') + (selectedRows.length > visible.length
+        ? '<button type="button" class="ps-resource-more" data-open-ps-resource="' + escAttr(kind) + '">另有 ' + (selectedRows.length - visible.length) + ' 个已选择</button>'
+        : '');
+    });
+  }
+
+  var PERSONAL_DH_RESOURCE_PAGE_SIZE = 20;
+
+  function filteredPersonalDigitalHumanResourceRows() {
+    var kind = state.personalDigitalHumanResourcePickerKind === 'voice' ? 'voice' : 'avatar';
+    var rows = personalDigitalHumanResourceOptions(kind, state.personalDigitalHumanResourceDraft);
+    var query = String(state.personalDigitalHumanResourceQuery || '').trim().toLowerCase();
+    if (!query) return rows;
+    return rows.filter(function(row) {
+      return [resourceTitle(row), resourceSubtitle(row, kind), row && (row.provider || row.source), row && row.status].some(function(value) {
+        return String(value || '').toLowerCase().indexOf(query) >= 0;
+      });
+    });
+  }
+
+  function renderPersonalDigitalHumanResourcePicker() {
+    var modal = $('psDigitalHumanResourceModal');
+    if (!modal || !modal.classList.contains('is-visible')) return;
+    var kind = state.personalDigitalHumanResourcePickerKind === 'voice' ? 'voice' : 'avatar';
+    var listKey = kind === 'avatar' ? 'avatars' : 'voices';
+    var draft = normalizePersonalDigitalHumanResources(state.personalDigitalHumanResourceDraft);
+    state.personalDigitalHumanResourceDraft = draft;
+    var selectedRows = draft[listKey];
+    var selected = {};
+    selectedRows.forEach(function(row) { selected[digitalHumanResourceKey(row, kind)] = true; });
+    var rows = filteredPersonalDigitalHumanResourceRows();
+    var totalPages = Math.max(1, Math.ceil(rows.length / PERSONAL_DH_RESOURCE_PAGE_SIZE));
+    var page = parseInt(state.personalDigitalHumanResourcePage, 10);
+    if (!Number.isFinite(page) || page < 1) page = 1;
+    if (page > totalPages) page = totalPages;
+    state.personalDigitalHumanResourcePage = page;
+    var start = (page - 1) * PERSONAL_DH_RESOURCE_PAGE_SIZE;
+    var pageRows = rows.slice(start, start + PERSONAL_DH_RESOURCE_PAGE_SIZE);
+    if ($('psDigitalHumanResourceTitle')) $('psDigitalHumanResourceTitle').textContent = kind === 'avatar' ? '选择数字人形象 / 分身' : '选择声音';
+    if ($('psDigitalHumanResourceStats')) $('psDigitalHumanResourceStats').textContent = '搜索结果 ' + rows.length + ' 个，已选 ' + selectedRows.length + ' 个';
+    var tabs = $('psDigitalHumanResourceTabs');
+    if (tabs) Array.from(tabs.querySelectorAll('[data-ps-resource-kind]')).forEach(function(button) {
+      var buttonKind = button.getAttribute('data-ps-resource-kind') === 'voice' ? 'voice' : 'avatar';
+      var buttonCount = draft[buttonKind === 'avatar' ? 'avatars' : 'voices'].length;
+      button.textContent = (buttonKind === 'avatar' ? '形象 / 分身' : '声音') + ' (' + buttonCount + ')';
+      button.classList.toggle('active', buttonKind === kind);
+    });
+    var list = $('psDigitalHumanResourceList');
+    if (list) {
+      list.innerHTML = pageRows.length ? pageRows.map(function(row) {
+        var key = digitalHumanResourceKey(row, kind);
+        var checked = !!selected[key];
+        var cover = kind === 'avatar' ? personalDigitalHumanMediaUrl(row.cover_url || row.image_url) : '';
+        var marker = kind === 'avatar' ? resourceTitle(row).slice(0, 1) : '声';
+        return '<label class="ps-resource-option' + (checked ? ' selected' : '') + '">' +
+          '<input type="checkbox" data-ps-resource-key="' + escAttr(key) + '"' + (checked ? ' checked' : '') + '>' +
+          '<span class="ps-resource-thumb">' + (cover ? '<img src="' + escAttr(cover) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' : esc(marker)) + '</span>' +
+          '<span class="ps-resource-copy"><strong>' + esc(resourceTitle(row)) + '</strong><small>' + esc(resourceSubtitle(row, kind) + (row.provider ? ' · ' + row.provider : '')) + '</small></span>' +
+        '</label>';
+      }).join('') : '<div class="ps-resource-empty-state">没有匹配的资源</div>';
+    }
+    var allSelected = !!rows.length && rows.every(function(row) { return !!selected[digitalHumanResourceKey(row, kind)]; });
+    if ($('psDigitalHumanResourceSelectAll')) {
+      $('psDigitalHumanResourceSelectAll').textContent = allSelected ? '取消全选搜索结果' : '全选搜索结果';
+      $('psDigitalHumanResourceSelectAll').disabled = !rows.length;
+    }
+    if ($('psDigitalHumanResourcePageText')) $('psDigitalHumanResourcePageText').textContent = page + ' / ' + totalPages;
+    if ($('psDigitalHumanResourcePrev')) $('psDigitalHumanResourcePrev').disabled = page <= 1;
+    if ($('psDigitalHumanResourceNext')) $('psDigitalHumanResourceNext').disabled = page >= totalPages;
+  }
+
+  function openPersonalDigitalHumanResourcePicker(kind) {
+    state.personalDigitalHumanResourcePickerKind = kind === 'voice' ? 'voice' : 'avatar';
+    state.personalDigitalHumanResourceQuery = '';
+    state.personalDigitalHumanResourcePage = 1;
+    state.personalDigitalHumanResourceDraft = clonePersonalDigitalHumanResources(state.personalDigitalHumanResources);
+    if ($('psDigitalHumanResourceSearch')) $('psDigitalHumanResourceSearch').value = '';
+    var modal = $('psDigitalHumanResourceModal');
+    if (modal) {
+      modal.hidden = false;
+      modal.setAttribute('aria-hidden', 'false');
+      modal.classList.add('is-visible');
+      document.documentElement.classList.add('ps-dh-modal-open');
+    }
+    renderPersonalDigitalHumanResourcePicker();
+    loadPersonalDigitalHumanResources().then(renderPersonalDigitalHumanResourcePicker);
+  }
+
+  function closePersonalDigitalHumanResourcePicker() {
+    var modal = $('psDigitalHumanResourceModal');
+    if (modal) {
+      modal.classList.remove('is-visible');
+      modal.setAttribute('aria-hidden', 'true');
+      modal.hidden = true;
+    }
+    if (!$('psDigitalHumanTemplateModal') || $('psDigitalHumanTemplateModal').hidden) document.documentElement.classList.remove('ps-dh-modal-open');
+    state.personalDigitalHumanResourceDraft = null;
+  }
+
+  function confirmPersonalDigitalHumanResources() {
+    state.personalDigitalHumanResources = clonePersonalDigitalHumanResources(state.personalDigitalHumanResourceDraft);
+    renderPersonalDigitalHumanResources();
+    closePersonalDigitalHumanResourcePicker();
+  }
+
+  function loadPersonalDigitalHumanResources() {
+    if (state.personalDigitalHumanResourcesLoading) return Promise.resolve();
+    state.personalDigitalHumanResourcesLoading = true;
+    renderPersonalDigitalHumanResources();
+    function loadKind(kind, page, rows) {
+      page = page || 1;
+      rows = rows || [];
+      if (page > 20) return Promise.resolve(rows);
+      return cloudJson('/api/h5/assets/digital-library?kind=' + encodeURIComponent(kind) + '&page=' + page + '&size=100').then(function(data) {
+        var items = Array.isArray(data.items) ? data.items : [];
+        rows = rows.concat(items);
+        var total = Number(data.total || 0);
+        if (!items.length || items.length < 100 || (total > 0 && rows.length >= total)) return rows;
+        return loadKind(kind, page + 1, rows);
+      });
+    }
+    return Promise.all([
+      loadKind('avatar').catch(function() { return []; }),
+      loadKind('voice').catch(function() { return []; })
+    ]).then(function(results) {
+      state.personalDigitalHumanAvatarOptions = results[0];
+      state.personalDigitalHumanVoiceOptions = results[1];
+    }).finally(function() {
+      state.personalDigitalHumanResourcesLoading = false;
+      renderPersonalDigitalHumanResources();
+      renderPersonalDigitalHumanResourcePicker();
     });
   }
 
@@ -1944,6 +2179,7 @@
     renderCurrentTemplate();
     renderSavedTemplates();
     renderPersonalDigitalHumanTemplateSummary();
+    renderPersonalDigitalHumanResources();
     renderKeywords();
     renderCompetitors();
     renderMemories();
@@ -1955,6 +2191,7 @@
     state.defaultItem = item || {};
     setPersonalTemplateLanguage(templateLanguageFromParts(state.defaultItem.requirements, state.defaultItem.meta, state.personalTemplateLanguage));
     state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((state.defaultItem.meta || {}).digital_human_template);
+    state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((state.defaultItem.meta || {}).digital_human_resources);
     state.personalDigitalHumanTemplateExplicitlyCleared = false;
     state.selectedKeywords = {};
     state.selectedCompetitors = {};
@@ -1966,6 +2203,7 @@
     renderTemplateLists();
     renderCurrentTemplate();
     renderPersonalDigitalHumanTemplateSummary();
+    renderPersonalDigitalHumanResources();
   }
 
   function loadKeywords() {
@@ -2018,6 +2256,7 @@
       cloudJson('/api/ip-content/competitors').then(function(data) { state.competitors = Array.isArray(data.items) ? data.items : []; }),
       loadMemories().catch(function() { state.memories = []; }),
       loadTemplates().catch(function() { state.templates = []; }),
+      loadPersonalDigitalHumanResources().catch(function() { state.personalDigitalHumanAvatarOptions = []; state.personalDigitalHumanVoiceOptions = []; }),
       cloudJson('/api/ip-content/personal-default').then(function(data) { state.defaultItem = data.item || {}; })
     ]).then(function() {
       applyDefaultItem(state.defaultItem || {});
@@ -2070,7 +2309,12 @@
         memory_doc_ids: cleanStringIds(state.selectedMemories),
         memory_docs: memoryDocs,
         requirements: templateRequirementsWithLanguage({}, language),
-        meta: { source: 'personal_settings_template', language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate }
+        meta: (function() {
+          var currentMeta = state.defaultItem && state.defaultItem.meta && typeof state.defaultItem.meta === 'object' ? state.defaultItem.meta : {};
+          var meta = { source: 'personal_settings_template', language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate, digital_human_resources: clonePersonalDigitalHumanResources(state.personalDigitalHumanResources) };
+          if (currentMeta.current_template_id) meta.current_template_id = currentMeta.current_template_id;
+          return meta;
+        })()
       };
       return cloudJson(state.editingTemplateId ? '/api/ip-content/schedule-templates/' + encodeURIComponent(state.editingTemplateId) : '/api/ip-content/schedule-templates', {
         method: state.editingTemplateId ? 'PATCH' : 'POST',
@@ -2079,7 +2323,9 @@
     }).then(function(data) {
       if (data.item && data.item.id) state.editingTemplateId = String(data.item.id);
       setMsg('模板已保存。');
-      return loadTemplates();
+      // Applying an agent template creates user-owned resource rows. Refresh
+      // those lists before the next edit so the saved IDs can be rendered.
+      return Promise.all([loadKeywords(), loadCompetitors(), loadMemories(), loadTemplates()]);
     }).catch(function(err) {
       setMsg(err.message || '保存失败', true);
     }).finally(function() {
@@ -2107,6 +2353,9 @@
       : (state.personalDigitalHumanTemplateExplicitlyCleared
         ? null
         : clonePersonalDigitalHumanTemplate(state.personalSelectedDigitalHumanTemplate || (existing.meta || {}).digital_human_template));
+    var digitalHumanResources = options.digital_human_resources !== undefined
+      ? clonePersonalDigitalHumanResources(options.digital_human_resources)
+      : clonePersonalDigitalHumanResources(state.personalDigitalHumanResources || (existing.meta || {}).digital_human_resources);
     return Promise.all(selectedMemoryPayload(memoryIds).map(fetchMemoryContent)).then(function(memoryDocs) {
       return cloudJson('/api/ip-content/personal-default', {
         method: 'PUT',
@@ -2117,7 +2366,7 @@
           memory_doc_ids: memoryIds,
           memory_docs: memoryDocs,
           requirements: incomingRequirements,
-          meta: Object.assign({}, (existing.meta && typeof existing.meta === 'object') ? existing.meta : {}, options.meta || {}, { source: source, language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate })
+          meta: Object.assign({}, (existing.meta && typeof existing.meta === 'object') ? existing.meta : {}, options.meta || {}, { source: source, language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate, digital_human_resources: digitalHumanResources })
         }
       });
     }).then(function(data) {
@@ -2145,6 +2394,7 @@
     row = row || {};
     state.editingTemplateId = editing && row.id ? String(row.id) : '';
     state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((row.meta || {}).digital_human_template);
+    state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((row.meta || {}).digital_human_resources);
     state.personalDigitalHumanTemplateExplicitlyCleared = false;
     state.selectedKeywords = {};
     state.selectedCompetitors = {};
@@ -2155,6 +2405,7 @@
     if ($('psTemplateName')) $('psTemplateName').value = row.name || '';
     setPersonalTemplateLanguage(templateLanguageFromParts(row.requirements, row.meta, row.language || row.target_language || state.personalTemplateLanguage));
     renderPersonalDigitalHumanTemplateSummary();
+    renderPersonalDigitalHumanResources();
     renderAllLists();
     switchTab('template');
   }
@@ -2165,6 +2416,7 @@
     state.selectedCompetitors = {};
     state.selectedMemories = {};
     state.personalSelectedDigitalHumanTemplate = clonePersonalDigitalHumanTemplate((state.defaultItem || {}).meta && state.defaultItem.meta.digital_human_template);
+    state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((state.defaultItem || {}).meta && state.defaultItem.meta.digital_human_resources);
     state.personalDigitalHumanTemplateDraft = null;
     state.personalDigitalHumanTemplateExplicitlyCleared = false;
     if ($('psTemplateName')) $('psTemplateName').value = '';
@@ -2172,10 +2424,41 @@
     renderTemplateLists();
     renderSavedTemplates();
     renderPersonalDigitalHumanTemplateSummary();
+    renderPersonalDigitalHumanResources();
   }
 
   function useTemplate(id, btn) {
     var row = (state.templates || []).find(function(item) { return String(item.id || '') === String(id || ''); });
+    if (row && row.source === 'agent') {
+      state.editingTemplateId = '';
+      state.selectedKeywords = {};
+      state.selectedCompetitors = {};
+      state.selectedMemories = {};
+      state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((row.meta || {}).digital_human_template);
+      state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((row.meta || {}).digital_human_resources);
+      state.personalDigitalHumanTemplateExplicitlyCleared = false;
+      (row.keyword_ids || []).forEach(function(value) { if (value) state.selectedKeywords[String(value)] = true; });
+      (row.competitor_ids || []).forEach(function(value) { if (value) state.selectedCompetitors[String(value)] = true; });
+      (row.memory_doc_ids || []).forEach(function(value) { if (value) state.selectedMemories[String(value)] = true; });
+      (Array.isArray(row.keywords) ? row.keywords : []).forEach(function(resource) {
+        var resourceId = String(resource && resource.id || '');
+        if (resourceId && !state.keywords.some(function(item) { return String(item && item.id || '') === resourceId; })) state.keywords.push(resource);
+      });
+      (Array.isArray(row.competitors) ? row.competitors : []).forEach(function(resource) {
+        var resourceId = String(resource && resource.id || '');
+        if (resourceId && !state.competitors.some(function(item) { return String(item && item.id || '') === resourceId; })) state.competitors.push(resource);
+      });
+      (Array.isArray(row.memory_docs) ? row.memory_docs : []).forEach(function(resource) {
+        var resourceId = memoryId(resource);
+        if (resourceId && !state.memories.some(function(item) { return memoryId(item) === resourceId; })) state.memories.push(resource);
+      });
+      state.defaultItem = Object.assign({}, state.defaultItem || {}, { meta: Object.assign({}, (state.defaultItem && state.defaultItem.meta) || {}, { current_template_id: row.id }) });
+      if ($('psTemplateName')) $('psTemplateName').value = templateName(row);
+      setPersonalTemplateLanguage(templateLanguageFromParts(row.requirements, row.meta, row.language || row.target_language || state.personalTemplateLanguage));
+      renderAllLists();
+      setMsg('已填充代理商模板内容，请修改名称后保存为个人模板。');
+      return;
+    }
     if (!row) {
       setMsg('模板不存在。', true);
       return;
@@ -2184,7 +2467,8 @@
     state.selectedKeywords = {};
     state.selectedCompetitors = {};
     state.selectedMemories = {};
-    state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((row.meta || {}).digital_human_template);
+      state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((row.meta || {}).digital_human_template);
+      state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((row.meta || {}).digital_human_resources);
     state.personalDigitalHumanTemplateExplicitlyCleared = false;
     (row.keyword_ids || []).forEach(function(value) { if (value) state.selectedKeywords[String(value)] = true; });
     (row.competitor_ids || []).forEach(function(value) { if (value) state.selectedCompetitors[String(value)] = true; });
@@ -2198,7 +2482,7 @@
     saveCurrentDefault({
       name: templateName(row),
       requirements: requirements,
-      meta: Object.assign({}, row.meta || {}, { current_template_id: row.id, language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: state.personalSelectedDigitalHumanTemplate }),
+      meta: Object.assign({}, row.meta || {}, { current_template_id: row.id, language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: state.personalSelectedDigitalHumanTemplate, digital_human_resources: clonePersonalDigitalHumanResources(state.personalDigitalHumanResources) }),
       source: 'personal_settings_current_template',
       language: language,
       replaceSelection: true
@@ -2211,6 +2495,49 @@
     }).finally(function() {
       setBusy(btn, false);
     });
+  }
+
+  function copyTemplate(id, btn) {
+    var row = (state.templates || []).find(function(item) { return String(item.id || '') === String(id || ''); });
+    if (!row) {
+      setMsg('模板不存在。', true);
+      return;
+    }
+    setBusy(btn, true, '复制中的...');
+    cloudJson('/api/ip-content/schedule-templates/' + encodeURIComponent(id) + '/copy', {
+      method: 'POST',
+      body: {}
+    }).then(function(data) {
+      return Promise.all([loadKeywords(), loadCompetitors(), loadMemories(), loadTemplates()]).then(function() {
+        var copied = data.item || (state.templates || []).find(function(item) {
+          return String(item.meta && item.meta.copied_from_template_id || '') === String(id);
+        });
+        if (copied) applyTemplate(copied, true);
+        setMsg('已复制为个人模板，可继续编辑。');
+      });
+    }).catch(function(err) {
+      setMsg(err.message || '复制失败', true);
+    }).finally(function() {
+      setBusy(btn, false);
+    });
+  }
+
+  function deleteTemplate(id, btn) {
+    var row = (state.templates || []).find(function(item) { return String(item.id || '') === String(id || ''); });
+    if (!row || row.source === 'agent') {
+      setMsg('只能删除自己创建的模板。', true);
+      return;
+    }
+    if (!window.confirm('删除模板“' + templateName(row) + '”？')) return;
+    setBusy(btn, true, '删除中...');
+    cloudJson('/api/ip-content/schedule-templates/' + encodeURIComponent(id), { method: 'DELETE', json: false })
+      .then(function() {
+        if (String(state.editingTemplateId || '') === String(id || '')) resetTemplateForm();
+        return loadAll();
+      })
+      .then(function() { setMsg('模板已删除。'); })
+      .catch(function(err) { setMsg(err.message || '删除失败', true); })
+      .finally(function() { setBusy(btn, false); });
   }
 
   function addKeyword() {
@@ -2742,6 +3069,9 @@
     });
     document.addEventListener('keydown', function(ev) {
       if (ev.key === 'Escape' && state.profilePhotoPickerOpen) closeProfilePhotoPicker();
+      if (ev.key === 'Escape' && $('psDigitalHumanResourceModal') && !$('psDigitalHumanResourceModal').hidden) {
+        closePersonalDigitalHumanResourcePicker();
+      }
       if (ev.key === 'Escape' && $('psDigitalHumanTemplateModal') && !$('psDigitalHumanTemplateModal').hidden) {
         closePersonalDigitalHumanTemplatePicker();
       }
@@ -2755,6 +3085,85 @@
     });
     if ($('psDigitalHumanTemplateChooseBtn')) $('psDigitalHumanTemplateChooseBtn').addEventListener('click', function() {
       openPersonalDigitalHumanTemplatePicker();
+    });
+    if ($('psDigitalHumanAvatarChooseBtn')) $('psDigitalHumanAvatarChooseBtn').addEventListener('click', function() {
+      openPersonalDigitalHumanResourcePicker('avatar');
+    });
+    if ($('psDigitalHumanVoiceChooseBtn')) $('psDigitalHumanVoiceChooseBtn').addEventListener('click', function() {
+      openPersonalDigitalHumanResourcePicker('voice');
+    });
+    ['psDigitalHumanAvatarList', 'psDigitalHumanVoiceList'].forEach(function(id) {
+      if (!$(id)) return;
+      $(id).addEventListener('click', function(ev) {
+        var button = ev.target && ev.target.closest ? ev.target.closest('[data-open-ps-resource]') : null;
+        if (button) openPersonalDigitalHumanResourcePicker(button.getAttribute('data-open-ps-resource') || 'avatar');
+      });
+    });
+    if ($('psDigitalHumanResourceClose')) $('psDigitalHumanResourceClose').addEventListener('click', closePersonalDigitalHumanResourcePicker);
+    if ($('psDigitalHumanResourceCancel')) $('psDigitalHumanResourceCancel').addEventListener('click', closePersonalDigitalHumanResourcePicker);
+    if ($('psDigitalHumanResourceConfirm')) $('psDigitalHumanResourceConfirm').addEventListener('click', confirmPersonalDigitalHumanResources);
+    if ($('psDigitalHumanResourceModal')) $('psDigitalHumanResourceModal').addEventListener('click', function(ev) {
+      if (ev.target === $('psDigitalHumanResourceModal')) closePersonalDigitalHumanResourcePicker();
+    });
+    if ($('psDigitalHumanResourceTabs')) $('psDigitalHumanResourceTabs').addEventListener('click', function(ev) {
+      var button = ev.target && ev.target.closest ? ev.target.closest('[data-ps-resource-kind]') : null;
+      if (!button) return;
+      state.personalDigitalHumanResourcePickerKind = button.getAttribute('data-ps-resource-kind') === 'voice' ? 'voice' : 'avatar';
+      state.personalDigitalHumanResourceQuery = '';
+      state.personalDigitalHumanResourcePage = 1;
+      if ($('psDigitalHumanResourceSearch')) $('psDigitalHumanResourceSearch').value = '';
+      renderPersonalDigitalHumanResourcePicker();
+    });
+    if ($('psDigitalHumanResourceSearch')) $('psDigitalHumanResourceSearch').addEventListener('input', function(ev) {
+      state.personalDigitalHumanResourceQuery = String(ev.target.value || '');
+      state.personalDigitalHumanResourcePage = 1;
+      renderPersonalDigitalHumanResourcePicker();
+    });
+    if ($('psDigitalHumanResourceList')) $('psDigitalHumanResourceList').addEventListener('change', function(ev) {
+      var input = ev.target && ev.target.closest ? ev.target.closest('[data-ps-resource-key]') : null;
+      if (!input) return;
+      var kind = state.personalDigitalHumanResourcePickerKind === 'voice' ? 'voice' : 'avatar';
+      var listKey = kind === 'avatar' ? 'avatars' : 'voices';
+      var key = input.getAttribute('data-ps-resource-key') || '';
+      var draft = normalizePersonalDigitalHumanResources(state.personalDigitalHumanResourceDraft);
+      var current = draft[listKey].filter(function(row) { return digitalHumanResourceKey(row, kind) !== key; });
+      if (input.checked) {
+        var picked = personalDigitalHumanResourceOptions(kind, draft).find(function(row) { return digitalHumanResourceKey(row, kind) === key; });
+        if (picked) current.push(Object.assign({}, picked));
+      }
+      draft[listKey] = current;
+      state.personalDigitalHumanResourceDraft = draft;
+      renderPersonalDigitalHumanResourcePicker();
+    });
+    if ($('psDigitalHumanResourceSelectAll')) $('psDigitalHumanResourceSelectAll').addEventListener('click', function() {
+      var kind = state.personalDigitalHumanResourcePickerKind === 'voice' ? 'voice' : 'avatar';
+      var listKey = kind === 'avatar' ? 'avatars' : 'voices';
+      var rows = filteredPersonalDigitalHumanResourceRows();
+      var rowKeys = {};
+      rows.forEach(function(row) { rowKeys[digitalHumanResourceKey(row, kind)] = true; });
+      var draft = normalizePersonalDigitalHumanResources(state.personalDigitalHumanResourceDraft);
+      var selected = {};
+      draft[listKey].forEach(function(row) { selected[digitalHumanResourceKey(row, kind)] = true; });
+      var allSelected = !!rows.length && rows.every(function(row) { return !!selected[digitalHumanResourceKey(row, kind)]; });
+      var kept = draft[listKey].filter(function(row) { return !rowKeys[digitalHumanResourceKey(row, kind)]; });
+      draft[listKey] = allSelected ? kept : kept.concat(rows.map(function(row) { return Object.assign({}, row); }));
+      state.personalDigitalHumanResourceDraft = draft;
+      renderPersonalDigitalHumanResourcePicker();
+    });
+    if ($('psDigitalHumanResourceClear')) $('psDigitalHumanResourceClear').addEventListener('click', function() {
+      var kind = state.personalDigitalHumanResourcePickerKind === 'voice' ? 'voice' : 'avatar';
+      var draft = normalizePersonalDigitalHumanResources(state.personalDigitalHumanResourceDraft);
+      draft[kind === 'avatar' ? 'avatars' : 'voices'] = [];
+      state.personalDigitalHumanResourceDraft = draft;
+      renderPersonalDigitalHumanResourcePicker();
+    });
+    if ($('psDigitalHumanResourcePrev')) $('psDigitalHumanResourcePrev').addEventListener('click', function() {
+      state.personalDigitalHumanResourcePage = Math.max(1, Number(state.personalDigitalHumanResourcePage || 1) - 1);
+      renderPersonalDigitalHumanResourcePicker();
+    });
+    if ($('psDigitalHumanResourceNext')) $('psDigitalHumanResourceNext').addEventListener('click', function() {
+      state.personalDigitalHumanResourcePage = Number(state.personalDigitalHumanResourcePage || 1) + 1;
+      renderPersonalDigitalHumanResourcePicker();
     });
     if ($('psDigitalHumanTemplateClearBtn')) $('psDigitalHumanTemplateClearBtn').addEventListener('click', function() {
       state.personalSelectedDigitalHumanTemplate = null;

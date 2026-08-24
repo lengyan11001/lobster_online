@@ -804,6 +804,16 @@
             <button type="button" id="psDigitalHumanTemplateChooseBtn" class="btn btn-ghost btn-sm">选择模板</button>
             <button type="button" id="psDigitalHumanTemplateClearBtn" class="btn btn-ghost btn-sm">不使用</button>
           </div>
+          <div class="ps-resource-heading">
+            <div class="ps-card-title">关联数字人形象 / 分身</div>
+            <div class="ps-resource-heading-actions"><span>已选 <b id="psDigitalHumanAvatarCount">0</b></span><button type="button" id="psDigitalHumanAvatarChooseBtn" class="btn btn-ghost btn-sm">选择</button></div>
+          </div>
+          <div id="psDigitalHumanAvatarList" class="ps-list ps-resource-summary-list"></div>
+          <div class="ps-resource-heading">
+            <div class="ps-card-title">关联声音</div>
+            <div class="ps-resource-heading-actions"><span>已选 <b id="psDigitalHumanVoiceCount">0</b></span><button type="button" id="psDigitalHumanVoiceChooseBtn" class="btn btn-ghost btn-sm">选择</button></div>
+          </div>
+          <div id="psDigitalHumanVoiceList" class="ps-list ps-resource-summary-list"></div>
           <div class="ps-actions">
             <button type="button" id="psSaveTemplateBtn" class="btn btn-primary btn-sm">保存模板</button>
             <button type="button" id="psNewTemplateBtn" class="btn btn-ghost btn-sm">新建模板</button>
@@ -821,6 +831,38 @@
         </section>
       </div>
     </section>
+  </div>
+</div>
+<div id="psDigitalHumanResourceModal" class="ps-dh-modal ps-resource-modal" aria-hidden="true" hidden>
+  <div class="ps-dh-modal-dialog ps-resource-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="psDigitalHumanResourceTitle">
+    <div class="ps-dh-modal-head">
+      <div class="ps-resource-modal-heading">
+        <strong id="psDigitalHumanResourceTitle">选择数字人资源</strong>
+        <span id="psDigitalHumanResourceStats">搜索结果 0 个，已选 0 个</span>
+      </div>
+      <button type="button" id="psDigitalHumanResourceClose" class="ps-dh-modal-close" aria-label="关闭">×</button>
+    </div>
+    <div id="psDigitalHumanResourceTabs" class="ps-resource-tabs">
+      <button type="button" data-ps-resource-kind="avatar">形象 / 分身</button>
+      <button type="button" data-ps-resource-kind="voice">声音</button>
+    </div>
+    <div class="ps-resource-tools">
+      <input id="psDigitalHumanResourceSearch" type="search" placeholder="搜索名称、编号或来源" autocomplete="off">
+      <button type="button" id="psDigitalHumanResourceSelectAll" class="btn btn-ghost btn-sm">全选搜索结果</button>
+    </div>
+    <div id="psDigitalHumanResourceList" class="ps-resource-modal-list"></div>
+    <div class="ps-dh-modal-foot">
+      <div class="ps-dh-pagination">
+        <button type="button" id="psDigitalHumanResourcePrev" class="btn btn-ghost btn-sm">上一页</button>
+        <span id="psDigitalHumanResourcePageText">1 / 1</span>
+        <button type="button" id="psDigitalHumanResourceNext" class="btn btn-ghost btn-sm">下一页</button>
+      </div>
+      <div class="ps-dh-modal-actions">
+        <button type="button" id="psDigitalHumanResourceClear" class="btn btn-ghost btn-sm danger-text">清空当前类型</button>
+        <button type="button" id="psDigitalHumanResourceCancel" class="btn btn-ghost btn-sm">取消</button>
+        <button type="button" id="psDigitalHumanResourceConfirm" class="btn btn-primary btn-sm">确认选择</button>
+      </div>
+    </div>
   </div>
 </div>
 <div id="psDigitalHumanTemplateModal" class="ps-dh-modal" aria-hidden="true" hidden>

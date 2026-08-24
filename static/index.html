@@ -9,7 +9,7 @@
   <link rel="apple-touch-icon" id="brandAppleTouch" href="__LOBSTER_APPLE_TOUCH__">
   <link rel="stylesheet" href="/static/css/common.css?v=20260822-i18n-full-v2">
     <link rel="stylesheet" href="/static/css/index.css?v=20260813-local-bestseller-ip-role">
-  <link rel="stylesheet" href="/static/css/pc-workbench.css?v=20260813-dh-modal-v1">
+  <link rel="stylesheet" href="/static/css/pc-workbench.css?v=20260824-personal-digital-resource-picker-v2">
   <link rel="stylesheet" href="/static/css/bihuo-25-video.css?v=20260731-workbench-v1">
 </head>
 <body>
@@ -30,12 +30,12 @@
         <button type="button" class="nav-left-item" data-view="assets" data-asset-origin-target="user_upload" data-feature-gate="asset_library_entry">素材库</button>
         <button type="button" class="nav-left-item" data-view="global-leads" data-feature-gate="global_trade_leads_skill">客资线索</button>
         <button type="button" class="nav-left-item" data-view="scheduled-tasks" data-feature-gate="scheduled_tasks_entry">定时任务</button>
-        <button type="button" class="nav-left-item nav-hidden-route" data-view="billing" hidden>消费记录</button>
-        <button type="button" class="nav-left-item nav-hidden-route" data-view="sys-config" hidden>系统配置</button>
-        <button type="button" class="nav-left-item nav-hidden-route" data-view="logs" hidden>日志</button>
-        <button type="button" class="nav-left-item nav-hidden-route" data-view="personal-settings" hidden>个人设置</button>
+        <button type="button" class="nav-left-item nav-hidden-route" data-view="billing" data-feature-gate="billing_entry" hidden>消费记录</button>
+        <button type="button" class="nav-left-item nav-hidden-route" data-view="sys-config" data-feature-gate="sys_config_entry" hidden>系统配置</button>
+        <button type="button" class="nav-left-item nav-hidden-route" data-view="logs" data-feature-gate="logs_entry" hidden>日志</button>
+        <button type="button" class="nav-left-item nav-hidden-route" data-view="personal-settings" data-feature-gate="personal_settings_entry" hidden>个人设置</button>
         <button type="button" class="nav-left-item" data-view="agent" data-feature-gate="agent_entry" id="navAgent">AI执行台</button>
-        <button type="button" class="nav-left-item" data-view="tutorial">教程</button>
+        <button type="button" class="nav-left-item" data-view="tutorial" data-feature-gate="tutorial_entry">教程</button>
       </nav>
       <div class="header-actions" id="headerActions" style="display: none;">
         <span id="sutuiBalanceWrap" data-feature-gate="billing_entry" data-feature-gate-preserve-display="1" style="display:none;margin-right:0.75rem;font-size:0.85rem;color:var(--text-muted);align-items:center;gap:0.5rem;">
@@ -181,20 +181,20 @@
                     <span class="chat-sidebar-entry-copy">IP人设定位</span>
                     <span class="chat-sidebar-entry-arrow">›</span>
                   </button>
-                  <button type="button" class="chat-sidebar-entry app-side-primary-entry" data-view="audio-transcription" data-feature-gate="personal_settings_entry">
+                  <button type="button" class="chat-sidebar-entry app-side-primary-entry" data-view="audio-transcription" data-feature-gate="ai_secretary_entry">
                     <span class="chat-sidebar-entry-icon">秘</span>
                     <span class="chat-sidebar-entry-copy">AI秘书</span>
                     <span class="chat-sidebar-entry-arrow">›</span>
                   </button>
 
-                  <details class="chat-sidebar-tree-group" id="onlineEmployeeNavGroup">
+                  <details class="chat-sidebar-tree-group" id="onlineEmployeeNavGroup" data-feature-gate="my_ai_employees_entry">
                     <summary><span class="chat-sidebar-tree-dot"></span><span>我的AI员工</span></summary>
                     <div class="chat-sidebar-tree-items" id="onlineEmployeeNavItems">
                       <button type="button" class="chat-sidebar-entry" data-online-employee="system_sales" data-feature-gate="local_bestseller_skill"><span class="chat-sidebar-entry-icon">销</span><span class="chat-sidebar-entry-copy">销售</span><span class="chat-sidebar-entry-arrow">›</span></button>
                     </div>
                   </details>
 
-                  <details class="chat-sidebar-tree-group">
+                  <details class="chat-sidebar-tree-group" data-feature-gate="ai_marketing_entry">
                     <summary><span class="chat-sidebar-tree-dot"></span><span>AI营销创作</span></summary>
                     <div class="chat-sidebar-tree-items">
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="ip-content-studio" data-feature-gate="ip_content_daily_skill"><span class="chat-sidebar-entry-icon">日</span><span class="chat-sidebar-entry-copy">IP日更文案</span><span class="chat-sidebar-entry-arrow">›</span></button>
@@ -2702,10 +2702,10 @@
   </div>
 
   <script src="/static/js/i18n-generated.js?v=20260822-i18n-full-v2"></script>
-  <script src="/static/js/i18n.js?v=20260823-douyin-online-keywords-v1"></script>
+  <script src="/static/js/i18n.js?v=20260824-personal-digital-resource-picker-v2"></script>
   <script src="/static/js/help-hints.js?v=20260522-billing-tier2"></script>
   <script src="/static/js/view-loader.js?v=20260624-reload-existing-views"></script>
-  <script src="/static/js/view-registry.js?v=20260823-mixer-hevc-v3"></script>
+  <script src="/static/js/view-registry.js?v=20260824-personal-digital-resource-picker-v2"></script>
   <script src="/static/js/app.js?v=20260813-signed-slot-v1"></script>
   <script src="/static/js/hifly-digital-human.js?v=20260606-voice-provider-detect"></script>
   <script src="/static/js/chat.js?v=20260718-home-feature-gates"></script>
@@ -2733,6 +2733,6 @@
   <script src="/static/js/scheduled-tasks.js?v=20260615-ip-daily-task-options"></script>
   <link rel="stylesheet" href="/static/css/task-center.css?v=20260821-task-center-round-v3">
   <script src="/static/js/task-center.js?v=20260821-task-center-round-v3"></script>
-  <script src="/static/js/init.js?v=20260813-signed-slot-v1"></script>
+  <script src="/static/js/init.js?v=20260824-client-update-fresh-status-v1"></script>
 </body>
 </html>

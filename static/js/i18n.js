@@ -13,6 +13,20 @@
 
   var GENERATED_EN = window.LobsterGeneratedEn || {};
   var CURATED_EN = {
+    '关联数字人形象 / 分身': 'Linked Digital Avatars / Clones',
+    '关联声音': 'Linked Voices',
+    '选择数字人资源': 'Select Digital Human Resources',
+    '选择数字人形象 / 分身': 'Select Digital Avatars / Clones',
+    '选择声音': 'Select Voices',
+    '形象 / 分身': 'Avatars / Clones',
+    '搜索名称、编号或来源': 'Search name, ID, or source',
+    '全选搜索结果': 'Select All Search Results',
+    '取消全选搜索结果': 'Deselect All Search Results',
+    '清空当前类型': 'Clear Current Type',
+    '确认选择': 'Confirm Selection',
+    '尚未选择，点击添加': 'Nothing selected. Click to add.',
+    '没有匹配的资源': 'No matching resources',
+    '正在加载资源...': 'Loading resources...',
     '采集关键词（可选）': 'Collection Keywords (Optional)',
     '留空使用当前设备 Online 已配置的全部关键词；手动填写可用逗号或换行分隔': 'Leave blank to use all keywords configured in Online for the current device. Separate custom keywords with commas or line breaks.',
     '抖音获客 - Online 全部关键词': 'Douyin Leads - All Online Keywords',
