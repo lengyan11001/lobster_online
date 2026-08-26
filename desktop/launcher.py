@@ -205,6 +205,7 @@ _STARTUP_STATUS_LOCK = threading.Lock()
 _CLIENT_UPDATE_RESTART_LOCK = threading.Lock()
 _CLIENT_UPDATE_RESTART_SCHEDULED = False
 _ALLOW_WINDOW_CLOSE = False
+_SERVICE_CLEANUP_LOCK = threading.Lock()
 _STARTUP_STATUS: dict[str, object] = {
     "stage": "prepare",
     "message": "正在准备启动...",
@@ -771,6 +772,43 @@ def process_looks_this_root_backend(pid: int) -> bool:
     return normalized_root in normalized_cmd and any(marker in normalized_cmd.lower() for marker in backend_markers)
 
 
+def command_line_looks_this_root_service(cmd: str) -> bool:
+    """Return true only for a service command launched from this client root.
+
+    The ``run_*.bat`` wrappers normally exit after spawning Python, so the
+    Popen handles held by the launcher can be dead while the actual services
+    keep running.  Shutdown therefore also scans the process table, but it
+    must be stricter than a port based kill to avoid touching unrelated local
+    Python/Node applications.
+    """
+    if not cmd:
+        return False
+    normalized_cmd = os.path.normcase(cmd).replace("/", "\\")
+    try:
+        normalized_root = os.path.normcase(str(ROOT.resolve())).replace("/", "\\").rstrip("\\")
+    except Exception:
+        normalized_root = os.path.normcase(str(ROOT)).replace("/", "\\").rstrip("\\")
+    if f"{normalized_root}\\" not in normalized_cmd:
+        return False
+    lower = normalized_cmd.lower()
+    return any(
+        marker in lower
+        for marker in (
+            "\\start.bat",
+            "backend\\run.py",
+            "run_backend.bat",
+            "run_mcp.bat",
+            "run_module('mcp'",
+            'run_module(\"mcp\"',
+            "openclaw.mjs gateway",
+        )
+    )
+
+
+def process_looks_this_root_service(pid: int) -> bool:
+    return command_line_looks_this_root_service(process_command_line(pid))
+
+
 def wait_port_closed(port: int, seconds: float = 6.0) -> bool:
     deadline = time.time() + seconds
     while time.time() < deadline:
@@ -1089,6 +1127,83 @@ def stop_other_root_backends(preferred_port: int) -> None:
         stop_port_processes(port, "BackendDuplicate")
 
 
+def cleanup_owned_services(
+    backend_proc: subprocess.Popen | None = None,
+    mcp_proc: subprocess.Popen | None = None,
+    *,
+    ports: tuple[int, ...] = (DEFAULT_PORT, DEFAULT_MCP_PORT, 18789),
+) -> None:
+    """Stop every service belonging to this desktop client.
+
+    A desktop close must not leave a backend polling cloud tasks in the
+    background.  First stop the known launch handles, then find orphaned
+    descendants by their exact root and service command line.  Port cleanup is
+    likewise restricted to processes that pass the same ownership check.
+    """
+    with _SERVICE_CLEANUP_LOCK:
+        current_pid = os.getpid()
+        seen: set[int] = set()
+        for proc, name in ((backend_proc, "Backend"), (mcp_proc, "MCP")):
+            if proc is None or proc.poll() is not None:
+                continue
+            try:
+                pid = int(proc.pid)
+            except Exception:
+                continue
+            if pid and pid != current_pid:
+                seen.add(pid)
+                stop_process(proc, name)
+
+        # The cmd.exe wrappers can outlive the Popen object and leave orphaned
+        # Python/Node children. Scan only processes whose command line identifies
+        # this exact root and one of our service entry points.
+        if os.name == "nt":
+            try:
+                rows = subprocess.check_output(
+                    [
+                        "powershell.exe",
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command",
+                        "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+                    ],
+                    text=True,
+                    errors="ignore",
+                    creationflags=creation_flags(),
+                    timeout=8,
+                )
+                parsed = json.loads(rows or "[]")
+                if isinstance(parsed, dict):
+                    parsed = [parsed]
+                for row in parsed if isinstance(parsed, list) else []:
+                    try:
+                        pid = int(row.get("ProcessId"))
+                    except (TypeError, ValueError):
+                        continue
+                    if pid <= 0 or pid == current_pid or pid in seen:
+                        continue
+                    if not command_line_looks_this_root_service(str(row.get("CommandLine") or "")):
+                        continue
+                    seen.add(pid)
+                    kill_pid_tree(pid, "OwnedService")
+            except Exception as exc:
+                log(f"OwnedService: process scan failed: {exc}")
+
+            # A process can disappear between the process-table snapshot and
+            # netstat. Recheck the configured ports and only kill verified-owned
+            # listeners; never use a blind port kill during desktop shutdown.
+            for port in ports:
+                for pid in sorted(netstat_listening_pids(int(port))):
+                    if pid <= 0 or pid == current_pid or pid in seen:
+                        continue
+                    if process_looks_this_root_service(pid):
+                        seen.add(pid)
+                        kill_pid_tree(pid, f"OwnedService:{port}")
+                wait_port_closed(int(port), seconds=3.0)
+        log(f"OwnedService: shutdown cleanup complete; stopped={sorted(seen)}")
+
+
 def choose_mcp_port(preferred: int, backend_port: int) -> int:
     if not port_open("127.0.0.1", preferred):
         return preferred
@@ -1174,8 +1289,22 @@ def stop_process(proc: subprocess.Popen | None, name: str) -> None:
 
 
 class DesktopApi:
+    def __init__(self, recover_services=None):
+        self._recover_services = recover_services
+
     def startup_status(self) -> dict:
         return get_startup_status_snapshot()
+
+    def recover_local_services(self, reason: str = "network") -> dict:
+        """Recover services owned by this desktop process without restarting the UI."""
+        if not callable(self._recover_services):
+            return {"ok": False, "error": "desktop service recovery is unavailable"}
+        try:
+            result = self._recover_services(str(reason or "network"))
+        except Exception as exc:
+            log(f"DesktopApi: service recovery failed reason={reason}: {exc}")
+            return {"ok": False, "error": "local service recovery failed"}
+        return result if isinstance(result, dict) else {"ok": bool(result)}
 
     def install_client_update(self) -> dict:
         """Exit cleanly, let a detached helper apply OTA, then relaunch."""
@@ -1267,6 +1396,40 @@ class DesktopApi:
         except Exception as exc:
             log(f"save asset failed asset_id={asset_id} target={target}: {exc}")
             return {"ok": False, "error": f"保存失败：{exc}"}
+        return {"ok": True, "path": str(target), "filename": target.name}
+
+    def save_text_file(self, suggested_name: str, content: str) -> dict:
+        """Save authenticated/generated text that a WebView cannot download as a blob URL."""
+        raw = str(content or "")
+        encoded = raw.encode("utf-8")
+        if len(encoded) > 8 * 1024 * 1024:
+            return {"ok": False, "error": "The file is too large to save from the desktop window."}
+        try:
+            import webview  # type: ignore
+
+            window = webview.active_window()
+            if window is None:
+                return {"ok": False, "error": "The desktop window is not available."}
+            default_name = safe_filename(suggested_name or "memory.md", "memory.md")
+            result = window.create_file_dialog(
+                webview.SAVE_DIALOG,
+                save_filename=default_name,
+                file_types=("Markdown files (*.md)", "Text files (*.txt)", "All files (*.*)"),
+            )
+        except Exception as exc:
+            log(f"save text dialog failed: {exc}")
+            return {"ok": False, "error": f"Unable to open the save dialog: {exc}"}
+
+        if not result:
+            return {"ok": False, "cancelled": True}
+        target_raw = result[0] if isinstance(result, (list, tuple)) else result
+        target = Path(str(target_raw)).expanduser()
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(encoded)
+        except Exception as exc:
+            log(f"save text file failed target={target}: {exc}")
+            return {"ok": False, "error": f"Unable to save the file: {exc}"}
         return {"ok": True, "path": str(target), "filename": target.name}
 
 
@@ -1648,8 +1811,58 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         "backend_proc": None,
         "mcp_proc": None,
         "watchdog_stop": threading.Event(),
+        "closing": threading.Event(),
+        "recovery_lock": threading.Lock(),
     }
     try:
+        def recover_local_services(reason: str = "network") -> dict:
+            if runtime["closing"].is_set():
+                return {"ok": False, "closing": True}
+            health_url = f"http://127.0.0.1:{port}/api/health?fast=1"
+            lock = runtime["recovery_lock"]
+            with lock:
+                if runtime["closing"].is_set():
+                    return {"ok": False, "closing": True}
+
+                mcp_restarted = False
+                if not port_open("127.0.0.1", mcp_port, timeout=0.4):
+                    mcp_proc = start_bat("MCPRecovery", "run_mcp.bat", env)
+                    if mcp_proc is not None:
+                        runtime["mcp_proc"] = mcp_proc
+                        mcp_restarted = True
+
+                if wait_for_own_backend(port, 2):
+                    return {"ok": True, "backend_restarted": False, "mcp_restarted": mcp_restarted}
+
+                proc = runtime.get("backend_proc")
+                if isinstance(proc, subprocess.Popen) and proc.poll() is None:
+                    log(f"Desktop recovery: restarting unhealthy backend reason={reason}")
+                    stop_process(proc, "BackendRecovery")
+                    runtime["backend_proc"] = None
+                    time.sleep(0.4)
+                elif port_open("127.0.0.1", port, timeout=0.3):
+                    owned = [pid for pid in netstat_listening_pids(port) if process_looks_this_root_backend(pid)]
+                    for pid in owned:
+                        kill_pid_tree(pid, "BackendRecovery")
+                    if owned:
+                        wait_port_closed(port, 6.0)
+                    if port_open("127.0.0.1", port, timeout=0.3):
+                        log(f"Desktop recovery: backend port {port} is owned by another process")
+                        return {"ok": False, "error": "backend port is occupied"}
+
+                recovered_proc = start_bat("BackendRecovery", "run_backend.bat", env)
+                runtime["backend_proc"] = recovered_proc
+                if recovered_proc is None:
+                    return {"ok": False, "error": "backend failed to start"}
+                recovered = wait_for_own_backend(port, 45)
+                log(f"Desktop recovery: completed reason={reason} recovered={recovered}")
+                return {
+                    "ok": recovered,
+                    "backend_restarted": True,
+                    "mcp_restarted": mcp_restarted,
+                    "health_url": health_url,
+                }
+
         def watch_backend(window) -> None:
             """Restart only an unexpectedly exited local backend while the window is open."""
             stop_event = runtime["watchdog_stop"]
@@ -1671,39 +1884,28 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                     # without treating one slow request as a crash.
                     if failures < 10:
                         continue
-                    log("Backend watchdog: owned backend is alive but unhealthy; restarting it")
-                    stop_process(proc, "BackendWatchdog")
-                    runtime["backend_proc"] = None
-                    time.sleep(0.5)
-                if port_open("127.0.0.1", port, timeout=0.3):
-                    failures = 0
-                    continue
-
-                log("Backend watchdog: local backend exited; restarting it")
-                recovered_proc = start_bat("BackendRecovery", "run_backend.bat", env)
-                runtime["backend_proc"] = recovered_proc
+                result = recover_local_services("backend_watchdog")
                 failures = 0
-                if recovered_proc is None:
+                if not result.get("ok"):
                     continue
-
-                deadline = time.time() + 45
-                while time.time() < deadline and not stop_event.wait(1.0):
-                    if http_ready(health_url, timeout=1.0):
-                        log("Backend watchdog: local backend recovered")
-                        try:
-                            window.evaluate_js(
-                                "if (window.requestLobsterNetworkRecovery) "
-                                "window.requestLobsterNetworkRecovery({reason:'backend_watchdog'});"
-                            )
-                        except Exception:
-                            pass
-                        break
+                log("Backend watchdog: local backend recovered")
+                try:
+                    window.evaluate_js(
+                        "if (window.requestLobsterNetworkRecovery) "
+                        "window.requestLobsterNetworkRecovery({reason:'backend_watchdog',skipProbe:true});"
+                    )
+                except Exception:
+                    pass
 
         def start_services_then_load(window) -> None:
             try:
                 ok, actual_url, backend_proc, mcp_proc, error = start_services_blocking(port, mcp_port, env, wait_seconds, ensure_runtime=False)
                 runtime["backend_proc"] = backend_proc
                 runtime["mcp_proc"] = mcp_proc
+                if runtime["closing"].is_set():
+                    log("webview closed during service startup; stopping newly started services")
+                    cleanup_owned_services(backend_proc, mcp_proc, ports=(port, mcp_port, 18789))
+                    return
                 if ok:
                     window.load_url(actual_url)
                     log("webview client page loaded")
@@ -1733,16 +1935,18 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             height=height,
             min_size=(900, 640),
             text_select=True,
-            js_api=DesktopApi(),
+            js_api=DesktopApi(recover_local_services),
         )
 
         def confirm_window_close() -> bool | None:
             if _ALLOW_WINDOW_CLOSE:
                 runtime["watchdog_stop"].set()
+                runtime["closing"].set()
                 return None
             allowed = confirm_box(title, CONFIRM_CLOSE_BODY_TEMPLATE.format(title=title))
             if allowed:
                 runtime["watchdog_stop"].set()
+                runtime["closing"].set()
             return None if allowed else False
 
         window.events.closing += confirm_window_close
@@ -1758,9 +1962,16 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         runtime["watchdog_stop"].set()
         return True, runtime.get("backend_proc") if isinstance(runtime.get("backend_proc"), subprocess.Popen) else None, runtime.get("mcp_proc") if isinstance(runtime.get("mcp_proc"), subprocess.Popen) else None
     except Exception as exc:
-        runtime["watchdog_stop"].set()
         log(f"webview start failed: {exc}")
         return False, None, None
+    finally:
+        runtime["watchdog_stop"].set()
+        runtime["closing"].set()
+        cleanup_owned_services(
+            runtime.get("backend_proc") if isinstance(runtime.get("backend_proc"), subprocess.Popen) else None,
+            runtime.get("mcp_proc") if isinstance(runtime.get("mcp_proc"), subprocess.Popen) else None,
+            ports=(port, mcp_port, 18789),
+        )
 
 
 def main() -> int:
@@ -1820,8 +2031,6 @@ def main() -> int:
     if not ok:
         return open_legacy_browser_mode(port, mcp_port, env, args.wait)
 
-    stop_process(backend_proc, "Backend")
-    stop_process(mcp_proc, "MCP")
     return 0
 
 

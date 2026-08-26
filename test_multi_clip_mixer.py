@@ -39,7 +39,8 @@ def test_template_customization_uses_the_existing_local_cutcli_pipeline():
     assert "materials: [{ type: 'video', fileUrl: videoUrl, soundSwitch: true }]" in script
     assert "material_composition: 'order'" in script
     assert "struct_layers: structLayers" in script
-    assert "introduce_name: ''" in script
+    assert "introduce_name: supportsIpLayer && description ? title : ''" in script
+    assert "loadShanjianTemplateDetail" in script
     assert "overlay_texts: readTemplateOverlayTexts()" in script
     assert "templateOverlayFields(state.selectedTemplate)" in script
     assert "overlayFieldMaxLength(field)" in script

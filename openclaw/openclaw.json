@@ -1,13 +1,6 @@
 {
   "meta": {
-    "lastTouchedVersion": "2026.4.1",
-    "lastTouchedAt": "2026-06-13T14:47:14.246Z"
-  },
-  "wizard": {
-    "lastRunAt": "2026-03-25T11:18:09.044Z",
-    "lastRunVersion": "2026.4.1",
-    "lastRunCommand": "doctor",
-    "lastRunMode": "local"
+    "lastTouchedAt": "2026-08-19T03:22:26.727452Z"
   },
   "commands": {
     "native": "auto",
@@ -56,8 +49,8 @@
     "providers": {
       "lobster-sutui": {
         "baseUrl": "http://127.0.0.1:8000/internal/openclaw-sutui/v1",
-        "apiKey": "lobster-oc-sutui-local-change-me",
         "api": "openai-completions",
+        "apiKey": "lobster-oc-sutui-local-change-me",
         "models": [
           {
             "id": "deepseek-chat",
@@ -88,18 +81,8 @@
       "model": {
         "primary": "lobster-sutui/deepseek-chat"
       },
-      "memorySearch": {
-        "store": {
-          "fts": {
-            "tokenizer": "trigram"
-          }
-        }
-      },
-      "compaction": {
-        "mode": "safeguard"
-      },
-      "timeoutSeconds": 600,
       "thinkingDefault": "off",
+      "timeoutSeconds": 600,
       "llm": {
         "idleTimeoutSeconds": 180
       }
@@ -108,6 +91,7 @@
       {
         "id": "main",
         "default": true,
+        "thinkingDefault": "off",
         "tools": {
           "deny": [
             "group:runtime",
@@ -122,12 +106,12 @@
             "security": "deny",
             "ask": "off"
           }
-        },
-        "thinkingDefault": "off"
+        }
       },
       {
         "id": "lobster-sutui-deepseek-chat",
         "model": "lobster-sutui/deepseek-chat",
+        "thinkingDefault": "off",
         "tools": {
           "deny": [
             "group:runtime",
@@ -142,94 +126,7 @@
             "security": "deny",
             "ask": "off"
           }
-        },
-        "thinkingDefault": "off"
-      },
-      {
-        "id": "lobster-browser-use",
-        "model": "lobster-sutui/openclaw-skill-chat",
-        "tools": {
-          "deny": [
-            "browser",
-            "canvas",
-            "web_fetch",
-            "web_search",
-            "x_search",
-            "read",
-            "write",
-            "memory_search",
-            "nodes",
-            "memory_get"
-          ],
-          "exec": {
-            "host": "gateway",
-            "security": "full",
-            "ask": "off"
-          }
         }
-      },
-      {
-        "id": "lobster-computer-use",
-        "model": "lobster-sutui/openclaw-skill-chat",
-        "tools": {
-          "deny": [
-            "browser",
-            "canvas",
-            "web_fetch",
-            "web_search",
-            "x_search",
-            "read",
-            "write",
-            "memory_search",
-            "nodes",
-            "memory_get"
-          ],
-          "exec": {
-            "host": "gateway",
-            "security": "full",
-            "ask": "off"
-          }
-        }
-      },
-      {
-        "id": "anthropic-claude-sonnet-4-5",
-        "model": "anthropic/claude-sonnet-4-5"
-      },
-      {
-        "id": "anthropic-claude-opus-4-6",
-        "model": "anthropic/claude-opus-4-6"
-      },
-      {
-        "id": "anthropic-claude-haiku-3-5",
-        "model": "anthropic/claude-haiku-3-5"
-      },
-      {
-        "id": "openai-gpt-4o",
-        "model": "openai/gpt-4o"
-      },
-      {
-        "id": "openai-gpt-4o-mini",
-        "model": "openai/gpt-4o-mini"
-      },
-      {
-        "id": "openai-o3-mini",
-        "model": "openai/o3-mini"
-      },
-      {
-        "id": "deepseek-deepseek-chat",
-        "model": "deepseek/deepseek-chat"
-      },
-      {
-        "id": "deepseek-deepseek-reasoner",
-        "model": "deepseek/deepseek-reasoner"
-      },
-      {
-        "id": "google-gemini-2-5-pro",
-        "model": "google/gemini-2.5-pro"
-      },
-      {
-        "id": "google-gemini-2-5-flash",
-        "model": "google/gemini-2.5-flash"
       }
     ]
   },

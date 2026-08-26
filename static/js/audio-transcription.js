@@ -51,9 +51,17 @@
   }
   function parseError(data, fallback) {
     if (!data) return fallback || '请求失败';
-    if (typeof data === 'string') return data;
+    if (typeof data === 'string') {
+      return typeof window.normalizeLobsterRecoverableMessage === 'function'
+        ? window.normalizeLobsterRecoverableMessage(data)
+        : data;
+    }
     var detail = data.detail || data.message || data.error;
-    if (typeof detail === 'string') return detail;
+    if (typeof detail === 'string') {
+      return typeof window.normalizeLobsterRecoverableMessage === 'function'
+        ? window.normalizeLobsterRecoverableMessage(detail)
+        : detail;
+    }
     try { return JSON.stringify(detail || data); } catch (err) { return fallback || '请求失败'; }
   }
   function requestJson(path, options) {
@@ -106,12 +114,23 @@
         var data = {};
         try { data = JSON.parse(xhr.responseText || '{}'); } catch (error) { data = {}; }
         if (xhr.status < 200 || xhr.status >= 300 || data.ok === false) {
-          reject(new Error(parseError(data, '音频上传失败（HTTP ' + xhr.status + '）')));
+          var rawError = parseError(data, '音频上传失败（HTTP ' + xhr.status + '）');
+          if (/连接正在自动恢复|登录状态已失效/.test(rawError) && typeof window.requestLobsterNetworkRecovery === 'function') {
+            window.requestLobsterNetworkRecovery({ reason: 'audio_upload_response' }).catch(function() {});
+          }
+          reject(new Error(rawError));
           return;
         }
         resolve(data);
       };
-      xhr.onerror = function() { reject(new Error('音频上传连接中断，请检查网络后重试')); };
+      xhr.onerror = function() {
+        var recovery = typeof window.requestLobsterNetworkRecovery === 'function'
+          ? window.requestLobsterNetworkRecovery({ reason: 'audio_upload_network' })
+          : Promise.resolve(false);
+        Promise.resolve(recovery).finally(function() {
+          reject(new Error('连接正在自动恢复，请稍后重试'));
+        });
+      };
       xhr.ontimeout = function() { reject(new Error('音频上传超时，已停止本次上传，请重试')); };
       xhr.onabort = function() { reject(new Error('音频上传已取消')); };
       xhr.send(form);

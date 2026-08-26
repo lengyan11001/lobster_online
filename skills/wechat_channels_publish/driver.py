@@ -1159,27 +1159,180 @@ async def _click_followup_confirm(page: Any) -> bool:
     return False
 
 
+async def _handle_original_notice(page: Any, enabled: bool, _step) -> bool:
+    """Handle the post-submit original-rights reminder without blocking publish."""
+    try:
+        result = await page.evaluate(
+            """
+            ({enabled}) => {
+              const roots = [];
+              const seen = new Set();
+              const walk = (root) => {
+                if (!root || seen.has(root)) return;
+                seen.add(root);
+                roots.push(root);
+                for (const el of (root.querySelectorAll ? root.querySelectorAll('*') : [])) {
+                  if (el.shadowRoot) walk(el.shadowRoot);
+                }
+              };
+              walk(document);
+              const norm = (value) => String(value || '').replace(/\\s+/g, '').trim();
+              const visible = (el) => {
+                if (!el || !el.getBoundingClientRect) return false;
+                const r = el.getBoundingClientRect();
+                const s = getComputedStyle(el);
+                return r.width > 5 && r.height > 5 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
+              };
+              const noRemind = ['不再提醒', '以后不再提醒', '下次不再提醒', '不再提示'];
+              let notice = false;
+              let checkbox = null;
+              let noRemindAction = null;
+              let continueButton = null;
+              for (const root of roots) {
+                const all = root.querySelectorAll ? root.querySelectorAll('button, [role="button"], label, span, div, p, input[type="checkbox"], [role="checkbox"]') : [];
+                for (const el of all) {
+                  if (!visible(el)) continue;
+                  const text = norm(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '');
+                  if (!text) continue;
+                  if (noRemind.some((token) => text.includes(token))) {
+                    notice = true;
+                    const parent = el.closest('label, [role="checkbox"], .ant-checkbox-wrapper, div') || el;
+                    const cb = el.matches('input[type="checkbox"], [role="checkbox"]') ? el : parent.querySelector?.('input[type="checkbox"], [role="checkbox"]');
+                    if (cb) {
+                      const r = cb.getBoundingClientRect();
+                      const checked = 'checked' in cb ? !!cb.checked : String(cb.getAttribute?.('aria-checked') || '').toLowerCase() === 'true';
+                      checkbox = { box: {x:r.left,y:r.top,width:r.width,height:r.height}, checked };
+                    } else if (el.matches('button, [role="button"]') || el.closest('button, [role="button"]') || el.classList.contains('no-tip-btn') || el.closest('.no-tip-btn')) {
+                      const target = el.closest('button, [role="button"], .no-tip-btn') || el;
+                      const r = target.getBoundingClientRect();
+                      noRemindAction = { box: {x:r.left,y:r.top,width:r.width,height:r.height}, text };
+                    }
+                  }
+                  const buttonTokens = ['直接发表', '继续发表', '确认发表', '确定', '我知道了', '继续'];
+                  const buttonTarget = el.matches('button, [role="button"]') ? el : el.closest('button, [role="button"]');
+                  if (!buttonTarget || !visible(buttonTarget)) continue;
+                  const buttonText = norm(buttonTarget.textContent || buttonTarget.getAttribute('aria-label') || buttonTarget.getAttribute('title') || text);
+                  const buttonRank = buttonTokens.findIndex((token) => buttonText === token || buttonText.includes(token));
+                  if (buttonRank >= 0) {
+                    const r = buttonTarget.getBoundingClientRect();
+                    if (r.width > 24 && r.height > 16 && (!continueButton || buttonRank < continueButton.rank)) {
+                      continueButton = {box:{x:r.left,y:r.top,width:r.width,height:r.height}, text: buttonText, rank: buttonRank};
+                    }
+                  }
+                }
+              }
+              return {notice, checkbox, noRemindAction, continueButton, enabled: !!enabled};
+            }
+            """,
+            {"enabled": bool(enabled)},
+        )
+        if not isinstance(result, dict) or not result.get("notice"):
+            return False
+        if bool(result.get("enabled", True)) and isinstance(result.get("checkbox"), dict):
+            checkbox = result["checkbox"]
+            if not checkbox.get("checked"):
+                await _human_click_box(page, checkbox.get("box") or {})
+                _step("勾选原创提示不再提醒", True)
+        elif bool(result.get("enabled", True)) and isinstance(result.get("noRemindAction"), dict):
+            action = result["noRemindAction"]
+            await _human_click_box(page, action.get("box") or {})
+            _step("点击原创提示不再提醒", True)
+            # The no-tip control only changes the reminder preference. The
+            # publish dialog still needs the explicit "直接发表" action.
+            await _delay(0.25, 0.6)
+            followup = await page.evaluate(
+                """
+                () => {
+                  const norm = (value) => String(value || '').replace(/\\s+/g, '').trim();
+                  const visible = (el) => {
+                    if (!el || !el.getBoundingClientRect) return false;
+                    const r = el.getBoundingClientRect();
+                    const s = getComputedStyle(el);
+                    return r.width > 24 && r.height > 16 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
+                  };
+                  const tokens = ['直接发表', '继续发表', '确认发表', '确定', '我知道了', '继续'];
+                  for (const el of document.querySelectorAll('button, [role="button"]')) {
+                    if (!visible(el)) continue;
+                    const text = norm(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '');
+                    if (tokens.some((token) => text === token || text.includes(token))) {
+                      const r = el.getBoundingClientRect();
+                      return {box: {x:r.left,y:r.top,width:r.width,height:r.height}, text};
+                    }
+                  }
+                  return null;
+                }
+                """
+            )
+            if isinstance(followup, dict):
+                await _human_click_box(page, followup.get("box") or {})
+                _step("处理原创提示并继续发布", True, button=followup.get("text", ""))
+                return True
+            return True
+        button = result.get("continueButton")
+        if isinstance(button, dict):
+            await _human_click_box(page, button.get("box") or {})
+            _step("处理原创提示并继续发布", True, button=button.get("text", ""))
+            return True
+        _step("检测到原创提示但未找到继续按钮", False)
+        return False
+    except Exception as exc:
+        logger.warning("[WECHAT-CHANNELS] original notice handling failed: %s", exc)
+        _step("处理原创提示并继续发布", False, error=str(exc))
+        return False
+
+
 async def _verify_publish_result(page: Any, _step) -> Dict[str, Any]:
-    success_words = ("发表成功", "发布成功", "提交成功", "已发表", "已发布", "审核中")
-    fail_words = ("发表失败", "发布失败", "提交失败", "请上传", "不能为空", "格式不支持", "审核失败")
+    success_words = ("发表成功", "发布成功", "提交成功", "已发表", "已发布", "已提交审核", "审核中", "发布完成", "内容已发布")
+    fail_words = ("发表失败", "发布失败", "提交失败", "请上传", "不能为空", "格式不支持", "审核失败", "资料不完整", "内容不合规")
+
+    def _excerpt(text: str, limit: int = 260) -> str:
+        return " ".join((text or "").split())[:limit]
+
     for _ in range(45):
         text = await _deep_text(page)
-        if any(word in text for word in success_words):
-            _step("检测发布结果", True)
-            return {"ok": True, "url": getattr(page, "url", "") or ""}
-        if any(word in text for word in fail_words):
-            _step("检测发布结果", False)
-            return {"ok": False, "error": "视频号页面提示发布失败或资料不完整", "url": getattr(page, "url", "") or ""}
-        url = (getattr(page, "url", "") or "").split("?")[0].rstrip("/")
-        if url and not url.endswith("/post/create") and "/login" not in url:
-            _step("检测发布跳转", True, url=url)
-            return {"ok": True, "url": getattr(page, "url", "") or ""}
+        url = getattr(page, "url", "") or ""
+        excerpt = _excerpt(text)
+        matched_fail = next((word for word in fail_words if word in text), "")
+        if matched_fail:
+            _step("检测发布结果", False, matched=matched_fail, url=url)
+            return {
+                "ok": False,
+                "status": "failed",
+                "error": f"视频号页面提示：{matched_fail}",
+                "url": url,
+                "matched_keyword": matched_fail,
+                "page_text_excerpt": excerpt,
+            }
+        matched_success = next((word for word in success_words if word in text), "")
+        if matched_success:
+            _step("检测发布结果", True, matched=matched_success, url=url)
+            return {
+                "ok": True,
+                "status": "success",
+                "url": url,
+                "matched_keyword": matched_success,
+                "page_text_excerpt": excerpt,
+            }
+        normalized_url = url.split("?")[0].rstrip("/")
+        if normalized_url and not normalized_url.endswith("/post/create") and "/login" not in normalized_url:
+            _step("检测发布跳转", True, url=normalized_url)
+            return {
+                "ok": True,
+                "status": "success",
+                "url": url,
+                "matched_keyword": "url_redirect",
+                "page_text_excerpt": excerpt,
+            }
         await asyncio.sleep(1)
-    _step("发布结果未明确返回", True)
+    final_url = getattr(page, "url", "") or ""
+    _step("发布结果未明确返回", False, url=final_url)
     return {
-        "ok": True,
-        "url": getattr(page, "url", "") or "",
+        "ok": False,
+        "status": "unknown",
+        "url": final_url,
         "warning": "已点击发表，但页面未在 45 秒内返回明确成功提示，请到视频号助手确认。",
+        "error": "视频号发布结果未能明确识别",
+        "page_text_excerpt": _excerpt(text if 'text' in locals() else ""),
     }
 
 
@@ -1313,7 +1466,22 @@ class WechatChannelsDriver(BaseDriver):
                 await publish_btn.click(force=True, timeout=_pw_ms(12000))
                 await _delay(0.8, 1.6)
             _step("点击发表", True)
-            if await _click_followup_confirm(page):
+            notice_no_remind = _option_bool(
+                options,
+                "wechat_channels_original_notice_no_remind",
+                "channels_original_notice_no_remind",
+                "original_notice_no_remind",
+            )
+            if notice_no_remind is None:
+                notice_no_remind = True
+            notice_handled = False
+            for attempt in range(4):
+                if await _handle_original_notice(page, bool(notice_no_remind), _step):
+                    notice_handled = True
+                    break
+                if attempt < 3:
+                    await asyncio.sleep(0.6)
+            if not notice_handled and await _click_followup_confirm(page):
                 _step("确认发表", True)
 
             result = await _verify_publish_result(page, _step)

@@ -203,11 +203,15 @@
           <label>搜索数量<input id="oeNodeDouyinMaxResults" type="number" min="10" max="100" step="1" value="50"></label>
           <label>搜索方式<select id="oeNodeDouyinMode"><option value="script">浏览器脚本</option><option value="api">接口模式</option></select></label>
         </div>
+        <div class="oe-form-label" id="oeNodeDouyinTouchField" hidden>
+          <span>精准用户触达参数</span>
+          <label>每次触达数量<input id="oeNodeDouyinTouchMaxUsers" type="number" min="1" max="200" step="1" value="20"></label>
+        </div>
         <div class="oe-form-label" id="oeNodeDouyinFollowupField" hidden>
-          <span>采集后继续执行（可多选）</span>
+          <span>执行动作（可多选）</span>
           <label><input id="oeNodeDouyinFollowupReplyComments" type="checkbox"> 回复客户评论</label>
-          <label><input id="oeNodeDouyinFollowupMentionComment" type="checkbox"> 评论并@客户</label>
           <label><input id="oeNodeDouyinFollowupFollowComment" type="checkbox"> 关注并评论</label>
+          <label><input id="oeNodeDouyinFollowupMentionComment" type="checkbox"> 评论并@客户</label>
           <label><input id="oeNodeDouyinFollowupDirectMessage" type="checkbox"> 主动私信</label>
         </div>
         <div class="oe-form-label" id="oeNodeMomentField" hidden>

@@ -73,6 +73,7 @@
 .mcm-overlay-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
 .mcm-overlay-head strong { color: #30394b; font-size: 12px; font-weight: 600; }
 .mcm-overlay-head span { color: #89919f; font-size: 10px; }
+.mcm-template-capabilities { margin: -2px 0 9px; color: #50705f; font-size: 11px; }
 .mcm-overlay-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
 .mcm-overlay-field { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
 .mcm-overlay-field > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #566072; font-size: 11px; }

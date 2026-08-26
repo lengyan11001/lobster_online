@@ -1,7 +1,7 @@
 {
-  "version": "1.0.210",
-  "build": 254,
-  "applied_at": "2026-08-24T16:08:34+08:00",
-  "note": "OEM switcher runtime and latest client code",
-  "bundle_sha256": "55af2d04b1cceaecaf21c6e9bb59b837409e5b860e2ae51ef5060c87316b5e45"
+  "version": "1.0.214",
+  "build": 258,
+  "applied_at": "2026-08-26T13:21:14+08:00",
+  "note": "provider fallback routing latest",
+  "bundle_sha256": "636bcf06521c52b4c93567810ab82c872dd708e52a7d4175fe9b96fc56c51f95"
 }

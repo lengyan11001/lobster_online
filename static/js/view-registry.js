@@ -4,7 +4,7 @@
   window.registerLobsterView('audio-transcription', {
     html: '/static/views/audio-transcription.html?v=20260810-ai-secretary-v2',
     css: '/static/css/audio-transcription.css?v=20260810-ai-secretary-v2',
-    scripts: '/static/js/audio-transcription.js?v=20260810-ai-secretary-v2',
+    scripts: '/static/js/audio-transcription.js?v=20260826-auto-request-recovery-v1',
     init: 'initAudioTranscriptionView'
   });
 
@@ -29,7 +29,7 @@
 
   window.registerLobsterView('personal-settings', {
     html: '/static/views/personal-settings.html?v=20260824-personal-digital-resource-picker-v2',
-    scripts: '/static/js/personal-settings.js?v=20260824-personal-digital-resource-picker-v2',
+    scripts: '/static/js/personal-settings.js?v=20260826-memory-download-bridge-v1',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });

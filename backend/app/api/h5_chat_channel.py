@@ -3778,6 +3778,10 @@ def _scheduled_douyin_search_keyword(source: Dict[str, Any]) -> str:
 
 def _scheduled_douyin_sales_action_from_text(value: Any) -> str:
     text = str(value or "").strip()
+    if "我的评论区" in text or "抖音我的评论区" in text:
+        return "self_comment_monitor"
+    if "精准用户触达" in text or "精准触达" in text:
+        return "precise_touch"
     if "养号" in text:
         return "account_nurture"
     if "发布后采集" in text or "关键词抓取" in text:
@@ -3861,6 +3865,7 @@ def _scheduled_douyin_online_config_params(
     plans: Any = None,
     search_sessions: Any = None,
     stranger_monitors: Any = None,
+    self_comment_monitors: Any = None,
 ) -> Dict[str, Any]:
     """Build task parameters exclusively from Online's persisted Douyin settings."""
     action_key = str(action or "").strip().lower()
@@ -3973,6 +3978,36 @@ def _scheduled_douyin_online_config_params(
             )
         return params
 
+    if action_key == "self_comment_monitor":
+        states = [
+            dict(row)
+            for row in (self_comment_monitors if isinstance(self_comment_monitors, list) else [])
+            if isinstance(row, dict)
+        ]
+        target = next(
+            (
+                row
+                for row in states
+                if default_account_id > 0 and _safe_int(row.get("account_id")) == default_account_id
+            ),
+            next((row for row in states if bool(row.get("enabled"))), states[0] if states else {}),
+        )
+        if target:
+            params.update(
+                {
+                    "account_id": _safe_int(target.get("account_id") or default_account_id),
+                    "max_videos": _safe_int(target.get("max_videos") or 20) or 20,
+                    "max_comments_per_video": _safe_int(target.get("max_comments_per_video") or 80) or 80,
+                    "auto_reply_enabled": bool(target.get("auto_reply_enabled", False)),
+                    "reply_mode": str(target.get("reply_mode") or "fixed").strip().lower() or "fixed",
+                    "reply_message": str(target.get("reply_message") or "").strip(),
+                    "reply_prompt": str(target.get("reply_prompt") or "").strip(),
+                    "contact_value": str(target.get("contact_value") or "").strip(),
+                    "reply_image_path": str(target.get("reply_image_path") or target.get("comment_image_path") or "").strip(),
+                }
+            )
+        return params
+
     if action_key == "account_nurture":
         duration_min = max(5, _safe_int(local_config.get("douyin_nurture_session_min_minutes") or 20) or 20)
         duration_max = max(duration_min, _safe_int(local_config.get("douyin_nurture_session_max_minutes") or 40) or 40)
@@ -3986,10 +4021,12 @@ def _load_scheduled_douyin_online_config_params(action: str) -> Dict[str, Any]:
         _install_douyin_origin_import_path()
         from douyin_api import (  # type: ignore
             douyin_schedule_plans,
+            list_douyin_self_comment_monitor_states,
             list_douyin_stranger_message_monitor_states,
             load_douyin_search_sessions_state,
             load_global_config,
             restore_douyin_stranger_message_monitor_config,
+            restore_douyin_self_comment_monitor_config,
         )
 
         if str(action or "").strip().lower() == "stranger_message":
@@ -3997,6 +4034,8 @@ def _load_scheduled_douyin_online_config_params(action: str) -> Dict[str, Any]:
             # restore hook has already run. Reload the persisted config before
             # a one-shot H5 task so the fixed reply is never lost from memory.
             restore_douyin_stranger_message_monitor_config()
+        if str(action or "").strip().lower() == "self_comment_monitor":
+            restore_douyin_self_comment_monitor_config()
 
         return _scheduled_douyin_online_config_params(
             action,
@@ -4004,6 +4043,7 @@ def _load_scheduled_douyin_online_config_params(action: str) -> Dict[str, Any]:
             plans=douyin_schedule_plans,
             search_sessions=load_douyin_search_sessions_state(),
             stranger_monitors=list_douyin_stranger_message_monitor_states(),
+            self_comment_monitors=list_douyin_self_comment_monitor_states(),
         )
     except Exception as exc:
         logger.warning("[SCHEDULED-TASK] load Online Douyin config failed action=%s error=%s", action, exc)
@@ -4559,6 +4599,8 @@ def _scheduled_douyin_interaction_users(
 _SCHEDULED_DOUYIN_ACTION_LABELS = {
     "account_nurture": "自动养号",
     "search_collect": "关键词采集精准客户",
+    "self_comment_monitor": "我的评论区",
+    "precise_touch": "精准用户触达",
     "reply_comments": "回复视频评论",
     "mention_comment": "评论并@精准客户",
     "follow_comment": "关注并评论精准客户",
@@ -4568,8 +4610,8 @@ _SCHEDULED_DOUYIN_ACTION_LABELS = {
 
 _SCHEDULED_DOUYIN_FOLLOWUP_ACTIONS = (
     "reply_comments",
-    "mention_comment",
     "follow_comment",
+    "mention_comment",
     "direct_message",
 )
 
@@ -4596,11 +4638,31 @@ def _merge_scheduled_douyin_collection_params(
     if explicit_keywords:
         merged["keywords"] = explicit_keywords
         merged["keyword"] = explicit_keywords[0]
-    merged["followup_actions"] = _scheduled_douyin_followup_actions(
-        workflow.get("followup_actions"),
-        default_all="followup_actions" not in workflow,
-    )
     merged["customer_scope"] = "current_collection_batch"
+    return merged
+
+
+def _merge_scheduled_douyin_precise_touch_params(
+    online_params: Any,
+    workflow_params: Any,
+) -> Dict[str, Any]:
+    merged = dict(online_params) if isinstance(online_params, dict) else {}
+    workflow = dict(workflow_params) if isinstance(workflow_params, dict) else {}
+    for key in (
+        "touch_actions",
+        "followup_actions",
+        "max_users",
+        "max_results",
+        "interval_minutes_min",
+        "interval_minutes_max",
+        "sales_schedule_start",
+        "sales_schedule_end",
+        "sales_schedule_duration_minutes",
+        "sales_node_label",
+    ):
+        if key in workflow and workflow.get(key) not in (None, "", []):
+            merged[key] = workflow.get(key)
+    merged["customer_scope"] = "precise_pool"
     return merged
 
 
@@ -4927,6 +4989,8 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
     max_users = max(1, min(_safe_int(source.get("max_users") or source.get("max_results") or 10) or 10, 200))
     interval_minutes_min = max(1, min(_safe_int(source.get("interval_minutes_min") or 4) or 4, 60))
     interval_minutes_max = max(interval_minutes_min, min(_safe_int(source.get("interval_minutes_max") or 6) or 6, 120))
+    raw_source_users = source.get("users") if isinstance(source.get("users"), list) else source.get("selected_users") if isinstance(source.get("selected_users"), list) else []
+    source_users = [dict(row) for row in raw_source_users if isinstance(row, dict)]
 
     _install_douyin_origin_import_path()
     if action == "account_nurture":
@@ -4968,17 +5032,162 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         )
         return normalized
 
+    if action == "self_comment_monitor":
+        from douyin_api import get_douyin_self_comment_monitor_state, run_douyin_self_comment_monitor_cycle  # type: ignore
+
+        if account_id <= 0:
+            return {"code": 400, "msg": "Online 未配置可执行的抖音我的评论区账号。"}
+        result = await run_douyin_self_comment_monitor_cycle(
+            account_id,
+            trigger_type="workflow",
+            one_shot=True,
+        )
+        if not isinstance(result, dict):
+            return {"code": 500, "msg": "抖音我的评论区执行没有返回结果。"}
+        monitor_state = get_douyin_self_comment_monitor_state(account_id)
+        status = str(result.get("status") or monitor_state.get("last_cycle_status") or "failed").strip().lower()
+        code = 200 if status in {"completed", "skipped", "disabled"} else 500
+        return {
+            **result,
+            "code": code,
+            "action": action,
+            "stats": {
+                "total": _safe_int(monitor_state.get("last_video_count") or 0),
+                "processed": _safe_int(monitor_state.get("last_comment_count") or 0),
+                "success": _safe_int(monitor_state.get("last_auto_reply_success") or 0),
+                "failed": _safe_int(monitor_state.get("last_auto_reply_failed") or 0),
+                "new_comments": _safe_int(monitor_state.get("last_new_comment_count") or 0),
+                "precise": _safe_int(monitor_state.get("last_precise_count") or 0),
+            },
+            "final_state": monitor_state,
+        }
+
+    if action == "precise_touch":
+        from douyin_api import collect_douyin_precise_touch_users, update_douyin_precise_touch_users  # type: ignore
+
+        touch_actions = _scheduled_douyin_followup_actions(
+            source.get("touch_actions") if isinstance(source.get("touch_actions"), list) else source.get("followup_actions"),
+            default_all=True,
+        )
+        if not touch_actions:
+            touch_actions = list(_SCHEDULED_DOUYIN_FOLLOWUP_ACTIONS)
+        if not touch_actions:
+            return {"code": 400, "msg": "当前没有可执行的精准触达动作。"}
+
+        results: List[Dict[str, Any]] = []
+        success_count = 0
+        touched_total = 0
+        for touch_action in touch_actions:
+            touch_users = collect_douyin_precise_touch_users(touch_action, max_users)
+            if touch_action == "reply_comments":
+                touch_users = [
+                    row
+                    for row in touch_users
+                    if isinstance(row, dict) and _safe_int(row.get("task_id")) > 0
+                ]
+            if not touch_users:
+                results.append(
+                    {
+                        "action": touch_action,
+                        "label": _SCHEDULED_DOUYIN_ACTION_LABELS.get(touch_action, touch_action),
+                        "result": {"code": 204, "msg": "当前动作没有可触达的精准用户"},
+                        "users": [],
+                    }
+                )
+                continue
+
+            sub_params = dict(source)
+            sub_params = _load_scheduled_douyin_online_config_params(touch_action)
+            for key in ("interval_minutes_min", "interval_minutes_max"):
+                if key in source and source.get(key) not in (None, "", []):
+                    sub_params[key] = source.get(key)
+            sub_params["users"] = touch_users
+            sub_params["selected_users"] = touch_users
+            sub_params["customer_scope"] = "precise_pool"
+            if touch_action == "reply_comments":
+                sub_params["selected_task_ids"] = sorted(
+                    {
+                        _safe_int(row.get("task_id"))
+                        for row in touch_users
+                        if isinstance(row, dict) and _safe_int(row.get("task_id")) > 0
+                    }
+                )
+            started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            update_douyin_precise_touch_users(
+                touch_users,
+                action=touch_action,
+                status="queued",
+                account_id=account_id or None,
+                started_at=started_at,
+            )
+            try:
+                touch_result = await _run_scheduled_douyin_sales_action(touch_action, sub_params)
+            except Exception as exc:
+                logger.exception(
+                    "[SCHEDULED-TASK] Douyin precise touch failed action=%s",
+                    touch_action,
+                )
+                touch_result = {"code": 500, "msg": str(exc).strip() or exc.__class__.__name__}
+
+            touch_code = _safe_int(touch_result.get("code") if isinstance(touch_result, dict) else 0)
+            touch_status = str(touch_result.get("status") or "").strip().lower() if isinstance(touch_result, dict) else ""
+            mark_status = "completed" if touch_code in {0, 200} and touch_status not in {"timeout", "timeout_stopped"} else "failed"
+            if mark_status == "completed":
+                success_count += 1
+            touched_total += len(touch_users)
+            update_douyin_precise_touch_users(
+                touch_users,
+                action=touch_action,
+                status=mark_status,
+                error="" if mark_status == "completed" else str((touch_result or {}).get("msg") or (touch_result or {}).get("message") or "").strip(),
+                result=str((touch_result or {}).get("summary") or (touch_result or {}).get("msg") or "").strip(),
+                account_id=account_id or None,
+                started_at=str((touch_result or {}).get("started_at") or started_at).strip() or None,
+                finished_at=str((touch_result or {}).get("finished_at") or "").strip() or None,
+            )
+            results.append(
+                {
+                    "action": touch_action,
+                    "label": _SCHEDULED_DOUYIN_ACTION_LABELS.get(touch_action, touch_action),
+                    "result": touch_result,
+                    "users": _scheduled_douyin_action_users(touch_action, touch_users),
+                }
+            )
+
+        summary = f"精准用户触达完成：共执行 {len(results)} 个动作，成功 {success_count} 个，触达候选 {touched_total} 人。"
+        return {
+            "code": 200,
+            "msg": summary,
+            "summary": summary,
+            "action": action,
+            "results": results,
+            "stats": {
+                "total": len(results),
+                "processed": len(results),
+                "success": success_count,
+                "failed": len(results) - success_count,
+                "users": touched_total,
+            },
+        }
+
     if action == "reply_comments":
         from douyin_api import douyin_start_video_comment, get_commentable_douyin_tasks  # type: ignore
 
         comment_mode = str(source.get("comment_mode") or "fixed").strip() or "fixed"
         selected_task_ids = _scheduled_douyin_selected_task_ids(source)
         if not selected_task_ids:
-            selected_task_ids = [
-                _safe_int(row.get("id"))
-                for row in get_commentable_douyin_tasks()
-                if isinstance(row, dict) and _safe_int(row.get("id")) > 0
-            ][:max_users]
+            if source_users:
+                selected_task_ids = [
+                    _safe_int(row.get("task_id"))
+                    for row in source_users
+                    if isinstance(row, dict) and _safe_int(row.get("task_id")) > 0
+                ]
+            if not selected_task_ids:
+                selected_task_ids = [
+                    _safe_int(row.get("id"))
+                    for row in get_commentable_douyin_tasks()
+                    if isinstance(row, dict) and _safe_int(row.get("id")) > 0
+                ][:max_users]
         result = await douyin_start_video_comment(request={
             "selected_task_ids": selected_task_ids,
             "comment_mode": comment_mode,
@@ -5007,7 +5216,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
     if action == "follow_comment":
         from douyin_api import douyin_start_follow_comment  # type: ignore
 
-        users = _scheduled_douyin_interaction_users(max_users, _scheduled_douyin_selected_task_ids(source))
+        users = source_users or _scheduled_douyin_interaction_users(max_users, _scheduled_douyin_selected_task_ids(source))
         if not users:
             return {"code": 400, "msg": "当前没有可执行的精准客户，请先完成关键词采集。"}
         comment_mode = str(source.get("comment_mode") or "fixed").strip() or "fixed"
@@ -5039,7 +5248,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
     if action == "direct_message":
         from douyin_api import douyin_start_interaction  # type: ignore
 
-        users = _scheduled_douyin_interaction_users(max_users, _scheduled_douyin_selected_task_ids(source))
+        users = source_users or _scheduled_douyin_interaction_users(max_users, _scheduled_douyin_selected_task_ids(source))
         if not users:
             return {"code": 400, "msg": "当前没有可私信的精准客户，请先完成关键词采集。"}
         message_mode = str(source.get("message_mode") or "fixed").strip() or "fixed"
@@ -5080,7 +5289,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         from douyin_api import douyin_get_self_videos  # type: ignore
         from douyin_api import douyin_start_mention_comment  # type: ignore
 
-        users = _scheduled_douyin_interaction_users(max_users, _scheduled_douyin_selected_task_ids(source))
+        users = source_users or _scheduled_douyin_interaction_users(max_users, _scheduled_douyin_selected_task_ids(source))
         if not users:
             return {"code": 400, "msg": "当前没有可@的精准客户，请先完成关键词采集。"}
         videos_result = await douyin_get_self_videos(account_id=account_id, max_videos=6)
@@ -5190,10 +5399,14 @@ async def _run_scheduled_douyin_leads(
         params = _load_scheduled_douyin_online_config_params(action)
         if action == "search_collect":
             params = _merge_scheduled_douyin_collection_params(params, workflow_params)
+        elif action == "precise_touch":
+            params = _merge_scheduled_douyin_precise_touch_params(params, workflow_params)
     elif not params or (action == "search_collect" and not _scheduled_douyin_search_keyword(params)):
         online_params = _load_scheduled_douyin_online_config_params(action)
         if action == "search_collect":
             params = _merge_scheduled_douyin_collection_params(online_params, workflow_params)
+        elif action == "precise_touch":
+            params = _merge_scheduled_douyin_precise_touch_params(online_params, workflow_params)
         else:
             params = online_params
     if h5_one_shot:
@@ -5217,7 +5430,7 @@ async def _run_scheduled_douyin_leads(
     try:
         if action == "search_collect":
             result = await _run_scheduled_douyin_search_collect_action(params)
-        elif action in {"account_nurture", "reply_comments", "mention_comment", "follow_comment", "direct_message", "stranger_message"}:
+        elif action in {"account_nurture", "self_comment_monitor", "precise_touch", "reply_comments", "mention_comment", "follow_comment", "direct_message", "stranger_message"}:
             result = await _run_scheduled_douyin_sales_action(action, params)
         else:
             raise RuntimeError(f"暂不支持的抖音获客任务类型：{action}")
@@ -5300,32 +5513,12 @@ async def _run_scheduled_douyin_leads(
                     _safe_int(result_payload.get("selected_videos_total")),
                 )
                 final_status = str((final_state or {}).get("status") or "").strip().lower()
-                followup_results: List[Dict[str, Any]] = []
-                followup_actions = _scheduled_douyin_followup_actions(params.get("followup_actions"))
-                if final_status == "done" and followup_actions:
-                    followup_results = await _run_scheduled_douyin_batch_followups(
-                        cloud,
-                        base,
-                        headers,
-                        run_id,
-                        followup_actions,
-                        selected_task_ids,
-                    )
-                    _active_scheduled_douyin_actions[run_id] = action
-                    result_payload["followup_actions"] = followup_actions
-                    result_payload["followup_results"] = followup_results
                 if final_status == "done":
                     result_text = (
                         f"搜索完成，共执行 {keyword_total} 个关键词，找到 {search_total} 个视频；"
                         f"已采集 {selected_video_total} 个视频的客户 {comments_collected} 人，"
                         f"精准客户 {precise_total} 人。"
                     )
-                    if followup_results:
-                        success_count = len([
-                            row for row in followup_results
-                            if _safe_int((row.get("result") or {}).get("code")) in {0, 200}
-                        ])
-                        result_text += f" 已按本次客户批次执行 {len(followup_results)} 个后续动作，成功 {success_count} 个。"
                 elif final_status == "timeout":
                     result_text = (
                         f"搜索完成，找到 {search_total} 个视频；"
@@ -7893,6 +8086,47 @@ def _select_daily_virtualman(
     return dict(normalized[(local_day.toordinal() + node_offset) % len(normalized)])
 
 
+def _normalize_voice_candidates(value: Any) -> List[Dict[str, Any]]:
+    rows = value if isinstance(value, list) else []
+    candidates: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        status = _workflow_text(row.get("status"), 32).lower()
+        if status and status not in {"succeed", "success", "completed", "complete", "done"}:
+            continue
+        voice = _workflow_text(row.get("voice") or row.get("voice_id") or row.get("speaker_id") or row.get("speakerId"), 128)
+        if not voice or voice in seen:
+            continue
+        seen.add(voice)
+        candidates.append({
+            "voice": voice,
+            "title": _workflow_text(row.get("title") or row.get("name"), 128),
+            "provider": _workflow_text(row.get("provider") or row.get("source"), 32),
+            "source_record_id": _safe_int(row.get("source_record_id") or row.get("id")),
+        })
+    return candidates
+
+
+def _select_daily_voice(
+    candidates: List[Dict[str, Any]],
+    *,
+    local_day: date,
+    rotation_key: str,
+    sequence_slot: Optional[int] = None,
+) -> Dict[str, Any]:
+    normalized = _normalize_voice_candidates(candidates)
+    if not normalized:
+        return {}
+    if sequence_slot is not None:
+        slot = max(0, int(sequence_slot))
+        return dict(normalized[(local_day.toordinal() + slot) % len(normalized)])
+    digest = hashlib.sha256((str(rotation_key or "digital-human") + "|voice").encode("utf-8")).digest()
+    offset = int.from_bytes(digest[:8], "big")
+    return dict(normalized[(local_day.toordinal() + offset) % len(normalized)])
+
+
 def _digital_human_rotation_context(
     source: Dict[str, Any],
     current_item: Optional[Dict[str, Any]],
@@ -7944,22 +8178,10 @@ async def _resolve_workflow_virtualman(
     if not rotation_enabled:
         return {"virtualman_id": fixed_id} if fixed_id else {}
 
+    # The server snapshot is the template's allow-list.  Do not refresh all
+    # user profiles here: that would reintroduce assets not selected in the
+    # active personal template.
     candidates = _normalize_virtualman_candidates(source.get("virtualman_candidates"))
-    profile_refresh_succeeded = False
-    if cloud is not None and base:
-        try:
-            response = await cloud.get(
-                f"{base}/api/shanjian-digital-human/profiles",
-                headers=headers,
-                timeout=30.0,
-            )
-            data = response.json() if response.content else {}
-            cloud_candidates = _normalize_virtualman_candidates(data.get("items") if isinstance(data, dict) else [])
-            if response.status_code < 400 and isinstance(data, dict):
-                candidates = cloud_candidates
-                profile_refresh_succeeded = True
-        except Exception as exc:
-            logger.warning("[H5-DIGITAL-HUMAN] profile refresh failed, using task snapshot: %s", exc)
 
     if candidates:
         local_day, rotation_key = _digital_human_rotation_context(source, current_item)
@@ -7978,8 +8200,6 @@ async def _resolve_workflow_virtualman(
         selected["selection_slot"] = sequence_slot
         selected["selection_date"] = local_day.isoformat()
         return selected
-    if profile_refresh_succeeded:
-        return {}
     return {"virtualman_id": fixed_id} if fixed_id else {}
 
 
@@ -8072,6 +8292,17 @@ async def _run_shanjian_digital_human_workflow(
     audio_asset_id = _workflow_text(source.get("audio_asset_id"), 128)
     audio_mode = drive_mode == "audio" or bool(audio_url or audio_asset_id)
     voice = _workflow_text(source.get("voice") or source.get("speaker_id") or source.get("speakerId"), 128)
+    voice_candidates = _normalize_voice_candidates(source.get("voice_candidates"))
+    if not audio_mode and voice_candidates:
+        local_day, rotation_key = _digital_human_rotation_context(source, current_item)
+        sequence_slot = max(0, _safe_int(source.get("virtualman_rotation_slot"))) if "virtualman_rotation_slot" in source else None
+        selected_voice = _select_daily_voice(
+            voice_candidates,
+            local_day=local_day,
+            rotation_key=rotation_key,
+            sequence_slot=sequence_slot,
+        )
+        voice = _workflow_text(selected_voice.get("voice"), 128) or voice
     missing = []
     if not virtualman_id:
         missing.append("素材库：请先创建并训练完成可用的数字人形象分身（数字人2.0）")
@@ -9318,8 +9549,19 @@ async def _scheduled_task_keepalive(
     headers: Dict[str, str],
     run_id: str,
 ) -> None:
-    interval = float(os.environ.get("LOBSTER_SCHEDULED_TASK_HEARTBEAT_SEC", "120") or "120")
-    interval = max(30.0, interval)
+    interval = float(os.environ.get("LOBSTER_SCHEDULED_TASK_HEARTBEAT_SEC", "60") or "60")
+    interval = min(60.0, max(30.0, interval))
+    try:
+        await _post_task_event(
+            client,
+            base,
+            headers,
+            run_id,
+            "heartbeat",
+            {"text": "本地执行中", "heartbeat": True},
+        )
+    except Exception as exc:
+        logger.debug("[SCHEDULED-TASK] heartbeat failed run_id=%s: %s", run_id, exc)
     while True:
         await asyncio.sleep(interval)
         try:

@@ -1582,6 +1582,14 @@ window._openHiddenWorkspaceView = function(view) {
     try { location.hash = 'multi-clip-mixer'; } catch (e1) {}
     return;
   }
+  if (target === 'ppt-studio' && typeof window.showLobsterView === 'function') {
+    window.showLobsterView('ppt-studio').catch(function(error) {
+      console.error('Failed to open PPT studio:', error);
+      alert('PPT \u5de5\u4f5c\u53f0\u52a0\u8f7d\u5931\u8d25\uff0c\u8bf7\u5237\u65b0\u9875\u9762\u540e\u91cd\u8bd5\u3002' + (error && error.message ? '\n' + error.message : ''));
+    });
+    try { location.hash = 'ppt-studio'; } catch (e1) {}
+    return;
+  }
   if (target === 'viral-video-remix' && typeof window._openViralVideoRemixView === 'function') {
     window._openViralVideoRemixView();
     return;
@@ -3307,6 +3315,16 @@ function loadSkillStore() {
               showDebug: !!(isSkillAdmin && pkg.store_visibility === 'debug'),
             });
           }
+        if (pkg.id === 'create_ppt_skill') {
+          var pptTags = _skillStoreTagHtml(pkg.tags || []);
+          var pptCap = pkg.capabilities_count ? ' \u00b7 ' + pkg.capabilities_count + ' \u4e2a\u80fd\u529b' : '';
+          return '<div class="skill-store-card ppt-studio-card" data-skill-package-id="' + escapeAttr(pkg.id || '') + '" style="cursor:pointer;border-color:rgba(249,115,22,0.35);background:linear-gradient(135deg,rgba(249,115,22,0.08),transparent);">' +
+            '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">\u53ef\u76f4\u63a5\u8fdb\u5165</span></div>' +
+            '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || 'PPT \u751f\u6210')) + '</div>' +
+            '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '')) + pptCap + '</div>' +
+            '<div class="card-tags">' + pptTags + '</div>' +
+            '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm ppt-studio-entry-btn">\u8fdb\u5165PPT\u5de5\u4f5c\u53f0</button></div></div>';
+        }
         if (pkg.id === 'messenger_reply') {
           var tagsM = _skillStoreTagHtml(pkg.tags || []);
           var capM = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
@@ -3392,6 +3410,7 @@ function loadSkillStore() {
         _bindJuheWechatCardEntry();
         _bindWechatChannelsTranscriptCardEntry();
         _bindAi3dModelCardEntry();
+        _bindPptStudioCardEntry();
         _bindWechatArticleCardEntry();
         _bindEcommerceDetailCardEntry();
         _bindEcommercePublishCardEntry();
@@ -3587,6 +3606,38 @@ function _bindWechatArticleCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       _openWechatArticleChatFlow();
+    });
+  });
+}
+
+function _openPptStudioViewFromSkillStore() {
+  if (typeof window.showLobsterView !== 'function') {
+    alert('PPT \u5de5\u4f5c\u53f0\u6682\u65f6\u65e0\u6cd5\u6253\u5f00\uff0c\u8bf7\u5237\u65b0\u9875\u9762\u540e\u91cd\u8bd5\u3002');
+    return;
+  }
+  window.showLobsterView('ppt-studio').catch(function(error) {
+    console.error('Failed to open PPT studio:', error);
+    alert('PPT \u5de5\u4f5c\u53f0\u52a0\u8f7d\u5931\u8d25\uff0c\u8bf7\u5237\u65b0\u9875\u9762\u540e\u91cd\u8bd5\u3002' + (error && error.message ? '\n' + error.message : ''));
+  });
+  try { location.hash = 'ppt-studio'; } catch (e1) {}
+}
+
+function _bindPptStudioCardEntry() {
+  document.querySelectorAll('.ppt-studio-card, [data-skill-package-id="create_ppt_skill"]').forEach(function(card) {
+    if (card.dataset.pptStudioEntryBound === '1') return;
+    card.dataset.pptStudioEntryBound = '1';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      _openPptStudioViewFromSkillStore();
+    });
+  });
+  document.querySelectorAll('.ppt-studio-entry-btn').forEach(function(btn) {
+    if (btn.dataset.pptStudioEntryBound === '1') return;
+    btn.dataset.pptStudioEntryBound = '1';
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      _openPptStudioViewFromSkillStore();
     });
   });
 }

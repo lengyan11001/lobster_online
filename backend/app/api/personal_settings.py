@@ -12,9 +12,10 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List
+from urllib.parse import quote
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel, Field
 
 from .auth import _ServerUser, get_current_user_for_local
@@ -1075,3 +1076,31 @@ async def preview_memory_document(
     if not found:
         raise HTTPException(status_code=404, detail="资料不存在")
     return {"ok": True, "document": found, "content_text": _read_canonical_memory_content(found, max_chars=60_000)}
+
+
+@router.get("/api/personal-settings/memory-documents/{doc_id}/download", summary="下载个人记忆文档")
+async def download_memory_document(
+    doc_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    clean_id = re.sub(r"[^a-zA-Z0-9_-]", "", (doc_id or "").strip())[:64]
+    found = _find_memory_record(current_user.id, clean_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="资料不存在")
+    canonical = Path(__file__).resolve().parent.parent.parent.parent / str(found.get("canonical_path") or "")
+    user_root = _user_dir(current_user.id).resolve()
+    try:
+        if not canonical.is_file() or user_root not in canonical.resolve().parents:
+            raise RuntimeError("canonical memory path invalid")
+        content = canonical.read_bytes()
+    except Exception:
+        text = _read_canonical_memory_content(found, max_chars=500_000)
+        content = text.encode("utf-8")
+    title = _short_title(found.get("title") or found.get("filename"), "个人记忆资料")
+    filename = f"{title}.md"
+    disposition = f'attachment; filename="memory.md"; filename*=UTF-8\'\'{quote(filename)}'
+    return Response(
+        content=content,
+        media_type="text/markdown",
+        headers={"Content-Disposition": disposition, "Cache-Control": "no-store"},
+    )

@@ -74,7 +74,22 @@ DEFAULT_DOUYIN_ACCOUNTS = [
 DOUYIN_MENTION_COMMENT_MAX_USERS_PER_COMMENT = 50
 DOUYIN_MENTION_COMMENT_SAFE_TEXT_LIMIT = 180
 DOUYIN_SCHEDULE_PLANS_BLOB_KEY = "douyin_schedule_plans_v1"
-DOUYIN_SCHEDULE_TYPES = {"collect_precise", "follow_comment", "interaction"}
+DOUYIN_SCHEDULE_TYPES = {
+    "collect_precise",
+    "precise_touch",
+    "self_comment_monitor",
+    "follow_comment",
+    "interaction",
+}
+DOUYIN_PRECISE_TOUCH_ACTIONS = ("reply_comments", "follow_comment", "mention_comment", "direct_message")
+DOUYIN_PRECISE_TOUCH_DONE_STATUSES = {
+    "completed",
+}
+DOUYIN_PRECISE_TOUCH_INFLIGHT_STATUSES = {
+    "queued",
+    "processing",
+}
+DOUYIN_PRECISE_TOUCH_STATE_BLOB_KEY = "douyin_precise_touch_state_v1"
 DOUYIN_GROUP_NAME_PATTERN = re.compile(r"群|群聊|交流群|社群|分群")
 DOUYIN_GROUP_PREVIEW_PATTERN = re.compile(
     r"加入了群聊|通过.+加入了群聊|新成员可查看历史消息|群聊已满员|查看和管理\s*群成员|本群|置顶公告"
@@ -88,6 +103,7 @@ DOUYIN_SEARCH_MODES = {"api", "script"}
 douyin_tasks: List[Dict] = []
 douyin_all_customer_pool: List[Dict] = []
 douyin_precise_customer_pool: List[Dict] = []
+douyin_precise_touch_state: Dict[str, Dict[str, Dict[str, object]]] = {}
 douyin_running = False
 douyin_stop_requested = False
 douyin_background_task: Optional[asyncio.Task] = None
@@ -541,6 +557,8 @@ def save_douyin_tasks_state():
     try:
         douyin_state_store.save_blob_json("douyin_tasks", douyin_tasks or [])
         all_rows, precise_rows = build_douyin_customer_pools_from_tasks(douyin_tasks)
+        apply_douyin_precise_touch_state(all_rows)
+        apply_douyin_precise_touch_state(precise_rows)
         douyin_state_store.save_douyin_customer_pools(all_rows, precise_rows)
         combined_all_rows, combined_precise_rows = build_combined_douyin_customer_pools()
         sync_douyin_customer_pool_cache(combined_all_rows, combined_precise_rows)
@@ -558,6 +576,16 @@ def save_douyin_group_member_results():
 def save_douyin_manual_interaction_users():
     try:
         douyin_state_store.save_blob_json("douyin_manual_interaction_users", douyin_manual_interaction_users or [])
+    except Exception:
+        pass
+
+
+def save_douyin_precise_touch_state():
+    try:
+        douyin_state_store.save_blob_json(
+            DOUYIN_PRECISE_TOUCH_STATE_BLOB_KEY,
+            douyin_precise_touch_state or {},
+        )
     except Exception:
         pass
 
@@ -888,6 +916,38 @@ def restore_douyin_manual_interaction_users():
             douyin_manual_interaction_users = [normalize_high_intent_user(row) for row in loaded if isinstance(row, dict)]
     except Exception:
         douyin_manual_interaction_users = []
+
+
+def restore_douyin_precise_touch_state():
+    global douyin_precise_touch_state
+    try:
+        loaded = douyin_state_store.load_blob_json(DOUYIN_PRECISE_TOUCH_STATE_BLOB_KEY, default={})
+        next_state: Dict[str, Dict[str, Dict[str, object]]] = {}
+        if isinstance(loaded, dict):
+            for raw_key, raw_actions in loaded.items():
+                key = str(raw_key or "").strip()
+                if not key or not isinstance(raw_actions, dict):
+                    continue
+                action_state: Dict[str, Dict[str, object]] = {}
+                for raw_action, raw_value in raw_actions.items():
+                    action = str(raw_action or "").strip().lower()
+                    if not action:
+                        continue
+                    value = raw_value if isinstance(raw_value, dict) else {}
+                    action_state[action] = {
+                        "status": str(value.get("status", "") or "").strip().lower() or "pending",
+                        "error": str(value.get("error", "") or "").strip(),
+                        "result": str(value.get("result", "") or "").strip(),
+                        "account_id": str(value.get("account_id", "") or "").strip(),
+                        "started_at": str(value.get("started_at", "") or "").strip(),
+                        "finished_at": str(value.get("finished_at", "") or "").strip(),
+                        "updated_at": str(value.get("updated_at", "") or "").strip(),
+                    }
+                if action_state:
+                    next_state[key] = action_state
+        douyin_precise_touch_state = next_state
+    except Exception:
+        douyin_precise_touch_state = {}
 
 
 def restore_douyin_stranger_message_results():
@@ -1346,6 +1406,8 @@ def restore_douyin_customer_pools_state():
         all_rows, precise_rows = build_combined_douyin_customer_pools()
         if not all_rows and not precise_rows:
             all_rows, precise_rows = douyin_state_store.load_douyin_customer_pools()
+        apply_douyin_precise_touch_state(all_rows)
+        apply_douyin_precise_touch_state(precise_rows)
         douyin_all_customer_pool = [row for row in all_rows if isinstance(row, dict)]
         douyin_precise_customer_pool = [row for row in precise_rows if isinstance(row, dict)]
     except Exception:
@@ -1398,6 +1460,12 @@ def restore_douyin_mention_comment_history():
 def normalize_douyin_schedule_type(value: object) -> str:
     normalized = str(value or "collect_precise").strip().lower()
     return normalized if normalized in DOUYIN_SCHEDULE_TYPES else "collect_precise"
+
+
+def normalize_douyin_precise_touch_actions(value: object) -> List[str]:
+    """Normalize touch actions to the shared H5/Online order."""
+    selected = {str(item or "").strip().lower() for item in value} if isinstance(value, list) else set()
+    return [action for action in DOUYIN_PRECISE_TOUCH_ACTIONS if action in selected]
 
 
 def coerce_bool(value: object, default: bool = False) -> bool:
@@ -1485,6 +1553,10 @@ def normalize_douyin_schedule_plan(raw_plan: Optional[Dict[str, object]] = None)
     )
     comment_scroll_rounds = max(20, min(int(plan.get("comment_scroll_rounds", 300) or 300), 300))
     comment_max_comments = max(20, min(int(plan.get("comment_max_comments", 500) or 500), 500))
+    touch_actions = normalize_douyin_precise_touch_actions(plan.get("touch_actions"))
+    if schedule_type == "precise_touch" and not touch_actions:
+        touch_actions = list(DOUYIN_PRECISE_TOUCH_ACTIONS)
+    account_id = max(0, int(plan.get("account_id", plan.get("douyin_account_id", 0)) or 0))
     next_run_at = parse_schedule_datetime(plan.get("next_run_at"))
     window_start = normalize_schedule_time_text(plan.get("window_start"), "09:00")
     window_end = normalize_schedule_time_text(plan.get("window_end"), "23:00")
@@ -1493,10 +1565,13 @@ def normalize_douyin_schedule_plan(raw_plan: Optional[Dict[str, object]] = None)
         "name": str(plan.get("name", "") or "").strip()
         or {
             "collect_precise": "采集视频精准客户",
+            "precise_touch": "精准用户触达计划",
+            "self_comment_monitor": "我的评论区计划",
             "follow_comment": "精准互动计划",
             "interaction": "精准私信计划",
         }.get(schedule_type, "抖音排期计划"),
         "type": schedule_type,
+        "account_id": account_id,
         "enabled": coerce_bool(plan.get("enabled", True), True),
         "keyword": str(plan.get("keyword", "") or "").strip(),
         "interval_minutes": interval_minutes,
@@ -1505,6 +1580,8 @@ def normalize_douyin_schedule_plan(raw_plan: Optional[Dict[str, object]] = None)
         "max_results": max_results,
         "max_videos_per_run": max_videos_per_run,
         "max_users_per_run": max_users_per_run,
+        "touch_actions": touch_actions,
+        "use_online_self_comment_config": coerce_bool(plan.get("use_online_self_comment_config", True), True),
         "comment_scroll_rounds": comment_scroll_rounds,
         "comment_max_comments": comment_max_comments,
         "comment_mode": normalize_douyin_video_comment_mode(plan.get("comment_mode")),
@@ -2828,6 +2905,121 @@ def user_choice_loose_key(row: Dict) -> str:
     )
 
 
+def precise_customer_pool_key(row: Dict) -> str:
+    return user_choice_key(row) or user_choice_loose_key(row)
+
+
+def precise_customer_touch_identity_key(row: Dict) -> str:
+    """Stable per-user key for the four touch actions.
+
+    The customer pool may contain multiple comments from the same person. Touch
+    state must follow the person, not an individual comment row.
+    """
+    source = row if isinstance(row, dict) else {}
+    for field in ("sec_user_id", "sec_uid", "douyin_id", "user_id"):
+        value = " ".join(str(source.get(field, "") or "").split())
+        if value:
+            return f"user:{value}"
+    profile_url = str(source.get("profile_url", "") or source.get("target_profile_url", "") or "").strip()
+    if profile_url:
+        return f"profile:{profile_url.rstrip('/')}"
+    username = " ".join(str(source.get("username", "") or "").split())
+    if username:
+        return f"name:{username.lower()}"
+    return precise_customer_pool_key(source)
+
+
+def _normalize_douyin_precise_touch_action_state(raw_value: object) -> Dict[str, object]:
+    value = raw_value if isinstance(raw_value, dict) else {}
+    return {
+        "status": str(value.get("status", "") or "").strip().lower() or "pending",
+        "error": str(value.get("error", "") or "").strip(),
+        "result": str(value.get("result", "") or "").strip(),
+        "account_id": str(value.get("account_id", "") or "").strip(),
+        "started_at": str(value.get("started_at", "") or "").strip(),
+        "finished_at": str(value.get("finished_at", "") or "").strip(),
+        "updated_at": str(value.get("updated_at", "") or "").strip(),
+    }
+
+
+def _get_douyin_precise_touch_action_state(row: Dict, action: str) -> Dict[str, object]:
+    key = precise_customer_touch_identity_key(row if isinstance(row, dict) else {})
+    if not key:
+        return {}
+    action_state = douyin_precise_touch_state.get(key, {})
+    if not action_state:
+        # Read states written by the earlier comment-row key format.
+        legacy_key = precise_customer_pool_key(row if isinstance(row, dict) else {})
+        action_state = douyin_precise_touch_state.get(legacy_key, {})
+    if not isinstance(action_state, dict):
+        return {}
+    return _normalize_douyin_precise_touch_action_state(action_state.get(str(action or "").strip().lower(), {}))
+
+
+def _is_douyin_precise_touch_action_done(state: object) -> bool:
+    if not isinstance(state, dict):
+        return False
+    status = str(state.get("status", "") or "").strip().lower()
+    return status in DOUYIN_PRECISE_TOUCH_DONE_STATUSES
+
+
+def _is_douyin_precise_touch_action_inflight(state: object) -> bool:
+    if not isinstance(state, dict):
+        return False
+    status = str(state.get("status", "") or "").strip().lower()
+    return status in DOUYIN_PRECISE_TOUCH_INFLIGHT_STATUSES
+
+
+def apply_douyin_precise_touch_state(rows: List[Dict]) -> None:
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = precise_customer_touch_identity_key(row)
+        if not key:
+            continue
+        action_state = douyin_precise_touch_state.get(key, {})
+        if not action_state:
+            action_state = douyin_precise_touch_state.get(precise_customer_pool_key(row), {})
+        if not isinstance(action_state, dict):
+            action_state = {}
+        normalized_state = {
+            action: _normalize_douyin_precise_touch_action_state(state)
+            for action, state in action_state.items()
+            if str(action or "").strip().lower()
+        }
+        row["precise_touch_statuses"] = normalized_state
+        row["precise_touch_completed_actions"] = [
+            action for action, state in normalized_state.items() if str(state.get("status") or "").strip().lower() == "completed"
+        ]
+        row["precise_touch_done_actions"] = [
+            action for action, state in normalized_state.items() if _is_douyin_precise_touch_action_done(state)
+        ]
+        row["precise_touch_inflight_actions"] = [
+            action for action, state in normalized_state.items() if _is_douyin_precise_touch_action_inflight(state)
+        ]
+        row["precise_touch_pending_actions"] = [
+            action
+            for action in DOUYIN_PRECISE_TOUCH_ACTIONS
+            if not _is_douyin_precise_touch_action_done(normalized_state.get(action, {}))
+            and not _is_douyin_precise_touch_action_inflight(normalized_state.get(action, {}))
+        ]
+
+
+def _sort_douyin_precise_touch_users(row: Dict) -> tuple[int, float, str]:
+    touch_state = row.get("precise_touch_statuses", {})
+    pending_rank = 0
+    if isinstance(touch_state, dict):
+        completed_count = len([action for action, state in touch_state.items() if str((state or {}).get("status") or "").strip().lower() == "completed"])
+        pending_rank = -completed_count
+    timestamp = (
+        parse_comment_timestamp(row.get("last_seen_at", ""))
+        or parse_comment_timestamp(row.get("comment_time", ""))
+        or parse_comment_timestamp(row.get("first_seen_at", ""))
+    )
+    username = str(row.get("username", "") or "")
+    return (pending_rank, -float(timestamp or 0), username)
+
+
 def mention_comment_identity_key(row: Dict) -> str:
     if not isinstance(row, dict):
         return ""
@@ -4030,6 +4222,109 @@ def collect_douyin_interaction_users(selected_task_ids: Optional[Set[int]] = Non
     return rows
 
 
+def collect_douyin_precise_touch_users(
+    action: Optional[str] = None,
+    limit: Optional[int] = None,
+    selected_task_ids: Optional[Set[int]] = None,
+) -> List[Dict]:
+    _all_rows, precise_rows = build_combined_douyin_customer_pools()
+    action_key = str(action or "").strip().lower()
+    wanted_task_ids = {int(task_id) for task_id in (selected_task_ids or set()) if int(task_id) > 0}
+    rows: List[Dict] = []
+    seen = set()
+
+    for raw_row in precise_rows:
+        if not isinstance(raw_row, dict):
+            continue
+        row = normalize_combined_customer_pool_row(raw_row)
+        apply_douyin_precise_touch_state([row])
+        task_id = int(row.get("task_id", 0) or 0)
+        if wanted_task_ids and task_id not in wanted_task_ids:
+            continue
+        key = precise_customer_touch_identity_key(row)
+        if not key or key in seen:
+            continue
+        if action_key:
+            state = _get_douyin_precise_touch_action_state(row, action_key)
+            if _is_douyin_precise_touch_action_done(state) or _is_douyin_precise_touch_action_inflight(state):
+                continue
+        seen.add(key)
+        rows.append(row)
+
+    rows.sort(key=_sort_douyin_precise_touch_users)
+    if limit is not None:
+        rows = rows[: max(0, int(limit or 0))]
+    return rows
+
+
+def update_douyin_precise_touch_users(
+    target_rows: List[Dict],
+    *,
+    action: str,
+    status: str,
+    error: Optional[str] = None,
+    result: Optional[str] = None,
+    account_id: Optional[object] = None,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+) -> int:
+    action_key = str(action or "").strip().lower()
+    status_value = str(status or "").strip().lower() or "pending"
+    if not action_key:
+        return 0
+    keys = {
+        precise_customer_touch_identity_key(row)
+        for row in (target_rows or [])
+        if isinstance(row, dict) and precise_customer_touch_identity_key(row)
+    }
+    if not keys:
+        return 0
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for key in keys:
+        action_map = douyin_precise_touch_state.setdefault(key, {})
+        previous = action_map.get(action_key, {})
+        next_state = _normalize_douyin_precise_touch_action_state(previous)
+        next_state["status"] = status_value
+        next_state["updated_at"] = timestamp
+        if error is not None:
+            next_state["error"] = str(error or "").strip()
+        if result is not None:
+            next_state["result"] = str(result or "").strip()
+        if account_id is not None:
+            next_state["account_id"] = str(account_id or "").strip()
+        if started_at is not None:
+            next_state["started_at"] = str(started_at or "").strip()
+        if finished_at is not None:
+            next_state["finished_at"] = str(finished_at or "").strip()
+        elif status_value in {"queued", "processing"}:
+            next_state["finished_at"] = ""
+        action_map[action_key] = next_state
+
+    save_douyin_precise_touch_state()
+    save_douyin_tasks_state()
+    return len(keys)
+
+
+def delete_douyin_precise_touch_state_for_rows(target_rows: List[Dict]) -> int:
+    keys = set()
+    for row in target_rows or []:
+        if not isinstance(row, dict):
+            continue
+        for key in (precise_customer_touch_identity_key(row), precise_customer_pool_key(row)):
+            if key:
+                keys.add(key)
+    removed = 0
+    for key in keys:
+        if key in douyin_precise_touch_state:
+            douyin_precise_touch_state.pop(key, None)
+            removed += 1
+    if removed:
+        save_douyin_precise_touch_state()
+        save_douyin_tasks_state()
+    return removed
+
+
 def update_douyin_monitor_comment_users(
     target_rows: List[Dict],
     updates: Dict[str, object],
@@ -4331,6 +4626,8 @@ def build_combined_douyin_customer_pools() -> tuple[List[Dict], List[Dict]]:
 
     all_rows = [merged_rows[key] for key in ordered_keys]
     precise_rows = [dict(row) for row in all_rows if bool(row.get("is_high_intent"))]
+    apply_douyin_precise_touch_state(all_rows)
+    apply_douyin_precise_touch_state(precise_rows)
     return all_rows, precise_rows
 
 
@@ -4381,6 +4678,7 @@ def delete_douyin_customers_from_tasks(raw_rows: List[Dict]) -> Dict[str, int]:
 
     removed_customer_keys: Set[str] = set()
     removed_precise_keys: Set[str] = set()
+    removed_precise_rows: List[Dict] = []
     matched_task_ids: Set[int] = set()
 
     def should_remove(task_id: int, row: Dict) -> bool:
@@ -4403,6 +4701,7 @@ def delete_douyin_customers_from_tasks(raw_rows: List[Dict]) -> Dict[str, int]:
             removed_customer_keys.add(identity)
             if precise:
                 removed_precise_keys.add(identity)
+                removed_precise_rows.append(normalized)
 
     for task in douyin_tasks:
         if not isinstance(task, dict):
@@ -4438,6 +4737,8 @@ def delete_douyin_customers_from_tasks(raw_rows: List[Dict]) -> Dict[str, int]:
 
     if matched_task_ids:
         save_douyin_tasks_state()
+    if removed_precise_rows:
+        delete_douyin_precise_touch_state_for_rows(removed_precise_rows)
 
     return {
         "requested": requested,
@@ -5994,6 +6295,7 @@ def validate_douyin_inbox_reply_settings(
 
 
 restore_douyin_tasks_state()
+restore_douyin_precise_touch_state()
 restore_douyin_customer_pools_state()
 restore_douyin_group_member_results()
 restore_douyin_schedule_plans()
@@ -7090,6 +7392,8 @@ def get_douyin_schedule_busy_reason() -> str:
         return "群成员提取任务正在执行"
     if douyin_stranger_message_running:
         return "私信引流任务正在执行"
+    if any(bool(state.get("running")) for state in list_douyin_self_comment_monitor_states()):
+        return "我的评论区任务正在执行"
     return ""
 
 
@@ -7256,6 +7560,47 @@ async def execute_douyin_schedule_plan(plan: Dict[str, object]) -> Dict[str, obj
                 + "。"
             )
         return start_result
+    if plan_type == "precise_touch":
+        try:
+            # Keep Online排期与H5节点共用同一套精准用户池、动作顺序和状态落库逻辑。
+            from app.api.h5_chat_channel import _run_scheduled_douyin_sales_action  # type: ignore
+
+            result = await _run_scheduled_douyin_sales_action(
+                "precise_touch",
+                {
+                    "account_id": normalized.get("account_id", 0),
+                    "max_users": normalized.get("max_users_per_run", 30),
+                    "touch_actions": normalized.get("touch_actions", list(DOUYIN_PRECISE_TOUCH_ACTIONS)),
+                },
+            )
+            return result if isinstance(result, dict) else {"code": 500, "msg": "精准用户触达没有返回执行结果"}
+        except Exception as exc:
+            douyin_log(f"[抖音精准用户触达] 排期执行失败：{exc}", "error")
+            return {"code": 500, "msg": str(exc).strip() or exc.__class__.__name__}
+    if plan_type == "self_comment_monitor":
+        try:
+            from app.api.h5_chat_channel import _run_scheduled_douyin_sales_action  # type: ignore
+
+            account_id = int(normalized.get("account_id", 0) or 0)
+            if account_id <= 0:
+                restore_douyin_self_comment_monitor_config()
+                states = list_douyin_self_comment_monitor_states()
+                default_account_id = int(load_global_config().get("douyin_default_account_id", 0) or 0)
+                target = next(
+                    (row for row in states if default_account_id > 0 and int(row.get("account_id", 0) or 0) == default_account_id),
+                    next((row for row in states if bool(row.get("enabled"))), states[0] if states else {}),
+                )
+                account_id = int(target.get("account_id", 0) or 0) if isinstance(target, dict) else 0
+            if account_id <= 0:
+                return {"code": 400, "msg": "我的评论区计划未找到 Online 已保存的抖音账号配置"}
+            result = await _run_scheduled_douyin_sales_action(
+                "self_comment_monitor",
+                {"account_id": account_id},
+            )
+            return result if isinstance(result, dict) else {"code": 500, "msg": "我的评论区没有返回执行结果"}
+        except Exception as exc:
+            douyin_log(f"[抖音我的评论区] 排期执行失败：{exc}", "error")
+            return {"code": 500, "msg": str(exc).strip() or exc.__class__.__name__}
     if plan_type == "follow_comment":
         users = collect_plan_follow_comment_users(normalized)
         if not users:
@@ -10371,7 +10716,12 @@ async def send_douyin_self_comment_replies_on_loaded_page(
     return result
 
 
-async def run_douyin_self_comment_monitor_cycle(account_id: int, trigger_type: str = "scheduled") -> Dict[str, object]:
+async def run_douyin_self_comment_monitor_cycle(
+    account_id: int,
+    trigger_type: str = "scheduled",
+    *,
+    one_shot: bool = False,
+) -> Dict[str, object]:
     state = get_douyin_self_comment_monitor_state(account_id, create=True)
     started_at = datetime.now()
     started_at_text = started_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -10379,7 +10729,7 @@ async def run_douyin_self_comment_monitor_cycle(account_id: int, trigger_type: s
     state["last_error"] = ""
     state["last_skip_reason"] = ""
 
-    if not bool(state.get("enabled")):
+    if not bool(state.get("enabled")) and not one_shot:
         schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
         set_douyin_self_comment_monitor_idle_message(account_id, "我的评论区监控未开启。")
         state["last_cycle_status"] = "disabled"
@@ -10388,13 +10738,15 @@ async def run_douyin_self_comment_monitor_cycle(account_id: int, trigger_type: s
     config = load_global_config()
     account = get_douyin_account_by_id(account_id, config) if account_id > 0 else get_active_douyin_account(config)
     if not account:
-        schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
+        if not one_shot:
+            schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
         message = "本轮跳过：当前没有可用的抖音在线账号。"
         state.update({"last_cycle_status": "skipped", "last_skip_reason": "no_online_account", "message": message})
         douyin_log(f"[抖音我的评论区] {message}", "warning")
         return {"status": "skipped", "message": message}
     if str(account.get("status", "") or "").strip() != "online":
-        schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
+        if not one_shot:
+            schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
         message = f"本轮跳过：账号 {account.get('id')} 还没有完成登录。"
         state.update({"account_id": int(account.get("id", 0) or 0) or None, "last_cycle_status": "skipped", "last_skip_reason": "account_waiting_login", "message": message})
         douyin_log(f"[抖音我的评论区] {message}", "warning")
@@ -10404,7 +10756,8 @@ async def run_douyin_self_comment_monitor_cycle(account_id: int, trigger_type: s
     if not busy and douyin_inbox_running and int(douyin_inbox_state.get("account_id", 0) or 0) == int(account.get("id", 0) or 0):
         busy, busy_reason = True, "消息聚合采集任务正在执行"
     if busy:
-        schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
+        if not one_shot:
+            schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
         message = f"本轮跳过：{busy_reason}，等待下一次。"
         state.update({"account_id": int(account.get("id", 0) or 0) or None, "last_cycle_status": "skipped", "last_skip_reason": normalize_douyin_text(busy_reason), "message": message})
         douyin_log(f"[抖音我的评论区] {message}", "warning")
@@ -10545,7 +10898,8 @@ async def run_douyin_self_comment_monitor_cycle(account_id: int, trigger_type: s
                 )
                 continue
 
-        schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
+        if not one_shot:
+            schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
         message = f"本轮完成：检查 {len(videos)} 个作品，读取 {total_comments} 条评论，新增 {new_comments_total} 条，高意向 {precise_total} 条。"
         if auto_reply_enabled and int(auto_reply_result.get("processed", 0) or 0) > 0:
             message += f" 自动回复 {int(auto_reply_result.get('success', 0) or 0)} 成功，{int(auto_reply_result.get('failed', 0) or 0)} 失败。"
@@ -10567,7 +10921,8 @@ async def run_douyin_self_comment_monitor_cycle(account_id: int, trigger_type: s
         douyin_log(f"[抖音我的评论区] {message}", "success")
         return {"status": "completed", "message": message}
     except Exception as exc:
-        schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
+        if not one_shot:
+            schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
         state.update(
             {
                 "running": False,
@@ -15026,7 +15381,11 @@ async def douyin_run_self_comment_monitor_once(request: Optional[dict] = None):
     task = douyin_self_comment_monitor_tasks_by_account.get(target_account_id)
     if task and not task.done():
         return {"code": 400, "msg": f"账号 {target_account_id} 的我的评论区监控正在执行中，请稍后再试。"}
-    result = await run_douyin_self_comment_monitor_cycle(target_account_id, trigger_type="manual")
+    result = await run_douyin_self_comment_monitor_cycle(
+        target_account_id,
+        trigger_type="manual",
+        one_shot=True,
+    )
     return {
         "code": 200 if result.get("status") != "failed" else 400,
         "msg": result.get("message", "我的评论区检查完成。"),

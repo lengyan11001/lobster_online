@@ -140,26 +140,88 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
   if (window.__LOBSTER_BRAND_FETCH_INSTALLED || typeof window.fetch !== 'function') return;
   var nativeFetch = window.fetch.bind(window);
   var apiPathPattern = /^\/(?:api|auth|chat|skills|capabilities)(?:\/|$)/;
+  var publicAuthPathPattern = /^\/auth\/(?:captcha|login-phone-password|sms\/send|register-phone)(?:\/|$)/;
   var NETWORK_RETRY_DELAYS = [0, 350, 1000, 2500];
   var nativeTaskPathPattern = /^\/api\/native-wechat\/(?:messages\/send|friends\/add|groups\/create|moments\/(?:like|comment|publish))(?:\/|$)/;
-  var backendRecoveryPromise = null;
+  var backendRecoveryPromises = {};
+  var backendRecoveryLastSuccessAt = {};
+  var authRecoveryPromise = null;
+  var RECOVERY_MESSAGE = '连接正在自动恢复，请稍后重试';
+  var LOGIN_EXPIRED_MESSAGE = '登录状态已失效，请重新登录';
 
   function isTransientNetworkError(error) {
     var name = String(error && error.name || '');
     var message = String(error && error.message || error || '');
     return !!(error && error.lobsterNetworkError) || (
-      name !== 'AbortError' && /Failed to fetch|NetworkError|Load failed|timed out|timeout/i.test(message)
+      name !== 'AbortError' && /Failed to fetch|fetch(?:ing)?(?:\s+to\b.{0,160}?)?\s+failed|NetworkError|Load failed|network request failed|timed out|timeout/i.test(message)
     );
   }
 
   function normalizeNetworkError(error) {
     if (!isTransientNetworkError(error)) return error;
-    var normalized = new Error('网络连接暂时中断，请稍后重试');
+    var normalized = new Error(RECOVERY_MESSAGE);
     normalized.name = 'LobsterNetworkError';
     normalized.code = 'NETWORK_UNAVAILABLE';
     normalized.lobsterNetworkError = true;
     normalized.cause = error;
     return normalized;
+  }
+
+  function normalizeRecoverableMessage(value) {
+    var message = String(value && value.message || value || '');
+    if (/无法验证凭证|Could not validate credentials|invalid credentials/i.test(message)) return LOGIN_EXPIRED_MESSAGE;
+    if (/Failed to fetch|fetch(?:ing)?(?:\s+to\b.{0,160}?)?\s+failed|NetworkError|Load failed|network request failed/i.test(message)) return RECOVERY_MESSAGE;
+    return message;
+  }
+
+  window.normalizeLobsterRecoverableMessage = normalizeRecoverableMessage;
+
+  function recoverableTextKind(value) {
+    var text = String(value == null ? '' : value);
+    if (/无法验证凭证|Could not validate credentials|invalid credentials|not authenticated|invalid token|token expired/i.test(text)) return 'auth';
+    if (/Failed to fetch|fetch(?:ing)?(?:\s+to\b.{0,160}?)?\s+failed|NetworkError|Load failed|network request failed/i.test(text)) return 'network';
+    return '';
+  }
+
+  function payloadErrorText(value) {
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) return value.map(payloadErrorText).filter(Boolean).join(' ');
+    if (!value || typeof value !== 'object') return '';
+    return ['detail', 'error', 'message', 'msg'].map(function(key) {
+      return Object.prototype.hasOwnProperty.call(value, key) ? payloadErrorText(value[key]) : '';
+    }).filter(Boolean).join(' ');
+  }
+
+  function recoverablePayloadKind(value) {
+    if (typeof value === 'string') {
+      if (/^\s*[\[{]/.test(value)) {
+        try { return recoverablePayloadKind(JSON.parse(value)); } catch (e) {}
+      }
+      return value.length <= 1000 ? recoverableTextKind(value) : '';
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return '';
+    var numericCode = Number(value.code || value.status_code || (typeof value.status === 'number' ? value.status : 0));
+    var state = String(typeof value.status === 'string' ? value.status : value.state || '').toLowerCase();
+    var hasErrorField = Object.prototype.hasOwnProperty.call(value, 'detail') || Object.prototype.hasOwnProperty.call(value, 'error');
+    var failed = value.ok === false || value.success === false || numericCode >= 400 ||
+      /^(?:error|failed|failure|unauthorized|unavailable)$/.test(state) || hasErrorField;
+    return failed ? recoverableTextKind(payloadErrorText(value)) : '';
+  }
+
+  function sanitizeRecoverablePayload(value, force) {
+    if (typeof value === 'string') {
+      if (/^\s*[\[{]/.test(value)) {
+        try { return JSON.stringify(sanitizeRecoverablePayload(JSON.parse(value), false)); } catch (e) {}
+      }
+      return force ? normalizeRecoverableMessage(value) : value;
+    }
+    if (Array.isArray(value)) return force ? value.map(function(item) { return sanitizeRecoverablePayload(item, true); }) : value;
+    if (!value || typeof value !== 'object') return value;
+    Object.keys(value).forEach(function(key) {
+      var errorField = /^(?:detail|error|message|msg)$/i.test(key);
+      value[key] = sanitizeRecoverablePayload(value[key], !!force || errorField);
+    });
+    return value;
   }
 
   function requestMethod(input, init) {
@@ -176,6 +238,25 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
       if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
     } catch (e) {}
     return 'lobster-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
+  }
+
+  function storedToken() {
+    try {
+      if (typeof getStoredAuthToken === 'function') return String(getStoredAuthToken() || '').trim();
+    } catch (e) {}
+    try { return String(localStorage.getItem('token') || '').trim(); } catch (e2) { return ''; }
+  }
+
+  function syncLatestToken(headers, url) {
+    var latest = storedToken();
+    try { token = latest; } catch (e) {}
+    var hadAuthorization = headers.has('Authorization');
+    if (latest && (hadAuthorization || !publicAuthPathPattern.test(url.pathname))) {
+      headers.set('Authorization', 'Bearer ' + latest);
+    } else if (!latest && hadAuthorization) {
+      headers.delete('Authorization');
+    }
+    return latest;
   }
 
   function backendRecoveryOrigins(preferredOrigin) {
@@ -200,23 +281,63 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
     });
   }
 
-  function recoverBackend(preferredOrigin) {
-    if (backendRecoveryPromise) return backendRecoveryPromise;
+  function isLocalRecoveryOrigin(origin) {
+    var target = String(origin || '').replace(/\/$/, '');
+    var candidates = [];
+    try {
+      if (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) {
+        candidates.push(new URL(String(LOCAL_API_BASE), window.location.href).origin);
+      }
+    } catch (e) {}
+    try {
+      var current = window.location && window.location.origin;
+      var host = String(window.location && window.location.hostname || '').toLowerCase();
+      if (current && (host === '127.0.0.1' || host === 'localhost')) candidates.push(current);
+    } catch (e2) {}
+    return candidates.indexOf(target) >= 0;
+  }
+
+  function invokeDesktopRecovery(origin, reason) {
+    if (!isLocalRecoveryOrigin(origin)) return Promise.resolve(false);
+    try {
+      var api = window.pywebview && window.pywebview.api;
+      if (!api || typeof api.recover_local_services !== 'function') return Promise.resolve(false);
+      return Promise.resolve(api.recover_local_services(String(reason || 'network')))
+        .then(function(result) { return !!(result && result.ok); })
+        .catch(function() { return false; });
+    } catch (e) {
+      return Promise.resolve(false);
+    }
+  }
+
+  function recoverBackend(preferredOrigin, reason) {
     var origins = backendRecoveryOrigins(preferredOrigin);
+    var recoveryKey = origins.join('|') || 'default';
+    if (backendRecoveryPromises[recoveryKey]) return backendRecoveryPromises[recoveryKey];
+    if (Date.now() - Number(backendRecoveryLastSuccessAt[recoveryKey] || 0) < 2000) {
+      return Promise.resolve(true);
+    }
     var delays = [0, 500, 1200, 2500, 5000, 8000];
-    backendRecoveryPromise = new Promise(function(resolve) {
+    backendRecoveryPromises[recoveryKey] = new Promise(function(resolve) {
       var index = 0;
       function attempt() {
         var originIndex = 0;
         function nextOrigin() {
           if (originIndex >= origins.length) {
             if (index >= delays.length - 1) return resolve(false);
+            var localOrigin = origins.filter(isLocalRecoveryOrigin)[0] || '';
             index += 1;
-            return window.setTimeout(attempt, delays[index]);
+            var desktopRecovery = index === 1
+              ? invokeDesktopRecovery(localOrigin, reason || 'network')
+              : Promise.resolve(false);
+            return Promise.resolve(desktopRecovery).finally(function() {
+              window.setTimeout(attempt, delays[index]);
+            });
           }
           var origin = origins[originIndex++];
           probeBackend(origin).then(function() {
             window.__LOBSTER_BACKEND_LAST_RECOVERY_AT = Date.now();
+            backendRecoveryLastSuccessAt[recoveryKey] = Date.now();
             resolve(true);
           }).catch(nextOrigin);
         }
@@ -224,12 +345,16 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
       }
       attempt();
     }).finally(function() {
-      backendRecoveryPromise = null;
+      delete backendRecoveryPromises[recoveryKey];
     });
-    return backendRecoveryPromise;
+    return backendRecoveryPromises[recoveryKey];
   }
 
   window.__lobsterProbeBackend = recoverBackend;
+  window.__lobsterRecoverRequest = function(meta) {
+    meta = meta || {};
+    return recoverBackend(meta.origin || '', meta.reason || 'network');
+  };
 
   function waitForNetworkRetry(ms) {
     return new Promise(function(resolve) { window.setTimeout(resolve, ms); });
@@ -250,11 +375,100 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
     return values;
   }
 
+  function credentialFailureResponse(response, headers) {
+    if (!response || !headers.get('Authorization')) return Promise.resolve(false);
+    if (response.status !== 401 && response.status !== 403) return Promise.resolve(false);
+    if (/bearer/i.test(String(response.headers && response.headers.get('WWW-Authenticate') || ''))) {
+      return Promise.resolve(true);
+    }
+    try {
+      return response.clone().text().then(function(body) {
+        return /无法验证凭证|Could not validate credentials|invalid credentials|not authenticated|invalid token|token expired/i.test(String(body || ''));
+      }).catch(function() { return false; });
+    } catch (e) {
+      return Promise.resolve(false);
+    }
+  }
+
+  function connectivityFailureResponse(response) {
+    if (!response || response.status < 400) return Promise.resolve(false);
+    try {
+      return response.clone().text().then(function(body) {
+        return /Failed to fetch|fetch(?:ing)?(?:\s+to\b.{0,160}?)?\s+failed|NetworkError|network request failed|认证中心不可达|认证中心暂时不可用/i.test(String(body || ''));
+      }).catch(function() { return false; });
+    } catch (e) {
+      return Promise.resolve(false);
+    }
+  }
+
+  function jsonResponse(message, status, code) {
+    var body = JSON.stringify({
+      ok: false,
+      code: Number(code || status || 503),
+      detail: String(message || RECOVERY_MESSAGE),
+      msg: String(message || RECOVERY_MESSAGE),
+      recoverable: status !== 401
+    });
+    return new Response(body, {
+      status: status || 503,
+      statusText: status === 401 ? 'Unauthorized' : 'Service Unavailable',
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'X-Lobster-Recovered-Error': '1' }
+    });
+  }
+
+  function validateStoredToken(latest) {
+    if (!latest) return Promise.resolve('invalid');
+    var base = '';
+    try { base = String(typeof API_BASE !== 'undefined' ? API_BASE : '').replace(/\/$/, ''); } catch (e) {}
+    if (!base) return Promise.resolve('unavailable');
+    return nativeFetch(base + '/auth/me', {
+      method: 'GET',
+      cache: 'no-store',
+      headers: {
+        'Authorization': 'Bearer ' + latest,
+        'X-Lobster-Brand': getLobsterBrandMark()
+      }
+    }).then(function(response) {
+      if (response.status === 200) return 'valid';
+      if (response.status === 401 || response.status === 403) return 'invalid';
+      return 'unavailable';
+    }).catch(function() { return 'unavailable'; });
+  }
+
+  function recoverAuthentication(url, previousToken) {
+    if (authRecoveryPromise) return authRecoveryPromise;
+    authRecoveryPromise = Promise.resolve().then(function() {
+      var latest = storedToken();
+      try { token = latest; } catch (e) {}
+      if (!latest) return { valid: false, changed: latest !== previousToken, token: latest };
+      if (latest !== previousToken) return { valid: true, changed: true, token: latest };
+      return validateStoredToken(latest).then(function(state) {
+        if (state === 'invalid') return { valid: false, unavailable: false, changed: false, token: latest };
+        return recoverBackend(url.origin, state === 'valid' ? 'auth' : 'auth_unavailable').then(function() {
+          return { valid: true, unavailable: state === 'unavailable', changed: false, token: latest };
+        });
+      });
+    }).finally(function() {
+      authRecoveryPromise = null;
+    });
+    return authRecoveryPromise;
+  }
+
+  function requestViewRecovery(url, reason) {
+    if (typeof window.requestLobsterNetworkRecovery !== 'function') return;
+    Promise.resolve(window.requestLobsterNetworkRecovery({
+      origin: url.origin,
+      reason: reason || 'network',
+      skipProbe: true
+    })).catch(function() {});
+  }
+
   window.fetch = function(input, init) {
     try {
       var rawUrl = typeof input === 'string' ? input : (input && input.url) || '';
       var url = new URL(rawUrl, window.location.href);
-      var shouldAddBrand = apiPathPattern.test(url.pathname) && apiOrigins().indexOf(url.origin) >= 0;
+      var canRecoverBackend = apiOrigins().indexOf(url.origin) >= 0;
+      var shouldAddBrand = apiPathPattern.test(url.pathname) && canRecoverBackend;
       var method = requestMethod(input, init);
       var next = Object.assign({}, init || {});
       var headers = new Headers(input instanceof Request ? input.headers : undefined);
@@ -263,35 +477,165 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
       if (isNativeTask && !headers.get('X-Lobster-Request-Id')) headers.set('X-Lobster-Request-Id', requestId());
       var hasIdempotencyKey = !!headers.get('X-Lobster-Request-Id');
       var canRetryAfterRecovery = retryableRequest(input, init) || (isNativeTask && hasIdempotencyKey);
-      if (shouldAddBrand || canRetryAfterRecovery) {
+      {
         if (shouldAddBrand) headers.set('X-Lobster-Brand', getLobsterBrandMark());
+        if (shouldAddBrand) syncLatestToken(headers, url);
         next.headers = headers;
         var attempt = 0;
-        function run() {
-          var requestInput = input;
-          if (attempt > 0 && input instanceof Request) {
-            try { requestInput = input.clone(); } catch (eClone) {}
+        var authAttempt = 0;
+        var authValidationUnavailable = false;
+        var authTokenConfirmedValid = false;
+        var requestTemplate = null;
+        if (input instanceof Request) {
+          try { requestTemplate = input.clone(); } catch (eTemplate) {}
+        }
+        function recoverPayload(kind, value, consumer) {
+          var sanitized = sanitizeRecoverablePayload(value, typeof value === 'string');
+          if (kind === 'auth' && authAttempt < 1) {
+            authAttempt += 1;
+            return recoverAuthentication(url, storedToken()).then(function(result) {
+              if (result && result.valid) {
+                authValidationUnavailable = !!result.unavailable;
+                authTokenConfirmedValid = !result.unavailable;
+                return run().then(function(retried) { return retried[consumer](); });
+              }
+              return sanitized;
+            });
           }
-          return nativeFetch(requestInput, next).catch(function(err) {
-            if (canRetryAfterRecovery && isTransientNetworkError(err) && attempt < NETWORK_RETRY_DELAYS.length - 1) {
+          if (kind === 'auth' && (authValidationUnavailable || authTokenConfirmedValid)) {
+            if (canRecoverBackend) requestViewRecovery(url, 'auth_payload_unavailable');
+            return Promise.resolve(sanitizeRecoverablePayload({
+              ok: false,
+              code: 503,
+              detail: RECOVERY_MESSAGE,
+              msg: RECOVERY_MESSAGE,
+              recoverable: true
+            }, false)).then(function(payload) {
+              return consumer === 'text' ? JSON.stringify(payload) : payload;
+            });
+          }
+          if (kind === 'network' && canRetryAfterRecovery && attempt < NETWORK_RETRY_DELAYS.length - 1) {
+            attempt += 1;
+            var recovery = canRecoverBackend ? recoverBackend(url.origin, 'payload') : Promise.resolve(false);
+            return waitForNetworkRetry(NETWORK_RETRY_DELAYS[attempt]).then(function() {
+              return recovery.then(function() {
+                return run().then(function(retried) { return retried[consumer](); });
+              });
+            });
+          }
+          var finalRecovery = canRecoverBackend ? recoverBackend(url.origin, 'payload') : Promise.resolve(false);
+          return finalRecovery.then(function() {
+            if (canRecoverBackend) requestViewRecovery(url, 'payload');
+            return sanitized;
+          });
+        }
+        function protectApplicationResponse(response) {
+          if (!response) return response;
+          try {
+            var originalJson = response.json.bind(response);
+            Object.defineProperty(response, 'json', {
+              configurable: true,
+              value: function() {
+                return originalJson().then(function(value) {
+                  var kind = recoverablePayloadKind(value);
+                  return kind ? recoverPayload(kind, value, 'json') : value;
+                });
+              }
+            });
+            var originalText = response.text.bind(response);
+            Object.defineProperty(response, 'text', {
+              configurable: true,
+              value: function() {
+                return originalText().then(function(value) {
+                  var kind = recoverablePayloadKind(value);
+                  return kind ? recoverPayload(kind, value, 'text') : value;
+                });
+              }
+            });
+          } catch (eProtect) {}
+          return response;
+        }
+        function run() {
+          var usedToken = shouldAddBrand ? syncLatestToken(headers, url) : '';
+          next.headers = headers;
+          var requestInput = requestTemplate ? requestTemplate.clone() : input;
+          return nativeFetch(requestInput, next).then(function(response) {
+            var credentialCheck = shouldAddBrand
+              ? credentialFailureResponse(response, headers)
+              : Promise.resolve(false);
+            return credentialCheck.then(function(isCredentialFailure) {
+              if (isCredentialFailure) {
+                if (authAttempt < 1) {
+                  authAttempt += 1;
+                  return recoverAuthentication(url, usedToken).then(function(result) {
+                    if (result && result.valid) {
+                      authValidationUnavailable = !!result.unavailable;
+                      authTokenConfirmedValid = !result.unavailable;
+                      return run();
+                    }
+                    return jsonResponse(LOGIN_EXPIRED_MESSAGE, 401, 401);
+                  });
+                }
+                if (authValidationUnavailable || authTokenConfirmedValid) {
+                  requestViewRecovery(url, 'auth_unavailable');
+                  return jsonResponse(RECOVERY_MESSAGE, 503, 503);
+                }
+                return jsonResponse(LOGIN_EXPIRED_MESSAGE, 401, 401);
+              }
+              return connectivityFailureResponse(response).then(function(isConnectivityFailure) {
+                if (!isConnectivityFailure) return protectApplicationResponse(response);
+                if (canRetryAfterRecovery && attempt < NETWORK_RETRY_DELAYS.length - 1) {
+                  attempt += 1;
+                  return waitForNetworkRetry(NETWORK_RETRY_DELAYS[attempt]).then(function() {
+                    var recovery = canRecoverBackend
+                      ? recoverBackend(url.origin, 'http_' + response.status)
+                      : Promise.resolve(false);
+                    return recovery.then(run);
+                  });
+                }
+                if (canRecoverBackend) requestViewRecovery(url, 'http_' + response.status);
+                if (shouldAddBrand) return jsonResponse(RECOVERY_MESSAGE, 503, 503);
+                throw normalizeNetworkError(new Error(RECOVERY_MESSAGE));
+              });
+            });
+          }).catch(function(err) {
+            if (!isTransientNetworkError(err)) throw err;
+            if (canRetryAfterRecovery && attempt < NETWORK_RETRY_DELAYS.length - 1) {
               attempt += 1;
               return waitForNetworkRetry(NETWORK_RETRY_DELAYS[attempt]).then(function() {
-                return recoverBackend(url.origin).then(function() { return run(); });
+                var recovery = canRecoverBackend
+                  ? recoverBackend(url.origin, 'fetch')
+                  : Promise.resolve(false);
+                return recovery.then(run);
               });
             }
-            throw normalizeNetworkError(err);
+            var finalRecovery = canRecoverBackend
+              ? recoverBackend(url.origin, 'fetch')
+              : Promise.resolve(false);
+            return finalRecovery.then(function() {
+              if (canRecoverBackend) requestViewRecovery(url, 'fetch');
+              if (shouldAddBrand) return jsonResponse(RECOVERY_MESSAGE, 503, 503);
+              throw normalizeNetworkError(err);
+            });
           });
         }
         return run();
       }
     } catch (e) {}
-    return nativeFetch(input, init);
+    return nativeFetch(input, init).catch(function(error) {
+      throw normalizeNetworkError(error);
+    });
   };
   window.__LOBSTER_BRAND_FETCH_INSTALLED = true;
 })();
 
 (function installNetworkRecovery() {
   if (window.__LOBSTER_NETWORK_RECOVERY_INSTALLED) return;
+  var recoveryState = window.__LOBSTER_NETWORK_RECOVERY_STATE = window.__LOBSTER_NETWORK_RECOVERY_STATE || {
+    promise: null,
+    lastReason: '',
+    lastRecoveredAt: 0
+  };
 
   function currentRecoveryView(metaView) {
     var view = String(metaView || '').trim();
@@ -332,10 +676,20 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
   // to block or skip requests for the current view.
   window.requestLobsterNetworkRecovery = function(meta) {
     meta = meta || { view: currentRecoveryView(), reason: 'network' };
-    var probe = typeof window.__lobsterProbeBackend === 'function'
+    if (recoveryState.promise) return recoveryState.promise;
+    recoveryState.lastReason = String(meta.reason || 'network');
+    var probe = !meta.skipProbe && typeof window.__lobsterProbeBackend === 'function'
       ? window.__lobsterProbeBackend(meta.origin || '')
       : Promise.resolve(true);
-    return Promise.resolve(probe).then(function() { return runRecovery(meta); });
+    recoveryState.promise = Promise.resolve(probe).then(function() {
+      return runRecovery(meta);
+    }).then(function(result) {
+      recoveryState.lastRecoveredAt = Date.now();
+      return result;
+    }).finally(function() {
+      recoveryState.promise = null;
+    });
+    return recoveryState.promise;
   };
   window.refreshCurrentLobsterView = function(meta) {
     meta = meta || { view: currentRecoveryView(), reason: 'manual' };
@@ -367,7 +721,9 @@ var RECHARGE_URL = null;
 
 function showMsg(el, text, isErr) {
   if (!el) return;
-  el.textContent = text;
+  el.textContent = typeof window.normalizeLobsterRecoverableMessage === 'function'
+    ? window.normalizeLobsterRecoverableMessage(text)
+    : text;
   el.className = 'msg ' + (isErr ? 'err' : 'ok');
   el.style.display = 'block';
 }
@@ -635,6 +991,7 @@ window.bindLobsterInstallationId = bindLobsterInstallationId;
 window.loadLobsterInstallationIdStatus = loadLobsterInstallationIdStatus;
 
 function authHeaders() {
+  try { token = getStoredAuthToken(); } catch (e) {}
   var h = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (token || '') };
   h['X-Installation-Id'] = getOrCreateInstallationId();
   h['X-Lobster-Brand'] = getLobsterBrandMark();
@@ -661,6 +1018,14 @@ function getCurrentUserIdFromToken() {
 }
 window.getCurrentUserIdFromToken = getCurrentUserIdFromToken;
 
-function escapeHtml(s) { return (s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
-function escapeAttr(s) { return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-function truncate(s, len) { s = (s || '').trim(); return s.length <= len ? s : s.slice(0, len) + '…'; }
+function _stringifyUiValue(s) {
+  if (s == null) return '';
+  if (typeof s === 'string') return s;
+  if (typeof s === 'object') {
+    try { return JSON.stringify(s); } catch (e) { return String(s); }
+  }
+  return String(s);
+}
+function escapeHtml(s) { return _stringifyUiValue(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function escapeAttr(s) { return _stringifyUiValue(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function truncate(s, len) { s = _stringifyUiValue(s).trim(); return s.length <= len ? s : s.slice(0, len) + '…'; }

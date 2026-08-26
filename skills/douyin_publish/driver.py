@@ -2300,34 +2300,45 @@ class DouyinDriver(BaseDriver):
         logger.info("[DOUYIN-PUBLISH] waiting for result, pre_url=%s", pre_url)
         publish_ok = False
         error_msg = ""
+        result_meta: Dict[str, Any] = {}
 
-        # 整页 innerText 易出现「发布完成」等说明文案误判；正文仅接受更明确的关键词，「发布完成」仅信 toast 容器
+        def _excerpt(text: str, limit: int = 260) -> str:
+            return " ".join((text or "").split())[:limit]
+
         _JS_CHECK = """
         () => {
-            const r = {status:'unknown'};
-            const body = document.body ? document.body.innerText : '';
-            const okStrict = ['发布成功', '作品发布成功', '已发布', '作品已发布', '提交成功'];
-            const okToastExtra = ['发布完成'];
-            const fail = ['发布失败', '上传失败', '审核不通过', '内容不符合', '审核未通过', '请选择封面', '必须选择封面'];
-            for (const k of okStrict) { if (body.includes(k)) return {status:'success', keyword:k, src:'body_strict'}; }
-            for (const k of fail) { if (body.includes(k)) return {status:'fail', keyword:k, src:'body'}; }
-
+            const successWords = ['发布成功', '作品发布成功', '已发布', '作品已发布', '提交成功', '已提交审核', '审核中', '发布完成', '作品已提交', '内容已发布', '保存成功'];
+            const failWords = ['发布失败', '上传失败', '审核不通过', '内容不符合', '审核未通过', '请选择封面', '必须选择封面', '提交失败', '内容异常', '参数错误'];
+            const samples = [];
+            const pushSample = (src, text) => {
+                const t = (text || '').trim();
+                if (t) samples.push({src, text: t.slice(0, 360)});
+            };
+            pushSample('body', document.body ? (document.body.innerText || document.body.textContent || '') : '');
             const toastSels = [
                 '.semi-toast-content', '.semi-toast-wrapper',
                 '.semi-notification-content', '.semi-notification',
+                '.semi-message-content', '.semi-message',
                 '[class*="toast"]', '[class*="Toast"]',
                 '[class*="notice"]', '[class*="message"]',
+                '[aria-live]', '[role="alert"]', '[role="status"]', '[role="dialog"]',
             ];
-            const okAll = okStrict.concat(okToastExtra);
             for (const sel of toastSels) {
                 for (const el of document.querySelectorAll(sel)) {
-                    const t = (el.textContent || '').trim();
-                    if (!t) continue;
-                    for (const k of okAll) { if (t.includes(k)) return {status:'success', keyword:k, src:'toast'}; }
-                    for (const k of fail) { if (t.includes(k)) return {status:'fail', keyword:k, src:'toast'}; }
+                    pushSample(sel, el.innerText || el.textContent || '');
                 }
             }
-            return r;
+            for (const item of samples) {
+                for (const k of failWords) {
+                    if (item.text.includes(k)) return {status:'fail', keyword:k, src:item.src, text:item.text};
+                }
+            }
+            for (const item of samples) {
+                for (const k of successWords) {
+                    if (item.text.includes(k)) return {status:'success', keyword:k, src:item.src, text:item.text};
+                }
+            }
+            return {status:'unknown', samples:samples.slice(0, 5)};
         }
         """
 
@@ -2344,6 +2355,7 @@ class DouyinDriver(BaseDriver):
             if "/content/manage" in cur:
                 logger.info("[DOUYIN-PUBLISH] on manage page => success")
                 publish_ok = True
+                result_meta = {"status": "success", "keyword": "url_manage", "src": "url", "text": ""}
                 break
 
             # JS text / toast scan
@@ -2352,12 +2364,14 @@ class DouyinDriver(BaseDriver):
                 logger.info("[DOUYIN-PUBLISH] JS: %s", jr)
                 if jr.get("status") == "success":
                     publish_ok = True
+                    result_meta = dict(jr)
                     break
                 elif jr.get("status") == "fail":
                     error_msg = jr.get("keyword", "发布失败")
+                    result_meta = dict(jr)
                     break
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("[DOUYIN-PUBLISH] result scan failed: %s", exc)
 
             if ci in (3, 7, 11, 15):
                 await _dismiss_overlays(page, f"result_check_{ci}")
@@ -2367,22 +2381,48 @@ class DouyinDriver(BaseDriver):
         if not publish_ok and not error_msg:
             if "/content/manage" in final_url:
                 publish_ok = True
+                result_meta = result_meta or {"status": "success", "keyword": "url_manage", "src": "url", "text": ""}
             elif "/content/upload" in final_url and final_url != pre_url:
                 error_msg = "页面跳转到上传页(可能点了暂存而非发布)"
+                result_meta = result_meta or {"status": "fail", "keyword": "url_upload_redirect", "src": "url", "text": ""}
 
         logger.info("[DOUYIN-PUBLISH] === DONE === ok=%s url=%s err=%s", publish_ok, final_url, error_msg)
+        matched_keyword = str(result_meta.get("keyword") or "").strip() if isinstance(result_meta, dict) else ""
+        result_source = str(result_meta.get("src") or "").strip() if isinstance(result_meta, dict) else ""
+        page_excerpt = _excerpt(str(result_meta.get("text") or "")) if isinstance(result_meta, dict) else ""
 
         if publish_ok:
-            _step("发布成功", True, url=final_url)
-            return {"ok": True, "url": final_url, "applied": applied}
+            _step("发布成功", True, url=final_url, matched=matched_keyword, src=result_source)
+            return {
+                "ok": True,
+                "status": "success",
+                "url": final_url,
+                "matched_keyword": matched_keyword,
+                "result_source": result_source,
+                "page_text_excerpt": page_excerpt,
+                "applied": applied,
+            }
         elif error_msg:
-            _step("发布失败", False, error=error_msg, url=final_url)
-            return {"ok": False, "error": f"发布失败: {error_msg}", "url": final_url, "applied": applied}
-        else:
-            _step("发布状态不确定", False, url=final_url)
+            _step("发布失败", False, error=error_msg, url=final_url, matched=matched_keyword, src=result_source)
             return {
                 "ok": False,
+                "status": "failed",
+                "error": f"发布失败: {error_msg}",
+                "url": final_url,
+                "matched_keyword": matched_keyword,
+                "result_source": result_source,
+                "page_text_excerpt": page_excerpt,
+                "applied": applied,
+            }
+        else:
+            _step("发布状态不确定", False, url=final_url, matched=matched_keyword, src=result_source)
+            return {
+                "ok": False,
+                "status": "unknown",
                 "error": f"点击发布后未检测到成功标志（当前页面: {final_url}），请手动确认",
                 "url": final_url,
+                "matched_keyword": matched_keyword,
+                "result_source": result_source,
+                "page_text_excerpt": page_excerpt,
                 "applied": applied,
             }

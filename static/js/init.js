@@ -280,7 +280,8 @@ var USE_INDEPENDENT_AUTH = true;
   if (window.__LOBSTER_CLIENT_UPDATE_REMINDER__) return;
   window.__LOBSTER_CLIENT_UPDATE_REMINDER__ = true;
 
-  var CHECK_INTERVAL_MS = 60 * 60 * 1000;
+  // The result must follow the installed marker promptly after an OTA.
+  var CHECK_INTERVAL_MS = 60 * 1000;
   var RETRY_INTERVAL_MS = 5 * 60 * 1000;
   var timer = null;
   var checking = false;
@@ -348,7 +349,7 @@ var USE_INDEPENDENT_AUTH = true;
     var base = updateBase();
     if (!base) return;
     checking = true;
-    requestStatus(base + '/api/client-update/status')
+    requestStatus(base + '/api/client-update/status?_=' + Date.now())
       .then(function(status) {
         render(status || {});
         schedule(status && status.ok === false ? RETRY_INTERVAL_MS : CHECK_INTERVAL_MS);
@@ -358,6 +359,9 @@ var USE_INDEPENDENT_AUTH = true;
   }
 
   function bind() {
+    // Never carry an update result across launches/navigation. The badge stays
+    // hidden until this page receives a fresh status response.
+    render({ ok: true, available: false });
     var action = document.getElementById('clientUpdateAction');
     if (action) {
       action.addEventListener('click', function(event) {
@@ -385,6 +389,12 @@ var USE_INDEPENDENT_AUTH = true;
         });
       });
     }
+    // A client update can finish while this window is backgrounded. Refresh
+    // as soon as the user returns instead of waiting for the polling timer.
+    document.addEventListener('visibilitychange', function() {
+      if (!document.hidden) check();
+    });
+    window.addEventListener('focus', check);
     window.setTimeout(check, 1800);
   }
 
@@ -1528,10 +1538,17 @@ var LOBSTER_LEGACY_DENY_MISSING_FEATURES = {
   x_leads_access: true,
   tiktok_leads_access: true,
   openai_official_image_channel_access: true,
-  bihuo_25_video_skill: true
+  bihuo_25_video_skill: true,
+  ai_secretary_entry: true,
+  production_records_entry: true,
+  openclaw_weixin_channel: true,
+  openclaw_memory_skill: true,
+  browser_use_skill: true,
+  computer_use_skill: true,
+  media_edit_skill: true
 };
 var LOBSTER_VIEW_FEATURE_GATES = {
-  'audio-transcription': 'personal_settings_entry',
+  'audio-transcription': 'ai_secretary_entry',
   chat: 'home_ai_chat_entry',
   'skill-store': 'skill_store_entry',
   'douyin-leads': 'douyin_leads_access',
@@ -1580,6 +1597,7 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   'x-leads': 'x_leads_access',
   'tiktok-leads': 'tiktok_leads_access',
   'social-leads': ['reddit_leads_access', 'x_leads_access', 'tiktok_leads_access', 'reddit_leads', 'x_leads', 'tiktok_leads'],
+  tutorial: 'tutorial_entry',
 };
 
 function _normalizeLobsterFeatureFlags(features) {
@@ -1824,6 +1842,19 @@ function restoreDashboardViewAfterLogin() {
   }
 }
 
+var _dashboardRecoveryTimer = null;
+var _dashboardRecoveryAttempt = 0;
+function scheduleDashboardRecovery() {
+  if (_dashboardRecoveryTimer) return;
+  var delay = Math.min(10000, 1200 * Math.pow(2, Math.min(_dashboardRecoveryAttempt, 3)));
+  _dashboardRecoveryAttempt += 1;
+  _dashboardRecoveryTimer = window.setTimeout(function() {
+    _dashboardRecoveryTimer = null;
+    try { token = typeof getStoredAuthToken === 'function' ? getStoredAuthToken() : token; } catch (e) {}
+    loadDashboard();
+  }, delay);
+}
+
 function loadDashboard() {
   if (!token) {
     applyLobsterFeatureGates({});
@@ -1844,10 +1875,19 @@ function loadDashboard() {
         loadDashboard();
         return null;
       }
+      if (!r.ok) {
+        scheduleDashboardRecovery();
+        return null;
+      }
       return r.json();
     })
     .then(function(d) {
       if (!d) return;
+      _dashboardRecoveryAttempt = 0;
+      if (_dashboardRecoveryTimer) {
+        window.clearTimeout(_dashboardRecoveryTimer);
+        _dashboardRecoveryTimer = null;
+      }
       if (d.id == null) {
         token = null;
         if (typeof clearStoredAuthToken === 'function') clearStoredAuthToken();
@@ -1893,6 +1933,8 @@ function loadDashboard() {
       var navAgent = document.getElementById('navAgent');
       if (navAgent) navAgent.style.display = '';
       window.__currentUserIsAgent = !!d.is_agent;
+    }).catch(function() {
+      scheduleDashboardRecovery();
     });
 }
 

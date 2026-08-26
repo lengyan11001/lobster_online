@@ -9,6 +9,10 @@
     templateCatalog: [],
     templateCatalogProvider: '',
     selectedTemplate: null,
+    shanjianTemplateDetail: null,
+    shanjianTemplateDetailId: '',
+    shanjianTemplateDetailPromise: null,
+    shanjianTemplateDetailError: '',
     overlayTexts: {},
     positionOverrides: {},
     musicOptions: [],
@@ -711,6 +715,78 @@
     renderTemplateLayout();
   }
 
+  function shanjianEditInfo(detail) {
+    return detail && detail.videoStructInfo && detail.videoStructInfo.editInfo
+      ? detail.videoStructInfo.editInfo
+      : {};
+  }
+
+  function renderShanjianTemplateCapabilities() {
+    var target = $('mcmShanjianTemplateCapabilities');
+    if (!target) return;
+    if (currentTemplateProvider() !== 'shanjian' || !state.selectedTemplate) {
+      target.textContent = '';
+      target.hidden = true;
+      return;
+    }
+    target.hidden = false;
+    if (state.shanjianTemplateDetailPromise) {
+      target.textContent = '正在读取模板支持的输入...';
+      return;
+    }
+    if (state.shanjianTemplateDetailError) {
+      target.textContent = '模板输入信息读取失败，暂不能确认介绍文案是否支持';
+      return;
+    }
+    if (!state.shanjianTemplateDetail || state.shanjianTemplateDetailId !== String(state.selectedTemplate.id)) {
+      target.textContent = '正在读取模板支持的输入...';
+      return;
+    }
+    var editInfo = shanjianEditInfo(state.shanjianTemplateDetail);
+    var supported = [];
+    if (editInfo.headerLayer) supported.push('标题');
+    if (editInfo.ipLayer) supported.push('介绍文案');
+    target.textContent = supported.length ? ('当前模板支持：' + supported.join('、')) : '当前模板没有可填写的标题或介绍文案图层';
+  }
+
+  function loadShanjianTemplateDetail(item) {
+    var templateId = String(item && item.id || '').trim();
+    if (!templateId || !item || item.provider !== 'shanjian') return Promise.resolve(null);
+    if (state.shanjianTemplateDetailId === templateId && state.shanjianTemplateDetail) {
+      renderShanjianTemplateCapabilities();
+      return Promise.resolve(state.shanjianTemplateDetail);
+    }
+    if (state.shanjianTemplateDetailId === templateId && state.shanjianTemplateDetailPromise) {
+      renderShanjianTemplateCapabilities();
+      return state.shanjianTemplateDetailPromise;
+    }
+    state.shanjianTemplateDetail = null;
+    state.shanjianTemplateDetailId = templateId;
+    state.shanjianTemplateDetailError = '';
+    state.shanjianTemplateDetailPromise = post('/api/shanjian-smart-clip/template-detail', {
+      template_id: templateId
+    }).then(function(response) {
+      if (state.shanjianTemplateDetailId === templateId) {
+        state.shanjianTemplateDetail = response && response.item ? response.item : {};
+        state.shanjianTemplateDetailError = '';
+      }
+      return response && response.item ? response.item : {};
+    }).catch(function(error) {
+      if (state.shanjianTemplateDetailId === templateId) state.shanjianTemplateDetailError = error.message || '模板详情读取失败';
+      throw error;
+    }).then(function(detail) {
+      if (state.shanjianTemplateDetailId === templateId) state.shanjianTemplateDetailPromise = null;
+      renderShanjianTemplateCapabilities();
+      return detail;
+    }, function(error) {
+      if (state.shanjianTemplateDetailId === templateId) state.shanjianTemplateDetailPromise = null;
+      renderShanjianTemplateCapabilities();
+      throw error;
+    });
+    renderShanjianTemplateCapabilities();
+    return state.shanjianTemplateDetailPromise;
+  }
+
   function templateOverlayFields(item) {
     var strategy = item && item.generation_strategy && typeof item.generation_strategy === 'object' ? item.generation_strategy : {};
     var fields = item && Array.isArray(item.overlay_fields) ? item.overlay_fields : strategy.overlay_fields;
@@ -950,6 +1026,15 @@
     state.selectedTemplate = item || null;
     state.overlayTexts = next;
     if (!sameTemplate) state.positionOverrides = {};
+    if (!item || item.provider !== 'shanjian') {
+      state.shanjianTemplateDetail = null;
+      state.shanjianTemplateDetailId = '';
+      state.shanjianTemplateDetailPromise = null;
+      state.shanjianTemplateDetailError = '';
+    } else if (!sameTemplate || (!state.shanjianTemplateDetail && !state.shanjianTemplateDetailPromise)) {
+      loadShanjianTemplateDetail(item).catch(function() {});
+    }
+    renderShanjianTemplateCapabilities();
   }
 
   function updateOverlayCounter(input) {
@@ -971,6 +1056,7 @@
       panel.hidden = true;
       fieldsRoot.innerHTML = '';
       if (shanjianPanel) shanjianPanel.hidden = !state.selectedTemplate;
+      renderShanjianTemplateCapabilities();
       return;
     }
     if (shanjianPanel) shanjianPanel.hidden = true;
@@ -1216,15 +1302,12 @@
     var title = normalizeShanjianTitle((($('mcmShanjianTitle') || {}).value || ''));
     var description = String((($('mcmShanjianDescription') || {}).value || '').trim()).slice(0, 240);
     progress('template', 'active', '正在提交闪剪模板任务');
-    return post('/api/shanjian-smart-clip/template-detail', {
-      template_id: state.selectedTemplate.id
-    }).then(function(detailResponse) {
-      var editInfo = detailResponse && detailResponse.item && detailResponse.item.videoStructInfo
-        ? detailResponse.item.videoStructInfo.editInfo || {}
-        : {};
+    return loadShanjianTemplateDetail(state.selectedTemplate).then(function(detailResponse) {
+      var editInfo = shanjianEditInfo(detailResponse);
+      var supportsIpLayer = !!editInfo.ipLayer;
       var structLayers = [];
       if (editInfo.headerLayer) structLayers.push({ markCode: 'headerLayer', show: true });
-      if (editInfo.ipLayer && (description || title)) structLayers.push({ markCode: 'ipLayer', show: true });
+      if (supportsIpLayer && description) structLayers.push({ markCode: 'ipLayer', show: true });
       return post('/api/shanjian-smart-clip/submit', {
       title: title,
       scene: 'newsMixCutting',
@@ -1233,8 +1316,9 @@
       material_sound_switch: true,
       material_composition: 'order',
       video_duration: Math.max(5, Math.round(Number(baseResult.duration || 30))),
-      introduce_name: '',
-      introduce_description: description,
+      // 闪剪 introduceCard.name 是必填元数据；页面没有单独的 name 输入，服务端会以标题兜底。
+      introduce_name: supportsIpLayer && description ? title : '',
+      introduce_description: supportsIpLayer ? description : '',
       struct_layers: structLayers,
       header_switch: true,
       material_switch: true,

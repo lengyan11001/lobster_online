@@ -1136,6 +1136,7 @@
         '<div class="ps-generated-head">' +
           '<strong>' + esc(docTypeLabel(key)) + '</strong>' +
           '<label class="ps-choice"><input type="checkbox" data-ps-save-doc="' + escAttr(key) + '" checked><span>保存这个结果</span></label>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-download-generated-doc="' + escAttr(key) + '">下载</button>' +
         '</div>' +
         '<textarea data-ps-generated-text="' + escAttr(key) + '">' + esc(docs[key]) + '</textarea>' +
       '</article>';
@@ -1609,8 +1610,72 @@
         if (row) applyTemplate(row, true);
       });
     });
+    box.querySelectorAll('[data-download-generated-doc]').forEach(function(button) {
+      button.addEventListener('click', function() {
+        var key = button.getAttribute('data-download-generated-doc') || '';
+        var text = state.generatedDocuments && state.generatedDocuments[key] || '';
+        downloadTextFile(docTypeLabel(key) + '.md', '# ' + docTypeLabel(key) + '\n\n' + text)
+          .then(function(result) {
+            if (!result || !result.cancelled) setMsg(result && result.path ? '已保存至：' + result.path : '下载已开始');
+          })
+          .catch(function(err) { setMsg(err.message || '下载失败', true); });
+      });
+    });
     list.querySelectorAll('[data-delete-template]').forEach(function(btn) {
       btn.addEventListener('click', function() { deleteTemplate(btn.getAttribute('data-delete-template') || '', btn); });
+    });
+  }
+
+  function parseHostSaveResult(value) {
+    if (value && typeof value === 'object') return value;
+    if (typeof value !== 'string') return {};
+    try { return JSON.parse(value); } catch (e) { return { ok: value === 'ok' }; }
+  }
+
+  function saveTextDownload(filename, text) {
+    filename = filename || '个人记忆资料.md';
+    text = String(text || '');
+    if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.save_text_file === 'function') {
+      return Promise.resolve(window.pywebview.api.save_text_file(filename, text)).then(function(value) {
+        var result = parseHostSaveResult(value);
+        if (!result.ok && !result.cancelled) throw new Error(result.error || '保存失败');
+        return result;
+      });
+    }
+    if (window.LobsterAndroid && typeof window.LobsterAndroid.saveTextFile === 'function') {
+      try {
+        var androidResult = parseHostSaveResult(window.LobsterAndroid.saveTextFile(filename, 'text/markdown', text));
+        if (!androidResult.ok && !androidResult.cancelled) throw new Error(androidResult.error || '保存失败');
+        return Promise.resolve(androidResult);
+      } catch (err) {
+        return Promise.reject(err);
+      }
+    }
+    var blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+    return Promise.resolve({ ok: true, browser_download: true });
+  }
+
+  function downloadTextFile(filename, text) {
+    return saveTextDownload(filename, text);
+  }
+
+  function downloadMemoryDocument(id, fallbackName) {
+    if (!id) return Promise.reject(new Error('资料不存在'));
+    return fetch(cloudBase() + '/api/personal-settings/memory-documents/' + encodeURIComponent(id) + '/download', {
+      headers: headers(false)
+    }).then(function(resp) {
+      if (!resp.ok) return resp.text().then(function(text) { throw new Error(text || '下载失败'); });
+      return resp.text();
+    }).then(function(text) {
+      return saveTextDownload(fallbackName || '个人记忆资料.md', text);
     });
   }
 
@@ -1906,12 +1971,24 @@
         '<small>' + esc(tag + (doc.notes || doc.filename ? ' · ' + (doc.notes || doc.filename) : '') + (doc.created_at ? ' · ' + doc.created_at : '')) + '</small></div>' +
         '<div class="ps-actions">' +
           '<button type="button" class="btn btn-ghost btn-sm" data-preview-memory="' + escAttr(id) + '">预览</button>' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-download-memory="' + escAttr(id) + '">下载</button>' +
           (readOnly ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-delete-memory="' + escAttr(id) + '">删除</button>') +
         '</div>' +
       '</article>';
     }).join('') + page.pager;
     el.querySelectorAll('[data-preview-memory]').forEach(function(btn) {
       btn.addEventListener('click', function() { previewMemory(btn.getAttribute('data-preview-memory') || ''); });
+    });
+    el.querySelectorAll('[data-download-memory]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var id = btn.getAttribute('data-download-memory') || '';
+        var doc = state.memories.filter(function(row) { return memoryId(row) === id; })[0] || {};
+        downloadMemoryDocument(id, (memoryTitle(doc) || '个人记忆资料') + '.md')
+          .then(function(result) {
+            if (!result || !result.cancelled) setMsg(result && result.path ? '已保存至：' + result.path : '下载已开始');
+          })
+          .catch(function(err) { setMsg(err.message || '下载失败', true); });
+      });
     });
     el.querySelectorAll('[data-delete-memory]').forEach(function(btn) {
       btn.addEventListener('click', function() { deleteMemory(btn.getAttribute('data-delete-memory') || ''); });
@@ -2160,6 +2237,7 @@
     var mode = (($('psSaveMode') || {}).value || 'new');
     var targetSelect = $('psTargetMemorySelect');
     var titleInput = $('psMemoryTitle');
+    var review = $('psMemoryReviewText');
     if (targetSelect) {
       targetSelect.disabled = mode !== 'overwrite';
       if (mode !== 'overwrite') targetSelect.value = '';
@@ -2167,6 +2245,11 @@
     if (titleInput) {
       titleInput.disabled = mode === 'overwrite';
       if (mode === 'overwrite') titleInput.value = '';
+    }
+    if (review) {
+      var editing = mode === 'overwrite';
+      review.style.display = editing ? '' : 'none';
+      review.setAttribute('aria-hidden', editing ? 'false' : 'true');
     }
     if (mode === 'overwrite' && targetSelect && !targetSelect.value) {
       setMsg('覆盖已有文档需要先选择一个文档。', true);
@@ -2896,8 +2979,10 @@
       setMsg('请至少勾选一个要保存的 AI 理解结果。', true);
       return;
     }
-    var content = generatedContent || (!hasGeneratedPreview ? (($('psMemoryReviewText') || {}).value || '').trim() : '');
     var mode = (($('psSaveMode') || {}).value || 'new');
+    var content = mode === 'overwrite'
+      ? (($('psMemoryReviewText') || {}).value || '').trim()
+      : (generatedContent || (!hasGeneratedPreview ? (($('psMemoryReviewText') || {}).value || '').trim() : ''));
     var title = mode === 'new' ? memoryFormTitle() : '';
     var targetDocId = (($('psTargetMemorySelect') || {}).value || '');
     if (!content) {
@@ -3247,7 +3332,14 @@
     if ($('psTargetMemorySelect')) $('psTargetMemorySelect').addEventListener('change', function() {
       syncSaveModeState();
       var id = $('psTargetMemorySelect').value || '';
-      if (id) previewMemory(id);
+      if (id) {
+        previewMemory(id);
+        cloudJson('/api/personal-settings/memory-documents/' + encodeURIComponent(id) + '/preview', { json: false })
+          .then(function(data) {
+            if ($('psMemoryReviewText')) $('psMemoryReviewText').value = data.content_text || '';
+          })
+          .catch(function(err) { setMsg(err.message || '读取失败', true); });
+      }
     });
   }
 

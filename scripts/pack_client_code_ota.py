@@ -87,7 +87,6 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     "static/branding/brands.json",
     "static/index.html",
     "static/ai3d-model-preview.html",
-    "static/lobster-bridge.js",
     "static/client_version.json",
     "CLIENT_CODE_VERSION.json",
 )

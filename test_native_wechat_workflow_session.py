@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
+import json
 from pathlib import Path
 import sys
 import types
@@ -10,6 +11,53 @@ import pytest
 
 from backend.app.api import h5_chat_channel as channel
 from backend.app.services import native_wechat_engine as engine
+
+
+@pytest.mark.asyncio
+async def test_auto_reply_language_follows_latest_customer_message(monkeypatch):
+    requests = []
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"choices": [{"message": {"content": "{\\"should_reply\\": true, \\"reply\\": \\"Thanks for reaching out!\\"}"}}]}'
+        text = ""
+
+        def json(self):
+            return json.loads(self.content.decode("utf-8"))
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def post(self, url, *, json, headers):
+            requests.append({"url": url, "json": json, "headers": headers})
+            return FakeResponse()
+
+    monkeypatch.setattr(engine.httpx, "AsyncClient", lambda **_kwargs: FakeClient())
+    monkeypatch.setattr(engine, "_server_proxy_base", lambda: "http://sutui.test")
+
+    result = await engine._call_auto_reply_llm(
+        auth_context={"token": "test-token"},
+        user_id=1,
+        peer_name="Alice",
+        latest_message="Hi, could you send me the price list?",
+        recent_context="Alice: Hi, could you send me the price list?",
+        reply_language="zh-CN",
+    )
+
+    assert result["reply"] == "Thanks for reaching out!"
+    assert len(requests) == 1
+    prompt = "\n".join(
+        str(message.get("content") or "")
+        for message in requests[0]["json"]["messages"]
+    )
+    assert "回复语言必须跟随对方最新消息" in prompt
+    assert "根据对方最新消息自动识别并跟随" in prompt
+    assert "reply字段必须完全使用" not in prompt
+    assert "zh-CN" not in prompt
 
 
 @pytest.mark.asyncio
@@ -81,6 +129,64 @@ def test_friend_request_action_only_matches_pending_status_suffix():
     assert engine._friend_request_action_label("Alice\u7b49\u5f85\u9a8c\u8bc1") == "\u7b49\u5f85\u9a8c\u8bc1"
 
 
+def test_friend_request_display_name_prefers_exact_child_name():
+    class FakeNode:
+        def __init__(self, name, children=None):
+            self.Name = name
+            self._children = children or []
+
+        def GetChildren(self):
+            return self._children
+
+    nickname = FakeNode("Alice")
+    greeting = FakeNode("\u6211\u662f Alice")
+    accept = FakeNode("\u63a5\u53d7")
+    row = FakeNode("Alice\u6211\u662f Alice\u63a5\u53d7", [nickname, greeting, accept])
+
+    assert engine._friend_request_display_name(
+        {"node": row, "text": row.Name, "action": "\u63a5\u53d7"}
+    ) == "Alice"
+
+
+@pytest.mark.asyncio
+async def test_accepted_friend_gets_ai_welcome_and_verified_send(monkeypatch):
+    friend_requests = {
+        "items": [
+            {"key": "request-1", "status": "accepted", "display_name": "Alice"},
+            {"key": "request-2", "status": "failed", "display_name": "Bob"},
+        ]
+    }
+    calls = []
+
+    async def generate(**kwargs):
+        calls.append(("generate", kwargs["contact_name"], kwargs["reply_language"]))
+        return "\u4f60\u597d Alice\uff0c\u5f88\u9ad8\u5174\u8ba4\u8bc6\u4f60\u3002"
+
+    async def run_local(func, *args, **kwargs):
+        calls.append(("send", args[1], args[2], args[3]["driver"]))
+        return {"ok": True, "peer_id": args[1], "verified": True}
+
+    monkeypatch.setattr(engine, "_generate_new_friend_welcome", generate)
+    monkeypatch.setattr(engine, "_run_local_wechat_async", run_local)
+
+    result = await engine._welcome_accepted_friend_requests(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        friend_requests,
+        auth_context={"token": "token"},
+        user_id=1,
+        memory_context="memory",
+        reply_language="zh-CN",
+    )
+
+    assert result == {"generated": 1, "sent": 1, "failed": 0}
+    assert calls == [
+        ("generate", "Alice", "zh-CN"),
+        ("send", "Alice", "\u4f60\u597d Alice\uff0c\u5f88\u9ad8\u5174\u8ba4\u8bc6\u4f60\u3002", "native_wechat_friend_welcome"),
+    ]
+    assert friend_requests["items"][0]["welcome_status"] == "sent"
+    assert "welcome_status" not in friend_requests["items"][1]
+
+
 def test_waiting_verification_request_opens_detail_before_accepting(monkeypatch):
     node = object()
     item = {
@@ -117,9 +223,19 @@ async def test_auto_reply_checks_friend_requests_before_scanning_messages(tmp_pa
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     monkeypatch.setattr(
         engine,
+        "_dismiss_local_wechat_session_ghosts_for_account",
+        lambda _account_id: {"found": 0, "dismissed": 0, "hwnds": [], "errors": []},
+    )
+    monkeypatch.setattr(
+        engine,
         "_load_auto_reply_memory_context",
         lambda *args, **kwargs: {"text": "", "document_count": 0, "titles": []},
     )
+
+    async def run_local(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "_run_local_wechat_async", run_local)
 
     def accept_friend_requests(account_id, *, max_accepts=20, max_scrolls=24):
         calls.append(("friends", account_id))
@@ -132,18 +248,28 @@ async def test_auto_reply_checks_friend_requests_before_scanning_messages(tmp_pa
         assert recent_only is True
         return {"ok": True, "items": []}
 
+    async def welcome_friends(account_id, friend_requests, **kwargs):
+        calls.append(("welcome", account_id))
+        assert friend_requests["accepted"] == 1
+        assert kwargs["reply_language"] == "zh-CN"
+        return {"generated": 1, "sent": 1, "failed": 0}
+
     monkeypatch.setattr(engine, "accept_local_friend_requests", accept_friend_requests)
+    monkeypatch.setattr(engine, "_welcome_accepted_friend_requests", welcome_friends)
     monkeypatch.setattr(engine, "sync_local_sessions", sync_sessions)
+    monkeypatch.setattr(engine, "_open_next_visible_session", lambda *_args, **_kwargs: None)
 
     result = await engine.run_auto_reply_once(engine.LOCAL_DEFAULT_ACCOUNT_ID, force=True)
 
     assert calls == [
         ("friends", engine.LOCAL_DEFAULT_ACCOUNT_ID),
+        ("welcome", engine.LOCAL_DEFAULT_ACCOUNT_ID),
         ("sessions", engine.LOCAL_DEFAULT_ACCOUNT_ID),
     ]
     assert result["friend_requests_checked"] == 2
     assert result["friend_requests_accepted"] == 1
     assert result["friend_requests_failed"] == 0
+    assert result["friend_welcome_sent"] == 1
 
 
 @pytest.mark.asyncio
@@ -152,9 +278,19 @@ async def test_auto_reply_can_skip_friend_requests_after_takeover_initial_scan(t
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     monkeypatch.setattr(
         engine,
+        "_dismiss_local_wechat_session_ghosts_for_account",
+        lambda _account_id: {"found": 0, "dismissed": 0, "hwnds": [], "errors": []},
+    )
+    monkeypatch.setattr(
+        engine,
         "_load_auto_reply_memory_context",
         lambda *args, **kwargs: {"text": "", "document_count": 0, "titles": []},
     )
+
+    async def run_local(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "_run_local_wechat_async", run_local)
     monkeypatch.setattr(
         engine,
         "accept_local_friend_requests",
@@ -166,6 +302,7 @@ async def test_auto_reply_can_skip_friend_requests_after_takeover_initial_scan(t
         return {"ok": True, "items": []}
 
     monkeypatch.setattr(engine, "sync_local_sessions", sync_sessions)
+    monkeypatch.setattr(engine, "_open_next_visible_session", lambda *_args, **_kwargs: None)
 
     result = await engine.run_auto_reply_once(
         engine.LOCAL_DEFAULT_ACCOUNT_ID,
@@ -2652,6 +2789,122 @@ def test_find_local_contact_list_falls_back_to_guess(monkeypatch):
     monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda _root: sentinel)
 
     assert engine._find_local_contact_list(object()) is sentinel
+
+
+def test_session_cell_click_does_not_smoothly_move_pointer(monkeypatch):
+    calls = []
+
+    class FakeCell:
+        ClassName = "mmui::ChatSessionCell"
+
+        def Click(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(engine, "_human_pause", lambda *args, **kwargs: None)
+
+    engine._uia_click(FakeCell())
+
+    assert calls == [{"simulateMove": False}]
+
+
+def test_dismiss_session_ghost_windows_only_closes_matching_wechat_overlays(monkeypatch):
+    main_hwnd = 100
+    session_ghost = 200
+    normal_dialog = 300
+    other_process_ghost = 400
+    hidden = []
+    posted = []
+
+    windows = {
+        main_hwnd: {"pid": 11, "visible": True, "class": "Qt51514QWindowIcon", "rect": (0, 0, 800, 600), "ex": 0},
+        session_ghost: {
+            "pid": 11,
+            "visible": True,
+            "class": "Qt51514QWindowToolSaveBits",
+            "rect": (20, 30, 226, 104),
+            "ex": 0x80088,
+        },
+        normal_dialog: {
+            "pid": 11,
+            "visible": True,
+            "class": "Qt51514QWindowToolSaveBits",
+            "rect": (20, 30, 900, 700),
+            "ex": 0x80088,
+        },
+        other_process_ghost: {
+            "pid": 12,
+            "visible": True,
+            "class": "Qt51514QWindowToolSaveBits",
+            "rect": (20, 30, 226, 104),
+            "ex": 0x80088,
+        },
+    }
+    fake_win32con = types.SimpleNamespace(
+        GW_OWNER=4,
+        GWL_EXSTYLE=-20,
+        WS_EX_LAYERED=0x80000,
+        WS_EX_TOOLWINDOW=0x80,
+        WS_EX_TOPMOST=0x8,
+        WM_CANCELMODE=0x001F,
+        WM_CLOSE=0x0010,
+        SW_HIDE=0,
+    )
+    fake_win32process = types.SimpleNamespace(
+        GetWindowThreadProcessId=lambda hwnd: (1, windows[hwnd]["pid"]),
+    )
+    fake_win32gui = types.SimpleNamespace(
+        IsWindow=lambda hwnd: hwnd in windows,
+        IsWindowVisible=lambda hwnd: windows[hwnd]["visible"],
+        GetClassName=lambda hwnd: windows[hwnd]["class"],
+        GetParent=lambda _hwnd: 0,
+        GetWindow=lambda _hwnd, _flag: 0,
+        GetWindowRect=lambda hwnd: windows[hwnd]["rect"],
+        GetWindowLong=lambda hwnd, _index: windows[hwnd]["ex"],
+        EnumWindows=lambda callback, extra: [callback(hwnd, extra) for hwnd in windows],
+        PostMessage=lambda hwnd, message, wparam, lparam: posted.append((hwnd, message, wparam, lparam)),
+        ShowWindow=lambda hwnd, command: hidden.append((hwnd, command)),
+    )
+    monkeypatch.setitem(sys.modules, "win32con", fake_win32con)
+    monkeypatch.setitem(sys.modules, "win32process", fake_win32process)
+    monkeypatch.setitem(sys.modules, "win32gui", fake_win32gui)
+
+    result = engine._dismiss_local_wechat_session_ghost_windows(main_hwnd)
+
+    assert result["found"] == 1
+    assert result["dismissed"] == 1
+    assert result["hwnds"] == [session_ghost]
+    assert hidden == [(session_ghost, fake_win32con.SW_HIDE)]
+    assert [row[1] for row in posted] == [fake_win32con.WM_CANCELMODE, fake_win32con.WM_CLOSE]
+
+
+def test_group_welcome_send_allows_only_verified_new_group(monkeypatch):
+    monkeypatch.setattr(
+        engine,
+        "_current_local_chat_info",
+        lambda _wx, fallback_name="": {"chat_name": "Alice,Bob", "chat_type": "group"},
+    )
+
+    verified = engine._verify_local_send_chat(
+        object(),
+        "Alice,Bob",
+        allow_group=True,
+    )
+    assert verified == {"chat_type": "group", "chat_name": "Alice,Bob"}
+
+    with pytest.raises(RuntimeError, match="不是私聊"):
+        engine._verify_local_send_chat(object(), "Alice,Bob")
+
+
+def test_group_welcome_send_rejects_wrong_group(monkeypatch):
+    monkeypatch.setattr(
+        engine,
+        "_current_local_chat_info",
+        lambda _wx, fallback_name="": {"chat_name": "AnotherGroup", "chat_type": "group"},
+    )
+
+    with pytest.raises(RuntimeError, match="新建目标不一致"):
+        engine._verify_local_send_chat(object(), "Alice,Bob", allow_group=True)
+
 
 def test_selected_memory_context_only_loads_selected_document(monkeypatch):
     from backend.app.api import openclaw_memory

@@ -141,6 +141,7 @@ var _schTasksAccountId = null;
 var _schTasksPollTimer = null;
 var _creatorDefaultTtlSec = 3600;
 var _detailScheduleCache = null;
+var _publishDefaultPrefs = {};
 /** 审核发布子 Tab：current | history */
 var _detailReviewSubTab = 'current';
 
@@ -177,6 +178,164 @@ function _schUpdateScheduleKindUI() {
     lbl.textContent = '描述需求';
     hint.textContent = '可用上方提纲：模型、画面方向、生成素材、发布文案、是否发布；不需要的栏写「无」。';
   }
+}
+
+function publishCloudBase() {
+  return (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '';
+}
+
+function _publishCurrentInstallationId() {
+  if (typeof getOrCreateInstallationId === 'function') return String(getOrCreateInstallationId() || '').trim();
+  try { return String(localStorage.getItem('lobster_installation_id') || '').trim(); } catch (e) { return ''; }
+}
+
+function _publishDefaultScope(platform) {
+  var key = String(platform || '').trim().toLowerCase();
+  return key ? 'publish:' + key : 'publish';
+}
+
+function _publishDefaultPref(scope) {
+  var scopeText = String(scope || '').trim();
+  var pref = (_publishDefaultPrefs || {})[scopeText];
+  if (pref) return pref;
+  if (scopeText.indexOf('publish:') === 0) {
+    var platform = scopeText.slice('publish:'.length).trim().toLowerCase();
+    var legacy = (_publishDefaultPrefs || {}).publish || null;
+    var legacyPlatform = String((legacy && legacy.platform) || '').trim().toLowerCase();
+    if (legacy && legacyPlatform === platform) return legacy;
+  }
+  return null;
+}
+
+function _publishAccountLocalId(account) {
+  return String((account && (account.account_id || account.id)) || '').trim();
+}
+
+function _publishAccountKey(account) {
+  var installationId = _publishCurrentInstallationId();
+  var platform = String((account && account.platform) || '').trim();
+  var accountId = _publishAccountLocalId(account);
+  if (!installationId || !platform || !accountId) return '';
+  return installationId + ':' + platform + ':' + accountId;
+}
+
+function _publishAccountCanSetDefault(account) {
+  return !!(account && !ECOMMERCE_PLATFORMS[account.platform] && _publishAccountKey(account));
+}
+
+function _applyPublishDefaultPrefs(accounts) {
+  return (Array.isArray(accounts) ? accounts : []).map(function(account) {
+    var copy = Object.assign({}, account || {});
+    var accountKey = _publishAccountKey(copy);
+    var defaultScope = _publishDefaultScope(copy.platform);
+    var pref = _publishDefaultPref(defaultScope);
+    copy.account_key = accountKey;
+    copy.default_scope = defaultScope;
+    copy.is_default = !!(pref && accountKey && String(pref.account_key || '') === accountKey);
+    return copy;
+  });
+}
+
+function _publishAccountsSnapshotForHeartbeat(accounts) {
+  return (Array.isArray(accounts) ? accounts : []).map(function(account) {
+    account = account || {};
+    var accountId = _publishAccountLocalId(account);
+    var platform = String(account.platform || '').trim();
+    var nickname = String(account.nickname || account.name || '').trim();
+    if (!accountId || !platform || !nickname) return null;
+    return {
+      id: accountId,
+      account_id: accountId,
+      platform: platform,
+      platform_name: account.platform_name || PLATFORM_NAMES[platform] || platform,
+      nickname: nickname,
+      status: String(account.status || '').trim(),
+      online: ['active', 'online', 'logged_in', 'ready', 'success'].indexOf(String(account.status || '').trim().toLowerCase()) >= 0,
+      managed_by: account.managed_by || '',
+      is_origin_slot: !!account.is_origin_slot
+    };
+  }).filter(Boolean);
+}
+
+function _syncPublishAccountsToCloud(accounts) {
+  var base = publishCloudBase();
+  var installationId = _publishCurrentInstallationId();
+  if (!base || !installationId || typeof fetch !== 'function') return Promise.resolve({ skipped: true });
+  return fetch(base + '/api/h5-chat/device-heartbeat', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({
+      display_name: 'local-online',
+      publish_accounts: _publishAccountsSnapshotForHeartbeat(accounts)
+    })
+  }).then(function(r) {
+    return r.json().catch(function() { return {}; }).then(function(d) {
+      if (!r.ok) throw new Error(d.detail || d.message || ('HTTP ' + r.status));
+      return d;
+    });
+  });
+}
+
+function _loadPublishDefaultPrefs(accounts) {
+  var base = publishCloudBase();
+  var installationId = _publishCurrentInstallationId();
+  if (!base || !installationId || typeof fetch !== 'function') return Promise.resolve({});
+  return _syncPublishAccountsToCloud(accounts || _allAccounts).catch(function() { return null; })
+    .then(function() {
+      return fetch(base + '/api/h5-chat/mounted-accounts?installation_id=' + encodeURIComponent(installationId), {
+        headers: authHeaders()
+      });
+    })
+    .then(function(r) {
+      return r.json().catch(function() { return {}; }).then(function(d) {
+        if (!r.ok) throw new Error(d.detail || d.message || ('HTTP ' + r.status));
+        _publishDefaultPrefs = (d && d.defaults) || {};
+        return _publishDefaultPrefs;
+      });
+    })
+    .catch(function() {
+      _publishDefaultPrefs = _publishDefaultPrefs || {};
+      return _publishDefaultPrefs;
+    });
+}
+
+function _setPublishDefaultAccount(account) {
+  if (!account || !_publishAccountCanSetDefault(account)) {
+    alert('账号无效，无法设为默认');
+    return Promise.resolve();
+  }
+  var base = publishCloudBase();
+  var installationId = _publishCurrentInstallationId();
+  if (!base || !installationId) {
+    alert('未检测到服务器 API_BASE 或安装槽位，无法写入 H5 默认账号');
+    return Promise.resolve();
+  }
+  var accountKey = _publishAccountKey(account);
+  var scope = _publishDefaultScope(account.platform);
+  return _syncPublishAccountsToCloud(_allAccounts)
+    .then(function() {
+      return fetch(base + '/api/h5-chat/mounted-accounts/default', {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          scope: scope,
+          account_key: accountKey,
+          installation_id: installationId
+        })
+      });
+    })
+    .then(function(r) {
+      return r.json().catch(function() { return {}; }).then(function(d) {
+        if (!r.ok) throw new Error(d.detail || d.message || ('HTTP ' + r.status));
+        _publishDefaultPrefs = (d && d.defaults) || _publishDefaultPrefs || {};
+        _allAccounts = _applyPublishDefaultPrefs(_allAccounts);
+        _applyAccountPlatformFilter();
+        alert('默认发布账号已设置，H5 工作流会共用这个默认账号');
+      });
+    })
+    .catch(function(err) {
+      alert((err && err.message) || '设置默认账号失败');
+    });
 }
 
 function _schUpdatePublishModeUI() {
@@ -1149,6 +1308,11 @@ function _renderAccountList(accounts, emptyMessage) {
     var detailBtn = isEcom ? '' : '<button type="button" class="btn btn-primary btn-sm" data-open-account-detail="' + a.id + '" title="进入账号详情（数据与定时任务）">进入详情</button>';
     var openBtn = '<button type="button" class="btn btn-primary btn-sm" data-open-browser="' + a.id + '">打开浏览器</button>';
     var runsBtn = isEcom ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-schedule-runs-acct="' + a.id + '" title="间隔定时任务的执行记录">执行记录</button>';
+    var defaultBtn = (!isEcom && _publishAccountCanSetDefault(a))
+      ? (a.is_default
+        ? '<button type="button" class="btn btn-ghost btn-sm" disabled>默认账号</button>'
+        : '<button type="button" class="btn btn-ghost btn-sm" data-set-publish-default="' + escapeAttr(a.id) + '">设默认</button>')
+      : '';
     var publishBtn = '<button type="button" class="btn btn-primary btn-sm" data-publish-acct="' + a.id + '" data-publish-nick="' + escapeAttr(a.nickname) + '">发布素材</button>';
     var deleteBtn = isOriginSlot ? '' : '<button type="button" class="btn btn-ghost btn-sm" data-delete-id="' + a.id + '">删除</button>';
     var lastLogin = a.last_login ? '上次登录: ' + _formatDateTimeBeijing(a.last_login) : '';
@@ -1172,6 +1336,9 @@ function _renderAccountList(accounts, emptyMessage) {
       schHint = '<div class="account-card-highlight">定时已开 · ' + escapeHtml(modeShort) +
         ' · ' + escapeHtml(kindL) + ' · ' + escapeHtml(_formatScheduleIntervalMinutes(im)) + vHint + nextL + '</div>';
     }
+    if (!isEcom && a.is_default) {
+      schHint += '<div class="account-card-highlight">默认发布账号 · H5 工作流共用</div>';
+    }
     return '<div class="skill-store-card account-card" data-account-card="' + a.id + '" data-platform="' + escapeAttr(a.platform) + '" data-origin-slot="' + (isOriginSlot ? '1' : '0') + '" style="cursor:pointer;" title="' + (isOriginSlot ? '抖音获客中心固定槽位' : '点击查看详情') + '">' +
       '<div class="account-card-top">' +
       '<div class="card-label">' + escapeHtml(PLATFORM_NAMES[a.platform] || a.platform) + '</div>' +
@@ -1182,7 +1349,7 @@ function _renderAccountList(accounts, emptyMessage) {
       (syncLine ? '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">' + escapeHtml(syncLine) + '</div>' : '') +
       '</div>' +
       schHint +
-      '<div class="card-actions" onclick="event.stopPropagation();">' + detailBtn + ' ' + openBtn + ' ' + runsBtn + ' ' + publishBtn + ' ' + deleteBtn + '</div></div>';
+      '<div class="card-actions" onclick="event.stopPropagation();">' + defaultBtn + ' ' + detailBtn + ' ' + openBtn + ' ' + runsBtn + ' ' + publishBtn + ' ' + deleteBtn + '</div></div>';
   }).join('');
   _bindAccountButtons(el);
   _bindAccountCardClicks(el);
@@ -1218,8 +1385,12 @@ function loadAccounts() {
       }
       var d = x.d;
       var accounts = (d && Array.isArray(d.accounts)) ? d.accounts : [];
-      _allAccounts = accounts;
+      _allAccounts = _applyPublishDefaultPrefs(accounts);
       _applyAccountPlatformFilter();
+      _loadPublishDefaultPrefs(accounts).then(function() {
+        _allAccounts = _applyPublishDefaultPrefs(accounts);
+        _applyAccountPlatformFilter();
+      });
     })
     .catch(function(err) {
       var m = (err && err.message) ? err.message : String(err);
@@ -1228,6 +1399,26 @@ function loadAccounts() {
 }
 
 function _bindAccountButtons(el) {
+  el.querySelectorAll('button[data-set-publish-default]').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var id = btn.getAttribute('data-set-publish-default');
+      var account = (_allAccounts || []).find(function(row) {
+        return row && String(row.id) === String(id);
+      });
+      if (!account) {
+        alert('账号不存在，请刷新后重试');
+        return;
+      }
+      btn.disabled = true;
+      var oldText = btn.textContent;
+      btn.textContent = '设置中...';
+      _setPublishDefaultAccount(account).finally(function() {
+        btn.disabled = false;
+        btn.textContent = oldText || '设默认';
+      });
+    });
+  });
   el.querySelectorAll('button[data-open-account-detail]').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();

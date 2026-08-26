@@ -84,9 +84,11 @@ def test_shanjian_copy_is_only_rendered_by_the_followup_template():
     assert "overlay_title: overlayTitle" not in js
     assert "scene: 'newsMixCutting'" in js
     assert "materials: [{ type: 'video', fileUrl: videoUrl, soundSwitch: true }]" in js
-    assert "introduce_name: ''" in js
+    assert "introduce_name: supportsIpLayer && description ? title : ''" in js
     assert "introduce_description: description" in js
     assert "struct_layers: structLayers" in js
+    assert "loadShanjianTemplateDetail" in js
+    assert "mcmShanjianTemplateCapabilities" in js
 
 
 def test_mixer_request_has_no_local_overlay_fields():

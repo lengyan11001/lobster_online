@@ -34,7 +34,7 @@
     {time:'10:00',end:'10:15',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管',params:{group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'}},
     {time:'10:30',end:'11:00',key:'douyin_leads',label:'抖音自动养号',note:'抖音自动养号'},
     {time:'11:00',end:'11:30',key:'wechat_channels_nurture',label:'视频号自动养号（敬请期待）',note:'视频号自动养号',soon:true},
-    {time:'11:30',end:'12:45',key:'douyin_leads',label:'抖音获客·关键词抓取精准客户',note:'抖音获客·关键词抓取精准客户',params:{followup_actions:['reply_comments','mention_comment','follow_comment','direct_message'],customer_scope:'current_collection_batch'}},
+    {time:'11:30',end:'12:45',key:'douyin_leads',label:'抖音获客·关键词抓取精准客户',note:'抖音获客·关键词抓取精准客户',params:{followup_actions:['reply_comments','follow_comment','mention_comment','direct_message'],customer_scope:'current_collection_batch'}},
     {time:'13:00',end:'13:15',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管',params:{group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'}},
     {time:'13:30',end:'13:45',key:'native_wechat_moments_engage',label:'微信朋友圈自己评论区接管',note:'微信朋友圈自己评论区接管',params:{moment_action:'comment'}},
     {time:'13:45',end:'14:15',key:'hifly.video.create_by_tts',label:'创作数字人口播视频',note:'创作一条数字人口播视频（用于发朋友圈）',publish:[['14:15','wechat_moments','微信朋友圈发布']]},
@@ -45,8 +45,10 @@
     {time:'16:00',end:'16:30',key:'wechat_channels_nurture',label:'视频号自动养号（敬请期待）',note:'视频号自动养号',soon:true},
     {time:'16:30',end:'16:45',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管',params:{group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'}},
     {time:'17:00',end:'17:15',key:'native_wechat_moments_engage',label:'微信朋友圈点赞评论',note:'微信朋友圈点赞评论'},
-    {time:'17:15',end:'18:15',key:'douyin_leads',label:'抖音获客·关键词抓取精准客户',note:'抖音获客·关键词抓取精准客户',params:{followup_actions:['reply_comments','mention_comment','follow_comment','direct_message'],customer_scope:'current_collection_batch'}},
+    {time:'17:15',end:'18:15',key:'douyin_leads',label:'抖音获客·关键词抓取精准客户',note:'抖音获客·关键词抓取精准客户',params:{followup_actions:['reply_comments','follow_comment','mention_comment','direct_message'],customer_scope:'current_collection_batch'}},
+    {time:'18:15',end:'18:30',key:'douyin_leads',label:'抖音精准用户触达',note:'抖音精准用户触达',params:{touch_actions:['reply_comments','follow_comment','mention_comment','direct_message'],customer_scope:'precise_pool',max_users:20}},
     {time:'18:30',end:'18:45',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管',params:{group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'}},
+    {time:'18:45',end:'19:00',key:'douyin_leads',label:'抖音我的评论区',note:'抖音我的评论区'},
     {time:'19:15',end:'19:30',key:'douyin_leads',label:'抖音私信接管',note:'抖音私信接管'},
     {time:'19:30',end:'20:00',key:'hifly.video.create_by_tts',label:'创作数字人口播视频',note:'创作一条数字人口播视频（用于发朋友圈）',publish:[['20:00','wechat_moments','微信朋友圈发布']]},
     {time:'20:15',end:'20:30',key:'wechat_channels_comment',label:'视频号评论区接管（敬请期待）',note:'视频号评论区接管',soon:true},
@@ -192,6 +194,8 @@
     var text = String(note || '');
     if (text.indexOf('养号') >= 0) return 'account_nurture';
     if (text.indexOf('关键词抓取') >= 0) return 'search_collect';
+    if (text.indexOf('精准用户触达') >= 0 || text.indexOf('精准触达') >= 0) return 'precise_touch';
+    if (text.indexOf('我的评论区') >= 0) return 'self_comment_monitor';
     if (text.indexOf('回复') >= 0 && text.indexOf('评论') >= 0) return 'reply_comments';
     if (text.indexOf('@精准') >= 0 || text.indexOf('评论并@') >= 0 || text.indexOf('自己评论区接管') >= 0) return 'mention_comment';
     if (text.indexOf('关注') >= 0 && text.indexOf('评论') >= 0) return 'follow_comment';
@@ -199,7 +203,7 @@
     if (text.indexOf('私信接管') >= 0 || text.indexOf('私信引流') >= 0) return 'stranger_message';
     return 'search_collect';
   }
-  var DOUYIN_FOLLOWUP_ACTIONS=['reply_comments','mention_comment','follow_comment','direct_message'];
+  var DOUYIN_FOLLOWUP_ACTIONS=['reply_comments','follow_comment','mention_comment','direct_message'];
   function normalizeDouyinFollowupActions(value) {
     var selected={}; (Array.isArray(value) ? value : []).forEach(function(item){selected[String(item || '').trim().toLowerCase()]=true;});
     return DOUYIN_FOLLOWUP_ACTIONS.filter(function(action){return !!selected[action];});
@@ -276,7 +280,7 @@
       return {title:socialPayload.title,task_kind:'social_leads',content:'H5 工作流：' + socialPayload.title,payload:socialPayload};
     }
     if (row.key === 'douyin_leads') {
-      var action = salesAction(prompt), max = action === 'search_collect' || action === 'account_nurture' ? 50 : 10;
+      var action = salesAction(prompt), max = action === 'search_collect' || action === 'account_nurture' ? 50 : action === 'precise_touch' ? 20 : 10;
       // Keep explicitly edited private-message options when rebuilding the
       // plan.  The editor stores the checkbox in row.params, but the old
       // branch rebuilt params from scratch and silently dropped it.
@@ -289,6 +293,19 @@
       if (action === 'search_collect') {
         douyinParams.followup_actions=normalizeDouyinFollowupActions(douyinParams.followup_actions || []);
         douyinParams.customer_scope='current_collection_batch';
+        delete douyinParams.touch_actions;
+      } else if (action === 'precise_touch') {
+        douyinParams.touch_actions=normalizeDouyinFollowupActions(douyinParams.touch_actions || douyinParams.followup_actions || []);
+        douyinParams.followup_actions=normalizeDouyinFollowupActions(douyinParams.followup_actions || douyinParams.touch_actions || []);
+        douyinParams.customer_scope='precise_pool';
+        delete douyinParams.keyword; delete douyinParams.keywords; delete douyinParams.query; delete douyinParams.search_keyword;
+        delete douyinParams.regions; delete douyinParams.mode; delete douyinParams.max_results;
+      } else if (action === 'self_comment_monitor') {
+        douyinParams.customer_scope='self_comments';
+        douyinParams.h5_one_shot=true;
+        douyinParams.douyin_execution_mode='one_shot';
+        delete douyinParams.keyword; delete douyinParams.keywords; delete douyinParams.query; delete douyinParams.search_keyword;
+        delete douyinParams.regions; delete douyinParams.mode; delete douyinParams.max_results; delete douyinParams.max_users; delete douyinParams.followup_actions; delete douyinParams.touch_actions;
       }
       if (action !== 'stranger_message') {
         delete douyinParams.wechat_add_friend_enabled;
@@ -765,13 +782,14 @@
   window.addEventListener('lobster:installation-id-changed', handleInstallationContextChange);
   window.addEventListener('lobster:device-seed-changed', handleInstallationContextChange);
   function syncNodeModalFields() {
-    var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), label=String((el('oeNodeLabel') || {}).value || ''), note=String((el('oeNodeNote') || {}).value || ''), takeover=key === 'native_wechat_poll', douyinPrivate=isDouyinPrivate({ability_key:key,ability_label:label,note:note}), douyinCollection=key === 'douyin_leads' && salesAction(note || label) === 'search_collect';
+    var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), label=String((el('oeNodeLabel') || {}).value || ''), note=String((el('oeNodeNote') || {}).value || ''), takeover=key === 'native_wechat_poll', douyinPrivate=isDouyinPrivate({ability_key:key,ability_label:label,note:note}), douyinCollection=key === 'douyin_leads' && salesAction(note || label) === 'search_collect', douyinTouch=key === 'douyin_leads' && salesAction(note || label) === 'precise_touch';
     if (el('oeNodeGroupInviteField')) el('oeNodeGroupInviteField').hidden=!takeover;
     if (el('oeNodeWechatPrivateSessionLimitField')) el('oeNodeWechatPrivateSessionLimitField').hidden=!takeover;
     if (el('oeNodeWechatAddFriendField')) el('oeNodeWechatAddFriendField').hidden=!douyinPrivate;
     if (el('oeNodeDouyinReplyModeField')) el('oeNodeDouyinReplyModeField').hidden=!douyinPrivate;
     if (el('oeNodeDouyinCollectionField')) el('oeNodeDouyinCollectionField').hidden=!douyinCollection;
-    if (el('oeNodeDouyinFollowupField')) el('oeNodeDouyinFollowupField').hidden=!douyinCollection;
+    if (el('oeNodeDouyinTouchField')) el('oeNodeDouyinTouchField').hidden=!douyinTouch;
+    if (el('oeNodeDouyinFollowupField')) el('oeNodeDouyinFollowupField').hidden=!(douyinCollection || douyinTouch);
     syncMomentPicker('node',key === 'native_wechat_moments_engage');
   }
   function openNodeModal(index) {
@@ -786,9 +804,11 @@
     if (el('oeNodeDouyinKeyword')) el('oeNodeDouyinKeyword').value=String(params.keyword || params.query || '');
     if (el('oeNodeDouyinRegions')) el('oeNodeDouyinRegions').value=(Array.isArray(params.regions) ? params.regions.join('，') : String(params.regions || '全国'));
     if (el('oeNodeDouyinMaxResults')) el('oeNodeDouyinMaxResults').value=Math.max(10,Math.min(100,Number(params.max_results || 50)));
+    if (el('oeNodeDouyinTouchMaxUsers')) el('oeNodeDouyinTouchMaxUsers').value=Math.max(1,Math.min(200,Number(params.max_users || params.max_results || 20)));
     if (el('oeNodeDouyinMode')) el('oeNodeDouyinMode').value=['script','api'].indexOf(String(params.mode || '').toLowerCase()) >= 0 ? String(params.mode).toLowerCase() : 'script';
-    var followups=Object.prototype.hasOwnProperty.call(params,'followup_actions') ? normalizeDouyinFollowupActions(params.followup_actions) : DOUYIN_FOLLOWUP_ACTIONS.slice();
-    [['oeNodeDouyinFollowupReplyComments','reply_comments'],['oeNodeDouyinFollowupMentionComment','mention_comment'],['oeNodeDouyinFollowupFollowComment','follow_comment'],['oeNodeDouyinFollowupDirectMessage','direct_message']].forEach(function(item){if(el(item[0]))el(item[0]).checked=followups.indexOf(item[1])>=0;});
+    var followupSource=Object.prototype.hasOwnProperty.call(params,'followup_actions') ? params.followup_actions : params.touch_actions;
+    var followups=Object.prototype.hasOwnProperty.call(params,'followup_actions') || Object.prototype.hasOwnProperty.call(params,'touch_actions') ? normalizeDouyinFollowupActions(followupSource) : DOUYIN_FOLLOWUP_ACTIONS.slice();
+    [['oeNodeDouyinFollowupReplyComments','reply_comments'],['oeNodeDouyinFollowupFollowComment','follow_comment'],['oeNodeDouyinFollowupMentionComment','mention_comment'],['oeNodeDouyinFollowupDirectMessage','direct_message']].forEach(function(item){if(el(item[0]))el(item[0]).checked=followups.indexOf(item[1])>=0;});
     el('oeNodeWechatPrivateSessionLimit').value=Math.max(1,Math.min(100,Number(params.private_sessions_per_round || 10)));
     el('oeNodeMomentAction').value=String(params.moment_action || 'like_comment'); initMomentPicker('node',Array.isArray(params.contact_wx_nos) ? params.contact_wx_nos : params.targets);
     syncNodeModalFields(); el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60);
@@ -812,12 +832,25 @@
       row.params.mode=['script','api'].indexOf(String((el('oeNodeDouyinMode') || {}).value || '').toLowerCase()) >= 0 ? String(el('oeNodeDouyinMode').value).toLowerCase() : 'script';
       row.params.followup_actions=normalizeDouyinFollowupActions([
         el('oeNodeDouyinFollowupReplyComments') && el('oeNodeDouyinFollowupReplyComments').checked ? 'reply_comments' : '',
-        el('oeNodeDouyinFollowupMentionComment') && el('oeNodeDouyinFollowupMentionComment').checked ? 'mention_comment' : '',
         el('oeNodeDouyinFollowupFollowComment') && el('oeNodeDouyinFollowupFollowComment').checked ? 'follow_comment' : '',
+        el('oeNodeDouyinFollowupMentionComment') && el('oeNodeDouyinFollowupMentionComment').checked ? 'mention_comment' : '',
         el('oeNodeDouyinFollowupDirectMessage') && el('oeNodeDouyinFollowupDirectMessage').checked ? 'direct_message' : ''
       ]);
+      delete row.params.max_users;
+      delete row.params.touch_actions;
       row.params.customer_scope='current_collection_batch';
-    } else { delete row.params.keyword; delete row.params.regions; delete row.params.max_results; delete row.params.mode; delete row.params.followup_actions; delete row.params.customer_scope; }
+    } else if (key === 'douyin_leads' && salesAction(note || label) === 'precise_touch') {
+      delete row.params.keyword; delete row.params.keywords; delete row.params.query; delete row.params.search_keyword; delete row.params.regions; delete row.params.mode; delete row.params.max_results;
+      row.params.max_users=Math.max(1,Math.min(200,Number((el('oeNodeDouyinTouchMaxUsers') || {}).value || 20)));
+      row.params.touch_actions=normalizeDouyinFollowupActions([
+        el('oeNodeDouyinFollowupReplyComments') && el('oeNodeDouyinFollowupReplyComments').checked ? 'reply_comments' : '',
+        el('oeNodeDouyinFollowupFollowComment') && el('oeNodeDouyinFollowupFollowComment').checked ? 'follow_comment' : '',
+        el('oeNodeDouyinFollowupMentionComment') && el('oeNodeDouyinFollowupMentionComment').checked ? 'mention_comment' : '',
+        el('oeNodeDouyinFollowupDirectMessage') && el('oeNodeDouyinFollowupDirectMessage').checked ? 'direct_message' : ''
+      ]);
+      row.params.followup_actions=row.params.touch_actions.slice();
+      row.params.customer_scope='precise_pool';
+    } else { delete row.params.keyword; delete row.params.regions; delete row.params.max_results; delete row.params.max_users; delete row.params.mode; delete row.params.followup_actions; delete row.params.touch_actions; delete row.params.customer_scope; }
     delete row.params.followup_action; delete row.params.group_invite_rules;
     var next=existing ? Object.assign({},existing) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)};
     next.time=time; next.end_time=end; next.time_range=time + (end ? '-' + end : ''); next.ability_key=key; next.ability_label=label; next.note=note; next.plan=planForRow(row); if (existing) next.children=existing.children || existing.actions || [];

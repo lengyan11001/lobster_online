@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -51,8 +51,6 @@ _CLIENT_CODE_VERSION_FILE = Path(__file__).resolve().parent.parent.parent.parent
 _CLIENT_ROOT = _CLIENT_CODE_VERSION_FILE.parent
 _CLIENT_UPDATE_CHECK_SCRIPT = _CLIENT_ROOT / "scripts" / "check_client_code_update.py"
 _CLIENT_UPDATE_STATUS_PREFIX = "__LOBSTER_UPDATE_STATUS__="
-_CLIENT_UPDATE_STATUS_CACHE_SECONDS = 60.0
-_client_update_status_cache: tuple[float, dict[str, Any]] | None = None
 _client_update_status_lock = asyncio.Lock()
 _MACHINE_ID_FILE_NAME = "machine_identity.json"
 _MACHINE_INSTANCE_ID_CACHE = ""
@@ -189,19 +187,10 @@ def _run_client_update_status_check() -> dict[str, Any]:
 
 
 async def _client_update_status() -> dict[str, Any]:
-    global _client_update_status_cache
-    now = time.monotonic()
-    cached = _client_update_status_cache
-    if cached and now - cached[0] < _CLIENT_UPDATE_STATUS_CACHE_SECONDS:
-        return dict(cached[1])
+    # This endpoint drives the update badge. Do not cache the result: after an
+    # OTA is applied, the next poll must reflect the newly installed marker.
     async with _client_update_status_lock:
-        now = time.monotonic()
-        cached = _client_update_status_cache
-        if cached and now - cached[0] < _CLIENT_UPDATE_STATUS_CACHE_SECONDS:
-            return dict(cached[1])
-        payload = await asyncio.to_thread(_run_client_update_status_check)
-        _client_update_status_cache = (time.monotonic(), dict(payload))
-        return payload
+        return await asyncio.to_thread(_run_client_update_status_check)
 
 
 @router.get("/api/edition", summary="在线版（固定 edition=online）")
@@ -238,7 +227,10 @@ async def get_edition():
 
 
 @router.get("/api/client-update/status", summary="检查本机客户端是否有新版本")
-async def get_client_update_status():
+async def get_client_update_status(response: Response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     return await _client_update_status()
 
 

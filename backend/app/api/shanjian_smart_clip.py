@@ -68,6 +68,7 @@ class SubmitClipBody(TokenBody):
     resource_preprocess_method: str = "roughCut"
     material_composition: str = "random"
     video_duration: int = 30
+    struct_layers: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class TaskBody(TokenBody):
@@ -403,14 +404,23 @@ async def submit_clip(
             file_url = str(item.get("fileUrl") or item.get("file_url") or "").strip()
             kind = str(item.get("type") or "").strip()
             if file_url and kind in {"image", "video"}:
-                cleaned.append({"type": kind, "fileUrl": file_url})
+                row = {"type": kind, "fileUrl": file_url}
+                if "soundSwitch" in item or "sound_switch" in item:
+                    row["soundSwitch"] = bool(item.get("soundSwitch", item.get("sound_switch")))
+                cleaned.append(row)
         if cleaned:
             payload["materials"] = cleaned
-    if body.introduce_name.strip() or body.introduce_description.strip():
+    intro_name = body.introduce_name.strip() or str(body.title or "").strip() or "智能剪辑"
+    if body.introduce_description.strip():
         payload["introduceCard"] = {
-            "name": body.introduce_name.strip(),
+            "name": intro_name[:80],
             "description": body.introduce_description.strip(),
         }
+    if body.struct_layers:
+        payload["structLayers"] = [
+            item for item in body.struct_layers[:10]
+            if isinstance(item, dict) and str(item.get("markCode") or item.get("mark_code") or "").strip()
+        ]
 
     upstream = await _post(endpoint, body.token, payload)
     data = _data(upstream)

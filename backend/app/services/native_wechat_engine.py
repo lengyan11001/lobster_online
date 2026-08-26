@@ -2655,12 +2655,38 @@ async def _run_auto_reply_worker(account_id: str) -> None:
             _AUTO_REPLY_WORKERS.pop(account_id, None)
 
 
+_LOCAL_GROUP_CHAT_TYPES = {"group", "chatroom"}
+_LOCAL_PRIVATE_CHAT_TYPES = {"friend", "direct", "private", "personal", "single"}
+_LOCAL_NON_PRIVATE_CHAT_TYPES = {"official", "subscription", "system", "service", "filehelper"}
+
+
+def _normalize_local_chat_type(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    aliases = {
+        "chat_room": "chatroom",
+        "chat-room": "chatroom",
+        "room": "chatroom",
+        "one_to_one": "friend",
+        "one-to-one": "friend",
+        "private_chat": "private",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def _local_chat_type_is_group(value: Any) -> bool:
+    return _normalize_local_chat_type(value) in _LOCAL_GROUP_CHAT_TYPES
+
+
+def _local_chat_type_is_private(value: Any) -> bool:
+    return _normalize_local_chat_type(value) in _LOCAL_PRIVATE_CHAT_TYPES
+
+
 def _looks_like_group_session(item: Dict[str, Any]) -> bool:
     peer_id = str(item.get("peer_id") or item.get("display_name") or "").strip()
-    chat_type = str(item.get("chat_type") or "").strip().lower()
-    if chat_type in {"group", "chatroom"}:
+    chat_type = _normalize_local_chat_type(item.get("chat_type"))
+    if _local_chat_type_is_group(chat_type):
         return True
-    if chat_type in {"official", "subscription"}:
+    if chat_type in _LOCAL_NON_PRIVATE_CHAT_TYPES:
         return True
     if peer_id in {"公众号", "服务号", "订阅号", "文件传输助手"}:
         return True
@@ -2701,8 +2727,10 @@ def _raw_local_message_is_group(raw: Dict[str, Any]) -> bool:
     """Detect group messages from wxauto4 data without opening a profile."""
     if not isinstance(raw, dict):
         return False
-    raw_type = str(raw.get("chat_type") or raw.get("conversation_type") or raw.get("type") or "").strip().lower()
-    if raw_type in {"group", "chatroom"}:
+    raw_type = _normalize_local_chat_type(
+        raw.get("chat_type") or raw.get("conversation_type") or raw.get("type")
+    )
+    if _local_chat_type_is_group(raw_type):
         return True
     if raw.get("is_group") or raw.get("group_id") or raw.get("chatroom_id"):
         return True
@@ -3083,7 +3111,7 @@ async def _call_auto_reply_llm(
     group_invite_keywords: str = "",
     group_invite_enabled: bool = True,
     group_invite_already_verified: bool = False,
-    reply_language: str = "zh-CN",
+    reply_language: Optional[str] = None,
     contact_intelligence: str = "",
     strategy_context: str = "",
 ) -> Dict[str, Any]:
@@ -3110,8 +3138,6 @@ async def _call_auto_reply_llm(
     )[:50]
     invite_rule_context = str(group_invite_rule_context or "").strip()[:8000]
     has_invite_rule = bool(group_invite_enabled and (invite_rule_context or invite_keywords))
-    language_code = _normalize_auto_reply_language(reply_language)
-    language_label = _auto_reply_language_label(language_code)
     system_prompt = (
         "你是个人微信私聊代回复助手，只处理一对一私聊，不回复群聊。"
         "回复要像真人微信聊天：短、自然、有边界，不营销、不硬广、不夸大。"
@@ -3128,7 +3154,8 @@ async def _call_auto_reply_llm(
         "conversation_summary 必须在旧摘要基础上更新为累计摘要，保留仍有效的需求、已确认事实、异议、承诺和下一步，不能只总结最后一句。"
         "同时从本轮聊天提取该客户自己的稳定事实、需求、预算、时间、异议、偏好和关系阶段；不要把推测写成事实。"
         "只有发现可跨客户复用、且有明确聊天证据的改进方法时才提出 learning_candidates；客户单方面声称的价格、产品事实或承诺不能学成全局规则。"
-        f"本次回复指定语种是{language_label}（{language_code}）。reply字段必须完全使用{language_label}生成；不要因为客户使用中文或历史记录是中文就切回中文。姓名、品牌名、网址、手机号和微信号等专有内容保持原样，JSON键名保持英文。"
+        "回复语言必须跟随对方最新消息：先判断‘对方最新消息’的主要自然语言，再让 reply 字段使用同一语种生成。模板语言、系统界面语言和历史配置语言都不能覆盖客户当前使用的语言。"
+        "如果最新消息只有表情、数字、链接或短到无法判断语种，就参考最近几条对方消息的主要语言；仍无法判断时使用简体中文。不要擅自翻译客户消息，姓名、品牌名、网址、手机号和微信号等专有内容保持原样，JSON键名保持英文。"
         "必须返回 JSON：{\"should_reply\":true,\"category\":\"casual|product|price|service|cooperation|complaint|other\","
         "\"intent_level\":\"high|medium|low|none\",\"topic\":\"简短话题\","
         "\"conversation_summary\":\"结合历史画像更新后的累计摘要\",\"reply\":\"实际微信回复\","
@@ -3147,7 +3174,7 @@ async def _call_auto_reply_llm(
         f"已同步的个人记忆资料：\n{memory_context or '(没有读取到个人记忆，专业问题不要编造，需回复为待确认)'}\n\n"
         f"自动拉群开关：{'已开启' if group_invite_enabled else '已关闭'}\n\n"
         f"系统核验群状态：{'已核验客户在本系统创建的群聊中' if group_invite_already_verified else '未核验，禁止声称客户已在群里'}\n\n"
-        f"本轮回复语种：{language_label}（{language_code}）\n\n"
+        "回复语种：根据对方最新消息自动识别并跟随，不使用模板语言配置。\n\n"
         f"拉群判断规则文件：\n{invite_rule_context or '(未配置，本轮不得判定拉群)'}\n\n"
         f"历史拉群关键词（仅兼容旧设置）：\n{('、'.join(invite_keywords)) if invite_keywords else '(无)'}"
     )
@@ -3507,6 +3534,7 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         "group_invite_not_executable": "拉群配置需调整",
         "failed": "回复失败",
         "skipped_group": "群聊已跳过",
+        "skipped_unknown_chat_type": "会话类型未确认，已跳过",
         "skipped": "已跳过",
     }
     category_counts: Dict[str, int] = {}
@@ -3538,6 +3566,7 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         "skipped": int(result.get("skipped") or 0),
         "failed": int(result.get("failed") or 0),
         "skipped_groups": int(result.get("skipped_groups") or 0),
+        "skipped_unknown_chat_type": int(result.get("skipped_unknown_chat_type") or 0),
         "friend_requests_checked": int(result.get("friend_requests_checked") or 0),
         "friend_requests_accepted": int(result.get("friend_requests_accepted") or 0),
         "friend_requests_failed": int(result.get("friend_requests_failed") or 0),
@@ -3562,7 +3591,7 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         f"- 新好友申请：检查 {report['friend_requests_checked']} 条，已同意 {report['friend_requests_accepted']} 条，失败 {report['friend_requests_failed']} 条",
         f"- 高意向会话：{report['high_intent_count']} 个",
         f"- 命中拉群条件：{report['group_invite_match_count']} 个",
-        f"- 跳过：{report['skipped']} 个；群聊/公众号排除：{report['skipped_groups']} 个；失败：{report['failed']} 个",
+        f"- 跳过：{report['skipped']} 个；群聊/公众号排除：{report['skipped_groups']} 个；类型未确认：{report['skipped_unknown_chat_type']} 个；失败：{report['failed']} 个",
     ]
     lines.append(
         f"- \u65b0\u597d\u53cb\u6b22\u8fce\u8bed\uff1a\u5df2\u53d1\u9001 {report['friend_welcome_sent']} \u6761\uff0c"
@@ -3713,6 +3742,7 @@ async def run_auto_reply_once(
         "replied": 0,
         "skipped": 0,
         "skipped_groups": 0,
+        "skipped_unknown_chat_type": 0,
         "failed": 0,
         "items": [],
         "friend_requests_checked": 0,
@@ -3740,7 +3770,8 @@ async def run_auto_reply_once(
             "document_count": int(memory.get("document_count") or 0),
             "titles": list(memory.get("titles") or []),
         },
-        "reply_language": _normalize_auto_reply_language(cfg.get("language")),
+        "reply_language": "auto",
+        "reply_language_source": "customer_message",
         "intelligence_outbox": {"processed": 0, "remaining": 0},
     }
     try:
@@ -3847,21 +3878,21 @@ async def run_auto_reply_once(
                     load_more_pages=0,
                     select_via_uia=False,
                     current_selected=True,
-                    # The session row was already clicked above.  Do not ask
-                    # wxauto4 for ChatBox.get_info() here: wxauto4 41.x opens
-                    # the contact/avatar area while resolving chat identity.
-                    read_chat_info=False,
+                    # The session row was already clicked above.  Read the
+                    # selected chat's real type before any AI call or send;
+                    # wxauto4 41.x returns friend/group and member count here.
+                    read_chat_info=True,
                     download_attachments=False,
                 )
                 _collect_local_driver_recovery(result, sync_result)
                 chat_info = sync_result.get("chat_info") if isinstance(sync_result.get("chat_info"), dict) else {}
                 actual_peer = str(sync_result.get("peer_id") or peer_id)
-                chat_type = str((chat_info or {}).get("chat_type") or "").strip().lower()
+                chat_type = _normalize_local_chat_type((chat_info or {}).get("chat_type"))
                 if chat_type in {"", "unknown"}:
-                    chat_type = str(sync_result.get("message_chat_type") or "").strip().lower()
+                    chat_type = _normalize_local_chat_type(sync_result.get("message_chat_type"))
                 if chat_type in {"", "unknown"}:
-                    chat_type = _known_local_peer_chat_type(account_id, actual_peer)
-                if chat_type in {"group", "chatroom", "official", "subscription"} or _looks_like_group_session(
+                    chat_type = _normalize_local_chat_type(_known_local_peer_chat_type(account_id, actual_peer))
+                if _local_chat_type_is_group(chat_type) or chat_type in _LOCAL_NON_PRIVATE_CHAT_TYPES or _looks_like_group_session(
                     {
                         "peer_id": actual_peer,
                         "display_name": display_name,
@@ -3871,6 +3902,22 @@ async def run_auto_reply_once(
                 ):
                     result["skipped_groups"] += 1
                     item_result.update({"status": "skipped_group", "chat_type": chat_type or "group_like"})
+                    result["items"].append(item_result)
+                    continue
+                if not _local_chat_type_is_private(chat_type):
+                    # Never guess that an unknown selected session is a
+                    # private chat.  A stale/partial wxauto4 response must be
+                    # skipped rather than allowed to reach the model or send.
+                    result["skipped"] += 1
+                    result["skipped_unknown_chat_type"] += 1
+                    item_result.update(
+                        {
+                            "status": "skipped_unknown_chat_type",
+                            "chat_type": chat_type or "unknown",
+                            "error": "未能确认当前微信会话是一对一私聊，已跳过",
+                            "reply_suppressed": True,
+                        }
+                    )
                     result["items"].append(item_result)
                     continue
                 current_peer = actual_peer
@@ -3967,7 +4014,6 @@ async def run_auto_reply_once(
                     group_invite_keywords=str(cfg.get("group_invite_keywords") or ""),
                     group_invite_enabled=bool(cfg.get("group_invite_enabled")),
                     group_invite_already_verified=group_invite_already_verified,
-                    reply_language=_normalize_auto_reply_language(cfg.get("language")),
                     contact_intelligence=contact_intelligence,
                     strategy_context=strategy_context,
                 )
@@ -4889,9 +4935,9 @@ def _persist_session(account_id: str, session: Dict[str, Any], *, chat_type: str
 
 
 def _persist_peer_chat_info(account_id: str, peer_id: str, info: Dict[str, Any]) -> None:
-    chat_type = str(info.get("chat_type") or "unknown").strip() or "unknown"
+    chat_type = _normalize_local_chat_type(info.get("chat_type")) or "unknown"
     display_name = str(info.get("chat_name") or peer_id).strip() or peer_id
-    if chat_type == "group":
+    if _local_chat_type_is_group(chat_type):
         _persist_group(
             account_id,
             {
@@ -4902,8 +4948,12 @@ def _persist_peer_chat_info(account_id: str, peer_id: str, info: Dict[str, Any])
                 "raw": info,
             },
         )
-    elif chat_type in {"friend", "official"}:
-        _persist_session(account_id, {"peer_id": peer_id, "display_name": display_name, "raw": info}, chat_type="direct" if chat_type == "friend" else chat_type)
+    elif _local_chat_type_is_private(chat_type) or chat_type in _LOCAL_NON_PRIVATE_CHAT_TYPES:
+        _persist_session(
+            account_id,
+            {"peer_id": peer_id, "display_name": display_name, "raw": info},
+            chat_type="direct" if _local_chat_type_is_private(chat_type) else chat_type,
+        )
     else:
         _persist_session(account_id, {"peer_id": peer_id, "display_name": display_name, "raw": info}, chat_type=chat_type)
 
@@ -7392,6 +7442,7 @@ def sync_local_messages_legacy(account_id: str) -> Dict[str, Any]:
 
 def _current_local_chat_info(wx: Any, *, fallback_name: str = "") -> Dict[str, Any]:
     """Read the selected chat identity without opening its profile panel."""
+    fallback_info: Dict[str, Any] = {}
     chat_box = getattr(wx, "ChatBox", None)
     get_info = getattr(chat_box, "get_info", None)
     if callable(get_info):
@@ -7403,20 +7454,33 @@ def _current_local_chat_info(wx: Any, *, fallback_name: str = "") -> Dict[str, A
                 result = dict(info)
                 if fallback_name and not str(result.get("chat_name") or "").strip():
                     result["chat_name"] = fallback_name
-                return result
+                if _normalize_local_chat_type(result.get("chat_type")) not in {"", "unknown"}:
+                    return result
+                fallback_info = result
         except Exception:
             pass
-    # Older wxauto4 versions do not expose ChatBox.get_info().
+    # ChatInfo is the authoritative fallback when ChatBox.get_info() does not
+    # include a type.  Current wxauto4 returns friend/group and member count.
     chat_info = getattr(wx, "ChatInfo", None)
     if callable(chat_info):
-        info = chat_info()
-        if not isinstance(info, dict):
-            info = _obj_dict(info)
-        result = dict(info or {})
-        if fallback_name and not str(result.get("chat_name") or "").strip():
-            result["chat_name"] = fallback_name
-        return result
-    return {"chat_name": fallback_name or "current", "chat_type": "unknown"}
+        try:
+            info = chat_info()
+            if not isinstance(info, dict):
+                info = _obj_dict(info)
+            merged = {**fallback_info, **dict(info or {})}
+            if fallback_name and not str(merged.get("chat_name") or "").strip():
+                merged["chat_name"] = fallback_name
+            if _normalize_local_chat_type(merged.get("chat_type")) not in {"", "unknown"}:
+                return merged
+            fallback_info = merged
+        except Exception:
+            pass
+    attr_type = _normalize_local_chat_type(getattr(wx, "chat_type", ""))
+    if attr_type not in {"", "unknown"}:
+        fallback_info["chat_type"] = attr_type
+    if fallback_name and not str(fallback_info.get("chat_name") or "").strip():
+        fallback_info["chat_name"] = fallback_name
+    return fallback_info or {"chat_name": fallback_name or "current", "chat_type": "unknown"}
 
 
 def _sync_local_messages_once(
@@ -11372,6 +11436,37 @@ def _submit_local_wechat_typed_message(
     raise RuntimeError("微信消息发送后未在聊天记录中出现，未确认发送成功")
 
 
+def _verify_local_send_chat(
+    wx: Any,
+    expected_peer: str,
+    *,
+    strict_private: bool = False,
+    allow_group: bool = False,
+) -> Dict[str, Any]:
+    """Verify the selected WeChat chat immediately before typing or sending."""
+    info = _current_local_chat_info(wx, fallback_name="")
+    actual_peer = str((info or {}).get("chat_name") or "").strip()
+    chat_type = _normalize_local_chat_type((info or {}).get("chat_type"))
+    is_group = _local_chat_type_is_group(chat_type)
+    if (is_group and not allow_group) or chat_type in _LOCAL_NON_PRIVATE_CHAT_TYPES:
+        raise RuntimeError(f"当前微信会话不是私聊（chat_type={chat_type or 'unknown'}），已阻止发送")
+    if not is_group and _looks_like_group_session({"peer_id": actual_peer, "display_name": actual_peer, "chat_type": chat_type}):
+        raise RuntimeError(f"当前微信会话疑似群聊（{actual_peer or '未命名'}），已阻止发送")
+    expected = str(expected_peer or "").strip()
+    if allow_group:
+        if not is_group:
+            raise RuntimeError("新建群欢迎语发送时未能确认当前会话是群聊，已阻止发送")
+        if not actual_peer or (expected and actual_peer != expected):
+            raise RuntimeError(
+                f"当前微信群与新建目标不一致（当前={actual_peer or '未命名'}，目标={expected or '未命名'}），已阻止发送"
+            )
+    if strict_private and not _local_chat_type_is_private(chat_type):
+        raise RuntimeError("未能确认当前微信会话是一对一私聊，已阻止发送")
+    if strict_private and expected and actual_peer and expected != actual_peer:
+        raise RuntimeError(f"当前微信会话与目标不一致（当前={actual_peer}，目标={expected}），已阻止发送")
+    return {"chat_type": chat_type or "unknown", "chat_name": actual_peer}
+
+
 def _send_text_local_slow_once(
     account_id: str,
     peer_id: str,
@@ -11398,6 +11493,18 @@ def _send_text_local_slow_once(
         except Exception as exc:
             raise RuntimeError(f"open local WeChat chat failed: {exc}") from exc
         time.sleep(random.uniform(0.55, 1.1))
+    raw_meta = raw_meta if isinstance(raw_meta, dict) else {}
+    driver_name = str(raw_meta.get("driver") or "").strip()
+    strict_private = driver_name == "native_wechat_auto_reply"
+    # Group welcomes are the one intentional group send.  The caller still
+    # supplies the freshly-created group name, which is checked below.
+    allow_group = driver_name == "native_wechat_group_welcome"
+    verified_chat = _verify_local_send_chat(
+        wx,
+        peer_id,
+        strict_private=strict_private,
+        allow_group=allow_group,
+    )
     _focus_local_wechat(hwnd)
 
     # ChatWith usually focuses the input box. Clear the draft and paste once;
@@ -11419,7 +11526,14 @@ def _send_text_local_slow_once(
         "send_verified": bool(submit_result.get("verified")),
         "send_attempts": int(submit_result.get("attempts") or 1),
         **(raw_meta or {}),
+        "chat_type": verified_chat.get("chat_type"),
+        "chat_name": verified_chat.get("chat_name"),
     }
+    stored_chat_type = (
+        verified_chat.get("chat_type")
+        if _local_chat_type_is_private(verified_chat.get("chat_type"))
+        else "unknown"
+    )
     with _connect() as conn:
         conn.execute(
             """
@@ -11439,7 +11553,7 @@ def _send_text_local_slow_once(
               raw_json=excluded.raw_json,
               updated_at=excluded.updated_at
             """,
-            (_stable_key(account_id, peer_id), account_id, peer_id, peer_id, "direct", now, _json_dumps(raw), now, now),
+            (_stable_key(account_id, peer_id), account_id, peer_id, peer_id, stored_chat_type, now, _json_dumps(raw), now, now),
         )
     return {"ok": True, "client_id": client_id, "peer_id": peer_id, "driver": "pc_wechat_slow_typing"}
 
@@ -13461,7 +13575,10 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
                         account_id,
                         group_key,
                         welcome_message,
-                        {"driver": "native_wechat_group_welcome", "group_task_id": task_id},
+                        {
+                            "driver": "native_wechat_group_welcome",
+                            "group_task_id": task_id,
+                        },
                     )
                     if bool(payload.get("use_current_chat")):
                         welcome_args = (*welcome_args, True)
