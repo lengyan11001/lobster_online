@@ -1,7 +1,7 @@
 {
-  "version": "1.0.214",
-  "build": 258,
-  "applied_at": "2026-08-26T13:21:14+08:00",
-  "note": "provider fallback routing latest",
-  "bundle_sha256": "636bcf06521c52b4c93567810ab82c872dd708e52a7d4175fe9b96fc56c51f95"
+  "version": "1.0.215",
+  "build": 259,
+  "applied_at": "2026-08-26T13:29:37+08:00",
+  "note": "provider fallback routing and workflow final",
+  "bundle_sha256": "70ebb4ff5ed2a4269a8255426e20dcdc83028c0892ed67b63fdd93a1de86070b"
 }
