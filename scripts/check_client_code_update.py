@@ -1413,13 +1413,17 @@ def _apply_bundle_zip(zpath: Path, paths: list[str], tdir: Path) -> list[str]:
         _clear_pending_bundle_rollback_marker()
         raise
 
+    # Every requested path is now installed. Commit the bundle transaction
+    # before removing backups so an interruption during best-effort cleanup
+    # cannot roll a completed update (including its version marker) back on
+    # the next launch.
+    _clear_pending_bundle_rollback_marker()
     for _, backup in backups:
-        if backup.exists():
+        if backup is not None and backup.exists():
             try:
                 _delete_path(backup)
             except Exception as cleanup_exc:
                 print(f"[code] [WARN] cleanup backup failed for {backup}: {cleanup_exc}", flush=True)
-    _clear_pending_bundle_rollback_marker()
     print(f"[code-progress] apply_done count={len(applied)}", flush=True)
     return applied
 

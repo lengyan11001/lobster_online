@@ -107,6 +107,38 @@ def test_packaging_records_bundle_identity_for_same_build_update_check(tmp_path)
     )
 
 
+def test_bundle_apply_succeeds_when_target_did_not_exist(monkeypatch, tmp_path):
+    root = tmp_path / "client"
+    root.mkdir()
+    update_state = root / ".updates"
+    bundle = tmp_path / "bundle.zip"
+    with zipfile.ZipFile(bundle, "w") as archive:
+        archive.writestr("new-runtime-file.txt", "installed")
+
+    monkeypatch.setattr(updater, "ROOT", root)
+    monkeypatch.setattr(updater, "_PENDING_UPDATE_DIR", update_state)
+    monkeypatch.setattr(
+        updater,
+        "_PENDING_PATH_REPLACE_MARKER",
+        update_state / "pending_path_replace.json",
+    )
+    monkeypatch.setattr(
+        updater,
+        "_PENDING_BUNDLE_ROLLBACK_MARKER",
+        update_state / "pending_bundle_rollback.json",
+    )
+
+    applied = updater._apply_bundle_zip(
+        bundle,
+        ["new-runtime-file.txt"],
+        tmp_path / "work",
+    )
+
+    assert applied == ["new-runtime-file.txt"]
+    assert (root / "new-runtime-file.txt").read_text(encoding="utf-8") == "installed"
+    assert not updater._PENDING_BUNDLE_ROLLBACK_MARKER.exists()
+
+
 def test_check_only_reports_new_build_without_applying_update(monkeypatch, capsys):
     monkeypatch.setattr(
         updater,
@@ -298,9 +330,14 @@ def test_no_dependency_ota_excludes_nested_node_modules(monkeypatch):
 
 def test_default_ota_is_encrypted_website_only(monkeypatch, tmp_path):
     (tmp_path / "backend").mkdir()
+    (tmp_path / "scripts").mkdir()
     (tmp_path / "static").mkdir()
     (tmp_path / "skills" / "should_not_ship").mkdir(parents=True)
     (tmp_path / "backend" / "sample.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (tmp_path / "scripts" / "check_client_code_update.py").write_text(
+        "VALUE = 1\n",
+        encoding="utf-8",
+    )
     (tmp_path / "static" / "index.html").write_text("<html></html>\n", encoding="utf-8")
     (tmp_path / "skills" / "should_not_ship" / "SKILL.md").write_text("secret\n", encoding="utf-8")
     version = {"version": "1.0.200", "build": 244}
@@ -321,6 +358,8 @@ def test_default_ota_is_encrypted_website_only(monkeypatch, tmp_path):
         names = set(archive.namelist())
         assert "backend/sample.pyc" in names
         assert "backend/sample.py" in names
+        assert "scripts/check_client_code_update.py" in names
+        assert "scripts/check_client_code_update.pyc" in names
         assert "static/index.html" in names
         assert not any(name.startswith("skills/") for name in names)
         loader = archive.read("backend/sample.py").decode("utf-8")

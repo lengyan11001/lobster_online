@@ -190,6 +190,93 @@ OPENCLAW_SKIP_FILE_NAMES = {
 
 SKILL_RUNTIME_DIR_NAMES = {"runs", "job_runs", "output", "cache"}
 
+REMOVED_3D_WHEEL_PREFIXES = (
+    "filelock-",
+    "flatbuffers-",
+    "fsspec-",
+    "imageio-",
+    "jinja2-",
+    "jsonschema-",
+    "jsonschema_specifications-",
+    "lazy_loader-",
+    "llvmlite-",
+    "markupsafe-",
+    "mpmath-",
+    "networkx-",
+    "numba-",
+    "onnxruntime-",
+    "opencv_python-",
+    "platformdirs-",
+    "pooch-",
+    "pymeshfix-",
+    "pymatting-",
+    "referencing-",
+    "rembg-",
+    "rpds_py-",
+    "scikit_image-",
+    "scipy-",
+    "segment_anything-",
+    "shapely-",
+    "sympy-",
+    "tifffile-",
+    "torch-",
+    "torchvision-",
+    "trimesh-",
+)
+
+REMOVED_3D_SITE_PACKAGE_PREFIXES = (
+    "cv2",
+    "filelock",
+    "flatbuffers",
+    "fsspec",
+    "functorch",
+    "imageio",
+    "isympy.",
+    "jinja2",
+    "jsonschema",
+    "jsonschema_specifications",
+    "lazy_loader",
+    "llvmlite",
+    "llvmlite.libs",
+    "markupsafe",
+    "mpmath",
+    "networkx",
+    "numba",
+    "onnxruntime",
+    "opencv_python",
+    "platformdirs",
+    "pooch",
+    "pymatting",
+    "pymeshfix",
+    "pymeshfix.libs",
+    "referencing",
+    "rembg",
+    "rpds",
+    "rpds_py",
+    "scikit_image",
+    "scipy",
+    "scipy.libs",
+    "segment_anything",
+    "shapely",
+    "shapely.libs",
+    "skimage",
+    "sympy",
+    "tifffile",
+    "torch",
+    "torchgen",
+    "torchvision",
+    "trimesh",
+)
+
+REMOVED_3D_SCRIPT_NAMES = {
+    "isympy.exe",
+    "numba",
+    "rembg.exe",
+    "torchfrtrace.exe",
+    "torchrun.exe",
+    "trimesh.exe",
+}
+
 OPENCLAW_DEFAULT_WORKSPACE_FILES = (
     "AGENTS.md",
     "BOOTSTRAP.md",
@@ -257,6 +344,30 @@ def _should_skip_rel(rel_posix: str, *, is_dir: bool) -> bool:
     if rel_posix.startswith(("static/uploads/", "static/hifly_previews/")):
         return True
     if rel_posix.startswith("desktop/webview2/fixed-runtime/"):
+        return True
+    if rel_posix.startswith("models/sam/"):
+        return True
+    if (
+        len(parts) >= 4
+        and parts[0] == "python"
+        and parts[1].lower() == "lib"
+        and parts[2].lower() == "site-packages"
+        and parts[3].lower().startswith(REMOVED_3D_SITE_PACKAGE_PREFIXES)
+    ):
+        return True
+    if (
+        len(parts) >= 3
+        and parts[0] == "python"
+        and parts[1].lower() == "scripts"
+        and parts[2].lower() in REMOVED_3D_SCRIPT_NAMES
+    ):
+        return True
+    if (
+        len(parts) >= 3
+        and parts[0] == "deps"
+        and parts[1] == "wheels"
+        and name.lower().startswith(REMOVED_3D_WHEEL_PREFIXES)
+    ):
         return True
 
     if parts[0] == "openclaw":

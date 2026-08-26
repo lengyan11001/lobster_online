@@ -20,7 +20,8 @@
     momentContactSelected: {},
     childMomentContactSelected: {},
     contextGeneration: 0,
-    installationId: ''
+    installationId: '',
+    deviceRefreshPromise: null
   };
 
   var SALES_ROWS = [
@@ -630,6 +631,34 @@
       return state.devices;
     });
   }
+  function refreshDeviceStatus() {
+    if (state.deviceRefreshPromise) return state.deviceRefreshPromise;
+    var previous=state.devices.slice();
+    state.deviceRefreshPromise=api('/api/h5-chat/devices/status?_=' + Date.now()).then(function(data){
+      var devices=Array.isArray(data && data.devices) ? data.devices : [];
+      devices.forEach(function(device){
+        var old=previous.find(function(item){return String(item && item.installation_id || '') === String(device && device.installation_id || '');});
+        if (old && Array.isArray(old.wechat_contacts) && old.wechat_contacts.length) device.wechat_contacts=old.wechat_contacts;
+      });
+      state.devices=devices;
+      renderDevices();
+      return devices;
+    }).finally(function(){state.deviceRefreshPromise=null;});
+    return state.deviceRefreshPromise;
+  }
+  function waitForOnlineDevice(iid) {
+    var retryDelays=[0,300,700,1200];
+    function attempt(index) {
+      var wait=retryDelays[index] || 0;
+      return new Promise(function(resolve){setTimeout(resolve,wait);}).then(refreshDeviceStatus).then(function(devices){
+        var device=devices.find(function(item){return String(item && item.installation_id || '') === iid;});
+        if (device && device.online) return device;
+        if (index + 1 < retryDelays.length) return attempt(index + 1);
+        throw new Error('请选择在线的 Online 设备');
+      });
+    }
+    return attempt(0);
+  }
   function loadActive(expectedInstallationId) {
     var iid=String(expectedInstallationId || selectedDeviceId()).trim();
     if (!iid) { state.active=null; renderStatus(); return Promise.resolve(null); }
@@ -669,23 +698,24 @@
     };
   }
   function demoNode(index) {
-    var iid=selectedDeviceId(), device=state.devices.find(function(item){return String(item.installation_id || '') === iid;});
+    var iid=selectedDeviceId();
     if (!iid) throw new Error('请先选择 Online 设备');
-    if (!device || !device.online) throw new Error('请选择在线的 Online 设备');
     var plan=workflowDemoPlan(state.nodes[Number(index)]);
     return runSubmission('demo',function(){
-      return api('/api/scheduled-tasks/tasks',{method:'POST',headers:{'X-Installation-Id':iid},json:{
-        title:plan.title,
-        task_kind:plan.task_kind,
-        content:plan.content,
-        payload:plan.payload,
-        schedule_type:'once',
-        interval_seconds:60,
-        start_at:'',
-        daily_times:[],
-        timezone_offset_minutes:-new Date().getTimezoneOffset(),
-        installation_ids:[iid]
-      }}).then(function(){if(typeof toast === 'function') toast('演示任务已下发，可在工作历史查看结果');});
+      return waitForOnlineDevice(iid).then(function(){
+        return api('/api/scheduled-tasks/tasks',{method:'POST',headers:{'X-Installation-Id':iid},json:{
+          title:plan.title,
+          task_kind:plan.task_kind,
+          content:plan.content,
+          payload:plan.payload,
+          schedule_type:'once',
+          interval_seconds:60,
+          start_at:'',
+          daily_times:[],
+          timezone_offset_minutes:-new Date().getTimezoneOffset(),
+          installation_ids:[iid]
+        }});
+      }).then(function(){if(typeof toast === 'function') toast('演示任务已下发，可在工作历史查看结果');});
     });
   }
   function runSubmission(kind, task) { if (state.submitting) return Promise.reject(new Error('操作正在处理中，请勿重复提交')); state.submitting=kind; clearError(); render(); return Promise.resolve().then(task).finally(function(){state.submitting='';render();}); }
@@ -781,6 +811,12 @@
   }
   window.addEventListener('lobster:installation-id-changed', handleInstallationContextChange);
   window.addEventListener('lobster:device-seed-changed', handleInstallationContextChange);
+  function refreshDevicesOnForeground() {
+    if (document.visibilityState === 'hidden' || !el('content-h5-employees')) return;
+    refreshDeviceStatus().catch(function(){});
+  }
+  window.addEventListener('focus', refreshDevicesOnForeground);
+  document.addEventListener('visibilitychange', refreshDevicesOnForeground);
   function syncNodeModalFields() {
     var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), label=String((el('oeNodeLabel') || {}).value || ''), note=String((el('oeNodeNote') || {}).value || ''), takeover=key === 'native_wechat_poll', douyinPrivate=isDouyinPrivate({ability_key:key,ability_label:label,note:note}), douyinCollection=key === 'douyin_leads' && salesAction(note || label) === 'search_collect', douyinTouch=key === 'douyin_leads' && salesAction(note || label) === 'precise_touch';
     if (el('oeNodeGroupInviteField')) el('oeNodeGroupInviteField').hidden=!takeover;

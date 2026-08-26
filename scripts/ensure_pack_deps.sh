@@ -8,6 +8,46 @@ mkdir -p deps/wheels
 
 shopt -s nullglob
 
+# 3D/SAM runtimes are optional and must not be shipped in the common client package.
+_3d_wheels=(
+  deps/wheels/torch-*.whl
+  deps/wheels/torchvision-*.whl
+  deps/wheels/opencv_python-*.whl
+  deps/wheels/segment_anything-*.whl
+  deps/wheels/trimesh-*.whl
+  deps/wheels/pymeshfix-*.whl
+  deps/wheels/shapely-*.whl
+  deps/wheels/sympy-*.whl
+  deps/wheels/filelock-*.whl
+  deps/wheels/flatbuffers-*.whl
+  deps/wheels/fsspec-*.whl
+  deps/wheels/imageio-*.whl
+  deps/wheels/jinja2-*.whl
+  deps/wheels/jsonschema-*.whl
+  deps/wheels/jsonschema_specifications-*.whl
+  deps/wheels/lazy_loader-*.whl
+  deps/wheels/llvmlite-*.whl
+  deps/wheels/markupsafe-*.whl
+  deps/wheels/mpmath-*.whl
+  deps/wheels/networkx-*.whl
+  deps/wheels/numba-*.whl
+  deps/wheels/onnxruntime-*.whl
+  deps/wheels/platformdirs-*.whl
+  deps/wheels/pooch-*.whl
+  deps/wheels/pymatting-*.whl
+  deps/wheels/referencing-*.whl
+  deps/wheels/rembg-*.whl
+  deps/wheels/rpds_py-*.whl
+  deps/wheels/scikit_image-*.whl
+  deps/wheels/scipy-*.whl
+  deps/wheels/tifffile-*.whl
+)
+if [ ${#_3d_wheels[@]} -gt 0 ]; then
+  rm -f -- "${_3d_wheels[@]}"
+  echo "==> removed optional 3D/SAM wheels from the common package"
+fi
+rm -f -- models/sam/sam_vit_b.pth 2>/dev/null || true
+
 _have_pycrypt() {
   local a=(deps/wheels/pycryptodome*.whl)
   [ ${#a[@]} -gt 0 ]

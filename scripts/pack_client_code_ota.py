@@ -72,6 +72,9 @@ OTA_PATHS_WITH_NODEJS_DEPS: tuple[str, ...] = OTA_PATHS + (
 # by their dedicated installers or separate updates; including them here makes
 # every web update unnecessarily slow to extract.
 WEBSITE_OTA_PATHS: tuple[str, ...] = (
+    # Keep all maintenance and repair scripts current. The directory is small,
+    # and shipping only the updater leaves older helper scripts installed.
+    "scripts",
     "backend",
     # OEM switcher runtime. The configurator is launched by the bundled
     # OEM配置启动器.exe and must be updated together with its branding helper.

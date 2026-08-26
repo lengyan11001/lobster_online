@@ -6,6 +6,7 @@ import subprocess
 import pytest
 
 from desktop import oem_branding, oem_configurator
+from _pack_exe_test import build_encrypted_dist
 from scripts import pack_full_project_zip, pack_slim_zip
 
 
@@ -303,12 +304,44 @@ def test_factory_full_package_excludes_local_brand_and_runtime_data():
     assert pack_full_project_zip.should_exclude(
         "lobster_online", "brand-launcher.spec", factory_oem=True
     )
-    assert not pack_full_project_zip.should_exclude(
+    assert pack_full_project_zip.should_exclude(
         "lobster_online", "models/sam/sam_vit_b.pth", factory_oem=True
     )
     assert not pack_full_project_zip.should_exclude(
         "lobster_online", "deps/vc_redist.x64.exe", factory_oem=True
     )
+
+
+@pytest.mark.parametrize(
+    "wheel_name",
+    (
+        "torch-2.13.0-cp312-cp312-win_amd64.whl",
+        "opencv_python-5.0.0.93-cp37-abi3-win_amd64.whl",
+        "rembg-2.0.76-py3-none-any.whl",
+        "scipy-1.18.0-cp312-cp312-win_amd64.whl",
+        "trimesh-5.0.0-py3-none-any.whl",
+        "segment_anything-1.0-py3-none-any.whl",
+    ),
+)
+def test_full_packages_exclude_removed_3d_dependencies(wheel_name):
+    rel = f"deps/wheels/{wheel_name}"
+
+    assert pack_full_project_zip.should_exclude("lobster_online", rel)
+    assert build_encrypted_dist._should_skip_rel(rel, is_dir=False)
+
+
+@pytest.mark.parametrize(
+    "rel",
+    (
+        "python/Lib/site-packages/torch/__init__.py",
+        "python/Lib/site-packages/rembg/__init__.py",
+        "python/Lib/site-packages/scipy.libs/libscipy.dll",
+        "python/Scripts/rembg.exe",
+    ),
+)
+def test_full_packages_exclude_preinstalled_3d_dependencies(rel):
+    assert pack_full_project_zip.should_exclude("lobster_online", rel)
+    assert build_encrypted_dist._should_skip_rel(rel, is_dir=False)
 
 
 def test_factory_oem_code_seeds_env_from_example(tmp_path):

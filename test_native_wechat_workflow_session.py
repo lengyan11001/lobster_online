@@ -560,6 +560,29 @@ def test_auto_reply_requires_customer_to_have_the_actual_last_message(tmp_path, 
     assert engine._latest_auto_reply_candidate(engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a") is None
 
 
+def test_auto_reply_candidate_survives_a_later_outbound_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    engine._persist_message_obj(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        {"id": "inbound-id", "hash": "inbound-hash", "attr": "friend", "content": "hello"},
+        download_attachments=False,
+    )
+    engine._persist_message_obj(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "customer-a",
+        {"id": "outbound-file", "hash": "outbound-file-hash", "attr": "self", "type": "file", "content": "demo.zip"},
+        download_attachments=False,
+    )
+
+    candidate = engine._latest_auto_reply_candidate(engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a")
+
+    assert candidate is not None
+    assert candidate["content"] == "hello"
+    assert candidate["auto_reply_inbound_id"] == "wxhash:inbound-hash"
+
+
 def test_auto_reply_candidate_rejects_self_message_even_if_direction_was_stored_as_in(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     engine.init_db()
@@ -1220,7 +1243,7 @@ def test_recent_session_sync_uses_twenty_page_limit(monkeypatch):
     assert result["count"] == 1
 
 
-def test_recent_session_collect_does_not_stop_on_yesterday_label(monkeypatch):
+def test_recent_session_collect_initializes_the_first_visible_page(monkeypatch):
     class FakeCell:
         def __init__(self, text: str):
             self.Name = text
@@ -1251,8 +1274,10 @@ def test_recent_session_collect_does_not_stop_on_yesterday_label(monkeypatch):
 
     result = engine._uia_collect_recent_sessions(123, max_rounds=5)
 
-    assert result["rounds"] == 5
-    assert [item["peer_id"] for item in result["items"]] == ["A", "B", "C", "D", "E"]
+    # The takeover pass opens each visible session before continuing to the
+    # next page, so this snapshot is intentionally only the reset first page.
+    assert result["rounds"] == 1
+    assert [item["peer_id"] for item in result["items"]] == ["A"]
 
 
 def test_uia_session_cell_parses_inline_unread_badge_and_mute_label():
@@ -2151,6 +2176,58 @@ async def test_create_group_task_sends_welcome_after_group_is_created(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_failed_group_task_releases_auto_reply_history_for_a_later_round(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    account_id = engine.LOCAL_DEFAULT_ACCOUNT_ID
+    peer_id = "customer-a"
+    inbound = {
+        "peer_id": peer_id,
+        "direction": "in",
+        "content": "please create a group",
+        "auto_reply_inbound_id": "message-a",
+    }
+    assert engine._record_auto_reply_history(
+        account_id,
+        peer_id,
+        inbound,
+        reply="",
+        category="cooperation",
+        status="skipped",
+        error="group invite queued",
+    )
+    task = engine._create_wechat_task(
+        account_id=account_id,
+        task_type="create_group",
+        target_type="group_contacts",
+        targets=[peer_id, "sales-a"],
+        payload={
+            "source_peer_id": peer_id,
+            "source_inbound_message_id": "message-a",
+            "use_current_chat": True,
+        },
+        strategy=engine.get_strategy(),
+        start_worker=False,
+    )
+
+    async def local_failure(*_args, **_kwargs):
+        raise RuntimeError("contact selection failed")
+
+    async def observe(*_args, **_kwargs):
+        return {"ok": True}
+
+    monkeypatch.setattr(engine, "_run_local_wechat_async", local_failure)
+    monkeypatch.setattr(engine, "_observe_wechat_intelligence", observe)
+
+    await engine._process_create_group_task(task)
+
+    failed_task = engine.get_task(task["id"])
+    assert failed_task["status"] == "failed"
+    assert "contact selection failed" in failed_task["error_message"]
+    assert not engine._auto_reply_history_exists(account_id, peer_id, inbound)
+
+
+@pytest.mark.asyncio
 async def test_auto_reply_match_immediately_queues_group_with_primary_contact(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     engine.init_db()
@@ -2222,7 +2299,7 @@ async def test_auto_reply_group_invite_rejects_customer_as_primary_contact(monke
 
 
 @pytest.mark.asyncio
-async def test_unexecutable_group_invite_suppresses_promised_reply(tmp_path, monkeypatch):
+async def test_failed_group_invite_is_silent_and_does_not_consume_message(tmp_path, monkeypatch):
     monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
     monkeypatch.setattr(
         engine,
@@ -2247,6 +2324,14 @@ async def test_unexecutable_group_invite_suppresses_promised_reply(tmp_path, mon
         engine,
         "sync_local_messages",
         lambda *_args, **_kwargs: {"peer_id": "张老师", "chat_info": {"chat_type": "direct"}},
+    )
+    opened = []
+    monkeypatch.setattr(
+        engine,
+        "_open_next_visible_session",
+        lambda *_args, **_kwargs: None if opened else opened.append(True) or {
+            "peer_id": "张老师", "display_name": "张老师", "unread_count": 1,
+        },
     )
     monkeypatch.setattr(
         engine,
@@ -2278,7 +2363,7 @@ async def test_unexecutable_group_invite_suppresses_promised_reply(tmp_path, mon
     monkeypatch.setattr(
         engine,
         "_send_text_local_slow",
-        lambda *_args, **_kwargs: pytest.fail("a failed group action must not send a promise to the customer"),
+        lambda *_args, **_kwargs: pytest.fail("failed group invite must not send a private reply"),
     )
 
     result = await engine.run_auto_reply_once(
@@ -2289,9 +2374,14 @@ async def test_unexecutable_group_invite_suppresses_promised_reply(tmp_path, mon
 
     assert result["replied"] == 0
     assert result["skipped"] == 1
-    assert result["items"][0]["status"] == "group_invite_not_executable"
+    assert result["items"][0]["status"] == "group_invite_failed"
+    assert result["items"][0]["group_invite_failed"] is True
     assert result["items"][0]["reply_suppressed"] is True
-    assert "不能与当前客户相同" in result["items"][0]["error"]
+    assert not engine._auto_reply_history_exists(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        "张老师",
+        {"peer_id": "张老师", "content": "行", "auto_reply_inbound_id": "message-a"},
+    )
 
 
 @pytest.mark.asyncio
@@ -2514,6 +2604,14 @@ async def test_group_invite_success_keeps_default_welcome_message(tmp_path, monk
         "sync_local_messages",
         lambda *_args, **_kwargs: {"peer_id": "张老师", "chat_info": {"chat_type": "direct"}},
     )
+    opened = []
+    monkeypatch.setattr(
+        engine,
+        "_open_next_visible_session",
+        lambda *_args, **_kwargs: None if opened else opened.append(True) or {
+            "peer_id": "张老师", "display_name": "张老师", "unread_count": 1,
+        },
+    )
     monkeypatch.setattr(
         engine,
         "_latest_auto_reply_candidate",
@@ -2582,119 +2680,6 @@ async def test_create_group_task_deduplicates_same_auto_invite(tmp_path, monkeyp
 
     assert second["id"] == first["id"]
     assert second["deduped"] is True
-
-
-@pytest.mark.asyncio
-async def test_failed_group_invite_can_retry_after_primary_contact_changes(tmp_path, monkeypatch):
-    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
-    monkeypatch.setattr(engine, "_find_local_account", lambda _account_id: {"hwnd": 1})
-    monkeypatch.setattr(engine, "_ensure_task_worker", lambda _account_id: None)
-    engine.init_db()
-
-    inbound = {
-        "peer_id": "customer-a",
-        "direction": "in",
-        "content": "how much is it",
-        "provider_message_id": "message-a",
-        "created_at": "2026-08-14T09:44:00",
-        "auto_reply_inbound_id": "message-a",
-    }
-    engine._record_auto_reply_history(
-        engine.LOCAL_DEFAULT_ACCOUNT_ID,
-        "customer-a",
-        inbound,
-        reply="",
-        category="price",
-        status="skipped",
-        error="group invite queued",
-    )
-    failed = await engine.create_group_task(
-        engine.LOCAL_DEFAULT_ACCOUNT_ID,
-        ["customer-a", "old-sales"],
-        dedup_key="auto-invite-old-sales",
-        source_peer_id="customer-a",
-        source_inbound_message_id="message-a",
-    )
-    engine._finish_task(failed["id"], "failed", 0, 0, 2, "not found old-sales")
-    engine._mark_auto_reply_group_invite_failed(
-        engine.LOCAL_DEFAULT_ACCOUNT_ID,
-        "customer-a",
-        "message-a",
-        "not found old-sales",
-    )
-
-    candidate = engine._latest_failed_group_invite_candidate(
-        engine.LOCAL_DEFAULT_ACCOUNT_ID,
-        "customer-a",
-        "new-sales",
-    )
-
-    assert candidate is not None
-    assert candidate["content"] == "how much is it"
-    assert candidate["auto_reply_inbound_id"] == "message-a"
-    assert candidate["previous_group_invite_primary_contact"] == "old-sales"
-    with engine._connect() as conn:
-        row = conn.execute(
-            """
-            select status,error_message from wechat_auto_reply_history
-            where account_id=? and peer_id=? and inbound_message_id=?
-            """,
-            (engine.LOCAL_DEFAULT_ACCOUNT_ID, "customer-a", "message-a"),
-        ).fetchone()
-    assert row["status"] == "failed"
-    assert "not found old-sales" in row["error_message"]
-
-
-@pytest.mark.asyncio
-async def test_failed_group_invite_retry_is_throttled_for_same_primary_contact(tmp_path, monkeypatch):
-    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
-    monkeypatch.setattr(engine, "_find_local_account", lambda _account_id: {"hwnd": 1})
-    monkeypatch.setattr(engine, "_ensure_task_worker", lambda _account_id: None)
-    engine.init_db()
-    inbound = {
-        "peer_id": "customer-a",
-        "direction": "in",
-        "content": "please invite me",
-        "provider_message_id": "message-a",
-        "created_at": "2026-08-14T09:44:00",
-        "auto_reply_inbound_id": "message-a",
-    }
-    engine._record_auto_reply_history(
-        engine.LOCAL_DEFAULT_ACCOUNT_ID,
-        "customer-a",
-        inbound,
-        reply="",
-        category="price",
-        status="skipped",
-        error="group invite queued",
-    )
-    failed = await engine.create_group_task(
-        engine.LOCAL_DEFAULT_ACCOUNT_ID,
-        ["customer-a", "same-sales"],
-        dedup_key="auto-invite-same-sales",
-        source_peer_id="customer-a",
-        source_inbound_message_id="message-a",
-    )
-    engine._finish_task(failed["id"], "failed", 0, 0, 2, "not found same-sales")
-
-    assert (
-        engine._latest_failed_group_invite_candidate(
-            engine.LOCAL_DEFAULT_ACCOUNT_ID,
-            "customer-a",
-            "same-sales",
-            retry_cooldown_seconds=300,
-        )
-        is None
-    )
-    assert (
-        engine._latest_failed_group_invite_candidate(
-            engine.LOCAL_DEFAULT_ACCOUNT_ID,
-            "customer-a",
-            "same-sales",
-            retry_cooldown_seconds=0,
-        )
-        is not None
-    )
 
 
 @pytest.mark.asyncio

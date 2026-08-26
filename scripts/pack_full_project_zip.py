@@ -15,6 +15,93 @@ from pathlib import Path
 
 FACTORY_CONFIGURATOR_EXE = "OEM\u914d\u7f6e\u542f\u52a8\u5668.exe"
 
+REMOVED_3D_WHEEL_PREFIXES = (
+    "filelock-",
+    "flatbuffers-",
+    "fsspec-",
+    "imageio-",
+    "jinja2-",
+    "jsonschema-",
+    "jsonschema_specifications-",
+    "lazy_loader-",
+    "llvmlite-",
+    "markupsafe-",
+    "mpmath-",
+    "networkx-",
+    "numba-",
+    "onnxruntime-",
+    "opencv_python-",
+    "platformdirs-",
+    "pooch-",
+    "pymeshfix-",
+    "pymatting-",
+    "referencing-",
+    "rembg-",
+    "rpds_py-",
+    "scikit_image-",
+    "scipy-",
+    "segment_anything-",
+    "shapely-",
+    "sympy-",
+    "tifffile-",
+    "torch-",
+    "torchvision-",
+    "trimesh-",
+)
+
+REMOVED_3D_SITE_PACKAGE_PREFIXES = (
+    "cv2",
+    "filelock",
+    "flatbuffers",
+    "fsspec",
+    "functorch",
+    "imageio",
+    "isympy.",
+    "jinja2",
+    "jsonschema",
+    "jsonschema_specifications",
+    "lazy_loader",
+    "llvmlite",
+    "llvmlite.libs",
+    "markupsafe",
+    "mpmath",
+    "networkx",
+    "numba",
+    "onnxruntime",
+    "opencv_python",
+    "platformdirs",
+    "pooch",
+    "pymatting",
+    "pymeshfix",
+    "pymeshfix.libs",
+    "referencing",
+    "rembg",
+    "rpds",
+    "rpds_py",
+    "scikit_image",
+    "scipy",
+    "scipy.libs",
+    "segment_anything",
+    "shapely",
+    "shapely.libs",
+    "skimage",
+    "sympy",
+    "tifffile",
+    "torch",
+    "torchgen",
+    "torchvision",
+    "trimesh",
+)
+
+REMOVED_3D_SCRIPT_NAMES = {
+    "isympy.exe",
+    "numba",
+    "rembg.exe",
+    "torchfrtrace.exe",
+    "torchrun.exe",
+    "trimesh.exe",
+}
+
 
 def should_exclude(proj: str, rel_posix: str, *, factory_oem: bool = False) -> bool:
     """rel_posix: relative path under project root, forward slashes, no leading slash."""
@@ -115,6 +202,30 @@ def should_exclude(proj: str, rel_posix: str, *, factory_oem: bool = False) -> b
     if rel_posix.startswith(("_pack_exe_test/", "_lobster_runtime/", "dist/", "build/", "tmp_responsive_check/", "tmp_templates/", ".updates/", "release_updates/")):
         return True
     if rel_posix.startswith("desktop/webview2/fixed-runtime/"):
+        return True
+    if rel_posix.startswith("models/sam/"):
+        return True
+    if (
+        len(parts) >= 4
+        and parts[0] == "python"
+        and parts[1].lower() == "lib"
+        and parts[2].lower() == "site-packages"
+        and parts[3].lower().startswith(REMOVED_3D_SITE_PACKAGE_PREFIXES)
+    ):
+        return True
+    if (
+        len(parts) >= 3
+        and parts[0] == "python"
+        and parts[1].lower() == "scripts"
+        and parts[2].lower() in REMOVED_3D_SCRIPT_NAMES
+    ):
+        return True
+    if (
+        len(parts) >= 3
+        and parts[0] == "deps"
+        and parts[1] == "wheels"
+        and parts[-1].lower().startswith(REMOVED_3D_WHEEL_PREFIXES)
+    ):
         return True
     if rel_posix.startswith("assets/"):
         return True

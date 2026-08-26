@@ -24,6 +24,19 @@ class _FakeStatusResponse:
         return self._payload
 
 
+def test_image_studio_default_wait_covers_cloud_fallback_chain(monkeypatch):
+    monkeypatch.delenv("LOBSTER_IMAGE_STUDIO_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("COMFLY_IMAGE_TIMEOUT_SECONDS", raising=False)
+
+    assert image_studio._configured_image_studio_timeout_seconds() == 600.0
+
+
+def test_image_studio_wait_configuration_accepts_nine_minutes(monkeypatch):
+    monkeypatch.setenv("LOBSTER_IMAGE_STUDIO_TIMEOUT_SECONDS", "900")
+
+    assert image_studio._configured_image_studio_timeout_seconds() == 900.0
+
+
 def _request(headers=None) -> Request:
     return Request(
         {
@@ -92,7 +105,7 @@ async def test_multipart_image_edit_keeps_url_response_format(monkeypatch):
     )
 
     assert result["ok"] is True
-    assert captured["url"].endswith("/api/comfly-proxy/v1/images/edits")
+    assert captured["url"].endswith("/api/comfly-proxy/v1/images/edits/start")
     assert captured["json"] is None
     assert captured["data"]["response_format"] == "url"
     assert captured["data"]["size"] == "1080x1920"

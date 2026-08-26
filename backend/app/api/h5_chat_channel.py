@@ -9812,7 +9812,7 @@ async def h5_chat_poll_loop() -> None:
     h5_poll_interval = _channel_interval("LOBSTER_H5_CHAT_POLL_INTERVAL_SEC", 5.0, 3.0)
     task_poll_interval = _channel_interval("LOBSTER_SCHEDULED_TASK_POLL_INTERVAL_SEC", 30.0, 10.0)
     publish_poll_interval = _channel_interval("LOBSTER_SCHEDULED_PUBLISH_POLL_INTERVAL_SEC", 30.0, 10.0)
-    heartbeat_interval = _channel_interval("LOBSTER_H5_CHAT_HEARTBEAT_INTERVAL_SEC", 60.0, 30.0)
+    heartbeat_interval = _channel_interval("LOBSTER_H5_CHAT_HEARTBEAT_INTERVAL_SEC", 30.0, 30.0)
     sleep_missing_auth = 10.0
     logged_missing = False
     last_heartbeat_at = 0.0

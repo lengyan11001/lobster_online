@@ -45,7 +45,7 @@ _TRANSIENT_IMAGE_ERRORS = (
     httpx.PoolTimeout,
 )
 
-_DEFAULT_IMAGE_STUDIO_TIMEOUT_SECONDS = 360.0
+_DEFAULT_IMAGE_STUDIO_TIMEOUT_SECONDS = 600.0
 
 
 def _is_pending_duplicate_response(status_code: int, detail: str) -> bool:
@@ -64,7 +64,7 @@ def _configured_image_studio_timeout_seconds() -> float:
     if not raw:
         return _DEFAULT_IMAGE_STUDIO_TIMEOUT_SECONDS
     try:
-        return max(60.0, min(600.0, float(raw)))
+        return max(60.0, min(900.0, float(raw)))
     except (TypeError, ValueError):
         return _DEFAULT_IMAGE_STUDIO_TIMEOUT_SECONDS
 
@@ -285,7 +285,9 @@ async def _submit_comfly_image_request(
         start_resp = await client.post(start_url, headers=request_headers, data=data or {}, files=files or [])
     if not _is_async_proxy_unavailable(start_resp):
         if start_resp.status_code >= 400:
-            raise HTTPException(status_code=start_resp.status_code, detail=_pick_error_detail(start_resp))
+            # Let the caller handle an idempotent 409 as a pending request and
+            # poll/retry it instead of turning it into a misleading 500.
+            return start_resp
         try:
             start_payload = start_resp.json() if start_resp.content else {}
         except Exception as exc:
@@ -351,7 +353,7 @@ async def _generate_image_studio_core(
         effective_timeout = (
             _configured_image_studio_timeout_seconds()
             if timeout_seconds is None
-            else max(60.0, min(600.0, float(timeout_seconds)))
+            else max(60.0, min(900.0, float(timeout_seconds)))
         )
     except (TypeError, ValueError):
         effective_timeout = _configured_image_studio_timeout_seconds()

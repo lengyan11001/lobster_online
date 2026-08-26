@@ -2814,24 +2814,54 @@ def _auto_reply_history_exists(account_id: str, peer_id: str, inbound: Dict[str,
 
 def _latest_auto_reply_candidate(account_id: str, peer_id: str) -> Optional[Dict[str, Any]]:
     latest = _latest_message_record(account_id, peer_id, include_system=True)
-    if not latest or latest.get("direction") != "in":
+    if not latest:
         return None
-    raw = latest.get("raw_json") if isinstance(latest.get("raw_json"), dict) else {}
-    raw_type = str(raw.get("type") or "").strip().lower()
-    raw_sender = str(raw.get("sender") or raw.get("sender_remark") or "").strip().lower()
-    if (
-        latest.get("is_system")
-        or latest.get("msg_type") == "time"
-        or raw_sender == "system"
-        or raw_type in {"system", "sys", "status", "notification", "notify", "time", "voip", "call"}
-        or _looks_like_non_replyable_wechat_event(latest.get("content"))
-    ):
+
+    def eligible(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if message.get("direction") != "in":
+            return None
+        raw = message.get("raw_json") if isinstance(message.get("raw_json"), dict) else {}
+        raw_type = str(raw.get("type") or "").strip().lower()
+        raw_sender = str(raw.get("sender") or raw.get("sender_remark") or "").strip().lower()
+        if (
+            message.get("is_system")
+            or message.get("msg_type") == "time"
+            or raw_sender == "system"
+            or raw_type in {"system", "sys", "status", "notification", "notify", "time", "voip", "call"}
+            or _looks_like_non_replyable_wechat_event(message.get("content"))
+        ):
+            return None
+        if not str(message.get("content") or "").strip():
+            return None
+        message["auto_reply_inbound_id"] = _auto_reply_inbound_id(peer_id, message)
+        return message
+
+    candidate = eligible(latest)
+    if candidate:
+        return candidate
+    # A user can send a file after a customer message without answering that
+    # message. Treat only these attachment-only outbound events as transparent;
+    # any later outbound text still means a human has replied.
+    if latest.get("direction") != "out" or str(latest.get("msg_type") or "").lower() not in {"file", "image", "video"}:
         return None
-    content = str(latest.get("content") or "").strip()
-    if not content:
-        return None
-    latest["auto_reply_inbound_id"] = _auto_reply_inbound_id(peer_id, latest)
-    return latest
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            select * from wechat_messages
+            where account_id=? and peer_id=?
+            order by created_at desc, id desc
+            limit 30
+            """,
+            (account_id, peer_id),
+        ).fetchall()
+    for row in rows[1:]:
+        message = _normalize_message_public(_row_to_dict(row))
+        if message.get("direction") == "out" and str(message.get("msg_type") or "").lower() not in {"file", "image", "video"}:
+            return None
+        candidate = eligible(message)
+        if candidate:
+            return candidate
+    return None
 
 
 def _record_auto_reply_history(
@@ -2906,89 +2936,28 @@ def _update_auto_reply_history(
         )
 
 
-def _mark_auto_reply_group_invite_failed(account_id: str, peer_id: str, inbound_id: str, error: str) -> None:
-    inbound_id = str(inbound_id or "").strip()
+def _release_auto_reply_group_invite_history(account_id: str, peer_id: str, inbound_id: str) -> None:
+    """Allow a later scan to retry a group invite that never completed.
+
+    A queued group invite suppresses the ordinary reply and creates a skipped
+    auto-reply history row. When the actual group task fails, that row must be
+    released; otherwise it permanently hides the same customer message from
+    every later scan. The failed task itself remains the audit record.
+    """
+    account_id = str(account_id or "").strip()
     peer_id = str(peer_id or "").strip()
-    if not inbound_id or not peer_id:
+    inbound_id = str(inbound_id or "").strip()
+    if not account_id or not peer_id or not inbound_id:
         return
     with _connect() as conn:
         conn.execute(
             """
-            update wechat_auto_reply_history
-            set status='failed', error_message=?, updated_at=?
+            delete from wechat_auto_reply_history
             where account_id=? and peer_id=? and inbound_message_id=?
+              and status='skipped' and coalesce(reply_content, '')=''
             """,
-            (f"拉群失败：{str(error or '')[:1800]}", _now_iso(), account_id, peer_id, inbound_id),
+            (account_id, peer_id, inbound_id),
         )
-
-
-def _latest_failed_group_invite_candidate(
-    account_id: str,
-    peer_id: str,
-    primary_contact: str,
-    *,
-    retry_cooldown_seconds: int = 300,
-) -> Optional[Dict[str, Any]]:
-    primary_contact = str(primary_contact or "").strip()
-    peer_id = str(peer_id or "").strip()
-    if not primary_contact or not peer_id or _has_verified_group_invite(account_id, peer_id, primary_contact):
-        return None
-    peer_key = _compact_for_contains(peer_id).lower()
-    with _connect() as conn:
-        rows = conn.execute(
-            """
-            select id, targets, payload, error_message, updated_at
-            from wechat_tasks
-            where account_id=? and task_type='create_group' and status='failed'
-            order by updated_at desc
-            limit 20
-            """,
-            (account_id,),
-        ).fetchall()
-        for row in rows:
-            payload = _safe_json_loads(str(row["payload"] or ""), {})
-            source_peer_id = str((payload or {}).get("source_peer_id") or "").strip()
-            if not isinstance(payload, dict) or _compact_for_contains(source_peer_id).lower() != peer_key:
-                continue
-            inbound_id = str(payload.get("source_inbound_message_id") or "").strip()
-            if not inbound_id:
-                continue
-            targets = [
-                str(item or "").strip()
-                for item in _safe_json_loads(str(row["targets"] or ""), [])
-                if str(item or "").strip()
-            ]
-            task_primary = next((item for item in targets if item != peer_id), "")
-            updated_at = _parse_iso_datetime(row["updated_at"])
-            if task_primary == primary_contact and updated_at:
-                if (datetime.utcnow() - updated_at).total_seconds() < retry_cooldown_seconds:
-                    return None
-            hist = conn.execute(
-                """
-                select inbound_content, created_at
-                from wechat_auto_reply_history
-                where account_id=? and peer_id=? and inbound_message_id=?
-                limit 1
-                """,
-                (account_id, source_peer_id or peer_id, inbound_id),
-            ).fetchone()
-            content = str(hist["inbound_content"] if hist else "").strip()
-            if not content:
-                continue
-            return {
-                "peer_id": source_peer_id or peer_id,
-                "direction": "in",
-                "msg_type": "text",
-                "content": content,
-                "provider_message_id": inbound_id,
-                "auto_reply_inbound_id": inbound_id,
-                "created_at": str(hist["created_at"] if hist else row["updated_at"]),
-                "group_invite_retry": True,
-                "previous_group_invite_error": str(row["error_message"] or "")[:500],
-                "previous_group_invite_task_id": str(row["id"] or ""),
-                "previous_group_invite_primary_contact": task_primary,
-            }
-    return None
 
 
 def _recent_conversation_text(account_id: str, peer_id: str, *, limit: int = 8) -> str:
@@ -3531,6 +3500,7 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         "group_invite_queued": "拉群已排队",
         "group_invite_completed": "拉群已完成",
         "group_invite_deduped": "拉群已去重",
+        "group_invite_failed": "拉群失败，后续会重新判断",
         "group_invite_not_executable": "拉群配置需调整",
         "failed": "回复失败",
         "skipped_group": "群聊已跳过",
@@ -4067,7 +4037,6 @@ async def run_auto_reply_once(
                         elif group_invite.get("skipped"):
                             result["group_invite_skipped"] += 1
                     except Exception as group_exc:
-                        result["group_invite_failed"] += 1
                         group_invite = {"ok": False, "error": str(group_exc)[:500]}
                         item_result["group_invite"] = group_invite
 
@@ -4082,28 +4051,13 @@ async def run_auto_reply_once(
                         and (group_invite.get("queued") or group_invite.get("completed") or group_invite.get("deduped"))
                     )
                     if not invite_ok:
-                        invite_reason = str((group_invite or {}).get("reason") or (group_invite or {}).get("error") or "unknown")
-                        invite_error_labels = {
-                            "missing_primary_contact": "未设置拉群主联系人",
-                            "primary_contact_wx_no_missing": "预设拉群联系人没有微信号，请先同步通讯录",
-                            "primary_contact_is_customer": "拉群主联系人不能与当前客户相同",
-                        }
-                        invite_error = invite_error_labels.get(invite_reason, f"拉群任务未能创建：{invite_reason}")
-                        _record_auto_reply_history(
-                            account_id,
-                            actual_peer,
-                            inbound,
-                            reply="",
-                            category=str(llm_reply.get("category") or ""),
-                            status="skipped",
-                            error=invite_error,
-                        )
+                        result["group_invite_failed"] += 1
                         result["skipped"] += 1
                         item_result.update(
                             {
-                                "status": "group_invite_not_executable",
+                                "status": "group_invite_failed",
+                                "group_invite_failed": True,
                                 "reply_suppressed": True,
-                                "error": invite_error,
                             }
                         )
                         result["items"].append(item_result)
@@ -4202,7 +4156,7 @@ async def run_auto_reply_once(
                     item_status = str(item_result.get("status") or "skipped")
                     event_type = "reply_sent" if item_status == "sent" else "reply_skipped"
                     outcome_status = "completed"
-                    if item_status in {"failed", "group_invite_not_executable"}:
+                    if item_status in {"failed", "group_invite_failed", "group_invite_not_executable"}:
                         event_type = "failed"
                         outcome_status = "failed"
                     inbound_id = str(
@@ -13629,8 +13583,7 @@ async def _process_create_group_task(task: Dict[str, Any]) -> None:
         _finish_task(task_id, "failed", 0, 0, len(targets), str(exc))
         source_peer_id = str(payload.get("source_peer_id") or "").strip()
         source_inbound_id = str(payload.get("source_inbound_message_id") or "").strip()
-        if source_peer_id and source_inbound_id:
-            _mark_auto_reply_group_invite_failed(account_id, source_peer_id, source_inbound_id, str(exc))
+        _release_auto_reply_group_invite_history(account_id, source_peer_id, source_inbound_id)
         if source_peer_id:
             await _observe_wechat_intelligence(
                 _AUTO_REPLY_AUTH_CONTEXT.get(account_id),
