@@ -1,7 +1,7 @@
 {
-  "version": "1.0.216",
-  "build": 260,
-  "applied_at": "2026-08-26T14:37:41+08:00",
-  "note": "fix OTA rollback loop and ship full scripts",
-  "bundle_sha256": "8921994348abdc1536618f63da011c4676ac4df8636dbfc04996c6c0520ff217"
+  "version": "1.0.217",
+  "build": 261,
+  "applied_at": "2026-08-26T19:31:42+08:00",
+  "note": "pack client OTA",
+  "bundle_sha256": "212931b3283ce89deedeba6ca722090530a0512be16b06e6c03dfec57bdc06b0"
 }
