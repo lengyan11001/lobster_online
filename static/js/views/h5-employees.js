@@ -62,10 +62,20 @@
     {time:'23:30',end:'24:00',key:'wechat_channels_nurture',label:'视频号自动养号（敬请期待）',note:'视频号自动养号',soon:true}
   ];
 
-  // Keep the editor options aligned with H5: sales presets are distinct
-  // actions even when they share the same ability key.
+  // Keep the editor options aligned with H5. Sales presets remain distinct
+  // actions even when they share an ability key, but users choose them by
+  // platform instead of from one mixed sales list.
   var NODE_OPTIONS = [];
   var nodeOptionKeys = {};
+  // Kept as a compatibility label for older saved templates; these entries
+  // are intentionally shown under the consolidated AI营销 group.
+  var LEGACY_NODE_GROUP_LABEL = 'AI海外平台';
+  var NODE_OPTION_GROUP_ORDER = ['抖音','个微','AI营销'];
+  function nodeOptionGroupForKey(key) {
+    if (String(key || '') === 'douyin_leads') return '抖音';
+    if (String(key || '').indexOf('native_wechat_') === 0) return '个微';
+    return 'AI营销';
+  }
   function addNodeOption(key, label, note, group) {
     var identity = String(key || '') + '@@' + String(label || '');
     if (!key || !label || nodeOptionKeys[identity]) return;
@@ -73,25 +83,25 @@
     NODE_OPTIONS.push([String(key), String(label), String(note || label), String(group || '销售员工'), identity]);
   }
   SALES_ROWS.forEach(function(row) {
-    if (!row.soon) addNodeOption(row.key, row.label, row.note, '销售员工');
+    if (!row.soon) addNodeOption(row.key, row.label, row.note, nodeOptionGroupForKey(row.key));
   });
   [
-    ['hifly.video.create_by_tts','数字人口播视频','选择数字人和声音，生成口播视频。','AI营销创作'],
-    ['comfly.seedance.tvc.pipeline','创意分镜头视频','按连续分镜规划视频，并生成完整成片。','AI营销创作'],
-    ['local_bestseller','同城爆款视频','围绕同城热点和门店场景生成爆款视频方案。','AI营销创作'],
-    ['comfly.daihuo.pipeline','爆款TVC','使用素材或产品图生成广告短片。','AI营销创作'],
-    ['viral_video_remix','爆款复刻','基于爆款结构复刻视频脚本和执行方案。','AI营销创作'],
-    ['image_composer_studio','AI设计图','根据文案或产品资料生成海报、详情页和朋友圈配图。','AI营销创作'],
-    ['ip_content_daily','IP日更文案','生成短视频口播、朋友圈文案和配图提示词。','AI营销创作'],
-    ['wewrite.article.pipeline','公众号文章','根据主题生成公众号文章、配图和发布草稿。','AI营销创作'],
-    ['douyin_leads','抖音获客','采集客户线索、评论互动、私信触达和同行监控。','AI获客'],
-    ['native_wechat_poll','个微私信接管','读取个人微信新消息，并按个人记忆自动生成回复。','私域销冠'],
-    ['native_wechat_add_friend','个微自动加好友','把目标手机号或微信号加入本机个人微信加好友队列。','私域销冠'],
-    ['native_wechat_moments_engage','朋友圈点赞评论','对指定联系人24小时内朋友圈进行点赞或评论。','私域销冠'],
-    ['linkedin_leads','LinkedIn线索挖掘','采集LinkedIn相关线索和账号资料。','AI海外平台'],
-    ['reddit_leads','Reddit线索采集','采集社区帖子、评论并分析精准用户。','AI海外平台'],
-    ['x_leads','X线索采集','采集账号内容、评论和潜在线索。','AI海外平台'],
-    ['tiktok_leads','TikTok线索采集','采集账号作品、视频评论和潜在线索。','AI海外平台']
+    ['hifly.video.create_by_tts','数字人口播视频','选择数字人和声音，生成口播视频。','AI营销'],
+    ['comfly.seedance.tvc.pipeline','创意分镜头视频','按连续分镜规划视频，并生成完整成片。','AI营销'],
+    ['local_bestseller','同城爆款视频','围绕同城热点和门店场景生成爆款视频方案。','AI营销'],
+    ['comfly.daihuo.pipeline','爆款TVC','使用素材或产品图生成广告短片。','AI营销'],
+    ['viral_video_remix','爆款复刻','基于爆款结构复刻视频脚本和执行方案。','AI营销'],
+    ['image_composer_studio','AI设计图','根据文案或产品资料生成海报、详情页和朋友圈配图。','AI营销'],
+    ['ip_content_daily','IP日更文案','生成短视频口播、朋友圈文案和配图提示词。','AI营销'],
+    ['wewrite.article.pipeline','公众号文章','根据主题生成公众号文章、配图和发布草稿。','AI营销'],
+    ['douyin_leads','抖音获客','采集客户线索、评论互动、私信触达和同行监控。','抖音'],
+    ['native_wechat_poll','个微私信接管','读取个人微信新消息，并按个人记忆自动生成回复。','个微'],
+    ['native_wechat_add_friend','个微自动加好友','把目标手机号或微信号加入本机个人微信加好友队列。','个微'],
+    ['native_wechat_moments_engage','朋友圈点赞评论','对指定联系人24小时内朋友圈进行点赞或评论。','个微'],
+    ['linkedin_leads','LinkedIn线索挖掘','采集LinkedIn相关线索和账号资料。','AI营销'],
+    ['reddit_leads','Reddit线索采集','采集社区帖子、评论并分析精准用户。','AI营销'],
+    ['x_leads','X线索采集','采集账号内容、评论和潜在线索。','AI营销'],
+    ['tiktok_leads','TikTok线索采集','采集账号作品、视频评论和潜在线索。','AI营销']
   ].forEach(function(item) { addNodeOption(item[0], item[1], item[2], item[3]); });
 
   var CHILD_ACTION_OPTIONS = [
@@ -737,6 +747,7 @@
     var select=el('oeNodeKey'); if (!select) return;
     var groups={}, order=[];
     NODE_OPTIONS.forEach(function(item){var group=item[3] || '销售员工';if(!groups[group]){groups[group]=[];order.push(group);}groups[group].push(item);});
+    order=NODE_OPTION_GROUP_ORDER.filter(function(group){return !!groups[group];}).concat(order.filter(function(group){return NODE_OPTION_GROUP_ORDER.indexOf(group) < 0;}));
     select.innerHTML=order.map(function(group){return '<optgroup label="' + esc(group) + '">' + groups[group].map(function(item){return '<option value="' + esc(item[4]) + '">' + esc(item[1]) + '</option>';}).join('') + '</optgroup>';}).join('');
     var option=findOption(selected,selectedLabel);
     select.value=option[4] || NODE_OPTIONS[0][4];
@@ -831,6 +842,7 @@
     });
     root.addEventListener('change',function(event){
       if(event.target.id==='oeNodeKey') { var option=nodeOptionFromValue(event.target.value); if (option) { el('oeNodeLabel').value=option[1]; el('oeNodeNote').value=option[2] || option[1]; } syncNodeModalFields(); }
+      if(event.target.id==='oeNodeDouyinReplyCommentMode') syncNodeModalFields();
       if(event.target.id==='oeChildType') syncChildModalFields();
     });
     root.addEventListener('input',function(event){
@@ -887,6 +899,14 @@
     if (el('oeNodeDouyinCollectionField')) el('oeNodeDouyinCollectionField').hidden=!douyinCollection;
     if (el('oeNodeDouyinTouchField')) el('oeNodeDouyinTouchField').hidden=!douyinTouch;
     if (el('oeNodeDouyinFollowupField')) el('oeNodeDouyinFollowupField').hidden=!douyinTouch;
+    var replyMode=String((el('oeNodeDouyinReplyCommentMode') || {}).value || 'fixed').toLowerCase();
+    if (['fixed','ai','rewrite'].indexOf(replyMode) < 0) replyMode='fixed';
+    [['oeNodeDouyinReplyCommentFixedField','fixed'],['oeNodeDouyinReplyCommentAiField','ai'],['oeNodeDouyinReplyCommentRewriteField','rewrite']].forEach(function(item){
+      var field=el(item[0]), visible=douyinCollection && replyMode === item[1];
+      if (!field) return;
+      field.hidden=!visible;
+      Array.prototype.forEach.call(field.querySelectorAll('input, textarea, select'),function(input){input.disabled=!visible;});
+    });
     syncMomentPicker('node',key === 'native_wechat_moments_engage');
   }
   function openNodeModal(index) {

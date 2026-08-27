@@ -98,7 +98,9 @@ def test_online_employee_editor_manages_supported_child_actions():
     assert "function demoNode(index)" in script
     assert "演示任务已下发" in script
     assert "salesAction(note)" in script
-    assert "AI营销创作" in script
+    assert "NODE_OPTION_GROUP_ORDER = ['抖音','个微','AI营销']" in script
+    assert "nodeOptionGroupForKey(row.key)" in script
+    assert "AI营销" in script
     assert "AI海外平台" in script
     assert "native_wechat_group_invite" in script
     assert "native_wechat_moments_engage" in script
@@ -111,7 +113,7 @@ def test_online_employee_editor_manages_supported_child_actions():
     assert "state.editingId || template && template.id" in script
     assert ".oe-form-label[hidden] { display:none; }" in html
     assert "100dvh" in html
-    assert "20260819-employee-server-params-v3" in registry
+    assert "20260827-node-groups-reply-mode-v1" in registry
 
 
 def test_moments_nodes_save_paginated_contact_selection_as_wechat_ids():

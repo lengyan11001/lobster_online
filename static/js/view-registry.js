@@ -157,8 +157,8 @@
   });
 
   window.registerLobsterView('h5-employees', {
-    html: '/static/views/h5-employees.html?v=20260823-douyin-online-keywords-v1',
-    scripts: '/static/js/views/h5-employees.js?v=20260823-douyin-online-keywords-v1',
+    html: '/static/views/h5-employees.html?v=20260827-node-groups-reply-mode-v1',
+    scripts: '/static/js/views/h5-employees.js?v=20260827-node-groups-reply-mode-v1',
     init: 'initOnlineH5EmployeesView',
     cache: 'reload'
   });

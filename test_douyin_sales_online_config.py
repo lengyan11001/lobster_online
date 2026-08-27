@@ -38,6 +38,9 @@ def test_h5_employee_editor_exposes_precise_touch_actions():
         "oeNodeDouyinReplyCommentText",
         "oeNodeDouyinReplyCommentPrompt",
         "oeNodeDouyinReplyCommentSeedText",
+        "oeNodeDouyinReplyCommentFixedField",
+        "oeNodeDouyinReplyCommentAiField",
+        "oeNodeDouyinReplyCommentRewriteField",
         "oeNodeDouyinFollowupMentionComment",
         "oeNodeDouyinFollowupFollowComment",
         "oeNodeDouyinFollowupDirectMessage",
@@ -47,6 +50,13 @@ def test_h5_employee_editor_exposes_precise_touch_actions():
     assert "if (!keyword) throw new Error('请填写采集关键词')" not in script
     assert "留空使用当前设备 Online 已配置的全部关键词" in html
     assert "el('oeNodeDouyinKeyword').value" in script
+    assert "if(event.target.id==='oeNodeDouyinReplyCommentMode') syncNodeModalFields();" in script
+    assert "replyMode=String((el('oeNodeDouyinReplyCommentMode')" in script
+    assert "field.hidden=!visible" in script
+    assert "input.disabled=!visible" in script
+    assert 'id="oeNodeDouyinReplyCommentFixedField" hidden' in html
+    assert 'id="oeNodeDouyinReplyCommentAiField" hidden' in html
+    assert 'id="oeNodeDouyinReplyCommentRewriteField" hidden' in html
     assert "return saveTemplate().then" in script
 
 
