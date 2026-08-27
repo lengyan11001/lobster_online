@@ -75,6 +75,7 @@ _SEEDANCE_TVC_DEFAULT_CHANNEL = "openmind"
 _active_scheduled_run_ids: set[str] = set()
 _active_scheduled_douyin_actions: Dict[str, str] = {}
 _active_client_workflow_actions: Dict[str, str] = {}
+_scheduled_douyin_precise_touch_claim_lock = asyncio.Lock()
 _WORKFLOW_NODE_STOP_TIMEOUT_SECONDS = 8.0
 _WORKFLOW_NODE_CANCEL_GRACE_SECONDS = 8.0
 _SCHEDULED_COMPLETE_RETRY_STATUS = {500, 502, 503, 504}
@@ -3913,6 +3914,21 @@ def _scheduled_douyin_online_config_params(
             plan.get("comment_max_comments") or local_config.get("comment_max_comments") or 500
         ) or 500
         params["mode"] = str(plan.get("mode") or "script").strip() or "script"
+        has_reply_config = (
+            _workflow_flag(plan.get("reply_precise_comments"), False)
+            or str(plan.get("reply_comment_text") or "").strip()
+            or str(plan.get("reply_comment_prompt") or "").strip()
+            or str(plan.get("reply_comment_seed_text") or "").strip()
+            or str(plan.get("reply_comment_mode") or "fixed").strip().lower() not in {"", "fixed"}
+        )
+        if has_reply_config:
+            params["reply_precise_comments"] = _workflow_flag(plan.get("reply_precise_comments"), False)
+            params["reply_comment_mode"] = str(plan.get("reply_comment_mode") or plan.get("comment_mode") or "fixed").strip().lower() or "fixed"
+            if params["reply_comment_mode"] not in {"fixed", "ai", "rewrite"}:
+                params["reply_comment_mode"] = "fixed"
+            params["reply_comment_text"] = str(plan.get("reply_comment_text") or plan.get("comment_text") or "").strip()
+            params["reply_comment_prompt"] = str(plan.get("reply_comment_prompt") or plan.get("comment_prompt") or "").strip()
+            params["reply_comment_seed_text"] = str(plan.get("reply_comment_seed_text") or plan.get("comment_seed_text") or "").strip()
         return params
 
     if action_key in {"reply_comments", "mention_comment", "follow_comment"}:
@@ -4301,6 +4317,7 @@ async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Di
     _install_douyin_origin_import_path()
     from douyin_api import douyin_search_collect  # type: ignore
     from douyin_api import douyin_start_tasks  # type: ignore
+    from douyin_api import configure_douyin_collection_tasks  # type: ignore
     from douyin_api import match_douyin_tasks_for_rows  # type: ignore
     from douyin_api import normalize_douyin_search_session_result  # type: ignore
     from douyin_api import set_tasks_from_rows  # type: ignore
@@ -4393,6 +4410,7 @@ async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Di
 
     set_tasks_from_rows(rows)
     matched_tasks = match_douyin_tasks_for_rows(rows)
+    configure_douyin_collection_tasks(matched_tasks, source)
     task_ids = [int(task.get("id", 0) or 0) for task in matched_tasks if int(task.get("id", 0) or 0) > 0]
     if not task_ids:
         return {"code": 400, "msg": f"关键词“{keyword}”本次没有匹配到可执行任务。"}
@@ -4609,7 +4627,6 @@ _SCHEDULED_DOUYIN_ACTION_LABELS = {
 }
 
 _SCHEDULED_DOUYIN_FOLLOWUP_ACTIONS = (
-    "reply_comments",
     "follow_comment",
     "mention_comment",
     "direct_message",
@@ -4629,7 +4646,19 @@ def _merge_scheduled_douyin_collection_params(
 ) -> Dict[str, Any]:
     merged = dict(online_params) if isinstance(online_params, dict) else {}
     workflow = dict(workflow_params) if isinstance(workflow_params, dict) else {}
-    for key in ("regions", "max_results", "max_videos_per_run", "mode"):
+    for key in (
+        "regions",
+        "max_results",
+        "max_videos_per_run",
+        "mode",
+        "reply_precise_comments",
+        "reply_comment_mode",
+        "reply_comment_text",
+        "reply_comment_prompt",
+        "reply_comment_seed_text",
+        "reply_comment_interval_minutes_min",
+        "reply_comment_interval_minutes_max",
+    ):
         if key in workflow and workflow.get(key) not in (None, "", []):
             merged[key] = workflow.get(key)
     explicit_keywords = _scheduled_douyin_search_keywords(
@@ -4638,6 +4667,39 @@ def _merge_scheduled_douyin_collection_params(
     if explicit_keywords:
         merged["keywords"] = explicit_keywords
         merged["keyword"] = explicit_keywords[0]
+    # Collection writes candidates into the global precise-user pool and may
+    # reply to the just-filtered comments immediately. Other touch actions
+    # remain owned by the standalone precise-touch node.
+    legacy_actions = []
+    for key in ("followup_actions", "touch_actions"):
+        values = workflow.get(key)
+        if isinstance(values, list):
+            legacy_actions.extend(values)
+    legacy_reply = "reply_comments" in {
+        str(item or "").strip().lower() for item in (legacy_actions if isinstance(legacy_actions, list) else [])
+    }
+    merged["reply_precise_comments"] = _workflow_flag(
+        workflow.get("reply_precise_comments", merged.get("reply_precise_comments")),
+        legacy_reply or _workflow_flag(merged.get("reply_precise_comments"), False),
+    )
+    for target, aliases in (
+        ("reply_comment_mode", ("reply_comment_mode", "comment_mode")),
+        ("reply_comment_text", ("reply_comment_text", "comment_text")),
+        ("reply_comment_prompt", ("reply_comment_prompt", "comment_prompt")),
+        ("reply_comment_seed_text", ("reply_comment_seed_text", "comment_seed_text")),
+    ):
+        for alias in aliases:
+            if workflow.get(alias) not in (None, "", []):
+                merged[target] = workflow.get(alias)
+                break
+    merged["reply_comment_mode"] = str(merged.get("reply_comment_mode") or "fixed").strip().lower() or "fixed"
+    if merged["reply_comment_mode"] not in {"fixed", "ai", "rewrite"}:
+        merged["reply_comment_mode"] = "fixed"
+    merged["reply_comment_text"] = str(merged.get("reply_comment_text") or "").strip()
+    merged["reply_comment_prompt"] = str(merged.get("reply_comment_prompt") or "").strip()
+    merged["reply_comment_seed_text"] = str(merged.get("reply_comment_seed_text") or "").strip()
+    merged["followup_actions"] = []
+    merged.pop("touch_actions", None)
     merged["customer_scope"] = "current_collection_batch"
     return merged
 
@@ -4661,7 +4723,17 @@ def _merge_scheduled_douyin_precise_touch_params(
         "sales_node_label",
     ):
         if key in workflow and workflow.get(key) not in (None, "", []):
-            merged[key] = workflow.get(key)
+            merged[key] = (
+                _scheduled_douyin_followup_actions(workflow.get(key))
+                if key in {"touch_actions", "followup_actions"}
+                else workflow.get(key)
+            )
+    if "touch_actions" in merged:
+        merged["touch_actions"] = _scheduled_douyin_followup_actions(merged.get("touch_actions"))
+        merged.pop("followup_actions", None)
+    elif "followup_actions" in merged:
+        merged["touch_actions"] = _scheduled_douyin_followup_actions(merged.get("followup_actions"))
+        merged.pop("followup_actions", None)
     merged["customer_scope"] = "precise_pool"
     return merged
 
@@ -4717,6 +4789,7 @@ async def _wait_for_douyin_sales_action_completion(
 
 def _scheduled_douyin_slim_user(row: Dict[str, Any], action: str) -> Dict[str, Any]:
     status_prefix = {
+        "reply_comments": "reply_comments",
         "mention_comment": "mention_comment",
         "follow_comment": "follow_comment",
         "direct_message": "interaction",
@@ -5063,7 +5136,10 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         }
 
     if action == "precise_touch":
-        from douyin_api import collect_douyin_precise_touch_users, update_douyin_precise_touch_users  # type: ignore
+        from douyin_api import (  # type: ignore
+            collect_douyin_precise_touch_users,
+            update_douyin_precise_touch_users,
+        )
 
         touch_actions = _scheduled_douyin_followup_actions(
             source.get("touch_actions") if isinstance(source.get("touch_actions"), list) else source.get("followup_actions"),
@@ -5078,13 +5154,25 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         success_count = 0
         touched_total = 0
         for touch_action in touch_actions:
-            touch_users = collect_douyin_precise_touch_users(touch_action, max_users)
-            if touch_action == "reply_comments":
-                touch_users = [
-                    row
-                    for row in touch_users
-                    if isinstance(row, dict) and _safe_int(row.get("task_id")) > 0
-                ]
+            # Claim the bounded slice atomically so two workflow triggers
+            # cannot select the same user/action before either one is queued.
+            async with _scheduled_douyin_precise_touch_claim_lock:
+                touch_users = collect_douyin_precise_touch_users(touch_action, max_users)
+                if touch_action == "reply_comments":
+                    touch_users = [
+                        row
+                        for row in touch_users
+                        if isinstance(row, dict) and _safe_int(row.get("task_id")) > 0
+                    ]
+                started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                if touch_users:
+                    update_douyin_precise_touch_users(
+                        touch_users,
+                        action=touch_action,
+                        status="queued",
+                        account_id=account_id or None,
+                        started_at=started_at,
+                    )
             if not touch_users:
                 results.append(
                     {
@@ -5112,14 +5200,6 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                         if isinstance(row, dict) and _safe_int(row.get("task_id")) > 0
                     }
                 )
-            started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            update_douyin_precise_touch_users(
-                touch_users,
-                action=touch_action,
-                status="queued",
-                account_id=account_id or None,
-                started_at=started_at,
-            )
             try:
                 touch_result = await _run_scheduled_douyin_sales_action(touch_action, sub_params)
             except Exception as exc:
@@ -5131,26 +5211,67 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
 
             touch_code = _safe_int(touch_result.get("code") if isinstance(touch_result, dict) else 0)
             touch_status = str(touch_result.get("status") or "").strip().lower() if isinstance(touch_result, dict) else ""
-            mark_status = "completed" if touch_code in {0, 200} and touch_status not in {"timeout", "timeout_stopped"} else "failed"
+            user_results = touch_result.get("user_results") if isinstance(touch_result, dict) else None
+            if touch_action == "reply_comments" and isinstance(user_results, list):
+                # Reply results are per customer. Persist each result instead
+                # of applying one aggregate status to the whole selected set.
+                for user_result in user_results:
+                    if not isinstance(user_result, dict) or not isinstance(user_result.get("user"), dict):
+                        continue
+                    user_row = user_result["user"]
+                    user_status = "completed" if str(user_result.get("status") or "").strip().lower() == "completed" else "failed"
+                    update_douyin_precise_touch_users(
+                        [user_row],
+                        action=touch_action,
+                        status=user_status,
+                        error="" if user_status == "completed" else str(user_result.get("error") or "").strip(),
+                        result=str(user_result.get("reply_text") or "").strip(),
+                        account_id=user_result.get("account_id") or account_id or None,
+                        started_at=str(user_result.get("started_at") or started_at).strip() or None,
+                        finished_at=str(user_result.get("finished_at") or "").strip() or None,
+                    )
+                failed_users = [
+                    item
+                    for item in user_results
+                    if isinstance(item, dict) and str(item.get("status") or "").strip().lower() != "completed"
+                ]
+                mark_status = "failed" if failed_users else "completed"
+            else:
+                mark_status = "completed" if touch_code in {0, 200} and touch_status not in {"timeout", "timeout_stopped"} else "failed"
             if mark_status == "completed":
                 success_count += 1
             touched_total += len(touch_users)
-            update_douyin_precise_touch_users(
-                touch_users,
-                action=touch_action,
-                status=mark_status,
-                error="" if mark_status == "completed" else str((touch_result or {}).get("msg") or (touch_result or {}).get("message") or "").strip(),
-                result=str((touch_result or {}).get("summary") or (touch_result or {}).get("msg") or "").strip(),
-                account_id=account_id or None,
-                started_at=str((touch_result or {}).get("started_at") or started_at).strip() or None,
-                finished_at=str((touch_result or {}).get("finished_at") or "").strip() or None,
-            )
+            if not (touch_action == "reply_comments" and isinstance(user_results, list)):
+                update_douyin_precise_touch_users(
+                    touch_users,
+                    action=touch_action,
+                    status=mark_status,
+                    error="" if mark_status == "completed" else str((touch_result or {}).get("msg") or (touch_result or {}).get("message") or "").strip(),
+                    result=str((touch_result or {}).get("summary") or (touch_result or {}).get("msg") or "").strip(),
+                    account_id=account_id or None,
+                    started_at=str((touch_result or {}).get("started_at") or started_at).strip() or None,
+                    finished_at=str((touch_result or {}).get("finished_at") or "").strip() or None,
+                )
+            action_users = _scheduled_douyin_action_users(touch_action, touch_users)
+            if touch_action == "reply_comments" and isinstance(user_results, list):
+                action_users = []
+                for user_result in user_results:
+                    if not isinstance(user_result, dict) or not isinstance(user_result.get("user"), dict):
+                        continue
+                    reply_user = dict(user_result["user"])
+                    reply_user["reply_comments_status"] = str(user_result.get("status") or "failed").strip().lower()
+                    reply_user["reply_comments_error"] = str(user_result.get("error") or "").strip()
+                    reply_user["reply_comments_text"] = str(user_result.get("reply_text") or "").strip()
+                    reply_user["reply_comments_account_id"] = user_result.get("account_id") or ""
+                    reply_user["reply_comments_started_at"] = user_result.get("started_at") or ""
+                    reply_user["reply_comments_finished_at"] = user_result.get("finished_at") or ""
+                    action_users.append(_scheduled_douyin_slim_user(reply_user, touch_action))
             results.append(
                 {
                     "action": touch_action,
                     "label": _SCHEDULED_DOUYIN_ACTION_LABELS.get(touch_action, touch_action),
                     "result": touch_result,
-                    "users": _scheduled_douyin_action_users(touch_action, touch_users),
+                    "users": action_users,
                 }
             )
 
@@ -5171,6 +5292,25 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         }
 
     if action == "reply_comments":
+        from douyin_api import run_douyin_precise_customer_replies  # type: ignore
+
+        # Precise touch replies are customer-level actions. Do not route them
+        # through the legacy video-comment endpoint, which would process every
+        # comment in a selected video instead of the bounded pool slice.
+        if source_users:
+            comment_mode = str(source.get("comment_mode") or "fixed").strip() or "fixed"
+            reply_result = await run_douyin_precise_customer_replies(
+                source_users,
+                comment_mode=comment_mode,
+                comment_text=_scheduled_douyin_fixed_text(source, "comment") if comment_mode == "fixed" else "",
+                comment_prompt=str(source.get("comment_prompt") or "").strip(),
+                comment_seed_text=str(source.get("comment_seed_text") or "").strip(),
+                account_id=account_id,
+                interval_minutes_min=interval_minutes_min,
+                interval_minutes_max=interval_minutes_max,
+            )
+            return dict(reply_result) if isinstance(reply_result, dict) else {"code": 500, "msg": "精准客户评论回复没有返回结果。"}
+
         from douyin_api import douyin_start_video_comment, get_commentable_douyin_tasks  # type: ignore
 
         comment_mode = str(source.get("comment_mode") or "fixed").strip() or "fixed"

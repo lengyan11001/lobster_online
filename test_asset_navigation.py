@@ -17,6 +17,7 @@ def test_generated_content_and_user_assets_have_separate_entries():
     assert 'class="asset-upload-control"' in view
     assert "function setAssetLibraryOrigin" in publish
     assert "assetViewDescription" in publish
+    assert "asset_origin: 'user_upload'" in publish
     assert "assets:" in init
 
 

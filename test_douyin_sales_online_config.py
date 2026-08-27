@@ -1,8 +1,12 @@
 import asyncio
 
 import backend.app.api.h5_chat_channel as h5_chat_channel
+
+h5_chat_channel._install_douyin_origin_import_path()
+import douyin_api  # type: ignore  # noqa: E402
 from backend.app.api.h5_chat_channel import (
     _merge_scheduled_douyin_collection_params,
+    _merge_scheduled_douyin_precise_touch_params,
     _merge_scheduled_douyin_stranger_params,
     _scheduled_douyin_changed_conversations,
     _scheduled_douyin_followup_actions,
@@ -13,7 +17,7 @@ from backend.app.api.h5_chat_channel import (
 )
 
 
-def test_h5_employee_editor_exposes_collection_followup_actions():
+def test_h5_employee_editor_exposes_precise_touch_actions():
     from pathlib import Path
 
     root = Path(__file__).resolve().parent
@@ -21,6 +25,7 @@ def test_h5_employee_editor_exposes_collection_followup_actions():
     html = (root / "static" / "views" / "h5-employees.html").read_text(encoding="utf-8")
 
     assert "oeNodeDouyinFollowupField" in html
+    assert "oeNodeDouyinTouchField" in html
     assert "customer_scope:'current_collection_batch'" in script
     assert "migrateDouyinFollowupNodes" in script
     for field_id in (
@@ -28,7 +33,11 @@ def test_h5_employee_editor_exposes_collection_followup_actions():
         "oeNodeDouyinRegions",
         "oeNodeDouyinMaxResults",
         "oeNodeDouyinMode",
-        "oeNodeDouyinFollowupReplyComments",
+        "oeNodeDouyinReplyPreciseComments",
+        "oeNodeDouyinReplyCommentMode",
+        "oeNodeDouyinReplyCommentText",
+        "oeNodeDouyinReplyCommentPrompt",
+        "oeNodeDouyinReplyCommentSeedText",
         "oeNodeDouyinFollowupMentionComment",
         "oeNodeDouyinFollowupFollowComment",
         "oeNodeDouyinFollowupDirectMessage",
@@ -41,11 +50,10 @@ def test_h5_employee_editor_exposes_collection_followup_actions():
     assert "return saveTemplate().then" in script
 
 
-def test_collection_followups_default_all_but_keep_explicit_empty():
+def test_precise_touch_actions_default_all_but_keep_explicit_empty():
     assert _scheduled_douyin_followup_actions(None, default_all=True) == [
-        "reply_comments",
-        "mention_comment",
         "follow_comment",
+        "mention_comment",
         "direct_message",
     ]
     assert _scheduled_douyin_followup_actions([], default_all=True) == []
@@ -72,11 +80,12 @@ def test_collection_node_params_override_online_defaults():
     assert params["regions"] == ["深圳", "东莞"]
     assert params["max_results"] == 80
     assert params["mode"] == "api"
-    assert params["followup_actions"] == ["reply_comments", "direct_message"]
+    assert params["reply_precise_comments"] is True
+    assert params["followup_actions"] == []
     assert params["customer_scope"] == "current_collection_batch"
 
 
-def test_collection_node_explicit_empty_actions_remains_empty():
+def test_collection_node_always_disables_followup_actions():
     params = _merge_scheduled_douyin_collection_params({}, {"followup_actions": []})
     assert params["followup_actions"] == []
 
@@ -101,13 +110,87 @@ def test_collection_workflow_title_keeps_online_keywords_and_followups():
 
     assert params["keyword"] == "AI赚钱"
     assert params["keywords"] == ["AI赚钱", "AI直播", "AI短视频", "AI获客", "AI智能体", "AI"]
-    assert params["followup_actions"] == [
-        "reply_comments",
-        "mention_comment",
-        "follow_comment",
-        "direct_message",
-    ]
+    assert params["followup_actions"] == []
     assert params["customer_scope"] == "current_collection_batch"
+
+
+def test_precise_touch_node_uses_pool_and_preserves_selected_action_order():
+    params = _merge_scheduled_douyin_precise_touch_params(
+        {"touch_actions": ["reply_comments", "follow_comment", "mention_comment", "direct_message"]},
+        {"touch_actions": ["mention_comment", "follow_comment"], "max_users": 12},
+    )
+
+    assert params["touch_actions"] == ["follow_comment", "mention_comment"]
+    assert params["max_users"] == 12
+    assert params["customer_scope"] == "precise_pool"
+
+
+def test_precise_customer_reply_processes_only_selected_users(monkeypatch):
+    calls = []
+
+    class FakeScraper:
+        def __init__(self, account_id, cdp_port):
+            self.account_id = account_id
+            self.cdp_port = cdp_port
+
+        async def reply_to_video_comment(self, video_url, reply_text, target_comment, **kwargs):
+            calls.append((video_url, target_comment["username"], reply_text))
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(douyin_api, "DouyinCommentScraper", FakeScraper)
+    monkeypatch.setattr(douyin_api, "load_global_config", lambda: {})
+    monkeypatch.setattr(
+        douyin_api,
+        "get_online_douyin_accounts",
+        lambda _config: [{"id": 1, "port": 9332, "status": "online"}],
+    )
+    monkeypatch.setattr(
+        douyin_api,
+        "generate_douyin_video_comment_text",
+        lambda task, **_kwargs: f"回复-{task['author']}",
+    )
+
+    result = asyncio.run(
+        douyin_api.run_douyin_precise_customer_replies(
+            [
+                {"username": "甲", "task_url": "https://v/1", "task_title": "视频1", "task_author": "作者1"},
+                {"username": "乙", "task_url": "https://v/2", "task_title": "视频2", "task_author": "作者2"},
+            ],
+            comment_mode="fixed",
+            comment_text="固定回复",
+            interval_minutes_min=0,
+            interval_minutes_max=0,
+        )
+    )
+
+    assert result["code"] == 200
+    assert result["success"] == 2
+    assert result["failed"] == 0
+    assert [item[0:2] for item in calls] == [("https://v/1", "甲"), ("https://v/2", "乙")]
+
+
+def test_precise_touch_pool_excludes_completed_and_inflight_but_keeps_failed(monkeypatch):
+    rows = [
+        {"sec_user_id": "done", "username": "已完成", "is_high_intent": True},
+        {"sec_user_id": "busy", "username": "执行中", "is_high_intent": True},
+        {"sec_user_id": "retry", "username": "失败可重试", "is_high_intent": True},
+    ]
+    monkeypatch.setattr(douyin_api, "build_combined_douyin_customer_pools", lambda: (rows, rows))
+    monkeypatch.setattr(
+        douyin_api,
+        "douyin_precise_touch_state",
+        {
+            "user:done": {"follow_comment": {"status": "completed"}},
+            "user:busy": {"follow_comment": {"status": "processing"}},
+            "user:retry": {"follow_comment": {"status": "failed"}},
+        },
+    )
+
+    selected = douyin_api.collect_douyin_precise_touch_users("follow_comment", limit=10)
+
+    assert [row["username"] for row in selected] == ["失败可重试"]
 
 
 def test_stranger_workflow_explicit_false_overrides_online_config():

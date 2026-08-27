@@ -6696,6 +6696,37 @@
                                         </div>
                                     </div>
                                 </div>
+                                <div class="scheduler-section-row row-triple" style="margin-top:12px">
+                                    <div class="video-comment-field">
+                                        <label><input type="checkbox" id="douyin-scheduler-reply-precise-comments"> 筛选后立即回复精准客户评论</label>
+                                    </div>
+                                    <div class="video-comment-field">
+                                        <label for="douyin-scheduler-reply-comment-mode">回复模式</label>
+                                        <select id="douyin-scheduler-reply-comment-mode" onchange="toggleDouyinSchedulerReplyCommentOptions()">
+                                            <option value="fixed">固定文案</option>
+                                            <option value="ai">AI 按客户评论生成</option>
+                                            <option value="rewrite">AI 同方向改编</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div id="douyin-scheduler-reply-comment-fixed-wrap" class="video-comment-panel active">
+                                    <div class="video-comment-field">
+                                        <label for="douyin-scheduler-reply-comment-text">固定回复文案</label>
+                                        <textarea id="douyin-scheduler-reply-comment-text" rows="2" placeholder="固定模式使用；AI 模式可留空"></textarea>
+                                    </div>
+                                </div>
+                                <div id="douyin-scheduler-reply-comment-ai-wrap" class="video-comment-panel">
+                                    <div class="video-comment-field">
+                                        <label for="douyin-scheduler-reply-comment-prompt">回复要求</label>
+                                        <textarea id="douyin-scheduler-reply-comment-prompt" rows="2" placeholder="AI 模式：回复方向和约束"></textarea>
+                                    </div>
+                                </div>
+                                <div id="douyin-scheduler-reply-comment-rewrite-wrap" class="video-comment-panel">
+                                    <div class="video-comment-field">
+                                        <label for="douyin-scheduler-reply-comment-seed">改编基准文案</label>
+                                        <textarea id="douyin-scheduler-reply-comment-seed" rows="2" placeholder="改编模式使用"></textarea>
+                                    </div>
+                                </div>
                                 </div>
                             </div>
                             <div id="douyin-scheduler-touch-fields" class="source video-comment-config" style="margin-top:14px;display:none">
@@ -6712,7 +6743,6 @@
                                         <div class="video-comment-field" style="grid-column:span 3">
                                             <label>触达动作（按此先后执行）</label>
                                             <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:8px">
-                                                <label><input type="checkbox" id="douyin-scheduler-touch-reply" value="reply_comments" checked> 回复客户评论</label>
                                                 <label><input type="checkbox" id="douyin-scheduler-touch-follow" value="follow_comment" checked> 关注并评论</label>
                                                 <label><input type="checkbox" id="douyin-scheduler-touch-mention" value="mention_comment" checked> 评论并@客户</label>
                                                 <label><input type="checkbox" id="douyin-scheduler-touch-message" value="direct_message" checked> 主动私信</label>
@@ -8921,6 +8951,69 @@
         function hasActiveDouyinWorkbenchJobs(){return douyinIsRunning||douyinVideoCommentRunning||douyinMentionCommentRunning||douyinFollowCommentRunning||douyinInteractionRunning||douyinStrangerMessageRunning||douyinInboxRunning||douyinGroupMemberRunning||douyinAccountNurtureRunning}
         function getDouyinWorkbenchPollDelay(){const anyBusy=hasActiveDouyinWorkbenchJobs(),target=normalize(getCurrentDouyinWorkspaceTarget()||"overview");if(document.hidden)return anyBusy?30000:180000;if(target==="overview"||target==="config"||target==="guide")return anyBusy?15000:30000;if(isDirectRouteLightweightTarget(target))return anyBusy?5000:45000;if(anyBusy)return 5000;return 15000}
         function scheduleDouyinWorkbenchPolling(immediate=false){if(window.__douyinWorkbenchPollTimer){window.clearTimeout(window.__douyinWorkbenchPollTimer);window.__douyinWorkbenchPollTimer=0}const delay=immediate&&!document.hidden?0:getDouyinWorkbenchPollDelay();window.__douyinWorkbenchPollTimer=window.setTimeout(async()=>{await pollDouyinWorkspaceOnce();scheduleDouyinWorkbenchPolling(false)},delay)}
+        // Keep the embedded scheduler aligned with the sales node contract.
+        const douyinInlineSchedulerTouchActionsCompat = ["follow_comment", "mention_comment", "direct_message"];
+        function getDouyinSchedulerReplyCommentMode() {
+            const value = normalize(document.getElementById("douyin-scheduler-reply-comment-mode")?.value || "fixed").toLowerCase();
+            return ["fixed", "ai", "rewrite"].includes(value) ? value : "fixed";
+        }
+        function toggleDouyinSchedulerReplyCommentOptions() {
+            const mode = getDouyinSchedulerReplyCommentMode();
+            document.getElementById("douyin-scheduler-reply-comment-fixed-wrap")?.classList.toggle("active", mode === "fixed");
+            document.getElementById("douyin-scheduler-reply-comment-ai-wrap")?.classList.toggle("active", mode === "ai");
+            document.getElementById("douyin-scheduler-reply-comment-rewrite-wrap")?.classList.toggle("active", mode === "rewrite");
+        }
+        const getDefaultDouyinSchedulerPlanInlineBase = getDefaultDouyinSchedulerPlan;
+        getDefaultDouyinSchedulerPlan = function() {
+            const plan = getDefaultDouyinSchedulerPlanInlineBase();
+            plan.touch_actions = douyinInlineSchedulerTouchActionsCompat.slice();
+            plan.reply_precise_comments = false;
+            plan.reply_comment_mode = plan.reply_comment_mode || "fixed";
+            plan.reply_comment_text = plan.reply_comment_text || "";
+            plan.reply_comment_prompt = plan.reply_comment_prompt || "";
+            plan.reply_comment_seed_text = plan.reply_comment_seed_text || "";
+            return plan;
+        };
+        const getDouyinSchedulerPlanConfigMetaInlineBase = getDouyinSchedulerPlanConfigMeta;
+        getDouyinSchedulerPlanConfigMeta = function(plan = {}) {
+            const summary = getDouyinSchedulerPlanConfigMetaInlineBase(plan);
+            if (normalize(plan.type || "") === "collect_precise" && plan.reply_precise_comments) {
+                return `${summary} · 立即回复（${getDouyinSchedulerStrategyLabel(plan.reply_comment_mode)}）`;
+            }
+            return summary;
+        };
+        const populateDouyinSchedulerPlanFormInlineBase = populateDouyinSchedulerPlanForm;
+        populateDouyinSchedulerPlanForm = function(plan = {}) {
+            const next = { ...(plan || {}) };
+            if (Array.isArray(next.touch_actions)) {
+                next.touch_actions = next.touch_actions.filter((action) => douyinInlineSchedulerTouchActionsCompat.includes(action));
+            }
+            return populateDouyinSchedulerPlanFormInlineBase(next);
+        };
+        const buildDouyinSchedulerPlanPayloadInlineBase = buildDouyinSchedulerPlanPayload;
+        buildDouyinSchedulerPlanPayload = function() {
+            const plan = buildDouyinSchedulerPlanPayloadInlineBase();
+            if (normalize(plan.type || "") === "collect_precise") {
+                plan.reply_precise_comments = !!document.getElementById("douyin-scheduler-reply-precise-comments")?.checked;
+                plan.reply_comment_mode = getDouyinSchedulerReplyCommentMode();
+                plan.reply_comment_text = document.getElementById("douyin-scheduler-reply-comment-text")?.value || "";
+                plan.reply_comment_prompt = document.getElementById("douyin-scheduler-reply-comment-prompt")?.value || "";
+                plan.reply_comment_seed_text = document.getElementById("douyin-scheduler-reply-comment-seed")?.value || "";
+            }
+            if (normalize(plan.type || "") === "precise_touch") {
+                plan.touch_actions = Array.isArray(plan.touch_actions)
+                    ? plan.touch_actions.filter((action) => douyinInlineSchedulerTouchActionsCompat.includes(action))
+                    : douyinInlineSchedulerTouchActionsCompat.slice();
+            }
+            return plan;
+        };
+        const toggleDouyinSchedulerPlanTypeFieldsInlineBase = toggleDouyinSchedulerPlanTypeFields;
+        toggleDouyinSchedulerPlanTypeFields = function() {
+            toggleDouyinSchedulerPlanTypeFieldsInlineBase();
+            if (normalize(document.getElementById("douyin-scheduler-type")?.value || "") === "collect_precise") {
+                toggleDouyinSchedulerReplyCommentOptions();
+            }
+        };
         document.addEventListener("visibilitychange",()=>{scheduleDouyinWorkbenchPolling(!document.hidden)});
     </script>
 </body>

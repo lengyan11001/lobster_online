@@ -17,6 +17,13 @@
     return typeof API_BASE !== 'undefined' ? String(API_BASE || '').replace(/\/$/, '') : '';
   }
 
+  function hasAuthToken() {
+    try {
+      if (typeof getStoredAuthToken === 'function') return !!String(getStoredAuthToken() || '').trim();
+    } catch (e) {}
+    return !!String(typeof token !== 'undefined' ? token : '').trim();
+  }
+
   function headers() {
     var result = typeof authHeaders === 'function' ? authHeaders() : {};
     if (typeof getOrCreateInstallationId === 'function') {
@@ -117,6 +124,12 @@
 
   async function refresh() {
     if (state.polling) return;
+    if (!hasAuthToken()) {
+      state.rows = [];
+      state.seenActive = {};
+      render();
+      return;
+    }
     state.polling = true;
     try {
       var iid = currentInstallationId();

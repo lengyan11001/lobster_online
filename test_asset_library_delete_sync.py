@@ -5,6 +5,7 @@ import inspect
 from pathlib import Path
 
 from starlette.datastructures import UploadFile
+from starlette.background import BackgroundTasks
 from starlette.requests import Request
 
 from backend.app.api import assets
@@ -118,19 +119,34 @@ def test_asset_upload_reports_backend_or_network_failure_detail():
 def test_asset_upload_saves_locally_and_defers_public_url_until_use():
     upload_source = inspect.getsource(assets.upload_asset)
     helper_source = inspect.getsource(assets._upload_bytes_to_auth_server)
+    header_source = inspect.getsource(assets._auth_server_upload_headers)
 
     assert "_save_bytes" in upload_source
     assert "_upload_to_tos" not in upload_source
     assert "_upload_bytes_to_auth_server" not in upload_source
-    assert '"public_url_status": "deferred_until_use"' in upload_source
+    assert 'public_url_status = "preparing" if upload_headers else "deferred_until_use"' in upload_source
+    assert '"public_url_status": public_url_status' in upload_source
     assert 'source_url=None' in upload_source
-    assert "range(1, 4)" in helper_source
+    assert "range(1, _AUTH_SERVER_UPLOAD_MAX_ATTEMPTS + 1)" in helper_source
     assert "trust_env=False" in helper_source
-    assert 'headers["X-Lobster-Brand"] = brand_mark' in helper_source
+    assert 'headers["X-Lobster-Brand"] = brand_mark' in header_source
 
     ui_source = (Path(__file__).parent / "static" / "js" / "publish.js").read_text(encoding="utf-8")
     assert "正在保存到本地素材库" in ui_source
     assert "本地保存完成" in ui_source
+
+
+def test_manual_url_assets_stay_in_the_user_upload_library():
+    body = assets.SaveAssetReq(
+        url="https://cdn.example.test/manual-reference.png",
+        asset_origin="user_upload",
+    )
+
+    assert assets._save_asset_origin(body) == "user_upload"
+    assert "if _save_asset_origin(body) != \"generated\":" in inspect.getsource(
+        assets._report_generation_record_to_server
+    )
+    assert '"asset_origin": asset_origin' in inspect.getsource(assets._save_asset_from_url_locked)
 
 
 def test_asset_upload_returns_after_local_database_save(monkeypatch):
@@ -163,6 +179,7 @@ def test_asset_upload_returns_after_local_database_save(monkeypatch):
     result = asyncio.run(
         assets.upload_asset(
             request=request,
+            background_tasks=BackgroundTasks(),
             file=upload,
             current_user=SimpleNamespace(id=7),
             db=db,

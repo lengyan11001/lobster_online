@@ -381,6 +381,37 @@
                                                 <input type="number" id="douyin-scheduler-comment-max-comments" min="20" max="500" step="10" value="500">
                                             </div>
                                         </div>
+                                        <div class="scheduler-section-row row-triple" style="margin-top:12px">
+                                            <div class="video-comment-field">
+                                                <label><input type="checkbox" id="douyin-scheduler-reply-precise-comments"> 筛选后立即回复精准客户评论</label>
+                                            </div>
+                                            <div class="video-comment-field">
+                                                <label for="douyin-scheduler-reply-comment-mode">回复模式</label>
+                                                <select id="douyin-scheduler-reply-comment-mode" onchange="toggleSchedulerReplyCommentOptions()">
+                                                    <option value="fixed">固定文案</option>
+                                                    <option value="ai">AI 按客户评论生成</option>
+                                                    <option value="rewrite">AI 同方向改编</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div id="douyin-scheduler-reply-comment-fixed-wrap" class="video-comment-panel active">
+                                            <div class="video-comment-field">
+                                                <label for="douyin-scheduler-reply-comment-text">固定回复文案</label>
+                                                <textarea id="douyin-scheduler-reply-comment-text" rows="2" placeholder="固定模式使用；AI 模式可留空"></textarea>
+                                            </div>
+                                        </div>
+                                        <div id="douyin-scheduler-reply-comment-ai-wrap" class="video-comment-panel">
+                                            <div class="video-comment-field">
+                                                <label for="douyin-scheduler-reply-comment-prompt">回复要求</label>
+                                                <textarea id="douyin-scheduler-reply-comment-prompt" rows="2" placeholder="AI 模式：回复方向和约束"></textarea>
+                                            </div>
+                                        </div>
+                                        <div id="douyin-scheduler-reply-comment-rewrite-wrap" class="video-comment-panel">
+                                            <div class="video-comment-field">
+                                                <label for="douyin-scheduler-reply-comment-seed">改编基准文案</label>
+                                                <textarea id="douyin-scheduler-reply-comment-seed" rows="2" placeholder="改编模式使用"></textarea>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -399,7 +430,6 @@
                                         <div class="video-comment-field" style="grid-column:span 3">
                                             <label>触达动作（按此先后执行）</label>
                                             <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:8px">
-                                                <label><input type="checkbox" id="douyin-scheduler-touch-reply" value="reply_comments" checked> 回复客户评论</label>
                                                 <label><input type="checkbox" id="douyin-scheduler-touch-follow" value="follow_comment" checked> 关注并评论</label>
                                                 <label><input type="checkbox" id="douyin-scheduler-touch-mention" value="mention_comment" checked> 评论并@客户</label>
                                                 <label><input type="checkbox" id="douyin-scheduler-touch-message" value="direct_message" checked> 主动私信</label>
@@ -717,11 +747,12 @@
         function getSchedulerPlanConfigMeta(plan = {}) {
             const type = normalize(plan.type);
             if (type === "collect_precise") {
-                return `关键词 ${plan.keyword || "-"} · 搜索 ${plan.max_results || 50} 条 · 每轮视频 ${plan.max_videos_per_run || 50} 条 · 滚动 ${plan.comment_scroll_rounds || 300} 轮 · 最多评论 ${plan.comment_max_comments || 500} 条`;
+                const reply = plan.reply_precise_comments ? ` · 立即回复（${getSchedulerStrategyLabel(plan.reply_comment_mode)}）` : "";
+                return `关键词 ${plan.keyword || "-"} · 搜索 ${plan.max_results || 50} 条 · 每轮视频 ${plan.max_videos_per_run || 50} 条 · 滚动 ${plan.comment_scroll_rounds || 300} 轮 · 最多评论 ${plan.comment_max_comments || 500} 条${reply}`;
             }
             if (type === "precise_touch") {
-                const labels = { reply_comments: "回复客户评论", follow_comment: "关注并评论", mention_comment: "评论并@客户", direct_message: "主动私信" };
-                const actions = Array.isArray(plan.touch_actions) ? plan.touch_actions.map((item) => labels[item] || item).filter(Boolean) : [];
+                const labels = { follow_comment: "关注并评论", mention_comment: "评论并@客户", direct_message: "主动私信" };
+                const actions = Array.isArray(plan.touch_actions) ? plan.touch_actions.filter((item) => Object.prototype.hasOwnProperty.call(labels, item)).map((item) => labels[item]).filter(Boolean) : [];
                 return `每轮触达 ${plan.max_users_per_run || 30} 人 · 动作 ${actions.join(" → ") || "全部"}`;
             }
             if (type === "self_comment_monitor") {
@@ -751,9 +782,14 @@
                 comment_scroll_rounds: 300,
                 comment_max_comments: 500,
                 max_users_per_run: 30,
-                touch_actions: ["reply_comments", "follow_comment", "mention_comment", "direct_message"],
+                touch_actions: ["follow_comment", "mention_comment", "direct_message"],
                 account_id: 0,
                 use_online_self_comment_config: true,
+                reply_precise_comments: false,
+                reply_comment_mode: "fixed",
+                reply_comment_text: "",
+                reply_comment_prompt: "",
+                reply_comment_seed_text: "",
                 comment_mode: "fixed",
                 comment_text: "",
                 comment_prompt: "",
@@ -794,6 +830,18 @@
             document.getElementById("douyin-scheduler-comment-rewrite-wrap")?.classList.toggle("active", mode === "rewrite");
         }
 
+        function getSchedulerReplyCommentMode() {
+            const value = normalize(document.getElementById("douyin-scheduler-reply-comment-mode")?.value || "fixed").toLowerCase();
+            return ["fixed", "ai", "rewrite"].includes(value) ? value : "fixed";
+        }
+
+        function toggleSchedulerReplyCommentOptions() {
+            const mode = getSchedulerReplyCommentMode();
+            document.getElementById("douyin-scheduler-reply-comment-fixed-wrap")?.classList.toggle("active", mode === "fixed");
+            document.getElementById("douyin-scheduler-reply-comment-ai-wrap")?.classList.toggle("active", mode === "ai");
+            document.getElementById("douyin-scheduler-reply-comment-rewrite-wrap")?.classList.toggle("active", mode === "rewrite");
+        }
+
         function getSchedulerMessageMode() {
             const value = normalize(document.getElementById("douyin-scheduler-message-mode")?.value || "fixed").toLowerCase();
             return ["fixed", "ai", "rewrite"].includes(value) ? value : "fixed";
@@ -813,6 +861,7 @@
             document.getElementById("douyin-scheduler-self-comment-fields").style.display = type === "self_comment_monitor" ? "block" : "none";
             document.getElementById("douyin-scheduler-follow-fields").style.display = type === "follow_comment" ? "block" : "none";
             document.getElementById("douyin-scheduler-interaction-fields").style.display = type === "interaction" ? "block" : "none";
+            if (type === "collect_precise") toggleSchedulerReplyCommentOptions();
             if (type === "follow_comment") toggleSchedulerCommentOptions();
             if (type === "interaction") toggleSchedulerMessageOptions();
         }
@@ -833,9 +882,14 @@
             document.getElementById("douyin-scheduler-max-videos").value = next.max_videos_per_run ?? 50;
             document.getElementById("douyin-scheduler-comment-scroll-rounds").value = next.comment_scroll_rounds ?? 300;
             document.getElementById("douyin-scheduler-comment-max-comments").value = next.comment_max_comments ?? 500;
+            document.getElementById("douyin-scheduler-reply-precise-comments").checked = !!next.reply_precise_comments;
+            document.getElementById("douyin-scheduler-reply-comment-mode").value = next.reply_comment_mode || "fixed";
+            document.getElementById("douyin-scheduler-reply-comment-text").value = next.reply_comment_text || "";
+            document.getElementById("douyin-scheduler-reply-comment-prompt").value = next.reply_comment_prompt || "";
+            document.getElementById("douyin-scheduler-reply-comment-seed").value = next.reply_comment_seed_text || "";
             document.getElementById("douyin-scheduler-touch-max-users").value = next.max_users_per_run ?? 30;
-            const touchActions = Array.isArray(next.touch_actions) ? next.touch_actions : ["reply_comments", "follow_comment", "mention_comment", "direct_message"];
-            ["reply_comments", "follow_comment", "mention_comment", "direct_message"].forEach((action) => {
+            const touchActions = Array.isArray(next.touch_actions) ? next.touch_actions.filter((action) => ["follow_comment", "mention_comment", "direct_message"].includes(action)) : ["follow_comment", "mention_comment", "direct_message"];
+            ["follow_comment", "mention_comment", "direct_message"].forEach((action) => {
                 const checkbox = document.querySelector(`#douyin-scheduler-touch-fields input[value="${action}"]`);
                 if (checkbox) checkbox.checked = touchActions.includes(action);
             });
@@ -882,10 +936,15 @@
                     max_videos_per_run: Math.max(1, parseInt(document.getElementById("douyin-scheduler-max-videos")?.value, 10) || 50),
                     comment_scroll_rounds: Math.max(20, parseInt(document.getElementById("douyin-scheduler-comment-scroll-rounds")?.value, 10) || 300),
                     comment_max_comments: Math.max(20, parseInt(document.getElementById("douyin-scheduler-comment-max-comments")?.value, 10) || 500),
+                    reply_precise_comments: !!document.getElementById("douyin-scheduler-reply-precise-comments")?.checked,
+                    reply_comment_mode: getSchedulerReplyCommentMode(),
+                    reply_comment_text: document.getElementById("douyin-scheduler-reply-comment-text")?.value || "",
+                    reply_comment_prompt: document.getElementById("douyin-scheduler-reply-comment-prompt")?.value || "",
+                    reply_comment_seed_text: document.getElementById("douyin-scheduler-reply-comment-seed")?.value || "",
                 };
             }
             if (type === "precise_touch") {
-                const actions = ["reply_comments", "follow_comment", "mention_comment", "direct_message"].filter((action) => document.querySelector(`#douyin-scheduler-touch-fields input[value="${action}"]`)?.checked);
+                const actions = ["follow_comment", "mention_comment", "direct_message"].filter((action) => document.querySelector(`#douyin-scheduler-touch-fields input[value="${action}"]`)?.checked);
                 return {
                     ...base,
                     max_users_per_run: Math.max(1, parseInt(document.getElementById("douyin-scheduler-touch-max-users")?.value, 10) || 30),

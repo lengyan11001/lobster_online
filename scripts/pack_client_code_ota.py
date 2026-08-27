@@ -76,8 +76,10 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     # and shipping only the updater leaves older helper scripts installed.
     "scripts",
     "backend",
-    # OEM switcher runtime. The configurator is launched by the bundled
-    # OEM配置启动器.exe and must be updated together with its branding helper.
+    # Desktop Python runtime used by the stable OEM EXE shells. The branded
+    # executables stay installed, while launcher and configurator behavior can
+    # continue to receive OTA fixes.
+    "desktop/launcher.py",
     "desktop/oem_branding.py",
     "desktop/oem_configurator.py",
     "OEM配置启动器.exe",

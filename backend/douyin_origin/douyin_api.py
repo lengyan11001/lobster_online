@@ -81,7 +81,10 @@ DOUYIN_SCHEDULE_TYPES = {
     "follow_comment",
     "interaction",
 }
-DOUYIN_PRECISE_TOUCH_ACTIONS = ("reply_comments", "follow_comment", "mention_comment", "direct_message")
+# ``reply_comments`` is handled immediately by the precise-acquisition
+# worker.  The standalone precise-touch node only owns these three actions.
+DOUYIN_PRECISE_TOUCH_ACTIONS = ("follow_comment", "mention_comment", "direct_message")
+DOUYIN_COLLECTION_REPLY_ACTION = "reply_comments"
 DOUYIN_PRECISE_TOUCH_DONE_STATUSES = {
     "completed",
 }
@@ -818,6 +821,27 @@ def ensure_douyin_task_shape(task: Dict) -> Dict:
     task["video_comment_account_id"] = str(task.get("video_comment_account_id", "") or "").strip()
     task["video_comment_started_at"] = str(task.get("video_comment_started_at", "") or "").strip()
     task["video_comment_finished_at"] = str(task.get("video_comment_finished_at", "") or "").strip()
+    task["precise_reply_enabled"] = coerce_bool(task.get("precise_reply_enabled", task.get("reply_precise_comments", False)), False)
+    task["precise_reply_mode"] = normalize_douyin_video_comment_mode(
+        task.get("precise_reply_mode", task.get("reply_comment_mode", "fixed"))
+    )
+    task["precise_reply_text"] = str(
+        task.get("precise_reply_text", task.get("reply_comment_text", "")) or ""
+    ).strip()
+    task["precise_reply_prompt"] = str(
+        task.get("precise_reply_prompt", task.get("reply_comment_prompt", "")) or ""
+    ).strip()
+    task["precise_reply_seed_text"] = str(
+        task.get("precise_reply_seed_text", task.get("reply_comment_seed_text", "")) or ""
+    ).strip()
+    task["precise_reply_interval_minutes_min"] = max(
+        0.0,
+        min(float(task.get("precise_reply_interval_minutes_min", task.get("reply_comment_interval_minutes_min", 0)) or 0), 1440),
+    )
+    task["precise_reply_interval_minutes_max"] = max(
+        task["precise_reply_interval_minutes_min"],
+        min(float(task.get("precise_reply_interval_minutes_max", task.get("reply_comment_interval_minutes_max", 0)) or 0), 1440),
+    )
     return task
 
 
@@ -1556,6 +1580,22 @@ def normalize_douyin_schedule_plan(raw_plan: Optional[Dict[str, object]] = None)
     touch_actions = normalize_douyin_precise_touch_actions(plan.get("touch_actions"))
     if schedule_type == "precise_touch" and not touch_actions:
         touch_actions = list(DOUYIN_PRECISE_TOUCH_ACTIONS)
+    legacy_reply_actions = plan.get("followup_actions") if isinstance(plan.get("followup_actions"), list) else []
+    # Older collection plans stored the immediate-reply toggle in touch_actions.
+    # Only migrate that legacy value for collection plans; precise-touch plans
+    # must never regain reply_comments as a follow-up action.
+    if schedule_type == "collect_precise" and isinstance(plan.get("touch_actions"), list):
+        legacy_reply_actions = [*legacy_reply_actions, *plan.get("touch_actions", [])]
+    reply_precise_comments = coerce_bool(
+        plan.get("reply_precise_comments"),
+        "reply_comments" in {str(item or "").strip().lower() for item in legacy_reply_actions},
+    )
+    reply_comment_mode = normalize_douyin_video_comment_mode(
+        plan.get("reply_comment_mode", plan.get("comment_mode"))
+    )
+    reply_comment_text = str(plan.get("reply_comment_text", plan.get("comment_text", "")) or "").strip()
+    reply_comment_prompt = str(plan.get("reply_comment_prompt", plan.get("comment_prompt", "")) or "").strip()
+    reply_comment_seed_text = str(plan.get("reply_comment_seed_text", plan.get("comment_seed_text", "")) or "").strip()
     account_id = max(0, int(plan.get("account_id", plan.get("douyin_account_id", 0)) or 0))
     next_run_at = parse_schedule_datetime(plan.get("next_run_at"))
     window_start = normalize_schedule_time_text(plan.get("window_start"), "09:00")
@@ -1581,6 +1621,11 @@ def normalize_douyin_schedule_plan(raw_plan: Optional[Dict[str, object]] = None)
         "max_videos_per_run": max_videos_per_run,
         "max_users_per_run": max_users_per_run,
         "touch_actions": touch_actions,
+        "reply_precise_comments": reply_precise_comments,
+        "reply_comment_mode": reply_comment_mode,
+        "reply_comment_text": reply_comment_text,
+        "reply_comment_prompt": reply_comment_prompt,
+        "reply_comment_seed_text": reply_comment_seed_text,
         "use_online_self_comment_config": coerce_bool(plan.get("use_online_self_comment_config", True), True),
         "comment_scroll_rounds": comment_scroll_rounds,
         "comment_max_comments": comment_max_comments,
@@ -2987,6 +3032,18 @@ def apply_douyin_precise_touch_state(rows: List[Dict]) -> None:
             for action, state in action_state.items()
             if str(action or "").strip().lower()
         }
+        for action_name, action_state_value in normalized_state.items():
+            prefix = str(action_name or "").strip().lower()
+            if not prefix:
+                continue
+            row[f"{prefix}_status"] = action_state_value.get("status", "pending")
+            row[f"{prefix}_error"] = action_state_value.get("error", "")
+            row[f"{prefix}_result"] = action_state_value.get("result", "")
+            row[f"{prefix}_text"] = action_state_value.get("result", "")
+            row[f"{prefix}_account_id"] = action_state_value.get("account_id", "")
+            row[f"{prefix}_started_at"] = action_state_value.get("started_at", "")
+            row[f"{prefix}_finished_at"] = action_state_value.get("finished_at", "")
+            row[f"{prefix}_updated_at"] = action_state_value.get("updated_at", "")
         row["precise_touch_statuses"] = normalized_state
         row["precise_touch_completed_actions"] = [
             action for action, state in normalized_state.items() if str(state.get("status") or "").strip().lower() == "completed"
@@ -3168,6 +3225,49 @@ def set_tasks_from_rows(rows: List[Dict]) -> List[Dict]:
     douyin_tasks = tasks
     save_douyin_tasks_state()
     return douyin_tasks
+
+
+def configure_douyin_collection_tasks(tasks: List[Dict], params: Optional[Dict] = None) -> int:
+    """Attach one-shot precise-comment settings to newly scheduled tasks."""
+    source = params if isinstance(params, dict) else {}
+    legacy_actions = source.get("followup_actions")
+    if not isinstance(legacy_actions, list):
+        legacy_actions = source.get("touch_actions")
+    explicit_enabled = source.get("reply_precise_comments")
+    enabled = (
+        coerce_bool(explicit_enabled, False)
+        if explicit_enabled is not None
+        else "reply_comments" in {str(item or "").strip().lower() for item in (legacy_actions or [])}
+    )
+    mode = normalize_douyin_video_comment_mode(
+        source.get("reply_comment_mode", source.get("comment_mode", "fixed"))
+    )
+    text = str(source.get("reply_comment_text", source.get("comment_text", "")) or "").strip()
+    prompt = str(source.get("reply_comment_prompt", source.get("comment_prompt", "")) or "").strip()
+    seed = str(source.get("reply_comment_seed_text", source.get("comment_seed_text", "")) or "").strip()
+    interval_min = max(
+        0.0,
+        min(float(source.get("reply_comment_interval_minutes_min", source.get("interval_minutes_min", 0)) or 0), 1440),
+    )
+    interval_max = max(
+        interval_min,
+        min(float(source.get("reply_comment_interval_minutes_max", source.get("interval_minutes_max", 0)) or 0), 1440),
+    )
+    configured = 0
+    for task in tasks or []:
+        if not isinstance(task, dict):
+            continue
+        task["precise_reply_enabled"] = enabled
+        task["precise_reply_mode"] = mode
+        task["precise_reply_text"] = text
+        task["precise_reply_prompt"] = prompt
+        task["precise_reply_seed_text"] = seed
+        task["precise_reply_interval_minutes_min"] = interval_min
+        task["precise_reply_interval_minutes_max"] = interval_max
+        configured += 1
+    if configured:
+        save_douyin_tasks_state()
+    return configured
 
 
 def normalize_high_intent_user(row: Dict) -> Dict:
@@ -5914,6 +6014,87 @@ def generate_douyin_video_comment_text(
     return request_douyin_ai_comment(system_prompt, user_prompt)
 
 
+def generate_douyin_video_comment_replies_batch(
+    task: Dict,
+    users: List[Dict],
+    *,
+    mode: Optional[str],
+    fixed_text: str = "",
+    prompt_text: str = "",
+    seed_text: str = "",
+) -> Dict[int, str]:
+    """Generate one reply per captured comment in a single video batch.
+
+    The indexes here belong to this immutable ``users`` snapshot, rather than
+    to the live page.  A later comment insertion therefore cannot retarget a
+    reply to another customer.
+    """
+    rows = [row for row in (users or []) if isinstance(row, dict)]
+    if not rows:
+        return {}
+    normalized_mode = normalize_douyin_video_comment_mode(mode)
+    if normalized_mode == "fixed":
+        text = generate_douyin_video_comment_text(
+            task,
+            mode="fixed",
+            fixed_text=fixed_text,
+            prompt_text=prompt_text,
+            seed_text=seed_text,
+        )
+        return {index: text for index, _ in enumerate(rows, start=1)}
+
+    client = create_ai_client()
+    if not str(client.api_key or "").strip():
+        raise RuntimeError("当前未配置 AI 接口 Key，不能使用 AI 评论回复模式。")
+    title = str(task.get("title", "") or "").strip() or "未知"
+    author = str(task.get("author", "") or "").strip() or "未知"
+    direction = clean_douyin_video_comment_text(prompt_text, limit=240)
+    seed = clean_douyin_video_comment_text(seed_text, limit=240)
+    lines = []
+    for index, row in enumerate(rows, start=1):
+        username = clean_douyin_video_comment_text(row.get("username", ""), limit=60) or "未知用户"
+        comment = clean_douyin_video_comment_text(
+            row.get("comment", row.get("content", "")),
+            limit=180,
+        ) or "（无文字评论）"
+        lines.append(f"{index}. 用户：{username}；客户原评论：{comment}")
+    mode_rule = (
+        f"基准文案：{seed}\n请保持基准文案的核心方向，针对每条原评论自然改写。"
+        if normalized_mode == "rewrite"
+        else f"回复方向：{direction or '结合视频和客户原评论，给出自然、具体、友好的回复。'}"
+    )
+    prompt = (
+        "你是抖音账号的真人运营。请为下面同一条视频下的客户评论分别生成一条回复。\n"
+        "只返回 JSON，不要解释，格式必须是："
+        '{"replies":[{"comment_index":1,"reply_text":"..."}]}\n'
+        "要求：每个 comment_index 只出现一次；回复必须对应客户原评论；"
+        "不要复制原评论，不要出现私信、联系方式、AI、机器人、引流等词；"
+        "每条回复控制在 10 到 48 个中文字符。\n"
+        f"视频标题：{title}\n作者：{author}\n{mode_rule}\n评论列表：\n"
+        + "\n".join(lines)
+    )
+    content = client.filter_with_prompt(prompt)
+    parsed = parse_json_object_from_text(content)
+    raw_replies = parsed.get("replies") if isinstance(parsed, dict) else None
+    result: Dict[int, str] = {}
+    if isinstance(raw_replies, list):
+        for item in raw_replies:
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("comment_index", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if index < 1 or index > len(rows) or index in result:
+                continue
+            text = clean_douyin_video_comment_text(item.get("reply_text", ""), limit=120)
+            if text:
+                result[index] = text
+    if len(result) != len(rows):
+        raise RuntimeError("AI 批量回复未完整返回每条评论的话术。")
+    return result
+
+
 def generate_douyin_interaction_message(
     user: Dict,
     *,
@@ -7523,6 +7704,7 @@ async def execute_douyin_schedule_plan(plan: Dict[str, object]) -> Dict[str, obj
             return {"code": 400, "msg": f"关键词“{keyword}”本次没有可用视频。"}
         set_tasks_from_rows(rows)
         matched_tasks = match_douyin_tasks_for_rows(rows)
+        configure_douyin_collection_tasks(matched_tasks, normalized)
         task_ids = [int(task.get("id", 0) or 0) for task in matched_tasks if int(task.get("id", 0) or 0) > 0]
         if not task_ids:
             return {"code": 400, "msg": f"关键词“{keyword}”本次没有匹配到可执行任务。"}
@@ -8109,12 +8291,56 @@ async def run_douyin_task_worker(
                     strategy=_filter_strategy,
                     duration_ms=int((time.time() - _filter_started_at) * 1000),
                 )
+                reply_results: List[Dict] = []
                 async with state_lock:
                     task["all_comments"] = comments
                     task["comment_count"] = len(comments)
                     task["high_intent_users"] = dedupe_users(high_intent)
-                    task["status"] = "completed"
+                    task["status"] = "processing"
                     task["error"] = ""
+                    task["collect_progress"] = {
+                        **ensure_douyin_task_shape(task).get("collect_progress", {}),
+                        "phase": "replying_precise_comments" if task.get("precise_reply_enabled") and high_intent else "completed",
+                        "account_id": int(account["id"] or 0),
+                        "collected_comments": len(comments),
+                        "visible_comments": len(comments),
+                        "updated_at": _now_text(),
+                        "last_message": (
+                            f"精准客户筛选完成，共 {len(high_intent)} 人，正在逐视频回复。"
+                            if task.get("precise_reply_enabled") and high_intent
+                            else f"评论采集完成，共采集 {len(comments)} 条评论。"
+                        ),
+                    }
+                    save_douyin_tasks_state()
+                reply_candidates = [
+                    row
+                    for row in (high_intent or [])
+                    if not _is_douyin_precise_touch_action_done(
+                        _get_douyin_precise_touch_action_state(row, DOUYIN_COLLECTION_REPLY_ACTION)
+                    )
+                    and not _is_douyin_precise_touch_action_inflight(
+                        _get_douyin_precise_touch_action_state(row, DOUYIN_COLLECTION_REPLY_ACTION)
+                    )
+                ]
+                if task.get("precise_reply_enabled") and reply_candidates:
+                    interval_min = max(0, int(float(task.get("precise_reply_interval_minutes_min", 0) or 0) * 60))
+                    interval_max = max(
+                        interval_min,
+                        int(float(task.get("precise_reply_interval_minutes_max", 0) or 0) * 60),
+                    )
+                    reply_results = await _run_douyin_precise_customer_reply_batch_worker(
+                        task,
+                        reply_candidates,
+                        account,
+                        task.get("precise_reply_mode", "fixed"),
+                        task.get("precise_reply_text", ""),
+                        task.get("precise_reply_prompt", ""),
+                        task.get("precise_reply_seed_text", ""),
+                        interval_min,
+                        interval_max,
+                    )
+                async with state_lock:
+                    task["status"] = "completed"
                     task["collect_progress"] = {
                         **ensure_douyin_task_shape(task).get("collect_progress", {}),
                         "phase": "completed",
@@ -8122,7 +8348,12 @@ async def run_douyin_task_worker(
                         "collected_comments": len(comments),
                         "visible_comments": len(comments),
                         "updated_at": _now_text(),
-                        "last_message": f"评论采集完成，共采集 {len(comments)} 条评论。",
+                        "last_message": (
+                        f"评论采集完成，共采集 {len(comments)} 条评论，精准客户 {len(high_intent)} 人；"
+                            f"回复成功 {sum(1 for item in reply_results if item.get('status') == 'completed')} 人。"
+                            if task.get("precise_reply_enabled")
+                            else f"评论采集完成，共采集 {len(comments)} 条评论。"
+                        ),
                     }
                     save_douyin_tasks_state()
                 douyin_log(
@@ -8358,12 +8589,56 @@ async def run_douyin_task_worker_protocol(
                 strategy=_filter_strategy,
                 duration_ms=int((time.time() - _filter_started_at) * 1000),
             )
+            reply_results: List[Dict] = []
             async with state_lock:
                 task["all_comments"] = comments
                 task["comment_count"] = len(comments)
                 task["high_intent_users"] = dedupe_users(high_intent)
-                task["status"] = "completed"
+                task["status"] = "processing"
                 task["error"] = ""
+                task["collect_progress"] = {
+                    **ensure_douyin_task_shape(task).get("collect_progress", {}),
+                    "phase": "replying_precise_comments" if task.get("precise_reply_enabled") and high_intent else "completed",
+                    "account_id": int(account["id"] or 0),
+                    "collected_comments": len(comments),
+                    "visible_comments": len(comments),
+                    "updated_at": _now_text(),
+                    "last_message": (
+                        f"精准客户筛选完成，共 {len(high_intent)} 人，正在逐视频回复。"
+                        if task.get("precise_reply_enabled") and high_intent
+                        else f"协议模式采集完成，共采集 {len(comments)} 条评论。"
+                    ),
+                }
+                save_douyin_tasks_state()
+            reply_candidates = [
+                row
+                for row in (high_intent or [])
+                if not _is_douyin_precise_touch_action_done(
+                    _get_douyin_precise_touch_action_state(row, DOUYIN_COLLECTION_REPLY_ACTION)
+                )
+                and not _is_douyin_precise_touch_action_inflight(
+                    _get_douyin_precise_touch_action_state(row, DOUYIN_COLLECTION_REPLY_ACTION)
+                )
+            ]
+            if task.get("precise_reply_enabled") and reply_candidates:
+                interval_min = max(0, int(float(task.get("precise_reply_interval_minutes_min", 0) or 0) * 60))
+                interval_max = max(
+                    interval_min,
+                    int(float(task.get("precise_reply_interval_minutes_max", 0) or 0) * 60),
+                )
+                reply_results = await _run_douyin_precise_customer_reply_batch_worker(
+                    task,
+                    reply_candidates,
+                    account,
+                    task.get("precise_reply_mode", "fixed"),
+                    task.get("precise_reply_text", ""),
+                    task.get("precise_reply_prompt", ""),
+                    task.get("precise_reply_seed_text", ""),
+                    interval_min,
+                    interval_max,
+                )
+            async with state_lock:
+                task["status"] = "completed"
                 task["collect_progress"] = {
                     **ensure_douyin_task_shape(task).get("collect_progress", {}),
                     "phase": "completed",
@@ -8371,7 +8646,12 @@ async def run_douyin_task_worker_protocol(
                     "collected_comments": len(comments),
                     "visible_comments": len(comments),
                     "updated_at": _now_text(),
-                    "last_message": f"协议模式采集完成，共采集 {len(comments)} 条评论。",
+                    "last_message": (
+                        f"协议模式采集完成，共采集 {len(comments)} 条评论，精准客户 {len(high_intent)} 人；"
+                        f"回复成功 {sum(1 for item in reply_results if item.get('status') == 'completed')} 人。"
+                        if task.get("precise_reply_enabled")
+                        else f"协议模式采集完成，共采集 {len(comments)} 条评论。"
+                    ),
                 }
                 save_douyin_tasks_state()
             douyin_log(
@@ -8693,6 +8973,308 @@ async def run_douyin_video_comments(
             f"[抖音视频评论] 本轮结束，成功 {douyin_video_comment_state['success']}，失败 {douyin_video_comment_state['failed']}",
             "info",
         )
+
+
+async def _run_douyin_precise_customer_reply_batch_worker(
+    task: Dict,
+    users: List[Dict],
+    account: Dict,
+    comment_mode: str,
+    comment_text: str,
+    comment_prompt: str,
+    comment_seed_text: str,
+    interval_seconds_min: int,
+    interval_seconds_max: int,
+) -> List[Dict]:
+    """Reply to one video's selected comments with batched AI generation."""
+    scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    results: List[Dict] = []
+    rows = [normalize_high_intent_user(row) for row in (users or []) if isinstance(row, dict)]
+    try:
+        fixed_reply_text = ""
+        if normalize_douyin_video_comment_mode(comment_mode) == "fixed":
+            fixed_reply_text = generate_douyin_video_comment_text(
+                task,
+                mode="fixed",
+                fixed_text=comment_text,
+                prompt_text=comment_prompt,
+                seed_text=comment_seed_text,
+            )
+        batch_size = 30
+        for batch_start in range(0, len(rows), batch_size):
+            batch = rows[batch_start : batch_start + batch_size]
+            try:
+                reply_map = (
+                    {index: fixed_reply_text for index, _ in enumerate(batch, start=1)}
+                    if fixed_reply_text
+                    else await asyncio.to_thread(
+                        generate_douyin_video_comment_replies_batch,
+                        task,
+                        batch,
+                        mode=comment_mode,
+                        fixed_text=comment_text,
+                        prompt_text=comment_prompt,
+                        seed_text=comment_seed_text,
+                    )
+                )
+                batch_error = ""
+            except Exception as exc:
+                reply_map = {}
+                batch_error = str(exc).strip() or exc.__class__.__name__
+
+            for offset, user in enumerate(batch, start=1):
+                started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                item = {
+                    "user": user,
+                    "status": "failed",
+                    "account_id": int(account.get("id", 0) or 0),
+                    "started_at": started_at,
+                    "finished_at": "",
+                    "reply_text": str(reply_map.get(offset, "") or "").strip(),
+                    "error": batch_error,
+                }
+                try:
+                    update_douyin_precise_touch_users(
+                        [user],
+                        action=DOUYIN_COLLECTION_REPLY_ACTION,
+                        status="processing",
+                        account_id=account.get("id"),
+                        started_at=started_at,
+                    )
+                    if batch_error:
+                        raise RuntimeError(batch_error)
+                    task_url = str(task.get("url", "") or "").strip()
+                    if not task_url:
+                        raise RuntimeError("精准客户缺少来源视频地址，无法定位评论")
+                    await scraper.reply_to_video_comment(
+                        task_url,
+                        item["reply_text"],
+                        user,
+                        expected_title=str(task.get("title", "") or "").strip(),
+                        logger=douyin_log,
+                    )
+                    item["status"] = "completed"
+                    update_douyin_precise_touch_users(
+                        [user],
+                        action=DOUYIN_COLLECTION_REPLY_ACTION,
+                        status="completed",
+                        result=item["reply_text"],
+                        account_id=account.get("id"),
+                        started_at=started_at,
+                        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                except Exception as exc:
+                    item["error"] = str(exc).strip() or exc.__class__.__name__
+                    douyin_log(
+                        f"[抖音精准获客评论回复] {user.get('username') or '-'} 执行失败：{item['error']}",
+                        "error",
+                    )
+                    update_douyin_precise_touch_users(
+                        [user],
+                        action=DOUYIN_COLLECTION_REPLY_ACTION,
+                        status="failed",
+                        error=item["error"],
+                        result=item["reply_text"],
+                        account_id=account.get("id"),
+                        started_at=started_at,
+                        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                item["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                results.append(item)
+                progress = ensure_douyin_task_shape(task).get("collect_progress", {})
+                progress.update(
+                    {
+                        "phase": "replying_precise_comments",
+                        "updated_at": _now_text(),
+                        "last_message": f"已回复精准客户评论 {len(results)}/{len(rows)} 条。",
+                    }
+                )
+                task["collect_progress"] = progress
+                save_douyin_tasks_state()
+                if len(results) < len(rows):
+                    wait_seconds = (
+                        random.randint(interval_seconds_min, interval_seconds_max)
+                        if interval_seconds_max > interval_seconds_min
+                        else interval_seconds_min
+                    )
+                    if wait_seconds > 0:
+                        await asyncio.sleep(wait_seconds)
+    finally:
+        await scraper.close()
+    return results
+
+
+async def _run_douyin_precise_customer_reply_worker(
+    users: List[Dict],
+    account: Dict,
+    comment_mode: str,
+    comment_text: str,
+    comment_prompt: str,
+    comment_seed_text: str,
+    interval_seconds_min: int,
+    interval_seconds_max: int,
+) -> List[Dict]:
+    """Reply to exactly the selected customer comments, one row at a time."""
+    scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    results: List[Dict] = []
+    try:
+        for index, raw_user in enumerate(users or []):
+            user = normalize_high_intent_user(raw_user if isinstance(raw_user, dict) else {})
+            task_url = str(
+                user.get("task_url")
+                or user.get("video_url")
+                or user.get("url")
+                or ""
+            ).strip()
+            task_title = str(
+                user.get("task_title")
+                or user.get("video_title")
+                or user.get("title")
+                or ""
+            ).strip()
+            task_author = str(user.get("task_author") or user.get("author") or "").strip()
+            started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            item = {
+                "user": user,
+                "status": "failed",
+                "account_id": int(account.get("id", 0) or 0),
+                "started_at": started_at,
+                "finished_at": "",
+                "reply_text": "",
+                "error": "",
+            }
+            try:
+                if not task_url:
+                    raise RuntimeError("精准客户缺少来源视频地址，无法定位评论")
+                task_stub = {
+                    "title": task_title,
+                    "author": task_author,
+                    "url": task_url,
+                }
+                final_text = generate_douyin_video_comment_text(
+                    task_stub,
+                    mode=comment_mode,
+                    fixed_text=comment_text,
+                    prompt_text=comment_prompt,
+                    seed_text=comment_seed_text,
+                )
+                item["reply_text"] = final_text
+                await scraper.reply_to_video_comment(
+                    task_url,
+                    final_text,
+                    user,
+                    expected_title=task_title,
+                    logger=douyin_log,
+                )
+                item["status"] = "completed"
+            except Exception as exc:
+                item["error"] = str(exc).strip() or exc.__class__.__name__
+                douyin_log(
+                    f"[抖音精准客户回复] {user.get('username') or '-'} 执行失败：{item['error']}",
+                    "error",
+                )
+            item["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            results.append(item)
+
+            if index < len(users or []) - 1:
+                wait_seconds = (
+                    random.randint(interval_seconds_min, interval_seconds_max)
+                    if interval_seconds_max > interval_seconds_min
+                    else interval_seconds_min
+                )
+                if wait_seconds > 0:
+                    await asyncio.sleep(wait_seconds)
+    finally:
+        await scraper.close()
+    return results
+
+
+async def run_douyin_precise_customer_replies(
+    users: List[Dict],
+    *,
+    comment_mode: str = "fixed",
+    comment_text: str = "",
+    comment_prompt: str = "",
+    comment_seed_text: str = "",
+    account_id: int = 0,
+    interval_minutes_min: float = 4,
+    interval_minutes_max: float = 6,
+) -> Dict[str, object]:
+    """Run the precise-pool reply action with a strict per-user limit."""
+    source_users = [dict(row) for row in (users or []) if isinstance(row, dict)]
+    if not source_users:
+        return {"code": 400, "msg": "当前没有可回复的精准客户。", "user_results": []}
+
+    nurture_conflict = build_douyin_nurture_conflict("执行精准客户评论回复")
+    if nurture_conflict:
+        return dict(nurture_conflict)
+    if has_running_douyin_task_for_account_nurture():
+        return {
+            "code": 409,
+            "msg": "当前有其他抖音任务正在执行，请等待完成后再进行精准客户评论回复。",
+            "user_results": [],
+        }
+
+    config = load_global_config()
+    normalized_mode = normalize_douyin_video_comment_mode(comment_mode)
+    if normalized_mode in {"ai", "rewrite"} and not douyin_ai_available(config):
+        return {
+            "code": 400,
+            "msg": "当前未配置 AI 接口 Key，不能使用 AI 评论回复模式。",
+            "user_results": [],
+        }
+    accounts = get_online_douyin_accounts(config)
+    if account_id > 0:
+        preferred = [account for account in accounts if int(account.get("id", 0) or 0) == int(account_id)]
+        if preferred:
+            accounts = preferred
+    if not accounts:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的抖音在线账号，请先登录。",
+            "user_results": [],
+        }
+
+    interval_seconds_min = max(0, min(int(float(interval_minutes_min or 0) * 60), 24 * 60 * 60))
+    interval_seconds_max = max(
+        interval_seconds_min,
+        min(int(float(interval_minutes_max or 0) * 60), 24 * 60 * 60),
+    )
+    batches = distribute_interaction_users(source_users, accounts)
+    batch_results = await asyncio.gather(
+        *[
+            _run_douyin_precise_customer_reply_worker(
+                batch["users"],
+                batch["account"],
+                normalized_mode,
+                comment_text,
+                comment_prompt,
+                comment_seed_text,
+                interval_seconds_min,
+                interval_seconds_max,
+            )
+            for batch in batches
+        ]
+    )
+    user_results = [item for batch in batch_results for item in batch]
+    success = sum(1 for item in user_results if item.get("status") == "completed")
+    failed = len(user_results) - success
+    status = "completed" if not failed else "partial"
+    return {
+        "code": 200,
+        "status": status,
+        "msg": f"精准客户评论回复完成：成功 {success} 人，失败 {failed} 人。",
+        "summary": f"精准客户评论回复完成：成功 {success} 人，失败 {failed} 人。",
+        "total": len(user_results),
+        "processed": len(user_results),
+        "success": success,
+        "failed": failed,
+        "account_ids": [int(batch["account"].get("id", 0) or 0) for batch in batches],
+        "interval_seconds_min": interval_seconds_min,
+        "interval_seconds_max": interval_seconds_max,
+        "user_results": user_results,
+    }
 
 
 async def run_douyin_mention_comments(

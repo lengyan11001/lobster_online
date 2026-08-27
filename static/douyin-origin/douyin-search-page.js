@@ -1686,6 +1686,70 @@ function getSearchPollInterval(){if(document.hidden)return 30000;return douyinIs
 async function pollSearchPageOnce(){if(searchPollInFlight)return;searchPollInFlight=true;try{await updateDouyinTasks(true)}finally{searchPollInFlight=false}}
 function scheduleSearchPolling(immediate=false){if(searchPollTimer){window.clearTimeout(searchPollTimer);searchPollTimer=0}const delay=immediate?0:getSearchPollInterval();searchPollTimer=window.setTimeout(async()=>{await pollSearchPageOnce();scheduleSearchPolling(false)},delay)}
 document.addEventListener('visibilitychange',()=>{scheduleSearchPolling(true)});
+
+// Keep the search page scheduler contract aligned with the collection node.
+const douyinSearchSchedulerTouchActionsCompat = ["follow_comment", "mention_comment", "direct_message"];
+function getDouyinSearchSchedulerReplyCommentMode() {
+    const value = normalize(document.getElementById("douyin-scheduler-reply-comment-mode")?.value || "fixed").toLowerCase();
+    return ["fixed", "ai", "rewrite"].includes(value) ? value : "fixed";
+}
+function toggleDouyinSearchSchedulerReplyCommentOptions() {
+    const mode = getDouyinSearchSchedulerReplyCommentMode();
+    document.getElementById("douyin-scheduler-reply-comment-fixed-wrap")?.classList.toggle("active", mode === "fixed");
+    document.getElementById("douyin-scheduler-reply-comment-ai-wrap")?.classList.toggle("active", mode === "ai");
+    document.getElementById("douyin-scheduler-reply-comment-rewrite-wrap")?.classList.toggle("active", mode === "rewrite");
+}
+const getDefaultDouyinSchedulerPlanSearchBase = getDefaultDouyinSchedulerPlan;
+getDefaultDouyinSchedulerPlan = function() {
+    const plan = getDefaultDouyinSchedulerPlanSearchBase();
+    plan.touch_actions = douyinSearchSchedulerTouchActionsCompat.slice();
+    plan.reply_precise_comments = false;
+    plan.reply_comment_mode = plan.reply_comment_mode || "fixed";
+    plan.reply_comment_text = plan.reply_comment_text || "";
+    plan.reply_comment_prompt = plan.reply_comment_prompt || "";
+    plan.reply_comment_seed_text = plan.reply_comment_seed_text || "";
+    return plan;
+};
+const getDouyinSchedulerPlanConfigMetaSearchBase = getDouyinSchedulerPlanConfigMeta;
+getDouyinSchedulerPlanConfigMeta = function(plan = {}) {
+    const summary = getDouyinSchedulerPlanConfigMetaSearchBase(plan);
+    if (normalize(plan.type || "") === "collect_precise" && plan.reply_precise_comments) {
+        return `${summary} · 立即回复（${getDouyinSchedulerStrategyLabel(plan.reply_comment_mode)}）`;
+    }
+    return summary;
+};
+const populateDouyinSchedulerPlanFormSearchBase = populateDouyinSchedulerPlanForm;
+populateDouyinSchedulerPlanForm = function(plan = {}) {
+    const next = { ...(plan || {}) };
+    if (Array.isArray(next.touch_actions)) {
+        next.touch_actions = next.touch_actions.filter((action) => douyinSearchSchedulerTouchActionsCompat.includes(action));
+    }
+    return populateDouyinSchedulerPlanFormSearchBase(next);
+};
+const buildDouyinSchedulerPlanPayloadSearchBase = buildDouyinSchedulerPlanPayload;
+buildDouyinSchedulerPlanPayload = function() {
+    const plan = buildDouyinSchedulerPlanPayloadSearchBase();
+    if (normalize(plan.type || "") === "collect_precise") {
+        plan.reply_precise_comments = !!document.getElementById("douyin-scheduler-reply-precise-comments")?.checked;
+        plan.reply_comment_mode = getDouyinSearchSchedulerReplyCommentMode();
+        plan.reply_comment_text = document.getElementById("douyin-scheduler-reply-comment-text")?.value || "";
+        plan.reply_comment_prompt = document.getElementById("douyin-scheduler-reply-comment-prompt")?.value || "";
+        plan.reply_comment_seed_text = document.getElementById("douyin-scheduler-reply-comment-seed")?.value || "";
+    }
+    if (normalize(plan.type || "") === "precise_touch") {
+        plan.touch_actions = Array.isArray(plan.touch_actions)
+            ? plan.touch_actions.filter((action) => douyinSearchSchedulerTouchActionsCompat.includes(action))
+            : douyinSearchSchedulerTouchActionsCompat.slice();
+    }
+    return plan;
+};
+const toggleDouyinSchedulerPlanTypeFieldsSearchBase = toggleDouyinSchedulerPlanTypeFields;
+toggleDouyinSchedulerPlanTypeFields = function() {
+    toggleDouyinSchedulerPlanTypeFieldsSearchBase();
+    if (normalize(document.getElementById("douyin-scheduler-type")?.value || "") === "collect_precise") {
+        toggleDouyinSearchSchedulerReplyCommentOptions();
+    }
+};
 document.addEventListener('click',event=>{const picker=document.getElementById('search-capture-region-picker');if(!searchCaptureRegionMenuOpen||!picker)return;if(!picker.contains(event.target))closeSearchCaptureRegionMenu()});
 document.addEventListener('DOMContentLoaded',async()=>{document.getElementById('confirm-modal')?.addEventListener('click',event=>{if(event.target.id==='confirm-modal')closeConfirmModal()});document.getElementById('search-capture-modal')?.addEventListener('click',event=>{if(event.target.id==='search-capture-modal')closeSearchCaptureModal()});document.getElementById('search-task-refilter-modal')?.addEventListener('click',event=>{if(event.target.id==='search-task-refilter-modal')closeSearchTaskRefilterModal()});document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;closeConfirmModal();closeSearchCaptureModal();closeSearchTaskRefilterModal();closeSearchCaptureRegionMenu()});changeDouyinCollectionMode(localStorage.getItem(douyinCollectionModeStorageKey)||"protocol",true);changeDouyinSearchMode(localStorage.getItem("douyin.search_mode")||"api",true);await loadDouyinConfig(true);await loadDouyinSearchSessions();syncCollectSessionSelection();const session=getCurrentDouyinSearchSession();if(session)applyDouyinSearchSession(session,{render:false});await updateDouyinTasks(true);renderDouyinSearchResults(douyinSearchResultData);refreshActionState();scheduleSearchPolling(false)})
 

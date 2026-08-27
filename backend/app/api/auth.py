@@ -359,6 +359,20 @@ async def get_current_user_for_local(
     """发布/素材等：认证中心 GET {AUTH_SERVER_BASE}/auth/me。未配置 AUTH_SERVER_BASE → 503。"""
     from ..core.config import get_settings
 
+    token = (token or "").strip()
+    if not token:
+        logger.warning(
+            "[auth-local] rejected empty bearer method=%s path=%s installation_id=%s",
+            request.method,
+            request.url.path,
+            (request.headers.get("X-Installation-Id") or "").strip() or "-",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="登录状态已失效，请重新登录",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     s = get_settings()
     base = (s.auth_server_base or "").strip().rstrip("/")
     if not base:

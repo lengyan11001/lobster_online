@@ -331,6 +331,7 @@ def test_no_dependency_ota_excludes_nested_node_modules(monkeypatch):
 def test_default_ota_is_encrypted_website_only(monkeypatch, tmp_path):
     (tmp_path / "backend").mkdir()
     (tmp_path / "scripts").mkdir()
+    (tmp_path / "desktop").mkdir()
     (tmp_path / "static").mkdir()
     (tmp_path / "skills" / "should_not_ship").mkdir(parents=True)
     (tmp_path / "backend" / "sample.py").write_text("VALUE = 1\n", encoding="utf-8")
@@ -338,6 +339,7 @@ def test_default_ota_is_encrypted_website_only(monkeypatch, tmp_path):
         "VALUE = 1\n",
         encoding="utf-8",
     )
+    (tmp_path / "desktop" / "launcher.py").write_text("VALUE = 1\n", encoding="utf-8")
     (tmp_path / "static" / "index.html").write_text("<html></html>\n", encoding="utf-8")
     (tmp_path / "skills" / "should_not_ship" / "SKILL.md").write_text("secret\n", encoding="utf-8")
     version = {"version": "1.0.200", "build": 244}
@@ -360,6 +362,8 @@ def test_default_ota_is_encrypted_website_only(monkeypatch, tmp_path):
         assert "backend/sample.py" in names
         assert "scripts/check_client_code_update.py" in names
         assert "scripts/check_client_code_update.pyc" in names
+        assert "desktop/launcher.py" in names
+        assert "desktop/launcher.pyc" in names
         assert "static/index.html" in names
         assert not any(name.startswith("skills/") for name in names)
         loader = archive.read("backend/sample.py").decode("utf-8")

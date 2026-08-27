@@ -992,7 +992,8 @@ window.loadLobsterInstallationIdStatus = loadLobsterInstallationIdStatus;
 
 function authHeaders() {
   try { token = getStoredAuthToken(); } catch (e) {}
-  var h = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (token || '') };
+  var h = { 'Content-Type': 'application/json' };
+  if (token) h.Authorization = 'Bearer ' + token;
   h['X-Installation-Id'] = getOrCreateInstallationId();
   h['X-Lobster-Brand'] = getLobsterBrandMark();
   if (window.__LOBSTER_IS_OVERSEAS_USER) h['X-Lobster-Client-Overseas'] = 'true';

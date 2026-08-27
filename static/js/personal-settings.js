@@ -6,6 +6,7 @@
     competitorCandidates: [],
     memories: [],
     templates: [],
+    templateLoadError: '',
     editingTemplateId: '',
     selectedKeywords: {},
     selectedCompetitors: {},
@@ -2327,6 +2328,7 @@
   function loadTemplates() {
     return cloudJson('/api/ip-content/schedule-templates').then(function(data) {
       state.templates = (Array.isArray(data.items) ? data.items : []).filter(function(row) { return !isPersonalDefaultTemplate(row); });
+      state.templateLoadError = '';
       renderCurrentTemplate();
       renderSavedTemplates();
     });
@@ -2338,7 +2340,9 @@
       cloudJson('/api/ip-content/keywords').then(function(data) { state.keywords = Array.isArray(data.items) ? data.items : []; }),
       cloudJson('/api/ip-content/competitors').then(function(data) { state.competitors = Array.isArray(data.items) ? data.items : []; }),
       loadMemories().catch(function() { state.memories = []; }),
-      loadTemplates().catch(function() { state.templates = []; }),
+      loadTemplates().catch(function(err) {
+        state.templateLoadError = err && err.message ? err.message : '模板加载失败';
+      }),
       loadPersonalDigitalHumanResources().catch(function() { state.personalDigitalHumanAvatarOptions = []; state.personalDigitalHumanVoiceOptions = []; }),
       cloudJson('/api/ip-content/personal-default').then(function(data) { state.defaultItem = data.item || {}; })
     ]).then(function() {
@@ -2346,7 +2350,7 @@
       pruneSelectedIntMap(state.selectedKeywords, state.keywords);
       pruneSelectedIntMap(state.selectedCompetitors, state.competitors);
       renderAllLists();
-      setMsg('');
+      setMsg(state.templateLoadError ? ('IP 人设模板加载失败：' + state.templateLoadError) : '', !!state.templateLoadError);
     }).catch(function(err) {
       renderAllLists();
       setMsg(err.message || '个人设置加载失败', true);

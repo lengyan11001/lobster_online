@@ -1250,6 +1250,7 @@ def _resize_image_if_needed(
 class SaveAssetReq(BaseModel):
     url: str
     media_type: str = "image"
+    asset_origin: str = "generated"
     name: Optional[str] = None
     tags: Optional[str] = None
     prompt: Optional[str] = None
@@ -1299,6 +1300,10 @@ def _normalize_asset_origin_filter(value: Optional[str]) -> str:
     if raw in ("generated", "generate", "ai_generated"):
         return "generated"
     return ""
+
+
+def _save_asset_origin(body: SaveAssetReq) -> str:
+    return _normalize_asset_origin_filter(body.asset_origin) or "generated"
 
 
 def _creative_candidate_group(meta: Optional[dict]) -> str:
@@ -2094,37 +2099,53 @@ def _final_save_url_dedupe_key(
     return hashlib.sha256(f"{tid}\n{base_dk}".encode("utf-8")).hexdigest()
 
 
-def _find_existing_asset_by_save_url_dedupe(db: Session, user_id: int, dedupe_key: str) -> Optional[Asset]:
+def _find_existing_asset_by_save_url_dedupe(
+    db: Session,
+    user_id: int,
+    dedupe_key: str,
+    *,
+    asset_origin: Optional[str] = None,
+) -> Optional[Asset]:
     """按 meta.save_url_dedupe 全库命中；勿仅用最近 N 条扫（素材多时同一 URL 会重复入库）。"""
     db_url = (settings.database_url or "").strip().lower()
+    clean_origin = _normalize_asset_origin_filter(asset_origin)
     row_id: Optional[int] = None
     if "sqlite" in db_url:
+        origin_clause = (
+            " AND COALESCE(json_extract(meta, '$.asset_origin'), json_extract(meta, '$.origin'), 'generated') = :origin"
+            if clean_origin else ""
+        )
         r = db.execute(
             text(
                 "SELECT id FROM assets WHERE user_id = :uid "
-                "AND json_extract(meta, '$.save_url_dedupe') = :dk LIMIT 1"
+                "AND json_extract(meta, '$.save_url_dedupe') = :dk" + origin_clause + " LIMIT 1"
             ),
-            {"uid": user_id, "dk": dedupe_key},
+            {"uid": user_id, "dk": dedupe_key, "origin": clean_origin},
         ).fetchone()
         if r:
             row_id = int(r[0])
     elif "mysql" in db_url or "mariadb" in db_url:
+        origin_clause = (
+            " AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(meta, '$.asset_origin')), JSON_UNQUOTE(JSON_EXTRACT(meta, '$.origin')), 'generated') = :origin"
+            if clean_origin else ""
+        )
         r = db.execute(
             text(
                 "SELECT id FROM assets WHERE user_id = :uid AND "
-                "JSON_UNQUOTE(JSON_EXTRACT(meta, '$.save_url_dedupe')) = :dk LIMIT 1"
+                "JSON_UNQUOTE(JSON_EXTRACT(meta, '$.save_url_dedupe')) = :dk" + origin_clause + " LIMIT 1"
             ),
-            {"uid": user_id, "dk": dedupe_key},
+            {"uid": user_id, "dk": dedupe_key, "origin": clean_origin},
         ).fetchone()
         if r:
             row_id = int(r[0])
     elif "postgresql" in db_url:
+        origin_clause = " AND COALESCE(meta->>'asset_origin', meta->>'origin', 'generated') = :origin" if clean_origin else ""
         r = db.execute(
             text(
                 "SELECT id FROM assets WHERE user_id = :uid "
-                "AND meta->>'save_url_dedupe' = :dk LIMIT 1"
+                "AND meta->>'save_url_dedupe' = :dk" + origin_clause + " LIMIT 1"
             ),
-            {"uid": user_id, "dk": dedupe_key},
+            {"uid": user_id, "dk": dedupe_key, "origin": clean_origin},
         ).fetchone()
         if r:
             row_id = int(r[0])
@@ -2138,6 +2159,8 @@ def _find_existing_asset_by_save_url_dedupe(db: Session, user_id: int, dedupe_ke
         .all()
     )
     for a in rows:
+        if clean_origin and _asset_origin(a.meta) != clean_origin:
+            continue
         if (a.meta or {}).get("save_url_dedupe") == dedupe_key:
             return a
         if a.source_url and _save_url_dedupe_key(a.source_url) == dedupe_key:
@@ -2166,6 +2189,8 @@ async def _report_generation_record_to_server(
     outcome: str,
 ) -> None:
     """Best-effort report for admin audit; never blocks local save-url success."""
+    if _save_asset_origin(body) != "generated":
+        return
     base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/") or "https://bhzn.top"
     public_url = str(asset_payload.get("source_url") or "").strip()
     if not base or not public_url:
@@ -2244,7 +2269,7 @@ def _normalized_url_path(url: str) -> str:
 
 
 def _find_existing_asset_by_normalized_source_url(
-    db: Session, user_id: int, url: str
+    db: Session, user_id: int, url: str, *, asset_origin: Optional[str] = None,
 ) -> Optional[Asset]:
     """同一稳定公链（如 mcp-images）已入库则不再插行：与仅按 v3 hint 存的 meta.dk 互为补集。"""
     nu = _normalized_url_path(url)
@@ -2260,19 +2285,27 @@ def _find_existing_asset_by_normalized_source_url(
         .all()
     )
     for a in rows:
-        if _normalized_url_path(a.source_url or "") == nu:
+        if (
+            _normalized_url_path(a.source_url or "") == nu
+            and (not asset_origin or _asset_origin(a.meta) == asset_origin)
+        ):
             return a
     return None
 
 
-def _find_existing_asset_by_cdn_assets_url(db: Session, user_id: int, url: str) -> Optional[Asset]:
+def _find_existing_asset_by_cdn_assets_url(
+    db: Session, user_id: int, url: str, *, asset_origin: Optional[str] = None,
+) -> Optional[Asset]:
     """CDN .../assets/{asset_id}.ext 与库 asset_id 一致时视为同一素材（与 v3-tasks 链互为别称）。"""
     u = (url or "").strip().split("?")[0].split("#")[0]
     m = re.search(r"/assets/([a-f0-9]{8,24})\.(?:png|jpe?g|webp|gif|mp4|webm|mov)$", u, re.IGNORECASE)
     if not m:
         return None
     aid = m.group(1).lower()
-    return db.query(Asset).filter(Asset.user_id == user_id, Asset.asset_id == aid).first()
+    row = db.query(Asset).filter(Asset.user_id == user_id, Asset.asset_id == aid).first()
+    if row is not None and asset_origin and _asset_origin(row.meta) != asset_origin:
+        return None
+    return row
 
 
 async def _save_asset_from_url_locked(
@@ -2283,10 +2316,13 @@ async def _save_asset_from_url_locked(
     *,
     effective_url_resolved: str,
 ) -> dict:
+    asset_origin = _save_asset_origin(body)
     # 阶段1：仅短事务去重/补写，避免与下方 await 下载/MCP 共占一条池连接
     db = SessionLocal()
     try:
-        existing = _find_existing_asset_by_save_url_dedupe(db, current_user.id, dk)
+        existing = _find_existing_asset_by_save_url_dedupe(
+            db, current_user.id, dk, asset_origin=asset_origin
+        )
         if existing:
             logger.info(
                 "[save-url 诊断] user_id=%s outcome=dedupe_meta asset_id=%s dk=%s body_prefix=%s effective_prefix=%s "
@@ -2320,7 +2356,9 @@ async def _save_asset_from_url_locked(
                 outcome="dedupe_meta",
             )
             return result
-        src_hit = _find_existing_asset_by_normalized_source_url(db, current_user.id, body.url)
+        src_hit = _find_existing_asset_by_normalized_source_url(
+            db, current_user.id, body.url, asset_origin=asset_origin
+        )
         if src_hit:
             logger.info(
                 "[save-url 诊断] user_id=%s outcome=dedupe_source_url asset_id=%s body_prefix=%s tags=%s",
@@ -2348,7 +2386,9 @@ async def _save_asset_from_url_locked(
                 outcome="dedupe_source_url",
             )
             return result
-        cdn_hit = _find_existing_asset_by_cdn_assets_url(db, current_user.id, body.url)
+        cdn_hit = _find_existing_asset_by_cdn_assets_url(
+            db, current_user.id, body.url, asset_origin=asset_origin
+        )
         if cdn_hit:
             logger.info(
                 "[save-url 诊断] user_id=%s outcome=dedupe_cdn_path asset_id=%s dk=%s body_prefix=%s hint_prefix=%s tags=%s",
@@ -2497,7 +2537,7 @@ async def _save_asset_from_url_locked(
     else:
         source_url = tos_url
 
-    meta: dict = {"save_url_dedupe": dk}
+    meta: dict = {"save_url_dedupe": dk, "asset_origin": asset_origin}
     gtid = (body.generation_task_id or "").strip()
     if gtid:
         meta["generation_task_id"] = gtid[:128]
@@ -2618,7 +2658,7 @@ async def save_asset_from_url(
         _url_snip_for_log(body.dedupe_hint_url) if has_hint else "-",
         (body.tags or "")[:64],
     )
-    async with _save_url_lock_for(current_user.id, dk):
+    async with _save_url_lock_for(current_user.id, f"{_save_asset_origin(body)}:{dk}"):
         return await _save_asset_from_url_locked(
             dk, body, request, current_user, effective_url_resolved=effective_for_dedupe
         )

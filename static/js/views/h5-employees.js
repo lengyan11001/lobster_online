@@ -21,7 +21,8 @@
     childMomentContactSelected: {},
     contextGeneration: 0,
     installationId: '',
-    deviceRefreshPromise: null
+    deviceRefreshPromise: null,
+    salesTemplateMigrationPending: false
   };
 
   var SALES_ROWS = [
@@ -35,7 +36,7 @@
     {time:'10:00',end:'10:15',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管',params:{group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'}},
     {time:'10:30',end:'11:00',key:'douyin_leads',label:'抖音自动养号',note:'抖音自动养号'},
     {time:'11:00',end:'11:30',key:'wechat_channels_nurture',label:'视频号自动养号（敬请期待）',note:'视频号自动养号',soon:true},
-    {time:'11:30',end:'12:45',key:'douyin_leads',label:'抖音获客·关键词抓取精准客户',note:'抖音获客·关键词抓取精准客户',params:{followup_actions:['reply_comments','follow_comment','mention_comment','direct_message'],customer_scope:'current_collection_batch'}},
+    {time:'11:30',end:'12:45',key:'douyin_leads',label:'抖音获客·关键词抓取精准客户',note:'抖音获客·关键词抓取精准客户',params:{customer_scope:'current_collection_batch'}},
     {time:'13:00',end:'13:15',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管',params:{group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'}},
     {time:'13:30',end:'13:45',key:'native_wechat_moments_engage',label:'微信朋友圈自己评论区接管',note:'微信朋友圈自己评论区接管',params:{moment_action:'comment'}},
     {time:'13:45',end:'14:15',key:'hifly.video.create_by_tts',label:'创作数字人口播视频',note:'创作一条数字人口播视频（用于发朋友圈）',publish:[['14:15','wechat_moments','微信朋友圈发布']]},
@@ -46,8 +47,8 @@
     {time:'16:00',end:'16:30',key:'wechat_channels_nurture',label:'视频号自动养号（敬请期待）',note:'视频号自动养号',soon:true},
     {time:'16:30',end:'16:45',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管',params:{group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'}},
     {time:'17:00',end:'17:15',key:'native_wechat_moments_engage',label:'微信朋友圈点赞评论',note:'微信朋友圈点赞评论'},
-    {time:'17:15',end:'18:15',key:'douyin_leads',label:'抖音获客·关键词抓取精准客户',note:'抖音获客·关键词抓取精准客户',params:{followup_actions:['reply_comments','follow_comment','mention_comment','direct_message'],customer_scope:'current_collection_batch'}},
-    {time:'18:15',end:'18:30',key:'douyin_leads',label:'抖音精准用户触达',note:'抖音精准用户触达',params:{touch_actions:['reply_comments','follow_comment','mention_comment','direct_message'],customer_scope:'precise_pool',max_users:20}},
+    {time:'17:15',end:'18:15',key:'douyin_leads',label:'抖音获客·关键词抓取精准客户',note:'抖音获客·关键词抓取精准客户',params:{customer_scope:'current_collection_batch'}},
+    {time:'18:15',end:'18:30',key:'douyin_leads',label:'抖音精准用户触达',note:'抖音精准用户触达',params:{touch_actions:['follow_comment','mention_comment','direct_message'],customer_scope:'precise_pool',max_users:20}},
     {time:'18:30',end:'18:45',key:'native_wechat_poll',label:'微信私信接管',note:'微信私信接管',params:{group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'}},
     {time:'18:45',end:'19:00',key:'douyin_leads',label:'抖音我的评论区',note:'抖音我的评论区'},
     {time:'19:15',end:'19:30',key:'douyin_leads',label:'抖音私信接管',note:'抖音私信接管'},
@@ -204,7 +205,7 @@
     if (text.indexOf('私信接管') >= 0 || text.indexOf('私信引流') >= 0) return 'stranger_message';
     return 'search_collect';
   }
-  var DOUYIN_FOLLOWUP_ACTIONS=['reply_comments','follow_comment','mention_comment','direct_message'];
+  var DOUYIN_FOLLOWUP_ACTIONS=['follow_comment','mention_comment','direct_message'];
   function normalizeDouyinFollowupActions(value) {
     var selected={}; (Array.isArray(value) ? value : []).forEach(function(item){selected[String(item || '').trim().toLowerCase()]=true;});
     return DOUYIN_FOLLOWUP_ACTIONS.filter(function(action){return !!selected[action];});
@@ -292,12 +293,15 @@
       if (!Array.isArray(douyinParams.regions) || !douyinParams.regions.length) douyinParams.regions=['全国'];
       if (!douyinParams.mode) douyinParams.mode='script';
       if (action === 'search_collect') {
-        douyinParams.followup_actions=normalizeDouyinFollowupActions(douyinParams.followup_actions || []);
+        // Collection only fills the global precise-user pool. Touch actions are
+        // executed later by the standalone precise-touch node.
+        douyinParams.followup_actions=[];
         douyinParams.customer_scope='current_collection_batch';
         delete douyinParams.touch_actions;
       } else if (action === 'precise_touch') {
         douyinParams.touch_actions=normalizeDouyinFollowupActions(douyinParams.touch_actions || douyinParams.followup_actions || []);
-        douyinParams.followup_actions=normalizeDouyinFollowupActions(douyinParams.followup_actions || douyinParams.touch_actions || []);
+        delete douyinParams.followup_actions;
+        delete douyinParams.reply_precise_comments; delete douyinParams.reply_comment_mode; delete douyinParams.reply_comment_text; delete douyinParams.reply_comment_prompt; delete douyinParams.reply_comment_seed_text;
         douyinParams.customer_scope='precise_pool';
         delete douyinParams.keyword; delete douyinParams.keywords; delete douyinParams.query; delete douyinParams.search_keyword;
         delete douyinParams.regions; delete douyinParams.mode; delete douyinParams.max_results;
@@ -512,12 +516,36 @@
     var prepared=[], current=null;
     (Array.isArray(nodes) ? nodes : []).forEach(function(node){
       var action=salesAction(node && (node.note || node.ability_label) || ''), payload=workflowPayload(node), params=payload.params && typeof payload.params === 'object' ? payload.params : {};
-      if (action === 'search_collect' && String(node && node.ability_key || '') === 'douyin_leads') { current=node; prepared.push(node); return; }
-      if (current && DOUYIN_FOLLOWUP_ACTIONS.indexOf(action) >= 0 && String(node && node.ability_key || '') === 'douyin_leads') {
-        var currentPayload=workflowPayload(current), currentParams=Object.assign({},currentPayload.params || {});
-        currentParams.followup_actions=normalizeDouyinFollowupActions((currentParams.followup_actions || []).concat(action));
+      if (action === 'search_collect' && String(node && node.ability_key || '') === 'douyin_leads') {
+        current=node;
+        var currentPayload=workflowPayload(node), currentParams=Object.assign({},currentPayload.params || {});
+        var legacyCollectionActions=Array.isArray(currentParams.followup_actions) ? currentParams.followup_actions : Array.isArray(currentParams.touch_actions) ? currentParams.touch_actions : [];
+        currentParams.followup_actions=[];
+        delete currentParams.touch_actions;
         currentParams.customer_scope='current_collection_batch';
-        current.plan.payload=Object.assign({},currentPayload,{params:currentParams});
+        currentParams.reply_precise_comments=boolParam(currentParams.reply_precise_comments,legacyCollectionActions.indexOf('reply_comments') >= 0);
+        currentParams.reply_comment_mode=String(currentParams.reply_comment_mode || currentParams.comment_mode || 'fixed').toLowerCase();
+        if (['fixed','ai','rewrite'].indexOf(currentParams.reply_comment_mode) < 0) currentParams.reply_comment_mode='fixed';
+        currentParams.reply_comment_text=String(currentParams.reply_comment_text || currentParams.comment_text || '');
+        currentParams.reply_comment_prompt=String(currentParams.reply_comment_prompt || currentParams.comment_prompt || '');
+        currentParams.reply_comment_seed_text=String(currentParams.reply_comment_seed_text || currentParams.comment_seed_text || '');
+        node.plan=node.plan && typeof node.plan === 'object' ? node.plan : {};
+        node.plan.payload=Object.assign({},currentPayload,{params:currentParams});
+        prepared.push(node);
+        return;
+      }
+      if (['reply_comments'].concat(DOUYIN_FOLLOWUP_ACTIONS).indexOf(action) >= 0 && String(node && node.ability_key || '') === 'douyin_leads') {
+        // Legacy sales templates stored the four touch actions as children of
+        // collection. They are now owned by the standalone precise-touch node.
+        // Drop them instead of silently making collection execute touch work.
+        if (action === 'reply_comments' && current) {
+          var currentPayload=workflowPayload(current), currentParams=Object.assign({},currentPayload.params || {});
+          currentParams.reply_precise_comments=true;
+          var legacyParams=payload.params && typeof payload.params === 'object' ? payload.params : {};
+          [['reply_comment_mode','reply_comment_mode'],['reply_comment_text','reply_comment_text'],['reply_comment_prompt','reply_comment_prompt'],['reply_comment_seed_text','reply_comment_seed_text'],['comment_mode','reply_comment_mode'],['comment_text','reply_comment_text'],['comment_prompt','reply_comment_prompt'],['comment_seed_text','reply_comment_seed_text']].forEach(function(pair){if(legacyParams[pair[0]] != null && String(legacyParams[pair[0]]).trim()) currentParams[pair[1]]=legacyParams[pair[0]];});
+          current.plan=current.plan && typeof current.plan === 'object' ? current.plan : {};
+          current.plan.payload=Object.assign({},currentPayload,{params:currentParams});
+        }
         return;
       }
       prepared.push(node);
@@ -538,6 +566,19 @@
       nodes.push(node);
     });
     return nodes;
+  }
+  function salesPresetNodeIdentity(node) {
+    if (!node || typeof node !== 'object') return '';
+    var key=String(node.ability_key || node.key || '').trim(), text=String(node.note || node.ability_label || '').trim(), plan=node.plan && typeof node.plan === 'object' ? node.plan : {}, payload=plan.payload && typeof plan.payload === 'object' ? plan.payload : {}, params=payload.params && typeof payload.params === 'object' ? payload.params : {}, explicitAction=String(payload.action || params.sales_action || '').trim().toLowerCase(), action=key === 'douyin_leads' ? (explicitAction || salesAction(text)) : '';
+    if (key === 'douyin_leads' && (action === 'precise_touch' || action === 'self_comment_monitor')) return 'douyin:' + action;
+    return [key,text,String(node.time || '').trim()].join('|');
+  }
+  function mergeSalesPresetNodes(nodes) {
+    var existing=normalizeWorkflowTimeline(Array.isArray(nodes) ? clone(nodes) : []), defaults=salesNodes(), seen={};
+    existing.map(salesPresetNodeIdentity).filter(Boolean).forEach(function(identity){seen[identity]=true;});
+    var added=0;
+    defaults.forEach(function(node){var identity=salesPresetNodeIdentity(node);if(!identity || seen[identity])return;existing.push(clone(node));seen[identity]=true;added+=1;});
+    return {nodes:normalizeWorkflowTimeline(existing),added:added};
   }
   function normalizeTemplate(template) { var out = Object.assign({}, template || {}); out.nodes = normalizeWorkflowTimeline(migrateDouyinAddFriendChildren(migrateDouyinFollowupNodes(migrateGroupInviteNodes(Array.isArray(out.nodes) ? clone(out.nodes) : [])))); out.meta = out.meta && typeof out.meta === 'object' ? Object.assign({},out.meta) : {}; return out; }
   function ownSalesMirror() { return state.templates.find(function(item) { return activeTemplateKey(item) === 'system_sales'; }); }
@@ -667,9 +708,29 @@
       state.active=data.activation || null; renderStatus(); return state.active;
     });
   }
-  function applyServerTemplate(id) { state.selectedId=String(id || 'system_sales'); var base=normalizeTemplate(templateForSelected()); state.editingId=base.source === 'own' ? String(base.id || '') : ''; state.editingMeta=Object.assign({},base.meta || {}); state.nodes=normalizeWorkflowTimeline(base.nodes || []); if (state.selectedId === 'system_sales' && !ownSalesMirror()) { base=normalizeTemplate(Object.assign({},base,{nodes:salesNodes()})); state.nodes=normalizeWorkflowTimeline(base.nodes || []); } state.selectedTemplate=base; if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey; render(); loadActive().catch(function(){}); return base; }
+  function applyServerTemplate(id) {
+    state.selectedId=String(id || 'system_sales');
+    var mirror=state.selectedId === 'system_sales' ? ownSalesMirror() : null, base, merged;
+    if (mirror) {
+      merged=mergeSalesPresetNodes(mirror.nodes);
+      base=normalizeTemplate(Object.assign({},mirror,{nodes:merged.nodes}));
+      state.salesTemplateMigrationPending=merged.added > 0;
+      var mirrorIndex=state.templates.findIndex(function(item){return String(item && item.id || '') === String(mirror.id || '');});
+      if (mirrorIndex >= 0) state.templates[mirrorIndex]=base;
+    } else {
+      base=normalizeTemplate(templateForSelected());
+      state.salesTemplateMigrationPending=false;
+      if (state.selectedId === 'system_sales') base=normalizeTemplate(Object.assign({},base,{nodes:salesNodes()}));
+    }
+    state.editingId=base.source === 'own' ? String(base.id || '') : '';
+    state.editingMeta=Object.assign({},base.meta || {});
+    state.nodes=normalizeWorkflowTimeline(base.nodes || []);
+    state.selectedTemplate=base;
+    if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey;
+    render(); loadActive().catch(function(){}); return base;
+  }
   function selectTemplate(id) { var selected=String(id || 'system_sales'); return loadTemplates().then(function(){return applyServerTemplate(selected);}); }
-  function resetNew() { state.selectedId=''; state.selectedTemplate={id:'',source:'own',name:'新员工',nodes:[],meta:{}}; state.editingId=''; state.editingMeta={}; state.nodes=[]; if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey; render(); }
+  function resetNew() { state.selectedId=''; state.selectedTemplate={id:'',source:'own',name:'新员工',nodes:[],meta:{}}; state.editingId=''; state.editingMeta={}; state.nodes=[]; state.salesTemplateMigrationPending=false; if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey; render(); }
   function findOption(key, label) { return NODE_OPTIONS.find(function(item){return item[0] === key && (!label || item[1] === label);}) || NODE_OPTIONS.find(function(item){return item[0] === key;}) || [String(key || ''), String(key || ''), String(key || ''), '销售员工', String(key || '')]; }
   function nodeOptionFromValue(value) { return NODE_OPTIONS.find(function(item){return item[4] === String(value || '');}) || findOption(value); }
   function fillNodeOptions(selected, selectedLabel) {
@@ -719,9 +780,9 @@
     });
   }
   function runSubmission(kind, task) { if (state.submitting) return Promise.reject(new Error('操作正在处理中，请勿重复提交')); state.submitting=kind; clearError(); render(); return Promise.resolve().then(task).finally(function(){state.submitting='';render();}); }
-  function saveTemplate() { var body=payloadToSave(), id=String(state.editingId || ''); body.installation_id=selectedDeviceId(); return runSubmission('save',function(){return api(id ? '/api/h5-workflows/templates/' + encodeURIComponent(id) : '/api/h5-workflows/templates',{method:id?'PATCH':'POST',json:body}).then(function(data){var saved=data.template || {}; state.editingId=String(saved.id || id); state.editingMeta=Object.assign({},saved.meta || body.meta); state.selectedId=String(saved.id || state.selectedId || 'system_sales'); return loadTemplates().then(function(){state.selectedTemplate=normalizeTemplate(state.templates.find(function(item){return String(item.id) === state.editingId;}) || Object.assign({},saved,{source:'own'})); state.nodes=clone(state.selectedTemplate.nodes || body.nodes); if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey; render(); if (typeof loadOnlineH5Employees === 'function') loadOnlineH5Employees(); return saved;});});}); }
+  function saveTemplate() { var body=payloadToSave(), id=String(state.editingId || ''); body.installation_id=selectedDeviceId(); return runSubmission('save',function(){return api(id ? '/api/h5-workflows/templates/' + encodeURIComponent(id) : '/api/h5-workflows/templates',{method:id?'PATCH':'POST',json:body}).then(function(data){var saved=data.template || {}; state.editingId=String(saved.id || id); state.salesTemplateMigrationPending=false; state.editingMeta=Object.assign({},saved.meta || body.meta); state.selectedId=String(saved.id || state.selectedId || 'system_sales'); return loadTemplates().then(function(){state.selectedTemplate=normalizeTemplate(state.templates.find(function(item){return String(item.id) === state.editingId;}) || Object.assign({},saved,{source:'own'})); state.nodes=clone(state.selectedTemplate.nodes || body.nodes); if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey; render(); if (typeof loadOnlineH5Employees === 'function') loadOnlineH5Employees(); return saved;});});}); }
   function askPlanDay() { var answer=window.prompt('请输入本次销售工作流从第几天开始执行（1-30）','1'); if (answer === null) return null; var day=Number(answer); if (!Number.isInteger(day) || day < 1 || day > 30) throw new Error('执行天数请输入 1 到 30 的整数'); return day; }
-  function activateTemplate() { var iid=selectedDeviceId(), template=state.selectedTemplate; if (!iid) throw new Error('请先选择 Online 设备'); var device=state.devices.find(function(item){return String(item.installation_id) === iid;}); if (!device || !device.online) throw new Error('请选择在线的 Online 设备'); var day=templateNeedsPlanDay(template) ? askPlanDay() : undefined; if (day === null) return Promise.resolve(); var requestFactory; if (state.selectedId === 'system_sales' && !state.editingId) requestFactory=function(){return api('/api/h5-workflows/activate-inline',{method:'POST',json:{template_key:'system_sales',name:'销售员工',nodes:clone(state.nodes),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),plan_day:day}});}; else { var id=String(state.editingId || template && template.id || ''); if (!id) return saveTemplate().then(activateTemplate); requestFactory=function(){return api('/api/h5-workflows/activate',{method:'POST',json:{template_id:Number(id),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),...(day ? {plan_day:day} : {})}});}; } return runSubmission('activate',requestFactory).then(function(data){state.active=data.activation || null; renderStatus(); if (typeof toast === 'function') toast('员工工作流已启用');}); }
+  function activateTemplate() { var iid=selectedDeviceId(), template=state.selectedTemplate; if (!iid) throw new Error('请先选择 Online 设备'); var device=state.devices.find(function(item){return String(item.installation_id) === iid;}); if (!device || !device.online) throw new Error('请选择在线的 Online 设备'); var day=templateNeedsPlanDay(template) ? askPlanDay() : undefined; if (day === null) return Promise.resolve(); if (state.salesTemplateMigrationPending && state.editingId) return saveTemplate().then(activateTemplate); var requestFactory; if (state.selectedId === 'system_sales' && !state.editingId) requestFactory=function(){return api('/api/h5-workflows/activate-inline',{method:'POST',json:{template_key:'system_sales',name:'销售员工',nodes:clone(state.nodes),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),plan_day:day}});}; else { var id=String(state.editingId || template && template.id || ''); if (!id) return saveTemplate().then(activateTemplate); requestFactory=function(){return api('/api/h5-workflows/activate',{method:'POST',json:{template_id:Number(id),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),...(day ? {plan_day:day} : {})}});}; } return runSubmission('activate',requestFactory).then(function(data){state.active=data.activation || null; renderStatus(); if (typeof toast === 'function') toast('员工工作流已启用');}); }
   function stopTemplate() { var active=activeForDevice(); if (!active || !active.id) throw new Error('当前设备没有启用员工'); return runSubmission('stop',function(){return api('/api/h5-workflows/activations/' + encodeURIComponent(active.id) + '/stop',{method:'POST',json:{}}).then(function(){state.active=null;if(typeof toast==='function')toast('员工工作流已停用');});}); }
   function deleteTemplate() {
     var template=state.selectedTemplate, id=String(state.editingId || template && template.id || '').trim();
@@ -825,7 +886,7 @@
     if (el('oeNodeDouyinReplyModeField')) el('oeNodeDouyinReplyModeField').hidden=!douyinPrivate;
     if (el('oeNodeDouyinCollectionField')) el('oeNodeDouyinCollectionField').hidden=!douyinCollection;
     if (el('oeNodeDouyinTouchField')) el('oeNodeDouyinTouchField').hidden=!douyinTouch;
-    if (el('oeNodeDouyinFollowupField')) el('oeNodeDouyinFollowupField').hidden=!(douyinCollection || douyinTouch);
+    if (el('oeNodeDouyinFollowupField')) el('oeNodeDouyinFollowupField').hidden=!douyinTouch;
     syncMomentPicker('node',key === 'native_wechat_moments_engage');
   }
   function openNodeModal(index) {
@@ -842,9 +903,15 @@
     if (el('oeNodeDouyinMaxResults')) el('oeNodeDouyinMaxResults').value=Math.max(10,Math.min(100,Number(params.max_results || 50)));
     if (el('oeNodeDouyinTouchMaxUsers')) el('oeNodeDouyinTouchMaxUsers').value=Math.max(1,Math.min(200,Number(params.max_users || params.max_results || 20)));
     if (el('oeNodeDouyinMode')) el('oeNodeDouyinMode').value=['script','api'].indexOf(String(params.mode || '').toLowerCase()) >= 0 ? String(params.mode).toLowerCase() : 'script';
-    var followupSource=Object.prototype.hasOwnProperty.call(params,'followup_actions') ? params.followup_actions : params.touch_actions;
-    var followups=Object.prototype.hasOwnProperty.call(params,'followup_actions') || Object.prototype.hasOwnProperty.call(params,'touch_actions') ? normalizeDouyinFollowupActions(followupSource) : DOUYIN_FOLLOWUP_ACTIONS.slice();
-    [['oeNodeDouyinFollowupReplyComments','reply_comments'],['oeNodeDouyinFollowupFollowComment','follow_comment'],['oeNodeDouyinFollowupMentionComment','mention_comment'],['oeNodeDouyinFollowupDirectMessage','direct_message']].forEach(function(item){if(el(item[0]))el(item[0]).checked=followups.indexOf(item[1])>=0;});
+    if (el('oeNodeDouyinReplyPreciseComments')) el('oeNodeDouyinReplyPreciseComments').checked=boolParam(params.reply_precise_comments,false);
+    if (el('oeNodeDouyinReplyCommentMode')) el('oeNodeDouyinReplyCommentMode').value=['fixed','ai','rewrite'].indexOf(String(params.reply_comment_mode || 'fixed').toLowerCase()) >= 0 ? String(params.reply_comment_mode || 'fixed').toLowerCase() : 'fixed';
+    if (el('oeNodeDouyinReplyCommentText')) el('oeNodeDouyinReplyCommentText').value=String(params.reply_comment_text || '');
+    if (el('oeNodeDouyinReplyCommentPrompt')) el('oeNodeDouyinReplyCommentPrompt').value=String(params.reply_comment_prompt || '');
+    if (el('oeNodeDouyinReplyCommentSeedText')) el('oeNodeDouyinReplyCommentSeedText').value=String(params.reply_comment_seed_text || '');
+    var douyinTouch=String((el('oeNodeKey') || {}).value || option[0] || '') === 'douyin_leads' && salesAction(String((el('oeNodeNote') || {}).value || '') || String((el('oeNodeLabel') || {}).value || '') || option[2] || option[1]) === 'precise_touch';
+    var followupSource=Object.prototype.hasOwnProperty.call(params,'touch_actions') ? params.touch_actions : params.followup_actions;
+    var followups=douyinTouch ? (Object.prototype.hasOwnProperty.call(params,'touch_actions') || Object.prototype.hasOwnProperty.call(params,'followup_actions') ? normalizeDouyinFollowupActions(followupSource) : DOUYIN_FOLLOWUP_ACTIONS.slice()) : [];
+    [['oeNodeDouyinFollowupFollowComment','follow_comment'],['oeNodeDouyinFollowupMentionComment','mention_comment'],['oeNodeDouyinFollowupDirectMessage','direct_message']].forEach(function(item){if(el(item[0]))el(item[0]).checked=followups.indexOf(item[1])>=0;});
     el('oeNodeWechatPrivateSessionLimit').value=Math.max(1,Math.min(100,Number(params.private_sessions_per_round || 10)));
     el('oeNodeMomentAction').value=String(params.moment_action || 'like_comment'); initMomentPicker('node',Array.isArray(params.contact_wx_nos) ? params.contact_wx_nos : params.targets);
     syncNodeModalFields(); el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60);
@@ -866,12 +933,12 @@
       row.params.regions=regions.length ? regions : ['全国'];
       row.params.max_results=Math.max(10,Math.min(100,Number((el('oeNodeDouyinMaxResults') || {}).value || 50)));
       row.params.mode=['script','api'].indexOf(String((el('oeNodeDouyinMode') || {}).value || '').toLowerCase()) >= 0 ? String(el('oeNodeDouyinMode').value).toLowerCase() : 'script';
-      row.params.followup_actions=normalizeDouyinFollowupActions([
-        el('oeNodeDouyinFollowupReplyComments') && el('oeNodeDouyinFollowupReplyComments').checked ? 'reply_comments' : '',
-        el('oeNodeDouyinFollowupFollowComment') && el('oeNodeDouyinFollowupFollowComment').checked ? 'follow_comment' : '',
-        el('oeNodeDouyinFollowupMentionComment') && el('oeNodeDouyinFollowupMentionComment').checked ? 'mention_comment' : '',
-        el('oeNodeDouyinFollowupDirectMessage') && el('oeNodeDouyinFollowupDirectMessage').checked ? 'direct_message' : ''
-      ]);
+      row.params.reply_precise_comments=!!(el('oeNodeDouyinReplyPreciseComments') && el('oeNodeDouyinReplyPreciseComments').checked);
+      row.params.reply_comment_mode=['fixed','ai','rewrite'].indexOf(String((el('oeNodeDouyinReplyCommentMode') || {}).value || 'fixed').toLowerCase()) >= 0 ? String(el('oeNodeDouyinReplyCommentMode').value).toLowerCase() : 'fixed';
+      row.params.reply_comment_text=String((el('oeNodeDouyinReplyCommentText') || {}).value || '').trim();
+      row.params.reply_comment_prompt=String((el('oeNodeDouyinReplyCommentPrompt') || {}).value || '').trim();
+      row.params.reply_comment_seed_text=String((el('oeNodeDouyinReplyCommentSeedText') || {}).value || '').trim();
+      row.params.followup_actions=[];
       delete row.params.max_users;
       delete row.params.touch_actions;
       row.params.customer_scope='current_collection_batch';
@@ -879,12 +946,11 @@
       delete row.params.keyword; delete row.params.keywords; delete row.params.query; delete row.params.search_keyword; delete row.params.regions; delete row.params.mode; delete row.params.max_results;
       row.params.max_users=Math.max(1,Math.min(200,Number((el('oeNodeDouyinTouchMaxUsers') || {}).value || 20)));
       row.params.touch_actions=normalizeDouyinFollowupActions([
-        el('oeNodeDouyinFollowupReplyComments') && el('oeNodeDouyinFollowupReplyComments').checked ? 'reply_comments' : '',
         el('oeNodeDouyinFollowupFollowComment') && el('oeNodeDouyinFollowupFollowComment').checked ? 'follow_comment' : '',
         el('oeNodeDouyinFollowupMentionComment') && el('oeNodeDouyinFollowupMentionComment').checked ? 'mention_comment' : '',
         el('oeNodeDouyinFollowupDirectMessage') && el('oeNodeDouyinFollowupDirectMessage').checked ? 'direct_message' : ''
       ]);
-      row.params.followup_actions=row.params.touch_actions.slice();
+      delete row.params.followup_actions;
       row.params.customer_scope='precise_pool';
     } else { delete row.params.keyword; delete row.params.regions; delete row.params.max_results; delete row.params.max_users; delete row.params.mode; delete row.params.followup_actions; delete row.params.touch_actions; delete row.params.customer_scope; }
     delete row.params.followup_action; delete row.params.group_invite_rules;

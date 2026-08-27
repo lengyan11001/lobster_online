@@ -4679,7 +4679,7 @@ function bindAssetSaveUrlUi() {
       fetch(publishLocalBase() + '/api/assets/save-url', {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-        body: JSON.stringify({ url: rawUrl, media_type: mtype })
+        body: JSON.stringify({ url: rawUrl, media_type: mtype, asset_origin: 'user_upload' })
       })
         .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(function(d) {

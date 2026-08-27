@@ -6945,6 +6945,8 @@ class DouyinCommentScraper:
         if not reply_text and not image_path:
             raise ValueError("回复内容不能为空")
 
+        target_username = str((target_comment or {}).get("username", "") or "").strip()
+
         click_result = await self._find_and_click_comment_reply_button(
             page,
             target_comment,
