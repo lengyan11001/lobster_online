@@ -1,7 +1,7 @@
 {
-  "version": "1.0.217",
-  "build": 261,
-  "applied_at": "2026-08-26T19:31:42+08:00",
-  "note": "pack client OTA",
-  "bundle_sha256": "212931b3283ce89deedeba6ca722090530a0512be16b06e6c03dfec57bdc06b0"
+  "version": "1.0.218",
+  "build": 262,
+  "applied_at": "2026-08-27T12:25:23+08:00",
+  "note": "asset source separation and workflow updates",
+  "bundle_sha256": "2342130758659806329b953ae1c204e7bd13e01c284e99b248bdbcbacee8b57f"
 }
