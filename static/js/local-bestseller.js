@@ -350,7 +350,7 @@
       style: ipRole || '真实同城生活感',
       source_mode: selectedSourceMode(),
       photo_asset_id: state.selectedPhoto && state.selectedPhoto.asset_id ? state.selectedPhoto.asset_id : '',
-      photo_url: state.selectedPhoto && state.selectedPhoto.url ? state.selectedPhoto.url : '',
+      photo_url: state.selectedPhoto && state.selectedPhoto.source_url ? state.selectedPhoto.source_url : '',
       uploaded_video_url: state.selectedVideo && state.selectedVideo.url ? state.selectedVideo.url : ''
     };
   }
@@ -384,17 +384,7 @@
 
   function mediaSourceUrl(item) {
     if (!item || typeof item !== 'object') return '';
-    var fields = [
-      item.source_url,
-      item.sourceUrl,
-      item.url,
-      item.open_url,
-      item.openUrl,
-      item.preview_url,
-      item.previewUrl,
-      item.object_url,
-      item.objectUrl
-    ];
+    var fields = [item.source_url, item.sourceUrl];
     for (var i = 0; i < fields.length; i += 1) {
       var url = String(fields[i] || '').trim();
       if (url) return url;
@@ -446,14 +436,14 @@
 
   function normalizeAsset(row) {
     if (!row || !row.asset_id) return null;
-    var previewUrl = row.object_url || row.objectUrl || row.preview_url || row.previewUrl || row.source_url || row.sourceUrl || row.url || row.open_url || '';
-    var url = row.source_url || row.sourceUrl || row.url || row.open_url || row.openUrl || row.preview_url || row.previewUrl || previewUrl || '';
+    var sourceUrl = row.source_url || row.sourceUrl || '';
+    var previewUrl = row.object_url || row.objectUrl || row.preview_url || row.previewUrl || sourceUrl || row.url || row.open_url || row.openUrl || '';
     return {
       asset_id: row.asset_id,
       name: row.filename || row.name || row.asset_id,
-      url: url,
-      preview_url: previewUrl || url,
-      source_url: row.source_url || row.sourceUrl || url,
+      url: sourceUrl,
+      preview_url: previewUrl || sourceUrl,
+      source_url: sourceUrl,
       open_url: row.open_url || row.openUrl || '',
       object_url: row.object_url || row.objectUrl || '',
       media_type: row.media_type || 'image',
@@ -507,7 +497,7 @@
         var item = normalizeAsset(result.data) || {
           asset_id: result.data.asset_id,
           name: file.name,
-          url: result.data.source_url || result.data.preview_url || '',
+          url: result.data.source_url || '',
           preview_url: result.data.preview_url || result.data.source_url || '',
           media_type: kind
         };

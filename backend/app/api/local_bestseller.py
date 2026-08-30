@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -716,6 +717,12 @@ def _scene_generation_prompt(card: Dict[str, Any]) -> str:
     return prompt
 
 
+def _append_public_reference_url(urls: List[str], url: str) -> None:
+    clean = _public_upstream_url(url)
+    if clean and clean not in urls:
+        urls.append(clean)
+
+
 def _card_with_video_result(card: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
     card = dict(card)
     task_id = str((result or {}).get("task_id") or (result or {}).get("job_id") or "").strip()
@@ -846,43 +853,34 @@ def _resolve_reference_urls(
     if _is_city_scene_only_day(int(card.get("day") or 0)):
         urls: List[str] = []
         scene_url = str(card.get("scene_url") or "").strip()
-        public_scene_url = _public_upstream_url(scene_url)
-        if public_scene_url:
-            urls.append(public_scene_url)
         scene_aid = str(card.get("scene_asset_id") or "").strip()
         if scene_aid:
             public = get_asset_public_url(scene_aid, current_user.id, request, db)
             if not public:
                 raise HTTPException(status_code=400, detail=f"场景底图素材 {scene_aid} 暂无可用于云端合成的公网地址")
-            if public not in urls:
-                urls.append(public)
+            _append_public_reference_url(urls, public)
+        _append_public_reference_url(urls, scene_url)
         return urls[:2]
 
     urls: List[str] = []
     photo_url = str(profile.get("photo_url") or "").strip()
-    public_photo_url = _public_upstream_url(photo_url)
-    if public_photo_url:
-        urls.append(public_photo_url)
     aid = str(profile.get("photo_asset_id") or "").strip()
     if aid:
         public = get_asset_public_url(aid, current_user.id, request, db)
         if not public:
             raise HTTPException(status_code=400, detail=f"人物照片素材 {aid} 暂无可用于云端合成的公网地址")
-        if public not in urls:
-            urls.append(public)
+        _append_public_reference_url(urls, public)
+    _append_public_reference_url(urls, photo_url)
     if not urls:
         raise HTTPException(status_code=400, detail="请先上传人物照片，或从素材库选择一张人物照片")
     scene_url = str(card.get("scene_url") or "").strip()
-    public_scene_url = _public_upstream_url(scene_url)
-    if public_scene_url and public_scene_url not in urls:
-        urls.append(public_scene_url)
     scene_aid = str(card.get("scene_asset_id") or "").strip()
     if scene_aid:
         public = get_asset_public_url(scene_aid, current_user.id, request, db)
         if not public:
             raise HTTPException(status_code=400, detail=f"场景底图素材 {scene_aid} 暂无可用于云端合成的公网地址")
-        if public not in urls:
-            urls.append(public)
+        _append_public_reference_url(urls, public)
+    _append_public_reference_url(urls, scene_url)
     return urls[:2]
 
 
