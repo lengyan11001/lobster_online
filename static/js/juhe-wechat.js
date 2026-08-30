@@ -376,7 +376,8 @@
   }
 
   function contactValue(item) {
-    return item.contact_key || item.wx_no || item.display_name || item.remark || item.id || contactTitle(item);
+    // A WeChat id is stable; a nickname or remark can be shared by contacts.
+    return item.wx_no || item.contact_key || item.display_name || item.remark || item.id || contactTitle(item);
   }
 
   function groupInviteContactValue(item) {

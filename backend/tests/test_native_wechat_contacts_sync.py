@@ -6,6 +6,7 @@ import threading
 import types
 
 from backend.app.services import native_wechat_engine as engine
+from backend.app.api import native_wechat as native_wechat_api
 
 
 def _use_temp_native_wechat_db(monkeypatch, tmp_path):
@@ -151,6 +152,39 @@ def test_next_visible_session_uses_list_order_and_skips_processed_without_scroll
     assert first["peer_id"] == "客户A"
     assert second["peer_id"] == "客户B"
     assert clicked == [cells[1], cells[2]]
+
+
+def test_next_visible_session_processes_duplicate_display_names_separately(monkeypatch):
+    root = object()
+    cells = [object(), object()]
+    clicked = []
+
+    fake_auto = types.ModuleType("uiautomation")
+    fake_auto.ControlFromHandle = lambda hwnd: root
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_auto)
+    monkeypatch.setattr(engine, "_module_available", lambda name: name == "uiautomation")
+    monkeypatch.setattr(engine, "_local_wechat_hwnd", lambda account_id: 1001)
+    monkeypatch.setattr(engine, "_uia_session_cells", lambda value: cells)
+    monkeypatch.setattr(
+        engine,
+        "_session_from_uia_cell",
+        lambda cell: {
+            "peer_id": "徐",
+            "display_name": "徐",
+            "session_key": "row-a" if cell is cells[0] else "row-b",
+        },
+    )
+    monkeypatch.setattr(engine, "_uia_click", lambda cell: clicked.append(cell))
+    monkeypatch.setattr(engine.time, "sleep", lambda seconds: None)
+
+    processed = set()
+    first = engine._open_next_visible_session("local-pc", processed, {})
+    processed.add(first["peer_id"])
+    second = engine._open_next_visible_session("local-pc", processed, {})
+
+    assert first["peer_id"] != second["peer_id"]
+    assert first["display_name"] == second["display_name"] == "徐"
+    assert clicked == cells
 
 
 def test_next_visible_session_scrolls_one_page_after_current_page(monkeypatch):
@@ -328,12 +362,98 @@ def test_auto_reply_send_keeps_the_already_open_session(monkeypatch, tmp_path):
     assert wx.chat_with_calls == []
 
 
-def test_session_time_over_24h_is_conservative():
+def test_task_targets_preserve_spaces_inside_contact_names():
+    targets = engine._normalize_task_targets([
+        "FIPILOCK-Joy 温副总",
+        "erbiandeqixi",
+        "wxid_one, wxid_two\nwxid_three，wxid_four、wxid_five；wxid_six",
+    ])
+
+    assert targets == [
+        "FIPILOCK-Joy 温副总",
+        "erbiandeqixi",
+        "wxid_one",
+        "wxid_two",
+        "wxid_three",
+        "wxid_four",
+        "wxid_five",
+        "wxid_six",
+    ]
+
+
+def test_native_wechat_api_targets_preserve_spaces_inside_contact_names():
+    assert native_wechat_api._merge_targets(
+        ["FIPILOCK-Joy 温副总", "erbiandeqixi"],
+        "wxid_one,wxid_two\nwxid_three",
+    ) == [
+        "FIPILOCK-Joy 温副总",
+        "erbiandeqixi",
+        "wxid_one",
+        "wxid_two",
+        "wxid_three",
+    ]
+
+
+def test_current_chat_group_only_searches_configured_wechat_id(monkeypatch):
+    calls = []
+
+    async def fake_run(func, *args):
+        calls.append((func, args))
+        return {
+            "ok": True,
+            "selected": 1,
+            "group_verified": True,
+            "verified_member_count": 3,
+            "group": {"group_key": "test-group"},
+        }
+
+    monkeypatch.setattr(engine, "_run_local_wechat_async", fake_run)
+    monkeypatch.setattr(engine, "_update_task_payload", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_finish_task", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_observe_wechat_intelligence", lambda *args, **kwargs: None)
+
+    asyncio.run(engine._process_create_group_task({
+        "id": "task-1",
+        "account_id": "pc-wechat-default",
+        "targets": ["FIPILOCK-Joy 温副总", "erbiandeqixi"],
+        "payload": {"use_current_chat": True},
+    }))
+
+    assert calls == [(
+        engine.create_local_group_from_current,
+        (
+            "pc-wechat-default",
+            ["FIPILOCK-Joy 温副总", "erbiandeqixi"],
+            ["erbiandeqixi"],
+        ),
+    )]
+
+
+def test_session_time_old_calendar_boundary_is_conservative():
     now = engine.datetime(2026, 8, 19, 15, 0)
     assert engine._session_time_over_24h("24小时前", now=now)
     assert engine._session_time_over_24h("昨天14:59", now=now)
     assert engine._session_time_over_24h("前天", now=now)
-    assert not engine._session_time_over_24h("昨天", now=now)
+    assert engine._session_time_over_24h("昨天", now=now)
     assert not engine._session_time_over_24h("14:00", now=now)
     assert engine._session_time_over_24h("昨天下午2:59", now=now)
     assert not engine._session_time_over_24h("下午2:00", now=now)
+    assert engine._session_time_over_24h("8月18日23:59", now=now)
+    assert not engine._session_time_over_24h("8月19日00:01", now=now)
+    assert engine._session_time_over_24h("\u661f\u671f\u4e00", now=now)
+    assert engine._session_time_over_24h("\u5468\u4e00", now=now)
+    assert engine._session_time_over_24h(
+        "12\u670831\u65e523:59",
+        now=engine.datetime(2027, 1, 1, 0, 5),
+    )
+
+
+def test_auto_reply_defaults_to_100_private_sessions_and_respects_old_boundary():
+    assert engine.DEFAULT_STRATEGY["auto_reply_private_sessions_per_round"] == 100
+    assert engine._auto_reply_default_config("pc-wechat-default")["private_sessions_per_round"] == 100
+    assert engine._normalize_auto_reply_private_session_limit(None) == 100
+    assert engine._normalize_auto_reply_private_session_limit(10) == 100
+    assert engine._normalize_auto_reply_private_session_limit(36) == 36
+    assert engine._session_stops_recent_scan({"session_time": "24小时前"})
+    assert engine._session_stops_recent_scan({"session_time": "昨天"})
+    assert not engine._session_stops_recent_scan({"session_time": "昨天14:59", "pinned": True})

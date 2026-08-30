@@ -141,17 +141,29 @@ if __name__ == "__main__":
     host = (getattr(settings, "host", None) or os.environ.get("HOST") or "0.0.0.0").strip() or "0.0.0.0"
     _logger.info("[启动] Backend 启动 host=%s port=%s edition=%s LOG_LEVEL=%s", host, port, edition, _log_level_name)
     _logger.info("[startup] Import backend.app.main start")
+    _import_traceback_timeout = max(
+        5,
+        float(os.environ.get("LOBSTER_IMPORT_TRACEBACK_TIMEOUT", "20") or "20"),
+    )
+    _import_started = time.monotonic()
     try:
         faulthandler.enable()
-        faulthandler.dump_traceback_later(45, repeat=False)
-    except Exception:
-        pass
+        faulthandler.dump_traceback_later(_import_traceback_timeout, repeat=False)
+        _logger.info("[startup] import traceback timer armed timeout=%.1fs", _import_traceback_timeout)
+    except Exception as exc:
+        _logger.warning("[startup] import traceback timer unavailable: %s", exc)
     try:
         app_module = importlib.import_module("backend.app.main")
         app = getattr(app_module, "app")
-        _logger.info("[startup] Import backend.app.main done")
+        _logger.info(
+            "[startup] Import backend.app.main done elapsed_ms=%.1f",
+            (time.monotonic() - _import_started) * 1000,
+        )
     except Exception:
-        _logger.exception("[startup] Import backend.app.main failed")
+        _logger.exception(
+            "[startup] Import backend.app.main failed elapsed_ms=%.1f",
+            (time.monotonic() - _import_started) * 1000,
+        )
         raise
     finally:
         try:

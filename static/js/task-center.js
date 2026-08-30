@@ -133,14 +133,16 @@
     state.polling = true;
     try {
       var iid = currentInstallationId();
-      var query = '/api/scheduled-tasks/runs?limit=40';
+      // The task badge only needs the current device's newest active run.
+      // Never pull historical result_payload values on this 4-second poll.
+      var query = '/api/scheduled-tasks/runs?limit=1&active_only=1&compact=1';
       if (iid) query += '&installation_id=' + encodeURIComponent(iid);
       var response = await fetch(base() + query, { headers: headers() });
       if (!response.ok) throw new Error();
 
       var data = await response.json();
       var rows = (Array.isArray(data.runs) ? data.runs : []).filter(belongsToCurrentDevice);
-      var running = rows.filter(active);
+      var running = rows.filter(active).slice(0, 1);
       var newActive = running.some(function (row) {
         return row.id && !state.seenActive[row.id];
       });
@@ -149,7 +151,7 @@
       running.forEach(function (row) {
         if (row.id) state.seenActive[row.id] = true;
       });
-      state.rows = rows;
+      state.rows = running;
       if (newActive) state.open = true;
       render();
     } catch (_) {
@@ -168,21 +170,31 @@
     button.textContent = '停止中';
     try {
       var response = await fetch(
-        base() + '/api/scheduled-tasks/runs/' + encodeURIComponent(id),
-        { method: 'DELETE', headers: headers() }
+        base() + '/api/scheduled-tasks/runs/' + encodeURIComponent(id) + '/cancel',
+        { method: 'POST', headers: headers() }
       );
-      if (!response.ok) throw new Error();
+      var payload = {};
+      try {
+        payload = await response.json();
+      } catch (_) {}
+      if (!response.ok) {
+        throw new Error(String(payload.detail || payload.error || '停止任务失败'));
+      }
       await refresh();
-    } catch (_) {
+    } catch (error) {
       button.disabled = false;
       button.textContent = '停止失败';
+      button.title = String(error && error.message || '停止任务失败');
     }
   }
 
   function start() {
     mount();
-    refresh();
-    setInterval(refresh, 4000);
+    (async function poll() {
+      await refresh();
+      var delay = state.rows.some(active) ? 4000 : 10000;
+      window.setTimeout(poll, delay);
+    })();
   }
 
   if (document.readyState === 'loading') {

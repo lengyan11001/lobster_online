@@ -76,8 +76,11 @@ _active_scheduled_run_ids: set[str] = set()
 _active_scheduled_douyin_actions: Dict[str, str] = {}
 _active_client_workflow_actions: Dict[str, str] = {}
 _scheduled_douyin_precise_touch_claim_lock = asyncio.Lock()
+_SCHEDULED_DOUYIN_IDLE_POLL_SECONDS = 2.0
 _WORKFLOW_NODE_STOP_TIMEOUT_SECONDS = 8.0
 _WORKFLOW_NODE_CANCEL_GRACE_SECONDS = 8.0
+_NATIVE_WECHAT_BUSY_RETRY_SECONDS = 45.0
+_NATIVE_WECHAT_BUSY_RETRY_INTERVAL_SECONDS = 1.0
 _SCHEDULED_COMPLETE_RETRY_STATUS = {500, 502, 503, 504}
 _MOBILE_UPLOAD_TITLE = "【手机上传素材】"
 _MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*【手机上传素材】\n(?P<body>[\s\S]*)", re.IGNORECASE)
@@ -1009,6 +1012,41 @@ async def proxy_h5_chat_devices_status(
     )
 
 
+@router.post("/api/h5-chat/device-heartbeat/refresh", summary="Immediately refresh local Online device presence")
+async def refresh_h5_chat_device_heartbeat(
+    request: Request,
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    """Send a fresh presence snapshot before UI actions that need a device.
+
+    The background channel normally sends this every 30 seconds.  A direct
+    refresh closes the small race where the UI asks for status between two
+    heartbeats (or immediately after the process resumes from a busy task).
+    """
+    jwt_token, installation_id = _auth_context()
+    request_token = _request_bearer_token(request)
+    if request_token:
+        jwt_token = request_token
+    request_installation = (request.headers.get("X-Installation-Id") or "").strip()
+    if request_installation:
+        installation_id = request_installation
+    if not jwt_token or not installation_id:
+        raise HTTPException(status_code=401, detail="Missing bearer token or installation id")
+    payload = {
+        "display_name": "local-online",
+        "publish_accounts": _build_publish_account_snapshot(jwt_token),
+        "wechat_contacts": _build_native_wechat_contact_snapshot(),
+        "capabilities": _h5_client_capabilities(),
+    }
+    return await _proxy_cloud_json(
+        request,
+        "POST",
+        "/api/h5-chat/device-heartbeat",
+        json_body=payload,
+        timeout_sec=10.0,
+    )
+
+
 @router.get("/api/scheduled-tasks/runs", summary="Proxy cloud scheduled task runs for local online UI")
 async def proxy_scheduled_task_runs(
     request: Request,
@@ -1047,6 +1085,40 @@ async def proxy_delete_scheduled_task_run(
         "DELETE",
         f"/api/scheduled-tasks/runs/{run_id}",
     )
+
+
+@router.post("/api/scheduled-tasks/runs/{run_id}/cancel", summary="Stop a scheduled task run and its local worker")
+async def proxy_cancel_scheduled_task_run(
+    run_id: str,
+    request: Request,
+    _current_user: Any = Depends(get_current_user_for_local),
+) -> Dict[str, Any]:
+    detail = await _proxy_cloud_json(
+        request,
+        "GET",
+        f"/api/scheduled-tasks/runs/{run_id}",
+    )
+    run = detail.get("run") if isinstance(detail.get("run"), dict) else {}
+    result = await _proxy_cloud_json(
+        request,
+        "POST",
+        f"/api/scheduled-tasks/runs/{run_id}/cancel",
+    )
+    status_before_cancel = str(run.get("status") or "").strip().lower()
+    if run and status_before_cancel not in {"success", "completed", "failed", "cancelled", "canceled"}:
+        try:
+            result["local_stop"] = await _stop_workflow_node_with_timeout(
+                run,
+                headers=_cloud_headers_from_request(request),
+            )
+        except Exception as exc:
+            logger.warning("[SCHEDULED-TASK] local stop failed run_id=%s: %s", run_id, exc)
+            result["local_stop"] = {
+                "stop_requested": False,
+                "reason": "local_stop_failed",
+                "error": str(exc)[:300],
+            }
+    return result
 
 
 @router.post("/api/scheduled-tasks/runs/{run_id}/publish-request", summary="Proxy scheduled task publish request")
@@ -3906,7 +3978,9 @@ def _scheduled_douyin_online_config_params(
             if keyword:
                 params["keyword"] = keyword
         params["max_results"] = _safe_int(plan.get("max_results") or 50) or 50
-        params["max_videos_per_run"] = _safe_int(plan.get("max_videos_per_run") or 1) or 1
+        # Keep H5 and Online aligned. Older plans may omit this field; that
+        # must mean the normal per-run limit, not "only the first video".
+        params["max_videos_per_run"] = _safe_int(plan.get("max_videos_per_run") or 50) or 50
         params["comment_scroll_rounds"] = _safe_int(
             plan.get("comment_scroll_rounds") or local_config.get("comment_scroll_rounds") or 300
         ) or 300
@@ -4300,7 +4374,11 @@ async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Di
         return {"code": 400, "msg": "缺少采集关键词：请先在 Online 的抖音获客排期或搜索工作台配置关键词。"}
 
     max_results = max(10, min(_safe_int(source.get("max_results") or 50) or 50, 100))
-    max_videos = max(1, min(_safe_int(source.get("max_videos_per_run") or source.get("max_videos") or 1) or 1, 50))
+    # Collect every selected/new video up to the configured per-run limit.
+    max_videos = max(
+        1,
+        min(_safe_int(source.get("max_videos_per_run") or source.get("max_videos") or 50) or 50, 50),
+    )
     comment_scroll_rounds = max(
         20,
         min(_safe_int(source.get("comment_scroll_rounds") or 300) or 300, 300),
@@ -4320,6 +4398,7 @@ async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Di
     from douyin_api import configure_douyin_collection_tasks  # type: ignore
     from douyin_api import match_douyin_tasks_for_rows  # type: ignore
     from douyin_api import normalize_douyin_search_session_result  # type: ignore
+    from douyin_api import select_douyin_search_result_keys  # type: ignore
     from douyin_api import set_tasks_from_rows  # type: ignore
     from douyin_api import upsert_douyin_search_session_state  # type: ignore
 
@@ -4339,28 +4418,24 @@ async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Di
         for item in (raw_results if isinstance(raw_results, list) else [])
         if isinstance(item, dict)
     ]
-    selected_item_keys: List[str] = [
-        str(item.get("source_item_key", "") or "").strip()
+    selected_item_keys = select_douyin_search_result_keys(normalized_results, max_videos)
+    if selected_item_keys and not any(
+        bool(item.get("export_selected", True))
+        and str(item.get("source_item_key", "") or "").strip() in set(selected_item_keys)
         for item in normalized_results
-        if bool(item.get("export_selected", True))
-    ][:max_videos]
-    if not selected_item_keys:
-        selected_item_keys = [
-            str(item.get("source_item_key", "") or "").strip()
-            for item in normalized_results
-            if str(item.get("source_item_key", "") or "").strip()
-        ][:max_videos]
-        if selected_item_keys:
-            logger.warning(
-                "[SCHEDULED-TASK] douyin search_collect fallback to first search results keyword=%s keys=%s",
-                keyword,
-                selected_item_keys,
-            )
+        if isinstance(item, dict)
+    ):
+        logger.warning(
+            "[SCHEDULED-TASK] douyin search_collect fallback to unfiltered search results keyword=%s keys=%s",
+            keyword,
+            selected_item_keys,
+        )
     if not selected_item_keys:
         return {"code": 400, "msg": f"关键词“{keyword}”本次没有可用视频。"}
 
     selected_item_key_set = {key for key in selected_item_keys if key}
-    session = upsert_douyin_search_session_state(
+    session = await asyncio.to_thread(
+        upsert_douyin_search_session_state,
         keyword=keyword,
         account_id=search_result.get("account_id", "") if isinstance(search_result, dict) else "",
         results=normalized_results,
@@ -4373,7 +4448,7 @@ async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Di
             "selected_item_keys": selected_item_keys,
             "matched_users": 0,
             "precise_users": 0,
-            "last_message": f"已完成关键词“{keyword}”搜索，正在准备采集第 1 个视频的客户。",
+            "last_message": f"已完成关键词“{keyword}”搜索，正在准备依次采集 {len(selected_item_keys)} 个视频的客户。",
             "updated_at": int(datetime.now().timestamp() * 1000),
         },
     )
@@ -4408,14 +4483,15 @@ async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Di
     if not rows:
         return {"code": 400, "msg": f"关键词“{keyword}”本次没有可用视频。"}
 
-    set_tasks_from_rows(rows)
-    matched_tasks = match_douyin_tasks_for_rows(rows)
-    configure_douyin_collection_tasks(matched_tasks, source)
+    await asyncio.to_thread(set_tasks_from_rows, rows)
+    matched_tasks = await asyncio.to_thread(match_douyin_tasks_for_rows, rows)
+    await asyncio.to_thread(configure_douyin_collection_tasks, matched_tasks, source)
     task_ids = [int(task.get("id", 0) or 0) for task in matched_tasks if int(task.get("id", 0) or 0) > 0]
     if not task_ids:
         return {"code": 400, "msg": f"关键词“{keyword}”本次没有匹配到可执行任务。"}
 
-    upsert_douyin_search_session_state(
+    await asyncio.to_thread(
+        upsert_douyin_search_session_state,
         keyword=keyword,
         account_id=search_result.get("account_id", "") if isinstance(search_result, dict) else "",
         results=session.get("results", []),
@@ -4429,7 +4505,7 @@ async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Di
             "selected_item_keys": selected_item_keys,
             "matched_users": 0,
             "precise_users": 0,
-            "last_message": "搜索完成，正在对第 1 个视频采集客户。",
+            "last_message": f"搜索完成，正在依次采集 {len(task_ids)} 个视频的客户。",
             "updated_at": int(datetime.now().timestamp() * 1000),
         },
     )
@@ -4461,7 +4537,7 @@ async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Di
         actual_started = max(0, _safe_int(result.get("selected_count") or len(task_ids)))
         skipped_existing = max(0, len(task_ids) - actual_started)
         result["msg"] = (
-            f"搜索完成，找到 {len(normalized_results)} 个视频；已开始采集第 1 个视频的客户。"
+            f"搜索完成，找到 {len(normalized_results)} 个视频；已开始依次采集 {actual_started} 个视频的客户。"
             + (f" 已跳过 {skipped_existing} 个已完成任务。" if skipped_existing else "")
         )
     return result
@@ -4787,6 +4863,65 @@ async def _wait_for_douyin_sales_action_completion(
         await asyncio.sleep(max(0.5, poll_interval_seconds))
 
 
+async def _wait_for_local_douyin_runtime_idle(run_id: str) -> None:
+    """Queue a claimed server task behind any active local Douyin worker."""
+    _install_douyin_origin_import_path()
+    from douyin_api import get_douyin_schedule_busy_reason  # type: ignore
+
+    last_reason = ""
+    while True:
+        reason = str(get_douyin_schedule_busy_reason(include_external=False) or "").strip()
+        if not reason:
+            if last_reason:
+                logger.info(
+                    "[SCHEDULED-TASK] local Douyin worker released; continuing run_id=%s",
+                    run_id,
+                )
+            return
+        if reason != last_reason:
+            logger.info(
+                "[SCHEDULED-TASK] waiting for local Douyin worker run_id=%s holder=%s",
+                run_id,
+                reason,
+            )
+            last_reason = reason
+        await asyncio.sleep(_SCHEDULED_DOUYIN_IDLE_POLL_SECONDS)
+
+
+def _scheduled_item_uses_douyin_runtime(item: Dict[str, Any]) -> bool:
+    """Whether a claimed cloud run shares the local Douyin browser."""
+    if not isinstance(item, dict):
+        return False
+    kind = str(item.get("task_kind") or item.get("kind") or "").strip().lower()
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    action = str(payload.get("action") or item.get("action") or "").strip().lower()
+    if kind == "douyin_leads":
+        return True
+    return action in {
+        "collect_precise",
+        "precise_touch",
+        "self_comment_monitor",
+        "follow_comment",
+        "interaction",
+        "comment_collect",
+        "video_comment",
+        "mention_comment",
+        "direct_message",
+    } or action.startswith("douyin_")
+
+
+def _local_douyin_busy_reason() -> str:
+    """Read local worker occupancy before claiming another cloud task."""
+    try:
+        _install_douyin_origin_import_path()
+        from douyin_api import get_douyin_schedule_busy_reason  # type: ignore
+
+        return str(get_douyin_schedule_busy_reason(include_external=False) or "").strip()
+    except Exception as exc:
+        logger.debug("[SCHEDULED-TASK] local Douyin busy check failed: %s", exc)
+        return ""
+
+
 def _scheduled_douyin_slim_user(row: Dict[str, Any], action: str) -> Dict[str, Any]:
     status_prefix = {
         "reply_comments": "reply_comments",
@@ -4848,6 +4983,25 @@ def _scheduled_douyin_action_users(
         row = current_map.get(key, selected)
         output.append(_scheduled_douyin_slim_user(row, action))
     return output
+
+
+def _scheduled_douyin_precise_touch_user_status(action: str, row: Dict[str, Any]) -> str:
+    raw_status = str((row or {}).get("status") or "").strip().lower()
+    success_statuses = {
+        "reply_comments": {"completed", "success"},
+        "mention_comment": {"completed", "success"},
+        "follow_comment": {"completed", "success"},
+        "direct_message": {"sent", "completed", "success"},
+    }
+    return "completed" if raw_status in success_statuses.get(action, {"completed", "success"}) else "failed"
+
+
+def _scheduled_douyin_precise_touch_status_prefix(action: str) -> str:
+    return {
+        "direct_message": "interaction",
+        "follow_comment": "follow_comment",
+        "mention_comment": "mention_comment",
+    }.get(action, action)
 
 
 async def _run_scheduled_douyin_batch_followups(
@@ -5131,6 +5285,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 "failed": _safe_int(monitor_state.get("last_auto_reply_failed") or 0),
                 "new_comments": _safe_int(monitor_state.get("last_new_comment_count") or 0),
                 "precise": _safe_int(monitor_state.get("last_precise_count") or 0),
+                "failed_videos": _safe_int(monitor_state.get("last_failed_video_count") or 0),
             },
             "final_state": monitor_state,
         }
@@ -5138,6 +5293,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
     if action == "precise_touch":
         from douyin_api import (  # type: ignore
             collect_douyin_precise_touch_users,
+            precise_customer_touch_identity_key,
             update_douyin_precise_touch_users,
         )
 
@@ -5152,12 +5308,45 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
 
         results: List[Dict[str, Any]] = []
         success_count = 0
-        touched_total = 0
+        action_stats: List[Dict[str, Any]] = []
+        # A user can be selected once for each enabled action.  The summary is
+        # about people touched, so count stable customer identities rather than
+        # adding the same person once per action.
+        touched_user_keys: set[str] = set()
+        blocked_by_previous_action = ""
         for touch_action in touch_actions:
+            if blocked_by_previous_action:
+                action_stat = {
+                    "action": touch_action,
+                    "label": _SCHEDULED_DOUYIN_ACTION_LABELS.get(touch_action, touch_action),
+                    "selected": 0,
+                    "processed": 0,
+                    "success": 0,
+                    "failed": 0,
+                    "not_started": 0,
+                    "started": False,
+                    "result_code": 424,
+                    "error": blocked_by_previous_action,
+                }
+                action_stats.append(action_stat)
+                results.append(
+                    {
+                        "action": touch_action,
+                        "label": action_stat["label"],
+                        "result": {"code": 424, "msg": blocked_by_previous_action},
+                        "users": [],
+                        "stats": action_stat,
+                    }
+                )
+                continue
             # Claim the bounded slice atomically so two workflow triggers
             # cannot select the same user/action before either one is queued.
             async with _scheduled_douyin_precise_touch_claim_lock:
-                touch_users = collect_douyin_precise_touch_users(touch_action, max_users)
+                touch_users = await asyncio.to_thread(
+                    collect_douyin_precise_touch_users,
+                    touch_action,
+                    max_users,
+                )
                 if touch_action == "reply_comments":
                     touch_users = [
                         row
@@ -5166,7 +5355,8 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                     ]
                 started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 if touch_users:
-                    update_douyin_precise_touch_users(
+                    await asyncio.to_thread(
+                        update_douyin_precise_touch_users,
                         touch_users,
                         action=touch_action,
                         status="queued",
@@ -5174,15 +5364,36 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                         started_at=started_at,
                     )
             if not touch_users:
+                action_stat = {
+                    "action": touch_action,
+                    "label": _SCHEDULED_DOUYIN_ACTION_LABELS.get(touch_action, touch_action),
+                    "selected": 0,
+                    "processed": 0,
+                    "success": 0,
+                    "failed": 0,
+                    "not_started": 0,
+                    "started": False,
+                    "result_code": 204,
+                    "error": "",
+                }
+                action_stats.append(action_stat)
                 results.append(
                     {
                         "action": touch_action,
                         "label": _SCHEDULED_DOUYIN_ACTION_LABELS.get(touch_action, touch_action),
                         "result": {"code": 204, "msg": "当前动作没有可触达的精准用户"},
                         "users": [],
+                        "stats": action_stat,
                     }
                 )
                 continue
+
+            for touch_user in touch_users:
+                if not isinstance(touch_user, dict):
+                    continue
+                identity_key = precise_customer_touch_identity_key(touch_user)
+                if identity_key:
+                    touched_user_keys.add(identity_key)
 
             sub_params = dict(source)
             sub_params = _load_scheduled_douyin_online_config_params(touch_action)
@@ -5209,9 +5420,13 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 )
                 touch_result = {"code": 500, "msg": str(exc).strip() or exc.__class__.__name__}
 
-            touch_code = _safe_int(touch_result.get("code") if isinstance(touch_result, dict) else 0)
-            touch_status = str(touch_result.get("status") or "").strip().lower() if isinstance(touch_result, dict) else ""
             user_results = touch_result.get("user_results") if isinstance(touch_result, dict) else None
+            result_code = _safe_int(touch_result.get("code")) if isinstance(touch_result, dict) else 500
+            action_users = await asyncio.to_thread(_scheduled_douyin_action_users, touch_action, touch_users)
+            # A rejected start (busy/conflict/offline) did not process this
+            # round. Do not reuse stale completed flags from the global pool.
+            if result_code != 200 and not (touch_action == "reply_comments" and isinstance(user_results, list)):
+                action_users = []
             if touch_action == "reply_comments" and isinstance(user_results, list):
                 # Reply results are per customer. Persist each result instead
                 # of applying one aggregate status to the whole selected set.
@@ -5220,7 +5435,8 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                         continue
                     user_row = user_result["user"]
                     user_status = "completed" if str(user_result.get("status") or "").strip().lower() == "completed" else "failed"
-                    update_douyin_precise_touch_users(
+                    await asyncio.to_thread(
+                        update_douyin_precise_touch_users,
                         [user_row],
                         action=touch_action,
                         status=user_status,
@@ -5237,22 +5453,46 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 ]
                 mark_status = "failed" if failed_users else "completed"
             else:
-                mark_status = "completed" if touch_code in {0, 200} and touch_status not in {"timeout", "timeout_stopped"} else "failed"
+                completed_users = 0
+                aggregate_error = str(
+                    (touch_result or {}).get("msg")
+                    or (touch_result or {}).get("message")
+                    or ""
+                ).strip()
+                aggregate_result = str(
+                    (touch_result or {}).get("summary")
+                    or (touch_result or {}).get("msg")
+                    or ""
+                ).strip()
+                for index, selected_user in enumerate(touch_users):
+                    user_result = action_users[index] if index < len(action_users) else {}
+                    user_status = (
+                        "failed"
+                        if result_code != 200
+                        else _scheduled_douyin_precise_touch_user_status(touch_action, user_result)
+                    )
+                    if index >= len(action_users):
+                        fallback_row = dict(selected_user)
+                        status_prefix = _scheduled_douyin_precise_touch_status_prefix(touch_action)
+                        fallback_row[f"{status_prefix}_status"] = user_status
+                        fallback_row[f"{status_prefix}_error"] = aggregate_error or "本轮未返回该用户的成功结果"
+                        action_users.append(_scheduled_douyin_slim_user(fallback_row, touch_action))
+                    if user_status == "completed":
+                        completed_users += 1
+                    await asyncio.to_thread(
+                        update_douyin_precise_touch_users,
+                        [selected_user],
+                        action=touch_action,
+                        status=user_status,
+                        error="" if user_status == "completed" else str(user_result.get("error") or aggregate_error or "本轮未返回该用户的成功结果").strip(),
+                        result=str(user_result.get("sent_text") or aggregate_result).strip(),
+                        account_id=user_result.get("account_id") or account_id or None,
+                        started_at=str(user_result.get("started_at") or started_at).strip() or None,
+                        finished_at=str(user_result.get("finished_at") or "").strip() or None,
+                    )
+                mark_status = "completed" if completed_users == len(touch_users) else "failed"
             if mark_status == "completed":
                 success_count += 1
-            touched_total += len(touch_users)
-            if not (touch_action == "reply_comments" and isinstance(user_results, list)):
-                update_douyin_precise_touch_users(
-                    touch_users,
-                    action=touch_action,
-                    status=mark_status,
-                    error="" if mark_status == "completed" else str((touch_result or {}).get("msg") or (touch_result or {}).get("message") or "").strip(),
-                    result=str((touch_result or {}).get("summary") or (touch_result or {}).get("msg") or "").strip(),
-                    account_id=account_id or None,
-                    started_at=str((touch_result or {}).get("started_at") or started_at).strip() or None,
-                    finished_at=str((touch_result or {}).get("finished_at") or "").strip() or None,
-                )
-            action_users = _scheduled_douyin_action_users(touch_action, touch_users)
             if touch_action == "reply_comments" and isinstance(user_results, list):
                 action_users = []
                 for user_result in user_results:
@@ -5266,28 +5506,86 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                     reply_user["reply_comments_started_at"] = user_result.get("started_at") or ""
                     reply_user["reply_comments_finished_at"] = user_result.get("finished_at") or ""
                     action_users.append(_scheduled_douyin_slim_user(reply_user, touch_action))
+            selected_count = len(touch_users)
+            status_values = [
+                str((row or {}).get("status") or "").strip().lower()
+                for row in action_users
+                if isinstance(row, dict)
+            ]
+            if result_code != 200:
+                # A rejected launch leaves this pool slice retryable. It did
+                # not process or fail any person in the current round.
+                action_success_users = 0
+                action_failed_users = 0
+                action_processed_users = 0
+                action_not_started_users = selected_count
+            else:
+                action_success_users = sum(status in {"completed", "success", "sent"} for status in status_values)
+                action_failed_users = sum(status in {"failed", "error", "cancelled", "skipped"} for status in status_values)
+                action_processed_users = min(selected_count, action_success_users + action_failed_users)
+                action_not_started_users = max(0, selected_count - action_processed_users)
+            action_stat = {
+                "action": touch_action,
+                "label": _SCHEDULED_DOUYIN_ACTION_LABELS.get(touch_action, touch_action),
+                "selected": selected_count,
+                "processed": action_processed_users,
+                "success": min(selected_count, action_success_users),
+                "failed": min(selected_count, action_failed_users),
+                "not_started": action_not_started_users,
+                "started": result_code == 200,
+                "result_code": result_code,
+                "error": str((touch_result or {}).get("msg") or "").strip() if isinstance(touch_result, dict) else "",
+            }
+            action_stats.append(action_stat)
             results.append(
                 {
                     "action": touch_action,
                     "label": _SCHEDULED_DOUYIN_ACTION_LABELS.get(touch_action, touch_action),
                     "result": touch_result,
                     "users": action_users,
+                    "stats": action_stat,
                 }
             )
+            if result_code != 200:
+                blocked_by_previous_action = (
+                    f"前置动作“{action_stat['label']}”未启动，本轮后续动作不再执行："
+                    f"{action_stat['error'] or '启动失败'}"
+                )
 
-        summary = f"精准用户触达完成：共执行 {len(results)} 个动作，成功 {success_count} 个，触达候选 {touched_total} 人。"
+        touched_total = len(touched_user_keys)
+        started_action_count = sum(bool(item.get("started")) for item in action_stats)
+        not_started_action_count = len(action_stats) - started_action_count
+        failed_action_count = max(0, started_action_count - success_count)
+        detail_summary = "；".join(
+            f"{item['label']}：选取 {item['selected']}，处理 {item['processed']}，成功 {item['success']}，失败 {item['failed']}，未启动 {item['not_started']}"
+            for item in action_stats
+        )
+        summary = (
+            f"精准用户触达完成：配置 {len(results)} 个动作，已启动 {started_action_count} 个，"
+            f"全部完成 {success_count} 个，启动后未全部完成 {failed_action_count} 个，"
+            f"未启动 {not_started_action_count} 个，触达候选 {touched_total} 人。"
+        )
+        if detail_summary:
+            summary = f"{summary} {detail_summary}。"
         return {
             "code": 200,
             "msg": summary,
             "summary": summary,
             "action": action,
             "results": results,
+            "action_stats": action_stats,
             "stats": {
                 "total": len(results),
-                "processed": len(results),
+                "processed": started_action_count,
                 "success": success_count,
-                "failed": len(results) - success_count,
+                "failed": failed_action_count,
+                "not_started": not_started_action_count,
                 "users": touched_total,
+                "selected_users": sum(item["selected"] for item in action_stats),
+                "processed_users": sum(item["processed"] for item in action_stats),
+                "success_users": sum(item["success"] for item in action_stats),
+                "failed_users": sum(item["failed"] for item in action_stats),
+                "not_started_users": sum(item["not_started"] for item in action_stats),
             },
         }
 
@@ -5356,7 +5654,11 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
     if action == "follow_comment":
         from douyin_api import douyin_start_follow_comment  # type: ignore
 
-        users = source_users or _scheduled_douyin_interaction_users(max_users, _scheduled_douyin_selected_task_ids(source))
+        users = source_users or await asyncio.to_thread(
+            _scheduled_douyin_interaction_users,
+            max_users,
+            _scheduled_douyin_selected_task_ids(source),
+        )
         if not users:
             return {"code": 400, "msg": "当前没有可执行的精准客户，请先完成关键词采集。"}
         comment_mode = str(source.get("comment_mode") or "fixed").strip() or "fixed"
@@ -5382,13 +5684,17 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             action,
             result,
             completion,
-            users=_scheduled_douyin_action_users(action, users),
+            users=await asyncio.to_thread(_scheduled_douyin_action_users, action, users),
         )
 
     if action == "direct_message":
         from douyin_api import douyin_start_interaction  # type: ignore
 
-        users = source_users or _scheduled_douyin_interaction_users(max_users, _scheduled_douyin_selected_task_ids(source))
+        users = source_users or await asyncio.to_thread(
+            _scheduled_douyin_interaction_users,
+            max_users,
+            _scheduled_douyin_selected_task_ids(source),
+        )
         if not users:
             return {"code": 400, "msg": "当前没有可私信的精准客户，请先完成关键词采集。"}
         message_mode = str(source.get("message_mode") or "fixed").strip() or "fixed"
@@ -5422,14 +5728,18 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             action,
             result,
             completion,
-            users=_scheduled_douyin_action_users(action, users),
+            users=await asyncio.to_thread(_scheduled_douyin_action_users, action, users),
         )
 
     if action == "mention_comment":
         from douyin_api import douyin_get_self_videos  # type: ignore
         from douyin_api import douyin_start_mention_comment  # type: ignore
 
-        users = source_users or _scheduled_douyin_interaction_users(max_users, _scheduled_douyin_selected_task_ids(source))
+        users = source_users or await asyncio.to_thread(
+            _scheduled_douyin_interaction_users,
+            max_users,
+            _scheduled_douyin_selected_task_ids(source),
+        )
         if not users:
             return {"code": 400, "msg": "当前没有可@的精准客户，请先完成关键词采集。"}
         videos_result = await douyin_get_self_videos(account_id=account_id, max_videos=6)
@@ -5462,7 +5772,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             action,
             result,
             completion,
-            users=_scheduled_douyin_action_users(action, users),
+            users=await asyncio.to_thread(_scheduled_douyin_action_users, action, users),
         )
 
     if action == "stranger_message":
@@ -5764,6 +6074,12 @@ async def _stop_douyin_action(
             from douyin_api import douyin_stop_tasks  # type: ignore
 
             result = await douyin_stop_tasks()
+        elif action == "self_comment_monitor":
+            from douyin_api import douyin_stop_self_comment_monitor  # type: ignore
+
+            result = await douyin_stop_self_comment_monitor(
+                {"account_id": account_id} if account_id > 0 else None
+            )
         else:
             return {"action": action, "stop_requested": False, "reason": "unsupported_action"}
     except Exception as exc:
@@ -5810,8 +6126,13 @@ async def _stop_workflow_node_local_execution(
             account_id = str(
                 params.get("account_id") or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID
             ).strip() or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID
-            await _request_local_auto_reply_stop(account_id, headers)
-            return {"action": action, "stop_requested": True, "account_id": account_id}
+            local_stop = native_wechat_engine.request_auto_reply_stop(account_id)
+            return {
+                "action": action,
+                "stop_requested": bool(local_stop.get("requested")),
+                "account_id": account_id,
+                "local": local_stop,
+            }
 
     return {"stop_requested": False, "reason": "no_cooperative_stop"}
 
@@ -8676,6 +8997,7 @@ async def _run_native_wechat_takeover_session(
         "replied": 0,
         "skipped": 0,
         "failed": 0,
+        "busy_retry_count": 0,
         "friend_requests_checked": 0,
         "friend_requests_accepted": 0,
         "friend_requests_failed": 0,
@@ -8726,17 +9048,45 @@ async def _run_native_wechat_takeover_session(
                 stop_reason = "slot_ownership_changed"
                 break
         try:
-            result = await _post_local_api_json(
-                "/api/native-wechat/auto-reply/run-once",
-                {
-                    "account_id": account_id,
-                    "force": True,
-                    "check_friend_requests": round_number == 1,
-                    "config_override": config_override or {},
-                },
-                headers=headers,
-                timeout_seconds=1800.0,
-            )
+            # A cancelled run can still be inside one synchronous wxauto call
+            # for a few seconds after the cloud has rejected its heartbeat.
+            # Wait for that local lock to release and retry this same round;
+            # otherwise a normal restart is reported as a failed takeover.
+            busy_retry_deadline = _takeover_monotonic() + _NATIVE_WECHAT_BUSY_RETRY_SECONDS
+            busy_retry_count = 0
+            can_recover_busy = bool(cloud is not None and base and run_id)
+            while True:
+                result = await _post_local_api_json(
+                    "/api/native-wechat/auto-reply/run-once",
+                    {
+                        "account_id": account_id,
+                        "force": True,
+                        "check_friend_requests": round_number == 1,
+                        "config_override": config_override or {},
+                    },
+                    headers=headers,
+                    timeout_seconds=1800.0,
+                )
+                is_skipped = isinstance(result.get("skipped"), bool) and result.get("skipped")
+                reason = str(result.get("reason") or "").strip().lower() if is_skipped else ""
+                if reason != "running" or not can_recover_busy:
+                    break
+                remaining = min(
+                    busy_retry_deadline - _takeover_monotonic(),
+                    deadline_monotonic - _takeover_monotonic(),
+                )
+                if remaining <= 0:
+                    break
+                busy_retry_count += 1
+                output["busy_retry_count"] = int(output.get("busy_retry_count") or 0) + 1
+                if busy_retry_count == 1:
+                    logger.info(
+                        "[SCHEDULED-TASK] local WeChat busy; waiting before retry round=%s window=%.1fs config=%s",
+                        round_number,
+                        _NATIVE_WECHAT_BUSY_RETRY_SECONDS,
+                        result.get("config") if isinstance(result.get("config"), dict) else {},
+                    )
+                await asyncio.sleep(min(_NATIVE_WECHAT_BUSY_RETRY_INTERVAL_SECONDS, remaining))
             if str(result.get("stop_reason") or "").strip().lower() == "cancelled":
                 stop_reason = "cancelled"
                 break
@@ -9156,18 +9506,9 @@ async def _run_client_workflow_action(
             session_minutes = 1 if has_workflow_window else 30
         session_minutes = max(1, min(session_minutes, 1440))
         session_seconds = float(session_minutes * 60)
-        workflow_deadline = _parse_utc_datetime(source.get("_workflow_node_deadline_at"))
-        if workflow_deadline is not None:
-            remaining_seconds = (workflow_deadline - datetime.now(timezone.utc)).total_seconds()
-            if remaining_seconds <= 0:
-                return {
-                    "ok": False,
-                    "status": "cancelled",
-                    "reason": "workflow_node_deadline_expired",
-                    "message": "节点时间已结束，个微接管未启动。",
-                    "deadline_at": workflow_deadline.isoformat(),
-                }
-            session_seconds = min(session_seconds, max(1.0, remaining_seconds))
+        # The configured node window determines when this run is queued.  Its
+        # duration starts when the device actually claims and starts the run;
+        # a delayed FIFO run must still receive the full configured session.
         config_override = {
             key: source[key]
             for key in (
@@ -9533,12 +9874,6 @@ async def _run_client_workflow(
         params["schedule_config"] = payload.get("schedule_config")
     if not run_id or not action:
         return
-    workflow_deadline = _workflow_node_deadline_utc(item)
-    if workflow_deadline is not None:
-        # Keep action-specific code aware of the immutable node cutoff. This
-        # particularly prevents a late-started personal-WeChat session from
-        # treating the whole scheduled window as newly available time.
-        params["_workflow_node_deadline_at"] = workflow_deadline.isoformat()
     event_status = await _post_task_event(
         cloud,
         base,
@@ -9688,11 +10023,39 @@ async def _scheduled_task_keepalive(
     base: str,
     headers: Dict[str, str],
     run_id: str,
+    item: Optional[Dict[str, Any]] = None,
 ) -> None:
     interval = float(os.environ.get("LOBSTER_SCHEDULED_TASK_HEARTBEAT_SEC", "60") or "60")
     interval = min(60.0, max(30.0, interval))
+
+    async def send_heartbeat() -> bool:
+        status = await _post_task_event(
+            client,
+            base,
+            headers,
+            run_id,
+            "heartbeat",
+            {"text": "local task running", "heartbeat": True},
+        )
+        if _task_event_rejects_local_work(status):
+            logger.info(
+                "[SCHEDULED-TASK] heartbeat rejected; requesting local worker stop run_id=%s status=%s",
+                run_id,
+                status,
+            )
+            if isinstance(item, dict):
+                try:
+                    await _stop_workflow_node_with_timeout(item, headers=headers)
+                except Exception as exc:
+                    logger.debug(
+                        "[SCHEDULED-TASK] rejected heartbeat local stop failed run_id=%s: %s",
+                        run_id,
+                        exc,
+                    )
+            return False
+        return True
     try:
-        await _post_task_event(
+        status = await _post_task_event(
             client,
             base,
             headers,
@@ -9700,12 +10063,21 @@ async def _scheduled_task_keepalive(
             "heartbeat",
             {"text": "本地执行中", "heartbeat": True},
         )
+        if _task_event_rejects_local_work(status):
+            logger.info(
+                "[SCHEDULED-TASK] initial heartbeat rejected; requesting local worker stop run_id=%s status=%s",
+                run_id,
+                status,
+            )
+            if isinstance(item, dict):
+                await _stop_workflow_node_with_timeout(item, headers=headers)
+            return
     except Exception as exc:
         logger.debug("[SCHEDULED-TASK] heartbeat failed run_id=%s: %s", run_id, exc)
     while True:
         await asyncio.sleep(interval)
         try:
-            await _post_task_event(
+            status = await _post_task_event(
                 client,
                 base,
                 headers,
@@ -9713,6 +10085,15 @@ async def _scheduled_task_keepalive(
                 "heartbeat",
                 {"text": "本地执行中", "heartbeat": True},
             )
+            if _task_event_rejects_local_work(status):
+                logger.info(
+                    "[SCHEDULED-TASK] heartbeat rejected; requesting local worker stop run_id=%s status=%s",
+                    run_id,
+                    status,
+                )
+                if isinstance(item, dict):
+                    await _stop_workflow_node_with_timeout(item, headers=headers)
+                return
         except Exception as exc:
             logger.debug("[SCHEDULED-TASK] heartbeat failed run_id=%s: %s", run_id, exc)
 
@@ -9784,77 +10165,8 @@ async def _run_scheduled_task_with_workflow_deadline(
     headers: Dict[str, str],
     item: Dict[str, Any],
 ) -> None:
-    """Run a claimed node only until its absolute workflow boundary.
-
-    The outer deadline covers every workflow action. Known local workers also
-    receive an explicit stop request, because cancelling this coroutine alone
-    cannot stop a Douyin worker that was launched in a separate background
-    task.
-    """
-    deadline = _workflow_node_deadline_utc(item)
-    if deadline is None:
-        await _process_scheduled_task(client, base, jwt_token, installation_id, item)
-        return
-
-    remaining_seconds = _workflow_node_remaining_seconds(item)
-    if remaining_seconds is None or remaining_seconds <= 0:
-        await _report_workflow_node_deadline_expired(
-            client,
-            base,
-            headers,
-            item,
-            deadline=deadline,
-            phase="before_start",
-        )
-        return
-
-    execution_task = asyncio.create_task(
-        _process_scheduled_task(client, base, jwt_token, installation_id, item)
-    )
-    try:
-        done, _pending = await asyncio.wait({execution_task}, timeout=remaining_seconds)
-        if execution_task in done:
-            await execution_task
-            return
-
-        logger.info(
-            "[SCHEDULED-TASK] workflow node deadline reached run_id=%s deadline=%s",
-            str(item.get("id") or "").strip(),
-            deadline.isoformat(),
-        )
-        stop_result = await _stop_workflow_node_with_timeout(item, headers=headers)
-        await _report_workflow_node_deadline_expired(
-            client,
-            base,
-            headers,
-            item,
-            deadline=deadline,
-            phase="while_running",
-            stop_result=stop_result,
-        )
-
-        # Give cooperative workers a brief chance to flush their own cleanup.
-        # This is especially useful for the stranger-message loop, which exits
-        # after observing its explicit stop flag.
-        try:
-            await asyncio.wait_for(
-                asyncio.shield(execution_task),
-                timeout=_WORKFLOW_NODE_CANCEL_GRACE_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            await _cancel_workflow_execution_task(execution_task)
-        except Exception as exc:
-            logger.debug("[SCHEDULED-TASK] stopped worker exited with error: %s", exc)
-    except asyncio.CancelledError:
-        if not execution_task.done():
-            try:
-                await _stop_workflow_node_with_timeout(item, headers=headers)
-            finally:
-                await _cancel_workflow_execution_task(execution_task)
-        raise
-    finally:
-        if not execution_task.done():
-            await _cancel_workflow_execution_task(execution_task)
+    """Run a claimed task to completion; scheduling windows are not cutoffs."""
+    await _process_scheduled_task(client, base, jwt_token, installation_id, item)
 
 
 async def _process_item_detached(
@@ -9880,11 +10192,32 @@ async def _process_scheduled_task_detached(
     if run_id and not _try_mark_scheduled_run_active(run_id):
         logger.info("[SCHEDULED-TASK] skip duplicate in-flight run_id=%s", run_id)
         return
+    douyin_lock = None
+    douyin_lock_acquired = False
+    douyin_marker_id = ""
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         keepalive: Optional[asyncio.Task] = None
         if run_id:
-            keepalive = asyncio.create_task(_scheduled_task_keepalive(client, base, headers, run_id))
+            keepalive = asyncio.create_task(_scheduled_task_keepalive(client, base, headers, run_id, item))
         try:
+            if _scheduled_item_uses_douyin_runtime(item):
+                _install_douyin_origin_import_path()
+                from douyin_api import (  # type: ignore
+                    douyin_schedule_execution_lock,
+                    set_douyin_schedule_external_work,
+                )
+
+                douyin_lock = douyin_schedule_execution_lock
+                await douyin_lock.acquire()
+                douyin_lock_acquired = True
+                douyin_marker_id = f"server:{run_id}"
+                payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+                set_douyin_schedule_external_work(
+                    douyin_marker_id,
+                    active=True,
+                    label=str(item.get("title") or payload.get("action") or "scheduled Douyin task"),
+                )
+                await _wait_for_local_douyin_runtime_idle(run_id)
             await _run_scheduled_task_with_workflow_deadline(
                 client,
                 base,
@@ -9900,6 +10233,13 @@ async def _process_scheduled_task_detached(
                     await keepalive
                 except asyncio.CancelledError:
                     pass
+            if douyin_marker_id:
+                try:
+                    set_douyin_schedule_external_work(douyin_marker_id, active=False)
+                except Exception:
+                    pass
+            if douyin_lock_acquired and douyin_lock and douyin_lock.locked():
+                douyin_lock.release()
             _unmark_scheduled_run_active(run_id)
 
 
@@ -9960,7 +10300,10 @@ async def h5_chat_poll_loop() -> None:
     last_task_poll_at = 0.0
     last_publish_poll_at = 0.0
     max_h5_concurrency = _channel_concurrency("LOBSTER_H5_CHAT_CONCURRENCY", 2, 5)
-    max_task_concurrency = _channel_concurrency("LOBSTER_SCHEDULED_TASK_CONCURRENCY", 2, 10)
+    # A physical Online installation is a single worker. The server also
+    # serializes claims, but keeping the client at one prevents overlapping
+    # local Playwright/WeChat work before the next poll observes the lock.
+    max_task_concurrency = _channel_concurrency("LOBSTER_SCHEDULED_TASK_CONCURRENCY", 1, 1)
     max_publish_concurrency = _channel_concurrency("LOBSTER_SCHEDULED_PUBLISH_CONCURRENCY", 1, 3)
     active_items: set[asyncio.Task] = set()
     active_task_runs: set[asyncio.Task] = set()
@@ -10049,7 +10392,15 @@ async def h5_chat_poll_loop() -> None:
                         resp.raise_for_status()
                         items = (resp.json() or {}).get("items") or []
                 task_items: list[Dict[str, Any]] = []
-                task_slots = max(0, max_task_concurrency - len(active_task_runs))
+                # A publish follow-up uses the same local account/browser as
+                # a scheduled task. Do not poll the other queue while either
+                # kind is already running in this process.
+                local_douyin_busy_reason = _local_douyin_busy_reason()
+                task_slots = (
+                    max(0, max_task_concurrency - len(active_task_runs))
+                    if not active_publish_runs and not local_douyin_busy_reason
+                    else 0
+                )
                 if task_slots > 0 and now_loop - last_task_poll_at >= task_poll_interval:
                     last_task_poll_at = now_loop
                     task_resp = await client.get(
@@ -10072,7 +10423,11 @@ async def h5_chat_poll_loop() -> None:
                     elif task_resp.status_code != 404:
                         logger.debug("[SCHEDULED-TASK] pending request HTTP %s: %s", task_resp.status_code, task_resp.text[:300])
                 publish_items: list[Dict[str, Any]] = []
-                publish_slots = max(0, max_publish_concurrency - len(active_publish_runs))
+                publish_slots = (
+                    max(0, max_publish_concurrency - len(active_publish_runs))
+                    if not active_task_runs and not local_douyin_busy_reason
+                    else 0
+                )
                 if publish_slots > 0 and now_loop - last_publish_poll_at >= publish_poll_interval:
                     last_publish_poll_at = now_loop
                     publish_resp = await client.get(

@@ -1395,6 +1395,9 @@ function renderOnlineH5Employees(templates) {
     + customRows.map(_onlineEmployeeButton).join('');
 }
 
+var onlineH5EmployeesRequest = null;
+var onlineH5EmployeesRequestKey = '';
+
 function loadOnlineH5Employees() {
   if (!token || typeof API_BASE === 'undefined' || !API_BASE) {
     renderOnlineH5Employees([]);
@@ -1402,9 +1405,13 @@ function loadOnlineH5Employees() {
   }
   var brand = typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo';
   var installationId = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
+  var requestKey = String(brand || '') + '@@' + String(installationId || '');
+  if (onlineH5EmployeesRequest && onlineH5EmployeesRequestKey === requestKey) {
+    return onlineH5EmployeesRequest;
+  }
   var url = String(API_BASE).replace(/\/$/, '') + '/api/h5-workflows/templates?brand=' + encodeURIComponent(brand)
     + (installationId ? '&installation_id=' + encodeURIComponent(installationId) : '');
-  return fetch(url, { headers: typeof authHeaders === 'function' ? authHeaders() : { 'Authorization': 'Bearer ' + token } })
+  var request = fetch(url, { headers: typeof authHeaders === 'function' ? authHeaders() : { 'Authorization': 'Bearer ' + token } })
     .then(function(response) {
       return response.json().catch(function() { return {}; }).then(function(data) {
         if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
@@ -1420,6 +1427,20 @@ function loadOnlineH5Employees() {
       renderOnlineH5Employees([]);
       return [];
     });
+  onlineH5EmployeesRequest = request;
+  onlineH5EmployeesRequestKey = requestKey;
+  request.then(function() {
+    if (onlineH5EmployeesRequest === request) {
+      onlineH5EmployeesRequest = null;
+      onlineH5EmployeesRequestKey = '';
+    }
+  }, function() {
+    if (onlineH5EmployeesRequest === request) {
+      onlineH5EmployeesRequest = null;
+      onlineH5EmployeesRequestKey = '';
+    }
+  });
+  return request;
 }
 
 function openAppSideNavPlaceholder(title, sourceEl) {
@@ -1534,6 +1555,8 @@ var LOBSTER_FEATURE_REFRESH_INTERVAL_MS = 15000;
 var LOBSTER_FEATURE_STRICT_MARKER = '__homepage_feature_gates_v1';
 var LOBSTER_LEGACY_DENY_MISSING_FEATURES = {
   douyin_leads_access: true,
+  private_domain_entry: true,
+  overseas_platform_entry: true,
   reddit_leads_access: true,
   x_leads_access: true,
   tiktok_leads_access: true,

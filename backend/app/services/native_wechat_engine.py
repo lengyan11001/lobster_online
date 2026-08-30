@@ -8,6 +8,7 @@ import hashlib
 import io
 import importlib.util
 import json
+import logging
 import mimetypes
 import os
 import random
@@ -37,6 +38,8 @@ ACCOUNTS_DIR = STATE_DIR / "accounts"
 DB_PATH = ROOT_DIR / "data" / "native_wechat_engine.db"
 LOG_DIR = ROOT_DIR / "logs"
 NATIVE_WECHAT_DIAGNOSTIC_LOG = LOG_DIR / "native_wechat_diagnostics.jsonl"
+NATIVE_WECHAT_AUTO_REPLY_LOG = LOG_DIR / "native_wechat_auto_reply.jsonl"
+NATIVE_WECHAT_AUTO_REPLY_LOG_DISABLE_MARKER = LOG_DIR / "native_wechat_auto_reply.disabled"
 NATIVE_WECHAT_UPLOAD_DIR = ROOT_DIR / "temp_assets" / "native_wechat"
 NATIVE_WECHAT_DOWNLOAD_DIR = ROOT_DIR / "assets" / "native_wechat"
 NATIVE_WECHAT_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
@@ -99,7 +102,10 @@ DEFAULT_STRATEGY: Dict[str, Any] = {
     "auto_reply_interval_seconds": 15,
     "auto_reply_session_sleep_min": 0.0,
     "auto_reply_session_sleep_max": 0.0,
-    "auto_reply_private_sessions_per_round": 10,
+    # Process a larger batch in each takeover round.  This is still bounded
+    # by the explicit 100-session safety cap below and can be overridden by a
+    # workflow node when a smaller batch is desired.
+    "auto_reply_private_sessions_per_round": 100,
     "auto_reply_char_sleep_min": 0.08,
     "auto_reply_char_sleep_max": 0.22,
     "auto_reply_punctuation_sleep_min": 0.35,
@@ -125,6 +131,9 @@ _LOCAL_WECHAT_THREAD_STATE = threading.local()
 _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID = 0
 _LOCAL_WECHAT_DRIVER_RECOVERY: Dict[str, Dict[str, Any]] = {}
 _LOCAL_WXAUTO4_CLIENTS: Dict[tuple[str, int], Any] = {}
+# Accounts doing an automatic-takeover scan use wxauto4's precise timestamps.
+# The public sync_local_sessions API keeps its existing UIA behavior.
+_AUTO_REPLY_TIME_SCAN_ACCOUNTS: set[str] = set()
 # wxauto4 and the WeChat UIA handles are thread-affine.  asyncio.to_thread()
 # may choose a different pool worker after each LLM/network wait, which forces
 # the driver cache to be rebuilt and makes WeChat steal focus between chats.
@@ -138,6 +147,75 @@ _LOCAL_WECHAT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 # the account task queue so those pauses cannot delay message, group, or media
 # tasks. The actual UI operation still uses the shared thread-affine executor.
 _ADD_FRIEND_TASKS: Dict[str, asyncio.Task[Any]] = {}
+_AUTO_REPLY_DIAGNOSTIC_LOCK = threading.Lock()
+_AUTO_REPLY_DIAGNOSTIC_ENABLED: Optional[bool] = None
+
+
+def auto_reply_diagnostics_enabled() -> bool:
+    """Return the current process/file controlled diagnostic switch."""
+    if _AUTO_REPLY_DIAGNOSTIC_ENABLED is not None:
+        return bool(_AUTO_REPLY_DIAGNOSTIC_ENABLED)
+    raw = str(os.environ.get("NATIVE_WECHAT_AUTO_REPLY_LOG") or "").strip().lower()
+    if raw in {"0", "false", "off", "no", "disabled"}:
+        return False
+    try:
+        return not NATIVE_WECHAT_AUTO_REPLY_LOG_DISABLE_MARKER.exists()
+    except OSError:
+        return True
+
+
+def set_auto_reply_diagnostics_enabled(enabled: bool) -> Dict[str, Any]:
+    """Toggle detailed takeover logging immediately and persist the choice."""
+    global _AUTO_REPLY_DIAGNOSTIC_ENABLED
+    _AUTO_REPLY_DIAGNOSTIC_ENABLED = bool(enabled)
+    try:
+        if enabled:
+            NATIVE_WECHAT_AUTO_REPLY_LOG_DISABLE_MARKER.unlink(missing_ok=True)
+        else:
+            LOG_DIR.mkdir(parents=True, exist_ok=True)
+            NATIVE_WECHAT_AUTO_REPLY_LOG_DISABLE_MARKER.write_text(
+                "disabled\n", encoding="utf-8"
+            )
+    except Exception as exc:
+        return {"enabled": bool(enabled), "ok": False, "error": str(exc)[:300]}
+    return {
+        "enabled": bool(enabled),
+        "ok": True,
+        "log_path": str(NATIVE_WECHAT_AUTO_REPLY_LOG),
+        "disable_marker": str(NATIVE_WECHAT_AUTO_REPLY_LOG_DISABLE_MARKER),
+    }
+
+
+def _write_auto_reply_diagnostic(
+    event: str,
+    *,
+    account_id: str = "",
+    run_id: str = "",
+    **fields: Any,
+) -> None:
+    """Append one bounded, correlated takeover event for local diagnosis.
+
+    The normal backend log contains a large amount of unrelated traffic.  This
+    small JSONL stream keeps the takeover decision chain searchable without
+    persisting auth context or unbounded prompts/responses.
+    """
+    if not auto_reply_diagnostics_enabled():
+        return
+    entry: Dict[str, Any] = {
+        "timestamp": datetime.now().isoformat(timespec="milliseconds"),
+        "event": str(event or "auto_reply"),
+        "account_id": str(account_id or ""),
+        "run_id": str(run_id or ""),
+    }
+    entry.update(_json_safe_value(fields, max_text=1200))
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        with _AUTO_REPLY_DIAGNOSTIC_LOCK:
+            with NATIVE_WECHAT_AUTO_REPLY_LOG.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry, ensure_ascii=False, separators=(",", ":")) + "\n")
+    except Exception as exc:
+        # Diagnostics must never interrupt message handling.
+        logging.getLogger(__name__).debug("auto-reply diagnostic write failed: %s", exc)
 
 
 def _now_iso() -> str:
@@ -2338,6 +2416,19 @@ def _auto_reply_default_config(account_id: str) -> Dict[str, Any]:
     }
 
 
+def _normalize_auto_reply_private_session_limit(value: Any) -> int:
+    default_limit = int(DEFAULT_STRATEGY["auto_reply_private_sessions_per_round"])
+    try:
+        limit = int(value or default_limit)
+    except (TypeError, ValueError):
+        limit = default_limit
+    # Older workflow nodes persisted the former default explicitly. Upgrade
+    # that value so existing employees receive the new default as well.
+    if limit == 10:
+        limit = default_limit
+    return max(1, min(limit, 100))
+
+
 def _normalize_auto_reply_config(row: Optional[sqlite3.Row], account_id: str) -> Dict[str, Any]:
     cfg = _auto_reply_default_config(account_id)
     if row:
@@ -2352,16 +2443,9 @@ def _normalize_auto_reply_config(row: Optional[sqlite3.Row], account_id: str) ->
         cfg["interval_seconds"] = int(DEFAULT_STRATEGY["auto_reply_interval_seconds"])
     if cfg["interval_seconds"] == 1800:
         cfg["interval_seconds"] = int(DEFAULT_STRATEGY["auto_reply_interval_seconds"])
-    try:
-        cfg["private_sessions_per_round"] = max(
-            1,
-            min(
-                int(cfg.get("private_sessions_per_round") or DEFAULT_STRATEGY["auto_reply_private_sessions_per_round"]),
-                100,
-            ),
-        )
-    except Exception:
-        cfg["private_sessions_per_round"] = int(DEFAULT_STRATEGY["auto_reply_private_sessions_per_round"])
+    cfg["private_sessions_per_round"] = _normalize_auto_reply_private_session_limit(
+        cfg.get("private_sessions_per_round")
+    )
     if not isinstance(cfg.get("last_result"), dict):
         cfg["last_result"] = _safe_json_loads(str(cfg.get("last_result") or ""), {})
     for key in ("memory_doc_ids", "group_invite_contacts"):
@@ -2750,6 +2834,12 @@ def _local_message_provider_id(raw: Dict[str, Any], peer_id: str, msg_type: str,
     takeover round cannot turn one old inbound message into a new event.
     """
     stable = str(raw.get("hash") or raw.get("hash_text") or "").strip()
+    # wxauto4's hash is derived from the rendered cell (position + text), so
+    # two messages with the same text can share it across different days.
+    # Include a surrounding WeChat time marker when one is available.
+    time_context = str(raw.get("_wechat_time_context") or "").strip()
+    if stable and time_context and str(msg_type or "").lower() not in {"time", "system"}:
+        return f"wxhash:{stable}:t{_stable_key('wechat-message-time', time_context)[:20]}"
     if stable:
         return f"wxhash:{stable}"
     source = str(raw.get("id") or raw.get("client_id") or "").strip()
@@ -2758,43 +2848,83 @@ def _local_message_provider_id(raw: Dict[str, Any], peer_id: str, msg_type: str,
     return _stable_key(peer_id, msg_type, content, str(raw.get("time") or ""))
 
 
+def _local_message_time_contexts(raw_messages: List[Dict[str, Any]]) -> List[str]:
+    """Associate visible messages with their nearest WeChat time marker."""
+    markers = [
+        (index, str(raw.get("time") or "").strip())
+        for index, raw in enumerate(raw_messages)
+        if str(raw.get("time") or "").strip()
+        and str(raw.get("type") or "").strip().lower() in {"time", "system"}
+    ]
+    if not markers:
+        return [""] * len(raw_messages)
+    contexts = [""] * len(raw_messages)
+    for index, raw in enumerate(raw_messages):
+        if str(raw.get("type") or "").strip().lower() in {"time", "system"}:
+            continue
+        _, marker_value = min(markers, key=lambda item: abs(item[0] - index))
+        if marker_value:
+            contexts[index] = marker_value
+    return contexts
+
+
 def _auto_reply_inbound_id(peer_id: str, inbound: Dict[str, Any]) -> str:
     raw = inbound.get("raw_json") if isinstance(inbound.get("raw_json"), dict) else {}
+    explicit_id = str(
+        inbound.get("auto_reply_inbound_id")
+        or inbound.get("provider_message_id")
+        or ""
+    ).strip()
+    # A per-read occurrence suffix is intentional: wxauto4 can reuse one hash
+    # for two distinct visible messages with identical text.
+    if explicit_id:
+        return explicit_id
     stable = str(raw.get("hash") or raw.get("hash_text") or "").strip()
     if stable:
         return f"wxhash:{stable}"
-    return str(
-        inbound.get("auto_reply_inbound_id")
-        or inbound.get("provider_message_id")
-        or inbound.get("id")
-        or _stable_key(peer_id, inbound.get("content"), inbound.get("created_at"))
-    )
+    return str(inbound.get("id") or _stable_key(peer_id, inbound.get("content"), inbound.get("created_at")))
 
 
 def _auto_reply_history_exists(account_id: str, peer_id: str, inbound: Dict[str, Any]) -> bool:
-    """Check current and pre-stable-hash history for an already handled message."""
+    """Check whether a message has a terminal takeover outcome.
+
+    ``sending`` and ``failed`` rows are crash/retry breadcrumbs, not proof that
+    WeChat accepted the reply.  They must remain retryable in a later round.
+    Only a confirmed send or an explicit business skip consumes the inbound
+    message.
+    """
+    terminal_statuses = {"sent", "skipped"}
     inbound_id = _auto_reply_inbound_id(peer_id, inbound)
     raw = inbound.get("raw_json") if isinstance(inbound.get("raw_json"), dict) else {}
     stable_hash = str(raw.get("hash") or raw.get("hash_text") or "").strip()
+    explicit_id = str(
+        inbound.get("auto_reply_inbound_id")
+        or inbound.get("provider_message_id")
+        or ""
+    ).strip()
+    allow_legacy_hash_lookup = bool(
+        stable_hash
+        and (not explicit_id or explicit_id == f"wxhash:{stable_hash}")
+    )
     with _connect() as conn:
         row = conn.execute(
             """
-            select 1 from wechat_auto_reply_history
+            select status from wechat_auto_reply_history
             where account_id=? and peer_id=? and inbound_message_id=?
             limit 1
             """,
             (account_id, peer_id, inbound_id),
         ).fetchone()
-        if row:
+        if row and str(row["status"] or "").strip().lower() in terminal_statuses:
             return True
-        if not stable_hash:
+        if not allow_legacy_hash_lookup:
             return False
         # Before the stable-hash fix, history used wxauto4's regenerated id.
         # Link those rows back to the persisted message raw payload so an OTA
         # upgrade does not answer the same old message one more time.
         rows = conn.execute(
             """
-            select m.raw_json
+            select h.status, m.raw_json
             from wechat_auto_reply_history h
             join wechat_messages m
               on m.account_id=h.account_id
@@ -2807,9 +2937,86 @@ def _auto_reply_history_exists(account_id: str, peer_id: str, inbound: Dict[str,
         ).fetchall()
         for candidate in rows:
             raw_json = _safe_json_loads(str(candidate["raw_json"] or ""), {})
-            if isinstance(raw_json, dict) and str(raw_json.get("hash") or "").strip() == stable_hash:
+            if (
+                str(candidate["status"] or "").strip().lower() in terminal_statuses
+                and isinstance(raw_json, dict)
+                and str(raw_json.get("hash") or "").strip() == stable_hash
+            ):
                 return True
         return False
+
+
+def _auto_reply_history_state(account_id: str, peer_id: str, inbound: Dict[str, Any]) -> Dict[str, Any]:
+    """Return the stored outcome for a message when a takeover skips it."""
+    inbound_id = _auto_reply_inbound_id(peer_id, inbound)
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                select status, error_message, reply_content, category, created_at, updated_at
+                from wechat_auto_reply_history
+                where account_id=? and peer_id=? and inbound_message_id=?
+                order by updated_at desc
+                limit 1
+                """,
+                (account_id, peer_id, inbound_id),
+            ).fetchone()
+        if not row:
+            return {"exists": False, "inbound_message_id": inbound_id}
+        return {
+            "exists": True,
+            "inbound_message_id": inbound_id,
+            "status": str(row[0] or ""),
+            "error": str(row[1] or "")[:500],
+            "reply_preview": str(row[2] or "")[:240],
+            "category": str(row[3] or ""),
+            "created_at": str(row[4] or ""),
+            "updated_at": str(row[5] or ""),
+        }
+    except Exception as exc:
+        return {"exists": False, "inbound_message_id": inbound_id, "error": f"history_lookup_failed: {exc}"[:500]}
+
+
+def _promote_session_preview_latest(account_id: str, peer_id: str, preview: Any) -> Optional[Dict[str, Any]]:
+    """Align persisted ordering with the authoritative session-list preview.
+
+    wxauto4 can return the visible message tree in a different order from the
+    order in which it is iterated.  During a sync every message otherwise gets
+    the current wall-clock timestamp, so an older message visited later can
+    incorrectly become ``latest``.  The session row is the one value that
+    WeChat explicitly exposes as current; promote its exact matching message
+    after the batch has been persisted.
+    """
+    preview_key = re.sub(r"\s+", "", str(preview or "")).strip().lower()
+    if not preview_key:
+        return None
+    with _connect() as conn:
+        rows = conn.execute(
+            """
+            select * from wechat_messages
+            where account_id=? and peer_id=? and direction != 'system' and msg_type != 'time'
+            order by rowid desc
+            limit 200
+            """,
+            (account_id, peer_id),
+        ).fetchall()
+        match = None
+        for row in rows:
+            content_key = re.sub(r"\s+", "", str(row["content"] or "")).strip().lower()
+            if content_key == preview_key:
+                match = row
+                break
+        if not match:
+            return None
+        current = _latest_message_record(account_id, peer_id, include_system=False)
+        if current and str(current.get("id") or "") == str(match["id"] or ""):
+            return current
+        promoted_at = _now_iso()
+        conn.execute(
+            "update wechat_messages set created_at=? where id=?",
+            (promoted_at, match["id"]),
+        )
+    return _normalize_message_public(_row_to_dict(match) | {"created_at": promoted_at})
 
 
 def _latest_auto_reply_candidate(account_id: str, peer_id: str) -> Optional[Dict[str, Any]]:
@@ -2839,28 +3046,6 @@ def _latest_auto_reply_candidate(account_id: str, peer_id: str) -> Optional[Dict
     candidate = eligible(latest)
     if candidate:
         return candidate
-    # A user can send a file after a customer message without answering that
-    # message. Treat only these attachment-only outbound events as transparent;
-    # any later outbound text still means a human has replied.
-    if latest.get("direction") != "out" or str(latest.get("msg_type") or "").lower() not in {"file", "image", "video"}:
-        return None
-    with _connect() as conn:
-        rows = conn.execute(
-            """
-            select * from wechat_messages
-            where account_id=? and peer_id=?
-            order by created_at desc, id desc
-            limit 30
-            """,
-            (account_id, peer_id),
-        ).fetchall()
-    for row in rows[1:]:
-        message = _normalize_message_public(_row_to_dict(row))
-        if message.get("direction") == "out" and str(message.get("msg_type") or "").lower() not in {"file", "image", "video"}:
-            return None
-        candidate = eligible(message)
-        if candidate:
-            return candidate
     return None
 
 
@@ -2875,10 +3060,38 @@ def _record_auto_reply_history(
     error: str = "",
 ) -> bool:
     inbound_id = _auto_reply_inbound_id(peer_id, inbound)
-    if _auto_reply_history_exists(account_id, peer_id, {**inbound, "auto_reply_inbound_id": inbound_id}):
-        return False
     now = _now_iso()
     with _connect() as conn:
+        # A previous ``failed``/``sending`` attempt is retryable. Reuse that
+        # row instead of hitting the unique inbound-message key and reporting
+        # the current retry as a duplicate.
+        existing = conn.execute(
+            """
+            select id from wechat_auto_reply_history
+            where account_id=? and peer_id=? and inbound_message_id=?
+            limit 1
+            """,
+            (account_id, peer_id, inbound_id),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                update wechat_auto_reply_history
+                   set inbound_content=?, reply_content=?, category=?, status=?,
+                       error_message=?, updated_at=?
+                 where id=?
+                """,
+                (
+                    str(inbound.get("content") or "")[:4000],
+                    str(reply or "")[:4000],
+                    str(category or "")[:80],
+                    status,
+                    str(error or "")[:2000],
+                    now,
+                    existing["id"],
+                ),
+            )
+            return True
         cursor = conn.execute(
             """
             insert into wechat_auto_reply_history(
@@ -3068,6 +3281,132 @@ def _load_faq_memory_context(user_id: Optional[int], *, max_chars: int = 12000) 
     return str(_load_auto_reply_memory_context(user_id, max_chars=max_chars).get("text") or "")
 
 
+def _normalize_auto_reply_llm_content(
+    content: str,
+    *,
+    latest_message: str,
+    recent_context: str,
+    group_invite_enabled: bool,
+    group_invite_already_verified: bool,
+    has_invite_rule: bool,
+) -> Dict[str, Any]:
+    parsed = _json_from_text(content)
+    is_structured = bool(parsed)
+    reply = str(parsed.get("reply") or parsed.get("content") or "").strip() if is_structured else ""
+    should_reply = _bool_value(parsed.get("should_reply"), default=bool(reply)) if is_structured else True
+    if not is_structured and content.strip():
+        reply = re.sub(r"^```.*?```$", "", content.strip(), flags=re.S).strip()
+    max_chars = int(DEFAULT_STRATEGY["auto_reply_max_text_chars"])
+    reply = reply[:max_chars].strip()
+    if _looks_like_auto_reply_control_payload(reply):
+        raise RuntimeError("AI返回了内部判断数据，已阻止发送")
+    if not should_reply and reply:
+        should_reply = True
+    if should_reply and not reply:
+        raise RuntimeError("AI未生成可发送的回复")
+    if not should_reply:
+        reply = ""
+    category = str(parsed.get("category") or "other").strip().lower()
+    if category not in {"casual", "product", "price", "service", "cooperation", "complaint", "other"}:
+        category = "other"
+    intent_level = str(parsed.get("intent_level") or "none").strip().lower()
+    if intent_level not in {"high", "medium", "low", "none"}:
+        intent_level = "none"
+    should_invite_group = _bool_value(parsed.get("should_invite_group"))
+    if not group_invite_enabled or not has_invite_rule:
+        should_invite_group = False
+    elif group_invite_already_verified:
+        should_invite_group = False
+    elif _is_affirmative_group_confirmation(latest_message, recent_context):
+        should_invite_group = True
+    elif _reply_claims_existing_group(reply):
+        should_invite_group = True
+    matched_raw = parsed.get("matched_group_keywords")
+    if isinstance(matched_raw, str):
+        matched_values = re.split(r"[,，;；\n]+", matched_raw)
+    elif isinstance(matched_raw, list):
+        matched_values = matched_raw
+    else:
+        matched_values = []
+    matched_group_keywords = list(
+        dict.fromkeys(str(item or "").strip() for item in matched_values if str(item or "").strip())
+    )[:20]
+    group_invite_reason = str(parsed.get("group_invite_reason") or "").strip()[:300]
+    if should_invite_group and _reply_claims_existing_group(reply) and not group_invite_already_verified:
+        group_invite_reason = group_invite_reason or "AI 回复涉及已入群状态，但系统尚未核验，必须先实际执行拉群"
+    if should_invite_group and _is_affirmative_group_confirmation(latest_message, recent_context):
+        if "明确同意拉群" not in matched_group_keywords:
+            matched_group_keywords.append("明确同意拉群")
+        group_invite_reason = group_invite_reason or "客户对我方此前提出的建群或拉群邀请作出明确肯定答复"
+    profile_raw = parsed.get("customer_profile") if isinstance(parsed.get("customer_profile"), dict) else {}
+    profile_updates: Dict[str, Any] = {}
+    allowed_profile_fields = {
+        "company", "role", "industry", "region", "needs", "budget", "timeline", "objections",
+        "preferences", "interests", "products", "relationship", "notes", "tags",
+    }
+    for key, value in profile_raw.items():
+        if key not in allowed_profile_fields:
+            continue
+        if isinstance(value, list):
+            cleaned = list(
+                dict.fromkeys(str(item or "").strip()[:160] for item in value if str(item or "").strip())
+            )[:20]
+            if cleaned:
+                profile_updates[key] = cleaned
+        elif isinstance(value, (str, int, float, bool)) and str(value or "").strip():
+            profile_updates[key] = str(value).strip()[:1000]
+    stage = str(parsed.get("stage") or "").strip().lower()
+    if stage not in {"unknown", "new", "warming", "qualified", "proposal", "won", "lost", "service"}:
+        stage = ""
+    candidates_raw = parsed.get("learning_candidates") if isinstance(parsed.get("learning_candidates"), list) else []
+    learning_candidates: List[Dict[str, Any]] = []
+    for item in candidates_raw[:8]:
+        if not isinstance(item, dict):
+            continue
+        candidate_content = str(item.get("content") or "").strip()[:4000]
+        if not candidate_content:
+            continue
+        candidate_category = str(item.get("category") or "general").strip().lower()
+        if candidate_category not in {
+            "general", "fact", "tone", "product", "price", "service", "commitment", "forbidden",
+            "group_rule", "followup",
+        }:
+            candidate_category = "general"
+        candidate_risk = str(item.get("risk_level") or "medium").strip().lower()
+        if candidate_risk not in {"low", "medium", "high"}:
+            candidate_risk = "medium"
+        try:
+            confidence = max(0, min(100, int(item.get("confidence") or 0)))
+        except (TypeError, ValueError):
+            confidence = 0
+        learning_candidates.append(
+            {
+                "category": candidate_category,
+                "title": str(item.get("title") or "聊天中发现的新规则").strip()[:200],
+                "content": candidate_content,
+                "evidence": str(item.get("evidence") or "").strip()[:4000],
+                "confidence": confidence,
+                "risk_level": candidate_risk,
+            }
+        )
+    return {
+        "should_reply": should_reply,
+        "category": category,
+        "intent_level": intent_level,
+        "topic": str(parsed.get("topic") or "").strip()[:80],
+        "conversation_summary": str(parsed.get("conversation_summary") or parsed.get("summary") or "").strip()[:200],
+        "reply": reply,
+        "should_invite_group": should_invite_group,
+        "matched_group_keywords": matched_group_keywords,
+        "group_invite_reason": group_invite_reason,
+        "stage": stage,
+        "next_followup": str(parsed.get("next_followup") or "").strip()[:2000],
+        "profile_updates": profile_updates,
+        "learning_candidates": learning_candidates,
+        "raw": content[:2000],
+    }
+
+
 async def _call_auto_reply_llm(
     *,
     auth_context: Optional[Dict[str, Any]],
@@ -3171,114 +3510,154 @@ async def _call_auto_reply_llm(
         content = str(data["choices"][0]["message"]["content"] or "")
     except Exception:
         content = json.dumps(data, ensure_ascii=False)
-    parsed = _json_from_text(content)
-    is_structured = bool(parsed)
-    reply = str(parsed.get("reply") or parsed.get("content") or "").strip() if is_structured else ""
-    should_reply = _bool_value(parsed.get("should_reply"), default=bool(reply)) if is_structured else True
-    if not is_structured and content.strip():
-        reply = re.sub(r"^```.*?```$", "", content.strip(), flags=re.S).strip()
-    max_chars = int(DEFAULT_STRATEGY["auto_reply_max_text_chars"])
-    reply = reply[:max_chars].strip()
-    if _looks_like_auto_reply_control_payload(reply):
-        raise RuntimeError("AI返回了内部判断数据，已阻止发送")
-    if should_reply and not reply:
-        raise RuntimeError("AI未生成可发送的回复")
-    if not should_reply:
-        reply = ""
-    category = str(parsed.get("category") or "other").strip().lower()
-    if category not in {"casual", "product", "price", "service", "cooperation", "complaint", "other"}:
-        category = "other"
-    intent_level = str(parsed.get("intent_level") or "none").strip().lower()
-    if intent_level not in {"high", "medium", "low", "none"}:
-        intent_level = "none"
-    should_invite_group = _bool_value(parsed.get("should_invite_group"))
-    if not group_invite_enabled or not has_invite_rule:
-        should_invite_group = False
-    elif group_invite_already_verified:
-        should_invite_group = False
-    elif _is_affirmative_group_confirmation(latest_message, recent_context):
-        should_invite_group = True
-    elif _reply_claims_existing_group(reply):
-        should_invite_group = True
-    matched_raw = parsed.get("matched_group_keywords")
-    if isinstance(matched_raw, str):
-        matched_values = re.split(r"[,，;；\n]+", matched_raw)
-    elif isinstance(matched_raw, list):
-        matched_values = matched_raw
-    else:
-        matched_values = []
-    matched_group_keywords = list(
-        dict.fromkeys(str(item or "").strip() for item in matched_values if str(item or "").strip())
-    )[:20]
-    group_invite_reason = str(parsed.get("group_invite_reason") or "").strip()[:300]
-    if should_invite_group and _reply_claims_existing_group(reply) and not group_invite_already_verified:
-        group_invite_reason = group_invite_reason or "AI 回复涉及已入群状态，但系统尚未核验，必须先实际执行拉群"
-    if should_invite_group and _is_affirmative_group_confirmation(latest_message, recent_context):
-        if "明确同意拉群" not in matched_group_keywords:
-            matched_group_keywords.append("明确同意拉群")
-        group_invite_reason = group_invite_reason or "客户对我方此前提出的建群或拉群邀请作出明确肯定答复"
-    profile_raw = parsed.get("customer_profile") if isinstance(parsed.get("customer_profile"), dict) else {}
-    profile_updates: Dict[str, Any] = {}
-    allowed_profile_fields = {
-        "company", "role", "industry", "region", "needs", "budget", "timeline", "objections",
-        "preferences", "interests", "products", "relationship", "notes", "tags",
-    }
-    for key, value in profile_raw.items():
-        if key not in allowed_profile_fields:
-            continue
-        if isinstance(value, list):
-            cleaned = list(dict.fromkeys(str(item or "").strip()[:160] for item in value if str(item or "").strip()))[:20]
-            if cleaned:
-                profile_updates[key] = cleaned
-        elif isinstance(value, (str, int, float, bool)) and str(value or "").strip():
-            profile_updates[key] = str(value).strip()[:1000]
-    stage = str(parsed.get("stage") or "").strip().lower()
-    if stage not in {"unknown", "new", "warming", "qualified", "proposal", "won", "lost", "service"}:
-        stage = ""
-    candidates_raw = parsed.get("learning_candidates") if isinstance(parsed.get("learning_candidates"), list) else []
-    learning_candidates: List[Dict[str, Any]] = []
-    for item in candidates_raw[:8]:
-        if not isinstance(item, dict):
-            continue
-        candidate_content = str(item.get("content") or "").strip()[:4000]
-        if not candidate_content:
-            continue
-        candidate_category = str(item.get("category") or "general").strip().lower()
-        if candidate_category not in {"general", "fact", "tone", "product", "price", "service", "commitment", "forbidden", "group_rule", "followup"}:
-            candidate_category = "general"
-        candidate_risk = str(item.get("risk_level") or "medium").strip().lower()
-        if candidate_risk not in {"low", "medium", "high"}:
-            candidate_risk = "medium"
-        try:
-            confidence = max(0, min(100, int(item.get("confidence") or 0)))
-        except (TypeError, ValueError):
-            confidence = 0
-        learning_candidates.append(
+    return _normalize_auto_reply_llm_content(
+        content,
+        latest_message=latest_message,
+        recent_context=recent_context,
+        group_invite_enabled=group_invite_enabled,
+        group_invite_already_verified=group_invite_already_verified,
+        has_invite_rule=has_invite_rule,
+    )
+
+
+async def _call_auto_reply_llm_batch(
+    *,
+    auth_context: Optional[Dict[str, Any]],
+    user_id: Optional[int],
+    items: List[Dict[str, Any]],
+    memory_context: str = "",
+    group_invite_rule_context: str = "",
+    group_invite_keywords: str = "",
+    group_invite_enabled: bool = True,
+) -> Dict[str, Dict[str, Any]]:
+    requests = [dict(item) for item in items if str(item.get("work_id") or "").strip()]
+    if not requests:
+        return {}
+    if len(requests) == 1:
+        item = requests[0]
+        reply = await _call_auto_reply_llm(
+            auth_context=auth_context,
+            user_id=user_id,
+            peer_name=str(item.get("peer_name") or ""),
+            latest_message=str(item.get("latest_message") or ""),
+            recent_context=str(item.get("recent_context") or ""),
+            memory_context=memory_context,
+            group_invite_rule_context=group_invite_rule_context,
+            group_invite_keywords=group_invite_keywords,
+            group_invite_enabled=group_invite_enabled,
+            group_invite_already_verified=bool(item.get("group_invite_already_verified")),
+            contact_intelligence=str(item.get("contact_intelligence") or ""),
+            strategy_context=str(item.get("strategy_context") or ""),
+        )
+        return {str(item["work_id"]): reply}
+
+    auth_context = auth_context or {}
+    token = str(auth_context.get("token") or getattr(settings, "openclaw_sutui_fallback_jwt", None) or "").strip()
+    if not token:
+        raise RuntimeError("missing login token for AI auto reply")
+    installation_id = str(
+        auth_context.get("installation_id")
+        or getattr(settings, "openclaw_sutui_fallback_installation_id", None)
+        or f"native-wechat-auto-reply-{int(user_id or 0)}"
+    )
+    model = (
+        getattr(settings, "lobster_orchestration_sutui_chat_model", None)
+        or getattr(settings, "lobster_default_sutui_chat_model", None)
+        or "deepseek-chat"
+    )
+    invite_keywords = list(
+        dict.fromkeys(
+            item.strip()
+            for item in re.split(r"[,，;；\n]+", str(group_invite_keywords or ""))
+            if item.strip()
+        )
+    )[:50]
+    invite_rule_context = str(group_invite_rule_context or "").strip()[:8000]
+    has_invite_rule = bool(group_invite_enabled and (invite_rule_context or invite_keywords))
+    system_prompt = (
+        "你是个人微信私聊批量代回复助手，只处理一对一私聊。输入包含多个彼此独立的客户会话。"
+        "必须分别依据每个会话的最新消息、最近上下文、客户画像和长期规则生成回复，严禁串用客户信息。"
+        "回复要短、自然、有边界，不营销、不夸大；专业问题优先依据共享的个人记忆资料，资料没有答案时不得编造。"
+        "reply 必须跟随各自客户最新消息的自然语言。只有客户诉求明确符合拉群规则时 should_invite_group 才能为 true；"
+        "系统已核验在群的客户不得再次拉群，但仍应正常回复新消息。"
+        "每个输入 work_id 必须原样返回且只能返回一次。返回 JSON 对象，顶层只有 results 数组。"
+        "results 每项格式：{\"work_id\":\"原值\",\"should_reply\":true,"
+        "\"category\":\"casual|product|price|service|cooperation|complaint|other\","
+        "\"intent_level\":\"high|medium|low|none\",\"topic\":\"\","
+        "\"conversation_summary\":\"累计摘要\",\"reply\":\"实际微信回复\","
+        "\"stage\":\"unknown|new|warming|qualified|proposal|won|lost|service\","
+        "\"next_followup\":\"\",\"customer_profile\":{},\"learning_candidates\":[],"
+        "\"should_invite_group\":false,\"matched_group_keywords\":[],\"group_invite_reason\":\"\"}。"
+    )
+    conversations: List[Dict[str, Any]] = []
+    for item in requests:
+        conversations.append(
             {
-                "category": candidate_category,
-                "title": str(item.get("title") or "聊天中发现的新规则").strip()[:200],
-                "content": candidate_content,
-                "evidence": str(item.get("evidence") or "").strip()[:4000],
-                "confidence": confidence,
-                "risk_level": candidate_risk,
+                "work_id": str(item.get("work_id") or ""),
+                "peer_name": str(item.get("peer_name") or "")[:240],
+                "latest_message": str(item.get("latest_message") or "")[:4000],
+                "recent_context": str(item.get("recent_context") or "")[:8000],
+                "contact_intelligence": str(item.get("contact_intelligence") or "")[:7000],
+                "strategy_context": str(item.get("strategy_context") or "")[:7000],
+                "group_invite_already_verified": bool(item.get("group_invite_already_verified")),
             }
         )
-    return {
-        "should_reply": should_reply,
-        "category": category,
-        "intent_level": intent_level,
-        "topic": str(parsed.get("topic") or "").strip()[:80],
-        "conversation_summary": str(parsed.get("conversation_summary") or parsed.get("summary") or "").strip()[:200],
-        "reply": reply,
-        "should_invite_group": should_invite_group,
-        "matched_group_keywords": matched_group_keywords,
-        "group_invite_reason": group_invite_reason,
-        "stage": stage,
-        "next_followup": str(parsed.get("next_followup") or "").strip()[:2000],
-        "profile_updates": profile_updates,
-        "learning_candidates": learning_candidates,
-        "raw": content[:2000],
+    user_payload = {
+        "shared": {
+            "memory_context": str(memory_context or "")[:12000],
+            "group_invite_enabled": bool(group_invite_enabled),
+            "group_invite_rule_context": invite_rule_context,
+            "group_invite_keywords": invite_keywords,
+        },
+        "conversations": conversations,
     }
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ],
+        "stream": False,
+        "temperature": 0.35,
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {token}",
+        "X-Installation-Id": installation_id,
+    }
+    async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
+        resp = await client.post(f"{_server_proxy_base()}/api/sutui-chat/completions", json=payload, headers=headers)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"sutui-chat batch HTTP {resp.status_code}: {(resp.text or '')[:500]}")
+    data = resp.json() if resp.content else {}
+    try:
+        content = str(data["choices"][0]["message"]["content"] or "")
+    except Exception:
+        content = json.dumps(data, ensure_ascii=False)
+    parsed = _json_from_text(content)
+    raw_results = parsed.get("results") if isinstance(parsed.get("results"), list) else []
+    request_by_id = {str(item["work_id"]): item for item in requests}
+    normalized: Dict[str, Dict[str, Any]] = {}
+    for raw in raw_results:
+        if not isinstance(raw, dict):
+            continue
+        work_id = str(raw.get("work_id") or "").strip()
+        request = request_by_id.get(work_id)
+        if request is None or work_id in normalized:
+            continue
+        normalized[work_id] = _normalize_auto_reply_llm_content(
+            json.dumps(raw, ensure_ascii=False),
+            latest_message=str(request.get("latest_message") or ""),
+            recent_context=str(request.get("recent_context") or ""),
+            group_invite_enabled=group_invite_enabled,
+            group_invite_already_verified=bool(request.get("group_invite_already_verified")),
+            has_invite_rule=has_invite_rule,
+        )
+    missing = [work_id for work_id in request_by_id if work_id not in normalized]
+    if missing:
+        raise RuntimeError(f"AI批量回复缺少 {len(missing)} 个会话结果")
+    return normalized
 
 
 async def _generate_new_friend_welcome(
@@ -3636,6 +4015,105 @@ def _session_is_scan_candidate(item: Dict[str, Any]) -> bool:
     return not _looks_like_non_replyable_wechat_event(item.get("last_content"))
 
 
+def _session_preview_matches_message(session: Dict[str, Any], message: Optional[Dict[str, Any]]) -> bool:
+    if not message:
+        return False
+    preview = re.sub(r"\s+", "", str(session.get("last_content") or "")).strip().lower()
+    content = re.sub(r"\s+", "", str(message.get("content") or "")).strip().lower()
+    msg_type = str(message.get("msg_type") or "text").strip().lower()
+    if not preview:
+        return False
+    if content and preview == content:
+        return True
+    marker_by_type = {
+        "image": ("[图片]", "[image]"),
+        "video": ("[视频]", "[video]"),
+        "voice": ("[语音]", "[voice]"),
+        "file": ("[文件]", "[file]"),
+        "link": ("[链接]", "[link]"),
+    }
+    markers = marker_by_type.get(msg_type, ())
+    return any(re.sub(r"\s+", "", marker).lower() in preview for marker in markers)
+
+
+def _latest_strict_auto_reply_candidate(account_id: str, peer_id: str) -> Optional[Dict[str, Any]]:
+    """Return an unanswered inbound only when it is the latest real message."""
+    candidate = _latest_auto_reply_candidate(account_id, peer_id)
+    if not candidate or str(candidate.get("direction") or "").strip().lower() != "in":
+        return None
+    latest = _latest_message_record(account_id, peer_id, include_system=False)
+    if not latest:
+        return candidate
+    if str(latest.get("direction") or "").strip().lower() != "in":
+        return None
+    if _auto_reply_inbound_id(peer_id, candidate) != _auto_reply_inbound_id(peer_id, latest):
+        return None
+    return candidate
+
+
+def _auto_reply_session_prefilter(account_id: str, session: Dict[str, Any]) -> Dict[str, Any]:
+    """Classify a session row without opening it whenever cached direction is sufficient."""
+    peer_id = str(session.get("peer_id") or "").strip()
+    if not peer_id:
+        return {"action": "skip", "reason": "missing_peer"}
+    # The time-driven wxauto4 snapshot deliberately omits rows without a
+    # trustworthy exact timestamp.  Keep this guard here as well so a stale
+    # or externally supplied snapshot cannot reopen an undated session.
+    if "session_time_reliable" in session:
+        if not bool(session.get("session_time_reliable")):
+            return {"action": "skip", "reason": "session_time_unreliable"}
+        try:
+            age_seconds = float(session.get("session_time_age_seconds"))
+        except (TypeError, ValueError):
+            return {"action": "skip", "reason": "session_time_unreliable"}
+        if age_seconds < 0:
+            return {"action": "skip", "reason": "session_time_in_future"}
+        if age_seconds >= 24 * 60 * 60:
+            return {"action": "stop", "reason": "last_message_over_24h"}
+    known_type = _normalize_local_chat_type(
+        session.get("chat_type") or _known_local_peer_chat_type(account_id, peer_id)
+    )
+    if (
+        _local_chat_type_is_group(known_type)
+        or known_type in _LOCAL_NON_PRIVATE_CHAT_TYPES
+        or _looks_like_group_session({**session, "chat_type": known_type})
+        or _is_non_private_session_entry(session)
+    ):
+        return {"action": "skip_group", "reason": "known_non_private", "chat_type": known_type}
+    if _session_stops_recent_scan(session):
+        return {"action": "stop", "reason": "last_message_over_24h"}
+    if not _session_is_scan_candidate(session):
+        return {"action": "skip", "reason": "non_replyable_preview"}
+
+    latest = _latest_message_record(account_id, peer_id, include_system=False)
+    if latest and _session_preview_matches_message(session, latest):
+        direction = str(latest.get("direction") or "").strip().lower()
+        if direction == "out":
+            return {"action": "skip", "reason": "latest_message_outbound", "latest": latest}
+        if direction == "in":
+            candidate = _latest_strict_auto_reply_candidate(account_id, peer_id)
+            if not candidate:
+                return {"action": "skip", "reason": "latest_inbound_not_replyable", "latest": latest}
+            return {"action": "open", "reason": "cached_latest_inbound", "candidate": candidate}
+
+    try:
+        unread_count = int(session.get("unread_count") or 0)
+    except (TypeError, ValueError):
+        unread_count = 0
+    return {
+        "action": "open",
+        "reason": "unread_or_preview_changed" if unread_count > 0 else "preview_direction_unknown",
+    }
+
+
+def _auto_reply_work_id(account_id: str, peer_id: str, inbound: Dict[str, Any]) -> str:
+    return "wechat-reply-v1-" + _stable_key(
+        str(account_id or "").strip(),
+        str(peer_id or "").strip(),
+        _auto_reply_inbound_id(peer_id, inbound),
+    )
+
+
 async def run_auto_reply_once(
     account_id: str,
     *,
@@ -3649,9 +4127,24 @@ async def run_auto_reply_once(
     account_id = str(account_id or "").strip()
     if not account_id:
         raise RuntimeError("missing account_id")
+    run_id = "auto-reply-" + datetime.now().strftime("%Y%m%d%H%M%S") + "-" + uuid.uuid4().hex[:8]
+
+    def log_event(event: str, **fields: Any) -> None:
+        _write_auto_reply_diagnostic(event, account_id=account_id, run_id=run_id, **fields)
+
     if auth_context:
         _AUTO_REPLY_AUTH_CONTEXT[account_id] = dict(auth_context)
     cfg = get_auto_reply_config(account_id)
+    log_event(
+        "run_requested",
+        trigger=trigger,
+        force=bool(force),
+        check_friend_requests=bool(check_friend_requests),
+        enabled=bool(cfg.get("enabled")),
+        interval_seconds=int(cfg.get("interval_seconds") or 0),
+        private_sessions_per_round=int(cfg.get("private_sessions_per_round") or 0),
+        group_invite_enabled=bool(cfg.get("group_invite_enabled")),
+    )
     if isinstance(config_override, dict) and config_override:
         cfg = {**cfg, **config_override}
         cfg["language"] = _normalize_auto_reply_language(
@@ -3669,19 +4162,20 @@ async def run_auto_reply_once(
             "private_sessions_per_round",
             config_override.get("max_private_sessions_per_round", cfg.get("private_sessions_per_round")),
         )
-        try:
-            cfg["private_sessions_per_round"] = max(1, min(int(private_limit or 10), 100))
-        except Exception:
-            cfg["private_sessions_per_round"] = int(DEFAULT_STRATEGY["auto_reply_private_sessions_per_round"])
+        cfg["private_sessions_per_round"] = _normalize_auto_reply_private_session_limit(private_limit)
     effective_user_id = int(cfg.get("user_id") or (auth_context or {}).get("user_id") or 0) or None
     if not force and not cfg.get("enabled"):
+        log_event("run_skipped", reason="disabled")
         return {"ok": True, "skipped": True, "reason": "disabled", "config": cfg}
     if not _auto_reply_due(cfg, force=force):
+        log_event("run_skipped", reason="not_due")
         return {"ok": True, "skipped": True, "reason": "not_due", "config": cfg}
     if not _claim_auto_reply_run(account_id):
+        log_event("run_skipped", reason="running")
         return {"ok": True, "skipped": True, "reason": "running", "config": get_auto_reply_config(account_id)}
     started_monotonic = time.monotonic()
     started_at = _now_iso()
+    log_event("run_started", started_at=started_at)
     memory = _load_auto_reply_memory_context(
         effective_user_id,
         max_chars=12000,
@@ -3779,84 +4273,516 @@ async def run_auto_reply_once(
                 result["friend_requests_failed"] = 1
         if _auto_reply_stop_requested(account_id):
             result["stop_reason"] = "cancelled"
+            log_event(
+                "run_stop_requested",
+                stage="after_friend_requests",
+                friend_requests=result.get("friend_requests") or {},
+            )
         if result.get("stop_reason"):
             result["finished_at"] = _now_iso()
             result["duration_seconds"] = round(max(0.0, time.monotonic() - started_monotonic), 2)
             report = _build_auto_reply_report(result, memory)
             result["report"] = report
             result["summary_text"] = report.get("summary_text") or ""
+            log_event(
+                "run_finished",
+                stop_reason=result.get("stop_reason") or "",
+                duration_seconds=result.get("duration_seconds") or 0,
+                session_count=result.get("session_count") or 0,
+                processed=result.get("processed") or 0,
+                replied=result.get("replied") or 0,
+                skipped=result.get("skipped") or 0,
+                failed=result.get("failed") or 0,
+            )
             _finish_auto_reply_run(account_id, result)
             return {**result, "config": get_auto_reply_config(account_id)}
-        session_data = await _run_local_wechat_async(
-            sync_local_sessions,
-            account_id,
-            passive=False,
-            recent_only=True,
-        )
+        _AUTO_REPLY_TIME_SCAN_ACCOUNTS.add(account_id)
+        try:
+            session_data = await _run_local_wechat_async(
+                sync_local_sessions,
+                account_id,
+                passive=False,
+                recent_only=False,
+            )
+        finally:
+            _AUTO_REPLY_TIME_SCAN_ACCOUNTS.discard(account_id)
         _collect_local_driver_recovery(result, session_data)
         sessions = _enrich_sessions_with_message_counts(account_id, list(session_data.get("items") or []))
+        log_event(
+            "session_scan_completed",
+            time_scan=bool(session_data.get("time_scan")),
+            time_scan_old_boundary=bool(session_data.get("time_scan_old_boundary")),
+            scroll_rounds=int(session_data.get("scroll_rounds") or 0),
+            raw_session_count=len(session_data.get("items") or []),
+            enriched_session_count=len(sessions),
+            driver_recovered=bool(session_data.get("driver_recovered")),
+            driver_retry_count=int(session_data.get("driver_retry_count") or 0),
+        )
+        # Older/test drivers may not provide the wxauto4 time snapshot. Keep
+        # their existing top-reset behavior; the precise-time path already
+        # returns the driver to the top in its finally block.
+        reset_data: Dict[str, Any] = {}
+        if not bool(session_data.get("time_scan")):
+            reset_data = await _run_local_wechat_async(
+                sync_local_sessions,
+                account_id,
+                passive=False,
+                recent_only=True,
+            )
+            _collect_local_driver_recovery(result, reset_data)
+            log_event(
+                "session_scan_reset_completed",
+                scroll_rounds=int(reset_data.get("scroll_rounds") or 0),
+                raw_session_count=len(reset_data.get("items") or []),
+                driver_recovered=bool(reset_data.get("driver_recovered")),
+            )
         result["session_count"] = len(sessions)
-        result["session_scan_rounds"] = int(session_data.get("scroll_rounds") or 0)
-        result["session_scan_limit"] = 50
-        private_session_limit = max(
-            1,
-            min(
-                int(cfg.get("private_sessions_per_round") or DEFAULT_STRATEGY["auto_reply_private_sessions_per_round"]),
-                100,
-            ),
+        result["session_scan_rounds"] = int(session_data.get("scroll_rounds") or 0) + int(
+            reset_data.get("scroll_rounds") or 0
+        )
+        result["session_scan_limit"] = 100
+        private_session_limit = _normalize_auto_reply_private_session_limit(
+            cfg.get("private_sessions_per_round")
         )
         result["private_session_limit"] = private_session_limit
         result["unread_private_count"] = 0
         result["unread_message_count"] = 0
-        processed_peer_ids: set[str] = set()
-        session_scroll_state: Dict[str, Any] = {"scroll_rounds": 0, "at_end": False}
-        personal_sessions_checked = 0
-        # Each round starts at the first visible row.  We click one row,
-        # inspect the current chat, and then take the next unprocessed visible
-        # row. Once the current page is exhausted, advance one page and keep
-        # going; never search or repeatedly scroll at the bottom.
-        while personal_sessions_checked < private_session_limit:
-            if _auto_reply_stop_requested(account_id):
-                result["stop_reason"] = "cancelled"
-                break
-            session = await _run_local_wechat_async(
-                _open_next_visible_session,
-                account_id,
-                processed_peer_ids,
-                session_scroll_state,
+        result["prefilter_skipped"] = 0
+        result["candidate_sessions_opened"] = 0
+        result["ai_batch_candidate_count"] = 0
+        result["ai_batch_request_count"] = 0
+
+        configured_primary_contact_for_batch = str(
+            cfg.get("group_invite_primary_contact")
+            or next(
+                (value for value in (cfg.get("group_invite_contacts") or []) if str(value or "").strip()),
+                "",
             )
-            if not session:
+        ).strip()
+        primary_contact_for_batch = (
+            _resolve_local_contact_wx_no(account_id, configured_primary_contact_for_batch)
+            or configured_primary_contact_for_batch
+        )
+        prepared_by_work_id: Dict[str, Dict[str, Any]] = {}
+        batch_requests: List[Dict[str, Any]] = []
+        scan_boundary_reached = bool(session_data.get("time_scan_old_boundary"))
+
+        for session in sessions:
+            if len(batch_requests) >= private_session_limit:
                 break
             peer_id = str(session.get("peer_id") or "").strip()
-            display_name = str(session.get("display_name") or peer_id).strip()
+            display_name = _session_display_name(session.get("display_name") or peer_id)
+            decision = _auto_reply_session_prefilter(account_id, session)
+            action = str(decision.get("action") or "skip")
+            reason = str(decision.get("reason") or "prefilter_skipped")
+            log_event(
+                "session_decision",
+                peer_id=peer_id,
+                display_name=display_name,
+                action=action,
+                reason=reason,
+                chat_type=str(decision.get("chat_type") or session.get("chat_type") or ""),
+                unread_count=str(session.get("unread_count") or "0"),
+                session_time=str(session.get("session_time") or ""),
+                session_time_reliable=session.get("session_time_reliable"),
+                session_time_age_seconds=session.get("session_time_age_seconds"),
+                last_content=str(session.get("last_content") or "")[:500],
+                cached_latest_direction=str((decision.get("latest") or {}).get("direction") or "")
+                if isinstance(decision.get("latest"), dict)
+                else "",
+                cached_latest_id=str((decision.get("latest") or {}).get("provider_message_id") or "")
+                if isinstance(decision.get("latest"), dict)
+                else "",
+            )
+            if action == "stop":
+                scan_boundary_reached = True
+                log_event("scan_stopped", peer_id=peer_id, display_name=display_name, reason=reason)
+                break
+            if action == "skip_group":
+                result["skipped_groups"] += 1
+                result["items"].append(
+                    {
+                        "peer_id": peer_id,
+                        "display_name": display_name,
+                        "status": "prefiltered_group",
+                        "chat_type": str(decision.get("chat_type") or "group_like"),
+                        "skip_reason": reason,
+                    }
+                )
+                continue
+            if action != "open":
+                result["skipped"] += 1
+                result["prefilter_skipped"] += 1
+                result["items"].append(
+                    {
+                        "peer_id": peer_id,
+                        "display_name": display_name,
+                        "status": "prefiltered",
+                        "skip_reason": reason,
+                    }
+                )
+                continue
+
+            collection_result: Dict[str, Any] = {
+                "peer_id": peer_id,
+                "display_name": display_name,
+                "status": "collecting",
+                "prefilter_reason": reason,
+            }
+            log_event(
+                "session_open_started",
+                peer_id=peer_id,
+                display_name=display_name,
+                prefilter_reason=reason,
+            )
+            try:
+                result["candidate_sessions_opened"] += 1
+                sync_result = await _run_local_wechat_async(
+                    sync_local_messages,
+                    account_id,
+                    peer_id,
+                    load_more_pages=0,
+                    select_via_uia="@@uia-" in peer_id,
+                    uia_session_max_rounds=20,
+                    current_selected=False,
+                    read_chat_info=True,
+                    download_attachments=False,
+                    diagnostic_context={
+                        "account_id": account_id,
+                        "run_id": run_id,
+                        "stage": "collect",
+                        "session_preview": session.get("last_content") or "",
+                    },
+                )
+                _collect_local_driver_recovery(result, sync_result)
+                chat_info = sync_result.get("chat_info") if isinstance(sync_result.get("chat_info"), dict) else {}
+                actual_peer = str(sync_result.get("peer_id") or peer_id).strip()
+                if _session_display_name(actual_peer) == display_name and "@@uia-" in peer_id:
+                    actual_peer = peer_id
+                chat_type = _normalize_local_chat_type((chat_info or {}).get("chat_type"))
+                if chat_type in {"", "unknown"}:
+                    chat_type = _normalize_local_chat_type(sync_result.get("message_chat_type"))
+                if chat_type in {"", "unknown"}:
+                    chat_type = _normalize_local_chat_type(_known_local_peer_chat_type(account_id, actual_peer))
+                latest_after_sync = sync_result.get("latest_message") if isinstance(sync_result.get("latest_message"), dict) else {}
+                log_event(
+                    "session_open_completed",
+                    peer_id=peer_id,
+                    actual_peer=actual_peer,
+                    display_name=display_name,
+                    chat_type=chat_type or "unknown",
+                    read_chat_info=True,
+                    message_chat_type=str(sync_result.get("message_chat_type") or ""),
+                    seen_count=str(sync_result.get("seen_count") or "0"),
+                    inserted_count=str(sync_result.get("count") or "0"),
+                    deduped_count=str(sync_result.get("deduped_count") or "0"),
+                    latest_message_id=str(
+                        latest_after_sync.get("auto_reply_inbound_id")
+                        or latest_after_sync.get("provider_message_id")
+                        or latest_after_sync.get("id")
+                        or ""
+                    ),
+                    latest_message_time=str(latest_after_sync.get("created_at") or ""),
+                    latest_preview=str(latest_after_sync.get("content") or "")[:500],
+                    **_message_diagnostic_fields(latest_after_sync, prefix="latest_"),
+                )
+                if (
+                    _local_chat_type_is_group(chat_type)
+                    or chat_type in _LOCAL_NON_PRIVATE_CHAT_TYPES
+                    or _looks_like_group_session(
+                        {
+                            "peer_id": actual_peer,
+                            "display_name": display_name,
+                            "last_content": str(session.get("last_content") or ""),
+                            "chat_type": chat_type,
+                        }
+                    )
+                ):
+                    result["skipped_groups"] += 1
+                    collection_result.update(
+                        {"status": "skipped_group", "chat_type": chat_type or "group_like", "skip_reason": "group_chat"}
+                    )
+                    log_event(
+                        "session_skipped",
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        status="skipped_group",
+                        chat_type=chat_type or "group_like",
+                        reason="group_chat",
+                    )
+                    result["items"].append(collection_result)
+                    continue
+                if not _local_chat_type_is_private(chat_type):
+                    result["skipped"] += 1
+                    result["skipped_unknown_chat_type"] += 1
+                    collection_result.update(
+                        {
+                            "status": "skipped_unknown_chat_type",
+                            "chat_type": chat_type or "unknown",
+                            "reply_suppressed": True,
+                            "skip_reason": "chat_type_not_confirmed",
+                        }
+                    )
+                    log_event(
+                        "session_skipped",
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        status="skipped_unknown_chat_type",
+                        chat_type=chat_type or "unknown",
+                        reason="chat_type_not_confirmed",
+                    )
+                    result["items"].append(collection_result)
+                    continue
+                inbound = _latest_strict_auto_reply_candidate(account_id, actual_peer)
+                if not inbound:
+                    result["skipped"] += 1
+                    collection_result.update(
+                        {"status": "no_unreplied_message", "skip_reason": "latest_message_not_inbound"}
+                    )
+                    log_event(
+                        "message_candidate",
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        chat_type=chat_type,
+                        found=False,
+                        reason="latest_message_not_inbound",
+                        **_message_diagnostic_fields(latest_after_sync, prefix="latest_"),
+                    )
+                    result["items"].append(collection_result)
+                    continue
+                log_event(
+                    "message_candidate",
+                    peer_id=peer_id,
+                    actual_peer=actual_peer,
+                    display_name=display_name,
+                    chat_type=chat_type,
+                    found=True,
+                    inbound_message_id=_auto_reply_inbound_id(actual_peer, inbound),
+                    inbound_time=str(inbound.get("created_at") or ""),
+                    inbound_type=str(inbound.get("msg_type") or "text"),
+                    inbound_preview=str(inbound.get("content") or "")[:500],
+                    decision="queued_for_ai",
+                    **_message_diagnostic_fields(inbound, prefix="inbound_"),
+                )
+                local_group_invite_verified = _has_verified_group_invite(
+                    account_id,
+                    actual_peer,
+                    primary_contact_for_batch,
+                )
+                intelligence_context = await _load_wechat_intelligence_context(
+                    _AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
+                    account_id=account_id,
+                    contact_key=actual_peer,
+                    contact_name=display_name,
+                    latest_message=str(inbound.get("content") or ""),
+                )
+                contact_intelligence, strategy_context = _wechat_intelligence_prompt_context(intelligence_context)
+                server_contact = intelligence_context.get("contact") if isinstance(intelligence_context, dict) else {}
+                group_invite_already_verified = bool(
+                    local_group_invite_verified
+                    or (isinstance(server_contact, dict) and server_contact.get("group_invite_verified"))
+                )
+                if not group_invite_already_verified:
+                    contact_intelligence = str(_strip_unverified_group_claims(contact_intelligence) or "")
+                recent = _recent_conversation_text(account_id, actual_peer, limit=8)
+                work_id = _auto_reply_work_id(account_id, actual_peer, inbound)
+                request_item = {
+                    "work_id": work_id,
+                    "peer_name": display_name,
+                    "latest_message": str(inbound.get("content") or ""),
+                    "recent_context": recent,
+                    "contact_intelligence": contact_intelligence,
+                    "strategy_context": strategy_context,
+                    "group_invite_already_verified": group_invite_already_verified,
+                }
+                prepared = {
+                    "work_id": work_id,
+                    "session": dict(session),
+                    "session_peer_id": peer_id,
+                    "actual_peer": actual_peer,
+                    "display_name": display_name,
+                    "inbound": inbound,
+                    "request": request_item,
+                    "intelligence_context": intelligence_context,
+                    "local_group_invite_verified": local_group_invite_verified,
+                    "group_invite_already_verified": group_invite_already_verified,
+                }
+                prepared_by_work_id[work_id] = prepared
+                batch_requests.append(request_item)
+                log_event(
+                    "message_queued_for_ai",
+                    work_id=work_id,
+                    peer_id=peer_id,
+                    actual_peer=actual_peer,
+                    display_name=display_name,
+                    inbound_message_id=_auto_reply_inbound_id(actual_peer, inbound),
+                    group_invite_already_verified=bool(group_invite_already_verified),
+                    intelligence_available=bool(intelligence_context.get("available")),
+                    recent_context_chars=len(recent),
+                )
+            except Exception as collection_exc:
+                result["failed"] += 1
+                collection_result.update(
+                    {
+                        "status": "collection_failed",
+                        "error": str(collection_exc)[:300],
+                        "skip_reason": "candidate_collection_failed",
+                    }
+                )
+                log_event(
+                    "session_collection_failed",
+                    peer_id=peer_id,
+                    display_name=display_name,
+                    error=str(collection_exc)[:500],
+                )
+                result["items"].append(collection_result)
+
+        result["ai_batch_candidate_count"] = len(batch_requests)
+        batch_replies: Dict[str, Dict[str, Any]] = {}
+        batch_size = 8
+        for offset in range(0, len(batch_requests), batch_size):
+            chunk = batch_requests[offset : offset + batch_size]
+            log_event(
+                "ai_batch_started",
+                batch_index=int(offset / batch_size) + 1,
+                batch_size=len(chunk),
+                work_ids=[str(item.get("work_id") or "") for item in chunk],
+                candidates=[
+                    {
+                        "work_id": str(item.get("work_id") or ""),
+                        "peer_name": str(item.get("peer_name") or "")[:120],
+                        "latest_preview": str(item.get("latest_message") or "")[:300],
+                    }
+                    for item in chunk
+                ],
+            )
+            try:
+                result["ai_batch_request_count"] += 1
+                chunk_replies = await _call_auto_reply_llm_batch(
+                    auth_context=_AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
+                    user_id=effective_user_id,
+                    items=chunk,
+                    memory_context=str(memory.get("text") or ""),
+                    group_invite_rule_context=str(invite_rule_memory.get("text") or ""),
+                    group_invite_keywords=str(cfg.get("group_invite_keywords") or ""),
+                    group_invite_enabled=bool(cfg.get("group_invite_enabled")),
+                )
+                batch_replies.update(chunk_replies)
+                log_event(
+                    "ai_batch_completed",
+                    batch_index=int(offset / batch_size) + 1,
+                    requested_count=len(chunk),
+                    reply_count=len(chunk_replies),
+                    decisions=[
+                        {
+                            "work_id": str(work_id),
+                            "should_reply": bool(reply.get("should_reply")),
+                            "should_invite_group": bool(reply.get("should_invite_group")),
+                            "category": str(reply.get("category") or "")[:80],
+                            "reply_preview": str(reply.get("reply") or "")[:300],
+                        }
+                        for work_id, reply in chunk_replies.items()
+                        if isinstance(reply, dict)
+                    ],
+                )
+            except Exception as batch_exc:
+                log_event(
+                    "ai_batch_failed",
+                    batch_index=int(offset / batch_size) + 1,
+                    requested_count=len(chunk),
+                    work_ids=[str(item.get("work_id") or "") for item in chunk],
+                    error=str(batch_exc)[:700],
+                )
+                for request_item in chunk:
+                    work_id = str(request_item.get("work_id") or "")
+                    prepared = prepared_by_work_id.get(work_id) or {}
+                    result["failed"] += 1
+                    result["items"].append(
+                        {
+                            "peer_id": str(prepared.get("session_peer_id") or ""),
+                            "display_name": str(prepared.get("display_name") or ""),
+                            "work_id": work_id,
+                            "status": "ai_batch_failed",
+                            "error": str(batch_exc)[:300],
+                            "skip_reason": "ai_batch_failed",
+                        }
+                    )
+
+        executable_prepared = [
+            prepared_by_work_id[work_id]
+            for work_id in prepared_by_work_id
+            if work_id in batch_replies
+        ]
+        personal_sessions_checked = 0
+        # Execute the prepared identities, never the mutable row indexes. A
+        # new incoming message may reorder the list while the batch AI call is
+        # running, but it cannot change which captured work item is reopened.
+        for prepared in executable_prepared:
+            if _auto_reply_stop_requested(account_id):
+                result["stop_reason"] = "cancelled"
+                log_event("run_stop_requested", stage="before_execution_item")
+                break
+            session = dict(prepared.get("session") or {})
+            peer_id = str(session.get("peer_id") or "").strip()
+            display_name = _session_display_name(session.get("display_name") or peer_id)
             if not peer_id:
                 continue
-            processed_peer_ids.add(peer_id)
-            item_result: Dict[str, Any] = {"peer_id": peer_id, "display_name": display_name, "status": "skipped"}
+            work_id = str(prepared.get("work_id") or "").strip()
+            log_event(
+                "execution_started",
+                work_id=work_id,
+                peer_id=peer_id,
+                display_name=display_name,
+                expected_peer_id=str(prepared.get("actual_peer") or peer_id),
+                expected_inbound_message_id=_auto_reply_inbound_id(
+                    str(prepared.get("actual_peer") or peer_id),
+                    prepared.get("inbound") if isinstance(prepared.get("inbound"), dict) else {},
+                ),
+            )
+            item_result: Dict[str, Any] = {
+                "peer_id": peer_id,
+                "display_name": display_name,
+                "work_id": work_id,
+                "status": "skipped",
+            }
             current_inbound: Optional[Dict[str, Any]] = None
             current_reply = ""
             current_category = ""
             current_peer = peer_id
             llm_reply: Dict[str, Any] = {}
-            intelligence_context: Dict[str, Any] = {}
+            intelligence_context = (
+                dict(prepared.get("intelligence_context") or {})
+                if isinstance(prepared.get("intelligence_context"), dict)
+                else {}
+            )
             skip_intelligence_observation = False
+            chat_type = ""
             try:
                 sync_result = await _run_local_wechat_async(
                     sync_local_messages,
                     account_id,
                     peer_id,
                     load_more_pages=0,
-                    select_via_uia=False,
-                    current_selected=True,
-                    # The session row was already clicked above.  Read the
-                    # selected chat's real type before any AI call or send;
-                    # wxauto4 41.x returns friend/group and member count here.
+                    select_via_uia="@@uia-" in peer_id,
+                    uia_session_max_rounds=20,
+                    current_selected=False,
+                    # Reopen the captured identity. The list may have been
+                    # reordered by new messages while the batch AI call ran.
                     read_chat_info=True,
                     download_attachments=False,
+                    diagnostic_context={"account_id": account_id, "run_id": run_id, "stage": "execute"},
                 )
                 _collect_local_driver_recovery(result, sync_result)
                 chat_info = sync_result.get("chat_info") if isinstance(sync_result.get("chat_info"), dict) else {}
                 actual_peer = str(sync_result.get("peer_id") or peer_id)
+                # wxauto4 can only expose a display name after a UIA click.
+                # Preserve the row alias when it returns the same duplicate
+                # name, so the two rows cannot overwrite each other's history.
+                if _session_display_name(actual_peer) == display_name and "@@uia-" in peer_id:
+                    actual_peer = peer_id
                 chat_type = _normalize_local_chat_type((chat_info or {}).get("chat_type"))
                 if chat_type in {"", "unknown"}:
                     chat_type = _normalize_local_chat_type(sync_result.get("message_chat_type"))
@@ -3871,7 +4797,17 @@ async def run_auto_reply_once(
                     }
                 ):
                     result["skipped_groups"] += 1
-                    item_result.update({"status": "skipped_group", "chat_type": chat_type or "group_like"})
+                    item_result.update({"status": "skipped_group", "chat_type": chat_type or "group_like", "skip_reason": "group_chat"})
+                    log_event(
+                        "execution_skipped",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        status="skipped_group",
+                        chat_type=chat_type or "group_like",
+                        reason="group_chat",
+                    )
                     result["items"].append(item_result)
                     continue
                 if not _local_chat_type_is_private(chat_type):
@@ -3886,12 +4822,22 @@ async def run_auto_reply_once(
                             "chat_type": chat_type or "unknown",
                             "error": "未能确认当前微信会话是一对一私聊，已跳过",
                             "reply_suppressed": True,
+                            "skip_reason": "chat_type_not_confirmed",
                         }
+                    )
+                    log_event(
+                        "execution_skipped",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        status="skipped_unknown_chat_type",
+                        chat_type=chat_type or "unknown",
+                        reason="chat_type_not_confirmed",
                     )
                     result["items"].append(item_result)
                     continue
                 current_peer = actual_peer
-                processed_peer_ids.add(actual_peer)
                 personal_sessions_checked += 1
                 result["unread_private_count"] += 1
                 result["unread_message_count"] += max(0, int(session.get("unread_count") or 0))
@@ -3905,21 +4851,102 @@ async def run_auto_reply_once(
                         }
                     )
                     result["items"].append(item_result)
-                    break
-                configured_primary_contact = str(
-                    cfg.get("group_invite_primary_contact")
-                    or next(
-                        (value for value in (cfg.get("group_invite_contacts") or []) if str(value or "").strip()),
-                        "",
+                    log_event(
+                        "execution_stopped",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        display_name=display_name,
+                        reason="last_message_over_24h",
+                        session_time=str(session.get("session_time") or ""),
                     )
-                ).strip()
-                primary_contact = _resolve_local_contact_wx_no(account_id, configured_primary_contact) or configured_primary_contact
-                inbound = _latest_auto_reply_candidate(account_id, actual_peer)
+                    break
+                inbound = _latest_strict_auto_reply_candidate(account_id, actual_peer)
                 if not inbound:
                     result["skipped"] += 1
-                    item_result.update({"status": "no_unreplied_message"})
+                    item_result.update(
+                        {
+                            "status": "stale_after_batch",
+                            "reply_suppressed": True,
+                            "skip_reason": "latest_message_changed",
+                        }
+                    )
                     result["items"].append(item_result)
+                    skip_intelligence_observation = True
+                    log_event(
+                        "execution_skipped",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        display_name=display_name,
+                        status="stale_after_batch",
+                        reason="latest_message_changed",
+                    )
                     continue
+
+                expected_peer = str(prepared.get("actual_peer") or peer_id).strip()
+                expected_inbound = (
+                    dict(prepared.get("inbound") or {})
+                    if isinstance(prepared.get("inbound"), dict)
+                    else {}
+                )
+                expected_inbound_id = _auto_reply_inbound_id(expected_peer, expected_inbound)
+                current_inbound_id = _auto_reply_inbound_id(actual_peer, inbound)
+                current_work_id = _auto_reply_work_id(account_id, actual_peer, inbound)
+                if (
+                    not work_id
+                    or actual_peer != expected_peer
+                    or current_inbound_id != expected_inbound_id
+                    or current_work_id != work_id
+                ):
+                    result["skipped"] += 1
+                    item_result.update(
+                        {
+                            "status": "stale_after_batch",
+                            "reply_suppressed": True,
+                            "skip_reason": "latest_message_changed",
+                            "expected_peer_id": expected_peer[:240],
+                            "resolved_peer_id": actual_peer[:240],
+                            "expected_inbound_message_id": expected_inbound_id[:255],
+                            "current_inbound_message_id": current_inbound_id[:255],
+                        }
+                    )
+                    result["items"].append(item_result)
+                    skip_intelligence_observation = True
+                    log_event(
+                        "execution_skipped",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        display_name=display_name,
+                        status="stale_after_batch",
+                        reason="latest_message_changed",
+                        expected_inbound_message_id=expected_inbound_id,
+                        current_inbound_message_id=current_inbound_id,
+                        expected_peer_id=expected_peer,
+                        resolved_peer_id=actual_peer,
+                    )
+                    continue
+
+                llm_reply = dict(batch_replies.get(work_id) or {})
+                if not llm_reply:
+                    result["skipped"] += 1
+                    item_result.update(
+                        {
+                            "status": "stale_after_batch",
+                            "reply_suppressed": True,
+                            "skip_reason": "batch_result_missing",
+                        }
+                    )
+                    result["items"].append(item_result)
+                    skip_intelligence_observation = True
+                    log_event(
+                        "execution_skipped",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        display_name=display_name,
+                        status="stale_after_batch",
+                        reason="batch_result_missing",
+                    )
+                    continue
+
                 current_inbound = inbound
                 item_result.update(
                     {
@@ -3933,10 +4960,22 @@ async def run_auto_reply_once(
                         "message_time": str(inbound.get("created_at") or ""),
                     }
                 )
+                log_event(
+                    "execution_message_current",
+                    work_id=work_id,
+                    peer_id=peer_id,
+                    actual_peer=actual_peer,
+                    display_name=display_name,
+                    inbound_message_id=str(item_result.get("inbound_message_id") or ""),
+                    inbound_time=str(inbound.get("created_at") or ""),
+                    inbound_type=str(inbound.get("msg_type") or "text"),
+                    inbound_preview=str(inbound.get("content") or "")[:500],
+                    **_message_diagnostic_fields(inbound, prefix="inbound_"),
+                )
                 local_group_invite_verified = _has_verified_group_invite(
                     account_id,
                     actual_peer,
-                    primary_contact,
+                    primary_contact_for_batch,
                 )
                 if local_group_invite_verified:
                     item_result.update(
@@ -3945,23 +4984,9 @@ async def run_auto_reply_once(
                             "verification_source": "local_task",
                         }
                     )
-                if _auto_reply_history_exists(account_id, actual_peer, inbound):
-                    result["skipped"] += 1
-                    item_result.update({"status": "duplicate", "reply_suppressed": True})
-                    result["items"].append(item_result)
-                    continue
-                intelligence_context = await _load_wechat_intelligence_context(
-                    _AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
-                    account_id=account_id,
-                    contact_key=actual_peer,
-                    contact_name=display_name,
-                    latest_message=str(inbound.get("content") or ""),
-                )
-                contact_intelligence, strategy_context = _wechat_intelligence_prompt_context(intelligence_context)
-                server_contact = intelligence_context.get("contact") if isinstance(intelligence_context, dict) else {}
                 group_invite_already_verified = bool(
                     local_group_invite_verified
-                    or (isinstance(server_contact, dict) and server_contact.get("group_invite_verified"))
+                    or prepared.get("group_invite_already_verified")
                 )
                 if group_invite_already_verified and not local_group_invite_verified:
                     item_result.update(
@@ -3970,23 +4995,6 @@ async def run_auto_reply_once(
                             "verification_source": "server_intelligence",
                         }
                     )
-                recent = _recent_conversation_text(account_id, actual_peer, limit=8)
-                if not group_invite_already_verified:
-                    contact_intelligence = str(_strip_unverified_group_claims(contact_intelligence) or "")
-                llm_reply = await _call_auto_reply_llm(
-                    auth_context=_AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
-                    user_id=effective_user_id,
-                    peer_name=display_name,
-                    latest_message=str(inbound.get("content") or ""),
-                    recent_context=recent,
-                    memory_context=str(memory.get("text") or ""),
-                    group_invite_rule_context=str(invite_rule_memory.get("text") or ""),
-                    group_invite_keywords=str(cfg.get("group_invite_keywords") or ""),
-                    group_invite_enabled=bool(cfg.get("group_invite_enabled")),
-                    group_invite_already_verified=group_invite_already_verified,
-                    contact_intelligence=contact_intelligence,
-                    strategy_context=strategy_context,
-                )
                 # A verified group relationship only disables another invite.
                 # It must not suppress an ordinary reply to the customer's
                 # new message, even if a model ignores the supplied flag.
@@ -4015,8 +5023,36 @@ async def run_auto_reply_once(
                         "intelligence_context_available": bool(intelligence_context.get("available")),
                     }
                 )
+                log_event(
+                    "ai_decision",
+                    work_id=work_id,
+                    peer_id=peer_id,
+                    actual_peer=actual_peer,
+                    display_name=display_name,
+                    inbound_message_id=str(item_result.get("inbound_message_id") or ""),
+                    should_reply=bool(llm_reply.get("should_reply")),
+                    reply_available=bool(str(llm_reply.get("reply") or "").strip()),
+                    reply_preview=str(llm_reply.get("reply") or "")[:500],
+                    category=str(llm_reply.get("category") or "")[:80],
+                    intent_level=str(llm_reply.get("intent_level") or "")[:40],
+                    topic=str(llm_reply.get("topic") or "")[:160],
+                    should_invite_group=bool(llm_reply.get("should_invite_group")),
+                    matched_group_keywords=list(llm_reply.get("matched_group_keywords") or [])[:20],
+                    group_invite_reason=str(llm_reply.get("group_invite_reason") or "")[:500],
+                    group_invite_already_verified=bool(group_invite_already_verified),
+                )
                 group_invite: Optional[Dict[str, Any]] = None
                 if llm_reply.get("should_invite_group"):
+                    log_event(
+                        "group_invite_started",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        inbound_message_id=str(item_result.get("inbound_message_id") or ""),
+                        reason=str(llm_reply.get("group_invite_reason") or "")[:500],
+                        matched_group_keywords=list(llm_reply.get("matched_group_keywords") or [])[:20],
+                    )
                     try:
                         group_invite = await _queue_auto_reply_group_invite(
                             account_id,
@@ -4028,6 +5064,14 @@ async def run_auto_reply_once(
                         item_result["group_invite"] = group_invite
                         item_result["group_invite_dedup_key"] = str(group_invite.get("dedup_key") or "")
                         item_result["customer_wx_no"] = str(group_invite.get("customer_wx_no") or "")
+                        log_event(
+                            "group_invite_result",
+                            work_id=work_id,
+                            peer_id=peer_id,
+                            actual_peer=actual_peer,
+                            display_name=display_name,
+                            result=group_invite,
+                        )
                         if group_invite.get("queued"):
                             result["group_invite_queued"] += 1
                         elif group_invite.get("completed"):
@@ -4039,13 +5083,34 @@ async def run_auto_reply_once(
                     except Exception as group_exc:
                         group_invite = {"ok": False, "error": str(group_exc)[:500]}
                         item_result["group_invite"] = group_invite
+                        log_event(
+                            "group_invite_failed",
+                            work_id=work_id,
+                            peer_id=peer_id,
+                            actual_peer=actual_peer,
+                            display_name=display_name,
+                            error=str(group_exc)[:700],
+                        )
 
                 if llm_reply.get("should_invite_group") and group_invite and group_invite.get("already_grouped"):
                     llm_reply["should_invite_group"] = False
                     item_result["should_invite_group"] = False
                     item_result["group_invite_already_verified"] = True
 
-                if llm_reply.get("should_invite_group"):
+                if llm_reply.get("should_invite_group") and group_invite and (
+                    group_invite.get("queued") or group_invite.get("completed") or group_invite.get("deduped")
+                ):
+                    item_result.update(
+                        {
+                            "group_invite_initiated": True,
+                            "group_invite_welcome_message": group_invite_welcome_message,
+                        }
+                    )
+
+                if llm_reply.get("should_invite_group") and not (
+                    group_invite
+                    and (group_invite.get("queued") or group_invite.get("completed") or group_invite.get("deduped"))
+                ):
                     invite_ok = bool(
                         group_invite
                         and (group_invite.get("queued") or group_invite.get("completed") or group_invite.get("deduped"))
@@ -4058,7 +5123,18 @@ async def run_auto_reply_once(
                                 "status": "group_invite_failed",
                                 "group_invite_failed": True,
                                 "reply_suppressed": True,
+                                "skip_reason": "group_invite_failed",
                             }
+                        )
+                        log_event(
+                            "group_invite_failed",
+                            work_id=work_id,
+                            peer_id=peer_id,
+                            actual_peer=actual_peer,
+                            display_name=display_name,
+                            inbound_message_id=str(item_result.get("inbound_message_id") or ""),
+                            result=group_invite or {},
+                            reason="invite_result_not_executable",
                         )
                         result["items"].append(item_result)
                         continue
@@ -4097,7 +5173,16 @@ async def run_auto_reply_once(
                         status="skipped",
                     )
                     result["skipped"] += 1
-                    item_result.update({"status": "llm_skipped"})
+                    item_result.update({"status": "llm_skipped", "skip_reason": "llm_should_reply_false"})
+                    log_event(
+                        "execution_skipped",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        status="llm_skipped",
+                        reason="llm_should_reply_false",
+                    )
                     result["items"].append(item_result)
                     continue
                 reply_text = str(llm_reply.get("reply") or "").strip()
@@ -4114,16 +5199,55 @@ async def run_auto_reply_once(
                     status="sending",
                 ):
                     result["skipped"] += 1
-                    item_result.update({"status": "duplicate"})
+                    item_result.update({"status": "duplicate", "skip_reason": "duplicate_history_insert"})
+                    log_event(
+                        "execution_skipped",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        status="duplicate",
+                        reason="duplicate_history_insert",
+                        history=_auto_reply_history_state(account_id, actual_peer, inbound),
+                    )
                     result["items"].append(item_result)
                     continue
-                await _run_local_wechat_async(
-                    _send_text_local_slow,
+                log_event(
+                    "reply_send_started",
+                    work_id=work_id,
+                    peer_id=peer_id,
+                    actual_peer=actual_peer,
+                    display_name=display_name,
+                    inbound_message_id=str(item_result.get("inbound_message_id") or ""),
+                    reply_preview=reply_text[:500],
+                    category=current_category,
+                )
+                send_result = await _run_local_wechat_async(
+                    _send_auto_reply_text_with_diagnostics,
                     account_id,
                     actual_peer,
                     reply_text,
-                    {"driver": "native_wechat_auto_reply", "trigger": trigger, "category": llm_reply.get("category")},
+                    {
+                        "driver": "native_wechat_auto_reply",
+                        "trigger": trigger,
+                        "category": llm_reply.get("category"),
+                    },
                     use_current_chat=True,
+                    diagnostic_context={
+                        "run_id": run_id,
+                        "work_id": work_id,
+                        "inbound_message_id": str(item_result.get("inbound_message_id") or ""),
+                    },
+                )
+                log_event(
+                    "reply_send_completed",
+                    work_id=work_id,
+                    peer_id=peer_id,
+                    actual_peer=actual_peer,
+                    display_name=display_name,
+                    inbound_message_id=str(item_result.get("inbound_message_id") or ""),
+                    reply_preview=reply_text[:500],
+                    send_result=send_result if isinstance(send_result, dict) else {"value": str(send_result)[:500]},
                 )
                 _update_auto_reply_history(
                     account_id,
@@ -4136,6 +5260,16 @@ async def run_auto_reply_once(
                 result["processed"] += 1
                 result["replied"] += 1
                 item_result.update({"status": "sent", "reply_preview": reply_text[:240]})
+                log_event(
+                    "execution_finished",
+                    work_id=work_id,
+                    peer_id=peer_id,
+                    actual_peer=actual_peer,
+                    display_name=display_name,
+                    status="sent",
+                    inbound_message_id=str(item_result.get("inbound_message_id") or ""),
+                    reply_preview=reply_text[:500],
+                )
                 result["items"].append(item_result)
             except Exception as exc:
                 if current_inbound is not None:
@@ -4150,6 +5284,21 @@ async def run_auto_reply_once(
                     )
                 result["failed"] += 1
                 item_result.update({"status": "failed", "error": str(exc)[:300]})
+                log_event(
+                    "execution_failed",
+                    work_id=work_id,
+                    peer_id=peer_id,
+                    actual_peer=current_peer,
+                    display_name=display_name,
+                    status="failed",
+                    inbound_message_id=str(
+                        current_inbound.get("auto_reply_inbound_id")
+                        if isinstance(current_inbound, dict)
+                        else ""
+                    ),
+                    reply_preview=current_reply[:500],
+                    error=str(exc)[:700],
+                )
                 result["items"].append(item_result)
             finally:
                 if current_inbound is not None and not skip_intelligence_observation:
@@ -4186,6 +5335,16 @@ async def run_auto_reply_once(
                             "learning_candidates": llm_reply.get("learning_candidates") if isinstance(llm_reply.get("learning_candidates"), list) else [],
                             "payload": {
                                 "trigger": trigger,
+                                "processing_status": item_status,
+                                "skip_reason": str(item_result.get("skip_reason") or "")[:120],
+                                "chat_type": str(item_result.get("chat_type") or chat_type or "")[:32],
+                                "display_name": display_name[:240],
+                                "session_peer_id": peer_id[:240],
+                                "resolved_peer_id": current_peer[:240],
+                                "inbound_message_id": inbound_id[:255],
+                                "model_should_reply": bool(llm_reply.get("should_reply")),
+                                "model_reply_available": bool(str(llm_reply.get("reply") or "").strip()),
+                                "model_raw_preview": str(llm_reply.get("raw") or "")[:500],
                                 "should_invite_group": bool(llm_reply.get("should_invite_group")),
                                 "group_invite": item_result.get("group_invite") if isinstance(item_result.get("group_invite"), dict) else {},
                             },
@@ -4221,14 +5380,30 @@ async def run_auto_reply_once(
                 low = float(DEFAULT_STRATEGY["auto_reply_session_sleep_min"])
                 high = max(low, float(DEFAULT_STRATEGY["auto_reply_session_sleep_max"]))
                 await asyncio.sleep(random.uniform(low, high))
-        result["session_scan_rounds"] = int(result.get("session_scan_rounds") or 0) + int(
-            session_scroll_state.get("scroll_rounds") or 0
-        )
+        if scan_boundary_reached and not result.get("stop_reason"):
+            result["stop_reason"] = "last_message_over_24h"
         result["finished_at"] = _now_iso()
         result["duration_seconds"] = round(max(0.0, time.monotonic() - started_monotonic), 2)
         report = _build_auto_reply_report(result, memory)
         result["report"] = report
         result["summary_text"] = report.get("summary_text") or ""
+        log_event(
+            "run_finished",
+            stop_reason=result.get("stop_reason") or "",
+            duration_seconds=result.get("duration_seconds") or 0,
+            session_count=result.get("session_count") or 0,
+            candidate_sessions_opened=result.get("candidate_sessions_opened") or 0,
+            ai_batch_candidate_count=result.get("ai_batch_candidate_count") or 0,
+            ai_batch_request_count=result.get("ai_batch_request_count") or 0,
+            processed=result.get("processed") or 0,
+            replied=result.get("replied") or 0,
+            skipped=result.get("skipped") or 0,
+            failed=result.get("failed") or 0,
+            skipped_groups=result.get("skipped_groups") or 0,
+            group_invite_queued=result.get("group_invite_queued") or 0,
+            group_invite_completed=result.get("group_invite_completed") or 0,
+            group_invite_failed=result.get("group_invite_failed") or 0,
+        )
         _finish_auto_reply_run(account_id, result)
         return {**result, "config": get_auto_reply_config(account_id)}
     except asyncio.CancelledError:
@@ -4237,6 +5412,15 @@ async def run_auto_reply_once(
         result["error"] = "本轮接管已取消"
         result["finished_at"] = _now_iso()
         result["duration_seconds"] = round(max(0.0, time.monotonic() - started_monotonic), 2)
+        log_event(
+            "run_cancelled",
+            stop_reason=result.get("stop_reason") or "cancelled",
+            duration_seconds=result.get("duration_seconds") or 0,
+            processed=result.get("processed") or 0,
+            replied=result.get("replied") or 0,
+            skipped=result.get("skipped") or 0,
+            failed=result.get("failed") or 0,
+        )
         try:
             _finish_auto_reply_run(account_id, result, error=result["error"])
         finally:
@@ -4244,6 +5428,14 @@ async def run_auto_reply_once(
     except Exception as exc:
         result["ok"] = False
         result["error"] = str(exc)
+        log_event(
+            "run_failed",
+            error=str(exc)[:1000],
+            processed=result.get("processed") or 0,
+            replied=result.get("replied") or 0,
+            skipped=result.get("skipped") or 0,
+            failed=result.get("failed") or 0,
+        )
         _finish_auto_reply_run(account_id, result, error=str(exc))
         raise
 
@@ -4674,6 +5866,23 @@ def _uia_control_class(node: Any, default: str = "") -> str:
         return default
 
 
+def _uia_node_identity(node: Any) -> str:
+    """Return a UIA identity that survives wrapper recreation during one scan."""
+    for attr in ("AutomationId", "RuntimeId"):
+        try:
+            value = getattr(node, attr, None)
+            if callable(value):
+                value = value()
+            if isinstance(value, (list, tuple)):
+                value = ".".join(str(part) for part in value)
+            value = str(value or "").strip()
+            if value:
+                return value
+        except Exception:
+            continue
+    return ""
+
+
 def _uia_rect(node: Any) -> Optional[tuple[float, float, float, float]]:
     try:
         rect = getattr(node, "BoundingRectangle", None)
@@ -4755,12 +5964,18 @@ def _ensure_local_contacts_tab(account_id: str) -> int:
 def _session_from_obj(sess: Any) -> Dict[str, Any]:
     raw = _obj_dict(sess)
     name = _obj_value(sess, "name", "nickname", "realname", "display_name") or str(raw.get("name") or "")
+    stable_id = _obj_value(sess, "wxid", "wxNo", "wx_no", "username", "id") or str(
+        raw.get("wxid") or raw.get("wxNo") or raw.get("wx_no") or raw.get("username") or raw.get("id") or ""
+    )
     try:
         unread_count = int(raw.get("new_count") or 0)
     except Exception:
         unread_count = 0
     return {
-        "peer_id": str(name or "").strip(),
+        # wxauto4 normally exposes the display name only.  Prefer a real
+        # account identifier when present so duplicate display names remain
+        # distinct; otherwise retain the historical name key.
+        "peer_id": str(stable_id or name or "").strip(),
         "display_name": str(name or "").strip(),
         "last_content": str(raw.get("content") or ""),
         "session_time": str(raw.get("time") or ""),
@@ -4768,6 +5983,43 @@ def _session_from_obj(sess: Any) -> Dict[str, Any]:
         "is_new": bool(raw.get("isnew")),
         "is_muted": bool(raw.get("ismute")),
         "raw": raw,
+    }
+
+
+def _wxauto_session_datetime(value: Any, *, now: Optional[datetime] = None) -> Optional[datetime]:
+    """Parse wxauto4's precise session timestamp when one is available."""
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return None
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M",
+        "%Y.%m.%d %H:%M:%S", "%Y.%m.%d %H:%M",
+        "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M",
+    ):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    match = re.search(r"(\d{4}[-/.]\d{1,2}[-/.]\d{1,2}[ T]\d{1,2}:\d{2}(?::\d{2})?)", text)
+    return _wxauto_session_datetime(match.group(1), now=now) if match else None
+
+
+def _wxauto_session_time_reliability(value: Any, *, now: Optional[datetime] = None) -> Dict[str, Any]:
+    """Return timestamp reliability metadata for a 24-hour scan boundary."""
+    current = now or datetime.now()
+    parsed = _wxauto_session_datetime(value, now=current)
+    if parsed is None:
+        return {"datetime": None, "reliable": False, "future": False, "age_seconds": None}
+    age_seconds = (current - parsed).total_seconds()
+    future = age_seconds < -300
+    return {
+        "datetime": parsed,
+        "reliable": not future,
+        "future": future,
+        "age_seconds": round(age_seconds, 3),
     }
 
 
@@ -5326,6 +6578,23 @@ def _normalize_message_public(item: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _message_diagnostic_fields(item: Optional[Dict[str, Any]], *, prefix: str = "message_") -> Dict[str, Any]:
+    """Expose the raw direction/identity inputs in takeover diagnostics."""
+    if not isinstance(item, dict):
+        return {}
+    raw = item.get("raw_json") if isinstance(item.get("raw_json"), dict) else {}
+    return {
+        f"{prefix}direction": str(item.get("direction") or ""),
+        f"{prefix}provider_id": str(item.get("provider_message_id") or item.get("id") or ""),
+        f"{prefix}hash": str(raw.get("hash") or raw.get("hash_text") or "")[:160],
+        f"{prefix}hash_text": str(raw.get("hash_text") or "")[:240],
+        f"{prefix}attr": str(raw.get("attr") or ""),
+        f"{prefix}sender": str(raw.get("sender") or raw.get("sender_remark") or "")[:120],
+        f"{prefix}time_context": str(raw.get("_wechat_time_context") or "")[:80],
+        f"{prefix}created_at": str(item.get("created_at") or ""),
+    }
+
+
 def _matches_recent_local_outbound(
     account_id: str,
     peer_id: str,
@@ -5363,6 +6632,8 @@ def _persist_message_obj(
     msg: Any,
     *,
     download_attachments: bool = True,
+    provider_message_id_override: str = "",
+    created_at_override: str = "",
 ) -> Dict[str, Any]:
     raw = _obj_dict(msg)
     content = str(raw.get("content") or raw.get("text") or "")
@@ -5380,8 +6651,8 @@ def _persist_message_obj(
         direction = "out"
     else:
         direction = "in"
-    created_at = _now_iso()
-    message_id = _local_message_provider_id(raw, peer_id, msg_type, content)
+    created_at = str(created_at_override or "").strip() or _now_iso()
+    message_id = str(provider_message_id_override or "").strip() or _local_message_provider_id(raw, peer_id, msg_type, content)
     attachment = (
         _download_message_attachment(account_id, peer_id, msg, raw, msg_type)
         if download_attachments
@@ -5398,7 +6669,7 @@ def _persist_message_obj(
             """,
             (account_id, peer_id, message_id),
         ).fetchone()
-        if not existing:
+        if not existing and not provider_message_id_override:
             stable_hash = str(raw.get("hash") or raw.get("hash_text") or "").strip()
             if stable_hash:
                 for legacy in conn.execute(
@@ -5432,6 +6703,7 @@ def _persist_message_obj(
                 "content": existing_item.get("content") or content,
                 "msg_type": existing_item.get("msg_type") or msg_type,
                 "direction": existing_item.get("direction") or direction,
+                "provider_message_id": existing_item.get("provider_message_id") or message_id,
                 "sender": sender,
                 "created_at": existing_item.get("created_at") or created_at,
                 "attachments": existing_item.get("attachments") or [],
@@ -5460,6 +6732,7 @@ def _persist_message_obj(
         "content": content,
         "msg_type": msg_type,
         "direction": direction,
+        "provider_message_id": message_id,
         "sender": sender,
         "created_at": created_at,
         "attachments": [attachment] if attachment else [],
@@ -5844,6 +7117,137 @@ def _sync_local_sessions_from_wxauto4(account_id: str) -> Dict[str, Any]:
     }
 
 
+def _sync_recent_sessions_from_wxauto4(account_id: str, *, max_pages: int = 30) -> Dict[str, Any]:
+    """Read recent sessions from wxauto4 timestamps without a full UIA scan."""
+    wx = _get_wxauto4_client(account_id)
+    box = getattr(wx, "SessionBox", None)
+    if box is None:
+        raise RuntimeError("wxauto4 SessionBox is unavailable")
+    current = datetime.now()
+    seen: Dict[str, Dict[str, Any]] = {}
+    changed: List[Dict[str, Any]] = []
+    groups = 0
+    rounds = 0
+    old_boundary = False
+    previous_signature: tuple[str, ...] = ()
+    try:
+        try:
+            box.go_top()
+            time.sleep(0.15)
+        except Exception:
+            pass
+        for index in range(max(1, min(int(max_pages or 1), 60))):
+            rounds = index + 1
+            sessions = list(wx.GetSession() or [])
+            if not sessions:
+                break
+            page_signature: List[str] = []
+            page_has_recent_personal = False
+            for sess in sessions:
+                session = _session_from_obj(sess)
+                peer_id = str(session.get("peer_id") or "").strip()
+                if not peer_id:
+                    continue
+                raw = session.get("raw") if isinstance(session.get("raw"), dict) else {}
+                reliability = _wxauto_session_time_reliability(session.get("session_time"), now=current)
+                parsed = reliability.get("datetime")
+                session["session_time_reliable"] = bool(reliability.get("reliable"))
+                session["session_time_future"] = bool(reliability.get("future"))
+                session["session_time_age_seconds"] = reliability.get("age_seconds")
+                raw.update({
+                    "source": "wxauto4_session",
+                    "session_time_reliable": session["session_time_reliable"],
+                    "session_time_future": session["session_time_future"],
+                    "session_time_age_seconds": session["session_time_age_seconds"],
+                })
+                session["raw"] = raw
+                raw_type = str(raw.get("type") or raw.get("chat_type") or "").lower()
+                chat_type = "unknown"
+                if raw.get("is_group") or raw_type in {"group", "chatroom"} or "@chatroom" in peer_id.lower():
+                    chat_type = "group"
+                    groups += 1
+                session["chat_type"] = chat_type
+                display_name = str(session.get("display_name") or peer_id)
+                page_signature.append(f"{peer_id}:{session.get('session_time') or ''}:{session.get('last_content') or ''}")
+                is_non_private = (
+                    chat_type == "group"
+                    or _is_non_private_session_entry(session)
+                    or _looks_like_group_session({**session, "chat_type": chat_type})
+                )
+                # Empty timestamps mean that WeChat has no usable latest
+                # message for this row.  Future timestamps have been observed
+                # on system rows.  Neither is safe for automatic takeover, so
+                # keep it out of the candidate snapshot entirely.
+                if reliability.get("reliable") and parsed is not None:
+                    age_seconds = float(reliability.get("age_seconds") or 0)
+                    if age_seconds < 24 * 60 * 60 and not is_non_private:
+                        page_has_recent_personal = True
+                    elif age_seconds >= 24 * 60 * 60 and not is_non_private:
+                        old_boundary = True
+                    if age_seconds < 0 or age_seconds >= 24 * 60 * 60:
+                        continue
+                else:
+                    continue
+                dedup_key = peer_id or f"{display_name}:{session.get('session_time') or ''}"
+                seen.setdefault(dedup_key, session)
+            if old_boundary and not page_has_recent_personal:
+                break
+            signature = tuple(page_signature)
+            if signature == previous_signature:
+                break
+            previous_signature = signature
+            try:
+                box.roll_down()
+                time.sleep(0.18)
+            except Exception:
+                break
+        items: List[Dict[str, Any]] = []
+        for session in seen.values():
+            chat_type = str(session.get("chat_type") or "unknown")
+            saved = _persist_session(account_id, session, chat_type=chat_type)
+            if saved:
+                saved.update({
+                    "session_time_reliable": bool(session.get("session_time_reliable")),
+                    "session_time_future": bool(session.get("session_time_future")),
+                    "session_time_age_seconds": session.get("session_time_age_seconds"),
+                    "raw": session.get("raw") or {},
+                })
+                items.append(saved)
+                if saved.get("changed"):
+                    changed.append(saved)
+                if chat_type == "group":
+                    _persist_group(
+                        account_id,
+                        {
+                            "group_key": str(session.get("peer_id") or ""),
+                            "display_name": str(session.get("display_name") or session.get("peer_id") or ""),
+                            "source": "wxauto4_session",
+                            "raw": session.get("raw") or {},
+                        },
+                    )
+        return {
+            "ok": True,
+            "items": items,
+            "count": len(items),
+            "changed": changed,
+            "changed_count": len(changed),
+            "mode": "merge",
+            "source": "wxauto4_sessions_time",
+            "time_scan": True,
+            "time_scan_cutoff_hours": 24,
+            "time_scan_old_boundary": old_boundary,
+            "fallback": False,
+            "group_count": groups,
+            "scroll_rounds": rounds,
+            "scroll_completed": bool(old_boundary or rounds >= max_pages),
+        }
+    finally:
+        try:
+            box.go_top()
+        except Exception:
+            pass
+
+
 def _session_from_uia_cell(cell: Any) -> Dict[str, Any]:
     raw_text = _uia_control_text(cell)
     lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
@@ -5863,9 +7267,20 @@ def _session_from_uia_cell(cell: Any) -> Dict[str, Any]:
             unread_count = int(m.group(1))
             first_content = str(m.group(2) or "").strip()
             last_content = "\n".join([x for x in [first_content, *content_lines[1:]] if x]).strip()
+    rect = _uia_rect(cell)
+    rect_hint = ""
+    if rect:
+        rect_hint = ":".join(str(round(value)) for value in rect)
+    row_identity = _uia_node_identity(cell) or rect_hint
+    session_key = _stable_key(
+        "uia-session",
+        peer_id,
+        row_identity,
+    ) if row_identity else ""
     return {
         "peer_id": peer_id,
         "display_name": peer_id,
+        "session_key": session_key,
         "last_content": last_content,
         "session_time": session_time,
         "unread_count": unread_count,
@@ -5876,12 +7291,62 @@ def _session_from_uia_cell(cell: Any) -> Dict[str, Any]:
             "source": "pc_wechat_uia_sessions",
             "pinned": pinned,
             "ui_class": _uia_control_class(cell),
+            "uia_identity": row_identity,
         },
     }
 
 
+def _decorate_uia_session_items(cells: List[Any]) -> List[Dict[str, Any]]:
+    """Attach stable row keys and disambiguate duplicate display names."""
+    counts: Dict[str, int] = {}
+    items: List[Dict[str, Any]] = []
+    for cell in cells:
+        item = _session_from_uia_cell(cell)
+        name = str(item.get("display_name") or item.get("peer_id") or "").strip()
+        if not name:
+            continue
+        base_key = str(item.get("session_key") or "").strip()
+        if not base_key:
+            base_key = _stable_key(
+                "uia-session",
+                name,
+                str(item.get("session_time") or ""),
+                str(item.get("last_content") or ""),
+            )
+        item["session_key"] = base_key
+        item["display_name"] = name
+        items.append(item)
+        counts[name] = counts.get(name, 0) + 1
+    duplicate_names = {name for name, count in counts.items() if count > 1}
+    duplicate_seen: Dict[str, int] = {}
+    for item in items:
+        name = str(item.get("display_name") or item.get("peer_id") or "").strip()
+        if name in duplicate_names:
+            occurrence = duplicate_seen.get(name, 0)
+            duplicate_seen[name] = occurrence + 1
+            item["peer_id"] = f"{name}@@uia-{item['session_key']}-{occurrence}"[:240]
+            item["session_occurrence"] = occurrence
+        else:
+            item["peer_id"] = name
+            item["session_occurrence"] = 0
+    return items
+
+
+def _session_display_name(peer_id: Any) -> str:
+    """Get the visible contact name from an internal UIA disambiguation key."""
+    value = str(peer_id or "").strip()
+    return value.split("@@uia-", 1)[0].strip() if "@@uia-" in value else value
+
+
 def _session_time_over_24h(label: Any, *, now: Optional[datetime] = None) -> bool:
-    """Return True only when the list timestamp clearly predates 24 hours."""
+    """Return True when a session is outside today's chronological boundary.
+
+    WeChat's list uses calendar labels (``昨天``/``前天``/an explicit date)
+    rather than a precise timestamp in many builds.  For takeover scanning,
+    seeing one of those labels is the reliable boundary: later rows cannot
+    contain today's messages.  Relative hour labels still use a strict
+    24-hour comparison, and bare clock labels are treated as today's rows.
+    """
     value = re.sub(r"\s+", "", str(label or "")).strip()
     if not value:
         return False
@@ -5894,6 +7359,10 @@ def _session_time_over_24h(label: Any, *, now: Optional[datetime] = None) -> boo
     day_match = re.fullmatch(r"(\d+)天前", value)
     if day_match:
         return int(day_match.group(1)) >= 1
+    # WeChat uses weekday labels only for earlier calendar days; today's rows
+    # use a clock value instead. They are therefore also a safe scan boundary.
+    if re.fullmatch(r"(?:星期|周)[一二三四五六日天]", value):
+        return True
 
     time_match = re.search(r"(\d{1,2}):(\d{2})", value)
     clock_hour: Optional[int] = None
@@ -5917,7 +7386,9 @@ def _session_time_over_24h(label: Any, *, now: Optional[datetime] = None) -> boo
                 second=0,
                 microsecond=0,
             )
-        elif offset >= 2:
+        else:
+            # The calendar marker itself is enough to stop the current-day
+            # scan.  Do not wait for 24 elapsed hours (e.g. yesterday 23:50).
             return True
     else:
         date_match = re.search(r"(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日", value)
@@ -5929,6 +7400,10 @@ def _session_time_over_24h(label: Any, *, now: Optional[datetime] = None) -> boo
             day = int(match.group(3))
             try:
                 date_value = datetime(year, month, day)
+                # A yearless December label observed in January belongs to the
+                # previous year, not to a future date in the current year.
+                if not match.group(1) and date_value.date() > current.date():
+                    date_value = date_value.replace(year=year - 1)
                 if clock_hour is not None and clock_minute is not None:
                     date_value = date_value.replace(
                         hour=clock_hour,
@@ -5949,6 +7424,10 @@ def _session_time_over_24h(label: Any, *, now: Optional[datetime] = None) -> boo
 
     if date_value is None:
         return False
+    # Explicit calendar dates are also chronological boundaries even when the
+    # previous day's timestamp is less than 24 elapsed hours ago.
+    if date_value.date() < current.date():
+        return True
     return current - date_value >= timedelta(hours=24)
 
 
@@ -5965,6 +7444,18 @@ def _session_is_pinned(item: Dict[str, Any]) -> bool:
 
 def _session_stops_recent_scan(item: Dict[str, Any]) -> bool:
     """Only an old, non-pinned personal session is a chronological boundary."""
+    if "session_time_reliable" in item:
+        # wxauto4 supplies an exact timestamp.  Use elapsed time rather than
+        # the legacy UIA calendar-label rule (which treats any prior date as
+        # old and would incorrectly stop at yesterday 23:50 when it is still
+        # within the requested 24-hour window).
+        if not bool(item.get("session_time_reliable")):
+            return False
+        try:
+            age_seconds = float(item.get("session_time_age_seconds"))
+        except (TypeError, ValueError):
+            return False
+        return age_seconds >= 24 * 60 * 60 and not _session_is_pinned(item)
     return _session_time_over_24h(item.get("session_time")) and not _session_is_pinned(item)
 
 
@@ -6042,7 +7533,7 @@ def _uia_scroll_target_from_cells(cells: List[Any], fallback: Any) -> Any:
 
 
 def _uia_collect_visible_sessions(root: Any) -> List[Dict[str, Any]]:
-    return [item for item in (_session_from_uia_cell(cell) for cell in _uia_session_cells(root)) if item.get("peer_id")]
+    return _decorate_uia_session_items(_uia_session_cells(root))
 
 
 _NON_PRIVATE_SESSION_PEER_IDS = {
@@ -6091,22 +7582,21 @@ def _restore_local_chat_session_list(account_id: str) -> Dict[str, Any]:
     clicks = 0
     for _ in range(3):
         root = auto.ControlFromHandle(int(hwnd))
-        cells = _uia_session_cells(root)
-        brand_cells = [
-            node for node in _uia_walk(root, max_depth=18, max_nodes=1800)
-            if _uia_control_class(node) == "mmui::BrandSessionCell"
-        ]
-        # The normal top-level list contains ChatSessionCell rows and no
-        # BrandSessionCell rows.  Do not click an unrelated back button there.
-        if cells and not brand_cells:
-            return {"ok": True, "clicks": clicks, "restored": clicks > 0}
+        nodes = _uia_walk(root, max_depth=18, max_nodes=1800)
+        brand_cells = [node for node in nodes if _uia_control_class(node) == "mmui::BrandSessionCell"]
         back = next(
-            (
-                node for node in _uia_walk(root, max_depth=18, max_nodes=1800)
-                if _uia_control_class(node) == "mmui::ChatBackwardView"
-            ),
+            (node for node in nodes if _uia_control_class(node) == "mmui::ChatBackwardView"),
             None,
         )
+        top_level_cells = [node for node in nodes if _uia_control_class(node) == "mmui::ChatSessionCell"]
+        # The normal top-level list contains ChatSessionCell rows and no
+        # BrandSessionCell rows.  Do not read the full session list here: the
+        # caller reads it immediately afterwards, and a second UIA traversal
+        # can consume/reorder a page while the list is being scrolled.
+        # Generic builds may not expose ChatSessionCell, so the absence of a
+        # back control is also enough to identify the top-level list.
+        if not brand_cells and (top_level_cells or back is None):
+            return {"ok": True, "clicks": clicks, "restored": clicks > 0}
         if back is None:
             # A detail view can briefly expose no back control while the
             # navigation animation is running; retry once after a short wait.
@@ -6153,18 +7643,17 @@ def _uia_collect_recent_sessions(hwnd: int, *, max_rounds: int = 20) -> Dict[str
     _uia_reset_session_list_to_top(root, cells)
     root = auto.ControlFromHandle(int(hwnd))
     cells = _uia_session_cells(root)
-    visible = [_session_from_uia_cell(cell) for cell in cells]
-    visible = [item for item in visible if item.get("peer_id")]
+    visible = _decorate_uia_session_items(cells)
     return {"items": visible, "rounds": 1, "completed": False}
 
 
 def _find_uia_session_cell(root: Any, peer_id: str) -> Optional[Any]:
-    """Find a session row by its first-line peer name, never by child controls."""
+    """Find a session row by name or the internal duplicate-row alias."""
     wanted = str(peer_id or "").strip()
     if not wanted:
         return None
-    for cell in _uia_session_cells(root):
-        item = _session_from_uia_cell(cell)
+    cells = _uia_session_cells(root)
+    for cell, item in zip(cells, _decorate_uia_session_items(cells)):
         if str(item.get("peer_id") or "").strip() == wanted:
             return cell
     return None
@@ -6193,15 +7682,15 @@ def _open_next_visible_session(
 
     def visible_signature(items: List[Any]) -> tuple[str, ...]:
         signature: List[str] = []
-        for cell in items:
-            peer_id = str(_session_from_uia_cell(cell).get("peer_id") or "").strip()
+        for item in _decorate_uia_session_items(items):
+            peer_id = str(item.get("peer_id") or "").strip()
             if peer_id:
                 signature.append(peer_id)
         return tuple(signature)
 
     def click_next(items: List[Any]) -> Optional[Dict[str, Any]]:
-        for cell in items:
-            item = _session_from_uia_cell(cell)
+        decorated = _decorate_uia_session_items(items)
+        for cell, item in zip(items, decorated):
             peer_id = str(item.get("peer_id") or "").strip()
             if not peer_id or peer_id in processed:
                 continue
@@ -6316,8 +7805,7 @@ def _uia_collect_all_sessions(hwnd: int) -> Dict[str, Any]:
         rounds = idx + 1
         root = auto.ControlFromHandle(int(hwnd))
         cells = _uia_session_cells(root)
-        visible = [_session_from_uia_cell(cell) for cell in cells]
-        visible = [item for item in visible if item.get("peer_id")]
+        visible = _decorate_uia_session_items(cells)
         before = len(seen)
         for item in visible:
             peer_id = str(item.get("peer_id") or "")
@@ -6418,6 +7906,10 @@ def _sync_local_sessions_once(
 ) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
+    if account_id in _AUTO_REPLY_TIME_SCAN_ACCOUNTS and not passive and not recent_only:
+        # Do not fall back to UIA's calendar labels here: automatic takeover
+        # must only process rows with a precise wxauto4 timestamp.
+        return _sync_recent_sessions_from_wxauto4(account_id)
     try:
         return _sync_local_sessions_from_uia(account_id, passive=passive, recent_only=recent_only)
     except Exception as uia_exc:
@@ -6704,6 +8196,10 @@ def _extract_contact_profile_wx_no(root: Any) -> str:
             if candidate and not any("\u4e00" <= char <= "\u9fff" for char in candidate):
                 return candidate
     return ""
+
+
+class _NoRecentMoments(RuntimeError):
+    """The contact has no usable Moments post in the current 24-hour window."""
 
 
 def _persist_contact_wx_no(account_id: str, target: str, wx_no: str, *, source: str = "pc_wechat_uia_contact_profile") -> Dict[str, Any]:
@@ -7437,6 +8933,17 @@ def _current_local_chat_info(wx: Any, *, fallback_name: str = "") -> Dict[str, A
     return fallback_info or {"chat_name": fallback_name or "current", "chat_type": "unknown"}
 
 
+def _chat_info_peer_key(info: Dict[str, Any], fallback_name: str = "") -> str:
+    """Extract a stable WeChat account key when the driver exposes one."""
+    if not isinstance(info, dict):
+        return str(fallback_name or "").strip()
+    for key in ("wxid", "wx_id", "wxNo", "wx_no", "username", "user_name", "contact_id", "contact_key"):
+        value = str(info.get(key) or "").strip()
+        if value:
+            return value
+    return str(fallback_name or "").strip()
+
+
 def _sync_local_messages_once(
     account_id: str,
     peer_id: str = "",
@@ -7447,23 +8954,72 @@ def _sync_local_messages_once(
     read_chat_info: bool = True,
     current_selected: bool = False,
     download_attachments: bool = True,
+    diagnostic_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
     wx = _get_wxauto4_client(account_id)
     target = str(peer_id or "").strip()
+    display_target = _session_display_name(target)
+    diagnostic_context = dict(diagnostic_context or {})
+    diagnostic_account_id = str(diagnostic_context.get("account_id") or account_id)
+    diagnostic_run_id = str(diagnostic_context.get("run_id") or "")
     if target and not current_selected:
-        if select_via_uia:
-            _open_local_session_by_uia(account_id, target, max_rounds=uia_session_max_rounds)
-        else:
-            wx.ChatWith(target, exact=True, force=False)
-            time.sleep(random.uniform(0.45, 0.9))
+        _write_auto_reply_diagnostic(
+            "chat_click_started",
+            account_id=diagnostic_account_id,
+            run_id=diagnostic_run_id,
+            target_peer_id=target,
+            target_display_name=display_target,
+            click_mode="uia" if select_via_uia else "exact_chat",
+            select_via_uia=bool(select_via_uia),
+            current_selected=False,
+            read_chat_info=bool(read_chat_info),
+        )
+    if target and not current_selected:
+        try:
+            if select_via_uia:
+                _open_local_session_by_uia(account_id, target, max_rounds=uia_session_max_rounds)
+            else:
+                wx.ChatWith(target, exact=True, force=False)
+                time.sleep(random.uniform(0.45, 0.9))
+        except Exception as exc:
+            _write_auto_reply_diagnostic(
+                "chat_click_failed",
+                account_id=diagnostic_account_id,
+                run_id=diagnostic_run_id,
+                target_peer_id=target,
+                target_display_name=display_target,
+                click_mode="uia" if select_via_uia else "exact_chat",
+                error=str(exc)[:500],
+            )
+            raise
     info = (
-        _current_local_chat_info(wx, fallback_name=target)
+        _current_local_chat_info(wx, fallback_name=display_target)
         if read_chat_info
-        else {"chat_name": target or "current", "chat_type": "unknown"}
+        else {"chat_name": display_target or "current", "chat_type": "unknown"}
     )
-    actual_peer = str((info or {}).get("chat_name") or target or "").strip() or "current"
+    actual_name = str((info or {}).get("chat_name") or display_target or "").strip()
+    stable_peer = _chat_info_peer_key(info or {}, "")
+    # When a UIA row was assigned a duplicate-name alias, wxauto4 reports the
+    # visible name after the click. Keep the alias for local message/history
+    # storage so the second row cannot overwrite the first row.
+    actual_peer = stable_peer or actual_name
+    if "@@uia-" in target and _session_display_name(actual_name) == display_target and not stable_peer:
+        actual_peer = target
+    actual_peer = actual_peer or target or "current"
+    if target and not current_selected:
+        _write_auto_reply_diagnostic(
+            "chat_click_completed",
+            account_id=diagnostic_account_id,
+            run_id=diagnostic_run_id,
+            target_peer_id=target,
+            target_display_name=display_target,
+            resolved_peer_id=actual_peer,
+            resolved_display_name=actual_name,
+            click_mode="uia" if select_via_uia else "exact_chat",
+            chat_type=str((info or {}).get("chat_type") or "unknown"),
+        )
     _persist_peer_chat_info(account_id, actual_peer, info or {"chat_name": actual_peer, "chat_type": "unknown"})
     previous_latest = _latest_message_record(account_id, actual_peer)
     pages = max(0, min(int(load_more_pages or 0), 3))
@@ -7478,15 +9034,57 @@ def _sync_local_messages_once(
     message_chat_type = "group" if any(
         _raw_local_message_is_group(_obj_dict(msg)) for msg in (messages or [])
     ) else ""
-    items = [
-        _persist_message_obj(
-            account_id,
+    # wxauto4 may reuse the same hash for two visible messages with identical
+    # text (for example a second "你好"). Keep list position in the identity
+    # for that read, while preserving the stable hash for ordinary messages.
+    message_list = list(messages or [])
+    raw_messages = [_obj_dict(msg) for msg in message_list]
+    time_contexts = _local_message_time_contexts(raw_messages)
+    occurrence_by_identity: Dict[str, int] = {}
+    items: List[Dict[str, Any]] = []
+    for index, msg in enumerate(message_list):
+        raw_msg = raw_messages[index]
+        time_context = time_contexts[index] if index < len(time_contexts) else ""
+        identity_raw = dict(raw_msg)
+        if time_context:
+            identity_raw["_wechat_time_context"] = time_context
+        stable_hash = str(raw_msg.get("hash") or raw_msg.get("hash_text") or "").strip()
+        identity_base = _local_message_provider_id(
+            identity_raw,
             actual_peer,
-            msg,
-            download_attachments=download_attachments,
+            str(raw_msg.get("type") or "text").lower(),
+            str(raw_msg.get("content") or raw_msg.get("text") or ""),
         )
-        for msg in (messages or [])
-    ]
+        occurrence_by_identity[identity_base] = occurrence_by_identity.get(identity_base, 0) + 1
+        occurrence = occurrence_by_identity[identity_base]
+        provider_override = ""
+        if identity_base and time_context:
+            provider_override = f"{identity_base}:occ{occurrence}"
+        elif stable_hash and occurrence > 1:
+            provider_override = f"wxhash:{stable_hash}:occ{occurrence}"
+        # Preserve wxauto's explicit message time when present.  Non-time
+        # messages inherit the timestamp marker immediately before them.
+        # Only an explicit timestamp belongs in the database ordering. The
+        # inferred marker is a local display time and must not replace the
+        # UTC ingestion timestamp used to decide which message is latest.
+        msg_time = str(raw_msg.get("time") or "").strip()
+        items.append(
+            _persist_message_obj(
+                account_id,
+                actual_peer,
+                msg,
+                download_attachments=download_attachments,
+                provider_message_id_override=provider_override,
+                created_at_override=msg_time,
+            )
+        )
+    promoted = _promote_session_preview_latest(
+        account_id,
+        actual_peer,
+        diagnostic_context.get("session_preview"),
+    )
+    if promoted:
+        latest = promoted
     inserted = [
         x for x in items
         if not x.get("deduped") and x.get("direction") != "system" and x.get("msg_type") != "time"
@@ -7541,6 +9139,7 @@ def sync_local_messages(
     read_chat_info: bool = True,
     current_selected: bool = False,
     download_attachments: bool = True,
+    diagnostic_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     return _run_local_driver_operation(
         account_id,
@@ -7554,6 +9153,7 @@ def sync_local_messages(
             read_chat_info=read_chat_info,
             current_selected=current_selected,
             download_attachments=download_attachments,
+            diagnostic_context=diagnostic_context,
         ),
     )
 
@@ -7657,6 +9257,33 @@ def _uia_set_text(node: Any, text: str) -> None:
         return
     _send_hotkey("a", ctrl=True, pause=0.08)
     _paste_text(value)
+
+
+def _uia_get_value(node: Any) -> str:
+    """Read the value of an edit control (Name is only its placeholder)."""
+    for getter in ("GetValuePattern", "ValuePattern"):
+        try:
+            pattern = getattr(node, getter)
+            pattern = pattern() if callable(pattern) else pattern
+            if pattern is None:
+                continue
+            value = getattr(pattern, "Value", None)
+            if value is None:
+                reader = getattr(pattern, "GetValue", None)
+                value = reader() if callable(reader) else None
+            if value is not None:
+                return str(value).strip()
+        except Exception:
+            pass
+    for getter in ("GetValue", "GetText"):
+        try:
+            reader = getattr(node, getter, None)
+            value = reader() if callable(reader) else None
+            if value is not None:
+                return str(value).strip()
+        except Exception:
+            pass
+    return ""
 
 
 def _uia_try_set_value(node: Any, text: str) -> bool:
@@ -8760,20 +10387,25 @@ def _find_local_contact_list(root: Any) -> Optional[Any]:
     return _uia_guess_contact_list(root)
 
 
-def _find_visible_contact_cell(root: Any, target: str) -> Optional[Any]:
+def _find_visible_contact_cells(root: Any, target: str) -> List[Any]:
     wanted = str(target or "").strip()
     if not wanted:
-        return None
-    fallback: Optional[Any] = None
+        return []
+    exact: List[Any] = []
+    fallback: List[Any] = []
     for node in _uia_walk(root, max_depth=18, max_nodes=1800):
         if _uia_control_class(node) != "mmui::ContactsCellItemView":
             continue
         name = _uia_control_text(node)
         if name == wanted:
-            return node
-        if fallback is None and wanted in name:
-            fallback = node
-    return fallback
+            exact.append(node)
+        elif wanted in name:
+            fallback.append(node)
+    return exact or fallback
+
+
+def _find_visible_contact_cell(root: Any, target: str) -> Optional[Any]:
+    return next(iter(_find_visible_contact_cells(root, target)), None)
 
 
 def _read_visible_contact_profile_wx_no(
@@ -8828,12 +10460,16 @@ def _open_local_contact_profile(
     capture_wx_no: bool = True,
 ) -> None:
     _ensure_local_contacts_tab(account_id)
+    original_target = str(target or "").strip()
+    if not original_target:
+        raise RuntimeError("missing contact target")
+    expected_wx_no = _resolve_local_contact_wx_no(account_id, original_target)
     root = _uia_foreground_or_main_root(hwnd)
     contact_list = _find_local_contact_list(root)
     if contact_list is None:
         raise RuntimeError("local WeChat contact list not found")
-    aliases = _resolve_local_contact_aliases(account_id, target)
-    search_terms = aliases or [str(target or "").strip()]
+    aliases = _resolve_local_contact_aliases(account_id, original_target)
+    search_terms = aliases or [original_target]
     try:
         contact_list.WheelUp(wheelTimes=24)
         time.sleep(0.35)
@@ -8843,13 +10479,51 @@ def _open_local_contact_profile(
     stable_rounds = 0
     last_visible = ""
     found_node: Optional[Any] = None
+    checked_candidates: set[tuple[str, tuple[int, int, int, int] | None]] = set()
+    observed_wx_no = ""
     for _idx in range(80):
         root = _uia_foreground_or_main_root(hwnd)
+        visible_candidates: List[Any] = []
+        visible_keys: set[tuple[str, tuple[int, int, int, int] | None]] = set()
         for candidate in search_terms:
-            found_node = _find_visible_contact_cell(root, candidate)
-            if found_node is not None:
-                target = candidate
-                break
+            for node in _find_visible_contact_cells(root, candidate):
+                candidate_key = (_uia_control_text(node), _uia_rect_tuple(node))
+                if candidate_key in visible_keys or candidate_key in checked_candidates:
+                    continue
+                visible_keys.add(candidate_key)
+                visible_candidates.append(node)
+        for candidate_node in visible_candidates:
+            candidate_key = (_uia_control_text(candidate_node), _uia_rect_tuple(candidate_node))
+            _uia_click(candidate_node)
+            steps.append(
+                {
+                    "step": "open_contact_profile_candidate",
+                    "ok": True,
+                    "target": original_target,
+                    "candidate": candidate_key[0],
+                    "expected_wx_no": expected_wx_no,
+                }
+            )
+            time.sleep(0.8)
+            profile_root = _uia_foreground_or_main_root(hwnd)
+            observed_wx_no = _extract_contact_profile_wx_no(profile_root)
+            if expected_wx_no:
+                matched = bool(observed_wx_no) and observed_wx_no.casefold() == expected_wx_no.casefold()
+                steps.append(
+                    {
+                        "step": "verify_contact_profile_wx_no",
+                        "ok": matched,
+                        "target": original_target,
+                        "candidate": candidate_key[0],
+                        "expected_wx_no": expected_wx_no,
+                        "observed_wx_no": observed_wx_no,
+                    }
+                )
+                checked_candidates.add(candidate_key)
+                if not matched:
+                    continue
+            found_node = candidate_node
+            break
         if found_node is not None:
             break
         visible_names: List[str] = []
@@ -8872,9 +10546,16 @@ def _open_local_contact_profile(
 
     if found_node is None:
         raise RuntimeError(f"联系人未找到：{target}")
-    _uia_click(found_node)
-    steps.append({"step": "open_contact_profile", "ok": True, "target": target, "aliases": aliases[:5]})
-    time.sleep(0.8)
+    steps.append(
+        {
+            "step": "open_contact_profile",
+            "ok": True,
+            "target": original_target,
+            "aliases": aliases[:5],
+            "expected_wx_no": expected_wx_no,
+            "observed_wx_no": observed_wx_no,
+        }
+    )
     if not capture_wx_no:
         return
     try:
@@ -8887,33 +10568,357 @@ def _open_local_contact_profile(
         steps.append({"step": "capture_contact_wx_no", "ok": False, "target": target, "error": str(exc)})
 
 
+def _find_local_top_search_field(root: Any) -> Optional[Any]:
+    for node in _uia_walk(root, max_depth=18, max_nodes=2200):
+        if _uia_control_class(node) != "mmui::XValidatorTextEdit":
+            continue
+        rect = _uia_rect_tuple(node)
+        if rect is None or rect[0] > 320:
+            continue
+        return node
+    return None
+
+
+_LOCAL_SEARCH_NON_CONTACT_MARKERS = (
+    "搜索网络结果", "搜一搜", "视频号", "公众号", "文章",
+    "小程序", "音乐", "表情", "看一看", "群聊", "聊天记录",
+)
+
+
+def _local_search_node_text(node: Any) -> str:
+    """Return complete text exposed by one search result row."""
+    parts: List[str] = []
+    for item in _uia_walk(node, max_depth=6, max_nodes=80):
+        text = str(_uia_control_text(item) or "").strip()
+        if text and text not in parts:
+            parts.append(text)
+    return "\n".join(parts)
+
+
+def _is_local_contact_search_result(node: Any, target: str) -> bool:
+    text = _local_search_node_text(node)
+    lowered = text.casefold()
+    wanted = str(target or "").strip().casefold()
+    if not wanted or not text or wanted not in lowered:
+        return False
+    if any(marker.casefold() in lowered for marker in _LOCAL_SEARCH_NON_CONTACT_MARKERS):
+        return False
+    # wxauto/WeChat 4.1 often flattens the contact row into one line such as
+    # “昵称我是昵称已添加”, so a separate 联系人/微信号 label is not reliable.
+    # Once network markers are excluded, a row containing the exact query is
+    # the contact suggestion we want.
+    return True
+
+
+def _find_local_search_result(root: Any, target: str, *, min_y: Optional[int] = None) -> Optional[Any]:
+    candidates: List[tuple[int, int, Any]] = []
+    for node in _uia_walk(root, max_depth=20, max_nodes=2600):
+        if _uia_control_class(node) not in {"mmui::XTableCell", "mmui::SearchContentCellView"} or not _is_local_contact_search_result(node, target):
+            continue
+        text = _local_search_node_text(node)
+        rect = _uia_rect_tuple(node)
+        if min_y is not None and (rect is None or int(rect[1]) < int(min_y)):
+            continue
+        lines = [re.sub(r"\s+", "", line).casefold() for line in text.splitlines() if line.strip()]
+        exact = str(target or "").strip().casefold() in lines
+        score = 100 if exact else 10
+        if any(label in text.casefold() for label in ("联系人", "微信号")):
+            score += 5
+        y = int(rect[1]) if rect else 10**9
+        candidates.append((score, -y, node))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return candidates[0][2]
+
+
+def _find_local_contact_search_result(
+    root: Any,
+    target: str,
+    *,
+    search_bottom: Optional[int] = None,
+) -> Optional[Any]:
+    """Select the first result in WeChat's 联系人 section only.
+
+    Search suggestions contain a ``搜索网络结果`` row before the actual
+    contact rows.  Both are XTableCell controls; using the first cell or a
+    text-only match can therefore open 视频号.  Anchor candidates below the
+    explicit 联系人 header and choose the first non-network row.
+    """
+    category_bottom: Optional[int] = None
+    group_top: Optional[int] = None
+    network_top: Optional[int] = None
+    candidates: List[tuple[int, Any]] = []
+    # Collect section headers independently of UIA traversal order. Qt can
+    # expose the 群聊 header before 联系人 even though it is drawn below it.
+    headers: List[tuple[str, int, int]] = []
+    for node in _uia_walk(root, max_depth=20, max_nodes=2600):
+        text = _uia_control_text(node).strip()
+        rect = _uia_rect_tuple(node)
+        if rect is None:
+            continue
+        top, bottom = int(rect[1]), int(rect[3])
+        header_text = text.splitlines()[0].strip() if text else ""
+        if header_text in {"联系人", "聯絡人", "群聊", "群組", "搜索网络结果", "搜一搜"}:
+            headers.append((header_text, top, bottom))
+    contact_headers = [
+        item for item in headers
+        if item[0] in {"联系人", "聯絡人"}
+        and (search_bottom is None or item[1] >= int(search_bottom) - 2)
+    ]
+    if contact_headers:
+        # Use the first visible 联系人 section, which is the one containing
+        # the direct-search result list.
+        _label, _top, category_bottom_value = sorted(contact_headers, key=lambda item: item[1])[0]
+        category_bottom = category_bottom_value
+        following = [item for item in headers if item[1] >= category_bottom]
+        group_headers = [item for item in following if item[0] in {"群聊", "群組"}]
+        network_headers = [item for item in following if item[0] in {"搜索网络结果", "搜一搜"}]
+        if group_headers:
+            group_top = min(item[1] for item in group_headers)
+        elif network_headers:
+            # Some WeChat builds hide an empty 群聊 section. The network
+            # header is still a safe upper boundary for contact rows.
+            network_top = min(item[1] for item in network_headers)
+    # The category header is our safety anchor. If it is absent, do not infer
+    # a contact from arbitrary XTableCell rows.
+    if category_bottom is None or (group_top is None and network_top is None):
+        return None
+    lower_bound = category_bottom
+    upper_bound = group_top if group_top is not None else network_top
+    for node in _uia_walk(root, max_depth=20, max_nodes=2600):
+        # WeChat 4.x exposes direct contact rows as SearchContentCellView
+        # (the section headers remain XTableCell).  Restricting this to
+        # XTableCell makes a real contact row invisible and leaves the search
+        # popup open, which is the failure seen in the desktop client.
+        if _uia_control_class(node) not in {"mmui::XTableCell", "mmui::SearchContentCellView"}:
+            continue
+        rect = _uia_rect_tuple(node)
+        if rect is None:
+            continue
+        if int(rect[1]) < int(lower_bound) or (upper_bound is not None and int(rect[1]) >= int(upper_bound)):
+            continue
+        row_text = _local_search_node_text(node).strip()
+        lowered = row_text.casefold()
+        if not row_text:
+            continue
+        if any(marker.casefold() in lowered for marker in _LOCAL_SEARCH_NON_CONTACT_MARKERS):
+            continue
+        # We intentionally do not require the query to be present in this
+        # row. WeChat renders the first contact as a nickname-only cell and
+        # puts the searched wx id in a later/hidden child; filtering by query
+        # would skip the first contact and click a later row.
+        if row_text in {"联系人", "聯絡人", "搜索网络结果", "搜一搜", "群聊"}:
+            continue
+        candidates.append((int(rect[1]), node))
+    # Do not fall back to an unscoped XTableCell. A missing/changed 联系人
+    # section must fail closed instead of risking a click on 搜索网络结果.
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
+
+
+def _local_profile_popup_root(hwnd: int) -> Optional[Any]:
+    """Find WeChat's detached contact profile popup by window handle."""
+    try:
+        import uiautomation as auto  # type: ignore
+        import win32gui  # type: ignore
+        import win32process  # type: ignore
+
+        _thread_id, target_pid = win32process.GetWindowThreadProcessId(int(hwnd))
+        found: Optional[Any] = None
+
+        def _enum(window: int, _extra: Any) -> None:
+            nonlocal found
+            if found is not None or not win32gui.IsWindowVisible(window):
+                return
+            try:
+                _tid, pid = win32process.GetWindowThreadProcessId(window)
+                if int(pid or 0) != int(target_pid or 0):
+                    return
+                root = auto.ControlFromHandle(int(window))
+                if _uia_control_class(root) == "mmui::ProfileUniquePop":
+                    found = root
+            except Exception:
+                return
+
+        win32gui.EnumWindows(_enum, None)
+        return found
+    except Exception:
+        return None
+
+
+def _open_local_contact_profile_via_search(
+    hwnd: int,
+    account_id: str,
+    target: str,
+    steps: List[Dict[str, Any]],
+) -> str:
+    """Open a contact through the top search and verify its stable WeChat id."""
+    original_target = str(target or "").strip()
+    expected_wx_no = _resolve_local_contact_wx_no(account_id, original_target)
+    if not expected_wx_no and _looks_like_wechat_id(original_target):
+        expected_wx_no = original_target
+    if not expected_wx_no:
+        raise RuntimeError("contact WeChat id is required for Moments operations")
+
+    _ensure_local_chat_tab(account_id)
+    _focus_local_wechat(hwnd)
+    search: Optional[Any] = None
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        search = _find_local_top_search_field(_uia_main_root(hwnd))
+        if search is not None:
+            break
+        time.sleep(0.25)
+    if search is None:
+        raise RuntimeError("local WeChat top search field not found")
+    search_rect = _uia_rect_tuple(search)
+    search_bottom = int(search_rect[3]) if search_rect else None
+    _uia_set_text(search, expected_wx_no)
+    # The control's Name remains the placeholder "搜索". Verify the actual
+    # ValuePattern content so a stale query can never drive a name/network row.
+    query_value = ""
+    for _ in range(8):
+        query_value = _uia_get_value(search)
+        if query_value.casefold() == expected_wx_no.casefold():
+            break
+        time.sleep(0.1)
+    if query_value.casefold() != expected_wx_no.casefold():
+        raise RuntimeError(
+            f"local WeChat search query was not applied: expected wxid {expected_wx_no!r}, got {query_value!r}"
+        )
+    steps.append(
+        {
+            "step": "search_contact_by_wx_no",
+            "ok": True,
+            "target": original_target,
+            "wx_no": expected_wx_no,
+            "query_value": query_value,
+        }
+    )
+
+    result_node: Optional[Any] = None
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        result_node = _find_local_contact_search_result(
+            _uia_main_root(hwnd), expected_wx_no, search_bottom=search_bottom
+        )
+        if result_node is not None:
+            break
+        time.sleep(0.25)
+    if result_node is None:
+        raise RuntimeError(f"contact search result not found for WeChat id: {expected_wx_no}")
+    selected_text = _local_search_node_text(result_node)[:240]
+    selected_rect = _uia_rect_tuple(result_node)
+    _uia_click(result_node)
+    steps.append(
+        {
+            "step": "open_contact_search_result",
+            "ok": True,
+            "target": original_target,
+            "wx_no": expected_wx_no,
+            "selection_scope": "联系人:first_matching_result",
+            "selected_text": selected_text,
+            "selected_rect": selected_rect,
+        }
+    )
+    time.sleep(0.8)
+
+    root = _uia_main_root(hwnd)
+    info_button = next(
+        (
+            node
+            for node in _uia_walk(root, max_depth=20, max_nodes=2600)
+            if _uia_control_class(node) == "mmui::XButton" and _uia_control_text(node) == "聊天信息"
+        ),
+        None,
+    )
+    if info_button is None:
+        raise RuntimeError("local WeChat chat info button not found")
+    # The panel may already be open; only click when its member cell is absent.
+    member = next(
+        (
+            node
+            for node in _uia_walk(root, max_depth=20, max_nodes=2600)
+            if _uia_control_class(node) == "mmui::ChatMemberCell"
+        ),
+        None,
+    )
+    if member is None:
+        _uia_click(info_button)
+        time.sleep(0.7)
+        root = _uia_main_root(hwnd)
+        member = next(
+            (
+                node
+                for node in _uia_walk(root, max_depth=20, max_nodes=2600)
+                if _uia_control_class(node) == "mmui::ChatMemberCell"
+            ),
+            None,
+        )
+    if member is None:
+        raise RuntimeError("local WeChat chat member cell not found")
+    member_rect = _uia_rect_tuple(member)
+    if member_rect is None:
+        raise RuntimeError("local WeChat chat member cell has no bounds")
+    _uia_click_screen_point(
+        int((member_rect[0] + member_rect[2]) / 2),
+        int((member_rect[1] + member_rect[3]) / 2),
+    )
+    steps.append({"step": "open_contact_profile_popup", "ok": True, "target": original_target, "wx_no": expected_wx_no})
+
+    observed_wx_no = ""
+    profile_root: Any = None
+    deadline = time.monotonic() + 6.0
+    while time.monotonic() < deadline:
+        profile_root = _local_profile_popup_root(hwnd)
+        if profile_root is not None:
+            observed_wx_no = _extract_contact_profile_wx_no(profile_root)
+            if observed_wx_no:
+                break
+        time.sleep(0.25)
+    matched = bool(observed_wx_no) and observed_wx_no.casefold() == expected_wx_no.casefold()
+    steps.append(
+        {
+            "step": "verify_contact_profile_wx_no",
+            "ok": matched,
+            "target": original_target,
+            "expected_wx_no": expected_wx_no,
+            "observed_wx_no": observed_wx_no,
+        }
+    )
+    if not matched:
+        raise RuntimeError(
+            f"contact profile WeChat id mismatch: expected {expected_wx_no}, observed {observed_wx_no or 'unknown'}"
+        )
+    if profile_root is None:
+        raise RuntimeError("local WeChat contact profile did not open")
+    moments_entry = next(
+        (
+            node
+            for node in _uia_walk(profile_root, max_depth=20, max_nodes=2600)
+            if _uia_control_class(node) == "mmui::XMouseEventView" and _uia_control_text(node) == "朋友圈"
+        ),
+        None,
+    )
+    if moments_entry is None:
+        raise _NoRecentMoments(f"contact has no Moments entry: {original_target}")
+    _uia_click(moments_entry)
+    steps.append({"step": "open_contact_moments", "ok": True, "target": original_target, "wx_no": expected_wx_no})
+    time.sleep(1.5)
+    return expected_wx_no
+
+
 def _open_local_contact_moments(account_id: str, target: str, steps: List[Dict[str, Any]]) -> int:
     hwnd = _local_wechat_hwnd(account_id)
     if not hwnd:
         raise RuntimeError("没有检测到本机微信窗口")
-    _open_local_contact_profile(hwnd, account_id, target, steps, capture_wx_no=False)
-    root = _uia_foreground_or_main_root(hwnd)
-    candidates: List[tuple[int, Any]] = []
-    for node in _uia_walk(root, max_depth=18, max_nodes=1400):
-        if _uia_control_text(node) != "朋友圈":
-            continue
-        rect = _uia_rect_tuple(node)
-        class_name = _uia_control_class(node)
-        width = (rect[2] - rect[0]) if rect else 0
-        score = width
-        if class_name == "mmui::XMouseEventView":
-            score += 1000
-        elif class_name == "mmui::XTextView":
-            score += 200
-        elif class_name == "mmui::XTabBarItem":
-            score -= 500
-        candidates.append((score, node))
-    if not candidates:
-        raise RuntimeError(f"联系人没有可进入的朋友圈入口：{target}")
-    candidates.sort(key=lambda item: item[0], reverse=True)
-    _uia_click(candidates[0][1])
-    steps.append({"step": "open_contact_moments", "ok": True, "target": target})
-    time.sleep(1.5)
+    _open_local_contact_profile_via_search(hwnd, account_id, target, steps)
+    # The search/profile helper already clicks the verified profile's
+    # ``朋友圈`` entry. It opens a separate SNS window; do not inspect the
+    # main chat tree again or a video-account label can be mistaken for it.
     return hwnd
 
 
@@ -9143,9 +11148,17 @@ def _scan_and_like_contact_album_page(
     stop_after_24h = False
     cells = _visible_contact_album_cells(root)
     if not cells:
-        detail_result = _scan_and_like_visible_moments(account_id, [target], dry_run=dry_run, seen=seen, steps=steps)
-        _return_contact_album_list(hwnd, steps, target)
-        return detail_result
+        # The verified contact album is empty. Do not fall back to the global
+        # timeline: that can select another person's post after focus changes.
+        steps.append({"step": "contact_album_skip", "target": target, "reason": "no_recent_post"})
+        return {
+            "found": 0,
+            "liked": 0,
+            "already_liked": 0,
+            "skipped": 1,
+            "stop_after_24h": False,
+            "target_handled": True,
+        }
 
     for cell in cells:
         time_label = str(cell.get("time_label") or "")
@@ -10021,18 +12034,15 @@ async def _scan_and_comment_contact_album_page(
     root = _uia_foreground_or_main_root(hwnd)
     cells = _visible_contact_album_cells(root)
     if not cells:
-        result = await _comment_first_visible_moments_post(
-            account_id,
-            target,
-            dry_run=dry_run,
-            auth_context=auth_context,
-            user_id=user_id,
-            album_text="",
-            steps=steps,
-            self_names=self_names,
-        )
-        _return_contact_album_list(hwnd, steps, target)
-        return {**result, "stop_after_24h": False}
+        steps.append({"step": "moments_comment_skip", "target": target, "reason": "no_recent_post"})
+        return {
+            "found": 0,
+            "commented": 0,
+            "already_commented": 0,
+            "skipped": 1,
+            "stop_after_24h": False,
+            "result": {"target": target, "status": "skipped", "reason": "no_recent_post"},
+        }
     first = cells[0]
     time_label = str(first.get("time_label") or "")
     album_text = str(first.get("text") or "")
@@ -10216,7 +12226,7 @@ async def _process_contact_moments_engage_target(
                     "view": _contact_moments_view_debug(_uia_foreground_or_main_root(hwnd)),
                 }
             )
-            return {"target": target, "status": "failed", "reason": "page_not_ready"}
+            return {"target": target, "status": "skipped", "reason": "no_recent_post"}
         cell = visible.get("cell") if isinstance(visible.get("cell"), dict) else None
         fallback_time_label = ""
         if cell is not None:
@@ -10226,7 +12236,7 @@ async def _process_contact_moments_engage_target(
                 return {"target": target, "status": "skipped", "reason": "outside_24h"}
             if not cell.get("within_24h"):
                 steps.append({"step": "moments_engage_skip", "target": target, "reason": "time_unknown", "time": fallback_time_label or "unknown"})
-                return {"target": target, "status": "failed", "reason": "time_unknown"}
+                return {"target": target, "status": "skipped", "reason": "no_recent_post", "time": fallback_time_label or "unknown"}
             _uia_click(cell.get("node"))
             opened_detail = True
             steps.append({"step": "moments_engage_open_post", "target": target, "time": fallback_time_label})
@@ -10238,14 +12248,14 @@ async def _process_contact_moments_engage_target(
             post = _find_first_visible_timeline_post(root, target)
         if post is None:
             steps.append({"step": "moments_engage_skip", "target": target, "reason": "post_not_found"})
-            return {"target": target, "status": "failed", "reason": "post_not_found"}
+            return {"target": target, "status": "skipped", "reason": "no_recent_post"}
         time_label = str(post.get("time_label") or fallback_time_label or "")
         if _moments_time_outside_24h(time_label):
             steps.append({"step": "moments_engage_skip", "target": target, "reason": "outside_24h", "time": time_label})
             return {"target": target, "status": "skipped", "reason": "outside_24h"}
         if not _moments_time_within_24h(time_label):
             steps.append({"step": "moments_engage_skip", "target": target, "reason": "time_unknown", "time": time_label or "unknown"})
-            return {"target": target, "status": "failed", "reason": "time_unknown"}
+            return {"target": target, "status": "skipped", "reason": "no_recent_post", "time": time_label or "unknown"}
 
         wants_like = moment_action in {"like", "like_comment", "both"}
         wants_comment = moment_action in {"comment", "like_comment", "both"}
@@ -10517,6 +12527,20 @@ async def _process_moments_like_task(task: Dict[str, Any]) -> None:
                     seen=seen,
                     steps=steps,
                 )
+            except _NoRecentMoments as exc:
+                skipped_total += 1
+                processed_steps += 1
+                steps.append({"step": "contact_moments_skip", "target": target, "reason": "no_recent_post", "detail": str(exc)[:240]})
+                _update_task_progress(
+                    task_id,
+                    processed_steps,
+                    found_total if dry_run else liked_total,
+                    0,
+                    f"found={found_total}, liked={liked_total}, already={already_total}, skipped={skipped_total}",
+                )
+                _merge_task_payload(task_id, {"steps": steps[-120:]})
+                await _sleep_between_moments_targets(strategy, target_idx, len(targets))
+                continue
             except Exception as exc:
                 fallback_targets.append(target)
                 steps.append({"step": "contact_moments_fallback", "target": target, "error": str(exc)})
@@ -10644,6 +12668,7 @@ async def _process_moments_comment_task(task: Dict[str, Any]) -> None:
     commented_total = 0
     already_total = 0
     skipped_total = 0
+    failed_total = 0
     processed = 0
     last_error = ""
     try:
@@ -10671,20 +12696,26 @@ async def _process_moments_comment_task(task: Dict[str, Any]) -> None:
                 skipped_total += int(result.get("skipped") or 0)
                 item = result.get("result") if isinstance(result.get("result"), dict) else {"target": target, "status": "unknown"}
                 results.append(item)
+                if str(item.get("status") or "").strip().lower() in {"failed", "partial_failed"}:
+                    failed_total += 1
             except Exception as exc:
                 last_error = str(exc)
-                skipped_total += 1
-                results.append({"target": target, "status": "failed", "error": last_error})
+                if isinstance(exc, _NoRecentMoments):
+                    skipped_total += 1
+                    results.append({"target": target, "status": "skipped", "reason": "no_recent_post"})
+                else:
+                    failed_total += 1
+                    results.append({"target": target, "status": "failed", "error": last_error})
             _merge_task_payload(task_id, {"comment_results": results[-50:], "steps": steps[-80:]})
             _update_task_progress(
                 task_id,
                 processed,
                 found_total if dry_run else commented_total,
-                skipped_total,
-                f"found={found_total}, commented={commented_total}, already={already_total}, skipped={skipped_total}" + (f", last_error={last_error}" if last_error else ""),
+                failed_total,
+                f"found={found_total}, commented={commented_total}, already={already_total}, skipped={skipped_total}, failed={failed_total}" + (f", last_error={last_error}" if last_error else ""),
             )
             await _sleep_between_moments_targets(strategy, idx, len(targets))
-        status = "success" if skipped_total == 0 else ("partial_failed" if commented_total or already_total or (dry_run and found_total) else "failed")
+        status = "success" if failed_total == 0 else ("partial_failed" if commented_total or already_total or (dry_run and found_total) else "failed")
         if dry_run:
             status = "success" if found_total or already_total else status
         _finish_task(
@@ -10692,8 +12723,8 @@ async def _process_moments_comment_task(task: Dict[str, Any]) -> None:
             status,
             processed,
             found_total if dry_run else commented_total,
-            skipped_total,
-            f"dry_run={dry_run}, found={found_total}, commented={commented_total}, already={already_total}, skipped={skipped_total}" + (f", last_error={last_error}" if last_error else ""),
+            failed_total,
+            f"dry_run={dry_run}, found={found_total}, commented={commented_total}, already={already_total}, skipped={skipped_total}, failed={failed_total}" + (f", last_error={last_error}" if last_error else ""),
         )
     except Exception as exc:
         _finish_task(
@@ -10701,7 +12732,7 @@ async def _process_moments_comment_task(task: Dict[str, Any]) -> None:
             "failed",
             processed,
             found_total if dry_run else commented_total,
-            skipped_total or int(task.get("planned_total") or 0),
+            failed_total or int(task.get("planned_total") or 0),
             str(exc),
         )
     finally:
@@ -10792,6 +12823,9 @@ async def _process_moments_engage_task(task: Dict[str, Any]) -> None:
                     steps=steps,
                     self_names=self_names,
                 )
+            except _NoRecentMoments as exc:
+                steps.append({"step": "moments_engage_skip", "target": target, "reason": "no_recent_post", "detail": str(exc)[:240]})
+                result = {"target": target, "status": "skipped", "reason": "no_recent_post"}
             except Exception as exc:
                 last_error = str(exc)
                 result = {"target": target, "status": "failed", "reason": last_error}
@@ -11407,16 +13441,17 @@ def _verify_local_send_chat(
     if not is_group and _looks_like_group_session({"peer_id": actual_peer, "display_name": actual_peer, "chat_type": chat_type}):
         raise RuntimeError(f"当前微信会话疑似群聊（{actual_peer or '未命名'}），已阻止发送")
     expected = str(expected_peer or "").strip()
+    expected_display = _session_display_name(expected)
     if allow_group:
         if not is_group:
             raise RuntimeError("新建群欢迎语发送时未能确认当前会话是群聊，已阻止发送")
-        if not actual_peer or (expected and actual_peer != expected):
+        if not actual_peer or (expected_display and actual_peer != expected_display):
             raise RuntimeError(
                 f"当前微信群与新建目标不一致（当前={actual_peer or '未命名'}，目标={expected or '未命名'}），已阻止发送"
             )
     if strict_private and not _local_chat_type_is_private(chat_type):
         raise RuntimeError("未能确认当前微信会话是一对一私聊，已阻止发送")
-    if strict_private and expected and actual_peer and expected != actual_peer:
+    if strict_private and expected_display and actual_peer and expected_display != actual_peer:
         raise RuntimeError(f"当前微信会话与目标不一致（当前={actual_peer}，目标={expected}），已阻止发送")
     return {"chat_type": chat_type or "unknown", "chat_name": actual_peer}
 
@@ -11428,6 +13463,28 @@ def _send_text_local_slow_once(
     raw_meta: Optional[Dict[str, Any]] = None,
     use_current_chat: bool = False,
 ) -> Dict[str, Any]:
+    raw_meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
+    diagnostic_context = getattr(_LOCAL_WECHAT_THREAD_STATE, "auto_reply_diagnostic_context", {})
+    if not isinstance(diagnostic_context, dict):
+        diagnostic_context = {}
+    diagnostic_run_id = str(raw_meta.get("run_id") or diagnostic_context.get("run_id") or "")
+
+    def log_send_event(event: str, **fields: Any) -> None:
+        if diagnostic_run_id or str(raw_meta.get("driver") or "") == "native_wechat_auto_reply":
+            _write_auto_reply_diagnostic(
+                event,
+                account_id=account_id,
+                run_id=diagnostic_run_id,
+                peer_id=str(peer_id or ""),
+                work_id=str(raw_meta.get("work_id") or diagnostic_context.get("work_id") or ""),
+                inbound_message_id=str(
+                    raw_meta.get("inbound_message_id")
+                    or diagnostic_context.get("inbound_message_id")
+                    or ""
+                ),
+                **fields,
+            )
+
     item = _find_local_account(account_id)
     peer_id = str(peer_id or "").strip()
     text = str(text or "").strip()
@@ -11441,13 +13498,25 @@ def _send_text_local_slow_once(
     wx = _get_wxauto4_client(account_id)
     hwnd = int(item.get("hwnd") or 0)
     _focus_local_wechat(hwnd)
+    log_send_event(
+        "reply_chat_open_started" if not use_current_chat else "reply_chat_reused",
+        click_target=str(peer_id or ""),
+        click_mode="wxauto4_chat_with" if not use_current_chat else "current_chat",
+        use_current_chat=bool(use_current_chat),
+        text_chars=len(text),
+        text_preview=text[:500],
+    )
     if not use_current_chat:
         try:
             wx.ChatWith(peer_id, exact=True, force=False)
         except Exception as exc:
+            log_send_event(
+                "reply_chat_open_failed",
+                click_target=str(peer_id or ""),
+                error=str(exc)[:700],
+            )
             raise RuntimeError(f"open local WeChat chat failed: {exc}") from exc
         time.sleep(random.uniform(0.55, 1.1))
-    raw_meta = raw_meta if isinstance(raw_meta, dict) else {}
     driver_name = str(raw_meta.get("driver") or "").strip()
     strict_private = driver_name == "native_wechat_auto_reply"
     # Group welcomes are the one intentional group send.  The caller still
@@ -11460,6 +13529,13 @@ def _send_text_local_slow_once(
         allow_group=allow_group,
     )
     _focus_local_wechat(hwnd)
+    log_send_event(
+        "reply_chat_verified",
+        click_target=str(peer_id or ""),
+        verified_chat=verified_chat,
+        strict_private=bool(strict_private),
+        allow_group=bool(allow_group),
+    )
 
     # ChatWith usually focuses the input box. Clear the draft and paste once;
     # repeated in-process clipboard writes can corrupt the Windows heap.
@@ -11468,7 +13544,30 @@ def _send_text_local_slow_once(
     time.sleep(random.uniform(0.18, 0.42))
     _paste_text_quick(text)
     time.sleep(random.uniform(0.35, 0.9))
-    submit_result = _submit_local_wechat_typed_message(wx, hwnd, text)
+    log_send_event(
+        "send_button_clicked",
+        click_target="send_button",
+        input_text_present=bool(text),
+        input_text_chars=len(text),
+        input_text_preview=text[:500],
+        submit_method="_submit_local_wechat_typed_message",
+    )
+    try:
+        submit_result = _submit_local_wechat_typed_message(wx, hwnd, text)
+    except Exception as exc:
+        log_send_event(
+            "send_button_failed",
+            click_target="send_button",
+            input_text_present=bool(text),
+            input_text_chars=len(text),
+            error=str(exc)[:700],
+        )
+        raise
+    log_send_event(
+        "send_button_completed",
+        click_target="send_button",
+        submit_result=submit_result if isinstance(submit_result, dict) else {"value": str(submit_result)[:500]},
+    )
 
     now = _now_iso()
     client_id = f"lobster-local-wechat-auto-{uuid.uuid4().hex}"
@@ -11529,6 +13628,35 @@ def _send_text_local_slow(
         # restarts WeChat.
         retry_on_failure=True,
     )
+
+
+def _send_auto_reply_text_with_diagnostics(
+    account_id: str,
+    peer_id: str,
+    text: str,
+    raw_meta: Optional[Dict[str, Any]] = None,
+    use_current_chat: bool = False,
+    diagnostic_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Carry the takeover correlation ID through the thread-affine send call."""
+    previous = getattr(_LOCAL_WECHAT_THREAD_STATE, "auto_reply_diagnostic_context", None)
+    _LOCAL_WECHAT_THREAD_STATE.auto_reply_diagnostic_context = dict(diagnostic_context or {})
+    try:
+        return _send_text_local_slow(
+            account_id,
+            peer_id,
+            text,
+            raw_meta,
+            use_current_chat=use_current_chat,
+        )
+    finally:
+        if previous is None:
+            try:
+                delattr(_LOCAL_WECHAT_THREAD_STATE, "auto_reply_diagnostic_context")
+            except AttributeError:
+                pass
+        else:
+            _LOCAL_WECHAT_THREAD_STATE.auto_reply_diagnostic_context = previous
 
 
 def _send_files_local(account_id: str, peer_id: str, attachments: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -12946,8 +15074,8 @@ def _normalize_task_targets(targets: List[str], *, max_targets: int = 0) -> List
         value = str(raw or "").strip()
         if not value:
             continue
-        # External callers often pass a pasted block of phone numbers / sessions.
-        parts = [x.strip() for x in re.split(r"[\s,，;；]+", value) if x.strip()]
+        # Keep spaces inside display names. Only explicit list separators split targets.
+        parts = [x.strip() for x in re.split(r"[\r\n,，、;；]+", value) if x.strip()]
         for part in parts:
             key = part.lower()
             if key in seen:

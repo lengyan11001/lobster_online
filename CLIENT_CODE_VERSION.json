@@ -1,7 +1,7 @@
 {
-  "version": "1.0.219",
-  "build": 263,
-  "applied_at": "2026-08-27T14:27:55+08:00",
-  "note": "H5 workflow node groups and reply mode fields",
-  "bundle_sha256": "bb3a4711d130bb1b3d7a9be96cacf0f600549e3625cf7a55fea7c7543acf2603"
+  "version": "1.0.228",
+  "build": 272,
+  "applied_at": "2026-08-30T03:14:02+08:00",
+  "note": "server deploy 3d17342",
+  "bundle_sha256": "591d80948c4d15b70efdb4357481fdd150b8502b3440b61c67a73c6038ced81c"
 }

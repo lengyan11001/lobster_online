@@ -32,6 +32,11 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 STAGING_DIR = SCRIPT_DIR / "staging"
 OUTPUT_DIR = SCRIPT_DIR / "output"
 ARCHIVE_ROOT_NAME = "lobster_online"
+FACTORY_CONFIGURATOR_EXE = "OEM\u914d\u7f6e\u542f\u52a8\u5668.exe"
+BRAND_LAUNCHER_EXES = {
+    "\u5fc5\u706b\u667a\u80fdAI.exe",
+    "\u5fc5\u706bAI\u5458\u5de5.exe",
+}
 
 PYTHON = str(PROJECT_ROOT / "python" / "python.exe")
 PYINSTALLER = str(PROJECT_ROOT / "python" / "Scripts" / "pyinstaller.exe")
@@ -318,7 +323,7 @@ def _rel_posix(path: Path) -> str:
     return path.as_posix().strip("/")
 
 
-def _should_skip_rel(rel_posix: str, *, is_dir: bool) -> bool:
+def _should_skip_rel(rel_posix: str, *, is_dir: bool, factory_oem: bool = False) -> bool:
     rel_posix = _rel_posix(Path(rel_posix))
     if not rel_posix:
         return False
@@ -342,6 +347,8 @@ def _should_skip_rel(rel_posix: str, *, is_dir: bool) -> bool:
     if rel_posix.startswith(("assets/", "browser_data/", "logs/", "chat_storage/", ".updates/", "_lobster_runtime/")):
         return True
     if rel_posix.startswith(("static/uploads/", "static/hifly_previews/")):
+        return True
+    if factory_oem and rel_posix.startswith("static/branding/cache/"):
         return True
     if rel_posix.startswith("desktop/webview2/fixed-runtime/"):
         return True
@@ -387,7 +394,7 @@ def _should_skip_rel(rel_posix: str, *, is_dir: bool) -> bool:
     return False
 
 
-def _copy_ignore_for(top_name: str):
+def _copy_ignore_for(top_name: str, *, factory_oem: bool = False):
     top_src = (PROJECT_ROOT / top_name).resolve()
 
     def _ignore(dir_path: str, names: list[str]) -> set[str]:
@@ -400,14 +407,18 @@ def _copy_ignore_for(top_name: str):
         for name in names:
             full = base / name
             rel = Path(top_name) / base_rel / name
-            if _should_skip_rel(rel.as_posix(), is_dir=full.is_dir()):
+            if _should_skip_rel(
+                rel.as_posix(),
+                is_dir=full.is_dir(),
+                factory_oem=factory_oem,
+            ):
                 ignored.add(name)
         return ignored
 
     return _ignore
 
 
-def copy_project(include_runtime: bool = False):
+def copy_project(include_runtime: bool = False, *, factory_oem: bool = False):
     """复制必要文件到 staging 目录"""
     dirs_to_copy = list(DIRS_TO_COPY)
     if include_runtime:
@@ -418,11 +429,20 @@ def copy_project(include_runtime: bool = False):
         dst = STAGING_DIR / d
         if src.exists():
             log(f"  复制目录: {d}/")
-            shutil.copytree(src, dst, ignore=_copy_ignore_for(d))
+            shutil.copytree(src, dst, ignore=_copy_ignore_for(d, factory_oem=factory_oem))
         else:
             log(f"  [SKIP] 目录不存在: {d}/")
 
-    for f in FILES_TO_COPY:
+    files_to_copy = list(FILES_TO_COPY)
+    if factory_oem:
+        files_to_copy = [
+            name
+            for name in files_to_copy
+            if name != ".env" and name not in BRAND_LAUNCHER_EXES
+        ]
+        files_to_copy.append(FACTORY_CONFIGURATOR_EXE)
+
+    for f in files_to_copy:
         src = PROJECT_ROOT / f
         dst = STAGING_DIR / f
         if src.exists():
@@ -520,8 +540,16 @@ def compile_and_strip(skip: bool = False):
     log(f"  已保护 {total_stubbed} 个 .py：真实代码在同名 .pyc，.py 为 loader stub")
 
 
-def prepare_desktop_launcher_exe():
-    """保留正式桌面入口：必火智能AI.exe → pythonw.exe desktop/launcher.py。"""
+def prepare_desktop_launcher_exe(*, factory_oem: bool = False):
+    """Validate the appropriate desktop entry for branded or factory packages."""
+    if factory_oem:
+        configurator = STAGING_DIR / FACTORY_CONFIGURATOR_EXE
+        if configurator.is_file():
+            size_kb = configurator.stat().st_size / 1024
+            log(f"  [OK] {FACTORY_CONFIGURATOR_EXE} ({size_kb:.1f} KB)")
+            return True
+        log(f"[ERR] {FACTORY_CONFIGURATOR_EXE} missing; cannot build factory package")
+        return False
     exe_path = STAGING_DIR / "必火智能AI.exe"
     if not exe_path.exists():
         src = PROJECT_ROOT / "必火智能AI.exe"
@@ -550,11 +578,14 @@ def calculate_size():
     return total
 
 
-def create_output_zip(include_runtime: bool = False):
+def create_output_zip(include_runtime: bool = False, *, factory_oem: bool = False):
     """创建最终分发 zip 包"""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    suffix = "_runtime" if include_runtime else ""
+    if factory_oem:
+        suffix = "_factory_runtime" if include_runtime else "_factory"
+    else:
+        suffix = "_runtime" if include_runtime else ""
     zip_name = f"lobster_desktop{suffix}_{timestamp}"
     zip_path = OUTPUT_DIR / zip_name
 
@@ -586,6 +617,7 @@ def main():
             "LOBSTER_ALLOW_PLAIN_PACK=1"
         )
     include_runtime = "--include-runtime" in sys.argv
+    factory_oem = "--factory-oem" in sys.argv
     total_steps = 5
 
     print("=" * 50)
@@ -595,6 +627,7 @@ def main():
     print(f"  输出到: {STAGING_DIR}")
     print(f"  保护:   {'跳过' if skip_encrypt else '编译.pyc+删除源码'}")
     print(f"  运行时: {'包含' if include_runtime else '不包含'}")
+    print(f"  工厂包: {'是' if factory_oem else '否'}")
     print()
 
     # Step 1: 清理
@@ -603,7 +636,7 @@ def main():
 
     # Step 2: 复制项目文件
     step(2, total_steps, "复制项目文件到 staging")
-    copy_project(include_runtime=include_runtime)
+    copy_project(include_runtime=include_runtime, factory_oem=factory_oem)
     size = calculate_size()
     log(f"  复制完成: {size / (1024*1024):.1f} MB")
 
@@ -613,7 +646,7 @@ def main():
 
     # Step 4: 准备正式桌面启动器 EXE
     step(4, total_steps, "准备 必火智能AI.exe 桌面启动器")
-    if not prepare_desktop_launcher_exe():
+    if not prepare_desktop_launcher_exe(factory_oem=factory_oem):
         log("[ERR] 构建失败！")
         sys.exit(1)
 
@@ -621,22 +654,31 @@ def main():
     step(5, total_steps, "创建分发 zip 包")
     staging_size = calculate_size()
     log(f"  staging 目录大小: {staging_size / (1024*1024):.1f} MB")
-    zip_file = create_output_zip(include_runtime=include_runtime)
+    zip_file = create_output_zip(
+        include_runtime=include_runtime,
+        factory_oem=factory_oem,
+    )
 
     print()
     print("=" * 50)
     print("  构建完成！")
     print("=" * 50)
     print()
-    print("  分发包内容（需要用户自行准备的运行时）：")
+    print("  分发包内容：")
     print("    - python/           → 嵌入式 Python（install.bat 会检测）")
     print("    - deps/             → ffmpeg + pip wheels")
     print("    - nodejs/           → Node.js + OpenClaw")
     print()
     print("  使用方式：")
     print("    1. 解压分发包到目标目录")
-    print("    2. 将运行时文件放入对应子目录")
-    print("    3. 双击 必火智能AI.exe（保持正式桌面启动流程）")
+    if include_runtime:
+        print("    2. Python、Node/OpenClaw 和离线 wheels 已包含，无需另行准备")
+    else:
+        print("    2. 将运行时文件放入对应子目录")
+    if factory_oem:
+        print(f"    3. 双击 {FACTORY_CONFIGURATOR_EXE} 完成品牌配置")
+    else:
+        print("    3. 双击 必火智能AI.exe（保持正式桌面启动流程）")
     print()
     if zip_file:
         print(f"  分发包路径: {zip_file}")

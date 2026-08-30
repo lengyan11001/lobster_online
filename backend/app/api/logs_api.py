@@ -33,6 +33,7 @@ _DIAGNOSTIC_CONFIG_BYTES = 256 * 1024
 _LOG_CANDIDATES = [
     "logs/app.log",
     "logs/native_wechat_diagnostics.jsonl",
+    "logs/native_wechat_auto_reply.jsonl",
     "app.log",
     "backend.log",
     "backend_err.log",

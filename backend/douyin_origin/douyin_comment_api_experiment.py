@@ -348,8 +348,20 @@ class DouyinCommentApiExperiment:
         comments: List[Dict[str, Any]] = []
         cursor = 0
         has_more = 1
+        declared_total: Optional[int] = None
         while has_more == 1 and len(comments) < max_comments:
             page = self.get_comments_page(auth, normalized_url, cursor=cursor, count=min(20, max_comments))
+            if declared_total is None and isinstance(page, dict):
+                for key in ("total", "comment_count", "comment_total", "total_count"):
+                    value = page.get(key)
+                    if value is None and isinstance(page.get("extra"), dict):
+                        value = page["extra"].get(key)
+                    try:
+                        if value is not None and str(value).strip() != "":
+                            declared_total = max(0, int(value or 0))
+                            break
+                    except (TypeError, ValueError):
+                        continue
             page_comments = page.get("comments") or []
             if not isinstance(page_comments, list) or not page_comments:
                 break
@@ -373,6 +385,11 @@ class DouyinCommentApiExperiment:
             "aweme_id": extract_aweme_id(normalized_url),
             "count": len(comments),
             "comments": comments,
+            "declared_total": declared_total,
+            # An empty protocol response is only a confirmed empty result
+            # when the API explicitly reports total=0.  An empty list alone
+            # is ambiguous (auth, anti-bot, or a changed response shape).
+            "empty_confirmed": bool(declared_total == 0),
         }
 
     def get_all_replies(

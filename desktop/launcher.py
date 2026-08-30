@@ -591,6 +591,21 @@ def http_ready(url: str, timeout: float = 1.2) -> bool:
         return False
 
 
+def http_ready_probe(url: str, timeout: float = 1.2) -> tuple[bool, str, float]:
+    """Return health status plus a compact diagnostic reason and elapsed time."""
+    started = time.monotonic()
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "LobsterDesktop/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status = int(resp.status)
+        elapsed_ms = (time.monotonic() - started) * 1000
+        return 200 <= status < 500, f"http_status={status}", elapsed_ms
+    except Exception as exc:
+        elapsed_ms = (time.monotonic() - started) * 1000
+        reason = f"{type(exc).__name__}: {str(exc).strip() or 'no message'}"
+        return False, reason, elapsed_ms
+
+
 def http_json(url: str, timeout: float = 1.2) -> dict:
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "LobsterDesktop/1.0"})
@@ -1815,7 +1830,11 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         "recovery_lock": threading.Lock(),
     }
     try:
-        def recover_local_services(reason: str = "network") -> dict:
+        def recover_local_services(
+            reason: str = "network",
+            *,
+            allow_live_process_restart: bool = False,
+        ) -> dict:
             if runtime["closing"].is_set():
                 return {"ok": False, "closing": True}
             health_url = f"http://127.0.0.1:{port}/api/health?fast=1"
@@ -1831,12 +1850,49 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                         runtime["mcp_proc"] = mcp_proc
                         mcp_restarted = True
 
+                recovery_started = time.monotonic()
+                initial_probe = http_ready_probe(health_url, timeout=2.5)
+                log(
+                    "Desktop recovery: begin reason=%s health_ok=%s health_reason=%s "
+                    "health_elapsed_ms=%.1f backend_pid=%s"
+                    % (
+                        reason,
+                        initial_probe[0],
+                        initial_probe[1],
+                        initial_probe[2],
+                        getattr(runtime.get("backend_proc"), "pid", None),
+                    )
+                )
                 if wait_for_own_backend(port, 2):
+                    log(
+                        "Desktop recovery: backend already healthy reason=%s elapsed_ms=%.1f"
+                        % (reason, (time.monotonic() - recovery_started) * 1000)
+                    )
                     return {"ok": True, "backend_restarted": False, "mcp_restarted": mcp_restarted}
 
                 proc = runtime.get("backend_proc")
                 if isinstance(proc, subprocess.Popen) and proc.poll() is None:
-                    log(f"Desktop recovery: restarting unhealthy backend reason={reason}")
+                    if not allow_live_process_restart and port_open("127.0.0.1", port, timeout=0.4):
+                        # A busy Python event loop can temporarily stop serving
+                        # /api/health while the backend process and its socket
+                        # are still alive. Never kill that process from the
+                        # watchdog: doing so loses the active task context.
+                        log(
+                            "Desktop recovery: defer live backend restart reason=%s pid=%s "
+                            "health_reason=%s"
+                            % (reason, proc.pid, initial_probe[1])
+                        )
+                        return {
+                            "ok": False,
+                            "deferred": True,
+                            "backend_restarted": False,
+                            "mcp_restarted": mcp_restarted,
+                            "health_url": health_url,
+                        }
+                    log(
+                        "Desktop recovery: stopping unhealthy backend reason=%s pid=%s poll=%s"
+                        % (reason, proc.pid, proc.poll())
+                    )
                     stop_process(proc, "BackendRecovery")
                     runtime["backend_proc"] = None
                     time.sleep(0.4)
@@ -1853,9 +1909,22 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                 recovered_proc = start_bat("BackendRecovery", "run_backend.bat", env)
                 runtime["backend_proc"] = recovered_proc
                 if recovered_proc is None:
+                    log(
+                        "Desktop recovery: backend launch returned no process reason=%s elapsed_ms=%.1f"
+                        % (reason, (time.monotonic() - recovery_started) * 1000)
+                    )
                     return {"ok": False, "error": "backend failed to start"}
                 recovered = wait_for_own_backend(port, 45)
-                log(f"Desktop recovery: completed reason={reason} recovered={recovered}")
+                log(
+                    "Desktop recovery: completed reason=%s recovered=%s new_pid=%s "
+                    "elapsed_ms=%.1f wait_seconds=45"
+                    % (
+                        reason,
+                        recovered,
+                        getattr(recovered_proc, "pid", None),
+                        (time.monotonic() - recovery_started) * 1000,
+                    )
+                )
                 return {
                     "ok": recovered,
                     "backend_restarted": True,
@@ -1869,22 +1938,49 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             failures = 0
             health_url = f"http://127.0.0.1:{port}/api/health?fast=1"
             while not stop_event.wait(2.0):
-                if http_ready(health_url, timeout=1.0):
+                health_ok, health_reason, health_elapsed_ms = http_ready_probe(health_url, timeout=1.0)
+                if health_ok:
                     failures = 0
                     continue
                 failures += 1
+                if failures in (1, 3, 10):
+                    proc = runtime.get("backend_proc")
+                    log(
+                        "Backend watchdog: health failure count=%s reason=%s elapsed_ms=%.1f "
+                        "backend_pid=%s process_alive=%s"
+                        % (
+                            failures,
+                            health_reason,
+                            health_elapsed_ms,
+                            getattr(proc, "pid", None),
+                            isinstance(proc, subprocess.Popen) and proc.poll() is None,
+                        )
+                    )
                 if failures < 3:
                     continue
 
                 proc = runtime.get("backend_proc")
-                if isinstance(proc, subprocess.Popen) and proc.poll() is None:
-                    # A healthy event loop answers the fast health endpoint even
-                    # while a task is running. Only restart an owned process after
-                    # a sustained health failure; this covers a wedged event loop
-                    # without treating one slow request as a crash.
-                    if failures < 10:
-                        continue
-                result = recover_local_services("backend_watchdog")
+                process_alive = isinstance(proc, subprocess.Popen) and proc.poll() is None
+                if process_alive and port_open("127.0.0.1", port, timeout=0.4):
+                    # Health probes share the backend event loop. A long
+                    # Playwright/AI operation can make the probe time out even
+                    # though the process is still serving the task. Keep the
+                    # process alive and let the next probe observe recovery.
+                    if failures in (3, 10) or failures % 30 == 0:
+                        log(
+                            "Backend watchdog: defer recovery; backend process and port are alive "
+                            "pid=%s failures=%s"
+                            % (getattr(proc, "pid", None), failures)
+                        )
+                    continue
+                result = recover_local_services(
+                    "backend_watchdog",
+                    allow_live_process_restart=False,
+                )
+                log(
+                    "Backend watchdog: recovery result ok=%s restarted=%s error=%s"
+                    % (result.get("ok"), result.get("backend_restarted"), result.get("error"))
+                )
                 failures = 0
                 if not result.get("ok"):
                     continue

@@ -512,7 +512,7 @@
         async function loadDouyinConfig(silent = false) {
             let configData = {};
             try {
-                configData = await fetchJsonWithTimeout("/api/douyin/config", 4000);
+                configData = await fetchJsonWithTimeout("/api/douyin/config", 15000);
                 if (configData.code !== 200) throw new Error(configData.msg || configData.detail || "配置接口返回异常");
             } catch (error) {
                 configData = {
@@ -527,7 +527,7 @@
                     comment_scroll_rounds: 300,
                     comment_max_comments: 500,
                     douyin_default_account_id: 1,
-                    douyin_accounts: getDefaultDouyinAccounts(),
+                    douyin_accounts: douyinAccounts.length ? douyinAccounts : getDefaultDouyinAccounts(),
                 };
                 if (!silent) addLog(`加载抖音配置失败，已使用默认配置兜底：${error.message}`, "warning");
                 setAccountActionStatus(`抖音后端接口暂时不可用：${error.message}。如果刚迁移或刚改完代码，请重启后端服务后再试。`, "error");

@@ -1216,13 +1216,14 @@ async def _read_douyin_front_login_state(page: Any, ctx: Any) -> Dict[str, Any]:
         if isinstance(cookie, dict)
     )
     state: Dict[str, Any] = {}
+    dom_probe_ok = False
     try:
         state = await page.evaluate(
             """
             () => {
               const compact = (value) => String(value || '').replace(/\\s+/g, '');
               const bodyText = compact(document.body && document.body.innerText || '');
-              const loginTexts = ['登录', '立即登录', '扫码登录', '去登录', '手机号登录', '验证码登录'];
+              const loginTexts = ['登录', '立即登录', '扫码登录', '去登录', '手机号登录', '验证码登录', '未登录'];
               const loginPrompt = Array.from(document.querySelectorAll('button, a, div, span'))
                 .some((el) => {
                   const text = compact(el.innerText || el.textContent || '');
@@ -1231,11 +1232,13 @@ async def _read_douyin_front_login_state(page: Any, ctx: Any) -> Dict[str, Any]:
               const qrLoginVisible = Array.from(document.querySelectorAll('img, canvas, div'))
                 .some((el) => {
                   const className = compact(el.className || '').toLowerCase();
-                  const alt = compact(el.getAttribute && el.getAttribute('alt') || '').toLowerCase();
+                   const alt = compact(el.getAttribute && el.getAttribute('alt') || '').toLowerCase();
+                   const aria = compact(el.getAttribute && el.getAttribute('aria-label') || '').toLowerCase();
                   const text = compact(el.innerText || '');
                   return className.includes('qrcode')
                     || className.includes('qr-code')
-                    || alt.includes('qr')
+                     || alt.includes('qr')
+                     || aria.includes('二维码')
                     || text.includes('扫码登录')
                     || text.includes('二维码');
                 });
@@ -1249,22 +1252,45 @@ async def _read_douyin_front_login_state(page: Any, ctx: Any) -> Dict[str, Any]:
                 profileLinkCount,
                 path: location.pathname || '',
               };
-            }
+                }
             """
         )
+        dom_probe_ok = isinstance(state, dict)
     except Exception:
         state = {}
     login_prompt = bool(state.get("loginPrompt"))
     qr_login_visible = bool(state.get("qrLoginVisible"))
-    logged_in = bool(has_session_cookie and not login_prompt and not qr_login_visible)
+    current_path = str(state.get("path", "") or "").lower()
+    login_page_path = any(token in current_path for token in ("/login", "/passport", "/signin"))
+    # A cookie alone is not enough when the page probe itself failed (for
+    # example while the SPA is navigating or the target was briefly closed).
+    # Treat that observation as unknown so callers retain the previous state.
+    logged_in = bool(
+        dom_probe_ok
+        and has_session_cookie
+        and not login_prompt
+        and not qr_login_visible
+        and not login_page_path
+    )
+    if logged_in:
+        probe_state = "online"
+    elif login_prompt or qr_login_visible or login_page_path:
+        probe_state = "waiting"
+    else:
+        # No decisive marker usually means the SPA is still hydrating or the
+        # page navigation was interrupted.  Callers must keep the last state.
+        probe_state = "unknown"
     return {
         "logged_in": logged_in,
+        "probe_state": probe_state,
         "cookie": bool(has_session_cookie),
         "login_prompt": login_prompt,
         "qr_login_visible": qr_login_visible,
         "profile_hints": bool(state.get("profileHints")),
         "profile_link_count": int(state.get("profileLinkCount", 0) or 0),
         "path": str(state.get("path", "") or ""),
+        "login_page_path": login_page_path,
+        "dom_probe_ok": dom_probe_ok,
     }
 
 
@@ -1308,15 +1334,61 @@ async def check_douyin_front_login(
         logged_in = bool(state.get("logged_in"))
         if not headless:
             _setup_auto_close(ctx, profile_dir, page, browser_options=opts)
+        probe_state = str(state.get("probe_state") or "unknown")
+        if logged_in:
+            message = "抖音前台已登录"
+        elif probe_state == "waiting":
+            message = "抖音前台明确显示未登录，请完成扫码登录。"
+        else:
+            message = "抖音前台登录状态暂时无法确认，请稍后重试。"
         return {
             "logged_in": logged_in,
-            "message": "抖音前台已登录" if logged_in else "抖音前台未检测到登录，请点击“打开登录”完成扫码。",
+            "message": message,
             **state,
         }
     except Exception as e:
         if created_new:
             await _drop_cached_context(profile_dir, ctx, browser_options=opts)
-        return {"logged_in": False, "message": str(e), "cookie": False}
+        return {"logged_in": False, "probe_state": "unknown", "message": str(e), "cookie": False}
+
+
+async def check_douyin_front_login_stable(
+    profile_dir: str,
+    url: str = "https://www.douyin.com/jingxuan",
+    browser_options: Optional[Dict[str, Any]] = None,
+    *,
+    headless: bool = True,
+    attempts: int = 2,
+) -> Dict[str, Any]:
+    """Retry front-site probes and expose an explicit unknown state."""
+    total = max(1, int(attempts or 1))
+    last: Dict[str, Any] = {"logged_in": False, "probe_state": "unknown", "attempts": 0}
+    waiting_result: Optional[Dict[str, Any]] = None
+    for attempt in range(1, total + 1):
+        try:
+            result = await check_douyin_front_login(
+                profile_dir,
+                url=url,
+                browser_options=browser_options,
+                headless=headless,
+            )
+        except Exception as exc:
+            result = {
+                "logged_in": False,
+                "probe_state": "unknown",
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+        last = dict(result or {})
+        state = str(last.get("probe_state") or ("online" if last.get("logged_in") else "unknown"))
+        last["probe_state"] = state if state in {"online", "waiting", "unknown"} else "unknown"
+        last["attempts"] = attempt
+        if bool(last.get("logged_in")):
+            return last
+        if last["probe_state"] == "waiting":
+            waiting_result = dict(last)
+        if attempt < total:
+            await asyncio.sleep(0.8)
+    return waiting_result or last
 
 
 def _extract_douyin_aweme_id(url: str) -> str:

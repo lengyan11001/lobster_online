@@ -3,7 +3,6 @@
 (function () {
   'use strict';
 
-  var POLL_MS = 5000;
   var REFRESH_DEBOUNCE_MS = 1200;
   var SWARM_PAGE_SIZE = 10;
   var SYNC_CACHE_GRACE_MS = 60000;
@@ -1615,10 +1614,8 @@
   function ensurePolling() {
     clearTimer();
     state.destroyed = false;
-    state.timer = setInterval(function () {
-      if (!document.getElementById('content-agent') || !document.getElementById('content-agent').classList.contains('visible')) return;
-      refreshDashboard(false);
-    }, POLL_MS);
+    // The global task-center owns the only high-frequency run poll. The
+    // dashboard is refreshed on entry, manually, or after selecting a card.
   }
 
   function bindRefreshButton() {

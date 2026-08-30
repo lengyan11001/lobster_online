@@ -3,6 +3,7 @@
 
   var state = {
     templates: [],
+    templatesLoadedInstallationId: '',
     devices: [],
     selectedId: '',
     selectedTemplate: null,
@@ -22,7 +23,10 @@
     contextGeneration: 0,
     installationId: '',
     deviceRefreshPromise: null,
-    salesTemplateMigrationPending: false
+    salesTemplateMigrationPending: false,
+    nodePermissionsLoaded: false,
+    nodeAllowedCapabilityIds: [],
+    nodeSkillPackages: []
   };
 
   var SALES_ROWS = [
@@ -62,29 +66,54 @@
     {time:'23:30',end:'24:00',key:'wechat_channels_nurture',label:'视频号自动养号（敬请期待）',note:'视频号自动养号',soon:true}
   ];
 
-  // Keep the editor options aligned with H5. Sales presets remain distinct
-  // actions even when they share an ability key, but users choose them by
-  // platform instead of from one mixed sales list.
+  // Keep the editor options aligned with H5. A capability is listed once;
+  // Douyin keeps one entry per executable action because each action has a
+  // different dispatch payload.
   var NODE_OPTIONS = [];
   var nodeOptionKeys = {};
-  // Kept as a compatibility label for older saved templates; these entries
-  // are intentionally shown under the consolidated AI营销 group.
-  var LEGACY_NODE_GROUP_LABEL = 'AI海外平台';
   var NODE_OPTION_GROUP_ORDER = ['抖音','个微','AI营销'];
+  var NODE_OPTION_PACKAGE_IDS = {
+    'hifly.video.create_by_tts':'hifly_digital_human_skill',
+    'comfly.seedance.tvc.pipeline':'comfly_seedance_tvc_skill',
+    'comfly.daihuo.pipeline':'comfly_veo_skill',
+    'image_composer_studio':'goal_video_pipeline_skill',
+    'ip_content_daily':'ip_content_daily_skill',
+    'wewrite.article.pipeline':'wewrite_official_account_skill',
+    'linkedin_leads':'linkedin_leads',
+    'reddit_leads':'reddit_leads',
+    'x_leads':'x_leads',
+    'tiktok_leads':'tiktok_leads'
+  };
+  var NODE_OPTION_CAPABILITY_IDS = {
+    'hifly.video.create_by_tts':'hifly.video.create_by_tts',
+    'comfly.seedance.tvc.pipeline':'comfly.seedance.tvc.pipeline',
+    'comfly.daihuo.pipeline':'comfly.daihuo.pipeline',
+    'image_composer_studio':'goal.image.pipeline',
+    'ip_content_daily':'ip_content_daily',
+    'wewrite.article.pipeline':'wewrite.article.pipeline'
+  };
+  function nodeOptionFeatureGate(key) {
+    var normalized=String(key || '').trim();
+    if (normalized === 'douyin_leads') return 'douyin_leads_access';
+    if (normalized.indexOf('native_wechat_') === 0) return 'private_domain_entry';
+    if (['linkedin_leads','reddit_leads','x_leads','tiktok_leads'].indexOf(normalized) >= 0) return 'overseas_platform_entry';
+    return '';
+  }
   function nodeOptionGroupForKey(key) {
     if (String(key || '') === 'douyin_leads') return '抖音';
     if (String(key || '').indexOf('native_wechat_') === 0) return '个微';
     return 'AI营销';
   }
   function addNodeOption(key, label, note, group) {
-    var identity = String(key || '') + '@@' + String(label || '');
-    if (!key || !label || nodeOptionKeys[identity]) return;
+    var normalizedKey=String(key || '').trim();
+    var normalizedLabel=String(label || '').trim();
+    var identity=normalizedKey === 'douyin_leads'
+      ? normalizedKey + '@@' + salesAction(String(note || normalizedLabel))
+      : normalizedKey;
+    if (!normalizedKey || !normalizedLabel || nodeOptionKeys[identity]) return;
     nodeOptionKeys[identity] = true;
-    NODE_OPTIONS.push([String(key), String(label), String(note || label), String(group || '销售员工'), identity]);
+    NODE_OPTIONS.push([normalizedKey, normalizedLabel, String(note || normalizedLabel), String(group || '销售员工'), identity]);
   }
-  SALES_ROWS.forEach(function(row) {
-    if (!row.soon) addNodeOption(row.key, row.label, row.note, nodeOptionGroupForKey(row.key));
-  });
   [
     ['hifly.video.create_by_tts','数字人口播视频','选择数字人和声音，生成口播视频。','AI营销'],
     ['comfly.seedance.tvc.pipeline','创意分镜头视频','按连续分镜规划视频，并生成完整成片。','AI营销'],
@@ -94,7 +123,6 @@
     ['image_composer_studio','AI设计图','根据文案或产品资料生成海报、详情页和朋友圈配图。','AI营销'],
     ['ip_content_daily','IP日更文案','生成短视频口播、朋友圈文案和配图提示词。','AI营销'],
     ['wewrite.article.pipeline','公众号文章','根据主题生成公众号文章、配图和发布草稿。','AI营销'],
-    ['douyin_leads','抖音获客','采集客户线索、评论互动、私信触达和同行监控。','抖音'],
     ['native_wechat_poll','个微私信接管','读取个人微信新消息，并按个人记忆自动生成回复。','个微'],
     ['native_wechat_add_friend','个微自动加好友','把目标手机号或微信号加入本机个人微信加好友队列。','个微'],
     ['native_wechat_moments_engage','朋友圈点赞评论','对指定联系人24小时内朋友圈进行点赞或评论。','个微'],
@@ -103,6 +131,30 @@
     ['x_leads','X线索采集','采集账号内容、评论和潜在线索。','AI营销'],
     ['tiktok_leads','TikTok线索采集','采集账号作品、视频评论和潜在线索。','AI营销']
   ].forEach(function(item) { addNodeOption(item[0], item[1], item[2], item[3]); });
+  SALES_ROWS.forEach(function(row) {
+    if (!row.soon && row.key === 'douyin_leads') {
+      addNodeOption(row.key, row.label, row.note, nodeOptionGroupForKey(row.key));
+    }
+  });
+
+  function nodeOptionPackageVisible(packageId) {
+    var id=String(packageId || '').trim();
+    if (!id || !state.nodePermissionsLoaded) return false;
+    var pkg=state.nodeSkillPackages.find(function(item){return String(item && item.id || '').trim() === id;});
+    return !!(pkg && (pkg.status === 'installed' || pkg.default_installed || pkg.unlocked));
+  }
+  function nodeOptionIsAllowed(item) {
+    if (!item) return false;
+    var key=String(item[0] || '').trim(), gate=nodeOptionFeatureGate(key);
+    if (gate && !(typeof window.isLobsterFeatureAllowed === 'function' && window.isLobsterFeatureAllowed(gate))) return false;
+    if (key === 'local_bestseller' || key === 'viral_video_remix') return true;
+    var capabilityId=NODE_OPTION_CAPABILITY_IDS[key] || '', packageId=NODE_OPTION_PACKAGE_IDS[key] || '';
+    if (gate && !capabilityId && !packageId) return true;
+    if (!state.nodePermissionsLoaded) return false;
+    if (capabilityId && state.nodeAllowedCapabilityIds.indexOf(capabilityId) >= 0) return true;
+    return nodeOptionPackageVisible(packageId);
+  }
+  function visibleNodeOptions() { return NODE_OPTIONS.filter(nodeOptionIsAllowed); }
 
   var CHILD_ACTION_OPTIONS = [
     ['publish','发布内容'],
@@ -220,13 +272,36 @@
     var selected={}; (Array.isArray(value) ? value : []).forEach(function(item){selected[String(item || '').trim().toLowerCase()]=true;});
     return DOUYIN_FOLLOWUP_ACTIONS.filter(function(action){return !!selected[action];});
   }
+  function workflowParams(node) {
+    if (!node || typeof node !== 'object') return {};
+    var plan=node.plan && typeof node.plan === 'object' ? node.plan : {};
+    var payload=plan.payload && typeof plan.payload === 'object' ? plan.payload : {};
+    var inner=payload.payload && typeof payload.payload === 'object' ? payload.payload : {};
+    if (payload.params && typeof payload.params === 'object') return payload.params;
+    if (inner.params && typeof inner.params === 'object') return inner.params;
+    if (plan.params && typeof plan.params === 'object') return plan.params;
+    return node.params && typeof node.params === 'object' ? node.params : {};
+  }
+  function douyinNodeAction(node, fallbackText) {
+    var payload=workflowPayload(node), params=workflowParams(node);
+    var explicit=String(payload.action || params.sales_action || '').trim().toLowerCase();
+    var inferred=salesAction(fallbackText || node && (node.note || node.ability_label) || '');
+    if (['search_collect','precise_touch','self_comment_monitor','account_nurture','reply_comments','follow_comment','mention_comment','direct_message','stranger_message'].indexOf(explicit) >= 0) {
+      return explicit === 'search_collect' && inferred !== 'search_collect' ? inferred : explicit;
+    }
+    return inferred;
+  }
   function isDouyinCollection(node) {
     if (!node || String(node.ability_key || node.key || '') !== 'douyin_leads') return false;
-    var payload=workflowPayload(node), params=payload.params && typeof payload.params === 'object' ? payload.params : {};
-    return salesAction(node.note || node.ability_label || '') === 'search_collect' && String(params.sales_action || payload.action || 'search_collect') === 'search_collect';
+    return douyinNodeAction(node) === 'search_collect';
   }
   function baseScheduleParams(row, params) {
     return Object.assign({}, params || {}, {sales_schedule_start:row.time, sales_schedule_end:row.end, sales_schedule_duration_minutes:scheduleDuration(row.time, row.end), sales_node_label:row.label || row.note || ''});
+  }
+  function wechatPrivateSessionLimit(value) {
+    var limit=Number(value || 100);
+    if (!Number.isFinite(limit) || limit === 10) limit=100;
+    return Math.max(1,Math.min(100,limit));
   }
   function nativePlan(key, row, extra) {
     var params = Object.assign({account_id:'pc-wechat-default', note:row.note || row.label || '', prompt:row.note || row.label || ''}, row.params || {}, extra || {});
@@ -251,12 +326,8 @@
       if (duration > 0) params.takeover_session_minutes = duration;
       else delete params.takeover_session_minutes;
       params.message_poll_interval_seconds = Number(params.message_poll_interval_seconds || 15);
-      params.private_sessions_per_round = Math.max(
-        1,
-        Math.min(
-          Number(params.private_sessions_per_round || params.max_private_sessions_per_round || 10),
-          100
-        )
+      params.private_sessions_per_round = wechatPrivateSessionLimit(
+        params.private_sessions_per_round || params.max_private_sessions_per_round
       );
       params.accept_friend_requests_once = params.accept_friend_requests_once !== false;
     }
@@ -292,7 +363,7 @@
       return {title:socialPayload.title,task_kind:'social_leads',content:'H5 工作流：' + socialPayload.title,payload:socialPayload};
     }
     if (row.key === 'douyin_leads') {
-      var action = salesAction(prompt), max = action === 'search_collect' || action === 'account_nurture' ? 50 : action === 'precise_touch' ? 20 : 10;
+      var action = String(row.sales_action || '').trim().toLowerCase() || salesAction(prompt), max = action === 'search_collect' || action === 'account_nurture' ? 50 : action === 'precise_touch' ? 20 : 10;
       // Keep explicitly edited private-message options when rebuilding the
       // plan.  The editor stores the checkbox in row.params, but the old
       // branch rebuilt params from scratch and silently dropped it.
@@ -356,8 +427,7 @@
   }
   function isDouyinPrivate(node) {
     if (!node || String(node.ability_key || node.key || '') !== 'douyin_leads') return false;
-    var payload=workflowPayload(node), params=payload.params && typeof payload.params === 'object' ? payload.params : {};
-    var action=String(payload.action || params.sales_action || '').trim().toLowerCase();
+    var action=douyinNodeAction(node);
     if (action === 'stranger_message') return true;
     var text=[node.ability_label,node.note,node.plan && node.plan.title].map(function(value){return String(value || '');}).join(' ');
     return text.indexOf('私信接管') >= 0 || text.indexOf('私信引流') >= 0 || text.toLowerCase().indexOf('private takeover') >= 0;
@@ -372,7 +442,7 @@
   }
   function childOptions(parent, currentType) {
     var values=[];
-    if (isWechatPrivate(parent)) values.push('native_wechat_moments_engage');
+    if (isWechatPrivate(parent) && nodeOptionIsAllowed(findOption('native_wechat_moments_engage'))) values.push('native_wechat_moments_engage');
     values.push('publish');
     if (currentType && currentType !== 'native_wechat_group_invite' && values.indexOf(currentType) < 0) values.push(currentType);
     return values.map(function(value){return CHILD_ACTION_OPTIONS.find(function(item){return item[0] === value;});}).filter(Boolean);
@@ -640,7 +710,11 @@
     if (editable) html+='<button type="button" class="oe-mini-btn" data-oe-child-add="' + index + '">添加下级</button><button type="button" class="oe-mini-btn" data-oe-edit="' + index + '">编辑</button><button type="button" class="oe-mini-btn" data-oe-delete="' + index + '">删除</button>';
     return html;
   }
-  function nodeHtml(node,index,editable) { var soon=!!(node.comingSoon || node.workflow_placeholder || node.plan && node.plan.payload && node.plan.payload.skip_execution); var children=workflowChildren(node); return '<article class="oe-node' + (soon ? ' is-soon' : '') + '"><div class="oe-time">' + esc(node.time || '--:--') + (node.end_time ? '<br><span style="color:#a0aaba;font-size:.61rem;font-weight:400">' + esc(node.end_time) + '</span>' : '') + '</div><div class="oe-line"></div><div class="oe-node-main"><div class="oe-node-title"><span>' + esc(node.ability_label || node.note || '工作节点') + '</span>' + (soon ? '<span class="oe-tag soon">敬请期待</span>' : '') + (node.sales_preset ? '<span class="oe-tag">销售</span>' : '') + '</div><div class="oe-node-note">' + esc(node.note || '') + '</div><div class="oe-node-key">' + esc(node.ability_key || '') + '</div></div><div class="oe-node-actions">' + nodeActionsHtml(node,index,editable,soon) + '</div>' + (children.length ? '<div class="oe-children">' + children.map(function(child){return childHtml(child,index,editable);}).join('') + '</div>' : '') + '</article>'; }
+  function nodeIsAllowed(node) {
+    if (!node) return false;
+    return nodeOptionIsAllowed(findOption(node.ability_key || node.key, node.ability_label, node));
+  }
+  function nodeHtml(node,index,editable) { var soon=!!(node.comingSoon || node.workflow_placeholder || node.plan && node.plan.payload && node.plan.payload.skip_execution); var children=workflowChildren(node), allowed=nodeIsAllowed(node); return '<article class="oe-node' + (soon ? ' is-soon' : '') + (!allowed ? ' is-locked' : '') + '"><div class="oe-time">' + esc(node.time || '--:--') + (node.end_time ? '<br><span style="color:#a0aaba;font-size:.61rem;font-weight:400">' + esc(node.end_time) + '</span>' : '') + '</div><div class="oe-line"></div><div class="oe-node-main"><div class="oe-node-title"><span>' + esc(node.ability_label || node.note || '工作节点') + '</span>' + (soon ? '<span class="oe-tag soon">敬请期待</span>' : '') + (!allowed ? '<span class="oe-tag soon">权限未开通</span>' : '') + (node.sales_preset ? '<span class="oe-tag">销售</span>' : '') + '</div><div class="oe-node-note">' + esc(node.note || '') + '</div><div class="oe-node-key">' + esc(node.ability_key || '') + '</div></div><div class="oe-node-actions">' + (allowed ? nodeActionsHtml(node,index,editable,soon) : '') + '</div>' + (children.length ? '<div class="oe-children">' + children.map(function(child){return childHtml(child,index,editable);}).join('') + '</div>' : '') + '</article>'; }
   function renderTimeline() { var host=el('oeTimeline'); if (!host) return; var editable=currentTemplateIsEditable(), count=state.nodes.length, childCount=state.nodes.reduce(function(total,node){return total+workflowChildren(node).length;},0); el('oeTimelineMeta').textContent=count + ' 个节点' + (childCount ? ' · ' + childCount + ' 个下级动作' : ''); host.innerHTML=count ? state.nodes.map(function(node,index){return nodeHtml(node,index,editable);}).join('') : '<div class="oe-empty-list">还没有节点，点击“添加节点”开始配置。</div>'; }
   function renderEditor() {
     var body=el('oeEditorBody'), empty=el('oeEditorEmpty'), template=state.selectedTemplate; if (!template) { body.hidden=true; empty.hidden=false; return; }
@@ -656,10 +730,29 @@
   function render() { renderDevices(); renderList(); renderEditor(); }
   function loadTemplates(expectedInstallationId) {
     var iid=String(expectedInstallationId || selectedDeviceId()).trim(), query=iid ? '?installation_id=' + encodeURIComponent(iid) : '';
+    if (state.templatesLoadedInstallationId === iid && Array.isArray(state.templates) && state.templates.length) {
+      return Promise.resolve(state.templates);
+    }
     return api('/api/h5-workflows/templates' + query).then(function(data){
       if (iid !== selectedDeviceId()) return [];
       state.templates=(Array.isArray(data.templates) ? data.templates : []).map(normalizeTemplate);
+      state.templatesLoadedInstallationId=iid;
       return state.templates;
+    });
+  }
+  function loadNodePermissions() {
+    state.nodePermissionsLoaded=false;
+    state.nodeAllowedCapabilityIds=[];
+    state.nodeSkillPackages=[];
+    return Promise.all([
+      api('/skills/store').catch(function(){return {packages:[]};}),
+      api('/skills/user-allowed-capability-ids').catch(function(){return {capability_ids:[]};})
+    ]).then(function(results){
+      var store=results[0] || {}, allowed=results[1] || {};
+      state.nodeSkillPackages=Array.isArray(store.packages) ? store.packages : [];
+      state.nodeAllowedCapabilityIds=(Array.isArray(allowed.capability_ids) ? allowed.capability_ids : []).map(function(id){return String(id || '').trim();}).filter(Boolean);
+      state.nodePermissionsLoaded=true;
+      return {packages:state.nodeSkillPackages,capabilityIds:state.nodeAllowedCapabilityIds};
     });
   }
   function loadLocalWechatContacts() {
@@ -685,7 +778,21 @@
   function refreshDeviceStatus() {
     if (state.deviceRefreshPromise) return state.deviceRefreshPromise;
     var previous=state.devices.slice();
-    state.deviceRefreshPromise=api('/api/h5-chat/devices/status?_=' + Date.now()).then(function(data){
+    function refreshLocalHeartbeat() {
+      var base=localBaseUrl();
+      if (!base || typeof fetch !== 'function') return Promise.resolve(null);
+      var controller=typeof AbortController === 'function' ? new AbortController() : null;
+      var timer=controller ? setTimeout(function(){controller.abort();},3000) : null;
+      return fetch(base + '/api/h5-chat/device-heartbeat/refresh?_=' + Date.now(), {
+        method:'POST', headers:headers(), signal:controller ? controller.signal : undefined
+      }).then(function(response){return response.json().catch(function(){return {};}).then(function(data){
+        if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
+        return data;
+      });}).catch(function(){return null;}).finally(function(){if(timer) clearTimeout(timer);});
+    }
+    state.deviceRefreshPromise=refreshLocalHeartbeat().then(function(){
+      return api('/api/h5-chat/devices/status?_=' + Date.now());
+    }).then(function(data){
       var devices=Array.isArray(data && data.devices) ? data.devices : [];
       devices.forEach(function(device){
         var old=previous.find(function(item){return String(item && item.installation_id || '') === String(device && device.installation_id || '');});
@@ -698,7 +805,7 @@
     return state.deviceRefreshPromise;
   }
   function waitForOnlineDevice(iid) {
-    var retryDelays=[0,300,700,1200];
+    var retryDelays=[0,300,800,1600,2600];
     function attempt(index) {
       var wait=retryDelays[index] || 0;
       return new Promise(function(resolve){setTimeout(resolve,wait);}).then(refreshDeviceStatus).then(function(devices){
@@ -741,16 +848,26 @@
   }
   function selectTemplate(id) { var selected=String(id || 'system_sales'); return loadTemplates().then(function(){return applyServerTemplate(selected);}); }
   function resetNew() { state.selectedId=''; state.selectedTemplate={id:'',source:'own',name:'新员工',nodes:[],meta:{}}; state.editingId=''; state.editingMeta={}; state.nodes=[]; state.salesTemplateMigrationPending=false; if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey; render(); }
-  function findOption(key, label) { return NODE_OPTIONS.find(function(item){return item[0] === key && (!label || item[1] === label);}) || NODE_OPTIONS.find(function(item){return item[0] === key;}) || [String(key || ''), String(key || ''), String(key || ''), '销售员工', String(key || '')]; }
+  function findOption(key, label, node) {
+    if (String(key || '') === 'douyin_leads' && node) {
+      var action=douyinNodeAction(node);
+      var actionMatch=NODE_OPTIONS.find(function(item){return item[0] === key && salesAction(item[2] || item[1]) === action;});
+      if (actionMatch) return actionMatch;
+    }
+    var exact=NODE_OPTIONS.find(function(item){return item[0] === key && (!label || item[1] === label);});
+    if (exact) return exact;
+    return NODE_OPTIONS.find(function(item){return item[0] === key;}) || [String(key || ''), String(key || ''), String(key || ''), '销售员工', String(key || '')];
+  }
   function nodeOptionFromValue(value) { return NODE_OPTIONS.find(function(item){return item[4] === String(value || '');}) || findOption(value); }
-  function fillNodeOptions(selected, selectedLabel) {
+  function fillNodeOptions(selected, selectedLabel, node) {
     var select=el('oeNodeKey'); if (!select) return;
+    var options=visibleNodeOptions();
     var groups={}, order=[];
-    NODE_OPTIONS.forEach(function(item){var group=item[3] || '销售员工';if(!groups[group]){groups[group]=[];order.push(group);}groups[group].push(item);});
+    options.forEach(function(item){var group=item[3] || '销售员工';if(!groups[group]){groups[group]=[];order.push(group);}groups[group].push(item);});
     order=NODE_OPTION_GROUP_ORDER.filter(function(group){return !!groups[group];}).concat(order.filter(function(group){return NODE_OPTION_GROUP_ORDER.indexOf(group) < 0;}));
     select.innerHTML=order.map(function(group){return '<optgroup label="' + esc(group) + '">' + groups[group].map(function(item){return '<option value="' + esc(item[4]) + '">' + esc(item[1]) + '</option>';}).join('') + '</optgroup>';}).join('');
-    var option=findOption(selected,selectedLabel);
-    select.value=option[4] || NODE_OPTIONS[0][4];
+    var option=findOption(selected,selectedLabel,node), visibleOption=options.find(function(item){return item[4] === option[4];}) || options[0];
+    select.value=visibleOption ? visibleOption[4] : '';
   }
   function closeNodeModal() { el('oeNodeModal').hidden=true; state.nodeEditIndex=-1; }
   function fillChildOptions(parent,selected) { var select=el('oeChildType'), options=childOptions(parent,selected); if (!select) return; select.innerHTML=options.map(function(item){return '<option value="' + esc(item[0]) + '">' + esc(item[1]) + '</option>';}).join(''); select.value=options.some(function(item){return item[0] === selected;}) ? selected : (options[0] && options[0][0] || 'publish'); }
@@ -791,7 +908,7 @@
     });
   }
   function runSubmission(kind, task) { if (state.submitting) return Promise.reject(new Error('操作正在处理中，请勿重复提交')); state.submitting=kind; clearError(); render(); return Promise.resolve().then(task).finally(function(){state.submitting='';render();}); }
-  function saveTemplate() { var body=payloadToSave(), id=String(state.editingId || ''); body.installation_id=selectedDeviceId(); return runSubmission('save',function(){return api(id ? '/api/h5-workflows/templates/' + encodeURIComponent(id) : '/api/h5-workflows/templates',{method:id?'PATCH':'POST',json:body}).then(function(data){var saved=data.template || {}; state.editingId=String(saved.id || id); state.salesTemplateMigrationPending=false; state.editingMeta=Object.assign({},saved.meta || body.meta); state.selectedId=String(saved.id || state.selectedId || 'system_sales'); return loadTemplates().then(function(){state.selectedTemplate=normalizeTemplate(state.templates.find(function(item){return String(item.id) === state.editingId;}) || Object.assign({},saved,{source:'own'})); state.nodes=clone(state.selectedTemplate.nodes || body.nodes); if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey; render(); if (typeof loadOnlineH5Employees === 'function') loadOnlineH5Employees(); return saved;});});}); }
+  function saveTemplate() { var body=payloadToSave(), id=String(state.editingId || ''); body.installation_id=selectedDeviceId(); return runSubmission('save',function(){return api(id ? '/api/h5-workflows/templates/' + encodeURIComponent(id) : '/api/h5-workflows/templates',{method:id?'PATCH':'POST',json:body}).then(function(data){var saved=data.template || {}; state.editingId=String(saved.id || id); state.salesTemplateMigrationPending=false; state.editingMeta=Object.assign({},saved.meta || body.meta); state.selectedId=String(saved.id || state.selectedId || 'system_sales'); state.templatesLoadedInstallationId=''; return loadTemplates().then(function(){state.selectedTemplate=normalizeTemplate(state.templates.find(function(item){return String(item.id) === state.editingId;}) || Object.assign({},saved,{source:'own'})); state.nodes=clone(state.selectedTemplate.nodes || body.nodes); if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey; render(); if (typeof loadOnlineH5Employees === 'function') loadOnlineH5Employees(); return saved;});});}); }
   function askPlanDay() { var answer=window.prompt('请输入本次销售工作流从第几天开始执行（1-30）','1'); if (answer === null) return null; var day=Number(answer); if (!Number.isInteger(day) || day < 1 || day > 30) throw new Error('执行天数请输入 1 到 30 的整数'); return day; }
   function activateTemplate() { var iid=selectedDeviceId(), template=state.selectedTemplate; if (!iid) throw new Error('请先选择 Online 设备'); var device=state.devices.find(function(item){return String(item.installation_id) === iid;}); if (!device || !device.online) throw new Error('请选择在线的 Online 设备'); var day=templateNeedsPlanDay(template) ? askPlanDay() : undefined; if (day === null) return Promise.resolve(); if (state.salesTemplateMigrationPending && state.editingId) return saveTemplate().then(activateTemplate); var requestFactory; if (state.selectedId === 'system_sales' && !state.editingId) requestFactory=function(){return api('/api/h5-workflows/activate-inline',{method:'POST',json:{template_key:'system_sales',name:'销售员工',nodes:clone(state.nodes),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),plan_day:day}});}; else { var id=String(state.editingId || template && template.id || ''); if (!id) return saveTemplate().then(activateTemplate); requestFactory=function(){return api('/api/h5-workflows/activate',{method:'POST',json:{template_id:Number(id),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),...(day ? {plan_day:day} : {})}});}; } return runSubmission('activate',requestFactory).then(function(data){state.active=data.activation || null; renderStatus(); if (typeof toast === 'function') toast('员工工作流已启用');}); }
   function stopTemplate() { var active=activeForDevice(); if (!active || !active.id) throw new Error('当前设备没有启用员工'); return runSubmission('stop',function(){return api('/api/h5-workflows/activations/' + encodeURIComponent(active.id) + '/stop',{method:'POST',json:{}}).then(function(){state.active=null;if(typeof toast==='function')toast('员工工作流已停用');});}); }
@@ -806,6 +923,7 @@
       state.editingMeta={};
       state.nodes=[];
       state.selectedId='system_sales';
+      state.templatesLoadedInstallationId='';
       return loadTemplates().then(function(){applyServerTemplate('system_sales'); if (typeof loadOnlineH5Employees === 'function') loadOnlineH5Employees(); if(typeof toast==='function')toast('员工已删除');});
     });});
   }
@@ -866,7 +984,7 @@
     var requested=String(window.__onlineEmployeeSelectedId || '').trim();
     if(requested) {state.selectedId=requested; window.__onlineEmployeeSelectedId='';}
     state.loading=true;
-    Promise.all([loadTemplates(iid),loadDevices()]).then(function(){
+    Promise.all([loadTemplates(iid),loadDevices(),loadNodePermissions()]).then(function(){
       if (generation !== state.contextGeneration || iid !== selectedDeviceId()) return;
       if(!state.selectedId) state.selectedId='system_sales';
       applyServerTemplate(state.selectedId);
@@ -891,7 +1009,7 @@
   window.addEventListener('focus', refreshDevicesOnForeground);
   document.addEventListener('visibilitychange', refreshDevicesOnForeground);
   function syncNodeModalFields() {
-    var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), label=String((el('oeNodeLabel') || {}).value || ''), note=String((el('oeNodeNote') || {}).value || ''), takeover=key === 'native_wechat_poll', douyinPrivate=isDouyinPrivate({ability_key:key,ability_label:label,note:note}), douyinCollection=key === 'douyin_leads' && salesAction(note || label) === 'search_collect', douyinTouch=key === 'douyin_leads' && salesAction(note || label) === 'precise_touch';
+    var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), selectedSalesAction=key === 'douyin_leads' ? salesAction(option[2] || option[1]) : '', takeover=key === 'native_wechat_poll', douyinPrivate=selectedSalesAction === 'stranger_message', douyinCollection=selectedSalesAction === 'search_collect', douyinTouch=selectedSalesAction === 'precise_touch';
     if (el('oeNodeGroupInviteField')) el('oeNodeGroupInviteField').hidden=!takeover;
     if (el('oeNodeWechatPrivateSessionLimitField')) el('oeNodeWechatPrivateSessionLimitField').hidden=!takeover;
     if (el('oeNodeWechatAddFriendField')) el('oeNodeWechatAddFriendField').hidden=!douyinPrivate;
@@ -911,11 +1029,13 @@
   }
   function openNodeModal(index) {
     requireEditableTemplate(); state.nodeEditIndex=typeof index === 'number' ? index : -1;
-    var node=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, params=workflowPayload(node).params || {};
+    var node=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, params=workflowParams(node);
+    if (node && !nodeIsAllowed(node)) throw new Error('当前节点所需权限未开通');
+    if (!node && !visibleNodeOptions().length) throw new Error('当前账号没有可添加的员工节点');
     el('oeNodeModalTitle').textContent=node ? '编辑工作流节点' : '添加工作流节点';
     el('oeNodeTime').value=node && node.time || '09:00'; el('oeNodeEndTime').value=node && node.end_time || '';
-    var option=findOption(node && node.ability_key,node && node.ability_label);
-    fillNodeOptions(node && node.ability_key,node && node.ability_label); el('oeNodeLabel').value=node && node.ability_label || option[1]; el('oeNodeNote').value=node && node.note || option[2] || option[1];
+    var option=findOption(node && node.ability_key,node && node.ability_label,node);
+    fillNodeOptions(node && node.ability_key,node && node.ability_label,node); el('oeNodeLabel').value=node && node.ability_label || option[1]; el('oeNodeNote').value=node && node.note || option[2] || option[1];
     el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; el('oeNodeWechatAddFriendEnabled').checked=boolParam(params.wechat_add_friend_enabled,false);
     if (el('oeNodeDouyinReplyMode')) el('oeNodeDouyinReplyMode').value=String(params.reply_mode || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed';
     if (el('oeNodeDouyinKeyword')) el('oeNodeDouyinKeyword').value=String(params.keyword || params.query || '');
@@ -928,25 +1048,25 @@
     if (el('oeNodeDouyinReplyCommentText')) el('oeNodeDouyinReplyCommentText').value=String(params.reply_comment_text || '');
     if (el('oeNodeDouyinReplyCommentPrompt')) el('oeNodeDouyinReplyCommentPrompt').value=String(params.reply_comment_prompt || '');
     if (el('oeNodeDouyinReplyCommentSeedText')) el('oeNodeDouyinReplyCommentSeedText').value=String(params.reply_comment_seed_text || '');
-    var douyinTouch=String((el('oeNodeKey') || {}).value || option[0] || '') === 'douyin_leads' && salesAction(String((el('oeNodeNote') || {}).value || '') || String((el('oeNodeLabel') || {}).value || '') || option[2] || option[1]) === 'precise_touch';
+    var douyinTouch=String(option[0] || '') === 'douyin_leads' && (node ? douyinNodeAction(node) : salesAction(option[2] || option[1])) === 'precise_touch';
     var followupSource=Object.prototype.hasOwnProperty.call(params,'touch_actions') ? params.touch_actions : params.followup_actions;
     var followups=douyinTouch ? (Object.prototype.hasOwnProperty.call(params,'touch_actions') || Object.prototype.hasOwnProperty.call(params,'followup_actions') ? normalizeDouyinFollowupActions(followupSource) : DOUYIN_FOLLOWUP_ACTIONS.slice()) : [];
     [['oeNodeDouyinFollowupFollowComment','follow_comment'],['oeNodeDouyinFollowupMentionComment','mention_comment'],['oeNodeDouyinFollowupDirectMessage','direct_message']].forEach(function(item){if(el(item[0]))el(item[0]).checked=followups.indexOf(item[1])>=0;});
-    el('oeNodeWechatPrivateSessionLimit').value=Math.max(1,Math.min(100,Number(params.private_sessions_per_round || 10)));
+    el('oeNodeWechatPrivateSessionLimit').value=wechatPrivateSessionLimit(params.private_sessions_per_round);
     el('oeNodeMomentAction').value=String(params.moment_action || 'like_comment'); initMomentPicker('node',Array.isArray(params.contact_wx_nos) ? params.contact_wx_nos : params.targets);
     syncNodeModalFields(); el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60);
   }
   function saveNodeFromModal() {
     requireEditableTemplate(); var option=nodeOptionFromValue(el('oeNodeKey').value), key=String(option[0] || ''), time=el('oeNodeTime').value, end=el('oeNodeEndTime').value, label=el('oeNodeLabel').value.trim() || option[1], note=el('oeNodeNote').value.trim() || option[2] || label;
     if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择开始时间');
-    var existing=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, existingParams=workflowPayload(existing).params || {}, row={time:time,end:end,key:key,label:label,note:note,params:Object.assign({},existingParams,{group_invite_enabled:key === 'native_wechat_poll' && !!el('oeNodeGroupInviteEnabled').checked})};
-    if (key === 'native_wechat_poll') row.params.private_sessions_per_round=Math.max(1,Math.min(100,Number(el('oeNodeWechatPrivateSessionLimit').value || 10)));
+    var existing=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, existingParams=workflowParams(existing), selectedSalesAction=key === 'douyin_leads' ? salesAction(option[2] || option[1]) : '', row={time:time,end:end,key:key,label:label,note:note,sales_action:selectedSalesAction,params:Object.assign({},existingParams,{group_invite_enabled:key === 'native_wechat_poll' && !!el('oeNodeGroupInviteEnabled').checked})};
+    if (key === 'native_wechat_poll') row.params.private_sessions_per_round=Math.max(1,Math.min(100,Number(el('oeNodeWechatPrivateSessionLimit').value || 100)));
     else delete row.params.private_sessions_per_round;
     if (key === 'native_wechat_moments_engage') { row.params.contact_wx_nos=momentSelectionValues('node'); row.params.targets=row.params.contact_wx_nos.slice(); row.params.moment_action=String(el('oeNodeMomentAction').value || 'like_comment'); row.params.max_scrolls=Number(row.params.max_scrolls || 6); if (!row.params.contact_wx_nos.length) throw new Error('请选择至少一个朋友圈联系人'); }
     else { delete row.params.contact_wx_nos; delete row.params.targets; delete row.params.moment_action; }
-    if (isDouyinPrivate({ability_key:key,ability_label:label,note:note})) { row.params.wechat_add_friend_enabled=!!el('oeNodeWechatAddFriendEnabled').checked; row.params.wechat_add_friend_targets_source='douyin_private_message_phone'; row.params.reply_mode=String((el('oeNodeDouyinReplyMode') || {}).value || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed'; }
+    if (selectedSalesAction === 'stranger_message') { row.params.wechat_add_friend_enabled=!!el('oeNodeWechatAddFriendEnabled').checked; row.params.wechat_add_friend_targets_source='douyin_private_message_phone'; row.params.reply_mode=String((el('oeNodeDouyinReplyMode') || {}).value || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed'; }
     else { delete row.params.wechat_add_friend_enabled; delete row.params.wechat_add_friend_targets_source; delete row.params.wechat_add_friend_rules; delete row.params.reply_mode; }
-    if (key === 'douyin_leads' && salesAction(note || label) === 'search_collect') {
+    if (key === 'douyin_leads' && selectedSalesAction === 'search_collect') {
       var keyword=String((el('oeNodeDouyinKeyword') || {}).value || '').trim();
       var regions=String((el('oeNodeDouyinRegions') || {}).value || '全国').split(/[，,\n]+/).map(function(value){return value.trim();}).filter(Boolean);
       if (keyword) row.params.keyword=keyword; else { delete row.params.keyword; delete row.params.keywords; delete row.params.query; delete row.params.search_keyword; }
@@ -962,7 +1082,7 @@
       delete row.params.max_users;
       delete row.params.touch_actions;
       row.params.customer_scope='current_collection_batch';
-    } else if (key === 'douyin_leads' && salesAction(note || label) === 'precise_touch') {
+    } else if (key === 'douyin_leads' && selectedSalesAction === 'precise_touch') {
       delete row.params.keyword; delete row.params.keywords; delete row.params.query; delete row.params.search_keyword; delete row.params.regions; delete row.params.mode; delete row.params.max_results;
       row.params.max_users=Math.max(1,Math.min(200,Number((el('oeNodeDouyinTouchMaxUsers') || {}).value || 20)));
       row.params.touch_actions=normalizeDouyinFollowupActions([

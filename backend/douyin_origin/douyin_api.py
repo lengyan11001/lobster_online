@@ -23,7 +23,12 @@ from ai_client import AIClient
 from console_safe import safe_print
 from douyin_account_nurture import DouyinAccountNurtureScheduler
 from douyin_client import DouyinClient, is_port_open
-from douyin_comment_scraper import DouyinCommentScraper, DouyinMentionCommentStopped, extract_aweme_id
+from douyin_comment_scraper import (
+    DouyinCommentCollectionUnconfirmed,
+    DouyinCommentScraper,
+    DouyinMentionCommentStopped,
+    extract_aweme_id,
+)
 from runtime_paths import resolve_install_dir, resolve_runtime_root
 from state_store import RuntimeStateStore
 
@@ -64,7 +69,34 @@ STATE_DB_FILE = ROOT_DATA_DIR / "app_state.db"
 
 DOUYIN_ACCOUNT_LIMIT = 3
 DOUYIN_ACCOUNT_LOGIN_CHECK_TIMEOUT_SECONDS = 25
+DOUYIN_ACCOUNT_LOGIN_CHECK_ATTEMPTS = 2
+DOUYIN_ACCOUNT_LOGIN_CHECK_RETRY_DELAY_SECONDS = 0.8
 DOUYIN_ACCOUNT_VIEW_NAVIGATION_TIMEOUT_MS = 15000
+
+
+def _protocol_comment_result_confirmed(
+    payload: object,
+    comments: List[Dict],
+    *,
+    expected_total: Optional[int] = None,
+) -> bool:
+    """Distinguish an explicitly empty result from an unreadable response."""
+    if comments:
+        return True
+    if not isinstance(payload, dict):
+        return False
+    try:
+        declared = payload.get("declared_total")
+        if declared is None:
+            declared = payload.get("comment_count")
+        declared_total = int(declared) if declared is not None and str(declared).strip() else None
+    except (TypeError, ValueError):
+        declared_total = None
+    if declared_total is None:
+        return bool(payload.get("empty_confirmed"))
+    return declared_total == 0 and (
+        expected_total is None or int(expected_total or 0) <= 0
+    )
 
 DEFAULT_DOUYIN_ACCOUNTS = [
     {"id": account_id, "status": "offline", "port": 9331 + account_id}
@@ -346,6 +378,8 @@ douyin_schedule_runtime_state: Dict[str, object] = {
     "busy_reason": "",
     "last_error": "",
 }
+douyin_schedule_external_work: Dict[str, Dict[str, str]] = {}
+douyin_schedule_execution_lock = asyncio.Lock()
 douyin_account_nurture_scheduler: Optional[DouyinAccountNurtureScheduler] = None
 douyin_account_nurture_background_task: Optional[asyncio.Task] = None
 DOUYIN_SHARE_URL_PATTERN = re.compile(r"https?://[^\s<>'\"，。；！？、]+", flags=re.I)
@@ -1019,6 +1053,7 @@ def normalize_douyin_self_comment_monitor_state(
     base = {
         "enabled": False,
         "running": False,
+        "stop_requested": False,
         "interval_minutes": 30,
         "account_id": int(account_id or source.get("account_id", 0) or 0) or None,
         "max_videos": 20,
@@ -1032,6 +1067,7 @@ def normalize_douyin_self_comment_monitor_state(
         "last_video_count": 0,
         "last_comment_count": 0,
         "last_new_comment_count": 0,
+        "last_failed_video_count": 0,
         "last_precise_count": 0,
         "auto_reply_enabled": False,
         "reply_mode": "fixed",
@@ -1047,6 +1083,7 @@ def normalize_douyin_self_comment_monitor_state(
         {
             "enabled": bool(source.get("enabled", base["enabled"])),
             "running": bool(source.get("running", base["running"])),
+            "stop_requested": bool(source.get("stop_requested", base["stop_requested"])),
             "interval_minutes": max(1, min(int(source.get("interval_minutes", base["interval_minutes"]) or 30), 1440)),
             "account_id": int(source.get("account_id", base["account_id"]) or base["account_id"] or 0) or None,
             "max_videos": max(1, min(int(source.get("max_videos", base["max_videos"]) or 20), 100)),
@@ -1060,6 +1097,7 @@ def normalize_douyin_self_comment_monitor_state(
             "last_video_count": max(0, int(source.get("last_video_count", base["last_video_count"]) or 0)),
             "last_comment_count": max(0, int(source.get("last_comment_count", base["last_comment_count"]) or 0)),
             "last_new_comment_count": max(0, int(source.get("last_new_comment_count", base["last_new_comment_count"]) or 0)),
+            "last_failed_video_count": max(0, int(source.get("last_failed_video_count", base["last_failed_video_count"]) or 0)),
             "last_precise_count": max(0, int(source.get("last_precise_count", base["last_precise_count"]) or 0)),
             "auto_reply_enabled": bool(source.get("auto_reply_enabled", base["auto_reply_enabled"])),
             "reply_mode": reply_mode,
@@ -1108,7 +1146,8 @@ def normalize_douyin_self_comment_row(row: Dict) -> Dict:
     normalized["video_cover_image"] = str(source.get("video_cover_image", "") or source.get("cover_image", "") or "").strip()
     normalized["comment"] = normalize_douyin_text(source.get("comment", "") or source.get("content", ""))
     normalized["content"] = normalized["comment"]
-    normalized["comment_time"] = normalize_douyin_text(source.get("comment_time", ""))
+    raw_comment_time = normalize_douyin_text(source.get("comment_time", ""))
+    normalized["comment_time"] = normalize_douyin_self_comment_time(raw_comment_time)
     normalized["comment_key"] = normalize_douyin_text(source.get("comment_key", "")) or build_douyin_self_comment_comment_key(normalized)
     normalized["row_key"] = normalize_douyin_text(source.get("row_key", ""))
     if not normalized["row_key"]:
@@ -1130,6 +1169,26 @@ def normalize_douyin_self_comment_row(row: Dict) -> Dict:
     normalized["reply_updated_at"] = normalize_douyin_text(source.get("reply_updated_at", ""))
     normalized["source"] = "douyin_self_comment_monitor"
     return normalized
+
+
+def normalize_douyin_self_comment_time(value: object) -> str:
+    text = normalize_douyin_text(value)
+    if not text:
+        return ""
+    # Old builds stored the whole author/content/action line as the time.
+    # Keep only the recognizable relative/date token when migrating those
+    # rows, so their keys remain stable and readable.
+    match = re.search(
+        r"(?:\u521a\u521a|\d+\s*\u5206\u949f\u524d|\d+\s*\u5c0f\u65f6\u524d|\d+\s*\u5929\u524d|\d+\s*\u5468\u524d|\u6628\u5929\s*\d{0,2}:?\d{0,2}|\d{1,4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?|\d+\s*\u6708\u524d|\d+\s*\u5e74\u524d)",
+        text,
+    )
+    if match:
+        return match.group(0).strip()
+    # Old DOM parsing persisted a complete author/content/action line. It is
+    # not a usable timestamp and must not become part of a dedupe key.
+    if "..." in text or "\u2026" in text or "\u00b7" in text:
+        return ""
+    return text if len(text) <= 30 else ""
 
 
 def build_douyin_self_comment_row_key(row: Dict) -> str:
@@ -1197,6 +1256,21 @@ def merge_douyin_self_comment_monitor_results(account_id: int, rows: List[Dict])
         for row in account_rows
         if build_douyin_self_comment_row_key(row)
     }
+    def legacy_identity(row: Dict) -> str:
+        return "|".join(
+            [
+                normalize_douyin_text(row.get("account_id", "")),
+                normalize_douyin_text(row.get("aweme_id", "")),
+                normalize_douyin_text(row.get("user_id", "")),
+                normalize_douyin_text(row.get("comment", row.get("content", ""))),
+            ]
+        )
+
+    account_legacy_keys = {
+        legacy_identity(row): key
+        for key, row in account_map.items()
+        if legacy_identity(row)
+    }
     incoming_keys: List[str] = []
     changed = 0
     for raw_row in rows or []:
@@ -1207,6 +1281,12 @@ def merge_douyin_self_comment_monitor_results(account_id: int, rows: List[Dict])
         if not key:
             continue
         existing = account_map.get(key)
+        legacy_key = account_legacy_keys.get(legacy_identity(normalized))
+        if existing is None and legacy_key and legacy_key != key:
+            existing = account_map.pop(legacy_key, None)
+            account_legacy_keys.pop(legacy_identity(existing or {}), None)
+            if existing is not None:
+                changed += 1
         if existing:
             for keep_key in (
                 "reply_status",
@@ -1231,6 +1311,7 @@ def merge_douyin_self_comment_monitor_results(account_id: int, rows: List[Dict])
         else:
             changed += 1
         account_map[key] = normalized
+        account_legacy_keys[legacy_identity(normalized)] = key
         if key not in incoming_keys:
             incoming_keys.append(key)
 
@@ -1294,11 +1375,28 @@ def restore_douyin_self_comment_monitor_results():
             default=[],
         )
         if isinstance(loaded, list):
-            douyin_self_comment_monitor_results = [
-                normalize_douyin_self_comment_row(row)
-                for row in loaded
-                if isinstance(row, dict)
-            ]
+            cleaned_rows = []
+            migration_changed = False
+            for row in loaded:
+                if not isinstance(row, dict):
+                    migration_changed = True
+                    continue
+                normalized = normalize_douyin_self_comment_row(row)
+                comment_text = normalize_douyin_text(normalized.get("comment", ""))
+                if not comment_text or re.fullmatch(r"[\d.,]+", comment_text):
+                    migration_changed = True
+                    continue
+                if (
+                    normalized.get("comment") != row.get("comment", row.get("content", ""))
+                    or normalized.get("comment_time") != row.get("comment_time", "")
+                ):
+                    migration_changed = True
+                cleaned_rows.append(normalized)
+            douyin_self_comment_monitor_results = cleaned_rows
+            if migration_changed:
+                # Persist the migration so malformed fields do not return on
+                # every restart or get reprocessed by the next scan.
+                save_douyin_self_comment_monitor_results()
     except Exception:
         douyin_self_comment_monitor_results = []
 
@@ -1577,8 +1675,10 @@ def normalize_douyin_schedule_plan(raw_plan: Optional[Dict[str, object]] = None)
     )
     comment_scroll_rounds = max(20, min(int(plan.get("comment_scroll_rounds", 300) or 300), 300))
     comment_max_comments = max(20, min(int(plan.get("comment_max_comments", 500) or 500), 500))
-    touch_actions = normalize_douyin_precise_touch_actions(plan.get("touch_actions"))
-    if schedule_type == "precise_touch" and not touch_actions:
+    has_explicit_touch_actions = "touch_actions" in plan or "followup_actions" in plan
+    raw_touch_actions = plan.get("touch_actions") if "touch_actions" in plan else plan.get("followup_actions")
+    touch_actions = normalize_douyin_precise_touch_actions(raw_touch_actions)
+    if schedule_type == "precise_touch" and not has_explicit_touch_actions:
         touch_actions = list(DOUYIN_PRECISE_TOUCH_ACTIONS)
     legacy_reply_actions = plan.get("followup_actions") if isinstance(plan.get("followup_actions"), list) else []
     # Older collection plans stored the immediate-reply toggle in touch_actions.
@@ -2044,6 +2144,19 @@ def parse_douyin_nurture_account_ids(request: Optional[Dict]) -> List[int]:
 def build_douyin_nurture_conflict(action_label: str) -> Optional[Dict]:
     running = reconcile_douyin_account_nurture_runtime_state()
     if running and douyin_account_nurture_scheduler and douyin_account_nurture_scheduler.is_actively_blocking_other_tasks():
+        scheduler_snapshot = douyin_account_nurture_scheduler.snapshot()
+        douyin_log(
+            "[抖音任务互斥] trigger=%s holder=account_nurture account_ids=%s started_at=%s "
+            "active_window=%s current_account=%s"
+            % (
+                action_label,
+                scheduler_snapshot.get("enabled_account_ids") or scheduler_snapshot.get("account_ids") or [],
+                scheduler_snapshot.get("started_at") or "",
+                scheduler_snapshot.get("active_window") or scheduler_snapshot.get("is_active_window") or "",
+                scheduler_snapshot.get("current_account_id") or scheduler_snapshot.get("account_id") or "",
+            ),
+            "warning",
+        )
         return {
             "code": 409,
             "type": "account_nurture_running",
@@ -2053,6 +2166,15 @@ def build_douyin_nurture_conflict(action_label: str) -> Optional[Dict]:
 
 
 def has_running_douyin_task_for_account_nurture() -> bool:
+    return bool(get_running_douyin_task_conflict_snapshot())
+
+
+def get_running_douyin_task_conflict_snapshot() -> List[Dict[str, object]]:
+    """Return the active local Douyin workers that block an account-nurture run.
+
+    The snapshot is intentionally limited to scheduler-safe operational fields so
+    a rejection log identifies the holder without recording customer content.
+    """
     reconcile_douyin_runtime_state()
     reconcile_douyin_video_comment_runtime_state()
     reconcile_douyin_mention_comment_runtime_state()
@@ -2060,17 +2182,44 @@ def has_running_douyin_task_for_account_nurture() -> bool:
     reconcile_douyin_interaction_runtime_state()
     reconcile_douyin_group_member_runtime_state()
     reconcile_douyin_stranger_message_runtime_state()
-    monitor_running = bool(douyin_monitor_runtime_state.get("running"))
-    return bool(
-        douyin_running
-        or douyin_video_comment_running
-        or douyin_mention_comment_running
-        or douyin_follow_comment_running
-        or douyin_interaction_running
-        or douyin_group_member_running
-        or douyin_stranger_message_running
-        or monitor_running
+    workers = [
+        ("comment_collect", douyin_running, {}, douyin_background_task),
+        ("video_comment", douyin_video_comment_running, douyin_video_comment_state, douyin_video_comment_background_task),
+        ("mention_comment", douyin_mention_comment_running, douyin_mention_comment_state, douyin_mention_comment_background_task),
+        ("follow_comment", douyin_follow_comment_running, douyin_follow_comment_state, douyin_follow_comment_background_task),
+        ("direct_message", douyin_interaction_running, douyin_interaction_state, douyin_interaction_background_task),
+        ("group_member_extract", douyin_group_member_running, douyin_group_member_state, douyin_group_member_background_task),
+        ("stranger_message", douyin_stranger_message_running, douyin_stranger_message_state, douyin_stranger_message_background_task),
+        ("peer_monitor", bool(douyin_monitor_runtime_state.get("running")), douyin_monitor_runtime_state, douyin_monitor_scheduler_task),
+    ]
+    snapshot: List[Dict[str, object]] = []
+    for action, running, state, task in workers:
+        if not running:
+            continue
+        state_data = state if isinstance(state, dict) else {}
+        account_ids = state_data.get("account_ids") or []
+        account_id = state_data.get("account_id")
+        snapshot.append(
+            {
+                "action": action,
+                "account_id": account_id,
+                "account_ids": account_ids,
+                "started_at": state_data.get("started_at") or "",
+                "processed": state_data.get("processed") or 0,
+                "total": state_data.get("total") or 0,
+                "task_alive": bool(task and not task.done()),
+            }
+        )
+    return snapshot
+
+
+def log_douyin_task_conflict(trigger: str, snapshot: Optional[List[Dict[str, object]]] = None) -> List[Dict[str, object]]:
+    holders = snapshot if snapshot is not None else get_running_douyin_task_conflict_snapshot()
+    douyin_log(
+        f"[抖音任务互斥] trigger={trigger} holders={json.dumps(holders, ensure_ascii=False, separators=(',', ':'))}",
+        "warning",
     )
+    return holders
 
 
 def safe_int(value, default: int) -> int:
@@ -2633,6 +2782,33 @@ def normalize_douyin_search_session_result(
     return normalized
 
 
+def select_douyin_search_result_keys(results: object, max_videos: object = 50) -> List[str]:
+    """Select a complete, de-duplicated video batch for precise collection."""
+    rows = results if isinstance(results, list) else []
+    try:
+        limit = max(1, min(int(max_videos or 50), 50))
+    except (TypeError, ValueError):
+        limit = 50
+
+    def collect(predicate) -> List[str]:
+        selected: List[str] = []
+        seen: Set[str] = set()
+        for item in rows:
+            if not isinstance(item, dict) or not predicate(item):
+                continue
+            key = str(item.get("source_item_key", "") or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            selected.append(key)
+            if len(selected) >= limit:
+                break
+        return selected
+
+    selected = collect(lambda item: bool(item.get("export_selected", True)))
+    return selected or collect(lambda item: True)
+
+
 def load_douyin_search_sessions_state() -> List[Dict]:
     payload = douyin_state_store.load_blob_json(DOUYIN_SEARCH_SESSIONS_BLOB_KEY, default=[])
     sessions = payload.get("sessions", []) if isinstance(payload, dict) else payload
@@ -2839,9 +3015,10 @@ async def run_douyin_keyword_search(
     finally:
         await scraper.close()
 
-    results = annotate_search_duplicates(results, keyword_text)
-    results = mark_search_results_for_export(results)
-    session = upsert_douyin_search_session_state(
+    results = await asyncio.to_thread(annotate_search_duplicates, results, keyword_text)
+    results = await asyncio.to_thread(mark_search_results_for_export, results)
+    session = await asyncio.to_thread(
+        upsert_douyin_search_session_state,
         keyword=keyword_text,
         account_id=account.get("id", ""),
         results=results,
@@ -2885,7 +3062,8 @@ async def run_douyin_keyword_search_via_api(
         "publish_time": "0",
         "filter_duration": "0",
     }
-    response = requests.post(
+    response = await asyncio.to_thread(
+        requests.post,
         f"{api_base}/api/v1/douyin/search/fetch_general_search_v1",
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -2900,9 +3078,10 @@ async def run_douyin_keyword_search_via_api(
     if int(data.get("code") or 0) != 200:
         raise RuntimeError(str(data.get("message_zh") or data.get("message") or "接口搜索失败"))
     results = normalize_tikhub_douyin_search_results(data, keyword_text, result_limit)
-    results = annotate_search_duplicates(results, keyword_text)
-    results = mark_search_results_for_export(results)
-    session = upsert_douyin_search_session_state(
+    results = await asyncio.to_thread(annotate_search_duplicates, results, keyword_text)
+    results = await asyncio.to_thread(mark_search_results_for_export, results)
+    session = await asyncio.to_thread(
+        upsert_douyin_search_session_state,
         keyword=keyword_text,
         account_id=account_id,
         results=results,
@@ -6742,6 +6921,14 @@ def merge_monitor_videos(
         seen.add(aweme_id)
         existing = existing_by_aweme.get(aweme_id, {})
         is_existing = bool(existing)
+        existing_collection_status = str(existing.get("collection_status", "") or "").strip().lower()
+        if not existing_collection_status:
+            if str(existing.get("last_collect_error", "") or "").strip():
+                existing_collection_status = "failed"
+            elif str(existing.get("last_collected_at", "") or "").strip():
+                existing_collection_status = "completed"
+            elif not is_existing and not initial_sync and auto_collect_new:
+                existing_collection_status = "pending"
         merged.append(
             {
                 **existing,
@@ -6751,6 +6938,8 @@ def merge_monitor_videos(
                 "first_seen_at": str(existing.get("first_seen_at", "") or now_text),
                 "last_seen_at": now_text,
                 "last_collected_at": str(existing.get("last_collected_at", "") or ""),
+                "collection_status": existing_collection_status,
+                "last_collect_error": str(existing.get("last_collect_error", "") or "").strip(),
                 "is_selected": bool(
                     existing.get("is_selected", False)
                     if is_existing
@@ -6786,16 +6975,56 @@ def select_monitor_videos_for_collection(
         aweme_id = str(video.get("aweme_id", "") or "").strip()
         if not aweme_id or aweme_id in seen_aweme_ids:
             continue
+        collection_status = str(video.get("collection_status", "") or "").strip().lower()
         should_collect = bool(video.get("is_selected")) or (
             bool(auto_collect_new)
-            and bool(video.get("is_new"))
             and not str(video.get("last_collected_at", "") or "").strip()
+            and (
+                bool(video.get("is_new"))
+                or collection_status in {"pending", "failed", "unconfirmed", "processing"}
+            )
         )
         if not should_collect:
             continue
         selected.append(video)
         seen_aweme_ids.add(aweme_id)
     return selected
+
+
+def update_monitor_video_collection_state(
+    target_id: int,
+    aweme_id: str,
+    status: str,
+    *,
+    error: str = "",
+) -> None:
+    """Persist collection outcome without making an unreadable result look empty."""
+    target_id = int(target_id or 0)
+    aweme_id = str(aweme_id or "").strip()
+    if target_id <= 0 or not aweme_id:
+        return
+    normalized_status = str(status or "pending").strip().lower() or "pending"
+    videos = douyin_state_store.load_douyin_monitor_videos(target_id)
+    changed = False
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for item in videos:
+        if str(item.get("aweme_id", "") or "").strip() != aweme_id:
+            continue
+        item["collection_status"] = normalized_status
+        item["last_collect_error"] = str(error or "").strip()
+        item["last_collect_attempt_at"] = now_text
+        if normalized_status == "completed":
+            item["last_collected_at"] = now_text
+            item["is_new"] = False
+        else:
+            # Keep automatic new-video selection eligible for the next cycle.
+            item["last_collected_at"] = ""
+            if normalized_status in {"failed", "unconfirmed"}:
+                item["is_new"] = True
+        changed = True
+        break
+    if changed:
+        douyin_state_store.save_douyin_monitor_videos(target_id, videos)
 
 
 def resolve_monitor_target_profile_identity(target: Dict) -> str:
@@ -7160,11 +7389,20 @@ async def run_douyin_monitor_comment_worker(
                 f"[抖音同行监控] 账号 {account['id']} 开始采集视频：{video.get('title') or video.get('url')}",
                 "info",
             )
+            update_monitor_video_collection_state(target_id, aweme_id, "processing")
             max_comments = max(20, min(int(config.get("comment_max_comments", 200) or 200), 500))
             comments = []
             collection_method = "script"
             if protocol_client is not None and protocol_auth is not None:
                 try:
+                    expected_value = None
+                    for expected_key in ("comments", "comment_count", "source_comment_count"):
+                        if expected_key in video and video.get(expected_key) is not None:
+                            try:
+                                expected_value = max(0, int(video.get(expected_key) or 0))
+                            except (TypeError, ValueError):
+                                expected_value = None
+                            break
                     comments_payload = await asyncio.to_thread(
                         lambda: protocol_client.get_all_comments(
                             protocol_auth,
@@ -7178,6 +7416,19 @@ async def run_douyin_monitor_comment_worker(
                         for index, row in enumerate(raw_comments)
                         if isinstance(row, dict)
                     ]
+                    if not _protocol_comment_result_confirmed(
+                        comments_payload,
+                        comments,
+                        expected_total=expected_value,
+                    ):
+                        payload_keys = sorted(str(key) for key in comments_payload.keys()) if isinstance(comments_payload, dict) else []
+                        douyin_log(
+                            f"[抖音同行监控] 协议评论结果未确认 aweme_id={aweme_id} raw_count={len(raw_comments)} expected_total={expected_value} payload_keys={payload_keys}",
+                            "warning",
+                        )
+                        raise DouyinCommentCollectionUnconfirmed(
+                            "协议接口返回空评论但未明确确认作品无评论"
+                        )
                     collection_method = "protocol"
                     douyin_log(
                         f"[抖音同行监控] 账号 {account['id']} 已通过协议采集视频评论 {len(comments)} 条：{video.get('title') or video.get('url')}",
@@ -7189,13 +7440,36 @@ async def run_douyin_monitor_comment_worker(
                         "warning",
                     )
                     comments = []
+                    collection_method = "script"
             if collection_method != "protocol":
-                comments = await scraper.scrape_video_comments(
-                    str(video.get("url", "") or ""),
-                    max_comments=max_comments,
-                    max_scroll_rounds=max(20, min(int(config.get("comment_scroll_rounds", 120) or 120), 300)),
-                    logger=douyin_log,
-                )
+                try:
+                    comments = await scraper.scrape_video_comments(
+                        str(video.get("url", "") or ""),
+                        max_comments=max_comments,
+                        max_scroll_rounds=max(20, min(int(config.get("comment_scroll_rounds", 120) or 120), 300)),
+                        logger=douyin_log,
+                    )
+                except Exception as exc:
+                    failure = {
+                        "target_id": int(target_id or 0),
+                        "aweme_id": aweme_id,
+                        "video_url": str(video.get("url", "") or ""),
+                        "error": str(exc),
+                    }
+                    async with state_lock:
+                        run_payload["failed_videos"] = int(run_payload.get("failed_videos", 0) or 0) + 1
+                        run_payload.setdefault("failure_details", []).append(failure)
+                    douyin_log(
+                        f"[抖音同行监控] 评论采集未确认，保留视频待下轮重试：{video.get('title') or video.get('url')}，原因：{exc}",
+                        "error",
+                    )
+                    update_monitor_video_collection_state(
+                        target_id,
+                        aweme_id,
+                        "unconfirmed",
+                        error=str(exc),
+                    )
+                    continue
             existing_comment_keys = {
                 str(item.get("comment_key", "") or "")
                 for item in douyin_state_store.load_douyin_monitor_comments(target_id)
@@ -7268,18 +7542,7 @@ async def run_douyin_monitor_comment_worker(
                     run_payload["new_precise"] = int(run_payload.get("new_precise", 0) or 0) + len(precise_users)
 
             async with state_lock:
-                videos = douyin_state_store.load_douyin_monitor_videos(target_id)
-                now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                updated = False
-                for item in videos:
-                    if str(item.get("aweme_id", "") or "").strip() != aweme_id:
-                        continue
-                    item["last_collected_at"] = now_text
-                    item["is_new"] = False
-                    updated = True
-                    break
-                if updated:
-                    douyin_state_store.save_douyin_monitor_videos(target_id, videos)
+                update_monitor_video_collection_state(target_id, aweme_id, "completed")
     finally:
         await scraper.close()
 
@@ -7313,6 +7576,8 @@ async def run_douyin_monitor_cycle(
         "videos_total": 0,
         "new_comments": 0,
         "new_precise": 0,
+        "failed_videos": 0,
+        "failure_details": [],
         "skipped_targets_no_selection": 0,
         "error": "",
         "message": "",
@@ -7468,20 +7733,29 @@ async def run_douyin_monitor_cycle(
             message = (
                 f"同行监控已完成，使用 {used_account_count} 个账号并发，本轮新增评论 {run_payload['new_comments']} 条，新增精准客户 {run_payload['new_precise']} 人。"
             )
+            failed_videos = int(run_payload.get("failed_videos", 0) or 0)
+            if failed_videos:
+                message += f" 另有 {failed_videos} 个视频评论未确认，未标记为已采集，将在下轮重试。"
             skipped = int(run_payload.get("skipped_targets_no_selection", 0) or 0)
             if skipped > 0:
                 message += f" 另有 {skipped} 个同行因未勾选视频而只做了视频同步。"
         run_payload["message"] = message
+        if int(run_payload.get("failed_videos", 0) or 0) > 0:
+            run_payload["status"] = "partial"
         douyin_monitor_runtime_state.update(
             {
                 "running": False,
                 "message": message,
+                "last_error": message if int(run_payload.get("failed_videos", 0) or 0) > 0 else "",
                 "last_run_at": finished_at,
                 "next_run_at": next_run_at,
                 "last_slot_key": slot_key,
             }
         )
-        douyin_log(douyin_monitor_runtime_state["message"], "success")
+        douyin_log(
+            douyin_monitor_runtime_state["message"],
+            "warning" if int(run_payload.get("failed_videos", 0) or 0) > 0 else "success",
+        )
         douyin_state_store.save_douyin_monitor_run(run_payload)
         return run_payload
     except Exception as exc:
@@ -7512,7 +7786,12 @@ async def douyin_monitor_scheduler_loop():
             latest_run = douyin_state_store.load_latest_douyin_monitor_run()
             slot_key, slot_time = get_latest_due_monitor_slot(now)
             douyin_monitor_runtime_state["next_run_at"] = next_run.strftime("%Y-%m-%d %H:%M:%S")
-            if slot_key and slot_time and not douyin_monitor_runtime_state.get("running"):
+            if (
+                slot_key
+                and slot_time
+                and not douyin_monitor_runtime_state.get("running")
+                and not douyin_schedule_external_work
+            ):
                 if (
                     reconcile_douyin_account_nurture_runtime_state()
                     and douyin_account_nurture_scheduler
@@ -7547,7 +7826,37 @@ async def ensure_douyin_monitor_scheduler():
     douyin_monitor_scheduler_task = asyncio.create_task(douyin_monitor_scheduler_loop())
 
 
-def get_douyin_schedule_busy_reason() -> str:
+def set_douyin_schedule_external_work(
+    holder_id: str,
+    *,
+    active: bool,
+    label: str = "",
+) -> None:
+    """Prevent the autonomous scheduler from racing a claimed server task."""
+    normalized_id = str(holder_id or "").strip()
+    if not normalized_id:
+        return
+    if active:
+        douyin_schedule_external_work[normalized_id] = {
+            "label": str(label or "server scheduled task").strip(),
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    else:
+        douyin_schedule_external_work.pop(normalized_id, None)
+
+
+def get_douyin_schedule_external_work() -> List[Dict[str, str]]:
+    return [
+        {"holder_id": holder_id, **dict(item)}
+        for holder_id, item in douyin_schedule_external_work.items()
+    ]
+
+
+def get_douyin_schedule_busy_reason(*, include_external: bool = True) -> str:
+    if include_external and douyin_schedule_external_work:
+        holder_id, holder = next(iter(douyin_schedule_external_work.items()))
+        label = str(holder.get("label") or holder_id).strip()
+        return f"服务器任务正在执行：{label}"
     reconcile_douyin_runtime_state()
     reconcile_douyin_video_comment_runtime_state()
     reconcile_douyin_mention_comment_runtime_state()
@@ -7555,6 +7864,7 @@ def get_douyin_schedule_busy_reason() -> str:
     reconcile_douyin_interaction_runtime_state()
     reconcile_douyin_group_member_runtime_state()
     reconcile_douyin_stranger_message_runtime_state()
+    reconcile_douyin_inbox_runtime_state()
     reconcile_douyin_account_nurture_runtime_state()
     nurture_conflict = build_douyin_nurture_conflict("执行排期中心")
     if nurture_conflict:
@@ -7573,6 +7883,12 @@ def get_douyin_schedule_busy_reason() -> str:
         return "群成员提取任务正在执行"
     if douyin_stranger_message_running:
         return "私信引流任务正在执行"
+    if douyin_inbox_running:
+        return "Douyin inbox task is running"
+    if any(task and not task.done() for task in douyin_inbox_monitor_tasks_by_account.values()):
+        return "Douyin inbox monitor is running"
+    if any(task and not task.done() for task in douyin_stranger_message_monitor_tasks_by_account.values()):
+        return "Douyin private-message monitor is running"
     if any(bool(state.get("running")) for state in list_douyin_self_comment_monitor_states()):
         return "我的评论区任务正在执行"
     return ""
@@ -7644,6 +7960,67 @@ def collect_plan_interaction_users(plan: Dict[str, object]) -> List[Dict]:
     return candidates[:max_users]
 
 
+async def _await_douyin_schedule_worker(
+    background_task: Optional[asyncio.Task],
+    *,
+    plan: Dict[str, object],
+    action: str,
+) -> Dict[str, object]:
+    """Keep a local schedule occupied until its background worker finishes.
+
+    Start endpoints intentionally return as soon as a worker is queued for
+    interactive callers.  A scheduled plan, however, owns the shared Douyin
+    browser for the whole worker lifetime; releasing the schedule lock at
+    launch time lets another plan or a cloud workflow race that worker.
+    """
+    plan_id = str(plan.get("id", "") or "").strip()
+    plan_name = str(plan.get("name", "") or "未命名计划").strip()
+    if not background_task:
+        douyin_log(
+            f"[抖音排期中心] worker 缺失，计划={plan_name}({plan_id}) action={action}，视为已结束",
+            "warning",
+        )
+        return {"waited": False, "elapsed_seconds": 0.0}
+
+    started = asyncio.get_running_loop().time()
+    douyin_log(
+        f"[抖音排期中心] 等待 worker 完成，计划={plan_name}({plan_id}) action={action}",
+        "info",
+    )
+    try:
+        # Shield the worker from scheduler shutdown cancellation.  A user
+        # stop still cancels the worker itself and is reported below.
+        await asyncio.shield(background_task)
+    except asyncio.CancelledError:
+        if background_task.cancelled():
+            douyin_log(
+                f"[抖音排期中心] worker 被取消，计划={plan_name}({plan_id}) action={action}",
+                "warning",
+            )
+            return {
+                "waited": True,
+                "cancelled": True,
+                "elapsed_seconds": asyncio.get_running_loop().time() - started,
+            }
+        raise
+    except Exception as exc:
+        elapsed = asyncio.get_running_loop().time() - started
+        douyin_log(
+            f"[抖音排期中心] worker 异常结束，计划={plan_name}({plan_id}) action={action} "
+            f"elapsed={elapsed:.1f}s error={type(exc).__name__}: {exc}",
+            "error",
+        )
+        return {"waited": True, "elapsed_seconds": elapsed, "error": str(exc)}
+
+    elapsed = asyncio.get_running_loop().time() - started
+    douyin_log(
+        f"[抖音排期中心] worker 已完成，计划={plan_name}({plan_id}) action={action} "
+        f"elapsed={elapsed:.1f}s",
+        "info",
+    )
+    return {"waited": True, "elapsed_seconds": elapsed}
+
+
 async def execute_douyin_schedule_plan(plan: Dict[str, object]) -> Dict[str, object]:
     normalized = normalize_douyin_schedule_plan(plan)
     plan_type = str(normalized.get("type", "") or "")
@@ -7666,11 +8043,7 @@ async def execute_douyin_schedule_plan(plan: Dict[str, object]) -> Dict[str, obj
             if isinstance(item, dict)
         ]
         max_videos = max(1, int(normalized.get("max_videos_per_run", 50) or 50))
-        selected_item_keys: List[str] = [
-            str(item.get("source_item_key", "") or "").strip()
-            for item in normalized_results
-            if bool(item.get("export_selected", True))
-        ][:max_videos]
+        selected_item_keys = select_douyin_search_result_keys(normalized_results, max_videos)
         if not selected_item_keys:
             return {"code": 400, "msg": f"关键词“{keyword}”本次没有可用视频。"}
         session = upsert_douyin_search_session_state(
@@ -7741,6 +8114,12 @@ async def execute_douyin_schedule_plan(plan: Dict[str, object]) -> Dict[str, obj
                 + (f"，跳过 {skipped_existing} 条已有客户数据的历史完成任务" if skipped_existing else "")
                 + "。"
             )
+        if int(start_result.get("code", 0) or 0) == 200:
+            await _await_douyin_schedule_worker(
+                douyin_background_task,
+                plan=normalized,
+                action="collect_precise",
+            )
         return start_result
     if plan_type == "precise_touch":
         try:
@@ -7784,7 +8163,7 @@ async def execute_douyin_schedule_plan(plan: Dict[str, object]) -> Dict[str, obj
             douyin_log(f"[抖音我的评论区] 排期执行失败：{exc}", "error")
             return {"code": 500, "msg": str(exc).strip() or exc.__class__.__name__}
     if plan_type == "follow_comment":
-        users = collect_plan_follow_comment_users(normalized)
+        users = await asyncio.to_thread(collect_plan_follow_comment_users, normalized)
         if not users:
             return {"code": 400, "msg": "当前没有可执行的精准互动客户。"}
         payload = {
@@ -7796,9 +8175,18 @@ async def execute_douyin_schedule_plan(plan: Dict[str, object]) -> Dict[str, obj
             "interval_minutes_min": normalized.get("follow_interval_minutes_min", 3),
             "interval_minutes_max": normalized.get("follow_interval_minutes_max", 5),
         }
-        return await douyin_start_follow_comment(request=payload)
+        result = await douyin_start_follow_comment(request=payload)
+        if not isinstance(result, dict):
+            return {"code": 500, "msg": "关注评论排期启动没有返回结果"}
+        if int(result.get("code", 0) or 0) == 200:
+            await _await_douyin_schedule_worker(
+                douyin_follow_comment_background_task,
+                plan=normalized,
+                action="follow_comment",
+            )
+        return result
     if plan_type == "interaction":
-        users = collect_plan_interaction_users(normalized)
+        users = await asyncio.to_thread(collect_plan_interaction_users, normalized)
         if not users:
             return {"code": 400, "msg": "当前没有可执行的精准私信客户。"}
         payload = {
@@ -7810,7 +8198,16 @@ async def execute_douyin_schedule_plan(plan: Dict[str, object]) -> Dict[str, obj
             "interval_minutes_min": normalized.get("interaction_interval_minutes_min", 3),
             "interval_minutes_max": normalized.get("interaction_interval_minutes_max", 5),
         }
-        return await douyin_start_interaction(request=payload)
+        result = await douyin_start_interaction(request=payload)
+        if not isinstance(result, dict):
+            return {"code": 500, "msg": "私信排期启动没有返回结果"}
+        if int(result.get("code", 0) or 0) == 200:
+            await _await_douyin_schedule_worker(
+                douyin_interaction_background_task,
+                plan=normalized,
+                action="interaction",
+            )
+        return result
     return {"code": 400, "msg": "未知的排期计划类型。"}
 
 
@@ -7868,7 +8265,11 @@ async def douyin_schedule_scheduler_loop():
                     douyin_schedule_runtime_state["active_plan_id"] = plan_id
                     douyin_schedule_runtime_state["active_plan_name"] = str(plan.get("name", "") or "")
                     douyin_schedule_runtime_state["active_phase"] = "launching"
-                    result = await execute_douyin_schedule_plan(plan)
+                    # All local scheduled plans share the same browser and
+                    # account state. Hold one execution lock so a manually
+                    # claimed server task cannot race this plan.
+                    async with douyin_schedule_execution_lock:
+                        result = await execute_douyin_schedule_plan(plan)
                     success = int(result.get("code", 0) or 0) == 200
                     next_run = get_next_douyin_schedule_run(
                         now,
@@ -7959,23 +8360,11 @@ def get_online_douyin_accounts(config: Optional[Dict] = None) -> List[Dict]:
     return online_accounts
 
 
-async def detect_douyin_account_login_state(account: Dict) -> bool:
-    scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
-    try:
-        return bool(
-            await asyncio.wait_for(
-                scraper.check_login_state(logger=douyin_log),
-                timeout=DOUYIN_ACCOUNT_LOGIN_CHECK_TIMEOUT_SECONDS,
-            )
-        )
-    except asyncio.TimeoutError:
-        douyin_log(
-            f"[抖音账号] 账号 {account.get('id', '-')} 登录态检测超过 {DOUYIN_ACCOUNT_LOGIN_CHECK_TIMEOUT_SECONDS} 秒，先标记为待登录，避免阻塞配置页。",
-            "warning",
-        )
-        return False
-    finally:
-        await scraper.close()
+async def _legacy_detect_douyin_account_login_state(account: Dict) -> bool:
+    # Compatibility wrapper: transient probe failures must not be converted
+    # into a persisted logout state by callers that still use this bool API.
+    result = await probe_douyin_account_login_state(account)
+    return str(result.get("state") or "unknown") == "online"
 
 
 def ensure_douyin_account_browser_ready(
@@ -8089,6 +8478,20 @@ def distribute_douyin_tasks(tasks: List[Dict], accounts: List[Dict]) -> List[Dic
     for index, task in enumerate(tasks):
         buckets[index % len(buckets)]["tasks"].append(task)
     return [bucket for bucket in buckets if bucket["tasks"]]
+
+
+def douyin_collection_requires_serial_reply(tasks: List[Dict]) -> bool:
+    """Whether a collection batch must finish each video's reply before the next.
+
+    Precise-comment replies are tied to the comments just filtered on the
+    current video. Running separate account buckets concurrently can therefore
+    start a later video before the previous video's reply phase has completed.
+    """
+    return any(
+        coerce_bool(task.get("precise_reply_enabled"), False)
+        for task in (tasks or [])
+        if isinstance(task, dict)
+    )
 
 
 async def run_douyin_task_worker(
@@ -8530,19 +8933,43 @@ async def run_douyin_task_worker_protocol(
                 f"[抖音评论采集] 账号 {account['id']} 开始处理：{task.get('title') or task.get('url')}",
                 "info",
             )
-            comments_payload = await asyncio.to_thread(
-                lambda: client.get_all_comments(
-                    auth,
-                    str(task.get("url", "") or "").strip(),
-                    max_comments=max_comments,
+            comments_payload: object = None
+            comments: List[Dict] = []
+            for comment_attempt in range(1, 3):
+                comments_payload = await asyncio.to_thread(
+                    lambda: client.get_all_comments(
+                        auth,
+                        str(task.get("url", "") or "").strip(),
+                        max_comments=max_comments,
+                    )
                 )
-            )
-            raw_comments = comments_payload.get("comments", []) if isinstance(comments_payload, dict) else []
-            comments = [
-                normalize_douyin_protocol_comment_row(row, task=task, index=index)
-                for index, row in enumerate(raw_comments)
-                if isinstance(row, dict)
-            ]
+                raw_comments = comments_payload.get("comments", []) if isinstance(comments_payload, dict) else []
+                comments = [
+                    normalize_douyin_protocol_comment_row(row, task=task, index=index)
+                    for index, row in enumerate(raw_comments)
+                    if isinstance(row, dict)
+                ]
+                if _protocol_comment_result_confirmed(
+                    comments_payload,
+                    comments,
+                    expected_total=source_comment_total,
+                ):
+                    break
+                payload_keys = sorted(str(key) for key in comments_payload.keys()) if isinstance(comments_payload, dict) else []
+                douyin_log(
+                    f"[抖音评论采集] 协议评论结果未确认 task_id={task.get('id')} raw_count={len(raw_comments)} expected_total={source_comment_total} payload_keys={payload_keys}",
+                    "warning",
+                )
+                if comment_attempt < 2:
+                    douyin_log(
+                        f"[抖音评论采集] 协议评论返回空且未确认，任务 {task.get('id')} 准备第 2 次重试。",
+                        "warning",
+                    )
+                    await asyncio.sleep(1.0)
+                else:
+                    raise DouyinCommentCollectionUnconfirmed(
+                        "协议接口连续 2 次返回空评论但未明确确认作品无评论"
+                    )
             _filter_prompt = get_douyin_comment_direction(load_global_config())
             _filter_strategy = get_douyin_comment_filter_strategy(load_global_config())
             _filter_started_at = time.time()
@@ -8722,10 +9149,16 @@ async def run_douyin_tasks(
     )
     resolved_collection_mode = normalize_douyin_collection_mode(collection_mode)
     max_comments = comment_limit
-    batches = distribute_douyin_tasks(runnable_tasks, accounts)
+    serial_reply = douyin_collection_requires_serial_reply(runnable_tasks)
+    if serial_reply:
+        # A reply-enabled precise-acquisition run is intentionally single
+        # flight: collect -> AI filter -> reply for video N, then video N+1.
+        batches = [{"account": accounts[0], "tasks": list(runnable_tasks)}]
+    else:
+        batches = distribute_douyin_tasks(runnable_tasks, accounts)
     state_lock = asyncio.Lock()
     douyin_log(
-        f"[抖音评论采集] 已启动 {len(batches)} 个账号并发，共 {len(runnable_tasks)} 条任务，模式 {douyin_collection_mode_label(resolved_collection_mode)}，滚动 {scroll_rounds} 轮，最多采集 {max_comments} 条评论",
+        f"[抖音评论采集] 已启动 {len(batches)} 个账号{('串行' if serial_reply else '并发')}，共 {len(runnable_tasks)} 条任务，模式 {douyin_collection_mode_label(resolved_collection_mode)}，滚动 {scroll_rounds} 轮，最多采集 {max_comments} 条评论",
         "info",
     )
 
@@ -8874,7 +9307,8 @@ async def run_douyin_video_comments(
             douyin_log(f"[抖音视频评论] 开始发送：{task.get('title') or task.get('url')}")
 
             try:
-                final_comment_text = generate_douyin_video_comment_text(
+                final_comment_text = await asyncio.to_thread(
+                    generate_douyin_video_comment_text,
                     task,
                     mode=mode,
                     fixed_text=comment_text,
@@ -8975,6 +9409,64 @@ async def run_douyin_video_comments(
         )
 
 
+def _sort_douyin_comment_users(users: List[Dict]) -> List[Dict]:
+    """Keep captured comment order without using the mutable index as identity."""
+    indexed_users = list(enumerate(users or []))
+
+    def sort_key(entry: tuple[int, Dict]) -> tuple[int, int, int]:
+        original_index, user = entry
+        try:
+            comment_index = int(str(user.get("comment_index", "") or "").strip())
+        except (TypeError, ValueError):
+            return (1, original_index, original_index)
+        return (0, comment_index, original_index)
+
+    return [user for _, user in sorted(indexed_users, key=sort_key)]
+
+
+def _restore_douyin_comment_order(users: List[Dict], source_comments: List[Dict]) -> List[Dict]:
+    """Restore the source-list index after AI filtering splits comments into batches."""
+    strict_lookup: Dict[str, Dict] = {}
+    loose_lookup: Dict[str, Dict] = {}
+    for position, source in enumerate(source_comments or [], start=1):
+        if not isinstance(source, dict):
+            continue
+        source_row = dict(source)
+        source_row["comment_index"] = source_row.get("comment_index") or position
+        strict_key = user_choice_key(source_row)
+        loose_key = user_choice_loose_key(source_row)
+        if strict_key:
+            strict_lookup.setdefault(strict_key, source_row)
+        if loose_key:
+            loose_lookup.setdefault(loose_key, source_row)
+
+    restored: List[Dict] = []
+    for user in users or []:
+        if not isinstance(user, dict):
+            continue
+        source = strict_lookup.get(user_choice_key(user)) or loose_lookup.get(user_choice_loose_key(user))
+        row = dict(user)
+        if source:
+            row["comment_index"] = source.get("comment_index", row.get("comment_index", ""))
+        restored.append(row)
+    return restored
+
+
+def _douyin_comment_video_group_key(video_url: str) -> str:
+    normalized_url = str(video_url or "").strip()
+    aweme_id = extract_aweme_id(normalized_url)
+    return f"aweme:{aweme_id}" if aweme_id else normalized_url
+
+
+async def _close_douyin_comment_page(page: object) -> None:
+    if page is None:
+        return
+    try:
+        await page.close()
+    except Exception:
+        pass
+
+
 async def _run_douyin_precise_customer_reply_batch_worker(
     task: Dict,
     users: List[Dict],
@@ -8989,11 +9481,18 @@ async def _run_douyin_precise_customer_reply_batch_worker(
     """Reply to one video's selected comments with batched AI generation."""
     scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
     results: List[Dict] = []
-    rows = [normalize_high_intent_user(row) for row in (users or []) if isinstance(row, dict)]
+    rows = _sort_douyin_comment_users(
+        _restore_douyin_comment_order(
+            [normalize_high_intent_user(row) for row in (users or []) if isinstance(row, dict)],
+            [row for row in (task.get("all_comments", []) or []) if isinstance(row, dict)],
+        )
+    )
+    page = None
     try:
         fixed_reply_text = ""
         if normalize_douyin_video_comment_mode(comment_mode) == "fixed":
-            fixed_reply_text = generate_douyin_video_comment_text(
+            fixed_reply_text = await asyncio.to_thread(
+                generate_douyin_video_comment_text,
                 task,
                 mode="fixed",
                 fixed_text=comment_text,
@@ -9046,13 +9545,32 @@ async def _run_douyin_precise_customer_reply_batch_worker(
                     task_url = str(task.get("url", "") or "").strip()
                     if not task_url:
                         raise RuntimeError("精准客户缺少来源视频地址，无法定位评论")
-                    await scraper.reply_to_video_comment(
-                        task_url,
-                        item["reply_text"],
-                        user,
-                        expected_title=str(task.get("title", "") or "").strip(),
-                        logger=douyin_log,
-                    )
+                    task_title = str(task.get("title", "") or "").strip()
+                    for attempt in range(2):
+                        try:
+                            if page is None:
+                                page = await scraper.open_video_comment_page(
+                                    task_url,
+                                    expected_title=task_title,
+                                    logger=douyin_log,
+                                )
+                            await scraper.reply_to_loaded_video_comment(
+                                page,
+                                item["reply_text"],
+                                user,
+                                logger=douyin_log,
+                                allow_scroll=True,
+                            )
+                            break
+                        except Exception as exc:
+                            await _close_douyin_comment_page(page)
+                            page = None
+                            if attempt >= 1:
+                                raise
+                            douyin_log(
+                                f"[抖音精准获客评论回复] 当前页面处理失败，重新进入视频后重试一次：{exc}",
+                                "warning",
+                            )
                     item["status"] = "completed"
                     update_douyin_precise_touch_users(
                         [user],
@@ -9100,6 +9618,7 @@ async def _run_douyin_precise_customer_reply_batch_worker(
                     if wait_seconds > 0:
                         await asyncio.sleep(wait_seconds)
     finally:
+        await _close_douyin_comment_page(page)
         await scraper.close()
     return results
 
@@ -9117,76 +9636,182 @@ async def _run_douyin_precise_customer_reply_worker(
     """Reply to exactly the selected customer comments, one row at a time."""
     scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
     results: List[Dict] = []
+    normalized_users = [
+        normalize_high_intent_user(row if isinstance(row, dict) else {})
+        for row in (users or [])
+    ]
+    video_groups: Dict[str, Dict[str, object]] = {}
+    for user in normalized_users:
+        task_url = str(user.get("task_url") or user.get("video_url") or user.get("url") or "").strip()
+        group_key = _douyin_comment_video_group_key(task_url) or f"missing:{len(video_groups)}"
+        group = video_groups.setdefault(group_key, {"video_url": task_url, "users": []})
+        group["users"].append(user)
+    processed_count = 0
     try:
-        for index, raw_user in enumerate(users or []):
-            user = normalize_high_intent_user(raw_user if isinstance(raw_user, dict) else {})
-            task_url = str(
-                user.get("task_url")
-                or user.get("video_url")
-                or user.get("url")
-                or ""
-            ).strip()
-            task_title = str(
-                user.get("task_title")
-                or user.get("video_title")
-                or user.get("title")
-                or ""
-            ).strip()
-            task_author = str(user.get("task_author") or user.get("author") or "").strip()
-            started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            item = {
-                "user": user,
-                "status": "failed",
-                "account_id": int(account.get("id", 0) or 0),
-                "started_at": started_at,
-                "finished_at": "",
-                "reply_text": "",
-                "error": "",
-            }
+        for group in video_groups.values():
+            page = None
+            task_url = str(group.get("video_url", "") or "").strip()
+            group_users = _sort_douyin_comment_users(group.get("users", []))
             try:
-                if not task_url:
-                    raise RuntimeError("精准客户缺少来源视频地址，无法定位评论")
-                task_stub = {
-                    "title": task_title,
-                    "author": task_author,
-                    "url": task_url,
-                }
-                final_text = generate_douyin_video_comment_text(
-                    task_stub,
-                    mode=comment_mode,
-                    fixed_text=comment_text,
-                    prompt_text=comment_prompt,
-                    seed_text=comment_seed_text,
-                )
-                item["reply_text"] = final_text
-                await scraper.reply_to_video_comment(
-                    task_url,
-                    final_text,
-                    user,
-                    expected_title=task_title,
-                    logger=douyin_log,
-                )
-                item["status"] = "completed"
-            except Exception as exc:
-                item["error"] = str(exc).strip() or exc.__class__.__name__
-                douyin_log(
-                    f"[抖音精准客户回复] {user.get('username') or '-'} 执行失败：{item['error']}",
-                    "error",
-                )
-            item["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            results.append(item)
+                for user in group_users:
+                    task_title = str(
+                        user.get("task_title") or user.get("video_title") or user.get("title") or ""
+                    ).strip()
+                    task_author = str(user.get("task_author") or user.get("author") or "").strip()
+                    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    item = {
+                        "user": user,
+                        "status": "failed",
+                        "account_id": int(account.get("id", 0) or 0),
+                        "started_at": started_at,
+                        "finished_at": "",
+                        "reply_text": "",
+                        "error": "",
+                    }
+                    try:
+                        if not task_url:
+                            raise RuntimeError("精准客户缺少来源视频地址，无法定位评论")
+                        task_stub = {"title": task_title, "author": task_author, "url": task_url}
+                        final_text = await asyncio.to_thread(
+                            generate_douyin_video_comment_text,
+                            task_stub,
+                            mode=comment_mode,
+                            fixed_text=comment_text,
+                            prompt_text=comment_prompt,
+                            seed_text=comment_seed_text,
+                        )
+                        item["reply_text"] = final_text
+                        for attempt in range(2):
+                            try:
+                                if page is None:
+                                    page = await scraper.open_video_comment_page(
+                                        task_url,
+                                        expected_title=task_title,
+                                        logger=douyin_log,
+                                    )
+                                await scraper.reply_to_loaded_video_comment(
+                                    page,
+                                    final_text,
+                                    user,
+                                    logger=douyin_log,
+                                    allow_scroll=True,
+                                )
+                                break
+                            except Exception as exc:
+                                await _close_douyin_comment_page(page)
+                                page = None
+                                if attempt >= 1:
+                                    raise
+                                douyin_log(
+                                    f"[抖音精准客户回复] 当前页面处理失败，重新进入视频后重试一次：{exc}",
+                                    "warning",
+                                )
+                        item["status"] = "completed"
+                    except Exception as exc:
+                        item["error"] = str(exc).strip() or exc.__class__.__name__
+                        douyin_log(
+                            f"[抖音精准客户回复] {user.get('username') or '-'} 执行失败：{item['error']}",
+                            "error",
+                        )
+                    item["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    results.append(item)
+                    processed_count += 1
 
-            if index < len(users or []) - 1:
-                wait_seconds = (
-                    random.randint(interval_seconds_min, interval_seconds_max)
-                    if interval_seconds_max > interval_seconds_min
-                    else interval_seconds_min
-                )
-                if wait_seconds > 0:
-                    await asyncio.sleep(wait_seconds)
+                    if processed_count < len(normalized_users):
+                        wait_seconds = (
+                            random.randint(interval_seconds_min, interval_seconds_max)
+                            if interval_seconds_max > interval_seconds_min
+                            else interval_seconds_min
+                        )
+                        if wait_seconds > 0:
+                            await asyncio.sleep(wait_seconds)
+            finally:
+                await _close_douyin_comment_page(page)
     finally:
         await scraper.close()
+
     return results
+
+
+async def probe_douyin_account_login_state(
+    account: Dict,
+    *,
+    attempts: int = DOUYIN_ACCOUNT_LOGIN_CHECK_ATTEMPTS,
+    allow_browser_launch: bool = True,
+) -> Dict[str, object]:
+    """Probe one account without turning a transient browser failure into logout.
+
+    ``allow_browser_launch`` is intentionally explicit.  Account-specific
+    actions (login/check/view) may start that account's browser, while passive
+    status reads must be able to avoid launching any browser at all.
+    """
+    account_id = int(account.get("id", 0) or 0)
+    account_port = int(account.get("port", 0) or 0)
+    if not allow_browser_launch and not is_port_open(account_port):
+        return {
+            "state": "unknown",
+            "reason": "browser_not_running",
+            "attempts": 0,
+        }
+    last: Dict[str, object] = {
+        "state": "unknown",
+        "reason": "probe_not_completed",
+        "attempts": 0,
+    }
+    total_attempts = max(1, int(attempts or 1))
+    waiting_result: Optional[Dict[str, object]] = None
+    for attempt in range(1, total_attempts + 1):
+        scraper = DouyinCommentScraper(
+            account_id=account_id,
+            cdp_port=account_port,
+            allow_workspace_fallback=allow_browser_launch,
+        )
+        try:
+            logged_in = bool(
+                await asyncio.wait_for(
+                    scraper.check_login_state(logger=douyin_log),
+                    timeout=DOUYIN_ACCOUNT_LOGIN_CHECK_TIMEOUT_SECONDS,
+                )
+            )
+            details = getattr(scraper, "last_login_probe", {})
+            if not isinstance(details, dict):
+                details = {}
+            state = str(details.get("state") or ("online" if logged_in else "unknown")).strip().lower()
+            if logged_in:
+                state = "online"
+            if state not in {"online", "waiting", "unknown"}:
+                state = "unknown"
+            last = {**details, "state": state, "attempts": attempt}
+            if state == "online":
+                return last
+            if state == "waiting":
+                waiting_result = dict(last)
+        except asyncio.TimeoutError:
+            last = {"state": "unknown", "reason": "probe_timeout", "attempts": attempt}
+            douyin_log(
+                f"[抖音账号] 账号 {account_id} 登录态探测超时（第 {attempt}/{total_attempts} 次），保留原状态",
+                "warning",
+            )
+        except Exception as exc:
+            last = {
+                "state": "unknown",
+                "reason": f"{type(exc).__name__}: {exc}",
+                "attempts": attempt,
+            }
+            douyin_log(
+                f"[抖音账号] 账号 {account_id} 登录态探测异常（第 {attempt}/{total_attempts} 次），保留原状态：{exc}",
+                "warning",
+            )
+        finally:
+            await scraper.close()
+        if attempt < total_attempts:
+            await asyncio.sleep(DOUYIN_ACCOUNT_LOGIN_CHECK_RETRY_DELAY_SECONDS)
+    return waiting_result or last
+
+
+async def detect_douyin_account_login_state(account: Dict) -> bool:
+    result = await probe_douyin_account_login_state(account)
+    return str(result.get("state") or "unknown") == "online"
 
 
 async def run_douyin_precise_customer_replies(
@@ -9209,6 +9834,7 @@ async def run_douyin_precise_customer_replies(
     if nurture_conflict:
         return dict(nurture_conflict)
     if has_running_douyin_task_for_account_nurture():
+        log_douyin_task_conflict("执行自动养号")
         return {
             "code": 409,
             "msg": "当前有其他抖音任务正在执行，请等待完成后再进行精准客户评论回复。",
@@ -9739,7 +10365,8 @@ async def run_douyin_follow_comment_worker(
                     "author": str(user.get("username", "") or "该用户"),
                     "url": str(user.get("profile_url", "") or ""),
                 }
-                final_comment_text = generate_douyin_video_comment_text(
+                final_comment_text = await asyncio.to_thread(
+                    generate_douyin_video_comment_text,
                     target_work,
                     mode=comment_mode,
                     fixed_text=comment_text,
@@ -10179,7 +10806,8 @@ async def run_douyin_interaction_worker(
             current_user = str(user.get("username", "") or user.get("profile_url", ""))
             final_message = ""
             try:
-                final_message = generate_douyin_interaction_message(
+                final_message = await asyncio.to_thread(
+                    generate_douyin_interaction_message,
                     user,
                     mode=message_mode,
                     fixed_text=fixed_message,
@@ -10777,7 +11405,8 @@ async def send_douyin_inbox_messages_for_monitor(
         current_user = str(row.get("username", "") or row.get("profile_url", "") or "-")
         item_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
-            final_message = generate_douyin_inbox_reply_message(
+            final_message = await asyncio.to_thread(
+                generate_douyin_inbox_reply_message,
                 row,
                 mode=reply_mode,
                 fixed_text=reply_message,
@@ -11025,6 +11654,8 @@ async def run_douyin_inbox_monitor_cycle(account_id: int, trigger_type: str = "s
 
 
 async def ensure_douyin_inbox_monitor_scheduler():
+    if douyin_schedule_external_work:
+        return
     now = datetime.now()
     for state in list_douyin_inbox_monitor_states():
         account_id = int(state.get("account_id", 0) or 0)
@@ -11068,6 +11699,18 @@ def build_douyin_self_comment_rows(
         for row in (existing_rows or [])
         if isinstance(row, dict) and build_douyin_self_comment_row_key(row)
     }
+    existing_fallback_map = {
+        "|".join(
+            [
+                normalize_douyin_text(row.get("account_id", "")),
+                normalize_douyin_text(row.get("aweme_id", "")),
+                normalize_douyin_text(row.get("user_id", "")),
+                normalize_douyin_text(row.get("comment", row.get("content", ""))),
+            ]
+        ): normalize_douyin_self_comment_row(row)
+        for row in (existing_rows or [])
+        if isinstance(row, dict)
+    }
     rows: List[Dict] = []
     for comment in comments or []:
         if not isinstance(comment, dict):
@@ -11097,7 +11740,15 @@ def build_douyin_self_comment_rows(
                 value = precise_match.get(key, "")
                 if value not in (None, ""):
                     row[key] = value
-        existing = existing_map.get(build_douyin_self_comment_row_key(row))
+        fallback_key = "|".join(
+            [
+                normalize_douyin_text(row.get("account_id", "")),
+                normalize_douyin_text(row.get("aweme_id", "")),
+                normalize_douyin_text(row.get("user_id", "")),
+                normalize_douyin_text(row.get("comment", row.get("content", ""))),
+            ]
+        )
+        existing = existing_map.get(build_douyin_self_comment_row_key(row)) or existing_fallback_map.get(fallback_key)
         if existing:
             row["first_seen_at"] = existing.get("first_seen_at") or row["first_seen_at"]
             for key in (
@@ -11164,7 +11815,8 @@ async def send_douyin_self_comment_replies_for_monitor(
                 if normalize_douyin_inbox_reply_mode(reply_mode) == "fixed" and not str(reply_message or "").strip() and image_path:
                     final_message = ""
                 else:
-                    final_message = generate_douyin_self_comment_reply_message(
+                    final_message = await asyncio.to_thread(
+                        generate_douyin_self_comment_reply_message,
                         row,
                         mode=reply_mode,
                         fixed_text=reply_message,
@@ -11232,6 +11884,7 @@ async def send_douyin_self_comment_replies_on_loaded_page(
     reply_prompt: str = "",
     contact_value: str = "",
     image_path: str = "",
+    allow_scroll: bool = True,
 ) -> Dict[str, int]:
     account_id = int((account or {}).get("id", 0) or 0)
     image_path = str(image_path or "").strip()
@@ -11244,7 +11897,8 @@ async def send_douyin_self_comment_replies_on_loaded_page(
             if normalize_douyin_inbox_reply_mode(reply_mode) == "fixed" and not str(reply_message or "").strip() and image_path:
                 final_message = ""
             else:
-                final_message = generate_douyin_self_comment_reply_message(
+                final_message = await asyncio.to_thread(
+                    generate_douyin_self_comment_reply_message,
                     row,
                     mode=reply_mode,
                     fixed_text=reply_message,
@@ -11267,7 +11921,7 @@ async def send_douyin_self_comment_replies_on_loaded_page(
                 row,
                 image_path=image_path,
                 logger=douyin_log,
-                allow_scroll=False,
+                allow_scroll=allow_scroll,
             )
             update_douyin_self_comment_monitor_rows(
                 [row],
@@ -11305,11 +11959,15 @@ async def run_douyin_self_comment_monitor_cycle(
     one_shot: bool = False,
 ) -> Dict[str, object]:
     state = get_douyin_self_comment_monitor_state(account_id, create=True)
+    current_task = asyncio.current_task()
     started_at = datetime.now()
     started_at_text = started_at.strftime("%Y-%m-%d %H:%M:%S")
     state["last_run_at"] = started_at_text
     state["last_error"] = ""
     state["last_skip_reason"] = ""
+    # A cycle owns its stop latch. The stop endpoint flips it asynchronously,
+    # while every browser/AI phase below checks it before starting more work.
+    state["stop_requested"] = False
 
     if not bool(state.get("enabled")) and not one_shot:
         schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
@@ -11347,6 +12005,13 @@ async def run_douyin_self_comment_monitor_cycle(
 
     max_videos = max(1, min(int(state.get("max_videos", 20) or 20), 100))
     max_comments = max(5, min(int(state.get("max_comments_per_video", 80) or 80), 500))
+    # Keep the browser extraction callback and the AI request aligned.  A
+    # single-comment batch makes a normal 80-comment scan issue 80 separate
+    # model requests and can outlive the client task lease before replies run.
+    comment_batch_size = max(
+        5,
+        min(int(config.get("comment_ai_batch_size", 20) or 20), 80, max_comments),
+    )
     auto_reply_enabled = bool(state.get("auto_reply_enabled"))
     reply_mode = normalize_douyin_inbox_reply_mode(state.get("reply_mode", "fixed"))
     reply_message = str(state.get("reply_message", "") or "").strip()
@@ -11355,39 +12020,65 @@ async def run_douyin_self_comment_monitor_cycle(
     reply_image_path = str(state.get("reply_image_path", "") or state.get("comment_image_path", "") or "").strip()
     ai_client = create_ai_client()
     scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    if current_task is not None:
+        existing_task = douyin_self_comment_monitor_tasks_by_account.get(int(account["id"] or 0))
+        if not existing_task or existing_task.done():
+            douyin_self_comment_monitor_tasks_by_account[int(account["id"])] = current_task
+
+    def should_stop() -> bool:
+        # One-shot workflow invocations are not enabled in persisted monitor
+        # state, so only the explicit latch can stop them. Scheduled monitor
+        # cycles also stop when the user disables the monitor.
+        return bool(state.get("stop_requested")) or (
+            not one_shot and not bool(state.get("enabled"))
+        )
+
     state.update(
         {
             "running": True,
+            "stop_requested": False,
             "account_id": account["id"],
-            "message": f"正在检查我的评论区：账号 {account['id']}，作品 {max_videos} 个，每个最多 {max_comments} 条评论。",
+            "message": (
+                f"正在检查我的评论区：账号 {account['id']}，作品 {max_videos} 个，"
+                f"每个最多 {max_comments} 条评论，AI 每批最多 {comment_batch_size} 条。"
+            ),
             "last_cycle_status": "running",
         }
     )
-    douyin_log(f"[抖音我的评论区] 开始检查账号 {account['id']} 的作品评论区。", "info")
+    douyin_log(
+        f"[抖音我的评论区] 开始检查账号 {account['id']} 的作品评论区，"
+        f"采集/AI 批次上限 {comment_batch_size} 条。",
+        "info",
+    )
     try:
-        profile_payload = await scraper.scrape_self_videos(max_videos=max_videos, logger=douyin_log)
+        profile_payload = await scraper.scrape_self_videos(
+            max_videos=max_videos,
+            should_stop=should_stop,
+            logger=douyin_log,
+        )
         videos = (profile_payload.get("videos", []) if isinstance(profile_payload, dict) else []) or []
         total_comments = 0
         new_comments_total = 0
         precise_total = 0
+        failed_videos = 0
         auto_reply_result = {"total": 0, "processed": 0, "success": 0, "failed": 0}
         merged_rows_all: List[Dict] = []
         existing_rows_all = collect_douyin_self_comment_monitor_results(account["id"])
         existing_keys = {build_douyin_self_comment_row_key(row) for row in existing_rows_all if build_douyin_self_comment_row_key(row)}
         for video in videos[:max_videos]:
+            if should_stop():
+                douyin_log("[抖音我的评论区] 收到停止请求，结束剩余作品处理", "warning")
+                break
             try:
                 if not isinstance(video, dict):
                     continue
                 video_url = str(video.get("url", "") or "").strip()
                 if not video_url:
                     continue
-                batch_comments_for_video: List[Dict] = []
-
                 async def handle_self_comment_batch(page, batch_comments: List[Dict], batch_index: int):
-                    nonlocal new_comments_total, precise_total, auto_reply_result, existing_rows_all, batch_comments_for_video
-                    if not batch_comments:
+                    nonlocal new_comments_total, precise_total, existing_rows_all
+                    if not batch_comments or should_stop():
                         return
-                    batch_comments_for_video.extend(batch_comments)
                     candidate_rows = build_douyin_self_comment_rows(account, video, batch_comments, [], existing_rows_all)
                     fresh_comments = [
                         row
@@ -11421,8 +12112,12 @@ async def run_douyin_self_comment_monitor_cycle(
                                 "",
                                 _filter_strategy,
                                 event_logger=log_douyin_filter_event,
+                                batch_size=comment_batch_size,
                             )
                         )
+                        if should_stop():
+                            douyin_log("[抖音我的评论区] AI 筛选返回后收到停止请求，丢弃当前批次后续动作", "warning")
+                            return
                         log_douyin_filter_event(
                             "done",
                             scope="self_comment_monitor_batch",
@@ -11439,26 +12134,6 @@ async def run_douyin_self_comment_monitor_cycle(
                     existing_rows_all = collect_douyin_self_comment_monitor_results(account["id"])
                     new_comments_total += len(fresh_comments)
                     precise_total += len(precise_users or [])
-                    if auto_reply_enabled:
-                        reply_rows = collect_pending_douyin_self_comment_auto_reply_rows(account["id"], rows)
-                        if reply_rows:
-                            douyin_log(
-                                f"[抖音我的评论区] 当前作品第 {batch_index} 批命中 {len(reply_rows)} 条待回复高意向评论，原地自动回复。",
-                                "info",
-                            )
-                            current_reply_result = await send_douyin_self_comment_replies_on_loaded_page(
-                                scraper,
-                                page,
-                                account,
-                                reply_rows,
-                                reply_mode=reply_mode,
-                                reply_message=reply_message,
-                                reply_prompt=reply_prompt,
-                                contact_value=contact_value,
-                                image_path=reply_image_path,
-                            )
-                            for key in ("total", "processed", "success", "failed"):
-                                auto_reply_result[key] = int(auto_reply_result.get(key, 0) or 0) + int(current_reply_result.get(key, 0) or 0)
                     for row in rows:
                         key = build_douyin_self_comment_row_key(row)
                         if key:
@@ -11467,41 +12142,114 @@ async def run_douyin_self_comment_monitor_cycle(
                 comments = await scraper.process_video_comment_batches(
                     video_url,
                     max_comments=max_comments,
-                    batch_size=1,
+                    batch_size=comment_batch_size,
                     max_scroll_rounds=max(10, min(int(config.get("comment_scroll_rounds", 80) or 80), 300)),
                     logger=douyin_log,
                     on_batch=handle_self_comment_batch,
+                    should_stop=should_stop,
                 )
                 total_comments += len(comments or [])
+                if should_stop():
+                    break
+                if auto_reply_enabled and not should_stop():
+                    target_aweme_id = normalize_douyin_text(video.get("aweme_id", "")) or normalize_douyin_text(extract_aweme_id(video_url))
+                    reply_rows = [
+                        row
+                        for row in collect_pending_douyin_self_comment_auto_reply_rows(account["id"])
+                        if (
+                            target_aweme_id
+                            and normalize_douyin_text(row.get("aweme_id", "")) == target_aweme_id
+                        )
+                        or (
+                            not target_aweme_id
+                            and normalize_douyin_text(row.get("video_url", "")) == normalize_douyin_text(video_url)
+                        )
+                    ]
+                    if reply_rows:
+                        douyin_log(
+                            f"[抖音我的评论区] 当前作品采集和 AI 筛选完成，命中 {len(reply_rows)} 条待回复高意向评论，开始顺序回复。",
+                            "info",
+                        )
+                        reply_page = None
+                        try:
+                            reply_page = await scraper.open_video_comment_page(
+                                video_url,
+                                expected_title=str(video.get("title", "") or ""),
+                                logger=douyin_log,
+                            )
+                            current_reply_result = await send_douyin_self_comment_replies_on_loaded_page(
+                                scraper,
+                                reply_page,
+                                account,
+                                reply_rows,
+                                reply_mode=reply_mode,
+                                reply_message=reply_message,
+                                reply_prompt=reply_prompt,
+                                contact_value=contact_value,
+                                image_path=reply_image_path,
+                                allow_scroll=True,
+                            )
+                            for key in ("total", "processed", "success", "failed"):
+                                auto_reply_result[key] = int(auto_reply_result.get(key, 0) or 0) + int(current_reply_result.get(key, 0) or 0)
+                        except Exception as reply_exc:
+                            douyin_log(
+                                f"[抖音我的评论区] 当前作品顺序回复未完成：{reply_exc}",
+                                "error",
+                            )
+                        finally:
+                            if reply_page is not None:
+                                await reply_page.close()
             except Exception as video_exc:
+                failed_videos += 1
                 douyin_log(
-                    f"[抖音我的评论区] 当前作品评论采集跳过：{video.get('title') if isinstance(video, dict) else '-'}，原因：{video_exc}",
-                    "warning",
+                    f"[抖音我的评论区] 当前作品评论采集未确认，保留本轮失败记录：{video.get('title') if isinstance(video, dict) else '-'}，原因：{video_exc}",
+                    "error",
                 )
                 continue
 
-        if not one_shot:
+        stopped = should_stop()
+        if not one_shot and not stopped:
             schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
-        message = f"本轮完成：检查 {len(videos)} 个作品，读取 {total_comments} 条评论，新增 {new_comments_total} 条，高意向 {precise_total} 条。"
+        message = (
+            f"本轮已停止：已检查 {len(videos)} 个作品，读取 {total_comments} 条评论，"
+            f"新增 {new_comments_total} 条，高意向 {precise_total} 条。"
+            if stopped
+            else f"本轮完成：检查 {len(videos)} 个作品，读取 {total_comments} 条评论，新增 {new_comments_total} 条，高意向 {precise_total} 条。"
+        )
+        if failed_videos:
+            message += f" 另有 {failed_videos} 个作品评论未确认，本轮未按无评论处理。"
         if auto_reply_enabled and int(auto_reply_result.get("processed", 0) or 0) > 0:
             message += f" 自动回复 {int(auto_reply_result.get('success', 0) or 0)} 成功，{int(auto_reply_result.get('failed', 0) or 0)} 失败。"
+        cycle_status = "stopped" if stopped else ("partial" if failed_videos else "completed")
         state.update(
             {
                 "running": False,
                 "message": message,
                 "last_video_count": len(videos),
                 "last_comment_count": total_comments,
+                "last_failed_video_count": failed_videos,
                 "last_new_comment_count": new_comments_total,
                 "last_precise_count": precise_total,
                 "last_auto_reply_total": int(auto_reply_result.get("processed", 0) or 0),
                 "last_auto_reply_success": int(auto_reply_result.get("success", 0) or 0),
                 "last_auto_reply_failed": int(auto_reply_result.get("failed", 0) or 0),
                 "last_skip_reason": "",
-                "last_cycle_status": "completed",
+                "last_cycle_status": cycle_status,
             }
         )
-        douyin_log(f"[抖音我的评论区] {message}", "success")
-        return {"status": "completed", "message": message}
+        douyin_log(f"[抖音我的评论区] {message}", "warning" if stopped or failed_videos else "success")
+        return {"status": cycle_status, "message": message}
+    except asyncio.CancelledError:
+        state.update(
+            {
+                "running": False,
+                "stop_requested": True,
+                "last_cycle_status": "stopped",
+                "message": "我的评论区监控已停止。",
+            }
+        )
+        douyin_log("[抖音我的评论区] 当前任务已取消，立即关闭评论采集页面", "warning")
+        raise
     except Exception as exc:
         if not one_shot:
             schedule_next_douyin_self_comment_monitor_run(account_id, started_at)
@@ -11518,12 +12266,15 @@ async def run_douyin_self_comment_monitor_cycle(
     finally:
         await scraper.close()
         state["running"] = False
-        douyin_self_comment_monitor_tasks_by_account.pop(int(account_id or 0), None)
+        if douyin_self_comment_monitor_tasks_by_account.get(int(account_id or 0)) is current_task:
+            douyin_self_comment_monitor_tasks_by_account.pop(int(account_id or 0), None)
         if bool(state.get("enabled")):
             set_douyin_self_comment_monitor_idle_message(account_id, state.get("message", ""))
 
 
 async def ensure_douyin_self_comment_monitor_scheduler():
+    if douyin_schedule_external_work:
+        return
     now = datetime.now()
     for state in list_douyin_self_comment_monitor_states():
         account_id = int(state.get("account_id", 0) or 0)
@@ -11605,7 +12356,8 @@ async def run_douyin_stranger_message_send(
             item_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             final_message = message
             try:
-                final_message = generate_douyin_stranger_reply_message(
+                final_message = await asyncio.to_thread(
+                    generate_douyin_stranger_reply_message,
                     row,
                     mode=reply_mode,
                     fixed_text=message,
@@ -11769,7 +12521,8 @@ async def send_douyin_stranger_messages_for_monitor(
             current_user = str(row.get("username", "") or row.get("profile_url", ""))
             item_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             try:
-                final_message = generate_douyin_stranger_reply_message(
+                final_message = await asyncio.to_thread(
+                    generate_douyin_stranger_reply_message,
                     row,
                     mode=reply_mode,
                     fixed_text=message,
@@ -12247,7 +13000,8 @@ async def run_douyin_h5_stranger_message_task_once(
                 }
             )
             try:
-                final_message = generate_douyin_stranger_reply_message(
+                final_message = await asyncio.to_thread(
+                    generate_douyin_stranger_reply_message,
                     row,
                     mode=normalized_reply_mode,
                     fixed_text=fixed_text,
@@ -12781,6 +13535,9 @@ async def douyin_stranger_message_monitor_loop():
                 continue
 
             now = datetime.now()
+            if douyin_schedule_external_work:
+                await asyncio.sleep(15)
+                continue
             for state in enabled_states:
                 account_id = int(state.get("account_id", 0) or 0)
                 if account_id <= 0:
@@ -13246,7 +14003,7 @@ async def douyin_add_monitor_target(request: Optional[dict] = None):
         return nurture_conflict
     payload = request if isinstance(request, dict) else {}
     share_text = str(payload.get("share_url", "") or payload.get("profile_url", "") or "").strip()
-    share_url = resolve_douyin_share_url(share_text)
+    share_url = await asyncio.to_thread(resolve_douyin_share_url, share_text)
     if not share_url:
         return {"code": 400, "msg": "未识别到可用链接，请直接粘贴抖音分享文案或主页链接。"}
 
@@ -13492,7 +14249,7 @@ async def douyin_run_monitor_targets(http_request: Request = None, request: Opti
         }
     return {
         "code": 200 if result.get("status") == "completed" else 500,
-        "msg": result.get("error") or "同行监控已执行完成。",
+        "msg": result.get("error") or result.get("message") or "同行监控已执行完成。",
         "result": result,
         "targets": load_monitor_targets_bundle(),
     }
@@ -13633,6 +14390,7 @@ async def douyin_get_monitor_status():
 @router.get("/config")
 async def douyin_get_config(http_request: Request = None):
     config = load_global_config()
+    accounts = _normalize_accounts(config.get("douyin_accounts"))
     local_api_key_configured = bool(str(config.get("api_key", "") or "").strip())
     server_ai_proxy_available = douyin_ai_available(config, http_request) and not local_api_key_configured
     return {
@@ -13649,7 +14407,7 @@ async def douyin_get_config(http_request: Request = None):
         "comment_scroll_rounds": config.get("comment_scroll_rounds", 300),
         "comment_max_comments": config.get("comment_max_comments", 500),
         "douyin_default_account_id": config.get("douyin_default_account_id", 1),
-        "douyin_accounts": _normalize_accounts(config.get("douyin_accounts")),
+        "douyin_accounts": accounts,
         "douyin_message_show_browser": bool(config.get("douyin_message_show_browser", False)),
         "douyin_nurture_interval_min_minutes": config.get("douyin_nurture_interval_min_minutes", 120),
         "douyin_nurture_interval_max_minutes": config.get("douyin_nurture_interval_max_minutes", 180),
@@ -13872,6 +14630,7 @@ async def douyin_start_account_nurture(request: Optional[dict] = None):
         or douyin_stranger_message_running
         or monitor_running
     ):
+        log_douyin_task_conflict("启动自动养号")
         return {
             "code": 409,
             "type": "douyin_task_conflict",
@@ -13979,13 +14738,18 @@ async def douyin_login_account(account_id: int):
             douyin_log(f"[抖音账号] {msg}", "error")
             return {"code": 500, "msg": msg}
 
-        is_logged_in = await detect_douyin_account_login_state(account)
-        account["status"] = "online" if is_logged_in else "waiting"
-        config["douyin_accounts"] = accounts
-        save_global_config(config)
+        login_probe = await probe_douyin_account_login_state(account)
+        probe_state = str(login_probe.get("state") or "unknown")
+        is_logged_in = probe_state == "online"
+        if probe_state in {"online", "waiting"}:
+            account["status"] = "online" if is_logged_in else "waiting"
+            config["douyin_accounts"] = accounts
+            save_global_config(config)
         if is_logged_in:
-            return {"code": 200, "status": "online", "msg": "Douyin account is already online"}
-        return {"code": 200, "status": "waiting", "msg": "Browser launched, please finish login in the Douyin window"}
+            return {"code": 200, "status": "online", "probe_state": probe_state, "probe": login_probe, "msg": "Douyin account is already online"}
+        if probe_state == "waiting":
+            return {"code": 200, "status": "waiting", "probe_state": probe_state, "probe": login_probe, "msg": "Browser launched, please finish login in the Douyin window"}
+        return {"code": 200, "status": account.get("status") or "waiting", "probe_state": "unknown", "probe": login_probe, "msg": "登录状态暂时无法确认，浏览器已打开，请稍后重试"}
     except HTTPException:
         raise
     except Exception as exc:
@@ -14020,11 +14784,19 @@ async def douyin_check_account(account_id: int):
     if not account:
         raise HTTPException(status_code=400, detail="Invalid Douyin account ID")
 
-    is_logged_in = await detect_douyin_account_login_state(account)
-    account["status"] = "online" if is_logged_in else "waiting"
-    config["douyin_accounts"] = accounts
-    save_global_config(config)
-    return {"code": 200, "status": account["status"]}
+    login_probe = await probe_douyin_account_login_state(account)
+    probe_state = str(login_probe.get("state") or "unknown")
+    if probe_state in {"online", "waiting"}:
+        account["status"] = "online" if probe_state == "online" else "waiting"
+        config["douyin_accounts"] = accounts
+        save_global_config(config)
+    return {
+        "code": 200,
+        "status": account.get("status") or "waiting",
+        "logged_in": probe_state == "online",
+        "probe_state": probe_state,
+        "probe": login_probe,
+    }
 
 
 @router.post("/account/{account_id}/view")
@@ -14457,7 +15229,8 @@ async def douyin_run_scheduler_plan_now(plan_id: str):
     douyin_schedule_runtime_state["active_plan_id"] = str(plan.get("id", "") or "")
     douyin_schedule_runtime_state["active_plan_name"] = str(plan.get("name", "") or "")
     douyin_schedule_runtime_state["active_phase"] = "launching"
-    result = await execute_douyin_schedule_plan(plan)
+    async with douyin_schedule_execution_lock:
+        result = await execute_douyin_schedule_plan(plan)
     success = int(result.get("code", 0) or 0) == 200
     update_douyin_schedule_plan_runtime(
         str(plan.get("id", "") or ""),
@@ -14815,9 +15588,9 @@ async def douyin_add_group_members_to_interaction(request: Optional[dict] = None
     if not isinstance(raw_rows, list) or not raw_rows:
         return {"code": 400, "msg": "请先勾选至少一个群成员。"}
 
-    imported = import_group_members_to_interaction_pool(raw_rows)
-    removed = remove_group_members_from_results(raw_rows)
-    total = len(collect_douyin_interaction_users())
+    imported = await asyncio.to_thread(import_group_members_to_interaction_pool, raw_rows)
+    removed = await asyncio.to_thread(remove_group_members_from_results, raw_rows)
+    total = len(await asyncio.to_thread(collect_douyin_interaction_users))
     return {
         "code": 200,
         "msg": (
@@ -14914,12 +15687,26 @@ async def douyin_get_self_videos(account_id: int = 0, max_videos: int = 12):
     if not await asyncio.to_thread(client.launch_browser, "https://www.douyin.com/user/self?from_tab_name=main"):
         return {"code": 500, "msg": f"账号 {account['id']} 浏览器启动失败，无法采集自己的视频列表。"}
 
-    is_logged_in = await detect_douyin_account_login_state(account)
-    account["status"] = "online" if is_logged_in else "waiting"
-    config["douyin_accounts"] = accounts
-    save_global_config(config)
+    login_probe = await probe_douyin_account_login_state(account)
+    probe_state = str(login_probe.get("state") or "unknown")
+    is_logged_in = probe_state == "online"
+    if probe_state in {"online", "waiting"}:
+        account["status"] = "online" if is_logged_in else "waiting"
+        config["douyin_accounts"] = accounts
+        save_global_config(config)
 
     if not is_logged_in:
+        if probe_state == "unknown":
+            return {
+                "code": 503,
+                "type": "account_status_unknown",
+                "msg": f"账号 {account['id']} 登录状态暂时无法确认，请稍后重试",
+                "probe_state": probe_state,
+                "probe": login_probe,
+                "account": account,
+                "videos": [],
+                "profile": {},
+            }
         return {
             "code": 400,
             "type": "account_waiting_login",
@@ -14927,6 +15714,8 @@ async def douyin_get_self_videos(account_id: int = 0, max_videos: int = 12):
             "account": account,
             "videos": [],
             "profile": {},
+            "probe_state": probe_state,
+            "probe": login_probe,
         }
 
     scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
@@ -15320,7 +16109,7 @@ async def douyin_follow_comment_status(lite: bool = False, include_users: bool =
     if include_users:
         users = [
             build_douyin_interaction_user_status_payload(row, lite=lite)
-            for row in collect_douyin_interaction_users()
+            for row in await asyncio.to_thread(collect_douyin_interaction_users)
         ]
     return {
         "code": 200,
@@ -15385,7 +16174,10 @@ async def douyin_start_follow_comment(http_request: Request = None, request: Opt
     if not isinstance(raw_users, list) or not raw_users:
         return {"code": 400, "msg": "请先勾选至少一个高意向用户。"}
 
-    valid_pool = {user_choice_key(row): row for row in collect_douyin_interaction_users()}
+    valid_pool = {
+        user_choice_key(row): row
+        for row in await asyncio.to_thread(collect_douyin_interaction_users)
+    }
     selected_users: List[Dict] = []
     skipped_completed_users: List[Dict] = []
     seen = set()
@@ -15512,7 +16304,7 @@ async def douyin_interaction_status(lite: bool = False, include_users: bool = Tr
     if include_users:
         users = [
             build_douyin_interaction_user_status_payload(row, lite=lite)
-            for row in collect_douyin_interaction_users()
+            for row in await asyncio.to_thread(collect_douyin_interaction_users)
         ]
     return {
         "code": 200,
@@ -15584,7 +16376,10 @@ async def douyin_start_interaction(http_request: Request = None, request: Option
     if not isinstance(raw_users, list) or not raw_users:
         return {"code": 400, "msg": "请先勾选至少一个高意向用户。"}
 
-    valid_pool = {user_choice_key(row): row for row in collect_douyin_interaction_users()}
+    valid_pool = {
+        user_choice_key(row): row
+        for row in await asyncio.to_thread(collect_douyin_interaction_users)
+    }
     selected_users: List[Dict] = []
     seen = set()
     skipped_sent = 0
@@ -15712,7 +16507,10 @@ async def douyin_reset_interaction(request: Optional[dict] = None):
     if target_status not in {"pending", "sent"}:
         return {"code": 400, "msg": "目标状态只能是「待发送」或「已发送」。"}
 
-    valid_pool = {user_choice_key(row): row for row in collect_douyin_interaction_users()}
+    valid_pool = {
+        user_choice_key(row): row
+        for row in await asyncio.to_thread(collect_douyin_interaction_users)
+    }
     rows: List[Dict] = []
     for raw_user in raw_users:
         key = user_choice_key(raw_user if isinstance(raw_user, dict) else {})
@@ -15732,7 +16530,8 @@ async def douyin_reset_interaction(request: Optional[dict] = None):
         return {"code": 400, "msg": "没有可重置的客户，可能状态已经更新。"}
 
     finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if target_status == "sent" else ""
-    update_douyin_interaction_users(
+    await asyncio.to_thread(
+        update_douyin_interaction_users,
         rows,
         status=target_status,
         error="",
@@ -15928,20 +16727,24 @@ async def douyin_stop_self_comment_monitor(request: Optional[dict] = None):
     if target_account_id <= 0:
         return {"code": 400, "msg": "请先指定要停止监控的抖音账号。"}
     state = get_douyin_self_comment_monitor_state(target_account_id)
-    if not state.get("enabled"):
+    task = douyin_self_comment_monitor_tasks_by_account.get(target_account_id)
+    task_alive = bool(task and not task.done())
+    if not state.get("enabled") and not state.get("running") and not task_alive:
         return {"code": 200, "msg": f"账号 {target_account_id} 当前没有开启我的评论区监控。", "monitor": state, "monitors": list_douyin_self_comment_monitor_states()}
     state["enabled"] = False
-    state["running"] = False
+    state["stop_requested"] = True
     state["next_run_at"] = ""
-    state["message"] = "我的评论区监控已关闭。"
-    task = douyin_self_comment_monitor_tasks_by_account.get(target_account_id)
-    if task and not task.done():
+    state["message"] = "我的评论区监控停止中，正在结束当前任务。"
+    if task_alive:
         task.cancel()
     save_douyin_self_comment_monitor_config()
-    douyin_log(f"[抖音我的评论区] 已关闭账号 {target_account_id} 的监控。", "warning")
+    douyin_log(
+        f"[抖音我的评论区] 已发出停止请求账号 {target_account_id} task_alive={'yes' if task_alive else 'no'}",
+        "warning",
+    )
     return {
         "code": 200,
-        "msg": f"账号 {target_account_id} 的我的评论区监控已关闭。",
+        "msg": f"账号 {target_account_id} 的我的评论区监控已发出停止请求。",
         "monitor": state,
         "monitors": list_douyin_self_comment_monitor_states(),
     }
@@ -15963,11 +16766,18 @@ async def douyin_run_self_comment_monitor_once(request: Optional[dict] = None):
     task = douyin_self_comment_monitor_tasks_by_account.get(target_account_id)
     if task and not task.done():
         return {"code": 400, "msg": f"账号 {target_account_id} 的我的评论区监控正在执行中，请稍后再试。"}
-    result = await run_douyin_self_comment_monitor_cycle(
-        target_account_id,
-        trigger_type="manual",
-        one_shot=True,
-    )
+    current_task = asyncio.current_task()
+    if current_task is not None:
+        douyin_self_comment_monitor_tasks_by_account[target_account_id] = current_task
+    try:
+        result = await run_douyin_self_comment_monitor_cycle(
+            target_account_id,
+            trigger_type="manual",
+            one_shot=True,
+        )
+    finally:
+        if douyin_self_comment_monitor_tasks_by_account.get(target_account_id) is current_task:
+            douyin_self_comment_monitor_tasks_by_account.pop(target_account_id, None)
     return {
         "code": 200 if result.get("status") != "failed" else 400,
         "msg": result.get("message", "我的评论区检查完成。"),
@@ -16906,9 +17716,14 @@ async def douyin_start_tasks(http_request: Request = None, request: Optional[dic
         )
     )
     preferred_account_id = accounts[0]["id"] if accounts else None
-    account_ids = [account["id"] for account in accounts[: max(1, min(len(accounts), len(runnable_tasks)))]]
+    serial_reply = douyin_collection_requires_serial_reply(runnable_tasks)
+    account_ids = (
+        [accounts[0]["id"]]
+        if serial_reply and accounts
+        else [account["id"] for account in accounts[: max(1, min(len(accounts), len(runnable_tasks)))]]
+    )
     douyin_log(
-        f"[抖音评论采集] 已启动，并发账号 {', '.join(str(account_id) for account_id in account_ids)}，共 {len(runnable_tasks)} 条任务，模式 {douyin_collection_mode_label(collection_mode)}，滚动 {comment_scroll_rounds} 轮，最多采集 {comment_max_comments} 条评论"
+        f"[抖音评论采集] 已启动，{'串行账号' if serial_reply else '并发账号'} {', '.join(str(account_id) for account_id in account_ids)}，共 {len(runnable_tasks)} 条任务，模式 {douyin_collection_mode_label(collection_mode)}，滚动 {comment_scroll_rounds} 轮，最多采集 {comment_max_comments} 条评论"
         + (f"，重新采集已完成任务 {recollect_completed} 条" if recollect_completed else "")
         + (f"，跳过已有客户数据的历史完成任务 {skipped_completed} 条" if skipped_completed else ""),
         "success",
@@ -16916,7 +17731,7 @@ async def douyin_start_tasks(http_request: Request = None, request: Optional[dic
     return {
         "code": 200,
         "msg": (
-            f"评论采集任务已启动，使用 {len(account_ids)} 个账号并发，共 {len(runnable_tasks)} 条任务，模式 {douyin_collection_mode_label(collection_mode)}"
+            f"评论采集任务已启动，使用 {len(account_ids)} 个账号{'串行' if serial_reply else '并发'}，共 {len(runnable_tasks)} 条任务，模式 {douyin_collection_mode_label(collection_mode)}"
             + (f"，优先账号 {preferred_account_id}" if preferred_account_id else "")
             + (f"，将重新采集 {recollect_completed} 条已完成任务" if recollect_completed else "")
             + (f"，已跳过 {skipped_completed} 条已有客户数据的历史完成任务" if skipped_completed else "")

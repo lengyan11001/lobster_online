@@ -4,9 +4,10 @@ import asyncio
 import os
 import random
 import re
+import time
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable, Dict, List, Optional
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import requests
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
@@ -71,6 +72,10 @@ def conversation_time_is_older_than_24h(value: object, now: Optional[datetime] =
 
 class DouyinMentionCommentStopped(RuntimeError):
     pass
+
+
+class DouyinCommentCollectionUnconfirmed(RuntimeError):
+    """The comment surface opened, but its contents could not be verified."""
 
 
 def parse_count_text(text: str) -> int:
@@ -153,6 +158,15 @@ def extract_sec_user_id(profile_url: str) -> str:
     return ""
 
 
+def extract_xsec_token(profile_url: str) -> str:
+    parsed = urlparse(str(profile_url or ""))
+    for key in ("xsec_token", "sec_token", "xsecToken"):
+        value = str((parse_qs(parsed.query or "").get(key) or [""])[0] or "").strip()
+        if value:
+            return value
+    return ""
+
+
 def is_playwright_target_closed_error(exc: BaseException) -> bool:
     text = f"{type(exc).__name__}: {exc}"
     return "TargetClosedError" in text or "Target page, context or browser has been closed" in text
@@ -183,6 +197,12 @@ class DouyinCommentScraper:
         self._context: Optional[BrowserContext] = None
         self._owns_browser = False
         self._owns_context = False
+        # Login checks are deliberately tri-state.  A page that has not
+        # finished loading is not evidence that the account is logged out.
+        self.last_login_probe: Dict[str, object] = {
+            "state": "unknown",
+            "reason": "not_checked",
+        }
 
     async def _dispose_browser_runtime(self):
         context = self._context if self._owns_context else None
@@ -579,6 +599,13 @@ class DouyinCommentScraper:
                         || editor?.textContent
                         || ''
                     );
+                    const mentionEntities = editor
+                        ? Array.from(editor.querySelectorAll(
+                            '.douyin_mention_word, [data-mention], [data-mention-id], [class*="mention_word"]'
+                        ))
+                            .map((node) => normalize(node.innerText || node.textContent || ''))
+                            .filter(Boolean)
+                        : [];
                     const placeholderText = normalize(
                         placeholder?.innerText
                         || placeholder?.textContent
@@ -607,6 +634,7 @@ class DouyinCommentScraper:
                         suggestion_visible: suggestionVisible,
                         send_button_visible: !!sendButton,
                         send_button_disabled: sendDisabled,
+                        mention_entities: mentionEntities,
                         comments,
                     };
                 }
@@ -623,6 +651,7 @@ class DouyinCommentScraper:
                 "suggestion_visible": False,
                 "send_button_visible": False,
                 "send_button_disabled": False,
+                "mention_entities": [],
                 "comments": [],
             }
 
@@ -911,11 +940,16 @@ class DouyinCommentScraper:
                     const hiddenList = listNodes.find((node) => !isVisible(node));
                     const commentItems = Array.from(document.querySelectorAll('.comment-item-info-wrap, [data-e2e="comment-item"], .comment-item'))
                         .filter((node) => isVisible(node) && !node.closest('.replyContainer'));
-                    const emptyHints = ['暂无评论', '还没有评论', '抢首评', '暂无更多评论', '没有更多评论', '评论加载失败'];
+                    const emptyHints = ['暂无评论', '还没有评论', '抢首评', '暂无更多评论', '没有更多评论'];
                     const unavailableHints = ['评论功能已关闭', '暂不支持评论', '作者已关闭评论', '仅互关朋友可评论', '仅允许互关朋友评论'];
                     const loginHints = ['请先登录后发表评论', '登录后即可参与互动讨论', '立即登录'];
-                    const emptyHint = emptyHints.find((item) => bodyText.includes(item)) || '';
-                    const unavailableHint = unavailableHints.find((item) => bodyText.includes(item)) || '';
+                    const surfaceText = normalize(visibleList?.innerText || '');
+                    // Once the comment panel is visible, only trust text from
+                    // that panel. Global body text can contain stale/hidden
+                    // "暂无评论" nodes from another route.
+                    const hintText = visibleList ? surfaceText : bodyText;
+                    const emptyHint = emptyHints.find((item) => hintText.includes(item)) || '';
+                    const unavailableHint = unavailableHints.find((item) => hintText.includes(item)) || '';
                     const loginHint = loginHints.find((item) => bodyText.includes(item)) || '';
                     const visibleEditor = Array.from(document.querySelectorAll(
                         '[contenteditable="true"], textarea, input, [class*="comment-input"], [class*="DraftEditor"]'
@@ -938,17 +972,20 @@ class DouyinCommentScraper:
             if last_state.get("unavailableHint"):
                 self._emit(logger, f"[抖音评论] 当前作品评论不可用：{last_state.get('unavailableHint')}", "warning")
                 return {**last_state, "ready": True, "empty": True}
+            if last_state.get("emptyHint"):
+                if int(last_state.get("visibleCommentCount", 0) or 0) == 0:
+                    self._emit(logger, f"[抖音评论] 当前作品暂无可采集评论：{last_state.get('emptyHint')}", "info")
+                    return {**last_state, "ready": True, "empty": True}
             if last_state.get("visibleCommentCount", 0) > 0 or last_state.get("hasVisibleList") or last_state.get("visibleEditor"):
                 return {**last_state, "ready": True, "empty": False}
-            if last_state.get("emptyHint"):
-                self._emit(logger, f"[抖音评论] 当前作品暂无可采集评论：{last_state.get('emptyHint')}", "info")
-                return {**last_state, "ready": True, "empty": True}
             await page.wait_for_timeout(600)
 
         if last_state.get("hasHiddenList") and not last_state.get("visibleCommentCount"):
-            self._emit(logger, "[抖音评论] 评论列表存在但未显示，按空评论作品跳过", "warning")
-            return {**last_state, "ready": True, "empty": True}
-        raise RuntimeError("评论区打开超时，未检测到评论列表、输入框或空评论提示")
+            self._emit(logger, "[抖音评论] 评论列表存在但未显示，无法确认是否有评论", "warning")
+            return {**last_state, "ready": True, "empty": False, "unconfirmed": True}
+        raise DouyinCommentCollectionUnconfirmed(
+            "评论区打开超时，未检测到评论列表、输入框或明确的空评论提示"
+        )
 
     async def _read_like_surface_state(self, page: Page) -> Dict:
         return await page.evaluate(
@@ -1426,6 +1463,39 @@ class DouyinCommentScraper:
                 last_reason = str(exc)
             await page.wait_for_timeout(350)
         raise RuntimeError(f"私信面板已打开，但发送区仍未稳定进入视口：{last_reason}")
+
+    async def _first_visible_locator(self, locator, max_items: int = 20):
+        try:
+            total = await locator.count()
+        except Exception:
+            return None
+        for index in range(min(total, max(1, int(max_items or 20)))):
+            candidate = locator.nth(index)
+            try:
+                if await candidate.is_visible():
+                    return candidate
+            except Exception:
+                continue
+        return None
+
+    async def _resolve_visible_message_composer(self, page: Page):
+        dialog = await self._first_visible_locator(
+            page.locator('[data-e2e="im-dialog"], #messageContent')
+        )
+        input_selector = (
+            'div[data-e2e="msg-input"] [contenteditable="true"], '
+            '.public-DraftEditor-content[contenteditable="true"]'
+        )
+        send_selector = ".e2e-send-msg-btn, [class*='send-msg-btn'], span.e2e-send-msg-btn"
+
+        scopes = [dialog] if dialog is not None else []
+        scopes.append(page)
+        for scope in scopes:
+            input_box = await self._first_visible_locator(scope.locator(input_selector))
+            send_button = await self._first_visible_locator(scope.locator(send_selector))
+            if input_box is not None and send_button is not None:
+                return dialog, input_box, send_button
+        raise RuntimeError("私信面板已打开，但没有找到当前可见的输入框和发送按钮")
 
     async def _find_visible_private_message_button(self, page: Page, selector: str) -> Dict[str, object]:
         buttons = page.locator(selector)
@@ -1957,13 +2027,33 @@ class DouyinCommentScraper:
             raise RuntimeError("私信输入框已出现，但仍未成功聚焦")
         self._emit(logger, f"{log_prefix} 已聚焦私信输入框", "info")
 
-    def _can_connect_cdp(self) -> bool:
-        if not self.cdp_port or not is_port_open(self.cdp_port):
+    def _can_connect_cdp(self, logger: Optional[Callable[[str, str], None]] = None) -> bool:
+        started = time.monotonic()
+        if not self.cdp_port:
+            self._emit(logger, "[抖音诊断] CDP 检查跳过：未配置端口", "warning")
+            return False
+        if not is_port_open(self.cdp_port):
+            self._emit(
+                logger,
+                f"[抖音诊断] CDP 检查失败：端口未开放 port={self.cdp_port} elapsed_ms={(time.monotonic() - started) * 1000:.1f}",
+                "warning",
+            )
             return False
         try:
             resp = requests.get(f"http://127.0.0.1:{self.cdp_port}/json/version", timeout=2)
-            return resp.ok
-        except Exception:
+            ok = resp.ok
+            self._emit(
+                logger,
+                f"[抖音诊断] CDP HTTP 检查 port={self.cdp_port} ok={ok} status={resp.status_code} elapsed_ms={(time.monotonic() - started) * 1000:.1f}",
+                "info" if ok else "warning",
+            )
+            return ok
+        except Exception as exc:
+            self._emit(
+                logger,
+                f"[抖音诊断] CDP HTTP 检查异常 port={self.cdp_port} error={type(exc).__name__}: {exc} elapsed_ms={(time.monotonic() - started) * 1000:.1f}",
+                "warning",
+            )
             return False
 
     async def _has_login_intercept(self, page: Page) -> bool:
@@ -2029,15 +2119,34 @@ class DouyinCommentScraper:
 
     async def _ensure_browser(self, logger: Optional[Callable[[str, str], None]] = None):
         if self._context:
+            self._emit(logger, "[抖音诊断] 复用已有 BrowserContext", "info")
             return
 
-        self._playwright = await async_playwright().start()
-
-        if self.allow_cdp_reuse and self._can_connect_cdp():
-            self._emit(logger, f"[抖音] 复用已登录浏览器会话，port={self.cdp_port}")
-            self._browser = await self._playwright.chromium.connect_over_cdp(
-                f"http://127.0.0.1:{self.cdp_port}"
+        stage_started = time.monotonic()
+        self._emit(logger, "[抖音诊断] Playwright 启动开始", "info")
+        try:
+            self._playwright = await async_playwright().start()
+        except Exception as exc:
+            self._emit(
+                logger,
+                f"[抖音诊断] Playwright 启动失败 error={type(exc).__name__}: {exc} elapsed_ms={(time.monotonic() - stage_started) * 1000:.1f}",
+                "error",
             )
+            raise
+        self._emit(logger, f"[抖音诊断] Playwright 启动完成 elapsed_ms={(time.monotonic() - stage_started) * 1000:.1f}", "info")
+
+        if self.allow_cdp_reuse and self._can_connect_cdp(logger=logger):
+            self._emit(logger, f"[抖音] 复用已登录浏览器会话，port={self.cdp_port}")
+            cdp_started = time.monotonic()
+            self._emit(logger, f"[抖音诊断] connect_over_cdp 开始 port={self.cdp_port}", "info")
+            try:
+                self._browser = await self._playwright.chromium.connect_over_cdp(
+                    f"http://127.0.0.1:{self.cdp_port}"
+                )
+            except Exception as exc:
+                self._emit(logger, f"[抖音诊断] connect_over_cdp 失败 error={type(exc).__name__}: {exc} elapsed_ms={(time.monotonic() - cdp_started) * 1000:.1f}", "error")
+                raise
+            self._emit(logger, f"[抖音诊断] connect_over_cdp 完成 contexts={len(self._browser.contexts)} elapsed_ms={(time.monotonic() - cdp_started) * 1000:.1f}", "info")
             self._owns_browser = False
             if self._browser.contexts:
                 self._context = self._browser.contexts[0]
@@ -2055,11 +2164,15 @@ class DouyinCommentScraper:
                 launched = DouyinClient(self.cdp_port, account_id=self.account_id).launch_browser(
                     start_url="https://www.douyin.com/chat"
                 )
-                if launched and self._can_connect_cdp():
+                self._emit(logger, f"[抖音诊断] 账号浏览器拉起结果 launched={launched}", "info")
+                if launched and self._can_connect_cdp(logger=logger):
                     self._emit(logger, f"[抖音] 已自动拉起账号浏览器工作位，准备复用，port={self.cdp_port}", "info")
+                    cdp_started = time.monotonic()
+                    self._emit(logger, f"[抖音诊断] fallback connect_over_cdp 开始 port={self.cdp_port}", "info")
                     self._browser = await self._playwright.chromium.connect_over_cdp(
                         f"http://127.0.0.1:{self.cdp_port}"
                     )
+                    self._emit(logger, f"[抖音诊断] fallback connect_over_cdp 完成 contexts={len(self._browser.contexts)} elapsed_ms={(time.monotonic() - cdp_started) * 1000:.1f}", "info")
                     self._owns_browser = False
                     if self._browser.contexts:
                         self._context = self._browser.contexts[0]
@@ -2095,9 +2208,12 @@ class DouyinCommentScraper:
             logger,
             f"[抖音] 启动持久化浏览器，profile={self.profile_dir}，headless={self.headless}",
         )
+        launch_started = time.monotonic()
+        self._emit(logger, "[抖音诊断] launch_persistent_context 开始", "info")
         try:
             self._context = await self._playwright.chromium.launch_persistent_context(**launch_kwargs)
         except Exception as exc:
+            self._emit(logger, f"[抖音诊断] launch_persistent_context 失败 error={type(exc).__name__}: {exc} elapsed_ms={(time.monotonic() - launch_started) * 1000:.1f}", "error")
             message = str(exc or "")
             if self.cdp_port and self.allow_workspace_fallback and any(
                 marker in message
@@ -2113,10 +2229,13 @@ class DouyinCommentScraper:
                     launched = DouyinClient(self.cdp_port, account_id=self.account_id).launch_browser(
                         start_url="https://www.douyin.com/chat"
                     )
-                    if launched and self._can_connect_cdp():
+                    self._emit(logger, f"[抖音诊断] 持久化模式失败后的账号浏览器拉起结果 launched={launched}", "info")
+                    if launched and self._can_connect_cdp(logger=logger):
+                        self._emit(logger, f"[抖音诊断] retry connect_over_cdp 开始 port={self.cdp_port}", "info")
                         self._browser = await self._playwright.chromium.connect_over_cdp(
                             f"http://127.0.0.1:{self.cdp_port}"
                         )
+                        self._emit(logger, f"[抖音诊断] retry connect_over_cdp 完成 contexts={len(self._browser.contexts)}", "info")
                         self._owns_browser = False
                         if self._browser.contexts:
                             self._context = self._browser.contexts[0]
@@ -2132,17 +2251,23 @@ class DouyinCommentScraper:
             raise
         self._owns_context = True
         self._owns_browser = False
+        self._emit(logger, f"[抖音诊断] launch_persistent_context 完成 elapsed_ms={(time.monotonic() - launch_started) * 1000:.1f}", "info")
 
     async def close(self):
         await self._dispose_browser_runtime()
 
     async def _new_page(self, logger: Optional[Callable[[str, str], None]] = None) -> Page:
+        page_started = time.monotonic()
+        self._emit(logger, "[抖音诊断] 创建新页面开始", "info")
         await self._ensure_browser(logger=logger)
         if not self._context:
             raise RuntimeError("抖音浏览器上下文初始化失败")
         try:
-            return await self._context.new_page()
+            page = await self._context.new_page()
+            self._emit(logger, f"[抖音诊断] 创建新页面完成 elapsed_ms={(time.monotonic() - page_started) * 1000:.1f}", "info")
+            return page
         except Exception as exc:
+            self._emit(logger, f"[抖音诊断] 创建新页面失败 error={type(exc).__name__}: {exc} elapsed_ms={(time.monotonic() - page_started) * 1000:.1f}", "error")
             message = str(exc or "")
             closed_markers = [
                 "Target page, context or browser has been closed",
@@ -2843,13 +2968,58 @@ class DouyinCommentScraper:
         self._emit(logger, f"[抖音视频评论] 已点击视频中心以激活快捷键：{label} ({int(click_x)}, {int(click_y)})", "info")
         return target or {}
 
+    async def _pause_page_videos(
+        self,
+        page: Page,
+        logger: Optional[Callable[[str, str], None]] = None,
+        *,
+        stage: str = "",
+    ) -> Dict[str, object]:
+        """Stop every visible/injected video before keyboard shortcuts run."""
+        try:
+            result = await page.evaluate(
+                """
+                () => {
+                    const nodes = Array.from(document.querySelectorAll('video'));
+                    let playing = 0;
+                    let paused = 0;
+                    for (const video of nodes) {
+                        if (!video.paused && !video.ended) playing += 1;
+                        try { video.pause(); paused += 1; } catch (_) {}
+                        try { video.autoplay = false; } catch (_) {}
+                    }
+                    return { total: nodes.length, playing, paused };
+                }
+                """
+            )
+            if isinstance(result, dict) and int(result.get("playing", 0) or 0) > 0:
+                self._emit(
+                    logger,
+                    f"[抖音视频评论] 已暂停页面视频 stage={stage or '-'} "
+                    f"playing={int(result.get('playing', 0) or 0)} "
+                    f"total={int(result.get('total', 0) or 0)}",
+                    "info",
+                )
+            return result if isinstance(result, dict) else {}
+        except Exception as exc:
+            self._emit(
+                logger,
+                f"[抖音视频评论] 暂停页面视频失败 stage={stage or '-'} error={type(exc).__name__}: {exc}",
+                "warning",
+            )
+            return {}
+
     async def _open_video_comment_panel_by_shortcuts(
         self,
         page: Page,
         logger: Optional[Callable[[str, str], None]] = None,
         like_before_open: bool = True,
     ) -> None:
+        await self._pause_page_videos(page, logger=logger, stage="before_center_click")
         await self._click_video_center_for_shortcuts(page, logger=logger)
+        # The center click is only used to focus the player and may toggle
+        # playback. Pause again before sending the comment-panel shortcut.
+        await self._pause_page_videos(page, logger=logger, stage="after_center_click")
 
         if like_before_open:
             liked = False
@@ -3093,9 +3263,10 @@ class DouyinCommentScraper:
         self,
         logger: Optional[Callable[[str, str], None]] = None,
     ) -> bool:
+        self.last_login_probe = {"state": "unknown", "reason": "probe_started"}
         page = await self._new_page(logger=logger)
         try:
-            await page.goto("https://www.douyin.com/user/self", wait_until="domcontentloaded", timeout=60000)
+            await page.goto("https://www.douyin.com/user/self", wait_until="domcontentloaded", timeout=20000)
             await page.wait_for_timeout(4000)
             cookies = []
             try:
@@ -3117,7 +3288,7 @@ class DouyinCommentScraper:
                 () => {
                     const normalize = (value) => String(value || '').replace(/\\s+/g, '');
                     const bodyText = normalize(document.body?.innerText || '');
-                    const loginTexts = ['登录', '立即登录', '扫码登录', '去登录', '手机号登录', '验证码登录'];
+                    const loginTexts = ['登录', '立即登录', '扫码登录', '去登录', '手机号登录', '验证码登录', '未登录'];
                     const loginPrompt = Array.from(document.querySelectorAll('button, a, div, span'))
                         .some((el) => {
                             const text = normalize(el.innerText || el.textContent || '');
@@ -3127,22 +3298,28 @@ class DouyinCommentScraper:
                         .some((el) => {
                             const className = normalize(el.className || '').toLowerCase();
                             const alt = normalize(el.getAttribute?.('alt') || '').toLowerCase();
+                            const aria = normalize(el.getAttribute?.('aria-label') || '').toLowerCase();
                             const text = normalize(el.innerText || '');
                             return className.includes('qrcode')
                                 || className.includes('qr-code')
                                 || alt.includes('qr')
+                                || aria.includes('二维码')
                                 || text.includes('扫码登录')
                                 || text.includes('二维码');
                         });
-                    const profileHints = ['退出登录', '账号与安全', '我的作品', '我的喜欢', '获赞', '粉丝', '关注']
+                    const profileHints = ['退出登录', '账号与安全', '我的作品', '我的喜欢', '作品管理', '数据中心']
                         .some((text) => bodyText.includes(text));
                     const currentPath = location.pathname || '';
+                    const loginPagePath = /\\/(?:login|passport|signin)(?:\\/|$)/i.test(currentPath);
+                    const selfPath = /^\\/user\\/self(?:\\/|$)/.test(currentPath);
                     const userPath = /^\\/user\\/(?!self(?:\\/|$))/.test(currentPath);
                     const profileLinkCount = document.querySelectorAll('a[href*="/user/"]').length;
                     return {
                         loginPrompt,
                         qrLoginVisible,
                         profileHints,
+                        loginPagePath,
+                        selfPath,
                         userPath,
                         profileLinkCount,
                         currentPath,
@@ -3153,30 +3330,61 @@ class DouyinCommentScraper:
             login_prompt = bool(state.get("loginPrompt"))
             qr_login_visible = bool(state.get("qrLoginVisible"))
             profile_hints = bool(state.get("profileHints"))
+            login_page_path = bool(state.get("loginPagePath"))
+            self_path = bool(state.get("selfPath"))
             user_path = bool(state.get("userPath"))
             profile_link_count = int(state.get("profileLinkCount", 0) or 0)
             current_path = str(state.get("currentPath", "") or "")
 
             result = False
             if not login_component_visible and not login_prompt and not qr_login_visible:
-                result = bool(profile_hints or user_path or (has_session_cookie and profile_link_count > 0))
+                result = bool(
+                    has_session_cookie
+                    and (profile_hints or self_path or user_path or profile_link_count > 0)
+                )
+
+            if result:
+                probe_state = "online"
+                probe_reason = "profile_or_session_markers"
+            elif login_component_visible or login_prompt or qr_login_visible or login_page_path:
+                probe_state = "waiting"
+                probe_reason = "login_prompt_or_qr_visible"
+            else:
+                probe_state = "unknown"
+                probe_reason = "page_loaded_without_decisive_markers"
+            self.last_login_probe = {
+                "state": probe_state,
+                "reason": probe_reason,
+                "path": current_path,
+                "cookie": bool(has_session_cookie),
+                "login_component": bool(login_component_visible),
+                "login_prompt": bool(login_prompt),
+                "qr_login_visible": bool(qr_login_visible),
+                "login_page_path": login_page_path,
+                "self_path": self_path,
+            }
 
             self._emit(
                 logger,
-                f"[抖音登录检测] 账号{self.account_id or '-'} 状态={'online' if result else 'offline'} "
+                f"[抖音登录检测] 账号{self.account_id or '-'} 状态={probe_state} "
                 f"path={current_path or '-'} cookie={'yes' if has_session_cookie else 'no'} "
-                f"login_component={'yes' if login_component_visible else 'no'}",
+                f"login_component={'yes' if login_component_visible else 'no'} state={probe_state}",
                 "success" if result else "warning",
             )
             return bool(result)
         except Exception as exc:
             if is_playwright_target_closed_error(exc):
+                self.last_login_probe = {"state": "unknown", "reason": "target_closed"}
                 self._emit(
                     logger,
-                    f"[抖音登录检测] 账号{self.account_id or '-'} 检测页已关闭，按未登录处理。",
+                    f"[抖音登录检测] 账号{self.account_id or '-'} 检测页已关闭，状态=unknown，保留原状态。",
                     "warning",
                 )
                 return False
+            self.last_login_probe = {
+                "state": "unknown",
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
             raise
         finally:
             try:
@@ -3228,6 +3436,11 @@ class DouyinCommentScraper:
                         || ''
                     ).trim();
                     if (fromSSR) return fromSSR;
+                    // /user/self pages also contain recommendation/user links.
+                    // Never infer the current account from an arbitrary link,
+                    // otherwise a recommended creator can become the owner id.
+                    const path = String(location.pathname || '');
+                    if (/\/user\/self(?:\/|$)/.test(path)) return '';
                     const candidate = Array.from(document.querySelectorAll('a[href*="/user/"]'))
                         .map((node) => String(node.href || '').split('?')[0])
                         .find((href) => href.includes('/user/') && !href.endsWith('/user/self'));
@@ -3356,7 +3569,7 @@ class DouyinCommentScraper:
         except Exception:
             profile_metrics = {}
 
-        if not username:
+        if not username or username.strip().lower() in {"douyin", "www.douyin.com"}:
             username = str(profile_metrics.get("username", "") or "").strip()
 
         follow_count_text = str(profile_metrics.get("follow_count_text", "") or "").strip()
@@ -3424,6 +3637,9 @@ class DouyinCommentScraper:
         profile_url: str,
         max_videos: int = 10,
         logger: Optional[Callable[[str, str], None]] = None,
+        *,
+        self_only: bool = False,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> Dict:
         profile_url = str(profile_url or "").strip()
         max_videos = max(1, min(int(max_videos or 10), 20))
@@ -3448,9 +3664,13 @@ class DouyinCommentScraper:
 
             page.on("response", lambda response: asyncio.create_task(handle_aweme_post_response(response)))
 
-            self._emit(logger, f"[抖音同行监控] 打开同行主页：{profile_url}")
+            page_label = "抖音我的评论区" if self_only else "抖音同行监控"
+            subject_label = "本人作品" if self_only else "同行"
+            self._emit(logger, f"[{page_label}] 打开{subject_label}主页：{profile_url}")
             await page.goto(profile_url, wait_until="domcontentloaded", timeout=60000)
+            await self._pause_page_videos(page, logger=logger, stage="profile_after_goto")
             await page.wait_for_timeout(3500)
+            await self._pause_page_videos(page, logger=logger, stage="profile_after_settle")
             await self._raise_if_login_intercept(page)
 
             summary = await self._extract_profile_summary_from_page(
@@ -3460,7 +3680,17 @@ class DouyinCommentScraper:
 
             stable_rounds = 0
             last_count = 0
-            for round_index in range(10):
+            # The self profile page may append recommendations after the
+            # account's own grid. Do not scroll the whole document in this
+            # mode; the authoritative aweme post response is sufficient and
+            # avoids ever entering a foreign video surface.
+            scroll_round_limit = 0 if self_only else 10
+            if self_only:
+                self._emit(logger, "[抖音我的评论区] 本人作品模式禁止全页面下滑，避免进入推荐视频", "info")
+            for round_index in range(scroll_round_limit):
+                if should_stop and should_stop():
+                    self._emit(logger, "[抖音我的评论区] 收到停止请求，结束本人作品列表采集", "warning")
+                    break
                 try:
                     raw_count = await page.locator('a[href*="/video/"]').count()
                 except Exception:
@@ -3480,7 +3710,10 @@ class DouyinCommentScraper:
 
             raw_rows = await page.evaluate(
                 """
-                (limit) => {
+                (params) => {
+                    const options = params && typeof params === 'object' ? params : {};
+                    const limit = Number(options.limit || 10);
+                    const restrictToSelf = Boolean(options.restrictToSelf);
                     const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
                     const isDuration = (value) => /^\\d{1,2}:\\d{2}(?::\\d{2})?$/.test(normalize(value));
                     const isCountText = (value) => /^(\\d+(?:\\.\\d+)?[万千kKwW+]*|\\d+)$/.test(
@@ -3520,7 +3753,17 @@ class DouyinCommentScraper:
                     };
                     const rows = [];
                     const seen = new Set();
-                    const anchors = Array.from(document.querySelectorAll('a[href*="/video/"]'));
+                    const postRoot = document.querySelector(
+                        '[data-e2e="user-post"], [data-e2e*="user-post"], [class*="user-post"]'
+                    );
+                    // A /user/self page can append recommended videos while scrolling.
+                    // When collecting the current account, only inspect the explicit
+                    // user-post surface. If it is unavailable, return no DOM fallback
+                    // rather than risking a foreign video.
+                    const anchorRoot = restrictToSelf ? postRoot : document;
+                    const anchors = anchorRoot
+                        ? Array.from(anchorRoot.querySelectorAll('a[href*="/video/"]'))
+                        : [];
                     for (const anchor of anchors) {
                         const href = String(anchor.href || '').split('?')[0];
                         if (!href || seen.has(href)) continue;
@@ -3561,7 +3804,7 @@ class DouyinCommentScraper:
                     return rows;
                 }
                 """,
-                max_videos,
+                {"limit": max_videos, "restrictToSelf": bool(self_only)},
             )
 
             aweme_post_payload: Dict = {}
@@ -3596,7 +3839,17 @@ class DouyinCommentScraper:
                 return ""
 
             api_video_map: Dict[str, Dict] = {}
+            api_rejected_count = 0
             api_aweme_list = aweme_post_payload.get("aweme_list", []) if isinstance(aweme_post_payload, dict) else []
+            own_sec_user_id = str(summary.get("sec_user_id", "") or "").strip()
+            if own_sec_user_id.lower() in {"self", "user"}:
+                own_sec_user_id = ""
+            own_username = str(summary.get("username", "") or "").strip()
+            self._emit(
+                logger,
+                f"[抖音我的评论区] 本人作品校验身份 sec_user_id={own_sec_user_id or '-'} username={own_username or '-'}",
+                "info",
+            ) if self_only else None
             for order_index, aweme in enumerate(api_aweme_list or [], start=1):
                 if not isinstance(aweme, dict):
                     continue
@@ -3604,6 +3857,24 @@ class DouyinCommentScraper:
                 if not aweme_id:
                     continue
                 author_info = aweme.get("author") if isinstance(aweme.get("author"), dict) else {}
+                author_sec_user_id = str(
+                    author_info.get("sec_uid") or author_info.get("sec_user_id") or ""
+                ).strip()
+                author_nickname = str(author_info.get("nickname", "") or "").strip()
+                if self_only:
+                    owned = False
+                    if own_sec_user_id and author_sec_user_id:
+                        owned = own_sec_user_id == author_sec_user_id
+                    elif own_username and author_nickname:
+                        owned = own_username.strip().casefold() == author_nickname.strip().casefold()
+                    if not owned:
+                        api_rejected_count += 1
+                        self._emit(
+                            logger,
+                            f"[抖音我的评论区] 丢弃非本人作品 aweme_id={aweme_id} author={author_nickname or '-'} sec_user_id={author_sec_user_id or '-'}",
+                            "warning",
+                        )
+                        continue
                 statistics = aweme.get("statistics") if isinstance(aweme.get("statistics"), dict) else {}
                 video_info = aweme.get("video") if isinstance(aweme.get("video"), dict) else {}
                 digg_count = int(statistics.get("digg_count", 0) or 0)
@@ -3624,6 +3895,7 @@ class DouyinCommentScraper:
                     "publish_time_text": format_unix_timestamp_text(publish_ts),
                     "publish_timestamp": publish_ts,
                     "video_order": order_index,
+                    "author_sec_user_id": author_sec_user_id,
                 }
 
             raw_video_map: Dict[str, Dict] = {}
@@ -3637,7 +3909,26 @@ class DouyinCommentScraper:
                 raw_video_map[aweme_id] = item
 
             videos: List[Dict] = []
-            source_aweme_ids = list(api_video_map.keys()) if api_video_map else list(raw_video_map.keys())
+            if self_only:
+                # The profile API and the rendered grid can briefly disagree
+                # while recommendations are being injected.  When the grid is
+                # available, require an id present in both sources.
+                if api_video_map and raw_video_map:
+                    source_aweme_ids = [
+                        aweme_id for aweme_id in api_video_map if aweme_id in raw_video_map
+                    ]
+                else:
+                    source_aweme_ids = list(api_video_map.keys()) if api_video_map else []
+                if api_video_map and raw_video_map and not source_aweme_ids:
+                    self._emit(
+                        logger,
+                        "[抖音我的评论区] API 作品与本人主页作品卡片无交集，已跳过本轮评论页",
+                        "warning",
+                    )
+            else:
+                source_aweme_ids = (
+                    list(api_video_map.keys()) if api_video_map else list(raw_video_map.keys())
+                )
             for index, aweme_id in enumerate(source_aweme_ids, start=1):
                 api_item = api_video_map.get(aweme_id, {})
                 raw_item = raw_video_map.get(aweme_id, {})
@@ -3653,6 +3944,7 @@ class DouyinCommentScraper:
                         "url": url,
                         "title": str(api_item.get("title", "") or raw_item.get("title", "") or "").strip() or f"视频 {index}",
                         "author": str(api_item.get("author", "") or summary.get("username", "") or "").strip(),
+                        "author_sec_user_id": str(api_item.get("author_sec_user_id", "") or "").strip(),
                         "cover_image": str(api_item.get("cover_image", "") or raw_item.get("cover_image", "") or "").strip(),
                         "likes": int(api_item.get("likes", 0) or parse_count_text(raw_item.get("likes_text", ""))),
                         "likes_text": str(api_item.get("likes_text", "") or raw_item.get("likes_text", "") or "").strip(),
@@ -3667,6 +3959,12 @@ class DouyinCommentScraper:
                     }
                 )
 
+            if self_only:
+                self._emit(
+                    logger,
+                    f"[抖音我的评论区] 本人作品校验完成 accepted={len(videos)} api_rejected={api_rejected_count} raw_candidates={len(raw_video_map)}",
+                    "success" if videos else "warning",
+                )
             return {
                 "profile": summary,
                 "videos": videos,
@@ -3677,12 +3975,15 @@ class DouyinCommentScraper:
     async def scrape_self_videos(
         self,
         max_videos: int = 12,
+        should_stop: Optional[Callable[[], bool]] = None,
         logger: Optional[Callable[[str, str], None]] = None,
     ) -> Dict:
         return await self.scrape_profile_videos(
             "https://www.douyin.com/user/self?from_tab_name=main",
             max_videos=max_videos,
             logger=logger,
+            self_only=True,
+            should_stop=should_stop,
         )
 
     async def list_chat_groups(
@@ -6033,26 +6334,56 @@ class DouyinCommentScraper:
 
             self._emit(logger, f"[抖音私信] 已打开私信面板：{expected_username or profile_url}")
 
-            dialog = dialog_locator
-            await dialog.wait_for(state="visible", timeout=10000)
-            await page.wait_for_timeout(1800)
+            dialog = None
+            input_box = None
+            send_button = None
+            composer_error = ""
+            for composer_attempt in range(2):
+                await page.wait_for_timeout(1800 if composer_attempt == 0 else 1200)
+                try:
+                    dialog, input_box, send_button = await self._resolve_visible_message_composer(page)
+                    await self._wait_for_message_composer_ready(
+                        page,
+                        input_box,
+                        send_button,
+                        dialog_locator=dialog,
+                        logger=logger,
+                        log_prefix="[抖音私信]",
+                        timeout_ms=15000,
+                    )
+                    composer_error = ""
+                    break
+                except Exception as exc:
+                    composer_error = str(exc).strip() or exc.__class__.__name__
+                    if composer_attempt >= 1:
+                        break
+                    self._emit(
+                        logger,
+                        f"[抖音私信] 私信面板已出现但当前发送区不可用，关闭面板后重新打开一次：{composer_error}",
+                        "warning",
+                    )
+                    try:
+                        await page.keyboard.press("Escape")
+                    except Exception:
+                        pass
+                    await page.wait_for_timeout(700)
+                    reopened_candidate = await self._mark_dom_private_message_button(page)
+                    reopened_marker = str(reopened_candidate.get("marker", "") or "")
+                    if reopened_candidate.get("found") and reopened_marker:
+                        await self._click_marked_private_message_button(
+                            page,
+                            reopened_marker,
+                            logger=logger,
+                            log_prefix="[抖音私信]",
+                            click_method="normal",
+                        )
+            if input_box is None or send_button is None or composer_error:
+                raise RuntimeError(f"私信面板重开后发送区仍不可用：{composer_error or '未找到可见输入框'}")
 
-            input_box = page.locator(
-                'div[data-e2e="msg-input"] [contenteditable="true"], .public-DraftEditor-content[contenteditable="true"]'
-            ).first
-            send_button = page.locator(".e2e-send-msg-btn, [class*='send-msg-btn'], span.e2e-send-msg-btn").first
-            await self._wait_for_message_composer_ready(
-                page,
-                input_box,
-                send_button,
-                dialog_locator=dialog,
-                logger=logger,
-                log_prefix="[抖音私信]",
-                timeout_ms=15000,
-            )
             sent_messages = []
             total_parts = len(message_parts)
             for index, message_part in enumerate(message_parts, start=1):
+                dialog, input_box, send_button = await self._resolve_visible_message_composer(page)
                 await self._wait_for_message_composer_ready(
                     page,
                     input_box,
@@ -6085,11 +6416,22 @@ class DouyinCommentScraper:
                             .map((node) => (node.textContent || '').trim())
                             .filter(Boolean);
                         if (texts.some((text) => text.includes(needle))) return true;
-                        const editor = document.querySelector(
-                            'div[data-e2e="msg-input"] [contenteditable="true"][role="textbox"]'
-                        );
+                        const visible = (node) => {
+                            if (!node || typeof node.getBoundingClientRect !== 'function') return false;
+                            const style = window.getComputedStyle(node);
+                            const rect = node.getBoundingClientRect();
+                            return style.display !== 'none'
+                                && style.visibility !== 'hidden'
+                                && style.opacity !== '0'
+                                && rect.width > 0
+                                && rect.height > 0;
+                        };
+                        const editor = Array.from(document.querySelectorAll(
+                            'div[data-e2e="msg-input"] [contenteditable="true"][role="textbox"], '
+                            + '.public-DraftEditor-content[contenteditable="true"]'
+                        )).find(visible);
                         const editorText = (editor?.textContent || '').trim();
-                        return editorText.length === 0;
+                        return !!editor && editorText.length === 0;
                     }
                     """,
                     message_part,
@@ -6994,6 +7336,13 @@ class DouyinCommentScraper:
             "allowScroll": bool(allow_scroll),
         }
 
+        try:
+            target_comment_index = int(str((target_comment or {}).get("comment_index", "") or "").strip())
+        except (TypeError, ValueError):
+            target_comment_index = 0
+        if allow_scroll and target_comment_index > 0:
+            max_scroll_rounds = max(int(max_scroll_rounds or 10), min(120, target_comment_index // 4 + 8))
+
         for round_index in range(max(1, int(max_scroll_rounds or 10))):
             result = await page.evaluate(
                 """
@@ -7002,6 +7351,16 @@ class DouyinCommentScraper:
                     const targetUsername = normalize(target.username);
                     const targetProfileUrl = normalize(target.profileUrl);
                     const targetContent = normalize(target.content);
+                    const profileKey = (value) => {
+                        try {
+                            const parsed = new URL(String(value || ''), window.location.origin);
+                            return parsed.pathname.replace(/\/+$/, '');
+                        } catch (_) {
+                            return String(value || '').split(/[?#]/, 1)[0].replace(/\/+$/, '');
+                        }
+                    };
+                    const targetProfileKey = profileKey(targetProfileUrl);
+                    const targetContentCore = normalize(targetContent.replace(/^@\\s*/, ''));
                     const isVisible = (node) => {
                         if (!node || typeof node.getBoundingClientRect !== 'function') return false;
                         const style = window.getComputedStyle(node);
@@ -7032,16 +7391,21 @@ class DouyinCommentScraper:
                             item.querySelector('a[href*="/user/"]');
                         const username = normalize(authorLink?.innerText || authorLink?.textContent || '');
                         const profileUrl = normalize(authorLink?.href || '');
+                        const currentProfileKey = profileKey(profileUrl);
                         const text = normalize(item.innerText || item.textContent || '');
                         let score = 0;
                         if (targetUsername && username === targetUsername) score += 6;
                         else if (targetUsername && username && (username.includes(targetUsername) || targetUsername.includes(username))) score += 3;
-                        if (targetProfileUrl && profileUrl && profileUrl === targetProfileUrl) score += 7;
+                        if (targetProfileKey && currentProfileKey && currentProfileKey === targetProfileKey) score += 12;
                         if (targetContent && text.includes(targetContent)) score += 10;
                         else if (targetContent) {
                             const compactTarget = targetContent.replace(/\\s+/g, '');
                             const compactText = text.replace(/\\s+/g, '');
                             if (compactTarget && compactText.includes(compactTarget.slice(0, Math.min(compactTarget.length, 32)))) score += 5;
+                            else {
+                                const compactCore = targetContentCore.replace(/\\s+/g, '');
+                                if (compactCore && compactText.includes(compactCore.slice(0, Math.min(compactCore.length, 32)))) score += 5;
+                            }
                         }
                         return { item, score, username, profileUrl, text };
                     };
@@ -7180,6 +7544,33 @@ class DouyinCommentScraper:
 
         raise RuntimeError(f"未在评论列表中找到目标评论：{target_username or ''} {target_content[:30]}")
 
+    async def open_video_comment_page(
+        self,
+        video_url: str,
+        expected_title: str = "",
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> Page:
+        """Open one video and leave its comment panel ready for repeated actions."""
+        video_url = str(video_url or "").strip()
+        if not video_url:
+            raise ValueError("缺少作品地址")
+
+        target_url = build_douyin_modal_video_url(video_url)
+        page = await self._new_page(logger=logger)
+        try:
+            self._emit(logger, f"[抖音评论区监控] 打开作品评论区：{expected_title or video_url}", "info")
+            await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+            await self._pause_page_videos(page, logger=logger, stage="comment_page_after_goto")
+            await page.wait_for_timeout(4000)
+            await self._pause_page_videos(page, logger=logger, stage="comment_page_after_settle")
+            await self._raise_if_login_intercept(page)
+            await self._open_video_comment_panel_by_shortcuts(page, logger=logger, like_before_open=False)
+            await self._ensure_comment_panel_ready(page, logger=logger)
+            return page
+        except Exception:
+            await page.close()
+            raise
+
     async def reply_to_video_comment(
         self,
         video_url: str,
@@ -7200,15 +7591,13 @@ class DouyinCommentScraper:
             raise ValueError("回复内容不能为空")
 
         target_url = build_douyin_modal_video_url(video_url)
-        page = await self._new_page(logger=logger)
+        page: Optional[Page] = None
         try:
-            self._emit(logger, f"[抖音评论区监控] 打开自己的作品评论区：{expected_title or video_url}", "info")
-            await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(4000)
-            await self._raise_if_login_intercept(page)
-            await self._open_video_comment_panel_by_shortcuts(page, logger=logger, like_before_open=False)
-            await self._ensure_comment_panel_ready(page, logger=logger)
-
+            page = await self.open_video_comment_page(
+                video_url,
+                expected_title=expected_title,
+                logger=logger,
+            )
             await self.reply_to_loaded_video_comment(
                 page,
                 reply_text,
@@ -7228,7 +7617,8 @@ class DouyinCommentScraper:
                 "target_comment": target_comment,
             }
         finally:
-            await page.close()
+            if page is not None:
+                await page.close()
 
     async def _extract_visible_comment_batch(
         self,
@@ -7269,12 +7659,27 @@ class DouyinCommentScraper:
                     if (value.includes('年') && value.includes('月') && /\\d/.test(value)) return true;
                     return false;
                 };
+                // Douyin changes class names frequently. Keep field parsing
+                // based on semantic text and attributes instead of one DOM
+                // class so controls cannot be stored as comment content.
+                const timePattern = /(\\u521a\\u521a|\\d+\\s*\\u5206\\u949f\\u524d|\\d+\\s*\\u5c0f\\u65f6\\u524d|\\d+\\s*\\u5929\\u524d|\\d+\\s*\\u5468\\u524d|\\u6628\\u5929\\s*\\d{0,2}:?\\d{0,2}|\\d{1,4}[-/.]\\d{1,2}(?:[-/.]\\d{1,2})?|\\d+\\s*\\u6708\\u524d|\\d+\\s*\\u5e74\\u524d)/;
+                const locationPattern = /(?:IP\\s*(?:\\u5c5e\\u5730)?\\s*[:：]?\\s*)([^\\s，。,。；;]{2,20})/i;
+                const isCountOnly = (text) => /^(?:\\d+(?:[.]\\d+)?(?:\\u4e07|\\u5343|k|K|w|W)?\\+?)$/.test(normalizeText(text).replace(/,/g, ''));
+                const isLocationText = (text) => {
+                    const value = normalizeText(text);
+                    return Boolean(value && (locationPattern.test(value) || /^[\\u4e00-\\u9fff]{2,12}$/.test(value) && /(?:\\u7701|\\u5e02|\\u533a|\\u53bf|\\u6e7e|\\u6e2f|\\u6fb3)$/.test(value)));
+                };
+                const isNoiseText = (text) => {
+                    const value = normalizeText(text);
+                    return !value || isActionText(value) || isMetaText(value) || isLocationText(value) || isCountOnly(value);
+                };
                 const getText = (el) => normalizeText(el?.innerText || el?.textContent || '');
                 const firstUsefulText = (elements, username) => {
                     for (const el of elements) {
                         if (!el || !isVisible(el)) continue;
                         const text = getText(el);
-                        if (!text || text === username || isActionText(text) || isMetaText(text)) continue;
+                        if (!text || text === username || isNoiseText(text)) continue;
+                        if (el.children && el.children.length && !String(el.className || '').toLowerCase().includes('comment-content')) continue;
                         return text;
                     }
                     return '';
@@ -7295,14 +7700,7 @@ class DouyinCommentScraper:
                             continue;
                         }
                         if (parent.closest('a[href*="/user/"]')) continue;
-                        if (text === username || isActionText(text)) {
-                            if (texts.length) break;
-                            continue;
-                        }
-                        if (isMetaText(text)) {
-                            if (texts.length) break;
-                            continue;
-                        }
+                        if (text === username || isNoiseText(text)) continue;
                         texts.push(text);
                     }
                     return normalizeText(texts.join(' '));
@@ -7310,14 +7708,39 @@ class DouyinCommentScraper:
                 const extractMetaText = (itemRoot, root) => {
                     const fixedMeta = itemRoot.querySelector('.vo4kEeuY, .fJhvAqos, [class*="comment-item-time"], [class*="time"]');
                     const fixedText = getText(fixedMeta);
-                    if (isMetaText(fixedText)) return fixedText;
-                    const textEls = Array.from(itemRoot.querySelectorAll('span, div, p'));
+                    const fixedMatch = fixedText.match(timePattern);
+                    if (fixedMatch) return fixedMatch[0];
+                    const textEls = Array.from(itemRoot.querySelectorAll('span, div, p, time'));
                     for (const el of textEls) {
                         if (!isVisible(el)) continue;
                         const text = getText(el);
-                        if (isMetaText(text)) return text;
+                        const match = text.match(timePattern);
+                        if (match) return match[0];
                     }
-                    return getText(root.querySelector('[class*="time"]'));
+                    const fallback = getText(root.querySelector('[class*="time"]'));
+                    return fallback.match(timePattern)?.[0] || '';
+                };
+                const extractLocation = (itemRoot) => {
+                    const candidates = Array.from(itemRoot.querySelectorAll('[class*="location"], [class*="ip"], span, div'));
+                    for (const el of candidates) {
+                        if (!isVisible(el)) continue;
+                        const text = getText(el);
+                        const match = text.match(locationPattern);
+                        if (match && match[1]) return normalizeText(match[1]);
+                    }
+                    return '';
+                };
+                const readCommentId = (itemRoot) => {
+                    const nodes = [itemRoot, ...Array.from(itemRoot.querySelectorAll('*'))];
+                    for (const node of nodes) {
+                        for (const attr of Array.from(node.attributes || [])) {
+                            const name = String(attr.name || '').toLowerCase();
+                            const value = normalizeText(attr.value || '');
+                            if (!value || value.length > 160) continue;
+                            if (/(?:comment[_-]?(?:id|uid)|commentid|cid|data-comment)/.test(name) && !/^comment-item$/i.test(value)) return value;
+                        }
+                    }
+                    return '';
                 };
                 const itemSet = new Set();
                 for (const item of Array.from(document.querySelectorAll('[data-e2e="comment-item"]'))) {
@@ -7345,14 +7768,18 @@ class DouyinCommentScraper:
                     const contentEl = itemRoot.querySelector('.gD6hDm2O .JrWL1Ykc') || itemRoot.querySelector('.gD6hDm2O') || root.querySelector('.C7LroK_h .WFJiGxr7') || root.querySelector('.C7LroK_h') || itemRoot.querySelector('[class*="comment-content"]') || root.querySelector('[class*="comment-content"]');
                     const avatarImg = itemRoot.querySelector('span[data-e2e="live-avatar"] img, .avatar-component-avatar-container img, img[alt*="头像"]');
                     const statsEl = itemRoot.querySelector('.vXZJEXVc') || itemRoot.querySelector('.comment-item-stats-container') || root.querySelector('.vXZJEXVc') || root.querySelector('.comment-item-stats-container') || itemRoot.querySelector('[class*="stats"]') || root.querySelector('[class*="stats"]');
-                    const content = firstUsefulText([contentEl], username) || extractContentByOrder(itemRoot, authorLink, username);
+                    const contentCandidates = [
+                        contentEl,
+                        ...Array.from(itemRoot.querySelectorAll('[class*="comment-content"], [class*="comment-text"], [class*="JrWL1Ykc"]')),
+                    ];
+                    const content = firstUsefulText(contentCandidates, username) || extractContentByOrder(itemRoot, authorLink, username);
                     const rawMetaText = extractMetaText(itemRoot, root);
-                    const metaParts = rawMetaText.split(/[·•・]/).map((part) => part.trim()).filter(Boolean);
-                    const commentTime = metaParts.length ? metaParts[0] : rawMetaText;
-                    const location = metaParts.length > 1 ? metaParts.slice(1).join(' · ') : '';
+                    const commentTime = rawMetaText.match(timePattern)?.[0] || '';
+                    const location = extractLocation(itemRoot);
                     const statsLines = (statsEl?.innerText || '').split(/\\n+/).map((part) => part.replace(/\\s+/g, ' ').trim()).filter(Boolean);
-                    const statNumbers = statsLines.filter((part) => /\\d/.test(part));
+                    const statNumbers = statsLines.filter((part) => isCountOnly(part));
                     rows.push({
+                        comment_id: readCommentId(itemRoot),
                         username,
                         profile_url: profileUrl,
                         content,
@@ -7375,10 +7802,15 @@ class DouyinCommentScraper:
             comment_time = str(item.get("comment_time", "")).strip()
             avatar_url = str(item.get("avatar_url", "")).strip()
             location = str(item.get("location", "")).strip()
+            comment_id = str(item.get("comment_id", "") or "").strip()
             if not username or not profile_url or not content:
                 continue
+            # Numeric-only nodes are normally the like/reply counters, not a
+            # user comment. They were previously persisted as content="0".
+            if re.fullmatch(r"[\d.,]+", content):
+                continue
             user_id = extract_sec_user_id(profile_url)
-            key = f"{user_id}|{content}|{comment_time}"
+            key = f"id:{comment_id}" if comment_id else f"{user_id}|{content}|{comment_time}"
             if key in seen_keys:
                 continue
             if mark_seen:
@@ -7386,10 +7818,10 @@ class DouyinCommentScraper:
             batch.append(
                 {
                     "comment_index": len(seen_keys) if mark_seen else len(seen_keys) + len(batch) + 1,
-                    "comment_id": "",
+                    "comment_id": comment_id,
                     "username": username,
                     "user_id": user_id,
-                    "user_xsec_token": "",
+                    "user_xsec_token": extract_xsec_token(profile_url),
                     "platform": "douyin",
                     "content": content,
                     "comment": content,
@@ -7438,34 +7870,127 @@ class DouyinCommentScraper:
         max_scroll_rounds: int = 18,
         logger: Optional[Callable[[str, str], None]] = None,
         on_batch: Optional[Callable[[Page, List[Dict], int], Awaitable[None]]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
     ) -> List[Dict]:
+        """Collect comments in batches, retrying only unverified empty reads."""
+        last_error: Optional[Exception] = None
+        for attempt in range(1, 3):
+            try:
+                return await self._process_video_comment_batches_once(
+                    video_url,
+                    max_comments=max_comments,
+                    batch_size=batch_size,
+                    max_scroll_rounds=max_scroll_rounds,
+                    logger=logger,
+                    on_batch=on_batch,
+                    should_stop=should_stop,
+                )
+            except DouyinCommentCollectionUnconfirmed as exc:
+                last_error = exc
+                self._emit(
+                    logger,
+                    f"[抖音评论采集] 分批采集第 {attempt}/2 次未确认评论内容，准备重试：{exc}",
+                    "warning",
+                )
+                if attempt < 2:
+                    await asyncio.sleep(1.0)
+                    continue
+                raise RuntimeError(
+                    f"评论区已打开但连续 2 次未读取到可验证评论，未判定为无评论：{exc}"
+                ) from exc
+        raise last_error or RuntimeError("评论分批采集未返回结果")
+
+    async def _process_video_comment_batches_once(
+        self,
+        video_url: str,
+        *,
+        max_comments: int = 80,
+        batch_size: int = 10,
+        max_scroll_rounds: int = 18,
+        logger: Optional[Callable[[str, str], None]] = None,
+        on_batch: Optional[Callable[[Page, List[Dict], int], Awaitable[None]]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> List[Dict]:
+        def is_stopped() -> bool:
+            try:
+                return bool(should_stop and should_stop())
+            except Exception:
+                return False
+
+        if is_stopped():
+            self._emit(logger, f"[抖音评论采集] 收到停止请求，跳过视频：{video_url}", "warning")
+            return []
         page = await self._new_page(logger=logger)
         seen_keys: set = set()
         collected: List[Dict] = []
+        pending_batch: List[Dict] = []
+        delivered_batch_index = 0
+        surface: Dict = {}
+
+        async def flush_pending(force: bool = False) -> None:
+            """Deliver full AI batches while keeping the scrape page alive."""
+            nonlocal delivered_batch_index, pending_batch
+            if not on_batch:
+                pending_batch.clear()
+                return
+            target_size = max(1, int(batch_size or 10))
+            while pending_batch and (force or len(pending_batch) >= target_size):
+                if is_stopped():
+                    self._emit(logger, "[抖音评论采集] 停止请求已生效，放弃未发送的评论批次", "warning")
+                    pending_batch.clear()
+                    return
+                chunk_size = target_size if len(pending_batch) >= target_size else len(pending_batch)
+                chunk = pending_batch[:chunk_size]
+                del pending_batch[:chunk_size]
+                delivered_batch_index += 1
+                self._emit(
+                    logger,
+                    f"[抖音评论] 送入 AI 第 {delivered_batch_index} 批：{len(chunk)} 条评论",
+                    "info",
+                )
+                await on_batch(page, chunk, delivered_batch_index)
+                if is_stopped():
+                    pending_batch.clear()
+                    return
+
         try:
             self._emit(logger, f"[抖音评论] 打开视频：{video_url}")
             target_url = build_douyin_modal_video_url(video_url)
             await page.goto(target_url, wait_until="domcontentloaded", timeout=60000)
+            await self._pause_page_videos(page, logger=logger, stage="batch_page_after_goto")
             await page.wait_for_timeout(4000)
+            await self._pause_page_videos(page, logger=logger, stage="batch_page_after_settle")
+            if is_stopped():
+                self._emit(logger, "[抖音评论采集] 页面打开后收到停止请求，结束当前视频", "warning")
+                return []
             await self._raise_if_login_intercept(page)
             await self._open_video_comment_panel_by_shortcuts(page, logger=logger, like_before_open=False)
             surface = await self._wait_for_comment_collection_surface(page, logger=logger, timeout_ms=16000)
             if surface.get("empty"):
                 self._emit(logger, f"[抖音评论] 当前作品无可采集评论，已跳过：{video_url}", "info")
                 return []
+            if surface.get("unconfirmed"):
+                raise DouyinCommentCollectionUnconfirmed(
+                    "评论区列表存在但未显示可验证内容"
+                )
 
             max_comments = max(1, min(int(max_comments or 80), 500))
             batch_size = max(1, min(int(batch_size or 10), max_comments))
             max_scroll_rounds = max(1, min(int(max_scroll_rounds or 18), 300))
             stable_rounds = 0
             for round_index in range(max_scroll_rounds):
+                if is_stopped():
+                    self._emit(logger, f"[抖音评论采集] 停止请求已生效，结束第 {round_index + 1} 轮滚动", "warning")
+                    break
                 batch = await self._extract_visible_comment_batch(page, seen_keys, batch_size=batch_size, max_total=max_comments)
                 if batch:
                     collected.extend(batch)
+                    pending_batch.extend(batch)
                     stable_rounds = 0
                     self._emit(logger, f"[抖音评论] 当前批次提取 {len(batch)} 条评论，累计 {len(collected)}/{max_comments}", "info")
-                    if on_batch:
-                        await on_batch(page, batch, round_index + 1)
+                    await flush_pending()
+                    if is_stopped():
+                        break
                 else:
                     stable_rounds += 1
                 if len(collected) >= max_comments:
@@ -7481,11 +8006,31 @@ class DouyinCommentScraper:
                 )
                 if next_visible_batch:
                     continue
+                if is_stopped():
+                    self._emit(logger, "[抖音评论采集] 滚动前收到停止请求", "warning")
+                    break
                 scroll_state = await self._scroll_comment_panel_once(page)
                 await page.wait_for_timeout(1200)
                 if scroll_state and scroll_state.get("top") == scroll_state.get("before"):
                     stable_rounds += 1
-            self._emit(logger, f"[抖音评论] 共分批提取 {len(collected)} 条一级评论用户", "success")
+            if not is_stopped():
+                await flush_pending(force=True)
+            else:
+                pending_batch.clear()
+            if not collected and not is_stopped() and not surface.get("empty"):
+                self._emit(
+                    logger,
+                    "[抖音评论采集] 评论区已打开但本轮没有提取到可验证评论，结果未确认，不按空评论完成",
+                    "warning",
+                )
+                raise DouyinCommentCollectionUnconfirmed(
+                    "评论区可见但本轮未提取到有效评论节点"
+                )
+            self._emit(
+                logger,
+                f"[抖音评论] {'停止后保留' if is_stopped() else '共分批提取'} {len(collected)} 条一级评论用户",
+                "warning" if is_stopped() else "success",
+            )
             return collected[:max_comments]
         finally:
             await page.close()
@@ -7783,34 +8328,49 @@ class DouyinCommentScraper:
         target_index = max(0, int(chosen.get("index", 0) or 0))
         root_index = max(0, int(chosen.get("root_index", last_state.get("chosen_root_index", 0)) or 0))
         root_locator = page.locator('[class*="atBox-inner-container"], [class*="atBox-inner"]').nth(root_index)
+        candidate_locator = root_locator.locator(":scope > div").nth(target_index)
         try:
-            clicked_label = await root_locator.evaluate(
-                """
-                (node, payload) => {
-                    const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
-                    const directChildren = Array.from(node.children || []).filter((child) => child.tagName === 'DIV');
-                    const target = directChildren.find((child) => String(child.id || '').trim() === String(payload.targetId || '').trim())
-                        || directChildren[Number(payload.targetIndex) || 0];
-                    if (!target) return '';
-                    const clickable = target.querySelector('.OToQiXBr') || target.querySelector('.zJiGLhJ6') || target;
-                    clickable.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, button: 0 }));
-                    clickable.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true, button: 0 }));
-                    clickable.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, button: 0 }));
-                    const labelNode = target.querySelector('.eRbIZXG4, [class*="eRbIZXG4"]');
-                    return normalize(labelNode?.textContent || target.innerText || target.textContent || '');
-                }
-                """,
-                {"targetId": target_id, "targetIndex": target_index},
-            )
+            await candidate_locator.click(timeout=5000)
             await page.wait_for_timeout(240)
-        except Exception:
+            clicked_label = str(chosen.get("label", "") or "").strip()
+        except Exception as primary_click_exc:
             try:
-                fallback_locator = root_locator.locator(":scope > div").nth(target_index)
-                await fallback_locator.click(timeout=5000, force=True)
+                await candidate_locator.locator('[role="listitem"]').first.click(timeout=3500)
                 await page.wait_for_timeout(240)
                 clicked_label = str(chosen.get("label", "") or "").strip()
             except Exception:
-                clicked_label = ""
+                try:
+                    await candidate_locator.click(timeout=3500, force=True)
+                    await page.wait_for_timeout(240)
+                    clicked_label = str(chosen.get("label", "") or "").strip()
+                except Exception:
+                    try:
+                        clicked_label = await root_locator.evaluate(
+                            """
+                            (node, payload) => {
+                                const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+                                const directChildren = Array.from(node.children || []).filter((child) => child.tagName === 'DIV');
+                                const target = directChildren.find((child) => String(child.id || '').trim() === String(payload.targetId || '').trim())
+                                    || directChildren[Number(payload.targetIndex) || 0];
+                                if (!target) return '';
+                                const clickable = target.querySelector('.OToQiXBr') || target.querySelector('.zJiGLhJ6') || target;
+                                clickable.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, button: 0 }));
+                                clickable.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, composed: true, button: 0 }));
+                                clickable.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, composed: true, button: 0 }));
+                                const labelNode = target.querySelector('.eRbIZXG4, [class*="eRbIZXG4"]');
+                                return normalize(labelNode?.textContent || target.innerText || target.textContent || '');
+                            }
+                            """,
+                            {"targetId": target_id, "targetIndex": target_index},
+                        )
+                        await page.wait_for_timeout(240)
+                    except Exception:
+                        self._emit(
+                            logger,
+                            f"[抖音评论@客户] 候选真实点击失败，已尝试强制点击和 DOM 兜底：{primary_click_exc}",
+                            "warning",
+                        )
+                        clicked_label = ""
         clicked_label = str(clicked_label or chosen.get("label", "") or "").strip()
         if not clicked_label:
             raise RuntimeError(f"候选用户 @{expected_username} 已识别，但点击失败")
@@ -7834,31 +8394,59 @@ class DouyinCommentScraper:
         deadline = asyncio.get_event_loop().time() + (timeout_ms / 1000.0)
         last_editor_text = ""
         last_suggestion_visible = False
+        last_mention_entities: List[str] = []
+        keyboard_fallback_used = False
+        commit_checks = 0
 
         while asyncio.get_event_loop().time() < deadline:
             self._raise_if_should_stop(should_stop, logger=logger)
+            commit_checks += 1
             snapshot = await self._read_comment_submission_snapshot(page)
             editor_text = re.sub(r"\s+", " ", str(snapshot.get("editor_text", "") or "")).strip()
             suggestion_visible = bool(snapshot.get("suggestion_visible"))
+            mention_entities = [
+                re.sub(r"\s+", " ", str(value or "")).strip()
+                for value in (snapshot.get("mention_entities", []) or [])
+                if re.sub(r"\s+", " ", str(value or "")).strip()
+            ]
             last_editor_text = editor_text
             last_suggestion_visible = suggestion_visible
+            last_mention_entities = mention_entities
 
-            label_inserted = bool(selected_name) and f"@{selected_name}" in editor_text
+            expected_tokens = {
+                f"@{value}"
+                for value in (selected_name, expected_name)
+                if value
+            }
+            entity_inserted = any(entity in expected_tokens for entity in mention_entities)
             text_changed = editor_text != before_text
-            search_query_lingering = bool(expected_name) and f"@{expected_name}" in editor_text and not label_inserted
-            if label_inserted and text_changed and not suggestion_visible and not search_query_lingering:
+            if entity_inserted and text_changed:
+                if suggestion_visible:
+                    await page.keyboard.press("Escape")
+                    await page.wait_for_timeout(120)
                 self._emit(
                     logger,
-                    f"[抖音评论@客户] 已确认 @{selected_name} 写入评论框，继续处理下一个用户",
+                    f"[抖音评论@客户] 已确认 @{selected_name or expected_name} 形成提及实体，继续处理下一个用户",
                     "info",
                 )
                 return editor_text
+            if suggestion_visible and not keyboard_fallback_used and commit_checks >= 3:
+                keyboard_fallback_used = True
+                self._emit(
+                    logger,
+                    f"[抖音评论@客户] 候选点击后未形成提及实体，尝试键盘选择 @{expected_name or selected_name}",
+                    "warning",
+                )
+                await page.keyboard.press("ArrowDown")
+                await page.keyboard.press("Enter")
+                await page.wait_for_timeout(240)
             await page.wait_for_timeout(180)
 
         self._emit(
             logger,
             f"[抖音评论@客户] 候选点击后未稳定写入评论框：期望=@{expected_name or selected_name}，"
-            f"实际编辑框={last_editor_text or '空'}，候选框{'仍可见' if last_suggestion_visible else '已隐藏'}",
+            f"实际编辑框={last_editor_text or '空'}，提及实体={last_mention_entities or '[]'}，"
+            f"候选框{'仍可见' if last_suggestion_visible else '已隐藏'}",
             "warning",
         )
         raise RuntimeError(f"选择候选 @{selected_name or expected_name} 后，评论框未完成插入")
@@ -8078,10 +8666,20 @@ class DouyinCommentScraper:
         try:
             url = f"https://www.douyin.com/search/{quote(keyword)}?type=video"
             self._emit(logger, f"[抖音搜索] 打开搜索页：{keyword}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            goto_started = time.monotonic()
+            self._emit(logger, f"[抖音诊断] page.goto 开始 url={url}", "info")
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            except Exception as exc:
+                self._emit(logger, f"[抖音诊断] page.goto 失败 error={type(exc).__name__}: {exc} elapsed_ms={(time.monotonic() - goto_started) * 1000:.1f}", "error")
+                raise
+            self._emit(logger, f"[抖音诊断] page.goto 完成 current_url={page.url} elapsed_ms={(time.monotonic() - goto_started) * 1000:.1f}", "info")
             await page.wait_for_timeout(3000)
+            self._emit(logger, "[抖音诊断] 登录拦截检查开始", "info")
             await self._raise_if_login_intercept(page)
+            self._emit(logger, "[抖音诊断] 首个视频选择器等待开始 selector=a[href*='/video/']", "info")
             await page.wait_for_selector('a[href*="/video/"]', timeout=30000)
+            self._emit(logger, "[抖音诊断] 首个视频选择器已命中", "info")
 
             max_scroll_rounds = 18
             stable_rounds = 0
@@ -8253,11 +8851,55 @@ class DouyinCommentScraper:
                 if len(deduped) >= max_results:
                     break
 
+            self._emit(logger, f"[抖音诊断] 搜索结果整理完成 raw={len(raw_results)} deduped={len(deduped)}", "info")
             return deduped
+        except Exception as exc:
+            self._emit(logger, f"[抖音诊断] scrape_search_results 失败 keyword={keyword} current_url={getattr(page, 'url', '')} error={type(exc).__name__}: {exc}", "error")
+            raise
         finally:
             await page.close()
 
     async def scrape_video_comments(
+        self,
+        video_url: str,
+        max_comments: int = 80,
+        max_scroll_rounds: int = 18,
+        logger: Optional[Callable[[str, str], None]] = None,
+        progress_callback: Optional[Callable[[Dict], None]] = None,
+    ) -> List[Dict]:
+        """Collect comments without treating an unreadable page as empty.
+
+        A visible comment panel with zero parsed rows is ambiguous: it may be
+        an actually empty video, or the page may still be loading / have
+        changed its DOM. Retry the whole page once and fail explicitly if the
+        second attempt still cannot verify the result.
+        """
+        last_error: Optional[Exception] = None
+        for attempt in range(1, 3):
+            try:
+                return await self._scrape_video_comments_once(
+                    video_url,
+                    max_comments=max_comments,
+                    max_scroll_rounds=max_scroll_rounds,
+                    logger=logger,
+                    progress_callback=progress_callback,
+                )
+            except DouyinCommentCollectionUnconfirmed as exc:
+                last_error = exc
+                self._emit(
+                    logger,
+                    f"[抖音评论采集] 第 {attempt}/2 次未确认评论内容，准备重试：{exc}",
+                    "warning",
+                )
+                if attempt < 2:
+                    await asyncio.sleep(1.0)
+                    continue
+                raise RuntimeError(
+                    f"评论区已打开但连续 2 次未读取到可验证评论，未判定为无评论：{exc}"
+                ) from exc
+        raise last_error or RuntimeError("评论采集未返回结果")
+
+    async def _scrape_video_comments_once(
         self,
         video_url: str,
         max_comments: int = 80,
@@ -8576,6 +9218,30 @@ class DouyinCommentScraper:
                     )
                 except Exception:
                     pass
+
+            if not deduped and not surface.get("empty"):
+                self._emit(
+                    logger,
+                    "[抖音评论采集] 评论区已打开但未提取到评论，结果未确认，不按空评论完成",
+                    "warning",
+                )
+                try:
+                    if progress_callback:
+                        progress_callback(
+                            {
+                                "phase": "unconfirmed",
+                                "collected_comments": 0,
+                                "visible_comments": len(raw_comments),
+                                "scroll_round": max_scroll_rounds,
+                                "scroll_round_limit": max_scroll_rounds,
+                                "last_message": "评论区已打开但未确认评论内容，正在重试。",
+                            }
+                        )
+                except Exception:
+                    pass
+                raise DouyinCommentCollectionUnconfirmed(
+                    "评论区可见但未提取到有效评论节点"
+                )
 
             self._emit(logger, f"[抖音评论] 共提取 {len(deduped)} 条一级评论用户", "success")
             return deduped

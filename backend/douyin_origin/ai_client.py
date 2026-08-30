@@ -166,6 +166,7 @@ class AIClient:
         custom_prompt: str = "",
         filter_strategy: str = "prompt",
         event_logger: Optional[Callable] = None,
+        batch_size: Optional[int] = None,
     ) -> List[Dict]:
         """
         用AI筛选高意向评论
@@ -181,7 +182,10 @@ class AIClient:
         if not comments:
             return []
 
-        batch_size = 80
+        # Callers that already control collection batches can pass that size
+        # through so audit logs describe the actual request boundaries. Keep
+        # the historical 80-comment default for other callers.
+        batch_size = max(1, min(int(batch_size or 80), 80))
         merged: List[Dict] = []
         seen = set()
 
@@ -213,6 +217,14 @@ class AIClient:
                 total_batches=total_batches,
             )
             for row in batch_result:
+                row = dict(row) if isinstance(row, dict) else {}
+                try:
+                    local_index = int(row.get("comment_index", 0) or 0) - 1
+                except (TypeError, ValueError):
+                    local_index = -1
+                if 0 <= local_index < len(candidate_comments):
+                    source_index = candidate_comments[local_index].get("comment_index")
+                    row["comment_index"] = source_index or (start + local_index + 1)
                 key = row.get("comment_id") or f"{row.get('user_id', '')}|{row.get('content', '')}|{row.get('comment_time', '')}"
                 if key in seen:
                     continue

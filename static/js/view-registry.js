@@ -149,7 +149,7 @@
 
   window.registerLobsterView('agent', {
     html: '/static/views/agent.html',
-    scripts: '/static/js/views/agent.js?v=20260622-agent-execution-screen'
+    scripts: '/static/js/views/agent.js?v=20260830-agent-no-poll-v1'
   });
 
   window.registerLobsterView('tutorial', {
@@ -157,8 +157,8 @@
   });
 
   window.registerLobsterView('h5-employees', {
-    html: '/static/views/h5-employees.html?v=20260827-node-groups-reply-mode-v1',
-    scripts: '/static/js/views/h5-employees.js?v=20260827-node-groups-reply-mode-v1',
+    html: '/static/views/h5-employees.html?v=20260827-touch-action-echo-v1',
+    scripts: '/static/js/views/h5-employees.js?v=20260830-employee-cache-v1',
     init: 'initOnlineH5EmployeesView',
     cache: 'reload'
   });

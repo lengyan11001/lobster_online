@@ -54,6 +54,10 @@ class AutoReplyRunBody(BaseModel):
     config_override: Optional[Dict[str, Any]] = None
 
 
+class AutoReplyDiagnosticsBody(BaseModel):
+    enabled: bool
+
+
 class SyncBody(BaseModel):
     account_id: str = Field(min_length=1, max_length=160)
     limit: int = Field(default=10000, ge=1, le=10000)
@@ -165,7 +169,7 @@ def _merge_targets(*items: Any) -> List[str]:
             text = str(raw or "").strip()
             if not text:
                 continue
-            for part in [x.strip() for x in re.split(r"[\s,，;；]+", text) if x.strip()]:
+            for part in [x.strip() for x in re.split(r"[\r\n,，、;；]+", text) if x.strip()]:
                 key = part.lower()
                 if key in seen:
                     continue
@@ -413,6 +417,28 @@ async def native_wechat_stop_auto_reply(
         return engine.request_auto_reply_stop(body.account_id)
     except Exception as exc:
         _raise_native_wechat_error("auto_reply_stop", exc, account_id=body.account_id)
+
+
+@router.get("/api/native-wechat/auto-reply/diagnostics")
+async def native_wechat_auto_reply_diagnostics(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    return {
+        "ok": True,
+        "enabled": engine.auto_reply_diagnostics_enabled(),
+        "log_path": str(engine.NATIVE_WECHAT_AUTO_REPLY_LOG),
+        "disable_marker": str(engine.NATIVE_WECHAT_AUTO_REPLY_LOG_DISABLE_MARKER),
+    }
+
+
+@router.post("/api/native-wechat/auto-reply/diagnostics")
+async def native_wechat_set_auto_reply_diagnostics(
+    body: AutoReplyDiagnosticsBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    return engine.set_auto_reply_diagnostics_enabled(body.enabled)
 
 
 @router.post("/api/native-wechat/contacts/sync")

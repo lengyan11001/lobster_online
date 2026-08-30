@@ -44,7 +44,7 @@ def test_douyin_private_message_editor_preserves_add_friend_switch():
     assert "if (action !== 'stranger_message')" in douyin_plan
     assert "wechat_add_friend_targets_source='douyin_private_message_phone'" in script
     assert "action === 'stranger_message'" in script
-    assert "isDouyinPrivate({ability_key:key,ability_label:label,note:note})" in script
+    assert "selectedSalesAction === 'stranger_message'" in script
 
 
 def test_employee_editor_uses_server_as_the_only_persisted_source():
@@ -101,7 +101,16 @@ def test_online_employee_editor_manages_supported_child_actions():
     assert "NODE_OPTION_GROUP_ORDER = ['抖音','个微','AI营销']" in script
     assert "nodeOptionGroupForKey(row.key)" in script
     assert "AI营销" in script
-    assert "AI海外平台" in script
+    assert "function nodeOptionFeatureGate(key)" in script
+    assert "private_domain_entry" in script
+    assert "overseas_platform_entry" in script
+    assert "'linkedin_leads':'linkedin_leads'" in script
+    assert "'reddit_leads':'reddit_leads'" in script
+    assert "'x_leads':'x_leads'" in script
+    assert "'tiktok_leads':'tiktok_leads'" in script
+    assert "function nodeOptionPackageVisible(packageId)" in script
+    assert "function loadNodePermissions()" in script
+    assert "nodeOptionIsAllowed(findOption('native_wechat_moments_engage'))" in script
     assert "native_wechat_group_invite" in script
     assert "native_wechat_moments_engage" in script
     assert 'id="oeChildModal"' in html
@@ -113,7 +122,7 @@ def test_online_employee_editor_manages_supported_child_actions():
     assert "state.editingId || template && template.id" in script
     assert ".oe-form-label[hidden] { display:none; }" in html
     assert "100dvh" in html
-    assert "20260827-node-groups-reply-mode-v1" in registry
+    assert "20260827-touch-action-echo-v1" in registry
 
 
 def test_moments_nodes_save_paginated_contact_selection_as_wechat_ids():

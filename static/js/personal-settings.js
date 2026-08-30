@@ -29,6 +29,7 @@
     defaultItem: null,
     personalTemplateLanguage: 'zh-CN',
     profilePhotoPreview: '',
+    profilePhotoPreviewObjectUrl: '',
     profilePhotoName: '',
     profilePhotoResolvedValue: '',
     profilePhotoResolvingValue: '',
@@ -37,6 +38,7 @@
     profilePhotoPickerLoading: false,
     profilePhotoPickerQuery: '',
     profilePhotoUploadBusy: false,
+    profilePhotoUploadPreview: '',
     personalDigitalHumanTemplates: [],
     personalDigitalHumanTemplatesLoaded: false,
     personalDigitalHumanTemplatesLoading: false,
@@ -373,8 +375,19 @@
 
   function setProfilePhoto(value, previewUrl, name) {
     var nextValue = String(value || '').trim();
+    var pendingPreview = state.profilePhotoUploadPreview || '';
+    var nextPreview = profilePhotoDisplayUrl(previewUrl || (nextValue.indexOf('http') === 0 ? nextValue : '') || pendingPreview);
+    if (pendingPreview && pendingPreview !== nextPreview && window.URL && URL.revokeObjectURL) {
+      URL.revokeObjectURL(pendingPreview);
+    }
+    state.profilePhotoUploadPreview = '';
+    if (state.profilePhotoPreviewObjectUrl && state.profilePhotoPreviewObjectUrl !== nextPreview && window.URL && URL.revokeObjectURL) {
+      URL.revokeObjectURL(state.profilePhotoPreviewObjectUrl);
+      state.profilePhotoPreviewObjectUrl = '';
+    }
     setFieldValue('psProfilePhoto', nextValue);
-    state.profilePhotoPreview = profilePhotoDisplayUrl(previewUrl || (nextValue.indexOf('http') === 0 ? nextValue : ''));
+    state.profilePhotoPreview = nextPreview;
+    if (/^blob:/i.test(nextPreview)) state.profilePhotoPreviewObjectUrl = nextPreview;
     state.profilePhotoName = String(name || '').trim();
     state.profilePhotoResolvedValue = state.profilePhotoPreview ? nextValue : '';
     state.profilePhotoResolvingValue = '';
@@ -411,7 +424,7 @@
   function renderProfilePhotoSelector() {
     var value = fieldValue('psProfilePhoto');
     resolveProfilePhotoPreview(value);
-    var preview = profilePhotoDisplayUrl(state.profilePhotoPreview || value);
+    var preview = profilePhotoDisplayUrl(state.profilePhotoUploadPreview || state.profilePhotoPreview || value);
     var title = state.profilePhotoName || (value ? '已选择人物照片' : '还没有选择照片');
     var meta = value ? (/^https?:\/\//i.test(value) ? '图片链接' : '素材库图片') : '支持 JPG、PNG、WEBP 等图片';
     var uploadLabel = state.profilePhotoUploadBusy ? '上传中...' : '上传电脑图片';
@@ -459,6 +472,7 @@
       return;
     }
     state.profilePhotoUploadBusy = true;
+    state.profilePhotoUploadPreview = window.URL && URL.createObjectURL ? URL.createObjectURL(file) : '';
     renderProfileWizard();
     setMsg('正在上传人物照片...');
     var fd = new FormData();
@@ -475,6 +489,8 @@
         setMsg('人物照片已上传并存入素材库。');
       })
       .catch(function(err) {
+        if (state.profilePhotoUploadPreview && window.URL && URL.revokeObjectURL) URL.revokeObjectURL(state.profilePhotoUploadPreview);
+        state.profilePhotoUploadPreview = '';
         setMsg(err.message || '人物照片上传失败', true);
       })
       .finally(function() {

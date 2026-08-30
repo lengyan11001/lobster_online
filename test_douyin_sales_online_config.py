@@ -4,6 +4,7 @@ import backend.app.api.h5_chat_channel as h5_chat_channel
 
 h5_chat_channel._install_douyin_origin_import_path()
 import douyin_api  # type: ignore  # noqa: E402
+from douyin_comment_scraper import DouyinCommentScraper  # type: ignore  # noqa: E402
 from backend.app.api.h5_chat_channel import (
     _merge_scheduled_douyin_collection_params,
     _merge_scheduled_douyin_precise_touch_params,
@@ -11,10 +12,320 @@ from backend.app.api.h5_chat_channel import (
     _scheduled_douyin_changed_conversations,
     _scheduled_douyin_followup_actions,
     _scheduled_douyin_online_config_params,
+    _run_scheduled_douyin_sales_action,
     _scheduled_douyin_result_payload,
     _scheduled_douyin_sales_action_from_context,
     _scheduled_douyin_search_keywords,
 )
+
+
+class _FakeKeyboard:
+    def __init__(self):
+        self.presses = []
+
+    async def press(self, key):
+        self.presses.append(key)
+
+
+class _FakeMentionPage:
+    def __init__(self):
+        self.keyboard = _FakeKeyboard()
+
+    async def wait_for_timeout(self, _timeout_ms):
+        await asyncio.sleep(0)
+
+
+class _FakeLocatorCollection:
+    def __init__(self, items):
+        self.items = list(items)
+
+    async def count(self):
+        return len(self.items)
+
+    def nth(self, index):
+        return self.items[index]
+
+
+class _FakeVisibleLocator:
+    def __init__(self, visible, children=None):
+        self.visible = visible
+        self.children = children or {}
+
+    async def is_visible(self):
+        return self.visible
+
+    def locator(self, selector):
+        return _FakeLocatorCollection(self.children.get(selector, []))
+
+
+class _FakeComposerPage:
+    def __init__(self, dialogs):
+        self.dialogs = dialogs
+
+    def locator(self, selector):
+        if selector == '[data-e2e="im-dialog"], #messageContent':
+            return _FakeLocatorCollection(self.dialogs)
+        return _FakeLocatorCollection([])
+
+
+def test_mention_commit_requires_real_entity_and_uses_keyboard_fallback():
+    scraper = DouyinCommentScraper(account_id=1, cdp_port=9332)
+    page = _FakeMentionPage()
+    snapshots = iter(
+        [
+            {"editor_text": "@目标用户", "suggestion_visible": True, "mention_entities": []},
+            {"editor_text": "@目标用户", "suggestion_visible": True, "mention_entities": []},
+            {"editor_text": "@目标用户", "suggestion_visible": True, "mention_entities": []},
+            {
+                "editor_text": "@目标用户 ",
+                "suggestion_visible": False,
+                "mention_entities": ["@目标用户"],
+            },
+        ]
+    )
+
+    async def read_snapshot(_page):
+        return next(snapshots)
+
+    scraper._read_comment_submission_snapshot = read_snapshot
+    result = asyncio.run(
+        scraper._wait_for_mention_commit(
+            page,
+            before_editor_text="",
+            expected_username="目标用户",
+            selected_label="目标用户",
+        )
+    )
+
+    assert result == "@目标用户"
+    assert page.keyboard.presses == ["ArrowDown", "Enter"]
+
+
+def test_visible_message_composer_skips_hidden_stale_controls():
+    input_selector = (
+        'div[data-e2e="msg-input"] [contenteditable="true"], '
+        '.public-DraftEditor-content[contenteditable="true"]'
+    )
+    send_selector = ".e2e-send-msg-btn, [class*='send-msg-btn'], span.e2e-send-msg-btn"
+    hidden_input = _FakeVisibleLocator(False)
+    hidden_send = _FakeVisibleLocator(False)
+    visible_input = _FakeVisibleLocator(True)
+    visible_send = _FakeVisibleLocator(True)
+    hidden_dialog = _FakeVisibleLocator(
+        False,
+        {input_selector: [hidden_input], send_selector: [hidden_send]},
+    )
+    visible_dialog = _FakeVisibleLocator(
+        True,
+        {
+            input_selector: [hidden_input, visible_input],
+            send_selector: [hidden_send, visible_send],
+        },
+    )
+    page = _FakeComposerPage([hidden_dialog, visible_dialog])
+    scraper = DouyinCommentScraper(account_id=1, cdp_port=9332)
+
+    dialog, input_box, send_button = asyncio.run(
+        scraper._resolve_visible_message_composer(page)
+    )
+
+    assert dialog is visible_dialog
+    assert input_box is visible_input
+    assert send_button is visible_send
+
+
+def test_precise_touch_persists_each_direct_message_result(monkeypatch):
+    selected_users = [
+        {"username": "成功用户", "profile_url": "https://www.douyin.com/user/success"},
+        {"username": "失败用户", "profile_url": "https://www.douyin.com/user/failed"},
+    ]
+    interaction_users = [
+        {**selected_users[0], "interaction_status": "sent", "interaction_message": "已发送"},
+        {
+            **selected_users[1],
+            "interaction_status": "failed",
+            "interaction_error": "输入框未出现",
+        },
+    ]
+    state_updates = []
+
+    monkeypatch.setattr(
+        douyin_api,
+        "collect_douyin_precise_touch_users",
+        lambda _action, _limit: [dict(row) for row in selected_users],
+    )
+    monkeypatch.setattr(
+        douyin_api,
+        "update_douyin_precise_touch_users",
+        lambda rows, **kwargs: state_updates.append(
+            ([row["username"] for row in rows], kwargs["status"], kwargs.get("error", ""))
+        ),
+    )
+    monkeypatch.setattr(
+        douyin_api,
+        "collect_douyin_interaction_users",
+        lambda _selected_task_ids=None: [dict(row) for row in interaction_users],
+    )
+
+    async def start_interaction(request):
+        return {"code": 200, "total": len(request["users"])}
+
+    async def interaction_status(*_args, **_kwargs):
+        return {
+            "running": False,
+            "state": {"total": 2, "processed": 2, "success": 1, "failed": 1},
+        }
+
+    monkeypatch.setattr(douyin_api, "douyin_start_interaction", start_interaction)
+    monkeypatch.setattr(douyin_api, "douyin_interaction_status", interaction_status)
+    monkeypatch.setattr(
+        h5_chat_channel,
+        "_load_scheduled_douyin_online_config_params",
+        lambda _action: {},
+    )
+
+    result = asyncio.run(
+        _run_scheduled_douyin_sales_action(
+            "precise_touch",
+            {
+                "touch_actions": ["direct_message"],
+                "max_users": 2,
+                "interval_minutes_min": 1,
+                "interval_minutes_max": 1,
+            },
+        )
+    )
+
+    final_updates = {
+        names[0]: (status, error)
+        for names, status, error in state_updates
+        if len(names) == 1 and status != "queued"
+    }
+    assert final_updates["成功用户"] == ("completed", "")
+    assert final_updates["失败用户"] == ("failed", "输入框未出现")
+    assert result["stats"]["success"] == 0
+    assert result["stats"]["failed"] == 1
+
+
+def test_precise_touch_busy_launch_reports_not_started_without_stale_success(monkeypatch):
+    selected_users = [
+        {
+            "username": "待重试客户",
+            "profile_url": "https://www.douyin.com/user/retry",
+            "follow_comment_status": "completed",
+        }
+    ]
+    state_updates = []
+
+    monkeypatch.setattr(
+        douyin_api,
+        "collect_douyin_precise_touch_users",
+        lambda _action, _limit: [dict(row) for row in selected_users],
+    )
+    monkeypatch.setattr(
+        douyin_api,
+        "update_douyin_precise_touch_users",
+        lambda rows, **kwargs: state_updates.append((kwargs["status"], kwargs.get("error", ""))),
+    )
+    monkeypatch.setattr(
+        douyin_api,
+        "collect_douyin_interaction_users",
+        lambda _selected_task_ids=None: [dict(row) for row in selected_users],
+    )
+
+    async def busy_follow_comment(request):
+        assert request["users"]
+        return {"code": 400, "msg": "关注评论任务已在执行中"}
+
+    monkeypatch.setattr(douyin_api, "douyin_start_follow_comment", busy_follow_comment)
+    monkeypatch.setattr(
+        h5_chat_channel,
+        "_load_scheduled_douyin_online_config_params",
+        lambda _action: {"comment_mode": "fixed", "comment_text": "你好"},
+    )
+
+    result = asyncio.run(
+        _run_scheduled_douyin_sales_action(
+            "precise_touch",
+            {"touch_actions": ["follow_comment"], "max_users": 1},
+        )
+    )
+
+    stat = result["action_stats"][0]
+    assert stat == {
+        "action": "follow_comment",
+        "label": stat["label"],
+        "selected": 1,
+        "processed": 0,
+        "success": 0,
+        "failed": 0,
+        "not_started": 1,
+        "started": False,
+        "result_code": 400,
+        "error": "关注评论任务已在执行中",
+    }
+    assert result["stats"]["success_users"] == 0
+    assert result["stats"]["not_started_users"] == 1
+    assert state_updates[-1][0] == "failed"
+
+
+def test_precise_touch_does_not_start_later_actions_after_busy_rejection(monkeypatch):
+    selected_users = [
+        {
+            "username": "串行客户",
+            "profile_url": "https://www.douyin.com/user/serial",
+        }
+    ]
+    claimed_actions = []
+    started_actions = []
+
+    def collect_users(action, _limit):
+        claimed_actions.append(action)
+        return [dict(row) for row in selected_users]
+
+    monkeypatch.setattr(douyin_api, "collect_douyin_precise_touch_users", collect_users)
+    monkeypatch.setattr(douyin_api, "update_douyin_precise_touch_users", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(
+        douyin_api,
+        "collect_douyin_interaction_users",
+        lambda _selected_task_ids=None: [dict(row) for row in selected_users],
+    )
+
+    async def busy_follow_comment(request):
+        started_actions.append("follow_comment")
+        return {"code": 400, "msg": "已有任务运行"}
+
+    async def unexpected_direct_message(request):
+        started_actions.append("direct_message")
+        return {"code": 200, "total": len(request["users"])}
+
+    monkeypatch.setattr(douyin_api, "douyin_start_follow_comment", busy_follow_comment)
+    monkeypatch.setattr(douyin_api, "douyin_start_interaction", unexpected_direct_message)
+    monkeypatch.setattr(
+        h5_chat_channel,
+        "_load_scheduled_douyin_online_config_params",
+        lambda action: (
+            {"comment_mode": "fixed", "comment_text": "你好"}
+            if action == "follow_comment"
+            else {"message_mode": "fixed", "message": "你好"}
+        ),
+    )
+
+    result = asyncio.run(
+        _run_scheduled_douyin_sales_action(
+            "precise_touch",
+            {
+                "touch_actions": ["follow_comment", "direct_message"],
+                "max_users": 1,
+            },
+        )
+    )
+
+    assert claimed_actions == ["follow_comment"]
+    assert started_actions == ["follow_comment"]
+    assert [item["result_code"] for item in result["action_stats"]] == [400, 424]
+    assert result["stats"]["processed"] == 0
+    assert result["stats"]["not_started"] == 2
 
 
 def test_h5_employee_editor_exposes_precise_touch_actions():
@@ -58,6 +369,10 @@ def test_h5_employee_editor_exposes_precise_touch_actions():
     assert 'id="oeNodeDouyinReplyCommentAiField" hidden' in html
     assert 'id="oeNodeDouyinReplyCommentRewriteField" hidden' in html
     assert "return saveTemplate().then" in script
+    assert "function workflowParams(node)" in script
+    assert "function douyinNodeAction(node, fallbackText)" in script
+    assert "fillNodeOptions(node && node.ability_key,node && node.ability_label,node)" in script
+    assert "selectedSalesAction === 'precise_touch'" in script
 
 
 def test_precise_touch_actions_default_all_but_keep_explicit_empty():
@@ -67,6 +382,20 @@ def test_precise_touch_actions_default_all_but_keep_explicit_empty():
         "direct_message",
     ]
     assert _scheduled_douyin_followup_actions([], default_all=True) == []
+
+
+def test_online_scheduler_preserves_selected_and_explicit_empty_touch_actions():
+    selected = douyin_api.normalize_douyin_schedule_plan(
+        {"type": "precise_touch", "touch_actions": ["direct_message", "follow_comment"]}
+    )
+    empty = douyin_api.normalize_douyin_schedule_plan(
+        {"type": "precise_touch", "touch_actions": []}
+    )
+    legacy_missing = douyin_api.normalize_douyin_schedule_plan({"type": "precise_touch"})
+
+    assert selected["touch_actions"] == ["follow_comment", "direct_message"]
+    assert empty["touch_actions"] == []
+    assert legacy_missing["touch_actions"] == ["follow_comment", "mention_comment", "direct_message"]
 
 
 def test_collection_node_params_override_online_defaults():
@@ -138,13 +467,21 @@ def test_precise_touch_node_uses_pool_and_preserves_selected_action_order():
 def test_precise_customer_reply_processes_only_selected_users(monkeypatch):
     calls = []
 
+    class FakePage:
+        async def close(self):
+            return None
+
     class FakeScraper:
         def __init__(self, account_id, cdp_port):
             self.account_id = account_id
             self.cdp_port = cdp_port
 
-        async def reply_to_video_comment(self, video_url, reply_text, target_comment, **kwargs):
-            calls.append((video_url, target_comment["username"], reply_text))
+        async def open_video_comment_page(self, video_url, **kwargs):
+            calls.append(("open", video_url, ""))
+            return FakePage()
+
+        async def reply_to_loaded_video_comment(self, page, reply_text, target_comment, **kwargs):
+            calls.append(("reply", target_comment["username"], reply_text))
 
         async def close(self):
             return None
@@ -178,7 +515,258 @@ def test_precise_customer_reply_processes_only_selected_users(monkeypatch):
     assert result["code"] == 200
     assert result["success"] == 2
     assert result["failed"] == 0
-    assert [item[0:2] for item in calls] == [("https://v/1", "甲"), ("https://v/2", "乙")]
+    assert calls == [
+        ("open", "https://v/1", ""),
+        ("reply", "甲", "回复-作者1"),
+        ("open", "https://v/2", ""),
+        ("reply", "乙", "回复-作者2"),
+    ]
+
+
+def test_precise_acquisition_reuses_page_orders_comments_and_retries_current_only(monkeypatch):
+    opened_pages = []
+    reply_calls = []
+    state_updates = []
+    failed_once = False
+
+    class FakePage:
+        def __init__(self, page_number):
+            self.page_number = page_number
+            self.closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class FakeScraper:
+        def __init__(self, account_id, cdp_port):
+            self.account_id = account_id
+            self.cdp_port = cdp_port
+
+        async def open_video_comment_page(self, video_url, **kwargs):
+            page = FakePage(len(opened_pages) + 1)
+            opened_pages.append((video_url, page))
+            return page
+
+        async def reply_to_loaded_video_comment(self, page, reply_text, target_comment, **kwargs):
+            nonlocal failed_once
+            username = target_comment["username"]
+            reply_calls.append((page.page_number, username, kwargs.get("allow_scroll")))
+            if username == "乙" and not failed_once:
+                failed_once = True
+                raise RuntimeError("page stale")
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(douyin_api, "DouyinCommentScraper", FakeScraper)
+    monkeypatch.setattr(
+        douyin_api,
+        "generate_douyin_video_comment_text",
+        lambda *_args, **_kwargs: "统一回复",
+    )
+    monkeypatch.setattr(
+        douyin_api,
+        "update_douyin_precise_touch_users",
+        lambda users, **kwargs: state_updates.append((users[0]["username"], kwargs["status"])),
+    )
+    monkeypatch.setattr(douyin_api, "save_douyin_tasks_state", lambda: None)
+
+    result = asyncio.run(
+        douyin_api._run_douyin_precise_customer_reply_batch_worker(
+            {"url": "https://www.douyin.com/video/123", "title": "测试视频"},
+            [
+                {"username": "丙", "comment_index": 3, "comment": "c"},
+                {"username": "甲", "comment_index": 1, "comment": "a"},
+                {"username": "乙", "comment_index": 2, "comment": "b"},
+            ],
+            {"id": 1, "port": 9332},
+            "fixed",
+            "统一回复",
+            "",
+            "",
+            0,
+            0,
+        )
+    )
+
+    assert [item["user"]["username"] for item in result] == ["甲", "乙", "丙"]
+    assert [item["status"] for item in result] == ["completed", "completed", "completed"]
+    assert len(opened_pages) == 2
+    assert reply_calls == [(1, "甲", True), (1, "乙", True), (2, "乙", True), (2, "丙", True)]
+    assert state_updates.count(("甲", "completed")) == 1
+    assert state_updates.count(("乙", "completed")) == 1
+    assert state_updates.count(("丙", "completed")) == 1
+
+
+def test_ai_filter_preserves_global_comment_indexes_across_batches(monkeypatch):
+    client = douyin_api.AIClient("https://example.invalid", "test-key")
+    comments = [
+        {
+            "comment_index": index,
+            "username": f"用户{index}",
+            "user_id": f"user-{index}",
+            "content": f"评论{index}",
+            "comment_time": f"time-{index}",
+        }
+        for index in range(1, 162)
+    ]
+
+    def fake_filter_batch(_title, batch, *_args, **_kwargs):
+        positions = [1]
+        if len(batch) > 1:
+            positions.append(len(batch))
+        return [
+            {
+                **batch[position - 1],
+                "comment_index": position,
+                "comment": batch[position - 1]["content"],
+            }
+            for position in positions
+        ]
+
+    monkeypatch.setattr(client, "_filter_comments_batch", fake_filter_batch)
+
+    result = client.filter_comments("测试视频", comments)
+
+    assert [row["comment_index"] for row in result] == [1, 80, 81, 160, 161]
+
+
+def test_ai_filter_logs_and_uses_explicit_collection_batch_size(monkeypatch):
+    client = douyin_api.AIClient("https://example.invalid", "test-key")
+    events = []
+    comments = [
+        {
+            "comment_index": index,
+            "username": f"用户{index}",
+            "user_id": f"user-{index}",
+            "content": f"评论{index}",
+        }
+        for index in range(1, 26)
+    ]
+
+    def fake_filter_batch(_title, batch, *_args, **_kwargs):
+        return [{**batch[0], "comment_index": 1}]
+
+    monkeypatch.setattr(client, "_filter_comments_batch", fake_filter_batch)
+
+    result = client.filter_comments(
+        "测试视频",
+        comments,
+        batch_size=20,
+        event_logger=lambda event, **fields: events.append((event, fields)),
+    )
+
+    invoke = next(fields for event, fields in events if event == "ai_filter_invoke")
+    assert invoke["batch_size"] == 20
+    assert invoke["total_batches"] == 2
+    assert len(result) == 2
+
+
+def test_old_self_comment_time_line_is_not_kept_as_timestamp():
+    assert douyin_api.normalize_douyin_self_comment_time("喜羊羊 ... 这条评论 2周前") == "2周前"
+    assert douyin_api.normalize_douyin_self_comment_time("喜羊羊 ... 这条评论") == ""
+
+
+def test_precise_reply_restores_bad_batch_indexes_from_source_comments():
+    source_comments = [
+        {
+            "comment_index": 1,
+            "username": "第一批",
+            "user_id": "user-1",
+            "comment": "评论1",
+            "comment_time": "time-1",
+        },
+        {
+            "comment_index": 161,
+            "username": "第三批",
+            "user_id": "user-161",
+            "comment": "评论161",
+            "comment_time": "time-161",
+        },
+    ]
+    filtered_users = [
+        {**source_comments[1], "comment_index": 1},
+        source_comments[0],
+    ]
+
+    restored = douyin_api._restore_douyin_comment_order(filtered_users, source_comments)
+    ordered = douyin_api._sort_douyin_comment_users(restored)
+
+    assert [row["username"] for row in ordered] == ["第一批", "第三批"]
+    assert [row["comment_index"] for row in ordered] == [1, 161]
+
+
+def test_precise_pool_groups_canonical_video_urls_and_reuses_each_page(monkeypatch):
+    open_calls = []
+    reply_calls = []
+
+    class FakePage:
+        def __init__(self, video_url):
+            self.video_url = video_url
+
+        async def close(self):
+            return None
+
+    class FakeScraper:
+        def __init__(self, account_id, cdp_port):
+            pass
+
+        async def open_video_comment_page(self, video_url, **kwargs):
+            open_calls.append(video_url)
+            return FakePage(video_url)
+
+        async def reply_to_loaded_video_comment(self, page, reply_text, target_comment, **kwargs):
+            reply_calls.append((page.video_url, target_comment["username"]))
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(douyin_api, "DouyinCommentScraper", FakeScraper)
+    monkeypatch.setattr(
+        douyin_api,
+        "generate_douyin_video_comment_text",
+        lambda task, **_kwargs: f"回复-{task['author']}",
+    )
+
+    result = asyncio.run(
+        douyin_api._run_douyin_precise_customer_reply_worker(
+            [
+                {
+                    "username": "乙",
+                    "comment_index": 2,
+                    "task_url": "https://www.douyin.com/video/123",
+                    "task_author": "作者1",
+                },
+                {
+                    "username": "另一个视频",
+                    "comment_index": 1,
+                    "task_url": "https://www.douyin.com/video/456",
+                    "task_author": "作者2",
+                },
+                {
+                    "username": "甲",
+                    "comment_index": 1,
+                    "task_url": "https://www.douyin.com/user/self?modal_id=123",
+                    "task_author": "作者1",
+                },
+            ],
+            {"id": 1, "port": 9332},
+            "fixed",
+            "固定回复",
+            "",
+            "",
+            0,
+            0,
+        )
+    )
+
+    assert [item["status"] for item in result] == ["completed", "completed", "completed"]
+    assert open_calls == ["https://www.douyin.com/video/123", "https://www.douyin.com/video/456"]
+    assert reply_calls == [
+        ("https://www.douyin.com/video/123", "甲"),
+        ("https://www.douyin.com/video/123", "乙"),
+        ("https://www.douyin.com/video/456", "另一个视频"),
+    ]
 
 
 def test_precise_touch_pool_excludes_completed_and_inflight_but_keeps_failed(monkeypatch):

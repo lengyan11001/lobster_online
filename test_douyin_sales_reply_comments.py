@@ -118,6 +118,10 @@ async def test_reply_comments_limits_start_to_selected_task_ids(monkeypatch):
     async def idle_status(*_args, **_kwargs):
         return {"code": 200, "running": False, "state": {}}
 
+    async def precise_customer_replies(*_args, **_kwargs):
+        raise AssertionError("selected task IDs without users must use the video-comment path")
+
+    fake.run_douyin_precise_customer_replies = precise_customer_replies
     fake.douyin_start_video_comment = start_video_comment
     fake.douyin_video_comment_status = video_comment_status
     fake.douyin_follow_comment_status = idle_status

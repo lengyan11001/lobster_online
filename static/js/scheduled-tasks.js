@@ -414,6 +414,22 @@
     var modal = ensureRunDetailModal();
     var body = document.getElementById('scheduledRunDetailBody');
     if (!body) return;
+    body.innerHTML = '<p class="meta">加载执行详情...</p>';
+    modal.classList.add('visible');
+    api('/api/scheduled-tasks/runs/' + encodeURIComponent(runId))
+      .then(function (data) {
+        var detail = data && data.run && typeof data.run === 'object' ? data.run : run;
+        state.runsById[String(runId)] = detail;
+        renderRunDetail(detail, modal, body);
+      })
+      .catch(function (error) {
+        // Keep the compact list row usable if the detail request is transiently unavailable.
+        renderRunDetail(run, modal, body);
+        showMsg('scheduledTaskMsg', error && error.message ? error.message : '执行详情加载失败', true);
+      });
+  }
+
+  function renderRunDetail(run, modal, body) {
     var payload = resultPayload(run);
     var urls = collectMediaUrls(run);
     var prompts = collectPromptFields({ request: run.payload || {}, result: payload });
@@ -453,7 +469,6 @@
       + detailSection('结果 / 错误', resultHtml)
       + detailSection('任务参数', '<pre class="scheduled-run-detail-pre">' + html(formatJson(run.payload || {})) + '</pre>')
       + detailSection('结果数据', '<pre class="scheduled-run-detail-pre">' + html(formatJson(payload || {})) + '</pre>');
-    modal.classList.add('visible');
   }
 
   function openIpContentStudio() {
@@ -1696,7 +1711,7 @@
     var finishedEl = document.getElementById('scheduledTaskFinishedRunsList');
     if (runningEl) runningEl.innerHTML = '<p class="meta">加载中...</p>';
     if (finishedEl) finishedEl.innerHTML = '<p class="meta">加载中...</p>';
-    return api('/api/scheduled-tasks/runs?limit=80').then(function (d) {
+    return api('/api/scheduled-tasks/runs?limit=80&compact=1').then(function (d) {
       renderRunsByStatus(d.runs || []);
     }).catch(function (e) {
       var errHtml = '<p class="meta" style="color:#e74c3c;">' + html(e.message) + '</p>';

@@ -1604,14 +1604,26 @@ async def open_browser(
             platform=acct.platform,
             browser_options=bopts,
         )
+        if acct.platform == "douyin" and not result.get("logged_in"):
+            from publisher.browser_pool import check_douyin_front_login_stable
+
+            probe = await check_douyin_front_login_stable(
+                profile_dir=profile_dir,
+                url=DOUYIN_WORKBENCH_URL,
+                browser_options=bopts,
+                headless=True,
+            )
+            result.update(probe)
         logged_in = result.get("logged_in", False)
+        probe_state = str(result.get("probe_state") or ("online" if logged_in else "waiting"))
         if logged_in and acct.status != "active":
             acct.status = "active"
             acct.last_login = datetime.utcnow()
-        _update_douyin_origin_slot_status(acct, "online" if logged_in else "waiting")
-        if acct.id > 0:
-            db.commit()
-        return {"ok": True, "logged_in": logged_in, "message": result.get("message", "")}
+        if probe_state in {"online", "waiting"}:
+            _update_douyin_origin_slot_status(acct, "online" if logged_in else "waiting")
+            if acct.id > 0:
+                db.commit()
+        return {"ok": True, "logged_in": logged_in, "probe_state": probe_state, "message": result.get("message", "")}
     except Exception as e:
         logger.exception("Open browser failed")
         return {"ok": False, "logged_in": False, "message": str(e)}
@@ -1628,6 +1640,38 @@ async def check_login_status(
         raise HTTPException(404, detail="账号不存在")
 
     try:
+        if acct.platform == "douyin":
+            from publisher.browser_pool import check_douyin_front_login_stable
+
+            profile_dir, bopts = _account_browser_profile_and_options(acct, douyin_front=True)
+            probe = await check_douyin_front_login_stable(
+                profile_dir=profile_dir,
+                url=DOUYIN_WORKBENCH_URL,
+                browser_options=bopts,
+                headless=True,
+            )
+            probe_state = str(probe.get("probe_state") or "unknown")
+            logged_in = bool(probe.get("logged_in"))
+            if probe_state in {"online", "waiting"}:
+                acct.status = "active" if logged_in else "pending"
+                if logged_in:
+                    acct.last_login = datetime.utcnow()
+                _update_douyin_origin_slot_status(acct, "online" if logged_in else "waiting")
+                if acct.id > 0:
+                    db.commit()
+            return {
+                "logged_in": logged_in,
+                "probe_state": probe_state,
+                "status": acct.status,
+                "detail": probe,
+                "message": (
+                    "logged in"
+                    if logged_in
+                    else "login probe timed out; state unchanged"
+                    if probe_state == "unknown"
+                    else "please scan the QR code to log in"
+                ),
+            }
         from publisher.browser_pool import check_browser_login
 
         profile_dir, bopts = _account_browser_profile_and_options(acct, douyin_front=acct.platform == "douyin")
@@ -1671,12 +1715,14 @@ async def open_douyin_workbench_browser(
         )
         if result.get("ok"):
             logged_in = bool(result.get("logged_in"))
-            acct.status = "active" if logged_in else "pending"
-            if logged_in:
-                acct.last_login = datetime.utcnow()
-            _update_douyin_origin_slot_status(acct, "online" if logged_in else "waiting")
-            if acct.id > 0:
-                db.commit()
+            probe_state = str(result.get("probe_state") or "unknown")
+            if probe_state in {"online", "waiting"}:
+                acct.status = "active" if logged_in else "pending"
+                if logged_in:
+                    acct.last_login = datetime.utcnow()
+                _update_douyin_origin_slot_status(acct, "online" if logged_in else "waiting")
+                if acct.id > 0:
+                    db.commit()
         return result
     except Exception as e:
         logger.exception("Open douyin workbench browser failed")
@@ -1696,36 +1742,48 @@ async def check_douyin_workbench_login_status(
         raise HTTPException(400, detail="该入口只支持抖音账号")
 
     try:
-        from publisher.browser_pool import check_douyin_front_login
+        from publisher.browser_pool import check_douyin_front_login_stable
 
         profile_dir, bopts = _account_browser_profile_and_options(acct, douyin_front=True)
-        result = await check_douyin_front_login(
+        result = await check_douyin_front_login_stable(
             profile_dir=profile_dir,
             url=DOUYIN_WORKBENCH_URL,
             browser_options=bopts,
             headless=True,
         )
         logged_in = bool(result.get("logged_in"))
-        acct.status = "active" if logged_in else "pending"
-        if logged_in:
-            acct.last_login = datetime.utcnow()
-        _update_douyin_origin_slot_status(acct, "online" if logged_in else "waiting")
-        if acct.id > 0:
-            db.commit()
+        probe_state = str(result.get("probe_state") or "unknown")
+        if probe_state in {"online", "waiting"}:
+            acct.status = "active" if logged_in else "pending"
+            if logged_in:
+                acct.last_login = datetime.utcnow()
+            _update_douyin_origin_slot_status(acct, "online" if logged_in else "waiting")
+            if acct.id > 0:
+                db.commit()
         return {
             "logged_in": logged_in,
             "status": acct.status,
+            "probe_state": probe_state,
             "message": result.get("message") or ("抖音前台已登录" if logged_in else "抖音前台未登录"),
             "detail": {
                 "cookie": bool(result.get("cookie")),
                 "login_prompt": bool(result.get("login_prompt")),
+                "qr_login_visible": bool(result.get("qr_login_visible")),
+                "profile_hints": bool(result.get("profile_hints")),
+                "attempts": result.get("attempts") or 0,
                 "path": result.get("path") or "",
                 "entry_url": DOUYIN_WORKBENCH_URL,
             },
         }
     except Exception as e:
         logger.exception("Check douyin workbench login status failed")
-        return {"logged_in": False, "status": "error", "message": str(e)}
+        return {
+            "logged_in": False,
+            "status": acct.status,
+            "probe_state": "unknown",
+            "message": "抖音前台登录状态暂时无法确认，请稍后重试。",
+            "detail": {"error": str(e)},
+        }
 
 
 @router.delete("/api/accounts/{account_id}", summary="删除发布账号")
