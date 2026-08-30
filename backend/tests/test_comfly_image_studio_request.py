@@ -113,6 +113,82 @@ async def test_multipart_image_edit_keeps_url_response_format(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_image_generation_drops_non_public_reference_urls(monkeypatch):
+    captured = {}
+
+    class _FakeAsyncClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def post(self, url, *, headers=None, data=None, files=None, json=None):
+            captured["json"] = dict(json or {})
+            return _FakeResponse()
+
+    monkeypatch.setattr(image_studio.httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        image_studio,
+        "_resolve_comfly_credentials",
+        lambda _user_id, _db, _request: ("https://bhzn.top/api/comfly-proxy", "jwt"),
+    )
+    async def _fake_save_image_studio_results(**_kwargs):
+        return []
+
+    monkeypatch.setattr(image_studio, "_save_image_studio_results", _fake_save_image_studio_results)
+
+    result = await image_studio._generate_image_studio_core(
+        request=_request(),
+        current_user=type("User", (), {"id": 71})(),
+        db=None,
+        prompt="生成一张人物场景图",
+        model="gpt-image-2",
+        aspect_ratio="9:16",
+        quality="high",
+        background="auto",
+        upload_payloads=[],
+        reference_image_urls=[
+            "http://127.0.0.1:8000/api/assets/file/local-photo?token=abc",
+            "https://lobster-online-assets.tos-cn-guangzhou.volces.com/assets/photo.jpg",
+        ],
+    )
+
+    assert result["ok"] is True
+    assert captured["json"]["image"] == [
+        "https://lobster-online-assets.tos-cn-guangzhou.volces.com/assets/photo.jpg"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_image_generation_rejects_only_non_public_reference_urls(monkeypatch):
+    monkeypatch.setattr(
+        image_studio,
+        "_resolve_comfly_credentials",
+        lambda _user_id, _db, _request: ("https://bhzn.top/api/comfly-proxy", "jwt"),
+    )
+
+    with pytest.raises(image_studio.HTTPException) as exc:
+        await image_studio._generate_image_studio_core(
+            request=_request(),
+            current_user=type("User", (), {"id": 72})(),
+            db=None,
+            prompt="生成一张人物场景图",
+            model="gpt-image-2",
+            aspect_ratio="9:16",
+            quality="high",
+            background="auto",
+            upload_payloads=[],
+            reference_image_urls=["http://127.0.0.1:8000/api/assets/file/local-photo"],
+        )
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_multipart_image_edit_sends_client_request_id(monkeypatch):
     captured = {}
 

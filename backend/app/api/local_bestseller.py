@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal, get_db
-from .assets import get_asset_public_url
+from .assets import _is_internal_asset_http_url, get_asset_public_url
 from .auth import _ServerUser, get_current_user_for_local
 from .comfly_seedance_tvc import ComflySeedancePipelinePayload, start_seedance_tvc_pipeline_job
 from .comfly_image_studio import _generate_image_studio_core
@@ -22,6 +22,13 @@ _LOCAL_BESTSELLER_SCENE_TIMEOUT_SECONDS = 300.0
 _ROOT = Path(__file__).resolve().parents[3]
 _DATA_FILE = _ROOT / "static" / "data" / "local-bestseller-10day.json"
 _BGM_FILE = _ROOT / "static" / "data" / "local-bestseller-bgm.json"
+
+
+def _public_upstream_url(value: Any) -> str:
+    url = str(value or "").strip()
+    if not url.startswith(("http://", "https://")) or _is_internal_asset_http_url(url):
+        return ""
+    return url
 
 
 class LocalBestsellerProfile(BaseModel):
@@ -797,8 +804,9 @@ def _resolve_card_image_url(
     prefer_scene_for_video = bool(card.get("prefer_scene_for_video"))
     if prefer_scene_for_video:
         scene_url = str(card.get("scene_url") or card.get("scene_preview_url") or "").strip()
-        if scene_url.startswith(("http://", "https://")):
-            return scene_url
+        public_scene_url = _public_upstream_url(scene_url)
+        if public_scene_url:
+            return public_scene_url
         scene_aid = str(card.get("scene_asset_id") or "").strip()
         if scene_aid:
             public = get_asset_public_url(scene_aid, current_user.id, request, db)
@@ -806,16 +814,18 @@ def _resolve_card_image_url(
                 return public
 
     image_url = str(card.get("image_url") or "").strip()
-    if image_url.startswith(("http://", "https://")):
-        return image_url
+    public_image_url = _public_upstream_url(image_url)
+    if public_image_url:
+        return public_image_url
     aid = str(card.get("image_asset_id") or "").strip()
     if aid:
         public = get_asset_public_url(aid, current_user.id, request, db)
         if public:
             return public
     scene_url = str(card.get("scene_url") or card.get("scene_preview_url") or "").strip()
-    if scene_url.startswith(("http://", "https://")):
-        return scene_url
+    public_scene_url = _public_upstream_url(scene_url)
+    if public_scene_url:
+        return public_scene_url
     scene_aid = str(card.get("scene_asset_id") or "").strip()
     if scene_aid:
         public = get_asset_public_url(scene_aid, current_user.id, request, db)
@@ -836,8 +846,9 @@ def _resolve_reference_urls(
     if _is_city_scene_only_day(int(card.get("day") or 0)):
         urls: List[str] = []
         scene_url = str(card.get("scene_url") or "").strip()
-        if scene_url.startswith(("http://", "https://")):
-            urls.append(scene_url)
+        public_scene_url = _public_upstream_url(scene_url)
+        if public_scene_url:
+            urls.append(public_scene_url)
         scene_aid = str(card.get("scene_asset_id") or "").strip()
         if scene_aid:
             public = get_asset_public_url(scene_aid, current_user.id, request, db)
@@ -849,8 +860,9 @@ def _resolve_reference_urls(
 
     urls: List[str] = []
     photo_url = str(profile.get("photo_url") or "").strip()
-    if photo_url.startswith(("http://", "https://")):
-        urls.append(photo_url)
+    public_photo_url = _public_upstream_url(photo_url)
+    if public_photo_url:
+        urls.append(public_photo_url)
     aid = str(profile.get("photo_asset_id") or "").strip()
     if aid:
         public = get_asset_public_url(aid, current_user.id, request, db)
@@ -861,8 +873,9 @@ def _resolve_reference_urls(
     if not urls:
         raise HTTPException(status_code=400, detail="请先上传人物照片，或从素材库选择一张人物照片")
     scene_url = str(card.get("scene_url") or "").strip()
-    if scene_url.startswith(("http://", "https://")) and scene_url not in urls:
-        urls.append(scene_url)
+    public_scene_url = _public_upstream_url(scene_url)
+    if public_scene_url and public_scene_url not in urls:
+        urls.append(public_scene_url)
     scene_aid = str(card.get("scene_asset_id") or "").strip()
     if scene_aid:
         public = get_asset_public_url(scene_aid, current_user.id, request, db)

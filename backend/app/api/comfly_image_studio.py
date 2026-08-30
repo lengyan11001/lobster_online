@@ -16,6 +16,7 @@ from ..services.comfly_image_studio_job_store import create_job_record, get_job,
 from ..services.comfly_veo_exec import _resolve_comfly_credentials
 from .assets import (
     SaveAssetReq,
+    _is_internal_asset_http_url,
     _compute_save_url_dedupe_key,
     _final_save_url_dedupe_key,
     _resolve_v3_tasks_url_for_download,
@@ -387,11 +388,25 @@ async def _generate_image_studio_core(
     client_request_id = str(request.headers.get("X-Client-Request-Id") or "").strip()
     if client_request_id:
         body["client_request_id"] = client_request_id
-    refs = [
-        str(url or "").strip()
-        for url in (reference_image_urls or [])
-        if str(url or "").strip().startswith(("http://", "https://"))
-    ][:12]
+    refs: List[str] = []
+    rejected_refs: List[str] = []
+    for value in reference_image_urls or []:
+        url = str(value or "").strip()
+        if url.startswith(("http://", "https://")) and not _is_internal_asset_http_url(url):
+            if url not in refs:
+                refs.append(url)
+        elif url:
+            rejected_refs.append(url[:120])
+    refs = refs[:12]
+    if rejected_refs:
+        logger.warning(
+            "[comfly_image_studio] rejected non-public reference urls user_id=%s count=%s urls=%s",
+            current_user.id,
+            len(rejected_refs),
+            rejected_refs[:3],
+        )
+    if (reference_image_urls or []) and not refs and not upload_payloads:
+        raise HTTPException(status_code=400, detail="参考图片必须是上游可访问的公网地址，请重新上传或转存素材")
     if refs:
         body["image"] = refs
 
