@@ -10569,14 +10569,117 @@ def _open_local_contact_profile(
 
 
 def _find_local_top_search_field(root: Any) -> Optional[Any]:
-    for node in _uia_walk(root, max_depth=18, max_nodes=2200):
-        if _uia_control_class(node) != "mmui::XValidatorTextEdit":
+    """Find WeChat's main-window search box without assuming screen origin.
+
+    The WeChat window can be moved anywhere on the desktop.  The previous
+    implementation compared the control's absolute screen ``left`` value to
+    320, so a perfectly valid search box was rejected whenever the window was
+    positioned to the right of the primary monitor.
+    """
+    root_rect = _uia_rect_tuple(root)
+    nodes = _uia_walk(root, max_depth=18, max_nodes=2200)
+    candidates: List[tuple[int, int, Any]] = []
+    structural_nodes: set[int] = set()
+    # Current WeChat builds expose the edit as a child of the left-pane
+    # ``XSearchField`` container.  Prefer that stable UIA relationship over
+    # any geometry so a future window layout change cannot select chat input.
+    for container in nodes:
+        if _uia_control_class(container) not in {"mmui::XSearchField", "mmui::SearchField"}:
+            continue
+        for node in _uia_walk(container, max_depth=6, max_nodes=80)[1:]:
+            class_name = _uia_control_class(node)
+            control_type = str(getattr(node, "ControlTypeName", "") or "")
+            name = _uia_control_text(node)
+            if class_name != "mmui::XValidatorTextEdit" and not (
+                "Edit" in control_type and name in {"搜索", "Search"}
+            ):
+                continue
+            rect = _uia_rect_tuple(node)
+            if rect is None:
+                continue
+            structural_nodes.add(id(node))
+            rel_top = rect[1] - root_rect[1] if root_rect is not None else rect[1]
+            rel_left = rect[0] - root_rect[0] if root_rect is not None else rect[0]
+            # Named search edits are preferred if a container ever exposes
+            # more than one editor (for example an IME helper control).
+            score = int(rel_top * 10 + rel_left)
+            if name in {"搜索", "Search"}:
+                score -= 1000
+            candidates.append((score, int(rect[1]), node))
+    if candidates:
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        return candidates[0][2]
+
+    candidates = []
+    for node in nodes:
+        class_name = _uia_control_class(node)
+        control_type = str(getattr(node, "ControlTypeName", "") or "")
+        # Keep the class match first, but accept an Edit control with the
+        # visible search name for WeChat builds that rename the Qt class.
+        name = _uia_control_text(node)
+        is_search_edit = class_name == "mmui::XValidatorTextEdit" or (
+            "Edit" in control_type and name in {"搜索", "Search"}
+        )
+        if not is_search_edit:
+            continue
+        if id(node) in structural_nodes:
             continue
         rect = _uia_rect_tuple(node)
-        if rect is None or rect[0] > 320:
+        if rect is None:
             continue
-        return node
-    return None
+        if root_rect is not None:
+            root_left, root_top, root_right, root_bottom = root_rect
+            rel_left = rect[0] - root_left
+            rel_top = rect[1] - root_top
+            root_width = max(1, root_right - root_left)
+            root_height = max(1, root_bottom - root_top)
+            # The main search field is in the upper-left toolbar.  Relative
+            # bounds remain stable when the whole window moves or is resized.
+            if rel_left < -20 or rel_left > min(420, root_width * 0.65):
+                continue
+            if rel_top < -20 or rel_top > min(150, root_height * 0.25):
+                continue
+            score = int(rel_top * 10 + rel_left)
+            if name in {"搜索", "Search"}:
+                score -= 1000
+        else:
+            # A root without bounds is unusual, but still prefer a named
+            # search edit and never use an arbitrary edit control.
+            if name not in {"搜索", "Search"} and class_name != "mmui::XValidatorTextEdit":
+                continue
+            score = int(rect[1] * 10 + rect[0])
+        candidates.append((score, int(rect[1]), node))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][2]
+
+
+def _local_top_search_debug(root: Any) -> Dict[str, Any]:
+    """Return a small UIA snapshot useful when search discovery fails."""
+    fields: List[Dict[str, Any]] = []
+    for node in _uia_walk(root, max_depth=18, max_nodes=2200):
+        class_name = _uia_control_class(node)
+        control_type = str(getattr(node, "ControlTypeName", "") or "")
+        if "Edit" not in control_type and "Edit" not in class_name:
+            continue
+        rect = _uia_rect_tuple(node)
+        fields.append(
+            {
+                "name": _uia_control_text(node)[:80],
+                "class_name": class_name[:120],
+                "control_type": control_type[:80],
+                "rect": rect,
+            }
+        )
+        if len(fields) >= 20:
+            break
+    return {
+        "root_name": _uia_control_text(root)[:80],
+        "root_class": _uia_control_class(root)[:120],
+        "root_rect": _uia_rect_tuple(root),
+        "edit_controls": fields,
+    }
 
 
 _LOCAL_SEARCH_NON_CONTACT_MARKERS = (
@@ -10773,6 +10876,24 @@ def _open_local_contact_profile_via_search(
             break
         time.sleep(0.25)
     if search is None:
+        debug_root = _uia_main_root(hwnd)
+        debug = _local_top_search_debug(debug_root)
+        steps.append(
+            {
+                "step": "find_top_search_field",
+                "ok": False,
+                "target": original_target,
+                "hwnd": int(hwnd or 0),
+                **debug,
+            }
+        )
+        _write_auto_reply_diagnostic(
+            "moments_search_field_not_found",
+            account_id=account_id,
+            target=original_target,
+            hwnd=int(hwnd or 0),
+            **debug,
+        )
         raise RuntimeError("local WeChat top search field not found")
     search_rect = _uia_rect_tuple(search)
     search_bottom = int(search_rect[3]) if search_rect else None
@@ -12828,6 +12949,14 @@ async def _process_moments_engage_task(task: Dict[str, Any]) -> None:
                 result = {"target": target, "status": "skipped", "reason": "no_recent_post"}
             except Exception as exc:
                 last_error = str(exc)
+                steps.append(
+                    {
+                        "step": "moments_engage_target_failed",
+                        "target": target,
+                        "target_index": idx,
+                        "error": last_error[:500],
+                    }
+                )
                 result = {"target": target, "status": "failed", "reason": last_error}
             results.append(result)
             status = str(result.get("status") or "failed")

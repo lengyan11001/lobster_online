@@ -218,3 +218,23 @@ def test_search_edit_reads_value_pattern_instead_of_placeholder_name():
             return ValuePattern()
 
     assert engine._uia_get_value(SearchEdit()) == "hddhdjjdjensb"
+
+
+def test_top_search_field_uses_window_relative_coordinates(monkeypatch):
+    """A WeChat window on the right side of the desktop still exposes search."""
+    class Node:
+        def __init__(self, name, class_name, control_type, rect, children=None):
+            self.Name = name
+            self.ClassName = class_name
+            self.ControlTypeName = control_type
+            self.BoundingRectangle = type("Rect", (), {
+                "left": rect[0], "top": rect[1], "right": rect[2], "bottom": rect[3]
+            })()
+            self._children = children or []
+
+        def GetChildren(self):
+            return self._children
+
+    search = Node("搜索", "mmui::XValidatorTextEdit", "EditControl", (1080, 202, 1180, 224))
+    root = Node("微信", "mmui::MainWindow", "WindowControl", (947, 171, 1896, 962), [search])
+    assert engine._find_local_top_search_field(root) is search
