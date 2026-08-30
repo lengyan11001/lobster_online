@@ -9259,6 +9259,53 @@ def _uia_set_text(node: Any, text: str) -> None:
     _paste_text(value)
 
 
+def _uia_set_local_search_query(
+    node: Any,
+    text: str,
+    *,
+    force_paste: bool = False,
+) -> Dict[str, Any]:
+    """Enter a local-contact query through the same event path as a user.
+
+    WeChat's top search field sometimes accepts ``ValuePattern.SetValue`` but
+    does not rebuild the local-contact section.  Use actual keyboard events
+    first, then fall back to paste when the UIA wrapper cannot send keys.
+    """
+    value = str(text or "").strip()
+    if not value:
+        raise RuntimeError("local WeChat search query is empty")
+    try:
+        node.SetFocus()
+    except Exception:
+        pass
+    try:
+        node.Click(simulateMove=True)
+    except Exception:
+        pass
+    time.sleep(0.15)
+    _send_hotkey("a", ctrl=True, pause=0.05)
+    _send_hotkey("backspace", pause=0.05)
+
+    sender = getattr(node, "SendKeys", None)
+    fallback_error = "forced clipboard retry" if force_paste else "uia SendKeys unavailable"
+    if not force_paste and callable(sender):
+        try:
+            # Character-by-character input is important here: SetValue and a
+            # single synthetic text assignment can bypass WeChat's search
+            # debounce/input handler, while SendKeys produces TextChanged.
+            sender(value, interval=0.035, waitTime=0.08, charMode=True)
+            return {"method": "uia_send_keys", "value": value}
+        except Exception as exc:
+            fallback_error = str(exc)[:240]
+
+    _paste_text(value)
+    return {
+        "method": "clipboard_paste",
+        "value": value,
+        "fallback_error": fallback_error,
+    }
+
+
 def _uia_get_value(node: Any) -> str:
     """Read the value of an edit control (Name is only its placeholder)."""
     for getter in ("GetValuePattern", "ValuePattern"):
@@ -10682,6 +10729,27 @@ def _local_top_search_debug(root: Any) -> Dict[str, Any]:
     }
 
 
+def _local_search_popup_debug(root: Any) -> List[Dict[str, Any]]:
+    """Capture a bounded summary of search rows without selecting one."""
+    rows: List[Dict[str, Any]] = []
+    for node in _uia_walk(root, max_depth=20, max_nodes=2600):
+        if _uia_control_class(node) not in {"mmui::XTableCell", "mmui::SearchContentCellView"}:
+            continue
+        text = _local_search_node_text(node).strip()
+        if not text:
+            continue
+        rows.append(
+            {
+                "class_name": _uia_control_class(node)[:120],
+                "text": text[:240],
+                "rect": _uia_rect_tuple(node),
+            }
+        )
+        if len(rows) >= 40:
+            break
+    return rows
+
+
 _LOCAL_SEARCH_NON_CONTACT_MARKERS = (
     "搜索网络结果", "搜一搜", "视频号", "公众号", "文章",
     "小程序", "音乐", "表情", "看一看", "群聊", "聊天记录",
@@ -10897,39 +10965,87 @@ def _open_local_contact_profile_via_search(
         raise RuntimeError("local WeChat top search field not found")
     search_rect = _uia_rect_tuple(search)
     search_bottom = int(search_rect[3]) if search_rect else None
-    _uia_set_text(search, expected_wx_no)
-    # The control's Name remains the placeholder "搜索". Verify the actual
-    # ValuePattern content so a stale query can never drive a name/network row.
-    query_value = ""
-    for _ in range(8):
-        query_value = _uia_get_value(search)
-        if query_value.casefold() == expected_wx_no.casefold():
-            break
-        time.sleep(0.1)
-    if query_value.casefold() != expected_wx_no.casefold():
-        raise RuntimeError(
-            f"local WeChat search query was not applied: expected wxid {expected_wx_no!r}, got {query_value!r}"
-        )
-    steps.append(
-        {
-            "step": "search_contact_by_wx_no",
-            "ok": True,
-            "target": original_target,
-            "wx_no": expected_wx_no,
-            "query_value": query_value,
-        }
-    )
-
     result_node: Optional[Any] = None
-    deadline = time.monotonic() + 8.0
-    while time.monotonic() < deadline:
-        result_node = _find_local_contact_search_result(
-            _uia_main_root(hwnd), expected_wx_no, search_bottom=search_bottom
+    query_value = ""
+    input_attempts: List[Dict[str, Any]] = []
+    last_search_rows: List[Dict[str, Any]] = []
+    # ValuePattern is fast but can bypass WeChat's local-search input handler.
+    # Retry once with a fresh field wrapper and a different input path before
+    # declaring the contact missing. Never select a network-search row.
+    for attempt in range(2):
+        if attempt:
+            search = _find_local_top_search_field(_uia_main_root(hwnd)) or search
+            time.sleep(0.2)
+        try:
+            input_meta = _uia_set_local_search_query(
+                search,
+                expected_wx_no,
+                force_paste=attempt > 0,
+            )
+        except Exception as exc:
+            input_meta = {"method": "input_error", "error": str(exc)[:240]}
+        query_value = ""
+        for _ in range(12):
+            query_value = _uia_get_value(search)
+            if query_value.casefold() == expected_wx_no.casefold():
+                break
+            time.sleep(0.1)
+        input_meta = {**input_meta, "attempt": attempt + 1, "query_value": query_value}
+        input_attempts.append(input_meta)
+        steps.append(
+            {
+                "step": "search_contact_by_wx_no",
+                "ok": query_value.casefold() == expected_wx_no.casefold(),
+                "target": original_target,
+                "wx_no": expected_wx_no,
+                **input_meta,
+            }
         )
+        if query_value.casefold() != expected_wx_no.casefold():
+            continue
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            search_root = _uia_main_root(hwnd)
+            result_node = _find_local_contact_search_result(
+                search_root, expected_wx_no, search_bottom=search_bottom
+            )
+            if result_node is not None:
+                break
+            last_search_rows = _local_search_popup_debug(search_root)
+            time.sleep(0.25)
         if result_node is not None:
             break
-        time.sleep(0.25)
+        steps.append(
+            {
+                "step": "search_contact_retry",
+                "ok": attempt < 1,
+                "target": original_target,
+                "wx_no": expected_wx_no,
+                "attempt": attempt + 1,
+                "rows": last_search_rows[:12],
+            }
+        )
     if result_node is None:
+        debug_root = _uia_main_root(hwnd)
+        debug = _local_top_search_debug(debug_root)
+        debug["search_rows"] = last_search_rows[:20]
+        debug["input_attempts"] = input_attempts
+        steps.append(
+            {
+                "step": "search_contact_result_not_found",
+                "ok": False,
+                "target": original_target,
+                "wx_no": expected_wx_no,
+                **debug,
+            }
+        )
+        _write_auto_reply_diagnostic(
+            "moments_search_result_not_found",
+            account_id=account_id,
+            target=original_target,
+            hwnd=int(hwnd or 0),
+            **debug,
+        )
         raise RuntimeError(f"contact search result not found for WeChat id: {expected_wx_no}")
     selected_text = _local_search_node_text(result_node)[:240]
     selected_rect = _uia_rect_tuple(result_node)

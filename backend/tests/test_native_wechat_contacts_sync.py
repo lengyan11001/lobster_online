@@ -457,3 +457,79 @@ def test_auto_reply_defaults_to_100_private_sessions_and_respects_old_boundary()
     assert engine._session_stops_recent_scan({"session_time": "24小时前"})
     assert engine._session_stops_recent_scan({"session_time": "昨天"})
     assert not engine._session_stops_recent_scan({"session_time": "昨天14:59", "pinned": True})
+
+
+def test_local_contact_search_uses_keyboard_events(monkeypatch):
+    calls = []
+
+    class FakeSearch:
+        def SetFocus(self):
+            calls.append(("focus",))
+
+        def Click(self, **kwargs):
+            calls.append(("click", kwargs))
+
+        def SendKeys(self, value, **kwargs):
+            calls.append(("send_keys", value, kwargs))
+
+    monkeypatch.setattr(engine, "_send_hotkey", lambda *args, **kwargs: calls.append(("hotkey", args, kwargs)))
+    monkeypatch.setattr(engine.time, "sleep", lambda seconds: None)
+
+    result = engine._uia_set_local_search_query(FakeSearch(), "hddhdjjdjensb")
+
+    assert result["method"] == "uia_send_keys"
+    assert result["value"] == "hddhdjjdjensb"
+    assert [item[0] for item in calls] == ["focus", "click", "hotkey", "hotkey", "send_keys"]
+    assert calls[-1][2]["charMode"] is True
+
+
+def test_local_contact_search_falls_back_to_clipboard(monkeypatch):
+    calls = []
+
+    class FakeSearch:
+        def SetFocus(self):
+            pass
+
+        def Click(self, **kwargs):
+            pass
+
+        def SendKeys(self, value, **kwargs):
+            raise RuntimeError("uia keyboard unavailable")
+
+    monkeypatch.setattr(engine, "_send_hotkey", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_paste_text", lambda value: calls.append(value))
+    monkeypatch.setattr(engine.time, "sleep", lambda seconds: None)
+
+    result = engine._uia_set_local_search_query(FakeSearch(), "hddhdjjdjensb")
+
+    assert result["method"] == "clipboard_paste"
+    assert result["fallback_error"] == "uia keyboard unavailable"
+    assert calls == ["hddhdjjdjensb"]
+
+
+def test_local_contact_search_can_force_clipboard_retry(monkeypatch):
+    calls = []
+
+    class FakeSearch:
+        def SetFocus(self):
+            pass
+
+        def Click(self, **kwargs):
+            pass
+
+        def SendKeys(self, value, **kwargs):
+            calls.append(("send_keys", value))
+
+    monkeypatch.setattr(engine, "_send_hotkey", lambda *args, **kwargs: None)
+    monkeypatch.setattr(engine, "_paste_text", lambda value: calls.append(("paste", value)))
+    monkeypatch.setattr(engine.time, "sleep", lambda seconds: None)
+
+    result = engine._uia_set_local_search_query(
+        FakeSearch(),
+        "hddhdjjdjensb",
+        force_paste=True,
+    )
+
+    assert result["method"] == "clipboard_paste"
+    assert result["fallback_error"] == "forced clipboard retry"
+    assert calls == [("paste", "hddhdjjdjensb")]
