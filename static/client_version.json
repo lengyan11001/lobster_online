@@ -1,7 +1,7 @@
 {
-  "version": "1.0.228",
-  "build": 272,
-  "applied_at": "2026-08-30T03:14:02+08:00",
-  "note": "server deploy 3d17342",
-  "bundle_sha256": "591d80948c4d15b70efdb4357481fdd150b8502b3440b61c67a73c6038ced81c"
+  "version": "1.0.229",
+  "build": 273,
+  "applied_at": "2026-08-30T20:43:03+08:00",
+  "note": "douyin schedule worker lifecycle locking",
+  "bundle_sha256": "21d257cf2e85896e1b29f4d3fd16eef747c4e58956c39d95ee8e36d8d90361ed"
 }
