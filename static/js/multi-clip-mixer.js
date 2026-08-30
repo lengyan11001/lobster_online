@@ -1290,9 +1290,9 @@
   }
 
   function normalizeShanjianTitle(value) {
-    var title = String(value || '').trim();
+    var title = String(value || '').replace(/\r\n?/g, '\n').trim();
     if (Array.from(title).length < 3) title = '智能剪辑';
-    return Array.from(title).slice(0, 120).join('');
+    return Array.from(title).slice(0, 80).join('');
   }
 
   function applyShanjianTemplate(baseResult) {
