@@ -1,7 +1,7 @@
 {
-  "version": "1.0.230",
-  "build": 274,
-  "applied_at": "2026-08-30T21:47:05+08:00",
-  "note": "multi clip shanjian title multiline input",
-  "bundle_sha256": "1e2275031932eac389acf8da9b8d8ff2857dbab8ff9b06714becbf9826bf1eda"
+  "version": "1.0.231",
+  "build": 275,
+  "applied_at": "2026-08-30T22:17:51+08:00",
+  "note": "fix WeChat moments search field discovery",
+  "bundle_sha256": "350ef645a9d4970a8afd85157c9a24eadb6705fb27de8610b14800bb71090819"
 }
