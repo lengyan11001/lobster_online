@@ -1,7 +1,7 @@
 {
-  "version": "1.0.231",
-  "build": 275,
-  "applied_at": "2026-08-30T22:17:51+08:00",
-  "note": "fix WeChat moments search field discovery",
-  "bundle_sha256": "350ef645a9d4970a8afd85157c9a24eadb6705fb27de8610b14800bb71090819"
+  "version": "2.0.0",
+  "build": 277,
+  "applied_at": "2026-08-30T22:53:49+08:00",
+  "note": "2.0.0: client fixes and WeChat local search",
+  "bundle_sha256": "95ce680a8c4e145405110e5ef2a27b3e5bd60d213d594f61d1875db39188034c"
 }
