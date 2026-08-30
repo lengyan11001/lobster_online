@@ -309,7 +309,12 @@ def _next_patch_version(version: str) -> str:
     return f"{major}.{minor}.{patch + 1}"
 
 
-def _bump_local_client_version(root: Path, *, note: str = "pack client OTA") -> dict[str, object]:
+def _bump_local_client_version(
+    root: Path,
+    *,
+    note: str = "pack client OTA",
+    version_override: str = "",
+) -> dict[str, object]:
     version_paths = [root / rel.replace("/", os.sep) for rel in VERSION_FILE_RELS]
     existing: list[dict[str, object]] = []
     for path in version_paths:
@@ -335,8 +340,14 @@ def _bump_local_client_version(root: Path, *, note: str = "pack client OTA") -> 
     current_build = builds.pop()
     if current_build < 0:
         raise ValueError(f"invalid client build: {current_build}")
+    selected_version = str(version_override or "").strip() or _next_patch_version(current_version)
+    if version_override:
+        parts = selected_version.lstrip("vV").split(".")
+        if len(parts) != 3 or any(not part.isdigit() for part in parts):
+            raise ValueError(f"invalid client version override: {version_override!r}")
+        selected_version = ".".join(str(int(part)) for part in parts)
     bumped: dict[str, object] = {
-        "version": _next_patch_version(current_version),
+        "version": selected_version,
         "build": current_build + 1,
         "applied_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
         "note": str(note or "pack client OTA").strip() or "pack client OTA",
@@ -948,6 +959,11 @@ def main() -> int:
         default="pack client OTA",
         help="Note stored in both local client version files before packing",
     )
+    ap.add_argument(
+        "--release-version",
+        default="",
+        help="Optional semantic version to write for this release (for example 2.0.0); build still increments",
+    )
     args = ap.parse_args()
     if args.website_only and (args.with_nodejs_deps or args.with_ppt_runtime_deps or args.with_memory_document_runtime_deps or args.with_douyin_runtime_deps or args.with_wechat_runtime_deps):
         print("[ERR] --website-only 不能与运行时依赖包选项同时使用")
@@ -976,7 +992,11 @@ def main() -> int:
         print(f"[ERR] root 不是目录: {root}")
         return 1
     try:
-        bumped_version = _bump_local_client_version(root, note=args.version_note)
+        bumped_version = _bump_local_client_version(
+            root,
+            note=args.version_note,
+            version_override=args.release_version,
+        )
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
         print(f"[ERR] 无法在打包前升级本地版本: {exc}")
         return 1
