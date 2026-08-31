@@ -15688,6 +15688,8 @@ async def douyin_get_self_videos(account_id: int = 0, max_videos: int = 12):
         return {"code": 500, "msg": f"账号 {account['id']} 浏览器启动失败，无法采集自己的视频列表。"}
 
     scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    result: Dict = {"profile": {}, "videos": []}
+    page_error: Optional[Exception] = None
     try:
         # The @-comment action immediately opens this same page to read a
         # target video.  Do not first open another /user/self page merely to
@@ -15701,21 +15703,54 @@ async def douyin_get_self_videos(account_id: int = 0, max_videos: int = 12):
             )
         except RuntimeError as exc:
             message = str(exc or "").strip()
-            if "登录拦截" not in message and "未登录" not in message and "登录态已失效" not in message:
-                raise
-            account["status"] = "waiting"
-            config["douyin_accounts"] = accounts
-            save_global_config(config)
-            return {
-                "code": 400,
-                "type": "account_waiting_login",
-                "msg": f"账号 {account['id']} 浏览器已打开，但尚未完成登录，请先扫码登录后再刷新。",
-                "account": account,
-                "videos": [],
-                "profile": {},
-            }
+            if "登录拦截" in message or "未登录" in message or "登录态已失效" in message:
+                account["status"] = "waiting"
+                config["douyin_accounts"] = accounts
+                save_global_config(config)
+                return {
+                    "code": 400,
+                    "type": "account_waiting_login",
+                    "msg": f"账号 {account['id']} 浏览器已打开，但尚未完成登录，请先扫码登录后再刷新。",
+                    "account": account,
+                    "videos": [],
+                    "profile": {},
+                }
+            page_error = exc
+        except Exception as exc:
+            page_error = exc
     finally:
         await scraper.close()
+
+    if page_error is not None:
+        cached_account_id = int(douyin_mention_self_video_cache.get("account_id", 0) or 0)
+        cached_videos = [
+            dict(row)
+            for row in (douyin_mention_self_video_cache.get("videos", []) or [])
+            if isinstance(row, dict) and str(row.get("url") or "").strip()
+        ]
+        if cached_account_id == int(account["id"]) and cached_videos:
+            douyin_log(
+                f"[Douyin mention] profile refresh failed; reusing verified video cache for account {account['id']}: {page_error}",
+                "warning",
+            )
+            return {
+                "code": 200,
+                "msg": f"本人主页刷新超时，已复用账号 {account['id']} 的作品缓存。",
+                "account": account,
+                "profile": dict(douyin_mention_self_video_cache.get("profile") or {}),
+                "videos": cached_videos[:max_videos],
+                "fetched_at": str(douyin_mention_self_video_cache.get("fetched_at") or "").strip(),
+                "cache_fallback": True,
+            }
+        return {
+            "code": 503,
+            "type": "self_video_page_unavailable",
+            "msg": f"账号 {account['id']} 的本人主页暂时无法读取，请稍后重试。",
+            "detail": str(page_error or "").strip(),
+            "account": account,
+            "videos": [],
+            "profile": {},
+        }
 
     fetched_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     douyin_mention_self_video_cache.update(

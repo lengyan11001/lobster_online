@@ -10,7 +10,14 @@ from typing import Awaitable, Callable, Dict, List, Optional
 from urllib.parse import parse_qs, quote, urlparse
 
 import requests
-from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
+from playwright.async_api import (
+    Browser,
+    BrowserContext,
+    Page,
+    Playwright,
+    TimeoutError as PlaywrightTimeoutError,
+    async_playwright,
+)
 
 from douyin_client import DouyinClient, is_port_open
 
@@ -2286,6 +2293,48 @@ class DouyinCommentScraper:
             self._emit(logger, "[抖音] 浏览器会话已重连，继续执行任务", "info")
             return await self._context.new_page()
 
+    async def _goto_profile_page(
+        self,
+        page: Page,
+        profile_url: str,
+        *,
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> None:
+        """Open a Douyin profile without waiting for its SPA to become idle.
+
+        Douyin can keep loading recommendation and tracking resources after the
+        profile shell is usable. Waiting for ``domcontentloaded`` makes a valid
+        account look unavailable after a full minute. A committed navigation is
+        sufficient here because the caller performs its own short settle delay
+        and visible-login check afterwards.
+        """
+        target = str(profile_url or "").strip()
+        last_error: Optional[BaseException] = None
+        for attempt in range(1, 3):
+            try:
+                await page.goto(target, wait_until="commit", timeout=15000)
+                self._emit(
+                    logger,
+                    f"[Douyin diagnostic] profile commit ready attempt={attempt}; reading video list",
+                    "info",
+                )
+                return
+            except PlaywrightTimeoutError as exc:
+                last_error = exc
+                if attempt == 1:
+                    self._emit(
+                        logger,
+                        "[Douyin] profile first-screen request timed out; retrying once in the same session",
+                        "warning",
+                    )
+                    try:
+                        await page.wait_for_timeout(500)
+                    except Exception:
+                        pass
+                    continue
+            break
+        raise RuntimeError("Douyin profile first-screen connection timed out; retry later") from last_error
+
     async def open_chat_workspace_page(
         self,
         logger: Optional[Callable[[str, str], None]] = None,
@@ -3647,6 +3696,7 @@ class DouyinCommentScraper:
             raise ValueError("缺少同行主页地址")
 
         page = await self._new_page(logger=logger)
+        response_tasks: set[asyncio.Task] = set()
         try:
             aweme_post_future = asyncio.get_running_loop().create_future()
 
@@ -3660,14 +3710,27 @@ class DouyinCommentScraper:
                 try:
                     aweme_post_future.set_result(await response.json())
                 except Exception as exc:
+                    # Closing this short-lived read page races with late
+                    # response handlers. It is not a task failure and must
+                    # never leave an unobserved TargetClosedError behind.
+                    if aweme_post_future.done():
+                        return
+                    if is_playwright_target_closed_error(exc):
+                        aweme_post_future.cancel()
+                        return
                     aweme_post_future.set_exception(exc)
 
-            page.on("response", lambda response: asyncio.create_task(handle_aweme_post_response(response)))
+            def on_response(response):
+                task = asyncio.create_task(handle_aweme_post_response(response))
+                response_tasks.add(task)
+                task.add_done_callback(response_tasks.discard)
+
+            page.on("response", on_response)
 
             page_label = "抖音我的评论区" if self_only else "抖音同行监控"
             subject_label = "本人作品" if self_only else "同行"
             self._emit(logger, f"[{page_label}] 打开{subject_label}主页：{profile_url}")
-            await page.goto(profile_url, wait_until="domcontentloaded", timeout=60000)
+            await self._goto_profile_page(page, profile_url, logger=logger)
             await self._pause_page_videos(page, logger=logger, stage="profile_after_goto")
             await page.wait_for_timeout(3500)
             await self._pause_page_videos(page, logger=logger, stage="profile_after_settle")
@@ -3970,6 +4033,21 @@ class DouyinCommentScraper:
                 "videos": videos,
             }
         finally:
+            for task in tuple(response_tasks):
+                if not task.done():
+                    task.cancel()
+            if response_tasks:
+                await asyncio.gather(*tuple(response_tasks), return_exceptions=True)
+            if not aweme_post_future.done():
+                aweme_post_future.cancel()
+            elif not aweme_post_future.cancelled():
+                # The navigation can fail before the response future is read.
+                # Observe its exception so asyncio does not log a misleading
+                # "Future exception was never retrieved" after cleanup.
+                try:
+                    aweme_post_future.exception()
+                except Exception:
+                    pass
             await page.close()
 
     async def scrape_self_videos(

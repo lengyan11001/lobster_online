@@ -5329,32 +5329,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         # about people touched, so count stable customer identities rather than
         # adding the same person once per action.
         touched_user_keys: set[str] = set()
-        blocked_by_previous_action = ""
         for touch_action in touch_actions:
-            if blocked_by_previous_action:
-                action_stat = {
-                    "action": touch_action,
-                    "label": _SCHEDULED_DOUYIN_ACTION_LABELS.get(touch_action, touch_action),
-                    "selected": 0,
-                    "processed": 0,
-                    "success": 0,
-                    "failed": 0,
-                    "not_started": 0,
-                    "started": False,
-                    "result_code": 424,
-                    "error": blocked_by_previous_action,
-                }
-                action_stats.append(action_stat)
-                results.append(
-                    {
-                        "action": touch_action,
-                        "label": action_stat["label"],
-                        "result": {"code": 424, "msg": blocked_by_previous_action},
-                        "users": [],
-                        "stats": action_stat,
-                    }
-                )
-                continue
             # Claim the bounded slice atomically so two workflow triggers
             # cannot select the same user/action before either one is queued.
             async with _scheduled_douyin_precise_touch_claim_lock:
@@ -5562,12 +5537,6 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                     "stats": action_stat,
                 }
             )
-            if result_code != 200:
-                blocked_by_previous_action = (
-                    f"前置动作“{action_stat['label']}”未启动，本轮后续动作不再执行："
-                    f"{action_stat['error'] or '启动失败'}"
-                )
-
         touched_total = len(touched_user_keys)
         started_action_count = sum(bool(item.get("started")) for item in action_stats)
         not_started_action_count = len(action_stats) - started_action_count

@@ -1,7 +1,7 @@
 {
-  "version": "2.0.3",
-  "build": 282,
-  "applied_at": "2026-08-31T20:46:37+08:00",
-  "note": "Fix Douyin multi-action login probe",
-  "bundle_sha256": "41a8bae95e909979b7d5f2023cfdd35b55aff6f8bec860f44029def1cc73570b"
+  "version": "2.0.4",
+  "build": 283,
+  "applied_at": "2026-08-31T22:29:11+08:00",
+  "note": "Fix precise touch profile timeout and independent actions",
+  "bundle_sha256": "fdd0f46a606d35437c24bc2ee49be8015693eefa9c1a6cdab155909a265017e6"
 }

@@ -5,6 +5,7 @@ import backend.app.api.h5_chat_channel as h5_chat_channel
 h5_chat_channel._install_douyin_origin_import_path()
 import douyin_api  # type: ignore  # noqa: E402
 from douyin_comment_scraper import DouyinCommentScraper  # type: ignore  # noqa: E402
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from backend.app.api.h5_chat_channel import (
     _merge_scheduled_douyin_collection_params,
     _merge_scheduled_douyin_precise_touch_params,
@@ -196,6 +197,64 @@ def test_self_video_load_marks_waiting_only_for_visible_login_intercept(monkeypa
     assert saved == [config]
 
 
+def test_self_video_load_uses_same_account_cache_when_profile_page_times_out(monkeypatch):
+    config = {
+        "douyin_accounts": [{"id": 1, "port": 9332, "status": "online"}],
+        "douyin_default_account_id": 1,
+    }
+
+    class _FakeScraper:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def scrape_self_videos(self, **_kwargs):
+            raise RuntimeError("Douyin profile first-screen connection timed out; retry later")
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(douyin_api, "load_global_config", lambda: config)
+    monkeypatch.setattr(douyin_api.DouyinClient, "launch_browser", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(douyin_api, "DouyinCommentScraper", _FakeScraper)
+    monkeypatch.setattr(
+        douyin_api,
+        "douyin_mention_self_video_cache",
+        {
+            "account_id": 1,
+            "profile": {"username": "test account"},
+            "videos": [{"url": "https://www.douyin.com/video/1"}],
+            "fetched_at": "2026-08-31 22:00:00",
+        },
+    )
+
+    result = asyncio.run(douyin_api.douyin_get_self_videos(account_id=1, max_videos=6))
+
+    assert result["code"] == 200
+    assert result["cache_fallback"] is True
+    assert result["videos"] == [{"url": "https://www.douyin.com/video/1"}]
+
+
+def test_profile_navigation_uses_commit_and_retries_after_timeout():
+    class _FakePage:
+        def __init__(self):
+            self.calls = []
+
+        async def goto(self, _url, *, wait_until, timeout):
+            self.calls.append((wait_until, timeout))
+            if len(self.calls) == 1:
+                raise PlaywrightTimeoutError("first navigation timed out")
+
+        async def wait_for_timeout(self, _milliseconds):
+            pass
+
+    page = _FakePage()
+    scraper = DouyinCommentScraper(account_id=1, cdp_port=9332)
+
+    asyncio.run(scraper._goto_profile_page(page, "https://www.douyin.com/user/self"))
+
+    assert page.calls == [("commit", 15000), ("commit", 15000)]
+
+
 def test_precise_touch_persists_each_direct_message_result(monkeypatch):
     selected_users = [
         {"username": "成功用户", "profile_url": "https://www.douyin.com/user/success"},
@@ -331,7 +390,7 @@ def test_precise_touch_busy_launch_reports_not_started_without_stale_success(mon
     assert state_updates[-1][0] == "failed"
 
 
-def test_precise_touch_does_not_start_later_actions_after_busy_rejection(monkeypatch):
+def test_precise_touch_starts_later_independent_actions_after_rejection(monkeypatch):
     selected_users = [
         {
             "username": "串行客户",
@@ -357,12 +416,12 @@ def test_precise_touch_does_not_start_later_actions_after_busy_rejection(monkeyp
         started_actions.append("follow_comment")
         return {"code": 400, "msg": "已有任务运行"}
 
-    async def unexpected_direct_message(request):
+    async def direct_message(request):
         started_actions.append("direct_message")
         return {"code": 200, "total": len(request["users"])}
 
     monkeypatch.setattr(douyin_api, "douyin_start_follow_comment", busy_follow_comment)
-    monkeypatch.setattr(douyin_api, "douyin_start_interaction", unexpected_direct_message)
+    monkeypatch.setattr(douyin_api, "douyin_start_interaction", direct_message)
     monkeypatch.setattr(
         h5_chat_channel,
         "_load_scheduled_douyin_online_config_params",
@@ -383,11 +442,61 @@ def test_precise_touch_does_not_start_later_actions_after_busy_rejection(monkeyp
         )
     )
 
-    assert claimed_actions == ["follow_comment"]
-    assert started_actions == ["follow_comment"]
-    assert [item["result_code"] for item in result["action_stats"]] == [400, 424]
-    assert result["stats"]["processed"] == 0
-    assert result["stats"]["not_started"] == 2
+    assert claimed_actions == ["follow_comment", "direct_message"]
+    assert started_actions == ["follow_comment", "direct_message"]
+    assert [item["result_code"] for item in result["action_stats"]] == [400, 200]
+    assert result["stats"]["processed"] == 1
+    assert result["stats"]["not_started"] == 1
+
+
+def test_precise_touch_continues_to_direct_message_when_mention_page_is_unavailable(monkeypatch):
+    selected_users = [
+        {
+            "username": "retry customer",
+            "profile_url": "https://www.douyin.com/user/retry-customer",
+        }
+    ]
+    claimed_actions = []
+    started_actions = []
+
+    def collect_users(action, _limit):
+        claimed_actions.append(action)
+        return [dict(row) for row in selected_users]
+
+    monkeypatch.setattr(douyin_api, "collect_douyin_precise_touch_users", collect_users)
+    monkeypatch.setattr(douyin_api, "update_douyin_precise_touch_users", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(
+        douyin_api,
+        "collect_douyin_interaction_users",
+        lambda _selected_task_ids=None: [dict(row) for row in selected_users],
+    )
+
+    async def unavailable_self_videos(**_kwargs):
+        return {"code": 503, "type": "self_video_page_unavailable", "videos": []}
+
+    async def start_direct_message(request):
+        started_actions.append("direct_message")
+        assert request["users"] == selected_users
+        return {"code": 200, "total": len(request["users"])}
+
+    monkeypatch.setattr(douyin_api, "douyin_get_self_videos", unavailable_self_videos)
+    monkeypatch.setattr(douyin_api, "douyin_start_interaction", start_direct_message)
+    monkeypatch.setattr(
+        h5_chat_channel,
+        "_load_scheduled_douyin_online_config_params",
+        lambda action: {"message_mode": "fixed", "message": "hello"} if action == "direct_message" else {},
+    )
+
+    result = asyncio.run(
+        _run_scheduled_douyin_sales_action(
+            "precise_touch",
+            {"touch_actions": ["mention_comment", "direct_message"], "max_users": 1},
+        )
+    )
+
+    assert claimed_actions == ["mention_comment", "direct_message"]
+    assert started_actions == ["direct_message"]
+    assert [item["result_code"] for item in result["action_stats"]] == [503, 200]
 
 
 def test_h5_employee_editor_exposes_precise_touch_actions():
