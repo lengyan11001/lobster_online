@@ -717,9 +717,11 @@
   function nodeHtml(node,index,editable) { var soon=!!(node.comingSoon || node.workflow_placeholder || node.plan && node.plan.payload && node.plan.payload.skip_execution); var children=workflowChildren(node), allowed=nodeIsAllowed(node); return '<article class="oe-node' + (soon ? ' is-soon' : '') + (!allowed ? ' is-locked' : '') + '"><div class="oe-time">' + esc(node.time || '--:--') + (node.end_time ? '<br><span style="color:#a0aaba;font-size:.61rem;font-weight:400">' + esc(node.end_time) + '</span>' : '') + '</div><div class="oe-line"></div><div class="oe-node-main"><div class="oe-node-title"><span>' + esc(node.ability_label || node.note || '工作节点') + '</span>' + (soon ? '<span class="oe-tag soon">敬请期待</span>' : '') + (!allowed ? '<span class="oe-tag soon">权限未开通</span>' : '') + (node.sales_preset ? '<span class="oe-tag">销售</span>' : '') + '</div><div class="oe-node-note">' + esc(node.note || '') + '</div><div class="oe-node-key">' + esc(node.ability_key || '') + '</div></div><div class="oe-node-actions">' + (allowed ? nodeActionsHtml(node,index,editable,soon) : '') + '</div>' + (children.length ? '<div class="oe-children">' + children.map(function(child){return childHtml(child,index,editable);}).join('') + '</div>' : '') + '</article>'; }
   function renderTimeline() { var host=el('oeTimeline'); if (!host) return; var editable=currentTemplateIsEditable(), count=state.nodes.length, childCount=state.nodes.reduce(function(total,node){return total+workflowChildren(node).length;},0); el('oeTimelineMeta').textContent=count + ' 个节点' + (childCount ? ' · ' + childCount + ' 个下级动作' : ''); host.innerHTML=count ? state.nodes.map(function(node,index){return nodeHtml(node,index,editable);}).join('') : '<div class="oe-empty-list">还没有节点，点击“添加节点”开始配置。</div>'; }
   function renderEditor() {
-    var body=el('oeEditorBody'), empty=el('oeEditorEmpty'), template=state.selectedTemplate; if (!template) { body.hidden=true; empty.hidden=false; return; }
+    var body=el('oeEditorBody'), empty=el('oeEditorEmpty'), template=state.selectedTemplate, copyButton=el('oeCopyTemplateBtn'); if (!template) { body.hidden=true; empty.hidden=false; if (copyButton) copyButton.hidden=true; return; }
     body.hidden=false; empty.hidden=true; el('oeEditorTitle').textContent=template.name || '未命名员工'; el('oeEditorSubtitle').textContent=isSalesTemplate(template) ? '销售 24 小时工作流 · 复用 H5 销售逻辑' : (template.source === 'granted' ? '授权模板 · 只读配置' : '自定义工作流'); if (el('oeTemplateName').dataset.oeTemplateDraftKey !== currentDraftKey()) { el('oeTemplateName').value=template.name || ''; el('oeTemplateName').dataset.oeTemplateDraftKey=currentDraftKey(); } renderStatus(); renderTimeline();
-    var editable=currentTemplateIsEditable(); el('oeTemplateName').disabled=!editable; el('oeTemplateName').title=editable ? '' : '授权模板不能修改';
+    var editable=currentTemplateIsEditable(), canCopy=template.source === 'granted' && !!String(template.id || '').trim();
+    if (copyButton) { copyButton.hidden=!canCopy; copyButton.disabled=!!state.submitting; }
+    el('oeTemplateName').disabled=!editable; el('oeTemplateName').title=editable ? '' : '授权模板不能修改';
     document.querySelectorAll('#content-h5-employees [data-oe-action="save"],#content-h5-employees [data-oe-action="add"]').forEach(function(button){button.disabled=!editable || !!state.submitting;});
     document.querySelectorAll('#content-h5-employees [data-oe-action="activate"],#content-h5-employees [data-oe-action="stop"]').forEach(function(button){button.disabled=!!state.submitting;});
     document.querySelectorAll('#content-h5-employees [data-oe-action="delete-template"]').forEach(function(button){
@@ -909,6 +911,31 @@
   }
   function runSubmission(kind, task) { if (state.submitting) return Promise.reject(new Error('操作正在处理中，请勿重复提交')); state.submitting=kind; clearError(); render(); return Promise.resolve().then(task).finally(function(){state.submitting='';render();}); }
   function saveTemplate() { var body=payloadToSave(), id=String(state.editingId || ''); body.installation_id=selectedDeviceId(); return runSubmission('save',function(){return api(id ? '/api/h5-workflows/templates/' + encodeURIComponent(id) : '/api/h5-workflows/templates',{method:id?'PATCH':'POST',json:body}).then(function(data){var saved=data.template || {}; state.editingId=String(saved.id || id); state.salesTemplateMigrationPending=false; state.editingMeta=Object.assign({},saved.meta || body.meta); state.selectedId=String(saved.id || state.selectedId || 'system_sales'); state.templatesLoadedInstallationId=''; return loadTemplates().then(function(){state.selectedTemplate=normalizeTemplate(state.templates.find(function(item){return String(item.id) === state.editingId;}) || Object.assign({},saved,{source:'own'})); state.nodes=clone(state.selectedTemplate.nodes || body.nodes); if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey; render(); if (typeof loadOnlineH5Employees === 'function') loadOnlineH5Employees(); return saved;});});}); }
+  function copiedTemplateName(template) { var base=String(template && template.name || '员工模板').trim() || '员工模板'; return /副本$/.test(base) ? base : base + '副本'; }
+  function copyTemplate() {
+    var source=state.selectedTemplate, sourceId=String(source && source.id || '').trim();
+    if (!source || source.source !== 'granted' || !sourceId) throw new Error('只能复制他人授权的员工模板');
+    if (!state.nodes.length) throw new Error('模板没有可复制的节点');
+    return runSubmission('copy',function(){
+      return api('/api/h5-workflows/templates',{method:'POST',json:{
+        name:copiedTemplateName(source),
+        nodes:clone(state.nodes),
+        meta:{copied_from:sourceId,copied_source:String(source.source || '')},
+        installation_id:selectedDeviceId()
+      }}).then(function(data){
+        var saved=data.template || {}, copiedId=String(saved.id || '').trim();
+        if (!copiedId) throw new Error('复制成功但服务器没有返回新模板');
+        state.templatesLoadedInstallationId='';
+        return loadTemplates().then(function(){
+          var copied=state.templates.find(function(item){return String(item && item.id || '') === copiedId;});
+          if (!copied) throw new Error('复制成功但新模板尚未加载，请刷新后重试');
+          applyServerTemplate(copiedId);
+          if (typeof toast === 'function') toast('已复制，可继续编辑');
+          return copied;
+        });
+      });
+    });
+  }
   function askPlanDay() { var answer=window.prompt('请输入本次销售工作流从第几天开始执行（1-30）','1'); if (answer === null) return null; var day=Number(answer); if (!Number.isInteger(day) || day < 1 || day > 30) throw new Error('执行天数请输入 1 到 30 的整数'); return day; }
   function activateTemplate() { var iid=selectedDeviceId(), template=state.selectedTemplate; if (!iid) throw new Error('请先选择 Online 设备'); var device=state.devices.find(function(item){return String(item.installation_id) === iid;}); if (!device || !device.online) throw new Error('请选择在线的 Online 设备'); var day=templateNeedsPlanDay(template) ? askPlanDay() : undefined; if (day === null) return Promise.resolve(); if (state.salesTemplateMigrationPending && state.editingId) return saveTemplate().then(activateTemplate); var requestFactory; if (state.selectedId === 'system_sales' && !state.editingId) requestFactory=function(){return api('/api/h5-workflows/activate-inline',{method:'POST',json:{template_key:'system_sales',name:'销售员工',nodes:clone(state.nodes),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),plan_day:day}});}; else { var id=String(state.editingId || template && template.id || ''); if (!id) return saveTemplate().then(activateTemplate); requestFactory=function(){return api('/api/h5-workflows/activate',{method:'POST',json:{template_id:Number(id),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),...(day ? {plan_day:day} : {})}});}; } return runSubmission('activate',requestFactory).then(function(data){state.active=data.activation || null; renderStatus(); if (typeof toast === 'function') toast('员工工作流已启用');}); }
   function stopTemplate() { var active=activeForDevice(); if (!active || !active.id) throw new Error('当前设备没有启用员工'); return runSubmission('stop',function(){return api('/api/h5-workflows/activations/' + encodeURIComponent(active.id) + '/stop',{method:'POST',json:{}}).then(function(){state.active=null;if(typeof toast==='function')toast('员工工作流已停用');});}); }
@@ -953,6 +980,7 @@
         if(action==='moment-node-prev' || action==='moment-child-prev') {state.momentContactPage=Math.max(1,state.momentContactPage-1);renderMomentPicker(action.indexOf('child')>=0?'child':'node');return;}
         if(action==='moment-node-next' || action==='moment-child-next') {state.momentContactPage+=1;renderMomentPicker(action.indexOf('child')>=0?'child':'node');return;}
         if(action==='save') {saveTemplate().catch(function(err){showError(err.message);});return;}
+        if(action==='copy-template') {copyTemplate().catch(function(err){showError(err.message || '复制失败');});return;}
         if(action==='activate') {activateTemplate().catch(function(err){showError(err.message);});return;}
         if(action==='stop') {stopTemplate().catch(function(err){showError(err.message);});return;}
         if(action==='delete-template') {deleteTemplate().catch(function(err){showError(err.message);});return;}

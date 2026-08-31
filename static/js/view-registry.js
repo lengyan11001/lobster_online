@@ -158,7 +158,7 @@
 
   window.registerLobsterView('h5-employees', {
     html: '/static/views/h5-employees.html?v=20260827-touch-action-echo-v1',
-    scripts: '/static/js/views/h5-employees.js?v=20260830-employee-cache-v1',
+    scripts: '/static/js/views/h5-employees.js?v=20260831-employee-copy-v1',
     init: 'initOnlineH5EmployeesView',
     cache: 'reload'
   });

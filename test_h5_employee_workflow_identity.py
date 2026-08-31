@@ -81,6 +81,23 @@ def test_online_employee_editor_deletes_saved_custom_employee_from_server():
     assert "删除后服务器模板会移除" in script
 
 
+def test_online_employee_editor_copies_granted_template_into_owned_template():
+    script = _script()
+    html = (ROOT / "static" / "views" / "h5-employees.html").read_text(encoding="utf-8")
+    registry = (ROOT / "static" / "js" / "view-registry.js").read_text(encoding="utf-8")
+
+    assert 'id="oeCopyTemplateBtn"' in html
+    assert 'data-oe-action="copy-template"' in html
+    assert "function copiedTemplateName(template)" in script
+    assert "function copyTemplate()" in script
+    assert "source.source !== 'granted'" in script
+    assert "meta:{copied_from:sourceId,copied_source:String(source.source || '')}" in script
+    assert "method:'POST'" in script
+    assert "state.templatesLoadedInstallationId=''" in script
+    assert "applyServerTemplate(copiedId)" in script
+    assert "h5-employees.js?v=20260831-employee-copy-v1" in registry
+
+
 def test_online_employee_editor_manages_supported_child_actions():
     script = _script()
     html = (ROOT / "static" / "views" / "h5-employees.html").read_text(encoding="utf-8")
