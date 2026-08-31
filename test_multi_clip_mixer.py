@@ -116,6 +116,60 @@ def test_template_overlay_inputs_are_driven_by_template_metadata():
     assert "position_overrides: templatePositionOverridesForSubmit()" in script
 
 
+def test_template_title_is_entered_before_random_or_specific_template_selection():
+    root = Path(__file__).parent
+    script = (root / "static" / "js" / "multi-clip-mixer.js").read_text(encoding="utf-8")
+    view = (root / "static" / "views" / "multi-clip-mixer.html").read_text(encoding="utf-8")
+    registry = (root / "static" / "js" / "view-registry.js").read_text(encoding="utf-8")
+
+    assert 'id="mcmTemplateTitle"' in view
+    assert '<textarea id="mcmTemplateTitle"' in view
+    assert view.index('id="mcmTemplateTitle"') < view.index('id="mcmRandomTemplateSwitch"')
+    assert 'id="mcmTemplateRandomRow"' in view
+    assert view.index('id="mcmRandomTemplateSwitch"') < view.index('name="mcmTemplateProvider"')
+    assert "function templateTitleField(item)" in script
+    assert "function templateTitleValue()" in script
+    assert "function overlayTextsWithTemplateTitle(item, values)" in script
+    assert "var title = normalizeShanjianTitle(templateTitleValue());" in script
+    assert "title: templateTitleValue() ||" in script
+    assert "multi-clip-mixer.js?v=20260831-mixer-history-v3" in registry
+
+
+def test_random_music_and_template_mode_hides_specific_choices():
+    root = Path(__file__).parent
+    script = (root / "static" / "js" / "multi-clip-mixer.js").read_text(encoding="utf-8")
+    view = (root / "static" / "views" / "multi-clip-mixer.html").read_text(encoding="utf-8")
+
+    assert 'id="mcmMusicRandomRow"' in view
+    assert 'id="mcmRandomMusicSwitch"' in view
+    assert 'id="mcmTemplateChoiceArea"' in view
+    assert "if (choiceArea) choiceArea.hidden = randomTemplate;" in script
+    assert "if ($('mcmMusicGrid')) $('mcmMusicGrid').hidden = randomMusic;" in script
+    assert "grid.innerHTML = randomMusic ? '' : state.musicOptions.map" in script
+    assert "grid.innerHTML = randomTemplate ? '' : state.templates.map" in script
+
+
+def test_multi_clip_history_persists_batches_and_supports_batch_actions():
+    root = Path(__file__).parent
+    script = (root / "static" / "js" / "multi-clip-mixer.js").read_text(encoding="utf-8")
+    view = (root / "static" / "views" / "multi-clip-mixer.html").read_text(encoding="utf-8")
+    styles = (root / "static" / "css" / "multi-clip-mixer.css").read_text(encoding="utf-8")
+
+    assert "HISTORY_STORAGE_KEY = 'lobster_multi_clip_history_v1'" in script
+    assert "HISTORY_LIMIT = 50" in script
+    assert "function loadHistory()" in script
+    assert "function historyStorageKey()" in script
+    assert "getCurrentUserIdFromToken" in script
+    assert "function saveActiveHistoryBatch(completed)" in script
+    assert "function downloadVideoUrls(urls, prefix)" in script
+    assert "function copyVideoUrls(urls)" in script
+    assert "data-batch-action=\"download\"" in script
+    assert "data-history-action=\"copy\"" in script
+    assert 'id="mcmHistoryToggleBtn"' in view
+    assert 'id="mcmHistoryList"' in view
+    assert ".mcm-history-item" in styles
+
+
 def test_multi_clip_preview_reuses_template_studio_renderer():
     root = Path(__file__).parent
     mixer_script = (root / "static" / "js" / "multi-clip-mixer.js").read_text(encoding="utf-8")

@@ -2390,6 +2390,93 @@ def _auto_reply_language_label(value: Any) -> str:
     return _AUTO_REPLY_LANGUAGE_LABELS.get(code, "简体中文")
 
 
+def _detect_auto_reply_language(latest_message: Any, recent_context: Any = "") -> str:
+    """Detect the customer's dominant language from the newest message.
+
+    Script detection is intentionally local and conservative.  It prevents a
+    shared batch prompt or the account's historical template language from
+    deciding a reply language.  Recent context is only a fallback for
+    messages made entirely of emojis, numbers, or links.
+    """
+    latest = str(latest_message or "").strip()
+    context = str(recent_context or "").strip()
+
+    def detect(text: str) -> str:
+        if not text:
+            return ""
+        if re.search(r"[\uac00-\ud7a3]", text):
+            return "ko"
+        if re.search(r"[\u3040-\u30ff\u31f0-\u31ff]", text):
+            return "ja"
+        if re.search(r"[\u0e00-\u0e7f]", text):
+            return "th"
+        if re.search(r"[\u0600-\u06ff]", text):
+            return "ar"
+        if re.search(r"[\u0400-\u04ff]", text):
+            return "ru"
+        han_count = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", text))
+        latin_count = len(re.findall(r"[A-Za-z]", text))
+        if han_count and han_count >= max(1, latin_count):
+            return "zh-CN"
+        if latin_count >= 2:
+            lowered = text.lower()
+            if re.search(r"[\u00c0-\u024f]", text) and any(
+                marker in lowered for marker in (" que ", " para ", " esta ", " como ", " qué ")
+            ):
+                return "es"
+            if re.search(r"[\u00c0-\u024f]", text) and any(
+                marker in lowered for marker in (" que ", " avec ", " pour ", " vous ", " est ")
+            ):
+                return "fr"
+            return "en"
+        return ""
+
+    latest_language = detect(latest)
+    if latest_language:
+        return latest_language
+    # _recent_conversation_text labels messages as "对方:" and "我:".
+    # When the newest message is only an emoji/link, use the customer's own
+    # lines first so our historical Chinese replies cannot override them.
+    customer_lines = [
+        match.group(1).strip()
+        for match in re.finditer(r"(?:^|\n)\s*对方\s*[:：]\s*(.*)", context)
+        if match.group(1).strip()
+    ]
+    if customer_lines:
+        detected = [detect(line) for line in customer_lines]
+        detected = [language for language in detected if language]
+        if detected:
+            counts = {language: detected.count(language) for language in set(detected)}
+            return max(counts, key=lambda language: (counts[language], len(detected) - 1 - detected[::-1].index(language)))
+    return detect(context) or "zh-CN"
+
+
+def _auto_reply_language_matches(reply: Any, expected_language: Any) -> bool:
+    """Return whether generated text is plausibly in the requested language."""
+    text = str(reply or "").strip()
+    if not text:
+        return False
+    language = _normalize_auto_reply_language(expected_language)
+    has_hangul = bool(re.search(r"[\uac00-\ud7a3]", text))
+    has_kana = bool(re.search(r"[\u3040-\u30ff\u31f0-\u31ff]", text))
+    han_count = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", text))
+    latin_count = len(re.findall(r"[A-Za-z]", text))
+    if language == "ko":
+        return has_hangul
+    if language == "ja":
+        # Japanese messages can be kanji-only, but kana is a strong signal
+        # and prevents a Chinese-only answer from passing this check.
+        return has_kana or (han_count > 0 and not has_hangul and latin_count == 0)
+    if language == "zh-CN":
+        return han_count > 0 and not has_hangul and not has_kana
+    if language in {"th", "ar", "ru"}:
+        ranges = {"th": r"[\u0e00-\u0e7f]", "ar": r"[\u0600-\u06ff]", "ru": r"[\u0400-\u04ff]"}
+        return bool(re.search(ranges[language], text))
+    if language in {"en", "es", "fr", "de", "pt", "vi", "id", "ms"}:
+        return latin_count >= 2 and han_count == 0 and not has_hangul and not has_kana
+    return True
+
+
 def _auto_reply_default_config(account_id: str) -> Dict[str, Any]:
     return {
         "account_id": account_id,
@@ -2893,7 +2980,7 @@ def _auto_reply_history_exists(account_id: str, peer_id: str, inbound: Dict[str,
     Only a confirmed send or an explicit business skip consumes the inbound
     message.
     """
-    terminal_statuses = {"sent", "skipped"}
+    terminal_statuses = {"sent", "skipped", "unknown"}
     inbound_id = _auto_reply_inbound_id(peer_id, inbound)
     raw = inbound.get("raw_json") if isinstance(inbound.get("raw_json"), dict) else {}
     stable_hash = str(raw.get("hash") or raw.get("hash_text") or "").strip()
@@ -3289,6 +3376,7 @@ def _normalize_auto_reply_llm_content(
     group_invite_enabled: bool,
     group_invite_already_verified: bool,
     has_invite_rule: bool,
+    expected_language: Optional[str] = None,
 ) -> Dict[str, Any]:
     parsed = _json_from_text(content)
     is_structured = bool(parsed)
@@ -3396,6 +3484,9 @@ def _normalize_auto_reply_llm_content(
         "topic": str(parsed.get("topic") or "").strip()[:80],
         "conversation_summary": str(parsed.get("conversation_summary") or parsed.get("summary") or "").strip()[:200],
         "reply": reply,
+        "reply_language": _normalize_auto_reply_language(
+            expected_language or _detect_auto_reply_language(latest_message, recent_context)
+        ),
         "should_invite_group": should_invite_group,
         "matched_group_keywords": matched_group_keywords,
         "group_invite_reason": group_invite_reason,
@@ -3420,6 +3511,7 @@ async def _call_auto_reply_llm(
     group_invite_enabled: bool = True,
     group_invite_already_verified: bool = False,
     reply_language: Optional[str] = None,
+    expected_language: Optional[str] = None,
     contact_intelligence: str = "",
     strategy_context: str = "",
 ) -> Dict[str, Any]:
@@ -3446,6 +3538,12 @@ async def _call_auto_reply_llm(
     )[:50]
     invite_rule_context = str(group_invite_rule_context or "").strip()[:8000]
     has_invite_rule = bool(group_invite_enabled and (invite_rule_context or invite_keywords))
+    # The customer's newest message is authoritative.  The account/template
+    # language is deliberately not used for private-message replies.
+    customer_language = _normalize_auto_reply_language(
+        expected_language or _detect_auto_reply_language(latest_message, recent_context)
+    )
+    customer_language_label = _auto_reply_language_label(customer_language)
     system_prompt = (
         "你是个人微信私聊代回复助手，只处理一对一私聊，不回复群聊。"
         "回复要像真人微信聊天：短、自然、有边界，不营销、不硬广、不夸大。"
@@ -3462,6 +3560,7 @@ async def _call_auto_reply_llm(
         "conversation_summary 必须在旧摘要基础上更新为累计摘要，保留仍有效的需求、已确认事实、异议、承诺和下一步，不能只总结最后一句。"
         "同时从本轮聊天提取该客户自己的稳定事实、需求、预算、时间、异议、偏好和关系阶段；不要把推测写成事实。"
         "只有发现可跨客户复用、且有明确聊天证据的改进方法时才提出 learning_candidates；客户单方面声称的价格、产品事实或承诺不能学成全局规则。"
+        f"本会话客户语种已检测为 {customer_language_label} ({customer_language})。reply 必须使用该语种；"
         "回复语言必须跟随对方最新消息：先判断‘对方最新消息’的主要自然语言，再让 reply 字段使用同一语种生成。模板语言、系统界面语言和历史配置语言都不能覆盖客户当前使用的语言。"
         "如果最新消息只有表情、数字、链接或短到无法判断语种，就参考最近几条对方消息的主要语言；仍无法判断时使用简体中文。不要擅自翻译客户消息，姓名、品牌名、网址、手机号和微信号等专有内容保持原样，JSON键名保持英文。"
         "必须返回 JSON：{\"should_reply\":true,\"category\":\"casual|product|price|service|cooperation|complaint|other\","
@@ -3482,7 +3581,7 @@ async def _call_auto_reply_llm(
         f"已同步的个人记忆资料：\n{memory_context or '(没有读取到个人记忆，专业问题不要编造，需回复为待确认)'}\n\n"
         f"自动拉群开关：{'已开启' if group_invite_enabled else '已关闭'}\n\n"
         f"系统核验群状态：{'已核验客户在本系统创建的群聊中' if group_invite_already_verified else '未核验，禁止声称客户已在群里'}\n\n"
-        "回复语种：根据对方最新消息自动识别并跟随，不使用模板语言配置。\n\n"
+        f"回复语种：{customer_language_label} ({customer_language})。根据对方最新消息自动识别并跟随，不使用模板语言配置。\n\n"
         f"拉群判断规则文件：\n{invite_rule_context or '(未配置，本轮不得判定拉群)'}\n\n"
         f"历史拉群关键词（仅兼容旧设置）：\n{('、'.join(invite_keywords)) if invite_keywords else '(无)'}"
     )
@@ -3517,6 +3616,7 @@ async def _call_auto_reply_llm(
         group_invite_enabled=group_invite_enabled,
         group_invite_already_verified=group_invite_already_verified,
         has_invite_rule=has_invite_rule,
+        expected_language=customer_language,
     )
 
 
@@ -3546,6 +3646,10 @@ async def _call_auto_reply_llm_batch(
             group_invite_keywords=group_invite_keywords,
             group_invite_enabled=group_invite_enabled,
             group_invite_already_verified=bool(item.get("group_invite_already_verified")),
+            expected_language=_normalize_auto_reply_language(
+                item.get("customer_language")
+                or _detect_auto_reply_language(item.get("latest_message") or "", item.get("recent_context") or "")
+            ),
             contact_intelligence=str(item.get("contact_intelligence") or ""),
             strategy_context=str(item.get("strategy_context") or ""),
         )
@@ -3578,7 +3682,8 @@ async def _call_auto_reply_llm_batch(
         "你是个人微信私聊批量代回复助手，只处理一对一私聊。输入包含多个彼此独立的客户会话。"
         "必须分别依据每个会话的最新消息、最近上下文、客户画像和长期规则生成回复，严禁串用客户信息。"
         "回复要短、自然、有边界，不营销、不夸大；专业问题优先依据共享的个人记忆资料，资料没有答案时不得编造。"
-        "reply 必须跟随各自客户最新消息的自然语言。只有客户诉求明确符合拉群规则时 should_invite_group 才能为 true；"
+        "reply 必须跟随各自客户最新消息的自然语言。每个会话输入都包含 customer_language 和 customer_language_label，"
+        "必须严格使用该会话自己的语种，不能使用其他会话或账号模板的语种。只有客户诉求明确符合拉群规则时 should_invite_group 才能为 true；"
         "系统已核验在群的客户不得再次拉群，但仍应正常回复新消息。"
         "每个输入 work_id 必须原样返回且只能返回一次。返回 JSON 对象，顶层只有 results 数组。"
         "results 每项格式：{\"work_id\":\"原值\",\"should_reply\":true,"
@@ -3599,6 +3704,14 @@ async def _call_auto_reply_llm_batch(
                 "recent_context": str(item.get("recent_context") or "")[:8000],
                 "contact_intelligence": str(item.get("contact_intelligence") or "")[:7000],
                 "strategy_context": str(item.get("strategy_context") or "")[:7000],
+                "customer_language": _normalize_auto_reply_language(
+                    item.get("customer_language")
+                    or _detect_auto_reply_language(item.get("latest_message") or "", item.get("recent_context") or "")
+                ),
+                "customer_language_label": _auto_reply_language_label(
+                    item.get("customer_language")
+                    or _detect_auto_reply_language(item.get("latest_message") or "", item.get("recent_context") or "")
+                ),
                 "group_invite_already_verified": bool(item.get("group_invite_already_verified")),
             }
         )
@@ -3653,6 +3766,10 @@ async def _call_auto_reply_llm_batch(
             group_invite_enabled=group_invite_enabled,
             group_invite_already_verified=bool(request.get("group_invite_already_verified")),
             has_invite_rule=has_invite_rule,
+            expected_language=_normalize_auto_reply_language(
+                request.get("customer_language")
+                or _detect_auto_reply_language(request.get("latest_message") or "", request.get("recent_context") or "")
+            ),
         )
     missing = [work_id for work_id in request_by_id if work_id not in normalized]
     if missing:
@@ -3694,6 +3811,11 @@ async def _generate_new_friend_welcome(
     )
     contact_label = contact_name or "\u672a\u77e5"
     memory_label = str(memory_context or "").strip()[:6000] or "(\u6682\u65e0\u8d44\u6599)"
+    system_prompt += (
+        "\nCustomer language is a hard per-conversation constraint: "
+        f"{language_label} ({language_code}). The reply must use this language; "
+        "never translate it to the account template language.\n"
+    )
     user_prompt = (
         f"\u65b0\u597d\u53cb\u6635\u79f0\uff1a{contact_label}\n\n"
         f"\u4e2a\u4eba\u8d44\u6599\u4e0e\u4e1a\u52a1\u8bb0\u5fc6\uff1a\n{memory_label}"
@@ -4588,6 +4710,10 @@ async def run_auto_reply_once(
                 if not group_invite_already_verified:
                     contact_intelligence = str(_strip_unverified_group_claims(contact_intelligence) or "")
                 recent = _recent_conversation_text(account_id, actual_peer, limit=8)
+                customer_language = _detect_auto_reply_language(
+                    str(inbound.get("content") or ""),
+                    recent,
+                )
                 work_id = _auto_reply_work_id(account_id, actual_peer, inbound)
                 request_item = {
                     "work_id": work_id,
@@ -4596,6 +4722,7 @@ async def run_auto_reply_once(
                     "recent_context": recent,
                     "contact_intelligence": contact_intelligence,
                     "strategy_context": strategy_context,
+                    "customer_language": customer_language,
                     "group_invite_already_verified": group_invite_already_verified,
                 }
                 prepared = {
@@ -4619,6 +4746,8 @@ async def run_auto_reply_once(
                     actual_peer=actual_peer,
                     display_name=display_name,
                     inbound_message_id=_auto_reply_inbound_id(actual_peer, inbound),
+                    customer_language=customer_language,
+                    customer_language_label=_auto_reply_language_label(customer_language),
                     group_invite_already_verified=bool(group_invite_already_verified),
                     intelligence_available=bool(intelligence_context.get("available")),
                     recent_context_chars=len(recent),
@@ -4655,6 +4784,7 @@ async def run_auto_reply_once(
                         "work_id": str(item.get("work_id") or ""),
                         "peer_name": str(item.get("peer_name") or "")[:120],
                         "latest_preview": str(item.get("latest_message") or "")[:300],
+                        "customer_language": str(item.get("customer_language") or "zh-CN"),
                     }
                     for item in chunk
                 ],
@@ -5033,6 +5163,12 @@ async def run_auto_reply_once(
                     should_reply=bool(llm_reply.get("should_reply")),
                     reply_available=bool(str(llm_reply.get("reply") or "").strip()),
                     reply_preview=str(llm_reply.get("reply") or "")[:500],
+                    expected_language=str(
+                        (prepared.get("request") or {}).get("customer_language")
+                        if isinstance(prepared.get("request"), dict)
+                        else ""
+                    ),
+                    reply_language=_detect_auto_reply_language(str(llm_reply.get("reply") or "")),
                     category=str(llm_reply.get("category") or "")[:80],
                     intent_level=str(llm_reply.get("intent_level") or "")[:40],
                     topic=str(llm_reply.get("topic") or "")[:160],
@@ -5188,6 +5324,132 @@ async def run_auto_reply_once(
                 reply_text = str(llm_reply.get("reply") or "").strip()
                 if _looks_like_auto_reply_control_payload(reply_text):
                     raise RuntimeError("内部判断数据禁止作为微信回复发送")
+                request_item = prepared.get("request") if isinstance(prepared.get("request"), dict) else {}
+                expected_language = _normalize_auto_reply_language(
+                    request_item.get("customer_language")
+                    or _detect_auto_reply_language(
+                        str(inbound.get("content") or ""),
+                        str(request_item.get("recent_context") or ""),
+                    )
+                )
+                reply_language = _detect_auto_reply_language(reply_text)
+                language_match = _auto_reply_language_matches(reply_text, expected_language)
+                item_result.update(
+                    {
+                        "expected_language": expected_language,
+                        "expected_language_label": _auto_reply_language_label(expected_language),
+                        "reply_language": reply_language,
+                        "reply_language_label": _auto_reply_language_label(reply_language),
+                        "language_match": bool(language_match),
+                    }
+                )
+                log_event(
+                    "reply_language_check",
+                    work_id=work_id,
+                    peer_id=peer_id,
+                    actual_peer=actual_peer,
+                    expected_language=expected_language,
+                    expected_language_label=_auto_reply_language_label(expected_language),
+                    reply_language=reply_language,
+                    reply_language_label=_auto_reply_language_label(reply_language),
+                    language_match=bool(language_match),
+                    reply_preview=reply_text[:500],
+                )
+                if not language_match:
+                    # A batch model can occasionally leak the account's default
+                    # language into one item. Retry only that customer so other
+                    # conversations keep their already-generated results.
+                    log_event(
+                        "reply_language_retry_started",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        expected_language=expected_language,
+                        generated_language=reply_language,
+                    )
+                    try:
+                        retry_reply = await _call_auto_reply_llm(
+                            auth_context=_AUTO_REPLY_AUTH_CONTEXT.get(account_id) or auth_context,
+                            user_id=effective_user_id,
+                            peer_name=display_name,
+                            latest_message=str(inbound.get("content") or ""),
+                            recent_context=str(request_item.get("recent_context") or _recent_conversation_text(account_id, actual_peer, limit=8)),
+                            memory_context=str(memory.get("text") or ""),
+                            group_invite_rule_context=str(invite_rule_memory.get("text") or ""),
+                            group_invite_keywords=str(cfg.get("group_invite_keywords") or ""),
+                            group_invite_enabled=bool(cfg.get("group_invite_enabled")),
+                            group_invite_already_verified=bool(group_invite_already_verified),
+                            expected_language=expected_language,
+                            contact_intelligence=str(request_item.get("contact_intelligence") or ""),
+                            strategy_context=str(request_item.get("strategy_context") or ""),
+                        )
+                        retry_text = str(retry_reply.get("reply") or "").strip()
+                        retry_language = _detect_auto_reply_language(retry_text)
+                        retry_match = bool(
+                            retry_reply.get("should_reply")
+                            and _auto_reply_language_matches(retry_text, expected_language)
+                        )
+                        log_event(
+                            "reply_language_retry_completed",
+                            work_id=work_id,
+                            peer_id=peer_id,
+                            actual_peer=actual_peer,
+                            expected_language=expected_language,
+                            reply_language=retry_language,
+                            language_match=retry_match,
+                            reply_preview=retry_text[:500],
+                        )
+                        if retry_match:
+                            llm_reply = retry_reply
+                            reply_text = retry_text
+                            reply_language = retry_language
+                            language_match = True
+                            item_result.update(
+                                {
+                                    "reply_language": reply_language,
+                                    "reply_language_label": _auto_reply_language_label(reply_language),
+                                    "language_match": True,
+                                    "language_retry": True,
+                                }
+                            )
+                    except Exception as retry_exc:
+                        log_event(
+                            "reply_language_retry_failed",
+                            work_id=work_id,
+                            peer_id=peer_id,
+                            actual_peer=actual_peer,
+                            expected_language=expected_language,
+                            error=str(retry_exc)[:700],
+                        )
+                if not language_match:
+                    result["failed"] += 1
+                    item_result.update(
+                        {
+                            "status": "language_mismatch",
+                            "reply_suppressed": True,
+                            "skip_reason": "reply_language_mismatch",
+                            "error": f"expected {expected_language}, generated {reply_language}",
+                        }
+                    )
+                    _record_auto_reply_history(
+                        account_id,
+                        actual_peer,
+                        inbound,
+                        reply=reply_text,
+                        category=str(llm_reply.get("category") or ""),
+                        status="failed",
+                        error="reply_language_mismatch",
+                    )
+                    log_event(
+                        "reply_suppressed_language_mismatch",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        expected_language=expected_language,
+                        reply_language=reply_language,
+                    )
+                    result["items"].append(item_result)
+                    continue
                 current_reply = reply_text
                 current_category = str(llm_reply.get("category") or "")
                 if not _record_auto_reply_history(
@@ -5272,6 +5534,7 @@ async def run_auto_reply_once(
                 )
                 result["items"].append(item_result)
             except Exception as exc:
+                send_outcome_uncertain = isinstance(exc, _LocalWeChatSendUncertain)
                 if current_inbound is not None:
                     _update_auto_reply_history(
                         account_id,
@@ -5279,13 +5542,19 @@ async def run_auto_reply_once(
                         current_inbound,
                         reply=current_reply,
                         category=current_category,
-                        status="failed",
+                        status="unknown" if send_outcome_uncertain else "failed",
                         error=str(exc),
                     )
                 result["failed"] += 1
-                item_result.update({"status": "failed", "error": str(exc)[:300]})
+                item_result.update(
+                    {
+                        "status": "send_unconfirmed" if send_outcome_uncertain else "failed",
+                        "error": str(exc)[:300],
+                        "retry_suppressed": send_outcome_uncertain,
+                    }
+                )
                 log_event(
-                    "execution_failed",
+                    "reply_send_unconfirmed" if send_outcome_uncertain else "execution_failed",
                     work_id=work_id,
                     peer_id=peer_id,
                     actual_peer=current_peer,
@@ -5298,6 +5567,7 @@ async def run_auto_reply_once(
                     ),
                     reply_preview=current_reply[:500],
                     error=str(exc)[:700],
+                    retry_suppressed=send_outcome_uncertain,
                 )
                 result["items"].append(item_result)
             finally:
@@ -6957,6 +7227,10 @@ def _run_local_driver_operation(
             return result
         except Exception as initial_exc:
             if not retry_on_failure:
+                raise
+            if isinstance(initial_exc, _LocalWeChatSendUncertain):
+                # A click already occurred. Rebuilding the driver and replaying
+                # the operation could send the same text a second time.
                 raise
             recovery = _recover_local_wechat_driver(
                 account_id,
@@ -13546,6 +13820,18 @@ def _wxauto_snapshot_has_new_outbound(before: Dict[str, Any], after: Dict[str, A
     expected = str(text or "").strip()
     if not expected:
         return False
+    def matching_count(snapshot: Dict[str, Any]) -> int:
+        return sum(
+            1
+            for item in (snapshot.get("items") or [])
+            if isinstance(item, dict)
+            and str(item.get("attr") or "").lower() in {"self", "out", "me"}
+            and str(item.get("content") or "").strip() == expected
+        )
+    # wxauto4 can reuse the same hash_text/coordinate identity for repeated
+    # visible messages.  Count changes are authoritative in that case.
+    if matching_count(after) > matching_count(before):
+        return True
     before_ids = {
         str(item.get("identity") or "")
         for item in (before.get("items") or [])
@@ -13563,7 +13849,7 @@ def _wxauto_snapshot_has_new_outbound(before: Dict[str, Any], after: Dict[str, A
     return False
 
 
-def _local_wechat_draft_text(hwnd: int) -> str:
+def _local_wechat_draft_text(hwnd: int) -> Optional[str]:
     try:
         import win32gui  # type: ignore
 
@@ -13583,11 +13869,11 @@ def _local_wechat_draft_text(hwnd: int) -> str:
                 continue
             candidates.append((bottom * 1_000_000 + max(0, right - left) * max(0, bottom - top), edit))
         if not candidates:
-            return ""
+            return None
         edit = max(candidates, key=lambda item: item[0])[1]
         return str(_uia_value_text(edit) or "").strip()
     except Exception:
-        return ""
+        return None
 
 
 def _click_local_wechat_send_button(hwnd: int) -> str:
@@ -13633,6 +13919,14 @@ def _clear_local_wechat_draft(hwnd: int) -> None:
         pass
 
 
+class _LocalWeChatSendUncertain(RuntimeError):
+    """A send click happened but the UI could not prove its outcome.
+
+    Retrying this exception would click Send again and can create a duplicate
+    message. Driver recovery remains enabled for failures before the click.
+    """
+
+
 def _submit_local_wechat_typed_message(
     wx: Any,
     hwnd: int,
@@ -13644,31 +13938,48 @@ def _submit_local_wechat_typed_message(
     before = _wxauto_visible_message_snapshot(wx)
     methods: List[str] = []
     last_snapshot: Dict[str, Any] = before
-    for attempt in range(2):
-        methods.append(_click_local_wechat_send_button(hwnd))
-        deadline = time.monotonic() + max(0.05, float(verify_timeout))
-        while time.monotonic() < deadline:
-            time.sleep(0.25)
-            last_snapshot = _wxauto_visible_message_snapshot(wx)
-            if _wxauto_snapshot_has_new_outbound(before, last_snapshot, expected):
-                return {"ok": True, "verified": True, "send_method": methods[-1], "attempts": attempt + 1}
-        draft = _local_wechat_draft_text(hwnd)
-        if expected and expected not in draft:
-            break
-        if attempt == 0:
-            _focus_local_wechat(hwnd)
+    # A send click is not idempotent.  Do not click twice inside this helper;
+    # a timeout can mean WeChat accepted the first click but wxauto4 has not
+    # refreshed its message snapshot yet.
+    methods.append(_click_local_wechat_send_button(hwnd))
+    deadline = time.monotonic() + max(0.05, float(verify_timeout))
+    while time.monotonic() < deadline:
+        time.sleep(0.25)
+        last_snapshot = _wxauto_visible_message_snapshot(wx)
+        if _wxauto_snapshot_has_new_outbound(before, last_snapshot, expected):
+            return {"ok": True, "verified": True, "send_method": methods[-1], "attempts": 1}
     draft = _local_wechat_draft_text(hwnd)
+    if draft is None:
+        raise _LocalWeChatSendUncertain(
+            "微信输入框状态无法读取，未确认发送成功；为避免重复未自动重试"
+        )
     if expected and expected in draft:
         _clear_local_wechat_draft(hwnd)
-        raise RuntimeError("点击微信发送按钮后消息仍停留在输入框，未确认发送成功")
-    snapshot_error = str(last_snapshot.get("error") or "").strip()
-    if snapshot_error:
-        _clear_local_wechat_draft(hwnd)
-        raise RuntimeError(f"微信消息发送后无法校验结果：{snapshot_error}")
-    _clear_local_wechat_draft(hwnd)
-    raise RuntimeError("微信消息发送后未在聊天记录中出现，未确认发送成功")
-
-
+        raise _LocalWeChatSendUncertain(
+            "点击微信发送按钮后消息仍停留在输入框，未确认发送成功；为避免重复未自动重试"
+        )
+    # The draft disappearing means WeChat accepted the submit even when
+    # GetAllMessage is stale. Treat it as submitted and let persisted history
+    # suppress a later duplicate send.
+    grace_deadline = time.monotonic() + 2.0
+    while time.monotonic() < grace_deadline:
+        time.sleep(0.25)
+        last_snapshot = _wxauto_visible_message_snapshot(wx)
+        if _wxauto_snapshot_has_new_outbound(before, last_snapshot, expected):
+            return {
+                "ok": True,
+                "verified": True,
+                "verification": "message_snapshot_after_grace",
+                "send_method": methods[-1],
+                "attempts": 1,
+            }
+    return {
+        "ok": True,
+        "verified": False,
+        "verification": "draft_cleared_snapshot_pending",
+        "send_method": methods[-1],
+        "attempts": 1,
+    }
 def _verify_local_send_chat(
     wx: Any,
     expected_peer: str,

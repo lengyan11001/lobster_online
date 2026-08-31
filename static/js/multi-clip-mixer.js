@@ -1,5 +1,8 @@
 (function() {
   var PENDING_TEMPLATE_STORAGE_KEY = 'lobster_multi_clip_pending_cutcli_template_v1';
+  var HISTORY_STORAGE_KEY = 'lobster_multi_clip_history_v1';
+  var HISTORY_LIMIT = 50;
+  var HISTORY_PAGE_SIZE = 6;
 
   var state = {
     clips: [],
@@ -25,6 +28,12 @@
     templatePollTimer: null,
     pendingTemplateTask: null,
     batchResults: [],
+    batchSelection: {},
+    history: [],
+    historySelection: {},
+    historyPage: 0,
+    historyVisible: false,
+    activeHistoryBatch: null,
     importingFiles: false
   };
 
@@ -276,7 +285,11 @@
     var mode = currentClipMode();
     if ($('mcmFixedModePanel')) $('mcmFixedModePanel').hidden = mode !== 'fixed';
     if ($('mcmRandomModePanel')) $('mcmRandomModePanel').hidden = mode !== 'random';
+    if ($('mcmTemplateRandomRow')) $('mcmTemplateRandomRow').hidden = mode !== 'random';
+    if ($('mcmMusicRandomRow')) $('mcmMusicRandomRow').hidden = mode !== 'random';
     renderClips();
+    renderTemplates();
+    renderMusicOptions();
   }
 
   function totalSelectedDuration() {
@@ -293,6 +306,297 @@
       preview_url: result.preview_url || '',
       duration: Number(result.duration || 0)
     };
+  }
+
+  function rawResultVideoUrl(result) {
+    result = result || {};
+    return String(result.source_url || result.video_url || result.preview_url || '').trim();
+  }
+
+  function resultVideoUrl(result) {
+    return resolveUrl(rawResultVideoUrl(result), apiBase());
+  }
+
+  function makeHistoryId(prefix) {
+    return String(prefix || 'mcm') + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
+  }
+
+  function compactHistoryResult(result, index) {
+    var sourceUrl = rawResultVideoUrl(result);
+    if (!sourceUrl) return null;
+    result = result || {};
+    var historyId = String(result.history_result_id || result._historyId || '');
+    if (!historyId) {
+      historyId = makeHistoryId('result-' + (index || 0));
+      result._historyId = historyId;
+    }
+    return {
+      id: historyId,
+      history_result_id: historyId,
+      asset_id: String(result.asset_id || ''),
+      source_url: String(result.source_url || sourceUrl),
+      video_url: String(result.video_url || ''),
+      preview_url: String(result.preview_url || ''),
+      duration: Number(result.duration || 0),
+      template_name: String(result.template_name || '')
+    };
+  }
+
+  function normalizeHistoryBatch(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    var results = (Array.isArray(raw.results) ? raw.results : []).map(compactHistoryResult).filter(Boolean);
+    if (!results.length) return null;
+    return {
+      id: String(raw.id || makeHistoryId('batch')),
+      created_at: Number(raw.created_at || Date.now()),
+      completed_at: Number(raw.completed_at || 0),
+      title: String(raw.title || '多段视频混剪'),
+      clip_mode: raw.clip_mode === 'random' ? 'random' : 'fixed',
+      total_runs: Math.max(1, Number(raw.total_runs || results.length || 1)),
+      clip_count: Math.max(0, Number(raw.clip_count || 0)),
+      template_name: String(raw.template_name || ''),
+      music_name: String(raw.music_name || ''),
+      status: raw.status === 'completed' ? 'completed' : 'partial',
+      results: results
+    };
+  }
+
+  function loadHistory() {
+    try {
+      var parsed = JSON.parse(localStorage.getItem(historyStorageKey()) || '[]');
+      state.history = (Array.isArray(parsed) ? parsed : [])
+        .map(normalizeHistoryBatch)
+        .filter(Boolean)
+        .sort(function(left, right) { return Number(right.created_at || 0) - Number(left.created_at || 0); })
+        .slice(0, HISTORY_LIMIT);
+    } catch (error) {
+      state.history = [];
+    }
+  }
+
+  function saveHistory() {
+    try {
+      localStorage.setItem(historyStorageKey(), JSON.stringify(state.history.slice(0, HISTORY_LIMIT)));
+    } catch (error) {}
+  }
+
+  function historyStorageKey() {
+    var userId = '';
+    try {
+      userId = typeof getCurrentUserIdFromToken === 'function' ? String(getCurrentUserIdFromToken() || '').trim() : '';
+    } catch (error) {}
+    return userId ? (HISTORY_STORAGE_KEY + ':' + userId) : HISTORY_STORAGE_KEY;
+  }
+
+  function activeHistoryTemplateName(options) {
+    if (!options || !options.useTemplate) return '';
+    if (currentClipMode() === 'random' && (($('mcmRandomTemplateSwitch') || {}).checked)) return '随机模板';
+    return String((state.selectedTemplate || {}).name || '定制模板');
+  }
+
+  function startHistoryBatch(options, totalRuns, title) {
+    state.activeHistoryBatch = {
+      id: makeHistoryId('batch'),
+      created_at: Date.now(),
+      completed_at: 0,
+      title: String(title || templateTitleValue() || '多段视频混剪'),
+      clip_mode: currentClipMode(),
+      total_runs: Math.max(1, Number(totalRuns || 1)),
+      clip_count: state.clips.length,
+      template_name: activeHistoryTemplateName(options),
+      music_name: options && options.useMusic ? String((state.selectedMusic || {}).music_name || '') : ''
+    };
+    state.batchSelection = {};
+    return state.activeHistoryBatch;
+  }
+
+  function saveActiveHistoryBatch(completed) {
+    var active = state.activeHistoryBatch;
+    if (!active) return;
+    var results = state.batchResults.map(compactHistoryResult).filter(Boolean);
+    if (!results.length) return;
+    if (completed) active.completed_at = Date.now();
+    var record = Object.assign({}, active, { results: results, status: completed ? 'completed' : 'partial' });
+    var index = state.history.findIndex(function(item) { return item.id === record.id; });
+    if (index >= 0) state.history[index] = record;
+    else state.history.unshift(record);
+    state.history.sort(function(left, right) { return Number(right.created_at || 0) - Number(left.created_at || 0); });
+    state.history = state.history.slice(0, HISTORY_LIMIT);
+    var selection = state.historySelection[record.id] || {};
+    results.forEach(function(result) {
+      if (typeof selection[result.id] === 'undefined') selection[result.id] = true;
+    });
+    state.historySelection[record.id] = selection;
+    saveHistory();
+    renderHistory();
+  }
+
+  function appendBatchResult(result) {
+    state.batchResults.push(result || {});
+    state.batchSelection[state.batchResults.length - 1] = true;
+    renderBatchResults();
+    saveActiveHistoryBatch(false);
+  }
+
+  function historyResultId(result, index) {
+    return String((result || {}).id || ('result-' + index));
+  }
+
+  function currentBatchSelectedUrls() {
+    return state.batchResults.reduce(function(urls, result, index) {
+      var url = resultVideoUrl(result);
+      if (url && state.batchSelection[index] !== false) urls.push(url);
+      return urls;
+    }, []);
+  }
+
+  function historySelectedUrls(batch) {
+    if (!batch) return [];
+    var selected = state.historySelection[batch.id] || {};
+    return (batch.results || []).reduce(function(urls, result, index) {
+      var url = resultVideoUrl(result);
+      if (url && selected[historyResultId(result, index)] !== false) urls.push(url);
+      return urls;
+    }, []);
+  }
+
+  function safeDownloadName(prefix, index) {
+    var stem = String(prefix || 'multi-clip-mixer').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 72) || 'multi-clip-mixer';
+    return stem + '-' + String(index + 1).padStart(2, '0') + '.mp4';
+  }
+
+  function downloadVideoUrls(urls, prefix) {
+    urls = (Array.isArray(urls) ? urls : []).filter(Boolean);
+    if (!urls.length) return showMessage('请先选择至少一条可下载的视频。', true);
+    urls.forEach(function(url, index) {
+      window.setTimeout(function() {
+        var link = document.createElement('a');
+        link.href = url;
+        link.download = safeDownloadName(prefix, index);
+        link.rel = 'noopener';
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+      }, index * 180);
+    });
+    showMessage('已发起 ' + urls.length + ' 条视频下载。', false);
+  }
+
+  function copyVideoUrls(urls) {
+    urls = (Array.isArray(urls) ? urls : []).filter(Boolean);
+    if (!urls.length) return showMessage('请先选择至少一条有链接的视频。', true);
+    var text = urls.join('\n');
+    if (typeof copyToClipboard === 'function') {
+      copyToClipboard(text, function() { showMessage('已复制 ' + urls.length + ' 条视频链接。', false); });
+      return;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function() {
+        showMessage('已复制 ' + urls.length + ' 条视频链接。', false);
+      }).catch(function() { showMessage('复制链接失败，请重试。', true); });
+      return;
+    }
+    showMessage('当前环境不支持复制链接。', true);
+  }
+
+  function formatHistoryTime(value) {
+    var date = new Date(Number(value || 0));
+    if (Number.isNaN(date.getTime())) return '';
+    try {
+      return date.toLocaleString('zh-CN', { hour12: false });
+    } catch (error) {
+      return date.toLocaleString();
+    }
+  }
+
+  function batchLabel(batch) {
+    var parts = [String(batch.title || '多段视频混剪')];
+    if (batch.clip_mode === 'random') parts.push('随机');
+    if (batch.template_name) parts.push(batch.template_name);
+    return parts.join(' · ');
+  }
+
+  function renderBatchResults() {
+    var root = $('mcmBatchResults');
+    if (!root) return;
+    root.hidden = !state.batchResults.length;
+    if (!state.batchResults.length) {
+      root.innerHTML = '';
+      return;
+    }
+    var selectedCount = state.batchResults.reduce(function(count, result, index) {
+      return count + (resultVideoUrl(result) && state.batchSelection[index] !== false ? 1 : 0);
+    }, 0);
+    root.innerHTML = '<div class="mcm-batch-head">'
+      + '<div><strong>本次结果</strong><span>' + selectedCount + ' / ' + state.batchResults.length + ' 条已选</span></div>'
+      + '<div class="mcm-result-tools">'
+      + '<label class="mcm-check-label"><input type="checkbox" data-batch-select-all ' + (selectedCount && selectedCount === state.batchResults.filter(resultVideoUrl).length ? 'checked' : '') + '>全选</label>'
+      + '<button type="button" class="btn btn-ghost btn-sm" data-batch-action="download">批量下载</button>'
+      + '<button type="button" class="btn btn-ghost btn-sm" data-batch-action="copy">复制链接</button>'
+      + '</div></div>'
+      + '<div class="mcm-batch-list">'
+      + state.batchResults.map(function(result, index) {
+        var url = resultVideoUrl(result);
+        var checked = state.batchSelection[index] !== false ? ' checked' : '';
+        var label = result.template_name ? (' · ' + result.template_name) : '';
+        return '<article class="mcm-batch-item">'
+          + '<label class="mcm-batch-check"><input type="checkbox" data-batch-index="' + index + '"' + (url ? checked : ' disabled') + '><span class="mcm-visually-hidden">选择第 ' + (index + 1) + ' 条</span></label>'
+          + (url ? '<button type="button" class="mcm-batch-preview" data-batch-preview="' + index + '"><video src="' + escapeHtml(url) + '" muted playsinline preload="metadata"></video></button>' : '<span class="mcm-batch-preview is-empty">无预览</span>')
+          + '<span class="mcm-batch-copy">' + (index + 1) + '. ' + escapeHtml(formatSeconds(result.duration || 0)) + escapeHtml(label) + '</span>'
+          + (url ? '<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="' + escapeHtml(url) + '">打开</a>' : '')
+          + '</article>';
+      }).join('') + '</div>';
+  }
+
+  function renderHistory() {
+    var panel = $('mcmHistoryPanel');
+    var list = $('mcmHistoryList');
+    var count = $('mcmHistoryCount');
+    var pager = $('mcmHistoryPager');
+    if (!panel || !list) return;
+    panel.hidden = !state.history.length || !state.historyVisible;
+    if (count) count.textContent = state.history.length + ' 批';
+    if ($('mcmHistoryToggleBtn')) $('mcmHistoryToggleBtn').textContent = state.history.length ? ('历史记录 ' + state.history.length) : '历史记录';
+    if (!state.history.length) {
+      list.innerHTML = '';
+      if (pager) pager.hidden = true;
+      return;
+    }
+    var pageCount = Math.max(1, Math.ceil(state.history.length / HISTORY_PAGE_SIZE));
+    state.historyPage = Math.max(0, Math.min(state.historyPage, pageCount - 1));
+    var pageRows = state.history.slice(state.historyPage * HISTORY_PAGE_SIZE, (state.historyPage + 1) * HISTORY_PAGE_SIZE);
+    list.innerHTML = pageRows.map(function(batch) {
+      var selection = state.historySelection[batch.id] || {};
+      var results = Array.isArray(batch.results) ? batch.results : [];
+      var availableCount = results.filter(resultVideoUrl).length;
+      var selectedCount = results.reduce(function(total, result, index) {
+        return total + (resultVideoUrl(result) && selection[historyResultId(result, index)] !== false ? 1 : 0);
+      }, 0);
+      var allChecked = availableCount > 0 && selectedCount === availableCount;
+      return '<article class="mcm-history-item" data-history-id="' + escapeHtml(batch.id) + '">'
+        + '<div class="mcm-history-item-head"><div><strong>' + escapeHtml(batchLabel(batch)) + '</strong><span>'
+        + escapeHtml(formatHistoryTime(batch.completed_at || batch.created_at)) + ' · ' + results.length + ' 条'
+        + (batch.status === 'completed' ? '' : ' · 部分完成') + '</span></div>'
+        + '<div class="mcm-result-tools"><label class="mcm-check-label"><input type="checkbox" data-history-select-all ' + (allChecked ? 'checked' : '') + '>全选</label>'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-history-action="download">批量下载</button>'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-history-action="copy">复制链接</button>'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-history-action="delete">删除</button></div></div>'
+        + '<div class="mcm-history-results">' + results.map(function(result, index) {
+          var url = resultVideoUrl(result);
+          var resultId = historyResultId(result, index);
+          return '<div class="mcm-history-result">'
+            + '<label class="mcm-batch-check"><input type="checkbox" data-history-result="' + escapeHtml(resultId) + '"' + (url ? (selection[resultId] !== false ? ' checked' : '') : ' disabled') + '><span class="mcm-visually-hidden">选择历史结果</span></label>'
+            + (url ? '<button type="button" class="mcm-batch-preview" data-history-preview="' + index + '"><video src="' + escapeHtml(url) + '" muted playsinline preload="metadata"></video></button>' : '<span class="mcm-batch-preview is-empty">无预览</span>')
+            + '<span class="mcm-batch-copy">' + (index + 1) + '. ' + escapeHtml(formatSeconds(result.duration || 0)) + '</span>'
+            + (url ? '<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="' + escapeHtml(url) + '">打开</a>' : '')
+            + '</div>';
+        }).join('') + '</div></article>';
+    }).join('');
+    if (pager) pager.hidden = pageCount <= 1;
+    if ($('mcmHistoryPageLabel')) $('mcmHistoryPageLabel').textContent = (state.historyPage + 1) + ' / ' + pageCount;
+    if ($('mcmHistoryPrevBtn')) $('mcmHistoryPrevBtn').disabled = state.historyPage <= 0;
+    if ($('mcmHistoryNextBtn')) $('mcmHistoryNextBtn').disabled = state.historyPage >= pageCount - 1;
   }
 
   function rememberPendingTemplateTask(taskId, baseResult) {
@@ -697,7 +1001,10 @@
   function renderTemplates() {
     var grid = $('mcmTemplateGrid');
     if (!grid) return;
-    grid.innerHTML = state.templates.map(function(item) {
+    var randomTemplate = currentClipMode() === 'random' && (($('mcmRandomTemplateSwitch') || {}).checked);
+    var choiceArea = $('mcmTemplateChoiceArea');
+    if (choiceArea) choiceArea.hidden = randomTemplate;
+    grid.innerHTML = randomTemplate ? '' : state.templates.map(function(item) {
       var selected = state.selectedTemplate && String(state.selectedTemplate.id) === String(item.id);
       var cover = templateImage(item);
       var demo = templateDemo(item);
@@ -709,7 +1016,7 @@
       return '<button type="button" class="mcm-template-card' + (selected ? ' is-selected' : '') + '" data-template-id="' + escapeHtml(item.id) + '" title="双击预览模板">'
         + media + '<span>' + escapeHtml(item.name || '未命名模板') + '</span></button>';
     }).join('');
-    if ($('mcmTemplatePicked')) $('mcmTemplatePicked').textContent = state.selectedTemplate ? ('已选：' + (state.selectedTemplate.name || '剪辑模板')) : '还未选择';
+    if ($('mcmTemplatePicked')) $('mcmTemplatePicked').textContent = randomTemplate ? '每条随机选择' : (state.selectedTemplate ? ('已选：' + (state.selectedTemplate.name || '剪辑模板')) : '还未选择');
     if ($('mcmTemplateMoreBtn')) $('mcmTemplateMoreBtn').hidden = true;
     renderTemplateOverlayFields();
     renderTemplateLayout();
@@ -791,6 +1098,29 @@
     var strategy = item && item.generation_strategy && typeof item.generation_strategy === 'object' ? item.generation_strategy : {};
     var fields = item && Array.isArray(item.overlay_fields) ? item.overlay_fields : strategy.overlay_fields;
     return Array.isArray(fields) ? fields.filter(function(field) { return !!String((field || {}).key || '').trim(); }) : [];
+  }
+
+  function templateTitleField(item) {
+    var fields = templateOverlayFields(item);
+    var priorities = ['title', 'headline', 'top_text'];
+    for (var index = 0; index < priorities.length; index += 1) {
+      var field = fields.find(function(candidate) { return String(candidate.key || '').trim() === priorities[index]; });
+      if (field) return field;
+    }
+    return null;
+  }
+
+  function templateTitleValue() {
+    var input = $('mcmTemplateTitle');
+    return truncateChars(String(input && input.value || '').replace(/\r\n?/g, '\n').trim(), 80);
+  }
+
+  function overlayTextsWithTemplateTitle(item, values) {
+    var result = Object.assign({}, values || {}), field = templateTitleField(item);
+    if (!field) return result;
+    var title = templateTitleValue();
+    result[String(field.key || '').trim()] = truncateChars(title || String(field.default || ''), overlayFieldMaxLength(field));
+    return result;
   }
 
   function truncateChars(value, limit) {
@@ -1060,7 +1390,12 @@
       return;
     }
     if (shanjianPanel) shanjianPanel.hidden = true;
-    var fields = templateOverlayFields(state.selectedTemplate);
+    var titleField = templateTitleField(state.selectedTemplate);
+    var titleKey = titleField ? String(titleField.key || '').trim() : '';
+    var fields = templateOverlayFields(state.selectedTemplate).filter(function(field) {
+      return String(field.key || '').trim() !== titleKey;
+    });
+    state.overlayTexts = overlayTextsWithTemplateTitle(state.selectedTemplate, state.overlayTexts);
     panel.hidden = !fields.length;
     fieldsRoot.innerHTML = fields.map(function(field) {
       var key = String(field.key || '').trim();
@@ -1085,8 +1420,8 @@
       var key = String(input.dataset.overlayKey || '').trim();
       if (key) result[key] = String(input.value || '').trim();
     });
-    state.overlayTexts = result;
-    return result;
+    state.overlayTexts = overlayTextsWithTemplateTitle(state.selectedTemplate, result);
+    return state.overlayTexts;
   }
 
   function filterTemplates() {
@@ -1150,13 +1485,15 @@
   function renderMusicOptions() {
     var grid = $('mcmMusicGrid');
     if (!grid) return;
-    grid.innerHTML = state.musicOptions.map(function(item, index) {
+    var randomMusic = currentClipMode() === 'random' && (($('mcmRandomMusicSwitch') || {}).checked);
+    if ($('mcmMusicGrid')) $('mcmMusicGrid').hidden = randomMusic;
+    grid.innerHTML = randomMusic ? '' : state.musicOptions.map(function(item, index) {
       var selected = state.selectedMusic && String(state.selectedMusic.key) === String(item.key);
       return '<button type="button" class="mcm-music-card' + (selected ? ' is-selected' : '') + '" data-music-index="' + index + '">'
         + '<span class="mcm-music-play" data-play-music="' + index + '" title="试听">▶</span>'
         + '<span><strong>' + escapeHtml(item.music_name || '背景音乐') + '</strong><small>' + escapeHtml(item.note || (item.has_preview ? '可试听' : '默认音乐')) + '</small></span></button>';
     }).join('');
-    if ($('mcmMusicPicked')) $('mcmMusicPicked').textContent = state.selectedMusic ? ('已选：' + (state.selectedMusic.music_name || '背景音乐')) : '还未选择';
+    if ($('mcmMusicPicked')) $('mcmMusicPicked').textContent = randomMusic ? '每条随机选择' : (state.selectedMusic ? ('已选：' + (state.selectedMusic.music_name || '背景音乐')) : '还未选择');
   }
 
   function loadMusicOptions() {
@@ -1299,7 +1636,7 @@
     if (!state.selectedTemplate) return Promise.reject(new Error('请先选择闪剪模板'));
     var videoUrl = baseResult && (baseResult.source_url || baseResult.video_url || '');
     if (!videoUrl) return Promise.reject(new Error('基础成片没有公网链接，无法提交闪剪模板；请先保证 TOS/转存成功。'));
-    var title = normalizeShanjianTitle((($('mcmShanjianTitle') || {}).value || ''));
+    var title = normalizeShanjianTitle(templateTitleValue());
     var description = String((($('mcmShanjianDescription') || {}).value || '').trim()).slice(0, 240);
     progress('template', 'active', '正在提交闪剪模板任务');
     return loadShanjianTemplateDetail(state.selectedTemplate).then(function(detailResponse) {
@@ -1385,21 +1722,6 @@
     return state.selectedMusic;
   }
 
-  function renderBatchResults() {
-    var root = $('mcmBatchResults');
-    if (!root) return;
-    root.hidden = !state.batchResults.length;
-    root.innerHTML = state.batchResults.map(function(result, index) {
-      var url = resolveUrl(result.source_url || result.video_url || result.preview_url || '', apiBase());
-      var label = result.template_name ? (' · ' + result.template_name) : '';
-      return '<article class="mcm-batch-item">'
-        + (url ? '<button type="button" class="mcm-batch-preview" data-batch-index="' + index + '"><video src="' + escapeHtml(url) + '" muted playsinline preload="metadata"></video></button>' : '<span class="mcm-batch-preview is-empty">无预览</span>')
-        + '<span>' + (index + 1) + '. ' + escapeHtml(formatSeconds(result.duration || 0)) + escapeHtml(label) + '</span>'
-        + (url ? '<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="' + escapeHtml(url) + '">打开</a>' : '')
-        + '</article>';
-    }).join('');
-  }
-
   function templateStateSnapshot() {
     return {
       selectedTemplate: state.selectedTemplate,
@@ -1424,7 +1746,7 @@
     if (options.useTemplate && template) selectTemplate(template);
     progress('merge', 'active', '正在处理第 ' + runIndex + '/' + totalRuns + ' 条，' + state.clips.length + ' 个视频片段');
     return post('/api/multi-clip-mixer/render', {
-      title: totalRuns > 1 ? ('多段视频混剪 ' + runIndex) : '多段视频混剪',
+      title: templateTitleValue() || (totalRuns > 1 ? ('多段视频混剪 ' + runIndex) : '多段视频混剪'),
       clips: buildClipPlan(runIndex),
       keep_original_audio: false,
       audio_asset_id: audioClip ? audioClip.assetId : '',
@@ -1450,8 +1772,7 @@
     }).then(function(result) {
       result = result || {};
       if (template) result.template_name = template.name || '';
-      state.batchResults.push(result);
-      renderBatchResults();
+      appendBatchResult(result);
       if (options.useTemplate) restoreTemplateState(templateBeforeRun);
       return result;
     }).catch(function(error) {
@@ -1479,11 +1800,13 @@
         throw new Error('已开启音乐模板，请先选择一首音乐，或在随机模式中开启音乐随机。');
       }
       showMessage('', false);
+      var totalRuns = outputCount();
       state.batchResults = [];
+      state.batchSelection = {};
+      startHistoryBatch({ useTemplate: useTemplate, useMusic: useMusic }, totalRuns);
       renderBatchResults();
       resetProgress();
       setBusy(true, '正在裁剪并拼接...');
-      var totalRuns = outputCount();
       var chain = Promise.resolve();
       for (var index = 1; index <= totalRuns; index += 1) {
         (function(runIndex) {
@@ -1501,6 +1824,7 @@
       var totalRuns = payload.totalRuns;
       progress('done', 'done', result && result.asset_id ? '成片已保存到素材库' : '成片已生成，可打开预览');
       showMessage((result && result.completion_message) || ('视频生成完成，共 ' + totalRuns + ' 条结果已保存。'), false);
+      saveActiveHistoryBatch(true);
     }).catch(function(error) {
       var templateActive = document.querySelector('#mcmProgressList [data-stage="template"].is-active');
       if (templateActive && state.lastBaseResult) {
@@ -1525,6 +1849,10 @@
     state.pendingTemplateTask = pending;
     try { localStorage.setItem(PENDING_TEMPLATE_STORAGE_KEY, JSON.stringify(pending)); } catch (error) {}
     state.lastBaseResult = pending.baseResult;
+    state.batchResults = [];
+    state.batchSelection = {};
+    startHistoryBatch({ useTemplate: true, useMusic: false }, 1, '恢复的多段视频混剪');
+    renderBatchResults();
     resetProgress();
     progress('merge', 'done', '基础混剪成片已完成，共 ' + formatSeconds(pending.baseResult.duration));
     progress('music', 'done', '基础成片已保留');
@@ -1536,6 +1864,8 @@
     }).then(function(task) {
       return finishTemplateTask(task, pending.taskId, pending.baseResult);
     }).then(function(result) {
+      appendBatchResult(result);
+      saveActiveHistoryBatch(true);
       progress('done', 'done', '模板成片已保存到素材库');
       if ($('mcmRetryTemplateBtn')) $('mcmRetryTemplateBtn').hidden = true;
       showMessage((result && result.completion_message)
@@ -1559,9 +1889,15 @@
       return;
     }
     if (!state.lastBaseResult) return;
+    state.batchResults = [];
+    state.batchSelection = {};
+    startHistoryBatch({ useTemplate: true, useMusic: false }, 1, '多段视频混剪模板重试');
+    renderBatchResults();
     setBusy(true, '正在重试模板定制...');
     showMessage('', false);
     applyTemplate(state.lastBaseResult).then(function(result) {
+      appendBatchResult(result);
+      saveActiveHistoryBatch(true);
       progress('done', 'done', '模板成片已保存到素材库');
       showMessage((result && result.completion_message) || '模板成片生成完成。', false);
     }).catch(function(error) {
@@ -1619,6 +1955,7 @@
     Array.prototype.forEach.call(document.querySelectorAll('input[name="mcmClipMode"]'), function(input) {
       input.addEventListener('change', syncModePanels);
     });
+    if ($('mcmRandomTemplateSwitch')) $('mcmRandomTemplateSwitch').addEventListener('change', renderTemplates);
     if ($('mcmApplyFixedBtn')) $('mcmApplyFixedBtn').addEventListener('click', applyFixedRangeToAll);
     if ($('mcmTemplateSwitch')) $('mcmTemplateSwitch').addEventListener('change', function(event) {
       $('mcmTemplatePanel').hidden = !event.target.checked;
@@ -1640,6 +1977,7 @@
       $('mcmMusicPanel').hidden = !event.target.checked;
       if (event.target.checked && !state.musicOptions.length) loadMusicOptions().catch(function(error) { showMessage(error.message, true); });
     });
+    if ($('mcmRandomMusicSwitch')) $('mcmRandomMusicSwitch').addEventListener('change', renderMusicOptions);
     var searchTimer = null;
     if ($('mcmTemplateSearch')) $('mcmTemplateSearch').addEventListener('input', function() {
       clearTimeout(searchTimer);
@@ -1660,6 +1998,12 @@
       updateOverlayCounter(input);
       var key = String(input.dataset.overlayKey || '').trim();
       if (key) state.overlayTexts[key] = input.value || '';
+      renderTemplateLayoutItems();
+    });
+    if ($('mcmTemplateTitle')) $('mcmTemplateTitle').addEventListener('input', function(event) {
+      var value = truncateChars(String(event.target.value || '').replace(/\r\n?/g, '\n').trim(), 80);
+      if (event.target.value !== value) event.target.value = value;
+      state.overlayTexts = overlayTextsWithTemplateTitle(state.selectedTemplate, state.overlayTexts);
       renderTemplateLayoutItems();
     });
     if ($('mcmTemplateLayoutReset')) $('mcmTemplateLayoutReset').addEventListener('click', function() {
@@ -1729,13 +2073,92 @@
     });
     if ($('mcmGenerateBtn')) $('mcmGenerateBtn').addEventListener('click', generate);
     if ($('mcmRetryTemplateBtn')) $('mcmRetryTemplateBtn').addEventListener('click', retryTemplate);
-    if ($('mcmBatchResults')) $('mcmBatchResults').addEventListener('click', function(event) {
-      var button = event.target.closest('[data-batch-index]');
-      if (!button) return;
-      var index = Number(button.getAttribute('data-batch-index'));
-      var result = state.batchResults[index];
-      if (result) setResultVideo(result).catch(function(error) { showMessage(error.message || '预览失败', true); });
+    if ($('mcmHistoryToggleBtn')) $('mcmHistoryToggleBtn').addEventListener('click', function() {
+      if (!state.history.length) return showMessage('还没有历史记录，完成一次生成后会自动保留在这里。', false);
+      state.historyVisible = !state.historyVisible;
+      renderHistory();
     });
+    if ($('mcmHistoryPrevBtn')) $('mcmHistoryPrevBtn').addEventListener('click', function() {
+      if (state.historyPage <= 0) return;
+      state.historyPage -= 1;
+      renderHistory();
+    });
+    if ($('mcmHistoryNextBtn')) $('mcmHistoryNextBtn').addEventListener('click', function() {
+      var maxPage = Math.max(0, Math.ceil(state.history.length / HISTORY_PAGE_SIZE) - 1);
+      if (state.historyPage >= maxPage) return;
+      state.historyPage += 1;
+      renderHistory();
+    });
+    if ($('mcmBatchResults')) {
+      $('mcmBatchResults').addEventListener('change', function(event) {
+        var checkbox = event.target.closest('input[type="checkbox"]');
+        if (!checkbox) return;
+        if (checkbox.hasAttribute('data-batch-select-all')) {
+          state.batchResults.forEach(function(result, index) {
+            if (resultVideoUrl(result)) state.batchSelection[index] = checkbox.checked;
+          });
+        } else if (checkbox.hasAttribute('data-batch-index')) {
+          state.batchSelection[Number(checkbox.getAttribute('data-batch-index'))] = checkbox.checked;
+        }
+        renderBatchResults();
+      });
+      $('mcmBatchResults').addEventListener('click', function(event) {
+        var action = event.target.closest('[data-batch-action]');
+        if (action) {
+          var urls = currentBatchSelectedUrls();
+          if (action.getAttribute('data-batch-action') === 'download') downloadVideoUrls(urls, (state.activeHistoryBatch || {}).title || '多段视频混剪');
+          if (action.getAttribute('data-batch-action') === 'copy') copyVideoUrls(urls);
+          return;
+        }
+        var button = event.target.closest('[data-batch-preview]');
+        if (!button) return;
+        var result = state.batchResults[Number(button.getAttribute('data-batch-preview'))];
+        if (result) setResultVideo(result).catch(function(error) { showMessage(error.message || '预览失败', true); });
+      });
+    }
+    if ($('mcmHistoryList')) {
+      $('mcmHistoryList').addEventListener('change', function(event) {
+        var checkbox = event.target.closest('input[type="checkbox"]');
+        var item = event.target.closest('[data-history-id]');
+        if (!checkbox || !item) return;
+        var batch = state.history.find(function(row) { return row.id === item.getAttribute('data-history-id'); });
+        if (!batch) return;
+        var selection = state.historySelection[batch.id] || {};
+        if (checkbox.hasAttribute('data-history-select-all')) {
+          (batch.results || []).forEach(function(result, index) {
+            if (resultVideoUrl(result)) selection[historyResultId(result, index)] = checkbox.checked;
+          });
+        } else if (checkbox.hasAttribute('data-history-result')) {
+          selection[checkbox.getAttribute('data-history-result')] = checkbox.checked;
+        }
+        state.historySelection[batch.id] = selection;
+        renderHistory();
+      });
+      $('mcmHistoryList').addEventListener('click', function(event) {
+        var item = event.target.closest('[data-history-id]');
+        if (!item) return;
+        var batch = state.history.find(function(row) { return row.id === item.getAttribute('data-history-id'); });
+        if (!batch) return;
+        var action = event.target.closest('[data-history-action]');
+        if (action) {
+          var actionName = action.getAttribute('data-history-action');
+          if (actionName === 'download') downloadVideoUrls(historySelectedUrls(batch), batch.title || '多段视频混剪');
+          if (actionName === 'copy') copyVideoUrls(historySelectedUrls(batch));
+          if (actionName === 'delete') {
+            if (!window.confirm('删除这批混剪历史记录？已生成的视频不会从素材库删除。')) return;
+            state.history = state.history.filter(function(row) { return row.id !== batch.id; });
+            delete state.historySelection[batch.id];
+            saveHistory();
+            renderHistory();
+          }
+          return;
+        }
+        var preview = event.target.closest('[data-history-preview]');
+        if (!preview) return;
+        var result = (batch.results || [])[Number(preview.getAttribute('data-history-preview'))];
+        if (result) setResultVideo(result).catch(function(error) { showMessage(error.message || '预览失败', true); });
+      });
+    }
   }
 
   window.initMultiClipMixerView = function() {
@@ -1743,9 +2166,11 @@
     if (!root || root.dataset.mcmInitialized === '1') return;
     root.dataset.mcmInitialized = '1';
     bindEvents();
+    loadHistory();
     syncModePanels();
     renderClips();
     renderBatchResults();
+    renderHistory();
     resetProgress();
     resumePendingTemplateTask();
   };

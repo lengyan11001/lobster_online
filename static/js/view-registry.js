@@ -164,9 +164,9 @@
   });
 
   window.registerLobsterView('multi-clip-mixer', {
-    html: '/static/views/multi-clip-mixer.html?v=20260824-template-input-v1',
-    css: '/static/css/multi-clip-mixer.css?v=20260814-v2',
-    scripts: '/static/js/multi-clip-mixer.js?v=20260824-template-input-v1',
+    html: '/static/views/multi-clip-mixer.html?v=20260831-mixer-history-v3',
+    css: '/static/css/multi-clip-mixer.css?v=20260831-history-v2',
+    scripts: '/static/js/multi-clip-mixer.js?v=20260831-mixer-history-v3',
     init: 'initMultiClipMixerView',
     cache: 'reload'
   });

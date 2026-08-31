@@ -1053,11 +1053,27 @@ async def proxy_scheduled_task_runs(
     limit: int = Query(80, ge=1, le=200),
     _current_user: Any = Depends(get_current_user_for_local),
 ) -> Dict[str, Any]:
+    # Preserve the filters used by the Online task badge.  Dropping
+    # ``active_only``/``installation_id`` makes the cloud return historical
+    # rows, so a currently-running task can fall outside the first page and
+    # disappear from the local UI.
+    params: Dict[str, Any] = {"limit": limit}
+    for key in (
+        "offset",
+        "compact",
+        "date",
+        "timezone_offset_minutes",
+        "installation_id",
+        "active_only",
+    ):
+        value = request.query_params.get(key)
+        if value is not None and str(value).strip() != "":
+            params[key] = value
     return await _proxy_cloud_json(
         request,
         "GET",
         "/api/scheduled-tasks/runs",
-        params={"limit": limit},
+        params=params,
     )
 
 
@@ -10165,8 +10181,77 @@ async def _run_scheduled_task_with_workflow_deadline(
     headers: Dict[str, str],
     item: Dict[str, Any],
 ) -> None:
-    """Run a claimed task to completion; scheduling windows are not cutoffs."""
-    await _process_scheduled_task(client, base, jwt_token, installation_id, item)
+    """Run a claimed workflow node only until its absolute node deadline.
+
+    A queued node may be claimed late, but it must not receive a fresh full
+    session from the claim time.  The local action is stopped cooperatively
+    first, then the coroutine is cancelled if it does not exit promptly.
+    """
+    deadline = _workflow_node_deadline_utc(item)
+    if deadline is None:
+        await _process_scheduled_task(client, base, jwt_token, installation_id, item)
+        return
+
+    remaining_seconds = _workflow_node_remaining_seconds(item)
+    if remaining_seconds is None or remaining_seconds <= 0:
+        stop_result = await _stop_workflow_node_with_timeout(item, headers=headers)
+        await _report_workflow_node_deadline_expired(
+            client,
+            base,
+            headers,
+            item,
+            deadline=deadline,
+            phase="before_start",
+            stop_result=stop_result,
+        )
+        return
+
+    execution_task = asyncio.create_task(
+        _process_scheduled_task(client, base, jwt_token, installation_id, item)
+    )
+    try:
+        done, _pending = await asyncio.wait({execution_task}, timeout=remaining_seconds)
+        if execution_task in done:
+            await execution_task
+            return
+
+        logger.info(
+            "[SCHEDULED-TASK] workflow node deadline reached run_id=%s deadline=%s",
+            str(item.get("id") or "").strip(),
+            deadline.isoformat(),
+        )
+        stop_result = await _stop_workflow_node_with_timeout(item, headers=headers)
+        await _report_workflow_node_deadline_expired(
+            client,
+            base,
+            headers,
+            item,
+            deadline=deadline,
+            phase="while_running",
+            stop_result=stop_result,
+        )
+
+        # Cooperative workers get a brief chance to flush cleanup.  This is
+        # important for local loops that observe an explicit stop flag.
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(execution_task),
+                timeout=_WORKFLOW_NODE_CANCEL_GRACE_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            await _cancel_workflow_execution_task(execution_task)
+        except Exception as exc:
+            logger.debug("[SCHEDULED-TASK] stopped worker exited with error: %s", exc)
+    except asyncio.CancelledError:
+        if not execution_task.done():
+            try:
+                await _stop_workflow_node_with_timeout(item, headers=headers)
+            finally:
+                await _cancel_workflow_execution_task(execution_task)
+        raise
+    finally:
+        if not execution_task.done():
+            await _cancel_workflow_execution_task(execution_task)
 
 
 async def _process_item_detached(

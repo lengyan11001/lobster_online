@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="/static/css/multi-clip-mixer.css?v=20260814-v2">
+<link rel="stylesheet" href="/static/css/multi-clip-mixer.css?v=20260831-history-v2">
 <div id="content-multi-clip-mixer" class="content-block">
   <div class="mcm-page">
     <header class="mcm-header">
@@ -52,8 +52,6 @@
             <div id="mcmRandomModePanel" class="mcm-mode-body" hidden>
               <label>每段随机时长（秒）<input id="mcmRandomSegmentSeconds" type="number" min="0.5" step="0.5" value="3"></label>
               <label>生成数量<input id="mcmRandomOutputCount" type="number" min="1" max="20" step="1" value="1"></label>
-              <label class="mcm-inline-check"><input id="mcmRandomTemplateSwitch" type="checkbox" checked><span>模板随机</span></label>
-              <label class="mcm-inline-check"><input id="mcmRandomMusicSwitch" type="checkbox" checked><span>音乐随机</span></label>
             </div>
           </div>
 
@@ -62,19 +60,29 @@
             <input id="mcmTemplateSwitch" type="checkbox">
           </label>
           <div id="mcmTemplatePanel" class="mcm-choice-panel" hidden>
+            <div id="mcmTemplateTitlePanel" class="mcm-overlay-panel mcm-template-title-panel">
+              <div class="mcm-overlay-head">
+                <strong>成片标题</strong>
+                <span>先填写标题，再选择随机模板或指定模板。</span>
+              </div>
+              <label class="mcm-overlay-field"><span><strong>标题</strong><em>支持换行，用于模板主标题</em></span><textarea id="mcmTemplateTitle" rows="3" maxlength="80" placeholder="输入成片标题，可分多行"></textarea></label>
+            </div>
+            <label id="mcmTemplateRandomRow" class="mcm-template-random-row"><span><strong>模板选择</strong><small>关闭后选择指定模板；开启后每条随机选择模板。</small></span><span class="mcm-inline-check"><input id="mcmRandomTemplateSwitch" type="checkbox" checked><span>随机模板</span></span></label>
             <div class="mcm-provider-row">
               <label><input type="radio" name="mcmTemplateProvider" value="local" checked><span>我们的模板</span></label>
               <label><input type="radio" name="mcmTemplateProvider" value="shanjian"><span>闪剪模板</span></label>
             </div>
-            <div class="mcm-choice-toolbar">
+            <div id="mcmTemplateChoiceArea">
+              <div class="mcm-choice-toolbar">
               <div>
                 <strong>选择剪辑模板</strong>
                 <span id="mcmTemplatePicked">还未选择</span>
               </div>
               <input id="mcmTemplateSearch" type="search" placeholder="搜索模板">
+              </div>
+              <div id="mcmTemplateGrid" class="mcm-template-grid"></div>
+              <button id="mcmTemplateMoreBtn" type="button" class="btn btn-ghost btn-sm" hidden>加载更多</button>
             </div>
-            <div id="mcmTemplateGrid" class="mcm-template-grid"></div>
-            <button id="mcmTemplateMoreBtn" type="button" class="btn btn-ghost btn-sm" hidden>加载更多</button>
             <div id="mcmTemplateOverlayPanel" class="mcm-overlay-panel" hidden>
               <div class="mcm-overlay-head">
                 <strong>模板文案</strong>
@@ -85,11 +93,10 @@
             <div id="mcmShanjianCopyPanel" class="mcm-overlay-panel" hidden>
               <div class="mcm-overlay-head">
                 <strong>闪剪文案</strong>
-                <span>标题和介绍文案会作为输入交给闪剪模板，样式由所选模板决定。</span>
+                <span>介绍文案会作为输入交给闪剪模板，样式由所选模板决定。</span>
               </div>
               <div id="mcmShanjianTemplateCapabilities" class="mcm-template-capabilities" hidden></div>
               <div class="mcm-overlay-fields">
-                <label class="mcm-overlay-field"><span><strong>标题</strong><em>交给模板标题图层</em></span><textarea id="mcmShanjianTitle" rows="3" maxlength="80" placeholder="多段视频混剪"></textarea></label>
                 <label class="mcm-overlay-field"><span><strong>介绍文案</strong><em>交给模板身份栏</em></span><textarea id="mcmShanjianDescription" rows="3" maxlength="240" placeholder="填写模板身份栏要显示的介绍文案，留空则不传。"></textarea></label>
               </div>
             </div>
@@ -112,9 +119,10 @@
           <div id="mcmMusicPanel" class="mcm-choice-panel" hidden>
             <div class="mcm-choice-toolbar">
               <div>
-                <strong>选择音乐模板</strong>
+                <strong>音乐选择</strong>
                 <span id="mcmMusicPicked">还未选择</span>
               </div>
+              <label id="mcmMusicRandomRow" class="mcm-inline-check"><input id="mcmRandomMusicSwitch" type="checkbox" checked><span>随机音乐</span></label>
               <label class="mcm-volume-control">音量 <input id="mcmMusicVolume" type="range" min="0" max="1" step="0.05" value="0.24"><output id="mcmMusicVolumeValue">24%</output></label>
             </div>
             <div id="mcmMusicGrid" class="mcm-music-grid"></div>
@@ -129,7 +137,7 @@
         <section class="mcm-result-section">
           <div class="mcm-result-head">
             <div><span class="mcm-step">03</span><h3>生成结果</h3></div>
-            <span id="mcmTotalDuration" class="mcm-duration">0 秒</span>
+            <div class="mcm-result-head-tools"><span id="mcmTotalDuration" class="mcm-duration">0 秒</span><button id="mcmHistoryToggleBtn" type="button" class="btn btn-ghost btn-sm">历史记录</button></div>
           </div>
           <div id="mcmResultSurface" class="mcm-result-surface">
             <div class="mcm-result-empty"><strong>成片将在这里显示</strong><span>添加视频并完成设置后开始生成。</span></div>
@@ -139,6 +147,18 @@
             <button id="mcmRetryTemplateBtn" type="button" class="btn btn-ghost" hidden>重试模板处理</button>
           </div>
           <div id="mcmBatchResults" class="mcm-batch-results" hidden></div>
+          <div id="mcmHistoryPanel" class="mcm-history-panel" hidden>
+            <div class="mcm-history-head">
+              <div><strong>历史记录</strong><span id="mcmHistoryCount">0 批</span></div>
+              <span>最近生成的成片</span>
+            </div>
+            <div id="mcmHistoryList" class="mcm-history-list"></div>
+            <div id="mcmHistoryPager" class="mcm-history-pager" hidden>
+              <button id="mcmHistoryPrevBtn" type="button" class="btn btn-ghost btn-sm">上一页</button>
+              <span id="mcmHistoryPageLabel"></span>
+              <button id="mcmHistoryNextBtn" type="button" class="btn btn-ghost btn-sm">下一页</button>
+            </div>
+          </div>
         </section>
 
         <section class="mcm-progress-section">
