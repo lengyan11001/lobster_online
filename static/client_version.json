@@ -1,7 +1,7 @@
 {
-  "version": "2.0.4",
-  "build": 283,
-  "applied_at": "2026-08-31T22:29:11+08:00",
-  "note": "Fix precise touch profile timeout and independent actions",
-  "bundle_sha256": "fdd0f46a606d35437c24bc2ee49be8015693eefa9c1a6cdab155909a265017e6"
+  "version": "2.0.5",
+  "build": 284,
+  "applied_at": "2026-08-31T23:30:39+08:00",
+  "note": "Skip unavailable precise touch users",
+  "bundle_sha256": "e95e888a2873a28c5d9fb67e36bcbbd5f47a3a446c1f5cf6f595b4c0a18ab1a3"
 }
