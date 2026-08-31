@@ -1,7 +1,7 @@
 {
   "version": "2.0.2",
-  "build": 280,
-  "applied_at": "2026-08-31T14:31:36+08:00",
-  "note": "employee template copy and latest fixes",
-  "bundle_sha256": "647564f7faa9b16d926a7d47a91b4de2a2cc9d12a8585dde1e7136c227d5bd71"
+  "build": 281,
+  "applied_at": "2026-08-31T17:40:59+08:00",
+  "note": "WeChat duplicate reply fix and mixer workflow",
+  "bundle_sha256": "d8a2c267f5e7c2a4c6a35948d4900e9003b156037251eaa416835e5b7b4b0852"
 }
