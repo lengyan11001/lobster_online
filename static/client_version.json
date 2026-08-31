@@ -1,7 +1,7 @@
 {
-  "version": "2.0.5",
-  "build": 284,
-  "applied_at": "2026-08-31T23:30:39+08:00",
-  "note": "Skip unavailable precise touch users",
-  "bundle_sha256": "e95e888a2873a28c5d9fb67e36bcbbd5f47a3a446c1f5cf6f595b4c0a18ab1a3"
+  "version": "2.0.6",
+  "build": 285,
+  "applied_at": "2026-08-31T23:46:30+08:00",
+  "note": "Fix encrypted OTA Python 3.12 compatibility",
+  "bundle_sha256": "90c68a007a7824a089d4e0f87bfa3a0c7543b8d5034602ee29454f0710e3b5f7"
 }
