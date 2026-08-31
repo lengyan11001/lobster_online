@@ -43,7 +43,6 @@ OTA_PATHS: tuple[str, ...] = (
     "skills",
     "skill_registry.json",
     "upstream_urls.json",
-    "openclaw",
     "requirements.txt",
     ".env.example",
     "install.bat",
@@ -55,7 +54,6 @@ OTA_PATHS: tuple[str, ...] = (
     "nodejs/ensure-npm-cli.mjs",
     "nodejs/run-npm.mjs",
     "nodejs/.gitignore",
-    "nodejs/node_modules/@tencent-weixin/openclaw-weixin",
     "backend/douyin_origin/douyin_protocol/node_modules",
     # Keep version last so partial OTA failures do not mark the client updated.
     "CLIENT_CODE_VERSION.json",
@@ -63,8 +61,7 @@ OTA_PATHS: tuple[str, ...] = (
 
 # 与 check_client_code_update.DEFAULT_PATHS_WITH_NODEJS_DEPS 一致（仅在对等清单外加整树时用）
 OTA_PATHS_WITH_NODEJS_DEPS: tuple[str, ...] = OTA_PATHS + (
-    "nodejs/.openclaw/npm",
-    "nodejs/node_modules",
+    # Retired OpenClaw dependencies are intentionally never included.
 )
 
 # Production OTA is intentionally limited to the web application plus the
@@ -266,6 +263,21 @@ OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
 )
 
 _OTA_SKIP_SKILLS_DIRS = {"runs", "job_runs", "output", "cache"}
+# Retired workbench payloads are kept in the source tree only for compatibility
+# with old imports; they must not be shipped in encrypted OTA updates.
+_OTA_RETIRED_SKILL_DIRS = (
+    "skills/browser_use_skill/",
+    "skills/computer_use_skill/",
+    "skills/media_edit/",
+)
+_OTA_RETIRED_PACKAGE_IDS = frozenset({
+    "browser_use_skill",
+    "computer_use_skill",
+    "media_edit_skill",
+    "ecommerce_publish_skill",
+    "__retired_browser_use_skill",
+    "__retired_computer_use_skill",
+})
 # 爆款 TVC 的最终合并依赖 comfly_veo3_daihuo_video 内置 ffmpeg。
 # 其它技能的 tools/ffmpeg 仍按默认跳过，避免 OTA 被无关二进制撑大。
 _OTA_ALLOW_SKILLS_TOOL_RELS = {
@@ -432,6 +444,8 @@ def _env_text_for_pack(path: Path) -> str:
 def _skip_file(rel: str) -> bool:
     r = _norm(rel).lower()
     nr = _norm(rel)
+    if nr.lower().startswith(_OTA_RETIRED_SKILL_DIRS):
+        return True
     if _is_pack_skipped_path(rel):
         return True
     if r == "machine_identity.json" or r.endswith("/machine_identity.json"):
@@ -468,6 +482,15 @@ def _skip_file(rel: str) -> bool:
     return False
 
 
+def _sanitized_skill_registry_bytes(path: Path) -> bytes:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    packages = payload.get("packages")
+    if isinstance(packages, dict):
+        for pkg_id in _OTA_RETIRED_PACKAGE_IDS:
+            packages.pop(pkg_id, None)
+    return (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
 def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
     base = root / rel_dir.replace("/", os.sep)
     if not base.exists():
@@ -476,6 +499,9 @@ def _add_tree(zf: zipfile.ZipFile, root: Path, rel_dir: str) -> None:
         if _skip_file(rel_dir):
             return
         if rel_dir not in zf.NameToInfo:
+            if _norm(rel_dir) == "skill_registry.json":
+                zf.writestr(rel_dir, _sanitized_skill_registry_bytes(base))
+                return
             if _norm(rel_dir) in {".env", ".env.example"}:
                 zf.writestr(rel_dir, _env_text_for_pack(base))
             else:
@@ -573,7 +599,10 @@ def _add_openclaw(zf: zipfile.ZipFile, root: Path) -> None:
             rel = _norm(os.path.relpath(str(full), str(root)))
             if _skip_file(rel):
                 continue
-            _zip_write_file(zf, full, rel)
+            if rel == "skill_registry.json":
+                zf.writestr(rel, _sanitized_skill_registry_bytes(full))
+            else:
+                _zip_write_file(zf, full, rel)
 
     for rel in _OTA_OPENCLAW_POLICY_RELS:
         src_pol = root / rel.replace("/", os.sep)
@@ -695,9 +724,58 @@ def _ensure_douyin_protocol_node_deps(root: Path) -> None:
         raise RuntimeError("Douyin protocol dependency jsrsasign was not installed")
 
 
+def _python_major_minor(python_exe: Path) -> tuple[int, int] | None:
+    try:
+        completed = subprocess.run(
+            [str(python_exe), "-c", "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+        major, minor = completed.stdout.strip().split(".", 1)
+        return int(major), int(minor)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
 def _bundled_python(root: Path) -> Path:
-    bundled = root / "python" / "python.exe"
-    return bundled if bundled.is_file() else Path(sys.executable)
+    """Locate the Python ABI shipped to clients for encrypted bytecode.
+
+    ``--root`` may point at a clean Git worktree, which intentionally does not
+    contain the ignored embedded runtime. Never silently compile with the
+    packer's interpreter in that case: pyc files are ABI-specific.
+    """
+    packer_root = Path(__file__).resolve().parent.parent
+    configured = os.environ.get("LOBSTER_OTA_PYTHON", "").strip()
+    candidates = [
+        root / "python" / "python.exe",
+        packer_root / "python" / "python.exe",
+    ]
+    if configured:
+        candidates.append(Path(configured))
+    candidates.append(Path(sys.executable))
+
+    checked: list[str] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        version = _python_major_minor(resolved) if resolved.is_file() else None
+        checked.append(f"{resolved} ({'.'.join(map(str, version)) if version else 'unavailable'})")
+        if version == (3, 12):
+            return resolved
+
+    raise RuntimeError(
+        "Encrypted OTA requires the client Python 3.12 runtime; refusing to compile incompatible pyc. "
+        "Checked: " + "; ".join(checked)
+    )
 
 
 def _copy_tree_for_encrypted_ota(src: Path, dst: Path, rel: str) -> None:
@@ -965,6 +1043,9 @@ def main() -> int:
         help="Optional semantic version to write for this release (for example 2.0.0); build still increments",
     )
     args = ap.parse_args()
+    if args.with_nodejs_deps:
+        print("[INFO] --with-nodejs-deps is retired; OpenClaw/npm dependencies will not be packaged")
+        args.with_nodejs_deps = False
     if args.website_only and (args.with_nodejs_deps or args.with_ppt_runtime_deps or args.with_memory_document_runtime_deps or args.with_douyin_runtime_deps or args.with_wechat_runtime_deps):
         print("[ERR] --website-only 不能与运行时依赖包选项同时使用")
         return 1
@@ -1080,7 +1161,7 @@ def main() -> int:
         out = (parent / f"lobster_online_client_code_ota{suffix}_{ts}.zip").resolve()
     else:
         out = args.out.resolve()
-    if args.with_nodejs_deps:
+    if False and args.with_nodejs_deps:
         nm = root / "nodejs" / "node_modules"
         if not nm.is_dir():
             print(f"[ERR] --with-nodejs-deps 需要已存在的 {nm}")
