@@ -29,7 +29,6 @@
     defaultItem: null,
     personalTemplateLanguage: 'zh-CN',
     profilePhotoPreview: '',
-    profilePhotoPreviewObjectUrl: '',
     profilePhotoName: '',
     profilePhotoResolvedValue: '',
     profilePhotoResolvingValue: '',
@@ -38,7 +37,6 @@
     profilePhotoPickerLoading: false,
     profilePhotoPickerQuery: '',
     profilePhotoUploadBusy: false,
-    profilePhotoUploadPreview: '',
     personalDigitalHumanTemplates: [],
     personalDigitalHumanTemplatesLoaded: false,
     personalDigitalHumanTemplatesLoading: false,
@@ -132,11 +130,26 @@
     opts = opts || {};
     var req = { method: opts.method || 'GET', headers: headers(opts.json !== false) };
     if (opts.body !== undefined) req.body = JSON.stringify(opts.body || {});
-    return fetch(base + path, req).then(function(resp) {
+    var timeoutMs = Number(opts.timeoutMs || 0);
+    var controller = timeoutMs > 0 && typeof AbortController === 'function' ? new AbortController() : null;
+    if (controller) req.signal = controller.signal;
+    var timer = null;
+    var request = fetch(base + path, req).then(function(resp) {
       return resp.json().catch(function() { return {}; }).then(function(data) {
         if (!resp.ok || data.ok === false) throw new Error(parseErr(data, '请求失败'));
         return data;
       });
+    });
+
+    if (timeoutMs <= 0) return request;
+    var timeout = new Promise(function(_, reject) {
+      timer = window.setTimeout(function() {
+        if (controller) controller.abort();
+        reject(new Error('request timeout'));
+      }, timeoutMs);
+    });
+    return Promise.race([request, timeout]).finally(function() {
+      if (timer) window.clearTimeout(timer);
     });
   }
 
@@ -357,13 +370,34 @@
   }
 
   function profilePhotoAssetPreview(row) {
+    return profilePhotoPublicUrl(row);
+  }
+
+  function profilePhotoPublicUrl(row) {
     row = row || {};
-    return String(row.preview_url || row.local_preview_url || row.open_url || row.source_url || row.url || '').trim();
+    var value = String(row.source_url || '').trim();
+    if (!/^https?:\/\//i.test(value)) return '';
+    try {
+      var host = new URL(value).hostname.toLowerCase();
+      if (!host || host === 'localhost' || host === '::1' || host === '[::1]' || host.endsWith('.local')) return '';
+      if (/^127\.|^0\.|^10\.|^192\.168\.|^169\.254\.|^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return '';
+    } catch (e) {
+      return '';
+    }
+    return value;
   }
 
   function profilePhotoDisplayUrl(value) {
     var url = String(value || '').trim();
-    return /^(https?:\/\/|blob:|data:image\/|\/)/i.test(url) ? url : '';
+    if (!/^https?:\/\//i.test(url)) return '';
+    try {
+      var host = new URL(url).hostname.toLowerCase();
+      if (!host || host === 'localhost' || host === '::1' || host === '[::1]' || host.endsWith('.local')) return '';
+      if (/^127\.|^0\.|^10\.|^192\.168\.|^169\.254\.|^172\.(1[6-9]|2\d|3[0-1])\./.test(host)) return '';
+    } catch (e) {
+      return '';
+    }
+    return url;
   }
 
   function profilePhotoSize(value) {
@@ -375,19 +409,9 @@
 
   function setProfilePhoto(value, previewUrl, name) {
     var nextValue = String(value || '').trim();
-    var pendingPreview = state.profilePhotoUploadPreview || '';
-    var nextPreview = profilePhotoDisplayUrl(previewUrl || (nextValue.indexOf('http') === 0 ? nextValue : '') || pendingPreview);
-    if (pendingPreview && pendingPreview !== nextPreview && window.URL && URL.revokeObjectURL) {
-      URL.revokeObjectURL(pendingPreview);
-    }
-    state.profilePhotoUploadPreview = '';
-    if (state.profilePhotoPreviewObjectUrl && state.profilePhotoPreviewObjectUrl !== nextPreview && window.URL && URL.revokeObjectURL) {
-      URL.revokeObjectURL(state.profilePhotoPreviewObjectUrl);
-      state.profilePhotoPreviewObjectUrl = '';
-    }
+    var nextPreview = profilePhotoDisplayUrl(previewUrl);
     setFieldValue('psProfilePhoto', nextValue);
     state.profilePhotoPreview = nextPreview;
-    if (/^blob:/i.test(nextPreview)) state.profilePhotoPreviewObjectUrl = nextPreview;
     state.profilePhotoName = String(name || '').trim();
     state.profilePhotoResolvedValue = state.profilePhotoPreview ? nextValue : '';
     state.profilePhotoResolvingValue = '';
@@ -408,9 +432,11 @@
     localJson('/api/assets/' + encodeURIComponent(selected), { json: false })
       .then(function(item) {
         if (fieldValue('psProfilePhoto') !== selected) return;
-        state.profilePhotoPreview = profilePhotoDisplayUrl(profilePhotoAssetPreview(item));
+        var publicUrl = profilePhotoPublicUrl(item);
+        state.profilePhotoPreview = profilePhotoDisplayUrl(publicUrl);
         state.profilePhotoName = String(item.filename || item.name || '素材库图片');
         state.profilePhotoResolvedValue = selected;
+        if (!publicUrl) waitForProfilePhotoPublicUrl(selected, 0);
       })
       .catch(function() {
         if (fieldValue('psProfilePhoto') === selected) state.profilePhotoResolvedValue = selected;
@@ -424,7 +450,7 @@
   function renderProfilePhotoSelector() {
     var value = fieldValue('psProfilePhoto');
     resolveProfilePhotoPreview(value);
-    var preview = profilePhotoDisplayUrl(state.profilePhotoUploadPreview || state.profilePhotoPreview || value);
+    var preview = profilePhotoDisplayUrl(state.profilePhotoPreview || (value.indexOf('http') === 0 ? value : ''));
     var title = state.profilePhotoName || (value ? '已选择人物照片' : '还没有选择照片');
     var meta = value ? (/^https?:\/\//i.test(value) ? '图片链接' : '素材库图片') : '支持 JPG、PNG、WEBP 等图片';
     var uploadLabel = state.profilePhotoUploadBusy ? '上传中...' : '上传电脑图片';
@@ -472,7 +498,6 @@
       return;
     }
     state.profilePhotoUploadBusy = true;
-    state.profilePhotoUploadPreview = window.URL && URL.createObjectURL ? URL.createObjectURL(file) : '';
     renderProfileWizard();
     setMsg('正在上传人物照片...');
     var fd = new FormData();
@@ -487,16 +512,39 @@
       .then(function(item) {
         setProfilePhoto(item.asset_id, profilePhotoAssetPreview(item), item.filename || file.name || '人物照片');
         setMsg('人物照片已上传并存入素材库。');
+        waitForProfilePhotoPublicUrl(item.asset_id, 0);
       })
       .catch(function(err) {
-        if (state.profilePhotoUploadPreview && window.URL && URL.revokeObjectURL) URL.revokeObjectURL(state.profilePhotoUploadPreview);
-        state.profilePhotoUploadPreview = '';
         setMsg(err.message || '人物照片上传失败', true);
       })
       .finally(function() {
         state.profilePhotoUploadBusy = false;
         renderProfileWizard();
       });
+  }
+
+  var PROFILE_PHOTO_PUBLIC_URL_RETRIES = 20;
+
+  function waitForProfilePhotoPublicUrl(assetId, attempt) {
+    var selected = String(assetId || '').trim();
+    if (!selected || fieldValue('psProfilePhoto') !== selected || attempt >= PROFILE_PHOTO_PUBLIC_URL_RETRIES) return;
+    window.setTimeout(function() {
+      if (fieldValue('psProfilePhoto') !== selected) return;
+      localJson('/api/assets/' + encodeURIComponent(selected), { json: false })
+        .then(function(item) {
+          if (fieldValue('psProfilePhoto') !== selected) return;
+          var publicUrl = profilePhotoPublicUrl(item);
+          if (publicUrl) {
+            setProfilePhoto(selected, publicUrl, item.filename || item.name || '人物照片');
+            renderProfileWizard();
+            return;
+          }
+          waitForProfilePhotoPublicUrl(selected, attempt + 1);
+        })
+        .catch(function() {
+          waitForProfilePhotoPublicUrl(selected, attempt + 1);
+        });
+    }, 1000);
   }
 
   function renderProfilePhotoPicker(error) {
@@ -575,6 +623,7 @@
     var item = (state.profilePhotoAssets || []).find(function(row) { return String(row.asset_id || '') === String(assetId || ''); });
     if (!item) return;
     setProfilePhoto(item.asset_id, profilePhotoAssetPreview(item), item.filename || item.name || '素材库图片');
+    if (!profilePhotoPublicUrl(item)) waitForProfilePhotoPublicUrl(item.asset_id, 0);
     closeProfilePhotoPicker();
     renderProfileWizard();
     setMsg('已选择素材库人物照片。');
@@ -1165,6 +1214,17 @@
         if ($('psMemoryReviewText')) $('psMemoryReviewText').value = formatGeneratedDocs(state.generatedDocuments, state.generatedDocOrder);
       });
     });
+    box.querySelectorAll('[data-download-generated-doc]').forEach(function(button) {
+      button.addEventListener('click', function() {
+        var key = button.getAttribute('data-download-generated-doc') || '';
+        var text = state.generatedDocuments && state.generatedDocuments[key] || '';
+        downloadTextFile(docTypeLabel(key) + '.md', '# ' + docTypeLabel(key) + '\n\n' + text)
+          .then(function(result) {
+            if (!result || !result.cancelled) setMsg(result && result.path ? '已保存至：' + result.path : '下载已开始');
+          })
+          .catch(function(err) { setMsg(err.message || '下载失败', true); });
+      });
+    });
     if ($('psMemoryReviewText')) $('psMemoryReviewText').value = formatGeneratedDocs(docs, order);
   }
 
@@ -1192,7 +1252,6 @@
   var PS_LIST_PAGE_SIZE = 8;
   var psMultiSelectPages = {};
   var psListPages = {};
-  var psListPagingBound = false;
 
   function psPageInfo(elId, rows, size, store) {
     var totalPages = Math.max(1, Math.ceil(rows.length / size));
@@ -1212,16 +1271,19 @@
     '</div>';
   }
 
-  function updatePsMultiSelectSummary(el) {
+  function updatePsMultiSelectSummary(el, rows, idFn, titleFn, selected) {
     if (!el) return;
     var summary = el.querySelector('[data-ps-multi-summary]');
     if (!summary) return;
-    var checked = Array.prototype.slice.call(el.querySelectorAll('input[type="checkbox"]:checked'));
-    var names = checked.slice(0, 2).map(function(input) {
-      var strong = input.closest('label') && input.closest('label').querySelector('strong');
-      return strong ? strong.textContent : input.value;
+    var selectedRows = Array.isArray(rows)
+      ? rows.filter(function(row) { return !!selected[String(idFn(row) || '')]; })
+      : Array.prototype.slice.call(el.querySelectorAll('input[type="checkbox"]:checked'));
+    var names = selectedRows.slice(0, 2).map(function(row) {
+      if (Array.isArray(rows)) return titleFn(row);
+      var strong = row.closest('label') && row.closest('label').querySelector('strong');
+      return strong ? strong.textContent : row.value;
     });
-    summary.textContent = checked.length ? ('已选 ' + checked.length + ' 项' + (names.length ? ' · ' + names.join('、') : '')) : '未选择';
+    summary.textContent = selectedRows.length ? ('已选 ' + selectedRows.length + ' 项' + (names.length ? ' · ' + names.join('、') : '')) : '未选择';
   }
 
   function renderPsMultiSelect(elId, rows, opts) {
@@ -1244,9 +1306,16 @@
     var selectedRows = rows.filter(function(row) { return !!selected[String(idFn(row))]; });
     var selectedNames = selectedRows.slice(0, 2).map(function(row) { return titleFn(row); });
     var label = selectedRows.length ? ('已选 ' + selectedRows.length + ' 项' + (selectedNames.length ? ' · ' + selectedNames.join('、') : '')) : '未选择';
+    var allSelected = !!rows.length && rows.every(function(row) {
+      var id = String(idFn(row) || '');
+      return id && !!selected[id];
+    });
     el.innerHTML = '<details class="ps-multi-select">' +
       '<summary><span>' + esc(opts.label || '选择') + '</span><strong data-ps-multi-summary>' + esc(label) + '</strong><i>⌄</i></summary>' +
-      '<div class="ps-multi-select-menu"><div class="ps-multi-select-options">' + pageRows.map(function(row) {
+      '<div class="ps-multi-select-menu"><div class="ps-multi-select-toolbar">' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-ps-select-all="' + escAttr(elId) + '">' + (allSelected ? '取消全选' : '全选') + '</button>' +
+        '<span>' + rows.length + ' 项</span>' +
+      '</div><div class="ps-multi-select-options">' + pageRows.map(function(row) {
         var id = String(idFn(row) || '');
         var kind = String(kindFn(row) || '');
         var subtitle = String(subtitleFn(row) || '');
@@ -1257,7 +1326,20 @@
       }).join('') + '</div><div class="ps-multi-select-footer">' + psPagerMarkup('data-ps-multi-page', elId, info.page, info.totalPages) + '</div></div></details>';
     bindOptionChecks(el, opts.kind, selected);
     el.querySelectorAll('input[' + attrName + ']').forEach(function(input) {
-      input.addEventListener('change', function() { updatePsMultiSelectSummary(el); });
+      input.addEventListener('change', function() { updatePsMultiSelectSummary(el, rows, idFn, titleFn, selected); });
+    });
+    el.querySelectorAll('[data-ps-select-all]').forEach(function(button) {
+      button.addEventListener('click', function(ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        rows.forEach(function(row) {
+          var id = String(idFn(row) || '');
+          if (id) selected[id] = !allSelected;
+        });
+        renderPsMultiSelect(elId, rows, opts);
+        var details = $(elId).querySelector('details');
+        if (details) details.open = true;
+      });
     });
     el.querySelectorAll('[data-ps-multi-page]').forEach(function(btn) {
       btn.addEventListener('click', function(ev) {
@@ -1272,16 +1354,22 @@
     });
   }
 
-  function ensurePsListPagingHandlers() {
-    if (psListPagingBound) return;
-    psListPagingBound = true;
-    document.addEventListener('click', function(ev) {
-      var btn = ev.target && ev.target.closest ? ev.target.closest('[data-ps-list-page]') : null;
-      if (!btn) return;
-      ev.preventDefault();
-      var id = btn.getAttribute('data-ps-list-page') || '';
-      psListPages[id] = Math.max(1, (psListPages[id] || 1) + Number(btn.getAttribute('data-page-delta') || 0));
-      renderAllLists();
+  function bindPsListPagers() {
+    var root = $('content-personal-settings');
+    if (!root) return;
+    root.querySelectorAll('[data-ps-list-page]').forEach(function(btn) {
+      if (btn.getAttribute('data-ps-list-page-bound') === '1') return;
+      btn.setAttribute('data-ps-list-page-bound', '1');
+      btn.addEventListener('click', function(ev) {
+        if (btn.disabled) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        var id = btn.getAttribute('data-ps-list-page') || '';
+        var delta = Number(btn.getAttribute('data-page-delta') || 0);
+        if (!id || !delta) return;
+        psListPages[id] = Math.max(1, (psListPages[id] || 1) + delta);
+        renderAllLists();
+      });
     });
   }
 
@@ -1627,20 +1715,10 @@
         if (row) applyTemplate(row, true);
       });
     });
-    box.querySelectorAll('[data-download-generated-doc]').forEach(function(button) {
-      button.addEventListener('click', function() {
-        var key = button.getAttribute('data-download-generated-doc') || '';
-        var text = state.generatedDocuments && state.generatedDocuments[key] || '';
-        downloadTextFile(docTypeLabel(key) + '.md', '# ' + docTypeLabel(key) + '\n\n' + text)
-          .then(function(result) {
-            if (!result || !result.cancelled) setMsg(result && result.path ? '已保存至：' + result.path : '下载已开始');
-          })
-          .catch(function(err) { setMsg(err.message || '下载失败', true); });
-      });
-    });
     list.querySelectorAll('[data-delete-template]').forEach(function(btn) {
       btn.addEventListener('click', function() { deleteTemplate(btn.getAttribute('data-delete-template') || '', btn); });
     });
+    bindPsListPagers();
   }
 
   function parseHostSaveResult(value) {
@@ -1938,6 +2016,7 @@
     el.querySelectorAll('[data-delete-keyword]').forEach(function(btn) {
       btn.addEventListener('click', function() { deleteKeyword(btn.getAttribute('data-delete-keyword') || ''); });
     });
+    bindPsListPagers();
   }
 
   function renderCompetitors() {
@@ -1966,6 +2045,7 @@
     el.querySelectorAll('[data-delete-competitor]').forEach(function(btn) {
       btn.addEventListener('click', function() { deleteCompetitor(btn.getAttribute('data-delete-competitor') || ''); });
     });
+    bindPsListPagers();
   }
 
   function renderMemories() {
@@ -2010,6 +2090,7 @@
     el.querySelectorAll('[data-delete-memory]').forEach(function(btn) {
       btn.addEventListener('click', function() { deleteMemory(btn.getAttribute('data-delete-memory') || ''); });
     });
+    bindPsListPagers();
   }
 
   function renderMemorySelectOptions() {
@@ -2084,6 +2165,7 @@
     el.querySelectorAll('[data-delete-upload-memory]').forEach(function(btn) {
       btn.addEventListener('click', function() { deleteMemory(btn.getAttribute('data-delete-upload-memory') || ''); });
     });
+    bindPsListPagers();
   }
 
   function memorySourceDocRows() {
@@ -2274,7 +2356,6 @@
   }
 
   function renderAllLists() {
-    ensurePsListPagingHandlers();
     renderTemplateLists();
     renderCurrentTemplate();
     renderSavedTemplates();
@@ -2285,6 +2366,7 @@
     renderMemories();
     renderMemorySourceSelectors();
     renderProfileWizard();
+    bindPsListPagers();
   }
 
   function applyDefaultItem(item) {
@@ -2350,23 +2432,74 @@
     });
   }
 
+  var PERSONAL_SETTINGS_LOAD_TIMEOUT_MS = 10000;
+
   function loadAll() {
     setMsg('正在加载个人设置...');
-    return Promise.all([
-      cloudJson('/api/ip-content/keywords').then(function(data) { state.keywords = Array.isArray(data.items) ? data.items : []; }),
-      cloudJson('/api/ip-content/competitors').then(function(data) { state.competitors = Array.isArray(data.items) ? data.items : []; }),
-      loadMemories().catch(function() { state.memories = []; }),
-      loadTemplates().catch(function(err) {
-        state.templateLoadError = err && err.message ? err.message : '模板加载失败';
+    state.templateLoadError = '';
+    setMsg('');
+    renderAllLists();
+
+    // Core settings render independently so optional paginated resources
+    // cannot keep the whole personal-settings page in a loading state.
+    var coreErrors = [];
+    var coreLoads = [
+      cloudJson('/api/ip-content/keywords', { timeoutMs: PERSONAL_SETTINGS_LOAD_TIMEOUT_MS }).then(function(data) {
+        state.keywords = Array.isArray(data.items) ? data.items : [];
+        pruneSelectedIntMap(state.selectedKeywords, state.keywords);
+        renderTemplateLists();
+        renderMemorySourceSelectors();
+        renderKeywords();
+      }).catch(function(err) {
+        state.keywords = [];
+        coreErrors.push('关键词：' + (err && err.message ? err.message : '加载失败'));
+        renderKeywords();
       }),
-      loadPersonalDigitalHumanResources().catch(function() { state.personalDigitalHumanAvatarOptions = []; state.personalDigitalHumanVoiceOptions = []; }),
-      cloudJson('/api/ip-content/personal-default').then(function(data) { state.defaultItem = data.item || {}; })
-    ]).then(function() {
-      applyDefaultItem(state.defaultItem || {});
-      pruneSelectedIntMap(state.selectedKeywords, state.keywords);
-      pruneSelectedIntMap(state.selectedCompetitors, state.competitors);
+      cloudJson('/api/ip-content/competitors', { timeoutMs: PERSONAL_SETTINGS_LOAD_TIMEOUT_MS }).then(function(data) {
+        state.competitors = Array.isArray(data.items) ? data.items : [];
+        pruneSelectedIntMap(state.selectedCompetitors, state.competitors);
+        renderTemplateLists();
+        renderMemorySourceSelectors();
+        renderCompetitors();
+      }).catch(function(err) {
+        state.competitors = [];
+        coreErrors.push('同行：' + (err && err.message ? err.message : '加载失败'));
+        renderCompetitors();
+      })
+    ];
+
+    return Promise.all(coreLoads).then(function() {
       renderAllLists();
-      setMsg(state.templateLoadError ? ('IP 人设模板加载失败：' + state.templateLoadError) : '', !!state.templateLoadError);
+      setMsg(coreErrors.length ? coreErrors.join('；') : '');
+
+      var defaultLoad = cloudJson('/api/ip-content/personal-default').then(function(data) {
+        state.defaultItem = data.item || {};
+        applyDefaultItem(state.defaultItem);
+        renderAllLists();
+      }).catch(function(err) {
+        coreErrors.push('默认配置：' + (err && err.message ? err.message : '加载失败'));
+        setMsg(coreErrors.join('；'), true);
+      });
+
+      // Optional panels continue loading in the background.
+      return Promise.all([
+        defaultLoad,
+        loadMemories().catch(function() { state.memories = []; renderAllLists(); }),
+        loadTemplates().catch(function(err) {
+          state.templateLoadError = err && err.message ? err.message : '模板加载失败';
+          renderSavedTemplates();
+        }),
+        loadPersonalDigitalHumanResources().catch(function() {
+          state.personalDigitalHumanAvatarOptions = [];
+          state.personalDigitalHumanVoiceOptions = [];
+          renderPersonalDigitalHumanResources();
+        })
+      ]).then(function() {
+        renderAllLists();
+        if (state.templateLoadError) {
+          setMsg('IP 人设模板加载失败：' + state.templateLoadError, true);
+        }
+      });
     }).catch(function(err) {
       renderAllLists();
       setMsg(err.message || '个人设置加载失败', true);

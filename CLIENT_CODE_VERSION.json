@@ -1,7 +1,7 @@
 {
-  "version": "2.0.0",
-  "build": 277,
-  "applied_at": "2026-08-30T22:53:49+08:00",
-  "note": "2.0.0: client fixes and WeChat local search",
-  "bundle_sha256": "95ce680a8c4e145405110e5ef2a27b3e5bd60d213d594f61d1875db39188034c"
+  "version": "2.0.1",
+  "build": 278,
+  "applied_at": "2026-08-31T10:28:55+08:00",
+  "note": "personal settings loading and source_url preview",
+  "bundle_sha256": "d36ef3cb3f2ace32dcecebadd34a0638ad72bfb7c56c28a3bcd42e18bd3b6eea"
 }

@@ -1,5 +1,6 @@
 """User settings: model selection, preferences."""
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -310,6 +311,26 @@ def _get_or_create_machine_instance_id() -> str:
             data = json.loads(path.read_text(encoding="utf-8"))
             value = _normalize_installation_id(str(data.get("machine_instance_id") or ""))
             if value:
+                _MACHINE_INSTANCE_ID_CACHE = value
+                return value
+        except Exception:
+            pass
+
+    # Keep the identity outside the application directory. If an older
+    # install has no machine_identity.json yet, Windows' MachineGuid lets an
+    # OTA/reinstall recover the same logical slot instead of making a new one.
+    if os.name == "nt":
+        try:
+            import winreg  # type: ignore
+
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Cryptography",
+            ) as key:
+                guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+            guid = str(guid or "").strip()
+            if guid:
+                value = "mw" + hashlib.sha256(guid.encode("utf-8")).hexdigest()[:48]
                 _MACHINE_INSTANCE_ID_CACHE = value
                 return value
         except Exception:

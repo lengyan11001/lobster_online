@@ -20,5 +20,5 @@ def test_desktop_api_exposes_text_save_dialog_and_cache_key_is_current():
 
     assert "def save_text_file(self, suggested_name: str, content: str) -> dict:" in launcher
     assert "webview.SAVE_DIALOG" in launcher
-    assert "20260826-memory-download-bridge-v1" in registry
-    assert "20260826-memory-download-bridge-v1" in index
+    assert "20260831-personal-settings-load-v1" in registry
+    assert "20260831-personal-settings-load-v1" in index

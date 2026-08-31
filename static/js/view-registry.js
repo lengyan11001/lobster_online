@@ -29,7 +29,7 @@
 
   window.registerLobsterView('personal-settings', {
     html: '/static/views/personal-settings.html?v=20260824-personal-digital-resource-picker-v2',
-    scripts: '/static/js/personal-settings.js?v=20260826-memory-download-bridge-v1',
+    scripts: '/static/js/personal-settings.js?v=20260831-personal-settings-load-v1',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
