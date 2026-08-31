@@ -1,7 +1,7 @@
 {
-  "version": "2.0.1",
-  "build": 278,
-  "applied_at": "2026-08-31T10:28:55+08:00",
-  "note": "personal settings loading and source_url preview",
-  "bundle_sha256": "d36ef3cb3f2ace32dcecebadd34a0638ad72bfb7c56c28a3bcd42e18bd3b6eea"
+  "version": "2.0.2",
+  "build": 279,
+  "applied_at": "2026-08-31T11:21:57+08:00",
+  "note": "installation slot migration and personal settings",
+  "bundle_sha256": "2d57f3292a8c2fccc027abe53ad96e75f3e4d9ffea8b7ed9f7c36e5346ca8a80"
 }
