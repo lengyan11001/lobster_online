@@ -15687,43 +15687,33 @@ async def douyin_get_self_videos(account_id: int = 0, max_videos: int = 12):
     if not await asyncio.to_thread(client.launch_browser, "https://www.douyin.com/user/self?from_tab_name=main"):
         return {"code": 500, "msg": f"账号 {account['id']} 浏览器启动失败，无法采集自己的视频列表。"}
 
-    login_probe = await probe_douyin_account_login_state(account)
-    probe_state = str(login_probe.get("state") or "unknown")
-    is_logged_in = probe_state == "online"
-    if probe_state in {"online", "waiting"}:
-        account["status"] = "online" if is_logged_in else "waiting"
-        config["douyin_accounts"] = accounts
-        save_global_config(config)
-
-    if not is_logged_in:
-        if probe_state == "unknown":
+    scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    try:
+        # The @-comment action immediately opens this same page to read a
+        # target video.  Do not first open another /user/self page merely to
+        # probe login: its own browser/CDP/page setup can consume the full
+        # probe deadline and incorrectly block a working account.  The real
+        # page operation checks for a visible login intercept itself.
+        try:
+            result = await scraper.scrape_self_videos(
+                max_videos=max_videos,
+                logger=douyin_log,
+            )
+        except RuntimeError as exc:
+            message = str(exc or "").strip()
+            if "登录拦截" not in message and "未登录" not in message and "登录态已失效" not in message:
+                raise
+            account["status"] = "waiting"
+            config["douyin_accounts"] = accounts
+            save_global_config(config)
             return {
-                "code": 503,
-                "type": "account_status_unknown",
-                "msg": f"账号 {account['id']} 登录状态暂时无法确认，请稍后重试",
-                "probe_state": probe_state,
-                "probe": login_probe,
+                "code": 400,
+                "type": "account_waiting_login",
+                "msg": f"账号 {account['id']} 浏览器已打开，但尚未完成登录，请先扫码登录后再刷新。",
                 "account": account,
                 "videos": [],
                 "profile": {},
             }
-        return {
-            "code": 400,
-            "type": "account_waiting_login",
-            "msg": f"账号 {account['id']} 浏览器已打开，但尚未完成登录，请先扫码登录后再刷新。",
-            "account": account,
-            "videos": [],
-            "profile": {},
-            "probe_state": probe_state,
-            "probe": login_probe,
-        }
-
-    scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
-    try:
-        result = await scraper.scrape_self_videos(
-            max_videos=max_videos,
-            logger=douyin_log,
-        )
     finally:
         await scraper.close()
 

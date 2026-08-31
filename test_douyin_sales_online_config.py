@@ -134,6 +134,68 @@ def test_visible_message_composer_skips_hidden_stale_controls():
     assert send_button is visible_send
 
 
+def test_self_video_load_skips_transient_login_probe_and_uses_real_page(monkeypatch):
+    config = {
+        "douyin_accounts": [{"id": 1, "port": 9332, "status": "online"}],
+        "douyin_default_account_id": 1,
+    }
+    calls = []
+
+    class _FakeScraper:
+        def __init__(self, **kwargs):
+            calls.append(("init", kwargs))
+
+        async def scrape_self_videos(self, **kwargs):
+            calls.append(("scrape", kwargs))
+            return {"profile": {"username": "测试账号"}, "videos": [{"url": "https://www.douyin.com/video/1"}]}
+
+        async def close(self):
+            calls.append(("close", {}))
+
+    monkeypatch.setattr(douyin_api, "load_global_config", lambda: config)
+    monkeypatch.setattr(douyin_api, "save_global_config", lambda _config: (_ for _ in ()).throw(AssertionError("unexpected config save")))
+    monkeypatch.setattr(douyin_api, "save_douyin_mention_self_video_cache", lambda: None)
+    monkeypatch.setattr(douyin_api.DouyinClient, "launch_browser", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(douyin_api, "probe_douyin_account_login_state", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("login probe must not run")))
+    monkeypatch.setattr(douyin_api, "DouyinCommentScraper", _FakeScraper)
+
+    result = asyncio.run(douyin_api.douyin_get_self_videos(account_id=1, max_videos=6))
+
+    assert result["code"] == 200
+    assert result["videos"] == [{"url": "https://www.douyin.com/video/1"}]
+    assert [item[0] for item in calls] == ["init", "scrape", "close"]
+
+
+def test_self_video_load_marks_waiting_only_for_visible_login_intercept(monkeypatch):
+    config = {
+        "douyin_accounts": [{"id": 1, "port": 9332, "status": "online"}],
+        "douyin_default_account_id": 1,
+    }
+    saved = []
+
+    class _FakeScraper:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def scrape_self_videos(self, **_kwargs):
+            raise RuntimeError("当前抖音浏览器未登录，或登录态已失效，页面出现登录拦截")
+
+        async def close(self):
+            pass
+
+    monkeypatch.setattr(douyin_api, "load_global_config", lambda: config)
+    monkeypatch.setattr(douyin_api, "save_global_config", lambda value: saved.append(value))
+    monkeypatch.setattr(douyin_api.DouyinClient, "launch_browser", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(douyin_api, "DouyinCommentScraper", _FakeScraper)
+
+    result = asyncio.run(douyin_api.douyin_get_self_videos(account_id=1, max_videos=6))
+
+    assert result["code"] == 400
+    assert result["type"] == "account_waiting_login"
+    assert config["douyin_accounts"][0]["status"] == "waiting"
+    assert saved == [config]
+
+
 def test_precise_touch_persists_each_direct_message_result(monkeypatch):
     selected_users = [
         {"username": "成功用户", "profile_url": "https://www.douyin.com/user/success"},

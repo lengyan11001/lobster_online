@@ -1,7 +1,7 @@
 {
-  "version": "2.0.2",
-  "build": 281,
-  "applied_at": "2026-08-31T17:40:59+08:00",
-  "note": "WeChat duplicate reply fix and mixer workflow",
-  "bundle_sha256": "d8a2c267f5e7c2a4c6a35948d4900e9003b156037251eaa416835e5b7b4b0852"
+  "version": "2.0.3",
+  "build": 282,
+  "applied_at": "2026-08-31T20:46:37+08:00",
+  "note": "Fix Douyin multi-action login probe",
+  "bundle_sha256": "41a8bae95e909979b7d5f2023cfdd35b55aff6f8bec860f44029def1cc73570b"
 }
