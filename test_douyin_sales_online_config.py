@@ -328,6 +328,71 @@ def test_precise_touch_persists_each_direct_message_result(monkeypatch):
     assert result["stats"]["failed"] == 1
 
 
+def test_precise_touch_skips_known_unavailable_users_but_retries_generic_failures(monkeypatch):
+    unavailable_user = {
+        "username": "deleted-user",
+        "profile_url": "https://www.douyin.com/user/deleted-user",
+        "is_high_intent": True,
+    }
+    retryable_user = {
+        "username": "retry-user",
+        "profile_url": "https://www.douyin.com/user/retry-user",
+        "is_high_intent": True,
+    }
+    unavailable_key = douyin_api.precise_customer_touch_identity_key(unavailable_user)
+    retryable_key = douyin_api.precise_customer_touch_identity_key(retryable_user)
+    monkeypatch.setattr(
+        douyin_api,
+        "build_combined_douyin_customer_pools",
+        lambda: ([], [dict(unavailable_user), dict(retryable_user)]),
+    )
+    monkeypatch.setattr(
+        douyin_api,
+        "douyin_precise_touch_state",
+        {
+            unavailable_key: {
+                "direct_message": {
+                    "status": "failed",
+                    "error": "用户不存在：该抖音主页已失效或已被删除",
+                }
+            },
+            retryable_key: {
+                "direct_message": {
+                    "status": "failed",
+                    "error": "页面输入框未出现",
+                }
+            },
+        },
+    )
+
+    users = douyin_api.collect_douyin_precise_touch_users(
+        action="direct_message",
+        limit=10,
+    )
+
+    assert [row["username"] for row in users] == ["retry-user"]
+
+
+def test_precise_touch_persists_confirmed_missing_account_as_unavailable(monkeypatch):
+    user = {
+        "username": "deleted-user",
+        "profile_url": "https://www.douyin.com/user/deleted-user",
+    }
+    key = douyin_api.precise_customer_touch_identity_key(user)
+    monkeypatch.setattr(douyin_api, "douyin_precise_touch_state", {})
+    monkeypatch.setattr(douyin_api, "save_douyin_precise_touch_state", lambda: None)
+    monkeypatch.setattr(douyin_api, "save_douyin_tasks_state", lambda: None)
+
+    douyin_api.update_douyin_precise_touch_users(
+        [user],
+        action="direct_message",
+        status="failed",
+        error="用户不存在：该抖音主页已失效或已被删除，无法发送私信",
+    )
+
+    assert douyin_api.douyin_precise_touch_state[key]["direct_message"]["status"] == "unavailable"
+
+
 def test_precise_touch_busy_launch_reports_not_started_without_stale_success(monkeypatch):
     selected_users = [
         {

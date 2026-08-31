@@ -119,6 +119,7 @@ DOUYIN_PRECISE_TOUCH_ACTIONS = ("follow_comment", "mention_comment", "direct_mes
 DOUYIN_COLLECTION_REPLY_ACTION = "reply_comments"
 DOUYIN_PRECISE_TOUCH_DONE_STATUSES = {
     "completed",
+    "unavailable",
 }
 DOUYIN_PRECISE_TOUCH_INFLIGHT_STATUSES = {
     "queued",
@@ -3153,6 +3154,32 @@ def precise_customer_touch_identity_key(row: Dict) -> str:
     return precise_customer_pool_key(source)
 
 
+def is_douyin_precise_touch_unavailable_error(error: object) -> bool:
+    """Whether an error confirms that a target account cannot be contacted.
+
+    Keep this intentionally narrow. Login, browser, network, rate-limit and
+    ordinary operation failures must remain retryable on the next touch round.
+    """
+    message = str(error or "").strip().lower()
+    if not message:
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "用户不存在",
+            "账号不存在",
+            "用户已注销",
+            "账号已注销",
+            "主页已失效",
+            "主页已被删除",
+            "抖音主页已失效",
+            "抖音主页已被删除",
+            "user not found",
+            "account not found",
+        )
+    )
+
+
 def _normalize_douyin_precise_touch_action_state(raw_value: object) -> Dict[str, object]:
     value = raw_value if isinstance(raw_value, dict) else {}
     return {
@@ -3194,6 +3221,36 @@ def _is_douyin_precise_touch_action_inflight(state: object) -> bool:
     return status in DOUYIN_PRECISE_TOUCH_INFLIGHT_STATUSES
 
 
+def _is_douyin_precise_touch_user_unavailable(row: Dict) -> bool:
+    """Return true when any action has confirmed the target no longer exists."""
+    key = precise_customer_touch_identity_key(row if isinstance(row, dict) else {})
+    action_state = douyin_precise_touch_state.get(key, {}) if key else {}
+    if not action_state and isinstance(row, dict):
+        action_state = douyin_precise_touch_state.get(precise_customer_pool_key(row), {})
+    if isinstance(action_state, dict):
+        for state in action_state.values():
+            normalized = _normalize_douyin_precise_touch_action_state(state)
+            if str(normalized.get("status") or "").strip().lower() == "unavailable":
+                return True
+            if is_douyin_precise_touch_unavailable_error(normalized.get("error")):
+                return True
+
+    # Existing rows written before the dedicated touch-state store should be
+    # protected too. This prevents a historical confirmed deletion from being
+    # retried merely because the client has upgraded.
+    if isinstance(row, dict):
+        return any(
+            is_douyin_precise_touch_unavailable_error(row.get(field))
+            for field in (
+                "interaction_error",
+                "follow_comment_error",
+                "mention_comment_error",
+                "reply_comments_error",
+            )
+        )
+    return False
+
+
 def apply_douyin_precise_touch_state(rows: List[Dict]) -> None:
     for row in rows or []:
         if not isinstance(row, dict):
@@ -3224,6 +3281,7 @@ def apply_douyin_precise_touch_state(rows: List[Dict]) -> None:
             row[f"{prefix}_finished_at"] = action_state_value.get("finished_at", "")
             row[f"{prefix}_updated_at"] = action_state_value.get("updated_at", "")
         row["precise_touch_statuses"] = normalized_state
+        row["precise_touch_unavailable"] = _is_douyin_precise_touch_user_unavailable(row)
         row["precise_touch_completed_actions"] = [
             action for action, state in normalized_state.items() if str(state.get("status") or "").strip().lower() == "completed"
         ]
@@ -3233,12 +3291,16 @@ def apply_douyin_precise_touch_state(rows: List[Dict]) -> None:
         row["precise_touch_inflight_actions"] = [
             action for action, state in normalized_state.items() if _is_douyin_precise_touch_action_inflight(state)
         ]
-        row["precise_touch_pending_actions"] = [
-            action
-            for action in DOUYIN_PRECISE_TOUCH_ACTIONS
-            if not _is_douyin_precise_touch_action_done(normalized_state.get(action, {}))
-            and not _is_douyin_precise_touch_action_inflight(normalized_state.get(action, {}))
-        ]
+        row["precise_touch_pending_actions"] = (
+            []
+            if row["precise_touch_unavailable"]
+            else [
+                action
+                for action in DOUYIN_PRECISE_TOUCH_ACTIONS
+                if not _is_douyin_precise_touch_action_done(normalized_state.get(action, {}))
+                and not _is_douyin_precise_touch_action_inflight(normalized_state.get(action, {}))
+            ]
+        )
 
 
 def _sort_douyin_precise_touch_users(row: Dict) -> tuple[int, float, str]:
@@ -4523,6 +4585,8 @@ def collect_douyin_precise_touch_users(
         key = precise_customer_touch_identity_key(row)
         if not key or key in seen:
             continue
+        if _is_douyin_precise_touch_user_unavailable(row):
+            continue
         if action_key:
             state = _get_douyin_precise_touch_action_state(row, action_key)
             if _is_douyin_precise_touch_action_done(state) or _is_douyin_precise_touch_action_inflight(state):
@@ -4549,6 +4613,8 @@ def update_douyin_precise_touch_users(
 ) -> int:
     action_key = str(action or "").strip().lower()
     status_value = str(status or "").strip().lower() or "pending"
+    if status_value == "failed" and is_douyin_precise_touch_unavailable_error(error):
+        status_value = "unavailable"
     if not action_key:
         return 0
     keys = {
