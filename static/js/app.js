@@ -96,6 +96,12 @@ function getLobsterBrandMark() {
     window.__LOBSTER_BRAND_MARK || localStorage.getItem('lobster_active_brand_mark') || 'bihuo'
   );
 }
+// Some OEMs use an operator-provided balance and must not expose self-service recharge.
+function isLobsterRechargeHiddenForBrand() {
+  var mark = getLobsterBrandMark();
+  return mark === 'daka' || mark === 'jinghai';
+}
+window.isLobsterRechargeHiddenForBrand = isLobsterRechargeHiddenForBrand;
 function lobsterTokenStorageKey(mark) {
   return 'token:' + normalizeLobsterBrandMark(mark || getLobsterBrandMark());
 }
@@ -699,6 +705,8 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
 })();
 
 var token = getStoredAuthToken();
+// The task center must wait for /auth/me to validate this token.
+window.__lobsterAuthReady = false;
 var currentView = 'chat';
 /** 在线版前端，默认连 lobster_server（注册/登录在 server 上） */
 var EDITION = 'online';

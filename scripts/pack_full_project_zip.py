@@ -6,6 +6,7 @@ Paths inside the zip: <proj>/<relative path from proj root>.
 from __future__ import annotations
 
 import fnmatch
+import json
 import argparse
 import os
 import sys
@@ -102,6 +103,32 @@ REMOVED_3D_SCRIPT_NAMES = {
     "trimesh.exe",
 }
 
+# Retired client skills.  Keep their server-side compatibility code available,
+# but do not ship obsolete workbench payloads in a fresh desktop package.
+RETIRED_SKILL_DIRS = (
+    "skills/browser_use_skill/",
+    "skills/computer_use_skill/",
+    "skills/media_edit/",
+)
+
+PACKAGED_RETIRED_PACKAGE_IDS = frozenset({
+    "browser_use_skill",
+    "computer_use_skill",
+    "media_edit_skill",
+    "ecommerce_publish_skill",
+    "__retired_browser_use_skill",
+    "__retired_computer_use_skill",
+})
+
+
+def _packaged_skill_registry(path: Path) -> bytes:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    packages = payload.get("packages")
+    if isinstance(packages, dict):
+        for pkg_id in PACKAGED_RETIRED_PACKAGE_IDS:
+            packages.pop(pkg_id, None)
+    return (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
 
 def should_exclude(proj: str, rel_posix: str, *, factory_oem: bool = False) -> bool:
     """rel_posix: relative path under project root, forward slashes, no leading slash."""
@@ -117,6 +144,18 @@ def should_exclude(proj: str, rel_posix: str, *, factory_oem: bool = False) -> b
 
     root_name = parts[0] if len(parts) == 1 else None
     lower_rel = rel_posix.lower()
+
+    # OpenClaw Gateway/runtime is retired.  Keep only portable node.exe in a
+    # full package; the Douyin protocol carries its own jsrsasign dependency.
+    if lower_rel == "openclaw" or lower_rel.startswith("openclaw/"):
+        return True
+    if lower_rel == "nodejs/node_modules" or lower_rel.startswith("nodejs/node_modules/"):
+        return True
+    if lower_rel == "nodejs/.openclaw" or lower_rel.startswith("nodejs/.openclaw/"):
+        return True
+
+    if lower_rel.startswith(RETIRED_SKILL_DIRS):
+        return True
 
     if parts[-1].lower() == "machine_identity.json":
         return True
@@ -373,7 +412,10 @@ def main() -> int:
                 if should_exclude(proj, rel_posix, factory_oem=args.factory_oem):
                     continue
                 arcname = f"{proj}/{rel_posix}"
-                zf.write(full, arcname, compress_type=zipfile.ZIP_DEFLATED)
+                if rel_posix == "skill_registry.json":
+                    zf.writestr(arcname, _packaged_skill_registry(full), compress_type=zipfile.ZIP_DEFLATED)
+                else:
+                    zf.write(full, arcname, compress_type=zipfile.ZIP_DEFLATED)
                 count += 1
 
     print(f"pack_full_project_zip.py: added {count} files -> {out_zip}")

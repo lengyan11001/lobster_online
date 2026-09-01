@@ -31,7 +31,7 @@ _TEMP_DIR = _BASE_DIR / "temp_assets" / "msghelper_wechat"
 _TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 _TOKEN_CACHE: Dict[str, Any] = {"token": "", "expires_at": 0.0}
-_UI_AUTH_CACHE: Dict[str, Any] = {"auth": {}, "expires_at": 0.0}
+_UI_AUTH_CACHE: Dict[str, Any] = {"auth": {}, "expires_at": 0.0, "file_signature": ()}
 _SECRET_KEYS = {
     "authorization",
     "accesstoken",
@@ -197,14 +197,27 @@ def _read_msghelper_ui_auth(force: bool = False) -> Dict[str, str]:
         "expires_time": "",
     }
     leveldb = _msghelper_leveldb_dir()
+    file_signature: tuple[tuple[str, int, int], ...] = ()
     if leveldb.exists():
         try:
-            files = sorted(
-                [p for p in leveldb.glob("*") if p.suffix.lower() in {".log", ".ldb"}],
-                key=lambda p: p.stat().st_mtime if p.exists() else 0,
+            candidate_files = [
+                p for p in leveldb.glob("*") if p.suffix.lower() in {".log", ".ldb"}
+            ]
+            files = sorted(candidate_files, key=lambda p: p.stat().st_mtime if p.exists() else 0)
+            file_signature = tuple(
+                (str(path), int(path.stat().st_mtime_ns), int(path.stat().st_size))
+                for path in files
+                if path.exists()
             )
         except Exception:
             files = []
+            file_signature = ()
+        if (
+            not force
+            and file_signature == tuple(_UI_AUTH_CACHE.get("file_signature") or ())
+        ):
+            _UI_AUTH_CACHE["expires_at"] = now + 15
+            return dict(cached)
         for path in files:
             try:
                 blob = path.read_bytes()
@@ -218,7 +231,11 @@ def _read_msghelper_ui_auth(force: bool = False) -> Dict[str, str]:
     if auth.get("tenant_id") and auth.get("user_id") and (auth.get("access_token") or auth.get("refresh_token")):
         _UI_AUTH_CACHE["auth"] = dict(auth)
         _UI_AUTH_CACHE["expires_at"] = now + 15
+        _UI_AUTH_CACHE["file_signature"] = file_signature
         return auth
+    _UI_AUTH_CACHE["auth"] = {}
+    _UI_AUTH_CACHE["expires_at"] = now + 15
+    _UI_AUTH_CACHE["file_signature"] = file_signature
     return {}
 
 

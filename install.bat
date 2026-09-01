@@ -381,6 +381,8 @@ echo.
 
 REM Step 4: Check OpenClaw + bundled plugins (e.g. @tencent-weixin/openclaw-weixin)
 echo [4/7] Checking OpenClaw...
+echo   [SKIP] OpenClaw Gateway and the retired WeChat plugin are not installed.
+goto :oc_retired
 if not "%NODE_OK%"=="1" (
     echo   [SKIP] No Node.js available
     goto :oc_done
@@ -429,10 +431,16 @@ if exist "node_modules\openclaw" echo   [OK] OpenClaw installed
 :oc_done
 echo.
 
+:oc_retired
+echo.
+goto :skip_openclaw_setup
+
 REM Step 5: Configure OpenClaw Gateway
 echo [5/7] Configuring OpenClaw Gateway...
 "%PYTHON%" "scripts\setup_openclaw.py"
 echo.
+
+:skip_openclaw_setup
 
 REM Step 6: Optional Playwright Chromium
 echo [6/7] Checking optional Playwright browser...

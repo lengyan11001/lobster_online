@@ -60,6 +60,7 @@ try:
 except Exception as _e:
     pass  # 无写权限等则仅控制台输出
 _logger = logging.getLogger("backend.run")
+_MCP_LOG_HANDLES: list[object] = []
 
 import uvicorn
 from backend.app.core.config import settings
@@ -87,10 +88,6 @@ def _start_mcp_if_needed():
                 mcp_root = _parent
                 _logger.info("[启动] MCP 自启：mcp 在上一级 %s", mcp_root)
         mcp_log_path = os.path.join(mcp_root, "mcp.log")
-        try:
-            _mcp_log = open(mcp_log_path, "a", encoding="utf-8")
-        except Exception:
-            _mcp_log = subprocess.DEVNULL
         _cmd = (
             "import sys; sys.path.insert(0, %s); sys.argv = ['mcp', '--port', '%s']; "
             "import runpy; runpy.run_module('mcp', run_name='__main__', alter_sys=True)"
@@ -119,14 +116,39 @@ def _start_mcp_if_needed():
             "AI_TEST_PLATFORM_BASE_URL",
             (os.environ.get("AI_TEST_PLATFORM_BASE_URL") or "").strip() or f"http://127.0.0.1:{_py_port}",
         )
-        subprocess.Popen(
-            [sys.executable, "-c", _cmd],
-            cwd=mcp_root,
-            env=_mcp_env,
-            stdout=_mcp_log,
-            stderr=subprocess.STDOUT if _mcp_log != subprocess.DEVNULL else subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        rotating_runner = os.path.join(_root, "scripts", "rotating_log_runner.py")
+        if os.path.isfile(rotating_runner):
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    rotating_runner,
+                    "--log",
+                    mcp_log_path,
+                    "--",
+                    sys.executable,
+                    "-c",
+                    _cmd,
+                ],
+                cwd=mcp_root,
+                env=_mcp_env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        else:
+            # Compatibility with an old install that has not received the
+            # helper yet; the next OTA/startup will switch to bounded logs.
+            mcp_log = open(mcp_log_path, "a", encoding="utf-8")
+            _MCP_LOG_HANDLES.append(mcp_log)
+            subprocess.Popen(
+                [sys.executable, "-c", _cmd],
+                cwd=mcp_root,
+                env=_mcp_env,
+                stdout=mcp_log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
         time.sleep(0.8)
         _logger.info("[启动] MCP 已自启，端口 %s (日志 %s)", mcp_port, mcp_log_path)
     except Exception as e:

@@ -34,6 +34,14 @@
     cache: 'reload'
   });
 
+  window.registerLobsterView('douyin-information-desk', {
+    html: '/static/views/douyin-information-desk.html?v=20260901-douyin-platform-desk-v2',
+    css: '/static/css/douyin-information-desk.css?v=20260901-douyin-platform-desk-v2',
+    scripts: '/static/js/douyin-information-desk.js?v=20260901-douyin-platform-desk-v2',
+    init: 'initDouyinInformationDeskView',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('production', {
     html: '/static/views/production.html',
     scripts: '/static/js/views/production.js?v=20260528-view-split'
@@ -139,7 +147,7 @@
 
   window.registerLobsterView('billing', {
     html: '/static/views/billing.html',
-    scripts: '/static/js/views/billing.js?v=20260528-view-split'
+    scripts: '/static/js/views/billing.js?v=20260901-oem-recharge-gate-v1'
   });
 
   window.registerLobsterView('sys-config', {
@@ -164,9 +172,9 @@
   });
 
   window.registerLobsterView('multi-clip-mixer', {
-    html: '/static/views/multi-clip-mixer.html?v=20260831-mixer-history-v3',
-    css: '/static/css/multi-clip-mixer.css?v=20260831-history-v2',
-    scripts: '/static/js/multi-clip-mixer.js?v=20260831-mixer-history-v3',
+    html: '/static/views/multi-clip-mixer.html?v=20260831-mixer-history-v5',
+    css: '/static/css/multi-clip-mixer.css?v=20260831-history-v4',
+    scripts: '/static/js/multi-clip-mixer.js?v=20260831-mixer-history-v5',
     init: 'initMultiClipMixerView',
     cache: 'reload'
   });

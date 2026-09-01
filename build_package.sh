@@ -101,6 +101,9 @@ fi
 
 # Step 5: Pre-install OpenClaw + plugins from nodejs/package.json（制包机须有 npm；便携 node.exe 无法在 macOS/Linux 上执行，故用系统 npm --prefix）
 # 已有 openclaw 且已有微信插件则跳过，避免无谓 npm 与 Windows EBUSY
+if false; then
+  # OpenClaw and the retired WeChat plugin are intentionally not installed.
+  # Keep the legacy block below unreachable for old checkouts.
 if [ ! -f "nodejs/package.json" ]; then
     echo "[ERR] 缺少 nodejs/package.json，无法预装 OpenClaw 依赖"
     exit 1
@@ -167,6 +170,8 @@ OCEOF
     echo "  [√] OpenClaw 配置模板就绪"
 else
     echo "[6] OpenClaw 配置已存在，跳过"
+fi
+
 fi
 
 # Step 7: Init .env if not exists

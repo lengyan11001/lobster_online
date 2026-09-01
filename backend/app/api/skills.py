@@ -20,6 +20,14 @@ router = APIRouter()
 _BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
 _SKILL_STORE_ADMIN_CACHE: dict[str, tuple[float, bool]] = {}
 _SKILL_STORE_ADMIN_CACHE_TTL_SEC = 120.0
+RETIRED_PACKAGE_IDS = frozenset({
+    "browser_use_skill",
+    "computer_use_skill",
+    "media_edit_skill",
+    "ecommerce_publish_skill",
+    "__retired_browser_use_skill",
+    "__retired_computer_use_skill",
+})
 
 
 def _load_registry() -> dict:
@@ -128,6 +136,8 @@ async def list_store(request: Request):
     for pkg_id, pkg in packages.items():
         if not isinstance(pkg, dict):
             continue
+        if pkg_id in RETIRED_PACKAGE_IDS:
+            continue
         if not _package_visible_in_store(pkg, is_admin):
             continue
         out.append({
@@ -178,6 +188,8 @@ async def install_skill(
     package = packages.get(body.package_id)
     if not package:
         raise HTTPException(status_code=404, detail=f"技能包 {body.package_id} 不存在")
+    if body.package_id in RETIRED_PACKAGE_IDS:
+        raise HTTPException(status_code=410, detail="该技能已退役")
     if package.get("status") == "coming_soon":
         raise HTTPException(status_code=400, detail="该技能包即将推出，暂不可安装")
 

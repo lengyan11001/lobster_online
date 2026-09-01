@@ -1,5 +1,6 @@
 """系统日志只读接口：GET /api/logs 返回 lobster/logs/app.log 末尾内容，供「日志」Tab 查看。"""
 import asyncio
+from collections import deque
 import io
 import json
 import logging
@@ -32,14 +33,19 @@ _DIAGNOSTIC_CONFIG_BYTES = 256 * 1024
 
 _LOG_CANDIDATES = [
     "logs/app.log",
+    "logs/app.log.1",
     "logs/native_wechat_diagnostics.jsonl",
+    "logs/native_wechat_diagnostics.jsonl.1",
     "logs/native_wechat_auto_reply.jsonl",
+    "logs/native_wechat_auto_reply.jsonl.1",
     "app.log",
     "backend.log",
+    "backend.log.1",
     "backend_err.log",
     "backend_stdout.log",
     "backend_stderr.log",
     "mcp.log",
+    "mcp.log.1",
     "openclaw.log",
     "openclaw_err.log",
     "openclaw_stdout.log",
@@ -47,6 +53,7 @@ _LOG_CANDIDATES = [
     "openclaw_stderr2.log",
     "launcher.log",
     "desktop_launcher.log",
+    "desktop_launcher.log.1",
 ]
 _CONFIG_CANDIDATES = [
     ".env",
@@ -76,13 +83,14 @@ def _read_log_tail(path: Path, tail: int) -> tuple[str, int]:
         return "", 0
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
+            lines = deque(maxlen=max(1, int(tail)))
+            total = 0
+            for line in f:
+                total += 1
+                lines.append(line)
     except OSError:
         return "", 0
-    n = len(lines)
-    if n > tail:
-        lines = lines[-tail:]
-    return "".join(lines), n
+    return "".join(lines), total
 
 
 def _utc_iso() -> str:

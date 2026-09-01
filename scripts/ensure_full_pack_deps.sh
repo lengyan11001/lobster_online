@@ -29,7 +29,8 @@ echo "==> [full-offline] 3/3 verify_offline_wheels.py"
 echo "==> [full-offline] wheels 校验通过"
 
 # OpenClaw + 微信插件须已在 nodejs/node_modules（由仓库根目录 build_package.sh 的 npm ci/install 写入）
-if [ ! -d "$ROOT/nodejs/node_modules/openclaw" ] || [ ! -d "$ROOT/nodejs/node_modules/@tencent-weixin/openclaw-weixin" ]; then
+echo "==> [full-offline] OpenClaw 已退役；跳过根 node_modules 检查"
+if false; then
   echo "[ERR] 缺少 nodejs 预装依赖：需要 nodejs/node_modules/openclaw 与 @tencent-weixin/openclaw-weixin"
   echo "      请在仓库根目录执行: bash build_package.sh（制包机需已安装 npm）"
   exit 1

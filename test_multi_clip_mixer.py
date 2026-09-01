@@ -132,7 +132,7 @@ def test_template_title_is_entered_before_random_or_specific_template_selection(
     assert "function overlayTextsWithTemplateTitle(item, values)" in script
     assert "var title = normalizeShanjianTitle(templateTitleValue());" in script
     assert "title: templateTitleValue() ||" in script
-    assert "multi-clip-mixer.js?v=20260831-mixer-history-v3" in registry
+    assert "multi-clip-mixer.js?v=20260831-mixer-history-v5" in registry
 
 
 def test_random_music_and_template_mode_hides_specific_choices():
@@ -161,10 +161,13 @@ def test_multi_clip_history_persists_batches_and_supports_batch_actions():
     assert "function historyStorageKey()" in script
     assert "getCurrentUserIdFromToken" in script
     assert "function saveActiveHistoryBatch(completed)" in script
-    assert "function downloadVideoUrls(urls, prefix)" in script
     assert "function copyVideoUrls(urls)" in script
-    assert "data-batch-action=\"download\"" in script
     assert "data-history-action=\"copy\"" in script
+    assert "data-history-action=\"toggle\"" in script
+    assert "state.historyExpanded[batch.id] === true" in script
+    assert "(expanded ? '' : ' hidden')" in script
+    assert "historySelectedUrls(batch)" in script
+    assert "批量下载" not in script
     assert 'id="mcmHistoryToggleBtn"' in view
     assert 'id="mcmHistoryList"' in view
     assert ".mcm-history-item" in styles

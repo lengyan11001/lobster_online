@@ -238,7 +238,7 @@
         if (balRow) balRow.style.background = enough ? '#f0fdf4' : '#fef2f2';
         if (!enough) {
           if (hint) hint.textContent = '算力不足，请先充值后再提交。差 ' + (credits - balance) + ' 算力。';
-          if (rechargeBtn) rechargeBtn.style.display = '';
+          if (rechargeBtn && !(typeof window.isLobsterRechargeHiddenForBrand === 'function' && window.isLobsterRechargeHiddenForBrand())) rechargeBtn.style.display = '';
           if (ok) { ok.disabled = true; ok.style.opacity = '0.5'; ok.style.cursor = 'not-allowed'; }
         } else {
           if (hint) hint.textContent = '余额充足，扣减后剩余 ' + (balance - credits) + ' 算力。';

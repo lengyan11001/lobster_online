@@ -2506,6 +2506,7 @@
 
   function openRechargeFromCreditWarning() {
     closeCreditWarning();
+    if (typeof window.isLobsterRechargeHiddenForBrand === 'function' && window.isLobsterRechargeHiddenForBrand()) return;
     var rechargeUrl = (typeof RECHARGE_URL !== 'undefined' && RECHARGE_URL) ? String(RECHARGE_URL) : '';
     if (rechargeUrl && rechargeUrl !== '#') {
       try {
@@ -3186,6 +3187,9 @@
       if (btn) btn.addEventListener('click', closeCreditWarning);
     });
     var creditRechargeBtn = $('seedanceCreditModalRecharge');
+    if (creditRechargeBtn && typeof window.isLobsterRechargeHiddenForBrand === 'function' && window.isLobsterRechargeHiddenForBrand()) {
+      creditRechargeBtn.style.display = 'none';
+    }
     if (creditRechargeBtn) creditRechargeBtn.addEventListener('click', openRechargeFromCreditWarning);
     var creditModal = $('seedanceCreditModal');
     if (creditModal) {

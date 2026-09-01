@@ -259,6 +259,8 @@ set "NODE_OK=1"
 echo.
 
 echo [4/7] OpenClaw...
+echo   [SKIP] OpenClaw Gateway and the retired WeChat plugin are not installed.
+goto :oc_retired
 if not "%NODE_OK%"=="1" goto :oc_done
 if exist "nodejs\node_modules\openclaw" goto :oc_done
 if exist "node_modules\openclaw" goto :oc_done
@@ -285,9 +287,15 @@ if exist "nodejs\node.exe" (
 :oc_done
 echo.
 
+:oc_retired
+echo.
+goto :skip_openclaw_setup
+
 echo [5/7] Configuring OpenClaw Gateway...
 %PYTHON% scripts\setup_openclaw.py
 echo.
+
+:skip_openclaw_setup
 
 echo [6/7] Playwright Chromium...
 if exist "browser_chromium" (

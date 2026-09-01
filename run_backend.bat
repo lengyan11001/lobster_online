@@ -61,6 +61,10 @@ exit /b 0
 :python_ready
 cd /d "%ROOT%"
 set "PYTHONPATH=%ROOT%"
-"%PY%" backend\run.py 1>>backend.log 2>&1
+if exist "%ROOT%\scripts\rotating_log_runner.py" (
+    "%PY%" "%ROOT%\scripts\rotating_log_runner.py" --log "%ROOT%\backend.log" -- "%PY%" "%ROOT%\backend\run.py"
+) else (
+    "%PY%" "%ROOT%\backend\run.py" 1>>"%ROOT%\backend.log" 2>&1
+)
 
 

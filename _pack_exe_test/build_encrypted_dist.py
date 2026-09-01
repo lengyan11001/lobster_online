@@ -17,6 +17,7 @@ Lobster 加密打包构建脚本
 from __future__ import annotations
 
 import compileall
+import json
 import os
 import platform
 import py_compile
@@ -72,7 +73,6 @@ DIRS_TO_COPY = [
     "static",
     "publisher",
     "scripts",
-    "openclaw",
     "skills",
 ]
 
@@ -194,6 +194,23 @@ OPENCLAW_SKIP_FILE_NAMES = {
 }
 
 SKILL_RUNTIME_DIR_NAMES = {"runs", "job_runs", "output", "cache"}
+
+# Retired workbench payloads.  Server-side compatibility modules remain in the
+# project, but these obsolete client skills are not copied into distributions.
+RETIRED_SKILL_DIRS = (
+    "skills/browser_use_skill/",
+    "skills/computer_use_skill/",
+    "skills/media_edit/",
+)
+
+PACKAGED_RETIRED_PACKAGE_IDS = frozenset({
+    "browser_use_skill",
+    "computer_use_skill",
+    "media_edit_skill",
+    "ecommerce_publish_skill",
+    "__retired_browser_use_skill",
+    "__retired_computer_use_skill",
+})
 
 REMOVED_3D_WHEEL_PREFIXES = (
     "filelock-",
@@ -331,6 +348,18 @@ def _should_skip_rel(rel_posix: str, *, is_dir: bool, factory_oem: bool = False)
     name = parts[-1]
     lower = rel_posix.lower()
 
+    # OpenClaw Gateway, npm cache and Tencent WeChat plugin are retired.  The
+    # portable node.exe remains available for the Douyin protocol signer.
+    if lower == "openclaw" or lower.startswith("openclaw/"):
+        return True
+    if lower == "nodejs/node_modules" or lower.startswith("nodejs/node_modules/"):
+        return True
+    if lower == "nodejs/.openclaw" or lower.startswith("nodejs/.openclaw/"):
+        return True
+
+    if lower.startswith(RETIRED_SKILL_DIRS):
+        return True
+
     if name in COMMON_SKIP_DIR_NAMES:
         return True
     if name in SKIP_FILES:
@@ -450,7 +479,27 @@ def copy_project(include_runtime: bool = False, *, factory_oem: bool = False):
         else:
             log(f"  [SKIP] 文件不存在: {f}")
 
-    _copy_openclaw_workspace_defaults()
+
+
+def sanitize_staged_skill_registry() -> None:
+    """Remove retired packages from the registry shipped in a distribution."""
+    path = STAGING_DIR / "skill_registry.json"
+    if not path.is_file():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        packages = payload.get("packages")
+        if not isinstance(packages, dict):
+            return
+        removed = [pkg_id for pkg_id in list(packages) if pkg_id in PACKAGED_RETIRED_PACKAGE_IDS]
+        if not removed:
+            return
+        for pkg_id in removed:
+            packages.pop(pkg_id, None)
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        log(f"  registry 已过滤退役技能: {', '.join(sorted(removed))}")
+    except Exception as exc:
+        raise RuntimeError(f"无法清理打包 registry: {exc}") from exc
 
 
 def _openclaw_default_candidates(filename: str) -> list[Path]:
@@ -637,6 +686,7 @@ def main():
     # Step 2: 复制项目文件
     step(2, total_steps, "复制项目文件到 staging")
     copy_project(include_runtime=include_runtime, factory_oem=factory_oem)
+    sanitize_staged_skill_registry()
     size = calculate_size()
     log(f"  复制完成: {size / (1024*1024):.1f} MB")
 

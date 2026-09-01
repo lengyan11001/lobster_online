@@ -77,6 +77,7 @@ _active_scheduled_douyin_actions: Dict[str, str] = {}
 _active_client_workflow_actions: Dict[str, str] = {}
 _scheduled_douyin_precise_touch_claim_lock = asyncio.Lock()
 _SCHEDULED_DOUYIN_IDLE_POLL_SECONDS = 2.0
+_SCHEDULED_DOUYIN_STOP_SETTLE_TIMEOUT_SECONDS = 20.0
 _WORKFLOW_NODE_STOP_TIMEOUT_SECONDS = 8.0
 _WORKFLOW_NODE_CANCEL_GRACE_SECONDS = 8.0
 _NATIVE_WECHAT_BUSY_RETRY_SECONDS = 45.0
@@ -4854,28 +4855,66 @@ async def _wait_for_douyin_sales_action_completion(
         douyin_video_comment_status,
     )
 
-    deadline = asyncio.get_running_loop().time() + max(timeout_seconds, poll_interval_seconds)
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(timeout_seconds, poll_interval_seconds)
     last_snapshot: Dict[str, Any] = {}
-    while True:
+
+    async def read_status() -> Dict[str, Any]:
         if action == "reply_comments":
-            raw = await douyin_video_comment_status()
-        elif action == "mention_comment":
-            raw = await douyin_mention_comment_status()
-        elif action == "follow_comment":
-            raw = await douyin_follow_comment_status(lite=False, include_users=False)
-        elif action == "direct_message":
-            raw = await douyin_interaction_status(lite=False, include_users=False)
-        else:
-            return {"status": "unsupported", "state": {}}
+            return await douyin_video_comment_status()
+        if action == "mention_comment":
+            return await douyin_mention_comment_status()
+        if action == "follow_comment":
+            return await douyin_follow_comment_status(lite=False, include_users=False)
+        if action == "direct_message":
+            return await douyin_interaction_status(lite=False, include_users=False)
+        return {"running": False, "state": {}}
+
+    while True:
+        raw = await read_status()
 
         state = raw.get("state") if isinstance(raw, dict) and isinstance(raw.get("state"), dict) else {}
         last_snapshot = dict(state)
         running = bool(raw.get("running")) if isinstance(raw, dict) else bool(state.get("running"))
         if not running:
-            return {"status": "done", "state": last_snapshot}
-        if asyncio.get_running_loop().time() >= deadline:
+            return {"status": "done", "state": last_snapshot, "runtime_idle": True}
+        if loop.time() >= deadline:
             stop_result = await _stop_douyin_action(action, account_id=account_id)
-            return {"status": "timeout_stopped", "state": last_snapshot, "stop_result": stop_result}
+            # A stop request is asynchronous. Do not let the next workflow
+            # action start while the old local worker still owns the browser.
+            settle_deadline = loop.time() + _SCHEDULED_DOUYIN_STOP_SETTLE_TIMEOUT_SECONDS
+            while loop.time() < settle_deadline:
+                try:
+                    settled = await read_status()
+                except Exception as exc:
+                    logger.debug("[SCHEDULED-TASK] Douyin stop settle poll failed action=%s: %s", action, exc)
+                    settled = {}
+                settled_state = (
+                    settled.get("state")
+                    if isinstance(settled, dict) and isinstance(settled.get("state"), dict)
+                    else {}
+                )
+                if isinstance(settled_state, dict):
+                    last_snapshot = dict(settled_state)
+                if not bool(settled.get("running")):
+                    return {
+                        "status": "timeout_stopped",
+                        "state": last_snapshot,
+                        "stop_result": stop_result,
+                        "runtime_idle": True,
+                    }
+                await asyncio.sleep(min(0.5, max(0.1, poll_interval_seconds)))
+            logger.warning(
+                "[SCHEDULED-TASK] Douyin action did not settle after stop action=%s account_id=%s",
+                action,
+                account_id,
+            )
+            return {
+                "status": "timeout_stop_pending",
+                "state": last_snapshot,
+                "stop_result": stop_result,
+                "runtime_idle": False,
+            }
         await asyncio.sleep(max(0.5, poll_interval_seconds))
 
 
@@ -5198,7 +5237,7 @@ def _scheduled_douyin_completed_result(
     }
     stats = {key: value for key, value in stats.items() if value or key in {"total", "processed", "success", "failed"}}
     label = _SCHEDULED_DOUYIN_ACTION_LABELS.get(action, action)
-    if completion_status in {"timeout", "timeout_stopped"}:
+    if completion_status in {"timeout", "timeout_stopped", "timeout_stop_pending"}:
         summary = (
             f"{label}超过安全等待时间，已请求停止；当前已处理 {stats.get('processed', 0)}/{stats.get('total', 0)}，"
             f"成功 {stats.get('success', 0)}，失败 {stats.get('failed', 0)}。"
@@ -5215,6 +5254,7 @@ def _scheduled_douyin_completed_result(
             "status": completion_status,
             "stats": stats,
             "final_state": dict(state),
+            "runtime_idle": bool(completion.get("runtime_idle", True)),
         }
     )
     if users is not None:
@@ -5329,7 +5369,34 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         # about people touched, so count stable customer identities rather than
         # adding the same person once per action.
         touched_user_keys: set[str] = set()
+        blocked_by_unsettled_action = ""
         for touch_action in touch_actions:
+            if blocked_by_unsettled_action:
+                # Do not claim or mark users for actions that were never
+                # started. They remain available to the next touch round.
+                action_stat = {
+                    "action": touch_action,
+                    "label": _SCHEDULED_DOUYIN_ACTION_LABELS.get(touch_action, touch_action),
+                    "selected": 0,
+                    "processed": 0,
+                    "success": 0,
+                    "failed": 0,
+                    "not_started": 0,
+                    "started": False,
+                    "result_code": 423,
+                    "error": blocked_by_unsettled_action,
+                }
+                action_stats.append(action_stat)
+                results.append(
+                    {
+                        "action": touch_action,
+                        "label": action_stat["label"],
+                        "result": {"code": 423, "msg": blocked_by_unsettled_action},
+                        "users": [],
+                        "stats": action_stat,
+                    }
+                )
+                continue
             # Claim the bounded slice atomically so two workflow triggers
             # cannot select the same user/action before either one is queued.
             async with _scheduled_douyin_precise_touch_claim_lock:
@@ -5537,6 +5604,18 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                     "stats": action_stat,
                 }
             )
+            if isinstance(touch_result, dict) and touch_result.get("runtime_idle") is False:
+                # The local action was stopped but did not release its worker
+                # within the bounded settle window. Keep later actions queued
+                # instead of starting them against the same browser session.
+                blocked_by_unsettled_action = (
+                    f"前置动作“{action_stat['label']}”停止后仍未释放本地抖音浏览器；"
+                    "本轮后续动作未启动，将在下一轮重新领取。"
+                )
+                logger.warning(
+                    "[SCHEDULED-TASK] Douyin precise touch halted before next action action=%s",
+                    touch_action,
+                )
         touched_total = len(touched_user_keys)
         started_action_count = sum(bool(item.get("started")) for item in action_stats)
         not_started_action_count = len(action_stats) - started_action_count

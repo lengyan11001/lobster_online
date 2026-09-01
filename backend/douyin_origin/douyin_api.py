@@ -15972,6 +15972,12 @@ async def douyin_stop_mention_comment():
         return {"code": 200, "msg": "当前没有正在执行的评论@精准客户任务。"}
 
     douyin_mention_comment_stop_requested = True
+    background_task = douyin_mention_comment_background_task
+    if background_task and not background_task.done():
+        # A worker can be blocked inside Playwright/CDP and never reach its
+        # cooperative stop checks. Cancel it so its finally block releases
+        # the scraper and clears the runtime state promptly.
+        background_task.cancel()
     douyin_log("[抖音评论@客户] 已请求停止", "warning")
     return {"code": 200, "msg": "已请求停止评论@精准客户任务。"}
 
@@ -16189,6 +16195,9 @@ async def douyin_stop_video_comment():
         return {"code": 200, "msg": "当前没有正在执行的视频评论任务。"}
 
     douyin_video_comment_stop_requested = True
+    background_task = douyin_video_comment_background_task
+    if background_task and not background_task.done():
+        background_task.cancel()
     douyin_log("[抖音视频评论] 已请求停止", "warning")
     return {"code": 200, "msg": "已请求停止视频评论任务。"}
 

@@ -45,24 +45,42 @@ if not os.path.isdir(os.path.join(_root, "mcp")):
         mcp_root = _parent
 
 mcp_log_path = os.path.join(mcp_root, "mcp.log")
-try:
-    mcp_log = open(mcp_log_path, "a", encoding="utf-8")
-except Exception:
-    mcp_log = subprocess.DEVNULL
 
 cmd = (
     "import sys; sys.path.insert(0, %s); sys.argv = ['mcp', '--port', '8001']; "
     "import runpy; runpy.run_module('mcp', run_name='__main__', alter_sys=True)"
 ) % repr(mcp_root)
 
-p = subprocess.Popen(
-    [sys.executable, "-c", cmd],
-    cwd=mcp_root,
-    env=mcp_env,
-    stdout=mcp_log,
-    stderr=subprocess.STDOUT if mcp_log != subprocess.DEVNULL else subprocess.DEVNULL,
-    start_new_session=True,
-)
+rotating_runner = os.path.join(_root, "scripts", "rotating_log_runner.py")
+if os.path.isfile(rotating_runner):
+    p = subprocess.Popen(
+        [
+            sys.executable,
+            rotating_runner,
+            "--log",
+            mcp_log_path,
+            "--",
+            sys.executable,
+            "-c",
+            cmd,
+        ],
+        cwd=mcp_root,
+        env=mcp_env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+else:
+    mcp_log = open(mcp_log_path, "a", encoding="utf-8")
+    p = subprocess.Popen(
+        [sys.executable, "-c", cmd],
+        cwd=mcp_root,
+        env=mcp_env,
+        stdout=mcp_log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
 time.sleep(3)
 print(f"Started MCP PID={p.pid}, poll={p.poll()}")
 

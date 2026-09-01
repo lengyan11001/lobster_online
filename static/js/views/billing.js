@@ -58,6 +58,18 @@ function loadBillingView() {
   var PAGE_SIZE = 10;
   var base = (typeof API_BASE !== 'undefined' ? API_BASE : '').replace(/\/$/, '');
   if (!base) base = (typeof LOCAL_API_BASE !== 'undefined' ? LOCAL_API_BASE : '') || '';
+  var hideRecharge = typeof window.isLobsterRechargeHiddenForBrand === 'function'
+    && window.isLobsterRechargeHiddenForBrand();
+  if (hideRecharge) {
+    ['rechargeBlock', 'billingTabRecharge'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) { el.hidden = true; el.style.display = 'none'; }
+    });
+    var rechargeTab = document.querySelector('.store-tab[data-billing-tab="recharge"]');
+    if (rechargeTab) { rechargeTab.hidden = true; rechargeTab.style.display = 'none'; }
+    var pricingBlockHidden = document.getElementById('billingPricingBlock');
+    if (pricingBlockHidden) { pricingBlockHidden.hidden = true; pricingBlockHidden.style.display = 'none'; }
+  }
   function parseListResp(d) {
     if (Array.isArray(d)) return { items: d, total: d.length };
     return { items: (d && d.items) ? d.items : [], total: (d && d.total != null) ? d.total : 0 };
@@ -183,13 +195,14 @@ function loadBillingView() {
       })
       .catch(function() { creditHistoryEl.innerHTML = '<p class="meta err" style="padding:1rem;">网络错误，无法加载算力流水。</p>'; creditPagerEl.innerHTML = ''; });
   }
-  loadRechargePage(1);
+  if (!hideRecharge) loadRechargePage(1);
   loadConsumptionPage(1);
   var tabRecharge = document.querySelector('.store-tab[data-billing-tab="recharge"]');
   var tabConsumption = document.querySelector('.store-tab[data-billing-tab="consumption"]');
   var panelRecharge = document.getElementById('billingTabRecharge');
   var panelConsumption = document.getElementById('billingTabConsumption');
   function showBillingTab(tab) {
+    if (hideRecharge) tab = 'consumption';
     if (tab === 'recharge') {
       if (panelRecharge) panelRecharge.style.display = '';
       if (panelConsumption) panelConsumption.style.display = 'none';
@@ -204,7 +217,8 @@ function loadBillingView() {
   }
   if (tabRecharge) tabRecharge.onclick = function() { showBillingTab('recharge'); };
   if (tabConsumption) tabConsumption.onclick = function() { showBillingTab('consumption'); };
-  if (pricingContent) {
+  if (hideRecharge) showBillingTab('consumption');
+  if (pricingContent && !hideRecharge) {
     fetch(API_BASE + '/api/billing/pricing', { headers: authHeaders() })
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(d) {
@@ -249,7 +263,7 @@ function loadBillingView() {
       .then(function(d) { if (balanceEl) balanceEl.textContent = '我的算力：' + (d && d.credits != null ? d.credits : '--'); })
       .catch(function() { if (balanceEl) balanceEl.textContent = '我的算力：--'; });
     var rechargeBlock = document.getElementById('rechargeBlock');
-    if (rechargeBlock) {
+    if (rechargeBlock && !hideRecharge) {
       rechargeBlock.style.display = '';
       var rechargeTitle = rechargeBlock.querySelector('h4');
       if (rechargeTitle) rechargeTitle.textContent = '算力充值';
@@ -298,7 +312,7 @@ function loadBillingView() {
     var rechargeSubmitBtn = document.getElementById('rechargeSubmitBtn');
     var rechargeMsg = document.getElementById('rechargeMsg');
     var rechargeResult = document.getElementById('rechargeResult');
-    if (rechargeSubmitBtn && !rechargeSubmitBtn._ownRechargeBound) {
+    if (!hideRecharge && rechargeSubmitBtn && !rechargeSubmitBtn._ownRechargeBound) {
       rechargeSubmitBtn._ownRechargeBound = true;
       rechargeSubmitBtn.addEventListener('click', function() {
         var amountEl = document.getElementById('rechargeAmount');
@@ -349,7 +363,7 @@ function loadBillingView() {
       .then(renderBalance)
       .catch(function() { if (balanceEl) balanceEl.textContent = '速推余额：--'; });
     var rechargeBlock = document.getElementById('rechargeBlock');
-    if (rechargeBlock) {
+    if (rechargeBlock && !hideRecharge) {
       rechargeBlock.style.display = '';
       fetch(API_BASE + '/api/sutui/recharge-options', { headers: authHeaders() })
         .then(function(r) { return r.json(); })
@@ -370,7 +384,7 @@ function loadBillingView() {
     var rechargeSubmitBtn = document.getElementById('rechargeSubmitBtn');
     var rechargeMsg = document.getElementById('rechargeMsg');
     var rechargeResult = document.getElementById('rechargeResult');
-    if (rechargeSubmitBtn && !rechargeSubmitBtn._rechargeBound) {
+    if (!hideRecharge && rechargeSubmitBtn && !rechargeSubmitBtn._rechargeBound) {
       rechargeSubmitBtn._rechargeBound = true;
       rechargeSubmitBtn.addEventListener('click', function() {
         var amountEl = document.getElementById('rechargeAmount');

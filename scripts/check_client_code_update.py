@@ -79,7 +79,6 @@ DEFAULT_PATHS: tuple[str, ...] = (
     "skills",
     "skill_registry.json",
     "upstream_urls.json",
-    "openclaw",
     "requirements.txt",
     ".env.example",
     "install.bat",
@@ -98,8 +97,7 @@ DEFAULT_PATHS: tuple[str, ...] = (
 
 # 可选：整包 node 依赖（体积大）；一般发 OTA 仅用 DEFAULT_PATHS，目标机点授权在线安装即可
 DEFAULT_PATHS_WITH_NODEJS_DEPS: tuple[str, ...] = DEFAULT_PATHS + (
-    "nodejs/.openclaw/npm",
-    "nodejs/node_modules",
+    # Retired OpenClaw dependencies are intentionally never included.
 )
 
 BLOCKED_PREFIXES = (

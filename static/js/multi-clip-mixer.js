@@ -33,6 +33,7 @@
     historySelection: {},
     historyPage: 0,
     historyVisible: false,
+    historyExpanded: {},
     activeHistoryBatch: null,
     importingFiles: false
   };
@@ -460,29 +461,6 @@
     }, []);
   }
 
-  function safeDownloadName(prefix, index) {
-    var stem = String(prefix || 'multi-clip-mixer').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 72) || 'multi-clip-mixer';
-    return stem + '-' + String(index + 1).padStart(2, '0') + '.mp4';
-  }
-
-  function downloadVideoUrls(urls, prefix) {
-    urls = (Array.isArray(urls) ? urls : []).filter(Boolean);
-    if (!urls.length) return showMessage('请先选择至少一条可下载的视频。', true);
-    urls.forEach(function(url, index) {
-      window.setTimeout(function() {
-        var link = document.createElement('a');
-        link.href = url;
-        link.download = safeDownloadName(prefix, index);
-        link.rel = 'noopener';
-        link.style.display = 'none';
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-      }, index * 180);
-    });
-    showMessage('已发起 ' + urls.length + ' 条视频下载。', false);
-  }
-
   function copyVideoUrls(urls) {
     urls = (Array.isArray(urls) ? urls : []).filter(Boolean);
     if (!urls.length) return showMessage('请先选择至少一条有链接的视频。', true);
@@ -532,7 +510,6 @@
       + '<div><strong>本次结果</strong><span>' + selectedCount + ' / ' + state.batchResults.length + ' 条已选</span></div>'
       + '<div class="mcm-result-tools">'
       + '<label class="mcm-check-label"><input type="checkbox" data-batch-select-all ' + (selectedCount && selectedCount === state.batchResults.filter(resultVideoUrl).length ? 'checked' : '') + '>全选</label>'
-      + '<button type="button" class="btn btn-ghost btn-sm" data-batch-action="download">批量下载</button>'
       + '<button type="button" class="btn btn-ghost btn-sm" data-batch-action="copy">复制链接</button>'
       + '</div></div>'
       + '<div class="mcm-batch-list">'
@@ -574,15 +551,16 @@
         return total + (resultVideoUrl(result) && selection[historyResultId(result, index)] !== false ? 1 : 0);
       }, 0);
       var allChecked = availableCount > 0 && selectedCount === availableCount;
+      var expanded = state.historyExpanded[batch.id] === true;
       return '<article class="mcm-history-item" data-history-id="' + escapeHtml(batch.id) + '">'
         + '<div class="mcm-history-item-head"><div><strong>' + escapeHtml(batchLabel(batch)) + '</strong><span>'
         + escapeHtml(formatHistoryTime(batch.completed_at || batch.created_at)) + ' · ' + results.length + ' 条'
         + (batch.status === 'completed' ? '' : ' · 部分完成') + '</span></div>'
-        + '<div class="mcm-result-tools"><label class="mcm-check-label"><input type="checkbox" data-history-select-all ' + (allChecked ? 'checked' : '') + '>全选</label>'
-        + '<button type="button" class="btn btn-ghost btn-sm" data-history-action="download">批量下载</button>'
+        + '<div class="mcm-result-tools"><button type="button" class="btn btn-ghost btn-sm" data-history-action="toggle">' + (expanded ? '收起记录' : '查看记录') + '</button>'
+        + '<label class="mcm-check-label"><input type="checkbox" data-history-select-all ' + (allChecked ? 'checked' : '') + '>全选</label>'
         + '<button type="button" class="btn btn-ghost btn-sm" data-history-action="copy">复制链接</button>'
         + '<button type="button" class="btn btn-ghost btn-sm" data-history-action="delete">删除</button></div></div>'
-        + '<div class="mcm-history-results">' + results.map(function(result, index) {
+        + '<div class="mcm-history-results"' + (expanded ? '' : ' hidden') + '>' + results.map(function(result, index) {
           var url = resultVideoUrl(result);
           var resultId = historyResultId(result, index);
           return '<div class="mcm-history-result">'
@@ -2076,6 +2054,7 @@
     if ($('mcmHistoryToggleBtn')) $('mcmHistoryToggleBtn').addEventListener('click', function() {
       if (!state.history.length) return showMessage('还没有历史记录，完成一次生成后会自动保留在这里。', false);
       state.historyVisible = !state.historyVisible;
+      if (state.historyVisible) state.historyExpanded = {};
       renderHistory();
     });
     if ($('mcmHistoryPrevBtn')) $('mcmHistoryPrevBtn').addEventListener('click', function() {
@@ -2106,7 +2085,6 @@
         var action = event.target.closest('[data-batch-action]');
         if (action) {
           var urls = currentBatchSelectedUrls();
-          if (action.getAttribute('data-batch-action') === 'download') downloadVideoUrls(urls, (state.activeHistoryBatch || {}).title || '多段视频混剪');
           if (action.getAttribute('data-batch-action') === 'copy') copyVideoUrls(urls);
           return;
         }
@@ -2142,12 +2120,17 @@
         var action = event.target.closest('[data-history-action]');
         if (action) {
           var actionName = action.getAttribute('data-history-action');
-          if (actionName === 'download') downloadVideoUrls(historySelectedUrls(batch), batch.title || '多段视频混剪');
+          if (actionName === 'toggle') {
+            state.historyExpanded[batch.id] = state.historyExpanded[batch.id] !== true;
+            renderHistory();
+            return;
+          }
           if (actionName === 'copy') copyVideoUrls(historySelectedUrls(batch));
           if (actionName === 'delete') {
             if (!window.confirm('删除这批混剪历史记录？已生成的视频不会从素材库删除。')) return;
             state.history = state.history.filter(function(row) { return row.id !== batch.id; });
             delete state.historySelection[batch.id];
+            delete state.historyExpanded[batch.id];
             saveHistory();
             renderHistory();
           }

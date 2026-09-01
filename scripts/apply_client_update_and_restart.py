@@ -13,12 +13,39 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LOG_PATH = ROOT / ".updates" / "update_restart.log"
+LOG_MAX_BYTES = 10 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
+
+
+def _rotate_log_if_needed() -> None:
+    try:
+        if not LOG_PATH.exists() or LOG_PATH.stat().st_size < LOG_MAX_BYTES:
+            return
+    except OSError:
+        return
+    try:
+        LOG_PATH.with_name(f"{LOG_PATH.name}.{LOG_BACKUP_COUNT}").unlink(missing_ok=True)
+    except OSError:
+        pass
+    for index in range(LOG_BACKUP_COUNT - 1, 0, -1):
+        src = LOG_PATH.with_name(f"{LOG_PATH.name}.{index}")
+        dst = LOG_PATH.with_name(f"{LOG_PATH.name}.{index + 1}")
+        try:
+            if src.exists():
+                src.replace(dst)
+        except OSError:
+            pass
+    try:
+        LOG_PATH.replace(LOG_PATH.with_name(f"{LOG_PATH.name}.1"))
+    except OSError:
+        pass
 
 
 def _log(message: str) -> None:
     try:
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _rotate_log_if_needed()
         with LOG_PATH.open("a", encoding="utf-8") as handle:
             handle.write(f"[{stamp}] {message}\n")
     except OSError:

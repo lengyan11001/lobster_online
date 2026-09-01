@@ -15,12 +15,6 @@ for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":8001 " ^| findstr "L
     echo   [OK] MCP process %%p stopped
 )
 
-REM Kill OpenClaw Gateway by port 18789
-for /f "tokens=5" %%p in ('netstat -ano 2^>nul ^| findstr ":18789 " ^| findstr "LISTENING"') do (
-    taskkill /F /PID %%p >nul 2>&1
-    echo   [OK] OpenClaw process %%p stopped
-)
-
 echo(
 echo Lobster stopped.
 pause

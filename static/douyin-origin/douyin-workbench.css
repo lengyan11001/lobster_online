@@ -6055,3 +6055,249 @@
             }
             .capture-config-grid { grid-template-columns: 1fr; }
         }
+
+        /* The workbench is embedded in Online, where a windowed client often gives it
+           less width and height than a full browser. Keep navigation compact there
+           so it does not push the active work area below the fold. */
+        @media (max-width: 1380px) {
+            body {
+                height: auto;
+                min-height: 100vh;
+                overflow: auto;
+            }
+            .app {
+                height: auto;
+                min-height: 100vh;
+            }
+            .workspace-shell {
+                grid-template-columns: minmax(0, 1fr);
+                height: auto;
+                min-height: 100vh;
+                overflow: visible;
+                padding: 10px;
+                gap: 10px;
+            }
+            .workspace-sidebar {
+                position: static;
+                inset: auto;
+                width: auto;
+                height: auto;
+                min-height: 0;
+                max-height: none;
+                display: grid;
+                grid-template-columns: minmax(148px, auto) minmax(0, 1fr);
+                align-items: center;
+                gap: 12px;
+                overflow: visible;
+                padding: 12px 14px;
+                border-radius: 18px;
+                scrollbar-width: auto;
+                -ms-overflow-style: auto;
+            }
+            .workspace-sidebar::-webkit-scrollbar {
+                display: block;
+            }
+            .sidebar-brand {
+                min-width: 0;
+                padding: 0 12px 0 2px;
+                border-right: 1px solid rgba(255, 255, 255, 0.16);
+                border-bottom: 0;
+            }
+            .sidebar-brand-head {
+                gap: 10px;
+            }
+            .sidebar-brand-mark {
+                width: 38px;
+                height: 38px;
+                border-radius: 13px;
+                font-size: 14px;
+            }
+            .sidebar-brand h2,
+            .sidebar-brand-copy .brand-name {
+                font-size: 1.08rem;
+                line-height: 1.2;
+                letter-spacing: 0;
+                white-space: nowrap;
+            }
+            .sidebar-label {
+                display: none;
+            }
+            .sidebar-nav {
+                min-width: 0;
+                gap: 0;
+            }
+            .sidebar-accordion {
+                display: grid;
+                grid-auto-flow: column;
+                grid-template-rows: repeat(2, 40px);
+                grid-auto-columns: minmax(126px, 1fr);
+                gap: 4px;
+                min-width: 0;
+                overflow-x: auto;
+                overflow-y: hidden;
+                overscroll-behavior-x: contain;
+                padding: 3px 2px 8px;
+                scrollbar-width: thin;
+                scrollbar-color: rgba(224, 232, 255, 0.7) transparent;
+            }
+            .sidebar-accordion::-webkit-scrollbar {
+                height: 5px;
+            }
+            .sidebar-accordion::-webkit-scrollbar-thumb {
+                border-radius: 999px;
+                background: rgba(224, 232, 255, 0.7);
+            }
+            .sidebar-group {
+                display: block;
+                min-width: 0;
+            }
+            .sidebar-group-header {
+                min-height: 40px;
+                height: 40px;
+                gap: 7px;
+                padding: 4px 8px;
+                border-radius: 12px;
+            }
+            .sidebar-group-main {
+                gap: 8px;
+            }
+            .sidebar-group-icon {
+                width: 30px;
+                height: 30px;
+                border-radius: 10px;
+            }
+            .sidebar-group-icon svg {
+                width: 15px;
+                height: 15px;
+            }
+            .sidebar-group-title {
+                font-size: 13px;
+                line-height: 1.2;
+                white-space: nowrap;
+            }
+            .workspace-content {
+                grid-column: auto;
+                min-width: 0;
+                min-height: 0;
+                height: auto;
+                overflow: visible;
+                overscroll-behavior: auto;
+                padding: 0 0 14px;
+            }
+            .workspace-content > *,
+            .workspace-panel-page,
+            .panel-head > *,
+            .log-head > *,
+            .table-tools > * {
+                min-width: 0;
+            }
+            .panel-head,
+            .log-head,
+            .table-tools {
+                align-items: flex-start;
+            }
+            .panel-head .subtle,
+            .log-head .subtle,
+            .table-tools .subtle,
+            .field label,
+            .field .hint {
+                overflow-wrap: anywhere;
+            }
+            .tools,
+            .row,
+            .table-tools,
+            .tabs,
+            .meta {
+                min-width: 0;
+            }
+            .tools > input,
+            .tools > select,
+            .row > input,
+            .row > select,
+            .table-tools > input,
+            .table-tools > select {
+                min-width: 0;
+                max-width: 100%;
+            }
+        }
+        @media (max-width: 980px) {
+            .workspace-sidebar {
+                grid-template-columns: minmax(0, 1fr);
+                align-items: stretch;
+                gap: 8px;
+            }
+            .sidebar-brand {
+                padding: 0 2px 8px;
+                border-right: 0;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+            }
+            .sidebar-accordion {
+                grid-template-rows: repeat(2, 38px);
+                grid-auto-columns: minmax(118px, 1fr);
+            }
+            .sidebar-group-header {
+                min-height: 38px;
+                height: 38px;
+            }
+        }
+        @media (max-width: 680px) {
+            .workspace-shell {
+                padding: 8px;
+            }
+            .workspace-sidebar {
+                padding: 10px;
+            }
+            .workspace-content {
+                padding: 0 0 12px;
+            }
+        }
+
+        /* These checkboxes are visually represented by their adjacent spans. They
+           must not inherit the global full-width input rule or create a hidden
+           horizontal overflow in the inbox view. */
+        .douyin-inbox-reply-toggle input,
+        .douyin-inbox-unread-toggle input {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            min-height: 0;
+            margin: -1px;
+            padding: 0;
+            border: 0;
+            clip: rect(0 0 0 0);
+            clip-path: inset(50%);
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
+        /* Keep the stranger-message control column bounded. An auto-sized grid
+           column was allowed to grow to the width of its full-width buttons,
+           leaving the reply form too narrow and causing the preset tabs to cross
+           into the monitor card. */
+        .stranger-message-compose-grid {
+            grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+            align-items: start;
+        }
+        .stranger-message-side-stack,
+        .stranger-message-actions {
+            min-width: 0;
+            width: 100%;
+        }
+        .stranger-message-actions > input {
+            width: 100% !important;
+            min-width: 0 !important;
+            max-width: 100%;
+        }
+        .dm-preset-head {
+            flex-wrap: wrap;
+        }
+        .dm-preset-tabs {
+            flex: 1 1 100%;
+            flex-wrap: wrap;
+            justify-content: flex-start;
+        }
+        @media (max-width: 1200px) {
+            .stranger-message-compose-grid {
+                grid-template-columns: minmax(0, 1fr);
+            }
+        }

@@ -85,6 +85,9 @@ class DouyinCommentCollectionUnconfirmed(RuntimeError):
     """The comment surface opened, but its contents could not be verified."""
 
 
+DOUYIN_CDP_CONNECT_TIMEOUT_MS = 30000
+
+
 def parse_count_text(text: str) -> int:
     value = str(text or "").strip().replace(",", "").replace("+", "")
     if not value:
@@ -2148,7 +2151,8 @@ class DouyinCommentScraper:
             self._emit(logger, f"[抖音诊断] connect_over_cdp 开始 port={self.cdp_port}", "info")
             try:
                 self._browser = await self._playwright.chromium.connect_over_cdp(
-                    f"http://127.0.0.1:{self.cdp_port}"
+                    f"http://127.0.0.1:{self.cdp_port}",
+                    timeout=DOUYIN_CDP_CONNECT_TIMEOUT_MS,
                 )
             except Exception as exc:
                 self._emit(logger, f"[抖音诊断] connect_over_cdp 失败 error={type(exc).__name__}: {exc} elapsed_ms={(time.monotonic() - cdp_started) * 1000:.1f}", "error")
@@ -2177,7 +2181,8 @@ class DouyinCommentScraper:
                     cdp_started = time.monotonic()
                     self._emit(logger, f"[抖音诊断] fallback connect_over_cdp 开始 port={self.cdp_port}", "info")
                     self._browser = await self._playwright.chromium.connect_over_cdp(
-                        f"http://127.0.0.1:{self.cdp_port}"
+                        f"http://127.0.0.1:{self.cdp_port}",
+                        timeout=DOUYIN_CDP_CONNECT_TIMEOUT_MS,
                     )
                     self._emit(logger, f"[抖音诊断] fallback connect_over_cdp 完成 contexts={len(self._browser.contexts)} elapsed_ms={(time.monotonic() - cdp_started) * 1000:.1f}", "info")
                     self._owns_browser = False
@@ -2240,7 +2245,8 @@ class DouyinCommentScraper:
                     if launched and self._can_connect_cdp(logger=logger):
                         self._emit(logger, f"[抖音诊断] retry connect_over_cdp 开始 port={self.cdp_port}", "info")
                         self._browser = await self._playwright.chromium.connect_over_cdp(
-                            f"http://127.0.0.1:{self.cdp_port}"
+                            f"http://127.0.0.1:{self.cdp_port}",
+                            timeout=DOUYIN_CDP_CONNECT_TIMEOUT_MS,
                         )
                         self._emit(logger, f"[抖音诊断] retry connect_over_cdp 完成 contexts={len(self._browser.contexts)}", "info")
                         self._owns_browser = False
@@ -2276,6 +2282,28 @@ class DouyinCommentScraper:
         except Exception as exc:
             self._emit(logger, f"[抖音诊断] 创建新页面失败 error={type(exc).__name__}: {exc} elapsed_ms={(time.monotonic() - page_started) * 1000:.1f}", "error")
             message = str(exc or "")
+            if "Failed to open a new tab" in message or "Target.createTarget" in message:
+                # CDP can keep an attached context alive while rejecting
+                # Target.createTarget. Reconnect the Playwright transport and
+                # retry against the same logged-in browser. Do not return an
+                # existing page here: callers own pages returned by _new_page
+                # and will close them after each user.
+                self._emit(logger, "[抖音] 新标签页创建被拒绝，准备重连 CDP 后重试", "warning")
+                await self._dispose_browser_runtime()
+                await self._ensure_browser(logger=logger)
+                if not self._context:
+                    raise RuntimeError("抖音浏览器上下文重连失败")
+                try:
+                    page = await self._context.new_page()
+                    self._emit(logger, "[抖音] CDP 重连后创建页面成功", "info")
+                    return page
+                except Exception as retry_exc:
+                    self._emit(
+                        logger,
+                        f"[抖音] CDP 重连后创建页面仍失败 error={type(retry_exc).__name__}: {retry_exc}",
+                        "error",
+                    )
+                    raise
             closed_markers = [
                 "Target page, context or browser has been closed",
                 "Browser has been closed",

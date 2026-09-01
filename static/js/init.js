@@ -1234,12 +1234,18 @@ function syncOpenclawMemoryFromServerIfOnline() {
 }
 
 function setAuthenticatedChrome(isAuthenticated) {
+  window.__lobsterAuthReady = !!isAuthenticated;
   var header = document.getElementById('appHeader');
   var nav = document.getElementById('appTopNav');
   var actions = document.getElementById('headerActions');
   if (header) header.classList.toggle('auth-guest', !isAuthenticated);
   if (nav) nav.style.display = isAuthenticated ? 'flex' : 'none';
   if (actions) actions.style.display = isAuthenticated ? 'flex' : 'none';
+  try {
+    window.dispatchEvent(new CustomEvent('lobster-auth-state', {
+      detail: { authenticated: !!isAuthenticated }
+    }));
+  } catch (e) {}
 }
 
 function revealTopNavItem(item) {
@@ -1492,6 +1498,7 @@ document.addEventListener('click', function(event) {
 var LOBSTER_LAST_VIEW_KEY = 'lobster_online_last_view';
 var LOBSTER_MAIN_VIEWS = {
   'audio-transcription': true,
+  'douyin-information-desk': true,
   chat: true,
   'skill-store': true,
   'douyin-leads': true,
@@ -1554,6 +1561,7 @@ var _lobsterFeatureLastRefreshAt = 0;
 var LOBSTER_FEATURE_REFRESH_INTERVAL_MS = 15000;
 var LOBSTER_FEATURE_STRICT_MARKER = '__homepage_feature_gates_v1';
 var LOBSTER_LEGACY_DENY_MISSING_FEATURES = {
+  douyin_platform_information_desk_access: true,
   douyin_leads_access: true,
   private_domain_entry: true,
   overseas_platform_entry: true,
@@ -1572,6 +1580,7 @@ var LOBSTER_LEGACY_DENY_MISSING_FEATURES = {
 };
 var LOBSTER_VIEW_FEATURE_GATES = {
   'audio-transcription': 'ai_secretary_entry',
+  'douyin-information-desk': 'douyin_platform_information_desk_access',
   chat: 'home_ai_chat_entry',
   'skill-store': 'skill_store_entry',
   'douyin-leads': 'douyin_leads_access',
@@ -2536,6 +2545,8 @@ function loadSutuiBalance() {
     wrap.style.display = 'none';
     return;
   }
+  var hideRecharge = typeof window.isLobsterRechargeHiddenForBrand === 'function'
+    && window.isLobsterRechargeHiddenForBrand();
   wrap.style.display = 'flex';
   wrap.dataset.featureGateDefaultDisplay = 'flex';
   wrap.dataset.featureGateDefaultHidden = '0';
@@ -2543,7 +2554,11 @@ function loadSutuiBalance() {
   wrap.setAttribute('title', '查看算力消耗与每日上限');
   if (USE_INDEPENDENT_AUTH) {
     textEl.textContent = '算力：加载中…';
-    if (rechargeBtn) { rechargeBtn.style.display = ''; rechargeBtn.href = '#'; rechargeBtn.textContent = '充值'; }
+    if (rechargeBtn) {
+      rechargeBtn.style.display = hideRecharge ? 'none' : '';
+      rechargeBtn.href = '#';
+      rechargeBtn.textContent = '充值';
+    }
     fetch(API_BASE + '/auth/me', { headers: authHeaders() })
       .then(function(r) { return r.json(); })
       .then(function(d) { textEl.textContent = '算力：' + (d && d.credits != null ? d.credits : '--'); })
@@ -2552,7 +2567,7 @@ function loadSutuiBalance() {
   }
   textEl.textContent = '余额：加载中…';
   if (rechargeBtn) {
-    rechargeBtn.style.display = RECHARGE_URL ? '' : 'none';
+    rechargeBtn.style.display = (!hideRecharge && RECHARGE_URL) ? '' : 'none';
     rechargeBtn.href = RECHARGE_URL || '#';
     rechargeBtn.textContent = '充值';
   }

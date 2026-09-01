@@ -1,7 +1,15 @@
 (function () {
   'use strict';
 
-  var state = { rows: [], open: false, seenActive: {}, polling: false };
+  var state = {
+    rows: [],
+    open: false,
+    seenActive: {},
+    polling: false,
+    authenticated: !!window.__lobsterAuthReady,
+    started: false,
+    timer: null
+  };
 
   function esc(value) {
     var text = String(value == null ? '' : value);
@@ -71,6 +79,7 @@
     if (document.getElementById('lobsterTaskFab')) return;
 
     var root = document.createElement('div');
+    root.id = 'lobsterTaskCenter';
     root.innerHTML =
       '<button id="lobsterTaskFab" class="lobster-task-fab" type="button" aria-label="执行任务" title="执行任务">' +
         '<svg viewBox="0 0 24 24" aria-hidden="true">' +
@@ -96,10 +105,13 @@
   }
 
   function render() {
+    var root = document.getElementById('lobsterTaskCenter');
     var panel = document.getElementById('lobsterTaskPanel');
     var fab = document.getElementById('lobsterTaskFab');
     var list = document.getElementById('lobsterTaskList');
     if (!panel || !fab || !list) return;
+
+    if (root) root.hidden = !state.authenticated;
 
     var running = state.rows.filter(active);
     fab.classList.toggle('is-active', !!running.length);
@@ -124,7 +136,7 @@
 
   async function refresh() {
     if (state.polling) return;
-    if (!hasAuthToken()) {
+    if (!state.authenticated || !hasAuthToken()) {
       state.rows = [];
       state.seenActive = {};
       render();
@@ -162,6 +174,7 @@
   }
 
   async function stop(event) {
+    if (!state.authenticated || !hasAuthToken()) return;
     var button = event.target.closest('[data-run-id]');
     if (!button) return;
 
@@ -188,13 +201,46 @@
     }
   }
 
-  function start() {
-    mount();
-    (async function poll() {
+  function clearTimer() {
+    if (state.timer !== null) {
+      window.clearTimeout(state.timer);
+      state.timer = null;
+    }
+  }
+
+  function schedulePoll(delay) {
+    if (!state.started || !state.authenticated || !hasAuthToken() || state.timer !== null) return;
+    state.timer = window.setTimeout(async function () {
+      state.timer = null;
+      if (!state.authenticated || !hasAuthToken()) return;
       await refresh();
-      var delay = state.rows.some(active) ? 4000 : 10000;
-      window.setTimeout(poll, delay);
-    })();
+      schedulePoll(state.rows.some(active) ? 4000 : 10000);
+    }, Math.max(0, Number(delay) || 0));
+  }
+
+  function setAuthenticated(value) {
+    var next = !!value;
+    state.authenticated = next;
+    if (!next) {
+      clearTimer();
+      state.rows = [];
+      state.seenActive = {};
+      state.open = false;
+      render();
+      return;
+    }
+    mount();
+    render();
+    schedulePoll(0);
+  }
+
+  function start() {
+    state.started = true;
+    window.addEventListener('lobster-auth-state', function (event) {
+      var detail = event && event.detail;
+      setAuthenticated(!!(detail && detail.authenticated));
+    });
+    setAuthenticated(window.__lobsterAuthReady === true);
   }
 
   if (document.readyState === 'loading') {

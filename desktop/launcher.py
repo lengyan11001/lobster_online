@@ -198,6 +198,9 @@ def resolve_root() -> Path:
 
 ROOT = resolve_root()
 LOG_PATH = ROOT / "desktop_launcher.log"
+_LOG_ROTATE_MAX_BYTES = 50 * 1024 * 1024
+_LOG_ROTATE_BACKUP_COUNT = 3
+_LOG_ROTATE_LOCK = threading.Lock()
 APP_ICON_PATH: Path | None = None
 LOADING_MARK_PATH: Path | None = None
 _ACTIVE_DESKTOP_BRANDING: dict[str, object] = {}
@@ -242,12 +245,53 @@ def get_startup_status_snapshot() -> dict[str, object]:
 def log(message: str) -> None:
     line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {message}"
     try:
-        with LOG_PATH.open("a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        payload = (line + "\n").encode("utf-8", "replace")
+        with _LOG_ROTATE_LOCK:
+            try:
+                current_size = LOG_PATH.stat().st_size if LOG_PATH.exists() else 0
+            except OSError:
+                current_size = 0
+            if current_size and current_size + len(payload) > _LOG_ROTATE_MAX_BYTES:
+                try:
+                    LOG_PATH.with_name(f"{LOG_PATH.name}.{_LOG_ROTATE_BACKUP_COUNT}").unlink(missing_ok=True)
+                except OSError:
+                    pass
+                for index in range(_LOG_ROTATE_BACKUP_COUNT - 1, 0, -1):
+                    src = LOG_PATH.with_name(f"{LOG_PATH.name}.{index}")
+                    dst = LOG_PATH.with_name(f"{LOG_PATH.name}.{index + 1}")
+                    try:
+                        if src.exists():
+                            src.replace(dst)
+                    except OSError:
+                        pass
+                try:
+                    LOG_PATH.replace(LOG_PATH.with_name(f"{LOG_PATH.name}.1"))
+                except OSError:
+                    pass
+            LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with LOG_PATH.open("ab") as f:
+                f.write(payload)
     except Exception:
         pass
     if not _is_frozen():
         print(line)
+
+
+def clear_service_log(path: Path, label: str) -> bool:
+    """Remove a stopped service's append-only console log before restart."""
+    try:
+        path.unlink(missing_ok=True)
+        log(f"Logs: cleared {label} path={path}")
+        return True
+    except Exception as exc:
+        log(f"Logs: failed to clear {label} path={path}: {exc}")
+        return False
+
+
+def clear_startup_service_logs() -> None:
+    clear_service_log(ROOT / "backend.log", "backend")
+    clear_service_log(ROOT / "mcp.log", "mcp")
+    clear_service_log(ROOT / "logs" / "app.log", "app")
 
 
 def message_box(title: str, body: str) -> None:
@@ -1258,6 +1302,9 @@ def start_services_blocking(
     stop_other_root_backends(port)
     port = choose_backend_port(port)
     mcp_port = choose_mcp_port(mcp_port, port)
+    # The desktop launcher starts run_backend.bat/run_mcp.bat directly, so it
+    # does not pass through start.bat's log cleanup block.
+    clear_startup_service_logs()
     env["PORT"] = str(port)
     env["MCP_PORT"] = str(mcp_port)
     ready_url = f"http://127.0.0.1:{port}/?desktop=1&v={int(time.time())}-{uuid.uuid4().hex[:8]}"
@@ -1845,6 +1892,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
 
                 mcp_restarted = False
                 if not port_open("127.0.0.1", mcp_port, timeout=0.4):
+                    clear_service_log(ROOT / "mcp.log", "mcp recovery")
                     mcp_proc = start_bat("MCPRecovery", "run_mcp.bat", env)
                     if mcp_proc is not None:
                         runtime["mcp_proc"] = mcp_proc
@@ -1906,6 +1954,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                         log(f"Desktop recovery: backend port {port} is owned by another process")
                         return {"ok": False, "error": "backend port is occupied"}
 
+                clear_service_log(ROOT / "backend.log", "backend recovery")
                 recovered_proc = start_bat("BackendRecovery", "run_backend.bat", env)
                 runtime["backend_proc"] = recovered_proc
                 if recovered_proc is None:

@@ -646,7 +646,7 @@ def test_prefilter_replies_again_when_last_message_is_inbound_even_if_history_ex
     )
 
     assert decision["action"] == "open"
-    assert decision["reason"] == "cached_latest_inbound"
+    assert decision["reason"] == "wxauto_round_direction_check"
 
 
 def test_latest_outbound_attachment_does_not_reopen_an_older_inbound(tmp_path, monkeypatch):
@@ -1266,6 +1266,7 @@ def test_typed_message_clicks_send_and_verifies_new_outbound(monkeypatch):
         return "uia_send_button"
 
     monkeypatch.setattr(engine, "_click_local_wechat_send_button", click_send)
+    monkeypatch.setattr(engine, "_local_wechat_draft_text", lambda _hwnd: "您好，有什么可以帮您？")
     monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
 
     result = engine._submit_local_wechat_typed_message(
@@ -1597,6 +1598,7 @@ def test_auto_reply_skips_non_private_sessions_before_opening_chat():
 
 def test_non_private_session_entry_recognizes_official_account_containers():
     assert engine._is_non_private_session_entry({"peer_id": "服务号"}) is True
+    assert engine._is_non_private_session_entry({"peer_id": "服务通知"}) is True
     assert engine._is_non_private_session_entry({"peer_id": "公众号"}) is True
     assert engine._is_non_private_session_entry({"peer_id": "订阅号"}) is True
     assert engine._is_non_private_session_entry({"peer_id": "文件传输助手"}) is True
@@ -1606,6 +1608,41 @@ def test_non_private_session_entry_recognizes_official_account_containers():
         "peer_id": "折叠入口",
         "raw": {"ui_class": "mmui::BrandSessionCell"},
     }) is True
+
+
+@pytest.mark.parametrize(
+    "session",
+    [
+        {"peer_id": "微信支付"},
+        {"peer_id": "服务通知"},
+        {"peer_id": "微信运动"},
+        {"peer_id": "腾讯新闻"},
+        {"peer_id": "service-account", "raw": {"chat_type": "service"}},
+        {"peer_id": "system-row", "raw": {"is_system": True}},
+        {"peer_id": "official-id", "raw": {"wxid": "gh_example_account"}},
+    ],
+)
+def test_auto_reply_prefilter_rejects_all_non_personal_session_evidence_before_open(session):
+    decision = engine._auto_reply_session_prefilter(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        {"last_content": "通知", "unread_count": 1, **session},
+    )
+
+    assert decision["action"] == "skip_group"
+    assert decision["reason"]
+
+
+def test_auto_reply_prefilter_requires_private_identity_for_unknown_rows():
+    decision = engine._auto_reply_session_prefilter(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        {"peer_id": "仅有昵称", "display_name": "仅有昵称", "unread_count": 1},
+    )
+
+    assert decision == {
+        "action": "skip",
+        "reason": "private_identity_unconfirmed",
+        "chat_type": "unknown",
+    }
 
 
 def test_open_next_visible_session_skips_official_container(monkeypatch):
@@ -2563,8 +2600,9 @@ async def test_failed_group_invite_is_silent_and_does_not_consume_message(tmp_pa
         lambda *_args, **_kwargs: {
             "items": [
                 {
-                    "peer_id": "张老师",
+                    "peer_id": "wxid_customer_zhang",
                     "display_name": "张老师",
+                    "wechat_id": "wxid_customer_zhang",
                     "last_content": "行",
                     "unread_count": 1,
                 }
@@ -2574,21 +2612,21 @@ async def test_failed_group_invite_is_silent_and_does_not_consume_message(tmp_pa
     monkeypatch.setattr(
         engine,
         "sync_local_messages",
-        lambda *_args, **_kwargs: {"peer_id": "张老师", "chat_info": {"chat_type": "direct"}},
+            lambda *_args, **_kwargs: {"peer_id": "wxid_customer_zhang", "chat_info": {"chat_type": "direct"}},
     )
     opened = []
     monkeypatch.setattr(
         engine,
         "_open_next_visible_session",
         lambda *_args, **_kwargs: None if opened else opened.append(True) or {
-            "peer_id": "张老师", "display_name": "张老师", "unread_count": 1,
+                "peer_id": "wxid_customer_zhang", "display_name": "张老师", "wechat_id": "wxid_customer_zhang", "unread_count": 1,
         },
     )
     monkeypatch.setattr(
         engine,
         "_latest_auto_reply_candidate",
         lambda *_args, **_kwargs: {
-            "peer_id": "张老师",
+                "peer_id": "wxid_customer_zhang",
             "direction": "in",
             "content": "行",
             "auto_reply_inbound_id": "message-a",
@@ -2663,7 +2701,7 @@ async def test_verified_group_replies_normally_without_repeating_group_invite(tm
 
     monkeypatch.setattr(engine, "_flush_wechat_intelligence_outbox", flush_outbox)
     monkeypatch.setattr(engine, "sync_local_sessions", lambda *_args, **_kwargs: {
-        "items": [{"peer_id": "customer-a", "display_name": "Customer A", "last_content": "please invite me"}],
+            "items": [{"peer_id": "wxid_customer_a", "display_name": "Customer A", "wechat_id": "wxid_customer_a", "last_content": "please invite me"}],
         "scroll_rounds": 1,
     })
     monkeypatch.setattr(engine, "_enrich_sessions_with_message_counts", lambda _account_id, items: items)
@@ -2671,18 +2709,18 @@ async def test_verified_group_replies_normally_without_repeating_group_invite(tm
     monkeypatch.setattr(
         engine,
         "_open_next_visible_session",
-        lambda *_args, **_kwargs: None if opened else opened.append(True) or {"peer_id": "customer-a", "display_name": "Customer A", "unread_count": 1},
+            lambda *_args, **_kwargs: None if opened else opened.append(True) or {"peer_id": "wxid_customer_a", "display_name": "Customer A", "wechat_id": "wxid_customer_a", "unread_count": 1},
     )
     monkeypatch.setattr(
         engine,
         "sync_local_messages",
-        lambda *_args, **_kwargs: {"peer_id": "customer-a", "chat_info": {"chat_type": "direct"}},
+            lambda *_args, **_kwargs: {"peer_id": "wxid_customer_a", "chat_info": {"chat_type": "direct"}},
     )
     monkeypatch.setattr(
         engine,
         "_latest_auto_reply_candidate",
         lambda *_args, **_kwargs: {
-            "peer_id": "customer-a",
+                "peer_id": "wxid_customer_a",
             "direction": "in",
             "content": "please invite me",
             "auto_reply_inbound_id": "message-a",
@@ -2701,7 +2739,7 @@ async def test_verified_group_replies_normally_without_repeating_group_invite(tm
     async def reply(**kwargs):
         llm_args.update(kwargs)
         # The runner must still suppress this if the model ignores its flag.
-        return {"should_reply": True, "reply": "当然，先和您聊聊具体需求。", "category": "casual", "should_invite_group": True}
+        return {"should_reply": True, "reply": "Of course. Let's discuss your needs first.", "category": "casual", "should_invite_group": True}
 
     sent = []
     monkeypatch.setattr(engine, "_call_auto_reply_llm", reply)
@@ -2720,7 +2758,7 @@ async def test_verified_group_replies_normally_without_repeating_group_invite(tm
     assert llm_args["group_invite_already_verified"] is True
     assert sent == [
         (
-            ("pc-wechat-default", "customer-a", "当然，先和您聊聊具体需求。", {"driver": "native_wechat_auto_reply", "trigger": "manual", "category": "casual"}),
+            ("pc-wechat-default", "wxid_customer_a", "Of course. Let's discuss your needs first.", {"driver": "native_wechat_auto_reply", "trigger": "manual", "category": "casual"}),
             {"use_current_chat": True},
         )
     ]
@@ -2807,10 +2845,14 @@ async def test_group_session_is_skipped_before_reply_or_group_decision(tmp_path,
         check_friend_requests=False,
     )
 
-    assert read_info_calls == [True]
+    # Unknown rows fail closed before any click/read. A later session/contact
+    # sync may classify the row; automatic takeover must not inspect it just
+    # to discover that it is a group or service conversation.
+    assert read_info_calls == []
     assert result["replied"] == 0
-    assert result["skipped_groups"] == 1
-    assert result["items"][0]["status"] == "skipped_group"
+    assert result["candidate_sessions_opened"] == 0
+    assert result["items"][0]["status"] == "prefiltered"
+    assert result["items"][0]["skip_reason"] == "private_identity_unconfirmed"
 
 
 @pytest.mark.asyncio
@@ -2842,8 +2884,9 @@ async def test_group_invite_success_keeps_default_welcome_message(tmp_path, monk
         lambda *_args, **_kwargs: {
             "items": [
                 {
-                    "peer_id": "张老师",
+                    "peer_id": "wxid_customer_zhang",
                     "display_name": "张老师",
+                    "wechat_id": "wxid_customer_zhang",
                     "last_content": "行",
                     "unread_count": 1,
                 }
@@ -2853,21 +2896,21 @@ async def test_group_invite_success_keeps_default_welcome_message(tmp_path, monk
     monkeypatch.setattr(
         engine,
         "sync_local_messages",
-        lambda *_args, **_kwargs: {"peer_id": "张老师", "chat_info": {"chat_type": "direct"}},
+            lambda *_args, **_kwargs: {"peer_id": "wxid_customer_zhang", "chat_info": {"chat_type": "direct"}},
     )
     opened = []
     monkeypatch.setattr(
         engine,
         "_open_next_visible_session",
         lambda *_args, **_kwargs: None if opened else opened.append(True) or {
-            "peer_id": "张老师", "display_name": "张老师", "unread_count": 1,
+                "peer_id": "wxid_customer_zhang", "display_name": "张老师", "wechat_id": "wxid_customer_zhang", "unread_count": 1,
         },
     )
     monkeypatch.setattr(
         engine,
         "_latest_auto_reply_candidate",
         lambda *_args, **_kwargs: {
-            "peer_id": "张老师",
+                "peer_id": "wxid_customer_zhang",
             "direction": "in",
             "content": "行",
             "auto_reply_inbound_id": "message-a",
@@ -2974,8 +3017,149 @@ def _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions):
     return session_calls
 
 
+def test_fresh_wxauto_session_never_uses_contact_cache_id():
+    session = {
+        "display_name": "章杰哥",
+        "peer_id": "章杰哥",
+        "raw": {},
+    }
+    assert engine._session_wechat_id(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        session,
+        {"章杰哥": "kelvenli"},
+    ) == ""
+
+
+def test_fresh_session_prefilter_keeps_established_direction_prefilter(tmp_path, monkeypatch):
+    monkeypatch.setattr(engine, "DB_PATH", tmp_path / "native-wechat.sqlite3")
+    engine.init_db()
+    decision = engine._auto_reply_session_prefilter(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        {
+            "peer_id": "wxid_current_customer",
+            "display_name": "当前客户",
+            "chat_type": "direct",
+            "session_snapshot_fresh": True,
+            "session_time_reliable": True,
+            "session_time_age_seconds": 30,
+            "last_content": "已回复",
+        },
+    )
+    assert decision["action"] == "open"
+    assert decision["reason"] == "wxauto_round_direction_check"
+
+
+def test_wxauto_page_capture_keeps_only_inbound_and_captures_id(monkeypatch):
+    now = engine.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    calls = []
+
+    def sync_page(_account_id, peer_id, **_kwargs):
+        calls.append(peer_id)
+        direction = "out" if peer_id == "已回复" else "in"
+        return {
+            "ok": True,
+            "peer_id": peer_id,
+            "chat_info": {"chat_name": peer_id, "chat_type": "direct"},
+            "fresh_latest_message": {
+                "peer_id": peer_id,
+                "direction": direction,
+                "content": "message",
+                "auto_reply_inbound_id": f"{peer_id}-message",
+            },
+        }
+
+    monkeypatch.setattr(engine, "_sync_local_messages_once", sync_page)
+    monkeypatch.setattr(
+        engine,
+        "_read_current_private_chat_wx_no",
+        lambda *_args, **_kwargs: {"ok": True, "wx_no": "wxid_inbound", "reason": "profile_popup"},
+    )
+    captures = engine._capture_auto_reply_scan_page(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        [
+            {"name": "待回复", "content": "message", "time": now},
+            {"name": "已回复", "content": "message", "time": now},
+        ],
+    )
+    assert calls == ["待回复", "已回复"]
+    assert list(captures) == ["待回复", "已回复"]
+    assert captures["待回复"]["wechat_id"] == "wxid_inbound"
+    assert captures["待回复"]["source"] == "wxauto_page_immediate_capture"
+    assert captures["已回复"]["status"] == "latest_message_not_inbound"
+
+
 @pytest.mark.asyncio
-async def test_auto_reply_prefilter_skips_cached_latest_outbound_without_opening(tmp_path, monkeypatch):
+async def test_fresh_round_does_not_fall_back_to_historical_message(tmp_path, monkeypatch):
+    sessions = [
+        {
+            "peer_id": "wxid_current_customer",
+            "display_name": "当前客户",
+            "chat_type": "direct",
+            "session_snapshot_fresh": True,
+            "session_time_reliable": True,
+            "session_time_age_seconds": 30,
+            "last_content": "历史预览",
+        }
+    ]
+    _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions)
+    monkeypatch.setattr(
+        engine,
+        "sync_local_messages",
+        lambda *_args, **_kwargs: {
+            "ok": True,
+            "peer_id": "wxid_current_customer",
+            "chat_info": {"chat_name": "当前客户", "chat_type": "direct"},
+            "latest_message": {"direction": "out", "content": "旧记录"},
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_latest_strict_auto_reply_candidate",
+        lambda *_args, **_kwargs: pytest.fail("fresh rounds must not use historical candidates"),
+    )
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+    assert result["ai_batch_candidate_count"] == 0
+    assert result["items"][0]["status"] == "fresh_message_snapshot_missing"
+
+
+@pytest.mark.asyncio
+async def test_non_personal_sessions_never_open_messages_or_reach_ai(tmp_path, monkeypatch):
+    sessions = [
+        {"peer_id": "微信支付", "last_content": "支付通知", "unread_count": 1},
+        {"peer_id": "服务通知", "last_content": "服务消息", "unread_count": 1},
+        {"peer_id": "官方账号", "last_content": "更新", "raw": {"wxid": "gh_vendor"}},
+        {"peer_id": "系统入口", "last_content": "通知", "raw": {"is_system": True}},
+    ]
+    _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions)
+    monkeypatch.setattr(
+        engine,
+        "sync_local_messages",
+        lambda *_args, **_kwargs: pytest.fail("non-personal sessions must be rejected before opening"),
+    )
+
+    async def no_batch(**_kwargs):
+        pytest.fail("non-personal sessions must not reach the AI batch")
+
+    monkeypatch.setattr(engine, "_call_auto_reply_llm_batch", no_batch)
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    assert result["candidate_sessions_opened"] == 0
+    assert result["ai_batch_candidate_count"] == 0
+    assert result["replied"] == 0
+    assert all(item["status"] == "prefiltered_group" for item in result["items"])
+
+
+@pytest.mark.asyncio
+async def test_auto_reply_does_not_use_cached_latest_outbound_as_live_gate(tmp_path, monkeypatch):
     sessions = [
         {
             "peer_id": "customer-out",
@@ -2983,6 +3167,7 @@ async def test_auto_reply_prefilter_skips_cached_latest_outbound_without_opening
             "last_content": "已经回复过了",
             "session_time": "10:30",
             "unread_count": 0,
+            "chat_type": "friend",
         }
     ]
     session_calls = _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions)
@@ -3008,10 +3193,21 @@ async def test_auto_reply_prefilter_skips_cached_latest_outbound_without_opening
             ),
         )
 
+    sync_calls = []
     monkeypatch.setattr(
         engine,
         "sync_local_messages",
-        lambda *_args, **_kwargs: pytest.fail("cached outbound session must not be opened"),
+        lambda _account_id, peer_id, **_kwargs: sync_calls.append(peer_id)
+        or {
+            "peer_id": peer_id,
+            "chat_info": {"chat_name": "customer-out", "chat_type": "direct"},
+            "fresh_latest_message": {
+                "peer_id": peer_id,
+                "direction": "out",
+                "content": "已经回复过了",
+                "auto_reply_inbound_id": "outbound-current",
+            },
+        },
     )
 
     async def no_batch(**_kwargs):
@@ -3026,16 +3222,330 @@ async def test_auto_reply_prefilter_skips_cached_latest_outbound_without_opening
     )
 
     assert session_calls == [False, True]
+    assert sync_calls == ["customer-out"]
+    assert result["candidate_sessions_opened"] == 1
+    assert result["ai_batch_candidate_count"] == 0
+    assert result["items"][0]["skip_reason"] == "latest_message_not_inbound"
+
+
+@pytest.mark.asyncio
+async def test_auto_reply_stops_fallback_scan_at_first_old_ordinary_session(tmp_path, monkeypatch):
+    sessions = [
+        {
+            "peer_id": "old-customer",
+            "display_name": "Old customer",
+            "session_time": "2026-08-30 09:00:00",
+            "session_time_reliable": True,
+            "session_time_age_seconds": 24 * 60 * 60 + 1,
+            "last_content": "old message",
+        },
+        {
+            "peer_id": "wxid_must_not_open",
+            "display_name": "Must not open",
+            "wechat_id": "wxid_must_not_open",
+            "last_content": "new message",
+            "unread_count": 1,
+        },
+    ]
+    _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions)
+    monkeypatch.setattr(
+        engine,
+        "sync_local_messages",
+        lambda *_args, **_kwargs: pytest.fail("rows after the old-session boundary must not be opened"),
+    )
+
+    async def no_batch(**_kwargs):
+        pytest.fail("rows after the old-session boundary must not enter the AI batch")
+
+    monkeypatch.setattr(engine, "_call_auto_reply_llm_batch", no_batch)
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    assert result["stop_reason"] == "last_message_over_24h"
     assert result["candidate_sessions_opened"] == 0
     assert result["ai_batch_candidate_count"] == 0
-    assert result["items"][0]["skip_reason"] == "latest_message_outbound"
+
+
+@pytest.mark.asyncio
+async def test_auto_reply_does_not_send_missing_wechat_id_to_ai(tmp_path, monkeypatch):
+    sessions = [
+        {
+            "peer_id": "待识别客户",
+            "display_name": "待识别客户",
+            "last_content": "你好",
+            "unread_count": 1,
+            "chat_type": "friend",
+        }
+    ]
+    _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions)
+    monkeypatch.setattr(
+        engine,
+        "sync_local_messages",
+        lambda *_args, **_kwargs: {
+            "peer_id": "待识别客户",
+            "chat_info": {"chat_name": "待识别客户", "chat_type": "direct"},
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_read_current_private_chat_wx_no",
+        lambda *_args, **_kwargs: {"ok": False, "wx_no": "", "reason": "profile_wx_no_missing"},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_latest_strict_auto_reply_candidate",
+        lambda _account_id, peer_id: {
+            "peer_id": peer_id,
+            "direction": "in",
+            "content": "你好",
+            "auto_reply_inbound_id": "inbound-missing-wechat-id",
+        },
+    )
+
+    async def no_batch(**_kwargs):
+        pytest.fail("a conversation without a stable WeChat ID must not enter the AI batch")
+
+    monkeypatch.setattr(engine, "_call_auto_reply_llm_batch", no_batch)
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    assert result["ai_batch_candidate_count"] == 0
+    assert result["replied"] == 0
+    assert result["items"][0]["status"] == "wechat_id_missing"
+
+
+@pytest.mark.asyncio
+async def test_auto_reply_does_not_capture_id_when_current_message_is_not_inbound(tmp_path, monkeypatch):
+    sessions = [
+        {
+            "peer_id": "无需回复客户",
+            "display_name": "无需回复客户",
+            "last_content": "已回复",
+            "unread_count": 0,
+            "chat_type": "friend",
+        }
+    ]
+    _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions)
+    monkeypatch.setattr(
+        engine,
+        "sync_local_messages",
+        lambda *_args, **_kwargs: {
+            "peer_id": "无需回复客户",
+            "chat_info": {"chat_name": "无需回复客户", "chat_type": "direct"},
+        },
+    )
+    monkeypatch.setattr(engine, "_latest_strict_auto_reply_candidate", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        engine,
+        "_read_current_private_chat_wx_no",
+        lambda *_args, **_kwargs: pytest.fail("outbound or unknown latest messages must not open a profile"),
+    )
+
+    async def no_batch(**_kwargs):
+        pytest.fail("outbound or unknown latest messages must not enter the AI batch")
+
+    monkeypatch.setattr(engine, "_call_auto_reply_llm_batch", no_batch)
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    assert result["ai_batch_candidate_count"] == 0
+    assert result["items"][0]["status"] == "no_unreplied_message"
+
+
+@pytest.mark.asyncio
+async def test_auto_reply_captures_candidate_wechat_id_then_reopens_by_id(tmp_path, monkeypatch):
+    sessions = [
+        {
+            "peer_id": "新客户",
+            "display_name": "新客户",
+            "last_content": "你好",
+            "unread_count": 1,
+            "chat_type": "friend",
+        }
+    ]
+    _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions)
+    sync_calls = []
+
+    def sync_messages(_account_id, peer_id, **_kwargs):
+        sync_calls.append(peer_id)
+        return {
+            "peer_id": peer_id,
+            "chat_info": {"chat_name": "新客户", "chat_type": "direct"},
+        }
+
+    monkeypatch.setattr(engine, "sync_local_messages", sync_messages)
+    # The current runner captures the live page before the AI batch. Keep the
+    # legacy call trace meaningful while supplying that immutable capture.
+    def sync_sessions_with_capture(_account_id, **kwargs):
+        if kwargs.get("capture_auto_reply"):
+            capture_key = str(sessions[0]["peer_id"])
+            sync_calls.append(capture_key)
+            inbound = {
+                "direction": "in",
+                "content": str(sessions[0].get("last_content") or "hello"),
+                "auto_reply_inbound_id": "inbound-new-customer",
+            }
+            return {
+                "ok": True,
+                "items": sessions,
+                "scroll_rounds": 1,
+                "time_scan": True,
+                "auto_reply_captures": {
+                    capture_key: {
+                        "sync_result": {
+                            "ok": True,
+                            "peer_id": capture_key,
+                            "chat_info": {"chat_name": capture_key, "chat_type": "direct"},
+                            "fresh_latest_message": inbound,
+                        },
+                        "inbound": inbound,
+                        "actual_peer": capture_key,
+                        "wechat_id": "wxid_new_customer",
+                        "display_name": capture_key,
+                        "source": "wxauto_page_immediate_capture",
+                    }
+                },
+            }
+        return {"ok": True, "items": sessions, "scroll_rounds": 1}
+    monkeypatch.setattr(engine, "sync_local_sessions", sync_sessions_with_capture)
+    monkeypatch.setattr(
+        engine,
+        "_read_current_private_chat_wx_no",
+        lambda *_args, **_kwargs: {"ok": True, "wx_no": "wxid_new_customer", "reason": "profile_popup"},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_latest_strict_auto_reply_candidate",
+        lambda _account_id, peer_id: {
+            "peer_id": peer_id,
+            "direction": "in",
+            "content": "你好",
+            "auto_reply_inbound_id": "inbound-new-customer",
+        },
+    )
+    monkeypatch.setattr(engine, "_recent_conversation_text", lambda *_args, **_kwargs: "对方: 你好")
+
+    async def batch_reply(*, items, **_kwargs):
+        assert [item["wechat_id"] for item in items] == ["wxid_new_customer"]
+        return {
+            str(items[0]["work_id"]): {
+                "should_reply": True,
+                "reply": "您好，请问有什么可以帮您？",
+                "category": "casual",
+            }
+        }
+
+    sent = []
+    monkeypatch.setattr(engine, "_call_auto_reply_llm_batch", batch_reply)
+    monkeypatch.setattr(
+        engine,
+        "_send_text_local_slow",
+        lambda _account_id, peer_id, content, *_args, **_kwargs: sent.append((peer_id, content)) or {"ok": True},
+    )
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    # The nickname-keyed collection opens the chat once; the stable wxid is
+    # searched only after AI confirms that a reply is required.
+    assert sync_calls == ["新客户", "wxid_new_customer"]
+    assert sent == [("wxid_new_customer", "您好，请问有什么可以帮您？")]
+    assert result["replied"] == 1
+
+
+@pytest.mark.asyncio
+async def test_auto_reply_does_not_search_id_when_ai_skips_candidate(tmp_path, monkeypatch):
+    sessions = [
+        {
+            "peer_id": "暂不回复客户",
+            "display_name": "暂不回复客户",
+            "last_content": "收到",
+            "unread_count": 1,
+            "chat_type": "friend",
+        }
+    ]
+    _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions)
+    sync_calls = []
+
+    def sync_messages(_account_id, peer_id, **_kwargs):
+        sync_calls.append(peer_id)
+        return {
+            "peer_id": peer_id,
+            "chat_info": {"chat_name": "暂不回复客户", "chat_type": "direct"},
+        }
+
+    monkeypatch.setattr(engine, "sync_local_messages", sync_messages)
+    monkeypatch.setattr(
+        engine,
+        "_read_current_private_chat_wx_no",
+        lambda *_args, **_kwargs: {"ok": True, "wx_no": "wxid_no_action", "reason": "profile_popup"},
+    )
+    monkeypatch.setattr(
+        engine,
+        "_latest_strict_auto_reply_candidate",
+        lambda _account_id, peer_id: {
+            "peer_id": peer_id,
+            "direction": "in",
+            "content": "收到",
+            "auto_reply_inbound_id": "inbound-no-action",
+        },
+    )
+
+    async def batch_reply(*, items, **_kwargs):
+        assert [item["wechat_id"] for item in items] == ["wxid_no_action"]
+        return {
+            str(items[0]["work_id"]): {
+                "should_reply": False,
+                "should_invite_group": False,
+                "category": "acknowledgement",
+            }
+        }
+
+    monkeypatch.setattr(engine, "_call_auto_reply_llm_batch", batch_reply)
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    assert sync_calls == ["暂不回复客户"]
+    assert result["replied"] == 0
+    assert result["items"][0]["status"] == "llm_skipped"
 
 
 @pytest.mark.asyncio
 async def test_auto_reply_batches_candidates_and_binds_replies_by_work_id(tmp_path, monkeypatch):
     sessions = [
-        {"peer_id": "customer-a", "display_name": "Customer A", "last_content": "message-a", "unread_count": 1},
-        {"peer_id": "customer-b", "display_name": "Customer B", "last_content": "message-b", "unread_count": 1},
+        {
+            "peer_id": "客户A",
+            "display_name": "Customer A",
+            "wechat_id": "wxid_customer_a",
+            "last_content": "message-a",
+            "unread_count": 1,
+        },
+        {
+            "peer_id": "客户B",
+            "display_name": "Customer B",
+            "wechat_id": "wxid_customer_b",
+            "last_content": "message-b",
+            "unread_count": 1,
+        },
     ]
     session_calls = _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions)
     sync_calls = []
@@ -3045,14 +3555,14 @@ async def test_auto_reply_batches_candidates_and_binds_replies_by_work_id(tmp_pa
         return {"peer_id": peer_id, "chat_info": {"chat_type": "direct"}}
 
     inbound_by_peer = {
-        "customer-a": {
-            "peer_id": "customer-a",
+        "wxid_customer_a": {
+            "peer_id": "wxid_customer_a",
             "direction": "in",
             "content": "message-a",
             "auto_reply_inbound_id": "inbound-a",
         },
-        "customer-b": {
-            "peer_id": "customer-b",
+        "wxid_customer_b": {
+            "peer_id": "wxid_customer_b",
             "direction": "in",
             "content": "message-b",
             "auto_reply_inbound_id": "inbound-b",
@@ -3092,16 +3602,159 @@ async def test_auto_reply_batches_candidates_and_binds_replies_by_work_id(tmp_pa
 
     assert session_calls == [False, True]
     assert len(batch_calls) == 1
-    assert [peer_id for peer_id, _kwargs in sync_calls] == ["customer-a", "customer-b", "customer-a", "customer-b"]
+    assert [peer_id for peer_id, _kwargs in sync_calls] == [
+        "wxid_customer_a",
+        "wxid_customer_b",
+        "wxid_customer_a",
+        "wxid_customer_b",
+    ]
     assert all(call_kwargs["current_selected"] is False for _peer_id, call_kwargs in sync_calls)
-    assert sent == [("customer-a", "reply-a"), ("customer-b", "reply-b")]
+    assert sent == [("wxid_customer_a", "reply-a"), ("wxid_customer_b", "reply-b")]
     assert result["replied"] == 2
 
 
 @pytest.mark.asyncio
-async def test_auto_reply_discards_batch_result_when_latest_message_changes(tmp_path, monkeypatch):
+async def test_auto_reply_executes_each_ai_batch_before_requesting_the_next(tmp_path, monkeypatch):
+    async def no_sleep(_delay):
+        return None
+
+    monkeypatch.setattr(engine.asyncio, "sleep", no_sleep)
     sessions = [
-        {"peer_id": "customer-a", "display_name": "Customer A", "last_content": "old-message", "unread_count": 1}
+        {
+            "peer_id": f"customer-{index}",
+            "display_name": f"Customer {index}",
+            "wechat_id": f"wxid_customer_{index}",
+            "last_content": f"message-{index}",
+            "unread_count": 1,
+            "chat_type": "friend",
+        }
+        for index in range(10)
+    ]
+    _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions)
+    order = []
+
+    def sync_messages(_account_id, peer_id, **_kwargs):
+        return {"peer_id": peer_id, "chat_info": {"chat_type": "direct"}}
+
+    inbound_by_peer = {
+        f"wxid_customer_{index}": {
+            "peer_id": f"wxid_customer_{index}",
+            "direction": "in",
+            "content": f"message-{index}",
+            "auto_reply_inbound_id": f"inbound-{index}",
+        }
+        for index in range(10)
+    }
+    monkeypatch.setattr(engine, "sync_local_messages", sync_messages)
+    monkeypatch.setattr(
+        engine,
+        "_latest_strict_auto_reply_candidate",
+        lambda _account_id, peer_id: dict(inbound_by_peer[peer_id]),
+    )
+
+    async def batch_reply(*, items, **_kwargs):
+        batch_number = len([entry for entry in order if entry.startswith("ai-")]) + 1
+        order.append(f"ai-{batch_number}")
+        return {
+            str(item["work_id"]): {
+                "should_reply": True,
+                "reply": f"reply-{item['wechat_id'].rsplit('_', 1)[-1]}",
+                "category": "casual",
+            }
+            for item in items
+        }
+
+    monkeypatch.setattr(engine, "_call_auto_reply_llm_batch", batch_reply)
+    monkeypatch.setattr(
+        engine,
+        "_send_text_local_slow",
+        lambda _account_id, peer_id, _content, *_args, **_kwargs: order.append(
+            f"send-{peer_id.rsplit('_', 1)[-1]}"
+        )
+        or {"ok": True},
+    )
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    assert order[:9] == ["ai-1", *[f"send-{index}" for index in range(8)]]
+    assert order[9:] == ["ai-2", "send-8", "send-9"]
+    assert result["ai_batch_request_count"] == 2
+    assert result["replied"] == 10
+
+
+@pytest.mark.asyncio
+async def test_auto_reply_does_not_truncate_recent_candidates_at_legacy_limit(tmp_path, monkeypatch):
+    sessions = [
+        {
+            "peer_id": f"wxid_recent_{index}",
+            "display_name": f"Recent {index}",
+            "wechat_id": f"wxid_recent_{index}",
+            "last_content": f"message-{index}",
+            "unread_count": 1,
+            "chat_type": "friend",
+        }
+        for index in range(101)
+    ]
+    _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions)
+
+    monkeypatch.setattr(
+        engine,
+        "sync_local_messages",
+        lambda _account_id, peer_id, **_kwargs: {
+            "peer_id": peer_id,
+            "chat_info": {"chat_type": "direct"},
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_latest_strict_auto_reply_candidate",
+        lambda _account_id, peer_id: {
+            "peer_id": peer_id,
+            "direction": "in",
+            "content": f"message-{peer_id.rsplit('_', 1)[-1]}",
+            "auto_reply_inbound_id": f"inbound-{peer_id.rsplit('_', 1)[-1]}",
+        },
+    )
+    batch_sizes = []
+
+    async def batch_reply(*, items, **_kwargs):
+        batch_sizes.append(len(items))
+        return {
+            str(item["work_id"]): {
+                "should_reply": False,
+                "should_invite_group": False,
+                "category": "no_action",
+            }
+            for item in items
+        }
+
+    monkeypatch.setattr(engine, "_call_auto_reply_llm_batch", batch_reply)
+
+    result = await engine.run_auto_reply_once(
+        engine.LOCAL_DEFAULT_ACCOUNT_ID,
+        force=True,
+        check_friend_requests=False,
+    )
+
+    assert result["ai_batch_candidate_count"] == 101
+    assert result["ai_batch_request_count"] == 13
+    assert batch_sizes == ([8] * 12) + [5]
+
+
+@pytest.mark.asyncio
+async def test_auto_reply_keeps_prepared_batch_when_latest_message_changes(tmp_path, monkeypatch):
+    sessions = [
+        {
+            "peer_id": "客户A",
+            "display_name": "Customer A",
+            "wechat_id": "wxid_customer_a",
+            "last_content": "old-message",
+            "unread_count": 1,
+        }
     ]
     _patch_batch_reply_runner_common(tmp_path, monkeypatch, sessions)
     monkeypatch.setattr(
@@ -3110,8 +3763,8 @@ async def test_auto_reply_discards_batch_result_when_latest_message_changes(tmp_
         lambda _account_id, peer_id, **_kwargs: {"peer_id": peer_id, "chat_info": {"chat_type": "direct"}},
     )
     candidates = [
-        {"peer_id": "customer-a", "direction": "in", "content": "old-message", "auto_reply_inbound_id": "old-id"},
-        {"peer_id": "customer-a", "direction": "in", "content": "new-message", "auto_reply_inbound_id": "new-id"},
+        {"peer_id": "wxid_customer_a", "direction": "in", "content": "old-message", "auto_reply_inbound_id": "old-id"},
+        {"peer_id": "wxid_customer_a", "direction": "in", "content": "new-message", "auto_reply_inbound_id": "new-id"},
     ]
     monkeypatch.setattr(
         engine,
@@ -3129,10 +3782,11 @@ async def test_auto_reply_discards_batch_result_when_latest_message_changes(tmp_
         }
 
     monkeypatch.setattr(engine, "_call_auto_reply_llm_batch", batch_reply)
+    sent = []
     monkeypatch.setattr(
         engine,
         "_send_text_local_slow",
-        lambda *_args, **_kwargs: pytest.fail("a stale AI reply must never be sent"),
+        lambda _account_id, peer_id, content, *_args, **_kwargs: sent.append((peer_id, content)) or {"ok": True},
     )
 
     result = await engine.run_auto_reply_once(
@@ -3141,15 +3795,10 @@ async def test_auto_reply_discards_batch_result_when_latest_message_changes(tmp_
         check_friend_requests=False,
     )
 
-    assert result["replied"] == 0
-    assert result["skipped"] == 1
-    assert result["items"][0]["status"] == "stale_after_batch"
-    assert result["items"][0]["skip_reason"] == "latest_message_changed"
-    assert not engine._auto_reply_history_exists(
-        engine.LOCAL_DEFAULT_ACCOUNT_ID,
-        "customer-a",
-        {"auto_reply_inbound_id": "old-id", "content": "old-message"},
-    )
+    assert result["replied"] == 1
+    assert sent == [("wxid_customer_a", "reply-for-old-message")]
+    assert result["items"][0]["status"] == "sent"
+    assert result["items"][0]["current_latest_message_id"] == "new-id"
 
 
 @pytest.mark.asyncio
