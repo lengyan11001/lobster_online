@@ -1,7 +1,7 @@
 {
-  "version": "2.0.9",
-  "build": 288,
-  "applied_at": "2026-09-01T15:16:57+08:00",
+  "version": "2.0.10",
+  "build": 289,
+  "applied_at": "2026-09-02T00:45:07+08:00",
   "note": "Reliable WeChat message input and send flow",
-  "bundle_sha256": "e167b504c48697f6f562de68e8d66f0b4862aeafb0789b22c2eaa4640c7ad9b9"
+  "bundle_sha256": "057dcbc91d65b6b8ffc98133216d956ae114aa7d3377425ebc5423a9d1360e71"
 }
