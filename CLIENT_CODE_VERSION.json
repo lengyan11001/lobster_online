@@ -1,7 +1,7 @@
 {
-  "version": "2.0.12",
-  "build": 291,
-  "applied_at": "2026-09-02T16:10:36+08:00",
-  "note": "TikHub pricing and provider billing protection",
-  "bundle_sha256": "13789aa91eee96103f86cede0343f2cbeaa245da6bdbc50b47928d5641e94894"
+  "version": "2.0.13",
+  "build": 292,
+  "applied_at": "2026-09-02T21:45:45+08:00",
+  "note": "workflow reliability, asset delivery and scheduler resilience",
+  "bundle_sha256": "2d3a32e416290e4a779fe63c019fdd5a2c8f02fd820e10ca2a13c328126aadbd"
 }
