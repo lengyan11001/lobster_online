@@ -867,9 +867,10 @@ def _resolve_reference_urls(
     aid = str(profile.get("photo_asset_id") or "").strip()
     if aid:
         public = get_asset_public_url(aid, current_user.id, request, db)
-        if not public:
+        if public:
+            _append_public_reference_url(urls, public)
+        elif not photo_url:
             raise HTTPException(status_code=400, detail=f"人物照片素材 {aid} 暂无可用于云端合成的公网地址")
-        _append_public_reference_url(urls, public)
     _append_public_reference_url(urls, photo_url)
     if not urls:
         raise HTTPException(status_code=400, detail="请先上传人物照片，或从素材库选择一张人物照片")

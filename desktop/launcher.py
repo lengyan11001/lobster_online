@@ -1987,41 +1987,53 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             failures = 0
             health_url = f"http://127.0.0.1:{port}/api/health?fast=1"
             while not stop_event.wait(2.0):
-                health_ok, health_reason, health_elapsed_ms = http_ready_probe(health_url, timeout=1.0)
+                # A long client workflow can briefly monopolize the backend
+                # event loop. Give the lightweight fast probe enough time to
+                # return, and rely on process/port liveness before recovery.
+                health_ok, health_reason, health_elapsed_ms = http_ready_probe(health_url, timeout=2.5)
                 if health_ok:
                     failures = 0
                     continue
+
+                proc = runtime.get("backend_proc")
+                process_alive = isinstance(proc, subprocess.Popen) and proc.poll() is None
+                port_alive = process_alive and port_open("127.0.0.1", port, timeout=0.4)
+                probe_delayed = (
+                    "timeouterror" in health_reason.lower()
+                    or "timed out" in health_reason.lower()
+                    or "timeout" in health_reason.lower()
+                )
+                if port_alive and probe_delayed:
+                    # A synchronous Playwright/AI section can delay the
+                    # event loop while the backend remains healthy enough to
+                    # continue the active task. Do not turn that delay into a
+                    # recovery attempt or carry it into the next probe.
+                    if failures in (0, 3, 10) or failures % 30 == 0:
+                        log(
+                            "Backend watchdog: health probe delayed; backend process and port are alive "
+                            "reason=%s elapsed_ms=%.1f pid=%s"
+                            % (health_reason, health_elapsed_ms, getattr(proc, "pid", None))
+                        )
+                    failures = 0
+                    continue
+
                 failures += 1
                 if failures in (1, 3, 10):
-                    proc = runtime.get("backend_proc")
                     log(
                         "Backend watchdog: health failure count=%s reason=%s elapsed_ms=%.1f "
-                        "backend_pid=%s process_alive=%s"
+                        "backend_pid=%s process_alive=%s port_alive=%s"
                         % (
                             failures,
                             health_reason,
                             health_elapsed_ms,
                             getattr(proc, "pid", None),
-                            isinstance(proc, subprocess.Popen) and proc.poll() is None,
+                            process_alive,
+                            port_alive,
                         )
                     )
                 if failures < 3:
                     continue
 
-                proc = runtime.get("backend_proc")
-                process_alive = isinstance(proc, subprocess.Popen) and proc.poll() is None
-                if process_alive and port_open("127.0.0.1", port, timeout=0.4):
-                    # Health probes share the backend event loop. A long
-                    # Playwright/AI operation can make the probe time out even
-                    # though the process is still serving the task. Keep the
-                    # process alive and let the next probe observe recovery.
-                    if failures in (3, 10) or failures % 30 == 0:
-                        log(
-                            "Backend watchdog: defer recovery; backend process and port are alive "
-                            "pid=%s failures=%s"
-                            % (getattr(proc, "pid", None), failures)
-                        )
-                    continue
                 result = recover_local_services(
                     "backend_watchdog",
                     allow_live_process_restart=False,

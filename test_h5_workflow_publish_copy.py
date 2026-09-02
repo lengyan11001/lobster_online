@@ -259,10 +259,16 @@ async def test_douyin_child_without_script_still_generates_copy_on_server(monkey
 
     async def post_local(path, body, **kwargs):
         publish_calls.append((path, body))
+        if path == "/api/assets/save-url":
+            return {"asset_id": "local-bestseller-video"}
         return {"ok": True}
+
+    async def local_asset_missing(*args, **kwargs):
+        return {"asset_id": "bestseller-video", "available": False}
 
     monkeypatch.setattr(channel, "_resolve_parent_workflow_material", resolve_parent)
     monkeypatch.setattr(channel, "_generate_scheduled_publish_copy", generate_copy)
+    monkeypatch.setattr(channel, "_get_local_api_json", local_asset_missing)
     monkeypatch.setattr(channel, "_post_local_api_json", post_local)
 
     await channel._run_client_workflow_action(
@@ -284,10 +290,11 @@ async def test_douyin_child_without_script_still_generates_copy_on_server(monkey
 
     assert len(generated_calls) == 1
     assert generated_calls[0]["source_script"] == ""
-    assert publish_calls[0][0] == "/api/publish"
-    assert publish_calls[0][1]["ai_publish_copy"] is False
-    assert publish_calls[0][1]["title"] == "同城榜单发布标题"
-    assert publish_calls[0][1]["description"] == "同城榜单发布正文"
+    publish_body = next(body for path, body in publish_calls if path == "/api/publish")
+    assert publish_body["ai_publish_copy"] is False
+    assert publish_body["asset_id"] == "local-bestseller-video"
+    assert publish_body["title"] == "同城榜单发布标题"
+    assert publish_body["description"] == "同城榜单发布正文"
 
 
 @pytest.mark.asyncio

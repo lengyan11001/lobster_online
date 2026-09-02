@@ -258,8 +258,25 @@
   function fmtTime(value) {
     if (!value) return '';
     try {
-      var d = new Date(value);
-      if (!isNaN(d.getTime())) return d.toLocaleString();
+      var raw = String(value).trim();
+      // API timestamps are UTC ISO values; make the UTC assumption explicit when
+      // the backend omits the trailing Z so browsers do not interpret them as
+      // local time.
+      if (raw && isNaN(Number(raw)) && raw.indexOf(' ') > 0 && raw.indexOf('T') < 0) raw = raw.replace(' ', 'T');
+      if (raw && isNaN(Number(raw)) && !/[zZ]$/.test(raw) && !/[+-]\d{2}:?\d{2}$/.test(raw)) raw += 'Z';
+      var d = new Date(value && !isNaN(Number(value)) ? Number(value) : raw);
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleString('zh-CN', {
+          timeZone: 'Asia/Shanghai',
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: false
+        });
+      }
     } catch (e) {}
     return String(value);
   }
@@ -1566,11 +1583,45 @@
     var label = document.querySelector('label[for="ipCompetitorSearchInput"]');
     var input = $('ipCompetitorSearchInput');
     var btn = $('ipSearchCompetitorBtn');
+    var directBtn = $('ipAddCompetitorByChannelIdBtn');
     if (label) label.textContent = isWechatChannels ? '昵称或 username' : '昵称或抖音号';
-    if (input) input.placeholder = isWechatChannels ? '输入视频号昵称或 username' : '输入昵称或抖音号';
+    if (input) input.placeholder = isWechatChannels ? '输入视频号昵称、sph 开头公开 ID 或 username' : '输入昵称或抖音号';
     if (btn) btn.textContent = '搜索账号';
+    if (directBtn) directBtn.hidden = !isWechatChannels;
     state.competitorCandidates = [];
     renderCompetitorCandidates();
+  }
+
+  function addCompetitorByChannelId() {
+    var platform = (($('ipCompetitorPlatform') && $('ipCompetitorPlatform').value) || 'douyin');
+    if (platform !== 'wechat_channels') return;
+    var input = $('ipCompetitorSearchInput');
+    var channelId = ((input && input.value) || '').trim();
+    var tags = (($('ipCompetitorTags') && $('ipCompetitorTags').value) || '').trim();
+    if (!channelId) {
+      setMsg('请先输入视频号公开 ID（sph 开头）。', true);
+      return;
+    }
+    var btn = $('ipAddCompetitorByChannelIdBtn');
+    setBusy(btn, true, '解析并添加中...');
+    cloudJson('/api/ip-content/wechat-channels/competitors/by-channel-id', {
+      method: 'POST',
+      body: { channel_id: channelId, industry_tags: tags }
+    }).then(function(data) {
+      if (input) input.value = '';
+      if ($('ipCompetitorTags')) $('ipCompetitorTags').value = '';
+      state.competitorCandidates = [];
+      renderCompetitorCandidates();
+      setMsg('视频号公开 ID 已添加。');
+      return loadCompetitors().then(function() {
+        if (data.item && data.item.id) return syncCompetitor(data.item.id);
+        return null;
+      });
+    }).catch(function(err) {
+      setMsg(err.message || '按照视频号公开 ID 添加失败', true);
+    }).finally(function() {
+      setBusy(btn, false);
+    });
   }
 
   function addCompetitorFromCandidate(candidate, btn) {
@@ -2800,6 +2851,7 @@
     if ($('ipAddKeywordBtn')) $('ipAddKeywordBtn').addEventListener('click', addKeyword);
     if ($('ipCompetitorPlatform')) $('ipCompetitorPlatform').addEventListener('change', updateCompetitorPlatformFields);
     if ($('ipSearchCompetitorBtn')) $('ipSearchCompetitorBtn').addEventListener('click', searchCompetitors);
+    if ($('ipAddCompetitorByChannelIdBtn')) $('ipAddCompetitorByChannelIdBtn').addEventListener('click', addCompetitorByChannelId);
     if ($('ipCompetitorSearchInput')) {
       $('ipCompetitorSearchInput').addEventListener('keydown', function(ev) {
         if (ev.key === 'Enter') {

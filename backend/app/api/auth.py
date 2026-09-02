@@ -46,6 +46,7 @@ _AUTH_ME_TRANSIENT_HTTP = frozenset({429, 502, 503, 504})
 # Bearer(+安装 id) -> (monotonic 过期时间, 用户 id)；仅缓存远端 200 结果
 _AUTH_ME_CACHE_LOCK = asyncio.Lock()
 _AUTH_ME_CACHE: Dict[str, tuple[float, int]] = {}
+_AUTH_ME_STALE_GRACE_SECONDS = 900
 _SKILL_STORE_ADMIN_CACHE_LOCK = asyncio.Lock()
 _SKILL_STORE_ADMIN_CACHE: Dict[str, tuple[float, bool]] = {}
 _SKILL_STORE_ADMIN_CACHE_TTL_SEC = 120.0
@@ -402,6 +403,37 @@ async def get_current_user_for_local(
                 return _ServerUser(id=hit[1])
 
     last_request_error: Optional[Exception] = None
+
+    async def stale_cached_user() -> Optional[_ServerUser]:
+        """Keep local work usable during a short auth-server outage.
+
+        Only network failures reach this helper. Explicit 401/403 responses
+        still invalidate access immediately.
+        """
+        if cache_key is None:
+            return None
+        try:
+            grace_seconds = max(
+                0,
+                int(getattr(s, "auth_me_stale_cache_grace_seconds", _AUTH_ME_STALE_GRACE_SECONDS) or 0),
+            )
+        except (TypeError, ValueError):
+            grace_seconds = _AUTH_ME_STALE_GRACE_SECONDS
+        if grace_seconds <= 0:
+            return None
+        now_m = time.monotonic()
+        async with _AUTH_ME_CACHE_LOCK:
+            cached = _AUTH_ME_CACHE.get(cache_key)
+        if not cached or cached[0] + grace_seconds <= now_m:
+            return None
+        logger.warning(
+            "[auth-local] auth/me unavailable; using stale authenticated user id=%s age=%.1fs grace=%ss",
+            cached[1],
+            max(0.0, now_m - cached[0]),
+            grace_seconds,
+        )
+        return _ServerUser(id=cached[1])
+
     for attempt in range(1, _AUTH_ME_MAX_ATTEMPTS + 1):
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -456,7 +488,11 @@ async def get_current_user_for_local(
                 detail="无法验证凭证",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        except HTTPException:
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+                cached_user = await stale_cached_user()
+                if cached_user is not None:
+                    return cached_user
             raise
         except httpx.RequestError as e:
             last_request_error = e
@@ -470,6 +506,9 @@ async def get_current_user_for_local(
                 )
                 await asyncio.sleep(0.25 * (2 ** (attempt - 1)))
                 continue
+            cached_user = await stale_cached_user()
+            if cached_user is not None:
+                return cached_user
             logger.error(
                 "[auth-local] 503 原因=认证中心不可达 url=%s/auth/me err_type=%s err=%s",
                 base,

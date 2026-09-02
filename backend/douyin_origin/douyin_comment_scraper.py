@@ -85,6 +85,19 @@ class DouyinCommentCollectionUnconfirmed(RuntimeError):
     """The comment surface opened, but its contents could not be verified."""
 
 
+class DouyinSearchUpstreamError(RuntimeError):
+    """The Douyin search page returned an HTTP error before rendering results."""
+
+    def __init__(self, status: int, url: str, body: str = "") -> None:
+        self.status = int(status or 0)
+        self.url = str(url or "")
+        self.body = re.sub(r"\s+", " ", str(body or "")).strip()[:500]
+        detail = f"Douyin search page returned HTTP {self.status} at {self.url}"
+        if self.body:
+            detail += f": {self.body}"
+        super().__init__(detail)
+
+
 DOUYIN_CDP_CONNECT_TIMEOUT_MS = 30000
 
 
@@ -8775,7 +8788,33 @@ class DouyinCommentScraper:
             goto_started = time.monotonic()
             self._emit(logger, f"[抖音诊断] page.goto 开始 url={url}", "info")
             try:
-                await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                response = None
+                transient_statuses = {408, 429, 500, 502, 503, 504}
+                for attempt in range(1, 4):
+                    response = await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    status = int(response.status) if response is not None and response.status else 0
+                    self._emit(
+                        logger,
+                        f"[抖音诊断] page.goto 响应 attempt={attempt} http_status={status or 'unknown'} current_url={page.url}",
+                        "info" if status < 400 else "warning",
+                    )
+                    if status < 400 or not status:
+                        break
+
+                    body_preview = ""
+                    try:
+                        body_preview = (await page.locator("body").inner_text(timeout=2000))[:500]
+                    except Exception:
+                        pass
+                    body_preview_clean = re.sub(r"\s+", " ", body_preview).strip()[:500]
+                    self._emit(
+                        logger,
+                        f"[抖音诊断] 抖音搜索页 HTTP {status} attempt={attempt} body={body_preview_clean}",
+                        "warning",
+                    )
+                    if status not in transient_statuses or attempt >= 3:
+                        raise DouyinSearchUpstreamError(status, url, body_preview)
+                    await page.wait_for_timeout(1000 * attempt)
             except Exception as exc:
                 self._emit(logger, f"[抖音诊断] page.goto 失败 error={type(exc).__name__}: {exc} elapsed_ms={(time.monotonic() - goto_started) * 1000:.1f}", "error")
                 raise

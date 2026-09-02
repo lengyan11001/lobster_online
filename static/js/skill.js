@@ -1345,7 +1345,7 @@ window._openIpContentStudioView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('ip-content-studio', {
       html: '/static/views/ip-content-studio.html?v=20260615-ip-content-batch',
-      scripts: '/static/js/ip-content-studio.js?v=20260615-ip-content-batch-20260807-content-publish-v1',
+      scripts: '/static/js/ip-content-studio.js?v=20260902-beijing-time-v1',
       cache: 'reload'
     });
   }

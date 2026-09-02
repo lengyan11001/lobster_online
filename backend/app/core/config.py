@@ -167,6 +167,8 @@ class Settings(BaseSettings):
     lobster_mcp_billing_internal_key: Optional[str] = None
     """同 Bearer 在本进程内复用最近一次成功的 GET /auth/me 结果，减少并发与远端超时。秒；0=每次请求都拉远端（与旧行为一致）。"""
     auth_me_cache_ttl_seconds: int = 120
+    """网络短暂不可达时，允许复用最近一次成功认证的最长秒数；401/403 不走此宽限。"""
+    auth_me_stale_cache_grace_seconds: int = 900
     """为 True 时：高消耗 invoke_capability 前需用户确认后再请求 MCP（环境变量 CHAT_REQUIRE_CAPABILITY_COST_CONFIRM）。"""
     chat_require_capability_cost_confirm: bool = False
     """为 True（默认）时：纯图/视频生成拿到终态 saved_assets 后尽早结束工具编排，减少多余 LLM 轮次；用户同句要求发布时仍会继续编排。"""

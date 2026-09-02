@@ -316,6 +316,9 @@ def test_audio_driven_workflow_skips_voice_preview_tts(monkeypatch):
     async def fake_post_cloud(*args, **kwargs):
         return next(responses)
 
+    async def fake_materialize(**kwargs):
+        return "local-video-1", {"status": "materialized"}
+
     class NoTtsCloud:
         async def post(self, *args, **kwargs):
             raise AssertionError("audio drive must not call preview-tts")
@@ -323,6 +326,7 @@ def test_audio_driven_workflow_skips_voice_preview_tts(monkeypatch):
     monkeypatch.setattr(h5_chat_channel, "_resolve_workflow_virtualman", fake_resolve)
     monkeypatch.setattr(h5_chat_channel, "_workflow_event", fake_event)
     monkeypatch.setattr(h5_chat_channel, "_post_cloud_api_json", fake_post_cloud)
+    monkeypatch.setattr(h5_chat_channel, "_ensure_local_workflow_asset", fake_materialize)
 
     result = asyncio.run(
         _run_shanjian_digital_human_workflow(

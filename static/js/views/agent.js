@@ -197,8 +197,12 @@
   }
 
   function isSkippedRun(run) {
-    var rp = run && run.resultPayload && typeof run.resultPayload === 'object' ? run.resultPayload : {};
-    return !!(rp && rp.skipped);
+    var rp = run && run.resultPayload && typeof run.resultPayload === 'object'
+      ? run.resultPayload
+      : (run && run.result_payload && typeof run.result_payload === 'object' ? run.result_payload : {});
+    var progress = run && run.progress && typeof run.progress === 'object' ? run.progress : {};
+    var reason = String((rp && (rp.skip_reason || rp.reason)) || (progress && (progress.skip_reason || progress.reason)) || '').toLowerCase();
+    return !!(rp && rp.skipped) || reason === 'expired_before_execution' || reason === 'workflow_node_deadline_expired';
   }
 
   function capabilityLabel(run) {
@@ -660,6 +664,7 @@
 
   function workerTone(run) {
     var status = String((run && run.status) || '').toLowerCase();
+    if (isSkippedRun(run)) return 'done';
     if (status === 'completed') return 'done';
     if (status === 'failed' || status === 'cancelled') return 'failed';
     return 'running';

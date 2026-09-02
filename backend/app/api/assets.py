@@ -1251,6 +1251,7 @@ class SaveAssetReq(BaseModel):
     url: str
     media_type: str = "image"
     asset_origin: str = "generated"
+    content_visibility: Optional[str] = None
     name: Optional[str] = None
     tags: Optional[str] = None
     prompt: Optional[str] = None
@@ -2323,7 +2324,7 @@ async def _save_asset_from_url_locked(
         existing = _find_existing_asset_by_save_url_dedupe(
             db, current_user.id, dk, asset_origin=asset_origin
         )
-        if existing:
+        if existing and _asset_local_path(existing):
             logger.info(
                 "[save-url 诊断] user_id=%s outcome=dedupe_meta asset_id=%s dk=%s body_prefix=%s effective_prefix=%s "
                 "hint_prefix=%s tags=%s",
@@ -2356,10 +2357,16 @@ async def _save_asset_from_url_locked(
                 outcome="dedupe_meta",
             )
             return result
+        if existing:
+            logger.info(
+                "[save-url] stale dedupe row has no local file; repairing asset_id=%s url=%s",
+                existing.asset_id,
+                _url_snip_for_log(body.url),
+            )
         src_hit = _find_existing_asset_by_normalized_source_url(
             db, current_user.id, body.url, asset_origin=asset_origin
         )
-        if src_hit:
+        if src_hit and _asset_local_path(src_hit):
             logger.info(
                 "[save-url 诊断] user_id=%s outcome=dedupe_source_url asset_id=%s body_prefix=%s tags=%s",
                 current_user.id,
@@ -2386,10 +2393,16 @@ async def _save_asset_from_url_locked(
                 outcome="dedupe_source_url",
             )
             return result
+        if src_hit:
+            logger.info(
+                "[save-url] stale source-url row has no local file; repairing asset_id=%s url=%s",
+                src_hit.asset_id,
+                _url_snip_for_log(body.url),
+            )
         cdn_hit = _find_existing_asset_by_cdn_assets_url(
             db, current_user.id, body.url, asset_origin=asset_origin
         )
-        if cdn_hit:
+        if cdn_hit and _asset_local_path(cdn_hit):
             logger.info(
                 "[save-url 诊断] user_id=%s outcome=dedupe_cdn_path asset_id=%s dk=%s body_prefix=%s hint_prefix=%s tags=%s",
                 current_user.id,
@@ -2420,6 +2433,12 @@ async def _save_asset_from_url_locked(
                 outcome="dedupe_cdn_path",
             )
             return result
+        if cdn_hit:
+            logger.info(
+                "[save-url] stale CDN row has no local file; repairing asset_id=%s url=%s",
+                cdn_hit.asset_id,
+                _url_snip_for_log(body.url),
+            )
     finally:
         db.close()
 
@@ -2538,6 +2557,9 @@ async def _save_asset_from_url_locked(
         source_url = tos_url
 
     meta: dict = {"save_url_dedupe": dk, "asset_origin": asset_origin}
+    visibility = str(body.content_visibility or "").strip().lower()
+    if visibility in {"hidden", "internal", "intermediate"}:
+        meta["content_visibility"] = visibility
     gtid = (body.generation_task_id or "").strip()
     if gtid:
         meta["generation_task_id"] = gtid[:128]
@@ -2696,6 +2718,11 @@ async def upload_asset(
     if mtype == "image":
         data, ct = await asyncio.to_thread(_resize_image_if_needed, data, ext, ct)
     aid, fname, fsize = await asyncio.to_thread(_save_bytes, data, ext)
+    request_headers = getattr(request, "headers", {}) or {}
+    profile_photo_upload = (
+        str(request_headers.get("X-Asset-Purpose") or "").strip().lower() == "profile_photo"
+        or str(request_headers.get("X-Profile-Photo") or "").strip() == "1"
+    )
     upload_headers = _snapshot_auth_server_upload_headers(request) if mtype == "image" else {}
     public_url_status = "preparing" if upload_headers else "deferred_until_use"
     asset = Asset(
@@ -2713,7 +2740,43 @@ async def upload_asset(
     )
     db.add(asset)
     db.commit()
-    if upload_headers:
+    remote_asset_id = ""
+    if upload_headers and profile_photo_upload:
+        # Profile photos are used by server-side generation immediately after
+        # saving the survey. Finish the mirror and registration in this
+        # request so the caller receives a durable public URL and remote ID.
+        public_url, upload_diag = await asyncio.to_thread(
+            _upload_local_asset_to_auth_server_sync,
+            ASSETS_DIR / fname,
+            fname,
+            ct,
+            request,
+        )
+        if public_url:
+            asset.source_url = public_url
+            meta = dict(asset.meta or {})
+            meta["public_url_status"] = "ready"
+            meta["public_url_uploaded_at"] = datetime.utcnow().isoformat()
+            asset.meta = meta
+            db.add(asset)
+            db.commit()
+            remote = await _register_user_upload_asset_to_auth_server(asset, request)
+            remote_asset_id = str((remote or {}).get("asset_id") or "").strip()
+            if remote_asset_id:
+                meta = dict(asset.meta or {})
+                meta["remote_asset_id"] = remote_asset_id[:80]
+                meta["remote_registered_at"] = datetime.utcnow().isoformat()
+                asset.meta = meta
+                db.add(asset)
+                db.commit()
+        else:
+            logger.warning(
+                "[assets] immediate cloud mirror failed asset_id=%s diag=%s; scheduling retry",
+                aid,
+                upload_diag,
+            )
+            background_tasks.add_task(_warm_asset_source_url_background, aid, current_user.id, upload_headers)
+    elif upload_headers:
         background_tasks.add_task(_warm_asset_source_url_background, aid, current_user.id, upload_headers)
     logger.info("[素材本地上传] 已落盘 asset_id=%s filename=%s size=%s media_type=%s", aid, fname, fsize, mtype)
     return {
@@ -2721,7 +2784,8 @@ async def upload_asset(
         "filename": fname,
         "media_type": mtype,
         "file_size": fsize,
-        "source_url": None,
+        "source_url": asset.source_url,
+        "remote_asset_id": remote_asset_id,
         # Let media elements stream local uploads directly instead of waiting
         # for the frontend to download the whole file into a Blob first.
         "open_url": build_asset_file_url(
@@ -2729,8 +2793,8 @@ async def upload_asset(
             aid,
             expiry_sec=_ASSET_LIST_OPEN_FALLBACK_EXPIRY_SEC,
         ),
-        "local_only": True,
-        "public_url_status": public_url_status,
+        "local_only": not bool(asset.source_url),
+        "public_url_status": "ready" if asset.source_url else public_url_status,
     }
 
 
@@ -2770,6 +2834,16 @@ def list_assets(
             Asset.meta["origin"].as_string(),
             "",
         )
+    )
+    meta_visibility = func.lower(
+        func.coalesce(
+            Asset.meta["content_visibility"].as_string(),
+            Asset.meta["library_visibility"].as_string(),
+            "",
+        )
+    )
+    query = query.filter(
+        ~meta_visibility.in_(("hidden", "internal", "intermediate"))
     )
     if origin_filter == "user_upload":
         query = query.filter(meta_origin == "user_upload")
@@ -2829,6 +2903,7 @@ def list_assets(
         out.append(
             {
                 "asset_id": r.asset_id,
+                "remote_asset_id": str((r.meta or {}).get("remote_asset_id") or "") if isinstance(r.meta, dict) else "",
                 "filename": r.filename,
                 "media_type": r.media_type,
                 "file_size": r.file_size,
@@ -3104,6 +3179,41 @@ def serve_asset_file(
     return _stream_local_asset(path, ct, request)
 
 
+@router.get("/api/assets/{asset_id}/availability", summary="检查素材是否已落到本机")
+def get_asset_availability(
+    asset_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    """Expose a small, non-path-leaking readiness check for workflow delivery.
+
+    A cloud asset row and a usable local file are different states. The H5
+    worker uses this endpoint before publishing so it can materialize a cloud
+    result through save-url when the local file is absent.
+    """
+    clean_id = str(asset_id or "").strip()
+    row = db.query(Asset).filter(
+        Asset.asset_id == clean_id,
+        Asset.user_id == current_user.id,
+    ).first()
+    if not row:
+        return {
+            "asset_id": clean_id,
+            "exists": False,
+            "available": False,
+            "local": False,
+        }
+    local = _asset_local_path(row)
+    return {
+        "asset_id": row.asset_id,
+        "exists": True,
+        "available": bool(local),
+        "local": bool(local),
+        "media_type": row.media_type or "",
+        "source_url": row.source_url or "",
+    }
+
+
 @router.get("/api/assets/{asset_id}", summary="获取素材详情")
 def get_asset(
     asset_id: str,
@@ -3128,6 +3238,7 @@ def get_asset(
         open_url = (a.source_url or "").strip()
     return {
         "asset_id": a.asset_id,
+        "remote_asset_id": str((a.meta or {}).get("remote_asset_id") or "") if isinstance(a.meta, dict) else "",
         "filename": a.filename,
         "media_type": a.media_type,
         "file_size": a.file_size,

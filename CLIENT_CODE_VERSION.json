@@ -1,7 +1,7 @@
 {
-  "version": "2.0.10",
-  "build": 289,
-  "applied_at": "2026-09-02T00:45:07+08:00",
-  "note": "Reliable WeChat message input and send flow",
-  "bundle_sha256": "057dcbc91d65b6b8ffc98133216d956ae114aa7d3377425ebc5423a9d1360e71"
+  "version": "2.0.12",
+  "build": 291,
+  "applied_at": "2026-09-02T16:10:36+08:00",
+  "note": "TikHub pricing and provider billing protection",
+  "bundle_sha256": "13789aa91eee96103f86cede0343f2cbeaa245da6bdbc50b47928d5641e94894"
 }

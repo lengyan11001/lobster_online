@@ -83,6 +83,14 @@ _WORKFLOW_NODE_CANCEL_GRACE_SECONDS = 8.0
 _NATIVE_WECHAT_BUSY_RETRY_SECONDS = 45.0
 _NATIVE_WECHAT_BUSY_RETRY_INTERVAL_SECONDS = 1.0
 _SCHEDULED_COMPLETE_RETRY_STATUS = {500, 502, 503, 504}
+_SCHEDULED_TASK_TRANSIENT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
+_SCHEDULED_TASK_EVENT_TIMEOUT_SECONDS = 12.0
+_SCHEDULED_TASK_EVENT_ATTEMPTS = 3
+_SCHEDULED_TASK_COMPLETION_ATTEMPTS = 5
+_SCHEDULED_TASK_COMPLETION_RETRY_DELAY_SECONDS = 2.0
+_SCHEDULED_TASK_COMPLETION_RETRY_SECONDS = 6 * 60 * 60
+_pending_task_completion_run_ids: set[str] = set()
+_pending_task_completion_tasks: set[asyncio.Task] = set()
 _MOBILE_UPLOAD_TITLE = "【手机上传素材】"
 _MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*【手机上传素材】\n(?P<body>[\s\S]*)", re.IGNORECASE)
 
@@ -1324,16 +1332,66 @@ async def _post_task_event(
     event_type: str,
     payload: Optional[Dict[str, Any]] = None,
 ) -> int:
-    try:
-        response = await client.post(
-            f"{base}/api/scheduled-tasks/runs/{run_id}/event",
-            json={"type": event_type, "payload": payload or {}},
-            headers=headers,
-        )
-        return int(response.status_code)
-    except Exception as exc:
-        logger.debug("[SCHEDULED-TASK] post event failed run_id=%s type=%s: %s", run_id, event_type, exc)
-        return 0
+    body = {"type": event_type, "payload": payload or {}}
+    return await _post_task_control_request(
+        client,
+        f"{base}/api/scheduled-tasks/runs/{run_id}/event",
+        body,
+        headers,
+        label=f"event:{event_type}",
+    )
+
+
+async def _post_task_control_request(
+    client: httpx.AsyncClient,
+    url: str,
+    body: Dict[str, Any],
+    headers: Dict[str, str],
+    *,
+    label: str,
+    attempts: int = _SCHEDULED_TASK_EVENT_ATTEMPTS,
+) -> int:
+    """Post task control data with a short timeout.
+
+    The client HTTP session is also used by long-running local jobs and can
+    have a multi-hour read timeout. Task events must never inherit that timeout:
+    a DNS outage should make one event unavailable, not suspend the worker's
+    heartbeat coroutine for the entire watchdog window.
+    """
+    attempts = max(1, int(attempts or 1))
+    timeout = httpx.Timeout(
+        _SCHEDULED_TASK_EVENT_TIMEOUT_SECONDS,
+        connect=3.0,
+        read=_SCHEDULED_TASK_EVENT_TIMEOUT_SECONDS,
+        write=3.0,
+        pool=3.0,
+    )
+    last_error: Optional[Exception] = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = await client.post(url, json=body, headers=headers, timeout=timeout)
+            status = int(response.status_code)
+            if status in _SCHEDULED_TASK_TRANSIENT_STATUS and attempt < attempts:
+                await asyncio.sleep(0.25 * (2 ** (attempt - 1)))
+                continue
+            if status in _SCHEDULED_TASK_TRANSIENT_STATUS:
+                logger.warning("[SCHEDULED-TASK] %s unavailable status=%s attempts=%s", label, status, attempts)
+            return status
+        except httpx.RequestError as exc:
+            last_error = exc
+            if attempt < attempts:
+                await asyncio.sleep(0.25 * (2 ** (attempt - 1)))
+                continue
+        except Exception as exc:
+            last_error = exc
+            break
+    logger.warning(
+        "[SCHEDULED-TASK] %s unavailable after %s attempts error=%s",
+        label,
+        attempts,
+        str(last_error)[:240] if last_error else "unknown",
+    )
+    return 0
 
 
 def _task_event_rejects_local_work(status_code: Any) -> bool:
@@ -1353,11 +1411,90 @@ async def _complete_task_run(
     result_payload: Optional[Dict[str, Any]] = None,
     error: str = "",
 ) -> None:
-    await client.post(
+    body = {"result_text": result_text, "result_payload": result_payload or {}, "error": error}
+    status = await _post_task_control_request(
+        client,
         f"{base}/api/scheduled-tasks/runs/{run_id}/complete",
-        json={"result_text": result_text, "result_payload": result_payload or {}, "error": error},
-        headers=headers,
+        body,
+        headers,
+        label="completion",
+        attempts=_SCHEDULED_TASK_COMPLETION_ATTEMPTS,
     )
+    if status in {200, 201, 202, 204, 409}:
+        return
+    if status == 0 or status in _SCHEDULED_TASK_TRANSIENT_STATUS:
+        # Completion is the one event that cannot be reconstructed from a
+        # later heartbeat. Keep retrying in a separate task after the local
+        # workflow returns, so a remote outage cannot abort the local worker.
+        _queue_task_completion_retry(base, headers, run_id, body)
+        return
+    raise RuntimeError(f"scheduled task completion rejected HTTP {status}")
+
+
+def _queue_task_completion_retry(
+    base: str,
+    headers: Dict[str, str],
+    run_id: str,
+    body: Dict[str, Any],
+) -> None:
+    clean_run_id = str(run_id or "").strip()
+    if not clean_run_id or clean_run_id in _pending_task_completion_run_ids:
+        return
+    _pending_task_completion_run_ids.add(clean_run_id)
+    task = asyncio.create_task(_retry_task_completion(base, headers, clean_run_id, body))
+    _pending_task_completion_tasks.add(task)
+
+    def _done(completed: asyncio.Task) -> None:
+        _pending_task_completion_tasks.discard(completed)
+        _pending_task_completion_run_ids.discard(clean_run_id)
+        try:
+            completed.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("[SCHEDULED-TASK] completion retry stopped run_id=%s error=%s", clean_run_id, str(exc)[:240])
+
+    task.add_done_callback(_done)
+
+
+async def _retry_task_completion(
+    base: str,
+    headers: Dict[str, str],
+    run_id: str,
+    body: Dict[str, Any],
+) -> None:
+    deadline = asyncio.get_running_loop().time() + _SCHEDULED_TASK_COMPLETION_RETRY_SECONDS
+    delay = _SCHEDULED_TASK_COMPLETION_RETRY_DELAY_SECONDS
+    while asyncio.get_running_loop().time() < deadline:
+        timeout = httpx.Timeout(
+            _SCHEDULED_TASK_EVENT_TIMEOUT_SECONDS,
+            connect=3.0,
+            read=_SCHEDULED_TASK_EVENT_TIMEOUT_SECONDS,
+            write=3.0,
+            pool=3.0,
+        )
+        try:
+            async with httpx.AsyncClient(timeout=timeout, trust_env=False) as retry_client:
+                status = await _post_task_control_request(
+                    retry_client,
+                    f"{base}/api/scheduled-tasks/runs/{run_id}/complete",
+                    body,
+                    headers,
+                    label="completion-retry",
+                    attempts=2,
+                )
+            if status in {200, 201, 202, 204, 409}:
+                logger.info("[SCHEDULED-TASK] completion retry succeeded run_id=%s", run_id)
+                return
+            if status not in _SCHEDULED_TASK_TRANSIENT_STATUS and status != 0:
+                logger.warning("[SCHEDULED-TASK] completion retry rejected run_id=%s status=%s", run_id, status)
+                return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("[SCHEDULED-TASK] completion retry error run_id=%s: %s", run_id, str(exc)[:240])
+        await asyncio.sleep(min(delay, max(0.5, deadline - asyncio.get_running_loop().time())))
+        delay = min(60.0, delay * 1.8)
 
 
 def _local_chat_url() -> str:
@@ -7933,6 +8070,85 @@ async def _post_cloud_api_json(
     return data if isinstance(data, dict) else {"result": data}
 
 
+async def _ensure_local_workflow_asset(
+    *,
+    asset_id: str,
+    source_url: str,
+    media_type: str,
+    name: str,
+    prompt: str,
+    headers: Dict[str, str],
+    run_id: str = "",
+) -> tuple[str, Dict[str, Any]]:
+    """Return an asset ID that is present in this Online client's asset DB.
+
+    Workflow results can contain an asset ID created by the cloud server. That
+    ID is not usable by the local /api/publish endpoint until the media has
+    been downloaded into the Online asset library. Prefer an existing local
+    row, and otherwise materialize it from the public result URL.
+    """
+    requested_id = str(asset_id or "").strip()
+    public_url = str(source_url or "").strip()
+    if requested_id:
+        try:
+            availability = await _get_local_api_json(
+                f"/api/assets/{quote(requested_id, safe='')}/availability",
+                headers=headers,
+                timeout_seconds=20.0,
+            )
+            local_id = str(availability.get("asset_id") or requested_id).strip()
+            if local_id and bool(availability.get("available")):
+                logger.info(
+                    "[H5-WORKFLOW] local asset ready asset_id=%s requested_asset_id=%s source=existing",
+                    local_id,
+                    requested_id,
+                )
+                return local_id, {"status": "existing", "requested_asset_id": requested_id}
+        except Exception as exc:
+            logger.info(
+                "[H5-WORKFLOW] local asset missing asset_id=%s; will materialize from URL=%s err=%s",
+                requested_id,
+                public_url[:160] if public_url else "-",
+                str(exc)[:240],
+            )
+
+    if not public_url.startswith(("http://", "https://")):
+        raise RuntimeError(
+            f"客户端素材不存在: {requested_id or '(empty)'}，且任务没有可转存的公网 URL"
+        )
+
+    saved = await _post_local_api_json(
+        "/api/assets/save-url",
+        {
+            "url": public_url,
+            "media_type": str(media_type or "video").strip().lower() or "video",
+            "asset_origin": "generated",
+            "content_visibility": "internal",
+            "name": str(name or "H5工作流素材").strip() or "H5工作流素材",
+            "prompt": str(prompt or "").strip(),
+            "tags": "H5工作流生成",
+            "generation_task_id": str(run_id or "").strip() or None,
+        },
+        headers=headers,
+        timeout_seconds=1800.0,
+        request_id=f"h5:{run_id}:asset-materialize" if run_id else "",
+    )
+    local_id = str(saved.get("asset_id") or "").strip()
+    if not local_id:
+        raise RuntimeError("公网素材已转存，但客户端没有返回本地 asset_id")
+    logger.info(
+        "[H5-WORKFLOW] local asset materialized requested_asset_id=%s local_asset_id=%s url=%s",
+        requested_id or "-",
+        local_id,
+        public_url[:160],
+    )
+    return local_id, {
+        "status": "materialized",
+        "requested_asset_id": requested_id,
+        "source_url": public_url,
+    }
+
+
 async def _get_cloud_api_json(
     path: str,
     *,
@@ -8278,6 +8494,29 @@ async def _resolve_parent_workflow_material(
         )
         if not material:
             continue
+        if material.get("asset_id") and not material.get("url"):
+            try:
+                cloud_asset = await _get_cloud_api_json(
+                    f"/api/assets/{quote(str(material.get('asset_id')), safe='')}",
+                    cloud=cloud,
+                    base=base,
+                    headers=headers,
+                    timeout_seconds=20.0,
+                )
+                cloud_url = str(
+                    cloud_asset.get("source_url")
+                    or cloud_asset.get("open_url")
+                    or cloud_asset.get("preview_url")
+                    or ""
+                ).strip()
+                if cloud_url.startswith(("http://", "https://")):
+                    material["url"] = cloud_url
+            except Exception as exc:
+                logger.info(
+                    "[H5-WORKFLOW] cloud asset URL lookup failed asset_id=%s err=%s",
+                    str(material.get("asset_id") or "")[:128],
+                    str(exc)[:240],
+                )
         publish_context = _extract_parent_publish_context(parent_result_payload)
         candidates.append({**material, **publish_context, "source_run_id": str(parent.get("source_run_id") or "")})
     if not candidates:
@@ -8395,6 +8634,19 @@ def _workflow_installation_id(headers: Dict[str, str]) -> str:
         if value:
             return value
     return ""
+
+
+def _is_local_asset_missing_error(exc: Exception) -> bool:
+    """Only retry publish when the local API positively rejected the asset."""
+    text = str(exc or "").strip().lower()
+    if not text:
+        return False
+    if "素材不存在" in text or "素材 不存在" in text:
+        return True
+    return (
+        "asset" in text
+        and ("not found" in text or "missing" in text or "does not exist" in text)
+    )
 
 
 def _workflow_language_label(language: str) -> str:
@@ -8703,10 +8955,24 @@ async def _resolve_workflow_virtualman(
     if not rotation_enabled:
         return {"virtualman_id": fixed_id} if fixed_id else {}
 
-    # The server snapshot is the template's allow-list.  Do not refresh all
-    # user profiles here: that would reintroduce assets not selected in the
-    # active personal template.
+    # Refresh the server-side profile list before each generated workflow.
+    # A successful response is authoritative (including an empty list), while
+    # transient network failures retain the task snapshot as a fallback.
     candidates = _normalize_virtualman_candidates(source.get("virtualman_candidates"))
+    profile_refresh_succeeded = False
+    if cloud is not None and base:
+        try:
+            response = await cloud.get(
+                f"{base}/api/shanjian-digital-human/profiles",
+                headers=headers,
+                timeout=30.0,
+            )
+            data = response.json() if response.content else {}
+            if response.status_code < 400 and isinstance(data, dict):
+                candidates = _normalize_virtualman_candidates(data.get("items"))
+                profile_refresh_succeeded = True
+        except Exception as exc:
+            logger.warning("[H5-DIGITAL-HUMAN] profile refresh failed, using task snapshot: %s", exc)
 
     if candidates:
         local_day, rotation_key = _digital_human_rotation_context(source, current_item)
@@ -8725,6 +8991,8 @@ async def _resolve_workflow_virtualman(
         selected["selection_slot"] = sequence_slot
         selected["selection_date"] = local_day.isoformat()
         return selected
+    if profile_refresh_succeeded:
+        return {}
     return {"virtualman_id": fixed_id} if fixed_id else {}
 
 
@@ -8963,6 +9231,35 @@ async def _run_shanjian_digital_human_workflow(
             cover_url = _workflow_text(last.get("cover_url") or (record or {}).get("cover_url"), 1000)
             if not video_url:
                 raise RuntimeError("数字人2.0任务已完成，但没有返回视频链接")
+            # The cloud task owns the generated URL, while the follow-up
+            # publish endpoint reads the Online client's local asset DB. Make
+            # the hand-off explicit so a successful generation is locally
+            # publishable as well.
+            await _workflow_event(cloud, base, headers, run_id, "正在将成品视频转存到本机素材库")
+            local_asset_id = ""
+            local_asset: Dict[str, Any] = {"status": "pending"}
+            try:
+                local_asset_id, local_asset = await _ensure_local_workflow_asset(
+                    asset_id="",
+                    source_url=video_url,
+                    media_type="video",
+                    name=title or "数字人口播视频",
+                    prompt=script,
+                    headers=headers,
+                    run_id=run_id,
+                )
+            except Exception as exc:
+                # Keep the cloud generation successful if local materialization
+                # is temporarily unavailable. The publish action retries this
+                # exact hand-off once it receives a deterministic missing-asset
+                # response from the local API.
+                local_asset = {"status": "pending", "error": str(exc)[:300]}
+                logger.warning(
+                    "[H5-WORKFLOW] generated video local materialization pending task_id=%s url=%s err=%s",
+                    task_id or record_id,
+                    video_url[:160],
+                    str(exc)[:300],
+                )
             return {
                 "ok": True,
                 "action": "shanjian_digital_human_video",
@@ -8986,11 +9283,13 @@ async def _run_shanjian_digital_human_workflow(
                 "voice": voice,
                 "media_type": "video",
                 "video_url": video_url,
+                "video_asset_id": local_asset_id,
+                "local_asset": local_asset,
                 "cover_url": cover_url,
                 "duration": last.get("duration") or (record or {}).get("duration"),
                 "source_media_urls": [video_url],
                 "media_urls": {"video": [video_url]},
-                "result_refs": {"asset_ids": [], "urls": [video_url]},
+                "result_refs": {"asset_ids": [local_asset_id] if local_asset_id else [], "urls": [video_url]},
                 "tts": {
                     "duration_seconds": tts_data.get("duration_seconds") if isinstance(tts_data, dict) else None,
                     "audio_url": (record or {}).get("audio_url") or "",
@@ -9726,6 +10025,39 @@ async def _run_client_workflow_action(
             )
             material = str(material_source.get("asset_id") or "").strip()
             source_url = str(material_source.get("url") or "").strip()
+        # A workflow may carry only the cloud asset ID. Resolve its public
+        # source URL before checking the local asset DB so the same
+        # materialization path works for direct and parent-linked publish
+        # nodes.
+        if material and not source_url and cloud is not None and base:
+            try:
+                cloud_asset = await _get_cloud_api_json(
+                    f"/api/assets/{quote(material, safe='')}",
+                    cloud=cloud,
+                    base=base,
+                    headers=headers,
+                    timeout_seconds=20.0,
+                )
+                candidate_url = str(
+                    cloud_asset.get("source_url")
+                    or cloud_asset.get("open_url")
+                    or cloud_asset.get("preview_url")
+                    or ""
+                ).strip()
+                if candidate_url.startswith(("http://", "https://")):
+                    source_url = candidate_url
+                    material_source.setdefault("media_type", cloud_asset.get("media_type") or "")
+                    logger.info(
+                        "[H5-WORKFLOW] resolved cloud publish asset URL asset_id=%s url=%s",
+                        material,
+                        source_url[:160],
+                    )
+            except Exception as exc:
+                logger.info(
+                    "[H5-WORKFLOW] direct cloud publish asset URL lookup failed asset_id=%s err=%s",
+                    material,
+                    str(exc)[:240],
+                )
         source_script = str(material_source.get("source_script") or "").strip()
         publish_title = str(source.get("title") or "").strip()
         publish_description = str(source.get("description") or source.get("prompt") or "").strip()
@@ -9761,20 +10093,26 @@ async def _run_client_workflow_action(
         elif _is_wechat_channels_platform(platform):
             publish_title = _wechat_channels_short_title(publish_title, publish_description)
         save_result: Dict[str, Any] = {}
-        if not material and source_url and not _is_wechat_moments_platform(platform):
-            save_result = await _post_local_api_json(
-                "/api/assets/save-url",
-                {
-                    "url": source_url,
-                    "media_type": str(material_source.get("media_type") or source.get("media_type") or "video").strip() or "video",
-                    "name": str(source.get("name") or source.get("title") or "H5安排工作素材").strip(),
-                    "tags": str(source.get("tags") or "H5安排工作").strip(),
-                    "prompt": str(source.get("description") or source.get("title") or "").strip(),
-                },
+        if source_url and not _is_wechat_moments_platform(platform):
+            material, save_result = await _ensure_local_workflow_asset(
+                asset_id=material,
+                source_url=source_url,
+                media_type=str(material_source.get("media_type") or source.get("media_type") or "video").strip() or "video",
+                name=str(
+                    source.get("name")
+                    or source.get("title")
+                    or material_source.get("source_title")
+                    or "H5工作流素材"
+                ).strip(),
+                prompt=str(
+                    source.get("description")
+                    or source.get("title")
+                    or material_source.get("source_script")
+                    or ""
+                ).strip(),
                 headers=headers,
-                timeout_seconds=1200.0,
+                run_id=run_id,
             )
-            material = str(save_result.get("asset_id") or "").strip()
         if _is_wechat_moments_platform(platform):
             draft = {
                 "asset_id": material,
@@ -9821,12 +10159,40 @@ async def _run_client_workflow_action(
         account_id = str(source.get("account_id") or "").strip()
         if re.fullmatch(r"-?\d+", account_id):
             publish_body["account_id"] = int(account_id)
-        publish_result = await _post_local_api_json(
-            "/api/publish",
-            publish_body,
-            headers=headers,
-            timeout_seconds=7200.0,
-        )
+        try:
+            publish_result = await _post_local_api_json(
+                "/api/publish",
+                publish_body,
+                headers=headers,
+                timeout_seconds=7200.0,
+            )
+        except RuntimeError as exc:
+            # A file can disappear between the readiness check and the
+            # publish request. Re-materialize once from the immutable result
+            # URL, then retry only this deterministic local-asset failure.
+            if not source_url or not _is_local_asset_missing_error(exc):
+                raise
+            logger.warning(
+                "[H5-WORKFLOW] publish reported missing local asset; rematerializing once asset_id=%s url=%s",
+                material,
+                source_url[:160],
+            )
+            material, save_result = await _ensure_local_workflow_asset(
+                asset_id="",
+                source_url=source_url,
+                media_type=str(material_source.get("media_type") or source.get("media_type") or "video").strip() or "video",
+                name=str(source.get("name") or source.get("title") or "H5工作流素材").strip(),
+                prompt=str(source.get("description") or source.get("title") or "").strip(),
+                headers=headers,
+                run_id=run_id,
+            )
+            publish_body["asset_id"] = material
+            publish_result = await _post_local_api_json(
+                "/api/publish",
+                publish_body,
+                headers=headers,
+                timeout_seconds=7200.0,
+            )
         return {
             "ok": True,
             "asset_id": material,

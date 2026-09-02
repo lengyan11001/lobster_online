@@ -46,9 +46,13 @@ async def health(fast: bool = False):
         mcp = {"reachable": None, "tools_count": 0, "skipped": True}
     else:
         mcp = await _mcp_status()
+    # ``fast=1`` is used by the desktop watchdog.  Avoid a UDP socket probe
+    # on this path: a stalled network adapter must not block the backend event
+    # loop and make a healthy long-running task look dead.
+    lan_ip = "" if fast else _get_lan_ip()
     return {
         "status": "ok",
-        "lan_ip": _get_lan_ip(),
+        "lan_ip": lan_ip,
         "client_root": os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")),
         "mcp": mcp,
     }

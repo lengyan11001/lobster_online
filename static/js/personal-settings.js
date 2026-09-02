@@ -502,7 +502,9 @@
     setMsg('正在上传人物照片...');
     var fd = new FormData();
     fd.append('file', file, file.name || 'profile-photo');
-    fetch(localBase() + '/api/assets/upload', { method: 'POST', headers: headers(false), body: fd })
+    var uploadHeaders = headers(false);
+    uploadHeaders['X-Asset-Purpose'] = 'profile_photo';
+    fetch(localBase() + '/api/assets/upload', { method: 'POST', headers: uploadHeaders, body: fd })
       .then(function(resp) {
         return resp.json().catch(function() { return {}; }).then(function(data) {
           if (!resp.ok || !data.asset_id) throw new Error(parseErr(data, '人物照片上传失败'));
@@ -691,6 +693,9 @@
 
   function profileRequirements() {
     var profilePhoto = fieldValue('psProfilePhoto');
+    var profilePhotoUrl = /^https?:\/\//i.test(profilePhoto)
+      ? profilePhoto
+      : profilePhotoDisplayUrl(state.profilePhotoPreview || '');
     var basic = {
       name: fieldValue('psProfileName'),
       gender: fieldValue('psGender'),
@@ -705,6 +710,7 @@
       video_style: fieldValue('psVideoStyle'),
       after_view_action: fieldValue('psAfterViewAction')
     };
+    if (!basic.profile_photo_url && profilePhotoUrl) basic.profile_photo_url = profilePhotoUrl;
     var business = {
       product: fieldValue('psBusinessProduct'),
       target_customer: fieldValue('psTargetCustomer'),
@@ -791,7 +797,10 @@
     var req = (item && item.requirements) || {};
     var profile = req.basic_profile && typeof req.basic_profile === 'object' ? req.basic_profile : (req.profile || {});
     var business = req.business_description && typeof req.business_description === 'object' ? req.business_description : (req.business || {});
-    var profilePhoto = req.profile_photo_asset_id || profile.profile_photo_asset_id || req.profile_photo_url || profile.profile_photo_url || '';
+    // Prefer the durable public URL for display. The server may canonicalize
+    // a local Online asset ID to a different asset ID after sync.
+    var profilePhoto = req.profile_photo_url || profile.profile_photo_url
+      || req.profile_photo_asset_id || profile.profile_photo_asset_id || '';
     setFieldValue('psProfileName', req.profile_name || profile.name || '');
     setFieldValue('psGender', req.gender || profile.gender || '');
     if (fieldValue('psProfilePhoto') !== String(profilePhoto || '')) {
@@ -2862,10 +2871,44 @@
     var isWechatChannels = platform === 'wechat_channels';
     var label = document.querySelector('#content-personal-settings label[for="psCompetitorSearchInput"]');
     var input = $('psCompetitorSearchInput');
-    if (label) label.textContent = isWechatChannels ? '昵称或 username' : '昵称或抖音号';
-    if (input) input.placeholder = isWechatChannels ? '输入视频号昵称或 username' : '输入昵称或抖音号';
+    var directBtn = $('psAddCompetitorByChannelIdBtn');
+    if (label) label.textContent = isWechatChannels ? '昵称、公开 ID 或 username' : '昵称或抖音号';
+    if (input) input.placeholder = isWechatChannels ? '输入视频号昵称、sph 开头公开 ID 或 username' : '输入昵称或抖音号';
+    if (directBtn) directBtn.hidden = !isWechatChannels;
     state.competitorCandidates = [];
     renderCompetitorCandidates();
+  }
+
+  function addCompetitorByChannelId() {
+    var platform = (($('psCompetitorPlatform') || {}).value || 'douyin');
+    if (platform !== 'wechat_channels') return;
+    var input = $('psCompetitorSearchInput');
+    var channelId = ((input && input.value) || '').trim();
+    var tags = (($('psCompetitorTags') || {}).value || '').trim();
+    if (!channelId) {
+      setMsg('请先输入视频号公开 ID（sph 开头）。', true);
+      return;
+    }
+    var btn = $('psAddCompetitorByChannelIdBtn');
+    setBusy(btn, true, '解析并添加中...');
+    cloudJson('/api/ip-content/wechat-channels/competitors/by-channel-id', {
+      method: 'POST',
+      body: { channel_id: channelId, industry_tags: tags }
+    }).then(function(data) {
+      if (input) input.value = '';
+      if ($('psCompetitorTags')) $('psCompetitorTags').value = '';
+      state.competitorCandidates = [];
+      renderCompetitorCandidates();
+      setMsg('视频号公开 ID 已添加。');
+      return loadCompetitors().then(function() {
+        if (data.item && data.item.id) return syncCompetitor(data.item.id);
+        return null;
+      });
+    }).catch(function(err) {
+      setMsg(err.message || '按照视频号公开 ID 添加失败', true);
+    }).finally(function() {
+      setBusy(btn, false);
+    });
   }
 
   function searchCompetitors() {
@@ -3448,6 +3491,7 @@
     if ($('psAddKeywordBtn')) $('psAddKeywordBtn').addEventListener('click', addKeyword);
     if ($('psCompetitorPlatform')) $('psCompetitorPlatform').addEventListener('change', updateCompetitorPlatformFields);
     if ($('psSearchCompetitorBtn')) $('psSearchCompetitorBtn').addEventListener('click', searchCompetitors);
+    if ($('psAddCompetitorByChannelIdBtn')) $('psAddCompetitorByChannelIdBtn').addEventListener('click', addCompetitorByChannelId);
     if ($('psCompetitorSearchInput')) {
       $('psCompetitorSearchInput').addEventListener('keydown', function(ev) {
         if (ev.key === 'Enter') {

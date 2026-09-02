@@ -80,7 +80,7 @@
 
   window.registerLobsterView('ip-content-studio', {
     html: '/static/views/ip-content-studio.html?v=20260807-moment-failure-scope',
-    scripts: '/static/js/ip-content-studio.js?v=20260807-moment-failure-scope-20260807-content-publish-v1',
+    scripts: '/static/js/ip-content-studio.js?v=20260902-beijing-time-v1',
     init: 'initIpContentStudioView',
     cache: 'reload'
   });
