@@ -1,7 +1,7 @@
 {
-  "version": "2.0.14",
-  "build": 293,
-  "applied_at": "2026-09-03T16:32:01+08:00",
-  "note": "custom recharge amount",
-  "bundle_sha256": "f696150280bcc6f7f5844512ce1c7ea78385eb69e22ec67d51b056f689205484"
+  "version": "2.0.15",
+  "build": 294,
+  "applied_at": "2026-09-03T17:46:28+08:00",
+  "note": "template live reference and workflow runtime update",
+  "bundle_sha256": "455bb4bade2a082976a2810b0e98cd72d8c6c15d88e3891097498544568ac727"
 }
