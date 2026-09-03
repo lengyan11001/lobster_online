@@ -1,7 +1,7 @@
 {
-  "version": "2.0.13",
-  "build": 292,
-  "applied_at": "2026-09-02T21:45:45+08:00",
-  "note": "workflow reliability, asset delivery and scheduler resilience",
-  "bundle_sha256": "2d3a32e416290e4a779fe63c019fdd5a2c8f02fd820e10ca2a13c328126aadbd"
+  "version": "2.0.14",
+  "build": 293,
+  "applied_at": "2026-09-03T16:32:01+08:00",
+  "note": "custom recharge amount",
+  "bundle_sha256": "f696150280bcc6f7f5844512ce1c7ea78385eb69e22ec67d51b056f689205484"
 }

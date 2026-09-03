@@ -19,6 +19,48 @@ function billingRatioHintPlainText(packages) {
   return '';
 }
 
+var BILLING_CUSTOM_CREDITS_PER_YUAN = 100;
+var BILLING_CUSTOM_MIN_YUAN = 1;
+var BILLING_CUSTOM_MAX_YUAN = 100000;
+
+function billingCustomAmountValue() {
+  var input = document.getElementById('rechargeCustomAmount');
+  if (!input) return null;
+  var raw = String(input.value == null ? '' : input.value).trim();
+  if (!raw) return null;
+  var amount = Number(raw);
+  if (!Number.isSafeInteger(amount) || amount < BILLING_CUSTOM_MIN_YUAN || amount > BILLING_CUSTOM_MAX_YUAN) return null;
+  return amount;
+}
+
+function setupBillingCustomAmount() {
+  var amountSel = document.getElementById('rechargeAmount');
+  var customWrap = document.getElementById('rechargeCustomAmountWrap');
+  var customInput = document.getElementById('rechargeCustomAmount');
+  var customHint = document.getElementById('rechargeCustomCreditsHint');
+  if (!amountSel || !customWrap || !customInput) return;
+  function update() {
+    var isCustom = String(amountSel.value || '') === 'custom';
+    customWrap.style.display = isCustom ? '' : 'none';
+    if (customHint) {
+      var amount = billingCustomAmountValue();
+      customHint.textContent = isCustom && amount != null
+        ? ('充值 ' + amount + ' 元，到账 ' + (amount * BILLING_CUSTOM_CREDITS_PER_YUAN) + ' 积分（1 元 = 100 积分）')
+        : (isCustom ? '自定义金额按 1 元 = 100 积分计算，金额须为 1～100000 元的整数' : '');
+      customHint.style.display = isCustom ? '' : 'none';
+    }
+  }
+  if (!amountSel._billingCustomBound) {
+    amountSel._billingCustomBound = true;
+    amountSel.addEventListener('change', update);
+  }
+  if (!customInput._billingCustomBound) {
+    customInput._billingCustomBound = true;
+    customInput.addEventListener('input', update);
+  }
+  update();
+}
+
 
 function loadBillingView() {
   var balanceEl = document.getElementById('billingBalance');
@@ -283,12 +325,14 @@ function loadBillingView() {
         .then(function(opts) {
           var amountSel = document.getElementById('rechargeAmount');
           var hintEl = document.getElementById('rechargeRatioHint');
-          if (amountSel && opts && Array.isArray(opts.packages) && opts.packages.length) {
-            amountSel.innerHTML = opts.packages.map(function(p, i) {
+          if (amountSel) {
+            var packageOptions = (opts && Array.isArray(opts.packages) ? opts.packages : []).map(function(p, i) {
               var py = billingPackageYuan(p);
               var lab = p.label || (py + '元 - ' + p.credits + '算力');
               return '<option value="' + i + '" data-credits="' + (p.credits || 0) + '">' + escapeHtml(lab) + '</option>';
             }).join('');
+            amountSel.innerHTML = packageOptions + '<option value="custom">自定义金额</option>';
+            setupBillingCustomAmount();
           }
           if (hintEl) {
             if (opts && Array.isArray(opts.packages) && opts.packages.length) {
@@ -316,15 +360,30 @@ function loadBillingView() {
       rechargeSubmitBtn._ownRechargeBound = true;
       rechargeSubmitBtn.addEventListener('click', function() {
         var amountEl = document.getElementById('rechargeAmount');
-        var idx = amountEl ? parseInt(amountEl.value, 10) : -1;
+        var selectedValue = amountEl ? String(amountEl.value || '') : '';
+        var isCustom = selectedValue === 'custom';
+        var idx = isCustom ? -1 : parseInt(selectedValue, 10);
         var paymentType = 'WECHAT';
         if (USE_FUIOU_PAY) {
           var typeSel = document.getElementById('rechargePaymentType');
           paymentType = (typeSel && typeSel.value) ? String(typeSel.value).toUpperCase() : 'WECHAT';
         }
-        var createBody = { package_index: idx };
+        var createBody;
+        if (isCustom) {
+          var customAmount = billingCustomAmountValue();
+          if (customAmount == null) {
+            showMsg(rechargeMsg, '请输入 1～100000 元的整数金额', true);
+            return;
+          }
+          createBody = {
+            price_yuan: customAmount,
+            credits: customAmount * BILLING_CUSTOM_CREDITS_PER_YUAN
+          };
+        } else {
+          createBody = { package_index: idx };
+        }
         if (USE_FUIOU_PAY) createBody.payment_type = paymentType;
-        if (!amountEl || idx < 0) { showMsg(rechargeMsg, '请选择套餐', true); return; }
+        if (!amountEl || (!isCustom && idx < 0)) { showMsg(rechargeMsg, '请选择充值档位', true); return; }
         if (rechargeResult) { rechargeResult.style.display = 'none'; rechargeResult.innerHTML = ''; }
         rechargeSubmitBtn.disabled = true;
         showMsg(rechargeMsg, '正在创建订单…', false);

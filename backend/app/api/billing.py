@@ -37,6 +37,10 @@ _DEFAULT_USAGE_COSTS = [
     {"label": "默认视频生成", "credits": 160, "unit": "次"},
 ]
 
+_CUSTOM_RECHARGE_CREDITS_PER_YUAN = 100
+_CUSTOM_RECHARGE_MIN_YUAN = 1
+_CUSTOM_RECHARGE_MAX_YUAN = 100000
+
 
 def _get_billing_pricing() -> dict[str, Any]:
     """从 custom_configs.json 读取 BILLING_PRICING；缺失时返回默认。"""
@@ -251,6 +255,8 @@ def create_recharge_order(
         raise HTTPException(status_code=400, detail="当前未启用自有充值")
     pricing = _get_billing_pricing()
     packages = pricing.get("credit_packages", _DEFAULT_CREDIT_PACKAGES)
+    if body.package_index is not None and (body.price_yuan is not None or body.credits is not None):
+        raise HTTPException(status_code=400, detail="套餐和自定义金额不能同时提交")
     if body.package_index is not None:
         idx = int(body.package_index)
         if idx < 0 or idx >= len(packages):
@@ -261,8 +267,10 @@ def create_recharge_order(
     elif body.price_yuan is not None and body.credits is not None:
         amount_yuan = int(body.price_yuan)
         credits = int(body.credits)
-        if amount_yuan <= 0 or credits <= 0:
-            raise HTTPException(status_code=400, detail="金额与算力须为正数")
+        if not (_CUSTOM_RECHARGE_MIN_YUAN <= amount_yuan <= _CUSTOM_RECHARGE_MAX_YUAN):
+            raise HTTPException(status_code=400, detail="自定义充值金额须为正数，且在 1～100000 元范围内")
+        if credits != amount_yuan * _CUSTOM_RECHARGE_CREDITS_PER_YUAN:
+            raise HTTPException(status_code=400, detail="自定义充值按 1 元 = 100 积分计算")
     else:
         raise HTTPException(status_code=400, detail="请选择套餐或指定 price_yuan + credits")
     out_trade_no = f"R{current_user.id}_{int(time.time())}_{uuid.uuid4().hex[:8]}"

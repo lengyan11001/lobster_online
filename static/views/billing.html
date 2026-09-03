@@ -16,6 +16,10 @@
           <label style="font-size:0.82rem;color:var(--text-muted);">充值档位</label>
           <select id="rechargeAmount" style="padding:0.4rem 0.6rem;font-size:0.9rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);min-width:8rem;"></select>
         </div>
+        <div class="form-group" id="rechargeCustomAmountWrap" style="margin:0;display:none;">
+          <label for="rechargeCustomAmount" style="font-size:0.82rem;color:var(--text-muted);">自定义金额（元）</label>
+          <input id="rechargeCustomAmount" type="number" min="1" max="100000" step="1" inputmode="numeric" placeholder="请输入金额" style="padding:0.4rem 0.6rem;font-size:0.9rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);width:8rem;">
+        </div>
         <div class="form-group" style="margin:0;display:none;" id="rechargePaymentTypeWrap">
           <label style="font-size:0.82rem;color:var(--text-muted);">支付方式</label>
           <select id="rechargePaymentType" style="padding:0.4rem 0.6rem;font-size:0.9rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);min-width:7rem;"></select>
@@ -24,6 +28,7 @@
         <span id="rechargeMsg" class="msg" style="display:none;font-size:0.82rem;"></span>
       </div>
       <p id="rechargeRatioHint" class="meta" style="display:none;margin-top:0.65rem;font-size:0.82rem;line-height:1.45;color:var(--text-muted);"></p>
+      <p id="rechargeCustomCreditsHint" class="meta" style="display:none;margin-top:0.35rem;font-size:0.82rem;line-height:1.45;color:var(--text-muted);"></p>
       <div id="rechargeResult" style="display:none;margin-top:0.75rem;padding:0.75rem;background:var(--bg-secondary);border-radius:var(--radius-sm);font-size:0.85rem;"></div>
     </div>
     <div style="margin-top:1rem;">
