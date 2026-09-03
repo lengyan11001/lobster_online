@@ -2583,9 +2583,20 @@
     var existing = state.defaultItem || {};
     var source = options.source || 'personal_settings';
     var language = normalizeIpTemplateLanguage(options.language || currentPersonalTemplateLanguage() || templateLanguageFromParts(existing.requirements, existing.meta, ''));
-    var baseRequirements = stripPersonalProfileRequirements((existing.requirements && typeof existing.requirements === 'object') ? existing.requirements : {});
+    var existingMeta = existing.meta && typeof existing.meta === 'object' ? existing.meta : {};
+    var hasLiveTemplate = !!(existingMeta.current_template_id || (options.meta && options.meta.current_template_id));
+    // When a current template is selected, its requirements/resources are a
+    // live server-side reference. Do not copy the previous personal-default
+    // snapshot back into the request, otherwise old oral/image fields become
+    // permanent overrides. Profile saves still send only independent profile
+    // fields; the server retains any deliberate template overrides.
+    var baseRequirements = (!hasLiveTemplate && !options.includeProfile)
+      ? stripPersonalProfileRequirements((existing.requirements && typeof existing.requirements === 'object') ? existing.requirements : {})
+      : {};
     var incomingRequirements = Object.assign({}, baseRequirements, stripPersonalProfileRequirements(options.requirements || {}));
-    if (options.includeProfile) incomingRequirements = Object.assign({}, incomingRequirements, profileRequirements());
+    if (options.includeProfile) {
+      incomingRequirements = Object.assign({}, hasLiveTemplate ? {} : incomingRequirements, profileRequirements());
+    }
     incomingRequirements = templateRequirementsWithLanguage(incomingRequirements, language);
     var keywordSource = options.replaceSelection ? cleanIntIds(state.selectedKeywords) : [].concat(Array.isArray(existing.keyword_ids) ? existing.keyword_ids : [], cleanIntIds(state.selectedKeywords));
     var competitorSource = options.replaceSelection ? cleanIntIds(state.selectedCompetitors) : [].concat(Array.isArray(existing.competitor_ids) ? existing.competitor_ids : [], cleanIntIds(state.selectedCompetitors));
@@ -2719,11 +2730,10 @@
     (row.competitor_ids || []).forEach(function(value) { if (value) state.selectedCompetitors[String(value)] = true; });
     (row.memory_doc_ids || []).forEach(function(value) { if (value) state.selectedMemories[String(value)] = true; });
     var language = templateLanguageFromParts(row.requirements, row.meta, row.language || row.target_language || state.personalTemplateLanguage);
-    var requirements = templateRequirementsWithLanguage(Object.assign(
-      {},
-      stripPersonalProfileRequirements((state.defaultItem && state.defaultItem.requirements && typeof state.defaultItem.requirements === 'object') ? state.defaultItem.requirements : {}),
-      stripPersonalProfileRequirements((row.requirements && typeof row.requirements === 'object') ? row.requirements : {})
-    ), language);
+    var requirements = templateRequirementsWithLanguage(
+      stripPersonalProfileRequirements((row.requirements && typeof row.requirements === 'object') ? row.requirements : {}),
+      language
+    );
     saveCurrentDefault({
       name: templateName(row),
       requirements: requirements,

@@ -6725,8 +6725,11 @@ restore_douyin_precise_touch_state()
 restore_douyin_customer_pools_state()
 restore_douyin_group_member_results()
 restore_douyin_schedule_plans()
-if not douyin_all_customer_pool and not douyin_precise_customer_pool and douyin_tasks:
-    save_douyin_tasks_state()
+# Do not synchronously rebuild and rewrite the complete customer-pool tables
+# during module import.  ``restore_douyin_customer_pools_state`` already
+# reconstructs the pools in memory from the task/monitor state; the old
+# fallback made every backend startup block on a full JSON/SQLite rewrite.
+# The next real state mutation persists the current pools normally.
 
 
 def get_next_monitor_run_time(now: Optional[datetime] = None) -> datetime:
@@ -6884,7 +6887,7 @@ def normalize_monitor_author_name(value: object) -> str:
 def extract_monitor_video_author_sec_user_id(video: Dict) -> str:
     if not isinstance(video, dict):
         return ""
-    for key in ("author_sec_user_id", "author_sec_uid"):
+    for key in ("author_sec_user_id", "author_sec_uid", "author_secUid", "sec_user_id", "sec_uid", "secUid"):
         value = normalize_douyin_text(video.get(key, ""))
         if value:
             return value
@@ -6909,6 +6912,11 @@ def is_monitor_video_for_target(video: Dict, target: Dict) -> bool:
     video_author = normalize_monitor_author_name(video.get("author", ""))
     if target_name and video_author:
         return target_name == video_author
+
+    # Once a target has a stable identity, an item with no matching author
+    # identity must not be silently mixed into that target's video list.
+    if target_sec_user_id:
+        return False
 
     return True
 
@@ -7358,11 +7366,21 @@ async def sync_monitor_target_profile_and_videos(
     fetched_videos = payload.get("videos", []) if isinstance(payload, dict) else []
     existing_videos = douyin_state_store.load_douyin_monitor_videos(int(target.get("target_id", 0) or 0))
     now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    profile_data = profile if isinstance(profile, dict) else {}
+    merged_profile_url = str(profile_data.get("profile_url") or target.get("profile_url") or "").strip()
+    merged_sec_user_id = str(
+        profile_data.get("sec_user_id")
+        or profile_data.get("sec_uid")
+        or target.get("sec_user_id")
+        or (payload.get("sec_user_id") if isinstance(payload, dict) else "")
+        or ""
+    ).strip()
     merged_target = douyin_state_store.save_douyin_monitor_target(
         {
             **target,
-            **profile,
-            "profile_url": str(profile.get("profile_url", target.get("profile_url", "")) or ""),
+            **profile_data,
+            "profile_url": merged_profile_url,
+            "sec_user_id": merged_sec_user_id,
             "last_video_sync_at": now_text,
             "next_run_at": get_next_monitor_run_time().strftime("%Y-%m-%d %H:%M:%S"),
             "status": "active",
@@ -7370,9 +7388,30 @@ async def sync_monitor_target_profile_and_videos(
             "last_video_sync_error": protocol_error,
         }
     )
+    valid_existing_videos = filter_monitor_videos_for_target(existing_videos, merged_target)
+    valid_fetched_videos = filter_monitor_videos_for_target(fetched_videos, merged_target)
+    dropped_existing = len(existing_videos) - len(valid_existing_videos)
+    dropped_fetched = len(fetched_videos) - len(valid_fetched_videos)
+    if dropped_existing or dropped_fetched:
+        douyin_log(
+            f"[抖音同行监控] 已按同行身份过滤视频：{merged_target.get('username') or merged_target.get('sec_user_id') or '-'} "
+            f"历史丢弃 {dropped_existing} 条，本次丢弃 {dropped_fetched} 条",
+            "warning",
+        )
+    if dropped_existing and int(merged_target.get("target_id", 0) or 0) > 0:
+        douyin_state_store.delete_douyin_monitor_videos(
+            int(merged_target.get("target_id", 0) or 0),
+            [
+                str(video.get("aweme_id", "") or "").strip()
+                for video in existing_videos
+                if isinstance(video, dict)
+                and str(video.get("aweme_id", "") or "").strip()
+                and video not in valid_existing_videos
+            ],
+        )
     merged_videos = merge_monitor_videos(
-        existing_videos,
-        fetched_videos,
+        valid_existing_videos,
+        valid_fetched_videos,
         initial_sync=initial_sync,
         auto_collect_new=bool(merged_target.get("auto_collect_new", True)),
     )
@@ -14134,7 +14173,10 @@ async def douyin_add_monitor_target(request: Optional[dict] = None):
                 f"[抖音同行监控] 已从视频链接识别同行作者：{seed_profile.get('username') or monitor_profile_url}",
                 "info",
             )
-        existing_target = douyin_state_store.find_douyin_monitor_target(profile_url=monitor_profile_url)
+        existing_target = douyin_state_store.find_douyin_monitor_target(
+            profile_url=monitor_profile_url,
+            sec_user_id=str(seed_profile.get("sec_user_id", "") or "").strip(),
+        )
         seed_target = {
             **existing_target,
             **seed_profile,

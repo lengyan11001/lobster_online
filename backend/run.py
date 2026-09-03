@@ -1,5 +1,5 @@
 """启动后端：根据 LOBSTER_EDITION 决定监听地址；默认同时拉起 MCP(8001) 以提供速推等能力。
-全日志：默认 LOG_LEVEL=debug；要减少输出可设 .env 中 LOG_LEVEL=info。
+运行日志默认 LOG_LEVEL=info；需要详细诊断时可在 .env 中设为 debug。
 系统日志写入 lobster/logs/app.log，可在「日志」Tab 或 GET /api/logs 查看。"""
 import faulthandler
 import asyncio
@@ -31,8 +31,9 @@ try:
 except Exception:
     pass
 
-# 全日志：由 LOG_LEVEL 控制，默认 debug（.env 可设 LOG_LEVEL=info 仅关键信息）
-_log_level_name = os.environ.get("LOG_LEVEL", "debug").strip().lower()
+# 运行日志由 LOG_LEVEL 控制；默认 info，避免轮询/依赖库 debug 输出拖慢
+# 本地诊断仍可显式设置 LOG_LEVEL=debug。
+_log_level_name = os.environ.get("LOG_LEVEL", "info").strip().lower()
 _log_level = getattr(logging, _log_level_name.upper(), logging.DEBUG)
 logging.basicConfig(
     level=_log_level,
@@ -59,6 +60,11 @@ try:
     logging.getLogger().addHandler(_file_handler)
 except Exception as _e:
     pass  # 无写权限等则仅控制台输出
+# These libraries can emit one debug record per HTTP/TLS operation.  Keep
+# application-level debug available while preventing transport tracing from
+# filling the bounded backend log during normal operation.
+for _noisy_logger_name in ("httpx", "httpcore", "urllib3", "asyncio"):
+    logging.getLogger(_noisy_logger_name).setLevel(logging.WARNING)
 _logger = logging.getLogger("backend.run")
 _MCP_LOG_HANDLES: list[object] = []
 

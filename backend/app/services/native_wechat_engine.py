@@ -157,6 +157,10 @@ _LOCAL_WECHAT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 # the account task queue so those pauses cannot delay message, group, or media
 # tasks. The actual UI operation still uses the shared thread-affine executor.
 _ADD_FRIEND_TASKS: Dict[str, asyncio.Task[Any]] = {}
+# User-controlled friend-add queue schedulers. These are intentionally separate
+# from the account task worker so a long interval never blocks other work.
+_FRIEND_ADD_SCHEDULERS: Dict[str, asyncio.Task[Any]] = {}
+_FRIEND_ADD_WAKE_EVENTS: Dict[str, asyncio.Event] = {}
 _AUTO_REPLY_DIAGNOSTIC_LOCK = threading.Lock()
 _NATIVE_WECHAT_LOG_ROTATE_LOCK = threading.Lock()
 _AUTO_REPLY_DIAGNOSTIC_ENABLED: Optional[bool] = None
@@ -769,6 +773,16 @@ def init_db() -> None:
             );
             create index if not exists idx_wechat_tasks_account_time
             on wechat_tasks(account_id, created_at desc);
+
+            create table if not exists wechat_friend_add_control (
+                account_id text primary key,
+                enabled integer not null default 0,
+                interval_seconds integer not null default 60,
+                running integer not null default 0,
+                last_started_at text,
+                last_stopped_at text,
+                updated_at text not null
+            );
 
             create table if not exists wechat_auto_reply_config (
                 account_id text primary key,
@@ -2854,6 +2868,12 @@ def _claim_auto_reply_run(account_id: str) -> bool:
         raise
 
 
+def _auto_reply_run_active(account_id: str) -> bool:
+    """Check the in-process takeover lock without touching the database."""
+    with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
+        return str(account_id or "").strip() in _AUTO_REPLY_ACTIVE_RUNS
+
+
 def _release_auto_reply_run(account_id: str) -> None:
     with _AUTO_REPLY_ACTIVE_RUNS_LOCK:
         _AUTO_REPLY_ACTIVE_RUNS.discard(str(account_id or "").strip())
@@ -4560,6 +4580,14 @@ async def run_auto_reply_once(
 
     if auth_context:
         _AUTO_REPLY_AUTH_CONTEXT[account_id] = dict(auth_context)
+    # A second manual/scheduled trigger must not redo config/due checks while
+    # the same account is already scanning or replying.  Keep the claim below
+    # as the race-safe authority; this fast path only avoids duplicate work in
+    # the common case where the lock is already held.
+    if _auto_reply_run_active(account_id):
+        log_event("run_skipped", reason="running", trigger=trigger, force=bool(force))
+        return {"ok": True, "skipped": True, "reason": "running", "config": get_auto_reply_config(account_id)}
+
     cfg = get_auto_reply_config(account_id)
     log_event(
         "run_requested",
@@ -14370,12 +14398,14 @@ async def create_add_friend_task(
     permission: str = "朋友圈",
     prepare_only: bool = False,
     client_request_id: str = "",
+    queue_only: bool = False,
 ) -> Dict[str, Any]:
     init_db()
     existing = _existing_task_by_client_request_id(account_id, client_request_id)
     if existing:
         return existing
-    _find_local_account(account_id)
+    if not queue_only:
+        _find_local_account(account_id)
     strategy = get_strategy()
     max_targets = int(strategy.get("max_targets_per_task") or 0)
     targets = _normalize_task_targets(keywords, max_targets=max_targets)
@@ -14385,6 +14415,61 @@ async def create_add_friend_task(
     added_today = _local_friend_request_count_today(account_id)
     if daily_limit > 0 and added_today + len(targets) > daily_limit:
         raise RuntimeError(f"daily friend add limit would be exceeded: {added_today}/{daily_limit}")
+    if queue_only:
+        # Leave room for the per-target suffix in client_request_id.
+        batch_id = str(client_request_id or uuid.uuid4().hex)[:140]
+        first_existing = _existing_task_by_client_request_id(account_id, f"{batch_id}:0") if client_request_id else None
+        if first_existing:
+            with _connect() as conn:
+                rows = conn.execute(
+                    "select * from wechat_tasks where account_id=? and task_type='add_friend' and client_request_id like ? order by created_at asc",
+                    (account_id, f"{batch_id}:%"),
+                ).fetchall()
+            queued_tasks = [_row_to_dict(row) for row in rows]
+            return {
+                "id": batch_id,
+                "account_id": account_id,
+                "task_type": "add_friend",
+                "targets": [list(item.get("targets") or [""])[0] for item in queued_tasks],
+                "tasks": queued_tasks,
+                "status": "queued" if any(str(item.get("status")) in {"queued", "running"} for item in queued_tasks) else "success",
+                "planned_total": len(queued_tasks),
+                "queued_total": sum(1 for item in queued_tasks if str(item.get("status")) == "queued"),
+                "deduped": True,
+            }
+        queued_tasks: List[Dict[str, Any]] = []
+        for index, target in enumerate(targets):
+            queued_tasks.append(_create_wechat_task(
+                account_id=account_id,
+                task_type="add_friend",
+                target_type="friend_keyword",
+                targets=[target],
+                payload={
+                    "apply_message": str(apply_message or ""),
+                    "remark": str(remark or ""),
+                    "tags": tags or [],
+                    "permission": str(permission or ""),
+                    "prepare_only": bool(prepare_only),
+                    "queue_only": True,
+                    "batch_request_id": batch_id,
+                },
+                strategy=strategy,
+                planned_total=1,
+                client_request_id=f"{batch_id}:{index}" if client_request_id else "",
+                start_worker=False,
+                initial_status="queued",
+            ))
+        _notify_friend_add_scheduler(account_id)
+        return {
+            "id": batch_id,
+            "account_id": account_id,
+            "task_type": "add_friend",
+            "targets": targets,
+            "tasks": queued_tasks,
+            "status": "queued",
+            "planned_total": len(queued_tasks),
+            "queued_total": len(queued_tasks),
+        }
     task = _create_wechat_task(
         account_id=account_id,
         task_type="add_friend",
@@ -17518,6 +17603,7 @@ def _create_wechat_task(
     auth_context: Optional[Dict[str, Any]] = None,
     client_request_id: str = "",
     start_worker: bool = True,
+    initial_status: str = "pending",
 ) -> Dict[str, Any]:
     client_request_id = str(client_request_id or "").strip()[:180]
     if client_request_id:
@@ -17527,6 +17613,9 @@ def _create_wechat_task(
     task_id = uuid.uuid4().hex
     now = _now_iso()
     total = int(planned_total if planned_total is not None else len(targets))
+    status = str(initial_status or "pending").strip().lower()
+    if status not in {"pending", "queued"}:
+        status = "pending"
     try:
         with _connect() as conn:
             conn.execute(
@@ -17542,7 +17631,7 @@ def _create_wechat_task(
                     _json_dumps(targets),
                     _json_dumps(payload),
                     _json_dumps(strategy),
-                    "pending",
+                    status,
                     total,
                     now,
                     now,
@@ -17560,7 +17649,7 @@ def _create_wechat_task(
         _TASK_AUTH_CONTEXT[task_id] = dict(auth_context)
     if start_worker:
         _ensure_task_worker(account_id)
-    return get_task(task_id) or {"id": task_id, "status": "pending", "planned_total": total}
+    return get_task(task_id) or {"id": task_id, "status": status, "planned_total": total}
 
 
 def _ensure_task_worker(account_id: str) -> None:
@@ -17634,6 +17723,164 @@ def _active_add_friend_worker(account_id: str) -> Optional[asyncio.Task[Any]]:
         _ADD_FRIEND_TASKS.pop(key, None)
         return None
     return task
+
+
+def _normalize_friend_add_control(row: Optional[sqlite3.Row], account_id: str) -> Dict[str, Any]:
+    data = dict(row) if row else {}
+    try:
+        interval = int(data.get("interval_seconds") or 60)
+    except (TypeError, ValueError):
+        interval = 60
+    interval = max(1, min(interval, 86400))
+    key = str(account_id or "").strip()
+    scheduler = _FRIEND_ADD_SCHEDULERS.get(key)
+    running = bool(scheduler is not None and not scheduler.done())
+    return {
+        "account_id": key,
+        "enabled": bool(int(data.get("enabled") or 0)),
+        "interval_seconds": interval,
+        "running": running,
+        "last_started_at": str(data.get("last_started_at") or ""),
+        "last_stopped_at": str(data.get("last_stopped_at") or ""),
+        "updated_at": str(data.get("updated_at") or ""),
+    }
+
+
+def get_friend_add_control(account_id: str) -> Dict[str, Any]:
+    init_db()
+    key = str(account_id or "").strip()
+    if not key:
+        return _normalize_friend_add_control(None, key)
+    with _connect() as conn:
+        row = conn.execute("select * from wechat_friend_add_control where account_id=? limit 1", (key,)).fetchone()
+    return _normalize_friend_add_control(row, key)
+
+
+def save_friend_add_control(account_id: str, *, interval_seconds: Optional[int] = None) -> Dict[str, Any]:
+    init_db()
+    key = str(account_id or "").strip()
+    if not key:
+        raise RuntimeError("missing account_id")
+    current = get_friend_add_control(key)
+    value = current["interval_seconds"] if interval_seconds is None else max(1, min(int(interval_seconds), 86400))
+    now = _now_iso()
+    with _connect() as conn:
+        conn.execute(
+            """
+            insert into wechat_friend_add_control(account_id, enabled, interval_seconds, running, updated_at)
+            values(?,?,?,?,?)
+            on conflict(account_id) do update set interval_seconds=excluded.interval_seconds, updated_at=excluded.updated_at
+            """,
+            (key, 1 if current["enabled"] else 0, int(value), 1 if current["running"] else 0, now),
+        )
+    _notify_friend_add_scheduler(key)
+    return get_friend_add_control(key)
+
+
+def _set_friend_add_control_enabled(account_id: str, enabled: bool) -> None:
+    key = str(account_id or "").strip()
+    if not key:
+        return
+    now = _now_iso()
+    with _connect() as conn:
+        conn.execute(
+            """
+            insert into wechat_friend_add_control(account_id, enabled, interval_seconds, running, last_started_at, last_stopped_at, updated_at)
+            values(?,?,?,?,?,?,?)
+            on conflict(account_id) do update set enabled=excluded.enabled,
+                last_started_at=case when excluded.enabled=1 then excluded.last_started_at else wechat_friend_add_control.last_started_at end,
+                last_stopped_at=case when excluded.enabled=0 then excluded.last_stopped_at else wechat_friend_add_control.last_stopped_at end,
+                updated_at=excluded.updated_at
+            """,
+            (key, 1 if enabled else 0, 60, 0, now if enabled else None, now if not enabled else None, now),
+        )
+
+
+def _notify_friend_add_scheduler(account_id: str) -> None:
+    event = _FRIEND_ADD_WAKE_EVENTS.get(str(account_id or "").strip())
+    if event is not None:
+        event.set()
+
+
+def _claim_next_queued_friend_task(account_id: str) -> Optional[Dict[str, Any]]:
+    key = str(account_id or "").strip()
+    if not key:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "select * from wechat_tasks where account_id=? and task_type='add_friend' and status='queued' order by created_at asc, id asc limit 1",
+            (key,),
+        ).fetchone()
+        if not row:
+            return None
+        task_id = str(row["id"])
+        changed = conn.execute(
+            "update wechat_tasks set status='running', updated_at=? where id=? and status='queued'",
+            (_now_iso(), task_id),
+        ).rowcount
+        if not changed:
+            return None
+        row = conn.execute("select * from wechat_tasks where id=? limit 1", (task_id,)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
+async def _run_friend_add_scheduler(account_id: str) -> None:
+    key = str(account_id or "").strip()
+    event = _FRIEND_ADD_WAKE_EVENTS.setdefault(key, asyncio.Event())
+    try:
+        while get_friend_add_control(key).get("enabled"):
+            task = _claim_next_queued_friend_task(key)
+            if task:
+                try:
+                    await _process_add_friend_task(task)
+                except Exception as exc:
+                    _finish_task(
+                        str(task.get("id") or ""),
+                        "failed",
+                        int(task.get("processed") or 0),
+                        int(task.get("success") or 0),
+                        max(1, int(task.get("failed") or 0)),
+                        str(exc),
+                    )
+                if not get_friend_add_control(key).get("enabled"):
+                    break
+                interval = get_friend_add_control(key).get("interval_seconds") or 60
+                event.clear()
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=float(interval))
+                except asyncio.TimeoutError:
+                    pass
+                continue
+            event.clear()
+            try:
+                await asyncio.wait_for(event.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                pass
+    except asyncio.CancelledError:
+        raise
+    finally:
+        current = _FRIEND_ADD_SCHEDULERS.get(key)
+        if current is asyncio.current_task():
+            _FRIEND_ADD_SCHEDULERS.pop(key, None)
+            _FRIEND_ADD_WAKE_EVENTS.pop(key, None)
+
+
+async def start_friend_add_queue(account_id: str) -> Dict[str, Any]:
+    key = str(account_id or "").strip()
+    _find_local_account(key)
+    _set_friend_add_control_enabled(key, True)
+    current = _FRIEND_ADD_SCHEDULERS.get(key)
+    if current is None or current.done():
+        _FRIEND_ADD_SCHEDULERS[key] = asyncio.create_task(_run_friend_add_scheduler(key), name=f"wechat-friend-add-queue-{key[-8:]}")
+    _notify_friend_add_scheduler(key)
+    return get_friend_add_control(key)
+
+
+async def stop_friend_add_queue(account_id: str) -> Dict[str, Any]:
+    key = str(account_id or "").strip()
+    _set_friend_add_control_enabled(key, False)
+    _notify_friend_add_scheduler(key)
+    return get_friend_add_control(key)
 
 
 async def _run_add_friend_task_background(task: Dict[str, Any]) -> None:
@@ -18365,6 +18612,51 @@ def list_tasks(account_id: str = "", *, limit: int = 50, offset: int = 0) -> Dic
             tuple(params + [int(limit), int(offset)]),
         ).fetchall()
     return {"items": [_row_to_dict(row) for row in rows], "count": int(total), "limit": limit, "offset": offset}
+
+
+def list_friend_records(account_id: str = "", *, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+    """Return one processing record per friend-add target, including history."""
+    init_db()
+    params: List[Any] = []
+    where = "where task_type='add_friend'"
+    if account_id:
+        where += " and account_id=?"
+        params.append(account_id)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"select * from wechat_tasks {where} order by created_at desc, id desc",
+            tuple(params),
+        ).fetchall()
+    records: List[Dict[str, Any]] = []
+    for row in rows:
+        task = _row_to_dict(row)
+        targets = list(task.get("targets") or [])
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        if not targets:
+            targets = [str(payload.get("keyword") or "")]
+        for target in targets:
+            records.append({
+                "id": str(task.get("id") or ""),
+                "task_id": str(task.get("id") or ""),
+                "account_id": str(task.get("account_id") or ""),
+                "keyword": str(target or ""),
+                "target": str(target or ""),
+                "apply_message": str(payload.get("apply_message") or ""),
+                "remark": str(payload.get("remark") or ""),
+                "tags": payload.get("tags") if isinstance(payload.get("tags"), list) else [],
+                "permission": str(payload.get("permission") or ""),
+                "status": str(task.get("status") or ""),
+                "error_message": str(task.get("error_message") or ""),
+                "created_at": str(task.get("created_at") or ""),
+                "updated_at": str(task.get("updated_at") or ""),
+                "processed": int(task.get("processed") or 0),
+                "success": int(task.get("success") or 0),
+                "failed": int(task.get("failed") or 0),
+            })
+    total = len(records)
+    start = max(0, int(offset))
+    end = start + max(1, int(limit))
+    return {"items": records[start:end], "count": total, "limit": int(limit), "offset": start}
 
 
 def get_task(task_id: str) -> Optional[Dict[str, Any]]:

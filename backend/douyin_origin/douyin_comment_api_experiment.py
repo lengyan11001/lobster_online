@@ -543,6 +543,12 @@ class DouyinCommentApiExperiment:
     def _normalize_aweme(self, aweme: Dict[str, Any], *, order_index: int = 1) -> Dict[str, Any]:
         aweme_id = str(aweme.get("aweme_id", "") or "").strip()
         author = aweme.get("author") if isinstance(aweme.get("author"), dict) else {}
+        author_sec_user_id = str(
+            author.get("sec_uid")
+            or author.get("sec_user_id")
+            or author.get("secUid")
+            or ""
+        ).strip()
         statistics = aweme.get("statistics") if isinstance(aweme.get("statistics"), dict) else {}
         video = aweme.get("video") if isinstance(aweme.get("video"), dict) else {}
         create_time = int(aweme.get("create_time", 0) or 0)
@@ -555,6 +561,7 @@ class DouyinCommentApiExperiment:
             "url": build_video_url(aweme_id) if aweme_id else "",
             "title": str(aweme.get("desc", "") or "").strip() or f"视频 {order_index}",
             "author": str(author.get("nickname", "") or "").strip(),
+            "author_sec_user_id": author_sec_user_id,
             "cover_image": _pick_image_url(video),
             "likes": digg_count,
             "likes_text": _format_compact_count(digg_count),

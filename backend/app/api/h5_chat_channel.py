@@ -7832,6 +7832,10 @@ async def _wait_for_local_native_wechat_task(
                 return result
             if status not in {"success", "completed"}:
                 reason = str(current.get("error_message") or current.get("message") or status).strip()
+                result["ok"] = False
+                result["status"] = status
+                result["error"] = reason[:500] or "local WeChat task failed"
+                return result
                 raise RuntimeError(reason[:500] or "本机微信任务执行失败")
             return result
         if asyncio.get_running_loop().time() >= deadline:
@@ -10342,7 +10346,26 @@ async def _run_client_workflow(
         )
     except Exception as exc:
         logger.exception("[SCHEDULED-TASK] client workflow failed run_id=%s action=%s", run_id, action)
-        await _complete_task_run(cloud, base, headers, run_id, error=(str(exc).strip() or "client workflow failed")[:500])
+        error_text = (str(exc).strip() or "client workflow failed")[:500]
+        failure = {
+            "stage": "client_workflow_action",
+            "error": error_text,
+            "exception_type": type(exc).__name__,
+        }
+        await _complete_task_run(
+            cloud,
+            base,
+            headers,
+            run_id,
+            result_text=error_text,
+            result_payload={
+                "task_kind": "client_workflow",
+                "action": action,
+                "params": params,
+                "failure": failure,
+            },
+            error=error_text,
+        )
 
 
 async def _process_scheduled_task(
@@ -10807,6 +10830,7 @@ async def h5_chat_poll_loop() -> None:
     active_items: set[asyncio.Task] = set()
     active_task_runs: set[asyncio.Task] = set()
     active_publish_runs: set[asyncio.Task] = set()
+    poll_error_streak = 0
     logger.info(
         "[H5-CHAT] poll intervals h5=%ss scheduled=%ss publish=%ss heartbeat=%ss",
         h5_poll_interval,
@@ -10948,6 +10972,10 @@ async def h5_chat_poll_loop() -> None:
                         publish_items = (publish_resp.json() or {}).get("items") or []
                     elif publish_resp.status_code != 404:
                         logger.debug("[SCHEDULED-PUBLISH] pending request HTTP %s: %s", publish_resp.status_code, publish_resp.text[:300])
+                # All enabled requests completed successfully, including an
+                # empty response.  Do not carry an earlier transient-error
+                # backoff into a healthy polling cycle.
+                poll_error_streak = 0
                 if not items and not task_items and not publish_items:
                     next_due = min(
                         last_h5_poll_at + h5_poll_interval if h5_slots > 0 else now_loop + h5_poll_interval,
@@ -10972,4 +11000,5 @@ async def h5_chat_poll_loop() -> None:
             raise
         except Exception as exc:
             logger.warning("[H5-CHAT] poll loop error: %s", exc)
-            await asyncio.sleep(5.0)
+            poll_error_streak = min(poll_error_streak + 1, 5)
+            await asyncio.sleep(min(30.0, 5.0 * (2 ** (poll_error_streak - 1))))

@@ -1055,6 +1055,27 @@ class RuntimeStateStore:
             finally:
                 conn.close()
 
+    def delete_douyin_monitor_videos(self, target_id: int, aweme_ids: List[str]):
+        target_id = int(target_id or 0)
+        normalized_ids = [
+            str(item or "").strip()
+            for item in (aweme_ids or [])
+            if str(item or "").strip()
+        ]
+        if target_id <= 0 or not normalized_ids:
+            return
+        placeholders = ",".join("?" for _ in normalized_ids)
+        with self._lock:
+            conn = self._connect()
+            try:
+                conn.execute(
+                    f"DELETE FROM douyin_monitor_videos WHERE target_id = ? AND aweme_id IN ({placeholders})",
+                    (target_id, *normalized_ids),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
     def set_douyin_monitor_video_selection(self, target_id: int, selected_aweme_ids: List[str]):
         normalized_selected = {str(item or "").strip() for item in (selected_aweme_ids or []) if str(item or "").strip()}
         with self._lock:

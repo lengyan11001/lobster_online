@@ -11,6 +11,9 @@
     activeGroupKey: '',
     groupMembers: [],
     tasks: [],
+    friendRecords: [],
+    friendQueueControl: null,
+    friendImportRows: [],
     strategy: null,
     autoReply: null,
     autoReplyTemplateLanguage: 'zh-CN',
@@ -30,7 +33,8 @@
       groups: { page: 1, limit: 100, total: 0, keyword: '', loading: false },
       groupMembers: { page: 1, limit: 100, total: 0, keyword: '', loading: false },
       contactPicker: { page: 1, limit: 100, total: 0, keyword: '', loading: false },
-      tasks: { page: 1, limit: 80, total: 0, keyword: '', loading: false }
+      tasks: { page: 1, limit: 80, total: 0, keyword: '', loading: false },
+      friendRecords: { page: 1, limit: 50, total: 0, keyword: '', loading: false }
     },
     messageHistory: { limit: 100, total: 0, loading: false },
     requestSeq: {},
@@ -97,7 +101,7 @@
   }
 
   function resetAllPagination() {
-    ['peers', 'contacts', 'groups', 'groupMembers', 'contactPicker', 'tasks', 'messages'].forEach(beginRequest);
+    ['peers', 'contacts', 'groups', 'groupMembers', 'contactPicker', 'tasks', 'friendRecords', 'messages'].forEach(beginRequest);
     Object.keys(state.pagination).forEach(resetPagination);
     state.contactPickerContacts = [];
     state.messageHistory = { limit: 100, total: 0, loading: false };
@@ -119,7 +123,8 @@
       groups: 'nativeWechatGroupPagination',
       groupMembers: 'nativeWechatGroupMemberPagination',
       contactPicker: 'nativeWechatContactPickerPagination',
-      tasks: 'nativeWechatTaskPagination'
+      tasks: 'nativeWechatTaskPagination',
+      friendRecords: 'nativeWechatFriendRecordPagination'
     }[key] || '';
   }
 
@@ -808,6 +813,72 @@
     return '<a class="native-wechat-file-link" href="' + esc(url) + '" target="_blank" rel="noopener">' + esc(name) + '</a>';
   }
 
+  function friendStatusText(status) {
+    var map = { queued: '待处理', pending: '待处理', running: '执行中', success: '已申请', failed: '失败', partial_failed: '部分成功', cancelled: '已停止' };
+    return map[String(status || '').toLowerCase()] || status || '-';
+  }
+
+  function renderFriendQueue() {
+    var control = state.friendQueueControl || {};
+    var running = !!control.running;
+    var enabled = !!control.enabled;
+    setChip('nativeWechatFriendState', running ? '运行中' : (enabled ? '已启动' : '未启动'));
+    var summary = $('nativeWechatFriendQueueSummary');
+    if (summary) summary.textContent = (running ? '运行中' : (enabled ? '已启动' : '已停止')) + '，间隔 ' + Number(control.interval_seconds || 60) + ' 秒';
+    var interval = $('nativeWechatFriendIntervalInput');
+    if (interval && document.activeElement !== interval) interval.value = Number(control.interval_seconds || 60);
+  }
+
+  function renderFriendRecords() {
+    var list = $('nativeWechatFriendRecordList');
+    if (!list) return;
+    if (!state.friendRecords.length) {
+      list.className = 'native-wechat-empty';
+      list.textContent = '暂无加好友记录';
+      renderPagination('friendRecords');
+      return;
+    }
+    list.className = '';
+    list.innerHTML = '<table class="native-wechat-table"><thead><tr><th>目标</th><th>状态</th><th>申请消息</th><th>备注/权限</th><th>时间</th><th>操作</th></tr></thead><tbody>' +
+      state.friendRecords.map(function(item) {
+        var detail = [item.remark || '', item.permission || ''].filter(Boolean).join(' / ');
+        return '<tr><td>' + esc(item.keyword || item.target || '-') + '</td>' +
+          '<td>' + esc(friendStatusText(item.status)) + '</td>' +
+          '<td style="max-width:240px;white-space:pre-wrap;word-break:break-word;">' + esc(item.apply_message || '-') + '</td>' +
+          '<td>' + esc(detail || '-') + '</td>' +
+          '<td>' + esc(formatTime(item.updated_at || item.created_at)) + '</td>' +
+          '<td><button type="button" class="btn btn-ghost btn-sm" data-native-friend-record="' + esc(item.id) + '">详情</button></td></tr>';
+      }).join('') + '</tbody></table>';
+    renderPagination('friendRecords');
+  }
+
+  function loadFriendQueueControl() {
+    var id = activeAccountId();
+    if (!id) { state.friendQueueControl = null; renderFriendQueue(); return Promise.resolve(); }
+    return apiJson('/api/native-wechat/friends/queue?account_id=' + encodeURIComponent(id)).then(function(data) {
+      state.friendQueueControl = data.control || {};
+      renderFriendQueue();
+    }).catch(function(err) { setMsg(err.message || '加载加好友队列设置失败', true); });
+  }
+
+  function loadFriendRecords(page) {
+    var id = activeAccountId();
+    var meta = preparePagination('friendRecords', page, '');
+    if (!id) { state.friendRecords = []; meta.total = 0; meta.loading = false; renderFriendRecords(); return Promise.resolve(); }
+    var sequence = beginRequest('friendRecords');
+    var path = '/api/native-wechat/friends/records?account_id=' + encodeURIComponent(id) + '&limit=' + meta.limit + '&offset=' + ((meta.page - 1) * meta.limit);
+    return apiJson(path).then(function(data) {
+      if (!isCurrentRequest('friendRecords', sequence) || id !== activeAccountId()) return;
+      if (!applyPaginationResponse(meta, data)) return loadFriendRecords(meta.page);
+      state.friendRecords = Array.isArray(data.items) ? data.items : [];
+      renderFriendRecords();
+    }).catch(function(err) {
+      if (isCurrentRequest('friendRecords', sequence)) setMsg(err.message || '加载加好友记录失败', true);
+    }).finally(function() {
+      if (isCurrentRequest('friendRecords', sequence)) { meta.loading = false; renderPagination('friendRecords'); }
+    });
+  }
+
   function renderTasks() {
     var list = $('nativeWechatTaskList');
     if (!list) return;
@@ -838,6 +909,8 @@
   }
 
   function taskStatusText(status) {
+    if (String(status || '').toLowerCase() === 'queued') return '待处理';
+    if (String(status || '').toLowerCase() === 'cancelled') return '已停止';
     var map = { pending: '排队中', running: '执行中', success: '成功', failed: '失败', partial_failed: '部分失败' };
     return map[status] || status || '-';
   }
@@ -851,6 +924,7 @@
       panel.classList.toggle('active', panel.getAttribute('data-native-wechat-panel') === state.tab);
     });
     if (state.tab === 'tasks') loadTasks();
+    if (state.tab === 'friends') { loadFriendRecords(); loadFriendQueueControl(); }
     if (state.tab === 'contacts') loadContacts();
     if (state.tab === 'groups') {
       loadGroups();
@@ -1175,6 +1249,7 @@
     if (key === 'groupMembers') return loadGroupMembers(page);
     if (key === 'contactPicker') return loadContactPicker(page);
     if (key === 'tasks') return loadTasks(page);
+    if (key === 'friendRecords') return loadFriendRecords(page);
     return Promise.resolve();
   }
 
@@ -1302,7 +1377,7 @@
     });
   }
 
-  function addFriend() {
+  function submitFriendQueue() {
     var id = activeAccountId();
     var keywords = splitTargets((($('nativeWechatFriendKeyword') || {}).value || '').trim());
     var applyMessage = (($('nativeWechatFriendApplyMessage') || {}).value || '').trim();
@@ -1331,6 +1406,114 @@
       setChip('nativeWechatFriendState', '失败');
       setMsg(err.message || '提交好友申请失败', true);
     });
+  }
+
+  function addFriend() {
+    var modal = $('nativeWechatFriendAddModal');
+    if (modal) modal.classList.add('show');
+    var input = $('nativeWechatFriendModalKeyword');
+    if (input) input.focus();
+  }
+
+  function submitFriendAddModal() {
+    var id = activeAccountId();
+    var keywords = splitTargets((($('nativeWechatFriendModalKeyword') || {}).value || '').trim());
+    var applyMessage = (($('nativeWechatFriendModalApplyMessage') || {}).value || '').trim();
+    var remark = (($('nativeWechatFriendModalRemark') || {}).value || '').trim();
+    var permission = (($('nativeWechatFriendModalPermission') || {}).value || '朋友圈').trim();
+    var tags = (($('nativeWechatFriendModalTags') || {}).value || '').split(/[,，]/).map(function(x) { return x.trim(); }).filter(Boolean);
+    if (!id) return setMsg('请先选择账号', true);
+    if (!keywords.length) return setMsg('请填写微信号、手机号或昵称', true);
+    var submit = $('nativeWechatFriendModalSubmitBtn');
+    if (submit) submit.disabled = true;
+    setChip('nativeWechatFriendState', '提交中');
+    var requestId = 'friend-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+    return apiJson('/api/native-wechat/friends/add', {
+      method: 'POST',
+      body: { account_id: id, keywords: keywords, apply_message: applyMessage, remark: remark, tags: tags, permission: permission, prepare_only: false, queue_only: true, client_request_id: requestId }
+    }).then(function(data) {
+      var modal = $('nativeWechatFriendAddModal');
+      if (modal) modal.classList.remove('show');
+      setChip('nativeWechatFriendState', '已入队');
+      setMsg('已加入加好友列表，点击启动后逐条申请', false);
+      var input = $('nativeWechatFriendModalKeyword');
+      if (input) input.value = '';
+      return Promise.all([loadFriendRecords(), loadFriendQueueControl()]);
+    }).catch(function(err) {
+      setChip('nativeWechatFriendState', '提交失败');
+      setMsg(err.message || '提交好友申请失败', true);
+    }).finally(function() { if (submit) submit.disabled = false; });
+  }
+
+  function saveFriendQueueSettings() {
+    var id = activeAccountId();
+    var input = $('nativeWechatFriendIntervalInput');
+    var interval = Math.max(1, Math.min(86400, Number(input && input.value || 60)));
+    if (!id) return setMsg('请先选择账号', true);
+    return apiJson('/api/native-wechat/friends/queue/settings', { method: 'POST', body: { account_id: id, interval_seconds: interval } }).then(function(data) {
+      state.friendQueueControl = data.control || {};
+      renderFriendQueue();
+      closeModals();
+      setMsg('加好友队列设置已保存', false);
+    }).catch(function(err) { setMsg(err.message || '保存加好友设置失败', true); });
+  }
+
+  function startFriendQueue() {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先选择账号', true);
+    var input = $('nativeWechatFriendIntervalInput');
+    var interval = Math.max(1, Math.min(86400, Number(input && input.value || (state.friendQueueControl && state.friendQueueControl.interval_seconds) || 60)));
+    return apiJson('/api/native-wechat/friends/queue/start', { method: 'POST', body: { account_id: id, interval_seconds: interval } }).then(function(data) {
+      state.friendQueueControl = data.control || {};
+      renderFriendQueue();
+      setMsg('加好友队列已启动', false);
+      return loadFriendRecords();
+    }).catch(function(err) { setMsg(err.message || '启动加好友队列失败', true); });
+  }
+
+  function stopFriendQueue() {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先选择账号', true);
+    var interval = Number((state.friendQueueControl || {}).interval_seconds || 60);
+    return apiJson('/api/native-wechat/friends/queue/stop', { method: 'POST', body: { account_id: id, interval_seconds: interval } }).then(function(data) {
+      state.friendQueueControl = data.control || {};
+      renderFriendQueue();
+      setMsg('已停止领取新的加好友任务，当前操作完成后停止', false);
+      return loadFriendRecords();
+    }).catch(function(err) { setMsg(err.message || '停止加好友队列失败', true); });
+  }
+
+  function importFriendFiles(files) {
+    files = Array.prototype.slice.call(files || []);
+    if (!files.length) return;
+    Promise.all(files.map(function(file) {
+      return new Promise(function(resolve, reject) {
+        var reader = new FileReader();
+        reader.onload = function() { resolve(String(reader.result || '')); };
+        reader.onerror = reject;
+        reader.readAsText(file, 'utf-8');
+      });
+    })).then(function(contents) {
+      var values = [];
+      contents.forEach(function(content) {
+        var parsed = null;
+        try { parsed = JSON.parse(content); } catch (_) {}
+        if (Array.isArray(parsed)) parsed.forEach(function(item) { values.push(typeof item === 'object' ? (item.wxid || item.wechat_id || item.phone || item.mobile || item.keyword || item.target || '') : item); });
+        else if (parsed && typeof parsed === 'object') Object.keys(parsed).forEach(function(key) { values.push(parsed[key]); });
+        else values = values.concat(splitTargets(content.replace(/\r/g, '\n')));
+      });
+      values = splitTargets(values.join('\n'));
+      if (!values.length) return setMsg('导入文件中没有可用的微信号或手机号', true);
+      var input = $('nativeWechatFriendModalKeyword');
+      if (input) input.value = values.join('\n');
+      addFriend();
+      setMsg('已导入 ' + values.length + ' 个目标，请确认申请信息后提交', false);
+    }).catch(function() { setMsg('读取导入文件失败', true); });
+  }
+
+  function showFriendRecordDetail(record) {
+    if (!record) return;
+    showJsonDetail('好友申请记录', record);
   }
 
   function submitMomentsLike() {
@@ -1799,6 +1982,8 @@
     state.activeGroupKey = '';
     state.groupMembers = [];
     state.tasks = [];
+    state.friendRecords = [];
+    state.friendQueueControl = null;
     state.contactSelected = {};
     state.autoReply = null;
     resetAllPagination();
@@ -1812,6 +1997,8 @@
     renderGroups();
     renderGroupMembers();
     renderMessages();
+    renderFriendRecords();
+    renderFriendQueue();
     renderAutoReplyConfig();
   }
 
@@ -1830,6 +2017,8 @@
       loadContacts(1);
       loadGroups(1);
       loadTasks();
+      loadFriendRecords();
+      loadFriendQueueControl();
       loadAutoReplyConfig();
       loadAutoReplyMemoryDocs();
     });
@@ -1926,6 +2115,20 @@
     if (loadOlderMessagesBtn) loadOlderMessagesBtn.addEventListener('click', loadOlderMessages);
     var addFriendBtn = $('nativeWechatAddFriendBtn');
     if (addFriendBtn) addFriendBtn.addEventListener('click', addFriend);
+    var friendModalSubmitBtn = $('nativeWechatFriendModalSubmitBtn');
+    if (friendModalSubmitBtn) friendModalSubmitBtn.addEventListener('click', submitFriendAddModal);
+    var friendImportBtn = $('nativeWechatImportFriendBtn');
+    var friendImportInput = $('nativeWechatFriendImportInput');
+    if (friendImportBtn && friendImportInput) friendImportBtn.addEventListener('click', function() { friendImportInput.click(); });
+    if (friendImportInput) friendImportInput.addEventListener('change', function() { importFriendFiles(friendImportInput.files); friendImportInput.value = ''; });
+    var friendStartBtn = $('nativeWechatFriendQueueStartBtn');
+    if (friendStartBtn) friendStartBtn.addEventListener('click', startFriendQueue);
+    var friendStopBtn = $('nativeWechatFriendQueueStopBtn');
+    if (friendStopBtn) friendStopBtn.addEventListener('click', stopFriendQueue);
+    var friendSettingsBtn = $('nativeWechatFriendQueueSettingsBtn');
+    if (friendSettingsBtn) friendSettingsBtn.addEventListener('click', function() { loadFriendQueueControl().then(function() { var modal = $('nativeWechatFriendSettingsModal'); if (modal) modal.classList.add('show'); }); });
+    var friendSettingsSaveBtn = $('nativeWechatFriendSettingsSaveBtn');
+    if (friendSettingsSaveBtn) friendSettingsSaveBtn.addEventListener('click', saveFriendQueueSettings);
     var contactSelectAllBtn = $('nativeWechatContactSelectAllBtn');
     if (contactSelectAllBtn) contactSelectAllBtn.addEventListener('click', function() {
       state.contacts.forEach(function(item) {
@@ -2026,6 +2229,8 @@
         loadContacts(1);
         loadGroups(1);
         loadTasks();
+        loadFriendRecords();
+        loadFriendQueueControl();
         return;
       }
       var contactSelect = evt.target.closest('[data-native-contact-select]');
@@ -2055,6 +2260,12 @@
         var local = state.tasks.find(function(x) { return x.id === taskId; });
         if (local) showTaskDetail(local);
       }
+      var friendRecordBtn = evt.target.closest('[data-native-friend-record]');
+      if (friendRecordBtn) {
+        var recordId = friendRecordBtn.getAttribute('data-native-friend-record') || '';
+        var record = state.friendRecords.find(function(item) { return String(item.id) === String(recordId); });
+        showFriendRecordDetail(record);
+      }
     });
   }
 
@@ -2062,6 +2273,14 @@
     var root = $('content-juhe-wechat');
     if (!root || root.dataset.inited === '1') return;
     root.dataset.inited = '1';
+    var friendTab = root.querySelector('[data-native-wechat-tab="friends"]');
+    if (friendTab) friendTab.textContent = '加好友';
+    var friendButtons = root.querySelectorAll('#nativeWechatAddFriendBtn');
+    for (var friendButtonIndex = 1; friendButtonIndex < friendButtons.length; friendButtonIndex += 1) {
+      if (friendButtons[friendButtonIndex] && friendButtons[friendButtonIndex].closest('.native-wechat-card')) {
+        friendButtons[friendButtonIndex].closest('.native-wechat-card').remove();
+      }
+    }
     bindEvents(root);
     renderAccountSelect();
     renderPeers();
@@ -2069,6 +2288,8 @@
     renderGroups();
     renderGroupMembers();
     renderMessages();
+    renderFriendRecords();
+    renderFriendQueue();
     renderTasks();
     renderSendFiles();
     renderMomentsFiles();
@@ -2076,6 +2297,7 @@
     loadAccounts().then(function() {
       return Promise.all([
         loadPeers(), loadContacts(), loadTasks(), loadStrategy(), loadAutoReplyConfig(),
+        loadFriendRecords(), loadFriendQueueControl(),
         loadAutoReplyMemoryDocs(), loadAutoReplyTemplateLanguage()
       ]);
     });

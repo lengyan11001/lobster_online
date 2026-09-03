@@ -121,6 +121,13 @@ class AddFriendBody(BaseModel):
     tags: List[str] = Field(default_factory=list, max_length=20)
     permission: str = Field(default="朋友圈", max_length=20)
     prepare_only: bool = False
+    queue_only: bool = False
+    client_request_id: str = Field(default="", max_length=180)
+
+
+class FriendQueueSettingsBody(BaseModel):
+    account_id: str = Field(min_length=1, max_length=160)
+    interval_seconds: int = Field(default=60, ge=1, le=86400)
 
 
 class MomentsLikeBody(BaseModel):
@@ -699,16 +706,71 @@ async def native_wechat_add_friend(
             tags=body.tags,
             permission=body.permission,
             prepare_only=body.prepare_only,
-            client_request_id=_client_request_id(request),
+            queue_only=body.queue_only,
+            client_request_id=body.client_request_id or _client_request_id(request),
         )
         return {
             "ok": True,
             "task": task,
-            "queued": task.get("status") in {"pending", "running"},
+            "queued": task.get("status") in {"pending", "queued", "running"},
             "message": "好友申请任务已加入队列，将按频率慢慢处理",
         }
     except Exception as exc:
         _raise_native_wechat_error("friends_add", exc, account_id=body.account_id)
+
+
+@router.get("/api/native-wechat/friends/records")
+async def native_wechat_friend_records(
+    account_id: str = "",
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    return {"ok": True, **engine.list_friend_records(account_id, limit=limit, offset=offset)}
+
+
+@router.get("/api/native-wechat/friends/queue")
+async def native_wechat_friend_queue(
+    account_id: str = "",
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    if not account_id:
+        raise HTTPException(status_code=422, detail="missing account_id")
+    return {"ok": True, "control": engine.get_friend_add_control(account_id)}
+
+
+@router.post("/api/native-wechat/friends/queue/settings")
+async def native_wechat_friend_queue_settings(
+    body: FriendQueueSettingsBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    try:
+        return {"ok": True, "control": engine.save_friend_add_control(body.account_id, interval_seconds=body.interval_seconds)}
+    except Exception as exc:
+        _raise_native_wechat_error("friends_queue_settings", exc, account_id=body.account_id)
+
+
+@router.post("/api/native-wechat/friends/queue/start")
+async def native_wechat_friend_queue_start(
+    body: FriendQueueSettingsBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    try:
+        engine.save_friend_add_control(body.account_id, interval_seconds=body.interval_seconds)
+        return {"ok": True, "control": await engine.start_friend_add_queue(body.account_id)}
+    except Exception as exc:
+        _raise_native_wechat_error("friends_queue_start", exc, account_id=body.account_id)
+
+
+@router.post("/api/native-wechat/friends/queue/stop")
+async def native_wechat_friend_queue_stop(
+    body: FriendQueueSettingsBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    try:
+        return {"ok": True, "control": await engine.stop_friend_add_queue(body.account_id)}
+    except Exception as exc:
+        _raise_native_wechat_error("friends_queue_stop", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/moments/like")

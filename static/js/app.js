@@ -99,7 +99,7 @@ function getLobsterBrandMark() {
 // Some OEMs use an operator-provided balance and must not expose self-service recharge.
 function isLobsterRechargeHiddenForBrand() {
   var mark = getLobsterBrandMark();
-  return mark === 'daka' || mark === 'jinghai';
+  return mark === 'daka';
 }
 window.isLobsterRechargeHiddenForBrand = isLobsterRechargeHiddenForBrand;
 function lobsterTokenStorageKey(mark) {
