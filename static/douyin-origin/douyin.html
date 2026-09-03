@@ -6464,7 +6464,7 @@
                                     <div class="video-comment-field">
                                         <label for="douyin-interaction-seed-text">私信基准文案</label>
                                         <textarea id="douyin-interaction-seed-text" rows="3" placeholder="例如：看你刚刚的评论挺有感觉的，方便交流下你现在在关注什么吗？"></textarea>
-                                        <div class="video-comment-hint">AI 会围绕这条基准私信做同方向改编，每次换一种说法，但不会把原本意思改掉。</div>
+                                        <div class="video-comment-hint dm-preset-hint"><span>保存后下次打开私信互动会自动回填这条 AI 改写基准文案。</span><button type="button" class="btn btn-primary dm-preset-save-btn" onclick="saveDouyinInteractionRewrite(true)">保存改写文案</button></div>
                                     </div>
                                 </div>
                             </div>
@@ -9015,6 +9015,35 @@
             }
         };
         document.addEventListener("visibilitychange",()=>{scheduleDouyinWorkbenchPolling(!document.hidden)});
+    </script>
+    <script>
+        (() => {
+            const storageKey = "douyin-interaction-rewrite-seed-v1";
+            window.loadDouyinInteractionRewrite = function() {
+                const seedEl = document.getElementById("douyin-interaction-seed-text");
+                if (!seedEl) return;
+                try {
+                    seedEl.value = localStorage.getItem(storageKey) || "";
+                } catch (error) {}
+            };
+            window.saveDouyinInteractionRewrite = function(showLog = false) {
+                const seedEl = document.getElementById("douyin-interaction-seed-text");
+                if (!seedEl) return;
+                const seedText = String(seedEl.value || "").trim();
+                if (!seedText) {
+                    if (showLog && typeof addLog === "function") addLog("请先填写私信基准文案。", "warning");
+                    return;
+                }
+                try {
+                    localStorage.setItem(storageKey, seedText);
+                } catch (error) {
+                    if (showLog && typeof addLog === "function") addLog(`保存改写文案失败：${error.message}`, "error");
+                    return;
+                }
+                if (showLog && typeof addLog === "function") addLog("已保存 AI 改写基准文案。", "success");
+            };
+            document.addEventListener("DOMContentLoaded", () => window.loadDouyinInteractionRewrite());
+        })();
     </script>
 </body>
 </html>

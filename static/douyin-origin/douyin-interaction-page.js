@@ -18,6 +18,7 @@ let douyinInteractionPresetState = { activeIndex: 0, presets: [] };
 const defaultDouyinInteractionMessage = "你好，我看到你对 OpenClaw 感兴趣，方便交流一下你现在最想解决的问题吗？";
 const douyinInteractionPresetCount = 10;
 const douyinInteractionPresetStorageKey = "douyin-interaction-message-presets-v1";
+const douyinInteractionRewriteStorageKey = "douyin-interaction-rewrite-seed-v1";
 
 const esc = value => String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -521,6 +522,31 @@ function saveDouyinInteractionPreset(showLog = false) {
     if (showLog) addLog(`已保存私信话术 ${douyinInteractionPresetState.activeIndex + 1}。`, "success");
 }
 
+function loadDouyinInteractionRewrite() {
+    const seedEl = document.getElementById("douyin-interaction-seed-text");
+    if (!seedEl) return;
+    try {
+        seedEl.value = localStorage.getItem(douyinInteractionRewriteStorageKey) || "";
+    } catch (error) {}
+}
+
+function saveDouyinInteractionRewrite(showLog = false) {
+    const seedEl = document.getElementById("douyin-interaction-seed-text");
+    if (!seedEl) return;
+    const seedText = String(seedEl.value || "").trim();
+    if (!seedText) {
+        if (showLog) addLog("请先填写私信基准文案。", "warning");
+        return;
+    }
+    try {
+        localStorage.setItem(douyinInteractionRewriteStorageKey, seedText);
+    } catch (error) {
+        if (showLog) addLog(`保存改写文案失败：${error.message}`, "error");
+        return;
+    }
+    if (showLog) addLog("已保存 AI 改写基准文案。", "success");
+}
+
 function handleDouyinInteractionPresetInput() {
     updateDouyinInteractionPresetDraftFromForm();
 }
@@ -888,6 +914,7 @@ document.addEventListener("visibilitychange", () => {
 
 document.addEventListener("DOMContentLoaded", async () => {
     loadDouyinInteractionPresets();
+    loadDouyinInteractionRewrite();
     renderCommentTimeFilter("interaction-time-filter", interactionTimeFilterDays);
     toggleDouyinInteractionOptions();
     changeDouyinInteractionIntervalUnit();
