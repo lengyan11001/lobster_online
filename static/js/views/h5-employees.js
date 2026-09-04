@@ -957,8 +957,6 @@
   function activateTemplate() {
     var iid=selectedDeviceId(), template=state.selectedTemplate;
     if (!iid) throw new Error('Please select an Online device');
-    var device=state.devices.find(function(item){return String(item.installation_id || '') === iid;});
-    if (!device || !device.online) throw new Error('Please select an online Online device');
     var day=templateNeedsPlanDay(template) ? askPlanDay() : undefined;
     if (day === null) return Promise.resolve();
     if (state.salesTemplateMigrationPending && state.editingId) return saveTemplate().then(activateTemplate);

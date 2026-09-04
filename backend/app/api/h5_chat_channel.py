@@ -1543,6 +1543,21 @@ def _scheduled_payload(item: Dict[str, Any]) -> Dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _raise_if_server_template_invalid(source: Any) -> Optional[Dict[str, Any]]:
+    """Honor the server's current-template decision without revalidating it locally."""
+    if not isinstance(source, dict):
+        return None
+    validation = source.get("template_validation")
+    if not isinstance(validation, dict):
+        validation = source.get("_server_template_validation")
+    if not isinstance(validation, dict):
+        return None
+    if validation.get("checked") and validation.get("ok") is False:
+        message = str(validation.get("message") or "Current personal template is incomplete").strip()
+        raise RuntimeError(message[:500])
+    return validation
+
+
 def _merge_id_list(existing: Any, asset_ids: List[str]) -> List[str]:
     raw: List[Any] = []
     if isinstance(existing, list):
@@ -7310,6 +7325,7 @@ async def _run_scheduled_capability(
     if not run_id or not capability_id:
         return
     try:
+        _raise_if_server_template_invalid(payload)
         task_title = str(item.get("title") or "").strip()
         if capability_id in {"goal.video.pipeline", "goal.image.pipeline", "hifly.video.create_by_tts", "create.video.pipeline", "create.ppt.pipeline", _SEEDANCE_TVC_CAPABILITY_ID}:
             asset_context = _scheduled_asset_context_with_urls(attachment_asset_ids, jwt_token, installation_id)
@@ -9076,6 +9092,7 @@ async def _run_shanjian_digital_human_workflow(
     base: str,
     current_item: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    _raise_if_server_template_invalid(source)
     selected_virtualman = await _resolve_workflow_virtualman(
         source,
         cloud=cloud,
@@ -9777,7 +9794,8 @@ async def _run_client_workflow_action(
     if action == "local_bestseller_daily_video":
         profile = source.get("profile") if isinstance(source.get("profile"), dict) else {}
         profile = {str(key): value for key, value in profile.items() if str(value or "").strip()}
-        missing = _local_bestseller_missing_fields(source, profile)
+        _raise_if_server_template_invalid(source)
+        missing = []
         if missing:
             raise RuntimeError("IP人设定位缺少：" + "、".join(missing) + "。请先补全后再启动销售员工。")
         days = _clamp_int(source.get("days"), 30, 1, 30)
@@ -10302,6 +10320,9 @@ async def _run_client_workflow(
     action = str(payload.get("action") or "").strip()
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
     params = dict(params)
+    server_template_validation = payload.get("template_validation")
+    if isinstance(server_template_validation, dict):
+        params["_server_template_validation"] = server_template_validation
     if isinstance(payload.get("h5_context"), dict) and "h5_context" not in params:
         params["h5_context"] = payload.get("h5_context")
     if isinstance(payload.get("schedule_config"), dict) and "schedule_config" not in params:
@@ -10319,6 +10340,7 @@ async def _run_client_workflow(
     if _task_event_rejects_local_work(event_status):
         return
     try:
+        _raise_if_server_template_invalid(payload)
         result = await _run_client_workflow_action(
             action,
             params,
