@@ -28,8 +28,8 @@
   });
 
   window.registerLobsterView('personal-settings', {
-    html: '/static/views/personal-settings.html?v=20260824-personal-digital-resource-picker-v2',
-    scripts: '/static/js/personal-settings.js?v=20260831-personal-settings-load-v1',
+    html: '/static/views/personal-settings.html?v=20260903-personal-template-layout-v1',
+    scripts: '/static/js/personal-settings.js?v=20260903-personal-template-layout-v1',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });

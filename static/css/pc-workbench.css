@@ -2407,6 +2407,46 @@ html.ps-dh-modal-open body {
   gap: 12px;
 }
 
+/* The template workspace keeps the editable form on the left and puts the
+   template record plus all selectable resources in one right-hand column. */
+.personal-settings-view [data-ps-panel="template"] .ps-card-subtitle,
+.personal-settings-view [data-ps-panel="template"] #psCurrentTemplateBox,
+.personal-settings-view [data-ps-panel="template"] #psSavedTemplateList[hidden] {
+  display: none;
+}
+
+.personal-settings-view .ps-template-list-heading,
+.personal-settings-view .ps-template-resource-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid #f0f2f5;
+}
+
+.personal-settings-view .ps-template-list-heading span,
+.personal-settings-view .ps-template-resource-heading span {
+  color: #98a2b2;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.personal-settings-view #psSavedTemplateListRight {
+  max-height: 430px;
+  overflow: auto;
+  padding-right: 3px;
+}
+
+.personal-settings-view #psSavedTemplateListRight .ps-template-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.personal-settings-view .ps-template-resource-heading {
+  margin-top: 8px;
+}
+
 .personal-settings-view .ps-resource-heading-actions {
   display: flex;
   align-items: center;

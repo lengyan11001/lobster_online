@@ -1390,9 +1390,19 @@ function renderOnlineH5Employees(templates) {
   var host = document.getElementById('onlineEmployeeNavItems');
   if (!host) return;
   var salesAllowed = typeof window.isLobsterFeatureAllowed !== 'function' || window.isLobsterFeatureAllowed('local_bestseller_skill');
+  var systemRows = (Array.isArray(templates) ? templates : []).filter(function(template) {
+    return template && template.source === 'system' && _onlineEmployeeSystemKey(template);
+  }).map(function(template) {
+    var key = _onlineEmployeeSystemKey(template);
+    return Object.assign({}, template, { id: key, source: 'system' });
+  });
   var customRows = (Array.isArray(templates) ? templates : []).filter(function(template) {
     return template && template.id != null && !_onlineEmployeeSystemKey(template);
   });
+  if (systemRows.length) {
+    host.innerHTML = systemRows.map(_onlineEmployeeButton).concat(customRows.map(_onlineEmployeeButton)).join('');
+    return;
+  }
   host.innerHTML = '<button type="button" class="chat-sidebar-entry" data-online-employee="system_sales" data-feature-gate="local_bestseller_skill"' + (salesAllowed ? '' : ' hidden') + '>'
     + '<span class="chat-sidebar-entry-icon">销</span>'
     + '<span class="chat-sidebar-entry-copy">销售</span>'

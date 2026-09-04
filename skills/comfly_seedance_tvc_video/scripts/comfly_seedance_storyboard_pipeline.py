@@ -163,6 +163,28 @@ class StopNewSubmissionsError(PipelineError):
     pass
 
 
+def _exception_diagnostics(exc: BaseException, command: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Keep enough OS/provider context to diagnose opaque client failures."""
+    details: Dict[str, Any] = {
+        "exception_type": type(exc).__name__,
+        "message": str(exc),
+        "args": [str(value) for value in getattr(exc, "args", ())],
+    }
+    for attr in ("filename", "filename2", "errno", "winerror", "strerror"):
+        value = getattr(exc, attr, None)
+        if value is not None:
+            details[attr] = str(value) if attr.startswith("filename") else value
+    if command is not None:
+        details["command"] = [str(part) for part in command]
+    return details
+
+
+def _exception_summary(exc: BaseException, command: Optional[List[str]] = None) -> str:
+    details = _exception_diagnostics(exc, command)
+    suffix = f"; diagnostics={json.dumps(details, ensure_ascii=False, sort_keys=True)}"
+    return f"{str(exc) or type(exc).__name__}{suffix}"
+
+
 @dataclass
 class SubmitControl:
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -281,6 +303,9 @@ class RunLogger:
                 "shot_concurrency": config.shot_concurrency,
                 "generate_audio": config.generate_audio,
                 "watermark": config.watermark,
+                "ffmpeg_path": config.ffmpeg_path,
+                "ffmpeg_resolved": _resolve_tool_binary("ffmpeg", config.ffmpeg_path),
+                "ffprobe_resolved": _ffprobe_binary_for(config.ffmpeg_path),
             },
             "input": {k: v for k, v in raw_input.items() if k != "apikey"},
             "steps": {},
@@ -718,9 +743,22 @@ def _probe_video_dimensions(media_path: str, ffmpeg_path: str) -> Optional[Dict[
             encoding="utf-8",
             errors="replace",
         )
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError) as exc:
+        logger.warning(
+            "[seedance-tool-error] tool=ffprobe operation=video_dimensions media_path=%s ffmpeg_path=%s details=%s",
+            media_path,
+            ffmpeg_path,
+            json.dumps(_exception_diagnostics(exc, [ffprobe_binary, "-show_entries", "stream=width,height", media_path]), ensure_ascii=False),
+        )
         return None
     if proc.returncode != 0:
+        logger.warning(
+            "[seedance-tool-error] tool=ffprobe operation=video_dimensions returncode=%s media_path=%s ffprobe_path=%s stderr=%s",
+            proc.returncode,
+            media_path,
+            ffprobe_binary,
+            (proc.stderr or "")[-2000:],
+        )
         return None
     try:
         payload = json.loads(proc.stdout or "{}")
@@ -752,9 +790,22 @@ def _probe_stream_types(media_path: str, ffmpeg_path: str) -> List[str]:
             encoding="utf-8",
             errors="replace",
         )
-    except (FileNotFoundError, OSError):
+    except (FileNotFoundError, OSError) as exc:
+        logger.warning(
+            "[seedance-tool-error] tool=ffprobe operation=stream_types media_path=%s ffmpeg_path=%s details=%s",
+            media_path,
+            ffmpeg_path,
+            json.dumps(_exception_diagnostics(exc, [ffprobe_binary, "-show_entries", "stream=codec_type", media_path]), ensure_ascii=False),
+        )
         return []
     if proc.returncode != 0:
+        logger.warning(
+            "[seedance-tool-error] tool=ffprobe operation=stream_types returncode=%s media_path=%s ffprobe_path=%s stderr=%s",
+            proc.returncode,
+            media_path,
+            ffprobe_binary,
+            (proc.stderr or "")[-2000:],
+        )
         return []
     try:
         payload = json.loads(proc.stdout or "{}")
@@ -832,9 +883,16 @@ def _merge_completed_segments(config: PipelineConfig, logger_obj: RunLogger, seg
         filter_complex = "".join(video_inputs) + f"concat=n={len(downloaded)}:v=1:a=0[v]"
         cmd.extend(["-filter_complex", filter_complex, "-map", "[v]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", output_arg])
         audio_preserved = False
-    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    except (FileNotFoundError, OSError) as exc:
+        details = _exception_diagnostics(exc, cmd)
+        logger_obj.error("merge_ffmpeg", _exception_summary(exc, cmd))
+        raise PipelineError(f"ffmpeg execution failed: {_exception_summary(exc, cmd)}") from exc
     if proc.returncode != 0 or not merged_path.exists():
-        raise PipelineError(proc.stderr.strip() or proc.stdout.strip() or f"ffmpeg exited with {proc.returncode}")
+        output_error = proc.stderr.strip() or proc.stdout.strip() or f"ffmpeg exited with {proc.returncode}"
+        logger_obj.error("merge_ffmpeg", json.dumps({"message": output_error, "command": cmd, "ffmpeg_path": ffmpeg_binary, "returncode": proc.returncode, "stderr": proc.stderr[-4000:], "stdout": proc.stdout[-4000:]}, ensure_ascii=False))
+        raise PipelineError(output_error)
     return {
         "status": "success",
         "merged_video_path": str(merged_path),
@@ -1783,12 +1841,13 @@ def _submit_segment_video_to_provider(
             index,
             f"submit_{provider_role}",
             "failed",
-            error=str(exc),
+            error=_exception_summary(exc),
             payload={
                 "video_channel": provider_channel,
                 "video_model": provider_model,
                 "provider_role": provider_role,
                 "request": _video_submit_debug_request(client, segment_plan, segment_reference_result, provider_model, provider_channel),
+                "exception": _exception_diagnostics(exc),
             },
         )
         if submit_control is not None and _is_insufficient_credit_error(exc):
@@ -1847,7 +1906,7 @@ def _submit_segment_video(
                 submit_control,
             )
         except Exception as exc:
-            last_error = str(exc)
+            last_error = _exception_summary(exc)
     raise PipelineError(f"segment {index:02d} video submit failed: {last_error}")
 
 
@@ -2095,18 +2154,19 @@ def _run_segment_video_providers(
         except (InsufficientCreditError, StopNewSubmissionsError):
             raise
         except Exception as exc:
-            last_error = str(exc)
+            last_error = _exception_summary(exc)
             logger_obj.segment(
                 index,
                 f"video_attempt_{provider_role}",
                 "failed",
-                error=last_error,
+                error=_exception_summary(exc),
                 payload={
                     "video_channel": provider_channel,
                     "video_model": provider_model,
                     "provider_role": provider_kind,
                     "provider_stage_role": provider_role,
                     "provider_attempt": provider_index,
+                    "exception": _exception_diagnostics(exc),
                 },
             )
     raise PipelineError(f"segment {index:02d} video generation failed: {last_error}")

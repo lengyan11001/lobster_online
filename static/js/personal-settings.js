@@ -1686,19 +1686,20 @@
   }
 
   function renderSavedTemplates() {
-    var list = $('psSavedTemplateList');
+    var list = $('psSavedTemplateListRight') || $('psSavedTemplateList');
     if (!list) return;
     var rows = Array.isArray(state.templates) ? state.templates : [];
+    var currentId = String(((state.defaultItem || {}).meta || {}).current_template_id || '');
     if (!rows.length) {
       list.innerHTML = '<div class="ps-empty">暂无模板</div>';
       return;
     }
-    var page = psListPageRows('psSavedTemplateList', rows);
+    var page = psListPageRows(list.id, rows);
     list.innerHTML = page.rows.map(function(row) {
       var id = String(row.id || '');
-      var k = Array.isArray(row.keyword_ids) ? row.keyword_ids.length : 0;
-      var c = Array.isArray(row.competitor_ids) ? row.competitor_ids.length : 0;
-      var m = Array.isArray(row.memory_doc_ids) ? row.memory_doc_ids.length : 0;
+      var k = Array.isArray(row.keyword_ids) && row.keyword_ids.length ? row.keyword_ids.length : (Array.isArray(row.keywords) ? row.keywords.length : 0);
+      var c = Array.isArray(row.competitor_ids) && row.competitor_ids.length ? row.competitor_ids.length : (Array.isArray(row.competitors) ? row.competitors.length : 0);
+      var m = Array.isArray(row.memory_doc_ids) && row.memory_doc_ids.length ? row.memory_doc_ids.length : (Array.isArray(row.memory_docs) ? row.memory_docs.length : 0);
       var dh = row.meta && typeof row.meta === 'object' && row.meta.digital_human_template && typeof row.meta.digital_human_template === 'object'
         ? String(row.meta.digital_human_template.name || row.meta.digital_human_template.style_id || '已选数字人')
         : '未选数字人';
@@ -1714,6 +1715,16 @@
         '</div>' +
       '</article>';
     }).join('') + page.pager;
+    if (currentId) {
+      list.querySelectorAll('[data-use-template]').forEach(function(btn) {
+        if (String(btn.getAttribute('data-use-template') || '') !== currentId) return;
+        btn.disabled = true;
+        btn.removeAttribute('data-use-template');
+        btn.className = 'btn btn-ghost btn-sm';
+        btn.textContent = '\u5f53\u524d';
+        btn.setAttribute('aria-current', 'true');
+      });
+    }
     list.querySelectorAll('[data-use-template]').forEach(function(btn) {
       btn.addEventListener('click', function() { useTemplate(btn.getAttribute('data-use-template') || '', btn); });
     });
@@ -2378,8 +2389,25 @@
     bindPsListPagers();
   }
 
+  function mergeTemplateResourcesIntoState(item) {
+    item = item || {};
+    (Array.isArray(item.keywords) ? item.keywords : []).forEach(function(resource) {
+      var resourceId = String(resource && resource.id || '');
+      if (resourceId && !state.keywords.some(function(row) { return String(row && row.id || '') === resourceId; })) state.keywords.push(resource);
+    });
+    (Array.isArray(item.competitors) ? item.competitors : []).forEach(function(resource) {
+      var resourceId = String(resource && resource.id || '');
+      if (resourceId && !state.competitors.some(function(row) { return String(row && row.id || '') === resourceId; })) state.competitors.push(resource);
+    });
+    (Array.isArray(item.memory_docs) ? item.memory_docs : []).forEach(function(resource) {
+      var resourceId = memoryId(resource);
+      if (resourceId && !state.memories.some(function(row) { return memoryId(row) === resourceId; })) state.memories.push(resource);
+    });
+  }
+
   function applyDefaultItem(item) {
     state.defaultItem = item || {};
+    mergeTemplateResourcesIntoState(state.defaultItem);
     setPersonalTemplateLanguage(templateLanguageFromParts(state.defaultItem.requirements, state.defaultItem.meta, state.personalTemplateLanguage));
     state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((state.defaultItem.meta || {}).digital_human_template);
     state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((state.defaultItem.meta || {}).digital_human_resources);
@@ -2435,6 +2463,7 @@
   function loadTemplates() {
     return cloudJson('/api/ip-content/schedule-templates').then(function(data) {
       state.templates = (Array.isArray(data.items) ? data.items : []).filter(function(row) { return !isPersonalDefaultTemplate(row); });
+      state.templates.forEach(mergeTemplateResourcesIntoState);
       state.templateLoadError = '';
       renderCurrentTemplate();
       renderSavedTemplates();
@@ -2556,7 +2585,7 @@
         requirements: templateRequirementsWithLanguage({}, language),
         meta: (function() {
           var currentMeta = state.defaultItem && state.defaultItem.meta && typeof state.defaultItem.meta === 'object' ? state.defaultItem.meta : {};
-          var meta = { source: 'personal_settings_template', language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate, digital_human_resources: clonePersonalDigitalHumanResources(state.personalDigitalHumanResources) };
+          var meta = { source: 'personal_settings_template', language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate, digital_human_template_configured: true, digital_human_resources: clonePersonalDigitalHumanResources(state.personalDigitalHumanResources), digital_human_resources_configured: true };
           if (currentMeta.current_template_id) meta.current_template_id = currentMeta.current_template_id;
           return meta;
         })()
@@ -2622,7 +2651,7 @@
           memory_doc_ids: memoryIds,
           memory_docs: memoryDocs,
           requirements: incomingRequirements,
-          meta: Object.assign({}, (existing.meta && typeof existing.meta === 'object') ? existing.meta : {}, options.meta || {}, { source: source, language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate, digital_human_resources: digitalHumanResources })
+          meta: Object.assign({}, (existing.meta && typeof existing.meta === 'object') ? existing.meta : {}, options.meta || {}, { source: source, language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate, digital_human_template_configured: true, digital_human_resources: digitalHumanResources, digital_human_resources_configured: true, resource_selection_complete: true })
         }
       });
     }).then(function(data) {
@@ -2632,7 +2661,7 @@
   }
 
   function saveConfigSilently() {
-    return saveCurrentDefault();
+    return saveCurrentDefault({ replaceSelection: true });
   }
 
   function saveProfile() {
@@ -2640,7 +2669,7 @@
     var btn = $('psSaveProfileBtn');
     setBusy(btn, true, '保存中...');
     setMsg('正在保存资料调查...');
-    saveCurrentDefault({ source: 'online_personal_profile', includeProfile: true })
+    saveCurrentDefault({ source: 'online_personal_profile', includeProfile: true, replaceSelection: true })
       .then(function() { setMsg('资料调查已保存。'); })
       .catch(function(err) { setMsg(err.message || '保存失败', true); })
       .finally(function() { setBusy(btn, false); });
@@ -2648,6 +2677,7 @@
 
   function applyTemplate(row, editing) {
     row = row || {};
+    mergeTemplateResourcesIntoState(row);
     state.editingTemplateId = editing && row.id ? String(row.id) : '';
     state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((row.meta || {}).digital_human_template);
     state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((row.meta || {}).digital_human_resources);

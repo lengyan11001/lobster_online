@@ -661,14 +661,22 @@
     return {nodes:normalizeWorkflowTimeline(existing),added:added};
   }
   function normalizeTemplate(template) { var out = Object.assign({}, template || {}); out.nodes = normalizeWorkflowTimeline(migrateDouyinAddFriendChildren(migrateDouyinFollowupNodes(migrateGroupInviteNodes(Array.isArray(out.nodes) ? clone(out.nodes) : [])))); out.meta = out.meta && typeof out.meta === 'object' ? Object.assign({},out.meta) : {}; return out; }
-  function ownSalesMirror() { return state.templates.find(function(item) { return activeTemplateKey(item) === 'system_sales'; }); }
-  function templateForSelected() { if (state.selectedId === 'system_sales') return ownSalesMirror() || {id:'system_sales',source:'system',name:'销售员工',meta:{system_template_key:'system_sales'},nodes:salesNodes()}; return state.templates.find(function(item) { return String(item.id) === String(state.selectedId); }) || null; }
+  function systemTemplateRows() { return state.templates.filter(function(item) { return item && item.source === 'system' && activeTemplateKey(item); }); }
+  function systemTemplateForKey(key) { var wanted=String(key || '').trim(); return systemTemplateRows().find(function(item) { return activeTemplateKey(item) === wanted; }) || null; }
+  function ownSalesMirror() { return state.templates.find(function(item) { return item && item.source === 'own' && activeTemplateKey(item) === 'system_sales'; }); }
+  function templateForSelected() {
+    var selected=String(state.selectedId || '').trim(), system=systemTemplateForKey(selected);
+    if (system) return Object.assign({},system,{id:selected,source:'system'});
+    if (selected === 'system_sales') return ownSalesMirror() || {id:'system_sales',source:'system',name:'销售员工',meta:{system_template_key:'system_sales'},nodes:salesNodes()};
+    return state.templates.find(function(item) { return String(item.id) === selected; }) || null;
+  }
   function templateIsEditable(template) { return !!(template && template.source === 'own'); }
-  function currentTemplateIsEditable() { return state.selectedId === 'system_sales' || templateIsEditable(state.selectedTemplate); }
+  function currentTemplateIsEditable() { return templateIsEditable(state.selectedTemplate); }
   function requireEditableTemplate() { if (!currentTemplateIsEditable()) throw new Error('授权模板为只读配置，不能修改'); }
   function activeForDevice() { var iid = selectedDeviceId(); return state.active && String(state.active.installation_id || '') === iid ? state.active : null; }
   function draftKeyFor(template, selectedId, editingId) {
-    if (String(selectedId || '') === 'system_sales' || activeTemplateKey(template) === 'system_sales') return 'system_sales';
+    var systemKey=activeTemplateKey(template) || (String(selectedId || '').indexOf('system_') === 0 ? String(selectedId || '') : '');
+    if (systemKey) return systemKey;
     var id=String(editingId || template && template.id || selectedId || '').trim();
     return id ? 'template:' + id : '';
   }
@@ -695,7 +703,13 @@
   }
   function renderList() {
     var host = el('oeTemplateList'); if (!host) return;
-    var rows = [{id:'system_sales',name:'销售员工',meta:{system_template_key:'system_sales'},source:'system',mark:'销'}].concat(state.templates.filter(function(item) { return activeTemplateKey(item) !== 'system_sales'; }).map(function(item) { return Object.assign({mark:String(item.name || '员').charAt(0)},item); }));
+    var systems=systemTemplateRows().map(function(item) {
+      var key=activeTemplateKey(item);
+      return Object.assign({},item,{id:key,source:'system',mark:String(item.name || '员').charAt(0)});
+    });
+    if (!systems.length) systems=[{id:'system_sales',name:'销售员工',meta:{system_template_key:'system_sales'},source:'system',mark:'销'}];
+    var systemKeys={}; systems.forEach(function(item){systemKeys[activeTemplateKey(item) || String(item.id || '')]=true;});
+    var rows = systems.concat(state.templates.filter(function(item) { return item && !systemKeys[activeTemplateKey(item)] && !activeTemplateKey(item); }).map(function(item) { return Object.assign({mark:String(item.name || '员').charAt(0)},item); }));
     if (!rows.length) { host.innerHTML = '<div class="oe-empty-list">当前账号没有可访问的员工模板。</div>'; return; }
     host.innerHTML = rows.map(function(item) { var selected=String(item.id)===String(state.selectedId); var meta=item.source === 'granted' ? '他人授权' : item.source === 'system' ? '系统员工' : '我的模板'; return '<button type="button" class="oe-employee-item' + (selected ? ' is-selected' : '') + '" data-oe-template="' + esc(item.id) + '"' + (state.submitting ? ' disabled aria-disabled="true"' : '') + '><span class="oe-employee-mark">' + esc(item.mark || String(item.name || '员').charAt(0)) + '</span><span class="oe-employee-copy"><span class="oe-employee-name">' + esc(item.name || '未命名员工') + '</span><span class="oe-employee-meta">' + meta + '</span></span></button>'; }).join('');
   }
@@ -829,7 +843,7 @@
   }
   function applyServerTemplate(id) {
     state.selectedId=String(id || 'system_sales');
-    var mirror=state.selectedId === 'system_sales' ? ownSalesMirror() : null, base, merged;
+    var catalog=systemTemplateForKey(state.selectedId), mirror=!catalog && state.selectedId === 'system_sales' ? ownSalesMirror() : null, base, merged;
     if (mirror) {
       merged=mergeSalesPresetNodes(mirror.nodes);
       base=normalizeTemplate(Object.assign({},mirror,{nodes:merged.nodes}));
@@ -839,7 +853,7 @@
     } else {
       base=normalizeTemplate(templateForSelected());
       state.salesTemplateMigrationPending=false;
-      if (state.selectedId === 'system_sales') base=normalizeTemplate(Object.assign({},base,{nodes:salesNodes()}));
+      if (state.selectedId === 'system_sales' && !catalog) base=normalizeTemplate(Object.assign({},base,{nodes:salesNodes()}));
     }
     state.editingId=base.source === 'own' ? String(base.id || '') : '';
     state.editingMeta=Object.assign({},base.meta || {});
@@ -937,8 +951,29 @@
     });
   }
   function askPlanDay() { var answer=window.prompt('请输入本次销售工作流从第几天开始执行（1-30）','1'); if (answer === null) return null; var day=Number(answer); if (!Number.isInteger(day) || day < 1 || day > 30) throw new Error('执行天数请输入 1 到 30 的整数'); return day; }
-  function activateTemplate() { var iid=selectedDeviceId(), template=state.selectedTemplate; if (!iid) throw new Error('请先选择 Online 设备'); var device=state.devices.find(function(item){return String(item.installation_id) === iid;}); if (!device || !device.online) throw new Error('请选择在线的 Online 设备'); var day=templateNeedsPlanDay(template) ? askPlanDay() : undefined; if (day === null) return Promise.resolve(); if (state.salesTemplateMigrationPending && state.editingId) return saveTemplate().then(activateTemplate); var requestFactory; if (state.selectedId === 'system_sales' && !state.editingId) requestFactory=function(){return api('/api/h5-workflows/activate-inline',{method:'POST',json:{template_key:'system_sales',name:'销售员工',nodes:clone(state.nodes),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),plan_day:day}});}; else { var id=String(state.editingId || template && template.id || ''); if (!id) return saveTemplate().then(activateTemplate); requestFactory=function(){return api('/api/h5-workflows/activate',{method:'POST',json:{template_id:Number(id),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),...(day ? {plan_day:day} : {})}});}; } return runSubmission('activate',requestFactory).then(function(data){state.active=data.activation || null; renderStatus(); if (typeof toast === 'function') toast('员工工作流已启用');}); }
   function stopTemplate() { var active=activeForDevice(); if (!active || !active.id) throw new Error('当前设备没有启用员工'); return runSubmission('stop',function(){return api('/api/h5-workflows/activations/' + encodeURIComponent(active.id) + '/stop',{method:'POST',json:{}}).then(function(){state.active=null;if(typeof toast==='function')toast('员工工作流已停用');});}); }
+  // System catalog templates are read-only and use the same inline activation
+  // path as H5. Custom templates continue to activate by their database id.
+  function activateTemplate() {
+    var iid=selectedDeviceId(), template=state.selectedTemplate;
+    if (!iid) throw new Error('Please select an Online device');
+    var device=state.devices.find(function(item){return String(item.installation_id || '') === iid;});
+    if (!device || !device.online) throw new Error('Please select an online Online device');
+    var day=templateNeedsPlanDay(template) ? askPlanDay() : undefined;
+    if (day === null) return Promise.resolve();
+    if (state.salesTemplateMigrationPending && state.editingId) return saveTemplate().then(activateTemplate);
+    var systemKey=template && template.source === 'system' ? (activeTemplateKey(template) || state.selectedId) : '';
+    var requestFactory;
+    if (systemKey && !state.editingId) {
+      requestFactory=function(){return api('/api/h5-workflows/activate-inline',{method:'POST',json:{template_key:systemKey,name:template.name || 'System employee template',nodes:clone(state.nodes),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),...(day ? {plan_day:day} : {})}});};
+    } else {
+      var id=String(state.editingId || template && template.id || '');
+      if (!id) return saveTemplate().then(activateTemplate);
+      requestFactory=function(){return api('/api/h5-workflows/activate',{method:'POST',json:{template_id:Number(id),installation_id:iid,timezone_offset_minutes:-new Date().getTimezoneOffset(),...(day ? {plan_day:day} : {})}});};
+    }
+    return runSubmission('activate',requestFactory).then(function(data){state.active=data.activation || null; renderStatus(); if (typeof toast === 'function') toast('Employee workflow enabled');});
+  }
+
   function deleteTemplate() {
     var template=state.selectedTemplate, id=String(state.editingId || template && template.id || '').trim();
     if (!id || !templateIsEditable(template)) throw new Error('只能删除自己创建的员工');

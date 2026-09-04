@@ -775,8 +775,6 @@
               <p>把关键词、同行和记忆组合成不同业务场景的个人 IP 模板。</p>
             </div>
           </div>
-          <div class="ps-card-title ps-card-subtitle">当前使用模板</div>
-          <div id="psCurrentTemplateBox" class="ps-list"></div>
           <div class="ps-card-title">新建模板</div>
           <div class="ps-field">
             <label for="psTemplateName">模板名称</label>
@@ -821,10 +819,17 @@
             <button type="button" id="psSaveTemplateBtn" class="btn btn-primary btn-sm">保存模板</button>
             <button type="button" id="psNewTemplateBtn" class="btn btn-ghost btn-sm">新建模板</button>
           </div>
-          <div class="ps-card-title">已有模板</div>
-          <div id="psSavedTemplateList" class="ps-list"></div>
         </section>
         <section class="ps-card">
+          <div class="ps-template-list-heading">
+            <div class="ps-card-title">模板记录</div>
+            <span>授权模板和个人模板</span>
+          </div>
+          <div id="psSavedTemplateListRight" class="ps-list"></div>
+          <div class="ps-template-resource-heading">
+            <div class="ps-card-title">模板资源</div>
+            <span>关键词、同行和记忆文件</span>
+          </div>
           <div class="ps-card-title">选择关键词</div>
           <div id="psTemplateKeywordList" class="ps-list"></div>
           <div class="ps-card-title">选择同行账号</div>
