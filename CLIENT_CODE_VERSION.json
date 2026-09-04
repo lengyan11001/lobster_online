@@ -1,7 +1,7 @@
 {
-  "version": "2.0.15",
-  "build": 294,
-  "applied_at": "2026-09-03T17:46:28+08:00",
-  "note": "template live reference and workflow runtime update",
-  "bundle_sha256": "455bb4bade2a082976a2810b0e98cd72d8c6c15d88e3891097498544568ac727"
+  "version": "2.0.16",
+  "build": 295,
+  "applied_at": "2026-09-04T15:42:54+08:00",
+  "note": "server competitor context fix",
+  "bundle_sha256": "4da08575e848d62fe2a892d86c5bed482d0744affb96dbbdaf3b5779d50c57f6"
 }
