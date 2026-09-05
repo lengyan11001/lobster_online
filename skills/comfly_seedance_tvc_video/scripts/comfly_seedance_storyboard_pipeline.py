@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import concurrent.futures
+import base64
+import mimetypes
 import json
 import logging
 import shutil
@@ -680,11 +682,17 @@ def _parse_json(text: str) -> Dict[str, Any]:
 
 
 def _resolve_video_download_url(url: str, channel: str, base_url: str, task_id: str = "") -> str:
-    """Route protected OpenMind content through our server-side proxy."""
+    """Route protected provider content through the matching server-side proxy."""
     source_url = str(url or "").strip()
     parsed = urlparse(source_url)
     hostname = (parsed.hostname or "").lower()
-    if _normalize_video_channel(channel) != "openmind" and hostname not in {"xingapi.top", "www.xingapi.top"}:
+    normalized_channel = _normalize_video_channel(channel)
+    provider = ""
+    if normalized_channel == "openmind" or hostname in {"openmindapi.com", "www.openmindapi.com"}:
+        provider = "openmind"
+    elif normalized_channel == "xing" or hostname in {"xingapi.top", "www.xingapi.top"}:
+        provider = "xing"
+    if not provider:
         return source_url
     path_parts = [part for part in parsed.path.split("/") if part]
     proxy_task_id = str(task_id or "").strip()
@@ -696,15 +704,27 @@ def _resolve_video_download_url(url: str, channel: str, base_url: str, task_id: 
             return source_url
     if not proxy_task_id or not (base_url or "").strip():
         return source_url
-    return f"{base_url.rstrip('/')}/openmind/v1/videos/{quote(proxy_task_id, safe='')}/content"
+    return f"{base_url.rstrip('/')}/{provider}/v1/videos/{quote(proxy_task_id, safe='')}/content"
+
+
+def _download_headers_for_url(url: str, api_key: str = "") -> Optional[Dict[str, str]]:
+    parsed = urlparse(str(url or ""))
+    if "/api/comfly-proxy/xing/" not in parsed.path:
+        return None
+    token = str(api_key or "").strip()
+    if not token:
+        return None
+    auth = token if token.lower().startswith("bearer ") else f"Bearer {token}"
+    return {"Authorization": auth, "Accept": "video/mp4,*/*"}
 
 
 def _download_file(
     url: str,
     path: Path,
     timeout_seconds: int,
+    headers: Optional[Dict[str, str]] = None,
 ) -> Path:
-    r = requests.get(url, timeout=timeout_seconds)
+    r = requests.get(url, timeout=timeout_seconds, headers=headers or None)
     if r.status_code != 200:
         raise PipelineError(f"Download failed HTTP {r.status_code}: {url}")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -841,6 +861,7 @@ def _merge_completed_segments(config: PipelineConfig, logger_obj: RunLogger, seg
                 download_url,
                 clip_path,
                 config.clip_download_timeout_seconds,
+                headers=_download_headers_for_url(download_url, config.api_key),
             ),
         )
         logger_obj.segment(index, "merge_download", "success", attempts=attempts, payload={"index": index, "path": str(downloaded_path)})
@@ -1204,11 +1225,45 @@ class ComflySeedanceClient:
 
         return _retry("upload", self.config.upload_retries, self.config.network_retry_delay_seconds, self.logger, call)
 
+    def _image_url_to_data_url(self, image_url: str) -> str:
+        src = str(image_url or "").strip()
+        if not src:
+            raise PipelineError("Empty analysis image url")
+        if src.startswith("data:image/"):
+            return src
+
+        content: bytes
+        mime_type = "image/png"
+        if src.startswith(("http://", "https://")):
+            resp = self.session.get(src, timeout=120, allow_redirects=True)
+            resp.raise_for_status()
+            content = resp.content
+            header_mime = (resp.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+            if header_mime.startswith("image/"):
+                mime_type = header_mime
+            else:
+                guessed = (mimetypes.guess_type(src)[0] or "").strip().lower()
+                if guessed.startswith("image/"):
+                    mime_type = guessed
+        else:
+            path = Path(src)
+            if not path.exists():
+                raise PipelineError(f"Analysis image file not found: {src}")
+            content = path.read_bytes()
+            guessed = (mimetypes.guess_type(path.name)[0] or "").strip().lower()
+            if guessed.startswith("image/"):
+                mime_type = guessed
+
+        if not content:
+            raise PipelineError(f"Analysis image is empty: {src}")
+        encoded = base64.b64encode(content).decode("ascii")
+        return f"data:{mime_type};base64,{encoded}"
+
     def analyze(self, image_urls: List[str]) -> tuple[Dict[str, Any], int]:
         prompt = _analysis_prompt(self.config)
         content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
         for url in image_urls:
-            content.append({"type": "image_url", "image_url": {"url": url}})
+            content.append({"type": "image_url", "image_url": {"url": self._image_url_to_data_url(url)}})
 
         primary = (self.config.analysis_model or "").strip()
         fallback = (self.config.analysis_model_fallback or "").strip()
@@ -2062,6 +2117,7 @@ def _validate_segment_video_aspect(
             download_url,
             validation_path,
             client.config.clip_download_timeout_seconds,
+            headers=_download_headers_for_url(download_url, client.config.api_key),
         ),
     )
     dimensions = _probe_video_dimensions(str(downloaded_path), client.config.ffmpeg_path)
