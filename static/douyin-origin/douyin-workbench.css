@@ -3587,6 +3587,40 @@
             gap: 6px;
             min-width: 0;
         }
+        .precise-touch-status {
+            min-width: 220px;
+        }
+        .precise-touch-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+        }
+        .precise-touch-action {
+            display: inline-flex;
+            flex-direction: column;
+            gap: 3px;
+            min-width: 0;
+        }
+        .precise-touch-action .badge {
+            min-height: 26px;
+            padding: 0 8px;
+            font-size: 11px;
+            white-space: nowrap;
+        }
+        .precise-touch-detail {
+            max-width: 120px;
+            overflow: hidden;
+            color: var(--muted);
+            font-size: 11px;
+            line-height: 1.35;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .precise-touch-no-record {
+            color: var(--muted);
+            font-size: 11px;
+            line-height: 1.35;
+        }
         .table-action-row {
             display: flex;
             flex-wrap: wrap;
@@ -6299,5 +6333,135 @@
         @media (max-width: 1200px) {
             .stranger-message-compose-grid {
                 grid-template-columns: minmax(0, 1fr);
+            }
+        }
+
+        /* Keep the Douyin workbench navigation fixed at the top at every width.
+           The content owns vertical scrolling; the nav only scrolls horizontally. */
+        :root {
+            --douyin-fixed-nav-height: 76px;
+        }
+        body:not(.embed-mode) {
+            overflow: hidden;
+        }
+        body:not(.embed-mode) .workspace-shell {
+            display: block;
+            height: 100dvh;
+            min-height: 0;
+            overflow: hidden;
+            padding: calc(var(--douyin-fixed-nav-height) + 28px) 14px 14px;
+        }
+        body:not(.embed-mode) .workspace-sidebar {
+            position: fixed;
+            inset: 14px 14px auto;
+            width: auto;
+            height: var(--douyin-fixed-nav-height);
+            min-height: 0;
+            max-height: var(--douyin-fixed-nav-height);
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            overflow: hidden;
+            padding: 12px 18px;
+            z-index: 10;
+        }
+        body:not(.embed-mode) .sidebar-brand {
+            flex: 0 0 auto;
+            padding: 0 18px 0 2px;
+            border-right: 1px solid rgba(255, 255, 255, 0.16);
+            border-bottom: 0;
+        }
+        body:not(.embed-mode) .sidebar-nav {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: block;
+            overflow: hidden;
+        }
+        body:not(.embed-mode) .sidebar-label {
+            display: none;
+        }
+        body:not(.embed-mode) .sidebar-accordion {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+            width: 100%;
+            overflow-x: auto;
+            overflow-y: hidden;
+            overscroll-behavior-x: contain;
+            padding: 2px 2px 6px;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(224, 232, 255, 0.7) transparent;
+        }
+        body:not(.embed-mode) .sidebar-accordion::-webkit-scrollbar {
+            height: 5px;
+        }
+        body:not(.embed-mode) .sidebar-accordion::-webkit-scrollbar-thumb {
+            border-radius: 999px;
+            background: rgba(224, 232, 255, 0.7);
+        }
+        body:not(.embed-mode) .sidebar-group {
+            display: block;
+            flex: 0 0 auto;
+            min-width: max-content;
+        }
+        body:not(.embed-mode) .sidebar-group-header {
+            width: auto;
+            min-width: max-content;
+            min-height: 48px;
+            height: 48px;
+            padding: 6px 12px;
+            border-radius: 15px;
+            white-space: nowrap;
+        }
+        body:not(.embed-mode) .sidebar-subnav {
+            display: none;
+        }
+        body:not(.embed-mode) .workspace-content {
+            display: block;
+            grid-column: auto;
+            height: 100%;
+            min-height: 0;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            padding: 0 0 20px;
+        }
+        @media (max-width: 680px) {
+            :root {
+                --douyin-fixed-nav-height: 60px;
+            }
+            body:not(.embed-mode) .workspace-shell {
+                padding: calc(var(--douyin-fixed-nav-height) + 18px) 8px 8px;
+            }
+            body:not(.embed-mode) .workspace-sidebar {
+                inset: 8px 8px auto;
+                gap: 10px;
+                padding: 8px 10px;
+            }
+            body:not(.embed-mode) .sidebar-brand {
+                padding-right: 10px;
+            }
+            body:not(.embed-mode) .sidebar-brand-mark {
+                width: 34px;
+                height: 34px;
+                border-radius: 11px;
+                font-size: 13px;
+            }
+            body:not(.embed-mode) .sidebar-brand-copy .brand-name {
+                font-size: 1rem;
+            }
+            body:not(.embed-mode) .sidebar-group-header {
+                min-height: 42px;
+                height: 42px;
+                padding: 4px 8px;
+                border-radius: 12px;
+            }
+            body:not(.embed-mode) .sidebar-group-icon {
+                width: 30px;
+                height: 30px;
+                border-radius: 10px;
+            }
+            body:not(.embed-mode) .sidebar-group-title {
+                font-size: 13px;
             }
         }

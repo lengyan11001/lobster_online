@@ -705,6 +705,88 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
 })();
 
 var token = getStoredAuthToken();
+/*
+ * Video compatibility stays on the Online machine.  The local endpoint
+ * probes the source and only invokes the bundled ffmpeg for HEVC/WebM or
+ * other formats the embedded WebView cannot decode.  All callers can keep
+ * passing their original URL; this hook covers dynamically-rendered videos
+ * across every view as well.
+ */
+window.lobsterVideoCompatUrl = function(rawUrl, filename, variant) {
+  var raw = String(rawUrl || '').trim();
+  if (!raw || /^(?:blob:|data:|file:)/i.test(raw) || /\/api\/media\/compat(?:[/?]|$)/i.test(raw)) return raw;
+  var local = String(typeof LOCAL_API_BASE !== 'undefined' ? (LOCAL_API_BASE || '') : '').replace(/\/$/, '');
+  if (!local) return raw;
+  var absolute = raw;
+  try { absolute = new URL(raw, raw.charAt(0) === '/' && local ? local + '/' : window.location.href).href; } catch (e) {}
+  var params = new URLSearchParams();
+  params.set('url', absolute);
+  params.set('filename', String(filename || 'digital-human.mp4'));
+  var tokenValue = String(typeof token !== 'undefined' ? (token || '') : '');
+  if (tokenValue) params.set('token', tokenValue);
+  if (variant) params.set('variant', String(variant));
+  return local + '/api/media/compat?' + params.toString();
+};
+window.lobsterVideoPosterUrl = function(rawUrl, filename) {
+  return window.lobsterVideoCompatUrl(rawUrl, filename, 'poster');
+};
+
+/* Convert video sources at the DOM boundary so legacy and newly-added views
+ * receive the same behavior without duplicating media logic in each module. */
+(function installVideoCompatibilityObserver() {
+  function upgrade(video) {
+    if (!video || !video.getAttribute || video.dataset.lobsterVideoCompat === '1') return;
+    var source = String(video.getAttribute('src') || '').trim();
+    if (!source && video.querySelector) {
+      var childSource = video.querySelector('source[src]');
+      source = String(childSource && childSource.getAttribute('src') || '').trim();
+    }
+    if (!source || /^(?:blob:|data:|file:)/i.test(source)) return;
+    if (/\/api\/media\/compat(?:[/?]|$)|\/api\/multi-clip-mixer\/assets\/[^/]+\/playback\.mp4/i.test(source)) return;
+    var name = String(source.split(/[?#]/)[0].split('/').pop() || 'digital-human.mp4');
+    if (!/\.[a-z0-9]{2,8}$/i.test(name)) name = 'digital-human.mp4';
+    var converted = window.lobsterVideoCompatUrl(source, name, '');
+    if (!converted || converted === source) return;
+    video.dataset.lobsterVideoCompat = '1';
+    video.dataset.lobsterOriginalSrc = source;
+    video.addEventListener('error', function() {
+      if (video.dataset.lobsterVideoCompatFallback === '1') return;
+      video.dataset.lobsterVideoCompatFallback = '1';
+      video.setAttribute('src', source);
+      try { video.load(); } catch (e) {}
+    }, { once: true });
+    if (!video.getAttribute('poster') && typeof window.lobsterVideoPosterUrl === 'function') {
+      video.setAttribute('poster', window.lobsterVideoPosterUrl(source, 'video-cover.jpg'));
+    }
+    video.setAttribute('src', converted);
+    if (video.querySelectorAll) {
+      Array.prototype.forEach.call(video.querySelectorAll('source[src]'), function(childSource) {
+        childSource.setAttribute('src', converted);
+      });
+    }
+  }
+  function scan(root) {
+    if (!root) return;
+    if (root.tagName === 'SOURCE' && root.parentElement) {
+      upgrade(root.parentElement);
+      return;
+    }
+    if (root.tagName === 'VIDEO') upgrade(root);
+    if (root.querySelectorAll) Array.prototype.forEach.call(root.querySelectorAll('video'), upgrade);
+  }
+  function start() {
+    scan(document);
+    if (!window.MutationObserver || !document.body) return;
+    new MutationObserver(function(records) {
+      records.forEach(function(record) {
+        if (record.type === 'attributes') scan(record.target);
+        Array.prototype.forEach.call(record.addedNodes || [], scan);
+      });
+    }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
+  else start();
+})();
 // The task center must wait for /auth/me to validate this token.
 window.__lobsterAuthReady = false;
 var currentView = 'chat';

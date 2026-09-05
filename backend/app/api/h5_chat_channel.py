@@ -584,6 +584,20 @@ def _workflow_node_remaining_seconds(item: Any, *, now: Optional[datetime] = Non
     return (deadline - current.astimezone(timezone.utc)).total_seconds()
 
 
+def _workflow_node_uses_hard_deadline(item: Any) -> bool:
+    """Only time-bounded private-WeChat takeover stops at the node cutoff."""
+    source = item if isinstance(item, dict) else {}
+    payload = source.get("payload") if isinstance(source.get("payload"), dict) else {}
+    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    action = str(
+        payload.get("action")
+        or params.get("action")
+        or source.get("action")
+        or ""
+    ).strip().lower()
+    return action == "native_wechat_poll"
+
+
 def _local_bestseller_workflow_day(
     source: Dict[str, Any],
     days: int,
@@ -4157,21 +4171,32 @@ def _scheduled_douyin_online_config_params(
             plan.get("comment_max_comments") or local_config.get("comment_max_comments") or 500
         ) or 500
         params["mode"] = str(plan.get("mode") or "script").strip() or "script"
+        plan_has_checkbox = "reply_precise_comments" in plan
         has_reply_config = (
             _workflow_flag(plan.get("reply_precise_comments"), False)
-            or str(plan.get("reply_comment_text") or "").strip()
-            or str(plan.get("reply_comment_prompt") or "").strip()
-            or str(plan.get("reply_comment_seed_text") or "").strip()
-            or str(plan.get("reply_comment_mode") or "fixed").strip().lower() not in {"", "fixed"}
+            or (
+                not plan_has_checkbox
+                and (
+                    str(plan.get("reply_comment_text") or "").strip()
+                    or str(plan.get("reply_comment_prompt") or "").strip()
+                    or str(plan.get("reply_comment_seed_text") or "").strip()
+                    or str(plan.get("reply_comment_mode") or "").strip().lower() in {"fixed", "ai", "rewrite"}
+                )
+            )
         )
         if has_reply_config:
-            params["reply_precise_comments"] = _workflow_flag(plan.get("reply_precise_comments"), False)
-            params["reply_comment_mode"] = str(plan.get("reply_comment_mode") or plan.get("comment_mode") or "fixed").strip().lower() or "fixed"
-            if params["reply_comment_mode"] not in {"fixed", "ai", "rewrite"}:
-                params["reply_comment_mode"] = "fixed"
-            params["reply_comment_text"] = str(plan.get("reply_comment_text") or plan.get("comment_text") or "").strip()
-            params["reply_comment_prompt"] = str(plan.get("reply_comment_prompt") or plan.get("comment_prompt") or "").strip()
-            params["reply_comment_seed_text"] = str(plan.get("reply_comment_seed_text") or plan.get("comment_seed_text") or "").strip()
+            params["reply_precise_comments"] = True
+            reply_mode = str(plan.get("reply_comment_mode") or plan.get("comment_mode") or "").strip().lower()
+            if reply_mode in {"fixed", "ai", "rewrite"}:
+                params["reply_comment_mode"] = reply_mode
+            for key, alias in (
+                ("reply_comment_text", "comment_text"),
+                ("reply_comment_prompt", "comment_prompt"),
+                ("reply_comment_seed_text", "comment_seed_text"),
+            ):
+                value = str(plan.get(key) or plan.get(alias) or "").strip()
+                if value:
+                    params[key] = value
         return params
 
     if action_key in {"reply_comments", "mention_comment", "follow_comment"}:
@@ -4877,6 +4902,15 @@ _SCHEDULED_DOUYIN_FOLLOWUP_ACTIONS = (
     "direct_message",
 )
 
+# All three catalog workflows use the account's current Online Douyin
+# settings at execution time.  Keeping this list here prevents the two
+# non-sales catalog cards from falling back to stale template parameters.
+_SYSTEM_DOUYIN_WORKFLOW_KEYS = {
+    "system_sales",
+    "system_short_video_wechat",
+    "system_douyin_leads",
+}
+
 
 def _scheduled_douyin_followup_actions(value: Any, *, default_all: bool = False) -> List[str]:
     if not isinstance(value, list):
@@ -4923,10 +4957,11 @@ def _merge_scheduled_douyin_collection_params(
     legacy_reply = "reply_comments" in {
         str(item or "").strip().lower() for item in (legacy_actions if isinstance(legacy_actions, list) else [])
     }
-    merged["reply_precise_comments"] = _workflow_flag(
+    reply_enabled = _workflow_flag(
         workflow.get("reply_precise_comments", merged.get("reply_precise_comments")),
         legacy_reply or _workflow_flag(merged.get("reply_precise_comments"), False),
     )
+    merged["reply_precise_comments"] = reply_enabled
     for target, aliases in (
         ("reply_comment_mode", ("reply_comment_mode", "comment_mode")),
         ("reply_comment_text", ("reply_comment_text", "comment_text")),
@@ -4937,12 +4972,31 @@ def _merge_scheduled_douyin_collection_params(
             if workflow.get(alias) not in (None, "", []):
                 merged[target] = workflow.get(alias)
                 break
-    merged["reply_comment_mode"] = str(merged.get("reply_comment_mode") or "fixed").strip().lower() or "fixed"
-    if merged["reply_comment_mode"] not in {"fixed", "ai", "rewrite"}:
-        merged["reply_comment_mode"] = "fixed"
-    merged["reply_comment_text"] = str(merged.get("reply_comment_text") or "").strip()
-    merged["reply_comment_prompt"] = str(merged.get("reply_comment_prompt") or "").strip()
-    merged["reply_comment_seed_text"] = str(merged.get("reply_comment_seed_text") or "").strip()
+    if reply_enabled:
+        mode = str(merged.get("reply_comment_mode") or "").strip().lower()
+        if mode in {"fixed", "ai", "rewrite"}:
+            merged["reply_comment_mode"] = mode
+        else:
+            merged.pop("reply_comment_mode", None)
+        for key in ("reply_comment_text", "reply_comment_prompt", "reply_comment_seed_text"):
+            value = str(merged.get(key) or "").strip()
+            if value:
+                merged[key] = value
+            else:
+                merged.pop(key, None)
+    else:
+        for key in (
+            "reply_precise_comments",
+            "reply_comment_mode",
+            "reply_comment_text",
+            "reply_comment_prompt",
+            "reply_comment_seed_text",
+            "comment_mode",
+            "comment_text",
+            "comment_prompt",
+            "comment_seed_text",
+        ):
+            merged.pop(key, None)
     merged["followup_actions"] = []
     merged.pop("touch_actions", None)
     merged["customer_scope"] = "current_collection_batch"
@@ -4992,10 +5046,19 @@ def _scheduled_douyin_action_timeout(start_result: Dict[str, Any]) -> float:
     return float(max(300, min(7200, interval_seconds * max(0, total - 1) + 300)))
 
 
+def _scheduled_douyin_completion_timeout(
+    source: Dict[str, Any],
+    start_result: Dict[str, Any],
+) -> Optional[float]:
+    if bool(source.get("_wait_for_natural_completion")):
+        return None
+    return _scheduled_douyin_action_timeout(start_result)
+
+
 async def _wait_for_douyin_sales_action_completion(
     action: str,
     *,
-    timeout_seconds: float,
+    timeout_seconds: Optional[float],
     account_id: int = 0,
     poll_interval_seconds: float = 2.0,
 ) -> Dict[str, Any]:
@@ -5008,7 +5071,11 @@ async def _wait_for_douyin_sales_action_completion(
     )
 
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + max(timeout_seconds, poll_interval_seconds)
+    deadline = (
+        loop.time() + max(timeout_seconds, poll_interval_seconds)
+        if timeout_seconds is not None
+        else None
+    )
     last_snapshot: Dict[str, Any] = {}
 
     async def read_status() -> Dict[str, Any]:
@@ -5030,7 +5097,7 @@ async def _wait_for_douyin_sales_action_completion(
         running = bool(raw.get("running")) if isinstance(raw, dict) else bool(state.get("running"))
         if not running:
             return {"status": "done", "state": last_snapshot, "runtime_idle": True}
-        if loop.time() >= deadline:
+        if deadline is not None and loop.time() >= deadline:
             stop_result = await _stop_douyin_action(action, account_id=account_id)
             # A stop request is asynchronous. Do not let the next workflow
             # action start while the old local worker still owns the browser.
@@ -5613,6 +5680,9 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             sub_params["users"] = touch_users
             sub_params["selected_users"] = touch_users
             sub_params["customer_scope"] = "precise_pool"
+            # A claimed precise-touch batch waits for each action to finish;
+            # only then may the serial workflow release the next node.
+            sub_params["_wait_for_natural_completion"] = True
             if touch_action == "reply_comments":
                 sub_params["selected_task_ids"] = sorted(
                     {
@@ -5857,7 +5927,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             return dict(result)
         completion = await _wait_for_douyin_sales_action_completion(
             action,
-            timeout_seconds=_scheduled_douyin_action_timeout(result),
+            timeout_seconds=_scheduled_douyin_completion_timeout(source, result),
             account_id=account_id,
         )
         return _scheduled_douyin_completed_result(
@@ -5893,7 +5963,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             return dict(result)
         completion = await _wait_for_douyin_sales_action_completion(
             action,
-            timeout_seconds=_scheduled_douyin_action_timeout(result),
+            timeout_seconds=_scheduled_douyin_completion_timeout(source, result),
             account_id=account_id,
         )
         return _scheduled_douyin_completed_result(
@@ -5937,7 +6007,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             return dict(result)
         completion = await _wait_for_douyin_sales_action_completion(
             action,
-            timeout_seconds=_scheduled_douyin_action_timeout(result),
+            timeout_seconds=_scheduled_douyin_completion_timeout(source, result),
             account_id=account_id,
         )
         return _scheduled_douyin_completed_result(
@@ -5981,7 +6051,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             return dict(result)
         completion = await _wait_for_douyin_sales_action_completion(
             action,
-            timeout_seconds=_scheduled_douyin_action_timeout(result),
+            timeout_seconds=_scheduled_douyin_completion_timeout(source, result),
             account_id=account_id,
         )
         return _scheduled_douyin_completed_result(
@@ -6041,9 +6111,10 @@ async def _run_scheduled_douyin_leads(
     params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
     h5_context = payload.get("h5_context") if isinstance(payload.get("h5_context"), dict) else {}
     h5_one_shot = _is_h5_douyin_one_shot(payload, h5_context)
+    workflow_template_key = str(h5_context.get("workflow_template_key") or "").strip().lower()
     is_sales_workflow = (
         str(h5_context.get("department_id") or "").strip().lower() == "sales"
-        or str(h5_context.get("workflow_template_key") or "").strip().lower() == "system_sales"
+        or workflow_template_key in _SYSTEM_DOUYIN_WORKFLOW_KEYS
     )
     inferred_sales_action = _scheduled_douyin_sales_action_from_payload(payload, item)
     sales_action = str((params if isinstance(params, dict) else {}).get("sales_action") or "").strip().lower()
@@ -10646,7 +10717,11 @@ async def _run_scheduled_task_with_workflow_deadline(
     session from the claim time.  The local action is stopped cooperatively
     first, then the coroutine is cancelled if it does not exit promptly.
     """
-    deadline = _workflow_node_deadline_utc(item)
+    # Workflow node end times normally define ordering, not execution
+    # timeouts. A queued task must finish before this installation claims the
+    # next node. Private-WeChat takeover is the exception because it is a
+    # deliberately time-bounded monitoring session.
+    deadline = _workflow_node_deadline_utc(item) if _workflow_node_uses_hard_deadline(item) else None
     if deadline is None:
         await _process_scheduled_task(client, base, jwt_token, installation_id, item)
         return

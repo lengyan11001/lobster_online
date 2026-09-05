@@ -5,6 +5,31 @@ import pytest
 from backend.app.api import h5_chat_channel as channel
 
 
+def _workflow_item(action: str) -> dict:
+    return {
+        "task_kind": "client_workflow" if action == "native_wechat_poll" else "douyin_leads",
+        "payload": {
+            "action": action,
+            "h5_context": {"workflow_node_id": "node-1"},
+        },
+    }
+
+
+def test_only_private_wechat_takeover_uses_workflow_hard_deadline():
+    assert channel._workflow_node_uses_hard_deadline(_workflow_item("native_wechat_poll")) is True
+    assert channel._workflow_node_uses_hard_deadline(_workflow_item("precise_touch")) is False
+    assert channel._workflow_node_uses_hard_deadline(_workflow_item("account_nurture")) is False
+
+
+def test_precise_touch_waits_for_natural_action_completion():
+    launch = {"total": 100, "interval_seconds_max": 3600}
+
+    assert channel._scheduled_douyin_completion_timeout(
+        {"_wait_for_natural_completion": True}, launch
+    ) is None
+    assert channel._scheduled_douyin_completion_timeout({}, launch) == 7200.0
+
+
 @pytest.mark.asyncio
 async def test_local_task_center_cancel_proxies_cloud_then_stops_local_worker(monkeypatch):
     calls = []

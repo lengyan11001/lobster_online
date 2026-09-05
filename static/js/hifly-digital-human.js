@@ -41,6 +41,7 @@
   var HIFLY_STYLE_VERSION = '20260606-voice-provider-detect';
   var HIFLY_AVATAR_COVER_MANIFEST = '/static/data/hifly-public-avatar-covers.json?v=20260512';
   var HIFLY_AVATAR_VIDEO_MAX_BYTES = 200 * 1024 * 1024;
+  var HIFLY_VOICE_CLONE_MAX_BYTES = 10 * 1024 * 1024;
   var HIFLY_VOICE_RECORD_PROMPTS = {
     zh: [
       '你好，欢迎使用声音创建功能。请保持自然语速和清晰发音，完整朗读这段文字。今天的风很轻，阳光也刚刚好，希望这段录音可以帮助系统更准确地识别你的声音特点。',
@@ -736,12 +737,16 @@
   function avatarMedia(item, className) {
     var mediaClass = className ? (' class="' + escapeHtml(className) + '"') : '';
     if (item && item.source_type === 'video' && item.detail_url) {
-      return '<video' + mediaClass + ' src="' + escapeHtml(item.detail_url) + '" muted playsinline preload="metadata"></video>';
+      var detailVideo = typeof window.lobsterVideoCompatUrl === 'function'
+        ? window.lobsterVideoCompatUrl(item.detail_url, 'avatar.mp4') : item.detail_url;
+      return '<video' + mediaClass + ' src="' + escapeHtml(detailVideo) + '" muted playsinline preload="metadata"></video>';
     }
     // 支持云端返回的视频字段名（如 video_url / face_video_url）
     var videoUrl = item && (item.video_url || item.face_video_url || item.preview_video_url);
     if (videoUrl && /\.(mp4|webm|mov)(\?|$)/i.test(String(videoUrl))) {
-      return '<video' + mediaClass + ' src="' + escapeHtml(videoUrl) + '" muted playsinline preload="metadata"></video>';
+      var compatibleVideo = typeof window.lobsterVideoCompatUrl === 'function'
+        ? window.lobsterVideoCompatUrl(videoUrl, 'avatar.mp4') : videoUrl;
+      return '<video' + mediaClass + ' src="' + escapeHtml(compatibleVideo) + '" muted playsinline preload="metadata"></video>';
     }
     var src = coverSrc(item);
     var fallback = placeholderSvg(item ? item.title : '数字人', item ? item.section : 'public');
@@ -841,7 +846,9 @@
       /** 视频：source_type=video 或 URL 后缀是视频；其它一律按图片渲染 */
       var isVideo = (item && item.source_type === 'video') || /\.(mp4|webm|mov)(\?|$)/i.test(detailUrl);
       if (isVideo) {
-        body.innerHTML = '<video src="' + srcAttr + '" controls autoplay playsinline style="max-width:100%;max-height:70vh;background:#000;"></video>';
+        var detailPlaybackUrl = typeof window.lobsterVideoCompatUrl === 'function'
+          ? window.lobsterVideoCompatUrl(detailUrl, 'avatar-detail.mp4') : detailUrl;
+        body.innerHTML = '<video src="' + escapeHtml(detailPlaybackUrl) + '" controls autoplay playsinline style="max-width:100%;max-height:70vh;background:#000;"></video>';
       } else {
         body.innerHTML = '<img src="' + srcAttr + '" alt="" style="max-width:100%;max-height:70vh;object-fit:contain;background:#000;">';
       }
@@ -1050,8 +1057,10 @@
   function downloadUrlForVideo(videoUrl, filename) {
     var local = baseUrl();
     var safeName = filename || 'digital-human.mp4';
-    if (!local) return videoUrl || '';
-    return local + '/api/hifly/video/download?url=' + encodeURIComponent(videoUrl || '') + '&filename=' + encodeURIComponent(safeName);
+    var playbackUrl = typeof window.lobsterVideoCompatUrl === 'function'
+      ? window.lobsterVideoCompatUrl(videoUrl, safeName) : videoUrl;
+    if (!local) return playbackUrl || '';
+    return local + '/api/hifly/video/download?url=' + encodeURIComponent(playbackUrl || '') + '&filename=' + encodeURIComponent(safeName);
   }
 
   function openExternalUrl(url) {
@@ -1194,12 +1203,14 @@
   function renderResultVideo(videoUrl) {
     var el = $('hiflyResultSurface');
     if (!el) return;
+    var playbackUrl = typeof window.lobsterVideoCompatUrl === 'function'
+      ? window.lobsterVideoCompatUrl(videoUrl, 'digital-human.mp4') : videoUrl;
     el.innerHTML = ''
       + '<div class="hifly-video-result-wrap">'
-      + '<video src="' + escapeHtml(videoUrl) + '" controls style="width:100%;height:100%;object-fit:contain;background:#000;border-radius:20px;"></video>'
+      + '<video src="' + escapeHtml(playbackUrl) + '" controls style="width:100%;height:100%;object-fit:contain;background:#000;border-radius:20px;"></video>'
       + '<div class="hifly-video-result-actions">'
-      + '<button type="button" class="btn btn-primary btn-sm" data-hifly-video-download="' + escapeHtml(videoUrl) + '" data-download-filename="digital-human.mp4">下载视频</button>'
-      + '<button type="button" class="btn btn-ghost btn-sm" data-hifly-video-open="' + escapeHtml(videoUrl) + '">打开视频</button>'
+      + '<button type="button" class="btn btn-primary btn-sm" data-hifly-video-download="' + escapeHtml(playbackUrl) + '" data-download-filename="digital-human.mp4">下载视频</button>'
+      + '<button type="button" class="btn btn-ghost btn-sm" data-hifly-video-open="' + escapeHtml(playbackUrl) + '">打开视频</button>'
       + '</div>'
       + '</div>';
     bindVideoResultActions();
@@ -1905,9 +1916,11 @@
       ? 'success'
       : (item.status === 'failed' ? 'danger' : 'processing');
     var videoUrl = item.video_url || '';
+    var playbackUrl = videoUrl && typeof window.lobsterVideoCompatUrl === 'function'
+      ? window.lobsterVideoCompatUrl(videoUrl, 'digital-human.mp4') : videoUrl;
     var mediaHtml;
     if (videoUrl && item.status === 'success') {
-      mediaHtml = '<video src="' + escapeHtml(videoUrl) + '" controls preload="metadata" '
+      mediaHtml = '<video src="' + escapeHtml(playbackUrl) + '" controls preload="metadata" '
         + 'style="width:100%;height:140px;object-fit:cover;background:#000;border-radius:12px;"></video>';
     } else {
       mediaHtml = '<div class="hifly-video-history-placeholder" '
@@ -1923,7 +1936,7 @@
       : '';
     var downloadBtn = (videoUrl && item.status === 'success')
       ? '<button type="button" class="btn btn-primary btn-sm" data-hifly-video-download="'
-        + escapeHtml(videoUrl) + '" data-download-filename="' + escapeHtml((item.title || 'digital-human') + '.mp4') + '">下载</button>'
+        + escapeHtml(playbackUrl) + '" data-download-filename="' + escapeHtml((item.title || 'digital-human') + '.mp4') + '">下载</button>'
       : '';
     var refreshBtn = (item.status !== 'success' && item.status !== 'failed')
       ? '<button type="button" class="btn btn-ghost btn-sm hifly-video-history-refresh" data-task-id="'
@@ -2351,6 +2364,12 @@
       + '，超过 200MB 限制。请压缩或裁剪后再上传。';
   }
 
+  function voiceCloneSizeLimitMessage(file) {
+    return '声音样本太大，当前文件 '
+      + formatFileSize(file && file.size)
+      + '，超过 10MB 限制。请压缩或裁剪后再上传。';
+  }
+
   function renderUploadError(metaId, message) {
     var el = $(metaId);
     if (!el) return;
@@ -2366,6 +2385,16 @@
     renderUploadError(metaId || 'hiflyAvatarVideoFileMeta', message);
     showMessage(message, true);
     return false;
+  }
+
+  function validateUploadFile(inputId, file, metaId) {
+    if (inputId === 'hiflyVoiceCreateFile' && file && Number(file.size || 0) > HIFLY_VOICE_CLONE_MAX_BYTES) {
+      var message = voiceCloneSizeLimitMessage(file);
+      renderUploadError(metaId || 'hiflyVoiceFileMeta', message);
+      showMessage(message, true);
+      return false;
+    }
+    return validateAvatarVideoUploadFile(inputId, file, metaId);
   }
 
   function revokeUploadPreview(inputId) {
@@ -2472,11 +2501,12 @@
         state.voiceCreateRecordedFile = file || null;
         if (file) setVoiceRecordStatus('已选择本地音频，可直接提交创建声音。', 'success');
       }
-      if (!validateAvatarVideoUploadFile(inputId, file, metaId)) {
+      if (!validateUploadFile(inputId, file, metaId)) {
         if (input) input.value = '';
+        if (inputId === 'hiflyVoiceCreateFile') state.voiceCreateRecordedFile = null;
         revokeUploadPreview(inputId);
         syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, null);
-        renderUploadError(metaId, avatarVideoSizeLimitMessage(file));
+        renderUploadError(metaId, inputId === 'hiflyVoiceCreateFile' ? voiceCloneSizeLimitMessage(file) : avatarVideoSizeLimitMessage(file));
         return;
       }
       syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, file);
@@ -2497,11 +2527,12 @@
         state.voiceCreateRecordedFile = file || null;
         if (file) setVoiceRecordStatus('已选择本地音频，可直接提交创建声音。', 'success');
       }
-      if (!validateAvatarVideoUploadFile(inputId, file, metaId)) {
+      if (!validateUploadFile(inputId, file, metaId)) {
         if (input) input.value = '';
+        if (inputId === 'hiflyVoiceCreateFile') state.voiceCreateRecordedFile = null;
         revokeUploadPreview(inputId);
         syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, null);
-        renderUploadError(metaId, avatarVideoSizeLimitMessage(file));
+        renderUploadError(metaId, inputId === 'hiflyVoiceCreateFile' ? voiceCloneSizeLimitMessage(file) : avatarVideoSizeLimitMessage(file));
         return;
       }
       input.files = ev.dataTransfer.files;
@@ -2795,6 +2826,11 @@
     }
     setFieldError('hiflyVoiceCreateName', 'hiflyVoiceCreateNameError', '');
     if (!file) return showMessage('请先上传声音样本，或使用电脑录音生成样本。', true);
+    if (Number(file.size || 0) > HIFLY_VOICE_CLONE_MAX_BYTES) {
+      var sizeMessage = voiceCloneSizeLimitMessage(file);
+      renderUploadError('hiflyVoiceFileMeta', sizeMessage);
+      return showMessage(sizeMessage, true);
+    }
     if (!agree) return showMessage('请先勾选同意承诺。', true);
 
     var formData = new FormData();
@@ -3561,7 +3597,7 @@
               <strong>声音要求</strong>
               <div class="hifly-requirement-grid">
                 <span>格式：mp3 / m4a / wav</span>
-                <span>大小：不超过 20MB</span>
+                <span>大小：不超过 10MB</span>
                 <span>建议：人声清晰、环境噪音少</span>
               </div>
             </div>

@@ -44,10 +44,11 @@
     }
   };
 
-  var SHANJIAN_TEMPLATE_VERSION = '20260606-voice-provider-detect';
-  var SHANJIAN_STYLE_VERSION = '20260606-voice-provider-detect';
+  var SHANJIAN_TEMPLATE_VERSION = '20260904-voice-preview-fallback-v1';
+  var SHANJIAN_STYLE_VERSION = '20260904-voice-preview-fallback-v1';
   var SHANJIAN_AVATAR_COVER_MANIFEST = '/static/data/shanjian-public-avatar-covers.json?v=20260512';
   var SHANJIAN_AVATAR_VIDEO_MAX_BYTES = 200 * 1024 * 1024;
+  var SHANJIAN_VOICE_CLONE_MAX_BYTES = 10 * 1024 * 1024;
   var INLINE_MATERIAL_IMAGE_SECONDS = 2;
   var INLINE_MATERIAL_VIDEO_MAX_SECONDS = 60;
   var INLINE_MATERIAL_TOTAL_MAX_SECONDS = 300;
@@ -316,6 +317,41 @@
     return payload;
   }
 
+  function previewAudioUrlFromResponse(data) {
+    var queue = [data];
+    var seen = [];
+    while (queue.length) {
+      var current = queue.shift();
+      if (!current || typeof current !== 'object' || seen.indexOf(current) >= 0) continue;
+      seen.push(current);
+      var direct = current.audio_url || current.audioUrl || current.preview_url || current.previewUrl;
+      if (typeof direct === 'string' && direct.trim()) return normalizeAssetUrl(direct.trim());
+      Object.keys(current).forEach(function(key) {
+        var value = current[key];
+        if (value && typeof value === 'object') queue.push(value);
+      });
+    }
+    return '';
+  }
+
+  function requestVoicePreviewTts(voiceId, text, params, provider, fallbackUrl) {
+    var fallback = normalizeAssetUrl(fallbackUrl || '');
+    return requestCloud('/api/hifly/my/voice/preview-tts', previewTtsPayload(voiceId, text, params, provider))
+      .then(function(data) {
+        var audioUrl = previewAudioUrlFromResponse(data);
+        if (audioUrl) return audioUrl;
+        if (fallback) return fallback;
+        throw new Error('当前声音没有试听音频。');
+      })
+      .catch(function(err) {
+        if (fallback) {
+          try { console.warn('[shanjian] preview TTS unavailable, use demo audio', err); } catch (logErr) {}
+          return fallback;
+        }
+        throw err;
+      });
+  }
+
   function findVoiceGroupByVoiceIdLoose(voiceId) {
     if (!voiceId) return null;
     var all = (state.voiceLibrary.mine || []).concat(state.voiceLibrary.public || []);
@@ -427,14 +463,13 @@
           || (state.selectedVoice && state.selectedVoice.voice === voiceId ? state.selectedVoice.provider : '');
         if (provider) btn.setAttribute('data-preview-provider', provider);
         var sampleText = previewScriptText();
+        var fallbackUrl = normalizeAssetUrl(url);
         var previewPromise;
         var canPreviewByTts = voiceId && !isConsumerPreviewVoice(voiceId);
         if (sampleText && canPreviewByTts) {
-          previewPromise = requestCloud('/api/hifly/my/voice/preview-tts', previewTtsPayload(voiceId, sampleText, params, provider)).then(function(data) {
-            return data.audio_url || '';
-          });
-        } else if (url) {
-          previewPromise = Promise.resolve(url);
+          previewPromise = requestVoicePreviewTts(voiceId, sampleText, params, provider, fallbackUrl);
+        } else if (fallbackUrl) {
+          previewPromise = Promise.resolve(fallbackUrl);
         } else if ((provider === 'minimax' || provider === 'qwen') && canPreviewByTts) {
           previewPromise = requestCloud('/api/hifly/my/voice/preview-tts', previewTtsPayload(
             voiceId,
@@ -3406,6 +3441,12 @@
       + '，超过 200MB 限制。请压缩或裁剪后再上传。';
   }
 
+  function voiceCloneSizeLimitMessage(file) {
+    return '声音样本太大，当前文件 '
+      + formatFileSize(file && file.size)
+      + '，超过 10MB 限制。请压缩或裁剪后再上传。';
+  }
+
   function renderUploadError(metaId, message) {
     var el = $(metaId);
     if (!el) return;
@@ -3421,6 +3462,16 @@
     renderUploadError(metaId || 'shanjianAvatarVideoFileMeta', message);
     showMessage(message, true);
     return false;
+  }
+
+  function validateUploadFile(inputId, file, metaId) {
+    if (inputId === 'shanjianVoiceCreateFile' && file && Number(file.size || 0) > SHANJIAN_VOICE_CLONE_MAX_BYTES) {
+      var message = voiceCloneSizeLimitMessage(file);
+      renderUploadError(metaId || 'shanjianVoiceFileMeta', message);
+      showMessage(message, true);
+      return false;
+    }
+    return validateAvatarVideoUploadFile(inputId, file, metaId);
   }
 
   function revokeUploadPreview(inputId) {
@@ -3527,11 +3578,12 @@
         state.voiceCreateRecordedFile = file || null;
         if (file) setVoiceRecordStatus('已选择本地音频，可直接提交创建声音。', 'success');
       }
-      if (!validateAvatarVideoUploadFile(inputId, file, metaId)) {
+      if (!validateUploadFile(inputId, file, metaId)) {
         if (input) input.value = '';
+        if (inputId === 'shanjianVoiceCreateFile') state.voiceCreateRecordedFile = null;
         revokeUploadPreview(inputId);
         syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, null);
-        renderUploadError(metaId, avatarVideoSizeLimitMessage(file));
+        renderUploadError(metaId, inputId === 'shanjianVoiceCreateFile' ? voiceCloneSizeLimitMessage(file) : avatarVideoSizeLimitMessage(file));
         return;
       }
       syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, file);
@@ -3552,11 +3604,12 @@
         state.voiceCreateRecordedFile = file || null;
         if (file) setVoiceRecordStatus('已选择本地音频，可直接提交创建声音。', 'success');
       }
-      if (!validateAvatarVideoUploadFile(inputId, file, metaId)) {
+      if (!validateUploadFile(inputId, file, metaId)) {
         if (input) input.value = '';
+        if (inputId === 'shanjianVoiceCreateFile') state.voiceCreateRecordedFile = null;
         revokeUploadPreview(inputId);
         syncUploadSelection(triggerId, inputId, previewId, metaId, previewKind, null);
-        renderUploadError(metaId, avatarVideoSizeLimitMessage(file));
+        renderUploadError(metaId, inputId === 'shanjianVoiceCreateFile' ? voiceCloneSizeLimitMessage(file) : avatarVideoSizeLimitMessage(file));
         return;
       }
       input.files = ev.dataTransfer.files;
@@ -3746,7 +3799,7 @@
         console.log('[shanjian-debug] preview-tts payload', previewPayload);
         console.log('[shanjian-debug] preview-tts result', ttsData);
       } catch (previewLogErr) {}
-      var audioUrl = String(ttsData.audio_url || '').trim();
+      var audioUrl = previewAudioUrlFromResponse(ttsData);
       try {
         console.log('[shanjian-debug] preview-tts audio_url', audioUrl);
       } catch (audioLogErr) {}
@@ -3903,6 +3956,11 @@
     }
     setFieldError('shanjianVoiceCreateName', 'shanjianVoiceCreateNameError', '');
     if (!file) return showMessage('请先上传声音样本，或使用电脑录音生成样本。', true);
+    if (Number(file.size || 0) > SHANJIAN_VOICE_CLONE_MAX_BYTES) {
+      var sizeMessage = voiceCloneSizeLimitMessage(file);
+      renderUploadError('shanjianVoiceFileMeta', sizeMessage);
+      return showMessage(sizeMessage, true);
+    }
     if (!agree) return showMessage('请先勾选同意承诺。', true);
 
     var formData = new FormData();
@@ -4910,7 +4968,7 @@
               <strong>声音要求</strong>
               <div class="shanjian-requirement-grid">
                 <span>格式：mp3 / m4a / wav</span>
-                <span>大小：不超过 20MB</span>
+                <span>大小：不超过 10MB</span>
                 <span>建议：人声清晰、环境噪音少</span>
               </div>
             </div>

@@ -202,7 +202,8 @@
                   <details class="chat-sidebar-tree-group" data-feature-gate="ai_marketing_entry">
                     <summary><span class="chat-sidebar-tree-dot"></span><span>AI营销创作</span></summary>
                     <div class="chat-sidebar-tree-items">
-                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="ip-content-studio" data-feature-gate="ip_content_daily_skill"><span class="chat-sidebar-entry-icon">日</span><span class="chat-sidebar-entry-copy">IP日更文案</span><span class="chat-sidebar-entry-arrow">›</span></button>
+                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="ip-content-studio" data-ip-content-mode="oral" data-feature-gate="ip_content_oral_skill"><span class="chat-sidebar-entry-icon">口</span><span class="chat-sidebar-entry-copy">IP口播文案</span><span class="chat-sidebar-entry-arrow">›</span></button>
+                      <button type="button" class="chat-sidebar-entry" data-open-hidden-view="ip-content-studio" data-ip-content-mode="moments" data-feature-gate="ip_content_moments_skill"><span class="chat-sidebar-entry-icon">圈</span><span class="chat-sidebar-entry-copy">朋友圈图文</span><span class="chat-sidebar-entry-arrow">›</span></button>
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="image-composer-studio" data-feature-gate="goal_video_pipeline_skill"><span class="chat-sidebar-entry-icon">图</span><span class="chat-sidebar-entry-copy">AI设计图</span><span class="chat-sidebar-entry-arrow">›</span></button>
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="shanjian-digital-human" data-feature-gate="hifly_digital_human_skill"><span class="chat-sidebar-entry-icon">人</span><span class="chat-sidebar-entry-copy">数字人口播视频</span><span class="chat-sidebar-entry-arrow">›</span></button>
                       <button type="button" class="chat-sidebar-entry" data-open-hidden-view="local-bestseller" data-feature-gate="local_bestseller_skill"><span class="chat-sidebar-entry-icon">城</span><span class="chat-sidebar-entry-copy">同城爆款视频</span><span class="chat-sidebar-entry-arrow">›</span></button>
@@ -2711,12 +2712,12 @@
   <script src="/static/js/help-hints.js?v=20260522-billing-tier2"></script>
   <script src="/static/js/view-loader.js?v=20260624-reload-existing-views"></script>
   <script src="/static/js/view-registry.js?v=20260831-personal-settings-load-v1"></script>
-  <script src="/static/js/app.js?v=20260901-oem-recharge-gate-v1"></script>
-  <script src="/static/js/hifly-digital-human.js?v=20260606-voice-provider-detect"></script>
-  <script src="/static/js/chat.js?v=20260718-home-feature-gates"></script>
+  <script src="/static/js/app.js?v=20260904-video-compat-v1"></script>
+  <script src="/static/js/hifly-digital-human.js?v=20260904-video-compat-v1"></script>
+  <script src="/static/js/chat.js?v=20260905-ip-content-split-v1"></script>
   <script src="/static/js/mastra-chat.js?v=20260803-shared-h5-codex-chat-v2"></script>
-  <script src="/static/js/skill.js?v=20260804-multi-clip-mixer"></script>
-  <script src="/static/js/shanjian-digital-human.js?v=20260807-oem-auth-text-v1"></script>
+  <script src="/static/js/skill.js?v=20260905-ip-content-split-v1"></script>
+  <script src="/static/js/shanjian-digital-human.js?v=20260904-voice-preview-fallback-v1"></script>
   <script src="/static/js/messenger-config.js"></script>
   <script src="/static/js/twilio-whatsapp-config.js"></script>
   <script src="/static/js/meta-social.js"></script>
@@ -2735,9 +2736,9 @@
   <script src="/static/js/cutcli-template-studio.js?v=20260805-shared-template-preview"></script>
   <script src="/static/js/wecom-contacts.js?v=20260416i"></script>
   <script src="/static/js/publish.js?v=20260819-asset-inline-publish-v2"></script>
-  <script src="/static/js/scheduled-tasks.js?v=20260830-run-list-compact-v1"></script>
+  <script src="/static/js/scheduled-tasks.js?v=20260905-ip-content-split-v1"></script>
   <link rel="stylesheet" href="/static/css/task-center.css?v=20260821-task-center-round-v3">
   <script src="/static/js/task-center.js?v=20260831-auth-gated-v1"></script>
-  <script src="/static/js/init.js?v=20260901-oem-recharge-gate-v1"></script>
+  <script src="/static/js/init.js?v=20260905-ip-content-split-v1"></script>
 </body>
 </html>

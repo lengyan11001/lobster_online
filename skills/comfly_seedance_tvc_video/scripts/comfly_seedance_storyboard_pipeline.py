@@ -125,6 +125,10 @@ ALLOWED_TOTAL_DURATIONS = (10, 20, 30, 40, 50, 60)
 ALLOWED_YUNWU_TOTAL_DURATIONS = (8, 16, 24, 32, 40, 48)
 FIXED_SEGMENT_DURATION_SECONDS = 10
 YUNWU_SEGMENT_DURATION_SECONDS = 8
+# Comfly rejects prompts at 4096 tokens.  Keep a conservative character
+# budget because the video providers do not all use the same tokenizer.
+VIDEO_PROMPT_MAX_CHARS = 3800
+VIDEO_PROMPT_TRUNCATION_MARKER = "\n[Prompt shortened to fit the provider limit]\n"
 REFERENCE_PURPOSE_GUIDANCE = {
     "storyboard": "use composition, shot structure, visual hierarchy, and pacing as storyboard guidance; do not treat unrelated people or products as mandatory subjects",
     "person": "preserve this target person's face, facial features, hair, temperament, and core outfit traits throughout the film",
@@ -574,6 +578,27 @@ def _first_text(d: Dict[str, Any], *keys: str) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _limit_video_prompt(prompt: Any, max_chars: int = VIDEO_PROMPT_MAX_CHARS) -> str:
+    """Keep the final video prompt below the upstream context limit.
+
+    The composed prompt contains both user-specific storyboard details and
+    fixed continuity rules.  When it is too long, retain both ends so the
+    subject/camera direction at the front and the style/safety constraints at
+    the end survive instead of sending an invalid request to every fallback.
+    """
+    text = str(prompt or "").strip()
+    limit = max(1, int(max_chars or VIDEO_PROMPT_MAX_CHARS))
+    if len(text) <= limit:
+        return text
+    marker = VIDEO_PROMPT_TRUNCATION_MARKER
+    if len(marker) >= limit:
+        return text[:limit]
+    budget = limit - len(marker)
+    head = max(1, (budget * 2) // 3)
+    tail = max(0, budget - head)
+    return f"{text[:head].rstrip()}{marker}{text[-tail:].lstrip() if tail else ''}"[:limit]
 
 
 def _non_retryable(exc: Exception) -> bool:
@@ -1157,7 +1182,7 @@ def _compose_seedance_prompt(
         "Do not render storyboard boards, split panels, time labels, copy blocks, comic layouts, or presentation-sheet compositions",
         "Do not introduce extra products, extra brand marks, unwanted subtitles, UI overlays, or watermarks",
     ]
-    return ". ".join(part for part in parts if part)
+    return _limit_video_prompt(". ".join(part for part in parts if part))
 
 
 class ComflySeedanceClient:
@@ -1372,6 +1397,9 @@ class ComflySeedanceClient:
         model: str = "",
         base_url: str = "",
     ) -> tuple[Dict[str, Any], int]:
+        # Apply the limit at the request boundary as well as during plan
+        # construction so direct callers and all fallback providers are safe.
+        prompt = _limit_video_prompt(prompt)
         video_channel = _normalize_video_channel(channel or self.video_channel)
         video_model = (model or self.config.video_model or _default_video_model(video_channel)).strip() or _default_video_model(video_channel)
         video_base_url = _normalize_video_base_url_for_channel(video_channel, base_url or "", _default_video_base_url(video_channel, self.base_url))
@@ -2232,7 +2260,7 @@ def _direct_video_prompt(config: PipelineConfig) -> str:
     prompt = (config.task_text or "").strip()
     if not prompt:
         prompt = "基于上传参考图生成一段自然、连贯、适合短视频平台发布的图生视频。"
-    return "\n".join(
+    return _limit_video_prompt("\n".join(
         [
             prompt,
             f"Visual tone: {VISUAL_TONE_GUIDANCE[config.visual_tone]}.",
@@ -2240,7 +2268,7 @@ def _direct_video_prompt(config: PipelineConfig) -> str:
             f"Audio requirement: {_audio_guidance(config)}",
             _reference_guidance(config),
         ]
-    )
+    ))
 
 
 def _build_direct_segment_plan(config: PipelineConfig, reference_image_urls: List[str], index: int = 1) -> Dict[str, Any]:

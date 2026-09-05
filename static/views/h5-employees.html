@@ -159,7 +159,7 @@
             <div class="oe-actions">
               <button type="button" class="oe-btn" data-oe-action="add">添加节点</button>
               <button type="button" class="oe-btn" data-oe-action="save">保存员工</button>
-              <button type="button" class="oe-btn" id="oeCopyTemplateBtn" data-oe-action="copy-template" hidden>复制为我的</button>
+              <button type="button" class="oe-btn" id="oeCopyTemplateBtn" data-oe-action="copy-template" hidden>复制副本并编辑</button>
               <button type="button" class="oe-btn primary" data-oe-action="activate">启用员工</button>
               <button type="button" class="oe-btn danger" data-oe-action="stop">停用</button>
               <button type="button" class="oe-btn danger" data-oe-action="delete-template">删除员工</button>
@@ -204,7 +204,7 @@
           <label>搜索数量<input id="oeNodeDouyinMaxResults" type="number" min="10" max="100" step="1" value="50"></label>
           <label>搜索方式<select id="oeNodeDouyinMode"><option value="script">浏览器脚本</option><option value="api">接口模式</option></select></label>
           <label><input id="oeNodeDouyinReplyPreciseComments" type="checkbox"> 筛选后立即回复精准客户评论</label>
-          <label>回复模式<select id="oeNodeDouyinReplyCommentMode"><option value="fixed">固定文案</option><option value="ai">AI 按客户评论生成</option><option value="rewrite">AI 同方向改编</option></select></label>
+          <label>回复模式<select id="oeNodeDouyinReplyCommentMode"><option value="">不启用回复（默认）</option><option value="fixed">固定文案</option><option value="ai">AI 按客户评论生成</option><option value="rewrite">AI 同方向改编</option></select></label>
           <label id="oeNodeDouyinReplyCommentFixedField" hidden>固定回复文案<textarea id="oeNodeDouyinReplyCommentText" rows="2" placeholder="固定模式使用"></textarea></label>
           <label id="oeNodeDouyinReplyCommentAiField" hidden>回复要求<textarea id="oeNodeDouyinReplyCommentPrompt" rows="2" placeholder="AI 模式：回复方向和约束"></textarea></label>
           <label id="oeNodeDouyinReplyCommentRewriteField" hidden>改编基准文案<textarea id="oeNodeDouyinReplyCommentSeedText" rows="2" placeholder="改编模式使用"></textarea></label>

@@ -1605,7 +1605,7 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   agent: 'agent_entry',
   'openclaw-memory': 'openclaw_memory_skill',
   'creative-film-studio': 'goal_video_pipeline_skill',
-  'ip-content-studio': 'ip_content_daily_skill',
+  'ip-content-studio': ['ip_content_oral_skill', 'ip_content_moments_skill', 'ip_content_daily_skill'],
   'wechat-article': 'wewrite_official_account_skill',
   'image-composer-studio': 'goal_video_pipeline_skill',
   'ppt-studio': 'create_ppt_skill',

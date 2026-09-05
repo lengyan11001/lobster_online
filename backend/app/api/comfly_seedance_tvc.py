@@ -897,10 +897,27 @@ def _run_caption_ffmpeg(ffmpeg_path: str, input_path: Path, ass_path: Path, outp
         "+faststart",
         str(output_path),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except OSError as exc:
+        details = {
+            "exception_type": type(exc).__name__,
+            "message": str(exc),
+            "filename": getattr(exc, "filename", None),
+            "errno": getattr(exc, "errno", None),
+            "winerror": getattr(exc, "winerror", None),
+            "command": cmd,
+            "ffmpeg_path": ffmpeg_path,
+            "input_path": str(input_path),
+            "ass_path": str(ass_path),
+        }
+        logger.exception("[seedance-tool-error] caption ffmpeg execution failed details=%s", details)
+        raise RuntimeError(f"ffmpeg execution failed: {details}") from exc
     if proc.returncode != 0:
         quoted = " ".join(shlex.quote(x) for x in cmd)
-        raise RuntimeError((proc.stderr or proc.stdout or f"ffmpeg failed: {quoted}")[:2000])
+        error = (proc.stderr or proc.stdout or f"ffmpeg failed: {quoted}")[:2000]
+        logger.error("[seedance-tool-error] caption ffmpeg returned nonzero returncode=%s command=%s stderr=%s", proc.returncode, cmd, error)
+        raise RuntimeError(error)
 
 
 def _run_bgm_ffmpeg(ffmpeg_path: str, input_path: Path, bgm_path: Path, output_path: Path, volume: float) -> None:
@@ -931,10 +948,27 @@ def _run_bgm_ffmpeg(ffmpeg_path: str, input_path: Path, bgm_path: Path, output_p
         "+faststart",
         str(output_path),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except OSError as exc:
+        details = {
+            "exception_type": type(exc).__name__,
+            "message": str(exc),
+            "filename": getattr(exc, "filename", None),
+            "errno": getattr(exc, "errno", None),
+            "winerror": getattr(exc, "winerror", None),
+            "command": cmd,
+            "ffmpeg_path": ffmpeg_path,
+            "input_path": str(input_path),
+            "bgm_path": str(bgm_path),
+        }
+        logger.exception("[seedance-tool-error] bgm ffmpeg execution failed details=%s", details)
+        raise RuntimeError(f"ffmpeg execution failed: {details}") from exc
     if proc.returncode != 0:
         quoted = " ".join(shlex.quote(x) for x in cmd)
-        raise RuntimeError((proc.stderr or proc.stdout or f"ffmpeg failed: {quoted}")[:2000])
+        error = (proc.stderr or proc.stdout or f"ffmpeg failed: {quoted}")[:2000]
+        logger.error("[seedance-tool-error] bgm ffmpeg returned nonzero returncode=%s command=%s stderr=%s", proc.returncode, cmd, error)
+        raise RuntimeError(error)
 
 
 def _save_local_bestseller_caption_asset(

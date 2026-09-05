@@ -1505,7 +1505,7 @@
     state.lastRefreshAt = now;
     return Promise.allSettled([
       fetchJson('/api/h5-chat/messages?limit=40'),
-      fetchJson('/api/scheduled-tasks/runs?limit=80'),
+      fetchJson('/api/scheduled-tasks/runs?limit=80&compact=1'),
       fetchCloudJson('/api/h5/recorder/files?page=1&page_size=12&source_type=live_executor')
     ]).then(function (results) {
       var messageResult = results[0];

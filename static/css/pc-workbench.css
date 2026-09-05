@@ -3123,6 +3123,127 @@ html[data-brand="hikong"] #content-chat .chat-suggestion-chip:nth-child(3n) .cha
   }
 }
 
+/* Keep the Hikong workbench shell consistent when navigating beyond the home view. */
+html[data-brand="hikong"] .page:has(#dashboard.visible) {
+  --pc-bg: #edf7fb;
+  --pc-blue: #1a3fa3;
+  --pc-blue-soft: #e5f5fa;
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .header {
+  border-bottom-color: rgba(19, 183, 216, 0.16);
+  background: rgba(255, 255, 255, 0.98);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-top-nav .nav-left-item.active {
+  color: #138dad;
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-top-nav .nav-left-item.active::after {
+  background: linear-gradient(90deg, #1a3fa3, #13b7d8);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) #sutuiBalanceWrap {
+  border-color: rgba(19, 183, 216, 0.2);
+  color: #17658a !important;
+  background: #f1fbfd;
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .header-avatar-badge {
+  color: #17658a;
+  background: #e5f5fa;
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav,
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav-toolbar,
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .chat-history-sidebar {
+  border-color: rgba(134, 224, 240, 0.16);
+  background: transparent;
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav {
+  background: linear-gradient(165deg, #0b1a3a 0%, #173a86 62%, #116f93 100%);
+  box-shadow: 10px 0 28px rgba(11, 26, 58, 0.12);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav-title,
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .chat-sidebar-section-label {
+  border-color: rgba(190, 243, 252, 0.14);
+  color: rgba(224, 246, 250, 0.66);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav-toggle {
+  border-color: rgba(190, 243, 252, 0.18);
+  color: #c8f4fb;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav-toggle:hover {
+  border-color: rgba(190, 243, 252, 0.34);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .chat-sidebar-tree-items {
+  border-left-color: rgba(190, 243, 252, 0.16);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .chat-sidebar-tree-group summary,
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .chat-sidebar-entry {
+  color: rgba(234, 248, 252, 0.78);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .chat-sidebar-tree-group summary:hover,
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .chat-sidebar-tree-group[open] > summary {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .chat-sidebar-entry:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .chat-sidebar-entry.is-active {
+  color: #fff;
+  background: rgba(88, 216, 236, 0.16);
+  box-shadow: inset 3px 0 0 #13b7d8;
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .chat-sidebar-entry-icon {
+  color: #bfeef6;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .chat-sidebar-entry.is-active .chat-sidebar-entry-icon {
+  color: #0b6e8a;
+  background: #e9fbfd;
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .chat-sidebar-entry-arrow {
+  color: rgba(214, 242, 248, 0.5);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .search-input {
+  border-color: rgba(190, 243, 252, 0.14);
+  color: #eefbfc;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .search-input::placeholder {
+  color: rgba(220, 244, 248, 0.48);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .app-side-nav .btn-new-session {
+  border-color: rgba(190, 243, 252, 0.2);
+  color: #fff;
+  background: rgba(19, 183, 216, 0.16);
+}
+
+html[data-brand="hikong"] .page:has(#dashboard.visible) .dashboard-main {
+  background: #edf7fb;
+}
+
 /* All OEM home logos give one short acknowledgement when the pointer enters. */
 @keyframes online-home-logo-shake {
   0%, 100% { transform: translateX(0) rotate(0); }

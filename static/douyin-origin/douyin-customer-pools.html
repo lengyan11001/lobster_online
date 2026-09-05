@@ -253,6 +253,9 @@
                                     <select id="all-customers-time-filter" style="width:auto;min-width:170px" onchange="changeAllCustomersTimeFilter()">
                                         <option value="all">评论时间：无限制</option>
                                     </select>
+                                    <select id="all-customers-status-filter" style="width:auto;min-width:150px" onchange="changeAllCustomersStatusFilter()">
+                                        <option value="all">状态：全部</option>
+                                    </select>
                                     <input type="text" id="all-customers-username-filter" class="input" placeholder="搜索昵称" style="width:180px;min-width:180px" oninput="changeAllCustomersUsernameFilter()">
                                     <input type="text" id="all-customers-source-filter" class="input" placeholder="搜索来源视频" style="width:220px;min-width:220px" oninput="changeAllCustomersSourceFilter()">
                                     <select id="all-customers-page-size" style="width:auto;min-width:120px" onchange="changeAllCustomersPageSize()">
@@ -330,6 +333,9 @@
                                     <select id="intent-time-filter" style="width:auto;min-width:170px" onchange="changeIntentTimeFilter()">
                                         <option value="all">评论时间：无限制</option>
                                     </select>
+                                    <select id="intent-status-filter" style="width:auto;min-width:150px" onchange="changeIntentStatusFilter()">
+                                        <option value="all">状态：全部</option>
+                                    </select>
                                     <input type="text" id="intent-username-filter" class="input" placeholder="搜索昵称" style="width:180px;min-width:180px" oninput="changeIntentUsernameFilter()">
                                     <input type="text" id="intent-source-filter" class="input" placeholder="搜索来源视频" style="width:220px;min-width:220px" oninput="changeIntentSourceFilter()">
                                     <select id="intent-page-size" style="width:auto;min-width:120px" onchange="changeIntentPageSize()">
@@ -372,7 +378,7 @@
                                                     <th style="width:240px">客户</th>
                                                     <th>评论内容</th>
                                                     <th style="min-width:300px">来源视频</th>
-                                                    <th class="nowrap" style="width:140px">当前状态</th>
+                                                    <th class="nowrap" style="width:240px">触达状态</th>
                                                     <th class="nowrap" style="width:150px">操作</th>
                                                 </tr>
                                             </thead>
@@ -421,6 +427,7 @@
         let allCustomerTimeFilterDays = "all";
         let allCustomerUsernameFilter = "";
         let allCustomerSourceFilter = "";
+        let allCustomerStatusFilter = "all";
         let allCustomerSourceNavFilter = "";
         let allCustomerSelectedSourceKey = "all";
         let allCustomerSelectionKeys = new Set();
@@ -429,6 +436,7 @@
         let intentTimeFilterDays = "all";
         let intentUsernameFilter = "";
         let intentSourceFilter = "";
+        let intentStatusFilter = "all";
         let intentSourceNavFilter = "";
         let intentSelectedSourceKey = "all";
         let customerPoolPollTimer = 0;
@@ -561,8 +569,11 @@
             document.title = getCustomerPoolPageTitle(currentCustomerPoolTarget);
             document.getElementById("all-customers-workspace-page")?.classList.toggle("active", currentCustomerPoolTarget === "all-customers");
             document.getElementById("intent-workspace-page")?.classList.toggle("active", currentCustomerPoolTarget === "intent");
-            document.getElementById("sidebar-customers-link")?.classList.toggle("active", currentCustomerPoolTarget === "all-customers");
-            document.getElementById("sidebar-intent-link")?.classList.toggle("active", currentCustomerPoolTarget === "intent");
+            document.querySelectorAll(".sidebar-group").forEach((element) => element.classList.remove("is-active"));
+            document.querySelectorAll(".sidebar-group-header,.sidebar-subbtn,.sidebar-utility-btn").forEach((element) => element.classList.remove("active"));
+            const activeLink = document.querySelector(`.sidebar-group-header[data-sidebar="${currentCustomerPoolTarget}"]`);
+            activeLink?.classList.add("active");
+            activeLink?.closest(".sidebar-group")?.classList.add("is-active");
         }
 
         function syncCustomerPoolTargetFromLocation() {
@@ -923,10 +934,134 @@
             select.value = currentValue;
         }
 
+        const customerPoolStatusOptions = [
+            { value: "all", label: "状态：全部" },
+            { value: "not_added", label: "待加入精准" },
+            { value: "monitor", label: "监控沉淀" },
+            { value: "pending", label: "未触达" },
+            { value: "processing", label: "触达中" },
+            { value: "partial", label: "部分完成" },
+            { value: "completed", label: "已完成" },
+            { value: "failed", label: "触达失败" },
+            { value: "unavailable", label: "不可用" },
+        ];
+
+        function renderCustomerPoolStatusFilter(selectId, currentValue, includeMembership = false) {
+            const select = document.getElementById(selectId);
+            if (!select) return;
+            const options = includeMembership
+                ? customerPoolStatusOptions
+                : customerPoolStatusOptions.filter((option) => !["not_added", "monitor"].includes(option.value));
+            const value = options.some((option) => option.value === currentValue) ? currentValue : "all";
+            select.innerHTML = options.map((option) => `<option value="${option.value}" ${option.value === value ? "selected" : ""}>${option.label}</option>`).join("");
+            select.value = value;
+        }
+
         function renderIntentUserCell(user) {
             const sourceLabel = getCustomerSourceLabel(user);
             const subtle = sourceLabel ? (isMonitorCustomerRow(user) ? `来源同行：${sourceLabel}` : `来源作者：${sourceLabel}`) : (normalize(user.reason || "") || "来自评论精准筛选");
             return `<div class="intent-user-cell">${renderIntentAvatar(user)}<div class="intent-user-meta"><div class="intent-user-name">${esc(user.username || "-")}</div><div class="intent-user-subtle">${esc(cut(subtle, 34))}</div></div></div>`;
+        }
+
+        const preciseTouchActionDefinitions = [
+            { key: "follow_comment", label: "关注评论" },
+            { key: "mention_comment", label: "评论@" },
+            { key: "direct_message", label: "主动私信" },
+        ];
+
+        function getPreciseTouchActionState(user = {}, actionKey = "") {
+            const key = normalize(actionKey).toLowerCase();
+            const states = user && user.precise_touch_statuses && typeof user.precise_touch_statuses === "object"
+                ? user.precise_touch_statuses
+                : {};
+            const stored = states[key];
+            if (stored && typeof stored === "object") {
+                return { ...stored, status: normalize(stored.status || "pending").toLowerCase(), known: true };
+            }
+            const legacyPrefix = key === "direct_message" ? "interaction" : key;
+            const legacyStatus = normalize(user[`${legacyPrefix}_status`] || "").toLowerCase();
+            const legacyDetail = normalize(
+                user[`${legacyPrefix}_error`] ||
+                user[`${legacyPrefix}_result`] ||
+                user[`${legacyPrefix}_message`] ||
+                user[`${legacyPrefix}_updated_at`] ||
+                user[`${legacyPrefix}_started_at`] ||
+                user[`${legacyPrefix}_finished_at`] ||
+                "",
+            );
+            if (legacyStatus && (legacyStatus !== "pending" || legacyDetail)) {
+                return {
+                    status: legacyStatus,
+                    error: user[`${legacyPrefix}_error`] || "",
+                    result: user[`${legacyPrefix}_result`] || user[`${legacyPrefix}_message`] || "",
+                    known: true,
+                };
+            }
+            return { status: "pending", error: "", result: "", known: false };
+        }
+
+        function getPreciseTouchStatusMeta(status) {
+            const value = normalize(status).toLowerCase();
+            if (value === "sent") return { label: "已完成", className: "completed" };
+            if (value === "queued") return { label: "排队中", className: "processing" };
+            if (value === "processing") return { label: "触达中", className: "processing" };
+            if (value === "completed") return { label: "已完成", className: "completed" };
+            if (value === "failed") return { label: "触达失败", className: "failed" };
+            if (value === "unavailable") return { label: "不可用", className: "failed" };
+            return { label: "未触达", className: "pending" };
+        }
+
+        function getPreciseTouchOverallStatus(user = {}, entries = []) {
+            if (user.precise_touch_unavailable) return { label: "不可用", className: "failed" };
+            const knownEntries = entries.filter((entry) => entry.known);
+            if (!knownEntries.length) return { label: "未触达", className: "pending" };
+            if (knownEntries.some((entry) => ["queued", "processing"].includes(entry.status))) {
+                return { label: "触达中", className: "processing" };
+            }
+            const failed = knownEntries.some((entry) => ["failed", "unavailable"].includes(entry.status));
+            const completed = knownEntries.filter((entry) => ["completed", "sent"].includes(entry.status)).length;
+            if (failed && completed) return { label: "部分完成", className: "processing" };
+            if (failed) return { label: "触达失败", className: "failed" };
+            if (completed === knownEntries.length) return { label: "已完成", className: "completed" };
+            return { label: "部分完成", className: "processing" };
+        }
+
+        function getPreciseTouchOverallStatusKey(user = {}) {
+            if (user.precise_touch_unavailable) return "unavailable";
+            const entries = preciseTouchActionDefinitions.map((definition) => getPreciseTouchActionState(user, definition.key));
+            const knownEntries = entries.filter((entry) => entry.known);
+            if (!knownEntries.length) return "pending";
+            if (knownEntries.some((entry) => ["queued", "processing"].includes(entry.status))) return "processing";
+            const failed = knownEntries.some((entry) => ["failed", "unavailable"].includes(entry.status));
+            const completed = knownEntries.filter((entry) => ["completed", "sent"].includes(entry.status)).length;
+            if (failed && completed) return "partial";
+            if (failed) return "failed";
+            if (completed === knownEntries.length) return "completed";
+            return "partial";
+        }
+
+        function getCustomerPoolStatusKey(user = {}) {
+            if (!user.is_high_intent) return isMonitorCustomerRow(user) ? "monitor" : "not_added";
+            return getPreciseTouchOverallStatusKey(user);
+        }
+
+        function matchesCustomerPoolStatusFilter(user, filterValue) {
+            return filterValue === "all" || getCustomerPoolStatusKey(user) === filterValue;
+        }
+
+        function renderPreciseTouchStatusCell(user = {}) {
+            const entries = preciseTouchActionDefinitions.map((definition) => ({
+                ...definition,
+                ...getPreciseTouchActionState(user, definition.key),
+            }));
+            const overall = getPreciseTouchOverallStatus(user, entries);
+            const knownEntries = entries.filter((entry) => entry.known);
+            const actionHtml = knownEntries.map((entry) => {
+                const meta = getPreciseTouchStatusMeta(entry.status);
+                const detail = normalize(entry.error || entry.result || "");
+                return `<span class="precise-touch-action"><span class="badge status-${meta.className}">${esc(entry.label)}：${esc(meta.label)}</span>${detail ? `<span class="precise-touch-detail" title="${esc(detail)}">${esc(cut(detail, 30))}</span>` : ""}</span>`;
+            }).join("") || '<span class="precise-touch-no-record">暂无触达记录</span>';
+            return `<div class="table-status-stack precise-touch-status"><span class="badge status-${overall.className}">整体：${esc(overall.label)}</span><div class="precise-touch-actions">${actionHtml}</div></div>`;
         }
 
         function getCustomerDeleteSelectionKey(user = {}) {
@@ -980,6 +1115,7 @@
                 if (!matchesCommentTimeFilter(commentTime, allCustomerTimeFilterDays)) return false;
                 if (!matchesTextFilter(username, allCustomerUsernameFilter)) return false;
                 if (!matchesTextFilter(sourceTitle, allCustomerSourceFilter)) return false;
+                if (!matchesCustomerPoolStatusFilter(user, allCustomerStatusFilter)) return false;
                 return true;
             });
         }
@@ -995,6 +1131,7 @@
                 if (!matchesCommentTimeFilter(commentTime, intentTimeFilterDays)) return false;
                 if (!matchesTextFilter(username, intentUsernameFilter)) return false;
                 if (!matchesTextFilter(sourceTitle, intentSourceFilter)) return false;
+                if (!matchesCustomerPoolStatusFilter(user, intentStatusFilter)) return false;
                 return true;
             });
         }
@@ -1179,9 +1316,10 @@
             syncAllCustomerSelection(allUsers);
             renderAllCustomersRegionFilter(allUsers);
             renderCommentTimeFilter("all-customers-time-filter", allCustomerTimeFilterDays);
+            renderCustomerPoolStatusFilter("all-customers-status-filter", allCustomerStatusFilter, true);
             const baseUsers = getAllCustomerBaseFilteredUsers(allUsers);
             const sourceGroups = getIntentSourceGroups(baseUsers);
-            const hasFilter = allCustomerRegionFilter !== "all" || allCustomerTimeFilterDays !== "all" || normalize(allCustomerUsernameFilter) || normalize(allCustomerSourceFilter);
+            const hasFilter = allCustomerRegionFilter !== "all" || allCustomerTimeFilterDays !== "all" || allCustomerStatusFilter !== "all" || normalize(allCustomerUsernameFilter) || normalize(allCustomerSourceFilter);
             syncAllCustomerSourceSelection(sourceGroups);
             const selectedGroup = sourceGroups.find((group) => group.key === allCustomerSelectedSourceKey) || null;
             const users = baseUsers.filter((user) => allCustomerSelectedSourceKey === "all" || getIntentSourceGroupKey(user) === allCustomerSelectedSourceKey);
@@ -1233,7 +1371,7 @@
                 const selectionKey = getCustomerDeleteSelectionKey(user);
                 const selectable = !!selectionKey;
                 const checked = selectable && allCustomerSelectionKeys.has(selectionKey);
-                return `<tr><td class="cell-tight"><input type="checkbox" ${checked ? "checked" : ""} ${selectable ? "" : "disabled"} onchange='toggleAllCustomerSelectionByKey(${JSON.stringify(selectionKey)}, this.checked)'></td><td>${renderTableIndexCell(start + index + 1, normalize(user.comment_id || "") ? "comment" : "pool")}</td><td>${renderIntentUserCell(user)}</td><td>${renderCustomerCommentCell(user, 120)}</td><td>${renderTaskPostHtml(user)}</td><td class="nowrap">${user.is_high_intent ? '<span class="badge status-completed">已加入</span>' : '<span class="badge status-pending">待加入</span>'}</td><td><div class="table-action-row">${renderProfileAction(user.profile_url)}${!user.is_high_intent ? `<button type="button" class="btn btn-primary" onclick='addAllCustomerToIntentByKey(${JSON.stringify(userChoiceKey(user))})'>加入精准</button>` : ""}</div></td></tr>`;
+                return `<tr><td class="cell-tight"><input type="checkbox" ${checked ? "checked" : ""} ${selectable ? "" : "disabled"} onchange='toggleAllCustomerSelectionByKey(${JSON.stringify(selectionKey)}, this.checked)'></td><td>${renderTableIndexCell(start + index + 1, normalize(user.comment_id || "") ? "comment" : "pool")}</td><td>${renderIntentUserCell(user)}</td><td>${renderCustomerCommentCell(user, 120)}</td><td>${renderTaskPostHtml(user)}</td><td class="nowrap">${user.is_high_intent ? `<div class="table-status-stack"><span class="badge status-completed">已加入</span>${renderPreciseTouchStatusCell(user)}</div>` : '<span class="badge status-pending">待加入</span>'}</td><td><div class="table-action-row">${renderProfileAction(user.profile_url)}${!user.is_high_intent ? `<button type="button" class="btn btn-primary" onclick='addAllCustomerToIntentByKey(${JSON.stringify(userChoiceKey(user))})'>加入精准</button>` : ""}</div></td></tr>`;
             }).join("");
             pager.innerHTML = total > 1
                 ? `<div class="subtle">全部客户分页：每页 ${size} 条</div><div class="pager"><span>第 ${allCustomerCurrentPage} / ${total} 页</span><button type="button" class="pager-btn" onclick="goToAllCustomersPage(1)" ${allCustomerCurrentPage === 1 ? "disabled" : ""}>首页</button><button type="button" class="pager-btn" onclick="goToAllCustomersPage(${allCustomerCurrentPage - 1})" ${allCustomerCurrentPage === 1 ? "disabled" : ""}>上一页</button><button type="button" class="pager-btn" onclick="goToAllCustomersPage(${allCustomerCurrentPage + 1})" ${allCustomerCurrentPage === total ? "disabled" : ""}>下一页</button><button type="button" class="pager-btn" onclick="goToAllCustomersPage(${total})" ${allCustomerCurrentPage === total ? "disabled" : ""}>末页</button></div>`
@@ -1248,9 +1386,10 @@
             const allUsers = collectHighIntentUsers();
             renderIntentRegionFilter(allUsers);
             renderCommentTimeFilter("intent-time-filter", intentTimeFilterDays);
+            renderCustomerPoolStatusFilter("intent-status-filter", intentStatusFilter);
             const baseUsers = getIntentBaseFilteredUsers(allUsers);
             const sourceGroups = getIntentSourceGroups(baseUsers);
-            const hasFilter = intentRegionFilter !== "all" || intentTimeFilterDays !== "all" || normalize(intentUsernameFilter) || normalize(intentSourceFilter);
+            const hasFilter = intentRegionFilter !== "all" || intentTimeFilterDays !== "all" || intentStatusFilter !== "all" || normalize(intentUsernameFilter) || normalize(intentSourceFilter);
             syncIntentSourceSelection(sourceGroups);
             const selectedGroup = sourceGroups.find((group) => group.key === intentSelectedSourceKey) || null;
             const users = baseUsers.filter((user) => intentSelectedSourceKey === "all" || getIntentSourceGroupKey(user) === intentSelectedSourceKey);
@@ -1290,7 +1429,7 @@
             const start = (intentCurrentPage - 1) * size;
             const page = users.slice(start, start + size);
             info.textContent = `第 ${intentCurrentPage} / ${total} 页，共 ${users.length} 位客户${selectedGroup ? `，来源《${cut(selectedGroup.task_title || "未命名视频", 18)}》` : ""}`;
-            tbody.innerHTML = page.map((user, index) => `<tr><td>${renderTableIndexCell(start + index + 1, "intent")}</td><td>${renderIntentUserCell(user)}</td><td>${renderCustomerCommentCell(user, 120)}</td><td>${renderTaskPostHtml(user)}</td><td class="nowrap">${isMonitorCustomerRow(user) ? '<span class="badge status-processing">监控精准</span>' : '<span class="badge status-completed">精准客户</span>'}</td><td><div class="table-action-row">${renderProfileAction(user.profile_url)}${isMonitorCustomerRow(user) ? "" : `<button type="button" class="btn btn-danger" onclick='removeIntentUserByKey(${JSON.stringify(userChoiceKey(user))})'>移出精准</button>`}</div></td></tr>`).join("");
+            tbody.innerHTML = page.map((user, index) => `<tr><td>${renderTableIndexCell(start + index + 1, "intent")}</td><td>${renderIntentUserCell(user)}</td><td>${renderCustomerCommentCell(user, 120)}</td><td>${renderTaskPostHtml(user)}</td><td>${renderPreciseTouchStatusCell(user)}</td><td><div class="table-action-row">${renderProfileAction(user.profile_url)}${isMonitorCustomerRow(user) ? "" : `<button type="button" class="btn btn-danger" onclick='removeIntentUserByKey(${JSON.stringify(userChoiceKey(user))})'>移出精准</button>`}</div></td></tr>`).join("");
             pager.innerHTML = total > 1
                 ? `<div class="subtle">精准客户分页：每页 ${size} 条</div><div class="pager"><span>第 ${intentCurrentPage} / ${total} 页</span><button type="button" class="pager-btn" onclick="goToIntentPage(1)" ${intentCurrentPage === 1 ? "disabled" : ""}>首页</button><button type="button" class="pager-btn" onclick="goToIntentPage(${intentCurrentPage - 1})" ${intentCurrentPage === 1 ? "disabled" : ""}>上一页</button><button type="button" class="pager-btn" onclick="goToIntentPage(${intentCurrentPage + 1})" ${intentCurrentPage === total ? "disabled" : ""}>下一页</button><button type="button" class="pager-btn" onclick="goToIntentPage(${total})" ${intentCurrentPage === total ? "disabled" : ""}>末页</button></div>`
                 : `<div class="subtle">精准客户分页：每页 ${size} 条</div>`;
@@ -1471,6 +1610,7 @@
         function changeAllCustomersPageSize() { allCustomerCurrentPage = 1; renderAllCustomersPreview(); }
         function changeAllCustomersRegionFilter() { allCustomerRegionFilter = document.getElementById("all-customers-region-filter")?.value || "all"; allCustomerCurrentPage = 1; renderAllCustomersPreview(); }
         function changeAllCustomersTimeFilter() { allCustomerTimeFilterDays = document.getElementById("all-customers-time-filter")?.value || "all"; allCustomerCurrentPage = 1; renderAllCustomersPreview(); }
+        function changeAllCustomersStatusFilter() { allCustomerStatusFilter = document.getElementById("all-customers-status-filter")?.value || "all"; allCustomerCurrentPage = 1; renderAllCustomersPreview(); }
         function changeAllCustomersUsernameFilter() { allCustomerUsernameFilter = document.getElementById("all-customers-username-filter")?.value || ""; allCustomerCurrentPage = 1; renderAllCustomersPreview(); }
         function changeAllCustomersSourceFilter() { allCustomerSourceFilter = document.getElementById("all-customers-source-filter")?.value || ""; allCustomerCurrentPage = 1; renderAllCustomersPreview(); }
         function changeAllCustomersSourceNavFilter() { allCustomerSourceNavFilter = document.getElementById("all-customers-source-nav-filter")?.value || ""; renderAllCustomersPreview(); }
@@ -1478,6 +1618,7 @@
         function changeIntentPageSize() { intentCurrentPage = 1; renderIntentPreview(); }
         function changeIntentRegionFilter() { intentRegionFilter = document.getElementById("intent-region-filter")?.value || "all"; intentCurrentPage = 1; renderIntentPreview(); }
         function changeIntentTimeFilter() { intentTimeFilterDays = document.getElementById("intent-time-filter")?.value || "all"; intentCurrentPage = 1; renderIntentPreview(); }
+        function changeIntentStatusFilter() { intentStatusFilter = document.getElementById("intent-status-filter")?.value || "all"; intentCurrentPage = 1; renderIntentPreview(); }
         function changeIntentUsernameFilter() { intentUsernameFilter = document.getElementById("intent-username-filter")?.value || ""; intentCurrentPage = 1; renderIntentPreview(); }
         function changeIntentSourceFilter() { intentSourceFilter = document.getElementById("intent-source-filter")?.value || ""; intentCurrentPage = 1; renderIntentPreview(); }
         function changeIntentSourceNavFilter() { intentSourceNavFilter = document.getElementById("intent-source-nav-filter")?.value || ""; renderIntentPreview(); }

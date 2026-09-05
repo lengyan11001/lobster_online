@@ -78,6 +78,8 @@
     'comfly.daihuo.pipeline':'comfly_veo_skill',
     'image_composer_studio':'goal_video_pipeline_skill',
     'ip_content_daily':'ip_content_daily_skill',
+    'ip_content_oral':'ip_content_oral_skill',
+    'ip_content_moments':'ip_content_moments_skill',
     'wewrite.article.pipeline':'wewrite_official_account_skill',
     'linkedin_leads':'linkedin_leads',
     'reddit_leads':'reddit_leads',
@@ -90,6 +92,8 @@
     'comfly.daihuo.pipeline':'comfly.daihuo.pipeline',
     'image_composer_studio':'goal.image.pipeline',
     'ip_content_daily':'ip_content_daily',
+    'ip_content_oral':'ip_content_oral',
+    'ip_content_moments':'ip_content_moments',
     'wewrite.article.pipeline':'wewrite.article.pipeline'
   };
   function nodeOptionFeatureGate(key) {
@@ -121,7 +125,8 @@
     ['comfly.daihuo.pipeline','爆款TVC','使用素材或产品图生成广告短片。','AI营销'],
     ['viral_video_remix','爆款复刻','基于爆款结构复刻视频脚本和执行方案。','AI营销'],
     ['image_composer_studio','AI设计图','根据文案或产品资料生成海报、详情页和朋友圈配图。','AI营销'],
-    ['ip_content_daily','IP日更文案','生成短视频口播、朋友圈文案和配图提示词。','AI营销'],
+    ['ip_content_oral','IP口播文案','包含行业热门口播和专业热门IP口播。','AI营销'],
+    ['ip_content_moments','朋友圈图文','生成朋友圈图文内容。','AI营销'],
     ['wewrite.article.pipeline','公众号文章','根据主题生成公众号文章、配图和发布草稿。','AI营销'],
     ['native_wechat_poll','个微私信接管','读取个人微信新消息，并按个人记忆自动生成回复。','个微'],
     ['native_wechat_add_friend','个微自动加好友','把目标手机号或微信号加入本机个人微信加好友队列。','个微'],
@@ -148,6 +153,15 @@
     var key=String(item[0] || '').trim(), gate=nodeOptionFeatureGate(key);
     if (gate && !(typeof window.isLobsterFeatureAllowed === 'function' && window.isLobsterFeatureAllowed(gate))) return false;
     if (key === 'local_bestseller' || key === 'viral_video_remix') return true;
+    // Existing employee templates may still contain the former combined IP
+    // daily node.  Its package is retired from the picker, but the node stays
+    // usable when either split package is available.
+    if (key === 'ip_content_daily') {
+      if (!state.nodePermissionsLoaded) return false;
+      return nodeOptionPackageVisible('ip_content_oral_skill')
+        || nodeOptionPackageVisible('ip_content_moments_skill')
+        || nodeOptionPackageVisible('ip_content_daily_skill');
+    }
     var capabilityId=NODE_OPTION_CAPABILITY_IDS[key] || '', packageId=NODE_OPTION_PACKAGE_IDS[key] || '';
     if (gate && !capabilityId && !packageId) return true;
     if (!state.nodePermissionsLoaded) return false;
@@ -353,6 +367,8 @@
     if (row.key === 'comfly.daihuo.pipeline') return {title:'爆款TVC',task_kind:'capability',content:'H5 工作流：爆款TVC',payload:{capability_id:'comfly.daihuo.pipeline',payload:{action:'start_pipeline',task_text:prompt,prompt:prompt,auto_save:true}}};
     if (row.key === 'viral_video_remix') return {title:'爆款复制',task_kind:'client_workflow',content:'H5 工作流：爆款复制',payload:{action:'viral_video_remix_start',params:baseScheduleParams(row,{prompt:prompt,billing_confirmed:true,ratio:'9:16'})}};
     if (row.key === 'image_composer_studio') return {title:'AI设计图',task_kind:'client_workflow',content:'H5 工作流：AI设计图',payload:{action:'image_studio_generate',params:baseScheduleParams(row,{prompt:prompt,note:prompt})}};
+    if (row.key === 'ip_content_oral') return {title:'IP口播文案',task_kind:'ip_content_daily',content:'H5 工作流：IP口播文案',payload:{template_id:0,use_personal_default:true,tasks:['industry_hot_oral','professional_ip_oral'],sync_before:true,industry_count:5,ip_count:5,moments_count:20,requirements:{}}};
+    if (row.key === 'ip_content_moments') return {title:'朋友圈图文',task_kind:'ip_content_daily',content:'H5 工作流：朋友圈图文',payload:{template_id:0,use_personal_default:true,tasks:['moments_candidate'],sync_before:true,industry_count:5,ip_count:5,moments_count:20,requirements:{}}};
     if (row.key === 'ip_content_daily') return {title:'IP日更文案',task_kind:'ip_content_daily',content:'H5 工作流：IP日更文案',payload:{template_id:0,use_personal_default:true,tasks:['industry_hot_oral','professional_ip_oral','moments_candidate'],sync_before:true,industry_count:5,ip_count:5,moments_count:20,requirements:{}}};
     if (row.key === 'wewrite.article.pipeline') return {title:'公众号文章',task_kind:'capability',content:'H5 工作流：公众号文章',payload:{capability_id:'wewrite.article.pipeline',payload:{idea:prompt,style:'',include_images:true,image_count:3,image_aspect_ratio:'16:9'}}};
     if (row.key === 'linkedin_leads') return {title:'LinkedIn线索挖掘',task_kind:'linkedin_mining',content:'H5 工作流：LinkedIn线索挖掘',payload:{title:'LinkedIn线索挖掘',keywords:[prompt],max_people:30,auto_run:true}};
@@ -603,12 +619,20 @@
         currentParams.followup_actions=[];
         delete currentParams.touch_actions;
         currentParams.customer_scope='current_collection_batch';
-        currentParams.reply_precise_comments=boolParam(currentParams.reply_precise_comments,legacyCollectionActions.indexOf('reply_comments') >= 0);
-        currentParams.reply_comment_mode=String(currentParams.reply_comment_mode || currentParams.comment_mode || 'fixed').toLowerCase();
-        if (['fixed','ai','rewrite'].indexOf(currentParams.reply_comment_mode) < 0) currentParams.reply_comment_mode='fixed';
-        currentParams.reply_comment_text=String(currentParams.reply_comment_text || currentParams.comment_text || '');
-        currentParams.reply_comment_prompt=String(currentParams.reply_comment_prompt || currentParams.comment_prompt || '');
-        currentParams.reply_comment_seed_text=String(currentParams.reply_comment_seed_text || currentParams.comment_seed_text || '');
+        var legacyReplyEnabled=legacyCollectionActions.indexOf('reply_comments') >= 0;
+        var replyEnabled=boolParam(currentParams.reply_precise_comments,false) || legacyReplyEnabled;
+        var replyMode=String(currentParams.reply_comment_mode || currentParams.comment_mode || '').toLowerCase();
+        var replyText=String(currentParams.reply_comment_text || currentParams.comment_text || '').trim();
+        var replyPrompt=String(currentParams.reply_comment_prompt || currentParams.comment_prompt || '').trim();
+        var replySeedText=String(currentParams.reply_comment_seed_text || currentParams.comment_seed_text || '').trim();
+        ['reply_precise_comments','reply_comment_mode','reply_comment_text','reply_comment_prompt','reply_comment_seed_text','comment_mode','comment_text','comment_prompt','comment_seed_text'].forEach(function(key){delete currentParams[key];});
+        if (replyEnabled) {
+          currentParams.reply_precise_comments=true;
+          if (['fixed','ai','rewrite'].indexOf(replyMode) >= 0) currentParams.reply_comment_mode=replyMode;
+          if (replyText) currentParams.reply_comment_text=replyText;
+          if (replyPrompt) currentParams.reply_comment_prompt=replyPrompt;
+          if (replySeedText) currentParams.reply_comment_seed_text=replySeedText;
+        }
         node.plan=node.plan && typeof node.plan === 'object' ? node.plan : {};
         node.plan.payload=Object.assign({},currentPayload,{params:currentParams});
         prepared.push(node);
@@ -733,7 +757,7 @@
   function renderEditor() {
     var body=el('oeEditorBody'), empty=el('oeEditorEmpty'), template=state.selectedTemplate, copyButton=el('oeCopyTemplateBtn'); if (!template) { body.hidden=true; empty.hidden=false; if (copyButton) copyButton.hidden=true; return; }
     body.hidden=false; empty.hidden=true; el('oeEditorTitle').textContent=template.name || '未命名员工'; el('oeEditorSubtitle').textContent=isSalesTemplate(template) ? '销售 24 小时工作流 · 复用 H5 销售逻辑' : (template.source === 'granted' ? '授权模板 · 只读配置' : '自定义工作流'); if (el('oeTemplateName').dataset.oeTemplateDraftKey !== currentDraftKey()) { el('oeTemplateName').value=template.name || ''; el('oeTemplateName').dataset.oeTemplateDraftKey=currentDraftKey(); } renderStatus(); renderTimeline();
-    var editable=currentTemplateIsEditable(), canCopy=template.source === 'granted' && !!String(template.id || '').trim();
+    var editable=currentTemplateIsEditable(), canCopy=(template.source === 'granted' || template.source === 'system') && !!String(template.id || '').trim();
     if (copyButton) { copyButton.hidden=!canCopy; copyButton.disabled=!!state.submitting; }
     el('oeTemplateName').disabled=!editable; el('oeTemplateName').title=editable ? '' : '授权模板不能修改';
     document.querySelectorAll('#content-h5-employees [data-oe-action="save"],#content-h5-employees [data-oe-action="add"]').forEach(function(button){button.disabled=!editable || !!state.submitting;});
@@ -878,6 +902,11 @@
   function fillNodeOptions(selected, selectedLabel, node) {
     var select=el('oeNodeKey'); if (!select) return;
     var options=visibleNodeOptions();
+    var selectedKey=String(selected || '').trim();
+    if (selectedKey === 'ip_content_daily') {
+      var legacyOption=['ip_content_daily','IP日更文案（兼容）','保留旧版任务数据；新建节点请使用拆分后的 IP口播文案或朋友圈图文。','AI营销','ip_content_daily'];
+      if (nodeOptionIsAllowed(legacyOption)) options.push(legacyOption);
+    }
     var groups={}, order=[];
     options.forEach(function(item){var group=item[3] || '销售员工';if(!groups[group]){groups[group]=[];order.push(group);}groups[group].push(item);});
     order=NODE_OPTION_GROUP_ORDER.filter(function(group){return !!groups[group];}).concat(order.filter(function(group){return NODE_OPTION_GROUP_ORDER.indexOf(group) < 0;}));
@@ -927,8 +956,8 @@
   function saveTemplate() { var body=payloadToSave(), id=String(state.editingId || ''); body.installation_id=selectedDeviceId(); return runSubmission('save',function(){return api(id ? '/api/h5-workflows/templates/' + encodeURIComponent(id) : '/api/h5-workflows/templates',{method:id?'PATCH':'POST',json:body}).then(function(data){var saved=data.template || {}; state.editingId=String(saved.id || id); state.salesTemplateMigrationPending=false; state.editingMeta=Object.assign({},saved.meta || body.meta); state.selectedId=String(saved.id || state.selectedId || 'system_sales'); state.templatesLoadedInstallationId=''; return loadTemplates().then(function(){state.selectedTemplate=normalizeTemplate(state.templates.find(function(item){return String(item.id) === state.editingId;}) || Object.assign({},saved,{source:'own'})); state.nodes=clone(state.selectedTemplate.nodes || body.nodes); if (el('oeTemplateName')) delete el('oeTemplateName').dataset.oeTemplateDraftKey; render(); if (typeof loadOnlineH5Employees === 'function') loadOnlineH5Employees(); return saved;});});}); }
   function copiedTemplateName(template) { var base=String(template && template.name || '员工模板').trim() || '员工模板'; return /副本$/.test(base) ? base : base + '副本'; }
   function copyTemplate() {
-    var source=state.selectedTemplate, sourceId=String(source && source.id || '').trim();
-    if (!source || source.source !== 'granted' || !sourceId) throw new Error('只能复制他人授权的员工模板');
+    var source=state.selectedTemplate, sourceId=source && source.source === 'system' ? (activeTemplateKey(source) || String(source.id || '').trim()) : String(source && source.id || '').trim();
+    if (!source || (source.source !== 'granted' && source.source !== 'system') || !sourceId) throw new Error('当前员工模板不能复制');
     if (!state.nodes.length) throw new Error('模板没有可复制的节点');
     return runSubmission('copy',function(){
       return api('/api/h5-workflows/templates',{method:'POST',json:{
@@ -1078,8 +1107,8 @@
     if (el('oeNodeDouyinCollectionField')) el('oeNodeDouyinCollectionField').hidden=!douyinCollection;
     if (el('oeNodeDouyinTouchField')) el('oeNodeDouyinTouchField').hidden=!douyinTouch;
     if (el('oeNodeDouyinFollowupField')) el('oeNodeDouyinFollowupField').hidden=!douyinTouch;
-    var replyMode=String((el('oeNodeDouyinReplyCommentMode') || {}).value || 'fixed').toLowerCase();
-    if (['fixed','ai','rewrite'].indexOf(replyMode) < 0) replyMode='fixed';
+    var replyMode=String((el('oeNodeDouyinReplyCommentMode') || {}).value || '').toLowerCase();
+    if (['','fixed','ai','rewrite'].indexOf(replyMode) < 0) replyMode='';
     [['oeNodeDouyinReplyCommentFixedField','fixed'],['oeNodeDouyinReplyCommentAiField','ai'],['oeNodeDouyinReplyCommentRewriteField','rewrite']].forEach(function(item){
       var field=el(item[0]), visible=douyinCollection && replyMode === item[1];
       if (!field) return;
@@ -1105,7 +1134,7 @@
     if (el('oeNodeDouyinTouchMaxUsers')) el('oeNodeDouyinTouchMaxUsers').value=Math.max(1,Math.min(200,Number(params.max_users || params.max_results || 20)));
     if (el('oeNodeDouyinMode')) el('oeNodeDouyinMode').value=['script','api'].indexOf(String(params.mode || '').toLowerCase()) >= 0 ? String(params.mode).toLowerCase() : 'script';
     if (el('oeNodeDouyinReplyPreciseComments')) el('oeNodeDouyinReplyPreciseComments').checked=boolParam(params.reply_precise_comments,false);
-    if (el('oeNodeDouyinReplyCommentMode')) el('oeNodeDouyinReplyCommentMode').value=['fixed','ai','rewrite'].indexOf(String(params.reply_comment_mode || 'fixed').toLowerCase()) >= 0 ? String(params.reply_comment_mode || 'fixed').toLowerCase() : 'fixed';
+    if (el('oeNodeDouyinReplyCommentMode')) el('oeNodeDouyinReplyCommentMode').value=['fixed','ai','rewrite'].indexOf(String(params.reply_comment_mode || '').toLowerCase()) >= 0 ? String(params.reply_comment_mode || '').toLowerCase() : '';
     if (el('oeNodeDouyinReplyCommentText')) el('oeNodeDouyinReplyCommentText').value=String(params.reply_comment_text || '');
     if (el('oeNodeDouyinReplyCommentPrompt')) el('oeNodeDouyinReplyCommentPrompt').value=String(params.reply_comment_prompt || '');
     if (el('oeNodeDouyinReplyCommentSeedText')) el('oeNodeDouyinReplyCommentSeedText').value=String(params.reply_comment_seed_text || '');
@@ -1134,11 +1163,19 @@
       row.params.regions=regions.length ? regions : ['全国'];
       row.params.max_results=Math.max(10,Math.min(100,Number((el('oeNodeDouyinMaxResults') || {}).value || 50)));
       row.params.mode=['script','api'].indexOf(String((el('oeNodeDouyinMode') || {}).value || '').toLowerCase()) >= 0 ? String(el('oeNodeDouyinMode').value).toLowerCase() : 'script';
-      row.params.reply_precise_comments=!!(el('oeNodeDouyinReplyPreciseComments') && el('oeNodeDouyinReplyPreciseComments').checked);
-      row.params.reply_comment_mode=['fixed','ai','rewrite'].indexOf(String((el('oeNodeDouyinReplyCommentMode') || {}).value || 'fixed').toLowerCase()) >= 0 ? String(el('oeNodeDouyinReplyCommentMode').value).toLowerCase() : 'fixed';
-      row.params.reply_comment_text=String((el('oeNodeDouyinReplyCommentText') || {}).value || '').trim();
-      row.params.reply_comment_prompt=String((el('oeNodeDouyinReplyCommentPrompt') || {}).value || '').trim();
-      row.params.reply_comment_seed_text=String((el('oeNodeDouyinReplyCommentSeedText') || {}).value || '').trim();
+      var replyEnabled=!!(el('oeNodeDouyinReplyPreciseComments') && el('oeNodeDouyinReplyPreciseComments').checked);
+      ['reply_precise_comments','reply_comment_mode','reply_comment_text','reply_comment_prompt','reply_comment_seed_text','comment_mode','comment_text','comment_prompt','comment_seed_text'].forEach(function(field){delete row.params[field];});
+      if (replyEnabled) {
+        row.params.reply_precise_comments=true;
+        var replyMode=String((el('oeNodeDouyinReplyCommentMode') || {}).value || '').toLowerCase();
+        if (['fixed','ai','rewrite'].indexOf(replyMode) >= 0) row.params.reply_comment_mode=replyMode;
+        var replyText=String((el('oeNodeDouyinReplyCommentText') || {}).value || '').trim();
+        var replyPrompt=String((el('oeNodeDouyinReplyCommentPrompt') || {}).value || '').trim();
+        var replySeedText=String((el('oeNodeDouyinReplyCommentSeedText') || {}).value || '').trim();
+        if (replyText) row.params.reply_comment_text=replyText;
+        if (replyPrompt) row.params.reply_comment_prompt=replyPrompt;
+        if (replySeedText) row.params.reply_comment_seed_text=replySeedText;
+      }
       row.params.followup_actions=[];
       delete row.params.max_users;
       delete row.params.touch_actions;

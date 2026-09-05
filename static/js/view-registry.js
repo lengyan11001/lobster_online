@@ -80,7 +80,7 @@
 
   window.registerLobsterView('ip-content-studio', {
     html: '/static/views/ip-content-studio.html?v=20260807-moment-failure-scope',
-    scripts: '/static/js/ip-content-studio.js?v=20260902-beijing-time-v1',
+    scripts: '/static/js/ip-content-studio.js?v=20260905-ip-content-split-v1',
     init: 'initIpContentStudioView',
     cache: 'reload'
   });
@@ -165,8 +165,8 @@
   });
 
   window.registerLobsterView('h5-employees', {
-    html: '/static/views/h5-employees.html?v=20260827-touch-action-echo-v1',
-    scripts: '/static/js/views/h5-employees.js?v=20260831-employee-copy-v1',
+    html: '/static/views/h5-employees.html?v=20260905-douyin-default-reply-v1',
+    scripts: '/static/js/views/h5-employees.js?v=20260905-ip-content-split-v1',
     init: 'initOnlineH5EmployeesView',
     cache: 'reload'
   });

@@ -1341,27 +1341,29 @@ window._openCreativeFilmStudioView = function() {
   try { location.hash = 'creative-film-studio'; } catch (e1) {}
 };
 
-window._openIpContentStudioView = function() {
+window._openIpContentStudioView = function(mode) {
+  mode = mode === 'moments' ? 'moments' : (mode === 'oral' ? 'oral' : '');
+  window.__ipContentStudioMode = mode;
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('ip-content-studio', {
-      html: '/static/views/ip-content-studio.html?v=20260615-ip-content-batch',
-      scripts: '/static/js/ip-content-studio.js?v=20260902-beijing-time-v1',
+      html: '/static/views/ip-content-studio.html?v=20260905-ip-content-split-v1',
+      scripts: '/static/js/ip-content-studio.js?v=20260905-ip-content-split-v1',
       cache: 'reload'
     });
   }
   if (typeof window.showLobsterView === 'function') {
     window.showLobsterView('ip-content-studio', document.querySelector('.nav-left-item[data-view="skill-store"]'))
       .then(function() {
-        if (typeof window.initIpContentStudioView === 'function') window.initIpContentStudioView();
+        if (typeof window.initIpContentStudioView === 'function') window.initIpContentStudioView(mode);
       })
       .catch(function(err) {
         console.error('Failed to open ip-content-studio', err);
-        alert('IP日更文案页面加载失败，请刷新页面后重试。' + (err && err.message ? '\n' + err.message : ''));
+        alert((mode === 'moments' ? '朋友圈图文' : (mode === 'oral' ? 'IP口播文案' : 'IP日更文案')) + '页面加载失败，请刷新页面后重试。' + (err && err.message ? '\n' + err.message : ''));
       });
     return;
   }
   _switchToHiddenView('ip-content-studio');
-  if (typeof window.initIpContentStudioView === 'function') window.initIpContentStudioView();
+  if (typeof window.initIpContentStudioView === 'function') window.initIpContentStudioView(mode);
   try { location.hash = 'ip-content-studio'; } catch (e1) {}
 };
 
@@ -1925,19 +1927,25 @@ function _renderCutcliTemplateCard() {
   '</div>';
 }
 
-function _renderIpContentStudioCard(pkg, showDebug) {
+function _renderIpContentStudioCard(pkg, showDebug, mode) {
   pkg = pkg || {};
+  mode = mode === 'moments' ? 'moments' : 'oral';
+  var isMoments = mode === 'moments';
+  var fallbackTitle = isMoments ? '朋友圈图文' : 'IP口播文案';
+  var fallbackDesc = isMoments ? '基于关键词、同行和记忆资料生成朋友圈图文内容。' : '基于行业热门和专业同行数据，生成行业热门口播与专业 IP 口播文案。';
+  var cardClass = isMoments ? 'ip-content-moments-card' : 'ip-content-oral-card';
+  var packageId = isMoments ? 'ip_content_moments_skill' : 'ip_content_oral_skill';
   var debugBadge = showDebug
     ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
     : '';
   var tags = _skillStoreTagHtml(pkg.tags || ['TikHub', '抖音', '视频号']);
   var cap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
-  return '<div class="skill-store-card ip-content-studio-card" data-skill-package-id="' + escapeAttr(pkg.id || 'ip_content_daily_skill') + '" style="cursor:pointer;border-color:rgba(20,184,166,0.35);background:linear-gradient(135deg,rgba(20,184,166,0.08),rgba(59,130,246,0.05));">' +
+  return '<div class="skill-store-card ip-content-studio-card ' + cardClass + '" data-ip-content-mode="' + mode + '" data-skill-package-id="' + escapeAttr(packageId) + '" style="cursor:pointer;border-color:rgba(20,184,166,0.35);background:linear-gradient(135deg,rgba(20,184,166,0.08),rgba(59,130,246,0.05));">' +
     '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可用</span></div>' +
-    '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || 'IP日更文案')) + '</div>' +
-    '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '榜单、同行和记忆资料生成可审核文案。')) + cap + '</div>' +
+    '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || fallbackTitle)) + '</div>' +
+    '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || fallbackDesc)) + cap + '</div>' +
     '<div class="card-tags">' + tags + '</div>' +
-    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm ip-content-studio-entry-btn">进入工作台</button></div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm ip-content-studio-entry-btn" data-ip-content-mode="' + mode + '">进入工作台</button></div>' +
   '</div>';
 }
 
@@ -2809,6 +2817,8 @@ var _SKILL_STORE_SIMPLE_COPY_BY_ID = {
   'wecom_reply': { title: '企业微信自动回复', desc: '企微客服回复' },
   'ecommerce_publish_skill': { title: '商品发布', desc: '管理店铺账号' },
   'ip_content_daily_skill': { title: 'IP日更文案', desc: '榜单、同行、记忆生成文案' },
+  'ip_content_oral_skill': { title: 'IP口播文案', desc: '行业热门口播、专业热门 IP 口播' },
+  'ip_content_moments_skill': { title: '朋友圈图文', desc: '生成朋友圈图文内容' },
   'linkedin_mining_skill': { title: 'LinkedIn线索挖掘', desc: '画像、候选人、图谱和报告' },
   'juhe_wechat_skill': { title: '微信协议助手', desc: '本机微信连接工作台' },
   'create_ppt_skill': { title: 'PPT 生成', desc: '主题生成演示文稿' },
@@ -2833,6 +2843,8 @@ var _SKILL_STORE_SIMPLE_COPY_BY_CLASS = {
   'wecom-reply-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.wecom_reply,
   'ecommerce-publish-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.ecommerce_publish_skill,
   'ip-content-studio-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.ip_content_daily_skill,
+  'ip-content-oral-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.ip_content_oral_skill,
+  'ip-content-moments-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.ip_content_moments_skill,
   'linkedin-mining-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.linkedin_mining_skill,
   'juhe-wechat-card': _SKILL_STORE_SIMPLE_COPY_BY_ID.juhe_wechat_skill
 };
@@ -2884,6 +2896,8 @@ var _SKILL_STORE_ICON_BY_ID = {
   'wecom_reply': { icon: 'building', tone: 'cyan' },
   'ecommerce_publish_skill': { icon: 'store', tone: 'orange' },
   'ip_content_daily_skill': { icon: 'trend', tone: 'teal' },
+  'ip_content_oral_skill': { icon: 'trend', tone: 'teal' },
+  'ip_content_moments_skill': { icon: 'file', tone: 'blue' },
   'linkedin_mining_skill': { icon: 'network', tone: 'blue' },
   'juhe_wechat_skill': { icon: 'message', tone: 'green' },
   'create_ppt_skill': { icon: 'presentation', tone: 'orange' },
@@ -2908,6 +2922,8 @@ var _SKILL_STORE_ICON_BY_CLASS = {
   'wecom-reply-card': _SKILL_STORE_ICON_BY_ID.wecom_reply,
   'ecommerce-publish-card': _SKILL_STORE_ICON_BY_ID.ecommerce_publish_skill,
   'ip-content-studio-card': _SKILL_STORE_ICON_BY_ID.ip_content_daily_skill,
+  'ip-content-oral-card': _SKILL_STORE_ICON_BY_ID.ip_content_oral_skill,
+  'ip-content-moments-card': _SKILL_STORE_ICON_BY_ID.ip_content_moments_skill,
   'linkedin-mining-card': _SKILL_STORE_ICON_BY_ID.linkedin_mining_skill,
   'juhe-wechat-card': _SKILL_STORE_ICON_BY_ID.juhe_wechat_skill
 };
@@ -3019,7 +3035,11 @@ function _isIpContentSkillCard(card) {
   if (!card) return false;
   var packageId = card.getAttribute('data-skill-package-id') || '';
   return packageId === 'ip_content_daily_skill' ||
-    card.classList.contains('ip-content-studio-card');
+    packageId === 'ip_content_oral_skill' ||
+    packageId === 'ip_content_moments_skill' ||
+    card.classList.contains('ip-content-studio-card') ||
+    card.classList.contains('ip-content-oral-card') ||
+    card.classList.contains('ip-content-moments-card');
 }
 
 function _isLinkedinMiningSkillCard(card) {
@@ -3128,6 +3148,8 @@ function _decorateSkillImageCards(el) {
     'shanjian-smart-clip-card',
     'goal-video-pipeline-card',
     'ip-content-studio-card',
+    'ip-content-oral-card',
+    'ip-content-moments-card',
     'linkedin-mining-card',
     'juhe-wechat-card',
     'wechat-article-card',
@@ -3202,7 +3224,13 @@ function loadSkillStore() {
       var multiClipPkg = pkgById('multi_clip_mixer_skill');
       var metaPkg = pkgById('meta_social');
       var cutcliPkg = pkgById('cutcli_template_skill') || pkgById('cutcli_templates_skill') || pkgById('cutcli_template_studio');
-      var ipContentPkg = pkgById('ip_content_daily_skill');
+      var legacyIpContentPkg = pkgById('ip_content_daily_skill');
+      var ipContentOralPkg = pkgById('ip_content_oral_skill') || (legacyIpContentPkg ? Object.assign({}, legacyIpContentPkg, {
+        id: 'ip_content_oral_skill', name: 'IP口播文案', description: '基于行业热门和专业同行数据，生成行业热门口播与专业 IP 口播文案。', tags: ['TikHub', '抖音', '口播', 'IP']
+      }) : null);
+      var ipContentMomentsPkg = pkgById('ip_content_moments_skill') || (legacyIpContentPkg ? Object.assign({}, legacyIpContentPkg, {
+        id: 'ip_content_moments_skill', name: '朋友圈图文', description: '基于关键词、同行和记忆资料生成朋友圈图文内容。', tags: ['TikHub', '朋友圈', '图文']
+      }) : null);
       var linkedinMiningPkg = pkgById('linkedin_mining_skill');
       var redditLeadsPkg = pkgById('reddit_leads');
       var xLeadsPkg = pkgById('x_leads');
@@ -3233,7 +3261,8 @@ function loadSkillStore() {
         if (multiClipPkg) html += _renderMultiClipMixerCard();
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (metaPkg) html += _renderMetaSocialCard({ pkg: metaPkg });
-        if (ipContentPkg) html += _renderIpContentStudioCard(ipContentPkg, !!(isSkillAdmin && ipContentPkg.store_visibility === 'debug'));
+        if (ipContentOralPkg) html += _renderIpContentStudioCard(ipContentOralPkg, !!(isSkillAdmin && ipContentOralPkg.store_visibility === 'debug'), 'oral');
+        if (ipContentMomentsPkg) html += _renderIpContentStudioCard(ipContentMomentsPkg, !!(isSkillAdmin && ipContentMomentsPkg.store_visibility === 'debug'), 'moments');
         if (linkedinMiningPkg) html += _renderLinkedinMiningCard(linkedinMiningPkg, !!(isSkillAdmin && linkedinMiningPkg.store_visibility === 'debug'));
         if (redditLeadsPkg) html += _renderSocialLeadsCard(redditLeadsPkg, 'reddit', !!(isSkillAdmin && redditLeadsPkg.store_visibility === 'debug'));
         if (xLeadsPkg) html += _renderSocialLeadsCard(xLeadsPkg, 'x', !!(isSkillAdmin && xLeadsPkg.store_visibility === 'debug'));
@@ -3289,6 +3318,7 @@ function loadSkillStore() {
           if (pkg.id === 'cutcli_template_studio') return '';
           if (pkg.id === 'comfly_ecommerce_detail_skill') return '';
           if (pkg.id === 'ip_content_daily_skill') return '';
+          if (pkg.id === 'ip_content_oral_skill' || pkg.id === 'ip_content_moments_skill') return '';
           if (pkg.id === 'linkedin_mining_skill') return '';
           if (pkg.id === 'reddit_leads') return '';
           if (pkg.id === 'x_leads') return '';
@@ -3805,13 +3835,13 @@ function _bindGoalVideoPipelineCardEntry() {
 }
 
 function _bindIpContentStudioCardEntry() {
-  document.querySelectorAll('.ip-content-studio-card, [data-skill-package-id="ip_content_daily_skill"]').forEach(function(card) {
+  document.querySelectorAll('.ip-content-studio-card, [data-skill-package-id="ip_content_daily_skill"], [data-skill-package-id="ip_content_oral_skill"], [data-skill-package-id="ip_content_moments_skill"]').forEach(function(card) {
     if (card.dataset.ipContentEntryBound === '1') return;
     card.dataset.ipContentEntryBound = '1';
     card.style.cursor = 'pointer';
     card.addEventListener('click', function(e) {
       if (e.target.closest('.card-actions')) return;
-      if (typeof window._openIpContentStudioView === 'function') window._openIpContentStudioView();
+      if (typeof window._openIpContentStudioView === 'function') window._openIpContentStudioView(card.getAttribute('data-ip-content-mode') || '');
     });
   });
   document.querySelectorAll('.ip-content-studio-entry-btn').forEach(function(btn) {
@@ -3819,7 +3849,7 @@ function _bindIpContentStudioCardEntry() {
     btn.dataset.ipContentEntryBound = '1';
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
-      if (typeof window._openIpContentStudioView === 'function') window._openIpContentStudioView();
+      if (typeof window._openIpContentStudioView === 'function') window._openIpContentStudioView(btn.getAttribute('data-ip-content-mode') || '');
     });
   });
 }

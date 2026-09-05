@@ -5731,6 +5731,136 @@
             }
             .capture-config-grid { grid-template-columns: 1fr; }
         }
+
+        /* Keep the Douyin workbench navigation fixed at the top at every width.
+           The content owns vertical scrolling; the nav only scrolls horizontally. */
+        :root {
+            --douyin-fixed-nav-height: 76px;
+        }
+        body:not(.embed-mode) {
+            overflow: hidden;
+        }
+        body:not(.embed-mode) .workspace-shell {
+            display: block;
+            height: 100dvh;
+            min-height: 0;
+            overflow: hidden;
+            padding: calc(var(--douyin-fixed-nav-height) + 28px) 14px 14px;
+        }
+        body:not(.embed-mode) .workspace-sidebar {
+            position: fixed;
+            inset: 14px 14px auto;
+            width: auto;
+            height: var(--douyin-fixed-nav-height);
+            min-height: 0;
+            max-height: var(--douyin-fixed-nav-height);
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            overflow: hidden;
+            padding: 12px 18px;
+            z-index: 10;
+        }
+        body:not(.embed-mode) .sidebar-brand {
+            flex: 0 0 auto;
+            padding: 0 18px 0 2px;
+            border-right: 1px solid rgba(255, 255, 255, 0.16);
+            border-bottom: 0;
+        }
+        body:not(.embed-mode) .sidebar-nav {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: block;
+            overflow: hidden;
+        }
+        body:not(.embed-mode) .sidebar-label {
+            display: none;
+        }
+        body:not(.embed-mode) .sidebar-accordion {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 0;
+            width: 100%;
+            overflow-x: auto;
+            overflow-y: hidden;
+            overscroll-behavior-x: contain;
+            padding: 2px 2px 6px;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(224, 232, 255, 0.7) transparent;
+        }
+        body:not(.embed-mode) .sidebar-accordion::-webkit-scrollbar {
+            height: 5px;
+        }
+        body:not(.embed-mode) .sidebar-accordion::-webkit-scrollbar-thumb {
+            border-radius: 999px;
+            background: rgba(224, 232, 255, 0.7);
+        }
+        body:not(.embed-mode) .sidebar-group {
+            display: block;
+            flex: 0 0 auto;
+            min-width: max-content;
+        }
+        body:not(.embed-mode) .sidebar-group-header {
+            width: auto;
+            min-width: max-content;
+            min-height: 48px;
+            height: 48px;
+            padding: 6px 12px;
+            border-radius: 15px;
+            white-space: nowrap;
+        }
+        body:not(.embed-mode) .sidebar-subnav {
+            display: none;
+        }
+        body:not(.embed-mode) .workspace-content {
+            display: block;
+            grid-column: auto;
+            height: 100%;
+            min-height: 0;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            padding: 0 0 20px;
+        }
+        @media (max-width: 680px) {
+            :root {
+                --douyin-fixed-nav-height: 60px;
+            }
+            body:not(.embed-mode) .workspace-shell {
+                padding: calc(var(--douyin-fixed-nav-height) + 18px) 8px 8px;
+            }
+            body:not(.embed-mode) .workspace-sidebar {
+                inset: 8px 8px auto;
+                gap: 10px;
+                padding: 8px 10px;
+            }
+            body:not(.embed-mode) .sidebar-brand {
+                padding-right: 10px;
+            }
+            body:not(.embed-mode) .sidebar-brand-mark {
+                width: 34px;
+                height: 34px;
+                border-radius: 11px;
+                font-size: 13px;
+            }
+            body:not(.embed-mode) .sidebar-brand-copy .brand-name {
+                font-size: 1rem;
+            }
+            body:not(.embed-mode) .sidebar-group-header {
+                min-height: 42px;
+                height: 42px;
+                padding: 4px 8px;
+                border-radius: 12px;
+            }
+            body:not(.embed-mode) .sidebar-group-icon {
+                width: 30px;
+                height: 30px;
+                border-radius: 10px;
+            }
+            body:not(.embed-mode) .sidebar-group-title {
+                font-size: 13px;
+            }
+        }
     </style>
     <script src="/static/douyin-origin/lobster-bridge.js?v=20260826-auto-request-recovery-v1"></script>
 </head>
@@ -7272,6 +7402,31 @@
         let douyinTasks=[],douyinAllCustomerPool=[],douyinPreciseCustomerPool=[],douyinSearchResultData=[],douyinSearchSessions=[],activeDouyinSearchSessionId="",collectSelectedSessionId="",douyinSearchCurrentPage=1,searchExplorerTab="videos",searchExplorerSelectedKey="",searchCustomerCurrentPage=1,douyinTaskCurrentPage=1,douyinTaskStatusFilter="all",douyinIsRunning=false,douyinVideoCommentRunning=false,douyinVideoCommentState={},douyinFollowCommentRunning=false,douyinFollowCommentState={},douyinInteractionRunning=false,douyinInteractionState={},douyinInteractionUsers=[],douyinGroupMemberRunning=false,douyinGroupMemberState={},douyinGroupMemberResults=[],douyinStrangerMessageRunning=false,douyinStrangerMessageState={},douyinStrangerMessageResults=[],douyinStrangerMessageMonitorState={},douyinStrangerMessageMonitorStates={},douyinInboxRunning=false,douyinInboxState={},douyinInboxResults=[],douyinInboxMonitorState={},douyinInboxMonitorStates={},douyinInboxReplyDrafts={},douyinInboxConversationDetails={},douyinInboxDetailLoadingKey="",douyinInboxDesiredConversationKey="",douyinInboxDetailFetchInFlight=false,douyinInboxDetailFailureUntil={},douyinStrangerLeadAccountId=0,douyinStrangerLeadCurrentPage=1,douyinStrangerLeadReplyStatusFilter="all",douyinInboxAccountFilter="all",douyinInboxSearchKeyword="",douyinInboxOnlyUnread=false,douyinInboxSelectedConversationKey="",douyinInboxDraftMessage="",douyinAccountNurtureRunning=false,douyinAccountNurtureState={},douyinGroupCandidates=[],douyinGroupSelection=new Set(),douyinGroupMemberSelection=new Set(),douyinGroupCurrentPage=1,douyinGroupRegionFilter="all",douyinAccounts=[],activeDouyinAccountId=null,savedDouyinIntentPrompt="",savedDouyinIntentStrategy="prompt",searchTaskRefilterState={taskId:0,title:""},taskUserModalTaskId=null,taskUserDraftRows=[],taskUserRegionFilter="all",taskUserTimeFilterDays="all",allCustomerCurrentPage=1,allCustomerRegionFilter="all",allCustomerTimeFilterDays="all",allCustomerUsernameFilter="",allCustomerSourceFilter="",allCustomerSourceNavFilter="",allCustomerSelectedSourceKey="all",allCustomerSelectionKeys=new Set(),douyinSchedulerPlans=[],douyinSchedulerRuntimeState={},douyinSchedulerEditingId="",douyinSchedulerFormTouched=false,douyinSchedulerFormSyncing=false,intentCurrentPage=1,intentRegionFilter="all",intentTimeFilterDays="all",intentUsernameFilter="",intentSourceFilter="",intentSourceNavFilter="",intentSelectedSourceKey="all",followCurrentPage=1,followSelectedKeywordKey="all",interactionCurrentPage=1,interactionRegionFilter="all",interactionTimeFilterDays="all",interactionFollowStatusFilter="all",interactionMessageStatusFilter="all",douyinMonitorTargets=[],douyinMonitorCurrentTargetId=0,douyinMonitorAllCustomers=[],douyinMonitorPreciseCustomers=[],douyinMonitorExplorerTab="videos",douyinMonitorCustomerTab="all",douyinMonitorCurrentPage=1,douyinMonitorRegionFilter="all",douyinMonitorTimeFilterDays="all",douyinMonitorUsernameFilter="",douyinMonitorSourceFilter="",douyinMonitorSelectedSourceKey="all",douyinMonitorRuntimeState={},douyinMonitorSelectionDrafts=new Map(),douyinMonitorSelectionSaveTimers=new Map(),lastDouyinLogId=0,douyinLastLogPollAt=0,douyinIsActivated=true,overviewMapChart=null,overviewHotspotRows=[],searchCaptureSubmitting=false,searchCaptureRegionMenuOpen=false,douyinUiScrollState={},douyinCurrentWorkspaceTarget="overview",douyinWorkspacePollInFlight=false,douyinCustomerPoolsLoaded=false,douyinCustomerPoolsDirty=true,douyinCustomerPoolsRequestInFlight=null,douyinTaskDigest="",douyinSearchTaskSyncInFlight=null,douyinStartTasksInFlight=false,douyinLastTaskRefreshAt=0,douyinLastOverviewStatsRefreshAt=0,douyinLastFollowCommentStatusAt=0,douyinLastInteractionStatusAt=0,douyinStatsTotalTasks=0,douyinStatsCompletedTasks=0,douyinStatsHighIntentUsers=0;
         let douyinMentionCommentRunning=false,douyinMentionCommentState={},douyinMentionAccountId=0,douyinMentionSelfVideos=[],douyinMentionSelfProfile={},douyinMentionFetchedAt="",douyinMentionSelectedVideoUrl="",douyinMentionCustomerCurrentPage=1,douyinMentionRegionFilter="all",douyinMentionTimeFilterDays="all",douyinMentionUsernameFilter="",douyinMentionSourceFilter="",douyinMentionSelectionKeys=new Set(),douyinMentionSelectionTouched=false;
         let overviewMapResizeObserver=null,overviewMapResizeFrame=0,overviewMapResponsiveBound=false;
+        let allCustomerStatusFilter="all",intentStatusFilter="all";
+        const customerPoolStatusOptions=[{value:"all",label:"状态：全部"},{value:"not_added",label:"待加入精准"},{value:"monitor",label:"监控沉淀"},{value:"pending",label:"未触达"},{value:"processing",label:"触达中"},{value:"partial",label:"部分完成"},{value:"completed",label:"已完成"},{value:"failed",label:"触达失败"},{value:"unavailable",label:"不可用"}];
+        const preciseTouchActionDefinitions=[{key:"follow_comment",label:"关注评论"},{key:"mention_comment",label:"评论@"},{key:"direct_message",label:"主动私信"}];
+        function getPreciseTouchActionState(user={},actionKey=""){
+            const key=normalize(actionKey).toLowerCase(),states=user&&user.precise_touch_statuses&&typeof user.precise_touch_statuses==="object"?user.precise_touch_statuses:{},stored=states[key];
+            if(stored&&typeof stored==="object")return{...stored,status:normalize(stored.status||"pending").toLowerCase(),known:true};
+            const legacyPrefix=key==="direct_message"?"interaction":key,legacyStatus=normalize(user[`${legacyPrefix}_status`]||"").toLowerCase(),legacyDetail=normalize(user[`${legacyPrefix}_error`]||user[`${legacyPrefix}_result`]||user[`${legacyPrefix}_message`]||user[`${legacyPrefix}_updated_at`]||user[`${legacyPrefix}_started_at`]||user[`${legacyPrefix}_finished_at`]||"");
+            if(legacyStatus&&(legacyStatus!=="pending"||legacyDetail))return{status:legacyStatus,error:user[`${legacyPrefix}_error`]||"",result:user[`${legacyPrefix}_result`]||user[`${legacyPrefix}_message`]||"",known:true};
+            return{status:"pending",error:"",result:"",known:false};
+        }
+        function getPreciseTouchOverallStatusKey(user={}){
+            if(user.precise_touch_unavailable)return"unavailable";
+            const entries=preciseTouchActionDefinitions.map(definition=>getPreciseTouchActionState(user,definition.key)),knownEntries=entries.filter(entry=>entry.known);
+            if(!knownEntries.length)return"pending";
+            if(knownEntries.some(entry=>["queued","processing"].includes(entry.status)))return"processing";
+            const failed=knownEntries.some(entry=>["failed","unavailable"].includes(entry.status)),completed=knownEntries.filter(entry=>["completed","sent"].includes(entry.status)).length;
+            if(failed&&completed)return"partial";
+            if(failed)return"failed";
+            if(completed===knownEntries.length)return"completed";
+            return"partial";
+        }
+        function getCustomerPoolStatusKey(user={}){if(!user.is_high_intent)return isMonitorCustomerRow(user)?"monitor":"not_added";return getPreciseTouchOverallStatusKey(user)}
+        function matchesCustomerPoolStatusFilter(user,filterValue){return filterValue==="all"||getCustomerPoolStatusKey(user)===filterValue}
+        function renderPreciseTouchStatusCell(user={}){const meta={pending:{label:"未触达",className:"pending"},processing:{label:"触达中",className:"processing"},partial:{label:"部分完成",className:"processing"},completed:{label:"已完成",className:"completed"},failed:{label:"触达失败",className:"failed"},unavailable:{label:"不可用",className:"failed"}}[getPreciseTouchOverallStatusKey(user)]||{label:"未触达",className:"pending"};return`<span class="badge status-${meta.className}">整体：${meta.label}</span>`}
+        function renderCustomerPoolStatusFilter(selectId,currentValue,includeMembership=false){const select=document.getElementById(selectId);if(!select)return;const options=includeMembership?customerPoolStatusOptions:customerPoolStatusOptions.filter(option=>!["not_added","monitor"].includes(option.value)),value=options.some(option=>option.value===currentValue)?currentValue:"all";select.innerHTML=options.map(option=>`<option value="${option.value}" ${option.value===value?"selected":""}>${option.label}</option>`).join("");select.value=value}
         let confirmModalState={title:"确认操作",message:"确认继续吗？",confirmText:"确认",confirmClass:"btn-danger",submitting:false,onConfirm:null};
         let douyinTaskSelectionIds=new Set(),followSelectionKeys=new Set(),followSelectionTouched=false,interactionSelectionKeys=new Set(),interactionSelectionTouched=false,douyinStrangerLeadSelectionKeys=new Set(),douyinStrangerLeadSelectionTouched=false,douyinSearchPageSize=20,searchCustomerPageSize=20,douyinSearchSessionPersistVersion=0,douyinSearchSessionServerSavedAt=0,douyinSearchSessionDirty=false,searchCustomerSelectionDrafts=new Map(),searchPreciseSelectionDrafts=new Map(),douyinSearchSessionSaveTimer=0,douyinInteractionPresetState={activeIndex:0,presets:[]},douyinFollowCommentStateDigest="",douyinInteractionStateDigest="",douyinInteractionUsersDigest="",douyinPreciseCustomerPoolDigest="",douyinFlattenedTaskUsersCache=[],douyinFlattenedTaskUsersCacheKey="",douyinSearchSessionsSyncToken="";const maxDouyinSearchSessionCount=12,douyinSearchSessionStorageKey="douyin-search-sessions-v1",defaultDouyinInteractionMessage="你好，我看到你对 OpenClaw 感兴趣，方便交流一下你现在最想解决的问题吗？",douyinInteractionPresetCount=10,douyinInteractionPresetStorageKey="douyin-interaction-message-presets-v1",douyinActivationPlatform="douyin",searchCaptureRegionOptions=["全国","北京","上海","天津","重庆","河北","山西","辽宁","吉林","黑龙江","江苏","浙江","安徽","福建","江西","山东","河南","湖北","湖南","广东","海南","四川","贵州","云南","陕西","甘肃","青海","台湾","内蒙古","广西","西藏","宁夏","新疆","香港","澳门","美国","英国","日本","韩国","新加坡","马来西亚","加拿大","澳大利亚","海外","未知"];
         const esc=v=>String(v??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;"),cut=(v,m=30)=>{const t=String(v??"");return t.length>m?`${t.slice(0,m)}...`:t},emptyBox=m=>`<div class="empty">${esc(m)}</div>`;
@@ -9043,6 +9198,79 @@
                 if (showLog && typeof addLog === "function") addLog("已保存 AI 改写基准文案。", "success");
             };
             document.addEventListener("DOMContentLoaded", () => window.loadDouyinInteractionRewrite());
+        })();
+    </script>
+    <script>
+        (() => {
+            function ensureCustomerPoolStatusFilters() {
+                const specs = [
+                    { after: "all-customers-time-filter", id: "all-customers-status-filter", handler: "changeAllCustomersStatusFilter" },
+                    { after: "intent-time-filter", id: "intent-status-filter", handler: "changeIntentStatusFilter" },
+                ];
+                specs.forEach((spec) => {
+                    const anchor = document.getElementById(spec.after);
+                    if (!anchor || document.getElementById(spec.id)) return;
+                    const select = document.createElement("select");
+                    select.id = spec.id;
+                    select.style.width = "auto";
+                    select.style.minWidth = "150px";
+                    select.addEventListener("change", () => window[spec.handler]?.());
+                    anchor.insertAdjacentElement("afterend", select);
+                });
+            }
+
+            const baseGetAllCustomerBaseFilteredUsers = getAllCustomerBaseFilteredUsers;
+            getAllCustomerBaseFilteredUsers = function(users = collectAllCommentUsers()) {
+                return baseGetAllCustomerBaseFilteredUsers(users).filter((user) => matchesCustomerPoolStatusFilter(user, allCustomerStatusFilter));
+            };
+            const baseGetIntentBaseFilteredUsers = getIntentBaseFilteredUsers;
+            getIntentBaseFilteredUsers = function(users = collectHighIntentUsers()) {
+                return baseGetIntentBaseFilteredUsers(users).filter((user) => matchesCustomerPoolStatusFilter(user, intentStatusFilter));
+            };
+
+            const baseRenderAllCustomersPreview = renderAllCustomersPreview;
+            renderAllCustomersPreview = function(...args) {
+                ensureCustomerPoolStatusFilters();
+                renderCustomerPoolStatusFilter("all-customers-status-filter", allCustomerStatusFilter, true);
+                const result = baseRenderAllCustomersPreview(...args);
+                const users = getFilteredAllCustomers(collectAllCommentUsers());
+                const size = parseInt(document.getElementById("all-customers-page-size")?.value, 10) || 10;
+                const start = (allCustomerCurrentPage - 1) * size;
+                [...document.querySelectorAll("#all-customers-tbody tr")].forEach((row, index) => {
+                    const user = users[start + index];
+                    const cell = row.cells?.[5];
+                    if (!user || !cell || !user.is_high_intent) return;
+                    cell.innerHTML = `<div class="table-status-stack"><span class="badge status-completed">已加入</span>${renderPreciseTouchStatusCell(user)}</div>`;
+                });
+                return result;
+            };
+            const baseRenderIntentPreview = renderIntentPreview;
+            renderIntentPreview = function(...args) {
+                ensureCustomerPoolStatusFilters();
+                renderCustomerPoolStatusFilter("intent-status-filter", intentStatusFilter);
+                const result = baseRenderIntentPreview(...args);
+                const users = getFilteredIntentUsers(collectHighIntentUsers());
+                const size = parseInt(document.getElementById("intent-page-size")?.value, 10) || 10;
+                const start = (intentCurrentPage - 1) * size;
+                [...document.querySelectorAll("#intent-tbody tr")].forEach((row, index) => {
+                    const user = users[start + index];
+                    const cell = row.cells?.[4];
+                    if (!user || !cell) return;
+                    cell.innerHTML = renderPreciseTouchStatusCell(user);
+                });
+                return result;
+            };
+
+            window.changeAllCustomersStatusFilter = function() {
+                allCustomerStatusFilter = document.getElementById("all-customers-status-filter")?.value || "all";
+                allCustomerCurrentPage = 1;
+                renderAllCustomersPreview();
+            };
+            window.changeIntentStatusFilter = function() {
+                intentStatusFilter = document.getElementById("intent-status-filter")?.value || "all";
+                intentCurrentPage = 1;
+                renderIntentPreview();
+            };
         })();
     </script>
 </body>

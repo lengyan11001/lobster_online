@@ -730,7 +730,6 @@ window.LobsterGeneratedEn = Object.freeze({
   "大片": "Blockbuster",
   "大小": "size",
   "大小：不超过 10MB": "Size: no more than 10MB",
-  "大小：不超过 20MB": "Size: no more than 20MB",
   "大小写不敏感）；支持后端返回的以 / 开头的相对路径": "Case-insensitive); supports relative paths starting with / returned by the backend",
   "大小约": "Size approx.",
   "代理": "agent",

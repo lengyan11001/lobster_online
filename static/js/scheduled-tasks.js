@@ -20,6 +20,14 @@
       label: 'IP日更文案',
       description: '服务器定时同步关键词和同行数据，生成行业口播、专业IP口播、朋友圈文案。'
     },
+    'ip_content_oral': {
+      label: 'IP口播文案',
+      description: '生成行业热门口播和专业热门IP口播。'
+    },
+    'ip_content_moments': {
+      label: '朋友圈图文',
+      description: '生成朋友圈图文内容。'
+    },
     'lead_collection_templates': {
       label: '线索采集模板',
       description: '按选中的 Reddit、X、TikTok、LinkedIn 模板定时采集公开信息并汇总结果。'
@@ -349,6 +357,15 @@
     }[String(task || '')] || task || '文案';
   }
 
+  function ipContentCapabilityLabel(payload) {
+    var tasks = payload && Array.isArray(payload.tasks)
+      ? payload.tasks.map(function (item) { return String(item || '').trim(); }).filter(Boolean)
+      : [];
+    if (tasks.length === 1 && tasks[0] === 'moments_candidate') return '朋友圈图文';
+    if (tasks.length && tasks.every(function (item) { return item === 'industry_hot_oral' || item === 'professional_ip_oral'; })) return 'IP口播文案';
+    return 'IP日更文案';
+  }
+
   function ipContentGroupHtml(payload) {
     if (!payload || !payload.ip_content_daily) return '';
     var groups = Array.isArray(payload.groups) ? payload.groups : [];
@@ -357,8 +374,10 @@
         return { task: key, records: payload.records_by_task[key] || [] };
       });
     }
-    if (!groups.length) return '<p class="meta">暂无 IP 日更文案结果。</p>';
-    var openStudioBtn = '<button type="button" class="btn btn-primary btn-sm scheduled-open-ip-studio-btn">打开 IP日更工作台出图</button>';
+    var capabilityLabel = ipContentCapabilityLabel(payload);
+    if (!groups.length) return '<p class="meta">暂无 ' + html(capabilityLabel) + ' 结果。</p>';
+    var studioMode = capabilityLabel === '朋友圈图文' ? 'moments' : (capabilityLabel === 'IP口播文案' ? 'oral' : '');
+    var openStudioBtn = '<button type="button" class="btn btn-primary btn-sm scheduled-open-ip-studio-btn" data-ip-content-mode="' + html(studioMode) + '">打开 ' + html(capabilityLabel) + ' 工作台</button>';
     return '<div class="scheduled-ip-result">'
       + '<div style="display:flex;justify-content:flex-end;margin-bottom:0.5rem;">' + openStudioBtn + '</div>'
       + groups.map(function (group) {
@@ -463,7 +482,7 @@
       : '<p class="meta">无错误或文本结果。</p>';
     var ipHtml = ipContentGroupHtml(payload);
     body.innerHTML = metaHtml
-      + (ipHtml ? detailSection('IP日更文案', ipHtml) : '')
+      + (ipHtml ? detailSection(ipContentCapabilityLabel(payload), ipHtml) : '')
       + detailSection('生成素材', materialHtml)
       + detailSection('提示词', promptHtml)
       + detailSection('结果 / 错误', resultHtml)
@@ -471,10 +490,14 @@
       + detailSection('结果数据', '<pre class="scheduled-run-detail-pre">' + html(formatJson(payload || {})) + '</pre>');
   }
 
-  function openIpContentStudio() {
+  function openIpContentStudio(mode) {
     closeRunDetailModal();
     if (typeof window.openIpContentStudio === 'function') {
-      window.openIpContentStudio();
+      window.openIpContentStudio(mode || '');
+      return;
+    }
+    if (typeof window._openIpContentStudioView === 'function') {
+      window._openIpContentStudioView(mode || '');
       return;
     }
     var target = document.querySelector('[data-skill-id="ip-content-studio"], [data-skill="ip-content-studio"], [data-view="ip-content-studio"]');
@@ -553,7 +576,12 @@
 
   function rowCapabilityId(row) {
     var payload = row && row.payload && typeof row.payload === 'object' ? row.payload : {};
-    if (row && row.task_kind === 'ip_content_daily') return 'ip_content_daily';
+    if (row && row.task_kind === 'ip_content_daily') {
+      var tasks = Array.isArray(payload.tasks) ? payload.tasks.map(function (item) { return String(item || '').trim(); }).filter(Boolean) : [];
+      if (tasks.length === 1 && tasks[0] === 'moments_candidate') return 'ip_content_moments';
+      if (tasks.length && tasks.every(function (item) { return item === 'industry_hot_oral' || item === 'professional_ip_oral'; })) return 'ip_content_oral';
+      return 'ip_content_daily';
+    }
     return String(payload.capability_id || '');
   }
 
@@ -778,11 +806,14 @@
       + '</label>';
   }
 
-  function ipDailyTaskOptionsHtml() {
+  function ipDailyTaskOptionsHtml(capabilityId) {
+    var allowed = capabilityId === 'ip_content_oral'
+      ? ['industry_hot_oral', 'professional_ip_oral']
+      : (capabilityId === 'ip_content_moments' ? ['moments_candidate'] : IP_DAILY_TASK_OPTIONS.map(function (item) { return item.value; }));
     return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0.45rem;">'
       + IP_DAILY_TASK_OPTIONS.map(function (item) {
         return '<label style="display:flex;align-items:center;gap:0.45rem;min-height:2.35rem;padding:0 0.55rem;border:1px solid var(--border);border-radius:8px;background:#fff;">'
-          + '<input type="checkbox" data-ip-daily-task="' + html(item.value) + '" checked style="width:auto;min-height:auto;">'
+          + '<input type="checkbox" data-ip-daily-task="' + html(item.value) + '"' + (allowed.indexOf(item.value) >= 0 ? ' checked' : '') + (capabilityId && capabilityId !== 'ip_content_daily' ? ' disabled' : '') + ' style="width:auto;min-height:auto;">'
           + '<span>' + html(item.label) + '</span>'
           + '</label>';
       }).join('')
@@ -979,10 +1010,13 @@
       });
   }
 
-  function renderIpContentDailyFields(host) {
+  function renderIpContentDailyFields(host, capabilityId) {
+    capabilityId = capabilityId || 'ip_content_daily';
+    var studioMode = capabilityId === 'ip_content_moments' ? 'moments' : (capabilityId === 'ip_content_oral' ? 'oral' : '');
+    var studioLabel = capabilityId === 'ip_content_moments' ? '打开朋友圈图文配置' : (capabilityId === 'ip_content_oral' ? '打开 IP口播配置' : '打开 IP日更配置');
     host.innerHTML = compactGrid(
       fieldHtml('关键词和同行模板', selectHtml('scheduledTaskIpTemplate', optionHtml('', '模板加载中...')))
-      + fieldHtml('生成内容', ipDailyTaskOptionsHtml(), true)
+      + fieldHtml('生成内容', ipDailyTaskOptionsHtml(capabilityId), true)
       + fieldHtml('执行前同步', checkboxHtml('scheduledTaskIpSyncBefore', '每次执行前同步关键词和同行新数据', true))
       + fieldHtml(
         '补充要求（可选）',
@@ -990,7 +1024,7 @@
       )
       + fieldHtml(
         '模板维护',
-        '<button type="button" class="btn btn-ghost btn-sm scheduled-open-ip-studio-btn">打开 IP日更配置</button>',
+        '<button type="button" class="btn btn-ghost btn-sm scheduled-open-ip-studio-btn" data-ip-content-mode="' + html(studioMode) + '">' + html(studioLabel) + '</button>',
         true
       )
     );
@@ -1290,7 +1324,7 @@
     var host = document.getElementById('scheduledTaskParamFields');
     if (!host) return;
     var capabilityId = val('scheduledTaskCapability') || 'goal.video.pipeline';
-    if (capabilityId === 'ip_content_daily') renderIpContentDailyFields(host);
+    if (capabilityId === 'ip_content_daily' || capabilityId === 'ip_content_oral' || capabilityId === 'ip_content_moments') renderIpContentDailyFields(host, capabilityId);
     else if (capabilityId === 'lead_collection_templates') renderLeadCollectionTemplateFields(host);
     else if (capabilityId === 'hifly.video.create_by_tts') renderHiflyFields(host);
     else if (capabilityId === 'goal.image.pipeline') renderImageFields(host);
@@ -1304,13 +1338,17 @@
     sel.innerHTML = [
       'goal.image.pipeline',
       'lead_collection_templates',
-      'ip_content_daily',
+      'ip_content_oral',
+      'ip_content_moments',
       'goal.video.pipeline',
       'hifly.video.create_by_tts'
     ].map(function (id) {
       return optionHtml(id, (CAPABILITIES[id] || {}).label || id);
     }).join('');
-    sel.value = CAPABILITIES[current] ? current : 'goal.image.pipeline';
+    if (current === 'ip_content_daily') current = 'ip_content_oral';
+    sel.value = ['goal.image.pipeline', 'lead_collection_templates', 'ip_content_oral', 'ip_content_moments', 'goal.video.pipeline', 'hifly.video.create_by_tts'].indexOf(current) >= 0
+      ? current
+      : 'goal.image.pipeline';
     toggleCapability();
     return Promise.resolve();
   }
@@ -1343,11 +1381,13 @@
 
   function collectCapabilityPayload() {
     var capabilityId = val('scheduledTaskCapability') || 'goal.video.pipeline';
-    if (capabilityId === 'ip_content_daily') {
+    if (capabilityId === 'ip_content_daily' || capabilityId === 'ip_content_oral' || capabilityId === 'ip_content_moments') {
       var template = selectedIpTemplate();
       var templateId = parseInt(val('scheduledTaskIpTemplate') || '0', 10);
       if (!templateId || isNaN(templateId)) throw new Error('请选择 IP日更服务器模板');
-      var tasks = selectedIpDailyTasks();
+      var tasks = capabilityId === 'ip_content_oral'
+        ? ['industry_hot_oral', 'professional_ip_oral']
+        : (capabilityId === 'ip_content_moments' ? ['moments_candidate'] : selectedIpDailyTasks());
       if (!tasks.length) throw new Error('请选择至少一种生成内容');
       var extra = val('scheduledTaskIpRequirement');
       var requirements = {};
@@ -1447,7 +1487,7 @@
     var title = val(prefix + 'Title') || (capabilityText(capabilityId) || '能力定时任务');
     var capPayload = collectCapabilityPayload();
     if (scheduleType === 'daily_times' && !dailyTimes.length) throw new Error('请填写每天执行时间，例如 9,12,18 或 09:00,12:00,18:00');
-    if (capabilityId === 'ip_content_daily') {
+    if (capabilityId === 'ip_content_daily' || capabilityId === 'ip_content_oral' || capabilityId === 'ip_content_moments') {
       kind = 'ip_content_daily';
       installationIds = [];
     }
@@ -1465,13 +1505,18 @@
         return row && String(row.id) === String(publishAccountId);
       }) || null;
     }
+    var contentText = capabilityId === 'ip_content_oral'
+      ? '定时生成 IP口播文案'
+      : (capabilityId === 'ip_content_moments'
+        ? '定时生成朋友圈图文'
+        : (capabilityId === 'ip_content_daily'
+          ? '定时生成 IP日更文案'
+          : (capabilityId === 'lead_collection_templates' ? '定时执行线索采集模板' : '定时调用能力 ' + capabilityId)));
     var body = {
       title: title,
       task_kind: kind,
-      content: capabilityId === 'ip_content_daily'
-        ? '定时生成 IP日更文案'
-        : (capabilityId === 'lead_collection_templates' ? '定时执行线索采集模板' : '定时调用能力 ' + capabilityId),
-      payload: capabilityId === 'ip_content_daily' || capabilityId === 'lead_collection_templates'
+      content: contentText,
+      payload: (capabilityId === 'ip_content_daily' || capabilityId === 'ip_content_oral' || capabilityId === 'ip_content_moments' || capabilityId === 'lead_collection_templates')
         ? capPayload
         : { capability_id: capabilityId, payload: capPayload },
       schedule_type: scheduleType,
@@ -1821,7 +1866,7 @@
     document.addEventListener('click', function (evt) {
       var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-open-ip-studio-btn') : null;
       if (!btn) return;
-      openIpContentStudio();
+      openIpContentStudio(btn.getAttribute('data-ip-content-mode') || '');
     });
     document.addEventListener('click', function (evt) {
       var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-refresh-lead-templates-btn') : null;

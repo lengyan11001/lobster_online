@@ -301,6 +301,118 @@
     }
   }
 
+  var DOUYIN_SIDEBAR_SCROLL_KEY = 'douyin-sidebar-scroll-left-v1';
+  var DOUYIN_SIDEBAR_TARGETS = {
+    '/douyin': 'overview',
+    '/douyin/search': 'search',
+    '/douyin/monitor': 'monitor',
+    '/douyin/self-comments': 'self-comments',
+    '/douyin/collect': 'collect',
+    '/douyin/mention': 'mention',
+    '/douyin/follow': 'follow',
+    '/douyin/customers': 'all-customers',
+    '/douyin/intent': 'intent',
+    '/douyin/interaction': 'interaction',
+    '/douyin/stranger-leads': 'stranger-leads',
+    '/douyin/inbox': 'inbox',
+    '/douyin/scheduler': 'scheduler',
+    '/douyin/nurture': 'nurture',
+    '/douyin/groups': 'groups',
+    '/douyin/logs': 'logs',
+    '/douyin/guide': 'guide',
+    '/douyin/config': 'config'
+  };
+  var DOUYIN_SIDEBAR_FILE_TARGETS = {
+    'douyin.html': 'overview',
+    'douyin-search.html': 'search',
+    'douyin-monitor.html': 'monitor',
+    'douyin-self-comments.html': 'self-comments',
+    'douyin-collect.html': 'collect',
+    'douyin-mention.html': 'mention',
+    'douyin-follow.html': 'follow',
+    'douyin-customer-pools.html': 'all-customers',
+    'douyin-interaction.html': 'interaction',
+    'douyin-stranger-leads.html': 'stranger-leads',
+    'douyin-inbox.html': 'inbox',
+    'douyin-scheduler.html': 'scheduler',
+    'douyin-nurture.html': 'nurture',
+    'douyin-groups.html': 'groups',
+    'douyin-logs.html': 'logs',
+    'douyin-guide.html': 'guide',
+    'douyin-config.html': 'config'
+  };
+
+  function getDouyinSidebarTargetFromLocation() {
+    var pathname = String(window.location.pathname || '').replace(/\/+$/, '') || '/douyin';
+    var hash = String(window.location.hash || '').replace(/^#/, '').toLowerCase();
+    var target = DOUYIN_SIDEBAR_TARGETS[pathname] || '';
+    if (!target) {
+      var filename = pathname.split('/').pop() || '';
+      target = DOUYIN_SIDEBAR_FILE_TARGETS[filename] || '';
+      if (filename === 'douyin.html') {
+        try {
+          var requested = new URLSearchParams(window.location.search || '').get('target') || '';
+          if (requested) target = requested;
+        } catch (err) {}
+      }
+    }
+    if (hash === 'precise' || hash === 'intent') target = 'intent';
+    if (hash === 'all' || hash === 'customers' || hash === 'all-customers') target = 'all-customers';
+    return target;
+  }
+
+  function readDouyinSidebarScrollLeft() {
+    try { return Math.max(0, Number(window.sessionStorage.getItem(DOUYIN_SIDEBAR_SCROLL_KEY) || 0) || 0); } catch (err) { return 0; }
+  }
+
+  function saveDouyinSidebarScrollLeft(nav) {
+    if (!nav) return;
+    try { window.sessionStorage.setItem(DOUYIN_SIDEBAR_SCROLL_KEY, String(Math.max(0, nav.scrollLeft || 0))); } catch (err) {}
+  }
+
+  function syncDouyinSidebarState() {
+    var nav = document.querySelector('.workspace-sidebar .sidebar-accordion');
+    if (!nav) return;
+    var target = getDouyinSidebarTargetFromLocation();
+    if (target) {
+      var controls = nav.querySelectorAll('.sidebar-group-header,.sidebar-subbtn,.sidebar-utility-btn');
+      for (var i = 0; i < controls.length; i += 1) controls[i].classList.remove('active');
+      var groups = nav.querySelectorAll('.sidebar-group');
+      for (var j = 0; j < groups.length; j += 1) groups[j].classList.remove('is-active');
+      var active = nav.querySelector('[data-sidebar="' + target + '"]');
+      if (active) {
+        active.classList.add('active');
+        var group = active.closest('.sidebar-group');
+        if (group) group.classList.add('is-active');
+      }
+    }
+    var savedScrollLeft = readDouyinSidebarScrollLeft();
+    nav.scrollLeft = savedScrollLeft;
+    window.requestAnimationFrame(function() {
+      nav.scrollLeft = savedScrollLeft;
+      var active = nav.querySelector('.sidebar-group-header.active,.sidebar-subbtn.active,.sidebar-utility-btn.active');
+      if (!active) return;
+      var navRect = nav.getBoundingClientRect();
+      var activeRect = active.getBoundingClientRect();
+      if (activeRect.left < navRect.left || activeRect.right > navRect.right) {
+        active.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
+      }
+    });
+  }
+
+  document.addEventListener('scroll', function(event) {
+    var nav = event.target && event.target.closest ? event.target.closest('.workspace-sidebar .sidebar-accordion') : null;
+    if (nav) saveDouyinSidebarScrollLeft(nav);
+  }, true);
+
+  document.addEventListener('click', function(event) {
+    var link = event.target && event.target.closest ? event.target.closest('a[href^="/static/douyin-origin/"]') : null;
+    if (link) saveDouyinSidebarScrollLeft(link.closest('.sidebar-accordion'));
+  }, true);
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', syncDouyinSidebarState);
+  else syncDouyinSidebarState();
+
   document.addEventListener('click', function(event) {
     var link = event.target && event.target.closest ? event.target.closest('a[href^="/static/douyin-origin/"]') : null;
     if (!link || link.target === '_blank') return;

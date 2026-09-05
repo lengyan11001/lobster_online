@@ -1,5 +1,6 @@
 (function() {
   var state = {
+    mode: '',
     tab: 'records',
     docs: [],
     selectedDocs: {},
@@ -236,6 +237,7 @@
   }
 
   function switchTab(tab) {
+    if (state.mode === 'oral' && tab === 'moment-images') tab = 'records';
     state.tab = tab || 'records';
     document.querySelectorAll('#content-ip-content-studio [data-ip-tab]').forEach(function(btn) {
       btn.classList.toggle('is-active', btn.getAttribute('data-ip-tab') === state.tab);
@@ -279,6 +281,46 @@
       }
     } catch (e) {}
     return String(value);
+  }
+
+  function applyStudioMode(mode) {
+    state.mode = mode === 'moments' ? 'moments' : (mode === 'oral' ? 'oral' : '');
+    var root = $('content-ip-content-studio');
+    if (!root) return;
+    root.setAttribute('data-ip-content-mode', state.mode || 'all');
+    var title = root.querySelector('.ip-content-title');
+    var kicker = root.querySelector('.ip-content-kicker');
+    var subtitle = root.querySelector('.ip-content-subtitle');
+    if (state.mode === 'oral') {
+      if (kicker) kicker.textContent = 'IP口播文案';
+      if (title) title.textContent = '行业热门口播与专业 IP 口播';
+      if (subtitle) subtitle.textContent = '关键词榜单、同行作品、记忆文件与口播文案生成记录';
+    } else if (state.mode === 'moments') {
+      if (kicker) kicker.textContent = '朋友圈图文';
+      if (title) title.textContent = '朋友圈图文内容工作台';
+      if (subtitle) subtitle.textContent = '关键词榜单、同行作品、记忆文件与朋友圈图文生成记录';
+    } else {
+      if (kicker) kicker.textContent = 'IP日更文案';
+      if (title) title.textContent = '热点、同行与朋友圈内容工作台';
+      if (subtitle) subtitle.textContent = '关键词榜单、同行作品、记忆文件、文案生成记录';
+    }
+    var industryBtn = $('ipGenerateIndustryBtn');
+    var ipBtn = $('ipGenerateIpBtn');
+    var momentsBtn = $('ipGenerateMomentsBtn');
+    if (industryBtn) industryBtn.style.display = state.mode === 'moments' ? 'none' : '';
+    if (ipBtn) ipBtn.style.display = state.mode === 'moments' ? 'none' : '';
+    if (momentsBtn) momentsBtn.style.display = state.mode === 'oral' ? 'none' : '';
+    root.querySelectorAll('[data-ip-record-filter]').forEach(function(btn) {
+      var filter = btn.getAttribute('data-ip-record-filter') || '';
+      btn.style.display = (state.mode === 'oral' && filter === 'moments_candidate') || (state.mode === 'moments' && (filter === 'industry_hot_oral' || filter === 'professional_ip_oral')) ? 'none' : '';
+    });
+    root.querySelectorAll('[data-ip-tab="moment-images"]').forEach(function(btn) {
+      btn.style.display = state.mode === 'oral' ? 'none' : '';
+    });
+    var bulk = $('ipRecordBulkToolbar');
+    if (bulk) bulk.hidden = state.mode === 'moments';
+    if (state.mode === 'oral' && state.tab === 'moment-images') state.tab = 'records';
+    switchTab(state.tab || 'records');
   }
 
   function fmtCount(value) {
@@ -2915,7 +2957,8 @@
     });
   }
 
-  window.initIpContentStudioView = function() {
+  window.initIpContentStudioView = function(mode) {
+    applyStudioMode(mode || window.__ipContentStudioMode || '');
     bind();
     restoreGenerationSettings();
     restoreMomentBatchJobs();

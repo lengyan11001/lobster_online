@@ -1363,6 +1363,8 @@ function _getChatSuggestionMeta(title) {
     'AI对话': { tone: 'video', icon: '⌕', desc: '回到本机智能对话' },
     '手机对话': { tone: 'ecommerce', icon: '○', desc: '查看手机消息' },
     '每日IP日更': { tone: 'content', icon: '日', desc: '热点、同行、记忆生成文案' },
+    'IP口播文案': { tone: 'content', icon: '口', desc: '行业热门口播、专业 IP 口播' },
+    '朋友圈图文': { tone: 'content', icon: '圈', desc: '生成朋友圈图文内容' },
     '公众号文章': { tone: 'content', icon: '文', desc: '写文、配图、推草稿' },
     '创作图片': { tone: 'content', icon: '▣', desc: '进入图片工作台' },
     '创意分镜头视频': { tone: 'plan', icon: '▶', desc: '进入创意分镜头视频工作台' },
@@ -1384,6 +1386,7 @@ function _clearChatSuggestionActionAttrs(el) {
   el.removeAttribute('data-chat-quick-mode');
   el.removeAttribute('data-chat-open-default');
   el.removeAttribute('data-h5-chat-sync');
+  el.removeAttribute('data-ip-content-mode');
   el.removeAttribute('data-feature-gate');
 }
 
@@ -1892,9 +1895,10 @@ function updateChatModeUi(mode) {
     if (categoryTabs) categoryTabs.classList.remove('is-visible');
     updateWorkspaceStatusUi({ visible: false });
     if (chipIpDaily) {
-      _renderChatSuggestionChip(chipIpDaily, '每日IP日更');
+      _renderChatSuggestionChip(chipIpDaily, 'IP口播文案');
       _setChatSuggestionAction(chipIpDaily, 'data-open-hidden-view', 'ip-content-studio');
-      _setChatSuggestionGate(chipIpDaily, 'ip_content_daily_skill');
+      chipIpDaily.setAttribute('data-ip-content-mode', 'oral');
+      _setChatSuggestionGate(chipIpDaily, 'ip_content_oral_skill');
     }
     if (chipWechatArticle) {
       _renderChatSuggestionChip(chipWechatArticle, '公众号文章');
@@ -4227,6 +4231,8 @@ function bindChatHomeActions() {
       if (!_chatHomeActionAllowed(hiddenViewBtn, hiddenView)) return;
       if (hiddenView === 'wechat-article' && typeof window.openWechatArticlePage === 'function') {
         window.openWechatArticlePage();
+      } else if (hiddenView === 'ip-content-studio' && typeof window._openIpContentStudioView === 'function') {
+        window._openIpContentStudioView(hiddenViewBtn.getAttribute('data-ip-content-mode') || '');
       } else if (hiddenView === 'hifly-digital-human') {
         openHiddenWorkspaceFallback(hiddenView);
       } else if (typeof window._openHiddenWorkspaceView === 'function') {

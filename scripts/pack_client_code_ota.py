@@ -444,6 +444,9 @@ def _env_text_for_pack(path: Path) -> str:
 def _skip_file(rel: str) -> bool:
     r = _norm(rel).lower()
     nr = _norm(rel)
+    # Runtime logs are local diagnostics, never deployable client code.
+    if r.endswith(".log"):
+        return True
     if nr.lower().startswith(_OTA_RETIRED_SKILL_DIRS):
         return True
     if _is_pack_skipped_path(rel):
@@ -1023,6 +1026,14 @@ def main() -> int:
         help="打包完整代码路径；仍默认加密，适用于明确的完整代码发布",
     )
     ap.add_argument(
+        "--include-skill",
+        dest="include_skills",
+        action="append",
+        default=[],
+        metavar="SKILL",
+        help="仅随 OTA 更新指定 skills/<SKILL> 目录；需与 --full-code 一起使用，可重复指定",
+    )
+    ap.add_argument(
         "--overseas",
         action="store_true",
         help="Pack overseas edition OTA; default false keeps LOBSTER_IS_OVERSEAS_USER=false in bundled .env",
@@ -1043,6 +1054,21 @@ def main() -> int:
         help="Optional semantic version to write for this release (for example 2.0.0); build still increments",
     )
     args = ap.parse_args()
+    include_skills: list[str] = []
+    for raw_skill in args.include_skills or []:
+        value = str(raw_skill or "").strip().replace("\\", "/").strip("/")
+        if value.lower().startswith("skills/"):
+            value = value[7:].strip("/")
+        parts = value.split("/") if value else []
+        if not parts or any(part in {"", ".", ".."} for part in parts) or value.startswith("/"):
+            print(f"[ERR] invalid --include-skill: {raw_skill}")
+            return 1
+        normalized = "/".join(parts)
+        if normalized not in include_skills:
+            include_skills.append(normalized)
+    if include_skills and args.website_only:
+        print("[ERR] --include-skill must be used with --full-code")
+        return 1
     if args.with_nodejs_deps:
         print("[INFO] --with-nodejs-deps is retired; OpenClaw/npm dependencies will not be packaged")
         args.with_nodejs_deps = False
@@ -1069,6 +1095,11 @@ def main() -> int:
         print(f"[ERR] invalid --brand: {_PACK_BRAND}")
         return 1
     root: Path = args.root.resolve()
+    for skill in include_skills:
+        skill_root = root / "skills" / skill.replace("/", os.sep)
+        if not skill_root.is_dir():
+            print(f"[ERR] --include-skill directory not found: {skill_root}")
+            return 1
     if not root.is_dir():
         print(f"[ERR] root 不是目录: {root}")
         return 1
@@ -1087,7 +1118,14 @@ def main() -> int:
     )
     parent = root.parent
     paths_tuple: tuple[str, ...]
-    if args.website_only:
+    if include_skills:
+        paths_tuple = (
+            "backend",
+            "static/client_version.json",
+            *(f"skills/{skill}" for skill in include_skills),
+            "CLIENT_CODE_VERSION.json",
+        )
+    elif args.website_only:
         paths_tuple = WEBSITE_OTA_PATHS
     else:
         paths_tuple = OTA_PATHS_WITH_NODEJS_DEPS if args.with_nodejs_deps else OTA_PATHS
@@ -1141,6 +1179,8 @@ def main() -> int:
     if args.out is None:
         ts = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         suffix_parts = []
+        if include_skills:
+            suffix_parts.append("targeted_" + "_".join(include_skills).replace("/", "_"))
         if args.with_nodejs_deps:
             suffix_parts.append("with_nodejs")
         if args.no_bundled_node_deps:

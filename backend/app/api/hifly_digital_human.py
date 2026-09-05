@@ -27,6 +27,8 @@ _MAX_VOICE_PAGE_SIZE = 300
 _IMAGE_MAX_BYTES = 10 * 1024 * 1024
 _VIDEO_MAX_BYTES = 500 * 1024 * 1024
 _AUDIO_MAX_BYTES = 20 * 1024 * 1024
+# Voice enrollment has a stricter upstream limit than regular audio uploads.
+_VOICE_CLONE_MAX_BYTES = 10 * 1024 * 1024
 
 _IMAGE_EXTS = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}
 _VIDEO_EXTS = {"mp4": "video/mp4", "mov": "video/quicktime"}
@@ -1853,7 +1855,7 @@ async def hifly_voice_create_upload(
     languages: str = Form("zh"),
     file: UploadFile = File(...),
 ):
-    uploaded = await _upload_file_to_hifly(token, file, allowed_exts=_AUDIO_EXTS, max_bytes=_AUDIO_MAX_BYTES, fallback_ext="mp3")
+    uploaded = await _upload_file_to_hifly(token, file, allowed_exts=_AUDIO_EXTS, max_bytes=_VOICE_CLONE_MAX_BYTES, fallback_ext="mp3")
     data = await hifly_voice_create(
         HiflyVoiceCreateBody(
             token=token,
