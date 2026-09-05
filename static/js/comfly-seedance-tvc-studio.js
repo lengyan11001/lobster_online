@@ -297,10 +297,22 @@
     }
     if (steps.length) {
       var last = steps[steps.length - 1] || {};
-      var name = progressStepNameText(last.name);
-      var status = progressStepStatusText(last.status);
-      if (last.error && String(last.status || '').trim().toLowerCase() === 'failed') {
-        return normalizeApiErrorText(last.error, '').trim() || (name + '失败');
+      var lastStatus = String(last.status || '').trim().toLowerCase();
+      var active = last;
+      if (lastStatus === 'failed' || lastStatus === 'error' || lastStatus === 'cancelled' || lastStatus === 'canceled' || lastStatus === 'expired') {
+        for (var k = steps.length - 2; k >= 0; k -= 1) {
+          var candidate = steps[k] || {};
+          var candidateStatus = String(candidate.status || '').trim().toLowerCase();
+          if (candidateStatus !== 'failed' && candidateStatus !== 'error' && candidateStatus !== 'cancelled' && candidateStatus !== 'canceled' && candidateStatus !== 'expired') {
+            active = candidate;
+            break;
+          }
+        }
+      }
+      var name = progressStepNameText(active.name);
+      var status = progressStepStatusText(active.status);
+      if (String(active.status || '').trim().toLowerCase() === 'failed' && active.error) {
+        return normalizeApiErrorText(active.error, '').trim() || (name + '失败');
       }
       if (name || status) return (name || '处理中') + (status ? ' · ' + status : '');
     }
@@ -1885,9 +1897,9 @@
 
   function segmentDisplayStatus(seg) {
     if (!seg || typeof seg !== 'object') return '等待中';
-    if (seg.error || seg.status === 'failed') return '失败';
     if (seg.videoUrl) return '视频完成';
     if (seg.imageUrl) return '视频合成中';
+    if (seg.error || seg.status === 'failed') return '失败';
     return '图片合成中';
   }
 
