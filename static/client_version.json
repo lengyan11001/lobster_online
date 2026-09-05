@@ -1,7 +1,7 @@
 {
-  "version": "2.0.22",
-  "build": 301,
-  "applied_at": "2026-09-04T20:36:56+08:00",
-  "note": "inline moments coach hierarchical navigation",
-  "bundle_sha256": "671fd83a028b8a8138b13bdfc181a6d4dea1a05c1b3a6a2ceaabd7b9f4e034de"
+  "version": "2.0.24",
+  "build": 303,
+  "applied_at": "2026-09-05T17:41:40+08:00",
+  "note": "fix online self-comment reply mode persistence",
+  "bundle_sha256": "051c396ea6b4dec9a8ded827b4f033769565a3db481787d1bcaddcce8585005e"
 }
