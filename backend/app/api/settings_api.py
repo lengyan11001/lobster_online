@@ -115,15 +115,23 @@ def _todesk_show_id(exe: Path) -> dict[str, str]:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            errors="replace",
             timeout=8,
             creationflags=flags,
         )
     except Exception as exc:
         return {"error": str(exc)}
     out: dict[str, str] = {}
-    for line in (cp.stdout or "").splitlines():
+    raw_output = cp.stdout or b""
+    if isinstance(raw_output, bytes):
+        # The Rust agent writes UTF-8, while Windows may expose the child
+        # stream as the system GBK code page. Decode explicitly so Chinese
+        # labels such as “验证码” are never lost as replacement characters.
+        output = raw_output.decode("utf-8", errors="replace")
+        if "验证码" not in output and "设备 ID" not in output:
+            output = raw_output.decode("gbk", errors="replace")
+    else:
+        output = str(raw_output)
+    for line in output.splitlines():
         text = line.strip()
         if ":" not in text:
             continue
