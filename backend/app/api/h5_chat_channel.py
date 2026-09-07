@@ -102,6 +102,17 @@ def _h5_client_capabilities() -> list[str]:
     if ready:
         capabilities.append("memory_document_parse_v1")
         capabilities.append("memory_document_generate_v1")
+    # The cloud admin console uses the normal Online heartbeat as the source
+    # of truth for remote-support visibility.  Keep this a capability flag so
+    # no separate ToDesk server or polling path is involved.
+    try:
+        state_path = _BASE_DIR / "data" / "remote_support.json"
+        if state_path.exists():
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            if bool(state.get("enabled")):
+                capabilities.append("remote_support_enabled")
+    except Exception:
+        pass
     return capabilities
 
 
