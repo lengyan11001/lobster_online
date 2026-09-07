@@ -20,6 +20,14 @@ const douyinInteractionPresetCount = 10;
 const douyinInteractionPresetStorageKey = "douyin-interaction-message-presets-v1";
 const douyinInteractionRewriteStorageKey = "douyin-interaction-rewrite-seed-v1";
 
+function persistDouyinLocalSetting(key, value) {
+    return fetch("/api/douyin/local-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings: { [key]: value } }),
+    }).catch(() => null);
+}
+
 const esc = value => String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -471,6 +479,7 @@ function persistDouyinInteractionPresets() {
     try {
         localStorage.setItem(douyinInteractionPresetStorageKey, JSON.stringify(douyinInteractionPresetState));
     } catch (error) {}
+    void persistDouyinLocalSetting(douyinInteractionPresetStorageKey, douyinInteractionPresetState);
 }
 
 function loadDouyinInteractionPresets() {
@@ -482,6 +491,19 @@ function loadDouyinInteractionPresets() {
     }
     douyinInteractionPresetState = normalizeDouyinInteractionPresetState(parsed);
     applyDouyinInteractionPresetToForm();
+    fetch("/api/douyin/local-settings").then(res => res.json()).then(data => {
+        const remote = data?.settings?.[douyinInteractionPresetStorageKey];
+        if (remote && typeof remote === "object") {
+            douyinInteractionPresetState = normalizeDouyinInteractionPresetState(remote);
+            applyDouyinInteractionPresetToForm();
+        } else if (douyinInteractionPresetState.presets.some(item => String(item || "").trim())) {
+            void persistDouyinLocalSetting(douyinInteractionPresetStorageKey, douyinInteractionPresetState);
+        }
+        const seedEl = document.getElementById("douyin-interaction-seed-text");
+        const remoteSeed = data?.settings?.[douyinInteractionRewriteStorageKey];
+        if (seedEl && remoteSeed) seedEl.value = String(remoteSeed);
+        else if (seedEl && seedEl.value.trim()) void persistDouyinLocalSetting(douyinInteractionRewriteStorageKey, seedEl.value.trim());
+    }).catch(() => {});
 }
 
 function updateDouyinInteractionPresetDraftFromForm() {
@@ -544,6 +566,7 @@ function saveDouyinInteractionRewrite(showLog = false) {
         if (showLog) addLog(`保存改写文案失败：${error.message}`, "error");
         return;
     }
+    void persistDouyinLocalSetting(douyinInteractionRewriteStorageKey, seedText);
     if (showLog) addLog("已保存 AI 改写基准文案。", "success");
 }
 

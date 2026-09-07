@@ -5732,8 +5732,8 @@
             .capture-config-grid { grid-template-columns: 1fr; }
         }
 
-        /* Keep the Douyin workbench navigation fixed at the top at every width.
-           The content owns vertical scrolling; the nav only scrolls horizontally. */
+        /* Keep the Douyin workbench navigation fixed at the top while allowing
+           the tabs to wrap when the available width is smaller. */
         :root {
             --douyin-fixed-nav-height: 76px;
         }
@@ -5751,9 +5751,9 @@
             position: fixed;
             inset: 14px 14px auto;
             width: auto;
-            height: var(--douyin-fixed-nav-height);
+            height: auto;
             min-height: 0;
-            max-height: var(--douyin-fixed-nav-height);
+            max-height: none;
             display: flex;
             align-items: center;
             gap: 18px;
@@ -5762,10 +5762,7 @@
             z-index: 10;
         }
         body:not(.embed-mode) .sidebar-brand {
-            flex: 0 0 auto;
-            padding: 0 18px 0 2px;
-            border-right: 1px solid rgba(255, 255, 255, 0.16);
-            border-bottom: 0;
+            display: none;
         }
         body:not(.embed-mode) .sidebar-nav {
             flex: 1 1 auto;
@@ -5778,37 +5775,50 @@
         }
         body:not(.embed-mode) .sidebar-accordion {
             display: flex;
-            align-items: center;
+            align-items: stretch;
+            align-content: center;
+            justify-content: flex-start;
+            flex-wrap: wrap;
             gap: 6px;
             min-width: 0;
             width: 100%;
-            overflow-x: auto;
-            overflow-y: hidden;
-            overscroll-behavior-x: contain;
-            padding: 2px 2px 6px;
-            scrollbar-width: thin;
-            scrollbar-color: rgba(224, 232, 255, 0.7) transparent;
-        }
-        body:not(.embed-mode) .sidebar-accordion::-webkit-scrollbar {
-            height: 5px;
-        }
-        body:not(.embed-mode) .sidebar-accordion::-webkit-scrollbar-thumb {
-            border-radius: 999px;
-            background: rgba(224, 232, 255, 0.7);
+            overflow: visible;
+            overscroll-behavior: contain;
+            padding: 0;
         }
         body:not(.embed-mode) .sidebar-group {
             display: block;
-            flex: 0 0 auto;
+            flex: 1 1 auto;
             min-width: max-content;
         }
         body:not(.embed-mode) .sidebar-group-header {
-            width: auto;
+            width: 100%;
             min-width: max-content;
             min-height: 48px;
-            height: 48px;
+            height: auto;
             padding: 6px 12px;
             border-radius: 15px;
             white-space: nowrap;
+            border: 1px solid rgba(224, 232, 255, 0.22);
+            background: rgba(255, 255, 255, 0.08);
+            box-shadow: 0 7px 16px rgba(7, 14, 70, 0.1);
+        }
+        body:not(.embed-mode) .sidebar-group-header:hover {
+            border-color: rgba(255, 255, 255, 0.5);
+            background: rgba(255, 255, 255, 0.16);
+        }
+        body:not(.embed-mode) .sidebar-group-header.active {
+            border-color: rgba(255, 255, 255, 0.82);
+            background: #ffffff;
+            color: #222fb9;
+            box-shadow: 0 8px 18px rgba(7, 14, 70, 0.18);
+        }
+        body:not(.embed-mode) .sidebar-group-icon {
+            display: none;
+        }
+        body:not(.embed-mode) .sidebar-group-main {
+            gap: 0;
+            justify-content: center;
         }
         body:not(.embed-mode) .sidebar-subnav {
             display: none;
@@ -5822,9 +5832,27 @@
             overscroll-behavior: contain;
             padding: 0 0 20px;
         }
+        @media (max-width: 1750px) {
+            :root {
+                --douyin-fixed-nav-height: 126px;
+            }
+            body:not(.embed-mode) .sidebar-group {
+                flex: 0 1 calc(11.1111% - 6px);
+                min-width: 0;
+            }
+            body:not(.embed-mode) .sidebar-group-header {
+                min-width: 0;
+                padding-inline: 8px;
+            }
+            body:not(.embed-mode) .sidebar-group-title {
+                white-space: normal;
+                text-align: center;
+                overflow-wrap: anywhere;
+            }
+        }
         @media (max-width: 680px) {
             :root {
-                --douyin-fixed-nav-height: 60px;
+                --douyin-fixed-nav-height: 154px;
             }
             body:not(.embed-mode) .workspace-shell {
                 padding: calc(var(--douyin-fixed-nav-height) + 18px) 8px 8px;
@@ -5834,31 +5862,16 @@
                 gap: 10px;
                 padding: 8px 10px;
             }
-            body:not(.embed-mode) .sidebar-brand {
-                padding-right: 10px;
-            }
-            body:not(.embed-mode) .sidebar-brand-mark {
-                width: 34px;
-                height: 34px;
-                border-radius: 11px;
-                font-size: 13px;
-            }
-            body:not(.embed-mode) .sidebar-brand-copy .brand-name {
-                font-size: 1rem;
-            }
             body:not(.embed-mode) .sidebar-group-header {
                 min-height: 42px;
-                height: 42px;
                 padding: 4px 8px;
                 border-radius: 12px;
             }
-            body:not(.embed-mode) .sidebar-group-icon {
-                width: 30px;
-                height: 30px;
-                border-radius: 10px;
+            body:not(.embed-mode) .sidebar-group {
+                flex-basis: calc(16.6667% - 6px);
             }
             body:not(.embed-mode) .sidebar-group-title {
-                font-size: 13px;
+                font-size: 12px;
             }
         }
     </style>
@@ -7766,8 +7779,9 @@
         function getDouyinInteractionMode(){const value=normalize(document.getElementById("douyin-interaction-mode")?.value||"fixed").toLowerCase();return["fixed","ai","rewrite"].includes(value)?value:"fixed"}
         function getDouyinInteractionModeLabel(mode=getDouyinInteractionMode()){return({fixed:"固定文案",ai:"AI 自动生成",rewrite:"AI 同方向改编"})[mode]||"固定文案"}
         function normalizeDouyinInteractionPresetState(state={}){const presets=Array.from({length:douyinInteractionPresetCount},(_,index)=>String(Array.isArray(state.presets)?state.presets[index]??"":index===0?defaultDouyinInteractionMessage:""));let activeIndex=Number(state.activeIndex||0);if(!Number.isInteger(activeIndex)||activeIndex<0||activeIndex>=douyinInteractionPresetCount)activeIndex=0;return{activeIndex,presets}}
-        function persistDouyinInteractionPresets(){try{localStorage.setItem(douyinInteractionPresetStorageKey,JSON.stringify(douyinInteractionPresetState))}catch(error){}}
-        function loadDouyinInteractionPresets(){let parsed={};try{parsed=JSON.parse(localStorage.getItem(douyinInteractionPresetStorageKey)||"{}")||{}}catch(error){parsed={}}douyinInteractionPresetState=normalizeDouyinInteractionPresetState(parsed);applyDouyinInteractionPresetToForm()}
+        function persistDouyinLocalSetting(key,value){return fetch("/api/douyin/local-settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({settings:{[key]:value}})}).catch(()=>null)}
+        function persistDouyinInteractionPresets(){try{localStorage.setItem(douyinInteractionPresetStorageKey,JSON.stringify(douyinInteractionPresetState))}catch(error){}void persistDouyinLocalSetting(douyinInteractionPresetStorageKey,douyinInteractionPresetState)}
+        function loadDouyinInteractionPresets(){let parsed={};try{parsed=JSON.parse(localStorage.getItem(douyinInteractionPresetStorageKey)||"{}")||{}}catch(error){parsed={}}douyinInteractionPresetState=normalizeDouyinInteractionPresetState(parsed);applyDouyinInteractionPresetToForm();fetch("/api/douyin/local-settings").then(res=>res.json()).then(data=>{const remote=data?.settings?.[douyinInteractionPresetStorageKey];if(remote&&typeof remote==="object"){douyinInteractionPresetState=normalizeDouyinInteractionPresetState(remote);applyDouyinInteractionPresetToForm()}else if(douyinInteractionPresetState.presets.some(item=>String(item||"").trim()))void persistDouyinLocalSetting(douyinInteractionPresetStorageKey,douyinInteractionPresetState)}).catch(()=>{})}
         function updateDouyinInteractionPresetDraftFromForm(){const messageEl=document.getElementById("douyin-interaction-message");if(!messageEl)return;douyinInteractionPresetState=normalizeDouyinInteractionPresetState(douyinInteractionPresetState);douyinInteractionPresetState.presets[douyinInteractionPresetState.activeIndex]=String(messageEl.value||"").trim()}
         function getDouyinInteractionFixedMessages(){updateDouyinInteractionPresetDraftFromForm();douyinInteractionPresetState=normalizeDouyinInteractionPresetState(douyinInteractionPresetState);return douyinInteractionPresetState.presets.map(item=>String(item||"").trim()).filter(Boolean)}
         function renderDouyinInteractionPresetTabs(){const tabs=document.getElementById("douyin-interaction-preset-tabs");if(!tabs)return;tabs.innerHTML=Array.from({length:douyinInteractionPresetCount},(_,index)=>`<button type="button" class="btn dm-preset-tab ${index===douyinInteractionPresetState.activeIndex?"active":""}" data-preset-index="${index}" onclick="selectDouyinInteractionPreset(${index})">话术 ${index+1}</button>`).join("")}
@@ -9174,12 +9188,18 @@
     <script>
         (() => {
             const storageKey = "douyin-interaction-rewrite-seed-v1";
+            const persistLocalSetting = (value) => fetch("/api/douyin/local-settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: { [storageKey]: value } }) }).catch(() => null);
             window.loadDouyinInteractionRewrite = function() {
                 const seedEl = document.getElementById("douyin-interaction-seed-text");
                 if (!seedEl) return;
                 try {
                     seedEl.value = localStorage.getItem(storageKey) || "";
                 } catch (error) {}
+                fetch("/api/douyin/local-settings").then(res => res.json()).then(data => {
+                    const remote = data?.settings?.[storageKey];
+                    if (remote) seedEl.value = String(remote);
+                    else if (seedEl.value.trim()) void persistLocalSetting(seedEl.value.trim());
+                }).catch(() => {});
             };
             window.saveDouyinInteractionRewrite = function(showLog = false) {
                 const seedEl = document.getElementById("douyin-interaction-seed-text");
@@ -9195,6 +9215,7 @@
                     if (showLog && typeof addLog === "function") addLog(`保存改写文案失败：${error.message}`, "error");
                     return;
                 }
+                void persistLocalSetting(seedText);
                 if (showLog && typeof addLog === "function") addLog("已保存 AI 改写基准文案。", "success");
             };
             document.addEventListener("DOMContentLoaded", () => window.loadDouyinInteractionRewrite());

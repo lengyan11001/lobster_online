@@ -91,6 +91,7 @@ _SCHEDULED_TASK_COMPLETION_RETRY_DELAY_SECONDS = 2.0
 _SCHEDULED_TASK_COMPLETION_RETRY_SECONDS = 6 * 60 * 60
 _pending_task_completion_run_ids: set[str] = set()
 _pending_task_completion_tasks: set[asyncio.Task] = set()
+_scheduled_task_control_delivery: Dict[str, Dict[str, Any]] = {}
 _MOBILE_UPLOAD_TITLE = "【手机上传素材】"
 _MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*【手机上传素材】\n(?P<body>[\s\S]*)", re.IGNORECASE)
 
@@ -1353,6 +1354,57 @@ async def _post_task_event(
         body,
         headers,
         label=f"event:{event_type}",
+        run_id=run_id,
+    )
+
+
+def _record_task_control_delivery(
+    *,
+    run_id: str,
+    label: str,
+    url: str,
+    status: int,
+    attempts: int,
+    error: Optional[Exception] = None,
+) -> None:
+    """Log control-plane delivery state so watchdog incidents are diagnosable."""
+    clean_run_id = str(run_id or "").strip() or "unknown"
+    key = f"{clean_run_id}:{label}"
+    state = _scheduled_task_control_delivery.setdefault(key, {})
+    now = datetime.now(timezone.utc).isoformat()
+    previous_failures = int(state.get("consecutive_failures") or 0)
+    status = int(status or 0)
+    path = urlparse(url).path or url
+    if 200 <= status < 300:
+        if previous_failures:
+            logger.info(
+                "[SCHEDULED-TASK] control delivery recovered run_id=%s label=%s status=%s previous_failures=%s",
+                clean_run_id,
+                label,
+                status,
+                previous_failures,
+            )
+        state.update({"consecutive_failures": 0, "last_success_at": now, "last_status": status})
+        return
+    failures = previous_failures + 1
+    state.update(
+        {
+            "consecutive_failures": failures,
+            "last_failure_at": now,
+            "last_status": status,
+        }
+    )
+    logger.warning(
+        "[SCHEDULED-TASK] control delivery failed run_id=%s label=%s path=%s status=%s attempts=%s "
+        "consecutive_failures=%s last_success_at=%s error=%s",
+        clean_run_id,
+        label,
+        path,
+        status,
+        attempts,
+        failures,
+        state.get("last_success_at") or "",
+        str(error)[:240] if error else "",
     )
 
 
@@ -1363,6 +1415,7 @@ async def _post_task_control_request(
     headers: Dict[str, str],
     *,
     label: str,
+    run_id: str = "",
     attempts: int = _SCHEDULED_TASK_EVENT_ATTEMPTS,
 ) -> int:
     """Post task control data with a short timeout.
@@ -1388,8 +1441,13 @@ async def _post_task_control_request(
             if status in _SCHEDULED_TASK_TRANSIENT_STATUS and attempt < attempts:
                 await asyncio.sleep(0.25 * (2 ** (attempt - 1)))
                 continue
-            if status in _SCHEDULED_TASK_TRANSIENT_STATUS:
-                logger.warning("[SCHEDULED-TASK] %s unavailable status=%s attempts=%s", label, status, attempts)
+            _record_task_control_delivery(
+                run_id=run_id,
+                label=label,
+                url=url,
+                status=status,
+                attempts=attempt,
+            )
             return status
         except httpx.RequestError as exc:
             last_error = exc
@@ -1404,6 +1462,14 @@ async def _post_task_control_request(
         label,
         attempts,
         str(last_error)[:240] if last_error else "unknown",
+    )
+    _record_task_control_delivery(
+        run_id=run_id,
+        label=label,
+        url=url,
+        status=0,
+        attempts=attempts,
+        error=last_error,
     )
     return 0
 
@@ -1432,6 +1498,7 @@ async def _complete_task_run(
         body,
         headers,
         label="completion",
+        run_id=run_id,
         attempts=_SCHEDULED_TASK_COMPLETION_ATTEMPTS,
     )
     if status in {200, 201, 202, 204, 409}:
@@ -1495,6 +1562,7 @@ async def _retry_task_completion(
                     body,
                     headers,
                     label="completion-retry",
+                    run_id=run_id,
                     attempts=2,
                 )
             if status in {200, 201, 202, 204, 409}:
@@ -3327,9 +3395,23 @@ def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
     local_item = local_result.get("item") if isinstance(local_result.get("item"), dict) else {}
     video_result = local_result.get("video_result") if isinstance(local_result.get("video_result"), dict) else {}
     video_item = video_result.get("item") if isinstance(video_result.get("item"), dict) else {}
+    publish_draft = result_payload.get("publish_draft") if isinstance(result_payload.get("publish_draft"), dict) else {}
     record = generated.get("ip_daily_record") if isinstance(generated.get("ip_daily_record"), dict) else {}
     if not record and isinstance(local_result.get("ip_daily_record"), dict):
         record = local_result["ip_daily_record"]
+    # Server-side 朋友圈图文 runs expose all generated rows under groups but
+    # intentionally select only the first row for a publish child.  Reuse that
+    # exact row (and its text) instead of asking the publish LLM to invent a
+    # second caption.
+    if not record:
+        groups = result_payload.get("groups") if isinstance(result_payload.get("groups"), list) else []
+        for group in groups:
+            if not isinstance(group, dict) or str(group.get("task") or "").strip() != "moments_candidate":
+                continue
+            rows = group.get("records") if isinstance(group.get("records"), list) else []
+            if rows and isinstance(rows[0], dict):
+                record = rows[0]
+                break
     mcp_result = result_payload.get("mcp_result") if isinstance(result_payload.get("mcp_result"), dict) else {}
 
     def first_text(*values: Any, limit: int = 6000) -> str:
@@ -3341,7 +3423,24 @@ def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
                 return text[:limit]
         return ""
 
+    def first_raw_text(*values: Any, limit: int = 8000) -> str:
+        for value in values:
+            if isinstance(value, (dict, list)):
+                continue
+            text = str(value or "").strip()
+            if text:
+                return text[:limit]
+        return ""
+
+    source_content = first_raw_text(
+        publish_draft.get("content"),
+        publish_draft.get("description"),
+        record.get("body"),
+        record.get("content"),
+    )
     script = first_text(
+        publish_draft.get("content"),
+        publish_draft.get("description"),
         generated.get("script"),
         generated.get("oral_script"),
         local_result.get("script"),
@@ -3356,6 +3455,7 @@ def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
         mcp_result.get("script"),
     )
     title = first_text(
+        publish_draft.get("title"),
         record.get("title"),
         generated.get("title"),
         local_result.get("title"),
@@ -3365,6 +3465,7 @@ def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
         limit=160,
     )
     caption = first_text(
+        publish_draft.get("caption"),
         result_payload.get("caption"),
         generated.get("caption_hint"),
         local_result.get("caption_hint"),
@@ -3378,6 +3479,11 @@ def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
         or ""
     )
     language = first_text(generated.get("language"), local_result.get("language"), record.get("language"), limit=64)
+    source_content_mode = ""
+    if str(publish_draft.get("source_task") or "").strip() == "moments_candidate":
+        source_content_mode = "ip_moment_first"
+    elif record and str(record.get("task") or "").strip() == "moments_candidate":
+        source_content_mode = "ip_moment_first"
     capability_id = first_text(result_payload.get("capability_id"), limit=128)
     if not capability_id and str(local_result.get("action") or "").strip() == "shanjian_digital_human_video":
         capability_id = "hifly.video.create_by_tts"
@@ -3385,11 +3491,13 @@ def _extract_parent_publish_context(result_payload: Any) -> Dict[str, str]:
         capability_id = "local_bestseller_daily_video"
     return {
         "source_script": script,
+        "source_content": source_content,
         "source_title": title,
         "source_caption": caption,
         "source_tags": tags,
         "source_language": language,
         "source_capability_id": capability_id,
+        "source_content_mode": source_content_mode,
     }
 
 
@@ -8385,7 +8493,11 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
         if not isinstance(value, dict):
             return
         item_kind = str(value.get("media_type") or value.get("type") or inherited_kind or "").strip().lower()
-        if item_kind not in {"video", "image"}:
+        if item_kind in {"image_text", "images", "picture", "photo", "photos", "jpg", "jpeg", "png", "webp"}:
+            item_kind = "image"
+        elif item_kind in {"short_video", "video_text", "mp4", "mov"}:
+            item_kind = "video"
+        elif item_kind not in {"video", "image"}:
             item_kind = ""
         for raw_key, raw_value in value.items():
             key = str(raw_key or "").strip().lower()
@@ -8440,10 +8552,17 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
         fallback = first_url(*fallback_buckets)
         if fallback:
             result["url"] = fallback
+        if media_type == "image":
+            result["image_asset_ids"] = image_ids[:9]
+            result["image_urls"] = image_urls[:9]
         return result
 
     def url_result(url: str, media_type: str) -> Dict[str, Any]:
-        return {"url": url, "media_type": media_type}
+        result = {"url": url, "media_type": media_type}
+        if media_type == "image":
+            result["image_asset_ids"] = image_ids[:9]
+            result["image_urls"] = image_urls[:9]
+        return result
 
     preferred = _normalize_parent_material_media_type(preferred_media_type)
     if preferred == "image":
@@ -10152,11 +10271,32 @@ async def _run_client_workflow_action(
                     str(exc)[:240],
                 )
         source_script = str(material_source.get("source_script") or "").strip()
+        source_content = str(material_source.get("source_content") or "").strip()
+        source_content_mode = str(material_source.get("source_content_mode") or "").strip().lower()
+        parent_image_urls = [
+            str(value or "").strip()
+            for value in (material_source.get("image_urls") if isinstance(material_source.get("image_urls"), list) else [])
+            if str(value or "").strip()
+        ][:9]
+        parent_image_asset_ids = [
+            str(value or "").strip()
+            for value in (material_source.get("image_asset_ids") if isinstance(material_source.get("image_asset_ids"), list) else [])
+            if str(value or "").strip()
+        ][:9]
         publish_title = str(source.get("title") or "").strip()
         publish_description = str(source.get("description") or source.get("prompt") or "").strip()
+        if _is_wechat_moments_platform(platform) and source_content_mode == "ip_moment_first" and (source_content or source_script):
+            # The Moments node already produced the final first-row copy. Keep
+            # it verbatim; the child publish action must not spend another LLM
+            # call rewriting it.
+            publish_description = source_content or source_script
         publish_tags = str(source.get("tags") or "").strip()
         generated_publish_copy: Dict[str, str] = {}
-        if bool(source.get("ai_publish_copy", True)):
+        generate_copy = bool(source.get("ai_publish_copy", True)) and not (
+            _is_wechat_moments_platform(platform)
+            and source_content_mode == "ip_moment_first"
+        )
+        if generate_copy:
             generated_publish_copy = await _generate_scheduled_publish_copy(
                 base=base,
                 headers=headers,
@@ -10170,8 +10310,8 @@ async def _run_client_workflow_action(
                 },
                 result=material_source,
                 refs={
-                    "asset_ids": [material] if material else [],
-                    "urls": [source_url] if source_url else [],
+                    "asset_ids": list(dict.fromkeys(([material] if material else []) + parent_image_asset_ids)),
+                    "urls": list(dict.fromkeys(([source_url] if source_url else []) + parent_image_urls)),
                 },
                 platform=platform,
                 task_title=str(material_source.get("source_title") or source.get("source_workflow_node_label") or "发布内容").strip(),
@@ -10211,6 +10351,8 @@ async def _run_client_workflow_action(
                 "asset_id": material,
                 "source_url": source_url,
                 "url": source_url,
+                "image_urls": parent_image_urls,
+                "image_asset_ids": parent_image_asset_ids,
                 "platform": "wechat_moments",
                 "platform_name": str(source.get("platform_name") or "微信朋友圈").strip(),
                 "account_id": str(source.get("account_id") or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID).strip(),

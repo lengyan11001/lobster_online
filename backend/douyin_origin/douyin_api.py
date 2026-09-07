@@ -106,6 +106,7 @@ DEFAULT_DOUYIN_ACCOUNTS = [
 DOUYIN_MENTION_COMMENT_MAX_USERS_PER_COMMENT = 50
 DOUYIN_MENTION_COMMENT_SAFE_TEXT_LIMIT = 180
 DOUYIN_SCHEDULE_PLANS_BLOB_KEY = "douyin_schedule_plans_v1"
+DOUYIN_LOCAL_SETTINGS_BLOB_KEY = "douyin_local_settings_v1"
 DOUYIN_SCHEDULE_TYPES = {
     "collect_precise",
     "precise_touch",
@@ -2816,6 +2817,19 @@ def load_douyin_search_sessions_state() -> List[Dict]:
     if not isinstance(sessions, list):
         return []
     return [dict(item) for item in sessions if isinstance(item, dict)]
+
+
+def load_douyin_local_settings() -> Dict:
+    payload = douyin_state_store.load_blob_json(DOUYIN_LOCAL_SETTINGS_BLOB_KEY, default={})
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def save_douyin_local_settings(settings: Dict) -> Dict:
+    current = load_douyin_local_settings()
+    current.update({str(key): value for key, value in (settings or {}).items()})
+    current["updated_at"] = int(datetime.now().timestamp() * 1000)
+    douyin_state_store.save_blob_json(DOUYIN_LOCAL_SETTINGS_BLOB_KEY, current)
+    return current
 
 
 def load_douyin_search_sessions_saved_at() -> int:
@@ -15006,6 +15020,20 @@ async def douyin_get_search_sessions():
         "saved_at": load_douyin_search_sessions_saved_at(),
         "sessions": load_douyin_search_sessions_state(),
     }
+
+
+@router.get("/local-settings")
+async def douyin_get_local_settings():
+    return {"code": 200, "settings": load_douyin_local_settings()}
+
+
+@router.post("/local-settings")
+async def douyin_save_local_settings(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    settings = payload.get("settings", payload)
+    if not isinstance(settings, dict):
+        return {"code": 400, "msg": "settings must be an object"}
+    return {"code": 200, "settings": save_douyin_local_settings(settings)}
 
 
 @router.post("/search/sessions")

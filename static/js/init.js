@@ -1415,6 +1415,7 @@ var onlineH5EmployeesRequest = null;
 var onlineH5EmployeesRequestKey = '';
 
 function loadOnlineH5Employees() {
+  if (!document.getElementById('onlineEmployeeNavItems')) return Promise.resolve([]);
   if (!token || typeof API_BASE === 'undefined' || !API_BASE) {
     renderOnlineH5Employees([]);
     return Promise.resolve([]);

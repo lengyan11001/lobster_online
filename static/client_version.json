@@ -1,7 +1,7 @@
 {
-  "version": "2.0.24",
-  "build": 303,
-  "applied_at": "2026-09-05T17:41:40+08:00",
-  "note": "fix online self-comment reply mode persistence",
-  "bundle_sha256": "051c396ea6b4dec9a8ded827b4f033769565a3db481787d1bcaddcce8585005e"
+  "version": "2.0.25",
+  "build": 304,
+  "applied_at": "2026-09-07T16:51:11+08:00",
+  "note": "preserve personal profile on live template save",
+  "bundle_sha256": "61e7829ccf2cfdee74173ecaecf78e3659fc0b1e82eed34c31909aa99b12d789"
 }

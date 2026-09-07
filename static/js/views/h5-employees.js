@@ -126,7 +126,7 @@
     ['viral_video_remix','爆款复刻','基于爆款结构复刻视频脚本和执行方案。','AI营销'],
     ['image_composer_studio','AI设计图','根据文案或产品资料生成海报、详情页和朋友圈配图。','AI营销'],
     ['ip_content_oral','IP口播文案','包含行业热门口播和专业热门IP口播。','AI营销'],
-    ['ip_content_moments','朋友圈图文','生成朋友圈图文内容。','AI营销'],
+    ['ip_content_moments','朋友圈图文','生成首条朋友圈图文并自动生成 3 张配图。','AI营销'],
     ['wewrite.article.pipeline','公众号文章','根据主题生成公众号文章、配图和发布草稿。','AI营销'],
     ['native_wechat_poll','个微私信接管','读取个人微信新消息，并按个人记忆自动生成回复。','个微'],
     ['native_wechat_add_friend','个微自动加好友','把目标手机号或微信号加入本机个人微信加好友队列。','个微'],
@@ -355,7 +355,7 @@
   function publishChild(parent, item, index) {
     var platform = item[1];
     var label = item[2];
-    return {id:parent.id + '_action_' + (index + 1), time:item[0], parent_node_id:parent.id, action_type:'publish', type:'publish', platform:platform, ability_key:'publish_content', ability_label:label, department_id:'sales', department_name:'销售部', note:label + '，配文案、带标签发布', is_action_node:true, param_configured:true, plan:{title:label, task_kind:'client_workflow', content:'H5 工作流动作：' + label, payload:{action:'publish_content',params:{source_mode:'parent_latest_run',source_workflow_node_id:parent.id,source_workflow_node_label:parent.ability_label,platform:platform,media_type:platform === 'wechat_moments' ? 'image_text' : 'video',ai_publish_copy:true,note:label}}}};
+    return {id:parent.id + '_action_' + (index + 1), time:item[0], parent_node_id:parent.id, action_type:'publish', type:'publish', platform:platform, ability_key:'publish_content', ability_label:label, department_id:'sales', department_name:'销售部', note:label + '，配文案、带标签发布', is_action_node:true, param_configured:true, plan:{title:label, task_kind:'client_workflow', content:'H5 工作流动作：' + label, payload:{action:'publish_content',params:{source_mode:'parent_latest_run',source_workflow_node_id:parent.id,source_workflow_node_label:parent.ability_label,platform:platform,media_type:platform === 'wechat_moments' ? 'image_text' : 'video',ai_publish_copy:!(platform === 'wechat_moments' && String(parent.ability_key || '') === 'ip_content_moments'),note:label}}}};
   }
   function planForRow(row) {
     var prompt = row.note || row.label || '';
