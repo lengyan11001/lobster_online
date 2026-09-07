@@ -116,6 +116,14 @@ def _h5_client_capabilities() -> list[str]:
     return capabilities
 
 
+def _remote_support_snapshot() -> dict[str, Any]:
+    try:
+        from .settings_api import remote_support_heartbeat_snapshot
+        return remote_support_heartbeat_snapshot()
+    except Exception:
+        return {"enabled": False}
+
+
 def _local_mcp_url() -> str:
     port = os.environ.get("MCP_PORT") or str(getattr(settings, "mcp_port", 8001))
     return f"http://127.0.0.1:{port}/mcp"
@@ -1072,6 +1080,7 @@ async def refresh_h5_chat_device_heartbeat(
         "publish_accounts": _build_publish_account_snapshot(jwt_token),
         "wechat_contacts": _build_native_wechat_contact_snapshot(),
         "capabilities": _h5_client_capabilities(),
+        "remote_support": _remote_support_snapshot(),
     }
     return await _proxy_cloud_json(
         request,
@@ -4582,19 +4591,17 @@ def _scheduled_douyin_result_payload(
 async def _wait_for_douyin_collect_completion(
     selected_task_ids: List[int],
     *,
-    timeout_seconds: float = 900.0,
     poll_interval_seconds: float = 3.0,
 ) -> Dict[str, Any]:
     selected_ids = [task_id for task_id in selected_task_ids if _safe_int(task_id) > 0]
     if not selected_ids:
         return {"status": "empty", "tasks": [], "selected_video": None}
 
-    deadline = asyncio.get_running_loop().time() + max(timeout_seconds, poll_interval_seconds)
-    last_snapshot: List[Dict[str, Any]] = []
     while True:
         _install_douyin_origin_import_path()
         from douyin_api import ensure_douyin_task_shape  # type: ignore
         from douyin_api import douyin_tasks as raw_douyin_tasks  # type: ignore
+        from douyin_api import save_douyin_tasks_state  # type: ignore
 
         task_map: Dict[int, Dict[str, Any]] = {}
         for task in raw_douyin_tasks if isinstance(raw_douyin_tasks, list) else []:
@@ -4605,21 +4612,59 @@ async def _wait_for_douyin_collect_completion(
                 continue
             task_map[task_id] = ensure_douyin_task_shape(dict(task))
         snapshot = [task_map[task_id] for task_id in selected_ids if task_id in task_map]
+        # A crashed local worker can leave a child in processing forever. Use
+        # the child's own started_at as a recovery boundary, independent of
+        # the parent polling loop, and persist an explicit failed terminal
+        # state so the parent can finish with a truthful summary.
+        now_utc = datetime.now(timezone.utc)
+        recovered_timeout = False
+        for raw_task in raw_douyin_tasks if isinstance(raw_douyin_tasks, list) else []:
+            if not isinstance(raw_task, dict) or _safe_int(raw_task.get("id")) not in selected_ids:
+                continue
+            if str(raw_task.get("status") or "").strip().lower() != "processing":
+                continue
+            progress = raw_task.get("collect_progress") if isinstance(raw_task.get("collect_progress"), dict) else {}
+            started_text = str(progress.get("started_at") or "").strip()
+            try:
+                started_at = datetime.strptime(started_text, "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=timezone(timedelta(hours=8))
+                ).astimezone(timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            if (now_utc - started_at).total_seconds() < 900:
+                continue
+            timeout_message = "抖音评论采集子任务超过 900 秒，已按超时失败结束"
+            raw_task["status"] = "failed"
+            raw_task["error"] = timeout_message
+            raw_task["collect_progress"] = {
+                **progress,
+                "phase": "failed",
+                "updated_at": now_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                "last_message": timeout_message,
+            }
+            recovered_timeout = True
+        if recovered_timeout:
+            save_douyin_tasks_state()
+            task_map = {
+                _safe_int(task.get("id")): ensure_douyin_task_shape(dict(task))
+                for task in raw_douyin_tasks
+                if isinstance(task, dict) and _safe_int(task.get("id")) > 0
+            }
+            snapshot = [task_map[task_id] for task_id in selected_ids if task_id in task_map]
         if snapshot:
-            last_snapshot = snapshot
             statuses = [str(task.get("status") or "").strip().lower() for task in snapshot]
-            if statuses and all(status in {"completed", "failed"} for status in statuses):
+            # A collection batch is not finished until every selected child
+            # has reached an explicit terminal state.  Do not turn a client
+            # wait timeout into a completed parent run: pending/processing
+            # children must remain visible and keep the parent in progress.
+            if len(snapshot) == len(selected_ids) and statuses and all(
+                status in {"completed", "failed"} for status in statuses
+            ):
                 return {
                     "status": "done",
                     "tasks": snapshot,
                     "selected_video": snapshot[0] if snapshot else None,
                 }
-        if asyncio.get_running_loop().time() >= deadline:
-            return {
-                "status": "timeout",
-                "tasks": last_snapshot,
-                "selected_video": last_snapshot[0] if last_snapshot else None,
-            }
         await asyncio.sleep(max(1.0, poll_interval_seconds))
 
 
@@ -6369,22 +6414,16 @@ async def _run_scheduled_douyin_leads(
                     _safe_int(result_payload.get("selected_videos_total")),
                 )
                 final_status = str((final_state or {}).get("status") or "").strip().lower()
-                if final_status == "done":
-                    result_text = (
-                        f"搜索完成，共执行 {keyword_total} 个关键词，找到 {search_total} 个视频；"
-                        f"已采集 {selected_video_total} 个视频的客户 {comments_collected} 人，"
-                        f"精准客户 {precise_total} 人。"
+                if final_status != "done":
+                    raise RuntimeError(
+                        "抖音采集子任务未全部进入 completed/failed 终态，"
+                        f"拒绝结束父任务（state={final_status or 'unknown'}）。"
                     )
-                elif final_status == "timeout":
-                    result_text = (
-                        f"搜索完成，找到 {search_total} 个视频；"
-                        "采集任务仍在执行，结果会继续同步。"
-                    )
-                else:
-                    result_text = (
-                        str(result.get("msg") or "").strip()
-                        or _compact_result_text(result)
-                    )
+                result_text = (
+                    f"搜索完成，共执行 {keyword_total} 个关键词，找到 {search_total} 个视频；"
+                    f"已采集 {selected_video_total} 个视频的客户 {comments_collected} 人，"
+                    f"精准客户 {precise_total} 人。"
+                )
                 await _complete_task_run(
                     cloud,
                     base,
@@ -11117,6 +11156,7 @@ async def h5_chat_poll_loop() -> None:
                             "publish_accounts": _build_publish_account_snapshot(jwt_token),
                             "wechat_contacts": _build_native_wechat_contact_snapshot(),
                             "capabilities": _h5_client_capabilities(),
+                            "remote_support": _remote_support_snapshot(),
                         },
                         headers=headers,
                     )

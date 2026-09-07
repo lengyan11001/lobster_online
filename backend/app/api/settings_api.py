@@ -107,6 +107,15 @@ def _save_todesk_state(data: dict[str, Any]) -> None:
     os.replace(tmp, _TODSK_STATE_FILE)
 
 
+def _remember_todesk_identity(state: dict[str, Any], identity: dict[str, str]) -> dict[str, Any]:
+    """Persist the agent identity so heartbeats do not spawn a probe process."""
+    for key in ("device_id", "verification_code", "server"):
+        value = str(identity.get(key) or "").strip()
+        if value:
+            state[key] = value
+    return state
+
+
 def _todesk_show_id(exe: Path) -> dict[str, str]:
     flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
     try:
@@ -546,6 +555,12 @@ def _remote_support_payload() -> dict[str, Any]:
     identity: dict[str, str] = {}
     if exe:
         identity = _todesk_show_id(exe)
+        if identity.get("device_id") or identity.get("verification_code"):
+            try:
+                _remember_todesk_identity(state, identity)
+                _save_todesk_state(state)
+            except Exception as exc:
+                logger.debug("remote support identity persistence failed: %s", exc)
     return {
         "enabled": bool(state.get("enabled")),
         "running": _todesk_process_alive(),
@@ -554,6 +569,20 @@ def _remote_support_payload() -> dict[str, Any]:
         "device_id": identity.get("device_id", ""),
         "verification_code": identity.get("verification_code", ""),
         "server": identity.get("server", "https://todesk.bhzn.top"),
+    }
+
+
+def remote_support_heartbeat_snapshot() -> dict[str, Any]:
+    """Small, local-only snapshot included in the main server heartbeat."""
+    state = _load_todesk_state()
+    if not bool(state.get("enabled")):
+        return {"enabled": False}
+    return {
+        "enabled": True,
+        "running": _todesk_process_alive(),
+        "device_id": str(state.get("device_id") or ""),
+        "verification_code": str(state.get("verification_code") or ""),
+        "server": str(state.get("server") or "https://todesk.bhzn.top"),
     }
 
 
@@ -574,6 +603,7 @@ async def get_remote_support(
 @router.post("/api/settings/remote-support", summary="Enable or disable remote support agent")
 async def update_remote_support(
     body: RemoteSupportRequest,
+    request: Request,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     global _TODSK_PROCESS
@@ -587,6 +617,7 @@ async def update_remote_support(
             if not _todesk_process_alive():
                 _start_todesk_process(exe)
             state["enabled"] = True
+            _remember_todesk_identity(state, _todesk_show_id(exe))
             state["updated_at"] = int(time.time() * 1000)
             _save_todesk_state(state)
         else:
@@ -621,7 +652,19 @@ async def update_remote_support(
             state.pop("agent_pid", None)
             state["updated_at"] = int(time.time() * 1000)
             _save_todesk_state(state)
-    return await asyncio.to_thread(_remote_support_payload)
+    # Do not wait for the 30-second background heartbeat after a user action.
+    # Immediately report the new state to the main server; a transient failure
+    # is logged and the normal heartbeat loop remains the retry path.
+    cloud_reported = False
+    try:
+        from .h5_chat_channel import refresh_h5_chat_device_heartbeat
+        await refresh_h5_chat_device_heartbeat(request, current_user)
+        cloud_reported = True
+    except Exception as exc:
+        logger.warning("remote support state immediate heartbeat failed: %s", exc)
+    payload = await asyncio.to_thread(_remote_support_payload)
+    payload["cloud_reported"] = cloud_reported
+    return payload
 
 
 @router.post("/api/settings", summary="更新用户设置")
