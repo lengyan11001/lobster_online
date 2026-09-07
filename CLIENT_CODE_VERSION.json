@@ -1,7 +1,7 @@
 {
-  "version": "2.0.25",
-  "build": 304,
-  "applied_at": "2026-09-07T16:51:11+08:00",
-  "note": "preserve personal profile on live template save",
-  "bundle_sha256": "61e7829ccf2cfdee74173ecaecf78e3659fc0b1e82eed34c31909aa99b12d789"
+  "version": "2.0.26",
+  "build": 305,
+  "applied_at": "2026-09-07T16:55:45+08:00",
+  "note": "preserve personal profile on live template save; sync latest online fixes",
+  "bundle_sha256": "7a71e4942592e31a8be9ab50807f30ec8b8481f4a2315dfebff6be42c038e81f"
 }
