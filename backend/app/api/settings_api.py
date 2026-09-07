@@ -56,6 +56,152 @@ _client_update_status_lock = asyncio.Lock()
 _MACHINE_ID_FILE_NAME = "machine_identity.json"
 _MACHINE_INSTANCE_ID_CACHE = ""
 
+# Optional BHZN ToDesk integration.  The agent is deliberately kept as a
+# separate process so the Online backend remains lightweight; the switch in
+# System Config controls this process and the agent continues to use its
+# existing encrypted config/WS protocol.
+_TODSK_STATE_FILE = _CLIENT_ROOT / "data" / "remote_support.json"
+_TODSK_PROCESS = None
+_TODSK_PROCESS_LOCK = asyncio.Lock()
+
+
+def _todesk_agent_candidates() -> list[Path]:
+    configured = str(os.environ.get("BHZN_TODESK_AGENT_PATH") or "").strip()
+    candidates: list[Path] = []
+    if configured:
+        candidates.append(Path(configured))
+    candidates.extend([
+        _CLIENT_ROOT / "BHZN-ToDesk-Agent.exe",
+        _CLIENT_ROOT / "desktop" / "BHZN-ToDesk-Agent.exe",
+        Path(r"E:\BHZN-ToDesk\desktop-agent-rs\dist\BHZN-ToDesk-Agent.exe"),
+        Path(r"E:\BHZN-ToDesk\desktop-agent-rs\dist\BHZN-ToDesk-Agent-Setup.exe"),
+    ])
+    return candidates
+
+
+def _todesk_agent_path() -> Optional[Path]:
+    for path in _todesk_agent_candidates():
+        try:
+            if path.is_file():
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def _load_todesk_state() -> dict[str, Any]:
+    try:
+        if _TODSK_STATE_FILE.is_file():
+            data = json.loads(_TODSK_STATE_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {"enabled": False}
+
+
+def _save_todesk_state(data: dict[str, Any]) -> None:
+    _TODSK_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _TODSK_STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, _TODSK_STATE_FILE)
+
+
+def _todesk_show_id(exe: Path) -> dict[str, str]:
+    flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+    try:
+        cp = subprocess.run(
+            [str(exe), "--show-id", "--no-update"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            timeout=8,
+            creationflags=flags,
+        )
+    except Exception as exc:
+        return {"error": str(exc)}
+    out: dict[str, str] = {}
+    for line in (cp.stdout or "").splitlines():
+        text = line.strip()
+        if ":" not in text:
+            continue
+        key, value = text.split(":", 1)
+        key = key.strip().lower()
+        value = value.strip()
+        if "id" in key and "配置" not in key:
+            out.setdefault("device_id", value)
+        elif "验证码" in key or "verification" in key:
+            out.setdefault("verification_code", value)
+        elif "服务器" in key or "server" in key:
+            out.setdefault("server", value)
+    return out
+
+
+def _todesk_process_alive() -> bool:
+    global _TODSK_PROCESS
+    if _TODSK_PROCESS is not None:
+        try:
+            if _TODSK_PROCESS.poll() is None:
+                return True
+        except Exception:
+            pass
+    # Recover state after backend restart by checking the persisted PID first.
+    state = _load_todesk_state()
+    try:
+        persisted_pid = int(state.get("agent_pid") or 0)
+    except (TypeError, ValueError):
+        persisted_pid = 0
+    if persisted_pid > 0:
+        try:
+            import psutil  # type: ignore
+            proc = psutil.Process(persisted_pid)
+            cmd = " ".join(proc.cmdline())
+            if proc.is_running() and "BHZN-ToDesk-Agent" in (cmd or proc.name()):
+                return True
+        except Exception:
+            pass
+    # Recover state after backend restart by checking the process command line
+    # when psutil is available (it is bundled in Online builds).
+    try:
+        import psutil  # type: ignore
+        for proc in psutil.process_iter(["name", "exe", "cmdline"]):
+            info = proc.info
+            exe = str(info.get("exe") or "")
+            cmd = " ".join(str(x) for x in (info.get("cmdline") or []))
+            if "BHZN-ToDesk-Agent" in (exe + " " + cmd):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _start_todesk_process(exe: Path) -> None:
+    """Start the agent once, writing output to a rotating-friendly log file."""
+    global _TODSK_PROCESS
+    if _todesk_process_alive():
+        return
+    log_dir = _CLIENT_ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "todesk-agent.log"
+    flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+    handle = log_file.open("a", encoding="utf-8")
+    try:
+        _TODSK_PROCESS = subprocess.Popen(
+            [str(exe), "--headless", "--no-update"],
+            cwd=str(exe.parent),
+            stdin=subprocess.DEVNULL,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            creationflags=flags,
+        )
+        state = _load_todesk_state()
+        state["agent_pid"] = _TODSK_PROCESS.pid
+        _save_todesk_state(state)
+    finally:
+        handle.close()
+
 
 def _load_custom_configs() -> dict[str, Any]:
     if not _CUSTOM_CONFIGS_FILE.exists():
@@ -267,6 +413,10 @@ class MachineIdentityResponse(BaseModel):
     machine_instance_id: str
 
 
+class RemoteSupportRequest(BaseModel):
+    enabled: bool
+
+
 _INSTALLATION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{8,128}$")
 
 
@@ -380,6 +530,90 @@ def get_settings(current_user: User = Depends(get_current_user)):
 @router.get("/api/settings/machine-identity", response_model=MachineIdentityResponse)
 def get_machine_identity():
     return MachineIdentityResponse(machine_instance_id=_get_or_create_machine_instance_id())
+
+
+def _remote_support_payload() -> dict[str, Any]:
+    state = _load_todesk_state()
+    exe = _todesk_agent_path()
+    identity: dict[str, str] = {}
+    if exe:
+        identity = _todesk_show_id(exe)
+    return {
+        "enabled": bool(state.get("enabled")),
+        "running": _todesk_process_alive(),
+        "available": bool(exe),
+        "agent_path": str(exe) if exe else "",
+        "device_id": identity.get("device_id", ""),
+        "verification_code": identity.get("verification_code", ""),
+        "server": identity.get("server", "https://todesk.bhzn.top"),
+    }
+
+
+@router.get("/api/settings/remote-support", summary="Remote support agent status")
+async def get_remote_support(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    state = _load_todesk_state()
+    exe = _todesk_agent_path()
+    if bool(state.get("enabled")) and exe and not _todesk_process_alive():
+        try:
+            _start_todesk_process(exe)
+        except Exception as exc:
+            logger.warning("remote support agent auto-start failed: %s", exc)
+    return await asyncio.to_thread(_remote_support_payload)
+
+
+@router.post("/api/settings/remote-support", summary="Enable or disable remote support agent")
+async def update_remote_support(
+    body: RemoteSupportRequest,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    global _TODSK_PROCESS
+    async with _TODSK_PROCESS_LOCK:
+        state = _load_todesk_state()
+        requested = bool(body.enabled)
+        exe = _todesk_agent_path()
+        if requested:
+            if not exe:
+                raise HTTPException(status_code=503, detail="BHZN ToDesk Agent 未安装，请先安装客户端组件")
+            if not _todesk_process_alive():
+                _start_todesk_process(exe)
+            state["enabled"] = True
+            state["updated_at"] = int(time.time() * 1000)
+            _save_todesk_state(state)
+        else:
+            proc = _TODSK_PROCESS
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    await asyncio.to_thread(proc.wait, 5)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+            _TODSK_PROCESS = None
+            # If Online was restarted, terminate only the exact persisted
+            # ToDesk Agent PID that this switch started.
+            try:
+                persisted_pid = int(state.get("agent_pid") or 0)
+            except (TypeError, ValueError):
+                persisted_pid = 0
+            if persisted_pid > 0:
+                try:
+                    import psutil  # type: ignore
+                    owned = psutil.Process(persisted_pid)
+                    cmd = " ".join(owned.cmdline())
+                    if owned.is_running() and "BHZN-ToDesk-Agent" in (cmd or owned.name()):
+                        owned.terminate()
+                        owned.wait(timeout=5)
+                except Exception:
+                    pass
+            state["enabled"] = False
+            state.pop("agent_pid", None)
+            state["updated_at"] = int(time.time() * 1000)
+            _save_todesk_state(state)
+    return await asyncio.to_thread(_remote_support_payload)
 
 
 @router.post("/api/settings", summary="更新用户设置")

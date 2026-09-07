@@ -151,8 +151,8 @@
   });
 
   window.registerLobsterView('sys-config', {
-    html: '/static/views/sys-config.html?v=20260818-device-alias-v1',
-    scripts: '/static/js/views/sysconfig.js?v=20260818-device-alias-v1'
+    html: '/static/views/sys-config.html?v=20260907-todesk-v1',
+    scripts: '/static/js/views/sysconfig.js?v=20260907-todesk-v1'
   });
 
   window.registerLobsterView('agent', {

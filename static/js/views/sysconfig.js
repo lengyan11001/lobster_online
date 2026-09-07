@@ -900,3 +900,65 @@ if (clearOpenclawMemoryBtn) {
 }
 
 // xSkill/SuTui config moved to skill store (skill.js)
+
+function renderRemoteSupportStatus(data) {
+  var toggle = document.getElementById('remoteSupportEnabled');
+  var label = document.getElementById('remoteSupportToggleLabel');
+  var status = document.getElementById('remoteSupportStatus');
+  var identity = document.getElementById('remoteSupportIdentity');
+  var idEl = document.getElementById('remoteSupportDeviceId');
+  var codeEl = document.getElementById('remoteSupportCode');
+  if (!data) return;
+  if (toggle) toggle.checked = !!data.enabled;
+  if (label) label.textContent = data.enabled ? '远程支持已打开' : '远程支持已关闭';
+  if (status) {
+    status.textContent = data.running ? '在线' : (data.available ? '未运行' : '未安装');
+    status.className = 'badge ' + (data.running ? 'good' : 'warn');
+  }
+  if (identity) identity.style.display = data.available ? 'grid' : 'none';
+  if (idEl) idEl.textContent = data.device_id || '-';
+  if (codeEl) codeEl.textContent = data.verification_code || '-';
+}
+
+function loadRemoteSupportStatus() {
+  var block = document.getElementById('remoteSupportBlock');
+  if (!block) return;
+  fetch((LOCAL_API_BASE || '') + '/api/settings/remote-support', { headers: authHeaders() })
+    .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+    .then(function(x) {
+      if (!x.ok) throw new Error((x.data && x.data.detail) || '远程支持状态读取失败');
+      renderRemoteSupportStatus(x.data);
+    })
+    .catch(function(err) {
+      var status = document.getElementById('remoteSupportStatus');
+      if (status) { status.textContent = '不可用'; status.className = 'badge warn'; }
+      var msg = document.getElementById('remoteSupportMsg');
+      if (msg) { showMsg(msg, (err && err.message) || '远程支持状态读取失败', true); msg.style.display = ''; }
+    });
+}
+
+var remoteSupportEnabled = document.getElementById('remoteSupportEnabled');
+if (remoteSupportEnabled) {
+  remoteSupportEnabled.addEventListener('change', function() {
+    var checkbox = remoteSupportEnabled;
+    var msg = document.getElementById('remoteSupportMsg');
+    checkbox.disabled = true;
+    fetch((LOCAL_API_BASE || '') + '/api/settings/remote-support', {
+      method: 'POST', headers: authHeaders(), body: JSON.stringify({ enabled: !!checkbox.checked })
+    })
+      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+      .then(function(x) {
+        if (!x.ok) throw new Error((x.data && x.data.detail) || '远程支持切换失败');
+        renderRemoteSupportStatus(x.data);
+        if (msg) { showMsg(msg, x.data.enabled ? '远程支持已打开' : '远程支持已关闭', false); msg.style.display = ''; }
+      })
+      .catch(function(err) {
+        checkbox.checked = !checkbox.checked;
+        if (msg) { showMsg(msg, (err && err.message) || '远程支持切换失败', true); msg.style.display = ''; }
+      })
+      .finally(function() { checkbox.disabled = false; });
+  });
+}
+var remoteSupportRefreshBtn = document.getElementById('remoteSupportRefreshBtn');
+if (remoteSupportRefreshBtn) remoteSupportRefreshBtn.addEventListener('click', loadRemoteSupportStatus);
+loadRemoteSupportStatus();

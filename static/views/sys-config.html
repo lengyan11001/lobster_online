@@ -59,6 +59,25 @@
         <button type="button" id="saveSutuiTokenBtn" class="btn btn-ghost btn-sm" style="margin-top:0.25rem;">保存 Token</button>
         <span id="sutuiTokenMsg" class="msg" style="display:none;margin-left:0.5rem;"></span>
       </div>
+      <div class="form-group" id="remoteSupportBlock">
+        <label>远程支持（BHZN ToDesk）</label>
+        <div class="form-hint">打开后启动本机远程支持 Agent。设备编号和验证码用于管理员远程协助；关闭后立即停止 Agent。</div>
+        <div style="display:flex;align-items:center;gap:0.7rem;flex-wrap:wrap;margin-top:0.55rem;">
+          <label style="display:inline-flex;align-items:center;gap:0.45rem;cursor:pointer;">
+            <input type="checkbox" id="remoteSupportEnabled">
+            <span id="remoteSupportToggleLabel">远程支持已关闭</span>
+          </label>
+          <span id="remoteSupportStatus" class="badge">未检测</span>
+        </div>
+        <div id="remoteSupportIdentity" style="display:none;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.55rem;margin-top:0.65rem;max-width:58rem;">
+          <div><div class="form-hint">设备编号</div><code id="remoteSupportDeviceId" style="display:block;border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.5rem 0.6rem;">-</code></div>
+          <div><div class="form-hint">验证码</div><code id="remoteSupportCode" style="display:block;border:1px solid var(--border);border-radius:var(--radius-sm);padding:0.5rem 0.6rem;">-</code></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;margin-top:0.55rem;">
+          <button type="button" id="remoteSupportRefreshBtn" class="btn btn-ghost btn-sm">刷新状态</button>
+          <span id="remoteSupportMsg" class="msg" style="display:none;"></span>
+        </div>
+      </div>
       <div class="form-group" id="assetPathSettingsBlock">
         <label>素材路径</label>
         <div class="form-hint">内部素材目录用于系统入库读取，不建议手动移动；下载目录用于素材库“下载/下载到素材文件夹”。</div>
