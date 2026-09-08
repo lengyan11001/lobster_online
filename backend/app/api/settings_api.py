@@ -62,6 +62,9 @@ _MACHINE_INSTANCE_ID_CACHE = ""
 # existing encrypted config/WS protocol.
 _TODSK_STATE_FILE = _CLIENT_ROOT / "data" / "remote_support.json"
 _TODSK_AGENT_CONFIG_FILE = _CLIENT_ROOT / "data" / "todesk_agent.json"
+_TODSK_AGENT_SOURCE = _CLIENT_ROOT / "desktop" / "todesk_agent" / "bhzn_desktop_agent.py"
+_TODSK_AGENT_VENV = _CLIENT_ROOT / "desktop" / "todesk_agent" / ".venv"
+_TODSK_AGENT_READY = _TODSK_AGENT_VENV / ".ready"
 _TODSK_SERVER_URL = "https://bhzn.top"
 _TODSK_PROCESS = None
 _TODSK_PROCESS_LOCK = asyncio.Lock()
@@ -72,13 +75,54 @@ def _todesk_agent_candidates() -> list[Path]:
     candidates: list[Path] = []
     if configured:
         candidates.append(Path(configured))
+    # Prefer a source checkout only when its isolated runtime exists.  The
+    # normal Online Python environment must never import the optional RTC
+    # stack; the switch can still use the packaged agent until this source
+    # runtime has been built by the supplied build script.
+    source_python = _todesk_source_python()
+    if source_python:
+        candidates.append(_TODSK_AGENT_SOURCE)
     candidates.extend([
         _CLIENT_ROOT / "BHZN-ToDesk-Agent.exe",
         _CLIENT_ROOT / "desktop" / "BHZN-ToDesk-Agent.exe",
-        Path(r"E:\BHZN-ToDesk\desktop-agent-rs\dist\BHZN-ToDesk-Agent.exe"),
-        Path(r"E:\BHZN-ToDesk\desktop-agent-rs\dist\BHZN-ToDesk-Agent-Setup.exe"),
     ])
     return candidates
+
+
+def _todesk_source_python() -> Optional[Path]:
+    candidates = (
+        _TODSK_AGENT_VENV / "Scripts" / "python.exe",
+        _TODSK_AGENT_VENV / "bin" / "python",
+    )
+    for path in candidates:
+        try:
+            if path.is_file() and _TODSK_AGENT_READY.is_file():
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def _todesk_command(agent_path: Path, *args: str) -> list[str]:
+    """Build a command for the source agent or a legacy packaged binary."""
+    if agent_path.suffix.lower() == ".py":
+        return [str(_todesk_source_python() or sys.executable), str(agent_path), *args]
+    return [str(agent_path), *args]
+
+
+def _todesk_run_args(agent_path: Path, *args: str) -> tuple[str, ...]:
+    # The source agent uses --nogui; older packaged agents used --headless.
+    prefix = ("--nogui",) if agent_path.suffix.lower() == ".py" else ("--headless",)
+    return (*prefix, *args)
+
+
+def _is_todesk_process(proc: Any) -> bool:
+    try:
+        cmd = " ".join(str(item) for item in (proc.cmdline() or []))
+        name = str(proc.name() or "")
+        return "BHZN-ToDesk-Agent" in (cmd + " " + name) or "bhzn_desktop_agent.py" in cmd
+    except Exception:
+        return False
 
 
 def _todesk_agent_path() -> Optional[Path]:
@@ -120,9 +164,14 @@ def _remember_todesk_identity(state: dict[str, Any], identity: dict[str, str]) -
 
 def _todesk_show_id(exe: Path, config_path: Optional[Path] = None) -> dict[str, str]:
     flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+    command_args = ["--show-id"]
+    if exe.suffix.lower() != ".py":
+        command_args.append("--no-update")
+    if config_path:
+        command_args.extend(["--config", str(config_path)])
     try:
         cp = subprocess.run(
-            [str(exe), "--show-id", "--no-update", *(["--config", str(config_path)] if config_path else [])],
+            _todesk_command(exe, *command_args),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -191,7 +240,7 @@ def _todesk_process_alive() -> bool:
             import psutil  # type: ignore
             proc = psutil.Process(persisted_pid)
             cmd = " ".join(proc.cmdline())
-            if proc.is_running() and "BHZN-ToDesk-Agent" in (cmd or proc.name()):
+            if proc.is_running() and _is_todesk_process(proc):
                 return True
         except Exception:
             pass
@@ -203,7 +252,7 @@ def _todesk_process_alive() -> bool:
             info = proc.info
             exe = str(info.get("exe") or "")
             cmd = " ".join(str(x) for x in (info.get("cmdline") or []))
-            if "BHZN-ToDesk-Agent" in (exe + " " + cmd):
+            if "BHZN-ToDesk-Agent" in (exe + " " + cmd) or "bhzn_desktop_agent.py" in cmd:
                 return True
     except Exception:
         pass
@@ -224,7 +273,15 @@ def _start_todesk_process(exe: Path) -> None:
     handle = log_file.open("a", encoding="utf-8")
     try:
         _TODSK_PROCESS = subprocess.Popen(
-            [str(exe), "--headless", "--no-update", "--config", str(config_path)],
+            _todesk_command(
+                exe,
+                *_todesk_run_args(
+                    exe,
+                    *( [] if exe.suffix.lower() == ".py" else ["--no-update"] ),
+                    "--config",
+                    str(config_path),
+                ),
+            ),
             cwd=str(exe.parent),
             stdin=subprocess.DEVNULL,
             stdout=handle,
@@ -568,6 +625,19 @@ def get_machine_identity():
 
 def _remote_support_payload() -> dict[str, Any]:
     state = _load_todesk_state()
+    # Remote support is strictly opt-in.  When the switch is off, do not
+    # probe executables, inspect processes, read identities, or initialize any
+    # remote-control dependency on the normal Online request path.
+    if not bool(state.get("enabled")):
+        return {
+            "enabled": False,
+            "running": False,
+            "available": False,
+            "agent_path": "",
+            "device_id": "",
+            "verification_code": "",
+            "server": _TODSK_SERVER_URL,
+        }
     exe = _todesk_agent_path()
     identity: dict[str, str] = {}
     if exe:
@@ -608,6 +678,8 @@ async def get_remote_support(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     state = _load_todesk_state()
+    if not bool(state.get("enabled")):
+        return await asyncio.to_thread(_remote_support_payload)
     exe = _todesk_agent_path()
     if bool(state.get("enabled")) and exe and not _todesk_process_alive():
         try:
@@ -659,8 +731,7 @@ async def update_remote_support(
                 try:
                     import psutil  # type: ignore
                     owned = psutil.Process(persisted_pid)
-                    cmd = " ".join(owned.cmdline())
-                    if owned.is_running() and "BHZN-ToDesk-Agent" in (cmd or owned.name()):
+                    if owned.is_running() and _is_todesk_process(owned):
                         owned.terminate()
                         owned.wait(timeout=5)
                 except Exception:

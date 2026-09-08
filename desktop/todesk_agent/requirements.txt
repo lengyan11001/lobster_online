@@ -1,0 +1,9 @@
+Pillow==10.4.0
+cryptography==48.0.1
+mss==9.0.1
+pyautogui==0.9.54
+pyperclip==1.11.0
+websocket-client==1.8.0
+numpy==2.0.2
+av==12.3.0
+aiortc==1.9.0
