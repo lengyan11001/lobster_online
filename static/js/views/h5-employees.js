@@ -198,6 +198,7 @@
   function showError(message) { var box = el('oeError'); if (!box) return; box.textContent = message || ''; box.hidden = !message; }
   function clearError() { showError(''); }
   function activeTemplateKey(template) { return String(template && template.meta && (template.meta.system_template_key || template.meta.systemTemplateKey) || '').trim(); }
+  function isLegacySystemMirror(template) { var meta=template && template.meta && typeof template.meta === 'object' ? template.meta : {}; return String(meta.source || '').trim() === 'system_mirror' && !!activeTemplateKey(template); }
   function isSalesTemplate(template) { return String(state.selectedId) === 'system_sales' || activeTemplateKey(template) === 'system_sales'; }
   function templateNeedsPlanDay(template) { return isSalesTemplate(template) || (state.nodes.length ? state.nodes : (template && template.nodes || [])).some(function(node) { var payload=node && node.plan && node.plan.payload || {}; return String(node && node.ability_key || '') === 'local_bestseller' || String(payload.action || '') === 'local_bestseller_daily_video'; }); }
   function selectedDeviceId() {
@@ -733,7 +734,7 @@
     });
     if (!systems.length) systems=[{id:'system_sales',name:'销售员工',meta:{system_template_key:'system_sales'},source:'system',mark:'销'}];
     var systemKeys={}; systems.forEach(function(item){systemKeys[activeTemplateKey(item) || String(item.id || '')]=true;});
-    var rows = systems.concat(state.templates.filter(function(item) { return item && !systemKeys[activeTemplateKey(item)] && !activeTemplateKey(item); }).map(function(item) { return Object.assign({mark:String(item.name || '员').charAt(0)},item); }));
+    var rows = systems.concat(state.templates.filter(function(item) { return item && !isLegacySystemMirror(item) && !systemKeys[activeTemplateKey(item)] && !activeTemplateKey(item); }).map(function(item) { return Object.assign({mark:String(item.name || '员').charAt(0)},item); }));
     if (!rows.length) { host.innerHTML = '<div class="oe-empty-list">当前账号没有可访问的员工模板。</div>'; return; }
     host.innerHTML = rows.map(function(item) { var selected=String(item.id)===String(state.selectedId); var meta=item.source === 'granted' ? '他人授权' : item.source === 'system' ? '系统员工' : '我的模板'; return '<button type="button" class="oe-employee-item' + (selected ? ' is-selected' : '') + '" data-oe-template="' + esc(item.id) + '"' + (state.submitting ? ' disabled aria-disabled="true"' : '') + '><span class="oe-employee-mark">' + esc(item.mark || String(item.name || '员').charAt(0)) + '</span><span class="oe-employee-copy"><span class="oe-employee-name">' + esc(item.name || '未命名员工') + '</span><span class="oe-employee-meta">' + meta + '</span></span></button>'; }).join('');
   }
@@ -868,6 +869,10 @@
   function applyServerTemplate(id) {
     state.selectedId=String(id || 'system_sales');
     var catalog=systemTemplateForKey(state.selectedId), mirror=!catalog && state.selectedId === 'system_sales' ? ownSalesMirror() : null, base, merged;
+    if (!catalog) {
+      var legacy=state.templates.find(function(item){return String(item && item.id || '') === state.selectedId && isLegacySystemMirror(item);});
+      if (legacy) { state.selectedId=activeTemplateKey(legacy) || 'system_sales'; catalog=systemTemplateForKey(state.selectedId); }
+    }
     if (mirror) {
       merged=mergeSalesPresetNodes(mirror.nodes);
       base=normalizeTemplate(Object.assign({},mirror,{nodes:merged.nodes}));

@@ -61,6 +61,8 @@ _MACHINE_INSTANCE_ID_CACHE = ""
 # System Config controls this process and the agent continues to use its
 # existing encrypted config/WS protocol.
 _TODSK_STATE_FILE = _CLIENT_ROOT / "data" / "remote_support.json"
+_TODSK_AGENT_CONFIG_FILE = _CLIENT_ROOT / "data" / "todesk_agent.json"
+_TODSK_SERVER_URL = "https://bhzn.top"
 _TODSK_PROCESS = None
 _TODSK_PROCESS_LOCK = asyncio.Lock()
 
@@ -116,11 +118,11 @@ def _remember_todesk_identity(state: dict[str, Any], identity: dict[str, str]) -
     return state
 
 
-def _todesk_show_id(exe: Path) -> dict[str, str]:
+def _todesk_show_id(exe: Path, config_path: Optional[Path] = None) -> dict[str, str]:
     flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
     try:
         cp = subprocess.run(
-            [str(exe), "--show-id", "--no-update"],
+            [str(exe), "--show-id", "--no-update", *(["--config", str(config_path)] if config_path else [])],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -154,6 +156,20 @@ def _todesk_show_id(exe: Path) -> dict[str, str]:
         elif "服务器" in key or "server" in key:
             out.setdefault("server", value)
     return out
+
+
+def _ensure_todesk_main_server_config(exe: Path, state: dict[str, Any]) -> Path:
+    """Keep the existing device identity but always connect the agent to bhzn.top."""
+    legacy_identity = _todesk_show_id(exe)
+    identity = {
+        "deviceId": str(state.get("device_id") or legacy_identity.get("device_id") or "").strip(),
+        "verificationCode": str(state.get("verification_code") or legacy_identity.get("verification_code") or "").strip(),
+        "name": str(state.get("device_name") or "").strip(),
+        "server": _TODSK_SERVER_URL,
+    }
+    _TODSK_AGENT_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _TODSK_AGENT_CONFIG_FILE.write_text(json.dumps(identity, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return _TODSK_AGENT_CONFIG_FILE
 
 
 def _todesk_process_alive() -> bool:
@@ -203,17 +219,18 @@ def _start_todesk_process(exe: Path) -> None:
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "todesk-agent.log"
     flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+    state = _load_todesk_state()
+    config_path = _ensure_todesk_main_server_config(exe, state)
     handle = log_file.open("a", encoding="utf-8")
     try:
         _TODSK_PROCESS = subprocess.Popen(
-            [str(exe), "--headless", "--no-update"],
+            [str(exe), "--headless", "--no-update", "--config", str(config_path)],
             cwd=str(exe.parent),
             stdin=subprocess.DEVNULL,
             stdout=handle,
             stderr=subprocess.STDOUT,
             creationflags=flags,
         )
-        state = _load_todesk_state()
         state["agent_pid"] = _TODSK_PROCESS.pid
         _save_todesk_state(state)
     finally:
@@ -554,7 +571,7 @@ def _remote_support_payload() -> dict[str, Any]:
     exe = _todesk_agent_path()
     identity: dict[str, str] = {}
     if exe:
-        identity = _todesk_show_id(exe)
+        identity = _todesk_show_id(exe, _TODSK_AGENT_CONFIG_FILE if _TODSK_AGENT_CONFIG_FILE.is_file() else None)
         if identity.get("device_id") or identity.get("verification_code"):
             try:
                 _remember_todesk_identity(state, identity)
@@ -568,7 +585,7 @@ def _remote_support_payload() -> dict[str, Any]:
         "agent_path": str(exe) if exe else "",
         "device_id": identity.get("device_id", ""),
         "verification_code": identity.get("verification_code", ""),
-        "server": identity.get("server", "https://todesk.bhzn.top"),
+        "server": identity.get("server", _TODSK_SERVER_URL),
     }
 
 
@@ -582,7 +599,7 @@ def remote_support_heartbeat_snapshot() -> dict[str, Any]:
         "running": _todesk_process_alive(),
         "device_id": str(state.get("device_id") or ""),
         "verification_code": str(state.get("verification_code") or ""),
-        "server": str(state.get("server") or "https://todesk.bhzn.top"),
+        "server": str(state.get("server") or _TODSK_SERVER_URL),
     }
 
 

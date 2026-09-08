@@ -8655,6 +8655,19 @@ async def run_douyin_task_worker(
             if douyin_stop_requested:
                 break
 
+            child_timeout_state = {"timed_out": False}
+            child_worker_task = asyncio.current_task()
+            child_timeout_task: Optional[asyncio.Task] = None
+
+            async def cancel_child_on_timeout() -> None:
+                try:
+                    await asyncio.sleep(900.0)
+                    child_timeout_state["timed_out"] = True
+                    if child_worker_task is not None:
+                        child_worker_task.cancel()
+                except asyncio.CancelledError:
+                    return
+
             try:
                 source_comment_total = max(
                     0,
@@ -8708,6 +8721,7 @@ async def run_douyin_task_worker(
                     pass
                 continue
 
+            child_timeout_task = asyncio.create_task(cancel_child_on_timeout())
             try:
                 def update_collect_progress(progress_patch: Dict[str, object]) -> None:
                     progress = ensure_douyin_task_shape(task).get("collect_progress", {})
@@ -8883,6 +8897,8 @@ async def run_douyin_task_worker(
                     "success",
                 )
             except Exception as exc:
+                if child_timeout_task is not None and not child_timeout_task.done():
+                    child_timeout_task.cancel()
                 async with state_lock:
                     task["status"] = "failed"
                     task["error"] = str(exc)
@@ -8903,9 +8919,16 @@ async def run_douyin_task_worker(
                 except Exception:
                     pass
             except BaseException as exc:
+                if child_timeout_task is not None and not child_timeout_task.done():
+                    child_timeout_task.cancel()
+                error_message = (
+                    "抖音评论采集子任务超过 900 秒，已按超时失败结束"
+                    if child_timeout_state["timed_out"]
+                    else f"{type(exc).__name__}: {exc}"
+                )
                 async with state_lock:
                     task["status"] = "failed"
-                    task["error"] = f"{type(exc).__name__}: {exc}"
+                    task["error"] = error_message
                     task["collect_progress"] = {
                         **ensure_douyin_task_shape(task).get("collect_progress", {}),
                         "phase": "failed",
@@ -8922,13 +8945,20 @@ async def run_douyin_task_worker(
                     traceback.print_exc()
                 except Exception:
                     pass
-                if isinstance(exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+                if isinstance(exc, asyncio.CancelledError) and not child_timeout_state["timed_out"]:
+                    raise
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                     raise
                 # 非取消类异常（如 Playwright 内部 BaseException）：记录并继续下一个任务
                 continue
-
             # 每个任务结束后短暂等待，避免 0 评论或快速完成的任务紧接着开下一个 page 时
             # 因为浏览器资源未完全释放而触发 Playwright 内部异常
+            if child_timeout_task is not None and not child_timeout_task.done():
+                child_timeout_task.cancel()
+                try:
+                    await child_timeout_task
+                except asyncio.CancelledError:
+                    pass
             try:
                 await asyncio.sleep(1.0)
             except asyncio.CancelledError:
@@ -9014,6 +9044,20 @@ async def run_douyin_task_worker_protocol(
     for task in tasks:
         if douyin_stop_requested:
             break
+        if "child_timeout_task" in locals() and child_timeout_task is not None and not child_timeout_task.done():
+            child_timeout_task.cancel()
+        child_timeout_state = {"timed_out": False}
+        child_worker_task = asyncio.current_task()
+        child_timeout_task: Optional[asyncio.Task] = None
+
+        async def cancel_child_on_timeout() -> None:
+            try:
+                await asyncio.sleep(900.0)
+                child_timeout_state["timed_out"] = True
+                if child_worker_task is not None:
+                    child_worker_task.cancel()
+            except asyncio.CancelledError:
+                return
         try:
             work_info = await asyncio.to_thread(client.get_work_info, auth, str(task.get("url", "") or "").strip())
             source_comment_total = max(
@@ -9052,6 +9096,7 @@ async def run_douyin_task_worker_protocol(
                 f"[抖音评论采集] 账号 {account['id']} 开始处理：{task.get('title') or task.get('url')}",
                 "info",
             )
+            child_timeout_task = asyncio.create_task(cancel_child_on_timeout())
             comments_payload: object = None
             comments: List[Dict] = []
             for comment_attempt in range(1, 3):
@@ -9223,6 +9268,33 @@ async def run_douyin_task_worker_protocol(
             try:
                 traceback.print_exc()
             except Exception:
+                pass
+        except BaseException as exc:
+            if child_timeout_task is not None and not child_timeout_task.done():
+                child_timeout_task.cancel()
+            error_message = (
+                "抖音评论采集子任务超过 900 秒，已按超时失败结束"
+                if child_timeout_state["timed_out"]
+                else f"{type(exc).__name__}: {exc}"
+            )
+            async with state_lock:
+                task["status"] = "failed"
+                task["error"] = error_message
+                task["collect_progress"] = {
+                    **ensure_douyin_task_shape(task).get("collect_progress", {}),
+                    "phase": "failed",
+                    "account_id": int(account["id"] or 0),
+                    "updated_at": _now_text(),
+                    "last_message": error_message,
+                }
+                save_douyin_tasks_state()
+            if isinstance(exc, asyncio.CancelledError) and not child_timeout_state["timed_out"]:
+                raise
+        if child_timeout_task is not None and not child_timeout_task.done():
+            child_timeout_task.cancel()
+            try:
+                await child_timeout_task
+            except asyncio.CancelledError:
                 pass
 
 
