@@ -1,7 +1,7 @@
 {
-  "version": "2.0.27",
-  "build": 306,
-  "applied_at": "2026-09-07T20:13:09+08:00",
-  "note": "per-child Douyin collection timeout and complete child terminal states",
-  "bundle_sha256": "8c2462d0d4ab60754da42283e7591524a548ddbfb9d6c23c2a14b5e152052d31"
+  "version": "2.0.28",
+  "build": 307,
+  "applied_at": "2026-09-08T09:45:20+08:00",
+  "note": "remote support agent primary server",
+  "bundle_sha256": "e369227d92b11937f6136db09993523c9740ad303234187a9b742180c1893100"
 }
