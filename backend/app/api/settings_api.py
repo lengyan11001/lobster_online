@@ -159,7 +159,7 @@ def _todesk_show_id(exe: Path, config_path: Optional[Path] = None) -> dict[str, 
 
 
 def _ensure_todesk_main_server_config(exe: Path, state: dict[str, Any]) -> Path:
-    """Keep the existing device identity but always connect the agent to bhzn.top."""
+    """Keep the existing device identity but always connect the agent to bhos.online."""
     legacy_identity = _todesk_show_id(exe)
     identity = {
         "deviceId": str(state.get("device_id") or legacy_identity.get("device_id") or "").strip(),
