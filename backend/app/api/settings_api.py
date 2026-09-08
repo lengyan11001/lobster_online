@@ -65,7 +65,7 @@ _TODSK_AGENT_CONFIG_FILE = _CLIENT_ROOT / "data" / "todesk_agent.json"
 _TODSK_AGENT_SOURCE = _CLIENT_ROOT / "desktop" / "todesk_agent" / "bhzn_desktop_agent.py"
 _TODSK_AGENT_VENV = _CLIENT_ROOT / "desktop" / "todesk_agent" / ".venv"
 _TODSK_AGENT_READY = _TODSK_AGENT_VENV / ".ready"
-_TODSK_SERVER_URL = "https://bhzn.top"
+_TODSK_SERVER_URL = "https://todesk.bhzn.top"
 _TODSK_PROCESS = None
 _TODSK_PROCESS_LOCK = asyncio.Lock()
 
