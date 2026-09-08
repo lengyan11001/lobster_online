@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
-DEFAULT_API = "https://bhzn.top"
+DEFAULT_API = "https://bhos.online"
 DEFAULT_PORT = 8000
 PROXY_PREFIXES = (
     "/api/",

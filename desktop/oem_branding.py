@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_OEM_SERVER = "https://bhzn.top"
+DEFAULT_OEM_SERVER = "https://bhos.online"
 OEM_CODE_RE = re.compile(r"^[0-9]{4,12}$")
 BRAND_MARK_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")

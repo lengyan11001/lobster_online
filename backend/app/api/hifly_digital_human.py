@@ -43,7 +43,7 @@ _HIFLY_PREVIEWS_MANIFEST_PATH = _HIFLY_PREVIEWS_DIR / "manifest.json"
 _HIFLY_PUBLIC_AVATARS_PATH = _ROOT_DIR / "hifly_public_avatars.json"
 _HIFLY_PUBLIC_AVATAR_CACHE_PATH = _ROOT_DIR / "data" / "hifly_public_avatars_cache.json"
 _HIFLY_BILLING_STATE_PATH = _ROOT_DIR / "data" / "hifly_billing_state.json"
-_LOBSTER_SERVER_PUBLIC = "https://bhzn.top"
+_LOBSTER_SERVER_PUBLIC = "https://bhos.online"
 
 _GENERIC_FEMALE_COVER = "https://hfcdn.lingverse.co/c8fb4357c18dcbe55bb646a284ab43fe/69FF59FF/hf/input/6/videos/hansining-035/hansining-cover.jpg"
 _GENERIC_MALE_COVER = "https://hfcdn.lingverse.co/a9303a866274b89806760ecedbc10a2a/69FF59FF/hf/input/6/videos/zhoujingxing-035/zhoujingxing-cover.jpg"

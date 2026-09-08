@@ -626,7 +626,7 @@ def _is_auth_server_temp_asset_url(url: str) -> bool:
                 return False
         except Exception:
             return False
-        auth_base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/") or "https://bhzn.top"
+        auth_base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/") or "https://bhos.online"
         auth_host = (urlparse(auth_base).hostname or "").lower()
         return bool(auth_host and hostname == auth_host)
     except Exception:
@@ -2192,7 +2192,7 @@ async def _report_generation_record_to_server(
     """Best-effort report for admin audit; never blocks local save-url success."""
     if _save_asset_origin(body) != "generated":
         return
-    base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/") or "https://bhzn.top"
+    base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/") or "https://bhos.online"
     public_url = str(asset_payload.get("source_url") or "").strip()
     if not base or not public_url:
         logger.info(

@@ -2091,7 +2091,7 @@ def _parse_iso_datetime(value: Any) -> Optional[datetime]:
 
 
 def _server_proxy_base() -> str:
-    return (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/") or "https://bhzn.top"
+    return (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/") or "https://bhos.online"
 
 
 def _wechat_intelligence_headers(auth_context: Optional[Dict[str, Any]]) -> Dict[str, str]:
@@ -13720,7 +13720,7 @@ def _find_detail_comment_cell(root: Any) -> Optional[Any]:
 
 
 def _server_proxy_base_for_native() -> str:
-    return (getattr(settings, "auth_server_base", None) or "https://bhzn.top").strip().rstrip("/")
+    return (getattr(settings, "auth_server_base", None) or "https://bhos.online").strip().rstrip("/")
 
 
 async def _call_sutui_chat_for_native_task(

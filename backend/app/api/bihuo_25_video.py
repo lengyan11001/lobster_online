@@ -31,7 +31,7 @@ from ..core.config import settings
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_SERVER_FALLBACK = "https://bhzn.top"
+_SERVER_FALLBACK = "https://bhos.online"
 _PROVIDER_MODEL = "st-ai/super-seed2-lite"
 _MODE_TO_UPSTREAM = {
     "reference": "omini",

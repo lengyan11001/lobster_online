@@ -62,7 +62,7 @@ _MACHINE_INSTANCE_ID_CACHE = ""
 # existing encrypted config/WS protocol.
 _TODSK_STATE_FILE = _CLIENT_ROOT / "data" / "remote_support.json"
 _TODSK_AGENT_CONFIG_FILE = _CLIENT_ROOT / "data" / "todesk_agent.json"
-_TODSK_SERVER_URL = "https://bhzn.top"
+_TODSK_SERVER_URL = "https://bhos.online"
 _TODSK_PROCESS = None
 _TODSK_PROCESS_LOCK = asyncio.Lock()
 

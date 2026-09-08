@@ -44,7 +44,7 @@ _DATA_DIR.mkdir(exist_ok=True)
 _ASSETS_DIR = _BASE_DIR / "assets"
 _CONFIG_PATH = _DATA_DIR / "wechat_article_config.json"
 _API_TIMEOUT = 30.0
-_LOBSTER_SERVER_PUBLIC = "https://bhzn.top"
+_LOBSTER_SERVER_PUBLIC = "https://bhos.online"
 _IMAGE_GENERATION_RETRIES = 3
 _IMAGE_GENERATION_CONCURRENCY = 3
 

@@ -1,5 +1,5 @@
 /** 定死：公网 lobster_server（登录/验证码/auth/me；与 pack_bundle AUTH_SERVER_BASE 一致；走 HTTPS 与 Nginx 443） */
-var LOBSTER_SERVER_PUBLIC = 'https://bhzn.top';
+var LOBSTER_SERVER_PUBLIC = 'https://bhos.online';
 
 (function setApiBaseFromUrl() {
   // 定死：本机回环端口与当前页端口一致（默认 8000）

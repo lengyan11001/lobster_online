@@ -36,7 +36,7 @@ from ..core.config import settings
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_LOBSTER_SERVER_PUBLIC = "https://bhzn.top"
+_LOBSTER_SERVER_PUBLIC = "https://bhos.online"
 _PIPELINE_ID = "goal.image.pipeline"
 _SOURCE_MODE = "ai_image"
 _MAX_SELECTED_DOCS = 8
