@@ -4922,12 +4922,18 @@ async def run_auto_reply_once(
             )
             try:
                 result["candidate_sessions_opened"] += 1
-                scanned_wechat_id = str(session.get("wechat_id") or "").strip()
-                if not scanned_wechat_id and _looks_like_wechat_id(peer_id):
-                    scanned_wechat_id = peer_id
                 scanned_wechat_id_source = str(session.get("wechat_id_source") or "missing")
-                if scanned_wechat_id and scanned_wechat_id_source == "missing":
-                    scanned_wechat_id_source = "wxauto_peer_id"
+                scanned_wechat_id = str(session.get("wechat_id") or "").strip()
+                # A wxauto session row commonly exposes its display name as
+                # peer_id. A name such as "Future" matches the lexical shape
+                # of a WeChat ID, but is not an identity that may be searched.
+                # A scan capture below supplies the profile-verified ID for
+                # the current visible row; without that proof, leave it empty.
+                if isinstance(session.get("_auto_reply_scan_capture"), dict):
+                    scanned_wechat_id = ""
+                    scanned_wechat_id_source = "scan_profile_required"
+                elif scanned_wechat_id_source == "missing":
+                    scanned_wechat_id = ""
                 captured_wechat_id = ""
                 collection_target = scanned_wechat_id or peer_id
                 collection_target_source = (
@@ -8317,6 +8323,7 @@ def _session_wechat_id(
     del account_id, contact_wx_no_index
     raw = session.get("raw") if isinstance(session.get("raw"), dict) else {}
     display_name = _session_display_name(session.get("display_name") or session.get("peer_id") or "")
+    display_key = _normalize_contact_lookup_key(display_name)
     for value in (
         session.get("wechat_id"),
         session.get("wxid"),
@@ -8327,7 +8334,15 @@ def _session_wechat_id(
         raw.get("username"),
     ):
         candidate = str(value or "").strip()
-        if candidate and _looks_like_wechat_id(candidate):
+        # Some wxauto builds populate username with the visible nickname.
+        # Never promote that value to an executable contact identity. A real
+        # ID matching the visible label is resolved from the open profile in
+        # the takeover capture path instead.
+        if (
+            candidate
+            and _looks_like_wechat_id(candidate)
+            and _normalize_contact_lookup_key(candidate) != display_key
+        ):
             return candidate
     return ""
 
@@ -8565,24 +8580,37 @@ def _capture_auto_reply_scan_page(
                 )
                 continue
             actual_peer = str(sync_result.get("peer_id") or peer_id).strip()
-            candidates = (
-                target_wx_id,
-                _chat_info_peer_key(chat_info, ""),
-                actual_peer,
+            # The session row and ChatInfo can both return the visible nickname
+            # in fields that look like an ID.  The later action pass searches
+            # by this value, so only the profile of the currently selected
+            # direct chat is authoritative here.
+            identity = _read_current_private_chat_wx_no(
+                account_id,
+                expected_display_name=display_name,
             )
-            wechat_id = next((str(value).strip() for value in candidates if _looks_like_wechat_id(value)), "")
-            if not wechat_id:
-                identity = _read_current_private_chat_wx_no(
-                    account_id,
-                    expected_display_name=display_name,
-                )
-                wechat_id = str(identity.get("wx_no") or "").strip() if isinstance(identity, dict) else ""
+            wechat_id = str(identity.get("wx_no") or "").strip() if isinstance(identity, dict) else ""
+            _write_auto_reply_diagnostic(
+                "scan_session_identity_capture",
+                account_id=account_id,
+                run_id=str(context.get("run_id") or ""),
+                target_peer_id=peer_id,
+                target_display_name=display_name,
+                actual_peer=actual_peer,
+                success=bool(_looks_like_wechat_id(wechat_id)),
+                wechat_id=wechat_id,
+                reason=str(identity.get("reason") or "") if isinstance(identity, dict) else "invalid_result",
+            )
             if not _looks_like_wechat_id(wechat_id):
                 capture_skip(
-                    "wechat_id_missing",
+                    "identity_unresolved",
                     chat_type=chat_type,
                     actual_peer=actual_peer,
                     chat_info=chat_info,
+                    identity_reason=(
+                        str(identity.get("reason") or "")[:160]
+                        if isinstance(identity, dict)
+                        else "invalid_result"
+                    ),
                 )
                 continue
             captures[peer_id] = {
