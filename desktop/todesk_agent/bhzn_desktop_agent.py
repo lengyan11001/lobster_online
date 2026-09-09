@@ -91,7 +91,9 @@ def reveal_text(values, key: int) -> str:
     return "".join(chr(value ^ key) for value in values)
 
 
-DEFAULT_SERVER = "https://bhzn.top"
+# The remote-support relay is intentionally isolated from the Online main
+# domain. Older configs are normalized to this endpoint on startup.
+DEFAULT_SERVER = "https://todesk.bhzn.top"
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0

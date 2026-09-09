@@ -65,7 +65,9 @@ _TODSK_AGENT_CONFIG_FILE = _CLIENT_ROOT / "data" / "todesk_agent.json"
 _TODSK_AGENT_SOURCE = _CLIENT_ROOT / "desktop" / "todesk_agent" / "bhzn_desktop_agent.py"
 _TODSK_AGENT_VENV = _CLIENT_ROOT / "desktop" / "todesk_agent" / ".venv"
 _TODSK_AGENT_READY = _TODSK_AGENT_VENV / ".ready"
-_TODSK_SERVER_URL = "https://bhzn.top"
+# ToDesk uses its isolated relay domain. Keep this separate from the Online
+# main domain so the optional agent never tries the application websocket.
+_TODSK_SERVER_URL = "https://todesk.bhzn.top"
 _TODSK_PROCESS = None
 _TODSK_PROCESS_LOCK = asyncio.Lock()
 
@@ -140,6 +142,12 @@ def _load_todesk_state() -> dict[str, Any]:
         if _TODSK_STATE_FILE.is_file():
             data = json.loads(_TODSK_STATE_FILE.read_text(encoding="utf-8"))
             if isinstance(data, dict):
+                # Migrate clients that were written with the old main-domain
+                # endpoint. The device identity is preserved; only the relay
+                # URL is corrected. Persisting is deferred to the normal
+                # state-save path to avoid writes on every status poll.
+                if data.get("server") != _TODSK_SERVER_URL:
+                    data["server"] = _TODSK_SERVER_URL
                 return data
     except Exception:
         pass
@@ -208,7 +216,7 @@ def _todesk_show_id(exe: Path, config_path: Optional[Path] = None) -> dict[str, 
 
 
 def _ensure_todesk_main_server_config(exe: Path, state: dict[str, Any]) -> Path:
-    """Keep the existing device identity but always connect the agent to bhzn.top."""
+    """Keep the existing device identity but always use the isolated relay."""
     legacy_identity = _todesk_show_id(exe)
     identity = {
         "deviceId": str(state.get("device_id") or legacy_identity.get("device_id") or "").strip(),
