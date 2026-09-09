@@ -301,6 +301,69 @@ def _strip_duplicate_title_heading(markdown: str, title: str = "") -> str:
     return raw.strip()
 
 
+def _normalize_prompt_echo_text(text: str) -> str:
+    value = re.sub(r"[#>*_`、，。！？：；,.!?:;《》「」『』“”\"'（）()\[\]【】\-—\s]+", "", str(text or ""))
+    return value.strip().lower()
+
+
+def _looks_like_prompt_echo(text: str, idea: str = "") -> bool:
+    value = _normalize_prompt_echo_text(text)
+    seed = _normalize_prompt_echo_text(idea)
+    return bool(value and seed and (seed in value or value in seed))
+
+
+def _strip_prompt_echo_phrases(text: str, idea: str = "") -> str:
+    raw = str(text or "")
+    seed = str(idea or "").strip()
+    if not raw or not seed:
+        return raw.strip()
+    escaped = re.escape(seed)
+    patterns = [
+        rf"围绕[“\"']{escaped}[”\"']",
+        rf"围绕〔{escaped}〕",
+        rf"围绕（{escaped}）",
+        rf"围绕\({escaped}\)",
+        rf"围绕{escaped}",
+        rf"以[“\"']{escaped}[”\"']为主题",
+        rf"以〔{escaped}〕为主题",
+        rf"以（{escaped}）为主题",
+        rf"以\({escaped}\)为主题",
+        rf"以{escaped}为主题",
+        rf"针对[“\"']{escaped}[”\"']",
+    ]
+    out = raw
+    for pattern in patterns:
+        out = re.sub(pattern, "", out, flags=re.IGNORECASE)
+    out = re.sub(r"^[，,。；;、\s]+", "", out)
+    out = re.sub(r"\s+([，,。；;：:！？!?])", r"\1", out)
+    out = re.sub(r"([，,。；;：:！？!?]){2,}", r"\1", out)
+    return out.strip()
+
+
+def _strip_prompt_echo(markdown: str, idea: str = "") -> str:
+    raw = (markdown or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    seed = _normalize_prompt_echo_text(idea)
+    if not raw or not seed:
+        return raw
+    blocks = re.split(r"\n\s*\n", raw)
+    cleaned: List[str] = []
+    for block in blocks:
+        piece = block.strip()
+        if not piece:
+            continue
+        piece = _strip_prompt_echo_phrases(piece, idea)
+        if not piece:
+            continue
+        piece_norm = _normalize_prompt_echo_text(piece)
+        if _looks_like_prompt_echo(piece, idea):
+            if len(piece_norm) <= max(24, len(seed) + 12):
+                continue
+        if piece_norm and (seed in piece_norm or piece_norm in seed) and len(piece_norm) <= max(24, len(seed) + 12):
+            continue
+        cleaned.append(piece)
+    return "\n\n".join(cleaned).strip()
+
+
 def _article_paragraph_contexts(markdown: str, title: str = "", max_count: int = 3) -> List[str]:
     clean = _strip_duplicate_title_heading(markdown, title)
     blocks: List[Dict[str, str]] = []
@@ -519,6 +582,9 @@ async def _call_article_writer(body: WechatArticleGenerateIn, token: str, instal
     )
     system_prompt = (
         "你是资深微信公众号主编和排版策划。请根据用户输入的主题/想法，直接生成可发布的公众号文章。"
+        "先理解并提炼用户要求，再写成文章本身。"
+        "严禁复述用户原始输入、要求说明、提示词、示例内容或任务描述。"
+        "不要把用户给出的指令、清单、引用样例、注意事项写进正文开头。"
         "必须返回严格 JSON，不要 Markdown 代码块。字段：title、digest、markdown、image_prompt。"
         "markdown 不要重复写文章标题或一级标题，正文从导语或二级标题开始，可包含自然段、二级标题、列表或引用，语言中文，适合微信阅读。"
         "如果用户要求自动配图，image_prompt 写一条适合 gpt-image-2 的配图提示词；否则 image_prompt 可为空。"
@@ -528,7 +594,7 @@ async def _call_article_writer(body: WechatArticleGenerateIn, token: str, instal
         f"目标读者：{body.audience.strip() or '普通公众号读者'}\n"
         f"写作风格：{body.style.strip() or '专业、有观点、适合公众号阅读'}\n"
         f"是否自动配图：{'是' if body.include_images else '否'}\n\n"
-        "请生成一篇完整公众号文章，不要让用户再补标题、摘要或正文。"
+        "请直接输出一篇完整公众号文章。不要复述上面的原始输入，不要解释写作过程，不要把这些指令写进正文。"
     )
     payload = {
         "model": model,
@@ -564,7 +630,17 @@ async def _call_article_writer(body: WechatArticleGenerateIn, token: str, instal
         content = data["choices"][0]["message"]["content"]
     except Exception:
         content = json.dumps(data, ensure_ascii=False)
-    return _normalize_generated_article(_extract_json_object(content), body.idea, body.include_images)
+    normalized = _normalize_generated_article(_extract_json_object(content), body.idea, body.include_images)
+    normalized["markdown"] = _strip_prompt_echo(normalized.get("markdown") or "", body.idea)
+    if _looks_like_prompt_echo(normalized.get("title") or "", body.idea):
+        normalized["title"] = _extract_title(normalized["markdown"], "")
+    if _looks_like_prompt_echo(normalized.get("digest") or "", body.idea):
+        normalized["digest"] = _digest(normalized["markdown"])
+    if _looks_like_prompt_echo(normalized.get("image_prompt") or "", body.idea):
+        normalized["image_prompt"] = ""
+    if not normalized.get("digest"):
+        normalized["digest"] = _digest(normalized["markdown"])
+    return normalized
 
 
 def _local_openai_chat_config() -> Optional[Dict[str, Any]]:
@@ -1426,8 +1502,11 @@ async def generate_wechat_article(
         warnings.append("AI 成稿服务暂不可用，已使用本地结构化草稿兜底。")
         article = _normalize_generated_article({}, idea, body.include_images)
 
-    article_title = _extract_title(article.get("markdown") or "", article.get("title") or "")
-    article_markdown = _strip_duplicate_title_heading(article["markdown"], article_title)
+    article_title = article.get("title") or ""
+    if _looks_like_prompt_echo(article_title, idea):
+        article_title = ""
+    article_markdown = _strip_prompt_echo(_strip_duplicate_title_heading(article["markdown"], article_title), idea)
+    article_title = _extract_title(article_markdown, article_title)
     paragraph_contexts = _article_paragraph_contexts(article_markdown, article_title, body.image_count)
 
     image_url = ""
