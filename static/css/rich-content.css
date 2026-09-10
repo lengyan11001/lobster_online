@@ -23,6 +23,24 @@
   line-height: 0;
 }
 .rich-media-item img { display: block; width: 100%; max-height: 420px; object-fit: cover; }
+/* 工具产出的图片/视频走的是老媒体管线：同样限高，避免顶出屏幕 */
+.online-mastra-message-media img,
+.online-mastra-message-attachments img {
+  max-width: 100%;
+  max-height: 240px;
+  width: auto;
+  object-fit: cover;
+  border-radius: 10px;
+  cursor: zoom-in;
+}
+.online-mastra-message-media video,
+.online-mastra-message-attachments video {
+  max-width: 100%;
+  max-height: 260px;
+  border-radius: 10px;
+}
+.online-mastra-message-media audio,
+.online-mastra-message-attachments audio { max-width: 100%; }
 .rich-media-block { display: grid; gap: 8px; margin-top: 0.5rem; }
 .rich-media-block video,
 .rich-media-block audio { width: 100%; border-radius: 12px; background: #000; }
