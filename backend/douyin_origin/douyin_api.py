@@ -2090,6 +2090,11 @@ def build_douyin_account_nurture_idle_status(config: Optional[Dict] = None) -> D
     interval_max = max(interval_min, int(current_config.get("douyin_nurture_interval_max_minutes", 180) or 180))
     active_start_hour = max(6, min(int(current_config.get("douyin_nurture_active_start_hour", 9) or 9), 20))
     active_end_hour = max(active_start_hour + 1, min(int(current_config.get("douyin_nurture_active_end_hour", 23) or 23), 23))
+    try:
+        like_probability = float(current_config.get("douyin_nurture_like_probability", 0.10))
+    except (TypeError, ValueError):
+        like_probability = 0.10
+    like_probability = min(1.0, max(0.0, like_probability))
     return {
         "running": False,
         "started_at": "",
@@ -2103,6 +2108,7 @@ def build_douyin_account_nurture_idle_status(config: Optional[Dict] = None) -> D
             "session_label": f"{session_min}-{session_max} 分钟 / 次",
             "interval_label": f"{interval_min}-{interval_max} 分钟 / 次",
             "active_window_label": f"{active_start_hour:02d}:00-{active_end_hour:02d}:00",
+            "like_probability_label": f"随机点赞概率 {like_probability * 100:.0f}%",
             "daily_runs_label": "约 5-6 次 / 天",
             "warning": "养号期间不要执行其他抖音任务，否则浏览器会互相抢占，容易冲突。",
         },
@@ -2285,6 +2291,7 @@ def load_global_config() -> Dict:
         "douyin_nurture_interval_max_minutes": 180,
         "douyin_nurture_session_min_minutes": 20,
         "douyin_nurture_session_max_minutes": 40,
+        "douyin_nurture_like_probability": 0.10,
         "douyin_nurture_active_start_hour": 9,
         "douyin_nurture_active_end_hour": 23,
     }
@@ -14607,6 +14614,7 @@ async def douyin_get_config(http_request: Request = None):
         "douyin_nurture_interval_max_minutes": config.get("douyin_nurture_interval_max_minutes", 180),
         "douyin_nurture_session_min_minutes": config.get("douyin_nurture_session_min_minutes", 20),
         "douyin_nurture_session_max_minutes": config.get("douyin_nurture_session_max_minutes", 40),
+        "douyin_nurture_like_probability": config.get("douyin_nurture_like_probability", 0.10),
         "douyin_nurture_active_start_hour": config.get("douyin_nurture_active_start_hour", 9),
         "douyin_nurture_active_end_hour": config.get("douyin_nurture_active_end_hour", 23),
     }
@@ -14652,6 +14660,12 @@ async def douyin_update_config(request: dict):
             int(config.get("douyin_nurture_session_min_minutes", 20) or 20),
             int(request["douyin_nurture_session_max_minutes"] or config.get("douyin_nurture_session_min_minutes", 20) or 20),
         )
+    if "douyin_nurture_like_probability" in request:
+        try:
+            like_probability = float(request["douyin_nurture_like_probability"])
+        except (TypeError, ValueError):
+            like_probability = 0.10
+        config["douyin_nurture_like_probability"] = min(1.0, max(0.0, like_probability))
     if "douyin_nurture_active_start_hour" in request:
         config["douyin_nurture_active_start_hour"] = max(6, min(int(request["douyin_nurture_active_start_hour"] or 9), 20))
     if "douyin_nurture_active_end_hour" in request:

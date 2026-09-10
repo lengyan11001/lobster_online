@@ -15,6 +15,12 @@ from douyin_client import DouyinClient
 from win_subprocess import run_hidden
 
 
+# 养号时对每条视频执行随机点赞的概率。
+# 真实用户远没有这么高：原来写死 0.62（62%），刷 20 条就点 12 个赞，
+# 行为特征太扎眼，容易被判定成营销号。
+DEFAULT_LIKE_PROBABILITY = 0.10
+
+
 def _now_text() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -269,12 +275,21 @@ class DouyinAccountNurtureScheduler:
         minimum = self._active_start_hour() + 1
         return _safe_int(self.config.get("douyin_nurture_active_end_hour", 23), 23, minimum=minimum, maximum=23)
 
+    def _like_probability(self) -> float:
+        raw = self.config.get("douyin_nurture_like_probability", DEFAULT_LIKE_PROBABILITY)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = DEFAULT_LIKE_PROBABILITY
+        return min(1.0, max(0.0, value))
+
     def _rules(self) -> Dict[str, str]:
         return {
             "entry_url": "https://www.douyin.com/jingxuan",
             "session_label": f"{self._session_min_minutes()}-{self._session_max_minutes()} 分钟 / 次",
             "interval_label": f"{self._interval_min_minutes()}-{self._interval_max_minutes()} 分钟 / 次",
             "active_window_label": f"{self._active_start_hour():02d}:00-{self._active_end_hour():02d}:00",
+            "like_probability_label": f"随机点赞概率 {self._like_probability() * 100:.0f}%",
             "daily_runs_label": "约 5-6 次 / 天",
             "warning": "养号期间不要执行其他抖音任务，否则浏览器会互相抢占，容易冲突。",
         }
@@ -851,7 +866,7 @@ if ($proc -and $proc.CommandLine) {{
                     if not should_continue():
                         break
 
-                    if random.random() < 0.62:
+                    if random.random() < self._like_probability():
                         liked = await self._like_current_video(page)
                         if liked:
                             likes_sent += 1
@@ -862,7 +877,8 @@ if ($proc -and $proc.CommandLine) {{
                                 last_action="随机点赞成功，准备切到下一个视频",
                             )
                             self.broadcast_log(
-                                f"[抖音养号][账号{account_id}] 已对第 {watched_count} 条视频执行随机点赞（Z 键）。",
+                                f"[抖音养号][账号{account_id}] 已对第 {watched_count} 条视频执行随机点赞"
+                                f"（Z 键，当前概率 {self._like_probability() * 100:.0f}%）。",
                                 "info",
                             )
                         await _sleep_with_stop_check(random.randint(1, 4), should_continue)
