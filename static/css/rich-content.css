@@ -41,6 +41,11 @@
 }
 .online-mastra-message-media audio,
 .online-mastra-message-attachments audio { max-width: 100%; }
+
+/* 审批卡片：点过之后置灰并禁用按钮，避免重复点击；可选中的图片给放大光标 */
+.online-mastra-approval.is-decided { opacity: 0.62; }
+.online-mastra-approval.is-decided button { cursor: default; }
+.online-mastra-zoomable { cursor: zoom-in; }
 .rich-media-block { display: grid; gap: 8px; margin-top: 0.5rem; }
 .rich-media-block video,
 .rich-media-block audio { width: 100%; border-radius: 12px; background: #000; }

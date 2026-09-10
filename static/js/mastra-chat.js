@@ -447,6 +447,8 @@
         image.src = url;
         image.alt = name;
         image.loading = 'lazy';
+        image.className = 'online-mastra-zoomable';
+        image.addEventListener('click', function () { richLightbox(url); });
         wrap.appendChild(image);
       } else {
         var link = document.createElement('a');
@@ -509,7 +511,22 @@
     card.innerHTML = '<strong>需要确认后执行</strong><p></p><div class="online-mastra-approval-actions"><button type="button" data-mastra-approval-decision="reject">取消</button><button type="button" class="primary" data-mastra-approval-decision="approve">确认执行</button></div>';
     card.querySelector('p').textContent = text(approval.task || approval.reason || '将执行当前任务');
     card.querySelectorAll('[data-mastra-approval-decision]').forEach(function (button) {
-      button.addEventListener('click', function () { decideApproval(approval.id, button.getAttribute('data-mastra-approval-decision'), card); });
+      button.addEventListener('click', function () {
+        var decision = button.getAttribute('data-mastra-approval-decision');
+        // 点完立刻给反馈并禁用按钮：之前没有回显，用户会以为没生效，再去对话里打一次"确认"，
+        // 结果被当成新请求又生成一份（线上出现过一次确认出两张图）。
+        card.querySelectorAll('[data-mastra-approval-decision]').forEach(function (item) {
+          item.disabled = true;
+        });
+        card.classList.add('is-decided');
+        var tip = card.querySelector('p');
+        if (tip) {
+          tip.textContent = decision === 'approve'
+            ? '已确认，任务已下发，等待 Online 执行…'
+            : '已取消';
+        }
+        decideApproval(approval.id, decision, card);
+      });
     });
     bubble.wrapper.appendChild(card);
   }
