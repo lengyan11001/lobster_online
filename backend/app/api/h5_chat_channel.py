@@ -4188,16 +4188,40 @@ def _load_douyin_ai_keyword_history() -> List[Dict[str, Any]]:
     return history
 
 
-def _save_douyin_ai_keyword_history(rows: List[Dict[str, Any]]) -> None:
+def _save_douyin_ai_keyword_history(
+    rows: List[Dict[str, Any]],
+    *,
+    last_used: Optional[List[str]] = None,
+) -> None:
     path = _douyin_ai_keyword_history_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps({"keywords": rows[-2000:]}, ensure_ascii=False, indent=2)
+        payload = json.dumps(
+            {
+                "keywords": rows[-2000:],
+                "last_used": [str(item) for item in (last_used or []) if str(item or "").strip()],
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
         tmp_path = path.with_name(path.name + ".tmp")
         tmp_path.write_text(payload, encoding="utf-8")
         os.replace(tmp_path, path)
     except Exception as exc:
         logger.warning("[AI-KEYWORD] 保存关键词使用记录失败：%s", exc)
+
+
+def _douyin_ai_last_keywords() -> List[str]:
+    """上一次 AI 成功生成的关键词（AI 临时失败时用它兜底，不回头用 Online 的词）。"""
+    path = _douyin_ai_keyword_history_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    rows = raw.get("last_used") if isinstance(raw, dict) else None
+    if not isinstance(rows, list):
+        return []
+    return [str(item).strip() for item in rows if str(item or "").strip()]
 
 
 def _douyin_ai_recent_keywords(days: int) -> List[str]:
@@ -4224,7 +4248,7 @@ def _record_douyin_ai_keywords(keywords: List[str]) -> None:
         cleaned = str(keyword or "").strip()
         if cleaned:
             rows.append({"keyword": cleaned, "used_at": used_at})
-    _save_douyin_ai_keyword_history(rows)
+    _save_douyin_ai_keyword_history(rows, last_used=keywords)
 
 
 def _douyin_ai_memory_texts(value: Any) -> List[str]:
@@ -4359,6 +4383,11 @@ async def _apply_scheduled_douyin_ai_keywords(
     persona_text = str(source.get("ip_persona") or merged.get("ip_persona") or "").strip()[:400]
     recent_keywords = _douyin_ai_recent_keywords(avoid_days)
 
+    def last_ai_keywords() -> List[str]:
+        # 兜底不排除"刚用过"：宁可复用上次 AI 生成过的词，
+        # 也不要回头去用用户没配、也不该从 Online 取的关键词。
+        return _douyin_ai_last_keywords()
+
     try:
         keywords = await asyncio.to_thread(
             _generate_douyin_ai_keywords,
@@ -4370,9 +4399,25 @@ async def _apply_scheduled_douyin_ai_keywords(
             publish_window=str(publish_days),
         )
     except Exception as exc:
+        fallback = last_ai_keywords()
+        if fallback:
+            logger.warning("[AI-KEYWORD] 生成失败，沿用上一次 AI 关键词：%s（%s）", fallback, exc)
+            merged["keywords"] = fallback
+            merged["keyword"] = fallback[0]
+            merged["ai_keywords_used"] = True
+            merged["ai_keyword_generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            return merged
         logger.warning("[AI-KEYWORD] 生成关键词失败，本轮沿用原关键词：%s", exc)
         return merged
     if not keywords:
+        fallback = last_ai_keywords()
+        if fallback:
+            logger.warning("[AI-KEYWORD] AI 没给出新词，沿用上一次 AI 关键词：%s", fallback)
+            merged["keywords"] = fallback
+            merged["keyword"] = fallback[0]
+            merged["ai_keywords_used"] = True
+            merged["ai_keyword_generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            return merged
         logger.warning("[AI-KEYWORD] AI 没有给出可用关键词，本轮沿用原关键词")
         return merged
 
