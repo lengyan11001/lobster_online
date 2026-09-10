@@ -1,7 +1,7 @@
 {
-  "version": "2.0.38",
-  "build": 317,
-  "applied_at": "2026-09-10T19:25:47+08:00",
-  "note": "remote viewer last-frame fix + social leads list + rich chat display",
-  "bundle_sha256": "9a38d1b14633bbf0c0179d742a7af3902ce2432ee0a588440c00996159ccea67"
+  "version": "2.0.39",
+  "build": 318,
+  "applied_at": "2026-09-10T23:25:27+08:00",
+  "note": "ai lead keywords + dm contact split + rich chat media + approval lock",
+  "bundle_sha256": "8556dd9e5d0ab7fe0a33c42751cac7af5ae438ef6804ea54f86966461cc8cc40"
 }
