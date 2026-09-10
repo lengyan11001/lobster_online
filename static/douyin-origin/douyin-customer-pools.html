@@ -5,7 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI获客 · 抖音客户池</title>
     <link rel="icon" type="image/png" href="/static/douyin-origin/assets/app-icon.png">
-    <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+   <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
+    <style>
+      /* 全部客户 / 精准客户：表格不再被裁在一屏内，分页条与最后几行都能滚到 */
+      #all-customers-workspace-page .table-shell,
+      #intent-workspace-page .table-shell {
+        max-height: calc(100vh - 320px);
+        min-height: 240px;
+        overflow: auto;
+      }
+      #all-customers-workspace-page .search-session-stage,
+      #intent-workspace-page .search-session-stage {
+        min-height: 0;
+        overflow: visible;
+      }
+      #all-customers-pagination,
+      #intent-pagination {
+        position: sticky;
+        bottom: 0;
+        z-index: 2;
+        padding-top: 8px;
+        background: var(--surface, #ffffff);
+      }
+    </style>
     <script src="/static/douyin-origin/lobster-bridge.js?v=20260826-auto-request-recovery-v1"></script>
 </head>
 <body>
