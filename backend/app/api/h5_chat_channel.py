@@ -4161,6 +4161,240 @@ def _scheduled_douyin_search_keyword(source: Dict[str, Any]) -> str:
     return keywords[0] if keywords else ""
 
 
+_DOUYIN_AI_KEYWORD_HISTORY_FILE = "_lobster_runtime/douyin_ai_keywords.json"
+
+
+def _douyin_ai_keyword_history_path() -> Path:
+    return Path(__file__).resolve().parents[3] / _DOUYIN_AI_KEYWORD_HISTORY_FILE
+
+
+def _load_douyin_ai_keyword_history() -> List[Dict[str, Any]]:
+    path = _douyin_ai_keyword_history_path()
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    rows = raw.get("keywords") if isinstance(raw, dict) else raw
+    if not isinstance(rows, list):
+        return []
+    history: List[Dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        keyword = str(row.get("keyword") or "").strip()
+        used_at = str(row.get("used_at") or "").strip()
+        if keyword and used_at:
+            history.append({"keyword": keyword, "used_at": used_at})
+    return history
+
+
+def _save_douyin_ai_keyword_history(rows: List[Dict[str, Any]]) -> None:
+    path = _douyin_ai_keyword_history_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = json.dumps({"keywords": rows[-2000:]}, ensure_ascii=False, indent=2)
+        tmp_path = path.with_name(path.name + ".tmp")
+        tmp_path.write_text(payload, encoding="utf-8")
+        os.replace(tmp_path, path)
+    except Exception as exc:
+        logger.warning("[AI-KEYWORD] 保存关键词使用记录失败：%s", exc)
+
+
+def _douyin_ai_recent_keywords(days: int) -> List[str]:
+    """近 N 天已经用过的关键词（用来避免下一轮重复，重复就意味着没有新视频）。"""
+    cutoff = datetime.now() - timedelta(days=max(1, int(days or 1)))
+    used: List[str] = []
+    for row in _load_douyin_ai_keyword_history():
+        try:
+            used_at = datetime.strptime(str(row.get("used_at")), "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            continue
+        if used_at < cutoff:
+            continue
+        keyword = str(row.get("keyword") or "").strip()
+        if keyword and keyword not in used:
+            used.append(keyword)
+    return used
+
+
+def _record_douyin_ai_keywords(keywords: List[str]) -> None:
+    rows = _load_douyin_ai_keyword_history()
+    used_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for keyword in keywords:
+        cleaned = str(keyword or "").strip()
+        if cleaned:
+            rows.append({"keyword": cleaned, "used_at": used_at})
+    _save_douyin_ai_keyword_history(rows)
+
+
+def _douyin_ai_memory_texts(value: Any) -> List[str]:
+    rows = value if isinstance(value, list) else []
+    texts: List[str] = []
+    for row in rows:
+        if isinstance(row, dict):
+            content = str(row.get("content") or row.get("text") or row.get("markdown") or "").strip()
+        elif isinstance(row, str):
+            content = row.strip()
+        else:
+            content = ""
+        if content:
+            texts.append(content)
+    return texts
+
+
+def _parse_douyin_ai_keywords(raw: Any, *, limit: int) -> List[str]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    candidates: List[str] = []
+    match = re.search(r"\{[\s\S]*\}", text)
+    if match:
+        try:
+            parsed = json.loads(match.group(0))
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict) and isinstance(parsed.get("keywords"), list):
+            candidates = [str(item or "") for item in parsed["keywords"]]
+    if not candidates:
+        for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            cleaned = re.sub(r"^\s*[-*\d.、)]+\s*", "", line).strip()
+            if cleaned:
+                candidates.append(cleaned)
+    keywords: List[str] = []
+    for item in candidates:
+        keyword = " ".join(str(item or "").split()).strip().strip("\"'“”‘’,，。[]【】")
+        if not keyword or len(keyword) > 24 or keyword in keywords:
+            continue
+        keywords.append(keyword)
+        if len(keywords) >= limit:
+            break
+    return keywords
+
+
+def _generate_douyin_ai_keywords(
+    *,
+    library: List[str],
+    memory_texts: List[str],
+    persona_text: str,
+    recent_keywords: List[str],
+    count: int,
+    publish_window: str,
+) -> List[str]:
+    _install_douyin_origin_import_path()
+    from douyin_api import request_douyin_ai_comment  # type: ignore
+
+    system_prompt = (
+        "你是抖音精准获客的关键词规划助手。\n"
+        "目标：围绕这个 IP 的业务，给出这一轮最适合去抖音搜索、能捞到新客户的短视频搜索关键词。\n"
+        "要求：\n"
+        "1. 关键词要具体到能被搜到内容（人群 + 场景 + 需求/痛点，或品类 + 细分用途），不要泛词。\n"
+        "2. 每个关键词 4-12 个字，像真实用户会在抖音里搜的词。\n"
+        "3. 换着角度覆盖不同人群/场景，避免几个词只是同义反复。\n"
+        f"4. 只输出 JSON，格式：{{\"keywords\":[\"...\",\"...\"]}}，最多 {count} 个。\n"
+        "5. 不要输出解释、不要编号、不要额外文字。"
+    )
+    sections: List[str] = []
+    if persona_text:
+        sections.append(f"IP 定位：{persona_text}")
+    if library:
+        sections.append("行业关键词库：" + "、".join(library[:30]))
+    if memory_texts:
+        sections.append("IP 资料文档：\n" + "\n".join(item[:600] for item in memory_texts[:3]))
+    if recent_keywords:
+        sections.append("最近已经用过的关键词（禁止重复）：" + "、".join(recent_keywords[:40]))
+    if publish_window:
+        sections.append(f"希望搜索结果尽量落在最近 {publish_window} 天发布的新视频上。")
+    sections.append(f"请给出最多 {count} 个本轮要用的新关键词。")
+
+    raw = request_douyin_ai_comment(system_prompt, "\n\n".join(sections), max_tokens=220)
+    keywords = _parse_douyin_ai_keywords(raw, limit=count)
+    avoid = {str(item or "").strip().lower() for item in recent_keywords}
+    return [keyword for keyword in keywords if keyword.lower() not in avoid]
+
+
+def _scheduled_douyin_wants_ai_keywords(context: Any, params: Any) -> bool:
+    """节点是不是"精准获客AI"（让 AI 决定每轮关键词）。"""
+    source = params if isinstance(params, dict) else {}
+    for key in ("ai_keywords", "keyword_ai", "ai_keyword_mode"):
+        value = source.get(key)
+        if isinstance(value, bool) and value:
+            return True
+        if str(value or "").strip().lower() in {"1", "true", "yes", "on", "ai"}:
+            return True
+    for key in ("keyword_source", "keyword_mode"):
+        if str(source.get(key) or "").strip().lower() in {"ai", "auto"}:
+            return True
+    context_source = context if isinstance(context, dict) else {}
+    label_text = " ".join(
+        str(context_source.get(key) or "")
+        for key in ("ability_label", "workflow_node_label", "sales_node_label", "label", "title", "note")
+    ).lower()
+    if not label_text.strip():
+        return False
+    if "精准获客ai" in label_text or "ai获客" in label_text or "ai关键词" in label_text or "ai定关键词" in label_text:
+        return True
+    return "ai" in label_text and ("获客" in label_text or "关键词" in label_text)
+
+
+async def _apply_scheduled_douyin_ai_keywords(
+    params: Dict[str, Any],
+    workflow_params: Dict[str, Any],
+    context: Any,
+) -> Dict[str, Any]:
+    merged = dict(params or {})
+    source = workflow_params if isinstance(workflow_params, dict) else {}
+    count = _safe_int(source.get("ai_keyword_count") or merged.get("ai_keyword_count") or 3) or 3
+    count = max(1, min(count, 8))
+    avoid_days = _safe_int(source.get("ai_keyword_avoid_days") or merged.get("ai_keyword_avoid_days") or 7) or 7
+    avoid_days = max(1, min(avoid_days, 60))
+    publish_days = _safe_int(
+        source.get("ai_keyword_publish_days") or merged.get("ai_keyword_publish_days") or 7
+    ) or 7
+    publish_days = max(1, min(publish_days, 180))
+
+    library = _scheduled_douyin_search_keywords(
+        {"keywords": merged.get("keywords") or source.get("keywords")}
+    )
+    memory_texts = _douyin_ai_memory_texts(source.get("memory_docs") or merged.get("memory_docs"))
+    persona_text = str(source.get("ip_persona") or merged.get("ip_persona") or "").strip()[:400]
+    recent_keywords = _douyin_ai_recent_keywords(avoid_days)
+
+    try:
+        keywords = await asyncio.to_thread(
+            _generate_douyin_ai_keywords,
+            library=library,
+            memory_texts=memory_texts,
+            persona_text=persona_text,
+            recent_keywords=recent_keywords,
+            count=count,
+            publish_window=str(publish_days),
+        )
+    except Exception as exc:
+        logger.warning("[AI-KEYWORD] 生成关键词失败，本轮沿用原关键词：%s", exc)
+        return merged
+    if not keywords:
+        logger.warning("[AI-KEYWORD] AI 没有给出可用关键词，本轮沿用原关键词")
+        return merged
+
+    _record_douyin_ai_keywords(keywords)
+    merged["keywords"] = keywords
+    merged["keyword"] = keywords[0]
+    merged["ai_keywords_used"] = True
+    merged["ai_keyword_generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 保证新视频：默认按“最新发布 + 最近 N 天”搜索，节点里可以覆盖
+    merged["search_sort_type"] = str(source.get("search_sort_type") or merged.get("search_sort_type") or "1")
+    merged["search_publish_time"] = str(
+        source.get("search_publish_time") or merged.get("search_publish_time") or publish_days
+    )
+    logger.info(
+        "[AI-KEYWORD] 本轮 AI 关键词：%s（避开近 %s 天用过的 %s 个）",
+        keywords,
+        avoid_days,
+        len(recent_keywords),
+    )
+    return merged
+
+
 def _scheduled_douyin_sales_action_from_text(value: Any) -> str:
     text = str(value or "").strip()
     if "我的评论区" in text or "抖音我的评论区" in text:
@@ -4761,13 +4995,18 @@ async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Di
     from douyin_api import set_tasks_from_rows  # type: ignore
     from douyin_api import upsert_douyin_search_session_state  # type: ignore
 
-    search_result = await douyin_search_collect(
-        {
-            "keyword": keyword,
-            "max_results": max_results,
-            "mode": search_mode,
-        }
-    )
+    search_request: Dict[str, Any] = {
+        "keyword": keyword,
+        "max_results": max_results,
+        "mode": search_mode,
+    }
+    search_sort_type = str(source.get("search_sort_type") or "").strip()
+    search_publish_time = str(source.get("search_publish_time") or "").strip()
+    if search_sort_type:
+        search_request["sort_type"] = search_sort_type
+    if search_publish_time:
+        search_request["publish_time"] = search_publish_time
+    search_result = await douyin_search_collect(search_request)
     if _safe_int(search_result.get("code")) != 200:
         return search_result if isinstance(search_result, dict) else {"code": 500, "msg": "抖音搜索失败"}
 
@@ -6330,6 +6569,8 @@ async def _run_scheduled_douyin_leads(
         return
     _active_scheduled_douyin_actions[run_id] = action
     try:
+        if action == "search_collect" and _scheduled_douyin_wants_ai_keywords(h5_context, workflow_params):
+            params = await _apply_scheduled_douyin_ai_keywords(params, workflow_params, h5_context)
         if action == "search_collect":
             result = await _run_scheduled_douyin_search_collect_action(params)
         elif action in {"account_nurture", "self_comment_monitor", "precise_touch", "reply_comments", "mention_comment", "follow_comment", "direct_message", "stranger_message"}:

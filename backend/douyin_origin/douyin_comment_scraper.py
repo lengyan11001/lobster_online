@@ -7,7 +7,7 @@ import re
 import time
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable, Dict, List, Optional
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import requests
 from playwright.async_api import (
@@ -8780,10 +8780,19 @@ class DouyinCommentScraper:
         keyword: str,
         max_results: int = 50,
         logger: Optional[Callable[[str, str], None]] = None,
+        sort_type: Optional[str] = None,
+        publish_time: Optional[str] = None,
     ) -> List[Dict]:
         page = await self._new_page(logger=logger)
         try:
-            url = f"https://www.douyin.com/search/{quote(keyword)}?type=video"
+            # 精准获客要“新视频”，所以搜索链接支持带上抖音自己的排序/发布时间筛选：
+            # sort_type=1 按最新发布，publish_time=1/7/180 分别是一天内/一周内/半年内。
+            query_params: List[tuple] = [("type", "video")]
+            if str(sort_type or "").strip() not in ("", "0"):
+                query_params.append(("sort_type", str(sort_type).strip()))
+            if str(publish_time or "").strip() not in ("", "0"):
+                query_params.append(("publish_time", str(publish_time).strip()))
+            url = f"https://www.douyin.com/search/{quote(keyword)}?{urlencode(query_params)}"
             self._emit(logger, f"[抖音搜索] 打开搜索页：{keyword}")
             goto_started = time.monotonic()
             self._emit(logger, f"[抖音诊断] page.goto 开始 url={url}", "info")

@@ -3020,12 +3020,22 @@ async def run_douyin_keyword_search(
     *,
     max_results: int = 50,
     update_latest: bool = False,
+    sort_type: Optional[str] = None,
+    publish_time: Optional[str] = None,
 ) -> Dict:
     keyword_text = normalize_douyin_text(keyword)
     if not keyword_text:
         raise RuntimeError("请输入抖音搜索关键词")
     result_limit = max(10, min(int(max_results or 50), 100))
-    search_url = f"https://www.douyin.com/search/{requests.utils.quote(keyword_text)}?type=video"
+    search_query = [("type", "video")]
+    if str(sort_type or "").strip() not in ("", "0"):
+        search_query.append(("sort_type", str(sort_type).strip()))
+    if str(publish_time or "").strip() not in ("", "0"):
+        search_query.append(("publish_time", str(publish_time).strip()))
+    search_url = (
+        f"https://www.douyin.com/search/{requests.utils.quote(keyword_text)}"
+        f"?{requests.utils.urlencode(search_query)}"
+    )
     browser_result = await ensure_douyin_account_browser_ready_async(account, start_url=search_url)
     if int(browser_result.get("code", 0) or 0) != 200:
         raise RuntimeError(str(browser_result.get("msg", "") or "抖音搜索浏览器启动失败"))
@@ -3033,7 +3043,13 @@ async def run_douyin_keyword_search(
     scraper = DouyinCommentScraper(account_id=account["id"], cdp_port=account["port"])
     douyin_log(f"[抖音搜索] 开始搜索关键词：{keyword_text}", "info")
     try:
-        results = await scraper.scrape_search_results(keyword_text, max_results=result_limit, logger=douyin_log)
+        results = await scraper.scrape_search_results(
+            keyword_text,
+            max_results=result_limit,
+            logger=douyin_log,
+            sort_type=sort_type,
+            publish_time=publish_time,
+        )
     finally:
         await scraper.close()
 
@@ -3066,6 +3082,8 @@ async def run_douyin_keyword_search_via_api(
     *,
     max_results: int = 50,
     account_id: object = "api",
+    sort_type: Optional[str] = None,
+    publish_time: Optional[str] = None,
 ) -> Dict:
     keyword_text = normalize_douyin_text(keyword)
     if not keyword_text:
@@ -3080,8 +3098,8 @@ async def run_douyin_keyword_search_via_api(
         "keyword": keyword_text,
         "offset": "0",
         "count": str(min(result_limit, 30)),
-        "sort_type": "0",
-        "publish_time": "0",
+        "sort_type": str(sort_type or "0") or "0",
+        "publish_time": str(publish_time or "0") or "0",
         "filter_duration": "0",
     }
     response = await asyncio.to_thread(
@@ -15050,12 +15068,16 @@ async def douyin_search_collect(request: dict):
         return {"code": 400, "msg": "??????????"}
     search_mode = normalize_douyin_search_mode(request.get("mode", "api"))
     max_results = max(10, min(int(request.get("max_results", 50) or 50), 100))
+    sort_type = str(request.get("sort_type", "") or "").strip()
+    publish_time = str(request.get("publish_time", "") or "").strip()
     if search_mode == "api":
         try:
             payload = await run_douyin_keyword_search_via_api(
                 keyword,
                 max_results=max_results,
                 account_id="api",
+                sort_type=sort_type,
+                publish_time=publish_time,
             )
         except Exception as exc:
             douyin_log(f"[抖音搜索] 接口模式失败，准备回退脚本模式：{keyword}，原因：{exc}", "warning")
@@ -15087,6 +15109,8 @@ async def douyin_search_collect(request: dict):
             keyword,
             max_results=max_results,
             update_latest=True,
+            sort_type=sort_type,
+            publish_time=publish_time,
         )
     except Exception as exc:
         douyin_log(f"[????] ?????{keyword}????{exc}", "error")
