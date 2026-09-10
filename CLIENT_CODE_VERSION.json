@@ -1,7 +1,7 @@
 {
-  "version": "2.0.33",
-  "build": 312,
-  "applied_at": "2026-09-10T13:24:22+08:00",
-  "note": "personal IP live survey, auth load reduction and client workbench updates",
-  "bundle_sha256": "cd104b93c9a6e65f4220b953d7fbd362600dfc368f21e6fc2d19f6b64a5d098e"
+  "version": "2.0.38",
+  "build": 317,
+  "applied_at": "2026-09-10T19:25:47+08:00",
+  "note": "remote viewer last-frame fix + social leads list + rich chat display",
+  "bundle_sha256": "9a38d1b14633bbf0c0179d742a7af3902ce2432ee0a588440c00996159ccea67"
 }

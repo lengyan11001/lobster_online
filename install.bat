@@ -206,12 +206,11 @@ echo [2/7] Installing Python packages...
 set "PKG_IMPORT_CHECK=import fastapi,uvicorn,pydantic,httpx,sqlalchemy,playwright,greenlet,PIL"
 set "REQ_FILE=requirements.txt"
 
-REM If requirements.txt lists tos: drop old runtime file, regenerate, main pip skips tos (Step 2b installs tos)
-findstr /R /I /C:"tos" "requirements.txt" >nul 2>&1
-if errorlevel 1 goto :req_runtime_done
+REM tos and wxauto4 are installed in dedicated steps below. wxauto4 41.1.2
+REM is no longer available from PyPI, so the main pip step must never request it.
 if exist "requirements.runtime.txt" del /f /q "requirements.runtime.txt" >nul 2>&1
-echo   [INFO] Excluding tos from main step - will install in Step 2b...
-findstr /V /R /I /C:"^ *tos" "requirements.txt" > "requirements.runtime.txt"
+echo   [INFO] Excluding tos and wxauto4 from main step - installing separately...
+findstr /V /R /I /C:"^ *tos" /C:"^ *wxauto4" "requirements.txt" > "requirements.runtime.txt"
 set "REQ_FILE=requirements.runtime.txt"
 :req_runtime_done
 
@@ -271,7 +270,7 @@ REM Step 2a-extra: Native WeChat runtime deps (wxauto4 / UI automation)
 REM OTA updater can install these when applying scripts\wechat_runtime_wheels;
 REM manual unzip + install.bat must do the same explicitly.
 echo   [2a/7] Native WeChat dependencies...
-set "WECHAT_IMPORT_CHECK=import wxauto4,uiautomation,win32gui,pywinauto,pyperclip,comtypes"
+set "WECHAT_IMPORT_CHECK=import importlib.metadata as m; assert m.version('wxauto4') == '41.1.2'; import wxauto4,uiautomation,win32gui,pywinauto,pyperclip,comtypes"
 "%PYTHON%" -c "%WECHAT_IMPORT_CHECK%" >nul 2>&1
 if not errorlevel 1 (
     echo   [OK] Native WeChat dependencies already installed
@@ -287,9 +286,21 @@ if exist "scripts\wechat_runtime_wheels" (
     )
 )
 if "%WECHAT_RUNTIME_OK%"=="0" (
-    if /i not "%LOBSTER_OFFLINE_ONLY%"=="1" (
-        echo   Offline Native WeChat install incomplete - trying online...
-        "%PYTHON%" -m pip install "wxauto4==41.1.2" "uiautomation>=2.0.29" "pywin32>=306" "pywinauto>=0.6.8" "pyperclip>=1.9.0" 2>&1
+    if exist "deps\wheels\wxauto4-41.1.2-cp312-cp312-win_amd64.whl" (
+        echo   Installing Native WeChat dependencies from deps\wheels...
+        "%PYTHON%" -m pip install --no-index --find-links deps\wheels "wxauto4==41.1.2" "uiautomation>=2.0.29" "pywin32>=306" "pywinauto>=0.6.8" "pyperclip>=1.9.0" 2>&1
+        if not errorlevel 1 (
+            "%PYTHON%" -c "%WECHAT_IMPORT_CHECK%" >nul 2>&1
+            if not errorlevel 1 set "WECHAT_RUNTIME_OK=1"
+        )
+    )
+)
+if "%WECHAT_RUNTIME_OK%"=="0" if /i not "%LOBSTER_OFFLINE_ONLY%"=="1" (
+    echo   Bundled wxauto4 wheel missing - downloading verified 41.1.2 wheel...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $p=Join-Path $env:TEMP 'wxauto4-41.1.2-cp312-cp312-win_amd64.whl'; Invoke-WebRequest -Uri 'https://bhzn.top/client/client-code/runtime/wxauto4-41.1.2-cp312-cp312-win_amd64.whl' -OutFile $p -UseBasicParsing; if ((Get-FileHash -Algorithm SHA256 $p).Hash.ToLowerInvariant() -ne 'fb67e5d9208e44fc8215bec15edfb3c062ef55ae8695f19c2e5956c87ef61ad4') { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue; throw 'wxauto4 wheel checksum mismatch' }"
+    if not errorlevel 1 (
+        "%PYTHON%" -m pip install "uiautomation>=2.0.29" "pywin32>=306" "pywinauto>=0.6.8" "pyperclip>=1.9.0" colorama comtypes pillow psutil tenacity 2>&1
+        if not errorlevel 1 "%PYTHON%" -m pip install --no-deps --force-reinstall "%TEMP%\wxauto4-41.1.2-cp312-cp312-win_amd64.whl" 2>&1
         if not errorlevel 1 (
             "%PYTHON%" -c "%WECHAT_IMPORT_CHECK%" >nul 2>&1
             if not errorlevel 1 set "WECHAT_RUNTIME_OK=1"

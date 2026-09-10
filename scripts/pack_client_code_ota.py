@@ -79,6 +79,12 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     "desktop/launcher.py",
     "desktop/oem_branding.py",
     "desktop/oem_configurator.py",
+    # Optional BHZN ToDesk remote-support agent. System Config only starts
+    # remote support when this executable is present on the client, so every
+    # website OTA must carry it. Keep it an exact file path: listing the whole
+    # desktop directory would make the updater reconcile (and prune) unrelated
+    # desktop files such as the branded EXE shells.
+    "desktop/BHZN-ToDesk-Agent.exe",
     "OEM配置启动器.exe",
     "static/css",
     "static/js",
@@ -89,6 +95,11 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     "static/branding/brands.json",
     "static/index.html",
     "static/ai3d-model-preview.html",
+    # Tiny first-install/manual-repair entrypoints required when a website OTA
+    # also carries an offline runtime wheel bundle.
+    "requirements.txt",
+    "install.bat",
+    "install_slim.bat",
     "static/client_version.json",
     "CLIENT_CODE_VERSION.json",
 )
@@ -194,7 +205,7 @@ DOUYIN_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
 )
 
 WECHAT_RUNTIME_WHEEL_PATTERNS: tuple[str, ...] = (
-    "wxauto4-*-cp312-*-win_amd64.whl",
+    "wxauto4-41.1.2-cp312-cp312-win_amd64.whl",
     "uiautomation-*.whl",
     "pywin32-*-cp312-*-win_amd64.whl",
     "pywinauto-*.whl",
@@ -1072,7 +1083,7 @@ def main() -> int:
     if args.with_nodejs_deps:
         print("[INFO] --with-nodejs-deps is retired; OpenClaw/npm dependencies will not be packaged")
         args.with_nodejs_deps = False
-    if args.website_only and (args.with_nodejs_deps or args.with_ppt_runtime_deps or args.with_memory_document_runtime_deps or args.with_douyin_runtime_deps or args.with_wechat_runtime_deps):
+    if args.website_only and (args.with_nodejs_deps or args.with_ppt_runtime_deps or args.with_memory_document_runtime_deps or args.with_douyin_runtime_deps):
         print("[ERR] --website-only 不能与运行时依赖包选项同时使用")
         return 1
     _PACK_OVERSEAS = bool(args.overseas)

@@ -1961,6 +1961,123 @@
   display: none;
 }
 
+.personal-settings-view .ps-survey-name-field {
+  display: grid;
+  gap: 6px;
+  padding: 18px 24px;
+  border-bottom: 1px solid #edf1f7;
+  background: #fbfcfe;
+}
+
+.personal-settings-view .ps-survey-name-field > span {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.personal-settings-view .ps-survey-name-field input {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 13px;
+  box-sizing: border-box;
+  border: 1px solid #e5eaf1;
+  border-radius: 11px;
+  outline: 0;
+  background: #fff;
+  color: #273347;
+  font-size: 13px;
+}
+
+.personal-settings-view .ps-survey-name-field input:focus {
+  border-color: #9ec4ff;
+  box-shadow: 0 0 0 3px rgba(67, 131, 236, 0.08);
+}
+
+.personal-settings-view .ps-survey-name-field small {
+  color: #98a2b2;
+  font-size: 11px;
+}
+
+.personal-settings-view .ps-survey-record {
+  min-height: 62px;
+  padding: 10px 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border-radius: 12px;
+  background: #fbfcfe;
+}
+
+.personal-settings-view .ps-survey-record.is-selected {
+  border-color: #cfe0fb;
+  background: #f6f9ff;
+}
+
+.personal-settings-view .ps-survey-record-main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.personal-settings-view .ps-survey-record-icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: #4383ec;
+  background: #eaf2ff;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.personal-settings-view .ps-survey-record-copy {
+  min-width: 0;
+}
+
+.personal-settings-view .ps-survey-record-copy strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.personal-settings-view .ps-current-badge {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 5px;
+  color: #2f6f5d;
+  background: #e8f7f0;
+  font-size: 10px;
+}
+
+.personal-settings-view .ps-survey-record .ps-item-actions button {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid #e3e8ef;
+  border-radius: 8px;
+  color: #536174;
+  background: #fff;
+  box-shadow: none;
+  font-size: 11px;
+}
+
+.personal-settings-view .ps-survey-record .ps-item-actions button.is-danger {
+  border-color: #f5d9d6;
+  color: #b5473d;
+  background: #fff8f7;
+}
+
+@media (max-width: 720px) {
+  .personal-settings-view .ps-survey-record {
+    grid-template-columns: 1fr;
+  }
+
+  .personal-settings-view .ps-survey-record .ps-item-actions {
+    justify-content: flex-end;
+  }
+}
+
 .personal-settings-view .ps-photo-select {
   min-height: 88px;
   display: grid;

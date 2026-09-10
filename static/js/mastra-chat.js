@@ -15,7 +15,8 @@
     sending: false,
     requestSeq: 0,
     viewObserver: null,
-    composing: false
+    composing: false,
+    running: { messageId: '', sessionId: '' }
   };
 
   function el(id) {
@@ -228,12 +229,74 @@
   var RICH_URL_RE = /https?:\/\/[^\s<>"']+/gi;
 
   // 富内容样式随模块自带，避免依赖宿主页面的 <link> 顺序。
+  // 但它必须跟页面同源加载：以前用 apiUrl() 拼到线上服务端，线上并没有
+  // /static/css/rich-content.css（404），于是图片限高、缩略图、灯箱这些样式
+  // 整体失效，表现为"本地改完、客户端重启也不生效"。
+  var RICH_STYLE_PATH = '/static/css/rich-content.css?v=20260910-rich-content-v2';
+  var RICH_CRITICAL_CSS = [
+    '.rich-paragraph{white-space:pre-wrap;word-break:break-word;line-height:1.7;}',
+    '.rich-media-grid{display:grid;gap:6px;margin-top:.5rem;grid-template-columns:1fr;}',
+    '.rich-media-grid.is-multi{grid-template-columns:repeat(2,minmax(0,1fr));}',
+    '.rich-media-item{padding:0;border:0;border-radius:12px;overflow:hidden;background:rgba(15,23,42,.05);cursor:zoom-in;line-height:0;}',
+    '.rich-media-item img{display:block;width:100%;max-height:420px;object-fit:cover;}',
+    '.online-mastra-message-media img,.online-mastra-message-attachments img{max-width:100%;max-height:240px;width:auto;object-fit:cover;border-radius:10px;cursor:zoom-in;}',
+    '.online-mastra-message-media video,.online-mastra-message-attachments video{max-width:100%;max-height:260px;border-radius:10px;}',
+    '.online-mastra-approval.is-decided{opacity:.62;}',
+    '.online-mastra-approval-note{font-size:12px;color:rgba(15,23,42,.62);align-self:center;}',
+    '.rich-pending{background:linear-gradient(90deg,rgba(15,23,42,.06) 25%,rgba(15,23,42,.12) 37%,rgba(15,23,42,.06) 63%);background-size:400% 100%;min-height:120px;}',
+    '.rich-media-failed{display:flex;align-items:center;justify-content:center;min-height:120px;background:rgba(225,29,72,.08);border:1px dashed rgba(225,29,72,.35);color:#be123c;font-size:13px;cursor:pointer;}',
+    '.rich-lightbox{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.82);cursor:zoom-out;}',
+    '.rich-lightbox.hidden{display:none;}',
+    '.rich-lightbox img{max-width:94vw;max-height:92vh;border-radius:8px;}',
+    '.rich-lightbox button{position:absolute;border:0;background:rgba(255,255,255,.2);color:#fff;cursor:pointer;}',
+    '.rich-lightbox-back{top:16px;left:18px;height:34px;padding:0 .9rem;border-radius:999px;font-size:14px;}',
+    '.rich-lightbox-prev,.rich-lightbox-next{top:50%;transform:translateY(-50%);width:40px;height:40px;border-radius:50%;font-size:22px;line-height:1;}',
+    '.rich-lightbox-prev{left:12px;}',
+    '.rich-lightbox-next{right:12px;}',
+    '.rich-lightbox-counter{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);color:#fff;font-size:13px;}'
+  ].join('');
+
+  function richStyleCandidates() {
+    var out = [];
+    var origin = '';
+    try {
+      if (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) origin = text(LOCAL_API_BASE);
+    } catch (error) { origin = ''; }
+    if (!origin && window.location && window.location.origin) origin = window.location.origin;
+    origin = text(origin).replace(/\/$/, '');
+    if (origin) out.push(origin + RICH_STYLE_PATH);
+    if (out.indexOf(RICH_STYLE_PATH) < 0) out.push(RICH_STYLE_PATH);
+    try {
+      var remote = apiUrl(RICH_STYLE_PATH);
+      if (remote && out.indexOf(remote) < 0) out.push(remote);
+    } catch (error) { /* ignore */ }
+    return out;
+  }
+
+  function injectRichCriticalStyles() {
+    if (document.getElementById('onlineRichContentCritical')) return;
+    var style = document.createElement('style');
+    style.id = 'onlineRichContentCritical';
+    style.textContent = RICH_CRITICAL_CSS;
+    document.head.appendChild(style);
+  }
+
   function ensureRichStyles() {
     if (document.getElementById('onlineRichContentStyle')) return;
     var link = document.createElement('link');
     link.id = 'onlineRichContentStyle';
     link.rel = 'stylesheet';
-    link.href = apiUrl('/static/css/rich-content.css?v=20260910-rich-content-v1');
+    var candidates = richStyleCandidates();
+    var index = 0;
+    link.onerror = function () {
+      index += 1;
+      if (index < candidates.length) {
+        link.href = candidates[index];
+        return;
+      }
+      injectRichCriticalStyles();
+    };
+    link.href = candidates[0];
     document.head.appendChild(link);
   }
 
@@ -574,7 +637,7 @@
     });
   }
 
-  function renderApproval(bubble, approval) {
+  function renderApproval(bubble, approval, messageId) {
     if (!bubble || !approval || !approval.id || bubble.wrapper.querySelector('[data-mastra-approval]')) return;
     var card = document.createElement('div');
     card.className = 'online-mastra-approval';
@@ -596,7 +659,7 @@
             ? '已确认，任务已下发，等待 Online 执行…'
             : '已取消';
         }
-        decideApproval(approval.id, decision, card);
+        decideApproval(approval.id, decision, card, messageId || approval.message_id);
       });
     });
     bubble.wrapper.appendChild(card);
@@ -616,7 +679,11 @@
       appendBubbleText(live.bubble, payload.text || '');
     }
     if (type === 'progress' && payload.reply_text) setBubbleText(live.bubble, payload.reply_text);
-    if (type === 'approval_required') renderApproval(live.bubble, payload);
+    if (type === 'approval_required') renderApproval(live.bubble, payload, messageId);
+    if (type === 'cancelled') {
+      setBubbleText(live.bubble, payload.reply_text || payload.text || live.bubble.text || '已取消');
+      if (!historical) finishMessage(messageId, false);
+    }
     if (type === 'final') {
       setBubbleText(live.bubble, payload.reply_text || payload.text || live.bubble.text || '处理完成。');
       addMediaView(live.bubble, payload);
@@ -631,11 +698,14 @@
 
   function finishMessage(messageId, failed) {
     closeStream(messageId);
-    var live = state.live[text(messageId)];
+    var id = text(messageId);
+    var live = state.live[id];
     if (live && live.bubble) live.bubble.wrapper.classList.toggle('is-error', !!failed);
+    if (live && live.bubble) settleApprovalCard(live.bubble, failed);
+    if (text(state.running.messageId) === id) state.running = { messageId: '', sessionId: '' };
     loadSessions().catch(function () {});
     state.sending = false;
-    setComposerEnabled(true);
+    syncRunningUi();
   }
 
   function pollMessage(messageId) {
@@ -688,7 +758,7 @@
     var url = apiUrl('/api/h5-chat/messages/' + encodeURIComponent(id) + '/events?token=' + encodeURIComponent(text(typeof token !== 'undefined' ? token : '')) + '&last_event_id=' + Number(state.lastEventIds[id] || 0));
     var stream = new EventSource(url);
     state.streams[id] = stream;
-    ['queued', 'claimed', 'thinking', 'progress', 'tool_start', 'tool_end', 'delta', 'final', 'error', 'approval_required', 'publish_pending', 'publish_claimed', 'publish_result'].forEach(function (type) {
+    ['queued', 'claimed', 'thinking', 'progress', 'tool_start', 'tool_end', 'delta', 'final', 'error', 'cancelled', 'approval_required', 'publish_pending', 'publish_claimed', 'publish_result'].forEach(function (type) {
       stream.addEventListener(type, function (event) {
         try { applyEvent(id, JSON.parse(event.data || '{}'), false); } catch (e) {}
         scrollToBottom();
@@ -765,6 +835,7 @@
     }
     closeAllStreams();
     state.activeSessionId = id;
+    syncRunningUi();
     storeSessionId(id);
     if (options.compose !== false) enterCompose('', false);
     renderSessionHeader();
@@ -928,10 +999,14 @@
     });
   }
 
-  function decideApproval(id, decision, card) {
+  function decideApproval(id, decision, card, messageId) {
     var buttons = card ? card.querySelectorAll('button') : [];
     buttons.forEach(function (button) { button.disabled = true; });
-    request('/api/mastra-chat/approvals/' + encodeURIComponent(id) + '/decision', { method: 'POST', json: { decision: decision } }).then(function () {
+    request('/api/mastra-chat/approvals/' + encodeURIComponent(id) + '/decision', { method: 'POST', json: { decision: decision } }).then(function (data) {
+      if (decision === 'approve') {
+        startRunningTask(text(messageId), card);
+        return;
+      }
       if (card) {
         card.classList.add('is-decided');
         card.querySelector('.online-mastra-approval-actions').textContent = decision === 'approve' ? '已确认，正在执行' : '已取消执行';
@@ -942,11 +1017,78 @@
     });
   }
 
+  function isTaskRunningHere() {
+    var id = text(state.running.messageId);
+    return !!id && text(state.running.sessionId) === text(state.activeSessionId);
+  }
+
+  function settleApprovalCard(bubble, failed) {
+    var card = bubble && bubble.wrapper ? bubble.wrapper.querySelector('[data-mastra-approval]') : null;
+    var stop = card ? card.querySelector('[data-mastra-stop-task]') : null;
+    if (!stop) return;
+    var actions = card.querySelector('.online-mastra-approval-actions');
+    if (actions) actions.textContent = failed ? '执行失败，可重新下达' : '执行结束';
+  }
+
+  function syncRunningUi() {
+    var status = el('onlineMastraChatStatus');
+    var running = isTaskRunningHere();
+    if (status) {
+      var flag = running ? '1' : '0';
+      if (status.dataset.mastraRunning !== flag) {
+        status.dataset.mastraRunning = flag;
+        if (running) {
+          status.dataset.mastraIdleText = status.textContent || '';
+          status.textContent = '任务执行中，可点「停止执行」取消';
+        } else if (status.dataset.mastraIdleText) {
+          status.textContent = status.dataset.mastraIdleText;
+        }
+      }
+    }
+    setComposerEnabled(true);
+  }
+
+  function startRunningTask(messageId, card) {
+    var id = text(messageId);
+    if (!id) return;
+    state.running = { messageId: id, sessionId: text(state.activeSessionId) };
+    state.sending = false;
+    if (card) {
+      card.classList.add('is-decided');
+      card.classList.remove('is-error');
+      var actions = card.querySelector('.online-mastra-approval-actions');
+      if (actions) {
+        actions.innerHTML = '<button type="button" data-mastra-stop-task="1">停止执行</button><span class="online-mastra-approval-note">已确认，正在执行…</span>';
+        var stop = actions.querySelector('[data-mastra-stop-task]');
+        if (stop) stop.addEventListener('click', function () { stopRunningTask(id, stop); });
+      }
+    }
+    if (!state.streams[id] && !state.polls[id]) startStream(id);
+    syncRunningUi();
+  }
+
+  function stopRunningTask(messageId, button) {
+    var id = text(messageId);
+    if (!id) return;
+    if (button) button.disabled = true;
+    request('/api/mastra-chat/messages/' + encodeURIComponent(id) + '/cancel', { method: 'POST' }).then(function (data) {
+      if (data && data.side_effects_may_continue) {
+        window.alert('已停止调度；已经开始的外部任务可能仍会继续执行。');
+      }
+      finishMessage(id, false);
+      loadHistory().catch(function () {});
+    }).catch(function (error) {
+      if (button) button.disabled = false;
+      window.alert(error.message || '停止失败');
+    });
+  }
+
   function setComposerEnabled(enabled) {
     var input = el('onlineMastraInput');
     var send = el('onlineMastraSend');
-    if (input) input.disabled = !enabled;
-    if (send) send.disabled = !enabled || state.sending;
+    var locked = !enabled || isTaskRunningHere();
+    if (input) input.disabled = locked;
+    if (send) send.disabled = locked || state.sending;
   }
 
   function resizeInput() {

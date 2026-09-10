@@ -67,6 +67,13 @@
 /* 审批卡片：点过之后置灰并禁用按钮，避免重复点击；可选中的图片给放大光标 */
 .online-mastra-approval.is-decided { opacity: 0.62; }
 .online-mastra-approval.is-decided button { cursor: default; }
+/* 确认执行后只保留「停止执行」，配合输入框禁用，避免重复下达 */
+.online-mastra-approval-note { font-size: 12px; color: rgba(15, 23, 42, 0.62); align-self: center; }
+.online-mastra-approval-actions [data-mastra-stop-task] {
+  border-color: rgba(225, 29, 72, 0.35);
+  background: rgba(225, 29, 72, 0.1);
+  color: #be123c;
+}
 .online-mastra-zoomable { cursor: zoom-in; }
 .rich-media-block { display: grid; gap: 8px; margin-top: 0.5rem; }
 .rich-media-block video,

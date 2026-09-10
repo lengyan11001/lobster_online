@@ -27,6 +27,11 @@ def main() -> int:
         ("deps/wheels/pip-*.whl", _has_glob(BASE / "deps" / "wheels", "pip-*.whl"), ""),
         ("deps/get-pip.py", (BASE / "deps" / "get-pip.py").is_file(), ""),
         ("python/python.exe", (BASE / "python" / "python.exe").is_file(), "embedded Python"),
+        (
+            "desktop/BHZN-ToDesk-Agent.exe",
+            (BASE / "desktop" / "BHZN-ToDesk-Agent.exe").is_file(),
+            "optional remote support agent; System Config needs it to leave the not-installed state",
+        ),
         ("nodejs/node.exe", (BASE / "nodejs" / "node.exe").is_file(), "portable Node for Douyin protocol"),
         ("nodejs/package-lock.json", (BASE / "nodejs" / "package-lock.json").is_file(), "metadata only; no npm runtime"),
         ("deps/wheels/pycryptodome*.whl", _has_glob(BASE / "deps" / "wheels", "pycryptodome*.whl"), ""),
@@ -38,7 +43,8 @@ def main() -> int:
         print(f"  {name:<{width}}  [{'OK' if ok else 'MISSING'}]" + (f"  # {hint}" if hint else ""))
     critical = any(not ok for name, ok, _ in rows if name in {
         "deps/wheels (requirements)", "deps/wheels/pip-*.whl", "deps/get-pip.py",
-        "python/python.exe", "nodejs/node.exe", "scripts/pip_bootstrap_from_wheel.py",
+        "python/python.exe", "desktop/BHZN-ToDesk-Agent.exe", "nodejs/node.exe",
+        "scripts/pip_bootstrap_from_wheel.py",
     })
     if critical:
         print("\nERROR: missing a required Python/Node dependency; complete preparation before packaging.")

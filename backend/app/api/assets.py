@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
@@ -1189,6 +1189,73 @@ def _best_effort_open_folder_for_file(path: Path) -> bool:
     except Exception:
         logger.warning("[assets] open folder failed target=%s", target, exc_info=True)
     return False
+
+
+def _download_remote_asset_to_path(asset: Asset, target: Path, request: Request) -> int:
+    """Stream a cloud-only H5 asset into Online's local export folder."""
+    source_url = str(asset.source_url or "").strip()
+    candidates: list[tuple[str, dict[str, str]]] = []
+    if source_url.startswith(("http://", "https://")) and not _is_internal_asset_http_url(source_url):
+        candidates.append((source_url, {}))
+    remote_asset_id = (
+        str((asset.meta or {}).get("remote_asset_id") or "").strip()
+        if isinstance(asset.meta, dict)
+        else ""
+    )
+    auth_base = _auth_server_base_url()
+    auth_headers = _forward_auth_headers(request)
+    if remote_asset_id and auth_base and "Authorization" in auth_headers:
+        from urllib.parse import quote
+
+        candidates.append(
+            (
+                f"{auth_base}/api/assets/{quote(remote_asset_id, safe='')}/content",
+                auth_headers,
+            )
+        )
+    if not candidates:
+        raise HTTPException(404, detail="文件不存在，且没有可用的云端下载地址")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp_target = target.with_name(f".{target.name}.{uuid.uuid4().hex[:8]}.part")
+    errors: list[str] = []
+    try:
+        for url, headers in candidates:
+            try:
+                written = 0
+                with httpx.Client(
+                    timeout=httpx.Timeout(120.0, connect=15.0),
+                    follow_redirects=True,
+                    trust_env=False,
+                ) as client:
+                    with client.stream("GET", url, headers=headers) as response:
+                        response.raise_for_status()
+                        with temp_target.open("wb") as handle:
+                            for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                                if chunk:
+                                    handle.write(chunk)
+                                    written += len(chunk)
+                if written <= 0:
+                    raise ValueError("云端返回了空文件")
+                temp_target.replace(target)
+                return written
+            except Exception as exc:
+                errors.append(f"{url[:120]}: {exc}")
+                try:
+                    temp_target.unlink(missing_ok=True)
+                except Exception:
+                    pass
+        logger.warning(
+            "[assets] remote export failed asset_id=%s errors=%s",
+            asset.asset_id,
+            " | ".join(errors)[:800],
+        )
+        raise HTTPException(502, detail="云端文件下载失败，请稍后重试")
+    finally:
+        try:
+            temp_target.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 def _save_bytes(data: bytes, ext: str) -> tuple[str, str, int]:
@@ -3227,6 +3294,9 @@ def get_asset_content(
         raise HTTPException(404, detail="素材不存在")
     path = ASSETS_DIR / a.filename
     if not path.exists():
+        source_url = str(a.source_url or "").strip()
+        if source_url.startswith(("http://", "https://")) and not _is_internal_asset_http_url(source_url):
+            return RedirectResponse(url=source_url)
         raise HTTPException(404, detail="文件不存在")
     mt_map = {
         "image": "image/jpeg",
@@ -3241,6 +3311,7 @@ def get_asset_content(
 @router.post("/api/assets/{asset_id}/save-to-downloads", summary="保存素材到本机下载目录")
 def save_asset_to_downloads(
     asset_id: str,
+    request: Request,
     body: SaveAssetToDownloadsReq | None = None,
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
@@ -3249,18 +3320,23 @@ def save_asset_to_downloads(
     if not a:
         raise HTTPException(404, detail="素材不存在")
     source = _asset_local_path(a)
-    if not source:
-        raise HTTPException(404, detail="文件不存在")
-
     requested_name = body.filename if body else None
-    source_name = requested_name or a.filename or source.name
+    source_name = requested_name or a.filename or (source.name if source else "") or f"{a.asset_id}.bin"
     export_dir = _asset_library_export_dir(a.media_type or "")
     target = _unique_download_path(export_dir, source_name)
     reused_existing = False
-    if source.resolve() == target.resolve():
+    downloaded_from_cloud = False
+    if source and source.resolve() == target.resolve():
         reused_existing = True
-    else:
+    elif source:
         shutil.copy2(source, target)
+    else:
+        downloaded_size = _download_remote_asset_to_path(a, target, request)
+        downloaded_from_cloud = True
+        if not a.file_size:
+            a.file_size = downloaded_size
+            db.add(a)
+            db.commit()
 
     opened = _best_effort_open_folder_for_file(target) if (body.open_folder if body else True) else False
     return {
@@ -3271,6 +3347,7 @@ def save_asset_to_downloads(
         "directory": str(target.parent),
         "opened_folder": opened,
         "reused_existing": reused_existing,
+        "downloaded_from_cloud": downloaded_from_cloud,
     }
 
 

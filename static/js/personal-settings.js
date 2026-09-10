@@ -733,7 +733,8 @@
     var currentId = String((state.defaultItem || {}).survey_id || '');
     host.innerHTML = rows.length ? rows.map(function(row) {
       var id = String(row.id || '');
-      return '<div class="ps-option' + (id === currentId ? ' is-selected' : '') + '"><strong>' + esc(row.name || ('资料调查 #' + id)) + '</strong><div class="ps-item-actions"><button type="button" data-use-ps-survey="' + escAttr(id) + '">编辑</button><button type="button" data-delete-ps-survey="' + escAttr(id) + '">删除</button></div></div>';
+      var currentBadge = id === currentId ? '<span class="ps-current-badge">当前</span>' : '';
+      return '<div class="ps-option ps-survey-record' + (id === currentId ? ' is-selected' : '') + '"><div class="ps-survey-record-main"><span class="ps-survey-record-icon" aria-hidden="true">资</span><div class="ps-survey-record-copy"><strong>' + esc(row.name || ('资料调查 #' + id)) + '</strong><small>个人 IP 基础资料</small></div>' + currentBadge + '</div><div class="ps-item-actions"><button type="button" data-use-ps-survey="' + escAttr(id) + '">编辑</button><button class="is-danger" type="button" data-delete-ps-survey="' + escAttr(id) + '">删除</button></div></div>';
     }).join('') : '<div class="ps-empty">暂无资料调查记录</div>';
   }
 
@@ -2729,7 +2730,7 @@
     setMsg('正在保存资料调查...');
     var requirements = profileRequirements();
     var editingId = String(state.editingSurveyId || '');
-    cloudJson(editingId ? '/api/ip-content/profile-surveys/' + encodeURIComponent(editingId) : '/api/ip-content/profile-surveys', { method: editingId ? 'PATCH' : 'POST', body: { name: fieldValue('psProfileName') || '资料调查', requirements: requirements, meta: { source: 'online_personal_profile' } } })
+    cloudJson(editingId ? '/api/ip-content/profile-surveys/' + encodeURIComponent(editingId) : '/api/ip-content/profile-surveys', { method: editingId ? 'PATCH' : 'POST', body: { name: fieldValue('psSurveyName') || '默认资料', requirements: requirements, meta: { source: 'online_personal_profile' } } })
       .then(function(data) {
         state.surveys = [data.item].concat((state.surveys || []).filter(function(row) { return String(row.id) !== String(data.item && data.item.id); }));
         return saveCurrentDefault({ source: 'online_personal_profile', includeProfile: true, replaceSelection: true, survey_id: data.item && data.item.id });
@@ -2995,6 +2996,7 @@
     var row = (state.surveys || []).find(function(item) { return String(item.id) === String(id); });
     if (!row) return;
     state.editingSurveyId = String(row.id || '');
+    setFieldValue('psSurveyName', row.name || '默认资料');
     fillProfileFields({ requirements: row.requirements || {} });
     state.defaultItem = Object.assign({}, state.defaultItem || {}, { survey_id: row.id });
     renderSurveyRecords();
@@ -3479,6 +3481,7 @@
     if ($('psSaveProfileBtn')) $('psSaveProfileBtn').addEventListener('click', saveProfile);
     if ($('psNewSurveyBtn')) $('psNewSurveyBtn').addEventListener('click', function() {
       state.editingSurveyId = '';
+      setFieldValue('psSurveyName', '默认资料');
       setProfilePhoto('', '', '');
       state.profilePhotoUploadBusy = false;
       ['psProfileName','psGender','psBirthEra','psCurrentProvince','psCurrentCity','psHometown','psRole','psShareTopic','psVideoStyle','psAfterViewAction','psBusinessProduct','psTargetCustomer','psAdvantages'].forEach(function(id) { setFieldValue(id, ''); });

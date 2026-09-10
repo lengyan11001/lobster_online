@@ -607,6 +607,11 @@
           <section class="ps-editor-dialog ps-editor-dialog-lg" role="dialog" aria-modal="true" aria-labelledby="psSurveyEditorTitle">
             <header class="ps-editor-head"><strong id="psSurveyEditorTitle">新增资料调查</strong><button type="button" class="ps-editor-close" data-close-ps-editor aria-label="关闭">×</button></header>
             <div class="ps-editor-body">
+        <label class="ps-survey-name-field" for="psSurveyName">
+          <span>资料名称</span>
+          <input id="psSurveyName" type="text" maxlength="160" value="默认资料" placeholder="例如：默认资料、餐饮项目资料">
+          <small>仅用于区分不同资料，不会作为人设姓名写入生成内容。</small>
+        </label>
         <div class="ps-survey-heading">
           <div class="ps-survey-heading-icon" aria-hidden="true">资</div>
           <div>

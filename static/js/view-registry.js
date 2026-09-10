@@ -28,15 +28,15 @@
   });
 
   window.registerLobsterView('personal-settings', {
-    html: '/static/views/personal-settings.html?v=20260903-personal-template-layout-v1',
-    scripts: '/static/js/personal-settings.js?v=20260903-personal-template-layout-v1',
+    html: '/static/views/personal-settings.html?v=20260910-survey-record-name-v1',
+    scripts: '/static/js/personal-settings.js?v=20260910-survey-record-name-v1',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
 
   window.registerLobsterView('personal-whatsapp', {
-    html: '/static/views/personal-whatsapp.html?v=20260910-personal-whatsapp-workbench-v2',
-    scripts: '/static/js/personal-whatsapp.js?v=20260910-personal-whatsapp-workbench-v2',
+    html: '/static/views/personal-whatsapp.html?v=20260910-personal-whatsapp-workbench-v3',
+    scripts: '/static/js/personal-whatsapp.js?v=20260910-personal-whatsapp-workbench-v3',
     init: 'initPersonalWhatsappView',
     cache: 'reload'
   });

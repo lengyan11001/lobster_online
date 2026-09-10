@@ -129,6 +129,13 @@ def _brand_slug() -> str:
 
 
 def main() -> int:
+    # The slim installer cannot obtain the production-pinned wxauto4 41.1.2
+    # from PyPI anymore. Reuse the OTA packer's vetted wheel selection so every
+    # newly built slim package carries the minimal native WeChat runtime.
+    from pack_client_code_ota import _prepare_wechat_runtime_wheels
+
+    copied_wechat_wheels = _prepare_wechat_runtime_wheels(ROOT)
+    print(f"[wechat-runtime] prepared {len(copied_wechat_wheels)} bundled wheels")
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     brand = _brand_slug()
     out_zip = PARENT / f"lobster_online_slim_{brand}_{ts}.zip"
