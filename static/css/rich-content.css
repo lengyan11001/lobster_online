@@ -23,6 +23,28 @@
   line-height: 0;
 }
 .rich-media-item img { display: block; width: 100%; max-height: 420px; object-fit: cover; }
+/* 生成中骨架 + 加载失败占位：两端一致 */
+.rich-pending {
+  background: linear-gradient(90deg, rgba(15,23,42,0.06) 25%, rgba(15,23,42,0.12) 37%, rgba(15,23,42,0.06) 63%);
+  background-size: 400% 100%;
+  animation: rich-skeleton 1.4s ease infinite;
+  min-height: 120px;
+}
+.rich-media-failed {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  background: rgba(225, 29, 72, 0.08);
+  border: 1px dashed rgba(225, 29, 72, 0.35);
+  color: #be123c;
+  font-size: 13px;
+  cursor: pointer;
+}
+@keyframes rich-skeleton {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
 /* 工具产出的图片/视频走的是老媒体管线：同样限高，避免顶出屏幕 */
 .online-mastra-message-media img,
 .online-mastra-message-attachments img {

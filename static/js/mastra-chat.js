@@ -503,8 +503,23 @@
         image.src = url;
         image.alt = name;
         image.loading = 'lazy';
-        image.className = 'online-mastra-zoomable';
-        image.addEventListener('click', function () { richLightbox(url); });
+        image.className = 'online-mastra-zoomable rich-pending';
+        image.addEventListener('load', function () { image.classList.remove('rich-pending'); });
+        image.addEventListener('error', function () {
+          // 生成中先显示骨架；加载失败给一个可点重试的占位，避免整块空白
+          image.classList.remove('rich-pending');
+          image.classList.add('rich-media-failed');
+          image.title = '\u52a0\u8f7d\u5931\u8d25\uff0c\u70b9\u51fb\u91cd\u8bd5';
+        });
+        image.addEventListener('click', function () {
+          if (image.classList.contains('rich-media-failed')) {
+            image.classList.remove('rich-media-failed');
+            image.classList.add('rich-pending');
+            image.src = url + (url.indexOf('?') < 0 ? '?' : '&') + '_retry=' + Date.now();
+            return;
+          }
+          richLightbox(url);
+        });
         wrap.appendChild(image);
       } else {
         var link = document.createElement('a');
