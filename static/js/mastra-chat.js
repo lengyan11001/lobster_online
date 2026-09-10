@@ -61,7 +61,11 @@
       return response.text().then(function (body) {
         var data = {};
         try { data = body ? JSON.parse(body) : {}; } catch (e) { data = { detail: body }; }
-        if (!response.ok) throw new Error(text(data.detail || data.message || ('HTTP ' + response.status)));
+        if (!response.ok) {
+          var error = new Error(text(data.detail || data.message || ('HTTP ' + response.status)));
+          error.status = response.status;
+          throw error;
+        }
         return data;
       });
     });
@@ -372,24 +376,44 @@
   function pollMessage(messageId) {
     var id = text(messageId);
     if (state.polls[id]) return;
-    state.polls[id] = setInterval(function () {
+    var failures = 0;
+    function schedule(delay) {
+      if (!state.live[id] || state.streams[id]) return;
+      state.polls[id] = setTimeout(run, delay);
+    }
+    function run() {
+      delete state.polls[id];
+      if (!state.live[id]) return;
+      if (document.visibilityState === 'hidden') {
+        schedule(15000);
+        return;
+      }
       request('/api/h5-chat/messages/' + encodeURIComponent(id) + '?after_event_id=' + Number(state.lastEventIds[id] || 0)).then(function (data) {
+        failures = 0;
         (data.events || []).forEach(function (event) { applyEvent(id, event, false); });
         var status = data.message && text(data.message.status);
         if (status === 'completed' || status === 'failed' || status === 'cancelled') {
           var live = state.live[id];
           if (live && data.message.reply_text && !live.bubble.text) setBubbleText(live.bubble, data.message.reply_text);
           finishMessage(id, status === 'failed');
+          return;
         }
+        schedule(5000);
       }).catch(function (error) {
-        var live = state.live[id];
-        if (live) {
-          live.bubble.wrapper.classList.add('is-error');
-          setBubbleText(live.bubble, error.message || '查询失败');
+        if (error && (error.status === 401 || error.status === 403 || error.status === 404)) {
+          var live = state.live[id];
+          if (live) {
+            live.bubble.wrapper.classList.add('is-error');
+            setBubbleText(live.bubble, error.message || '查询失败');
+          }
+          finishMessage(id, true);
+          return;
         }
-        finishMessage(id, true);
+        failures += 1;
+        schedule(Math.min(30000, 5000 * Math.pow(2, Math.min(failures, 3))));
       });
-    }, 1400);
+    }
+    schedule(5000);
   }
 
   function startStream(messageId) {
@@ -419,7 +443,7 @@
       delete state.streams[id];
     }
     if (state.polls[id]) {
-      clearInterval(state.polls[id]);
+      clearTimeout(state.polls[id]);
       delete state.polls[id];
     }
   }

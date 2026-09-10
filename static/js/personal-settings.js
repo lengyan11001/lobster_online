@@ -5,9 +5,11 @@
     competitors: [],
     competitorCandidates: [],
     memories: [],
+    surveys: [],
     templates: [],
     templateLoadError: '',
     editingTemplateId: '',
+    editingSurveyId: '',
     selectedKeywords: {},
     selectedCompetitors: {},
     selectedMemories: {},
@@ -689,6 +691,50 @@
       answer.addEventListener('change', syncProfileAnswerToField);
     });
     updateProfileCompletion();
+    renderSurveyRecords();
+  }
+
+  function openPersonalSettingsEditor(id) {
+    var modal = $(id);
+    if (!modal) return;
+    modal.hidden = false;
+    modal.setAttribute('aria-hidden', 'false');
+    modal.classList.add('is-visible');
+    document.documentElement.classList.add('ps-editor-modal-open');
+    window.setTimeout(function() {
+      var input = modal.querySelector('input:not([type="hidden"]), select, textarea, button');
+      if (input && typeof input.focus === 'function') input.focus();
+    }, 0);
+  }
+
+  function closePersonalSettingsEditor(modal) {
+    if (typeof modal === 'string') modal = $(modal);
+    if (!modal) return;
+    modal.classList.remove('is-visible');
+    modal.hidden = true;
+    modal.setAttribute('aria-hidden', 'true');
+    if (!document.querySelector('.ps-editor-modal.is-visible')) document.documentElement.classList.remove('ps-editor-modal-open');
+  }
+
+  function closeAllPersonalSettingsEditors() {
+    document.querySelectorAll('.ps-editor-modal.is-visible').forEach(closePersonalSettingsEditor);
+  }
+
+  function renderSurveyRecords() {
+    var host = $('psSurveyList');
+    if (!host) return;
+    var surveySelect = $('psTemplateSurvey');
+    if (surveySelect) {
+      var selected = surveySelect.value || String((state.defaultItem || {}).survey_id || '');
+      surveySelect.innerHTML = '<option value="">不关联</option>' + (state.surveys || []).map(function(survey) { return '<option value="' + escAttr(survey.id) + '">' + esc(survey.name || ('资料调查 #' + survey.id)) + '</option>'; }).join('');
+      surveySelect.value = selected;
+    }
+    var rows = Array.isArray(state.surveys) ? state.surveys : [];
+    var currentId = String((state.defaultItem || {}).survey_id || '');
+    host.innerHTML = rows.length ? rows.map(function(row) {
+      var id = String(row.id || '');
+      return '<div class="ps-option' + (id === currentId ? ' is-selected' : '') + '"><strong>' + esc(row.name || ('资料调查 #' + id)) + '</strong><div class="ps-item-actions"><button type="button" data-use-ps-survey="' + escAttr(id) + '">编辑</button><button type="button" data-delete-ps-survey="' + escAttr(id) + '">删除</button></div></div>';
+    }).join('') : '<div class="ps-empty">暂无资料调查记录</div>';
   }
 
   function profileRequirements() {
@@ -1732,7 +1778,11 @@
       btn.addEventListener('click', function() {
         var id = btn.getAttribute('data-edit-template') || '';
         var row = (state.templates || []).find(function(item) { return String(item.id || '') === id; });
-        if (row) applyTemplate(row, true);
+        if (row) {
+          applyTemplate(row, true);
+          if ($('psTemplateEditorTitle')) $('psTemplateEditorTitle').textContent = '编辑模板';
+          openPersonalSettingsEditor('psTemplateEditorModal');
+        }
       });
     });
     list.querySelectorAll('[data-delete-template]').forEach(function(btn) {
@@ -2527,6 +2577,7 @@
           state.templateLoadError = err && err.message ? err.message : '模板加载失败';
           renderSavedTemplates();
         }),
+        loadSurveys(),
         loadPersonalDigitalHumanResources().catch(function() {
           state.personalDigitalHumanAvatarOptions = [];
           state.personalDigitalHumanVoiceOptions = [];
@@ -2582,6 +2633,11 @@
         competitor_ids: cleanExistingIntIds(cleanIntIds(state.selectedCompetitors), state.competitors),
         memory_doc_ids: cleanStringIds(state.selectedMemories),
         memory_docs: memoryDocs,
+        // The template owns this relationship. An empty selection must stay
+        // empty instead of silently falling back to the personal default.
+        survey_id: $('psTemplateSurvey') && $('psTemplateSurvey').value
+          ? $('psTemplateSurvey').value
+          : null,
         requirements: templateRequirementsWithLanguage({}, language),
         meta: (function() {
           var currentMeta = state.defaultItem && state.defaultItem.meta && typeof state.defaultItem.meta === 'object' ? state.defaultItem.meta : {};
@@ -2597,6 +2653,7 @@
     }).then(function(data) {
       if (data.item && data.item.id) state.editingTemplateId = String(data.item.id);
       setMsg('模板已保存。');
+      closePersonalSettingsEditor('psTemplateEditorModal');
       // Applying an agent template creates user-owned resource rows. Refresh
       // those lists before the next edit so the saved IDs can be rendered.
       return Promise.all([loadKeywords(), loadCompetitors(), loadMemories(), loadTemplates()]);
@@ -2646,6 +2703,7 @@
         method: 'PUT',
         body: {
           name: options.name || existing.name || '个人默认模板',
+          survey_id: options.survey_id !== undefined ? options.survey_id : (existing.survey_id || null),
           keyword_ids: keywordIds,
           competitor_ids: competitorIds,
           memory_doc_ids: memoryIds,
@@ -2669,8 +2727,14 @@
     var btn = $('psSaveProfileBtn');
     setBusy(btn, true, '保存中...');
     setMsg('正在保存资料调查...');
-    saveCurrentDefault({ source: 'online_personal_profile', includeProfile: true, replaceSelection: true })
-      .then(function() { setMsg('资料调查已保存。'); })
+    var requirements = profileRequirements();
+    var editingId = String(state.editingSurveyId || '');
+    cloudJson(editingId ? '/api/ip-content/profile-surveys/' + encodeURIComponent(editingId) : '/api/ip-content/profile-surveys', { method: editingId ? 'PATCH' : 'POST', body: { name: fieldValue('psProfileName') || '资料调查', requirements: requirements, meta: { source: 'online_personal_profile' } } })
+      .then(function(data) {
+        state.surveys = [data.item].concat((state.surveys || []).filter(function(row) { return String(row.id) !== String(data.item && data.item.id); }));
+        return saveCurrentDefault({ source: 'online_personal_profile', includeProfile: true, replaceSelection: true, survey_id: data.item && data.item.id });
+      })
+      .then(function() { state.editingSurveyId = ''; renderSurveyRecords(); closePersonalSettingsEditor('psSurveyEditorModal'); setMsg('资料调查已保存。'); })
       .catch(function(err) { setMsg(err.message || '保存失败', true); })
       .finally(function() { setBusy(btn, false); });
   }
@@ -2689,6 +2753,10 @@
     (row.competitor_ids || []).forEach(function(id) { if (id) state.selectedCompetitors[String(id)] = true; });
     (row.memory_doc_ids || []).forEach(function(id) { if (id) state.selectedMemories[String(id)] = true; });
     if ($('psTemplateName')) $('psTemplateName').value = row.name || '';
+    if ($('psTemplateSurvey')) {
+      $('psTemplateSurvey').innerHTML = '<option value="">不关联</option>' + (state.surveys || []).map(function(survey) { return '<option value="' + escAttr(survey.id) + '">' + esc(survey.name || ('资料调查 #' + survey.id)) + '</option>'; }).join('');
+      $('psTemplateSurvey').value = row.survey_id ? String(row.survey_id) : '';
+    }
     setPersonalTemplateLanguage(templateLanguageFromParts(row.requirements, row.meta, row.language || row.target_language || state.personalTemplateLanguage));
     renderPersonalDigitalHumanTemplateSummary();
     renderPersonalDigitalHumanResources();
@@ -2706,6 +2774,7 @@
     state.personalDigitalHumanTemplateDraft = null;
     state.personalDigitalHumanTemplateExplicitlyCleared = false;
     if ($('psTemplateName')) $('psTemplateName').value = '';
+    if ($('psTemplateSurvey')) $('psTemplateSurvey').value = '';
     setPersonalTemplateLanguage(templateLanguageFromParts((state.defaultItem || {}).requirements, (state.defaultItem || {}).meta, state.personalTemplateLanguage));
     renderTemplateLists();
     renderSavedTemplates();
@@ -2766,6 +2835,8 @@
     );
     saveCurrentDefault({
       name: templateName(row),
+      // Selecting a template also selects its live survey relationship.
+      survey_id: row.survey_id || null,
       requirements: requirements,
       meta: Object.assign({}, row.meta || {}, { current_template_id: row.id, language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: state.personalSelectedDigitalHumanTemplate, digital_human_resources: clonePersonalDigitalHumanResources(state.personalDigitalHumanResources) }),
       source: 'personal_settings_current_template',
@@ -2843,6 +2914,7 @@
       if ($('psKeywordInput')) $('psKeywordInput').value = '';
       if ($('psKeywordDisplayName')) $('psKeywordDisplayName').value = '';
       setMsg('关键词已添加。');
+      closePersonalSettingsEditor('psKeywordEditorModal');
       return loadKeywords();
     }).catch(function(err) {
       setMsg(err.message || '关键词添加失败', true);
@@ -2919,6 +2991,31 @@
     renderCompetitorCandidates();
   }
 
+  function useSurvey(id) {
+    var row = (state.surveys || []).find(function(item) { return String(item.id) === String(id); });
+    if (!row) return;
+    state.editingSurveyId = String(row.id || '');
+    fillProfileFields({ requirements: row.requirements || {} });
+    state.defaultItem = Object.assign({}, state.defaultItem || {}, { survey_id: row.id });
+    renderSurveyRecords();
+    if ($('psSurveyEditorTitle')) $('psSurveyEditorTitle').textContent = '编辑资料调查';
+    openPersonalSettingsEditor('psSurveyEditorModal');
+  }
+
+  function deleteSurvey(id) {
+    return cloudJson('/api/ip-content/profile-surveys/' + encodeURIComponent(id), { method: 'DELETE', json: false }).then(function() {
+      state.surveys = (state.surveys || []).filter(function(row) { return String(row.id) !== String(id); });
+      renderSurveyRecords();
+    });
+  }
+
+  function loadSurveys() {
+    return cloudJson('/api/ip-content/profile-surveys', { timeoutMs: PERSONAL_SETTINGS_LOAD_TIMEOUT_MS }).then(function(data) {
+      state.surveys = Array.isArray(data.items) ? data.items : [];
+      renderSurveyRecords();
+    }).catch(function() { state.surveys = []; });
+  }
+
   function addCompetitorByChannelId() {
     var platform = (($('psCompetitorPlatform') || {}).value || 'douyin');
     if (platform !== 'wechat_channels') return;
@@ -2940,6 +3037,7 @@
       state.competitorCandidates = [];
       renderCompetitorCandidates();
       setMsg('视频号公开 ID 已添加。');
+      closePersonalSettingsEditor('psCompetitorEditorModal');
       return loadCompetitors().then(function() {
         if (data.item && data.item.id) return syncCompetitor(data.item.id);
         return null;
@@ -3022,6 +3120,7 @@
         state.competitorCandidates = [];
         renderCompetitorCandidates();
         setMsg('同行账号已添加。');
+        closePersonalSettingsEditor('psCompetitorEditorModal');
         return loadCompetitors().then(function() {
           if (data.item && data.item.id) return syncCompetitor(data.item.id);
           return null;
@@ -3198,6 +3297,7 @@
           setMsg(queued.length
             ? '已提交 ' + queued.length + ' 个文件到 Online 解析，完成后自动存入记忆。'
             : '已存入 ' + Object.keys(savedKeys).length + ' 个文件。');
+          closePersonalSettingsEditor('psUploadEditorModal');
         }
       });
     }).catch(function(err) {
@@ -3268,6 +3368,7 @@
       .then(function() {
         setMsg('已按生成类型存入记忆，并写入模板选择。');
         renderTemplateLists();
+        closePersonalSettingsEditor('psMemoryEditorModal');
       })
       .catch(function(err) {
         setMsg(err.message || '保存记忆失败', true);
@@ -3294,6 +3395,7 @@
       .then(function() {
         setMsg('已存入记忆，并写入模板选择。');
         renderTemplateLists();
+        closePersonalSettingsEditor('psMemoryEditorModal');
       })
       .catch(function(err) {
         setMsg(err.message || '保存记忆失败', true);
@@ -3341,7 +3443,7 @@
   function previewMemory(id) {
     if (!id) return;
     var box = $('psMemoryPreview');
-    if (box) box.textContent = '正在读取...';
+    if (box) { box.hidden = false; box.textContent = '正在读取...'; }
     cloudJson('/api/personal-settings/memory-documents/' + encodeURIComponent(id) + '/preview', { json: false })
       .then(function(data) {
         if (box) box.textContent = data.content_text || '没有内容。';
@@ -3375,6 +3477,21 @@
       if (typeof window.showLobsterView === 'function') window.showLobsterView('chat');
     });
     if ($('psSaveProfileBtn')) $('psSaveProfileBtn').addEventListener('click', saveProfile);
+    if ($('psNewSurveyBtn')) $('psNewSurveyBtn').addEventListener('click', function() {
+      state.editingSurveyId = '';
+      setProfilePhoto('', '', '');
+      state.profilePhotoUploadBusy = false;
+      ['psProfileName','psGender','psBirthEra','psCurrentProvince','psCurrentCity','psHometown','psRole','psShareTopic','psVideoStyle','psAfterViewAction','psBusinessProduct','psTargetCustomer','psAdvantages'].forEach(function(id) { setFieldValue(id, ''); });
+      renderProfileWizard();
+      if ($('psSurveyEditorTitle')) $('psSurveyEditorTitle').textContent = '新增资料调查';
+      openPersonalSettingsEditor('psSurveyEditorModal');
+    });
+    if ($('psSurveyList')) $('psSurveyList').addEventListener('click', function(ev) {
+      var use = ev.target.closest('[data-use-ps-survey]');
+      if (use) { useSurvey(use.getAttribute('data-use-ps-survey')); return; }
+      var del = ev.target.closest('[data-delete-ps-survey]');
+      if (del) deleteSurvey(del.getAttribute('data-delete-ps-survey')).catch(function(err) { setMsg(err.message || '删除失败', true); });
+    });
     if ($('psProfilePhotoPickerClose')) $('psProfilePhotoPickerClose').addEventListener('click', closeProfilePhotoPicker);
     if ($('psProfilePhotoPickerSearch')) $('psProfilePhotoPickerSearch').addEventListener('input', function(ev) {
       state.profilePhotoPickerQuery = String(ev.target.value || '');
@@ -3389,6 +3506,7 @@
       if (item) pickProfilePhotoAsset(item.getAttribute('data-ps-photo-asset') || '');
     });
     document.addEventListener('keydown', function(ev) {
+      if (ev.key === 'Escape') closeAllPersonalSettingsEditors();
       if (ev.key === 'Escape' && state.profilePhotoPickerOpen) closeProfilePhotoPicker();
       if (ev.key === 'Escape' && $('psDigitalHumanResourceModal') && !$('psDigitalHumanResourceModal').hidden) {
         closePersonalDigitalHumanResourcePicker();
@@ -3529,6 +3647,33 @@
     if ($('psDigitalHumanTemplateCancel')) $('psDigitalHumanTemplateCancel').addEventListener('click', closePersonalDigitalHumanTemplatePicker);
     if ($('psDigitalHumanTemplateConfirm')) $('psDigitalHumanTemplateConfirm').addEventListener('click', confirmPersonalDigitalHumanTemplate);
     if ($('psAddKeywordBtn')) $('psAddKeywordBtn').addEventListener('click', addKeyword);
+    if ($('psOpenKeywordEditorBtn')) $('psOpenKeywordEditorBtn').addEventListener('click', function() {
+      if ($('psKeywordInput')) $('psKeywordInput').value = '';
+      openPersonalSettingsEditor('psKeywordEditorModal');
+    });
+    if ($('psOpenCompetitorEditorBtn')) $('psOpenCompetitorEditorBtn').addEventListener('click', function() {
+      state.competitorCandidates = [];
+      renderCompetitorCandidates();
+      openPersonalSettingsEditor('psCompetitorEditorModal');
+    });
+    if ($('psOpenUploadEditorBtn')) $('psOpenUploadEditorBtn').addEventListener('click', function() {
+      openPersonalSettingsEditor('psUploadEditorModal');
+    });
+    if ($('psOpenMemoryEditorBtn')) $('psOpenMemoryEditorBtn').addEventListener('click', function() {
+      if ($('psSaveMode')) $('psSaveMode').value = 'new';
+      syncSaveModeState();
+      openPersonalSettingsEditor('psMemoryEditorModal');
+    });
+    if ($('psOpenTemplateEditorBtn')) $('psOpenTemplateEditorBtn').addEventListener('click', function() {
+      resetTemplateForm();
+      if ($('psTemplateEditorTitle')) $('psTemplateEditorTitle').textContent = '新增模板';
+      openPersonalSettingsEditor('psTemplateEditorModal');
+    });
+    document.querySelectorAll('.ps-editor-modal').forEach(function(modal) {
+      modal.addEventListener('click', function(ev) {
+        if (ev.target === modal || (ev.target && ev.target.closest && ev.target.closest('[data-close-ps-editor]'))) closePersonalSettingsEditor(modal);
+      });
+    });
     if ($('psCompetitorPlatform')) $('psCompetitorPlatform').addEventListener('change', updateCompetitorPlatformFields);
     if ($('psSearchCompetitorBtn')) $('psSearchCompetitorBtn').addEventListener('click', searchCompetitors);
     if ($('psAddCompetitorByChannelIdBtn')) $('psAddCompetitorByChannelIdBtn').addEventListener('click', addCompetitorByChannelId);
@@ -3595,6 +3740,7 @@
     loadAll();
   };
   window.closePersonalSettingsOverlays = function() {
+    closeAllPersonalSettingsEditors();
     closeProfilePhotoPicker();
     closePersonalDigitalHumanTemplatePicker();
   };

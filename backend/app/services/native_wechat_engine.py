@@ -5183,26 +5183,48 @@ async def run_auto_reply_once(
                     continue
                 chat_info_peer = _chat_info_peer_key(chat_info, "")
                 reported_wechat_id = chat_info_peer if _looks_like_wechat_id(chat_info_peer) else ""
-                actual_wechat_id = actual_peer if _looks_like_wechat_id(actual_peer) else ""
-                resolved_wechat_id = next(
-                    (
-                        candidate
-                        for candidate in (
-                            reported_wechat_id,
-                            scanned_wechat_id,
-                            captured_wechat_id,
-                            actual_wechat_id,
-                        )
-                        if _looks_like_wechat_id(candidate)
-                    ),
-                    "",
+                # ``actual_peer`` is commonly the visible nickname.  A nickname
+                # such as ``FIPILOCK-Joy`` can satisfy the lexical wx-id check,
+                # but must not conflict with the profile-verified id captured
+                # from that same visible row (``Fipilockfactory`` in this case).
+                actual_wechat_id = (
+                    actual_peer
+                    if _looks_like_wechat_id(actual_peer)
+                    and _normalize_contact_lookup_key(actual_peer)
+                    != _normalize_contact_lookup_key(display_name)
+                    else ""
+                )
+                if (
+                    reported_wechat_id
+                    and _normalize_contact_lookup_key(reported_wechat_id)
+                    == _normalize_contact_lookup_key(display_name)
+                ):
+                    reported_wechat_id = ""
+                # A profile id captured from the currently selected chat is
+                # authoritative.  Do not compare it with wxauto fields that
+                # may contain a nickname or a stale ChatInfo value.
+                resolved_wechat_id = (
+                    captured_wechat_id
+                    if _looks_like_wechat_id(captured_wechat_id)
+                    else next(
+                        (
+                            candidate
+                            for candidate in (
+                                reported_wechat_id,
+                                scanned_wechat_id,
+                                actual_wechat_id,
+                            )
+                            if _looks_like_wechat_id(candidate)
+                        ),
+                        "",
+                    )
                 )
                 known_wechat_ids = {
                     value.casefold(): value
                     for value in (reported_wechat_id, scanned_wechat_id, captured_wechat_id, actual_wechat_id)
                     if _looks_like_wechat_id(value)
                 }
-                if len(known_wechat_ids) > 1:
+                if not _looks_like_wechat_id(captured_wechat_id) and len(known_wechat_ids) > 1:
                     result["skipped"] += 1
                     collection_result.update(
                         {
@@ -8589,6 +8611,18 @@ def _capture_auto_reply_scan_page(
                 expected_display_name=display_name,
             )
             wechat_id = str(identity.get("wx_no") or "").strip() if isinstance(identity, dict) else ""
+            identity_reason = (
+                str(identity.get("reason") or "") if isinstance(identity, dict) else "invalid_result"
+            )
+            # A few WeChat profiles render the wxid in a non-readable custom
+            # control. If the local contact table has exactly one wxid for the
+            # already selected display name, retain that unambiguous mapping;
+            # never choose among duplicate names.
+            if not _looks_like_wechat_id(wechat_id):
+                mapped_wxid = _resolve_unique_local_contact_wx_no(account_id, display_name)
+                if mapped_wxid:
+                    wechat_id = mapped_wxid
+                    identity_reason = "local_contact_unique_mapping"
             _write_auto_reply_diagnostic(
                 "scan_session_identity_capture",
                 account_id=account_id,
@@ -8598,7 +8632,7 @@ def _capture_auto_reply_scan_page(
                 actual_peer=actual_peer,
                 success=bool(_looks_like_wechat_id(wechat_id)),
                 wechat_id=wechat_id,
-                reason=str(identity.get("reason") or "") if isinstance(identity, dict) else "invalid_result",
+                 reason=identity_reason,
             )
             if not _looks_like_wechat_id(wechat_id):
                 capture_skip(
@@ -8606,11 +8640,7 @@ def _capture_auto_reply_scan_page(
                     chat_type=chat_type,
                     actual_peer=actual_peer,
                     chat_info=chat_info,
-                    identity_reason=(
-                        str(identity.get("reason") or "")[:160]
-                        if isinstance(identity, dict)
-                        else "invalid_result"
-                    ),
+                     identity_reason=identity_reason[:160],
                 )
                 continue
             captures[peer_id] = {
@@ -9820,6 +9850,21 @@ def _extract_contact_profile_wx_no(root: Any) -> str:
         if text:
             entries.append((text, _uia_control_class(node)))
     texts = [text for text, _class_name in entries]
+    # The profile popup wraps long wx ids visually (and some WeChat builds
+    # expose the label and value as separate UIA nodes).  Do not depend on the
+    # value node's class or on a single-line ``微信号: value`` string.
+    for idx, text in enumerate(texts):
+        compact_text = _compact_for_contains(text)
+        wxid_match = re.search(r"\bwxid_[A-Za-z0-9_-]{6,}\b", compact_text)
+        if wxid_match:
+            return wxid_match.group(0)
+        if "微信号" in compact_text or "微信號" in compact_text:
+            joined = compact_text
+            for following in texts[idx + 1 : idx + 3]:
+                joined += _compact_for_contains(following)
+                wxid_match = re.search(r"\bwxid_[A-Za-z0-9_-]{6,}\b", joined)
+                if wxid_match:
+                    return wxid_match.group(0)
     label_seen = False
     profile_started = False
     for idx, text in enumerate(texts):
@@ -9839,8 +9884,13 @@ def _extract_contact_profile_wx_no(root: Any) -> str:
             if any(marker in candidate for marker in ("地区", "地區", "备注", "朋友圈", "视频号", "共同群聊")):
                 label_seen = False
                 continue
-            if candidate and class_name.endswith("ContactProfileTextView"):
-                return candidate
+            if candidate:
+                candidate_compact = _compact_for_contains(candidate)
+                match = re.search(r"\bwxid_[A-Za-z0-9_-]{6,}\b", candidate_compact)
+                if match:
+                    return match.group(0)
+                if class_name.endswith("ContactProfileTextView"):
+                    return candidate
         if profile_started and class_name.endswith("ContactProfileTextView"):
             candidate = str(text or "").strip()
             if candidate and not any("\u4e00" <= char <= "\u9fff" for char in candidate):
@@ -9937,6 +9987,31 @@ def _resolve_local_contact_wx_no(account_id: str, target: str) -> str:
     # A value already shaped like a WeChat ID is safe to pass through even if
     # this contact has not been synced into the local contact table yet.
     return target if _looks_like_wechat_id(target) else ""
+
+
+def _resolve_unique_local_contact_wx_no(account_id: str, target: str) -> str:
+    """Return a wx id only when this display name maps to one contact."""
+    account_id = str(account_id or "").strip()
+    target = str(target or "").strip()
+    if not account_id or not target:
+        return ""
+    try:
+        with _connect() as conn:
+            rows = conn.execute(
+                """
+                select wx_no
+                from wechat_contacts
+                where account_id=? and (contact_key=? or display_name=? or remark=?)
+                  and trim(coalesce(wx_no,"")) != ""
+                order by updated_at desc, id desc
+                """,
+                (account_id, target, target, target),
+            ).fetchall()
+    except Exception:
+        return ""
+    values = [str(row["wx_no"] or "").strip() for row in rows]
+    values = [value for value in values if _looks_like_wechat_id(value)]
+    return values[0] if len(set(value.casefold() for value in values)) == 1 else ""
 
 
 def _uia_contact_recycler_lists(root: Any) -> List[Any]:
@@ -10654,6 +10729,9 @@ def _sync_local_messages_once(
                     target,
                     search_steps,
                     open_moments=False,
+                    fallback_display_name=str(
+                        diagnostic_context.get("expected_display_name") or ""
+                    ),
                 )
                 _write_auto_reply_diagnostic(
                     "chat_search_verified",
@@ -12685,6 +12763,20 @@ def _read_current_private_chat_wx_no(
         return result
     popup_opened = False
     try:
+        # A previous identity read can leave its detached popup open when ESC
+        # was delayed or swallowed.  Close it before inspecting the newly
+        # selected direct chat, otherwise its wx id can leak into this row.
+        if _local_profile_popup_root(hwnd) is not None:
+            _focus_local_wechat(hwnd)
+            _send_hotkey("esc", pause=0.2)
+            stale_deadline = time.monotonic() + 1.5
+            while time.monotonic() < stale_deadline:
+                if _local_profile_popup_root(hwnd) is None:
+                    break
+                time.sleep(0.1)
+            if _local_profile_popup_root(hwnd) is not None:
+                result["reason"] = "stale_profile_popup_not_closed"
+                return result
         _ensure_local_chat_tab(account_id)
         root = _uia_main_root(hwnd)
         info_button = next(
@@ -12703,7 +12795,37 @@ def _read_current_private_chat_wx_no(
             for node in _uia_walk(root, max_depth=20, max_nodes=2600)
             if _uia_control_class(node) == "mmui::ChatMemberCell"
         ]
+        # Chat information is a persistent side panel.  If the previous
+        # candidate left it open, its member cell can still point to the old
+        # contact after the session row changes.  Toggle it closed and reopen
+        # it for the current chat so the profile click starts from fresh UIA
+        # nodes.  No display-name comparison is used here; the profile wx id
+        # is the only identity carried into execution.
+        if members:
+            try:
+                _uia_click(info_button)
+                time.sleep(0.25)
+            except Exception:
+                pass
+            root = _uia_main_root(hwnd)
+            info_button = next(
+                (
+                    node
+                    for node in _uia_walk(root, max_depth=20, max_nodes=2600)
+                    if _uia_control_class(node) == "mmui::XButton"
+                    and _uia_control_text(node) == "聊天信息"
+                ),
+                None,
+            )
+            members = [
+                node
+                for node in _uia_walk(root, max_depth=20, max_nodes=2600)
+                if _uia_control_class(node) == "mmui::ChatMemberCell"
+            ]
         if not members:
+            if info_button is None:
+                result["reason"] = "chat_info_button_missing_after_reset"
+                return result
             _uia_click(info_button)
             time.sleep(0.45)
             root = _uia_main_root(hwnd)
@@ -12769,8 +12891,9 @@ def _open_local_contact_profile_via_search(
     steps: List[Dict[str, Any]],
     *,
     open_moments: bool = True,
+    fallback_display_name: str = "",
 ) -> str:
-    """Open a contact through the top search and verify its stable WeChat id."""
+    """Open a local contact, with a scan-bound name fallback for wxid misses."""
     original_target = str(target or "").strip()
     # A caller that already captured a WeChat ID from this round must search
     # that exact value.  Resolving it through the local contact table first
@@ -12883,6 +13006,67 @@ def _open_local_contact_profile_via_search(
                 "rows": last_search_rows[:12],
             }
         )
+    fallback_name = str(fallback_display_name or "").strip()
+    used_display_name_fallback = False
+    if result_node is None and fallback_name and not open_moments:
+        fallback_attempts: List[Dict[str, Any]] = []
+        fallback_rows: List[Dict[str, Any]] = []
+        for attempt in range(2):
+            search = _find_local_top_search_field(_uia_main_root(hwnd)) or search
+            try:
+                input_meta = _uia_set_local_search_query(
+                    search, fallback_name, force_paste=attempt > 0
+                )
+            except Exception as exc:
+                input_meta = {"method": "input_error", "error": str(exc)[:240]}
+            fallback_query_value = ""
+            for _ in range(12):
+                fallback_query_value = _uia_get_value(search)
+                if fallback_query_value.casefold() == fallback_name.casefold():
+                    break
+                time.sleep(0.1)
+            input_meta = {
+                **input_meta,
+                "attempt": attempt + 1,
+                "query_value": fallback_query_value,
+            }
+            fallback_attempts.append(input_meta)
+            steps.append(
+                {
+                    "step": "search_contact_by_display_name_fallback",
+                    "ok": fallback_query_value.casefold() == fallback_name.casefold(),
+                    "target": original_target,
+                    "wx_no": expected_wx_no,
+                    "fallback_display_name": fallback_name,
+                    **input_meta,
+                }
+            )
+            if fallback_query_value.casefold() != fallback_name.casefold():
+                continue
+            fallback_deadline = time.monotonic() + 4.0
+            while time.monotonic() < fallback_deadline:
+                search_root = _uia_main_root(hwnd)
+                result_node = _find_local_contact_search_result(
+                    search_root, fallback_name, search_bottom=search_bottom
+                )
+                if result_node is not None:
+                    used_display_name_fallback = True
+                    break
+                fallback_rows = _local_search_popup_debug(search_root)
+                time.sleep(0.25)
+            if result_node is not None:
+                break
+        steps.append(
+            {
+                "step": "search_contact_display_name_fallback_result",
+                "ok": bool(result_node is not None),
+                "target": original_target,
+                "wx_no": expected_wx_no,
+                "fallback_display_name": fallback_name,
+                "rows": fallback_rows[:12],
+                "input_attempts": fallback_attempts,
+            }
+        )
     if result_node is None:
         debug_root = _uia_main_root(hwnd)
         debug = _local_top_search_debug(debug_root)
@@ -12917,9 +13101,29 @@ def _open_local_contact_profile_via_search(
             "selection_scope": "联系人:first_matching_result",
             "selected_text": selected_text,
             "selected_rect": selected_rect,
+            "lookup_mode": (
+                "display_name_fallback_after_wxid_miss"
+                if used_display_name_fallback
+                else "wechat_id"
+            ),
         }
     )
     time.sleep(0.8)
+
+    # Reply execution only needs the exact contact search result.  The search
+    # itself is by the already captured WeChat ID; opening the profile again
+    # adds no safety and can reintroduce a stale profile popup from the prior
+    # candidate.  Moments callers keep the profile path below.
+    if not open_moments:
+        steps.append(
+            {
+                "step": "open_contact_chat_by_wx_no",
+                "ok": True,
+                "target": original_target,
+                "wx_no": expected_wx_no,
+            }
+        )
+        return expected_wx_no
 
     root = _uia_main_root(hwnd)
     info_button = next(

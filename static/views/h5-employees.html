@@ -189,6 +189,14 @@
           <span>本轮个人会话数量</span>
           <span><input id="oeNodeWechatPrivateSessionLimit" type="number" min="1" max="100" step="1" value="100"> 达到数量后进入下一轮</span>
         </label>
+        <div class="oe-form-label" id="oeNodeWhatsappField" hidden>
+          <span>个人whatapp助手参数</span>
+          <label>账号标识<input id="oeNodeWhatsappAccountId" type="text" value="desktop-whatsapp-default" readonly></label>
+          <label>消息轮询间隔（秒）<input id="oeNodeWhatsappInterval" type="number" min="1" max="300" step="1" value="15"></label>
+          <label>接管时长（分钟）<input id="oeNodeWhatsappTakeoverMinutes" type="number" min="1" max="1440" step="1" value="30"></label>
+          <label>每轮最多会话数<input id="oeNodeWhatsappMaxUnread" type="number" min="1" max="100" step="1" value="50"></label>
+          <label>回复要求<textarea id="oeNodeWhatsappInstruction" rows="3" maxlength="4000" placeholder="可选：回复语气、业务边界和语言要求"></textarea></label>
+        </div>
         <label class="oe-form-label" id="oeNodeDouyinReplyModeField" hidden>
           <span>抖音私信回复策略</span>
           <select id="oeNodeDouyinReplyMode"><option value="fixed">固定话术</option><option value="ai_lead">AI 引导加绿泡泡</option></select>

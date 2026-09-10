@@ -1489,19 +1489,41 @@
     Promise.all(files.map(function(file) {
       return new Promise(function(resolve, reject) {
         var reader = new FileReader();
-        reader.onload = function() { resolve(String(reader.result || '')); };
+        reader.onload = function() { resolve({ name: String(file.name || ''), content: String(reader.result || '') }); };
         reader.onerror = reject;
         reader.readAsText(file, 'utf-8');
       });
     })).then(function(contents) {
       var values = [];
-      contents.forEach(function(content) {
+      var csvRows = [];
+      contents.forEach(function(fileData) {
+        var content = fileData.content;
+        var fileName = fileData.name.toLowerCase();
+        if (/\.(csv|tsv)$/.test(fileName)) {
+          content.replace(/^\ufeff/, '').split(/\r?\n/).forEach(function(line, index) {
+            var row = line.trim();
+            if (!row) return;
+            var cells = parseFriendCsvLine(row, fileName.endsWith('.tsv') ? '\t' : ',');
+            var first = String(cells[0] || '').trim().replace(/^['"]|['"]$/g, '');
+            if (!first) return;
+            if (index === 0 && /^(contact|target|wxid|wechat[_ -]?id|phone|mobile)$/i.test(first)) return;
+            csvRows.push({
+              contact: first,
+              remark: String(cells[1] || '').trim(),
+              apply_message: String(cells[2] || '').trim(),
+              permission: String(cells[3] || '').trim(),
+              tags: String(cells[4] || '').split(/[;,，；]/).map(function(x) { return x.trim(); }).filter(Boolean)
+            });
+          });
+          return;
+        }
         var parsed = null;
         try { parsed = JSON.parse(content); } catch (_) {}
         if (Array.isArray(parsed)) parsed.forEach(function(item) { values.push(typeof item === 'object' ? (item.wxid || item.wechat_id || item.phone || item.mobile || item.keyword || item.target || '') : item); });
         else if (parsed && typeof parsed === 'object') Object.keys(parsed).forEach(function(key) { values.push(parsed[key]); });
         else values = values.concat(splitTargets(content.replace(/\r/g, '\n')));
       });
+      if (csvRows.length) return submitImportedFriendRows(csvRows);
       values = splitTargets(values.join('\n'));
       if (!values.length) return setMsg('导入文件中没有可用的微信号或手机号', true);
       var input = $('nativeWechatFriendModalKeyword');
@@ -1509,6 +1531,89 @@
       addFriend();
       setMsg('已导入 ' + values.length + ' 个目标，请确认申请信息后提交', false);
     }).catch(function() { setMsg('读取导入文件失败', true); });
+  }
+
+  function parseFriendCsvLine(line, delimiter) {
+    var cells = [], current = '', quoted = false;
+    for (var i = 0; i < line.length; i += 1) {
+      var ch = line[i];
+      if (ch === '"') {
+        if (quoted && line[i + 1] === '"') { current += '"'; i += 1; }
+        else quoted = !quoted;
+      } else if (ch === delimiter && !quoted) {
+        cells.push(current); current = '';
+      } else current += ch;
+    }
+    cells.push(current);
+    return cells;
+  }
+
+  function submitImportedFriendRows(rows) {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先选择账号', true);
+    var groups = {};
+    rows.forEach(function(row) {
+      if (!row.contact) return;
+      var permission = row.permission || '朋友圈';
+      var key = [row.remark, row.apply_message, permission, row.tags.join(',')].join('\u0001');
+      if (!groups[key]) groups[key] = { keywords: [], remark: row.remark, apply_message: row.apply_message, permission: permission, tags: row.tags };
+      groups[key].keywords.push(row.contact);
+    });
+    var batches = Object.keys(groups).map(function(key, index) {
+      var group = groups[key];
+      return apiJson('/api/native-wechat/friends/add', {
+        method: 'POST',
+        body: {
+          account_id: id,
+          keywords: group.keywords,
+          apply_message: group.apply_message,
+          remark: group.remark,
+          tags: group.tags,
+          permission: group.permission,
+          prepare_only: false,
+          queue_only: true,
+          client_request_id: 'friend-csv-' + Date.now() + '-' + index
+        }
+      });
+    });
+    if (!batches.length) return setMsg('CSV 第一列至少填写一个联系人', true);
+    setMsg('正在导入好友申请…', false);
+    return Promise.all(batches).then(function() {
+      setMsg('已按 CSV 每行参数加入好友列表', false);
+      return Promise.all([loadFriendRecords(), loadFriendQueueControl()]);
+    }).catch(function(err) { setMsg(err.message || '导入 CSV 失败', true); });
+  }
+
+  function downloadFriendImportTemplate(type) {
+    var isCsv = type === 'csv';
+    var content = isCsv
+      ? '\ufeffcontact,remark,apply_message,permission,tags\n13800138000,张三,您好，我是...,朋友圈,客户A\nwxid_example,客户A,方便加您吗？,仅聊天,意向客户;北京\n'
+      : '13800138000\nwxid_example\n';
+    var filename = isCsv ? '微信加好友导入模板.csv' : '微信加好友导入模板.txt';
+    function browserDownload() {
+      var blob = new Blob([content], { type: isCsv ? 'text/csv;charset=utf-8' : 'text/plain;charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      window.setTimeout(function() { link.remove(); URL.revokeObjectURL(url); }, 1000);
+      setMsg('模板已下载，请到默认下载目录查看', false);
+      return Promise.resolve();
+    }
+    if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.save_text_file === 'function') {
+      return Promise.resolve(window.pywebview.api.save_text_file(filename, content)).then(function(result) {
+        if (result && result.cancelled) return;
+        if (result && result.ok) setMsg('模板已保存：' + (result.path || result.filename || ''), false);
+        else return browserDownload();
+      }).catch(function() { return browserDownload(); });
+    }
+    if (window.LobsterAndroid && typeof window.LobsterAndroid.saveTextFile === 'function') {
+      try { window.LobsterAndroid.saveTextFile(filename, isCsv ? 'text/csv' : 'text/plain', content); setMsg('模板已保存', false); return Promise.resolve(); } catch (_) {}
+    }
+    return browserDownload();
   }
 
   function showFriendRecordDetail(record) {
@@ -2121,6 +2226,10 @@
     var friendImportInput = $('nativeWechatFriendImportInput');
     if (friendImportBtn && friendImportInput) friendImportBtn.addEventListener('click', function() { friendImportInput.click(); });
     if (friendImportInput) friendImportInput.addEventListener('change', function() { importFriendFiles(friendImportInput.files); friendImportInput.value = ''; });
+    var txtTemplateBtn = $('nativeWechatDownloadTxtTemplateBtn');
+    if (txtTemplateBtn) txtTemplateBtn.addEventListener('click', function() { downloadFriendImportTemplate('txt'); });
+    var csvTemplateBtn = $('nativeWechatDownloadCsvTemplateBtn');
+    if (csvTemplateBtn) csvTemplateBtn.addEventListener('click', function() { downloadFriendImportTemplate('csv'); });
     var friendStartBtn = $('nativeWechatFriendQueueStartBtn');
     if (friendStartBtn) friendStartBtn.addEventListener('click', startFriendQueue);
     var friendStopBtn = $('nativeWechatFriendQueueStopBtn');

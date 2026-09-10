@@ -1916,14 +1916,16 @@ async def test_takeover_session_polls_repeatedly_and_aggregates_new_results(monk
     )
 
     assert sleeps == [15, 15]
-    assert [body["check_friend_requests"] for body in request_bodies] == [True, False, False]
+    assert [body["check_friend_requests"] for body in request_bodies] == [True, True, True]
     assert result["completed_rounds"] == 3
     assert result["replied"] == 2
     assert result["skipped"] == 1
-    assert result["friend_requests_checked"] == 2
-    assert result["friend_requests_accepted"] == 1
-    assert result["friend_requests_failed"] == 0
-    assert result["friend_requests_checked_once"] is True
+    assert result["friend_requests_checked"] == 6
+    assert result["friend_requests_accepted"] == 3
+    assert result["friend_requests_failed"] == 1
+    assert result["friend_requests_checked_once"] is False
+    assert result["friend_requests_checked_each_round"] is True
+    assert [round_result["friend_requests_checked"] for round_result in result["rounds"]] == [2, 1, 3]
     assert result["group_invite_candidates"] == 1
     assert [item["round"] for item in result["items"]] == [1, 3]
 
@@ -1959,7 +1961,7 @@ async def test_takeover_session_defaults_to_thirty_minutes_at_fifteen_second_int
     assert len(sleeps) == 120
     assert set(sleeps) == {15.0}
     assert request_bodies[0]["check_friend_requests"] is True
-    assert all(body["check_friend_requests"] is False for body in request_bodies[1:])
+    assert all(body["check_friend_requests"] is True for body in request_bodies)
 
 
 @pytest.mark.asyncio

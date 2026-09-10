@@ -1,5 +1,10 @@
 /** 定死：公网 lobster_server（登录/验证码/auth/me；与 pack_bundle AUTH_SERVER_BASE 一致；走 HTTPS 与 Nginx 443） */
-var LOBSTER_SERVER_PUBLIC = 'https://bhzn.top';
+var LOBSTER_SERVER_PUBLIC = (typeof window !== 'undefined' && window.__LOBSTER_SERVER_PUBLIC__)
+  ? String(window.__LOBSTER_SERVER_PUBLIC__)
+  : 'https://bhzn.top';
+var LOBSTER_SERVER_CONFIGURED_IN_PAGE = typeof window !== 'undefined'
+  && !!String(window.__LOBSTER_SERVER_PUBLIC__ || '').trim();
+if (!/^https?:\/\//i.test(LOBSTER_SERVER_PUBLIC)) LOBSTER_SERVER_PUBLIC = 'https://bhzn.top';
 
 (function setApiBaseFromUrl() {
   // 定死：本机回环端口与当前页端口一致（默认 8000）
@@ -14,10 +19,18 @@ var LOBSTER_SERVER_PUBLIC = 'https://bhzn.top';
   // 调试覆盖：?api=http://127.0.0.1:8002 或 localStorage.lobster_server_api_base
   var p = startupParams;
   var serverApiOverride = (p.get('api') || '').trim();
+  var explicitServerApiOverride = !!serverApiOverride;
   if (serverApiOverride) {
     try { localStorage.setItem('lobster_server_api_base', serverApiOverride.replace(/\/$/, '')); } catch (eApi) {}
   } else {
     try { serverApiOverride = (localStorage.getItem('lobster_server_api_base') || '').trim(); } catch (eApi2) { serverApiOverride = ''; }
+  }
+  // A shared domestic/overseas package carries its authoritative server in
+  // the bundled config. Do not let an old localStorage override keep an
+  // overseas install on the domestic server (or the reverse). Explicit
+  // ?api= remains available for staging/debugging.
+  if (!explicitServerApiOverride && (LOBSTER_SERVER_CONFIGURED_IN_PAGE || /^(?:https?:\/\/)?(?:bhzn\.top|bhos\.online|42\.194\.209\.150)(?::\d+)?$/i.test(String(LOBSTER_SERVER_PUBLIC || '').replace(/\/$/, '')))) {
+    serverApiOverride = '';
   }
   window.__API_BASE = serverApiOverride ? serverApiOverride.replace(/\/$/, '') : LOBSTER_SERVER_PUBLIC;
 

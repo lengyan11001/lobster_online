@@ -119,6 +119,10 @@ def render_index_html(template: str, requested_mark: str = "") -> str:
     )
     values = {
         "__LOBSTER_BRANDING_AVAILABLE__": "true" if available else "false",
+        "__LOBSTER_SERVER_PUBLIC__": str(
+            (getattr(settings, "auth_server_base", None) or "https://bhzn.top").strip().rstrip("/")
+        ),
+        "__LOBSTER_IS_OVERSEAS_USER__": "true" if bool(getattr(settings, "lobster_is_overseas_user", False)) else "false",
         "__LOBSTER_BRAND_MARK__": str(branding.get("mark") or "").strip().lower() if available else "",
         "__LOBSTER_DOCUMENT_TITLE__": str(branding.get("document_title") or "") if available else "",
         "__LOBSTER_FAVICON_32__": str(icons.get("favicon_32") or _EMPTY_IMAGE) if available else _EMPTY_IMAGE,
@@ -164,6 +168,12 @@ def get_branding() -> Dict[str, Any]:
     if not isinstance(cfg, dict):
         return _empty_branding()
     out: Dict[str, Any] = {"available": True, "mark": mark, **cfg}
+    # The packaged client is shared by domestic and overseas editions. Keep
+    # the routing decision in the same edition config that drives branding;
+    # the browser applies this before authenticated requests are sent.
+    configured_server = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+    if configured_server:
+        out["server_base"] = configured_server
     parent = (getattr(settings, "lobster_parent_account", None) or "").strip()
     if parent:
         out["parent_account"] = parent

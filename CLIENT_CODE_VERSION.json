@@ -1,7 +1,7 @@
 {
-  "version": "2.0.29",
-  "build": 308,
-  "applied_at": "2026-09-08T14:39:52+08:00",
-  "note": "verified WeChat ID takeover routing",
-  "bundle_sha256": "551f3bd26294fb37e98d94235d524942593701963dbebc698d8e45d415acc419"
+  "version": "2.0.32",
+  "build": 311,
+  "applied_at": "2026-09-08T19:38:40+08:00",
+  "note": "WeChat wxid search fallback",
+  "bundle_sha256": "01d84c410bf497fc6fd8679dd42186551b5506629903ed1c03b60d0d0ea191e7"
 }

@@ -1917,6 +1917,165 @@ def _sync_remote_user_upload_assets(
     return inserted
 
 
+def _parse_remote_asset_created_at(raw: Any) -> Optional[datetime]:
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+    except (TypeError, ValueError):
+        return None
+
+
+def _sync_remote_generated_assets(
+    request: Request,
+    current_user: _ServerUser,
+    db: Session,
+    *,
+    media_type: Optional[str] = None,
+) -> dict[str, int]:
+    """Mirror H5-generated cloud images/videos into the Online library."""
+    base = _auth_server_base_url()
+    headers = _forward_auth_headers(request)
+    if not base or "Authorization" not in headers:
+        return {"inserted": 0, "updated": 0}
+    mt_filter = str(media_type or "").strip().lower()
+    if mt_filter and mt_filter not in ("image", "video"):
+        return {"inserted": 0, "updated": 0}
+    params: dict[str, str] = {"origin": "generated", "limit": "200"}
+    if mt_filter:
+        params["media_type"] = mt_filter
+    try:
+        with httpx.Client(timeout=15.0, follow_redirects=True, trust_env=False) as client:
+            resp = client.get(f"{base}/api/assets", params=params, headers=headers)
+        if resp.status_code >= 400:
+            logger.warning(
+                "[assets-sync] remote generated list failed status=%s body=%s",
+                resp.status_code,
+                (resp.text or "")[:300],
+            )
+            return {"inserted": 0, "updated": 0}
+        data = resp.json() if resp.content else {}
+    except Exception as exc:
+        logger.warning("[assets-sync] remote generated list exception err=%s", exc)
+        return {"inserted": 0, "updated": 0}
+    items = data.get("assets") if isinstance(data, dict) else []
+    if not isinstance(items, list):
+        return {"inserted": 0, "updated": 0}
+
+    remote_ids = {
+        str(item.get("asset_id") or "").strip()
+        for item in items
+        if isinstance(item, dict) and str(item.get("asset_id") or "").strip()
+    }
+    source_urls = {
+        str(item.get("source_url") or item.get("url") or item.get("open_url") or item.get("preview_url") or "").strip()
+        for item in items
+        if isinstance(item, dict)
+    }
+    source_urls = {url for url in source_urls if url.startswith(("http://", "https://"))}
+    existing_rows: list[Asset] = []
+    if source_urls:
+        existing_rows.extend(
+            db.query(Asset)
+            .filter(Asset.user_id == current_user.id, Asset.source_url.in_(source_urls))
+            .all()
+        )
+    if remote_ids:
+        remote_rows = (
+            db.query(Asset)
+            .filter(
+                Asset.user_id == current_user.id,
+                Asset.meta["remote_asset_id"].as_string().in_(remote_ids),
+            )
+            .all()
+        )
+        known_ids = {row.id for row in existing_rows}
+        existing_rows.extend(row for row in remote_rows if row.id not in known_ids)
+    existing_by_url = {(row.source_url or "").strip(): row for row in existing_rows if row.source_url}
+    existing_by_remote = {
+        str((row.meta or {}).get("remote_asset_id") or "").strip(): row
+        for row in existing_rows
+        if isinstance(row.meta, dict) and str((row.meta or {}).get("remote_asset_id") or "").strip()
+    }
+
+    inserted = 0
+    updated = 0
+    now_iso = datetime.utcnow().isoformat()
+    for item in items:
+        if not isinstance(item, dict) or item.get("asset_origin") == "user_upload":
+            continue
+        media = str(item.get("media_type") or "").strip().lower()
+        if media not in ("image", "video") or (mt_filter and media != mt_filter):
+            continue
+        source_url = str(
+            item.get("source_url") or item.get("url") or item.get("open_url") or item.get("preview_url") or ""
+        ).strip()
+        if not source_url.startswith(("http://", "https://")):
+            continue
+        remote_asset_id = str(item.get("asset_id") or "").strip()
+        row = existing_by_remote.get(remote_asset_id) or existing_by_url.get(source_url)
+        old_meta = dict(row.meta or {}) if row is not None and isinstance(row.meta, dict) else {}
+        meta = dict(old_meta)
+        meta.update({
+            "asset_origin": "generated",
+            "remote_asset_id": remote_asset_id,
+            "remote_source": "h5_server",
+            "save_url_dedupe": _save_url_dedupe_key(source_url),
+        })
+        meta.setdefault("remote_synced_at", now_iso)
+        title = str(item.get("title") or "").strip()
+        description = str(item.get("description") or "").strip()
+        if title:
+            meta["title"] = title
+        if description:
+            meta["description"] = description
+        try:
+            file_size = max(int(item.get("file_size") or 0), 0)
+        except Exception:
+            file_size = 0
+        if row is None:
+            row = Asset(
+                asset_id=_gen_asset_id(),
+                user_id=current_user.id,
+                filename=_remote_asset_filename(item.get("filename"), source_url, remote_asset_id or f"remote-{media}"),
+                media_type=media,
+                file_size=file_size,
+                source_url=source_url,
+                prompt=str(item.get("prompt") or item.get("creative_prompt") or description or "").strip() or None,
+                model=str(item.get("model") or "").strip() or None,
+                tags=str(item.get("tags") or "").strip() or None,
+                meta=meta,
+            )
+            created_at = _parse_remote_asset_created_at(item.get("created_at"))
+            if created_at is not None:
+                row.created_at = created_at
+            db.add(row)
+            existing_by_url[source_url] = row
+            if remote_asset_id:
+                existing_by_remote[remote_asset_id] = row
+            inserted += 1
+        else:
+            changed = False
+            if meta != old_meta:
+                row.meta = meta
+                changed = True
+            if not (row.source_url or "").strip():
+                row.source_url = source_url
+                changed = True
+            if changed:
+                db.add(row)
+                updated += 1
+    if inserted or updated:
+        db.commit()
+        logger.info(
+            "[assets-sync] synced remote generated inserted=%s updated=%s user_id=%s media_type=%s",
+            inserted, updated, current_user.id, mt_filter or "all",
+        )
+    return {"inserted": inserted, "updated": updated}
+
+
 def _register_local_user_upload_assets_to_auth_server(
     request: Request,
     current_user: _ServerUser,
@@ -2983,6 +3142,27 @@ def sync_user_upload_assets(
         media_type=media_type,
     )
     return {"ok": True, "registered": registered, "synced": synced, "changed": registered + synced}
+
+
+@router.post("/api/assets/sync-generated", summary="同步云端生成素材到本机")
+def sync_generated_assets(
+    request: Request,
+    media_type: Optional[str] = None,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    result = _sync_remote_generated_assets(
+        request,
+        current_user,
+        db,
+        media_type=media_type,
+    )
+    return {
+        "ok": True,
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "changed": result["inserted"] + result["updated"],
+    }
 
 
 @router.get("/api/assets/creative-candidate-groups", summary="创意成片备选素材组列表")

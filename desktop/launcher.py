@@ -30,6 +30,7 @@ DEFAULT_WINDOW_TITLE = "必火智能"
 OVERSEAS_WINDOW_TITLE = "必火AI海外员工"
 DEFAULT_BRAND_MARK = "bihuo"
 DEFAULT_OEM_BOOTSTRAP_SERVER = "https://bhzn.top"
+DEFAULT_OVERSEAS_SERVER = "https://bhos.online"
 SHOW_WINDOW_TITLEBAR_ICON = True
 DEFAULT_PORT = 8000
 DEFAULT_MCP_PORT = 8001
@@ -404,9 +405,17 @@ def load_desktop_branding(root: Path | None = None) -> dict[str, object]:
     requested_mark = read_env_value("LOBSTER_BRAND_MARK", default_mark, root).strip().lower()
     configured_oem_code = read_env_value("LOBSTER_OEM_CODE", "", root).strip()
     if configured_oem_code:
+        overseas = is_truthy_env_value(read_env_value("LOBSTER_IS_OVERSEAS_USER", "", root))
+        configured_server = read_env_value("AUTH_SERVER_BASE", "", root).strip().rstrip("/")
+        default_server = DEFAULT_OVERSEAS_SERVER if overseas else DEFAULT_OEM_BOOTSTRAP_SERVER
+        # Bundled packages historically carried the domestic bootstrap URL;
+        # let the edition flag select the overseas host unless an explicit
+        # OEM bootstrap URL was provided.
+        if overseas and configured_server in {"", DEFAULT_OEM_BOOTSTRAP_SERVER, "http://42.194.209.150", "https://42.194.209.150"}:
+            configured_server = default_server
         server_base = read_env_value(
             "LOBSTER_OEM_BOOTSTRAP_BASE",
-            read_env_value("AUTH_SERVER_BASE", DEFAULT_OEM_BOOTSTRAP_SERVER, root),
+            configured_server or default_server,
             root,
         )
         remote_profile = resolve_factory_oem_branding(root, configured_oem_code, server_base)
@@ -1476,7 +1485,7 @@ class DesktopApi:
             result = window.create_file_dialog(
                 webview.SAVE_DIALOG,
                 save_filename=default_name,
-                file_types=("Markdown files (*.md)", "Text files (*.txt)", "All files (*.*)"),
+                file_types=("CSV files (*.csv)", "Markdown files (*.md)", "Text files (*.txt)", "All files (*.*)"),
             )
         except Exception as exc:
             log(f"save text dialog failed: {exc}")

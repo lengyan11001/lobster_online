@@ -1551,6 +1551,18 @@ window._openAi3dModelView = function() {
   try { location.hash = 'ai-3d-model'; } catch (e1) {}
 };
 
+window._openPersonalWhatsappView = function() {
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('personal-whatsapp').catch(function(error) {
+      console.error('Failed to open personal WhatsApp view:', error);
+      alert('个人whatapp助手页面加载失败，请刷新页面后重试。' + (error && error.message ? '\n' + error.message : ''));
+    });
+    try { location.hash = 'personal-whatsapp'; } catch (e1) {}
+    return;
+  }
+  try { location.hash = 'personal-whatsapp'; } catch (e2) {}
+};
+
 window._openHiddenWorkspaceView = function(view) {
   var target = String(view || '').trim();
   if (!target) return;
@@ -1602,6 +1614,10 @@ window._openHiddenWorkspaceView = function(view) {
   }
   if (target === 'image-composer-studio' && typeof window._openImageComposerStudioView === 'function') {
     window._openImageComposerStudioView();
+    return;
+  }
+  if (target === 'personal-whatsapp' && typeof window._openPersonalWhatsappView === 'function') {
+    window._openPersonalWhatsappView();
     return;
   }
   if (target === 'local-bestseller' && typeof window.initLocalBestsellerView === 'function') {
@@ -1752,6 +1768,19 @@ function _renderTwilioWhatsappCard(opts) {
     '<div class="card-tags"><span class="tag">WhatsApp</span><span class="tag">Twilio</span></div>' +
     '<div class="card-actions" style="display:flex;flex-wrap:wrap;gap:0.35rem;">' +
     '<button type="button" class="btn btn-primary btn-sm twilio-whatsapp-entry-btn">配置</button></div></div>';
+}
+
+function _renderPersonalWhatsappCard(pkg) {
+  pkg = pkg || {};
+  var title = _skillStoreBrandSafeText((pkg.name && String(pkg.name).trim()) || '个人whatapp助手');
+  var desc = _skillStoreBrandSafeText((pkg.description && String(pkg.description).trim()) ||
+    '管理本机 Windows 桌面版 WhatsApp：同步会话和通讯录、查看与回复消息、添加联系人并执行私聊接管。');
+  return '<div class="skill-store-card personal-whatsapp-card" data-skill-package-id="' + escapeAttr(pkg.id || 'personal_whatsapp_assistant') + '" style="cursor:pointer;border-color:rgba(37,211,102,0.42);background:linear-gradient(135deg,rgba(37,211,102,0.09),transparent);">' +
+    '<div class="card-label">个微 <span class="badge-installed">可配置</span></div>' +
+    '<div class="card-value">' + escapeHtml(title) + '</div>' +
+    '<div class="card-desc">' + escapeHtml(desc) + '</div>' +
+    '<div class="card-tags"><span class="tag">WhatsApp</span><span class="tag">桌面客户端</span><span class="tag">工作流</span></div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm personal-whatsapp-entry-btn">打开控制台</button></div></div>';
 }
 
 function _renderXSkillCard() {
@@ -2805,6 +2834,7 @@ var _SKILL_STORE_SIMPLE_COPY_BY_ID = {
   'multi_clip_mixer_skill': { title: '多段视频混剪', desc: '选段、拼接、配乐和模板成片' },
   'comfly_ecommerce_detail_skill': { title: '电商详情页', desc: '生成商品套图' },
   'hifly_digital_human_skill': { title: '数字人口播', desc: '生成数字人口播' },
+  'personal_whatsapp_assistant': { title: '个人whatapp助手', desc: '管理本机 WhatsApp 接管' },
   'openclaw_weixin_channel': { title: '微信助手', desc: '微信通道授权' },
   'wewrite_official_account_skill': { title: '公众号文章', desc: '写文、配图、推草稿' },
   'openclaw_memory_skill': { title: '个人记忆', desc: '管理本机资料' },
@@ -2884,6 +2914,7 @@ var _SKILL_STORE_ICON_BY_ID = {
   'multi_clip_mixer_skill': { icon: 'scissors', tone: 'coral' },
   'comfly_ecommerce_detail_skill': { icon: 'bag', tone: 'rose' },
   'hifly_digital_human_skill': { icon: 'user', tone: 'violet' },
+  'personal_whatsapp_assistant': { icon: 'message', tone: 'green' },
   'openclaw_weixin_channel': { icon: 'message', tone: 'green' },
   'wewrite_official_account_skill': { icon: 'file', tone: 'coral' },
   'openclaw_memory_skill': { icon: 'database', tone: 'teal' },
@@ -2912,6 +2943,7 @@ var _SKILL_STORE_ICON_BY_CLASS = {
   'multi-clip-mixer-card': _SKILL_STORE_ICON_BY_ID.multi_clip_mixer_skill,
   'ecommerce-detail-card': _SKILL_STORE_ICON_BY_ID.comfly_ecommerce_detail_skill,
   'hifly-digital-human-card': _SKILL_STORE_ICON_BY_ID.hifly_digital_human_skill,
+  'personal-whatsapp-card': _SKILL_STORE_ICON_BY_ID.personal_whatsapp_assistant,
   'openclaw-weixin-card': _SKILL_STORE_ICON_BY_ID.openclaw_weixin_channel,
   'wechat-article-card': _SKILL_STORE_ICON_BY_ID.wewrite_official_account_skill,
   'openclaw-memory-card': _SKILL_STORE_ICON_BY_ID.openclaw_memory_skill,
@@ -2935,6 +2967,7 @@ var _SKILL_STORE_ICON_PATTERNS = [
   [/智能剪辑|山涧/i, _SKILL_STORE_ICON_BY_ID.shanjian_smart_clip],
   [/电商上架|电商详情|上架套图|详情图|SKU/i, _SKILL_STORE_ICON_BY_ID.comfly_ecommerce_detail_skill],
   [/必火数字人|数字人/i, _SKILL_STORE_ICON_BY_ID.hifly_digital_human_skill],
+  [/个人whatapp|个人whatsapp|桌面版 whatsapp/i, _SKILL_STORE_ICON_BY_ID.personal_whatsapp_assistant],
   [/微信助手|openclaw.*微信|weixin/i, _SKILL_STORE_ICON_BY_ID.openclaw_weixin_channel],
   [/公众号|微信文章|微信推文|wewrite/i, _SKILL_STORE_ICON_BY_ID.wewrite_official_account_skill],
   [/个人记忆|memory/i, _SKILL_STORE_ICON_BY_ID.openclaw_memory_skill],
@@ -3137,7 +3170,8 @@ function _decorateSkillImageCards(el) {
   var cardClickableClasses = [
     'youtube-publish-card',
     'meta-social-card',
-    'twilio-whatsapp-card',
+  'twilio-whatsapp-card',
+    'personal-whatsapp-card',
     'messenger-reply-card',
     'wecom-reply-card',
     'ecommerce-publish-card',
@@ -3222,6 +3256,7 @@ function loadSkillStore() {
       var viralPkg = pkgById('viral_video_remix_skill');
       var shanjianPkg = pkgById('shanjian_smart_clip');
       var multiClipPkg = pkgById('multi_clip_mixer_skill');
+      var personalWhatsappPkg = pkgById('personal_whatsapp_assistant');
       var metaPkg = pkgById('meta_social');
       var cutcliPkg = pkgById('cutcli_template_skill') || pkgById('cutcli_templates_skill') || pkgById('cutcli_template_studio');
       var legacyIpContentPkg = pkgById('ip_content_daily_skill');
@@ -3259,6 +3294,7 @@ function loadSkillStore() {
         if (cutcliPkg) html += _renderCutcliTemplateCard();
         if (shanjianPkg) html += _renderShanjianSmartClipCard();
         if (multiClipPkg) html += _renderMultiClipMixerCard();
+        if (personalWhatsappPkg) html += _renderPersonalWhatsappCard(personalWhatsappPkg);
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (metaPkg) html += _renderMetaSocialCard({ pkg: metaPkg });
         if (ipContentOralPkg) html += _renderIpContentStudioCard(ipContentOralPkg, !!(isSkillAdmin && ipContentOralPkg.store_visibility === 'debug'), 'oral');
@@ -3313,6 +3349,7 @@ function loadSkillStore() {
           if (pkg.id === 'viral_video_remix_skill') return '';
           if (pkg.id === 'shanjian_smart_clip') return '';
           if (pkg.id === 'multi_clip_mixer_skill') return '';
+          if (pkg.id === 'personal_whatsapp_assistant') return '';
           if (pkg.id === 'cutcli_template_skill') return '';
           if (pkg.id === 'cutcli_templates_skill') return '';
           if (pkg.id === 'cutcli_template_studio') return '';
@@ -3422,6 +3459,7 @@ function loadSkillStore() {
         _bindWecomConfigEntry();
         _bindMessengerCardEntry();
         _bindTwilioWhatsappCardEntry();
+        _bindPersonalWhatsappCardEntry();
         _bindYoutubePublishCardEntry();
         _bindMetaSocialCardEntry();
         _bindSeedanceTvcCardEntry();
@@ -3576,6 +3614,26 @@ function _bindTwilioWhatsappCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       _openTwilioWhatsappConfigView();
+    });
+  });
+}
+
+function _bindPersonalWhatsappCardEntry() {
+  document.querySelectorAll('.personal-whatsapp-card, [data-skill-package-id="personal_whatsapp_assistant"]').forEach(function(card) {
+    if (card.dataset.personalWhatsappEntryBound === '1') return;
+    card.dataset.personalWhatsappEntryBound = '1';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openPersonalWhatsappView === 'function') window._openPersonalWhatsappView();
+    });
+  });
+  document.querySelectorAll('.personal-whatsapp-entry-btn').forEach(function(btn) {
+    if (btn.dataset.personalWhatsappEntryBound === '1') return;
+    btn.dataset.personalWhatsappEntryBound = '1';
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openPersonalWhatsappView === 'function') window._openPersonalWhatsappView();
     });
   });
 }

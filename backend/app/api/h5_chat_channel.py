@@ -43,6 +43,7 @@ from ..services.document_text_extractor import (
 from ..db import SessionLocal
 from ..models import Asset, PublishAccount
 from ..services import native_wechat_engine
+from ..services import native_whatsapp_engine
 from ..services.openclaw_channel_auth_store import clear_channel_fallback, read_channel_fallback
 from .auth import _ServerUser, get_current_user_for_local
 from .assets import build_asset_file_url, get_asset_public_url
@@ -6578,6 +6579,13 @@ async def _stop_workflow_node_local_execution(
                 "account_id": account_id,
                 "local": local_stop,
             }
+        if action == "native_whatsapp_poll":
+            local_stop = native_whatsapp_engine.request_stop()
+            return {
+                "action": action,
+                "stop_requested": bool(local_stop.get("requested")),
+                "local": local_stop,
+            }
 
     return {"stop_requested": False, "reason": "no_cooperative_stop"}
 
@@ -9625,7 +9633,11 @@ async def _run_native_wechat_takeover_session(
         "friend_requests_checked": 0,
         "friend_requests_accepted": 0,
         "friend_requests_failed": 0,
-        "friend_requests_checked_once": True,
+        # A workflow round contains one friend-request pass and one session
+        # pass. Keep the legacy field for compatibility, but expose the new
+        # cadence explicitly.
+        "friend_requests_checked_once": False,
+        "friend_requests_checked_each_round": True,
         "items": [],
         "rounds": [],
         "started_at": started_at,
@@ -9642,7 +9654,7 @@ async def _run_native_wechat_takeover_session(
             headers,
             run_id,
             "running",
-            {"text": "个微接管启动，正在检查新好友申请（本次仅检查一次）", "stage": "friend_requests"},
+            {"text": "个微接管启动，每轮先检查新好友申请，再轮询会话", "stage": "friend_requests"},
         )
         if _task_event_rejects_local_work(event_status):
             await _request_local_auto_reply_stop(account_id, headers)
@@ -9685,7 +9697,9 @@ async def _run_native_wechat_takeover_session(
                     {
                         "account_id": account_id,
                         "force": True,
-                        "check_friend_requests": round_number == 1,
+                        # Every workflow round checks friend requests before
+                        # scanning/replying to sessions.
+                        "check_friend_requests": True,
                         "config_override": config_override or {},
                     },
                     headers=headers,
@@ -9741,10 +9755,9 @@ async def _run_native_wechat_takeover_session(
             output["replied"] += _safe_int(result.get("replied"))
             output["skipped"] += _safe_int(result.get("skipped"))
             output["failed"] += _safe_int(result.get("failed"))
-            if round_number == 1:
-                output["friend_requests_checked"] = _safe_int(result.get("friend_requests_checked"))
-                output["friend_requests_accepted"] = _safe_int(result.get("friend_requests_accepted"))
-                output["friend_requests_failed"] = _safe_int(result.get("friend_requests_failed"))
+            output["friend_requests_checked"] += _safe_int(result.get("friend_requests_checked"))
+            output["friend_requests_accepted"] += _safe_int(result.get("friend_requests_accepted"))
+            output["friend_requests_failed"] += _safe_int(result.get("friend_requests_failed"))
             output["items"].extend({**item, "round": round_number} for item in items)
             output["rounds"].append(
                 {
@@ -9753,12 +9766,10 @@ async def _run_native_wechat_takeover_session(
                     "replied": _safe_int(result.get("replied")),
                     "skipped": _safe_int(result.get("skipped")),
                     "failed": _safe_int(result.get("failed")),
-                    "friend_requests_checked": _safe_int(result.get("friend_requests_checked")) if round_number == 1 else 0,
-                    "friend_requests_accepted": _safe_int(result.get("friend_requests_accepted")) if round_number == 1 else 0,
-                    "friend_requests_failed": _safe_int(result.get("friend_requests_failed")) if round_number == 1 else 0,
-                    "friend_requests": (
-                        result.get("friend_requests") if round_number == 1 and isinstance(result.get("friend_requests"), dict) else {}
-                    ),
+                    "friend_requests_checked": _safe_int(result.get("friend_requests_checked")),
+                    "friend_requests_accepted": _safe_int(result.get("friend_requests_accepted")),
+                    "friend_requests_failed": _safe_int(result.get("friend_requests_failed")),
+                    "friend_requests": result.get("friend_requests") if isinstance(result.get("friend_requests"), dict) else {},
                     "items": items,
                     "summary_text": str(result.get("summary_text") or "").strip(),
                 }
@@ -9808,6 +9819,105 @@ async def _run_native_wechat_takeover_session(
         f"检查新好友申请 {output['friend_requests_checked']} 条，已同意 {output['friend_requests_accepted']} 条，"
         f"自动回复 {output['replied']} 条，跳过 {output['skipped']} 条，失败 {output['failed']} 条；"
         f"命中拉群条件 {output['group_invite_candidates']} 个会话。"
+    )
+    return output
+
+
+async def _run_native_whatsapp_takeover_session(
+    *,
+    account_id: str,
+    headers: Dict[str, str],
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    run_id: str,
+    interval_seconds: float = 15.0,
+    session_seconds: Optional[float] = None,
+    config_override: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Run the independent desktop WhatsApp skill on the same round cadence as WeChat."""
+    interval = max(1.0, float(interval_seconds or 15.0))
+    duration = max(1.0, min(float(session_seconds if session_seconds is not None else 1800.0), 86400.0))
+    started = _takeover_monotonic()
+    deadline = started + duration
+    output: Dict[str, Any] = {
+        "ok": True,
+        "mode": "whatsapp_takeover_session",
+        "account_id": account_id,
+        "session_seconds": round(duration, 2),
+        "interval_seconds": int(interval),
+        "completed_rounds": 0,
+        "checked": 0,
+        "replied": 0,
+        "skipped": 0,
+        "failed": 0,
+        "items": [],
+        "rounds": [],
+        "started_at": datetime.utcnow().isoformat(),
+    }
+    stop_reason = ""
+    while not stop_reason and _takeover_monotonic() < deadline:
+        if output["completed_rounds"]:
+            await asyncio.sleep(min(interval, max(0.0, deadline - _takeover_monotonic())))
+        if _takeover_monotonic() >= deadline:
+            break
+        if cloud is not None and base and run_id:
+            event_status = await _post_task_event(
+                cloud,
+                base,
+                headers,
+                run_id,
+                "running",
+                {"text": f"个人whatapp助手第 {output['completed_rounds'] + 1} 轮巡检", "stage": "unread_chats"},
+            )
+            if _task_event_rejects_local_work(event_status):
+                await _post_local_api_json(
+                    "/api/native-whatsapp/stop",
+                    {"account_id": account_id},
+                    headers=headers,
+                    timeout_seconds=8.0,
+                )
+                stop_reason = "slot_ownership_changed"
+                break
+        try:
+            result = await _post_local_api_json(
+                "/api/native-whatsapp/run-once",
+                {"account_id": account_id, "config_override": config_override or {}},
+                headers=headers,
+                timeout_seconds=1800.0,
+            )
+            if isinstance(result.get("skipped"), bool) and result.get("skipped"):
+                output["failed"] += 1
+                output["last_error"] = str(result.get("message") or result.get("reason") or "WhatsApp 本轮未执行")[:500]
+                stop_reason = "local_whatsapp_busy" if result.get("reason") == "running" else "local_whatsapp_not_executed"
+                break
+            output["completed_rounds"] += 1
+            for key in ("checked", "replied", "skipped", "failed"):
+                output[key] += _safe_int(result.get(key))
+            items = [item for item in (result.get("items") or []) if isinstance(item, dict)]
+            output["items"].extend({**item, "round": output["completed_rounds"]} for item in items)
+            output["rounds"].append(
+                {
+                    "round": output["completed_rounds"],
+                    "checked": _safe_int(result.get("checked")),
+                    "replied": _safe_int(result.get("replied")),
+                    "skipped": _safe_int(result.get("skipped")),
+                    "failed": _safe_int(result.get("failed")),
+                    "items": items,
+                    "summary_text": str(result.get("summary_text") or "").strip(),
+                }
+            )
+        except Exception as exc:
+            output["failed"] += 1
+            output["last_error"] = str(exc)[:500]
+            stop_reason = "local_whatsapp_error"
+            break
+    output["finished_at"] = datetime.utcnow().isoformat()
+    output["duration_seconds"] = round(max(0.0, _takeover_monotonic() - started), 2)
+    output["stop_reason"] = stop_reason or "session_deadline"
+    output["ok"] = output["completed_rounds"] > 0 and output["failed"] == 0 and not stop_reason
+    output["summary_text"] = (
+        f"个人whatapp助手已巡检 {output['completed_rounds']} 轮，检查 {output['checked']} 个未读会话，"
+        f"回复 {output['replied']} 个，跳过 {output['skipped']} 个，失败 {output['failed']} 个。"
     )
     return output
 
@@ -10195,6 +10305,37 @@ async def _run_client_workflow_action(
         finally:
             if run_id:
                 _active_client_workflow_actions.pop(run_id, None)
+    if action == "native_whatsapp_poll":
+        interval_seconds = max(1, min(_safe_int(source.get("message_poll_interval_seconds")) or 15, 300))
+        h5_context = source.get("h5_context") if isinstance(source.get("h5_context"), dict) else {}
+        window_start = h5_context.get("workflow_node_time") or source.get("sales_schedule_start")
+        window_end = h5_context.get("workflow_node_end_time") or source.get("sales_schedule_end")
+        configured_minutes = _safe_int(source.get("takeover_session_minutes"))
+        derived_minutes = _workflow_minutes_between(window_start, window_end)
+        session_minutes = configured_minutes or derived_minutes or (1 if window_start else 30)
+        session_minutes = max(1, min(session_minutes, 1440))
+        config_override = {
+            key: source[key]
+            for key in ("max_unread_per_round", "reply_instruction")
+            if key in source
+        }
+        if run_id:
+            _active_client_workflow_actions[run_id] = action
+        try:
+            return await _run_native_whatsapp_takeover_session(
+                account_id=str(source.get("account_id") or native_whatsapp_engine.DEFAULT_ACCOUNT_ID).strip()
+                or native_whatsapp_engine.DEFAULT_ACCOUNT_ID,
+                headers=headers,
+                cloud=cloud,
+                base=base,
+                run_id=run_id,
+                interval_seconds=interval_seconds,
+                session_seconds=float(session_minutes * 60),
+                config_override=config_override,
+            )
+        finally:
+            if run_id:
+                _active_client_workflow_actions.pop(run_id, None)
     if action == "native_wechat_add_friend":
         targets = _workflow_target_list(source, "targets", "phones", "phone_numbers", "keywords", "keyword")
         extracted_phones: List[str] = []
@@ -10523,6 +10664,16 @@ def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
         replied = int(result.get("replied") or result.get("success") or 0)
         skipped = int(result.get("skipped_count") or result.get("skipped") or 0)
         return f"个微私信接管已完成，回复 {replied} 条，跳过 {skipped} 条。"
+    if action == "native_whatsapp_poll":
+        if result.get("skipped"):
+            return str(result.get("message") or "个人whatapp助手已跳过。")
+        summary_text = str(result.get("summary_text") or "").strip()
+        if summary_text:
+            return summary_text
+        return (
+            f"个人whatapp助手已完成，回复 {int(result.get('replied') or 0)} 个，"
+            f"跳过 {int(result.get('skipped') or 0)} 个。"
+        )
     if action == "native_wechat_add_friend":
         if result.get("skipped"):
             return str(result.get("message") or "个微自动加好友已跳过。")
@@ -11100,16 +11251,20 @@ async def h5_chat_poll_loop() -> None:
         logger.info("[H5-CHAT] remote H5 chat channel disabled")
         return
 
-    h5_poll_interval = _channel_interval("LOBSTER_H5_CHAT_POLL_INTERVAL_SEC", 5.0, 3.0)
-    task_poll_interval = _channel_interval("LOBSTER_SCHEDULED_TASK_POLL_INTERVAL_SEC", 30.0, 10.0)
-    publish_poll_interval = _channel_interval("LOBSTER_SCHEDULED_PUBLISH_POLL_INTERVAL_SEC", 30.0, 10.0)
+    # These queues are idle most of the time and every Online installation runs
+    # this loop. Keep pickup responsive without multiplying fleet-wide traffic.
+    h5_poll_interval = _channel_interval("LOBSTER_H5_CHAT_POLL_INTERVAL_SEC", 10.0, 5.0)
+    task_poll_interval = _channel_interval("LOBSTER_SCHEDULED_TASK_POLL_INTERVAL_SEC", 45.0, 15.0)
+    publish_poll_interval = _channel_interval("LOBSTER_SCHEDULED_PUBLISH_POLL_INTERVAL_SEC", 45.0, 15.0)
     heartbeat_interval = _channel_interval("LOBSTER_H5_CHAT_HEARTBEAT_INTERVAL_SEC", 30.0, 30.0)
+    dashboard_report_interval = _channel_interval("LOBSTER_DOUYIN_DASHBOARD_REPORT_INTERVAL_SEC", 120.0, 60.0)
     sleep_missing_auth = 10.0
     logged_missing = False
     last_heartbeat_at = 0.0
     last_h5_poll_at = 0.0
     last_task_poll_at = 0.0
     last_publish_poll_at = 0.0
+    last_dashboard_report_at = 0.0
     max_h5_concurrency = _channel_concurrency("LOBSTER_H5_CHAT_CONCURRENCY", 2, 5)
     # A physical Online installation is a single worker. The server also
     # serializes claims, but keeping the client at one prevents overlapping
@@ -11174,16 +11329,18 @@ async def h5_chat_poll_loop() -> None:
                         continue
                     heartbeat_resp.raise_for_status()
                     last_heartbeat_at = now_loop
-                    try:
-                        await _report_douyin_dashboard_status(
-                            client,
-                            base,
-                            headers,
-                            jwt_token=jwt_token,
-                            installation_id=installation_id,
-                        )
-                    except Exception as exc:
-                        logger.debug("[DOUYIN-DASHBOARD] report failed: %s", exc)
+                    if now_loop - last_dashboard_report_at >= dashboard_report_interval:
+                        last_dashboard_report_at = now_loop
+                        try:
+                            await _report_douyin_dashboard_status(
+                                client,
+                                base,
+                                headers,
+                                jwt_token=jwt_token,
+                                installation_id=installation_id,
+                            )
+                        except Exception as exc:
+                            logger.debug("[DOUYIN-DASHBOARD] report failed: %s", exc)
                 items: list[Dict[str, Any]] = []
                 h5_slots = max(0, max_h5_concurrency - len(active_items))
                 if h5_slots > 0 and now_loop - last_h5_poll_at >= h5_poll_interval:

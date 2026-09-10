@@ -3,7 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <script>window.__LOBSTER_BRANDING_AVAILABLE__ = __LOBSTER_BRANDING_AVAILABLE__;</script>
+  <script>
+    window.__LOBSTER_BRANDING_AVAILABLE__ = __LOBSTER_BRANDING_AVAILABLE__;
+    window.__LOBSTER_SERVER_PUBLIC__ = '__LOBSTER_SERVER_PUBLIC__';
+    window.__LOBSTER_CONFIGURED_OVERSEAS = __LOBSTER_IS_OVERSEAS_USER__;
+    window.__LOBSTER_IS_OVERSEAS_USER = !!window.__LOBSTER_CONFIGURED_OVERSEAS;
+  </script>
   <title>__LOBSTER_DOCUMENT_TITLE__</title>
   <link rel="icon" id="brandFavicon" type="image/png" sizes="32x32" href="__LOBSTER_FAVICON_32__">
   <link rel="apple-touch-icon" id="brandAppleTouch" href="__LOBSTER_APPLE_TOUCH__">

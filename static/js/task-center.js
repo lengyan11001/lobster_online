@@ -150,6 +150,12 @@
       var query = '/api/scheduled-tasks/runs?limit=1&active_only=1&compact=1';
       if (iid) query += '&installation_id=' + encodeURIComponent(iid);
       var response = await fetch(base() + query, { headers: headers() });
+      if (response.status === 401 || response.status === 403) {
+        // Stop an expired login from polling forever. The auth event restarts
+        // the task center after the next successful login.
+        setAuthenticated(false);
+        return;
+      }
       if (!response.ok) throw new Error();
 
       var data = await response.json();
@@ -214,7 +220,7 @@
       state.timer = null;
       if (!state.authenticated || !hasAuthToken()) return;
       await refresh();
-      schedulePoll(state.rows.some(active) ? 4000 : 10000);
+      schedulePoll(state.rows.some(active) ? 8000 : 30000);
     }, Math.max(0, Number(delay) || 0));
   }
 
@@ -241,6 +247,13 @@
       setAuthenticated(!!(detail && detail.authenticated));
     });
     setAuthenticated(window.__lobsterAuthReady === true);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'hidden') {
+        clearTimer();
+        return;
+      }
+      if (state.authenticated && hasAuthToken()) schedulePoll(0);
+    });
   }
 
   if (document.readyState === 'loading') {

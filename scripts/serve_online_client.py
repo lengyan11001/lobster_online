@@ -12,6 +12,8 @@ backend process.
 from __future__ import annotations
 
 import sys
+import os
+import json
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -19,6 +21,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 DEFAULT_API = "https://bhzn.top"
+OVERSEAS_API = "https://bhos.online"
 DEFAULT_PORT = 8000
 PROXY_PREFIXES = (
     "/api/",
@@ -34,9 +37,43 @@ LOCAL_ONLY_OPTIONAL_PATHS = {
 }
 
 
+def _env_value(name: str, default: str = "") -> str:
+    value = str(os.environ.get(name) or "").strip()
+    if value:
+        return value
+    env_path = ROOT / ".env"
+    if not env_path.is_file():
+        return default
+    try:
+        for raw in env_path.read_text(encoding="utf-8-sig", errors="ignore").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, item = line.split("=", 1)
+            if key.strip() == name:
+                return item.strip().strip('"').strip("'") or default
+    except OSError:
+        pass
+    return default
+
+
+def _is_truthy(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on", "overseas", "海外"}
+
+
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
-    api_base = (sys.argv[2] if len(sys.argv) > 2 else DEFAULT_API).rstrip("/")
+    configured_api = sys.argv[2] if len(sys.argv) > 2 else ""
+    if configured_api:
+        api_base = configured_api.rstrip("/")
+    else:
+        configured_server = _env_value("AUTH_SERVER_BASE", "").rstrip("/")
+        domestic_servers = {"", DEFAULT_API, "http://42.194.209.150", "https://42.194.209.150"}
+        if _is_truthy(_env_value("LOBSTER_IS_OVERSEAS_USER", "")) and configured_server in domestic_servers:
+            api_base = OVERSEAS_API
+        else:
+            api_base = configured_server or (OVERSEAS_API if _is_truthy(_env_value("LOBSTER_IS_OVERSEAS_USER", "")) else DEFAULT_API)
+    api_base = api_base.rstrip("/")
     if not (STATIC / "index.html").exists():
         print(f"[ERR] missing {STATIC / 'index.html'}", file=sys.stderr)
         sys.exit(1)
@@ -105,7 +142,19 @@ def main() -> None:
             if self._is_remote_proxy_path(path_part):
                 return self._proxy_to_api()
             if path_part in {"/", "/index.html"}:
-                self.path = "/static/index.html"
+                template = (STATIC / "index.html").read_text(encoding="utf-8")
+                overseas_flag = "true" if _is_truthy(_env_value("LOBSTER_IS_OVERSEAS_USER", "")) else "false"
+                rendered = template.replace("__LOBSTER_SERVER_PUBLIC__", json.dumps(api_base)[1:-1]).replace(
+                    "__LOBSTER_IS_OVERSEAS_USER__", overseas_flag
+                )
+                data = rendered.encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
             return SimpleHTTPRequestHandler.do_GET(self)
 
         def do_POST(self):

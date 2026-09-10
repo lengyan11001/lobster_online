@@ -549,7 +549,13 @@ function applyBrandingFromApi() {
         else window.__LOBSTER_BRAND_MARK = b.mark;
       }
       if (b.parent_account) window.__LOBSTER_PARENT_ACCOUNT = b.parent_account;
-      window.__LOBSTER_IS_OVERSEAS_USER = !!b.is_overseas_user;
+      window.__LOBSTER_IS_OVERSEAS_USER = !!window.__LOBSTER_CONFIGURED_OVERSEAS || !!b.is_overseas_user;
+      if (b.server_base && /^https?:\/\//i.test(String(b.server_base))) {
+        var routedServerBase = String(b.server_base).replace(/\/$/, '');
+        window.__API_BASE = routedServerBase;
+        API_BASE = routedServerBase;
+        try { localStorage.setItem('lobster_server_api_base', routedServerBase); } catch (eServerBase) {}
+      }
       if (b.document_title) document.title = b.document_title;
       var icons = b.icons || {};
       var fav = document.getElementById('brandFavicon');
@@ -1560,7 +1566,8 @@ var LOBSTER_HIDDEN_VIEWS = {
   'x-leads': true,
   'tiktok-leads': true,
   'ai-3d-model': true,
-  'openclaw-skill-chat': true
+  'openclaw-skill-chat': true,
+  'personal-whatsapp': true
 };
 var _restoringDashboardView = false;
 var _suppressNextHashApply = false;
@@ -1603,6 +1610,7 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   'sys-config': 'sys_config_entry',
   logs: 'logs_entry',
   'personal-settings': 'personal_settings_entry',
+  'personal-whatsapp': 'personal_whatsapp_assistant',
   agent: 'agent_entry',
   'openclaw-memory': 'openclaw_memory_skill',
   'creative-film-studio': 'goal_video_pipeline_skill',

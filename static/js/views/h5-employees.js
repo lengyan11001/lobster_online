@@ -84,7 +84,8 @@
     'linkedin_leads':'linkedin_leads',
     'reddit_leads':'reddit_leads',
     'x_leads':'x_leads',
-    'tiktok_leads':'tiktok_leads'
+    'tiktok_leads':'tiktok_leads',
+    'native_whatsapp_poll':'personal_whatsapp_assistant'
   };
   var NODE_OPTION_CAPABILITY_IDS = {
     'hifly.video.create_by_tts':'hifly.video.create_by_tts',
@@ -94,7 +95,8 @@
     'ip_content_daily':'ip_content_daily',
     'ip_content_oral':'ip_content_oral',
     'ip_content_moments':'ip_content_moments',
-    'wewrite.article.pipeline':'wewrite.article.pipeline'
+    'wewrite.article.pipeline':'wewrite.article.pipeline',
+    'native_whatsapp_poll':'online.whatsapp_takeover'
   };
   function nodeOptionFeatureGate(key) {
     var normalized=String(key || '').trim();
@@ -105,7 +107,7 @@
   }
   function nodeOptionGroupForKey(key) {
     if (String(key || '') === 'douyin_leads') return '抖音';
-    if (String(key || '').indexOf('native_wechat_') === 0) return '个微';
+    if (String(key || '').indexOf('native_wechat_') === 0 || String(key || '') === 'native_whatsapp_poll') return '个微';
     return 'AI营销';
   }
   function addNodeOption(key, label, note, group) {
@@ -131,6 +133,7 @@
     ['native_wechat_poll','个微私信接管','读取个人微信新消息，并按个人记忆自动生成回复。','个微'],
     ['native_wechat_add_friend','个微自动加好友','把目标手机号或微信号加入本机个人微信加好友队列。','个微'],
     ['native_wechat_moments_engage','朋友圈点赞评论','对指定联系人24小时内朋友圈进行点赞或评论。','个微'],
+    ['native_whatsapp_poll','个人whatapp助手','接管 Windows 桌面版 WhatsApp，按轮次处理私聊消息。','个微'],
     ['linkedin_leads','LinkedIn线索挖掘','采集LinkedIn相关线索和账号资料。','AI营销'],
     ['reddit_leads','Reddit线索采集','采集社区帖子、评论并分析精准用户。','AI营销'],
     ['x_leads','X线索采集','采集账号内容、评论和潜在线索。','AI营销'],
@@ -346,6 +349,15 @@
       );
       params.accept_friend_requests_once = params.accept_friend_requests_once !== false;
     }
+    if (key === 'native_whatsapp_poll') {
+      var whatsappDuration=scheduleDuration(row.time, row.end);
+      params.account_id=String(params.account_id || 'desktop-whatsapp-default').trim() || 'desktop-whatsapp-default';
+      if (whatsappDuration > 0) params.takeover_session_minutes = whatsappDuration;
+      else params.takeover_session_minutes = Math.max(1,Math.min(1440,Number(params.takeover_session_minutes || 30)));
+      params.message_poll_interval_seconds = Math.max(1,Math.min(300,Number(params.message_poll_interval_seconds || 15)));
+      params.max_unread_per_round = Math.max(1,Math.min(100,Number(params.max_unread_per_round || 50)));
+      params.reply_instruction = String(params.reply_instruction || '').trim().slice(0,4000);
+    }
     if (params.followup_action === 'group_invite' || String(row.label || '').indexOf('拉群') >= 0) {
       delete params.followup_action;
       Object.assign(params, {group_invite_enabled:true,group_invite_rule_status:'pending_rules',trigger:'qualified_intent'});
@@ -361,7 +373,7 @@
   function planForRow(row) {
     var prompt = row.note || row.label || '';
     if (row.key.indexOf('wechat_channels_') === 0 || row.soon) return {title:row.label,task_kind:'workflow_placeholder',content:'H5 工作流占位：' + row.label,payload:{action:'workflow_coming_soon',skip_execution:true,note:row.note || row.label,platform:'wechat_channels'}};
-    if (row.key.indexOf('native_wechat_') === 0) return nativePlan(row.key, row);
+    if (row.key.indexOf('native_wechat_') === 0 || row.key === 'native_whatsapp_poll') return nativePlan(row.key, row);
     if (row.key === 'local_bestseller') return {title:'同城爆款视频',task_kind:'client_workflow',content:'H5 工作流：同城爆款视频',payload:{action:'local_bestseller_daily_video',params:baseScheduleParams(row,{note:prompt,prompt:prompt,days:30,day_mode:'workflow_elapsed'})}};
     if (row.key === 'hifly.video.create_by_tts') return {title:'数字人口播视频',task_kind:'capability',content:'H5 工作流：数字人口播视频',payload:{capability_id:'hifly.video.create_by_tts',payload:{script:prompt,prompt:prompt}}};
     if (row.key === 'comfly.seedance.tvc.pipeline') return {title:'创意分镜头视频',task_kind:'capability',content:'H5 工作流：创意分镜头视频',payload:{capability_id:'comfly.seedance.tvc.pipeline',payload:{action:'start_pipeline',task_text:prompt,prompt:prompt,auto_save:true}}};
@@ -1104,9 +1116,10 @@
   window.addEventListener('focus', refreshDevicesOnForeground);
   document.addEventListener('visibilitychange', refreshDevicesOnForeground);
   function syncNodeModalFields() {
-    var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), selectedSalesAction=key === 'douyin_leads' ? salesAction(option[2] || option[1]) : '', takeover=key === 'native_wechat_poll', douyinPrivate=selectedSalesAction === 'stranger_message', douyinCollection=selectedSalesAction === 'search_collect', douyinTouch=selectedSalesAction === 'precise_touch';
+    var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), selectedSalesAction=key === 'douyin_leads' ? salesAction(option[2] || option[1]) : '', takeover=key === 'native_wechat_poll', whatsapp=key === 'native_whatsapp_poll', douyinPrivate=selectedSalesAction === 'stranger_message', douyinCollection=selectedSalesAction === 'search_collect', douyinTouch=selectedSalesAction === 'precise_touch';
     if (el('oeNodeGroupInviteField')) el('oeNodeGroupInviteField').hidden=!takeover;
     if (el('oeNodeWechatPrivateSessionLimitField')) el('oeNodeWechatPrivateSessionLimitField').hidden=!takeover;
+    if (el('oeNodeWhatsappField')) el('oeNodeWhatsappField').hidden=!whatsapp;
     if (el('oeNodeWechatAddFriendField')) el('oeNodeWechatAddFriendField').hidden=!douyinPrivate;
     if (el('oeNodeDouyinReplyModeField')) el('oeNodeDouyinReplyModeField').hidden=!douyinPrivate;
     if (el('oeNodeDouyinCollectionField')) el('oeNodeDouyinCollectionField').hidden=!douyinCollection;
@@ -1148,6 +1161,11 @@
     var followups=douyinTouch ? (Object.prototype.hasOwnProperty.call(params,'touch_actions') || Object.prototype.hasOwnProperty.call(params,'followup_actions') ? normalizeDouyinFollowupActions(followupSource) : DOUYIN_FOLLOWUP_ACTIONS.slice()) : [];
     [['oeNodeDouyinFollowupFollowComment','follow_comment'],['oeNodeDouyinFollowupMentionComment','mention_comment'],['oeNodeDouyinFollowupDirectMessage','direct_message']].forEach(function(item){if(el(item[0]))el(item[0]).checked=followups.indexOf(item[1])>=0;});
     el('oeNodeWechatPrivateSessionLimit').value=wechatPrivateSessionLimit(params.private_sessions_per_round);
+    if (el('oeNodeWhatsappAccountId')) el('oeNodeWhatsappAccountId').value=String(params.account_id || 'desktop-whatsapp-default');
+    if (el('oeNodeWhatsappInterval')) el('oeNodeWhatsappInterval').value=Math.max(1,Math.min(300,Number(params.message_poll_interval_seconds || 15)));
+    if (el('oeNodeWhatsappTakeoverMinutes')) el('oeNodeWhatsappTakeoverMinutes').value=Math.max(1,Math.min(1440,Number(params.takeover_session_minutes || 30)));
+    if (el('oeNodeWhatsappMaxUnread')) el('oeNodeWhatsappMaxUnread').value=Math.max(1,Math.min(100,Number(params.max_unread_per_round || 50)));
+    if (el('oeNodeWhatsappInstruction')) el('oeNodeWhatsappInstruction').value=String(params.reply_instruction || '');
     el('oeNodeMomentAction').value=String(params.moment_action || 'like_comment'); initMomentPicker('node',Array.isArray(params.contact_wx_nos) ? params.contact_wx_nos : params.targets);
     syncNodeModalFields(); el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60);
   }
@@ -1157,6 +1175,15 @@
     var existing=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, existingParams=workflowParams(existing), selectedSalesAction=key === 'douyin_leads' ? salesAction(option[2] || option[1]) : '', row={time:time,end:end,key:key,label:label,note:note,sales_action:selectedSalesAction,params:Object.assign({},existingParams,{group_invite_enabled:key === 'native_wechat_poll' && !!el('oeNodeGroupInviteEnabled').checked})};
     if (key === 'native_wechat_poll') row.params.private_sessions_per_round=Math.max(1,Math.min(100,Number(el('oeNodeWechatPrivateSessionLimit').value || 100)));
     else delete row.params.private_sessions_per_round;
+    if (key === 'native_whatsapp_poll') {
+      row.params.account_id=String((el('oeNodeWhatsappAccountId') || {}).value || 'desktop-whatsapp-default').trim() || 'desktop-whatsapp-default';
+      row.params.message_poll_interval_seconds=Math.max(1,Math.min(300,Number((el('oeNodeWhatsappInterval') || {}).value || 15)));
+      row.params.takeover_session_minutes=Math.max(1,Math.min(1440,Number((el('oeNodeWhatsappTakeoverMinutes') || {}).value || 30)));
+      row.params.max_unread_per_round=Math.max(1,Math.min(100,Number((el('oeNodeWhatsappMaxUnread') || {}).value || 50)));
+      row.params.reply_instruction=String((el('oeNodeWhatsappInstruction') || {}).value || '').trim().slice(0,4000);
+    } else {
+      delete row.params.account_id; delete row.params.message_poll_interval_seconds; delete row.params.takeover_session_minutes; delete row.params.max_unread_per_round; delete row.params.reply_instruction;
+    }
     if (key === 'native_wechat_moments_engage') { row.params.contact_wx_nos=momentSelectionValues('node'); row.params.targets=row.params.contact_wx_nos.slice(); row.params.moment_action=String(el('oeNodeMomentAction').value || 'like_comment'); row.params.max_scrolls=Number(row.params.max_scrolls || 6); if (!row.params.contact_wx_nos.length) throw new Error('请选择至少一个朋友圈联系人'); }
     else { delete row.params.contact_wx_nos; delete row.params.targets; delete row.params.moment_action; }
     if (selectedSalesAction === 'stranger_message') { row.params.wechat_add_friend_enabled=!!el('oeNodeWechatAddFriendEnabled').checked; row.params.wechat_add_friend_targets_source='douyin_private_message_phone'; row.params.reply_mode=String((el('oeNodeDouyinReplyMode') || {}).value || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed'; }

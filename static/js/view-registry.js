@@ -34,6 +34,13 @@
     cache: 'reload'
   });
 
+  window.registerLobsterView('personal-whatsapp', {
+    html: '/static/views/personal-whatsapp.html?v=20260910-personal-whatsapp-workbench-v2',
+    scripts: '/static/js/personal-whatsapp.js?v=20260910-personal-whatsapp-workbench-v2',
+    init: 'initPersonalWhatsappView',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('douyin-information-desk', {
     html: '/static/views/douyin-information-desk.html?v=20260901-douyin-platform-desk-v2',
     css: '/static/css/douyin-information-desk.css?v=20260901-douyin-platform-desk-v2',

@@ -46,6 +46,12 @@ _AUTH_ME_TRANSIENT_HTTP = frozenset({429, 502, 503, 504})
 # Bearer(+安装 id) -> (monotonic 过期时间, 用户 id)；仅缓存远端 200 结果
 _AUTH_ME_CACHE_LOCK = asyncio.Lock()
 _AUTH_ME_CACHE: Dict[str, tuple[float, int]] = {}
+_AUTH_ME_VALIDATION_LOCKS: Dict[str, asyncio.Lock] = {}
+# Explicit 401/403 responses are deterministic for the same bearer token.
+# Remember them briefly so an expired local session cannot hit public
+# /auth/me every few seconds through multiple local endpoints.
+_AUTH_ME_INVALID_CACHE: Dict[str, float] = {}
+_AUTH_ME_INVALID_CACHE_TTL_SECONDS = 60.0
 _AUTH_ME_STALE_GRACE_SECONDS = 900
 _SKILL_STORE_ADMIN_CACHE_LOCK = asyncio.Lock()
 _SKILL_STORE_ADMIN_CACHE: Dict[str, tuple[float, bool]] = {}
@@ -398,9 +404,56 @@ async def get_current_user_for_local(
         cache_key = hashlib.sha256(f"{token}\0{xi}\0{brand_mark}".encode("utf-8")).hexdigest()
         now_m = time.monotonic()
         async with _AUTH_ME_CACHE_LOCK:
+            invalid_until = _AUTH_ME_INVALID_CACHE.get(cache_key, 0.0)
+            if invalid_until > now_m:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="登录状态已失效，请重新登录",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            if invalid_until:
+                _AUTH_ME_INVALID_CACHE.pop(cache_key, None)
             hit = _AUTH_ME_CACHE.get(cache_key)
             if hit and hit[0] > now_m:
                 return _ServerUser(id=hit[1])
+
+    # Collapse concurrent local endpoint checks for the same login into one
+    # public /auth/me request. After the first caller stores the result, all
+    # waiters re-read the local cache instead of contacting the server.
+    validation_lock: Optional[asyncio.Lock] = None
+    validation_owner = {"owned": False}
+    if cache_key is not None:
+        async with _AUTH_ME_CACHE_LOCK:
+            validation_lock = _AUTH_ME_VALIDATION_LOCKS.setdefault(cache_key, asyncio.Lock())
+        await validation_lock.acquire()
+        validation_owner["owned"] = True
+
+        def release_validation_lock() -> None:
+            if validation_lock is not None and validation_owner["owned"]:
+                validation_owner["owned"] = False
+                validation_lock.release()
+
+        owner_task = asyncio.current_task()
+        if owner_task is not None:
+            owner_task.add_done_callback(lambda _task: release_validation_lock())
+
+        now_m = time.monotonic()
+        async with _AUTH_ME_CACHE_LOCK:
+            invalid_until = _AUTH_ME_INVALID_CACHE.get(cache_key, 0.0)
+            hit = _AUTH_ME_CACHE.get(cache_key)
+        if invalid_until > now_m:
+            release_validation_lock()
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="登录状态已失效，请重新登录",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        if hit and hit[0] > now_m:
+            release_validation_lock()
+            return _ServerUser(id=hit[1])
+    else:
+        def release_validation_lock() -> None:
+            return None
 
     last_request_error: Optional[Exception] = None
 
@@ -456,17 +509,32 @@ async def get_current_user_for_local(
                 if cache_key is not None and ttl_s > 0:
                     exp = time.monotonic() + float(ttl_s)
                     async with _AUTH_ME_CACHE_LOCK:
+                        _AUTH_ME_INVALID_CACHE.pop(cache_key, None)
                         _AUTH_ME_CACHE[cache_key] = (exp, uid_int)
                         if len(_AUTH_ME_CACHE) > 2000:
                             t = time.monotonic()
                             for k in list(_AUTH_ME_CACHE.keys()):
                                 if _AUTH_ME_CACHE[k][0] <= t:
                                     del _AUTH_ME_CACHE[k]
+                release_validation_lock()
                 return _ServerUser(id=uid_int)
             if r.status_code in (401, 403):
                 su = _server_user_from_internal_lobster_jwt(request, token)
                 if su is not None:
+                    release_validation_lock()
                     return su
+                if cache_key is not None:
+                    async with _AUTH_ME_CACHE_LOCK:
+                        _AUTH_ME_CACHE.pop(cache_key, None)
+                        _AUTH_ME_INVALID_CACHE[cache_key] = (
+                            time.monotonic() + _AUTH_ME_INVALID_CACHE_TTL_SECONDS
+                        )
+                        if len(_AUTH_ME_INVALID_CACHE) > 2000:
+                            now_invalid = time.monotonic()
+                            for key, expires_at in list(_AUTH_ME_INVALID_CACHE.items()):
+                                if expires_at <= now_invalid:
+                                    _AUTH_ME_INVALID_CACHE.pop(key, None)
+                release_validation_lock()
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="无法验证凭证",
@@ -482,7 +550,9 @@ async def get_current_user_for_local(
                     )
                     await asyncio.sleep(0.25 * (2 ** (attempt - 1)))
                     continue
+                release_validation_lock()
                 raise HTTPException(status_code=503, detail="认证中心暂时不可用")
+            release_validation_lock()
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="无法验证凭证",
@@ -492,7 +562,9 @@ async def get_current_user_for_local(
             if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
                 cached_user = await stale_cached_user()
                 if cached_user is not None:
+                    release_validation_lock()
                     return cached_user
+            release_validation_lock()
             raise
         except httpx.RequestError as e:
             last_request_error = e
@@ -508,6 +580,7 @@ async def get_current_user_for_local(
                 continue
             cached_user = await stale_cached_user()
             if cached_user is not None:
+                release_validation_lock()
                 return cached_user
             logger.error(
                 "[auth-local] 503 原因=认证中心不可达 url=%s/auth/me err_type=%s err=%s",
@@ -515,6 +588,7 @@ async def get_current_user_for_local(
                 type(e).__name__,
                 e,
             )
+            release_validation_lock()
             raise HTTPException(status_code=503, detail="认证中心不可达") from last_request_error
 
 

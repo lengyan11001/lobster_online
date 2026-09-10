@@ -534,16 +534,19 @@
           <div class="ps-section-heading">
             <div>
               <div class="ps-card-title">关键词</div>
-              <p>添加你的行业、产品或服务关键词，用于热点检索和内容生成。</p>
+              <p>已保存的行业、产品或服务关键词。</p>
             </div>
+            <button type="button" id="psOpenKeywordEditorBtn" class="btn btn-primary btn-sm">新增关键词</button>
           </div>
-          <div class="ps-form-action-row">
-            <div class="ps-field">
-              <label for="psKeywordInput">行业关键词</label>
-              <input id="psKeywordInput" placeholder="输入行业关键词">
-            </div>
-            <input id="psKeywordDisplayName" type="hidden">
-            <button type="button" id="psAddKeywordBtn" class="btn btn-primary btn-sm">添加关键词</button>
+          <div id="psKeywordEditorModal" class="ps-editor-modal" hidden aria-hidden="true">
+            <section class="ps-editor-dialog ps-editor-dialog-sm" role="dialog" aria-modal="true" aria-labelledby="psKeywordEditorTitle">
+              <header class="ps-editor-head"><strong id="psKeywordEditorTitle">新增关键词</strong><button type="button" class="ps-editor-close" data-close-ps-editor aria-label="关闭">×</button></header>
+              <div class="ps-editor-body">
+                <div class="ps-field"><label for="psKeywordInput">行业关键词</label><input id="psKeywordInput" placeholder="输入行业关键词"></div>
+                <input id="psKeywordDisplayName" type="hidden">
+              </div>
+              <footer class="ps-editor-foot"><button type="button" class="btn btn-ghost btn-sm" data-close-ps-editor>取消</button><button type="button" id="psAddKeywordBtn" class="btn btn-primary btn-sm">保存</button></footer>
+            </section>
           </div>
           <div class="ps-list-region">
             <div class="ps-list-label">已添加关键词</div>
@@ -559,10 +562,14 @@
           <div class="ps-section-heading">
             <div>
               <div class="ps-card-title">同行账号</div>
-              <p>搜索并添加同行账号，系统会同步公开内容作为创作参考。</p>
+              <p>已保存的同行账号，系统会同步公开内容作为创作参考。</p>
             </div>
+            <button type="button" id="psOpenCompetitorEditorBtn" class="btn btn-primary btn-sm">新增同行</button>
           </div>
-          <div class="ps-competitor-form">
+          <div id="psCompetitorEditorModal" class="ps-editor-modal" hidden aria-hidden="true">
+            <section class="ps-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="psCompetitorEditorTitle">
+              <header class="ps-editor-head"><strong id="psCompetitorEditorTitle">新增同行账号</strong><button type="button" class="ps-editor-close" data-close-ps-editor aria-label="关闭">×</button></header>
+              <div class="ps-editor-body"><div class="ps-competitor-form">
             <div class="ps-field">
               <label for="psCompetitorPlatform">平台</label>
               <select id="psCompetitorPlatform">
@@ -580,8 +587,10 @@
             </div>
             <button type="button" id="psSearchCompetitorBtn" class="btn btn-primary btn-sm">搜索账号</button>
             <button type="button" id="psAddCompetitorByChannelIdBtn" class="btn btn-ghost btn-sm" hidden>按照视频号公开 ID 添加</button>
+              </div><div id="psCompetitorSearchResults" class="ps-user-results"></div></div>
+              <footer class="ps-editor-foot"><button type="button" class="btn btn-ghost btn-sm" data-close-ps-editor>关闭</button></footer>
+            </section>
           </div>
-          <div id="psCompetitorSearchResults" class="ps-user-results"></div>
           <div class="ps-list-region">
             <div class="ps-list-label">已添加同行</div>
             <div id="psCompetitorList" class="ps-list"></div>
@@ -592,6 +601,12 @@
 
     <section class="ps-panel" data-ps-panel="profile">
       <section class="ps-card ps-survey">
+        <div class="ps-section-heading"><div><div class="ps-card-title">资料调查</div><p>每条调查记录可以关联到不同的个人 IP 模板。</p></div><button class="btn btn-primary btn-sm" type="button" id="psNewSurveyBtn">新增资料</button></div>
+        <div id="psSurveyList" class="ps-list"></div>
+        <div id="psSurveyEditorModal" class="ps-editor-modal" hidden aria-hidden="true">
+          <section class="ps-editor-dialog ps-editor-dialog-lg" role="dialog" aria-modal="true" aria-labelledby="psSurveyEditorTitle">
+            <header class="ps-editor-head"><strong id="psSurveyEditorTitle">新增资料调查</strong><button type="button" class="ps-editor-close" data-close-ps-editor aria-label="关闭">×</button></header>
+            <div class="ps-editor-body">
         <div class="ps-survey-heading">
           <div class="ps-survey-heading-icon" aria-hidden="true">资</div>
           <div>
@@ -601,8 +616,9 @@
           <span id="psProfileCompletionText">已填写 0/14</span>
         </div>
         <div id="psProfileQuestionList" class="ps-survey-list"></div>
-        <div class="ps-actions ps-survey-actions">
-          <button class="btn btn-primary btn-sm" type="button" id="psSaveProfileBtn">保存资料调查</button>
+            </div>
+            <footer class="ps-editor-foot"><button type="button" class="btn btn-ghost btn-sm" data-close-ps-editor>取消</button><button class="btn btn-primary btn-sm" type="button" id="psSaveProfileBtn">保存</button></footer>
+          </section>
         </div>
         <div class="ps-hidden-fields" aria-hidden="true">
           <input id="psProfileName" type="hidden">
@@ -639,8 +655,11 @@
 
     <section class="ps-panel" data-ps-panel="upload">
       <section class="ps-card ps-upload-card">
-        <div class="ps-card-title">上传资料</div>
-        <div class="ps-upload-surface">
+        <div class="ps-section-heading"><div><div class="ps-card-title">上传资料</div><p>已上传并解析的资料记录。</p></div><button type="button" id="psOpenUploadEditorBtn" class="btn btn-primary btn-sm">新增资料</button></div>
+        <div id="psUploadEditorModal" class="ps-editor-modal" hidden aria-hidden="true">
+          <section class="ps-editor-dialog" role="dialog" aria-modal="true" aria-labelledby="psUploadEditorTitle">
+            <header class="ps-editor-head"><strong id="psUploadEditorTitle">上传资料</strong><button type="button" class="ps-editor-close" data-close-ps-editor aria-label="关闭">×</button></header>
+            <div class="ps-editor-body ps-upload-surface">
           <label class="ps-upload-label" for="psMemoryFiles">上传文件</label>
           <label id="psUploadDropzone" class="ps-upload-zone" for="psMemoryFiles">
             <input id="psMemoryFiles" class="ps-upload-input" type="file" multiple accept=".txt,.md,.csv,.json,.yaml,.yml,.html,.pdf,.doc,.docx,.xls,.xlsx,.xlsm,.ppt,.pptx,.jpg,.jpeg,.png,.webp,.gif,.mp4,.mov,.m4v,.avi,.mkv,.webm,.mp3,.wav,.m4a,.aac,.ogg,.flac,.amr,.wma,audio/*">
@@ -654,9 +673,9 @@
             <span class="ps-upload-hint">支持 PDF、DOCX、TXT、PPT、表格、图片、视频及音频，单文件大小不超过 50MB。</span>
           </label>
           <div id="psSelectedFiles" class="ps-file-list ps-upload-file-list"><div class="ps-empty">选择文件后会显示在这里。</div></div>
-          <div class="ps-actions ps-upload-actions">
-            <button type="button" id="psSaveRawMemoryBtn" class="btn btn-primary btn-sm">存入资料</button>
-          </div>
+            </div>
+            <footer class="ps-editor-foot"><button type="button" class="btn btn-ghost btn-sm" data-close-ps-editor>取消</button><button type="button" id="psSaveRawMemoryBtn" class="btn btn-primary btn-sm">存入资料</button></footer>
+          </section>
         </div>
         <div class="ps-list-region ps-upload-history-region">
           <div class="ps-section-heading ps-upload-history-head">
@@ -674,8 +693,12 @@
     </section>
 
     <section class="ps-panel" data-ps-panel="memory">
-      <div class="ps-grid">
-        <section class="ps-card">
+      <div class="ps-grid is-single">
+        <section class="ps-card"><div class="ps-section-heading"><div><div class="ps-card-title">记忆文件</div><p>已生成或授权的记忆文件。</p></div><button type="button" id="psOpenMemoryEditorBtn" class="btn btn-primary btn-sm">新增记忆</button></div><div id="psMemoryList" class="ps-list"></div><div id="psMemoryPreview" class="ps-memory-preview" hidden></div></section>
+        <div id="psMemoryEditorModal" class="ps-editor-modal" hidden aria-hidden="true">
+          <section class="ps-editor-dialog ps-editor-dialog-lg" role="dialog" aria-modal="true" aria-labelledby="psMemoryEditorTitle">
+            <header class="ps-editor-head"><strong id="psMemoryEditorTitle">新增记忆文件</strong><button type="button" class="ps-editor-close" data-close-ps-editor aria-label="关闭">×</button></header>
+            <div class="ps-editor-body">
           <div class="ps-section-heading">
             <div>
               <div class="ps-card-title">生成记忆文件</div>
@@ -753,22 +776,20 @@
             <label for="psMemoryTitle">新文档名字</label>
             <input id="psMemoryTitle" placeholder="输入文档名字" autocomplete="off" spellcheck="false">
           </div>
-          <div class="ps-actions">
-            <button type="button" id="psSaveMemoryBtn" class="btn btn-primary btn-sm">存入记忆</button>
-          </div>
-        </section>
-        <section class="ps-card">
-          <div class="ps-card-title">记忆文件</div>
-          <div id="psMemoryList" class="ps-list"></div>
-          <div class="ps-card-title">内容预览</div>
-          <div id="psMemoryPreview" class="ps-memory-preview">点击“预览”查看内容。</div>
-        </section>
+            </div>
+            <footer class="ps-editor-foot"><button type="button" class="btn btn-ghost btn-sm" data-close-ps-editor>取消</button><button type="button" id="psSaveMemoryBtn" class="btn btn-primary btn-sm">存入记忆</button></footer>
+          </section>
+        </div>
       </div>
     </section>
 
     <section class="ps-panel" data-ps-panel="template">
-      <div class="ps-grid">
-        <section class="ps-card">
+      <div class="ps-grid is-single">
+        <section class="ps-card"><div class="ps-template-list-heading"><div><div class="ps-card-title">模板记录</div><span>授权模板和个人模板</span></div><button type="button" id="psOpenTemplateEditorBtn" class="btn btn-primary btn-sm">新增模板</button></div><div id="psSavedTemplateListRight" class="ps-list"></div></section>
+        <div id="psTemplateEditorModal" class="ps-editor-modal" hidden aria-hidden="true">
+          <section class="ps-editor-dialog ps-editor-dialog-lg" role="dialog" aria-modal="true" aria-labelledby="psTemplateEditorTitle">
+            <header class="ps-editor-head"><strong id="psTemplateEditorTitle">新增模板</strong><button type="button" class="ps-editor-close" data-close-ps-editor aria-label="关闭">×</button></header>
+            <div class="ps-editor-body">
           <div class="ps-section-heading">
             <div>
               <div class="ps-card-title">模板管理</div>
@@ -779,6 +800,10 @@
           <div class="ps-field">
             <label for="psTemplateName">模板名称</label>
             <input id="psTemplateName" placeholder="模板名称">
+          </div>
+          <div class="ps-field">
+            <label for="psTemplateSurvey">资料调查记录</label>
+            <select id="psTemplateSurvey"><option value="">不关联</option></select>
           </div>
           <div class="ps-field">
             <label for="psTemplateLanguage">语种</label>
@@ -815,17 +840,7 @@
             <div class="ps-resource-heading-actions"><span>已选 <b id="psDigitalHumanVoiceCount">0</b></span><button type="button" id="psDigitalHumanVoiceChooseBtn" class="btn btn-ghost btn-sm">选择</button></div>
           </div>
           <div id="psDigitalHumanVoiceList" class="ps-list ps-resource-summary-list"></div>
-          <div class="ps-actions">
-            <button type="button" id="psSaveTemplateBtn" class="btn btn-primary btn-sm">保存模板</button>
-            <button type="button" id="psNewTemplateBtn" class="btn btn-ghost btn-sm">新建模板</button>
-          </div>
-        </section>
-        <section class="ps-card">
-          <div class="ps-template-list-heading">
-            <div class="ps-card-title">模板记录</div>
-            <span>授权模板和个人模板</span>
-          </div>
-          <div id="psSavedTemplateListRight" class="ps-list"></div>
+          <div id="psNewTemplateBtn" hidden></div>
           <div class="ps-template-resource-heading">
             <div class="ps-card-title">模板资源</div>
             <span>关键词、同行和记忆文件</span>
@@ -836,7 +851,10 @@
           <div id="psTemplateCompetitorList" class="ps-list"></div>
           <div class="ps-card-title">选择记忆文件</div>
           <div id="psTemplateMemoryList" class="ps-list"></div>
-        </section>
+            </div>
+            <footer class="ps-editor-foot"><button type="button" class="btn btn-ghost btn-sm" data-close-ps-editor>取消</button><button type="button" id="psSaveTemplateBtn" class="btn btn-primary btn-sm">保存模板</button></footer>
+          </section>
+        </div>
       </div>
     </section>
   </div>

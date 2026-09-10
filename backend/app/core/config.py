@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import List, Optional
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,6 +57,8 @@ class Settings(BaseSettings):
     lobster_parent_account: Optional[str] = None
     """安装包默认注册为海外版用户；未设置时默认 False（国内版）。"""
     lobster_is_overseas_user: bool = False
+    lobster_domestic_server_base: str = "https://bhzn.top"
+    lobster_overseas_server_base: str = "https://bhos.online"
     """在线版为 True 时：登录注册与充值全部自维护，不走速推；用户配置算力账号（速推 Token）用于耗算力，速推扣多少我们扣多少算力。"""
     lobster_independent_auth: bool = True
     """完成充值订单时需在请求头 X-Admin-Secret 携带此值（仅服务端/管理员使用）。"""
@@ -166,9 +168,31 @@ class Settings(BaseSettings):
     """与认证中心 LOBSTER_MCP_BILLING_INTERNAL_KEY 一致；本机转发 /capabilities/*、MCP 调认证中心（若有）时带 X-Lobster-Mcp-Billing。速推只走 mcp-gateway；media.edit 免费、comfly 在后端自扣费，均不在 MCP 侧走认证中心计费。"""
     lobster_mcp_billing_internal_key: Optional[str] = None
     """同 Bearer 在本进程内复用最近一次成功的 GET /auth/me 结果，减少并发与远端超时。秒；0=每次请求都拉远端（与旧行为一致）。"""
-    auth_me_cache_ttl_seconds: int = 120
+    auth_me_cache_ttl_seconds: int = 300
     """网络短暂不可达时，允许复用最近一次成功认证的最长秒数；401/403 不走此宽限。"""
     auth_me_stale_cache_grace_seconds: int = 900
+
+    @model_validator(mode="after")
+    def _resolve_auth_server_base_by_edition(self) -> "Settings":
+        """Use one client package and select the auth server from its edition flag.
+
+        Existing packages contain the domestic AUTH_SERVER_BASE value for
+        backwards compatibility. When the same package is marked overseas,
+        that domestic default must not keep routing login, billing, or assets
+        back to the mainland server. Explicit non-default server URLs remain
+        respected for OEM/staging deployments.
+        """
+        domestic = (self.lobster_domestic_server_base or "https://bhzn.top").strip().rstrip("/")
+        overseas = (self.lobster_overseas_server_base or "https://bhos.online").strip().rstrip("/")
+        current = (self.auth_server_base or "").strip().rstrip("/")
+        known_domestic = {domestic, "https://bhzn.top", "http://42.194.209.150", "https://42.194.209.150"}
+        if bool(self.lobster_is_overseas_user) and (not current or current in known_domestic):
+            self.auth_server_base = overseas
+        elif not current:
+            self.auth_server_base = domestic
+        else:
+            self.auth_server_base = current
+        return self
     """为 True 时：高消耗 invoke_capability 前需用户确认后再请求 MCP（环境变量 CHAT_REQUIRE_CAPABILITY_COST_CONFIRM）。"""
     chat_require_capability_cost_confirm: bool = False
     """为 True（默认）时：纯图/视频生成拿到终态 saved_assets 后尽早结束工具编排，减少多余 LLM 轮次；用户同句要求发布时仍会继续编排。"""

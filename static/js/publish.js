@@ -2018,6 +2018,7 @@ var _MEDIA_TYPE_LABELS = { image: '图片', video: '视频', audio: '音频', do
 var _assetCreativeGroupsCache = [];
 var _assetCreativeGroupEditingAssetId = '';
 var _currentAssetOrigin = 'generated';
+var _assetGeneratedTypeInitialized = false;
 var _assetPreviewState = null;
 var _assetPublishModalState = { asset: null, accounts: [], busy: false };
 var _assetListCache = {};
@@ -2092,7 +2093,17 @@ function _configureAssetTypeFilter(origin) {
   if (!select) return;
   var options = origin === 'user_upload' ? _UPLOAD_ASSET_TYPE_OPTIONS : _CONTENT_RECORD_TYPE_OPTIONS;
   var current = select.value;
-  if (!options.some(function(item) { return item[0] === current; })) current = origin === 'user_upload' ? '' : 'image';
+  // H5 workflow output is stored in the shared content library as article
+  // records. The old Online default stayed on "image", so the same records
+  // existed on the server but appeared to be missing until the user manually
+  // changed the type filter. Open generated content on copy first, then retain
+  // the user's explicit image/video/document selection for this session.
+  if (origin !== 'user_upload' && !_assetGeneratedTypeInitialized) {
+    current = 'article';
+    _assetGeneratedTypeInitialized = true;
+  } else if (!options.some(function(item) { return item[0] === current; })) {
+    current = origin === 'user_upload' ? '' : 'article';
+  }
   select.innerHTML = options.map(function(item) {
     return '<option value="' + escapeAttr(item[0]) + '">' + escapeHtml(item[1]) + '</option>';
   }).join('');
@@ -3786,6 +3797,9 @@ var _assetBulkMode = false;
 var _assetUserUploadSyncPromise = null;
 var _assetUserUploadSyncAt = 0;
 var _ASSET_USER_UPLOAD_SYNC_TTL_MS = 60000;
+var _assetGeneratedSyncPromise = null;
+var _assetGeneratedSyncAt = {};
+var _ASSET_GENERATED_SYNC_TTL_MS = 30000;
 
 function _syncUserUploadAssetsAfterRender(snapshot, options) {
   options = options || {};
@@ -3827,6 +3841,52 @@ function _syncUserUploadAssetsAfterRender(snapshot, options) {
       _assetUserUploadSyncPromise = null;
     });
   return _assetUserUploadSyncPromise;
+}
+
+function _syncGeneratedAssetsAfterRender(snapshot, options) {
+  options = options || {};
+  if (!snapshot || snapshot.origin !== 'generated' || ['image', 'video'].indexOf(snapshot.mediaType) < 0) {
+    return Promise.resolve(null);
+  }
+  var key = snapshot.mediaType;
+  var now = Date.now();
+  if (_assetGeneratedSyncPromise) return _assetGeneratedSyncPromise;
+  if (!options.force && now - Number(_assetGeneratedSyncAt[key] || 0) < _ASSET_GENERATED_SYNC_TTL_MS) {
+    return Promise.resolve(null);
+  }
+  _assetGeneratedSyncAt[key] = now;
+  var url = publishLocalBase() + '/api/assets/sync-generated?media_type=' + encodeURIComponent(snapshot.mediaType);
+  _assetGeneratedSyncPromise = fetch(url, { method: 'POST', headers: authHeaders() })
+    .then(function(r) {
+      return r.json().catch(function() { return {}; }).then(function(d) {
+        if (!r.ok) throw new Error((d && d.detail) || ('HTTP ' + r.status));
+        return d;
+      });
+    })
+    .then(function(d) {
+      if (Number(d && d.changed || 0) > 0
+          && _currentAssetOriginFilter() === 'generated'
+          && _assetLibraryState.query === snapshot.query
+          && _assetLibraryState.mediaType === snapshot.mediaType) {
+        loadAssets(snapshot.query, { skipCloudSync: true });
+      }
+      return d;
+    })
+    .catch(function(err) {
+      if (options.showError) {
+        _assetMsgShow('云端生成内容同步失败：' + ((err && err.message) || err), true);
+      }
+      return null;
+    })
+    .finally(function() {
+      _assetGeneratedSyncPromise = null;
+    });
+  return _assetGeneratedSyncPromise;
+}
+
+function _syncAssetsAfterRender(snapshot, options) {
+  _syncUserUploadAssetsAfterRender(snapshot, options);
+  _syncGeneratedAssetsAfterRender(snapshot, options);
 }
 
 function _assetSelectedIds() {
@@ -4370,6 +4430,12 @@ function loadAssets(query, options) {
           assetMap: {}
         };
         _setAssetLoadMoreState(false, false);
+        if (!options.skipCloudSync) {
+          _syncAssetsAfterRender(snap, {
+            force: !!options.syncUploads,
+            showError: !!options.syncUploads
+          });
+        }
         return;
       }
       _assetLibraryState.offset = offset;
@@ -4386,7 +4452,7 @@ function loadAssets(query, options) {
         _assetLibraryState.loading = false;
         _setAssetLoadMoreState(_assetLibraryState.offset < total, false);
         if (!append && !options.skipCloudSync) {
-          _syncUserUploadAssetsAfterRender(snap, {
+          _syncAssetsAfterRender(snap, {
             force: !!options.syncUploads,
             showError: !!options.syncUploads
           });
