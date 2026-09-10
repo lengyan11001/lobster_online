@@ -225,6 +225,183 @@
     syncActiveViewClass();
   }
 
+  var RICH_URL_RE = /https?:\/\/[^\s<>"']+/gi;
+
+  // 富内容样式随模块自带，避免依赖宿主页面的 <link> 顺序。
+  function ensureRichStyles() {
+    if (document.getElementById('onlineRichContentStyle')) return;
+    var link = document.createElement('link');
+    link.id = 'onlineRichContentStyle';
+    link.rel = 'stylesheet';
+    link.href = apiUrl('/static/css/rich-content.css?v=20260910-rich-content-v1');
+    document.head.appendChild(link);
+  }
+
+  var RICH_KINDS = [
+    [/\.(png|jpe?g|gif|webp|bmp|avif|svg)(?:[?#].*)?$/i, 'image'],
+    [/\.(mp4|webm|mov|m4v|avi|mkv)(?:[?#].*)?$/i, 'video'],
+    [/\.(mp3|wav|m4a|aac|ogg|flac)(?:[?#].*)?$/i, 'audio'],
+    [/\.(pdf|docx?|xlsx?|pptx?|zip|rar|7z|csv|txt|md|json)(?:[?#].*)?$/i, 'file']
+  ];
+
+  function richUrlKind(url) {
+    var clean = text(url);
+    if (!/^https?:\/\//i.test(clean)) return '';
+    for (var i = 0; i < RICH_KINDS.length; i += 1) {
+      if (RICH_KINDS[i][0].test(clean)) return RICH_KINDS[i][1];
+    }
+    return 'link';
+  }
+
+  function richHost(url) {
+    try { return new URL(url).host.replace(/^www\./i, ''); } catch (error) { return '\u94fe\u63a5'; }
+  }
+
+  function richLinkify(value) {
+    return escapeHtml(value).replace(RICH_URL_RE, function (raw) {
+      return '<a href="' + raw + '" target="_blank" rel="noopener noreferrer">' + raw + '</a>';
+    });
+  }
+
+  function richLightbox(url) {
+    var box = document.getElementById('onlineRichLightbox');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'onlineRichLightbox';
+      box.className = 'rich-lightbox hidden';
+      box.innerHTML = '<img alt="" /><button type="button" aria-label="\u5173\u95ed">\u00d7</button>';
+      box.addEventListener('click', function () { box.classList.add('hidden'); });
+      document.body.appendChild(box);
+    }
+    var img = box.querySelector('img');
+    if (img) img.src = url;
+    box.classList.remove('hidden');
+  }
+
+  function richImageGrid(urls) {
+    var host = document.createElement('div');
+    host.className = 'rich-media-grid' + (urls.length > 1 ? ' is-multi' : '');
+    urls.forEach(function (url) {
+      var button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'rich-media-item';
+      var img = document.createElement('img');
+      img.src = url;
+      img.alt = '\u56fe\u7247';
+      img.loading = 'lazy';
+      button.appendChild(img);
+      button.addEventListener('click', function () { richLightbox(url); });
+      host.appendChild(button);
+    });
+    return host;
+  }
+
+  function richMediaGroup(urls, kind) {
+    if (kind === 'image') return richImageGrid(urls);
+    var host = document.createElement('div');
+    host.className = 'rich-media-block';
+    urls.forEach(function (url) {
+      var node;
+      if (kind === 'video') {
+        node = document.createElement('video');
+        node.controls = true;
+        node.preload = 'metadata';
+      } else if (kind === 'audio') {
+        node = document.createElement('audio');
+        node.controls = true;
+        node.preload = 'metadata';
+      } else {
+        node = document.createElement('a');
+        node.className = 'rich-file-row';
+        node.href = url;
+        node.target = '_blank';
+        node.rel = 'noopener noreferrer';
+        node.textContent = '\u6587\u4ef6\uff1a' + (String(url).split(/[?#]/)[0].split('/').pop() || '\u4e0b\u8f7d');
+      }
+      if (node.tagName !== 'A') node.src = url;
+      host.appendChild(node);
+    });
+    return host;
+  }
+
+  function richLinkCard(url) {
+    var card = document.createElement('a');
+    card.className = 'rich-link-card';
+    card.href = url;
+    card.target = '_blank';
+    card.rel = 'noopener noreferrer';
+    var host = document.createElement('span');
+    host.className = 'rich-link-host';
+    host.textContent = richHost(url);
+    var path = document.createElement('span');
+    path.className = 'rich-link-path';
+    path.textContent = (String(url).replace(/^https?:\/\/[^/]+/i, '') || '/').slice(0, 80);
+    card.appendChild(host);
+    card.appendChild(path);
+    return card;
+  }
+
+  function renderRichBody(host, raw) {
+    if (!host) return;
+    host.textContent = '';
+    var lines = text(raw).split(/\r?\n/);
+    var buffer = [];
+    function flush() {
+      if (!buffer.length) return;
+      var block = document.createElement('div');
+      block.className = 'rich-paragraph';
+      block.innerHTML = richLinkify(buffer.join('\n'));
+      host.appendChild(block);
+      buffer = [];
+    }
+    for (var index = 0; index < lines.length; index += 1) {
+      var line = lines[index];
+      var trimmed = line.trim();
+      if (/^```/.test(trimmed)) {
+        var code = [];
+        index += 1;
+        while (index < lines.length && !/^```/.test(lines[index].trim())) {
+          code.push(lines[index]);
+          index += 1;
+        }
+        flush();
+        var pre = document.createElement('pre');
+        pre.className = 'rich-code';
+        var codeEl = document.createElement('code');
+        codeEl.textContent = code.join('\n');
+        pre.appendChild(codeEl);
+        host.appendChild(pre);
+        continue;
+      }
+      var alone = /^https?:\/\/\S+$/i.test(trimmed) ? trimmed : '';
+      if (!alone) {
+        buffer.push(line);
+        continue;
+      }
+      var kind = richUrlKind(alone);
+      flush();
+      if (kind === 'link') {
+        host.appendChild(richLinkCard(alone));
+        continue;
+      }
+      var group = [alone];
+      while (index + 1 < lines.length) {
+        var nextLine = lines[index + 1].trim();
+        if (!/^https?:\/\/\S+$/i.test(nextLine) || richUrlKind(nextLine) !== kind) break;
+        group.push(nextLine);
+        index += 1;
+      }
+      host.appendChild(richMediaGroup(group, kind));
+    }
+    flush();
+    if (!host.childNodes.length && text(raw)) {
+      var fallback = document.createElement('div');
+      fallback.className = 'rich-paragraph';
+      fallback.innerHTML = richLinkify(raw);
+      host.appendChild(fallback);
+    }
+  }
+
   function createBubble(role, message) {
     var box = el('onlineMastraMessages');
     if (!box) return null;
@@ -248,13 +425,13 @@
   function setBubbleText(bubble, value) {
     if (!bubble || !bubble.body) return;
     bubble.text = text(value);
-    bubble.body.textContent = bubble.text;
+    renderRichBody(bubble.body, bubble.text);
   }
 
   function appendBubbleText(bubble, value) {
     if (!bubble || !value) return;
     bubble.text += text(value);
-    if (bubble.body) bubble.body.textContent = bubble.text;
+    if (bubble.body) renderRichBody(bubble.body, bubble.text);
   }
 
   function addAttachmentView(bubble, attachments) {
@@ -789,6 +966,7 @@
   }
 
   function init() {
+    ensureRichStyles();
     if (!el('onlineMastraChat')) return;
     bind();
     state.initialized = true;
