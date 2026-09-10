@@ -194,15 +194,17 @@
       .sl-list {
         display: grid;
         gap: 0.55rem;
-        max-height: 640px;
+        max-height: min(640px, calc(100vh - 240px));
         overflow: auto;
+        overscroll-behavior: contain;
         padding-right: 0.2rem;
       }
       .sl-template-list {
         display: grid;
         gap: 0.55rem;
-        max-height: 520px;
+        max-height: min(520px, calc(100vh - 300px));
         overflow: auto;
+        overscroll-behavior: contain;
       }
       .sl-template-item {
         border: 1px solid rgba(15,23,42,0.1);
