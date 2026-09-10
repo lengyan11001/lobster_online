@@ -263,18 +263,74 @@
     });
   }
 
+  var lightboxItems = [];
+  var lightboxIndex = 0;
+
+  function lightboxCollect(url) {
+    var found = [];
+    document.querySelectorAll('.rich-media-item img, .online-mastra-zoomable, .online-mastra-message-attachments img').forEach(function (node) {
+      var src = text(node.getAttribute('src'));
+      if (src && found.indexOf(src) < 0) found.push(src);
+    });
+    if (url && found.indexOf(url) < 0) found.push(url);
+    return found;
+  }
+
+  function richLightboxShow(index) {
+    var box = document.getElementById('onlineRichLightbox');
+    if (!box || !lightboxItems.length) return;
+    lightboxIndex = (index + lightboxItems.length) % lightboxItems.length;
+    var img = box.querySelector('img');
+    if (img) img.src = lightboxItems[lightboxIndex];
+    var counter = box.querySelector('.rich-lightbox-counter');
+    if (counter) counter.textContent = (lightboxIndex + 1) + ' / ' + lightboxItems.length;
+    var multi = lightboxItems.length > 1;
+    var prev = box.querySelector('.rich-lightbox-prev');
+    var next = box.querySelector('.rich-lightbox-next');
+    if (prev) prev.style.display = multi ? '' : 'none';
+    if (next) next.style.display = multi ? '' : 'none';
+    if (counter) counter.style.display = multi ? '' : 'none';
+  }
+
   function richLightbox(url) {
     var box = document.getElementById('onlineRichLightbox');
     if (!box) {
       box = document.createElement('div');
       box.id = 'onlineRichLightbox';
       box.className = 'rich-lightbox hidden';
-      box.innerHTML = '<img alt="" /><button type="button" aria-label="\u5173\u95ed">\u00d7</button>';
-      box.addEventListener('click', function () { box.classList.add('hidden'); });
+      box.innerHTML = [
+        '<button type="button" class="rich-lightbox-back">\u8fd4\u56de</button>',
+        '<button type="button" class="rich-lightbox-prev" aria-label="\u4e0a\u4e00\u5f20">\u2039</button>',
+        '<img alt="" />',
+        '<button type="button" class="rich-lightbox-next" aria-label="\u4e0b\u4e00\u5f20">\u203a</button>',
+        '<span class="rich-lightbox-counter"></span>',
+      ].join('');
+      var close = function () { box.classList.add('hidden'); };
+      box.addEventListener('click', function (event) {
+        if (event.target === box) close();
+      });
+      box.querySelector('.rich-lightbox-back').addEventListener('click', function (event) {
+        event.stopPropagation();
+        close();
+      });
+      box.querySelector('.rich-lightbox-prev').addEventListener('click', function (event) {
+        event.stopPropagation();
+        richLightboxShow(lightboxIndex - 1);
+      });
+      box.querySelector('.rich-lightbox-next').addEventListener('click', function (event) {
+        event.stopPropagation();
+        richLightboxShow(lightboxIndex + 1);
+      });
+      document.addEventListener('keydown', function (event) {
+        if (box.classList.contains('hidden')) return;
+        if (event.key === 'Escape') close();
+        else if (event.key === 'ArrowLeft') richLightboxShow(lightboxIndex - 1);
+        else if (event.key === 'ArrowRight') richLightboxShow(lightboxIndex + 1);
+      });
       document.body.appendChild(box);
     }
-    var img = box.querySelector('img');
-    if (img) img.src = url;
+    lightboxItems = lightboxCollect(url);
+    richLightboxShow(Math.max(0, lightboxItems.indexOf(url)));
     box.classList.remove('hidden');
   }
 
