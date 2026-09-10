@@ -6019,7 +6019,24 @@ def douyin_inbox_reply_mode_label(mode: Optional[str]) -> str:
     }.get(normalized, "固定回复")
 
 
-def append_douyin_contact_lines(message: str, contact_value: str) -> str:
+def split_douyin_contact_parts(contact_value: str) -> List[str]:
+    """把联系方式拆成两条短消息。
+
+    平台对"整串微信号/手机号"的识别比较敏感，拆成两条发更安全。
+    优先在 - _ . 这类分隔符处切（分隔符不带进消息），否则从中间切。
+    """
+    value = normalize_douyin_text(contact_value)
+    if not value or len(value) < 4:
+        return [value] if value else []
+    for separator in ("-", "_", ".", "+"):
+        index = value.find(separator)
+        if index >= 2 and len(value) - index - 1 >= 2:
+            return [value[:index], value[index + 1 :]]
+    middle = len(value) // 2
+    return [value[:middle], value[middle:]]
+
+
+def append_douyin_contact_lines(message: str, contact_value: str, *, split_contact: bool = False) -> str:
     base_text = str(message or "").strip()
     cleaned_contact = normalize_douyin_text(contact_value)
     if not cleaned_contact:
@@ -6029,7 +6046,7 @@ def append_douyin_contact_lines(message: str, contact_value: str) -> str:
     parts = [part.strip() for part in base_text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if part.strip()]
     if not any("绿泡泡" in part or "微信" in part for part in parts):
         parts.append("麻烦您绿泡泡")
-    parts.append(cleaned_contact)
+    parts.extend(split_douyin_contact_parts(cleaned_contact) if split_contact else [cleaned_contact])
     return "\n".join(parts)
 
 
@@ -6575,7 +6592,7 @@ def generate_douyin_stranger_reply_message(
     if not ai_lines:
         ai_lines = ["有的", "我发您看看"]
 
-    return "\n".join(ai_lines + ["麻烦您绿泡泡", cleaned_contact])
+    return append_douyin_contact_lines("\n".join(ai_lines), cleaned_contact, split_contact=True)
 
 
 def generate_douyin_inbox_reply_message(
@@ -6598,7 +6615,7 @@ def generate_douyin_inbox_reply_message(
         final_text = str(fixed_text or "").strip()
         if not final_text:
             raise RuntimeError("固定回复文案为空，无法执行。")
-        return append_douyin_contact_lines(final_text, contact_value)
+        return append_douyin_contact_lines(final_text, contact_value, split_contact=True)
 
     cleaned_contact = normalize_douyin_text(contact_value)
     if not cleaned_contact:
@@ -6653,7 +6670,7 @@ def generate_douyin_inbox_reply_message(
     if not ai_lines:
         ai_lines = ["收到", "我发您看看"]
 
-    return append_douyin_contact_lines("\n".join(ai_lines), cleaned_contact)
+    return append_douyin_contact_lines("\n".join(ai_lines), cleaned_contact, split_contact=True)
 
 
 def generate_douyin_self_comment_reply_message(
@@ -13615,11 +13632,8 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
                 reply_message
                 if reply_mode == "fixed"
                 else "\n".join(
-                    [
-                        "AI 引导加绿泡泡",
-                        "麻烦您绿泡泡",
-                        normalize_douyin_text(contact_value),
-                    ]
+                    ["AI 引导加绿泡泡", "麻烦您绿泡泡"]
+                    + split_douyin_contact_parts(normalize_douyin_text(contact_value))
                 )
             )
             update_douyin_stranger_message_rows(
