@@ -1,7 +1,7 @@
 {
-  "version": "2.0.39",
-  "build": 318,
-  "applied_at": "2026-09-10T23:25:27+08:00",
-  "note": "ai lead keywords + dm contact split + rich chat media + approval lock",
-  "bundle_sha256": "8556dd9e5d0ab7fe0a33c42751cac7af5ae438ef6804ea54f86966461cc8cc40"
+  "version": "2.0.40",
+  "build": 319,
+  "applied_at": "2026-09-11T12:34:27+08:00",
+  "note": "device persona keep + content records asset localize + ai lead keywords",
+  "bundle_sha256": "e1066bb35ff6ae28d92376ce217d77b9f2833c3922283c861262d42093943541"
 }
