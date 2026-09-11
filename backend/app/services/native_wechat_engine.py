@@ -8571,17 +8571,10 @@ def _resolve_scan_contact_wx_no(
             return ""
 
     for attempt in range(1, max(1, int(attempts)) + 1):
-        if not open_name or not anchored(open_name):
+        if not anchored(open_name):
             # 当前打开的不是候选人：把这一行重新点一次（扫描本来就在点的行，
             # 只改变选中项，不搜索、不改变列表顺序），然后轮询等它生效。
             if callable(select_row):
-                # 微信窗口不在前台时点会话行可能完全不生效（本机复现过：
-                # 点完 chat_name 还是 current，随后"聊天信息"按钮就找不到，
-                # 于是表现成"这个人的微信号读不到"）。点之前先把窗口拉到前台。
-                try:
-                    _focus_local_wechat(_local_wechat_hwnd(account_id))
-                except Exception:
-                    pass
                 try:
                     select_row()
                 except Exception:
@@ -8595,13 +8588,6 @@ def _resolve_scan_contact_wx_no(
         if open_name and not anchored(open_name):
             reason = "chat_not_anchored"
             continue
-        if not open_name:
-            # 名字仍然读不到：会话可能刚被切走，读资料前再确认一次前台窗口，
-            # 避免在"没真正打开这个会话"的状态下去点聊天信息。
-            try:
-                _focus_local_wechat(_local_wechat_hwnd(account_id))
-            except Exception:
-                pass
         identity = _read_current_private_chat_wx_no(
             account_id,
             expected_display_name=display_name,
@@ -10062,58 +10048,93 @@ def _uia_profile_mentions_name(root: Any, expected_display_name: str) -> bool:
     return False
 
 
+# 资料卡上的字段标签：用来把"标签行"和"取值行"分开，避免把上一个字段（尤其是
+# "昵称"）的取值当成微信号。
+_PROFILE_FIELD_LABELS = (
+    "微信号",
+    "微信號",
+    "昵称",
+    "昵稱",
+    "地区",
+    "地區",
+    "备注",
+    "備註",
+    "标签",
+    "標籤",
+    "电话",
+    "電話",
+    "朋友圈",
+    "视频号",
+    "視頻號",
+    "共同群聊",
+    "个性签名",
+    "個性簽名",
+    "来源",
+    "來源",
+    "发消息",
+    "语音聊天",
+    "视频聊天",
+    "更多",
+)
+
+
+def _profile_field_label(value: Any) -> str:
+    """Return the profile field name when this text is one of its labels."""
+    compact = _compact_for_contains(value).rstrip(":：")
+    for label in _PROFILE_FIELD_LABELS:
+        if compact == label or compact.startswith(f"{label}:") or compact.startswith(f"{label}："):
+            return label
+    return ""
+
+
 def _extract_contact_profile_wx_no(root: Any) -> str:
+    """Read the WeChat ID from a contact card: only the ``微信号`` value counts.
+
+    An earlier version also had a last-resort rule: the first profile text
+    without Chinese characters after the avatar area was returned as the ID.
+    The ``昵称`` value is exactly such a text, so an all-letter nickname
+    (``Awareness``, ``Jason``...) was returned instead of the real ID — long
+    nicknames were then used as if they were the WeChat ID, and short ones
+    failed the ID format check and surfaced as "the card has an ID but we
+    cannot read it".  Stay label-driven; never guess from unrelated text.
+    """
     entries: List[tuple[str, str]] = []
     for node in _uia_walk(root, max_depth=20, max_nodes=5000):
         text = _uia_control_text(node)
         if text:
             entries.append((text, _uia_control_class(node)))
-    texts = [text for text, _class_name in entries]
-    # The profile popup wraps long wx ids visually (and some WeChat builds
-    # expose the label and value as separate UIA nodes).  Do not depend on the
-    # value node's class or on a single-line ``微信号: value`` string.
-    for idx, text in enumerate(texts):
-        compact_text = _compact_for_contains(text)
-        wxid_match = re.search(r"\bwxid_[A-Za-z0-9_-]{6,}\b", compact_text)
-        if wxid_match:
-            return wxid_match.group(0)
-        if "微信号" in compact_text or "微信號" in compact_text:
-            joined = compact_text
-            for following in texts[idx + 1 : idx + 3]:
-                joined += _compact_for_contains(following)
-                wxid_match = re.search(r"\bwxid_[A-Za-z0-9_-]{6,}\b", joined)
-                if wxid_match:
-                    return wxid_match.group(0)
-    label_seen = False
-    profile_started = False
-    for idx, text in enumerate(texts):
-        class_name = entries[idx][1]
-        if class_name.endswith("ContactHeadView"):
-            profile_started = True
-            continue
-        compact = _compact_for_contains(text)
-        match = re.search(r"微信号[:：]\s*([^\s]+)", compact)
+    # An explicit ``wxid_...`` means the same thing everywhere on the card.
+    for text, _class_name in entries:
+        match = re.search(r"\bwxid_[A-Za-z0-9_-]{6,}\b", _compact_for_contains(text))
         if match:
-            return str(match.group(1) or "").strip()
-        if compact in {"微信号", "微信號"} or compact.startswith("微信号") or compact.startswith("微信號"):
-            label_seen = True
+            return match.group(0)
+    for idx, (text, _class_name) in enumerate(entries):
+        compact = _compact_for_contains(text)
+        # Label and value in one node: ``微信号：ID20010218``.
+        match = re.search(r"微信号\s*[:：]\s*(.+)$", compact)
+        if match:
+            value = re.sub(r"\s+", "", str(match.group(1) or "")).strip()
+            if (
+                value
+                and not _profile_field_label(value)
+                and not any("\u4e00" <= char <= "\u9fff" for char in value)
+            ):
+                return value
+        if _profile_field_label(text) != "微信号":
             continue
-        if label_seen:
-            candidate = str(text or "").strip()
-            if any(marker in candidate for marker in ("地区", "地區", "备注", "朋友圈", "视频号", "共同群聊")):
-                label_seen = False
-                continue
-            if candidate:
-                candidate_compact = _compact_for_contains(candidate)
-                match = re.search(r"\bwxid_[A-Za-z0-9_-]{6,}\b", candidate_compact)
-                if match:
-                    return match.group(0)
-                if class_name.endswith("ContactProfileTextView"):
-                    return candidate
-        if profile_started and class_name.endswith("ContactProfileTextView"):
-            candidate = str(text or "").strip()
-            if candidate and not any("\u4e00" <= char <= "\u9fff" for char in candidate):
-                return candidate
+        # Label and value in separate nodes: the next text node is the value.
+        if idx + 1 >= len(entries):
+            return ""
+        value = str(entries[idx + 1][0] or "").strip()
+        if not value or _profile_field_label(value):
+            # This card shows the label with no value (the next node is already
+            # another field label).  Return nothing rather than another field's
+            # value such as the region.
+            return ""
+        match = re.search(r"\bwxid_[A-Za-z0-9_-]{6,}\b", _compact_for_contains(value))
+        if match:
+            return match.group(0)
+        return value
     return ""
 
 
@@ -10125,7 +10146,10 @@ def _persist_contact_wx_no(account_id: str, target: str, wx_no: str, *, source: 
     account_id = str(account_id or "").strip()
     target = str(target or "").strip()
     wx_no = str(wx_no or "").strip()
-    if not account_id or not target or not wx_no:
+    # Never store a value that cannot be a WeChat ID: an older extractor could
+    # persist a nickname fragment (the very junk that later blocked the real id
+    # from being learned for that contact).
+    if not account_id or not target or not _looks_like_profile_wechat_id(wx_no):
         return {}
     with _connect() as conn:
         row = conn.execute(
@@ -10334,6 +10358,17 @@ def _resolve_local_contact_aliases(account_id: str, target: str) -> List[str]:
 def _looks_like_wechat_id(value: str) -> bool:
     text = str(value or "").strip()
     return bool(text and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{5,}", text))
+
+
+def _looks_like_profile_wechat_id(value: str) -> bool:
+    """A value we are willing to store as a contact's WeChat ID.
+
+    Slightly more permissive than ``_looks_like_wechat_id`` (phone-style IDs
+    exist on some accounts) but still rejects junk such as a stray nickname
+    fragment.
+    """
+    text = str(value or "").strip()
+    return bool(text and re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z_-]{5,}", text))
 
 
 def _resolve_local_contact_wx_no(account_id: str, target: str) -> str:
@@ -13086,43 +13121,6 @@ def _find_local_contact_search_result(
     return candidates[0][1]
 
 
-_PROFILE_POPUP_CLASS_HINTS = ("ProfileUniquePop", "ProfilePop", "ContactProfilePop", "ProfileCardPop")
-
-
-def _looks_like_contact_profile_card(root: Any) -> bool:
-    """Recognize a 昵称/微信号/地区 contact card without relying on its class.
-
-    Some WeChat builds render the card as ``mmui::ProfileUniquePop``, others use
-    a sibling window class.  A missed class name looks exactly like "this
-    contact has no readable WeChat ID" even though the card is on screen, so
-    fall back to the card's own content.
-    """
-    rect = _uia_rect_tuple(root)
-    if rect is None:
-        return False
-    width = abs(float(rect[2]) - float(rect[0]))
-    if width <= 0 or width > 900:
-        # The main window and the moments window are far wider than the card.
-        return False
-    has_wechat_id_label = False
-    has_profile_text = False
-    try:
-        for node in _uia_walk(root, max_depth=18, max_nodes=1800):
-            class_name = _uia_control_class(node)
-            if class_name.endswith("ContactHeadView") or class_name.endswith("ContactProfileTextView"):
-                has_profile_text = True
-            compact = _compact_for_contains(_uia_control_text(node))
-            if not compact:
-                continue
-            if compact.startswith("微信号") or compact.startswith("微信號") or "wxid_" in compact:
-                has_wechat_id_label = True
-            if has_wechat_id_label and has_profile_text:
-                return True
-    except Exception:
-        return False
-    return has_wechat_id_label and has_profile_text
-
-
 def _local_profile_popup_root(hwnd: int) -> Optional[Any]:
     """Find WeChat's detached contact profile popup by window handle."""
     try:
@@ -13131,34 +13129,24 @@ def _local_profile_popup_root(hwnd: int) -> Optional[Any]:
         import win32process  # type: ignore
 
         _thread_id, target_pid = win32process.GetWindowThreadProcessId(int(hwnd))
-        windows: List[int] = []
+        found: Optional[Any] = None
 
         def _enum(window: int, _extra: Any) -> None:
-            if not win32gui.IsWindowVisible(window):
+            nonlocal found
+            if found is not None or not win32gui.IsWindowVisible(window):
                 return
             try:
                 _tid, pid = win32process.GetWindowThreadProcessId(window)
-                if int(pid or 0) == int(target_pid or 0):
-                    windows.append(int(window))
+                if int(pid or 0) != int(target_pid or 0):
+                    return
+                root = auto.ControlFromHandle(int(window))
+                if _uia_control_class(root) == "mmui::ProfileUniquePop":
+                    found = root
             except Exception:
                 return
 
         win32gui.EnumWindows(_enum, None)
-        hinted: Optional[Any] = None
-        for window in windows:
-            try:
-                root = auto.ControlFromHandle(int(window))
-            except Exception:
-                continue
-            class_name = _uia_control_class(root)
-            if class_name == "mmui::ProfileUniquePop":
-                return root
-            if hinted is None and any(hint in class_name for hint in _PROFILE_POPUP_CLASS_HINTS):
-                hinted = root
-                continue
-            if hinted is None and _looks_like_contact_profile_card(root):
-                hinted = root
-        return hinted
+        return found
     except Exception:
         return None
 
@@ -13189,6 +13177,7 @@ def _read_current_private_chat_wx_no(
         result["reason"] = "wechat_window_missing"
         return result
     popup_opened = False
+    profile_root: Any = None
     try:
         # A previous identity read can leave its detached popup open when ESC
         # was delayed or swallowed.  Close it before inspecting the newly
@@ -13314,6 +13303,8 @@ def _read_current_private_chat_wx_no(
                     return result
             time.sleep(0.2)
         result["reason"] = "profile_wx_no_missing"
+        # 带上资料卡上的文本，下次"读不到"能直接看出卡片长什么样。
+        result["profile_texts"] = _profile_card_texts(profile_root)
         return result
     except Exception as exc:
         result["reason"] = "profile_read_failed"
@@ -13325,6 +13316,22 @@ def _read_current_private_chat_wx_no(
                 _send_hotkey("esc", pause=0.2)
             except Exception:
                 pass
+
+
+def _profile_card_texts(root: Any, *, limit: int = 16) -> List[str]:
+    if root is None:
+        return []
+    texts: List[str] = []
+    try:
+        for node in _uia_walk(root, max_depth=20, max_nodes=900):
+            text = _uia_control_text(node)
+            if text:
+                texts.append(text[:60])
+            if len(texts) >= limit:
+                break
+    except Exception:
+        return texts
+    return texts
 
 
 def _open_local_contact_profile_via_search(
