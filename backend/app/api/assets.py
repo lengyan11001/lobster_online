@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
@@ -1189,6 +1189,31 @@ def _best_effort_open_folder_for_file(path: Path) -> bool:
     except Exception:
         logger.warning("[assets] open folder failed target=%s", target, exc_info=True)
     return False
+
+
+_ASSET_REMOTE_DOWNLOAD_LOCKS: Dict[str, threading.Lock] = {}
+_ASSET_REMOTE_DOWNLOAD_LOCKS_GUARD = threading.Lock()
+
+
+def _asset_remote_download_lock(asset_id: str) -> threading.Lock:
+    key = str(asset_id or "").strip() or "unknown"
+    with _ASSET_REMOTE_DOWNLOAD_LOCKS_GUARD:
+        lock = _ASSET_REMOTE_DOWNLOAD_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _ASSET_REMOTE_DOWNLOAD_LOCKS[key] = lock
+        return lock
+
+
+def _asset_has_remote_source(asset: Asset) -> bool:
+    """本地没有文件时，这个素材是否还能从云端补下来。"""
+    if asset is None:
+        return False
+    source_url = str(asset.source_url or "").strip()
+    if source_url.startswith(("http://", "https://")) and not _is_internal_asset_http_url(source_url):
+        return True
+    meta = asset.meta if isinstance(asset.meta, dict) else {}
+    return bool(str(meta.get("remote_asset_id") or "").strip())
 
 
 def _download_remote_asset_to_path(asset: Asset, target: Path, request: Request) -> int:
@@ -3292,12 +3317,28 @@ def get_asset_content(
     a = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
     if not a:
         raise HTTPException(404, detail="素材不存在")
-    path = ASSETS_DIR / a.filename
+    filename = str(a.filename or "").strip()
+    if not filename:
+        source_hint = str(a.source_url or "").strip()
+        filename = _remote_asset_filename(
+            "",
+            source_hint,
+            str((a.meta or {}).get("remote_asset_id") or "").strip() or f"{a.asset_id}.bin",
+        )
+        a.filename = filename
+        db.add(a)
+        db.commit()
+    path = ASSETS_DIR / filename
     if not path.exists():
-        source_url = str(a.source_url or "").strip()
-        if source_url.startswith(("http://", "https://")) and not _is_internal_asset_http_url(source_url):
-            return RedirectResponse(url=source_url)
-        raise HTTPException(404, detail="文件不存在")
+        # 云端同步过来的素材（例如"内容记录"里从服务器补下来的）本地没有文件。
+        # 这里必须本机下载后直接返回：以前是 307 跳到外链，浏览器跨域/签名校验
+        # 失败后会反复重试，页面看起来一直在刷新。
+        if _asset_has_remote_source(a):
+            with _asset_remote_download_lock(a.asset_id):
+                if not path.exists():
+                    _download_remote_asset_to_path(a, path, request)
+        if not path.exists():
+            raise HTTPException(404, detail="文件不存在")
     mt_map = {
         "image": "image/jpeg",
         "video": "video/mp4",

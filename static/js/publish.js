@@ -3464,10 +3464,16 @@ function _wireAssetListThumbs(container) {
         if (isVideo) _bindVideoListThumbSeek(el);
       })
       .catch(function() {
-        if (fb && !_thumbDirectLoadLikelyBroken(fb)) {
+        // 兜底直链就是同一个 /content 地址时不要再打一次：以前"取文件失败→退回同一
+        // 地址→再失败"会让内容记录页看起来一直在刷新。
+        var sameContentUrl = !!fb && String(fb).indexOf('/api/assets/' + encodeURIComponent(aid) + '/content') >= 0;
+        if (fb && !sameContentUrl && !_thumbDirectLoadLikelyBroken(fb)) {
           el.src = fb;
           if (isVideo) _bindVideoListThumbSeek(el);
+          return;
         }
+        var failedWrap = el.closest ? el.closest('.asset-preview-wrap') : null;
+        if (failedWrap) failedWrap.setAttribute('data-thumb-failed', '1');
       });
   }
 
