@@ -1,7 +1,7 @@
 {
-  "version": "2.0.42",
-  "build": 321,
-  "applied_at": "2026-09-11T18:04:53+08:00",
-  "note": "takeover: read wx id only from 微信号 field + nickname fallback + contacts-first",
-  "bundle_sha256": "9fca818d2f7d60a4148052fff23c28bb94d7d00a577d144ca74f1fcae9c190ea"
+  "version": "2.0.43",
+  "build": 322,
+  "applied_at": "2026-09-11T18:24:26+08:00",
+  "note": "takeover: zh language fix + clear local contacts button + profile card wx id fix",
+  "bundle_sha256": "64ac57304e5479a25136e19736125b6ee45a96cf6ddb1eeffbdfef8dfb7b9517"
 }
