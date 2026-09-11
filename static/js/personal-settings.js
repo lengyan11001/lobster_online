@@ -840,6 +840,17 @@
     return req;
   }
 
+  // 保存默认配置时要把设备行上已有的资料调查留住：切换/保存模板只该改模板相关
+  // 字段，不能把设备自己填的人设抹成空壳（否则启动时会报"资料调查全缺失"）。
+  function pickPersonalProfileRequirements(requirements) {
+    var req = requirements && typeof requirements === 'object' ? requirements : {};
+    var out = {};
+    PERSONAL_PROFILE_REQUIREMENT_KEYS.forEach(function(key) {
+      if (Object.prototype.hasOwnProperty.call(req, key)) out[key] = req[key];
+    });
+    return out;
+  }
+
   function fillProfileFields(item) {
     var req = (item && item.requirements) || {};
     var profile = req.basic_profile && typeof req.basic_profile === 'object' ? req.basic_profile : (req.profile || {});
@@ -2680,7 +2691,8 @@
     var baseRequirements = (!hasLiveTemplate && !options.includeProfile)
       ? stripPersonalProfileRequirements((existing.requirements && typeof existing.requirements === 'object') ? existing.requirements : {})
       : {};
-    var incomingRequirements = Object.assign({}, baseRequirements, stripPersonalProfileRequirements(options.requirements || {}));
+    var keptProfile = options.includeProfile ? {} : pickPersonalProfileRequirements(existing.requirements || {});
+    var incomingRequirements = Object.assign({}, keptProfile, baseRequirements, stripPersonalProfileRequirements(options.requirements || {}));
     if (options.includeProfile) {
       incomingRequirements = Object.assign({}, hasLiveTemplate ? {} : incomingRequirements, profileRequirements());
     }
