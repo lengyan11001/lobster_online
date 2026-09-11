@@ -4935,6 +4935,10 @@ async def run_auto_reply_once(
                 elif scanned_wechat_id_source == "missing":
                     scanned_wechat_id = ""
                 captured_wechat_id = ""
+                # Read/verified WeChat ID unavailable -> this candidate keeps a
+                # nickname identity and is reopened by name (the same route as
+                # "wx id search missed, fall back to the display name").
+                nickname_identity = False
                 collection_target = scanned_wechat_id or peer_id
                 collection_target_source = (
                     "wxauto_session" if scanned_wechat_id else "wxauto_page_capture_required"
@@ -4947,12 +4951,19 @@ async def run_auto_reply_once(
                     # time after the list has moved.
                     sync_result = dict(scan_capture.get("sync_result") or {})
                     captured_wechat_id = str(scan_capture.get("wechat_id") or "").strip()
-                    collection_target_source = "wxauto_page_immediate_capture"
+                    nickname_identity = str(scan_capture.get("identity_mode") or "") == "nickname"
+                    collection_target = (
+                        str(scan_capture.get("identity_target") or "").strip() if nickname_identity else collection_target
+                    ) or collection_target
+                    collection_target_source = (
+                        "wxauto_page_nickname_capture" if nickname_identity else "wxauto_page_immediate_capture"
+                    )
                     log_event(
                         "session_open_reused_page_capture",
                         peer_id=peer_id,
                         display_name=display_name,
                         wechat_id=captured_wechat_id,
+                        identity_mode="nickname" if nickname_identity else "wechat_id",
                     )
                 elif isinstance(scan_capture, dict):
                     # The scanner already attempted this row while it was on
@@ -5224,7 +5235,12 @@ async def run_auto_reply_once(
                     for value in (reported_wechat_id, scanned_wechat_id, captured_wechat_id, actual_wechat_id)
                     if _looks_like_wechat_id(value)
                 }
-                if not _looks_like_wechat_id(captured_wechat_id) and len(known_wechat_ids) > 1:
+                if nickname_identity:
+                    # 读不到号：这条按昵称搜发。身份就用会话里显示的名字；wxauto 顺手
+                    # 报回来的 id 不采信（本轮正是因为它不可靠才读到不号），发送前会
+                    # 用这个名字核对当前会话，搜错人不会发出去。
+                    resolved_wechat_id = display_name
+                elif not _looks_like_wechat_id(captured_wechat_id) and len(known_wechat_ids) > 1:
                     result["skipped"] += 1
                     collection_result.update(
                         {
@@ -5332,7 +5348,11 @@ async def run_auto_reply_once(
                     _looks_like_wechat_id(captured_wechat_id)
                     and captured_wechat_id.casefold() == resolved_wechat_id.casefold()
                 )
-                if actual_peer.casefold() != resolved_wechat_id.casefold() and not captured_identity_matches:
+                if (
+                    not nickname_identity
+                    and actual_peer.casefold() != resolved_wechat_id.casefold()
+                    and not captured_identity_matches
+                ):
                     # Message rows collected under a nickname cannot be safely
                     # compared with the later ID-based search. Defer this
                     # contact until its ID-backed conversation is synchronized.
@@ -5358,11 +5378,14 @@ async def run_auto_reply_once(
                     continue
                 session["wechat_id"] = resolved_wechat_id
                 session["identity_confirmed_current"] = bool(
-                    scanned_wechat_id or _looks_like_wechat_id(captured_wechat_id)
+                    nickname_identity or scanned_wechat_id or _looks_like_wechat_id(captured_wechat_id)
                 )
                 collection_result["wechat_id"] = resolved_wechat_id
+                collection_result["identity_mode"] = "nickname" if nickname_identity else "wechat_id"
                 collection_result["wechat_id_source"] = (
-                    scanned_wechat_id_source
+                    "wxauto_page_nickname_capture"
+                    if nickname_identity
+                    else scanned_wechat_id_source
                     if scanned_wechat_id
                     else "wxauto_page_immediate_capture"
                     if captured_wechat_id
@@ -5371,10 +5394,12 @@ async def run_auto_reply_once(
                 _persist_contact(
                     account_id,
                     {
-                        "contact_key": resolved_wechat_id,
+                        # 昵称身份不进通讯录的 wx_no：名字不是号，写进去会把之后的
+                        # "按名字查号"污染成"这个名字就是微信号"。
+                        "contact_key": display_name if nickname_identity else resolved_wechat_id,
                         "display_name": display_name,
-                        "wxNo": resolved_wechat_id,
-                        "source": "wxauto4_auto_reply_session",
+                        "wxNo": "" if nickname_identity else resolved_wechat_id,
+                        "source": "wxauto4_auto_reply_nickname" if nickname_identity else "wxauto4_auto_reply_session",
                     },
                 )
                 message_peer = actual_peer
@@ -5453,10 +5478,12 @@ async def run_auto_reply_once(
                     recent,
                 )
                 work_id = _auto_reply_work_id(account_id, resolved_wechat_id, inbound)
+                identity_mode = "nickname" if nickname_identity else "wechat_id"
                 request_item = {
                     "work_id": work_id,
                     "peer_name": display_name,
-                    "wechat_id": resolved_wechat_id,
+                    # 昵称身份时不要把它当成微信号交给模型；peer_name 已经带名字。
+                    "wechat_id": "" if nickname_identity else resolved_wechat_id,
                     "latest_message": str(inbound.get("content") or ""),
                     "recent_context": recent,
                     "contact_intelligence": contact_intelligence,
@@ -5469,6 +5496,8 @@ async def run_auto_reply_once(
                     "session": dict(session),
                     "session_peer_id": peer_id,
                     "wechat_id": resolved_wechat_id,
+                    "identity_mode": identity_mode,
+                    "identity_target": display_name if nickname_identity else resolved_wechat_id,
                     "actual_peer": resolved_wechat_id,
                     "identity_confirmed_current": bool(session.get("identity_confirmed_current")),
                     "display_name": display_name,
@@ -5487,6 +5516,7 @@ async def run_auto_reply_once(
                     actual_peer=actual_peer,
                     display_name=display_name,
                     wechat_id=resolved_wechat_id,
+                    identity_mode=identity_mode,
                     inbound_message_id=_auto_reply_inbound_id(resolved_wechat_id, inbound),
                     customer_language=customer_language,
                     customer_language_label=_auto_reply_language_label(customer_language),
@@ -5622,7 +5652,10 @@ async def run_auto_reply_once(
                     reason="ai_batch_failed",
                 )
                 continue
-            if not _looks_like_wechat_id(wechat_id):
+            # 读不到号的人用昵称身份继续走：执行阶段按名字搜索打开会话，发送前再用
+            # 名字核对当前会话，比对不上就整条不发。其它情况仍然必须有微信号。
+            nickname_identity = str(prepared.get("identity_mode") or "") == "nickname"
+            if not nickname_identity and not _looks_like_wechat_id(wechat_id):
                 result["skipped"] += 1
                 item_result = {
                     "peer_id": peer_id,
@@ -5649,6 +5682,7 @@ async def run_auto_reply_once(
                 peer_id=peer_id,
                 wechat_id=wechat_id,
                 display_name=display_name,
+                identity_mode="nickname" if nickname_identity else "wechat_id",
                 expected_peer_id=wechat_id,
                 expected_inbound_message_id=_auto_reply_inbound_id(
                     wechat_id,
@@ -5764,6 +5798,7 @@ async def run_auto_reply_once(
                         "run_id": run_id,
                         "stage": "execute",
                         "expected_display_name": display_name,
+                        "nickname_identity": nickname_identity,
                     },
                 )
                 _collect_local_driver_recovery(result, sync_result)
@@ -5779,7 +5814,48 @@ async def run_auto_reply_once(
                     or chat_info.get("nickname")
                     or ""
                 ).strip()
-                if observed_wechat_id and observed_wechat_id.casefold() != wechat_id.casefold():
+                opened_name_mismatch = bool(sync_result.get("session_target_mismatch")) or (
+                    nickname_identity
+                    and _normalize_contact_lookup_key(selected_display_name)
+                    and _normalize_contact_lookup_key(display_name)
+                    and _normalize_contact_lookup_key(selected_display_name)
+                    != _normalize_contact_lookup_key(display_name)
+                )
+                if opened_name_mismatch:
+                    # 打开的不是这个名字的会话（搜索命中别人的同名/近似会话）：
+                    # 绝不把这段对话送去判断，更不会发。
+                    result["skipped"] += 1
+                    item_result.update(
+                        {
+                            "status": "session_target_mismatch",
+                            "reply_suppressed": True,
+                            "skip_reason": "opened_chat_name_mismatch",
+                            "actual_display_name": str(
+                                sync_result.get("actual_display_name") or selected_display_name or ""
+                            ),
+                            "expected_display_name": display_name,
+                        }
+                    )
+                    result["items"].append(item_result)
+                    skip_intelligence_observation = True
+                    log_event(
+                        "execution_skipped",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        display_name=display_name,
+                        identity_mode="nickname" if nickname_identity else "wechat_id",
+                        status="session_target_mismatch",
+                        reason="opened_chat_name_mismatch",
+                        actual_display_name=str(
+                            sync_result.get("actual_display_name") or selected_display_name or ""
+                        ),
+                    )
+                    continue
+                if (
+                    not nickname_identity
+                    and observed_wechat_id
+                    and observed_wechat_id.casefold() != wechat_id.casefold()
+                ):
                     result["skipped"] += 1
                     item_result.update(
                         {
@@ -6398,6 +6474,8 @@ async def run_auto_reply_once(
                         "driver": "native_wechat_auto_reply",
                         "trigger": trigger,
                         "category": llm_reply.get("category"),
+                        "identity_mode": "nickname" if nickname_identity else "wechat_id",
+                        "display_name": display_name,
                     },
                     # The execute-stage sync has already searched the
                     # immutable WeChat ID and verified the selected chat.
@@ -8493,10 +8571,17 @@ def _resolve_scan_contact_wx_no(
             return ""
 
     for attempt in range(1, max(1, int(attempts)) + 1):
-        if not anchored(open_name):
+        if not open_name or not anchored(open_name):
             # 当前打开的不是候选人：把这一行重新点一次（扫描本来就在点的行，
             # 只改变选中项，不搜索、不改变列表顺序），然后轮询等它生效。
             if callable(select_row):
+                # 微信窗口不在前台时点会话行可能完全不生效（本机复现过：
+                # 点完 chat_name 还是 current，随后"聊天信息"按钮就找不到，
+                # 于是表现成"这个人的微信号读不到"）。点之前先把窗口拉到前台。
+                try:
+                    _focus_local_wechat(_local_wechat_hwnd(account_id))
+                except Exception:
+                    pass
                 try:
                     select_row()
                 except Exception:
@@ -8510,6 +8595,13 @@ def _resolve_scan_contact_wx_no(
         if open_name and not anchored(open_name):
             reason = "chat_not_anchored"
             continue
+        if not open_name:
+            # 名字仍然读不到：会话可能刚被切走，读资料前再确认一次前台窗口，
+            # 避免在"没真正打开这个会话"的状态下去点聊天信息。
+            try:
+                _focus_local_wechat(_local_wechat_hwnd(account_id))
+            except Exception:
+                pass
         identity = _read_current_private_chat_wx_no(
             account_id,
             expected_display_name=display_name,
@@ -8543,7 +8635,17 @@ def _resolve_scan_contact_wx_no(
         )
         suffix = "" if attempt == 1 else f"+retry{attempt}"
         return wechat_id, f"profile_popup{suffix}"
-    return "", reason or "identity_unresolved"
+    # 资料就是读不到号（有些微信版本就是不给，再多读也没用）：不再"放弃这个人"，
+    # 改成昵称身份，交给后面"微信号搜不到就用昵称搜"的那条发送逻辑。
+    nickname_reason = reason or "identity_unresolved"
+    _write_auto_reply_diagnostic(
+        "scan_identity_nickname_fallback",
+        account_id=account_id,
+        target_display_name=display_name,
+        reason=nickname_reason,
+        current_chat_name=open_name,
+    )
+    return display_name, f"nickname_fallback:{nickname_reason}"
 
 
 def _capture_auto_reply_scan_page(
@@ -8719,6 +8821,8 @@ def _capture_auto_reply_scan_page(
                 current_chat_name=str(chat_info.get("chat_name") or "").strip(),
                 select_row=select_row,
             )
+            # 读不到号的人不再丢：identity_mode=nickname 表示"按昵称搜着发"。
+            nickname_identity = str(identity_reason or "").startswith("nickname_fallback")
             _write_auto_reply_diagnostic(
                 "scan_session_identity_capture",
                 account_id=account_id,
@@ -8726,11 +8830,12 @@ def _capture_auto_reply_scan_page(
                 target_peer_id=peer_id,
                 target_display_name=display_name,
                 actual_peer=actual_peer,
-                success=bool(_looks_like_wechat_id(wechat_id)),
-                wechat_id=wechat_id,
+                success=bool(_looks_like_wechat_id(wechat_id)) and not nickname_identity,
+                wechat_id="" if nickname_identity else wechat_id,
+                identity_mode="nickname" if nickname_identity else "wechat_id",
                  reason=identity_reason,
             )
-            if not _looks_like_wechat_id(wechat_id):
+            if not nickname_identity and not _looks_like_wechat_id(wechat_id):
                 capture_skip(
                     "identity_unresolved",
                     chat_type=chat_type,
@@ -8743,7 +8848,10 @@ def _capture_auto_reply_scan_page(
                 "sync_result": sync_result,
                 "inbound": dict(fresh),
                 "actual_peer": actual_peer,
-                "wechat_id": wechat_id,
+                "wechat_id": "" if nickname_identity else wechat_id,
+                "identity_mode": "nickname" if nickname_identity else "wechat_id",
+                "identity_target": display_name if nickname_identity else wechat_id,
+                "identity_reason": identity_reason,
                 "display_name": display_name,
                 "chat_type": chat_type,
                 "source": "wxauto_page_immediate_capture",
@@ -10129,11 +10237,15 @@ def _link_local_contact_wx_no(
         result["matched_name"] = str(id_rows[0]["display_name"] or id_rows[0]["contact_key"] or "").strip()
         return result
     if name_rows:
+        # Only a value that really looks like a WeChat ID can be a conflicting
+        # identity.  Older builds stored junk here (for example a stray
+        # nickname fragment) and that junk must not block re-learning the
+        # correct ID from the contact's own profile card.
         conflict = next(
             (
                 row
                 for row in name_rows
-                if str(row["wx_no"] or "").strip()
+                if _looks_like_wechat_id(str(row["wx_no"] or "").strip())
                 and str(row["wx_no"]).strip().casefold() != wx_no.casefold()
             ),
             None,
@@ -10956,11 +11068,14 @@ def _sync_local_messages_once(
     # silently keep the previous conversation when its search misses, so use
     # the contact-search/profile route that verifies the ID before reading or
     # sending.  Other callers retain the established wxauto/UIA selection.
+    # 读不到号但按昵称身份执行时，也走"搜索联系人再核对"这条路：先按显示名搜，
+    # 搜到后同样会用名字核对当前会话，选错人会直接判定为会话不一致。
+    nickname_identity = bool(diagnostic_context.get("nickname_identity"))
     use_verified_contact_search = bool(
         target
         and not current_selected
-        and _looks_like_wechat_id(target)
         and str(diagnostic_context.get("stage") or "").strip().lower() == "execute"
+        and (nickname_identity or _looks_like_wechat_id(target))
     )
     click_mode = (
         "verified_contact_search"
@@ -10994,7 +11109,9 @@ def _sync_local_messages_once(
                     open_moments=False,
                     fallback_display_name=str(
                         diagnostic_context.get("expected_display_name") or ""
-                    ),
+                    )
+                    or (target if nickname_identity else ""),
+                    name_only=nickname_identity,
                 )
                 _write_auto_reply_diagnostic(
                     "chat_search_verified",
@@ -11030,7 +11147,7 @@ def _sync_local_messages_once(
     if (
         expected_name
         and target
-        and not _looks_like_wechat_id(target)
+        and (nickname_identity or not _looks_like_wechat_id(target))
         and _normalize_contact_lookup_key(expected_name)
         and _normalize_contact_lookup_key(actual_name)
         and _normalize_contact_lookup_key(expected_name)
@@ -12969,6 +13086,43 @@ def _find_local_contact_search_result(
     return candidates[0][1]
 
 
+_PROFILE_POPUP_CLASS_HINTS = ("ProfileUniquePop", "ProfilePop", "ContactProfilePop", "ProfileCardPop")
+
+
+def _looks_like_contact_profile_card(root: Any) -> bool:
+    """Recognize a 昵称/微信号/地区 contact card without relying on its class.
+
+    Some WeChat builds render the card as ``mmui::ProfileUniquePop``, others use
+    a sibling window class.  A missed class name looks exactly like "this
+    contact has no readable WeChat ID" even though the card is on screen, so
+    fall back to the card's own content.
+    """
+    rect = _uia_rect_tuple(root)
+    if rect is None:
+        return False
+    width = abs(float(rect[2]) - float(rect[0]))
+    if width <= 0 or width > 900:
+        # The main window and the moments window are far wider than the card.
+        return False
+    has_wechat_id_label = False
+    has_profile_text = False
+    try:
+        for node in _uia_walk(root, max_depth=18, max_nodes=1800):
+            class_name = _uia_control_class(node)
+            if class_name.endswith("ContactHeadView") or class_name.endswith("ContactProfileTextView"):
+                has_profile_text = True
+            compact = _compact_for_contains(_uia_control_text(node))
+            if not compact:
+                continue
+            if compact.startswith("微信号") or compact.startswith("微信號") or "wxid_" in compact:
+                has_wechat_id_label = True
+            if has_wechat_id_label and has_profile_text:
+                return True
+    except Exception:
+        return False
+    return has_wechat_id_label and has_profile_text
+
+
 def _local_profile_popup_root(hwnd: int) -> Optional[Any]:
     """Find WeChat's detached contact profile popup by window handle."""
     try:
@@ -12977,24 +13131,34 @@ def _local_profile_popup_root(hwnd: int) -> Optional[Any]:
         import win32process  # type: ignore
 
         _thread_id, target_pid = win32process.GetWindowThreadProcessId(int(hwnd))
-        found: Optional[Any] = None
+        windows: List[int] = []
 
         def _enum(window: int, _extra: Any) -> None:
-            nonlocal found
-            if found is not None or not win32gui.IsWindowVisible(window):
+            if not win32gui.IsWindowVisible(window):
                 return
             try:
                 _tid, pid = win32process.GetWindowThreadProcessId(window)
-                if int(pid or 0) != int(target_pid or 0):
-                    return
-                root = auto.ControlFromHandle(int(window))
-                if _uia_control_class(root) == "mmui::ProfileUniquePop":
-                    found = root
+                if int(pid or 0) == int(target_pid or 0):
+                    windows.append(int(window))
             except Exception:
                 return
 
         win32gui.EnumWindows(_enum, None)
-        return found
+        hinted: Optional[Any] = None
+        for window in windows:
+            try:
+                root = auto.ControlFromHandle(int(window))
+            except Exception:
+                continue
+            class_name = _uia_control_class(root)
+            if class_name == "mmui::ProfileUniquePop":
+                return root
+            if hinted is None and any(hint in class_name for hint in _PROFILE_POPUP_CLASS_HINTS):
+                hinted = root
+                continue
+            if hinted is None and _looks_like_contact_profile_card(root):
+                hinted = root
+        return hinted
     except Exception:
         return None
 
@@ -13171,6 +13335,7 @@ def _open_local_contact_profile_via_search(
     *,
     open_moments: bool = True,
     fallback_display_name: str = "",
+    name_only: bool = False,
 ) -> str:
     """Open a local contact, with a scan-bound name fallback for wxid misses."""
     original_target = str(target or "").strip()
@@ -13178,12 +13343,19 @@ def _open_local_contact_profile_via_search(
     # that exact value.  Resolving it through the local contact table first
     # could turn a current identity back into an old nickname mapping.
     expected_wx_no = (
-        original_target
+        ""
+        if name_only
+        else original_target
         if _looks_like_wechat_id(original_target)
         else _resolve_local_contact_wx_no(account_id, original_target)
     )
+    # 实在读不到号、本地通讯录也没有：聊天/发送路径可以直接按显示名搜这个人，
+    # 搜到的会话再用名字核对；朋友圈要在资料页核对号，所以仍然必须要有号。
+    name_only_target = ""
     if not expected_wx_no:
-        raise RuntimeError("contact WeChat id is required for Moments operations")
+        if open_moments or not original_target:
+            raise RuntimeError("contact WeChat id is required for Moments operations")
+        name_only_target = original_target
 
     _ensure_local_chat_tab(account_id)
     _focus_local_wechat(hwnd)
@@ -13232,7 +13404,7 @@ def _open_local_contact_profile_via_search(
     # ValuePattern is fast but can bypass WeChat's local-search input handler.
     # Retry once with a fresh field wrapper and a different input path before
     # declaring the contact missing. Never select a network-search row.
-    for attempt in range(2):
+    for attempt in range(0 if name_only_target else 2):
         if attempt:
             search = _find_local_top_search_field(_uia_main_root(hwnd)) or search
             time.sleep(0.2)
@@ -13285,7 +13457,7 @@ def _open_local_contact_profile_via_search(
                 "rows": last_search_rows[:12],
             }
         )
-    fallback_name = str(fallback_display_name or "").strip()
+    fallback_name = str(fallback_display_name or "").strip() or name_only_target
     used_display_name_fallback = False
     if result_node is None and fallback_name and not open_moments:
         fallback_attempts: List[Dict[str, Any]] = []
@@ -13367,7 +13539,9 @@ def _open_local_contact_profile_via_search(
             hwnd=int(hwnd or 0),
             **debug,
         )
-        raise RuntimeError(f"contact search result not found for WeChat id: {expected_wx_no}")
+        raise RuntimeError(
+            f"contact search result not found for: {expected_wx_no or name_only_target or original_target}"
+        )
     selected_text = _local_search_node_text(result_node)[:240]
     selected_rect = _uia_rect_tuple(result_node)
     _uia_click(result_node)
@@ -13400,9 +13574,10 @@ def _open_local_contact_profile_via_search(
                 "ok": True,
                 "target": original_target,
                 "wx_no": expected_wx_no,
+                "lookup_mode": "display_name" if name_only_target else "wechat_id",
             }
         )
-        return expected_wx_no
+        return expected_wx_no or name_only_target
 
     root = _uia_main_root(hwnd)
     info_button = next(
@@ -16306,6 +16481,7 @@ def _verify_local_send_chat(
     *,
     strict_private: bool = False,
     allow_group: bool = False,
+    nickname_identity: bool = False,
 ) -> Dict[str, Any]:
     """Verify the selected WeChat chat immediately before typing or sending."""
     info = _current_local_chat_info(wx, fallback_name="")
@@ -16336,12 +16512,15 @@ def _verify_local_send_chat(
     # A verified WeChat ID intentionally differs from the visible nickname.
     # The ID-based contact search above is the identity check in that case;
     # comparing the ID text to the nickname would reject every valid send.
+    # A nickname identity (the wx id could not be read) has nothing but this
+    # visible name, so it is compared in the same normalized form the execute
+    # stage used when it re-opened the chat.
     if (
         strict_private
         and expected_display
         and actual_peer
-        and expected_display != actual_peer
-        and not _looks_like_wechat_id(expected)
+        and _normalize_contact_lookup_key(expected_display) != _normalize_contact_lookup_key(actual_peer)
+        and (nickname_identity or not _looks_like_wechat_id(expected))
     ):
         raise RuntimeError(f"当前微信会话与目标不一致（当前={actual_peer}，目标={expected}），已阻止发送")
     return {"chat_type": chat_type or "unknown", "chat_name": actual_peer}
@@ -16391,7 +16570,10 @@ def _send_text_local_slow_once(
     _focus_local_wechat(hwnd)
     driver_name = str(raw_meta.get("driver") or "").strip()
     use_contact_search = driver_name == "native_wechat_auto_reply"
-    if use_contact_search and not _looks_like_wechat_id(peer_id):
+    # 读不到微信号的候选人用昵称身份发送：执行阶段已经按名字搜到并核对过当前会话，
+    # 这里只是复用那个会话；名字对不上时 _verify_local_send_chat 会直接拦住。
+    nickname_identity = str(raw_meta.get("identity_mode") or "").strip() == "nickname"
+    if use_contact_search and not nickname_identity and not _looks_like_wechat_id(peer_id):
         raise RuntimeError("auto reply requires the captured WeChat ID; nickname search is disabled")
     log_send_event(
         "reply_chat_open_started" if not use_current_chat else "reply_chat_reused",
@@ -16413,6 +16595,14 @@ def _send_text_local_slow_once(
                     peer_id,
                     search_steps,
                     open_moments=False,
+                    **(
+                        {
+                            "fallback_display_name": str(raw_meta.get("display_name") or ""),
+                            "name_only": True,
+                        }
+                        if nickname_identity
+                        else {}
+                    ),
                 )
                 log_send_event(
                     "reply_chat_search_verified",
@@ -16440,6 +16630,7 @@ def _send_text_local_slow_once(
         peer_id,
         strict_private=strict_private,
         allow_group=allow_group,
+        nickname_identity=nickname_identity,
     )
     _focus_local_wechat(hwnd)
     log_send_event(

@@ -123,3 +123,15 @@ def test_link_local_contact_wx_no_is_idempotent(monkeypatch, tmp_path):
     assert second["action"] == "already_linked"
     assert len(_contacts()) == before
     assert engine._resolve_unique_local_contact_wx_no(ACCOUNT, "余老师") == "laoshi2020"
+
+
+def test_link_local_contact_wx_no_replaces_junk_stored_id(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    # 线上真的出现过这种脏数据：值不是微信号的形状（长度/字符都不对），
+    # 不能让它挡住重新读到正确号。
+    _seed("澳洲专线物流", "澳洲专线物流", "lucy")
+
+    linked = engine._link_local_contact_wx_no(ACCOUNT, "澳洲专线物流", "ID20010218")
+
+    assert linked["action"] == "wx_no_filled"
+    assert engine._resolve_unique_local_contact_wx_no(ACCOUNT, "澳洲专线物流") == "ID20010218"
