@@ -2548,7 +2548,14 @@ def _detect_auto_reply_language(latest_message: Any, recent_context: Any = "") -
             return "ru"
         han_count = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff]", text))
         latin_count = len(re.findall(r"[A-Za-z]", text))
-        if han_count and han_count >= max(1, latin_count):
+        latin_words = len(re.findall(r"[A-Za-z]{2,}", text))
+        # A Chinese message that names the product in English ("要1000件有logo的
+        # polo衫") is still Chinese.  Comparing Han characters against Latin
+        # *letters* let "logo"/"polo" outnumber the characters, so the customer
+        # was classified as English and the model was told to answer in English.
+        # Two or more Han characters decide it; a single one only yields to a
+        # multi-word English message.
+        if han_count >= 2 or (han_count == 1 and latin_words <= 1):
             return "zh-CN"
         if latin_count >= 2:
             lowered = text.lower()
