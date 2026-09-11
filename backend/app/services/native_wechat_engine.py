@@ -8442,6 +8442,93 @@ def _wxauto4_visible_pinned_names(account_id: str) -> Optional[set[str]]:
         return None
 
 
+def _resolve_scan_contact_wx_no(
+    account_id: str,
+    *,
+    display_name: str,
+    current_chat_name: str = "",
+    select_row: Optional[Callable[[], None]] = None,
+    attempts: int = 3,
+) -> tuple:
+    """扫描阶段取候选人微信号：只读、可重试、绝不拿别人的号。
+
+    1) 本地通讯录唯一映射（不依赖窗口，零竞态）；
+    2) 锚定"当前打开的会话 == 候选人"再读资料，读前读后都核对名字，不符丢弃重试；
+    3) 两条都拿不到才返回空 —— 本轮跳过、下一轮继续（消息保持未读，不会漏回）。
+    """
+    expected_key = _normalize_contact_lookup_key(display_name)
+    mapped_wxid = (
+        _resolve_unique_local_contact_wx_no(account_id, display_name) if display_name else ""
+    )
+    reason = ""
+    open_name = str(current_chat_name or "").strip()
+
+    def anchored(name: str) -> bool:
+        if not expected_key:
+            return True
+        return _normalize_contact_lookup_key(name) == expected_key
+
+    def current_name() -> str:
+        if not expected_key:
+            return ""
+        try:
+            wx = _get_wxauto4_client(account_id, ensure_chat_tab=False)
+            info = _current_local_chat_info(wx, fallback_name="")
+            return str((info or {}).get("chat_name") or "").strip()
+        except Exception:
+            return ""
+
+    for attempt in range(1, max(1, int(attempts)) + 1):
+        if not anchored(open_name):
+            # 当前打开的不是候选人：把这一行重新点一次（扫描本来就在点的行，
+            # 只改变选中项，不搜索、不改变列表顺序），然后轮询等它生效。
+            if callable(select_row):
+                try:
+                    select_row()
+                except Exception:
+                    pass
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                time.sleep(0.2)
+                open_name = current_name()
+                if anchored(open_name):
+                    break
+        if open_name and not anchored(open_name):
+            reason = "chat_not_anchored"
+            continue
+        identity = _read_current_private_chat_wx_no(
+            account_id,
+            expected_display_name=display_name,
+        )
+        wechat_id = str(identity.get("wx_no") or "").strip() if isinstance(identity, dict) else ""
+        reason = (
+            str(identity.get("reason") or "invalid_result") if isinstance(identity, dict) else "invalid_result"
+        )
+        if not _looks_like_wechat_id(wechat_id):
+            open_name = current_name()
+            continue
+        after_name = current_name()
+        if after_name and not anchored(after_name):
+            # 读取途中会话被切走了，这一次的结果不可信（本机复现过：读 A 时切到 B，
+            # 返回的是 B 的微信号且 ok=True）。
+            reason = "chat_switched_during_read"
+            open_name = after_name
+            continue
+        if mapped_wxid and mapped_wxid.casefold() != wechat_id.casefold():
+            _write_auto_reply_diagnostic(
+                "scan_identity_conflict",
+                account_id=account_id,
+                target_display_name=display_name,
+                mapped_wxid=mapped_wxid,
+                profile_wxid=wechat_id,
+            )
+        suffix = "" if attempt == 1 else f"+retry{attempt}"
+        return wechat_id, f"profile_popup{suffix}"
+    if mapped_wxid:
+        return mapped_wxid, f"local_contact_unique_mapping({reason or 'profile_unresolved'})"
+    return "", reason or "identity_unresolved"
+
+
 def _capture_auto_reply_scan_page(
     account_id: str,
     sessions: List[Any],
@@ -8602,27 +8689,19 @@ def _capture_auto_reply_scan_page(
                 )
                 continue
             actual_peer = str(sync_result.get("peer_id") or peer_id).strip()
-            # The session row and ChatInfo can both return the visible nickname
-            # in fields that look like an ID.  The later action pass searches
-            # by this value, so only the profile of the currently selected
-            # direct chat is authoritative here.
-            identity = _read_current_private_chat_wx_no(
+            # 取号：先本地通讯录唯一映射，再"锚定当前会话==候选人"后读资料，
+            # 读前读后都核对名字；两条都拿不到就本轮跳过（下一轮继续）。
+            select_row = None
+            if live_session:
+                click_fn = getattr(raw_session, "click", None) or getattr(raw_session, "Click", None)
+                if callable(click_fn):
+                    select_row = (lambda fn=click_fn: fn())
+            wechat_id, identity_reason = _resolve_scan_contact_wx_no(
                 account_id,
-                expected_display_name=display_name,
+                display_name=display_name,
+                current_chat_name=str(chat_info.get("chat_name") or "").strip(),
+                select_row=select_row,
             )
-            wechat_id = str(identity.get("wx_no") or "").strip() if isinstance(identity, dict) else ""
-            identity_reason = (
-                str(identity.get("reason") or "") if isinstance(identity, dict) else "invalid_result"
-            )
-            # A few WeChat profiles render the wxid in a non-readable custom
-            # control. If the local contact table has exactly one wxid for the
-            # already selected display name, retain that unambiguous mapping;
-            # never choose among duplicate names.
-            if not _looks_like_wechat_id(wechat_id):
-                mapped_wxid = _resolve_unique_local_contact_wx_no(account_id, display_name)
-                if mapped_wxid:
-                    wechat_id = mapped_wxid
-                    identity_reason = "local_contact_unique_mapping"
             _write_auto_reply_diagnostic(
                 "scan_session_identity_capture",
                 account_id=account_id,
@@ -9841,6 +9920,21 @@ def _build_local_contact_wx_no_index(limit: int, *, account_id: str = "") -> Dic
             if key and key not in index:
                 index[key] = wx_no
     return index
+
+
+def _uia_profile_mentions_name(root: Any, expected_display_name: str) -> bool:
+    """资料弹窗里是否出现该候选人的名字（用来确认这份资料确实属于他）。"""
+    expected_key = _normalize_contact_lookup_key(expected_display_name)
+    if not expected_key:
+        return False
+    try:
+        for node in _uia_walk(root, max_depth=20, max_nodes=4000):
+            key = _normalize_contact_lookup_key(_uia_control_text(node))
+            if key and (key == expected_key or expected_key in key):
+                return True
+    except Exception:
+        return False
+    return False
 
 
 def _extract_contact_profile_wx_no(root: Any) -> str:
@@ -12843,10 +12937,18 @@ def _read_current_private_chat_wx_no(
             for node in members
             if expected_key and _normalize_contact_lookup_key(_uia_control_text(node)) == expected_key
         ]
+        profile_name_must_match = False
         if matching:
             member = matching[0]
         elif len(members) == 1:
-            member = members[0]
+            only = members[0]
+            only_key = _normalize_contact_lookup_key(_uia_control_text(only))
+            # 单元格名字和候选对不上（例如面板里还留着上一次打开的会话）：
+            # 不能直接采信，改为"读完资料后再用资料里的名字复核"。以前这里
+            # 直接把唯一成员当候选人，于是候选人的身份被写成别人的微信号
+            # （线上出现过"该回给臭、小子，结果发到徐的会话"）。
+            profile_name_must_match = bool(expected_key and only_key and only_key != expected_key)
+            member = only
         else:
             result["reason"] = "direct_chat_member_ambiguous"
             result["member_count"] = len(members)
@@ -12865,6 +12967,14 @@ def _read_current_private_chat_wx_no(
         while time.monotonic() < deadline:
             profile_root = _local_profile_popup_root(hwnd)
             if profile_root is not None:
+                if profile_name_must_match and not _uia_profile_mentions_name(
+                    profile_root, expected_display_name
+                ):
+                    # 资料里的名字也不是候选人 → 这份资料不属于本次候选人，放弃，
+                    # 绝不把别人的微信号写成本候选人的身份。
+                    result["reason"] = "profile_name_mismatch"
+                    result["selected_member_name"] = _uia_control_text(member)[:240]
+                    return result
                 wx_no = str(_extract_contact_profile_wx_no(profile_root) or "").strip()
                 if _looks_like_wechat_id(wx_no):
                     result.update({"ok": True, "wx_no": wx_no, "reason": "profile_popup"})
