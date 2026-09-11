@@ -8450,18 +8450,32 @@ def _resolve_scan_contact_wx_no(
     select_row: Optional[Callable[[], None]] = None,
     attempts: int = 3,
 ) -> tuple:
-    """扫描阶段取候选人微信号：只读、可重试、绝不拿别人的号。
+    """扫描阶段取候选人微信号：通讯录优先，兜底才读一次资料。
 
-    1) 本地通讯录唯一映射（不依赖窗口，零竞态）；
-    2) 锚定"当前打开的会话 == 候选人"再读资料，读前读后都核对名字，不符丢弃重试；
+    1) 本地通讯录里这个名字唯一对应一个微信号 —— 直接命中，不点会话、不读资料
+       （零竞态，也不用再等十几秒）；
+    2) 通讯录里查不到这个名字（典型原因：用户在微信里改过备注，会话名变了，
+       本地通讯录还留着旧名字）：锚定"当前打开的会话 == 候选人"后读一次资料，
+       拿到号再回通讯录对齐（同号联系人补上会话新名字、缺号的补号、没有的建档），
+       下一次第 1 步就能直接命中；
     3) 两条都拿不到才返回空 —— 本轮跳过、下一轮继续（消息保持未读，不会漏回）。
     """
     expected_key = _normalize_contact_lookup_key(display_name)
-    mapped_wxid = (
-        _resolve_unique_local_contact_wx_no(account_id, display_name) if display_name else ""
-    )
     reason = ""
     open_name = str(current_chat_name or "").strip()
+    if not expected_key:
+        return "", "identity_unresolved"
+
+    mapped_wxid = _resolve_unique_local_contact_wx_no(account_id, display_name)
+    if _looks_like_wechat_id(mapped_wxid):
+        _write_auto_reply_diagnostic(
+            "scan_identity_contact_hit",
+            account_id=account_id,
+            target_display_name=display_name,
+            wechat_id=mapped_wxid,
+            current_chat_name=open_name,
+        )
+        return mapped_wxid, "local_contact_unique_mapping"
 
     def anchored(name: str) -> bool:
         if not expected_key:
@@ -8514,18 +8528,21 @@ def _resolve_scan_contact_wx_no(
             reason = "chat_switched_during_read"
             open_name = after_name
             continue
-        if mapped_wxid and mapped_wxid.casefold() != wechat_id.casefold():
-            _write_auto_reply_diagnostic(
-                "scan_identity_conflict",
-                account_id=account_id,
-                target_display_name=display_name,
-                mapped_wxid=mapped_wxid,
-                profile_wxid=wechat_id,
-            )
+        # 通讯录对齐：这个名字刚才查不到（多半是用户改过备注），就用刚读到的号
+        # 把两边补齐/改名，下一次直接走上面的通讯录快速路径。
+        link = _link_local_contact_wx_no(account_id, display_name, wechat_id)
+        _write_auto_reply_diagnostic(
+            "scan_identity_contact_link",
+            account_id=account_id,
+            target_display_name=display_name,
+            wechat_id=wechat_id,
+            action=str((link or {}).get("action") or ""),
+            matched_name=str((link or {}).get("matched_name") or ""),
+            conflict_wx_no=str((link or {}).get("conflict_wx_no") or ""),
+            contact_count=(link or {}).get("contact_count"),
+        )
         suffix = "" if attempt == 1 else f"+retry{attempt}"
         return wechat_id, f"profile_popup{suffix}"
-    if mapped_wxid:
-        return mapped_wxid, f"local_contact_unique_mapping({reason or 'profile_unresolved'})"
     return "", reason or "identity_unresolved"
 
 
@@ -10021,6 +10038,158 @@ def _persist_contact_wx_no(account_id: str, target: str, wx_no: str, *, source: 
     contact["wx_no"] = wx_no
     contact["source"] = source or str(contact.get("source") or "local")
     return _persist_contact(account_id, contact)
+
+
+def _link_local_contact_wx_no(
+    account_id: str,
+    display_name: str,
+    wx_no: str,
+    *,
+    source: str = "takeover_identity_profile",
+) -> Dict[str, Any]:
+    """把"会话显示名 <-> 微信号"对齐写回本地通讯录。
+
+    用户在微信里改过备注后，会话列表显示新名字，本地通讯录还留着旧名字，按名字
+    就查不到这个人。这里用刚读到的微信号回头对齐两边，保证"用户看到的会话名"
+    和"通讯录里能查到的名字"指向同一个号：
+
+    - 通讯录里的同号联系人已经有这个名字 → 什么都不用改；
+    - 通讯录里的同号联系人叫别的名字 → 把会话新名字写成它的显示名，旧名字落到
+      备注/别名里（两个名字都还能查到）；
+    - 通讯录里有这个名字但没号 → 补上号；
+    - 通讯录里两边都没有 → 按会话名建一条，下次不必再读资料。
+
+    同名但号对不上时不做任何写入：宁可下一轮继续取号，也不能把另一个联系人的号
+    写成本候选人的身份。
+    """
+    account_id = str(account_id or "").strip()
+    target = _session_display_name(display_name)
+    target_key = _normalize_contact_lookup_key(target)
+    wx_no = str(wx_no or "").strip()
+    result: Dict[str, Any] = {"action": "none", "target": target, "wx_no": wx_no}
+    if not account_id or not target_key or not _looks_like_wechat_id(wx_no):
+        result["action"] = "skipped"
+        return result
+    try:
+        with _connect() as conn:
+            name_rows = conn.execute(
+                """
+                select contact_key, display_name, remark, wx_no, source, raw_json
+                from wechat_contacts
+                where account_id=?
+                  and (trim(coalesce(contact_key,''))=?
+                       or trim(coalesce(display_name,''))=?
+                       or trim(coalesce(remark,''))=?)
+                order by updated_at desc, id desc
+                limit 8
+                """,
+                (account_id, target, target, target),
+            ).fetchall()
+            id_rows = conn.execute(
+                """
+                select contact_key, display_name, remark, wx_no, source, raw_json
+                from wechat_contacts
+                where account_id=? and trim(coalesce(wx_no,''))=? collate nocase
+                order by updated_at desc, id desc
+                limit 8
+                """,
+                (account_id, wx_no),
+            ).fetchall()
+    except Exception as exc:
+        result["action"] = "db_unavailable"
+        result["error"] = str(exc)[:300]
+        return result
+    result["contact_count"] = len(id_rows)
+
+    def row_names(row: Any) -> List[str]:
+        names: List[str] = []
+        for value in (row["contact_key"], row["display_name"], row["remark"]):
+            text = str(value or "").strip()
+            if text and text not in names:
+                names.append(text)
+        return names
+
+    def row_aliases(row: Any) -> List[str]:
+        raw = _safe_json_loads(row["raw_json"], {})
+        aliases: List[str] = []
+        if isinstance(raw, dict) and isinstance(raw.get("aliases"), list):
+            aliases = [str(item).strip() for item in raw["aliases"] if str(item or "").strip()]
+        for name in row_names(row):
+            if name not in aliases:
+                aliases.append(name)
+        if target not in aliases:
+            aliases.append(target)
+        return aliases[:16]
+
+    if any(
+        target_key in {_normalize_contact_lookup_key(name) for name in row_names(row)}
+        for row in id_rows
+    ):
+        result["action"] = "already_linked"
+        result["matched_name"] = str(id_rows[0]["display_name"] or id_rows[0]["contact_key"] or "").strip()
+        return result
+    if name_rows:
+        conflict = next(
+            (
+                row
+                for row in name_rows
+                if str(row["wx_no"] or "").strip()
+                and str(row["wx_no"]).strip().casefold() != wx_no.casefold()
+            ),
+            None,
+        )
+        if conflict is not None:
+            result["action"] = "name_conflict"
+            result["conflict_wx_no"] = str(conflict["wx_no"] or "").strip()
+            return result
+        base = name_rows[0]
+        result["action"] = "wx_no_filled"
+        result["matched_name"] = str(base["display_name"] or base["contact_key"] or "").strip()
+        payload = {
+            "contact_key": str(base["contact_key"] or target).strip(),
+            "display_name": str(base["display_name"] or target).strip(),
+            "remark": str(base["remark"] or "").strip(),
+            "wxNo": wx_no,
+            # 保留这条联系人原来的来源（通讯录同步/会话同步），只标记这次对齐
+            # 是接管侧写的，方便以后排查"名字什么时候变的"。
+            "source": str(base["source"] or "").strip() or source,
+            "linked_by": source,
+            "aliases": row_aliases(base),
+        }
+    elif id_rows:
+        base = id_rows[0]
+        old_names = [name for name in row_names(base) if _normalize_contact_lookup_key(name) != target_key]
+        result["action"] = "renamed"
+        result["matched_name"] = str(base["display_name"] or base["contact_key"] or "").strip()
+        payload = {
+            "contact_key": str(base["contact_key"] or target).strip(),
+            "display_name": target,
+            "remark": str(base["remark"] or "").strip() or (old_names[0] if old_names else ""),
+            "wxNo": wx_no,
+            "source": str(base["source"] or "").strip() or source,
+            "linked_by": source,
+            "aliases": row_aliases(base),
+        }
+    else:
+        result["action"] = "contact_created"
+        payload = {
+            "contact_key": target,
+            "display_name": target,
+            "remark": "",
+            "wxNo": wx_no,
+            "source": source,
+            "linked_by": source,
+            "aliases": [target],
+        }
+    try:
+        persisted = _merge_contacts_snapshot(account_id, [payload], chat_type="direct")
+        result["persisted"] = bool(persisted)
+        if persisted:
+            result["contact"] = persisted[0]
+    except Exception as exc:
+        result["action"] = "persist_failed"
+        result["error"] = str(exc)[:300]
+    return result
 
 
 def _resolve_local_contact_aliases(account_id: str, target: str) -> List[str]:
