@@ -1377,6 +1377,27 @@
     });
   }
 
+  function clearContacts() {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先选择账号', true);
+    var message = '清除本地通讯录？只删除本机保存的通讯录缓存，不会影响微信里的联系人。';
+    if (typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm(message)) {
+      return;
+    }
+    setMsg('正在清除本地通讯录...', false);
+    return apiJson('/api/native-wechat/contacts/clear', {
+      method: 'POST',
+      body: { account_id: id }
+    }).then(function(data) {
+      state.contactSelected = {};
+      renderContactSelectionState();
+      setMsg('已清除本地通讯录：删除 ' + (Number(data.removed) || 0) + ' 条，剩余 ' + (Number(data.total_after) || 0) + ' 条', false);
+      return Promise.all([loadContacts(), loadPeers()]);
+    }).catch(function(err) {
+      setMsg(err.message || '清除通讯录失败', true);
+    });
+  }
+
   function submitFriendQueue() {
     var id = activeAccountId();
     var keywords = splitTargets((($('nativeWechatFriendKeyword') || {}).value || '').trim());
@@ -2214,6 +2235,8 @@
     if (syncSessionBtn) syncSessionBtn.addEventListener('click', syncSessions);
     var syncContactsBtn = $('nativeWechatSyncContactsBtn');
     if (syncContactsBtn) syncContactsBtn.addEventListener('click', syncContacts);
+    var clearContactsBtn = $('nativeWechatClearContactsBtn');
+    if (clearContactsBtn) clearContactsBtn.addEventListener('click', clearContacts);
     var syncGroupMembersBtn = $('nativeWechatSyncGroupMembersBtn');
     if (syncGroupMembersBtn) syncGroupMembersBtn.addEventListener('click', syncGroupMembers);
     var loadOlderMessagesBtn = $('nativeWechatLoadOlderMessagesBtn');

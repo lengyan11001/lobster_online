@@ -459,6 +459,18 @@ async def native_wechat_sync_contacts(
         _raise_native_wechat_error("contacts_sync", exc, account_id=body.account_id)
 
 
+@router.post("/api/native-wechat/contacts/clear")
+async def native_wechat_clear_contacts(
+    body: SyncBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """Drop the locally cached address book (WeChat itself is untouched)."""
+    try:
+        return await asyncio.to_thread(engine.clear_local_contacts, body.account_id)
+    except Exception as exc:
+        _raise_native_wechat_error("contacts_clear", exc, account_id=body.account_id)
+
+
 @router.post("/api/native-wechat/sessions/sync")
 async def native_wechat_sync_sessions(
     body: SyncBody,

@@ -10001,6 +10001,31 @@ def sync_local_contacts(account_id: str, *, limit: int = 10000) -> Dict[str, Any
     )
 
 
+def clear_local_contacts(account_id: str) -> Dict[str, Any]:
+    """Clear the locally cached address book for one account.
+
+    Only the local cache is touched: the WeChat address book itself is never
+    modified.  The takeover re-learns WeChat IDs from each contact's profile
+    card when the cache is empty.
+    """
+    init_db()
+    account_id = str(account_id or "").strip()
+    if not account_id:
+        raise RuntimeError("missing account_id")
+    with _connect() as conn:
+        row = conn.execute(
+            "select count(*) from wechat_contacts where account_id=?", (account_id,)
+        ).fetchone()
+        removed = int(row[0] if row else 0)
+        conn.execute("delete from wechat_contacts where account_id=?", (account_id,))
+    return {
+        "ok": True,
+        "account_id": account_id,
+        "removed": removed,
+        "total_after": _contact_count(account_id),
+    }
+
+
 def _normalize_contact_lookup_key(value: Any) -> str:
     return _compact_for_contains(str(value or "")).lower()
 

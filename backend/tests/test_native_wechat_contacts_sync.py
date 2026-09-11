@@ -4,6 +4,7 @@ import asyncio
 import sys
 import threading
 import types
+from pathlib import Path
 
 import pytest
 
@@ -1141,3 +1142,47 @@ def test_local_contact_search_can_force_clipboard_retry(monkeypatch):
     assert result["method"] == "clipboard_paste"
     assert result["fallback_error"] == "forced clipboard retry"
     assert calls == [("paste", "hddhdjjdjensb")]
+
+
+def test_clear_local_contacts_removes_only_that_account(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    engine._merge_contacts_snapshot(
+        "wechat-account-clear-a",
+        [
+            {"contact_key": "wxid_a1", "display_name": "联系人A1", "wxNo": "wxid_a1"},
+            {"contact_key": "wxid_a2", "display_name": "联系人A2", "wxNo": "wxid_a2"},
+        ],
+    )
+    engine._merge_contacts_snapshot(
+        "wechat-account-clear-b",
+        [{"contact_key": "wxid_b1", "display_name": "联系人B1", "wxNo": "wxid_b1"}],
+    )
+
+    result = engine.clear_local_contacts("wechat-account-clear-a")
+
+    assert result["ok"] is True
+    assert result["removed"] == 2
+    assert result["total_after"] == 0
+    assert engine.list_contacts("wechat-account-clear-a", limit=10)["count"] == 0
+    # 另一个账号的通讯录不受影响。
+    assert engine.list_contacts("wechat-account-clear-b", limit=10)["count"] == 1
+
+
+def test_clear_local_contacts_requires_account_id(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+
+    with pytest.raises(RuntimeError):
+        engine.clear_local_contacts("")
+
+
+def test_clear_contacts_button_and_endpoint_are_wired():
+    paths = {route.path for route in native_wechat_api.router.routes}
+    assert "/api/native-wechat/contacts/clear" in paths
+
+    root = Path(__file__).resolve().parents[2]
+    html = (root / "static" / "views" / "juhe-wechat.html").read_text(encoding="utf-8")
+    javascript = (root / "static" / "js" / "juhe-wechat.js").read_text(encoding="utf-8")
+    assert 'id="nativeWechatClearContactsBtn"' in html
+    assert html.index('id="nativeWechatSyncContactsBtn"') < html.index('id="nativeWechatClearContactsBtn"')
+    assert "'/api/native-wechat/contacts/clear'" in javascript
+    assert "$('nativeWechatClearContactsBtn')" in javascript
