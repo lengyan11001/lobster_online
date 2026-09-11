@@ -5717,6 +5717,7 @@ body.online-mastra-chat-compose .online-mastra-chat {
 .online-mastra-message {
   max-width: 900px;
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 0.65rem;
   margin: 0 auto 1.15rem;
@@ -5751,10 +5752,12 @@ body.online-mastra-chat-compose .online-mastra-chat {
 .online-mastra-message.is-error .online-mastra-bubble { color: #b44343; background: #fff6f6; border-color: #f2caca; }
 .online-mastra-message-attachments,
 .online-mastra-message-media {
+  flex: 1 1 100%;
+  max-width: none;
   display: flex;
   flex-wrap: wrap;
   gap: 0.45rem;
-  width: min(760px, 82%);
+  width: auto;
   margin: 0.45rem 0 0 2.1rem;
 }
 .online-mastra-message.is-user .online-mastra-message-attachments { margin-left: auto; margin-right: 2.1rem; justify-content: flex-end; }
@@ -5890,8 +5893,11 @@ body.online-mastra-chat-compose .online-mastra-chat {
 
 /* ── AI 调度助手：过程面板（Codex 式）+ 确认弹窗 + 输入区控件 ───────────── */
 .online-mastra-process {
-  max-width: min(760px, 82%);
-  margin: 0.4rem 0 0 2.1rem;
+  /* 独占一行：以前它是消息行的 flex 项，会跟正文抢宽度，
+     导致正文被挤成一条、确认条占掉半屏。 */
+  flex: 1 1 100%;
+  max-width: none;
+  margin: 0.1rem 0 0 2.1rem;
 }
 .online-mastra-process-head {
   display: inline-flex;
@@ -5916,7 +5922,7 @@ body.online-mastra-chat-compose .online-mastra-chat {
   0%, 100% { opacity: 0.35; transform: scale(0.85); }
   50% { opacity: 1; transform: scale(1.15); }
 }
-.online-mastra-process-current { max-width: min(560px, 62vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.online-mastra-process-current { max-width: min(680px, 74vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .online-mastra-process-count { color: #9aa6b8; font-size: 0.72rem; }
 .online-mastra-process-chevron {
   width: 6px;
@@ -5937,11 +5943,12 @@ body.online-mastra-chat-compose .online-mastra-chat {
 .online-mastra-process-steps[hidden] { display: none; }
 .online-mastra-process-step { color: #7b8899; font-size: 0.76rem; line-height: 1.5; }
 .online-mastra-approval-marker {
-  max-width: min(760px, 82%);
+  flex: 1 1 100%;
+  max-width: none;
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
-  margin: 0.4rem 0 0 2.1rem;
+  margin: 0.35rem 0 0 2.1rem;
   padding: 0.35rem 0.6rem;
   border-radius: 10px;
   background: rgba(95, 125, 255, 0.07);
