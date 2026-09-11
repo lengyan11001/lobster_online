@@ -1,7 +1,7 @@
 {
-  "version": "2.0.40",
-  "build": 319,
-  "applied_at": "2026-09-11T12:34:27+08:00",
-  "note": "device persona keep + content records asset localize + ai lead keywords",
-  "bundle_sha256": "e1066bb35ff6ae28d92376ce217d77b9f2833c3922283c861262d42093943541"
+  "version": "2.0.41",
+  "build": 320,
+  "applied_at": "2026-09-11T17:32:29+08:00",
+  "note": "takeover contact id: contacts-first, re-link renamed contacts",
+  "bundle_sha256": "d3b71fe6293dc6bc80caf1759c01b5e20a35644d6d34c45ea14c502985f5ce95"
 }
