@@ -242,6 +242,9 @@
     '.online-mastra-message-media img,.online-mastra-message-attachments img{max-width:100%;max-height:240px;width:auto;object-fit:cover;border-radius:10px;cursor:zoom-in;}',
     '.online-mastra-message-media video,.online-mastra-message-attachments video{max-width:100%;max-height:260px;border-radius:10px;}',
     '.online-mastra-approval.is-decided{opacity:.62;}',
+    '.online-mastra-status{display:grid;gap:2px;margin-top:4px;}',
+    '.online-mastra-status-line{font-size:12px;line-height:1.5;color:rgba(15,23,42,.55);}',
+    '.online-mastra-status-line::before{content:"\\00b7 ";}',
     '.online-mastra-approval-note{font-size:12px;color:rgba(15,23,42,.62);align-self:center;}',
     '.rich-pending{background:linear-gradient(90deg,rgba(15,23,42,.06) 25%,rgba(15,23,42,.12) 37%,rgba(15,23,42,.06) 63%);background-size:400% 100%;min-height:120px;}',
     '.rich-media-failed{display:flex;align-items:center;justify-content:center;min-height:120px;background:rgba(225,29,72,.08);border:1px dashed rgba(225,29,72,.35);color:#be123c;font-size:13px;cursor:pointer;}',
@@ -637,6 +640,72 @@
     });
   }
 
+  // 调度过程按"流式状态行"实时展示：排队、理解、调用能力、等待确认、执行、
+  // 发布等事件都补一行进去，用户不用等到最后才知道在干什么。
+  var ONLINE_MASTRA_STATUS_EVENTS = [
+    'queued',
+    'claimed',
+    'thinking',
+    'progress',
+    'tool_start',
+    'tool_end',
+    'publish_pending',
+    'publish_claimed',
+    'publish_result',
+    'approval_decided'
+  ];
+
+  var ONLINE_MASTRA_EVENT_LABELS = {
+    queued: '已进入调度队列',
+    claimed: '调度助手已接收',
+    thinking: '正在理解你的需求…',
+    tool_start: '正在调用能力',
+    tool_end: '能力调用完成',
+    publish_pending: '正在提交发布',
+    publish_claimed: '发布任务已接收',
+    publish_result: '发布结果已返回',
+    approval_decided: '已确认，正在执行'
+  };
+
+  function eventStatusText(payload, type) {
+    var source = payload && typeof payload === 'object' ? payload : {};
+    var value = text(source.text || source.message || source.detail || source.reply_text || '').trim();
+    var toolName = text(source.name || source.tool_id || source.tool || '').trim();
+    if (value) {
+      if (toolName && (type === 'tool_start' || type === 'tool_end')) {
+        return (type === 'tool_start' ? '正在调用：' : '调用完成：') + toolName;
+      }
+      return value;
+    }
+    if (toolName && (type === 'tool_start' || type === 'tool_end')) {
+      return (type === 'tool_start' ? '正在调用：' : '调用完成：') + toolName;
+    }
+    return ONLINE_MASTRA_EVENT_LABELS[type] || '';
+  }
+
+  function appendStatusLine(bubble, line) {
+    var value = text(line).trim();
+    if (!bubble || !bubble.wrapper || !value) return;
+    var wrap = bubble.statusWrap;
+    if (!wrap) {
+      wrap = document.createElement('div');
+      wrap.className = 'online-mastra-status';
+      bubble.wrapper.appendChild(wrap);
+      bubble.statusWrap = wrap;
+      bubble.statusLines = [];
+    }
+    var lines = bubble.statusLines || (bubble.statusLines = []);
+    if (lines.length && lines[lines.length - 1] === value) return;
+    if (lines.length > 40) lines.shift();
+    lines.push(value);
+    var row = document.createElement('div');
+    row.className = 'online-mastra-status-line';
+    row.textContent = value;
+    wrap.appendChild(row);
+    while (wrap.childNodes.length > 40) wrap.removeChild(wrap.firstChild);
+    scrollToBottom();
+  }
+
   function renderApproval(bubble, approval, messageId) {
     if (!bubble || !approval || !approval.id || bubble.wrapper.querySelector('[data-mastra-approval]')) return;
     var card = document.createElement('div');
@@ -678,8 +747,16 @@
       }
       appendBubbleText(live.bubble, payload.text || '');
     }
+    if (ONLINE_MASTRA_STATUS_EVENTS.indexOf(type) >= 0) {
+      // 队列/理解/执行进度都当成流式状态行实时补进去，不要只等最终结果。
+      // 历史回放不加，避免老会话里堆一屏状态行。
+      if (!historical) appendStatusLine(live.bubble, eventStatusText(payload, type));
+    }
     if (type === 'progress' && payload.reply_text) setBubbleText(live.bubble, payload.reply_text);
     if (type === 'approval_required') renderApproval(live.bubble, payload, messageId);
+    if (type === 'approval_decided') {
+      appendStatusLine(live.bubble, eventStatusText(payload, type) || '已确认，正在执行');
+    }
     if (type === 'cancelled') {
       setBubbleText(live.bubble, payload.reply_text || payload.text || live.bubble.text || '已取消');
       if (!historical) finishMessage(messageId, false);
