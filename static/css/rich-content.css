@@ -75,10 +75,6 @@
   color: #be123c;
 }
 .online-mastra-zoomable { cursor: zoom-in; }
-/* 调度过程的流式状态行：排队/理解/调用能力/等待确认/执行/发布 实时逐行出现 */
-.online-mastra-status { display: grid; gap: 2px; margin-top: 4px; }
-.online-mastra-status-line { font-size: 12px; line-height: 1.5; color: rgba(15, 23, 42, 0.55); }
-.online-mastra-status-line::before { content: "\00b7 "; }
 .rich-media-block { display: grid; gap: 8px; margin-top: 0.5rem; }
 .rich-media-block video,
 .rich-media-block audio { width: 100%; border-radius: 12px; background: #000; }

@@ -242,9 +242,6 @@
     '.online-mastra-message-media img,.online-mastra-message-attachments img{max-width:100%;max-height:240px;width:auto;object-fit:cover;border-radius:10px;cursor:zoom-in;}',
     '.online-mastra-message-media video,.online-mastra-message-attachments video{max-width:100%;max-height:260px;border-radius:10px;}',
     '.online-mastra-approval.is-decided{opacity:.62;}',
-    '.online-mastra-status{display:grid;gap:2px;margin-top:4px;}',
-    '.online-mastra-status-line{font-size:12px;line-height:1.5;color:rgba(15,23,42,.55);}',
-    '.online-mastra-status-line::before{content:"\\00b7 ";}',
     '.online-mastra-approval-note{font-size:12px;color:rgba(15,23,42,.62);align-self:center;}',
     '.rich-pending{background:linear-gradient(90deg,rgba(15,23,42,.06) 25%,rgba(15,23,42,.12) 37%,rgba(15,23,42,.06) 63%);background-size:400% 100%;min-height:120px;}',
     '.rich-media-failed{display:flex;align-items:center;justify-content:center;min-height:120px;background:rgba(225,29,72,.08);border:1px dashed rgba(225,29,72,.35);color:#be123c;font-size:13px;cursor:pointer;}',
@@ -683,55 +680,157 @@
     return ONLINE_MASTRA_EVENT_LABELS[type] || '';
   }
 
+  // 过程面板：正在跑的时候只有一行"当前步骤"在更新（不刷屏），
+  // 跑完折叠成"过程 · N 步"，点开能看完整步骤。
+  function ensureProcessPanel(bubble) {
+    if (bubble.processPanel) return bubble.processPanel;
+    var panel = document.createElement('div');
+    panel.className = 'online-mastra-process is-running';
+    panel.innerHTML = [
+      '<button type="button" class="online-mastra-process-head">',
+      '<span class="online-mastra-process-dot" aria-hidden="true"></span>',
+      '<span class="online-mastra-process-current">正在处理…</span>',
+      '<span class="online-mastra-process-count"></span>',
+      '<span class="online-mastra-process-chevron" aria-hidden="true"></span>',
+      '</button>',
+      '<div class="online-mastra-process-steps" hidden></div>'
+    ].join('');
+    var head = panel.querySelector('.online-mastra-process-head');
+    var steps = panel.querySelector('.online-mastra-process-steps');
+    head.addEventListener('click', function () {
+      var willOpen = steps.hidden;
+      steps.hidden = !willOpen;
+      panel.classList.toggle('is-open', willOpen);
+      if (willOpen && steps.lastChild && steps.lastChild.scrollIntoView) {
+        steps.lastChild.scrollIntoView({ block: 'nearest' });
+      }
+    });
+    bubble.wrapper.appendChild(panel);
+    bubble.processPanel = panel;
+    bubble.processSteps = [];
+    return panel;
+  }
+
   function appendStatusLine(bubble, line) {
     var value = text(line).trim();
     if (!bubble || !bubble.wrapper || !value) return;
-    var wrap = bubble.statusWrap;
-    if (!wrap) {
-      wrap = document.createElement('div');
-      wrap.className = 'online-mastra-status';
-      bubble.wrapper.appendChild(wrap);
-      bubble.statusWrap = wrap;
-      bubble.statusLines = [];
+    var panel = ensureProcessPanel(bubble);
+    var current = panel.querySelector('.online-mastra-process-current');
+    var steps = panel.querySelector('.online-mastra-process-steps');
+    var count = panel.querySelector('.online-mastra-process-count');
+    var list = bubble.processSteps || (bubble.processSteps = []);
+    var isRepeat = list.length && list[list.length - 1] === value;
+    if (!isRepeat) {
+      list.push(value);
+      if (list.length > 60) list.shift();
+      var row = document.createElement('div');
+      row.className = 'online-mastra-process-step';
+      row.textContent = value;
+      steps.appendChild(row);
+      while (steps.childNodes.length > 60) steps.removeChild(steps.firstChild);
     }
-    var lines = bubble.statusLines || (bubble.statusLines = []);
-    if (lines.length && lines[lines.length - 1] === value) return;
-    if (lines.length > 40) lines.shift();
-    lines.push(value);
-    var row = document.createElement('div');
-    row.className = 'online-mastra-status-line';
-    row.textContent = value;
-    wrap.appendChild(row);
-    while (wrap.childNodes.length > 40) wrap.removeChild(wrap.firstChild);
+    if (current) current.textContent = value;
+    if (count) count.textContent = list.length > 1 ? list.length + ' 步' : '';
+    panel.classList.add('is-running');
+    panel.classList.remove('is-done');
+    if (isRepeat && !panel.classList.contains('is-open')) return;
     scrollToBottom();
   }
 
-  function renderApproval(bubble, approval, messageId) {
-    if (!bubble || !approval || !approval.id || bubble.wrapper.querySelector('[data-mastra-approval]')) return;
-    var card = document.createElement('div');
-    card.className = 'online-mastra-approval';
-    card.dataset.mastraApproval = approval.id;
-    card.innerHTML = '<strong>需要确认后执行</strong><p></p><div class="online-mastra-approval-actions"><button type="button" data-mastra-approval-decision="reject">取消</button><button type="button" class="primary" data-mastra-approval-decision="approve">确认执行</button></div>';
-    card.querySelector('p').textContent = text(approval.task || approval.reason || '将执行当前任务');
-    card.querySelectorAll('[data-mastra-approval-decision]').forEach(function (button) {
-      button.addEventListener('click', function () {
-        var decision = button.getAttribute('data-mastra-approval-decision');
-        // 点完立刻给反馈并禁用按钮：之前没有回显，用户会以为没生效，再去对话里打一次"确认"，
-        // 结果被当成新请求又生成一份（线上出现过一次确认出两张图）。
-        card.querySelectorAll('[data-mastra-approval-decision]').forEach(function (item) {
-          item.disabled = true;
-        });
-        card.classList.add('is-decided');
-        var tip = card.querySelector('p');
-        if (tip) {
-          tip.textContent = decision === 'approve'
-            ? '已确认，任务已下发，等待 Online 执行…'
-            : '已取消';
-        }
-        decideApproval(approval.id, decision, card, messageId || approval.message_id);
-      });
+  function finishProcessPanel(bubble) {
+    if (!bubble || !bubble.processPanel) return;
+    var panel = bubble.processPanel;
+    panel.classList.remove('is-running', 'is-open');
+    panel.classList.add('is-done');
+    var steps = panel.querySelector('.online-mastra-process-steps');
+    if (steps) steps.hidden = true;
+    var count = panel.querySelector('.online-mastra-process-count');
+    if (count) {
+      var total = (bubble.processSteps || []).length;
+      count.textContent = total ? total + ' 步' : '';
+    }
+  }
+
+  function approvalModal() {
+    var box = document.getElementById('onlineMastraApprovalModal');
+    if (box) return box;
+    box = document.createElement('div');
+    box.id = 'onlineMastraApprovalModal';
+    box.className = 'online-mastra-modal hidden';
+    box.innerHTML = [
+      '<div class="online-mastra-modal-card" role="dialog" aria-modal="true" aria-labelledby="onlineMastraApprovalTitle">',
+      '<div class="online-mastra-modal-head">',
+      '<span class="online-mastra-modal-icon" aria-hidden="true">!</span>',
+      '<div><h2 id="onlineMastraApprovalTitle">需要你确认</h2>',
+      '<p>确认后才会真正执行，可能消耗额度或对外发布。</p></div>',
+      '</div>',
+      '<div class="online-mastra-modal-task"></div>',
+      '<div class="online-mastra-modal-actions">',
+      '<button type="button" class="ghost" data-mastra-modal="reject">取消</button>',
+      '<button type="button" class="primary" data-mastra-modal="approve">确认执行</button>',
+      '</div>',
+      '</div>'
+    ].join('');
+    document.body.appendChild(box);
+    box.addEventListener('click', function (event) {
+      if (event.target === box) closeApprovalModal();
     });
-    bubble.wrapper.appendChild(card);
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && !box.classList.contains('hidden')) closeApprovalModal();
+    });
+    return box;
+  }
+
+  function closeApprovalModal() {
+    var box = document.getElementById('onlineMastraApprovalModal');
+    if (!box || box.classList.contains('hidden')) return;
+    box.classList.add('hidden');
+    box.dataset.mastraApproval = '';
+    box.dataset.mastraMessage = '';
+  }
+
+  function openApprovalModal(approval, messageId) {
+    var box = approvalModal();
+    box.dataset.mastraApproval = text(approval.id);
+    box.dataset.mastraMessage = text(messageId || approval.message_id);
+    var task = box.querySelector('.online-mastra-modal-task');
+    if (task) task.textContent = text(approval.task || approval.reason || '将执行当前任务').trim();
+    var actions = box.querySelector('.online-mastra-modal-actions');
+    if (actions) {
+      actions.querySelectorAll('button').forEach(function (button) {
+        button.disabled = false;
+        if (button._mastraModalBound) return;
+        button._mastraModalBound = true;
+        button.addEventListener('click', function () {
+          if (box.classList.contains('hidden')) return;
+          actions.querySelectorAll('button').forEach(function (item) { item.disabled = true; });
+          decideApproval(box.dataset.mastraApproval, button.getAttribute('data-mastra-modal'), box, box.dataset.mastraMessage);
+        });
+      });
+    }
+    box.classList.remove('hidden');
+    var primary = actions ? actions.querySelector('[data-mastra-modal="approve"]') : null;
+    if (primary && primary.focus) setTimeout(function () { primary.focus(); }, 30);
+    scrollToBottom();
+  }
+
+  function renderApproval(bubble, approval, messageId, historical) {
+    if (!bubble || !approval || !approval.id) return;
+    var markerId = '[data-mastra-approval-marker="' + text(approval.id) + '"]';
+    if (bubble.wrapper.querySelector(markerId)) return;
+    // 气泡里只留一条"等待确认/已确认"的痕迹，真正的确认走弹窗。
+    var row = document.createElement('div');
+    row.className = 'online-mastra-approval-marker is-pending';
+    row.setAttribute('data-mastra-approval-marker', text(approval.id));
+    var label = document.createElement('span');
+    label.textContent = '等待确认：';
+    var summary = document.createElement('em');
+    summary.textContent = text(approval.task || approval.reason || '将执行当前任务').split('\n')[0].slice(0, 60);
+    row.appendChild(label);
+    row.appendChild(summary);
+    bubble.wrapper.appendChild(row);
+    // 历史回放不弹窗，避免一进会话就糊一脸确认框。
+    if (!historical) openApprovalModal(approval, messageId);
   }
 
   function applyEvent(messageId, event, historical) {
@@ -753,7 +852,7 @@
       if (!historical) appendStatusLine(live.bubble, eventStatusText(payload, type));
     }
     if (type === 'progress' && payload.reply_text) setBubbleText(live.bubble, payload.reply_text);
-    if (type === 'approval_required') renderApproval(live.bubble, payload, messageId);
+    if (type === 'approval_required') renderApproval(live.bubble, payload, messageId, historical);
     if (type === 'approval_decided') {
       appendStatusLine(live.bubble, eventStatusText(payload, type) || '已确认，正在执行');
     }
@@ -778,7 +877,10 @@
     var id = text(messageId);
     var live = state.live[id];
     if (live && live.bubble) live.bubble.wrapper.classList.toggle('is-error', !!failed);
-    if (live && live.bubble) settleApprovalCard(live.bubble, failed);
+    if (live && live.bubble) {
+      finishProcessPanel(live.bubble);
+      settleApprovalCard(live.bubble, failed);
+    }
     if (text(state.running.messageId) === id) state.running = { messageId: '', sessionId: '' };
     loadSessions().catch(function () {});
     state.sending = false;
@@ -1080,14 +1182,23 @@
     var buttons = card ? card.querySelectorAll('button') : [];
     buttons.forEach(function (button) { button.disabled = true; });
     request('/api/mastra-chat/approvals/' + encodeURIComponent(id) + '/decision', { method: 'POST', json: { decision: decision } }).then(function (data) {
+      closeApprovalModal();
+      var live = state.live[text(messageId)];
+      var marker = live && live.bubble && live.bubble.wrapper
+        ? live.bubble.wrapper.querySelector('[data-mastra-approval-marker="' + text(id) + '"]')
+        : null;
+      if (marker) {
+        marker.classList.remove('is-pending');
+        marker.classList.add('is-decided');
+        var label = marker.querySelector('span');
+        if (label) label.textContent = decision === 'approve' ? '已确认：' : '已取消：';
+      }
       if (decision === 'approve') {
-        startRunningTask(text(messageId), card);
+        if (live && live.bubble) appendStatusLine(live.bubble, '已确认，正在执行…');
+        startRunningTask(text(messageId), null);
         return;
       }
-      if (card) {
-        card.classList.add('is-decided');
-        card.querySelector('.online-mastra-approval-actions').textContent = decision === 'approve' ? '已确认，正在执行' : '已取消执行';
-      }
+      if (live && live.bubble) appendStatusLine(live.bubble, '已取消执行');
     }).catch(function (error) {
       buttons.forEach(function (button) { button.disabled = false; });
       window.alert(error.message || '操作失败');
@@ -1100,11 +1211,13 @@
   }
 
   function settleApprovalCard(bubble, failed) {
-    var card = bubble && bubble.wrapper ? bubble.wrapper.querySelector('[data-mastra-approval]') : null;
-    var stop = card ? card.querySelector('[data-mastra-stop-task]') : null;
-    if (!stop) return;
-    var actions = card.querySelector('.online-mastra-approval-actions');
-    if (actions) actions.textContent = failed ? '执行失败，可重新下达' : '执行结束';
+    if (!bubble || !bubble.wrapper) return;
+    var marker = bubble.wrapper.querySelector('.online-mastra-approval-marker.is-pending');
+    if (!marker) return;
+    marker.classList.remove('is-pending');
+    marker.classList.add('is-decided');
+    var label = marker.querySelector('span');
+    if (label) label.textContent = failed ? '执行失败：' : '已结束：';
   }
 
   function syncRunningUi() {

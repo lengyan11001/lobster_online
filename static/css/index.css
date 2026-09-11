@@ -5888,6 +5888,177 @@ body.online-mastra-chat-compose .online-mastra-chat {
 .online-mastra-upload-chip.is-error { border-color: #efcaca; color: #b44343; }
 .online-mastra-upload-chip button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 0.9rem; }
 
+/* ── AI 调度助手：过程面板（Codex 式）+ 确认弹窗 + 输入区控件 ───────────── */
+.online-mastra-process {
+  max-width: min(760px, 82%);
+  margin: 0.4rem 0 0 2.1rem;
+}
+.online-mastra-process-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 100%;
+  padding: 0.3rem 0.65rem;
+  border: 1px solid rgba(34, 49, 78, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #6b7a90;
+  font: inherit;
+  font-size: 0.76rem;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease, background 0.18s ease;
+}
+.online-mastra-process-head:hover { border-color: rgba(95, 125, 255, 0.35); color: #3656d6; background: #f7f9ff; }
+.online-mastra-process-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #5f7dff; }
+.online-mastra-process.is-running .online-mastra-process-dot { animation: online-mastra-pulse 1.2s ease-in-out infinite; }
+.online-mastra-process.is-done .online-mastra-process-dot { background: #9fb0c6; animation: none; }
+@keyframes online-mastra-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+.online-mastra-process-current { max-width: min(560px, 62vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.online-mastra-process-count { color: #9aa6b8; font-size: 0.72rem; }
+.online-mastra-process-chevron {
+  width: 6px;
+  height: 6px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg) translateY(-1px);
+  transition: transform 0.18s ease;
+}
+.online-mastra-process.is-open .online-mastra-process-chevron { transform: rotate(-135deg) translateY(-1px); }
+.online-mastra-process-steps {
+  display: grid;
+  gap: 0.22rem;
+  margin: 0.4rem 0 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid rgba(95, 125, 255, 0.25);
+}
+.online-mastra-process-steps[hidden] { display: none; }
+.online-mastra-process-step { color: #7b8899; font-size: 0.76rem; line-height: 1.5; }
+.online-mastra-approval-marker {
+  max-width: min(760px, 82%);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.4rem 0 0 2.1rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 10px;
+  background: rgba(95, 125, 255, 0.07);
+  color: #5a6c8c;
+  font-size: 0.78rem;
+}
+.online-mastra-approval-marker em {
+  max-width: 60ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: normal;
+  color: #38496a;
+}
+.online-mastra-approval-marker.is-decided { background: rgba(34, 197, 94, 0.09); color: #3f7d5c; }
+
+.online-mastra-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(19, 28, 45, 0.42);
+}
+.online-mastra-modal.hidden { display: none; }
+.online-mastra-modal-card {
+  width: min(560px, 100%);
+  max-height: min(78vh, 720px);
+  display: flex;
+  flex-direction: column;
+  padding: 1.1rem 1.15rem 1rem;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 26px 60px rgba(20, 32, 54, 0.28);
+}
+.online-mastra-modal-head { display: flex; align-items: flex-start; gap: 0.6rem; }
+.online-mastra-modal-icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: #fff4ef;
+  color: #f05c2f;
+  font-weight: 700;
+}
+.online-mastra-modal-head h2 { margin: 0; color: #1d2b44; font-size: 1rem; }
+.online-mastra-modal-head p { margin: 0.2rem 0 0; color: #8a97a9; font-size: 0.78rem; line-height: 1.5; }
+.online-mastra-modal-task {
+  max-height: 46vh;
+  overflow: auto;
+  margin: 0.85rem 0 0;
+  padding: 0.8rem 0.85rem;
+  border: 1px solid rgba(34, 49, 78, 0.09);
+  border-radius: 12px;
+  background: #fafbff;
+  color: #33435e;
+  font-size: 0.84rem;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+.online-mastra-modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
+.online-mastra-modal-actions button {
+  min-height: 36px;
+  padding: 0 1rem;
+  border: 1px solid rgba(34, 49, 78, 0.14);
+  border-radius: 10px;
+  background: #fff;
+  color: #52627a;
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+}
+.online-mastra-modal-actions button:hover:not(:disabled) { border-color: rgba(95, 125, 255, 0.4); background: #f7f9ff; color: #3656d6; }
+.online-mastra-modal-actions button.primary { border-color: #5f7dff; background: #5f7dff; color: #fff; }
+.online-mastra-modal-actions button.primary:hover:not(:disabled) { background: #4a68f0; color: #fff; transform: translateY(-1px); }
+.online-mastra-modal-actions button:disabled { opacity: 0.55; cursor: wait; }
+
+.online-mastra-composer { border-radius: 18px; }
+.online-mastra-composer:focus-within {
+  border-color: rgba(95, 125, 255, 0.42);
+  box-shadow: 0 14px 34px rgba(95, 125, 255, 0.14);
+}
+.online-mastra-composer textarea::placeholder { color: #a7b1c0; }
+.online-mastra-composer-left { gap: 0.4rem; }
+.online-mastra-attach-btn {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(34, 49, 78, 0.12);
+  border-radius: 10px;
+  background: #fff;
+  color: #52627a;
+  font-size: 1.05rem;
+}
+.online-mastra-attach-btn:hover { border-color: rgba(95, 125, 255, 0.4); background: #f7f9ff; color: #3656d6; }
+.online-mastra-permission-current {
+  min-height: 32px;
+  padding: 0 0.6rem;
+  border-radius: 999px;
+  background: rgba(240, 92, 47, 0.08);
+}
+.online-mastra-permission-current:hover { background: rgba(240, 92, 47, 0.14); }
+.online-mastra-model-label { padding: 0.2rem 0.5rem; border-radius: 999px; background: rgba(34, 49, 78, 0.05); }
+.online-mastra-send-btn {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(145deg, #5f7dff, #7ea0ff);
+  box-shadow: 0 6px 16px rgba(95, 125, 255, 0.32);
+}
+.online-mastra-send-btn:hover:not(:disabled) { background: linear-gradient(145deg, #4a68f0, #6b8cff); transform: translateY(-1px); }
+.online-mastra-send-btn:disabled { background: #c8ccd6; box-shadow: none; cursor: not-allowed; transform: none; }
+
 @media (max-width: 768px) {
   body.online-mastra-chat-compose .dashboard-layout { display: block; }
   body.online-mastra-chat-compose .app-side-nav { display: none; }
