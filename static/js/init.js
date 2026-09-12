@@ -1627,7 +1627,7 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   'local-bestseller': 'local_bestseller_skill',
   'viral-video-remix': 'viral_video_remix_skill',
   'hifly-digital-human': 'hifly_digital_human_skill',
-  'shanjian-digital-human': 'hifly_digital_human_skill',
+  'shanjian-digital-human': 'shanjian_digital_human_skill',
   'ecommerce-detail-studio': 'comfly_ecommerce_detail_skill',
   'juhe-wechat': 'juhe_wechat_skill',
   'wechat-channels-transcript': 'wechat_channels_transcript_skill',

@@ -9641,6 +9641,21 @@ async def _run_shanjian_digital_human_workflow(
     audio_mode = drive_mode == "audio" or bool(audio_url or audio_asset_id)
     voice = _workflow_text(source.get("voice") or source.get("speaker_id") or source.get("speakerId"), 128)
     voice_candidates = _normalize_voice_candidates(source.get("voice_candidates"))
+    if not audio_mode and not voice and not voice_candidates and cloud is not None and base:
+        # 数字人 2.0：节点没指定声音时，用账号自己的声音分身库（按天轮换），
+        # 这样从 1.0 迁过来的工作流节点不需要用户再配一次。
+        try:
+            response = await cloud.get(
+                f"{base}/api/hifly/my/voice/list",
+                params={"page": 1, "size": 100},
+                headers=headers,
+                timeout=30.0,
+            )
+            payload = response.json() if response.content else {}
+            if response.status_code < 400 and isinstance(payload, dict):
+                voice_candidates = _normalize_voice_candidates(payload.get("items"))
+        except Exception as exc:
+            logger.warning("[H5-DIGITAL-HUMAN] voice list refresh failed: %s", exc)
     if not audio_mode and voice_candidates:
         local_day, rotation_key = _digital_human_rotation_context(source, current_item)
         sequence_slot = max(0, _safe_int(source.get("virtualman_rotation_slot"))) if "virtualman_rotation_slot" in source else None

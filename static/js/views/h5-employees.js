@@ -73,7 +73,7 @@
   var nodeOptionKeys = {};
   var NODE_OPTION_GROUP_ORDER = ['抖音','个微','AI营销'];
   var NODE_OPTION_PACKAGE_IDS = {
-    'hifly.video.create_by_tts':'hifly_digital_human_skill',
+    'hifly.video.create_by_tts':'shanjian_digital_human_skill',
     'comfly.seedance.tvc.pipeline':'comfly_seedance_tvc_skill',
     'comfly.daihuo.pipeline':'comfly_veo_skill',
     'image_composer_studio':'goal_video_pipeline_skill',
@@ -387,7 +387,9 @@
     if (row.key.indexOf('wechat_channels_') === 0 || row.soon) return {title:row.label,task_kind:'workflow_placeholder',content:'H5 工作流占位：' + row.label,payload:{action:'workflow_coming_soon',skip_execution:true,note:row.note || row.label,platform:'wechat_channels'}};
     if (row.key.indexOf('native_wechat_') === 0 || row.key === 'native_whatsapp_poll') return nativePlan(row.key, row);
     if (row.key === 'local_bestseller') return {title:'同城爆款视频',task_kind:'client_workflow',content:'H5 工作流：同城爆款视频',payload:{action:'local_bestseller_daily_video',params:baseScheduleParams(row,{note:prompt,prompt:prompt,days:30,day_mode:'workflow_elapsed'})}};
-    if (row.key === 'hifly.video.create_by_tts') return {title:'数字人口播视频',task_kind:'capability',content:'H5 工作流：数字人口播视频',payload:{capability_id:'hifly.video.create_by_tts',payload:{script:prompt,prompt:prompt}}};
+    // 数字人统一走 2.0：节点下发 shanjian_digital_human_video，由账号已训练好的
+    // 形象分身/声音分身（按天轮换）出片；1.0 的本地数字人管线已退役。
+    if (row.key === 'hifly.video.create_by_tts') return {title:'数字人口播视频',task_kind:'client_workflow',content:'H5 工作流：数字人 2.0 口播视频',payload:{action:'shanjian_digital_human_video',params:baseScheduleParams(row,{script:prompt,prompt:prompt,title:String(prompt || '数字人口播').slice(0,40),virtualman_selection_mode:'daily_round_robin'})}};
     if (row.key === 'comfly.seedance.tvc.pipeline') return {title:'创意分镜头视频',task_kind:'capability',content:'H5 工作流：创意分镜头视频',payload:{capability_id:'comfly.seedance.tvc.pipeline',payload:{action:'start_pipeline',task_text:prompt,prompt:prompt,auto_save:true}}};
     if (row.key === 'comfly.daihuo.pipeline') return {title:'爆款TVC',task_kind:'capability',content:'H5 工作流：爆款TVC',payload:{capability_id:'comfly.daihuo.pipeline',payload:{action:'start_pipeline',task_text:prompt,prompt:prompt,auto_save:true}}};
     if (row.key === 'viral_video_remix') return {title:'爆款复制',task_kind:'client_workflow',content:'H5 工作流：爆款复制',payload:{action:'viral_video_remix_start',params:baseScheduleParams(row,{prompt:prompt,billing_confirmed:true,ratio:'9:16'})}};
