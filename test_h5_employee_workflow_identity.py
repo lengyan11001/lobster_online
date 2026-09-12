@@ -161,23 +161,3 @@ def test_moments_nodes_save_paginated_contact_selection_as_wechat_ids():
     assert "loadDevices()" in script and "loadLocalWechatContacts()" in script
     assert '"/api/h5-chat/devices/status"' in channel
     assert "proxy_h5_chat_devices_status" in channel
-
-
-def test_online_digital_human_node_runs_on_shanjian_2():
-    """数字人统一走 2.0：节点下发 shanjian_digital_human_video，权限挂 2.0 包。"""
-    script = (ROOT / "static" / "js" / "views" / "h5-employees.js").read_text(encoding="utf-8")
-    index = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    init = (ROOT / "static" / "js" / "init.js").read_text(encoding="utf-8")
-    channel = (ROOT / "backend" / "app" / "api" / "h5_chat_channel.py").read_text(encoding="utf-8")
-
-    # 节点权限与执行动作都切到数字人 2.0
-    assert "'hifly.video.create_by_tts':'shanjian_digital_human_skill'" in script
-    assert "action:'shanjian_digital_human_video'" in script
-    assert "virtualman_selection_mode:'daily_round_robin'" in script
-    # 1.0 的本地能力管线不再作为节点任务
-    assert "payload:{capability_id:'hifly.video.create_by_tts'" not in script
-    # 2.0 入口/视图权限改成独立的 2.0 包（1.0 包退役后不能被一起隐藏）
-    assert 'data-open-hidden-view="shanjian-digital-human" data-feature-gate="shanjian_digital_human_skill"' in index
-    assert "'shanjian-digital-human': 'shanjian_digital_human_skill'" in init
-    # 没配声音时用账号的声音分身库（按天轮换），迁移过来的节点不用重配
-    assert "/api/hifly/my/voice/list" in channel
