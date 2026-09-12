@@ -52,6 +52,7 @@ class Input(TypedDict, total=False):
     video_fallbacks: List[Dict[str, Any]]
     workflow_mode: str
     aspect_ratio: str
+    resolution: str
     visual_tone: str
     rhythm: str
     storyboard_count: int
@@ -97,6 +98,7 @@ class PipelineConfig:
     video_fallbacks: List[Dict[str, Any]] = field(default_factory=list)
     workflow_mode: str = "storyboard"
     aspect_ratio: str = "9:16"
+    resolution: str = "720P"
     reference_purposes: List[str] = field(default_factory=list)
     visual_tone: str = "clean_bright"
     rhythm: str = "smooth"
@@ -125,6 +127,8 @@ ALLOWED_TOTAL_DURATIONS = (10, 20, 30, 40, 50, 60)
 ALLOWED_YUNWU_TOTAL_DURATIONS = (8, 16, 24, 32, 40, 48)
 FIXED_SEGMENT_DURATION_SECONDS = 10
 YUNWU_SEGMENT_DURATION_SECONDS = 8
+WAN30_MIN_DURATION_SECONDS = 5
+WAN30_MAX_DURATION_SECONDS = 30
 # Comfly rejects prompts at 4096 tokens.  Keep a conservative character
 # budget because the video providers do not all use the same tokenizer.
 VIDEO_PROMPT_MAX_CHARS = 3800
@@ -303,6 +307,7 @@ class RunLogger:
                 "video_fallbacks": config.video_fallbacks or [],
                 "workflow_mode": config.workflow_mode,
                 "aspect_ratio": config.aspect_ratio,
+                "resolution": config.resolution,
                 "segment_count": config.segment_count,
                 "segment_duration_seconds": config.segment_duration_seconds,
                 "total_duration_seconds": config.total_duration_seconds,
@@ -408,6 +413,11 @@ def _as_bool(value: Any, default: bool) -> bool:
     return bool(value)
 
 
+def _normalize_video_resolution(raw: Any, default: str = "720P") -> str:
+    value = str(raw or "").strip().upper()
+    return value if value in {"720P", "1080P"} else default
+
+
 def _normalize_seedance_model(raw: str) -> str:
     model = (raw or "").strip()
     return _SEEDANCE_MODEL_ALIASES.get(model, model)
@@ -430,8 +440,15 @@ def _is_grok_video_model(raw: str) -> bool:
     } or s.startswith("xai/grok-imagine-video/")
 
 
+def _is_wan30_video_model(raw: str) -> bool:
+    s = (raw or "").strip().lower().replace("_", "-").replace(" ", "")
+    return s in {"wan3.0", "wan30", "wan3.0-video", "wan-3.0", "万相3.0", "万相-3.0"}
+
+
 def _normalize_video_channel(raw: str) -> str:
     s = (raw or "").strip().lower()
+    if s in {"dashscope", "dashscope_wan30", "dashscope-wan30", "wan30", "wan3", "wan3.0", "qianwen", "千问", "万相"}:
+        return "dashscope"
     if s in {"openmind", "open-mind", "om", "openmindapi"}:
         return "openmind"
     if s in {"xai", "x-ai", "official-xai", "official_xai"}:
@@ -462,6 +479,8 @@ def _default_video_base_url(channel: str, api_base: str) -> str:
 
 def _default_video_model(channel: str) -> str:
     normalized = _normalize_video_channel(channel)
+    if normalized == "dashscope":
+        return "wan3.0-video"
     if normalized == "openmind":
         return "veo31-fast"
     if normalized == "xai":
@@ -645,6 +664,22 @@ def _friendly_comfly_http_error(status_code: int, payload: Dict[str, Any]) -> st
 def _is_transient_video_poll_error(exc: Exception, channel: str) -> bool:
     text = str(exc or "").lower()
     normalized_channel = _normalize_video_channel(channel)
+    if normalized_channel == "dashscope":
+        return any(
+            flag in text
+            for flag in (
+                "task_id_not_found",
+                "task not found",
+                "http 400",
+                "http 404",
+                "http 502",
+                "readtimeout",
+                "timed out",
+                "timeout",
+                "connection reset",
+                "temporarily unavailable",
+            )
+        )
     if normalized_channel == "openmind":
         return any(
             flag in text
@@ -1403,6 +1438,49 @@ class ComflySeedanceClient:
         video_channel = _normalize_video_channel(channel or self.video_channel)
         video_model = (model or self.config.video_model or _default_video_model(video_channel)).strip() or _default_video_model(video_channel)
         video_base_url = _normalize_video_base_url_for_channel(video_channel, base_url or "", _default_video_base_url(video_channel, self.base_url))
+        if video_channel == "dashscope":
+            images = [url for url in reference_urls if url]
+            if segment_reference_url and segment_reference_url not in images:
+                images.append(segment_reference_url)
+            body: Dict[str, Any] = {
+                "model": video_model or "wan3.0-video",
+                "prompt": prompt,
+                "aspect_ratio": _normalize_aspect_ratio(self.config.aspect_ratio),
+                "ratio": _normalize_aspect_ratio(self.config.aspect_ratio),
+                "resolution": self.config.resolution,
+                "duration": int(duration_seconds),
+            }
+            if images:
+                body["images"] = images[:1]
+                body["image_url"] = images[0]
+
+            def call_dashscope() -> Dict[str, Any]:
+                vid_url = f"{video_base_url}/v2/videos/generations"
+                self._trace_request("dashscope_wan30_submit", vid_url, body)
+                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=180)
+                payload = self._check(r)
+                data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+                output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
+                task_id = str(
+                    output.get("task_id")
+                    or data.get("task_id")
+                    or payload.get("task_id")
+                    or payload.get("id")
+                    or data.get("id")
+                    or payload.get("request_id")
+                    or ""
+                ).strip()
+                if not task_id:
+                    raise PipelineError(f"DashScope Wan3.0 submit returned no task id: {payload}")
+                payload["_request"] = body
+                payload["task_id"] = task_id
+                payload["video_channel"] = "dashscope"
+                payload["video_base_url"] = video_base_url
+                payload["video_model"] = video_model or "wan3.0-video"
+                return payload
+
+            return _retry(action, self.config.video_submit_retries, self.config.network_retry_delay_seconds, self.logger, call_dashscope)
+
         if video_channel == "openmind":
             images = [url for url in reference_urls if url]
             if segment_reference_url and segment_reference_url not in images:
@@ -1645,10 +1723,15 @@ class ComflySeedanceClient:
         task_id: str,
         *,
         channel: str = "",
+        model: str = "",
         base_url: str = "",
         on_progress: Optional[Callable[[List[Dict[str, Any]], Dict[str, Any]], None]] = None,
     ) -> Dict[str, Any]:
         video_channel = _normalize_video_channel(channel or self.video_channel)
+        video_model = (
+            str(model or self.config.video_model or "").strip()
+            or _default_video_model(video_channel)
+        )
         video_base_url = _normalize_video_base_url_for_channel(video_channel, base_url or "", _default_video_base_url(video_channel, self.base_url))
         history: List[Dict[str, Any]] = []
         for attempt in range(1, self.config.max_polls + 1):
@@ -1662,6 +1745,12 @@ class ComflySeedanceClient:
                 elif video_channel == "xing":
                     poll_url = f"{video_base_url}/xing/v1/videos/{task_id}"
                     phase = "xing_seedance_poll"
+                elif video_channel == "dashscope":
+                    poll_url = (
+                        f"{video_base_url}/v2/videos/generations/{quote(task_id, safe='')}"
+                        f"?{urlencode({'api_kind': 'dashscope_wan30', 'model': video_model or 'wan3.0-video'})}"
+                    )
+                    phase = "dashscope_wan30_poll"
                 elif video_channel == "yunwu":
                     poll_url = f"{video_base_url}/v1/video/query?{urlencode({'id': task_id})}"
                     phase = "yunwu_video_poll"
@@ -1705,6 +1794,7 @@ class ComflySeedanceClient:
                 raise
             data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
             result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+            output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
             status = str(
                 payload.get("status")
                 or payload.get("state")
@@ -1713,6 +1803,9 @@ class ComflySeedanceClient:
                 or data.get("state")
                 or data.get("task_status")
                 or result.get("status")
+                or output.get("status")
+                or output.get("state")
+                or output.get("task_status")
                 or ""
             ).strip().lower()
             content = payload.get("content") if isinstance(payload.get("content"), dict) else {}
@@ -1727,6 +1820,9 @@ class ComflySeedanceClient:
                 or result.get("video_url")
                 or result.get("output")
                 or result.get("url")
+                or output.get("video_url")
+                or output.get("output")
+                or output.get("url")
                 or video_obj.get("url")
                 or payload.get("video_url")
                 or payload.get("output")
@@ -1734,7 +1830,23 @@ class ComflySeedanceClient:
                 or payload.get("mp4url")
                 or ""
             ).strip()
-            outputs = data.get("outputs") if isinstance(data, dict) else None
+            outputs = (
+                data.get("outputs")
+                if isinstance(data, dict)
+                else None
+            ) or (
+                output.get("outputs")
+                if isinstance(output, dict)
+                else None
+            ) or (
+                output.get("results")
+                if isinstance(output, dict)
+                else None
+            ) or (
+                output.get("task_results")
+                if isinstance(output, dict)
+                else None
+            )
             if not video_url and isinstance(outputs, list):
                 for item in outputs:
                     if isinstance(item, str) and item.strip():
@@ -2042,6 +2154,7 @@ def _poll_segment_video(
     poll_result = client.poll_seedance_video(
         segment_plan["video_task_id"],
         channel=str(segment_plan.get("video_channel") or ""),
+        model=str(segment_plan.get("video_model") or ""),
         base_url=str(segment_plan.get("video_base_url") or ""),
         on_progress=on_poll_progress,
     )
@@ -2259,7 +2372,11 @@ def _run_segment_video_providers(
 def _direct_video_prompt(config: PipelineConfig) -> str:
     prompt = (config.task_text or "").strip()
     if not prompt:
-        prompt = "基于上传参考图生成一段自然、连贯、适合短视频平台发布的图生视频。"
+        prompt = (
+            "基于参考图生成一段自然、连贯、适合短视频平台发布的图生视频。"
+            if config.reference_image
+            else "根据创意提示词生成一段自然、连贯、适合短视频平台发布的文生视频。"
+        )
     return _limit_video_prompt("\n".join(
         [
             prompt,
@@ -2272,37 +2389,36 @@ def _direct_video_prompt(config: PipelineConfig) -> str:
 
 
 def _build_direct_segment_plan(config: PipelineConfig, reference_image_urls: List[str], index: int = 1) -> Dict[str, Any]:
-    if not reference_image_urls:
-        raise PipelineError("direct_video requires at least one reference image")
     video_prompt = _direct_video_prompt(config)
     segment_index = max(1, int(index or 1))
-    reference_url = reference_image_urls[0]
+    reference_url = reference_image_urls[0] if reference_image_urls else ""
     start_second = (segment_index - 1) * config.segment_duration_seconds
     end_second = segment_index * config.segment_duration_seconds
+    has_reference = bool(reference_url)
     board = {
         "index": segment_index,
         "time_range_cn": f"{start_second}-{end_second}秒",
-        "board_title_cn": "直接图生视频",
-        "board_goal_cn": "使用用户上传图片和提示词直接生成视频",
+        "board_title_cn": "直接图生视频" if has_reference else "直接文生视频",
+        "board_goal_cn": "使用用户上传图片和提示词直接生成视频" if has_reference else "使用提示词直接生成视频",
         "narrative_stage_cn": "direct_video",
-        "visual_focus_cn": "用户上传参考图",
+        "visual_focus_cn": "用户上传参考图" if has_reference else "用户创意提示词",
         "seedance_prompt_en": video_prompt,
-        "storyboard_image_prompt_en": "提示图片为上传图片",
+        "storyboard_image_prompt_en": "提示图片为上传图片" if has_reference else "",
     }
     return {
         "index": segment_index,
         "board": board,
         "duration_seconds": config.segment_duration_seconds,
-        "board_image_prompt": "提示图片为上传图片",
+        "board_image_prompt": "提示图片为上传图片" if has_reference else "",
         "segment_reference_prompt": video_prompt,
         "video_prompt": video_prompt,
         "segment_reference_result": {
             "url": reference_url,
-            "source": "uploaded_reference_image",
+            "source": "uploaded_reference_image" if has_reference else "text_prompt",
         },
         "board_image_result": {
             "url": reference_url,
-            "source": "uploaded_reference_image",
+            "source": "uploaded_reference_image" if has_reference else "text_prompt",
         },
         "workflow_mode": "direct_video",
     }
@@ -2312,7 +2428,7 @@ def _should_use_direct_video(config: PipelineConfig, reference_image_urls: List[
     mode = (config.workflow_mode or "").strip().lower().replace("-", "_")
     if mode not in {"direct", "direct_video", "image_to_video", "i2v"}:
         return False
-    return bool(reference_image_urls)
+    return True
 
 
 def _finish_segments(
@@ -2367,6 +2483,7 @@ def _finish_segments(
             "video_fallbacks": config.video_fallbacks or [],
             "workflow_mode": config.workflow_mode,
             "aspect_ratio": config.aspect_ratio,
+            "resolution": config.resolution,
             "merge_clips": config.merge_clips,
             "reference_purposes": config.reference_purposes,
             "visual_tone": config.visual_tone,
@@ -2407,29 +2524,48 @@ def _build_config(data: Input) -> PipelineConfig:
         raise PipelineError("Missing apikey")
     raw_video_model = str(data.get("video_model") or "").strip()
     model_hint = raw_video_model.lower().replace(" ", "")
-    inferred_channel = "openmind" if _is_grok_video_model(raw_video_model) else ("yunwu" if model_hint in {"yunwu-veo3.1-plus", "veo3.1-plus", "veo3.1"} else "seedance")
+    inferred_channel = (
+        "dashscope"
+        if _is_wan30_video_model(raw_video_model)
+        else ("openmind" if _is_grok_video_model(raw_video_model) else ("yunwu" if model_hint in {"yunwu-veo3.1-plus", "veo3.1-plus", "veo3.1"} else "seedance"))
+    )
     video_channel = _normalize_video_channel(str(data.get("video_channel") or data.get("channel") or inferred_channel))
     if model_hint in {"yunwu-veo3.1-plus", "veo3.1-plus", "veo3.1"}:
         raw_video_model = "veo3.1"
     video_model_default = _default_video_model(video_channel)
     effective_video_model = (raw_video_model or video_model_default).strip() or video_model_default
-    segment_seconds = _segment_seconds_for_video(video_channel, effective_video_model)
-    allowed_totals = _allowed_total_durations_for_video(video_channel, effective_video_model)
+    is_wan30 = video_channel == "dashscope" or _is_wan30_video_model(effective_video_model)
     requested_segment_count = data.get("segment_count", data.get("storyboard_count"))
-    if data.get("total_duration_seconds") is None and requested_segment_count is not None:
-        raw_total = int(requested_segment_count) * segment_seconds
+    if is_wan30:
+        raw_total = int(data.get("total_duration_seconds", data.get("segment_duration_seconds", 10)))
+        if raw_total < WAN30_MIN_DURATION_SECONDS or raw_total > WAN30_MAX_DURATION_SECONDS:
+            raise PipelineError(
+                f"Wan3.0 duration must be between {WAN30_MIN_DURATION_SECONDS} and {WAN30_MAX_DURATION_SECONDS} seconds"
+            )
+        raw_segment_duration = int(data.get("segment_duration_seconds", raw_total))
+        if raw_segment_duration != raw_total:
+            raise PipelineError("Wan3.0 uses one video request; segment_duration_seconds must equal total_duration_seconds")
+        if requested_segment_count is not None and int(requested_segment_count) != 1:
+            raise PipelineError("Wan3.0 uses one video request; segment_count must be 1")
+        segment_seconds = raw_total
+        segment_count = 1
     else:
-        raw_total = int(data.get("total_duration_seconds", 20))
-    if raw_total not in allowed_totals:
-        raise PipelineError(f"total_duration_seconds must be one of {list(allowed_totals)}")
-    raw_segment_duration = int(data.get("segment_duration_seconds", segment_seconds))
-    if raw_segment_duration != segment_seconds:
-        raise PipelineError(f"segment_duration_seconds must be exactly {segment_seconds}")
-    segment_count = raw_total // segment_seconds
-    if requested_segment_count is not None and int(requested_segment_count) != segment_count:
-        raise PipelineError(
-            f"segment_count/storyboard_count must match total_duration_seconds / {segment_seconds}"
-        )
+        segment_seconds = _segment_seconds_for_video(video_channel, effective_video_model)
+        allowed_totals = _allowed_total_durations_for_video(video_channel, effective_video_model)
+        if data.get("total_duration_seconds") is None and requested_segment_count is not None:
+            raw_total = int(requested_segment_count) * segment_seconds
+        else:
+            raw_total = int(data.get("total_duration_seconds", 20))
+        if raw_total not in allowed_totals:
+            raise PipelineError(f"total_duration_seconds must be one of {list(allowed_totals)}")
+        raw_segment_duration = int(data.get("segment_duration_seconds", segment_seconds))
+        if raw_segment_duration != segment_seconds:
+            raise PipelineError(f"segment_duration_seconds must be exactly {segment_seconds}")
+        segment_count = raw_total // segment_seconds
+        if requested_segment_count is not None and int(requested_segment_count) != segment_count:
+            raise PipelineError(
+                f"segment_count/storyboard_count must match total_duration_seconds / {segment_seconds}"
+            )
     base_url = (data.get("base_url") or "https://ai.comfly.org").rstrip("/")
     video_base_default = _default_video_base_url(video_channel, base_url)
     fallback_channel = _normalize_video_channel(str(data.get("video_fallback_channel") or data.get("fallback_video_channel") or "comfly"))
@@ -2465,6 +2601,7 @@ def _build_config(data: Input) -> PipelineConfig:
         video_fallbacks=list(data.get("video_fallbacks") or data.get("fallback_video_providers") or []),
         workflow_mode=(str(data.get("workflow_mode") or "storyboard").strip().lower().replace("-", "_") or "storyboard"),
         aspect_ratio=_normalize_aspect_ratio(str(data.get("aspect_ratio") or "9:16"), "9:16"),
+        resolution=_normalize_video_resolution(data.get("resolution"), "720P"),
         reference_purposes=reference_purposes,
         visual_tone=visual_tone,
         rhythm=rhythm,
@@ -2525,7 +2662,7 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                 attempts=0,
                 payload={
                     "workflow_mode": "direct_video",
-                    "reference_image_url": reference_image_urls[0],
+                    "reference_image_url": reference_image_urls[0] if reference_image_urls else None,
                     "submitted_video_prompt": segment_plans[0]["video_prompt"],
                     "segment_count": len(segment_plans),
                     "segment_duration_seconds": config.segment_duration_seconds,
@@ -2538,11 +2675,11 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                     "ready",
                     payload={
                         "board": segment_plan["board"],
-                        "image_prompt": "提示图片为上传图片",
+                        "image_prompt": segment_plan["board_image_prompt"],
                         "video_prompt": segment_plan["video_prompt"],
                         "prompt": segment_plan["video_prompt"],
-                        "first_frame_image_url": segment_plan["segment_reference_result"]["url"],
-                        "image_source": "uploaded_reference_image",
+                        "first_frame_image_url": segment_plan["segment_reference_result"]["url"] or None,
+                        "image_source": segment_plan["segment_reference_result"]["source"],
                         "submitted_video_prompt": segment_plan["video_prompt"],
                         "workflow_mode": "direct_video",
                     },

@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, Response
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
@@ -72,6 +72,7 @@ _TIMEOUT_VIDEO_SUBMIT = 60.0
 _TIMEOUT_OPENMIND_VIDEO_SUBMIT = 60.0
 _TIMEOUT_XAI_VIDEO_SUBMIT = 60.0
 _TIMEOUT_VIDEO_POLL = 30.0
+_TIMEOUT_DASHSCOPE_VIDEO_SUBMIT = 180.0
 _MAX_PROXY_VIDEO_TASK_TRACK = 5000
 _MAX_GROK_REFERENCE_BYTES = 30 * 1024 * 1024
 _proxy_video_task_meta: "OrderedDict[str, Tuple[str, str]]" = OrderedDict()
@@ -995,6 +996,149 @@ def _xing_seedance_headers() -> Dict[str, str]:
     }
 
 
+def _dashscope_video_base_url() -> str:
+    base = (
+        os.environ.get("DASHSCOPE_VIDEO_API_BASE")
+        or os.environ.get("QWEN_VIDEO_API_BASE")
+        or os.environ.get("DASHSCOPE_API_BASE")
+        or "https://dashscope.aliyuncs.com"
+    ).strip().rstrip("/")
+    return base or "https://dashscope.aliyuncs.com"
+
+
+def _dashscope_video_api_key() -> str:
+    key = (
+        os.environ.get("DASHSCOPE_VIDEO_API_KEY")
+        or os.environ.get("QWEN_VIDEO_API_KEY")
+        or os.environ.get("DASHSCOPE_API_KEY")
+        or os.environ.get("QIANWEN_API_KEY")
+        or ""
+    ).strip()
+    if not key:
+        raise HTTPException(503, "Server missing DASHSCOPE_VIDEO_API_KEY")
+    return key
+
+
+def _dashscope_video_headers(*, async_submit: bool = False) -> Dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {_dashscope_video_api_key()}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if async_submit:
+        headers["X-DashScope-Async"] = "enable"
+    return headers
+
+
+def _normalize_wan_ratio(raw: Any) -> str:
+    ratio = str(raw or "").strip().replace(" ", "")
+    return ratio if ratio in {"adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"} else "9:16"
+
+
+def _normalize_wan_resolution(raw: Any) -> str:
+    resolution = str(raw or "").strip().upper()
+    return resolution if resolution in {"480P", "720P", "1080P"} else "720P"
+
+
+def _dashscope_wan30_body(body: Dict[str, Any], model: str, entry: Dict[str, Any]) -> Dict[str, Any]:
+    source = dict(body or {})
+    prompt = str(source.get("prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(400, "missing prompt")
+
+    image_url = ""
+    image = source.get("image")
+    if isinstance(image, dict):
+        image_url = str(image.get("url") or image.get("image_url") or "").strip()
+    elif image:
+        image_url = str(image).strip()
+    if not image_url:
+        image_url = str(source.get("image_url") or "").strip()
+    if not image_url:
+        images = source.get("images")
+        if isinstance(images, list):
+            image_url = next((str(item).strip() for item in images if str(item or "").strip()), "")
+
+    try:
+        duration = int(float(source.get("duration") or source.get("seconds") or 10))
+    except (TypeError, ValueError):
+        duration = 10
+    if duration < 5 or duration > 30:
+        raise HTTPException(400, "Wan3.0 duration must be between 5 and 30 seconds")
+
+    ratio = _normalize_wan_ratio(source.get("aspect_ratio") or source.get("ratio") or "9:16")
+    resolution = _normalize_wan_resolution(source.get("resolution") or "720P")
+    upstream_model = _upstream_model(model, entry) or "wan3.0-video"
+    parameters: Dict[str, Any] = {
+        "duration": duration,
+        "resolution": resolution,
+        "ratio": ratio,
+    }
+    if source.get("seed") not in (None, ""):
+        parameters["seed"] = source.get("seed")
+
+    input_body: Dict[str, Any] = {"prompt": prompt}
+    if image_url:
+        input_body["media"] = [{"type": "reference_image", "url": image_url}]
+
+    return {
+        "model": upstream_model,
+        "input": input_body,
+        "parameters": parameters,
+    }
+
+
+async def _dashscope_wan30_submit(body: Dict[str, Any], model: str, entry: Dict[str, Any]) -> Dict[str, Any]:
+    upstream_body = _dashscope_wan30_body(body, model, entry)
+    url = f"{_dashscope_video_base_url()}/api/v1/services/aigc/video-generation/video-synthesis"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_DASHSCOPE_VIDEO_SUBMIT, follow_redirects=True, trust_env=False) as client:
+            response = await client.post(url, headers=_dashscope_video_headers(async_submit=True), json=upstream_body)
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"DashScope Wan3.0 submit timeout after {_TIMEOUT_DASHSCOPE_VIDEO_SUBMIT}s") from exc
+    except httpx.TransportError as exc:
+        raise RuntimeError(f"DashScope Wan3.0 transport error: {exc!r}") from exc
+    if response.status_code >= 400:
+        raise RuntimeError(f"DashScope Wan3.0 HTTP {response.status_code}: {(response.text or '')[:700]}")
+    try:
+        payload = response.json() if response.content else {}
+    except Exception:
+        payload = {"_raw_text": response.text}
+    if isinstance(payload, dict):
+        payload.setdefault("_provider", "dashscope")
+        payload.setdefault("_api_format", "dashscope_wan30")
+        payload.setdefault("_requested_model", upstream_body.get("model"))
+        task_id = _task_id_from_response(payload)
+        if task_id:
+            payload.setdefault("task_id", task_id)
+    return payload
+
+
+async def _dashscope_wan30_poll(task_id: str) -> Dict[str, Any]:
+    safe_task_id = (task_id or "").strip()
+    if not safe_task_id:
+        raise HTTPException(400, "missing task_id")
+    url = f"{_dashscope_video_base_url()}/api/v1/tasks/{safe_task_id}"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT_VIDEO_POLL, follow_redirects=True, trust_env=False) as client:
+            response = await client.get(url, headers=_dashscope_video_headers())
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"DashScope Wan3.0 poll timeout after {_TIMEOUT_VIDEO_POLL}s") from exc
+    except httpx.TransportError as exc:
+        raise RuntimeError(f"DashScope Wan3.0 poll transport error: {exc!r}") from exc
+    if response.status_code >= 400:
+        raise RuntimeError(f"DashScope Wan3.0 poll HTTP {response.status_code}: {(response.text or '')[:700]}")
+    try:
+        payload = response.json() if response.content else {}
+    except Exception:
+        payload = {"_raw_text": response.text}
+    if isinstance(payload, dict):
+        payload.setdefault("_provider", "dashscope")
+        payload.setdefault("_api_format", "dashscope_wan30")
+        payload.setdefault("task_id", safe_task_id)
+    return payload
+
+
 def _xing_seedance_body(body: Dict[str, Any], model: str) -> Dict[str, Any]:
     source = dict(body or {})
     prompt = str(source.get("prompt") or "").strip()
@@ -1220,6 +1364,12 @@ async def _openmind_video_content(task_id: str) -> Response:
 def _task_id_from_response(resp: Dict[str, Any]) -> str:
     if not isinstance(resp, dict):
         return ""
+    output = resp.get("output")
+    if isinstance(output, dict):
+        for key in ("task_id", "id", "video_id", "job_id", "request_id", "generation_id", "run_id"):
+            value = output.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
     for key in ("id", "task_id", "video_id", "job_id", "request_id", "generation_id", "run_id"):
         value = resp.get(key)
         if isinstance(value, str) and value.strip():
@@ -1265,6 +1415,17 @@ def _coerce_grok_video_resolution(raw: Any) -> str:
 
 def _is_grok_api_format(entry: Dict[str, Any]) -> bool:
     return str((entry or {}).get("api_format") or "").strip().lower() == "grok"
+
+
+def _is_dashscope_wan30_api_format(entry: Dict[str, Any], model: str = "") -> bool:
+    api_format = str((entry or {}).get("api_format") or "").strip().lower()
+    model_id = str(model or (entry or {}).get("comfly_model") or "").strip().lower().replace("_", "-").replace(" ", "")
+    return api_format in {"dashscope_wan30", "wan30", "wan3"} or model_id in {
+        "wan3.0",
+        "wan30",
+        "wan3.0-video",
+        "wan-3.0",
+    }
 
 
 def _coerce_grok15_model(duration: Any) -> str:
@@ -1527,6 +1688,8 @@ async def _poll_comfly_video_task(task_id: str, model: str = "", api_kind: str =
         raise HTTPException(400, "missing task_id")
     kind = (api_kind or "").strip().lower()
     route_model = (model or "").strip()
+    if kind == "dashscope_wan30":
+        return await _dashscope_wan30_poll(tid)
     if kind == "grok_v1":
         resp = await _comfly_request(
             "GET",
@@ -1552,6 +1715,13 @@ async def _poll_comfly_video_task(task_id: str, model: str = "", api_kind: str =
             resp.setdefault("_api_format", "veo_v2")
         return resp
     except Exception as exc:
+        if "task_id_not_found" in str(exc).lower():
+            try:
+                resp = await _dashscope_wan30_poll(tid)
+                _remember_proxy_video_task(tid, "dashscope_wan30", route_model or "wan3.0-video")
+                return resp
+            except Exception:
+                pass
         if not _should_try_comfly_v1_poll_fallback(exc):
             raise
         resp = await _comfly_request(
@@ -2382,7 +2552,9 @@ async def proxy_videos_generations_submit(
     _audit("video_submit_pre_deduct", user_id=billing_user_id, request_user_id=request_user_id, model=model, estimated=estimated)
 
     try:
-        if _is_grok_api_format(entry):
+        if _is_dashscope_wan30_api_format(entry, model):
+            resp = await _dashscope_wan30_submit(body, model, entry)
+        elif _is_grok_api_format(entry):
             resp = await _submit_comfly_grok15_video(body, model, entry)
         else:
             resp = await _comfly_request("POST", _comfly_url("/v2/videos/generations", model),
@@ -2416,8 +2588,24 @@ async def proxy_videos_generations_submit(
     task_id = _task_id_from_response(resp) or (
         (resp.get("data", {}) or {}).get("task_id") if isinstance(resp.get("data"), dict) else resp.get("task_id")
     )
-    api_kind = "grok_v1" if _is_grok_api_format(entry) else "veo_v2"
+    api_kind = (
+        "dashscope_wan30"
+        if _is_dashscope_wan30_api_format(entry, model)
+        else ("grok_v1" if _is_grok_api_format(entry) else "veo_v2")
+    )
+    if task_id and isinstance(resp, dict):
+        resp.setdefault("task_id", task_id)
     _remember_proxy_video_task(task_id, api_kind, model)
+    # Keep the provider's outer request id as a backwards-compatible alias.
+    # New Wan responses expose the pollable id under output.task_id.
+    if isinstance(resp, dict):
+        aliases = [resp.get("request_id"), resp.get("id")]
+        data = resp.get("data")
+        if isinstance(data, dict):
+            aliases.extend([data.get("request_id"), data.get("id")])
+        for alias in aliases:
+            if isinstance(alias, str) and alias.strip() and alias.strip() != task_id:
+                _remember_proxy_video_task(alias.strip(), api_kind, model)
     _audit("video_submit_ok", user_id=billing_user_id, request_user_id=request_user_id, model=model,
            task_id=task_id,
            api_kind=api_kind,
@@ -2444,12 +2632,20 @@ async def proxy_videos_generations_submit(
 async def proxy_videos_generations_poll(
     task_id: str,
     request: Request,
+    api_kind: str = Query("", description="显式指定任务提供商，例如 dashscope_wan30"),
+    model: str = Query("", description="显式指定上游模型，用于跨进程轮询路由"),
     current_user: User = Depends(get_current_user),
 ):
     _check_request_authorized_for_billing(request)
     remembered_kind, remembered_model = _proxy_video_task_hint(task_id)
+    requested_kind = (api_kind or "").strip().lower()
+    requested_model = (model or "").strip()
+    effective_kind = requested_kind or remembered_kind
+    effective_model = requested_model or remembered_model
+    if effective_kind == "dashscope_wan30" and not effective_model:
+        effective_model = "wan3.0-video"
     try:
-        resp = await _poll_comfly_video_task(task_id, remembered_model, remembered_kind)
+        resp = await _poll_comfly_video_task(task_id, effective_model, effective_kind)
     except Exception as e:
         raise HTTPException(502, f"Comfly videos poll 调用失败：{e}")
     return JSONResponse(resp)

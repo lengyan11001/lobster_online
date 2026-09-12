@@ -270,6 +270,7 @@ def build_pipeline_input(
     video_fallbacks: Optional[List[Dict[str, Any]]] = None,
     workflow_mode: Optional[str] = None,
     aspect_ratio: Optional[str] = None,
+    resolution: Optional[str] = None,
     visual_tone: Optional[str] = None,
     rhythm: Optional[str] = None,
     generate_audio: Optional[bool] = None,
@@ -338,6 +339,8 @@ def build_pipeline_input(
         inp["video_fallbacks"] = list(video_fallbacks)
     if (aspect_ratio or "").strip():
         inp["aspect_ratio"] = aspect_ratio.strip()
+    if (resolution or "").strip():
+        inp["resolution"] = resolution.strip()
     if (visual_tone or "").strip():
         inp["visual_tone"] = visual_tone.strip()
     if (rhythm or "").strip():

@@ -87,6 +87,7 @@ class ComflySeedancePipelinePayload(BaseModel):
     video_base_url: Optional[str] = None
     video_fallbacks: List[Dict[str, Any]] = Field(default_factory=list, description="Ordered video fallback providers, each item supports channel/base_url/model.")
     aspect_ratio: str = "9:16"
+    resolution: str = "720P"
     visual_tone: str = "clean_bright"
     rhythm: str = "smooth"
     generate_audio: bool = True
@@ -169,6 +170,19 @@ def _is_veo31_request(channel: str, model: str) -> bool:
     }
 
 
+def _is_wan30_request(channel: str, model: str) -> bool:
+    channel_hint = (channel or "").strip().lower().replace("_", "-")
+    model_hint = (model or "").strip().lower().replace("_", "-").replace(" ", "")
+    return channel_hint in {"dashscope", "dashscope-wan30", "dashscope_wan30", "wan30", "wan3", "wan3.0", "qianwen", "千问", "万相"} or model_hint in {
+        "wan3.0",
+        "wan30",
+        "wan3.0-video",
+        "wan-3.0",
+        "万相3.0",
+        "万相-3.0",
+    }
+
+
 def _is_grok_video_request(channel: str, model: str) -> bool:
     model_hint = (model or "").strip().lower().replace("_", "-").replace(" ", "")
     return model_hint in {
@@ -212,7 +226,23 @@ def _validate_payload(pl: ComflySeedancePipelinePayload) -> None:
         raise HTTPException(status_code=400, detail="visual_tone 参数无效")
     if pl.rhythm not in {"smooth", "dynamic", "product_focus", "storytelling"}:
         raise HTTPException(status_code=400, detail="rhythm 参数无效")
+    uses_wan30 = _is_wan30_request(pl.video_channel or "", pl.video_model or "")
     uses_yunwu_veo = _is_veo31_request(pl.video_channel or "", pl.video_model or "")
+    if uses_wan30:
+        if pl.segment_count is not None and int(pl.segment_count) != 1:
+            raise HTTPException(status_code=400, detail="Wan3.0 单次请求只能提交 1 条视频")
+        for field_name in ("segment_duration_seconds", "total_duration_seconds"):
+            value = getattr(pl, field_name)
+            if value is not None and not 5 <= int(value) <= 30:
+                raise HTTPException(status_code=400, detail=f"Wan3.0 的 {field_name} 必须在 5～30 秒之间")
+        if (
+            pl.segment_duration_seconds is not None
+            and pl.total_duration_seconds is not None
+            and int(pl.segment_duration_seconds) != int(pl.total_duration_seconds)
+        ):
+            raise HTTPException(status_code=400, detail="Wan3.0 的 segment_duration_seconds 必须等于 total_duration_seconds")
+        return
+
     segment_seconds = 8 if uses_yunwu_veo else 10
     if pl.segment_duration_seconds is not None and int(pl.segment_duration_seconds) != segment_seconds:
         raise HTTPException(status_code=400, detail=f"segment_duration_seconds 当前模型固定为 {segment_seconds} 秒")
@@ -318,6 +348,7 @@ async def _prepare_pipeline_input(
         video_base_url=video_base_url,
         video_fallbacks=video_fallbacks,
         aspect_ratio=pl.aspect_ratio,
+        resolution=pl.resolution,
         visual_tone=pl.visual_tone,
         rhythm=pl.rhythm,
         generate_audio=pl.generate_audio,

@@ -1270,6 +1270,17 @@ window._openSeedanceTvcStudioView = function() {
   try { location.hash = 'seedance-tvc-studio'; } catch (e1) {}
 };
 
+window._openBatchCreativeVideoView = function() {
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('batch-creative-video').catch(function(error) {
+      console.error('Failed to open batch creative video:', error);
+    });
+    try { location.hash = 'batch-creative-video'; } catch (e1) {}
+    return;
+  }
+  _switchToHiddenView('batch-creative-video');
+};
+
 window._openViralVideoRemixView = function() {
   _switchToHiddenView('viral-video-remix');
   if (typeof _bindComflyConfigBtn === 'function') _bindComflyConfigBtn();
@@ -1610,6 +1621,10 @@ window._openHiddenWorkspaceView = function(view) {
   }
   if (target === 'seedance-tvc-studio' && typeof window._openSeedanceTvcStudioView === 'function') {
     window._openSeedanceTvcStudioView();
+    return;
+  }
+  if (target === 'batch-creative-video' && typeof window._openBatchCreativeVideoView === 'function') {
+    window._openBatchCreativeVideoView();
     return;
   }
   if (target === 'image-composer-studio' && typeof window._openImageComposerStudioView === 'function') {

@@ -110,6 +110,20 @@
       "comfly_model": "seedance-2.5",
       "note": "Xing Seedance2.5 group. 720p video generation. User charge follows the same 2x multiplier as Seedance2.0."
     },
+    "wan3.0-video": {
+      "price_type": "per_call",
+      "price_per_unit": 500,
+      "api_format": "dashscope_wan30",
+      "comfly_model": "wan3.0-video",
+      "note": "DashScope Wan3.0 video generation. Submitted through the cloud proxy and queried with DashScope task polling."
+    },
+    "wan3.0": {
+      "price_type": "per_call",
+      "price_per_unit": 500,
+      "api_format": "dashscope_wan30",
+      "comfly_model": "wan3.0-video",
+      "note": "Alias for wan3.0-video used by the batch creative video client."
+    },
     "sdols-2.0": {
       "price_type": "per_call",
       "price_per_unit": 30,

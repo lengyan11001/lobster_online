@@ -1555,6 +1555,7 @@ var LOBSTER_HIDDEN_VIEWS = {
   'douyin-workbench': true,
   'shanjian-smart-clip': true,
   'multi-clip-mixer': true,
+  'batch-creative-video': true,
   'global-leads': true,
   'ip-content-studio': true,
   'wechat-article': true,
@@ -1621,6 +1622,7 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   'viral-tvc-studio': 'comfly_veo_skill',
   'h5-employees': 'local_bestseller_skill',
   'seedance-tvc-studio': 'comfly_seedance_tvc_skill',
+  'batch-creative-video': 'comfly_seedance_tvc_skill',
   'bihuo-25-video': 'bihuo_25_video_skill',
   'local-bestseller': 'local_bestseller_skill',
   'viral-video-remix': 'viral_video_remix_skill',
@@ -2796,6 +2798,9 @@ function openCreditLimitModal() {
     if (hash === 'seedance-tvc-studio' && typeof window._openSeedanceTvcStudioView === 'function') {
       window._openSeedanceTvcStudioView();
     }
+    if (hash === 'batch-creative-video' && typeof window._openBatchCreativeVideoView === 'function') {
+      window._openBatchCreativeVideoView();
+    }
     if (hash === 'bihuo-25-video' && typeof window._openBihuo25VideoView === 'function') {
       window._openBihuo25VideoView();
     }
@@ -2836,6 +2841,7 @@ function openCreditLimitModal() {
     location.hash.indexOf('ecommerce-detail-studio') !== -1 ||
     location.hash.indexOf('image-composer-studio') !== -1 ||
     location.hash.indexOf('seedance-tvc-studio') !== -1 ||
+    location.hash.indexOf('batch-creative-video') !== -1 ||
     location.hash.indexOf('bihuo-25-video') !== -1 ||
     location.hash.indexOf('viral-video-remix') !== -1 ||
     location.hash.indexOf('cutcli-template-studio') !== -1 ||

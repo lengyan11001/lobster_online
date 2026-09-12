@@ -1,0 +1,124 @@
+<div id="content-batch-creative-video" class="content-block">
+  <div class="batch-creative-page">
+    <header class="batch-creative-head">
+      <div>
+        <div class="batch-creative-kicker">批量视频工作台</div>
+        <h3 class="batch-creative-title">批量创意视频</h3>
+        <p class="batch-creative-subtitle">可使用参考图和提示词，批量生成多条独立视频。</p>
+      </div>
+      <div class="batch-creative-head-actions">
+        <button type="button" id="batchCreativeBackBtn" class="btn btn-ghost btn-sm">返回首页</button>
+        <button type="button" id="batchCreativeRefreshBtn" class="btn btn-ghost btn-sm">刷新状态</button>
+      </div>
+    </header>
+
+    <div id="batchCreativeMsg" class="batch-creative-msg" role="status" aria-live="polite"></div>
+
+    <div class="batch-creative-layout">
+      <section class="batch-creative-panel batch-creative-settings">
+        <div class="batch-creative-panel-head">
+          <div>
+            <h4>生成设置</h4>
+            <span>每条视频会作为独立任务提交。</span>
+          </div>
+          <span id="batchCreativeSubmitCount" class="batch-creative-count">10 条</span>
+        </div>
+
+        <div class="batch-creative-field">
+          <label>参考图片</label>
+          <div id="batchCreativeImageDrop" class="batch-creative-upload">
+            <input type="file" id="batchCreativeImageInput" accept="image/jpeg,image/png,image/webp,image/*" hidden>
+            <div id="batchCreativeImageEmpty" class="batch-creative-upload-empty">
+              <strong>可选上传 1 张图片</strong>
+              <span>有图片时作为每条视频的参考图，没有图片也可以直接文生视频</span>
+              <button type="button" id="batchCreativeImageBtn" class="btn btn-primary btn-sm">选择图片</button>
+            </div>
+            <div id="batchCreativeImagePreview" class="batch-creative-image-preview" hidden>
+              <img id="batchCreativeImage" alt="参考图片预览">
+              <div class="batch-creative-image-meta">
+                <strong id="batchCreativeImageName"></strong>
+                <span id="batchCreativeImageStatus">已准备</span>
+              </div>
+              <button type="button" id="batchCreativeImageRemove" class="btn btn-ghost btn-sm">更换图片</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="batch-creative-field">
+          <label for="batchCreativePrompt">视频提示词</label>
+          <textarea id="batchCreativePrompt" placeholder="例如：男生在城市街头自然地展示这件夹克，镜头有连续动作，画面真实，节奏明快。"></textarea>
+        </div>
+
+        <label class="batch-creative-rewrite-option" for="batchCreativeAutoRewrite">
+          <input type="checkbox" id="batchCreativeAutoRewrite">
+          <span class="batch-creative-rewrite-copy">
+            <strong>自动改写提示词</strong>
+            <span>根据图片和原始提示词生成 5 个不同创作方向，每条视频使用一个方向。</span>
+          </span>
+        </label>
+
+        <div class="batch-creative-fields-row">
+          <div class="batch-creative-field">
+            <label for="batchCreativeAspectSelect">画面比例</label>
+            <select id="batchCreativeAspectSelect">
+              <option value="9:16" selected>竖屏 9:16</option>
+              <option value="16:9">横屏 16:9</option>
+            </select>
+          </div>
+          <div class="batch-creative-field">
+            <label for="batchCreativeResolutionSelect">视频分辨率</label>
+            <select id="batchCreativeResolutionSelect">
+              <option value="720P" selected>720P</option>
+              <option value="1080P">1080P</option>
+            </select>
+          </div>
+          <div class="batch-creative-field">
+            <label for="batchCreativeDurationSelect">视频时长</label>
+            <div class="batch-creative-count-control">
+              <input type="range" id="batchCreativeDurationSelect" min="5" max="30" step="1" value="10" aria-label="视频时长">
+              <div class="batch-creative-count-scale" aria-hidden="true">
+                <span>5 秒</span>
+                <span>30 秒</span>
+              </div>
+              <div id="batchCreativeDurationValue" class="batch-creative-count-value">当前时长 10 秒</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="batch-creative-field">
+          <label>生成数量</label>
+          <div class="batch-creative-count-control">
+            <input type="range" id="batchCreativeCountRange" min="1" max="50" step="1" value="10" aria-label="生成数量">
+            <div class="batch-creative-count-scale" aria-hidden="true">
+              <span>1 条</span>
+              <span>50 条</span>
+            </div>
+            <div id="batchCreativeCountValue" class="batch-creative-count-value">当前生成 10 条</div>
+          </div>
+        </div>
+
+        <button type="button" id="batchCreativeStartBtn" class="btn btn-primary batch-creative-main-btn">开始批量生成</button>
+        <button type="button" id="batchCreativeClearBtn" class="btn btn-ghost batch-creative-clear-btn">清空本批结果</button>
+      </section>
+
+      <section class="batch-creative-panel batch-creative-results">
+        <div class="batch-creative-panel-head">
+          <div>
+            <h4>视频结果</h4>
+            <span id="batchCreativeResultSummary">还没有提交任务</span>
+          </div>
+          <div class="batch-creative-stats" aria-label="任务统计">
+            <span data-stat="running">生成中 <strong id="batchCreativeRunningCount">0</strong></span>
+            <span data-stat="completed">成功 <strong id="batchCreativeCompletedCount">0</strong></span>
+            <span data-stat="failed">失败 <strong id="batchCreativeFailedCount">0</strong></span>
+          </div>
+        </div>
+        <div id="batchCreativeResultGrid" class="batch-creative-result-grid"></div>
+        <div id="batchCreativeResultEmpty" class="batch-creative-result-empty">
+          <strong>等待批量生成</strong>
+          <span>填写提示词后，结果会按任务逐条显示；参考图片为可选项。</span>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
