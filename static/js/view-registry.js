@@ -172,8 +172,8 @@
   });
 
   window.registerLobsterView('h5-employees', {
-    html: '/static/views/h5-employees.html?v=20260905-douyin-default-reply-v1',
-    scripts: '/static/js/views/h5-employees.js?v=20260905-ip-content-split-v1',
+    html: '/static/views/h5-employees.html?v=20260912-douyin-ai-keywords-v1',
+    scripts: '/static/js/views/h5-employees.js?v=20260912-douyin-ai-keywords-v1',
     init: 'initOnlineH5EmployeesView',
     cache: 'reload'
   });

@@ -110,15 +110,17 @@
     if (String(key || '').indexOf('native_wechat_') === 0 || String(key || '') === 'native_whatsapp_poll') return '个微';
     return 'AI营销';
   }
-  function addNodeOption(key, label, note, group) {
+  function addNodeOption(key, label, note, group, extra) {
     var normalizedKey=String(key || '').trim();
     var normalizedLabel=String(label || '').trim();
+    var extraParams=extra && typeof extra === 'object' ? extra : null;
+    var douyinAction=String(extraParams && extraParams.sales_action || '').trim().toLowerCase() || salesAction(String(note || normalizedLabel));
     var identity=normalizedKey === 'douyin_leads'
-      ? normalizedKey + '@@' + salesAction(String(note || normalizedLabel))
+      ? normalizedKey + '@@' + douyinAction + (extraParams && extraParams.ai_keywords ? '@ai' : '')
       : normalizedKey;
     if (!normalizedKey || !normalizedLabel || nodeOptionKeys[identity]) return;
     nodeOptionKeys[identity] = true;
-    NODE_OPTIONS.push([normalizedKey, normalizedLabel, String(note || normalizedLabel), String(group || '销售员工'), identity]);
+    NODE_OPTIONS.push([normalizedKey, normalizedLabel, String(note || normalizedLabel), String(group || '销售员工'), identity, extraParams]);
   }
   [
     ['hifly.video.create_by_tts','数字人口播视频','选择数字人和声音，生成口播视频。','AI营销'],
@@ -144,6 +146,16 @@
       addNodeOption(row.key, row.label, row.note, nodeOptionGroupForKey(row.key));
     }
   });
+  // 精准获客AI：一等公民节点，只出现在节点选择列表里，不并入已有模板
+  // （老节点、老排期不受影响）。关键词由 AI 按 IP 人设每轮生成，
+  // 所以这条不暴露"采集关键词"参数。
+  addNodeOption(
+    'douyin_leads',
+    '抖音精准获客AI',
+    'AI 按 IP 人设和资料模板每轮生成新关键词，用过的词按天数去重，只搜最近发布的新视频。',
+    '抖音',
+    {sales_action:'search_collect', ai_keywords:true, ai_keyword_count:3, ai_keyword_avoid_days:7, ai_keyword_publish_days:7, customer_scope:'current_collection_batch'}
+  );
 
   function nodeOptionPackageVisible(packageId) {
     var id=String(packageId || '').trim();
@@ -908,7 +920,13 @@
   function findOption(key, label, node) {
     if (String(key || '') === 'douyin_leads' && node) {
       var action=douyinNodeAction(node);
-      var actionMatch=NODE_OPTIONS.find(function(item){return item[0] === key && salesAction(item[2] || item[1]) === action;});
+      var wantsAiKeywords=boolParam(workflowParams(node).ai_keywords,false);
+      var actionMatch=NODE_OPTIONS.find(function(item){
+        if (item[0] !== key) return false;
+        var extra=item[5] && typeof item[5] === 'object' ? item[5] : {};
+        if (!!extra.ai_keywords !== wantsAiKeywords) return false;
+        return String(extra.sales_action || '').trim().toLowerCase() === action || salesAction(item[2] || item[1]) === action;
+      });
       if (actionMatch) return actionMatch;
     }
     var exact=NODE_OPTIONS.find(function(item){return item[0] === key && (!label || item[1] === label);});
@@ -1117,12 +1135,16 @@
   document.addEventListener('visibilitychange', refreshDevicesOnForeground);
   function syncNodeModalFields() {
     var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), selectedSalesAction=key === 'douyin_leads' ? salesAction(option[2] || option[1]) : '', takeover=key === 'native_wechat_poll', whatsapp=key === 'native_whatsapp_poll', douyinPrivate=selectedSalesAction === 'stranger_message', douyinCollection=selectedSalesAction === 'search_collect', douyinTouch=selectedSalesAction === 'precise_touch';
+    var optionExtra=option[5] && typeof option[5] === 'object' ? option[5] : {}, douyinAiKeywords=douyinCollection && !!optionExtra.ai_keywords;
     if (el('oeNodeGroupInviteField')) el('oeNodeGroupInviteField').hidden=!takeover;
     if (el('oeNodeWechatPrivateSessionLimitField')) el('oeNodeWechatPrivateSessionLimitField').hidden=!takeover;
     if (el('oeNodeWhatsappField')) el('oeNodeWhatsappField').hidden=!whatsapp;
     if (el('oeNodeWechatAddFriendField')) el('oeNodeWechatAddFriendField').hidden=!douyinPrivate;
     if (el('oeNodeDouyinReplyModeField')) el('oeNodeDouyinReplyModeField').hidden=!douyinPrivate;
     if (el('oeNodeDouyinCollectionField')) el('oeNodeDouyinCollectionField').hidden=!douyinCollection;
+    // 精准获客AI 的关键词由 AI 生成，隐藏"采集关键词"、换成 AI 选词设置。
+    if (el('oeNodeDouyinKeywordField')) el('oeNodeDouyinKeywordField').hidden=douyinAiKeywords;
+    if (el('oeNodeDouyinAiKeywordField')) el('oeNodeDouyinAiKeywordField').hidden=!douyinAiKeywords;
     if (el('oeNodeDouyinTouchField')) el('oeNodeDouyinTouchField').hidden=!douyinTouch;
     if (el('oeNodeDouyinFollowupField')) el('oeNodeDouyinFollowupField').hidden=!douyinTouch;
     var replyMode=String((el('oeNodeDouyinReplyCommentMode') || {}).value || '').toLowerCase();
@@ -1147,6 +1169,9 @@
     el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; el('oeNodeWechatAddFriendEnabled').checked=boolParam(params.wechat_add_friend_enabled,false);
     if (el('oeNodeDouyinReplyMode')) el('oeNodeDouyinReplyMode').value=String(params.reply_mode || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed';
     if (el('oeNodeDouyinKeyword')) el('oeNodeDouyinKeyword').value=String(params.keyword || params.query || '');
+    if (el('oeNodeDouyinAiKeywordCount')) el('oeNodeDouyinAiKeywordCount').value=Math.max(1,Math.min(8,Number(params.ai_keyword_count || 3)));
+    if (el('oeNodeDouyinAiKeywordAvoidDays')) el('oeNodeDouyinAiKeywordAvoidDays').value=Math.max(1,Math.min(60,Number(params.ai_keyword_avoid_days || 7)));
+    if (el('oeNodeDouyinAiKeywordPublishDays')) el('oeNodeDouyinAiKeywordPublishDays').value=Math.max(1,Math.min(180,Number(params.ai_keyword_publish_days || 7)));
     if (el('oeNodeDouyinRegions')) el('oeNodeDouyinRegions').value=(Array.isArray(params.regions) ? params.regions.join('，') : String(params.regions || '全国'));
     if (el('oeNodeDouyinMaxResults')) el('oeNodeDouyinMaxResults').value=Math.max(10,Math.min(100,Number(params.max_results || 50)));
     if (el('oeNodeDouyinTouchMaxUsers')) el('oeNodeDouyinTouchMaxUsers').value=Math.max(1,Math.min(200,Number(params.max_users || params.max_results || 20)));
@@ -1189,7 +1214,16 @@
     if (selectedSalesAction === 'stranger_message') { row.params.wechat_add_friend_enabled=!!el('oeNodeWechatAddFriendEnabled').checked; row.params.wechat_add_friend_targets_source='douyin_private_message_phone'; row.params.reply_mode=String((el('oeNodeDouyinReplyMode') || {}).value || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed'; }
     else { delete row.params.wechat_add_friend_enabled; delete row.params.wechat_add_friend_targets_source; delete row.params.wechat_add_friend_rules; delete row.params.reply_mode; }
     if (key === 'douyin_leads' && selectedSalesAction === 'search_collect') {
-      var keyword=String((el('oeNodeDouyinKeyword') || {}).value || '').trim();
+      var optionExtra=option[5] && typeof option[5] === 'object' ? option[5] : {}, aiKeywords=!!optionExtra.ai_keywords;
+      var keyword=aiKeywords ? '' : String((el('oeNodeDouyinKeyword') || {}).value || '').trim();
+      if (aiKeywords) {
+        row.params.ai_keywords=true;
+        row.params.ai_keyword_count=Math.max(1,Math.min(8,Number((el('oeNodeDouyinAiKeywordCount') || {}).value || 3)));
+        row.params.ai_keyword_avoid_days=Math.max(1,Math.min(60,Number((el('oeNodeDouyinAiKeywordAvoidDays') || {}).value || 7)));
+        row.params.ai_keyword_publish_days=Math.max(1,Math.min(180,Number((el('oeNodeDouyinAiKeywordPublishDays') || {}).value || 7)));
+      } else {
+        delete row.params.ai_keywords; delete row.params.ai_keyword_count; delete row.params.ai_keyword_avoid_days; delete row.params.ai_keyword_publish_days;
+      }
       var regions=String((el('oeNodeDouyinRegions') || {}).value || '全国').split(/[，,\n]+/).map(function(value){return value.trim();}).filter(Boolean);
       if (keyword) row.params.keyword=keyword; else { delete row.params.keyword; delete row.params.keywords; delete row.params.query; delete row.params.search_keyword; }
       row.params.regions=regions.length ? regions : ['全国'];
@@ -1222,7 +1256,7 @@
       ]);
       delete row.params.followup_actions;
       row.params.customer_scope='precise_pool';
-    } else { delete row.params.keyword; delete row.params.regions; delete row.params.max_results; delete row.params.max_users; delete row.params.mode; delete row.params.followup_actions; delete row.params.touch_actions; delete row.params.customer_scope; }
+    } else { delete row.params.keyword; delete row.params.regions; delete row.params.max_results; delete row.params.max_users; delete row.params.mode; delete row.params.followup_actions; delete row.params.touch_actions; delete row.params.customer_scope; delete row.params.ai_keywords; delete row.params.ai_keyword_count; delete row.params.ai_keyword_avoid_days; delete row.params.ai_keyword_publish_days; }
     delete row.params.followup_action; delete row.params.group_invite_rules;
     var next=existing ? Object.assign({},existing) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)};
     next.time=time; next.end_time=end; next.time_range=time + (end ? '-' + end : ''); next.ability_key=key; next.ability_label=label; next.note=note; next.plan=planForRow(row); if (existing) next.children=existing.children || existing.actions || [];

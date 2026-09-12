@@ -95,7 +95,7 @@ def test_online_employee_editor_copies_granted_template_into_owned_template():
     assert "method:'POST'" in script
     assert "state.templatesLoadedInstallationId=''" in script
     assert "applyServerTemplate(copiedId)" in script
-    assert "h5-employees.js?v=20260831-employee-copy-v1" in registry
+    assert "h5-employees.js?v=20260912-douyin-ai-keywords-v1" in registry
 
 
 def test_online_employee_editor_manages_supported_child_actions():
@@ -139,7 +139,7 @@ def test_online_employee_editor_manages_supported_child_actions():
     assert "state.editingId || template && template.id" in script
     assert ".oe-form-label[hidden] { display:none; }" in html
     assert "100dvh" in html
-    assert "20260827-touch-action-echo-v1" in registry
+    assert "20260912-douyin-ai-keywords-v1" in registry
 
 
 def test_moments_nodes_save_paginated_contact_selection_as_wechat_ids():

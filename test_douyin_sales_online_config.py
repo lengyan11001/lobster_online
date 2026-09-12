@@ -1241,3 +1241,40 @@ def test_stranger_takeover_returns_changed_incoming_and_reply_content_only():
     assert rows[0]["username"] == "新客户"
     assert rows[0]["incoming_message"] == "这个产品怎么报价？"
     assert rows[0]["reply_message"] == "您好，请告诉我需要的数量。"
+
+
+def test_h5_employee_editor_exposes_douyin_ai_keyword_node():
+    """Online 工作流节点选择列表要有「抖音精准获客AI」，并且只在列表里、不进默认模板。"""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    script = (root / "static" / "js" / "views" / "h5-employees.js").read_text(encoding="utf-8")
+    html = (root / "static" / "views" / "h5-employees.html").read_text(encoding="utf-8")
+
+    assert "'抖音精准获客AI'" in script
+    assert "sales_action:'search_collect', ai_keywords:true" in script
+    assert "ai_keyword_count:3" in script
+    assert "ai_keyword_avoid_days:7" in script
+    assert "ai_keyword_publish_days:7" in script
+    # 与手动关键词那条区分开：identity 带 @ai 后缀
+    assert "extraParams.ai_keywords ? '@ai' : ''" in script
+    # 不写进 SALES_ROWS，就不会被 mergeSalesPresetNodes 自动并进已有模板
+    assert "抖音精准获客AI" not in script.split("var SALES_ROWS = [")[1].split("];")[0]
+
+    for field_id in (
+        "oeNodeDouyinKeywordField",
+        "oeNodeDouyinAiKeywordField",
+        "oeNodeDouyinAiKeywordCount",
+        "oeNodeDouyinAiKeywordAvoidDays",
+        "oeNodeDouyinAiKeywordPublishDays",
+    ):
+        assert f'id="{field_id}"' in html
+
+    # 保存时按选项写入 / 清理 AI 参数，编辑时回填
+    assert "row.params.ai_keywords=true" in script
+    assert "delete row.params.ai_keywords" in script
+    assert "el('oeNodeDouyinAiKeywordCount').value=Math.max(1,Math.min(8" in script
+    assert "el('oeNodeDouyinAiKeywordField').hidden=!douyinAiKeywords" in script
+    assert "el('oeNodeDouyinKeywordField').hidden=douyinAiKeywords" in script
+    # 选中 AI 节点时不再要求手填关键词
+    assert "var keyword=aiKeywords ? '' : String((el('oeNodeDouyinKeyword')" in script

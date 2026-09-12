@@ -207,7 +207,13 @@
         </label>
         <div class="oe-form-label" id="oeNodeDouyinCollectionField" hidden>
           <span>精准获客参数</span>
-          <label>采集关键词（可选）<textarea id="oeNodeDouyinKeyword" rows="3" placeholder="留空使用当前设备 Online 已配置的全部关键词；手动填写可用逗号或换行分隔"></textarea></label>
+          <label id="oeNodeDouyinKeywordField">采集关键词（可选）<textarea id="oeNodeDouyinKeyword" rows="3" placeholder="留空使用当前设备 Online 已配置的全部关键词；手动填写可用逗号或换行分隔"></textarea></label>
+          <div class="oe-form-label" id="oeNodeDouyinAiKeywordField" hidden>
+            <span>AI 选词设置（精准获客AI）</span>
+            <label>每轮关键词数量<input id="oeNodeDouyinAiKeywordCount" type="number" min="1" max="8" step="1" value="3"></label>
+            <label>关键词去重天数（这几天用过的词不再用）<input id="oeNodeDouyinAiKeywordAvoidDays" type="number" min="1" max="60" step="1" value="7"></label>
+            <label>只搜最近多少天发布的新视频<input id="oeNodeDouyinAiKeywordPublishDays" type="number" min="1" max="180" step="1" value="7"></label>
+          </div>
           <label>地区<input id="oeNodeDouyinRegions" type="text" value="全国" placeholder="全国，或用逗号分隔多个城市"></label>
           <label>搜索数量<input id="oeNodeDouyinMaxResults" type="number" min="10" max="100" step="1" value="50"></label>
           <label>搜索方式<select id="oeNodeDouyinMode"><option value="script">浏览器脚本</option><option value="api">接口模式</option></select></label>
