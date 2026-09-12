@@ -10695,6 +10695,54 @@ async def _run_client_workflow_action(
         result["targets"] = targets
         result["moment_action"] = moment_action
         return result
+    if action == "native_wechat_send_message":
+        targets = _workflow_target_list(
+            source,
+            "targets",
+            "contacts",
+            "contact_wx_nos",
+            "names",
+            "to_usernames",
+            "to_username",
+        )
+        content = str(
+            source.get("message") or source.get("content") or source.get("text") or ""
+        ).strip()
+        if not targets:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "missing_targets",
+                "message": "没有指定微信收件人，已跳过发送",
+            }
+        if not content:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "missing_message",
+                "message": "没有要发送的内容，已跳过发送",
+            }
+        submitted = await _post_local_api_json(
+            "/api/native-wechat/messages/send",
+            {
+                "account_id": native_account_id,
+                "targets": targets,
+                "content": content,
+                "target_type": "direct",
+            },
+            headers=headers,
+            timeout_seconds=60.0,
+            request_id=f"h5:{run_id}:native-wechat-send" if run_id else "",
+        )
+        # 本机发送任务会逐个目标打开会话并核对收件人，等它跑完再回结果。
+        result = await _wait_for_local_native_wechat_task(
+            submitted,
+            headers=headers,
+            timeout_seconds=900.0,
+        )
+        result["targets"] = targets
+        result["message_preview"] = content[:200]
+        return result
     if action == "ip_moments_generate_images":
         return await _post_local_api_json("/api/ip-content/moments/images/generate", source, headers=headers, timeout_seconds=7200.0)
     if action == "publish_content":
@@ -10980,6 +11028,28 @@ def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
         if str(task.get("original_status") or "").lower() == "partial_failed" or failed:
             return f"朋友圈互动部分完成：处理 {completed} 个，失败 {failed} 个；点赞 {liked} 条，评论 {commented + already_commented} 条。"
         return f"朋友圈互动完成：处理 {completed} 个；点赞 {liked} 条，评论 {commented + already_commented} 条。"
+    if action == "native_wechat_send_message":
+        if result.get("skipped"):
+            return str(result.get("message") or "微信发送已跳过。")
+        task = result.get("task") if isinstance(result.get("task"), dict) else {}
+        targets = result.get("targets") if isinstance(result.get("targets"), list) else []
+        ok_count = int(task.get("success") or result.get("success_count") or 0)
+        failed_count = int(task.get("failed") or result.get("failed_count") or 0)
+        preview = str(result.get("message_preview") or "").strip()
+        if not ok_count and failed_count:
+            text = f"微信消息发送失败：{failed_count} 个收件人没发出去"
+            detail = str(task.get("error_message") or result.get("error") or "").strip()
+            if detail:
+                text += f"（{detail[:120]}）"
+        else:
+            text = f"微信消息已发送：成功 {ok_count} 个"
+            if failed_count:
+                text += f"，失败 {failed_count} 个"
+            if targets:
+                text += f"；收件人：{'、'.join(str(item) for item in targets[:5])}"
+        if preview:
+            text += f"；内容：{preview}"
+        return text + "。"
     if action == "ip_moments_generate_images":
         return f"朋友圈图片生成完成：{int(result.get('record_count') or 0)} 条文案，{int(result.get('image_count') or 0)} 张图片。"
     if action == "publish_content":

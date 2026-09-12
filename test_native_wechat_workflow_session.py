@@ -4082,3 +4082,81 @@ def test_selected_memory_context_only_loads_selected_document(monkeypatch):
     assert memory["titles"] == ["产品FAQ"]
     assert "FAQ内容" in memory["text"]
     assert "介绍内容" not in memory["text"]
+
+
+@pytest.mark.asyncio
+async def test_send_message_action_targets_contacts_and_waits_for_local_task(monkeypatch):
+    calls = []
+
+    async def post_local(path, body, **kwargs):
+        calls.append((path, body))
+        return {"ok": True, "task": {"id": "send-task", "status": "running"}}
+
+    waited = {}
+
+    async def wait_task(submitted, *, headers, timeout_seconds=1800.0):
+        waited["task_id"] = submitted["task"]["id"]
+        waited["timeout"] = timeout_seconds
+        return {"ok": True, "task": {"id": "send-task", "status": "success", "success": 1, "failed": 0}}
+
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+    monkeypatch.setattr(channel, "_wait_for_local_native_wechat_task", wait_task)
+
+    result = await channel._run_client_workflow_action(
+        "native_wechat_send_message",
+        {"targets": ["九变1"], "message": "记得去看演唱会", "account_id": "pc-wechat-default"},
+        headers={},
+        run_id="send-child",
+    )
+
+    assert calls == [
+        (
+            "/api/native-wechat/messages/send",
+            {
+                "account_id": "pc-wechat-default",
+                "targets": ["九变1"],
+                "content": "记得去看演唱会",
+                "target_type": "direct",
+            },
+        )
+    ]
+    assert waited["task_id"] == "send-task"
+    assert result["targets"] == ["九变1"]
+    assert result["message_preview"] == "记得去看演唱会"
+
+
+@pytest.mark.asyncio
+async def test_send_message_action_skips_without_targets_or_content(monkeypatch):
+    async def fail(*args, **kwargs):
+        raise AssertionError("缺少参数时不应该调用本机发送接口")
+
+    monkeypatch.setattr(channel, "_post_local_api_json", fail)
+
+    no_target = await channel._run_client_workflow_action(
+        "native_wechat_send_message", {"message": "在吗"}, headers={}, run_id="r1"
+    )
+    no_content = await channel._run_client_workflow_action(
+        "native_wechat_send_message", {"targets": ["九变1"], "message": "   "}, headers={}, run_id="r2"
+    )
+
+    assert no_target["skipped"] is True
+    assert no_target["reason"] == "missing_targets"
+    assert no_content["skipped"] is True
+    assert no_content["reason"] == "missing_message"
+
+
+def test_send_message_action_summary_reports_counts_and_targets():
+    text = channel._client_workflow_result_text(
+        "native_wechat_send_message",
+        {
+            "ok": True,
+            "task": {"id": "send-task", "status": "partial_failed", "success": 1, "failed": 1},
+            "targets": ["九变1", "九变2"],
+            "message_preview": "记得去看演唱会",
+        },
+    )
+
+    assert "成功 1 个" in text
+    assert "失败 1 个" in text
+    assert "九变1" in text
+    assert "记得去看演唱会" in text
