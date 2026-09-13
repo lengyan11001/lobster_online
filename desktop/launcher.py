@@ -17,6 +17,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from ctypes import wintypes
+from datetime import datetime, timezone
 from html import escape
 
 if os.name == "nt":
@@ -293,6 +294,41 @@ def clear_startup_service_logs() -> None:
     clear_service_log(ROOT / "backend.log", "backend")
     clear_service_log(ROOT / "mcp.log", "mcp")
     clear_service_log(ROOT / "logs" / "app.log", "app")
+
+
+# Mirrors backend/app/services/client_exit_marker.py.  The launcher runs as a
+# standalone script and must not import the backend package, so the small JSON
+# contract is duplicated here on purpose.  The next backend start reads this
+# marker to tell a deliberate restart apart from a real crash: the launcher is
+# the only process that survives a stop, and the backend is always killed with
+# ``taskkill /F`` (no chance to write anything on the way out).
+CLIENT_EXIT_MARKER_PATH = ROOT / "data" / "last_exit.json"
+
+
+def write_client_exit_marker(reason: str, detail: str = "") -> bool:
+    """Record why the local services are being stopped on purpose."""
+    clean_reason = str(reason or "").strip().lower()
+    if not clean_reason:
+        return False
+    payload = {
+        "schema": 1,
+        "at": datetime.now(timezone.utc).astimezone().isoformat(),
+        "reason": clean_reason,
+        "backend_pid": None,
+        "launcher_pid": os.getpid(),
+        "detail": str(detail or "")[:400],
+    }
+    try:
+        CLIENT_EXIT_MARKER_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CLIENT_EXIT_MARKER_PATH.write_text(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        log(f"ClientExit: marker reason={clean_reason} detail={payload['detail']}")
+        return True
+    except Exception as exc:
+        log(f"ClientExit: failed to write marker reason={clean_reason}: {exc}")
+        return False
 
 
 def message_box(title: str, body: str) -> None:
@@ -1192,6 +1228,9 @@ def stop_other_root_backends(preferred_port: int) -> None:
         if not port_owned_by_this_root(port):
             continue
         log(f"Backend: stopping stale same-root backend on port {port}")
+        # Force-killed leftovers would otherwise look like a crash on the next
+        # start, because only an intentional stop writes the exit marker.
+        write_client_exit_marker("startup_cleanup", detail=f"stale same-root backend port={port}")
         stop_port_processes(port, "BackendDuplicate")
 
 
@@ -1950,11 +1989,20 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                         "Desktop recovery: stopping unhealthy backend reason=%s pid=%s poll=%s"
                         % (reason, proc.pid, proc.poll())
                     )
+                    write_client_exit_marker(
+                        "watchdog_kill",
+                        detail=f"backend restart reason={reason} pid={proc.pid}",
+                    )
                     stop_process(proc, "BackendRecovery")
                     runtime["backend_proc"] = None
                     time.sleep(0.4)
                 elif port_open("127.0.0.1", port, timeout=0.3):
                     owned = [pid for pid in netstat_listening_pids(port) if process_looks_this_root_backend(pid)]
+                    if owned:
+                        write_client_exit_marker(
+                            "watchdog_kill",
+                            detail=f"backend restart reason={reason} ports pids={sorted(owned)}",
+                        )
                     for pid in owned:
                         kill_pid_tree(pid, "BackendRecovery")
                     if owned:
@@ -2108,11 +2156,13 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             if _ALLOW_WINDOW_CLOSE:
                 runtime["watchdog_stop"].set()
                 runtime["closing"].set()
+                runtime["exit_reason"] = "update_restart"
                 return None
             allowed = confirm_box(title, CONFIRM_CLOSE_BODY_TEMPLATE.format(title=title))
             if allowed:
                 runtime["watchdog_stop"].set()
                 runtime["closing"].set()
+                runtime["exit_reason"] = "user_closed"
             return None if allowed else False
 
         window.events.closing += confirm_window_close
@@ -2133,6 +2183,11 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
     finally:
         runtime["watchdog_stop"].set()
         runtime["closing"].set()
+        write_client_exit_marker(
+            str(runtime.get("exit_reason") or "").strip()
+            or ("update_restart" if _CLIENT_UPDATE_RESTART_SCHEDULED else "launcher_exit"),
+            detail="desktop window closed",
+        )
         cleanup_owned_services(
             runtime.get("backend_proc") if isinstance(runtime.get("backend_proc"), subprocess.Popen) else None,
             runtime.get("mcp_proc") if isinstance(runtime.get("mcp_proc"), subprocess.Popen) else None,

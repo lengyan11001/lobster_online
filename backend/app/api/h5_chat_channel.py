@@ -45,6 +45,10 @@ from ..models import Asset, PublishAccount
 from ..services import native_wechat_engine
 from ..services import native_whatsapp_engine
 from ..services.openclaw_channel_auth_store import clear_channel_fallback, read_channel_fallback
+from ..services.client_exit_marker import (
+    mark_exit_reason_reported,
+    pending_exit_reason_header,
+)
 from .auth import _ServerUser, get_current_user_for_local
 from .assets import build_asset_file_url, get_asset_public_url
 from .chat import _get_default_image_generate_model
@@ -410,6 +414,11 @@ def _headers(jwt_token: str, installation_id: str) -> Dict[str, str]:
         h["X-Installation-Id"] = installation_id
     h["X-Client-Process-Id"] = _CLIENT_PROCESS_ID
     h["X-Lobster-Chat-Turn-Billing"] = "pre_deduct_v1"
+    # Tells the cloud why the *previous* client process went away, so an
+    # interrupted run can be classified as a deliberate restart or a crash
+    # instead of the blanket "客户端进程已更换" fallback.  Dropped again once
+    # a claim request has been served (that is when the cloud reaps runs).
+    h.update(pending_exit_reason_header())
     return h
 
 
@@ -4821,6 +4830,9 @@ def _scheduled_douyin_result_payload(
             "items",
             "tasks",
             "users",
+            # 逐目标执行明细（节点执行情况详情抽屉与失败原因统计的数据源）。
+            "targets_detail",
+            "targets_summary",
             "conversations",
             "conversation_scope",
             "mode",
@@ -5727,6 +5739,188 @@ def _scheduled_douyin_precise_touch_status_prefix(action: str) -> str:
     }.get(action, action)
 
 
+# ── 节点执行明细：每个目标 × 每个动作的状态与失败原因 ────────────────────────
+# 云端任务中心按这份 targets_detail 渲染「节点执行情况」详情抽屉与主要原因统计。
+# state 词表固定为 选取/启动/成功/失败/未启动（selected/started/succeeded/
+# failed/not_started）；每条明细天然都已经「选取」，state 描述的是之后走到哪。
+_TARGET_SUCCESS_STATES = {
+    "completed",
+    "success",
+    "succeeded",
+    "sent",
+    "done",
+    "ok",
+    "replied",
+    "followed",
+    "mentioned",
+    "messaged",
+}
+_TARGET_FAILED_STATES = {
+    "failed",
+    "fail",
+    "error",
+    "cancelled",
+    "canceled",
+    "skipped",
+    "timeout",
+    "timeout_stopped",
+    "timeout_stop_pending",
+    "stopped",
+    "rejected",
+}
+_TARGET_STARTED_STATES = {
+    "queued",
+    "running",
+    "processing",
+    "started",
+    "in_progress",
+    "sending",
+}
+
+# 动作级返回码：200 已执行；204 没有可执行目标；423 被前置动作阻塞。
+# 后两者都属于「未启动」——它们正是「重试未启动的 N 个」要补跑的部分，
+# 不能混进失败数里，否则重试按钮会带上真正失败的目标。
+_ACTION_NOT_STARTED_CODES = {204, 423}
+
+
+def _normalize_target_state(raw: Any) -> str:
+    text = str(raw or "").strip().lower()
+    if text in _TARGET_SUCCESS_STATES:
+        return "succeeded"
+    if text in _TARGET_FAILED_STATES:
+        return "failed"
+    if text in _TARGET_STARTED_STATES:
+        return "started"
+    return "not_started"
+
+
+def _target_error_code(action_code: int, state: str) -> str:
+    """动作级返回码只有在失败时才是「原因」；成功/未启动不制造假错误码。"""
+    if state == "failed" and action_code and action_code not in (200, 204):
+        return f"action_{action_code}"
+    return ""
+
+
+def _target_identity(row: Dict[str, Any]) -> str:
+    for key in ("username", "nickname", "name", "profile_url", "user_id", "uid"):
+        value = str((row or {}).get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _build_targets_detail(
+    *,
+    results: Optional[List[Dict[str, Any]]] = None,
+    users: Optional[List[Dict[str, Any]]] = None,
+    action: str = "",
+    label: str = "",
+    fallback_reason: str = "",
+) -> List[Dict[str, Any]]:
+    """把动作/目标结果归一到 targets_detail（供云端聚合与详情展示）。"""
+    detail: List[Dict[str, Any]] = []
+
+    def emit(
+        act: str,
+        act_label: str,
+        state: str,
+        target: str,
+        reason: str,
+        error_code: str,
+        at: str,
+        account_id: str = "",
+    ) -> None:
+        entry = {
+            "target": target or act_label or act or "(未命名目标)",
+            "action": act,
+            "action_label": act_label,
+            "state": state,
+            "error_code": error_code,
+            "reason": str(reason or "")[:300],
+            "at": str(at or "")[:40],
+        }
+        if account_id:
+            entry["account_id"] = account_id
+        detail.append(entry)
+
+    rows = results if isinstance(results, list) else []
+    if rows:
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            act = str(item.get("action") or action or "").strip()
+            act_label = str(item.get("label") or _SCHEDULED_DOUYIN_ACTION_LABELS.get(act, act)).strip()
+            action_result = item.get("result") if isinstance(item.get("result"), dict) else {}
+            nested = action_result.get("targets_detail") if isinstance(action_result, dict) else None
+            if isinstance(nested, list) and nested:
+                # 子动作（例如批量跟进里的精准触达）已经产出逐目标明细，直接采用，
+                # 不要在上一层再退化成动作级的一行。
+                detail.extend(row for row in nested if isinstance(row, dict))
+                continue
+            action_code = _safe_int(action_result.get("code"))
+            action_msg = str(action_result.get("msg") or "").strip()
+            targets = item.get("users") if isinstance(item.get("users"), list) else []
+            if not targets:
+                # 动作级条目：没有可执行目标（被前置动作阻塞 / 无候选 / 启动失败）。
+                if action_code == 200:
+                    state = "succeeded"
+                elif action_code in _ACTION_NOT_STARTED_CODES:
+                    state = "not_started"
+                else:
+                    state = "failed"
+                emit(
+                    act,
+                    act_label,
+                    state,
+                    act_label or act,
+                    action_msg or fallback_reason,
+                    _target_error_code(action_code, state),
+                    "",
+                )
+                continue
+            for row in targets:
+                if not isinstance(row, dict):
+                    continue
+                state = _normalize_target_state(row.get("status"))
+                reason = str(row.get("error") or "").strip() or action_msg or fallback_reason
+                emit(
+                    act,
+                    act_label,
+                    state,
+                    _target_identity(row),
+                    reason,
+                    _target_error_code(action_code, state),
+                    str(row.get("finished_at") or row.get("started_at") or ""),
+                    str(row.get("account_id") or ""),
+                )
+        return detail
+
+    for row in users or []:
+        if not isinstance(row, dict):
+            continue
+        act = str(row.get("action") or action or "").strip()
+        act_label = str(label or _SCHEDULED_DOUYIN_ACTION_LABELS.get(act, act)).strip()
+        state = _normalize_target_state(row.get("status"))
+        emit(
+            act,
+            act_label,
+            state,
+            _target_identity(row),
+            str(row.get("error") or "").strip() or fallback_reason,
+            "",
+            str(row.get("finished_at") or row.get("started_at") or ""),
+            str(row.get("account_id") or ""),
+        )
+    return detail
+
+
+def _attach_targets_detail(payload: Dict[str, Any], detail: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """把明细挂到结果 payload 上（空明细不写键，避免污染既有结果）。"""
+    if isinstance(payload, dict) and detail:
+        payload["targets_detail"] = detail
+    return payload
+
+
 async def _run_scheduled_douyin_batch_followups(
     cloud: httpx.AsyncClient,
     base: str,
@@ -5927,6 +6121,11 @@ def _scheduled_douyin_completed_result(
     )
     if users is not None:
         result["users"] = users
+        # 云端「节点执行情况」按目标逐条展示，保证每个失败目标都带原因。
+        _attach_targets_detail(
+            result,
+            _build_targets_detail(users=users, action=action, label=label, fallback_reason=summary),
+        )
     if tasks is not None:
         result["tasks"] = tasks
     if isinstance(completion.get("stop_result"), dict):
@@ -6309,6 +6508,11 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             "action": action,
             "results": results,
             "action_stats": action_stats,
+            "targets_detail": _build_targets_detail(
+                results=results,
+                action=action,
+                fallback_reason=summary,
+            ),
             "stats": {
                 "total": len(results),
                 "processed": started_action_count,
@@ -11872,6 +12076,10 @@ async def h5_chat_poll_loop() -> None:
                         continue
                     if task_resp.status_code < 400:
                         task_items = (task_resp.json() or {}).get("items") or []
+                        # The cloud reaps runs from a previous client process
+                        # while serving this claim, so the exit reason has now
+                        # been consumed and must not be replayed.
+                        mark_exit_reason_reported()
                     elif task_resp.status_code != 404:
                         logger.debug("[SCHEDULED-TASK] pending request HTTP %s: %s", task_resp.status_code, task_resp.text[:300])
                 publish_items: list[Dict[str, Any]] = []

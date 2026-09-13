@@ -162,6 +162,15 @@ def _start_mcp_if_needed():
 
 
 if __name__ == "__main__":
+    # 记录本次会话并判定上一轮进程是「自己重启」还是「真崩溃」；结论会随
+    # X-Previous-Client-Exit-Reason 上报，供云端回收上一轮 run 时分类。
+    # 必须尽早执行：这样即使之后启动失败，本次会话也已被记账。
+    try:
+        from backend.app.services.client_exit_marker import previous_exit_reason
+
+        previous_exit_reason()
+    except Exception:
+        pass
     _start_mcp_if_needed()
     port = int(os.environ.get("PORT", str(settings.port)))
     edition = (getattr(settings, "lobster_edition", None) or "online").strip().lower()

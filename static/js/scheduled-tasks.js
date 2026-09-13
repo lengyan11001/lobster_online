@@ -349,6 +349,101 @@
       + '</section>';
   }
 
+  // ── 节点执行情况：统计行 + 点击展开的逐目标/动作明细 ──────────────────────
+  var TARGET_STATE_LABELS = {
+    selected: '选取',
+    started: '启动',
+    succeeded: '成功',
+    failed: '失败',
+    not_started: '未启动'
+  };
+  var TARGET_STATE_ORDER = ['selected', 'started', 'succeeded', 'failed', 'not_started'];
+
+  function targetsDigest(run) {
+    var digest = run && run.targets_digest;
+    if (!digest || typeof digest !== 'object') return null;
+    var summary = digest.summary && typeof digest.summary === 'object' ? digest.summary : {};
+    var reasons = Array.isArray(digest.reasons) ? digest.reasons : [];
+    if (!Number(summary.total || 0) && !reasons.length) return null;
+    return {
+      summary: summary,
+      reasons: reasons,
+      retry: Number(digest.retry_not_started || 0),
+      top: String(digest.top_reason || '')
+    };
+  }
+
+  function targetDetailRows(run) {
+    var payload = resultPayload(run);
+    var rows = payload && Array.isArray(payload.targets_detail) ? payload.targets_detail : [];
+    if (!rows.length && payload && payload.mcp_result && Array.isArray(payload.mcp_result.targets_detail)) {
+      rows = payload.mcp_result.targets_detail;
+    }
+    return rows.filter(function (row) { return row && typeof row === 'object'; });
+  }
+
+  function targetStateLabel(state) {
+    var key = String(state || 'not_started');
+    return TARGET_STATE_LABELS[key] || key;
+  }
+
+  function targetDetailTableHtml(run) {
+    var rows = targetDetailRows(run);
+    if (!rows.length) {
+      return '<p class="meta">本次没有逐目标明细（旧版本客户端上报，或该动作不产生目标）。</p>';
+    }
+    return '<div class="scheduled-targets-table">'
+      + rows.map(function (row) {
+        var state = String(row.state || 'not_started');
+        return '<div class="scheduled-targets-row scheduled-targets-row-' + html(state) + '">'
+          + '<span class="scheduled-targets-cell target">' + html(row.target || '-') + '</span>'
+          + '<span class="scheduled-targets-cell action">' + html(row.action_label || row.action || '-') + '</span>'
+          + '<span class="scheduled-targets-cell state">' + html(targetStateLabel(state)) + '</span>'
+          + '<span class="scheduled-targets-cell reason">' + html(row.reason || '') + '</span>'
+          + '</div>';
+      }).join('')
+      + '</div>';
+  }
+
+  function targetsDigestHtml(run) {
+    var digest = targetsDigest(run);
+    var rows = targetDetailRows(run);
+    if (!digest && !rows.length) return '';
+    var summary = digest ? digest.summary : {};
+    var chips = TARGET_STATE_ORDER.map(function (key) {
+      return '<span class="scheduled-targets-chip scheduled-targets-chip-' + key + '">'
+        + html(TARGET_STATE_LABELS[key]) + ' <strong>' + html(Number(summary[key] || 0)) + '</strong></span>';
+    }).join('');
+    var top = digest && digest.top
+      ? '<span class="scheduled-targets-top">主要原因：' + html(digest.top) + '</span>'
+      : '';
+    var retry = digest ? digest.retry : 0;
+    var retryHtml = retry > 0 && run && run.task_id
+      ? '<button type="button" class="btn btn-ghost btn-sm scheduled-run-retry-btn" data-task-id="'
+        + html(run.task_id) + '">重试未启动的 ' + html(retry) + ' 个</button>'
+      : (retry > 0 ? '<span class="meta">未启动 ' + html(retry) + ' 个（该记录没有可重跑的任务定义）</span>' : '');
+    var reasonsHtml = digest && digest.reasons.length
+      ? '<ul class="scheduled-targets-reasons">' + digest.reasons.map(function (item) {
+        var sample = Array.isArray(item.sample) && item.sample.length
+          ? '<em>（如：' + html(item.sample.join('、')) + '）</em>'
+          : '';
+        return '<li><span>' + html(item.text) + '</span><b>×' + html(Number(item.count || 0)) + '</b>' + sample + '</li>';
+      }).join('') + '</ul>'
+      : '';
+    return '<div class="scheduled-targets">'
+      + '<details open>'
+      + '<summary class="scheduled-targets-summary">'
+      + '<span class="scheduled-targets-chips">' + chips + '</span>'
+      + top
+      + '<span class="scheduled-targets-hint">点击收起 / 展开每个动作明细</span>'
+      + '</summary>'
+      + '<div class="scheduled-targets-body">'
+      + reasonsHtml
+      + targetDetailTableHtml(run)
+      + '<div class="scheduled-targets-actions">' + retryHtml + '</div>'
+      + '</div></details></div>';
+  }
+
   function ipTaskLabel(task) {
     return {
       industry_hot_oral: '行业热门口播',
@@ -481,7 +576,9 @@
       ? '<pre class="scheduled-run-detail-pre">' + html(resultText) + '</pre>'
       : '<p class="meta">无错误或文本结果。</p>';
     var ipHtml = ipContentGroupHtml(payload);
+    var targetsHtml = targetsDigestHtml(run);
     body.innerHTML = metaHtml
+      + (targetsHtml ? detailSection('节点执行情况', targetsHtml) : '')
       + (ipHtml ? detailSection(ipContentCapabilityLabel(payload), ipHtml) : '')
       + detailSection('生成素材', materialHtml)
       + detailSection('提示词', promptHtml)
@@ -1718,6 +1815,29 @@
     });
   }
 
+  function retryNotStartedTargets(taskId, btn) {
+    if (!taskId) return;
+    var original = btn ? btn.textContent : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '已提交重试...';
+    }
+    api('/api/scheduled-tasks/tasks/' + encodeURIComponent(taskId) + '/run-now', {
+      method: 'POST',
+      body: JSON.stringify({})
+    }).then(function () {
+      showMsg('scheduledTaskMsg', '已提交重试，本机 online 空闲后会重新执行未启动的目标', false);
+      loadRuns();
+      loadTasks();
+    }).catch(function (e) {
+      showMsg('scheduledTaskMsg', e.message || '重试提交失败', true);
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = original || '重试未启动的目标';
+      }
+    });
+  }
+
   function resumeVideoRun(runId, btn) {
     if (!runId) return;
     if (btn) {
@@ -1862,6 +1982,11 @@
       var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-run-resume-video-btn') : null;
       if (!btn) return;
       resumeVideoRun(btn.getAttribute('data-run-id'), btn);
+    });
+    document.addEventListener('click', function (evt) {
+      var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-run-retry-btn') : null;
+      if (!btn) return;
+      retryNotStartedTargets(btn.getAttribute('data-task-id'), btn);
     });
     document.addEventListener('click', function (evt) {
       var btn = evt.target && evt.target.closest ? evt.target.closest('.scheduled-open-ip-studio-btn') : null;

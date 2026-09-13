@@ -1620,6 +1620,92 @@
       font-size: 0.88rem;
       line-height: 1.35;
     }
+    /* 节点执行情况：统计行可点击展开，逐目标/动作显示状态与失败原因 */
+    .scheduled-targets > details > summary { cursor: pointer; list-style: none; }
+    .scheduled-targets > details > summary::-webkit-details-marker { display: none; }
+    .scheduled-targets-summary {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.45rem 0.6rem;
+      padding: 0.1rem 0;
+    }
+    .scheduled-targets-chips {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+    }
+    .scheduled-targets-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.28rem;
+      padding: 0.16rem 0.5rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-muted);
+      font-size: 0.76rem;
+    }
+    .scheduled-targets-chip strong { color: var(--text); font-size: 0.8rem; }
+    .scheduled-targets-chip-failed { border-color: rgba(255, 96, 96, 0.55); color: #ff8f8f; }
+    .scheduled-targets-chip-failed strong { color: #ff8f8f; }
+    .scheduled-targets-chip-not_started { border-color: rgba(255, 196, 0, 0.5); color: #ffc400; }
+    .scheduled-targets-chip-not_started strong { color: #ffc400; }
+    .scheduled-targets-chip-succeeded { border-color: rgba(64, 196, 128, 0.5); color: #57d09a; }
+    .scheduled-targets-chip-succeeded strong { color: #57d09a; }
+    .scheduled-targets-top { color: #ff8f8f; font-size: 0.78rem; }
+    .scheduled-targets-hint {
+      margin-left: auto;
+      color: var(--text-muted);
+      font-size: 0.72rem;
+    }
+    .scheduled-targets-body {
+      margin-top: 0.6rem;
+      display: grid;
+      gap: 0.55rem;
+    }
+    .scheduled-targets-reasons {
+      margin: 0;
+      padding-left: 1rem;
+      display: grid;
+      gap: 0.25rem;
+      font-size: 0.78rem;
+    }
+    .scheduled-targets-reasons li { color: var(--text); }
+    .scheduled-targets-reasons b { margin-left: 0.3rem; color: #ff8f8f; }
+    .scheduled-targets-reasons em {
+      margin-left: 0.35rem;
+      color: var(--text-muted);
+      font-style: normal;
+    }
+    .scheduled-targets-table {
+      display: grid;
+      gap: 0.28rem;
+      max-height: 320px;
+      overflow: auto;
+    }
+    .scheduled-targets-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr) 4.2rem minmax(0, 1.7fr);
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.34rem 0.5rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: 0.76rem;
+    }
+    .scheduled-targets-row .scheduled-targets-cell {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .scheduled-targets-row .state { color: var(--text-muted); }
+    .scheduled-targets-row-failed { border-color: rgba(255, 96, 96, 0.45); }
+    .scheduled-targets-row-failed .state { color: #ff8f8f; }
+    .scheduled-targets-row-not_started { border-color: rgba(255, 196, 0, 0.4); }
+    .scheduled-targets-row-not_started .state { color: #ffc400; }
+    .scheduled-targets-row-succeeded .state { color: #57d09a; }
+    .scheduled-targets-actions { display: flex; justify-content: flex-end; }
     .scheduled-run-detail-material > div {
       margin-top: 0;
     }
