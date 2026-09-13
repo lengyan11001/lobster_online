@@ -14,7 +14,7 @@ from collections import deque
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Set
-from urllib.parse import urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 import requests
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
@@ -3014,6 +3014,20 @@ def mark_search_results_for_export(results: List[Dict]) -> List[Dict]:
     return normalized
 
 
+def build_douyin_search_url(
+    keyword_text: str,
+    search_query: Optional[List[tuple[str, str]]] = None,
+) -> str:
+    """Douyin keyword-search URL with the keyword and query string encoded.
+
+    ``requests.utils`` re-exports ``quote`` but has no ``urlencode``; the query
+    string must come from ``urllib.parse`` or the whole keyword search fails with
+    "module 'requests.utils' has no attribute 'urlencode'".
+    """
+    query = urlencode(list(search_query or [("type", "video")]))
+    return f"https://www.douyin.com/search/{quote(keyword_text)}?{query}"
+
+
 async def run_douyin_keyword_search(
     account: Dict,
     keyword: str,
@@ -3032,10 +3046,7 @@ async def run_douyin_keyword_search(
         search_query.append(("sort_type", str(sort_type).strip()))
     if str(publish_time or "").strip() not in ("", "0"):
         search_query.append(("publish_time", str(publish_time).strip()))
-    search_url = (
-        f"https://www.douyin.com/search/{requests.utils.quote(keyword_text)}"
-        f"?{requests.utils.urlencode(search_query)}"
-    )
+    search_url = build_douyin_search_url(keyword_text, search_query)
     browser_result = await ensure_douyin_account_browser_ready_async(account, start_url=search_url)
     if int(browser_result.get("code", 0) or 0) != 200:
         raise RuntimeError(str(browser_result.get("msg", "") or "抖音搜索浏览器启动失败"))
