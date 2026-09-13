@@ -1,7 +1,7 @@
 {
-  "version": "2.0.45",
-  "build": 324,
-  "applied_at": "2026-09-13T09:58:51+08:00",
-  "note": "ui: remove lobster wording from all client UI text",
-  "bundle_sha256": "d9cfa0829849cb82d25b6c857968c240b3207f5ded918e24c92657280bca2f9a"
+  "version": "2.0.46",
+  "build": 325,
+  "applied_at": "2026-09-13T17:42:10+08:00",
+  "note": "fix(douyin): keyword search URL uses urllib.parse; feat(workflow): takeover node-end report; feat(oem): ship start.exe next to the branded launcher",
+  "bundle_sha256": "2fdca297c5cccbae435002506e1635c8c84c32fcccfe920ec138d76dc51b29f0"
 }
