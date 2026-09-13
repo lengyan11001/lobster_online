@@ -221,11 +221,46 @@ def install_brand_launcher(root: Path, profile: dict) -> Path:
         os.replace(partial, target)
     finally:
         partial.unlink(missing_ok=True)
-    install_start_entry(root, target)
+    install_start_entry(root, target, source=cached_start_entry_asset(root, profile))
     return target
 
 
-def install_start_entry(root: Path, launcher: Path) -> Path:
+def cached_start_entry_asset(root: Path, profile: dict) -> Path | None:
+    """Return the ``start.exe`` the OEM bundle delivered, when it is cached.
+
+    The bootstrap manifest offers ``start_entry`` next to ``launcher_exe``, so a
+    brand switch downloads both names for the same shell.
+    """
+    record_path = str(profile.get("_cache_profile_path") or "").strip()
+    if not record_path:
+        return None
+    try:
+        record = json.loads(Path(record_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    assets = record.get("assets") if isinstance(record, dict) else None
+    if not isinstance(assets, list):
+        return None
+    relative = ""
+    for item in assets:
+        if not isinstance(item, dict):
+            continue
+        candidate_rel = str(item.get("relative_path") or "").replace("\\", "/").lstrip("/")
+        if not candidate_rel:
+            continue
+        if str(item.get("key") or "").strip().lower() == "start_entry" or Path(candidate_rel).name.lower() == START_ENTRY_NAME:
+            relative = candidate_rel
+            break
+    if not relative:
+        return None
+    candidate = (root / Path(relative)).resolve()
+    cache_root = (root / "static" / "branding" / "cache").resolve()
+    if cache_root not in candidate.parents or not candidate.is_file() or candidate.suffix.lower() != ".exe":
+        return None
+    return candidate
+
+
+def install_start_entry(root: Path, launcher: Path, source: Path | None = None) -> Path:
     """Mirror the branded launcher EXE into the unified ``start.exe`` entry.
 
     The desktop shortcut keeps pointing at the branded EXE; autostart uses the
@@ -234,10 +269,20 @@ def install_start_entry(root: Path, launcher: Path) -> Path:
     """
     if launcher.name.lower() == START_ENTRY_NAME:
         return launcher
+    payload = launcher
+    if isinstance(source, Path) and source.is_file():
+        # The OEM bundle ships its own renamed copy. It is only used while it is a
+        # byte-identical mirror of the branded EXE, so a stale server copy can
+        # never make the autostart shell show a different brand icon.
+        try:
+            if source.stat().st_size == launcher.stat().st_size and source.read_bytes() == launcher.read_bytes():
+                payload = source
+        except OSError:
+            payload = launcher
     target = root / START_ENTRY_NAME
     partial = root / f".{START_ENTRY_NAME}.{os.getpid()}.part"
     try:
-        shutil.copy2(launcher, partial)
+        shutil.copy2(payload, partial)
     except OSError as exc:
         partial.unlink(missing_ok=True)
         raise RuntimeError(f"统一启动程序 {START_ENTRY_NAME} 写入失败：{exc}") from exc
