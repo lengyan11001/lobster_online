@@ -163,7 +163,7 @@
   });
 
   window.registerLobsterView('agent', {
-    html: '/static/views/agent.html',
+    html: '/static/views/agent.html?v=20260913-agent-brand-v1',
     scripts: '/static/js/views/agent.js?v=20260830-agent-no-poll-v1'
   });
 
