@@ -9928,6 +9928,10 @@ async def _run_native_wechat_takeover_session(
         "rounds": [],
         "started_at": started_at,
     }
+    if run_id:
+        # A node deadline can interrupt this session before its own timer fires;
+        # keep the live counters reachable for the node-end report.
+        _publish_takeover_session_state(run_id, output)
     last_config: Dict[str, Any] = {}
     consecutive_driver_failures = 0
     max_consecutive_driver_failures = 3
@@ -9963,7 +9967,7 @@ async def _run_native_wechat_takeover_session(
                 headers,
                 run_id,
                 "running",
-                {"text": f"个微私信接管第 {round_number} 轮巡检", "round": round_number, "session_seconds": duration_limit},
+                {"text": f"个微私信接管第 {round_number} 轮巡检", "round": round_number, "session_seconds": duration_limit, "takeover": _takeover_progress_patch(output)},
             )
             if _task_event_rejects_local_work(event_status):
                 await _request_local_auto_reply_stop(account_id, headers)
@@ -10072,6 +10076,7 @@ async def _run_native_wechat_takeover_session(
                         "round": round_number,
                         "session_seconds": duration_limit,
                         "heartbeat": True,
+                        "takeover": _takeover_progress_patch(output),
                     },
                 )
                 if _task_event_rejects_local_work(event_status):
@@ -11343,7 +11348,119 @@ async def _scheduled_task_keepalive(
             logger.debug("[SCHEDULED-TASK] heartbeat failed run_id=%s: %s", run_id, exc)
 
 
-def _workflow_node_deadline_message(deadline: datetime) -> str:
+_TAKEOVER_SESSION_STATES: Dict[str, Dict[str, Any]] = {}
+_TAKEOVER_SESSION_STATE_LIMIT = 20
+
+
+def _publish_takeover_session_state(run_id: str, state: Dict[str, Any]) -> None:
+    """Keep a live view of the running takeover session for the node report."""
+    key = str(run_id or "").strip()
+    if not key or not isinstance(state, dict):
+        return
+    _TAKEOVER_SESSION_STATES[key] = state
+    while len(_TAKEOVER_SESSION_STATES) > _TAKEOVER_SESSION_STATE_LIMIT:
+        _TAKEOVER_SESSION_STATES.pop(next(iter(_TAKEOVER_SESSION_STATES)))
+
+
+def _consume_takeover_session_state(run_id: str) -> Optional[Dict[str, Any]]:
+    key = str(run_id or "").strip()
+    if not key:
+        return None
+    state = _TAKEOVER_SESSION_STATES.pop(key, None)
+    return state if isinstance(state, dict) else None
+
+
+def _takeover_progress_patch(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Running counters attached to takeover heartbeats."""
+    snapshot = state if isinstance(state, dict) else {}
+    return {
+        "completed_rounds": _safe_int(snapshot.get("completed_rounds")),
+        "replied": _safe_int(snapshot.get("replied")),
+        "skipped": _safe_int(snapshot.get("skipped")),
+        "failed": _safe_int(snapshot.get("failed")),
+        "friend_requests_checked": _safe_int(snapshot.get("friend_requests_checked")),
+        "friend_requests_accepted": _safe_int(snapshot.get("friend_requests_accepted")),
+        "friend_requests_failed": _safe_int(snapshot.get("friend_requests_failed")),
+        "group_invite_candidates": _safe_int(snapshot.get("group_invite_candidates")),
+    }
+
+
+def _duration_label(seconds: float) -> str:
+    total = int(max(0.0, float(seconds or 0.0)))
+    if total < 60:
+        return f"{total} 秒"
+    return f"{total // 60} 分 {total % 60} 秒"
+
+
+def _takeover_deadline_report(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Aggregate what the takeover session actually did before the node ended."""
+    snapshot = state if isinstance(state, dict) else {}
+    rounds = [row for row in (snapshot.get("rounds") or []) if isinstance(row, dict)]
+    last_round = rounds[-1] if rounds else {}
+    try:
+        duration_seconds = max(0.0, float(snapshot.get("duration_seconds") or 0.0))
+    except (TypeError, ValueError):
+        duration_seconds = 0.0
+    return {
+        "completed_rounds": _safe_int(snapshot.get("completed_rounds")),
+        "replied": _safe_int(snapshot.get("replied")),
+        "skipped": _safe_int(snapshot.get("skipped")),
+        "failed": _safe_int(snapshot.get("failed")),
+        "friend_requests_checked": _safe_int(snapshot.get("friend_requests_checked")),
+        "friend_requests_accepted": _safe_int(snapshot.get("friend_requests_accepted")),
+        "friend_requests_failed": _safe_int(snapshot.get("friend_requests_failed")),
+        "group_invite_candidates": _safe_int(snapshot.get("group_invite_candidates")),
+        "duration_seconds": round(duration_seconds, 1),
+        "duration_label": _duration_label(duration_seconds),
+        "started_at": str(snapshot.get("started_at") or ""),
+        "finished_at": str(snapshot.get("finished_at") or ""),
+        "last_round_summary": str(last_round.get("summary_text") or "").strip(),
+        "session_summary": str(snapshot.get("summary_text") or "").strip(),
+    }
+
+
+def _takeover_deadline_text(report: Dict[str, Any]) -> str:
+    lines = [
+        "个微私信接管正常收工：节点时间已到，后续节点继续执行。",
+        "",
+        "接管实况",
+    ]
+    if report["completed_rounds"] <= 0:
+        lines.append("- 接管已启动，但本节点时间内未完成一轮巡检")
+    else:
+        lines.append(
+            f"- 已巡检：{report['completed_rounds']} 轮，耗时 {report['duration_label']}"
+        )
+        lines.append(
+            f"- 自动回复：{report['replied']} 个会话；"
+            f"跳过：{report['skipped']} 个；失败：{report['failed']} 个"
+        )
+        lines.append(
+            f"- 新好友申请：检查 {report['friend_requests_checked']} 个，"
+            f"已同意 {report['friend_requests_accepted']} 个，"
+            f"失败 {report['friend_requests_failed']} 个"
+        )
+        if report["group_invite_candidates"]:
+            lines.append(
+                f"- 疑似加群线索：{report['group_invite_candidates']} 个会话"
+            )
+    detail = report["session_summary"] or report["last_round_summary"]
+    if detail:
+        lines.append("")
+        lines.append(detail[:900])
+    return "\n".join(lines)
+
+
+def _workflow_node_deadline_message(
+    deadline: datetime,
+    *,
+    takeover_report: Optional[Dict[str, Any]] = None,
+    takeover_node: bool = False,
+) -> str:
+    if takeover_node:
+        if isinstance(takeover_report, dict):
+            return _takeover_deadline_text(takeover_report)
+        return "个微私信接管未执行：节点时间已到，本节点内没有可执行的接管时段，后续节点继续执行。"
     _ = deadline
     return "节点时间已结束，本次任务已自动停止，后续节点继续执行。"
 
@@ -11362,13 +11479,22 @@ async def _report_workflow_node_deadline_expired(
     run_id = str(item.get("id") or "").strip()
     if not run_id:
         return
-    message = _workflow_node_deadline_message(deadline)
+    takeover_node = _workflow_node_uses_hard_deadline(item)
+    takeover_state = _consume_takeover_session_state(run_id) if takeover_node else None
+    takeover_report = _takeover_deadline_report(takeover_state) if takeover_state else None
+    message = _workflow_node_deadline_message(
+        deadline,
+        takeover_report=takeover_report,
+        takeover_node=takeover_node,
+    )
     payload = {
         "reason": "workflow_node_deadline_expired",
         "deadline_at": deadline.astimezone(timezone.utc).isoformat(),
         "phase": phase,
         "text": message,
     }
+    if takeover_report is not None:
+        payload["takeover"] = dict(takeover_report)
     if stop_result:
         payload["local_stop"] = stop_result
     event_status = await _post_task_event(client, base, headers, run_id, "cancelled", payload)
