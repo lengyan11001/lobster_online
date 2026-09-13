@@ -9,6 +9,11 @@ from pathlib import Path
 
 APP_NAME = "必火智能AI"
 DEFAULT_BRAND_MARK = "bihuo"
+# Unified autostart entry. The factory wires boot autostart to this fixed name so
+# every OEM brand can keep its own desktop EXE name; the build therefore emits the
+# branded shell twice. Both files share the same bytes, so the embedded brand icon
+# stays identical no matter which one the user or the factory launches.
+START_ENTRY_NAME = "start.exe"
 
 
 def _read_dotenv_brand(root: Path) -> str:
@@ -81,12 +86,18 @@ def main() -> int:
 
     root_out = root / f"{APP_NAME}.exe"
     root_out.write_bytes(out.read_bytes())
+    dist_entry = dist / START_ENTRY_NAME
+    dist_entry.write_bytes(root_out.read_bytes())
+    root_entry = root / START_ENTRY_NAME
+    root_entry.write_bytes(root_out.read_bytes())
 
     print()
     print(f"[desktop] Brand: {brand_mark}")
     print(f"[desktop] Icon: {icon}")
     print(f"[desktop] Built: {out}")
     print(f"[desktop] Copied lightweight launcher to: {root_out}")
+    print(f"[desktop] Unified start entry: {root_entry}")
+    print(f"[desktop] Unified start entry (dist): {dist_entry}")
     return 0
 
 

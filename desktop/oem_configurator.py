@@ -26,6 +26,12 @@ def resolve_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+# Unified autostart entry installed next to the branded launcher EXE. The factory
+# points boot autostart at this fixed name, so a brand switch only has to refresh
+# these two files and never the shortcut/autostart configuration.
+START_ENTRY_NAME = "start.exe"
+
+
 def read_env(root: Path) -> dict[str, str]:
     path = root / ".env"
     result: dict[str, str] = {}
@@ -158,7 +164,7 @@ def cleanup_previous_oem(root: Path, previous_code: str, current_code: str, curr
         current_launcher = _safe_launcher_filename(current_install.get("launcher_filename"))
     except RuntimeError:
         current_launcher = ""
-    if previous_launcher and previous_launcher != current_launcher:
+    if previous_launcher and previous_launcher.lower() != START_ENTRY_NAME and previous_launcher != current_launcher:
         (root / previous_launcher).unlink(missing_ok=True)
 
     try:
@@ -215,7 +221,46 @@ def install_brand_launcher(root: Path, profile: dict) -> Path:
         os.replace(partial, target)
     finally:
         partial.unlink(missing_ok=True)
+    install_start_entry(root, target)
     return target
+
+
+def install_start_entry(root: Path, launcher: Path) -> Path:
+    """Mirror the branded launcher EXE into the unified ``start.exe`` entry.
+
+    The desktop shortcut keeps pointing at the branded EXE; autostart uses the
+    fixed name. Writing the same bytes keeps the embedded brand icon (window,
+    taskbar, file icon) identical for both entry points.
+    """
+    if launcher.name.lower() == START_ENTRY_NAME:
+        return launcher
+    target = root / START_ENTRY_NAME
+    partial = root / f".{START_ENTRY_NAME}.{os.getpid()}.part"
+    try:
+        shutil.copy2(launcher, partial)
+    except OSError as exc:
+        partial.unlink(missing_ok=True)
+        raise RuntimeError(f"统一启动程序 {START_ENTRY_NAME} 写入失败：{exc}") from exc
+    try:
+        os.replace(partial, target)
+        return target
+    except OSError as first_error:
+        # A running autostart image can refuse an in-place replace: move it aside.
+        stale = root / f".{START_ENTRY_NAME}.old.{os.getpid()}"
+        try:
+            if target.is_file():
+                os.replace(target, stale)
+            os.replace(partial, target)
+        except OSError as exc:
+            partial.unlink(missing_ok=True)
+            stale.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"统一启动程序 {START_ENTRY_NAME} 无法更新（请先退出客户端再切换）：{first_error} / {exc}"
+            ) from exc
+        stale.unlink(missing_ok=True)
+        return target
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def run_install(root: Path, code: str, brand_mark: str) -> None:

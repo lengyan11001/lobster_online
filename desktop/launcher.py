@@ -34,6 +34,23 @@ DEFAULT_OVERSEAS_SERVER = "https://bhos.online"
 SHOW_WINDOW_TITLEBAR_ICON = True
 DEFAULT_PORT = 8000
 DEFAULT_MCP_PORT = 8001
+# Unified autostart entry. The factory points boot autostart at this fixed name,
+# so each OEM brand can keep its own launcher EXE name on the desktop while the
+# autostart path stays identical everywhere.
+START_ENTRY_NAME = "start.exe"
+_LAUNCHER_EXE_EXCLUDES = (
+    START_ENTRY_NAME,
+    "python.exe",
+    "pythonw.exe",
+    "py.exe",
+    "pyw.exe",
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "explorer.exe",
+    "BHZN-ToDesk-Agent.exe",
+    "OEM\u914d\u7f6e\u542f\u52a8\u5668.exe",
+)
 CONFIRM_CLOSE_BODY_TEMPLATE = (
     "\u786e\u5b9a\u8981\u5173\u95ed{title}\u5417\uff1f\n\n"
     "\u5982\u679c\u6b63\u5728\u5168\u5c4f\u9884\u89c8\u89c6\u9891\uff0c"
@@ -461,22 +478,26 @@ def refresh_oem_desktop_shortcut(branding: dict[str, object]) -> None:
     script = ROOT / "scripts" / "create_desktop_shortcut.ps1"
     if not script.is_file():
         return
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(script),
+        "-Root",
+        str(ROOT),
+        "-BrandMark",
+        str(branding.get("mark") or ""),
+        "-BrandProfilePath",
+        profile_path,
+    ]
+    launcher_exe = resolve_brand_launcher_exe(branding)
+    if launcher_exe is not None:
+        command.extend(["-LauncherExe", str(launcher_exe)])
     try:
         result = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(script),
-                "-Root",
-                str(ROOT),
-                "-BrandMark",
-                str(branding.get("mark") or ""),
-                "-BrandProfilePath",
-                profile_path,
-            ],
+            command,
             cwd=str(ROOT),
             capture_output=True,
             text=True,
@@ -488,6 +509,174 @@ def refresh_oem_desktop_shortcut(branding: dict[str, object]) -> None:
             log(f"refresh OEM desktop shortcut failed code={result.returncode}: {result.stdout} {result.stderr}")
     except Exception as exc:
         log(f"refresh OEM desktop shortcut failed: {exc}")
+
+
+def parent_process_image_path() -> Path | None:
+    """Return the image path of the process that started this launcher."""
+    if os.name != "nt":
+        return None
+    try:
+        class PROCESSENTRY32W(ctypes.Structure):
+            _fields_ = [
+                ("dwSize", wintypes.DWORD),
+                ("cntUsage", wintypes.DWORD),
+                ("th32ProcessID", wintypes.DWORD),
+                ("th32DefaultHeapID", ctypes.c_size_t),
+                ("th32ModuleID", wintypes.DWORD),
+                ("cntThreads", wintypes.DWORD),
+                ("th32ParentProcessID", wintypes.DWORD),
+                ("pcPriClassBase", ctypes.c_long),
+                ("dwFlags", wintypes.DWORD),
+                ("szExeFile", ctypes.c_wchar * 260),
+            ]
+
+        kernel32 = ctypes.windll.kernel32
+        snapshot = kernel32.CreateToolhelp32Snapshot(0x00000002, 0)
+        if not snapshot or snapshot == -1:
+            return None
+        parent_pid = 0
+        try:
+            entry = PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(entry)
+            if kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+                while True:
+                    if entry.th32ProcessID == os.getpid():
+                        parent_pid = int(entry.th32ParentProcessID)
+                        break
+                    if not kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                        break
+        finally:
+            kernel32.CloseHandle(snapshot)
+        if parent_pid <= 0:
+            return None
+        handle = kernel32.OpenProcess(0x1000, False, parent_pid)
+        if not handle:
+            return None
+        try:
+            buffer = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(len(buffer))
+            if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+                return None
+            return Path(buffer.value) if buffer.value else None
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception as exc:
+        log(f"StartEntry: parent process lookup failed: {exc}")
+        return None
+
+
+def is_root_launcher_candidate(path: Path | None) -> bool:
+    """True when ``path`` is a launcher EXE stored directly in this client root."""
+    if path is None:
+        return False
+    try:
+        resolved = path.resolve()
+        if resolved.suffix.lower() != ".exe" or not resolved.is_file():
+            return False
+        if resolved.parent != ROOT.resolve():
+            return False
+    except OSError:
+        return False
+    blocked = {name.lower() for name in _LAUNCHER_EXE_EXCLUDES}
+    return resolved.name.lower() not in blocked
+
+
+def resolve_brand_launcher_exe(branding: dict[str, object] | None = None) -> Path | None:
+    """Best-effort resolution of this installation's branded launcher EXE."""
+    profile: object = branding if isinstance(branding, dict) and branding else globals().get("_ACTIVE_DESKTOP_BRANDING")
+    candidates: list[Path] = []
+    if isinstance(profile, dict):
+        install = profile.get("install") if isinstance(profile.get("install"), dict) else {}
+        name = str(install.get("launcher_filename") or "").strip()
+        if name and Path(name).name == name and name.lower().endswith(".exe"):
+            candidates.append(ROOT / name)
+    parent = parent_process_image_path()
+    if parent is not None:
+        candidates.append(parent)
+    for name in ("\u5fc5\u706b\u667a\u80fdAI.exe", "\u5fc5\u706bAI\u5458\u5de5.exe", "lobster.exe"):
+        candidates.append(ROOT / name)
+    for candidate in candidates:
+        if is_root_launcher_candidate(candidate):
+            try:
+                return candidate.resolve()
+            except OSError:
+                continue
+    scanned: list[Path] = []
+    try:
+        for item in sorted(ROOT.glob("*.exe")):
+            if not is_root_launcher_candidate(item):
+                continue
+            try:
+                size = item.stat().st_size
+            except OSError:
+                continue
+            if 4096 < size < 3 * 1024 * 1024:
+                scanned.append(item)
+    except OSError:
+        return None
+    if len(scanned) == 1:
+        return scanned[0]
+    return None
+
+
+def ensure_start_entry(
+    branding: dict[str, object] | None = None,
+    launcher: Path | None = None,
+) -> Path | None:
+    """Keep ``<ROOT>\\start.exe`` byte-identical to the branded launcher EXE.
+
+    Autostart is configured by the factory against this fixed name; this helper
+    only keeps the copy in sync (same bytes, therefore the same brand icon). It
+    never writes registry values or Startup shortcuts.
+    """
+    if os.name != "nt":
+        return None
+    source = launcher if is_root_launcher_candidate(launcher) else resolve_brand_launcher_exe(branding)
+    if source is None:
+        return None
+    entry = ROOT / START_ENTRY_NAME
+    try:
+        if (
+            entry.is_file()
+            and entry.stat().st_size == source.stat().st_size
+            and entry.read_bytes() == source.read_bytes()
+        ):
+            return entry
+    except OSError as exc:
+        log(f"StartEntry: compare failed: {exc}")
+        return None
+    partial = ROOT / f".{START_ENTRY_NAME}.{os.getpid()}.part"
+    stale = ROOT / f".{START_ENTRY_NAME}.old.{os.getpid()}"
+    try:
+        shutil.copy2(source, partial)
+    except OSError as exc:
+        partial.unlink(missing_ok=True)
+        log(f"StartEntry: copy failed: {exc}")
+        return None
+    try:
+        os.replace(partial, entry)
+        log(f"StartEntry: {START_ENTRY_NAME} synced from {source.name}")
+        return entry
+    except OSError as first_error:
+        partial.unlink(missing_ok=True)
+    try:
+        # The running autostart image can refuse an in-place replace: re-copy and
+        # swap the locked file aside first.
+        shutil.copy2(source, partial)
+        if entry.exists():
+            os.replace(entry, stale)
+        os.replace(partial, entry)
+        log(f"StartEntry: {START_ENTRY_NAME} replaced (running image was locked)")
+        return entry
+    except OSError as exc:
+        log(f"StartEntry: update failed: {first_error} / {exc}")
+        return None
+    finally:
+        for leftover in (partial, stale):
+            try:
+                leftover.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def configure_windows_app_identity(mark: str) -> None:
@@ -1393,11 +1582,11 @@ class DesktopApi:
                 (
                     path
                     for path in (
+                        resolve_brand_launcher_exe(),
+                        ROOT / START_ENTRY_NAME,
                         ROOT / "必火智能AI.exe",
-                        ROOT / "必火AI员工.exe",
-                        ROOT / "lobster.exe",
                     )
-                    if path.is_file()
+                    if isinstance(path, Path) and path.is_file()
                 ),
                 ROOT / "必火智能AI.exe",
             )
@@ -2159,6 +2348,10 @@ def main() -> int:
     if not (ROOT / "backend").is_dir() or not (ROOT / "static").is_dir():
         message_box(desktop_brand_title(APP_NAME, branding), f"客户端目录不完整，找不到 backend/static。\n\n当前目录：{ROOT}")
         return 2
+
+    # Autostart is configured by the factory against <ROOT>\start.exe; keep that
+    # copy identical to this brand's launcher EXE.
+    ensure_start_entry(branding)
 
     if not (ROOT / ".env").is_file():
         log(".env not found; launcher will continue with built-in/default environment values")
