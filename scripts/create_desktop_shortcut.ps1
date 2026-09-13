@@ -5,10 +5,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Root,
     [string]$BrandMark = '',
-    [string]$BrandProfilePath = '',
-    # Launcher EXE the client itself is running from; keeps the desktop shortcut on
-    # the branded EXE for OEM brands that are not listed below.
-    [string]$LauncherExe = ''
+    [string]$BrandProfilePath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -19,7 +16,6 @@ $desktopExe = Join-Path $Root $desktopExeName
 $legacyDesktopExeName = -join ([char]0x5fc5, [char]0x706b, 'AI', [char]0x5458, [char]0x5de5, '.exe')
 $legacyDesktopExe = Join-Path $Root $legacyDesktopExeName
 $legacyLobsterExe = Join-Path $Root 'lobster.exe'
-$startEntryExe = Join-Path $Root 'start.exe'
 $bat = Join-Path $Root 'start.bat'
 
 if (-not (Test-Path -LiteralPath $desktopExe) -and -not (Test-Path -LiteralPath $legacyDesktopExe) -and -not (Test-Path -LiteralPath $legacyLobsterExe) -and -not (Test-Path -LiteralPath $bat)) {
@@ -115,25 +111,17 @@ $lnkPath = Join-Path $desktop $lnkName
 try {
     $shell = New-Object -ComObject WScript.Shell
     $sc = $shell.CreateShortcut($lnkPath)
-    $targetPath = ''
     if (-not [string]::IsNullOrWhiteSpace($brandLauncher)) {
-        $targetPath = $brandLauncher
-    } elseif (-not [string]::IsNullOrWhiteSpace($LauncherExe) -and (Test-Path -LiteralPath $LauncherExe)) {
-        $targetPath = (Get-Item -LiteralPath $LauncherExe).FullName
+        $sc.TargetPath = $brandLauncher
     } elseif (Test-Path -LiteralPath $desktopExe) {
-        $targetPath = $desktopExe
+        $sc.TargetPath = $desktopExe
     } elseif (Test-Path -LiteralPath $legacyDesktopExe) {
-        $targetPath = $legacyDesktopExe
+        $sc.TargetPath = $legacyDesktopExe
     } elseif (Test-Path -LiteralPath $legacyLobsterExe) {
-        $targetPath = $legacyLobsterExe
-    } elseif (Test-Path -LiteralPath $startEntryExe) {
-        # Unified autostart entry: same bytes as the branded EXE, so the icon stays.
-        $targetPath = $startEntryExe
+        $sc.TargetPath = $legacyLobsterExe
     } else {
-        Write-Host '[desktop-shortcut] WARN: no launcher EXE found, falling back to start.bat'
-        $targetPath = $bat
+        $sc.TargetPath = $bat
     }
-    $sc.TargetPath = $targetPath
     $sc.WorkingDirectory = $Root
     $sc.IconLocation = "$ico,0"
     $sc.Description = $desc

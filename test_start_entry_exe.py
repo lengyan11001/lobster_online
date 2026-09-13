@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from desktop import build_desktop_exe, launcher, oem_configurator
+from desktop import build_desktop_exe, oem_configurator
 
 
 def _clear_brand_environment(monkeypatch):
@@ -214,86 +214,3 @@ def test_oem_switch_never_deletes_start_entry_filename(tmp_path, monkeypatch):
     oem_configurator.cleanup_previous_oem(tmp_path, "0100", "0200", current)
 
     assert (tmp_path / "start.exe").read_bytes() == b"unified-shell"
-
-
-def test_launcher_syncs_unified_start_entry(tmp_path, monkeypatch):
-    monkeypatch.setattr(launcher, "ROOT", tmp_path)
-    monkeypatch.setattr(launcher, "_ACTIVE_DESKTOP_BRANDING", {}, raising=False)
-    monkeypatch.setattr(launcher, "parent_process_image_path", lambda: None)
-    brand = tmp_path / "\u5fc5\u706b\u667a\u80fdAI.exe"
-    brand.write_bytes(b"shell-v1")
-
-    entry = launcher.ensure_start_entry()
-
-    assert entry == tmp_path / "start.exe"
-    assert entry.read_bytes() == b"shell-v1"
-
-    brand.write_bytes(b"shell-v2-longer")
-    launcher.ensure_start_entry()
-    assert (tmp_path / "start.exe").read_bytes() == b"shell-v2-longer"
-    assert launcher.resolve_brand_launcher_exe() == brand
-
-
-def test_launcher_uses_parent_shell_when_branding_is_unknown(tmp_path, monkeypatch):
-    monkeypatch.setattr(launcher, "ROOT", tmp_path)
-    monkeypatch.setattr(launcher, "_ACTIVE_DESKTOP_BRANDING", {}, raising=False)
-    parent = tmp_path / "\u6d77\u6d6aAI\u667a\u80fd\u4f53.exe"
-    parent.write_bytes(b"oem-shell")
-    monkeypatch.setattr(launcher, "parent_process_image_path", lambda: parent)
-
-    entry = launcher.ensure_start_entry()
-
-    assert entry == tmp_path / "start.exe"
-    assert entry.read_bytes() == b"oem-shell"
-
-
-def test_launcher_skips_ambiguous_unified_start_entry(tmp_path, monkeypatch):
-    monkeypatch.setattr(launcher, "ROOT", tmp_path)
-    monkeypatch.setattr(launcher, "_ACTIVE_DESKTOP_BRANDING", {}, raising=False)
-    monkeypatch.setattr(launcher, "parent_process_image_path", lambda: None)
-    (tmp_path / "ToolA.exe").write_bytes(b"a" * 8192)
-    (tmp_path / "ToolB.exe").write_bytes(b"b" * 8192)
-
-    assert launcher.ensure_start_entry() is None
-    assert not (tmp_path / "start.exe").exists()
-
-
-def test_desktop_update_relaunch_prefers_oem_shell_over_hardcoded_name(tmp_path, monkeypatch):
-    helper = tmp_path / "scripts" / "apply_client_update_and_restart.py"
-    helper.parent.mkdir(parents=True)
-    helper.write_text("# helper", encoding="utf-8")
-    python_exe = tmp_path / "python" / "python.exe"
-    python_exe.parent.mkdir()
-    python_exe.write_bytes(b"")
-    brand = tmp_path / "\u6d77\u6d6aAI\u667a\u80fd\u4f53.exe"
-    brand.write_bytes(b"oem-shell" * 2000)
-    popen_calls = []
-
-    class FakeTimer:
-        def __init__(self, _delay, _callback):
-            pass
-
-        def start(self):
-            return None
-
-    def fake_popen(command, **kwargs):
-        popen_calls.append((command, kwargs))
-        return object()
-
-    monkeypatch.setattr(launcher, "ROOT", Path(tmp_path))
-    monkeypatch.setattr(launcher, "_ACTIVE_DESKTOP_BRANDING", {}, raising=False)
-    monkeypatch.setattr(launcher, "parent_process_image_path", lambda: None)
-    monkeypatch.setattr(launcher, "bundled_python", lambda: str(python_exe))
-    monkeypatch.setattr(launcher, "build_env", lambda: {})
-    monkeypatch.setattr(launcher, "creation_flags", lambda: 0)
-    monkeypatch.setattr(launcher.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(launcher.threading, "Timer", FakeTimer)
-    monkeypatch.setattr(launcher, "_CLIENT_UPDATE_RESTART_SCHEDULED", False)
-    monkeypatch.setattr(launcher, "_ALLOW_WINDOW_CLOSE", False)
-
-    first = launcher.DesktopApi().install_client_update()
-
-    assert first["ok"] is True
-    assert len(popen_calls) == 1
-    assert popen_calls[0][0][:2] == [str(python_exe), str(helper)]
-    assert str(brand) in popen_calls[0][0]
