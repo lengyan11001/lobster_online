@@ -1,7 +1,7 @@
 {
-  "version": "2.0.44",
-  "build": 323,
-  "applied_at": "2026-09-12T11:18:05+08:00",
-  "note": "wechat send via chat + douyin AI keyword node + actionable model errors",
-  "bundle_sha256": "b99e716d85544d45386ab1c261590b4c695c8b2366c3102143df7bdbc2eff358"
+  "version": "2.0.45",
+  "build": 324,
+  "applied_at": "2026-09-13T09:58:51+08:00",
+  "note": "ui: remove lobster wording from all client UI text",
+  "bundle_sha256": "d9cfa0829849cb82d25b6c857968c240b3207f5ded918e24c92657280bca2f9a"
 }
