@@ -1,7 +1,7 @@
 {
-  "version": "2.0.46",
-  "build": 325,
-  "applied_at": "2026-09-13T17:42:10+08:00",
-  "note": "fix(douyin): keyword search URL uses urllib.parse; feat(workflow): takeover node-end report; feat(oem): ship start.exe next to the branded launcher",
-  "bundle_sha256": "2fdca297c5cccbae435002506e1635c8c84c32fcccfe920ec138d76dc51b29f0"
+  "version": "2.0.47",
+  "build": 326,
+  "applied_at": "2026-09-13T23:22:46+08:00",
+  "note": "feat: 上一轮客户端退出原因分类(真崩溃 vs 自己重启) + 节点执行明细(每个动作的失败原因)",
+  "bundle_sha256": "2f7078f4b7208eb16722a353be125d25e13154cb884ee6fe98b0e317b86fc404"
 }
