@@ -1782,7 +1782,7 @@ function updateWorkspaceStatusUi(options) {
   strip.style.display = visible ? 'flex' : 'none';
   if (!visible) return;
   if (primary) primary.textContent = cfg.primary || '测试模式';
-  if (secondary) secondary.textContent = cfg.secondary || '当前未强制校验龙虾登录态';
+  if (secondary) secondary.textContent = cfg.secondary || '当前未强制校验登录态';
   if (cliStatus) cliStatus.textContent = cfg.cli || '未连接';
 }
 
@@ -1795,7 +1795,7 @@ function maybeUpdateWorkspaceStatusFromMessage(message) {
     updateWorkspaceStatusUi({
       visible: true,
       primary: '测试模式',
-      secondary: '当前未强制校验龙虾登录态，可先直接体验工作台能力'
+      secondary: '当前未强制校验登录态，可先直接体验工作台能力'
     });
     return;
   }
@@ -1878,7 +1878,7 @@ function updateChatModeUi(mode) {
     updateWorkspaceStatusUi({
       visible: true,
       primary: '测试模式',
-      secondary: '当前未强制校验龙虾登录态，可先直接体验工作台能力'
+      secondary: '当前未强制校验登录态，可先直接体验工作台能力'
     });
     if (attachBtn) attachBtn.style.display = '';
     if (directChip) directChip.style.display = 'none';
@@ -2408,7 +2408,7 @@ function appendChatMessage(role, content) {
   var text = role === 'assistant' ? _compactAssistantReplyForDisplay(content, null) : (content || '');
   text = (text || '').trim() || '（无内容）';
   var html = linkifyText(text);
-  div.innerHTML = '<div class="role">' + (role === 'user' ? '我' : '龙虾') + '</div>' + html;
+  div.innerHTML = '<div class="role">' + (role === 'user' ? '我' : '助手') + '</div>' + html;
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }

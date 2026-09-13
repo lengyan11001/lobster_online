@@ -14,7 +14,7 @@
   });
 
   window.registerLobsterView('skill-store', {
-    html: '/static/views/skill-store.html'
+    html: '/static/views/skill-store.html?v=20260913-brand-v1'
   });
 
   window.registerLobsterView('douyin-leads', {
