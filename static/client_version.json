@@ -1,7 +1,7 @@
 {
-  "version": "2.0.48",
-  "build": 327,
-  "applied_at": "2026-09-14T15:03:54+08:00",
-  "note": "perf: cut fleet-wide polling (h5 pending 15s/idle 45s, tasks 90s, heartbeat 60s, status memo, UI 20s/60s, update check hourly); fix(douyin): do not mark the account waiting while the browser is still auto-logging-in",
-  "bundle_sha256": "8c1d3c8adcc53233ea65ff550bda03e7670a7ac04c035f1875980a4cd6623f2a"
+  "version": "2.0.49",
+  "build": 328,
+  "applied_at": "2026-09-14T17:16:39+08:00",
+  "note": "feat(ip-content): single expandable left-hand record tree + 选中出图 on the record row for 朋友圈文案/朋友圈图片记录",
+  "bundle_sha256": "ded86b0acf658b7255afca69b082278a84454875fb4f2e52f36af36d668cdcf4"
 }
