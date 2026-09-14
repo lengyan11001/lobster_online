@@ -3437,8 +3437,16 @@ class DouyinCommentScraper:
                 probe_state = "online"
                 probe_reason = "profile_or_session_markers"
             elif login_component_visible or login_prompt or qr_login_visible or login_page_path:
-                probe_state = "waiting"
-                probe_reason = "login_prompt_or_qr_visible"
+                # 浏览器刚拉起时常常先停在登录页，随后才自动登录进来。此时
+                # sessionid 仍然有效，不能据此判定"已登出"——否则调用方会把账号
+                # 状态写成 waiting 并卡死后续所有动作。保留 sessionid 时归为
+                # unknown（可重试），只有确认没有会话 cookie 才算 waiting。
+                if has_session_cookie:
+                    probe_state = "unknown"
+                    probe_reason = "login_ui_visible_with_session_cookie"
+                else:
+                    probe_state = "waiting"
+                    probe_reason = "login_prompt_or_qr_visible"
             else:
                 probe_state = "unknown"
                 probe_reason = "page_loaded_without_decisive_markers"

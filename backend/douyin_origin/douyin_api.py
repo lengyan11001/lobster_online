@@ -69,8 +69,8 @@ STATE_DB_FILE = ROOT_DATA_DIR / "app_state.db"
 
 DOUYIN_ACCOUNT_LIMIT = 3
 DOUYIN_ACCOUNT_LOGIN_CHECK_TIMEOUT_SECONDS = 25
-DOUYIN_ACCOUNT_LOGIN_CHECK_ATTEMPTS = 2
-DOUYIN_ACCOUNT_LOGIN_CHECK_RETRY_DELAY_SECONDS = 0.8
+DOUYIN_ACCOUNT_LOGIN_CHECK_ATTEMPTS = 6
+DOUYIN_ACCOUNT_LOGIN_CHECK_RETRY_DELAY_SECONDS = 4.0
 DOUYIN_ACCOUNT_VIEW_NAVIGATION_TIMEOUT_MS = 15000
 
 
@@ -15967,28 +15967,60 @@ async def douyin_get_self_videos(account_id: int = 0, max_videos: int = 12):
         # probe login: its own browser/CDP/page setup can consume the full
         # probe deadline and incorrectly block a working account.  The real
         # page operation checks for a visible login intercept itself.
-        try:
-            result = await scraper.scrape_self_videos(
-                max_videos=max_videos,
-                logger=douyin_log,
-            )
-        except RuntimeError as exc:
-            message = str(exc or "").strip()
-            if "登录拦截" in message or "未登录" in message or "登录态已失效" in message:
-                account["status"] = "waiting"
-                config["douyin_accounts"] = accounts
-                save_global_config(config)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                result = await scraper.scrape_self_videos(
+                    max_videos=max_videos,
+                    logger=douyin_log,
+                )
+                break
+            except RuntimeError as exc:
+                message = str(exc or "").strip()
+                if not ("登录拦截" in message or "未登录" in message or "登录态已失效" in message):
+                    page_error = exc
+                    break
+                # 浏览器刚拉起时往往先停在登录页、过一会才自动登录进来。不能凭
+                # 一次页面报错就把账号写成 waiting（会把后面所有动作卡在"没有
+                # 在线账号"），先用探活确认（探活本身会等自动登录），再决定。
+                probe = await probe_douyin_account_login_state(account)
+                probe_state = str(probe.get("state") or "unknown").strip().lower()
+                if probe_state == "waiting":
+                    account["status"] = "waiting"
+                    config["douyin_accounts"] = accounts
+                    save_global_config(config)
+                    return {
+                        "code": 400,
+                        "type": "account_waiting_login",
+                        "msg": f"账号 {account['id']} 浏览器已打开，但尚未完成登录，请先扫码登录后再刷新。",
+                        "account": account,
+                        "probe": probe,
+                        "videos": [],
+                        "profile": {},
+                    }
+                if probe_state == "online" and attempt == 1:
+                    douyin_log(
+                        f"[Douyin self videos] 账号 {account['id']} 页面出现登录拦截，探活已恢复 online，重试一次抓取",
+                        "warning",
+                    )
+                    continue
+                # 探活没确认掉线：保留原账号状态，避免一次误判锁死后续动作。
                 return {
                     "code": 400,
-                    "type": "account_waiting_login",
-                    "msg": f"账号 {account['id']} 浏览器已打开，但尚未完成登录，请先扫码登录后再刷新。",
+                    "type": "account_login_unconfirmed",
+                    "msg": (
+                        f"账号 {account['id']} 页面出现登录拦截，但探活未确认掉线"
+                        f"（state={probe_state}），已保留原账号状态，请稍后重试或点检查刷新。"
+                    ),
                     "account": account,
+                    "probe": probe,
                     "videos": [],
                     "profile": {},
                 }
-            page_error = exc
-        except Exception as exc:
-            page_error = exc
+            except Exception as exc:
+                page_error = exc
+                break
     finally:
         await scraper.close()
 
