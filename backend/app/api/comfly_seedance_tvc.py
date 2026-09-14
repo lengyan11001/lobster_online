@@ -286,6 +286,12 @@ async def _prepare_pipeline_input(
     video_channel = (pl.video_channel or "").strip().lower()
     video_base_url = (pl.video_base_url or "").strip()
     video_model = (pl.video_model or "").strip()
+    explicit_wan30_request = _is_wan30_request(video_channel, video_model)
+    if explicit_wan30_request:
+        # Wan3.0 is a direct single-request workflow. Do not let the
+        # managed Seedance provider policy replace it with a fixed-segment
+        # provider, otherwise valid 5-30 second durations are rejected.
+        video_channel = "dashscope"
     if video_model.lower().replace(" ", "") in {"yunwu-veo3.1-plus", "veo3.1-plus", "veo3.1"}:
         video_channel = "yunwu"
         video_model = "veo3.1"
@@ -295,7 +301,15 @@ async def _prepare_pipeline_input(
         video_channel = "yunwu"
         video_base_url = video_base_url or pipe_base
         video_model = video_model or "veo3.1"
-    policy = await _fetch_video_provider_policy(request=request, model=video_model or pl.video_model or "", channel=video_channel or pl.video_channel or "")
+    policy = (
+        {}
+        if explicit_wan30_request
+        else await _fetch_video_provider_policy(
+            request=request,
+            model=video_model or pl.video_model or "",
+            channel=video_channel or pl.video_channel or "",
+        )
+    )
     policy_providers = policy.get("providers") if isinstance(policy.get("providers"), list) else []
     server_base_for_policy = (get_settings().auth_server_base or "").strip().rstrip("/")
     if policy_providers:
