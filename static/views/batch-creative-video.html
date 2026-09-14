@@ -122,3 +122,16 @@
     </div>
   </div>
 </div>
+
+<div id="batchCreativeVideoModal" class="batch-creative-video-modal" hidden>
+  <div class="batch-creative-video-modal-backdrop" data-batch-video-close></div>
+  <section class="batch-creative-video-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="batchCreativeVideoModalTitle">
+    <header class="batch-creative-video-modal-head">
+      <strong id="batchCreativeVideoModalTitle">视频预览</strong>
+      <button type="button" class="btn btn-ghost btn-sm" data-batch-video-close>关闭</button>
+    </header>
+    <div class="batch-creative-video-modal-body">
+      <video id="batchCreativeVideoModalPlayer" controls controlsList="nofullscreen" playsinline preload="metadata"></video>
+    </div>
+  </section>
+</div>

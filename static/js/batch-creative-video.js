@@ -281,6 +281,54 @@
     return '';
   }
 
+  function extractSavedVideoAsset(data) {
+    var saved = Array.isArray(data && data.saved_assets) ? data.saved_assets : [];
+    var fallback = null;
+    for (var i = 0; i < saved.length; i += 1) {
+      var item = saved[i] && typeof saved[i] === 'object' ? saved[i] : {};
+      var asset = item.asset && typeof item.asset === 'object' ? item.asset : item;
+      var mediaType = String(asset.media_type || asset.mediaType || item.media_type || '').toLowerCase();
+      var kind = String(item.kind || '').toLowerCase();
+      var assetId = String(asset.asset_id || asset.id || item.asset_id || '').trim();
+      var assetUrl = String(
+        asset.source_url
+        || asset.open_url
+        || asset.preview_url
+        || asset.url
+        || item.source_url
+        || ''
+      ).trim();
+      if (!assetId && !assetUrl) continue;
+      var candidate = { assetId: assetId, assetUrl: assetUrl };
+      if (kind === 'merged_final' || kind === 'local_bestseller_captioned' || kind === 'local_bestseller_bgm_final') {
+        return candidate;
+      }
+      if (mediaType === 'video' || looksLikeVideoUrl(assetUrl)) fallback = candidate;
+    }
+    return fallback || { assetId: '', assetUrl: '' };
+  }
+
+  function normalizeAssetStatus(status) {
+    var value = String(status || '').toLowerCase().trim();
+    if (value === 'completed' || value === 'complete' || value === 'saved') return 'saved';
+    if (value === 'running' || value === 'saving' || value === 'pending' || value === 'checking') return 'saving';
+    if (value === 'failed' || value === 'error') return 'failed';
+    if (value === 'not_requested') return 'not_requested';
+    if (value === 'unknown') return 'unknown';
+    return '';
+  }
+
+  function assetStatusText(task) {
+    var status = normalizeAssetStatus(task.assetStatus);
+    if (status === 'saving') return '正在保存到素材库';
+    if (status === 'saved') {
+      return task.assetId ? '已入素材库 ' + task.assetId.slice(0, 8) : '已入素材库';
+    }
+    if (status === 'failed') return '素材库保存失败';
+    if (status === 'unknown') return '素材库状态待确认';
+    return '';
+  }
+
   function normalizeTask(task, index) {
     task = task && typeof task === 'object' ? task : {};
     return {
@@ -292,7 +340,11 @@
       error: String(task.error || '').trim(),
       createdAt: Number(task.createdAt || task.created_at_ts || 0) || 0,
       updatedAt: Number(task.updatedAt || task.updated_at_ts || 0) || 0,
-      progress: task.progress != null ? task.progress : null
+      progress: task.progress != null ? task.progress : null,
+      assetId: String(task.assetId || task.asset_id || '').trim(),
+      assetUrl: String(task.assetUrl || task.asset_url || '').trim(),
+      assetStatus: normalizeAssetStatus(task.assetStatus || task.asset_status),
+      assetError: String(task.assetError || task.asset_error || '').trim()
     };
   }
 
@@ -419,7 +471,7 @@
   function taskActionHtml(task) {
     var actions = [];
     if (task.videoUrl) {
-      actions.push('<button type="button" class="btn btn-primary" data-batch-open="' + escapeHtml(task.videoUrl) + '">打开</button>');
+      actions.push('<button type="button" class="btn btn-primary" data-batch-open="' + escapeHtml(task.videoUrl) + '">预览</button>');
       actions.push('<button type="button" class="btn btn-ghost" data-batch-download="' + escapeHtml(task.videoUrl) + '" data-batch-index="' + escapeHtml(task.index) + '">下载</button>');
     }
     if (task.status === 'failed') {
@@ -454,6 +506,9 @@
     grid.innerHTML = state.tasks.map(function(task) {
       var status = normalizeStatus(task.status);
       var error = task.error ? '<div class="batch-creative-card-error" title="' + escapeHtml(task.error) + '">' + escapeHtml(task.error) + '</div>' : '';
+      var assetError = task.assetStatus === 'failed' && task.assetError
+        ? '<div class="batch-creative-card-error" title="' + escapeHtml(task.assetError) + '">' + escapeHtml(task.assetError) + '</div>'
+        : '';
       var actions = taskActionHtml(task);
       var prompt = task.prompt
         ? '<div class="batch-creative-card-prompt" title="' + escapeHtml(task.prompt) + '"><span>提示词</span>' + escapeHtml(task.prompt) + '</div>'
@@ -468,7 +523,8 @@
         '<div class="batch-creative-card-head"><strong>视频 ' + escapeHtml(Number(task.index) + 1) + '</strong><span>' + escapeHtml(formatTime(task.updatedAt || task.createdAt)) + '</span></div>',
         prompt,
         error,
-        task.jobId ? '<div class="batch-creative-card-foot"><span>任务 ' + escapeHtml(task.jobId.slice(0, 10)) + '</span><span>' + escapeHtml(task.status === 'completed' ? '已入库' : '') + '</span></div>' : '',
+        assetError,
+        task.jobId ? '<div class="batch-creative-card-foot"><span>任务 ' + escapeHtml(task.jobId.slice(0, 10)) + '</span><span>' + escapeHtml(assetStatusText(task)) + '</span></div>' : '',
         actions ? '<div class="batch-creative-card-actions">' + actions + '</div>' : '',
         '</div>',
         '</article>'
@@ -680,7 +736,10 @@
 
   function pollTask(index) {
     var task = state.tasks.filter(function(item) { return Number(item.index) === Number(index); })[0];
-    if (!task || !task.jobId || task.status === 'completed') return;
+    if (!task || !task.jobId || task.status === 'failed') return;
+    if (task.status === 'completed' && ['saved', 'failed', 'unknown', 'not_requested'].indexOf(normalizeAssetStatus(task.assetStatus)) >= 0) {
+      return;
+    }
     if (state.polling[index]) return;
     state.polling[index] = true;
 
@@ -709,13 +768,45 @@
           var status = normalizeStatus(data.status);
           var videoUrl = extractVideoUrl(data);
           var error = data.error ? messageText({ error: data.error }, '') : '';
+          var postStatus = normalizeAssetStatus(data.post_status);
+          var postError = String(data.post_error || '').trim();
+          var autoSave = data.auto_save !== false;
+          var savedAsset = extractSavedVideoAsset(data);
+          var assetStatus = normalizeAssetStatus(current.assetStatus);
+          var assetId = savedAsset.assetId || current.assetId || '';
+          var assetUrl = savedAsset.assetUrl || current.assetUrl || '';
+          var assetError = '';
+
+          if (status === 'completed') {
+            if (!autoSave) {
+              assetStatus = 'not_requested';
+            } else if (postStatus === 'saved') {
+              assetStatus = 'saved';
+            } else if (postStatus === 'failed') {
+              assetStatus = 'failed';
+              assetError = postError || '视频已生成，但保存到素材库失败';
+            } else if (postStatus === 'saving') {
+              assetStatus = 'saving';
+            } else if (assetId || assetUrl) {
+              // Compatible with older server responses that returned saved_assets
+              // but did not expose the post-processing status.
+              assetStatus = 'saved';
+            } else {
+              assetStatus = 'unknown';
+            }
+          }
+
           setTask(index, {
             status: status,
             videoUrl: videoUrl || current.videoUrl || '',
             error: status === 'failed' ? (error || '视频任务执行失败') : '',
-            progress: data.progress || null
+            progress: data.progress || null,
+            assetId: assetId,
+            assetUrl: assetUrl,
+            assetStatus: assetStatus,
+            assetError: assetError
           });
-          if (status === 'completed' || status === 'failed') {
+          if (status === 'failed' || (status === 'completed' && ['saved', 'failed', 'unknown', 'not_requested'].indexOf(assetStatus) >= 0)) {
             delete state.polling[index];
             return;
           }
@@ -736,7 +827,7 @@
 
   function pollAllActiveTasks() {
     state.tasks.forEach(function(task) {
-      if (task.jobId && task.status !== 'completed' && task.status !== 'failed') pollTask(task.index);
+      if (task.jobId && task.status !== 'failed') pollTask(task.index);
     });
   }
 
@@ -900,7 +991,16 @@
     if (!task) return;
     var settings = getSettings();
     state.submitting = true;
-    setTask(index, { status: 'waiting', jobId: '', videoUrl: '', error: '' });
+    setTask(index, {
+      status: 'waiting',
+      jobId: '',
+      videoUrl: '',
+      error: '',
+      assetId: '',
+      assetUrl: '',
+      assetStatus: '',
+      assetError: ''
+    });
     showMessage('正在重试视频 ' + (Number(index) + 1) + '...', false);
     submitOne(task, settings, task.prompt || settings.prompt).finally(function() {
       state.submitting = false;
@@ -910,7 +1010,27 @@
 
   function openVideo(url) {
     if (!url) return;
-    try { window.open(url, '_blank', 'noopener'); } catch (e) { window.location.href = url; }
+    var modal = $('batchCreativeVideoModal');
+    var player = $('batchCreativeVideoModalPlayer');
+    if (!modal || !player) return;
+    player.pause();
+    player.removeAttribute('src');
+    player.src = url;
+    player.load();
+    modal.hidden = false;
+    player.play().catch(function() {});
+  }
+
+  function closeVideoModal() {
+    var modal = $('batchCreativeVideoModal');
+    var player = $('batchCreativeVideoModalPlayer');
+    if (!modal || modal.hidden) return;
+    if (player) {
+      player.pause();
+      player.removeAttribute('src');
+      player.load();
+    }
+    modal.hidden = true;
   }
 
   function downloadVideo(url, index) {
@@ -1105,6 +1225,16 @@
         if (remove) deleteTask(Number(remove.getAttribute('data-batch-delete')));
       });
     }
+    var modal = $('batchCreativeVideoModal');
+    if (modal) {
+      modal.addEventListener('click', function(event) {
+        var target = event.target;
+        if (target && target.closest && target.closest('[data-batch-video-close]')) closeVideoModal();
+      });
+    }
+    document.addEventListener('keydown', function(event) {
+      if (event.key === 'Escape') closeVideoModal();
+    });
   }
 
   window.initBatchCreativeVideoView = function() {

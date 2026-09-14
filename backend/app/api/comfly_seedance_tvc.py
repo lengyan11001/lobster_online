@@ -1287,17 +1287,22 @@ async def _seedance_job_runner(job_id: str) -> None:
     )
 
     if auto_save:
-        if final_video_path:
-            final_asset = await _save_local_final_video_asset(
-                local_path=final_video_path,
-                current_user=_ServerUser(id=user_id),
-                prompt=task_text,
-                video_model=_video_model_from_result(result),
-                auth_header=auth_header,
-                installation_id=installation_id,
-                generation_task_id=job_id,
-            )
-            if final_asset:
+        try:
+            # A task only counts as auto-saved after its final playable video
+            # has reached the user's material library. Prefer the local merged
+            # file, then fall back to the final public URL for direct-video jobs.
+            if final_video_path:
+                final_asset = await _save_local_final_video_asset(
+                    local_path=final_video_path,
+                    current_user=_ServerUser(id=user_id),
+                    prompt=task_text,
+                    video_model=_video_model_from_result(result),
+                    auth_header=auth_header,
+                    installation_id=installation_id,
+                    generation_task_id=job_id,
+                )
+                if not final_asset:
+                    raise RuntimeError("最终成片转存到素材库失败")
                 saved_assets.append(
                     {
                         "source_url": final_asset.get("source_url") or "",
@@ -1315,12 +1320,11 @@ async def _seedance_job_runner(job_id: str) -> None:
                         "kind": "merged_final",
                     },
                 }
-                final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
-
-        pairs = collect_video_urls_from_pipeline_result(result)
-        if pairs:
-            try:
-                segment_assets = await _save_pipeline_videos(
+            else:
+                pairs = collect_video_urls_from_pipeline_result(result)
+                if not pairs:
+                    raise RuntimeError("视频已生成，但未找到可转存到素材库的成片地址")
+                remote_assets = await _save_pipeline_videos(
                     urls=pairs,
                     request=None,
                     current_user=_ServerUser(id=user_id),
@@ -1328,24 +1332,48 @@ async def _seedance_job_runner(job_id: str) -> None:
                     auth_header=auth_header,
                     installation_id=installation_id,
                 )
-                saved_assets.extend(segment_assets)
-            except HTTPException as he:
-                detail = he.detail if isinstance(he.detail, str) else str(he.detail)
-                logger.warning(
-                    "[seedance-tvc] segment asset save failed after completion job_id=%s detail=%s",
-                    job_id,
-                    detail,
-                )
-                update_job(
-                    job_id,
-                    status="completed",
-                    error=None,
-                    result=result,
-                    saved_assets=saved_assets,
-                    post_status="failed",
-                    post_stage="saving_assets",
-                    post_error=f"segment asset save failed: {detail}",
-                )
+                for item in remote_assets:
+                    if str(item.get("task_id") or "").strip() == "final":
+                        item["kind"] = "merged_final"
+                saved_assets.extend(remote_assets)
+
+            if not saved_assets:
+                raise RuntimeError("视频已生成，但转存素材库后未返回素材记录")
+        except Exception as exc:
+            detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+            detail = str(detail or "未知错误")[:2000]
+            logger.warning(
+                "[seedance-tvc] final asset save failed after completion job_id=%s detail=%s",
+                job_id,
+                detail,
+            )
+            update_job(
+                job_id,
+                status="completed",
+                error=None,
+                result=result,
+                saved_assets=saved_assets,
+                post_status="failed",
+                post_stage="saving_assets",
+                post_error=f"final asset save failed: {detail}",
+            )
+            await sync_creative_job_to_cloud(
+                auth_header=auth_header,
+                installation_id=installation_id,
+                job_id=job_id,
+                feature_type="seedance_tvc",
+                provider="comfly_seedance",
+                status="completed",
+                stage="saving_assets",
+                title="创意视频任务",
+                prompt=task_text,
+                request_payload=request_payload,
+                result_payload=result,
+                saved_assets=saved_assets,
+                error=f"final asset save failed: {detail}",
+                meta={"auto_save": auto_save},
+            )
+            return
     caption_asset: Optional[Dict[str, Any]] = None
     try:
         caption_asset = await _caption_local_bestseller_video_if_needed(job_id=job_id, job=job, result=result)
