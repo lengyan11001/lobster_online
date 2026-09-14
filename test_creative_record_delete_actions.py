@@ -63,3 +63,43 @@ def test_local_backend_exposes_the_pipeline_job_delete_route():
     assert '@router.delete("/api/comfly-seedance-tvc/pipeline/jobs/{job_id}")' in api
     assert "delete_job(" in api
     assert "def delete_job(job_id: str, *, user_id: int) -> bool:" in store
+
+
+def test_viral_tvc_records_have_a_delete_button():
+    script = _read("static/js/viral-tvc-studio.js")
+
+    assert 'data-viral-tvc-record-delete="' in script
+    assert "function deleteRecord(jobId, btn)" in script
+    assert "/api/comfly-seedance-tvc/pipeline/jobs/" in script
+    assert "/api/creative-jobs/" in script
+    assert "deleteRecord(btn.getAttribute('data-viral-tvc-record-delete'), btn)" in script
+
+
+def test_ecommerce_detail_records_have_a_delete_button():
+    script = _read("static/js/comfly-ecommerce-detail.js")
+    api = _read("backend/app/api/comfly_ecommerce_detail.py")
+
+    assert 'data-task-delete="' in script
+    assert "ecom-task-card-delete" in script
+    assert "function _deleteRecentJob(jobId, btn)" in script
+    assert "_deleteRecentJob(btn.getAttribute('data-task-delete') || '', btn)" in script
+    assert '@router.delete("/api/comfly-ecommerce-detail/pipeline/jobs/{job_id}")' in api
+
+
+def test_cutcli_template_records_have_a_delete_button():
+    script = _read("static/js/cutcli-template-studio.js")
+    api = _read("backend/app/api/cutcli_templates_local.py")
+
+    assert 'data-cutcli-delete-job="' in script
+    assert "function deleteJob(jobId, btn)" in script
+    assert "findJobCard(grid, jobId)" in script
+    assert '@router.delete("/api/cutcli/local/templates/jobs/{job_id}"' in api
+
+
+def test_extra_workbench_asset_versions_are_bumped():
+    index = _read("static/index.html")
+    registry = _read("static/js/view-registry.js")
+
+    assert "comfly-ecommerce-detail.js?v=20260914-record-delete-v1" in index
+    assert "cutcli-template-studio.js?v=20260914-record-delete-v1" in index
+    assert "viral-tvc-studio.js?v=20260914-record-delete-v1" in registry

@@ -430,7 +430,10 @@
     var listHtml = (state.lastItems || []).slice(0, 6).map(function(item) {
       var prompt = String(item.prompt || item.title || '视频任务').trim() || '视频任务';
       var stamp = String(item.updated_at || item.created_at || '').trim();
-      return '<div class="viral-tvc-record"><strong>' + esc(prompt) + '</strong><small>' + esc(statusLabel(item.status)) + (stamp ? ' · ' + esc(stamp) : '') + '</small></div>';
+      var rowId = String(item.jobId || item.job_id || '').trim();
+      return '<div class="viral-tvc-record"><strong>' + esc(prompt) + '</strong><small>' + esc(statusLabel(item.status)) + (stamp ? ' · ' + esc(stamp) : '') + '</small>'
+        + (rowId ? '<button type="button" class="btn btn-ghost btn-sm" data-viral-tvc-record-delete="' + esc(rowId) + '">删除</button>' : '')
+        + '</div>';
     }).join('');
     if (!job && !listHtml) {
       host.className = 'viral-tvc-empty';
@@ -461,6 +464,11 @@
         try {
           window.open(url, '_blank', 'noopener');
         } catch (e) {}
+      };
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('[data-viral-tvc-record-delete]'), function(btn) {
+      btn.onclick = function() {
+        deleteRecord(btn.getAttribute('data-viral-tvc-record-delete'), btn);
       };
     });
     Array.prototype.forEach.call(host.querySelectorAll('[data-viral-tvc-download-video]'), function(btn) {
@@ -552,6 +560,44 @@
         applyHistoryRows(rows);
         return rows;
       });
+    });
+  }
+
+  function deleteRecordRequest(url) {
+    return fetch(url, { method: 'DELETE', headers: headers() })
+      .then(function(resp) {
+        return resp.json().catch(function() { return {}; }).then(function(data) {
+          return { ok: resp.ok, status: resp.status, data: data || {} };
+        });
+      })
+      .catch(function(err) {
+        return { ok: false, status: 0, data: {}, error: err };
+      });
+  }
+
+  function deleteRecord(jobId, btn) {
+    jobId = String(jobId || '').trim();
+    if (!jobId) return;
+    if (!window.confirm('删除这条爆款视频记录？删除后不再出现在记录列表里，已入库的素材不受影响。')) return;
+    if (btn) btn.disabled = true;
+    var calls = [deleteRecordRequest(base() + '/api/comfly-seedance-tvc/pipeline/jobs/' + encodeURIComponent(jobId))];
+    var cloud = String((typeof API_BASE !== 'undefined' ? API_BASE : '') || '').replace(/\/$/, '');
+    if (cloud) {
+      calls.push(deleteRecordRequest(cloud + '/api/creative-jobs/' + encodeURIComponent(jobId)));
+    }
+    Promise.all(calls).then(function(results) {
+      var cleared = results.length === 0 || results.some(function(row) {
+        return row.ok || row.status === 404 || row.status === 405;
+      });
+      if (!cleared) {
+        if (btn) btn.disabled = false;
+        setMsg(responseErrorText((results[0] || {}).data, '记录删除失败'), true);
+        return;
+      }
+      state.lastItems = (state.lastItems || []).filter(function(item) { return !item || item.jobId !== jobId; });
+      if (state.currentJobId === jobId) state.currentJobId = '';
+      renderStatus(state.lastItems[0] || null);
+      setMsg('记录已删除。', false);
     });
   }
 

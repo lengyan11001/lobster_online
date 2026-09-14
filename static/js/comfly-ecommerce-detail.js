@@ -1477,7 +1477,8 @@
       ].filter(Boolean).join(' · ');
       var hint = item.lastStep || item.productDirectionHint || '点击切换查看该任务';
       return (
-        '<button type="button" class="ecom-task-card' + (state.currentJobId === item.jobId ? ' active' : '') + '" data-task-card="' + escapeAttr(item.jobId) + '">' +
+        '<div class="ecom-task-card' + (state.currentJobId === item.jobId ? ' active' : '') + '" data-task-card="' + escapeAttr(item.jobId) + '" role="button" tabindex="0">' +
+          '<button type="button" class="ecom-task-card-delete" data-task-delete="' + escapeAttr(item.jobId) + '" title="删除这条任务记录" aria-label="删除这条任务记录">×</button>' +
           '<div class="ecom-task-card-shell">' +
             '<div class="ecom-task-card-thumb">' + thumb + '</div>' +
             '<div>' +
@@ -1490,13 +1491,58 @@
               '<div class="ecom-task-card-counts">' + (countChips || '<span class="ecom-task-count">暂无结果</span>') + '</div>' +
             '</div>' +
           '</div>' +
-        '</button>'
+        '</div>'
       );
     }).join('');
     wrap.querySelectorAll('[data-task-card]').forEach(function(btn) {
-      btn.addEventListener('click', function() {
+      btn.addEventListener('click', function(event) {
+        if (event.target && event.target.closest && event.target.closest('[data-task-delete]')) return;
         _activateRecentJob(btn.getAttribute('data-task-card') || '');
       });
+      btn.addEventListener('keydown', function(event) {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        btn.click();
+      });
+    });
+    wrap.querySelectorAll('[data-task-delete]').forEach(function(btn) {
+      btn.addEventListener('click', function(event) {
+        event.stopPropagation();
+        _deleteRecentJob(btn.getAttribute('data-task-delete') || '', btn);
+      });
+    });
+  }
+
+  function _deleteRecentJob(jobId, btn) {
+    jobId = String(jobId || '').trim();
+    if (!jobId) return;
+    if (!window.confirm('删除这条套图任务记录？删除后不再出现在最近任务里，已入库的图片不受影响。')) return;
+    if (btn) btn.disabled = true;
+    var base = _localBase();
+    var request = base
+      ? fetch(base + '/api/comfly-ecommerce-detail/pipeline/jobs/' + encodeURIComponent(jobId), {
+          method: 'DELETE',
+          headers: authHeaders()
+        }).then(function(resp) {
+          return resp.json().catch(function() { return {}; }).then(function(data) {
+            return { ok: resp.ok, status: resp.status, data: data || {} };
+          });
+        }).catch(function(err) {
+          return { ok: false, status: 0, data: {}, error: err };
+        })
+      : Promise.resolve({ ok: true, status: 404, data: {} });
+    request.then(function(result) {
+      if (!result.ok && result.status !== 404 && result.status !== 405) {
+        if (btn) btn.disabled = false;
+        _setMsg('删除失败：' + String((result.data && (result.data.detail || result.data.message)) || '请稍后重试'), true);
+        return;
+      }
+      state.recentJobs = (state.recentJobs || []).filter(function(item) { return !item || item.jobId !== jobId; });
+      if (state.currentJobId === jobId) state.currentJobId = '';
+      _writeRecentJobs();
+      _renderRecentTasks();
+      _renderTaskDrawer();
+      _setMsg('记录已删除。', false);
     });
   }
 

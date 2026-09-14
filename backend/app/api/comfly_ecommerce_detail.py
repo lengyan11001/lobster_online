@@ -1775,6 +1775,24 @@ async def ecommerce_detail_pipeline_detail_edit(
     }
 
 
+@router.delete("/api/comfly-ecommerce-detail/pipeline/jobs/{job_id}")
+async def ecommerce_detail_pipeline_job_delete(
+    job_id: str,
+    current_user: _ServerUser = Depends(get_current_user_media_edit),
+    db: Session = Depends(get_db),
+):
+    row = (
+        db.query(EcommerceDetailJob)
+        .filter(EcommerceDetailJob.job_id == str(job_id or "").strip(), EcommerceDetailJob.user_id == current_user.id)
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    db.delete(row)
+    db.commit()
+    return {"ok": True, "job_id": job_id}
+
+
 @router.get("/api/comfly-ecommerce-detail/pipeline/jobs")
 async def ecommerce_detail_pipeline_job_list(
     limit: int = 50,

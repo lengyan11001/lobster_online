@@ -1679,10 +1679,36 @@
 
   function jobActionHtml(job) {
     var media = jobMedia(job);
+    var deleteBtn = '<button type="button" class="btn btn-ghost btn-sm" data-cutcli-delete-job="' + esc(job.job_id || '') + '">\u5220\u9664</button>';
     if (media) {
-      return '<a class="btn btn-primary btn-sm" href="' + esc(media) + '" target="_blank" rel="noopener">\u6253\u5f00\u7ed3\u679c</a>';
+      return '<a class="btn btn-primary btn-sm" href="' + esc(media) + '" target="_blank" rel="noopener">\u6253\u5f00\u7ed3\u679c</a>' + deleteBtn;
     }
-    return '<button type="button" class="btn btn-ghost btn-sm" data-cutcli-poll-job="' + esc(job.job_id || '') + '">\u5237\u65b0</button>';
+    return '<button type="button" class="btn btn-ghost btn-sm" data-cutcli-poll-job="' + esc(job.job_id || '') + '">\u5237\u65b0</button>' + deleteBtn;
+  }
+
+  function deleteJob(jobId, btn) {
+    jobId = String(jobId || '').trim();
+    if (!jobId) return;
+    if (!window.confirm('\u5220\u9664\u8fd9\u6761\u751f\u6210\u8bb0\u5f55\uff1f\u5220\u9664\u540e\u4e0d\u518d\u51fa\u73b0\u5728\u8bb0\u5f55\u5217\u8868\u91cc\uff0c\u5df2\u5165\u5e93\u7684\u7d20\u6750\u4e0d\u53d7\u5f71\u54cd\u3002')) return;
+    if (btn) btn.disabled = true;
+    fetch(localApiBase() + '/api/cutcli/local/templates/jobs/' + encodeURIComponent(jobId), {
+      method: 'DELETE',
+      headers: headers()
+    })
+      .then(parseJsonResponse)
+      .then(function() {
+        state.jobs = (state.jobs || []).filter(function(job) { return !job || String(job.job_id || '') !== jobId; });
+        // renderJobs() only patches cards that are still in state, so drop the node too.
+        var grid = $('cutcliTplJobsGrid');
+        var card = findJobCard(grid, jobId);
+        if (card && card.parentNode) card.parentNode.removeChild(card);
+        renderJobs();
+        setHistoryMsg('\u8bb0\u5f55\u5df2\u5220\u9664\u3002', false);
+      })
+      .catch(function(err) {
+        if (btn) btn.disabled = false;
+        setHistoryMsg('\u5220\u9664\u5931\u8d25\uff1a' + String((err && err.message) || err || '\u8bf7\u7a0d\u540e\u91cd\u8bd5'), true);
+      });
   }
 
   function jobCardHtml(job) {
@@ -1733,6 +1759,13 @@
       btn.addEventListener('click', function() {
         activateTab('jobs');
         pollJob(btn.dataset.cutcliPollJob || '', false);
+      });
+    });
+    card.querySelectorAll('[data-cutcli-delete-job]').forEach(function(btn) {
+      if (btn.dataset.cutcliDeleteBound === '1') return;
+      btn.dataset.cutcliDeleteBound = '1';
+      btn.addEventListener('click', function() {
+        deleteJob(btn.getAttribute('data-cutcli-delete-job') || '', btn);
       });
     });
   }

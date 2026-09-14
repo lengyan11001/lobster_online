@@ -79,8 +79,8 @@
   });
 
   window.registerLobsterView('viral-tvc-studio', {
-    html: '/static/views/viral-tvc-studio.html?v=20260629-viral-tvc-entry-page',
-    scripts: '/static/js/viral-tvc-studio.js?v=20260629-viral-tvc-entry-page',
+    html: '/static/views/viral-tvc-studio.html?v=20260914-record-delete-v1',
+    scripts: '/static/js/viral-tvc-studio.js?v=20260914-record-delete-v1',
     init: 'initViralTvcStudioView',
     cache: 'reload'
   });

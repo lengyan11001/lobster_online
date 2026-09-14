@@ -3509,6 +3509,28 @@ def list_local_template_jobs(
     return {"ok": True, "jobs": [_job_to_public(row) for row in rows]}
 
 
+@router.delete("/api/cutcli/local/templates/jobs/{job_id}", summary="Delete a local CutCLI template job")
+def delete_local_template_job(
+    job_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    row = (
+        db.query(CapabilityCallLog)
+        .filter(
+            CapabilityCallLog.user_id == current_user.id,
+            CapabilityCallLog.capability_id == _FEATURE,
+            CapabilityCallLog.job_id == str(job_id or '').strip(),
+        )
+        .first()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail='job not found')
+    db.delete(row)
+    db.commit()
+    return {'ok': True, 'job_id': job_id}
+
+
 @router.get("/api/cutcli/local/templates/jobs/{job_id}", summary="Local CutCLI template job detail")
 def get_local_template_job(
     job_id: str,
