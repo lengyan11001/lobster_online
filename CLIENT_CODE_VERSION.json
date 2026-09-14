@@ -1,7 +1,7 @@
 {
-  "version": "2.0.50",
-  "build": 329,
-  "applied_at": "2026-09-14T17:26:36+08:00",
-  "note": "fix(ip-content): header generate buttons, per-文案 export checkbox, keep the record tree on re-init",
-  "bundle_sha256": "c3dd83bb22aefe4ed73dd24ab4f756b646be7c1fe0f590376ad85a52cbd6f77a"
+  "version": "2.0.51",
+  "build": 330,
+  "applied_at": "2026-09-14T17:36:49+08:00",
+  "note": "fix(ip-content): record list no longer renders stale local batches (no more flashing / phantom 20 条); header generate buttons; per-文案 选中出图",
+  "bundle_sha256": "6e61012ae66329f8828857a99e9a95b4d1ddd94b48688838306d2da06aded362"
 }
