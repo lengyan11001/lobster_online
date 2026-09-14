@@ -111,6 +111,18 @@ def test_ip_daily_records_are_a_single_expandable_tree_without_a_detail_column()
     assert "function toggleDraftGroupNode" in script
     assert "toggleDictFlag(state.expandedRecordGroups, groupId)" in script
 
+    # The 选中出图 checkbox sits on the 记录 (batch) row, so it is reachable
+    # without expanding anything, and the expanded rows/detail never repeat it.
+    assert "ip-record-select" in script
+    assert 'data-moment-select-group="' in script
+    assert "function momentRecordsOfGroup" in script
+    assert "function syncMomentSelectionInputs" in script
+    assert "closest('[data-delete-group],[data-retry-moment-batch],[data-show-moment-batch],.ip-record-select')" in script
+    assert (
+        "renderDraftCards(draftDetailTargetId(item.index), [item.rec], { selectable: false, hideTitle: true })"
+        in script
+    )
+
 
 def test_moment_image_records_expand_in_the_same_left_hand_tree():
     script = (ROOT / "static" / "js" / "ip-content-studio.js").read_text(encoding="utf-8")

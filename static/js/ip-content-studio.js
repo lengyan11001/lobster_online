@@ -2218,6 +2218,25 @@
     return 'ipDraftDetail_' + index;
   }
 
+  function momentRecordsOfGroup(groupId) {
+    return (state.latestDrafts || []).filter(function(rec) {
+      return rec.task === 'moments_candidate' && String(recordGroupId(rec)) === String(groupId || '');
+    });
+  }
+
+  function syncMomentSelectionInputs() {
+    var list = $('ipDraftGroupList');
+    if (!list) return;
+    list.querySelectorAll('[data-moment-select-group]').forEach(function(input) {
+      var records = momentRecordsOfGroup(input.getAttribute('data-moment-select-group'));
+      var selected = records.filter(function(rec) { return !!rec._selected; }).length;
+      input.checked = !!records.length && selected === records.length;
+      input.indeterminate = selected > 0 && selected < records.length;
+      var label = input.closest ? input.closest('.ip-record-select') : null;
+      if (label) label.classList.toggle('is-active', selected > 0);
+    });
+  }
+
   function recordLeafHtml(rec, leafIndex, detailIndex) {
     var id = String(rec.record_id || '');
     var open = !!state.expandedRecordLeaves[id];
@@ -2277,6 +2296,7 @@
       if (open) {
         leaves = records.map(function(rec) {
           if (state.expandedRecordLeaves[String(rec.record_id || '')]) openLeaves.push({ index: detailIndex, rec: rec });
+          if (rec.task === 'moments_candidate' && rec._selected === undefined) rec._selected = false;
           var leaf = recordLeafHtml(rec, detailIndex, detailIndex);
           detailIndex += 1;
           return leaf;
@@ -2287,6 +2307,12 @@
         '<span class="ip-badge is-image">' + (records.length ? esc(String(records.length)) + ' 条' : '待生成') + '</span>' +
         (group.image_count ? '<span class="ip-badge is-image">图片 ' + esc(group.image_count) + '</span>' : '') +
         (job ? '<span class="ip-badge' + (job.status === 'failed' ? ' is-used' : (job.status === 'done' ? ' is-new' : '')) + '">' + esc(momentBatchStatusLabel(job.status)) + '</span>' : '');
+      var selectBox = '';
+      if (group.task === 'moments_candidate' && records.length) {
+        var selectedCount = records.filter(function(rec) { return !!rec._selected; }).length;
+        selectBox = '<label class="ip-record-select' + (selectedCount ? ' is-active' : '') + '"><input type="checkbox" data-moment-select-group="' + escAttr(groupId) + '"' +
+          (selectedCount === records.length ? ' checked' : '') + '> <span>选中出图</span></label>';
+      }
       var actions = '<div class="ip-content-item-actions">' +
         (job && job.status === 'failed' ? '<button type="button" class="btn btn-primary btn-sm" data-retry-moment-batch="' + escAttr(job.batch_id) + '">重试该批</button>' : '') +
         (job && job.status === 'done' ? '<button type="button" class="btn btn-ghost btn-sm" data-show-moment-batch="' + escAttr(job.batch_id) + '">完整结果</button>' : '') +
@@ -2294,7 +2320,7 @@
         '</div>';
       return '<div class="ip-content-item ip-record-node' + (open ? ' is-open' : '') + '">' +
         '<div class="ip-record-node-head" data-record-group="' + escAttr(groupId) + '" role="button" tabindex="0" aria-expanded="' + (open ? 'true' : 'false') + '">' +
-        '<div class="ip-badge-row">' + badges + '</div>' +
+        '<div class="ip-badge-row">' + selectBox + badges + '</div>' +
         '<strong>' + esc(taskLabel(group.task)) + ' · ' + (records.length ? esc(String(records.length)) + ' 条' : '待生成') + (job ? ' · ' + esc(job.label) : '') + '</strong>' +
         '<small>' + esc(fmtTime(group.created_at)) + '</small>' +
         (preview ? '<small>' + esc(preview) + (preview.length >= 120 ? '...' : '') + '</small>' : '') +
@@ -2307,7 +2333,7 @@
     }).join('');
     list.querySelectorAll('[data-record-group]').forEach(function(node) {
       node.addEventListener('click', function(ev) {
-        if (ev.target && ev.target.closest && ev.target.closest('[data-delete-group],[data-retry-moment-batch],[data-show-moment-batch]')) return;
+        if (ev.target && ev.target.closest && ev.target.closest('[data-delete-group],[data-retry-moment-batch],[data-show-moment-batch],.ip-record-select')) return;
         toggleDraftGroupNode(node.getAttribute('data-record-group') || '');
       });
     });
@@ -2317,6 +2343,16 @@
         if (!id) return;
         toggleDictFlag(state.expandedRecordLeaves, id);
         renderDraftRecords();
+      });
+    });
+    list.querySelectorAll('[data-moment-select-group]').forEach(function(input) {
+      input.addEventListener('click', function(ev) { ev.stopPropagation(); });
+      input.addEventListener('change', function(ev) {
+        ev.stopPropagation();
+        var groupId = input.getAttribute('data-moment-select-group') || '';
+        var checked = !!input.checked;
+        momentRecordsOfGroup(groupId).forEach(function(rec) { rec._selected = checked; });
+        syncMomentSelectionInputs();
       });
     });
     list.querySelectorAll('[data-delete-group]').forEach(function(btn) {
@@ -2338,8 +2374,9 @@
       });
     });
     openLeaves.forEach(function(item) {
-      renderDraftCards(draftDetailTargetId(item.index), [item.rec], { selectable: item.rec.task === 'moments_candidate', hideTitle: true });
+      renderDraftCards(draftDetailTargetId(item.index), [item.rec], { selectable: false, hideTitle: true });
     });
+    syncMomentSelectionInputs();
     updateRecordBulkToolbar();
   }
 
