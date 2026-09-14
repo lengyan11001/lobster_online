@@ -1281,14 +1281,19 @@
         ? '<img src="' + escapeHtml(card.image) + '" alt="' + escapeHtml(card.title) + '">'
         : '<div class="imglab-task-card-pending">' + (card.status === 'running' ? '<span class="imglab-task-spinner" aria-hidden="true"></span>' : '<span class="imglab-task-done-mark">' + (card.status === 'stale' ? '刷新' : '完成') + '</span>') + '</div>';
       if (card.status === 'failed') media = '<div class="imglab-task-card-failed">失败</div>';
+      var deleteAttr = card.type === 'result'
+        ? 'data-imglab-result-delete="' + escapeHtml(card.index) + '"'
+        : 'data-imglab-job-delete="' + escapeHtml(card.jobId) + '"';
+      var deleteTitle = card.type === 'result' ? '删除这条生成结果' : '删除这条任务记录';
       return [
-        '<button type="button" class="imglab-task-card' + (isActive ? ' is-active' : '') + ' is-' + escapeHtml(card.status || 'running') + '" ' + attrs + ' title="' + escapeHtml(card.title || '图片任务') + '">',
+        '<div class="imglab-task-card' + (isActive ? ' is-active' : '') + ' is-' + escapeHtml(card.status || 'running') + '" ' + attrs + ' role="button" tabindex="0" title="' + escapeHtml(card.title || '图片任务') + '">',
+        '<button type="button" class="imglab-task-card-delete" ' + deleteAttr + ' title="' + deleteTitle + '" aria-label="' + deleteTitle + '">×</button>',
         '<div class="imglab-task-card-media">' + media + '</div>',
         '<div class="imglab-task-card-body">',
         '<span class="imglab-task-card-title">' + escapeHtml(card.title || '图片任务') + '</span>',
         '<span class="imglab-task-card-meta">' + escapeHtml(jobStatusText(card.status)) + (card.resultCount ? ' · ' + escapeHtml(card.resultCount) + ' 张' : '') + (card.assetId ? ' · 素材 ' + escapeHtml(card.assetId) : '') + '</span>',
         '</div>',
-        '</button>'
+        '</div>'
       ].join('');
     }).join('');
   }
@@ -1348,6 +1353,55 @@
     bindRecentJobButtons();
   }
 
+  function deleteCloudJobRequest(jobId) {
+    var base = cloudBase();
+    if (!base) return Promise.resolve({ ok: true, status: 404, data: {} });
+    return fetch(base + '/api/creative-jobs/' + encodeURIComponent(jobId), { method: 'DELETE', headers: authHeadersSafe() })
+      .then(function(response) {
+        return response.json().catch(function() { return {}; }).then(function(data) {
+          return { ok: response.ok, status: response.status, data: data || {} };
+        });
+      })
+      .catch(function(err) {
+        return { ok: false, status: 0, data: {}, error: err };
+      });
+  }
+
+  function removeJobRecord(jobId, btn) {
+    jobId = String(jobId || '').trim();
+    if (!jobId) return;
+    if (!window.confirm('删除这条任务记录？删除后不再出现在任务记录里，已入库的图片不受影响。')) return;
+    if (btn) btn.disabled = true;
+    deleteCloudJobRequest(jobId).then(function(result) {
+      if (!result.ok && result.status !== 404 && result.status !== 405) {
+        if (btn) btn.disabled = false;
+        showMessage('删除失败：' + responseErrorText(result.data, '记录删除失败'), true);
+        return;
+      }
+      state.recentJobs = (state.recentJobs || []).filter(function(item) { return !item || item.jobId !== jobId; });
+      saveRecentJobs();
+      if (state.selectedJobId === jobId) state.selectedJobId = '';
+      if (state.currentJobId === jobId) {
+        state.currentJobId = '';
+        state.currentJobStatus = '';
+      }
+      renderResultSurface();
+      showMessage('记录已删除。', false);
+    });
+  }
+
+  function removeResultRecord(index) {
+    index = Number(index);
+    if (!isFinite(index) || index < 0 || index >= (state.results || []).length) return;
+    if (!window.confirm('删除这条生成结果？只从当前工作台移除，素材库里的图片不受影响。')) return;
+    state.results.splice(index, 1);
+    if (state.activeResultIndex >= state.results.length) {
+      state.activeResultIndex = Math.max(0, state.results.length - 1);
+    }
+    renderResultSurface();
+    showMessage('结果已删除。', false);
+  }
+
   function bindRecentJobButtons() {
     document.querySelectorAll('[data-result-index]').forEach(function(btn) {
       if (btn.dataset.bound) return;
@@ -1378,6 +1432,31 @@
           return;
         }
         renderResultSurface();
+      });
+    });
+    document.querySelectorAll('.imglab-task-card').forEach(function(card) {
+      if (card.dataset.cardKeyBound) return;
+      card.dataset.cardKeyBound = '1';
+      card.addEventListener('keydown', function(event) {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        card.click();
+      });
+    });
+    document.querySelectorAll('[data-imglab-job-delete]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function(event) {
+        event.stopPropagation();
+        removeJobRecord(btn.getAttribute('data-imglab-job-delete'), btn);
+      });
+    });
+    document.querySelectorAll('[data-imglab-result-delete]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function(event) {
+        event.stopPropagation();
+        removeResultRecord(btn.getAttribute('data-imglab-result-delete'));
       });
     });
   }

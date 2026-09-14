@@ -20,6 +20,7 @@ from ..core.config import get_settings
 from ..services.creative_job_cloud_sync import sync_creative_job_to_cloud
 from ..services.comfly_seedance_tvc_job_store import (
     create_job_record,
+    delete_job,
     get_job,
     list_jobs_for_user,
     read_manifest_artifacts,
@@ -1720,4 +1721,14 @@ async def comfly_seedance_pipeline_jobs(
         "ok": True,
         "items": [_recent_job_summary(job, request=request) for job in rows],
     }
+
+
+@router.delete("/api/comfly-seedance-tvc/pipeline/jobs/{job_id}")
+async def comfly_seedance_pipeline_job_delete(
+    job_id: str,
+    current_user: _ServerUser = Depends(get_current_user_media_edit),
+):
+    if not delete_job(job_id, user_id=int(current_user.id)):
+        raise HTTPException(status_code=404, detail="job not found")
+    return {"ok": True, "job_id": job_id}
 

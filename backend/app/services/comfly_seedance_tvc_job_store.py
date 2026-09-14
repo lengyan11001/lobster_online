@@ -152,6 +152,27 @@ def list_jobs_for_user(user_id: int, *, limit: int = 60) -> List[Dict[str, Any]]
         return rows
 
 
+def delete_job(job_id: str, *, user_id: int) -> bool:
+    """Drop one job record so it disappears from the record list.
+
+    Only the owner may delete it; the generated files stay on disk because the
+    asset library still references whatever was already saved.
+    """
+    jid = (job_id or "").strip().lower()
+    if not jid:
+        return False
+    with JOBS_LOCK:
+        _ensure_loaded_unlocked()
+        job = _JOBS.get(jid)
+        if not job:
+            return False
+        if int(job.get("user_id") or -1) != int(user_id):
+            return False
+        _JOBS.pop(jid, None)
+        _save_store_to_disk_unlocked()
+    return True
+
+
 def _safe_int(value: Any, default: int = 0) -> int:
     try:
         return int(float(value))

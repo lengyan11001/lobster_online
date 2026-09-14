@@ -2268,6 +2268,55 @@
     bindResultVideoActions();
   }
 
+  function deleteJobRequest(url) {
+    return fetch(url, { method: 'DELETE', headers: authHeadersSafe() })
+      .then(function(response) {
+        return response.json().catch(function() { return {}; }).then(function(data) {
+          return { ok: response.ok, status: response.status, data: data || {} };
+        });
+      })
+      .catch(function(err) {
+        return { ok: false, status: 0, data: {}, error: err };
+      });
+  }
+
+  // One record can live in the local pipeline store, in the cloud creative-jobs store,
+  // or in both, so ask both and treat 404/405 as "already gone".
+  function deleteJobRecord(jobId, btn) {
+    jobId = String(jobId || '').trim();
+    if (!jobId) return;
+    if (!window.confirm('删除这条创作记录？删除后不再出现在记录列表里，已入库的素材不受影响。')) return;
+    if (btn) btn.disabled = true;
+    var calls = [];
+    var local = pipelineBase();
+    if (local) calls.push(deleteJobRequest(local + '/api/comfly-seedance-tvc/pipeline/jobs/' + encodeURIComponent(jobId)));
+    var cloud = cloudBase();
+    if (cloud) calls.push(deleteJobRequest(cloud + '/api/creative-jobs/' + encodeURIComponent(jobId)));
+    Promise.all(calls).then(function(results) {
+      var cleared = results.length === 0 || results.some(function(row) {
+        return row.ok || row.status === 404 || row.status === 405;
+      });
+      if (!cleared) {
+        if (btn) btn.disabled = false;
+        showMessage('删除失败：' + responseErrorText((results[0] || {}).data, '记录删除失败'));
+        return;
+      }
+      state.recentJobs = (state.recentJobs || []).filter(function(item) { return !item || item.jobId !== jobId; });
+      saveRecentJobs();
+      if (state.currentJobId === jobId) {
+        state.currentJobId = '';
+        state.currentJobStatus = '';
+        state.currentResultVideoUrl = '';
+        state.currentJobError = '';
+        state.currentJobPrompt = '';
+        state.currentJobTitle = '';
+        state.mainView = 'storyboard';
+      }
+      renderWorkspace();
+      showMessage('记录已删除。');
+    });
+  }
+
   function bindRecentJobButtons() {
     document.querySelectorAll('[data-seedance-job]').forEach(function(card) {
       if (card.dataset.bound) return;
@@ -2305,6 +2354,14 @@
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         openCard(event);
+      });
+    });
+    document.querySelectorAll('[data-seedance-job-delete]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function(event) {
+        event.stopPropagation();
+        deleteJobRecord(btn.getAttribute('data-seedance-job-delete'), btn);
       });
     });
   }
@@ -2388,14 +2445,18 @@
         var jobProgressHtml = job.status === 'running' && jobPct != null
           ? '<span class="seedance-business-job-progress"><span style="width:' + jobPct + '%"></span><em>' + jobPct + '%</em></span>'
           : '';
+        var deleteBtn = job.jobId
+          ? '<button type="button" class="btn btn-ghost btn-sm" data-seedance-job-delete="' + escapeHtml(job.jobId) + '">删除</button>'
+          : '';
         var actionHtml = videoUrl && job.status === 'completed'
           ? [
               '<span class="seedance-business-job-actions">',
               '<button type="button" class="btn btn-primary btn-sm" data-seedance-video-download="' + escapeHtml(videoUrl) + '" data-seedance-asset-id="' + escapeHtml(job.assetId || '') + '" data-download-filename="creative-video.mp4">下载</button>',
               '<button type="button" class="btn btn-ghost btn-sm" data-seedance-video-open="' + escapeHtml(videoUrl) + '">打开</button>',
+              deleteBtn,
               '</span>'
             ].join('')
-          : '';
+          : (deleteBtn ? '<span class="seedance-business-job-actions">' + deleteBtn + '</span>' : '');
         return [
           '<article class="seedance-business-job' + selected + '" data-seedance-job="' + escapeHtml(job.jobId) + '" tabindex="0" role="button">',
           '<span class="seedance-business-job-head">',

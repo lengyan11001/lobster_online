@@ -425,6 +425,7 @@
     if (task.status === 'failed') {
       actions.push('<button type="button" class="btn btn-ghost" data-batch-retry="' + escapeHtml(task.index) + '">重试</button>');
     }
+    actions.push('<button type="button" class="btn btn-ghost" data-batch-delete="' + escapeHtml(task.index) + '">删除</button>');
     return actions.join('');
   }
 
@@ -924,6 +925,26 @@
     link.remove();
   }
 
+  function deleteTask(index) {
+    index = Number(index);
+    var task = state.tasks.filter(function(item) { return Number(item.index) === index; })[0];
+    if (!task) return;
+    if (!window.confirm('删除这条批量生成记录？已入库的视频素材不受影响。')) return;
+    delete state.polling[index];
+    var jobId = String(task.jobId || '').trim();
+    var base = localBase();
+    if (jobId && base) {
+      fetch(base + '/api/comfly-seedance-tvc/pipeline/jobs/' + encodeURIComponent(jobId), {
+        method: 'DELETE',
+        headers: authHeadersSafe()
+      }).catch(function() { return null; });
+    }
+    state.tasks = state.tasks.filter(function(item) { return Number(item.index) !== index; });
+    saveSnapshot();
+    renderTasks();
+    showMessage('记录已删除。', false);
+  }
+
   function clearResults() {
     Object.keys(state.polling).forEach(function(key) { delete state.polling[key]; });
     state.tasks = [];
@@ -1076,7 +1097,12 @@
           return;
         }
         var retry = target.closest('[data-batch-retry]');
-        if (retry) retryTask(Number(retry.getAttribute('data-batch-retry')));
+        if (retry) {
+          retryTask(Number(retry.getAttribute('data-batch-retry')));
+          return;
+        }
+        var remove = target.closest('[data-batch-delete]');
+        if (remove) deleteTask(Number(remove.getAttribute('data-batch-delete')));
       });
     }
   }

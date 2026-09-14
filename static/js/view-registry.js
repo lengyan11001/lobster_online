@@ -187,9 +187,9 @@
   });
 
   window.registerLobsterView('batch-creative-video', {
-    html: '/static/views/batch-creative-video.html?v=20260912-batch-creative-video-public-image-v3',
-    css: '/static/css/batch-creative-video.css?v=20260912-batch-creative-video-public-image-v3',
-    scripts: '/static/js/batch-creative-video.js?v=20260912-batch-creative-video-public-image-v3',
+    html: '/static/views/batch-creative-video.html?v=20260914-record-delete-v1',
+    css: '/static/css/batch-creative-video.css?v=20260914-record-delete-v1',
+    scripts: '/static/js/batch-creative-video.js?v=20260914-record-delete-v1',
     init: 'initBatchCreativeVideoView',
     cache: 'reload'
   });
