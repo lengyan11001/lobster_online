@@ -118,7 +118,7 @@ def test_ip_daily_records_are_a_single_expandable_tree_without_a_detail_column()
     assert "closest('.ip-record-select')" in script
     assert "data-moment-select-group" not in script
     assert (
-        "renderDraftCards(draftDetailTargetId(item.index), [item.rec], { selectable: false, hideTitle: true })"
+        "renderDraftCards(draftDetailTargetId(item.index), [item.rec], { selectable: false, hideTitle: true, hideTaskBadge: true })"
         in script
     )
 
@@ -176,3 +176,17 @@ def test_moment_image_records_expand_in_the_same_left_hand_tree():
     assert 'data-moment-image-record="' in script
     assert "momentImageLeafTargetId" in script
     assert "toggleDictFlag(state.expandedMomentImageGroups, batchId)" in script
+
+
+def test_record_rows_do_not_repeat_the_type_and_count():
+    script = (ROOT / "static" / "js" / "ip-content-studio.js").read_text(encoding="utf-8")
+
+    # 记录行：类型和条数只在徽标出现一次，标题行只留批次信息
+    assert "var groupTitle = job ? (job.label + (Number(job.batch_count) > 1 ? ' / 共 ' + job.batch_count + ' 批' : '')) : '';" in script
+    assert "(groupTitle ? '<strong>' + esc(groupTitle) + '</strong>' : '') +" in script
+    assert "'<strong>' + esc(taskLabel(group.task)) + ' \u00b7 '" not in script
+
+    # 下级每条文案：不再重复类型徽标（选择框 / 图片数 / 箭头保留）
+    assert script.count("'<span class=\"ip-badge\">' + esc(taskLabel(rec.task)) + '</span>' +") == 1
+    assert "hideTaskBadge: true" in script
+    assert "(hideTaskBadge ? '' : '<span class=\"ip-badge\">' + esc(taskLabel(rec.task)) + '</span>'" in script

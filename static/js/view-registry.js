@@ -86,8 +86,8 @@
   });
 
   window.registerLobsterView('ip-content-studio', {
-    html: '/static/views/ip-content-studio.html?v=20260914-ip-content-record-tree-v2',
-    scripts: '/static/js/ip-content-studio.js?v=20260914-ip-content-record-tree-v2',
+    html: '/static/views/ip-content-studio.html?v=20260914-ip-content-record-tree-v3',
+    scripts: '/static/js/ip-content-studio.js?v=20260914-ip-content-record-tree-v3',
     init: 'initIpContentStudioView',
     cache: 'reload'
   });

@@ -2069,6 +2069,7 @@
     }
     var selectable = !!opts.selectable;
     var hideTitle = !!opts.hideTitle;
+    var hideTaskBadge = !!opts.hideTaskBadge;
     box.innerHTML = records.map(function(rec) {
       var checked = selectable && rec._selected ? ' checked' : '';
       var oral = isOralTask(rec.task);
@@ -2087,7 +2088,7 @@
         (selectable ? '<label class="ip-badge-row"><input type="checkbox" data-moment-select="' + escAttr(rec.record_id || '') + '"' + checked + '> <span class="ip-badge">选中出图</span></label>' : '') +
         '<div class="ip-draft-card-head"><div class="ip-badge-row">' +
         (oral ? '<label class="ip-draft-select"><input type="checkbox" data-record-select="' + escAttr(rec.record_id || '') + '"' + oralChecked + '>选择</label>' : '') +
-        '<span class="ip-badge">' + esc(taskLabel(rec.task)) + '</span>' + (rec.image_url ? '<span class="ip-badge is-image">已出图</span>' : '') + '</div>' +
+        (hideTaskBadge ? '' : '<span class="ip-badge">' + esc(taskLabel(rec.task)) + '</span>' + (rec.image_url ? '<span class="ip-badge is-image">已出图</span>' : '')) + '</div>' +
         '<div class="ip-draft-top-actions">' +
         (oral ? '<button type="button" class="btn btn-ghost btn-sm" data-copy-record="' + escAttr(rec.record_id || '') + '">复制</button>' : '') +
         draftActionMenuHtml(rec) + '</div></div>' +
@@ -2235,7 +2236,6 @@
       (rec.task === 'moments_candidate'
         ? '<label class="ip-record-select"><input type="checkbox" data-moment-select="' + escAttr(id) + '"' + (rec._selected ? ' checked' : '') + '> <span>选中出图</span></label>'
         : '') +
-      '<span class="ip-badge">' + esc(taskLabel(rec.task)) + '</span>' +
       (images.length ? '<span class="ip-badge is-image">图片 ' + esc(images.length) + '</span>' : '') +
       '<span class="ip-record-caret" aria-hidden="true">' + (open ? '▾' : '▸') + '</span></div>' +
       '</div>' +
@@ -2295,6 +2295,7 @@
         }).join('');
         if (!leaves) leaves = '<div class="ip-content-empty">' + (job && job.status === 'failed' ? '这一批没有生成内容，可以点重试该批重新生成。' : '这一批还没有生成内容。') + '</div>';
       }
+      var groupTitle = job ? (job.label + (Number(job.batch_count) > 1 ? ' / 共 ' + job.batch_count + ' 批' : '')) : '';
       var badges = '<span class="ip-badge">' + esc(taskLabel(group.task)) + '</span>' +
         '<span class="ip-badge is-image">' + (records.length ? esc(String(records.length)) + ' 条' : '待生成') + '</span>' +
         (group.image_count ? '<span class="ip-badge is-image">图片 ' + esc(group.image_count) + '</span>' : '') +
@@ -2307,7 +2308,7 @@
       return '<div class="ip-content-item ip-record-node' + (open ? ' is-open' : '') + '">' +
         '<div class="ip-record-node-head" data-record-group="' + escAttr(groupId) + '" role="button" tabindex="0" aria-expanded="' + (open ? 'true' : 'false') + '">' +
         '<div class="ip-badge-row">' + badges + '</div>' +
-        '<strong>' + esc(taskLabel(group.task)) + ' · ' + (records.length ? esc(String(records.length)) + ' 条' : '待生成') + (job ? ' · ' + esc(job.label) : '') + '</strong>' +
+        (groupTitle ? '<strong>' + esc(groupTitle) + '</strong>' : '') +
         '<small>' + esc(fmtTime(group.created_at)) + '</small>' +
         (preview ? '<small>' + esc(preview) + (preview.length >= 120 ? '...' : '') + '</small>' : '') +
         (job && job.status === 'failed' ? '<small class="ip-moment-batch-error">' + esc(job.error || '这一批生成失败，可以单独重试。') + '</small>' : '') +
@@ -2361,7 +2362,7 @@
       });
     });
     openLeaves.forEach(function(item) {
-      renderDraftCards(draftDetailTargetId(item.index), [item.rec], { selectable: false, hideTitle: true });
+      renderDraftCards(draftDetailTargetId(item.index), [item.rec], { selectable: false, hideTitle: true, hideTaskBadge: true });
     });
     updateRecordBulkToolbar();
   }
