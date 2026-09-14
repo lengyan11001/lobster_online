@@ -1,7 +1,7 @@
 {
-  "version": "2.0.51",
-  "build": 330,
-  "applied_at": "2026-09-14T17:36:49+08:00",
-  "note": "fix(ip-content): record list no longer renders stale local batches (no more flashing / phantom 20 条); header generate buttons; per-文案 选中出图",
-  "bundle_sha256": "6e61012ae66329f8828857a99e9a95b4d1ddd94b48688838306d2da06aded362"
+  "version": "2.0.52",
+  "build": 331,
+  "applied_at": "2026-09-14T18:04:07+08:00",
+  "note": "feat(creative): delete buttons on every generation record (seedance/image/batch/viral/ecommerce/cutcli); fix(ip-content): record rows no longer repeat 类型+条数",
+  "bundle_sha256": "34f593ee2092fe2b961d75c679d5a77fcb7fb6bbd24d400ecbafad74469241c0"
 }
