@@ -82,3 +82,45 @@ def test_moment_image_failures_are_rendered_on_the_matching_record():
     assert "失败原因已标在对应文案" in script
     assert "setMsg(err.message || '朋友圈出图失败', true)" not in script
     assert ".ip-moment-image-error" in view
+
+
+def test_ip_daily_records_are_a_single_expandable_tree_without_a_detail_column():
+    script = (ROOT / "static" / "js" / "ip-content-studio.js").read_text(encoding="utf-8")
+    view = (ROOT / "static" / "views" / "ip-content-studio.html").read_text(encoding="utf-8")
+
+    # Opening the entry shows the record list only: the right hand detail column
+    # and the always-on batch queue cards are gone for good.
+    assert 'id="ipLatestDraftList"' not in view
+    assert 'id="ipMomentBatchQueue"' not in view
+    assert 'id="ipMomentImageDetail"' not in view
+    assert 'id="ipRecordDetailTitle"' not in view
+    assert "resetRecordTreeState();" in script
+    assert "grid-template-columns: minmax(0, 1fr);" in view
+
+    # A batch expands to its own records, a record expands to its own detail.
+    assert "function recordLeafHtml" in script
+    assert "function recordTreeEntries" in script
+    assert "state.expandedRecordGroups" in script
+    assert "state.expandedRecordLeaves" in script
+    assert 'data-record-group="' in script
+    assert 'data-record-leaf="' in script
+    assert "draftDetailTargetId" in script
+    assert "renderDraftCards(draftDetailTargetId(item.index), [item.rec]" in script
+
+    # Several batches stay open side by side; collapsing one keeps the others.
+    assert "function toggleDraftGroupNode" in script
+    assert "toggleDictFlag(state.expandedRecordGroups, groupId)" in script
+
+
+def test_moment_image_records_expand_in_the_same_left_hand_tree():
+    script = (ROOT / "static" / "js" / "ip-content-studio.js").read_text(encoding="utf-8")
+
+    assert "function momentImageLeafHtml" in script
+    assert "function momentImageDetailHtml" in script
+    assert "function bindMomentImageRecordActions" in script
+    assert "state.expandedMomentImageGroups" in script
+    assert "state.expandedMomentImageLeaves" in script
+    assert 'data-moment-image-batch="' in script
+    assert 'data-moment-image-record="' in script
+    assert "momentImageLeafTargetId" in script
+    assert "toggleDictFlag(state.expandedMomentImageGroups, batchId)" in script

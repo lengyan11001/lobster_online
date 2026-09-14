@@ -88,7 +88,7 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
       .ip-content-layout.is-records {
-        grid-template-columns: minmax(270px, 0.72fr) minmax(460px, 1.28fr);
+        grid-template-columns: minmax(0, 1fr);
       }
       .ip-content-panel {
         background: var(--ip-panel);
@@ -187,7 +187,68 @@
         max-height: 360px;
       }
       .ip-content-list.is-groups {
-        max-height: 640px;
+        max-height: min(72vh, 820px);
+      }
+      .ip-record-node-head,
+      .ip-record-leaf-head {
+        position: relative;
+        cursor: pointer;
+      }
+      .ip-record-node-head {
+        padding-right: 1.15rem;
+      }
+      .ip-record-node.is-open {
+        border-color: rgba(15, 118, 110, 0.42);
+      }
+      .ip-record-children {
+        display: grid;
+        gap: 0.5rem;
+        margin-top: 0.6rem;
+        padding-left: 0.55rem;
+        border-left: 2px solid rgba(15, 118, 110, 0.2);
+      }
+      .ip-record-leaf {
+        border: 1px solid rgba(15, 23, 42, 0.1);
+        border-radius: 8px;
+        background: #fbfdff;
+        padding: 0.5rem 0.55rem;
+      }
+      .ip-record-leaf.is-open {
+        background: #fff;
+        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.07);
+      }
+      .ip-record-leaf-head {
+        padding-right: 1.15rem;
+      }
+      .ip-record-leaf-head .ip-moment-batch-preview {
+        grid-template-columns: 1fr;
+        gap: 0.12rem;
+        padding: 0.3rem 0.42rem;
+      }
+      .ip-record-leaf-meta {
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        flex-wrap: wrap;
+        margin-top: 0.32rem;
+      }
+      .ip-record-leaf-body {
+        margin-top: 0.5rem;
+      }
+      .ip-record-hint {
+        margin-left: auto;
+        margin-right: 0.45rem;
+        color: var(--ip-muted);
+        font-size: 0.74rem;
+        font-weight: 500;
+      }
+      .ip-record-caret {
+        position: absolute;
+        right: 0.1rem;
+        top: 0.28rem;
+        color: var(--ip-muted);
+        font-size: 0.78rem;
+        line-height: 1;
       }
       .ip-content-item {
         border: 1px solid rgba(15, 23, 42, 0.1);
@@ -970,46 +1031,34 @@
         </div>
       </section>
 
-      <div class="ip-content-layout is-records">
-        <section class="ip-content-panel">
-          <div class="ip-content-panel-title">文案生成记录</div>
-          <div class="ip-filter-row">
-            <button type="button" class="btn btn-ghost btn-sm is-active" data-ip-record-filter="">全部</button>
-            <button type="button" class="btn btn-ghost btn-sm" data-ip-record-filter="industry_hot_oral">行业口播</button>
-            <button type="button" class="btn btn-ghost btn-sm" data-ip-record-filter="professional_ip_oral">IP口播</button>
-            <button type="button" class="btn btn-ghost btn-sm" data-ip-record-filter="moments_candidate">朋友圈</button>
+      <section class="ip-content-panel">
+        <div class="ip-content-panel-title">
+          <span>文案生成记录</span>
+          <span class="ip-record-hint">点批次展开，再点文案看详情</span>
+          <button type="button" id="ipGenerateSelectedImagesBtn" class="btn btn-primary btn-sm" style="display:none;">生成选中图片</button>
+        </div>
+        <div class="ip-filter-row">
+          <button type="button" class="btn btn-ghost btn-sm is-active" data-ip-record-filter="">全部</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-ip-record-filter="industry_hot_oral">行业口播</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-ip-record-filter="professional_ip_oral">IP口播</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-ip-record-filter="moments_candidate">朋友圈</button>
+        </div>
+        <div id="ipRecordBulkToolbar" class="ip-record-bulk-toolbar" hidden>
+          <label class="ip-record-select-all"><input type="checkbox" id="ipRecordSelectAll">全选当前记录</label>
+          <div class="ip-record-bulk-actions">
+            <span id="ipRecordSelectedCount" class="ip-record-selected-count">已选 0 条</span>
+            <button type="button" id="ipCopySelectedRecordsBtn" class="btn btn-primary btn-sm" disabled>复制选中</button>
           </div>
-          <div id="ipDraftGroupList" class="ip-content-list is-groups"></div>
-        </section>
-        <section class="ip-content-panel">
-          <div id="ipMomentBatchQueue" class="ip-moment-batch-queue"></div>
-          <div class="ip-content-panel-title">
-            <span id="ipRecordDetailTitle">生成明细</span>
-            <button type="button" id="ipGenerateSelectedImagesBtn" class="btn btn-primary btn-sm" style="display:none;">生成选中图片</button>
-          </div>
-          <div id="ipRecordBulkToolbar" class="ip-record-bulk-toolbar" hidden>
-            <label class="ip-record-select-all"><input type="checkbox" id="ipRecordSelectAll">全选当前记录</label>
-            <div class="ip-record-bulk-actions">
-              <span id="ipRecordSelectedCount" class="ip-record-selected-count">已选 0 条</span>
-              <button type="button" id="ipCopySelectedRecordsBtn" class="btn btn-primary btn-sm" disabled>复制选中</button>
-            </div>
-          </div>
-          <div id="ipLatestDraftList" class="ip-draft-grid is-detail"></div>
-        </section>
-      </div>
+        </div>
+        <div id="ipDraftGroupList" class="ip-content-list is-groups"></div>
+      </section>
     </section>
 
     <section class="ip-content-tab-panel" data-ip-panel="moment-images">
-      <div class="ip-content-layout is-records">
-        <section class="ip-content-panel">
-          <div class="ip-content-panel-title">朋友圈图片生成记录</div>
-          <div id="ipMomentImageRecordList" class="ip-content-list is-groups"></div>
-        </section>
-        <section class="ip-content-panel">
-          <div class="ip-content-panel-title">图片明细</div>
-          <div id="ipMomentImageDetail" class="ip-content-list"></div>
-        </section>
-      </div>
+      <section class="ip-content-panel">
+        <div class="ip-content-panel-title">朋友圈图片生成记录</div>
+        <div id="ipMomentImageRecordList" class="ip-content-list is-groups"></div>
+      </section>
     </section>
 
     <section class="ip-content-tab-panel" data-ip-panel="synced">

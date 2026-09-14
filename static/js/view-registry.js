@@ -86,8 +86,8 @@
   });
 
   window.registerLobsterView('ip-content-studio', {
-    html: '/static/views/ip-content-studio.html?v=20260807-moment-failure-scope',
-    scripts: '/static/js/ip-content-studio.js?v=20260914-ip-content-record-split-v1',
+    html: '/static/views/ip-content-studio.html?v=20260914-ip-content-record-tree-v1',
+    scripts: '/static/js/ip-content-studio.js?v=20260914-ip-content-record-tree-v1',
     init: 'initIpContentStudioView',
     cache: 'reload'
   });
