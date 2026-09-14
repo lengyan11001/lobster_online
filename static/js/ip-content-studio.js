@@ -2218,25 +2218,6 @@
     return 'ipDraftDetail_' + index;
   }
 
-  function momentRecordsOfGroup(groupId) {
-    return (state.latestDrafts || []).filter(function(rec) {
-      return rec.task === 'moments_candidate' && String(recordGroupId(rec)) === String(groupId || '');
-    });
-  }
-
-  function syncMomentSelectionInputs() {
-    var list = $('ipDraftGroupList');
-    if (!list) return;
-    list.querySelectorAll('[data-moment-select-group]').forEach(function(input) {
-      var records = momentRecordsOfGroup(input.getAttribute('data-moment-select-group'));
-      var selected = records.filter(function(rec) { return !!rec._selected; }).length;
-      input.checked = !!records.length && selected === records.length;
-      input.indeterminate = selected > 0 && selected < records.length;
-      var label = input.closest ? input.closest('.ip-record-select') : null;
-      if (label) label.classList.toggle('is-active', selected > 0);
-    });
-  }
-
   function recordLeafHtml(rec, leafIndex, detailIndex) {
     var id = String(rec.record_id || '');
     var open = !!state.expandedRecordLeaves[id];
@@ -2246,7 +2227,11 @@
     return '<div class="ip-record-leaf' + (open ? ' is-open' : '') + '">' +
       '<div class="ip-record-leaf-head" data-record-leaf="' + escAttr(id) + '" role="button" tabindex="0" aria-expanded="' + (open ? 'true' : 'false') + '">' +
       '<div class="ip-moment-batch-preview"><strong>' + esc((leafIndex + 1) + '. ' + title) + '</strong><span>' + esc(body.slice(0, 90)) + (body.length > 90 ? '...' : '') + '</span></div>' +
-      '<div class="ip-record-leaf-meta"><span class="ip-badge">' + esc(taskLabel(rec.task)) + '</span>' +
+      '<div class="ip-record-leaf-meta">' +
+      (rec.task === 'moments_candidate'
+        ? '<label class="ip-record-select"><input type="checkbox" data-moment-select="' + escAttr(id) + '"' + (rec._selected ? ' checked' : '') + '> <span>选中出图</span></label>'
+        : '') +
+      '<span class="ip-badge">' + esc(taskLabel(rec.task)) + '</span>' +
       (images.length ? '<span class="ip-badge is-image">图片 ' + esc(images.length) + '</span>' : '') +
       '<span class="ip-record-caret" aria-hidden="true">' + (open ? '▾' : '▸') + '</span></div>' +
       '</div>' +
@@ -2307,12 +2292,6 @@
         '<span class="ip-badge is-image">' + (records.length ? esc(String(records.length)) + ' 条' : '待生成') + '</span>' +
         (group.image_count ? '<span class="ip-badge is-image">图片 ' + esc(group.image_count) + '</span>' : '') +
         (job ? '<span class="ip-badge' + (job.status === 'failed' ? ' is-used' : (job.status === 'done' ? ' is-new' : '')) + '">' + esc(momentBatchStatusLabel(job.status)) + '</span>' : '');
-      var selectBox = '';
-      if (group.task === 'moments_candidate' && records.length) {
-        var selectedCount = records.filter(function(rec) { return !!rec._selected; }).length;
-        selectBox = '<label class="ip-record-select' + (selectedCount ? ' is-active' : '') + '"><input type="checkbox" data-moment-select-group="' + escAttr(groupId) + '"' +
-          (selectedCount === records.length ? ' checked' : '') + '> <span>选中出图</span></label>';
-      }
       var actions = '<div class="ip-content-item-actions">' +
         (job && job.status === 'failed' ? '<button type="button" class="btn btn-primary btn-sm" data-retry-moment-batch="' + escAttr(job.batch_id) + '">重试该批</button>' : '') +
         (job && job.status === 'done' ? '<button type="button" class="btn btn-ghost btn-sm" data-show-moment-batch="' + escAttr(job.batch_id) + '">完整结果</button>' : '') +
@@ -2320,7 +2299,7 @@
         '</div>';
       return '<div class="ip-content-item ip-record-node' + (open ? ' is-open' : '') + '">' +
         '<div class="ip-record-node-head" data-record-group="' + escAttr(groupId) + '" role="button" tabindex="0" aria-expanded="' + (open ? 'true' : 'false') + '">' +
-        '<div class="ip-badge-row">' + selectBox + badges + '</div>' +
+        '<div class="ip-badge-row">' + badges + '</div>' +
         '<strong>' + esc(taskLabel(group.task)) + ' · ' + (records.length ? esc(String(records.length)) + ' 条' : '待生成') + (job ? ' · ' + esc(job.label) : '') + '</strong>' +
         '<small>' + esc(fmtTime(group.created_at)) + '</small>' +
         (preview ? '<small>' + esc(preview) + (preview.length >= 120 ? '...' : '') + '</small>' : '') +
@@ -2333,26 +2312,27 @@
     }).join('');
     list.querySelectorAll('[data-record-group]').forEach(function(node) {
       node.addEventListener('click', function(ev) {
-        if (ev.target && ev.target.closest && ev.target.closest('[data-delete-group],[data-retry-moment-batch],[data-show-moment-batch],.ip-record-select')) return;
+        if (ev.target && ev.target.closest && ev.target.closest('[data-delete-group],[data-retry-moment-batch],[data-show-moment-batch]')) return;
         toggleDraftGroupNode(node.getAttribute('data-record-group') || '');
       });
     });
     list.querySelectorAll('[data-record-leaf]').forEach(function(node) {
-      node.addEventListener('click', function() {
+      node.addEventListener('click', function(ev) {
+        if (ev.target && ev.target.closest && ev.target.closest('.ip-record-select')) return;
         var id = node.getAttribute('data-record-leaf') || '';
         if (!id) return;
         toggleDictFlag(state.expandedRecordLeaves, id);
         renderDraftRecords();
       });
     });
-    list.querySelectorAll('[data-moment-select-group]').forEach(function(input) {
+    list.querySelectorAll('[data-moment-select]').forEach(function(input) {
       input.addEventListener('click', function(ev) { ev.stopPropagation(); });
       input.addEventListener('change', function(ev) {
         ev.stopPropagation();
-        var groupId = input.getAttribute('data-moment-select-group') || '';
-        var checked = !!input.checked;
-        momentRecordsOfGroup(groupId).forEach(function(rec) { rec._selected = checked; });
-        syncMomentSelectionInputs();
+        var id = input.getAttribute('data-moment-select') || '';
+        (state.latestDrafts || []).forEach(function(rec) {
+          if (String(rec.record_id || '') === String(id)) rec._selected = !!input.checked;
+        });
       });
     });
     list.querySelectorAll('[data-delete-group]').forEach(function(btn) {
@@ -2376,7 +2356,6 @@
     openLeaves.forEach(function(item) {
       renderDraftCards(draftDetailTargetId(item.index), [item.rec], { selectable: false, hideTitle: true });
     });
-    syncMomentSelectionInputs();
     updateRecordBulkToolbar();
   }
 
@@ -3124,12 +3103,20 @@
     });
   }
 
-  window.initIpContentStudioView = function(mode) {
+  window.initIpContentStudioView = function(mode, options) {
+    // The shell re-runs the registered init every time this view is shown again.
+    // Only an explicit entry into the workbench collapses the tree; a plain re-init
+    // must keep whatever the user just expanded.
+    options = options || {};
     applyStudioMode(mode || window.__ipContentStudioMode || '');
     bind();
     restoreGenerationSettings();
     restoreMomentBatchJobs();
-    resetRecordTreeState();
+    if (options.enter) resetRecordTreeState();
+    else {
+      renderDraftRecords();
+      renderMomentImageRecords();
+    }
     switchConfigTab(state.configTab);
     updateCompetitorPlatformFields();
     refreshAll();

@@ -246,10 +246,6 @@
         cursor: pointer;
         user-select: none;
       }
-      .ip-record-select.is-active {
-        border-color: rgba(37, 99, 235, 0.55);
-        background: #e8f1ff;
-      }
       .ip-record-select input {
         margin: 0;
         cursor: pointer;
@@ -1022,6 +1018,9 @@
         <div class="ip-content-subtitle">关键词榜单、同行作品、记忆文件、文案生成记录</div>
       </div>
       <div class="ip-content-actions">
+        <button type="button" id="ipGenerateIndustryBtn" class="btn btn-primary btn-sm">行业热门口播</button>
+        <button type="button" id="ipGenerateIpBtn" class="btn btn-primary btn-sm">专业 IP 口播</button>
+        <button type="button" id="ipGenerateMomentsBtn" class="btn btn-primary btn-sm">生成朋友圈文案</button>
         <button type="button" id="ipContentRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
         <button type="button" id="ipContentBackBtn" class="btn btn-ghost btn-sm">返回</button>
       </div>
@@ -1036,23 +1035,6 @@
     </nav>
 
     <section class="ip-content-tab-panel is-active" data-ip-panel="records">
-      <section class="ip-content-panel" style="margin-bottom:0.85rem;">
-        <div class="ip-content-panel-title">生成设置</div>
-        <div class="ip-generate-compact">
-          <div class="ip-content-field" style="margin-bottom:0; min-width:280px;">
-            <label for="ipGenerateTemplateSelect">当前IP人设</label>
-            <select id="ipGenerateTemplateSelect" hidden aria-hidden="true"></select>
-            <div id="ipCurrentProfileTemplateBox" class="ip-content-empty">正在读取当前 IP人设配置...</div>
-          </div>
-          <div class="ip-generate-actions">
-            <button type="button" id="ipGenerateIndustryBtn" class="btn btn-primary btn-sm">行业热门口播</button>
-            <button type="button" id="ipGenerateIpBtn" class="btn btn-primary btn-sm">专业 IP 口播</button>
-            <button type="button" id="ipGenerateMomentsBtn" class="btn btn-primary btn-sm">生成朋友圈文案</button>
-            <button type="button" id="ipOpenPersonalSettingsBtn" class="btn btn-ghost btn-sm">IP人设定位</button>
-          </div>
-        </div>
-      </section>
-
       <section class="ip-content-panel">
         <div class="ip-content-panel-title">
           <span>文案生成记录</span>

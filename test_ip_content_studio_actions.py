@@ -111,17 +111,40 @@ def test_ip_daily_records_are_a_single_expandable_tree_without_a_detail_column()
     assert "function toggleDraftGroupNode" in script
     assert "toggleDictFlag(state.expandedRecordGroups, groupId)" in script
 
-    # The 选中出图 checkbox sits on the 记录 (batch) row, so it is reachable
-    # without expanding anything, and the expanded rows/detail never repeat it.
+    # The 选中出图 checkbox sits on every 文案 record row (not on the batch node and
+    # not in the expanded detail), so the five 朋友圈文案 are picked one by one.
     assert "ip-record-select" in script
-    assert 'data-moment-select-group="' in script
-    assert "function momentRecordsOfGroup" in script
-    assert "function syncMomentSelectionInputs" in script
-    assert "closest('[data-delete-group],[data-retry-moment-batch],[data-show-moment-batch],.ip-record-select')" in script
+    assert 'data-moment-select="' in script
+    assert "closest('.ip-record-select')" in script
+    assert "data-moment-select-group" not in script
     assert (
         "renderDraftCards(draftDetailTargetId(item.index), [item.rec], { selectable: false, hideTitle: true })"
         in script
     )
+
+
+def test_ip_daily_generate_buttons_moved_to_the_header_without_a_setting_panel():
+    view = (ROOT / "static" / "views" / "ip-content-studio.html").read_text(encoding="utf-8")
+
+    header = view[view.index('<header class="ip-content-head">'): view.index("</header>")]
+    for element in ('id="ipGenerateIndustryBtn"', 'id="ipGenerateIpBtn"', 'id="ipGenerateMomentsBtn"'):
+        assert element in header
+    assert 'id="ipContentRefreshBtn"' in header
+    # 生成设置 panel, the profile summary box and its standalone select are gone.
+    assert "生成设置" not in view
+    assert 'id="ipCurrentProfileTemplateBox"' not in view
+    assert 'id="ipGenerateTemplateSelect"' not in view
+    assert 'id="ipOpenPersonalSettingsBtn"' not in view
+
+
+def test_ip_daily_reinit_keeps_the_expanded_tree_and_only_entry_resets_it():
+    script = (ROOT / "static" / "js" / "ip-content-studio.js").read_text(encoding="utf-8")
+    skill = (ROOT / "static" / "js" / "skill.js").read_text(encoding="utf-8")
+
+    # A plain re-init (the shell re-showing the view) keeps what the user expanded.
+    assert "window.initIpContentStudioView = function(mode, options) {" in script
+    assert "if (options.enter) resetRecordTreeState();" in script
+    assert "window.initIpContentStudioView(mode, { enter: true });" in skill
 
 
 def test_moment_image_records_expand_in_the_same_left_hand_tree():

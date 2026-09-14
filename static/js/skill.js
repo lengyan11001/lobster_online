@@ -1357,15 +1357,15 @@ window._openIpContentStudioView = function(mode) {
   window.__ipContentStudioMode = mode;
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('ip-content-studio', {
-      html: '/static/views/ip-content-studio.html?v=20260914-ip-content-record-tree-v1',
-      scripts: '/static/js/ip-content-studio.js?v=20260914-ip-content-record-tree-v1',
+      html: '/static/views/ip-content-studio.html?v=20260914-ip-content-record-tree-v2',
+      scripts: '/static/js/ip-content-studio.js?v=20260914-ip-content-record-tree-v2',
       cache: 'reload'
     });
   }
   if (typeof window.showLobsterView === 'function') {
     window.showLobsterView('ip-content-studio', document.querySelector('.nav-left-item[data-view="skill-store"]'))
       .then(function() {
-        if (typeof window.initIpContentStudioView === 'function') window.initIpContentStudioView(mode);
+        if (typeof window.initIpContentStudioView === 'function') window.initIpContentStudioView(mode, { enter: true });
       })
       .catch(function(err) {
         console.error('Failed to open ip-content-studio', err);
@@ -1374,7 +1374,7 @@ window._openIpContentStudioView = function(mode) {
     return;
   }
   _switchToHiddenView('ip-content-studio');
-  if (typeof window.initIpContentStudioView === 'function') window.initIpContentStudioView(mode);
+  if (typeof window.initIpContentStudioView === 'function') window.initIpContentStudioView(mode, { enter: true });
   try { location.hash = 'ip-content-studio'; } catch (e1) {}
 };
 
