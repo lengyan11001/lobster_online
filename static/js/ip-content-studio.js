@@ -16,6 +16,8 @@
     activeGroupId: '',
     activeMomentImageBatchId: '',
     momentBatchJobs: [],
+    draftRecordsLoaded: false,
+    draftRecordsInFlight: null,
     latestDrafts: [],
     selectedRecordIds: {},
     recordFilter: '',
@@ -328,6 +330,7 @@
     if (state.mode === 'oral' && state.tab === 'moment-images') state.tab = 'records';
     switchTab(state.tab || 'records');
     if (previousMode !== state.mode) {
+      state.draftRecordsLoaded = false;
       renderDraftRecords();
       loadDraftRecords();
     }
@@ -582,7 +585,6 @@
 
   function restoreMomentBatchJobs() {
     state.momentBatchJobs = normalizeMomentBatchJobs(readStoredJson(MOMENT_BATCH_JOBS_STORAGE_KEY, []));
-    renderDraftRecords();
   }
 
   function resetRecordTreeState() {
@@ -2189,12 +2191,14 @@
     var seen = {};
     entries.forEach(function(entry) { seen[String(entry.group.group_id)] = true; });
     var showMoments = state.mode !== 'oral' && (!state.recordFilter || state.recordFilter === 'moments_candidate');
-    if (showMoments) {
+    if (showMoments && state.draftRecordsLoaded) {
       jobs.forEach(function(job) {
         var groupId = String(job.group_id || '');
         if (!groupId || seen[groupId]) return;
+        // A finished batch is already listed by the server; the local copy is only a
+        // cache and must never add rows of its own (that is what made the list flash).
+        if (job.status !== 'failed' && job.status !== 'running') return;
         var records = momentBatchRecords(job);
-        if (!records.length && job.status !== 'failed' && job.status !== 'running') return;
         seen[groupId] = true;
         entries.push({
           group: {
@@ -2263,7 +2267,10 @@
       imageBtn.style.display = hasMoments ? '' : 'none';
     }
     if (!entries.length) {
-      list.innerHTML = '<div class="ip-content-empty">' + (state.mode === 'moments' ? '暂无朋友圈文案生成记录，先在上方生成朋友圈文案。' : '暂无文案生成记录。') + '</div>';
+      var emptyText = state.draftRecordsLoaded
+        ? (state.mode === 'moments' ? '暂无朋友圈文案生成记录，先在上方生成朋友圈文案。' : '暂无文案生成记录。')
+        : '正在加载生成记录…';
+      list.innerHTML = '<div class="ip-content-empty">' + emptyText + '</div>';
       updateRecordBulkToolbar();
       return;
     }
@@ -2495,7 +2502,9 @@
     if (!list) return;
     var batches = momentImageBatches();
     if (!batches.length) {
-      list.innerHTML = '<div class="ip-content-empty">暂无朋友圈图片生成记录。</div>';
+      list.innerHTML = '<div class="ip-content-empty">'
+        + (state.draftRecordsLoaded ? '暂无朋友圈图片生成记录。' : '正在加载生成记录…')
+        + '</div>';
       state.activeMomentImageBatchId = '';
       return;
     }
@@ -2553,19 +2562,26 @@
   function loadDraftRecords() {
     // IP 口播文案 and 朋友圈图文 are separate entries: only list the drafts that
     // belong to the entry the user opened.
+    if (state.draftRecordsInFlight) return state.draftRecordsInFlight;
     var draftUrl = '/api/ip-content/draft-records?limit=120';
     if (state.mode === 'oral' || state.mode === 'moments') draftUrl += '&mode=' + encodeURIComponent(state.mode);
-    return cloudJson(draftUrl)
+    state.draftRecordsInFlight = cloudJson(draftUrl)
       .then(function(data) {
         state.draftRecords = Array.isArray(data.items) ? data.items : [];
         state.draftGroups = buildDraftGroups(state.draftRecords);
+        state.draftRecordsLoaded = true;
         renderDraftRecords();
         renderMomentImageRecords();
       })
       .catch(function(err) {
         var list = $('ipDraftGroupList');
         if (list) list.innerHTML = '<div class="ip-content-empty">' + esc(err.message || '文案生成记录加载失败') + '</div>';
+      })
+      .then(function(result) {
+        state.draftRecordsInFlight = null;
+        return result;
       });
+    return state.draftRecordsInFlight;
   }
 
   function copyText(text, btn) {

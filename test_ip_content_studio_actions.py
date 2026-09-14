@@ -147,6 +147,23 @@ def test_ip_daily_reinit_keeps_the_expanded_tree_and_only_entry_resets_it():
     assert "window.initIpContentStudioView(mode, { enter: true });" in skill
 
 
+def test_ip_daily_record_list_is_painted_from_the_server_list_only():
+    script = (ROOT / "static" / "js" / "ip-content-studio.js").read_text(encoding="utf-8")
+
+    # The cached batch jobs must not add rows of their own: that is what made the list
+    # show yesterday's 20 条 and then swap/flash when the server answer arrived.
+    restore_start = script.index("function restoreMomentBatchJobs")
+    restore_end = script.index("function resetRecordTreeState", restore_start)
+    assert "renderDraftRecords" not in script[restore_start:restore_end]
+    assert "if (showMoments && state.draftRecordsLoaded) {" in script
+    assert "if (job.status !== 'failed' && job.status !== 'running') return;" in script
+
+    # One shared in-flight load, and a loading placeholder instead of an empty list.
+    assert "if (state.draftRecordsInFlight) return state.draftRecordsInFlight;" in script
+    assert "state.draftRecordsLoaded = true;" in script
+    assert "正在加载生成记录…" in script
+
+
 def test_moment_image_records_expand_in_the_same_left_hand_tree():
     script = (ROOT / "static" / "js" / "ip-content-studio.js").read_text(encoding="utf-8")
 
