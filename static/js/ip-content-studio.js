@@ -284,7 +284,9 @@
   }
 
   function applyStudioMode(mode) {
+    var previousMode = state.mode;
     state.mode = mode === 'moments' ? 'moments' : (mode === 'oral' ? 'oral' : '');
+    if (previousMode !== state.mode) state.recordFilter = '';
     var root = $('content-ip-content-studio');
     if (!root) return;
     root.setAttribute('data-ip-content-mode', state.mode || 'all');
@@ -321,6 +323,10 @@
     if (bulk) bulk.hidden = state.mode === 'moments';
     if (state.mode === 'oral' && state.tab === 'moment-images') state.tab = 'records';
     switchTab(state.tab || 'records');
+    if (previousMode !== state.mode) {
+      renderDraftRecords();
+      loadDraftRecords();
+    }
   }
 
   function fmtCount(value) {
@@ -2147,6 +2153,10 @@
     var list = $('ipDraftGroupList');
     if (!list) return;
     var groups = state.draftGroups;
+    // Even if a cached response still carries both kinds, an entry must never
+    // display the other entry's drafts.
+    if (state.mode === 'oral') groups = groups.filter(function(item) { return isOralTask(item.task); });
+    else if (state.mode === 'moments') groups = groups.filter(function(item) { return item.task === 'moments_candidate'; });
     if (state.recordFilter) groups = groups.filter(function(item) { return item.task === state.recordFilter; });
     if (!groups.length) {
       list.innerHTML = '<div class="ip-content-empty">暂无文案生成记录。</div>';
@@ -2408,7 +2418,11 @@
   }
 
   function loadDraftRecords() {
-    return cloudJson('/api/ip-content/draft-records?limit=120')
+    // IP 口播文案 and 朋友圈图文 are separate entries: only list the drafts that
+    // belong to the entry the user opened.
+    var draftUrl = '/api/ip-content/draft-records?limit=120';
+    if (state.mode === 'oral' || state.mode === 'moments') draftUrl += '&mode=' + encodeURIComponent(state.mode);
+    return cloudJson(draftUrl)
       .then(function(data) {
         state.draftRecords = Array.isArray(data.items) ? data.items : [];
         state.draftGroups = buildDraftGroups(state.draftRecords);
