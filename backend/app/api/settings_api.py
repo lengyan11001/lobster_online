@@ -432,11 +432,27 @@ def _run_client_update_status_check() -> dict[str, Any]:
     return fallback
 
 
+_CLIENT_UPDATE_STATUS_TTL_SECONDS = 30.0
+_client_update_status_cache: tuple[float, dict[str, Any]] | None = None
+
+
 async def _client_update_status() -> dict[str, Any]:
-    # This endpoint drives the update badge. Do not cache the result: after an
-    # OTA is applied, the next poll must reflect the newly installed marker.
+    # This endpoint drives the update badge. The check spawns a helper process and
+    # fetches the remote manifest, so collapse duplicate UI polls into one run per
+    # TTL; a fresh OTA is still picked up within the same TTL window.
+    global _client_update_status_cache
+    now = time.monotonic()
+    cached = _client_update_status_cache
+    if cached is not None and (now - cached[0]) < _CLIENT_UPDATE_STATUS_TTL_SECONDS:
+        return dict(cached[1])
     async with _client_update_status_lock:
-        return await asyncio.to_thread(_run_client_update_status_check)
+        cached = _client_update_status_cache
+        now = time.monotonic()
+        if cached is not None and (now - cached[0]) < _CLIENT_UPDATE_STATUS_TTL_SECONDS:
+            return dict(cached[1])
+        result = await asyncio.to_thread(_run_client_update_status_check)
+        _client_update_status_cache = (time.monotonic(), dict(result))
+        return result
 
 
 @router.get("/api/edition", summary="在线版（固定 edition=online）")

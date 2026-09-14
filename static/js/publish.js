@@ -1832,7 +1832,7 @@ function loadCreatorScheduleTasks() {
       _stopSchTasksPoll();
       var mask = document.getElementById('creatorScheduleTasksModal');
       if (mask && mask.style.display === 'flex' && anyRunning) {
-        _schTasksPollTimer = setInterval(loadCreatorScheduleTasks, 4000);
+    _schTasksPollTimer = setInterval(loadCreatorScheduleTasks, 15000);
       }
     })
     .catch(function() {

@@ -220,7 +220,8 @@
       state.timer = null;
       if (!state.authenticated || !hasAuthToken()) return;
       await refresh();
-      schedulePoll(state.rows.some(active) ? 8000 : 30000);
+      // Task badge polling: keep it cheap for the fleet, the badge is advisory.
+      schedulePoll(state.rows.some(active) ? 20000 : 60000);
     }, Math.max(0, Number(delay) || 0));
   }
 

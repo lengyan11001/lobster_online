@@ -11939,11 +11939,15 @@ async def h5_chat_poll_loop() -> None:
 
     # These queues are idle most of the time and every Online installation runs
     # this loop. Keep pickup responsive without multiplying fleet-wide traffic.
-    h5_poll_interval = _channel_interval("LOBSTER_H5_CHAT_POLL_INTERVAL_SEC", 10.0, 5.0)
-    task_poll_interval = _channel_interval("LOBSTER_SCHEDULED_TASK_POLL_INTERVAL_SEC", 45.0, 15.0)
-    publish_poll_interval = _channel_interval("LOBSTER_SCHEDULED_PUBLISH_POLL_INTERVAL_SEC", 45.0, 15.0)
-    heartbeat_interval = _channel_interval("LOBSTER_H5_CHAT_HEARTBEAT_INTERVAL_SEC", 30.0, 30.0)
-    dashboard_report_interval = _channel_interval("LOBSTER_DOUYIN_DASHBOARD_REPORT_INTERVAL_SEC", 120.0, 60.0)
+    # Fleet-wide traffic control. The cloud box serves hundreds of Online
+    # installations; every poll here is one request there, so keep the idle case
+    # cheap and only poll fast while a queue actually has work.
+    h5_poll_interval = _channel_interval("LOBSTER_H5_CHAT_POLL_INTERVAL_SEC", 15.0, 5.0)
+    h5_idle_poll_interval = _channel_interval("LOBSTER_H5_CHAT_IDLE_POLL_INTERVAL_SEC", 45.0, h5_poll_interval)
+    task_poll_interval = _channel_interval("LOBSTER_SCHEDULED_TASK_POLL_INTERVAL_SEC", 90.0, 15.0)
+    publish_poll_interval = _channel_interval("LOBSTER_SCHEDULED_PUBLISH_POLL_INTERVAL_SEC", 90.0, 15.0)
+    heartbeat_interval = _channel_interval("LOBSTER_H5_CHAT_HEARTBEAT_INTERVAL_SEC", 60.0, 30.0)
+    dashboard_report_interval = _channel_interval("LOBSTER_DOUYIN_DASHBOARD_REPORT_INTERVAL_SEC", 300.0, 60.0)
     sleep_missing_auth = 10.0
     logged_missing = False
     last_heartbeat_at = 0.0
@@ -11961,9 +11965,15 @@ async def h5_chat_poll_loop() -> None:
     active_task_runs: set[asyncio.Task] = set()
     active_publish_runs: set[asyncio.Task] = set()
     poll_error_streak = 0
+    # An idle H5 queue backs off to the idle interval (and snaps back to the
+    # responsive interval as soon as a message shows up) so a quiet fleet does
+    # not keep hammering the cloud every 10-15 seconds.
+    h5_idle_streak = 0
+    h5_active_interval = h5_poll_interval
     logger.info(
-        "[H5-CHAT] poll intervals h5=%ss scheduled=%ss publish=%ss heartbeat=%ss",
+        "[H5-CHAT] poll intervals h5=%ss idle=%ss scheduled=%ss publish=%ss heartbeat=%ss",
         h5_poll_interval,
+        h5_idle_poll_interval,
         task_poll_interval,
         publish_poll_interval,
         heartbeat_interval,
@@ -12029,7 +12039,7 @@ async def h5_chat_poll_loop() -> None:
                             logger.debug("[DOUYIN-DASHBOARD] report failed: %s", exc)
                 items: list[Dict[str, Any]] = []
                 h5_slots = max(0, max_h5_concurrency - len(active_items))
-                if h5_slots > 0 and now_loop - last_h5_poll_at >= h5_poll_interval:
+                if h5_slots > 0 and now_loop - last_h5_poll_at >= h5_active_interval:
                     last_h5_poll_at = now_loop
                     resp = await client.get(f"{base}/api/h5-chat/pending", params={"limit": h5_slots}, headers=headers)
                     if resp.status_code == 401:
@@ -12113,9 +12123,19 @@ async def h5_chat_poll_loop() -> None:
                 # empty response.  Do not carry an earlier transient-error
                 # backoff into a healthy polling cycle.
                 poll_error_streak = 0
+                if items:
+                    h5_idle_streak = 0
+                    h5_active_interval = h5_poll_interval
+                else:
+                    h5_idle_streak += 1
+                    if h5_idle_streak >= 3:
+                        h5_active_interval = min(
+                            h5_idle_poll_interval,
+                            max(h5_poll_interval, h5_active_interval * 1.5),
+                        )
                 if not items and not task_items and not publish_items:
                     next_due = min(
-                        last_h5_poll_at + h5_poll_interval if h5_slots > 0 else now_loop + h5_poll_interval,
+                        last_h5_poll_at + h5_active_interval if h5_slots > 0 else now_loop + h5_active_interval,
                         last_task_poll_at + task_poll_interval if task_slots > 0 else now_loop + task_poll_interval,
                         last_publish_poll_at + publish_poll_interval if publish_slots > 0 else now_loop + publish_poll_interval,
                         last_heartbeat_at + heartbeat_interval,

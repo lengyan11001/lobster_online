@@ -280,8 +280,10 @@ var USE_INDEPENDENT_AUTH = true;
   if (window.__LOBSTER_CLIENT_UPDATE_REMINDER__) return;
   window.__LOBSTER_CLIENT_UPDATE_REMINDER__ = true;
 
-  // The result must follow the installed marker promptly after an OTA.
-  var CHECK_INTERVAL_MS = 60 * 1000;
+  // The result must follow the installed marker promptly after an OTA, but the
+  // check spawns a helper process and refetches the remote manifest, so poll it
+  // hourly instead of every minute.
+  var CHECK_INTERVAL_MS = 60 * 60 * 1000;
   var RETRY_INTERVAL_MS = 5 * 60 * 1000;
   var timer = null;
   var checking = false;
@@ -1577,7 +1579,7 @@ var LOBSTER_FEATURE_RAW = {};
 var LOBSTER_FEATURE_STRICT = false;
 var _lobsterFeatureRefreshInFlight = null;
 var _lobsterFeatureLastRefreshAt = 0;
-var LOBSTER_FEATURE_REFRESH_INTERVAL_MS = 15000;
+  var LOBSTER_FEATURE_REFRESH_INTERVAL_MS = 60000;
 var LOBSTER_FEATURE_STRICT_MARKER = '__homepage_feature_gates_v1';
 var LOBSTER_LEGACY_DENY_MISSING_FEATURES = {
   douyin_platform_information_desk_access: true,
