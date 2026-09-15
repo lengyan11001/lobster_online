@@ -1,7 +1,7 @@
 {
-  "version": "2.0.53",
-  "build": 332,
-  "applied_at": "2026-09-15T13:01:33+08:00",
-  "note": "fix: login inputs no longer remembered/kept after logout; llm chain wall-clock + chain budget (digital-human script step)",
-  "bundle_sha256": "bb49638c04f63d77d889cc22daed9402c32e2a1b9b67d673580bc5ca7d827c2d"
+  "version": "2.0.54",
+  "build": 333,
+  "applied_at": "2026-09-15T13:05:43+08:00",
+  "note": "merge upstream creative preview/asset-save + Wan3 durations; login autofill/logout clear; llm chain wall-clock and chain budget",
+  "bundle_sha256": "25121f8efb271a3bfbe05014c45c8d59a65cd34ea3d5c447f2646a72ebf20f9c"
 }
