@@ -1,7 +1,7 @@
 {
-  "version": "2.0.52",
-  "build": 331,
-  "applied_at": "2026-09-14T18:04:07+08:00",
-  "note": "feat(creative): delete buttons on every generation record (seedance/image/batch/viral/ecommerce/cutcli); fix(ip-content): record rows no longer repeat 类型+条数",
-  "bundle_sha256": "34f593ee2092fe2b961d75c679d5a77fcb7fb6bbd24d400ecbafad74469241c0"
+  "version": "2.0.53",
+  "build": 332,
+  "applied_at": "2026-09-15T13:01:33+08:00",
+  "note": "fix: login inputs no longer remembered/kept after logout; llm chain wall-clock + chain budget (digital-human script step)",
+  "bundle_sha256": "bb49638c04f63d77d889cc22daed9402c32e2a1b9b67d673580bc5ca7d827c2d"
 }
