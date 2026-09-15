@@ -1,7 +1,7 @@
 {
-  "version": "2.0.54",
-  "build": 333,
-  "applied_at": "2026-09-15T13:05:43+08:00",
-  "note": "merge upstream creative preview/asset-save + Wan3 durations; login autofill/logout clear; llm chain wall-clock and chain budget",
-  "bundle_sha256": "25121f8efb271a3bfbe05014c45c8d59a65cd34ea3d5c447f2646a72ebf20f9c"
+  "version": "2.0.55",
+  "build": 334,
+  "applied_at": "2026-09-15T17:21:21+08:00",
+  "note": "online workflow node demo uses the same server-side assembly as workflow start (demo == enabled); h5 workflow demo-plan endpoint + regression tests",
+  "bundle_sha256": "39e61671ec4afd7e26b7ed063295fdacb4263be44381aafdea76103467fd418c"
 }
