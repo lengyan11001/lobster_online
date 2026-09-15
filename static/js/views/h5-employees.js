@@ -969,21 +969,46 @@
   function demoNode(index) {
     var iid=selectedDeviceId();
     if (!iid) throw new Error('请先选择 Online 设备');
-    var plan=workflowDemoPlan(state.nodes[Number(index)]);
+    var node=state.nodes[Number(index)];
+    if (!node) throw new Error('未找到要演示的节点');
+    // 演示必须和"启动工作流"用同一段组装逻辑：节点里残留的 plan.payload 可能是旧版
+    // （例如数字人节点还留着 1.0 的 hifly.video.create_by_tts + 空参数，演示必然秒失败
+    // "请选择数字人"）。所以先让服务端按当前节点配置算一遍 plan，再下发一次性任务。
+    if (node.comingSoon || node.workflow_placeholder || node.plan && node.plan.payload && node.plan.payload.skip_execution) throw new Error('敬请期待');
+    var templateName=((el('oeTemplateName') && el('oeTemplateName').value) || '').trim() || String(state.selectedTemplate && state.selectedTemplate.name || '');
+    var templateMeta=Object.assign({}, state.editingMeta || (state.selectedTemplate && state.selectedTemplate.meta) || {});
+    var templateId=Number(state.editingId || state.selectedTemplate && state.selectedTemplate.id || 0);
+    if (!isFinite(templateId)) templateId=0;
     return runSubmission('demo',function(){
       return waitForOnlineDevice(iid).then(function(){
-        return api('/api/scheduled-tasks/tasks',{method:'POST',headers:{'X-Installation-Id':iid},json:{
-          title:plan.title,
-          task_kind:plan.task_kind,
-          content:plan.content,
-          payload:plan.payload,
-          schedule_type:'once',
-          interval_seconds:60,
-          start_at:'',
-          daily_times:[],
-          timezone_offset_minutes:-new Date().getTimezoneOffset(),
-          installation_ids:[iid]
-        }});
+        return api('/api/h5-workflows/demo-plan',{method:'POST',headers:{'X-Installation-Id':iid},json:{
+          name:templateName,
+          nodes:[clone(node)],
+          meta:templateMeta,
+          installation_id:iid,
+          template_id:templateId
+        }}).then(function(data){
+          if (data && data.plans && data.plans.length) return data.plans;
+          return [workflowDemoPlan(node)];
+        }).then(function(plans){
+          return plans.reduce(function(chain,plan){
+            return chain.then(function(){
+              var title=String(plan.title || node.ability_label || '员工节点');
+              return api('/api/scheduled-tasks/tasks',{method:'POST',headers:{'X-Installation-Id':iid},json:{
+                title:title.indexOf('演示-') === 0 ? title : '演示-' + title,
+                task_kind:plan.task_kind || 'client_workflow',
+                content:plan.content || ('Online 员工节点演示：' + (node.ability_label || '任务节点')),
+                payload:plan.payload || {},
+                schedule_type:'once',
+                interval_seconds:60,
+                start_at:'',
+                daily_times:[],
+                timezone_offset_minutes:-new Date().getTimezoneOffset(),
+                installation_ids:plan.server_side ? [] : [iid]
+              }});
+            });
+          },Promise.resolve());
+        });
       }).then(function(){if(typeof toast === 'function') toast('演示任务已下发，可在工作历史查看结果');});
     });
   }
