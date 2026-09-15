@@ -9480,6 +9480,58 @@ async def _workflow_event(
     await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": text})
 
 
+# 数字人节点前置"口播文案"的等待上限。服务端那条链（ip_content → sutui 代理）
+# 现在有 1500s 的总预算，这里给 1800s，保证"服务端还在跑"时客户端不会先放弃
+# ——之前的 600s 会让服务端白跑 20 分钟、文案生成出来也没人要。
+_SHANJIAN_SCRIPT_TIMEOUT_SECONDS = 1800.0
+_SHANJIAN_SCRIPT_PROGRESS_INTERVAL_SECONDS = 60.0
+
+
+async def _await_cloud_json_with_progress(
+    call,
+    *,
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    run_id: str,
+    label: str,
+    timeout_seconds: float = _SHANJIAN_SCRIPT_TIMEOUT_SECONDS,
+    interval_seconds: float = _SHANJIAN_SCRIPT_PROGRESS_INTERVAL_SECONDS,
+):
+    """等一个可能很慢的云端调用，期间定期汇报进度。
+
+    上游模型排队时文案生成可能要十几分钟；期间必须让用户看到"还在跑"，
+    而不是界面静止，最后只收到一句 client workflow failed。
+    """
+    task = asyncio.ensure_future(call())
+    waited = 0.0
+    try:
+        while True:
+            done, _pending = await asyncio.wait({task}, timeout=interval_seconds)
+            if done:
+                return task.result()
+            waited += interval_seconds
+            if waited + interval_seconds > max(interval_seconds, timeout_seconds):
+                break
+            try:
+                await _workflow_event(
+                    cloud,
+                    base,
+                    headers,
+                    run_id,
+                    f"{label}生成中：上游模型排队，已等待 {int(waited // 60)} 分钟…",
+                )
+            except Exception:
+                pass
+        raise RuntimeError(
+            f"{label}等待超时（已等 {int(timeout_seconds // 60)} 分钟，上游模型排队中）"
+            "。本次节点先结束，稍后重试即可。"
+        )
+    finally:
+        if not task.done():
+            task.cancel()
+
+
 async def _generate_shanjian_workflow_script(
     *,
     source: Dict[str, Any],
@@ -9526,22 +9578,32 @@ async def _generate_shanjian_workflow_script(
         ]
     )[:4000]
     await _workflow_event(cloud, base, headers, run_id, "正在调用 IP 日更生成行业热门口播文案")
-    generated = await _post_cloud_api_json(
-        "/api/ip-content/generate/industry-hot-oral",
-        {
-            "keyword_ids": keyword_ids,
-            "keyword_texts": keywords,
-            "memory_docs": memory_docs,
-            "extra_requirements": extra_requirements,
-            "count": 1,
-            "sync_before": bool(source.get("industry_oral_sync_before", False)),
-            "group_id": run_id,
-        },
-        cloud=cloud,
-        base=base,
-        headers=headers,
-        timeout_seconds=600.0,
-    )
+    try:
+        generated = await _await_cloud_json_with_progress(
+            lambda: _post_cloud_api_json(
+                "/api/ip-content/generate/industry-hot-oral",
+                {
+                    "keyword_ids": keyword_ids,
+                    "keyword_texts": keywords,
+                    "memory_docs": memory_docs,
+                    "extra_requirements": extra_requirements,
+                    "count": 1,
+                    "sync_before": bool(source.get("industry_oral_sync_before", False)),
+                    "group_id": run_id,
+                },
+                cloud=cloud,
+                base=base,
+                headers=headers,
+                timeout_seconds=_SHANJIAN_SCRIPT_TIMEOUT_SECONDS,
+            ),
+            cloud=cloud,
+            base=base,
+            headers=headers,
+            run_id=run_id,
+            label="数字人口播文案",
+        )
+    except Exception as exc:
+        raise RuntimeError(f"数字人口播文案生成失败：{exc}") from exc
     records = generated.get("records") if isinstance(generated.get("records"), list) else []
     drafts = generated.get("drafts") if isinstance(generated.get("drafts"), list) else []
     selected: Dict[str, Any] = {}
