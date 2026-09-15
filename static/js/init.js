@@ -1910,10 +1910,24 @@ function scheduleDashboardRecovery() {
   }, delay);
 }
 
+function clearLoginInputsForLogout() {
+  // 退出登录后不要再留着上次输入的账号/密码/手机号验证码，既避免被人看到，
+  // 也避免浏览器把残留值当成"保存的信息"继续提示。
+  ['loginAccount', 'loginPassword', 'registerPhone', 'registerSmsCode', 'registerCaptchaAnswer', 'ownWechatTokenInput'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  ['loginMsg', 'registerMsg', 'ownWechatPasteMsg'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) { el.textContent = ''; el.style.display = 'none'; }
+  });
+}
+
 function loadDashboard() {
   if (!token) {
     applyLobsterFeatureGates({});
     if (typeof window.resetChatSessionsForLogout === 'function') window.resetChatSessionsForLogout();
+    clearLoginInputsForLogout();
     document.getElementById('authPanel').style.display = 'block';
     document.getElementById('dashboard').classList.remove('visible');
     setAuthenticatedChrome(false);
