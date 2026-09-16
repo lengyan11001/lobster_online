@@ -1,7 +1,7 @@
 {
-  "version": "2.0.55",
-  "build": 334,
-  "applied_at": "2026-09-15T17:21:21+08:00",
-  "note": "online workflow node demo uses the same server-side assembly as workflow start (demo == enabled); h5 workflow demo-plan endpoint + regression tests",
-  "bundle_sha256": "39e61671ec4afd7e26b7ed063295fdacb4263be44381aafdea76103467fd418c"
+  "version": "2.0.57",
+  "build": 336,
+  "applied_at": "2026-09-16T21:27:57+08:00",
+  "note": "publish metrics: client collects Douyin/WeChat-Channels play counts daily (02:00-06:00 staggered window per installation) and reports to the cloud; manage.bhzn.top dashboard; 16 regression tests",
+  "bundle_sha256": "2b5cb6f7a8f0dfa201874f79e1ab4d7e7716662a08a60360f862051b32cff206"
 }
