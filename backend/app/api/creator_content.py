@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -20,19 +20,26 @@ from .publish import (
 from ..core.config import settings
 from ..db import get_db
 from ..datetime_iso import isoformat_utc
-from ..models import CreatorContentSnapshot, PublishAccount
+from ..models import CreatorContentSnapshot, CreatorMetricSample, PublishAccount
+from ..services.creator_metrics_collect import (
+    METRIC_PLATFORMS,
+    PLATFORM_LABEL as METRIC_PLATFORM_LABEL,
+)
 from ..services.creator_content_sync import sync_account_creator_content
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-SYNC_PLATFORMS = frozenset({"douyin", "xiaohongshu", "toutiao"})
+SYNC_PLATFORMS = frozenset({"douyin", "xiaohongshu", "toutiao", "wechat_channels"})
+
+_SYNCABLE_LABEL = "抖音/小红书/今日头条/视频号"
 
 _PLATFORM_LABEL = {
     "douyin": "抖音",
     "xiaohongshu": "小红书",
     "toutiao": "今日头条（头条号）",
+    "wechat_channels": "视频号",
 }
 
 _PUBLISH_DATA_MAX_ITEMS_PER_ACCOUNT = 40
@@ -189,7 +196,7 @@ def build_creator_publish_data_payload(
     if sc == "account" and not accounts:
         raise HTTPException(
             status_code=404,
-            detail="账号不存在或不是抖音/小红书/今日头条（无作品同步）",
+            detail=f"账号不存在或不是{_SYNCABLE_LABEL}（无作品同步）",
         )
     out_accounts: List[Dict[str, Any]] = []
     for acct in accounts:
@@ -227,7 +234,7 @@ async def perform_sync_creator_publish_accounts(
         syncable = [a for a in raw if a.platform in SYNC_PLATFORMS]
         if len(syncable) != len(raw):
             bad = [a.id for a in raw if a.platform not in SYNC_PLATFORMS]
-            raise ValueError(f"以下账号不是抖音/小红书/今日头条，无法同步作品数据: {bad}")
+            raise ValueError(f"以下账号不是{_SYNCABLE_LABEL}，无法同步作品数据: {bad}")
         accounts = syncable
     else:
         accounts = [a for a in raw if a.platform in SYNC_PLATFORMS]
@@ -237,7 +244,7 @@ async def perform_sync_creator_publish_accounts(
             raise ValueError(f"platform 须为 {', '.join(sorted(SYNC_PLATFORMS))}")
         accounts = [a for a in accounts if a.platform == p]
     if not accounts:
-        raise ValueError("没有可同步的抖音/小红书/今日头条账号")
+        raise ValueError(f"没有可同步的{_SYNCABLE_LABEL}账号")
     results: List[Dict[str, Any]] = []
     for acct in accounts:
         try:
@@ -356,12 +363,23 @@ async def perform_creator_content_sync(
 
     profile, bopts = _profile_and_options(acct)
     hl = settings.creator_sync_headless if headless is None else bool(headless)
-    result: Dict[str, Any] = await sync_account_creator_content(
-        profile,
-        acct.platform,
-        new_context_headless=hl,
-        browser_options=bopts,
-    )
+    if acct.platform == "wechat_channels":
+        from ..services.wechat_channels_creator_sync import (
+            sync_wechat_channels_creator_content,
+        )
+
+        result: Dict[str, Any] = await sync_wechat_channels_creator_content(
+            profile,
+            new_context_headless=hl,
+            browser_options=bopts,
+        )
+    else:
+        result = await sync_account_creator_content(
+            profile,
+            acct.platform,
+            new_context_headless=hl,
+            browser_options=bopts,
+        )
     items: List[Any] = result.get("items") or []
     meta: Dict[str, Any] = dict(result.get("meta") or {})
     meta["ok"] = bool(result.get("ok"))
@@ -505,3 +523,199 @@ async def sync_all_creator_content(
         )
     except ValueError as e:
         raise HTTPException(400, detail=str(e)) from e
+
+
+# ── 发布数据（播放量）：每日 02:00 采集抖音/视频号并上报云端 ──────────────────────
+
+
+def _metric_item_payload(row: CreatorMetricSample) -> Dict[str, Any]:
+    return {
+        "platform": row.platform,
+        "platform_label": METRIC_PLATFORM_LABEL.get(row.platform, row.platform),
+        "account_id": row.account_id,
+        "account_nickname": row.account_nickname,
+        "item_id": row.item_id,
+        "item_url": row.item_url,
+        "title": row.title,
+        "views": int(row.views or 0),
+        "likes": int(row.likes or 0),
+        "comments": int(row.comments or 0),
+        "shares": int(row.shares or 0),
+        "favorites": int(row.favorites or 0),
+        "impressions": int(row.impressions or 0),
+        "sampled_day": row.sampled_day,
+        "sampled_at": isoformat_utc(row.sampled_at),
+        "uploaded": bool(row.uploaded_at),
+        "upload_attempts": int(row.upload_attempts or 0),
+        "last_upload_error": row.last_upload_error,
+    }
+
+
+def build_publish_metrics_payload(
+    db: Session,
+    user_id: int,
+    *,
+    platform: Optional[str] = None,
+    account_id: Optional[int] = None,
+    days: int = 30,
+    limit: int = 200,
+) -> Dict[str, Any]:
+    """本地发布数据采样：每个作品取窗口内最近一天的值做汇总与明细。"""
+    from ..services.creator_metrics_daily_runner import (
+        count_pending_metric_samples,
+        daily_slot_seed,
+        daily_window,
+        next_daily_run_at,
+        read_login_context,
+        stable_slot_minute,
+    )
+
+    wanted = [platform] if platform else list(METRIC_PLATFORMS)
+    if platform and platform not in METRIC_PLATFORMS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"platform 须为 {' 或 '.join(METRIC_PLATFORMS)}",
+        )
+    since_utc = datetime.utcnow() - timedelta(days=max(1, int(days)))
+    query = db.query(CreatorMetricSample).filter(
+        CreatorMetricSample.user_id == user_id,
+        CreatorMetricSample.platform.in_(wanted),
+        CreatorMetricSample.sampled_at >= since_utc,
+    )
+    if account_id is not None:
+        query = query.filter(CreatorMetricSample.account_id == int(account_id))
+    rows = query.order_by(CreatorMetricSample.sampled_at.desc(), CreatorMetricSample.id.desc()).all()
+
+    latest: Dict[Any, CreatorMetricSample] = {}
+    for row in rows:
+        key = (row.platform, row.item_id)
+        current = latest.get(key)
+        if current is None or (row.sampled_day, row.id) > (current.sampled_day, current.id):
+            latest[key] = row
+
+    grouped: Dict[str, List[CreatorMetricSample]] = {p: [] for p in wanted}
+    for row in latest.values():
+        grouped.setdefault(row.platform, []).append(row)
+
+    platforms_out: List[Dict[str, Any]] = []
+    for plat in wanted:
+        items = sorted(grouped.get(plat, []), key=lambda r: (-int(r.views or 0), r.item_id))
+        # 每个账号各自的汇总，方便「个人发布中心」按账号看
+        per_account: Dict[Any, Dict[str, Any]] = {}
+        for row in items:
+            bucket = per_account.setdefault(
+                row.account_id,
+                {
+                    "account_id": row.account_id,
+                    "nickname": row.account_nickname,
+                    "item_count": 0,
+                    "views": 0,
+                    "likes": 0,
+                    "comments": 0,
+                    "shares": 0,
+                    "favorites": 0,
+                },
+            )
+            bucket["item_count"] += 1
+            bucket["views"] += int(row.views or 0)
+            bucket["likes"] += int(row.likes or 0)
+            bucket["comments"] += int(row.comments or 0)
+            bucket["shares"] += int(row.shares or 0)
+            bucket["favorites"] += int(row.favorites or 0)
+        platforms_out.append(
+            {
+                "platform": plat,
+                "platform_label": METRIC_PLATFORM_LABEL.get(plat, plat),
+                "item_count": len(items),
+                "views": sum(int(r.views or 0) for r in items),
+                "likes": sum(int(r.likes or 0) for r in items),
+                "comments": sum(int(r.comments or 0) for r in items),
+                "shares": sum(int(r.shares or 0) for r in items),
+                "favorites": sum(int(r.favorites or 0) for r in items),
+                "accounts": sorted(
+                    per_account.values(),
+                    key=lambda a: (-int(a["views"]), str(a.get("nickname") or "")),
+                ),
+                "items": [_metric_item_payload(r) for r in items[: max(1, int(limit))]],
+            }
+        )
+
+    jwt_token, installation_id = read_login_context()
+    window_start, window_end = daily_window()
+    slot = stable_slot_minute(daily_slot_seed(), window=(window_start, window_end))
+    next_run = next_daily_run_at(seed=daily_slot_seed(), window=(window_start, window_end))
+    return {
+        "ok": True,
+        "platforms": platforms_out,
+        "window_days": int(days),
+        "detail_limit": int(limit),
+        "schedule": {
+            "window": f"{window_start // 60:02d}:{window_start % 60:02d}-{window_end // 60:02d}:{window_end % 60:02d}",
+            "window_minutes": [window_start, window_end],
+            "slot_minute": slot,
+            "slot_at": f"{slot // 60:02d}:{slot % 60:02d}",
+            "slot_hint": (
+                "本机按 installation_id 固定落在窗口内某一分钟（每天再加 0~5 分钟微抖）"
+                "，所有客户端不会挤在同一时刻上报"
+            ),
+            "timezone": "Asia/Shanghai",
+            "next_run_at": next_run.isoformat(),
+            "platforms": list(METRIC_PLATFORMS),
+            "skipped_platforms": ["moments"],
+        },
+        "upload_queue": {
+            "pending": count_pending_metric_samples(db),
+            "logged_in": bool(jwt_token),
+            "installation_id": installation_id or "",
+        },
+        "note": (
+            "仅抖音与视频号（朋友圈/朋友圈视频暂不采集）。每天凌晨 02:00-06:00（北京时间）错峰采集一次并上报云端；"
+            "明细里 uploaded=false 表示尚未成功上报，会自动重试并保留在本地。"
+        ),
+    }
+
+
+class PublishMetricsSyncBody(BaseModel):
+    """手动触发发布数据采集（不传参数即抖音+视频号全量）。"""
+
+    source: str = Field(default="manual", description="标记本次采集来源，默认 manual")
+
+
+@router.post(
+    "/api/creator-content/metrics-sync",
+    summary="立即采集发布数据（播放量）并上报（抖音/视频号）",
+)
+async def sync_publish_metrics_now(
+    body: PublishMetricsSyncBody = PublishMetricsSyncBody(),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    from ..services.creator_metrics_daily_runner import run_daily_metrics_cycle
+
+    return await run_daily_metrics_cycle(
+        db=db,
+        user_id=current_user.id,
+        source=(body.source or "manual")[:32],
+    )
+
+
+@router.get(
+    "/api/creator-content/metrics",
+    summary="本地发布数据（播放量）汇总与明细：抖音/视频号",
+)
+def get_publish_metrics(
+    platform: Optional[str] = Query(None, description="douyin 或 wechat_channels；省略表示两者都要"),
+    account_id: Optional[int] = Query(None, description="只看某个发布账号"),
+    days: int = Query(30, ge=1, le=180, description="统计窗口（天）"),
+    limit: int = Query(200, ge=1, le=1000, description="每个平台返回的作品明细上限"),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    return build_publish_metrics_payload(
+        db,
+        current_user.id,
+        platform=platform,
+        account_id=account_id,
+        days=days,
+        limit=limit,
+    )

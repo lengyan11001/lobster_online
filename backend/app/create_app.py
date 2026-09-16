@@ -960,6 +960,13 @@ async def _lifespan(app: FastAPI):
         logger.info("[启动] YouTube 定时上传已启动（按间隔分钟 + 素材队列）")
     except Exception as e:
         logger.warning("[启动] YouTube 定时上传未启动: %s", e)
+    try:
+        from .services.creator_metrics_daily_runner import creator_metrics_daily_background_loop
+
+        asyncio.create_task(creator_metrics_daily_background_loop())
+        logger.info("[启动] 发布数据（播放量）每日同步已启动（每天 02:00 北京时间；抖音+视频号）")
+    except Exception as e:
+        logger.warning("[启动] 发布数据每日同步未启动: %s", e)
     if wecom_router is not None:
         try:
             from .api.wecom import _execute_scheduled_messages

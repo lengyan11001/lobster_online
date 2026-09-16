@@ -663,6 +663,46 @@ class CreatorContentSnapshot(Base):
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class CreatorMetricSample(Base):
+    """发布数据（播放量）采样：抖音/视频号作品按「北京自然日」每天一行，供上报云端。
+
+    sample_key = sha256(installation_id|platform|item_id|北京日期)，唯一约束保证：
+    - 同一天重复采集只更新数值（不产生重复行）；
+    - 上报幂等（云端按同一 sample_key UPSERT）。
+    uploaded_at 为空表示仍待上报；失败原因写入 last_upload_error 供界面/日志排查。
+    朋友圈（微信朋友圈视频）本轮不采集。
+    """
+
+    __tablename__ = "creator_metric_samples"
+    __table_args__ = (
+        UniqueConstraint("sample_key", name="uq_creator_metric_sample_key"),
+        Index("ix_creator_metric_samples_uploaded", "uploaded_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    account_nickname: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    platform: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    item_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    item_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    title: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    published_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    views: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    likes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    comments: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    shares: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    favorites: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    impressions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sampled_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    sampled_day: Mapped[str] = mapped_column(String(10), nullable=False, index=True)
+    sample_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(32), default="daily_0200", nullable=False)
+    uploaded_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    upload_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_upload_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
 # ── 独立计费：算力账号（耗算力时用哪个速推 Token）、充值订单 ────────────────────────
 
 class ConsumptionAccount(Base):
