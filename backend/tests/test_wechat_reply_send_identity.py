@@ -91,3 +91,28 @@ def test_verify_without_display_name_keeps_legacy_leniency_for_wxid_targets():
         strict_private=True,
     )
     assert result["chat_name"] == "九变"
+
+def test_anchor_reanchors_when_current_chat_title_unreadable():
+    """2026-09-17 福永十亩地小管家/小洛神那次：窗口标题读不出来时，
+    旧逻辑默认"就是目标"并复用窗口，结果把回复发给了别人。"""
+    anchor = engine._local_send_chat_anchor(_FakeWx(""), "福永十亩地小管家", use_current_chat=True)
+    assert anchor["anchored"] is False
+    assert anchor["reanchor"] is True
+    assert anchor["reason"] == "current_chat_unreadable"
+    assert anchor["expected_display_name"] == "福永十亩地小管家"
+
+
+def test_verify_blocks_when_private_chat_title_is_unreadable():
+    """收件人无法确认时宁可整条不发，也不能发错人。"""
+    with pytest.raises(RuntimeError, match="chat_identity_unreadable"):
+        engine._verify_local_send_chat(
+            _FakeWx("", "friend"),
+            "xkcmxu",
+            strict_private=True,
+            expected_display_name="福永十亩地小管家",
+        )
+
+
+def test_auto_reply_never_reuses_the_execute_stage_window():
+    """发送阶段固定按已校验的微信号重新打开会话，不再复用 execute 阶段留下的窗口。"""
+    assert engine._auto_reply_send_uses_current_chat() is False

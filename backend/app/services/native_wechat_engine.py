@@ -6484,12 +6484,11 @@ async def run_auto_reply_once(
                         "identity_mode": "nickname" if nickname_identity else "wechat_id",
                         "display_name": display_name,
                     },
-                    # The execute-stage sync has already searched the
-                    # immutable WeChat ID and verified the selected chat.
-                    # Reuse that verified current chat for the actual send so
-                    # the contact is not searched and profile-confirmed a
-                    # second time.
-                    use_current_chat=True,
+                    # 发送阶段不复用"当前已打开会话"：execute 阶段打开的会话在真正发送前
+                    # 可能已被别的会话占用（线上 2026-09-17：回给"福永十亩地小管家"的
+                    # 内容被发进了"小洛神"；2026-09-15：回给小亮的内容发进了涛哥）。
+                    # 这里一律按已校验的微信号重新搜索 + 核实后再发。
+                    use_current_chat=_auto_reply_send_uses_current_chat(),
                     diagnostic_context={
                         "run_id": run_id,
                         "work_id": work_id,
@@ -16660,7 +16659,17 @@ def _local_send_chat_anchor(
         }
     info = _current_local_chat_info(wx, fallback_name="")
     current = str(_session_display_name(str((info or {}).get("chat_name") or "").strip()) or "").strip()
-    if not expected or not current:
+    if expected and not current:
+        # 期望的是某个具体的人，但当前会话标题读不出来：不能默认"就是目标"，
+        # 否则窗口被别的会话占用时会直接发错人（线上 2026-09-17）。
+        return {
+            "anchored": False,
+            "reanchor": True,
+            "reason": "current_chat_unreadable",
+            "current_chat": current,
+            "expected_display_name": expected,
+        }
+    if not expected:
         return {
             "anchored": True,
             "reanchor": False,
@@ -16725,6 +16734,10 @@ def _verify_local_send_chat(
     if not name_target:
         candidate = _session_display_name(expected)
         name_target = "" if _looks_like_wechat_id(candidate) else candidate
+    if strict_private and name_target and not actual_peer:
+        raise RuntimeError(
+            "[chat_identity_unreadable] 当前微信会话标题读不出来，无法确认收件人，已阻止发送"
+        )
     if name_target and actual_peer:
         if _normalize_contact_lookup_key(name_target) == _normalize_contact_lookup_key(actual_peer):
             return {
@@ -17048,6 +17061,18 @@ def _send_text_local_slow(
         # restarts WeChat.
         retry_on_failure=True,
     )
+
+
+def _auto_reply_send_uses_current_chat() -> bool:
+    """Auto-reply sends must never reuse the window the execute stage left open.
+
+    The chat that was verified while reading the inbound message can be taken over
+    by another conversation before the reply is sent (online 2026-09-17: the reply
+    for "福永十亩地小管家" was typed into "小洛神"; 2026-09-15: 小亮's reply went to
+    涛哥).  Reopening by the verified WeChat ID immediately before sending is the
+    only way to guarantee the chosen recipient.
+    """
+    return False
 
 
 def _send_auto_reply_text_with_diagnostics(
