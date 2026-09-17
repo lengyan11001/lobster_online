@@ -4806,6 +4806,56 @@ def _scheduled_douyin_skip_payload(
     return payload
 
 
+def _douyin_collect_summary_text(result_payload: Dict[str, Any]) -> str:
+    """Describe what a collect run actually did.
+
+    "Selected" (approved by the video filter) is neither "started" nor
+    "collected": online 2026-09-15 (user 54, task 16467) the old wording said
+    "已采集 8 个视频的客户 823 人" while 6 of those 8 videos never rendered a
+    single comment.
+    """
+    payload = result_payload if isinstance(result_payload, dict) else {}
+    keyword_total = (
+        len(payload.get("keywords") or [])
+        or len(payload.get("keyword_summaries") or [])
+        or 1
+    )
+    search_total = _safe_int(payload.get("search_total"))
+    selected_total = max(
+        len(payload.get("selected_task_ids") or []),
+        _safe_int(payload.get("selected_videos_total")),
+    )
+    tasks: List[Dict[str, Any]] = []
+    final_state = payload.get("final_state")
+    if isinstance(final_state, dict) and isinstance(final_state.get("tasks"), list):
+        tasks = [row for row in final_state["tasks"] if isinstance(row, dict)]
+    started_total = _safe_int(payload.get("selected_count")) or len(tasks)
+    skipped_total = max(0, _safe_int(payload.get("skipped_completed")))
+    completed_total = sum(
+        1 for row in tasks if str(row.get("status") or "").strip().lower() == "completed"
+    )
+    failed_total = sum(
+        1 for row in tasks if str(row.get("status") or "").strip().lower() == "failed"
+    )
+    selected_video = payload.get("selected_video")
+    comments_collected = max(
+        _safe_int(payload.get("total_customers")),
+        _safe_int(selected_video.get("comments_collected")) if isinstance(selected_video, dict) else 0,
+    )
+    precise_total = max(
+        len(payload.get("precise_customers") or []),
+        _safe_int(payload.get("total_high_intent")),
+    )
+    text = f"搜索完成，共执行 {keyword_total} 个关键词，找到 {search_total} 个视频；"
+    text += f"选中 {selected_total} 个视频，实际启动 {started_total} 个"
+    if skipped_total:
+        text += f"（跳过已完成 {skipped_total} 个）"
+    if tasks:
+        text += f"，完成 {completed_total} 个、失败 {failed_total} 个"
+    text += f"，采集客户 {comments_collected} 人，精准客户 {precise_total} 人。"
+    return text
+
+
 def _scheduled_douyin_result_payload(
     action: str,
     result: Any,
@@ -5285,6 +5335,13 @@ async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str,
             "search_total": sum(_safe_int(row.get("search_total")) for row in successful_results),
             "selected_task_ids": selected_task_ids,
             "selected_videos_total": len(selected_task_ids),
+            # Each keyword starts its own batch: the combined payload must sum
+            # them instead of inheriting the first keyword's numbers (online
+            # 2026-09-15 reported 5 started while 8 tasks actually ran).
+            "selected_count": sum(_safe_int(row.get("selected_count")) for row in successful_results),
+            "skipped_completed": sum(
+                _safe_int(row.get("skipped_completed")) for row in successful_results
+            ),
             "selected_item_keys": selected_item_keys,
             "items": items[:100],
             "session_ids": session_ids,
@@ -6910,11 +6967,7 @@ async def _run_scheduled_douyin_leads(
                         "抖音采集子任务未全部进入 completed/failed 终态，"
                         f"拒绝结束父任务（state={final_status or 'unknown'}）。"
                     )
-                result_text = (
-                    f"搜索完成，共执行 {keyword_total} 个关键词，找到 {search_total} 个视频；"
-                    f"已采集 {selected_video_total} 个视频的客户 {comments_collected} 人，"
-                    f"精准客户 {precise_total} 人。"
-                )
+                result_text = _douyin_collect_summary_text(result_payload)
                 await _complete_task_run(
                     cloud,
                     base,
