@@ -462,7 +462,17 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
       if (!latest) return { valid: false, changed: latest !== previousToken, token: latest };
       if (latest !== previousToken) return { valid: true, changed: true, token: latest };
       return validateStoredToken(latest).then(function(state) {
-        if (state === 'invalid') return { valid: false, unavailable: false, changed: false, token: latest };
+        if (state === 'invalid') {
+          // token 真的失效了：先让本机后端用保存的 token 静默续签（30 天，服务端 /auth/refresh），
+          // 成功就把新 token 写回 localStorage —— 用户不会被打断去重新登录。
+          return renewStoredTokenSilently(latest).then(function(fresh) {
+            if (fresh) {
+              try { token = fresh; } catch (e) {}
+              return { valid: true, refreshed: true, changed: true, token: fresh };
+            }
+            return { valid: false, unavailable: false, changed: false, token: latest };
+          });
+        }
         return recoverBackend(url.origin, state === 'valid' ? 'auth' : 'auth_unavailable').then(function() {
           return { valid: true, unavailable: state === 'unavailable', changed: false, token: latest };
         });
@@ -471,6 +481,33 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
       authRecoveryPromise = null;
     });
     return authRecoveryPromise;
+  }
+
+  // 本机后端 /api/local/auth/renew：用保存在客户端的 token 静默换新（服务端 30 天 + /auth/refresh）。
+  // 只在本地回环上调用；拿不到就返回 ''，界面照旧提示重新登录。
+  function renewStoredTokenSilently(previousToken) {
+    var base = '';
+    try {
+      base = String(typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE ? LOCAL_API_BASE : '').replace(/\/$/, '');
+      if (!base) base = window.location.origin;
+    } catch (e) { return Promise.resolve(''); }
+    return nativeFetch(base + '/api/local/auth/renew', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}'
+    }).then(function(response) {
+      if (response.status !== 200) return '';
+      return response.json().then(function(data) {
+        var fresh = String((data && (data.token || data.access_token)) || '').trim();
+        if (!fresh || fresh === previousToken) return '';
+        try { setStoredAuthToken(fresh); } catch (e) {}
+        try {
+          if (typeof window.refreshLobsterCredits === 'function') window.refreshLobsterCredits();
+        } catch (e) {}
+        return fresh;
+      }).catch(function() { return ''; });
+    }).catch(function() { return ''; });
   }
 
   function requestViewRecovery(url, reason) {

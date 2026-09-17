@@ -967,6 +967,13 @@ async def _lifespan(app: FastAPI):
         logger.info("[启动] 发布数据（播放量）每日同步已启动（每天 02:00 北京时间；抖音+视频号）")
     except Exception as e:
         logger.warning("[启动] 发布数据每日同步未启动: %s", e)
+    try:
+        from .services.cloud_session_renew import cloud_token_renew_loop
+
+        asyncio.create_task(cloud_token_renew_loop())
+        logger.info("[启动] 云端登录态静默续签已启动（剩余不足 20 天时自动换新 token）")
+    except Exception as e:
+        logger.warning("[启动] 云端登录态静默续签未启动: %s", e)
     if wecom_router is not None:
         try:
             from .api.wecom import _execute_scheduled_messages
