@@ -141,7 +141,7 @@ def test_open_visible_session_does_not_scroll_down_when_target_is_missing(monkey
     monkeypatch.setattr(engine, "_local_wechat_hwnd", lambda account_id: 1001)
     monkeypatch.setattr(engine, "_uia_session_cells", lambda value: cells)
     monkeypatch.setattr(engine, "_find_uia_session_cell", lambda value, peer_id: None)
-    monkeypatch.setattr(engine, "_uia_click", lambda control: clicked.append(control))
+    monkeypatch.setattr(engine, "_uia_click", lambda control, **kwargs: clicked.append(control))
 
     try:
         engine._open_local_session_by_uia("local-pc", "不存在的会话")
@@ -170,7 +170,7 @@ def test_next_visible_session_uses_list_order_and_skips_processed_without_scroll
         "_session_from_uia_cell",
         lambda cell: {"peer_id": labels[cell], "display_name": labels[cell]},
     )
-    monkeypatch.setattr(engine, "_uia_click", lambda cell: clicked.append(cell))
+    monkeypatch.setattr(engine, "_uia_click", lambda cell, **kwargs: clicked.append(cell))
     monkeypatch.setattr(engine.time, "sleep", lambda seconds: None)
 
     first = engine._open_next_visible_session("local-pc", {"群聊"})
@@ -201,7 +201,7 @@ def test_next_visible_session_processes_duplicate_display_names_separately(monke
             "session_key": "row-a" if cell is cells[0] else "row-b",
         },
     )
-    monkeypatch.setattr(engine, "_uia_click", lambda cell: clicked.append(cell))
+    monkeypatch.setattr(engine, "_uia_click", lambda cell, **kwargs: clicked.append(cell))
     monkeypatch.setattr(engine.time, "sleep", lambda seconds: None)
 
     processed = set()
@@ -251,7 +251,7 @@ def test_next_visible_session_scrolls_one_page_after_current_page(monkeypatch):
         "_session_from_uia_cell",
         lambda cell: {"peer_id": labels[cell], "display_name": labels[cell]},
     )
-    monkeypatch.setattr(engine, "_uia_click", lambda cell: clicked.append(cell))
+    monkeypatch.setattr(engine, "_uia_click", lambda cell, **kwargs: clicked.append(cell))
     monkeypatch.setattr(engine.time, "sleep", lambda seconds: None)
 
     processed = set()
@@ -300,7 +300,7 @@ def test_next_visible_session_skips_processed_overlap_and_keeps_scrolling(monkey
         "_session_from_uia_cell",
         lambda cell: {"peer_id": labels[cell], "display_name": labels[cell]},
     )
-    monkeypatch.setattr(engine, "_uia_click", lambda cell: clicked.append(cell))
+    monkeypatch.setattr(engine, "_uia_click", lambda cell, **kwargs: clicked.append(cell))
     monkeypatch.setattr(engine.time, "sleep", lambda seconds: None)
 
     processed = {"客户A", "客户B"}
@@ -637,7 +637,7 @@ def test_send_button_waits_for_verified_uia_button(monkeypatch):
     monkeypatch.setattr(engine, "_uia_control_text", lambda node: "发送(S)")
     monkeypatch.setattr(engine, "_uia_control_class", lambda node: "mmui::XOutlineButton")
     monkeypatch.setattr(engine, "_uia_rect_tuple", lambda node: (100, 200, 180, 240))
-    monkeypatch.setattr(engine, "_uia_click", lambda node: clicked.append(node))
+    monkeypatch.setattr(engine, "_uia_click", lambda node, **kwargs: clicked.append(node))
     monkeypatch.setattr(engine.time, "sleep", lambda seconds: None)
 
     method = engine._click_local_wechat_send_button(1001)
@@ -980,6 +980,12 @@ def test_auto_reply_page_capture_accepts_normalized_session_snapshot(monkeypatch
         "_read_current_private_chat_wx_no",
         lambda *_args, **_kwargs: {"ok": True, "wx_no": "wxid_friend"},
     )
+    monkeypatch.setattr(engine, "_get_wxauto4_client", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        engine,
+        "_current_local_chat_info",
+        lambda *_args, **_kwargs: {"chat_name": "\u5f90", "chat_type": "friend"},
+    )
 
     captures = engine._capture_auto_reply_scan_page(
         "wechat-account",
@@ -1057,6 +1063,13 @@ def test_auto_reply_page_capture_keeps_known_private_chat_when_chat_info_type_is
         engine,
         "_read_current_private_chat_wx_no",
         lambda *_args, **_kwargs: {"ok": True, "wx_no": "Jasonchen369258147"},
+    )
+    # 当前窗口必须确定性：否则会去读开发者机器上真实的微信窗口。
+    monkeypatch.setattr(engine, "_get_wxauto4_client", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        engine,
+        "_current_local_chat_info",
+        lambda *_args, **_kwargs: {"chat_name": "Jason", "chat_type": "direct"},
     )
 
     captures = engine._capture_auto_reply_scan_page(

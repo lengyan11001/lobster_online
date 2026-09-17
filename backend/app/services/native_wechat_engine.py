@@ -8577,9 +8577,17 @@ def _resolve_scan_contact_wx_no(
             return ""
 
     for attempt in range(1, max(1, int(attempts)) + 1):
+        if not open_name:
+            # 调用方没带当前会话名：只读一次，不点行。
+            open_name = current_name()
+        if not open_name:
+            # 名字读不出来：重复点同一行不会有帮助（每次点击都会再切换一次会话，
+            # 线上就是这样把窗口反复抢走的）。本轮按昵称兜底，下一轮再看。
+            reason = "chat_name_unreadable"
+            break
         if not anchored(open_name):
-            # 当前打开的不是候选人：把这一行重新点一次（扫描本来就在点的行，
-            # 只改变选中项，不搜索、不改变列表顺序），然后轮询等它生效。
+            # 当前打开的是别人：把这一行重新点一次（只改变选中项，不搜索、
+            # 不改变列表顺序），然后轮询等它生效。
             if callable(select_row):
                 try:
                     select_row()
@@ -8815,6 +8823,12 @@ def _capture_auto_reply_scan_page(
             )
             # 读不到号的人不再丢：identity_mode=nickname 表示"按昵称搜着发"。
             nickname_identity = str(identity_reason or "").startswith("nickname_fallback")
+            if nickname_identity and _looks_like_wechat_id(target_wx_id):
+                # 会话行本身就带微信号（wxauto 行级字段）时优先用它：
+                # 昵称身份只在真的拿不到号时才用，避免把可用的行级身份丢掉。
+                wechat_id = target_wx_id
+                nickname_identity = False
+                identity_reason = "wxauto_session_id"
             _write_auto_reply_diagnostic(
                 "scan_session_identity_capture",
                 account_id=account_id,
@@ -8891,6 +8905,9 @@ def _sync_recent_sessions_from_wxauto4(
     stop_at_old_boundary = False
     previous_signature: tuple[str, ...] = ()
     auto_reply_captures: Dict[str, Dict[str, Any]] = {}
+    # 同一轮扫描里同一个人只点一次：抓取失败（取号/类型没确认）也算点过，
+    # 下一轮再重试，避免把窗口反复抢来抢去（线上 2026-09-17 错发的诱因之一）。
+    capture_attempted: set[str] = set()
     try:
         try:
             box.go_top()
@@ -9014,9 +9031,13 @@ def _sync_recent_sessions_from_wxauto4(
                     sess
                     for sess in page_capture_sessions
                     if str(_session_from_obj(sess).get("peer_id") or "").strip()
-                    not in auto_reply_captures
+                    not in capture_attempted
                 ]
                 if page_capture_sessions:
+                    capture_attempted.update(
+                        str(_session_from_obj(sess).get("peer_id") or "").strip()
+                        for sess in page_capture_sessions
+                    )
                     auto_reply_captures.update(
                         _capture_auto_reply_scan_page(
                             account_id,

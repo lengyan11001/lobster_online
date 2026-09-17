@@ -61,9 +61,21 @@ def test_scan_identity_reads_profile_once_and_links_renamed_contact(monkeypatch,
         return {"ok": True, "wx_no": "laoshi2020", "reason": "profile_popup"}
 
     monkeypatch.setattr(engine, "_read_current_private_chat_wx_no", fake_profile)
+    # 当前窗口要确定性：这个测试不该去读开发者机器上的真实微信窗口。
+    monkeypatch.setattr(engine, "_get_wxauto4_client", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        engine,
+        "_current_local_chat_info",
+        lambda *_args, **_kwargs: {"chat_name": "余老师工作号", "chat_type": "friend"},
+    )
 
-    # 用户在微信里把备注改成了"余老师工作号"：按新名字查不到，兜底读一次资料。
-    assert engine._resolve_scan_contact_wx_no(ACCOUNT, display_name="余老师工作号") == (
+    # 用户在微信里把备注改成了"余老师工作号"：按新名字查不到，当前打开的会话就是
+    # 这个人（扫描会带上当前行名字），此时兜底读一次资料。
+    assert engine._resolve_scan_contact_wx_no(
+        ACCOUNT,
+        display_name="余老师工作号",
+        current_chat_name="余老师工作号",
+    ) == (
         "laoshi2020",
         "profile_popup",
     )
