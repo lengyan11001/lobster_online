@@ -9520,10 +9520,18 @@ def _find_uia_session_cell(root: Any, peer_id: str) -> Optional[Any]:
     if not wanted:
         return None
     cells = _uia_session_cells(root)
+    matches: List[Any] = []
     for cell, item in zip(cells, _decorate_uia_session_items(cells)):
         if str(item.get("peer_id") or "").strip() == wanted:
+            matches.append(cell)
+    if not matches:
+        return None
+    # The virtualized list keeps scrolled-away rows in the tree with empty
+    # bounds; always prefer the copy that is really on screen.
+    for cell in matches:
+        if _uia_rect_tuple(cell) is not None:
             return cell
-    return None
+    return matches[0]
 
 
 def _open_next_visible_session(
@@ -9557,6 +9565,9 @@ def _open_next_visible_session(
 
     def click_next(items: List[Any]) -> Optional[Dict[str, Any]]:
         decorated = _decorate_uia_session_items(items)
+        # Some WeChat builds never expose row bounds; only trust empty bounds as
+        # "scrolled away" when the surrounding page does expose them.
+        bounds_available = any(_uia_rect_tuple(cell) is not None for cell in items)
         for cell, item in zip(items, decorated):
             peer_id = str(item.get("peer_id") or "").strip()
             if not peer_id or peer_id in processed:
@@ -9566,8 +9577,16 @@ def _open_next_visible_session(
                 # are not eligible for personal-message takeover.
                 processed.add(peer_id)
                 continue
+            if bounds_available and _uia_rect_tuple(cell) is None and not _uia_scroll_cell_into_view(cell):
+                # The virtualized list keeps scrolled-away rows in the tree
+                # with empty bounds. Leave the row unprocessed so the page
+                # scroll below can reach it instead of failing this click.
+                continue
             _dismiss_local_wechat_session_ghost_windows(hwnd)
-            _uia_click(cell)
+            try:
+                _uia_click(cell, require_bounds=bounds_available)
+            except RuntimeError:
+                continue
             time.sleep(random.uniform(0.35, 0.65))
             _dismiss_local_wechat_session_ghost_windows(hwnd)
             return item
@@ -9634,8 +9653,14 @@ def _open_local_session_by_uia(
         root = auto.ControlFromHandle(int(hwnd))
         cell = _find_uia_session_cell(root, target)
         if cell is not None:
+            bounds_available = any(_uia_rect_tuple(item) is not None for item in cells)
+            if bounds_available and _uia_rect_tuple(cell) is None:
+                _uia_scroll_cell_into_view(cell)
+                cell = _find_uia_session_cell(root, target) or cell
+            if bounds_available and _uia_rect_tuple(cell) is None:
+                raise RuntimeError("local WeChat session row found but not visible")
             _dismiss_local_wechat_session_ghost_windows(hwnd)
-            _uia_click(cell)
+            _uia_click(cell, require_bounds=bounds_available)
             time.sleep(random.uniform(0.35, 0.65))
             _dismiss_local_wechat_session_ghost_windows(hwnd)
             return {
@@ -11450,8 +11475,45 @@ def _uia_find_by_names(root: Any, names: List[str], *, contains: bool = False, m
     return None
 
 
-def _uia_click(node: Any) -> None:
+def _uia_scroll_cell_into_view(node: Any) -> bool:
+    """Bring a virtualized session row on screen; True when it has real bounds.
+
+    WeChat keeps rows that scrolled out of the viewport in the UIA tree with
+    ``BoundingRectangle`` (0,0,0,0).  Clicking such a row only logs
+    "Can not move cursor ... (0,0,0,0)" and leaves the chat list untouched, so
+    every later step of that round reports "page capture missing".
+    """
+    if _uia_rect_tuple(node) is not None:
+        return True
+    try:
+        pattern = node.GetScrollItemPattern()
+    except Exception:
+        pattern = None
+    if pattern is not None:
+        try:
+            pattern.ScrollIntoView()
+        except Exception:
+            pass
+        time.sleep(0.25)
+        if _uia_rect_tuple(node) is not None:
+            return True
+    return False
+
+
+def _uia_click(node: Any, *, require_bounds: bool = True) -> None:
+    """Click a UIA node; session rows are only clicked once they have real bounds.
+
+    ``require_bounds=False`` keeps the historical behaviour for WeChat builds whose
+    session rows never expose a ``BoundingRectangle``: there is no visibility
+    signal to trust, so clicking is still the only option.
+    """
     is_session_cell = _uia_control_class(node) == "mmui::ChatSessionCell"
+    if is_session_cell and require_bounds and _uia_rect_tuple(node) is None:
+        _uia_scroll_cell_into_view(node)
+    if is_session_cell and require_bounds and _uia_rect_tuple(node) is None:
+        # Off-screen (virtualized) row: do not burn a failed click on it.
+        # Callers skip the row and scroll to the next page instead.
+        raise RuntimeError("local WeChat session row is not visible")
     try:
         node.Click(simulateMove=not is_session_cell)
     except Exception:
@@ -13606,6 +13668,65 @@ def _open_local_contact_profile_via_search(
     # itself is by the already captured WeChat ID; opening the profile again
     # adds no safety and can reintroduce a stale profile popup from the prior
     # candidate.  Moments callers keep the profile path below.
+    # The clicked search row must be the chat that actually opened.  A row with
+    # no rect (2026-09-15: selected_text=小亮, selected_rect=None) or a window
+    # still showing another contact means the click never switched the
+    # conversation; failing here keeps the send path from typing into whoever
+    # happens to be in front.
+    if not open_moments:
+        label_target = str(_session_display_name(selected_text) or "").strip()
+        if label_target:
+            label_key = _normalize_contact_lookup_key(label_target)
+            opened_chat_name = ""
+            row_matches = False
+            probe_wx: Optional[Any] = None
+            try:
+                probe_wx = _get_wxauto4_client(account_id, ensure_chat_tab=False)
+            except Exception:
+                probe_wx = None
+            if probe_wx is not None:
+                deadline = time.monotonic() + 2.5
+                while True:
+                    opened_chat_name = str(
+                        _session_display_name(
+                            str(
+                                (_current_local_chat_info(probe_wx, fallback_name="") or {}).get("chat_name") or ""
+                            ).strip()
+                        )
+                        or ""
+                    ).strip()
+                    opened_key = _normalize_contact_lookup_key(opened_chat_name)
+                    row_matches = bool(opened_key) and bool(label_key) and (
+                        label_key in opened_key or opened_key in label_key
+                    )
+                    if row_matches or time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.25)
+                steps.append(
+                    {
+                        "step": "verify_opened_contact_chat",
+                        "ok": bool(row_matches),
+                        "target": original_target,
+                        "wx_no": expected_wx_no,
+                        "selected_text": selected_text,
+                        "selected_rect_present": bool(selected_rect),
+                        "opened_chat_name": opened_chat_name,
+                    }
+                )
+                if opened_chat_name and not row_matches:
+                    _write_auto_reply_diagnostic(
+                        "contact_search_opened_other_chat",
+                        account_id=account_id,
+                        target=original_target,
+                        wx_no=expected_wx_no,
+                        selected_text=selected_text,
+                        selected_rect_present=bool(selected_rect),
+                        opened_chat_name=opened_chat_name,
+                    )
+                    raise RuntimeError(
+                        "contact search opened a different chat: "
+                        f"selected={selected_text} opened={opened_chat_name}"
+                    )
     if not open_moments:
         steps.append(
             {
@@ -16514,6 +16635,49 @@ def _submit_local_wechat_typed_message(
         "send_method": methods[-1],
         "attempts": 1,
     }
+def _local_send_chat_anchor(
+    wx: Any,
+    expected_display_name: Any,
+    *,
+    use_current_chat: bool = True,
+) -> Dict[str, Any]:
+    """Report whether the selected chat is the contact we intend to reply to.
+
+    The comparison deliberately stays inside the visible-name namespace: an
+    immutable WeChat ID never equals a nickname, so comparing the two rejected
+    correct sends (online 2026-09-01: current=九变, target=eiaiyuangong).  When
+    either name is unreadable the answer is "cannot tell" and the caller keeps
+    its previous behaviour instead of inventing a mismatch.
+    """
+    expected = str(_session_display_name(str(expected_display_name or "").strip()) or "").strip()
+    if not use_current_chat:
+        return {
+            "anchored": True,
+            "reanchor": False,
+            "reason": "chat_opened_by_id",
+            "current_chat": "",
+            "expected_display_name": expected,
+        }
+    info = _current_local_chat_info(wx, fallback_name="")
+    current = str(_session_display_name(str((info or {}).get("chat_name") or "").strip()) or "").strip()
+    if not expected or not current:
+        return {
+            "anchored": True,
+            "reanchor": False,
+            "reason": "name_unavailable",
+            "current_chat": current,
+            "expected_display_name": expected,
+        }
+    matched = _normalize_contact_lookup_key(expected) == _normalize_contact_lookup_key(current)
+    return {
+        "anchored": bool(matched),
+        "reanchor": not matched,
+        "reason": "" if matched else "current_chat_is_another_contact",
+        "current_chat": current,
+        "expected_display_name": expected,
+    }
+
+
 def _verify_local_send_chat(
     wx: Any,
     expected_peer: str,
@@ -16521,6 +16685,7 @@ def _verify_local_send_chat(
     strict_private: bool = False,
     allow_group: bool = False,
     nickname_identity: bool = False,
+    expected_display_name: str = "",
 ) -> Dict[str, Any]:
     """Verify the selected WeChat chat immediately before typing or sending."""
     info = _current_local_chat_info(wx, fallback_name="")
@@ -16548,6 +16713,30 @@ def _verify_local_send_chat(
         chat_type = "direct"
     if strict_private and not _local_chat_type_is_private(chat_type):
         raise RuntimeError("未能确认当前微信会话是一对一私聊，已阻止发送")
+    # Name-space guard, evaluated before the ID-based comparison below.
+    # ``expected`` may be an immutable WeChat ID, which can never equal the
+    # visible nickname; compare the nickname the caller knows about with the
+    # nickname the chat window shows instead.  A matching name is proof enough
+    # and returns early, so the legacy ID-vs-nickname branch can no longer
+    # reject a correct conversation (2026-09-01: current=九变,
+    # target=eiaiyuangong).  No expected name means "cannot tell" and leaves
+    # the legacy behaviour untouched.
+    name_target = str(expected_display_name or "").strip()
+    if not name_target:
+        candidate = _session_display_name(expected)
+        name_target = "" if _looks_like_wechat_id(candidate) else candidate
+    if name_target and actual_peer:
+        if _normalize_contact_lookup_key(name_target) == _normalize_contact_lookup_key(actual_peer):
+            return {
+                "chat_type": chat_type or "unknown",
+                "chat_name": actual_peer,
+                "expected_display_name": name_target,
+                "anchored": True,
+            }
+        if strict_private:
+            raise RuntimeError(
+                f"[chat_identity_mismatch] 当前微信会话与目标显示名不一致（当前={actual_peer}，目标={name_target}），已阻止发送"
+            )
     # A verified WeChat ID intentionally differs from the visible nickname.
     # The ID-based contact search above is the identity check in that case;
     # comparing the ID text to the nickname would reject every valid send.
@@ -16614,15 +16803,37 @@ def _send_text_local_slow_once(
     nickname_identity = str(raw_meta.get("identity_mode") or "").strip() == "nickname"
     if use_contact_search and not nickname_identity and not _looks_like_wechat_id(peer_id):
         raise RuntimeError("auto reply requires the captured WeChat ID; nickname search is disabled")
-    log_send_event(
-        "reply_chat_open_started" if not use_current_chat else "reply_chat_reused",
-        click_target=str(peer_id or ""),
-        click_mode="moments_contact_search" if use_contact_search else ("wxauto4_chat_with" if not use_current_chat else "current_chat"),
+    # Reusing the chat the execute stage opened is the fast path, but it is only
+    # safe while that chat is still the intended contact.  Read the visible
+    # chat title (same namespace as the caller's display name) and fall back to
+    # the WeChat-ID search when another conversation took the window.
+    expected_display_name = str(raw_meta.get("display_name") or "").strip()
+    send_anchor = _local_send_chat_anchor(
+        wx,
+        expected_display_name,
         use_current_chat=bool(use_current_chat),
+    )
+    reuse_current_chat = bool(use_current_chat) and not bool(send_anchor.get("reanchor"))
+    if send_anchor.get("reanchor"):
+        log_send_event(
+            "reply_chat_reanchor_required",
+            click_target=str(peer_id or ""),
+            current_chat=send_anchor.get("current_chat"),
+            expected_display_name=send_anchor.get("expected_display_name"),
+            reason=send_anchor.get("reason"),
+        )
+    log_send_event(
+        "reply_chat_open_started" if not reuse_current_chat else "reply_chat_reused",
+        click_target=str(peer_id or ""),
+        click_mode="moments_contact_search" if use_contact_search else ("wxauto4_chat_with" if not reuse_current_chat else "current_chat"),
+        use_current_chat=bool(reuse_current_chat),
+        reanchor_required=bool(send_anchor.get("reanchor")),
+        current_chat=send_anchor.get("current_chat"),
+        expected_display_name=send_anchor.get("expected_display_name"),
         text_chars=len(text),
         text_preview=text[:500],
     )
-    if not use_current_chat:
+    if not reuse_current_chat:
         try:
             if use_contact_search:
                 search_steps: List[Dict[str, Any]] = []
@@ -16660,6 +16871,14 @@ def _send_text_local_slow_once(
             )
             raise RuntimeError(f"open local WeChat chat failed: {exc}") from exc
         time.sleep(random.uniform(0.55, 1.1))
+    if bool(send_anchor.get("reanchor")):
+        log_send_event(
+            "reply_chat_reanchored",
+            click_target=str(peer_id or ""),
+            click_mode="moments_contact_search" if use_contact_search else "wxauto4_chat_with",
+            previous_chat=send_anchor.get("current_chat"),
+            expected_display_name=send_anchor.get("expected_display_name"),
+        )
     strict_private = driver_name == "native_wechat_auto_reply"
     # Group welcomes are the one intentional group send.  The caller still
     # supplies the freshly-created group name, which is checked below.
@@ -16670,6 +16889,7 @@ def _send_text_local_slow_once(
         strict_private=strict_private,
         allow_group=allow_group,
         nickname_identity=nickname_identity,
+        expected_display_name=expected_display_name,
     )
     _focus_local_wechat(hwnd)
     log_send_event(
@@ -16770,7 +16990,7 @@ def _send_text_local_slow_once(
         "hwnd": hwnd,
         "chat_selection_method": (
             "current_session"
-            if use_current_chat
+            if reuse_current_chat
             else "moments_contact_search"
             if use_contact_search
             else "wxauto4_chat_with"
