@@ -32,6 +32,11 @@ from douyin_comment_scraper import (
 from runtime_paths import resolve_install_dir, resolve_runtime_root
 from state_store import RuntimeStateStore
 
+try:  # 掉线跟踪 + 登录拦截即停
+    import douyin_session_health as session_health
+except ImportError:
+    from . import douyin_session_health as session_health
+
 
 router = APIRouter(prefix="/api/douyin", tags=["douyin"])
 
@@ -10707,6 +10712,13 @@ async def run_douyin_follow_comment_worker(
                     finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 )
                 douyin_log(f"[抖音关注评论] 账号 {account['id']} 失败：{current_user}，原因：{exc}", "error")
+                if session_health.is_login_wall_error(exc):
+                    session_health.mark_need_relogin(account["id"], reason=str(exc)[:200])
+                    douyin_log(
+                        f"[抖音关注评论] 账号 {account['id']} 判定为登录掉线，本轮剩余 {max(0, len(users) - index)} 位目标已跳过，请重新登录该抖音账号后重试。",
+                        "error",
+                    )
+                    break
                 async with state_lock:
                     worker_state["processed"] = int(worker_state.get("processed", 0) or 0) + 1
                     worker_state["failed"] = int(worker_state.get("failed", 0) or 0) + 1
@@ -11183,6 +11195,13 @@ async def run_douyin_interaction_worker(
                     finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 )
                 douyin_log(f"[抖音私信] 账号 {account['id']} 发送失败：{current_user}，原因：{exc}", "error")
+                if session_health.is_login_wall_error(exc):
+                    session_health.mark_need_relogin(account["id"], reason=str(exc)[:200])
+                    douyin_log(
+                        f"[抖音私信] 账号 {account['id']} 判定为登录掉线，本轮剩余 {max(0, len(users) - index)} 位目标已跳过，请重新登录该抖音账号后重试。",
+                        "error",
+                    )
+                    break
                 if is_douyin_ai_generation_error(exc):
                     consecutive_ai_failures += 1
                 else:
@@ -18074,6 +18093,10 @@ async def douyin_start_tasks(http_request: Request = None, request: Optional[dic
             + (f"，已跳过 {skipped_completed} 条已有客户数据的历史完成任务" if skipped_completed else "")
         ),
         "selected_count": len(runnable_tasks),
+        # Keep "requested" and "started" separate so the caller can report both
+        # instead of treating the selection as the run (2026-09-15 user 54).
+        "requested_count": len(selected_task_ids) if selected_task_ids else len(runnable_tasks),
+        "selected_videos_total": len(selected_task_ids) if selected_task_ids else len(runnable_tasks),
         "skipped_completed": skipped_completed,
         "account_id": preferred_account_id,
         "account_ids": account_ids,

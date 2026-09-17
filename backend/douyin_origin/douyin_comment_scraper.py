@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import random
 import re
@@ -20,6 +21,11 @@ from playwright.async_api import (
 )
 
 from douyin_client import DouyinClient, is_port_open
+
+try:  # 会话健康/登录拦截取证（抖音掉线跟踪）
+    import douyin_session_health as session_health
+except ImportError:  # 包内导入时走相对路径
+    from . import douyin_session_health as session_health
 
 
 def conversation_time_is_older_than_24h(value: object, now: Optional[datetime] = None) -> bool:
@@ -96,6 +102,95 @@ class DouyinSearchUpstreamError(RuntimeError):
         if self.body:
             detail += f": {self.body}"
         super().__init__(detail)
+
+
+# Douyin renames its comment DOM classes regularly.  The historical class stays
+# first so current installations keep working, and the structural fallbacks stop
+# a rename from turning a rendered comment panel into
+# "评论区可见但未提取到有效评论节点" with visible_comments = 0 (online 2026-09-15,
+# user 54: 6 of 8 videos failed that way with the panel open).
+COMMENT_ITEM_SELECTORS = (
+    ".comment-item-info-wrap",
+    '[data-e2e="comment-item"]',
+    ".comment-item",
+    '[data-e2e*="comment-item"]',
+    '[class*="comment-item"]',
+    '[class*="CommentItem"]',
+)
+
+COMMENT_LIST_SELECTORS = (
+    '[data-e2e="comment-list"]',
+    ".comment-mainContent",
+    '[class*="comment-mainContent"]',
+    '[class*="comment-list"]',
+    '[class*="CommentList"]',
+)
+
+COMMENT_LIST_EXPAND_HINTS = ("展开", "查看更多", "更多回复", "点击加载", "加载更多")
+
+
+def build_comment_surface_probe_js(
+    item_selectors: object = None,
+    list_selectors: object = None,
+) -> str:
+    """Probe what the comment panel actually renders.
+
+    The selector lists live in Python so a DOM rename is a one-line change, and
+    the report separates "list present but zero rows" from "no list at all"
+    instead of treating both as a video without comments.
+    """
+    items = list(item_selectors or COMMENT_ITEM_SELECTORS)
+    lists = list(list_selectors or COMMENT_LIST_SELECTORS)
+    hints = list(COMMENT_LIST_EXPAND_HINTS)
+    return (
+        "() => {\n"
+        "  const itemSelectors = " + json.dumps(items) + ";\n"
+        "  const listSelectors = " + json.dumps(lists) + ";\n"
+        "  const expandHints = " + json.dumps(hints) + ";\n"
+        "  const isVisible = (node) => {\n"
+        "    if (!node || !(node instanceof Element)) return false;\n"
+        "    const style = window.getComputedStyle(node);\n"
+        "    if (!style || style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity || 1) === 0) return false;\n"
+        "    return Boolean(node.getClientRects().length || node.offsetWidth || node.offsetHeight);\n"
+        "  };\n"
+        "  const counts = {};\n"
+        "  const seen = new Set();\n"
+        "  let total = 0;\n"
+        "  for (const selector of itemSelectors) {\n"
+        "    let rows = [];\n"
+        "    try { rows = Array.from(document.querySelectorAll(selector)); } catch (error) { rows = []; }\n"
+        "    const visibleRows = rows.filter((node) => !node.closest('.replyContainer') && isVisible(node));\n"
+        "    counts[selector] = visibleRows.length;\n"
+        "    for (const node of visibleRows) {\n"
+        "      const key = node.closest('[data-e2e=\"comment-item\"], .comment-item, li') || node;\n"
+        "      if (!seen.has(key)) { seen.add(key); total += 1; }\n"
+        "    }\n"
+        "  }\n"
+        "  const listNodes = [];\n"
+        "  for (const selector of listSelectors) {\n"
+        "    try { listNodes.push(...Array.from(document.querySelectorAll(selector))); } catch (error) { }\n"
+        "  }\n"
+        "  const list = listNodes.find(isVisible) || listNodes[0] || null;\n"
+        "  let listScrollable = false;\n"
+        "  let listText = '';\n"
+        "  let expandButtons = 0;\n"
+        "  if (list) {\n"
+        "    let scroller = list;\n"
+        "    while (scroller && scroller.parentElement) {\n"
+        "      if (scroller.scrollHeight > scroller.clientHeight + 60) break;\n"
+        "      scroller = scroller.parentElement;\n"
+        "    }\n"
+        "    listScrollable = Boolean(scroller && scroller.scrollHeight > scroller.clientHeight + 60);\n"
+        "    listText = String(list.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 200);\n"
+        "    expandButtons = Array.from(list.querySelectorAll('button, span, div, a')).filter((node) => {\n"
+        "      if (!isVisible(node)) return false;\n"
+        "      const text = String(node.innerText || node.textContent || '').trim();\n"
+        "      return text.length > 0 && text.length <= 8 && expandHints.some((hint) => text.includes(hint));\n"
+        "    }).length;\n"
+        "  }\n"
+        "  return { counts, total, listFound: Boolean(list), listVisible: Boolean(list && isVisible(list)), listScrollable, listText, expandButtons };\n"
+        "}"
+    )
 
 
 DOUYIN_CDP_CONNECT_TIMEOUT_MS = 30000
@@ -934,6 +1029,94 @@ class DouyinCommentScraper:
                 "commentEntrySelectors": '[data-e2e="feed-comment-icon"], .comment-title, [class*="comment-title"]',
             },
         )
+
+    async def _read_comment_surface_counts(
+        self,
+        page: Page,
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> Dict:
+        """Count rendered comment rows using every known selector."""
+        try:
+            probe = await page.evaluate(build_comment_surface_probe_js())
+        except Exception as exc:
+            self._emit(logger, f"[抖音评论] 评论区探测失败：{type(exc).__name__}: {exc}", "warning")
+            return {"counts": {}, "total": 0, "listFound": False, "probe_error": str(exc)[:200]}
+        if not isinstance(probe, dict):
+            return {"counts": {}, "total": 0, "listFound": False}
+        probe["total"] = int(probe.get("total") or 0)
+        return probe
+
+    async def _wake_comment_list(
+        self,
+        page: Page,
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> Dict:
+        """Nudge a visible comment list that has not rendered any row yet.
+
+        Online the panel can be on screen while the virtualised list still shows
+        nothing (visible_comments stayed 0 for all 300 rounds).  Clicking the
+        container and pushing the list once is enough to make Douyin render the
+        first batch, so retry that instead of declaring the video unreadable.
+        Every step is best-effort: a missing page API must not break the flow.
+        """
+        actions: List[str] = []
+        try:
+            clicked = await page.evaluate(
+                """() => {
+                    const isVisible = (node) => {
+                        if (!node || !(node instanceof Element)) return false;
+                        const style = window.getComputedStyle(node);
+                        if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+                        return Boolean(node.getClientRects().length || node.offsetWidth || node.offsetHeight);
+                    };
+                    const selectors = ['[data-e2e="comment-list"]', '.comment-mainContent', '[class*="comment-mainContent"]'];
+                    let list = null;
+                    for (const selector of selectors) {
+                        const found = Array.from(document.querySelectorAll(selector)).find(isVisible);
+                        if (found) { list = found; break; }
+                    }
+                    if (!list) return { clickedList: false };
+                    list.scrollIntoView({ block: 'center' });
+                    list.click();
+                    return { clickedList: true };
+                }"""
+            )
+            if isinstance(clicked, dict) and clicked.get("clickedList"):
+                actions.append("click_list")
+        except Exception:
+            pass
+        try:
+            expanded = await page.evaluate(
+                """() => {
+                    const hints = ['展开', '查看更多', '点击加载'];
+                    const nodes = Array.from(document.querySelectorAll('button, span, div, a'));
+                    let count = 0;
+                    for (const node of nodes) {
+                        const text = String(node.innerText || node.textContent || '').trim();
+                        if (!text || text.length > 8) continue;
+                        if (!hints.some((hint) => text.includes(hint))) continue;
+                        try { node.click(); count += 1; } catch (error) { }
+                        if (count >= 2) break;
+                    }
+                    return { expanded: count };
+                }"""
+            )
+            if isinstance(expanded, dict) and int(expanded.get("expanded") or 0) > 0:
+                actions.append(f"expand:{int(expanded.get('expanded'))}")
+        except Exception:
+            pass
+        for key in ("End", "PageDown"):
+            try:
+                await page.keyboard.press(key)
+                actions.append(f"key:{key}")
+            except Exception:
+                break
+        try:
+            await page.wait_for_timeout(900)
+        except Exception:
+            pass
+        self._emit(logger, f"[抖音评论] 评论行未渲染，已尝试唤醒列表：{actions or ['none']}", "warning")
+        return {"actions": actions}
 
     async def _wait_for_comment_collection_surface(
         self,
@@ -2119,6 +2302,22 @@ class DouyinCommentScraper:
 
     async def _raise_if_login_intercept(self, page: Page):
         if await self._has_login_intercept(page):
+            # 掉线跟踪：先留现场（URL/验证类型/页面文本/截图）再抛错，
+            # 这样下次能从诊断包里直接看到"抖音要的是哪种验证"。
+            try:
+                wall_event = await session_health.capture_login_wall(
+                    page,
+                    account_id=self.account_id,
+                    action="login_intercept",
+                    reason="page_shows_login_wall",
+                )
+                session_health.mark_need_relogin(
+                    self.account_id,
+                    reason="page_shows_login_wall",
+                    url=str(wall_event.get("url") or ""),
+                )
+            except Exception:
+                pass
             raise RuntimeError("当前抖音浏览器未登录，或登录态已失效，页面出现登录拦截")
 
     async def _raise_if_profile_unavailable(self, page: Page):
@@ -9099,16 +9298,44 @@ class DouyinCommentScraper:
             max_scroll_rounds = max(1, min(int(max_scroll_rounds or 18), 300))
             stable_rounds = 0
             last_count = 0
+            zero_streak = 0
+            wake_attempts = 0
+            max_wake_attempts = 3
+            last_probe: Dict = {}
 
             for round_index in range(max_scroll_rounds):
-                current_count = await page.evaluate(
-                    """
-                    () => {
-                        return Array.from(document.querySelectorAll('.comment-item-info-wrap'))
-                            .filter((el) => !el.closest('.replyContainer')).length;
-                    }
-                    """
-                )
+                probe = await self._read_comment_surface_counts(page, logger=logger)
+                last_probe = probe if isinstance(probe, dict) else {}
+                current_count = int(last_probe.get("total") or 0)
+                if current_count == 0:
+                    zero_streak += 1
+                    if zero_streak == 2 and wake_attempts < max_wake_attempts:
+                        # The panel can be on screen while the virtualised list
+                        # still renders nothing; wake it before giving up.
+                        wake_attempts += 1
+                        await self._wake_comment_list(page, logger=logger)
+                        if progress_callback:
+                            try:
+                                progress_callback(
+                                    {
+                                        "phase": "waking",
+                                        "collected_comments": 0,
+                                        "visible_comments": 0,
+                                        "scroll_round": round_index + 1,
+                                        "scroll_round_limit": max_scroll_rounds,
+                                        "last_message": "评论区在屏但没有评论行，正在尝试唤醒列表。",
+                                        "surface_probe": {
+                                            key: last_probe.get(key)
+                                            for key in ("counts", "listFound", "listText", "expandButtons")
+                                        },
+                                    }
+                                )
+                            except Exception:
+                                pass
+                        await page.wait_for_timeout(1200)
+                        continue
+                else:
+                    zero_streak = 0
                 if progress_callback:
                     try:
                         progress_callback(
@@ -9382,6 +9609,37 @@ class DouyinCommentScraper:
                     pass
 
             if not deduped and not surface.get("empty"):
+                # Last chance: the batch extractor carries extra selectors and
+                # text-based parsing.  Online the panel rendered rows for it
+                # while the primary pass returned nothing.
+                fallback_batch = await self._extract_visible_comment_batch(
+                    page,
+                    set(),
+                    batch_size=max(1, min(int(max_comments or 80), 50)),
+                    max_total=max(1, int(max_comments or 80)),
+                )
+                if fallback_batch:
+                    self._emit(
+                        logger,
+                        f"[抖音评论] 主提取为空但批量提取器拿到 {len(fallback_batch)} 条评论，采用兜底结果。",
+                        "warning",
+                    )
+                    deduped = [dict(row) for row in fallback_batch]
+                    if progress_callback:
+                        try:
+                            progress_callback(
+                                {
+                                    "phase": "extracting",
+                                    "collected_comments": len(deduped),
+                                    "visible_comments": len(deduped),
+                                    "scroll_round": max_scroll_rounds,
+                                    "scroll_round_limit": max_scroll_rounds,
+                                    "last_message": f"主提取为空，兜底提取到 {len(deduped)} 条评论。",
+                                }
+                            )
+                        except Exception:
+                            pass
+            if not deduped and not surface.get("empty"):
                 self._emit(
                     logger,
                     "[抖音评论采集] 评论区已打开但未提取到评论，结果未确认，不按空评论完成",
@@ -9403,6 +9661,11 @@ class DouyinCommentScraper:
                     pass
                 raise DouyinCommentCollectionUnconfirmed(
                     "评论区可见但未提取到有效评论节点"
+                    f"（selector 命中：{last_probe.get('counts') or {}}，"
+                    f"listFound={bool(last_probe.get('listFound'))}，"
+                    f"expandButtons={int(last_probe.get('expandButtons') or 0)}，"
+                    f"唤醒次数={wake_attempts}，"
+                    f"listText={str(last_probe.get('listText') or '')[:70]!r}）"
                 )
 
             self._emit(logger, f"[抖音评论] 共提取 {len(deduped)} 条一级评论用户", "success")
