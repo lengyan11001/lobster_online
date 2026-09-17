@@ -1,7 +1,7 @@
 {
-  "version": "2.0.57",
-  "build": 336,
-  "applied_at": "2026-09-16T21:27:57+08:00",
-  "note": "publish metrics: client collects Douyin/WeChat-Channels play counts daily (02:00-06:00 staggered window per installation) and reports to the cloud; manage.bhzn.top dashboard; 16 regression tests",
-  "bundle_sha256": "2b5cb6f7a8f0dfa201874f79e1ab4d7e7716662a08a60360f862051b32cff206"
+  "version": "2.0.58",
+  "build": 337,
+  "applied_at": "2026-09-17T12:20:27+08:00",
+  "note": "template-driven digital human avatar/voice; WeChat auto-reply never reuses the open chat (wrong-recipient fix); scan dedup + row-level wxid; douyin collect reporting",
+  "bundle_sha256": "7f4f369c33c18bd6422d3fa609d3494a527ef618d6853c5541e742f6eca6f90d"
 }
