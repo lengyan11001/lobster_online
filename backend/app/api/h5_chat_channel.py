@@ -9777,6 +9777,37 @@ def _select_daily_voice(
     return dict(normalized[(local_day.toordinal() + offset) % len(normalized)])
 
 
+def _resolve_workflow_voice(
+    source: Dict[str, Any],
+    *,
+    local_day: date,
+    rotation_key: str,
+    sequence_slot: Optional[int] = None,
+) -> Dict[str, Any]:
+    """以模板为准：模板指定了声音就用指定的；模板给了多个候选且要求轮换才轮换。"""
+    fixed_voice = _workflow_text(
+        source.get("voice") or source.get("speaker_id") or source.get("speakerId"), 128
+    )
+    candidates = _normalize_voice_candidates(source.get("voice_candidates"))
+    selection_mode = _workflow_text(source.get("voice_selection_mode"), 32)
+    rotate = len(candidates) > 1 and selection_mode in {"daily_round_robin", "daily_sequence"}
+    if fixed_voice and not rotate:
+        return {"voice": fixed_voice, "selection_mode": "fixed", "selection_source": "template"}
+    if not candidates:
+        if fixed_voice:
+            return {"voice": fixed_voice, "selection_mode": "fixed", "selection_source": "template"}
+        return {}
+    selected = _select_daily_voice(
+        candidates,
+        local_day=local_day,
+        rotation_key=rotation_key,
+        sequence_slot=sequence_slot,
+    )
+    selected["selection_mode"] = "daily_sequence" if sequence_slot is not None else "daily_round_robin"
+    selected["selection_source"] = "template"
+    return selected
+
+
 def _digital_human_rotation_context(
     source: Dict[str, Any],
     current_item: Optional[Dict[str, Any]],
@@ -9828,12 +9859,12 @@ async def _resolve_workflow_virtualman(
     if not rotation_enabled:
         return {"virtualman_id": fixed_id} if fixed_id else {}
 
-    # Refresh the server-side profile list before each generated workflow.
-    # A successful response is authoritative (including an empty list), while
-    # transient network failures retain the task snapshot as a fallback.
+    # 以模板为准：模板里带了候选形象时只用模板给定的形象，不再用服务端全量形象
+    # 列表覆盖（那会把"指定了某个形象"的节点轮换成账号里的另一个形象）。
     candidates = _normalize_virtualman_candidates(source.get("virtualman_candidates"))
+    template_candidates = list(candidates)
     profile_refresh_succeeded = False
-    if cloud is not None and base:
+    if not candidates and cloud is not None and base:
         try:
             response = await cloud.get(
                 f"{base}/api/shanjian-digital-human/profiles",
@@ -9848,6 +9879,24 @@ async def _resolve_workflow_virtualman(
             logger.warning("[H5-DIGITAL-HUMAN] profile refresh failed, using task snapshot: %s", exc)
 
     if candidates:
+        # 以模板为准：模板给了候选形象时只在这几个形象里取——只给一个（或给了明确
+        # 的 virtualman_id）就是固定形象，不参与日期/槽位轮换；模板完全没给候选时才
+        # 保持原来的"按账号当前可用形象轮换"行为。
+        template_rotation = (
+            bool(template_candidates)
+            and len(candidates) > 1
+            and selection_mode in {"daily_round_robin", "daily_sequence"}
+        )
+        if template_candidates and not template_rotation:
+            chosen = dict(candidates[0])
+            if fixed_id:
+                for item in candidates:
+                    if _workflow_text(item.get("virtualman_id"), 128) == fixed_id:
+                        chosen = dict(item)
+                        break
+            chosen["selection_mode"] = "fixed"
+            chosen["selection_source"] = "template"
+            return chosen
         local_day, rotation_key = _digital_human_rotation_context(source, current_item)
         sequence_slot = (
             max(0, _safe_int(source.get("virtualman_rotation_slot")))
@@ -9863,6 +9912,7 @@ async def _resolve_workflow_virtualman(
         selected["selection_mode"] = "daily_sequence" if sequence_slot is not None else "daily_round_robin"
         selected["selection_slot"] = sequence_slot
         selected["selection_date"] = local_day.isoformat()
+        selected["selection_source"] = "template" if template_candidates else "account_rotation"
         return selected
     if profile_refresh_succeeded:
         return {}
@@ -9959,12 +10009,11 @@ async def _run_shanjian_digital_human_workflow(
     audio_asset_id = _workflow_text(source.get("audio_asset_id"), 128)
     audio_mode = drive_mode == "audio" or bool(audio_url or audio_asset_id)
     voice = _workflow_text(source.get("voice") or source.get("speaker_id") or source.get("speakerId"), 128)
-    voice_candidates = _normalize_voice_candidates(source.get("voice_candidates"))
-    if not audio_mode and voice_candidates:
+    if not audio_mode:
         local_day, rotation_key = _digital_human_rotation_context(source, current_item)
         sequence_slot = max(0, _safe_int(source.get("virtualman_rotation_slot"))) if "virtualman_rotation_slot" in source else None
-        selected_voice = _select_daily_voice(
-            voice_candidates,
+        selected_voice = _resolve_workflow_voice(
+            source,
             local_day=local_day,
             rotation_key=rotation_key,
             sequence_slot=sequence_slot,
