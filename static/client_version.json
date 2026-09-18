@@ -1,7 +1,7 @@
 {
-  "version": "2.0.58",
-  "build": 337,
-  "applied_at": "2026-09-17T12:20:27+08:00",
-  "note": "template-driven digital human avatar/voice; WeChat auto-reply never reuses the open chat (wrong-recipient fix); scan dedup + row-level wxid; douyin collect reporting",
-  "bundle_sha256": "7f4f369c33c18bd6422d3fa609d3494a527ef618d6853c5541e742f6eca6f90d"
+  "version": "2.0.59",
+  "build": 338,
+  "applied_at": "2026-09-18T14:04:50+08:00",
+  "note": "native-wechat 加好友文件导入全量入队；local-bestseller 空镜日不再生成无关人物 + 成片字幕不再超出画面",
+  "bundle_sha256": "d92995caa48bef32675aa6dd0b6f43b5d9752dd30f72fb226d9ea7286f0f246f"
 }
