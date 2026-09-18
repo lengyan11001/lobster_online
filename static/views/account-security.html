@@ -1,0 +1,89 @@
+<div id="content-account-security" class="content-block account-security-view">
+  <style>
+    .account-security-view { --as-ink: #18233a; --as-muted: #66758f; --as-line: rgba(21,35,64,.12); --as-accent: #0f8f7a; padding: 1rem; color: var(--as-ink); }
+    .as-page { display: grid; gap: 1rem; max-width: 60rem; }
+    .as-head { border-radius: 22px; padding: 1rem 1.15rem; border: 1px solid var(--as-line); background: linear-gradient(135deg, #fffaf0 0%, #eefaf6 60%, #f7fbff 100%); display: flex; gap: .8rem; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+    .as-head h2 { margin: 0 0 .2rem; font-size: clamp(1.3rem, 2.6vw, 1.8rem); }
+    .as-head .as-sub { color: var(--as-muted); font-size: .92rem; }
+    .as-chip { border-radius: 999px; padding: .35rem .8rem; font-size: .85rem; font-weight: 700; background: rgba(15,143,122,.12); color: #0b6f5e; }
+    .as-grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); }
+    .as-card { border: 1px solid var(--as-line); border-radius: 20px; background: #fff; padding: 1rem 1.1rem; box-shadow: 0 16px 36px rgba(20,36,64,.06); display: grid; gap: .7rem; align-content: start; }
+    .as-card h3 { margin: 0; font-size: 1.05rem; }
+    .as-card .as-hint { color: var(--as-muted); font-size: .86rem; line-height: 1.5; }
+    .as-row { display: grid; gap: .35rem; }
+    .as-row label { font-size: .86rem; font-weight: 700; color: #33415c; }
+    .as-row input { border: 1px solid var(--as-line); border-radius: 12px; padding: .6rem .7rem; font-size: .95rem; background: #fbfdff; }
+    .as-row input:focus { outline: 2px solid rgba(15,143,122,.35); border-color: rgba(15,143,122,.5); }
+    .as-inline { display: flex; gap: .5rem; }
+    .as-inline input { flex: 1 1 auto; }
+    .as-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
+    .as-btn { border: 0; border-radius: 12px; padding: .62rem 1rem; font-weight: 800; cursor: pointer; background: var(--as-accent); color: #fff; }
+    .as-btn.ghost { background: #eef4f9; color: #2b3b52; border: 1px solid var(--as-line); }
+    .as-btn[disabled] { opacity: .6; cursor: not-allowed; }
+    .as-msg { display: none; border-radius: 12px; padding: .6rem .8rem; font-size: .9rem; }
+    .as-msg.show { display: block; }
+    .as-msg.ok { background: rgba(15,143,122,.1); color: #0b6f5e; }
+    .as-msg.err { background: rgba(214,63,63,.1); color: #b32b2b; }
+  </style>
+  <div class="as-page">
+    <div class="as-head">
+      <div>
+        <h2>账号安全</h2>
+        <div class="as-sub">改密码、换绑手机号都只作用于当前登录账号（其它数据按账号 ID 关联，不会跟着手机号走）。</div>
+      </div>
+      <span class="as-chip" id="asAccountChip">当前账号：--</span>
+    </div>
+
+    <div id="asMsg" class="as-msg"></div>
+
+    <div class="as-grid">
+      <div class="as-card">
+        <h3>修改密码</h3>
+        <div class="as-hint">需要先输入当前密码。改完请用新密码登录，其它设备上的登录态不受影响。</div>
+        <div class="as-row">
+          <label for="asOldPassword">当前密码</label>
+          <input type="password" id="asOldPassword" autocomplete="current-password" placeholder="请输入当前密码">
+        </div>
+        <div class="as-row">
+          <label for="asNewPassword">新密码</label>
+          <input type="password" id="asNewPassword" autocomplete="new-password" placeholder="6～128 位">
+        </div>
+        <div class="as-row">
+          <label for="asConfirmPassword">确认新密码</label>
+          <input type="password" id="asConfirmPassword" autocomplete="new-password" placeholder="再次输入新密码">
+        </div>
+        <div class="as-actions">
+          <button type="button" class="as-btn" id="asChangePasswordBtn">保存新密码</button>
+        </div>
+      </div>
+
+      <div class="as-card">
+        <h3>更换手机号</h3>
+        <div class="as-hint">
+          需要先输入当前密码，然后给新手机号发验证码确认。换绑后：<br>
+          1) 新手机号成为登录账号；2) 老手机号会被释放（别人可以注册）；<br>
+          3) 设备槽位、素材、任务、积分、订单按账号 ID 保留，不受影响；<br>
+          4) 品牌固定代理号不允许自助换绑。
+        </div>
+        <div class="as-row">
+          <label for="asPhonePassword">当前密码</label>
+          <input type="password" id="asPhonePassword" autocomplete="current-password" placeholder="请输入当前密码">
+        </div>
+        <div class="as-row">
+          <label for="asNewPhone">新手机号</label>
+          <input type="tel" id="asNewPhone" inputmode="numeric" maxlength="11" placeholder="11 位手机号">
+        </div>
+        <div class="as-row">
+          <label for="asPhoneCode">短信验证码</label>
+          <div class="as-inline">
+            <input type="text" id="asPhoneCode" inputmode="numeric" maxlength="6" placeholder="6 位验证码">
+            <button type="button" class="as-btn ghost" id="asSendPhoneCodeBtn">获取验证码</button>
+          </div>
+        </div>
+        <div class="as-actions">
+          <button type="button" class="as-btn" id="asChangePhoneBtn">确认换绑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

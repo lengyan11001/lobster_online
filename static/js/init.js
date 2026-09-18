@@ -1533,6 +1533,7 @@ var LOBSTER_MAIN_VIEWS = {
   agent: true,
   'openclaw-memory': true,
   'personal-settings': true,
+  'account-security': true,
   'creative-film-studio': true,
   'ppt-studio': true,
   'viral-tvc-studio': true,
@@ -2459,6 +2460,7 @@ function runAppViewInit(view) {
   if (view === 'logs') { if (typeof ensureLogsBindings === 'function') ensureLogsBindings(); }
   if (view === 'openclaw-memory' && typeof window.initOpenclawMemoryManager === 'function') window.initOpenclawMemoryManager();
   if (view === 'personal-settings' && typeof window.initPersonalSettingsView === 'function') window.initPersonalSettingsView();
+  if (view === 'account-security' && typeof window.initAccountSecurityView === 'function') window.initAccountSecurityView();
   if (view === 'creative-film-studio' && typeof window.initCreativeFilmStudioView === 'function') window.initCreativeFilmStudioView();
   if (view === 'messenger-config' && typeof loadMessengerConfigPage === 'function') loadMessengerConfigPage();
   if (view === 'youtube-accounts' && typeof loadYoutubeAccountsPage === 'function') loadYoutubeAccountsPage();

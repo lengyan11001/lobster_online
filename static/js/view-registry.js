@@ -34,6 +34,13 @@
     cache: 'reload'
   });
 
+  window.registerLobsterView('account-security', {
+    html: '/static/views/account-security.html?v=20260918-account-security-v1',
+    scripts: '/static/js/account-security.js?v=20260918-account-security-v1',
+    init: 'initAccountSecurityView',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('personal-whatsapp', {
     html: '/static/views/personal-whatsapp.html?v=20260910-personal-whatsapp-workbench-v3',
     scripts: '/static/js/personal-whatsapp.js?v=20260910-personal-whatsapp-workbench-v3',
