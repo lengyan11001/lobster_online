@@ -371,6 +371,23 @@ def _real_life_prompt() -> str:
     )
 
 
+def _no_person_video_guard() -> str:
+    return (
+        "空镜视频，全片不要出现人物主体，不要清晰正脸、不要人脸特写、不要半身或全身人像、不要摆拍人物、不要生成可辨认的五官；"
+        "画面主体只能是街景、门店、商圈、社区、办公区、交通动线与环境细节（车辆、招牌灯光、树影、天气、光影变化）；"
+        "如果确有路人，只能是远景或虚化的背景点缀、快速经过、不占画面主体、不停留、不面向镜头表演；"
+        "如果首帧画面里已经出现了清晰人物，请把它弱化、虚化或移到远景，不要让它成为主体，也不要给它正脸动作。"
+    )
+
+
+def _no_person_scene_guard() -> str:
+    return (
+        "这一天不要生成人物主体：不要清晰正脸人物、不要人脸特写、不要半身或全身人像、不要摆拍人物、不要可辨认的五官；"
+        "画面主体必须是城市环境本身（街道、门店、商圈、社区、写字楼、电梯口、停车场、咖啡店、夜景、住宅区、地标周边或生活化室内）；"
+        "如果画面里必须有人，只能是远景或虚化的路人快速经过，不得占据画面主体，也不得出现清晰人脸。"
+    )
+
+
 def _city_scene_only_days() -> set[int]:
     return {1, 3, 4, 5, 8}
 
@@ -440,7 +457,7 @@ def _naturalize_scene_prompt(text: str) -> str:
     return out
 
 
-def _sanitize_video_prompt_no_speech(prompt: str) -> str:
+def _sanitize_video_prompt_no_speech(prompt: str, *, scene_only: bool = False) -> str:
     out = str(prompt or "").strip()
     protected: Dict[str, str] = {}
     protected_terms = ["说话", "口播", "对白", "台词", "唱歌", "配音", "开口", "做明显嘴型", "唇同步"]
@@ -455,6 +472,26 @@ def _sanitize_video_prompt_no_speech(prompt: str) -> str:
             normalized_prefix = "人物不要" if prefix.startswith("人物") else "不要"
             protected[token] = f"{normalized_prefix}{term}"
             out = out.replace(phrase, token)
+    if scene_only:
+        # 空镜日（Day 1/3/4/5/8）：不做「看镜头 / 口播」这类人物向改写，只补无人约束与声音约束
+        for token, phrase in protected.items():
+            out = out.replace(token, phrase)
+        out = out.replace("\u53e3\u64ad", "\u51fa\u955c").replace("\u8bf4\u8bdd", "\u51fa\u955c")
+        out = out.replace("\u770b\u955c\u5934", "\u8ba9\u955c\u5934\u7f13\u7f13\u626b\u8fc7\u73af\u5883\u7ec6\u8282")
+        out = re.sub(r"[\uff0c\u3001\s]{2,}", "\uff0c", out)
+        guard = _no_person_video_guard()
+        if "\u5168\u7247\u4e0d\u8981\u51fa\u73b0\u4eba\u7269\u4e3b\u4f53" not in out:
+            out = f"{out}{guard}" if out.endswith(("\u3002", "\uff1b", ";", ".")) else f"{out}\u3002{guard}"
+        bgm = (
+            "\u89c6\u9891\u5fc5\u987b\u4f34\u968f\u8857\u5934\u80cc\u666f\u97f3\u548c\u8f7b\u5feb\u8282\u594f\u97f3\u4e50\uff0c\u97f3\u91cf\u4f4e\uff0c\u53ea\u505a\u771f\u5b9e\u8857\u5934\u6c1b\u56f4\u548c\u8f7b\u5feb\u8282\u594f\u94fa\u5e95\uff1b"
+            "\u4e0d\u8981\u4eba\u58f0\u3001\u4e0d\u8981\u65c1\u767d\u3001\u4e0d\u8981\u6b4c\u8bcd\u3001\u4e0d\u8981\u4eba\u7269\u53d1\u58f0\u3002"
+        )
+        optional_bgm = "\u53ef\u52a0\u5165\u8f7b\u5fae\u80cc\u666f\u97f3\u4e50\u6216\u771f\u5b9e\u73af\u5883\u6c1b\u56f4\u611f\uff0c\u97f3\u91cf\u4f4e\uff0c\u4e0d\u8981\u4eba\u58f0\u3001\u4e0d\u8981\u65c1\u767d\u3001\u4e0d\u8981\u6b4c\u8bcd\u3001\u4e0d\u8981\u4efb\u4f55\u4eba\u7269\u53d1\u58f0\u3002"
+        if optional_bgm in out:
+            out = out.replace(optional_bgm, bgm)
+        elif "\u8857\u5934\u80cc\u666f\u97f3" not in out or "\u8f7b\u5feb\u8282\u594f\u97f3\u4e50" not in out:
+            out = f"{out}{bgm}" if out.endswith(("\u3002", "\uff1b", ";", ".")) else f"{out}\u3002{bgm}"
+        return out
     replacements = [
         ("动作自然：走路、停下、看镜头、轻微招手或口播。", "动作自然：走路、停下、转身、低头整理东西、侧身工作或与环境自然互动；视频中间约第4-6秒要自然抬头看向镜头。"),
         ("动作自然：走路、停下、看镜头、轻微招手或口播", "动作自然：走路、停下、转身、低头整理东西、侧身工作或与环境自然互动；视频中间约第4-6秒要自然抬头看向镜头"),
@@ -538,14 +575,14 @@ def _build_card(row: Dict[str, Any], profile: Dict[str, str]) -> Dict[str, Any]:
             f"{scene_only_prompt} 城市范围：{city_scope}。行业/赛道：{profile.get('industry')}，风格：{style}。"
             "这一天直接生成符合当地气质的真实同城场景图，不需要固定人物主角，不要绑定用户照片身份；"
             "可以表现与主题匹配的街道、门店、商圈、社区、写字楼、电梯口、停车场、咖啡店、夜景、住宅区、地标附近或生活化室内场景；"
-            "如果画面里出现行人，只能作为背景点缀或远景经过，不要突出单个人物，不要半身特写，不要摆拍。"
+            f"{_no_person_scene_guard()}"
             f"{scene_only_reference_prompt}{_real_life_scene_prompt()}"
             "输出9:16竖屏生活场景照片；画面本身不要生成字幕、不要水印、不要海报排版，字幕由前端/后期叠加。"
         )
         video_prompt = (
-            "基于合成出的城市场景图生成10秒竖屏视频，不要固定人物主角，不要人物口播，不要怼脸特写；"
+            "基于合成出的城市场景图生成10秒竖屏空镜视频：画面里不要出现人物主体，不要清晰正脸、人脸特写、半身或全身人像，不要摆拍人物；"
             "镜头像朋友拿手机在当地真实场景里边走边拍，轻微跟拍、轻微晃动、轻微推近、横移或扫街即可；"
-            "重点表现街景、门店、商圈、社区、办公区或生活空间的动态现场感，可以自然出现路人经过、车辆移动、招牌灯光、树影风感、门店进出或环境细节变化；"
+            "重点表现街景、门店、商圈、社区、办公区或生活空间的动态现场感，可以自然出现远景或虚化的路人快速经过（不得成为画面主体）、车辆移动、招牌灯光、树影风感、门店进出或环境细节变化；"
             "不要让任何单个人物成为主角，不要AI感运镜，不要过度电影光，不要文字水印。"
             f"{_real_life_scene_prompt()}"
         )
@@ -563,7 +600,7 @@ def _build_card(row: Dict[str, Any], profile: Dict[str, str]) -> Dict[str, Any]:
             f"{_real_life_prompt()}"
             "不要出现AI感运镜，不要过度电影光，不要文字水印。"
         )
-    video_prompt = _sanitize_video_prompt_no_speech(video_prompt)
+    video_prompt = _sanitize_video_prompt_no_speech(video_prompt, scene_only=scene_only_day)
     return {
         "id": f"local-day-{day:02d}",
         "day": day,
@@ -765,7 +802,9 @@ async def _submit_card_video_via_seedance(
     raw_prompt = str(card.get("video_prompt") or "").strip()
     if not raw_prompt:
         raise HTTPException(status_code=400, detail=f"Day {card.get('day')} 缺少 Grok 10秒视频提示词")
-    prompt = _sanitize_video_prompt_no_speech(raw_prompt)
+    prompt = _sanitize_video_prompt_no_speech(
+        raw_prompt, scene_only=_is_city_scene_only_day(int(card.get("day") or 0))
+    )
     pl = ComflySeedancePipelinePayload(
         asset_id=image_asset_id or None,
         image_url=image_url or None,

@@ -5,6 +5,7 @@ import logging
 import re
 import shlex
 import subprocess
+import unicodedata
 import uuid
 from copy import deepcopy
 from pathlib import Path
@@ -805,6 +806,74 @@ def _ass_color(hex_color: str) -> str:
     return f"&H00{bb}{gg}{rr}"
 
 
+_ASS_PLAY_RES_X = 1080
+_ASS_PLAY_RES_Y = 1920
+_ASS_SAFE_MARGIN_X = 52
+_ASS_SAFE_TOP = 96
+_ASS_SAFE_BOTTOM = 1810
+_ASS_NO_LINE_START = "，。！？、；：）】》》」』…·%"
+
+
+def _ass_char_units(ch: str) -> float:
+    if unicodedata.east_asian_width(ch) in ("W", "F"):
+        return 1.0
+    if ch.isspace():
+        return 0.35
+    return 0.55
+
+
+def _ass_display_units(text: str) -> float:
+    return sum(_ass_char_units(ch) for ch in str(text or ""))
+
+
+def _ass_max_units(font_size: int, *, margin_x: int = _ASS_SAFE_MARGIN_X) -> float:
+    usable = max(160, _ASS_PLAY_RES_X - 2 * int(margin_x))
+    return max(4.0, usable / max(1.0, float(font_size or 1)))
+
+
+def _ass_fit_font_size(text: str, *, base_size: int, margin_x: int = _ASS_SAFE_MARGIN_X, min_size: int) -> int:
+    """把字号压到该行刚好放得进画面（不小于 min_size）。"""
+    units = _ass_display_units(text)
+    if units <= 0:
+        return int(base_size)
+    usable = max(160, _ASS_PLAY_RES_X - 2 * int(margin_x))
+    fitted = int(usable / units)
+    return max(int(min_size), min(int(base_size), fitted))
+
+
+def _wrap_ass_line(text: str, *, font_size: int, margin_x: int = _ASS_SAFE_MARGIN_X, max_lines: int = 6) -> List[str]:
+    """\pos 事件不会自动换行，这里按显示宽度手动折行。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return [""]
+    limit = _ass_max_units(font_size, margin_x=margin_x)
+    lines: List[str] = []
+    current = ""
+    used = 0.0
+    for ch in raw:
+        width = _ass_char_units(ch)
+        if current and used + width > limit:
+            if ch in _ASS_NO_LINE_START:
+                current += ch
+                lines.append(current)
+                current = ""
+                used = 0.0
+                continue
+            lines.append(current)
+            current = ch
+            used = width
+            continue
+        current += ch
+        used += width
+    if current:
+        lines.append(current)
+    if max_lines > 0 and len(lines) > max_lines:
+        head = lines[: max_lines - 1]
+        head.append("".join(lines[max_lines - 1 :]))
+        lines = head
+    return lines
+
+
 def _ass_event(style: str, text: str, *, start: str = "0:00:00.00", end: str = "0:00:10.00", margin_v: int = 0) -> str:
     return f"Dialogue: 0,{start},{end},{style},,0,0,{int(margin_v)},,{text}"
 
@@ -831,19 +900,38 @@ def _local_bestseller_rank_table_ass_content(subtitle_text: str, *, day: Any = N
     subtitle = lines[1] if len(lines) > 1 else "湖北竟然是南方"
     south = ["上海", "江苏", "浙江", "安徽", "江西", "湖北", "湖南", "四川", "重庆", "贵州", "云南", "福建", "广东", "广西", "海南"]
     north = ["北京", "天津", "河北", "山西", "内蒙古", "辽宁", "吉林", "黑龙江", "山东", "河南", "陕西", "甘肃", "青海", "宁夏", "新疆"]
-    events = [
-        _ass_event("RankTitleRed", _escape_ass_text(title), margin_v=64),
-        _ass_event("RankTitleYellow", _escape_ass_text(subtitle), margin_v=172),
+    # 顶部大红标题/黄副标题：先按画面宽度压字号，必要时折行，避免顶到画面外
+    title_font = _ass_fit_font_size(title, base_size=96, margin_x=54, min_size=58)
+    title_wrapped = _wrap_ass_line(title, font_size=title_font, margin_x=54, max_lines=2)
+    title_step = max(56, int(round(title_font * 1.2)))
+    subtitle_font = _ass_fit_font_size(subtitle, base_size=88, margin_x=54, min_size=54)
+    subtitle_wrapped = _wrap_ass_line(subtitle, font_size=subtitle_font, margin_x=54, max_lines=2)
+    subtitle_step = max(52, int(round(subtitle_font * 1.2)))
+    subtitle_y = 64 + len(title_wrapped) * title_step + 8
+    events: List[str] = []
+    for idx, piece in enumerate(title_wrapped):
+        events.append(_ass_event("RankTitleRed", rf"{{\pos(540,{64 + idx * title_step})\fs{title_font}}}" + _escape_ass_text(piece)))
+    for idx, piece in enumerate(subtitle_wrapped):
+        events.append(_ass_event("RankTitleYellow", rf"{{\pos(540,{subtitle_y + idx * subtitle_step})\fs{subtitle_font}}}" + _escape_ass_text(piece)))
+    list_start_y = 462
+    list_rows = max(len(south), len(north), 1)
+    # 行距自适应：保证最后一行（含字号高度）仍留在画面安全区内
+    list_bottom_limit = _ASS_SAFE_BOTTOM - 96
+    if list_rows <= 1:
+        list_step_y = 100
+    else:
+        list_step_y = min(100, max(72, int((list_bottom_limit - list_start_y) / (list_rows - 1))))
+    events.extend([
         _ass_event("RankHeader", r"{\pos(328,336)}南方"),
         _ass_event("RankHeader", r"{\pos(752,336)}北方"),
-        *_rank_list_events("RankList", south, x=328, start_y=462, step_y=100),
-        *_rank_list_events("RankList", north, x=752, start_y=462, step_y=100),
-    ]
+        *_rank_list_events("RankList", south, x=328, start_y=list_start_y, step_y=list_step_y),
+        *_rank_list_events("RankList", north, x=752, start_y=list_start_y, step_y=list_step_y),
+    ])
     return "\n".join([
         "[Script Info]",
         "ScriptType: v4.00+",
-        "PlayResX: 1080",
-        "PlayResY: 1920",
+        f"PlayResX: {_ASS_PLAY_RES_X}",
+        f"PlayResY: {_ASS_PLAY_RES_Y}",
         "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",
@@ -869,35 +957,57 @@ def _local_bestseller_ass_content(subtitle_text: str, subtitle_style: Optional[D
     lines = _local_bestseller_caption_lines(subtitle_text)
     title = lines[0] if lines else ""
     body = lines[1:] if len(lines) > 1 else []
-    events: List[str] = []
-    stack: List[tuple[str, str]] = []
+    entries: List[tuple[str, str]] = []
     if title:
-        stack.append(("Title", title))
+        entries.append(("Title", title))
     if body:
-        stack.extend(("Body", line) for line in body[:4])
-    if stack:
-        use_top_layout = int(day or 0) in scene_only_days
+        entries.extend(("Body", line) for line in body[:4])
+
+    base_fonts = {"Title": 94, "Body": 88}
+    fonts = dict(base_fonts)
+    rendered: List[tuple[str, str]] = []
+    # 先按标准字号折行；行数太多就整体缩一号再折，保证整块字幕压在画面里
+    for scale in (1.0, 0.92, 0.84, 0.76):
+        fonts = {key: max(52, int(round(value * scale))) for key, value in base_fonts.items()}
+        rendered = []
+        for style_name, text in entries:
+            for piece in _wrap_ass_line(text, font_size=fonts[style_name]):
+                rendered.append((style_name, piece))
+        if len(rendered) <= 8:
+            break
+    rendered = rendered[:8]
+
+    use_top_layout = int(day or 0) in scene_only_days
+    if rendered:
+        max_font = max(fonts[style_name] for style_name, _ in rendered)
+        step = max(56, int(round(max_font * 1.22)))
+        height = (len(rendered) - 1) * step
         if use_top_layout:
-            step_y = 102 if variant == "large_center_stack" else 88
-            start_y = 288 if variant == "large_center_stack" else 312
-            if title:
-                events.append(_ass_event("Title", rf"{{\pos(540,132)}}" + _escape_ass_text(title)))
-            stack = [entry for entry in stack if entry[0] == "Body"]
+            start_y = _ASS_SAFE_TOP + 36
         else:
-            step_y = 102 if variant == "large_center_stack" else 92
             anchor_y = 1040 if variant == "large_center_stack" else 1010
-            start_y = int(round(anchor_y - ((len(stack) - 1) * step_y) / 2))
-        for idx, (event_style, text) in enumerate(stack):
-            y = start_y + idx * step_y
-            events.append(_ass_event(event_style, rf"{{\pos(540,{y})}}" + _escape_ass_text(text)))
+            start_y = int(round(anchor_y - height / 2))
+        start_y = max(_ASS_SAFE_TOP, start_y)
+        if start_y + height > _ASS_SAFE_BOTTOM:
+            start_y = max(_ASS_SAFE_TOP, _ASS_SAFE_BOTTOM - height)
+    else:
+        step = 102
+        start_y = 312 if use_top_layout else 1010
+
+    events: List[str] = []
+    cursor_y = start_y
+    for idx, (style_name, text) in enumerate(rendered):
+        y = start_y + idx * step
+        events.append(_ass_event(style_name, rf"{{\pos(540,{y})\fs{fonts[style_name]}}}" + _escape_ass_text(text)))
+        cursor_y = y
     if not events:
-        fallback_y = 312 if int(day or 0) in scene_only_days else 1010
+        fallback_y = 312 if use_top_layout else 1010
         events.append(_ass_event("Body", rf"{{\pos(540,{fallback_y})}}"))
     return "\n".join([
         "[Script Info]",
         "ScriptType: v4.00+",
-        "PlayResX: 1080",
-        "PlayResY: 1920",
+        f"PlayResX: {_ASS_PLAY_RES_X}",
+        f"PlayResY: {_ASS_PLAY_RES_Y}",
         "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",
