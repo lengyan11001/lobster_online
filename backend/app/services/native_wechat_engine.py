@@ -12716,7 +12716,7 @@ def _enforce_local_friend_add_rate(account_id: str) -> None:
     strategy = get_strategy()
     daily_limit = int(strategy.get("daily_friend_add_limit") or 0)
     if daily_limit > 0 and _local_friend_request_count_today(account_id) >= daily_limit:
-        raise RuntimeError(f"daily friend add limit reached: {daily_limit}")
+        raise FriendAddDailyLimitReached(f"daily friend add limit reached: {daily_limit}")
     min_gap = float(strategy.get("friend_add_min_gap") or 0)
     if min_gap <= 0:
         return
@@ -15254,6 +15254,25 @@ async def _process_contact_moments_engage_target(
         _close_foreground_sns_window(hwnd, steps, reason="contact_engage_done")
 
 
+class FriendAddDailyLimitReached(RuntimeError):
+    """今日加好友额度已用完：任务要留在队列里等额度窗口重置，而不是标记失败。"""
+
+
+def _friend_add_quota_reset_seconds() -> float:
+    """距离下一次加好友日额度重置的秒数（留 2 分钟缓冲）。"""
+    now = datetime.utcnow()
+    tomorrow = datetime(now.year, now.month, now.day) + timedelta(days=1)
+    return max(60.0, (tomorrow - now).total_seconds() + 120.0)
+
+
+def _task_row_by_id(task_id: str) -> Optional[Dict[str, Any]]:
+    if not task_id:
+        return None
+    with _connect() as conn:
+        row = conn.execute("select * from wechat_tasks where id=? limit 1", (task_id,)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
 async def create_add_friend_task(
     account_id: str,
     keywords: List[str],
@@ -15265,6 +15284,7 @@ async def create_add_friend_task(
     prepare_only: bool = False,
     client_request_id: str = "",
     queue_only: bool = False,
+    bulk_import: bool = False,
 ) -> Dict[str, Any]:
     init_db()
     existing = _existing_task_by_client_request_id(account_id, client_request_id)
@@ -15273,13 +15293,15 @@ async def create_add_friend_task(
     if not queue_only:
         _find_local_account(account_id)
     strategy = get_strategy()
-    max_targets = int(strategy.get("max_targets_per_task") or 0)
+    # bulk_import（文件导入）要求全量入队：不做单任务条数上限，也不在入队阶段校验日额度；
+    # 后面按设置的间隔一条条加好友，节流与日额度由执行层 _enforce_local_friend_add_rate 把控。
+    max_targets = 0 if bulk_import else int(strategy.get("max_targets_per_task") or 0)
     targets = _normalize_task_targets(keywords, max_targets=max_targets)
     if not targets:
         raise RuntimeError("缺少好友关键词")
     daily_limit = int(strategy.get("daily_friend_add_limit") or 0)
     added_today = _local_friend_request_count_today(account_id)
-    if daily_limit > 0 and added_today + len(targets) > daily_limit:
+    if not bulk_import and daily_limit > 0 and added_today + len(targets) > daily_limit:
         raise RuntimeError(f"daily friend add limit would be exceeded: {added_today}/{daily_limit}")
     if queue_only:
         # Leave room for the per-target suffix in client_request_id.
@@ -15354,18 +15376,39 @@ async def create_add_friend_task(
     return task
 
 
-async def _process_add_friend_task(task: Dict[str, Any]) -> None:
+async def _process_add_friend_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    """执行一条加好友任务。
+
+    今日额度用尽时不烧任务：把还没处理的目标写回 payload.pending_targets，任务退回 queued，
+    等额度窗口重置后由调度器接着跑。这样文件导入进来的全量表可以跨天慢慢加完。
+    """
     task_id = str(task.get("id") or "")
     account_id = str(task.get("account_id") or "")
-    targets = _normalize_task_targets(list(task.get("targets") or []))
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
     strategy = task.get("strategy") if isinstance(task.get("strategy"), dict) else get_strategy()
+    pending = payload.get("pending_targets")
+    resuming = isinstance(pending, list) and bool(pending)
+    if resuming:
+        targets = _normalize_task_targets(list(pending))
+    else:
+        targets = _normalize_task_targets(list(task.get("targets") or []))
+    base_processed = int(task.get("processed") or 0) if resuming else 0
+    base_success = int(task.get("success") or 0) if resuming else 0
+    base_failed = int(task.get("failed") or 0) if resuming else 0
     success = 0
     failed = 0
     processed = 0
     last_error = ""
+    deferred = ""
+    consumed = 0
     for idx, target in enumerate(targets):
+        try:
+            _enforce_local_friend_add_rate(account_id)
+        except FriendAddDailyLimitReached as exc:
+            deferred = str(exc)
+            break
         processed += 1
+        consumed = idx + 1
         ok = False
         err = ""
         for attempt in range(int(strategy.get("retry_max") or 0) + 1):
@@ -15383,19 +15426,56 @@ async def _process_add_friend_task(task: Dict[str, Any]) -> None:
                 )
                 ok = True
                 break
+            except FriendAddDailyLimitReached as exc:
+                deferred = str(exc)
+                err = deferred
+                break
             except Exception as exc:
                 err = str(exc)
                 if attempt < int(strategy.get("retry_max") or 0):
                     await _sleep(float(strategy.get("retry_sleep") or 0))
+        if deferred:
+            processed -= 1
+            consumed = idx
+            break
         if ok:
             success += 1
         else:
             failed += 1
             last_error = err
-        _update_task_progress(task_id, processed, success, failed, last_error)
+        _update_task_progress(
+            task_id,
+            base_processed + processed,
+            base_success + success,
+            base_failed + failed,
+            last_error,
+        )
         await _sleep_between_targets(strategy, idx, len(targets), kind="add_friend")
+    total_processed = base_processed + processed
+    total_success = base_success + success
+    total_failed = base_failed + failed
+    if deferred:
+        remaining = targets[consumed:]
+        _update_task_payload(task_id, {"pending_targets": remaining, "deferred_reason": deferred})
+        _finish_task(task_id, "queued", total_processed, total_success, total_failed, deferred)
+        return {
+            "deferred": True,
+            "reason": deferred,
+            "remaining": len(remaining),
+            "processed": total_processed,
+            "success": total_success,
+            "failed": total_failed,
+        }
+    _update_task_payload(task_id, {"pending_targets": [], "deferred_reason": ""})
     status = "success" if failed == 0 else ("partial_failed" if success else "failed")
-    _finish_task(task_id, status, processed, success, failed, last_error)
+    _finish_task(task_id, status, total_processed, total_success, total_failed, last_error)
+    return {
+        "deferred": False,
+        "status": status,
+        "processed": total_processed,
+        "success": total_success,
+        "failed": total_failed,
+    }
 
 
 async def create_moments_publish_task(
@@ -18838,8 +18918,11 @@ async def _run_friend_add_scheduler(account_id: str) -> None:
         while get_friend_add_control(key).get("enabled"):
             task = _claim_next_queued_friend_task(key)
             if task:
+                defer_seconds = 0.0
                 try:
-                    await _process_add_friend_task(task)
+                    outcome = await _process_add_friend_task(task)
+                    if isinstance(outcome, dict) and outcome.get("deferred"):
+                        defer_seconds = _friend_add_quota_reset_seconds()
                 except Exception as exc:
                     _finish_task(
                         str(task.get("id") or ""),
@@ -18851,6 +18934,14 @@ async def _run_friend_add_scheduler(account_id: str) -> None:
                     )
                 if not get_friend_add_control(key).get("enabled"):
                     break
+                if defer_seconds > 0:
+                    # 今日额度用尽：任务已退回队列，睡到额度重置再继续，不空转也不烧队列。
+                    event.clear()
+                    try:
+                        await asyncio.wait_for(event.wait(), timeout=float(defer_seconds))
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
                 interval = get_friend_add_control(key).get("interval_seconds") or 60
                 event.clear()
                 try:
@@ -18894,7 +18985,14 @@ async def _run_add_friend_task_background(task: Dict[str, Any]) -> None:
     account_id = str(task.get("account_id") or "").strip()
     task_id = str(task.get("id") or "")
     try:
-        await _process_add_friend_task(task)
+        while True:
+            outcome = await _process_add_friend_task(task)
+            if not (isinstance(outcome, dict) and outcome.get("deferred")):
+                break
+            refreshed = _task_row_by_id(task_id)
+            if refreshed:
+                task = refreshed
+            await _sleep(_friend_add_quota_reset_seconds())
     except asyncio.CancelledError:
         _finish_task(
             task_id,

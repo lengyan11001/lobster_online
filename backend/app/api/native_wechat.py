@@ -122,6 +122,7 @@ class AddFriendBody(BaseModel):
     permission: str = Field(default="朋友圈", max_length=20)
     prepare_only: bool = False
     queue_only: bool = False
+    bulk_import: bool = False
     client_request_id: str = Field(default="", max_length=180)
 
 
@@ -719,6 +720,7 @@ async def native_wechat_add_friend(
             permission=body.permission,
             prepare_only=body.prepare_only,
             queue_only=body.queue_only,
+            bulk_import=body.bulk_import,
             client_request_id=body.client_request_id or _client_request_id(request),
         )
         return {

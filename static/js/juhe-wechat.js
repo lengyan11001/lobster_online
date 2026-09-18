@@ -14,6 +14,7 @@
     friendRecords: [],
     friendQueueControl: null,
     friendImportRows: [],
+    friendImportBulk: false,
     strategy: null,
     autoReply: null,
     autoReplyTemplateLanguage: 'zh-CN',
@@ -1429,7 +1430,8 @@
     });
   }
 
-  function addFriend() {
+  function addFriend(bulkImport) {
+    state.friendImportBulk = bulkImport === true;
     var modal = $('nativeWechatFriendAddModal');
     if (modal) modal.classList.add('show');
     var input = $('nativeWechatFriendModalKeyword');
@@ -1448,6 +1450,15 @@
     var submit = $('nativeWechatFriendModalSubmitBtn');
     if (submit) submit.disabled = true;
     setChip('nativeWechatFriendState', '提交中');
+    if (state.friendImportBulk) {
+      state.friendImportBulk = false;
+      return submitFriendBulkBatches([{ keywords: keywords, remark: remark, apply_message: applyMessage, permission: permission, tags: tags }]).then(function() {
+        var modal = $('nativeWechatFriendAddModal');
+        if (modal) modal.classList.remove('show');
+        var input = $('nativeWechatFriendModalKeyword');
+        if (input) input.value = '';
+      }).finally(function() { if (submit) submit.disabled = false; });
+    }
     var requestId = 'friend-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
     return apiJson('/api/native-wechat/friends/add', {
       method: 'POST',
@@ -1549,8 +1560,8 @@
       if (!values.length) return setMsg('导入文件中没有可用的微信号或手机号', true);
       var input = $('nativeWechatFriendModalKeyword');
       if (input) input.value = values.join('\n');
-      addFriend();
-      setMsg('已导入 ' + values.length + ' 个目标，请确认申请信息后提交', false);
+      addFriend(true);
+      setMsg('已读取 ' + values.length + ' 个目标，填好申请信息后点提交（全部入队，不受条数限制）', false);
     }).catch(function() { setMsg('读取导入文件失败', true); });
   }
 
@@ -1569,40 +1580,88 @@
     return cells;
   }
 
-  function submitImportedFriendRows(rows) {
+  // 文件导入：单次请求的传输分片大小（服务端字段校验上限），只影响传输，不影响导入总量
+  var FRIEND_IMPORT_CHUNK = 100;
+
+  function submitFriendBulkBatches(batches) {
     var id = activeAccountId();
     if (!id) return setMsg('请先选择账号', true);
-    var groups = {};
-    rows.forEach(function(row) {
-      if (!row.contact) return;
-      var permission = row.permission || '朋友圈';
-      var key = [row.remark, row.apply_message, permission, row.tags.join(',')].join('\u0001');
-      if (!groups[key]) groups[key] = { keywords: [], remark: row.remark, apply_message: row.apply_message, permission: permission, tags: row.tags };
-      groups[key].keywords.push(row.contact);
+    var requests = [];
+    (batches || []).forEach(function(batch) {
+      var seen = {};
+      var keywords = [];
+      (batch.keywords || []).forEach(function(raw) {
+        var value = String(raw || '').trim();
+        var key = value.toLowerCase();
+        if (!value || seen[key]) return;
+        seen[key] = true;
+        keywords.push(value);
+      });
+      for (var offset = 0; offset < keywords.length; offset += FRIEND_IMPORT_CHUNK) {
+        requests.push({
+          keywords: keywords.slice(offset, offset + FRIEND_IMPORT_CHUNK),
+          remark: String(batch.remark || ''),
+          apply_message: String(batch.apply_message || ''),
+          permission: String(batch.permission || '朋友圈'),
+          tags: batch.tags || []
+        });
+      }
     });
-    var batches = Object.keys(groups).map(function(key, index) {
-      var group = groups[key];
-      return apiJson('/api/native-wechat/friends/add', {
-        method: 'POST',
-        body: {
-          account_id: id,
-          keywords: group.keywords,
-          apply_message: group.apply_message,
-          remark: group.remark,
-          tags: group.tags,
-          permission: group.permission,
-          prepare_only: false,
-          queue_only: true,
-          client_request_id: 'friend-csv-' + Date.now() + '-' + index
-        }
+    if (!requests.length) return setMsg('没有可导入的目标', true);
+    var total = requests.reduce(function(sum, item) { return sum + item.keywords.length; }, 0);
+    var clientId = 'friend-import-' + Date.now();
+    var done = 0;
+    setMsg('正在导入 ' + total + ' 个目标…', false);
+    var chain = Promise.resolve();
+    requests.forEach(function(req, index) {
+      chain = chain.then(function() {
+        return apiJson('/api/native-wechat/friends/add', {
+          method: 'POST',
+          body: {
+            account_id: id,
+            keywords: req.keywords,
+            apply_message: req.apply_message,
+            remark: req.remark,
+            tags: req.tags,
+            permission: req.permission,
+            prepare_only: false,
+            queue_only: true,
+            bulk_import: true,
+            client_request_id: clientId + '-' + index
+          }
+        }).then(function() {
+          done += req.keywords.length;
+          if (done < total) setMsg('正在导入 ' + done + '/' + total + ' …', false);
+        });
       });
     });
-    if (!batches.length) return setMsg('CSV 第一列至少填写一个联系人', true);
-    setMsg('正在导入好友申请…', false);
-    return Promise.all(batches).then(function() {
-      setMsg('已按 CSV 每行参数加入好友列表', false);
+    return chain.then(function() {
+      setChip('nativeWechatFriendState', '已入队');
+      setMsg('已导入 ' + total + ' 个目标，全部进入列表；点启动后按设置的间隔逐条加好友', false);
       return Promise.all([loadFriendRecords(), loadFriendQueueControl()]);
-    }).catch(function(err) { setMsg(err.message || '导入 CSV 失败', true); });
+    }).catch(function(err) {
+      setChip('nativeWechatFriendState', '导入失败');
+      setMsg('导入失败（已导入 ' + done + '/' + total + '）：' + ((err && err.message) || '未知错误'), true);
+    });
+  }
+
+  function submitImportedFriendRows(rows) {
+    var groups = {};
+    var order = [];
+    (rows || []).forEach(function(row) {
+      if (!row || !row.contact) return;
+      var permission = row.permission || '朋友圈';
+      var tags = row.tags || [];
+      var key = [row.remark, row.apply_message, permission, tags.join(',')].join('\u0001');
+      if (!groups[key]) {
+        groups[key] = { keywords: [], remark: row.remark, apply_message: row.apply_message, permission: permission, tags: tags };
+        order.push(key);
+      }
+      groups[key].keywords.push(row.contact);
+    });
+    var batches = order.map(function(key) { return groups[key]; });
+    if (!batches.length) return setMsg('CSV 第一列至少填写一个联系人', true);
+    return submitFriendBulkBatches(batches);
   }
 
   function downloadFriendImportTemplate(type) {
@@ -2242,7 +2301,7 @@
     var loadOlderMessagesBtn = $('nativeWechatLoadOlderMessagesBtn');
     if (loadOlderMessagesBtn) loadOlderMessagesBtn.addEventListener('click', loadOlderMessages);
     var addFriendBtn = $('nativeWechatAddFriendBtn');
-    if (addFriendBtn) addFriendBtn.addEventListener('click', addFriend);
+    if (addFriendBtn) addFriendBtn.addEventListener('click', function() { addFriend(false); });
     var friendModalSubmitBtn = $('nativeWechatFriendModalSubmitBtn');
     if (friendModalSubmitBtn) friendModalSubmitBtn.addEventListener('click', submitFriendAddModal);
     var friendImportBtn = $('nativeWechatImportFriendBtn');
