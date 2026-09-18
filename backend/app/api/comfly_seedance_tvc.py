@@ -328,7 +328,7 @@ async def _prepare_pipeline_input(
         requested_count = int(pl.total_duration_seconds) // (8 if uses_yunwu_veo else 10)
     workflow_mode = (pl.workflow_mode or "storyboard").strip().lower().replace("-", "_") or "storyboard"
     logger.info(
-        "[seedance-tvc] prepared pipeline user_id=%s workflow_mode=%s references=%s segment_count=%s segment_seconds=%s video_channel=%s video_model=%s",
+        "[seedance-tvc] prepared pipeline user_id=%s workflow_mode=%s references=%s segment_count=%s segment_seconds=%s video_channel=%s video_model=%s aspect_ratio=%s resolution=%s",
         current_user.id,
         workflow_mode,
         len(reference_images),
@@ -336,6 +336,8 @@ async def _prepare_pipeline_input(
         pl.segment_duration_seconds,
         video_channel or "",
         video_model or pl.video_model or "",
+        pl.aspect_ratio or "",
+        pl.resolution or "",
     )
     return build_pipeline_input(
         reference_image=reference_images[0] if reference_images else "",
@@ -506,6 +508,8 @@ async def _save_local_final_video_asset(
     auth_header: str = "",
     installation_id: str = "",
     generation_task_id: str = "",
+    tags: str = "auto,comfly.seedance.tvc.pipeline,merged",
+    meta_extra: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     path_text = str(local_path or "").strip()
     if not path_text:
@@ -549,6 +553,8 @@ async def _save_local_final_video_asset(
         "seedance_final_video": True,
         "origin_local_path": str(path),
     }
+    if meta_extra:
+        meta.update(meta_extra)
     if generation_task_id:
         meta["generation_task_id"] = generation_task_id[:128]
 
@@ -563,7 +569,7 @@ async def _save_local_final_video_asset(
             source_url=source_url,
             prompt=(prompt or "").strip()[:500] or None,
             model=(video_model or "").strip()[:128] or None,
-            tags="auto,comfly.seedance.tvc.pipeline,merged",
+            tags=tags,
             meta=meta,
         )
         db.add(asset)
@@ -591,6 +597,24 @@ async def _save_pipeline_videos(
 ) -> List[Dict[str, Any]]:
     saved: List[Dict[str, Any]] = []
     for url, task_id, title_hint in urls:
+        # 比例被裁/补过的分镜是本地文件（不是 URL）：直接按本地文件入库，保证素材库也是目标比例
+        if not str(url or "").startswith(("http://", "https://")):
+            local_row = await _save_local_final_video_asset(
+                local_path=url,
+                current_user=current_user,
+                prompt=title_hint or "",
+                video_model=video_model,
+                auth_header=auth_header or _request_auth_header(request),
+                installation_id=installation_id or _request_installation_id(request),
+                generation_task_id=task_id or "",
+                tags="auto,comfly.seedance.tvc.pipeline,shot",
+                meta_extra={"seedance_shot_clip": True},
+            )
+            if local_row:
+                saved.append({"source_url": url, "task_id": task_id, "asset": local_row})
+            else:
+                logger.warning("[seedance-tvc] local shot clip save skipped path=%s", url)
+            continue
         body = SaveAssetReq(
             url=url,
             media_type="video",

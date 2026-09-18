@@ -53,7 +53,8 @@ def test_seedance_storyboard_openmind_download_uses_openmind_proxy() -> None:
     assert url == "https://bhzn.top/api/comfly-proxy/openmind/v1/videos/task_abc/content"
 
 
-def test_seedance_storyboard_download_auth_only_for_xing_proxy() -> None:
+def test_seedance_storyboard_download_auth_for_proxied_content() -> None:
+    """走本服务代理取受保护成片的接口都要带 token（openmind 以前漏了 → 必然 401）。"""
     mod = _load_module("skills/comfly_seedance_tvc_video/scripts/comfly_seedance_storyboard_pipeline.py")
 
     assert mod._download_headers_for_url(
@@ -63,7 +64,7 @@ def test_seedance_storyboard_download_auth_only_for_xing_proxy() -> None:
     assert mod._download_headers_for_url(
         "https://bhzn.top/api/comfly-proxy/openmind/v1/videos/task_abc/content",
         "token",
-    ) is None
+    ) == {"Authorization": "Bearer token", "Accept": "video/mp4,*/*"}
     assert mod._download_headers_for_url(
         "https://lobster-online-assets.example.com/assets/demo.mp4",
         "token",

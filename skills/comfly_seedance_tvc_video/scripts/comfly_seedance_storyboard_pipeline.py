@@ -401,6 +401,42 @@ def _normalize_aspect_ratio(raw: str, default: str = "9:16") -> str:
     return default
 
 
+# 各比例的目标 w/h 与容差；成品尺寸用于把模型给的片子裁/补回目标比例
+_ASPECT_TARGETS: Dict[str, tuple] = {
+    "9:16": (9 / 16, 0.12),
+    "16:9": (16 / 9, 0.20),
+    "1:1": (1.0, 0.08),
+    "4:5": (4 / 5, 0.10),
+    "3:4": (3 / 4, 0.09),
+    "2:3": (2 / 3, 0.10),
+    "4:3": (4 / 3, 0.16),
+    "5:4": (5 / 4, 0.16),
+    "3:2": (3 / 2, 0.18),
+    "21:9": (21 / 9, 0.60),
+}
+
+_ASPECT_OUTPUT_SIZE: Dict[str, tuple] = {
+    "9:16": (720, 1280),
+    "16:9": (1280, 720),
+    "1:1": (1024, 1024),
+    "4:5": (864, 1080),
+    "3:4": (810, 1080),
+    "2:3": (720, 1080),
+    "4:3": (1080, 810),
+    "5:4": (1080, 864),
+    "3:2": (1080, 720),
+    "21:9": (1280, 548),
+}
+
+# 比例不符时的纠偏方式：cover=裁切填满（默认，短视频常用）/ contain=补黑边
+_ASPECT_FIT_MODE = "cover"
+
+
+def _aspect_output_size(aspect_ratio: str) -> tuple:
+    normalized = _normalize_aspect_ratio(aspect_ratio)
+    return _ASPECT_OUTPUT_SIZE.get(normalized) or _ASPECT_OUTPUT_SIZE["9:16"]
+
+
 def _as_bool(value: Any, default: bool) -> bool:
     if value is None:
         return default
@@ -769,7 +805,15 @@ def _resolve_video_download_url(url: str, channel: str, base_url: str, task_id: 
 
 def _download_headers_for_url(url: str, api_key: str = "") -> Optional[Dict[str, str]]:
     parsed = urlparse(str(url or ""))
-    if "/api/comfly-proxy/xing/" not in parsed.path:
+    path = parsed.path or ""
+    # 走本服务代理取受保护素材（/content 之类）的接口都要带用户 token，否则服务端
+    # get_current_user 直接 401：openmind 兜底通道的成片以前就是这么永远下载失败的。
+    needs_auth = (
+        "/api/comfly-proxy/xing/" in path
+        or "/api/comfly-proxy/openmind/" in path
+        or path.rstrip("/").endswith("/content")
+    )
+    if not needs_auth:
         return None
     token = str(api_key or "").strip()
     if not token:
@@ -858,6 +902,56 @@ def _probe_video_dimensions(media_path: str, ffmpeg_path: str) -> Optional[Dict[
     return {"width": width, "height": height}
 
 
+def _conform_video_to_ratio(
+    src_path: str,
+    aspect_ratio: str,
+    ffmpeg_path: str,
+    out_path: Path,
+    *,
+    mode: str = "",
+) -> Optional[Path]:
+    """把成片裁/补到目标比例（cover=裁切填满，contain=补黑边）；失败返回 None。
+
+    图生视频模型常常跟着参考图出片（参考图 3:4 就出 3:4），所以比例不符时不再整段
+    报废、重跑所有渠道，而是先纠一次再继续用。
+    """
+    ffmpeg_binary = _resolve_tool_binary("ffmpeg", ffmpeg_path)
+    if not ffmpeg_binary:
+        return None
+    width, height = _aspect_output_size(aspect_ratio)
+    fit_mode = (mode or _ASPECT_FIT_MODE or "cover").strip().lower()
+    if fit_mode == "contain":
+        vf = (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
+        )
+    else:
+        vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg_binary, "-y", "-i", str(src_path),
+        "-vf", vf,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-movflags", "+faststart",
+        str(out_path),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    except (FileNotFoundError, OSError) as exc:
+        logger.warning(
+            "[seedance-aspect] conform failed: %s",
+            _exception_summary(exc, [ffmpeg_binary, "-vf", vf, str(src_path), str(out_path)]),
+        )
+        return None
+    if proc.returncode != 0 or not out_path.exists():
+        logger.warning(
+            "[seedance-aspect] conform ffmpeg returncode=%s target=%s src=%s stderr=%s",
+            proc.returncode, f"{width}x{height}", src_path, (proc.stderr or "")[-500:],
+        )
+        return None
+    return out_path
+
+
 def _probe_stream_types(media_path: str, ffmpeg_path: str) -> List[str]:
     ffprobe_binary = _ffprobe_binary_for(ffmpeg_path)
     if not ffprobe_binary:
@@ -904,6 +998,18 @@ def _merge_completed_segments(config: PipelineConfig, logger_obj: RunLogger, seg
     for seg in sorted(segments, key=lambda item: int(item.get("index", 0))):
         index = int(seg.get("index", 0))
         clip_url = _first_text(seg, "mp4url")
+        # 校验阶段已经裁/补好的本地成片优先复用：既省一次下载，也保证合成用的是纠偏后的片子
+        validated_local = str(seg.get("local_clip_path") or "").strip()
+        if validated_local and Path(validated_local).is_file():
+            logger_obj.segment(
+                index,
+                "merge_download",
+                "success",
+                attempts=0,
+                payload={"index": index, "path": validated_local, "reused_validated_clip": True},
+            )
+            downloaded.append({"index": index, "path": validated_local, "url": clip_url, "reused": True})
+            continue
         download_url = _resolve_video_download_url(
             clip_url,
             str(seg.get("video_channel") or config.video_channel),
@@ -926,6 +1032,39 @@ def _merge_completed_segments(config: PipelineConfig, logger_obj: RunLogger, seg
         )
         logger_obj.segment(index, "merge_download", "success", attempts=attempts, payload={"index": index, "path": str(downloaded_path)})
         downloaded.append({"index": index, "path": str(downloaded_path), "url": clip_url})
+
+    # 合成前统一到目标比例：模型按参考图出片时可能是 3:4/1:1 等，先裁/补再拼接，
+    # 保证成片就是用户选的比例（抖音竖版 9:16 之类）。
+    normalized: List[Dict[str, Any]] = []
+    for item in downloaded:
+        clip_dimensions = _probe_video_dimensions(str(item["path"]), config.ffmpeg_path)
+        if clip_dimensions and _aspect_matches_request(clip_dimensions, config.aspect_ratio):
+            normalized.append(item)
+            continue
+        fit_path = clips_dir / f"segment_{int(item['index']):02d}_fit.mp4"
+        fitted = _conform_video_to_ratio(
+            str(item["path"]), config.aspect_ratio, config.ffmpeg_path, fit_path
+        )
+        fitted_dimensions = (
+            _probe_video_dimensions(str(fitted), config.ffmpeg_path) if fitted else None
+        )
+        if fitted and fitted_dimensions and _aspect_matches_request(fitted_dimensions, config.aspect_ratio):
+            logger_obj.segment(
+                int(item["index"]),
+                "merge_fit_aspect",
+                "adjusted",
+                payload={
+                    "index": item["index"],
+                    "source_dimensions": clip_dimensions or {},
+                    "dimensions": fitted_dimensions,
+                    "path": str(fitted),
+                    "fit_mode": _ASPECT_FIT_MODE,
+                },
+            )
+            normalized.append({**item, "path": str(fitted), "dimensions": fitted_dimensions, "fit_mode": _ASPECT_FIT_MODE})
+        else:
+            normalized.append(item)
+    downloaded = normalized
 
     merged_path = logger_obj.run_dir / "merged_output.mp4"
     if len(downloaded) == 1:
@@ -2210,14 +2349,17 @@ def _aspect_matches_request(dimensions: Dict[str, int], aspect_ratio: str) -> bo
     if width <= 0 or height <= 0:
         return True
     normalized = _normalize_aspect_ratio(aspect_ratio)
+    target = _ASPECT_TARGETS.get(normalized)
+    if not target:
+        return True
+    expected, tolerance = target
     actual = width / height
-    if normalized == "9:16":
-        return height > width and abs(actual - (9 / 16)) <= 0.12
-    if normalized == "16:9":
-        return width > height and abs(actual - (16 / 9)) <= 0.20
-    if normalized == "1:1":
-        return abs(actual - 1) <= 0.08
-    return True
+    # 竖版比例必须真的竖着，横版必须真的横着，避免 1:1 或反向尺寸被算成通过
+    if normalized in {"9:16", "4:5", "3:4", "2:3"} and width >= height:
+        return False
+    if normalized in {"16:9", "4:3", "5:4", "3:2", "21:9"} and width <= height:
+        return False
+    return abs(actual - expected) <= tolerance
 
 
 def _validate_segment_video_aspect(
@@ -2270,6 +2412,30 @@ def _validate_segment_video_aspect(
         "video_model": model,
     }
     if dimensions and not _aspect_matches_request(dimensions, aspect_ratio):
+        # 模型跟着参考图出片（参考图 3:4 → 成片 3:4）是常态，先裁/补到目标比例继续用，
+        # 不要因为比例不符就把整段丢给所有兜底渠道重跑（用户看到的就是这条 mismatch）。
+        fitted_path = _conform_video_to_ratio(
+            str(downloaded_path),
+            aspect_ratio,
+            client.config.ffmpeg_path,
+            validation_path.with_name(f"{validation_path.stem}_fitted{validation_path.suffix or '.mp4'}"),
+        )
+        fitted_dimensions = (
+            _probe_video_dimensions(str(fitted_path), client.config.ffmpeg_path) if fitted_path else None
+        )
+        if fitted_path and fitted_dimensions and _aspect_matches_request(fitted_dimensions, aspect_ratio):
+            payload = dict(
+                payload,
+                fitted=True,
+                fitted_path=str(fitted_path),
+                fitted_dimensions=fitted_dimensions,
+                fit_mode=_ASPECT_FIT_MODE,
+            )
+            segment_result["local_clip_path"] = str(fitted_path)
+            segment_result["aspect_fitted"] = True
+            segment_result["fitted_dimensions"] = fitted_dimensions
+            logger_obj.segment(index, f"aspect_check_{role}", "adjusted", attempts=attempts, payload=payload)
+            return
         logger_obj.segment(index, f"aspect_check_{role}", "failed", attempts=attempts, error="video aspect ratio mismatch", payload=payload)
         raise PipelineError(
             f"video aspect ratio mismatch: expected {aspect_ratio}, got {dimensions['width']}x{dimensions['height']} from {channel}/{model}"
