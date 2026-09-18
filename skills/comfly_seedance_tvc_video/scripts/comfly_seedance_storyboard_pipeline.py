@@ -822,6 +822,19 @@ def _download_headers_for_url(url: str, api_key: str = "") -> Optional[Dict[str,
     return {"Authorization": auth, "Accept": "video/mp4,*/*"}
 
 
+def _video_submit_headers(segment_key: str = "") -> Dict[str, str]:
+    """视频提交请求头：带上「分镜段标识」。
+
+    服务端据此做「同段只扣一次」：同一段分镜换渠道重跑时，会把上一笔还没结算的预扣退回，
+    避免一段视频失败重试被扣多次（详见服务端 _supersede_previous_video_charge）。
+    """
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    key = str(segment_key or "").strip()[:128]
+    if key:
+        headers["X-Lobster-Video-Segment"] = key
+    return headers
+
+
 def _download_file(
     url: str,
     path: Path,
@@ -1570,6 +1583,7 @@ class ComflySeedanceClient:
         channel: str = "",
         model: str = "",
         base_url: str = "",
+        segment_key: str = "",
     ) -> tuple[Dict[str, Any], int]:
         # Apply the limit at the request boundary as well as during plan
         # construction so direct callers and all fallback providers are safe.
@@ -1596,7 +1610,7 @@ class ComflySeedanceClient:
             def call_dashscope() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/v2/videos/generations"
                 self._trace_request("dashscope_wan30_submit", vid_url, body)
-                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=180)
+                r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=180)
                 payload = self._check(r)
                 data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
                 output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
@@ -1651,7 +1665,7 @@ class ComflySeedanceClient:
             def call_openmind() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/openmind/v1/videos"
                 self._trace_request("openmind_video_submit", vid_url, body)
-                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=180)
+                r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=180)
                 payload = self._check(r)
                 data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
                 task_id = str(
@@ -1689,7 +1703,7 @@ class ComflySeedanceClient:
             def call_xai() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/xai/v1/videos/generations"
                 self._trace_request("xai_video_submit", vid_url, body)
-                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
+                r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=120)
                 payload = self._check(r)
                 request_id = str(payload.get("request_id") or payload.get("id") or payload.get("task_id") or "").strip()
                 if not request_id:
@@ -1723,7 +1737,7 @@ class ComflySeedanceClient:
             def call_xing() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/xing/v1/videos/generations"
                 self._trace_request("xing_seedance_submit", vid_url, body)
-                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=180)
+                r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=180)
                 payload = self._check(r)
                 data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
                 task_id = str(
@@ -1769,7 +1783,7 @@ class ComflySeedanceClient:
             def call_yunwu() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/v1/video/create"
                 self._trace_request("yunwu_video_submit", vid_url, body)
-                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
+                r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=120)
                 payload = self._check(r)
                 data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
                 task_id = str(payload.get("id") or payload.get("task_id") or data.get("id") or data.get("task_id") or "").strip()
@@ -1811,7 +1825,7 @@ class ComflySeedanceClient:
             def call_comfly_veo() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/v2/videos/generations"
                 self._trace_request("comfly_video_submit", vid_url, body)
-                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
+                r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=120)
                 payload = self._check(r)
                 task_id = str(payload.get("id") or payload.get("task_id") or payload.get("video_id") or "").strip()
                 data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
@@ -1847,7 +1861,7 @@ class ComflySeedanceClient:
         def call() -> Dict[str, Any]:
             vid_url = f"{self.base_url}/seedance/v3/contents/generations/tasks"
             self._trace_request("seedance_submit", vid_url, body)
-            r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
+            r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=120)
             payload = self._check(r)
             task_id = payload.get("id") or payload.get("task_id")
             if not isinstance(task_id, str) or not task_id:
@@ -2156,6 +2170,8 @@ def _submit_segment_video_to_provider(
             channel=provider_channel,
             model=provider_model,
             base_url=provider_base_url,
+            # 同一段分镜的所有渠道尝试共用一个段标识：服务端据此保证「同段只扣一次」
+            segment_key=f"{logger_obj.run_dir.name}:seg{index:02d}",
         )
         logger_obj.segment(index, f"submit_{provider_role}", "success", attempts=submit_attempts, payload=submit_result)
         out = dict(segment_plan)

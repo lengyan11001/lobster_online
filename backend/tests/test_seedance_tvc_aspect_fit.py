@@ -233,3 +233,73 @@ def test_collect_video_urls_prefers_fitted_local_clip(tmp_path: Path) -> None:
         ],
     }
     assert collect_video_urls_from_pipeline_result(result) == [(str(local_clip), "task_1", "shot_3")]
+
+
+# —— 6. 视频提交带「分镜段标识」（服务端做同段只扣一次）——
+
+def test_video_submit_headers_carry_segment_key() -> None:
+    mod = _load_module()
+    assert mod._video_submit_headers("") == {"Content-Type": "application/json"}
+    assert mod._video_submit_headers("  ") == {"Content-Type": "application/json"}
+    assert mod._video_submit_headers("run_x:seg01") == {
+        "Content-Type": "application/json",
+        "X-Lobster-Video-Segment": "run_x:seg01",
+    }
+
+
+def test_submit_seedance_video_sends_segment_header(monkeypatch, tmp_path: Path) -> None:
+    mod = _load_module()
+    client, _logger = _client_and_logger(mod, tmp_path)
+    seen: Dict[str, Any] = {}
+
+    class _FakeResponse:
+        status_code = 200
+        content = b'{"task_id": "t1"}'
+        text = '{"task_id": "t1"}'
+
+        def json(self):
+            return {"task_id": "t1"}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        seen["url"] = url
+        seen["headers"] = dict(headers or {})
+        return _FakeResponse()
+
+    monkeypatch.setattr(client.session, "post", fake_post)
+    client.submit_seedance_video(
+        "prompt",
+        "https://cdn.example/ref.png",
+        [],
+        10,
+        "segment_01_submit_primary",
+        channel="dashscope",
+        model="wan3.0-video",
+        base_url="https://bhzn.top/api/comfly-proxy",
+        segment_key="run_20260918_120000:seg01",
+    )
+    assert seen["headers"].get("X-Lobster-Video-Segment") == "run_20260918_120000:seg01"
+
+
+def test_submit_seedance_video_without_segment_key_keeps_plain_headers(monkeypatch, tmp_path: Path) -> None:
+    mod = _load_module()
+    client, _logger = _client_and_logger(mod, tmp_path)
+    seen: Dict[str, Any] = {}
+
+    class _FakeResponse:
+        status_code = 200
+        content = b'{"task_id": "t2"}'
+        text = '{"task_id": "t2"}'
+
+        def json(self):
+            return {"task_id": "t2"}
+
+    def fake_post(url, headers=None, json=None, timeout=None):
+        seen["headers"] = dict(headers or {})
+        return _FakeResponse()
+
+    monkeypatch.setattr(client.session, "post", fake_post)
+    client.submit_seedance_video(
+        "prompt", "", [], 10, "segment_01_submit_primary",
+        channel="dashscope", model="wan3.0-video", base_url="https://bhzn.top/api/comfly-proxy",
+    )
+    assert "X-Lobster-Video-Segment" not in seen["headers"]
