@@ -853,6 +853,7 @@
     }
     if (type === 'progress' && payload.reply_text) setBubbleText(live.bubble, payload.reply_text);
     if (type === 'approval_required') renderApproval(live.bubble, payload, messageId, historical);
+    if (type === 'task_card' && payload) renderTaskCard(live.bubble, payload, messageId);
     if (type === 'approval_decided') {
       appendStatusLine(live.bubble, eventStatusText(payload, type) || '已确认，正在执行');
     }
@@ -870,6 +871,116 @@
       setBubbleText(live.bubble, payload.error || payload.detail || payload.message || '处理失败');
       if (!historical) finishMessage(messageId, true);
     }
+  }
+
+
+  // 后台任务进度卡（2026-09-20）：确认后转入后台的长任务，卡片跟随真实状态更新；
+  // 支持"取消任务"、多任务聚合，产物直接贴预览。事件与服务端 / H5 端同一套（task_card）。
+  function ensureTaskCardStyles() {
+    if (document.getElementById('onlineMastraTaskCardStyles')) return;
+    var style = document.createElement('style');
+    style.id = 'onlineMastraTaskCardStyles';
+    style.textContent = [
+      '.online-mastra-task-card{margin-top:8px;padding:10px 12px;border-radius:10px;border:1px solid rgba(64,128,255,.28);background:linear-gradient(180deg,rgba(238,244,255,.95),rgba(247,250,255,.95));}',
+      '.online-mastra-task-card-head{display:flex;align-items:center;gap:8px;font-size:13px;color:#1f2b3d;}',
+      '.online-mastra-task-card-head strong{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '.online-mastra-task-card-badge{padding:1px 8px;border-radius:999px;font-size:11px;background:rgba(64,128,255,.14);color:#2b6cff;}',
+      '.online-mastra-task-card-badge[data-status="queued"]{background:rgba(255,170,0,.16);color:#c07a00;}',
+      '.online-mastra-task-card-badge[data-status="done"]{background:rgba(24,180,120,.16);color:#12996a;}',
+      '.online-mastra-task-card-badge[data-status="failed"]{background:rgba(240,80,80,.16);color:#d13b3b;}',
+      '.online-mastra-task-card-badge[data-status="cancelled"]{background:rgba(140,150,170,.18);color:#6b7688;}',
+      '.online-mastra-task-card-text{margin-top:6px;font-size:12.5px;line-height:1.6;color:#46536a;white-space:pre-wrap;}',
+      '.online-mastra-task-card-items{margin-top:8px;display:flex;flex-direction:column;gap:4px;}',
+      '.online-mastra-task-card-item{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:#46536a;}',
+      '.online-mastra-task-card-cancel{margin-left:8px;padding:2px 10px;font-size:11.5px;border-radius:999px;border:1px solid rgba(209,59,59,.45);background:#fff;color:#d13b3b;cursor:pointer;}',
+      '.online-mastra-task-card-time{margin-top:6px;font-size:11px;color:#90a0b8;}'
+    ].join('');
+    document.head.appendChild(style);
+  }
+
+  function renderTaskCard(bubble, payload, messageId) {
+    if (!bubble || !bubble.wrapper || !payload) return;
+    ensureTaskCardStyles();
+    var box = bubble.wrapper.querySelector('.online-mastra-task-card');
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'online-mastra-task-card';
+      bubble.wrapper.appendChild(box);
+    }
+    var status = text(payload.status || 'running').toLowerCase();
+    var labels = { queued: '排队中', running: '执行中', done: '已完成', failed: '失败', cancelled: '已取消' };
+    var badgeText = text(payload.status_label) || labels[status] || '进行中';
+    var items = Array.isArray(payload.items) ? payload.items : [];
+    var cancellable = payload.cancellable && messageId && (status === 'queued' || status === 'running');
+    box.setAttribute('data-status', status);
+    box.innerHTML = '';
+    var head = document.createElement('div');
+    head.className = 'online-mastra-task-card-head';
+    var name = document.createElement('strong');
+    name.textContent = text(payload.title) || '后台任务';
+    var badge = document.createElement('span');
+    badge.className = 'online-mastra-task-card-badge';
+    badge.setAttribute('data-status', status);
+    badge.textContent = badgeText;
+    head.appendChild(name);
+    head.appendChild(badge);
+    if (cancellable) {
+      var cancelBtn = document.createElement('button');
+      cancelBtn.type = 'button';
+      cancelBtn.className = 'online-mastra-task-card-cancel';
+      cancelBtn.textContent = '取消任务';
+      cancelBtn.addEventListener('click', function () {
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = '正在取消…';
+        request('/api/mastra-chat/tasks/' + encodeURIComponent(messageId) + '/cancel', { method: 'POST', json: {} })
+          .then(function (data) {
+            if (data && data.card) renderTaskCard(bubble, data.card, messageId);
+            else cancelBtn.textContent = '已取消';
+          })
+          .catch(function (error) {
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = '取消任务';
+            window.alert(error.message || '取消失败');
+          });
+      });
+      head.appendChild(cancelBtn);
+    }
+    box.appendChild(head);
+    var bodyText = text(payload.text);
+    if (bodyText) {
+      var body = document.createElement('div');
+      body.className = 'online-mastra-task-card-text';
+      body.textContent = bodyText;
+      box.appendChild(body);
+    }
+    if (items.length > 1) {
+      var list = document.createElement('div');
+      list.className = 'online-mastra-task-card-items';
+      items.forEach(function (item) {
+        if (!item) return;
+        var row = document.createElement('div');
+        row.className = 'online-mastra-task-card-item';
+        var itemName = document.createElement('span');
+        itemName.textContent = text(item.title) || '任务';
+        var itemBadge = document.createElement('span');
+        itemBadge.className = 'online-mastra-task-card-badge';
+        itemBadge.setAttribute('data-status', text(item.status));
+        itemBadge.textContent = text(item.status_label) || labels[text(item.status)] || '';
+        row.appendChild(itemName);
+        row.appendChild(itemBadge);
+        list.appendChild(row);
+      });
+      box.appendChild(list);
+    }
+    var stamp = text(payload.updated_at).replace('T', ' ').slice(5, 16);
+    if (stamp) {
+      var foot = document.createElement('div');
+      foot.className = 'online-mastra-task-card-time';
+      foot.textContent = '更新于 ' + stamp;
+      box.appendChild(foot);
+    }
+    // 产物：复用已有媒体渲染（链接 + 预览）
+    addMediaView(bubble, payload);
   }
 
   function finishMessage(messageId, failed) {
