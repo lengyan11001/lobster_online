@@ -345,6 +345,99 @@ class AlibabaInquiryPhraseSummary(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class AlibabaReceptionConfig(Base):
+    """阿里询盘 AI 接待：排期 + 红线 + 接单策略（每账号一条）。"""
+
+    __tablename__ = "alibaba_reception_configs"
+    __table_args__ = (UniqueConstraint("account_id", name="uq_alibaba_reception_config_account"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    dry_run: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
+    online_interval_seconds: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    hot_interval_seconds: Mapped[int] = mapped_column(Integer, default=30, nullable=False)
+    work_window_start: Mapped[str] = mapped_column(String(8), default="08:00", nullable=False)
+    work_window_end: Mapped[str] = mapped_column(String(8), default="23:00", nullable=False)
+    max_turns: Mapped[int] = mapped_column(Integer, default=8, nullable=False)
+    max_chars: Mapped[int] = mapped_column(Integer, default=380, nullable=False)
+    delay_min_seconds: Mapped[int] = mapped_column(Integer, default=25, nullable=False)
+    delay_max_seconds: Mapped[int] = mapped_column(Integer, default=90, nullable=False)
+    accept_small_orders: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    accept_personal_orders: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    handoff_triggers: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    banned_words: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    persona: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AlibabaReceptionSession(Base):
+    """每个询盘的接待状态机实例（真人确认 → 采集 → 背调 → 分级 → 动作）。"""
+
+    __tablename__ = "alibaba_reception_sessions"
+    __table_args__ = (
+        UniqueConstraint("account_id", "inquiry_id", name="uq_alibaba_reception_session"),
+        Index("ix_alibaba_reception_sessions_account_stage", "account_id", "stage"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    inquiry_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    stage: Mapped[str] = mapped_column(String(32), default="new", nullable=False, index=True)
+    read_state: Mapped[str] = mapped_column(String(24), default="unknown", nullable=False)
+    online_state: Mapped[str] = mapped_column(String(24), default="unknown", nullable=False)
+    turn_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    priority: Mapped[str] = mapped_column(String(16), default="normal", nullable=False, index=True)
+    grade: Mapped[Optional[str]] = mapped_column(String(16), nullable=True, index=True)
+    score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    human_takeover: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    last_buyer_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_seller_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    cooldown_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_action: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_action_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class AlibabaPublicPoolTarget(Base):
+    """公海池待激活客户：三次触达节奏（T0 / T+2d / T+5d），回复即转成询盘。"""
+
+    __tablename__ = "alibaba_public_pool_targets"
+    __table_args__ = (
+        UniqueConstraint("account_id", "buyer_key", name="uq_alibaba_public_pool_target"),
+        Index("ix_alibaba_public_pool_account_status", "account_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    account_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    buyer_key: Mapped[str] = mapped_column(String(191), nullable=False, index=True)
+    buyer_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    company_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    country: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    product_line: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    source_scope: Mapped[str] = mapped_column(String(16), default="main", nullable=False)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False, index=True)
+    touch_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    last_touch_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    next_touch_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True, index=True)
+    cooldown_until: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    reply_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    converted_inquiry_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    chat_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    plan: Mapped[Optional[Any]] = mapped_column(JSON, nullable=True)
+    raw: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class Enterprise(Base):
     """企业：多企业，每企业可有 1～2 个产品。"""
     __tablename__ = "enterprises"

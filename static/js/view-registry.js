@@ -120,12 +120,12 @@
     cache: 'reload'
   });
 
-  window.registerLobsterView('alibaba-inquiries', {
-    html: '/static/views/alibaba-inquiries.html?v=20260721-alibaba-doc-collapse',
-    scripts: '/static/js/alibaba-inquiries.js?v=20260722-alibaba-archive-jobs',
-    init: 'initAlibabaInquiriesView',
-    cache: 'reload'
-  });
+window.registerLobsterView('alibaba-inquiries', {
+  html: '/static/views/alibaba-inquiries.html?v=20260920-ali-workbench-v2',
+  scripts: '/static/js/alibaba-inquiries.js?v=20260920-ali-workbench-v2',
+  init: 'initAlibabaInquiriesView',
+  cache: 'reload'
+});
 
   window.registerLobsterView('juhe-wechat', {
     html: '/static/views/juhe-wechat.html?v=20260808-native-wechat-pagination-v1',
