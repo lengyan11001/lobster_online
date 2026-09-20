@@ -73,6 +73,10 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     # and shipping only the updater leaves older helper scripts installed.
     "scripts",
     "backend",
+    # skills 随常规网站 OTA 一起走：只排除体积大/解压慢的（见 _OTA_SKIP_SKILL_ROOTS，
+    # 目前只有 skills/ppt_master ≈58MB/1.2 万文件），其余全部包含，避免像
+    # skills/comfly_seedance_tvc_video 这类管线因为不在 paths 里而永远更新不到客户端。
+    "skills",
     # Desktop Python runtime used by the stable OEM EXE shells. The branded
     # executables stay installed, while launcher and configurator behavior can
     # continue to receive OTA fixes.
@@ -274,6 +278,12 @@ OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
 )
 
 _OTA_SKIP_SKILLS_DIRS = {"runs", "job_runs", "output", "cache"}
+# 体积大、解压慢的 skill 不进 OTA（随安装包/单独分发提供）。2026-09-20 实测：
+#   skills/ppt_master = 57.9MB / 12107 个文件，占 skills 总量 92%（references/ai-image-comparison 43.6MB、
+#   templates/icons 9.6MB…）；排除它之后其余 20 个 skill 合计仅 4.9MB，所以除它之外都可以随常规 OTA 走。
+_OTA_SKIP_SKILL_ROOTS: tuple[str, ...] = (
+    "skills/ppt_master",
+)
 # Retired workbench payloads are kept in the source tree only for compatibility
 # with old imports; they must not be shipped in encrypted OTA updates.
 _OTA_RETIRED_SKILL_DIRS = (
@@ -459,6 +469,8 @@ def _skip_file(rel: str) -> bool:
     if r.endswith(".log"):
         return True
     if nr.lower().startswith(_OTA_RETIRED_SKILL_DIRS):
+        return True
+    if any(nr == p or nr.startswith(p + "/") for p in _OTA_SKIP_SKILL_ROOTS):
         return True
     if _is_pack_skipped_path(rel):
         return True
@@ -815,6 +827,8 @@ def _copy_tree_for_encrypted_ota(src: Path, dst: Path, rel: str) -> None:
             ):
                 continue
             if any(r.startswith(p + "/") or r == p for p in _OTA_SKIP_DIR_RELS):
+                continue
+            if any(r == p or r.startswith(p + "/") for p in _OTA_SKIP_SKILL_ROOTS):
                 continue
             if len(parts) >= 3 and parts[0] == "skills" and parts[2] in _OTA_SKIP_SKILLS_DIRS:
                 continue
