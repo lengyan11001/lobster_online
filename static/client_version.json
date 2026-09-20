@@ -1,7 +1,7 @@
 {
-  "version": "2.0.61",
-  "build": 340,
-  "applied_at": "2026-09-20T09:58:48+08:00",
-  "note": "分镜台管线：万相3.0(dashscope)挡位兼容 + 官方提示词截断 + 成片比例自动纠偏 + openmind 成片下载鉴权 + 同段只扣一次",
-  "bundle_sha256": "451a65ab6f8be9d24c7693a31e9e5e7ba0e23cff79b4b6cfb5385e337b2c30ad"
+  "version": "2.0.62",
+  "build": 341,
+  "applied_at": "2026-09-20T14:28:15+08:00",
+  "note": "Online 调度对话：后台任务进度卡（取消任务/多任务聚合/产物预览）",
+  "bundle_sha256": "98a4d00b7feedd18c4c0c6bb11e7a05c90a83b761198ad45dd8074ebe6135361"
 }
