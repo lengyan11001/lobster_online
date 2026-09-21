@@ -4390,6 +4390,11 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         f"- \u65b0\u597d\u53cb\u6b22\u8fce\u8bed\uff1a\u5df2\u53d1\u9001 {report['friend_welcome_sent']} \u6761\uff0c"
         f"\u5931\u8d25 {report['friend_welcome_failed']} \u6761"
     )
+    if not report["session_count"]:
+        lines.append(
+            "- 本轮没有读到任何会话：微信会话列表读取为空（可能窗口刚恢复/驱动未就绪），"
+            "已尝试把微信拉回聊天列表并重试；下一轮会自动重扫"
+        )
     if report["stop_reason"] == "last_message_over_24h":
         lines.append("- 已读到最后消息超过 24 小时的会话，本轮停止继续往后检查")
     elif report["stop_reason"] == "cancelled":
@@ -4805,6 +4810,8 @@ async def run_auto_reply_once(
             else 0,
             driver_recovered=bool(session_data.get("driver_recovered")),
             driver_retry_count=int(session_data.get("driver_retry_count") or 0),
+            ready_retries=int(session_data.get("ready_retries") or 0),
+            empty_scan_visible_count=int(session_data.get("empty_scan_visible_count") or 0),
         )
         # Older/test drivers may not provide the wxauto4 time snapshot. Keep
         # their existing top-reset behavior; the precise-time path already
@@ -8903,6 +8910,7 @@ def _sync_recent_sessions_from_wxauto4(
     normal_region_started = False
     pinned_count = 0
     stop_at_old_boundary = False
+    ready_retries = 0
     previous_signature: tuple[str, ...] = ()
     auto_reply_captures: Dict[str, Dict[str, Any]] = {}
     # 同一轮扫描里同一个人只点一次：抓取失败（取号/类型没确认）也算点过，
@@ -8918,6 +8926,18 @@ def _sync_recent_sessions_from_wxauto4(
         for index in range(page_limit):
             rounds = index + 1
             sessions = list(wx.GetSession() or [])
+            if not sessions and index == 0:
+                # 首屏读空：客户端刚启动 / 窗口刚恢复时 GetSession 会返回空，
+                # 直接当成"本轮没有会话"就是线上空转的根因
+                # （diag_20260921042352_4d3c07e6：这轮 0 条，5 秒后界面却有 9 个会话）。
+                # 把微信拉回聊天列表并等它就绪，最多重试 3 次。
+                for attempt in range(3):
+                    _ensure_local_session_list_ready(account_id)
+                    time.sleep(1.2 + 0.8 * attempt)
+                    sessions = list(wx.GetSession() or [])
+                    if sessions:
+                        ready_retries = attempt + 1
+                        break
             if not sessions:
                 scroll_completed = True
                 break
@@ -9131,12 +9151,37 @@ def _sync_recent_sessions_from_wxauto4(
             "scroll_completed": bool(scroll_completed),
             "auto_reply_captures": auto_reply_captures,
             "empty_scan_visible_count": empty_scan_visible,
+            "ready_retries": ready_retries,
         }
     finally:
         try:
             box.go_top()
         except Exception:
             pass
+
+
+def _ensure_local_session_list_ready(account_id: str) -> bool:
+    """把本机微信拉回「聊天列表可见」状态：恢复窗口 + 微信页 + 退出公众号列表。
+
+    只在读取为空时调用，用来区分「真的没有会话」和「驱动/窗口还没就绪」。
+    """
+    ok = False
+    try:
+        window = _ensure_local_wechat_window_visible(wait_seconds=2.0)
+        ok = bool(window.get("ok")) or ok
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        _ensure_local_chat_tab(account_id)
+        ok = True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        restored = _restore_local_chat_session_list(account_id)
+        ok = bool(restored.get("ok")) or ok
+    except Exception:  # noqa: BLE001
+        pass
+    return ok
 
 
 def _uia_visible_session_count(account_id: str) -> int:

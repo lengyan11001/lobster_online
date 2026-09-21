@@ -3895,6 +3895,18 @@ async def test_unverified_group_success_does_not_block_retry(tmp_path, monkeypat
     assert deduped["deduped"] is True
 
 
+@pytest.fixture(autouse=True)
+def _isolate_auto_reply_diagnostic_log(tmp_path_factory, monkeypatch):
+    """接管诊断日志必须隔离：否则跑测试会往生产 logs/native_wechat_auto_reply.jsonl
+
+    里写入 Recent N / Customer N 这类假会话，用户看接管记录就像"一直在空转"。
+    """
+    log_path = tmp_path_factory.mktemp("native_wechat_log") / "native_wechat_auto_reply.jsonl"
+    monkeypatch.setattr(engine, "NATIVE_WECHAT_AUTO_REPLY_LOG", log_path)
+    monkeypatch.setattr(engine, "_AUTO_REPLY_DIAGNOSTIC_ENABLED", True)
+    return log_path
+
+
 def test_unverified_group_claim_is_detected_and_sanitized():
     assert engine._reply_claims_existing_group("张老师，您已经在群里了哈") is True
     assert engine._reply_claims_existing_group("我先确认一下，再帮您安排") is False
@@ -4213,3 +4225,33 @@ def test_empty_session_read_raises_so_driver_recovery_kicks_in(monkeypatch):
     result = engine._sync_recent_sessions_from_wxauto4(engine.LOCAL_DEFAULT_ACCOUNT_ID)
     assert result["ok"] is True and result["items"] == []
     assert result["empty_scan_visible_count"] == 0
+
+
+def test_first_page_empty_read_waits_for_ready_and_retries(monkeypatch):
+    """首屏读空不能直接判"本轮没有会话"：先就绪等待，再重试（线上空转的另一半原因）。"""
+    calls = {"sessions": 0, "ready": 0}
+
+    class Box:
+        def go_top(self):
+            return True
+
+    class FakeWx:
+        SessionBox = Box()
+
+        def GetSession(self):
+            calls["sessions"] += 1
+            if calls["sessions"] < 3:
+                return []
+            return [{"name": "客户A", "time": "2026-09-21 12:00:00", "content": "在吗"}]
+
+    monkeypatch.setattr(engine, "_get_wxauto4_client", lambda *_args, **_kwargs: FakeWx())
+    monkeypatch.setattr(
+        engine, "_ensure_local_session_list_ready", lambda _account_id: calls.__setitem__("ready", calls["ready"] + 1)
+    )
+    monkeypatch.setattr(engine, "_uia_visible_session_count", lambda _account_id: 9)
+    monkeypatch.setattr(engine, "time", type("T", (), {"sleep": staticmethod(lambda _s: None), "time": staticmethod(lambda: 0.0)}))
+
+    result = engine._sync_recent_sessions_from_wxauto4(engine.LOCAL_DEFAULT_ACCOUNT_ID)
+    assert calls["ready"] >= 1, "首屏读空后必须先尝试把微信拉回聊天列表"
+    assert result["ready_retries"] >= 1
+    assert result["scroll_rounds"] == 1
