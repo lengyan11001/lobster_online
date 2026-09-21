@@ -2509,6 +2509,38 @@ def _reset_to_chat_list(hwnd: int, *, attempts: int = 3) -> bool:
     return _find_button(root, ("新建群组", "new group")) is not None
 
 
+async def _report_intelligence_observation(
+    payload: Dict[str, Any],
+    *,
+    auth_context: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """把这一轮接管结果回写给接管中枢（与个微同一套 observe，channel=whatsapp）。"""
+    context = auth_context or {}
+    token = str(context.get("token") or "").strip()
+    if not token:
+        return {"ok": False, "reason": "missing_token"}
+    body = {"channel": "whatsapp"}
+    body.update({key: value for key, value in (payload or {}).items() if value is not None})
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=4.0), trust_env=False) as client:
+            response = await client.post(
+                f"{_server_proxy_base()}/api/wechat-intelligence/observe",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                    "X-Installation-Id": str(context.get("installation_id") or "native-whatsapp")[:160],
+                },
+                json=body,
+            )
+        if response.status_code >= 400:
+            raise RuntimeError("HTTP %s: %s" % (response.status_code, (response.text or "")[:200]))
+        _append_log("intelligence_reported", event=body.get("event_type"), status=body.get("status"))
+        return {"ok": True}
+    except Exception as exc:  # noqa: BLE001
+        _append_log("intelligence_report_failed", event=body.get("event_type"), error=str(exc)[:300])
+        return {"ok": False, "error": str(exc)[:300]}
+
+
 def _find_button(
     root: Any,
     names: Iterable[str],
@@ -2835,6 +2867,24 @@ async def run_once(
                         result["stop_reason"] = "cancelled"
                         break
                     sent = await loop.run_in_executor(_UI_EXECUTOR, _send_current_message, hwnd, reply)
+                    try:
+                        report = await _report_intelligence_observation(
+                            {
+                                "account_id": DEFAULT_ACCOUNT_ID,
+                                "contact_key": "wa:" + str(snapshot.get("peer_key") or snapshot.get("peer_name") or "")[:200],
+                                "contact_name": str(snapshot.get("peer_name") or "")[:240],
+                                "event_type": "auto_reply",
+                                "status": "completed" if sent.get("sent") else "failed",
+                                "inbound_text": text[:4000],
+                                "reply_text": reply[:4000],
+                                "error_message": "" if sent.get("sent") else "发送未确认",
+                            },
+                            auth_context=auth_context,
+                        )
+                        item["intelligence_report"] = "ok" if report.get("ok") else "failed"
+                    except Exception as exc:  # noqa: BLE001
+                        item["intelligence_report"] = "failed"
+                        _append_log("intelligence_report_error", error=str(exc)[:200])
                     # 命中拉群关键词：把配置里的成员（加上当前对话人）拉成一个群
                     if bool(cfg.get("group_invite_enabled")) and group_invite_hit(
                         text, str(cfg.get("group_invite_keywords") or "")
@@ -2857,6 +2907,21 @@ async def run_once(
                             )
                             result["group_created"] = invite_result.get("name")
                             item["group_created"] = invite_result.get("name")
+                            try:
+                                await _report_intelligence_observation(
+                                    {
+                                        "account_id": DEFAULT_ACCOUNT_ID,
+                                        "contact_key": "wa:" + str(snapshot.get("peer_key") or peer_label)[:200],
+                                        "contact_name": peer_label[:240],
+                                        "event_type": "group_invite",
+                                        "status": "completed",
+                                        "payload": {"group": invite_result.get("name"),
+                                                    "members": invite_result.get("members") or []},
+                                    },
+                                    auth_context=auth_context,
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
                         except Exception as exc:  # noqa: BLE001
                             result["group_invite_failed"] = str(exc)[:200]
                             item["group_invite_failed"] = str(exc)[:200]

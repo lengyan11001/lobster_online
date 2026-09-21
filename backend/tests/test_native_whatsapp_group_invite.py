@@ -69,3 +69,22 @@ def test_frontend_has_group_settings():
     js = (ROOT / "static" / "js" / "personal-whatsapp.js").read_text(encoding="utf-8")
     assert "group_invite_contacts" in js
     assert "group_invite_keywords" in js
+
+
+def test_observe_report_uses_whatsapp_channel():
+    """回写学习信号：和个微共用 /observe，但必须带 channel=whatsapp。"""
+    source = (ROOT / "backend" / "app" / "services" / "native_whatsapp_engine.py").read_text(encoding="utf-8")
+    assert "/api/wechat-intelligence/observe" in source
+    assert '"channel": "whatsapp"' in source
+    assert "intelligence_report" in source
+    assert "group_invite" in source
+
+
+def test_server_accepts_channel_field():
+    """服务端 observe 入参支持 channel（默认 wechat，向后兼容）。"""
+    server = pathlib.Path(r"D:\lobster_server\backend\app\api\wechat_intelligence.py")
+    if not server.is_file():
+        return  # 客户端仓库里没带服务端代码时跳过
+    body = server.read_text(encoding="utf-8")
+    assert "channel: str = Field(default=\"wechat\"" in body
+    assert 'channel=_clean(body.channel, 16) or "wechat"' in body
