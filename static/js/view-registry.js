@@ -42,8 +42,8 @@
   });
 
   window.registerLobsterView('personal-whatsapp', {
-    html: '/static/views/personal-whatsapp.html?v=20260921-personal-whatsapp-record-actions-v12',
-    scripts: '/static/js/personal-whatsapp.js?v=20260921-personal-whatsapp-record-actions-v12',
+    html: '/static/views/personal-whatsapp.html?v=20260921-personal-whatsapp-cancel-v13',
+    scripts: '/static/js/personal-whatsapp.js?v=20260921-personal-whatsapp-cancel-v13',
     init: 'initPersonalWhatsappView',
     cache: 'reload'
   });

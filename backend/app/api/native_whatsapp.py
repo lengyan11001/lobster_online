@@ -325,6 +325,21 @@ async def native_whatsapp_friend_record_retry(
     return {**result, "control": control, "summary": engine.friend_add_queue_summary(account_id)}
 
 
+@router.post("/api/native-whatsapp/friends/records/{task_id}/cancel")
+async def native_whatsapp_friend_record_cancel(
+    task_id: str,
+    account_id: str = "",
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """停止一条排队中/执行中的加好友记录（执行中的会在几秒内中断）。"""
+    del current_user
+    try:
+        result = await asyncio.to_thread(engine.cancel_friend_record, task_id, account_id)
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+    return {**result, "summary": engine.friend_add_queue_summary(account_id)}
+
+
 @router.delete("/api/native-whatsapp/friends/records/{task_id}")
 async def native_whatsapp_friend_record_delete(
     task_id: str,

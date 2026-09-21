@@ -261,6 +261,17 @@
     $('personalWhatsappSessionSearch').addEventListener('input',debounce(function(){state.pages.sessions.keyword=text($('personalWhatsappSessionSearch').value).trim();state.pages.sessions.page=1;loadSessions().catch(function(e){showError(e.message);});},300));
     $('personalWhatsappSessionType').addEventListener('change',function(){state.pages.sessions.chatType=this.value;state.pages.sessions.page=1;loadSessions().catch(function(e){showError(e.message);});});
     root.addEventListener('click', function(event) {
+      var cancelBtn = event.target.closest && event.target.closest('[data-pwa-friend-cancel]');
+      if (cancelBtn) {
+        var cancelId = cancelBtn.dataset.pwaFriendCancel;
+        runBusy('正在停止这条记录...', function() {
+          return request('/api/native-whatsapp/friends/records/' + encodeURIComponent(cancelId) + '/cancel', { method: 'POST', json: { account_id: ACCOUNT_ID } }).then(function(data) {
+            toastMessage((data && data.message) || '已停止');
+            return Promise.all([loadFriendRecords(), loadFriendQueue(), loadRecords(), loadBase()]);
+          });
+        }).catch(function() {});
+        return;
+      }
       var retryBtn = event.target.closest && event.target.closest('[data-pwa-friend-retry]');
       if (retryBtn) {
         var retryId = retryBtn.dataset.pwaFriendRetry;
@@ -370,7 +381,9 @@
       var nameText = [item.first_name || '', item.last_name || ''].filter(Boolean).join(' ') || '-';
       var contactText = item.phone ? item.phone : (item.username ? '@' + item.username : '-');
       var actions = '';
-      if (item.status !== 'running') {
+      if (item.status === 'running') {
+        actions += '<button type="button" class="btn btn-ghost btn-sm" data-pwa-friend-cancel="' + esc(item.id) + '">停止</button>';
+      } else {
         if (item.status === 'failed' || item.status === 'partial_failed' || item.status === 'cancelled') actions += '<button type="button" class="btn btn-ghost btn-sm" data-pwa-friend-retry="' + esc(item.id) + '">重试</button>';
         actions += '<button type="button" class="btn btn-ghost btn-sm" data-pwa-friend-delete="' + esc(item.id) + '">删除</button>';
       }

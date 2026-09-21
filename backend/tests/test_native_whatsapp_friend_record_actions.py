@@ -113,3 +113,62 @@ def test_frontend_and_api_expose_retry_delete():
     # 不锁具体版本串，避免每次 bump 都改测试；只确认视图/脚本都挂上了 cache buster
     assert "/static/views/personal-whatsapp.html?v=" in registry
     assert "/static/js/personal-whatsapp.js?v=" in registry
+
+
+def test_cancel_running_record(isolated_db, monkeypatch):
+    """执行中的记录必须能停下来，否则界面永远「执行中」。"""
+    monkeypatch.setattr(engine, "_ACTIVE", False)
+    engine.clear_friend_add_cancel()
+    task_id = _insert_task(status="running")
+    result = engine.cancel_friend_record(task_id)
+    assert result["status"] == "cancelled"
+    assert engine._task_row_by_id(task_id)["status"] == "cancelled"
+    assert engine.friend_add_cancelled() is True, "应该给正在执行的 UIA 动作发停止信号"
+    engine.clear_friend_add_cancel()
+    assert engine.friend_add_cancelled() is False
+
+
+def test_cancel_queued_record(isolated_db):
+    task_id = _insert_task(status="queued")
+    assert engine.cancel_friend_record(task_id)["status"] == "cancelled"
+    assert engine._task_row_by_id(task_id)["status"] == "cancelled"
+
+
+def test_cancel_finished_record_is_rejected(isolated_db):
+    task_id = _insert_task(status="success")
+    with pytest.raises(Exception):
+        engine.cancel_friend_record(task_id)
+
+
+def test_reap_marks_stale_running_as_failed(isolated_db, monkeypatch):
+    monkeypatch.setattr(engine, "_ACTIVE", False)
+    monkeypatch.setattr(engine, "_LAST_REAP_AT", 0.0)
+    task_id = _insert_task(status="running")
+    stale = (engine.datetime.now().astimezone() - engine.timedelta(hours=1)).isoformat()
+    with engine._connect() as conn:
+        conn.execute("update whatsapp_tasks set updated_at=? where id=?", (stale, task_id))
+    reaped = engine.reap_stale_friend_tasks(max_age_seconds=600)
+    assert reaped >= 1
+    task = engine._task_row_by_id(task_id)
+    assert task["status"] == "failed"
+    assert "执行中断" in str(task["error_message"])
+
+
+def test_list_records_reaps_stale_running(isolated_db, monkeypatch):
+    monkeypatch.setattr(engine, "_ACTIVE", False)
+    monkeypatch.setattr(engine, "_LAST_REAP_AT", 0.0)
+    task_id = _insert_task(status="running")
+    stale = (engine.datetime.now().astimezone() - engine.timedelta(hours=1)).isoformat()
+    with engine._connect() as conn:
+        conn.execute("update whatsapp_tasks set updated_at=? where id=?", (stale, task_id))
+    records = engine.list_friend_records()["items"]
+    target = [item for item in records if item["id"] == task_id]
+    assert target and target[0]["status"] == "failed", "刷一次列表就应该把僵尸记录标成失败"
+
+
+def test_frontend_has_cancel_action():
+    js = (ROOT / "static" / "js" / "personal-whatsapp.js").read_text(encoding="utf-8")
+    assert "data-pwa-friend-cancel" in js
+    assert "/cancel" in js
+    api = (ROOT / "backend" / "app" / "api" / "native_whatsapp.py").read_text(encoding="utf-8")
+    assert "/api/native-whatsapp/friends/records/{task_id}/cancel" in api

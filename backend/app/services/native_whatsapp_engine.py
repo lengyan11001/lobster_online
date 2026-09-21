@@ -1968,6 +1968,7 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
     if not user and not number:
         raise RuntimeError("请填写 WhatsApp 用户名或电话号码")
     _claim_action("添加 WhatsApp 联系人")
+    clear_friend_add_cancel(DEFAULT_ACCOUNT_ID)
     hwnd: Optional[int] = None
     deadline = time.monotonic() + ADD_CONTACT_DEADLINE_SECONDS
     steps: List[str] = []
@@ -1980,6 +1981,8 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
         hwnd, _window = _window_or_raise()
         _open_new_chat_page(hwnd)
         mark("open_new_chat", started)
+        if friend_add_cancelled(DEFAULT_ACCOUNT_ID):
+            raise FriendAddCancelled("已手动停止")
         root = _root_for_hwnd(hwnd)
         add_buttons = [
             node for node, _depth in _iter_nodes(root, max_depth=20, max_nodes=CONTACT_TREE_NODES)
@@ -2014,11 +2017,15 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
         if number and fields.get("phone") is not None:
             _set_edit_text(fields["phone"], number)
         mark("fill_fields", started)
+        if friend_add_cancelled(DEFAULT_ACCOUNT_ID):
+            raise FriendAddCancelled("已手动停止")
         if time.monotonic() > deadline:
             raise RuntimeError("添加联系人超时：WhatsApp 界面响应太慢，请重试")
         # 实测：号码填完后 WhatsApp 要异步校验，按钮（叫「保存联系人」）不是立刻出现，
         # 所以轮询等待最多 8 秒；旧实现是精确匹配「保存 / Save」→ 永远点不到。
         started = time.monotonic()
+        if friend_add_cancelled(DEFAULT_ACCOUNT_ID):
+            raise FriendAddCancelled("已手动停止")
         saved = False
         for _wait in range(8):
             if _click_button_matching(_root_for_hwnd(hwnd), ("保存", "save")):
@@ -2691,6 +2698,7 @@ async def _process_add_contact_task(task: Dict[str, Any]) -> Dict[str, Any]:
     processed = success = failed = consumed = 0
     last_error = ""
     deferred = ""
+    cancelled = False
     for index, target in enumerate(targets):
         try:
             _enforce_friend_add_rate(DEFAULT_ACCOUNT_ID)
@@ -2714,6 +2722,10 @@ async def _process_add_contact_task(task: Dict[str, Any]) -> Dict[str, Any]:
                 if apply_message:
                     await asyncio.to_thread(send_message, _target_label(target), apply_message)
                 ok = True
+                break
+            except FriendAddCancelled as exc:
+                cancelled = True
+                error_text = str(exc)
                 break
             except FriendAddDailyLimitReached as exc:
                 deferred = str(exc)
@@ -2742,6 +2754,10 @@ async def _process_add_contact_task(task: Dict[str, Any]) -> Dict[str, Any]:
     total_processed = base_processed + processed
     total_success = base_success + success
     total_failed = base_failed + failed
+    if cancelled:
+        _finish_task(task_id, "cancelled", total_processed, total_success, total_failed, last_error or "已手动停止")
+        clear_friend_add_cancel(DEFAULT_ACCOUNT_ID)
+        return {"cancelled": True, "processed": total_processed, "success": total_success, "failed": total_failed}
     if deferred:
         remaining = targets[consumed:]
         _update_task_payload(task_id, {"pending_targets": remaining, "deferred_reason": deferred})
@@ -2830,6 +2846,7 @@ def list_friend_records(
 ) -> Dict[str, Any]:
     """逐条记录（一条任务 = 一个目标），给前端"加好友记录"表用。"""
     key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    reap_stale_friend_tasks(key)
     where = "where account_id=? and task_type='add_friend'"
     params: List[Any] = [key]
     if status:
@@ -2878,6 +2895,93 @@ def list_friend_records(
     end = start + max(1, int(limit))
     # total 与客户端其它分页接口口径一致；count 保留给旧前端
     return {"items": records[start:end], "count": total, "total": total, "limit": int(limit), "offset": start}
+
+
+class FriendAddCancelled(RuntimeError):
+    """用户手动停止加好友时抛出，用于尽快中断正在执行的 UIA 动作。"""
+
+
+_FRIEND_ADD_CANCEL_LOCK = threading.Lock()
+_FRIEND_ADD_CANCEL_EVENTS: Dict[str, threading.Event] = {}
+
+
+def _friend_cancel_event(account_id: str = "") -> threading.Event:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    with _FRIEND_ADD_CANCEL_LOCK:
+        event = _FRIEND_ADD_CANCEL_EVENTS.get(key)
+        if event is None:
+            event = threading.Event()
+            _FRIEND_ADD_CANCEL_EVENTS[key] = event
+        return event
+
+
+def friend_add_cancelled(account_id: str = "") -> bool:
+    return _friend_cancel_event(account_id).is_set()
+
+
+def clear_friend_add_cancel(account_id: str = "") -> None:
+    _friend_cancel_event(account_id).clear()
+
+
+def request_friend_add_cancel(account_id: str = "") -> None:
+    _friend_cancel_event(account_id).set()
+
+
+STALE_RUNNING_FRIEND_SECONDS = 15 * 60
+_LAST_REAP_AT = 0.0
+
+
+def reap_stale_friend_tasks(account_id: str = "", *, max_age_seconds: int = STALE_RUNNING_FRIEND_SECONDS) -> int:
+    """把卡在「执行中」但早就没有实际动作的任务标成失败。
+
+    客户机实测（2026-09-21）：加好友点不到「保存联系人」时会一直卡在执行中，
+    界面上既不能重试也不能删除。这里按「没有活动动作 + updated_at 太旧」判定为僵尸记录。
+    """
+    global _LAST_REAP_AT
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    now = time.time()
+    if now - _LAST_REAP_AT < 60:
+        return 0
+    _LAST_REAP_AT = now
+    with _ACTIVE_LOCK:
+        active = bool(_ACTIVE)
+    if active:
+        return 0
+    cutoff = (datetime.now().astimezone() - timedelta(seconds=max(60, int(max_age_seconds)))).isoformat()
+    with _DB_LOCK, _connect() as conn:
+        cur = conn.execute(
+            "update whatsapp_tasks set status='failed', error_message=?, updated_at=? "
+            "where account_id=? and task_type='add_friend' and status='running' and updated_at < ?",
+            (
+                "执行中断：超过 %d 分钟没有进展（可点重试或删除）" % max(1, int(max_age_seconds) // 60),
+                _now_iso(),
+                key,
+                cutoff,
+            ),
+        )
+        return int(cur.rowcount or 0)
+
+
+def cancel_friend_record(task_id: str, account_id: str = "") -> Dict[str, Any]:
+    """停止一条排队中/执行中的加好友记录。"""
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise RuntimeError("缺少记录 ID")
+    task = _task_row_by_id(tid)
+    if not task or str(task.get("account_id") or "") != key or str(task.get("task_type") or "") != "add_friend":
+        raise RuntimeError("找不到这条加好友记录")
+    status = str(task.get("status") or "")
+    if status not in {"queued", "pending", "running"}:
+        raise RuntimeError("这条记录已经结束（%s），不需要停止" % (status or "未知"))
+    if status == "running":
+        request_friend_add_cancel(key)
+        _finish_task(tid, "cancelled", int(task.get("processed") or 0),
+                     int(task.get("success") or 0), int(task.get("failed") or 0), "已手动停止")
+        _append_log("friend_add_cancel", task_id=tid)
+        return {"ok": True, "status": "cancelled", "message": "已请求停止，正在执行的这条会在几秒内中断"}
+    _finish_task(tid, "cancelled", 0, 0, 0, "已手动停止")
+    return {"ok": True, "status": "cancelled", "message": "已从队列移除"}
 
 
 def retry_friend_record(task_id: str, account_id: str = "") -> Dict[str, Any]:
