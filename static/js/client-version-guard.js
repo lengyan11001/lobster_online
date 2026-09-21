@@ -72,8 +72,18 @@
           '说明后端代码不是当前这个包（半包/旧包），请重新更新或重启客户端'
         );
       }
+      // 包已经更新、但后端进程还是更新前启动的：也会表现成"界面有、接口 404"
+      var appliedAt = Date.parse(String(backend.applied_at || ''));
+      var startedAt = Date.parse(String(backend.backend_started_at || ''));
+      if (!isNaN(appliedAt) && !isNaN(startedAt) && startedAt + 5000 < appliedAt) {
+        state.backend_stale = true;
+        banner(
+          '后端进程还是更新前的（后端启动 ' + backend.backend_started_at + '，代码包 ' + backend.applied_at + '）',
+          '请关闭客户端再打开，让后端跟着新代码重启'
+        );
+      }
       // 版本不一致时自动强刷一次（后端刚被 launcher 重启的场景一次就好）
-      if ((state.mismatch || state.missingRoutes.length) && !window[RELOAD_KEY]) {
+      if ((state.mismatch || state.missingRoutes.length || state.backend_stale) && !window[RELOAD_KEY]) {
         window[RELOAD_KEY] = true;
         setTimeout(function () {
           try { location.reload(); } catch (err) { /* ignore */ }

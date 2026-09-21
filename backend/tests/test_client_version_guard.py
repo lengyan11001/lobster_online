@@ -48,6 +48,7 @@ def test_frontend_guard_is_loaded_and_compares_versions():
     assert "/static/js/client-version-guard.js" in index
     assert "/api/version" in guard and "/static/client_version.json" in guard
     assert "expected_routes_missing" in guard
+    assert "backend_started_at" in guard and "applied_at" in guard     # 后端进程比包旧也要报
     assert "location.reload()" in guard
 
 
