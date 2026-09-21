@@ -462,7 +462,9 @@
         '<div class="ali-inline" style="margin-top:6px;gap:6px;flex-wrap:wrap;">' +
         readStateBadge(session) + onlineBadge(session) + stageBadge(session.stage) +
         badge('轮次 ' + (session.turn_count || 0), '') +
-        badge(esc(item.next_action || ''), 'info') +
+        (item.notify === 'business' ? badge('需要业务/老板介入', 'err') : badge(esc(item.next_action || ''), 'info')) +
+        (item.info_level ? badge('信息 ' + item.info_level, item.info_level === 'L3' ? 'ok' : 'warn') : '') +
+        ((item.next_ask || []).length ? badge('缺 ' + (item.next_ask || []).join('/'), '') : '') +
         '</div></div>' +
         '<div class="ali-cell-sub" style="flex:0 0 auto;">' + fmtTime(item.last_message_at) + '</div>' +
         '</div>';
@@ -575,6 +577,9 @@
     var session = reception.session || {};
     var cfg = reception.config || S.config || {};
     var archive = detail.archive || null;
+    var verdict = reception.verdict || null;
+    var sufficiency = reception.info_sufficiency || (verdict && verdict.sufficiency) || {};
+    var nextAsk = (reception.next_ask || (verdict && verdict.gaps) || []);
 
     var msgHtml = messages.length
       ? messages.slice(-40).map(function (m) {
@@ -607,6 +612,14 @@
       '<div class="ali-toolbar">' + badge('上限 ' + (cfg.max_chars || 380) + ' 字', '') +
       badge('延迟 ' + (cfg.delay_min_seconds || 25) + '-' + (cfg.delay_max_seconds || 90) + 's', '') + '</div></div>' +
       '<div class="ali-card-body">' +
+      (nextAsk.length
+        ? '<div class="ali-note" style="margin-bottom:8px;">还缺：' + esc(nextAsk.join('、')) +
+          '　<button type="button" class="ali-btn sm" data-act="ask-missing">按缺口生成追问</button>' +
+          (sufficiency.level ? '　' + badge('信息 ' + sufficiency.level, 'warn') : '') + '</div>'
+        : (sufficiency.level
+          ? '<div class="ali-note" style="margin-bottom:8px;">信息 ' + esc(sufficiency.level) + '：' +
+            esc(sufficiency.level_desc || '') + '</div>'
+          : '')) +
       '<textarea class="ali-input" id="aliReplyText" placeholder="可以直接写，或先点「生成草稿」"></textarea>' +
       '<div class="ali-toolbar" style="margin-top:10px;">' +
       '<button type="button" class="ali-btn" data-act="draft">生成草稿</button>' +
@@ -630,6 +643,24 @@
           '<div class="ali-note" style="margin-top:8px;">' + esc(compact(archive.summary || '', 260)) + '</div>'
         : '<div class="ali-note">还没有档案：生成后会自动做背调（官网/公开信息源）并给出分级。</div>') +
       '</div></div>';
+
+    if (verdict) {
+      body +=
+        '<div class="ali-card"><div class="ali-card-head"><div class="ali-card-title">背调结论</div>' +
+        '<div class="ali-toolbar">' +
+        badge(verdict.verdict_label || verdict.verdict || '—',
+          verdict.verdict === 'qualified' ? 'ok' : verdict.verdict === 'needs_more_info' ? 'warn' : 'info') +
+        badge('置信度 ' + (verdict.confidence || '—'), verdict.confidence === 'high' ? 'ok' : '') +
+        (verdict.notify === 'business' ? badge('需要业务/老板介入', 'err') : '') +
+        '</div></div><div class="ali-card-body">' +
+        '<ul style="margin:0;padding-left:18px;line-height:1.7;">' +
+        (verdict.why || []).map(function (line) { return '<li>' + esc(line) + '</li>'; }).join('') +
+        '</ul>' +
+        ((verdict.gaps || []).length
+          ? '<div class="ali-note" style="margin-top:8px;">缺口：' + esc((verdict.gaps || []).join('、')) + '（补上后可升级置信度）</div>'
+          : '') +
+        '</div></div>';
+    }
 
     openDrawer({
       key: 'inquiry:' + inquiryId,
@@ -661,6 +692,21 @@
               var box = $('aliReplyText');
               if (box) box.value = text;
               toast(text ? '草稿已生成' : '模型没给出草稿', text ? 'ok' : 'err');
+            })
+            .catch(function (e) { toast('生成失败：' + e.message, 'err'); });
+        });
+        on('ask-missing', function () {
+          var missingText = nextAsk.length ? nextAsk.join('、') : '公司名称、官网或邮箱';
+          var instruction = '本轮目的：继续要信息（资料不够做背景核验）。要问的字段：' + missingText +
+            '。要求：一次只问 1-2 个字段；先给一句对对方有用的价值/确认，再自然地问；不要罗列清单、不要催促成交。';
+          toast('正在按缺口生成追问…');
+          apiJson('/api/alibaba-inquiries/accounts/' + encodeURIComponent(S.accountId) + '/reply/draft',
+            { method: 'POST', body: { inquiry_id: inquiryId, instruction: instruction } })
+            .then(function (data) {
+              var text = ((data || {}).draft || {}).reply || '';
+              var box = $('aliReplyText');
+              if (box) box.value = text;
+              toast(text ? '追问已生成' : '模型没给出内容', text ? 'ok' : 'err');
             })
             .catch(function (e) { toast('生成失败：' + e.message, 'err'); });
         });

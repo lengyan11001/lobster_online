@@ -25,6 +25,7 @@ from .alibaba_inquiries import (
     ReplyDraftBody,
     _account_lock,
     _account_or_404,
+    _enqueue_archive_enrichment,
     _get_account_page,
     _goto,
     _latest_reply_state,
@@ -32,9 +33,18 @@ from .alibaba_inquiries import (
     _send_reply_via_page,
     draft_reply,
 )
+from .alibaba_backtest import (
+    assess_info_sufficiency,
+    backtest_verdict,
+    build_info_request_instruction,
+    is_human_like_message,
+)
 from .auth import _ServerUser, get_current_user_for_local
 from ..db import get_db
 from ..models import (
+    AlibabaCustomerArchive,
+    AlibabaCustomerArchiveEvidence,
+    AlibabaCustomerProfile,
     AlibabaInquiry,
     AlibabaInquiryMessage,
     AlibabaInquiryPhraseSummary,
@@ -547,6 +557,69 @@ def _nudge_candidates(
     return out[: max(1, limit)]
 
 
+def archive_facts(db: Session, account_id: int, inquiry_id: str) -> Dict[str, Any]:
+    """汇总用于"信息够不够/结论"的事实：档案字段 + 证据数 + 命中来源。"""
+    archive = (
+        db.query(AlibabaCustomerArchive)
+        .filter(AlibabaCustomerArchive.account_id == account_id, AlibabaCustomerArchive.inquiry_id == inquiry_id)
+        .first()
+    )
+    inquiry = (
+        db.query(AlibabaInquiry)
+        .filter(AlibabaInquiry.account_id == account_id, AlibabaInquiry.inquiry_id == inquiry_id)
+        .first()
+    )
+    profile = (
+        db.query(AlibabaCustomerProfile)
+        .filter(AlibabaCustomerProfile.account_id == account_id, AlibabaCustomerProfile.inquiry_id == inquiry_id)
+        .first()
+    )
+    seed = archive.seed if archive and isinstance(archive.seed, dict) else {}
+    fields = {
+        "company_name": (archive.company_name if archive else None) or (inquiry.company_name if inquiry else None)
+        or seed.get("company_name"),
+        "domain": (archive.domain if archive else None) or seed.get("domain"),
+        "email": (archive.email if archive else None) or (profile.email if profile else None) or seed.get("email"),
+        "phone": (archive.phone if archive else None) or seed.get("phone"),
+        "country": (archive.country if archive else None) or (inquiry.country if inquiry else None),
+        "buyer_login_id": inquiry.buyer_login_id if inquiry else None,
+    }
+    sources: List[str] = []
+    evidence_count = 0
+    if archive:
+        rows = (
+            db.query(AlibabaCustomerArchiveEvidence)
+            .filter(AlibabaCustomerArchiveEvidence.archive_id == archive.id)
+            .all()
+        )
+        evidence_count = len(rows)
+        for item in rows:
+            key = str(item.source_type or "").strip()
+            if key and key not in sources and not key.startswith("alibaba_"):
+                sources.append(key)
+    return {
+        "fields": {key: value for key, value in fields.items() if str(value or "").strip()},
+        "grade": (archive.grade if archive else "") or "",
+        "score": archive.score if archive else None,
+        "evidence_count": evidence_count,
+        "sources": sources[:8],
+    }
+
+
+def reception_verdict(db: Session, account_id: int, inquiry_id: str) -> Dict[str, Any]:
+    facts = archive_facts(db, account_id, inquiry_id)
+    verdict = backtest_verdict(
+        fields=facts["fields"],
+        evidence_count=facts["evidence_count"],
+        sources_hit=facts["sources"],
+        grade=facts["grade"],
+        score=facts["score"],
+    )
+    verdict["sufficiency"] = assess_info_sufficiency(facts["fields"])
+    verdict["fields"] = facts["fields"]
+    return verdict
+
+
 # ---------------------------------------------------------------- 请求体
 
 class ReceptionConfigBody(BaseModel):
@@ -745,6 +818,7 @@ def reception_dashboard(
         row = session_map.get(inquiry.inquiry_id) or _get_or_create_session(
             db, current_user.id, account_id, inquiry.inquiry_id
         )
+        item_verdict = reception_verdict(db, account_id, inquiry.inquiry_id)
         queue.append(
             {
                 "inquiry_id": inquiry.inquiry_id,
@@ -755,6 +829,11 @@ def reception_dashboard(
                 "preview": (inquiry.preview or "")[:160],
                 "last_message_at": inquiry.last_message_at.isoformat() if inquiry.last_message_at else None,
                 "session": session_to_dict(row),
+                "verdict": item_verdict.get("verdict_label"),
+                "verdict_key": item_verdict.get("verdict"),
+                "notify": item_verdict.get("notify"),
+                "info_level": (item_verdict.get("sufficiency") or {}).get("level"),
+                "next_ask": (item_verdict.get("gaps") or [])[:2],
                 "next_action": (
                     "人工已接管"
                     if row.human_takeover
@@ -815,10 +894,14 @@ def inquiry_reception(
     row = _get_or_create_session(db, current_user.id, account_id, inquiry_id)
     row = _sync_session_from_messages(db, row)
     config = config_to_dict(_get_or_create_config(db, current_user.id, account_id))
+    verdict = reception_verdict(db, account_id, inquiry_id)
     return {
         "ok": True,
         "session": session_to_dict(row),
         "config": config,
+        "verdict": verdict,
+        "info_sufficiency": verdict.get("sufficiency") or {},
+        "next_ask": (verdict.get("gaps") or [])[:2],
         "next_scan_seconds": next_scan_seconds(config, online_state=row.online_state),
         "turns_left": max(0, int(config["max_turns"]) - int(row.turn_count or 0)),
     }
@@ -876,6 +959,8 @@ async def run_reception(
         "blocked": 0,
         "nudged": 0,
         "nudge_previewed": 0,
+        "not_human": 0,
+        "enrich_queued": 0,
     }
     if not config["enabled"] and not dry_run:
         result["skipped_reason"] = "排期未启用（可先用 dry-run 预览）"
@@ -920,10 +1005,27 @@ async def run_reception(
             continue
         try:
             persona = config.get("persona") or {}
-            instruction = (
-                f"人设：{persona.get('name') or ''} {persona.get('title') or ''} @ {persona.get('company') or ''}；"
-                f"风格：{persona.get('style') or ''}；下一步要索取：{','.join(persona.get('ask_order') or [])}"
-            )
+            facts = archive_facts(db, account_id, inquiry.inquiry_id)
+            buyer_message = _latest_reply_state(db, account_id, inquiry.inquiry_id).get("buyer")
+            human_check = is_human_like_message(getattr(buyer_message, "content", "") or "")
+            entry["human_check"] = human_check
+            if not human_check["human"]:
+                meta = dict(row.meta) if isinstance(row.meta, dict) else {}
+                meta["human_check"] = human_check
+                row.meta = meta
+                row.last_action = "skip_not_human"
+                row.last_action_at = _now()
+                db.commit()
+                result["not_human"] = int(result.get("not_human") or 0) + 1
+                entry.update({
+                    "status": "skip_not_human",
+                    "reason": "内容不像真人（%s）" % "、".join(human_check["reasons"]) if human_check["reasons"] else "内容过短/无具体需求",
+                })
+                result["items"].append(entry)
+                continue
+            sufficiency = assess_info_sufficiency(facts["fields"])
+            entry["info_level"] = sufficiency["level"]
+            instruction = build_info_request_instruction(sufficiency, persona)
             draft = await draft_reply(
                 account_id,
                 ReplyDraftBody(inquiry_id=inquiry.inquiry_id, instruction=instruction),
@@ -989,7 +1091,7 @@ async def run_reception(
                 )
             )
             row.turn_count = int(row.turn_count or 0) + 1
-            row.stage = "collect"
+            row.stage = "collect" if not sufficiency["can_enrich"] else "qualified"
             row.last_action = "ai_reply"
             row.last_action_at = _now()
             row.last_seller_at = _now()
@@ -997,6 +1099,34 @@ async def run_reception(
             db.commit()
             result["sent"] += 1
             entry.update({"status": "sent", "draft": content})
+            if sufficiency["can_enrich"]:
+                # 信息够了 → 自动起背调（不再手动点）
+                try:
+                    profile = (
+                        db.query(AlibabaCustomerProfile)
+                        .filter(
+                            AlibabaCustomerProfile.account_id == account_id,
+                            AlibabaCustomerProfile.inquiry_id == inquiry.inquiry_id,
+                        )
+                        .first()
+                    )
+                    job = _enqueue_archive_enrichment(
+                        db=db,
+                        user_id=current_user.id,
+                        account_id=account_id,
+                        inquiry=inquiry,
+                        profile=profile,
+                        force=False,
+                        max_results=8,
+                    )
+                    entry["enrich"] = "queued"
+                    entry["enrich_job"] = (job or {}).get("job_id") or (job or {}).get("id")
+                    result["enrich_queued"] = int(result.get("enrich_queued") or 0) + 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("[ALI-RECEPTION] enqueue enrich failed inquiry=%s err=%s", inquiry.inquiry_id, exc)
+                    entry["enrich"] = "failed"
+            else:
+                entry["next_ask"] = sufficiency["missing"]
             result["items"].append(entry)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[ALI-RECEPTION] run failed inquiry=%s err=%s", inquiry.inquiry_id, exc)
