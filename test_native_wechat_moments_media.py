@@ -83,3 +83,48 @@ def test_moments_rejection_detects_image_side_toast(monkeypatch):
     assert engine._moments_publish_rejection(object()) == "处理失败"
     monkeypatch.setattr(engine, "_moments_publish_dialog_text", lambda _root: "正常文案，没有报错")
     assert engine._moments_publish_rejection(object()) == ""
+
+def test_parent_material_ignores_template_resources():
+    """线上事故：数字人模板封面 / 形象演示视频 / 头像被当成朋友圈发布素材。"""
+    from backend.app.api import h5_chat_channel as channel
+
+    payload = {
+        "template": {
+            "meta": {
+                "digital_human_template": {
+                    "cover_url": "https://x.example/dh-cover.jpg",
+                    "demo_url": "https://x.example/demo.mp4",
+                },
+                "digital_human_resources": {
+                    "avatars": [{"image_url": "https://x.example/avatar.mov", "cover_url": "https://x.example/avatar.mov"}],
+                },
+            },
+            "requirements": {"profile_photo_url": "https://x.example/avatar.jpg"},
+        },
+        "params": {"reference": "https://x.example/y.jpg"},
+    }
+    material = channel._extract_parent_material(payload)
+    for key in ("image_urls", "video_urls", "image_asset_ids", "video_asset_ids", "url", "asset_id"):
+        assert not material.get(key), (key, material)
+
+
+def test_parent_material_keeps_node_product():
+    """本节点产物必须照旧取得到（图片走 image_urls/image_asset_ids）。"""
+    from backend.app.api import h5_chat_channel as channel
+
+    payload = {
+        "groups": [
+            {"publish_draft": {"image_urls": ["https://x.example/a.png"], "image_asset_ids": ["a1"]}}
+        ]
+    }
+    material = channel._extract_parent_material(payload)
+    assert material.get("image_urls") == ["https://x.example/a.png"]
+    assert material.get("image_asset_ids") == ["a1"]
+
+
+def test_parent_material_ignores_cover_and_generic_keys():
+    """cover_url / 通用 url / *_material_* 这类旧兜底字段不再算素材。"""
+    from backend.app.api import h5_chat_channel as channel
+
+    material = channel._extract_parent_material({"result": {"cover_url": "https://x.example/cover.jpg"}})
+    assert not (material.get("image_urls") or material.get("url") or material.get("asset_id")), material

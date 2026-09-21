@@ -3728,7 +3728,12 @@ async def _wechat_moments_attachments_from_draft(
     headers: Dict[str, str],
 ) -> List[Dict[str, Any]]:
     files: List[Dict[str, Any]] = []
+    draft_media_kind = str(draft.get("media_type") or "").strip().lower()
+    # 图文只认本节点生成的 image_urls / image_asset_ids；draft.attachments、source_url、
+    # asset_id 这些旧兜底不再参与（曾把视频、模板图当配图发出去）。视频发布仍走原字段。
     raw_attachments = draft.get("attachments") if isinstance(draft.get("attachments"), list) else []
+    if draft_media_kind != "video":
+        raw_attachments = []
     for item in raw_attachments:
         if not isinstance(item, dict):
             continue
@@ -3759,9 +3764,11 @@ async def _wechat_moments_attachments_from_draft(
         files = [item for item in files if str(item.get("kind") or "").strip().lower() == "video"] or files
     elif draft_media_type in ("", "image", "image_text"):
         files = [item for item in files if str(item.get("kind") or "").strip().lower() != "video"]
-    asset_id = str(draft.get("asset_id") or "").strip()
+    asset_id = str(draft.get("asset_id") or "").strip() if draft_media_kind == "video" else ""
     media_type = str(draft.get("media_type") or "").strip()
-    source_url = str(draft.get("source_url") or draft.get("url") or "").strip()
+    source_url = (
+        str(draft.get("source_url") or draft.get("url") or "").strip() if draft_media_kind == "video" else ""
+    )
     if asset_id and not files:
         local = _local_asset_to_native_wechat_attachment(asset_id)
         if local:
@@ -9116,6 +9123,22 @@ def _preferred_parent_material_media_type(params: Dict[str, Any]) -> str:
     return _normalize_parent_material_media_type(raw)
 
 
+_PARENT_MATERIAL_SKIP_KEYS = {
+    "template",
+    "requirements",
+    "digital_human_template",
+    "digital_human_resources",
+    "avatars",
+    "profile_photo_url",
+    "basic_profile",
+    "params",
+    "input_refs",
+    "request",
+    "prompt",
+    "h5_context",
+    "memory_docs",
+}
+
 def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Dict[str, Any]:
     video_ids: List[str] = []
     image_ids: List[str] = []
@@ -9124,15 +9147,39 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
     image_urls: List[str] = []
     other_urls: List[str] = []
     seen: set[str] = set()
-    skip_keys = {"params", "input_refs", "request", "prompt", "requirements", "h5_context"}
-    video_id_keys = {"video_asset_id", "final_video_asset_id", "video_material_id"}
-    image_id_keys = {"image_asset_id", "cover_asset_id", "final_image_asset_id", "image_material_id"}
-    generic_id_keys = {"asset_id", "final_asset_id", "material_asset_id", "saved_asset_id"}
-    video_url_keys = {"video_url", "video_uri", "video_file_url"}
-    image_url_keys = {"image_url", "cover_url", "image_file_url"}
-    generic_url_keys = {"url", "file_url", "public_url", "media_url"}
+    # 模板/资料类资源不是发布素材：数字人模板封面、形象演示视频、头像以前会被
+    # 递归抓成朋友圈配图（线上事故），这里整棵子树跳过。
+    skip_keys = {
+        "params",
+        "input_refs",
+        "request",
+        "prompt",
+        "requirements",
+        "h5_context",
+        "template",
+        "digital_human_template",
+        "digital_human_resources",
+        "avatars",
+        "basic_profile",
+        "profile_photo_url",
+        "memory_docs",
+    }
+    # 只认本节点产物的字段：以前把 cover_url / *_material_* / file_url 这类
+    # 也当素材，结果把模板封面、形象演示视频当成了发布素材（线上事故）。
+    video_id_keys = {"video_asset_id", "final_video_asset_id"}
+    image_id_keys = {"image_asset_id", "image_asset_ids", "final_image_asset_id"}
+    generic_id_keys = {"asset_id", "final_asset_id"}
+    video_url_keys = {"video_url", "video_uri"}
+    image_url_keys = {"image_url", "image_urls"}
+    generic_url_keys = {"url", "public_url"}
 
     def add(value: Any, kind: str, is_url: bool) -> None:
+        # url/id 常常是列表（image_urls/image_asset_ids）：逐项解析。
+        # 以前直接 str(list)，于是拿到的是 "['a1']" 这种垃圾素材（线上踩过）。
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                add(item, kind, is_url)
+            return
         text = str(value or "").strip()
         if not text or text in seen:
             return
