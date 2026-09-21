@@ -2590,8 +2590,19 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
 
 
 def _server_proxy_base() -> str:
+    """服务端代理地址：与微信侧保持一致（优先 auth_server_base）。
+
+    实测（2026-09-21）：旧实现读到空的 lobster_server_url 就退回 https://h5.bhzn.top，
+    而 /api/sutui-chat/completions 只挂在主站：
+      POST https://h5.bhzn.top/api/sutui-chat/completions  → 404
+      POST https://bhzn.top/api/sutui-chat/completions     → 401（接口在，只要鉴权）
+    → 接管回复生成一直报「HTTP 404: {"detail":"Not Found"}」。
+    """
+    value = str(getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+    if value:
+        return value
     value = str(getattr(settings, "lobster_server_url", None) or "").strip().rstrip("/")
-    return value or "https://h5.bhzn.top"
+    return value or "https://bhzn.top"
 
 
 def _load_auto_reply_memory_context(
