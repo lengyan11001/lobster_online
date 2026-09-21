@@ -7844,33 +7844,77 @@ class DouyinCommentScraper:
                     }
 
                     const items = Array.from(itemSet).filter(isVisible);
+                    const cleanUsername = (value) => {
+                        let text = normalize(value);
+                        // 抖音把「作者」「等4.7W人赞了你」这类徽标拼进作者名里，
+                        // 直接和采集时的 username 比会永远不相等（2026-09-21 真机探测）。
+                        for (const pattern of [/\\s*作者\\s*$/, /\\s*等[\\d.万亿]+人赞了[你]?\\s*$/, /\\s*等[\\d.万亿]+人赞了\\s*$/]) {
+                            text = text.replace(pattern, '').trim();
+                        }
+                        return text;
+                    };
+                    const readBodyText = (item) => {
+                        // 只取主评论正文（作者行 info-wrap 的下一个兄弟），绝不包含 replyContainer 里的
+                        // 嵌套回复：否则目标评论若是别人的"回复"，会命中它的父评论并把回复发错楼。
+                        const infoWrap = item.querySelector('.comment-item-info-wrap');
+                        const node = infoWrap ? infoWrap.nextElementSibling : null;
+                        if (!node) return '';
+                        if (node.closest && node.closest('.replyContainer')) return '';
+                        return normalize(node.innerText || node.textContent || '');
+                    };
                     const scoreItem = (item) => {
                         const authorLink =
                             item.querySelector('.comment-item-info-wrap a[href*="/user/"]') ||
                             item.querySelector('a[href*="/user/"]');
-                        const username = normalize(authorLink?.innerText || authorLink?.textContent || '');
+                        const username = cleanUsername(authorLink?.innerText || authorLink?.textContent || '');
                         const profileUrl = normalize(authorLink?.href || '');
                         const currentProfileKey = profileKey(profileUrl);
-                        const text = normalize(item.innerText || item.textContent || '');
+                        const text = readBodyText(item);
+                        const compactBody = text.replace(/\\s+/g, '');
+                        const compactTarget = targetContent.replace(/\\s+/g, '');
+                        const compactCore = targetContentCore.replace(/\\s+/g, '');
+                        const nameHit = Boolean(targetUsername && username && username === targetUsername);
+                        const profileHit = Boolean(targetProfileKey && currentProfileKey && currentProfileKey === targetProfileKey);
+                        const exactContentHit = Boolean(targetContent && text && text.includes(targetContent));
+                        const prefixContentHit = Boolean(
+                            !exactContentHit && compactTarget
+                            && (compactBody.includes(compactTarget.slice(0, Math.min(compactTarget.length, 32)))
+                                || (compactCore && compactBody.includes(compactCore.slice(0, Math.min(compactCore.length, 32)))))
+                        );
                         let score = 0;
-                        if (targetUsername && username === targetUsername) score += 6;
-                        else if (targetUsername && username && (username.includes(targetUsername) || targetUsername.includes(username))) score += 3;
-                        if (targetProfileKey && currentProfileKey && currentProfileKey === targetProfileKey) score += 12;
-                        if (targetContent && text.includes(targetContent)) score += 10;
-                        else if (targetContent) {
-                            const compactTarget = targetContent.replace(/\\s+/g, '');
-                            const compactText = text.replace(/\\s+/g, '');
-                            if (compactTarget && compactText.includes(compactTarget.slice(0, Math.min(compactTarget.length, 32)))) score += 5;
-                            else {
-                                const compactCore = targetContentCore.replace(/\\s+/g, '');
-                                if (compactCore && compactText.includes(compactCore.slice(0, Math.min(compactCore.length, 32)))) score += 5;
-                            }
-                        }
-                        return { item, score, username, profileUrl, text };
+                        if (profileHit) score += 12;
+                        if (nameHit) score += 6;
+                        if (exactContentHit) score += 10;
+                        if (prefixContentHit) score += 5;
+                        return { item, score, username, profileUrl, text, nameHit, profileHit, exactContentHit, prefixContentHit };
                     };
-                    const scored = items.map(scoreItem).filter((entry) => entry.score >= 8);
-                    scored.sort((a, b) => b.score - a.score);
-                    const best = scored[0];
+                    const scored = items.map(scoreItem);
+                    const exactContentCount = scored.filter((entry) => entry.exactContentHit).length;
+                    // 入选条件（宁可判"找不到"，也不要发错楼）：
+                    //  1) 主页地址精确命中；
+                    //  2) 作者名 + 正文同时命中；
+                    //  3) 正文完全命中且全页唯一。
+                    // 正文前缀命中（+5）只参与排序，不作为入选依据。
+                    const matched = scored.filter(
+                        (entry) => entry.profileHit
+                            || (entry.nameHit && entry.exactContentHit)
+                            || (entry.exactContentHit && exactContentCount === 1)
+                    );
+                    matched.sort((a, b) => b.score - a.score);
+                    const debugCandidates = scored
+                        .slice()
+                        .sort((a, b) => b.score - a.score)
+                        .slice(0, 3)
+                        .map((entry) => ({
+                            username: entry.username,
+                            profile_url: entry.profileUrl,
+                            body: String(entry.text || '').slice(0, 40),
+                            score: entry.score,
+                            profile_hit: entry.profileHit,
+                            name_hit: entry.nameHit,
+                            content_hit: entry.exactContentHit,
+                        }));
+                    const best = matched[0];
                     if (best) {
                         best.item.scrollIntoView({ block: 'center', inline: 'nearest' });
                         const allActionNodes = Array.from(best.item.querySelectorAll('button, span, div, a, [tabindex], [data-popupid]'))
@@ -7942,7 +7986,13 @@ class DouyinCommentScraper:
                     }
 
                     if (!target.allowScroll) {
-                        return { found: false, clicked: false, visible_count: items.length, skipped_scroll: true };
+                        return {
+                            found: false,
+                            clicked: false,
+                            visible_count: items.length,
+                            skipped_scroll: true,
+                            debug_candidates: debugCandidates,
+                        };
                     }
 
                     const main = document.querySelector('.comment-mainContent');
@@ -7960,7 +8010,12 @@ class DouyinCommentScraper:
                     } else {
                         window.scrollBy(0, 800);
                     }
-                    return { found: false, clicked: false, visible_count: items.length };
+                    return {
+                        found: false,
+                        clicked: false,
+                        visible_count: items.length,
+                        debug_candidates: debugCandidates,
+                    };
                 }
                 """,
                     target_payload,
@@ -8002,6 +8057,23 @@ class DouyinCommentScraper:
                 )
             if result and result.get("found") and not result.get("clicked"):
                 raise RuntimeError(str(result.get("reason") or "已找到目标评论，但未找到回复按钮"))
+            if round_index == 0:
+                # 第一轮没命中就先把 top-3 候选打出来：作者名/主页/正文/分数/命中项，
+                # 下次线上再出"未在评论列表中找到目标评论"能直接复盘（2026-09-21 加）。
+                debug_candidates = result.get("debug_candidates") if isinstance(result, dict) else None
+                if isinstance(debug_candidates, list) and debug_candidates:
+                    self._emit(
+                        logger,
+                        "[抖音评论区监控] 首轮未命中目标评论，候选 top3："
+                        + "；".join(
+                            f"{str(item.get('username') or '-')[:12]} score={item.get('score')}"
+                            f" profile={item.get('profile_hit')} name={item.get('name_hit')}"
+                            f" content={item.get('content_hit')} 正文={str(item.get('body') or '')[:24]}"
+                            for item in debug_candidates
+                            if isinstance(item, dict)
+                        ),
+                        "warning",
+                    )
             await page.wait_for_timeout(900)
 
         raise RuntimeError(f"未在评论列表中找到目标评论：{target_username or ''} {target_content[:30]}")
