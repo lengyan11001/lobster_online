@@ -56,3 +56,37 @@ def test_click_with_mouse_waits_then_fails_clearly(monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         engine._click_with_mouse(node)
     assert "被其它窗口挡住" in str(exc.value)
+
+
+def test_remote_control_window_detected(monkeypatch):
+    monkeypatch.setattr(engine, "_window_haystack", lambda hwnd: "orayui awesun.exe 161 874 568 3")
+    assert engine._is_remote_control_window(123) is True
+    monkeypatch.setattr(engine, "_window_haystack", lambda hwnd: "chrome_widgetwin_1 chrome.exe")
+    assert engine._is_remote_control_window(123) is False
+
+
+def test_point_clickable_accepts_whatsapp_shell_pid(monkeypatch):
+    """WhatsApp = WinUI3 壳(pid A) + WebView2(pid B)：点两者都算"自己的窗口"。"""
+    monkeypatch.setattr(engine, "_point_window_hwnd", lambda x, y: 500)
+    monkeypatch.setattr(engine, "_primary_window_hwnd", lambda: 700)
+    monkeypatch.setattr(engine, "_same_process_window", lambda a, b: (int(a), int(b)) == (500, 700))
+    monkeypatch.setattr(engine, "_is_ime_like_window", lambda hwnd: False)
+    assert engine._point_clickable(1, 1, 999) is True
+
+
+def test_click_reports_remote_control_blocker(monkeypatch):
+    node = types.SimpleNamespace(kind="ButtonControl", rect=(100, 100, 300, 140))
+    monkeypatch.setattr(engine, "_rect", lambda n: (100, 100, 300, 140))
+    monkeypatch.setattr(engine, "_node_hwnd", lambda n: 111)
+    monkeypatch.setattr(engine, "_primary_window_hwnd", lambda: 111)
+    monkeypatch.setattr(engine, "_activate_window", lambda hwnd: None)
+    monkeypatch.setattr(engine, "_point_clickable", lambda x, y, target: False)
+    monkeypatch.setattr(engine, "_point_window_hwnd", lambda x, y: 777)
+    monkeypatch.setattr(engine, "_is_remote_control_window", lambda hwnd: True)
+    monkeypatch.setattr(engine, "_window_haystack", lambda hwnd: "orayui awesun.exe")
+    monkeypatch.setitem(sys.modules, "win32gui", types.SimpleNamespace(SetWindowPos=lambda *a, **k: None))
+    import pytest
+
+    with pytest.raises(RuntimeError) as exc:
+        engine._click_with_mouse(node)
+    assert "远程控制软件" in str(exc.value)

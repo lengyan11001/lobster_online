@@ -1090,6 +1090,43 @@ def _is_ime_like_window(hwnd: int) -> bool:
         return False
 
 
+_REMOTE_CONTROL_HINTS = (
+    "oray", "awesun", "sunlogin", "teamviewer", "anydesk", "rustdesk", "todesk", "vnc", "mstsc",
+)
+
+
+def _window_haystack(hwnd: int) -> str:
+    """窗口的 类名 + 标题 + 进程名（小写），用于识别输入法/远程控制软件。"""
+    if not hwnd:
+        return ""
+    try:
+        import win32gui  # type: ignore
+        import win32process  # type: ignore
+
+        parts = [str(win32gui.GetClassName(int(hwnd)) or ""), str(win32gui.GetWindowText(int(hwnd)) or "")]
+        _thread, pid = win32process.GetWindowThreadProcessId(int(hwnd))
+        if pid:
+            try:
+                import psutil  # type: ignore
+
+                parts.append(str(psutil.Process(int(pid)).name() or ""))
+            except Exception:
+                pass
+        return " ".join(parts).lower()
+    except Exception:
+        return ""
+
+
+def _is_remote_control_window(hwnd: int) -> bool:
+    """向日葵 / ToDesk / AnyDesk 等远程控制窗口。
+
+    实测（本机 2026-09-21 18:0x）：前台被 `AweSun.exe`（向日葵）的 `OrayUI` 窗口占着，
+    它会持续抢焦点，导致 WhatsApp 的点击守卫一直拒绝操作。
+    """
+    haystack = _window_haystack(hwnd)
+    return bool(haystack) and any(hint in haystack for hint in _REMOTE_CONTROL_HINTS)
+
+
 def _point_clickable(x: int, y: int, target: int) -> bool:
     """这个屏幕坐标是否"可以点"：WhatsApp 自己的窗口，或者输入法浮层。
 
@@ -1098,7 +1135,9 @@ def _point_clickable(x: int, y: int, target: int) -> bool:
     hwnd = _point_window_hwnd(x, y)
     if not hwnd:
         return True
-    if _same_process_window(hwnd, target):
+    # WhatsApp 是 WinUI3 + WebView2：控件属于 msedgewebview2 进程，窗口壳属于 WhatsApp.Root.exe，
+    # 两个 pid 都要认。
+    if _same_process_window(hwnd, target) or _same_process_window(hwnd, _primary_window_hwnd()):
         return True
     return _is_ime_like_window(hwnd)
 
@@ -1125,10 +1164,23 @@ def _click_with_mouse(node: Any) -> None:
             )
         except Exception:
             pass
-        deadline = time.monotonic() + 3.0
+        deadline = time.monotonic() + 8.0
         while not _point_clickable(x, y, target):
             if time.monotonic() >= deadline:
+                blocker = _point_window_hwnd(x, y)
+                if _is_remote_control_window(blocker):
+                    raise RuntimeError(
+                        "检测到远程控制软件（%s）占着前台，它会持续抢焦点：请把它最小化后再运行接管"
+                        % (_window_haystack(blocker)[:60] or "远程控制")
+                    )
                 raise RuntimeError("WhatsApp 窗口被其它窗口挡住或不可见，请把它移到前面后重试")
+            try:
+                win32gui.SetWindowPos(
+                    target, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
+                )
+            except Exception:
+                pass
             time.sleep(0.25)
     win32api.SetCursorPos((x, y))
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
