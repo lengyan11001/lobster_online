@@ -44,6 +44,13 @@ _IMPORT_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         ("requests", "playwright.async_api", "execjs", "google.protobuf", "pandas", "openpyxl", "pymysql", "websockets.sync.client"),
     ),
     ("wechat", "微信能力", ("wxauto4", "uiautomation", "win32gui", "pywinauto", "pyperclip", "comtypes")),
+    # WhatsApp 接管用的是同一套 UIA（uiautomation + comtypes），外加进程枚举/剪贴板兜底。
+    # 2026-09-21 diag_20260921073448_831a0dad：客户机这三项全缺，导致接管一直"未登录"。
+    (
+        "whatsapp",
+        "WhatsApp 接管",
+        ("uiautomation", "comtypes", "win32clipboard", "win32gui", "win32process", "pyperclip", "psutil"),
+    ),
 )
 
 
@@ -219,7 +226,22 @@ def _install_requirements(timeout: int) -> dict[str, Any]:
 def _verify_import(module_name: str) -> tuple[bool, str]:
     command = [sys.executable, "-c", f"import importlib; importlib.import_module({module_name!r})"]
     code, output = _run(command, 60)
-    return code == 0, _tail(output, 20)
+    if code == 0:
+        return True, _tail(output, 20)
+    # 客户端代码包里带了内置副本（backend/app/vendor）：site-packages 里没有、
+    # 但内置副本能加载的话，功能是正常的，不该被判定成"依赖缺失"。
+    vendor = ROOT / "backend" / "app" / "vendor"
+    if (vendor / module_name).is_dir():
+        probe = (
+            "import sys; sys.path.insert(0, r'%s');"
+            "import importlib; importlib.import_module(%r)"
+            % (str(vendor), module_name)
+        )
+        vendor_code, vendor_output = _run([sys.executable, "-c", probe], 90)
+        if vendor_code == 0:
+            return True, f"内置副本可用（{module_name}）"
+        return False, _tail(vendor_output, 20) or _tail(output, 20)
+    return False, _tail(output, 20)
 
 
 def _verify_groups() -> list[dict[str, Any]]:

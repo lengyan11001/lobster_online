@@ -62,9 +62,21 @@
   function statusDiagnostics(s) {
     var v = state.version || {};
     var deps = s.dependencies || {};
+    var sources = s.dependency_sources || {};
+    var depErrors = s.dependency_errors || {};
+    var caps = s.capabilities || {};
+    var repair = s.auto_repair || {};
     var processes = Array.isArray(s.processes) ? s.processes : [];
     var candidates = Array.isArray(s.candidates) ? s.candidates : [];
-    var depText = Object.keys(deps).map(function(key) { return key + ':' + (deps[key] ? '✓' : '✗'); }).join('　');
+    var depText = Object.keys(deps).map(function(key) {
+      if (deps[key]) return key + ':✓' + (sources[key] === 'vendor' ? '(内置副本)' : '');
+      return key + ':✗';
+    }).join('　');
+    var depErrorText = Object.keys(depErrors).map(function(key) { return key + ' → ' + depErrors[key]; }).join('；');
+    var capText = '进程枚举 ' + (caps.process_scan || '-') + '　剪贴板 ' + (caps.clipboard || '-') + '　UIA ' + (caps.uia || '-');
+    var repairText = repair.running
+      ? '正在自动修复运行依赖…'
+      : (repair.message ? ((repair.ok ? '上次自动修复：成功' : '上次自动修复：失败') + '（' + repair.message + '）') : '');
     var rows = candidates.map(function(row) {
       return '<tr><td>' + esc(row.title || '') + '</td><td>' + esc(row.class_name || '') + '</td>'
         + '<td>' + esc(row.process_name || '') + '</td>'
@@ -77,6 +89,9 @@
       + (v.expected_routes_missing && v.expected_routes_missing.length
         ? '　<span style="color:#b42318;">后端缺接口：' + esc(v.expected_routes_missing.join('、')) + '</span>' : '')
       + '<br>依赖：' + esc(depText)
+      + '<br>能力：' + esc(capText)
+      + (depErrorText ? '<br><span style="color:#b42318;">依赖错误：' + esc(depErrorText) + '</span>' : '')
+      + (repairText ? '<br>' + esc(repairText) : '')
       + '<br>原因：' + esc(s.reason || '（无）')
       + '<br>WhatsApp 进程：' + (processes.length
         ? esc(processes.map(function(p) { return (p.name || '?') + '(' + p.pid + ')'; }).join('、'))
@@ -87,7 +102,9 @@
           + '<thead><tr><th align="left">窗口标题</th><th align="left">窗口类名</th><th align="left">进程</th><th align="left">状态</th><th align="left">命中</th></tr></thead>'
           + '<tbody>' + rows + '</tbody></table>'
         : '<div style="margin-top:0.4rem;font-size:0.78rem;color:#b42318;">没有扫到候选窗口：请确认 WhatsApp 主窗口已打开（不是托盘/最小化）。</div>')
-      + '<div style="margin-top:0.5rem;"><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappCopyDiag">复制诊断信息</button></div>';
+      + '<div style="margin-top:0.5rem;"><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappCopyDiag">复制诊断信息</button>'
+      + (s.ok ? '' : ' <button class="btn btn-primary btn-sm" type="button" id="personalWhatsappRepairDeps">修复运行依赖</button>')
+      + '</div>';
   }
   function renderStatus() {
     var s = state.status || {};
@@ -101,6 +118,18 @@
         if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(payload).then(done, done); return; }
       } catch (e) {}
       window.prompt('复制下面的诊断信息', payload);
+    });
+    var repairBtn = $('personalWhatsappRepairDeps');
+    if (repairBtn) repairBtn.addEventListener('click', function() {
+      runBusy('正在修复运行依赖（首次可能要几分钟）...', function() {
+        return request('/api/settings/repair-runtime-dependencies', { method: 'POST', json: {} }).then(function(data) {
+          var ok = data && data.ok;
+          var message = (data && data.message) || '';
+          showNotice((ok ? '运行依赖修复完成。' : '运行依赖仍有缺失：') + message);
+          toastMessage(ok ? '依赖修复完成' : '依赖仍不完整，请看提示');
+          return loadBase();
+        });
+      }).catch(function() {});
     });
   }
   function fillConfig() {

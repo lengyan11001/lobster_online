@@ -27,6 +27,8 @@ backend/douyin_origin/douyin_protocol/node/
 __pycache__/
 *.pyc
 .pytest_cache/
+# comtypes 运行时生成类型库缓存（WhatsApp/微信 UIA 用），不进仓库也不随 OTA 下发
+.cache/
 
 # ── 用户配置 / 密钥 ──
 .env

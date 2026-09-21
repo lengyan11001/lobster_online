@@ -5,8 +5,10 @@ import concurrent.futures
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
+import sys
 import threading
 import time
 import uuid
@@ -40,6 +42,24 @@ WHATSAPP_PROCESS_NAMES = {"whatsapp.root.exe", "whatsapp.exe"}
 # 只要进程名里带 whatsapp 就算候选（覆盖 WhatsAppBeta / WhatsApp Business / whatsapp.root 等）
 WHATSAPP_PROCESS_HINTS = ("whatsapp",)
 WHATSAPP_PROCESS_IGNORE = {"whatsappcrashhandler.exe", "whatsappupdate.exe", "whatsappupdater.exe"}
+
+# WhatsApp 进程里还挂着一堆辅助窗口（输入法、托盘图标、GDI+ 钩子、广播事件窗口…）。
+# 它们类名各异、但都不是聊天主窗口；不过滤掉会把候选列表刷成一片噪音，
+# 用户看到的就是"识别出一堆看不懂的窗口"。
+_AUX_WINDOW_CLASS_EXACT = {"IME", "MSCTFIME UI", "MSCTFIME UI Window"}
+_AUX_WINDOW_CLASS_PREFIXES = ("h.notifyicon", ".net-broadcasteventwindow", "gdi+ hook window class")
+_AUX_WINDOW_TITLE_PREFIXES = ("default ime", "msctfime", "gdi+ window", "h.notifyicon")
+
+
+def is_auxiliary_window(*, class_name: str, title: str) -> bool:
+    """辅助窗口（输入法/托盘/钩子）不能当成 WhatsApp 主窗口候选。"""
+    window_class = str(class_name or "").strip().lower()
+    window_title = str(title or "").strip().lower()
+    if any(window_class.startswith(prefix) for prefix in _AUX_WINDOW_CLASS_PREFIXES):
+        return True
+    if any(window_class == name.lower() for name in _AUX_WINDOW_CLASS_EXACT):
+        return True
+    return any(window_title.startswith(prefix) for prefix in _AUX_WINDOW_TITLE_PREFIXES)
 
 
 def whatsapp_window_match(*, process_name: str, class_name: str, title: str) -> bool:
@@ -369,12 +389,194 @@ def _module_available(name: str) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# 运行依赖：优先用系统安装的包；装不上/装坏了就退回随客户端代码包下发的内置副本。
+#
+# 背景（diag_20260921073448_831a0dad，2026-09-21）：客户机上 uiautomation / pyperclip /
+# psutil 三个包都不在（status.dependencies 全 false），于是
+#   * 登录状态永远“未登录”（没有 UIA 就读不到会话控件）→ 接管根本起不来；
+#   * 进程名/路径为空 → 候选窗口全是「设置」「Edge」之类的系统窗口。
+# 解决方式：uiautomation / comtypes 走内置副本，进程枚举与剪贴板改成不依赖第三方包。
+# ---------------------------------------------------------------------------
+VENDOR_DIR = Path(__file__).resolve().parents[1] / "vendor"
+_COMTYPES_GEN_DIR = ROOT_DIR / ".cache" / "comtypes_gen"
+_UIA_LOCK = threading.Lock()
+_UIA_CACHE: Dict[str, Any] = {"module": None, "error": "", "source": "", "at": 0.0}
+_UIA_ERROR_CACHE_SECONDS = 300.0
+
+
+def _activate_vendor_path() -> bool:
+    """把随包下发的内置依赖目录挂到 sys.path 最前面（幂等）。"""
+    if not VENDOR_DIR.is_dir():
+        return False
+    resolved = str(VENDOR_DIR)
+    if resolved not in sys.path:
+        sys.path.insert(0, resolved)
+    return True
+
+
+def _prepare_comtypes_cache() -> None:
+    """comtypes 生成类型库会写包目录；改写到可写的 .cache，避免污染 OTA 下发目录。"""
+    try:
+        import comtypes.client  # type: ignore
+
+        _COMTYPES_GEN_DIR.mkdir(parents=True, exist_ok=True)
+        comtypes.client.gen_dir = str(_COMTYPES_GEN_DIR)
+    except Exception:
+        pass
+
+
+def _drop_partial_modules() -> None:
+    """清掉上一次失败导入留下的半成品模块，否则内置副本会被它挡住。"""
+    for name in ("uiautomation", "comtypes", "comtypes.client", "comtypes.gen"):
+        module = sys.modules.get(name)
+        if module is None:
+            continue
+        origin = str(getattr(module, "__file__", "") or "")
+        if not origin or "vendor" not in origin.replace("\\", "/"):
+            sys.modules.pop(name, None)
+
+
+def load_uia(*, refresh: bool = False) -> tuple[Any, str, str]:
+    """加载 uiautomation，返回 (模块或 None, 错误, 来源)。
+
+    来源：installed = 系统 site-packages；vendor = 随包内置副本；missing = 都不可用。
+    """
+    now = time.monotonic()
+    with _UIA_LOCK:
+        cached_module = _UIA_CACHE.get("module")
+        cached_error = str(_UIA_CACHE.get("error") or "")
+        cached_at = float(_UIA_CACHE.get("at") or 0.0)
+        if not refresh:
+            if cached_module is not None:
+                return cached_module, "", str(_UIA_CACHE.get("source") or "installed")
+            if cached_error and now - cached_at < _UIA_ERROR_CACHE_SECONDS:
+                return None, cached_error, "missing"
+
+    error = ""
+    module: Any = None
+    source = ""
+    try:
+        import uiautomation as auto  # type: ignore
+
+        module, source = auto, "installed"
+    except Exception as exc:
+        error = f"系统安装版：{type(exc).__name__}: {exc}"
+
+    if module is None and _activate_vendor_path():
+        _drop_partial_modules()
+        _prepare_comtypes_cache()
+        try:
+            import uiautomation as auto  # type: ignore
+
+            module, source, error = auto, "vendor", ""
+        except Exception as exc:
+            error = f"{error}；内置副本：{type(exc).__name__}: {exc}" if error else f"内置副本：{type(exc).__name__}: {exc}"
+
+    with _UIA_LOCK:
+        _UIA_CACHE.update(
+            {"module": module, "error": "" if module is not None else error,
+             "source": source, "at": time.monotonic()}
+        )
+    if module is None:
+        return None, error, "missing"
+    return module, "", source
+
+
+_CLIPBOARD_BACKEND = {"name": ""}
+
+
+def _clipboard_via_ctypes(text: str) -> None:
+    """纯 ctypes 写剪贴板（不依赖 pyperclip / pywin32）。"""
+    import ctypes
+    from ctypes import wintypes
+
+    CF_UNICODETEXT = 13
+    GMEM_MOVEABLE = 0x0002
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    payload = str(text or "").encode("utf-16-le") + b"\x00\x00"
+    handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(payload))
+    if not handle:
+        raise RuntimeError("剪贴板内存分配失败")
+    pointer = kernel32.GlobalLock(handle)
+    if not pointer:
+        raise RuntimeError("剪贴板内存锁定失败")
+    try:
+        ctypes.memmove(pointer, payload, len(payload))
+    finally:
+        kernel32.GlobalUnlock(handle)
+    last_error = "剪贴板被其他程序占用"
+    for _attempt in range(12):
+        if user32.OpenClipboard(None):
+            try:
+                user32.EmptyClipboard()
+                if not user32.SetClipboardData(CF_UNICODETEXT, handle):
+                    last_error = "剪贴板写入失败"
+                    continue
+                return
+            finally:
+                user32.CloseClipboard()
+        time.sleep(0.12)
+    raise RuntimeError(last_error)
+
+
+def set_clipboard_text(text: str) -> str:
+    """写系统剪贴板，返回实际使用的后端名（诊断用）。"""
+    value = str(text or "")
+    errors: List[str] = []
+    try:
+        import pyperclip  # type: ignore
+
+        pyperclip.copy(value)
+        _CLIPBOARD_BACKEND["name"] = "pyperclip"
+        return "pyperclip"
+    except Exception as exc:
+        errors.append(f"pyperclip: {type(exc).__name__}: {exc}")
+    if os.name == "nt":
+        try:
+            import win32clipboard  # type: ignore
+            import win32con  # type: ignore
+
+            win32clipboard.OpenClipboard()
+            try:
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, value)
+            finally:
+                win32clipboard.CloseClipboard()
+            _CLIPBOARD_BACKEND["name"] = "win32clipboard"
+            return "win32clipboard"
+        except Exception as exc:
+            errors.append(f"win32clipboard: {type(exc).__name__}: {exc}")
+        try:
+            _clipboard_via_ctypes(value)
+            _CLIPBOARD_BACKEND["name"] = "ctypes"
+            return "ctypes"
+        except Exception as exc:
+            errors.append(f"ctypes: {type(exc).__name__}: {exc}")
+    raise RuntimeError("剪贴板不可用（" + "；".join(errors) + "）")
+
+
+def _module_probe(name: str) -> tuple[bool, str]:
+    try:
+        __import__(name)
+        return True, ""
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
 def _process_meta(pid: int) -> Dict[str, Any]:
     try:
-        import psutil  # type: ignore
+        from .win_process_scan import process_image
 
-        proc = psutil.Process(int(pid))
-        return {"name": proc.name(), "exe": proc.exe()}
+        name, exe = process_image(int(pid or 0))
+        return {"name": name, "exe": exe}
     except Exception:
         return {"name": "", "exe": ""}
 
@@ -430,6 +632,8 @@ def _scan_windows() -> List[Dict[str, Any]]:
             meta = _process_meta(int(pid or 0))
             process_name = str(meta.get("name") or "").lower()
             process_path = str(meta.get("exe") or "")
+            if is_auxiliary_window(class_name=class_name, title=title):
+                return
             # 进程优先：只要是 WhatsApp 进程的顶层窗口就收进来（后面再按"类名/标题命中"排序），
             # 这样即使新版换了窗口类名也不会"完全识别不到"。
             if process_name or process_path:
@@ -442,11 +646,14 @@ def _scan_windows() -> List[Dict[str, Any]]:
                 else:
                     match_by = "process"
             else:
-                # 拿不到进程信息（例如客户端没装 psutil）：退回"只看窗口类名/标题"
-                if class_name in WHATSAPP_WINDOW_CLASSES:
-                    match_by = "class"
-                elif "whatsapp" in title.lower():
+                # 进程信息完全拿不到时才退回"只看窗口"，而且只有 WhatsApp 专有类名、
+                # 或标题里明确写着 WhatsApp 才算：ApplicationFrameWindow /
+                # Windows.UI.Core.CoreWindow / Chrome_WidgetWin_1 是系统共用类名，
+                # 不加这个门槛就会把「设置」「Windows 输入体验」「Edge」也收成候选。
+                if "whatsapp" in title.lower():
                     match_by = "title"
+                elif class_name == WHATSAPP_WINDOW_CLASS:
+                    match_by = "class"
                 else:
                     return
             row = window_row(int(hwnd), match_by=match_by)
@@ -479,16 +686,16 @@ def whatsapp_processes() -> List[Dict[str, Any]]:
     """列出机器上所有 WhatsApp 进程（即使没有窗口），用于诊断"到底是没起还是没识别到"。"""
     out: List[Dict[str, Any]] = []
     try:
-        import psutil  # type: ignore
+        from .win_process_scan import snapshot_processes
     except Exception:
         return out
-    for proc in psutil.process_iter(["pid", "name", "exe"]):
+    for proc in snapshot_processes():
         try:
-            name = str(proc.info.get("name") or "").lower()
-            if not any(hint in name for hint in WHATSAPP_PROCESS_HINTS):
+            name = str(proc.get("name") or "")
+            exe = str(proc.get("exe") or "")
+            if not is_whatsapp_process(name, exe):
                 continue
-            out.append({"pid": int(proc.info.get("pid") or 0), "name": proc.info.get("name") or "",
-                        "exe": proc.info.get("exe") or ""})
+            out.append({"pid": int(proc.get("pid") or 0), "name": name, "exe": exe})
         except Exception:
             continue
     return out
@@ -563,7 +770,9 @@ def _find_by_name(root: Any, names: Iterable[str], *, control_type: str = "") ->
 
 
 def _root_for_hwnd(hwnd: int) -> Any:
-    import uiautomation as auto  # type: ignore
+    auto, error, _source = load_uia()
+    if auto is None:
+        raise RuntimeError(f"UIA 控件不可用（{error}）")
 
     root = auto.ControlFromHandle(int(hwnd))
     candidates = [node for node, _depth in _iter_nodes(root, max_depth=14, max_nodes=400) if _node_aid(node) == "RootWebArea" and _rect(node)]
@@ -601,10 +810,9 @@ def _set_edit_text(node: Any, value: str) -> None:
     if node is None or not _rect(node):
         raise RuntimeError("WhatsApp 输入框不可用")
     _click(node)
-    import pyperclip  # type: ignore
     from pywinauto.keyboard import send_keys  # type: ignore
 
-    pyperclip.copy(str(value or ""))
+    set_clipboard_text(str(value or ""))
     send_keys("^a", pause=0.02)
     send_keys("^v", pause=0.03)
     time.sleep(0.18)
@@ -683,18 +891,115 @@ def _probe_window(window: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
-def status() -> Dict[str, Any]:
-    deps = {
-        name: _module_available(name)
-        for name in ("uiautomation", "win32gui", "win32process", "pyperclip", "psutil")
+_AUTO_REPAIR_LOCK = threading.Lock()
+_AUTO_REPAIR_COOLDOWN_SECONDS = 3 * 60 * 60
+_AUTO_REPAIR_STATE: Dict[str, Any] = {"running": False, "started_at": 0.0, "finished_at": 0.0,
+                                      "ok": None, "message": ""}
+
+
+def _dependency_report() -> Dict[str, Any]:
+    """依赖体检：uiautomation 走"已装/内置副本"两级加载，其余按普通导入探测并带错误原因。"""
+    uia_module, uia_error, uia_source = load_uia()
+    deps: Dict[str, bool] = {"uiautomation": uia_module is not None}
+    sources: Dict[str, str] = {"uiautomation": uia_source or ("installed" if uia_module else "missing")}
+    errors: Dict[str, str] = {}
+    if uia_module is None:
+        errors["uiautomation"] = uia_error
+    for name in ("win32gui", "win32process", "pyperclip", "psutil"):
+        ok, error = _module_probe(name)
+        deps[name] = ok
+        sources[name] = "installed" if ok else "missing"
+        if not ok:
+            errors[name] = error
+    return {"deps": deps, "errors": errors, "sources": sources, "uia_source": uia_source}
+
+
+def _clipboard_backend_probe() -> str:
+    if _CLIPBOARD_BACKEND.get("name"):
+        return str(_CLIPBOARD_BACKEND["name"])
+    for name, label in (("pyperclip", "pyperclip"), ("win32clipboard", "win32clipboard")):
+        ok, _error = _module_probe(name)
+        if ok:
+            return label
+    return "ctypes" if os.name == "nt" else "none"
+
+
+def _capabilities(report: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+    try:
+        from .win_process_scan import process_scan_backend
+
+        process_backend = process_scan_backend()
+    except Exception:
+        process_backend = "none"
+    return {
+        "process_scan": process_backend,
+        "clipboard": _clipboard_backend_probe(),
+        "uia": str((report or _dependency_report())["uia_source"] or "missing"),
     }
+
+
+def _auto_repair_snapshot() -> Dict[str, Any]:
+    with _AUTO_REPAIR_LOCK:
+        return {
+            "running": bool(_AUTO_REPAIR_STATE.get("running")),
+            "ok": _AUTO_REPAIR_STATE.get("ok"),
+            "message": str(_AUTO_REPAIR_STATE.get("message") or ""),
+            "started_at": float(_AUTO_REPAIR_STATE.get("started_at") or 0.0),
+            "finished_at": float(_AUTO_REPAIR_STATE.get("finished_at") or 0.0),
+        }
+
+
+def _auto_repair_worker() -> None:
+    try:
+        from .runtime_dependency_repair import repair_runtime_dependencies
+
+        result = repair_runtime_dependencies()
+        ok = bool(result.get("ok"))
+        message = str(result.get("message") or "")
+    except Exception as exc:  # noqa: BLE001
+        ok = False
+        message = f"{type(exc).__name__}: {exc}"
+    with _AUTO_REPAIR_LOCK:
+        _AUTO_REPAIR_STATE.update({"running": False, "finished_at": time.time(), "ok": ok, "message": message})
+    try:
+        _append_log("dependency_auto_repair", ok=ok, message=message)
+    except Exception:
+        pass
+
+
+def _maybe_schedule_auto_repair(report: Dict[str, Any]) -> None:
+    """UIA 完全不可用时自动补一次运行依赖（后台线程，3 小时最多一次，不阻塞状态查询）。"""
+    if report["deps"].get("uiautomation"):
+        return
+    with _AUTO_REPAIR_LOCK:
+        if _AUTO_REPAIR_STATE.get("running"):
+            return
+        last = max(float(_AUTO_REPAIR_STATE.get("started_at") or 0.0),
+                   float(_AUTO_REPAIR_STATE.get("finished_at") or 0.0))
+        if last and time.time() - last < _AUTO_REPAIR_COOLDOWN_SECONDS:
+            return
+        _AUTO_REPAIR_STATE.update({"running": True, "started_at": time.time(), "ok": None, "message": ""})
+    threading.Thread(target=_auto_repair_worker, name="lobster-whatsapp-deps", daemon=True).start()
+
+
+def status() -> Dict[str, Any]:
+    report = _dependency_report()
+    deps = report["deps"]
+    _maybe_schedule_auto_repair(report)
     windows = _scan_windows()
     processes = whatsapp_processes()
     probed = _probe_window(windows[0]) if windows and deps["uiautomation"] else (windows[0] if windows else {})
+    capabilities = _capabilities(report)
     with _ACTIVE_LOCK:
         running = _ACTIVE
         active_action = _ACTIVE_ACTION
-    if not windows and processes:
+    if not deps["uiautomation"]:
+        reason = (
+            "UIA 控件不可用（uiautomation 加载失败：%s）。已自动触发「修复运行依赖」，"
+            "也可以在本页手动点「修复运行依赖」后重试。"
+            % (report["errors"].get("uiautomation") or "未知原因")
+        )
+    elif not windows and processes:
         reason = (
             "检测到 WhatsApp 进程（%s），但没识别到主窗口：请把 WhatsApp 主窗口打开并还原（不要只留托盘/最小化）后重试。"
             % "、".join(sorted({str(item.get("name") or "?") for item in processes}))
@@ -713,6 +1018,10 @@ def status() -> Dict[str, Any]:
                 desktop_found=bool(windows),
                 reason=reason,
                 deps=deps,
+                dependency_sources=report["sources"],
+                dependency_errors=report["errors"],
+                capabilities=capabilities,
+                auto_repair=_auto_repair_snapshot(),
                 processes=[{"name": item.get("name"), "pid": item.get("pid")} for item in processes[:8]],
                 candidates=[
                     {"title": row.get("title"), "class_name": row.get("class_name"),
@@ -738,6 +1047,10 @@ def status() -> Dict[str, Any]:
             for row in windows[:8]
         ],
         "dependencies": deps,
+        "dependency_sources": report["sources"],
+        "dependency_errors": report["errors"],
+        "capabilities": capabilities,
+        "auto_repair": _auto_repair_snapshot(),
         "reason": reason,
         "config": get_config(),
     }
@@ -943,10 +1256,9 @@ def _send_current_message(hwnd: int, text: str) -> Dict[str, Any]:
     if composer is None:
         raise RuntimeError("未找到 WhatsApp 消息输入框")
     _click(composer)
-    import pyperclip  # type: ignore
     from pywinauto.keyboard import send_keys  # type: ignore
 
-    pyperclip.copy(str(text or ""))
+    set_clipboard_text(str(text or ""))
     send_keys("^v", pause=0.03)
     time.sleep(0.15)
     send_keys("{ENTER}", pause=0.05)
@@ -1379,10 +1691,10 @@ def _dismiss_contact_form(hwnd: int) -> None:
     except Exception:  # noqa: BLE001
         pass
     try:
-        import uiautomation as auto  # type: ignore
-
-        auto.SendKeys("{Escape}")
-        time.sleep(0.35)
+        auto, _error, _source = load_uia()
+        if auto is not None:
+            auto.SendKeys("{Escape}")
+            time.sleep(0.35)
     except Exception:  # noqa: BLE001
         pass
 
