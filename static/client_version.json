@@ -1,7 +1,7 @@
 {
-  "version": "2.0.74",
-  "build": 354,
-  "applied_at": "2026-09-21T18:08:18+08:00",
-  "note": "WhatsApp 点击守卫：识别远程控制软件(向日葵等)+ 反复抢回前台；不再被输入法/向日葵掐断接管",
-  "bundle_sha256": "8fc16062e0b61c15ccce8db24b8c4b8ecbdb336c348387cdf4104d8d642ba70c"
+  "version": "2.0.75",
+  "build": 355,
+  "applied_at": "2026-09-21T18:11:37+08:00",
+  "note": "WhatsApp 激活到最前：AttachThreadInput 抢前台（向日葵/远程控制占用时也能激活）",
+  "bundle_sha256": "b553bcd5c46f65392cfb14b80d5def28cdc31be207ac49cb84dbbe8fb351512b"
 }
