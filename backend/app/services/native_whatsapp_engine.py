@@ -887,6 +887,51 @@ def _node_hwnd(node: Any) -> int:
         return 0
 
 
+def _force_foreground(hwnd: int, *, wait_seconds: float = 2.5) -> bool:
+    """强行把窗口抢成前台。
+
+    实测（本机 18:1x）：向日葵的 `OrayUI` 一直占着前台，`SetForegroundWindow` 被系统拒绝。
+    这里用经典的 `AttachThreadInput` 把我们的线程附到前台窗口线程上，再调 SetForegroundWindow，
+    就能拿到前台（抢到后立刻做输入，趁它没抢回去）。
+    """
+    try:
+        import win32api  # type: ignore
+        import win32gui  # type: ignore
+        import win32process  # type: ignore
+    except Exception:
+        return _activate_window(hwnd, wait_seconds=wait_seconds)
+
+    target = int(hwnd or 0)
+    if not target:
+        return False
+    deadline = time.monotonic() + max(0.3, float(wait_seconds))
+    while True:
+        _activate_window(target, wait_seconds=0.05)
+        if _same_process_window(_foreground_hwnd(), target):
+            return True
+        foreground = _foreground_hwnd()
+        if foreground:
+            try:
+                fg_thread, _pid = win32process.GetWindowThreadProcessId(foreground)
+                current_thread = int(win32api.GetCurrentThreadId())
+                if fg_thread and int(fg_thread) != current_thread:
+                    win32process.AttachThreadInput(int(fg_thread), current_thread, True)
+                    try:
+                        win32gui.BringWindowToTop(target)
+                        win32gui.SetForegroundWindow(target)
+                    finally:
+                        win32process.AttachThreadInput(int(fg_thread), current_thread, False)
+                else:
+                    win32gui.SetForegroundWindow(target)
+            except Exception:
+                pass
+        if _same_process_window(_foreground_hwnd(), target):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.2)
+
+
 def _ensure_foreground(hwnd: int, *, attempts: int = 3, pause: float = 0.25) -> bool:
     """确保目标窗口是当前前台窗口。
 
@@ -896,11 +941,10 @@ def _ensure_foreground(hwnd: int, *, attempts: int = 3, pause: float = 0.25) -> 
     target = int(hwnd or 0)
     if not target:
         return False
-    for _attempt in range(max(1, attempts)):
-        if _same_process_window(_foreground_hwnd(), target):
-            return True
-        _activate_window(target)
-        time.sleep(pause)
+    if _same_process_window(_foreground_hwnd(), target):
+        return True
+    if _force_foreground(target, wait_seconds=max(0.5, pause * max(1, attempts))):
+        return True
     return _same_process_window(_foreground_hwnd(), target)
 
 
@@ -1006,26 +1050,45 @@ def _node_value(node: Any) -> str:
         return ""
 
 
-def _activate_window(hwnd: int) -> None:
+def _activate_window(hwnd: int, *, wait_seconds: float = 3.0) -> bool:
+    """把 WhatsApp 激活到最前面（照微信那套做法：恢复隐藏窗口 → 提到最前 → 轮询确认）。
+
+    后台进程调 SetForegroundWindow 常被系统拒绝，所以这里按顺序做多件事，并在
+    wait_seconds 内反复重试，只有真的到最前（前台是本进程窗口）才返回 True：
+      1) ShowWindow(SW_RESTORE / SW_SHOW)：窗口被最小化/隐藏时先显示出来
+      2) SetWindowPos(HWND_TOP + SWP_SHOWWINDOW) + BringWindowToTop：提到最前
+      3) SetForegroundWindow：尝试拿前台
+    """
     import win32con  # type: ignore
     import win32gui  # type: ignore
 
-    if win32gui.IsIconic(hwnd):
-        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-    try:
-        win32gui.SetForegroundWindow(hwnd)
-    except Exception:
-        pass
-    # 后台进程调 SetForegroundWindow 常被系统拒绝；BringWindowToTop / SetWindowPos
-    # 不需要前台权限，能把窗口提到最前，避免鼠标坐标点到被遮挡的其它程序上。
-    try:
-        win32gui.BringWindowToTop(hwnd)
-        win32gui.SetWindowPos(
-            hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
-            win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
-        )
-    except Exception:
-        pass
+    target = int(hwnd or 0)
+    if not target:
+        return False
+    deadline = time.monotonic() + max(0.3, float(wait_seconds))
+    while True:
+        try:
+            if win32gui.IsWindow(target):
+                if win32gui.IsIconic(target):
+                    win32gui.ShowWindow(target, win32con.SW_RESTORE)
+                else:
+                    win32gui.ShowWindow(target, win32con.SW_SHOW)
+                win32gui.SetWindowPos(
+                    target, win32con.HWND_TOP, 0, 0, 0, 0,
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
+                )
+                win32gui.BringWindowToTop(target)
+        except Exception:
+            pass
+        try:
+            win32gui.SetForegroundWindow(target)
+        except Exception:
+            pass
+        if _same_process_window(_foreground_hwnd(), target):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.3)
 
 
 def _click(node: Any, *, force_mouse: bool = False) -> None:
