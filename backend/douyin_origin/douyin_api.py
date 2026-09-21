@@ -6207,7 +6207,20 @@ def split_already_mentioned_users(rows: List[Dict]) -> tuple[List[Dict], List[Di
     return available, skipped
 
 
-def request_douyin_ai_comment(system_prompt: str, user_prompt: str, max_tokens: int = 180) -> str:
+def request_douyin_ai_comment(
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int = 180,
+    response_limit: int = 40,
+) -> str:
+    """Call the AI endpoint and return its reply text.
+
+    ``response_limit`` is the reply length cap of
+    :func:`clean_douyin_video_comment_text`. Comment copy fits in 40 chars, but
+    callers that expect a JSON payload (for example the AI keyword planner)
+    must raise it: a keyword JSON is 40+ chars, and truncating it breaks
+    ``json.loads`` so the caller silently sees "no keywords" (2026-09-21).
+    """
     client = create_ai_client()
     if not str(client.api_key or "").strip():
         raise RuntimeError("当前未配置 AI 接口 Key，不能使用 AI 评论模式。")
@@ -6240,7 +6253,7 @@ def request_douyin_ai_comment(system_prompt: str, user_prompt: str, max_tokens: 
 
             result = response.json()
             content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
-            cleaned = clean_douyin_video_comment_text(content)
+            cleaned = clean_douyin_video_comment_text(content, limit=max(1, int(response_limit or 40)))
             if not cleaned:
                 raise RuntimeError("AI 没有返回可用私信内容。")
             return cleaned

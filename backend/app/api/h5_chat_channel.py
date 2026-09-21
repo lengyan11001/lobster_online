@@ -4231,6 +4231,18 @@ def _scheduled_douyin_search_keyword(source: Dict[str, Any]) -> str:
     return keywords[0] if keywords else ""
 
 
+def _scheduled_douyin_ai_keyword_note(source: Any) -> str:
+    """AI 关键词没生成出来时，把原因写进任务结果，别让它静默降级。"""
+    params = source if isinstance(source, dict) else {}
+    reason = " ".join(str(params.get("ai_keyword_fallback") or "").split())
+    if not reason:
+        return ""
+    if len(reason) > 60:
+        reason = reason[:60] + "…"
+    words = _scheduled_douyin_search_keywords(params)
+    return f"（AI 关键词未生成：{reason}；本轮沿用 {len(words)} 个已有关键词）"
+
+
 _DOUYIN_AI_KEYWORD_HISTORY_FILE = "_lobster_runtime/douyin_ai_keywords.json"
 
 
@@ -4400,10 +4412,27 @@ def _generate_douyin_ai_keywords(
         sections.append(f"希望搜索结果尽量落在最近 {publish_window} 天发布的新视频上。")
     sections.append(f"请给出最多 {count} 个本轮要用的新关键词。")
 
-    raw = request_douyin_ai_comment(system_prompt, "\n\n".join(sections), max_tokens=220)
+    raw = request_douyin_ai_comment(
+        system_prompt,
+        "\n\n".join(sections),
+        max_tokens=220,
+        # 关键词是 JSON（{"keywords":[...]}），而评论文案用的默认回包上限是 40 字，
+        # 会把 JSON 截断 → json.loads 失败 → 静默退回原关键词（2026-09-21 定位）。
+        response_limit=400,
+    )
+    preview = " ".join(str(raw or "").split())[:200]
+    logger.info("[AI-KEYWORD] 模型返回（前 200 字）：%s", preview or "(空)")
     keywords = _parse_douyin_ai_keywords(raw, limit=count)
     avoid = {str(item or "").strip().lower() for item in recent_keywords}
-    return [keyword for keyword in keywords if keyword.lower() not in avoid]
+    kept = [keyword for keyword in keywords if keyword.lower() not in avoid]
+    if keywords and not kept:
+        logger.warning(
+            "[AI-KEYWORD] 模型给出的 %s 个关键词都被近 7 天已用清单过滤（清单 %s 个）：%s",
+            len(keywords),
+            len(recent_keywords),
+            keywords,
+        )
+    return kept
 
 
 def _scheduled_douyin_wants_ai_keywords(context: Any, params: Any) -> bool:
@@ -4458,6 +4487,37 @@ async def _apply_scheduled_douyin_ai_keywords(
         # 也不要回头去用用户没配、也不该从 Online 取的关键词。
         return _douyin_ai_last_keywords()
 
+    def apply_fallback(rows: Any, *, used_ai: bool, reason: str) -> bool:
+        """兜底关键词一律按节点设置的数量截断。
+
+        节点里的 ``ai_keyword_count`` 是用户设置的"每轮搜几个"，AI 没给出新词时
+        也必须守住这个上限：之前回退直接用原关键词列表，一次搜了 9 个（2026-09-21）。
+        """
+        available = [str(item or "").strip() for item in (rows or []) if str(item or "").strip()]
+        if not available:
+            return False
+        capped = available[:count]
+        if len(available) > len(capped):
+            logger.warning(
+                "[AI-KEYWORD] 候选关键词 %s 个，按节点设置 ai_keyword_count=%s 截断为 %s 个",
+                len(available),
+                count,
+                len(capped),
+            )
+        merged["keywords"] = capped
+        merged["keyword"] = capped[0]
+        merged["ai_keywords_used"] = used_ai
+        merged["ai_keyword_fallback"] = reason
+        merged["ai_keyword_generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logger.warning(
+            "[AI-KEYWORD] %s，本轮使用 %s 个关键词（节点设置最多 %s 个）：%s",
+            reason,
+            len(capped),
+            count,
+            capped,
+        )
+        return True
+
     try:
         keywords = await asyncio.to_thread(
             _generate_douyin_ai_keywords,
@@ -4469,32 +4529,41 @@ async def _apply_scheduled_douyin_ai_keywords(
             publish_window=str(publish_days),
         )
     except Exception as exc:
-        fallback = last_ai_keywords()
-        if fallback:
-            logger.warning("[AI-KEYWORD] 生成失败，沿用上一次 AI 关键词：%s（%s）", fallback, exc)
-            merged["keywords"] = fallback
-            merged["keyword"] = fallback[0]
-            merged["ai_keywords_used"] = True
-            merged["ai_keyword_generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if apply_fallback(
+            last_ai_keywords(),
+            used_ai=True,
+            reason=f"AI 生成关键词失败（{exc}），沿用上一次 AI 关键词",
+        ):
             return merged
-        logger.warning("[AI-KEYWORD] 生成关键词失败，本轮沿用原关键词：%s", exc)
+        if apply_fallback(
+            _scheduled_douyin_search_keywords(merged),
+            used_ai=False,
+            reason=f"AI 生成关键词失败（{exc}），沿用原关键词",
+        ):
+            return merged
+        logger.warning("[AI-KEYWORD] 生成关键词失败，且没有可用的原关键词：%s", exc)
         return merged
     if not keywords:
-        fallback = last_ai_keywords()
-        if fallback:
-            logger.warning("[AI-KEYWORD] AI 没给出新词，沿用上一次 AI 关键词：%s", fallback)
-            merged["keywords"] = fallback
-            merged["keyword"] = fallback[0]
-            merged["ai_keywords_used"] = True
-            merged["ai_keyword_generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if apply_fallback(
+            last_ai_keywords(),
+            used_ai=True,
+            reason="AI 没给出新词，沿用上一次 AI 关键词",
+        ):
             return merged
-        logger.warning("[AI-KEYWORD] AI 没有给出可用关键词，本轮沿用原关键词")
+        if apply_fallback(
+            _scheduled_douyin_search_keywords(merged),
+            used_ai=False,
+            reason="AI 没有给出可用关键词，沿用原关键词",
+        ):
+            return merged
+        logger.warning("[AI-KEYWORD] AI 没有给出可用关键词，且没有可用的原关键词")
         return merged
 
     _record_douyin_ai_keywords(keywords)
     merged["keywords"] = keywords
     merged["keyword"] = keywords[0]
     merged["ai_keywords_used"] = True
+    merged.pop("ai_keyword_fallback", None)
     merged["ai_keyword_generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     # 保证新视频：默认按“最新发布 + 最近 N 天”搜索，节点里可以覆盖
     merged["search_sort_type"] = str(source.get("search_sort_type") or merged.get("search_sort_type") or "1")
@@ -5305,6 +5374,7 @@ async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Di
         result["msg"] = (
             f"搜索完成，找到 {len(normalized_results)} 个视频；已开始依次采集 {actual_started} 个视频的客户。"
             + (f" 已跳过 {skipped_existing} 个已完成任务。" if skipped_existing else "")
+            + _scheduled_douyin_ai_keyword_note(source)
         )
     return result
 
@@ -5331,6 +5401,8 @@ async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str,
             keyword,
         )
         keyword_params = dict(source)
+        # AI 关键词兜底提示只在合并结果里说一次，别每个关键词都重复一遍。
+        keyword_params.pop("ai_keyword_fallback", None)
         keyword_params["keywords"] = [keyword]
         keyword_params["keyword"] = keyword
         result = await _run_scheduled_douyin_single_search_collect_action(keyword_params)
@@ -5389,6 +5461,7 @@ async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str,
                 f"Completed {len(successful_results)}/{len(keywords)} configured keywords; "
                 f"found {sum(_safe_int(row.get('search_total')) for row in successful_results)} videos "
                 f"and started {len(selected_task_ids)} collection tasks."
+                + _scheduled_douyin_ai_keyword_note(source)
             ),
             "keyword": keywords[0],
             "keywords": keywords,
