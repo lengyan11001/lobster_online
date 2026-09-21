@@ -975,8 +975,13 @@
         .then(function (data) {
           setBusy(false);
           var products = (data && data.products) || {};
-          toast('同步完成：产品 ' + (products.found || 0) + ' 条（新增 ' + (products.created || 0) +
-            ' / 更新 ' + (products.updated || 0) + '），页数 ' + (products.pages_scanned || 0), 'ok');
+          var reported = products.reported_total || 0;
+          var found = products.found || 0;
+          toast('同步完成：接口报告 ' + reported + ' 条 / 实际入库 ' + found +
+            ' 条（新增 ' + (products.created || 0) + ' / 更新 ' + (products.updated || 0) +
+            '），页数 ' + (products.pages_scanned || 0) +
+            (reported && found && reported !== found ? '（差了 ' + (reported - found) + ' 条，可再点一次同步）' : ''),
+            reported && found && reported !== found ? 'err' : 'ok');
           if (data && (data.store_error || data.products_error)) {
             toast('部分失败：' + (data.store_error || data.products_error), 'err');
           }

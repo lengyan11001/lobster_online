@@ -158,6 +158,21 @@ def test_api_url_helpers():
     assert store._api_url_from_performance(["https://x/other.js"]) == ""
 
 
+def test_clean_product_api_url_drops_page_filters_and_forces_paging():
+    messy = ("https://hz-productposting.alibaba.com/product/managementproducts/asyQueryProductsList.do"
+             "?statisticsType=month&repositoryType=all&imageType=all&showPowerScore=&status=approved"
+             "&page=3&size=10&keywords=rugged&groupId=123&refreshGroupId1=abc"
+             "&ctoken=tok1&_tb_token_=tok2&_csrf_token_=tok3&lang=en_US")
+
+    cleaned = store.clean_product_api_url(messy, page=2, size=50)
+
+    assert "page=2" in cleaned and "size=50" in cleaned
+    assert "status=approved" in cleaned
+    assert "ctoken=tok1" in cleaned and "_csrf_token_=tok3" in cleaned
+    assert "keywords" not in cleaned and "groupId" not in cleaned and "refreshGroupId1" not in cleaned
+    assert "size=10" not in cleaned and "page=3" not in cleaned
+
+
 def test_workbench_has_store_page_and_preparation_entries():
     assert "key: 'store'" in JS
     assert "function renderStore" in JS

@@ -256,6 +256,35 @@ def _api_url_from_performance(page_entries: List[str]) -> str:
     return ""
 
 
+_API_KEEP_PARAMS = ("ctoken", "_tb_token_", "_csrf_token_", "lang")
+_API_FIXED_PARAMS = {
+    "status": "approved",          # 只看线上（审核通过）
+    "repositoryType": "all",
+    "imageType": "all",
+    "statisticsType": "month",
+}
+
+
+def clean_product_api_url(url: str, *, page: int = 1, size: int = 50) -> str:
+    """只保留 token/语言 + 固定筛选，丢掉页面上可能残留的其它筛选条件。
+
+    2026-09-21 事故：客户端那次同步只入库 50 条（页面当时带着筛选/分页状态，被原样复用），
+    所以这里强制重建查询串：只看线上（status=approved）+ 全仓 + 指定 page/size。
+    """
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    parts = urlsplit(str(url or ""))
+    keep: Dict[str, str] = {}
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        if key in _API_KEEP_PARAMS and value:
+            keep[key] = value
+    query = dict(_API_FIXED_PARAMS)
+    query.update(keep)
+    query["page"] = str(page)
+    query["size"] = str(size)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+
+
 def _with_param(url: str, key: str, value: Any) -> str:
     pattern = re.compile(r"([?&])" + re.escape(key) + r"=[^&]*")
     if pattern.search(url):
@@ -345,23 +374,38 @@ async def sync_products_via_api(page: Any, *, size: int = 50, max_pages: int = 4
     url = _api_url_from_performance(entries if isinstance(entries, list) else [])
     if not url:
         return {"items": [], "pages_scanned": 0, "source": "api_url_missing"}
-    url = _with_param(_with_param(url, "size", size), "page", 1)
+    sizes = [size]
+    for fallback in (20, 10):
+        if fallback not in sizes:
+            sizes.append(fallback)
     items: List[Dict[str, Any]] = []
     seen: set = set()
     pages = 0
     total = None
+    diagnostics: List[Dict[str, Any]] = []
+    used_size = sizes[0]
     for page_no in range(1, max(1, min(200, max_pages)) + 1):
-        target = _with_param(url, "page", page_no)
-        try:
-            raw = await page.evaluate(
-                "(u) => fetch(u, {credentials: 'include'}).then(r => r.text())", target
-            )
-            data = json.loads(str(raw).strip())
-        except Exception as exc:
-            logger.warning("[ALI-STORE] api page %s failed: %s", page_no, exc)
+        data = None
+        page_error = ""
+        for candidate_size in sizes:
+            target = clean_product_api_url(url, page=page_no, size=candidate_size)
+            try:
+                raw = await page.evaluate(
+                    "(u) => fetch(u, {credentials: 'include'}).then(r => r.text())", target
+                )
+                data = json.loads(str(raw).strip())
+                used_size = candidate_size
+                break
+            except Exception as exc:
+                page_error = str(exc)[:200]
+                logger.warning("[ALI-STORE] api page %s size %s failed: %s", page_no, candidate_size, exc)
+                data = None
+        if data is None:
+            diagnostics.append({"page": page_no, "error": page_error or "fetch failed"})
             break
         products = data.get("products") if isinstance(data, dict) else None
         if not isinstance(products, list) or not products:
+            diagnostics.append({"page": page_no, "len": 0, "done": True})
             break
         pages += 1
         try:
@@ -377,9 +421,29 @@ async def sync_products_via_api(page: Any, *, size: int = 50, max_pages: int = 4
             seen.add(pid)
             new_on_page += 1
             items.append(fields)
-        if new_on_page == 0 or (total is not None and len(items) >= total):
+        diagnostics.append({
+            "page": page_no,
+            "size": used_size,
+            "len": len(products),
+            "new": new_on_page,
+            "total": total,
+            "first_id": str((products[0] or {}).get("id") or "") if isinstance(products[0], dict) else "",
+        })
+        if new_on_page == 0:
+            # 这一页全是重复：可能 page/size 没生效，换更小的 size 再试一次
+            if used_size != sizes[-1]:
+                continue
             break
-    return {"items": items, "pages_scanned": pages, "source": "api", "total": total}
+        if total is not None and len(items) >= total:
+            break
+    return {
+        "items": items,
+        "pages_scanned": pages,
+        "source": "api",
+        "total": total,
+        "page_size": used_size,
+        "pages": diagnostics[:60],
+    }
 
 
 async def sync_products(page: Any, *, max_pages: int = 40, page_wait: float = 2.6) -> Dict[str, Any]:
@@ -730,6 +794,8 @@ async def sync_store(
                     "pages_scanned": harvested["pages_scanned"],
                     "source": harvested.get("source", "dom"),
                     "reported_total": harvested.get("total"),
+                    "page_size": harvested.get("page_size"),
+                    "pages": harvested.get("pages") or [],
                     "created": counts["created"],
                     "updated": counts["updated"],
                     "samples": harvested["items"][:3],
