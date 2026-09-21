@@ -630,11 +630,99 @@ async def _combined_login_state(page: Any) -> Dict[str, Any]:
     }
 
 
+_INQUIRY_STATUS_CANDIDATES: tuple = (
+    "洽谈中", "报价中", "待回复", "已回复", "已关闭", "样品单", "商机",
+    "Ongoing", "Replied", "Unread", "Pending", "Closed", "Spam", "Starred",
+)
+_NOISE_LABEL_RE = re.compile(
+    r"(更新时间|创建时间|询价单号|查看详情|Inquiry from TM|翻译结果|Translation|Rae MA|TM 商机)"
+)
+_NAME_WITH_AVATAR_RE = re.compile(
+    r"(?:^|\s)([A-Za-z])\s+([A-Za-z0-9_\-\.&'\u4e00-\u9fa5][^\n]{1,60}?)\s+TM\b"
+)
+_NAME_BEFORE_TM_RE = re.compile(r"([A-Za-z0-9_\-\.&'\u4e00-\u9fa5][^\n]{1,60}?)\s+TM\b")
+_LABEL_PREFIX_RE = re.compile(
+    r"^(询价单号\s*[:：]\s*\d+\s*)?(更新时间\s*[:：]\s*[\d\-/]+\s*)?(创建时间\s*[:：]\s*[\d\-/]+\s*)?"
+)
+
+
+def _looks_like_noise_label(value: Any) -> bool:
+    """判断一个字段值是不是"标签噪音"（更新时间/创建时间/查看详情/Inquiry from TM…）。"""
+    text = str(value or "").strip()
+    if not text:
+        return True
+    if _NOISE_LABEL_RE.search(text):
+        return True
+    return bool(re.fullmatch(r"[\d\s\-/:.]+", text))
+
+
+def _clean_buyer_name(value: Any) -> str:
+    """只有像人名的才要：长度合理、不含标签、不含冒号、不是英文句首词。"""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text or len(text) > 60:
+        return ""
+    if _NOISE_LABEL_RE.search(text) or "：" in text or ":" in text:
+        return ""
+    if re.match(r"^(Inquiry|Re|Fwd|Hi|Hello|Dear)\b", text, re.I):
+        return ""
+    if not re.search(r"[A-Za-z\u4e00-\u9fa5]", text):
+        return ""
+    return text
+
+
+def _parse_inquiry_labels(text: str) -> Dict[str, Any]:
+    """按阿里会话列表行的中文标签解析：单号/更新时间/创建时间/状态/买家名/买家最后一句话。"""
+    body = re.sub(r"\s+", " ", str(text or "")).strip()
+    out: Dict[str, Any] = {}
+    match = re.search(
+        r"更新时间\s*[:：]\s*(20\d{2}[-/]\d{1,2}[-/]\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)", body
+    )
+    if match:
+        out["last_message_at"] = _parse_dt(match.group(1))
+    match = re.search(
+        r"创建时间\s*[:：]\s*(20\d{2}[-/]\d{1,2}[-/]\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)", body
+    )
+    if match:
+        out["created_at_on_platform"] = _parse_dt(match.group(1))
+    for candidate in _INQUIRY_STATUS_CANDIDATES:
+        if candidate in body:
+            out["status"] = candidate
+            break
+
+    name = ""
+    match = _NAME_WITH_AVATAR_RE.search(body)
+    if match:
+        out["avatar_letter"] = match.group(1)
+        name = match.group(2).strip()
+    else:
+        match = _NAME_BEFORE_TM_RE.search(body)
+        if match:
+            name = match.group(1).strip()
+    name = _clean_buyer_name(name)
+    if not name:
+        return out
+    out["buyer_name"] = name[:255]
+
+    index = body.find(name)
+    head = body[:index].strip() if index > 0 else ""
+    head = re.sub(r"^.*?Inquiry from TM\s*\[?信息?\]?\s*", "", head).strip()
+    head = _LABEL_PREFIX_RE.sub("", head).strip()
+    head = re.sub(r"^(?:Inquiry from TM|[信息]+)\s*", "", head).strip()
+    head = re.sub(r"(?:^|\s)[A-Za-z](?:\s*)$", "", head).strip()
+    if len(head) >= 4 and not _looks_like_noise_label(head):
+        out["preview"] = head[:500]
+    return out
+
+
 def _parse_list_row(row: Dict[str, Any]) -> Dict[str, Any]:
     text = _compact(row.get("text") or "\n".join(row.get("lines") or []), 5000)
     lines = [str(x or "").strip() for x in (row.get("lines") or []) if str(x or "").strip()]
     if not lines and text:
         lines = [x.strip() for x in re.split(r"\s{2,}|\n+", text) if x.strip()]
+    # 阿里列表行是中文标签 + 头像字母 + 姓名 + 状态（如「询价单号：… 更新时间：… 创建时间：…
+    # Inquiry from TM [信息] A Alhassan Abdullahi TM 商机 Rae MA 洽谈中 查看详情」）。
+    # 按标签解析比按行猜要稳，这里统一走 _parse_inquiry_labels()。
+    labeled = _parse_inquiry_labels(text)
 
     inquiry_id = str(row.get("id") or "").strip()
     href = str(row.get("href") or "").strip()
@@ -643,8 +731,10 @@ def _parse_list_row(row: Dict[str, Any]) -> Dict[str, Any]:
         inquiry_id = m.group(1) if m else ""
 
     dates = re.findall(r"20\d{2}[-/]\d{1,2}[-/]\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?", text)
-    status = ""
+    status = labeled.get("status") or ""
     for cand in ("Ongoing", "Unread", "Replied", "Pending", "Closed", "Spam", "Archived", "Starred"):
+        if status:
+            break
         if re.search(rf"\b{re.escape(cand)}\b", text, re.I):
             status = cand
             break
@@ -679,8 +769,18 @@ def _parse_list_row(row: Dict[str, Any]) -> Dict[str, Any]:
             preview = line[:500]
     if not title:
         title = lines[0][:255] if lines else f"询盘 {inquiry_id}"
+    if _looks_like_noise_label(title) or len(str(title)) > 120:
+        title = f"询盘 {inquiry_id}"
     if not preview:
         preview = text[:500]
+    if labeled.get("buyer_name") and _looks_like_noise_label(buyer):
+        buyer = labeled["buyer_name"]
+    elif buyer == labeled.get("buyer_name"):
+        pass
+    if labeled.get("preview") and _looks_like_noise_label(preview):
+        preview = labeled["preview"]
+    if labeled.get("subject") and _looks_like_noise_label(title):
+        title = labeled["subject"]
 
     return {
         "inquiry_id": inquiry_id,
@@ -689,9 +789,9 @@ def _parse_list_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "status": status,
         "preview": preview,
         "source_url": href,
-        "last_message_at": _parse_dt(dates[0]) if dates else _first_platform_dt(text),
-        "created_at_on_platform": _parse_dt(dates[-1]) if dates else None,
-        "raw_text": text,
+        "last_message_at": labeled.get("last_message_at") or (_parse_dt(dates[0]) if dates else _first_platform_dt(text)),
+        "created_at_on_platform": labeled.get("created_at_on_platform") or (_parse_dt(dates[-1]) if dates else None),
+        "raw_text": (str(row.get("text") or "").strip() or text)[:5000],
         "raw": row,
     }
 

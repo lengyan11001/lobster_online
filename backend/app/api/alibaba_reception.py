@@ -71,6 +71,7 @@ def default_reception_config() -> Dict[str, Any]:
     return {
         "enabled": False,
         "dry_run": True,
+        "pending_window_days": 30,
         "interval_minutes": 30,
         "online_interval_seconds": 60,
         "hot_interval_seconds": 30,
@@ -124,6 +125,11 @@ def config_to_dict(row: Optional[AlibabaReceptionConfig]) -> Dict[str, Any]:
             "handoff_triggers": _as_list(row.handoff_triggers, DEFAULT_HANDOFF_TRIGGERS),
             "banned_words": _as_list(row.banned_words, DEFAULT_BANNED_WORDS),
             "persona": row.persona if isinstance(row.persona, dict) and row.persona else dict(DEFAULT_PERSONA),
+            "pending_window_days": int(
+                (row.meta or {}).get("pending_window_days", 30)
+                if isinstance(row.meta, dict)
+                else 30
+            ),
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
     )
@@ -312,8 +318,22 @@ def _sync_session_from_messages(db: Session, row: AlibabaReceptionSession) -> Al
     return row
 
 
-def _pending_inquiries(db: Session, user_id: int, account_id: int, limit: int = 20) -> List[AlibabaInquiry]:
-    """待回询盘：买家最后一条比卖家新（阿里那边的"已读未回 / 未处理"）。"""
+def _pending_inquiries(
+    db: Session,
+    user_id: int,
+    account_id: int,
+    limit: int = 20,
+    *,
+    window_days: int = 0,
+    now: Optional[datetime] = None,
+) -> List[AlibabaInquiry]:
+    """待回询盘：买家最后一条比卖家新（阿里那边的"已读未回 / 未处理"）。
+
+    window_days > 0 时只看最近 N 天内还有动静的会话，避免把几个月前的历史询盘
+    当成"待处理"，把接待台的数字撑虚高。window_days = 0 表示不过滤（全部历史）。
+    """
+    anchor = now or _now()
+    deadline = anchor - timedelta(days=int(window_days)) if int(window_days or 0) > 0 else None
     rows = (
         db.query(AlibabaInquiry)
         .filter(AlibabaInquiry.user_id == user_id, AlibabaInquiry.account_id == account_id)
@@ -329,11 +349,35 @@ def _pending_inquiries(db: Session, user_id: int, account_id: int, limit: int = 
             continue
         buyer_at = getattr(buyer, "sent_at", None) or getattr(buyer, "created_at", None)
         seller_at = getattr(seller, "sent_at", None) or getattr(seller, "created_at", None)
-        if seller_at is None or (buyer_at and buyer_at > seller_at):
-            out.append(inquiry)
+        if not (seller_at is None or (buyer_at and buyer_at > seller_at)):
+            continue
+        if deadline is not None:
+            latest_at = max([value for value in (buyer_at, seller_at) if value] or [None]) if (buyer_at or seller_at) else None
+            if latest_at is None or latest_at < deadline:
+                continue
+        out.append(inquiry)
         if len(out) >= limit:
             break
     return out
+
+
+def pending_counts(
+    db: Session,
+    user_id: int,
+    account_id: int,
+    *,
+    window_days: int = 30,
+    now: Optional[datetime] = None,
+) -> Dict[str, int]:
+    """窗口内待处理 / 窗口外历史 两个数字，接待台用它解释"为什么是这个数"。"""
+    anchor = now or _now()
+    in_window = _pending_inquiries(db, user_id, account_id, limit=500, window_days=window_days, now=anchor)
+    all_pending = _pending_inquiries(db, user_id, account_id, limit=500, window_days=0, now=anchor)
+    return {
+        "in_window": len(in_window),
+        "historical": max(0, len(all_pending) - len(in_window)),
+        "total": len(all_pending),
+    }
 
 
 # ---------------------------------------------------------------- 请求体
@@ -341,6 +385,7 @@ def _pending_inquiries(db: Session, user_id: int, account_id: int, limit: int = 
 class ReceptionConfigBody(BaseModel):
     enabled: Optional[bool] = None
     dry_run: Optional[bool] = None
+    pending_window_days: Optional[int] = Field(default=None, ge=0, le=3650)
     interval_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
     online_interval_seconds: Optional[int] = Field(default=None, ge=10, le=3600)
     hot_interval_seconds: Optional[int] = Field(default=None, ge=10, le=3600)
@@ -405,8 +450,13 @@ def save_reception_config(
     _account_or_404(db, current_user.id, account_id)
     row = _get_or_create_config(db, current_user.id, account_id)
     payload = body.model_dump(exclude_none=True)
+    window_days = payload.pop("pending_window_days", None)
     for key, value in payload.items():
         setattr(row, key, value)
+    if window_days is not None:
+        meta = row.meta if isinstance(row.meta, dict) else {}
+        meta["pending_window_days"] = int(window_days)
+        row.meta = meta
     if row.delay_max_seconds < row.delay_min_seconds:
         row.delay_max_seconds = row.delay_min_seconds
     row.updated_at = _now()
@@ -437,14 +487,16 @@ def reception_dashboard(
         .scalar()
         or 0
     )
-    pending = _pending_inquiries(db, current_user.id, account_id, limit=200)
+    window_days = int(config.get("pending_window_days") or 0)
+    pending = _pending_inquiries(db, current_user.id, account_id, limit=200, window_days=window_days, now=now)
+    counts = pending_counts(db, current_user.id, account_id, window_days=window_days, now=now)
     sessions = (
         db.query(AlibabaReceptionSession)
         .filter(AlibabaReceptionSession.account_id == account_id)
         .all()
     )
     session_map = {s.inquiry_id: s for s in sessions}
-    awaiting = len(pending)
+    awaiting = counts["in_window"]
     online = sum(1 for s in sessions if str(s.online_state or "") in {"online", "hot", "typing"})
     read_no_reply = sum(1 for s in sessions if s.read_state == "read_no_reply")
     handoff = sum(1 for s in sessions if s.human_takeover)
@@ -520,6 +572,9 @@ def reception_dashboard(
         "stats": {
             "inquiries": int(inquiry_total),
             "awaiting_reply": awaiting,
+            "pending_historical": counts["historical"],
+            "pending_total": counts["total"],
+            "pending_window_days": window_days,
             "online": online,
             "read_no_reply": read_no_reply,
             "today_sent": int(today_sent),
@@ -633,11 +688,17 @@ async def run_reception(
     if body.inquiry_ids:
         candidates = [
             i
-            for i in _pending_inquiries(db, current_user.id, account_id, limit=200)
+            for i in _pending_inquiries(
+                db, current_user.id, account_id, limit=200,
+                window_days=int(config.get("pending_window_days") or 0),
+            )
             if i.inquiry_id in set(body.inquiry_ids)
         ][: body.limit]
     else:
-        candidates = _pending_inquiries(db, current_user.id, account_id, limit=body.limit)
+        candidates = _pending_inquiries(
+            db, current_user.id, account_id, limit=body.limit,
+            window_days=int(config.get("pending_window_days") or 0),
+        )
 
     lock = await _account_lock(account_id, "reply")
     for inquiry in candidates:

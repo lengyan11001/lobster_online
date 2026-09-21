@@ -364,8 +364,15 @@
       return;
     }
     var stats = data.stats || {};
+    var windowDays = stats.pending_window_days === null || stats.pending_window_days === undefined ? 30 : stats.pending_window_days;
+    var historyPending = stats.pending_historical || 0;
     var cards = [
-      { key: 'awaiting', num: stats.awaiting_reply, label: '待回复询盘', note: '买家最后一条还没回', view: 'inquiries' },
+      {
+        key: 'awaiting', num: stats.awaiting_reply,
+        label: '待回复询盘' + (windowDays > 0 ? '（近 ' + windowDays + ' 天）' : '（全部历史）'),
+        note: historyPending > 0 ? '另有 ' + historyPending + ' 条历史：可去公海池激活' : '买家最后一条还没回',
+        view: 'inquiries'
+      },
       { key: 'online', num: stats.online, label: '在线客户', note: '在线要提频到 60s/30s', view: 'inquiries' },
       { key: 'read', num: stats.read_no_reply, label: '已读未回', note: '可以主动撩动', view: 'inquiries' },
       { key: 'sent', num: stats.today_sent, label: '今日已回', note: '含人工与 AI', view: 'inquiries' },
@@ -1305,7 +1312,11 @@
       '<div class="ali-field"><div class="ali-field-label">正在输入（秒）</div><input class="ali-input" id="aliCfgHot" value="' + esc(num('hot_interval_seconds', 30)) + '"></div>' +
       '<div class="ali-field"><div class="ali-field-label">工作时段开始</div><input class="ali-input" id="aliCfgWs" value="' + esc(num('work_window_start', '08:00')) + '"></div>' +
       '<div class="ali-field"><div class="ali-field-label">工作时段结束</div><input class="ali-input" id="aliCfgWe" value="' + esc(num('work_window_end', '23:00')) + '"></div>' +
-      '</div></div></div>' +
+      '<div class="ali-field"><div class="ali-field-label">待处理时间窗（天，0=全部）</div><input class="ali-input" id="aliCfgWindow" value="' + esc(num('pending_window_days', 30)) + '"></div>' +
+      '</div>' +
+      '<div class="ali-note">时间窗只影响接待台/跑一轮的"待处理"口径：比如设 30 天，3 个月前的老询盘就不再算待回复，' +
+      '会显示成「历史」引导去公海池激活（避免"14 条待办其实都是几个月前的"）。</div>' +
+      '</div></div>' +
       '<div class="ali-card"><div class="ali-card-head"><div class="ali-card-title">红线</div></div><div class="ali-card-body">' +
       '<div class="ali-grid-3">' +
       '<div class="ali-field"><div class="ali-field-label">轮次上限</div><input class="ali-input" id="aliCfgTurns" value="' + esc(num('max_turns', 8)) + '"></div>' +
@@ -1335,6 +1346,7 @@
         hot_interval_seconds: Number($('aliCfgHot').value) || 30,
         work_window_start: $('aliCfgWs').value.trim() || '08:00',
         work_window_end: $('aliCfgWe').value.trim() || '23:00',
+        pending_window_days: Number($('aliCfgWindow').value) || 0,
         max_turns: Number($('aliCfgTurns').value) || 8,
         max_chars: Number($('aliCfgChars').value) || 380,
         delay_min_seconds: Number($('aliCfgDelayMin').value) || 25,
