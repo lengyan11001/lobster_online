@@ -82,6 +82,7 @@ from .api.account_creator_schedule import router as account_creator_schedule_rou
 from .api.alibaba_inquiries import router as alibaba_inquiries_router
 from .api.alibaba_reception import router as alibaba_reception_router
 from .api.alibaba_store_sync import router as alibaba_store_sync_router
+from .api.version_api import router as version_router
 from .api.logs_api import router as logs_router
 from .api.wechat_oa import router as wechat_oa_router
 from .api.msghelper_wechat import router as msghelper_wechat_router
@@ -1107,6 +1108,7 @@ def create_app() -> FastAPI:
     app.include_router(alibaba_inquiries_router, prefix="")
     app.include_router(alibaba_reception_router, prefix="")
     app.include_router(alibaba_store_sync_router, prefix="")
+    app.include_router(version_router, prefix="")
     app.include_router(logs_router, prefix="")
     app.include_router(wechat_oa_router, prefix="")
     app.include_router(msghelper_wechat_router, prefix="")

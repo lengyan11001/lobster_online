@@ -25,8 +25,37 @@ CONFIG_PATH = STATE_DIR / "config.json"
 DB_PATH = STATE_DIR / "state.db"
 LOG_PATH = ROOT_DIR / "logs" / "native_whatsapp.jsonl"
 DEFAULT_ACCOUNT_ID = "desktop-whatsapp-default"
-WHATSAPP_WINDOW_CLASS = "WinUIDesktopWin32WindowClass"
+# 桌面版 WhatsApp 有多种打包方式，窗口类名/进程名会随版本和安装渠道变：
+#   * 新版 WinUI3：进程 WhatsApp.exe，窗口类 WinUIDesktopWin32WindowClass
+#   * Store/UWP 外壳：宿主 ApplicationFrameWindow，真实窗口是它的子窗口
+#   * 打包成 Electron/WebView 的渠道版：Chrome_WidgetWin_1
+WHATSAPP_WINDOW_CLASSES = {
+    "WinUIDesktopWin32WindowClass",
+    "ApplicationFrameWindow",
+    "Chrome_WidgetWin_1",
+    "Windows.UI.Core.CoreWindow",
+}
+WHATSAPP_WINDOW_CLASS = "WinUIDesktopWin32WindowClass"   # 兼容旧引用
 WHATSAPP_PROCESS_NAMES = {"whatsapp.root.exe", "whatsapp.exe"}
+# 只要进程名里带 whatsapp 就算候选（覆盖 WhatsAppBeta / WhatsApp Business / whatsapp.root 等）
+WHATSAPP_PROCESS_HINTS = ("whatsapp",)
+WHATSAPP_PROCESS_IGNORE = {"whatsappcrashhandler.exe", "whatsappupdate.exe", "whatsappupdater.exe"}
+
+
+def whatsapp_window_match(*, process_name: str, class_name: str, title: str) -> bool:
+    """判断一个窗口是不是桌面版 WhatsApp 主窗口（跨版本尽量宽松）。"""
+    process = str(process_name or "").strip().lower()
+    window_class = str(class_name or "").strip()
+    window_title = str(title or "").strip().lower()
+    if not process:
+        return False
+    if process in WHATSAPP_PROCESS_IGNORE:
+        return False
+    if process not in WHATSAPP_PROCESS_NAMES and not any(hint in process for hint in WHATSAPP_PROCESS_HINTS):
+        return False
+    if window_class in WHATSAPP_WINDOW_CLASSES:
+        return True
+    return "whatsapp" in window_title
 
 _UI_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="lobster-whatsapp")
 _ACTIVE_LOCK = threading.Lock()
@@ -324,39 +353,101 @@ def _scan_windows() -> List[Dict[str, Any]]:
     except Exception:
         return []
     items: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def window_row(hwnd: int, *, match_by: str, parent_hwnd: int = 0) -> Optional[Dict[str, Any]]:
+        try:
+            title = str(win32gui.GetWindowText(hwnd) or "").strip()
+            class_name = str(win32gui.GetClassName(hwnd) or "").strip()
+            _thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
+            meta = _process_meta(int(pid or 0))
+            rect = tuple(int(value) for value in win32gui.GetWindowRect(hwnd))
+            return {
+                "account_id": DEFAULT_ACCOUNT_ID,
+                "hwnd": int(hwnd),
+                "parent_hwnd": int(parent_hwnd or 0),
+                "pid": int(pid or 0),
+                "title": title or "WhatsApp",
+                "class_name": class_name,
+                "process_name": meta.get("name") or "",
+                "process_path": meta.get("exe") or "",
+                "is_iconic": bool(win32gui.IsIconic(hwnd)),
+                "rect": list(rect),
+                "match_by": match_by,
+            }
+        except Exception:
+            return None
+
+    def children_of(hwnd: int) -> List[int]:
+        out: List[int] = []
+        try:
+            def visit(child: int, _extra: Any) -> None:
+                out.append(int(child))
+            win32gui.EnumChildWindows(hwnd, visit, None)
+        except Exception:
+            pass
+        return out
 
     def collect(hwnd: int, _extra: Any) -> None:
         try:
-            if not win32gui.IsWindowVisible(hwnd):
-                return
             title = str(win32gui.GetWindowText(hwnd) or "").strip()
             class_name = str(win32gui.GetClassName(hwnd) or "").strip()
             _thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
             meta = _process_meta(int(pid or 0))
             process_name = str(meta.get("name") or "").lower()
-            if process_name not in WHATSAPP_PROCESS_NAMES and "whatsapp" not in process_name:
+            if not whatsapp_window_match(process_name=process_name, class_name=class_name, title=title):
                 return
-            if class_name != WHATSAPP_WINDOW_CLASS and title.lower() != "whatsapp":
-                return
-            rect = tuple(int(value) for value in win32gui.GetWindowRect(hwnd))
-            items.append(
-                {
-                    "account_id": DEFAULT_ACCOUNT_ID,
-                    "hwnd": int(hwnd),
-                    "pid": int(pid or 0),
-                    "title": title or "WhatsApp",
-                    "class_name": class_name,
-                    "process_name": meta.get("name") or "",
-                    "process_path": meta.get("exe") or "",
-                    "is_iconic": bool(win32gui.IsIconic(hwnd)),
-                    "rect": list(rect),
-                }
-            )
+            match_by = "class" if class_name in WHATSAPP_WINDOW_CLASSES else "title"
+            row = window_row(int(hwnd), match_by=match_by)
+            if row and int(row["hwnd"]) not in seen:
+                seen.add(int(row["hwnd"]))
+                items.append(row)
+            # UWP/打包壳：真实窗口是子窗口，优先用子窗口句柄（点击/取控件都在子窗口上）
+            if class_name in {"ApplicationFrameWindow", "Windows.UI.Core.CoreWindow"}:
+                for child in children_of(int(hwnd)):
+                    child_class = ""
+                    try:
+                        child_class = str(win32gui.GetClassName(child) or "").strip()
+                    except Exception:
+                        child_class = ""
+                    if child_class not in WHATSAPP_WINDOW_CLASSES:
+                        continue
+                    child_row = window_row(child, match_by="child", parent_hwnd=int(hwnd))
+                    if child_row and int(child_row["hwnd"]) not in seen:
+                        seen.add(int(child_row["hwnd"]))
+                        items.append(child_row)
         except Exception:
             return
 
     win32gui.EnumWindows(collect, None)
-    return sorted(items, key=lambda row: (row.get("title") == "WhatsApp", int(row.get("hwnd") or 0)), reverse=True)
+
+    def rank(row: Dict[str, Any]) -> tuple:
+        title = str(row.get("title") or "").lower()
+        exact = 1 if title == "whatsapp" else 0
+        business_penalty = 0 if "business" not in title else -1
+        child_bonus = 1 if row.get("match_by") == "child" else 0
+        return (exact, business_penalty, child_bonus, int(row.get("hwnd") or 0))
+
+    return sorted(items, key=rank, reverse=True)
+
+
+def whatsapp_processes() -> List[Dict[str, Any]]:
+    """列出机器上所有 WhatsApp 进程（即使没有窗口），用于诊断"到底是没起还是没识别到"。"""
+    out: List[Dict[str, Any]] = []
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return out
+    for proc in psutil.process_iter(["pid", "name", "exe"]):
+        try:
+            name = str(proc.info.get("name") or "").lower()
+            if not any(hint in name for hint in WHATSAPP_PROCESS_HINTS):
+                continue
+            out.append({"pid": int(proc.info.get("pid") or 0), "name": proc.info.get("name") or "",
+                        "exe": proc.info.get("exe") or ""})
+        except Exception:
+            continue
+    return out
 
 
 def _iter_nodes(root: Any, *, max_depth: int = 24, max_nodes: int = 2400) -> Iterable[tuple[Any, int]]:
@@ -495,6 +586,13 @@ def _release_action() -> None:
 def _window_or_raise() -> tuple[int, Dict[str, Any]]:
     windows = _scan_windows()
     if not windows:
+        processes = whatsapp_processes()
+        if processes:
+            names = "、".join(sorted({str(item.get("name") or "?") for item in processes}))
+            raise RuntimeError(
+                "检测到 WhatsApp 进程（%s），但没有可操作的主窗口：请把 WhatsApp 主窗口打开并还原"
+                "（不要只留托盘），然后重试。" % names
+            )
         raise RuntimeError("未检测到 Windows 桌面版 WhatsApp，请先启动并登录")
     window = windows[0]
     hwnd = int(window.get("hwnd") or 0)
@@ -544,10 +642,18 @@ def _probe_window(window: Dict[str, Any]) -> Dict[str, Any]:
 def status() -> Dict[str, Any]:
     deps = {name: _module_available(name) for name in ("uiautomation", "win32gui", "win32process", "pyperclip")}
     windows = _scan_windows()
+    processes = whatsapp_processes()
     probed = _probe_window(windows[0]) if windows and deps["uiautomation"] else (windows[0] if windows else {})
     with _ACTIVE_LOCK:
         running = _ACTIVE
         active_action = _ACTIVE_ACTION
+    if not windows and processes:
+        reason = (
+            "检测到 WhatsApp 进程（%s），但没识别到主窗口：请把 WhatsApp 主窗口打开并还原（不要只留托盘/最小化）后重试。"
+            % "、".join(sorted({str(item.get("name") or "?") for item in processes}))
+        )
+    else:
+        reason = probed.get("reason") or ("未检测到 Windows 桌面版 WhatsApp" if not windows else "")
     return {
         "ok": bool(probed.get("uia_ready")),
         "desktop_found": bool(windows),
@@ -556,8 +662,13 @@ def status() -> Dict[str, Any]:
         "active_action": active_action,
         "unread_count": int(probed.get("unread_count") or 0),
         "window": probed,
+        "processes": processes[:8],
+        "candidates": [
+            {key: row.get(key) for key in ("hwnd", "title", "class_name", "process_name", "is_iconic", "match_by")}
+            for row in windows[:8]
+        ],
         "dependencies": deps,
-        "reason": probed.get("reason") or ("未检测到 Windows 桌面版 WhatsApp" if not windows else ""),
+        "reason": reason,
         "config": get_config(),
     }
 
