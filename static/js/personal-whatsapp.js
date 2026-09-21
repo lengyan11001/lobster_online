@@ -5,11 +5,13 @@
   var state = {
     tab: 'overview', busy: false, status: {}, config: {}, lastRun: {},
     sessions: [], groups: [], contacts: [], records: [], activeSession: null, messages: [],
+    friendQueue: {}, friendSummary: {}, friendRecords: [], autoReply: {}, diagnostics: {},
     pages: {
       sessions: { page: 1, limit: 30, total: 0, keyword: '', chatType: '' },
       groups: { page: 1, limit: 50, total: 0, keyword: '', chatType: 'group' },
       contacts: { page: 1, limit: 50, total: 0, keyword: '' },
-      records: { page: 1, limit: 50, total: 0, keyword: '' }
+      records: { page: 1, limit: 50, total: 0, keyword: '' },
+      friendRecords: { page: 1, limit: 50, total: 0, keyword: '', status: '' }
     }
   };
 
@@ -37,7 +39,7 @@
   function clearProgress() { var box = $('personalWhatsappError'); if (box && box.dataset.pwaMessageKind === 'progress') showError(''); }
   function setBusy(value, label) {
     state.busy = !!value;
-    var ids = ['personalWhatsappRefreshBtn','personalWhatsappSyncAllBtn','personalWhatsappSyncSessionsBtn','personalWhatsappSyncGroupsBtn','personalWhatsappOpenSessionBtn','personalWhatsappSendBtn','personalWhatsappSyncContactsBtn','personalWhatsappAddContactBtn','personalWhatsappSaveBtn','personalWhatsappRunBtn','personalWhatsappRefreshRecordsBtn'];
+    var ids = ['personalWhatsappRefreshBtn','personalWhatsappSyncAllBtn','personalWhatsappSyncSessionsBtn','personalWhatsappSyncGroupsBtn','personalWhatsappOpenSessionBtn','personalWhatsappSendBtn','personalWhatsappSyncContactsBtn','personalWhatsappAddContactBtn','personalWhatsappSaveBtn','personalWhatsappRunBtn','personalWhatsappRefreshRecordsBtn','personalWhatsappAddFriendSubmitBtn','personalWhatsappFriendQueueStartBtn','personalWhatsappFriendQueueStopBtn','personalWhatsappFriendQueueSettingsBtn','personalWhatsappFriendImportBtn','personalWhatsappLoopStartBtn','personalWhatsappDiagnosticsBtn'];
     ids.forEach(function(id) { var node = $(id); if (node) node.disabled = state.busy || ((id === 'personalWhatsappOpenSessionBtn' || id === 'personalWhatsappSendBtn') && !state.activeSession); });
     var stop = $('personalWhatsappStopBtn'); if (stop) stop.disabled = false;
     if (value && label) showError(label, true);
@@ -129,13 +131,15 @@
     if(tab==='groups')loadGroups().catch(function(e){showError(e.message);});
     if(tab==='contacts')loadContacts().catch(function(e){showError(e.message);});
     if(tab==='records')loadRecords().catch(function(e){showError(e.message);});
+    if(tab==='friends'){loadFriendQueue().catch(function(e){showError(e.message);});loadFriendRecords().catch(function(e){showError(e.message);});}
+    if(tab==='takeover'){loadAutoReply().catch(function(e){showError(e.message);});loadDiagnostics().catch(function(e){showError(e.message);});}
   }
   function saveConfig(showToast){return request('/api/native-whatsapp/config',{method:'POST',json:configFromFields()}).then(function(data){state.config=data.config||configFromFields();fillConfig();if(showToast!==false)toastMessage('WhatsApp 参数已保存');return state.config;});}
   function refreshActiveMessages(){if(!state.activeSession)return Promise.resolve();return request('/api/native-whatsapp/sessions/'+encodeURIComponent(state.activeSession.peer_key)+'/messages?limit=200&offset=0').then(function(data){state.messages=Array.isArray(data.items)?data.items:[];renderMessages();});}
 
   function bind() {
     var root=$('content-personal-whatsapp');if(!root||root.dataset.personalWhatsappBound==='1')return;root.dataset.personalWhatsappBound='1';
-    root.addEventListener('click',function(event){var tab=event.target.closest('[data-pwa-tab]');if(tab){activateTab(tab.dataset.pwaTab);return;}var peer=event.target.closest('[data-pwa-peer]');if(peer){selectSession(peer.dataset.pwaPeer);return;}var groupPeer=event.target.closest('[data-pwa-group-peer]');if(groupPeer){var group=state.groups.filter(function(row){return row.peer_key===groupPeer.dataset.pwaGroupPeer;})[0];activateTab('sessions');if(group)selectContactTarget(group.display_name,'group');return;}var page=event.target.closest('[data-pwa-page]');if(page){var meta=state.pages[page.dataset.pwaPage],dir=Number(page.dataset.pwaDir||0);meta.page=Math.max(1,Math.min(pageCount(meta),meta.page+dir));({sessions:loadSessions,groups:loadGroups,contacts:loadContacts,records:loadRecords}[page.dataset.pwaPage]||function(){return Promise.resolve();})().catch(function(e){showError(e.message);});return;}var contact=event.target.closest('[data-pwa-contact-chat]');if(contact){activateTab('sessions');selectContactTarget(contact.dataset.pwaContactChat);}});
+    root.addEventListener('click',function(event){var tab=event.target.closest('[data-pwa-tab]');if(tab){activateTab(tab.dataset.pwaTab);return;}var peer=event.target.closest('[data-pwa-peer]');if(peer){selectSession(peer.dataset.pwaPeer);return;}var groupPeer=event.target.closest('[data-pwa-group-peer]');if(groupPeer){var group=state.groups.filter(function(row){return row.peer_key===groupPeer.dataset.pwaGroupPeer;})[0];activateTab('sessions');if(group)selectContactTarget(group.display_name,'group');return;}var page=event.target.closest('[data-pwa-page]');if(page){var meta=state.pages[page.dataset.pwaPage],dir=Number(page.dataset.pwaDir||0);meta.page=Math.max(1,Math.min(pageCount(meta),meta.page+dir));({sessions:loadSessions,groups:loadGroups,contacts:loadContacts,records:loadRecords,friendRecords:loadFriendRecords}[page.dataset.pwaPage]||function(){return Promise.resolve();})().catch(function(e){showError(e.message);});return;}var contact=event.target.closest('[data-pwa-contact-chat]');if(contact){activateTab('sessions');selectContactTarget(contact.dataset.pwaContactChat);}});
     $('personalWhatsappRefreshBtn').addEventListener('click',function(){runBusy('正在刷新状态...',loadBase).catch(function(){});});
     $('personalWhatsappSyncAllBtn').addEventListener('click',function(){runBusy('正在同步会话...',function(){var sessionResult=null,contactResult=null;return request('/api/native-whatsapp/sessions/sync',{method:'POST',json:{account_id:ACCOUNT_ID,limit:1000,max_scrolls:30}}).then(function(data){sessionResult=data||{};showError('会话同步完成，正在同步通讯录...',true);return request('/api/native-whatsapp/contacts/sync',{method:'POST',json:{account_id:ACCOUNT_ID,limit:2000,max_scrolls:50}});}).then(function(data){contactResult=data||{};return Promise.all([loadBase(),loadSessions(),loadContacts(),loadRecords()]);}).then(function(){var summary=[sessionResult&&sessionResult.message,contactResult&&contactResult.message].filter(Boolean).join('；')||'会话和通讯录同步完成';showNotice(summary);toastMessage(summary);return {sessions:sessionResult,contacts:contactResult};});}).catch(function(){});});
     $('personalWhatsappSyncSessionsBtn').addEventListener('click',function(){runBusy('正在读取桌面会话...',function(){return request('/api/native-whatsapp/sessions/sync',{method:'POST',json:{account_id:ACCOUNT_ID,limit:1000,max_scrolls:30}}).then(function(data){toastMessage(data.message||'会话同步完成');return Promise.all([loadSessions(),loadRecords(),loadBase()]);});}).catch(function(){});});
@@ -148,11 +152,207 @@
     $('personalWhatsappRunBtn').addEventListener('click',function(){runBusy('正在执行一轮 WhatsApp 接管...',function(){return saveConfig(false).then(function(){return request('/api/native-whatsapp/run-once',{method:'POST',json:{account_id:ACCOUNT_ID,config_override:configFromFields()}});}).then(function(result){state.lastRun=result||{};renderLastRun();toastMessage(result&&result.skipped?'已有 WhatsApp 操作正在执行':'WhatsApp 本轮执行完成');return Promise.all([loadBase(),loadSessions(),loadRecords()]);});}).catch(function(){});});
     $('personalWhatsappStopBtn').addEventListener('click',function(){request('/api/native-whatsapp/stop',{method:'POST',json:{account_id:ACCOUNT_ID}}).then(function(result){toastMessage(result.running?'已请求停止当前接管':'当前没有接管任务');return loadBase();}).catch(function(e){showError(e.message);});});
     $('personalWhatsappRefreshRecordsBtn').addEventListener('click',function(){loadRecords().catch(function(e){showError(e.message);});});
+    $('personalWhatsappAddFriendSubmitBtn').addEventListener('click',function(){runBusy('正在提交好友申请...',submitFriendQueue).catch(function(){});});
+    $('personalWhatsappFriendQueueStartBtn').addEventListener('click',function(){runBusy('正在启动加好友队列...',startFriendQueue).catch(function(){});});
+    $('personalWhatsappFriendQueueStopBtn').addEventListener('click',function(){runBusy('正在停止加好友队列...',stopFriendQueue).catch(function(){});});
+    $('personalWhatsappFriendQueueSettingsBtn').addEventListener('click',function(){runBusy('正在保存加好友队列设置...',saveFriendQueueSettings).catch(function(){});});
+    $('personalWhatsappFriendImportBtn').addEventListener('click',function(){$('personalWhatsappFriendImportInput').click();});
+    $('personalWhatsappFriendImportInput').addEventListener('change',function(){var input=this;Promise.resolve(importFriendFiles(input.files)).catch(function(e){showError(e&&e.message||'导入文件失败');}).then(function(){input.value='';});});
+    $('personalWhatsappDownloadTxtTemplateBtn').addEventListener('click',downloadFriendTemplate);
+    $('personalWhatsappFriendRecordSearch').addEventListener('input',debounce(function(){state.pages.friendRecords.keyword=text($('personalWhatsappFriendRecordSearch').value).trim();state.pages.friendRecords.page=1;loadFriendRecords().catch(function(e){showError(e.message);});},300));
+    $('personalWhatsappFriendRecordStatus').addEventListener('change',function(){state.pages.friendRecords.status=this.value;state.pages.friendRecords.page=1;loadFriendRecords().catch(function(e){showError(e.message);});});
+    $('personalWhatsappLoopStartBtn').addEventListener('click',function(){runBusy('正在启动常驻接管...',startAutoReplyLoop).catch(function(){});});
+    $('personalWhatsappLoopStopBtn').addEventListener('click',function(){runBusy('正在停止常驻接管...',stopAutoReplyLoop).catch(function(){});});
+    $('personalWhatsappDiagnosticsBtn').addEventListener('click',function(){loadDiagnostics().catch(function(e){showError(e.message);});});
     $('personalWhatsappSessionSearch').addEventListener('input',debounce(function(){state.pages.sessions.keyword=text($('personalWhatsappSessionSearch').value).trim();state.pages.sessions.page=1;loadSessions().catch(function(e){showError(e.message);});},300));
     $('personalWhatsappSessionType').addEventListener('change',function(){state.pages.sessions.chatType=this.value;state.pages.sessions.page=1;loadSessions().catch(function(e){showError(e.message);});});
     $('personalWhatsappContactSearch').addEventListener('input',debounce(function(){state.pages.contacts.keyword=text($('personalWhatsappContactSearch').value).trim();state.pages.contacts.page=1;loadContacts().catch(function(e){showError(e.message);});},300));
     $('personalWhatsappRecordSearch').addEventListener('input',debounce(function(){state.pages.records.keyword=text($('personalWhatsappRecordSearch').value).trim();state.pages.records.page=1;loadRecords().catch(function(e){showError(e.message);});},300));
   }
 
-  window.initPersonalWhatsappView=function(){bind();loadBase().catch(function(error){showError(error.message||'WhatsApp 状态读取失败');});};
+  // ── 加好友队列（对齐微信协议助手 /friends 流程，桌面动作仍走 WhatsApp UIA）──
+  function splitTargetLines(value) {
+    var seen = {};
+    return text(value).split(/[\r\n;；]+/).map(function(item) { return item.trim(); }).filter(function(item) {
+      var key = item.toLowerCase();
+      if (!item || seen[key]) return false;
+      seen[key] = true;
+      return true;
+    });
+  }
+  function friendStatusText(value) { return ({queued:'排队中',pending:'排队中',running:'执行中',success:'成功',failed:'失败',partial_failed:'部分成功',cancelled:'已停止'}[String(value || '').toLowerCase()] || value || '-'); }
+  function friendStatusClass(value) { var key = String(value || '').toLowerCase(); if (key === 'success') return ''; if (key === 'failed') return ' bad'; return ' warn'; }
+  function uniqueRequestId() { return 'wa-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8); }
+  function friendIntervalField() { return numberField('personalWhatsappFriendInterval', 60, 1, 86400); }
+  function friendDailyLimitField() { return numberField('personalWhatsappFriendDailyLimit', 30, 0, 1000); }
+
+  function renderFriendQueue() {
+    var control = state.friendQueue || {}, summary = state.friendSummary || {};
+    var running = !!control.running, enabled = !!control.enabled;
+    var chip = $('personalWhatsappFriendQueueState');
+    if (chip) { chip.className = 'pwa-chip' + (running ? '' : (enabled ? ' warn' : '')); chip.textContent = running ? '运行中' : (enabled ? '已启动' : '未启动'); }
+    var label = $('personalWhatsappFriendQueueSummary');
+    if (label) label.textContent = (running ? '运行中' : (enabled ? '已启动' : '已停止')) + ' · 间隔 ' + Number(control.interval_seconds || 60) + ' 秒 · 日上限 ' + Number(control.daily_limit || 0) + ' 条 · 今日已加 ' + Number(summary.added_today || 0);
+    var stats = $('personalWhatsappFriendQueueStats');
+    if (stats) stats.innerHTML = statusCard('排队中', Number(summary.queued || 0) + ' 条') + statusCard('执行中', Number(summary.running || 0) + ' 条') + statusCard('累计成功', Number(summary.success || 0)) + statusCard('今日成功', Number(summary.today_success || 0) + ' / ' + Number(summary.added_today || 0), Number(summary.today_success || 0) ? 'good' : '') + statusCard('今日失败', Number(summary.today_failed || 0), Number(summary.today_failed || 0) ? 'bad' : '');
+    var interval = $('personalWhatsappFriendInterval');
+    if (interval && document.activeElement !== interval) interval.value = Math.max(1, Math.min(86400, Number(control.interval_seconds || 60)));
+    var limit = $('personalWhatsappFriendDailyLimit');
+    if (limit && document.activeElement !== limit) limit.value = Math.max(0, Math.min(1000, Number(control.daily_limit || 0)));
+    var stateChip = $('personalWhatsappFriendState');
+    if (stateChip) stateChip.textContent = running ? '排队中' : (Number(summary.queued || 0) ? '待启动' : '待提交');
+  }
+
+  function loadFriendQueue() {
+    return request('/api/native-whatsapp/friends/queue?account_id=' + encodeURIComponent(ACCOUNT_ID)).then(function(data) {
+      state.friendQueue = data.control || {}; state.friendSummary = data.summary || {}; renderFriendQueue(); return state.friendQueue;
+    });
+  }
+  function loadFriendRecords() {
+    var meta = state.pages.friendRecords;
+    var params = new URLSearchParams();
+    params.set('account_id', ACCOUNT_ID); params.set('limit', meta.limit); params.set('offset', Math.max(0, (meta.page - 1) * meta.limit));
+    if (meta.keyword) params.set('keyword', meta.keyword);
+    if (meta.status) params.set('status', meta.status);
+    return request('/api/native-whatsapp/friends/records?' + params.toString()).then(function(data) {
+      state.friendRecords = Array.isArray(data.items) ? data.items : [];
+      meta.total = Number(data.total || data.count || 0);
+      renderFriendRecords();
+    });
+  }
+  function renderFriendRecords() {
+    var host = $('personalWhatsappFriendRecordList'); if (!host) return;
+    if (!state.friendRecords.length) { host.className = 'pwa-empty'; host.textContent = '暂无加好友记录'; renderPagination('personalWhatsappFriendRecordPagination','friendRecords'); return; }
+    host.className = 'pwa-table-wrap';
+    host.innerHTML = '<table class="pwa-table"><thead><tr><th>目标</th><th>状态</th><th>验证消息</th><th>备注</th><th>时间</th></tr></thead><tbody>' + state.friendRecords.map(function(item) {
+      var detail = [item.updated_at || item.created_at || '', item.error_message || ''].filter(Boolean).join(' · ');
+      return '<tr><td>' + esc(item.target || item.keyword || '-') + '</td><td><span class="pwa-chip' + friendStatusClass(item.status) + '">' + esc(friendStatusText(item.status)) + '</span></td><td>' + esc(item.apply_message || '-') + '</td><td>' + esc(item.remark || '-') + '</td><td>' + esc(detail || '-') + '</td></tr>';
+    }).join('') + '</tbody></table>';
+    renderPagination('personalWhatsappFriendRecordPagination','friendRecords');
+  }
+
+  function submitFriendQueue() {
+    var targets = splitTargetLines($('personalWhatsappFriendKeyword') && $('personalWhatsappFriendKeyword').value);
+    if (!targets.length) { showError('请先填写至少一个目标（一行一个）'); return Promise.resolve(); }
+    var body = {
+      account_id: ACCOUNT_ID,
+      targets: targets,
+      apply_message: text($('personalWhatsappFriendApplyMessage') && $('personalWhatsappFriendApplyMessage').value).trim().slice(0, 1000),
+      remark: text($('personalWhatsappFriendRemark') && $('personalWhatsappFriendRemark').value).trim().slice(0, 200),
+      interval_seconds: friendIntervalField(),
+      daily_limit: friendDailyLimitField(),
+      queue_only: true,
+      client_request_id: uniqueRequestId()
+    };
+    var submitState = $('personalWhatsappAddFriendState');
+    if (submitState) submitState.textContent = '提交中';
+    return request('/api/native-whatsapp/friends/add', { method: 'POST', json: body }).then(function(data) {
+      var planned = Number(data && data.planned_total || targets.length);
+      if (submitState) submitState.textContent = '已入队 ' + planned + ' 条';
+      if ($('personalWhatsappFriendKeyword')) $('personalWhatsappFriendKeyword').value = '';
+      var autoStart = $('personalWhatsappFriendAutoStart');
+      var chain = autoStart && autoStart.checked
+        ? request('/api/native-whatsapp/friends/queue/start', { method: 'POST', json: { account_id: ACCOUNT_ID, interval_seconds: friendIntervalField(), daily_limit: friendDailyLimitField() } })
+        : Promise.resolve(null);
+      return chain.then(function() {
+        showNotice((autoStart && autoStart.checked ? '已入队并启动队列：' : '已加入加好友队列：') + planned + ' 条目标');
+        toastMessage('已加入加好友队列：' + planned + ' 条');
+        return Promise.all([loadFriendQueue(), loadFriendRecords(), loadRecords()]);
+      });
+    }).catch(function(error) {
+      if (submitState) submitState.textContent = '提交失败';
+      showError(error && error.message || '提交好友申请失败');
+    });
+  }
+  function saveFriendQueueSettings() {
+    return request('/api/native-whatsapp/friends/queue/settings', { method: 'POST', json: { account_id: ACCOUNT_ID, interval_seconds: friendIntervalField(), daily_limit: friendDailyLimitField() } }).then(function(data) {
+      state.friendQueue = data.control || {}; state.friendSummary = data.summary || {}; renderFriendQueue();
+      toastMessage('加好友队列设置已保存');
+      return state.friendQueue;
+    });
+  }
+  function startFriendQueue() {
+    return request('/api/native-whatsapp/friends/queue/start', { method: 'POST', json: { account_id: ACCOUNT_ID, interval_seconds: friendIntervalField(), daily_limit: friendDailyLimitField() } }).then(function(data) {
+      state.friendQueue = data.control || {}; state.friendSummary = data.summary || {}; renderFriendQueue();
+      toastMessage('加好友队列已启动');
+      return Promise.all([loadFriendQueue(), loadFriendRecords()]);
+    });
+  }
+  function stopFriendQueue() {
+    return request('/api/native-whatsapp/friends/queue/stop', { method: 'POST', json: { account_id: ACCOUNT_ID } }).then(function(data) {
+      state.friendQueue = data.control || {}; state.friendSummary = data.summary || {}; renderFriendQueue();
+      toastMessage('加好友队列已停止');
+      return Promise.all([loadFriendQueue(), loadFriendRecords()]);
+    });
+  }
+  function importFriendFiles(fileList) {
+    var files = Array.prototype.slice.call(fileList || []);
+    if (!files.length) return Promise.resolve(0);
+    return Promise.all(files.map(function(file) { return file.text(); })).then(function(contents) {
+      var lines = [];
+      contents.forEach(function(content) { lines = lines.concat(splitTargetLines(content)); });
+      var area = $('personalWhatsappFriendKeyword');
+      if (area) { var existing = area.value.trim(); area.value = (existing ? existing + '\n' : '') + lines.join('\n'); }
+      toastMessage('已导入 ' + lines.length + ' 行目标，请核对后提交');
+      return lines.length;
+    });
+  }
+  function downloadFriendTemplate() {
+    var content = ['# 一行一个目标：电话 / 名字,电话 / @用户名', '张三,13800138000', '+8613800138001', '@alice_wa', ''].join('\r\n');
+    var url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
+    var link = document.createElement('a');
+    link.href = url; link.download = 'whatsapp-friend-targets.txt';
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  // ── 接管：手动一轮 / 常驻循环 + 诊断 ─────────────────────────────────────
+  function renderAutoReply() {
+    var autoState = state.autoReply || {};
+    var running = !!autoState.running;
+    var chip = $('personalWhatsappTakeoverState');
+    if (chip) { chip.className = 'pwa-chip' + (running ? '' : ' warn'); chip.textContent = running ? '常驻接管中' : '未接管'; }
+    var label = $('personalWhatsappLoopSummary');
+    if (label) label.textContent = running ? ('常驻接管运行中 · 间隔 ' + Number(autoState.interval_seconds || 0) + ' 秒') : '常驻接管未启动';
+  }
+  function loadAutoReply() {
+    return request('/api/native-whatsapp/auto-reply/config').then(function(data) {
+      state.autoReply = data.state || {};
+      if (data.config) { state.config = data.config; state.lastRun = data.config.last_run || state.lastRun || {}; fillConfig(); renderLastRun(); }
+      renderAutoReply();
+      return state.autoReply;
+    });
+  }
+  function startAutoReplyLoop() {
+    return saveConfig(false).then(function() {
+      return request('/api/native-whatsapp/auto-reply/loop/start', { method: 'POST', json: { account_id: ACCOUNT_ID, interval_seconds: numberField('personalWhatsappInterval', 15, 5, 300), config_override: configFromFields() } });
+    }).then(function(data) {
+      state.autoReply = data.state || {}; renderAutoReply(); toastMessage('常驻接管已启动');
+      return loadDiagnostics();
+    });
+  }
+  function stopAutoReplyLoop() {
+    return request('/api/native-whatsapp/auto-reply/loop/stop', { method: 'POST', json: { account_id: ACCOUNT_ID } }).then(function(data) {
+      state.autoReply = data.state || {}; renderAutoReply(); toastMessage('常驻接管已停止');
+      return loadDiagnostics();
+    });
+  }
+  function loadDiagnostics() {
+    return request('/api/native-whatsapp/auto-reply/diagnostics?limit=20').then(function(data) {
+      state.diagnostics = data || {};
+      state.autoReply = data.state || state.autoReply || {};
+      if (data.last_run) { state.lastRun = data.last_run; renderLastRun(); }
+      renderAutoReply(); renderDiagnostics();
+    });
+  }
+  function renderDiagnostics() {
+    var host = $('personalWhatsappDiagnostics'); if (!host) return;
+    var events = state.diagnostics && Array.isArray(state.diagnostics.events) ? state.diagnostics.events.slice().reverse() : [];
+    host.innerHTML = events.length ? events.map(function(item) {
+      var detail = [];
+      Object.keys(item || {}).forEach(function(key) { if (key !== 'event' && key !== 'ts') detail.push(key + '=' + text(item[key])); });
+      return '<div class="pwa-record"><div class="pwa-item-title">' + esc(item.event || '事件') + ' <span class="pwa-badge">' + esc(item.ts || '') + '</span></div><div class="pwa-meta">' + esc(detail.join(' · ') || '-') + '</div></div>';
+    }).join('') : '<div class="pwa-empty">暂无日志</div>';
+  }
+  window.initPersonalWhatsappView=function(){bind();loadBase().catch(function(error){showError(error.message||'WhatsApp 状态读取失败');});loadFriendQueue().catch(function(){});loadAutoReply().catch(function(){});};
 })();

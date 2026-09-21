@@ -42,8 +42,8 @@
   });
 
   window.registerLobsterView('personal-whatsapp', {
-    html: '/static/views/personal-whatsapp.html?v=20260910-personal-whatsapp-workbench-v3',
-    scripts: '/static/js/personal-whatsapp.js?v=20260910-personal-whatsapp-workbench-v3',
+    html: '/static/views/personal-whatsapp.html?v=20260921-personal-whatsapp-friends-queue-v4',
+    scripts: '/static/js/personal-whatsapp.js?v=20260921-personal-whatsapp-friends-queue-v4',
     init: 'initPersonalWhatsappView',
     cache: 'reload'
   });

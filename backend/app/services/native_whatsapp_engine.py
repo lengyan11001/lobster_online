@@ -9,7 +9,8 @@ import re
 import sqlite3
 import threading
 import time
-from datetime import datetime
+import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -148,6 +149,37 @@ def _connect() -> sqlite3.Connection:
         );
         create index if not exists idx_whatsapp_operations_account_time
         on whatsapp_operations(account_id, created_at desc);
+
+        create table if not exists whatsapp_tasks (
+            id text primary key,
+            account_id text not null,
+            task_type text not null default 'add_friend',
+            targets text not null default '[]',
+            payload text not null default '{}',
+            status text not null default 'queued',
+            processed integer not null default 0,
+            success integer not null default 0,
+            failed integer not null default 0,
+            error_message text,
+            client_request_id text,
+            created_at text not null,
+            updated_at text not null
+        );
+        create index if not exists idx_whatsapp_tasks_queue
+        on whatsapp_tasks(account_id, task_type, status, created_at);
+        create unique index if not exists uq_whatsapp_tasks_client_request
+        on whatsapp_tasks(client_request_id) where client_request_id <> '';
+
+        create table if not exists whatsapp_friend_add_control (
+            account_id text primary key,
+            enabled integer not null default 0,
+            interval_seconds integer not null default 45,
+            daily_limit integer not null default 30,
+            running integer not null default 0,
+            last_started_at text,
+            last_stopped_at text,
+            updated_at text not null
+        );
         """
     )
     return conn
@@ -1361,3 +1393,740 @@ async def run_once(
     finally:
         _release_action()
         _STOP_REQUESTED.clear()
+
+
+# ── 批量加好友队列 + 常驻接管（对齐微信协议助手，2026-09-21）──────────────────
+# 目的：把「个人 WhatsApp 助手」的加好友与接管能力对齐微信协议助手：
+#   * 批量加好友：一行一个目标（电话 / 名字,电话 / @用户名），逐条入队，
+#     按间隔慢慢加、按日额度封顶、逐条留记录，可随时启停；
+#   * 接管：除单轮执行外，支持常驻轮次（按间隔自动跑下一轮）与诊断摘要。
+DEFAULT_FRIEND_ADD_INTERVAL_SECONDS = 45
+DEFAULT_FRIEND_ADD_DAILY_LIMIT = 30
+DEFAULT_FRIEND_ADD_RETRY_MAX = 1
+DEFAULT_FRIEND_ADD_RETRY_SLEEP = 3.0
+
+_FRIEND_ADD_SCHEDULERS: Dict[str, Any] = {}
+_FRIEND_ADD_WAKE_EVENTS: Dict[str, Any] = {}
+_AUTO_REPLY_LOOPS: Dict[str, Any] = {}
+
+
+class FriendAddDailyLimitReached(RuntimeError):
+    """今日加好友额度已用完：任务留在队列里等额度窗口重置，而不是标记失败。"""
+
+
+def _friend_add_quota_reset_seconds() -> float:
+    """距离下一次日额度重置的秒数（本地时间次日 0 点 + 2 分钟缓冲）。"""
+    now = datetime.now()
+    tomorrow = datetime(now.year, now.month, now.day) + timedelta(days=1)
+    return max(60.0, (tomorrow - now).total_seconds() + 120.0)
+
+
+_COMMON_COUNTRY_CODES = frozenset(
+    """1 7 20 27 30 31 32 33 34 36 39 40 41 43 44 45 46 47 48 49 51 52 53 54 55 56 57 58 60 61 62 63 64 65 66
+    81 82 84 86 90 91 92 93 94 95 98 211 212 213 216 218 220 221 222 223 224 225 226 227 228 229 230 231 232 233
+    234 235 236 237 238 239 240 241 242 243 244 245 246 247 248 249 250 251 252 253 254 255 256 257 258 260 261
+    262 263 264 265 266 267 268 269 290 291 297 298 299 350 351 352 353 354 355 356 357 358 359 370 371 372 373
+    374 375 376 377 378 379 380 381 382 383 385 386 387 389 420 421 423 500 501 502 503 504 505 506 507 508 509
+    590 591 592 593 594 595 596 597 598 599 670 672 673 674 675 676 677 678 679 680 681 682 683 685 686 687 688
+    689 690 691 692 850 852 853 855 856 880 886 960 961 962 963 964 965 966 967 968 970 971 972 973 974 975 976
+    977 979 992 993 994 995 996 998""".split()
+)
+
+
+def _split_country_code(digits: str) -> "tuple[str, str]":
+    """把 `+8613800138001` 拆成 ("+86", "13800138001")；识别不出国家码时返回原号码。"""
+    body = str(digits or "").lstrip("+")
+    for size in (3, 2, 1):
+        if len(body) > size + 5 and body[:size] in _COMMON_COUNTRY_CODES:
+            return "+" + body[:size], body[size:]
+    return "", body
+
+
+def _parse_target_line(line: str) -> Optional[Dict[str, str]]:
+    """解析一行目标：`名字,电话` / `电话` / `@用户名` / `名字,@用户名`。"""
+    text = str(line or "").strip()
+    if not text:
+        return None
+    parts = [part.strip() for part in re.split(r"[,，\t]+", text) if part.strip()]
+    if not parts:
+        return None
+    name = parts[0] if len(parts) >= 2 else ""
+    contact = parts[-1]
+    raw_contact = contact.lstrip("@").strip()
+    if not raw_contact:
+        return None
+    if contact.startswith("@"):
+        return {"first_name": name or raw_contact, "username": raw_contact, "phone": "", "country_code": ""}
+    digits = re.sub(r"[^0-9+]", "", contact)
+    if not digits:
+        return {"first_name": name or raw_contact, "username": raw_contact, "phone": "", "country_code": ""}
+    country_code = ""
+    number = digits
+    if digits.startswith("+"):
+        country_code, number = _split_country_code(digits)
+    return {
+        "first_name": name or digits,
+        "username": "",
+        "phone": number,
+        "country_code": country_code or "+86",
+    }
+
+
+def normalize_friend_targets(raw_targets: Iterable[Any]) -> List[Dict[str, str]]:
+    """把"一行一个目标"的批量文本解析成结构化目标（自动去重）。"""
+    out: List[Dict[str, str]] = []
+    seen: set = set()
+    for raw in raw_targets or []:
+        for line in re.split(r"[\r\n;；]+", str(raw or "")):
+            target = _parse_target_line(line)
+            if not target:
+                continue
+            key = str(target.get("username") or target.get("phone") or target.get("first_name") or "").casefold()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(target)
+    return out
+
+
+def _target_label(target: Dict[str, Any]) -> str:
+    username = str(target.get("username") or "").strip()
+    if username:
+        return "@" + username.lstrip("@")
+    country = str(target.get("country_code") or "+86").strip()
+    phone = str(target.get("phone") or "").strip()
+    if phone:
+        return country + phone
+    return str(target.get("first_name") or "").strip()
+
+
+def _row_to_task(row: sqlite3.Row) -> Dict[str, Any]:
+    data = _row_public(row)
+    for key in ("targets", "payload"):
+        raw = data.get(key)
+        if isinstance(raw, str):
+            try:
+                data[key] = json.loads(raw)
+            except (TypeError, ValueError):
+                data[key] = [] if key == "targets" else {}
+    return data
+
+
+def _persist_task_row(
+    *,
+    account_id: str,
+    task_type: str,
+    targets: List[Dict[str, Any]],
+    payload: Dict[str, Any],
+    status: str = "queued",
+    client_request_id: str = "",
+) -> Dict[str, Any]:
+    now = _now_iso()
+    task_id = uuid.uuid4().hex
+    with _DB_LOCK, _connect() as conn:
+        conn.execute(
+            "insert into whatsapp_tasks(id, account_id, task_type, targets, payload, status, "
+            "processed, success, failed, error_message, client_request_id, created_at, updated_at) "
+            "values(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                task_id,
+                account_id,
+                task_type,
+                _json_text(targets),
+                _json_text(payload),
+                status,
+                0,
+                0,
+                0,
+                "",
+                str(client_request_id or "")[:200],
+                now,
+                now,
+            ),
+        )
+    return _task_row_by_id(task_id) or {}
+
+
+def _task_row_by_id(task_id: str) -> Optional[Dict[str, Any]]:
+    if not task_id:
+        return None
+    with _connect() as conn:
+        row = conn.execute("select * from whatsapp_tasks where id=? limit 1", (task_id,)).fetchone()
+    return _row_to_task(row) if row else None
+
+
+def _existing_task_by_client_request_id(account_id: str, client_request_id: str) -> Optional[Dict[str, Any]]:
+    key = str(client_request_id or "").strip()
+    if not key:
+        return None
+    with _connect() as conn:
+        row = conn.execute(
+            "select * from whatsapp_tasks where account_id=? and client_request_id=? limit 1",
+            (account_id, key),
+        ).fetchone()
+    return _row_to_task(row) if row else None
+
+
+def _update_task_payload(task_id: str, patch: Dict[str, Any]) -> None:
+    task = _task_row_by_id(task_id)
+    if not task:
+        return
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    payload.update(patch or {})
+    with _DB_LOCK, _connect() as conn:
+        conn.execute(
+            "update whatsapp_tasks set payload=?, updated_at=? where id=?",
+            (_json_text(payload), _now_iso(), task_id),
+        )
+
+
+def _update_task_progress(task_id: str, processed: int, success: int, failed: int, error: str = "") -> None:
+    with _DB_LOCK, _connect() as conn:
+        conn.execute(
+            "update whatsapp_tasks set processed=?, success=?, failed=?, error_message=?, updated_at=? where id=?",
+            (int(processed), int(success), int(failed), str(error or "")[:2000], _now_iso(), task_id),
+        )
+
+
+def _finish_task(task_id: str, status: str, processed: int, success: int, failed: int, error: str = "") -> None:
+    _update_task_progress(task_id, processed, success, failed, error)
+    with _DB_LOCK, _connect() as conn:
+        conn.execute("update whatsapp_tasks set status=?, updated_at=? where id=?", (status, _now_iso(), task_id))
+
+
+def _friend_add_count_today(account_id: str) -> int:
+    """今天已经"尝试过"的加好友条数（一条任务 = 一个目标）。"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _connect() as conn:
+        row = conn.execute(
+            "select count(*) as n from whatsapp_tasks where account_id=? and task_type='add_friend' "
+            "and processed > 0 and substr(updated_at, 1, 10) = ?",
+            (account_id, today),
+        ).fetchone()
+    return int(row["n"] if row else 0)
+
+
+def _normalize_friend_add_control(row: Optional[sqlite3.Row], account_id: str) -> Dict[str, Any]:
+    data = dict(row) if row else {}
+    try:
+        interval = int(data.get("interval_seconds") or DEFAULT_FRIEND_ADD_INTERVAL_SECONDS)
+    except (TypeError, ValueError):
+        interval = DEFAULT_FRIEND_ADD_INTERVAL_SECONDS
+    raw_limit = data.get("daily_limit")
+    if raw_limit is None or raw_limit == "":
+        raw_limit = DEFAULT_FRIEND_ADD_DAILY_LIMIT
+    try:
+        # 显式 0 = 不限制：不能因为 `0 or 默认值` 被悄悄改回默认 30
+        daily_limit = int(raw_limit)
+    except (TypeError, ValueError):
+        daily_limit = DEFAULT_FRIEND_ADD_DAILY_LIMIT
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    scheduler = _FRIEND_ADD_SCHEDULERS.get(key)
+    return {
+        "account_id": key,
+        "enabled": bool(int(data.get("enabled") or 0)),
+        "interval_seconds": max(1, min(interval, 86400)),
+        "daily_limit": max(0, min(daily_limit, 1000)),
+        "running": bool(scheduler is not None and not scheduler.done()),
+        "added_today": _friend_add_count_today(key),
+        "last_started_at": str(data.get("last_started_at") or ""),
+        "last_stopped_at": str(data.get("last_stopped_at") or ""),
+        "updated_at": str(data.get("updated_at") or ""),
+    }
+
+
+def get_friend_add_control(account_id: str = "") -> Dict[str, Any]:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    with _connect() as conn:
+        row = conn.execute(
+            "select * from whatsapp_friend_add_control where account_id=? limit 1", (key,)
+        ).fetchone()
+    return _normalize_friend_add_control(row, key)
+
+
+def save_friend_add_control(
+    account_id: str = "",
+    *,
+    interval_seconds: Optional[int] = None,
+    daily_limit: Optional[int] = None,
+) -> Dict[str, Any]:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    current = get_friend_add_control(key)
+    interval = current["interval_seconds"] if interval_seconds is None else max(1, min(int(interval_seconds), 86400))
+    limit = current["daily_limit"] if daily_limit is None else max(0, min(int(daily_limit), 1000))
+    now = _now_iso()
+    with _DB_LOCK, _connect() as conn:
+        conn.execute(
+            "insert into whatsapp_friend_add_control(account_id, enabled, interval_seconds, daily_limit, running, updated_at) "
+            "values(?,?,?,?,?,?) on conflict(account_id) do update set interval_seconds=excluded.interval_seconds, "
+            "daily_limit=excluded.daily_limit, updated_at=excluded.updated_at",
+            (key, 1 if current["enabled"] else 0, int(interval), int(limit), 0, now),
+        )
+    _notify_friend_add_scheduler(key)
+    return get_friend_add_control(key)
+
+
+def _set_friend_add_control_enabled(account_id: str, enabled: bool) -> None:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    now = _now_iso()
+    with _DB_LOCK, _connect() as conn:
+        conn.execute(
+            "insert into whatsapp_friend_add_control(account_id, enabled, interval_seconds, daily_limit, running, "
+            "last_started_at, last_stopped_at, updated_at) values(?,?,?,?,?,?,?,?) "
+            "on conflict(account_id) do update set enabled=excluded.enabled, "
+            "last_started_at=case when excluded.enabled=1 then excluded.last_started_at else whatsapp_friend_add_control.last_started_at end, "
+            "last_stopped_at=case when excluded.enabled=0 then excluded.last_stopped_at else whatsapp_friend_add_control.last_stopped_at end, "
+            "updated_at=excluded.updated_at",
+            (
+                key,
+                1 if enabled else 0,
+                DEFAULT_FRIEND_ADD_INTERVAL_SECONDS,
+                DEFAULT_FRIEND_ADD_DAILY_LIMIT,
+                0,
+                now if enabled else None,
+                now if not enabled else None,
+                now,
+            ),
+        )
+        conn.execute(
+            "update whatsapp_friend_add_control set running=? where account_id=?", (1 if enabled else 0, key)
+        )
+
+
+def _notify_friend_add_scheduler(account_id: str) -> None:
+    event = _FRIEND_ADD_WAKE_EVENTS.get(str(account_id or "").strip() or DEFAULT_ACCOUNT_ID)
+    if event is not None:
+        event.set()
+
+
+def _claim_next_queued_task(account_id: str, task_type: str = "add_friend") -> Optional[Dict[str, Any]]:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    with _DB_LOCK, _connect() as conn:
+        row = conn.execute(
+            "select * from whatsapp_tasks where account_id=? and task_type=? and status='queued' "
+            "order by created_at asc, id asc limit 1",
+            (key, task_type),
+        ).fetchone()
+        if not row:
+            return None
+        task_id = str(row["id"])
+        changed = conn.execute(
+            "update whatsapp_tasks set status='running', updated_at=? where id=? and status='queued'",
+            (_now_iso(), task_id),
+        ).rowcount
+        if not changed:
+            return None
+        fresh = conn.execute("select * from whatsapp_tasks where id=? limit 1", (task_id,)).fetchone()
+    return _row_to_task(fresh) if fresh else None
+
+
+def _enforce_friend_add_rate(account_id: str) -> None:
+    control = get_friend_add_control(account_id)
+    limit = int(control.get("daily_limit") or 0)
+    if limit > 0 and _friend_add_count_today(account_id) >= limit:
+        raise FriendAddDailyLimitReached("今日加好友额度已用完（上限 %d 条）" % limit)
+
+
+def create_add_contact_task(
+    targets: Iterable[Any],
+    *,
+    apply_message: str = "",
+    remark: str = "",
+    bulk_import: bool = False,
+    queue_only: bool = True,
+    client_request_id: str = "",
+    interval_seconds: Optional[int] = None,
+    daily_limit: Optional[int] = None,
+) -> Dict[str, Any]:
+    """把批量目标逐条入队（一条任务 = 一个目标），由调度器按间隔慢慢加。"""
+    account_id = DEFAULT_ACCOUNT_ID
+    normalized = normalize_friend_targets(targets)
+    if not normalized:
+        raise RuntimeError("没有可用的加好友目标（支持：电话 / 名字,电话 / @用户名）")
+    if interval_seconds is not None or daily_limit is not None:
+        save_friend_add_control(account_id, interval_seconds=interval_seconds, daily_limit=daily_limit)
+    if not queue_only:
+        if not _scan_windows():
+            raise RuntimeError("未检测到 Windows 桌面版 WhatsApp，请先启动并登录")
+    batch_id = str(client_request_id or uuid.uuid4().hex)[:120]
+    if client_request_id:
+        first_existing = _existing_task_by_client_request_id(account_id, batch_id + ":0")
+        if first_existing:
+            with _connect() as conn:
+                rows = conn.execute(
+                    "select * from whatsapp_tasks where account_id=? and task_type='add_friend' "
+                    "and client_request_id like ? order by created_at asc",
+                    (account_id, batch_id + ":%"),
+                ).fetchall()
+            queued = [_row_to_task(row) for row in rows]
+            return {
+                "id": batch_id,
+                "task_type": "add_friend",
+                "targets": [_target_label(item) for item in normalized],
+                "tasks": queued,
+                "status": "queued" if any(str(item.get("status")) in {"queued", "running"} for item in queued) else "success",
+                "planned_total": len(queued),
+                "queued_total": sum(1 for item in queued if str(item.get("status")) == "queued"),
+                "deduped": True,
+            }
+    tasks: List[Dict[str, Any]] = []
+    for index, target in enumerate(normalized):
+        tasks.append(
+            _persist_task_row(
+                account_id=account_id,
+                task_type="add_friend",
+                targets=[target],
+                payload={
+                    "apply_message": str(apply_message or "").strip()[:1000],
+                    "remark": str(remark or "").strip()[:200],
+                    "bulk_import": bool(bulk_import),
+                    "queue_only": True,
+                    "batch_request_id": batch_id,
+                    "label": _target_label(target),
+                },
+                status="queued",
+                client_request_id=(batch_id + ":" + str(index)) if client_request_id else "",
+            )
+        )
+    _record_operation(
+        "friend_add_enqueue",
+        batch_id,
+        "queued",
+        "批量加好友入队 %d 条" % len(tasks),
+        {"batch_id": batch_id, "targets": [_target_label(item) for item in normalized]},
+    )
+    _notify_friend_add_scheduler(account_id)
+    return {
+        "id": batch_id,
+        "task_type": "add_friend",
+        "targets": [_target_label(item) for item in normalized],
+        "tasks": tasks,
+        "status": "queued",
+        "planned_total": len(tasks),
+        "queued_total": len(tasks),
+    }
+
+
+async def _process_add_contact_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    """执行一条加好友任务（一条任务 = 一个目标；带重试与日额度保护）。"""
+    task_id = str(task.get("id") or "")
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    pending = payload.get("pending_targets")
+    resuming = isinstance(pending, list) and bool(pending)
+    targets = [item for item in (list(pending) if resuming else list(task.get("targets") or [])) if isinstance(item, dict)]
+    if not targets:
+        _finish_task(task_id, "failed", 0, 0, 1, "任务里没有目标")
+        return {"status": "failed", "error": "任务里没有目标"}
+    base_processed = int(task.get("processed") or 0) if resuming else 0
+    base_success = int(task.get("success") or 0) if resuming else 0
+    base_failed = int(task.get("failed") or 0) if resuming else 0
+    apply_message = str(payload.get("apply_message") or "").strip()
+    processed = success = failed = consumed = 0
+    last_error = ""
+    deferred = ""
+    for index, target in enumerate(targets):
+        try:
+            _enforce_friend_add_rate(DEFAULT_ACCOUNT_ID)
+        except FriendAddDailyLimitReached as exc:
+            deferred = str(exc)
+            break
+        processed += 1
+        consumed = index + 1
+        ok = False
+        error_text = ""
+        for attempt in range(DEFAULT_FRIEND_ADD_RETRY_MAX + 1):
+            try:
+                await asyncio.to_thread(
+                    add_contact,
+                    first_name=str(target.get("first_name") or "").strip() or _target_label(target),
+                    username=str(target.get("username") or ""),
+                    phone=str(target.get("phone") or ""),
+                    country_code=str(target.get("country_code") or "+86"),
+                )
+                if apply_message:
+                    await asyncio.to_thread(send_message, _target_label(target), apply_message)
+                ok = True
+                break
+            except FriendAddDailyLimitReached as exc:
+                deferred = str(exc)
+                error_text = deferred
+                break
+            except Exception as exc:  # noqa: BLE001
+                error_text = str(exc)
+                if attempt < DEFAULT_FRIEND_ADD_RETRY_MAX:
+                    await asyncio.sleep(DEFAULT_FRIEND_ADD_RETRY_SLEEP)
+        if deferred:
+            processed -= 1
+            consumed = index
+            break
+        if ok:
+            success += 1
+        else:
+            failed += 1
+            last_error = error_text
+        _update_task_progress(
+            task_id,
+            base_processed + processed,
+            base_success + success,
+            base_failed + failed,
+            last_error,
+        )
+    total_processed = base_processed + processed
+    total_success = base_success + success
+    total_failed = base_failed + failed
+    if deferred:
+        remaining = targets[consumed:]
+        _update_task_payload(task_id, {"pending_targets": remaining, "deferred_reason": deferred})
+        _finish_task(task_id, "queued", total_processed, total_success, total_failed, deferred)
+        return {"deferred": True, "reason": deferred, "remaining": len(remaining)}
+    _update_task_payload(task_id, {"pending_targets": [], "deferred_reason": ""})
+    status = "success" if failed == 0 else ("partial_failed" if success else "failed")
+    _finish_task(task_id, status, total_processed, total_success, total_failed, last_error)
+    return {"deferred": False, "status": status, "processed": total_processed, "success": total_success, "failed": total_failed}
+
+
+async def _run_friend_add_scheduler(account_id: str) -> None:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    event = _FRIEND_ADD_WAKE_EVENTS.setdefault(key, asyncio.Event())
+    try:
+        while get_friend_add_control(key).get("enabled"):
+            task = _claim_next_queued_task(key)
+            if task:
+                defer_seconds = 0.0
+                try:
+                    outcome = await _process_add_contact_task(task)
+                    if isinstance(outcome, dict) and outcome.get("deferred"):
+                        defer_seconds = _friend_add_quota_reset_seconds()
+                except Exception as exc:  # noqa: BLE001
+                    _finish_task(
+                        str(task.get("id") or ""),
+                        "failed",
+                        int(task.get("processed") or 0),
+                        int(task.get("success") or 0),
+                        max(1, int(task.get("failed") or 0)),
+                        str(exc),
+                    )
+                if not get_friend_add_control(key).get("enabled"):
+                    break
+                interval = float(get_friend_add_control(key).get("interval_seconds") or DEFAULT_FRIEND_ADD_INTERVAL_SECONDS)
+                jitter = 0.85 + 0.3 * ((int(hashlib.sha1(str(task.get("id") or "").encode()).hexdigest()[:6], 16) % 100) / 100.0)
+                wait_seconds = defer_seconds or interval * jitter
+                event.clear()
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=max(1.0, wait_seconds))
+                except asyncio.TimeoutError:
+                    pass
+                continue
+            event.clear()
+            try:
+                await asyncio.wait_for(event.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                pass
+    except asyncio.CancelledError:
+        raise
+    finally:
+        current = _FRIEND_ADD_SCHEDULERS.get(key)
+        if current is asyncio.current_task():
+            _FRIEND_ADD_SCHEDULERS.pop(key, None)
+            _FRIEND_ADD_WAKE_EVENTS.pop(key, None)
+
+
+async def start_friend_add_queue(account_id: str = "") -> Dict[str, Any]:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    _set_friend_add_control_enabled(key, True)
+    current = _FRIEND_ADD_SCHEDULERS.get(key)
+    if current is None or current.done():
+        _FRIEND_ADD_SCHEDULERS[key] = asyncio.create_task(
+            _run_friend_add_scheduler(key), name="whatsapp-friend-add-" + key[-8:]
+        )
+    _notify_friend_add_scheduler(key)
+    _append_log("friend_add_queue_started", account_id=key)
+    return get_friend_add_control(key)
+
+
+async def stop_friend_add_queue(account_id: str = "") -> Dict[str, Any]:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    _set_friend_add_control_enabled(key, False)
+    _notify_friend_add_scheduler(key)
+    _append_log("friend_add_queue_stopped", account_id=key)
+    return get_friend_add_control(key)
+
+
+def list_friend_records(
+    account_id: str = "",
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    status: str = "",
+    keyword: str = "",
+) -> Dict[str, Any]:
+    """逐条记录（一条任务 = 一个目标），给前端"加好友记录"表用。"""
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    where = "where account_id=? and task_type='add_friend'"
+    params: List[Any] = [key]
+    if status:
+        where += " and status=?"
+        params.append(str(status))
+    with _connect() as conn:
+        rows = conn.execute(
+            "select * from whatsapp_tasks " + where + " order by created_at desc, id desc",
+            tuple(params),
+        ).fetchall()
+    records: List[Dict[str, Any]] = []
+    needle = str(keyword or "").strip().casefold()
+    for row in rows:
+        task = _row_to_task(row)
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        for target in task.get("targets") or []:
+            if not isinstance(target, dict):
+                continue
+            label = str(payload.get("label") or _target_label(target))
+            if needle and needle not in label.casefold() and needle not in str(payload.get("apply_message") or "").casefold():
+                continue
+            records.append(
+                {
+                    "id": str(task.get("id") or ""),
+                    "task_id": str(task.get("id") or ""),
+                    "account_id": str(task.get("account_id") or ""),
+                    "target": label,
+                    "keyword": label,
+                    "first_name": str(target.get("first_name") or ""),
+                    "phone": str(target.get("country_code") or "") + str(target.get("phone") or ""),
+                    "username": str(target.get("username") or ""),
+                    "apply_message": str(payload.get("apply_message") or ""),
+                    "remark": str(payload.get("remark") or ""),
+                    "status": str(task.get("status") or ""),
+                    "error_message": str(task.get("error_message") or ""),
+                    "processed": int(task.get("processed") or 0),
+                    "success": int(task.get("success") or 0),
+                    "failed": int(task.get("failed") or 0),
+                    "created_at": str(task.get("created_at") or ""),
+                    "updated_at": str(task.get("updated_at") or ""),
+                }
+            )
+    total = len(records)
+    start = max(0, int(offset))
+    end = start + max(1, int(limit))
+    # total 与客户端其它分页接口口径一致；count 保留给旧前端
+    return {"items": records[start:end], "count": total, "total": total, "limit": int(limit), "offset": start}
+
+
+def friend_add_queue_summary(account_id: str = "") -> Dict[str, Any]:
+    """队列概览：排队/执行中/累计与今日成功失败，给 UI 顶部状态用。"""
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    with _connect() as conn:
+        rows = conn.execute(
+            "select status, count(*) as n from whatsapp_tasks where account_id=? and task_type='add_friend' group by status",
+            (key,),
+        ).fetchall()
+    by_status = {str(row["status"]): int(row["n"] or 0) for row in rows}
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _connect() as conn:
+        today_row = conn.execute(
+            "select sum(success) as s, sum(failed) as f from whatsapp_tasks where account_id=? "
+            "and task_type='add_friend' and substr(updated_at, 1, 10) = ?",
+            (key, today),
+        ).fetchone()
+    control = get_friend_add_control(key)
+    return {
+        "queued": by_status.get("queued", 0),
+        "running": by_status.get("running", 0),
+        "success": by_status.get("success", 0) + by_status.get("partial_failed", 0),
+        "failed": by_status.get("failed", 0),
+        "today_success": int((today_row["s"] if today_row else 0) or 0),
+        "today_failed": int((today_row["f"] if today_row else 0) or 0),
+        "added_today": control.get("added_today", 0),
+        "daily_limit": control.get("daily_limit", 0),
+        "interval_seconds": control.get("interval_seconds"),
+        "enabled": control.get("enabled"),
+        "running_now": control.get("running"),
+    }
+
+
+# ── 接管：常驻轮次 + 诊断（对齐微信 auto-reply worker / diagnostics）──────────
+
+_AUTO_REPLY_STATE: Dict[str, Any] = {"auth_context": {}, "interval_seconds": 0}
+_AUTO_REPLY_LOOPS: Dict[str, Any] = {}
+
+
+def auto_reply_state() -> Dict[str, Any]:
+    task = _AUTO_REPLY_LOOPS.get(DEFAULT_ACCOUNT_ID)
+    running = bool(task is not None and not task.done())
+    return {
+        "running": running,
+        "interval_seconds": int(_AUTO_REPLY_STATE.get("interval_seconds") or 0),
+        "last_run": (get_config().get("last_run") or {}),
+    }
+
+
+async def _auto_reply_loop(interval_seconds: int) -> None:
+    try:
+        while True:
+            try:
+                await run_once(auth_context=dict(_AUTO_REPLY_STATE.get("auth_context") or {}))
+            except Exception as exc:  # noqa: BLE001
+                _append_log("auto_reply_loop_round_failed", error=str(exc)[:500])
+            await asyncio.sleep(max(5, int(interval_seconds)))
+    except asyncio.CancelledError:
+        raise
+    finally:
+        current = _AUTO_REPLY_LOOPS.get(DEFAULT_ACCOUNT_ID)
+        if current is asyncio.current_task():
+            _AUTO_REPLY_LOOPS.pop(DEFAULT_ACCOUNT_ID, None)
+
+
+async def start_auto_reply_loop(
+    *,
+    interval_seconds: Optional[int] = None,
+    auth_context: Optional[Dict[str, Any]] = None,
+    config_override: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """常驻接管：按间隔自动执行下一轮（对齐微信的自动回复 worker）。"""
+    cfg = get_config()
+    interval = int(interval_seconds or cfg.get("interval_seconds") or 15)
+    if config_override:
+        save_config(
+            interval_seconds=interval,
+            max_unread_per_round=config_override.get("max_unread_per_round"),
+            reply_instruction=config_override.get("reply_instruction"),
+        )
+    else:
+        save_config(interval_seconds=interval)
+    if auth_context:
+        _AUTO_REPLY_STATE["auth_context"] = dict(auth_context)
+    _AUTO_REPLY_STATE["interval_seconds"] = interval
+    current = _AUTO_REPLY_LOOPS.get(DEFAULT_ACCOUNT_ID)
+    if current is None or current.done():
+        _AUTO_REPLY_LOOPS[DEFAULT_ACCOUNT_ID] = asyncio.create_task(
+            _auto_reply_loop(interval), name="whatsapp-auto-reply-loop"
+        )
+    _append_log("auto_reply_loop_started", interval_seconds=interval)
+    return auto_reply_state()
+
+
+def stop_auto_reply_loop() -> Dict[str, Any]:
+    task = _AUTO_REPLY_LOOPS.pop(DEFAULT_ACCOUNT_ID, None)
+    if task is not None and not task.done():
+        task.cancel()
+    request_stop()
+    _append_log("auto_reply_loop_stopped")
+    return auto_reply_state()
+
+
+def auto_reply_diagnostics(limit: int = 20) -> Dict[str, Any]:
+    """最近一轮接管的结构化结果 + 日志尾部，给 UI 的诊断面板用。"""
+    cfg = get_config()
+    last_run = cfg.get("last_run") if isinstance(cfg.get("last_run"), dict) else {}
+    events: List[Dict[str, Any]] = []
+    try:
+        if LOG_PATH.exists():
+            with LOG_PATH.open("r", encoding="utf-8") as handle:
+                tail = handle.readlines()[-max(1, min(int(limit or 20), 200)):]
+            for line in tail:
+                try:
+                    events.append(json.loads(line))
+                except (TypeError, ValueError):
+                    continue
+    except OSError:
+        pass
+    return {"ok": True, "state": auto_reply_state(), "last_run": last_run, "events": events}
