@@ -201,3 +201,43 @@ def test_follow_button_failure_message_mentions_wait(monkeypatch):
     else:  # pragma: no cover
         raise AssertionError("按钮一直不出现时应该报错")
     assert page.follow_checks > 1, "应该是轮询多次后才失败"
+
+
+def test_unreachable_target_is_skipped_not_failed():
+    """「该主页没有可用的私信入口」不算失败：状态按 skipped 上报，也不进重试。"""
+    from backend.app.api import h5_chat_channel as h5
+
+    assert h5._normalize_target_state("unavailable") == "skipped"
+    assert h5._normalize_target_state("skipped") == "skipped"
+    assert h5._normalize_target_state("failed") == "failed"
+    assert h5._normalize_target_state("sent") == "succeeded"
+
+    assert h5._scheduled_douyin_precise_touch_user_status("direct_message", {"status": "unavailable"}) == "unavailable"
+    assert h5._scheduled_douyin_precise_touch_user_status("direct_message", {"status": "sent"}) == "completed"
+    assert h5._scheduled_douyin_precise_touch_user_status("direct_message", {"status": "failed"}) == "failed"
+
+
+def test_targets_detail_reports_skipped_state():
+    from backend.app.api import h5_chat_channel as h5
+
+    results = [
+        {
+            "action": "direct_message",
+            "label": "主动私信精准客户",
+            "result": {"code": 200, "msg": "主动私信完成"},
+            "users": [
+                {"username": "甲", "status": "sent", "error": ""},
+                {
+                    "username": "乙",
+                    "status": "unavailable",
+                    "error": "该主页没有可用的私信入口：私信按钮已点击但面板未出现",
+                },
+            ],
+            "stats": {},
+        }
+    ]
+
+    detail = h5._build_targets_detail(results=results, action="precise_touch", fallback_reason="summary")
+    states = {row["target"]: row["state"] for row in detail}
+
+    assert states == {"甲": "succeeded", "乙": "skipped"}, states

@@ -27,6 +27,7 @@ from douyin_comment_scraper import (
     DouyinCommentCollectionUnconfirmed,
     DouyinCommentScraper,
     DouyinMentionCommentStopped,
+    DouyinPrivateMessageUnavailable,
     extract_aweme_id,
 )
 from runtime_paths import resolve_install_dir, resolve_runtime_root
@@ -10531,6 +10532,7 @@ def refresh_follow_comment_state_from_workers(
     processed = sum(int(worker.get("processed", 0) or 0) for worker in workers if isinstance(worker, dict))
     success = sum(int(worker.get("success", 0) or 0) for worker in workers if isinstance(worker, dict))
     failed = sum(int(worker.get("failed", 0) or 0) for worker in workers if isinstance(worker, dict))
+    skipped = sum(int(worker.get("skipped", 0) or 0) for worker in workers if isinstance(worker, dict))
     commented = sum(int(worker.get("commented", 0) or 0) for worker in workers if isinstance(worker, dict))
     skipped_no_posts = sum(int(worker.get("skipped_no_posts", 0) or 0) for worker in workers if isinstance(worker, dict))
     current_users = [
@@ -11011,6 +11013,7 @@ def refresh_interaction_state_from_workers(
     douyin_interaction_state["processed"] = processed
     douyin_interaction_state["success"] = success
     douyin_interaction_state["failed"] = failed
+    douyin_interaction_state["skipped"] = skipped
     douyin_interaction_state["interval_seconds"] = interval_seconds_min
     douyin_interaction_state["interval_seconds_min"] = interval_seconds_min
     douyin_interaction_state["interval_seconds_max"] = interval_seconds_max
@@ -11218,64 +11221,90 @@ async def run_douyin_interaction_worker(
                         interval_seconds_max,
                     )
             except Exception as exc:
-                update_douyin_interaction_users(
-                    [user],
-                    status="failed",
-                    error=str(exc),
-                    message=final_message,
-                    account_id=account["id"],
-                    started_at=started_at,
-                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                )
-                douyin_log(f"[抖音私信] 账号 {account['id']} 发送失败：{current_user}，原因：{exc}", "error")
-                if session_health.is_login_wall_error(exc):
-                    session_health.mark_need_relogin(account["id"], reason=str(exc)[:200])
-                    douyin_log(
-                        f"[抖音私信] 账号 {account['id']} 判定为登录掉线，本轮剩余 {max(0, len(users) - index)} 位目标已跳过，请重新登录该抖音账号后重试。",
-                        "error",
+                # 「主页没有可用的私信入口」不是失败：对方关闭了私信 / 需要互相关注，
+                # 重试也没用。按 unavailable 落库（精确池的 done 状态，下一轮不再领），
+                # 不参与失败数、也不触发 AI 连续失败暂停。
+                if isinstance(exc, DouyinPrivateMessageUnavailable):
+                    update_douyin_interaction_users(
+                        [user],
+                        status="unavailable",
+                        error=str(exc),
+                        message=final_message,
+                        account_id=account["id"],
+                        started_at=started_at,
+                        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     )
-                    break
-                if is_douyin_ai_generation_error(exc):
-                    consecutive_ai_failures += 1
-                else:
-                    consecutive_ai_failures = 0
-                async with state_lock:
-                    worker_state["processed"] = int(worker_state.get("processed", 0) or 0) + 1
-                    worker_state["failed"] = int(worker_state.get("failed", 0) or 0) + 1
-                    worker_state["last_error"] = str(exc)
-                    douyin_interaction_state["last_error"] = str(exc)
-                    refresh_interaction_state_from_workers(
-                        get_interaction_assigned_total(),
-                        interval_seconds_min,
-                        interval_seconds_max,
-                    )
-
-                if consecutive_ai_failures >= 3:
-                    remaining_users = users[index:]
-                    if remaining_users:
-                        update_douyin_interaction_users(
-                            remaining_users,
-                            status="pending",
-                            error=ai_failure_abort_message,
-                            message="",
-                            account_id=account["id"],
-                            started_at="",
-                            finished_at="",
-                        )
                     douyin_log(
-                        f"[抖音私信] 账号 {account['id']} 连续 {consecutive_ai_failures} 次 AI 生成失败，已暂停本轮剩余私信。请稍后重试，或切换到固定文案模式。",
+                        f"[抖音私信] 账号 {account['id']} 跳过（不可私信）：{current_user}，原因：{exc}",
                         "warning",
                     )
                     async with state_lock:
-                        worker_state["status"] = "failed"
-                        worker_state["last_error"] = ai_failure_abort_message
-                        douyin_interaction_state["last_error"] = ai_failure_abort_message
+                        worker_state["processed"] = int(worker_state.get("processed", 0) or 0) + 1
+                        worker_state["skipped"] = int(worker_state.get("skipped", 0) or 0) + 1
                         refresh_interaction_state_from_workers(
                             get_interaction_assigned_total(),
                             interval_seconds_min,
                             interval_seconds_max,
                         )
-                    break
+                else:
+                    update_douyin_interaction_users(
+                        [user],
+                        status="failed",
+                        error=str(exc),
+                        message=final_message,
+                        account_id=account["id"],
+                        started_at=started_at,
+                        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    douyin_log(f"[抖音私信] 账号 {account['id']} 发送失败：{current_user}，原因：{exc}", "error")
+                    if session_health.is_login_wall_error(exc):
+                        session_health.mark_need_relogin(account["id"], reason=str(exc)[:200])
+                        douyin_log(
+                            f"[抖音私信] 账号 {account['id']} 判定为登录掉线，本轮剩余 {max(0, len(users) - index)} 位目标已跳过，请重新登录该抖音账号后重试。",
+                            "error",
+                        )
+                        break
+                    if is_douyin_ai_generation_error(exc):
+                        consecutive_ai_failures += 1
+                    else:
+                        consecutive_ai_failures = 0
+                    async with state_lock:
+                        worker_state["processed"] = int(worker_state.get("processed", 0) or 0) + 1
+                        worker_state["failed"] = int(worker_state.get("failed", 0) or 0) + 1
+                        worker_state["last_error"] = str(exc)
+                        douyin_interaction_state["last_error"] = str(exc)
+                        refresh_interaction_state_from_workers(
+                            get_interaction_assigned_total(),
+                            interval_seconds_min,
+                            interval_seconds_max,
+                        )
+
+                    if consecutive_ai_failures >= 3:
+                        remaining_users = users[index:]
+                        if remaining_users:
+                            update_douyin_interaction_users(
+                                remaining_users,
+                                status="pending",
+                                error=ai_failure_abort_message,
+                                message="",
+                                account_id=account["id"],
+                                started_at="",
+                                finished_at="",
+                            )
+                        douyin_log(
+                            f"[抖音私信] 账号 {account['id']} 连续 {consecutive_ai_failures} 次 AI 生成失败，已暂停本轮剩余私信。请稍后重试，或切换到固定文案模式。",
+                            "warning",
+                        )
+                        async with state_lock:
+                            worker_state["status"] = "failed"
+                            worker_state["last_error"] = ai_failure_abort_message
+                            douyin_interaction_state["last_error"] = ai_failure_abort_message
+                            refresh_interaction_state_from_workers(
+                                get_interaction_assigned_total(),
+                                interval_seconds_min,
+                                interval_seconds_max,
+                            )
+                        break
 
             has_next_user = index < len(users)
             if has_next_user and not douyin_interaction_stop_requested:

@@ -5913,6 +5913,10 @@ def _scheduled_douyin_action_users(
 
 def _scheduled_douyin_precise_touch_user_status(action: str, row: Dict[str, Any]) -> str:
     raw_status = str((row or {}).get("status") or "").strip().lower()
+    if raw_status in _TARGET_SKIPPED_STATES:
+        # 「该主页没有可用的私信入口」这类目标重试也没用：跟账号不存在一样按
+        # unavailable 落库（精确池的 done 状态，不会下一轮再领），但不算失败。
+        return "unavailable"
     success_statuses = {
         "reply_comments": {"completed", "success"},
         "mention_comment": {"completed", "success"},
@@ -5952,12 +5956,16 @@ _TARGET_FAILED_STATES = {
     "error",
     "cancelled",
     "canceled",
-    "skipped",
     "timeout",
     "timeout_stopped",
     "timeout_stop_pending",
     "stopped",
     "rejected",
+}
+_TARGET_SKIPPED_STATES = {
+    "skipped",
+    "unavailable",
+    "unreachable",
 }
 _TARGET_STARTED_STATES = {
     "queued",
@@ -5978,6 +5986,9 @@ def _normalize_target_state(raw: Any) -> str:
     text = str(raw or "").strip().lower()
     if text in _TARGET_SUCCESS_STATES:
         return "succeeded"
+    if text in _TARGET_SKIPPED_STATES:
+        # 不算失败、也不算未启动：这些目标本轮确实处理过，但对方不可达，重试无意义。
+        return "skipped"
     if text in _TARGET_FAILED_STATES:
         return "failed"
     if text in _TARGET_STARTED_STATES:
@@ -6439,6 +6450,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                     "processed": 0,
                     "success": 0,
                     "failed": 0,
+                    "skipped": 0,
                     "not_started": 0,
                     "started": False,
                     "result_code": 423,
@@ -6487,6 +6499,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                     "processed": 0,
                     "success": 0,
                     "failed": 0,
+                    "skipped": 0,
                     "not_started": 0,
                     "started": False,
                     "result_code": 204,
@@ -6573,6 +6586,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 mark_status = "failed" if failed_users else "completed"
             else:
                 completed_users = 0
+                skipped_users = 0
                 aggregate_error = str(
                     (touch_result or {}).get("msg")
                     or (touch_result or {}).get("message")
@@ -6598,6 +6612,8 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                         action_users.append(_scheduled_douyin_slim_user(fallback_row, touch_action))
                     if user_status == "completed":
                         completed_users += 1
+                    elif user_status == "unavailable":
+                        skipped_users += 1
                     await asyncio.to_thread(
                         update_douyin_precise_touch_users,
                         [selected_user],
@@ -6609,7 +6625,11 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                         started_at=str(user_result.get("started_at") or started_at).strip() or None,
                         finished_at=str(user_result.get("finished_at") or "").strip() or None,
                     )
-                mark_status = "completed" if completed_users == len(touch_users) else "failed"
+                # 只有「对方不可达」这种跳过时不算这轮没做成：它既不是失败也不该重试。
+                if touch_users and completed_users + skipped_users == len(touch_users):
+                    mark_status = "completed"
+                else:
+                    mark_status = "failed"
             if mark_status == "completed":
                 success_count += 1
             if touch_action == "reply_comments" and isinstance(user_results, list):
@@ -6636,12 +6656,21 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 # not process or fail any person in the current round.
                 action_success_users = 0
                 action_failed_users = 0
+                action_skipped_users = 0
                 action_processed_users = 0
                 action_not_started_users = selected_count
             else:
                 action_success_users = sum(status in {"completed", "success", "sent"} for status in status_values)
-                action_failed_users = sum(status in {"failed", "error", "cancelled", "skipped"} for status in status_values)
-                action_processed_users = min(selected_count, action_success_users + action_failed_users)
+                # 「对方不可达」按跳过计：处理过、但不计失败，也不会进「重试未启动」。
+                action_skipped_users = sum(status in _TARGET_SKIPPED_STATES for status in status_values)
+                action_failed_users = sum(
+                    status in {"failed", "error", "cancelled"} and status not in _TARGET_SKIPPED_STATES
+                    for status in status_values
+                )
+                action_processed_users = min(
+                    selected_count,
+                    action_success_users + action_skipped_users + action_failed_users,
+                )
                 action_not_started_users = max(0, selected_count - action_processed_users)
             action_stat = {
                 "action": touch_action,
@@ -6650,6 +6679,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 "processed": action_processed_users,
                 "success": min(selected_count, action_success_users),
                 "failed": min(selected_count, action_failed_users),
+                "skipped": min(selected_count, action_skipped_users),
                 "not_started": action_not_started_users,
                 "started": result_code == 200,
                 "result_code": result_code,
@@ -6683,6 +6713,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         failed_action_count = max(0, started_action_count - success_count)
         detail_summary = "；".join(
             f"{item['label']}：选取 {item['selected']}，处理 {item['processed']}，成功 {item['success']}，失败 {item['failed']}，未启动 {item['not_started']}"
+            + (f"，跳过 {item['skipped']}" if item.get("skipped") else "")
             for item in action_stats
         )
         summary = (
@@ -6709,12 +6740,14 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 "processed": started_action_count,
                 "success": success_count,
                 "failed": failed_action_count,
+                "skipped": 0,
                 "not_started": not_started_action_count,
                 "users": touched_total,
                 "selected_users": sum(item["selected"] for item in action_stats),
                 "processed_users": sum(item["processed"] for item in action_stats),
                 "success_users": sum(item["success"] for item in action_stats),
                 "failed_users": sum(item["failed"] for item in action_stats),
+                "skipped_users": sum(item.get("skipped", 0) for item in action_stats),
                 "not_started_users": sum(item["not_started"] for item in action_stats),
             },
         }

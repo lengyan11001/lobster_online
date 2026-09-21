@@ -445,6 +445,7 @@ def test_precise_touch_busy_launch_reports_not_started_without_stale_success(mon
         "processed": 0,
         "success": 0,
         "failed": 0,
+        "skipped": 0,
         "not_started": 1,
         "started": False,
         "result_code": 400,
