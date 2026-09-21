@@ -172,7 +172,7 @@ def test_frontend_surfaces_dependency_diagnostics():
     assert "fallbackReady" in js
     assert "已兜底" in js
     registry = (ROOT / "static" / "js" / "view-registry.js").read_text(encoding="utf-8")
-    assert "personal-whatsapp-tidy-v10" in registry
+    assert "personal-whatsapp-country-v11" in registry
 
 
 def test_frontend_hides_group_and_contact_tabs():

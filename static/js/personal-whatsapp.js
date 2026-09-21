@@ -422,7 +422,7 @@
     });
   }
   function downloadFriendTemplate() {
-    var content = ['# 一行一个目标：电话 / 名字,电话 / @用户名', '张三,13800138000', '+8613800138001', '@alice_wa', ''].join('\r\n');
+    var content = ['# 一行一个目标：电话 / 名字,电话 / @用户名（支持任意国家码 +86 / +1 / +39…）', '张三,13800138000', '张三,+8613800138001', 'Li,+393311234567', '@alice_wa', ''].join('\r\n');
     var url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
     var link = document.createElement('a');
     link.href = url; link.download = 'whatsapp-friend-targets.txt';

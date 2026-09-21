@@ -29,7 +29,7 @@
       </nav>
 
       <section class="pwa-panel active" data-pwa-panel="overview">
-        <div class="pwa-card"><div class="pwa-card-head"><div><h3>桌面能力</h3><div class="pwa-muted">能力来自当前 Windows WhatsApp 暴露的 UIA 控件，不使用截图识别。</div></div></div><div class="pwa-capability"><div><strong>会话与消息</strong><span>同步列表、打开会话、读取气泡、发送并确认</span></div><div><strong>群聊</strong><span>只做查看与手动回复，自动接管一律跳过群聊</span></div><div><strong>批量加好友</strong><span>一行一个目标入队，按间隔逐条加，带日额度与重试</span></div><div><strong>接管方式</strong><span>手动一轮 / 常驻循环，只处理未读一对一会话</span></div><div><strong class="off">桌面限制</strong><span>加好友表单只支持 +86；其他国家码请用 @用户名</span></div><div><strong class="off">未伪造能力</strong><span>WhatsApp 不具备朋友圈功能，因此不展示无效入口</span></div></div></div>
+        <div class="pwa-card"><div class="pwa-card-head"><div><h3>桌面能力</h3><div class="pwa-muted">能力来自当前 Windows WhatsApp 暴露的 UIA 控件，不使用截图识别。</div></div></div><div class="pwa-capability"><div><strong>会话与消息</strong><span>同步列表、打开会话、读取气泡、发送并确认</span></div><div><strong>群聊</strong><span>只做查看与手动回复，自动接管一律跳过群聊</span></div><div><strong>批量加好友</strong><span>一行一个目标入队，按间隔逐条加，带日额度与重试</span></div><div><strong>接管方式</strong><span>手动一轮 / 常驻循环，只处理未读一对一会话</span></div><div><strong>国家/地区</strong><span>加好友支持任意国家码（+86 / +1 / +39…），会自动在 WhatsApp 表单里切国家</span></div><div><strong class="off">未伪造能力</strong><span>WhatsApp 不具备朋友圈功能，因此不展示无效入口</span></div></div></div>
       </section>
 
       <section class="pwa-panel" data-pwa-panel="sessions">
@@ -72,7 +72,7 @@
         <div class="pwa-field"><label>目标（一行一个）</label><textarea id="personalWhatsappFriendKeyword" class="pwa-textarea" placeholder="张三,13800138000&#10;张三,张,13800138001&#10;李四,@alice_wa"></textarea></div>
         <div class="pwa-field"><label>验证消息（添加成功后自动发送）</label><input id="personalWhatsappFriendApplyMessage" class="pwa-input" placeholder="加好友后要发的话"></div>
         <div id="personalWhatsappFriendAddError" class="pwa-msg err"></div>
-        <div class="pwa-muted">格式：<b>姓名,电话</b> 或 <b>姓名,姓氏,电话</b>；WhatsApp 添加联系人表单必须有名字，只写号码会被拒绝。只写 <b>@用户名</b> 时用用户名当名字。<b>电话必须是已注册 WhatsApp 的号码</b>，否则 WhatsApp 不会出现「保存」按钮；用 @用户名 时要对方真的设置过 WhatsApp 用户名。间隔与每日上限在「设置」弹窗里；桌面表单目前只支持中国大陆 +86。</div>
+        <div class="pwa-muted">格式：<b>姓名,电话</b> 或 <b>姓名,姓氏,电话</b>；WhatsApp 添加联系人表单必须有名字，只写号码会被拒绝。只写 <b>@用户名</b> 时用用户名当名字。<b>电话必须是已注册 WhatsApp 的号码</b>，否则 WhatsApp 不会出现「保存」按钮；用 @用户名 时要对方真的设置过 WhatsApp 用户名。间隔与每日上限在「设置」弹窗里；桌面表单会自动切换国家/地区（+86 / +1 / +39 等任意国家码）。</div>
         <div class="pwa-btn-row"><button type="button" class="btn btn-primary" id="personalWhatsappAddFriendSubmitBtn">提交好友申请</button><label class="pwa-muted" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="personalWhatsappFriendAutoStart">提交后自动启动队列</label><span class="pwa-muted" id="personalWhatsappAddFriendState">等待提交</span></div>
       </div>
     </div>

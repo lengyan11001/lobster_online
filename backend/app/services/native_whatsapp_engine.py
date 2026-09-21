@@ -1760,21 +1760,152 @@ def _contact_form_hint(root: Any) -> str:
     return " / ".join(hits)
 
 
+_COUNTRY_NAME_HINTS = {
+    "86": ("中国", "china"),
+    "852": ("中国香港", "hong kong", "香港"),
+    "853": ("中国澳门", "macau", "澳门"),
+    "886": ("中国台湾", "taiwan", "台湾"),
+}
+
+
+def _country_item_matches(text: str, digits: str) -> bool:
+    """国家列表项是否匹配目标码。
+
+    实测（本机 WhatsApp WinUI3）：列表项文本形如 `🇮🇹 意大利 Italia +39`；
+    但「中国」那条不带 +86，所以再按国家名兜底。
+    """
+    value = str(text or "")
+    want = re.sub(r"[^0-9]", "", str(digits or ""))
+    if not want:
+        return False
+    if re.search(r"\+%s(?![0-9])" % re.escape(want), value):
+        return True
+    lowered = value.lower()
+    for hint in _COUNTRY_NAME_HINTS.get(want, ()):
+        if hint and hint in lowered:
+            return True
+    return False
+
+
+def _find_contact_country_button(root: Any) -> Optional[Any]:
+    for node, _depth in _iter_nodes(root, max_depth=25, max_nodes=12000):
+        if _node_type(node) != "ButtonControl" or not _rect(node):
+            continue
+        if "国家/地区" in _node_text(node):
+            return node
+    return None
+
+
+def _find_contact_country_search(root: Any, list_top: Optional[int] = None) -> Optional[Any]:
+    best: Optional[tuple] = None
+    skip = {"搜索或开始新聊天", "名字", "姓氏", "用户名", "电话号码"}
+    for node, depth in _iter_nodes(root, max_depth=22, max_nodes=8000):
+        if _node_type(node) != "EditControl":
+            continue
+        rect = _rect(node)
+        if not rect or _node_text(node).strip() in skip:
+            continue
+        if list_top is not None and rect[1] > list_top:
+            continue
+        if best is None or depth < best[0]:
+            best = (depth, node)
+    return best[1] if best else None
+
+
+def _find_contact_country_list(root: Any) -> Optional[Any]:
+    for node, _depth in _iter_nodes(root, max_depth=22, max_nodes=10000):
+        if _node_type(node) == "ListControl" and _rect(node):
+            return node
+    return None
+
+
+def _normalize_country_digits(country_code: str) -> str:
+    """把 +86 / 86 / +8618124655127（脏数据）统一成国家码数字 "86"。"""
+    raw = re.sub(r"[^0-9]", "", str(country_code or ""))
+    if not raw:
+        return "86"
+    for size in (3, 2, 1):
+        if len(raw) >= size and raw[:size] in _COMMON_COUNTRY_CODES:
+            return raw[:size]
+    return "86"
+
+
+def select_contact_country(hwnd: int, country_code: str) -> str:
+    """把「添加联系人」表单的国家/地区切到目标码，返回切换后按钮文本（如「国家/地区：意大利 +39」）。"""
+    digits = _normalize_country_digits(country_code)
+    root = _root_for_hwnd(hwnd)
+    button = _find_contact_country_button(root)
+    if button is None:
+        raise RuntimeError("WhatsApp 添加联系人表单没有出现国家/地区选择")
+    current = _node_text(button)
+    if _country_item_matches(current, digits):
+        return current
+    _click(button)
+    time.sleep(0.9)
+    root = _root_for_hwnd(hwnd)
+    list_node = _find_contact_country_list(root)
+    search = _find_contact_country_search(root, _rect(list_node)[1] if list_node is not None else None)
+    if search is None:
+        raise RuntimeError("WhatsApp 国家/地区列表没有出现搜索框")
+    _set_edit_text(search, digits)
+    time.sleep(1.0)
+    root = _root_for_hwnd(hwnd)
+    target = None
+    for node, _depth in _iter_nodes(root, max_depth=26, max_nodes=12000):
+        if _node_type(node) != "ButtonControl" or not _rect(node):
+            continue
+        text = _node_text(node).strip()
+        if not text or text.startswith("所选国家/地区"):
+            continue
+        if _country_item_matches(text, digits):
+            target = node
+            break
+    if target is None:
+        raise RuntimeError(f"WhatsApp 国家/地区列表里没有 +{digits}，请在 WhatsApp 表单里手动选择国家后重试")
+    _click(target)
+    time.sleep(0.9)
+    root = _root_for_hwnd(hwnd)
+    confirm_button = _find_contact_country_button(root)
+    confirmed = _node_text(confirm_button) if confirm_button is not None else ""
+    if not _country_item_matches(confirmed, digits):
+        raise RuntimeError(f"WhatsApp 国家/地区没有切换成功（当前显示：{confirmed or '未知'}）")
+    return confirmed
+
+
+def _collect_contact_form_fields(root: Any) -> Dict[str, Any]:
+    """收集「添加联系人」表单的输入框（名字/姓氏/用户名/电话号码）。"""
+    aliases = {
+        "first_name": {"名字", "first name"},
+        "last_name": {"姓氏", "last name"},
+        "username": {"用户名", "username"},
+        "phone": {"电话号码", "phone number"},
+    }
+    fields: Dict[str, Any] = {}
+    for node, _depth in _iter_nodes(root, max_depth=28, max_nodes=12000):
+        if _node_type(node) != "EditControl" or not _rect(node):
+            continue
+        label = _node_text(node).strip().casefold()
+        for key, names in aliases.items():
+            if label in names and key not in fields:
+                fields[key] = node
+    return fields
+
+
 def add_contact(*, first_name: str, last_name: str = "", username: str = "", phone: str = "", country_code: str = "+86") -> Dict[str, Any]:
     first = str(first_name or "").strip()[:200]
     last = str(last_name or "").strip()[:200]
     user = str(username or "").strip()[:240]
-    number = re.sub(r"[^0-9+]", "", str(phone or "").strip())[:80]
-    country = str(country_code or "+86").strip()[:20]
+    digits = _normalize_country_digits(country_code)
+    country = f"+{digits}"
+    number = re.sub(r"[^0-9]", "", str(phone or "").strip())[:40]
+    if number.startswith(digits):
+        number = number[len(digits):]
+    # target 先算出来：下面任何一步失败时，except 里记录错误都要用到它
+    target = user or f"{country}{number}"
     if not first:
         raise RuntimeError("请填写联系人名字")
     if not user and not number:
         raise RuntimeError("请填写 WhatsApp 用户名或电话号码")
-    if number.startswith(country):
-        number = number[len(country):]
-    if country not in {"+86", "86"}:
-        raise RuntimeError("当前桌面自动化仅确认支持中国 +86；其他国家请先在 WhatsApp 表单手动切换国家")
-    target = user or f"+86{number}"
     _claim_action("添加 WhatsApp 联系人")
     hwnd: Optional[int] = None
     try:
@@ -1790,20 +1921,17 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
         _click(add_buttons[-1])
         time.sleep(0.65)
         root = _root_for_hwnd(hwnd)
-        fields: Dict[str, Any] = {}
-        aliases = {
-            "first_name": {"名字", "first name"}, "last_name": {"姓氏", "last name"},
-            "username": {"用户名", "username"}, "phone": {"电话号码", "phone number"},
-        }
-        for node, _depth in _iter_nodes(root, max_depth=28, max_nodes=12000):
-            if _node_type(node) != "EditControl" or not _rect(node):
-                continue
-            label = _node_text(node).strip().casefold()
-            for key, names in aliases.items():
-                if label in names and key not in fields:
-                    fields[key] = node
+        fields = _collect_contact_form_fields(root)
         if "first_name" not in fields:
             raise RuntimeError("WhatsApp 添加联系人表单没有出现")
+        # 先切国家/地区（切换会让表单重建），再填其余字段，避免刚填的内容被清掉
+        if number:
+            select_contact_country(hwnd, digits)
+            time.sleep(0.4)
+            root = _root_for_hwnd(hwnd)
+            fields = _collect_contact_form_fields(root)
+            if "first_name" not in fields:
+                raise RuntimeError("切换国家/地区后 WhatsApp 联系人表单没有回来")
         _set_edit_text(fields["first_name"], first)
         if last and fields.get("last_name") is not None:
             _set_edit_text(fields["last_name"], last)
@@ -1823,14 +1951,16 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
         time.sleep(0.9)
         root = _root_for_hwnd(hwnd)
         still_editing = any(
-            _node_type(node) == "EditControl" and _node_text(node).strip().casefold() in aliases["first_name"] and _rect(node)
+            _node_type(node) == "EditControl" and _node_text(node).strip().casefold() in {"名字", "first name"} and _rect(node)
             for node, _depth in _iter_nodes(root, max_depth=25, max_nodes=9000)
         )
         if still_editing:
             raise RuntimeError("WhatsApp 仍停留在联系人表单，未确认保存成功" + ("；表单提示：" + hint if hint else ""))
         contact = _persist_contact({
-            "first_name": first, "last_name": last, "username": user.lstrip("@"), "phone": f"+86{number}" if number else "",
-            "country_code": "+86", "display_name": " ".join(part for part in (first, last) if part), "source": "desktop_add_contact",
+            "first_name": first, "last_name": last, "username": user.lstrip("@"),
+            "phone": f"{country}{number}" if number else "",
+            "country_code": country, "display_name": " ".join(part for part in (first, last) if part),
+            "source": "desktop_add_contact",
         })
         result = {"ok": True, "contact": contact, "message": "WhatsApp 联系人已保存"}
         _record_operation("add_contact", target, "success", result["message"], result)
