@@ -1,7 +1,7 @@
 {
-  "version": "2.0.66",
-  "build": 346,
-  "applied_at": "2026-09-21T15:37:38+08:00",
-  "note": "WhatsApp 识别诊断可视化(状态页+诊断包) + 无psutil兜底 + 版本守卫",
-  "bundle_sha256": "537310f30b7cc62d23a9d06d730035cf15641f68a4c5686a19eff3148caa11be"
+  "version": "2.0.67",
+  "build": 347,
+  "applied_at": "2026-09-21T15:47:49+08:00",
+  "note": "WhatsApp: 内置UIA依赖随包下发 + ctypes进程枚举/剪贴板兜底 + 依赖诊断与一键修复",
+  "bundle_sha256": "ffe844e0c90593f9b91cd8aaf2664d3421f2684ab300cebdad9104c4af15e5bb"
 }
