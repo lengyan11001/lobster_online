@@ -3617,6 +3617,37 @@ def _local_asset_to_native_wechat_attachment(asset_id: str) -> Optional[Dict[str
         db.close()
 
 
+_CONTENT_TYPE_SUFFIXES = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "video/x-msvideo": ".avi",
+    "video/webm": ".webm",
+}
+
+
+def _moments_extension_for_content_type(content_type: str, fallback_name: str, url: str) -> str:
+    """素材落盘扩展名只认真实 Content-Type；拿不到再看 URL，最后才用调用方文件名。
+
+    以前无论下载到什么都用 `moments-N.jpg`，于是视频被存成 .jpg，
+    微信朋友圈把它当图片处理直接报「处理失败」。
+    """
+    ctype = str(content_type or "").split(";", 1)[0].strip().lower()
+    if ctype in _CONTENT_TYPE_SUFFIXES:
+        return _CONTENT_TYPE_SUFFIXES[ctype]
+    for candidate in (str(fallback_name or ""), str(url or "")):
+        suffix = Path(candidate.split("?", 1)[0]).suffix.lower()
+        if suffix and len(suffix) <= 6:
+            return suffix
+    return ".bin"
+
+
+
+
 async def _download_url_to_native_wechat_attachment(
     url: str,
     *,
@@ -3627,7 +3658,15 @@ async def _download_url_to_native_wechat_attachment(
     clean_url = str(url or "").strip()
     if not clean_url:
         raise RuntimeError("朋友圈发布缺少素材 URL")
-    target = native_wechat_engine.make_native_wechat_upload_path(filename or _filename_from_url_for_moments(clean_url, media_type))
+    fallback_name = filename or _filename_from_url_for_moments(clean_url, media_type)
+
+    def _target_for(content_type_value: str) -> Path:
+        suffix = _moments_extension_for_content_type(content_type_value, fallback_name, clean_url)
+        return native_wechat_engine.make_native_wechat_upload_path(
+            str(Path(fallback_name).with_suffix(suffix).name) if fallback_name else "moments" + suffix
+        )
+
+    target = _target_for("")
     timeout = httpx.Timeout(600.0, connect=10.0, read=600.0, write=30.0, pool=10.0)
     req_headers = {"User-Agent": "Lobster-H5-Moments/1.0", "Accept": "*/*"}
     if _should_forward_auth_for_download_url(clean_url):
@@ -3645,6 +3684,15 @@ async def _download_url_to_native_wechat_attachment(
                     text = await resp.aread()
                     raise RuntimeError(f"朋友圈素材下载失败 HTTP {resp.status_code}: {text[:200]!r}")
                 content_type = str(resp.headers.get("content-type") or mimetypes.guess_type(str(target))[0] or "application/octet-stream").split(";", 1)[0]
+                # 响应头才是真实类型：`moments-2.jpg` 实际是 mov/mp4 时改存成 .mp4，
+                # 否则微信按 .jpg 解析视频，直接弹「处理失败」。
+                desired = _target_for(content_type)
+                if desired != target:
+                    try:
+                        target.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    target = desired
                 with target.open("wb") as out:
                     async for chunk in resp.aiter_bytes(1024 * 1024):
                         if not chunk:
@@ -3705,6 +3753,12 @@ async def _wechat_moments_attachments_from_draft(
                     headers=headers,
                 )
             )
+    # 节点类型决定素材：微信朋友圈图文只留图片，视频节点只留视频（不再混发）
+    draft_media_type = str(draft.get("media_type") or "").strip().lower()
+    if draft_media_type == "video":
+        files = [item for item in files if str(item.get("kind") or "").strip().lower() == "video"] or files
+    elif draft_media_type in ("", "image", "image_text"):
+        files = [item for item in files if str(item.get("kind") or "").strip().lower() != "video"]
     asset_id = str(draft.get("asset_id") or "").strip()
     media_type = str(draft.get("media_type") or "").strip()
     source_url = str(draft.get("source_url") or draft.get("url") or "").strip()

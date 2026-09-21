@@ -1049,7 +1049,8 @@ def test_moments_publish_rejects_video_longer_than_wechat_limit(monkeypatch):
     monkeypatch.setattr(engine, "_probe_moments_video_duration", lambda _path: 50.916667)
 
     with pytest.raises(engine._MomentsPublishError, match="最长支持30秒") as error:
-        engine._publish_moments_local_once("pc-wechat-default", attachments=files)
+        # media_type=video：图文节点只发图片，视频素材必须按视频发布提交
+        engine._publish_moments_local_once("pc-wechat-default", attachments=files, media_type="video")
 
     assert error.value.steps == [
         {"step": "validate_moments_video", "ok": False, "duration_seconds": 50.917}

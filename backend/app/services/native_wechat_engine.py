@@ -17370,6 +17370,14 @@ def _moments_publish_rejection(root: Any) -> str:
         "视频过长",
         "不能分享此视频",
         "无法分享此视频",
+        # 图片侧：微信处理不了素材时只弹这些提示（以前识别不到，只能等超时）
+        "处理失败",
+        "图片处理失败",
+        "上传失败",
+        "图片过大",
+        "不支持的文件格式",
+        "不支持此文件",
+        "无法添加此图片",
     ):
         if marker in text:
             return marker
@@ -17956,10 +17964,10 @@ def _publish_moments_local_once(
     try:
         if not text and not files:
             raise RuntimeError("朋友圈发布缺少正文或素材")
+        # 节点类型决定发什么：图文节点只发图片，视频节点只发视频（不再混发）
+        files = _split_moments_media(files, media_type=media_type, steps=steps)
         image_count = sum(1 for file in files if file.get("kind") == "image")
         video_count = sum(1 for file in files if file.get("kind") == "video")
-        if image_count and video_count:
-            raise RuntimeError("朋友圈一次发布暂不混合图片和视频")
         if image_count > 9:
             raise RuntimeError("朋友圈图文一次最多选择9张图片")
         if video_count > 1:
@@ -19564,14 +19572,175 @@ def make_native_wechat_upload_path(filename: str) -> Path:
     return native_wechat_upload_dir() / f"{uuid.uuid4().hex}_{stem}{suffix}"
 
 
-def native_wechat_file_kind(path: Path, content_type: str = "") -> str:
-    suffix = path.suffix.lower()
-    ctype = (content_type or mimetypes.guess_type(str(path))[0] or "").lower()
-    if suffix in _IMAGE_SUFFIXES or ctype.startswith("image/"):
+_MEDIA_SNIFF_BYTES = 64
+
+
+def _sniff_media_kind(path: Path) -> str:
+    """按文件头判断真实媒体类型（图片/视频/未知）。
+
+    线上事故：朋友圈图文把「内容是 mov/mp4、文件名却是 .jpg」的素材当图片发出去，
+    微信直接弹「处理失败」。文件名和调用方声明的类型都不可信，必须看文件头。
+    """
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(_MEDIA_SNIFF_BYTES)
+    except OSError:
+        return ""
+    if len(head) < 12:
+        return ""
+    if head.startswith(b"\xff\xd8\xff") or head.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image"
-    if suffix in _VIDEO_SUFFIXES or ctype.startswith("video/"):
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image"
+    if head[4:8] == b"ftyp":
         return "video"
+    if head.startswith(b"\x1aE\xdf\xa3"):  # matroska/webm
+        return "video"
+    if head.startswith(b"RIFF") and head[8:12] == b"AVI ":
+        return "video"
+    if head.startswith(b"FLV\x01"):
+        return "video"
+    return ""
+
+
+def _sniff_image_format(path: Path) -> str:
+    """按文件头判断图片格式；微信朋友圈稳妥只支持 jpg/png。"""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(_MEDIA_SNIFF_BYTES)
+    except OSError:
+        return ""
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "webp"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    return ""
+
+
+def native_wechat_file_kind(path: Path, content_type: str = "") -> str:
+    """真实类型优先：视频信号 > 图片信号 > 后缀。
+
+    旧顺序是「后缀是图片就先返回 image」，于是 `.jpg` 名的视频被判成图片，
+    图文发布把视频发给朋友圈导致微信处理失败。
+    """
+    ctype = (content_type or "").lower()
+    suffix = path.suffix.lower()
+    sniffed = _sniff_media_kind(path)
+    if ctype.startswith("video/") or sniffed == "video" or suffix in _VIDEO_SUFFIXES:
+        return "video"
+    if ctype.startswith("image/") or sniffed == "image" or suffix in _IMAGE_SUFFIXES:
+        return "image"
     return "file"
+
+
+def _aligned_media_path(path: Path, kind: str) -> Path:
+    """把扩展名纠正成真实类型（`.jpg` 里的视频 → `.mp4`），微信按扩展名解析素材。"""
+    if kind not in {"image", "video"}:
+        return path
+    suffix = path.suffix.lower()
+    if kind == "video" and suffix in _VIDEO_SUFFIXES:
+        return path
+    if kind == "image" and suffix in _IMAGE_SUFFIXES:
+        return path
+    target = path.with_suffix(".mp4" if kind == "video" else ".jpg")
+    if target == path:
+        return path
+    try:
+        if target.exists():
+            target.unlink(missing_ok=True)
+        path.rename(target)
+        return target
+    except OSError:
+        return path
+
+
+_MOMENTS_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
+_MOMENTS_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _split_moments_media(
+    files: List[Dict[str, Any]],
+    *,
+    media_type: str,
+    steps: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """按节点类型把素材分流：图文只发图片，视频只发视频（不再混发）。
+
+    以前不做分流，图文发布会把同一批素材里的视频一起带上（微信直接处理失败）。
+    """
+    want_video = str(media_type or "").strip().lower() == "video"
+    kept: List[Dict[str, Any]] = []
+    dropped_images: List[str] = []
+    dropped_videos: List[str] = []
+    for item in files:
+        kind = str(item.get("kind") or "").strip().lower()
+        name = str(item.get("filename") or Path(str(item.get("local_path") or "")).name)
+        if want_video:
+            if kind == "video":
+                kept.append(item)
+            else:
+                dropped_images.append(name)
+            continue
+        if kind == "video":
+            dropped_videos.append(name)
+            continue
+        if kind == "image":
+            path = Path(str(item.get("local_path") or name))
+            suffix = path.suffix.lower()
+            size = int(item.get("size") or 0)
+            image_format = _sniff_image_format(path) if path.exists() else ""
+            if image_format and image_format not in {"jpeg", "png"}:
+                dropped_images.append(name)
+                continue
+            if not image_format and suffix not in _MOMENTS_IMAGE_SUFFIXES:
+                dropped_images.append(name)
+                continue
+            if size and size > _MOMENTS_IMAGE_MAX_BYTES:
+                dropped_images.append(name)
+                continue
+            kept.append(item)
+            continue
+        dropped_images.append(name)
+    if dropped_videos:
+        steps.append(
+            {
+                "step": "skip_video_material_for_image_post",
+                "ok": True,
+                "count": len(dropped_videos),
+                "names": dropped_videos[:6],
+                "reason": "朋友圈图文只发图片，视频素材已跳过（视频请用视频发布）",
+            }
+        )
+    if dropped_images:
+        steps.append(
+            {
+                "step": "skip_unusable_image_material",
+                "ok": True,
+                "count": len(dropped_images),
+                "names": dropped_images[:6],
+                "reason": "只支持 jpg/png 且单张不超过 10MB",
+            }
+        )
+    if not kept:
+        if want_video:
+            raise RuntimeError(
+                "朋友圈视频发布没有可用视频素材（当前素材：%s）"
+                % ("、".join((dropped_images + dropped_videos)[:6]) or "空")
+            )
+        raise RuntimeError(
+            "朋友圈图文没有可用图片素材：本次素材是 %s，请改用视频发布或重新生成配图"
+            % ("、".join(dropped_videos[:6]) if dropped_videos else ("、".join(dropped_images[:6]) or "空"))
+        )
+    return kept
+
+
+
 
 
 def _resolve_native_wechat_attachment(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -19591,12 +19760,19 @@ def _resolve_native_wechat_attachment(item: Dict[str, Any]) -> Dict[str, Any]:
     filename = str(item.get("filename") or item.get("name") or path.name).strip() or path.name
     size = int(item.get("size") or path.stat().st_size)
     content_type = str(item.get("content_type") or mimetypes.guess_type(str(path))[0] or "application/octet-stream")
+    kind = native_wechat_file_kind(path, content_type)
+    # 扩展名要和真实内容一致：`.jpg` 名的视频要让微信看到 `.mp4`
+    aligned = _aligned_media_path(path, kind)
+    if aligned != path:
+        path = aligned
+        filename = Path(filename).with_suffix(path.suffix).name
+        content_type = mimetypes.guess_type(str(path))[0] or content_type
     return {
         "local_path": str(path),
         "filename": filename,
         "size": size,
         "content_type": content_type,
-        "kind": native_wechat_file_kind(path, content_type),
+        "kind": kind,
     }
 
 
