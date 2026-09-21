@@ -64,6 +64,19 @@ DEFAULT_PERSONA: Dict[str, Any] = {
 }
 POOL_TOUCH_OFFSETS_DAYS = (0, 2, 5)
 
+# 已读未回：换角度撩动（每轮换一个角度，不重复；用完即停，转公海池）
+DEFAULT_NUDGE_ANGLES: List[Dict[str, str]] = [
+    {"key": "value_case", "label": "价值/案例",
+     "goal": "用同行或同类买家的落地场景切入，问对方是不是也在做这件事"},
+    {"key": "new_price", "label": "新品/新价",
+     "goal": "提到新型号或更新后的报价表已经就绪，问要不要现在发过去"},
+    {"key": "choice", "label": "选择题",
+     "goal": "给两个具体选项让对方低成本回答（型号 A 还是 B / 先样品还是整单）"},
+    {"key": "resource", "label": "资源",
+     "goal": "提供一份对方用得上的资料（选型指南/认证/检测报告），换一次回复"},
+]
+NUDGE_MAX_CHARS = 240
+
 
 # ---------------------------------------------------------------- 配置与规则（纯函数，便于测试）
 
@@ -86,6 +99,11 @@ def default_reception_config() -> Dict[str, Any]:
         "handoff_triggers": list(DEFAULT_HANDOFF_TRIGGERS),
         "banned_words": list(DEFAULT_BANNED_WORDS),
         "persona": dict(DEFAULT_PERSONA),
+        "read_no_reply_enabled": True,
+        "nudge_max": 3,
+        "nudge_intervals_minutes": [120, 1440, 4320],
+        "nudge_angles": [dict(item) for item in DEFAULT_NUDGE_ANGLES],
+        "nudge_max_chars": NUDGE_MAX_CHARS,
     }
 
 
@@ -99,6 +117,57 @@ def _as_list(value: Any, fallback: List[str]) -> List[str]:
         if items:
             return items
     return list(fallback)
+
+
+def _as_int_list(value: Any, fallback: List[int]) -> List[int]:
+    items: List[int] = []
+    if isinstance(value, (list, tuple)):
+        for raw in value:
+            try:
+                number = int(float(str(raw).strip()))
+            except (TypeError, ValueError):
+                continue
+            if number > 0:
+                items.append(number)
+    elif isinstance(value, str):
+        for chunk in value.replace("，", ",").split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            try:
+                number = int(float(chunk))
+            except ValueError:
+                continue
+            if number > 0:
+                items.append(number)
+    return items or list(fallback)
+
+
+def _as_angle_list(value: Any) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                key = str(item.get("key") or "").strip()
+                label = str(item.get("label") or key).strip()
+                goal = str(item.get("goal") or "").strip()
+            else:
+                text = str(item or "").strip()
+                if not text:
+                    continue
+                key, label, goal = text, text, text
+            if not (key or label or goal):
+                continue
+            out.append({"key": key or label, "label": label or key, "goal": goal or label})
+    return out or [dict(item) for item in DEFAULT_NUDGE_ANGLES]
+
+
+def next_nudge_angle(config: Dict[str, Any], turn_index: int) -> Dict[str, str]:
+    """第 N 次撩动用哪个角度：按顺序轮转，保证每次角度不同。"""
+    angles = _as_angle_list(config.get("nudge_angles"))
+    if not angles:
+        return {"key": "value_case", "label": "价值/案例", "goal": ""}
+    return angles[int(turn_index or 0) % len(angles)]
 
 
 def config_to_dict(row: Optional[AlibabaReceptionConfig]) -> Dict[str, Any]:
@@ -130,6 +199,16 @@ def config_to_dict(row: Optional[AlibabaReceptionConfig]) -> Dict[str, Any]:
                 if isinstance(row.meta, dict)
                 else 30
             ),
+            "read_no_reply_enabled": bool((row.meta or {}).get("read_no_reply_enabled", True))
+            if isinstance(row.meta, dict) else True,
+            "nudge_max": int((row.meta or {}).get("nudge_max", 3)) if isinstance(row.meta, dict) else 3,
+            "nudge_intervals_minutes": _as_int_list(
+                (row.meta or {}).get("nudge_intervals_minutes"), [120, 1440, 4320]
+            ) if isinstance(row.meta, dict) else [120, 1440, 4320],
+            "nudge_angles": _as_angle_list((row.meta or {}).get("nudge_angles"))
+            if isinstance(row.meta, dict) else [dict(item) for item in DEFAULT_NUDGE_ANGLES],
+            "nudge_max_chars": int((row.meta or {}).get("nudge_max_chars", NUDGE_MAX_CHARS))
+            if isinstance(row.meta, dict) else NUDGE_MAX_CHARS,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
     )
@@ -380,12 +459,105 @@ def pending_counts(
     }
 
 
+def _nudge_state(session: AlibabaReceptionSession) -> Dict[str, Any]:
+    meta = session.meta if isinstance(session.meta, dict) else {}
+    try:
+        count = int(meta.get("nudge_count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    return {
+        "count": count,
+        "last_angle": str(meta.get("last_nudge_angle") or ""),
+        "last_at": _parse_iso(meta.get("last_nudge_at")),
+    }
+
+
+def _parse_iso(value: Any) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def nudge_due_at(config: Dict[str, Any], session: AlibabaReceptionSession, now: Optional[datetime] = None) -> Optional[datetime]:
+    """下一次可以撩动的时间点（None = 不该再撩）。"""
+    if not bool(config.get("read_no_reply_enabled", True)):
+        return None
+    state = _nudge_state(session)
+    max_times = int(config.get("nudge_max") or 0)
+    intervals = _as_int_list(config.get("nudge_intervals_minutes"), [120, 1440, 4320])
+    if state["count"] >= max_times:
+        return None
+    if not session.last_seller_at:
+        return None
+    if session.last_buyer_at and session.last_seller_at <= session.last_buyer_at:
+        return None      # 买家又说话了 → 走正常接待，不再撩
+    index = min(state["count"], len(intervals) - 1)
+    anchor = state["last_at"] or session.last_seller_at
+    return anchor + timedelta(minutes=int(intervals[index]))
+
+
+def _nudge_candidates(
+    db: Session,
+    user_id: int,
+    account_id: int,
+    *,
+    config: Dict[str, Any],
+    limit: int = 3,
+    now: Optional[datetime] = None,
+) -> List[Dict[str, Any]]:
+    """已读未回、到点可以换角度撩动的会话（按最久没动静的先来）。"""
+    anchor = now or _now()
+    rows = (
+        db.query(AlibabaReceptionSession)
+        .filter(
+            AlibabaReceptionSession.account_id == account_id,
+            AlibabaReceptionSession.human_takeover.is_(False),
+        )
+        .all()
+    )
+    out: List[Dict[str, Any]] = []
+    for session in rows:
+        due = nudge_due_at(config, session, anchor)
+        if due is None or due > anchor:
+            continue
+        inquiry = (
+            db.query(AlibabaInquiry)
+            .filter(
+                AlibabaInquiry.user_id == user_id,
+                AlibabaInquiry.account_id == account_id,
+                AlibabaInquiry.inquiry_id == session.inquiry_id,
+            )
+            .first()
+        )
+        if not inquiry:
+            continue
+        state = _nudge_state(session)
+        out.append({
+            "session": session,
+            "inquiry": inquiry,
+            "nudge_index": state["count"],
+            "last_angle": state["last_angle"],
+            "due_at": due,
+        })
+    out.sort(key=lambda item: item["due_at"])
+    return out[: max(1, limit)]
+
+
 # ---------------------------------------------------------------- 请求体
 
 class ReceptionConfigBody(BaseModel):
     enabled: Optional[bool] = None
     dry_run: Optional[bool] = None
     pending_window_days: Optional[int] = Field(default=None, ge=0, le=3650)
+    read_no_reply_enabled: Optional[bool] = None
+    nudge_max: Optional[int] = Field(default=None, ge=0, le=10)
+    nudge_intervals_minutes: Optional[List[int]] = None
+    nudge_angles: Optional[List[Dict[str, Any]]] = None
+    nudge_max_chars: Optional[int] = Field(default=None, ge=60, le=1200)
     interval_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
     online_interval_seconds: Optional[int] = Field(default=None, ge=10, le=3600)
     hot_interval_seconds: Optional[int] = Field(default=None, ge=10, le=3600)
@@ -406,6 +578,8 @@ class ReceptionRunBody(BaseModel):
     dry_run: Optional[bool] = None
     limit: int = Field(default=5, ge=1, le=30)
     inquiry_ids: List[str] = Field(default_factory=list)
+    include_nudges: bool = True
+    nudge_limit: int = Field(default=3, ge=0, le=20)
 
 
 class TakeoverBody(BaseModel):
@@ -451,11 +625,27 @@ def save_reception_config(
     row = _get_or_create_config(db, current_user.id, account_id)
     payload = body.model_dump(exclude_none=True)
     window_days = payload.pop("pending_window_days", None)
+    meta_keys = {
+        "read_no_reply_enabled": "read_no_reply_enabled",
+        "nudge_max": "nudge_max",
+        "nudge_intervals_minutes": "nudge_intervals_minutes",
+        "nudge_angles": "nudge_angles",
+        "nudge_max_chars": "nudge_max_chars",
+    }
+    meta_updates = {key: payload.pop(key) for key in list(payload.keys()) if key in meta_keys}
     for key, value in payload.items():
         setattr(row, key, value)
-    if window_days is not None:
-        meta = row.meta if isinstance(row.meta, dict) else {}
-        meta["pending_window_days"] = int(window_days)
+    if window_days is not None or meta_updates:
+        meta = dict(row.meta) if isinstance(row.meta, dict) else {}
+        if window_days is not None:
+            meta["pending_window_days"] = int(window_days)
+        for key, value in meta_updates.items():
+            if key == "nudge_angles":
+                meta[key] = _as_angle_list(value)
+            elif key == "nudge_intervals_minutes":
+                meta[key] = _as_int_list(value, [120, 1440, 4320])
+            else:
+                meta[key] = value
         row.meta = meta
     if row.delay_max_seconds < row.delay_min_seconds:
         row.delay_max_seconds = row.delay_min_seconds
@@ -490,6 +680,12 @@ def reception_dashboard(
     window_days = int(config.get("pending_window_days") or 0)
     pending = _pending_inquiries(db, current_user.id, account_id, limit=200, window_days=window_days, now=now)
     counts = pending_counts(db, current_user.id, account_id, window_days=window_days, now=now)
+    try:
+        nudge_ready = len(_nudge_candidates(
+            db, current_user.id, account_id, config=config, limit=50, now=now
+        ))
+    except Exception:
+        nudge_ready = 0
     sessions = (
         db.query(AlibabaReceptionSession)
         .filter(AlibabaReceptionSession.account_id == account_id)
@@ -575,6 +771,7 @@ def reception_dashboard(
             "pending_historical": counts["historical"],
             "pending_total": counts["total"],
             "pending_window_days": window_days,
+            "nudge_ready": nudge_ready,
             "online": online,
             "read_no_reply": read_no_reply,
             "today_sent": int(today_sent),
@@ -677,6 +874,8 @@ async def run_reception(
         "skipped": 0,
         "handoff": 0,
         "blocked": 0,
+        "nudged": 0,
+        "nudge_previewed": 0,
     }
     if not config["enabled"] and not dry_run:
         result["skipped_reason"] = "排期未启用（可先用 dry-run 预览）"
@@ -804,6 +1003,116 @@ async def run_reception(
             db.rollback()
             entry.update({"status": "failed", "error": str(exc)[:400]})
             result["items"].append(entry)
+
+    # ---- 已读未回：换角度撩动（另一个角度的话术触达）----
+    if body.include_nudges and int(body.nudge_limit or 0) > 0 and bool(config.get("read_no_reply_enabled", True)):
+        nudge_candidates = _nudge_candidates(
+            db, current_user.id, account_id, config=config, limit=int(body.nudge_limit), now=now
+        )
+        result["nudge_candidates"] = len(nudge_candidates)
+        for candidate in nudge_candidates:
+            session = candidate["session"]
+            inquiry = candidate["inquiry"]
+            angle = next_nudge_angle(config, candidate["nudge_index"])
+            entry: Dict[str, Any] = {
+                "inquiry_id": inquiry.inquiry_id,
+                "buyer": inquiry.buyer_name or "",
+                "kind": "nudge",
+                "nudge_index": candidate["nudge_index"] + 1,
+                "angle": angle.get("label") or angle.get("key"),
+                "status": "pending",
+            }
+            if not result["in_work_window"] and not dry_run:
+                entry.update({"status": "skipped", "reason": "不在工作时段"})
+                result["skipped"] += 1
+                result["items"].append(entry)
+                continue
+            try:
+                persona = config.get("persona") or {}
+                instruction = (
+                    "本轮目的：换角度触达（第 %d 次，角度『%s』：%s）。"
+                    "要求：%d 字符以内、一句话 + 一个轻问题、不要催单、不要重复上一轮角度（上一轮：%s）；"
+                    "人称/公司按人设：%s %s @ %s"
+                    % (
+                        candidate["nudge_index"] + 1,
+                        angle.get("label") or "",
+                        angle.get("goal") or "",
+                        int(config.get("nudge_max_chars") or NUDGE_MAX_CHARS),
+                        candidate["last_angle"] or "无",
+                        persona.get("name") or "",
+                        persona.get("title") or "",
+                        persona.get("company") or "",
+                    )
+                )
+                draft = await draft_reply(
+                    account_id,
+                    ReplyDraftBody(inquiry_id=inquiry.inquiry_id, instruction=instruction),
+                    request,
+                    current_user,
+                    db,
+                )
+                content = clamp_reply_text(
+                    str((draft or {}).get("draft", {}).get("reply") or ""),
+                    int(config.get("nudge_max_chars") or NUDGE_MAX_CHARS),
+                )
+                if not content:
+                    raise RuntimeError("nudge draft empty")
+                banned = find_banned_words(content, list(config["banned_words"]))
+                if banned:
+                    result["blocked"] += 1
+                    entry.update({"status": "blocked", "reason": "命中禁词：" + ",".join(banned[:3]), "draft": content})
+                    result["items"].append(entry)
+                    continue
+                if dry_run:
+                    result["nudge_previewed"] += 1
+                    entry.update({"status": "dry_run", "draft": content})
+                    result["items"].append(entry)
+                    continue
+                async with lock:
+                    page = await _get_account_page(acct, visible=True)
+                    await _goto(
+                        page,
+                        inquiry.source_url
+                        or f"https://message.alibaba.com/message/maDetail.htm?imInquiryId={inquiry.inquiry_id}",
+                    )
+                    send = await _send_reply_via_page(page, content)
+                    if not send.get("ok"):
+                        raise RuntimeError(str(send.get("error") or "send failed"))
+                uid = hashlib.sha1(
+                    f"nudge\0{_now().isoformat()}\0{content}".encode("utf-8")
+                ).hexdigest()[:40]
+                db.add(
+                    AlibabaInquiryMessage(
+                        user_id=current_user.id,
+                        account_id=account_id,
+                        inquiry_id=inquiry.inquiry_id,
+                        message_uid=uid,
+                        direction="seller",
+                        sender_name="me",
+                        content=content,
+                        msg_type="text",
+                        sent_at=_now(),
+                        raw={"source": "ai_nudge", "angle": angle.get("key"), "nudge_index": candidate["nudge_index"] + 1},
+                    )
+                )
+                meta = dict(session.meta) if isinstance(session.meta, dict) else {}
+                meta["nudge_count"] = candidate["nudge_index"] + 1
+                meta["last_nudge_angle"] = angle.get("label") or angle.get("key")
+                meta["last_nudge_at"] = _now().isoformat()
+                session.meta = meta
+                session.stage = "nudge" if meta["nudge_count"] < int(config.get("nudge_max") or 3) else "dormant"
+                session.last_action = "ai_nudge"
+                session.last_action_at = _now()
+                session.last_seller_at = _now()
+                db.commit()
+                result["nudged"] += 1
+                entry.update({"status": "sent", "draft": content})
+                result["items"].append(entry)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[ALI-RECEPTION] nudge failed inquiry=%s err=%s", inquiry.inquiry_id, exc)
+                db.rollback()
+                entry.update({"status": "failed", "error": str(exc)[:400]})
+                result["items"].append(entry)
 
     result["next_scan_seconds"] = next_scan_seconds(config)
     return result

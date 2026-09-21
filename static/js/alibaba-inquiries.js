@@ -375,6 +375,7 @@
       },
       { key: 'online', num: stats.online, label: '在线客户', note: '在线要提频到 60s/30s', view: 'inquiries' },
       { key: 'read', num: stats.read_no_reply, label: '已读未回', note: '可以主动撩动', view: 'inquiries' },
+      { key: 'nudge', num: stats.nudge_ready, label: '待撩动（换角度）', note: '到点用另一个角度触达', view: 'inquiries' },
       { key: 'sent', num: stats.today_sent, label: '今日已回', note: '含人工与 AI', view: 'inquiries' },
       { key: 'handoff', num: stats.human_takeover, label: '人工接管', note: '命中红线或手动接管', view: 'inquiries' },
       { key: 'pool', num: stats.pool_pending, label: '公海池待激活', note: 'T0/T+2d/T+5d', view: 'pool' },
@@ -1331,6 +1332,23 @@
       '<label class="ali-switch"><input type="checkbox" id="aliCfgPersonal"' + (cfg.accept_personal_orders ? ' checked' : '') + '> 接个人订单</label>' +
       '</div>' +
       '</div></div>' +
+      '<div class="ali-card"><div class="ali-card-head"><div class="ali-card-title">已读未回 · 换角度触达</div>' +
+      '<div class="ali-toolbar">' +
+      '<label class="ali-switch"><input type="checkbox" id="aliCfgNudgeEnabled"' + (cfg.read_no_reply_enabled ? ' checked' : '') + '> 开启撩动</label>' +
+      '</div></div><div class="ali-card-body">' +
+      '<div class="ali-grid-2">' +
+      '<div class="ali-field"><div class="ali-field-label">最多触达次数</div><input class="ali-input" id="aliCfgNudgeMax" value="' + esc(num('nudge_max', 3)) + '"></div>' +
+      '<div class="ali-field"><div class="ali-field-label">字节数上限</div><input class="ali-input" id="aliCfgNudgeChars" value="' + esc(num('nudge_max_chars', 240)) + '"></div>' +
+      '</div>' +
+      '<div class="ali-field"><div class="ali-field-label">间隔（分钟，逗号分隔；第 1/2/3 次分别等多久）</div>' +
+      '<input class="ali-input" id="aliCfgNudgeIntervals" value="' + esc((cfg.nudge_intervals_minutes || [120, 1440, 4320]).join(',')) + '"></div>' +
+      '<div class="ali-field"><div class="ali-field-label">角度列表（每行一个：标签｜目标）</div>' +
+      '<textarea class="ali-input" id="aliCfgNudgeAngles">' +
+      esc((cfg.nudge_angles || []).map(function (a) { return (a.label || '') + '｜' + (a.goal || ''); }).join('\n')) +
+      '</textarea></div>' +
+      '<div class="ali-note">逻辑：我方最后一条发出后对方一直不回 → 间隔到点就用<b>不同角度</b>再触达一次（不重复上一轮角度），' +
+      '超次数后标为「休眠」并建议进公海池；期间对方一回复就回到正常接待。</div>' +
+      '</div></div>' +
       '<div class="ali-inline" style="justify-content:flex-end;margin-top:12px;">' +
       '<button type="button" class="ali-btn primary" data-act="save">保存配置</button>' +
       '</div>';
@@ -1338,6 +1356,15 @@
       var splitList = function (id) {
         return ($(id).value || '').split(',').map(function (x) { return x.trim(); }).filter(Boolean);
       };
+      var angleLines = ($('aliCfgNudgeAngles').value || '').split('\n').map(function (line) {
+        var text = line.trim();
+        if (!text) return null;
+        var parts = text.split('｜');
+        var label = (parts[0] || '').trim();
+        var goal = (parts[1] || '').trim();
+        if (!label && !goal) return null;
+        return { key: label || goal, label: label || goal, goal: goal || label };
+      }).filter(Boolean);
       var payload = {
         enabled: $('aliCfgEnabled').checked,
         dry_run: $('aliCfgDryRun').checked,
@@ -1355,6 +1382,12 @@
         banned_words: splitList('aliCfgBanned'),
         accept_small_orders: $('aliCfgSmall').checked,
         accept_personal_orders: $('aliCfgPersonal').checked
+        ,
+        read_no_reply_enabled: $('aliCfgNudgeEnabled').checked,
+        nudge_max: Number($('aliCfgNudgeMax').value) || 0,
+        nudge_max_chars: Number($('aliCfgNudgeChars').value) || 240,
+        nudge_intervals_minutes: splitList('aliCfgNudgeIntervals').map(Number).filter(function (n) { return n > 0; }),
+        nudge_angles: angleLines
       };
       apiJson('/api/alibaba-inquiries/accounts/' + encodeURIComponent(S.accountId) + '/reception-config',
         { method: 'POST', body: payload })
@@ -1419,6 +1452,7 @@
           var kind = it.status === 'sent' ? 'ok' : it.status === 'dry_run' ? 'info' : it.status === 'handoff' ? 'err' : '';
           return '<div class="ali-card" style="margin-bottom:8px;"><div class="ali-card-body">' +
             '<div class="ali-inline" style="gap:6px;flex-wrap:wrap;">' + badge(it.status || '', kind) +
+            (it.kind === 'nudge' ? badge('换角度触达 第 ' + (it.nudge_index || 1) + ' 次 · ' + (it.angle || ''), 'violet') : '') +
             badge(it.buyer || it.inquiry_id, '') + '</div>' +
             (it.draft ? '<div style="margin-top:8px;white-space:pre-wrap;">' + esc(it.draft) + '</div>' : '') +
             (it.reason ? '<div class="ali-note" style="margin-top:6px;">' + esc(it.reason) + '</div>' : '') +
