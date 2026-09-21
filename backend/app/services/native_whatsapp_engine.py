@@ -1478,7 +1478,7 @@ def _find_new_chat_search(root: Any) -> Optional[Any]:
     """
     edits: List[tuple[Any, tuple[float, float, float, float]]] = []
     anchors: List[tuple[float, float, float, float]] = []
-    for node, _depth in _iter_nodes(root, max_depth=26, max_nodes=14000):
+    for node, _depth in _iter_nodes(root, max_depth=CONTACT_TREE_DEPTH, max_nodes=CONTACT_TREE_NODES):
         rect = _rect(node)
         if not rect:
             continue
@@ -1507,13 +1507,29 @@ def _open_new_chat_page(hwnd: int) -> Any:
     root = _root_for_hwnd(hwnd)
     _click_named(root, ("对话", "Chats"), required=False)
     time.sleep(0.3)
-    root = _root_for_hwnd(hwnd)
-    search = None
+    # 上一轮失败可能在窗口里留下表单/弹层：先按 Esc 收掉，否则新聊天面板点不出来
+    try:
+        auto, _error, _source = load_uia()
+        if auto is not None:
+            auto.SendKeys("{Escape}")
+            time.sleep(0.25)
+    except Exception:
+        pass
+    search = _find_new_chat_search(_root_for_hwnd(hwnd))
+    if search is not None:
+        # 已经停在新聊天页（上次没关掉）：直接用，别再点「新聊天」把它 toggle 掉
+        return search
     for attempt in range(3):
+        root = _root_for_hwnd(hwnd)
         _click_named(root, ("新聊天", "New chat"), required=attempt == 0)
         time.sleep(0.7 + 0.4 * attempt)
-        root = _root_for_hwnd(hwnd)
-        search = _find_new_chat_search(root)
+        search = _find_new_chat_search(_root_for_hwnd(hwnd))
+        if search is not None:
+            return search
+        # 点成 toggle 关掉的情况：再点一次
+        _click_named(_root_for_hwnd(hwnd), ("新聊天", "New chat"), required=False)
+        time.sleep(0.5)
+        search = _find_new_chat_search(_root_for_hwnd(hwnd))
         if search is not None:
             return search
     raise RuntimeError("WhatsApp 新聊天页没有出现联系人搜索框")
@@ -1737,6 +1753,7 @@ def _contact_save_blocked_message(hint: str = "") -> str:
         "用 @用户名 时要对方真的设过 WhatsApp 用户名。可以在桌面 WhatsApp 里手动输入同一个目标，"
         "屏幕上的提示（例如「此电话号码没有注册 WhatsApp」）会说明原因"
     )
+    message += "。如果这个号码已经在你 WhatsApp 的通讯录里，WhatsApp 会显示「查看联系人」而不是「保存联系人」，这种情况不需要再加一次"
     return message + ("；表单提示：" + hint if hint else "")
 
 
@@ -1748,7 +1765,7 @@ def _contact_form_hint(root: Any) -> str:
     把这句原文带进错误里，用户才能立刻知道该改号码还是改用户名。
     """
     hits: List[str] = []
-    for node, _depth in _iter_nodes(root, max_depth=28, max_nodes=12000):
+    for node, _depth in _iter_nodes(root, max_depth=CONTACT_TREE_DEPTH, max_nodes=CONTACT_TREE_NODES):
         text = re.sub(r"\s+", " ", _node_text(node)).strip()
         if not text or len(text) > 200:
             continue
@@ -1758,6 +1775,15 @@ def _contact_form_hint(root: Any) -> str:
         if len(hits) >= 3:
             break
     return " / ".join(hits)
+
+
+# 每次 UIA 遍历的规模上限。
+# 旧实现的问题是"遍历整棵树再挑最后一个"，客户机树大时一次加好友要跑好几分钟；
+# 现在关键查找都改成"命中即返回"，所以上限保留大一点（保证找得到）也不会慢。
+CONTACT_TREE_NODES = 12000
+CONTACT_TREE_DEPTH = 22
+# 单个联系人从打开表单到点保存的软超时；超了就明确失败，不留「执行中」
+ADD_CONTACT_DEADLINE_SECONDS = 60.0
 
 
 _COUNTRY_NAME_HINTS = {
@@ -1788,7 +1814,7 @@ def _country_item_matches(text: str, digits: str) -> bool:
 
 
 def _find_contact_country_button(root: Any) -> Optional[Any]:
-    for node, _depth in _iter_nodes(root, max_depth=25, max_nodes=12000):
+    for node, _depth in _iter_nodes(root, max_depth=CONTACT_TREE_DEPTH, max_nodes=CONTACT_TREE_NODES):
         if _node_type(node) != "ButtonControl" or not _rect(node):
             continue
         if "国家/地区" in _node_text(node):
@@ -1799,7 +1825,7 @@ def _find_contact_country_button(root: Any) -> Optional[Any]:
 def _find_contact_country_search(root: Any, list_top: Optional[int] = None) -> Optional[Any]:
     best: Optional[tuple] = None
     skip = {"搜索或开始新聊天", "名字", "姓氏", "用户名", "电话号码"}
-    for node, depth in _iter_nodes(root, max_depth=22, max_nodes=8000):
+    for node, depth in _iter_nodes(root, max_depth=CONTACT_TREE_DEPTH, max_nodes=CONTACT_TREE_NODES):
         if _node_type(node) != "EditControl":
             continue
         rect = _rect(node)
@@ -1813,7 +1839,7 @@ def _find_contact_country_search(root: Any, list_top: Optional[int] = None) -> O
 
 
 def _find_contact_country_list(root: Any) -> Optional[Any]:
-    for node, _depth in _iter_nodes(root, max_depth=22, max_nodes=10000):
+    for node, _depth in _iter_nodes(root, max_depth=CONTACT_TREE_DEPTH, max_nodes=CONTACT_TREE_NODES):
         if _node_type(node) == "ListControl" and _rect(node):
             return node
     return None
@@ -1851,7 +1877,7 @@ def select_contact_country(hwnd: int, country_code: str) -> str:
     time.sleep(1.0)
     root = _root_for_hwnd(hwnd)
     target = None
-    for node, _depth in _iter_nodes(root, max_depth=26, max_nodes=12000):
+    for node, _depth in _iter_nodes(root, max_depth=CONTACT_TREE_DEPTH, max_nodes=CONTACT_TREE_NODES):
         if _node_type(node) != "ButtonControl" or not _rect(node):
             continue
         text = _node_text(node).strip()
@@ -1881,14 +1907,49 @@ def _collect_contact_form_fields(root: Any) -> Dict[str, Any]:
         "phone": {"电话号码", "phone number"},
     }
     fields: Dict[str, Any] = {}
-    for node, _depth in _iter_nodes(root, max_depth=28, max_nodes=12000):
+    for node, _depth in _iter_nodes(root, max_depth=CONTACT_TREE_DEPTH, max_nodes=CONTACT_TREE_NODES):
         if _node_type(node) != "EditControl" or not _rect(node):
             continue
         label = _node_text(node).strip().casefold()
         for key, names in aliases.items():
             if label in names and key not in fields:
                 fields[key] = node
+        if len(fields) == len(aliases):
+            break  # 四个字段都拿到了，不用再往下遍历
     return fields
+
+
+def _click_button_matching(
+    root: Any,
+    needles: Iterable[str],
+    *,
+    max_depth: int = CONTACT_TREE_DEPTH,
+    max_nodes: int = CONTACT_TREE_NODES,
+    dry_run: bool = False,
+) -> bool:
+    """按「包含」匹配点按钮。
+
+    实测（本机 WinUI3，2026-09-21）：号码有效时表单底部的按钮叫「保存联系人」，
+    而旧实现是精确匹配「保存 / Save」→ 永远找不到 → 报「没给出保存按钮」，
+    这正是客户机加好友一直失败的原因。
+
+    命中即返回（旧写法遍历完整棵树，客户机上慢到几分钟）；dry_run 只探测不点击。
+    """
+    wanted = tuple(str(item).casefold() for item in needles if str(item or "").strip())
+    if not wanted:
+        return False
+    for node, _depth in _iter_nodes(root, max_depth=max_depth, max_nodes=max_nodes):
+        if _node_type(node) not in {"ButtonControl", "SplitButtonControl"} or not _rect(node):
+            continue
+        text = _node_text(node).strip().casefold()
+        if not text:
+            continue
+        if any(needle in text for needle in wanted):
+            if dry_run:
+                return True
+            _click(node)
+            return True
+    return False
 
 
 def add_contact(*, first_name: str, last_name: str = "", username: str = "", phone: str = "", country_code: str = "+86") -> Dict[str, Any]:
@@ -1908,30 +1969,43 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
         raise RuntimeError("请填写 WhatsApp 用户名或电话号码")
     _claim_action("添加 WhatsApp 联系人")
     hwnd: Optional[int] = None
+    deadline = time.monotonic() + ADD_CONTACT_DEADLINE_SECONDS
+    steps: List[str] = []
+
+    def mark(step: str, started_at: float) -> None:
+        steps.append("%s=%.1fs" % (step, time.monotonic() - started_at))
+
     try:
+        started = time.monotonic()
         hwnd, _window = _window_or_raise()
         _open_new_chat_page(hwnd)
+        mark("open_new_chat", started)
         root = _root_for_hwnd(hwnd)
         add_buttons = [
-            node for node, _depth in _iter_nodes(root, max_depth=25, max_nodes=10000)
+            node for node, _depth in _iter_nodes(root, max_depth=20, max_nodes=CONTACT_TREE_NODES)
             if _node_type(node) == "ButtonControl" and _node_text(node).strip().casefold() in {"添加联系人", "add contact"} and _rect(node)
         ]
         if not add_buttons:
             raise RuntimeError("WhatsApp 新聊天页没有出现添加联系人入口")
         _click(add_buttons[-1])
-        time.sleep(0.65)
+        time.sleep(0.6)
+        started = time.monotonic()
         root = _root_for_hwnd(hwnd)
         fields = _collect_contact_form_fields(root)
+        mark("open_form", started)
         if "first_name" not in fields:
             raise RuntimeError("WhatsApp 添加联系人表单没有出现")
         # 先切国家/地区（切换会让表单重建），再填其余字段，避免刚填的内容被清掉
         if number:
+            started = time.monotonic()
             select_contact_country(hwnd, digits)
-            time.sleep(0.4)
+            time.sleep(0.3)
+            mark("select_country", started)
             root = _root_for_hwnd(hwnd)
             fields = _collect_contact_form_fields(root)
             if "first_name" not in fields:
                 raise RuntimeError("切换国家/地区后 WhatsApp 联系人表单没有回来")
+        started = time.monotonic()
         _set_edit_text(fields["first_name"], first)
         if last and fields.get("last_name") is not None:
             _set_edit_text(fields["last_name"], last)
@@ -1939,22 +2013,28 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
             _set_edit_text(fields["username"], user.lstrip("@"))
         if number and fields.get("phone") is not None:
             _set_edit_text(fields["phone"], number)
-        time.sleep(0.6)
-        root = _root_for_hwnd(hwnd)
-        hint = _contact_form_hint(root)
-        # WhatsApp 只有认可这个目标（已注册号码 / 真实用户名）时才给出「保存」
-        saved = _click_named(root, ("保存", "Save"), required=False)
+        mark("fill_fields", started)
+        if time.monotonic() > deadline:
+            raise RuntimeError("添加联系人超时：WhatsApp 界面响应太慢，请重试")
+        # 实测：号码填完后 WhatsApp 要异步校验，按钮（叫「保存联系人」）不是立刻出现，
+        # 所以轮询等待最多 8 秒；旧实现是精确匹配「保存 / Save」→ 永远点不到。
+        started = time.monotonic()
+        saved = False
+        for _wait in range(8):
+            if _click_button_matching(_root_for_hwnd(hwnd), ("保存", "save")):
+                saved = True
+                break
+            time.sleep(0.6)
+        mark("click_save", started)
         if not saved:
-            saved = _click_named(root, ("保存", "Save"), control_type="", required=False)
-        if not saved:
-            raise RuntimeError(_contact_save_blocked_message(hint))
-        time.sleep(0.9)
+            raise RuntimeError(_contact_save_blocked_message(_contact_form_hint(_root_for_hwnd(hwnd))))
+        time.sleep(0.8)
+        started = time.monotonic()
         root = _root_for_hwnd(hwnd)
-        still_editing = any(
-            _node_type(node) == "EditControl" and _node_text(node).strip().casefold() in {"名字", "first name"} and _rect(node)
-            for node, _depth in _iter_nodes(root, max_depth=25, max_nodes=9000)
-        )
+        still_editing = "first_name" in _collect_contact_form_fields(root)
+        mark("verify_saved", started)
         if still_editing:
+            hint = _contact_form_hint(root)
             raise RuntimeError("WhatsApp 仍停留在联系人表单，未确认保存成功" + ("；表单提示：" + hint if hint else ""))
         contact = _persist_contact({
             "first_name": first, "last_name": last, "username": user.lstrip("@"),
@@ -1962,11 +2042,13 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
             "country_code": country, "display_name": " ".join(part for part in (first, last) if part),
             "source": "desktop_add_contact",
         })
-        result = {"ok": True, "contact": contact, "message": "WhatsApp 联系人已保存"}
+        result = {"ok": True, "contact": contact, "message": "WhatsApp 联系人已保存", "steps": steps}
         _record_operation("add_contact", target, "success", result["message"], result)
+        _append_log("add_contact_done", target=target, steps=steps)
         return result
     except Exception as exc:
         _record_operation("add_contact", target, "failed", str(exc))
+        _append_log("add_contact_failed", target=target, error=str(exc)[:500], steps=steps)
         if hwnd:
             # 失败时把表单收掉：残留的表单会让下一轮找不到「新聊天」搜索框
             _dismiss_contact_form(hwnd)
@@ -2158,7 +2240,8 @@ async def run_once(
 #   * 接管：除单轮执行外，支持常驻轮次（按间隔自动跑下一轮）与诊断摘要。
 DEFAULT_FRIEND_ADD_INTERVAL_SECONDS = 45
 DEFAULT_FRIEND_ADD_DAILY_LIMIT = 30
-DEFAULT_FRIEND_ADD_RETRY_MAX = 1
+# 实测：找不到「保存联系人」这类确定性失败重试也不会成功，反而让用户看着「执行中」等几分钟。
+DEFAULT_FRIEND_ADD_RETRY_MAX = 0
 DEFAULT_FRIEND_ADD_RETRY_SLEEP = 3.0
 
 _FRIEND_ADD_SCHEDULERS: Dict[str, Any] = {}

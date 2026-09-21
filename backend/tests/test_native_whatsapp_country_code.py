@@ -69,9 +69,23 @@ def test_normalize_country_digits(raw, expected):
 
 def _fake_iter_nodes(add_button):
     def stub(root, *, max_depth=24, max_nodes=2400):
-        if max_nodes == 10000:
+        if max_nodes == engine.CONTACT_TREE_NODES:
             return [(add_button, 1)]
         return []
+
+    return stub
+
+
+def _form_state_mock(first_field, phone_field):
+    """第一次收集表单字段（刚打开表单），保存后返回空表示表单已关闭。"""
+    state = {"count": 0}
+
+    def stub(root):
+        state["count"] += 1
+        # 第 1 次：刚打开表单；第 2 次：切换国家后（表单重建）；第 3 次：点保存后（表单应已关闭）
+        if state["count"] <= 2:
+            return {"first_name": first_field, "phone": phone_field}
+        return {}
 
     return stub
 
@@ -93,11 +107,8 @@ def test_add_contact_switches_country_instead_of_rejecting(monkeypatch):
     monkeypatch.setattr(engine, "_node_text", lambda node: getattr(node, "text", ""))
     monkeypatch.setattr(engine, "_rect", lambda node: getattr(node, "rect", None))
     monkeypatch.setattr(engine, "_click", lambda node: None)
-    monkeypatch.setattr(
-        engine,
-        "_collect_contact_form_fields",
-        lambda root: {"first_name": first_field, "phone": phone_field},
-    )
+    monkeypatch.setattr(engine, "_collect_contact_form_fields", _form_state_mock(first_field, phone_field))
+    monkeypatch.setattr(engine, "_click_button_matching", lambda root, needles, **kwargs: True)
     monkeypatch.setattr(
         engine,
         "select_contact_country",
@@ -105,7 +116,6 @@ def test_add_contact_switches_country_instead_of_rejecting(monkeypatch):
     )
     monkeypatch.setattr(engine, "_set_edit_text", lambda node, value: calls["edits"].append((node.text, value)))
     monkeypatch.setattr(engine, "_contact_form_hint", lambda root: "")
-    monkeypatch.setattr(engine, "_click_named", lambda root, names, **kwargs: True)
     monkeypatch.setattr(engine, "_persist_contact", lambda payload: payload)
     monkeypatch.setattr(engine, "_record_operation", lambda *args, **kwargs: None)
     monkeypatch.setattr(engine, "_dismiss_contact_form", lambda hwnd: None)
@@ -136,15 +146,11 @@ def test_add_contact_strips_duplicated_country_prefix(monkeypatch):
     monkeypatch.setattr(engine, "_node_text", lambda node: getattr(node, "text", ""))
     monkeypatch.setattr(engine, "_rect", lambda node: getattr(node, "rect", None))
     monkeypatch.setattr(engine, "_click", lambda node: None)
-    monkeypatch.setattr(
-        engine,
-        "_collect_contact_form_fields",
-        lambda root: {"first_name": first_field, "phone": phone_field},
-    )
+    monkeypatch.setattr(engine, "_collect_contact_form_fields", _form_state_mock(first_field, phone_field))
+    monkeypatch.setattr(engine, "_click_button_matching", lambda root, needles, **kwargs: True)
     monkeypatch.setattr(engine, "select_contact_country", lambda hwnd, code: "国家/地区：中国 +86")
     monkeypatch.setattr(engine, "_set_edit_text", lambda node, value: edits.append((node.text, value)))
     monkeypatch.setattr(engine, "_contact_form_hint", lambda root: "")
-    monkeypatch.setattr(engine, "_click_named", lambda root, names, **kwargs: True)
     monkeypatch.setattr(engine, "_persist_contact", lambda payload: payload)
     monkeypatch.setattr(engine, "_record_operation", lambda *args, **kwargs: None)
     monkeypatch.setattr(engine, "_dismiss_contact_form", lambda hwnd: None)
@@ -165,3 +171,50 @@ def test_frontend_no_longer_says_china_only():
     # 不锁具体版本串，避免每次 bump 都改测试；只确认视图/脚本都挂上了 cache buster
     assert "/static/views/personal-whatsapp.html?v=" in registry
     assert "/static/js/personal-whatsapp.js?v=" in registry
+
+
+def test_click_button_matching_accepts_save_contact_label(monkeypatch):
+    """实测按钮叫「保存联系人」；finder 必须按包含匹配，且命中即返回。"""
+    first = types.SimpleNamespace(kind="ButtonControl", text="保存联系人", rect=(0, 0, 10, 10))
+    second = types.SimpleNamespace(kind="ButtonControl", text="另一个按钮", rect=(0, 0, 10, 10))
+    visited = []
+
+    def fake_iter(root, *, max_depth=24, max_nodes=2400):
+        for node in (first, second):
+            visited.append(node)
+            yield node, 1
+
+    monkeypatch.setattr(engine, "_iter_nodes", fake_iter)
+    monkeypatch.setattr(engine, "_node_type", lambda node: getattr(node, "kind", ""))
+    monkeypatch.setattr(engine, "_node_text", lambda node: getattr(node, "text", ""))
+    monkeypatch.setattr(engine, "_rect", lambda node: getattr(node, "rect", None))
+
+    assert engine._click_button_matching("root", ("保存", "save"), dry_run=True) is True
+    assert visited == [first], "命中后不该继续遍历（旧写法会遍历完整棵树，客户机上慢到几分钟）"
+    visited.clear()
+    assert engine._click_button_matching("root", ("查看联系人", "view contact"), dry_run=True) is False
+
+
+def test_collect_contact_form_fields_stops_early(monkeypatch):
+    nodes = [
+        types.SimpleNamespace(kind="EditControl", text="名字", rect=(0, 0, 10, 10)),
+        types.SimpleNamespace(kind="EditControl", text="姓氏", rect=(0, 0, 10, 10)),
+        types.SimpleNamespace(kind="EditControl", text="用户名", rect=(0, 0, 10, 10)),
+        types.SimpleNamespace(kind="EditControl", text="电话号码", rect=(0, 0, 10, 10)),
+        types.SimpleNamespace(kind="EditControl", text="后面还有别的控件", rect=(0, 0, 10, 10)),
+    ]
+    visited = []
+
+    def fake_iter(root, *, max_depth=24, max_nodes=2400):
+        for node in nodes:
+            visited.append(node)
+            yield node, 1
+
+    monkeypatch.setattr(engine, "_iter_nodes", fake_iter)
+    monkeypatch.setattr(engine, "_node_type", lambda node: getattr(node, "kind", ""))
+    monkeypatch.setattr(engine, "_node_text", lambda node: getattr(node, "text", ""))
+    monkeypatch.setattr(engine, "_rect", lambda node: getattr(node, "rect", None))
+
+    fields = engine._collect_contact_form_fields("root")
+    assert sorted(fields) == ["first_name", "last_name", "phone", "username"]
+    assert len(visited) == 4, "四个字段拿齐后应立即停止遍历"
