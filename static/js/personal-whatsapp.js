@@ -39,7 +39,7 @@
   function clearProgress() { var box = $('personalWhatsappError'); if (box && box.dataset.pwaMessageKind === 'progress') showError(''); }
   function setBusy(value, label) {
     state.busy = !!value;
-    var ids = ['personalWhatsappRefreshBtn','personalWhatsappSyncAllBtn','personalWhatsappSyncSessionsBtn','personalWhatsappSyncGroupsBtn','personalWhatsappOpenSessionBtn','personalWhatsappSendBtn','personalWhatsappSyncContactsBtn','personalWhatsappAddContactBtn','personalWhatsappAddFriendBtn','personalWhatsappSaveBtn','personalWhatsappRunBtn','personalWhatsappRefreshRecordsBtn','personalWhatsappAddFriendSubmitBtn','personalWhatsappContactSubmitBtn','personalWhatsappFriendQueueStartBtn','personalWhatsappFriendQueueStopBtn','personalWhatsappFriendQueueSettingsBtn','personalWhatsappFriendSettingsSaveBtn','personalWhatsappTakeoverSettingsBtn','personalWhatsappFriendImportBtn','personalWhatsappLoopStartBtn','personalWhatsappDiagnosticsBtn'];
+    var ids = ['personalWhatsappRefreshBtn','personalWhatsappSyncAllBtn','personalWhatsappSyncSessionsBtn','personalWhatsappOpenSessionBtn','personalWhatsappSendBtn','personalWhatsappAddContactBtn','personalWhatsappAddFriendBtn','personalWhatsappSaveBtn','personalWhatsappRunBtn','personalWhatsappRefreshRecordsBtn','personalWhatsappAddFriendSubmitBtn','personalWhatsappContactSubmitBtn','personalWhatsappFriendQueueStartBtn','personalWhatsappFriendQueueStopBtn','personalWhatsappFriendQueueSettingsBtn','personalWhatsappFriendSettingsSaveBtn','personalWhatsappTakeoverSettingsBtn','personalWhatsappFriendImportBtn','personalWhatsappLoopStartBtn','personalWhatsappDiagnosticsBtn'];
     ids.forEach(function(id) { var node = $(id); if (node) node.disabled = state.busy || ((id === 'personalWhatsappOpenSessionBtn' || id === 'personalWhatsappSendBtn') && !state.activeSession); });
     var stop = $('personalWhatsappStopBtn'); if (stop) stop.disabled = false;
     if (value && label) showError(label, true);
@@ -68,31 +68,35 @@
     var repair = s.auto_repair || {};
     var processes = Array.isArray(s.processes) ? s.processes : [];
     var candidates = Array.isArray(s.candidates) ? s.candidates : [];
+    var depKeys = Object.keys(deps);
+    var depOk = depKeys.filter(function(key) { return deps[key]; }).length;
     var fallbackReady = {
       psutil: caps.process_scan === 'ctypes',
       pyperclip: caps.clipboard === 'win32clipboard' || caps.clipboard === 'ctypes'
     };
-    var depText = Object.keys(deps).map(function(key) {
-      if (deps[key]) return key + ':✓' + (sources[key] === 'vendor' ? '(内置副本)' : '');
-      return key + ':✗' + (fallbackReady[key] ? '(已兜底)' : '');
-    }).join('　');
+    var depText = depKeys.map(function(key) {
+      if (deps[key]) return key + ':\u2713' + (sources[key] === 'vendor' ? '(内置副本)' : '');
+      return key + ':\u2717' + (fallbackReady[key] ? '(已兜底)' : '');
+    }).join('\u3000');
     var openErrors = Object.keys(depErrors).filter(function(key) { return !fallbackReady[key]; });
-    var depErrorText = openErrors.map(function(key) { return key + ' → ' + depErrors[key]; }).join('；');
-    var capText = '进程枚举 ' + (caps.process_scan || '-') + '　剪贴板 ' + (caps.clipboard || '-') + '　UIA ' + (caps.uia || '-');
+    var depErrorText = openErrors.map(function(key) { return key + ' \u2192 ' + depErrors[key]; }).join('\uff1b');
+    var capText = '进程枚举 ' + (caps.process_scan || '-') + ' / 剪贴板 ' + (caps.clipboard || '-') + ' / UIA ' + (caps.uia || '-');
     var repairText = repair.running
       ? '正在自动修复运行依赖…'
       : (repair.message ? ((repair.ok ? '上次自动修复：成功' : '上次自动修复：失败') + '（' + repair.message + '）') : '');
+    var built = (v.static_version || '-') + '-' + (v.static_build == null ? '-' : v.static_build);
+    var summary = '版本 ' + built + ' · 依赖 ' + depOk + '/' + depKeys.length + ' 可用 · ' + capText;
     var rows = candidates.map(function(row) {
       return '<tr><td>' + esc(row.title || '') + '</td><td>' + esc(row.class_name || '') + '</td>'
         + '<td>' + esc(row.process_name || '') + '</td>'
         + '<td>' + (row.is_visible === false ? '隐藏' : (row.is_iconic ? '最小化' : '正常')) + '</td>'
         + '<td>' + esc(row.match_by || '') + '</td></tr>';
     }).join('');
-    return '<div style="grid-column:1/-1;margin-top:0.6rem;font-size:0.78rem;line-height:1.75;color:#3f5a4e;">'
+    var detail = '<div id="personalWhatsappDiagDetail" style="display:none;margin-top:0.5rem;font-size:0.78rem;line-height:1.75;color:#3f5a4e;">'
       + '版本：界面 ' + esc(v.static_version || '-') + '-' + esc(v.static_build == null ? '-' : v.static_build)
-      + '　后端 ' + esc(v.client_version || '-') + '-' + esc(v.client_build == null ? '-' : v.client_build)
+      + ' / 后端 ' + esc(v.client_version || '-') + '-' + esc(v.client_build == null ? '-' : v.client_build)
       + (v.expected_routes_missing && v.expected_routes_missing.length
-        ? '　<span style="color:#b42318;">后端缺接口：' + esc(v.expected_routes_missing.join('、')) + '</span>' : '')
+        ? ' <span style="color:#b42318;">后端缺接口：' + esc(v.expected_routes_missing.join('、')) + '</span>' : '')
       + '<br>依赖：' + esc(depText)
       + '<br>能力：' + esc(capText)
       + (depErrorText ? '<br><span style="color:#b42318;">依赖错误：' + esc(depErrorText) + '</span>' : '')
@@ -101,15 +105,19 @@
       + '<br>WhatsApp 进程：' + (processes.length
         ? esc(processes.map(function(p) { return (p.name || '?') + '(' + p.pid + ')'; }).join('、'))
         : '（没检测到进程）')
-      + '</div>'
       + (candidates.length
-        ? '<table style="margin-top:0.5rem;width:100%;font-size:0.76rem;border-collapse:collapse;">'
+        ? '<div style="margin-top:0.5rem;overflow:auto;"><table style="width:100%;font-size:0.76rem;border-collapse:collapse;">'
           + '<thead><tr><th align="left">窗口标题</th><th align="left">窗口类名</th><th align="left">进程</th><th align="left">状态</th><th align="left">命中</th></tr></thead>'
-          + '<tbody>' + rows + '</tbody></table>'
-        : '<div style="margin-top:0.4rem;font-size:0.78rem;color:#b42318;">没有扫到候选窗口：请确认 WhatsApp 主窗口已打开（不是托盘/最小化）。</div>')
-      + '<div style="margin-top:0.5rem;"><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappCopyDiag">复制诊断信息</button>'
-      + (s.ok ? '' : ' <button class="btn btn-primary btn-sm" type="button" id="personalWhatsappRepairDeps">修复运行依赖</button>')
+          + '<tbody>' + rows + '</tbody></table></div>'
+        : '<br>没有扫到候选窗口：请确认 WhatsApp 主窗口已打开（不是托盘/最小化）。')
       + '</div>';
+    return '<div style="grid-column:1/-1;margin-top:0.6rem;font-size:0.78rem;line-height:1.7;color:#3f5a4e;">'
+      + '<div>' + esc(summary) + '</div>'
+      + (s.ok ? '' : '<div style="color:#b42318;">原因：' + esc(s.reason || '（无）') + '</div>')
+      + '<div style="margin-top:0.4rem;"><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappCopyDiag">复制诊断信息</button>'
+      + ' <button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappDiagToggle">查看诊断详情</button>'
+      + (s.ok ? '' : ' <button class="btn btn-primary btn-sm" type="button" id="personalWhatsappRepairDeps">修复运行依赖</button>')
+      + '</div>' + detail + '</div>';
   }
   function renderStatus() {
     var s = state.status || {};
@@ -123,6 +131,14 @@
         if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(payload).then(done, done); return; }
       } catch (e) {}
       window.prompt('复制下面的诊断信息', payload);
+    });
+    var diagToggle = $('personalWhatsappDiagToggle');
+    if (diagToggle) diagToggle.addEventListener('click', function() {
+      var detail = $('personalWhatsappDiagDetail');
+      if (!detail) return;
+      var show = detail.style.display === 'none';
+      detail.style.display = show ? 'block' : 'none';
+      diagToggle.textContent = show ? '收起诊断详情' : '查看诊断详情';
     });
     var repairBtn = $('personalWhatsappRepairDeps');
     if (repairBtn) repairBtn.addEventListener('click', function() {
@@ -171,7 +187,7 @@
     host.innerHTML = state.sessions.length ? state.sessions.map(function(row) { var active = state.activeSession && state.activeSession.peer_key === row.peer_key; return '<div class="pwa-item' + (active ? ' active' : '') + '" data-pwa-peer="' + esc(row.peer_key) + '"><div class="pwa-item-title">' + esc(row.display_name || '未命名') + ' ' + (row.chat_type === 'group' ? '<span class="pwa-badge">群聊</span>' : '') + '</div><div class="pwa-meta">' + esc(row.last_message || '尚未同步消息') + '</div><div class="pwa-meta">' + esc(row.updated_at || '') + '</div></div>'; }).join('') : '<div class="pwa-empty">暂无会话，请先同步</div>';
     renderPagination('personalWhatsappSessionPagination','sessions');
   }
-  function loadGroups() { var meta=state.pages.groups;return request('/api/native-whatsapp/sessions?'+query(meta,{chat_type:'group'})).then(function(data){state.groups=Array.isArray(data.items)?data.items:[];meta.total=Number(data.total||0);var host=$('personalWhatsappGroupList');if(host)host.innerHTML=state.groups.length?state.groups.map(function(row){return '<div class="pwa-item" data-pwa-group-peer="'+esc(row.peer_key)+'"><div class="pwa-item-title">'+esc(row.display_name||'未命名群聊')+' <span class="pwa-badge">群聊</span></div><div class="pwa-meta">'+esc(row.last_message||'尚未同步消息')+'</div></div>';}).join(''):'<div class="pwa-empty">暂无已识别群聊；打开群会话同步后会归入这里</div>';renderPagination('personalWhatsappGroupPagination','groups');}); }
+  function loadGroups() { var meta=state.pages.groups;return request('/api/native-whatsapp/sessions?'+query(meta,{chat_type:'group'})).then(function(data){state.groups=Array.isArray(data.items)?data.items:[];meta.total=Number(data.total||0);var host=$('personalWhatsappGroupList');if(host)host.innerHTML=state.groups.length?state.groups.map(function(row){return '<div class="pwa-item" data-pwa-group-peer="'+esc(row.peer_key)+'"><div class="pwa-item-title">'+esc(row.display_name||'未命名群聊')+' <span class="pwa-badge">群聊</span></div><div class="pwa-meta">'+esc(row.last_message||'尚未同步消息')+'</div></div>';}).join(''):'<div class=\"pwa-empty\">暂无已识别群聊；先同步会话，群聊会自动归入这里</div>';renderPagination('personalWhatsappGroupPagination','groups');}); }
   function selectSession(key) {
     state.activeSession = state.sessions.filter(function(row) { return row.peer_key === key; })[0] || null;
     state.messages = []; renderSessions(); renderMessages();
@@ -205,8 +221,6 @@
     document.querySelectorAll('#content-personal-whatsapp .pwa-tab').forEach(function(node){node.classList.toggle('active',node.dataset.pwaTab===tab);});
     document.querySelectorAll('#content-personal-whatsapp .pwa-panel').forEach(function(node){node.classList.toggle('active',node.dataset.pwaPanel===tab);});
     if(tab==='sessions')loadSessions().catch(function(e){showError(e.message);});
-    if(tab==='groups')loadGroups().catch(function(e){showError(e.message);});
-    if(tab==='contacts')loadContacts().catch(function(e){showError(e.message);});
     if(tab==='records')loadRecords().catch(function(e){showError(e.message);});
     if(tab==='friends'){loadFriendQueue().catch(function(e){showError(e.message);});loadFriendRecords().catch(function(e){showError(e.message);});}
     if(tab==='takeover'){loadAutoReply().catch(function(e){showError(e.message);});loadDiagnostics().catch(function(e){showError(e.message);});}
@@ -218,12 +232,10 @@
     var root=$('content-personal-whatsapp');if(!root||root.dataset.personalWhatsappBound==='1')return;root.dataset.personalWhatsappBound='1';
     root.addEventListener('click',function(event){var modalClose=event.target.closest('[data-pwa-modal-close]');if(modalClose){closeModalOf(modalClose);return;}if(event.target.classList&&event.target.classList.contains('pwa-modal-mask')){closeModal(event.target.id);return;}var tab=event.target.closest('[data-pwa-tab]');if(tab){activateTab(tab.dataset.pwaTab);return;}var peer=event.target.closest('[data-pwa-peer]');if(peer){selectSession(peer.dataset.pwaPeer);return;}var groupPeer=event.target.closest('[data-pwa-group-peer]');if(groupPeer){var group=state.groups.filter(function(row){return row.peer_key===groupPeer.dataset.pwaGroupPeer;})[0];activateTab('sessions');if(group)selectContactTarget(group.display_name,'group');return;}var page=event.target.closest('[data-pwa-page]');if(page){var meta=state.pages[page.dataset.pwaPage],dir=Number(page.dataset.pwaDir||0);meta.page=Math.max(1,Math.min(pageCount(meta),meta.page+dir));({sessions:loadSessions,groups:loadGroups,contacts:loadContacts,records:loadRecords,friendRecords:loadFriendRecords}[page.dataset.pwaPage]||function(){return Promise.resolve();})().catch(function(e){showError(e.message);});return;}var contact=event.target.closest('[data-pwa-contact-chat]');if(contact){activateTab('sessions');selectContactTarget(contact.dataset.pwaContactChat);}});
     $('personalWhatsappRefreshBtn').addEventListener('click',function(){runBusy('正在刷新状态...',loadBase).catch(function(){});});
-    $('personalWhatsappSyncAllBtn').addEventListener('click',function(){runBusy('正在同步会话...',function(){var sessionResult=null,contactResult=null;return request('/api/native-whatsapp/sessions/sync',{method:'POST',json:{account_id:ACCOUNT_ID,limit:1000,max_scrolls:30}}).then(function(data){sessionResult=data||{};showError('会话同步完成，正在同步通讯录...',true);return request('/api/native-whatsapp/contacts/sync',{method:'POST',json:{account_id:ACCOUNT_ID,limit:2000,max_scrolls:50}});}).then(function(data){contactResult=data||{};return Promise.all([loadBase(),loadSessions(),loadContacts(),loadRecords()]);}).then(function(){var summary=[sessionResult&&sessionResult.message,contactResult&&contactResult.message].filter(Boolean).join('；')||'会话和通讯录同步完成';showNotice(summary);toastMessage(summary);return {sessions:sessionResult,contacts:contactResult};});}).catch(function(){});});
+    $('personalWhatsappSyncAllBtn').addEventListener('click',function(){runBusy('正在同步会话...',function(){var sessionResult=null;return request('/api/native-whatsapp/sessions/sync',{method:'POST',json:{account_id:ACCOUNT_ID,limit:1000,max_scrolls:30}}).then(function(data){sessionResult=data||{};return Promise.all([loadBase(),loadSessions(),loadRecords()]);}).then(function(){var summary=(sessionResult&&sessionResult.message)||'会话同步完成';showNotice(summary);toastMessage(summary);return {sessions:sessionResult};});}).catch(function(){});});
     $('personalWhatsappSyncSessionsBtn').addEventListener('click',function(){runBusy('正在读取桌面会话...',function(){return request('/api/native-whatsapp/sessions/sync',{method:'POST',json:{account_id:ACCOUNT_ID,limit:1000,max_scrolls:30}}).then(function(data){toastMessage(data.message||'会话同步完成');return Promise.all([loadSessions(),loadRecords(),loadBase()]);});}).catch(function(){});});
-    $('personalWhatsappSyncGroupsBtn').addEventListener('click',function(){runBusy('正在读取桌面会话...',function(){return request('/api/native-whatsapp/sessions/sync',{method:'POST',json:{account_id:ACCOUNT_ID,limit:1000,max_scrolls:30}}).then(function(data){toastMessage(data.message||'会话同步完成');return Promise.all([loadGroups(),loadRecords(),loadBase()]);});}).catch(function(){});});
     $('personalWhatsappOpenSessionBtn').addEventListener('click',function(){if(!state.activeSession)return;runBusy('正在打开并同步会话...',function(){return request('/api/native-whatsapp/conversations/open',{method:'POST',json:{account_id:ACCOUNT_ID,target:state.activeSession.display_name}}).then(function(data){var peer=data&&data.peer||{};if(peer.peer_key)state.activeSession=peer;state.messages=Array.isArray(data&&data.messages)?data.messages.map(function(item,index){return {id:'live_'+index,direction:item.direction,content:item.text};}):[];renderMessages();return Promise.all([loadSessions(),loadRecords(),loadBase()]);});}).catch(function(){});});
     $('personalWhatsappSendBtn').addEventListener('click',function(){if(!state.activeSession)return;var content=text($('personalWhatsappSendContent').value).trim();if(!content){showError('请输入发送内容');return;}runBusy('正在发送并确认...',function(){$('personalWhatsappSendState').textContent='发送中';return request('/api/native-whatsapp/messages/send',{method:'POST',json:{account_id:ACCOUNT_ID,target:state.activeSession.display_name,content:content}}).then(function(data){if(data&&data.peer&&data.peer.peer_key)state.activeSession=data.peer;$('personalWhatsappSendContent').value='';$('personalWhatsappSendState').textContent='发送成功';toastMessage('WhatsApp 消息发送成功');return Promise.all([refreshActiveMessages(),loadSessions(),loadRecords(),loadBase()]);});}).catch(function(){$('personalWhatsappSendState').textContent='发送失败';});});
-    $('personalWhatsappSyncContactsBtn').addEventListener('click',function(){runBusy('正在读取 WhatsApp 通讯录...',function(){return request('/api/native-whatsapp/contacts/sync',{method:'POST',json:{account_id:ACCOUNT_ID,limit:2000,max_scrolls:50}}).then(function(data){toastMessage(data.message||'通讯录同步完成');return Promise.all([loadContacts(),loadRecords(),loadBase()]);});}).catch(function(){});});
     $('personalWhatsappRunBtn').addEventListener('click',function(){runBusy('正在执行一轮 WhatsApp 接管...',function(){return saveConfig(false).then(function(){return request('/api/native-whatsapp/run-once',{method:'POST',json:{account_id:ACCOUNT_ID,config_override:configFromFields()}});}).then(function(result){state.lastRun=result||{};renderLastRun();toastMessage(result&&result.skipped?'已有 WhatsApp 操作正在执行':'WhatsApp 本轮执行完成');return Promise.all([loadBase(),loadSessions(),loadRecords()]);});}).catch(function(){});});
     $('personalWhatsappStopBtn').addEventListener('click',function(){request('/api/native-whatsapp/stop',{method:'POST',json:{account_id:ACCOUNT_ID}}).then(function(result){toastMessage(result.running?'已请求停止当前接管':'当前没有接管任务');return loadBase();}).catch(function(e){showError(e.message);});});
     $('personalWhatsappRefreshRecordsBtn').addEventListener('click',function(){loadRecords().catch(function(e){showError(e.message);});});
@@ -248,7 +260,6 @@
     document.addEventListener('keydown',function(event){if(event.key==='Escape')closeModal(null);});
     $('personalWhatsappSessionSearch').addEventListener('input',debounce(function(){state.pages.sessions.keyword=text($('personalWhatsappSessionSearch').value).trim();state.pages.sessions.page=1;loadSessions().catch(function(e){showError(e.message);});},300));
     $('personalWhatsappSessionType').addEventListener('change',function(){state.pages.sessions.chatType=this.value;state.pages.sessions.page=1;loadSessions().catch(function(e){showError(e.message);});});
-    $('personalWhatsappContactSearch').addEventListener('input',debounce(function(){state.pages.contacts.keyword=text($('personalWhatsappContactSearch').value).trim();state.pages.contacts.page=1;loadContacts().catch(function(e){showError(e.message);});},300));
     $('personalWhatsappRecordSearch').addEventListener('input',debounce(function(){state.pages.records.keyword=text($('personalWhatsappRecordSearch').value).trim();state.pages.records.page=1;loadRecords().catch(function(e){showError(e.message);});},300));
   }
 

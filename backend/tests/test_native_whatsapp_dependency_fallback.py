@@ -172,4 +172,20 @@ def test_frontend_surfaces_dependency_diagnostics():
     assert "fallbackReady" in js
     assert "已兜底" in js
     registry = (ROOT / "static" / "js" / "view-registry.js").read_text(encoding="utf-8")
-    assert "personal-whatsapp-deps-vendor-v9" in registry
+    assert "personal-whatsapp-tidy-v10" in registry
+
+
+def test_frontend_hides_group_and_contact_tabs():
+    """群聊/通讯录不再单独开 tab：群聊在会话页可筛，通讯录能力留在接口层。"""
+    html = (ROOT / "static" / "views" / "personal-whatsapp.html").read_text(encoding="utf-8")
+    assert 'data-pwa-tab="groups"' not in html
+    assert 'data-pwa-tab="contacts"' not in html
+    assert 'data-pwa-panel="groups"' not in html
+    assert 'data-pwa-panel="contacts"' not in html
+    assert 'data-pwa-tab="sessions"' in html and 'data-pwa-tab="friends"' in html
+    js = (ROOT / "static" / "js" / "personal-whatsapp.js").read_text(encoding="utf-8")
+    assert "personalWhatsappSyncGroupsBtn" not in js
+    assert "personalWhatsappSyncContactsBtn" not in js
+    # 诊断信息默认收起，不再直接刷在屏幕上
+    assert 'id="personalWhatsappDiagDetail" style="display:none' in js
+    assert "personalWhatsappDiagToggle" in js
