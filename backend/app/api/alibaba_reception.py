@@ -800,6 +800,15 @@ def reception_dashboard(
         .scalar()
         or 0
     )
+    customer_archives = (
+        db.query(func.count(AlibabaCustomerArchive.id))
+        .filter(
+            AlibabaCustomerArchive.user_id == current_user.id,
+            AlibabaCustomerArchive.account_id == account_id,
+        )
+        .scalar()
+        or 0
+    )
     strategy = (
         db.query(AlibabaInquiryPhraseSummary)
         .filter(
@@ -857,6 +866,7 @@ def reception_dashboard(
             "human_takeover": handoff,
             "pool_pending": int(pool_pending),
             "kb_docs": int(kb_docs),
+            "customer_archives": int(customer_archives),
         },
         "config": config,
         "next_scan_seconds": next_scan_seconds(config),

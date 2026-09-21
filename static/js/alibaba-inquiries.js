@@ -764,9 +764,10 @@
       '?limit=' + S.archives.limit + '&offset=' + S.archives.offset +
       (S.archives.q ? '&q=' + encodeURIComponent(S.archives.q) : '');
     return apiJson(q).then(function (data) {
-      S.archives.items = (data && (data.archives || data.items)) || [];
+      S.archives.items = (data && (data.items || data.archives)) || [];
       S.archives.total = (data && (data.total || 0)) || 0;
       if (S.view === 'customers') render();
+      renderNav();
     }).catch(function (err) { toast('档案加载失败：' + err.message, 'err'); });
   }
 
@@ -1125,7 +1126,8 @@
     if (!needAccount()) return Promise.resolve();
     return apiJson('/api/alibaba-inquiries/accounts/' + encodeURIComponent(S.accountId) + '/training-docs')
       .then(function (data) {
-        S.docs = (data && (data.docs || data.documents)) || [];
+        // 接口返回 {"ok":true,"items":[...]}：三种字段名都兼容，避免"角标有数字、列表空的"
+        S.docs = (data && (data.items || data.docs || data.documents)) || [];
         if (S.view === 'kb') render();
       })
       .catch(function (err) { toast('资料加载失败：' + err.message, 'err'); });
@@ -1858,7 +1860,9 @@
       inquiries: S.dashboard && S.dashboard.stats ? S.dashboard.stats.awaiting_reply : null,
       store: S.storeStats ? S.storeStats.products : null,
       pool: S.dashboard && S.dashboard.stats ? S.dashboard.stats.pool_pending : null,
-      customers: S.dashboard && S.dashboard.stats ? S.dashboard.stats.inquiries : null,
+      customers: (S.archives && S.archives.total)
+        ? S.archives.total
+        : (S.dashboard && S.dashboard.stats ? S.dashboard.stats.customer_archives : null),
       kb: S.dashboard && S.dashboard.stats ? S.dashboard.stats.kb_docs : null
     };
     function itemHtml(item) {

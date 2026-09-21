@@ -1,7 +1,18 @@
 """阿里 AI 接待（排期 / 红线 / 公海池）纯逻辑回归。"""
 from datetime import datetime, timedelta
+from types import SimpleNamespace
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 from backend.app.api import alibaba_reception as reception
+from backend.app.db import Base
+from backend.app.models import (
+    AlibabaCustomerArchive,
+    AlibabaInquiryAccount,
+    AlibabaInquiryTrainingDoc,
+)
 
 
 def test_default_config_has_sane_red_lines():
@@ -69,3 +80,36 @@ def test_reply_delay_stays_inside_configured_range():
     for _ in range(20):
         delay = reception.reply_delay_seconds(config)
         assert config["delay_min_seconds"] <= delay <= config["delay_max_seconds"]
+
+
+@pytest.fixture()
+def session():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(bind=engine)
+    db = sessionmaker(bind=engine, autoflush=False)()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def test_dashboard_counts_match_their_lists(session):
+    """角标口径必须和对应列表一致：客户档案=archive 行数，知识库=training-doc 行数。"""
+    session.add(AlibabaInquiryAccount(id=1, user_id=1, nickname="acct", status="active"))
+    session.add(AlibabaInquiryTrainingDoc(user_id=1, account_id=1, title="2026 报价表", kind="price"))
+    for index in range(3):
+        session.add(AlibabaCustomerArchive(
+            user_id=1, account_id=1, inquiry_id="inq-%d" % index, archive_key="key-%d" % index,
+            display_name="客户 %d" % index, status="pending",
+        ))
+    session.commit()
+
+    payload = reception.reception_dashboard(
+        account_id=1,
+        current_user=SimpleNamespace(id=1),
+        db=session,
+    )
+
+    assert payload["stats"]["customer_archives"] == 3
+    assert payload["stats"]["kb_docs"] == 1
+    assert payload["stats"]["inquiries"] == 0

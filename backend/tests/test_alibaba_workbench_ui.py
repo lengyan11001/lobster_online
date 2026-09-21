@@ -38,3 +38,10 @@ def test_new_reception_endpoints_are_wired():
 
 def test_dry_run_is_default_path_for_run_modal():
     assert "showRunModal(!!(S.config && S.config.dry_run))" in JS
+
+
+def test_list_badges_use_the_same_source_as_their_lists():
+    """角标不能拿"询盘总数"当客户档案数；知识库列表要能吃下接口的 items 字段。"""
+    assert "stats.customer_archives" in JS
+    assert "stats.inquiries : null" not in JS
+    assert "(data.items || data.docs || data.documents)" in JS
