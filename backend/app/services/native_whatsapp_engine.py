@@ -946,27 +946,57 @@ def sync_sessions(*, limit: int = 500, max_scrolls: int = 20) -> Dict[str, Any]:
     return _sync_sessions_ui(limit=limit, max_scrolls=max_scrolls)
 
 
+_NEW_CHAT_SEARCH_MARKERS = ("搜索姓名", "search name", "电话号码", "phone number", "@账号", "username")
+
+
+def _find_new_chat_search(root: Any) -> Optional[Any]:
+    """在新聊天页里找搜索框。
+
+    先按「面板锚点」找：新聊天面板一定有「添加联系人 / 新建群组」按钮，
+    搜索框就在这些按钮上方且横向重叠（不依赖会被清空的占位文案）。
+    找不到再退回按占位文案匹配。
+    """
+    edits: List[tuple[Any, tuple[float, float, float, float]]] = []
+    anchors: List[tuple[float, float, float, float]] = []
+    for node, _depth in _iter_nodes(root, max_depth=26, max_nodes=14000):
+        rect = _rect(node)
+        if not rect:
+            continue
+        if _node_type(node) == "EditControl":
+            edits.append((node, rect))
+        elif _node_type(node) == "ButtonControl" and _node_text(node).strip().casefold() in {
+            "添加联系人", "add contact", "新建群组", "new group",
+        }:
+            anchors.append(rect)
+    if edits and anchors:
+        ax0, ay0, ax1, _ay1 = anchors[0]
+        above = [
+            (node, rect)
+            for node, rect in edits
+            if rect[1] < ay0 and rect[0] < ax1 and rect[2] > ax0 and (rect[3] - rect[1]) < 60
+        ]
+        if above:
+            return max(above, key=lambda item: item[1][1])[0]
+    for node, _rect_ in edits:
+        if any(marker in _node_text(node).casefold() for marker in _NEW_CHAT_SEARCH_MARKERS):
+            return node
+    return None
+
+
 def _open_new_chat_page(hwnd: int) -> Any:
     root = _root_for_hwnd(hwnd)
     _click_named(root, ("对话", "Chats"), required=False)
     time.sleep(0.3)
     root = _root_for_hwnd(hwnd)
-    _click_named(root, ("新聊天", "New chat"))
-    time.sleep(0.65)
-    root = _root_for_hwnd(hwnd)
-    search = next(
-        (
-            node
-            for node, _depth in _iter_nodes(root, max_depth=24, max_nodes=8000)
-            if _node_type(node) == "EditControl"
-            and any(marker in _node_text(node).casefold() for marker in ("搜索姓名", "search name", "电话号码", "phone number", "@账号", "username"))
-            and _rect(node)
-        ),
-        None,
-    )
-    if search is None:
-        raise RuntimeError("WhatsApp 新聊天页没有出现联系人搜索框")
-    return search
+    search = None
+    for attempt in range(3):
+        _click_named(root, ("新聊天", "New chat"), required=attempt == 0)
+        time.sleep(0.7 + 0.4 * attempt)
+        root = _root_for_hwnd(hwnd)
+        search = _find_new_chat_search(root)
+        if search is not None:
+            return search
+    raise RuntimeError("WhatsApp 新聊天页没有出现联系人搜索框")
 
 
 def _contact_rows_from_new_chat(root: Any) -> List[Dict[str, Any]]:
@@ -1142,6 +1172,74 @@ def send_message(target: str, content: str) -> Dict[str, Any]:
         _release_action()
 
 
+_CONTACT_FORM_HINT_MARKERS = (
+    "没有注册 whatsapp",
+    "未注册 whatsapp",
+    "not on whatsapp",
+    "找不到",
+    "未找到",
+    "无法找到",
+    "couldn't find",
+    "no results",
+    "无效",
+    "invalid",
+    "邀请对方",
+    "invite",
+)
+
+
+def _dismiss_contact_form(hwnd: int) -> None:
+    """收掉「添加联系人」表单：先点返回，再按 Esc（失败不影响主流程）。"""
+    try:
+        root = _root_for_hwnd(hwnd)
+        if _click_named(root, ("返回", "Back"), required=False):
+            time.sleep(0.35)
+            return
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import uiautomation as auto  # type: ignore
+
+        auto.SendKeys("{Escape}")
+        time.sleep(0.35)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _contact_save_blocked_message(hint: str = "") -> str:
+    """WhatsApp 不给「保存」按钮时的可执行提示。
+
+    实测：号码没注册 WhatsApp 时，表单只会显示一句提示并且**不出现保存按钮**，
+    而这句提示在当前 WebView2 版里读不到（UIA 树里没有），所以文案必须自己能说明问题。
+    """
+    message = (
+        "WhatsApp 没给出「保存」按钮，说明它不认这个目标：手机号必须是已注册 WhatsApp 的号码；"
+        "用 @用户名 时要对方真的设过 WhatsApp 用户名。可以在桌面 WhatsApp 里手动输入同一个目标，"
+        "屏幕上的提示（例如「此电话号码没有注册 WhatsApp」）会说明原因"
+    )
+    return message + ("；表单提示：" + hint if hint else "")
+
+
+def _contact_form_hint(root: Any) -> str:
+    """读 WhatsApp「添加联系人」表单自己的提示文案。
+
+    实测：号码没注册 WhatsApp、或用户名找不到时，表单不会出现「保存」按钮，
+    而是显示一句提示（例如「此电话号码没有注册 WhatsApp。请在主要设备上邀请对方。」）。
+    把这句原文带进错误里，用户才能立刻知道该改号码还是改用户名。
+    """
+    hits: List[str] = []
+    for node, _depth in _iter_nodes(root, max_depth=28, max_nodes=12000):
+        text = re.sub(r"\s+", " ", _node_text(node)).strip()
+        if not text or len(text) > 200:
+            continue
+        folded = text.casefold()
+        if any(marker in folded for marker in _CONTACT_FORM_HINT_MARKERS) and text not in hits:
+            hits.append(text)
+        if len(hits) >= 3:
+            break
+    return " / ".join(hits)
+
+
 def add_contact(*, first_name: str, last_name: str = "", username: str = "", phone: str = "", country_code: str = "+86") -> Dict[str, Any]:
     first = str(first_name or "").strip()[:200]
     last = str(last_name or "").strip()[:200]
@@ -1158,6 +1256,7 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
         raise RuntimeError("当前桌面自动化仅确认支持中国 +86；其他国家请先在 WhatsApp 表单手动切换国家")
     target = user or f"+86{number}"
     _claim_action("添加 WhatsApp 联系人")
+    hwnd: Optional[int] = None
     try:
         hwnd, _window = _window_or_raise()
         _open_new_chat_page(hwnd)
@@ -1192,11 +1291,15 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
             _set_edit_text(fields["username"], user.lstrip("@"))
         if number and fields.get("phone") is not None:
             _set_edit_text(fields["phone"], number)
-        time.sleep(0.35)
+        time.sleep(0.6)
         root = _root_for_hwnd(hwnd)
+        hint = _contact_form_hint(root)
+        # WhatsApp 只有认可这个目标（已注册号码 / 真实用户名）时才给出「保存」
         saved = _click_named(root, ("保存", "Save"), required=False)
         if not saved:
-            raise RuntimeError("联系人资料已填写，但 WhatsApp 没有提供可点击的保存按钮")
+            saved = _click_named(root, ("保存", "Save"), control_type="", required=False)
+        if not saved:
+            raise RuntimeError(_contact_save_blocked_message(hint))
         time.sleep(0.9)
         root = _root_for_hwnd(hwnd)
         still_editing = any(
@@ -1204,7 +1307,7 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
             for node, _depth in _iter_nodes(root, max_depth=25, max_nodes=9000)
         )
         if still_editing:
-            raise RuntimeError("WhatsApp 仍停留在联系人表单，未确认保存成功")
+            raise RuntimeError("WhatsApp 仍停留在联系人表单，未确认保存成功" + ("；表单提示：" + hint if hint else ""))
         contact = _persist_contact({
             "first_name": first, "last_name": last, "username": user.lstrip("@"), "phone": f"+86{number}" if number else "",
             "country_code": "+86", "display_name": " ".join(part for part in (first, last) if part), "source": "desktop_add_contact",
@@ -1214,6 +1317,9 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
         return result
     except Exception as exc:
         _record_operation("add_contact", target, "failed", str(exc))
+        if hwnd:
+            # 失败时把表单收掉：残留的表单会让下一轮找不到「新聊天」搜索框
+            _dismiss_contact_form(hwnd)
         raise
     finally:
         _release_action()

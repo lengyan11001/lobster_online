@@ -464,3 +464,93 @@ def test_whatsapp_friend_fields_follow_desktop_form_not_wechat():
     assert "function namelessTargetLines" in script
     assert "personalWhatsappFriendAddError" in script
     assert "<th>姓名</th>" in script and "号码 / @用户名" in script
+
+
+class _FakeNode:
+    """最小 UIA 节点替身：引擎只读 Name / ControlTypeName / AutomationId / BoundingRectangle。"""
+
+    def __init__(self, name="", control_type="EditControl", rect=None, automation_id=""):
+        self.Name = name
+        self.ControlTypeName = control_type
+        self.AutomationId = automation_id
+        if rect is not None:
+            self.BoundingRectangle = type(
+                "Rect", (), {"left": rect[0], "top": rect[1], "right": rect[2], "bottom": rect[3]}
+            )()
+
+
+def _fake_tree(monkeypatch, nodes):
+    monkeypatch.setattr(engine, "_iter_nodes", lambda root, **kwargs: [(node, 1) for node in nodes])
+
+
+def test_contact_form_hint_reads_whatsapp_own_text(monkeypatch):
+    """号码未注册时表单会显示提示：能读到就必须带进错误里。"""
+    _fake_tree(
+        monkeypatch,
+        [
+            _FakeNode("名字"),
+            _FakeNode("此电话号码没有注册 WhatsApp。请在主要设备上邀请对方。", "TextControl"),
+            _FakeNode("保存", "ButtonControl"),
+        ],
+    )
+    assert "没有注册 WhatsApp" in engine._contact_form_hint(object())
+    _fake_tree(monkeypatch, [_FakeNode("名字")])
+    assert engine._contact_form_hint(object()) == ""
+
+
+def test_contact_save_blocked_message_is_actionable():
+    """当前 WebView2 版读不到那句提示时，错误本身必须说清怎么办。"""
+    message = engine._contact_save_blocked_message("")
+    assert "「保存」" in message
+    assert "已注册 WhatsApp" in message
+    assert "用户名" in message
+    assert engine._contact_save_blocked_message("此电话号码没有注册 WhatsApp").endswith(
+        "表单提示：此电话号码没有注册 WhatsApp"
+    )
+
+
+def test_new_chat_search_found_without_placeholder(monkeypatch):
+    """点开新聊天后面板搜索框会丢标签：要能靠「添加联系人」按钮的几何关系找到它。"""
+    blank = _FakeNode("", "EditControl", rect=(1137, 320, 1323, 341))
+    _fake_tree(
+        monkeypatch,
+        [
+            blank,
+            _FakeNode("添加联系人", "ButtonControl", rect=(1130, 360, 1330, 400)),
+            _FakeNode("新建群组", "ButtonControl", rect=(1130, 410, 1330, 450)),
+        ],
+    )
+    assert engine._find_new_chat_search(object()) is blank
+
+    # 没有锚点按钮时退回占位文案匹配
+    labelled = _FakeNode("搜索姓名、电话号码或 @账号", "EditControl", rect=(1137, 320, 1323, 341))
+    _fake_tree(monkeypatch, [labelled])
+    assert engine._find_new_chat_search(object()) is labelled
+    _fake_tree(monkeypatch, [_FakeNode("名字", "EditControl", rect=(1, 1, 2, 2))])
+    assert engine._find_new_chat_search(object()) is None
+
+
+def test_add_contact_failure_dismisses_form(monkeypatch):
+    """表单残留会连带下一轮找不到搜索框：失败时必须收掉。"""
+    dismissed = {"n": 0}
+    monkeypatch.setattr(engine, "_window_or_raise", lambda: (123, {"title": "WhatsApp"}))
+    monkeypatch.setattr(engine, "_activate_window", lambda hwnd: None)
+    monkeypatch.setattr(engine, "_open_new_chat_page", lambda hwnd: _FakeNode("搜索"))
+    monkeypatch.setattr(engine, "_root_for_hwnd", lambda hwnd: object())
+    monkeypatch.setattr(engine, "_click", lambda node: None)
+    monkeypatch.setattr(engine, "_set_edit_text", lambda node, value: None)
+    monkeypatch.setattr(engine, "_contact_save_blocked_message", lambda hint="": "保存没出现")
+    monkeypatch.setattr(engine, "_dismiss_contact_form", lambda hwnd: dismissed.__setitem__("n", dismissed["n"] + 1))
+    _fake_tree(
+        monkeypatch,
+        [
+            _FakeNode("名字", "EditControl", rect=(1, 1, 2, 2)),
+            _FakeNode("电话号码", "EditControl", rect=(1, 1, 2, 2)),
+            _FakeNode("添加联系人", "ButtonControl", rect=(1, 1, 2, 2)),
+        ],
+    )
+    monkeypatch.setattr(engine, "_click_named", lambda root, names, **kwargs: False)
+
+    with pytest.raises(RuntimeError, match="保存没出现"):
+        engine.add_contact(first_name="探测", phone="1312312312")
+    assert dismissed["n"] == 1
