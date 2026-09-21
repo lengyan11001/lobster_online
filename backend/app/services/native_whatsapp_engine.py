@@ -405,13 +405,25 @@ _UIA_CACHE: Dict[str, Any] = {"module": None, "error": "", "source": "", "at": 0
 _UIA_ERROR_CACHE_SECONDS = 300.0
 
 
-def _activate_vendor_path() -> bool:
-    """把随包下发的内置依赖目录挂到 sys.path 最前面（幂等）。"""
+def _activate_vendor_path(*, prefer: bool = False) -> bool:
+    """把随包下发的内置依赖目录挂进 sys.path（幂等）。
+
+    默认追加到末尾：系统已安装的包照旧优先，缺失的（uiautomation / comtypes /
+    psutil / pyperclip）从内置副本补上。
+    prefer=True 时挪到最前：系统安装版导入失败（装坏了）时强制走内置副本。
+    """
     if not VENDOR_DIR.is_dir():
         return False
     resolved = str(VENDOR_DIR)
-    if resolved not in sys.path:
+    if resolved in sys.path:
+        if prefer and sys.path.index(resolved) != 0:
+            sys.path.remove(resolved)
+            sys.path.insert(0, resolved)
+        return True
+    if prefer:
         sys.path.insert(0, resolved)
+    else:
+        sys.path.append(resolved)
     return True
 
 
@@ -437,6 +449,11 @@ def _drop_partial_modules() -> None:
             sys.modules.pop(name, None)
 
 
+# 模块加载即挂上内置依赖目录：psutil / pyperclip 缺失时也能从随包副本补上，
+# uiautomation 导入失败时 load_uia() 会再把它提到 sys.path 最前。
+_activate_vendor_path()
+
+
 def load_uia(*, refresh: bool = False) -> tuple[Any, str, str]:
     """加载 uiautomation，返回 (模块或 None, 错误, 来源)。
 
@@ -459,17 +476,17 @@ def load_uia(*, refresh: bool = False) -> tuple[Any, str, str]:
     try:
         import uiautomation as auto  # type: ignore
 
-        module, source = auto, "installed"
+        module, source = auto, _module_source(auto)
     except Exception as exc:
         error = f"系统安装版：{type(exc).__name__}: {exc}"
 
-    if module is None and _activate_vendor_path():
+    if module is None and _activate_vendor_path(prefer=True):
         _drop_partial_modules()
         _prepare_comtypes_cache()
         try:
             import uiautomation as auto  # type: ignore
 
-            module, source, error = auto, "vendor", ""
+            module, source, error = auto, _module_source(auto), ""
         except Exception as exc:
             error = f"{error}；内置副本：{type(exc).__name__}: {exc}" if error else f"内置副本：{type(exc).__name__}: {exc}"
 
@@ -569,6 +586,16 @@ def _module_probe(name: str) -> tuple[bool, str]:
         return True, ""
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
+
+
+def _module_source(module: Any) -> str:
+    """区分模块是从随包内置副本来的，还是系统 site-packages 来的。"""
+    origin = str(getattr(module, "__file__", "") or "").replace("\\", "/")
+    if not origin:
+        return "builtin"
+    if origin.startswith(str(VENDOR_DIR).replace("\\", "/")):
+        return "vendor"
+    return "installed"
 
 
 def _process_meta(pid: int) -> Dict[str, Any]:
@@ -908,7 +935,7 @@ def _dependency_report() -> Dict[str, Any]:
     for name in ("win32gui", "win32process", "pyperclip", "psutil"):
         ok, error = _module_probe(name)
         deps[name] = ok
-        sources[name] = "installed" if ok else "missing"
+        sources[name] = _module_source(sys.modules.get(name)) if ok else "missing"
         if not ok:
             errors[name] = error
     return {"deps": deps, "errors": errors, "sources": sources, "uia_source": uia_source}

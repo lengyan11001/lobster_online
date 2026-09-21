@@ -68,11 +68,16 @@
     var repair = s.auto_repair || {};
     var processes = Array.isArray(s.processes) ? s.processes : [];
     var candidates = Array.isArray(s.candidates) ? s.candidates : [];
+    var fallbackReady = {
+      psutil: caps.process_scan === 'ctypes',
+      pyperclip: caps.clipboard === 'win32clipboard' || caps.clipboard === 'ctypes'
+    };
     var depText = Object.keys(deps).map(function(key) {
       if (deps[key]) return key + ':✓' + (sources[key] === 'vendor' ? '(内置副本)' : '');
-      return key + ':✗';
+      return key + ':✗' + (fallbackReady[key] ? '(已兜底)' : '');
     }).join('　');
-    var depErrorText = Object.keys(depErrors).map(function(key) { return key + ' → ' + depErrors[key]; }).join('；');
+    var openErrors = Object.keys(depErrors).filter(function(key) { return !fallbackReady[key]; });
+    var depErrorText = openErrors.map(function(key) { return key + ' → ' + depErrors[key]; }).join('；');
     var capText = '进程枚举 ' + (caps.process_scan || '-') + '　剪贴板 ' + (caps.clipboard || '-') + '　UIA ' + (caps.uia || '-');
     var repairText = repair.running
       ? '正在自动修复运行依赖…'
@@ -83,7 +88,7 @@
         + '<td>' + (row.is_visible === false ? '隐藏' : (row.is_iconic ? '最小化' : '正常')) + '</td>'
         + '<td>' + esc(row.match_by || '') + '</td></tr>';
     }).join('');
-    return '<div style="margin-top:0.6rem;font-size:0.78rem;line-height:1.75;color:#3f5a4e;">'
+    return '<div style="grid-column:1/-1;margin-top:0.6rem;font-size:0.78rem;line-height:1.75;color:#3f5a4e;">'
       + '版本：界面 ' + esc(v.static_version || '-') + '-' + esc(v.static_build == null ? '-' : v.static_build)
       + '　后端 ' + esc(v.client_version || '-') + '-' + esc(v.client_build == null ? '-' : v.client_build)
       + (v.expected_routes_missing && v.expected_routes_missing.length

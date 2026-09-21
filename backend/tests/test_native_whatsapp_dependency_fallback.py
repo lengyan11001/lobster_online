@@ -38,6 +38,30 @@ def test_vendor_bundle_ships_uiautomation_and_comtypes():
     assert (vendor / "uiautomation" / "uiautomation.py").is_file()
     assert (vendor / "uiautomation" / "bin").is_dir()
     assert (vendor / "comtypes" / "__init__.py").is_file()
+    # psutil 的 C 扩展与 pyperclip 也随包下发：客户机缺这两个包时不必再退化到兜底
+    assert (vendor / "psutil" / "__init__.py").is_file()
+    assert (vendor / "psutil" / "_psutil_windows.pyd").is_file()
+    assert (vendor / "pyperclip" / "__init__.py").is_file()
+    assert str(vendor) in sys.path, "engine 导入时就应该把内置依赖目录挂进 sys.path"
+
+
+def test_vendored_psutil_and_pyperclip_fill_missing_packages(monkeypatch):
+    """site-packages 里没有 psutil / pyperclip 时，要从内置副本补上（客户机场景）。"""
+    monkeypatch.setattr(sys, "path", [p for p in sys.path if "site-packages" not in p.lower()])
+    for name in ("psutil", "pyperclip", "psutil._psutil_windows"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    scan.reset_cache()
+    ok, error = engine._module_probe("psutil")
+    assert ok, error
+    vendor_prefix = str(engine.VENDOR_DIR).replace("\\", "/")
+    assert vendor_prefix in str(sys.modules["psutil"].__file__).replace("\\", "/")
+    assert engine._module_source(sys.modules["psutil"]) == "vendor"
+    assert scan.process_scan_backend() == "psutil"
+    rows = scan.snapshot_processes(ttl=0.0)
+    assert any(row["pid"] == os.getpid() for row in rows)
+    clip_ok, clip_error = engine._module_probe("pyperclip")
+    assert clip_ok, clip_error
+    scan.reset_cache()
 
 
 def test_process_scan_uses_ctypes_when_psutil_missing(monkeypatch):
@@ -142,5 +166,10 @@ def test_frontend_surfaces_dependency_diagnostics():
     assert "/api/settings/repair-runtime-dependencies" in js
     assert "dependency_sources" in js
     assert "capabilities" in js
+    # 诊断块必须横跨整行，否则状态卡网格会把它挤成窄条、按钮和表格叠在一起
+    assert "grid-column:1/-1" in js
+    # 已有兜底的缺失（psutil→ctypes / pyperclip→win32clipboard）不该再报红
+    assert "fallbackReady" in js
+    assert "已兜底" in js
     registry = (ROOT / "static" / "js" / "view-registry.js").read_text(encoding="utf-8")
-    assert "personal-whatsapp-deps-vendor-v8" in registry
+    assert "personal-whatsapp-deps-vendor-v9" in registry
