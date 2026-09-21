@@ -57,12 +57,45 @@ def whatsapp_window_match(*, process_name: str, class_name: str, title: str) -> 
         return True
     return "whatsapp" in window_title
 
+
+def is_whatsapp_process(process_name: str, process_path: str = "") -> bool:
+    """判断一个进程是不是 WhatsApp（进程名优先，安装路径兜底，兼容 Store/MSIX 版）。"""
+    name = str(process_name or "").strip().lower()
+    path = str(process_path or "").strip().lower()
+    if name in WHATSAPP_PROCESS_IGNORE:
+        return False
+    if name in WHATSAPP_PROCESS_NAMES or any(hint in name for hint in WHATSAPP_PROCESS_HINTS):
+        return True
+    if not path:
+        return False
+    # 浏览器也可能在参数里带 whatsapp；只看可执行文件路径本身
+    if any(token in path for token in ("chrome.exe", "msedge.exe", "firefox.exe", "iexplore.exe")):
+        return False
+    return "whatsapp" in path
+
+
+def _window_rank(row: Dict[str, Any]) -> tuple:
+    title = str(row.get("title") or "").lower()
+    class_name = str(row.get("class_name") or "")
+    noisy = any(token in title for token in ("hidden", "tray", "shadow", "default ime", "msctfime"))
+    return (
+        1 if row.get("match_by") in {"class", "title"} else 0,
+        1 if (row.get("is_visible") and not row.get("is_iconic")) else 0,
+        1 if title == "whatsapp" else 0,
+        0 if "business" in title else 1,
+        1 if row.get("match_by") == "child" else 0,
+        1 if class_name in WHATSAPP_WINDOW_CLASSES else 0,
+        1 if not noisy else 0,
+        int(row.get("hwnd") or 0),
+    )
+
 _UI_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="lobster-whatsapp")
 _ACTIVE_LOCK = threading.Lock()
 _ACTIVE = False
 _ACTIVE_ACTION = ""
 _STOP_REQUESTED = threading.Event()
 _DB_LOCK = threading.RLock()
+_LAST_STATUS_LOG_AT = 0.0
 
 _SKIP_TEXT = {
     "WhatsApp",
@@ -371,6 +404,7 @@ def _scan_windows() -> List[Dict[str, Any]]:
                 "class_name": class_name,
                 "process_name": meta.get("name") or "",
                 "process_path": meta.get("exe") or "",
+                "is_visible": bool(win32gui.IsWindowVisible(hwnd)),
                 "is_iconic": bool(win32gui.IsIconic(hwnd)),
                 "rect": list(rect),
                 "match_by": match_by,
@@ -395,9 +429,26 @@ def _scan_windows() -> List[Dict[str, Any]]:
             _thread_id, pid = win32process.GetWindowThreadProcessId(hwnd)
             meta = _process_meta(int(pid or 0))
             process_name = str(meta.get("name") or "").lower()
-            if not whatsapp_window_match(process_name=process_name, class_name=class_name, title=title):
-                return
-            match_by = "class" if class_name in WHATSAPP_WINDOW_CLASSES else "title"
+            process_path = str(meta.get("exe") or "")
+            # 进程优先：只要是 WhatsApp 进程的顶层窗口就收进来（后面再按"类名/标题命中"排序），
+            # 这样即使新版换了窗口类名也不会"完全识别不到"。
+            if process_name or process_path:
+                if not is_whatsapp_process(process_name, process_path):
+                    return
+                if class_name in WHATSAPP_WINDOW_CLASSES:
+                    match_by = "class"
+                elif "whatsapp" in title.lower():
+                    match_by = "title"
+                else:
+                    match_by = "process"
+            else:
+                # 拿不到进程信息（例如客户端没装 psutil）：退回"只看窗口类名/标题"
+                if class_name in WHATSAPP_WINDOW_CLASSES:
+                    match_by = "class"
+                elif "whatsapp" in title.lower():
+                    match_by = "title"
+                else:
+                    return
             row = window_row(int(hwnd), match_by=match_by)
             if row and int(row["hwnd"]) not in seen:
                 seen.add(int(row["hwnd"]))
@@ -421,14 +472,7 @@ def _scan_windows() -> List[Dict[str, Any]]:
 
     win32gui.EnumWindows(collect, None)
 
-    def rank(row: Dict[str, Any]) -> tuple:
-        title = str(row.get("title") or "").lower()
-        exact = 1 if title == "whatsapp" else 0
-        business_penalty = 0 if "business" not in title else -1
-        child_bonus = 1 if row.get("match_by") == "child" else 0
-        return (exact, business_penalty, child_bonus, int(row.get("hwnd") or 0))
-
-    return sorted(items, key=rank, reverse=True)
+    return sorted(items, key=_window_rank, reverse=True)
 
 
 def whatsapp_processes() -> List[Dict[str, Any]]:
@@ -640,7 +684,10 @@ def _probe_window(window: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def status() -> Dict[str, Any]:
-    deps = {name: _module_available(name) for name in ("uiautomation", "win32gui", "win32process", "pyperclip")}
+    deps = {
+        name: _module_available(name)
+        for name in ("uiautomation", "win32gui", "win32process", "pyperclip", "psutil")
+    }
     windows = _scan_windows()
     processes = whatsapp_processes()
     probed = _probe_window(windows[0]) if windows and deps["uiautomation"] else (windows[0] if windows else {})
@@ -654,6 +701,28 @@ def status() -> Dict[str, Any]:
         )
     else:
         reason = probed.get("reason") or ("未检测到 Windows 桌面版 WhatsApp" if not windows else "")
+    # 记录一次扫描结果（20 秒节流），下次诊断包就能直接看到"进程/窗口到底长什么样"
+    global _LAST_STATUS_LOG_AT
+    now_ts = time.time()
+    if now_ts - _LAST_STATUS_LOG_AT >= 20:
+        _LAST_STATUS_LOG_AT = now_ts
+        try:
+            _append_log(
+                "status_scan",
+                ok=bool(probed.get("uia_ready")),
+                desktop_found=bool(windows),
+                reason=reason,
+                deps=deps,
+                processes=[{"name": item.get("name"), "pid": item.get("pid")} for item in processes[:8]],
+                candidates=[
+                    {"title": row.get("title"), "class_name": row.get("class_name"),
+                     "process_name": row.get("process_name"), "is_iconic": row.get("is_iconic"),
+                     "match_by": row.get("match_by")}
+                    for row in windows[:8]
+                ],
+            )
+        except Exception:
+            pass
     return {
         "ok": bool(probed.get("uia_ready")),
         "desktop_found": bool(windows),
@@ -664,7 +733,8 @@ def status() -> Dict[str, Any]:
         "window": probed,
         "processes": processes[:8],
         "candidates": [
-            {key: row.get(key) for key in ("hwnd", "title", "class_name", "process_name", "is_iconic", "match_by")}
+            {key: row.get(key) for key in ("hwnd", "title", "class_name", "process_name",
+                                           "is_visible", "is_iconic", "match_by")}
             for row in windows[:8]
         ],
         "dependencies": deps,

@@ -59,10 +59,49 @@
   }
 
   function statusCard(label, value, tone) { return '<div class="pwa-stat"><span>' + esc(label) + '</span><strong style="color:' + (tone === 'good' ? '#087443' : tone === 'bad' ? '#b42318' : '#3f5a4e') + '">' + esc(value) + '</strong></div>'; }
+  function statusDiagnostics(s) {
+    var v = state.version || {};
+    var deps = s.dependencies || {};
+    var processes = Array.isArray(s.processes) ? s.processes : [];
+    var candidates = Array.isArray(s.candidates) ? s.candidates : [];
+    var depText = Object.keys(deps).map(function(key) { return key + ':' + (deps[key] ? '✓' : '✗'); }).join('　');
+    var rows = candidates.map(function(row) {
+      return '<tr><td>' + esc(row.title || '') + '</td><td>' + esc(row.class_name || '') + '</td>'
+        + '<td>' + esc(row.process_name || '') + '</td>'
+        + '<td>' + (row.is_visible === false ? '隐藏' : (row.is_iconic ? '最小化' : '正常')) + '</td>'
+        + '<td>' + esc(row.match_by || '') + '</td></tr>';
+    }).join('');
+    return '<div style="margin-top:0.6rem;font-size:0.78rem;line-height:1.75;color:#3f5a4e;">'
+      + '版本：界面 ' + esc(v.static_version || '-') + '-' + esc(v.static_build == null ? '-' : v.static_build)
+      + '　后端 ' + esc(v.client_version || '-') + '-' + esc(v.client_build == null ? '-' : v.client_build)
+      + (v.expected_routes_missing && v.expected_routes_missing.length
+        ? '　<span style="color:#b42318;">后端缺接口：' + esc(v.expected_routes_missing.join('、')) + '</span>' : '')
+      + '<br>依赖：' + esc(depText)
+      + '<br>原因：' + esc(s.reason || '（无）')
+      + '<br>WhatsApp 进程：' + (processes.length
+        ? esc(processes.map(function(p) { return (p.name || '?') + '(' + p.pid + ')'; }).join('、'))
+        : '（没检测到进程）')
+      + '</div>'
+      + (candidates.length
+        ? '<table style="margin-top:0.5rem;width:100%;font-size:0.76rem;border-collapse:collapse;">'
+          + '<thead><tr><th align="left">窗口标题</th><th align="left">窗口类名</th><th align="left">进程</th><th align="left">状态</th><th align="left">命中</th></tr></thead>'
+          + '<tbody>' + rows + '</tbody></table>'
+        : '<div style="margin-top:0.4rem;font-size:0.78rem;color:#b42318;">没有扫到候选窗口：请确认 WhatsApp 主窗口已打开（不是托盘/最小化）。</div>')
+      + '<div style="margin-top:0.5rem;"><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappCopyDiag">复制诊断信息</button></div>';
+  }
   function renderStatus() {
     var s = state.status || {};
     var host = $('personalWhatsappStatus'); if (!host) return;
-    host.innerHTML = statusCard('桌面客户端', s.desktop_found ? '已检测' : '未检测', s.desktop_found ? 'good' : 'bad') + statusCard('登录状态', s.logged_in ? '已登录' : '未登录', s.logged_in ? 'good' : 'bad') + statusCard('UIA 控件', s.ok ? '可用' : '不可用', s.ok ? 'good' : 'bad') + statusCard('未读会话', Number(s.unread_count || 0), s.unread_count ? 'good' : '') + statusCard('当前操作', s.running ? (s.active_action || '执行中') : '空闲', s.running ? '' : 'good');
+    host.innerHTML = statusCard('桌面客户端', s.desktop_found ? '已检测' : '未检测', s.desktop_found ? 'good' : 'bad') + statusCard('登录状态', s.logged_in ? '已登录' : '未登录', s.logged_in ? 'good' : 'bad') + statusCard('UIA 控件', s.ok ? '可用' : '不可用', s.ok ? 'good' : 'bad') + statusCard('未读会话', Number(s.unread_count || 0), s.unread_count ? 'good' : '') + statusCard('当前操作', s.running ? (s.active_action || '执行中') : '空闲', s.running ? '' : 'good') + statusDiagnostics(s);
+    var copy = $('personalWhatsappCopyDiag');
+    if (copy) copy.addEventListener('click', function() {
+      var payload = JSON.stringify({ version: state.version || {}, status: state.status || {} }, null, 1);
+      var done = function() { toastMessage('诊断信息已复制，发给技术支持即可'); };
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(payload).then(done, done); return; }
+      } catch (e) {}
+      window.prompt('复制下面的诊断信息', payload);
+    });
   }
   function fillConfig() {
     var c = state.config || {};
@@ -82,7 +121,11 @@
     host.innerHTML = items.length ? items.map(function(item) { var good = item.status === 'replied'; return '<div class="pwa-record ' + (item.status === 'failed' ? 'failed' : '') + '"><div class="pwa-item-title">' + esc(item.peer_name || '未命名会话') + ' <span class="pwa-badge">' + esc(good ? '已回复' : item.status === 'failed' ? '失败' : '跳过') + '</span></div><div class="pwa-meta">' + esc(item.reply || item.error || reasonLabel(item.reason)) + '</div></div>'; }).join('') : '<div class="pwa-empty">本轮没有会话明细</div>';
   }
   function loadBase() {
-    return Promise.all([request('/api/native-whatsapp/status'), request('/api/native-whatsapp/config')]).then(function(values) { state.status = values[0] || {}; state.config = values[1] && values[1].config || state.status.config || {}; state.lastRun = state.config.last_run || {}; renderStatus(); fillConfig(); renderLastRun(); if (!state.status.ok && state.status.reason) showError(state.status.reason); });
+    return Promise.all([
+      request('/api/native-whatsapp/status'),
+      request('/api/native-whatsapp/config'),
+      request('/api/version').catch(function() { return {}; })
+    ]).then(function(values) { state.status = values[0] || {}; state.config = values[1] && values[1].config || state.status.config || {}; state.version = values[2] || {}; state.lastRun = state.config.last_run || {}; renderStatus(); fillConfig(); renderLastRun(); if (!state.status.ok && state.status.reason) showError(state.status.reason); });
   }
 
   function loadSessions() {

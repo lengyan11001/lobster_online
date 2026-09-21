@@ -67,3 +67,29 @@ def test_whatsapp_window_match_covers_release_variants():
                                             class_name="Chrome_WidgetWin_1", title="WhatsApp Web")
     assert not engine.whatsapp_window_match(process_name="WhatsAppCrashHandler.exe",
                                             class_name="WinUIDesktopWin32WindowClass", title="WhatsApp")
+
+
+def test_whatsapp_process_and_ranking_for_store_build():
+    """Store/MSIX 版（WhatsApp.Root.exe，窗口在 WindowsApps 下）必须能被认出来。"""
+    from backend.app.services import native_whatsapp_engine as engine
+
+    assert engine.is_whatsapp_process("WhatsApp.Root.exe")
+    assert engine.is_whatsapp_process(
+        "app.exe", r"C:\Program Files\WindowsApps\5319275A.WhatsAppDesktop_2.3000.1047999808\WhatsApp.exe")
+    assert not engine.is_whatsapp_process("chrome.exe", r"C:\Program Files\Google\Chrome\chrome.exe")
+
+    main = {"title": "WhatsApp", "class_name": "WinUIDesktopWin32WindowClass", "match_by": "class",
+            "is_visible": False, "is_iconic": False, "hwnd": 10}
+    helper = {"title": "Default IME", "class_name": "IME", "match_by": "process",
+              "is_visible": False, "is_iconic": False, "hwnd": 20}
+    assert engine._window_rank(main) > engine._window_rank(helper)
+
+
+def test_diagnostics_bundle_includes_whatsapp_log_and_ui_shows_probe():
+    logs_api = (ROOT / "backend" / "app" / "api" / "logs_api.py").read_text(encoding="utf-8")
+    ui = (ROOT / "static" / "js" / "personal-whatsapp.js").read_text(encoding="utf-8")
+    engine = (ROOT / "backend" / "app" / "services" / "native_whatsapp_engine.py").read_text(encoding="utf-8")
+
+    assert "logs/native_whatsapp.jsonl" in logs_api
+    assert "statusDiagnostics" in ui and "复制诊断信息" in ui and "/api/version" in ui
+    assert "status_scan" in engine and "processes" in engine and "candidates" in engine
