@@ -806,6 +806,154 @@ def _root_for_hwnd(hwnd: int) -> Any:
     return candidates[-1] if candidates else root
 
 
+def _foreground_hwnd() -> int:
+    try:
+        import ctypes
+
+        return int(ctypes.windll.user32.GetForegroundWindow() or 0)
+    except Exception:
+        return 0
+
+
+def _same_process_window(candidate: int, target: int) -> bool:
+    """两个窗口句柄是否属于同一进程（同一个 WhatsApp 的壳/子窗口都算）。"""
+    if not candidate or not target:
+        return False
+    if candidate == target:
+        return True
+    try:
+        import win32process  # type: ignore
+
+        _thread_a, pid_a = win32process.GetWindowThreadProcessId(candidate)
+        _thread_b, pid_b = win32process.GetWindowThreadProcessId(target)
+        return bool(pid_a) and pid_a == pid_b
+    except Exception:
+        return False
+
+
+def _node_hwnd(node: Any) -> int:
+    """控件所属顶层窗口句柄。"""
+    try:
+        hwnd = int(getattr(node, "NativeWindowHandle", 0) or 0)
+        if hwnd:
+            return hwnd
+        return int(getattr(node.GetTopLevelControl(), "NativeWindowHandle", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _ensure_foreground(hwnd: int, *, attempts: int = 3, pause: float = 0.25) -> bool:
+    """确保目标窗口是当前前台窗口。
+
+    按键（^a/^v/Enter）是发给"当前前台窗口"的：如果焦点在别的程序（例如微信）上，
+    自动化就会操作到那个程序上。所以任何键盘/鼠标动作之前都必须先过这一关。
+    """
+    target = int(hwnd or 0)
+    if not target:
+        return False
+    for _attempt in range(max(1, attempts)):
+        if _same_process_window(_foreground_hwnd(), target):
+            return True
+        _activate_window(target)
+        time.sleep(pause)
+    return _same_process_window(_foreground_hwnd(), target)
+
+
+def _read_clipboard_text() -> str:
+    """读回用户剪贴板里的文本，用于用完还原（不污染用户剪贴板/微信）。"""
+    try:
+        import win32clipboard  # type: ignore
+        import win32con  # type: ignore
+
+        win32clipboard.OpenClipboard()
+        try:
+            if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                return str(win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT) or "")
+        finally:
+            win32clipboard.CloseClipboard()
+    except Exception:
+        pass
+    return ""
+
+
+_PRIMARY_WINDOW_CACHE: Dict[str, Any] = {"at": 0.0, "hwnd": 0}
+
+
+def _primary_window_hwnd() -> int:
+    """WhatsApp 主窗口句柄（5 秒缓存，避免每次都扫窗口）。"""
+    now = time.time()
+    cached = int(_PRIMARY_WINDOW_CACHE.get("hwnd") or 0)
+    if cached and now - float(_PRIMARY_WINDOW_CACHE.get("at") or 0.0) < 5:
+        return cached
+    windows = _scan_windows()
+    hwnd = int(windows[0]["hwnd"]) if windows else 0
+    _PRIMARY_WINDOW_CACHE.update({"at": now, "hwnd": hwnd})
+    return hwnd
+
+
+def _point_window_hwnd(x: int, y: int) -> int:
+    try:
+        import win32gui  # type: ignore
+
+        return int(win32gui.WindowFromPoint((int(x), int(y))) or 0)
+    except Exception:
+        return 0
+
+
+def _focus_by_mouse(node: Any, hwnd: int = 0) -> None:
+    """用真实鼠标点击聚焦输入框（Web 控件的 SetFocus/Invoke 都不可靠）。
+
+    点击前把 WhatsApp 临时置顶，并校验"这个坐标下确实是 WhatsApp 窗口"，
+    所以不会像旧实现那样把点击落到被遮挡的其它程序（例如微信）上。
+    """
+    rect = _rect(node)
+    if not rect:
+        raise RuntimeError("WhatsApp 输入框不可点击")
+    import win32api  # type: ignore
+    import win32con  # type: ignore
+    import win32gui  # type: ignore
+
+    target = int(hwnd or 0) or _primary_window_hwnd()
+    if target:
+        _activate_window(target)
+    x = int((rect[0] + rect[2]) / 2)
+    y = int((rect[1] + rect[3]) / 2)
+    pinned = False
+    if target:
+        try:
+            win32gui.SetWindowPos(
+                target, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
+            )
+            pinned = True
+            time.sleep(0.2)
+        except Exception:
+            pinned = False
+    try:
+        if target and not _same_process_window(_point_window_hwnd(x, y), target):
+            raise RuntimeError("输入框位置不在 WhatsApp 窗口上，已中止输入（避免误操作到其它程序）")
+        win32api.SetCursorPos((x, y))
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        time.sleep(0.12)
+    finally:
+        if pinned:
+            try:
+                win32gui.SetWindowPos(
+                    target, win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE,
+                )
+            except Exception:
+                pass
+
+
+def _node_value(node: Any) -> str:
+    try:
+        return str(node.GetValuePattern().Value)
+    except Exception:
+        return ""
+
+
 def _activate_window(hwnd: int) -> None:
     import win32con  # type: ignore
     import win32gui  # type: ignore
@@ -816,9 +964,39 @@ def _activate_window(hwnd: int) -> None:
         win32gui.SetForegroundWindow(hwnd)
     except Exception:
         pass
+    # 后台进程调 SetForegroundWindow 常被系统拒绝；BringWindowToTop / SetWindowPos
+    # 不需要前台权限，能把窗口提到最前，避免鼠标坐标点到被遮挡的其它程序上。
+    try:
+        win32gui.BringWindowToTop(hwnd)
+        win32gui.SetWindowPos(
+            hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
+            win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
+        )
+    except Exception:
+        pass
 
 
 def _click(node: Any) -> None:
+    """点击控件：优先 UIA 原生调用（Invoke/Select），不移动鼠标，避免误点到别的程序。"""
+    for accessor, action in (
+        ("GetInvokePattern", "Invoke"),
+        ("GetTogglePattern", "Toggle"),
+        ("GetSelectionItemPattern", "Select"),
+    ):
+        try:
+            pattern = getattr(node, accessor)()
+            getattr(pattern, action)()
+            time.sleep(0.08)
+            return
+        except Exception:
+            continue
+    # Web 按钮多数支持 LegacyIAccessible.DoDefaultAction（也不动鼠标）
+    try:
+        node.GetLegacyIAccessiblePattern().DoDefaultAction()
+        time.sleep(0.08)
+        return
+    except Exception:
+        pass
     rect = _rect(node)
     if not rect:
         raise RuntimeError("WhatsApp 控件不可点击")
@@ -827,22 +1005,49 @@ def _click(node: Any) -> None:
 
     x = int((rect[0] + rect[2]) / 2)
     y = int((rect[1] + rect[3]) / 2)
+    # 鼠标点击前确认"这个坐标下就是 WhatsApp 窗口"，避免点到别的程序（例如微信）上
+    target = _node_hwnd(node) or _primary_window_hwnd()
+    hit = _same_process_window(_point_window_hwnd(x, y), target) if target else True
+    if not hit:
+        woken = _ensure_foreground(target)
+        hit = woken or _same_process_window(_point_window_hwnd(x, y), target)
+    if not hit:
+        raise RuntimeError("点击位置不在 WhatsApp 窗口上，已中止（避免误操作到其它程序）")
     win32api.SetCursorPos((x, y))
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
     time.sleep(0.08)
 
 
-def _set_edit_text(node: Any, value: str) -> None:
+def _set_edit_text(node: Any, value: str, *, hwnd: Optional[int] = None) -> None:
+    """往 WhatsApp 输入框写值。
+
+    实测（本机 WinUI3，2026-09-21）：WebView2 的输入框不支持 ValuePattern /
+    LegacyIAccessible 写值，只能"聚焦 + 粘贴"。因此这里必须：
+      1) 先确认前台是本窗口 —— 否则 ^a/^v 会打到别的程序上（用户反馈"控制了我的微信"就是这个）；
+      2) 用完把用户剪贴板还原，避免污染。
+    """
+    text_value = str(value or "")
     if node is None or not _rect(node):
         raise RuntimeError("WhatsApp 输入框不可用")
-    _click(node)
+    target = int(hwnd or 0) or _primary_window_hwnd() or _node_hwnd(node)
+    if not _ensure_foreground(target):
+        raise RuntimeError("WhatsApp 窗口没有拿到前台焦点，已中止输入（避免误操作到其它程序）")
+    _focus_by_mouse(node, target)
     from pywinauto.keyboard import send_keys  # type: ignore
 
-    set_clipboard_text(str(value or ""))
-    send_keys("^a", pause=0.02)
-    send_keys("^v", pause=0.03)
-    time.sleep(0.18)
+    backup = _read_clipboard_text()
+    try:
+        set_clipboard_text(text_value)
+        send_keys("^a", pause=0.02)
+        send_keys("^v", pause=0.03)
+        time.sleep(0.18)
+    finally:
+        if backup:
+            try:
+                set_clipboard_text(backup)
+            except Exception:
+                pass
 
 
 def _claim_action(action: str) -> None:
@@ -1283,6 +1488,8 @@ def _send_current_message(hwnd: int, text: str) -> Dict[str, Any]:
     if composer is None:
         raise RuntimeError("未找到 WhatsApp 消息输入框")
     _click(composer)
+    if not _ensure_foreground(int(hwnd or 0) or _primary_window_hwnd()):
+        raise RuntimeError("WhatsApp 窗口没有拿到前台焦点，已中止发送（避免误操作到其它程序）")
     from pywinauto.keyboard import send_keys  # type: ignore
 
     set_clipboard_text(str(text or ""))
