@@ -1055,6 +1055,54 @@ def _click(node: Any, *, force_mouse: bool = False) -> None:
     _click_with_mouse(node)
 
 
+_IME_WINDOW_HINTS = (
+    "ime", "msctfime", "candwnd", "pinyin", "unikey", "inputtip", "textinputhost", "sogou", "qqpinyin",
+)
+
+
+def _is_ime_like_window(hwnd: int) -> bool:
+    """输入法候选窗 / TSF 浮层。
+
+    实测（本机日志 17:58）：接管一轮报「点击位置不在 WhatsApp 窗口上」，
+    当时候选窗口里就有 `QQPinyinImageCandWndTSF` —— 输入法浮层盖在 WhatsApp 上，
+    但它不属于别的程序，点它最多无效、不会误操作。
+    """
+    if not hwnd:
+        return False
+    try:
+        import win32gui  # type: ignore
+        import win32process  # type: ignore
+
+        class_name = str(win32gui.GetClassName(hwnd) or "").lower()
+        title = str(win32gui.GetWindowText(hwnd) or "").lower()
+        _thread, pid = win32process.GetWindowThreadProcessId(hwnd)
+        process_name = ""
+        if pid:
+            try:
+                import psutil  # type: ignore
+
+                process_name = str(psutil.Process(int(pid)).name() or "").lower()
+            except Exception:
+                process_name = ""
+        haystack = " ".join((class_name, title, process_name))
+        return any(hint in haystack for hint in _IME_WINDOW_HINTS)
+    except Exception:
+        return False
+
+
+def _point_clickable(x: int, y: int, target: int) -> bool:
+    """这个屏幕坐标是否"可以点"：WhatsApp 自己的窗口，或者输入法浮层。
+
+    其它程序（例如被挡住的微信/浏览器）一律返回 False —— 宁可不点，也不误操作。
+    """
+    hwnd = _point_window_hwnd(x, y)
+    if not hwnd:
+        return True
+    if _same_process_window(hwnd, target):
+        return True
+    return _is_ime_like_window(hwnd)
+
+
 def _click_with_mouse(node: Any) -> None:
     rect = _rect(node)
     if not rect:
@@ -1067,12 +1115,21 @@ def _click_with_mouse(node: Any) -> None:
     y = int((rect[1] + rect[3]) / 2)
     # 鼠标点击前确认"这个坐标下就是 WhatsApp 窗口"，避免点到别的程序（例如微信）上
     target = _node_hwnd(node) or _primary_window_hwnd()
-    hit = _same_process_window(_point_window_hwnd(x, y), target) if target else True
-    if not hit:
-        woken = _ensure_foreground(target)
-        hit = woken or _same_process_window(_point_window_hwnd(x, y), target)
-    if not hit:
-        raise RuntimeError("点击位置不在 WhatsApp 窗口上，已中止（避免误操作到其它程序）")
+    if target:
+        # 先把 WhatsApp 提到最前（后台进程抢不到前台，用置顶兜底），再等坐标可用
+        _activate_window(target)
+        try:
+            win32gui.SetWindowPos(
+                target, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
+            )
+        except Exception:
+            pass
+        deadline = time.monotonic() + 3.0
+        while not _point_clickable(x, y, target):
+            if time.monotonic() >= deadline:
+                raise RuntimeError("WhatsApp 窗口被其它窗口挡住或不可见，请把它移到前面后重试")
+            time.sleep(0.25)
     win32api.SetCursorPos((x, y))
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
