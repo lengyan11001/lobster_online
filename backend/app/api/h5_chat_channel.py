@@ -91,6 +91,12 @@ _SCHEDULED_COMPLETE_RETRY_STATUS = {500, 502, 503, 504}
 _SCHEDULED_TASK_TRANSIENT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 _SCHEDULED_TASK_EVENT_TIMEOUT_SECONDS = 12.0
 _SCHEDULED_TASK_EVENT_ATTEMPTS = 3
+# 控制面（事件/心跳/完成上报）一次丢包不该让服务端以为任务停了：失败入本地队列，
+# 由 polling 循环稍后重投。队列有上限、有保鲜期，避免无界增长。
+_SCHEDULED_TASK_CONTROL_OUTBOX_LIMIT = 200
+_SCHEDULED_TASK_CONTROL_OUTBOX_MAX_AGE_SECONDS = 900.0
+_SCHEDULED_TASK_CONTROL_OUTBOX_FLUSH_PER_LOOP = 5
+_scheduled_task_control_outbox: List[Dict[str, Any]] = []
 _SCHEDULED_TASK_COMPLETION_ATTEMPTS = 5
 _SCHEDULED_TASK_COMPLETION_RETRY_DELAY_SECONDS = 2.0
 _SCHEDULED_TASK_COMPLETION_RETRY_SECONDS = 6 * 60 * 60
@@ -1447,6 +1453,7 @@ async def _post_task_control_request(
     label: str,
     run_id: str = "",
     attempts: int = _SCHEDULED_TASK_EVENT_ATTEMPTS,
+    enqueue_on_failure: bool = True,
 ) -> int:
     """Post task control data with a short timeout.
 
@@ -1469,7 +1476,8 @@ async def _post_task_control_request(
             response = await client.post(url, json=body, headers=headers, timeout=timeout)
             status = int(response.status_code)
             if status in _SCHEDULED_TASK_TRANSIENT_STATUS and attempt < attempts:
-                await asyncio.sleep(0.25 * (2 ** (attempt - 1)))
+                # 加抖动：几百个安装同时被上游 5xx 抖到时不至于一起重试打爆服务端。
+                await asyncio.sleep(0.25 * (2 ** (attempt - 1)) * random.uniform(0.6, 1.4))
                 continue
             _record_task_control_delivery(
                 run_id=run_id,
@@ -1482,7 +1490,7 @@ async def _post_task_control_request(
         except httpx.RequestError as exc:
             last_error = exc
             if attempt < attempts:
-                await asyncio.sleep(0.25 * (2 ** (attempt - 1)))
+                await asyncio.sleep(0.25 * (2 ** (attempt - 1)) * random.uniform(0.6, 1.4))
                 continue
         except Exception as exc:
             last_error = exc
@@ -1501,7 +1509,99 @@ async def _post_task_control_request(
         attempts=attempts,
         error=last_error,
     )
+    if enqueue_on_failure:
+        _enqueue_task_control_outbox(url=url, body=body, label=label, run_id=run_id, error=last_error)
     return 0
+
+
+def _enqueue_task_control_outbox(
+    *,
+    url: str,
+    body: Dict[str, Any],
+    label: str,
+    run_id: str,
+    error: Optional[Exception] = None,
+) -> None:
+    """控制面请求重试失败后入队，交给 polling 循环补投（同一次元数据，不重算）。"""
+    item = {
+        "url": str(url or ""),
+        "body": dict(body or {}),
+        "label": str(label or ""),
+        "run_id": str(run_id or ""),
+        "queued_at": datetime.now(timezone.utc).timestamp(),
+        "attempts": 0,
+        "last_error": str(error)[:200] if error else "",
+    }
+    if not item["url"]:
+        return
+    _scheduled_task_control_outbox.append(item)
+    logger.warning(
+        "[SCHEDULED-TASK] control outbox queued label=%s run_id=%s pending=%s error=%s",
+        item["label"],
+        item["run_id"] or "-",
+        len(_scheduled_task_control_outbox),
+        item["last_error"] or "-",
+    )
+    overflow = len(_scheduled_task_control_outbox) - max(1, int(_SCHEDULED_TASK_CONTROL_OUTBOX_LIMIT or 1))
+    for _ in range(max(0, overflow)):
+        dropped = _scheduled_task_control_outbox.pop(0)
+        logger.warning(
+            "[SCHEDULED-TASK] control outbox overflow, dropped label=%s run_id=%s",
+            dropped.get("label"),
+            dropped.get("run_id") or "-",
+        )
+
+
+async def _flush_task_control_outbox(
+    client: httpx.AsyncClient,
+    headers: Dict[str, str],
+    *,
+    limit: int = _SCHEDULED_TASK_CONTROL_OUTBOX_FLUSH_PER_LOOP,
+) -> None:
+    """按轮询节奏补投控制面请求：成功即出队，过期即丢弃。"""
+    if not _scheduled_task_control_outbox:
+        return
+    now_ts = datetime.now(timezone.utc).timestamp()
+    max_age = float(_SCHEDULED_TASK_CONTROL_OUTBOX_MAX_AGE_SECONDS or 0)
+    budget = max(1, int(limit or 1))
+    flushed = 0
+    remaining: List[Dict[str, Any]] = []
+    for item in list(_scheduled_task_control_outbox):
+        age = now_ts - float(item.get("queued_at") or now_ts)
+        if max_age > 0 and age > max_age:
+            logger.warning(
+                "[SCHEDULED-TASK] control outbox expired label=%s run_id=%s age=%.0fs",
+                item.get("label"),
+                item.get("run_id") or "-",
+                age,
+            )
+            continue
+        if flushed >= budget:
+            remaining.append(item)
+            continue
+        item["attempts"] = int(item.get("attempts") or 0) + 1
+        status = await _post_task_control_request(
+            client,
+            str(item.get("url") or ""),
+            dict(item.get("body") or {}),
+            headers,
+            label=f"{item.get('label')}:retry",
+            run_id=str(item.get("run_id") or ""),
+            attempts=1,
+            enqueue_on_failure=False,
+        )
+        flushed += 1
+        if not (200 <= int(status or 0) < 300):
+            remaining.append(item)
+            continue
+        logger.info(
+            "[SCHEDULED-TASK] control outbox redelivered label=%s run_id=%s attempts=%s age=%.0fs",
+            item.get("label"),
+            item.get("run_id") or "-",
+            item.get("attempts"),
+            age,
+        )
+    _scheduled_task_control_outbox[:] = remaining
 
 
 def _task_event_rejects_local_work(status_code: Any) -> bool:
@@ -4902,6 +5002,7 @@ def _merge_scheduled_douyin_stranger_params(
         "reply_prompt",
         "contact_value",
         "wechat_add_friend_enabled",
+        "wechat_add_friend_targets_source",
     ):
         if key not in task:
             continue
@@ -6954,6 +7055,9 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             ),
             reply_prompt=str(source.get("reply_prompt") or "").strip(),
             contact_value=str(source.get("contact_value") or "").strip(),
+            wechat_add_friend_targets_source=str(
+                source.get("wechat_add_friend_targets_source") or ""
+            ).strip(),
         )
         return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音私信一次性任务执行失败"}
 
@@ -12369,6 +12473,9 @@ async def h5_chat_poll_loop() -> None:
         try:
             timeout = httpx.Timeout(30.0, connect=10.0, read=30.0, write=10.0, pool=10.0)
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+                # 上一轮里失败的控制面请求（事件/心跳/完成上报）在这里补投，
+                # 避免一次 502 就让服务端认为任务停摆。
+                await _flush_task_control_outbox(client, headers)
                 now_loop = asyncio.get_event_loop().time()
                 if now_loop - last_heartbeat_at >= heartbeat_interval:
                     heartbeat_resp = await client.post(

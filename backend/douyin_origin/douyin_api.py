@@ -150,6 +150,13 @@ DOUYIN_PRECISE_TOUCH_INFLIGHT_STATUSES = {
     "processing",
 }
 DOUYIN_PRECISE_TOUCH_STATE_BLOB_KEY = "douyin_precise_touch_state_v1"
+# 加好友来源：这些取值表示"联系方式从抖音私信内容里提取"，不需要节点预填 contact_value。
+DOUYIN_WECHAT_ADD_TARGETS_FROM_PRIVATE_MESSAGE = {
+    "douyin_private_message_phone",
+    "douyin_private_message_wechat",
+    "private_message_phone",
+    "private_message_contact",
+}
 DOUYIN_GROUP_NAME_PATTERN = re.compile(r"群|群聊|交流群|社群|分群")
 DOUYIN_GROUP_PREVIEW_PATTERN = re.compile(
     r"加入了群聊|通过.+加入了群聊|新成员可查看历史消息|群聊已满员|查看和管理\s*群成员|本群|置顶公告"
@@ -13090,6 +13097,7 @@ async def run_douyin_h5_stranger_message_task_once(
     reply_mode: str = "fixed",
     reply_prompt: str = "",
     contact_value: str = "",
+    wechat_add_friend_targets_source: str = "",
 ) -> Dict[str, object]:
     """Run the H5 Douyin private-message node once without enabling its monitor."""
     global douyin_stranger_message_running, douyin_stranger_message_stop_requested
@@ -13105,8 +13113,26 @@ async def run_douyin_h5_stranger_message_task_once(
         if auto_reply_enabled and normalized_reply_mode == "fixed" and not fixed_text:
             return {"status": "failed", "code": 400, "message": "H5 抖音私信接管缺少固定文案。"}
 
-        if auto_reply_enabled and normalized_reply_mode == "ai_lead" and not normalized_contact:
-            return {"status": "failed", "code": 400, "message": "H5 AI lead mode requires a contact value."}
+        # 加好友来源选「从抖音私信提取手机号」时，联系方式本来就来自私信内容，
+        # 此时不该再要求 H5 传 contact_value（2026-09-21：该配置连续 15 轮被判 400）。
+        contact_from_private_message = (
+            normalize_douyin_text(wechat_add_friend_targets_source).lower()
+            in DOUYIN_WECHAT_ADD_TARGETS_FROM_PRIVATE_MESSAGE
+        )
+        if (
+            auto_reply_enabled
+            and normalized_reply_mode == "ai_lead"
+            and not normalized_contact
+            and not contact_from_private_message
+        ):
+            return {
+                "status": "failed",
+                "code": 400,
+                "message": (
+                    "AI 线索模式缺少联系方式：请在节点里填写联系方式，"
+                    "或把加好友来源改成「从抖音私信提取手机号」。"
+                ),
+            }
 
         config = load_global_config()
         account = (
