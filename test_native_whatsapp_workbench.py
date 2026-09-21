@@ -384,3 +384,39 @@ def test_personal_whatsapp_view_mirrors_wechat_protocol_friend_flow():
 
     assert "personal-whatsapp-friends-queue" in registry
     assert "/static/js/personal-whatsapp.js?v=" in registry
+
+
+def test_personal_whatsapp_add_edit_forms_live_in_modals():
+    '''新增/编辑表单必须收进弹窗，页面上只留列表与工具栏；且同一控件不允许重复绑定。'''
+    root = Path(__file__).resolve().parent
+    view = (root / "static" / "views" / "personal-whatsapp.html").read_text(encoding="utf-8")
+    script = (root / "static" / "js" / "personal-whatsapp.js").read_text(encoding="utf-8")
+
+    # 四个弹窗：添加好友 / 单条联系人 / 加好友设置 / 接管设置
+    for modal_id in (
+        "personalWhatsappFriendAddModal",
+        "personalWhatsappContactModal",
+        "personalWhatsappFriendSettingsModal",
+        "personalWhatsappTakeoverSettingsModal",
+    ):
+        assert 'class="pwa-modal-mask" id="%s"' % modal_id in view, modal_id
+
+    # 表单字段必须落在弹窗里，不能留在 pwa-panel 直系区域
+    for panel in ('data-pwa-panel="friends"', 'data-pwa-panel="takeover"'):
+        start = view.index(panel)
+        panel_html = view[start:view.index("</section>", start)]
+        for field in ("personalWhatsappFriendKeyword", "personalWhatsappContactFirstName", "personalWhatsappInstruction"):
+            assert 'id="%s"' % field not in panel_html, field
+
+    # 弹窗开关 + Esc 关闭
+    for anchor in ("function openModal", "function closeModal", "function openFriendAddModal",
+                   "function openFriendSettingsModal", "function openTakeoverSettingsModal"):
+        assert anchor in script, anchor
+    assert "event.key==='Escape'" in script
+    assert "[data-pwa-modal-close]" in script
+
+    # 同一个控件只允许绑定一次监听（此前 saveBtn 被绑了两次，导致重复保存请求）
+    bound = re.findall(r"\$\('([A-Za-z0-9_-]+)'\)\.addEventListener", script)
+    assert len(bound) >= 20  # 防止正则失配后空跑
+    duplicated = {key for key in bound if bound.count(key) > 1}
+    assert not duplicated, sorted(duplicated)

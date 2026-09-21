@@ -9,6 +9,12 @@
 .pwa-table{width:100%;border-collapse:collapse;font-size:13px}
 .pwa-table th,.pwa-table td{padding:9px 8px;border-bottom:1px solid rgba(26,82,55,.1);text-align:left;vertical-align:top;word-break:break-word}
 .pwa-table th{color:#496257;font-size:12px}
+.pwa-modal-mask{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;padding:20px;background:rgba(15,23,42,.46)}
+.pwa-modal-mask.show{display:flex}
+.pwa-modal{width:min(680px,96vw);max-height:88vh;overflow:auto;border-radius:20px;background:#fbfffd;box-shadow:0 28px 80px rgba(15,23,42,.28);padding:16px}
+.pwa-modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.pwa-modal-head h3{margin:0;font-size:16px;font-weight:950}
+.pwa-modal .pwa-btn-row{margin-top:14px}
 @media(max-width:900px){.pwa-status{grid-template-columns:repeat(2,minmax(0,1fr))}.pwa-grid{grid-template-columns:1fr}.pwa-fields,.pwa-capability{grid-template-columns:1fr}.pwa-page{padding:12px}.pwa-card{padding:13px}}
     </style>
     <div class="pwa-shell">
@@ -43,35 +49,63 @@
 
       <section class="pwa-panel" data-pwa-panel="friends">
         <div class="pwa-card">
-          <div class="pwa-card-head"><div><h3>加好友队列</h3><div class="pwa-muted">提交只会入队；点「启动队列」后按间隔逐条加。命中日额度会退回队列，等次日额度重置再继续。</div></div><span class="pwa-chip" id="personalWhatsappFriendQueueState">未启动</span></div>
-          <div class="pwa-toolbar"><button type="button" class="btn btn-primary btn-sm" id="personalWhatsappFriendQueueStartBtn">启动队列</button><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappFriendQueueStopBtn">停止队列</button><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappFriendQueueSettingsBtn">保存队列设置</button><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappFriendImportBtn">批量导入文件</button><input id="personalWhatsappFriendImportInput" type="file" accept=".csv,.tsv,.txt,text/csv,text/plain" multiple style="display:none"><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappDownloadTxtTemplateBtn">下载 TXT 模板</button><span class="pwa-muted" id="personalWhatsappFriendQueueSummary">未启动</span></div>
+          <div class="pwa-card-head"><div><h3>加好友</h3><div class="pwa-muted">添加好友、单条联系人和队列设置都在弹窗里；这里只看队列和记录。</div></div><span class="pwa-chip" id="personalWhatsappFriendQueueState">未启动</span></div>
+          <div class="pwa-toolbar"><button type="button" class="btn btn-primary btn-sm" id="personalWhatsappAddFriendBtn">添加好友</button><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappAddContactBtn">单条联系人</button><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappFriendImportBtn">批量导入</button><input id="personalWhatsappFriendImportInput" type="file" accept=".csv,.tsv,.txt,text/csv,text/plain" multiple style="display:none"><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappDownloadTxtTemplateBtn">下载 TXT 模板</button><button type="button" class="btn btn-primary btn-sm" id="personalWhatsappFriendQueueStartBtn">启动</button><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappFriendQueueStopBtn">停止</button><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappFriendQueueSettingsBtn">设置</button><span class="pwa-muted" id="personalWhatsappFriendQueueSummary">未启动</span></div>
           <div class="pwa-status pwa-status-compact" id="personalWhatsappFriendQueueStats"></div>
           <div class="pwa-toolbar"><input id="personalWhatsappFriendRecordSearch" class="pwa-input" placeholder="搜索目标或申请语" style="max-width:420px"><select id="personalWhatsappFriendRecordStatus" class="pwa-select" style="width:130px"><option value="">全部状态</option><option value="queued">排队中</option><option value="running">执行中</option><option value="success">成功</option><option value="failed">失败</option><option value="cancelled">已停止</option></select></div>
           <div id="personalWhatsappFriendRecordList" class="pwa-empty">暂无加好友记录</div>
           <div id="personalWhatsappFriendRecordPagination" class="pwa-pagination"></div>
         </div>
-        <div class="pwa-grid" style="margin-top:12px">
-          <div class="pwa-card">
-            <div class="pwa-card-head"><div><h3>提交好友申请</h3><div class="pwa-muted">一行一个目标：电话 / 名字,电话 / @用户名。桌面版加好友表单只支持中国大陆 +86；其他国家请用 @用户名。</div></div><span class="pwa-chip" id="personalWhatsappFriendState">待提交</span></div>
-            <div class="pwa-field"><label>目标（一行一个）</label><textarea id="personalWhatsappFriendKeyword" class="pwa-textarea" placeholder="张三,13800138000&#10;+8613800138001&#10;@alice_wa"></textarea></div>
-            <div class="pwa-fields"><div class="pwa-field"><label>备注</label><input id="personalWhatsappFriendRemark" class="pwa-input" placeholder="可不填"></div><div class="pwa-field"><label>验证消息（添加成功后自动发送）</label><input id="personalWhatsappFriendApplyMessage" class="pwa-input" placeholder="加好友后要发的话"></div><div class="pwa-field"><label>两次取任务间隔（秒）</label><input id="personalWhatsappFriendInterval" class="pwa-input" type="number" min="1" max="86400" value="60"></div><div class="pwa-field"><label>每日上限（0 表示不限制）</label><input id="personalWhatsappFriendDailyLimit" class="pwa-input" type="number" min="0" max="1000" value="30"></div></div>
-            <div class="pwa-btn-row"><button type="button" class="btn btn-primary" id="personalWhatsappAddFriendSubmitBtn">提交好友申请</button><label class="pwa-muted" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="personalWhatsappFriendAutoStart">提交后自动启动队列</label><span class="pwa-muted" id="personalWhatsappAddFriendState">等待提交</span></div>
-          </div>
-          <div class="pwa-card">
-            <div class="pwa-card-head"><div><h3>单条添加联系人</h3><div class="pwa-muted">直接填写桌面「添加联系人」表单并立即保存，结果以桌面表单退出为准。</div></div><span class="pwa-muted" id="personalWhatsappAddContactState">待提交</span></div>
-            <div class="pwa-fields"><div class="pwa-field"><label>名字</label><input id="personalWhatsappContactFirstName" class="pwa-input" placeholder="必填"></div><div class="pwa-field"><label>姓氏</label><input id="personalWhatsappContactLastName" class="pwa-input" placeholder="可选"></div><div class="pwa-field"><label>@用户名</label><input id="personalWhatsappContactUsername" class="pwa-input" placeholder="例如 nplustech"></div><div class="pwa-field"><label>电话号码</label><input id="personalWhatsappContactPhone" class="pwa-input" placeholder="例如 13800138000"></div><div class="pwa-field"><label>国家/地区</label><select id="personalWhatsappCountryCode" class="pwa-select"><option value="+86">中国 +86</option></select></div></div>
-            <div class="pwa-btn-row"><button type="button" class="btn btn-primary" id="personalWhatsappAddContactBtn">填写桌面表单并保存</button></div>
-          </div>
-        </div>
       </section>
 
       <section class="pwa-panel" data-pwa-panel="takeover">
-        <div class="pwa-grid"><div class="pwa-card"><div class="pwa-card-head"><div><h3>接管参数</h3><div class="pwa-muted">工作流节点和手动执行共用这套本机参数。</div></div><span class="pwa-chip" id="personalWhatsappTakeoverState">未接管</span></div><div class="pwa-fields"><div class="pwa-field full"><label>账号标识</label><input id="personalWhatsappAccountId" class="pwa-input" value="desktop-whatsapp-default" readonly></div><div class="pwa-field"><label>轮询间隔（秒）</label><input id="personalWhatsappInterval" class="pwa-input" type="number" min="1" max="300" value="15"></div><div class="pwa-field"><label>接管时长（分钟）</label><input id="personalWhatsappTakeoverMinutes" class="pwa-input" type="number" min="1" max="1440" value="30"></div><div class="pwa-field"><label>每轮最多会话</label><input id="personalWhatsappMaxUnread" class="pwa-input" type="number" min="1" max="100" value="50"></div><div class="pwa-field full"><label>回复要求</label><textarea id="personalWhatsappInstruction" class="pwa-textarea" maxlength="4000" placeholder="语气、业务边界、语言要求等"></textarea></div></div><div class="pwa-btn-row"><button type="button" class="btn btn-primary" id="personalWhatsappSaveBtn">保存参数</button><button type="button" class="btn btn-ghost" id="personalWhatsappRunBtn">执行一轮</button><button type="button" class="btn btn-primary" id="personalWhatsappLoopStartBtn">开始常驻接管</button><button type="button" class="btn btn-ghost" id="personalWhatsappLoopStopBtn">停止常驻接管</button><button type="button" class="btn btn-danger" id="personalWhatsappStopBtn">停止当前执行</button></div><div class="pwa-muted" id="personalWhatsappLoopSummary">常驻接管未启动</div></div><div class="pwa-card"><div class="pwa-card-head"><div><h3>最近一轮</h3><div id="personalWhatsappLastRun" class="pwa-muted">暂无执行记录</div></div><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappDiagnosticsBtn">刷新诊断</button></div><div id="personalWhatsappItems" class="pwa-run-items"></div><div class="pwa-field" style="margin-top:10px"><label>接管日志（最近事件）</label><div id="personalWhatsappDiagnostics" class="pwa-list" style="max-height:280px"><div class="pwa-empty">暂无日志</div></div></div></div></div>
+        <div class="pwa-grid">
+          <div class="pwa-card">
+            <div class="pwa-card-head"><div><h3>接管</h3><div class="pwa-muted">只处理未读一对一会话，跳过群聊和系统消息。</div></div><span class="pwa-chip" id="personalWhatsappTakeoverState">未接管</span></div>
+            <div class="pwa-muted" id="personalWhatsappTakeoverSummary">间隔 15 秒 · 每轮最多 50 个会话 · 单轮 30 分钟</div>
+            <div class="pwa-btn-row"><button type="button" class="btn btn-primary" id="personalWhatsappRunBtn">执行一轮</button><button type="button" class="btn btn-primary" id="personalWhatsappLoopStartBtn">开始常驻接管</button><button type="button" class="btn btn-ghost" id="personalWhatsappLoopStopBtn">停止常驻接管</button><button type="button" class="btn btn-ghost" id="personalWhatsappTakeoverSettingsBtn">接管设置</button><button type="button" class="btn btn-danger" id="personalWhatsappStopBtn">停止当前执行</button></div>
+            <div class="pwa-muted" id="personalWhatsappLoopSummary">常驻接管未启动</div>
+          </div>
+          <div class="pwa-card"><div class="pwa-card-head"><div><h3>最近一轮</h3><div id="personalWhatsappLastRun" class="pwa-muted">暂无执行记录</div></div><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappDiagnosticsBtn">刷新诊断</button></div><div id="personalWhatsappItems" class="pwa-run-items"></div><div class="pwa-field" style="margin-top:10px"><label>接管日志（最近事件）</label><div id="personalWhatsappDiagnostics" class="pwa-list" style="max-height:280px"><div class="pwa-empty">暂无日志</div></div></div></div>
+        </div>
       </section>
 
       <section class="pwa-panel" data-pwa-panel="records">
         <div class="pwa-card"><div class="pwa-card-head"><div><h3>桌面操作记录</h3><div class="pwa-muted">同步、打开会话、发送、添加联系人和失败原因统一记录。</div></div><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappRefreshRecordsBtn">刷新</button></div><div class="pwa-toolbar"><input id="personalWhatsappRecordSearch" class="pwa-input" placeholder="搜索动作、目标或错误" style="max-width:460px"></div><div id="personalWhatsappRecordList" class="pwa-list"><div class="pwa-empty">暂无记录</div></div><div id="personalWhatsappRecordPagination" class="pwa-pagination"></div></div>
       </section>
+    </div>
+    <div class="pwa-modal-mask" id="personalWhatsappFriendAddModal">
+      <div class="pwa-modal">
+        <div class="pwa-modal-head"><h3>添加好友</h3><button type="button" class="btn btn-ghost btn-sm" data-pwa-modal-close>关闭</button></div>
+        <div class="pwa-field"><label>目标（一行一个：电话 / 名字,电话 / @用户名）</label><textarea id="personalWhatsappFriendKeyword" class="pwa-textarea" placeholder="张三,13800138000&#10;+8613800138001&#10;@alice_wa"></textarea></div>
+        <div class="pwa-fields"><div class="pwa-field"><label>备注</label><input id="personalWhatsappFriendRemark" class="pwa-input" placeholder="可不填"></div><div class="pwa-field"><label>验证消息（添加成功后自动发送）</label><input id="personalWhatsappFriendApplyMessage" class="pwa-input" placeholder="加好友后要发的话"></div></div>
+        <div class="pwa-muted">间隔与每日上限在「设置」弹窗里；桌面加好友表单只支持中国大陆 +86，其他国家请用 @用户名。</div>
+        <div class="pwa-btn-row"><button type="button" class="btn btn-primary" id="personalWhatsappAddFriendSubmitBtn">提交好友申请</button><label class="pwa-muted" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="personalWhatsappFriendAutoStart">提交后自动启动队列</label><span class="pwa-muted" id="personalWhatsappAddFriendState">等待提交</span></div>
+      </div>
+    </div>
+
+    <div class="pwa-modal-mask" id="personalWhatsappContactModal">
+      <div class="pwa-modal">
+        <div class="pwa-modal-head"><h3>单条添加联系人</h3><button type="button" class="btn btn-ghost btn-sm" data-pwa-modal-close>关闭</button></div>
+        <div class="pwa-fields"><div class="pwa-field"><label>名字</label><input id="personalWhatsappContactFirstName" class="pwa-input" placeholder="必填"></div><div class="pwa-field"><label>姓氏</label><input id="personalWhatsappContactLastName" class="pwa-input" placeholder="可选"></div><div class="pwa-field"><label>@用户名</label><input id="personalWhatsappContactUsername" class="pwa-input" placeholder="例如 nplustech"></div><div class="pwa-field"><label>电话号码</label><input id="personalWhatsappContactPhone" class="pwa-input" placeholder="例如 13800138000"></div><div class="pwa-field"><label>国家/地区</label><select id="personalWhatsappCountryCode" class="pwa-select"><option value="+86">中国 +86</option></select></div></div>
+        <div class="pwa-btn-row"><button type="button" class="btn btn-primary" id="personalWhatsappContactSubmitBtn">填写桌面表单并保存</button><span class="pwa-muted" id="personalWhatsappAddContactState">待提交</span></div>
+      </div>
+    </div>
+
+    <div class="pwa-modal-mask" id="personalWhatsappFriendSettingsModal">
+      <div class="pwa-modal">
+        <div class="pwa-modal-head"><h3>加好友设置</h3><button type="button" class="btn btn-ghost btn-sm" data-pwa-modal-close>关闭</button></div>
+        <div class="pwa-fields"><div class="pwa-field"><label>两次取任务间隔（秒）</label><input id="personalWhatsappFriendInterval" class="pwa-input" type="number" min="1" max="86400" value="60"></div><div class="pwa-field"><label>每日上限（0 表示不限制）</label><input id="personalWhatsappFriendDailyLimit" class="pwa-input" type="number" min="0" max="1000" value="30"></div></div>
+        <div class="pwa-btn-row"><button type="button" class="btn btn-primary" id="personalWhatsappFriendSettingsSaveBtn">保存设置</button></div>
+      </div>
+    </div>
+
+    <div class="pwa-modal-mask" id="personalWhatsappTakeoverSettingsModal">
+      <div class="pwa-modal">
+        <div class="pwa-modal-head"><h3>接管设置</h3><button type="button" class="btn btn-ghost btn-sm" data-pwa-modal-close>关闭</button></div>
+        <div class="pwa-fields"><div class="pwa-field full"><label>账号标识</label><input id="personalWhatsappAccountId" class="pwa-input" value="desktop-whatsapp-default" readonly></div><div class="pwa-field"><label>轮询间隔（秒）</label><input id="personalWhatsappInterval" class="pwa-input" type="number" min="1" max="300" value="15"></div><div class="pwa-field"><label>接管时长（分钟）</label><input id="personalWhatsappTakeoverMinutes" class="pwa-input" type="number" min="1" max="1440" value="30"></div><div class="pwa-field"><label>每轮最多会话</label><input id="personalWhatsappMaxUnread" class="pwa-input" type="number" min="1" max="100" value="50"></div><div class="pwa-field full"><label>回复要求</label><textarea id="personalWhatsappInstruction" class="pwa-textarea" maxlength="4000" placeholder="语气、业务边界、语言要求等"></textarea></div></div>
+        <div class="pwa-btn-row"><button type="button" class="btn btn-primary" id="personalWhatsappSaveBtn">保存参数</button></div>
+      </div>
     </div>
   </div>
 </section>
