@@ -65,6 +65,50 @@ def test_source_registry_has_room_for_new_platforms():
     assert "customs_data" in keys and "local_registry" in keys
 
 
+def test_normalize_grade_maps_every_writing_to_abcd():
+    assert bt.normalize_grade("A") == "A"
+    assert bt.normalize_grade("p2") == "B"
+    assert bt.normalize_grade("P3") == "C"
+    assert bt.normalize_grade("P4") == "D"
+    assert bt.normalize_grade("2") == "B"
+    assert bt.normalize_grade("优质客户") == "A"
+    assert bt.normalize_grade("垃圾询盘") == "D"
+    assert bt.normalize_grade("", 82) == "A"
+    assert bt.normalize_grade("", 70) == "B"
+    assert bt.normalize_grade("", 50) == "C"
+    assert bt.normalize_grade("", 10) == "D"
+    assert bt.normalize_grade("") == ""
+
+
+def test_placeholder_archive_detection():
+    placeholder = bt.is_placeholder_archive({
+        "display_name": "Gerson Carlos（待核验，当前仅为阿里询盘原始字段）",
+        "status": "needs_review",
+        "evidence_count": 0,
+        "sources": ["alibaba_inquiry", "alibaba_profile"],
+    })
+    real = bt.is_placeholder_archive({
+        "display_name": "ABC Trading LLC",
+        "status": "completed",
+        "evidence_count": 6,
+        "sources": ["official_website", "web_search"],
+    })
+
+    assert placeholder["placeholder"] is True
+    assert placeholder["suggested_status"] == "needs_info"
+    assert real["placeholder"] is False
+
+
+def test_verdict_accepts_legacy_p_grades():
+    payload = bt.backtest_verdict(
+        fields={"company_name": "PEPI INTEGRITY & MAINTENANCE", "domain": "pepi.com"},
+        evidence_count=5, sources_hit=["official_website"], grade="P2", score=72,
+    )
+
+    assert payload["verdict"] == "qualified"
+    assert payload["notify"] == "business"
+
+
 def test_info_request_instruction_asks_for_the_missing_fields():
     thin = bt.assess_info_sufficiency({"company_name": "ABC Trading Ltd"})
     instruction = bt.build_info_request_instruction(thin, {"name": "Lena", "title": "Sales Manager", "company": "HIKONG"})

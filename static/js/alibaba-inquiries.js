@@ -790,7 +790,8 @@
               '<div class="ali-cell-sub">' + esc(r.buyer_name || '') + '</div></td>' +
               '<td><div>' + esc(r.country || '—') + '</div><div class="ali-cell-sub">' + esc(r.domain || '') + '</div></td>' +
               '<td>' + badge(r.grade || '未分级', r.grade === 'A' ? 'ok' : r.grade === 'B' ? 'info' : '') +
-              (r.score === null || r.score === undefined ? '' : ' <span class="ali-cell-sub">' + r.score + '</span>') + '</td>' +
+              (r.score === null || r.score === undefined ? '' : ' <span class="ali-cell-sub">' + r.score + '</span>') +
+              ((r.placeholder && r.placeholder.placeholder) ? ' ' + badge('待补信息', 'warn') : '') + '</td>' +
               '<td>' + badge((r.evidence_count || 0) + ' 条', '') + '</td>' +
               '<td>' + fmtTime(r.updated_at) + '</td></tr>';
           }).join('') + '</tbody></table>'

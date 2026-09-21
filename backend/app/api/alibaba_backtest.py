@@ -161,6 +161,70 @@ VERDICT_LABELS = {
     "needs_more_info": "信息不够，先要信息",
 }
 
+# ---------------------------------------------------------------- 分级口径统一（A/B/C/D）
+
+_GRADE_TEXT_ALIASES = {
+    "A": "A", "A+": "A", "A1": "A",
+    "B": "B", "B+": "B",
+    "C": "C",
+    "D": "D",
+    # 背调 LLM 之前自己发明的 P 系列（P0 最好）
+    "P0": "A", "P1": "A", "P2": "B", "P3": "C", "P4": "D", "P5": "D",
+    "1": "A", "2": "B", "3": "C", "4": "D", "0": "A",
+    "HIGH": "A", "MEDIUM": "B", "MIDDLE": "B", "LOW": "C",
+    "VIP": "A", "IMPORTANT": "A", "QUALIFIED": "A",
+    "潜在": "B", "意向": "B",
+    "优质": "A", "重点": "A", "重要": "A", "核心": "A",
+    "普通": "C", "观察": "C", "一般": "C",
+    "垃圾": "D", "不匹配": "D", "非目标": "D", "无效": "D",
+}
+
+
+def normalize_grade(value: Any, score: Optional[float] = None) -> str:
+    """把任何分级写法收敛成 A/B/C/D（空且没有分数时返回 ""）。"""
+    text = str(value or "").strip().upper().replace("级", "").strip()
+    if text in _GRADE_TEXT_ALIASES:
+        return _GRADE_TEXT_ALIASES[text]
+    if text:
+        for source, target in _GRADE_TEXT_ALIASES.items():
+            if len(source) > 1 and source in text:
+                return target
+    try:
+        numeric = float(score) if score is not None else None
+    except (TypeError, ValueError):
+        numeric = None
+    if numeric is None:
+        return ""
+    if numeric >= 80:
+        return "A"
+    if numeric >= 65:
+        return "B"
+    if numeric >= 45:
+        return "C"
+    return "D"
+
+
+def is_placeholder_archive(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """判断一条档案是不是"只有阿里原始字段、没跑出结论"的占位档案。"""
+    payload = payload if isinstance(payload, dict) else {}
+    name = str(payload.get("display_name") or payload.get("company_name") or "")
+    status = str(payload.get("status") or "").strip().lower()
+    evidence_count = int(payload.get("evidence_count") or 0)
+    sources = [str(item) for item in (payload.get("sources") or payload.get("source_types") or [])]
+    external = [s for s in sources if not s.startswith("alibaba_")]
+    reasons: List[str] = []
+    if "待核验" in name or "仅为阿里询盘原始字段" in name:
+        reasons.append("显示名标注为待核验/仅阿里原始字段")
+    if status in {"needs_info", "pending"} and evidence_count == 0:
+        reasons.append("状态=待补信息且没有外部证据")
+    if evidence_count == 0 and not external:
+        reasons.append("没有任何外部来源证据")
+    return {
+        "placeholder": bool(reasons),
+        "reasons": reasons,
+        "suggested_status": "needs_info" if reasons else (status or "completed"),
+    }
+
 FIELD_LABELS = {
     "company_name": "公司名称",
     "domain": "官网/域名",
@@ -220,7 +284,7 @@ def backtest_verdict(
     """把证据收敛成结论：verdict + 置信度 + 三句话理由 + 缺口 + 已用来源。不再只堆来源。"""
     sufficiency = assess_info_sufficiency(fields)
     sources_hit = [str(item) for item in (sources_hit or []) if str(item or "").strip()]
-    grade = str(grade or "").upper()
+    grade = normalize_grade(grade, score)
     score_value = int(score or 0)
 
     if not sufficiency["can_enrich"]:

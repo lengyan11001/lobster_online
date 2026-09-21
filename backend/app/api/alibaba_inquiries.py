@@ -1719,6 +1719,37 @@ def _serialize_profile(row: Optional[AlibabaCustomerProfile]) -> Optional[Dict[s
     }
 
 
+def _normalize_archive_grade(grade: Any, score: Any = None) -> str:
+    """读的时候也把老数据（P2/P3 之类）收敛成 A/B/C/D。"""
+    try:
+        from .alibaba_backtest import normalize_grade
+
+        return normalize_grade(grade, score)
+    except Exception:
+        return str(grade or "").strip().upper()[:16]
+
+
+def _archive_placeholder_flag(
+    *,
+    display_name: str,
+    status: str,
+    evidence_count: int,
+    sources: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """占位档案 = 只有阿里原始字段、没跑出结论（提醒继续要信息，而不是当成已完成）。"""
+    try:
+        from .alibaba_backtest import is_placeholder_archive
+
+        return is_placeholder_archive({
+            "display_name": display_name,
+            "status": status,
+            "evidence_count": evidence_count,
+            "sources": sources or [],
+        })
+    except Exception:
+        return {"placeholder": False, "reasons": [], "suggested_status": status}
+
+
 def _serialize_archive(row: Optional[AlibabaCustomerArchive], db: Optional[Session] = None) -> Optional[Dict[str, Any]]:
     if not row:
         return None
@@ -1748,7 +1779,7 @@ def _serialize_archive(row: Optional[AlibabaCustomerArchive], db: Optional[Sessi
         "domain": row.domain or "",
         "email": row.email or "",
         "phone": row.phone or "",
-        "grade": row.grade or "",
+        "grade": _normalize_archive_grade(row.grade, row.score),
         "score": row.score,
         "summary": row.summary or "",
         "seed": row.seed or {},
@@ -1765,6 +1796,12 @@ def _serialize_archive(row: Optional[AlibabaCustomerArchive], db: Optional[Sessi
         },
         "pending_count": len(pending.get("items") or []) if isinstance(pending.get("items"), list) else 0,
         "evidence_count": int(evidence_count),
+        "placeholder": _archive_placeholder_flag(
+            display_name=row.display_name or "",
+            status=row.status or "",
+            evidence_count=int(evidence_count),
+            sources=[str(item.get("source_type") or "") for item in (evidence or []) if isinstance(item, dict)],
+        ),
         "last_enriched_at": _dt(row.last_enriched_at),
         "last_error": row.last_error or "",
         "created_at": _dt(row.created_at),
@@ -4010,12 +4047,25 @@ def _fallback_archive_profile(seed: Dict[str, Any], evidence: List[Dict[str, Any
     return result
 
 
-def _archive_status_from_profile(profile: Dict[str, Any], evidence: List[Dict[str, Any]]) -> str:
+def _archive_status_from_profile(
+    profile: Dict[str, Any],
+    evidence: List[Dict[str, Any]],
+    seed: Optional[Dict[str, Any]] = None,
+) -> str:
     entity = profile.get("entity_resolution") if isinstance(profile.get("entity_resolution"), dict) else {}
     pending = profile.get("pending_review") if isinstance(profile.get("pending_review"), dict) else {}
     pending_items = pending.get("items") if isinstance(pending.get("items"), list) else []
     external_count = len(_usable_archive_external_evidence(evidence))
     confidence = str(entity.get("confidence") or "").lower()
+    # 种子只有公司名或只有邮箱这类单锚点 → 信息本来就不够，别标成"待复核"，直接标待补信息
+    if seed is not None:
+        try:
+            from .alibaba_backtest import assess_info_sufficiency
+
+            if not assess_info_sufficiency(seed).get("can_enrich"):
+                return "needs_info"
+        except Exception:
+            pass
     if confidence == "low" or pending_items or external_count <= 0:
         return "needs_review"
     return "completed"
@@ -4256,10 +4306,14 @@ def _score_grade_from_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
         score = None
     if score is not None:
         score = max(0, min(100, score))
-    grade = str(lead_score.get("grade") or "").strip().upper()
-    if not grade and score is not None:
-        grade = "P0" if score >= 90 else ("P1" if score >= 80 else ("P2" if score >= 70 else ("P3" if score >= 60 else "P4")))
-    return {"score": score, "grade": grade[:16] if grade else ""}
+    # 分级口径统一成 A/B/C/D（模型之前会自己写 P0..P4，导致后面的结论映射认不出来）
+    try:
+        from .alibaba_backtest import normalize_grade
+
+        grade = normalize_grade(lead_score.get("grade"), score)
+    except Exception:
+        grade = str(lead_score.get("grade") or "").strip().upper()[:16]
+    return {"score": score, "grade": grade}
 
 
 async def _generate_archive_profile(
@@ -4422,7 +4476,7 @@ async def _run_archive_enrichment(
         db.commit()
         profile_payload = await _generate_archive_profile(request, seed, evidence)
         score_grade = _score_grade_from_profile(profile_payload)
-        status = _archive_status_from_profile(profile_payload, evidence)
+        status = _archive_status_from_profile(profile_payload, evidence, seed)
         basics = profile_payload.get("basics") if isinstance(profile_payload.get("basics"), dict) else {}
         entity = profile_payload.get("entity_resolution") if isinstance(profile_payload.get("entity_resolution"), dict) else {}
         field_evidence = _archive_field_evidence(seed, evidence, profile_payload)
