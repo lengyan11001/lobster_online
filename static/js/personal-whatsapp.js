@@ -4,6 +4,7 @@
   var ACCOUNT_ID = 'desktop-whatsapp-default';
   var state = {
     friendRecordTimer: null,
+    memoryDocs: [],
     tab: 'overview', busy: false, status: {}, config: {}, lastRun: {},
     sessions: [], groups: [], contacts: [], records: [], activeSession: null, messages: [],
     friendQueue: {}, friendSummary: {}, friendRecords: [], autoReply: {}, diagnostics: {},
@@ -154,6 +155,23 @@
       }).catch(function() {});
     });
   }
+  function loadMemoryDocs() {
+    return request('/api/openclaw/memory/list').then(function(data) {
+      state.memoryDocs = Array.isArray(data.documents) ? data.documents : [];
+      var select = $('personalWhatsappMemoryDoc');
+      if (!select) return state.memoryDocs;
+      var options = ['<option value="">不指定，使用系统优先记忆</option>'];
+      state.memoryDocs.forEach(function(doc) {
+        var id = String(doc.id || doc.doc_id || '');
+        if (!id) return;
+        options.push('<option value="' + esc(id) + '">' + esc(doc.title || doc.filename || id) + '</option>');
+      });
+      select.innerHTML = options.join('');
+      var current = (state.config && Array.isArray(state.config.memory_doc_ids)) ? state.config.memory_doc_ids : [];
+      if (current.length) select.value = String(current[0]);
+      return state.memoryDocs;
+    }).catch(function() { return []; });
+  }
   function fillConfig() {
     var c = state.config || {};
     if ($('personalWhatsappAccountId')) $('personalWhatsappAccountId').value = ACCOUNT_ID;
@@ -161,8 +179,13 @@
     if ($('personalWhatsappTakeoverMinutes')) $('personalWhatsappTakeoverMinutes').value = Math.max(1, Math.min(1440, Number(c.takeover_session_minutes || 30)));
     if ($('personalWhatsappMaxUnread')) $('personalWhatsappMaxUnread').value = Math.max(1, Math.min(100, Number(c.max_unread_per_round || 50)));
     if ($('personalWhatsappInstruction')) $('personalWhatsappInstruction').value = text(c.reply_instruction || '');
+    var memorySelect = $('personalWhatsappMemoryDoc');
+    if (memorySelect) {
+      var selectedDocs = Array.isArray(c.memory_doc_ids) ? c.memory_doc_ids : [];
+      memorySelect.value = selectedDocs.length ? String(selectedDocs[0]) : '';
+    }
   }
-  function configFromFields() { return { interval_seconds:numberField('personalWhatsappInterval',15,1,300), takeover_session_minutes:numberField('personalWhatsappTakeoverMinutes',30,1,1440), max_unread_per_round:numberField('personalWhatsappMaxUnread',50,1,100), reply_instruction:text($('personalWhatsappInstruction') && $('personalWhatsappInstruction').value).trim().slice(0,4000) }; }
+  function configFromFields() { return { memory_doc_ids:(function(){ var node=$('personalWhatsappMemoryDoc'); var value=node?text(node.value).trim():''; return value?[value]:[]; })(), interval_seconds:numberField('personalWhatsappInterval',15,1,300), takeover_session_minutes:numberField('personalWhatsappTakeoverMinutes',30,1,1440), max_unread_per_round:numberField('personalWhatsappMaxUnread',50,1,100), reply_instruction:text($('personalWhatsappInstruction') && $('personalWhatsappInstruction').value).trim().slice(0,4000) }; }
   function reasonLabel(value) { return ({duplicate_in_round:'本轮重复',group_chat:'群聊',no_replyable_text:'无可回复文字',last_message_not_inbound:'最后消息不是对方发送'}[value] || value || '跳过'); }
   function renderLastRun() {
     var run = state.lastRun || {}, summary = $('personalWhatsappLastRun'), host = $('personalWhatsappItems'); if (!summary || !host) return;
@@ -587,5 +610,5 @@
       return '<div class="pwa-record"><div class="pwa-item-title">' + esc(item.event || '事件') + ' <span class="pwa-badge">' + esc(item.ts || '') + '</span></div><div class="pwa-meta">' + esc(detail.join(' · ') || '-') + '</div></div>';
     }).join('') : '<div class="pwa-empty">暂无日志</div>';
   }
-  window.initPersonalWhatsappView=function(){bind();loadBase().then(function(){renderTakeoverSummary();}).catch(function(error){showError(error.message||'WhatsApp 状态读取失败');});loadFriendQueue().catch(function(){});loadAutoReply().catch(function(){});};
+  window.initPersonalWhatsappView=function(){bind();loadMemoryDocs().catch(function(){});loadBase().then(function(){renderTakeoverSummary();}).catch(function(error){showError(error.message||'WhatsApp 状态读取失败');});loadFriendQueue().catch(function(){});loadAutoReply().catch(function(){});};
 })();

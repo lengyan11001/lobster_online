@@ -332,6 +332,7 @@ def _default_config() -> Dict[str, Any]:
         "takeover_session_minutes": 30,
         "max_unread_per_round": 50,
         "reply_instruction": "",
+        "memory_doc_ids": [],
         "last_run": {},
     }
 
@@ -349,6 +350,10 @@ def get_config() -> Dict[str, Any]:
     result["takeover_session_minutes"] = max(1, min(int(result.get("takeover_session_minutes") or 30), 1440))
     result["max_unread_per_round"] = max(1, min(int(result.get("max_unread_per_round") or 50), 100))
     result["reply_instruction"] = str(result.get("reply_instruction") or "").strip()[:4000]
+    result["memory_doc_ids"] = [
+        str(item or "")[:64] for item in (result.get("memory_doc_ids") or [])
+        if str(item or "").strip()
+    ][:20]
     if not isinstance(result.get("last_run"), dict):
         result["last_run"] = {}
     return result
@@ -360,6 +365,7 @@ def save_config(
     takeover_session_minutes: Optional[int] = None,
     max_unread_per_round: Optional[int] = None,
     reply_instruction: Optional[str] = None,
+    memory_doc_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     cfg = get_config()
     if interval_seconds is not None:
@@ -370,6 +376,10 @@ def save_config(
         cfg["max_unread_per_round"] = max(1, min(int(max_unread_per_round), 100))
     if reply_instruction is not None:
         cfg["reply_instruction"] = str(reply_instruction or "").strip()[:4000]
+    if memory_doc_ids is not None:
+        cfg["memory_doc_ids"] = [
+            str(item or "")[:64] for item in (memory_doc_ids or []) if str(item or "").strip()
+        ][:20]
     _write_config(cfg)
     return cfg
 
@@ -2366,12 +2376,73 @@ def _server_proxy_base() -> str:
     return value or "https://h5.bhzn.top"
 
 
+def _load_auto_reply_memory_context(
+    user_id: Optional[int],
+    *,
+    max_chars: int = 12000,
+    max_docs: int = 5,
+    selected_doc_ids: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """把选中的「记忆文件」内容读出来，供回复时注入（与个微同一份实现思路）。"""
+    empty = {"text": "", "document_count": 0, "titles": []}
+    if not user_id:
+        return empty
+    try:
+        from ..api.openclaw_memory import _load_index, _read_canonical_memory_content  # type: ignore
+    except Exception:
+        return empty
+    try:
+        docs = _load_index(int(user_id))
+    except Exception:
+        return empty
+    selected = list(dict.fromkeys(
+        str(item or "").strip() for item in (selected_doc_ids or []) if str(item or "").strip()
+    ))
+    selected_set = set(selected)
+    picked: List[tuple] = []
+    for index, doc in enumerate(docs or []):
+        if not isinstance(doc, dict):
+            continue
+        doc_id = str(doc.get("id") or doc.get("doc_id") or "").strip()
+        if selected_set and doc_id not in selected_set:
+            continue
+        status = str(doc.get("status") or "active").strip().lower()
+        if status not in {"", "active", "enabled", "ready"}:
+            continue
+        rank = (len(selected) - selected.index(doc_id)) if (selected_set and doc_id in selected_set) else 0
+        picked.append((rank, -index, doc))
+    picked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    parts: List[str] = []
+    titles: List[str] = []
+    used = 0
+    for _rank, _index, doc in picked[: max(1, int(max_docs or 1))]:
+        title = str(doc.get("title") or doc.get("filename") or "记忆").strip()
+        remaining = max_chars - used
+        if remaining <= 0:
+            break
+        content = _read_canonical_memory_content(doc, max_chars=min(5000, remaining))
+        if not content:
+            continue
+        block = "## %s\n%s" % (title, content.strip())
+        parts.append(block)
+        titles.append(title[:120])
+        used += len(block)
+        if used >= max_chars:
+            break
+    return {
+        "text": "\n\n---\n\n".join(parts).strip()[:max_chars],
+        "document_count": len(titles),
+        "titles": titles,
+    }
+
+
 async def _generate_reply(
     latest_message: str,
     recent_context: str,
     *,
     auth_context: Optional[Dict[str, Any]],
     instruction: str,
+    memory_text: str = "",
 ) -> str:
     context = auth_context or {}
     token = str(context.get("token") or getattr(settings, "openclaw_sutui_fallback_jwt", None) or "").strip()
@@ -2388,6 +2459,8 @@ async def _generate_reply(
     )
     if instruction:
         system_prompt += f"\n用户补充要求：{instruction[:4000]}"
+    if memory_text:
+        system_prompt += "\n参考资料（优先遵守，不要照抄原文）：\n" + str(memory_text)[:12000]
     payload = {
         "model": model,
         "messages": [
@@ -2436,6 +2509,12 @@ async def run_once(
         return {"ok": True, "skipped": True, "reason": "running", "message": "WhatsApp 已有桌面操作正在执行"}
     _STOP_REQUESTED.clear()
     cfg = get_config()
+    memory_context = _load_auto_reply_memory_context(
+        int((auth_context or {}).get("user_id") or 0) or None,
+        max_chars=12000,
+        max_docs=5,
+        selected_doc_ids=cfg.get("memory_doc_ids") if isinstance(cfg.get("memory_doc_ids"), list) else [],
+    )
     if isinstance(config_override, dict):
         if "max_unread_per_round" in config_override:
             cfg["max_unread_per_round"] = max(1, min(int(config_override.get("max_unread_per_round") or 50), 100))
@@ -2501,6 +2580,7 @@ async def run_once(
                         "\n".join(context_lines),
                         auth_context=auth_context,
                         instruction=str(cfg.get("reply_instruction") or ""),
+                        memory_text=str(memory_context.get("text") or ""),
                     )
                     if _STOP_REQUESTED.is_set():
                         result["stop_reason"] = "cancelled"

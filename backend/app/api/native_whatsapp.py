@@ -19,6 +19,7 @@ class WhatsAppConfigBody(BaseModel):
     takeover_session_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
     max_unread_per_round: Optional[int] = Field(default=None, ge=1, le=100)
     reply_instruction: Optional[str] = Field(default=None, max_length=4000)
+    memory_doc_ids: Optional[List[str]] = Field(default=None, max_length=20)
 
 
 class WhatsAppRunBody(BaseModel):
