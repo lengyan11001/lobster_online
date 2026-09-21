@@ -1010,7 +1010,7 @@ def _focus_by_mouse(node: Any, hwnd: int = 0) -> None:
 
     target = int(hwnd or 0) or _primary_window_hwnd()
     if target:
-        _activate_window(target)
+        _force_foreground(target)
     # 点输入框左侧 1/4：搜索框右侧通常有个清除按钮（×），点中心可能点到它上
     x = int(rect[0] + (rect[2] - rect[0]) * 0.25)
     y = int((rect[1] + rect[3]) / 2)
@@ -1218,25 +1218,10 @@ def _click_with_mouse(node: Any) -> None:
     # 鼠标点击前确认"这个坐标下就是 WhatsApp 窗口"，避免点到别的程序（例如微信）上
     target = _node_hwnd(node) or _primary_window_hwnd()
     if target:
-        # 先把 WhatsApp 提到最前（后台进程抢不到前台，用置顶兜底），再等坐标可用
-        _activate_window(target)
-        try:
-            win32gui.SetWindowPos(
-                target, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
-            )
-        except Exception:
-            pass
-        deadline = time.monotonic() + 8.0
-        while not _point_clickable(x, y, target):
-            if time.monotonic() >= deadline:
-                blocker = _point_window_hwnd(x, y)
-                if _is_remote_control_window(blocker):
-                    raise RuntimeError(
-                        "检测到远程控制软件（%s）占着前台，它会持续抢焦点：请把它最小化后再运行接管"
-                        % (_window_haystack(blocker)[:60] or "远程控制")
-                    )
-                raise RuntimeError("WhatsApp 窗口被其它窗口挡住或不可见，请把它移到前面后重试")
+        # 自动把 WhatsApp 弄到最前（抢前台 AttachThreadInput + 视觉置顶，最多 6 轮），
+        # 不需要用户手动移动窗口。
+        for _attempt in range(6):
+            _force_foreground(target, wait_seconds=0.8)
             try:
                 win32gui.SetWindowPos(
                     target, win32con.HWND_TOPMOST, 0, 0, 0, 0,
@@ -1244,7 +1229,20 @@ def _click_with_mouse(node: Any) -> None:
                 )
             except Exception:
                 pass
-            time.sleep(0.25)
+            if _point_clickable(x, y, target):
+                break
+            time.sleep(0.3)
+        else:
+            blocker = _point_window_hwnd(x, y)
+            if _is_remote_control_window(blocker):
+                raise RuntimeError(
+                    "远程控制软件（%s）一直在抢前台，已自动尝试 6 次仍抢不过：请把它最小化后再运行接管"
+                    % (_window_haystack(blocker)[:60] or "远程控制")
+                )
+            raise RuntimeError(
+                "已自动尝试 6 次把 WhatsApp 拉到最前仍被挡住（当前挡着的是：%s）"
+                % (_window_haystack(_point_window_hwnd(x, y))[:60] or "未知窗口")
+            )
     win32api.SetCursorPos((x, y))
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
@@ -1313,7 +1311,7 @@ def _window_or_raise() -> tuple[int, Dict[str, Any]]:
     hwnd = int(window.get("hwnd") or 0)
     if not hwnd:
         raise RuntimeError("WhatsApp 窗口句柄不可用")
-    _activate_window(hwnd)
+    _force_foreground(hwnd)
     return hwnd, window
 
 
@@ -1547,7 +1545,7 @@ def _chat_rows(pane: Any) -> List[Dict[str, Any]]:
 
 
 def _visible_chat_rows(hwnd: int, *, unread_only: bool = False) -> List[Dict[str, Any]]:
-    _activate_window(hwnd)
+    _force_foreground(hwnd)
     root = _root_for_hwnd(hwnd)
     _click_named(root, ("对话", "Chats"), required=False)
     time.sleep(0.35)

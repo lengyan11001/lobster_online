@@ -61,18 +61,20 @@ def test_click_aborts_when_point_is_not_whatsapp(monkeypatch):
     monkeypatch.setattr(engine, "_rect", lambda node: (0, 0, 10, 10))
     monkeypatch.setattr(engine, "_node_hwnd", lambda node: 999)
     monkeypatch.setattr(engine, "_primary_window_hwnd", lambda: 999)
-    monkeypatch.setattr(engine, "_activate_window", lambda hwnd: None)
+    monkeypatch.setattr(engine, "_activate_window", lambda hwnd, **kw: None)
+    monkeypatch.setattr(engine, "_force_foreground", lambda hwnd, **kw: True)
     monkeypatch.setattr(engine, "_point_clickable", lambda x, y, target: False)
     monkeypatch.setitem(sys.modules, "win32gui", types.SimpleNamespace(SetWindowPos=lambda *a, **k: None))
     with pytest.raises(RuntimeError) as exc:
         engine._click(object())
-    assert "被其它窗口挡住" in str(exc.value)
+    assert "已自动尝试 6 次" in str(exc.value)
 
 
 def test_focus_by_mouse_aborts_when_point_moved_away(monkeypatch):
     monkeypatch.setattr(engine, "_rect", lambda node: (0, 0, 10, 10))
     monkeypatch.setattr(engine, "_primary_window_hwnd", lambda: 999)
-    monkeypatch.setattr(engine, "_activate_window", lambda hwnd: None)
+    monkeypatch.setattr(engine, "_activate_window", lambda hwnd, **kw: None)
+    monkeypatch.setattr(engine, "_force_foreground", lambda hwnd, **kw: True)
     monkeypatch.setattr(engine, "_point_window_hwnd", lambda x, y: 111)
     monkeypatch.setattr(engine, "_same_process_window", lambda a, b: False)
     with pytest.raises(RuntimeError) as exc:

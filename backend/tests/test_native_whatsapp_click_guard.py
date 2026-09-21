@@ -48,14 +48,15 @@ def test_click_with_mouse_waits_then_fails_clearly(monkeypatch):
     monkeypatch.setattr(engine, "_rect", lambda n: (100, 100, 300, 140))
     monkeypatch.setattr(engine, "_node_hwnd", lambda n: 111)
     monkeypatch.setattr(engine, "_primary_window_hwnd", lambda: 111)
-    monkeypatch.setattr(engine, "_activate_window", lambda hwnd: None)
+    monkeypatch.setattr(engine, "_activate_window", lambda hwnd, **kw: None)
+    monkeypatch.setattr(engine, "_force_foreground", lambda hwnd, **kw: True)
     monkeypatch.setattr(engine, "_point_clickable", lambda x, y, target: False)
     monkeypatch.setitem(sys.modules, "win32gui", types.SimpleNamespace(SetWindowPos=lambda *a, **k: None))
     import pytest
 
     with pytest.raises(RuntimeError) as exc:
         engine._click_with_mouse(node)
-    assert "被其它窗口挡住" in str(exc.value)
+    assert "已自动尝试 6 次" in str(exc.value)
 
 
 def test_remote_control_window_detected(monkeypatch):
@@ -79,7 +80,8 @@ def test_click_reports_remote_control_blocker(monkeypatch):
     monkeypatch.setattr(engine, "_rect", lambda n: (100, 100, 300, 140))
     monkeypatch.setattr(engine, "_node_hwnd", lambda n: 111)
     monkeypatch.setattr(engine, "_primary_window_hwnd", lambda: 111)
-    monkeypatch.setattr(engine, "_activate_window", lambda hwnd: None)
+    monkeypatch.setattr(engine, "_activate_window", lambda hwnd, **kw: None)
+    monkeypatch.setattr(engine, "_force_foreground", lambda hwnd, **kw: True)
     monkeypatch.setattr(engine, "_point_clickable", lambda x, y, target: False)
     monkeypatch.setattr(engine, "_point_window_hwnd", lambda x, y: 777)
     monkeypatch.setattr(engine, "_is_remote_control_window", lambda hwnd: True)
@@ -90,3 +92,22 @@ def test_click_reports_remote_control_blocker(monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         engine._click_with_mouse(node)
     assert "远程控制软件" in str(exc.value)
+
+
+def test_window_activation_is_fully_automatic():
+    """窗口该由程序自己拉到最前，不许让用户手动移动（用户明确要求）。"""
+    source = (ROOT / "backend" / "app" / "services" / "native_whatsapp_engine.py").read_text(encoding="utf-8")
+    # 取窗口 / 点击 / 输入聚焦 三条路径都必须走 _force_foreground
+    assert "    _force_foreground(hwnd)\n    return hwnd, window" in source, "取窗口时要抢前台"
+    assert "_force_foreground(target, wait_seconds=0.8)" in source, "点击前每轮都要抢前台"
+    assert source.count("_force_foreground(") >= 4
+    # 报错文案不该再让用户"自己移到前面"
+    assert "请把它移到前面后重试" not in source
+    assert "已自动尝试 6 次" in source
+
+
+def test_force_foreground_uses_attach_thread_input():
+    source = (ROOT / "backend" / "app" / "services" / "native_whatsapp_engine.py").read_text(encoding="utf-8")
+    start = source.index("def _force_foreground(")
+    body = source[start:start + 2000]
+    assert "AttachThreadInput" in body and "SetForegroundWindow" in body
