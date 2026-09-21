@@ -1,7 +1,7 @@
 {
-  "version": "2.0.73",
-  "build": 353,
-  "applied_at": "2026-09-21T17:53:17+08:00",
-  "note": "WhatsApp 去掉 pywinauto 依赖（客户机缺包报错修复）：按键改用 pywin32 keybd_event",
-  "bundle_sha256": "5652c964cdb18d16dad6b11aaae765ecfea79e7964cdd2c26b283d61bf687226"
+  "version": "2.0.74",
+  "build": 354,
+  "applied_at": "2026-09-21T18:08:18+08:00",
+  "note": "WhatsApp 点击守卫：识别远程控制软件(向日葵等)+ 反复抢回前台；不再被输入法/向日葵掐断接管",
+  "bundle_sha256": "8fc16062e0b61c15ccce8db24b8c4b8ecbdb336c348387cdf4104d8d642ba70c"
 }
