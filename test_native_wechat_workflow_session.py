@@ -1662,7 +1662,9 @@ def test_open_next_visible_session_skips_official_container(monkeypatch):
     monkeypatch.setattr(engine, "_local_wechat_hwnd", lambda _account_id: 123)
     monkeypatch.setattr(engine, "_restore_local_chat_session_list", lambda _account_id: {"ok": True})
     monkeypatch.setattr(engine, "_uia_session_cells", lambda _root: [official, customer])
-    monkeypatch.setattr(engine, "_uia_click", lambda node: clicked.append(node.Name))
+    # _uia_click gained a keyword-only visibility flag; the row here has no
+    # bounds, which keeps the historical click path.
+    monkeypatch.setattr(engine, "_uia_click", lambda node, **_kwargs: clicked.append(node.Name))
     monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
 
     item = engine._open_next_visible_session("pc-wechat-default", processed, {})
@@ -3951,8 +3953,15 @@ def test_find_local_contact_list_falls_back_to_guess(monkeypatch):
 def test_session_cell_click_does_not_smoothly_move_pointer(monkeypatch):
     calls = []
 
+    class Rect:
+        left = 10
+        top = 20
+        right = 210
+        bottom = 60
+
     class FakeCell:
         ClassName = "mmui::ChatSessionCell"
+        BoundingRectangle = Rect()
 
         def Click(self, **kwargs):
             calls.append(kwargs)
@@ -3962,6 +3971,30 @@ def test_session_cell_click_does_not_smoothly_move_pointer(monkeypatch):
     engine._uia_click(FakeCell())
 
     assert calls == [{"simulateMove": False}]
+
+
+def test_off_screen_session_cell_is_never_clicked(monkeypatch):
+    calls = []
+
+    class ScrollItemPattern:
+        def ScrollIntoView(self):
+            return True
+
+    class FakeCell:
+        ClassName = "mmui::ChatSessionCell"
+
+        def GetScrollItemPattern(self):
+            return ScrollItemPattern()
+
+        def Click(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(engine, "_human_pause", lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError):
+        engine._uia_click(FakeCell())
+
+    assert calls == []
 
 
 def test_dismiss_session_ghost_windows_only_closes_matching_wechat_overlays(monkeypatch):
@@ -4160,3 +4193,23 @@ def test_send_message_action_summary_reports_counts_and_targets():
     assert "失败 1 个" in text
     assert "九变1" in text
     assert "记得去看演唱会" in text
+
+
+def test_empty_session_read_raises_so_driver_recovery_kicks_in(monkeypatch):
+    """diag_20260921042352_4d3c07e6：wxauto 读会话返回空，界面却有 9 个会话；必须抛错触发驱动重建。"""
+    class Box:
+        def go_top(self):
+            return True
+    class FakeWx:
+        SessionBox = Box()
+        def GetSession(self):
+            return []
+    monkeypatch.setattr(engine, "_get_wxauto4_client", lambda *_args, **_kwargs: FakeWx())
+    monkeypatch.setattr(engine, "_uia_visible_session_count", lambda _account_id: 9)
+    with pytest.raises(RuntimeError, match="会话列表读取为空"):
+        engine._sync_recent_sessions_from_wxauto4(engine.LOCAL_DEFAULT_ACCOUNT_ID)
+    # 界面里也确实没有会话（真·空账号）时不能报错
+    monkeypatch.setattr(engine, "_uia_visible_session_count", lambda _account_id: 0)
+    result = engine._sync_recent_sessions_from_wxauto4(engine.LOCAL_DEFAULT_ACCOUNT_ID)
+    assert result["ok"] is True and result["items"] == []
+    assert result["empty_scan_visible_count"] == 0

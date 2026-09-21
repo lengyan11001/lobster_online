@@ -9100,6 +9100,18 @@ def _sync_recent_sessions_from_wxauto4(
                             "raw": session.get("raw") or {},
                         },
                     )
+        empty_scan_visible = 0
+        if not items and not groups:
+            # 线上事故（diag_20260921042352_4d3c07e6）：wxauto 的 GetSession()
+            # 返回空数组，但界面里明明有会话（UIA 能数到 9 个）。这种"空读取"
+            # 以前被当成"本轮没有会话"，不报错也就不触发驱动恢复，接管会一直
+            # 静默地 0 条会话、一条都不回。这里主动抛错，交给
+            # _run_local_driver_operation 的重建驱动 + 重试路径处理。
+            empty_scan_visible = _uia_visible_session_count(account_id)
+            if empty_scan_visible > 0:
+                raise RuntimeError(
+                    "微信会话列表读取为空，但界面可见 %d 个会话（wxauto 驱动疑似失效）" % empty_scan_visible
+                )
         return {
             "ok": True,
             "items": items,
@@ -9118,12 +9130,28 @@ def _sync_recent_sessions_from_wxauto4(
             "scroll_rounds": rounds,
             "scroll_completed": bool(scroll_completed),
             "auto_reply_captures": auto_reply_captures,
+            "empty_scan_visible_count": empty_scan_visible,
         }
     finally:
         try:
             box.go_top()
         except Exception:
             pass
+
+
+def _uia_visible_session_count(account_id: str) -> int:
+    """数一下界面上实际可见的会话行（只在读取结果为空时用来判断驱动是否失效）。"""
+    if not _module_available("uiautomation"):
+        return 0
+    try:
+        import uiautomation as auto  # type: ignore
+
+        hwnd = _local_wechat_hwnd(account_id)
+        if not hwnd:
+            return 0
+        return len(_uia_session_cells(auto.ControlFromHandle(int(hwnd))))
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def _session_from_uia_cell(cell: Any) -> Dict[str, Any]:
