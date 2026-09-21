@@ -475,23 +475,32 @@
       var area = $('personalWhatsappFriendKeyword');
       if (area) { var existing = area.value.trim(); area.value = (existing ? existing + '\n' : '') + lines.join('\n'); }
       openFriendAddModal();
-      toastMessage('已导入 ' + lines.length + ' 行目标（全量导入，不限条数）；间隔与日额度在「设置」里，只影响执行速度');
+      toastMessage('已导入 ' + lines.length + ' 行目标');
       return lines.length;
     });
   }
   function downloadFriendTemplate() {
-    // 客户端 webview 里 blob + a.download 点不动（程序化下载被拦），
-    // 所以模板由后端写到本地文件，再把内容填进输入框，用户可直接复制/编辑。
-    return request('/api/native-whatsapp/friends/template', { method: 'POST', json: {} }).then(function(data) {
-      var path = (data && data.path) || '';
-      var content = (data && data.content) || '';
-      openFriendAddModal();
-      var area = $('personalWhatsappFriendKeyword');
-      if (area && !text(area.value).trim() && content) area.value = content;
-      var message = path ? ('模板已保存到：' + path + '，也已填进上面的输入框，可直接改') : '模板已生成，已填入输入框';
-      showNotice(message); toastMessage(message);
-      return data;
-    }).catch(function(error) { showError((error && error.message) || '生成模板失败'); });
+    // 与个人微信那套一致：有 pywebview 就走原生保存（save_text_file），否则退回浏览器下载
+    var content = ['# 一行一个目标：电话 / 名字,电话 / @用户名', '张三,13800138000', '张三,+8613800138001', 'Li,+393311234567', '@alice_wa', ''].join('\r\n');
+    var filename = 'whatsapp-friend-targets.txt';
+    function browserDownload() {
+      var blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      var link = document.createElement('a');
+      link.href = url; link.download = filename; link.style.display = 'none';
+      document.body.appendChild(link); link.click();
+      window.setTimeout(function() { link.remove(); URL.revokeObjectURL(url); }, 1000);
+      toastMessage('模板已下载，请到默认下载目录查看');
+      return Promise.resolve();
+    }
+    if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.save_text_file === 'function') {
+      return Promise.resolve(window.pywebview.api.save_text_file(filename, content)).then(function(result) {
+        if (result && result.cancelled) return;
+        if (result && result.ok) toastMessage('模板已保存：' + (result.path || result.filename || ''));
+        else return browserDownload();
+      }).catch(function() { return browserDownload(); });
+    }
+    return browserDownload();
   }
 
   function submitSingleContact() {

@@ -309,18 +309,6 @@ async def native_whatsapp_friend_records(
     return {"ok": True, **engine.list_friend_records(account_id, limit=limit, offset=offset, status=status, keyword=keyword)}
 
 
-@router.post("/api/native-whatsapp/friends/template")
-async def native_whatsapp_friend_template(
-    current_user: _ServerUser = Depends(get_current_user_for_local),
-):
-    """生成加好友 TXT 模板：落到客户端本地文件，并把内容返回给前端。"""
-    del current_user
-    try:
-        return await asyncio.to_thread(engine.write_friend_template)
-    except Exception as exc:
-        raise _desktop_error(exc) from exc
-
-
 @router.post("/api/native-whatsapp/friends/records/{task_id}/retry")
 async def native_whatsapp_friend_record_retry(
     task_id: str,

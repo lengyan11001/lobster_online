@@ -1233,11 +1233,7 @@ def status() -> Dict[str, Any]:
         running = _ACTIVE
         active_action = _ACTIVE_ACTION
     if not deps["uiautomation"]:
-        reason = (
-            "UIA 控件不可用（uiautomation 加载失败：%s）。已自动触发「修复运行依赖」，"
-            "也可以在本页手动点「修复运行依赖」后重试。"
-            % (report["errors"].get("uiautomation") or "未知原因")
-        )
+        reason = "UIA 控件不可用，请点「修复运行依赖」".strip()
     elif not windows and processes:
         reason = (
             "检测到 WhatsApp 进程（%s），但没识别到主窗口：请把 WhatsApp 主窗口打开并还原（不要只留托盘/最小化）后重试。"
@@ -1962,12 +1958,7 @@ def _contact_save_blocked_message(hint: str = "") -> str:
     实测：号码没注册 WhatsApp 时，表单只会显示一句提示并且**不出现保存按钮**，
     而这句提示在当前 WebView2 版里读不到（UIA 树里没有），所以文案必须自己能说明问题。
     """
-    message = (
-        "WhatsApp 没给出「保存」按钮，说明它不认这个目标：手机号必须是已注册 WhatsApp 的号码；"
-        "用 @用户名 时要对方真的设过 WhatsApp 用户名。可以在桌面 WhatsApp 里手动输入同一个目标，"
-        "屏幕上的提示（例如「此电话号码没有注册 WhatsApp」）会说明原因"
-    )
-    message += "。如果这个号码已经在你 WhatsApp 的通讯录里，WhatsApp 会显示「查看联系人」而不是「保存联系人」，这种情况不需要再加一次"
+    message = "WhatsApp 没给出「保存」按钮：这个号码可能没注册 WhatsApp，或已经是你的联系人"
     return message + ("；表单提示：" + hint if hint else "")
 
 
@@ -2175,10 +2166,10 @@ def verify_contact_added(
         note = ""
     elif not_in_contacts:
         state = "not_in_contacts"
-        note = "WhatsApp 显示「不在你的联系人中」：这个号注册了 WhatsApp，但还没被加为联系人"
+        note = "WhatsApp 显示「不在你的联系人中」"
     else:
         state = "not_found"
-        note = "搜索结果里既没有这个联系人，也没有「不在你的联系人中」提示（号码可能没注册 WhatsApp）"
+        note = "搜索里找不到这个号码（可能没注册 WhatsApp）"
     return {
         "checked": True,
         "found": found,
@@ -2353,9 +2344,9 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
         result["verify"] = verify
         if verify.get("checked") and not verify.get("found"):
             if verify.get("state") == "not_in_contacts":
-                result["message"] = "已点保存，但 WhatsApp 仍显示「不在你的联系人中」：这条没加成功"
+                result["message"] = "已点保存，但 WhatsApp 仍显示「不在你的联系人中」"
             else:
-                result["message"] = "已点保存，但搜索不到这个号码（可能没注册 WhatsApp，或还没同步）"
+                result["message"] = "已点保存，但搜索不到这个号码"
         _record_operation("add_contact", target, "success", result["message"], result)
         _append_log("add_contact_done", target=target, steps=steps, verify=verify)
         return result
@@ -3263,7 +3254,7 @@ def reap_stale_friend_tasks(account_id: str = "", *, max_age_seconds: int = STAL
             "update whatsapp_tasks set status='failed', error_message=?, updated_at=? "
             "where account_id=? and task_type='add_friend' and status='running' and updated_at < ?",
             (
-                "执行中断：超过 %d 分钟没有进展（可点重试或删除）" % max(1, int(max_age_seconds) // 60),
+                "执行中断",
                 _now_iso(),
                 key,
                 cutoff,
@@ -3292,43 +3283,6 @@ def cancel_friend_record(task_id: str, account_id: str = "") -> Dict[str, Any]:
         return {"ok": True, "status": "cancelled", "message": "已请求停止，正在执行的这条会在几秒内中断"}
     _finish_task(tid, "cancelled", 0, 0, 0, "已手动停止")
     return {"ok": True, "status": "cancelled", "message": "已从队列移除"}
-
-
-FRIEND_TEMPLATE_REL = Path("tmp_templates") / "whatsapp-friend-targets.txt"
-
-
-def friend_template_content() -> str:
-    """加好友批量导入的 TXT 模板（一行一个目标，支持任意国家码）。"""
-    return "\n".join([
-        "# 一行一个目标：电话 / 名字,电话 / @用户名（支持任意国家码 +86 / +1 / +39…）",
-        "张三,13800138000",
-        "张三,+8613800138001",
-        "Li,+393311234567",
-        "@alice_wa",
-        "# 导入是全量导入（不按条数截断）；间隔与每日额度只影响执行速度，在弹窗的「设置」里改",
-        "",
-    ])
-
-
-def write_friend_template() -> Dict[str, Any]:
-    """把模板写到客户端本地文件。
-
-    前端用 blob + a.download 在客户端 webview 里点不动（程序化下载被拦），
-    所以改成后端落盘 + 把内容回给前端填进输入框。
-    """
-    path = ROOT_DIR / FRIEND_TEMPLATE_REL
-    content = friend_template_content()
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8-sig")  # 带 BOM，记事本/Excel 打开不乱码
-    except OSError as exc:
-        raise RuntimeError("写模板文件失败：%s" % exc) from exc
-    return {
-        "ok": True,
-        "path": str(path),
-        "content": content,
-        "message": "模板已保存到 %s" % path,
-    }
 
 
 def retry_friend_record(task_id: str, account_id: str = "") -> Dict[str, Any]:
