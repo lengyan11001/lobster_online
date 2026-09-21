@@ -1,7 +1,7 @@
 {
-  "version": "2.0.72",
-  "build": 352,
-  "applied_at": "2026-09-21T17:48:30+08:00",
-  "note": "WhatsApp 接管结果回写学习（channel=whatsapp，与个微共用 /observe）+ 拉群/记忆文件/加好友修复",
-  "bundle_sha256": "3dc66dfe769b019e40d022e4f9c3cad98ebc7fcaaf375a628202ed483d110481"
+  "version": "2.0.73",
+  "build": 353,
+  "applied_at": "2026-09-21T17:53:17+08:00",
+  "note": "WhatsApp 去掉 pywinauto 依赖（客户机缺包报错修复）：按键改用 pywin32 keybd_event",
+  "bundle_sha256": "5652c964cdb18d16dad6b11aaae765ecfea79e7964cdd2c26b283d61bf687226"
 }
