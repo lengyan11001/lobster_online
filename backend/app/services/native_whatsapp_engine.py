@@ -1094,13 +1094,12 @@ def _set_edit_text(node: Any, value: str, *, hwnd: Optional[int] = None) -> None
     if not _ensure_foreground(target):
         raise RuntimeError("WhatsApp 窗口没有拿到前台焦点，已中止输入（避免误操作到其它程序）")
     _focus_by_mouse(node, target)
-    from pywinauto.keyboard import send_keys  # type: ignore
-
     backup = _read_clipboard_text()
     try:
         set_clipboard_text(text_value)
-        send_keys("^a", pause=0.02)
-        send_keys("^v", pause=0.03)
+        send_keys_simple("^a")
+        time.sleep(0.03)
+        send_keys_simple("^v")
         time.sleep(0.18)
     finally:
         if backup:
@@ -1546,12 +1545,10 @@ def _send_current_message(hwnd: int, text: str) -> Dict[str, Any]:
     _click(composer)
     if not _ensure_foreground(int(hwnd or 0) or _primary_window_hwnd()):
         raise RuntimeError("WhatsApp 窗口没有拿到前台焦点，已中止发送（避免误操作到其它程序）")
-    from pywinauto.keyboard import send_keys  # type: ignore
-
     set_clipboard_text(str(text or ""))
-    send_keys("^v", pause=0.03)
+    send_keys_simple("^v")
     time.sleep(0.15)
-    send_keys("{ENTER}", pause=0.05)
+    send_keys_simple("{ENTER}")
     time.sleep(0.8)
     confirmed = _conversation_snapshot(hwnd)
     confirmed.pop("composer", None)
@@ -2539,6 +2536,38 @@ async def _report_intelligence_observation(
     except Exception as exc:  # noqa: BLE001
         _append_log("intelligence_report_failed", event=body.get("event_type"), error=str(exc)[:300])
         return {"ok": False, "error": str(exc)[:300]}
+
+
+def _key_event(vk: int, *, up: bool = False) -> None:
+    import win32api  # type: ignore
+    import win32con  # type: ignore
+
+    win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP if up else 0, 0)
+
+
+def send_keys_simple(keys: str) -> None:
+    """只发 Ctrl+字母 / Enter（本项目就用这几个），不再依赖 pywinauto。
+
+    客户机上没装 pywinauto 时会直接报 "No module named 'pywinauto'"；
+    这里换成 pywin32（客户端必装）的 keybd_event，少一个依赖。
+    """
+    import win32con  # type: ignore
+
+    lowered = str(keys or "").strip().lower()
+    if lowered.startswith("^") and len(lowered) == 2:
+        vk = ord(lowered[1].upper())
+        _key_event(win32con.VK_CONTROL)
+        _key_event(vk)
+        time.sleep(0.02)
+        _key_event(vk, up=True)
+        _key_event(win32con.VK_CONTROL, up=True)
+        return
+    if lowered in {"{enter}", "enter", "{return}"}:
+        _key_event(win32con.VK_RETURN)
+        time.sleep(0.02)
+        _key_event(win32con.VK_RETURN, up=True)
+        return
+    raise RuntimeError("不支持的按键：%s" % keys)
 
 
 def _find_button(
