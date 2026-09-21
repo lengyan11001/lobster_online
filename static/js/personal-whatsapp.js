@@ -169,6 +169,19 @@
       select.innerHTML = options.join('');
       var current = (state.config && Array.isArray(state.config.memory_doc_ids)) ? state.config.memory_doc_ids : [];
       if (current.length) select.value = String(current[0]);
+      var inviteSelect = $('personalWhatsappGroupInviteMemoryDoc');
+      if (inviteSelect) {
+        var inviteOptions = ['<option value="">不指定拉群规则文件</option>'];
+        state.memoryDocs.forEach(function(doc) {
+          var id = String(doc.id || doc.doc_id || '');
+          if (!id) return;
+          inviteOptions.push('<option value="' + esc(id) + '">' + esc(doc.title || doc.filename || id) + '</option>');
+        });
+        inviteSelect.innerHTML = inviteOptions.join('');
+        if (state.config && state.config.group_invite_memory_doc_id) {
+          inviteSelect.value = String(state.config.group_invite_memory_doc_id);
+        }
+      }
       return state.memoryDocs;
     }).catch(function() { return []; });
   }
@@ -184,8 +197,14 @@
       var selectedDocs = Array.isArray(c.memory_doc_ids) ? c.memory_doc_ids : [];
       memorySelect.value = selectedDocs.length ? String(selectedDocs[0]) : '';
     }
+    if ($('personalWhatsappGroupInviteEnabled')) $('personalWhatsappGroupInviteEnabled').checked = !!c.group_invite_enabled;
+    if ($('personalWhatsappGroupInviteMemoryDoc')) $('personalWhatsappGroupInviteMemoryDoc').value = text(c.group_invite_memory_doc_id || '');
+    if ($('personalWhatsappGroupInviteKeywords')) $('personalWhatsappGroupInviteKeywords').value = text(c.group_invite_keywords || '');
+    if ($('personalWhatsappGroupInviteContacts')) $('personalWhatsappGroupInviteContacts').value = (Array.isArray(c.group_invite_contacts) ? c.group_invite_contacts : []).join('\n');
+    if ($('personalWhatsappGroupInviteGroupName')) $('personalWhatsappGroupInviteGroupName').value = text(c.group_invite_group_name || '');
+    if ($('personalWhatsappGroupInviteWelcome')) $('personalWhatsappGroupInviteWelcome').value = text(c.group_invite_welcome_message || '');
   }
-  function configFromFields() { return { memory_doc_ids:(function(){ var node=$('personalWhatsappMemoryDoc'); var value=node?text(node.value).trim():''; return value?[value]:[]; })(), interval_seconds:numberField('personalWhatsappInterval',15,1,300), takeover_session_minutes:numberField('personalWhatsappTakeoverMinutes',30,1,1440), max_unread_per_round:numberField('personalWhatsappMaxUnread',50,1,100), reply_instruction:text($('personalWhatsappInstruction') && $('personalWhatsappInstruction').value).trim().slice(0,4000) }; }
+  function configFromFields() { return { group_invite_enabled:(function(){ var node=$('personalWhatsappGroupInviteEnabled'); return !!(node && node.checked); })(), group_invite_memory_doc_id:(function(){ var node=$('personalWhatsappGroupInviteMemoryDoc'); return node?text(node.value).trim():''; })(), group_invite_keywords:(function(){ var node=$('personalWhatsappGroupInviteKeywords'); return node?text(node.value).trim().slice(0,500):''; })(), group_invite_contacts:splitTargetLines($('personalWhatsappGroupInviteContacts') && $('personalWhatsappGroupInviteContacts').value), group_invite_group_name:(function(){ var node=$('personalWhatsappGroupInviteGroupName'); return node?text(node.value).trim().slice(0,60):''; })(), group_invite_welcome_message:(function(){ var node=$('personalWhatsappGroupInviteWelcome'); return node?text(node.value).trim().slice(0,1000):''; })(), memory_doc_ids:(function(){ var node=$('personalWhatsappMemoryDoc'); var value=node?text(node.value).trim():''; return value?[value]:[]; })(), interval_seconds:numberField('personalWhatsappInterval',15,1,300), takeover_session_minutes:numberField('personalWhatsappTakeoverMinutes',30,1,1440), max_unread_per_round:numberField('personalWhatsappMaxUnread',50,1,100), reply_instruction:text($('personalWhatsappInstruction') && $('personalWhatsappInstruction').value).trim().slice(0,4000) }; }
   function reasonLabel(value) { return ({duplicate_in_round:'本轮重复',group_chat:'群聊',no_replyable_text:'无可回复文字',last_message_not_inbound:'最后消息不是对方发送'}[value] || value || '跳过'); }
   function renderLastRun() {
     var run = state.lastRun || {}, summary = $('personalWhatsappLastRun'), host = $('personalWhatsappItems'); if (!summary || !host) return;

@@ -20,6 +20,12 @@ class WhatsAppConfigBody(BaseModel):
     max_unread_per_round: Optional[int] = Field(default=None, ge=1, le=100)
     reply_instruction: Optional[str] = Field(default=None, max_length=4000)
     memory_doc_ids: Optional[List[str]] = Field(default=None, max_length=20)
+    group_invite_enabled: Optional[bool] = None
+    group_invite_memory_doc_id: Optional[str] = Field(default=None, max_length=64)
+    group_invite_keywords: Optional[str] = Field(default=None, max_length=500)
+    group_invite_contacts: Optional[List[str]] = Field(default=None, max_length=30)
+    group_invite_group_name: Optional[str] = Field(default=None, max_length=60)
+    group_invite_welcome_message: Optional[str] = Field(default=None, max_length=1000)
 
 
 class WhatsAppRunBody(BaseModel):

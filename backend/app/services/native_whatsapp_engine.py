@@ -333,6 +333,12 @@ def _default_config() -> Dict[str, Any]:
         "max_unread_per_round": 50,
         "reply_instruction": "",
         "memory_doc_ids": [],
+        "group_invite_enabled": False,
+        "group_invite_memory_doc_id": "",
+        "group_invite_keywords": "",
+        "group_invite_contacts": [],
+        "group_invite_group_name": "",
+        "group_invite_welcome_message": "",
         "last_run": {},
     }
 
@@ -354,6 +360,15 @@ def get_config() -> Dict[str, Any]:
         str(item or "")[:64] for item in (result.get("memory_doc_ids") or [])
         if str(item or "").strip()
     ][:20]
+    result["group_invite_enabled"] = bool(result.get("group_invite_enabled"))
+    result["group_invite_memory_doc_id"] = str(result.get("group_invite_memory_doc_id") or "").strip()[:64]
+    result["group_invite_keywords"] = str(result.get("group_invite_keywords") or "").strip()[:500]
+    result["group_invite_contacts"] = [
+        str(item or "").strip()[:120] for item in (result.get("group_invite_contacts") or [])
+        if str(item or "").strip()
+    ][:30]
+    result["group_invite_group_name"] = str(result.get("group_invite_group_name") or "").strip()[:60]
+    result["group_invite_welcome_message"] = str(result.get("group_invite_welcome_message") or "").strip()[:1000]
     if not isinstance(result.get("last_run"), dict):
         result["last_run"] = {}
     return result
@@ -366,6 +381,12 @@ def save_config(
     max_unread_per_round: Optional[int] = None,
     reply_instruction: Optional[str] = None,
     memory_doc_ids: Optional[List[str]] = None,
+    group_invite_enabled: Optional[bool] = None,
+    group_invite_memory_doc_id: Optional[str] = None,
+    group_invite_keywords: Optional[str] = None,
+    group_invite_contacts: Optional[List[str]] = None,
+    group_invite_group_name: Optional[str] = None,
+    group_invite_welcome_message: Optional[str] = None,
 ) -> Dict[str, Any]:
     cfg = get_config()
     if interval_seconds is not None:
@@ -380,6 +401,20 @@ def save_config(
         cfg["memory_doc_ids"] = [
             str(item or "")[:64] for item in (memory_doc_ids or []) if str(item or "").strip()
         ][:20]
+    if group_invite_enabled is not None:
+        cfg["group_invite_enabled"] = bool(group_invite_enabled)
+    if group_invite_memory_doc_id is not None:
+        cfg["group_invite_memory_doc_id"] = str(group_invite_memory_doc_id or "").strip()[:64]
+    if group_invite_keywords is not None:
+        cfg["group_invite_keywords"] = str(group_invite_keywords or "").strip()[:500]
+    if group_invite_contacts is not None:
+        cfg["group_invite_contacts"] = [
+            str(item or "").strip()[:120] for item in (group_invite_contacts or []) if str(item or "").strip()
+        ][:30]
+    if group_invite_group_name is not None:
+        cfg["group_invite_group_name"] = str(group_invite_group_name or "").strip()[:60]
+    if group_invite_welcome_message is not None:
+        cfg["group_invite_welcome_message"] = str(group_invite_welcome_message or "").strip()[:1000]
     _write_config(cfg)
     return cfg
 
@@ -2444,6 +2479,212 @@ def _load_auto_reply_memory_context(
     }
 
 
+def _reset_to_chat_list(hwnd: int, *, attempts: int = 3) -> bool:
+    """把 WhatsApp 收回聊天列表（收掉残留的表单/建群面板）。"""
+    auto = None
+    try:
+        auto, _error, _source = load_uia()
+    except Exception:
+        auto = None
+    for _attempt in range(max(1, attempts)):
+        root = _root_for_hwnd(hwnd)
+        if _find_button(root, ("新建群组", "新 group")) is not None:
+            return True
+        back = _find_button(root, ("返回", "Back"))
+        if back is not None:
+            try:
+                _click(back)
+                _void = None
+                time.sleep(0.6)
+                continue
+            except Exception:
+                pass
+        if auto is not None:
+            try:
+                auto.SendKeys("{Escape}")
+                time.sleep(0.5)
+            except Exception:
+                pass
+    root = _root_for_hwnd(hwnd)
+    return _find_button(root, ("新建群组", "new group")) is not None
+
+
+def _find_button(
+    root: Any,
+    names: Iterable[str],
+    *,
+    max_depth: int = CONTACT_TREE_DEPTH,
+    max_nodes: int = CONTACT_TREE_NODES,
+) -> Optional[Any]:
+    """只找不点：先精确匹配，再按"包含"匹配（WhatsApp 的按钮文案经常带后缀）。"""
+    wanted = tuple(str(item).casefold() for item in names if str(item or "").strip())
+    if not wanted:
+        return None
+    exact: Optional[Any] = None
+    loose: Optional[Any] = None
+    for node, _depth in _iter_nodes(root, max_depth=max_depth, max_nodes=max_nodes):
+        if _node_type(node) not in {"ButtonControl", "SplitButtonControl"} or not _rect(node):
+            continue
+        label = _node_text(node).strip().casefold()
+        if not label:
+            continue
+        if label in wanted:
+            if exact is None:
+                exact = node
+        elif loose is None and any(item in label for item in wanted):
+            loose = node
+    return exact or loose
+
+
+def _group_member_rows(root: Any) -> List[Dict[str, Any]]:
+    """群成员选择页里的成员行（实测：接近整行宽的 ButtonControl，文本就是联系人名）。"""
+    rows: List[Dict[str, Any]] = []
+    for node, depth in _iter_nodes(root, max_depth=CONTACT_TREE_DEPTH, max_nodes=CONTACT_TREE_NODES):
+        if _node_type(node) != "ButtonControl" or not _rect(node):
+            continue
+        rect = _rect(node)
+        label = _node_text(node).strip()
+        if not label or len(label) > 60:
+            continue
+        if (rect[2] - rect[0]) < 180 or rect[1] < 360:
+            continue
+        rows.append({"node": node, "name": label, "rect": rect, "depth": depth})
+    return rows
+
+
+def _find_group_name_field(root: Any) -> Optional[Any]:
+    """群名页的输入框（实测在面板中部，右侧是「打开表情符号面板」按钮）。"""
+    for node, _depth in _iter_nodes(root, max_depth=CONTACT_TREE_DEPTH, max_nodes=CONTACT_TREE_NODES):
+        if _node_type(node) != "EditControl" or not _rect(node):
+            continue
+        rect = _rect(node)
+        if rect[0] < 1060:
+            continue
+        if 430 <= rect[1] <= 700 and (rect[2] - rect[0]) >= 80:
+            return node
+    return None
+
+
+def group_invite_hit(message: str, keywords: str) -> bool:
+    """这条消息是否命中拉群关键词（逗号/分号/空格分隔）。"""
+    body = str(message or "").casefold()
+    wanted = [item.casefold() for item in re.split(r"[,，;；\s]+", str(keywords or "")) if item.strip()]
+    if not body or not wanted:
+        return False
+    return any(item in body for item in wanted)
+
+
+def create_group(*, name: str, members: Iterable[str], welcome_message: str = "", dry_run: bool = False) -> Dict[str, Any]:
+    """新建 WhatsApp 群组。
+
+    实测流程（2026-09-21 本机 WinUI3）：
+      新聊天页「新建群组」→「添加群组成员」选成员（成员行必须鼠标点击）→「下一步」
+      → 群名页填群名 →「创建群组」。
+    """
+    group_name = str(name or "").strip()[:60]
+    member_names = [str(item or "").strip()[:120] for item in (members or []) if str(item or "").strip()]
+    if not group_name:
+        raise RuntimeError("请填写群名")
+    if not member_names:
+        raise RuntimeError("请至少指定一个群成员")
+    _claim_action("新建 WhatsApp 群组")
+    hwnd: Optional[int] = None
+    steps: List[str] = []
+    started = time.monotonic()
+    try:
+        hwnd, _window = _window_or_raise()
+        _reset_to_chat_list(hwnd)
+        _open_new_chat_page(hwnd)
+        root = _root_for_hwnd(hwnd)
+        entry = _find_button(root, ("新建群组", "new group"))
+        if entry is None:
+            raise RuntimeError("新聊天页没有出现「新建群组」入口")
+        _click(entry)
+        time.sleep(1.2)
+        steps.append("open=%.1fs" % (time.monotonic() - started))
+
+        for member in member_names:
+            root = _root_for_hwnd(hwnd)
+            box = _find_new_chat_search(root)
+            if box is not None:
+                _set_edit_text(box, member, hwnd=hwnd)
+                time.sleep(0.8)
+            root = _root_for_hwnd(hwnd)
+            row = next(
+                (item for item in _group_member_rows(root) if item["name"].casefold() == member.casefold()),
+                None,
+            )
+            if row is None:
+                raise RuntimeError("群成员列表里找不到「%s」（必须已经是联系人）" % member)
+            _click(row["node"], force_mouse=True)  # 实测：成员行 UIA Invoke 无效，只能鼠标点
+            time.sleep(0.6)
+            steps.append("member:%s" % member)
+
+        root = _root_for_hwnd(hwnd)
+        nxt = _find_button(root, ("下一步", "next"))
+        if nxt is None:
+            raise RuntimeError("选完成员后没有出现「下一步」")
+        _click(nxt, force_mouse=True)
+        time.sleep(1.3)
+
+        root = _root_for_hwnd(hwnd)
+        name_field = _find_group_name_field(root)
+        if name_field is None:
+            raise RuntimeError("群名输入框没有出现")
+        _set_edit_text(name_field, group_name, hwnd=hwnd)
+        time.sleep(0.5)
+        if str(_node_value(name_field) or "").strip() != group_name:
+            raise RuntimeError("群名没有填进去")
+        steps.append("name")
+
+        root = _root_for_hwnd(hwnd)
+        create_button = _find_button(root, ("创建群组", "create group"))
+        if create_button is None:
+            raise RuntimeError("没有出现「创建群组」按钮")
+        if dry_run:
+            steps.append("dry_run_stop")
+            return {
+                "ok": True,
+                "dry_run": True,
+                "name": group_name,
+                "members": member_names,
+                "steps": steps,
+                "message": "已到群名页（演练模式，未创建）",
+            }
+        _click(create_button, force_mouse=True)
+        time.sleep(1.8)
+        steps.append("created")
+
+        result: Dict[str, Any] = {
+            "ok": True,
+            "name": group_name,
+            "members": member_names,
+            "steps": steps,
+            "message": "已创建群组「%s」（%d 人）" % (group_name, len(member_names)),
+        }
+        if welcome_message:
+            try:
+                send_message(group_name, str(welcome_message)[:1000])
+                result["welcome_sent"] = True
+            except Exception as exc:  # noqa: BLE001
+                result["welcome_sent"] = False
+                result["welcome_error"] = str(exc)[:200]
+        _record_operation("create_group", group_name, "success", result["message"], result)
+        _append_log("group_created", name=group_name, members=member_names, steps=steps)
+        return result
+    except Exception as exc:
+        _record_operation("create_group", group_name, "failed", str(exc)[:300], {"steps": steps})
+        _append_log("group_create_failed", name=group_name, error=str(exc)[:300], steps=steps)
+        if hwnd:
+            try:
+                _dismiss_contact_form(hwnd)
+            except Exception:
+                pass
+        raise
+    finally:
+        _release_action()
+
+
 async def _generate_reply(
     latest_message: str,
     recent_context: str,
@@ -2594,6 +2835,31 @@ async def run_once(
                         result["stop_reason"] = "cancelled"
                         break
                     sent = await loop.run_in_executor(_UI_EXECUTOR, _send_current_message, hwnd, reply)
+                    # 命中拉群关键词：把配置里的成员（加上当前对话人）拉成一个群
+                    if bool(cfg.get("group_invite_enabled")) and group_invite_hit(
+                        text, str(cfg.get("group_invite_keywords") or "")
+                    ):
+                        try:
+                            invite_members = list(cfg.get("group_invite_contacts") or [])
+                            peer_label = str(snapshot.get("peer_name") or "").strip()
+                            if peer_label and peer_label not in invite_members:
+                                invite_members.append(peer_label)
+                            invite_name = str(cfg.get("group_invite_group_name") or "").strip() or (
+                                "群-" + (peer_label[:20] or "客户")
+                            )
+                            invite_result = await loop.run_in_executor(
+                                _UI_EXECUTOR,
+                                lambda: create_group(
+                                    name=invite_name,
+                                    members=invite_members,
+                                    welcome_message=str(cfg.get("group_invite_welcome_message") or ""),
+                                ),
+                            )
+                            result["group_created"] = invite_result.get("name")
+                            item["group_created"] = invite_result.get("name")
+                        except Exception as exc:  # noqa: BLE001
+                            result["group_invite_failed"] = str(exc)[:200]
+                            item["group_invite_failed"] = str(exc)[:200]
                     if not sent.get("sent"):
                         raise RuntimeError("消息已提交，但没有检测到新的出站气泡")
                     confirmed = await loop.run_in_executor(_UI_EXECUTOR, _conversation_snapshot, hwnd)
