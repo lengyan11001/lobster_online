@@ -47,6 +47,12 @@ DOUYIN_PM_FALLBACK_CLICK_METHODS = ("normal", "force", "coordinate", "native")
 DOUYIN_FOLLOW_BUTTON_WAIT_SECONDS = 15.0
 DOUYIN_FOLLOW_BUTTON_POLL_INTERVAL_MS = 500
 
+# 评论采集：面板在屏但一行评论都没渲染时，先唤醒虚拟列表再继续，别直接判失败。
+# 2026-09-21 现场：3 条视频因“已打开但未提取到评论”被判失败，实际是列表没渲染。
+DOUYIN_COMMENT_COLLECTION_ATTEMPTS = 3
+DOUYIN_COMMENT_COLLECTION_RETRY_BACKOFF_SECONDS = (1.5, 3.0)
+DOUYIN_COMMENT_WAKE_LIMIT = 3
+
 
 class DouyinPrivateMessageUnavailable(RuntimeError):
     """该主页没有可用的私信入口（按钮点了、弹层始终不出现）。重试没有意义。"""
@@ -8330,7 +8336,9 @@ class DouyinCommentScraper:
     ) -> List[Dict]:
         """Collect comments in batches, retrying only unverified empty reads."""
         last_error: Optional[Exception] = None
-        for attempt in range(1, 3):
+        attempts = max(1, int(DOUYIN_COMMENT_COLLECTION_ATTEMPTS or 1))
+        backoff = DOUYIN_COMMENT_COLLECTION_RETRY_BACKOFF_SECONDS
+        for attempt in range(1, attempts + 1):
             try:
                 return await self._process_video_comment_batches_once(
                     video_url,
@@ -8345,14 +8353,15 @@ class DouyinCommentScraper:
                 last_error = exc
                 self._emit(
                     logger,
-                    f"[抖音评论采集] 分批采集第 {attempt}/2 次未确认评论内容，准备重试：{exc}",
+                    f"[抖音评论采集] 分批采集第 {attempt}/{attempts} 次未确认评论内容，准备重试：{exc}",
                     "warning",
                 )
-                if attempt < 2:
-                    await asyncio.sleep(1.0)
+                if attempt < attempts:
+                    delay = backoff[min(attempt - 1, len(backoff) - 1)] if backoff else 1.0
+                    await asyncio.sleep(float(delay))
                     continue
                 raise RuntimeError(
-                    f"评论区已打开但连续 2 次未读取到可验证评论，未判定为无评论：{exc}"
+                    f"评论区已打开但连续 {attempts} 次未读取到可验证评论，未判定为无评论：{exc}"
                 ) from exc
         raise last_error or RuntimeError("评论分批采集未返回结果")
 
@@ -8434,6 +8443,7 @@ class DouyinCommentScraper:
             batch_size = max(1, min(int(batch_size or 10), max_comments))
             max_scroll_rounds = max(1, min(int(max_scroll_rounds or 18), 300))
             stable_rounds = 0
+            wake_attempts = 0
             for round_index in range(max_scroll_rounds):
                 if is_stopped():
                     self._emit(logger, f"[抖音评论采集] 停止请求已生效，结束第 {round_index + 1} 轮滚动", "warning")
@@ -8449,6 +8459,13 @@ class DouyinCommentScraper:
                         break
                 else:
                     stable_rounds += 1
+                if not collected and stable_rounds >= 2 and wake_attempts < DOUYIN_COMMENT_WAKE_LIMIT:
+                    # 面板在屏、一行都没渲染出来：抖音的虚拟列表偶发不铺数据，
+                    # 先点一下列表/按 End 唤醒它再继续，别直接把整条视频判失败。
+                    wake_attempts += 1
+                    await self._wake_comment_list(page, logger=logger)
+                    stable_rounds = 0
+                    continue
                 if len(collected) >= max_comments:
                     break
                 if stable_rounds >= 4:
@@ -8480,7 +8497,7 @@ class DouyinCommentScraper:
                     "warning",
                 )
                 raise DouyinCommentCollectionUnconfirmed(
-                    "评论区可见但本轮未提取到有效评论节点"
+                    f"评论区可见但本轮未提取到有效评论节点（唤醒列表 {wake_attempts} 次）"
                 )
             self._emit(
                 logger,

@@ -494,7 +494,7 @@ def log_douyin_filter_event(event: str, **fields) -> None:
     except Exception as exc:
         douyin_log(f"[抖音筛选日志] 写入失败: {exc}", "warning")
 
-    summary_keys = ("scope", "title", "comments_in", "precise_out", "fallback_used", "strategy", "duration_ms")
+    summary_keys = ("scope", "title", "comments_in", "precise_out", "fallback_used", "strategy", "duration_ms", "reason")
     summary = " | ".join(f"{k}={record[k]}" for k in summary_keys if k in record)
     level = "error" if event == "error" else ("warning" if record.get("fallback_used") else "info")
     douyin_log(f"[抖音筛选] {event} {summary}".strip(), level)

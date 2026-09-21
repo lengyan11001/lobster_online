@@ -461,6 +461,8 @@ class AIClient:
             is_reverse_filter=is_reverse_filter,
         )
 
+        fallback_reason = ""
+        response = None
         try:
             response = requests.post(
                 self.api_url,
@@ -525,6 +527,7 @@ class AIClient:
                         )
                         return merged
                     return mapped
+                fallback_reason = f"AI 返回无法解析为 high_intent_refs（HTTP 200，content 前 120 字：{str(content or '')[:120]}）"
             else:
                 _safe_event_log(
                     event_logger,
@@ -534,6 +537,7 @@ class AIClient:
                     raw_response=response.text[:600],
                 )
                 safe_print(f"API错误: {response.status_code}, body={response.text[:500]}")
+                fallback_reason = f"AI 接口 HTTP {response.status_code}：{str(response.text or '')[:120]}"
         except Exception as e:
             _safe_event_log(
                 event_logger,
@@ -542,7 +546,15 @@ class AIClient:
                 error=str(e),
             )
             safe_print(f"调用AI失败: {str(e)}")
+            fallback_reason = f"AI 调用异常：{type(e).__name__}: {str(e)[:120]}"
 
+        # 走到这里说明这一批没拿到可用的 AI 结果，下面用本地规则兜底。
+        # 记清楚「为什么兜底」，否则线上只看到一句 fallback_used=True，无法定位。
+        raw_preview = ""
+        try:
+            raw_preview = str(response.text or "")[:400]  # type: ignore[possibly-undefined]
+        except Exception:
+            raw_preview = ""
         fallback = self._fallback_filter_v2(
             candidate_comments,
             intent_profile=intent_profile,
@@ -558,6 +570,12 @@ class AIClient:
             comments_in_batch=len(candidate_comments),
             fallback_count=len(fallback),
             fallback_used=True,
+            reason=fallback_reason or "AI 未返回可解析结果",
+            raw_response=raw_preview,
+        )
+        safe_print(
+            f"[抖音筛选] AI 兜底（第 {batch_index}/{total_batches} 批，{len(candidate_comments)} 条评论）："
+            f"{fallback_reason or 'AI 未返回可解析结果'}"
         )
         return fallback
 
