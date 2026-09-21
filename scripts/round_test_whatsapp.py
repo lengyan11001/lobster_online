@@ -1,32 +1,24 @@
-"""每轮回归测试：WhatsApp 一轮 + 微信一轮（两边都跑，微信侧只读）。
+"""WhatsApp 回归测试（就测 WhatsApp，不碰微信）。
 
 用法：
-    .\python\python.exe scripts\round_test_whatsapp_wechat.py      # 客户端自带运行时
-    python scripts\round_test_whatsapp_wechat.py                    # 开发机
+    .\python\python.exe scripts\round_test_whatsapp.py
 
-说明：WhatsApp 侧只做"打开表单 + dry-run 按钮探测"，不点保存、不加好友；
-微信侧只读驱动状态与缓存统计，不点界面、不发消息。
+只做只读/无副作用的检查：状态与依赖、进程识别、记录统计、加好友表单与按钮 dry-run 探测。
+不点保存、不加好友、不发消息、不动微信。
 """
 from __future__ import annotations
 
-import argparse
 import json
 import pathlib
 import sqlite3
 import sys
 import time
 
-parser = argparse.ArgumentParser(description="每轮回归测试：WhatsApp + 微信")
-parser.add_argument("--deep", action="store_true",
-                    help="微信做深度检测（会显示/激活微信窗口、连 wxauto4）；默认只做被动检测，不打扰正在使用的微信")
-ARGS = parser.parse_args()
-
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.app.services import native_whatsapp_engine as wa  # noqa: E402
-from backend.app.services import native_wechat_engine as wx  # noqa: E402
 
 rows: list = []
 
@@ -37,18 +29,6 @@ def step(name, fn):
         rows.append((name, "OK", time.time() - started, fn()))
     except Exception as exc:  # noqa: BLE001
         rows.append((name, "FAIL", time.time() - started, "%s: %s" % (type(exc).__name__, exc)))
-
-
-def _count_by_status(db_path, table, column):
-    if not db_path.is_file():
-        return {}
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    try:
-        return {row[column]: row["c"] for row in conn.execute(
-            "select %s, count(*) c from %s group by %s" % (column, table, column))}
-    finally:
-        conn.close()
 
 
 def wa_status():
@@ -86,34 +66,39 @@ def wa_form_probe():
     return probe
 
 
-def wechat_driver():
-    # 默认被动：只扫窗口 + 依赖，不激活微信窗口、不连 wxauto4（别打扰正在用的微信）
-    # --deep 时才连 wxauto4 做驱动可用性探测（会显示/激活微信窗口）
-    data = wx._local_driver_status(passive=not ARGS.deep)
-    return {key: data.get(key) for key in ("ok", "driver_ready", "full_driver_ready", "count")}
+def wa_task_counts():
+    db = ROOT / "data" / "native_whatsapp" / "state.db"
+    if not db.is_file():
+        return {}
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    try:
+        return {row["status"]: row["c"] for row in conn.execute(
+            "select status, count(*) c from whatsapp_tasks group by status")}
+    finally:
+        conn.close()
 
 
-# ---- WhatsApp 一轮 ----
+def wa_template():
+    result = wa.write_friend_template()
+    return {"path": result["path"], "exists": pathlib.Path(result["path"]).is_file()}
+
+
 step("WA1 状态与依赖", wa_status)
 step("WA2 进程识别", lambda: {"processes": [p.get("name") for p in wa.whatsapp_processes()]})
-step("WA3 加好友记录统计", lambda: _count_by_status(ROOT / "data" / "native_whatsapp" / "state.db",
-                                                     "whatsapp_tasks", "status"))
+step("WA3 加好友记录统计", wa_task_counts)
 step("WA4 表单与保存按钮(dry-run)", wa_form_probe)
+step("WA5 TXT 模板落盘", wa_template)
 
-# ---- 微信一轮 ----
-step("WX1 驱动状态%s" % ("(deep)" if ARGS.deep else "(passive, 不打扰微信)"), wechat_driver)
-step("WX2 依赖", lambda: wx._local_driver_status(passive=True).get("dependencies"))
-step("WX3 窗口可见性(只读)", lambda: {"hwnds": [w.get("hwnd") for w in wx._scan_local_wechat_windows(max_age_seconds=0)][:3]})
-
-lines = ["轮次测试结果  %s" % time.strftime("%Y-%m-%d %H:%M:%S"), "-" * 78]
+lines = ["WhatsApp 回归测试  %s" % time.strftime("%Y-%m-%d %H:%M:%S"), "-" * 78]
 for name, state, cost, value in rows:
-    lines.append("%-4s %-30s %6.1fs  %s" % (state, name, cost, json.dumps(value, ensure_ascii=False, default=str)[:160]))
+    lines.append("%-4s %-28s %6.1fs  %s" % (state, name, cost, json.dumps(value, ensure_ascii=False, default=str)[:150]))
 ok = all(row[1] == "OK" for row in rows)
 lines.append("-" * 78)
 lines.append("全部通过" if ok else "有失败项")
 report = "\n".join(lines)
 print(report)
-out_path = ROOT / "logs" / ("round_test_%s.txt" % time.strftime("%Y%m%d_%H%M%S"))
+out_path = ROOT / "logs" / ("round_test_whatsapp_%s.txt" % time.strftime("%Y%m%d_%H%M%S"))
 try:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(report, encoding="utf-8")
