@@ -1,7 +1,7 @@
 {
-  "version": "2.0.63",
-  "build": 342,
-  "applied_at": "2026-09-20T18:11:13+08:00",
-  "note": "fix(ota): 常规 OTA 保住 OEM 品牌资源图（manifest 不再写整根 static）",
-  "bundle_sha256": "1ee5971b81a7a8e80ff9fe373f0e1c14f3e09b67303d8a28709b7d256e13c23d"
+  "version": "2.0.64",
+  "build": 344,
+  "applied_at": "2026-09-21T13:12:16+08:00",
+  "note": "个微接管空转修复 + 消费记录消耗位置列 + 资料调查弹窗只认关闭",
+  "bundle_sha256": "52156b3dbcd23a44a9bc2231a8080726a3c7de89034557c3efe61ba48c616684"
 }
