@@ -260,9 +260,13 @@ async def native_wechat_accounts(current_user: _ServerUser = Depends(get_current
 
 
 @router.get("/api/native-wechat/local/status")
-async def native_wechat_local_status(current_user: _ServerUser = Depends(get_current_user_for_local)):
+async def native_wechat_local_status(
+    deep: bool = False,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """默认被动检测（不动微信窗口）；deep=true 才会连 wxauto4 做深度探测。"""
     try:
-        result = {"ok": True, **await asyncio.to_thread(engine.local_driver_status)}
+        result = {"ok": True, **await asyncio.to_thread(engine.local_driver_status, passive=not deep)}
         if not result.get("ok") or int(result.get("count") or 0) <= 0:
             return _attach_diagnostic_if_needed(result, "local_status", reason="local pc wechat window not detected")
         return result

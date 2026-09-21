@@ -1935,7 +1935,12 @@ def list_accounts() -> List[Dict[str, Any]]:
     return out
 
 
-def local_driver_status(*, passive: bool = False) -> Dict[str, Any]:
+def local_driver_status(*, passive: bool = True) -> Dict[str, Any]:
+    """默认被动：只扫窗口/依赖，不激活微信窗口、不连 wxauto4。
+
+    以前默认被动关，前端每刷一次状态就会把微信窗口激活一次（用户会以为"被控制"）。
+    需要深度探测时显式传 passive=False（例如用户主动点「检测」）。
+    """
     init_db()
     return _local_driver_status(passive=passive)
 
