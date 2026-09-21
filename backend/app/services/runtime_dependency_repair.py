@@ -49,7 +49,8 @@ _IMPORT_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "whatsapp",
         "WhatsApp 接管",
-        ("uiautomation", "comtypes", "win32clipboard", "win32gui", "win32process", "pyperclip", "psutil"),
+        ("uiautomation", "comtypes", "win32clipboard", "win32gui", "win32process", "pyperclip", "psutil",
+         "pywinauto"),
     ),
 )
 

@@ -1258,9 +1258,14 @@ def _auto_repair_worker() -> None:
         pass
 
 
+# 这几项缺任何一个都会让加好友/发消息直接报错（例如客户机缺 pywinauto 报 No module named 'pywinauto'）
+WHATSAPP_REQUIRED_MODULES = ("uiautomation", "win32gui", "win32process", "pywinauto")
+
+
 def _maybe_schedule_auto_repair(report: Dict[str, Any]) -> None:
-    """UIA 完全不可用时自动补一次运行依赖（后台线程，3 小时最多一次，不阻塞状态查询）。"""
-    if report["deps"].get("uiautomation"):
+    """必需依赖缺任意一个就自动补一次（后台线程，3 小时最多一次，不阻塞状态查询）。"""
+    missing = [name for name in WHATSAPP_REQUIRED_MODULES if not report["deps"].get(name)]
+    if not missing:
         return
     with _AUTO_REPAIR_LOCK:
         if _AUTO_REPAIR_STATE.get("running"):
@@ -1284,8 +1289,9 @@ def status() -> Dict[str, Any]:
     with _ACTIVE_LOCK:
         running = _ACTIVE
         active_action = _ACTIVE_ACTION
-    if not deps["uiautomation"]:
-        reason = "UIA 控件不可用，请点「修复运行依赖」".strip()
+    missing_modules = [name for name in WHATSAPP_REQUIRED_MODULES if not deps.get(name)]
+    if missing_modules:
+        reason = "缺少依赖：%s（点「修复运行依赖」）" % "、".join(missing_modules)
     elif not windows and processes:
         reason = (
             "检测到 WhatsApp 进程（%s），但没识别到主窗口：请把 WhatsApp 主窗口打开并还原（不要只留托盘/最小化）后重试。"
