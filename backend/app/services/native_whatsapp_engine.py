@@ -993,34 +993,42 @@ def _activate_window(hwnd: int) -> None:
         pass
 
 
-def _click(node: Any) -> None:
-    """点击控件：优先 UIA 原生调用（Invoke/Select），不移动鼠标，避免误点到别的程序。"""
-    for accessor, action in (
-        ("GetInvokePattern", "Invoke"),
-        ("GetTogglePattern", "Toggle"),
-        ("GetSelectionItemPattern", "Select"),
-    ):
-        try:
-            pattern = getattr(node, accessor)()
-            getattr(pattern, action)()
-            time.sleep(0.08)
-            return
-        except Exception:
-            continue
-    # Web 按钮多数支持 LegacyIAccessible.DoDefaultAction（也不动鼠标）
-    try:
-        node.GetLegacyIAccessiblePattern().DoDefaultAction()
-        time.sleep(0.08)
+def _click(node: Any, *, force_mouse: bool = False) -> None:
+    """点击控件。
+
+    按钮类优先用 UIA 原生调用（不移动鼠标）；列表行/成员行这类 Web 元素
+    Invoke/DoDefaultAction 会"调用成功但没反应"，用 force_mouse=True 走鼠标点击。
+    """
+    if force_mouse:
+        _click_with_mouse(node)
         return
-    except Exception:
-        pass
+    # 按钮/菜单项优先用 UIA 原生调用（不移动鼠标）；
+    # 列表行、输入框这类 Web 元素对 Invoke/Select 往往"调用成功但没反应"，
+    # 必须走鼠标点击（下面带置顶 + 坐标守卫，不会点到别的程序上）。
+    if _node_type(node) in {"ButtonControl", "SplitButtonControl", "MenuItemControl", "TabItemControl"}:
+        for accessor, action in (
+            ("GetInvokePattern", "Invoke"),
+            ("GetLegacyIAccessiblePattern", "DoDefaultAction"),
+        ):
+            try:
+                pattern = getattr(node, accessor)()
+                getattr(pattern, action)()
+                time.sleep(0.08)
+                return
+            except Exception:
+                continue
+    _click_with_mouse(node)
+
+
+def _click_with_mouse(node: Any) -> None:
     rect = _rect(node)
     if not rect:
         raise RuntimeError("WhatsApp 控件不可点击")
     import win32api  # type: ignore
     import win32con  # type: ignore
 
-    x = int((rect[0] + rect[2]) / 2)
+    # 点控件左侧 1/4 处（避开行尾的勾选/箭头图标）
+    x = int(rect[0] + (rect[2] - rect[0]) * 0.25)
     y = int((rect[1] + rect[3]) / 2)
     # 鼠标点击前确认"这个坐标下就是 WhatsApp 窗口"，避免点到别的程序（例如微信）上
     target = _node_hwnd(node) or _primary_window_hwnd()
