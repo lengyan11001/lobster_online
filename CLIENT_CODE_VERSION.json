@@ -1,7 +1,7 @@
 {
-  "version": "2.0.77",
-  "build": 357,
-  "applied_at": "2026-09-21T18:35:59+08:00",
-  "note": "WhatsApp 接管修复：回复生成地址对齐主站（修 404）+ 窗口置前全自动（AttachThreadInput，不再要用户手动移动）",
-  "bundle_sha256": "d585e8237d8156477ebd1e0bf1409332a76b965a5ab660bbd32527e6d8d4c8ac"
+  "version": "2.0.65",
+  "build": 358,
+  "applied_at": "2026-09-21T19:45:58+08:00",
+  "note": "朋友圈：图文只发图片/视频只发视频 + 素材类型按文件头判定（修微信处理失败）",
+  "bundle_sha256": "64e646e1ac4622dc5fb7dd7e753e8395e244dafb146172c20bbaf0752362a1d3"
 }
