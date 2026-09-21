@@ -1,7 +1,7 @@
 {
-  "version": "2.0.71",
-  "build": 351,
-  "applied_at": "2026-09-21T17:40:48+08:00",
-  "note": "WhatsApp 接管：记忆文件参与回复 + 拉群（配置/关键词触发/建群）+ 加好友修复（保存联系人/任意国家码/记录停止重试删除/不再误操作其它程序）",
-  "bundle_sha256": "a46212ce277a35f096313ab590fd3ddd9e6bcf3f93c36df0166a549bc447ddb8"
+  "version": "2.0.72",
+  "build": 352,
+  "applied_at": "2026-09-21T17:48:30+08:00",
+  "note": "WhatsApp 接管结果回写学习（channel=whatsapp，与个微共用 /observe）+ 拉群/记忆文件/加好友修复",
+  "bundle_sha256": "3dc66dfe769b019e40d022e4f9c3cad98ebc7fcaaf375a628202ed483d110481"
 }
