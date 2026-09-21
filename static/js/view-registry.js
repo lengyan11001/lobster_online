@@ -121,8 +121,8 @@
   });
 
 window.registerLobsterView('alibaba-inquiries', {
-  html: '/static/views/alibaba-inquiries.html?v=20260920-ali-workbench-v2',
-  scripts: '/static/js/alibaba-inquiries.js?v=20260920-ali-workbench-v2',
+  html: '/static/views/alibaba-inquiries.html?v=20260921-ali-store-v3',
+  scripts: '/static/js/alibaba-inquiries.js?v=20260921-ali-store-v3',
   init: 'initAlibabaInquiriesView',
   cache: 'reload'
 });

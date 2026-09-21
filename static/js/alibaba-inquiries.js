@@ -10,14 +10,15 @@
    * ============================================================ */
 
   var NAV = [
-    { key: 'desk', label: '接待台', icon: '◎', hint: '今天该处理什么' },
-    { key: 'inquiries', label: '询盘', icon: '✉', hint: '按会话逐条处理' },
-    { key: 'pool', label: '公海池', icon: '◍', hint: 'T0 / T+2d / T+5d 激活' },
-    { key: 'customers', label: '客户档案', icon: '☰', hint: '背调与分级' },
-    { key: 'kb', label: '知识库', icon: '▤', hint: '产品/FAQ/报价/禁忌' },
-    { key: 'persona', label: '人设与话术', icon: '✎', hint: '人设与回复策略' },
-    { key: 'rules', label: '排期与红线', icon: '⚙', hint: '频率 · 轮次 · 禁词' },
-    { key: 'accounts', label: '账号', icon: '⌘', hint: '登录态与同步' }
+    { key: 'desk', label: '接待台', icon: '◎', hint: '今天该处理什么', group: 'work' },
+    { key: 'inquiries', label: '询盘', icon: '✉', hint: '按会话逐条处理', group: 'work' },
+    { key: 'store', label: '店铺与产品', icon: '▦', hint: '公司资料 + 线上产品', group: 'work' },
+    { key: 'pool', label: '公海池', icon: '◍', hint: 'T0 / T+2d / T+5d 激活', group: 'work' },
+    { key: 'customers', label: '客户档案', icon: '☰', hint: '背调与分级', group: 'work' },
+    { key: 'kb', label: '知识库', icon: '▤', hint: '产品/FAQ/报价/禁忌', group: 'config' },
+    { key: 'persona', label: '人设与话术', icon: '✎', hint: '人设与回复策略', group: 'config' },
+    { key: 'rules', label: '排期与红线', icon: '⚙', hint: '频率 · 轮次 · 禁词', group: 'config' },
+    { key: 'accounts', label: '账号', icon: '⌘', hint: '登录态与同步', group: 'config' }
   ];
 
   var S = {
@@ -31,6 +32,10 @@
     docs: [],
     summaries: [],
     pool: { items: [], status: '' },
+    store: null,
+    storeStats: null,
+    storeGroups: [],
+    products: { items: [], total: 0, offset: 0, limit: 20, q: '', audit_status: '', shelf_status: '' },
     drawer: null,
     busy: false
   };
@@ -387,6 +392,22 @@
       badge((S.config && S.config.dry_run ? '演练模式' : '真实发送'), S.config && S.config.dry_run ? 'warn' : 'err') +
       '</div></div>' +
       '<div id="aliDeskQueue">' + renderQueue(data.queue || []) + '</div></div>' +
+      '<div class="ali-card"><div class="ali-card-head"><div class="ali-card-title">准备工作</div>' +
+      '<div class="ali-hint">三件事做完，AI 接待才有依据</div></div>' +
+      '<div class="ali-card-body"><div class="ali-stats">' +
+      '<div class="ali-stat" data-prep="inquiries">' +
+      '<div class="ali-stat-num">' + (data.stats && data.stats.inquiries !== undefined ? data.stats.inquiries : '—') + '</div>' +
+      '<div class="ali-stat-label">① 同步询盘</div>' +
+      '<div class="ali-stat-note">' + (data.stats && data.stats.awaiting_reply ? '待回复 ' + data.stats.awaiting_reply + ' 条' : '已同步') + '</div></div>' +
+      '<div class="ali-stat" data-prep="store">' +
+      '<div class="ali-stat-num">' + (S.storeStats ? S.storeStats.products : '—') + '</div>' +
+      '<div class="ali-stat-label">② 店铺与产品</div>' +
+      '<div class="ali-stat-note">' + (S.store && S.store.company_name ? '已同步 · 线上 ' + ((S.storeStats && S.storeStats.online) || 0) + ' 条' : '还没同步') + '</div></div>' +
+      '<div class="ali-stat" data-prep="kb">' +
+      '<div class="ali-stat-num">' + (data.stats && data.stats.kb_docs !== undefined ? data.stats.kb_docs : '—') + '</div>' +
+      '<div class="ali-stat-label">③ 知识库（报价表/FAQ）</div>' +
+      '<div class="ali-stat-note">上传真实资料，回复才有依据</div></div>' +
+      '</div></div></div>' +
       '<div class="ali-card"><div class="ali-card-head"><div class="ali-card-title">当前策略</div>' +
       '<button type="button" class="ali-btn sm" data-act="goto-persona">去人设与话术</button></div>' +
       '<div class="ali-card-body"><div class="ali-note">' +
@@ -401,6 +422,20 @@
     host.querySelector('[data-act="run-dry"]').addEventListener('click', function () { showRunModal(true); });
     host.querySelector('[data-act="run-live"]').addEventListener('click', function () { showRunModal(false); });
     host.querySelector('[data-act="goto-persona"]').addEventListener('click', function () { S.view = 'persona'; render(); });
+    host.querySelectorAll('[data-prep]').forEach(function (el) {
+      el.addEventListener('click', function () {
+        var kind = el.getAttribute('data-prep');
+        if (kind === 'store') {
+          S.view = 'store';
+          render();
+          loadViewData();
+          return;
+        }
+        S.view = kind === 'kb' ? 'kb' : 'inquiries';
+        render();
+        loadViewData();
+      });
+    });
     bindQueue(host);
   }
 
@@ -846,6 +881,186 @@
   }
 
   /* ------------------------------------------------ 知识库 */
+
+  /* ------------------------------------------------ 店铺与产品（准备工作②） */
+
+  function loadStore() {
+    if (!S.accountId) return Promise.resolve();
+    return apiJson('/api/alibaba-inquiries/accounts/' + encodeURIComponent(S.accountId) + '/store')
+      .then(function (data) {
+        S.store = (data && data.store) || null;
+        S.storeStats = (data && data.stats) || null;
+        S.storeGroups = (data && data.groups) || [];
+        if (S.view === 'store') render();
+        return data;
+      })
+      .catch(function (err) { toast('店铺资料加载失败：' + err.message, 'err'); });
+  }
+
+  function loadProducts(reset) {
+    if (!S.accountId) return Promise.resolve();
+    if (reset) S.products.offset = 0;
+    var q = '/api/alibaba-inquiries/accounts/' + encodeURIComponent(S.accountId) + '/products?limit=' +
+      S.products.limit + '&offset=' + S.products.offset +
+      (S.products.q ? '&q=' + encodeURIComponent(S.products.q) : '') +
+      (S.products.audit_status ? '&audit_status=' + encodeURIComponent(S.products.audit_status) : '') +
+      (S.products.shelf_status ? '&shelf_status=' + encodeURIComponent(S.products.shelf_status) : '');
+    return apiJson(q).then(function (data) {
+      S.products.items = (data && data.products) || [];
+      S.products.total = (data && data.total) || 0;
+      if (S.view === 'store') render();
+    }).catch(function (err) { toast('产品列表加载失败：' + err.message, 'err'); });
+  }
+
+  function syncStore() {
+    if (!needAccount()) return;
+    confirmModal('同步会打开阿里后台把「公司资料 + 线上产品」拉下来（首次 300+ 产品约 1-2 分钟），继续吗？', function () {
+      setBusy(true, '正在同步店铺与产品…');
+      apiJson('/api/alibaba-inquiries/accounts/' + encodeURIComponent(S.accountId) + '/store/sync',
+        { method: 'POST', body: { products: true, store: true, max_pages: 60 } })
+        .then(function (data) {
+          setBusy(false);
+          var products = (data && data.products) || {};
+          toast('同步完成：产品 ' + (products.found || 0) + ' 条（新增 ' + (products.created || 0) +
+            ' / 更新 ' + (products.updated || 0) + '），页数 ' + (products.pages_scanned || 0), 'ok');
+          if (data && (data.store_error || data.products_error)) {
+            toast('部分失败：' + (data.store_error || data.products_error), 'err');
+          }
+          loadStore().then(function () { loadProducts(true); });
+          loadDashboard();
+        })
+        .catch(function (e) { setBusy(false); toast('同步失败：' + e.message, 'err'); });
+    }, { okLabel: '开始同步' });
+  }
+
+  function renderStore(host) {
+    var store = S.store || {};
+    var stats = S.storeStats || {};
+    var groups = S.storeGroups || [];
+    var rows = S.products.items || [];
+    var hasStore = !!(store && store.company_name);
+    host.innerHTML =
+      '<div class="ali-head"><div><div class="ali-h1">店铺与产品</div>' +
+      '<div class="ali-hint">店铺资料来自「管理公司信息」；产品默认只抓线上（审核通过 / 已上架）</div></div>' +
+      '<div class="ali-toolbar">' +
+      badge('产品 ' + (stats.products || 0) + ' 条', 'info') +
+      badge('线上 ' + (stats.online || 0) + ' 条', 'ok') +
+      '<button type="button" class="ali-btn primary" data-act="sync">同步店铺与产品</button>' +
+      '</div></div>' +
+      (hasStore
+        ? '<div class="ali-card"><div class="ali-card-head"><div class="ali-card-title">店铺资料</div>' +
+          '<div class="ali-toolbar">' + badge('完整度 ' + (store.completeness || '—'), 'ok') +
+          (store.storefront_url ? '<a class="ali-btn sm" href="' + esc(store.storefront_url) + '" target="_blank" rel="noreferrer">查看线上店铺</a>' : '') +
+          '</div></div><div class="ali-card-body"><dl class="ali-kv">' +
+          '<dt>公司名称</dt><dd>' + esc(store.company_name || '—') + '</dd>' +
+          '<dt>注册地</dt><dd>' + esc(store.registered_place || '—') + '</dd>' +
+          '<dt>运营地址</dt><dd>' + esc([store.street_address, store.city, store.province, store.country].filter(Boolean).join(' / ') || '—') + '</dd>' +
+          '<dt>经营模式</dt><dd>' + esc(store.biz_type || '—') + '</dd>' +
+          '<dt>主营类目</dt><dd>' + esc(store.main_category || '—') + '</dd>' +
+          '<dt>主营业务</dt><dd>' + esc(store.main_business || '—') + '</dd>' +
+          '<dt>更多经营产品</dt><dd>' + esc((store.more_products || []).join('、') || '—') + '</dd>' +
+          '<dt>注册年份</dt><dd>' + esc(store.register_year || '—') + '</dd>' +
+          '<dt>员工数</dt><dd>' + esc(store.employees || '—') + '</dd>' +
+          '<dt>公司网址</dt><dd>' + esc(store.website || '—') + '</dd>' +
+          '<dt>同步时间</dt><dd>' + fmtTime(store.synced_at) + '</dd>' +
+          '</dl></div></div>'
+        : '<div class="ali-card"><div class="ali-card-body">' +
+          emptyBlock('还没有同步店铺资料', '点右上角「同步店铺与产品」，会把公司资料和线上产品一起拉进来', [
+            { id: 'sync-store', label: '同步店铺与产品', kind: 'primary' }
+          ]) + '</div></div>') +
+      '<div class="ali-card"><div class="ali-card-head"><div class="ali-card-title">线上产品</div>' +
+      '<div class="ali-toolbar">' +
+      '<input class="ali-input" id="aliProductSearch" placeholder="搜索标题 / 型号 / 分组" value="' + esc(S.products.q) + '" style="width:220px">' +
+      '<select class="ali-select" id="aliProductShelf">' +
+      [['', '全部状态'], ['已上架', '已上架'], ['已下架', '已下架']].map(function (pair) {
+        return '<option value="' + pair[0] + '"' + (S.products.shelf_status === pair[0] ? ' selected' : '') + '>' + pair[1] + '</option>';
+      }).join('') + '</select>' +
+      '<select class="ali-select" id="aliProductGroup">' +
+      '<option value="">全部分组</option>' +
+      groups.map(function (g) {
+        return '<option value="' + esc(g.name || '') + '"' + (S.products.group_name === g.name ? ' selected' : '') + '>' +
+          esc(g.name || '未分组') + ' (' + g.count + ')</option>';
+      }).join('') + '</select>' +
+      '<button type="button" class="ali-btn" data-act="search">搜索</button>' +
+      '</div></div><div class="ali-card-body" style="padding:0;">' +
+      (rows.length
+        ? '<table class="ali-table"><thead><tr><th style="width:64px;"></th><th>产品</th><th>价格</th><th>库存</th><th>状态</th><th>月曝光</th></tr></thead><tbody>' +
+          rows.map(function (p) {
+            return '<tr data-product="' + esc(p.product_id) + '">' +
+              '<td>' + (p.image_url ? '<img src="' + esc(p.image_url) + '" style="width:44px;height:44px;object-fit:cover;border-radius:6px;">' : '') + '</td>' +
+              '<td><div class="ali-cell-main">' + esc(compact(p.subject, 90)) + '</div>' +
+              '<div class="ali-cell-sub">' + esc(p.model_no || '') + (p.group_name ? ' · ' + esc(p.group_name) : '') +
+              ' · ID ' + esc(p.product_id) + (p.owner ? ' · ' + esc(p.owner) : '') + '</div></td>' +
+              '<td>' + esc(p.price_text || '—') +
+              '<div class="ali-cell-sub">' + (p.moq ? 'MOQ ' + esc(p.moq) + ' · ' : '') +
+              (p.score === null || p.score === undefined ? '' : '评分 ' + esc(p.score)) + '</div></td>' +
+              '<td>' + esc(p.stock_text || '—') + '</td>' +
+              '<td>' + badge(p.shelf_status || '—', p.shelf_status === '已上架' ? 'ok' : '') +
+              (p.audit_status ? ' ' + badge(p.audit_status, p.audit_status === '审核通过' ? 'info' : 'warn') : '') + '</td>' +
+              '<td>' + (p.monthly_exposure === null || p.monthly_exposure === undefined ? '—' : p.monthly_exposure) + '</td></tr>';
+          }).join('') + '</tbody></table>'
+        : emptyBlock('还没有产品数据', hasStore ? '点右上角同步，或先同步一次' : '先同步店铺与产品', [])) +
+      '</div><div class="ali-pager">共 ' + (S.products.total || rows.length) + ' 条 · 第 ' +
+      (Math.floor(S.products.offset / S.products.limit) + 1) + ' 页' +
+      '<button type="button" class="ali-btn sm" data-act="prev">上一页</button>' +
+      '<button type="button" class="ali-btn sm" data-act="next">下一页</button></div></div>';
+
+    host.querySelector('[data-act="sync"]').addEventListener('click', syncStore);
+    host.querySelector('[data-act="search"]').addEventListener('click', function () {
+      S.products.q = $('aliProductSearch').value.trim();
+      S.products.shelf_status = $('aliProductShelf').value;
+      S.products.group_name = $('aliProductGroup').value;
+      loadProducts(true);
+    });
+    host.querySelector('[data-act="prev"]').addEventListener('click', function () {
+      S.products.offset = Math.max(0, S.products.offset - S.products.limit);
+      loadProducts(false);
+    });
+    host.querySelector('[data-act="next"]').addEventListener('click', function () {
+      if (S.products.offset + S.products.limit < S.products.total) {
+        S.products.offset += S.products.limit;
+        loadProducts(false);
+      }
+    });
+    host.querySelectorAll('[data-product]').forEach(function (el) {
+      el.addEventListener('click', function () { showProductDrawer(el.getAttribute('data-product')); });
+    });
+    bindEmptyActions(host, { 'sync-store': syncStore });
+  }
+
+  function showProductDrawer(productId) {
+    var product = null;
+    (S.products.items || []).forEach(function (p) { if (String(p.product_id) === String(productId)) product = p; });
+    if (!product) return;
+    openDrawer({
+      title: product.model_no || product.product_id,
+      sub: esc(compact(product.subject, 90)),
+      body:
+        '<div class="ali-card"><div class="ali-card-body">' +
+        (product.image_url ? '<img src="' + esc(product.image_url) + '" style="width:100%;max-width:320px;border-radius:10px;">' : '') +
+        '<dl class="ali-kv" style="margin-top:10px;">' +
+        '<dt>产品 ID</dt><dd>' + esc(product.product_id) + '</dd>' +
+        '<dt>型号 / 分组</dt><dd>' + esc((product.model_no || '—') + ' / ' + (product.group_name || '—')) + '</dd>' +
+        '<dt>类型</dt><dd>' + esc(product.product_type || '—') + '</dd>' +
+        '<dt>价格</dt><dd>' + esc(product.price_text || '—') + '</dd>' +
+        '<dt>MOQ</dt><dd>' + esc(product.moq || '—') + (product.second_order_quantity ? ' · 二次起订 ' + esc(product.second_order_quantity) : '') + '</dd>' +
+        '<dt>库存</dt><dd>' + esc(product.stock_text || '—') + '</dd>' +
+        '<dt>状态</dt><dd>' + esc((product.audit_status || '—') + ' / ' + (product.shelf_status || '—')) + (product.note ? ' · ' + esc(product.note) : '') + '</dd>' +
+        '<dt>点击 / 访客</dt><dd>' + (product.click_num === null || product.click_num === undefined ? '—' : product.click_num) +
+        ' / ' + (product.visitor_cnt === null || product.visitor_cnt === undefined ? '—' : product.visitor_cnt) + '</dd>' +
+        '<dt>评分</dt><dd>' + (product.score === null || product.score === undefined ? '—' : product.score) + '</dd>' +
+        '<dt>负责人</dt><dd>' + esc(product.owner || '—') + '</dd>' +
+        '<dt>更新时间</dt><dd>' + esc(product.gmt_modified || '—') + '</dd>' +
+        '<dt>关键词</dt><dd>' + esc(compact(product.keywords || '', 160) || '—') + '</dd>' +
+        '<dt>标签</dt><dd>' + esc((product.tags || []).join('、') || '—') + '</dd>' +
+        '</dl></div></div>',
+      actions: [
+        product.detail_url ? { label: '打开线上页', onClick: function () { window.open(product.detail_url, '_blank'); } } : null,
+        product.edit_url ? { label: '后台编辑', onClick: function () { window.open(product.edit_url, '_blank'); } } : null,
+        { label: '关闭', onClick: closeDrawer }
+      ].filter(Boolean)
+    });
+  }
 
   function loadDocs() {
     if (!needAccount()) return Promise.resolve();
@@ -1544,25 +1759,22 @@
     if (!host) return;
     var counts = {
       inquiries: S.dashboard && S.dashboard.stats ? S.dashboard.stats.awaiting_reply : null,
+      store: S.storeStats ? S.storeStats.products : null,
       pool: S.dashboard && S.dashboard.stats ? S.dashboard.stats.pool_pending : null,
       customers: S.dashboard && S.dashboard.stats ? S.dashboard.stats.inquiries : null,
       kb: S.dashboard && S.dashboard.stats ? S.dashboard.stats.kb_docs : null
     };
+    function itemHtml(item) {
+      return '<button type="button" class="ali-nav-item' + (S.view === item.key ? ' is-active' : '') + '" data-nav="' + item.key + '">' +
+        '<span class="ali-nav-ico">' + item.icon + '</span><span>' + esc(item.label) + '</span>' +
+        (counts[item.key] ? '<span class="ali-nav-count">' + counts[item.key] + '</span>' : '') +
+        '</button>';
+    }
     host.innerHTML =
       '<div class="ali-nav-group">工作</div>' +
-      NAV.slice(0, 4).map(function (item) {
-        return '<button type="button" class="ali-nav-item' + (S.view === item.key ? ' is-active' : '') + '" data-nav="' + item.key + '">' +
-          '<span class="ali-nav-ico">' + item.icon + '</span><span>' + esc(item.label) + '</span>' +
-          (counts[item.key] ? '<span class="ali-nav-count">' + counts[item.key] + '</span>' : '') +
-          '</button>';
-      }).join('') +
+      NAV.filter(function (item) { return item.group === 'work'; }).map(itemHtml).join('') +
       '<div class="ali-nav-group">配置</div>' +
-      NAV.slice(4).map(function (item) {
-        return '<button type="button" class="ali-nav-item' + (S.view === item.key ? ' is-active' : '') + '" data-nav="' + item.key + '">' +
-          '<span class="ali-nav-ico">' + item.icon + '</span><span>' + esc(item.label) + '</span>' +
-          (counts[item.key] ? '<span class="ali-nav-count">' + counts[item.key] + '</span>' : '') +
-          '</button>';
-      }).join('');
+      NAV.filter(function (item) { return item.group === 'config'; }).map(itemHtml).join('');
     host.querySelectorAll('[data-nav]').forEach(function (el) {
       el.addEventListener('click', function () {
         S.view = el.getAttribute('data-nav');
@@ -1594,6 +1806,7 @@
     }
     if (S.view === 'desk') renderDesk(main);
     else if (S.view === 'inquiries') renderInquiries(main);
+    else if (S.view === 'store') renderStore(main);
     else if (S.view === 'pool') renderPool(main);
     else if (S.view === 'customers') renderCustomers(main);
     else if (S.view === 'kb') renderKb(main);
@@ -1611,8 +1824,9 @@
 
   function loadViewData() {
     if (!S.accountId) return Promise.resolve();
-    if (S.view === 'desk') return loadDashboard();
+    if (S.view === 'desk') return loadDashboard().then(function () { return loadStore(); });
     if (S.view === 'inquiries') return loadInquiries(true);
+    if (S.view === 'store') return loadStore().then(function () { return loadProducts(true); });
     if (S.view === 'pool') return loadPool();
     if (S.view === 'customers') return loadArchives(true);
     if (S.view === 'kb') return loadDocs();
@@ -1669,8 +1883,8 @@
 
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('alibaba-inquiries', {
-      html: '/static/views/alibaba-inquiries.html?v=20260920-ali-workbench-v2',
-      scripts: '/static/js/alibaba-inquiries.js?v=20260920-ali-workbench-v2',
+      html: '/static/views/alibaba-inquiries.html?v=20260921-ali-store-v3',
+      scripts: '/static/js/alibaba-inquiries.js?v=20260921-ali-store-v3',
       init: 'initAlibabaInquiriesView',
       cache: 'reload'
     });
