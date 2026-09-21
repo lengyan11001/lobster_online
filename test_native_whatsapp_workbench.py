@@ -93,17 +93,21 @@ def test_batch_targets_are_parsed_and_deduped(isolated_whatsapp_state):
             "@alice_wa",
             "13800138000",          # 与第一行重复（同号码）
             "李四 13800138002",
+            "王五,王,13800138003",   # 姓名,姓氏,电话
         ]
     )
-    assert [item["phone"] for item in targets if item["phone"]] == ["13800138000", "13800138001", "13800138002"]
+    assert [item["phone"] for item in targets if item["phone"]] == [
+        "13800138000", "13800138001", "13800138002", "13800138003",
+    ]
     assert targets[0]["first_name"] == "张三"
     assert targets[0]["country_code"] == "+86"
+    assert targets[-1]["first_name"] == "王五" and targets[-1]["last_name"] == "王"
     assert any(item["username"] == "alice_wa" for item in targets)
     assert engine._target_label({"country_code": "+86", "phone": "13800138000"}) == "+8613800138000"
 
 
 def test_friend_add_queue_enqueues_and_lists_records(isolated_whatsapp_state):
-    task = engine.create_add_contact_task(["13800138000", "李四,13800138001"], apply_message="你好", queue_only=True)
+    task = engine.create_add_contact_task(["王五,13800138000", "李四,13800138001"], apply_message="你好", queue_only=True)
     assert task["queued_total"] == 2
     assert task["status"] == "queued"
 
@@ -130,13 +134,14 @@ def test_friend_add_task_runs_with_mocked_desktop(isolated_whatsapp_state, monke
     monkeypatch.setattr(engine, "add_contact", fake_add_contact)
     monkeypatch.setattr(engine, "send_message", fake_send_message)
 
-    engine.create_add_contact_task(["王五,13800138003"], apply_message="您好，我是小王")
+    engine.create_add_contact_task(["王五,王,13800138003"], apply_message="您好，我是小王")
     claimed = engine._claim_next_queued_task(engine.DEFAULT_ACCOUNT_ID)
     outcome = asyncio.run(engine._process_add_contact_task(claimed))
 
     assert outcome["status"] == "success"
     assert calls["add"][0]["phone"] == "13800138003"
     assert calls["add"][0]["first_name"] == "王五"
+    assert calls["add"][0]["last_name"] == "王"   # 姓氏必须真的带进 WhatsApp 表单
     assert calls["send"][0] == ("+8613800138003", "您好，我是小王")
 
     records = engine.list_friend_records(limit=5, offset=0)
@@ -148,7 +153,7 @@ def test_friend_add_task_runs_with_mocked_desktop(isolated_whatsapp_state, monke
 def test_friend_add_daily_limit_defers_task(isolated_whatsapp_state, monkeypatch):
     monkeypatch.setattr(engine, "add_contact", lambda **kwargs: {"ok": True})
     engine.save_friend_add_control(interval_seconds=5, daily_limit=1)
-    engine.create_add_contact_task(["13800138004", "13800138005"])
+    engine.create_add_contact_task(["赵一,13800138004", "钱二,13800138005"])
 
     first = engine._claim_next_queued_task(engine.DEFAULT_ACCOUNT_ID)
     outcome = asyncio.run(engine._process_add_contact_task(first))
@@ -243,7 +248,7 @@ def test_friend_queue_http_flow_enqueue_records_settings_and_queue(isolated_what
     monkeypatch.setattr(engine, "add_contact", lambda **kwargs: {"ok": True})
     monkeypatch.setattr(engine, "send_message", lambda target, content: {"ok": True, "sent": True})
     payload = {
-        "targets": ["张三,13800138000", "@alice_wa", "13800138000"],
+        "targets": ["张三,13800138000", "李四,张,13800138002", "13800138000"],
         "apply_message": "你好",
         "remark": "展会",
         "interval_seconds": 45,
@@ -268,6 +273,8 @@ def test_friend_queue_http_flow_enqueue_records_settings_and_queue(isolated_what
         assert records["count"] == 2 and records["total"] == 2
         assert {item["status"] for item in records["items"]} == {"queued"}
         assert {item["apply_message"] for item in records["items"]} == {"你好"}
+        assert {item["first_name"] for item in records["items"]} == {"张三", "李四"}
+        assert any(item["last_name"] == "张" and item["phone"] == "+8613800138002" for item in records["items"])
 
         queue = client.get("/api/native-whatsapp/friends/queue").json()
         assert queue["summary"]["queued"] == 2
@@ -420,3 +427,40 @@ def test_personal_whatsapp_add_edit_forms_live_in_modals():
     assert len(bound) >= 20  # 防止正则失配后空跑
     duplicated = {key for key in bound if bound.count(key) > 1}
     assert not duplicated, sorted(duplicated)
+
+
+def test_batch_add_friend_requires_name_for_phone_targets(isolated_whatsapp_state):
+    """WhatsApp 添加联系人表单必须有姓名：只写号码的目标不允许入队（不能照抄个微的关键词口径）。"""
+    with pytest.raises(RuntimeError) as excinfo:
+        engine.create_add_contact_task(["13800138000", "张三,13800138001"])
+    assert "必须填姓名" in str(excinfo.value)
+    assert engine.list_friend_records(limit=10, offset=0)["count"] == 0
+
+    task = engine.create_add_contact_task(["张三,13800138000", "李四,张,13800138002", "王五,@wangwu"])
+    assert task["queued_total"] == 3
+    records = engine.list_friend_records(limit=10, offset=0)["items"]
+    by_name = {item["first_name"]: item for item in records}
+    assert by_name["李四"]["last_name"] == "张"
+    assert by_name["王五"]["username"] == "wangwu"
+    assert by_name["王五"]["phone"] == ""
+
+
+def test_whatsapp_friend_fields_follow_desktop_form_not_wechat():
+    """字段按 WhatsApp「新联系人」表单（名字/姓氏/用户名/国家地区+电话），不照抄个微的关键词+备注+标签。"""
+    root = Path(__file__).resolve().parent
+    view = (root / "static" / "views" / "personal-whatsapp.html").read_text(encoding="utf-8")
+    script = (root / "static" / "js" / "personal-whatsapp.js").read_text(encoding="utf-8")
+
+    for wechat_only in ("personalWhatsappFriendRemark", "personalWhatsappFriendPermission",
+                        "personalWhatsappFriendTags", 'value="朋友圈"', 'value="仅聊天"'):
+        assert wechat_only not in view, wechat_only
+
+    for field in ("personalWhatsappContactFirstName", "personalWhatsappContactLastName",
+                  "personalWhatsappContactUsername", "personalWhatsappContactPhone",
+                  "personalWhatsappCountryCode"):
+        assert 'id="%s"' % field in view, field
+
+    assert "姓名,电话" in view and "必须有名字" in view
+    assert "function namelessTargetLines" in script
+    assert "personalWhatsappFriendAddError" in script
+    assert "<th>姓名</th>" in script and "号码 / @用户名" in script

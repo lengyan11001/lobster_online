@@ -1443,33 +1443,52 @@ def _split_country_code(digits: str) -> "tuple[str, str]":
 
 
 def _parse_target_line(line: str) -> Optional[Dict[str, str]]:
-    """解析一行目标：`名字,电话` / `电话` / `@用户名` / `名字,@用户名`。"""
+    """解析一行目标，字段对齐 WhatsApp「添加联系人」表单（名字/姓氏/@用户名/电话）。
+
+    支持：`姓名,电话`、`姓名,姓氏,电话`、`姓名,@用户名`、`姓名,姓氏,@用户名`；
+    只写一个号码时不带姓名，由 create_add_contact_task 拒绝入队（WhatsApp 表单必须有名字）。
+    """
     text = str(line or "").strip()
     if not text:
         return None
     parts = [part.strip() for part in re.split(r"[,，\t]+", text) if part.strip()]
     if not parts:
         return None
-    name = parts[0] if len(parts) >= 2 else ""
-    contact = parts[-1]
+    if len(parts) >= 3:
+        first_name, last_name, contact = parts[0], parts[1], parts[-1]
+    elif len(parts) == 2:
+        first_name, last_name, contact = parts[0], "", parts[1]
+    else:
+        first_name, last_name, contact = "", "", parts[0]
     raw_contact = contact.lstrip("@").strip()
     if not raw_contact:
         return None
     if contact.startswith("@"):
-        return {"first_name": name or raw_contact, "username": raw_contact, "phone": "", "country_code": ""}
+        return {"first_name": first_name, "last_name": last_name, "username": raw_contact, "phone": "", "country_code": ""}
     digits = re.sub(r"[^0-9+]", "", contact)
     if not digits:
-        return {"first_name": name or raw_contact, "username": raw_contact, "phone": "", "country_code": ""}
+        return {"first_name": first_name, "last_name": last_name, "username": raw_contact, "phone": "", "country_code": ""}
     country_code = ""
     number = digits
     if digits.startswith("+"):
         country_code, number = _split_country_code(digits)
     return {
-        "first_name": name or digits,
+        "first_name": first_name,
+        "last_name": last_name,
         "username": "",
         "phone": number,
         "country_code": country_code or "+86",
     }
+
+
+def _missing_name_targets(targets: Iterable[Dict[str, Any]]) -> List[str]:
+    """找出「只写了号码、没写姓名」的目标：WhatsApp 添加联系人表单必须有名字。"""
+    missing: List[str] = []
+    for target in targets or []:
+        if str(target.get("first_name") or "").strip():
+            continue
+        missing.append(_target_label(target))
+    return missing
 
 
 def normalize_friend_targets(raw_targets: Iterable[Any]) -> List[Dict[str, str]]:
@@ -1481,6 +1500,9 @@ def normalize_friend_targets(raw_targets: Iterable[Any]) -> List[Dict[str, str]]
             target = _parse_target_line(line)
             if not target:
                 continue
+            if not str(target.get("first_name") or "").strip() and target.get("username"):
+                # 只写 @用户名 时用用户名当名字（表单必填项不能空）
+                target["first_name"] = str(target["username"])
             key = str(target.get("username") or target.get("phone") or target.get("first_name") or "").casefold()
             if not key or key in seen:
                 continue
@@ -1742,7 +1764,13 @@ def create_add_contact_task(
     account_id = DEFAULT_ACCOUNT_ID
     normalized = normalize_friend_targets(targets)
     if not normalized:
-        raise RuntimeError("没有可用的加好友目标（支持：电话 / 名字,电话 / @用户名）")
+        raise RuntimeError("没有可用的加好友目标（支持：姓名,电话 / 姓名,姓氏,电话 / 姓名,@用户名）")
+    missing_names = _missing_name_targets(normalized)
+    if missing_names:
+        raise RuntimeError(
+            "WhatsApp 添加联系人必须填姓名：%d 个目标只写了号码（%s）。请改成「姓名,电话」或「姓名,姓氏,电话」"
+            % (len(missing_names), "、".join(missing_names[:3]))
+        )
     if interval_seconds is not None or daily_limit is not None:
         save_friend_add_control(account_id, interval_seconds=interval_seconds, daily_limit=daily_limit)
     if not queue_only:
@@ -1839,6 +1867,7 @@ async def _process_add_contact_task(task: Dict[str, Any]) -> Dict[str, Any]:
                 await asyncio.to_thread(
                     add_contact,
                     first_name=str(target.get("first_name") or "").strip() or _target_label(target),
+                    last_name=str(target.get("last_name") or "").strip(),
                     username=str(target.get("username") or ""),
                     phone=str(target.get("phone") or ""),
                     country_code=str(target.get("country_code") or "+86"),
@@ -1991,6 +2020,7 @@ def list_friend_records(
                     "target": label,
                     "keyword": label,
                     "first_name": str(target.get("first_name") or ""),
+                    "last_name": str(target.get("last_name") or ""),
                     "phone": str(target.get("country_code") or "") + str(target.get("phone") or ""),
                     "username": str(target.get("username") or ""),
                     "apply_message": str(payload.get("apply_message") or ""),

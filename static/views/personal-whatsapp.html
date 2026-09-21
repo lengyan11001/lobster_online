@@ -77,9 +77,10 @@
     <div class="pwa-modal-mask" id="personalWhatsappFriendAddModal">
       <div class="pwa-modal">
         <div class="pwa-modal-head"><h3>添加好友</h3><button type="button" class="btn btn-ghost btn-sm" data-pwa-modal-close>关闭</button></div>
-        <div class="pwa-field"><label>目标（一行一个：电话 / 名字,电话 / @用户名）</label><textarea id="personalWhatsappFriendKeyword" class="pwa-textarea" placeholder="张三,13800138000&#10;+8613800138001&#10;@alice_wa"></textarea></div>
-        <div class="pwa-fields"><div class="pwa-field"><label>备注</label><input id="personalWhatsappFriendRemark" class="pwa-input" placeholder="可不填"></div><div class="pwa-field"><label>验证消息（添加成功后自动发送）</label><input id="personalWhatsappFriendApplyMessage" class="pwa-input" placeholder="加好友后要发的话"></div></div>
-        <div class="pwa-muted">间隔与每日上限在「设置」弹窗里；桌面加好友表单只支持中国大陆 +86，其他国家请用 @用户名。</div>
+        <div class="pwa-field"><label>目标（一行一个）</label><textarea id="personalWhatsappFriendKeyword" class="pwa-textarea" placeholder="张三,13800138000&#10;张三,张,13800138001&#10;李四,@alice_wa"></textarea></div>
+        <div class="pwa-field"><label>验证消息（添加成功后自动发送）</label><input id="personalWhatsappFriendApplyMessage" class="pwa-input" placeholder="加好友后要发的话"></div>
+        <div id="personalWhatsappFriendAddError" class="pwa-msg err"></div>
+        <div class="pwa-muted">格式：<b>姓名,电话</b> 或 <b>姓名,姓氏,电话</b>；WhatsApp 添加联系人表单必须有名字，只写号码会被拒绝。只写 <b>@用户名</b> 时用用户名当名字。间隔与每日上限在「设置」弹窗里；桌面表单目前只支持中国大陆 +86。</div>
         <div class="pwa-btn-row"><button type="button" class="btn btn-primary" id="personalWhatsappAddFriendSubmitBtn">提交好友申请</button><label class="pwa-muted" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="personalWhatsappFriendAutoStart">提交后自动启动队列</label><span class="pwa-muted" id="personalWhatsappAddFriendState">等待提交</span></div>
       </div>
     </div>
@@ -87,7 +88,9 @@
     <div class="pwa-modal-mask" id="personalWhatsappContactModal">
       <div class="pwa-modal">
         <div class="pwa-modal-head"><h3>单条添加联系人</h3><button type="button" class="btn btn-ghost btn-sm" data-pwa-modal-close>关闭</button></div>
-        <div class="pwa-fields"><div class="pwa-field"><label>名字</label><input id="personalWhatsappContactFirstName" class="pwa-input" placeholder="必填"></div><div class="pwa-field"><label>姓氏</label><input id="personalWhatsappContactLastName" class="pwa-input" placeholder="可选"></div><div class="pwa-field"><label>@用户名</label><input id="personalWhatsappContactUsername" class="pwa-input" placeholder="例如 nplustech"></div><div class="pwa-field"><label>电话号码</label><input id="personalWhatsappContactPhone" class="pwa-input" placeholder="例如 13800138000"></div><div class="pwa-field"><label>国家/地区</label><select id="personalWhatsappCountryCode" class="pwa-select"><option value="+86">中国 +86</option></select></div></div>
+        <div class="pwa-fields"><div class="pwa-field"><label>名字（必填）</label><input id="personalWhatsappContactFirstName" class="pwa-input" placeholder="对应桌面表单的「名字」"></div><div class="pwa-field"><label>姓氏</label><input id="personalWhatsappContactLastName" class="pwa-input" placeholder="可选"></div><div class="pwa-field full"><label>用户名</label><input id="personalWhatsappContactUsername" class="pwa-input" placeholder="例如 nplustech（没有手机号时可只填用户名）"></div><div class="pwa-field"><label>国家/地区</label><select id="personalWhatsappCountryCode" class="pwa-select"><option value="+86">CN +86</option></select></div><div class="pwa-field"><label>电话号码</label><input id="personalWhatsappContactPhone" class="pwa-input" placeholder="例如 13800138000"></div></div>
+        <div class="pwa-muted">字段与桌面版「新联系人」一一对应：名字必填，用户名或电话号码至少填一个；桌面表单目前只支持 CN +86。</div>
+        <div id="personalWhatsappContactError" class="pwa-msg err"></div>
         <div class="pwa-btn-row"><button type="button" class="btn btn-primary" id="personalWhatsappContactSubmitBtn">填写桌面表单并保存</button><span class="pwa-muted" id="personalWhatsappAddContactState">待提交</span></div>
       </div>
     </div>

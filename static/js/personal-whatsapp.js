@@ -199,6 +199,16 @@
   function friendIntervalField() { return numberField('personalWhatsappFriendInterval', 60, 1, 86400); }
   function friendDailyLimitField() { return numberField('personalWhatsappFriendDailyLimit', 30, 0, 1000); }
   function friendAutoStartChecked() { var node = $('personalWhatsappFriendAutoStart'); return !!(node && node.checked); }
+  function showModalError(hostId, message) { var node = $(hostId); if (!node) return; node.textContent = message || ''; node.style.display = message ? 'block' : 'none'; }
+  function namelessTargetLines(lines) {
+    // WhatsApp 添加联系人表单必须有姓名：只写号码的行先在前端拦下来
+    return lines.filter(function(line) {
+      var parts = line.split(/[,，\t]+/).map(function(part) { return part.trim(); }).filter(Boolean);
+      if (!parts.length) return false;
+      var head = parts.length >= 2 ? parts.slice(0, -1).join('') : '';
+      return !head && /^[+\d\s\-()]+$/.test(parts[parts.length - 1]);
+    });
+  }
 
   function renderFriendQueue() {
     var control = state.friendQueue || {}, summary = state.friendSummary || {};
@@ -236,22 +246,30 @@
     var host = $('personalWhatsappFriendRecordList'); if (!host) return;
     if (!state.friendRecords.length) { host.className = 'pwa-empty'; host.textContent = '暂无加好友记录'; renderPagination('personalWhatsappFriendRecordPagination','friendRecords'); return; }
     host.className = 'pwa-table-wrap';
-    host.innerHTML = '<table class="pwa-table"><thead><tr><th>目标</th><th>状态</th><th>验证消息</th><th>备注</th><th>时间</th></tr></thead><tbody>' + state.friendRecords.map(function(item) {
+    host.innerHTML = '<table class="pwa-table"><thead><tr><th>姓名</th><th>号码 / @用户名</th><th>状态</th><th>验证消息</th><th>时间</th></tr></thead><tbody>' + state.friendRecords.map(function(item) {
       var detail = [item.updated_at || item.created_at || '', item.error_message || ''].filter(Boolean).join(' · ');
-      return '<tr><td>' + esc(item.target || item.keyword || '-') + '</td><td><span class="pwa-chip' + friendStatusClass(item.status) + '">' + esc(friendStatusText(item.status)) + '</span></td><td>' + esc(item.apply_message || '-') + '</td><td>' + esc(item.remark || '-') + '</td><td>' + esc(detail || '-') + '</td></tr>';
+      var nameText = [item.first_name || '', item.last_name || ''].filter(Boolean).join(' ') || '-';
+      var contactText = item.phone ? item.phone : (item.username ? '@' + item.username : '-');
+      return '<tr><td>' + esc(nameText) + '</td><td>' + esc(contactText) + '</td><td><span class="pwa-chip' + friendStatusClass(item.status) + '">' + esc(friendStatusText(item.status)) + '</span></td><td>' + esc(item.apply_message || '-') + '</td><td>' + esc(detail || '-') + '</td></tr>';
     }).join('') + '</tbody></table>';
     renderPagination('personalWhatsappFriendRecordPagination','friendRecords');
   }
 
-  function openFriendAddModal() { var node = $('personalWhatsappAddFriendState'); if (node) node.textContent = '等待提交'; openModal('personalWhatsappFriendAddModal'); }
+  function openFriendAddModal() { var node = $('personalWhatsappAddFriendState'); if (node) node.textContent = '等待提交'; showModalError('personalWhatsappFriendAddError', ''); openModal('personalWhatsappFriendAddModal'); }
   function submitFriendQueue() {
     var targets = splitTargetLines($('personalWhatsappFriendKeyword') && $('personalWhatsappFriendKeyword').value);
-    if (!targets.length) { showError('请先填写至少一个目标（一行一个）'); return Promise.resolve(); }
+    if (!targets.length) { showError('请先填写至少一个目标（一行一个）'); showModalError('personalWhatsappFriendAddError', '请先填写至少一个目标（一行一个）'); return Promise.resolve(); }
+    var nameless = namelessTargetLines(targets);
+    if (nameless.length) {
+      var tip = '这几行只写了号码、没写姓名：' + nameless.slice(0, 3).join('、') + '。WhatsApp 添加联系人表单必须有名字，请写成「姓名,电话」或「姓名,姓氏,电话」';
+      showModalError('personalWhatsappFriendAddError', tip);
+      return Promise.resolve();
+    }
+    showModalError('personalWhatsappFriendAddError', '');
     var body = {
       account_id: ACCOUNT_ID,
       targets: targets,
       apply_message: text($('personalWhatsappFriendApplyMessage') && $('personalWhatsappFriendApplyMessage').value).trim().slice(0, 1000),
-      remark: text($('personalWhatsappFriendRemark') && $('personalWhatsappFriendRemark').value).trim().slice(0, 200),
       interval_seconds: friendIntervalField(),
       daily_limit: friendDailyLimitField(),
       queue_only: true,
@@ -265,6 +283,7 @@
       if ($('personalWhatsappFriendKeyword')) $('personalWhatsappFriendKeyword').value = '';
       if ($('personalWhatsappFriendApplyMessage')) $('personalWhatsappFriendApplyMessage').value = '';
       closeModal('personalWhatsappFriendAddModal');
+      showModalError('personalWhatsappFriendAddError', '');
       showNotice((autoStart ? '已入队并启动队列：' : '已加入加好友队列：') + planned + ' 条目标');
       toastMessage('已加入加好友队列：' + planned + ' 条');
       var chain = autoStart
@@ -273,7 +292,9 @@
       return chain.then(function() { return Promise.all([loadFriendQueue(), loadFriendRecords(), loadRecords()]); });
     }).catch(function(error) {
       if (submitState) submitState.textContent = '提交失败';
-      showError(error && error.message || '提交好友申请失败');
+      var message = (error && error.message) || '提交好友申请失败';
+      showModalError('personalWhatsappFriendAddError', message);
+      showError(message);
     });
   }
   function openFriendSettingsModal() { loadFriendQueue().catch(function() {}).then(function() { openModal('personalWhatsappFriendSettingsModal'); }); }
@@ -323,7 +344,12 @@
 
   function submitSingleContact() {
     var body = { account_id: ACCOUNT_ID, first_name: text($('personalWhatsappContactFirstName').value).trim(), last_name: text($('personalWhatsappContactLastName').value).trim(), username: text($('personalWhatsappContactUsername').value).trim(), phone: text($('personalWhatsappContactPhone').value).trim(), country_code: $('personalWhatsappCountryCode').value };
-    if (!body.first_name || (!body.username && !body.phone)) { showError('请填写名字，并填写 @用户名或手机号'); return Promise.resolve(); }
+    if (!body.first_name || (!body.username && !body.phone)) {
+      showModalError('personalWhatsappContactError', '请填写名字，并填写 @用户名或手机号');
+      showError('请填写名字，并填写 @用户名或手机号');
+      return Promise.resolve();
+    }
+    showModalError('personalWhatsappContactError', '');
     var stateNode = $('personalWhatsappAddContactState');
     if (stateNode) stateNode.textContent = '提交中';
     return request('/api/native-whatsapp/contacts', { method: 'POST', json: body }).then(function(data) {
@@ -333,7 +359,9 @@
       return Promise.all([loadContacts(), loadRecords(), loadBase()]);
     }).catch(function(error) {
       if (stateNode) stateNode.textContent = '保存失败';
-      showError(error && error.message || '添加联系人失败');
+      var message = (error && error.message) || '添加联系人失败';
+      showModalError('personalWhatsappContactError', message);
+      showError(message);
     });
   }
 
