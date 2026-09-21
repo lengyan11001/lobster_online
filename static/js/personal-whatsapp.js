@@ -3,6 +3,7 @@
 
   var ACCOUNT_ID = 'desktop-whatsapp-default';
   var state = {
+    friendRecordTimer: null,
     tab: 'overview', busy: false, status: {}, config: {}, lastRun: {},
     sessions: [], groups: [], contacts: [], records: [], activeSession: null, messages: [],
     friendQueue: {}, friendSummary: {}, friendRecords: [], autoReply: {}, diagnostics: {},
@@ -370,7 +371,15 @@
       state.friendRecords = Array.isArray(data.items) ? data.items : [];
       meta.total = Number(data.total || data.count || 0);
       renderFriendRecords();
+      scheduleFriendRecordRefresh();
     });
+  }
+  // 有「执行中」的记录时每 5 秒自动刷新一次，避免用户看到一条永远不动的「执行中」
+  function scheduleFriendRecordRefresh() {
+    if (state.friendRecordTimer) { clearTimeout(state.friendRecordTimer); state.friendRecordTimer = null; }
+    var running = (state.friendRecords || []).some(function(item) { return item.status === 'running'; });
+    if (!running) return;
+    state.friendRecordTimer = setTimeout(function() { loadFriendRecords().catch(function() {}); }, 5000);
   }
   function renderFriendRecords() {
     var host = $('personalWhatsappFriendRecordList'); if (!host) return;

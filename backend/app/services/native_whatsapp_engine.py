@@ -908,7 +908,13 @@ def _focus_by_mouse(node: Any, hwnd: int = 0) -> None:
     """
     rect = _rect(node)
     if not rect:
-        raise RuntimeError("WhatsApp 输入框不可点击")
+        # 节点可能已过期（UI 刚重建）：退化为 UIA 原生聚焦，实在不行才报错
+        try:
+            node.SetFocus()
+            time.sleep(0.12)
+            return
+        except Exception:
+            raise RuntimeError("WhatsApp 输入框不可点击")
     import win32api  # type: ignore
     import win32con  # type: ignore
     import win32gui  # type: ignore
@@ -916,7 +922,8 @@ def _focus_by_mouse(node: Any, hwnd: int = 0) -> None:
     target = int(hwnd or 0) or _primary_window_hwnd()
     if target:
         _activate_window(target)
-    x = int((rect[0] + rect[2]) / 2)
+    # 点输入框左侧 1/4：搜索框右侧通常有个清除按钮（×），点中心可能点到它上
+    x = int(rect[0] + (rect[2] - rect[0]) * 0.25)
     y = int((rect[1] + rect[3]) / 2)
     pinned = False
     if target:
@@ -2105,6 +2112,85 @@ def select_contact_country(hwnd: int, country_code: str) -> str:
     return confirmed
 
 
+def verify_contact_added(
+    hwnd: int,
+    *,
+    first_name: str,
+    phone: str = "",
+    username: str = "",
+    country_code: str = "+86",
+) -> Dict[str, Any]:
+    """点完保存后再确认一次：在新聊天页搜这个目标，看是否真的进了联系人。
+
+    实测（本机 WinUI3，2026-09-21）：号码已经是联系人时，搜索结果里会先出现一张
+    带姓名的联系人卡片，随后才是「联系人」分组标题；没加上的目标搜不出这张卡片。
+    """
+    name = str(first_name or "").strip()
+    digits = re.sub(r"[^0-9]", "", str(phone or ""))
+    user = str(username or "").lstrip("@").strip()
+    probe = user or digits
+    if not probe:
+        return {"checked": False, "reason": "没有可搜索的目标"}
+    not_in_contacts_markers = ("不在你的联系人中", "不是你的联系人", "not in your contacts")
+    search = _open_new_chat_page(hwnd)
+    _set_edit_text(search, probe, hwnd=hwnd)
+    time.sleep(1.2)
+    root = _root_for_hwnd(hwnd)
+    search_rect = _rect(search) or (0, 0, 0, 0)
+    search_bottom = int(search_rect[3] or 0)
+    group_y = None
+    not_in_contacts = False
+    matched: List[str] = []
+    for node, _depth in _iter_nodes(root, max_depth=CONTACT_TREE_DEPTH, max_nodes=CONTACT_TREE_NODES):
+        rect = _rect(node)
+        if not rect or rect[0] < 1060:
+            continue
+        value = _node_text(node).strip()
+        if not value:
+            continue
+        folded_value = value.casefold()
+        if any(marker in folded_value for marker in not_in_contacts_markers):
+            not_in_contacts = True
+            continue
+        if group_y is None and value in {"联系人", "Contacts"}:
+            group_y = int(rect[1])
+            continue
+        if search_bottom and rect[1] < search_bottom:
+            continue
+        if group_y is not None and rect[1] > group_y:
+            continue
+        folded = value.casefold()
+        if name and folded == name.casefold():
+            matched.append(value)
+        elif user and folded == user.casefold():
+            matched.append(value)
+    try:
+        _set_edit_text(search, "", hwnd=hwnd)
+        time.sleep(0.3)
+    except Exception:
+        pass
+    found = bool(matched)
+    if found:
+        state = "in_contacts"
+        note = ""
+    elif not_in_contacts:
+        state = "not_in_contacts"
+        note = "WhatsApp 显示「不在你的联系人中」：这个号注册了 WhatsApp，但还没被加为联系人"
+    else:
+        state = "not_found"
+        note = "搜索结果里既没有这个联系人，也没有「不在你的联系人中」提示（号码可能没注册 WhatsApp）"
+    return {
+        "checked": True,
+        "found": found,
+        "state": state,
+        "not_in_contacts": not_in_contacts,
+        "probe": probe,
+        "group_seen": group_y is not None,
+        "matched": matched[:3],
+        "note": note,
+    }
+
+
 def _collect_contact_form_fields(root: Any) -> Dict[str, Any]:
     """收集「添加联系人」表单的输入框（名字/姓氏/用户名/电话号码）。"""
     aliases = {
@@ -2257,8 +2343,21 @@ def add_contact(*, first_name: str, last_name: str = "", username: str = "", pho
             "source": "desktop_add_contact",
         })
         result = {"ok": True, "contact": contact, "message": "WhatsApp 联系人已保存", "steps": steps}
+        # 加完再自己搜一次确认：成功失败都不猜，给用户一个明确结论
+        try:
+            verify = verify_contact_added(
+                hwnd, first_name=first, phone=number, username=user.lstrip("@"), country_code=country,
+            )
+        except Exception as exc:  # noqa: BLE001
+            verify = {"checked": False, "reason": "确认失败：%s" % exc}
+        result["verify"] = verify
+        if verify.get("checked") and not verify.get("found"):
+            if verify.get("state") == "not_in_contacts":
+                result["message"] = "已点保存，但 WhatsApp 仍显示「不在你的联系人中」：这条没加成功"
+            else:
+                result["message"] = "已点保存，但搜索不到这个号码（可能没注册 WhatsApp，或还没同步）"
         _record_operation("add_contact", target, "success", result["message"], result)
-        _append_log("add_contact_done", target=target, steps=steps)
+        _append_log("add_contact_done", target=target, steps=steps, verify=verify)
         return result
     except Exception as exc:
         _record_operation("add_contact", target, "failed", str(exc))
@@ -2916,9 +3015,10 @@ async def _process_add_contact_task(task: Dict[str, Any]) -> Dict[str, Any]:
         consumed = index + 1
         ok = False
         error_text = ""
+        verify_note = ""
         for attempt in range(DEFAULT_FRIEND_ADD_RETRY_MAX + 1):
             try:
-                await asyncio.to_thread(
+                task_result = await asyncio.to_thread(
                     add_contact,
                     first_name=str(target.get("first_name") or "").strip() or _target_label(target),
                     last_name=str(target.get("last_name") or "").strip(),
@@ -2926,6 +3026,9 @@ async def _process_add_contact_task(task: Dict[str, Any]) -> Dict[str, Any]:
                     phone=str(target.get("phone") or ""),
                     country_code=str(target.get("country_code") or "+86"),
                 )
+                verify = (task_result or {}).get("verify") if isinstance(task_result, dict) else {}
+                if isinstance(verify, dict) and verify.get("checked") and not verify.get("found"):
+                    verify_note = "已点保存，但搜索里没确认到联系人（可能还在同步）"
                 if apply_message:
                     await asyncio.to_thread(send_message, _target_label(target), apply_message)
                 ok = True
@@ -2956,7 +3059,7 @@ async def _process_add_contact_task(task: Dict[str, Any]) -> Dict[str, Any]:
             base_processed + processed,
             base_success + success,
             base_failed + failed,
-            last_error,
+            last_error or (verify_note if ok else ""),
         )
     total_processed = base_processed + processed
     total_success = base_success + success
