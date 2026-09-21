@@ -28,6 +28,25 @@ except ImportError:  # 包内导入时走相对路径
     from . import douyin_session_health as session_health
 
 
+# Playwright 的 page.evaluate() / browser_context.new_page() 没有超时参数：
+# CDP 连接半死时它们会一直挂着，只能等上层 900 秒看门狗 cancel，日志里表现为
+# 栈位置随机的 CancelledError（2026-09-21 排查结论）。这些调用统一加硬超时。
+DOUYIN_PW_NEW_PAGE_TIMEOUT_SECONDS = 20.0
+DOUYIN_PW_EVALUATE_TIMEOUT_SECONDS = 15.0
+
+
+async def await_with_hard_timeout(awaitable: Awaitable, timeout_seconds: float, label: str):
+    """等待一个没有内置超时能力的 Playwright 调用，超时立刻中止本次调用。
+
+    超时会取消内部的 Playwright 协程并抛 ``TimeoutError``，调用方原有的
+    “关页面 / 重连 CDP / 重试一次”逻辑可以直接接住，不再吃满 900 秒看门狗。
+    """
+    try:
+        return await asyncio.wait_for(awaitable, timeout=max(0.01, float(timeout_seconds or 0)))
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(f"{label} 超过 {float(timeout_seconds or 0):g} 秒无响应，已中止本次调用") from exc
+
+
 def conversation_time_is_older_than_24h(value: object, now: Optional[datetime] = None) -> bool:
     """Return whether a conversation has reached the per-list scan cutoff.
 
@@ -2488,25 +2507,37 @@ class DouyinCommentScraper:
         if not self._context:
             raise RuntimeError("抖音浏览器上下文初始化失败")
         try:
-            page = await self._context.new_page()
+            page = await await_with_hard_timeout(
+                self._context.new_page(),
+                DOUYIN_PW_NEW_PAGE_TIMEOUT_SECONDS,
+                "创建新页面（browser_context.new_page）",
+            )
             self._emit(logger, f"[抖音诊断] 创建新页面完成 elapsed_ms={(time.monotonic() - page_started) * 1000:.1f}", "info")
             return page
         except Exception as exc:
             self._emit(logger, f"[抖音诊断] 创建新页面失败 error={type(exc).__name__}: {exc} elapsed_ms={(time.monotonic() - page_started) * 1000:.1f}", "error")
             message = str(exc or "")
-            if "Failed to open a new tab" in message or "Target.createTarget" in message:
+            if isinstance(exc, TimeoutError) or "Failed to open a new tab" in message or "Target.createTarget" in message:
                 # CDP can keep an attached context alive while rejecting
                 # Target.createTarget. Reconnect the Playwright transport and
                 # retry against the same logged-in browser. Do not return an
                 # existing page here: callers own pages returned by _new_page
                 # and will close them after each user.
-                self._emit(logger, "[抖音] 新标签页创建被拒绝，准备重连 CDP 后重试", "warning")
+                self._emit(
+                    logger,
+                    f"[抖音] 新标签页创建失败（{type(exc).__name__}），准备重连 CDP 后重试：{message}",
+                    "warning",
+                )
                 await self._dispose_browser_runtime()
                 await self._ensure_browser(logger=logger)
                 if not self._context:
                     raise RuntimeError("抖音浏览器上下文重连失败")
                 try:
-                    page = await self._context.new_page()
+                    page = await await_with_hard_timeout(
+                        self._context.new_page(),
+                        DOUYIN_PW_NEW_PAGE_TIMEOUT_SECONDS,
+                        "CDP 重连后创建新页面（browser_context.new_page）",
+                    )
                     self._emit(logger, "[抖音] CDP 重连后创建页面成功", "info")
                     return page
                 except Exception as retry_exc:
@@ -7670,7 +7701,8 @@ class DouyinCommentScraper:
             max_scroll_rounds = max(int(max_scroll_rounds or 10), min(120, target_comment_index // 4 + 8))
 
         for round_index in range(max(1, int(max_scroll_rounds or 10))):
-            result = await page.evaluate(
+            result = await await_with_hard_timeout(
+                page.evaluate(
                 """
                 (target) => {
                     const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
@@ -7830,7 +7862,10 @@ class DouyinCommentScraper:
                     return { found: false, clicked: false, visible_count: items.length };
                 }
                 """,
-                target_payload,
+                    target_payload,
+                ),
+                DOUYIN_PW_EVALUATE_TIMEOUT_SECONDS,
+                "定位目标评论（page.evaluate）",
             )
             if result and result.get("clicked"):
                 click_points = result.get("click_points") if isinstance(result.get("click_points"), list) else []

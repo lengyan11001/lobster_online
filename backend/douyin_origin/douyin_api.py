@@ -77,6 +77,23 @@ DOUYIN_ACCOUNT_LOGIN_CHECK_TIMEOUT_SECONDS = 25
 DOUYIN_ACCOUNT_LOGIN_CHECK_ATTEMPTS = 6
 DOUYIN_ACCOUNT_LOGIN_CHECK_RETRY_DELAY_SECONDS = 4.0
 DOUYIN_ACCOUNT_VIEW_NAVIGATION_TIMEOUT_MS = 15000
+# 单条评论采集任务（含采集 + 精准客户回评）的兜底看门狗。
+# 正常情况下单条视频几十秒到几分钟；到 900 秒说明 Playwright/CDP 调用卡住了。
+DOUYIN_COMMENT_TASK_TIMEOUT_SECONDS = 900.0
+
+
+def _douyin_collection_interrupt_message(exc: BaseException, timed_out: bool) -> str:
+    """把“看门狗超时 cancel”和“真实异常”分开写成可读文案。
+
+    超时是看门狗主动取消当前任务，CancelledError 的栈位置随机（取决于当时卡在哪个
+    Playwright 调用上），直接展示 ``CancelledError`` 会让人误以为是代码报错。
+    """
+    if timed_out:
+        return (
+            f"抖音评论采集单条任务超过 {int(DOUYIN_COMMENT_TASK_TIMEOUT_SECONDS)} 秒无进展，"
+            "已按超时结束（通常是浏览器/CDP 调用挂住）"
+        )
+    return f"评论采集异常中断：{type(exc).__name__}: {exc}"
 
 
 def _protocol_comment_result_confirmed(
@@ -8732,7 +8749,7 @@ async def run_douyin_task_worker(
 
             async def cancel_child_on_timeout() -> None:
                 try:
-                    await asyncio.sleep(900.0)
+                    await asyncio.sleep(DOUYIN_COMMENT_TASK_TIMEOUT_SECONDS)
                     child_timeout_state["timed_out"] = True
                     if child_worker_task is not None:
                         child_worker_task.cancel()
@@ -8992,11 +9009,17 @@ async def run_douyin_task_worker(
             except BaseException as exc:
                 if child_timeout_task is not None and not child_timeout_task.done():
                     child_timeout_task.cancel()
-                error_message = (
-                    "抖音评论采集子任务超过 900 秒，已按超时失败结束"
-                    if child_timeout_state["timed_out"]
-                    else f"{type(exc).__name__}: {exc}"
-                )
+                timed_out = bool(child_timeout_state["timed_out"])
+                error_message = _douyin_collection_interrupt_message(exc, timed_out)
+                if timed_out:
+                    # 卡住的那套 context/transport 不能再留给下一条视频（现场日志里
+                    # 正是超时后继续“复用已有 BrowserContext”再次卡死）：丢弃运行时，
+                    # 下一条任务走 _ensure_browser 重新连 CDP。CDP 模式不会关掉用户浏览器。
+                    try:
+                        # 传输层已经半死时 close() 本身也可能挂住，所以同样加硬超时。
+                        await asyncio.wait_for(scraper.close(), timeout=5.0)
+                    except (Exception, asyncio.TimeoutError):
+                        pass
                 async with state_lock:
                     task["status"] = "failed"
                     task["error"] = error_message
@@ -9005,18 +9028,18 @@ async def run_douyin_task_worker(
                         "phase": "failed",
                         "account_id": int(account["id"] or 0),
                         "updated_at": _now_text(),
-                        "last_message": f"评论采集异常中断：{type(exc).__name__}: {exc}",
+                        "last_message": error_message,
                     }
                     save_douyin_tasks_state()
                 douyin_log(
-                    f"[抖音评论采集] 账号 {account['id']} 异常中断：{task.get('title') or task.get('url')}，{type(exc).__name__}: {exc}",
+                    f"[抖音评论采集] 账号 {account['id']} 异常中断：{task.get('title') or task.get('url')}，{error_message}",
                     "error",
                 )
                 try:
                     traceback.print_exc()
                 except Exception:
                     pass
-                if isinstance(exc, asyncio.CancelledError) and not child_timeout_state["timed_out"]:
+                if isinstance(exc, asyncio.CancelledError) and not timed_out:
                     raise
                 if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                     raise
@@ -9123,7 +9146,7 @@ async def run_douyin_task_worker_protocol(
 
         async def cancel_child_on_timeout() -> None:
             try:
-                await asyncio.sleep(900.0)
+                await asyncio.sleep(DOUYIN_COMMENT_TASK_TIMEOUT_SECONDS)
                 child_timeout_state["timed_out"] = True
                 if child_worker_task is not None:
                     child_worker_task.cancel()
@@ -9343,11 +9366,8 @@ async def run_douyin_task_worker_protocol(
         except BaseException as exc:
             if child_timeout_task is not None and not child_timeout_task.done():
                 child_timeout_task.cancel()
-            error_message = (
-                "抖音评论采集子任务超过 900 秒，已按超时失败结束"
-                if child_timeout_state["timed_out"]
-                else f"{type(exc).__name__}: {exc}"
-            )
+            timed_out = bool(child_timeout_state["timed_out"])
+            error_message = _douyin_collection_interrupt_message(exc, timed_out)
             async with state_lock:
                 task["status"] = "failed"
                 task["error"] = error_message
@@ -9359,7 +9379,7 @@ async def run_douyin_task_worker_protocol(
                     "last_message": error_message,
                 }
                 save_douyin_tasks_state()
-            if isinstance(exc, asyncio.CancelledError) and not child_timeout_state["timed_out"]:
+            if isinstance(exc, asyncio.CancelledError) and not timed_out:
                 raise
         if child_timeout_task is not None and not child_timeout_task.done():
             child_timeout_task.cancel()
