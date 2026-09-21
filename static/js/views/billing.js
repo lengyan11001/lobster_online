@@ -182,7 +182,7 @@ function loadBillingView() {
         if (history.length === 0) {
           creditHistoryEl.innerHTML = '<p class="meta" style="padding:1rem;">暂无算力变动。</p>';
         } else {
-          var html = '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;"><thead><tr style="border-bottom:1px solid var(--border);"><th style="text-align:left;padding:0.5rem;">时间</th><th style="text-align:left;padding:0.5rem;">类型</th><th style="text-align:right;padding:0.5rem;">变动</th><th style="text-align:left;padding:0.5rem;">说明</th></tr></thead><tbody>';
+          var html = '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;"><thead><tr style="border-bottom:1px solid var(--border);"><th style="text-align:left;padding:0.5rem;">时间</th><th style="text-align:left;padding:0.5rem;">类型</th><th style="text-align:right;padding:0.5rem;">变动</th><th style="text-align:left;padding:0.5rem;">消耗位置</th><th style="text-align:left;padding:0.5rem;">说明</th></tr></thead><tbody>';
           function billingConsumptionTypeLabel(et, hType) {
             if (hType === 'recharge') return '充值增加';
             var e = (et || '').trim().toLowerCase();
@@ -221,7 +221,10 @@ function loadBillingView() {
             if (h.balance_after != null && h.balance_after !== undefined) {
               desc = desc + '（余额 ' + h.balance_after + '）';
             }
-            html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.5rem;">' + escapeHtml(time) + '</td><td style="padding:0.5rem;">' + escapeHtml(typeText) + '</td><td style="padding:0.5rem;text-align:right;">' + amountStr + '</td><td style="padding:0.5rem;">' + escapeHtml(desc) + '</td></tr>';
+            // 「消耗位置」优先用服务端给的业务位置（能力/技能/充值订单），
+            // 老接口没有 origin 时退回类型文案，保证不会空列
+            var origin = (h.origin != null && String(h.origin).trim()) ? String(h.origin).trim() : (typeText || '-');
+            html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.06);"><td style="padding:0.5rem;">' + escapeHtml(time) + '</td><td style="padding:0.5rem;">' + escapeHtml(typeText) + '</td><td style="padding:0.5rem;text-align:right;">' + amountStr + '</td><td style="padding:0.5rem;">' + escapeHtml(origin) + '</td><td style="padding:0.5rem;">' + escapeHtml(desc) + '</td></tr>';
           });
           html += '</tbody></table>';
           creditHistoryEl.innerHTML = html;

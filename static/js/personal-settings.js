@@ -3521,7 +3521,18 @@
       if (item) pickProfilePhotoAsset(item.getAttribute('data-ps-photo-asset') || '');
     });
     document.addEventListener('keydown', function(ev) {
-      if (ev.key === 'Escape') closeAllPersonalSettingsEditors();
+      if (ev.key === 'Escape') {
+        // 资料调查弹窗同样只认「关闭」按钮：Esc 也不关，避免编辑到一半被清掉
+        var surveyModal = $('psSurveyEditorModal');
+        var surveyOpen = !!(surveyModal && surveyModal.classList.contains('is-visible'));
+        if (surveyOpen) {
+          document.querySelectorAll('.ps-editor-modal.is-visible').forEach(function(modal) {
+            if (modal.id !== 'psSurveyEditorModal') closePersonalSettingsEditor(modal);
+          });
+        } else {
+          closeAllPersonalSettingsEditors();
+        }
+      }
       if (ev.key === 'Escape' && state.profilePhotoPickerOpen) closeProfilePhotoPicker();
       if (ev.key === 'Escape' && $('psDigitalHumanResourceModal') && !$('psDigitalHumanResourceModal').hidden) {
         closePersonalDigitalHumanResourcePicker();
@@ -3686,7 +3697,13 @@
     });
     document.querySelectorAll('.ps-editor-modal').forEach(function(modal) {
       modal.addEventListener('click', function(ev) {
-        if (ev.target === modal || (ev.target && ev.target.closest && ev.target.closest('[data-close-ps-editor]'))) closePersonalSettingsEditor(modal);
+        if (ev.target === modal) {
+          // 资料调查弹窗：点遮罩不关（避免误点丢草稿），只能点「关闭」/「×」退出
+          if (modal.id === 'psSurveyEditorModal') return;
+          closePersonalSettingsEditor(modal);
+          return;
+        }
+        if (ev.target && ev.target.closest && ev.target.closest('[data-close-ps-editor]')) closePersonalSettingsEditor(modal);
       });
     });
     if ($('psCompetitorPlatform')) $('psCompetitorPlatform').addEventListener('change', updateCompetitorPlatformFields);

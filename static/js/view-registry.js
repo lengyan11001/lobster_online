@@ -28,8 +28,8 @@
   });
 
   window.registerLobsterView('personal-settings', {
-    html: '/static/views/personal-settings.html?v=20260910-survey-record-name-v1',
-    scripts: '/static/js/personal-settings.js?v=20260910-survey-record-name-v1',
+    html: '/static/views/personal-settings.html?v=20260921-survey-modal-close-only-v1',
+    scripts: '/static/js/personal-settings.js?v=20260921-survey-modal-close-only-v1',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
@@ -161,7 +161,7 @@ window.registerLobsterView('alibaba-inquiries', {
 
   window.registerLobsterView('billing', {
     html: '/static/views/billing.html',
-    scripts: '/static/js/views/billing.js?v=20260901-oem-recharge-gate-v1'
+    scripts: '/static/js/views/billing.js?v=20260921-credit-history-origin-v1'
   });
 
   window.registerLobsterView('sys-config', {
