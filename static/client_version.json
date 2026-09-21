@@ -1,7 +1,7 @@
 {
-  "version": "2.0.66",
-  "build": 359,
-  "applied_at": "2026-09-21T21:01:10+08:00",
-  "note": "发布节点只发本节点产物（去掉父节点/模板兜底 + 素材类型按文件头）",
-  "bundle_sha256": "0e5c5fd4ac60f74468b74b4c147a367941de505d5aee9dffbb0431fee0ede3ae"
+  "version": "2.0.67",
+  "build": 360,
+  "applied_at": "2026-09-21T22:55:39+08:00",
+  "note": "抖音获客/任务链路稳定性修复（AI关键词截断、Playwright硬超时、私信重试预算与跳过、采集唤醒、回复匹配收紧、控制面事件补投）",
+  "bundle_sha256": "bae2efe9b5f5ed42d5472947dd7e8eab546315bc2fc6f5af7b651d411c87b6e0"
 }
