@@ -51,6 +51,7 @@ def test_click_prefers_uia_pattern(monkeypatch):
 
     node = types.SimpleNamespace(kind="ButtonControl", GetInvokePattern=lambda: Pattern())
     monkeypatch.setattr(engine, "_rect", lambda item: (0, 0, 10, 10))
+    monkeypatch.setattr(engine, "_node_type", lambda item: getattr(item, "kind", ""))
     engine._click(node)
     assert called == ["invoke"], "能用 UIA 原生调用时不该动鼠标"
 
