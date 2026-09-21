@@ -34,6 +34,23 @@ except ImportError:  # 包内导入时走相对路径
 DOUYIN_PW_NEW_PAGE_TIMEOUT_SECONDS = 20.0
 DOUYIN_PW_EVALUATE_TIMEOUT_SECONDS = 15.0
 
+# 打开私信面板：整段一个总预算 + 连续失败断点。
+# 2026-09-21 现场：三层重试（DOM 4~6 次 × selector 6×4 次 × DOM 兜底 6 次）把
+# “这个主页不能私信”这个一次性结论放大成 36 次点击 / 4~5 分钟，10 人轮次要 90 分钟。
+DOUYIN_PM_DIALOG_OPEN_BUDGET_SECONDS = 30.0
+DOUYIN_PM_DIALOG_MISS_LIMIT = 4
+DOUYIN_PM_DOM_CLICK_METHODS = ("normal", "force", "coordinate", "native")
+DOUYIN_PM_SELECTOR_ATTEMPTS = 2
+DOUYIN_PM_FALLBACK_CLICK_METHODS = ("normal", "force", "coordinate", "native")
+
+# 关注按钮：主页是 SPA，按钮经常晚几秒才渲染，轮询等待而不是固定等一次。
+DOUYIN_FOLLOW_BUTTON_WAIT_SECONDS = 15.0
+DOUYIN_FOLLOW_BUTTON_POLL_INTERVAL_MS = 500
+
+
+class DouyinPrivateMessageUnavailable(RuntimeError):
+    """该主页没有可用的私信入口（按钮点了、弹层始终不出现）。重试没有意义。"""
+
 
 async def await_with_hard_timeout(awaitable: Awaitable, timeout_seconds: float, label: str):
     """等待一个没有内置超时能力的 Playwright 调用，超时立刻中止本次调用。
@@ -6528,16 +6545,39 @@ class DouyinCommentScraper:
 
             dialog_opened = False
             dialog_locator = page.locator(dialog_selector).first
-            private_button_count = await page.evaluate(
-                r"""
-                () => Array.from(document.querySelectorAll('button.semi-button, button'))
-                    .filter((node) => {
-                        const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
-                        return text === '私信';
-                    }).length
-                """
+            private_button_count = await await_with_hard_timeout(
+                page.evaluate(
+                    r"""
+                    () => Array.from(document.querySelectorAll('button.semi-button, button'))
+                        .filter((node) => {
+                            const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+                            return text === '私信';
+                        }).length
+                    """
+                ),
+                DOUYIN_PW_EVALUATE_TIMEOUT_SECONDS,
+                "检测私信按钮数量（page.evaluate）",
             )
             self._emit(logger, f"[抖音私信] 当前页面检测到 {private_button_count} 个匹配主页私信按钮的元素")
+
+            open_started = time.monotonic()
+            open_deadline = open_started + DOUYIN_PM_DIALOG_OPEN_BUDGET_SECONDS
+            dialog_miss_streak = 0
+            click_attempts = 0
+
+            def retry_budget_exhausted() -> bool:
+                return (
+                    time.monotonic() >= open_deadline
+                    or dialog_miss_streak >= DOUYIN_PM_DIALOG_MISS_LIMIT
+                )
+
+            async def dialog_visible(timeout_ms: int) -> bool:
+                try:
+                    await dialog_locator.wait_for(state="visible", timeout=timeout_ms)
+                    return True
+                except Exception:
+                    return False
+
             stable_button_candidate = await self._wait_for_private_message_button_ready(
                 page,
                 button_selectors,
@@ -6549,7 +6589,9 @@ class DouyinCommentScraper:
             stable_button_index = int(stable_button_candidate.get("index", 0) or 0)
             stable_button_marker = str(stable_button_candidate.get("marker", "") or "")
             if stable_button_marker:
-                for attempt in range(1, 7):
+                for attempt, click_method in enumerate(DOUYIN_PM_DOM_CLICK_METHODS, start=1):
+                    if retry_budget_exhausted():
+                        break
                     if attempt > 1:
                         dom_candidate = await self._mark_dom_private_message_button(page)
                         if dom_candidate.get("found") and dom_candidate.get("marker"):
@@ -6557,10 +6599,9 @@ class DouyinCommentScraper:
                         else:
                             self._emit(
                                 logger,
-                                f"[抖音私信] DOM 候选按钮第 {attempt}/6 次重试前未重新定位到按钮，继续使用上一次标记：{self._format_private_button_debug(dom_candidate.get('debug'))}",
+                                f"[抖音私信] DOM 候选按钮第 {attempt}/{len(DOUYIN_PM_DOM_CLICK_METHODS)} 次重试前未重新定位到按钮，继续使用上一次标记：{self._format_private_button_debug(dom_candidate.get('debug'))}",
                                 "warning",
                             )
-                    click_method = ["normal", "force", "coordinate", "native", "force", "coordinate"][attempt - 1]
                     clicked = await self._click_marked_private_message_button(
                         page,
                         stable_button_marker,
@@ -6569,80 +6610,86 @@ class DouyinCommentScraper:
                         click_method=click_method,
                     )
                     if not clicked:
-                        await page.wait_for_timeout(1200)
+                        await page.wait_for_timeout(800)
                         continue
-                    await page.wait_for_timeout(1200)
-                    try:
-                        await dialog_locator.wait_for(state="visible", timeout=4000)
+                    click_attempts += 1
+                    await page.wait_for_timeout(1000)
+                    if await dialog_visible(4000):
                         dialog_opened = True
-                        self._emit(logger, f"[抖音私信] 已通过 DOM 候选私信按钮打开私信面板，第 {attempt}/6 次，方式 {click_method}")
+                        self._emit(
+                            logger,
+                            f"[抖音私信] 已通过 DOM 候选私信按钮打开私信面板，第 {attempt}/{len(DOUYIN_PM_DOM_CLICK_METHODS)} 次，方式 {click_method}",
+                        )
                         break
-                    except Exception:
-                        if attempt < 6:
-                            self._emit(logger, f"[抖音私信] DOM 候选按钮第 {attempt}/6 次点击后弹层仍未出现，继续换方式重试", "warning")
-                            await page.wait_for_timeout(1800)
+                    dialog_miss_streak += 1
+                    self._emit(
+                        logger,
+                        f"[抖音私信] DOM 候选按钮第 {attempt}/{len(DOUYIN_PM_DOM_CLICK_METHODS)} 次点击后弹层仍未出现（连续 {dialog_miss_streak} 次）",
+                        "warning",
+                    )
+                    if not retry_budget_exhausted():
+                        await page.wait_for_timeout(1000)
             ordered_button_selectors = [stable_button_selector] + [
                 selector for selector in button_selectors if selector != stable_button_selector
             ]
             for selector in ordered_button_selectors:
-                if dialog_opened:
+                if dialog_opened or retry_budget_exhausted():
                     break
-                try:
-                    for attempt in range(1, 5):
+                for attempt in range(1, DOUYIN_PM_SELECTOR_ATTEMPTS + 1):
+                    if retry_budget_exhausted():
+                        break
+                    try:
                         candidate = await self._find_visible_private_message_button(page, selector)
-                        button_index = int(candidate.get("index", -1) or -1)
-                        if selector == stable_button_selector and attempt == 1 and button_index < 0:
-                            button_index = stable_button_index
-                        if button_index < 0:
-                            if attempt >= 4:
-                                raise RuntimeError(str(candidate.get("reason", "") or f"{selector} 当前没有可见按钮"))
-                            await page.wait_for_timeout(1200)
-                            continue
-                        button = page.locator(selector).nth(button_index)
-                        try:
-                            await button.scroll_into_view_if_needed()
-                        except Exception:
-                            pass
+                    except Exception as exc:
+                        self._emit(logger, f"[抖音私信] {selector} 查找私信按钮失败：{exc}", "warning")
+                        break
+                    button_index = int(candidate.get("index", -1) or -1)
+                    if selector == stable_button_selector and attempt == 1 and button_index < 0:
+                        button_index = stable_button_index
+                    if button_index < 0:
+                        # selector 层的作用是“换一个选择器再找”，同一个 selector 再等也是同一个结果
+                        break
+                    button = page.locator(selector).nth(button_index)
+                    try:
+                        await button.scroll_into_view_if_needed()
+                    except Exception:
+                        pass
+                    self._emit(
+                        logger,
+                        f"[抖音私信] 尝试点击私信按钮 selector：{selector}，命中第 {button_index + 1} 个匹配元素，第 {attempt}/{DOUYIN_PM_SELECTOR_ATTEMPTS} 次",
+                    )
+                    try:
+                        if attempt > 1:
+                            await button.click(timeout=5000, force=True)
+                        else:
+                            await button.click(timeout=5000)
+                    except Exception as click_exc:
+                        self._emit(logger, f"[抖音私信] 点击私信按钮失败：{click_exc}", "warning")
+                        break
+                    click_attempts += 1
+                    await page.wait_for_timeout(1000)
+                    if await dialog_visible(3200):
+                        dialog_opened = True
                         self._emit(
                             logger,
-                            f"[抖音私信] 尝试点击私信按钮 selector：{selector}，命中第 {button_index + 1} 个匹配元素，第 {attempt}/4 次",
+                            f"[抖音私信] 已通过 selector 点击私信按钮：{selector}（命中第 {button_index + 1} 个匹配元素，第 {attempt}/{DOUYIN_PM_SELECTOR_ATTEMPTS} 次）",
                         )
-                        try:
-                            if attempt in {2, 4}:
-                                await button.click(timeout=5000, force=True)
-                            else:
-                                await button.click(timeout=5000)
-                        except Exception as click_exc:
-                            if attempt >= 4:
-                                raise click_exc
-                            await page.wait_for_timeout(1200)
-                            continue
-                        await page.wait_for_timeout(1200)
-                        try:
-                            await dialog_locator.wait_for(state="visible", timeout=3200)
-                            dialog_opened = True
-                            self._emit(
-                                logger,
-                                f"[抖音私信] 已通过 selector 点击私信按钮：{selector}（命中第 {button_index + 1} 个匹配元素，第 {attempt}/4 次）",
-                            )
-                            break
-                        except Exception:
-                            if attempt < 4:
-                                self._emit(
-                                    logger,
-                                    f"[抖音私信] 第 {attempt}/4 次点击后私信弹层仍未出现，等待后继续重试",
-                                    "warning",
-                                )
-                                await page.wait_for_timeout(1800)
-                    if dialog_opened:
                         break
-                except Exception:
-                    continue
+                    dialog_miss_streak += 1
+                    self._emit(
+                        logger,
+                        f"[抖音私信] 第 {attempt}/{DOUYIN_PM_SELECTOR_ATTEMPTS} 次点击后私信弹层仍未出现（连续 {dialog_miss_streak} 次，剩余预算 {max(0, int(open_deadline - time.monotonic()))} 秒）",
+                        "warning",
+                    )
+                    if not retry_budget_exhausted():
+                        await page.wait_for_timeout(1000)
 
-            if not dialog_opened:
+            if not dialog_opened and not retry_budget_exhausted():
                 self._emit(logger, "[抖音私信] 常规 selector 未拉起私信弹层，尝试 DOM 兜底点击", "warning")
-                fallback_methods = ["normal", "force", "coordinate", "native", "force", "coordinate"]
+                fallback_methods = list(DOUYIN_PM_FALLBACK_CLICK_METHODS)
                 for attempt, click_method in enumerate(fallback_methods, start=1):
+                    if retry_budget_exhausted():
+                        break
                     dom_candidate = await self._mark_dom_private_message_button(page)
                     marker = str(dom_candidate.get("marker", "") or "")
                     if not dom_candidate.get("found") or not marker:
@@ -6651,7 +6698,7 @@ class DouyinCommentScraper:
                             f"[抖音私信] DOM 兜底第 {attempt}/{len(fallback_methods)} 次未找到可用私信按钮：{self._format_private_button_debug(dom_candidate.get('debug'))}",
                             "warning",
                         )
-                        await page.wait_for_timeout(1500)
+                        await page.wait_for_timeout(800)
                         continue
                     clicked = await self._click_marked_private_message_button(
                         page,
@@ -6661,32 +6708,50 @@ class DouyinCommentScraper:
                         click_method=click_method,
                     )
                     if not clicked:
-                        await page.wait_for_timeout(1200)
+                        await page.wait_for_timeout(800)
                         continue
                     self._emit(logger, f"[抖音私信] DOM 兜底点击已触发，第 {attempt}/{len(fallback_methods)} 次，方式 {click_method}")
-                    await page.wait_for_timeout(1500)
-                    try:
-                        await dialog_locator.wait_for(state="visible", timeout=5000)
+                    click_attempts += 1
+                    await page.wait_for_timeout(1200)
+                    if await dialog_visible(5000):
                         dialog_opened = True
                         break
-                    except Exception:
-                        dialog_opened = False
-                        if attempt < len(fallback_methods):
-                            self._emit(logger, f"[抖音私信] DOM 兜底第 {attempt}/{len(fallback_methods)} 次后弹层仍未出现，继续换方式重试", "warning")
-                            await page.wait_for_timeout(1800)
+                    dialog_miss_streak += 1
+                    self._emit(
+                        logger,
+                        f"[抖音私信] DOM 兜底第 {attempt}/{len(fallback_methods)} 次后弹层仍未出现（连续 {dialog_miss_streak} 次）",
+                        "warning",
+                    )
+                    if not retry_budget_exhausted():
+                        await page.wait_for_timeout(1000)
 
             if not dialog_opened:
+                self._emit(
+                    logger,
+                    f"[抖音私信] 打开私信面板失败：实际点击 {click_attempts} 次，耗时 {time.monotonic() - open_started:.1f} 秒"
+                    f"（预算 {DOUYIN_PM_DIALOG_OPEN_BUDGET_SECONDS:g} 秒，弹层连续未出现 {dialog_miss_streak} 次）",
+                    "warning",
+                )
                 await self._raise_if_profile_unavailable(page)
-                login_prompt_visible = await page.evaluate(
-                    """
-                    () => {
-                        const text = (document.body?.innerText || '').trim();
-                        return text.includes('扫码登录') || text.includes('验证码登录') || text.includes('登录后');
-                    }
-                    """
+                login_prompt_visible = await await_with_hard_timeout(
+                    page.evaluate(
+                        """
+                        () => {
+                            const text = (document.body?.innerText || '').trim();
+                            return text.includes('扫码登录') || text.includes('验证码登录') || text.includes('登录后');
+                        }
+                        """
+                    ),
+                    DOUYIN_PW_EVALUATE_TIMEOUT_SECONDS,
+                    "检测私信登录拦截（page.evaluate）",
                 )
                 if login_prompt_visible:
                     raise RuntimeError("点击私信后页面仍处于登录拦截状态，请先确认该抖音账号已登录")
+                if click_attempts > 0:
+                    # 按钮找到并点过、弹层始终不来 = 这个主页不可私信，再点也没有意义
+                    raise DouyinPrivateMessageUnavailable(
+                        "该主页没有可用的私信入口：私信按钮已点击但面板未出现（对方可能关闭了私信或需要互相关注），已放弃"
+                    )
                 raise RuntimeError("未能点击出私信窗口，请确认该主页存在可用的私信按钮")
 
             self._emit(logger, f"[抖音私信] 已打开私信面板：{expected_username or profile_url}")
@@ -7166,27 +7231,10 @@ class DouyinCommentScraper:
             if owns_page:
                 await page.close()
 
-    async def follow_user_and_find_first_post(
-        self,
-        profile_url: str,
-        expected_username: str = "",
-        logger: Optional[Callable[[str, str], None]] = None,
-    ) -> Dict:
-        profile_url = str(profile_url or "").strip()
-        if not profile_url:
-            raise ValueError("缺少用户主页地址")
-
-        page = await self._new_page(logger=logger)
-        video_url = ""
-        follow_clicked = False
-        already_following = False
-        try:
-            self._emit(logger, f"[抖音关注评论] 打开主页：{expected_username or profile_url}")
-            await page.goto(profile_url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(4500)
-            await self._raise_if_login_intercept(page)
-
-            follow_state = await page.evaluate(
+    async def _resolve_follow_button_state(self, page: Page) -> Dict[str, object]:
+        """读一次关注按钮状态：能点就点掉，返回 clicked / already_following / not_found。"""
+        state = await await_with_hard_timeout(
+            page.evaluate(
                 """
                 () => {
                     const normalize = (value) => String(value || '').replace(/\\s+/g, '').trim();
@@ -7222,7 +7270,51 @@ class DouyinCommentScraper:
                     return { action: 'not_found', label: '' };
                 }
                 """
-            )
+            ),
+            DOUYIN_PW_EVALUATE_TIMEOUT_SECONDS,
+            "检测关注按钮（page.evaluate）",
+        )
+        return state if isinstance(state, dict) else {"action": "not_found", "label": ""}
+
+    async def follow_user_and_find_first_post(
+        self,
+        profile_url: str,
+        expected_username: str = "",
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> Dict:
+        profile_url = str(profile_url or "").strip()
+        if not profile_url:
+            raise ValueError("缺少用户主页地址")
+
+        page = await self._new_page(logger=logger)
+        video_url = ""
+        follow_clicked = False
+        already_following = False
+        try:
+            self._emit(logger, f"[抖音关注评论] 打开主页：{expected_username or profile_url}")
+            await page.goto(profile_url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(1200)
+            await self._raise_if_login_intercept(page)
+
+            # 主页是 SPA：关注按钮经常晚几秒才渲染。以前固定等 4.5 秒只试一次，
+            # 页面慢一点就被误判成“该主页不允许关注”（2026-09-21：近 3 天 17 次）。
+            follow_state: Dict[str, object] = {"action": "not_found", "label": ""}
+            follow_deadline = time.monotonic() + DOUYIN_FOLLOW_BUTTON_WAIT_SECONDS
+            follow_wait_rounds = 0
+            while True:
+                follow_state = await self._resolve_follow_button_state(page)
+                follow_wait_rounds += 1
+                if str(follow_state.get("action") or "").strip() in {"clicked", "already_following"}:
+                    break
+                if time.monotonic() >= follow_deadline:
+                    break
+                await page.wait_for_timeout(DOUYIN_FOLLOW_BUTTON_POLL_INTERVAL_MS)
+            if follow_wait_rounds > 1:
+                self._emit(
+                    logger,
+                    f"[抖音关注评论] 关注按钮等待 {follow_wait_rounds} 轮后仍未出现（上限 {DOUYIN_FOLLOW_BUTTON_WAIT_SECONDS:g} 秒）",
+                    "info",
+                )
             follow_action = str((follow_state or {}).get("action", "") or "").strip()
             follow_label = str((follow_state or {}).get("label", "") or "").strip()
             if follow_action == "clicked":
@@ -7233,7 +7325,10 @@ class DouyinCommentScraper:
                 already_following = True
                 self._emit(logger, "[抖音关注评论] 当前账号已处于关注状态", "info")
             else:
-                raise RuntimeError("未找到可点击的关注按钮，请确认该主页允许关注")
+                raise RuntimeError(
+                    f"未找到可点击的关注按钮（已轮询等待 {DOUYIN_FOLLOW_BUTTON_WAIT_SECONDS:g} 秒），"
+                    "请确认该主页允许关注"
+                )
 
             work_state = await page.evaluate(
                 """
