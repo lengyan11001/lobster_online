@@ -166,7 +166,8 @@ def test_frontend_no_longer_says_china_only():
     assert "只支持 +86" not in html
     assert "只支持中国大陆 +86" not in html
     assert "+86 / +1 / +39" in html
-    assert "+86 / +1 / +39" in js
+    # 模板文案搬到了后端（webview 里 blob 下载点不动），前端只保留能力卡里的说明
+    assert "+86 / +1 / +39" in html
     registry = (ROOT / "static" / "js" / "view-registry.js").read_text(encoding="utf-8")
     # 不锁具体版本串，避免每次 bump 都改测试；只确认视图/脚本都挂上了 cache buster
     assert "/static/views/personal-whatsapp.html?v=" in registry

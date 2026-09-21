@@ -42,8 +42,8 @@
   });
 
   window.registerLobsterView('personal-whatsapp', {
-    html: '/static/views/personal-whatsapp.html?v=20260921-personal-whatsapp-verify-v14',
-    scripts: '/static/js/personal-whatsapp.js?v=20260921-personal-whatsapp-verify-v14',
+    html: '/static/views/personal-whatsapp.html?v=20260921-personal-whatsapp-template-v15',
+    scripts: '/static/js/personal-whatsapp.js?v=20260921-personal-whatsapp-template-v15',
     init: 'initPersonalWhatsappView',
     cache: 'reload'
   });

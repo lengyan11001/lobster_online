@@ -3294,6 +3294,43 @@ def cancel_friend_record(task_id: str, account_id: str = "") -> Dict[str, Any]:
     return {"ok": True, "status": "cancelled", "message": "已从队列移除"}
 
 
+FRIEND_TEMPLATE_REL = Path("tmp_templates") / "whatsapp-friend-targets.txt"
+
+
+def friend_template_content() -> str:
+    """加好友批量导入的 TXT 模板（一行一个目标，支持任意国家码）。"""
+    return "\n".join([
+        "# 一行一个目标：电话 / 名字,电话 / @用户名（支持任意国家码 +86 / +1 / +39…）",
+        "张三,13800138000",
+        "张三,+8613800138001",
+        "Li,+393311234567",
+        "@alice_wa",
+        "# 导入是全量导入（不按条数截断）；间隔与每日额度只影响执行速度，在弹窗的「设置」里改",
+        "",
+    ])
+
+
+def write_friend_template() -> Dict[str, Any]:
+    """把模板写到客户端本地文件。
+
+    前端用 blob + a.download 在客户端 webview 里点不动（程序化下载被拦），
+    所以改成后端落盘 + 把内容回给前端填进输入框。
+    """
+    path = ROOT_DIR / FRIEND_TEMPLATE_REL
+    content = friend_template_content()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8-sig")  # 带 BOM，记事本/Excel 打开不乱码
+    except OSError as exc:
+        raise RuntimeError("写模板文件失败：%s" % exc) from exc
+    return {
+        "ok": True,
+        "path": str(path),
+        "content": content,
+        "message": "模板已保存到 %s" % path,
+    }
+
+
 def retry_friend_record(task_id: str, account_id: str = "") -> Dict[str, Any]:
     """手动重试一条加好友记录：清掉失败计数与错误，重新排队（保留原目标与申请语）。"""
     key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID

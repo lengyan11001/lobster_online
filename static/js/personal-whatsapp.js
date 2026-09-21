@@ -475,17 +475,23 @@
       var area = $('personalWhatsappFriendKeyword');
       if (area) { var existing = area.value.trim(); area.value = (existing ? existing + '\n' : '') + lines.join('\n'); }
       openFriendAddModal();
-      toastMessage('已导入 ' + lines.length + ' 行目标，请核对后提交');
+      toastMessage('已导入 ' + lines.length + ' 行目标（全量导入，不限条数）；间隔与日额度在「设置」里，只影响执行速度');
       return lines.length;
     });
   }
   function downloadFriendTemplate() {
-    var content = ['# 一行一个目标：电话 / 名字,电话 / @用户名（支持任意国家码 +86 / +1 / +39…）', '张三,13800138000', '张三,+8613800138001', 'Li,+393311234567', '@alice_wa', ''].join('\r\n');
-    var url = URL.createObjectURL(new Blob([content], { type: 'text/plain;charset=utf-8' }));
-    var link = document.createElement('a');
-    link.href = url; link.download = 'whatsapp-friend-targets.txt';
-    document.body.appendChild(link); link.click(); document.body.removeChild(link);
-    setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+    // 客户端 webview 里 blob + a.download 点不动（程序化下载被拦），
+    // 所以模板由后端写到本地文件，再把内容填进输入框，用户可直接复制/编辑。
+    return request('/api/native-whatsapp/friends/template', { method: 'POST', json: {} }).then(function(data) {
+      var path = (data && data.path) || '';
+      var content = (data && data.content) || '';
+      openFriendAddModal();
+      var area = $('personalWhatsappFriendKeyword');
+      if (area && !text(area.value).trim() && content) area.value = content;
+      var message = path ? ('模板已保存到：' + path + '，也已填进上面的输入框，可直接改') : '模板已生成，已填入输入框';
+      showNotice(message); toastMessage(message);
+      return data;
+    }).catch(function(error) { showError((error && error.message) || '生成模板失败'); });
   }
 
   function submitSingleContact() {
