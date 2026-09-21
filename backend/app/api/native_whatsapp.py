@@ -309,6 +309,37 @@ async def native_whatsapp_friend_records(
     return {"ok": True, **engine.list_friend_records(account_id, limit=limit, offset=offset, status=status, keyword=keyword)}
 
 
+@router.post("/api/native-whatsapp/friends/records/{task_id}/retry")
+async def native_whatsapp_friend_record_retry(
+    task_id: str,
+    account_id: str = "",
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """手动重试一条失败的加好友记录；队列没开就顺手启动，保证它真的会被处理。"""
+    del current_user
+    try:
+        result = await asyncio.to_thread(engine.retry_friend_record, task_id, account_id)
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+    control = await engine.start_friend_add_queue(account_id)
+    return {**result, "control": control, "summary": engine.friend_add_queue_summary(account_id)}
+
+
+@router.delete("/api/native-whatsapp/friends/records/{task_id}")
+async def native_whatsapp_friend_record_delete(
+    task_id: str,
+    account_id: str = "",
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """删除一条加好友记录（执行中的先停止）。"""
+    del current_user
+    try:
+        result = await asyncio.to_thread(engine.delete_friend_record, task_id, account_id)
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+    return {**result, "summary": engine.friend_add_queue_summary(account_id)}
+
+
 @router.get("/api/native-whatsapp/friends/queue")
 async def native_whatsapp_friend_queue(
     account_id: str = "",

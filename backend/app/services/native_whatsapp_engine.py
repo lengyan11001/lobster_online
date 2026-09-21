@@ -2797,6 +2797,53 @@ def list_friend_records(
     return {"items": records[start:end], "count": total, "total": total, "limit": int(limit), "offset": start}
 
 
+def retry_friend_record(task_id: str, account_id: str = "") -> Dict[str, Any]:
+    """手动重试一条加好友记录：清掉失败计数与错误，重新排队（保留原目标与申请语）。"""
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise RuntimeError("缺少记录 ID")
+    task = _task_row_by_id(tid)
+    if not task or str(task.get("account_id") or "") != key or str(task.get("task_type") or "") != "add_friend":
+        raise RuntimeError("找不到这条加好友记录")
+    if str(task.get("status") or "") == "running":
+        raise RuntimeError("这条记录正在执行中，先点「停止」再重试")
+    with _DB_LOCK, _connect() as conn:
+        conn.execute(
+            "update whatsapp_tasks set status='queued', processed=0, success=0, failed=0, "
+            "error_message='', updated_at=? where id=?",
+            (_now_iso(), tid),
+        )
+    # 不碰 created_at：调度器按 created_at 升序取任务，重试的记录会排到最前
+    _update_task_payload(tid, {"pending_targets": [], "deferred_reason": ""})
+    _record_operation("friend_add_retry", tid, "queued", "手动重试加好友记录", {"task_id": tid})
+    _notify_friend_add_scheduler(key)
+    fresh = _task_row_by_id(tid) or {}
+    return {
+        "ok": True,
+        "task": fresh,
+        "status": str(fresh.get("status") or "queued"),
+        "message": "已重新排队，队列会按设置间隔处理",
+    }
+
+
+def delete_friend_record(task_id: str, account_id: str = "") -> Dict[str, Any]:
+    """删除一条加好友记录（执行中的必须先停止）。"""
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    tid = str(task_id or "").strip()
+    if not tid:
+        raise RuntimeError("缺少记录 ID")
+    task = _task_row_by_id(tid)
+    if not task or str(task.get("account_id") or "") != key or str(task.get("task_type") or "") != "add_friend":
+        raise RuntimeError("找不到这条加好友记录")
+    if str(task.get("status") or "") == "running":
+        raise RuntimeError("这条记录正在执行中，先点「停止」再删除")
+    with _DB_LOCK, _connect() as conn:
+        conn.execute("delete from whatsapp_tasks where id=?", (tid,))
+    _record_operation("friend_add_delete", tid, "success", "删除加好友记录", {"task_id": tid})
+    return {"ok": True, "deleted": tid, "message": "记录已删除"}
+
+
 def friend_add_queue_summary(account_id: str = "") -> Dict[str, Any]:
     """队列概览：排队/执行中/累计与今日成功失败，给 UI 顶部状态用。"""
     key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID

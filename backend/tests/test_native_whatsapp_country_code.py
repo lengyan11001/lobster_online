@@ -162,4 +162,6 @@ def test_frontend_no_longer_says_china_only():
     assert "+86 / +1 / +39" in html
     assert "+86 / +1 / +39" in js
     registry = (ROOT / "static" / "js" / "view-registry.js").read_text(encoding="utf-8")
-    assert "personal-whatsapp-country-v11" in registry
+    # 不锁具体版本串，避免每次 bump 都改测试；只确认视图/脚本都挂上了 cache buster
+    assert "/static/views/personal-whatsapp.html?v=" in registry
+    assert "/static/js/personal-whatsapp.js?v=" in registry

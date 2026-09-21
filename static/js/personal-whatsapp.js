@@ -260,6 +260,37 @@
     document.addEventListener('keydown',function(event){if(event.key==='Escape')closeModal(null);});
     $('personalWhatsappSessionSearch').addEventListener('input',debounce(function(){state.pages.sessions.keyword=text($('personalWhatsappSessionSearch').value).trim();state.pages.sessions.page=1;loadSessions().catch(function(e){showError(e.message);});},300));
     $('personalWhatsappSessionType').addEventListener('change',function(){state.pages.sessions.chatType=this.value;state.pages.sessions.page=1;loadSessions().catch(function(e){showError(e.message);});});
+    root.addEventListener('click', function(event) {
+      var retryBtn = event.target.closest && event.target.closest('[data-pwa-friend-retry]');
+      if (retryBtn) {
+        var retryId = retryBtn.dataset.pwaFriendRetry;
+        runBusy('正在重新排队...', function() {
+          return request('/api/native-whatsapp/friends/records/' + encodeURIComponent(retryId) + '/retry', { method: 'POST', json: { account_id: ACCOUNT_ID } }).then(function(data) {
+            toastMessage((data && data.message) || '已重新排队');
+            return Promise.all([loadFriendRecords(), loadFriendQueue(), loadRecords(), loadBase()]);
+          });
+        }).catch(function() {});
+        return;
+      }
+      var delBtn = event.target.closest && event.target.closest('[data-pwa-friend-delete]');
+      if (delBtn) {
+        if (delBtn.dataset.confirm !== '1') {
+          delBtn.dataset.confirm = '1';
+          delBtn.dataset.label = delBtn.textContent;
+          delBtn.textContent = '确认删除';
+          setTimeout(function() { if (delBtn.dataset.confirm === '1') { delBtn.dataset.confirm = ''; delBtn.textContent = delBtn.dataset.label || '删除'; } }, 4000);
+          return;
+        }
+        var delId = delBtn.dataset.pwaFriendDelete;
+        runBusy('正在删除记录...', function() {
+          return request('/api/native-whatsapp/friends/records/' + encodeURIComponent(delId), { method: 'DELETE' }).then(function(data) {
+            toastMessage((data && data.message) || '记录已删除');
+            return Promise.all([loadFriendRecords(), loadFriendQueue(), loadRecords(), loadBase()]);
+          });
+        }).catch(function() {});
+        return;
+      }
+    });
     $('personalWhatsappRecordSearch').addEventListener('input',debounce(function(){state.pages.records.keyword=text($('personalWhatsappRecordSearch').value).trim();state.pages.records.page=1;loadRecords().catch(function(e){showError(e.message);});},300));
   }
 
@@ -334,11 +365,16 @@
     var host = $('personalWhatsappFriendRecordList'); if (!host) return;
     if (!state.friendRecords.length) { host.className = 'pwa-empty'; host.textContent = '暂无加好友记录'; renderPagination('personalWhatsappFriendRecordPagination','friendRecords'); return; }
     host.className = 'pwa-table-wrap';
-    host.innerHTML = '<table class="pwa-table"><thead><tr><th>姓名</th><th>号码 / @用户名</th><th>状态</th><th>验证消息</th><th>时间</th></tr></thead><tbody>' + state.friendRecords.map(function(item) {
+    host.innerHTML = '<table class="pwa-table"><thead><tr><th>姓名</th><th>号码 / @用户名</th><th>状态</th><th>验证消息</th><th>时间</th><th>操作</th></tr></thead><tbody>' + state.friendRecords.map(function(item) {
       var detail = [item.updated_at || item.created_at || '', item.error_message || ''].filter(Boolean).join(' · ');
       var nameText = [item.first_name || '', item.last_name || ''].filter(Boolean).join(' ') || '-';
       var contactText = item.phone ? item.phone : (item.username ? '@' + item.username : '-');
-      return '<tr><td>' + esc(nameText) + '</td><td>' + esc(contactText) + '</td><td><span class="pwa-chip' + friendStatusClass(item.status) + '">' + esc(friendStatusText(item.status)) + '</span></td><td>' + esc(item.apply_message || '-') + '</td><td>' + esc(detail || '-') + '</td></tr>';
+      var actions = '';
+      if (item.status !== 'running') {
+        if (item.status === 'failed' || item.status === 'partial_failed' || item.status === 'cancelled') actions += '<button type="button" class="btn btn-ghost btn-sm" data-pwa-friend-retry="' + esc(item.id) + '">重试</button>';
+        actions += '<button type="button" class="btn btn-ghost btn-sm" data-pwa-friend-delete="' + esc(item.id) + '">删除</button>';
+      }
+      return '<tr><td>' + esc(nameText) + '</td><td>' + esc(contactText) + '</td><td><span class="pwa-chip' + friendStatusClass(item.status) + '">' + esc(friendStatusText(item.status)) + '</span></td><td>' + esc(item.apply_message || '-') + '</td><td>' + esc(detail || '-') + '</td><td>' + actions + '</td></tr>';
     }).join('') + '</tbody></table>';
     renderPagination('personalWhatsappFriendRecordPagination','friendRecords');
   }
