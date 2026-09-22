@@ -920,7 +920,9 @@ def ensure_douyin_task_shape(task: Dict) -> Dict:
 
 
 def build_douyin_task_lite_payload(task: Dict) -> Dict:
-    normalized = ensure_douyin_task_shape(dict(task if isinstance(task, dict) else {}))
+    # 不再 dict(task) 深拷贝整任务（含几万条评论）：lite 只读字段，直接就地补全即可，
+    # 原来每个任务都复制一遍评论列表，任务多的时候光拷贝就要好几秒。
+    normalized = ensure_douyin_task_shape(task if isinstance(task, dict) else {})
     return {
         "id": int(normalized.get("id", 0) or 0),
         "title": str(normalized.get("title", "") or "").strip(),
@@ -15387,10 +15389,11 @@ async def douyin_get_tasks():
     global douyin_tasks
     await ensure_douyin_schedule_scheduler()
     reconcile_douyin_runtime_state()
-    normalized_tasks = [ensure_douyin_task_shape(task if isinstance(task, dict) else {}) for task in douyin_tasks]
-    if normalized_tasks != douyin_tasks:
-        douyin_tasks = normalized_tasks
-        save_douyin_tasks_state()
+    # 只做就地归一化：ensure_douyin_task_shape 是原地补字段，不会产生新对象，
+    # 之前这里是「先构造归一化列表再整体比较」的写法，等于把几万条评论逐条比较一次（每次请求都要几秒）。
+    for task in douyin_tasks:
+        if isinstance(task, dict):
+            ensure_douyin_task_shape(task)
     if backfill_task_cover_images(douyin_tasks):
         save_douyin_tasks_state()
     return {
@@ -15407,10 +15410,9 @@ async def douyin_get_tasks_lite():
     global douyin_tasks
     await ensure_douyin_schedule_scheduler()
     reconcile_douyin_runtime_state()
-    normalized_tasks = [ensure_douyin_task_shape(task if isinstance(task, dict) else {}) for task in douyin_tasks]
-    if normalized_tasks != douyin_tasks:
-        douyin_tasks = normalized_tasks
-        save_douyin_tasks_state()
+    for task in douyin_tasks:
+        if isinstance(task, dict):
+            ensure_douyin_task_shape(task)
     if backfill_task_cover_images(douyin_tasks):
         save_douyin_tasks_state()
     lite_tasks = [build_douyin_task_lite_payload(task) for task in douyin_tasks if isinstance(task, dict)]
@@ -15423,6 +15425,20 @@ async def douyin_get_tasks_lite():
         "completed": sum(1 for task in douyin_tasks if task.get("status") == "completed"),
         "high_intent_users": high_intent_total,
     }
+
+
+@router.get("/tasks/{task_id}")
+async def douyin_get_task_detail(task_id: int):
+    """单个任务的完整数据（含评论明细）。
+
+    客户池页平时只拉 /tasks-lite（不带评论），只有需要明细的操作（例如移出精准客户）
+    才按需拉这一个任务的明细，避免整页把几万条评论一起传下来。
+    """
+    for task in douyin_tasks:
+        if isinstance(task, dict) and int(task.get("id", 0) or 0) == int(task_id or 0):
+            detail = ensure_douyin_task_shape(dict(task))
+            return {"code": 200, "task": detail}
+    return {"code": 404, "msg": "未找到该视频任务。"}
 
 
 @router.get("/customer-pools")
