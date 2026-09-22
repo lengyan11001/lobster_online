@@ -534,6 +534,24 @@ def test_memory_file_is_selected_in_douyin_leads_page():
     assert '"/api/douyin/stranger-messages/monitor/config"' in js
 
 
+def test_memory_doc_choice_is_echoed_after_page_switch():
+    """切换界面/刷新后要回显上次选的记忆文件（选项还没加载完也要能显示）。"""
+    root = Path(__file__).resolve().parent
+    js = (root / "static" / "douyin-origin" / "douyin-workbench-shared.js").read_text(encoding="utf-8")
+
+    assert "function applyDouyinStrangerMemoryDocSelection(" in js
+    assert "function douyinStrangerSavedMemoryDocId(" in js
+    assert "douyinStrangerMemoryDocPending" in js
+    # 选中就记住 + 存一份 + 同步到本机接管配置
+    assert "douyinStrangerMemoryDocTouched=true;saveDouyinStrangerMessagePresetAndSync(false);" in js
+    # 记忆文件列表加载完 / 切换到预设 / 刷新监控状态 都要回显
+    assert "select.innerHTML=html;if(current)select.value=current});applyDouyinStrangerMemoryDocSelection();" in js
+    assert "writeDouyinStrangerMessagePresetForm(douyinStrangerMessagePresetState.presets[douyinStrangerMessagePresetState.activeIndex]||{});applyDouyinStrangerMemoryDocSelection();" in js
+    assert "ensureDouyinStrangerLeadAccountSelection();applyDouyinStrangerMemoryDocSelection();" in js
+    # 列表读不到时把已选那份补成选项，保证看得见
+    assert "已选记忆文件（" in js
+
+
 def test_h5_node_memory_requires_online_douyin_config(monkeypatch):
     """Online 抖音获客里没选记忆文件 → 明确报错，指向那个位置。"""
     record = _install_h5_task_harness(monkeypatch, [_h5_task_row()])
