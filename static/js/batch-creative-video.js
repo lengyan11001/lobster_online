@@ -843,7 +843,8 @@
     return String(content || data.content || '').trim();
   }
 
-  function parseRewriteResponse(text) {
+  function parseRewriteResponse(text, targetCount) {
+    var want = Math.max(1, Number(targetCount || 5) || 5);
     var source = String(text || '').trim();
     source = source.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     var candidates = [source];
@@ -861,13 +862,23 @@
         var prompts = values.map(function(item) {
           return String(item && typeof item === 'object' ? (item.prompt || item.text || '') : item || '').trim();
         }).filter(Boolean);
-        if (prompts.length >= 5) return prompts.slice(0, 5);
+        if (prompts.length) return prompts.slice(0, want);
       } catch (e) {}
     }
-    return [];
+    // 兜底：响应被 max_tokens 截断（JSON 不完整）时，把完整的整句抠出来，别整批失败。
+    var salvaged = [];
+    var quoted = source.match(/"((?:[^"\\]|\\.){6,})"/g) || [];
+    quoted.forEach(function(raw) {
+      var value = raw.slice(1, -1).trim();
+      if (!value || value === 'prompts' || value === 'variants' || value === 'items') return;
+      if (salvaged.indexOf(value) >= 0) return;
+      salvaged.push(value);
+    });
+    return salvaged.slice(0, want);
   }
 
   function rewritePromptsWithAI(settings) {
+    var want = Math.max(1, Math.min(Number(settings.rewriteCount || 5) || 5, 10));
     // 本机后端不挂载 comfly-proxy；提示词改写走认证/计费云端，
     // 批量视频提交和任务轮询仍然走本机 pipeline。
     var base = cloudBase();
@@ -877,10 +888,10 @@
       type: 'text',
       text: [
         '请为批量视频生成任务改写提示词。',
-        '根据用户原始提示词，生成 5 条明显不同的创作方向；每条都必须保留用户的核心主体、动作和目标，不要改变用户意图。',
+        '根据用户原始提示词，生成 ' + want + ' 条明显不同的创作方向；每条都必须保留用户的核心主体、动作和目标，不要改变用户意图。',
         '如果有参考图片，请结合图片中的主体、场景、产品或人物特征，但不要凭空添加品牌信息。',
-        '5 条提示词要在镜头、动作、场景氛围、叙事方式或视觉重点上有明显区别，适合直接提交给文生视频或图生视频模型。',
-        '只返回 JSON，不要 Markdown、解释或编号，格式必须是：{"prompts":["提示词1","提示词2","提示词3","提示词4","提示词5"]}',
+        want + ' 条提示词要在镜头、动作、场景氛围、叙事方式或视觉重点上有明显区别，适合直接提交给文生视频或图生视频模型。',
+        '只返回 JSON，不要 Markdown、不要解释、不要编号，也不要省略任何一条；格式必须是：{"prompts":[' + Array.from({ length: want }, function(_, i) { return '"提示词' + (i + 1) + '"'; }).join(',') + ']}',
         '用户原始提示词：' + sourcePrompt
       ].join('\n')
     }];
@@ -899,7 +910,7 @@
 
     function attempt(index) {
       if (index >= models.length) {
-        return Promise.reject(new Error(lastError || 'AI 改写未返回有效的 5 条提示词'));
+        return Promise.reject(new Error(lastError || 'AI 改写未返回可用的提示词'));
       }
       var endpoint = base + '/api/comfly-proxy/v1/chat/completions';
       return fetch(endpoint, {
@@ -912,7 +923,7 @@
             { role: 'system', content: '你是批量短视频提示词导演，严格输出用户要求的 JSON。' },
             { role: 'user', content: content }
           ],
-          max_tokens: 3000
+          max_tokens: Math.max(3000, Math.min(8000, 800 + 600 * want))
         })
       })
         .then(function(response) {
@@ -925,8 +936,11 @@
             var detail = messageText(result.data, 'HTTP ' + String(result.status || 0));
             throw new Error('AI 改写请求失败（' + result.status + '）：' + detail + '。请求地址：' + endpoint);
           }
-          var prompts = parseRewriteResponse(extractChatText(result.data));
-          if (prompts.length < 5) throw new Error('AI 改写未返回完整的 5 条提示词');
+          var prompts = parseRewriteResponse(extractChatText(result.data), want);
+          if (!prompts.length) throw new Error('AI 改写没有返回可用的提示词');
+          if (prompts.length < want) {
+            showMessage('AI 只返回了 ' + prompts.length + '/' + want + ' 条提示词，先用这些继续生成。', true);
+          }
           return prompts;
         })
         .catch(function(error) {
@@ -946,8 +960,9 @@
     }
     state.submitting = true;
     renderTasks();
+    settings.rewriteCount = Math.max(3, Math.min(Number(settings.count || 5) || 5, 10));
     var promptPromise = settings.autoRewritePrompt
-      ? (showMessage('正在根据提示词' + (getImageSourceUrl() ? '和参考图片' : '') + '生成 5 个创作方向...', false), rewritePromptsWithAI(settings))
+      ? (showMessage('正在根据提示词' + (getImageSourceUrl() ? '和参考图片' : '') + '生成 ' + settings.rewriteCount + ' 个创作方向...', false), rewritePromptsWithAI(settings))
       : Promise.resolve([settings.prompt]);
     promptPromise
       .then(function(promptVariants) {
@@ -966,7 +981,7 @@
         renderTasks();
         showMessage(
           settings.autoRewritePrompt
-            ? '已生成 5 个提示词方向，正在提交 ' + settings.count + ' 条独立视频任务，每批最多 5 条，批次间隔 1 秒...'
+            ? '已生成 ' + promptVariants.length + ' 个提示词方向，正在提交 ' + settings.count + ' 条独立视频任务，每批最多 5 条，批次间隔 1 秒...'
             : '正在提交 ' + settings.count + ' 条独立视频任务，每批最多 5 条，批次间隔 1 秒...',
           false
         );
