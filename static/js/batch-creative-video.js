@@ -905,26 +905,19 @@
         });
     }
     if (imageUrl) content.push({ type: 'image_url', image_url: { url: imageUrl } });
-    // 首选 AI 调度助手那条路由（认证中心 /api/sutui-chat/completions）：
-    // 走 deepseek 直连、和对话助手同一模型配置，支持图片输入；失败再回落到 Comfly 的 gpt。
-    var targets = [
-      { path: '/api/sutui-chat/completions', model: 'deepseek-chat' },
-      { path: '/api/comfly-proxy/v1/chat/completions', model: 'gpt-5.5' },
-      { path: '/api/comfly-proxy/v1/chat/completions', model: 'gpt-5.4' }
-    ];
+    var models = ['gpt-5.5', 'gpt-5.4'];
     var lastError = '';
 
     function attempt(index) {
-      if (index >= targets.length) {
+      if (index >= models.length) {
         return Promise.reject(new Error(lastError || 'AI 改写未返回可用的提示词'));
       }
-      var target = targets[index];
-      var endpoint = base + target.path;
+      var endpoint = base + '/api/comfly-proxy/v1/chat/completions';
       return fetch(endpoint, {
         method: 'POST',
         headers: jsonHeaders(),
         body: JSON.stringify({
-          model: target.model,
+          model: models[index],
           stream: false,
           messages: [
             { role: 'system', content: '你是批量短视频提示词导演，严格输出用户要求的 JSON。' },
