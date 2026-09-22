@@ -82,6 +82,10 @@ _active_scheduled_douyin_actions: Dict[str, str] = {}
 _active_client_workflow_actions: Dict[str, str] = {}
 _scheduled_douyin_precise_touch_claim_lock = asyncio.Lock()
 _SCHEDULED_DOUYIN_IDLE_POLL_SECONDS = 2.0
+# 等本地抖音空闲/拿执行锁都要有上限：被取消的任务可能留下残留占用，
+# 没上限的话整台机器会一直卡着（2026-09-22 演示点不动就是这个原因）。
+_SCHEDULED_DOUYIN_IDLE_WAIT_SECONDS = 300.0
+_SCHEDULED_DOUYIN_LOCK_WAIT_SECONDS = 120.0
 _SCHEDULED_DOUYIN_STOP_SETTLE_TIMEOUT_SECONDS = 20.0
 _WORKFLOW_NODE_STOP_TIMEOUT_SECONDS = 8.0
 _WORKFLOW_NODE_CANCEL_GRACE_SECONDS = 8.0
@@ -5923,6 +5927,7 @@ async def _wait_for_local_douyin_runtime_idle(run_id: str) -> None:
     _install_douyin_origin_import_path()
     from douyin_api import get_douyin_schedule_busy_reason  # type: ignore
 
+    deadline = asyncio.get_event_loop().time() + _SCHEDULED_DOUYIN_IDLE_WAIT_SECONDS
     last_reason = ""
     while True:
         reason = str(get_douyin_schedule_busy_reason(include_external=False) or "").strip()
@@ -5940,6 +5945,14 @@ async def _wait_for_local_douyin_runtime_idle(run_id: str) -> None:
                 reason,
             )
             last_reason = reason
+        if asyncio.get_event_loop().time() >= deadline:
+            logger.warning(
+                "[SCHEDULED-TASK] local Douyin worker still busy after %ss (holder=%s); continue anyway run_id=%s",
+                _SCHEDULED_DOUYIN_IDLE_WAIT_SECONDS,
+                last_reason or "-",
+                run_id,
+            )
+            return
         await asyncio.sleep(_SCHEDULED_DOUYIN_IDLE_POLL_SECONDS)
 
 
@@ -12611,7 +12624,18 @@ async def _process_scheduled_task_detached(
                 )
 
                 douyin_lock = douyin_schedule_execution_lock
-                await douyin_lock.acquire()
+                try:
+                    await asyncio.wait_for(
+                        douyin_lock.acquire(),
+                        timeout=_SCHEDULED_DOUYIN_LOCK_WAIT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[SCHEDULED-TASK] local Douyin execution lock busy > %ss; skip run_id=%s",
+                        _SCHEDULED_DOUYIN_LOCK_WAIT_SECONDS,
+                        run_id,
+                    )
+                    return
                 douyin_lock_acquired = True
                 douyin_marker_id = f"server:{run_id}"
                 payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}

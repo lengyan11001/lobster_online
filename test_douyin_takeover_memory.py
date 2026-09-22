@@ -531,6 +531,18 @@ def test_online_node_save_is_robust_when_dropdown_resets():
     assert "item[1]===typedLabel || (!!typedNote && item[2]===typedNote)" in js
 
 
+def test_local_douyin_lock_and_idle_waits_are_bounded():
+    """本地抖音"等空闲/拿执行锁"必须有上限：否则被取消的任务会把机器卡死（演示点不动）。"""
+    root = Path(__file__).resolve().parent
+    src = (root / "backend" / "app" / "api" / "h5_chat_channel.py").read_text(encoding="utf-8")
+
+    assert "_SCHEDULED_DOUYIN_IDLE_WAIT_SECONDS = 300.0" in src
+    assert "_SCHEDULED_DOUYIN_LOCK_WAIT_SECONDS = 120.0" in src
+    assert "local Douyin worker still busy after %ss" in src
+    assert "local Douyin execution lock busy > %ss" in src
+    assert "asyncio.wait_for(" in src
+
+
 def test_memory_file_is_selected_in_douyin_leads_page():
     """记忆文件唯一入口：Online「抖音获客 → 私信引流」页里的记忆文件下拉。"""
     root = Path(__file__).resolve().parent
