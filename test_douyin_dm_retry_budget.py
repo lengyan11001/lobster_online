@@ -241,3 +241,34 @@ def test_targets_detail_reports_skipped_state():
     states = {row["target"]: row["state"] for row in detail}
 
     assert states == {"甲": "succeeded", "乙": "skipped"}, states
+
+
+def test_refresh_interaction_state_counts_skipped():
+    """回归：refresh_interaction_state_from_workers 必须自己算 skipped。
+
+    2026-09-22 线上事故：这个函数引用了没定义的 `skipped`，导致私信触达 worker
+    一启动就 NameError 崩溃 → 两个触达节点"处理 0 个"。
+    """
+    import douyin_api  # type: ignore
+
+    douyin_api.douyin_interaction_state["workers"] = [
+        {"processed": 3, "success": 1, "failed": 1, "skipped": 1, "current_user": "甲"},
+        {"processed": 2, "success": 2, "failed": 0, "skipped": 0, "current_user": ""},
+    ]
+    try:
+        douyin_api.refresh_interaction_state_from_workers(10, 240, 360)
+        state = douyin_api.douyin_interaction_state
+        assert state["processed"] == 5
+        assert state["success"] == 3
+        assert state["failed"] == 1
+        assert state["skipped"] == 1
+    finally:
+        douyin_api.douyin_interaction_state["workers"] = []
+
+
+def test_follow_comment_state_refresh_has_no_stray_skipped():
+    """同一个补丁曾把 skipped 写进 follow_comment 的刷新函数（死代码），别再回来。"""
+    import douyin_api  # type: ignore
+
+    douyin_api.douyin_follow_comment_state["workers"] = []
+    douyin_api.refresh_follow_comment_state_from_workers(0, 240, 360)

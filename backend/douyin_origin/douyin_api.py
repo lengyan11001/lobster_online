@@ -10539,7 +10539,6 @@ def refresh_follow_comment_state_from_workers(
     processed = sum(int(worker.get("processed", 0) or 0) for worker in workers if isinstance(worker, dict))
     success = sum(int(worker.get("success", 0) or 0) for worker in workers if isinstance(worker, dict))
     failed = sum(int(worker.get("failed", 0) or 0) for worker in workers if isinstance(worker, dict))
-    skipped = sum(int(worker.get("skipped", 0) or 0) for worker in workers if isinstance(worker, dict))
     commented = sum(int(worker.get("commented", 0) or 0) for worker in workers if isinstance(worker, dict))
     skipped_no_posts = sum(int(worker.get("skipped_no_posts", 0) or 0) for worker in workers if isinstance(worker, dict))
     current_users = [
@@ -11011,6 +11010,7 @@ def refresh_interaction_state_from_workers(
     processed = sum(int(worker.get("processed", 0) or 0) for worker in workers if isinstance(worker, dict))
     success = sum(int(worker.get("success", 0) or 0) for worker in workers if isinstance(worker, dict))
     failed = sum(int(worker.get("failed", 0) or 0) for worker in workers if isinstance(worker, dict))
+    skipped = sum(int(worker.get("skipped", 0) or 0) for worker in workers if isinstance(worker, dict))
     current_users = [
         str(worker.get("current_user", "") or "")
         for worker in workers
