@@ -836,38 +836,6 @@
       .then(function(response){return response.json().catch(function(){return {};}).then(function(data){if (!response.ok) return []; return Array.isArray(data.items) ? data.items : [];});})
       .catch(function(){return [];});
   }
-  var douyinMemoryDocsCache = null;
-  function loadDouyinMemoryDocs(force) {
-    if (!force && Array.isArray(douyinMemoryDocsCache)) return Promise.resolve(douyinMemoryDocsCache);
-    var base=localBaseUrl();
-    if (!base) return Promise.resolve([]);
-    return fetch(base + '/api/openclaw/memory/list', {headers:headers(), cache:'no-store'})
-      .then(function(response){return response.json().catch(function(){return {};}).then(function(data){if (!response.ok) return []; return Array.isArray(data.documents) ? data.documents : [];});})
-      .then(function(rows){douyinMemoryDocsCache=rows; return rows;})
-      .catch(function(){return [];});
-  }
-  function fillDouyinMemoryDocSelect(selectedId) {
-    var select=el('oeNodeDouyinMemoryDoc');
-    if (!select) return Promise.resolve([]);
-    var current=String(selectedId === undefined ? (select.value || '') : (selectedId || ''));
-    return loadDouyinMemoryDocs(!!selectedId).then(function(rows){
-      var options=['<option value="">不指定（用 IP人设定位-模板里选的那份）</option>'];
-      rows.forEach(function(doc){
-        var id=String(doc && (doc.id || doc.doc_id) || '').trim();
-        var title=String(doc && (doc.title || doc.filename) || id).trim();
-        if (id) options.push('<option value="'+esc(id)+'">'+esc(title)+'</option>');
-      });
-      // 列表读不到（本地接口失败/未登录）时，已选的那份也要留在下拉里，
-      // 不然刷新后看起来就是"没保存过"。
-      if (current && !rows.some(function(doc){return String(doc && (doc.id || doc.doc_id) || '').trim() === current;})) {
-        options.push('<option value="'+esc(current)+'">已选记忆文件（'+esc(current.slice(0, 12))+'…）</option>');
-      }
-      select.innerHTML=options.join('');
-      if (current) select.value=current;
-      select.dataset.oeMemoryLoaded='1';
-      return rows;
-    });
-  }
   function loadDevices() {
     return Promise.all([api('/api/h5-chat/devices/status'), loadLocalWechatContacts()]).then(function(results){
       var data=results[0] || {}, localContacts=Array.isArray(results[1]) ? results[1] : [];
@@ -1231,7 +1199,6 @@
     // 否则会掉到"精准获客参数"里（地区/搜索数量/搜索方式这些跟接管无关的字段）。
     var editingNode=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null;
     var editingParams=editingNode ? workflowParams(editingNode) : {};
-    var editingMemoryDocId=Array.isArray(editingParams.memory_doc_ids) && editingParams.memory_doc_ids.length ? String(editingParams.memory_doc_ids[0] || '') : '';
     var memoryTakeover=!!(option[5] && typeof option[5] === 'object' && option[5].memory_takeover)
       || boolParam(editingParams.memory_takeover,false)
       || String(editingParams.reply_mode || '').toLowerCase() === 'ai_memory';
@@ -1251,14 +1218,6 @@
       var currentReplyMode=String(el('oeNodeDouyinReplyMode').value || '').trim().toLowerCase();
       if ((replyModeExtra.memory_takeover || memoryTakeover) && ['', 'fixed'].indexOf(currentReplyMode) >= 0) {
         el('oeNodeDouyinReplyMode').value='ai_memory';
-      }
-    }
-    if (el('oeNodeDouyinMemoryField')) {
-      var currentReply=String((el('oeNodeDouyinReplyMode') || {}).value || '').toLowerCase();
-      var showMemoryField=douyinPrivate && currentReply === 'ai_memory';
-      el('oeNodeDouyinMemoryField').hidden=!showMemoryField;
-      if (showMemoryField && el('oeNodeDouyinMemoryDoc') && el('oeNodeDouyinMemoryDoc').dataset.oeMemoryLoaded !== '1') {
-        fillDouyinMemoryDocSelect(editingMemoryDocId);
       }
     }
     if (el('oeNodeDouyinCollectionField')) el('oeNodeDouyinCollectionField').hidden=!douyinCollection;
@@ -1294,10 +1253,6 @@
       var nodeReplyMode=String(params.reply_mode || '').trim().toLowerCase();
       if (['fixed', 'ai_lead', 'ai_memory'].indexOf(nodeReplyMode) < 0) nodeReplyMode='';
       el('oeNodeDouyinReplyMode').value=nodeReplyMode || (optionExtraForReply.memory_takeover ? 'ai_memory' : 'fixed');
-    }
-    if (el('oeNodeDouyinMemoryDoc')) {
-      var openedMemoryDocId=Array.isArray(params.memory_doc_ids) && params.memory_doc_ids.length ? String(params.memory_doc_ids[0] || '') : '';
-      fillDouyinMemoryDocSelect(openedMemoryDocId);
     }
     if (el('oeNodeDouyinKeyword')) el('oeNodeDouyinKeyword').value=String(params.keyword || params.query || '');
     if (el('oeNodeDouyinAiKeywordCount')) el('oeNodeDouyinAiKeywordCount').value=Math.max(1,Math.min(8,Number(params.ai_keyword_count || 3)));
@@ -1365,11 +1320,8 @@
       row.params.wechat_add_friend_targets_source='douyin_private_message_phone';
       row.params.reply_mode=['ai_lead', 'ai_memory'].indexOf(formReplyMode) >= 0 ? formReplyMode : 'fixed';
       if (optionExtraForSave.memory_takeover || row.params.reply_mode === 'ai_memory') row.params.memory_takeover=true; else delete row.params.memory_takeover;
-      // 记忆文件就取 Online 这个位置选的那份：只要选了就存下来（不再看回复策略），
-      // 否则会出现"选完刷新就没了"。工作流节点那边不再提供这个参数。
-      var memoryDocValue=String((el('oeNodeDouyinMemoryDoc') || {}).value || '').trim();
-      if (memoryDocValue) row.params.memory_doc_ids=[memoryDocValue];
-      else delete row.params.memory_doc_ids;
+      // 记忆文件不在节点上选：统一到 Online「抖音获客 → 私信引流」里选，下发时读那份配置。
+      delete row.params.memory_doc_ids;
     }
     else { delete row.params.wechat_add_friend_enabled; delete row.params.wechat_add_friend_targets_source; delete row.params.wechat_add_friend_rules; delete row.params.reply_mode; }
     if (key === 'douyin_leads' && selectedSalesAction === 'search_collect') {

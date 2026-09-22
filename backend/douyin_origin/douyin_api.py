@@ -13558,11 +13558,24 @@ async def run_douyin_h5_stranger_message_task_once(
                 ),
             }
 
-        # 记忆接管不做老节点兼容：记忆文件只认 Online 节点里选的那份（memory_doc_ids）。
+        # 记忆文件统一在 Online「抖音获客 → 私信引流」里选（本机接管配置里存着 memory_doc_ids）。
         takeover_memory_text = str(memory_context or "").strip()[:DOUYIN_STRANGER_MESSAGE_TAKEOVER_MEMORY_MAX_CHARS]
         takeover_memory_titles: List[str] = []
         takeover_memory_doc_ids = [str(item or "").strip() for item in (memory_doc_ids or []) if str(item or "").strip()]
         if auto_reply_enabled and normalized_reply_mode == "ai_memory" and not takeover_memory_text:
+            if not takeover_memory_doc_ids and requested_account_id > 0:
+                online_memory_doc_ids = get_douyin_stranger_message_monitor_state(requested_account_id).get(
+                    "memory_doc_ids"
+                )
+                takeover_memory_doc_ids = [
+                    str(item or "").strip() for item in (online_memory_doc_ids or []) if str(item or "").strip()
+                ]
+                if takeover_memory_doc_ids:
+                    douyin_log(
+                        "[H5抖音私信接管] 记忆文件取 Online 抖音获客-私信引流里选的那份："
+                        + "、".join(takeover_memory_doc_ids),
+                        "info",
+                    )
             if takeover_memory_doc_ids:
                 resolved_takeover_memory = load_douyin_takeover_memory_context(takeover_memory_doc_ids)
                 takeover_memory_text = str(resolved_takeover_memory.get("text") or "").strip()
@@ -13572,8 +13585,8 @@ async def run_douyin_h5_stranger_message_task_once(
                 "status": "failed",
                 "code": 400,
                 "message": (
-                    "抖音私信记忆接管缺少记忆文件：请先在 Online「我的AI员工 → 抖音私信记忆接管」"
-                    "节点里选 1 份记忆文件（例如「百问百答」）。"
+                    "抖音私信记忆接管缺少记忆文件：请先在 Online「抖音获客 → 私信引流」里"
+                    "选 1 份记忆文件（例如「百问百答」）。"
                 ),
             }
 

@@ -503,38 +503,45 @@ def test_online_employee_node_picker_offers_memory_takeover():
 
 
 def test_online_memory_takeover_node_only_asks_for_memory_file():
-    """这个节点只需要选记忆文件：不能再冒出地区/搜索数量/搜索方式这些精准获客参数。"""
+    """Online 节点不再有记忆文件选择（统一到「抖音获客 → 私信引流」里选），也不能冒出采集参数。"""
     root = Path(__file__).resolve().parent
     js = (root / "static" / "js" / "views" / "h5-employees.js").read_text(encoding="utf-8")
     html = (root / "static" / "views" / "h5-employees.html").read_text(encoding="utf-8")
 
-    assert 'id="oeNodeDouyinMemoryField"' in html
-    assert 'id="oeNodeDouyinMemoryDoc"' in html
-    assert "fillDouyinMemoryDocSelect" in js
-    assert "'/api/openclaw/memory/list'" in js
+    # 节点上不再有记忆文件选择
+    assert "oeNodeDouyinMemoryField" not in html
+    assert "oeNodeDouyinMemoryDoc" not in js
+    assert "fillDouyinMemoryDocSelect" not in js
     # 节点自己带 ai_memory / memory_takeover 时必须按私信接管表单渲染
     assert "var memoryTakeover=" in js
     assert "el('oeNodeDouyinCollectionField').hidden=!douyinCollection" in js
-    assert "row.params.memory_doc_ids=[memoryDocValue]" in js
     assert "el('oeNodeWechatAddFriendField').hidden=!douyinPrivate || memoryTakeover" in js
+    # 保存节点时不要写、也不留节点级记忆文件参数
+    assert "delete row.params.memory_doc_ids;" in js
 
 
-def test_online_memory_doc_selection_persists_and_shows_after_reload():
-    """Online 选了记忆文件必须存下来，刷新后还要能回显（列表读不到也不能看起来像没保存）。"""
+def test_memory_file_is_selected_in_douyin_leads_page():
+    """记忆文件唯一入口：Online「抖音获客 → 私信引流」页里的记忆文件下拉。"""
     root = Path(__file__).resolve().parent
-    js = (root / "static" / "js" / "views" / "h5-employees.js").read_text(encoding="utf-8")
+    html = (root / "static" / "douyin-origin" / "douyin-stranger-leads.html").read_text(encoding="utf-8")
+    js = (root / "static" / "douyin-origin" / "douyin-workbench-shared.js").read_text(encoding="utf-8")
 
-    # 只要选了就存，不再依赖回复策略（否则会出现"选完刷新就没了"）
-    assert "if (memoryDocValue) row.params.memory_doc_ids=[memoryDocValue];" in js
-    # 本地记忆列表读不到时，把已选的那份也塞回下拉，保证回显
-    assert "已选记忆文件" in js
-    assert "select.value=current;" in js
-    assert "row.params.memory_doc_ids=[memoryDocValue]" not in js.split("if (memoryDocValue)")[0][-200:]
+    assert 'id="stranger-message-memory-doc"' in html
+    assert "onDouyinStrangerMemoryDocChange" in html
+    assert "loadDouyinStrangerMemoryDocs" in js
+    assert "memory_doc_ids:memoryDocId?[memoryDocId]:[]" in js
+    # 选择结果要随私信接管配置存到本机（monitor/config）
+    assert '"/api/douyin/stranger-messages/monitor/config"' in js
 
 
-def test_h5_node_memory_requires_online_node_selection(monkeypatch):
-    """新功能不做老节点兼容：节点没配记忆文件就明确报错，指向 Online 节点设置。"""
+def test_h5_node_memory_requires_online_douyin_config(monkeypatch):
+    """Online 抖音获客里没选记忆文件 → 明确报错，指向那个位置。"""
     record = _install_h5_task_harness(monkeypatch, [_h5_task_row()])
+    monkeypatch.setattr(
+        douyin_api,
+        "get_douyin_stranger_message_monitor_state",
+        lambda account_id, create=False: {},
+    )
 
     result = asyncio.run(
         douyin_api.run_douyin_h5_stranger_message_task_once(account_id=5, reply_mode="ai_memory")
@@ -542,11 +549,12 @@ def test_h5_node_memory_requires_online_node_selection(monkeypatch):
 
     assert result["status"] == "failed"
     assert result["code"] == 400
-    assert "我的AI员工" in result["message"]
+    assert "抖音获客" in result["message"]
     assert record["sent"] == []
 
 
-def test_h5_node_memory_uses_online_node_doc_ids(monkeypatch):
+def test_h5_node_memory_uses_online_douyin_config(monkeypatch):
+    """下发时记忆文件取 Online「抖音获客 → 私信引流」里选的那份。"""
     record = _install_h5_task_harness(monkeypatch, [_h5_task_row()])
     calls = []
 
@@ -555,14 +563,17 @@ def test_h5_node_memory_uses_online_node_doc_ids(monkeypatch):
         return {"text": MEMORY_TEXT, "document_count": 1, "titles": ["百问百答"], "user_id": 1}
 
     monkeypatch.setattr(douyin_api, "load_douyin_takeover_memory_context", fake_load)
-
-    result = asyncio.run(
-        douyin_api.run_douyin_h5_stranger_message_task_once(
-            account_id=5, reply_mode="ai_memory", memory_doc_ids=["node-faq"]
-        )
+    monkeypatch.setattr(
+        douyin_api,
+        "get_douyin_stranger_message_monitor_state",
+        lambda account_id, create=False: {"memory_doc_ids": ["online-faq"]},
     )
 
-    assert calls == [["node-faq"]]
+    result = asyncio.run(
+        douyin_api.run_douyin_h5_stranger_message_task_once(account_id=5, reply_mode="ai_memory")
+    )
+
+    assert calls == [["online-faq"]]
     assert result["status"] == "completed"
     assert result["memory_titles"] == ["百问百答"]
     assert record["sent"] == ["基础版 999 元，含拍摄和剪辑"]
