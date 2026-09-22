@@ -443,7 +443,13 @@ def douyin_log(message: str, level: str = "info"):
         stdout = getattr(sys, "stdout", None)
         if stdout is None:
             return
-        encoding = getattr(stdout, "encoding", None) or "utf-8"
+        # 与 console_safe.safe_print 一致：重定向到文件时用 UTF-8 写字节，
+        # 否则中文会被 locale 编码替换成 '?'（线上任务错误文案变 ???? 的原因）。
+        try:
+            is_tty = bool(stdout.isatty())
+        except Exception:
+            is_tty = False
+        encoding = (getattr(stdout, "encoding", None) or "utf-8") if is_tty else "utf-8"
         payload = (console_text + "\n").encode(encoding, errors="replace")
         buffer = getattr(stdout, "buffer", None)
         if buffer is not None:

@@ -53,6 +53,11 @@ DOUYIN_COMMENT_COLLECTION_ATTEMPTS = 3
 DOUYIN_COMMENT_COLLECTION_RETRY_BACKOFF_SECONDS = (1.5, 3.0)
 DOUYIN_COMMENT_WAKE_LIMIT = 3
 
+# 搜索结果页：等首个视频条目的次数与单次超时。出不来先取证再重试一次
+# （2026-09-22 线上：3 个关键词全部 30 秒超时，只剩一行 TimeoutError 无从判断原因）。
+DOUYIN_SEARCH_RESULT_WAIT_ATTEMPTS = 2
+DOUYIN_SEARCH_RESULT_WAIT_TIMEOUT_MS = 30000
+
 
 class DouyinPrivateMessageUnavailable(RuntimeError):
     """该主页没有可用的私信入口（按钮点了、弹层始终不出现）。重试没有意义。"""
@@ -9201,6 +9206,103 @@ class DouyinCommentScraper:
         finally:
             await page.close()
 
+    async def _capture_search_failure_evidence(
+        self,
+        page: Page,
+        *,
+        keyword: str,
+        attempt: int,
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> Dict[str, object]:
+        """搜索页没出结果时抓现场：登录/验证判定 + 正文片段 + 截图（走会话健康那套）。"""
+        try:
+            event = await session_health.capture_login_wall(
+                page,
+                account_id=self.account_id,
+                action="search_collect",
+                reason=f"search_results_missing attempt={attempt} keyword={keyword}",
+            )
+            return event if isinstance(event, dict) else {}
+        except Exception as exc:
+            self._emit(
+                logger,
+                f"[抖音搜索] 采集失败现场出错：{type(exc).__name__}: {exc}",
+                "warning",
+            )
+            return {}
+
+    async def _wait_for_search_results_ready(
+        self,
+        page: Page,
+        *,
+        keyword: str,
+        url: str,
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> None:
+        """等搜索结果页出现视频条目；等不到就取证 + 重开一次，再不行用中文说明抛错。
+
+        2026-09-22 线上：搜索页能打开（URL 正确），但 30 秒内没有任何
+        ``a[href*="/video/"]`` 可见，三个关键词全部失败，日志只剩一行
+        ``TimeoutError: Page.wait_for_selector``，无法判断是风控验证页还是空结果。
+        """
+        attempts = max(1, int(DOUYIN_SEARCH_RESULT_WAIT_ATTEMPTS or 1))
+        timeout_ms = max(3000, int(DOUYIN_SEARCH_RESULT_WAIT_TIMEOUT_MS or 30000))
+        last_timeout: Optional[Exception] = None
+        last_evidence: Dict[str, object] = {}
+
+        for attempt in range(1, attempts + 1):
+            self._emit(
+                logger,
+                f"[抖音诊断] 首个视频选择器等待开始 attempt={attempt}/{attempts} "
+                f"selector=a[href*='/video/'] timeout_ms={timeout_ms}",
+                "info",
+            )
+            try:
+                await page.wait_for_selector('a[href*="/video/"]', timeout=timeout_ms)
+                self._emit(logger, "[抖音诊断] 首个视频选择器已命中", "info")
+                return
+            except Exception as exc:
+                last_timeout = exc
+                last_evidence = await self._capture_search_failure_evidence(
+                    page,
+                    keyword=keyword,
+                    attempt=attempt,
+                    logger=logger,
+                )
+                self._emit(
+                    logger,
+                    f"[抖音搜索] 搜索页第 {attempt}/{attempts} 次等不到视频条目："
+                    f"login_wall={last_evidence.get('login_wall')} "
+                    f"captcha={last_evidence.get('captcha') or '-'} "
+                    f"截图={last_evidence.get('screenshot') or '-'} "
+                    f"正文片段={str(last_evidence.get('text_excerpt') or '')[:80]!r}",
+                    "warning",
+                )
+                if attempt >= attempts:
+                    break
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    await page.wait_for_timeout(2500)
+                    await self._raise_if_login_intercept(page)
+                except Exception as retry_exc:
+                    self._emit(
+                        logger,
+                        f"[抖音搜索] 重试前重新打开搜索页失败：{type(retry_exc).__name__}: {retry_exc}",
+                        "warning",
+                    )
+
+        captcha_kind = str((last_evidence.get("captcha") or {}).get("type") or "") if isinstance(
+            last_evidence.get("captcha"), dict
+        ) else str(last_evidence.get("captcha") or "")
+        raise RuntimeError(
+            f"搜索结果页连续 {attempts} 次都没有出现视频条目（关键词：{keyword}）。"
+            f"登录/验证拦截={bool(last_evidence.get('login_wall'))}"
+            + (f"、验证类型={captcha_kind}" if captcha_kind else "")
+            + f"；最近一次错误：{type(last_timeout).__name__}: {last_timeout}"
+            + (f"；现场截图：{last_evidence.get('screenshot')}" if last_evidence.get("screenshot") else "")
+        )
+
+
     async def scrape_search_results(
         self,
         keyword: str,
@@ -9257,9 +9359,7 @@ class DouyinCommentScraper:
             await page.wait_for_timeout(3000)
             self._emit(logger, "[抖音诊断] 登录拦截检查开始", "info")
             await self._raise_if_login_intercept(page)
-            self._emit(logger, "[抖音诊断] 首个视频选择器等待开始 selector=a[href*='/video/']", "info")
-            await page.wait_for_selector('a[href*="/video/"]', timeout=30000)
-            self._emit(logger, "[抖音诊断] 首个视频选择器已命中", "info")
+            await self._wait_for_search_results_ready(page, keyword=keyword, url=url, logger=logger)
 
             max_scroll_rounds = 18
             stable_rounds = 0
