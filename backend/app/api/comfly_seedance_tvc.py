@@ -596,12 +596,11 @@ async def _save_local_final_video_asset(
         db.close()
 
 
-# 生成链路里的“过程件”型号：加字幕中间件、合成/加 BGM 中间件。
+# 生成链路里的“过程件”型号：加字幕中间件（合成/加 BGM 的那份是交付件，不能埋掉）。
 # 按口径：素材库「生成素材」与内容库都只展示最终交付件，过程件一律不给用户看
 # （仍可按 asset_id 取用，不影响发布链路）。2026-09-22 用户确认。
 _PROCESS_ASSET_MODELS: tuple = (
     "local-bestseller-caption-ffmpeg",
-    "local-bestseller-post-ffmpeg",
 )
 
 
@@ -1219,6 +1218,7 @@ def _save_local_bestseller_caption_asset(
     subtitle_text: str,
     job_id: str,
     day: Any,
+    content_visibility: str = "internal",
 ) -> Dict[str, Any]:
     data = output_path.read_bytes()
     aid = _gen_asset_id()
@@ -1244,8 +1244,9 @@ def _save_local_bestseller_caption_asset(
                 "seedance_job_id": job_id,
                 "local_bestseller_day": day,
                 "captioned": True,
-                # 过程件（加字幕）：暂不对外，等最终成片入库时降级为 intermediate。
-                "content_visibility": "internal",
+                # 加字幕件默认不对外（后面还有 BGM 合成件时它就是中间产物）；
+                # 只有当本任务没有 BGM（这一份就是交付件）时才标 visible。
+                "content_visibility": str(content_visibility or "internal").strip().lower() or "internal",
             },
         )
         db.add(row)
@@ -1302,8 +1303,10 @@ def _save_local_bestseller_post_asset(
                 "bgm_name": bgm_name,
                 "bgm_url": bgm_url,
                 "kind": kind,
-                # 过程件（合成/加 BGM）：暂不对外，等最终成片入库时降级为 intermediate。
-                "content_visibility": "internal",
+                # 合成/加 BGM 的这一份就是交付给用户的成片：可见；若之后另有最终件入库，
+                # _demote_process_assets_for_job 会把它降级为中间产物（这时它才是过程件）。
+                "asset_origin": "generated",
+                "content_visibility": "visible",
             },
         )
         db.add(row)
@@ -1357,6 +1360,9 @@ async def _caption_local_bestseller_video_if_needed(
             subtitle_text=subtitle_text,
             job_id=job_id,
             day=meta.get("day"),
+            # 有 BGM 时后面还会合成一份（那一份才是交付件），这里先不对外；
+            # 没有 BGM 时这份加字幕视频就是交付件。
+            content_visibility="internal" if str((meta.get("bgm") or {}).get("bgm_url") or "").strip() else "visible",
         )
 
 

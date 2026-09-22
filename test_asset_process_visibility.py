@@ -52,7 +52,7 @@ def test_remote_process_items_are_not_mirrored_into_library():
     assert assets_api._remote_asset_item_is_process({}) is False
 
 
-def test_caption_and_post_assets_are_internal_by_default(tmp_path, monkeypatch):
+def test_caption_is_internal_while_post_stays_the_deliverable(tmp_path, monkeypatch):
     _memory_session(monkeypatch)
     monkeypatch.setattr(seedance, "ASSETS_DIR", tmp_path)
     monkeypatch.setattr(seedance, "_upload_to_tos", lambda *_a, **_k: "https://tos.example/x.mp4")
@@ -66,6 +66,7 @@ def test_caption_and_post_assets_are_internal_by_default(tmp_path, monkeypatch):
         subtitle_text="字幕",
         job_id="job-1",
         day=1,
+        content_visibility="internal",
     )
     seedance._save_local_bestseller_post_asset(
         user_id=54,
@@ -79,14 +80,28 @@ def test_caption_and_post_assets_are_internal_by_default(tmp_path, monkeypatch):
 
     db = seedance.SessionLocal()
     try:
-        rows = db.query(Asset).all()
-        assert len(rows) == 2
-        for row in rows:
-            assert row.meta["content_visibility"] == "internal", row.meta
-            # 过程件默认不进云端内容库（同步会跳过 internal/hidden/intermediate）
-            assert assets_api._asset_sync_payload(row) is None
+        caption = db.query(Asset).filter(Asset.model == "local-bestseller-caption-ffmpeg").one()
+        post = db.query(Asset).filter(Asset.model == "local-bestseller-post-ffmpeg").one()
+        # 加字幕件有 BGM 后续步骤时为过程件：不对外、也不进云端内容库
+        assert caption.meta["content_visibility"] == "internal"
+        assert assets_api._asset_sync_payload(caption) is None
+        # 合成/加 BGM 的就是交付件：可见 + 可同步
+        assert post.meta["asset_origin"] == "generated"
+        assert post.meta["content_visibility"] == "visible"
+        assert assets_api._asset_sync_payload(post) is not None
     finally:
         db.close()
+
+
+def test_caption_visibility_follows_bgm_presence():
+    """没有 BGM 时，加字幕那份就是交付件，必须可见。"""
+    source = open(seedance.__file__, encoding="utf-8", errors="replace").read()
+    anchor = source.index('content_visibility="internal" if')
+    window = source[anchor - 600 : anchor + 200]
+
+    assert 'content_visibility="internal" if' in window
+    assert 'meta.get("bgm")' in window
+    assert "_save_local_bestseller_caption_asset(" in window
 
 
 def test_final_asset_demotes_job_process_assets(tmp_path, monkeypatch):
@@ -122,9 +137,10 @@ def test_final_asset_demotes_job_process_assets(tmp_path, monkeypatch):
         demoted = db.query(Asset).filter(Asset.asset_id == caption["asset_id"]).one()
         assert demoted.meta["asset_origin"] == "intermediate"
         assert demoted.meta["content_visibility"] == "hidden"
-        # 别的任务的过程件不受影响
+        # 别的任务不受影响；BGM 合成件本来就是交付件，保持可见
         others = db.query(Asset).filter(Asset.asset_id != caption["asset_id"]).all()
-        assert all(row.meta["content_visibility"] == "internal" for row in others)
+        assert others, "应还有一条别的任务的合成件"
+        assert all(row.meta["content_visibility"] == "visible" for row in others)
     finally:
         db.close()
 
