@@ -905,50 +905,33 @@
         });
     }
     if (imageUrl) content.push({ type: 'image_url', image_url: { url: imageUrl } });
-    // 首选 AI 调度助手本体 POST /chat（backend/app/api/chat.py 的智能对话接口）：
-    // 它内部按 lobster_default_sutui_chat_model 走 deepseek 直连，图片用 attachment_image_urls 传。
-    // 失败再回落到 Comfly 的 gpt（OpenAI 风格 + image_url 内容块）。
+    // 首选 AI 调度助手那条路由（认证中心 /api/sutui-chat/completions）：
+    // 走 deepseek 直连、和对话助手同一模型配置，支持图片输入；失败再回落到 Comfly 的 gpt。
     var targets = [
-      { kind: 'assistant' },
-      { kind: 'comfly', model: 'gpt-5.5' },
-      { kind: 'comfly', model: 'gpt-5.4' }
+      { path: '/api/sutui-chat/completions', model: 'deepseek-chat' },
+      { path: '/api/comfly-proxy/v1/chat/completions', model: 'gpt-5.5' },
+      { path: '/api/comfly-proxy/v1/chat/completions', model: 'gpt-5.4' }
     ];
     var lastError = '';
-
-    function bodyFor(target) {
-      if (target.kind === 'assistant') {
-        return {
-          message: String((content[0] && content[0].text) || ''),
-          model: '',
-          attachment_image_urls: imageUrl ? [imageUrl] : []
-        };
-      }
-      return {
-        model: target.model,
-        stream: false,
-        messages: [
-          { role: 'system', content: '你是批量短视频提示词导演，严格输出用户要求的 JSON。' },
-          { role: 'user', content: content }
-        ],
-        max_tokens: Math.max(3000, Math.min(8000, 800 + 600 * want))
-      };
-    }
-
-    function replyText(data) {
-      if (data && typeof data.reply === 'string' && data.reply.trim()) return data.reply;
-      return extractChatText(data);
-    }
 
     function attempt(index) {
       if (index >= targets.length) {
         return Promise.reject(new Error(lastError || 'AI 改写未返回可用的提示词'));
       }
       var target = targets[index];
-      var endpoint = base + (target.kind === 'assistant' ? '/chat' : '/api/comfly-proxy/v1/chat/completions');
+      var endpoint = base + target.path;
       return fetch(endpoint, {
         method: 'POST',
         headers: jsonHeaders(),
-        body: JSON.stringify(bodyFor(target))
+        body: JSON.stringify({
+          model: target.model,
+          stream: false,
+          messages: [
+            { role: 'system', content: '你是批量短视频提示词导演，严格输出用户要求的 JSON。' },
+            { role: 'user', content: content }
+          ],
+          max_tokens: Math.max(3000, Math.min(8000, 800 + 600 * want))
+        })
       })
         .then(function(response) {
           return response.json().catch(function() { return {}; }).then(function(data) {
@@ -960,7 +943,7 @@
             var detail = messageText(result.data, 'HTTP ' + String(result.status || 0));
             throw new Error('AI 改写请求失败（' + result.status + '）：' + detail + '。请求地址：' + endpoint);
           }
-          var prompts = parseRewriteResponse(replyText(result.data), want);
+          var prompts = parseRewriteResponse(extractChatText(result.data), want);
           if (!prompts.length) throw new Error('AI 改写没有返回可用的提示词');
           if (prompts.length < want) {
             showMessage('AI 只返回了 ' + prompts.length + '/' + want + ' 条提示词，先用这些继续生成。', true);
