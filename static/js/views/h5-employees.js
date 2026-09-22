@@ -1158,6 +1158,24 @@
   }
   window.addEventListener('focus', refreshDevicesOnForeground);
   document.addEventListener('visibilitychange', refreshDevicesOnForeground);
+  // 个微自动加好友节点的目标来源：本机导入名单 / 上级抖音私信结果 / 服务端账号上报池
+  function normalizeNativeAddFriendSource(value) {
+    var text=String(value || '').trim().toLowerCase();
+    if (['server_reported_pool','server_pool','reported_pool','reported_contacts','wechat_contact_pool'].indexOf(text) >= 0) return 'server_reported_pool';
+    if (['douyin_private_message_phone','douyin_private_message_mobile','douyin_private_message_wechat_id'].indexOf(text) >= 0) return 'douyin_private_message_phone';
+    return 'local_import';
+  }
+  function nativeAddFriendSourceFromParams(params) {
+    return normalizeNativeAddFriendSource(params && params.source_mode);
+  }
+  function setNativeAddFriendSource(value) {
+    var target=normalizeNativeAddFriendSource(value);
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="oeNodeNativeAddFriendSource"]'),function(input){input.checked=input.value === target;});
+  }
+  function nativeAddFriendSourceFromForm() {
+    var checked=document.querySelector('input[name="oeNodeNativeAddFriendSource"]:checked');
+    return normalizeNativeAddFriendSource(checked && checked.value);
+  }
   function syncNodeModalFields() {
     var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), selectedSalesAction=key === 'douyin_leads' ? salesAction(option[2] || option[1]) : '', takeover=key === 'native_wechat_poll', whatsapp=key === 'native_whatsapp_poll', douyinPrivate=selectedSalesAction === 'stranger_message', douyinCollection=selectedSalesAction === 'search_collect', douyinTouch=selectedSalesAction === 'precise_touch';
     var optionExtra=option[5] && typeof option[5] === 'object' ? option[5] : {}, douyinAiKeywords=douyinCollection && !!optionExtra.ai_keywords;
@@ -1165,6 +1183,7 @@
     if (el('oeNodeWechatPrivateSessionLimitField')) el('oeNodeWechatPrivateSessionLimitField').hidden=!takeover;
     if (el('oeNodeWhatsappField')) el('oeNodeWhatsappField').hidden=!whatsapp;
     if (el('oeNodeWechatAddFriendField')) el('oeNodeWechatAddFriendField').hidden=!douyinPrivate;
+    if (el('oeNodeNativeAddFriendField')) el('oeNodeNativeAddFriendField').hidden=key !== 'native_wechat_add_friend';
     if (el('oeNodeDouyinReplyModeField')) el('oeNodeDouyinReplyModeField').hidden=!douyinPrivate;
     if (el('oeNodeDouyinCollectionField')) el('oeNodeDouyinCollectionField').hidden=!douyinCollection;
     // 精准获客AI 的关键词由 AI 生成，隐藏"采集关键词"、换成 AI 选词设置。
@@ -1192,6 +1211,8 @@
     var option=findOption(node && node.ability_key,node && node.ability_label,node);
     fillNodeOptions(node && node.ability_key,node && node.ability_label,node); el('oeNodeLabel').value=node && node.ability_label || option[1]; el('oeNodeNote').value=node && node.note || option[2] || option[1];
     el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; el('oeNodeWechatAddFriendEnabled').checked=boolParam(params.wechat_add_friend_enabled,false);
+    setNativeAddFriendSource(nativeAddFriendSourceFromParams(params));
+    if (el('oeNodeNativeAddFriendLimit')) el('oeNodeNativeAddFriendLimit').value=Math.max(1,Math.min(200,Number(params.max_targets || params.server_pool_limit || 50)));
     if (el('oeNodeDouyinReplyMode')) el('oeNodeDouyinReplyMode').value=String(params.reply_mode || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed';
     if (el('oeNodeDouyinKeyword')) el('oeNodeDouyinKeyword').value=String(params.keyword || params.query || '');
     if (el('oeNodeDouyinAiKeywordCount')) el('oeNodeDouyinAiKeywordCount').value=Math.max(1,Math.min(8,Number(params.ai_keyword_count || 3)));
@@ -1236,6 +1257,22 @@
     }
     if (key === 'native_wechat_moments_engage') { row.params.contact_wx_nos=momentSelectionValues('node'); row.params.targets=row.params.contact_wx_nos.slice(); row.params.moment_action=String(el('oeNodeMomentAction').value || 'like_comment'); row.params.max_scrolls=Number(row.params.max_scrolls || 6); if (!row.params.contact_wx_nos.length) throw new Error('请选择至少一个朋友圈联系人'); }
     else { delete row.params.contact_wx_nos; delete row.params.targets; delete row.params.moment_action; }
+    if (key === 'native_wechat_add_friend') {
+      var addFriendSource=nativeAddFriendSourceFromForm();
+      if (addFriendSource === 'local_import') {
+        delete row.params.source_mode; delete row.params.trigger;
+        delete row.params.skip_without_clear_mobile; delete row.params.skip_without_clear_wechat_id;
+        delete row.params.max_targets; delete row.params.server_pool_limit;
+      } else if (addFriendSource === 'server_reported_pool') {
+        row.params.source_mode='server_reported_pool';
+        row.params.max_targets=Math.max(1,Math.min(200,Number((el('oeNodeNativeAddFriendLimit') || {}).value || 50)));
+        delete row.params.server_pool_limit; delete row.params.trigger;
+        delete row.params.skip_without_clear_mobile; delete row.params.skip_without_clear_wechat_id;
+      } else {
+        row.params.source_mode='douyin_private_message_phone'; row.params.trigger='clear_mobile'; row.params.skip_without_clear_mobile=true;
+        delete row.params.skip_without_clear_wechat_id; delete row.params.max_targets; delete row.params.server_pool_limit;
+      }
+    }
     if (selectedSalesAction === 'stranger_message') { row.params.wechat_add_friend_enabled=!!el('oeNodeWechatAddFriendEnabled').checked; row.params.wechat_add_friend_targets_source='douyin_private_message_phone'; row.params.reply_mode=String((el('oeNodeDouyinReplyMode') || {}).value || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed'; }
     else { delete row.params.wechat_add_friend_enabled; delete row.params.wechat_add_friend_targets_source; delete row.params.wechat_add_friend_rules; delete row.params.reply_mode; }
     if (key === 'douyin_leads' && selectedSalesAction === 'search_collect') {

@@ -6438,7 +6438,14 @@ def _scheduled_douyin_completed_result(
     return result
 
 
-async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+async def _run_scheduled_douyin_sales_action(
+    action: str,
+    params: Optional[Dict[str, Any]],
+    *,
+    cloud: Optional[httpx.AsyncClient] = None,
+    base: str = "",
+    headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     source = params if isinstance(params, dict) else {}
     account_id = _scheduled_douyin_account_id(source)
     max_users = max(1, min(_safe_int(source.get("max_users") or source.get("max_results") or 10) or 10, 200))
@@ -7044,12 +7051,13 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
     if action == "stranger_message":
         from douyin_api import run_douyin_h5_stranger_message_task_once  # type: ignore
 
+        wechat_add_friend_enabled = bool(source.get("wechat_add_friend_enabled", False))
         result = await run_douyin_h5_stranger_message_task_once(
             account_id=account_id,
             max_conversations=100,
             fixed_message=str(source.get("message") or "").strip(),
             auto_reply_enabled=bool(source.get("auto_reply_enabled", True)),
-            wechat_add_friend_enabled=bool(source.get("wechat_add_friend_enabled", False)),
+            wechat_add_friend_enabled=wechat_add_friend_enabled,
             reply_mode=(
                 "ai_lead"
                 if str(source.get("reply_mode") or "").strip().lower() == "ai_lead"
@@ -7061,7 +7069,36 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 source.get("wechat_add_friend_targets_source") or ""
             ).strip(),
         )
-        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音私信一次性任务执行失败"}
+        if not isinstance(result, dict):
+            return {"code": 500, "msg": "抖音私信一次性任务执行失败"}
+        normalized = dict(result)
+        # 没勾「自动提交好友申请」：本机不动微信，只把识别到的号码上报到账号级池子，
+        # 交给同账号的其它机器（个微自动加好友节点选「服务端上报池」）去加好友。
+        if not wechat_add_friend_enabled:
+            report = await _report_douyin_wechat_contacts_to_cloud(
+                cloud,
+                base,
+                headers or {},
+                result=normalized,
+                account_id=account_id,
+                account_label=str(source.get("sales_node_label") or "").strip(),
+            )
+            normalized["wechat_contact_report"] = report
+            if report.get("ok") and not report.get("skipped"):
+                logger.info(
+                    "[wechat-contact-pool] douyin report account=%s count=%s created=%s pending=%s",
+                    account_id,
+                    report.get("count"),
+                    report.get("created"),
+                    report.get("pending"),
+                )
+            elif not report.get("ok") and not report.get("skipped"):
+                logger.warning(
+                    "[wechat-contact-pool] douyin report failed account=%s reason=%s",
+                    account_id,
+                    report.get("reason"),
+                )
+        return normalized
 
     return {"code": 400, "msg": f"暂不支持的销售抖音动作：{action}"}
 
@@ -7153,7 +7190,13 @@ async def _run_scheduled_douyin_leads(
         if action == "search_collect":
             result = await _run_scheduled_douyin_search_collect_action(params)
         elif action in {"account_nurture", "self_comment_monitor", "precise_touch", "reply_comments", "mention_comment", "follow_comment", "direct_message", "stranger_message"}:
-            result = await _run_scheduled_douyin_sales_action(action, params)
+            result = await _run_scheduled_douyin_sales_action(
+                action,
+                params,
+                cloud=cloud,
+                base=base,
+                headers=headers,
+            )
         else:
             raise RuntimeError(f"暂不支持的抖音获客任务类型：{action}")
 
@@ -9244,6 +9287,155 @@ async def _get_cloud_api_json(
     return data if isinstance(data, dict) else {"result": data}
 
 
+_WECHAT_CONTACT_POOL_BASE_PATH = "/api/wechat-contact-pool"
+# 个微自动加好友节点的目标来源：从服务端账号级上报池领取
+_WECHAT_CONTACT_POOL_SOURCE_MODES = {
+    "server_reported_pool",
+    "server_pool",
+    "reported_pool",
+    "reported_contacts",
+    "wechat_contact_pool",
+}
+_WECHAT_CONTACT_POOL_DEFAULT_LIMIT = 50
+_WECHAT_CONTACT_POOL_MAX_LIMIT = 200
+
+
+def _douyin_wechat_contact_entries(result: Any) -> List[Dict[str, str]]:
+    """抖音私信接管结果里「客户发来的号码」明细，用于上报服务端账号池。"""
+    payload = result if isinstance(result, dict) else {}
+    entries: List[Dict[str, str]] = []
+    raw = payload.get("wechat_contact_entries")
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value") or "").strip()
+            if not value:
+                continue
+            entries.append(
+                {
+                    "value": value,
+                    "kind": str(item.get("kind") or "mobile").strip() or "mobile",
+                    "username": str(item.get("username") or "").strip(),
+                    "conversation_id": str(item.get("conversation_id") or "").strip(),
+                }
+            )
+    if entries:
+        return entries
+    # 老版本执行结果没有明细字段，至少把号码带上，别丢掉这批线索。
+    return [
+        {"value": str(value).strip(), "kind": "mobile", "username": "", "conversation_id": ""}
+        for value in (payload.get("extracted_phone_numbers") or [])
+        if str(value).strip()
+    ]
+
+
+async def _report_douyin_wechat_contacts_to_cloud(
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    *,
+    result: Any,
+    account_id: Any = 0,
+    account_label: str = "",
+) -> Dict[str, Any]:
+    """把抖音私信识别到的号码上报到账号级池子（节点未勾选「自动提交好友申请」时走这里）。"""
+    entries = _douyin_wechat_contact_entries(result)
+    label = str(account_label or "").strip()
+    if not label and account_id:
+        label = f"抖音账号 {account_id}"
+    if not entries:
+        return {"ok": True, "skipped": True, "reason": "no_contact", "count": 0, "pending": 0}
+    if cloud is None or not base:
+        logger.warning("[wechat-contact-pool] report skipped: cloud api connection missing")
+        return {"ok": False, "reason": "cloud_missing", "count": len(entries), "pending": 0}
+    try:
+        data = await _post_cloud_api_json(
+            f"{_WECHAT_CONTACT_POOL_BASE_PATH}/report",
+            {"platform": "douyin", "account_label": label, "items": entries},
+            cloud=cloud,
+            base=base,
+            headers=headers,
+            timeout_seconds=45.0,
+        )
+    except Exception as exc:
+        logger.warning("[wechat-contact-pool] report failed account=%s: %s", account_id, exc)
+        return {"ok": False, "reason": str(exc)[:300], "count": len(entries), "pending": 0}
+    return {
+        "ok": True,
+        "count": len(entries),
+        "created": _safe_int(data.get("created")),
+        "refreshed": _safe_int(data.get("refreshed")),
+        "skipped": _safe_int(data.get("skipped")),
+        "pending": _safe_int(data.get("pending")),
+        "account_label": label,
+    }
+
+
+async def _claim_reported_wechat_contacts(
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    *,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """从账号级池子领取待添加的号码（领取即占用，同账号其它机器不会重复领同一条）。"""
+    cap = max(1, min(_safe_int(limit) or _WECHAT_CONTACT_POOL_DEFAULT_LIMIT, _WECHAT_CONTACT_POOL_MAX_LIMIT))
+    data = await _post_cloud_api_json(
+        f"{_WECHAT_CONTACT_POOL_BASE_PATH}/claim",
+        {"platform": "douyin", "limit": cap},
+        cloud=cloud,
+        base=base,
+        headers=headers,
+        timeout_seconds=45.0,
+    )
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    claimed: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        value = str(item.get("value") or "").strip()
+        if not value:
+            continue
+        claimed.append(
+            {
+                "value": value,
+                "kind": str(item.get("kind") or "mobile").strip() or "mobile",
+                "username": str(item.get("username") or "").strip(),
+                "account_label": str(item.get("account_label") or "").strip(),
+            }
+        )
+    return claimed
+
+
+async def _ack_reported_wechat_contacts(
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    *,
+    added: List[str],
+    failed: List[str],
+    error: str = "",
+) -> Dict[str, Any]:
+    """回执：提交成功的标为已加，失败的放回池子让同账号的机器再来。"""
+    if not added and not failed:
+        return {"ok": True, "added": 0, "released": 0}
+    if cloud is None or not base:
+        return {"ok": False, "reason": "cloud_missing"}
+    try:
+        return await _post_cloud_api_json(
+            f"{_WECHAT_CONTACT_POOL_BASE_PATH}/ack",
+            {"platform": "douyin", "added": added, "failed": failed, "error": str(error or "")[:500]},
+            cloud=cloud,
+            base=base,
+            headers=headers,
+            timeout_seconds=45.0,
+        )
+    except Exception as exc:
+        logger.warning("[wechat-contact-pool] ack failed: %s", exc)
+        return {"ok": False, "reason": str(exc)[:300]}
+
+
 def _parse_run_time(value: Any) -> Optional[datetime]:
     text = str(value or "").strip()
     if not text:
@@ -11311,8 +11503,24 @@ async def _run_client_workflow_action(
     if action == "native_wechat_add_friend":
         targets = _workflow_target_list(source, "targets", "phones", "phone_numbers", "keywords", "keyword")
         extracted_phones: List[str] = []
+        claimed_pool_items: List[Dict[str, Any]] = []
         source_mode = str(source.get("source_mode") or "").strip().lower()
-        if source_mode in {
+        pool_mode = source_mode in _WECHAT_CONTACT_POOL_SOURCE_MODES
+        if pool_mode:
+            # 账号级上报池：抖音私信接管节点没勾「自动提交好友申请」时会上报到那里，
+            # 同账号的任意机器都能领（领取即占用，别的机器不会重复领同一条）。
+            if cloud is None or not base:
+                raise RuntimeError("自动加好友无法读取服务端上报池")
+            claimed_pool_items = await _claim_reported_wechat_contacts(
+                cloud,
+                base,
+                headers,
+                limit=_safe_int(source.get("max_targets") or source.get("server_pool_limit") or 0)
+                or _WECHAT_CONTACT_POOL_DEFAULT_LIMIT,
+            )
+            extracted_phones = [str(item.get("value") or "").strip() for item in claimed_pool_items]
+            extracted_phones = [value for value in extracted_phones if value]
+        elif source_mode in {
             "douyin_private_message_phone",
             "douyin_private_message_mobile",
             "douyin_private_message_wechat_id",
@@ -11330,6 +11538,18 @@ async def _run_client_workflow_action(
                 extracted_phones = _extract_mainland_mobile_numbers(parent_runs[0].get("result_payload"))
         targets = list(dict.fromkeys([*targets, *extracted_phones]))
         if not targets:
+            if pool_mode:
+                return {
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "server_pool_empty",
+                    "extracted_phones": [],
+                    "server_pool_items": [],
+                    "message": (
+                        "服务端上报池里没有待添加的号码：抖音私信接管节点不勾「自动提交好友申请」时，"
+                        "才会把识别到的号码上到池子里。"
+                    ),
+                }
             return {
                 "ok": True,
                 "skipped": True,
@@ -11337,22 +11557,51 @@ async def _run_client_workflow_action(
                 "extracted_phones": [],
                 "message": "本轮抖音私信未识别到客户发送的手机号，已跳过加好友",
             }
-        result = await _post_local_api_json(
-            "/api/native-wechat/friends/add",
-            {
-                "account_id": native_account_id,
-                "targets": targets,
-                "apply_message": str(source.get("apply_message") or "").strip(),
-                "remark": str(source.get("remark") or "").strip(),
-                "tags": source.get("tags") if isinstance(source.get("tags"), list) else [],
-                "permission": str(source.get("permission") or "朋友圈").strip() or "朋友圈",
-                "prepare_only": bool(source.get("prepare_only", False)),
-            },
-            headers=headers,
-            timeout_seconds=300.0,
-        )
+        try:
+            result = await _post_local_api_json(
+                "/api/native-wechat/friends/add",
+                {
+                    "account_id": native_account_id,
+                    "targets": targets,
+                    "apply_message": str(source.get("apply_message") or "").strip(),
+                    "remark": str(source.get("remark") or "").strip(),
+                    "tags": source.get("tags") if isinstance(source.get("tags"), list) else [],
+                    "permission": str(source.get("permission") or "朋友圈").strip() or "朋友圈",
+                    "prepare_only": bool(source.get("prepare_only", False)),
+                },
+                headers=headers,
+                timeout_seconds=300.0,
+            )
+        except Exception as exc:
+            if claimed_pool_items:
+                await _ack_reported_wechat_contacts(
+                    cloud,
+                    base,
+                    headers,
+                    added=[],
+                    failed=extracted_phones,
+                    error=str(exc),
+                )
+            raise
         result["targets"] = targets
         result["extracted_phones"] = extracted_phones
+        if claimed_pool_items:
+            result["server_pool_items"] = [
+                {
+                    "value": str(item.get("value") or "").strip(),
+                    "username": str(item.get("username") or "").strip(),
+                    "account_label": str(item.get("account_label") or "").strip(),
+                }
+                for item in claimed_pool_items
+            ]
+            # 已经提交给本机微信加好友队列，回执标记为已加；失败的那部分放回池子。
+            result["server_pool_ack"] = await _ack_reported_wechat_contacts(
+                cloud,
+                base,
+                headers,
+                added=extracted_phones,
+                failed=[],
+            )
         return result
     if action == "native_wechat_moments_engage":
         targets = _workflow_target_list(source, "contact_wx_nos", "targets", "contacts", "names")

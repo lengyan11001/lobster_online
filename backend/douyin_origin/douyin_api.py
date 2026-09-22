@@ -13056,6 +13056,42 @@ def extract_douyin_mainland_mobile_numbers(rows: List[Dict]) -> List[str]:
     return numbers
 
 
+def douyin_wechat_contact_entries(rows: List[Dict]) -> List[Dict[str, str]]:
+    """把「客户发来的手机号」整理成可上报服务端的条目（号码 + 来源昵称/会话）。
+
+    H5 工作流的抖音私信接管节点没勾选「自动提交好友申请」时，这些条目会上报到
+    账号级的服务端联系方式池，供同账号的其它机器执行个微自动加好友时领取。
+    """
+    entries: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        numbers: List[str] = []
+        for number in row.get("phone_numbers") or []:
+            # 号码可能带着空格/横线写在私信里，上报前统一成纯数字，避免同一个号上报成两条
+            text = re.sub(r"[\s\-()（）]", "", normalize_douyin_text(number))
+            if text:
+                numbers.append(text)
+        if not numbers:
+            continue
+        username = normalize_douyin_text(row.get("username") or "")
+        conversation = normalize_douyin_text(row.get("conversation_source") or "")
+        for number in numbers:
+            if number in seen:
+                continue
+            seen.add(number)
+            entries.append(
+                {
+                    "value": number,
+                    "kind": "mobile",
+                    "username": username,
+                    "conversation_id": conversation,
+                }
+            )
+    return entries
+
+
 async def _queue_douyin_wechat_friend_add(phone_numbers: List[str]) -> Dict[str, object]:
     if not phone_numbers:
         return {"enabled": True, "queued": False, "targets": [], "reason": "no_phone_number"}
@@ -13630,6 +13666,7 @@ async def run_douyin_h5_stranger_message_task_once(
                 "stranger_conversations": len(stranger_rows),
                 "reply": dict(reply_result),
                 "extracted_phone_numbers": phone_numbers,
+                "wechat_contact_entries": douyin_wechat_contact_entries(prepared_rows),
                 "wechat_add_targets": phone_numbers_to_queue,
                 "phone_contacts_skipped": phone_contacts_skipped,
                 "wechat_add_friend": wechat_add_friend_result,

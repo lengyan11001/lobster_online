@@ -204,7 +204,15 @@
         <label class="oe-form-label" id="oeNodeWechatAddFriendField" hidden>
           <span>抖音私信识别手机号后加微信好友</span>
           <span><input id="oeNodeWechatAddFriendEnabled" type="checkbox"> 自动提交好友申请</span>
+          <small>不勾选时本机不动微信：识别到的手机号上报到服务端账号池，由同账号的机器上加好友。</small>
         </label>
+        <div class="oe-form-label" id="oeNodeNativeAddFriendField" hidden>
+          <span>个微加好友目标来源</span>
+          <label><input type="radio" name="oeNodeNativeAddFriendSource" value="local_import"> 本机导入名单（节点自己带的手机号/微信号）</label>
+          <label><input type="radio" name="oeNodeNativeAddFriendSource" value="douyin_private_message_phone"> 上级抖音私信结果（同一台机器刚跑完的私信接管）</label>
+          <label><input type="radio" name="oeNodeNativeAddFriendSource" value="server_reported_pool"> 服务端上报池（同账号跨机器共用）</label>
+          <label>每轮领取数量<input id="oeNodeNativeAddFriendLimit" type="number" min="1" max="200" step="1" value="50"></label>
+        </div>
         <div class="oe-form-label" id="oeNodeDouyinCollectionField" hidden>
           <span>精准获客参数</span>
           <label id="oeNodeDouyinKeywordField">采集关键词（可选）<textarea id="oeNodeDouyinKeyword" rows="3" placeholder="留空使用当前设备 Online 已配置的全部关键词；手动填写可用逗号或换行分隔"></textarea></label>
