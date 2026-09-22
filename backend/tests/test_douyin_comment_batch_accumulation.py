@@ -166,11 +166,14 @@ def test_process_video_comment_batches_does_not_turn_unverified_empty_into_succe
             )
         )
     except RuntimeError as exc:
-        assert "连续 2 次未读取到可验证评论" in str(exc)
+        # 重试次数由 DOUYIN_COMMENT_COLLECTION_ATTEMPTS 决定，这里只钉住语义，不钉住次数
+        message = str(exc)
+        assert "未读取到可验证评论" in message
+        assert "未判定为无评论" in message
     else:
         raise AssertionError("unverified empty comment reads must fail, not complete")
 
-    assert len(pages) == 2
+    assert len(pages) >= 2, "未确认的空结果必须重试（重试会重新开页面）"
 
 
 def test_protocol_empty_result_requires_explicit_confirmation():
