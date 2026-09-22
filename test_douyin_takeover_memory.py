@@ -517,3 +517,16 @@ def test_online_memory_takeover_node_only_asks_for_memory_file():
     assert "el('oeNodeDouyinCollectionField').hidden=!douyinCollection" in js
     assert "row.params.memory_doc_ids=[memoryDocValue]" in js
     assert "el('oeNodeWechatAddFriendField').hidden=!douyinPrivate || memoryTakeover" in js
+
+
+def test_online_memory_doc_selection_persists_and_shows_after_reload():
+    """Online 选了记忆文件必须存下来，刷新后还要能回显（列表读不到也不能看起来像没保存）。"""
+    root = Path(__file__).resolve().parent
+    js = (root / "static" / "js" / "views" / "h5-employees.js").read_text(encoding="utf-8")
+
+    # 只要选了就存，不再依赖回复策略（否则会出现"选完刷新就没了"）
+    assert "if (memoryDocValue) row.params.memory_doc_ids=[memoryDocValue];" in js
+    # 本地记忆列表读不到时，把已选的那份也塞回下拉，保证回显
+    assert "已选记忆文件" in js
+    assert "select.value=current;" in js
+    assert "row.params.memory_doc_ids=[memoryDocValue]" not in js.split("if (memoryDocValue)")[0][-200:]
