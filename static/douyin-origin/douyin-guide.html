@@ -4,8 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>抖音工作台使用手册</title>
-    <link rel="icon" type="image/png" href="/static/static/douyin-origin/douyin.html-origin/assets/app-icon.png">
-    <link rel="stylesheet" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html-workbench.css">
+        <link rel="stylesheet" href="/static/douyin-origin/douyin-workbench.css">
     <style>
         :root {
             --bg: #f6f8fb;
@@ -622,7 +621,6 @@
                 <div class="guide-main-shell">
                     <header class="hero">
                         <div class="actions">
-                            <a class="button primary" href="/static/static/douyin-origin/douyin.html-origin/static/douyin-origin/douyin.html.html">进入抖音工作台</a>
                             <a class="button" href="#config">先看配置中心</a>
                             <a class="button" href="#workflow">查看推荐流程</a>
                         </div>
@@ -816,7 +814,7 @@
         sectionRoot.innerHTML = guideSections.map(([id, index, title, image, desc, steps, notes, tags]) => `
             <section id="${id}" class="section" data-keywords="${[title, ...tags].join(" ")}">
                 <div class="section-head"><div class="label">${index} / ${title}</div><h3>${title}</h3><p>${desc}</p></div>
-                <figure><img src="/static/static/douyin-origin/douyin.html-origin/assets/static/douyin-origin/douyin.html-guide/${image}" alt="抖音${title}页面截图"><figcaption>${title}页面截图。操作前先确认账号在线、筛选范围和任务状态都正常。</figcaption></figure>
+                <figure><div class="guide-shot-missing">（示意图缺失，按文字步骤操作）</div><figcaption>${title}页面截图。操作前先确认账号在线、筛选范围和任务状态都正常。</figcaption></figure>
                 <div class="section-body">
                     <div class="block"><h4>怎么用</h4><ol>${steps.map((item) => `<li>${item}</li>`).join("")}</ol></div>
                     <div class="block notice-block"><h4>注意事项</h4><ul>${notes.map((item) => `<li>${item}</li>`).join("")}</ul><div class="tags">${tags.map((item) => `<span class="tag">${item}</span>`).join("")}</div></div>

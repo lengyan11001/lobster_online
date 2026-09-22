@@ -37,8 +37,8 @@ DOUYIN_PW_EVALUATE_TIMEOUT_SECONDS = 15.0
 # 打开私信面板：整段一个总预算 + 连续失败断点。
 # 2026-09-21 现场：三层重试（DOM 4~6 次 × selector 6×4 次 × DOM 兜底 6 次）把
 # “这个主页不能私信”这个一次性结论放大成 36 次点击 / 4~5 分钟，10 人轮次要 90 分钟。
-DOUYIN_PM_DIALOG_OPEN_BUDGET_SECONDS = 30.0
-DOUYIN_PM_DIALOG_MISS_LIMIT = 4
+DOUYIN_PM_DIALOG_OPEN_BUDGET_SECONDS = 20.0
+DOUYIN_PM_DIALOG_MISS_LIMIT = 3
 DOUYIN_PM_DOM_CLICK_METHODS = ("normal", "force", "coordinate", "native")
 DOUYIN_PM_SELECTOR_ATTEMPTS = 2
 DOUYIN_PM_FALLBACK_CLICK_METHODS = ("normal", "force", "coordinate", "native")
@@ -9023,6 +9023,17 @@ class DouyinCommentScraper:
             await page.wait_for_timeout(220)
             snapshot = await self._read_comment_submission_snapshot(page)
             editor_text = re.sub(r"\s+", " ", str(snapshot.get("editor_text", "") or "")).strip()
+            if expected_name and f"@{expected_name}" in editor_text:
+                # Ctrl+Z 对这种"已经落成普通文本"的残留无效：再按退格把它删掉，
+                # 否则下一个人名会继续往同一个框里堆，@ 候选更难出现。
+                for _ in range(len(expected_name) + 2):
+                    try:
+                        await page.keyboard.press("Backspace")
+                    except Exception:
+                        break
+                await page.wait_for_timeout(180)
+                snapshot = await self._read_comment_submission_snapshot(page)
+                editor_text = re.sub(r"\s+", " ", str(snapshot.get("editor_text", "") or "")).strip()
             if not expected_name or f"@{expected_name}" not in editor_text:
                 self._emit(
                     logger,
