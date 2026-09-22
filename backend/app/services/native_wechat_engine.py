@@ -3383,6 +3383,83 @@ def _auto_reply_history_state(account_id: str, peer_id: str, inbound: Dict[str, 
         return {"exists": False, "inbound_message_id": inbound_id, "error": f"history_lookup_failed: {exc}"[:500]}
 
 
+# 上一轮生成了回复但没发出去的状态：同一条入站消息再出现时直接复用旧文案，不再调 AI。
+_AUTO_REPLY_RETRYABLE_STATUSES = {
+    "failed",
+    "unknown",
+    "send_unconfirmed",
+    "group_invite_failed",
+    "ai_batch_failed",
+}
+
+
+def _auto_reply_peer_is_group_primary_contact(
+    configured_primary_contact: Any,
+    resolved_primary_contact: Any,
+    wechat_id: Any,
+    peer_id: Any,
+) -> bool:
+    """客户本人就是配置的"群邀请主联系人"时，这条会话不该被 AI 接管（2026-09-22 用户口径）。
+
+    线上事故：主联系人被配成客户 Wendy 的微信号 xkcmwu → 每轮都判"该拉群"→ 拉群不可执行
+    → 普通回复被抑制 → 同一条消息每 2 分钟重生成一次、客户永远收不到。
+    """
+    configured = {
+        str(value or "").strip().lower()
+        for value in (configured_primary_contact, resolved_primary_contact)
+    }
+    configured.discard("")
+    if not configured:
+        return False
+    current = {str(value or "").strip().lower() for value in (wechat_id, peer_id)}
+    current.discard("")
+    return bool(configured & current)
+
+
+def _cached_auto_reply_reply(
+    account_id: str,
+    peer_id: str,
+    inbound: Dict[str, Any],
+) -> Dict[str, Any]:
+    """取"上一轮已生成但没发出去"的回复全文（同一条入站消息）。
+
+    同一 inbound_message_id 说明客户的话没变，直接复用旧文案尝试发送，避免重复生成。
+    """
+    payload = inbound if isinstance(inbound, dict) else {}
+    inbound_id = _auto_reply_inbound_id(peer_id, payload)
+    if not inbound_id:
+        return {}
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                select status, reply_content, category, updated_at
+                from wechat_auto_reply_history
+                where account_id=? and peer_id=? and inbound_message_id=?
+                order by updated_at desc
+                limit 1
+                """,
+                (account_id, peer_id, inbound_id),
+            ).fetchone()
+    except Exception:
+        return {}
+    if not row:
+        return {}
+    status = str(row[0] or "").strip().lower()
+    reply = str(row[1] or "").strip()
+    if not reply or status not in _AUTO_REPLY_RETRYABLE_STATUSES:
+        return {}
+    return {
+        "should_reply": True,
+        "reply": reply,
+        "category": str(row[2] or ""),
+        "should_invite_group": False,
+        "reused_from_history": True,
+        "previous_status": status,
+        "generated_at": str(row[3] or ""),
+    }
+
+
 def _promote_session_preview_latest(account_id: str, peer_id: str, preview: Any) -> Optional[Dict[str, Any]]:
     """Align persisted ordering with the authoritative session-list preview.
 
@@ -5457,6 +5534,44 @@ async def run_auto_reply_once(
                     )
                     result["items"].append(collection_result)
                     continue
+                if _auto_reply_peer_is_group_primary_contact(
+                    configured_primary_contact_for_batch,
+                    primary_contact_for_batch,
+                    resolved_wechat_id,
+                    peer_id,
+                ):
+                    # 客户本人就是配置的"群邀请主联系人"：按用户口径直接跳过，
+                    # 不生成回复、不回复，并落一条 terminal 历史避免每轮重来。
+                    result["skipped"] += 1
+                    collection_result.update(
+                        {
+                            "status": "skipped_primary_contact",
+                            "reply_suppressed": True,
+                            "skip_reason": "configured_group_invite_primary_contact",
+                        }
+                    )
+                    _record_auto_reply_history(
+                        account_id,
+                        resolved_wechat_id,
+                        inbound,
+                        reply="",
+                        category="",
+                        status="skipped",
+                        error="该联系人就是配置的拉群主联系人：按规则不生成、不回复",
+                    )
+                    log_event(
+                        "message_skipped_primary_contact",
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        chat_type=chat_type,
+                        inbound_message_id=_auto_reply_inbound_id(resolved_wechat_id, inbound),
+                        reason="configured_group_invite_primary_contact",
+                        configured_primary_contact=configured_primary_contact_for_batch,
+                        resolved_primary_contact=primary_contact_for_batch,
+                    )
+                    result["items"].append(collection_result)
+                    continue
                 log_event(
                     "message_candidate",
                     peer_id=peer_id,
@@ -5497,6 +5612,21 @@ async def run_auto_reply_once(
                     recent,
                 )
                 work_id = _auto_reply_work_id(account_id, resolved_wechat_id, inbound)
+                cached_reply = _cached_auto_reply_reply(account_id, resolved_wechat_id, inbound)
+                if cached_reply:
+                    # 客户这句话没变、上一轮已经生成过只是没发出去：直接复用旧文案，
+                    # 本轮跳过 AI 生成，执行阶段只负责"尝试发"。
+                    cached_replies_by_work_id[work_id] = cached_reply
+                    log_event(
+                        "reply_reused_from_history",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        inbound_message_id=_auto_reply_inbound_id(resolved_wechat_id, inbound),
+                        previous_status=str(cached_reply.get("previous_status") or ""),
+                        reply_preview=str(cached_reply.get("reply") or "")[:300],
+                    )
                 identity_mode = "nickname" if nickname_identity else "wechat_id"
                 request_item = {
                     "work_id": work_id,
@@ -5562,6 +5692,8 @@ async def run_auto_reply_once(
 
         result["ai_batch_candidate_count"] = len(batch_requests)
         batch_replies: Dict[str, Dict[str, Any]] = {}
+        # 上一轮已生成、这轮只需补发的回复（按 work_id 命中，不再请求 AI）
+        cached_replies_by_work_id: Dict[str, Dict[str, Any]] = {}
         batch_failures: Dict[str, str] = {}
         batch_size = 8
         executable_prepared = list(prepared_by_work_id.values())
@@ -5584,6 +5716,15 @@ async def run_auto_reply_once(
                     for item in chunk_prepared
                     if isinstance(item.get("request"), dict)
                 ]
+                # 命中"上一轮已生成回复"的条目不再请求 AI（空 chunk 时批量接口直接返回 {}），
+                # 直接把旧文案放进 batch_replies，执行阶段照常尝试发送。
+                chunk = [
+                    item
+                    for item in chunk
+                    if str(item.get("work_id") or "") not in cached_replies_by_work_id
+                ]
+                for cached_work_id, cached_reply_item in cached_replies_by_work_id.items():
+                    batch_replies.setdefault(cached_work_id, cached_reply_item)
                 log_event(
                     "ai_batch_started",
                     batch_index=batch_index,
@@ -6253,12 +6394,10 @@ async def run_auto_reply_once(
                     )
                     if not invite_ok:
                         result["group_invite_failed"] += 1
-                        result["skipped"] += 1
                         item_result.update(
                             {
                                 "status": "group_invite_failed",
                                 "group_invite_failed": True,
-                                "reply_suppressed": True,
                                 "skip_reason": "group_invite_failed",
                             }
                         )
@@ -6272,8 +6411,29 @@ async def run_auto_reply_once(
                             result=group_invite or {},
                             reason="invite_result_not_executable",
                         )
-                        result["items"].append(item_result)
-                        continue
+                        # 拉群执行不了（主联系人缺失/异常等）时不能把客户晾着：
+                        # 记下已经生成的回复，本轮直接当普通回复发出去（2026-09-22 用户口径）。
+                        _record_auto_reply_history(
+                            account_id,
+                            actual_peer,
+                            inbound,
+                            reply=str(llm_reply.get("reply") or ""),
+                            category=str(llm_reply.get("category") or ""),
+                            status="failed",
+                            error="group_invite_not_executable",
+                        )
+                        llm_reply["should_invite_group"] = False
+                        item_result["should_invite_group"] = False
+                        item_result["group_invite_downgraded_to_reply"] = True
+                        log_event(
+                            "group_invite_downgraded_to_reply",
+                            work_id=work_id,
+                            peer_id=peer_id,
+                            actual_peer=actual_peer,
+                            display_name=display_name,
+                            reason=str((group_invite or {}).get("reason") or "invite_result_not_executable"),
+                            reply_preview=str(llm_reply.get("reply") or "")[:300],
+                        )
                     _record_auto_reply_history(
                         account_id,
                         actual_peer,
