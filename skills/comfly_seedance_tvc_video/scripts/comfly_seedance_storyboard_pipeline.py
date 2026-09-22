@@ -2551,12 +2551,18 @@ def _run_segment_video_providers(
     raise PipelineError(f"segment {index:02d} video generation failed: {last_error}")
 
 
-def _direct_video_prompt(config: PipelineConfig) -> str:
+def _direct_video_prompt(
+    config: PipelineConfig,
+    reference_image_urls: Optional[List[str]] = None,
+) -> str:
+    # 参考图不在 PipelineConfig 上（由调用方按段传入），以前这里写 config.reference_image
+    # 会直接 AttributeError，把直出视频模式打挂（2026-09-22 修）。
+    has_reference = any(str(url or "").strip() for url in (reference_image_urls or []))
     prompt = (config.task_text or "").strip()
     if not prompt:
         prompt = (
             "基于参考图生成一段自然、连贯、适合短视频平台发布的图生视频。"
-            if config.reference_image
+            if has_reference
             else "根据创意提示词生成一段自然、连贯、适合短视频平台发布的文生视频。"
         )
     return _limit_video_prompt("\n".join(
@@ -2571,7 +2577,7 @@ def _direct_video_prompt(config: PipelineConfig) -> str:
 
 
 def _build_direct_segment_plan(config: PipelineConfig, reference_image_urls: List[str], index: int = 1) -> Dict[str, Any]:
-    video_prompt = _direct_video_prompt(config)
+    video_prompt = _direct_video_prompt(config, reference_image_urls)
     segment_index = max(1, int(index or 1))
     reference_url = reference_image_urls[0] if reference_image_urls else ""
     start_second = (segment_index - 1) * config.segment_duration_seconds
