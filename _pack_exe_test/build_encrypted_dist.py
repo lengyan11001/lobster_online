@@ -627,14 +627,12 @@ def calculate_size():
     return total
 
 
-def create_output_zip(include_runtime: bool = False, *, factory_oem: bool = False, preset_brand: str = ""):
+def create_output_zip(include_runtime: bool = False, *, factory_oem: bool = False):
     """创建最终分发 zip 包"""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     if factory_oem:
-        # 预置了品牌就把品牌写进包名，工厂拿到手一眼知道里面默认是哪个品牌
-        brand_suffix = f"_{preset_brand}" if preset_brand else ""
-        suffix = f"_factory{brand_suffix}_runtime" if include_runtime else f"_factory{brand_suffix}"
+        suffix = "_factory_runtime" if include_runtime else "_factory"
     else:
         suffix = "_runtime" if include_runtime else ""
     zip_name = f"lobster_desktop{suffix}_{timestamp}"
@@ -658,81 +656,6 @@ def create_output_zip(include_runtime: bool = False, *, factory_oem: bool = Fals
     return None
 
 
-def _preset_brand_arg() -> str:
-    """读取 --preset-brand <mark> / --preset-brand=<mark>。"""
-    argv = sys.argv[1:]
-    for index, arg in enumerate(argv):
-        if arg.startswith("--preset-brand="):
-            return arg.split("=", 1)[1].strip().lower()
-        if arg == "--preset-brand" and index + 1 < len(argv):
-            return argv[index + 1].strip().lower()
-    return ""
-
-
-def _preset_brand_payload(preset_brand: str) -> "tuple[Path, Path, dict]":
-    """按品牌标记找本机品牌缓存里的 profile（预置品牌进工厂包用）。"""
-    profiles_dir = PROJECT_ROOT / "static" / "branding" / "cache" / "profiles"
-    for path in sorted(profiles_dir.glob("*.json")):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        if str(payload.get("brand_mark") or "").strip().lower() != preset_brand:
-            continue
-        version = str(payload.get("version") or "").strip()
-        cache_dir = PROJECT_ROOT / "static" / "branding" / "cache" / preset_brand / version
-        if cache_dir.is_dir():
-            return path, cache_dir, payload
-    raise SystemExit(
-        f"[ERR] 本机没有品牌 {preset_brand} 的缓存，无法预置。"
-        "先在能联网的机器上用该品牌编号跑一次 OEM配置启动器，再把 "
-        f"static/branding/cache/{preset_brand}/ 与 profiles 带过来。"
-    )
-
-
-def apply_preset_brand(preset_brand: str) -> None:
-    """把预置品牌的资源、品牌启动器、统一自启入口 start.exe 放进工厂包。
-
-    工厂包原本不带品牌资源/启动器（靠 OEM配置启动器 按编号现下载）。
-    预置之后：解压即该品牌；要切其它 OEM 仍然跑 OEM配置启动器（它会把这两个文件刷新）
-    """
-    profile_path, cache_dir, payload = _preset_brand_payload(preset_brand)
-    target_cache_dir = STAGING_DIR / "static" / "branding" / "cache" / preset_brand / cache_dir.name
-    target_cache_dir.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(cache_dir, target_cache_dir, dirs_exist_ok=True)
-    asset_count = sum(1 for p in target_cache_dir.rglob("*") if p.is_file())
-    log(f"  品牌资源: static/branding/cache/{preset_brand}/{cache_dir.name}/（{asset_count} 个文件）")
-
-    profiles_dir = STAGING_DIR / "static" / "branding" / "cache" / "profiles"
-    profiles_dir.mkdir(parents=True, exist_ok=True)
-    code = str(payload.get("oem_code") or "").strip()
-    shutil.copy2(profile_path, profiles_dir / profile_path.name)
-    log(f"  品牌编号对照: static/branding/cache/profiles/{profile_path.name}（{code or '未标编号'}）")
-
-    # profile 记录里 install 挂在 profile 下（顶层也兼容一下）
-    profile_body = payload.get("profile") if isinstance(payload.get("profile"), dict) else {}
-    install = {}
-    for source in (profile_body, payload):
-        candidate = source.get("install") if isinstance(source.get("install"), dict) else None
-        if candidate:
-            install = candidate
-            break
-    launcher_name = str(install.get("launcher_filename") or "").strip() or f"{preset_brand}.exe"
-    launcher_source = cache_dir / "client_launcher.exe"
-    if launcher_source.is_file():
-        shutil.copy2(launcher_source, STAGING_DIR / launcher_name)
-        log(f"  品牌启动器: {launcher_name}（{launcher_source.stat().st_size / 1024:.1f} KB）")
-    else:
-        log(f"  [SKIP] 缓存里没有 client_launcher.exe，未放 {launcher_name}")
-
-    start_source = cache_dir / "start.exe"
-    if not start_source.is_file():
-        start_source = launcher_source
-    if start_source.is_file():
-        shutil.copy2(start_source, STAGING_DIR / "start.exe")
-        log("  统一自启入口: start.exe")
-
-
 def main():
     ensure_running_with_bundled_python()
 
@@ -744,10 +667,7 @@ def main():
         )
     include_runtime = "--include-runtime" in sys.argv
     factory_oem = "--factory-oem" in sys.argv
-    preset_brand = _preset_brand_arg()
-    if preset_brand and not factory_oem:
-        raise SystemExit("[ERR] --preset-brand 只用于工厂包（需同时带 --factory-oem）")
-    total_steps = 6 if preset_brand else 5
+    total_steps = 5
 
     print("=" * 50)
     print("  Lobster Desktop 加密打包构建")
@@ -757,7 +677,6 @@ def main():
     print(f"  保护:   {'跳过' if skip_encrypt else '编译.pyc+删除源码'}")
     print(f"  运行时: {'包含' if include_runtime else '不包含'}")
     print(f"  工厂包: {'是' if factory_oem else '否'}")
-    print(f"  预置品牌: {preset_brand or '无'}")
     print()
 
     # Step 1: 清理
@@ -781,19 +700,13 @@ def main():
         log("[ERR] 构建失败！")
         sys.exit(1)
 
-    if preset_brand:
-        # Step 5: 把预置品牌的资源、品牌启动器、统一自启入口 start.exe 放进包
-        step(5, total_steps, f"预置品牌资源与启动器（{preset_brand}）")
-        apply_preset_brand(preset_brand)
-
-    # Step 5/6: 打包输出
-    step(6 if preset_brand else 5, total_steps, "创建分发 zip 包")
+    # Step 5: 打包输出
+    step(5, total_steps, "创建分发 zip 包")
     staging_size = calculate_size()
     log(f"  staging 目录大小: {staging_size / (1024*1024):.1f} MB")
     zip_file = create_output_zip(
         include_runtime=include_runtime,
         factory_oem=factory_oem,
-        preset_brand=preset_brand,
     )
 
     print()
@@ -813,11 +726,7 @@ def main():
     else:
         print("    2. 将运行时文件放入对应子目录")
     if factory_oem:
-        if preset_brand:
-            print(f"    3. 已是 {preset_brand}：直接双击 start.exe 或该品牌启动器即可")
-            print(f"       要换其它 OEM：双击 {FACTORY_CONFIGURATOR_EXE}，输入工厂编号")
-        else:
-            print(f"    3. 双击 {FACTORY_CONFIGURATOR_EXE} 完成品牌配置")
+        print(f"    3. 双击 {FACTORY_CONFIGURATOR_EXE} 完成品牌配置")
     else:
         print("    3. 双击 必火智能AI.exe（保持正式桌面启动流程）")
     print()
