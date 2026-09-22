@@ -1,7 +1,7 @@
 {
-  "version": "2.0.67",
-  "build": 360,
-  "applied_at": "2026-09-21T22:55:39+08:00",
-  "note": "抖音获客/任务链路稳定性修复（AI关键词截断、Playwright硬超时、私信重试预算与跳过、采集唤醒、回复匹配收紧、控制面事件补投）",
-  "bundle_sha256": "bae2efe9b5f5ed42d5472947dd7e8eab546315bc2fc6f5af7b651d411c87b6e0"
+  "version": "2.0.68",
+  "build": 361,
+  "applied_at": "2026-09-22T09:35:08+08:00",
+  "note": "私信触达热修（NameError）+ 分镜台直出提示词 + 搜索超时取证/重试 + 日志中文编码 + 过程素材不进素材库/内容库",
+  "bundle_sha256": "1b0dc7b969fc2cd502de08fa833daf7687bd4b04bedf26e7b1cb103a6acfdd10"
 }
