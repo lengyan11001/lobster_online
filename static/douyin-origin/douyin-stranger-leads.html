@@ -261,6 +261,7 @@
                                                 <option value="ai_auto" selected>AI 自动回复</option>
                                                 <option value="fixed">固定文案</option>
                                                 <option value="ai_lead">AI 引导加绿泡泡</option>
+                                                <option value="ai_memory">AI 记忆接管（循环按记忆文件回复）</option>
                                             </select>
                                         </div>
                                         <div class="video-comment-field" style="margin-bottom:12px">
@@ -280,12 +281,20 @@
                                             <label for="stranger-message-ai-prompt">AI 回复方向</label>
                                             <textarea id="stranger-message-ai-prompt" rows="3" placeholder="可选填写，例如：先简单回应价格问题，再自然引导去绿泡泡继续聊；回复一定要短，不要像客服" oninput="syncStrangerMonitorField('stranger-message-ai-prompt',['interaction-stranger-ai-prompt']);refreshActionState()"></textarea>
                                             <div class="video-comment-hint">AI 会先读取对方最近一条私信，只生成前面很短的 1 到 2 句。最后两条会固定单独发送：麻烦您绿泡泡 / 你的联系方式。</div>
-                                            <label for="stranger-message-contact" style="margin-top:12px">绿泡泡联系方式</label>
-                                            <input type="text" id="stranger-message-contact" class="input" placeholder="例如：nbzql-1993" oninput="syncStrangerMonitorField('stranger-message-contact',['interaction-stranger-contact']);refreshActionState()">
-                                            <div class="video-comment-hint">系统会强制把“麻烦您绿泡泡”和这个联系方式拆成两条独立消息发出，不会合并在一起。</div>
+                                            <div id="stranger-message-contact-wrap">
+                                                <label for="stranger-message-contact" style="margin-top:12px">绿泡泡联系方式</label>
+                                                <input type="text" id="stranger-message-contact" class="input" placeholder="例如：nbzql-1993" oninput="syncStrangerMonitorField('stranger-message-contact',['interaction-stranger-contact']);refreshActionState()">
+                                                <div class="video-comment-hint">系统会强制把“麻烦您绿泡泡”和这个联系方式拆成两条独立消息发出，不会合并在一起。</div>
+                                            </div>
+                                        </div>
+                                        <div id="stranger-message-memory-wrap" class="video-comment-panel">
+                                            <label for="stranger-message-memory-doc">记忆文件</label>
+                                            <select id="stranger-message-memory-doc" onchange="onDouyinStrangerMemoryDocChange()"><option value="">请选择用于回复的记忆文件</option></select>
+                                            <div class="video-comment-hint">循环接管只按这个文件回复（例如「百问百答」）。系统每轮扫描新私信，读取会话上下文后生成 1-2 句回复；不拉群、不引导加微信、不主动发联系方式。</div>
+                                            <button type="button" class="btn" onclick="loadDouyinStrangerMemoryDocs()" style="margin-top:8px">重新读取记忆文件</button>
                                         </div>
                                         <div class="dm-preset-hint">
-                                            <span>会保存当前回复方式、引流话术、AI方向、联系方式、采集数和自动回复开关到本机。</span>
+                                            <span>会保存当前回复方式、引流话术、AI方向、联系方式、记忆文件、采集数和自动回复开关到本机。</span>
                                             <button type="button" class="btn btn-primary dm-preset-save-btn" onclick="saveDouyinStrangerMessagePresetAndSync(true)">保存当前话术</button>
                                         </div>
                                     </div>

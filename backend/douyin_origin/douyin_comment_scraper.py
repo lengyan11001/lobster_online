@@ -4443,6 +4443,7 @@ class DouyinCommentScraper:
         include_details: bool = False,
         item_callback: Optional[Callable[[Dict, Page], Awaitable[Optional[Dict]]]] = None,
         page: Optional[Page] = None,
+        should_read_detail: Optional[Callable[[Dict], bool]] = None,
     ) -> List[Dict]:
         limit = max(1, int(max_conversations or 10000))
         owns_page = page is None
@@ -5180,6 +5181,10 @@ class DouyinCommentScraper:
                 if should_stop and should_stop():
                     break
                 username = str(row.get("username", "") or "").strip()
+                # 循环接管只给"真的要回复"的会话读详情，避免每轮把所有会话都打开一遍。
+                detail_requested = bool(include_details) and (
+                    should_read_detail is None or should_read_detail(row)
+                )
                 merged = {
                     **row,
                     "incoming_message": str(
@@ -5188,13 +5193,15 @@ class DouyinCommentScraper:
                         or ""
                     ).strip(),
                     "collected_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "detail_read_status": "not_requested" if not include_details else "pending",
+                    "detail_read_status": (
+                        "not_requested" if not include_details else ("pending" if detail_requested else "skipped")
+                    ),
                     "detail_read_error": "",
                 }
                 if not str(merged.get("username", "") or "").strip():
                     merged["username"] = username
 
-                if include_details:
+                if detail_requested:
                     try:
                         opened, detail_reason = await open_direct_conversation(page, merged)
                         if opened:

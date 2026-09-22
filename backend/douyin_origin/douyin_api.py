@@ -230,6 +230,8 @@ douyin_interaction_state: Dict[str, object] = {
 }
 douyin_stranger_message_results: List[Dict] = []
 douyin_stranger_message_seen_records: Dict[str, Dict[str, str]] = {}
+# 循环接管：每个会话的回复尝试次数（失败要下一轮重试，但有上限，避免空转）。
+douyin_stranger_message_takeover_attempts: Dict[str, Dict[str, Dict[str, object]]] = {}
 douyin_stranger_message_state: Dict[str, object] = {
     "running": False,
     "phase": "",
@@ -373,6 +375,10 @@ DOUYIN_STRANGER_MESSAGE_RESULTS_BLOB_KEY = "douyin_stranger_messages"
 DOUYIN_STRANGER_MESSAGE_MONITOR_CONFIG_BLOB_KEY = "douyin_stranger_message_monitor_config"
 DOUYIN_STRANGER_MESSAGE_SEEN_RECORDS_BLOB_KEY = "douyin_stranger_message_seen_records"
 DOUYIN_STRANGER_MESSAGE_SEEN_LIMIT_PER_ACCOUNT = 5000
+# 循环接管（AI 记忆接管）：单个会话最多重试几次，避免同一条会话一直空转。
+DOUYIN_STRANGER_MESSAGE_TAKEOVER_MAX_ATTEMPTS = 3
+DOUYIN_STRANGER_MESSAGE_TAKEOVER_MEMORY_MAX_CHARS = 6000
+DOUYIN_STRANGER_MESSAGE_TAKEOVER_ATTEMPTS_BLOB_KEY = "douyin_stranger_message_takeover_attempts"
 DOUYIN_INBOX_RESULTS_BLOB_KEY = "douyin_inbox_messages"
 DOUYIN_INBOX_MONITOR_CONFIG_BLOB_KEY = "douyin_inbox_monitor_config"
 DOUYIN_SELF_COMMENT_MONITOR_RESULTS_BLOB_KEY = "douyin_self_comment_monitor_results"
@@ -561,6 +567,9 @@ def build_default_douyin_stranger_message_monitor_state(account_id: int = 0) -> 
         "last_skip_reason": "",
         "last_cycle_status": "idle",
         "seen_message_count": 0,
+        # 循环接管只按用户选中的记忆文件回复（例如「百问百答」）。
+        "memory_doc_ids": [],
+        "memory_user_id": None,
     }
 
 
@@ -598,6 +607,12 @@ def normalize_douyin_stranger_message_monitor_state(
             "last_skip_reason": normalize_douyin_text(payload.get("last_skip_reason", base["last_skip_reason"])),
             "last_cycle_status": normalize_douyin_text(payload.get("last_cycle_status", base["last_cycle_status"])) or "idle",
             "seen_message_count": max(0, int(payload.get("seen_message_count", base["seen_message_count"]) or 0)),
+            "memory_doc_ids": list(dict.fromkeys(
+                str(item or "").strip()
+                for item in (payload.get("memory_doc_ids") or base["memory_doc_ids"] or [])
+                if str(item or "").strip()
+            ))[:3],
+            "memory_user_id": int(payload.get("memory_user_id", base["memory_user_id"]) or 0) or None,
         }
     )
     # Old monitor records used fixed mode with an empty message. Treat that
@@ -714,6 +729,12 @@ def save_douyin_stranger_message_monitor_config():
                     "reply_prompt": str(state.get("reply_prompt", "") or "").strip(),
                     "contact_value": str(state.get("contact_value", "") or "").strip(),
                     "wechat_add_friend_enabled": bool(state.get("wechat_add_friend_enabled", False)),
+                    "memory_doc_ids": [
+                        str(item or "").strip()
+                        for item in (state.get("memory_doc_ids") or [])
+                        if str(item or "").strip()
+                    ][:3],
+                    "memory_user_id": int(state.get("memory_user_id", 0) or 0) or None,
                     "source": str(state.get("source") or "online_monitor").strip() or "online_monitor",
                 }
             )
@@ -1562,6 +1583,94 @@ def restore_douyin_stranger_message_seen_records():
         douyin_stranger_message_seen_records = next_records
     except Exception:
         douyin_stranger_message_seen_records = {}
+
+
+def save_douyin_stranger_message_takeover_attempts():
+    try:
+        douyin_state_store.save_blob_json(
+            DOUYIN_STRANGER_MESSAGE_TAKEOVER_ATTEMPTS_BLOB_KEY,
+            douyin_stranger_message_takeover_attempts or {},
+        )
+    except Exception:
+        pass
+
+
+def restore_douyin_stranger_message_takeover_attempts():
+    global douyin_stranger_message_takeover_attempts
+    try:
+        loaded = douyin_state_store.load_blob_json(
+            DOUYIN_STRANGER_MESSAGE_TAKEOVER_ATTEMPTS_BLOB_KEY,
+            default={},
+        )
+    except Exception:
+        loaded = {}
+    next_records: Dict[str, Dict[str, Dict[str, object]]] = {}
+    if isinstance(loaded, dict):
+        for raw_account_id, raw_bucket in loaded.items():
+            account_key = str(int(raw_account_id or 0) or 0)
+            if account_key == "0" or not isinstance(raw_bucket, dict):
+                continue
+            bucket: Dict[str, Dict[str, object]] = {}
+            for raw_key, raw_entry in raw_bucket.items():
+                key = normalize_douyin_text(raw_key)
+                if not key or not isinstance(raw_entry, dict):
+                    continue
+                bucket[key] = {
+                    "attempts": max(0, int(raw_entry.get("attempts", 0) or 0)),
+                    "last_error": normalize_douyin_text(raw_entry.get("last_error", ""))[:200],
+                    "last_at": normalize_douyin_text(raw_entry.get("last_at", "")),
+                }
+            if bucket:
+                next_records[account_key] = bucket
+    douyin_stranger_message_takeover_attempts = next_records
+
+
+def get_douyin_takeover_attempt(account_id: int, row: Dict) -> Dict[str, object]:
+    account_key = str(int(account_id or 0) or 0)
+    key = stranger_message_row_key(row if isinstance(row, dict) else {})
+    bucket = douyin_stranger_message_takeover_attempts.get(account_key) or {}
+    entry = bucket.get(key)
+    if isinstance(entry, dict):
+        return entry
+    return {"attempts": 0, "last_error": "", "last_at": ""}
+
+
+def record_douyin_takeover_attempt(account_id: int, row: Dict, *, error: str = "") -> int:
+    """记一次失败尝试，返回累计次数（达到上限就不要再重试同一条会话）。"""
+    account_key = str(int(account_id or 0) or 0)
+    key = stranger_message_row_key(row if isinstance(row, dict) else {})
+    if account_key == "0" or not key:
+        return 0
+    bucket = dict(douyin_stranger_message_takeover_attempts.get(account_key) or {})
+    previous = get_douyin_takeover_attempt(account_id, row)
+    entry = {
+        "attempts": int(previous.get("attempts", 0) or 0) + 1,
+        "last_error": normalize_douyin_text(error)[:200],
+        "last_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    bucket[key] = entry
+    if len(bucket) > DOUYIN_STRANGER_MESSAGE_SEEN_LIMIT_PER_ACCOUNT:
+        keep_items = sorted(
+            bucket.items(),
+            key=lambda item: str(item[1].get("last_at", "")),
+            reverse=True,
+        )[:DOUYIN_STRANGER_MESSAGE_SEEN_LIMIT_PER_ACCOUNT]
+        bucket = dict(keep_items)
+    douyin_stranger_message_takeover_attempts[account_key] = bucket
+    save_douyin_stranger_message_takeover_attempts()
+    return int(entry["attempts"])
+
+
+def clear_douyin_takeover_attempt(account_id: int, row: Dict) -> None:
+    account_key = str(int(account_id or 0) or 0)
+    key = stranger_message_row_key(row if isinstance(row, dict) else {})
+    if account_key == "0" or not key:
+        return
+    bucket = dict(douyin_stranger_message_takeover_attempts.get(account_key) or {})
+    if key in bucket:
+        bucket.pop(key, None)
+        douyin_stranger_message_takeover_attempts[account_key] = bucket
+        save_douyin_stranger_message_takeover_attempts()
 
 
 def restore_douyin_customer_pools_state():
@@ -5587,6 +5696,7 @@ restore_douyin_stranger_message_monitor_config()
 restore_douyin_inbox_monitor_config()
 restore_douyin_self_comment_monitor_config()
 restore_douyin_stranger_message_seen_records()
+restore_douyin_stranger_message_takeover_attempts()
 bootstrap_douyin_stranger_message_seen_records()
 restore_douyin_mention_self_video_cache()
 
@@ -6058,7 +6168,7 @@ def douyin_video_comment_mode_label(mode: Optional[str]) -> str:
 
 def normalize_douyin_stranger_reply_mode(value: Optional[str]) -> str:
     mode = str(value or "fixed").strip().lower()
-    if mode in {"fixed", "ai_lead", "ai_auto"}:
+    if mode in {"fixed", "ai_lead", "ai_auto", "ai_memory"}:
         return mode
     return "ai_auto"
 
@@ -6069,6 +6179,7 @@ def douyin_stranger_reply_mode_label(mode: Optional[str]) -> str:
         "fixed": "固定文案",
         "ai_lead": "AI 引导加微信",
         "ai_auto": "AI 自动回复",
+        "ai_memory": "AI 记忆接管",
     }.get(normalized, "AI 自动回复")
 
 
@@ -6602,6 +6713,233 @@ def assign_douyin_interaction_fixed_messages(users: List[Dict], messages: List[s
         user["_interaction_fixed_message"] = messages[index % len(messages)]
 
 
+DOUYIN_TAKEOVER_FORBIDDEN_REPLY_FLAGS = (
+    "微信",
+    "绿泡泡",
+    "weixin",
+    "wechat",
+    "WeChat",
+    "微信号",
+    "加个微",
+    "扣扣",
+)
+
+
+def _douyin_takeover_memory_root() -> Optional[Path]:
+    """本机个人记忆（openclaw user_memory）根目录；取不到就返回 None。"""
+    try:
+        from backend.app.api.openclaw_memory import _USER_MEMORY_DIR  # type: ignore
+    except Exception:
+        return None
+    try:
+        root = Path(_USER_MEMORY_DIR)
+    except Exception:
+        return None
+    return root if root.is_dir() else None
+
+
+def _douyin_takeover_memory_docs(user_id: int) -> List[Dict]:
+    try:
+        from backend.app.api.openclaw_memory import _load_index  # type: ignore
+    except Exception:
+        return []
+    try:
+        docs = _load_index(int(user_id))
+    except Exception:
+        return []
+    return [doc for doc in docs if isinstance(doc, dict)]
+
+
+def _douyin_takeover_memory_doc_id(doc: Dict) -> str:
+    payload = doc if isinstance(doc, dict) else {}
+    return normalize_douyin_text(payload.get("id") or payload.get("doc_id") or "")
+
+
+def _douyin_takeover_memory_user_dirs() -> List[Path]:
+    root = _douyin_takeover_memory_root()
+    if root is None:
+        return []
+    try:
+        entries = [entry for entry in root.glob("user_*") if entry.is_dir()]
+    except Exception:
+        return []
+
+    def sort_key(entry: Path) -> float:
+        try:
+            return float((entry / "index.json").stat().st_mtime)
+        except Exception:
+            return 0.0
+
+    return sorted(entries, key=sort_key, reverse=True)
+
+
+def resolve_douyin_takeover_memory_user_id(selected_doc_ids: Optional[List[str]] = None) -> Optional[int]:
+    """按选中的记忆文件反查它属于哪个本机账号目录。
+
+    后台循环没有请求上下文、拿不到登录态里的 user_id，所以这里扫
+    ``openclaw/user_memory/user_*``：命中选中资料的目录就是它；没给资料时
+    退回最近更新的目录。
+    """
+    wanted = [normalize_douyin_text(item) for item in (selected_doc_ids or []) if normalize_douyin_text(item)]
+    wanted_set = set(wanted)
+    fallback: Optional[int] = None
+    for entry in _douyin_takeover_memory_user_dirs():
+        try:
+            user_id = int(str(entry.name).split("_", 1)[1] or 0)
+        except Exception:
+            continue
+        if user_id <= 0:
+            continue
+        if fallback is None:
+            fallback = user_id
+        if not wanted_set:
+            return user_id
+        doc_ids = {_douyin_takeover_memory_doc_id(doc) for doc in _douyin_takeover_memory_docs(user_id)}
+        if wanted_set & doc_ids:
+            return user_id
+    return None if wanted_set else fallback
+
+
+def load_douyin_takeover_memory_context(
+    selected_doc_ids: Optional[List[str]] = None,
+    *,
+    user_id: Optional[int] = None,
+    max_chars: int = DOUYIN_STRANGER_MESSAGE_TAKEOVER_MEMORY_MAX_CHARS,
+) -> Dict[str, object]:
+    """读取用户选中的「百问百答」类记忆文件，拼成给 AI 的资料块。"""
+    wanted = [normalize_douyin_text(item) for item in (selected_doc_ids or []) if normalize_douyin_text(item)]
+    empty: Dict[str, object] = {
+        "text": "",
+        "document_count": 0,
+        "titles": [],
+        "user_id": int(user_id or 0) or None,
+    }
+    if not wanted:
+        return empty
+    resolved_user_id = int(user_id or 0) or int(resolve_douyin_takeover_memory_user_id(wanted) or 0)
+    if resolved_user_id <= 0:
+        return empty
+    try:
+        from backend.app.api.openclaw_memory import _read_canonical_memory_content  # type: ignore
+    except Exception:
+        return empty
+    wanted_set = set(wanted)
+    docs = [
+        doc
+        for doc in _douyin_takeover_memory_docs(resolved_user_id)
+        if _douyin_takeover_memory_doc_id(doc) in wanted_set
+    ]
+    docs.sort(key=lambda doc: wanted.index(_douyin_takeover_memory_doc_id(doc)))
+    parts: List[str] = []
+    titles: List[str] = []
+    used = 0
+    for doc in docs[:3]:
+        remaining = int(max_chars) - used
+        if remaining <= 0:
+            break
+        title = normalize_douyin_text(doc.get("title") or doc.get("filename") or "记忆资料") or "记忆资料"
+        try:
+            text = str(_read_canonical_memory_content(doc, max_chars=min(5000, remaining)) or "").strip()
+        except Exception:
+            text = ""
+        if not text:
+            continue
+        block = f"## {title}\n{text}"
+        parts.append(block)
+        titles.append(title[:120])
+        used += len(block)
+    return {
+        "text": "\n\n---\n\n".join(parts).strip()[: int(max_chars)],
+        "document_count": len(titles),
+        "titles": titles,
+        "user_id": resolved_user_id,
+    }
+
+
+def build_douyin_takeover_conversation_context(row: Dict, *, limit: int = 8) -> str:
+    """把已经打开的会话气泡拼成「对话上下文」，供记忆接管生成回复。"""
+    payload = row if isinstance(row, dict) else {}
+    lines: List[str] = []
+    messages = payload.get("messages")
+    if isinstance(messages, list):
+        for item in messages[-max(1, int(limit or 8)) :]:
+            if not isinstance(item, dict):
+                continue
+            text = clean_douyin_video_comment_text(item.get("text") or "", limit=60)
+            if not text:
+                continue
+            direction = str(item.get("direction") or "").strip().lower()
+            if direction:
+                is_incoming = direction == "incoming"
+            else:
+                is_incoming = bool(item.get("is_incoming"))
+            lines.append(f"{'对方' if is_incoming else '我'}：{text}")
+    if not lines:
+        incoming = clean_douyin_video_comment_text(
+            payload.get("incoming_message") or payload.get("preview_text") or "",
+            limit=120,
+        )
+        if incoming:
+            lines.append(f"对方：{incoming}")
+    return "\n".join(lines)
+
+
+def generate_douyin_takeover_memory_reply(
+    row: Dict,
+    *,
+    memory_context: str = "",
+    prompt_text: str = "",
+) -> str:
+    """循环接管：只依据记忆文件 + 会话上下文回复，不拉群、不引导加联系方式。"""
+    memory_text = str(memory_context or "").strip()
+    if not memory_text:
+        raise RuntimeError("没有可用的记忆文件内容，无法生成接管回复。")
+    payload = row if isinstance(row, dict) else {}
+    username = normalize_douyin_text(payload.get("username", ""))
+    latest = clean_douyin_video_comment_text(
+        payload.get("incoming_message") or payload.get("preview_text") or "",
+        limit=200,
+    )
+    conversation = build_douyin_takeover_conversation_context(payload)
+    direction = clean_douyin_video_comment_text(prompt_text, limit=200)
+    system_prompt = (
+        "你正在用抖音私信和一位潜在客户聊天，你就是本人，不是客服系统。\n"
+        "回复必须遵守：\n"
+        "1. 只依据下面给出的『参考记忆资料』和『对话上下文』回答；资料里没有的信息不要编造、不要承诺。\n"
+        "2. 资料里有对应答案时，用你自己的话简短复述要点，可以保留关键数字和承诺，但不要整段照抄。\n"
+        "3. 资料里没有答案时，就自然回应当前这句，并引导对方多说一点需求，不要瞎猜。\n"
+        "4. 只输出 1 到 2 行中文，每行一条短消息，单行最多 40 个字符。\n"
+        "5. 不要提 AI、系统、机器人、模板、引流这类词，不要让人看出是机器人在回复。\n"
+        "6. 不要主动提微信、绿泡泡、微信号、QQ 等任何联系方式，也不要引导对方换平台沟通。\n"
+        "7. 语气自然、像真人打字，不要长篇大论，不要营销腔。\n"
+        "8. 如果给了补充方向，必须优先遵守。"
+    )
+    user_prompt = (
+        f"客户昵称：{username or '未知'}\n"
+        f"对方最新私信：{latest or '未知'}\n"
+        f"补充方向（高优先级）：{direction or '围绕记忆资料回答问题，自然承接对话'}\n\n"
+        f"对话上下文（越靠后越新）：\n{conversation or '（本轮刚建立联系，没有更早的上下文）'}\n\n"
+        f"参考记忆资料：\n{memory_text}\n\n"
+        "请只输出 1 到 2 行简短回复，每行一句。"
+    )
+    ai_text = request_douyin_ai_comment(system_prompt, user_prompt, max_tokens=320, response_limit=200)
+    lines: List[str] = []
+    seen: Set[str] = set()
+    for raw_line in str(ai_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = clean_douyin_message_line(raw_line, limit=48)
+        if not line or line in seen:
+            continue
+        if any(flag in line for flag in DOUYIN_TAKEOVER_FORBIDDEN_REPLY_FLAGS):
+            continue
+        seen.add(line)
+        lines.append(line)
+        if len(lines) >= 2:
+            break
+    if not lines:
+        raise RuntimeError("AI 生成的接管回复不可用，本轮放弃发送，等下一轮。")
+    return "\n".join(lines)
+
+
 def generate_douyin_stranger_reply_message(
     row: Dict,
     *,
@@ -6609,6 +6947,7 @@ def generate_douyin_stranger_reply_message(
     fixed_text: str = "",
     prompt_text: str = "",
     contact_value: str = "",
+    memory_context: str = "",
 ) -> str:
     normalized = normalize_douyin_stranger_reply_mode(mode)
     if normalized == "fixed":
@@ -6616,6 +6955,13 @@ def generate_douyin_stranger_reply_message(
         if not final_text:
             raise RuntimeError("固定引流文案为空，无法执行。")
         return final_text
+
+    if normalized == "ai_memory":
+        return generate_douyin_takeover_memory_reply(
+            row,
+            memory_context=memory_context,
+            prompt_text=prompt_text,
+        )
 
     if normalized == "ai_auto":
         incoming_message = clean_douyin_video_comment_text(
@@ -13742,6 +14088,10 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
     reply_message = str(state.get("reply_message", "") or "").strip()
     reply_prompt = str(state.get("reply_prompt", "") or "").strip()
     contact_value = str(state.get("contact_value", "") or "").strip()
+    memory_doc_ids = [
+        str(item or "").strip() for item in (state.get("memory_doc_ids") or []) if str(item or "").strip()
+    ]
+    memory_user_id = int(state.get("memory_user_id", 0) or 0) or None
     wechat_add_friend_enabled = bool(state.get("wechat_add_friend_enabled", False))
     config = load_global_config()
     account = get_douyin_account_by_id(account_id, config) if account_id > 0 else get_active_douyin_account(config)
@@ -13807,6 +14157,217 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
             f"[抖音陌生人消息监控] 开始检查，账号 {account['id']}，最多 {max_conversations} 条，浏览器模式：{'显示窗口' if show_browser else '无头运行'}",
             "info",
         )
+        takeover_reply = bool(reply_mode == "ai_memory" and auto_reply_enabled)
+        takeover_memory: Dict[str, object] = {
+            "text": "",
+            "document_count": 0,
+            "titles": [],
+            "user_id": memory_user_id,
+        }
+        takeover_stats: Dict[str, int] = {
+            "total": 0,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "skipped": 0,
+        }
+        takeover_retry_pending_keys: Set[str] = set()
+        takeover_collect_kwargs: Dict[str, object] = {}
+        if takeover_reply:
+            if not memory_doc_ids:
+                schedule_next_douyin_stranger_message_monitor_run(account_id, started_at)
+                message = "AI 记忆接管还没选记忆文件，请先在页面上选一个记忆文件再开启。"
+                state.update(
+                    {
+                        "running": False,
+                        "last_cycle_status": "skipped",
+                        "last_skip_reason": "takeover_memory_missing",
+                        "message": message,
+                    }
+                )
+                douyin_log(f"[抖音陌生人消息监控] {message}", "warning")
+                return {"status": "skipped", "message": message}
+            takeover_memory = await asyncio.to_thread(
+                load_douyin_takeover_memory_context,
+                memory_doc_ids,
+                user_id=memory_user_id,
+            )
+            if not str(takeover_memory.get("text") or "").strip():
+                schedule_next_douyin_stranger_message_monitor_run(account_id, started_at)
+                message = "AI 记忆接管选中的记忆文件读不到内容，本轮已跳过，请重新选择记忆文件。"
+                state.update(
+                    {
+                        "running": False,
+                        "last_cycle_status": "skipped",
+                        "last_skip_reason": "takeover_memory_unreadable",
+                        "message": message,
+                    }
+                )
+                douyin_log(f"[抖音陌生人消息监控] {message}", "warning")
+                return {"status": "skipped", "message": message}
+            resolved_memory_user_id = int(takeover_memory.get("user_id") or 0) or 0
+            if resolved_memory_user_id > 0:
+                state["memory_user_id"] = resolved_memory_user_id
+            douyin_log(
+                "[抖音陌生人消息监控] 记忆接管已加载记忆文件："
+                f"{'、'.join(str(item) for item in (takeover_memory.get('titles') or [])) or '未命名'}"
+                f"（{len(str(takeover_memory.get('text') or ''))} 字）",
+                "info",
+            )
+
+            def should_read_takeover_detail(candidate: Dict) -> bool:
+                """只给「真的要回复」的会话开详情页，避免每轮白开上百个会话。"""
+                probe = normalize_douyin_stranger_message_row({**candidate, "account_id": account["id"]})
+                if not is_douyin_stranger_message_unread_row(probe):
+                    return False
+                fingerprints = stranger_message_seen_fingerprints(probe, account["id"])
+                seen_bucket = douyin_stranger_message_seen_records.get(str(account["id"])) or {}
+                if fingerprints and any(fingerprint in seen_bucket for fingerprint in fingerprints):
+                    return False
+                attempt = get_douyin_takeover_attempt(account["id"], probe)
+                return int(attempt.get("attempts", 0) or 0) < DOUYIN_STRANGER_MESSAGE_TAKEOVER_MAX_ATTEMPTS
+
+            async def handle_takeover_row(candidate: Dict, page) -> Dict:
+                row = normalize_douyin_stranger_message_row({**candidate, "account_id": account["id"]})
+                if not should_read_takeover_detail(row):
+                    return row
+                row_key = stranger_message_row_key(row)
+                username = normalize_douyin_text(row.get("username", ""))
+                if str(row.get("detail_read_status") or "").strip().lower() == "failed":
+                    error_text = normalize_douyin_text(row.get("detail_read_error", "")) or "会话详情读取失败"
+                    attempts = record_douyin_takeover_attempt(account["id"], row, error=error_text)
+                    retry_pending = attempts < DOUYIN_STRANGER_MESSAGE_TAKEOVER_MAX_ATTEMPTS
+                    if retry_pending and row_key:
+                        takeover_retry_pending_keys.add(row_key)
+                    takeover_stats["processed"] += 1
+                    takeover_stats["failed"] += 1
+                    row.update({"reply_status": "failed", "reply_error": error_text})
+                    update_douyin_stranger_message_rows(
+                        [row],
+                        status="failed",
+                        error=error_text,
+                        message="",
+                        account_id=account["id"],
+                    )
+                    douyin_log(
+                        f"[抖音陌生人消息监控] 记忆接管读取会话失败：{username or '未知会话'}，原因：{error_text}"
+                        f"（第 {attempts} 次{'' if retry_pending else '，已达上限不再重试'}）",
+                        "warning",
+                    )
+                    return row
+                if row.get("last_message_is_user") is False or not bool(row.get("has_user_message")):
+                    # 最后一条不是客户发的（例如红点是旧的），不回复也不重试。
+                    takeover_stats["skipped"] += 1
+                    row["reply_status"] = "skipped"
+                    update_douyin_stranger_message_rows(
+                        [row],
+                        status="skipped",
+                        error="",
+                        message="",
+                        account_id=account["id"],
+                    )
+                    return row
+                attempt = get_douyin_takeover_attempt(account["id"], row)
+                if int(attempt.get("attempts", 0) or 0) >= DOUYIN_STRANGER_MESSAGE_TAKEOVER_MAX_ATTEMPTS:
+                    return row
+                takeover_stats["total"] += 1
+                item_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                state.update(
+                    {
+                        "running": True,
+                        "phase": "takeover_reply",
+                        "message": f"记忆接管正在回复 {username or '当前会话'}",
+                    }
+                )
+                try:
+                    final_message = await asyncio.to_thread(
+                        generate_douyin_stranger_reply_message,
+                        row,
+                        mode="ai_memory",
+                        prompt_text=reply_prompt,
+                        memory_context=str(takeover_memory.get("text") or ""),
+                    )
+                except Exception as exc:
+                    error_text = str(exc)
+                    attempts = record_douyin_takeover_attempt(account["id"], row, error=error_text)
+                    retry_pending = attempts < DOUYIN_STRANGER_MESSAGE_TAKEOVER_MAX_ATTEMPTS
+                    if retry_pending and row_key:
+                        takeover_retry_pending_keys.add(row_key)
+                    takeover_stats["processed"] += 1
+                    takeover_stats["failed"] += 1
+                    row.update({"reply_status": "failed", "reply_error": error_text})
+                    update_douyin_stranger_message_rows(
+                        [row],
+                        status="failed",
+                        error=error_text,
+                        message="",
+                        account_id=account["id"],
+                        started_at=item_started_at,
+                        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    douyin_log(
+                        f"[抖音陌生人消息监控] 记忆接管生成回复失败：{username or '未知会话'}，原因：{error_text}"
+                        f"（第 {attempts} 次{'' if retry_pending else '，已达上限不再重试'}）",
+                        "error",
+                    )
+                    return row
+                try:
+                    await scraper.send_open_chat_message(
+                        page,
+                        final_message,
+                        logger=douyin_log,
+                        username=username,
+                    )
+                except Exception as exc:
+                    error_text = str(exc)
+                    attempts = record_douyin_takeover_attempt(account["id"], row, error=error_text)
+                    retry_pending = attempts < DOUYIN_STRANGER_MESSAGE_TAKEOVER_MAX_ATTEMPTS
+                    if retry_pending and row_key:
+                        takeover_retry_pending_keys.add(row_key)
+                    takeover_stats["processed"] += 1
+                    takeover_stats["failed"] += 1
+                    row.update({"reply_status": "failed", "reply_error": error_text, "reply_message": final_message})
+                    update_douyin_stranger_message_rows(
+                        [row],
+                        status="failed",
+                        error=error_text,
+                        message=final_message,
+                        account_id=account["id"],
+                        started_at=item_started_at,
+                        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    douyin_log(
+                        f"[抖音陌生人消息监控] 记忆接管发送失败：{username or '未知会话'}，原因：{error_text}"
+                        f"（第 {attempts} 次{'' if retry_pending else '，已达上限不再重试'}）",
+                        "error",
+                    )
+                    return row
+                takeover_retry_pending_keys.discard(row_key)
+                clear_douyin_takeover_attempt(account["id"], row)
+                takeover_stats["processed"] += 1
+                takeover_stats["success"] += 1
+                row.update({"reply_status": "sent", "reply_error": "", "reply_message": final_message})
+                update_douyin_stranger_message_rows(
+                    [row],
+                    status="sent",
+                    error="",
+                    message=final_message,
+                    account_id=account["id"],
+                    started_at=item_started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                douyin_log(
+                    f"[抖音陌生人消息监控] 记忆接管已回复 {username or '未知会话'}：{final_message}",
+                    "success",
+                )
+                return row
+
+            takeover_collect_kwargs = {
+                "include_details": True,
+                "should_read_detail": should_read_takeover_detail,
+                "item_callback": handle_takeover_row,
+            }
+
         rows = await scraper.collect_stranger_private_messages(
             max_conversations=max_conversations,
             should_stop=lambda: False,
@@ -13814,9 +14375,10 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
             progress_callback=lambda processed, total, username: state.update(
                 {
                     "running": True,
-                    "message": f"账号 {account['id']} 监控检查中，已读取 {processed}/{total} 条，会优先识别带未读红点的会话，当前 {normalize_douyin_text(username)}",
+                    "message": f"账号 {account['id']} 后台检查中，已读取 {processed}/{total} 条会话，正在识别有未读红点的会话，当前 {normalize_douyin_text(username)}",
                 }
             ),
+            **takeover_collect_kwargs,
         )
         changed = merge_douyin_stranger_message_results(account["id"], rows)
         unread_rows = [
@@ -13839,7 +14401,7 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
             "failed": 0,
             "stopped": False,
         }
-        if auto_reply_enabled and unseen_rows:
+        if auto_reply_enabled and unseen_rows and not takeover_reply:
             auto_reply_total = len(unseen_rows)
             queued_message = (
                 reply_message
@@ -13878,13 +14440,38 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
             if wechat_add_friend_enabled
             else {"enabled": False, "queued": False, "targets": [], "reason": "disabled"}
         )
+        if takeover_reply:
+            auto_reply_result = {
+                "total": int(takeover_stats.get("total", 0)),
+                "processed": int(takeover_stats.get("processed", 0)),
+                "success": int(takeover_stats.get("success", 0)),
+                "failed": int(takeover_stats.get("failed", 0)),
+                "stopped": False,
+            }
         # Mark the unread snapshot only after this cycle has completed its
-        # reply and optional friend-add submission.
-        mark_douyin_stranger_message_rows_seen(account["id"], unread_rows)
+        # reply and optional friend-add submission. 记忆接管里生成/发送失败的会话
+        # 不记入去重指纹，下一轮继续重试，直到成功或达到重试上限。
+        rows_to_mark_seen = unread_rows
+        if takeover_reply:
+            rows_to_mark_seen = [
+                row
+                for row in unread_rows
+                if stranger_message_row_key(row) not in takeover_retry_pending_keys
+            ]
+        mark_douyin_stranger_message_rows_seen(account["id"], rows_to_mark_seen)
         schedule_next_douyin_stranger_message_monitor_run(account_id, started_at)
         auto_reply_suffix = ""
         if auto_reply_enabled:
-            if unseen_rows:
+            if takeover_reply:
+                success_count = int(auto_reply_result.get("success", 0))
+                failed_count = int(auto_reply_result.get("failed", 0))
+                memory_titles = "、".join(str(item) for item in (takeover_memory.get("titles") or [])) or "未命名记忆文件"
+                auto_reply_suffix = (
+                    f"，按记忆文件《{memory_titles}》回复 {success_count} 条"
+                    f"{f'，失败 {failed_count} 条' if failed_count > 0 else ''}"
+                    f"{f'，{len(takeover_retry_pending_keys)} 条下一轮重试' if takeover_retry_pending_keys else ''}"
+                )
+            elif unseen_rows:
                 success_count = int(auto_reply_result.get("success", 0))
                 failed_count = int(auto_reply_result.get("failed", 0))
                 auto_reply_suffix = (
@@ -17823,6 +18410,8 @@ async def douyin_save_stranger_message_monitor_config(request: Optional[dict] = 
             "reply_message": reply_message,
             "reply_prompt": payload.get("reply_prompt", existing.get("reply_prompt", "")),
             "contact_value": payload.get("contact_value", existing.get("contact_value", "")),
+            "memory_doc_ids": payload.get("memory_doc_ids", existing.get("memory_doc_ids", [])),
+            "memory_user_id": payload.get("memory_user_id", existing.get("memory_user_id")),
             "wechat_add_friend_enabled": payload.get(
                 "wechat_add_friend_enabled",
                 existing.get("wechat_add_friend_enabled", False),
@@ -17865,9 +18454,32 @@ async def douyin_start_stranger_message_monitor(http_request: Request = None, re
     reply_prompt = str(payload.get("reply_prompt", "") or "").strip()
     contact_value = str(payload.get("contact_value", "") or "").strip()
     wechat_add_friend_enabled = bool(payload.get("wechat_add_friend_enabled", False))
+    memory_doc_ids = [
+        str(item or "").strip() for item in (payload.get("memory_doc_ids") or []) if str(item or "").strip()
+    ][:3]
+    memory_user_id = int(payload.get("memory_user_id", 0) or 0) or None
     if auto_reply_enabled:
         if reply_mode == "fixed" and not reply_message:
             reply_mode = "ai_auto"
+        if reply_mode == "ai_memory":
+            if not memory_doc_ids:
+                return {
+                    "code": 400,
+                    "msg": "开启记忆接管前，请先选择一个用于回复的记忆文件（例如「百问百答」）。",
+                }
+            if not douyin_ai_available(config, http_request):
+                return {"code": 400, "msg": "当前还没有配置 AI 接口 Key，暂时不能开启 AI 记忆接管。"}
+            memory_preview = await asyncio.to_thread(
+                load_douyin_takeover_memory_context,
+                memory_doc_ids,
+                user_id=memory_user_id,
+            )
+            if not str(memory_preview.get("text") or "").strip():
+                return {
+                    "code": 400,
+                    "msg": "选中的记忆文件读不到内容，请重新选择，或先在个人设置里上传这份资料。",
+                }
+            memory_user_id = int(memory_preview.get("user_id") or 0) or memory_user_id
         if reply_mode == "ai_lead":
             if not contact_value:
                 return {"code": 400, "msg": "开启监控自动回复前，请先填写绿泡泡联系方式。"}
@@ -17889,6 +18501,8 @@ async def douyin_start_stranger_message_monitor(http_request: Request = None, re
             "reply_prompt": reply_prompt,
             "contact_value": contact_value,
             "wechat_add_friend_enabled": wechat_add_friend_enabled,
+            "memory_doc_ids": memory_doc_ids,
+            "memory_user_id": memory_user_id,
             "source": "online_monitor",
             "last_error": "",
             "last_skip_reason": "",
@@ -17911,6 +18525,7 @@ async def douyin_start_stranger_message_monitor(http_request: Request = None, re
             f"陌生人消息监控已开启，账号 {target_account_id} 会每 {interval_minutes} 分钟自动进入“陌生人消息”列表检查一次；"
             f"如果当前有其他抖音任务，本轮会自动跳过。"
             f"{' 发现带未读红点的新增陌生人消息后会自动逐个回复新会话。' if auto_reply_enabled else ' 当前只监控带未读红点的新会话，不自动回复。'}"
+            f"{' AI 记忆接管只按你选的记忆文件回复：不拉群、不主动发联系方式。' if auto_reply_enabled and reply_mode == 'ai_memory' else ''}"
         ),
         "monitor": state,
         "monitors": list_douyin_stranger_message_monitor_states(),

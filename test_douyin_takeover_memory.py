@@ -1,0 +1,356 @@
+"""抖音私信循环接管（AI 记忆接管）：只按记忆文件 + 会话上下文回复，不拉群、不引导加微信。"""
+import asyncio
+import sys
+from pathlib import Path
+
+
+DOUYIN_ORIGIN_ROOT = Path(__file__).resolve().parent / "backend" / "douyin_origin"
+sys.path.insert(0, str(DOUYIN_ORIGIN_ROOT))
+
+import douyin_api  # noqa: E402
+from douyin_api import (  # noqa: E402
+    generate_douyin_stranger_reply_message,
+    normalize_douyin_stranger_message_monitor_state,
+    normalize_douyin_stranger_reply_mode,
+    douyin_stranger_reply_mode_label,
+)
+
+
+MEMORY_TEXT = "## 百问百答\n问：多少钱？\n答：基础版 999 元，包含拍摄和剪辑。"
+
+
+def _account():
+    return {"id": 5, "status": "online", "port": 9336}
+
+
+def _row(**extra):
+    row = {
+        "account_id": 5,
+        "conversation_key": "conv-takeover-1",
+        "username": "小亮",
+        "incoming_message": "你们这个多少钱",
+        "unread_count": 1,
+        "is_unread": True,
+        "time_text": "刚刚",
+    }
+    row.update(extra)
+    return row
+
+
+def test_ai_memory_mode_is_recognized():
+    assert normalize_douyin_stranger_reply_mode("ai_memory") == "ai_memory"
+    assert douyin_stranger_reply_mode_label("ai_memory") == "AI 记忆接管"
+
+
+def test_monitor_state_keeps_selected_memory_doc():
+    state = normalize_douyin_stranger_message_monitor_state(
+        {
+            "reply_mode": "ai_memory",
+            "memory_doc_ids": ["faq", "faq", "  额外  ", ""],
+            "memory_user_id": 1,
+        },
+        account_id=5,
+    )
+
+    assert state["reply_mode"] == "ai_memory"
+    assert state["memory_doc_ids"] == ["faq", "额外"]
+    assert state["memory_user_id"] == 1
+
+
+def test_takeover_reply_uses_memory_and_conversation_context(monkeypatch):
+    captured = {}
+
+    def fake_ai(system_prompt, user_prompt, **kwargs):
+        captured["system_prompt"] = system_prompt
+        captured["user_prompt"] = user_prompt
+        return "我们在做这个\n加个微信详聊"
+
+    monkeypatch.setattr(douyin_api, "request_douyin_ai_comment", fake_ai)
+
+    result = generate_douyin_stranger_reply_message(
+        _row(
+            messages=[
+                {"text": "在吗", "is_incoming": True},
+                {"text": "在的", "is_incoming": False},
+                {"text": "你们这个多少钱", "is_incoming": True},
+            ]
+        ),
+        mode="ai_memory",
+        prompt_text="回答价格问题，别报价太硬",
+        memory_context=MEMORY_TEXT,
+    )
+
+    # 命中记忆资料的内容可以回，引导加微信那条必须被丢掉。
+    assert result.splitlines() == ["我们在做这个"]
+    assert MEMORY_TEXT in captured["user_prompt"]
+    assert "对方：你们这个多少钱" in captured["user_prompt"]
+    assert "我：在的" in captured["user_prompt"]
+    assert "回答价格问题，别报价太硬" in captured["user_prompt"]
+    # 提示词里只能是"不许引导加微信"，不能出现旧的"强制补上绿泡泡"逻辑。
+    assert "麻烦您绿泡泡" not in captured["system_prompt"]
+    assert "不要主动提微信" in captured["system_prompt"]
+    assert "不要引导对方换平台沟通" in captured["system_prompt"]
+
+
+def test_takeover_reply_requires_memory_content():
+    try:
+        generate_douyin_stranger_reply_message(_row(), mode="ai_memory", memory_context="")
+    except RuntimeError as exc:
+        assert "记忆文件" in str(exc)
+    else:
+        raise AssertionError("没有记忆内容时不应该生成接管回复")
+
+
+def _install_takeover_harness(monkeypatch, rows, *, ai_reply="基础版 999 元，含拍摄和剪辑"):
+    """装一套接管循环用的假环境，返回收集到的调用记录。"""
+    account = _account()
+    record = {"sent": [], "collect_kwargs": [], "seen": [], "ai_calls": 0}
+    stored_rows = []
+
+    def fake_ai(system_prompt, user_prompt, **kwargs):
+        record["ai_calls"] += 1
+        if isinstance(ai_reply, Exception):
+            raise ai_reply
+        return ai_reply
+
+    class FakeScraper:
+        async def collect_stranger_private_messages(self, **kwargs):
+            record["collect_kwargs"].append(kwargs)
+            results = []
+            for raw in rows:
+                if kwargs.get("should_read_detail") and not kwargs["should_read_detail"](raw):
+                    continue
+                merged = dict(raw)
+                if kwargs.get("include_details"):
+                    merged.update(
+                        {
+                            "detail_read_status": "ok",
+                            "messages": [{"text": raw.get("incoming_message", ""), "is_incoming": True}],
+                            "last_message_is_user": True,
+                            "has_user_message": True,
+                        }
+                    )
+                if kwargs.get("item_callback"):
+                    result = await kwargs["item_callback"](merged, object())
+                    if isinstance(result, dict):
+                        merged.update(result)
+                results.append(merged)
+            return results
+
+        async def send_open_chat_message(self, page, message, **kwargs):
+            record["sent"].append({"username": kwargs.get("username"), "message": message})
+            return {"success": True, "messages": [message], "message_count": 1}
+
+        async def close(self):
+            return None
+
+    def store(account_id, incoming):
+        by_key = {
+            douyin_api.stranger_message_row_key(item): dict(item)
+            for item in stored_rows
+            if douyin_api.stranger_message_row_key(item)
+        }
+        for item in incoming:
+            normalized = douyin_api.normalize_douyin_stranger_message_row({**item, "account_id": account_id})
+            by_key[douyin_api.stranger_message_row_key(normalized)] = normalized
+        stored_rows[:] = list(by_key.values())
+        return len(stored_rows)
+
+    def mark_seen(account_id, incoming):
+        record["seen"].extend(
+            douyin_api.stranger_message_row_key(item) for item in (incoming or [])
+        )
+        return len(incoming or [])
+
+    monkeypatch.setattr(douyin_api, "load_global_config", lambda: {"douyin_accounts": [account]})
+    monkeypatch.setattr(douyin_api, "get_douyin_account_by_id", lambda account_id, config: account)
+    monkeypatch.setattr(douyin_api, "is_douyin_stranger_message_monitor_busy", lambda account_id: (False, ""))
+    monkeypatch.setattr(douyin_api, "create_douyin_message_scraper", lambda account, config: FakeScraper())
+    monkeypatch.setattr(douyin_api, "collect_douyin_stranger_message_results", lambda account_id=0: list(stored_rows))
+    monkeypatch.setattr(douyin_api, "merge_douyin_stranger_message_results", store)
+    monkeypatch.setattr(douyin_api, "mark_douyin_stranger_message_rows_seen", mark_seen)
+    monkeypatch.setattr(douyin_api, "save_douyin_stranger_message_results", lambda: None)
+    monkeypatch.setattr(douyin_api, "save_douyin_stranger_message_seen_records", lambda: None)
+    monkeypatch.setattr(douyin_api, "save_douyin_stranger_message_takeover_attempts", lambda: None)
+    monkeypatch.setattr(douyin_api, "save_douyin_stranger_message_monitor_config", lambda: None)
+    monkeypatch.setattr(douyin_api, "schedule_next_douyin_stranger_message_monitor_run", lambda *a, **k: "")
+    monkeypatch.setattr(
+        douyin_api,
+        "load_douyin_takeover_memory_context",
+        lambda doc_ids, **kwargs: {
+            "text": MEMORY_TEXT,
+            "document_count": 1,
+            "titles": ["百问百答 FAQ"],
+            "user_id": 1,
+        },
+    )
+    monkeypatch.setattr(douyin_api, "request_douyin_ai_comment", fake_ai)
+    monkeypatch.setattr(douyin_api, "douyin_stranger_message_seen_records", {})
+    monkeypatch.setattr(douyin_api, "douyin_stranger_message_takeover_attempts", {})
+
+    state = normalize_douyin_stranger_message_monitor_state(
+        {
+            "enabled": True,
+            "explicitly_started": True,
+            "reply_mode": "ai_memory",
+            "auto_reply_enabled": True,
+            "memory_doc_ids": ["faq"],
+            "memory_user_id": 1,
+        },
+        account_id=5,
+    )
+    monkeypatch.setitem(douyin_api.douyin_stranger_message_monitor_states, "5", state)
+    return record, state, stored_rows
+
+
+def test_monitor_cycle_replies_inside_opened_conversation(monkeypatch):
+    record, state, stored_rows = _install_takeover_harness(monkeypatch, [_row()])
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("记忆接管不能走固定的私信群发通道")
+
+    monkeypatch.setattr(douyin_api, "send_douyin_stranger_messages_for_monitor", forbidden)
+
+    result = asyncio.run(douyin_api.run_douyin_stranger_message_monitor_cycle(5))
+
+    assert result["status"] == "completed"
+    assert record["collect_kwargs"][0]["include_details"] is True
+    assert "item_callback" in record["collect_kwargs"][0]
+    assert [item["message"] for item in record["sent"]] == ["基础版 999 元，含拍摄和剪辑"]
+    assert "绿泡泡" not in record["sent"][0]["message"]
+    key = douyin_api.stranger_message_row_key(douyin_api.normalize_douyin_stranger_message_row(_row()))
+    assert record["seen"] == [key]
+    assert stored_rows[0]["reply_status"] == "sent"
+    assert "百问百答 FAQ" in state["message"]
+
+
+def test_monitor_cycle_skips_rows_whose_last_message_is_ours(monkeypatch):
+    rows = [_row(last_message_is_user=None)]
+    record, _state, _stored = _install_takeover_harness(monkeypatch, rows)
+
+    class OwnLastScraper:
+        async def collect_stranger_private_messages(self, **kwargs):
+            merged = dict(rows[0])
+            merged.update(
+                {
+                    "detail_read_status": "ok",
+                    "messages": [{"text": "资料发你了", "is_incoming": False}],
+                    "last_message_is_user": False,
+                    "has_user_message": True,
+                }
+            )
+            if kwargs.get("item_callback"):
+                result = await kwargs["item_callback"](merged, object())
+                if isinstance(result, dict):
+                    merged.update(result)
+            return [merged]
+
+        async def send_open_chat_message(self, page, message, **kwargs):
+            record["sent"].append({"username": kwargs.get("username"), "message": message})
+            return {"success": True}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(douyin_api, "create_douyin_message_scraper", lambda account, config: OwnLastScraper())
+
+    result = asyncio.run(douyin_api.run_douyin_stranger_message_monitor_cycle(5))
+
+    assert result["status"] == "completed"
+    assert record["sent"] == []
+    assert record["ai_calls"] == 0
+    assert len(record["seen"]) == 1
+
+
+def test_failed_generation_is_retried_until_success(monkeypatch):
+    record, _state, _stored = _install_takeover_harness(
+        monkeypatch,
+        [_row()],
+        ai_reply=RuntimeError("AI 接口调用失败：HTTP 502"),
+    )
+
+    first = asyncio.run(douyin_api.run_douyin_stranger_message_monitor_cycle(5))
+
+    assert first["status"] == "completed"
+    assert record["sent"] == []
+    # 生成失败不记去重指纹，下一轮还会重试。
+    assert record["seen"] == []
+    assert douyin_api.douyin_stranger_message_takeover_attempts["5"]
+
+    monkeypatch.setattr(
+        douyin_api,
+        "request_douyin_ai_comment",
+        lambda system_prompt, user_prompt, **kwargs: "基础版 999 元，含拍摄和剪辑",
+    )
+    second = asyncio.run(douyin_api.run_douyin_stranger_message_monitor_cycle(5))
+
+    assert second["status"] == "completed"
+    assert [item["message"] for item in record["sent"]] == ["基础版 999 元，含拍摄和剪辑"]
+    assert len(record["seen"]) == 1
+    assert not douyin_api.douyin_stranger_message_takeover_attempts.get("5")
+
+
+def test_monitor_start_requires_memory_doc(monkeypatch):
+    account = _account()
+    monkeypatch.setattr(douyin_api, "load_global_config", lambda: {"douyin_accounts": [account]})
+    monkeypatch.setattr(douyin_api, "get_douyin_account_by_id", lambda account_id, config: account)
+    monkeypatch.setattr(douyin_api, "save_douyin_stranger_message_monitor_config", lambda: None)
+    monkeypatch.setattr(douyin_api, "douyin_ai_available", lambda config=None, request=None: True)
+
+    async def ensure_scheduler():
+        return None
+
+    monkeypatch.setattr(douyin_api, "ensure_douyin_stranger_message_monitor_scheduler", ensure_scheduler)
+    try:
+        missing = asyncio.run(
+            douyin_api.douyin_start_stranger_message_monitor(
+                request={"account_id": 5, "reply_mode": "ai_memory", "auto_reply_enabled": True}
+            )
+        )
+        assert missing["code"] == 400
+        assert "记忆文件" in missing["msg"]
+
+        monkeypatch.setattr(
+            douyin_api,
+            "load_douyin_takeover_memory_context",
+            lambda doc_ids, **kwargs: {
+                "text": MEMORY_TEXT,
+                "document_count": 1,
+                "titles": ["百问百答"],
+                "user_id": 1,
+            },
+        )
+        ok = asyncio.run(
+            douyin_api.douyin_start_stranger_message_monitor(
+                request={
+                    "account_id": 5,
+                    "reply_mode": "ai_memory",
+                    "auto_reply_enabled": True,
+                    "memory_doc_ids": ["faq"],
+                }
+            )
+        )
+    finally:
+        douyin_api.douyin_stranger_message_monitor_states.pop("5", None)
+
+    assert ok["code"] == 200
+    assert ok["monitor"]["reply_mode"] == "ai_memory"
+    assert ok["monitor"]["memory_doc_ids"] == ["faq"]
+    assert "记忆文件" in ok["msg"]
+
+
+def test_light_page_offers_memory_takeover_option():
+    root = Path(__file__).resolve().parent
+    html = (root / "static" / "douyin-origin" / "douyin-stranger-leads.html").read_text(encoding="utf-8")
+    script = (root / "static" / "douyin-origin" / "douyin-workbench-shared.js").read_text(encoding="utf-8")
+
+    assert '<option value="ai_memory">AI 记忆接管（循环按记忆文件回复）</option>' in html
+    assert 'id="stranger-message-memory-doc"' in html
+    assert "loadDouyinStrangerMemoryDocs" in html
+    assert '"/api/openclaw/memory/list"' in script
+    assert '"ai_memory"' in script
+    assert "memory_doc_ids:memoryDocId?[memoryDocId]:[]" in script
+    assert "isDouyinStrangerReplyReady()" in script
+    # 选中记忆文件就直接切到记忆接管，用户只需要选一个记忆文件。
+    assert "onDouyinStrangerMemoryDocChange" in html
+    assert 'el.value="ai_memory"' in script
