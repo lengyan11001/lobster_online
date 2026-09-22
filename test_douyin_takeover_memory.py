@@ -530,3 +530,54 @@ def test_online_memory_doc_selection_persists_and_shows_after_reload():
     assert "已选记忆文件" in js
     assert "select.value=current;" in js
     assert "row.params.memory_doc_ids=[memoryDocValue]" not in js.split("if (memoryDocValue)")[0][-200:]
+
+
+def test_h5_node_memory_falls_back_to_online_douyin_config(monkeypatch):
+    """工作流节点没带记忆文件时，用 Online「抖音获客」里选的那份。"""
+    record = _install_h5_task_harness(monkeypatch, [_h5_task_row()])
+    calls = []
+
+    def fake_load(doc_ids, **kwargs):
+        calls.append(list(doc_ids))
+        return {"text": MEMORY_TEXT, "document_count": 1, "titles": ["百问百答"], "user_id": 1}
+
+    monkeypatch.setattr(douyin_api, "load_douyin_takeover_memory_context", fake_load)
+    monkeypatch.setattr(
+        douyin_api,
+        "get_douyin_stranger_message_monitor_state",
+        lambda account_id, create=False: {"memory_doc_ids": ["online-faq"]},
+    )
+
+    result = asyncio.run(
+        douyin_api.run_douyin_h5_stranger_message_task_once(account_id=5, reply_mode="ai_memory")
+    )
+
+    assert calls == [["online-faq"]]
+    assert result["status"] == "completed"
+    assert result["memory_titles"] == ["百问百答"]
+    assert record["sent"] == ["基础版 999 元，含拍摄和剪辑"]
+
+
+def test_h5_node_memory_prefers_task_params_over_online_config(monkeypatch):
+    record = _install_h5_task_harness(monkeypatch, [_h5_task_row()])
+    calls = []
+
+    def fake_load(doc_ids, **kwargs):
+        calls.append(list(doc_ids))
+        return {"text": MEMORY_TEXT, "document_count": 1, "titles": ["百问百答"], "user_id": 1}
+
+    monkeypatch.setattr(douyin_api, "load_douyin_takeover_memory_context", fake_load)
+    monkeypatch.setattr(
+        douyin_api,
+        "get_douyin_stranger_message_monitor_state",
+        lambda account_id, create=False: {"memory_doc_ids": ["online-faq"]},
+    )
+
+    asyncio.run(
+        douyin_api.run_douyin_h5_stranger_message_task_once(
+            account_id=5, reply_mode="ai_memory", memory_doc_ids=["node-faq"]
+        )
+    )
+
+    assert calls == [["node-faq"]]
+    assert record["sent"] == ["基础版 999 元，含拍摄和剪辑"]
