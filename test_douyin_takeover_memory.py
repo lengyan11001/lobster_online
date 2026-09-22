@@ -354,3 +354,134 @@ def test_light_page_offers_memory_takeover_option():
     # 选中记忆文件就直接切到记忆接管，用户只需要选一个记忆文件。
     assert "onDouyinStrangerMemoryDocChange" in html
     assert 'el.value="ai_memory"' in script
+
+
+def _install_h5_task_harness(monkeypatch, rows, *, ai_reply="基础版 999 元，含拍摄和剪辑"):
+    """H5 一次性节点（工作流节点）用的假环境。"""
+    account = {"id": 5, "status": "online", "port": 9336}
+    record = {"sent": [], "ai_prompts": []}
+
+    def fake_ai(system_prompt, user_prompt, **kwargs):
+        record["ai_prompts"].append(user_prompt)
+        if isinstance(ai_reply, Exception):
+            raise ai_reply
+        return ai_reply
+
+    class FakeScraper:
+        async def collect_chat_page_private_messages(self, **kwargs):
+            return []
+
+        async def collect_stranger_private_messages(self, **kwargs):
+            results = []
+            for raw in rows:
+                merged = dict(raw)
+                if kwargs.get("item_callback"):
+                    result = await kwargs["item_callback"](merged, object())
+                    if isinstance(result, dict):
+                        merged.update(result)
+                results.append(merged)
+            return results
+
+        async def send_open_chat_message(self, page, message, **kwargs):
+            record["sent"].append(message)
+            return {"success": True, "messages": [message], "message_count": 1}
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(douyin_api, "load_global_config", lambda: {"douyin_accounts": [account]})
+    monkeypatch.setattr(douyin_api, "get_douyin_account_by_id", lambda account_id, config: account)
+    monkeypatch.setattr(douyin_api, "is_douyin_stranger_message_monitor_busy", lambda account_id: (False, ""))
+    monkeypatch.setattr(douyin_api, "create_douyin_message_scraper", lambda account, config: FakeScraper())
+    monkeypatch.setattr(douyin_api, "collect_douyin_stranger_message_results", lambda account_id=0: [])
+    monkeypatch.setattr(douyin_api, "merge_douyin_stranger_message_results", lambda account_id, incoming: len(incoming or []))
+    monkeypatch.setattr(douyin_api, "merge_douyin_inbox_results", lambda account_id, incoming: len(incoming or []))
+    monkeypatch.setattr(douyin_api, "save_douyin_stranger_message_results", lambda: None)
+    monkeypatch.setattr(douyin_api, "request_douyin_ai_comment", fake_ai)
+    monkeypatch.setattr(
+        douyin_api,
+        "load_douyin_takeover_memory_context",
+        lambda doc_ids, **kwargs: {
+            "text": MEMORY_TEXT,
+            "document_count": 1,
+            "titles": ["百问百答"],
+            "user_id": 1,
+        },
+    )
+    return record
+
+
+def _h5_task_row():
+    return {
+        "conversation_key": "h5-takeover-1",
+        "username": "小亮",
+        "incoming_message": "你们这个多少钱",
+        "preview_text": "你们这个多少钱",
+        "last_message_text": "你们这个多少钱",
+        "last_message_is_user": True,
+        "has_user_message": True,
+        "detail_read_status": "ok",
+        "messages": [{"text": "你们这个多少钱", "is_incoming": True}],
+    }
+
+
+def test_h5_node_memory_mode_replies_from_memory_file(monkeypatch):
+    record = _install_h5_task_harness(monkeypatch, [_h5_task_row()])
+
+    result = asyncio.run(
+        douyin_api.run_douyin_h5_stranger_message_task_once(
+            account_id=5,
+            reply_mode="ai_memory",
+            memory_context=MEMORY_TEXT,
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert result["reply_mode"] == "ai_memory"
+    assert record["sent"] == ["基础版 999 元，含拍摄和剪辑"]
+    assert "绿泡泡" not in record["sent"][0]
+    assert MEMORY_TEXT in record["ai_prompts"][0]
+    assert "对方：你们这个多少钱" in record["ai_prompts"][0]
+    assert result["reply"]["success"] == 1
+
+
+def test_h5_node_memory_mode_resolves_doc_ids_locally(monkeypatch):
+    record = _install_h5_task_harness(monkeypatch, [_h5_task_row()])
+    result = asyncio.run(
+        douyin_api.run_douyin_h5_stranger_message_task_once(
+            account_id=5,
+            reply_mode="ai_memory",
+            memory_doc_ids=["faq"],
+        )
+    )
+
+    assert result["status"] == "completed"
+    assert result["memory_titles"] == ["百问百答"]
+    assert record["sent"] == ["基础版 999 元，含拍摄和剪辑"]
+
+
+def test_h5_node_memory_mode_requires_memory_file(monkeypatch):
+    record = _install_h5_task_harness(monkeypatch, [_h5_task_row()])
+    monkeypatch.setattr(
+        douyin_api,
+        "load_douyin_takeover_memory_context",
+        lambda doc_ids, **kwargs: {"text": "", "document_count": 0, "titles": [], "user_id": None},
+    )
+
+    result = asyncio.run(
+        douyin_api.run_douyin_h5_stranger_message_task_once(account_id=5, reply_mode="ai_memory")
+    )
+
+    assert result["status"] == "failed"
+    assert result["code"] == 400
+    assert "记忆文件" in result["message"]
+    assert record["sent"] == []
+
+
+def test_h5_channel_passes_memory_takeover_mode():
+    root = Path(__file__).resolve().parent
+    source = (root / "backend" / "app" / "api" / "h5_chat_channel.py").read_text(encoding="utf-8")
+
+    assert 'if douyin_reply_mode not in {"fixed", "ai_lead", "ai_memory"}:' in source
+    assert "memory_context=_douyin_takeover_memory_text(source)" in source
+    assert "memory_doc_ids=_douyin_takeover_memory_doc_ids(source)" in source

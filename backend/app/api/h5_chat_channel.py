@@ -4433,6 +4433,32 @@ def _record_douyin_ai_keywords(keywords: List[str]) -> None:
     _save_douyin_ai_keyword_history(rows, last_used=keywords)
 
 
+_DOUYIN_TAKEOVER_MEMORY_MAX_CHARS = 6000
+
+
+def _douyin_takeover_memory_text(source: Dict[str, Any]) -> str:
+    """记忆接管：优先用节点带下来的记忆文件正文（工作流模板里选的那份）。"""
+    texts = _douyin_ai_memory_texts(source.get("memory_docs"))
+    return "\n\n---\n\n".join(texts).strip()[:_DOUYIN_TAKEOVER_MEMORY_MAX_CHARS]
+
+
+def _douyin_takeover_memory_doc_ids(source: Dict[str, Any]) -> List[str]:
+    """节点只带了 doc_id 时，交给客户端按本机记忆库解析正文。"""
+    raw = source.get("memory_doc_ids")
+    if not isinstance(raw, list):
+        raw = source.get("memory_docs")
+    ids: List[str] = []
+    rows = raw if isinstance(raw, list) else []
+    for item in rows:
+        if isinstance(item, dict):
+            value = str(item.get("doc_id") or item.get("id") or "").strip()
+        else:
+            value = str(item or "").strip()
+        if value and value not in ids:
+            ids.append(value)
+    return ids[:3]
+
+
 def _douyin_ai_memory_texts(value: Any) -> List[str]:
     rows = value if isinstance(value, list) else []
     texts: List[str] = []
@@ -7052,22 +7078,23 @@ async def _run_scheduled_douyin_sales_action(
         from douyin_api import run_douyin_h5_stranger_message_task_once  # type: ignore
 
         wechat_add_friend_enabled = bool(source.get("wechat_add_friend_enabled", False))
+        douyin_reply_mode = str(source.get("reply_mode") or "").strip().lower()
+        if douyin_reply_mode not in {"fixed", "ai_lead", "ai_memory"}:
+            douyin_reply_mode = "fixed"
         result = await run_douyin_h5_stranger_message_task_once(
             account_id=account_id,
             max_conversations=100,
             fixed_message=str(source.get("message") or "").strip(),
             auto_reply_enabled=bool(source.get("auto_reply_enabled", True)),
             wechat_add_friend_enabled=wechat_add_friend_enabled,
-            reply_mode=(
-                "ai_lead"
-                if str(source.get("reply_mode") or "").strip().lower() == "ai_lead"
-                else "fixed"
-            ),
+            reply_mode=douyin_reply_mode,
             reply_prompt=str(source.get("reply_prompt") or "").strip(),
             contact_value=str(source.get("contact_value") or "").strip(),
             wechat_add_friend_targets_source=str(
                 source.get("wechat_add_friend_targets_source") or ""
             ).strip(),
+            memory_context=_douyin_takeover_memory_text(source),
+            memory_doc_ids=_douyin_takeover_memory_doc_ids(source),
         )
         if not isinstance(result, dict):
             return {"code": 500, "msg": "抖音私信一次性任务执行失败"}

@@ -13520,6 +13520,8 @@ async def run_douyin_h5_stranger_message_task_once(
     reply_prompt: str = "",
     contact_value: str = "",
     wechat_add_friend_targets_source: str = "",
+    memory_context: str = "",
+    memory_doc_ids: Optional[List[str]] = None,
 ) -> Dict[str, object]:
     """Run the H5 Douyin private-message node once without enabling its monitor."""
     global douyin_stranger_message_running, douyin_stranger_message_stop_requested
@@ -13554,6 +13556,22 @@ async def run_douyin_h5_stranger_message_task_once(
                     "AI 线索模式缺少联系方式：请在节点里填写联系方式，"
                     "或把加好友来源改成「从抖音私信提取手机号」。"
                 ),
+            }
+
+        # 记忆接管：节点带下来的记忆文件正文优先；没带就按 doc_id 在本机解析。
+        takeover_memory_text = str(memory_context or "").strip()[:DOUYIN_STRANGER_MESSAGE_TAKEOVER_MEMORY_MAX_CHARS]
+        takeover_memory_titles: List[str] = []
+        if auto_reply_enabled and normalized_reply_mode == "ai_memory" and not takeover_memory_text:
+            resolved_takeover_memory = load_douyin_takeover_memory_context(
+                [str(item or "").strip() for item in (memory_doc_ids or []) if str(item or "").strip()]
+            )
+            takeover_memory_text = str(resolved_takeover_memory.get("text") or "").strip()
+            takeover_memory_titles = [str(item) for item in (resolved_takeover_memory.get("titles") or [])]
+        if auto_reply_enabled and normalized_reply_mode == "ai_memory" and not takeover_memory_text:
+            return {
+                "status": "failed",
+                "code": 400,
+                "message": "抖音私信记忆接管缺少记忆文件：请在节点里选择 1 份记忆文件（例如「百问百答」）。",
             }
 
         config = load_global_config()
@@ -13729,6 +13747,7 @@ async def run_douyin_h5_stranger_message_task_once(
                     seen_phones.add(phone)
                     phone_numbers.append(phone)
 
+            counted_user_last = False
             if merged_numbers:
                 if _h5_douyin_last_message_is_user(row):
                     qualifying_users += 1
@@ -13738,14 +13757,18 @@ async def run_douyin_h5_stranger_message_task_once(
                 # latest message to be from the customer, but a prior inbound
                 # phone must not be lost just because the bot replied after it.
                 persist_row()
-                return row
+                # 记忆接管：识别到手机号也要继续按记忆回复，不再直接结束这条会话。
+                if normalized_reply_mode != "ai_memory":
+                    return row
+                counted_user_last = True
 
             if not _h5_douyin_last_message_is_user(row):
                 skipped_without_user_last += 1
                 persist_row()
                 return row
 
-            qualifying_users += 1
+            if not counted_user_last:
+                qualifying_users += 1
 
             if not auto_reply_enabled:
                 persist_row()
@@ -13780,6 +13803,7 @@ async def run_douyin_h5_stranger_message_task_once(
                     fixed_text=fixed_text,
                     prompt_text=prompt_text,
                     contact_value=normalized_contact,
+                    memory_context=takeover_memory_text,
                 )
                 row["reply_message"] = final_message
                 douyin_stranger_message_state["current_message_text"] = final_message
@@ -14003,6 +14027,8 @@ async def run_douyin_h5_stranger_message_task_once(
                 "started_at": started_at,
                 "finished_at": _now_text(),
                 "mode": "h5_one_shot",
+                "reply_mode": normalized_reply_mode,
+                "memory_titles": takeover_memory_titles,
                 "total_conversations": len(prepared_rows),
                 "max_conversations": limit,
                 "processed_user_last": qualifying_users,
