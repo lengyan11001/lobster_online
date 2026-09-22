@@ -217,7 +217,12 @@ def test_native_add_friend_pool_branch_claims_then_acks(monkeypatch):
     result = asyncio.run(
         channel._run_client_workflow_action(
             "native_wechat_add_friend",
-            {"source_mode": "server_reported_pool", "max_targets": 20, "account_id": "pc-wechat-default"},
+            {
+                "source_mode": "server_reported_pool",
+                "max_targets": 20,
+                "targets": ["13700137000"],  # 选了服务端池就不该再混进本地名单
+                "account_id": "pc-wechat-default",
+            },
             headers={"Authorization": "Bearer t"},
             run_id="",
             cloud=cloud,

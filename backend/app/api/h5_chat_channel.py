@@ -11511,6 +11511,8 @@ async def _run_client_workflow_action(
             # 同账号的任意机器都能领（领取即占用，别的机器不会重复领同一条）。
             if cloud is None or not base:
                 raise RuntimeError("自动加好友无法读取服务端上报池")
+            # 选了服务端池就只加池子里的号码，节点里残留的本地名单不再混进来
+            targets = []
             claimed_pool_items = await _claim_reported_wechat_contacts(
                 cloud,
                 base,
