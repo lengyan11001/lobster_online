@@ -553,6 +553,9 @@ async def _save_local_final_video_asset(
     meta: Dict[str, Any] = {
         "seedance_final_video": True,
         "origin_local_path": str(path),
+        # 最终交付件：素材库「生成素材」与内容库可见。
+        "asset_origin": "generated",
+        "content_visibility": "visible",
     }
     if meta_extra:
         meta.update(meta_extra)
@@ -575,6 +578,12 @@ async def _save_local_final_video_asset(
         )
         db.add(asset)
         db.commit()
+        # 最终成片已经入库：同一任务的字幕件/合成件降级为中间产物，不给用户展示。
+        await asyncio.to_thread(
+            _demote_process_assets_for_job,
+            generation_task_id,
+            user_id=int(getattr(current_user, "id", 0) or 0),
+        )
         return {
             "asset_id": asset_id,
             "filename": filename,
@@ -583,6 +592,57 @@ async def _save_local_final_video_asset(
             "source_url": source_url,
             "path": str(local_asset_path),
         }
+    finally:
+        db.close()
+
+
+# 生成链路里的“过程件”型号：加字幕中间件、合成/加 BGM 中间件。
+# 按口径：素材库「生成素材」与内容库都只展示最终交付件，过程件一律不给用户看
+# （仍可按 asset_id 取用，不影响发布链路）。2026-09-22 用户确认。
+_PROCESS_ASSET_MODELS: tuple = (
+    "local-bestseller-caption-ffmpeg",
+    "local-bestseller-post-ffmpeg",
+)
+
+
+def _demote_process_assets_for_job(job_id: str, *, user_id: int = 0) -> int:
+    """最终成片入库后，把同一任务的过程件降级为中间产物（素材库/内容库都不展示）。"""
+    clean = str(job_id or "").strip()
+    if not clean:
+        return 0
+    db = SessionLocal()
+    changed = 0
+    try:
+        query = db.query(Asset).filter(Asset.model.in_(_PROCESS_ASSET_MODELS))
+        if int(user_id or 0) > 0:
+            query = query.filter(Asset.user_id == int(user_id))
+        rows = query.order_by(Asset.created_at.desc()).limit(400).all()
+        for row in rows:
+            meta = dict(row.meta or {}) if isinstance(row.meta, dict) else {}
+            job_keys = {
+                str(meta.get("seedance_job_id") or "").strip(),
+                str(meta.get("generation_task_id") or "").strip(),
+            }
+            if clean not in job_keys:
+                continue
+            if meta.get("asset_origin") == "intermediate" and meta.get("content_visibility") == "hidden":
+                continue
+            meta["asset_origin"] = "intermediate"
+            meta["content_visibility"] = "hidden"
+            meta["demoted_by"] = "final_asset_saved"
+            row.meta = meta
+            changed += 1
+        if changed:
+            db.commit()
+            logger.info(
+                "[seedance-tvc] demoted %s process asset(s) to intermediate job_id=%s",
+                changed,
+                clean,
+            )
+        return changed
+    except Exception as exc:
+        logger.warning("[seedance-tvc] demote process assets failed job_id=%s err=%s", clean, str(exc)[:200])
+        return 0
     finally:
         db.close()
 
@@ -1184,6 +1244,8 @@ def _save_local_bestseller_caption_asset(
                 "seedance_job_id": job_id,
                 "local_bestseller_day": day,
                 "captioned": True,
+                # 过程件（加字幕）：暂不对外，等最终成片入库时降级为 intermediate。
+                "content_visibility": "internal",
             },
         )
         db.add(row)
@@ -1240,6 +1302,8 @@ def _save_local_bestseller_post_asset(
                 "bgm_name": bgm_name,
                 "bgm_url": bgm_url,
                 "kind": kind,
+                # 过程件（合成/加 BGM）：暂不对外，等最终成片入库时降级为 intermediate。
+                "content_visibility": "internal",
             },
         )
         db.add(row)

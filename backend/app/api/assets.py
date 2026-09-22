@@ -2020,6 +2020,20 @@ def _parse_remote_asset_created_at(raw: Any) -> Optional[datetime]:
         return None
 
 
+def _remote_asset_item_is_process(item: Dict[str, Any]) -> bool:
+    """云端条目是不是过程件（不该镜像进本地素材库）。
+
+    按口径：素材库只展示用户上传 + 最终交付件；中间产物（intermediate / internal /
+    hidden）既不在素材库也不在内容库出现（仍可按 asset_id 取用）。2026-09-22。
+    """
+    payload = item if isinstance(item, dict) else {}
+    origin = str(payload.get("asset_origin") or payload.get("origin") or "").strip().lower()
+    visibility = str(
+        payload.get("content_visibility") or payload.get("library_visibility") or ""
+    ).strip().lower()
+    return origin in {"intermediate", "internal"} or visibility in {"hidden", "internal", "intermediate"}
+
+
 def _sync_remote_generated_assets(
     request: Request,
     current_user: _ServerUser,
@@ -2096,7 +2110,11 @@ def _sync_remote_generated_assets(
     updated = 0
     now_iso = datetime.utcnow().isoformat()
     for item in items:
-        if not isinstance(item, dict) or item.get("asset_origin") == "user_upload":
+        if (
+            not isinstance(item, dict)
+            or item.get("asset_origin") == "user_upload"
+            or _remote_asset_item_is_process(item)
+        ):
             continue
         media = str(item.get("media_type") or "").strip().lower()
         if media not in ("image", "video") or (mt_filter and media != mt_filter):
