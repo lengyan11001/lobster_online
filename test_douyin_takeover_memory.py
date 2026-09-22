@@ -543,6 +543,22 @@ def test_local_douyin_lock_and_idle_waits_are_bounded():
     assert "asyncio.wait_for(" in src
 
 
+def test_douyin_takeover_runs_multi_round_loop_until_node_window_ends():
+    """抖音私信接管对齐个微：多轮循环（默认 15s 间隔）跑到节点时间窗结束，并汇报。"""
+    root = Path(__file__).resolve().parent
+    src = (root / "backend" / "app" / "api" / "h5_chat_channel.py").read_text(encoding="utf-8")
+    start = src.index('if action == "stranger_message":')
+    body = src[start : start + 9000]
+
+    assert 'or 15, 300))' in body, "默认 15 秒一轮"
+    assert "deadline_monotonic = _takeover_monotonic() + float(session_minutes * 60)" in body
+    assert "await asyncio.sleep(interval_seconds)" in body, "轮与轮之间要休眠"
+    assert "while True:" in body, "必须是循环而不是单轮"
+    assert 'normalized["takeover_rounds"] = rounds' in body
+    assert "抖音私信记忆接管正常收工" in body, "结束要有收工汇报"
+    assert 'session_window_elapsed' in body
+
+
 def test_memory_file_is_selected_in_douyin_leads_page():
     """记忆文件唯一入口：Online「抖音获客 → 私信引流」页里的记忆文件下拉。"""
     root = Path(__file__).resolve().parent

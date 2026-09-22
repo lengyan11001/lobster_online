@@ -7089,29 +7089,98 @@ async def _run_scheduled_douyin_sales_action(
 
     if action == "stranger_message":
         from douyin_api import run_douyin_h5_stranger_message_task_once  # type: ignore
+        import douyin_api as _douyin_api_module  # type: ignore
 
         wechat_add_friend_enabled = bool(source.get("wechat_add_friend_enabled", False))
         douyin_reply_mode = str(source.get("reply_mode") or "").strip().lower()
         if douyin_reply_mode not in {"fixed", "ai_lead", "ai_memory"}:
             douyin_reply_mode = "fixed"
-        result = await run_douyin_h5_stranger_message_task_once(
-            account_id=account_id,
-            max_conversations=100,
-            fixed_message=str(source.get("message") or "").strip(),
-            auto_reply_enabled=bool(source.get("auto_reply_enabled", True)),
-            wechat_add_friend_enabled=wechat_add_friend_enabled,
-            reply_mode=douyin_reply_mode,
-            reply_prompt=str(source.get("reply_prompt") or "").strip(),
-            contact_value=str(source.get("contact_value") or "").strip(),
-            wechat_add_friend_targets_source=str(
-                source.get("wechat_add_friend_targets_source") or ""
-            ).strip(),
-            memory_context=_douyin_takeover_memory_text(source),
-            memory_doc_ids=_douyin_takeover_memory_doc_ids(source),
+        # 多轮循环接管（对齐个微私信接管）：默认 15 秒一轮，跑到节点时间窗结束自己收工。
+        interval_seconds = max(1, min(_safe_int(source.get("message_poll_interval_seconds")) or 15, 300))
+        h5_context = source.get("h5_context") if isinstance(source.get("h5_context"), dict) else {}
+        window_start = h5_context.get("workflow_node_time") or source.get("sales_schedule_start")
+        window_end = h5_context.get("workflow_node_end_time") or source.get("sales_schedule_end")
+        configured_minutes = _safe_int(source.get("takeover_session_minutes"))
+        derived_minutes = _workflow_minutes_between(window_start, window_end)
+        has_workflow_window = bool(str(window_start or "").strip())
+        session_minutes = configured_minutes or derived_minutes
+        if session_minutes <= 0:
+            session_minutes = 1 if has_workflow_window else 30
+        session_minutes = max(1, min(session_minutes, 1440))
+        deadline_monotonic = _takeover_monotonic() + float(session_minutes * 60)
+
+        rounds = 0
+        conversations_seen = 0
+        reply_total = 0
+        reply_success = 0
+        reply_failed = 0
+        stop_reason = "session_window_elapsed"
+        normalized: Dict[str, Any] = {}
+        while True:
+            if bool(getattr(_douyin_api_module, "douyin_stranger_message_stop_requested", False)):
+                stop_reason = "stop_requested"
+                break
+            rounds += 1
+            result = await run_douyin_h5_stranger_message_task_once(
+                account_id=account_id,
+                max_conversations=100,
+                fixed_message=str(source.get("message") or "").strip(),
+                auto_reply_enabled=bool(source.get("auto_reply_enabled", True)),
+                wechat_add_friend_enabled=wechat_add_friend_enabled,
+                reply_mode=douyin_reply_mode,
+                reply_prompt=str(source.get("reply_prompt") or "").strip(),
+                contact_value=str(source.get("contact_value") or "").strip(),
+                wechat_add_friend_targets_source=str(
+                    source.get("wechat_add_friend_targets_source") or ""
+                ).strip(),
+                memory_context=_douyin_takeover_memory_text(source),
+                memory_doc_ids=_douyin_takeover_memory_doc_ids(source),
+            )
+            if not isinstance(result, dict):
+                if rounds == 1:
+                    return {"code": 500, "msg": "抖音私信接管执行失败"}
+                stop_reason = "round_failed"
+                break
+            normalized = dict(result)
+            round_stats = result.get("stats") if isinstance(result.get("stats"), dict) else {}
+            round_reply = result.get("reply") if isinstance(result.get("reply"), dict) else {}
+            conversations_seen += _safe_int(round_stats.get("total"))
+            reply_total += _safe_int(round_reply.get("total"))
+            reply_success += _safe_int(round_reply.get("success"))
+            reply_failed += _safe_int(round_reply.get("failed"))
+            logger.info(
+                "[抖音私信接管] 第 %s 轮完成：会话 %s 个，本轮回复成功 %s 条%s（间隔 %ss，本节点共 %s 分钟）",
+                rounds,
+                _safe_int(round_stats.get("total")),
+                _safe_int(round_reply.get("success")),
+                f"，失败 {_safe_int(round_reply.get('failed'))} 条" if _safe_int(round_reply.get("failed")) else "",
+                interval_seconds,
+                session_minutes,
+            )
+            if _takeover_monotonic() + interval_seconds > deadline_monotonic:
+                stop_reason = "session_window_elapsed"
+                break
+            await asyncio.sleep(interval_seconds)
+
+        summary = (
+            f"抖音私信记忆接管正常收工（共 {rounds} 轮，间隔 {interval_seconds}s）："
+            f"处理会话 {conversations_seen} 个，回复成功 {reply_success} 条"
+            f"{f'，失败 {reply_failed} 条' if reply_failed else ''}"
+            f"；结束原因：{'节点时间到' if stop_reason == 'session_window_elapsed' else stop_reason}"
         )
-        if not isinstance(result, dict):
-            return {"code": 500, "msg": "抖音私信一次性任务执行失败"}
-        normalized = dict(result)
+        normalized["takeover_rounds"] = rounds
+        normalized["takeover_interval_seconds"] = interval_seconds
+        normalized["takeover_session_minutes"] = session_minutes
+        normalized["takeover_stop_reason"] = stop_reason
+        normalized["takeover_totals"] = {
+            "conversations": conversations_seen,
+            "reply_total": reply_total,
+            "reply_success": reply_success,
+            "reply_failed": reply_failed,
+        }
+        normalized["summary_text"] = summary
+        normalized["message"] = summary
+        normalized["msg"] = summary
         # 没勾「自动提交好友申请」：本机不动微信，只把识别到的号码上报到账号级池子，
         # 交给同账号的其它机器（个微自动加好友节点选「服务端上报池」）去加好友。
         if not wechat_add_friend_enabled:
