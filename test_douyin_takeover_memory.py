@@ -500,3 +500,20 @@ def test_online_employee_node_picker_offers_memory_takeover():
     assert "reply_mode:'ai_memory'" in js
     assert "wantsMemoryTakeover" in js
     assert '<option value="ai_memory">AI 记忆接管（按记忆文件回复）</option>' in html
+
+
+def test_online_memory_takeover_node_only_asks_for_memory_file():
+    """这个节点只需要选记忆文件：不能再冒出地区/搜索数量/搜索方式这些精准获客参数。"""
+    root = Path(__file__).resolve().parent
+    js = (root / "static" / "js" / "views" / "h5-employees.js").read_text(encoding="utf-8")
+    html = (root / "static" / "views" / "h5-employees.html").read_text(encoding="utf-8")
+
+    assert 'id="oeNodeDouyinMemoryField"' in html
+    assert 'id="oeNodeDouyinMemoryDoc"' in html
+    assert "fillDouyinMemoryDocSelect" in js
+    assert "'/api/openclaw/memory/list'" in js
+    # 节点自己带 ai_memory / memory_takeover 时必须按私信接管表单渲染
+    assert "var memoryTakeover=" in js
+    assert "el('oeNodeDouyinCollectionField').hidden=!douyinCollection" in js
+    assert "row.params.memory_doc_ids=[memoryDocValue]" in js
+    assert "el('oeNodeWechatAddFriendField').hidden=!douyinPrivate || memoryTakeover" in js

@@ -201,6 +201,11 @@
           <span>抖音私信回复策略</span>
           <select id="oeNodeDouyinReplyMode"><option value="fixed">固定话术</option><option value="ai_lead">AI 引导加绿泡泡</option><option value="ai_memory">AI 记忆接管（按记忆文件回复）</option></select>
         </label>
+        <label class="oe-form-label" id="oeNodeDouyinMemoryField" hidden>
+          <span>记忆文件</span>
+          <select id="oeNodeDouyinMemoryDoc"><option value="">不指定（用 IP人设定位-模板里选的那份）</option></select>
+          <small>按这份资料回复客户（例如「百问百答」）；只读取新私信，按会话上下文回答，不拉群、不引导加微信。</small>
+        </label>
         <label class="oe-form-label" id="oeNodeWechatAddFriendField" hidden>
           <span>抖音私信识别手机号后加微信好友</span>
           <span><input id="oeNodeWechatAddFriendEnabled" type="checkbox"> 自动提交好友申请</span>
