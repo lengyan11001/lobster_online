@@ -988,11 +988,8 @@ def test_moments_publish_entry_accepts_initial_file_picker(monkeypatch):
     monkeypatch.setattr(engine, "_uia_find_by_names", lambda *_args, **_kwargs: publish_entry)
     monkeypatch.setattr(engine, "_uia_click", lambda node: clicked.append(node))
     monkeypatch.setattr(engine, "_uia_control_text", lambda _node: "发表")
-    monkeypatch.setattr(
-        engine,
-        "_file_dialog_filename_edit",
-        lambda root: object() if root is picker_root else None,
-    )
+    picker_window = {"hwnd": 654, "class": "#32770", "title": "picker", "pid": 0, "root": picker_root}
+    monkeypatch.setattr(engine, "_find_moments_file_picker_window", lambda **_kwargs: picker_window)
 
     hwnd = engine._click_moments_publish_entry(123, steps, expect_file_picker=True)
 
@@ -1016,9 +1013,19 @@ def test_moments_publish_selects_initial_picker_before_compose(monkeypatch):
         lambda _hwnd, _steps, *, expect_file_picker=False: calls.append(("open_entry", expect_file_picker)) or 456,
     )
     monkeypatch.setattr(engine, "_uia_foreground_or_main_root", lambda _hwnd: picker_root)
-    monkeypatch.setattr(engine, "_file_dialog_filename_edit", lambda root: object() if root is picker_root else None)
-    monkeypatch.setattr(engine, "_select_files_in_open_dialog", lambda _hwnd, _files, _steps: calls.append("select_files"))
+    picker_window = {"hwnd": 654, "class": "#32770", "title": "picker", "pid": 0, "root": picker_root}
+    monkeypatch.setattr(engine, "_find_moments_file_picker_window", lambda **_kwargs: picker_window)
+    monkeypatch.setattr(
+        engine,
+        "_select_files_in_open_dialog",
+        lambda _hwnd, _files, _steps, **_kwargs: calls.append("select_files"),
+    )
     monkeypatch.setattr(engine, "_wait_for_moments_publish_dialog", lambda _hwnd, _steps: calls.append("wait_compose"))
+    monkeypatch.setattr(
+        engine,
+        "_verify_moments_attachments",
+        lambda _hwnd, _count, _steps: calls.append("verify_attachments"),
+    )
     monkeypatch.setattr(engine, "_focus_moments_publish_text", lambda _hwnd, _steps: calls.append("focus_text"))
     monkeypatch.setattr(engine, "_fill_moments_publish_text", lambda _hwnd, _text, _steps: calls.append("fill_text"))
     monkeypatch.setattr(engine, "_submit_moments_publish", lambda _hwnd, _steps: calls.append("submit"))
@@ -1035,6 +1042,7 @@ def test_moments_publish_selects_initial_picker_before_compose(monkeypatch):
         ("open_entry", True),
         "select_files",
         "wait_compose",
+        "verify_attachments",
         "focus_text",
         "fill_text",
         "submit",

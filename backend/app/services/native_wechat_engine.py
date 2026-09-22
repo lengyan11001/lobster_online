@@ -17602,7 +17602,10 @@ def _click_moments_publish_entry(
                 deadline = time.time() + (10.0 if attempt == 1 else 12.0)
                 while time.time() < deadline:
                     root = _uia_foreground_or_main_root(publish_hwnd)
-                    if expect_file_picker and _file_dialog_filename_edit(root) is not None:
+                    if expect_file_picker and _find_moments_file_picker_window(
+                        wechat_pid=_window_process_id(publish_hwnd),
+                        timeout=0.0,
+                    ) is not None:
                         steps.append({"step": "moments_file_picker_ready", "ok": True, "attempt": attempt})
                         return publish_hwnd
                     if _moments_publish_dialog_ready(root):
@@ -17927,85 +17930,434 @@ def _uia_targeted_child(root: Any, control_type: str, automation_ids: List[str])
     return None
 
 
-def _file_dialog_filename_edit(root: Any) -> Optional[Any]:
-    # The Windows common file dialog exposes the filename box as Edit/1148.
-    # Do not use _uia_walk here: a directory with many video thumbnails makes
-    # UIA enumerate every item and can hold the per-account WeChat lock.
-    node = _uia_targeted_child(root, "Edit", ["1148"])
-    if node is not None:
-        return node
-    for name in ("文件名:", "文件名(N):", "File name:"):
-        finder = getattr(root, "EditControl", None)
-        if not callable(finder):
-            break
+def _window_process_id(hwnd: Any) -> int:
+    try:
+        target = int(hwnd or 0)
+    except Exception:
+        return 0
+    if not target:
+        return 0
+    try:
+        import win32process  # type: ignore
+
+        return int(win32process.GetWindowThreadProcessId(target)[1] or 0)
+    except Exception:
+        return 0
+
+
+def _top_level_windows() -> List[Dict[str, Any]]:
+    """可见顶层窗口快照（hwnd/class/title/pid），仅用于诊断与选择框定位。
+
+    2026-09-22 事故：以前把「点完发表那一瞬间的前台窗口」当成文件选择框句柄，
+    前台还在微信主窗时就把主窗当选择框 → 8 秒后必然判定「框没关」（误杀），
+    同一时刻的搜索根也是主窗 → 从主窗里搜不到选择框的 Edit/1148，每个控件空等 10 秒。
+    """
+    try:
+        import win32gui  # type: ignore
+    except Exception:
+        return []
+    windows: List[Dict[str, Any]] = []
+
+    def _collect(hwnd: int, _param: Any) -> bool:
         try:
-            node = finder(searchDepth=8, Name=name)
+            if not win32gui.IsWindowVisible(int(hwnd)):
+                return True
+            windows.append(
+                {
+                    "hwnd": int(hwnd),
+                    "class": str(win32gui.GetClassName(hwnd) or ""),
+                    "title": str(win32gui.GetWindowText(hwnd) or "")[:120],
+                    "pid": _window_process_id(hwnd),
+                }
+            )
+        except Exception:
+            pass
+        return True
+
+    try:
+        win32gui.EnumWindows(_collect, None)
+    except Exception:
+        pass
+    return windows
+
+
+def _window_is_alive(hwnd: Any) -> bool:
+    try:
+        target = int(hwnd or 0)
+    except Exception:
+        return False
+    if not target:
+        return False
+    try:
+        import win32gui  # type: ignore
+
+        return bool(win32gui.IsWindow(target) and win32gui.IsWindowVisible(target))
+    except Exception:
+        return False
+
+
+def _activate_window(hwnd: Any) -> bool:
+    """把目标窗口切到前台，保证随后的点击/回车真的落在它身上。"""
+    try:
+        target = int(hwnd or 0)
+    except Exception:
+        return False
+    if not target:
+        return False
+    try:
+        import win32api  # type: ignore
+        import win32con  # type: ignore
+        import win32gui  # type: ignore
+        import win32process  # type: ignore
+
+        try:
+            win32gui.ShowWindow(target, win32con.SW_RESTORE)
+        except Exception:
+            pass
+        current_thread = win32api.GetCurrentThreadId()
+        target_thread = win32process.GetWindowThreadProcessId(target)[0]
+        foreground = win32gui.GetForegroundWindow()
+        foreground_thread = win32process.GetWindowThreadProcessId(foreground)[0] if foreground else 0
+        attached: List[int] = []
+        for thread_id in {target_thread, foreground_thread}:
+            if thread_id and thread_id != current_thread:
+                try:
+                    win32process.AttachThreadInput(current_thread, thread_id, True)
+                    attached.append(thread_id)
+                except Exception:
+                    pass
+        try:
+            try:
+                win32gui.BringWindowToTop(target)
+            except Exception:
+                pass
+            try:
+                win32gui.SetForegroundWindow(target)
+            except Exception:
+                pass
+        finally:
+            for thread_id in attached:
+                try:
+                    win32process.AttachThreadInput(current_thread, thread_id, False)
+                except Exception:
+                    pass
+        time.sleep(0.2)
+        return win32gui.GetForegroundWindow() == target
+    except Exception:
+        return False
+
+
+def _uia_resolve(node: Any, *, timeout: float = 0.0, interval: float = 0.2) -> Optional[Any]:
+    """把 uiautomation 的「懒控件」真正解析一次。
+
+    uiautomation 里 `root.EditControl(AutomationId='1148')` 只是构造了搜索条件，
+    控件不存在时同样是真值 —— 以前所有"找到了吗"的判断因此恒真（假成功）。
+    这里统一用 Exists() 真查找：找不到返回 None。
+    """
+    if node is None:
+        return None
+    exists = getattr(node, "Exists", None)
+    if not callable(exists):
+        return node
+    wait = max(0.0, float(timeout or 0.0))
+    for args in ((wait, interval, False), (wait, interval), ()):
+        try:
+            found = bool(exists(*args))
+        except TypeError:
+            continue
+        except Exception:
+            return None
+        return node if found else None
+    return None
+
+
+_MOMENTS_PICKER_DIALOG_CLASS = "#32770"
+_MOMENTS_PICKER_TITLE_HINTS = ("选择", "打开", "图片", "视频", "文件", "上传")
+
+
+def _window_looks_like_moments_picker(window: Dict[str, Any]) -> bool:
+    class_name = str(window.get("class") or "")
+    if class_name == _MOMENTS_PICKER_DIALOG_CLASS:
+        return True
+    title = str(window.get("title") or "")
+    if class_name.startswith("mmui::") and any(hint in title for hint in _MOMENTS_PICKER_TITLE_HINTS):
+        return True
+    return False
+
+
+def _find_moments_file_picker_window(
+    *,
+    wechat_pid: int = 0,
+    timeout: float = 0.0,
+    steps: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """找一个"真的能用"的素材选择框：标准 #32770 或微信自绘对话框，且里面有文件名输入框。
+
+    只认可真正解析出文件名输入框的窗口，避免把微信主窗/别的窗口误当成选择框。
+    """
+    deadline = time.time() + max(0.0, float(timeout or 0.0))
+    while True:
+        for window in _top_level_windows():
+            if not _window_looks_like_moments_picker(window):
+                continue
+            class_name = str(window.get("class") or "")
+            pid = int(window.get("pid") or 0)
+            if wechat_pid and pid and pid != wechat_pid and class_name != _MOMENTS_PICKER_DIALOG_CLASS:
+                continue
+            root = _uia_main_root(int(window["hwnd"]))
+            edit = _file_dialog_filename_edit(root, timeout=0.2)
+            if edit is None:
+                continue
+            found = dict(window)
+            found["root"] = root
+            found["edit"] = edit
+            if steps is not None:
+                steps.append(
+                    {
+                        "step": "moments_file_picker_found",
+                        "ok": True,
+                        "hwnd": int(found["hwnd"]),
+                        "class": class_name,
+                        "title": str(found.get("title") or ""),
+                        "pid": pid,
+                    }
+                )
+            return found
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.25)
+
+
+def _window_state(hwnd: Any) -> Dict[str, Any]:
+    """单个窗口的当前状态，失败时写进 steps 供定位。"""
+    try:
+        target = int(hwnd or 0)
+    except Exception:
+        target = 0
+    state: Dict[str, Any] = {"hwnd": target, "alive": _window_is_alive(target)}
+    try:
+        import win32gui  # type: ignore
+
+        if target:
+            state["class"] = str(win32gui.GetClassName(target) or "")
+            state["title"] = str(win32gui.GetWindowText(target) or "")[:120]
+        state["foreground"] = int(win32gui.GetForegroundWindow() or 0)
+    except Exception:
+        pass
+    return state
+
+
+def _file_dialog_filename_edit(root: Any, *, timeout: float = 0.0) -> Optional[Any]:
+    """系统文件选择框的「文件名」输入框；找不到返回 None（真查找）。
+
+    2026-09-22 事故：以前返回的是未解析的懒控件（恒真），调用方的"等框出现"循环
+    第一轮就退出（等于不等待），之后就靠粘贴到"当时有焦点的窗口"，于是看起来
+    "素材填好了"，实际完全没校验。
+    """
+    if root is None:
+        return None
+    finder = getattr(root, "EditControl", None)
+    if not callable(finder):
+        return None
+    deadline = time.time() + float(timeout or 0.0)
+    while True:
+        try:
+            node = _uia_resolve(finder(searchDepth=8, AutomationId="1148"), timeout=0.0)
         except Exception:
             node = None
         if node is not None:
             return node
-    return None
+        for name in ("文件名:", "文件名(N):", "File name:"):
+            try:
+                node = _uia_resolve(finder(searchDepth=8, Name=name), timeout=0.0)
+            except Exception:
+                node = None
+            if node is not None:
+                return node
+        # 兜底：部分 Windows/微信组合换了 AutomationId，退回"对话框里第一个可编辑框"
+        try:
+            for candidate in _uia_edit_controls(root):
+                if _uia_resolve(candidate, timeout=0.0) is not None:
+                    return candidate
+        except Exception:
+            pass
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.25)
 
 
-def _file_dialog_open_button(root: Any) -> Optional[Any]:
-    # Common dialog Open button is Button/1. If this control is unavailable,
-    # the caller uses Enter; do not fall back to another full UIA traversal.
-    node = _uia_targeted_child(root, "Button", ["1"])
-    return node
+def _file_dialog_open_button(root: Any, *, timeout: float = 0.0) -> Optional[Any]:
+    """「打开(O)」按钮（Button/1）；找不到返回 None，调用方改用回车。"""
+    if root is None:
+        return None
+    finder = getattr(root, "ButtonControl", None)
+    if not callable(finder):
+        return None
+    deadline = time.time() + float(timeout or 0.0)
+    while True:
+        try:
+            node = _uia_resolve(finder(searchDepth=8, AutomationId="1"), timeout=0.0)
+        except Exception:
+            node = None
+        if node is not None:
+            return node
+        for name in ("打开(O)", "打开(&O)", "打开", "Open", "确定"):
+            try:
+                node = _uia_resolve(finder(searchDepth=8, Name=name), timeout=0.0)
+            except Exception:
+                node = None
+            if node is not None:
+                return node
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.2)
 
 
-def _select_files_in_open_dialog(hwnd: int, files: List[Dict[str, Any]], steps: List[Dict[str, Any]]) -> None:
+def _moments_text_written(node: Any, expected: str) -> bool:
+    wanted = _compact_for_contains(expected)
+    if not wanted:
+        return True
+    current = _compact_for_contains(_uia_value_text(node) or _uia_control_text(node))
+    if wanted in current:
+        return True
+    marker = wanted
+    if '"' in str(expected or ""):
+        parts = [part for part in str(expected).split('"') if part.strip()]
+        if parts:
+            marker = _compact_for_contains(parts[0])
+    return bool(marker) and marker in current
+
+
+def _uia_set_text_verified(
+    node: Any,
+    text: str,
+    *,
+    steps: Optional[List[Dict[str, Any]]] = None,
+    label: str = "",
+) -> bool:
+    """写入并回读校验（以前只写不读，才会出现"看着成功了"的假 ok）。"""
+    value = str(text or "")
+    if _uia_resolve(node, timeout=0.0) is None:
+        if steps is not None:
+            steps.append({"step": "moments_picker_type_paths", "ok": False, "label": label, "reason": "control_missing"})
+        return False
+    try:
+        node.SetFocus()
+    except Exception:
+        pass
+    try:
+        node.Click(simulateMove=True)
+    except Exception:
+        pass
+    _human_pause("ui_input_sleep_min", "ui_input_sleep_max", floor=0.12)
+    method = "value_pattern"
+    wrote = False
+    try:
+        wrote = bool(_uia_try_set_value(node, value))
+    except Exception:
+        wrote = False
+    if not wrote or not _moments_text_written(node, value):
+        method = "clipboard"
+        try:
+            _send_hotkey("a", ctrl=True, pause=0.08)
+            _send_hotkey_quick("backspace")
+        except Exception:
+            pass
+        for chunk in re.findall(r"[\s\S]{1,120}", value):
+            _paste_text_quick(chunk)
+            time.sleep(0.05)
+    ok = _moments_text_written(node, value)
+    if steps is not None:
+        steps.append(
+            {
+                "step": "moments_picker_type_paths",
+                "ok": bool(ok),
+                "label": label,
+                "chars": len(value),
+                "method": method,
+            }
+        )
+    return bool(ok)
+
+
+def _wait_window_closed(hwnd: Any, *, timeout: float = 8.0) -> bool:
+    deadline = time.time() + max(0.5, float(timeout or 0.0))
+    while time.time() < deadline:
+        if not _window_is_alive(hwnd):
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def _select_files_in_open_dialog(
+    hwnd: int,
+    files: List[Dict[str, Any]],
+    steps: List[Dict[str, Any]],
+    *,
+    picker: Optional[Dict[str, Any]] = None,
+) -> None:
+    """在系统文件选择框里选素材：真等框、真查找、回读校验、按框自己的句柄判断关没关。"""
     paths = [str(item.get("local_path") or "").strip() for item in files if str(item.get("local_path") or "").strip()]
     if not paths:
         return
     file_spec = " ".join(f'"{path}"' for path in paths)
-    deadline = time.time() + 10.0
-    edit = None
-    root = None
-    dialog_hwnd = 0
-    while time.time() < deadline:
-        root = _uia_foreground_or_main_root(hwnd)
-        try:
-            import win32gui  # type: ignore
-
-            dialog_hwnd = int(win32gui.GetForegroundWindow() or 0)
-        except Exception:
-            dialog_hwnd = 0
-        edit = _file_dialog_filename_edit(root)
-        if edit is not None:
-            break
-        time.sleep(0.25)
-    if edit is None or root is None:
-        raise RuntimeError("未找到系统文件选择框的文件名输入框")
-    _uia_set_text(edit, file_spec)
+    window = picker or _find_moments_file_picker_window(
+        wechat_pid=_window_process_id(hwnd),
+        timeout=10.0,
+        steps=steps,
+    )
+    if window is None:
+        steps.append({"step": "moments_file_picker_missing", "ok": False, "windows": _top_level_windows()[:12]})
+        raise RuntimeError("朋友圈素材选择框没打开（没找到系统文件选择框），请重试")
+    dialog_hwnd = int(window.get("hwnd") or 0)
+    root = window.get("root") or _uia_main_root(dialog_hwnd)
+    _activate_window(dialog_hwnd)
+    edit = window.get("edit") or _file_dialog_filename_edit(root, timeout=8.0)
+    if edit is None:
+        steps.append({"step": "moments_picker_filename_missing", "ok": False, "windows": _top_level_windows()[:12]})
+        raise RuntimeError("朋友圈素材选择框里没找到文件名输入框，请重试")
+    if not _uia_set_text_verified(edit, file_spec, steps=steps, label="moments_files"):
+        steps.append({"step": "select_moments_files", "ok": False, "reason": "文件名输入框回读不一致"})
+        raise RuntimeError("朋友圈素材路径没有真正写进文件选择框，请重试")
     steps.append({"step": "select_moments_files", "ok": True, "count": len(paths)})
-    open_btn = _file_dialog_open_button(root)
+    _activate_window(dialog_hwnd)
+    open_btn = _file_dialog_open_button(root, timeout=3.0)
     if open_btn is not None:
         _uia_click(open_btn)
     else:
+        steps.append({"step": "moments_picker_open_button_missing", "ok": True, "fallback": "enter"})
         _send_hotkey("enter", pause=0.25)
-    close_deadline = time.time() + 8.0
-    while time.time() < close_deadline:
+    if _wait_window_closed(dialog_hwnd, timeout=10.0):
+        steps.append({"step": "close_moments_file_picker", "ok": True})
+        return
+    # 编辑页已经拿到素材就不要再误杀（以前这里直接判失败，把已经加好的素材一起废掉）
+    ready_root = _uia_foreground_or_main_root(hwnd)
+    if _moments_publish_dialog_ready(ready_root) and not _moments_publish_rejection(ready_root):
         try:
-            import win32gui  # type: ignore
-
-            if not dialog_hwnd or not win32gui.IsWindow(dialog_hwnd) or not win32gui.IsWindowVisible(dialog_hwnd):
-                steps.append({"step": "close_moments_file_picker", "ok": True})
-                return
+            _activate_window(dialog_hwnd)
+            _send_hotkey("esc", pause=0.15)
         except Exception:
-            # If the platform does not expose a window handle, the compose
-            # dialog check below will still catch a failed selection.
             pass
-        time.sleep(0.25)
+        steps.append({"step": "close_moments_file_picker", "ok": True, "method": "editor_ready_after_timeout"})
+        return
+    steps.append(
+        {
+            "step": "close_moments_file_picker",
+            "ok": False,
+            "error": "系统文件选择框未在规定时间内关闭",
+            "window": _window_state(dialog_hwnd),
+        }
+    )
     try:
+        _activate_window(dialog_hwnd)
         _send_hotkey("esc", pause=0.1)
     except Exception:
         pass
-    steps.append({"step": "close_moments_file_picker", "ok": False, "error": "系统文件选择框未在8秒内关闭"})
-    raise RuntimeError("系统文件选择框选择素材后未关闭，请重试")
+    raise RuntimeError("朋友圈素材选择框没能确认（选择框未关闭），已终止本次发布")
 
 
 def _add_moments_publish_files(hwnd: int, files: List[Dict[str, Any]], steps: List[Dict[str, Any]]) -> None:
+    """点「+」打开素材选择框再选文件（发表入口没自动弹框时走这条兜底）。"""
     if not files:
         return
     root = _uia_foreground_or_main_root(hwnd)
@@ -18020,8 +18372,73 @@ def _add_moments_publish_files(hwnd: int, files: List[Dict[str, Any]], steps: Li
         left, top, _right, _bottom = rect
         _uia_click_screen_point(left + 175, top + 215)
         steps.append({"step": "open_moments_file_picker", "ok": True, "method": "coordinate"})
-    _select_files_in_open_dialog(hwnd, files, steps)
+    picker = _find_moments_file_picker_window(
+        wechat_pid=_window_process_id(hwnd),
+        timeout=12.0,
+        steps=steps,
+    )
+    if picker is None:
+        steps.append({"step": "moments_file_picker_missing", "ok": False, "after_plus": True})
+        raise RuntimeError("点了「+」之后朋友圈素材选择框仍未出现，请重试")
+    _select_files_in_open_dialog(hwnd, files, steps, picker=picker)
     time.sleep(random.uniform(1.0, 2.0))
+
+
+def _verify_moments_attachments(hwnd: int, expected: int, steps: List[Dict[str, Any]]) -> None:
+    """确认素材真的进了发表页：微信拒绝素材要立刻报出来，别再静默往下走。"""
+    root = _uia_foreground_or_main_root(hwnd)
+    rejection = _moments_publish_rejection(root)
+    if rejection:
+        steps.append({"step": "moments_media_rejected", "ok": False, "error": rejection})
+        raise RuntimeError(f"微信朋友圈拒绝素材：{rejection}")
+    observed = 0
+    try:
+        for node in _uia_walk(root, max_depth=14, max_nodes=1200):
+            class_name = _uia_control_class(node)
+            if "Image" in class_name or "mmui::Album" in class_name:
+                observed += 1
+    except Exception:
+        observed = 0
+    steps.append(
+        {
+            "step": "moments_attachments_ready",
+            "ok": observed > 0,
+            "expected": int(expected),
+            "observed_nodes": observed,
+        }
+    )
+
+
+def _dismiss_moments_leftovers(hwnd: int, steps: List[Dict[str, Any]]) -> None:
+    """失败后清场：关掉残留的选择框/发表页，避免污染下一轮（2026-09-22 18:34 事故）。"""
+    try:
+        picker = _find_moments_file_picker_window(wechat_pid=_window_process_id(hwnd), timeout=0.0)
+    except Exception:
+        picker = None
+    if picker is not None:
+        _activate_window(int(picker.get("hwnd") or 0))
+        try:
+            _send_hotkey("esc", pause=0.15)
+        except Exception:
+            pass
+        steps.append({"step": "cleanup_moments_picker", "ok": True})
+    root = _uia_foreground_or_main_root(hwnd)
+    if not _moments_publish_dialog_ready(root):
+        return
+    cancel = _uia_find_by_names(root, ["取消"], contains=False, max_depth=16)
+    if cancel is not None:
+        try:
+            _uia_click(cancel)
+            steps.append({"step": "cleanup_moments_publish_dialog", "ok": True, "method": "cancel"})
+            return
+        except Exception:
+            pass
+    try:
+        _send_hotkey("esc", pause=0.15)
+        _send_hotkey("esc", pause=0.15)
+        steps.append({"step": "cleanup_moments_publish_dialog", "ok": True, "method": "esc"})
+    except Exception:
+        pass
 
 
 def _moments_ffprobe_path() -> str:
@@ -18146,12 +18563,18 @@ def _publish_moments_local_once(
         _open_local_moments(hwnd, steps)
         publish_hwnd = _click_moments_publish_entry(hwnd, steps, expect_file_picker=bool(files))
         if files:
-            root = _uia_foreground_or_main_root(publish_hwnd)
-            if _file_dialog_filename_edit(root) is not None:
-                _select_files_in_open_dialog(publish_hwnd, files, steps)
-            else:
+            picker = _find_moments_file_picker_window(
+                wechat_pid=_window_process_id(publish_hwnd),
+                timeout=8.0,
+                steps=steps,
+            )
+            if picker is None:
+                steps.append({"step": "moments_file_picker_missing", "ok": False, "before_plus": True})
                 _add_moments_publish_files(publish_hwnd, files, steps)
+            else:
+                _select_files_in_open_dialog(publish_hwnd, files, steps, picker=picker)
             _wait_for_moments_publish_dialog(publish_hwnd, steps)
+            _verify_moments_attachments(publish_hwnd, len(files), steps)
         if text:
             _focus_moments_publish_text(publish_hwnd, steps)
             _fill_moments_publish_text(publish_hwnd, text, steps)
@@ -18174,6 +18597,10 @@ def _publish_moments_local_once(
             "driver": "pc_wechat_moments_uia",
         }
     except Exception as exc:
+        try:
+            _dismiss_moments_leftovers(int(item.get("hwnd") or 0), steps)
+        except Exception:
+            pass
         if isinstance(exc, _MomentsPublishError):
             raise
         raise _MomentsPublishError(str(exc), steps) from exc
