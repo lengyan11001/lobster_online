@@ -13558,33 +13558,11 @@ async def run_douyin_h5_stranger_message_task_once(
                 ),
             }
 
-        # 记忆接管的记忆文件来源（按优先级）：
-        # 1) 任务里带的记忆文件正文（老节点/H5 模板下发）；
-        # 2) 任务里带的 memory_doc_ids（Online「我的AI员工」节点上选的）；
-        # 3) Online「抖音获客」里选的那份（本机接管配置里存的 memory_doc_ids）。
+        # 记忆接管不做老节点兼容：记忆文件只认 Online 节点里选的那份（memory_doc_ids）。
         takeover_memory_text = str(memory_context or "").strip()[:DOUYIN_STRANGER_MESSAGE_TAKEOVER_MEMORY_MAX_CHARS]
         takeover_memory_titles: List[str] = []
         takeover_memory_doc_ids = [str(item or "").strip() for item in (memory_doc_ids or []) if str(item or "").strip()]
         if auto_reply_enabled and normalized_reply_mode == "ai_memory" and not takeover_memory_text:
-            if not takeover_memory_doc_ids:
-                online_account_id = int(requested_account_id or 0)
-                if online_account_id <= 0:
-                    online_account_id = int(
-                        (get_active_douyin_account(load_global_config()) or {}).get("id", 0) or 0
-                    )
-                if online_account_id > 0:
-                    online_memory_doc_ids = get_douyin_stranger_message_monitor_state(online_account_id).get(
-                        "memory_doc_ids"
-                    )
-                    takeover_memory_doc_ids = [
-                        str(item or "").strip() for item in (online_memory_doc_ids or []) if str(item or "").strip()
-                    ]
-                    if takeover_memory_doc_ids:
-                        douyin_log(
-                            "[H5抖音私信接管] 节点没带记忆文件，改用 Online 抖音获客里选的记忆文件："
-                            + "、".join(takeover_memory_doc_ids),
-                            "info",
-                        )
             if takeover_memory_doc_ids:
                 resolved_takeover_memory = load_douyin_takeover_memory_context(takeover_memory_doc_ids)
                 takeover_memory_text = str(resolved_takeover_memory.get("text") or "").strip()
@@ -13593,7 +13571,10 @@ async def run_douyin_h5_stranger_message_task_once(
             return {
                 "status": "failed",
                 "code": 400,
-                "message": "抖音私信记忆接管缺少记忆文件：请先在 Online 抖音获客里选 1 份记忆文件（例如「百问百答」）。",
+                "message": (
+                    "抖音私信记忆接管缺少记忆文件：请先在 Online「我的AI员工 → 抖音私信记忆接管」"
+                    "节点里选 1 份记忆文件（例如「百问百答」）。"
+                ),
             }
 
         config = load_global_config()
