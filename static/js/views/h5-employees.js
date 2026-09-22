@@ -1201,6 +1201,15 @@
     if (el('oeNodeWechatAddFriendField')) el('oeNodeWechatAddFriendField').hidden=!douyinPrivate;
     if (el('oeNodeNativeAddFriendField')) el('oeNodeNativeAddFriendField').hidden=key !== 'native_wechat_add_friend';
     if (el('oeNodeDouyinReplyModeField')) el('oeNodeDouyinReplyModeField').hidden=!douyinPrivate;
+    // 新建/切到「抖音私信记忆接管」时，回复策略默认就是 AI 记忆接管。
+    // 只做"默认值"，不反向把已选好的值改回去（编辑老节点不能被悄悄改成固定话术）。
+    if (el('oeNodeDouyinReplyMode')) {
+      var replyModeExtra=option[5] && typeof option[5] === 'object' ? option[5] : {};
+      var currentReplyMode=String(el('oeNodeDouyinReplyMode').value || '').trim().toLowerCase();
+      if (replyModeExtra.memory_takeover && ['', 'fixed'].indexOf(currentReplyMode) >= 0) {
+        el('oeNodeDouyinReplyMode').value='ai_memory';
+      }
+    }
     if (el('oeNodeDouyinCollectionField')) el('oeNodeDouyinCollectionField').hidden=!douyinCollection;
     // 精准获客AI 的关键词由 AI 生成，隐藏"采集关键词"、换成 AI 选词设置。
     if (el('oeNodeDouyinKeywordField')) el('oeNodeDouyinKeywordField').hidden=douyinAiKeywords;
