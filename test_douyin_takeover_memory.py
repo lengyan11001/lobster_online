@@ -520,6 +520,17 @@ def test_online_memory_takeover_node_only_asks_for_memory_file():
     assert "delete row.params.memory_doc_ids;" in js
 
 
+def test_online_node_save_is_robust_when_dropdown_resets():
+    """Online 保存节点：下拉被重置时按标题回查节点，动作优先取节点自带 sales_action。"""
+    root = Path(__file__).resolve().parent
+    js = (root / "static" / "js" / "views" / "h5-employees.js").read_text(encoding="utf-8")
+
+    assert "var optionSalesAction=option[5] && typeof option[5]==='object' ? String(option[5].sales_action||'').trim().toLowerCase() : ''" in js
+    assert "selectedSalesAction=key === 'douyin_leads' ? (optionSalesAction || salesAction(option[2] || option[1])) : ''" in js
+    assert "if (typedLabel && option[1] !== typedLabel)" in js
+    assert "item[1]===typedLabel || (!!typedNote && item[2]===typedNote)" in js
+
+
 def test_memory_file_is_selected_in_douyin_leads_page():
     """记忆文件唯一入口：Online「抖音获客 → 私信引流」页里的记忆文件下拉。"""
     root = Path(__file__).resolve().parent
