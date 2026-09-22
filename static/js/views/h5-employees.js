@@ -116,7 +116,7 @@
     var extraParams=extra && typeof extra === 'object' ? extra : null;
     var douyinAction=String(extraParams && extraParams.sales_action || '').trim().toLowerCase() || salesAction(String(note || normalizedLabel));
     var identity=normalizedKey === 'douyin_leads'
-      ? normalizedKey + '@@' + douyinAction + (extraParams && extraParams.ai_keywords ? '@ai' : '')
+      ? normalizedKey + '@@' + douyinAction + (extraParams && extraParams.ai_keywords ? '@ai' : '') + (extraParams && extraParams.memory_takeover ? '@memory' : '')
       : normalizedKey;
     if (!normalizedKey || !normalizedLabel || nodeOptionKeys[identity]) return;
     nodeOptionKeys[identity] = true;
@@ -155,6 +155,15 @@
     'AI 按 IP 人设和资料模板每轮生成新关键词，用过的词按天数去重，只搜最近发布的新视频。',
     '抖音',
     {sales_action:'search_collect', ai_keywords:true, ai_keyword_count:3, ai_keyword_avoid_days:7, ai_keyword_publish_days:7, customer_scope:'current_collection_batch'}
+  );
+  // 抖音私信记忆接管：一等公民节点，只出现在节点选择列表里（老节点、老排期不受影响）。
+  // 读取新私信后按记忆文件（IP人设定位-模板里选的那份）+ 会话上下文回复，不拉群、不引导加微信。
+  addNodeOption(
+    'douyin_leads',
+    '抖音私信记忆接管',
+    '抖音私信记忆接管：读取抖音新私信，按记忆文件（如百问百答）和会话上下文回复，不拉群、不引导加微信。',
+    '抖音',
+    {sales_action:'stranger_message', reply_mode:'ai_memory', memory_takeover:true, wechat_add_friend_targets_source:'douyin_private_message_phone'}
   );
 
   function nodeOptionPackageVisible(packageId) {
@@ -920,11 +929,18 @@
   function findOption(key, label, node) {
     if (String(key || '') === 'douyin_leads' && node) {
       var action=douyinNodeAction(node);
-      var wantsAiKeywords=boolParam(workflowParams(node).ai_keywords,false);
+      var nodeParams=workflowParams(node);
+      var wantsAiKeywords=boolParam(nodeParams.ai_keywords,false);
+      // 记忆接管节点和普通私信接管节点是同一个 action，必须靠这个标记区分，
+      // 否则编辑时会匹配到「抖音私信接管」，回复策略被改回固定话术。
+      var wantsMemoryTakeover=boolParam(nodeParams.memory_takeover,false)
+        || String(nodeParams.reply_mode || '').toLowerCase() === 'ai_memory'
+        || String(node && (node.note || node.ability_label) || '').indexOf('记忆接管') >= 0;
       var actionMatch=NODE_OPTIONS.find(function(item){
         if (item[0] !== key) return false;
         var extra=item[5] && typeof item[5] === 'object' ? item[5] : {};
         if (!!extra.ai_keywords !== wantsAiKeywords) return false;
+        if (!!extra.memory_takeover !== wantsMemoryTakeover) return false;
         return String(extra.sales_action || '').trim().toLowerCase() === action || salesAction(item[2] || item[1]) === action;
       });
       if (actionMatch) return actionMatch;
@@ -1213,7 +1229,12 @@
     el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; el('oeNodeWechatAddFriendEnabled').checked=boolParam(params.wechat_add_friend_enabled,false);
     setNativeAddFriendSource(nativeAddFriendSourceFromParams(params));
     if (el('oeNodeNativeAddFriendLimit')) el('oeNodeNativeAddFriendLimit').value=Math.max(1,Math.min(200,Number(params.max_targets || params.server_pool_limit || 50)));
-    if (el('oeNodeDouyinReplyMode')) el('oeNodeDouyinReplyMode').value=String(params.reply_mode || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed';
+    if (el('oeNodeDouyinReplyMode')) {
+      var optionExtraForReply=option[5] && typeof option[5] === 'object' ? option[5] : {};
+      var nodeReplyMode=String(params.reply_mode || '').trim().toLowerCase();
+      if (['fixed', 'ai_lead', 'ai_memory'].indexOf(nodeReplyMode) < 0) nodeReplyMode='';
+      el('oeNodeDouyinReplyMode').value=nodeReplyMode || (optionExtraForReply.memory_takeover ? 'ai_memory' : 'fixed');
+    }
     if (el('oeNodeDouyinKeyword')) el('oeNodeDouyinKeyword').value=String(params.keyword || params.query || '');
     if (el('oeNodeDouyinAiKeywordCount')) el('oeNodeDouyinAiKeywordCount').value=Math.max(1,Math.min(8,Number(params.ai_keyword_count || 3)));
     if (el('oeNodeDouyinAiKeywordAvoidDays')) el('oeNodeDouyinAiKeywordAvoidDays').value=Math.max(1,Math.min(60,Number(params.ai_keyword_avoid_days || 7)));
@@ -1273,7 +1294,14 @@
         delete row.params.skip_without_clear_wechat_id; delete row.params.max_targets; delete row.params.server_pool_limit;
       }
     }
-    if (selectedSalesAction === 'stranger_message') { row.params.wechat_add_friend_enabled=!!el('oeNodeWechatAddFriendEnabled').checked; row.params.wechat_add_friend_targets_source='douyin_private_message_phone'; row.params.reply_mode=String((el('oeNodeDouyinReplyMode') || {}).value || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed'; }
+    if (selectedSalesAction === 'stranger_message') {
+      var optionExtraForSave=option[5] && typeof option[5] === 'object' ? option[5] : {};
+      var formReplyMode=String((el('oeNodeDouyinReplyMode') || {}).value || 'fixed').trim().toLowerCase();
+      row.params.wechat_add_friend_enabled=!!el('oeNodeWechatAddFriendEnabled').checked;
+      row.params.wechat_add_friend_targets_source='douyin_private_message_phone';
+      row.params.reply_mode=['ai_lead', 'ai_memory'].indexOf(formReplyMode) >= 0 ? formReplyMode : 'fixed';
+      if (optionExtraForSave.memory_takeover) row.params.memory_takeover=true; else delete row.params.memory_takeover;
+    }
     else { delete row.params.wechat_add_friend_enabled; delete row.params.wechat_add_friend_targets_source; delete row.params.wechat_add_friend_rules; delete row.params.reply_mode; }
     if (key === 'douyin_leads' && selectedSalesAction === 'search_collect') {
       var optionExtra=option[5] && typeof option[5] === 'object' ? option[5] : {}, aiKeywords=!!optionExtra.ai_keywords;

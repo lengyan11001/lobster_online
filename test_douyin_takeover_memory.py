@@ -485,3 +485,18 @@ def test_h5_channel_passes_memory_takeover_mode():
     assert 'if douyin_reply_mode not in {"fixed", "ai_lead", "ai_memory"}:' in source
     assert "memory_context=_douyin_takeover_memory_text(source)" in source
     assert "memory_doc_ids=_douyin_takeover_memory_doc_ids(source)" in source
+
+
+def test_online_employee_node_picker_offers_memory_takeover():
+    """客户端 Online「我的AI员工 → 添加节点」里必须能看到「抖音私信记忆接管」。"""
+    root = Path(__file__).resolve().parent
+    js = (root / "static" / "js" / "views" / "h5-employees.js").read_text(encoding="utf-8")
+    html = (root / "static" / "views" / "h5-employees.html").read_text(encoding="utf-8")
+
+    assert "'抖音私信记忆接管'" in js
+    # 同 action 的节点靠 @memory 身份区分，否则会被去重掉（添加时就看不到）。
+    assert "? '@memory' : ''" in js
+    assert "memory_takeover:true" in js
+    assert "reply_mode:'ai_memory'" in js
+    assert "wantsMemoryTakeover" in js
+    assert '<option value="ai_memory">AI 记忆接管（按记忆文件回复）</option>' in html
