@@ -130,6 +130,8 @@ DOUYIN_MENTION_COMMENT_MAX_USERS_PER_COMMENT = 50
 DOUYIN_MENTION_COMMENT_SAFE_TEXT_LIMIT = 180
 DOUYIN_SCHEDULE_PLANS_BLOB_KEY = "douyin_schedule_plans_v1"
 DOUYIN_LOCAL_SETTINGS_BLOB_KEY = "douyin_local_settings_v1"
+# 「抖音获客 → 私信互动」页面保存的 10 条话术预设（前端 localStorage 同名的 key）
+DOUYIN_INTERACTION_PRESET_KEY = "douyin-interaction-message-presets-v1"
 DOUYIN_SCHEDULE_TYPES = {
     "collect_precise",
     "precise_touch",
@@ -6538,6 +6540,33 @@ def generate_douyin_interaction_message(
     return request_douyin_ai_comment(system_prompt, user_prompt)
 
 
+def load_douyin_local_interaction_messages() -> List[str]:
+    """取「抖音获客 → 私信互动」里保存的本地话术预设（最多 10 条）。
+
+    页面把预设存进 localStorage 并同步到本机设置（DOUYIN_INTERACTION_PRESET_KEY），
+    这里把它读出来 —— H5 排期/工作流触发私信时 payload 不带话术，需要回落到这份本地配置，
+    否则就会退到写死的默认文案（用户反馈"所有人都在发同一句"就是这么来的）。
+    """
+    try:
+        settings = load_douyin_local_settings() or {}
+    except Exception:
+        return []
+    blob = settings.get(DOUYIN_INTERACTION_PRESET_KEY)
+    raw = blob.get("presets") if isinstance(blob, dict) else blob
+    if not isinstance(raw, list):
+        return []
+    out: List[str] = []
+    seen: Set[str] = set()
+    for item in raw:
+        text = clean_douyin_video_comment_text(str(item or ""), limit=120)
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+        if len(out) >= 10:
+            break
+    return out
+
+
 def normalize_douyin_interaction_fixed_messages(payload: Dict) -> List[str]:
     messages: List[str] = []
     raw_messages = payload.get("messages")
@@ -6550,6 +6579,9 @@ def normalize_douyin_interaction_fixed_messages(payload: Dict) -> List[str]:
         fallback = clean_douyin_video_comment_text(str(payload.get("message", "") or ""), limit=120)
         if fallback:
             messages.append(fallback)
+    if not messages:
+        # H5 节点不配话术（设计如此）：回落到「私信互动」里保存的本地预设
+        messages = load_douyin_local_interaction_messages()
 
     deduped: List[str] = []
     seen = set()

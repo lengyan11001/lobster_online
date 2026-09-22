@@ -5605,7 +5605,9 @@ def _scheduled_douyin_account_id(params: Optional[Dict[str, Any]]) -> int:
 def _scheduled_douyin_fixed_text(params: Optional[Dict[str, Any]], kind: str) -> str:
     source = params if isinstance(params, dict) else {}
     if kind == "message":
-        return str(source.get("message") or source.get("direct_message") or "你好，看到你的内容挺有启发，想交流一下。").strip()
+        # 不写死兜底：节点本来就不配话术，留空让客户端回落「私信互动」里保存的本地话术；
+        # 本地也没配时由调用方跳过并写日志，避免给所有人群发同一句。
+        return str(source.get("message") or source.get("direct_message") or "").strip()
     return str(source.get("comment_text") or source.get("comment") or "内容很有参考价值，学习了。").strip()
 
 
