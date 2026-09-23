@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -3458,6 +3459,178 @@ def add_asset_to_creative_candidate_group(
 
 
 _LABEL_MEDIA_TYPES = {"image", "video", "audio", "document"}
+
+
+
+class AssetSplitReq(BaseModel):
+    segment_seconds: int = 3
+
+
+def _local_library_file(asset: Asset) -> Optional[Path]:
+    filename = str(getattr(asset, "filename", "") or "").strip()
+    if not filename:
+        return None
+    candidate = ASSETS_DIR / Path(filename).name
+    return candidate if candidate.is_file() else None
+
+
+def _reject_intermediate_library_asset(asset: Asset) -> None:
+    meta = asset.meta if isinstance(asset.meta, dict) else {}
+    if meta.get("online_split_source") or str(meta.get("content_visibility") or "").strip() == "intermediate":
+        raise HTTPException(400, detail="中间素材不能再次处理")
+
+
+async def _materialize_library_file(asset: Asset, request: Request, directory: Path) -> Path:
+    local_path = _local_library_file(asset)
+    if local_path is not None:
+        return local_path
+    suffix = Path(str(asset.filename or "asset.bin")).suffix or ".bin"
+    target = directory / f"source{suffix}"
+    await asyncio.to_thread(_download_remote_asset_to_path, asset, target, request)
+    return target
+
+
+@router.post("/api/assets/{asset_id}/split", summary="把已入库视频切成多段")
+async def split_saved_asset(
+    asset_id: str,
+    body: AssetSplitReq,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    row = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
+    if not row:
+        raise HTTPException(404, detail="素材不存在")
+    if (row.media_type or "").strip().lower() != "video":
+        raise HTTPException(400, detail="只有视频可以切片")
+    _reject_intermediate_library_asset(row)
+    seconds = max(2, min(int(body.segment_seconds or 3), 60))
+    from .h5_chat_channel import _split_online_video_file
+
+    upload_headers = _snapshot_auth_server_upload_headers(request)
+    source_meta = row.meta if isinstance(row.meta, dict) else {}
+    group_name = _creative_candidate_group(source_meta)
+    source_tags = row.tags if isinstance(row.tags, str) else None
+    created: list[Asset] = []
+    with tempfile.TemporaryDirectory(prefix="lobster_library_split_") as temp_name:
+        temp_dir = Path(temp_name)
+        source_path = await _materialize_library_file(row, request, temp_dir)
+        try:
+            segments = await asyncio.to_thread(
+                _split_online_video_file,
+                source_path,
+                temp_dir / "segments",
+                segment_seconds=seconds,
+                max_segments=120,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(500, detail=str(exc)[:500]) from exc
+        for index, segment in enumerate(segments, start=1):
+            aid, fname, fsize = _save_bytes(segment.read_bytes(), ".mp4")
+            meta = {
+                "asset_origin": "user_upload",
+                "storage": "local",
+                "public_url_status": "preparing" if upload_headers else "deferred_until_use",
+                "video_segment": True,
+                "segment_index": index,
+                "segment_seconds": seconds,
+                "split_source_asset_id": row.asset_id,
+            }
+            if group_name:
+                meta["creative_candidate_group"] = group_name
+                meta["creative_candidate_groups"] = [group_name]
+            created.append(
+                Asset(
+                    asset_id=aid,
+                    user_id=current_user.id,
+                    filename=fname,
+                    media_type="video",
+                    file_size=fsize,
+                    source_url=None,
+                    tags=source_tags,
+                    meta=meta,
+                )
+            )
+        db.add_all(created)
+        db.commit()
+    for item in created:
+        if not upload_headers:
+            continue
+        await asyncio.to_thread(_warm_asset_source_url_background, item.asset_id, current_user.id, upload_headers)
+        db.expire_all()
+        fresh = db.query(Asset).filter(Asset.asset_id == item.asset_id, Asset.user_id == current_user.id).first()
+        if fresh is None:
+            continue
+        remote = await _register_user_upload_asset_to_auth_server(fresh, request)
+        remote_asset_id = str((remote or {}).get("asset_id") or "").strip()
+        if not remote_asset_id:
+            continue
+        meta = dict(fresh.meta or {})
+        meta["remote_asset_id"] = remote_asset_id[:80]
+        meta["remote_registered_at"] = datetime.utcnow().isoformat()
+        fresh.meta = meta
+        db.add(fresh)
+        db.commit()
+    db.expire_all()
+    assets = []
+    for item in created:
+        fresh = db.query(Asset).filter(Asset.asset_id == item.asset_id, Asset.user_id == current_user.id).first()
+        if fresh is None:
+            continue
+        assets.append(
+            {
+                "asset_id": fresh.asset_id,
+                "filename": fresh.filename,
+                "segment_index": (fresh.meta or {}).get("segment_index"),
+                "creative_candidate_group": _creative_candidate_group(fresh.meta),
+                "tags": fresh.tags or "",
+            }
+        )
+    return {
+        "ok": True,
+        "source_asset_id": row.asset_id,
+        "segment_seconds": seconds,
+        "count": len(assets),
+        "assets": assets,
+    }
+
+
+@router.post("/api/assets/{asset_id}/ai-tags", summary="用 AI 理解素材并写入标签")
+async def fill_saved_asset_ai_tags(
+    asset_id: str,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    row = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
+    if not row:
+        raise HTTPException(404, detail="素材不存在")
+    media_type = (row.media_type or "").strip().lower()
+    if media_type not in {"image", "video"}:
+        raise HTTPException(400, detail="只支持图片或视频")
+    _reject_intermediate_library_asset(row)
+    from ..services.asset_ai_understand import understand_asset_tags
+
+    with tempfile.TemporaryDirectory(prefix="lobster_library_ai_") as temp_name:
+        source_path = await _materialize_library_file(row, request, Path(temp_name))
+        try:
+            tags = await asyncio.to_thread(
+                understand_asset_tags,
+                source_path,
+                media_type,
+                base_url=_auth_server_base_url(),
+                headers=_forward_auth_headers(request),
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(502, detail=str(exc)[:300]) from exc
+    group_name = _creative_candidate_group(row.meta if isinstance(row.meta, dict) else {})
+    return update_asset_labels(
+        asset_id,
+        AssetLabelsReq(creative_candidate_group=group_name, tags=tags),
+        request,
+        current_user,
+        db,
+    )
 
 
 @router.post("/api/assets/{asset_id}/labels", summary="编辑素材分组和标签")

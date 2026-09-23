@@ -4105,6 +4105,40 @@ function _setAssetLoadMoreState(visible, loading) {
   }
 }
 
+
+function _askAssetSegmentSeconds() {
+  return new Promise(function(resolve) {
+    var old = document.getElementById('asset-split-seconds-modal');
+    if (old) old.remove();
+    var wrap = document.createElement('div');
+    wrap.id = 'asset-split-seconds-modal';
+    wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99999;display:flex;align-items:center;justify-content:center;';
+    wrap.innerHTML = '<div style="background:#fff;color:#111;padding:16px;border-radius:12px;width:min(360px,92vw);box-shadow:0 12px 40px rgba(0,0,0,.2);">'
+      + '<div style="font-weight:600;margin-bottom:8px;">切片时长</div>'
+      + '<div style="font-size:13px;margin-bottom:8px;">每段多少秒，范围 2 到 60</div>'
+      + '<input id="asset-split-seconds-input" type="number" min="2" max="60" value="3" style="width:100%;box-sizing:border-box;padding:8px;">'
+      + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">'
+      + '<button type="button" id="asset-split-seconds-cancel">取消</button>'
+      + '<button type="button" id="asset-split-seconds-ok">开始切片</button>'
+      + '</div></div>';
+    document.body.appendChild(wrap);
+    var input = document.getElementById('asset-split-seconds-input');
+    function close(value) { wrap.remove(); resolve(value); }
+    document.getElementById('asset-split-seconds-cancel').onclick = function() { close(null); };
+    wrap.addEventListener('click', function(e) { if (e.target === wrap) close(null); });
+    document.getElementById('asset-split-seconds-ok').onclick = function() {
+      var seconds = parseInt(input.value, 10);
+      if (!seconds || seconds < 2 || seconds > 60) {
+        input.focus();
+        return;
+      }
+      close(seconds);
+    };
+    input.focus();
+    input.select();
+  });
+}
+
 function _bindAssetCardActions(container) {
   if (!container) return;
   _bindAssetContentActions(container, _assetLibraryState.assetMap);
@@ -4149,6 +4183,67 @@ function _bindAssetCardActions(container) {
       var aid = btn.getAttribute('data-download-asset');
       var asset = _assetLibraryState.assetMap[aid];
       _downloadAssetToLibrary(asset, { button: btn, usePreviewMsg: false });
+    });
+  });
+
+  container.querySelectorAll('button[data-split-asset]').forEach(function(btn) {
+    if (btn._assetLibraryBound) return;
+    btn._assetLibraryBound = true;
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var aid = btn.getAttribute('data-split-asset');
+      _askAssetSegmentSeconds().then(function(seconds) {
+        if (!seconds) return;
+        btn.disabled = true;
+        var originalText = btn.textContent;
+        btn.textContent = '切片中...';
+        fetch(publishLocalBase() + '/api/assets/' + encodeURIComponent(aid) + '/split', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+          body: JSON.stringify({ segment_seconds: seconds })
+        }).then(function(r) {
+          return r.json().catch(function() { return {}; }).then(function(d) {
+            if (!r.ok) throw new Error((d && (d.detail || d.message)) || ('HTTP ' + r.status));
+            return d;
+          });
+        }).then(function() {
+          _assetMsgShow('切片完成，已写入同一分组。', false);
+          if (typeof loadAssets === 'function') loadAssets((_assetLibraryState && _assetLibraryState.query) || '');
+        }).catch(function(err) {
+          _assetMsgShow((err && err.message) || '切片失败', true);
+        }).then(function() {
+          btn.disabled = false;
+          btn.textContent = originalText;
+        });
+      });
+    });
+  });
+  container.querySelectorAll('button[data-ai-tags-asset]').forEach(function(btn) {
+    if (btn._assetLibraryBound) return;
+    btn._assetLibraryBound = true;
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var aid = btn.getAttribute('data-ai-tags-asset');
+      btn.disabled = true;
+      var originalText = btn.textContent;
+      btn.textContent = '理解中...';
+      fetch(publishLocalBase() + '/api/assets/' + encodeURIComponent(aid) + '/ai-tags', {
+        method: 'POST',
+        headers: authHeaders()
+      }).then(function(r) {
+        return r.json().catch(function() { return {}; }).then(function(d) {
+          if (!r.ok) throw new Error((d && (d.detail || d.message)) || ('HTTP ' + r.status));
+          return d;
+        });
+      }).then(function() {
+        _assetMsgShow('AI理解完成，已写入标签。', false);
+        if (typeof loadAssets === 'function') loadAssets((_assetLibraryState && _assetLibraryState.query) || '');
+      }).catch(function(err) {
+        _assetMsgShow((err && err.message) || 'AI理解失败', true);
+      }).then(function() {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      });
     });
   });
   container.querySelectorAll('button[data-creative-candidate]').forEach(function(btn) {
@@ -4342,6 +4437,8 @@ function _renderAssetCards(container, assets, append) {
     var copyLabel = isContentRecord && ['article', 'wechat_article'].indexOf(String(a.kind || '').toLowerCase()) >= 0 ? '复制文案' : '复制摘要';
     var copyPromptBtn = isContentRecord ? '<button type="button" class="btn btn-ghost btn-sm" data-copy-asset-prompt="' + escapeAttr(a.asset_id) + '"' + (copyValue ? '' : ' disabled') + '>' + copyLabel + '</button>' : '';
     var downloadBtn = (!isContentRecord || String(a.file_url || '').trim()) ? '<button type="button" class="btn btn-ghost btn-sm" data-download-asset="' + escapeAttr(a.asset_id) + '">' + (isContentRecord ? '打开文件' : '下载') + '</button>' : '';
+var splitBtn = !isContentRecord && isVideo ? '<button type="button" class="btn btn-ghost btn-sm" data-split-asset="' + escapeAttr(a.asset_id) + '">切片</button>' : '';
+    var aiTagsBtn = !isContentRecord && (isImage || isVideo) ? '<button type="button" class="btn btn-ghost btn-sm" data-ai-tags-asset="' + escapeAttr(a.asset_id) + '">AI理解</button>' : '';
     var candidateBtn = !isContentRecord ? '<button type="button" class="btn btn-ghost btn-sm" data-creative-candidate="' + escapeAttr(a.asset_id) + '" data-current-creative-group="' + escapeAttr(currentGroup) + '" data-current-tags="' + escapeAttr(a.tags || '') + '">编辑</button>' : '';
     var actionMenu = _assetContentActionMenuHtml(a);
     var contentPreviewText = isContentRecord ? _assetContentText(a) : '';
@@ -4362,7 +4459,7 @@ function _renderAssetCards(container, assets, append) {
       imageStrip +
       groupHtml + tagHtml +
       '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">ID: ' + escapeHtml(a.asset_id) + ' · ' + escapeHtml(_formatDateTimeBeijing(a.created_at)) + '</div>' +
-      '<div class="card-actions">' + previewBtn + ' ' + copyPromptBtn + ' ' + downloadBtn + ' ' + useAsAttachBtn + ' ' + candidateBtn + ' ' + actionMenu + ' ' + deleteBtn + '</div></div>';
+      '<div class="card-actions">' + previewBtn + ' ' + copyPromptBtn + ' ' + downloadBtn + ' ' + useAsAttachBtn + ' ' + splitBtn + ' ' + aiTagsBtn + ' ' + candidateBtn + ' ' + actionMenu + ' ' + deleteBtn + '</div></div>';
   }).join('');
 
   if (append) container.insertAdjacentHTML('beforeend', html);

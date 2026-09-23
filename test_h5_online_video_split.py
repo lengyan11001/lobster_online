@@ -557,4 +557,66 @@ def test_online_split_segment_form_includes_only_nonempty_labels(tmp_path):
     assert captured["data"]["creative_candidate_group"] == "spring hero"
     assert captured["data"]["tags"] == "hot,cover"
     assert captured["data"]["video_segment"] == "true"
+def test_online_video_split_keeps_requested_sixty_second_segments(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    output = tmp_path / "segments"
+    commands = []
 
+    monkeypatch.setattr(channel, "find_ffmpeg", lambda: "C:/bundle/ffmpeg.exe")
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        pattern = str(command[-1])
+        Path(pattern.replace("%03d", "000")).write_bytes(b"one")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(channel.subprocess, "run", fake_run)
+    channel._split_online_video_file(source, output, segment_seconds=60, max_segments=120)
+    assert commands[0][commands[0].index("-segment_time") + 1] == "60"
+    assert commands[0][commands[0].index("-t") + 1] == "7200"
+
+
+def test_client_command_keep_source_does_not_cleanup(monkeypatch):
+    completed = []
+    cleaned = []
+
+    async def fake_run(*_args, **_kwargs):
+        return {
+            "total": 2,
+            "assets": [],
+            "action": "split_uploaded_video_asset",
+            "source_asset_id": "source-asset",
+        }
+
+    async def fake_complete(_cloud, _base, _headers, message_id, **kwargs):
+        completed.append((message_id, kwargs))
+
+    async def fake_cleanup(_cloud, _base, _headers, source_asset_id):
+        cleaned.append(source_asset_id)
+
+    monkeypatch.setattr(channel, "_run_online_video_split_command", fake_run)
+    monkeypatch.setattr(channel, "_complete_cloud_message", fake_complete)
+    monkeypatch.setattr(channel, "_cleanup_online_split_source", fake_cleanup)
+    command = {
+        "action": "split_uploaded_video_asset",
+        "source_asset_id": "source-asset",
+        "source_url": "https://cdn.example.com/source.mp4",
+        "keep_source": True,
+    }
+    item = {
+        "id": "message-id",
+        "content": channel._H5_CLIENT_COMMAND_PREFIX + json.dumps(command),
+    }
+    asyncio.run(
+        channel._run_client_command(
+            object(),
+            "https://server.example.com",
+            {"Authorization": "Bearer test"},
+            "jwt-token",
+            "installation-id",
+            item,
+        )
+    )
+    assert completed[0][0] == "message-id"
+    assert cleaned == []

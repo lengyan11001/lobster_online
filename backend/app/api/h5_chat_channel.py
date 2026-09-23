@@ -2001,7 +2001,7 @@ def _split_online_video_file(
     max_segments: int,
 ) -> List[Path]:
     ffmpeg = find_ffmpeg()
-    seconds = max(2, min(int(segment_seconds or 3), 10))
+    seconds = max(2, min(int(segment_seconds or 3), 60))
     segment_limit = max(1, min(int(max_segments or 120), 120))
     output_dir.mkdir(parents=True, exist_ok=True)
     output_pattern = output_dir / "segment_%03d.mp4"
@@ -2137,7 +2137,7 @@ async def _run_online_video_split_command(
     source_filename = Path(str(payload.get("source_filename") or "source.mp4")).name
     creative_candidate_group = str(payload.get("creative_candidate_group") or "").strip()
     upload_tags = str(payload.get("tags") or "").strip()
-    segment_seconds = max(2, min(int(payload.get("segment_seconds") or 3), 10))
+    segment_seconds = max(2, min(int(payload.get("segment_seconds") or 3), 60))
     max_segments = max(1, min(int(payload.get("max_segments") or 120), 120))
     if not source_asset_id or not source_url:
         raise RuntimeError("Online 切片指令缺少原视频信息")
@@ -2274,6 +2274,57 @@ async def _cleanup_online_split_source(
             )
     except Exception as exc:
         logger.warning("[H5-CHAT] online split source cleanup failed asset_id=%s: %s", source_asset_id, exc)
+
+
+
+async def _run_fill_asset_ai_tags_command(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    message_id: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    source_asset_id = str(payload.get("source_asset_id") or "").strip()
+    source_url = str(payload.get("source_url") or "").strip()
+    source_filename = Path(str(payload.get("source_filename") or "source.mp4")).name
+    group_name = str(payload.get("creative_candidate_group") or "")
+    media_type = str(payload.get("media_type") or "video").strip().lower() or "video"
+    if not source_asset_id or not source_url:
+        raise RuntimeError("AI\u7406\u89e3\u6307\u4ee4\u7f3a\u5c11\u7d20\u6750\u4fe1\u606f")
+    suffix = Path(source_filename).suffix.lower() or ".mp4"
+    with tempfile.TemporaryDirectory(prefix="lobster_asset_ai_tags_") as temp_name:
+        source_path = Path(temp_name) / f"source{suffix}"
+        await _post_cloud_event(
+            cloud,
+            base,
+            headers,
+            message_id,
+            "progress",
+            {"text": "Online \u6b63\u5728\u7406\u89e3\u7d20\u6750", "stage": "understand"},
+        )
+        await _download_online_split_source(source_url, source_path)
+        from ..services.asset_ai_understand import understand_asset_tags
+
+        tags = await asyncio.to_thread(
+            understand_asset_tags,
+            source_path,
+            media_type,
+            base_url=base,
+            headers=dict(headers),
+        )
+    response = await cloud.post(
+        f"{base}/api/assets/{source_asset_id}/labels",
+        json={"creative_candidate_group": group_name, "tags": tags},
+        headers=headers,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"\u5199\u56de\u6807\u7b7e\u5931\u8d25\uff1aHTTP {response.status_code} {(response.text or '')[:300]}")
+    return {
+        "mode": "client_command",
+        "action": "fill_asset_ai_tags",
+        "source_asset_id": source_asset_id,
+        "tags": tags,
+    }
 
 
 async def _download_online_memory_source(source_url: str, target: Path) -> bytes:
@@ -2583,12 +2634,13 @@ async def _run_client_command(
                 reply_text=f"视频切片完成，共生成 {result['total']} 段",
                 payload=result,
             )
-            await _cleanup_online_split_source(
-                cloud,
-                base,
-                headers,
-                str(result.get("source_asset_id") or ""),
-            )
+            if not (payload or {}).get("keep_source"):
+                await _cleanup_online_split_source(
+                    cloud,
+                    base,
+                    headers,
+                    str(result.get("source_asset_id") or ""),
+                )
             return
         if action == "parse_uploaded_memory_document":
             require_document_parser_runtime(refresh=True)
@@ -2624,11 +2676,22 @@ async def _run_client_command(
             for source_asset_id in result.get("source_asset_ids") or []:
                 await _cleanup_online_memory_source(cloud, base, headers, str(source_asset_id or ""))
             return
+        if action == "fill_asset_ai_tags":
+            result = await _run_fill_asset_ai_tags_command(cloud, base, headers, message_id, payload)
+            await _complete_cloud_message(
+                cloud,
+                base,
+                headers,
+                message_id,
+                reply_text="AI理解完成，已写入标签",
+                payload=result,
+            )
+            return
         raise RuntimeError(f"unsupported client command: {action or '-'}")
     except Exception as exc:
         if action == "split_uploaded_video_asset" and not split_result_ready:
             source_asset_id = str((payload or {}).get("source_asset_id") or "").strip()
-            if source_asset_id:
+            if source_asset_id and not (payload or {}).get("keep_source"):
                 await _cleanup_online_split_source(cloud, base, headers, source_asset_id)
         if action in {"parse_uploaded_memory_document", "generate_memory_documents_from_upload"} and not memory_result_ready:
             source_asset_ids = [str((payload or {}).get("source_asset_id") or "").strip()]
