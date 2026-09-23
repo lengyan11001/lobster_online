@@ -56,6 +56,10 @@ class _FakePage:
         self.waits = []
         self.follow_states = list(follow_states or [])
         self.follow_checks = 0
+        self.reloads = 0
+
+    async def reload(self, *_args, **_kwargs):
+        self.reloads += 1
 
     async def goto(self, *_args, **_kwargs):
         return None
@@ -175,12 +179,21 @@ def test_follow_button_polls_until_it_appears(monkeypatch):
         ]
     )
     scraper = _scraper_with(monkeypatch, page)
+    logs = []
 
-    result = asyncio.run(scraper.follow_user_and_find_first_post(PROFILE_URL, "用户A"))
+    result = asyncio.run(
+        scraper.follow_user_and_find_first_post(
+            PROFILE_URL,
+            "用户A",
+            logger=lambda message, level="info": logs.append(str(message)),
+        )
+    )
 
     assert result["followed"] is True
     # 老逻辑固定等 4.5 秒只查一次，第二轮才出现的按钮会被判成“不允许关注”
     assert page.follow_checks == 2, f"应轮询到第 2 次命中，实际 {page.follow_checks} 次"
+    assert page.reloads == 0
+    assert not any("仍未出现" in line for line in logs)
 
 
 def test_follow_button_failure_message_mentions_wait(monkeypatch):
@@ -198,9 +211,11 @@ def test_follow_button_failure_message_mentions_wait(monkeypatch):
     except RuntimeError as exc:
         assert "未找到可点击的关注按钮" in str(exc)
         assert "已轮询等待" in str(exc)
+        assert "并已刷新主页重试一次" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("按钮一直不出现时应该报错")
     assert page.follow_checks > 1, "应该是轮询多次后才失败"
+    assert page.reloads == 1
 
 
 def test_unreachable_target_is_skipped_not_failed():
@@ -272,3 +287,113 @@ def test_follow_comment_state_refresh_has_no_stray_skipped():
 
     douyin_api.douyin_follow_comment_state["workers"] = []
     douyin_api.refresh_follow_comment_state_from_workers(0, 240, 360)
+
+
+def test_follow_button_unavailable_does_not_reload(monkeypatch):
+    page = _FakePage(
+        follow_states=[
+            {
+                "action": "unavailable",
+                "label": "",
+                "unavailable_reason": "用户不存在，该抖音主页已失效或已被删除",
+            }
+        ]
+    )
+    scraper = _scraper_with(monkeypatch, page)
+
+    try:
+        asyncio.run(scraper.follow_user_and_find_first_post(PROFILE_URL, "用户A"))
+    except RuntimeError as exc:
+        assert "用户不存在" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("主页不可用时应该直接失败")
+    assert page.follow_checks == 1
+    assert page.reloads == 0
+
+
+def test_mention_queries_cover_precise_touch_failures():
+    names = {
+        "*一路有李*": (["*一路有李*", "一路有李", "一路"], [True, True, True]),
+        "A混血儿～大小姐": (["A混血儿～大小姐", "A混血儿大小姐", "A混血儿"], [True, True, True]),
+        "fantasticbebe": (["fantasticbebe", "fantasti"], [False, True]),
+        "\u200d ————♡⃛ Lᵒᵛᵉ": (["\u200d ————♡⃛ Lᵒᵛᵉ", "Love"], [True, True]),
+        "一个厉害的钓手": (["一个厉害的钓手", "一个厉害"], [False, True]),
+        "川小川哈": (["川小川哈", "川小"], [False, True]),
+        "痛症调理\u2011媚姐": (["痛症调理\u2011媚姐", "痛症调理媚姐", "痛症调理"], [True, True, True]),
+        "萍儿、": (["萍儿、", "萍儿"], [True, True]),
+    }
+    for username, (queries, required) in names.items():
+        actual = scraper_module.build_mention_search_queries(username)
+        assert actual == queries, (username, actual)
+        flags = [scraper_module.mention_query_requires_match(username, query) for query in actual]
+        assert flags == required, (username, flags)
+
+    assert scraper_module.mention_label_matches("Love", "Lovely", require_match=True) is False
+    assert scraper_module.mention_label_matches("川小川哈", "川小明", require_match=True) is False
+    assert scraper_module.mention_label_matches("\u200d ————♡⃛ Lᵒᵛᵉ", "Love", require_match=True) is True
+
+
+def test_mention_candidate_error_keeps_old_sentence():
+    message = scraper_module.format_mention_candidate_error(
+        "萍儿、",
+        {"root_visible": False, "root_count": 0, "row_count": 0, "editor_text": "@萍儿"},
+    )
+    assert message.startswith("输入 @萍儿、 后没有出现可点击的候选用户")
+    assert "候选容器未出现" in message
+    assert "编辑框内容=@萍儿" in message
+
+
+def test_completed_result_includes_failure_reason_not_skip():
+    users = [
+        {"username": "甲", "status": "completed", "error": ""},
+        {
+            "username": "乙",
+            "status": "failed",
+            "error": "未找到可点击的关注按钮（已轮询等待 15 秒，并已刷新主页重试一次）",
+        },
+        {"username": "丙", "status": "unavailable", "error": "用户不存在，该抖音主页已失效或已被删除"},
+        {
+            "username": "丁",
+            "status": "failed",
+            "error": "未找到可点击的关注按钮（已轮询等待 15 秒，并已刷新主页重试一次）",
+        },
+    ]
+    result = h5_chat_channel._scheduled_douyin_completed_result(
+        "follow_comment",
+        {"code": 200, "msg": "ok"},
+        {"status": "done", "state": {"total": 4, "processed": 4, "success": 1, "failed": 2}},
+        users=users,
+    )
+    assert result["code"] == 200
+    assert "失败 2。失败原因：" in result["summary"]
+    assert "未找到可点击的关注按钮" in result["summary"]
+    assert result["summary"].count("未找到可点击的关注按钮") == 1
+    assert "用户不存在" not in result["summary"]
+
+    line = h5_chat_channel._scheduled_douyin_precise_touch_detail_line(
+        {
+            "label": "关注并评论",
+            "selected": 10,
+            "processed": 10,
+            "success": 7,
+            "failed": 3,
+            "skipped": 0,
+            "not_started": 0,
+            "failure_reasons": ["未找到可点击的关注按钮（已轮询等待 15 秒）"],
+        }
+    )
+    assert "未启动 0，失败原因：" in line
+    assert "未找到可点击的关注按钮" in line
+    skipped = h5_chat_channel._scheduled_douyin_precise_touch_detail_line(
+        {
+            "label": "关注并评论",
+            "selected": 1,
+            "processed": 1,
+            "success": 0,
+            "failed": 0,
+            "skipped": 1,
+            "not_started": 0,
+            "failure_reasons": ["用户不存在"],
+        }
+    )
+    assert "失败原因" not in skipped

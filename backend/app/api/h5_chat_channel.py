@@ -6458,6 +6458,64 @@ def _scheduled_douyin_changed_conversations(
     return [_scheduled_douyin_slim_conversation(row) for row in changed[: max(1, limit)]]
 
 
+
+def _scheduled_douyin_failure_reasons(
+    users: Optional[List[Dict[str, Any]]],
+    *,
+    limit: int = 3,
+) -> List[str]:
+    """失败原因去重后最多 3 条。成功、跳过、未启动不进摘要。"""
+    reasons: List[str] = []
+    seen = set()
+    for row in users or []:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        if status not in _TARGET_FAILED_STATES:
+            continue
+        error = re.sub(r"\s+", " ", str(row.get("error") or "")).strip()
+        if not error:
+            continue
+        if len(error) > 100:
+            error = error[:100].rstrip()
+        if error in seen:
+            continue
+        seen.add(error)
+        reasons.append(error)
+        if len(reasons) >= max(1, int(limit or 3)):
+            break
+    return reasons
+
+
+def _scheduled_douyin_failure_reason_text(
+    users: Optional[List[Dict[str, Any]]],
+    *,
+    limit: int = 3,
+) -> str:
+    reasons = _scheduled_douyin_failure_reasons(users, limit=limit)
+    if not reasons:
+        return ""
+    return "失败原因：" + "；".join(reasons)
+
+
+def _scheduled_douyin_precise_touch_detail_line(item: Dict[str, Any]) -> str:
+    row = item if isinstance(item, dict) else {}
+    line = (
+        f"{row.get('label', '')}：选取 {row.get('selected', 0)}，处理 {row.get('processed', 0)}，"
+        f"成功 {row.get('success', 0)}，失败 {row.get('failed', 0)}，未启动 {row.get('not_started', 0)}"
+    )
+    if row.get("skipped"):
+        line += f"，跳过 {row.get('skipped')}"
+    reasons = [
+        str(reason).strip()
+        for reason in (row.get("failure_reasons") or [])
+        if str(reason).strip()
+    ]
+    if row.get("failed") and reasons:
+        line += "，失败原因：" + "；".join(reasons)
+    return line
+
+
 def _scheduled_douyin_completed_result(
     action: str,
     start_result: Dict[str, Any],
@@ -6485,6 +6543,10 @@ def _scheduled_douyin_completed_result(
             f"{label}执行完成：共 {stats.get('total', 0)}，已处理 {stats.get('processed', 0)}，"
             f"成功 {stats.get('success', 0)}，失败 {stats.get('failed', 0)}。"
         )
+    if _safe_int(stats.get("failed")) > 0:
+        reason_text = _scheduled_douyin_failure_reason_text(users)
+        if reason_text:
+            summary = f"{summary}{reason_text}。"
     result.update(
         {
             "msg": summary,
@@ -6865,6 +6927,11 @@ async def _run_scheduled_douyin_sales_action(
                 "started": result_code == 200,
                 "result_code": result_code,
                 "error": str((touch_result or {}).get("msg") or "").strip() if isinstance(touch_result, dict) else "",
+                "failure_reasons": (
+                    _scheduled_douyin_failure_reasons(action_users)
+                    if action_failed_users
+                    else []
+                ),
             }
             action_stats.append(action_stat)
             results.append(
@@ -6893,8 +6960,7 @@ async def _run_scheduled_douyin_sales_action(
         not_started_action_count = len(action_stats) - started_action_count
         failed_action_count = max(0, started_action_count - success_count)
         detail_summary = "；".join(
-            f"{item['label']}：选取 {item['selected']}，处理 {item['processed']}，成功 {item['success']}，失败 {item['failed']}，未启动 {item['not_started']}"
-            + (f"，跳过 {item['skipped']}" if item.get("skipped") else "")
+            _scheduled_douyin_precise_touch_detail_line(item)
             for item in action_stats
         )
         summary = (

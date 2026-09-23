@@ -6,6 +6,7 @@ import os
 import random
 import re
 import time
+import unicodedata
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable, Dict, List, Optional
 from urllib.parse import parse_qs, quote, urlencode, urlparse
@@ -46,6 +47,124 @@ DOUYIN_PM_FALLBACK_CLICK_METHODS = ("normal", "force", "coordinate", "native")
 # 关注按钮：主页是 SPA，按钮经常晚几秒才渲染，轮询等待而不是固定等一次。
 DOUYIN_FOLLOW_BUTTON_WAIT_SECONDS = 15.0
 DOUYIN_FOLLOW_BUTTON_POLL_INTERVAL_MS = 500
+
+DOUYIN_MENTION_CANDIDATE_SELECTOR = (
+    '[class*="atBox-inner-container"], [class*="atBox-inner"], [role="listbox"]'
+)
+
+
+def mention_match_key(value: str) -> str:
+    """昵称归一化：上标字母折成普通字母，只留中文、字母和数字。"""
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    chars = []
+    for ch in text:
+        if ch.isspace():
+            continue
+        category = unicodedata.category(ch)
+        if category.startswith("L") or category.startswith("N"):
+            chars.append(ch)
+    return "".join(chars).casefold()
+
+
+def mention_typed_core(value: str) -> str:
+    """输入框用的核心串：保留大小写，去掉符号、空白和装饰字符。"""
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    chars = []
+    for ch in text:
+        if ch.isspace():
+            continue
+        category = unicodedata.category(ch)
+        if category.startswith("L") or category.startswith("N"):
+            chars.append(ch)
+    return "".join(chars)
+
+
+def _mention_search_prefix(core: str) -> str:
+    if not core:
+        return ""
+    cjk = sum(1 for ch in core if "\u4e00" <= ch <= "\u9fff")
+    mostly_cjk = cjk >= max(1, len(core) // 2)
+    if mostly_cjk:
+        if len(core) > 4:
+            return core[:4]
+        if len(core) > 2:
+            return core[:2]
+        return ""
+    if len(core) > 8:
+        return core[:8]
+    return ""
+
+
+def build_mention_search_queries(username: str) -> List[str]:
+    """原文 → 去符号核心 → 较长核心的短前缀。最多 3 次；只剩一种时再原样打一遍。"""
+    original = re.sub(r"\s+", " ", str(username or "")).strip()
+    if not original:
+        return []
+    queries: List[str] = []
+
+    def add(item: str) -> None:
+        text = str(item or "").strip()
+        if text and text not in queries and len(queries) < 3:
+            queries.append(text)
+
+    add(original)
+    add(mention_typed_core(original))
+    add(_mention_search_prefix(mention_typed_core(original)))
+    if len(queries) == 1:
+        queries.append(queries[0])
+    return queries
+
+
+def mention_query_requires_match(username: str, query: str) -> bool:
+    """短前缀、去符号核心、带符号原文都不能盲点列表第一项。"""
+    original = re.sub(r"\s+", " ", str(username or "")).strip()
+    typed = str(query or "").strip()
+    if not original or typed != original:
+        return True
+    compact_original = re.sub(r"\s+", "", original)
+    return mention_typed_core(original) != compact_original
+
+
+def mention_label_matches(expected: str, label: str, *, require_match: bool = False) -> bool:
+    """候选必须对上原昵称。长度差超过 1 的更长名字（Love / Lovely）不算同一个。"""
+    expected_text = re.sub(r"\s+", " ", str(expected or "")).strip()
+    label_text = re.sub(r"\s+", " ", str(label or "")).strip()
+    if not expected_text or not label_text:
+        return False
+    expected_key = mention_match_key(expected_text)
+    label_key = mention_match_key(label_text)
+    if not expected_key or not label_key:
+        return False
+    if label_key == expected_key or label_text == expected_text:
+        return True
+    length_gap = abs(len(label_key) - len(expected_key))
+    if length_gap <= 1 and (
+        label_key.startswith(expected_key) or expected_key.startswith(label_key)
+    ):
+        return True
+    if require_match:
+        return False
+    return False
+
+def format_mention_candidate_error(username: str, state: Optional[Dict[str, object]] = None) -> str:
+    """候选没点到时的对外错误：保留旧句，并带上容器、候选数和编辑框。"""
+    expected = re.sub(r"\s+", " ", str(username or "")).strip()
+    payload = state if isinstance(state, dict) else {}
+    container = "已出现" if payload.get("root_visible") else "未出现"
+    try:
+        root_count = int(payload.get("root_count", 0) or 0)
+    except (TypeError, ValueError):
+        root_count = 0
+    try:
+        row_count = int(payload.get("row_count", 0) or 0)
+    except (TypeError, ValueError):
+        row_count = 0
+    editor = str(payload.get("editor_text", "") or "").strip() or "空"
+    return (
+        f"输入 @{expected} 后没有出现可点击的候选用户"
+        f"（候选容器{container}，可见容器 {root_count} 个，候选 {row_count} 个，编辑框内容={editor}）"
+    )
+
 
 # 评论采集：面板在屏但一行评论都没渲染时，先唤醒虚拟列表再继续，别直接判失败。
 # 2026-09-21 现场：3 条视频因“已打开但未提取到评论”被判失败，实际是列表没渲染。
@@ -716,7 +835,7 @@ class DouyinCommentScraper:
         try:
             return await page.evaluate(
                 """
-                ({ editorSelectors, placeholderSelectors }) => {
+                ({ editorSelectors, placeholderSelectors, mentionCandidateSelector }) => {
                     const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
                     const isVisible = (node) => {
                         if (!node || typeof node.getBoundingClientRect !== 'function') return false;
@@ -737,7 +856,7 @@ class DouyinCommentScraper:
                     const editor = pickVisibleBySelectors(editorSelectors);
                     const placeholder = pickVisibleBySelectors(placeholderSelectors);
                     const suggestionVisible = Array.from(
-                        document.querySelectorAll('[class*="atBox-inner-container"], [class*="atBox-inner"]')
+                        document.querySelectorAll(mentionCandidateSelector || '[class*="atBox-inner-container"], [class*="atBox-inner"], [role="listbox"]')
                     ).some(isVisible);
 
                     const sendCandidates = Array.from(
@@ -815,6 +934,7 @@ class DouyinCommentScraper:
                 {
                     "editorSelectors": self._comment_editor_selector(),
                     "placeholderSelectors": self._comment_placeholder_node_selector(),
+                    "mentionCandidateSelector": DOUYIN_MENTION_CANDIDATE_SELECTOR,
                 },
             )
         except Exception:
@@ -7258,12 +7378,17 @@ class DouyinCommentScraper:
                 await page.close()
 
     async def _resolve_follow_button_state(self, page: Page) -> Dict[str, object]:
-        """读一次关注按钮状态：能点就点掉，返回 clicked / already_following / not_found。"""
+        """读一次关注按钮状态：能点就点掉，返回 clicked / already_following / not_found / unavailable。
+
+        页面类型、摘要、可见按钮必须跟同一次 evaluate 一起返回。
+        再开一轮 evaluate 时，测试里的假页面会把不认识的脚本回成 2。
+        """
         state = await await_with_hard_timeout(
             page.evaluate(
                 """
                 () => {
                     const normalize = (value) => String(value || '').replace(/\\s+/g, '').trim();
+                    const preview = (value) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, 40);
                     const isVisible = (node) => {
                         if (!node || typeof node.getBoundingClientRect !== 'function') return false;
                         const style = window.getComputedStyle(node);
@@ -7273,27 +7398,73 @@ class DouyinCommentScraper:
                         const rect = node.getBoundingClientRect();
                         return rect.width > 0 && rect.height > 0;
                     };
-                    const nodes = Array.from(document.querySelectorAll('button, [role="button"]')).filter(isVisible);
-                    const readText = (node) => normalize(node.innerText || node.textContent || '');
-                    const followNode = nodes.find((node) => {
-                        const text = readText(node);
+                    const isStat = (node) => !!(node && node.closest && node.closest(
+                        '[data-e2e="user-info-follow"], [data-e2e="user-info-fans"], [data-e2e="user-info-like"]'
+                    ));
+                    const isFollowText = (text) => {
                         if (!text) return false;
                         if (text.includes('已关注') || text.includes('互相关注')) return false;
-                        return text === '关注' || text === '回关' || text.endsWith('关注');
-                    });
+                        if (/^\\d/.test(text)) return false;
+                        if (text === '关注' || text === '回关' || text === '+关注' || text === '＋关注') return true;
+                        return text.endsWith('关注') && text.length <= 4;
+                    };
+                    const readText = (node) => normalize(node.innerText || node.textContent || '');
+                    const bodyText = normalize(document.body && document.body.innerText || '');
+                    const href = String(location.href || '');
+                    let pageKind = '其他页面';
+                    let unavailableReason = '';
+                    if (bodyText.includes('用户不存在')) {
+                        pageKind = '用户不存在';
+                        unavailableReason = '用户不存在：该抖音主页已失效或已被删除';
+                    } else if (bodyText.includes('账号已被封禁') || bodyText.includes('账号封禁')) {
+                        pageKind = '账号封禁';
+                        unavailableReason = '账号封禁：该抖音账号不可用，无法关注';
+                    } else if (href.includes('/user/')) {
+                        pageKind = '用户主页';
+                    } else if (href.includes('/video/')) {
+                        pageKind = '视频页';
+                    }
+                    const diagnose = () => {
+                        const buttons = Array.from(document.querySelectorAll('button, [role="button"], .semi-button'))
+                            .filter(isVisible)
+                            .map(readText)
+                            .filter(Boolean)
+                            .slice(0, 6);
+                        return {
+                            page_kind: pageKind,
+                            summary: preview(document.body && document.body.innerText || ''),
+                            visible_buttons: buttons.join('、'),
+                            url: href,
+                            unavailable_reason: unavailableReason,
+                        };
+                    };
+                    const selector = 'button, [role="button"], [data-e2e*="follow-btn"], .semi-button, .semi-button-content';
+                    const profileRoot = document.querySelector('[data-e2e="user-info"]') || document.querySelector('header');
+                    const profileNodes = profileRoot
+                        ? Array.from(profileRoot.querySelectorAll('button, [role="button"], .semi-button, a, div, span'))
+                        : [];
+                    const nodes = Array.from(document.querySelectorAll(selector))
+                        .concat(profileNodes)
+                        .filter(isVisible)
+                        .filter((node) => !isStat(node));
+                    const followNode = nodes.find((node) => isFollowText(readText(node)));
                     if (followNode) {
                         const label = readText(followNode);
-                        followNode.click();
-                        return { action: 'clicked', label };
+                        const clickable = followNode.closest('button, [role="button"], .semi-button') || followNode;
+                        clickable.click();
+                        return Object.assign({ action: 'clicked', label }, diagnose());
                     }
                     const alreadyNode = nodes.find((node) => {
                         const text = readText(node);
                         return text.includes('已关注') || text.includes('互相关注');
                     });
                     if (alreadyNode) {
-                        return { action: 'already_following', label: readText(alreadyNode) };
+                        return Object.assign({ action: 'already_following', label: readText(alreadyNode) }, diagnose());
                     }
-                    return { action: 'not_found', label: '' };
+                    if (unavailableReason) {
+                        return Object.assign({ action: 'unavailable', label: '' }, diagnose());
+                    }
+                    return Object.assign({ action: 'not_found', label: '' }, diagnose());
                 }
                 """
             ),
@@ -7324,24 +7495,39 @@ class DouyinCommentScraper:
 
             # 主页是 SPA：关注按钮经常晚几秒才渲染。以前固定等 4.5 秒只试一次，
             # 页面慢一点就被误判成“该主页不允许关注”（2026-09-21：近 3 天 17 次）。
+            # 第一轮轮询仍没有可点按钮、且不是用户不存在/封禁时，刷新主页再查一轮。
             follow_state: Dict[str, object] = {"action": "not_found", "label": ""}
-            follow_deadline = time.monotonic() + DOUYIN_FOLLOW_BUTTON_WAIT_SECONDS
             follow_wait_rounds = 0
-            while True:
-                follow_state = await self._resolve_follow_button_state(page)
-                follow_wait_rounds += 1
-                if str(follow_state.get("action") or "").strip() in {"clicked", "already_following"}:
-                    break
-                if time.monotonic() >= follow_deadline:
-                    break
-                await page.wait_for_timeout(DOUYIN_FOLLOW_BUTTON_POLL_INTERVAL_MS)
-            if follow_wait_rounds > 1:
-                self._emit(
-                    logger,
-                    f"[抖音关注评论] 关注按钮等待 {follow_wait_rounds} 轮后仍未出现（上限 {DOUYIN_FOLLOW_BUTTON_WAIT_SECONDS:g} 秒）",
-                    "info",
-                )
+            follow_reloaded = False
+
+            async def _poll_follow_button_window() -> None:
+                nonlocal follow_state, follow_wait_rounds
+                follow_deadline = time.monotonic() + DOUYIN_FOLLOW_BUTTON_WAIT_SECONDS
+                while True:
+                    follow_state = await self._resolve_follow_button_state(page)
+                    follow_wait_rounds += 1
+                    action = str((follow_state or {}).get("action") or "").strip()
+                    if action in {"clicked", "already_following", "unavailable"}:
+                        return
+                    if time.monotonic() >= follow_deadline:
+                        return
+                    await page.wait_for_timeout(DOUYIN_FOLLOW_BUTTON_POLL_INTERVAL_MS)
+
+            await _poll_follow_button_window()
             follow_action = str((follow_state or {}).get("action", "") or "").strip()
+            if follow_action not in {"clicked", "already_following", "unavailable"}:
+                reload_page = getattr(page, "reload", None)
+                if callable(reload_page):
+                    try:
+                        await reload_page(wait_until="domcontentloaded", timeout=60000)
+                    except TypeError:
+                        await reload_page()
+                    follow_reloaded = True
+                    self._emit(logger, "[抖音关注评论] 关注按钮第一轮未出现，已刷新主页再查一次", "info")
+                    await page.wait_for_timeout(1200)
+                    await self._raise_if_login_intercept(page)
+                    await _poll_follow_button_window()
+                    follow_action = str((follow_state or {}).get("action", "") or "").strip()
             follow_label = str((follow_state or {}).get("label", "") or "").strip()
             if follow_action == "clicked":
                 follow_clicked = True
@@ -7350,10 +7536,39 @@ class DouyinCommentScraper:
             elif follow_action == "already_following":
                 already_following = True
                 self._emit(logger, "[抖音关注评论] 当前账号已处于关注状态", "info")
+            elif follow_action == "unavailable":
+                reason = str(
+                    (follow_state or {}).get("unavailable_reason")
+                    or follow_label
+                    or "该抖音主页不可用"
+                ).strip()
+                raise RuntimeError(reason or "该抖音主页不可用")
             else:
+                if follow_wait_rounds > 1:
+                    self._emit(
+                        logger,
+                        f"[抖音关注评论] 关注按钮等待 {follow_wait_rounds} 轮后仍未出现（上限 {DOUYIN_FOLLOW_BUTTON_WAIT_SECONDS:g} 秒）",
+                        "info",
+                    )
+                page_kind = str((follow_state or {}).get("page_kind") or "").strip()
+                page_summary = str((follow_state or {}).get("summary") or "").strip()
+                visible_buttons = str((follow_state or {}).get("visible_buttons") or "").strip()
+                page_url = str((follow_state or {}).get("url") or "").strip()
+                waited = f"已轮询等待 {DOUYIN_FOLLOW_BUTTON_WAIT_SECONDS:g} 秒"
+                if follow_reloaded:
+                    waited = f"{waited}，并已刷新主页重试一次"
+                detail_bits = []
+                if page_kind:
+                    detail_bits.append(f"页面类型={page_kind}")
+                if page_summary:
+                    detail_bits.append(f"摘要={page_summary}")
+                if visible_buttons:
+                    detail_bits.append(f"可见按钮={visible_buttons}")
+                if page_url:
+                    detail_bits.append(f"URL={page_url}")
+                detail = ("；" + "；".join(detail_bits)) if detail_bits else ""
                 raise RuntimeError(
-                    f"未找到可点击的关注按钮（已轮询等待 {DOUYIN_FOLLOW_BUTTON_WAIT_SECONDS:g} 秒），"
-                    "请确认该主页允许关注"
+                    f"未找到可点击的关注按钮（{waited}）{detail}，请确认该主页允许关注"
                 )
 
             work_state = await page.evaluate(
@@ -8710,6 +8925,7 @@ class DouyinCommentScraper:
         logger: Optional[Callable[[str, str], None]] = None,
         timeout_ms: int = 6000,
         should_stop: Optional[Callable[[], bool]] = None,
+        require_match: bool = False,
     ) -> str:
         expected_username = str(expected_username or "").strip()
         deadline = asyncio.get_event_loop().time() + (timeout_ms / 1000.0)
@@ -8727,7 +8943,7 @@ class DouyinCommentScraper:
         }
 
         async def read_locator_candidates() -> Dict[str, object]:
-            root_selector = '[class*="atBox-inner-container"], [class*="atBox-inner"]'
+            root_selector = DOUYIN_MENTION_CANDIDATE_SELECTOR
             root_locator = page.locator(root_selector)
             root_total = await root_locator.count()
             visible_root_count = 0
@@ -8759,8 +8975,7 @@ class DouyinCommentScraper:
                                 const rect = el.getBoundingClientRect();
                                 return rect.width > 0 && rect.height > 0;
                             };
-                            const directChildren = Array.from(node.children || []).filter((child) => child.tagName === 'DIV');
-                            const childRows = directChildren.map((child, index) => {
+                            const mapRows = (nodes, source) => nodes.map((child, index) => {
                                 const childVisible = isVisible(child) || Array.from(child.querySelectorAll('*')).some(isVisible);
                                 const labelNode = child.querySelector('.eRbIZXG4, [class*="eRbIZXG4"]');
                                 const label = normalize(labelNode?.textContent || '');
@@ -8772,8 +8987,18 @@ class DouyinCommentScraper:
                                     text,
                                     html: String(child.outerHTML || ''),
                                     visible: childVisible,
+                                    source,
                                 };
                             });
+                            const directChildren = Array.from(node.children || []).filter((child) => child.tagName === 'DIV');
+                            let childRows = mapRows(directChildren, 'div');
+                            if (!childRows.some((row) => row.visible && row.label)) {
+                                const optionNodes = Array.from(node.querySelectorAll('[role="option"], [role="listitem"]'));
+                                const optionRows = mapRows(optionNodes, 'option');
+                                if (optionRows.some((row) => row.visible && row.label)) {
+                                    childRows = optionRows;
+                                }
+                            }
                             return {
                                 html: String(node.outerHTML || ''),
                                 rows: childRows,
@@ -8802,6 +9027,7 @@ class DouyinCommentScraper:
                 label = str(row.get("label", "") or "").strip()
                 row["exact"] = bool(expected_username) and label == expected_username
                 row["prefix"] = bool(expected_username) and label.startswith(expected_username)
+                row["matched"] = mention_label_matches(expected_username, label, require_match=True)
                 row["root_index"] = best_root_index
 
             editor_snapshot = await self._read_comment_submission_snapshot(page)
@@ -8832,16 +9058,19 @@ class DouyinCommentScraper:
                 candidate_payload = []
 
             if candidate_payload:
-                if any(row.get("exact") or row.get("prefix") for row in candidate_payload):
+                if require_match:
+                    hit = any(row.get("matched") for row in candidate_payload)
+                else:
+                    hit = any(row.get("exact") or row.get("prefix") for row in candidate_payload)
+                if hit:
                     break
                 fallback_payload = candidate_payload
             await page.wait_for_timeout(180)
-        if not candidate_payload and fallback_payload:
-            candidate_payload = fallback_payload
-        elif candidate_payload and not any(row.get("exact") or row.get("prefix") for row in candidate_payload) and fallback_payload:
-            candidate_payload = fallback_payload
-        if not candidate_payload and fallback_payload:
-            candidate_payload = fallback_payload
+        if not require_match:
+            if not candidate_payload and fallback_payload:
+                candidate_payload = fallback_payload
+            elif candidate_payload and not any(row.get("exact") or row.get("prefix") for row in candidate_payload) and fallback_payload:
+                candidate_payload = fallback_payload
         if not candidate_payload:
             labels = [str(item or "").strip() for item in (last_state.get("labels", []) or []) if str(item or "").strip()]
             editor_text = str(last_state.get("editor_text", "") or "").strip()
@@ -8866,14 +9095,25 @@ class DouyinCommentScraper:
                 f"候选样本={labels if labels else '[]'}，编辑框内容={editor_text or '空'}",
                 "warning",
             )
-            raise RuntimeError(f"输入 @{expected_username} 后没有出现可点击的候选用户")
+            raise RuntimeError(format_mention_candidate_error(expected_username, last_state))
 
-        exact_or_prefix = next(
-            (row for row in candidate_payload if row.get("exact") or row.get("prefix")),
-            None,
-        )
-        chosen = exact_or_prefix or candidate_payload[0]
-        if not exact_or_prefix:
+        if require_match:
+            chosen = next((row for row in candidate_payload if row.get("matched")), None)
+            if not chosen:
+                self._emit(
+                    logger,
+                    f"[抖音评论@客户] 候选里没有和 @{expected_username} 对得上的用户，不点列表第一项",
+                    "warning",
+                )
+                raise RuntimeError(format_mention_candidate_error(expected_username, last_state))
+            exact_or_prefix = chosen
+        else:
+            exact_or_prefix = next(
+                (row for row in candidate_payload if row.get("exact") or row.get("prefix")),
+                None,
+            )
+            chosen = exact_or_prefix or candidate_payload[0]
+        if not require_match and not exact_or_prefix:
             labels = [str(item.get("label", "") or "").strip() for item in candidate_payload[:8] if str(item.get("label", "") or "").strip()]
             self._emit(
                 logger,
@@ -8892,8 +9132,12 @@ class DouyinCommentScraper:
         target_id = str(chosen.get("id", "") or "").strip()
         target_index = max(0, int(chosen.get("index", 0) or 0))
         root_index = max(0, int(chosen.get("root_index", last_state.get("chosen_root_index", 0)) or 0))
-        root_locator = page.locator('[class*="atBox-inner-container"], [class*="atBox-inner"]').nth(root_index)
-        candidate_locator = root_locator.locator(":scope > div").nth(target_index)
+        row_source = str(chosen.get("source") or "div").strip() or "div"
+        root_locator = page.locator(DOUYIN_MENTION_CANDIDATE_SELECTOR).nth(root_index)
+        if row_source == "option":
+            candidate_locator = root_locator.locator('[role="option"], [role="listitem"]').nth(target_index)
+        else:
+            candidate_locator = root_locator.locator(":scope > div").nth(target_index)
         try:
             await candidate_locator.click(timeout=5000)
             await page.wait_for_timeout(240)
@@ -8915,8 +9159,11 @@ class DouyinCommentScraper:
                             (node, payload) => {
                                 const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
                                 const directChildren = Array.from(node.children || []).filter((child) => child.tagName === 'DIV');
-                                const target = directChildren.find((child) => String(child.id || '').trim() === String(payload.targetId || '').trim())
-                                    || directChildren[Number(payload.targetIndex) || 0];
+                                const optionNodes = Array.from(node.querySelectorAll('[role="option"], [role="listitem"]'));
+                                const pool = String(payload.rowSource || '') === 'option' ? optionNodes : directChildren;
+                                const target = pool.find((child) => String(child.id || '').trim() === String(payload.targetId || '').trim())
+                                    || pool[Number(payload.targetIndex) || 0]
+                                    || optionNodes[Number(payload.targetIndex) || 0];
                                 if (!target) return '';
                                 const clickable = target.querySelector('.OToQiXBr') || target.querySelector('.zJiGLhJ6') || target;
                                 clickable.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, composed: true, button: 0 }));
@@ -8926,7 +9173,7 @@ class DouyinCommentScraper:
                                 return normalize(labelNode?.textContent || target.innerText || target.textContent || '');
                             }
                             """,
-                            {"targetId": target_id, "targetIndex": target_index},
+                            {"targetId": target_id, "targetIndex": target_index, "rowSource": row_source},
                         )
                         await page.wait_for_timeout(240)
                     except Exception:
@@ -9133,20 +9380,61 @@ class DouyinCommentScraper:
             failed_mentions: List[Dict[str, str]] = []
             for username in deduped_names:
                 self._raise_if_should_stop(should_stop, logger=logger)
+                last_typed_mention = username
                 try:
                     before_snapshot = await self._read_comment_submission_snapshot(page)
                     before_editor_text = str(before_snapshot.get("editor_text", "") or "")
                     await input_locator.click(timeout=5000, force=True)
-                    await self._move_comment_caret_to_end(input_locator, logger=logger)
-                    await page.keyboard.type(f"@{username}", delay=55)
-                    self._emit(logger, f"[抖音评论@客户] 已输入 @{username}，等待候选列表出现", "info")
-                    await page.wait_for_timeout(1000)
-                    selected_label = await self._pick_visible_mention_candidate(
-                        page,
-                        username,
-                        logger=logger,
-                        should_stop=should_stop,
-                    )
+                    queries = build_mention_search_queries(username) or [username]
+                    selected_label = ""
+                    attempted_queries = []
+                    last_mention_error = ""
+                    for attempt_index, query in enumerate(queries):
+                        self._raise_if_should_stop(should_stop, logger=logger)
+                        await self._move_comment_caret_to_end(input_locator, logger=logger)
+                        await page.keyboard.type(f"@{query}", delay=55)
+                        last_typed_mention = query
+                        attempted_queries.append(query)
+                        self._emit(
+                            logger,
+                            f"[抖音评论@客户] 已输入 @{query}，等待候选列表出现",
+                            "info",
+                        )
+                        await page.wait_for_timeout(1000)
+                        try:
+                            selected_label = await self._pick_visible_mention_candidate(
+                                page,
+                                username,
+                                logger=logger,
+                                timeout_ms=6000 if attempt_index == 0 else 3500,
+                                should_stop=should_stop,
+                                require_match=mention_query_requires_match(username, query),
+                            )
+                            break
+                        except DouyinMentionCommentStopped:
+                            raise
+                        except Exception as exc:
+                            last_mention_error = str(exc)
+                            if attempt_index >= len(queries) - 1:
+                                if len(attempted_queries) > 1 and "已尝试" not in last_mention_error:
+                                    last_mention_error = (
+                                        f"{last_mention_error}。已尝试：{'、'.join(attempted_queries)}"
+                                    )
+                                raise RuntimeError(last_mention_error) from exc
+                            await self._rollback_failed_mention_input(
+                                page,
+                                input_locator,
+                                query,
+                                logger=logger,
+                                should_stop=should_stop,
+                            )
+                            self._emit(
+                                logger,
+                                f"[抖音评论@客户] @{query} 没有点到候选，改用下一种写法重试：{exc}",
+                                "warning",
+                            )
+                    if not selected_label:
+                        raise RuntimeError(last_mention_error or format_mention_candidate_error(username))
                     await self._wait_for_mention_commit(
                         page,
                         before_editor_text=before_editor_text,
@@ -9184,7 +9472,7 @@ class DouyinCommentScraper:
                     await self._rollback_failed_mention_input(
                         page,
                         input_locator,
-                        username,
+                        last_typed_mention,
                         logger=logger,
                         should_stop=should_stop,
                     )
