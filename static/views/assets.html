@@ -285,10 +285,8 @@
                 <input type="text" id="assetSearchInput" placeholder="搜索素材..." style="flex:1;min-width:100px;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                 <button type="button" id="assetSearchBtn" class="btn btn-ghost btn-sm">搜索</button>
                 <button type="button" id="assetRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
-                <label class="btn btn-primary btn-sm asset-upload-control" style="cursor:pointer;margin:0;">
-                  上传本地文件
-                  <input type="file" id="assetUploadFile" accept="image/*,video/*,.ppt,.pptx,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md" multiple style="display:none;">
-                </label>
+                <button type="button" id="assetUploadOpenBtn" class="btn btn-primary btn-sm asset-upload-control">上传本地文件</button>
+                <input type="file" id="assetUploadFile" accept="image/*,video/*,.ppt,.pptx,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md" multiple style="display:none;">
                 <input type="text" id="assetUploadGroup" class="asset-upload-control" list="assetCreativeGroupOptions" placeholder="分组（可选）" autocomplete="off" style="min-width:120px;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                 <input type="text" id="assetUploadTags" class="asset-upload-control" placeholder="标签（可选，逗号分隔）" style="min-width:150px;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">
                 <input type="text" id="assetUrlInput" class="asset-upload-control" placeholder="网络素材URL（图片/视频链接）" style="flex:1;min-width:160px;padding:0.35rem 0.5rem;font-size:0.82rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:var(--radius-sm);color:var(--text);">

@@ -2096,21 +2096,56 @@
     <div class="modal" style="max-width:440px;">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem;">
         <div>
-          <h4 style="margin:0;font-size:1.05rem;">设置创意备选组</h4>
+          <h4 style="margin:0;font-size:1.05rem;">编辑素材</h4>
           <p id="assetCreativeGroupAssetId" class="meta" style="margin:0.35rem 0 0 0;font-size:0.78rem;"></p>
         </div>
         <button type="button" id="assetCreativeGroupClose" class="btn btn-ghost btn-sm" aria-label="关闭">×</button>
       </div>
-      <p class="meta" style="margin:0.75rem 0 0.65rem 0;">每个素材只能属于一个备选组，保存后会覆盖上一次设置。</p>
+      <p class="meta" style="margin:0.75rem 0 0.65rem 0;">分组和标签都可以留空，留空会清空。每个素材只保留一个分组。</p>
       <div class="modal-field" style="margin-bottom:0.75rem;">
-        <label>备选组名字</label>
+        <label>分组（可选）</label>
         <input type="text" id="assetCreativeGroupInput" list="assetCreativeGroupOptions" placeholder="例如：恒辉产品图" autocomplete="off" style="margin-top:0.35rem;width:100%;box-sizing:border-box;padding:0.48rem 0.55rem;font-size:0.88rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
         <datalist id="assetCreativeGroupOptions"></datalist>
+      </div>
+      <div class="modal-field" style="margin-bottom:0.75rem;">
+        <label>标签（可选，逗号分隔）</label>
+        <input type="text" id="assetCreativeGroupTags" placeholder="留空表示清空标签" autocomplete="off" style="margin-top:0.35rem;width:100%;box-sizing:border-box;padding:0.48rem 0.55rem;font-size:0.88rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
       </div>
       <div id="assetCreativeGroupMsg" class="msg" style="display:none;margin-bottom:0.65rem;font-size:0.82rem;"></div>
       <div class="btns" style="justify-content:flex-end;">
         <button type="button" id="assetCreativeGroupCancel" class="btn btn-ghost">取消</button>
         <button type="button" id="assetCreativeGroupSave" class="btn btn-primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="assetUploadConfirmModal" class="modal-mask" style="display:none;">
+    <div class="modal" style="max-width:440px;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.5rem;">
+        <div>
+          <h4 style="margin:0;font-size:1.05rem;">上传本地文件</h4>
+          <p class="meta" style="margin:0.35rem 0 0 0;font-size:0.78rem;">先选分组和标签，再选文件。两项都可以不填。</p>
+        </div>
+        <button type="button" id="assetUploadDialogClose" class="btn btn-ghost btn-sm" aria-label="关闭">×</button>
+      </div>
+      <div class="modal-field" style="margin:0.75rem 0;">
+        <label>分组（可选）</label>
+        <input type="text" id="assetUploadDialogGroup" list="assetCreativeGroupOptions" placeholder="例如：恒辉产品图" autocomplete="off" style="margin-top:0.35rem;width:100%;box-sizing:border-box;padding:0.48rem 0.55rem;font-size:0.88rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
+      </div>
+      <div class="modal-field" style="margin-bottom:0.75rem;">
+        <label>标签（可选，逗号分隔）</label>
+        <input type="text" id="assetUploadDialogTags" placeholder="多个标签用逗号分隔" autocomplete="off" style="margin-top:0.35rem;width:100%;box-sizing:border-box;padding:0.48rem 0.55rem;font-size:0.88rem;border-radius:var(--radius-sm);background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:var(--text);">
+      </div>
+      <div class="modal-field" style="margin-bottom:0.75rem;">
+        <label>文件</label>
+        <div style="display:flex;align-items:center;gap:0.55rem;margin-top:0.35rem;">
+          <button type="button" id="assetUploadDialogPickBtn" class="btn btn-ghost btn-sm">选择文件</button>
+          <span id="assetUploadDialogFileName" class="meta" style="font-size:0.82rem;">未选择文件</span>
+        </div>
+      </div>
+      <div class="btns" style="justify-content:flex-end;">
+        <button type="button" id="assetUploadDialogCancel" class="btn btn-ghost">取消</button>
+        <button type="button" id="assetUploadDialogConfirm" class="btn btn-primary">确认上传</button>
       </div>
     </div>
   </div>

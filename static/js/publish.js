@@ -3309,16 +3309,19 @@ function _showAssetCreativeGroupMsg(text, isErr) {
   msg.style.display = text ? 'block' : 'none';
 }
 
-function _openAssetCreativeGroupModal(assetId, currentGroup) {
+function _openAssetCreativeGroupModal(assetId, currentGroup, currentTags) {
   _assetCreativeGroupEditingAssetId = assetId || '';
+  _assetCreativeGroupOriginalTags = String(currentTags || '');
   var modal = document.getElementById('assetCreativeGroupModal');
   var label = document.getElementById('assetCreativeGroupAssetId');
   var input = document.getElementById('assetCreativeGroupInput');
+  var tagsInput = document.getElementById('assetCreativeGroupTags');
   if (label) label.textContent = assetId ? ('素材 ID：' + assetId) : '';
   if (input) {
     input.value = currentGroup || '';
     setTimeout(function() { input.focus(); input.select(); }, 30);
   }
+  if (tagsInput) tagsInput.value = _assetCreativeGroupOriginalTags.indexOf('auto,') === 0 ? '' : _assetCreativeGroupOriginalTags;
   _showAssetCreativeGroupMsg('', false);
   _renderAssetCreativeGroupControls();
   if (modal) modal.style.display = 'flex';
@@ -3328,31 +3331,32 @@ function _closeAssetCreativeGroupModal() {
   var modal = document.getElementById('assetCreativeGroupModal');
   if (modal) modal.style.display = 'none';
   _assetCreativeGroupEditingAssetId = '';
+  _assetCreativeGroupOriginalTags = '';
   _showAssetCreativeGroupMsg('', false);
 }
 
 function _saveAssetCreativeGroup() {
   var aid = _assetCreativeGroupEditingAssetId;
   var input = document.getElementById('assetCreativeGroupInput');
+  var tagsInput = document.getElementById('assetCreativeGroupTags');
   var save = document.getElementById('assetCreativeGroupSave');
   var groupName = (input && input.value ? input.value : '').trim();
+  var tagsValue = (tagsInput && tagsInput.value ? tagsInput.value : '').trim();
+  var originalTags = _assetCreativeGroupOriginalTags || '';
+  if (!tagsValue && originalTags.indexOf('auto,') === 0) tagsValue = originalTags;
   if (!aid) return;
-  if (!groupName) {
-    _showAssetCreativeGroupMsg('请填写备选组名字', true);
-    return;
-  }
   if (save) {
     save.disabled = true;
     save.textContent = '保存中...';
   }
-  fetch(publishLocalBase() + '/api/assets/' + encodeURIComponent(aid) + '/creative-candidate-groups', {
+  fetch(publishLocalBase() + '/api/assets/' + encodeURIComponent(aid) + '/labels', {
     method: 'POST',
     headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-    body: JSON.stringify({ group_name: groupName })
+    body: JSON.stringify({ creative_candidate_group: groupName, tags: tagsValue })
   })
     .then(function(r) { return r.json().catch(function() { return {}; }).then(function(d) { if (!r.ok) throw new Error((d && d.detail) || ('HTTP ' + r.status)); return d; }); })
     .then(function() {
-      _assetMsgShow('已设置创意备选组：' + groupName, false);
+      _assetMsgShow('素材分组和标签已保存', false);
       _closeAssetCreativeGroupModal();
       return loadCreativeCandidateGroups();
     })
@@ -3360,7 +3364,7 @@ function _saveAssetCreativeGroup() {
       loadAssets(_currentAssetSearchQuery(), { force: true });
     })
     .catch(function(e) {
-      _showAssetCreativeGroupMsg('设置失败：' + e.message, true);
+      _showAssetCreativeGroupMsg('保存失败：' + e.message, true);
     })
     .finally(function() {
       if (save) {
@@ -3589,7 +3593,8 @@ function _bindRenderedAssetListInteractions(el, assets) {
     btn.addEventListener('click', function() {
       var aid = btn.getAttribute('data-creative-candidate');
       var currentGroup = btn.getAttribute('data-current-creative-group') || '';
-      _openAssetCreativeGroupModal(aid, currentGroup);
+      var currentTags = btn.getAttribute('data-current-tags') || '';
+      _openAssetCreativeGroupModal(aid, currentGroup, currentTags);
     });
   });
   el.querySelectorAll('button[data-use-as-attach]').forEach(function(btn) {
@@ -3777,9 +3782,9 @@ function loadAssets(query, options) {
         var size = a.file_size ? (a.file_size > 1048576 ? (a.file_size / 1048576).toFixed(1) + ' MB' : (a.file_size / 1024).toFixed(1) + ' KB') : '';
         var useAsAttachBtn = (isImage || isVideo) ? '<button type="button" class="btn btn-primary btn-sm" data-use-as-attach="' + escapeAttr(a.asset_id) + '" data-attach-media-type="' + escapeAttr(a.media_type || '') + '" data-attach-has-url="' + (hasUrl ? '1' : '0') + '">用作附图</button>' : '';
         var previewBtn = '<button type="button" class="btn btn-ghost btn-sm" data-preview-asset="' + escapeAttr(a.asset_id) + '">查看结果</button>';
-        var copyPromptBtn = '<button type="button" class="btn btn-ghost btn-sm" data-copy-asset-prompt="' + escapeAttr(a.asset_id) + '"' + (((a.prompt || '').trim()) ? '' : ' disabled') + '>复制提示词</button>';
+        var copyPromptBtn = '';
         var downloadBtn = '<button type="button" class="btn btn-ghost btn-sm" data-download-asset="' + escapeAttr(a.asset_id) + '">下载</button>';
-        var candidateBtn = isImage ? '<button type="button" class="btn btn-ghost btn-sm" data-creative-candidate="' + escapeAttr(a.asset_id) + '" data-current-creative-group="' + escapeAttr(currentGroup) + '">设为创意备选</button>' : '';
+        var candidateBtn = '<button type="button" class="btn btn-ghost btn-sm" data-creative-candidate="' + escapeAttr(a.asset_id) + '" data-current-creative-group="' + escapeAttr(currentGroup) + '" data-current-tags="' + escapeAttr(a.tags || '') + '">编辑</button>';
         var actionMenu = _assetContentActionMenuHtml(a);
         var deleteBtn = '<button type="button" class="btn btn-ghost btn-sm" data-delete-asset="' + escapeAttr(a.asset_id) + '">删除</button>';
         var badgeColor = isImage ? '#6366f1' : isVideo ? '#f59e0b' : isDocument ? '#64748b' : '#888';
@@ -4130,7 +4135,8 @@ function _bindAssetCardActions(container) {
     btn.addEventListener('click', function() {
       var aid = btn.getAttribute('data-creative-candidate');
       var currentGroup = btn.getAttribute('data-current-creative-group') || '';
-      _openAssetCreativeGroupModal(aid, currentGroup);
+      var currentTags = btn.getAttribute('data-current-tags') || '';
+      _openAssetCreativeGroupModal(aid, currentGroup, currentTags);
     });
   });
   container.querySelectorAll('button[data-use-as-attach]').forEach(function(btn) {
@@ -4310,11 +4316,11 @@ function _renderAssetCards(container, assets, append) {
     var selectHtml = isContentRecord ? '' : '<label class="asset-card-select" onclick="event.stopPropagation();"><input type="checkbox" data-select-asset="' + escapeAttr(a.asset_id) + '"' + (_assetIsSelected(a.asset_id) ? ' checked' : '') + '><span>选择</span></label>';
     var useAsAttachBtn = !isContentRecord && (isImage || isVideo) ? '<button type="button" class="btn btn-primary btn-sm" data-use-as-attach="' + escapeAttr(a.asset_id) + '" data-attach-media-type="' + escapeAttr(a.media_type || '') + '" data-attach-has-url="' + (hasUrl ? '1' : '0') + '">用作附图</button>' : '';
     var previewBtn = '<button type="button" class="btn btn-ghost btn-sm" data-preview-asset="' + escapeAttr(a.asset_id) + '">查看结果</button>';
-    var copyValue = isContentRecord ? _assetContentText(a) : String(a.prompt || '').trim();
-    var copyLabel = isContentRecord && ['article', 'wechat_article'].indexOf(String(a.kind || '').toLowerCase()) >= 0 ? '复制文案' : (isContentRecord ? '复制摘要' : '复制提示词');
-    var copyPromptBtn = '<button type="button" class="btn btn-ghost btn-sm" data-copy-asset-prompt="' + escapeAttr(a.asset_id) + '"' + (copyValue ? '' : ' disabled') + '>' + copyLabel + '</button>';
+    var copyValue = isContentRecord ? _assetContentText(a) : '';
+    var copyLabel = isContentRecord && ['article', 'wechat_article'].indexOf(String(a.kind || '').toLowerCase()) >= 0 ? '复制文案' : '复制摘要';
+    var copyPromptBtn = isContentRecord ? '<button type="button" class="btn btn-ghost btn-sm" data-copy-asset-prompt="' + escapeAttr(a.asset_id) + '"' + (copyValue ? '' : ' disabled') + '>' + copyLabel + '</button>' : '';
     var downloadBtn = (!isContentRecord || String(a.file_url || '').trim()) ? '<button type="button" class="btn btn-ghost btn-sm" data-download-asset="' + escapeAttr(a.asset_id) + '">' + (isContentRecord ? '打开文件' : '下载') + '</button>' : '';
-    var candidateBtn = !isContentRecord && isImage ? '<button type="button" class="btn btn-ghost btn-sm" data-creative-candidate="' + escapeAttr(a.asset_id) + '" data-current-creative-group="' + escapeAttr(currentGroup) + '">设为创意备选</button>' : '';
+    var candidateBtn = !isContentRecord ? '<button type="button" class="btn btn-ghost btn-sm" data-creative-candidate="' + escapeAttr(a.asset_id) + '" data-current-creative-group="' + escapeAttr(currentGroup) + '" data-current-tags="' + escapeAttr(a.tags || '') + '">编辑</button>' : '';
     var actionMenu = _assetContentActionMenuHtml(a);
     var contentPreviewText = isContentRecord ? _assetContentText(a) : '';
     var imageStrip = isContentRecord && contentImages.length
@@ -4501,13 +4507,119 @@ function loadAssets(query, options) {
 }
 
 var assetUploadFile = null;
-var assetUploadLabel = null;
+var _assetCreativeGroupOriginalTags = '';
 function setAssetUploadState(loading, text) {
-  if (assetUploadLabel) {
-    assetUploadLabel.style.opacity = loading ? '0.5' : '1';
-    assetUploadLabel.style.pointerEvents = loading ? 'none' : '';
+  var uploadBtn = document.getElementById('assetUploadOpenBtn');
+  if (uploadBtn) {
+    uploadBtn.disabled = !!loading;
+    uploadBtn.style.opacity = loading ? '0.5' : '1';
+    uploadBtn.style.pointerEvents = loading ? 'none' : '';
   }
   if (text) _assetMsgShow(text, false);
+}
+
+function _openAssetUploadDialog() {
+  var dialogGroup = document.getElementById('assetUploadDialogGroup');
+  var dialogTags = document.getElementById('assetUploadDialogTags');
+  var storedGroup = document.getElementById('assetUploadGroup');
+  var storedTags = document.getElementById('assetUploadTags');
+  var nameEl = document.getElementById('assetUploadDialogFileName');
+  if (dialogGroup) dialogGroup.value = storedGroup ? (storedGroup.value || '') : '';
+  if (dialogTags) dialogTags.value = storedTags ? (storedTags.value || '') : '';
+  if (nameEl) nameEl.textContent = '未选择文件';
+  if (assetUploadFile) assetUploadFile.value = '';
+  if (typeof loadCreativeCandidateGroups === 'function') loadCreativeCandidateGroups();
+  var modal = document.getElementById('assetUploadConfirmModal');
+  if (modal) modal.style.display = 'flex';
+}
+
+function _closeAssetUploadDialog() {
+  var modal = document.getElementById('assetUploadConfirmModal');
+  if (modal) modal.style.display = 'none';
+}
+
+function _confirmAssetUploadDialog() {
+  var dialogGroup = document.getElementById('assetUploadDialogGroup');
+  var dialogTags = document.getElementById('assetUploadDialogTags');
+  var storedGroup = document.getElementById('assetUploadGroup');
+  var storedTags = document.getElementById('assetUploadTags');
+  if (storedGroup) storedGroup.value = dialogGroup ? String(dialogGroup.value || '').trim() : '';
+  if (storedTags) storedTags.value = dialogTags ? String(dialogTags.value || '').trim() : '';
+  var selected = assetUploadFile && assetUploadFile.files ? Array.from(assetUploadFile.files) : [];
+  if (!selected.length) {
+    _assetMsgShow('请先选择文件', true);
+    return;
+  }
+  _closeAssetUploadDialog();
+  _uploadAssetLibraryFiles(selected);
+}
+
+function _uploadAssetLibraryFiles(files) {
+  if (!files || !files.length) return;
+  var uploadLabels = _assetUploadOptionalLabels();
+  var total = files.length;
+  var done = 0, failed = 0;
+  var uploadErrors = [];
+  setAssetUploadState(true, '正在保存到本地素材库 ' + total + ' 个文件…');
+  Array.from(files).forEach(function(f, idx) {
+    var fd = new FormData();
+    fd.append('file', f);
+    if (uploadLabels.group) fd.append('creative_candidate_group', uploadLabels.group);
+    if (uploadLabels.tags) fd.append('tags', uploadLabels.tags);
+    fetch(publishLocalBase() + '/api/assets/upload', { method: 'POST', headers: _authHeadersNoContentType(), body: fd })
+      .then(function(r) {
+        return r.text().then(function(raw) {
+          var d = {};
+          if (raw) {
+            try { d = JSON.parse(raw); } catch (e) { d = {}; }
+          }
+          if (!r.ok) {
+            var msg = 'HTTP ' + r.status;
+            if (d && d.detail) {
+              msg = typeof d.detail === 'string' ? d.detail : (Array.isArray(d.detail) ? d.detail.map(function(x) { return x.msg || JSON.stringify(x); }).join('; ') : JSON.stringify(d.detail));
+            } else if (raw) {
+              msg += ': ' + raw.slice(0, 300);
+            }
+            throw new Error(msg);
+          }
+          return d;
+        });
+      })
+      .then(function(d) {
+        if (d && d.asset_id) {
+          done++;
+        } else {
+          throw new Error('本地保存未返回素材编号');
+        }
+      })
+      .catch(function(err) {
+        failed++;
+        var reason = (err && err.message) ? String(err.message) : '未知错误';
+        if (/failed to fetch|networkerror|load failed/i.test(reason)) {
+          reason = '网络请求失败，无法连接本机服务或云端上传接口';
+        }
+        uploadErrors.push((f.name || ('文件' + (idx + 1))) + '：' + reason.slice(0, 300));
+      })
+      .finally(function() {
+        var finished = done + failed;
+        if (finished === total) {
+          assetUploadFile.value = '';
+          setAssetUploadState(false, '');
+          var msg = '本地保存完成: ' + done + ' 个文件';
+          if (failed) msg += ', ' + failed + ' 个失败';
+          if (uploadErrors.length) {
+            msg += '；失败原因：' + uploadErrors.slice(0, 2).join('；');
+            if (uploadErrors.length > 2) msg += '；另有 ' + (uploadErrors.length - 2) + ' 个文件失败';
+          }
+          _assetMsgShow(msg, failed > 0);
+          if (done) _setAssetOriginTab('user_upload');
+          loadCreativeCandidateGroups();
+          loadAssets(_currentAssetSearchQuery(), { force: true, skipCloudSync: true });
+        } else {
+          setAssetUploadState(true, '正在保存到本地素材库 ' + finished + '/' + total + '…');
+        }
+      });
+  });
 }
 
 function bindAssetLibraryUi() {
@@ -4666,80 +4778,50 @@ function bindAssetLibraryUi() {
 
   // Upload local files; prepare a public URL only when a later action needs one.
   assetUploadFile = document.getElementById('assetUploadFile');
-  assetUploadLabel = assetUploadFile ? assetUploadFile.closest('label') : null;
+  var assetUploadOpenBtn = document.getElementById('assetUploadOpenBtn');
+  if (assetUploadOpenBtn && !assetUploadOpenBtn._assetLibraryBound) {
+    assetUploadOpenBtn._assetLibraryBound = true;
+    assetUploadOpenBtn.addEventListener('click', function() {
+      _openAssetUploadDialog();
+    });
+  }
+  var assetUploadDialogPickBtn = document.getElementById('assetUploadDialogPickBtn');
+  if (assetUploadDialogPickBtn && !assetUploadDialogPickBtn._assetLibraryBound) {
+    assetUploadDialogPickBtn._assetLibraryBound = true;
+    assetUploadDialogPickBtn.addEventListener('click', function() {
+      if (assetUploadFile) assetUploadFile.click();
+    });
+  }
+  var assetUploadDialogCancel = document.getElementById('assetUploadDialogCancel');
+  if (assetUploadDialogCancel && !assetUploadDialogCancel._assetLibraryBound) {
+    assetUploadDialogCancel._assetLibraryBound = true;
+    assetUploadDialogCancel.addEventListener('click', _closeAssetUploadDialog);
+  }
+  var assetUploadDialogClose = document.getElementById('assetUploadDialogClose');
+  if (assetUploadDialogClose && !assetUploadDialogClose._assetLibraryBound) {
+    assetUploadDialogClose._assetLibraryBound = true;
+    assetUploadDialogClose.addEventListener('click', _closeAssetUploadDialog);
+  }
+  var assetUploadDialogConfirm = document.getElementById('assetUploadDialogConfirm');
+  if (assetUploadDialogConfirm && !assetUploadDialogConfirm._assetLibraryBound) {
+    assetUploadDialogConfirm._assetLibraryBound = true;
+    assetUploadDialogConfirm.addEventListener('click', _confirmAssetUploadDialog);
+  }
   if (assetUploadFile && !assetUploadFile._assetLibraryBound) {
     assetUploadFile._assetLibraryBound = true;
     assetUploadFile.addEventListener('change', function() {
-    var files = assetUploadFile.files;
-    if (!files || !files.length) return;
-    var uploadLabels = _assetUploadOptionalLabels();
-    var total = files.length;
-    var done = 0, failed = 0;
-    var uploadErrors = [];
-    setAssetUploadState(true, '正在保存到本地素材库 ' + total + ' 个文件…');
-    Array.from(files).forEach(function(f, idx) {
-      var fd = new FormData();
-      fd.append('file', f);
-      if (uploadLabels.group) fd.append('creative_candidate_group', uploadLabels.group);
-      if (uploadLabels.tags) fd.append('tags', uploadLabels.tags);
-      fetch(publishLocalBase() + '/api/assets/upload', { method: 'POST', headers: _authHeadersNoContentType(), body: fd })
-        .then(function(r) {
-          return r.text().then(function(raw) {
-            var d = {};
-            if (raw) {
-              try { d = JSON.parse(raw); } catch (e) { d = {}; }
-            }
-            if (!r.ok) {
-              var msg = 'HTTP ' + r.status;
-              if (d && d.detail) {
-                msg = typeof d.detail === 'string' ? d.detail : (Array.isArray(d.detail) ? d.detail.map(function(x) { return x.msg || JSON.stringify(x); }).join('; ') : JSON.stringify(d.detail));
-              } else if (raw) {
-                msg += ': ' + raw.slice(0, 300);
-              }
-              throw new Error(msg);
-            }
-            return d;
-          });
-        })
-        .then(function(d) {
-          if (d && d.asset_id) {
-            done++;
-          } else {
-            throw new Error('本地保存未返回素材编号');
-          }
-        })
-        .catch(function(err) {
-          failed++;
-          var reason = (err && err.message) ? String(err.message) : '未知错误';
-          if (/failed to fetch|networkerror|load failed/i.test(reason)) {
-            reason = '网络请求失败，无法连接本机服务或云端上传接口';
-          }
-          uploadErrors.push((f.name || ('文件' + (idx + 1))) + '：' + reason.slice(0, 300));
-        })
-        .finally(function() {
-          var finished = done + failed;
-          if (finished === total) {
-            assetUploadFile.value = '';
-            setAssetUploadState(false, '');
-            var msg = '本地保存完成: ' + done + ' 个文件';
-            if (failed) msg += ', ' + failed + ' 个失败';
-            if (uploadErrors.length) {
-              msg += '；失败原因：' + uploadErrors.slice(0, 2).join('；');
-              if (uploadErrors.length > 2) msg += '；另有 ' + (uploadErrors.length - 2) + ' 个文件失败';
-            }
-            _assetMsgShow(msg, failed > 0);
-            if (done) _setAssetOriginTab('user_upload');
-            loadCreativeCandidateGroups();
-            loadAssets(_currentAssetSearchQuery(), { force: true, skipCloudSync: true });
-          } else {
-            setAssetUploadState(true, '正在保存到本地素材库 ' + finished + '/' + total + '…');
-          }
-        });
+      var files = assetUploadFile.files;
+      var nameEl = document.getElementById('assetUploadDialogFileName');
+      if (!nameEl) return;
+      if (!files || !files.length) {
+        nameEl.textContent = '未选择文件';
+        return;
+      }
+      if (files.length === 1) nameEl.textContent = files[0].name || '已选择 1 个文件';
+      else nameEl.textContent = '已选择 ' + files.length + ' 个文件';
     });
-  });
   }
 }
-
 function loadCreativeCandidateGroups() {
   var base = publishLocalBase();
   if (!base) return Promise.resolve([]);

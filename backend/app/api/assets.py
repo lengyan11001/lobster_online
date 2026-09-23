@@ -1374,6 +1374,11 @@ class CreativeCandidateGroupReq(BaseModel):
     group_name: str
 
 
+class AssetLabelsReq(BaseModel):
+    creative_candidate_group: str = ""
+    tags: str = ""
+
+
 def _asset_origin(meta: Optional[dict]) -> str:
     if isinstance(meta, str):
         try:
@@ -1503,6 +1508,64 @@ def _sync_creative_candidate_group_to_auth_server(row: Asset, group_name: str, r
                     )
     except Exception as exc:
         logger.warning("[assets-sync] sync creative group exception asset_id=%s err=%s", row.asset_id, exc)
+
+
+def _sync_asset_labels_to_auth_server(row: Asset, group_name: str, tags: Optional[str], request: Request, db: Session) -> None:
+    """Push optional group/tags to the auth server. Local save stays successful if this fails."""
+    base = _auth_server_base_url()
+    headers = _forward_auth_headers(request)
+    if not base or "Authorization" not in headers:
+        return
+    source_url = (row.source_url or "").strip()
+    meta = dict(row.meta or {})
+    remote_asset_id = str(meta.get("remote_asset_id") or "").strip()
+    clean_tags = tags.strip() if isinstance(tags, str) else ""
+    try:
+        with httpx.Client(timeout=12.0, follow_redirects=True, trust_env=False) as client:
+            if not remote_asset_id:
+                if not group_name and not clean_tags:
+                    return
+                if not source_url.startswith(("http://", "https://")):
+                    return
+                register_payload = {
+                    "url": source_url,
+                    "media_type": row.media_type or "image",
+                    "filename": row.filename or "",
+                    "file_size": row.file_size or 0,
+                    "source_asset_id": row.asset_id,
+                    "asset_origin": _asset_origin(row.meta),
+                }
+                if group_name:
+                    register_payload["creative_candidate_group"] = group_name
+                    register_payload["creative_candidate_groups"] = [group_name]
+                if clean_tags:
+                    register_payload["tags"] = clean_tags
+                resp = client.post(f"{base}/api/assets/register-url", json=register_payload, headers=headers)
+                if resp.status_code >= 400:
+                    logger.warning("[assets-sync] register labels asset failed status=%s", resp.status_code)
+                    return
+                data = resp.json()
+                remote_asset_id = str((data or {}).get("asset_id") or "").strip()
+                if remote_asset_id:
+                    meta["remote_asset_id"] = remote_asset_id[:80]
+                    meta["remote_registered_at"] = datetime.utcnow().isoformat()
+                    row.meta = meta
+                    db.add(row)
+                    db.commit()
+                return
+            resp = client.post(
+                f"{base}/api/assets/{remote_asset_id}/labels",
+                json={"creative_candidate_group": group_name or "", "tags": clean_tags},
+                headers=headers,
+            )
+            if resp.status_code >= 400:
+                logger.warning(
+                    "[assets-sync] sync labels failed remote_asset_id=%s status=%s",
+                    remote_asset_id,
+                    resp.status_code,
+                )
+    except Exception as exc:
+        logger.warning("[assets-sync] sync labels exception asset_id=%s err=%s", row.asset_id, exc)
 
 
 def _clean_creative_group_name(value: str) -> str:
@@ -3392,6 +3455,46 @@ def add_asset_to_creative_candidate_group(
     db.commit()
     _sync_creative_candidate_group_to_auth_server(row, group_name, request, db)
     return {"ok": True, "asset_id": row.asset_id, "group_name": group_name, "groups": [group_name]}
+
+
+_LABEL_MEDIA_TYPES = {"image", "video", "audio", "document"}
+
+
+@router.post("/api/assets/{asset_id}/labels", summary="编辑素材分组和标签")
+def update_asset_labels(
+    asset_id: str,
+    body: AssetLabelsReq,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    row = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
+    if not row:
+        raise HTTPException(404, detail="素材不存在")
+    media_type = (row.media_type or "").strip().lower()
+    if media_type not in _LABEL_MEDIA_TYPES:
+        raise HTTPException(400, detail="该素材类型不支持编辑分组和标签")
+    group_name = _clean_creative_group_name_optional(body.creative_candidate_group)
+    tags = _clean_upload_tags(body.tags if isinstance(body.tags, str) else "")
+    meta = dict(row.meta or {})
+    if group_name:
+        meta["creative_candidate_group"] = group_name
+        meta["creative_candidate_groups"] = [group_name]
+    else:
+        meta.pop("creative_candidate_group", None)
+        meta.pop("creative_candidate_groups", None)
+    row.meta = meta
+    row.tags = tags
+    db.add(row)
+    db.commit()
+    _sync_asset_labels_to_auth_server(row, group_name, tags, request, db)
+    return {
+        "ok": True,
+        "asset_id": row.asset_id,
+        "creative_candidate_group": group_name,
+        "creative_candidate_groups": [group_name] if group_name else [],
+        "tags": tags or "",
+    }
 
 
 # ── Get single + serve file ──────────────────────────────────────
