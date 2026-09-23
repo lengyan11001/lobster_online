@@ -3262,13 +3262,35 @@ function _downloadAssetToLibrary(asset, options) {
 }
 
 
+var _assetUploadStoredGroup = '';
+var _assetUploadStoredTags = '';
+var _assetUploadDialogMode = 'file';
+
 function _assetUploadOptionalLabels() {
-  var groupEl = document.getElementById('assetUploadGroup');
-  var tagsEl = document.getElementById('assetUploadTags');
   return {
-    group: groupEl ? String(groupEl.value || '').trim() : '',
-    tags: tagsEl ? String(tagsEl.value || '').trim() : ''
+    group: String(_assetUploadStoredGroup || '').trim(),
+    tags: String(_assetUploadStoredTags || '').trim()
   };
+}
+
+function _rememberAssetUploadDialogLabels() {
+  var dialogGroup = document.getElementById('assetUploadDialogGroup');
+  var dialogTags = document.getElementById('assetUploadDialogTags');
+  _assetUploadStoredGroup = dialogGroup ? String(dialogGroup.value || '').trim() : '';
+  _assetUploadStoredTags = dialogTags ? String(dialogTags.value || '').trim() : '';
+}
+
+function _setAssetUploadDialogMode(mode) {
+  _assetUploadDialogMode = mode === 'url' ? 'url' : 'file';
+  var title = document.getElementById('assetUploadDialogTitle');
+  var hint = document.getElementById('assetUploadDialogHint');
+  var fileRow = document.getElementById('assetUploadDialogFileRow');
+  var confirmBtn = document.getElementById('assetUploadDialogConfirm');
+  var isUrl = _assetUploadDialogMode === 'url';
+  if (title) title.textContent = isUrl ? '保存网络素材' : '上传本地文件';
+  if (hint) hint.textContent = isUrl ? '分组和标签都可以不填。' : '先选分组和标签，再选文件。两项都可以不填。';
+  if (fileRow) fileRow.style.display = isUrl ? 'none' : '';
+  if (confirmBtn) confirmBtn.textContent = isUrl ? '确认保存' : '确认上传';
 }
 
 function _assetUserTagHtml(a) {
@@ -4518,16 +4540,15 @@ function setAssetUploadState(loading, text) {
   if (text) _assetMsgShow(text, false);
 }
 
-function _openAssetUploadDialog() {
+function _openAssetUploadDialog(mode) {
   var dialogGroup = document.getElementById('assetUploadDialogGroup');
   var dialogTags = document.getElementById('assetUploadDialogTags');
-  var storedGroup = document.getElementById('assetUploadGroup');
-  var storedTags = document.getElementById('assetUploadTags');
   var nameEl = document.getElementById('assetUploadDialogFileName');
-  if (dialogGroup) dialogGroup.value = storedGroup ? (storedGroup.value || '') : '';
-  if (dialogTags) dialogTags.value = storedTags ? (storedTags.value || '') : '';
+  if (dialogGroup) dialogGroup.value = _assetUploadStoredGroup || '';
+  if (dialogTags) dialogTags.value = _assetUploadStoredTags || '';
   if (nameEl) nameEl.textContent = '未选择文件';
   if (assetUploadFile) assetUploadFile.value = '';
+  _setAssetUploadDialogMode(mode || 'file');
   if (typeof loadCreativeCandidateGroups === 'function') loadCreativeCandidateGroups();
   var modal = document.getElementById('assetUploadConfirmModal');
   if (modal) modal.style.display = 'flex';
@@ -4539,17 +4560,24 @@ function _closeAssetUploadDialog() {
 }
 
 function _confirmAssetUploadDialog() {
-  var dialogGroup = document.getElementById('assetUploadDialogGroup');
-  var dialogTags = document.getElementById('assetUploadDialogTags');
-  var storedGroup = document.getElementById('assetUploadGroup');
-  var storedTags = document.getElementById('assetUploadTags');
-  if (storedGroup) storedGroup.value = dialogGroup ? String(dialogGroup.value || '').trim() : '';
-  if (storedTags) storedTags.value = dialogTags ? String(dialogTags.value || '').trim() : '';
+  if (_assetUploadDialogMode === 'url') {
+    var urlInput = document.getElementById('assetUrlInput');
+    var rawUrl = (urlInput ? urlInput.value : '').trim();
+    if (!rawUrl) {
+      _assetMsgShow('请输入素材URL', true);
+      return;
+    }
+    _rememberAssetUploadDialogLabels();
+    _closeAssetUploadDialog();
+    _saveAssetFromUrl(rawUrl);
+    return;
+  }
   var selected = assetUploadFile && assetUploadFile.files ? Array.from(assetUploadFile.files) : [];
   if (!selected.length) {
     _assetMsgShow('请先选择文件', true);
     return;
   }
+  _rememberAssetUploadDialogLabels();
   _closeAssetUploadDialog();
   _uploadAssetLibraryFiles(selected);
 }
@@ -4822,6 +4850,36 @@ function bindAssetLibraryUi() {
     });
   }
 }
+
+function _saveAssetFromUrl(rawUrl) {
+  var assetSaveUrlBtn = document.getElementById('assetSaveUrlBtn');
+  var urlInput = document.getElementById('assetUrlInput');
+  if (assetSaveUrlBtn) assetSaveUrlBtn.disabled = true;
+  _assetMsgShow('正在保存…', false);
+  var ext = String(rawUrl || '').split('?')[0].split('#')[0].split('.').pop().toLowerCase();
+  var mtype = 'image';
+  if (['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv'].indexOf(ext) >= 0) mtype = 'video';
+  var labels = _assetUploadOptionalLabels();
+  var extra = {};
+  if (labels.group) extra.creative_candidate_group = labels.group;
+  if (labels.tags) extra.tags = labels.tags;
+  fetch(publishLocalBase() + '/api/assets/save-url', {
+    method: 'POST',
+    headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+    body: JSON.stringify(Object.assign({ url: rawUrl, media_type: mtype, asset_origin: 'user_upload' }, extra))
+  })
+    .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function(d) {
+      if (urlInput) urlInput.value = '';
+      _assetMsgShow('保存成功 (ID: ' + (d.asset_id || '') + ')', false);
+      loadCreativeCandidateGroups().then(function() {
+        loadAssets(_currentAssetSearchQuery(), { force: true });
+      });
+    })
+    .catch(function(e) { _assetMsgShow('保存失败: ' + e.message, true); })
+    .finally(function() { if (assetSaveUrlBtn) assetSaveUrlBtn.disabled = false; });
+}
+
 function loadCreativeCandidateGroups() {
   var base = publishLocalBase();
   if (!base) return Promise.resolve([]);
@@ -4850,32 +4908,7 @@ function bindAssetSaveUrlUi() {
       var urlInput = document.getElementById('assetUrlInput');
       var rawUrl = (urlInput ? urlInput.value : '').trim();
       if (!rawUrl) { _assetMsgShow('请输入素材URL', true); return; }
-      assetSaveUrlBtn.disabled = true;
-      _assetMsgShow('正在保存…', false);
-      var ext = rawUrl.split('?')[0].split('#')[0].split('.').pop().toLowerCase();
-      var mtype = 'image';
-      if (['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv'].indexOf(ext) >= 0) mtype = 'video';
-      fetch(publishLocalBase() + '/api/assets/save-url', {
-        method: 'POST',
-        headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-        body: JSON.stringify(Object.assign({ url: rawUrl, media_type: mtype, asset_origin: 'user_upload' }, (function() {
-          var labels = _assetUploadOptionalLabels();
-          var extra = {};
-          if (labels.group) extra.creative_candidate_group = labels.group;
-          if (labels.tags) extra.tags = labels.tags;
-          return extra;
-        })()))
-      })
-        .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-        .then(function(d) {
-          if (urlInput) urlInput.value = '';
-          _assetMsgShow('保存成功 (ID: ' + (d.asset_id || '') + ')', false);
-          loadCreativeCandidateGroups().then(function() {
-            loadAssets(_currentAssetSearchQuery(), { force: true });
-          });
-        })
-        .catch(function(e) { _assetMsgShow('保存失败: ' + e.message, true); })
-        .finally(function() { assetSaveUrlBtn.disabled = false; });
+      _openAssetUploadDialog('url');
     });
   }
 }

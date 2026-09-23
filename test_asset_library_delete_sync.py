@@ -319,14 +319,18 @@ def test_creative_group_summaries_count_images_and_keep_other_media():
 
 def test_upload_form_keeps_shared_optional_labels():
     view = (Path(__file__).parent / "static" / "views" / "assets.html").read_text(encoding="utf-8")
+    page = (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
     script = (Path(__file__).parent / "static" / "js" / "publish.js").read_text(encoding="utf-8")
-    assert 'id="assetUploadGroup"' in view
-    assert 'id="assetUploadTags"' in view
+    assert 'id="assetUploadGroup"' not in view
+    assert 'id="assetUploadTags"' not in view
+    assert 'id="assetUploadDialogGroup"' in page
+    assert 'id="assetUploadDialogTags"' in page
     assert "asset-upload-control" in view
     assert "var uploadLabels = _assetUploadOptionalLabels();" in script
     assert "if (uploadLabels.group) fd.append('creative_candidate_group', uploadLabels.group);" in script
-    assert "assetUploadGroup.value = ''" not in script
-    assert "assetUploadTags.value = ''" not in script
+    assert "_rememberAssetUploadDialogLabels" in script
+    assert "assetUploadDialogGroup.value = ''" not in script
+    assert "assetUploadDialogTags.value = ''" not in script
 class _LabelDb:
     def __init__(self, row):
         self.row = row
