@@ -490,6 +490,25 @@ def _workflow_flag(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def self_comment_monitor_workflow_code(status: str, monitor_state: Optional[Dict[str, Any]] = None) -> int:
+    """个别作品评论没确认不算节点失败；自动回复一次都没发出去才算失败。
+
+    未确认的作品下轮会重试，不该把已经采到的评论整轮打红。
+    自动回复全失败是另一件事，必须让节点失败，否则界面上看起来回复成功了。
+    """
+    state = monitor_state if isinstance(monitor_state, dict) else {}
+    normalized = str(status or "").strip().lower()
+    reply_success = _safe_int(state.get("last_auto_reply_success") or 0)
+    reply_failed = _safe_int(state.get("last_auto_reply_failed") or 0)
+    auto_reply_on = bool(state.get("auto_reply_enabled"))
+    replies_all_failed = auto_reply_on and (reply_success + reply_failed) > 0 and reply_success <= 0
+    if replies_all_failed or normalized in {"failed", "error"}:
+        return 500
+    if normalized in {"completed", "skipped", "disabled", "partial", "stopped"}:
+        return 200
+    return 500
+
+
 def _parse_utc_datetime(value: Any) -> Optional[datetime]:
     raw = str(value or "").strip()
     if not raw:
@@ -6560,7 +6579,7 @@ async def _run_scheduled_douyin_sales_action(
             return {"code": 500, "msg": "抖音我的评论区执行没有返回结果。"}
         monitor_state = get_douyin_self_comment_monitor_state(account_id)
         status = str(result.get("status") or monitor_state.get("last_cycle_status") or "failed").strip().lower()
-        code = 200 if status in {"completed", "skipped", "disabled"} else 500
+        code = self_comment_monitor_workflow_code(status, monitor_state)
         return {
             **result,
             "code": code,

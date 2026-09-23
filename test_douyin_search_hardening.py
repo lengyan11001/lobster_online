@@ -16,6 +16,11 @@ class _FakePage:
         self.url = "https://www.douyin.com/search/AI?type=video"
         self.selector_waits = 0
         self.gotos = 0
+        self.reloads = 0
+
+    async def reload(self, **_kwargs):
+        self.reloads += 1
+        return None
 
     async def wait_for_selector(self, *_args, **_kwargs):
         self.selector_waits += 1
@@ -82,9 +87,68 @@ def test_search_wait_captures_evidence_and_reports_chinese(monkeypatch):
         raise AssertionError("两次都等不到视频条目时必须抛错")
 
     assert page.selector_waits == 2, page.selector_waits
-    assert page.gotos == 1, "第二次尝试前应重新打开搜索页"
+    assert page.reloads == 1, "第二次尝试前应刷新页面，而不是对同一个 URL 再 goto"
+    assert page.gotos == 0, page.gotos
     assert len(captured) == 2, captured
     assert any("等不到视频条目" in line for line in logs)
+
+
+def test_search_wait_shell_page_says_result_area_empty(monkeypatch):
+    scraper = DouyinCommentScraper(account_id=1, cdp_port=9332)
+    page = _FakePage()
+
+    async def fake_capture(target_page, **kwargs):
+        return {
+            "login_wall": False,
+            "captcha": {"type": "none", "signal": ""},
+            "screenshot": "D:/runtime/logs/douyin_login_shots/login_wall_1.png",
+            "text_excerpt": "精选\n推荐\nAI抖音\n关注\n朋友\n我的\n直播\n2026 © 抖音\n京ICP备16016397号",
+        }
+
+    async def noop(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(scraper_module.session_health, "capture_login_wall", fake_capture)
+    monkeypatch.setattr(scraper, "_raise_if_login_intercept", noop)
+    monkeypatch.setattr(scraper_module, "DOUYIN_SEARCH_RESULT_WAIT_ATTEMPTS", 2)
+    monkeypatch.setattr(scraper_module, "DOUYIN_SEARCH_RESULT_WAIT_TIMEOUT_MS", 50)
+
+    try:
+        asyncio.run(
+            scraper._wait_for_search_results_ready(
+                page,
+                keyword="同城商家AI获客",
+                url=page.url,
+                logger=lambda message, level="info": None,
+            )
+        )
+    except RuntimeError as exc:
+        message = str(exc)
+        assert "同城商家AI获客" in message
+        assert "结果区是空的" in message
+        assert "不是登录墙" in message
+        assert "验证码" in message
+        assert "TimeoutError" not in message
+    else:  # pragma: no cover
+        raise AssertionError("空壳页重试后仍必须失败")
+
+    assert page.reloads == 1
+
+
+def test_self_comment_partial_is_not_a_node_failure_unless_replies_all_fail():
+    code = h5_chat_channel.self_comment_monitor_workflow_code
+    assert code("partial", {"auto_reply_enabled": True, "last_auto_reply_success": 6, "last_auto_reply_failed": 2}) == 200
+    assert code("partial", {"auto_reply_enabled": False, "last_auto_reply_success": 0, "last_auto_reply_failed": 0}) == 200
+    assert code("completed", {"auto_reply_enabled": True, "last_auto_reply_success": 1, "last_auto_reply_failed": 0}) == 200
+    assert code(
+        "partial",
+        {"auto_reply_enabled": True, "last_auto_reply_success": 0, "last_auto_reply_failed": 8},
+    ) == 500
+    assert code(
+        "completed",
+        {"auto_reply_enabled": True, "last_auto_reply_success": 0, "last_auto_reply_failed": 8},
+    ) == 500
+    assert code("failed", {"auto_reply_enabled": False}) == 500
 
 
 def test_search_wait_returns_when_results_appear(monkeypatch):

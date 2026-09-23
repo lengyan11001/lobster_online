@@ -12606,7 +12606,7 @@ async def send_douyin_self_comment_replies_on_loaded_page(
 ) -> Dict[str, int]:
     account_id = int((account or {}).get("id", 0) or 0)
     image_path = str(image_path or "").strip()
-    result = {"total": len(rows or []), "processed": 0, "success": 0, "failed": 0}
+    result = {"total": len(rows or []), "processed": 0, "success": 0, "failed": 0, "errors": []}
     for raw_row in rows or []:
         row = normalize_douyin_self_comment_row({**raw_row, "account_id": account_id})
         started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -12664,6 +12664,10 @@ async def send_douyin_self_comment_replies_on_loaded_page(
                 finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             )
             result["failed"] += 1
+            error_text = " ".join(str(exc).split())[:180] or type(exc).__name__
+            errors = result.setdefault("errors", [])
+            if error_text and error_text not in errors and len(errors) < 5:
+                errors.append(error_text)
             douyin_log(f"[抖音我的评论区] 当前批次自动回复失败：{row.get('username') or '-'}，原因：{exc}", "error")
         finally:
             result["processed"] += 1
@@ -12779,7 +12783,8 @@ async def run_douyin_self_comment_monitor_cycle(
         new_comments_total = 0
         precise_total = 0
         failed_videos = 0
-        auto_reply_result = {"total": 0, "processed": 0, "success": 0, "failed": 0}
+        failed_video_errors: List[str] = []
+        auto_reply_result = {"total": 0, "processed": 0, "success": 0, "failed": 0, "errors": []}
         merged_rows_all: List[Dict] = []
         existing_rows_all = collect_douyin_self_comment_monitor_results(account["id"])
         existing_keys = {build_douyin_self_comment_row_key(row) for row in existing_rows_all if build_douyin_self_comment_row_key(row)}
@@ -12909,7 +12914,16 @@ async def run_douyin_self_comment_monitor_cycle(
                             )
                             for key in ("total", "processed", "success", "failed"):
                                 auto_reply_result[key] = int(auto_reply_result.get(key, 0) or 0) + int(current_reply_result.get(key, 0) or 0)
+                            for error_text in current_reply_result.get("errors") or []:
+                                reason = " ".join(str(error_text).split())[:180]
+                                errors = auto_reply_result.setdefault("errors", [])
+                                if reason and reason not in errors and len(errors) < 5:
+                                    errors.append(reason)
                         except Exception as reply_exc:
+                            reason = " ".join(str(reply_exc).split())[:180] or type(reply_exc).__name__
+                            errors = auto_reply_result.setdefault("errors", [])
+                            if reason and reason not in errors and len(errors) < 5:
+                                errors.append(reason)
                             douyin_log(
                                 f"[抖音我的评论区] 当前作品顺序回复未完成：{reply_exc}",
                                 "error",
@@ -12919,8 +12933,13 @@ async def run_douyin_self_comment_monitor_cycle(
                                 await reply_page.close()
             except Exception as video_exc:
                 failed_videos += 1
+                title = str(video.get("title") or "").strip() if isinstance(video, dict) else ""
+                reason = " ".join(str(video_exc).split())[:180] or type(video_exc).__name__
+                summary = f"{title}：{reason}" if title else reason
+                if summary not in failed_video_errors and len(failed_video_errors) < 3:
+                    failed_video_errors.append(summary)
                 douyin_log(
-                    f"[抖音我的评论区] 当前作品评论采集未确认，保留本轮失败记录：{video.get('title') if isinstance(video, dict) else '-'}，原因：{video_exc}",
+                    f"[抖音我的评论区] 当前作品评论采集未确认，保留本轮失败记录：{title or '-'}，原因：{video_exc}",
                     "error",
                 )
                 continue
@@ -12936,21 +12955,39 @@ async def run_douyin_self_comment_monitor_cycle(
         )
         if failed_videos:
             message += f" 另有 {failed_videos} 个作品评论未确认，本轮未按无评论处理。"
+            if failed_video_errors:
+                message += " 未确认原因：" + "；".join(failed_video_errors) + "。"
+        reply_success = int(auto_reply_result.get("success", 0) or 0)
+        reply_failed = int(auto_reply_result.get("failed", 0) or 0)
+        reply_errors = [
+            str(item).strip()
+            for item in (auto_reply_result.get("errors") or [])
+            if str(item).strip()
+        ]
         if auto_reply_enabled and int(auto_reply_result.get("processed", 0) or 0) > 0:
-            message += f" 自动回复 {int(auto_reply_result.get('success', 0) or 0)} 成功，{int(auto_reply_result.get('failed', 0) or 0)} 失败。"
+            message += f" 自动回复 {reply_success} 成功，{reply_failed} 失败。"
+            if reply_errors:
+                message += " 回复失败原因：" + "；".join(reply_errors[:3]) + "。"
+        replies_all_failed = bool(auto_reply_enabled) and (reply_success + reply_failed) > 0 and reply_success <= 0
         cycle_status = "stopped" if stopped else ("partial" if failed_videos else "completed")
+        last_error = ""
+        if replies_all_failed:
+            last_error = "自动回复全部失败"
+            if reply_errors:
+                last_error += "：" + "；".join(reply_errors[:3])
         state.update(
             {
                 "running": False,
                 "message": message,
+                "last_error": last_error,
                 "last_video_count": len(videos),
                 "last_comment_count": total_comments,
                 "last_failed_video_count": failed_videos,
                 "last_new_comment_count": new_comments_total,
                 "last_precise_count": precise_total,
                 "last_auto_reply_total": int(auto_reply_result.get("processed", 0) or 0),
-                "last_auto_reply_success": int(auto_reply_result.get("success", 0) or 0),
-                "last_auto_reply_failed": int(auto_reply_result.get("failed", 0) or 0),
+                "last_auto_reply_success": reply_success,
+                "last_auto_reply_failed": reply_failed,
                 "last_skip_reason": "",
                 "last_cycle_status": cycle_status,
             }
@@ -15889,7 +15926,7 @@ async def douyin_search_collect(request: dict):
     request = request or {}
     keyword = str(request.get("keyword", "") or "").strip()
     if not keyword:
-        return {"code": 400, "msg": "??????????"}
+        return {"code": 400, "msg": "请先填写搜索关键词"}
     search_mode = normalize_douyin_search_mode(request.get("mode", "api"))
     max_results = max(10, min(int(request.get("max_results", 50) or 50), 100))
     sort_type = str(request.get("sort_type", "") or "").strip()
@@ -15937,11 +15974,11 @@ async def douyin_search_collect(request: dict):
             publish_time=publish_time,
         )
     except Exception as exc:
-        douyin_log(f"[????] ?????{keyword}????{exc}", "error")
-        return {"code": 500, "msg": f"??????: {exc}", "data": [], "total": 0, "search_mode": "script"}
+        douyin_log(f"[抖音搜索] 脚本搜索失败：{keyword}，原因：{exc}", "error")
+        return {"code": 500, "msg": f"抖音搜索失败：{exc}", "data": [], "total": 0, "search_mode": "script"}
     return {
         "code": 200,
-        "msg": f"??????????? {account['id']}",
+        "msg": f"抖音搜索已通过脚本模式完成，账号 {account['id']}",
         "data": payload["results"],
         "total": len(payload["results"]),
         "account_id": account["id"],

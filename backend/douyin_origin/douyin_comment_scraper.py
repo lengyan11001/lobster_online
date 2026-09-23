@@ -59,6 +59,14 @@ DOUYIN_SEARCH_RESULT_WAIT_ATTEMPTS = 2
 DOUYIN_SEARCH_RESULT_WAIT_TIMEOUT_MS = 30000
 
 
+def search_result_page_is_shell(text: object) -> bool:
+    """搜索页只剩左侧导航和页脚、结果区没有视频时返回 True。"""
+    body = str(text or "")
+    if "/video/" in body:
+        return False
+    return all(marker in body for marker in ("精选", "推荐", "京ICP"))
+
+
 class DouyinPrivateMessageUnavailable(RuntimeError):
     """该主页没有可用的私信入口（按钮点了、弹层始终不出现）。重试没有意义。"""
 
@@ -9299,25 +9307,51 @@ class DouyinCommentScraper:
                 if attempt >= attempts:
                     break
                 try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    # 同一个搜索 URL 再 goto 一次，Chrome 经常当成同页跳转，空壳不会重新渲染。
+                    self._emit(
+                        logger,
+                        "[抖音搜索] 结果区仍没有视频，改为刷新页面后再等一次",
+                        "warning",
+                    )
+                    await page.reload(wait_until="domcontentloaded", timeout=60000)
                     await page.wait_for_timeout(2500)
                     await self._raise_if_login_intercept(page)
                 except Exception as retry_exc:
                     self._emit(
                         logger,
-                        f"[抖音搜索] 重试前重新打开搜索页失败：{type(retry_exc).__name__}: {retry_exc}",
+                        f"[抖音搜索] 刷新搜索页失败，改从首页重新进入：{type(retry_exc).__name__}: {retry_exc}",
                         "warning",
                     )
+                    try:
+                        await page.goto("https://www.douyin.com/", wait_until="domcontentloaded", timeout=60000)
+                        await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                        await page.wait_for_timeout(2500)
+                        await self._raise_if_login_intercept(page)
+                    except Exception as fallback_exc:
+                        self._emit(
+                            logger,
+                            f"[抖音搜索] 从首页重新进入搜索页失败：{type(fallback_exc).__name__}: {fallback_exc}",
+                            "warning",
+                        )
 
-        captcha_kind = str((last_evidence.get("captcha") or {}).get("type") or "") if isinstance(
-            last_evidence.get("captcha"), dict
-        ) else str(last_evidence.get("captcha") or "")
+        captcha_info = last_evidence.get("captcha")
+        captcha_kind = str((captcha_info or {}).get("type") or "") if isinstance(captcha_info, dict) else str(captcha_info or "")
+        login_wall = bool(last_evidence.get("login_wall"))
+        shell = search_result_page_is_shell(last_evidence.get("text_excerpt"))
+        screenshot = str(last_evidence.get("screenshot") or "").strip()
+        screenshot_note = f"；现场截图：{screenshot}" if screenshot else ""
+        if shell and not login_wall and captcha_kind in {"", "none"}:
+            raise RuntimeError(
+                f"搜索页只渲染了左侧导航和页脚，结果区是空的（关键词：{keyword}）。"
+                f"不是登录墙，也不是验证码。已刷新重试 {attempts} 次。"
+                f"{screenshot_note}"
+            )
         raise RuntimeError(
             f"搜索结果页连续 {attempts} 次都没有出现视频条目（关键词：{keyword}）。"
-            f"登录/验证拦截={bool(last_evidence.get('login_wall'))}"
+            f"登录/验证拦截={login_wall}"
             + (f"、验证类型={captcha_kind}" if captcha_kind else "")
             + f"；最近一次错误：{type(last_timeout).__name__}: {last_timeout}"
-            + (f"；现场截图：{last_evidence.get('screenshot')}" if last_evidence.get("screenshot") else "")
+            + screenshot_note
         )
 
 
