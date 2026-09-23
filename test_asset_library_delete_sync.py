@@ -197,3 +197,134 @@ def test_top_navigation_buttons_are_excluded_from_drag_capture():
     source = (Path(__file__).parent / "static" / "js" / "init.js").read_text(encoding="utf-8")
 
     assert "event.target.closest('button, a, input, select, textarea, [role=\"button\"]')" in source
+
+def test_optional_upload_labels_clean_without_rejecting_blank():
+    from fastapi import Form
+
+    assert assets._clean_creative_group_name_optional("  spring   hero  ") == "spring hero"
+    assert assets._clean_creative_group_name_optional("   ") == ""
+    assert assets._clean_creative_group_name_optional(Form("")) == ""
+    assert assets._clean_creative_group_name_optional(None) == ""
+    assert assets._clean_creative_group_name_optional("g" * 50) == "g" * 40
+    assert assets._clean_upload_tags(Form("")) is None
+    assert assets._clean_upload_tags("  ") is None
+    assert assets._clean_upload_tags("hot, hot, cover; hero detail") == "hot,cover,hero,detail"
+    assert assets._clean_upload_tags(",".join(f"t{i}" for i in range(20))) == ",".join(f"t{i}" for i in range(12))
+    assert assets._clean_upload_tags("x" * 80) == "x" * 40
+    auto = "auto," + ("y" * 3000)
+    assert assets._clean_upload_tags(auto) == auto[:2048]
+    try:
+        assets._clean_creative_group_name("   ")
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 400
+    else:
+        raise AssertionError("required group name must still reject blanks")
+
+
+def test_asset_upload_stores_optional_group_and_tags(monkeypatch):
+    saved = []
+
+    class FakeDb:
+        @staticmethod
+        def in_transaction():
+            return False
+
+        def add(self, row):
+            saved.append(row)
+
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(assets, "_save_bytes", lambda data, ext: ("labeled", "labeled.png", len(data)))
+    request = Request({"type": "http", "method": "POST", "path": "/api/assets/upload", "headers": []})
+
+    result = asyncio.run(
+        assets.upload_asset(
+            request=request,
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="shot.png", file=io.BytesIO(b"png")),
+            creative_candidate_group="  spring   hero  ",
+            tags="hot, hot, cover",
+            current_user=SimpleNamespace(id=7),
+            db=FakeDb(),
+        )
+    )
+
+    assert result["creative_candidate_group"] == "spring hero"
+    assert saved[0].tags == "hot,cover"
+    assert saved[0].meta["creative_candidate_group"] == "spring hero"
+    assert saved[0].meta["creative_candidate_groups"] == ["spring hero"]
+    assert saved[0].meta["asset_origin"] == "user_upload"
+
+
+def test_asset_upload_ignores_omitted_form_defaults(monkeypatch):
+    saved = []
+
+    class FakeDb:
+        @staticmethod
+        def in_transaction():
+            return False
+
+        def add(self, row):
+            saved.append(row)
+
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(assets, "_save_bytes", lambda data, ext: ("plain", "plain.pdf", 3))
+    request = Request({"type": "http", "method": "POST", "path": "/api/assets/upload", "headers": []})
+
+    asyncio.run(
+        assets.upload_asset(
+            request=request,
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="intro.pdf", file=io.BytesIO(b"pdf")),
+            current_user=SimpleNamespace(id=7),
+            db=FakeDb(),
+        )
+    )
+
+    assert saved[0].tags is None
+    assert "creative_candidate_group" not in saved[0].meta
+    assert "creative_candidate_groups" not in saved[0].meta
+
+
+def test_user_upload_save_url_cleans_labels_without_touching_generated_tags():
+    source = inspect.getsource(assets._save_asset_from_url_locked)
+    assert 'if asset_origin == "user_upload":' in source
+    assert "stored_tags = _clean_upload_tags(body.tags)" in source
+    assert "tags=stored_tags" in source
+    backfill = inspect.getsource(assets._maybe_backfill_prompt_model_on_dedupe)
+    assert "tags" not in backfill
+    assert "creative_candidate_group" not in backfill
+
+
+def test_creative_group_summaries_count_images_and_keep_other_media():
+    rows = [
+        SimpleNamespace(media_type="image", model="", meta={"creative_candidate_group": "A", "asset_origin": "user_upload"}),
+        SimpleNamespace(media_type="video", model="", meta={"creative_candidate_group": "A", "asset_origin": "user_upload"}),
+        SimpleNamespace(media_type="image", model="", meta={"creative_candidate_group": "B", "content_visibility": "hidden"}),
+        SimpleNamespace(media_type="image", model="shanjian-digital-human-template-media", meta={"creative_candidate_group": "C"}),
+        SimpleNamespace(media_type="document", model="", meta={"creative_candidate_group": "D", "asset_origin": "user_upload"}),
+        SimpleNamespace(media_type="image", model="", meta={"asset_origin": "user_upload"}),
+    ]
+
+    groups = {item["name"]: item for item in assets._creative_candidate_group_summaries(rows)}
+
+    assert groups["A"]["count"] == 1
+    assert groups["D"]["count"] == 0
+    assert "B" not in groups
+    assert "C" not in groups
+
+
+def test_upload_form_keeps_shared_optional_labels():
+    view = (Path(__file__).parent / "static" / "views" / "assets.html").read_text(encoding="utf-8")
+    script = (Path(__file__).parent / "static" / "js" / "publish.js").read_text(encoding="utf-8")
+    assert 'id="assetUploadGroup"' in view
+    assert 'id="assetUploadTags"' in view
+    assert "asset-upload-control" in view
+    assert "var uploadLabels = _assetUploadOptionalLabels();" in script
+    assert "if (uploadLabels.group) fd.append('creative_candidate_group', uploadLabels.group);" in script
+    assert "assetUploadGroup.value = ''" not in script
+    assert "assetUploadTags.value = ''" not in script
+

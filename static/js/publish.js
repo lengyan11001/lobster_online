@@ -3261,6 +3261,26 @@ function _downloadAssetToLibrary(asset, options) {
     });
 }
 
+
+function _assetUploadOptionalLabels() {
+  var groupEl = document.getElementById('assetUploadGroup');
+  var tagsEl = document.getElementById('assetUploadTags');
+  return {
+    group: groupEl ? String(groupEl.value || '').trim() : '',
+    tags: tagsEl ? String(tagsEl.value || '').trim() : ''
+  };
+}
+
+function _assetUserTagHtml(a) {
+  var raw = String((a && a.tags) || '').trim();
+  if (!raw || raw.indexOf('auto,') === 0) return '';
+  var tags = raw.split(/[,，;；\s]+/).map(function(item) { return String(item || '').trim(); }).filter(Boolean).slice(0, 12);
+  if (!tags.length) return '';
+  return '<div class="card-tags">' + tags.map(function(tag) {
+    return '<span class="tag">' + escapeHtml(tag) + '</span>';
+  }).join('') + '</div>';
+}
+
 function _renderAssetCreativeGroupControls() {
   var filter = document.getElementById('assetCreativeGroupFilter');
   if (filter) {
@@ -3753,6 +3773,7 @@ function loadAssets(query, options) {
         var originClass = a.asset_origin === 'user_upload' ? ' is-upload' : ' is-generated';
         var currentGroup = (a.creative_candidate_group || (Array.isArray(a.creative_candidate_groups) && a.creative_candidate_groups[0]) || '').trim();
         var groupHtml = currentGroup ? '<div class="card-tags"><span class="tag">备选：' + escapeHtml(currentGroup) + '</span></div>' : '';
+        var tagHtml = _assetUserTagHtml(a);
         var size = a.file_size ? (a.file_size > 1048576 ? (a.file_size / 1048576).toFixed(1) + ' MB' : (a.file_size / 1024).toFixed(1) + ' KB') : '';
         var useAsAttachBtn = (isImage || isVideo) ? '<button type="button" class="btn btn-primary btn-sm" data-use-as-attach="' + escapeAttr(a.asset_id) + '" data-attach-media-type="' + escapeAttr(a.media_type || '') + '" data-attach-has-url="' + (hasUrl ? '1' : '0') + '">用作附图</button>' : '';
         var previewBtn = '<button type="button" class="btn btn-ghost btn-sm" data-preview-asset="' + escapeAttr(a.asset_id) + '">查看结果</button>';
@@ -3766,7 +3787,7 @@ function loadAssets(query, options) {
           '<div class="card-label"><span style="display:inline-flex;align-items:center;gap:0.35rem;flex-wrap:wrap;"><span class="asset-card-badge" style="background:' + badgeColor + ';">' + escapeHtml(typeLabel) + '</span><span class="asset-origin-badge' + originClass + '">' + escapeHtml(originLabel) + '</span></span><span class="asset-card-size">' + escapeHtml(size) + '</span></div>' +
           preview +
           '<div class="card-desc asset-card-desc-clamp" style="font-size:0.78rem;">' + escapeHtml(a.prompt || a.filename) + '</div>' +
-          groupHtml +
+          groupHtml + tagHtml +
           '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">ID: ' + escapeHtml(a.asset_id) + ' · ' + escapeHtml(_formatDateTimeBeijing(a.created_at)) + '</div>' +
           '<div class="card-actions">' + previewBtn + ' ' + copyPromptBtn + ' ' + downloadBtn + ' ' + useAsAttachBtn + ' ' + candidateBtn + ' ' + actionMenu + ' ' + deleteBtn + '</div></div>';
       }).join('');
@@ -4284,6 +4305,7 @@ function _renderAssetCards(container, assets, append) {
     var originClass = a.asset_origin === 'user_upload' ? ' is-upload' : ' is-generated';
     var currentGroup = (a.creative_candidate_group || (Array.isArray(a.creative_candidate_groups) && a.creative_candidate_groups[0]) || '').trim();
     var groupHtml = currentGroup ? '<div class="card-tags"><span class="tag">备选：' + escapeHtml(currentGroup) + '</span></div>' : '';
+    var tagHtml = _assetUserTagHtml(a);
     var size = a.file_size ? (a.file_size > 1048576 ? (a.file_size / 1048576).toFixed(1) + ' MB' : (a.file_size / 1024).toFixed(1) + ' KB') : '';
     var selectHtml = isContentRecord ? '' : '<label class="asset-card-select" onclick="event.stopPropagation();"><input type="checkbox" data-select-asset="' + escapeAttr(a.asset_id) + '"' + (_assetIsSelected(a.asset_id) ? ' checked' : '') + '><span>选择</span></label>';
     var useAsAttachBtn = !isContentRecord && (isImage || isVideo) ? '<button type="button" class="btn btn-primary btn-sm" data-use-as-attach="' + escapeAttr(a.asset_id) + '" data-attach-media-type="' + escapeAttr(a.media_type || '') + '" data-attach-has-url="' + (hasUrl ? '1' : '0') + '">用作附图</button>' : '';
@@ -4310,7 +4332,7 @@ function _renderAssetCards(container, assets, append) {
       preview +
       '<div class="card-desc asset-card-desc-clamp" style="font-size:0.78rem;">' + escapeHtml(contentPreviewText || a.summary || a.prompt || a.title || a.filename) + '</div>' +
       imageStrip +
-      groupHtml +
+      groupHtml + tagHtml +
       '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">ID: ' + escapeHtml(a.asset_id) + ' · ' + escapeHtml(_formatDateTimeBeijing(a.created_at)) + '</div>' +
       '<div class="card-actions">' + previewBtn + ' ' + copyPromptBtn + ' ' + downloadBtn + ' ' + useAsAttachBtn + ' ' + candidateBtn + ' ' + actionMenu + ' ' + deleteBtn + '</div></div>';
   }).join('');
@@ -4650,6 +4672,7 @@ function bindAssetLibraryUi() {
     assetUploadFile.addEventListener('change', function() {
     var files = assetUploadFile.files;
     if (!files || !files.length) return;
+    var uploadLabels = _assetUploadOptionalLabels();
     var total = files.length;
     var done = 0, failed = 0;
     var uploadErrors = [];
@@ -4657,6 +4680,8 @@ function bindAssetLibraryUi() {
     Array.from(files).forEach(function(f, idx) {
       var fd = new FormData();
       fd.append('file', f);
+      if (uploadLabels.group) fd.append('creative_candidate_group', uploadLabels.group);
+      if (uploadLabels.tags) fd.append('tags', uploadLabels.tags);
       fetch(publishLocalBase() + '/api/assets/upload', { method: 'POST', headers: _authHeadersNoContentType(), body: fd })
         .then(function(r) {
           return r.text().then(function(raw) {
@@ -4751,7 +4776,13 @@ function bindAssetSaveUrlUi() {
       fetch(publishLocalBase() + '/api/assets/save-url', {
         method: 'POST',
         headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
-        body: JSON.stringify({ url: rawUrl, media_type: mtype, asset_origin: 'user_upload' })
+        body: JSON.stringify(Object.assign({ url: rawUrl, media_type: mtype, asset_origin: 'user_upload' }, (function() {
+          var labels = _assetUploadOptionalLabels();
+          var extra = {};
+          if (labels.group) extra.creative_candidate_group = labels.group;
+          if (labels.tags) extra.tags = labels.tags;
+          return extra;
+        })()))
       })
         .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
         .then(function(d) {

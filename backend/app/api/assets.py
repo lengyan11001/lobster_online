@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, text
@@ -1346,6 +1346,7 @@ class SaveAssetReq(BaseModel):
     content_visibility: Optional[str] = None
     name: Optional[str] = None
     tags: Optional[str] = None
+    creative_candidate_group: Optional[str] = None
     prompt: Optional[str] = None
     model: Optional[str] = None
     # MCP sutui.transfer_url 自动入库：下载用 url（mcp 输出链），去重用转入链（通常为 v3），避免每次 transfer 换新 uuid 重复入库
@@ -1470,6 +1471,7 @@ def _sync_creative_candidate_group_to_auth_server(row: Asset, group_name: str, r
                     "creative_candidate_group": group_name,
                     "creative_candidate_groups": [group_name],
                 }
+                _copy_tags_into_register_payload(register_payload, row.tags)
                 resp = client.post(f"{base}/api/assets/register-url", json=register_payload, headers=headers)
                 if resp.status_code >= 400:
                     logger.warning(
@@ -1508,6 +1510,39 @@ def _clean_creative_group_name(value: str) -> str:
     if not name:
         raise HTTPException(400, detail="备选组名字不能为空")
     return name[:40]
+
+
+
+def _clean_creative_group_name_optional(value: Any) -> str:
+    """Optional upload group. Empty is allowed and never raises."""
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"\s+", " ", value.strip())[:40]
+
+
+def _clean_upload_tags(value: Any) -> Optional[str]:
+    """Optional user-upload tags. Non-strings and blanks stay unset."""
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    if raw.startswith("auto,"):
+        return raw[:2048]
+    seen: List[str] = []
+    for part in re.split(r"[,，;；\s]+", raw):
+        tag = part.strip()[:40]
+        if not tag or tag in seen:
+            continue
+        seen.append(tag)
+        if len(seen) >= 12:
+            break
+    return ",".join(seen) if seen else None
+
+
+def _copy_tags_into_register_payload(payload: dict, tags: Optional[str]) -> None:
+    if isinstance(tags, str) and tags.strip():
+        payload["tags"] = tags.strip()
 
 
 def _safe_chat_backup_key(key: str) -> str:
@@ -1909,6 +1944,7 @@ async def _register_user_upload_asset_to_auth_server(
     if group_name:
         payload["creative_candidate_group"] = group_name
         payload["creative_candidate_groups"] = [group_name]
+    _copy_tags_into_register_payload(payload, asset.tags)
     try:
         async with httpx.AsyncClient(timeout=18.0, follow_redirects=True, trust_env=False) as client:
             resp = await client.post(f"{base}/api/assets/register-url", json=payload, headers=headers)
@@ -1987,6 +2023,7 @@ def _sync_remote_user_upload_assets(
             media_type=media,
             file_size=file_size,
             source_url=source_url,
+            tags=_clean_upload_tags(item.get("tags")),
             meta={
                 "asset_origin": "user_upload",
                 "remote_asset_id": remote_asset_id,
@@ -2230,6 +2267,7 @@ def _register_local_user_upload_assets_to_auth_server(
             if group_name:
                 payload["creative_candidate_group"] = group_name
                 payload["creative_candidate_groups"] = [group_name]
+            _copy_tags_into_register_payload(payload, row.tags)
             try:
                 resp = client.post(f"{base}/api/assets/register-url", json=payload, headers=headers)
                 if resp.status_code >= 400:
@@ -2832,6 +2870,13 @@ async def _save_asset_from_url_locked(
     gtid = (body.generation_task_id or "").strip()
     if gtid:
         meta["generation_task_id"] = gtid[:128]
+    stored_tags = body.tags
+    if asset_origin == "user_upload":
+        stored_tags = _clean_upload_tags(body.tags)
+        upload_group = _clean_creative_group_name_optional(body.creative_candidate_group)
+        if upload_group:
+            meta["creative_candidate_group"] = upload_group
+            meta["creative_candidate_groups"] = [upload_group]
 
     log_url = body.url[:80] + ("..." if len(body.url) > 80 else "")
     if effective_url.strip() != (body.url or "").strip():
@@ -2848,7 +2893,7 @@ async def _save_asset_from_url_locked(
             source_url=source_url,
             prompt=body.prompt,
             model=body.model,
-            tags=body.tags,
+            tags=stored_tags,
             meta=meta,
         )
         db_ins.add(asset)
@@ -2962,6 +3007,8 @@ async def upload_asset(
     request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    creative_candidate_group: str = Form(""),
+    tags: str = Form(""),
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
@@ -2994,6 +3041,16 @@ async def upload_asset(
     )
     upload_headers = _snapshot_auth_server_upload_headers(request) if mtype == "image" else {}
     public_url_status = "preparing" if upload_headers else "deferred_until_use"
+    upload_group = _clean_creative_group_name_optional(creative_candidate_group)
+    upload_tags = _clean_upload_tags(tags)
+    upload_meta = {
+        "asset_origin": "user_upload",
+        "storage": "local",
+        "public_url_status": public_url_status,
+    }
+    if upload_group:
+        upload_meta["creative_candidate_group"] = upload_group
+        upload_meta["creative_candidate_groups"] = [upload_group]
     asset = Asset(
         asset_id=aid,
         user_id=current_user.id,
@@ -3001,11 +3058,8 @@ async def upload_asset(
         media_type=mtype,
         file_size=fsize,
         source_url=None,
-        meta={
-            "asset_origin": "user_upload",
-            "storage": "local",
-            "public_url_status": public_url_status,
-        },
+        tags=upload_tags,
+        meta=upload_meta,
     )
     db.add(asset)
     db.commit()
@@ -3064,6 +3118,9 @@ async def upload_asset(
         ),
         "local_only": not bool(asset.source_url),
         "public_url_status": "ready" if asset.source_url else public_url_status,
+        "tags": asset.tags or "",
+        "creative_candidate_group": _creative_candidate_group(asset.meta),
+        "creative_candidate_groups": _creative_candidate_groups(asset.meta),
     }
 
 
@@ -3275,29 +3332,43 @@ def sync_generated_assets(
     }
 
 
+def _asset_hidden_from_creative_groups(row: Asset) -> bool:
+    meta = row.meta if isinstance(getattr(row, "meta", None), dict) else {}
+    visibility = str(meta.get("content_visibility") or meta.get("library_visibility") or "").strip().lower()
+    origin = str(meta.get("asset_origin") or meta.get("origin") or "").strip().lower()
+    if visibility in {"hidden", "internal", "intermediate"} or origin in {"internal", "intermediate"}:
+        return True
+    return str(getattr(row, "model", "") or "").strip() == "shanjian-digital-human-template-media"
+
+
+def _creative_candidate_group_summaries(rows: list) -> List[dict]:
+    groups: Dict[str, dict] = {}
+    for row in rows:
+        if _asset_hidden_from_creative_groups(row):
+            continue
+        name = _creative_candidate_group(getattr(row, "meta", None))
+        if not name:
+            continue
+        current = groups.setdefault(name, {"name": name, "count": 0, "use_count": 0, "last_used_at": ""})
+        if str(getattr(row, "media_type", "") or "").strip().lower() == "image":
+            current["count"] += 1
+        current["use_count"] += _creative_candidate_group_use_count(row.meta, name)
+        last_used = _creative_candidate_group_last_used_at(row.meta, name)
+        if last_used and (not current["last_used_at"] or last_used > current["last_used_at"]):
+            current["last_used_at"] = last_used
+    return [
+        item
+        for item in sorted(groups.values(), key=lambda item: (-int(item.get("count") or 0), str(item.get("name") or "")))
+    ]
+
+
 @router.get("/api/assets/creative-candidate-groups", summary="创意成片备选素材组列表")
 def list_creative_candidate_groups(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    rows = db.query(Asset).filter(Asset.user_id == current_user.id, Asset.media_type == "image").all()
-    groups: Dict[str, dict] = {}
-    for row in rows:
-        name = _creative_candidate_group(row.meta)
-        if name:
-            current = groups.setdefault(name, {"name": name, "count": 0, "use_count": 0, "last_used_at": ""})
-            current["count"] += 1
-            current["use_count"] += _creative_candidate_group_use_count(row.meta, name)
-            last_used = _creative_candidate_group_last_used_at(row.meta, name)
-            if last_used and (not current["last_used_at"] or last_used > current["last_used_at"]):
-                current["last_used_at"] = last_used
-    return {
-        "ok": True,
-        "groups": [
-            item
-            for item in sorted(groups.values(), key=lambda row: (-int(row.get("count") or 0), str(row.get("name") or "")))
-        ],
-    }
+    rows = db.query(Asset).filter(Asset.user_id == current_user.id).all()
+    return {"ok": True, "groups": _creative_candidate_group_summaries(rows)}
 
 
 @router.post("/api/assets/{asset_id}/creative-candidate-groups", summary="加入创意成片备选素材组")

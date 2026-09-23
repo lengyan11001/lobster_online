@@ -2074,18 +2074,27 @@ async def _upload_online_split_segment(
     source_filename: str,
     split_job_id: str,
     segment_index: int,
+    creative_candidate_group: str = "",
+    tags: str = "",
 ) -> Dict[str, Any]:
+    form = {
+        "split_video": "false",
+        "source_upload_filename": source_filename,
+        "video_segment": "true",
+        "segment_index": str(segment_index),
+        "split_job_id": split_job_id,
+    }
+    group_name = creative_candidate_group.strip() if isinstance(creative_candidate_group, str) else ""
+    tag_text = tags.strip() if isinstance(tags, str) else ""
+    if group_name:
+        form["creative_candidate_group"] = group_name
+    if tag_text:
+        form["tags"] = tag_text
     with path.open("rb") as stream:
         response = await cloud.post(
             f"{base}/api/assets/upload",
             headers=headers,
-            data={
-                "split_video": "false",
-                "source_upload_filename": source_filename,
-                "video_segment": "true",
-                "segment_index": str(segment_index),
-                "split_job_id": split_job_id,
-            },
+            data=form,
             files={"file": (path.name, stream, "video/mp4")},
         )
     if response.status_code >= 400:
@@ -2107,6 +2116,8 @@ async def _run_online_video_split_command(
     source_asset_id = str(payload.get("source_asset_id") or "").strip()
     source_url = str(payload.get("source_url") or "").strip()
     source_filename = Path(str(payload.get("source_filename") or "source.mp4")).name
+    creative_candidate_group = str(payload.get("creative_candidate_group") or "").strip()
+    upload_tags = str(payload.get("tags") or "").strip()
     segment_seconds = max(2, min(int(payload.get("segment_seconds") or 3), 10))
     max_segments = max(1, min(int(payload.get("max_segments") or 120), 120))
     if not source_asset_id or not source_url:
@@ -2182,6 +2193,8 @@ async def _run_online_video_split_command(
                         source_filename=source_filename,
                         split_job_id=message_id,
                         segment_index=index,
+                        creative_candidate_group=creative_candidate_group,
+                        tags=upload_tags,
                     )
                 )
                 await _post_cloud_event(
