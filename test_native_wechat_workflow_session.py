@@ -2012,20 +2012,33 @@ async def test_takeover_session_waits_after_each_round_and_finishes_last_started
     assert result["stop_reason"] == "session_deadline"
 
 
+def test_native_wechat_driver_backoff_grows_then_caps():
+    assert channel._native_wechat_driver_backoff_seconds(1) == 30.0
+    assert channel._native_wechat_driver_backoff_seconds(2) == 60.0
+    assert channel._native_wechat_driver_backoff_seconds(3) == 120.0
+    assert channel._native_wechat_driver_backoff_seconds(4) == 240.0
+    assert channel._native_wechat_driver_backoff_seconds(5) == 300.0
+    assert channel._native_wechat_driver_backoff_seconds(9) == 300.0
+
+
 @pytest.mark.asyncio
-async def test_takeover_session_stops_after_three_consecutive_driver_failures(monkeypatch):
+async def test_takeover_session_retries_driver_failures_until_the_window_ends(monkeypatch):
+    clock = {"now": 0.0}
     attempts = []
     sleeps = []
+    error = "\u5fae\u4fe1\u4f1a\u8bdd\u5217\u8868\u8bfb\u53d6\u4e3a\u7a7a\uff0c\u4f46\u754c\u9762\u53ef\u89c1 9 \u4e2a\u4f1a\u8bdd"
 
     async def post_local(_path, _body, **_kwargs):
-        attempts.append(len(attempts) + 1)
-        raise RuntimeError("未识别到可用的微信窗口")
+        attempts.append(clock["now"])
+        raise RuntimeError(error)
 
-    async def no_sleep(seconds):
+    async def advance_sleep(seconds):
         sleeps.append(seconds)
+        clock["now"] += seconds
 
+    monkeypatch.setattr(channel, "_takeover_monotonic", lambda: clock["now"])
     monkeypatch.setattr(channel, "_post_local_api_json", post_local)
-    monkeypatch.setattr(channel.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(channel.asyncio, "sleep", advance_sleep)
 
     result = await channel._run_native_wechat_takeover_session(
         account_id="pc-wechat-default",
@@ -2033,18 +2046,60 @@ async def test_takeover_session_stops_after_three_consecutive_driver_failures(mo
         cloud=None,
         base="",
         run_id="run",
-        rounds=120,
         interval_seconds=15,
-        session_seconds=1800,
+        session_seconds=400,
     )
 
-    assert attempts == [1, 2, 3]
-    assert sleeps == [15.0, 15.0]
+    assert attempts == [0.0, 30.0, 90.0, 210.0]
+    assert sleeps == [30.0, 60.0, 120.0, 190.0]
     assert result["completed_rounds"] == 0
-    assert result["failed"] == 3
+    assert result["failed"] == 4
     assert result["ok"] is False
-    assert result["stop_reason"] == "consecutive_driver_failures"
-    assert result["last_error"] == "未识别到可用的微信窗口"
+    assert result["stop_reason"] == "session_deadline"
+    assert result["last_error"] == error
+    assert result["consecutive_driver_failures"] == 4
+    assert result["driver_backoff_seconds"] == 240.0
+
+
+@pytest.mark.asyncio
+async def test_takeover_session_resets_driver_backoff_after_a_successful_round(monkeypatch):
+    clock = {"now": 0.0}
+    calls = {"n": 0}
+    sleeps = []
+
+    async def post_local(_path, _body, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RuntimeError("wxauto empty")
+        clock["now"] += 20.0
+        return {"ok": True, "items": []}
+
+    async def advance_sleep(seconds):
+        sleeps.append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr(channel, "_takeover_monotonic", lambda: clock["now"])
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+    monkeypatch.setattr(channel.asyncio, "sleep", advance_sleep)
+
+    result = await channel._run_native_wechat_takeover_session(
+        account_id="pc-wechat-default",
+        headers={},
+        cloud=None,
+        base="",
+        run_id="run",
+        interval_seconds=15,
+        session_seconds=200,
+    )
+
+    assert sleeps == [30.0, 60.0, 15.0, 15.0, 15.0]
+    assert result["failed"] == 2
+    assert result["completed_rounds"] == 4
+    assert result["ok"] is True
+    assert result["stop_reason"] == "session_deadline"
+    assert result["consecutive_driver_failures"] == 0
+    assert result["driver_backoff_seconds"] == 0
+    assert result["last_error"] == ""
 
 
 @pytest.mark.asyncio
@@ -4251,13 +4306,23 @@ def test_first_page_empty_read_waits_for_ready_and_retries(monkeypatch):
             calls["sessions"] += 1
             if calls["sessions"] < 3:
                 return []
-            return [{"name": "客户A", "time": "2026-09-21 12:00:00", "content": "在吗"}]
+            return [{"name": "客户A", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "content": "在吗"}]
 
     monkeypatch.setattr(engine, "_get_wxauto4_client", lambda *_args, **_kwargs: FakeWx())
     monkeypatch.setattr(
         engine, "_ensure_local_session_list_ready", lambda _account_id: calls.__setitem__("ready", calls["ready"] + 1)
     )
     monkeypatch.setattr(engine, "_uia_visible_session_count", lambda _account_id: 9)
+    monkeypatch.setattr(
+        engine,
+        "_persist_session",
+        lambda _account_id, session, chat_type="unknown": {
+            "peer_id": session.get("peer_id"),
+            "display_name": session.get("display_name"),
+            "changed": False,
+            "chat_type": chat_type,
+        },
+    )
     monkeypatch.setattr(engine, "time", type("T", (), {"sleep": staticmethod(lambda _s: None), "time": staticmethod(lambda: 0.0)}))
 
     result = engine._sync_recent_sessions_from_wxauto4(engine.LOCAL_DEFAULT_ACCOUNT_ID)

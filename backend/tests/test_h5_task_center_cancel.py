@@ -165,6 +165,25 @@ def test_takeover_deadline_report_without_a_finished_round_is_explicit():
     assert "接管已启动，但本节点时间内未完成一轮巡检" in text
 
 
+def test_takeover_deadline_mentions_driver_retries_when_no_round_finished():
+    text = channel._workflow_node_deadline_message(
+        datetime.now(timezone.utc),
+        takeover_report=channel._takeover_deadline_report(
+            {
+                "completed_rounds": 0,
+                "failed": 4,
+                "last_error": "微信会话列表读取为空，但界面可见 9 个会话",
+            }
+        ),
+        takeover_node=True,
+    )
+
+    assert "失败 4 次" in text
+    assert "退避重试" in text
+    assert "界面可见 9 个会话" in text
+    assert "接管已启动，但本节点时间内未完成一轮巡检" not in text
+
+
 def test_running_takeover_session_counters_reach_the_heartbeat_patch():
     patch = channel._takeover_progress_patch(
         {

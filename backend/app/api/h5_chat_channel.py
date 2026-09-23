@@ -10866,6 +10866,16 @@ def _takeover_monotonic() -> float:
     return asyncio.get_running_loop().time()
 
 
+def _native_wechat_driver_backoff_seconds(consecutive_failures: int) -> float:
+    """Pause after a driver exception without ending an all-day takeover.
+
+    30s, 60s, 120s, 240s, then 300s. Three quick failures must not consume
+    the rest of a 00:00-23:59 window when wxauto only blipped.
+    """
+    step = max(0, int(consecutive_failures) - 1)
+    return float(min(300.0, 30.0 * (2 ** min(step, 4))))
+
+
 async def _run_native_wechat_takeover_session(
     *,
     account_id: str,
@@ -10916,7 +10926,9 @@ async def _run_native_wechat_takeover_session(
         _publish_takeover_session_state(run_id, output)
     last_config: Dict[str, Any] = {}
     consecutive_driver_failures = 0
-    max_consecutive_driver_failures = 3
+    # After a driver exception the next gap replaces the normal poll interval.
+    # 0 means use interval_seconds.
+    next_wait = 0.0
     stop_reason = ""
     round_number = 0
     if cloud is not None and base and run_id:
@@ -10934,11 +10946,13 @@ async def _run_native_wechat_takeover_session(
     while not stop_reason and _takeover_monotonic() < deadline_monotonic and (
         round_limit is None or round_number < round_limit
     ):
-        if round_number and interval:
+        wait_seconds = next_wait if next_wait > 0 else (interval if round_number else 0.0)
+        next_wait = 0.0
+        if wait_seconds:
             remaining = deadline_monotonic - _takeover_monotonic()
             if remaining <= 0:
                 break
-            await asyncio.sleep(min(interval, remaining))
+            await asyncio.sleep(min(wait_seconds, remaining))
         if _takeover_monotonic() >= deadline_monotonic:
             break
         round_number += 1
@@ -11021,6 +11035,9 @@ async def _run_native_wechat_takeover_session(
                 stop_reason = "local_wechat_busy" if reason == "running" else "local_wechat_not_executed"
                 break
             consecutive_driver_failures = 0
+            output["consecutive_driver_failures"] = 0
+            output["driver_backoff_seconds"] = 0
+            output["last_error"] = ""
             last_config = result.get("config") if isinstance(result.get("config"), dict) else last_config
             items = [item for item in (result.get("items") or []) if isinstance(item, dict)]
             output["completed_rounds"] += 1
@@ -11066,13 +11083,49 @@ async def _run_native_wechat_takeover_session(
                     stop_reason = "slot_ownership_changed"
                     break
         except Exception as exc:
+            # An empty wxauto read is often transient: the same machine can
+            # read the list again minutes later. Ending the session here used
+            # to consume the whole daily window (00:00-23:59) after ~2.5 min.
+            # Keep the run alive until the node deadline and back off so a
+            # dead driver does not grab the WeChat window every 15 seconds.
             consecutive_driver_failures += 1
             output["failed"] += 1
+            output["consecutive_driver_failures"] = consecutive_driver_failures
             output["rounds"].append({"round": round_number, "failed": 1, "error": str(exc)[:500]})
             output["last_error"] = str(exc)[:500]
-            if consecutive_driver_failures >= max_consecutive_driver_failures:
-                stop_reason = "consecutive_driver_failures"
-                break
+            next_wait = _native_wechat_driver_backoff_seconds(consecutive_driver_failures)
+            output["driver_backoff_seconds"] = next_wait
+            logger.warning(
+                "[SCHEDULED-TASK] native wechat driver read failed; retrying inside window round=%s consecutive=%s backoff=%.0fs error=%s",
+                round_number,
+                consecutive_driver_failures,
+                next_wait,
+                output["last_error"],
+            )
+            if cloud is not None and base and run_id:
+                event_status = await _post_task_event(
+                    cloud,
+                    base,
+                    headers,
+                    run_id,
+                    "running",
+                    {
+                        "text": (
+                            f"个微驱动暂时读不到会话，{int(next_wait)} 秒后重试"
+                            f"（连续第 {consecutive_driver_failures} 次）"
+                        ),
+                        "round": round_number,
+                        "session_seconds": duration_limit,
+                        "heartbeat": True,
+                        "driver_backoff_seconds": int(next_wait),
+                        "consecutive_driver_failures": consecutive_driver_failures,
+                        "takeover": _takeover_progress_patch(output),
+                    },
+                )
+                if _task_event_rejects_local_work(event_status):
+                    await _request_local_auto_reply_stop(account_id, headers)
+                    stop_reason = "slot_ownership_changed"
+                    break
     if not stop_reason and round_limit is not None and round_number >= round_limit and _takeover_monotonic() < deadline_monotonic:
         stop_reason = "round_limit"
     output["finished_at"] = datetime.utcnow().isoformat()
@@ -12457,6 +12510,7 @@ def _takeover_deadline_report(state: Dict[str, Any]) -> Dict[str, Any]:
         "finished_at": str(snapshot.get("finished_at") or ""),
         "last_round_summary": str(last_round.get("summary_text") or "").strip(),
         "session_summary": str(snapshot.get("summary_text") or "").strip(),
+        "last_error": str(snapshot.get("last_error") or "")[:500],
     }
 
 
@@ -12467,7 +12521,17 @@ def _takeover_deadline_text(report: Dict[str, Any]) -> str:
         "接管实况",
     ]
     if report["completed_rounds"] <= 0:
-        lines.append("- 接管已启动，但本节点时间内未完成一轮巡检")
+        failed = int(report.get("failed") or 0)
+        if failed > 0:
+            lines.append(
+                f"- 接管已启动，但个微驱动读不到会话（失败 {failed} 次）。"
+                "已在本节点时间内退避重试，没有完成一轮巡检"
+            )
+            last_error = str(report.get("last_error") or "").strip()
+            if last_error:
+                lines.append(f"- 最后一次错误：{last_error[:180]}")
+        else:
+            lines.append("- 接管已启动，但本节点时间内未完成一轮巡检")
     else:
         lines.append(
             f"- 已巡检：{report['completed_rounds']} 轮，耗时 {report['duration_label']}"
