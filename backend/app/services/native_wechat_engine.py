@@ -12978,36 +12978,269 @@ def _enforce_local_friend_add_rate(account_id: str) -> None:
         time.sleep(min_gap - elapsed)
 
 
-def _open_local_moments(hwnd: int, steps: List[Dict[str, Any]]) -> None:
-    _focus_local_wechat(hwnd)
-    root = _uia_foreground_or_main_root(hwnd)
-    nodes = _uia_walk(root, max_depth=8, max_nodes=240)
-    is_global_timeline = any(_uia_control_class(node) == "mmui::TimeLineListView" for node in nodes)
-    is_contact_album = any(
-        _uia_control_class(node) in {"mmui::AlbumBaseCell", "mmui::AlbumContentCell"} for node in nodes
-    )
-    if is_global_timeline and not is_contact_album:
-        steps.append({"step": "open_moments", "ok": True, "entry": "already_open"})
-        refresh = _uia_find_by_names(root, ["刷新"], contains=False, max_depth=10)
-        if refresh is not None:
-            _uia_click(refresh)
-            steps.append({"step": "refresh_moments", "ok": True})
-            time.sleep(1.5)
-        return
-    node = _uia_find_by_names(root, ["朋友圈"], contains=False, max_depth=18)
-    if node is None:
-        node = _uia_find_by_names(root, ["朋友圈"], contains=True, max_depth=18)
-    if node is None:
-        raise RuntimeError("未找到朋友圈入口，请确认 PC 微信左侧有朋友圈入口且当前账号支持")
-    _uia_click(node)
-    steps.append({"step": "open_moments", "ok": True, "entry": _uia_control_text(node)})
-    time.sleep(1.5)
-    root = _uia_foreground_or_main_root(hwnd)
+
+_MOMENTS_ENTRY_MISSING = "未找到朋友圈入口，请确认 PC 微信左侧有朋友圈入口且当前账号支持"
+_MOMENTS_NAV_SEARCH_NODES = 3200
+_MOMENTS_TIMELINE_CLASSES = {"mmui::TimeLineListView", "mmui::TimelineContentCell"}
+_MOMENTS_ALBUM_CLASSES = {"mmui::AlbumBaseCell", "mmui::AlbumContentCell"}
+
+
+def _root_native_handle(root: Any) -> int:
+    try:
+        return int(getattr(root, "NativeWindowHandle", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _moments_nav_label_usable(text: str) -> bool:
+    value = str(text or "").strip()
+    # "聊天、朋友圈、微信运动等" is permission copy, not the left nav.
+    if not value or "、" in value or len(value) > 12:
+        return False
+    return "朋友圈" in value
+
+
+def _scan_moments_surface(root: Any, *, max_nodes: int = _MOMENTS_NAV_SEARCH_NODES) -> Dict[str, Any]:
+    """Classify a WeChat surface, or find the left-nav Moments entry.
+
+    ``_uia_find_by_names`` stops at 600 nodes. A busy chat list is walked
+    first, so the left nav is intermittently past that cap and publish fails
+    with "entry not found" even though the button is on screen. This walk
+    keeps going until the nav is found, but still returns early once the
+    timeline has had the old 240-node chance to identify itself.
+    """
+    exact_nav = None
+    fuzzy_nav = None
+    seen = 0
+    queue: List[tuple[Any, int]] = [(root, 0)]
+    while queue and seen < max_nodes:
+        node, depth = queue.pop(0)
+        seen += 1
+        class_name = _uia_control_class(node)
+        if class_name in _MOMENTS_ALBUM_CLASSES:
+            return {"kind": "contact_album", "nav": None, "seen": seen}
+        if class_name in _MOMENTS_TIMELINE_CLASSES:
+            return {"kind": "timeline", "nav": None, "seen": seen}
+        text = _uia_control_text(node)
+        if text == "朋友圈":
+            exact_nav = node
+        elif (
+            fuzzy_nav is None
+            and text
+            and text != "朋友圈"
+            and _moments_nav_label_usable(text)
+        ):
+            fuzzy_nav = node
+        if exact_nav is not None and seen >= 240:
+            return {"kind": "nav", "nav": exact_nav, "seen": seen}
+        if depth >= 18:
+            continue
+        try:
+            children = node.GetChildren()
+        except Exception:
+            children = []
+        queue.extend((child, depth + 1) for child in children or [])
+    nav = exact_nav or fuzzy_nav
+    if nav is not None:
+        return {"kind": "nav", "nav": nav, "seen": seen}
+    return {"kind": "none", "nav": None, "seen": seen}
+
+
+def _refresh_local_moments(root: Any, steps: List[Dict[str, Any]]) -> None:
     refresh = _uia_find_by_names(root, ["刷新"], contains=False, max_depth=10)
-    if refresh is not None:
-        _uia_click(refresh)
-        steps.append({"step": "refresh_moments", "ok": True})
-        time.sleep(1.5)
+    if refresh is None:
+        return
+    _uia_click(refresh)
+    steps.append({"step": "refresh_moments", "ok": True})
+    time.sleep(1.5)
+
+
+def _recover_local_moments_entry(hwnd: int, steps: List[Dict[str, Any]], attempt: int) -> None:
+    """Dismiss overlays and put the main left nav back before searching again."""
+    try:
+        _send_hotkey("esc", pause=0.1)
+    except Exception:
+        pass
+    try:
+        _focus_local_wechat(hwnd)
+    except Exception as exc:
+        steps.append(
+            {
+                "step": "recover_moments_nav",
+                "ok": False,
+                "attempt": attempt,
+                "error": str(exc)[:240],
+            }
+        )
+        time.sleep(0.4)
+        return
+    try:
+        _ensure_local_tab(hwnd, "微信")
+    except Exception:
+        pass
+    steps.append({"step": "recover_moments_nav", "ok": True, "attempt": attempt})
+    time.sleep(0.45)
+
+
+def _moments_search_roots(hwnd: int, attempt: int) -> List[Any]:
+    roots: List[Any] = []
+    handles: set[int] = set()
+
+    def add(root: Any) -> None:
+        if root is None:
+            return
+        handle = _root_native_handle(root)
+        if handle and handle in handles:
+            return
+        if handle:
+            handles.add(handle)
+        roots.append(root)
+
+    foreground = None
+    main = None
+    try:
+        foreground = _uia_foreground_or_main_root(hwnd)
+    except Exception:
+        foreground = None
+    try:
+        main = _uia_main_root(hwnd)
+    except Exception:
+        main = None
+    if attempt == 1:
+        add(foreground)
+        add(main)
+    else:
+        add(main)
+        add(foreground)
+    return roots
+
+
+def _usable_moments_surface(root: Any) -> Optional[Dict[str, Any]]:
+    surface = _scan_moments_surface(root)
+    if surface.get("kind") == "contact_album":
+        return None
+    if surface.get("kind") == "none" and int(surface.get("seen") or 0) < 80:
+        time.sleep(0.35)
+        surface = _scan_moments_surface(root)
+        if surface.get("kind") == "contact_album":
+            return None
+    if surface.get("kind") in {"timeline", "nav"}:
+        return surface
+    return surface if surface.get("kind") == "none" else None
+
+
+def _accept_open_moments(
+    hwnd: int,
+    surface: Dict[str, Any],
+    steps: List[Dict[str, Any]],
+    attempt: int,
+    *,
+    entry: str = "",
+) -> bool:
+    kind = str(surface.get("kind") or "")
+    if kind == "timeline":
+        steps.append(
+            {
+                "step": "open_moments",
+                "ok": True,
+                "entry": entry or "already_open",
+                "attempt": attempt,
+            }
+        )
+        try:
+            root = _uia_foreground_or_main_root(hwnd)
+        except Exception:
+            return True
+        _refresh_local_moments(root, steps)
+        return True
+    if kind != "nav" or surface.get("nav") is None:
+        return False
+    node = surface["nav"]
+    _uia_click(node)
+    steps.append(
+        {
+            "step": "open_moments",
+            "ok": True,
+            "entry": _uia_control_text(node),
+            "attempt": attempt,
+        }
+    )
+    time.sleep(1.5)
+    try:
+        root = _uia_foreground_or_main_root(hwnd)
+    except Exception:
+        return True
+    _refresh_local_moments(root, steps)
+    return True
+
+
+def _open_existing_global_moments(hwnd: int, steps: List[Dict[str, Any]], attempt: int) -> bool:
+    try:
+        moments_hwnd = int(_find_visible_local_moments_hwnd() or 0)
+    except Exception:
+        return False
+    if not moments_hwnd or moments_hwnd == int(hwnd or 0):
+        return False
+    try:
+        surface = _scan_moments_surface(_uia_main_root(moments_hwnd))
+    except Exception:
+        return False
+    if surface.get("kind") != "timeline":
+        return False
+    try:
+        _focus_local_wechat(moments_hwnd)
+    except Exception:
+        pass
+    return _accept_open_moments(
+        moments_hwnd,
+        surface,
+        steps,
+        attempt,
+        entry="existing_window",
+    )
+
+
+def _open_local_moments(hwnd: int, steps: List[Dict[str, Any]]) -> None:
+    """Open the global Moments timeline inside this publish.
+
+    A missed left-nav entry used to fail the whole publish immediately.
+    Search past the old 600-node cap, and when the entry is still absent,
+    dismiss overlays and return to the chat tab before looking again.
+    The nav is clicked only after it is found, so a retry cannot toggle
+    Moments closed.
+    """
+    last_seen = 0
+    for attempt in range(1, 4):
+        _focus_local_wechat(hwnd)
+        if _open_existing_global_moments(hwnd, steps, attempt):
+            return
+        found = False
+        for root in _moments_search_roots(hwnd, attempt):
+            try:
+                surface = _usable_moments_surface(root)
+            except Exception:
+                continue
+            if not surface:
+                continue
+            last_seen = max(last_seen, int(surface.get("seen") or 0))
+            if _accept_open_moments(hwnd, surface, steps, attempt):
+                found = True
+                break
+        if found:
+            return
+        steps.append(
+            {
+                "step": "open_moments_retry",
+                "ok": False,
+                "attempt": attempt,
+                "seen": last_seen,
+                "error": _MOMENTS_ENTRY_MISSING,
+            }
+        )
+        if attempt >= 3:
+            break
+        _recover_local_moments_entry(hwnd, steps, attempt)
+    raise RuntimeError(_MOMENTS_ENTRY_MISSING)
 
 
 def _find_local_contact_list(root: Any) -> Optional[Any]:
