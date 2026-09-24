@@ -9327,11 +9327,24 @@ async def _wait_for_local_native_wechat_task(
     deadline = asyncio.get_running_loop().time() + max(30.0, float(timeout_seconds or 1800.0))
     terminal = {"success", "completed", "failed", "partial_failed", "cancelled", "canceled"}
     while True:
-        detail = await _get_local_api_json(
-            f"/api/native-wechat/tasks/{quote(task_id, safe='')}",
-            headers=headers,
-            timeout_seconds=30.0,
-        )
+        try:
+            detail = await _get_local_api_json(
+                f"/api/native-wechat/tasks/{quote(task_id, safe='')}",
+                headers=headers,
+                timeout_seconds=30.0,
+            )
+        except Exception as exc:
+            if not _is_transient_poll_error(exc):
+                raise
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError(f"本机微信任务等待超时，查询进度时连接中断：{task_id}") from exc
+            logger.warning(
+                "[H5-WORKFLOW] native wechat task poll retry task_id=%s err=%s",
+                task_id,
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            await asyncio.sleep(1.0)
+            continue
         current = detail.get("task") if isinstance(detail.get("task"), dict) else task
         status = str(current.get("status") or "").strip().lower()
         if status in terminal:
@@ -11631,13 +11644,25 @@ async def _run_native_wechat_group_invite_followup(
     deadline = asyncio.get_running_loop().time() + wait_seconds
     parent_runs: List[Dict[str, Any]] = []
     while True:
-        parent_runs = await _resolve_parent_workflow_results(
-            cloud,
-            base,
-            headers,
-            params=source,
-            current_item=current_item,
-        )
+        try:
+            parent_runs = await _resolve_parent_workflow_results(
+                cloud,
+                base,
+                headers,
+                params=source,
+                current_item=current_item,
+            )
+        except Exception as exc:
+            if not _is_transient_poll_error(exc):
+                raise
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError("等待上级节点结果超时，查询进度时连接中断") from exc
+            logger.warning(
+                "[H5-WORKFLOW] parent workflow poll retry err=%s",
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            await asyncio.sleep(poll_seconds)
+            continue
         if parent_runs or asyncio.get_running_loop().time() >= deadline:
             break
         await asyncio.sleep(poll_seconds)
