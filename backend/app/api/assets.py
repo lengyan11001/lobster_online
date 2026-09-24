@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -3672,6 +3673,66 @@ def update_asset_labels(
 
 # ── Get single + serve file ──────────────────────────────────────
 
+
+_POSTER_DIR = _BASE_DIR / "_lobster_runtime" / "asset_posters"
+_POSTER_GATE = threading.BoundedSemaphore(2)
+_POSTER_LOCKS_GUARD = threading.Lock()
+_POSTER_LOCKS: Dict[str, threading.Lock] = {}
+
+
+def _poster_lock(asset_id: str) -> threading.Lock:
+    with _POSTER_LOCKS_GUARD:
+        lock = _POSTER_LOCKS.get(asset_id)
+        if lock is None:
+            lock = threading.Lock()
+            _POSTER_LOCKS[asset_id] = lock
+        return lock
+
+
+def _ffmpeg_bin() -> Path:
+    name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    return _BASE_DIR / "deps" / "ffmpeg" / name
+
+
+def _ensure_video_poster(asset_id: str, source: Path) -> Path:
+    """HEVC 等浏览器不能直接画首帧的视频，抽一帧 JPEG 给素材库缩略图。"""
+    _POSTER_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _POSTER_DIR / f"{asset_id}.jpg"
+    source_mtime = source.stat().st_mtime
+    if dest.exists() and dest.stat().st_size > 0 and dest.stat().st_mtime >= source_mtime:
+        return dest
+    ffmpeg = _ffmpeg_bin()
+    if not ffmpeg.exists():
+        raise HTTPException(500, detail="ffmpeg 不存在，无法生成视频缩略图")
+    with _poster_lock(asset_id):
+        source_mtime = source.stat().st_mtime
+        if dest.exists() and dest.stat().st_size > 0 and dest.stat().st_mtime >= source_mtime:
+            return dest
+        tmp = dest.with_suffix(".tmp.jpg")
+        last_err = ""
+        for ss in ("0.1", "0"):
+            try:
+                proc = subprocess.run(
+                    [
+                        str(ffmpeg), "-y", "-ss", ss, "-i", str(source),
+                        "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "4",
+                        "-update", "1", str(tmp),
+                    ],
+                    capture_output=True,
+                    timeout=40,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                last_err = "timeout"
+                continue
+            if tmp.exists() and tmp.stat().st_size > 0:
+                tmp.replace(dest)
+                return dest
+            last_err = (proc.stderr or b"").decode("utf-8", errors="replace")[-300:]
+        logger.warning("[assets] poster failed asset=%s err=%s", asset_id, last_err)
+        raise HTTPException(500, detail="视频缩略图生成失败")
+
+
 @router.get("/api/assets/{asset_id}/content", summary="素材文件内容（需登录，用于前端预览）")
 def get_asset_content(
     asset_id: str,
@@ -3712,6 +3773,42 @@ def get_asset_content(
     }
     ct = mt_map.get((a.media_type or "").lower(), "application/octet-stream")
     return _stream_local_asset(path, ct, request)
+
+
+
+@router.get("/api/assets/{asset_id}/poster", summary="视频素材缩略图（抽一帧，需登录）")
+def get_asset_poster(
+    asset_id: str,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    a = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
+    if not a:
+        raise HTTPException(404, detail="素材不存在")
+    if (a.media_type or "").lower() != "video":
+        raise HTTPException(404, detail="不是视频")
+    filename = str(a.filename or "").strip()
+    if not filename:
+        source_hint = str(a.source_url or "").strip()
+        filename = _remote_asset_filename(
+            "",
+            source_hint,
+            str((a.meta or {}).get("remote_asset_id") or "").strip() or f"{a.asset_id}.bin",
+        )
+        a.filename = filename
+        db.add(a)
+        db.commit()
+    path = ASSETS_DIR / filename
+    if not path.exists():
+        if _asset_has_remote_source(a):
+            with _asset_remote_download_lock(a.asset_id):
+                if not path.exists():
+                    _download_remote_asset_to_path(a, path, request)
+        if not path.exists():
+            raise HTTPException(404, detail="文件不存在")
+    poster = _ensure_video_poster(a.asset_id, path)
+    return FileResponse(poster, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @router.post("/api/assets/{asset_id}/save-to-downloads", summary="保存素材到本机下载目录")

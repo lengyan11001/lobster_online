@@ -3487,18 +3487,25 @@ function _pickAssetListThumbUrl(a) {
 }
 
 /**
- * 缩略图：已配置本机 API 时优先走带登录头的 /content（与本机素材文件一致，避免签名 URL 误用 127.0.0.1 导致局域网打不开）；
- * 无本机 base 或 /content 失败时再尝试安全直链（公网 CDN 等）；视频 seek 一小段以显示首帧。
+ * 图片仍优先走带登录头的 /content。
+ * 视频不要先下完整文件：列表里直接用可分段的签名地址并定位到 0.1s，失败再回退 /content。
  */
 function _wireAssetListThumbs(container) {
   var base = publishLocalBase();
   if (!base || typeof fetch !== 'function') return;
 
+  function withVideoThumbFragment(url) {
+    var u = (url || '').trim();
+    if (!u || u.indexOf('#') >= 0) return u;
+    return u + '#t=0.1';
+  }
+
   function loadBlobIntoMedia(el, isVideo, directFallback) {
     var aid = el.getAttribute('data-asset-id');
     if (!aid) return;
     var fb = (directFallback || el.getAttribute('data-direct-fallback') || '').trim();
-    fetch(base + '/api/assets/' + encodeURIComponent(aid) + '/content', {
+    var contentSuffix = el.getAttribute('data-content-kind') === 'poster' ? '/poster' : '/content';
+    fetch(base + '/api/assets/' + encodeURIComponent(aid) + contentSuffix, {
       headers: _authHeadersForMediaFetch()
     })
       .then(function(r) {
@@ -3506,16 +3513,27 @@ function _wireAssetListThumbs(container) {
         return r.blob();
       })
       .then(function(blob) {
-        el.src = URL.createObjectURL(blob);
-        if (isVideo) _bindVideoListThumbSeek(el);
+        var blobUrl = URL.createObjectURL(blob);
+        if (!isVideo) {
+          el.src = blobUrl;
+          return;
+        }
+        _bindVideoListThumbSeek(el);
+        el.addEventListener('error', function onBlobErr() {
+          el.removeEventListener('error', onBlobErr);
+          try { URL.revokeObjectURL(blobUrl); } catch (e) {}
+          var failedWrap = el.closest ? el.closest('.asset-preview-wrap') : null;
+          if (failedWrap) failedWrap.setAttribute('data-thumb-failed', '1');
+        }, { once: true });
+        el.src = withVideoThumbFragment(blobUrl);
       })
       .catch(function() {
         // 兜底直链就是同一个 /content 地址时不要再打一次：以前"取文件失败→退回同一
         // 地址→再失败"会让内容记录页看起来一直在刷新。
         var sameContentUrl = !!fb && String(fb).indexOf('/api/assets/' + encodeURIComponent(aid) + '/content') >= 0;
         if (fb && !sameContentUrl && !_thumbDirectLoadLikelyBroken(fb)) {
-          el.src = fb;
           if (isVideo) _bindVideoListThumbSeek(el);
+          el.src = isVideo ? withVideoThumbFragment(fb) : fb;
           return;
         }
         var failedWrap = el.closest ? el.closest('.asset-preview-wrap') : null;
@@ -3557,27 +3575,25 @@ function _wireAssetListThumbs(container) {
   });
 
   container.querySelectorAll('video.asset-list-thumb-video').forEach(function(vid) {
-    var initial = (vid.getAttribute('data-initial-src') || '').trim();
+    var initial = (vid.getAttribute('data-initial-src') || vid.getAttribute('src') || '').trim();
     var preferBlobFirst = vid.getAttribute('data-prefer-content') === '1';
     if (initial && !_thumbDirectLoadLikelyBroken(initial)) preferBlobFirst = false;
-    if (preferBlobFirst) {
+    if (preferBlobFirst || !initial) {
       loadBlobIntoMedia(vid, true, '');
       return;
     }
-    if (initial) {
-      vid.src = initial;
-      _bindVideoListThumbSeek(vid);
-      vid.addEventListener(
-        'error',
-        function onErr() {
-          vid.removeEventListener('error', onErr);
-          loadBlobIntoMedia(vid, true, '');
-        },
-        { once: true }
-      );
-    } else {
-      loadBlobIntoMedia(vid, true, '');
-    }
+    var nextSrc = withVideoThumbFragment(initial);
+    _bindVideoListThumbSeek(vid);
+    vid.addEventListener(
+      'error',
+      function onErr() {
+        vid.removeEventListener('error', onErr);
+        loadBlobIntoMedia(vid, true, '');
+      },
+      { once: true }
+    );
+    if ((vid.getAttribute('src') || '') !== nextSrc) vid.src = nextSrc;
+    else if (vid.error) loadBlobIntoMedia(vid, true, '');
   });
 }
 
@@ -4392,16 +4408,21 @@ function _renderAssetCards(container, assets, append) {
         preview = '<div class="asset-preview-wrap" ' + wrapAttrs + '><div style="max-width:160px;max-height:120px;border-radius:6px;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;font-size:0.72rem;color:var(--text-muted);padding:0.5rem;">无缩略图<br>（未配置本机 API 或素材无文件）</div></div>';
       }
     } else if (isVideo) {
-      if (showThumb) {
-        var vidPreferContent = blobOk ? '1' : '0';
-        var vidInitialSrc = blobOk ? '' : safeDirectFallback;
+      if (showThumb && blobOk) {
+        preview =
+          '<div class="asset-preview-wrap" ' + wrapAttrs +
+          '><img class="asset-list-thumb" data-asset-id="' + escapeAttr(a.asset_id) +
+          '" data-prefer-content="1" data-content-kind="poster" data-direct-fallback="" data-initial-src="" alt="" style="max-width:160px;max-height:120px;border-radius:6px;object-fit:cover;pointer-events:none;"></div>';
+      } else if (showThumb) {
+        var videoDirect = safeDirectFallback;
+        var vidInitialSrc = videoDirect ? (videoDirect.indexOf('#') < 0 ? (videoDirect + '#t=0.1') : videoDirect) : '';
         preview =
           '<div class="asset-preview-wrap" ' + wrapAttrs +
           '><video class="asset-list-thumb-video" data-asset-id="' + escapeAttr(a.asset_id) +
-          '" data-prefer-content="' + vidPreferContent +
-          '" data-direct-fallback="' + escapeAttr(safeDirectFallback) +
+          '" data-prefer-content="0" data-direct-fallback="' + escapeAttr(safeDirectFallback) +
           '" data-initial-src="' + escapeAttr(vidInitialSrc) +
-          '" style="max-width:160px;max-height:120px;border-radius:6px;pointer-events:none;" muted preload="metadata" playsinline></video></div>';
+          '"' + (vidInitialSrc ? ' src="' + escapeAttr(vidInitialSrc) + '"' : '') +
+          ' style="max-width:160px;max-height:120px;border-radius:6px;pointer-events:none;" muted preload="metadata" playsinline></video></div>';
       } else {
         preview = '<div class="asset-preview-wrap" ' + wrapAttrs + '><div style="max-width:160px;max-height:120px;border-radius:6px;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;font-size:0.72rem;color:var(--text-muted);padding:0.5rem;">无缩略图<br>（未配置本机 API 或素材无文件）</div></div>';
       }

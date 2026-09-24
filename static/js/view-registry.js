@@ -151,7 +151,7 @@ window.registerLobsterView('alibaba-inquiries', {
 
   window.registerLobsterView('assets', {
     html: '/static/views/assets.html?v=20260806-content-record-categories',
-    scripts: '/static/js/publish.js?v=20260807-digital-human-v2-20260807-content-publish-v1'
+    scripts: '/static/js/publish.js?v=20260924-video-thumb-v1'
   });
 
   window.registerLobsterView('scheduled-tasks', {
