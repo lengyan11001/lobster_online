@@ -9877,7 +9877,10 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
             item_kind = ""
         for raw_key, raw_value in value.items():
             key = str(raw_key or "").strip().lower()
-            if key in skip_keys:
+            # 参考图只给生图用，不是发布素材。reference_image_urls /
+            # reference_asset_ids / resume_reference_image_urls 整段跳过，
+            # 不能递归进去，否则砂锅菜这类参考图会被收进朋友圈。
+            if key in skip_keys or "reference" in key:
                 continue
             kind = "video" if key in video_id_keys or key in video_url_keys else "image" if key in image_id_keys or key in image_url_keys else item_kind
             if key in video_id_keys or key in image_id_keys or key in generic_id_keys:

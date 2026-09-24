@@ -128,3 +128,39 @@ def test_parent_material_ignores_cover_and_generic_keys():
 
     material = channel._extract_parent_material({"result": {"cover_url": "https://x.example/cover.jpg"}})
     assert not (material.get("image_urls") or material.get("url") or material.get("asset_id")), material
+
+
+def test_parent_material_drops_reference_images():
+    """参考图不是发布素材：reference_image_urls 及嵌套 images[].reference_image_urls 不得进入发布列表。"""
+    from backend.app.api import h5_chat_channel as channel
+
+    claypot = "https://x.example/claypot.jpg"
+    generated = [
+        "https://x.example/meter-1.png",
+        "https://x.example/meter-2.png",
+    ]
+    payload = {
+        "publish_draft": {
+            "image_urls": generated,
+            "reference_image_urls": [claypot],
+            "reference_asset_ids": ["ref-asset"],
+            "resume_reference_image_urls": [claypot],
+            "images": [
+                {
+                    "image_url": generated[0],
+                    "reference_image_urls": [claypot],
+                },
+                {
+                    "image_urls": [generated[1]],
+                    "meta": {"reference_image_urls": [claypot], "reference_asset_ids": ["ref-asset"]},
+                },
+            ],
+        }
+    }
+    material = channel._extract_parent_material(payload)
+    urls = list(material.get("image_urls") or [])
+    blob = str(material)
+    assert claypot not in urls
+    assert claypot not in blob
+    assert "ref-asset" not in blob
+    assert urls == generated
