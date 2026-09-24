@@ -4657,7 +4657,7 @@ function loadAssets(query, options) {
     url = cloud + '/api/content-records?kind=' + encodeURIComponent(snap.mediaType) + '&limit=' + _ASSET_PAGE_SIZE + '&offset=' + offset + '&compact=true';
   } else {
     url = publishLocalBase() + '/api/assets?limit=' + _ASSET_PAGE_SIZE + '&offset=' + offset;
-    if (snap.origin) url += '&origin=' + encodeURIComponent(snap.origin);
+    if (snap.origin && !snap.creativeGroup) url += '&origin=' + encodeURIComponent(snap.origin);
     if (snap.mediaType) url += '&media_type=' + encodeURIComponent(snap.mediaType);
     if (snap.creativeGroup) url += '&creative_group=' + encodeURIComponent(snap.creativeGroup);
     if (snap.query) url += '&q=' + encodeURIComponent(snap.query);
@@ -4683,7 +4683,7 @@ function loadAssets(query, options) {
           });
         });
       }
-      if (snap.origin) {
+      if (snap.origin && !snap.creativeGroup) {
         assets = assets.filter(function(a) {
           var itemOrigin = a && a.asset_origin === 'user_upload' ? 'user_upload' : 'generated';
           return itemOrigin === snap.origin;

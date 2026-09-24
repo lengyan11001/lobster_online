@@ -3236,10 +3236,13 @@ def list_assets(
     query = query.filter(
         ~meta_visibility.in_(("hidden", "internal", "intermediate"))
     )
-    if origin_filter == "user_upload":
-        query = query.filter(meta_origin == "user_upload")
-    elif origin_filter == "generated":
-        query = query.filter(meta_origin != "user_upload")
+    # A selected creative group is a material bucket shared by both libraries.
+    # The dropdown count is not origin-scoped, so keep every asset in that group.
+    if not creative_group_name:
+        if origin_filter == "user_upload":
+            query = query.filter(meta_origin == "user_upload")
+        elif origin_filter == "generated":
+            query = query.filter(meta_origin != "user_upload")
     if creative_group_name:
         matched = [
             row
