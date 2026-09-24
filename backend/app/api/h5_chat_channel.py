@@ -8188,8 +8188,14 @@ async def _invoke_hifly_cloud_tts(
                 headers=headers,
                 timeout=poll_request_timeout,
             )
-        except httpx.TimeoutException:
-            last = {"ok": True, "task_id": task_id, "status": 2, "status_text": "查询超时，继续等待生成结果"}
+        except httpx.TransportError as exc:
+            logger.warning(
+                "[H5-WORKFLOW] hifly status poll retry task_id=%s waited=%s err=%s",
+                task_id,
+                waited,
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            last = {"ok": True, "task_id": task_id, "status": 2, "status_text": "查询连接中断，继续等待生成结果"}
             await asyncio.sleep(interval)
             waited += interval
             continue
@@ -8743,11 +8749,24 @@ async def _run_seedance_tvc_scheduled_pipeline(
     deadline = asyncio.get_running_loop().time() + max(30.0, float(timeout_seconds))
     last_job: Dict[str, Any] = {"ok": True, "status": "running", "job_id": job_id}
     while True:
-        job = await _get_local_api_json(
-            poll_path + ("&" if "?" in poll_path else "?") + "compact=false",
-            headers=headers,
-            timeout_seconds=180.0,
-        )
+        try:
+            job = await _get_local_api_json(
+                poll_path + ("&" if "?" in poll_path else "?") + "compact=false",
+                headers=headers,
+                timeout_seconds=180.0,
+            )
+        except Exception as exc:
+            if not _is_transient_poll_error(exc):
+                raise
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError("创意分镜头视频生成超时，查询进度时连接中断") from exc
+            logger.warning(
+                "[H5-WORKFLOW] seedance poll retry job_id=%s err=%s",
+                job_id,
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            await asyncio.sleep(interval)
+            continue
         last_job = job if isinstance(job, dict) else {"result": job}
         status = str(last_job.get("status") or "").strip().lower()
         if status == "failed":
@@ -9514,11 +9533,23 @@ async def _wait_local_bestseller_video(
 
     deadline = asyncio.get_running_loop().time() + max(30.0, float(timeout_seconds))
     while True:
-        job = await _get_local_api_json(
-            poll_path + ("&" if "?" in poll_path else "?") + "compact=false",
-            headers=headers,
-            timeout_seconds=180.0,
-        )
+        try:
+            job = await _get_local_api_json(
+                poll_path + ("&" if "?" in poll_path else "?") + "compact=false",
+                headers=headers,
+                timeout_seconds=180.0,
+            )
+        except Exception as exc:
+            if not _is_transient_poll_error(exc):
+                raise
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError("同城爆款视频生成超时，查询进度时连接中断") from exc
+            logger.warning(
+                "[H5-WORKFLOW] local bestseller poll retry err=%s",
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            await asyncio.sleep(max(0.1, float(poll_interval_seconds)))
+            continue
         status = str(job.get("status") or "").strip().lower()
         if status == "failed":
             raise RuntimeError(str(job.get("error") or job.get("post_error") or "同城爆款视频生成失败")[:500])
@@ -9538,6 +9569,13 @@ async def _wait_local_bestseller_video(
         if asyncio.get_running_loop().time() >= deadline:
             raise RuntimeError("同城爆款视频生成超时，未取得最终成片")
         await asyncio.sleep(max(0.1, float(poll_interval_seconds)))
+
+
+def _is_transient_poll_error(exc: BaseException) -> bool:
+    """Status polls are safe to repeat. A create/submit call is not."""
+    if isinstance(exc, httpx.TransportError):
+        return True
+    return isinstance(exc, RuntimeError) and "不可达" in str(exc or "")
 
 
 async def _post_cloud_api_json(
@@ -11025,14 +11063,43 @@ async def _run_shanjian_digital_human_workflow(
             body["record_id"] = record_id
         if task_id:
             body["task_id"] = task_id
-        last = await _post_cloud_api_json(
-            "/api/shanjian-digital-human/video/task",
-            body,
-            cloud=cloud,
-            base=base,
-            headers=headers,
-            timeout_seconds=180.0,
-        )
+        try:
+            last = await _post_cloud_api_json(
+                "/api/shanjian-digital-human/video/task",
+                body,
+                cloud=cloud,
+                base=base,
+                headers=headers,
+                timeout_seconds=180.0,
+            )
+        except Exception as exc:
+            if not _is_transient_poll_error(exc):
+                raise
+            logger.warning(
+                "[H5-WORKFLOW] digital human status poll retry task_id=%s record_id=%s waited=%s err=%s",
+                task_id or "-",
+                record_id or 0,
+                waited,
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            if waited >= poll_timeout:
+                last = {
+                    **last,
+                    "status": "processing",
+                    "poll_error": f"{type(exc).__name__}: {exc}"[:240],
+                }
+                break
+            await asyncio.sleep(interval)
+            waited += interval
+            if waited % 60 < interval:
+                await _workflow_event(
+                    cloud,
+                    base,
+                    headers,
+                    run_id,
+                    f"数字人2.0查询进度时云端暂时连不上，已等待 {waited} 秒，继续重试",
+                )
+            continue
         status = _workflow_text(last.get("status"), 64).lower()
         if status in {"succeed", "success", "completed", "complete", "done", "finished"}:
             record = last.get("record") if isinstance(last.get("record"), dict) else record
@@ -11697,11 +11764,24 @@ async def _run_client_workflow_action(
         timeout_seconds = float(_clamp_int(source.get("poll_timeout_seconds"), 1200, 30, 7200))
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         while True:
-            job = await _get_local_api_json(
-                f"/api/comfly-image-studio/jobs/{job_id}",
-                headers=headers,
-                timeout_seconds=120.0,
-            )
+            try:
+                job = await _get_local_api_json(
+                    f"/api/comfly-image-studio/jobs/{job_id}",
+                    headers=headers,
+                    timeout_seconds=120.0,
+                )
+            except Exception as exc:
+                if not _is_transient_poll_error(exc):
+                    raise
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise RuntimeError(f"图片生成等待超时，查询进度时连接中断，任务ID：{job_id}") from exc
+                logger.warning(
+                    "[H5-WORKFLOW] image studio poll retry job_id=%s err=%s",
+                    job_id,
+                    f"{type(exc).__name__}: {exc}"[:240],
+                )
+                await asyncio.sleep(2.5)
+                continue
             status = str(job.get("status") or "").strip().lower()
             if status == "completed":
                 return _image_studio_completed_result(job, job_id=job_id, prompt=prompt)
