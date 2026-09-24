@@ -2641,39 +2641,42 @@
   }
 
   function currentPersonalDigitalHumanAssetGroups() {
-    var select = $('psDigitalHumanAssetGroups');
-    if (state.personalDigitalHumanAssetGroupsLoaded && select) {
-      return normalizePersonalDigitalHumanAssetGroups(Array.prototype.map.call(select.selectedOptions || [], function(opt) {
-        return opt.value;
+    var selected = state.personalDigitalHumanAssetGroupSelected;
+    if (state.personalDigitalHumanAssetGroupsLoaded && selected) {
+      return normalizePersonalDigitalHumanAssetGroups(Object.keys(selected).filter(function(name) {
+        return !!selected[name];
       }));
     }
     return normalizePersonalDigitalHumanAssetGroups(state.personalDigitalHumanAssetGroups);
   }
 
   function renderPersonalDigitalHumanAssetGroups() {
-    var select = $('psDigitalHumanAssetGroups');
-    if (!select) return;
-    var selected = normalizePersonalDigitalHumanAssetGroups(state.personalDigitalHumanAssetGroups);
+    var el = $('psDigitalHumanAssetGroups');
+    if (!el) return;
     var names = [];
     (state.personalDigitalHumanAssetGroupOptions || []).forEach(function(row) {
       var name = String(row && row.name || '').trim();
       if (name && names.indexOf(name) < 0) names.push(name);
     });
-    selected.forEach(function(name) {
+    normalizePersonalDigitalHumanAssetGroups(state.personalDigitalHumanAssetGroups).forEach(function(name) {
       if (names.indexOf(name) < 0) names.push(name);
     });
-    select.innerHTML = names.map(function(name) {
-      var isSelected = selected.indexOf(name) >= 0 ? ' selected' : '';
-      return '<option value="' + escAttr(name) + '"' + isSelected + '>' + esc(name) + '</option>';
-    }).join('');
-    if (!select.dataset.boundAssetGroups) {
-      select.dataset.boundAssetGroups = '1';
-      select.addEventListener('change', function() {
-        state.personalDigitalHumanAssetGroups = normalizePersonalDigitalHumanAssetGroups(Array.prototype.map.call(select.selectedOptions || [], function(opt) {
-          return opt.value;
-        }));
-      });
-    }
+    var selected = {};
+    normalizePersonalDigitalHumanAssetGroups(state.personalDigitalHumanAssetGroups).forEach(function(name) {
+      selected[name] = true;
+    });
+    state.personalDigitalHumanAssetGroupSelected = selected;
+    renderTemplateOptions('psDigitalHumanAssetGroups', names.map(function(name) {
+      return { id: name, name: name };
+    }), {
+      kind: 'digital_human_asset_group',
+      label: '选择分组',
+      selected: selected,
+      empty: '暂无素材分组，请先在素材库里给素材设置分组。',
+      id: function(row) { return row.id; },
+      title: function(row) { return row.name; },
+      subtitle: function() { return ''; }
+    });
   }
 
   function loadPersonalDigitalHumanAssetGroups() {
@@ -2681,6 +2684,9 @@
     return localJson('/api/assets/creative-candidate-groups').then(function(data) {
       state.personalDigitalHumanAssetGroupOptions = Array.isArray(data && data.groups) ? data.groups : [];
       state.personalDigitalHumanAssetGroupsLoaded = true;
+      if (state.personalDigitalHumanAssetGroupSelected) {
+        state.personalDigitalHumanAssetGroups = currentPersonalDigitalHumanAssetGroups();
+      }
       renderPersonalDigitalHumanAssetGroups();
     }).catch(function() {
       state.personalDigitalHumanAssetGroupsLoaded = false;
