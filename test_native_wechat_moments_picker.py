@@ -214,3 +214,105 @@ def test_publish_failure_cleans_up_leftovers(monkeypatch):
         engine._publish_moments_local_once("pc-wechat-default", "文案", attachments=files)
 
     assert calls == ["cleanup"]
+
+
+def test_open_dialog_file_spec_same_folder_is_directory_plus_names():
+    """同目录 3 张不能再拼成 3 段完整路径，否则打开框会把默认高亮多交一张。"""
+    paths = [r"C:\moments\a.jpg", r"C:\moments\b.jpg", r"C:\moments\c.jpg"]
+    spec = engine._moments_open_dialog_file_spec(paths)
+    assert spec == '"C:\\moments" "a.jpg" "b.jpg" "c.jpg"'
+    assert spec != " ".join(f'"{path}"' for path in paths)
+    pieces = [part for part in spec.split('"') if part.strip()]
+    assert pieces == [r"C:\moments", "a.jpg", "b.jpg", "c.jpg"]
+    assert sum(1 for piece in pieces if piece.lower().endswith(".jpg")) == 3
+
+
+def test_open_dialog_file_spec_different_folders_stay_absolute():
+    spec = engine._moments_open_dialog_file_spec([r"C:\one\a.jpg", r"D:\two\b.jpg"])
+    assert spec == '"C:\\one\\a.jpg" "D:\\two\\b.jpg"'
+
+
+def test_clear_file_dialog_selection_drops_stranger_and_keeps_targets():
+    removed = []
+
+    class Item:
+        def __init__(self, name, selected):
+            self.Name = name
+            self._selected = selected
+
+        def GetSelectionItemPattern(self):
+            item = self
+
+            class Pattern:
+                def RemoveFromSelection(_self):
+                    removed.append(item.Name)
+
+                @property
+                def IsSelected(_self):
+                    return item._selected
+
+            return Pattern()
+
+        def GetChildren(self):
+            return []
+
+    class Root:
+        def __init__(self, children):
+            self._children = children
+
+        def GetChildren(self):
+            return list(self._children)
+
+    root = Root([Item("old.jpg", True), Item("a.jpg", True), Item("b.jpg", False)])
+    steps = []
+    cleared = engine._clear_file_dialog_default_selection(
+        root,
+        steps,
+        keep_names=["a.jpg", "b.jpg", "c.jpg"],
+    )
+    assert cleared == 1
+    assert removed == ["old.jpg"]
+    assert steps[-1] == {"step": "moments_picker_clear_selection", "ok": True, "cleared": 1}
+
+
+def test_select_files_clears_default_selection_before_open(monkeypatch):
+    steps = []
+    calls = []
+    spec = engine._moments_open_dialog_file_spec(
+        [r"C:\moments\a.jpg", r"C:\moments\b.jpg", r"C:\moments\c.jpg"]
+    )
+
+    monkeypatch.setattr(engine, "_activate_window", lambda _hwnd: True)
+
+    def _set(_node, text, **_kwargs):
+        calls.append(("set", text))
+        return True
+
+    def _clear(_root, _steps, keep_names=None):
+        calls.append(("clear", tuple(keep_names or ())))
+        return 1 if keep_names else 0
+
+    monkeypatch.setattr(engine, "_uia_set_text_verified", _set)
+    monkeypatch.setattr(engine, "_clear_file_dialog_default_selection", _clear)
+    monkeypatch.setattr(engine, "_moments_text_written", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(engine, "_file_dialog_open_button", lambda _root, *, timeout=0.0: "open")
+    monkeypatch.setattr(engine, "_uia_click", lambda node: calls.append(("click", node)))
+    monkeypatch.setattr(engine, "_wait_window_closed", lambda _hwnd, *, timeout=0.0: True)
+
+    files = [
+        {"local_path": r"C:\moments\a.jpg"},
+        {"local_path": r"C:\moments\b.jpg"},
+        {"local_path": r"C:\moments\c.jpg"},
+    ]
+    engine._select_files_in_open_dialog(123, files, steps, picker=_picker())
+
+    assert calls[0] == ("clear", ())
+    assert calls[1] == ("set", spec)
+    assert calls[2][0] == "clear"
+    assert calls[2][1] == ("a.jpg", "b.jpg", "c.jpg")
+    assert calls[3] == ("set", spec)
+    assert calls[4] == ("click", "open")
+    selected = [step for step in steps if step["step"] == "select_moments_files"][-1]
+    assert selected["spec_mode"] == "directory_names"
+    assert selected["count"] == 3
+    assert steps[-1]["step"] == "close_moments_file_picker"

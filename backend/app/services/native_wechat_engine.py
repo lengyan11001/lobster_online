@@ -18522,6 +18522,102 @@ def _wait_window_closed(hwnd: Any, *, timeout: float = 8.0) -> bool:
     return False
 
 
+def _moments_open_dialog_file_spec(paths: List[str]) -> str:
+    """系统「打开」框要写入的文件名。
+
+    同目录多图写成「目录 + 文件名」。多段完整路径不会换掉列表里的默认高亮，
+    点「打开」时高亮项会和这几张一起提交，朋友圈就会每次多出一张。
+    """
+    cleaned = [str(path or "").strip().strip('"') for path in paths if str(path or "").strip().strip('"')]
+    if not cleaned:
+        return ""
+    if len(cleaned) > 1 and len({str(Path(path).parent) for path in cleaned}) == 1:
+        folder = str(Path(cleaned[0]).parent)
+        names = [Path(path).name for path in cleaned]
+        return " ".join(f'"{part}"' for part in (folder, *names))
+    return " ".join(f'"{path}"' for path in cleaned)
+
+
+def _uia_selection_item_pattern(node: Any) -> Any:
+    for getter in ("GetSelectionItemPattern", "SelectionItemPattern"):
+        try:
+            pattern = getattr(node, getter, None)
+            pattern = pattern() if callable(pattern) else pattern
+        except Exception:
+            pattern = None
+        if pattern is not None:
+            return pattern
+    return None
+
+
+def _uia_selection_item_selected(node: Any) -> bool:
+    pattern = _uia_selection_item_pattern(node)
+    if pattern is None:
+        return False
+    for source in (pattern, node):
+        for attr in ("IsSelected", "CurrentIsSelected"):
+            try:
+                value = getattr(source, attr, None)
+                if callable(value):
+                    value = value()
+            except Exception:
+                continue
+            if value is True or value == 1:
+                return True
+    return False
+
+
+def _file_dialog_node_may_be_selected_item(node: Any) -> bool:
+    try:
+        control_type = str(getattr(node, "ControlTypeName", "") or "")
+    except Exception:
+        control_type = ""
+    class_name = _uia_control_class(node)
+    if any(token in control_type or token in class_name for token in ("ListItem", "DataItem")):
+        return True
+    if control_type or class_name:
+        return False
+    return any(hasattr(node, name) for name in ("GetSelectionItemPattern", "SelectionItemPattern"))
+
+
+def _clear_file_dialog_default_selection(
+    root: Any,
+    steps: Optional[List[Dict[str, Any]]] = None,
+    *,
+    keep_names: Optional[List[str]] = None,
+) -> int:
+    """清掉打开框里不属于本次素材的默认高亮，避免多打开一张。"""
+    keep = {str(name or "").strip().lower() for name in (keep_names or []) if str(name or "").strip()}
+    cleared = 0
+    if root is not None:
+        try:
+            nodes = _uia_walk(root, max_depth=12, max_nodes=800)
+        except Exception:
+            nodes = []
+        for node in nodes:
+            if not _file_dialog_node_may_be_selected_item(node):
+                continue
+            if not _uia_selection_item_selected(node):
+                continue
+            if keep:
+                label = _uia_control_text(node).strip().lower()
+                base = Path(label).name.lower() if label else ""
+                if label in keep or base in keep:
+                    continue
+            pattern = _uia_selection_item_pattern(node)
+            remover = getattr(pattern, "RemoveFromSelection", None) if pattern is not None else None
+            if not callable(remover):
+                continue
+            try:
+                remover()
+                cleared += 1
+            except Exception:
+                continue
+    if steps is not None:
+        steps.append({"step": "moments_picker_clear_selection", "ok": True, "cleared": cleared})
+    return cleared
+
+
 def _select_files_in_open_dialog(
     hwnd: int,
     files: List[Dict[str, Any]],
@@ -18533,7 +18629,7 @@ def _select_files_in_open_dialog(
     paths = [str(item.get("local_path") or "").strip() for item in files if str(item.get("local_path") or "").strip()]
     if not paths:
         return
-    file_spec = " ".join(f'"{path}"' for path in paths)
+    file_spec = _moments_open_dialog_file_spec(paths)
     window = picker or _find_moments_file_picker_window(
         wechat_pid=_window_process_id(hwnd),
         timeout=10.0,
@@ -18549,10 +18645,26 @@ def _select_files_in_open_dialog(
     if edit is None:
         steps.append({"step": "moments_picker_filename_missing", "ok": False, "windows": _top_level_windows()[:12]})
         raise RuntimeError("朋友圈素材选择框里没找到文件名输入框，请重试")
+    # SetValue 只改文件名框，不会取消列表默认高亮。先清掉高亮再写入。
+    _clear_file_dialog_default_selection(root, steps)
     if not _uia_set_text_verified(edit, file_spec, steps=steps, label="moments_files"):
         steps.append({"step": "select_moments_files", "ok": False, "reason": "文件名输入框回读不一致"})
         raise RuntimeError("朋友圈素材路径没有真正写进文件选择框，请重试")
-    steps.append({"step": "select_moments_files", "ok": True, "count": len(paths)})
+    # 写入后又高亮了别的文件时只清那一项。清选中有时会把文件名框抹掉，抹掉就写回再点打开。
+    if _clear_file_dialog_default_selection(root, steps, keep_names=[Path(path).name for path in paths]):
+        if not _moments_text_written(edit, file_spec):
+            if not _uia_set_text_verified(edit, file_spec, steps=steps, label="moments_files_restore"):
+                steps.append({"step": "select_moments_files", "ok": False, "reason": "文件名输入框回读不一致"})
+                raise RuntimeError("朋友圈素材路径没有真正写进文件选择框，请重试")
+    same_folder = len(paths) > 1 and len({str(Path(path).parent) for path in paths}) == 1
+    steps.append(
+        {
+            "step": "select_moments_files",
+            "ok": True,
+            "count": len(paths),
+            "spec_mode": "directory_names" if same_folder else "absolute",
+        }
+    )
     _activate_window(dialog_hwnd)
     open_btn = _file_dialog_open_button(root, timeout=3.0)
     if open_btn is not None:
