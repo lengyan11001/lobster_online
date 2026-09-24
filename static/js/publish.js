@@ -4122,6 +4122,87 @@ function _setAssetLoadMoreState(visible, loading) {
 }
 
 
+function _assetSplitBtnStyle(primary) {
+  if (primary) {
+    return 'border:0;background:#111;color:#fff;border-radius:8px;padding:8px 14px;cursor:pointer;';
+  }
+  return 'border:1px solid #d0d0d0;background:#fff;color:#111;border-radius:8px;padding:8px 14px;cursor:pointer;';
+}
+
+function _formatSplitDurationList(data) {
+  var assets = (data && data.assets) || [];
+  var parts = [];
+  for (var i = 0; i < assets.length; i++) {
+    var item = assets[i] || {};
+    var n = Number(item.duration_sec);
+    var text = isFinite(n) && n > 0 ? (Math.round(n * 10) / 10).toFixed(1) + '秒' : '时长未知';
+    parts.push('第' + (item.segment_index || (i + 1)) + '段 ' + text);
+  }
+  var count = (data && data.count) || assets.length || 0;
+  return '共 ' + count + ' 段' + (parts.length ? '：' + parts.join('，') : '');
+}
+
+function _openAssetSplitProgress() {
+  var old = document.getElementById('asset-split-progress-modal');
+  if (old) old.remove();
+  var wrap = document.createElement('div');
+  wrap.id = 'asset-split-progress-modal';
+  wrap.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:100000;display:flex;align-items:center;justify-content:center;';
+  wrap.innerHTML = '<div style="background:#fff;color:#111;padding:16px;border-radius:12px;width:min(420px,92vw);box-shadow:0 12px 40px rgba(0,0,0,.2);">'
+    + '<div id="asset-split-progress-title" style="font-weight:600;margin-bottom:10px;">正在切片</div>'
+    + '<div style="height:10px;background:#eee;border-radius:999px;overflow:hidden;">'
+    + '<div id="asset-split-progress-bar" style="height:100%;width:0%;background:#111;transition:width .2s;"></div>'
+    + '</div>'
+    + '<div id="asset-split-progress-label" style="font-size:13px;margin-top:10px;line-height:1.5;">正在准备原片</div>'
+    + '<div id="asset-split-progress-result" style="font-size:13px;margin-top:8px;line-height:1.5;white-space:pre-wrap;"></div>'
+    + '<div style="display:flex;justify-content:flex-end;margin-top:12px;">'
+    + '<button type="button" id="asset-split-progress-close" style="display:none;' + _assetSplitBtnStyle(true) + '">完成</button>'
+    + '</div></div>';
+  document.body.appendChild(wrap);
+  var title = document.getElementById('asset-split-progress-title');
+  var bar = document.getElementById('asset-split-progress-bar');
+  var label = document.getElementById('asset-split-progress-label');
+  var result = document.getElementById('asset-split-progress-result');
+  var closeBtn = document.getElementById('asset-split-progress-close');
+  var running = true;
+  var seen = 0;
+  function close() {
+    if (wrap.parentNode) wrap.remove();
+  }
+  closeBtn.onclick = function() { close(); };
+  wrap.addEventListener('click', function(e) {
+    if (e.target === wrap && !running) close();
+  });
+  return {
+    update: function(ratio, text) {
+      var value = Number(ratio);
+      if (!isFinite(value)) value = 0;
+      value = Math.max(0, Math.min(1, value));
+      if (value < seen) value = seen;
+      seen = value;
+      bar.style.width = Math.round(value * 100) + '%';
+      if (text) label.textContent = text;
+    },
+    succeed: function(data) {
+      running = false;
+      seen = 1;
+      bar.style.width = '100%';
+      title.textContent = '切片完成';
+      label.textContent = '已写入同一分组';
+      result.textContent = _formatSplitDurationList(data);
+      closeBtn.style.display = '';
+      closeBtn.textContent = '完成';
+    },
+    fail: function(message) {
+      running = false;
+      title.textContent = '切片失败';
+      label.textContent = message || '切片失败';
+      closeBtn.style.display = '';
+      closeBtn.textContent = '关闭';
+    }
+  };
+}
+
 function _askAssetSegmentSeconds() {
   return new Promise(function(resolve) {
     var old = document.getElementById('asset-split-seconds-modal');
@@ -4134,8 +4215,8 @@ function _askAssetSegmentSeconds() {
       + '<div style="font-size:13px;margin-bottom:8px;">每段多少秒，范围 2 到 60</div>'
       + '<input id="asset-split-seconds-input" type="number" min="2" max="60" value="3" style="width:100%;box-sizing:border-box;padding:8px;">'
       + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">'
-      + '<button type="button" id="asset-split-seconds-cancel">取消</button>'
-      + '<button type="button" id="asset-split-seconds-ok">开始切片</button>'
+      + '<button type="button" id="asset-split-seconds-cancel" style="' + _assetSplitBtnStyle(false) + '">取消</button>'
+      + '<button type="button" id="asset-split-seconds-ok" style="' + _assetSplitBtnStyle(true) + '">开始切片</button>'
       + '</div></div>';
     document.body.appendChild(wrap);
     var input = document.getElementById('asset-split-seconds-input');
@@ -4213,6 +4294,20 @@ function _bindAssetCardActions(container) {
         btn.disabled = true;
         var originalText = btn.textContent;
         btn.textContent = '切片中...';
+        var ui = _openAssetSplitProgress();
+        var timer = setInterval(function() {
+          fetch(publishLocalBase() + '/api/assets/' + encodeURIComponent(aid) + '/split-progress', {
+            headers: authHeaders()
+          }).then(function(r) {
+            return r.json().catch(function() { return null; });
+          }).then(function(d) {
+            if (!d) return;
+            var stage = d.stage || '';
+            if (d.running || stage === 'prepare' || stage === 'ffmpeg' || stage === 'save' || stage === 'upload') {
+              ui.update(d.ratio, d.label);
+            }
+          }).catch(function() {});
+        }, 400);
         fetch(publishLocalBase() + '/api/assets/' + encodeURIComponent(aid) + '/split', {
           method: 'POST',
           headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
@@ -4222,10 +4317,16 @@ function _bindAssetCardActions(container) {
             if (!r.ok) throw new Error((d && (d.detail || d.message)) || ('HTTP ' + r.status));
             return d;
           });
-        }).then(function() {
+        }).then(function(d) {
+          clearInterval(timer);
+          timer = null;
+          ui.succeed(d);
           _assetMsgShow('切片完成，已写入同一分组。', false);
           if (typeof loadAssets === 'function') loadAssets((_assetLibraryState && _assetLibraryState.query) || '');
         }).catch(function(err) {
+          if (timer) clearInterval(timer);
+          timer = null;
+          ui.fail((err && err.message) || '切片失败');
           _assetMsgShow((err && err.message) || '切片失败', true);
         }).then(function() {
           btn.disabled = false;

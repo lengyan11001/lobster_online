@@ -3491,6 +3491,47 @@ async def _materialize_library_file(asset: Asset, request: Request, directory: P
     return target
 
 
+_SPLIT_PROGRESS_LOCK = threading.Lock()
+_SPLIT_PROGRESS: Dict[str, Dict[str, Any]] = {}
+
+
+def _split_progress_key(user_id: int, asset_id: str) -> str:
+    return f"{int(user_id)}:{asset_id}"
+
+
+def _set_split_progress(user_id: int, asset_id: str, **fields: Any) -> None:
+    key = _split_progress_key(user_id, asset_id)
+    with _SPLIT_PROGRESS_LOCK:
+        current = dict(_SPLIT_PROGRESS.get(key) or {})
+        current.update(fields)
+        current["updated_at"] = time.time()
+        _SPLIT_PROGRESS[key] = current
+
+
+def _split_progress_snapshot(user_id: int, asset_id: str) -> Dict[str, Any]:
+    key = _split_progress_key(user_id, asset_id)
+    with _SPLIT_PROGRESS_LOCK:
+        return dict(_SPLIT_PROGRESS.get(key) or {})
+
+
+def _split_error_text(exc: BaseException) -> str:
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()[:300]
+    return str(exc).strip()[:300] or "切片失败"
+
+
+@router.get("/api/assets/{asset_id}/split-progress", summary="查看视频切片进度")
+def get_saved_asset_split_progress(
+    asset_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    data = _split_progress_snapshot(current_user.id, asset_id)
+    if not data:
+        return {"ok": True, "running": False, "ratio": 0.0, "label": "", "stage": "idle"}
+    return {"ok": True, **data}
+
+
 @router.post("/api/assets/{asset_id}/split", summary="把已入库视频切成多段")
 async def split_saved_asset(
     asset_id: str,
@@ -3506,94 +3547,169 @@ async def split_saved_asset(
         raise HTTPException(400, detail="只有视频可以切片")
     _reject_intermediate_library_asset(row)
     seconds = max(2, min(int(body.segment_seconds or 3), 60))
-    from .h5_chat_channel import _split_online_video_file
+    from .h5_chat_channel import _probe_media_duration, _split_online_video_file, find_ffmpeg
 
-    upload_headers = _snapshot_auth_server_upload_headers(request)
-    source_meta = row.meta if isinstance(row.meta, dict) else {}
-    group_name = _creative_candidate_group(source_meta)
-    source_tags = row.tags if isinstance(row.tags, str) else None
-    created: list[Asset] = []
-    with tempfile.TemporaryDirectory(prefix="lobster_library_split_") as temp_name:
-        temp_dir = Path(temp_name)
-        source_path = await _materialize_library_file(row, request, temp_dir)
-        try:
-            segments = await asyncio.to_thread(
-                _split_online_video_file,
-                source_path,
-                temp_dir / "segments",
-                segment_seconds=seconds,
-                max_segments=120,
+    _set_split_progress(
+        current_user.id,
+        asset_id,
+        running=True,
+        ratio=0.02,
+        label="正在准备原片",
+        stage="prepare",
+        error="",
+        count=0,
+    )
+    try:
+        upload_headers = _snapshot_auth_server_upload_headers(request)
+        source_meta = row.meta if isinstance(row.meta, dict) else {}
+        group_name = _creative_candidate_group(source_meta)
+        source_tags = row.tags if isinstance(row.tags, str) else None
+        created: list[Asset] = []
+        duration_by_id: Dict[str, float] = {}
+
+        def on_ffmpeg(ratio, label):
+            shown = max(0.0, min(1.0, float(ratio or 0)))
+            _set_split_progress(
+                current_user.id,
+                asset_id,
+                running=True,
+                ratio=0.05 + 0.55 * shown,
+                label=label or "正在切片",
+                stage="ffmpeg",
+                error="",
             )
-        except RuntimeError as exc:
-            raise HTTPException(500, detail=str(exc)[:500]) from exc
-        for index, segment in enumerate(segments, start=1):
-            aid, fname, fsize = _save_bytes(segment.read_bytes(), ".mp4")
-            meta = {
-                "asset_origin": "user_upload",
-                "storage": "local",
-                "public_url_status": "preparing" if upload_headers else "deferred_until_use",
-                "video_segment": True,
-                "segment_index": index,
-                "segment_seconds": seconds,
-                "split_source_asset_id": row.asset_id,
-            }
-            if group_name:
-                meta["creative_candidate_group"] = group_name
-                meta["creative_candidate_groups"] = [group_name]
-            created.append(
-                Asset(
-                    asset_id=aid,
-                    user_id=current_user.id,
-                    filename=fname,
-                    media_type="video",
-                    file_size=fsize,
-                    source_url=None,
-                    tags=source_tags,
-                    meta=meta,
+
+        with tempfile.TemporaryDirectory(prefix="lobster_library_split_") as temp_name:
+            temp_dir = Path(temp_name)
+            source_path = await _materialize_library_file(row, request, temp_dir)
+            try:
+                segments = await asyncio.to_thread(
+                    _split_online_video_file,
+                    source_path,
+                    temp_dir / "segments",
+                    segment_seconds=seconds,
+                    max_segments=120,
+                    progress=on_ffmpeg,
                 )
+            except RuntimeError as exc:
+                raise HTTPException(500, detail=str(exc)[:500]) from exc
+            ffmpeg_bin = find_ffmpeg()
+            total_segments = len(segments)
+            for index, segment in enumerate(segments, start=1):
+                _set_split_progress(
+                    current_user.id,
+                    asset_id,
+                    running=True,
+                    ratio=0.62 + 0.10 * (index / max(total_segments, 1)),
+                    label=f"正在保存第 {index}/{total_segments} 段",
+                    stage="save",
+                    error="",
+                )
+                duration_sec = round(float(_probe_media_duration(segment, ffmpeg_bin) or 0), 3)
+                aid, fname, fsize = _save_bytes(segment.read_bytes(), ".mp4")
+                duration_by_id[aid] = duration_sec
+                meta = {
+                    "asset_origin": "user_upload",
+                    "storage": "local",
+                    "public_url_status": "preparing" if upload_headers else "deferred_until_use",
+                    "video_segment": True,
+                    "segment_index": index,
+                    "segment_seconds": seconds,
+                    "duration_sec": duration_sec,
+                    "split_source_asset_id": row.asset_id,
+                }
+                if group_name:
+                    meta["creative_candidate_group"] = group_name
+                    meta["creative_candidate_groups"] = [group_name]
+                created.append(
+                    Asset(
+                        asset_id=aid,
+                        user_id=current_user.id,
+                        filename=fname,
+                        media_type="video",
+                        file_size=fsize,
+                        source_url=None,
+                        tags=source_tags,
+                        meta=meta,
+                    )
+                )
+            db.add_all(created)
+            db.commit()
+        upload_total = len(created)
+        for index, item in enumerate(created, start=1):
+            _set_split_progress(
+                current_user.id,
+                asset_id,
+                running=True,
+                ratio=0.74 + 0.24 * ((index - 1) / max(upload_total, 1)),
+                label=f"正在入库第 {index}/{upload_total} 段",
+                stage="upload",
+                error="",
+                count=upload_total,
             )
-        db.add_all(created)
-        db.commit()
-    for item in created:
-        if not upload_headers:
-            continue
-        await asyncio.to_thread(_warm_asset_source_url_background, item.asset_id, current_user.id, upload_headers)
+            if not upload_headers:
+                continue
+            await asyncio.to_thread(_warm_asset_source_url_background, item.asset_id, current_user.id, upload_headers)
+            db.expire_all()
+            fresh = db.query(Asset).filter(Asset.asset_id == item.asset_id, Asset.user_id == current_user.id).first()
+            if fresh is None:
+                continue
+            remote = await _register_user_upload_asset_to_auth_server(fresh, request)
+            remote_asset_id = str((remote or {}).get("asset_id") or "").strip()
+            if not remote_asset_id:
+                continue
+            meta = dict(fresh.meta or {})
+            meta["remote_asset_id"] = remote_asset_id[:80]
+            meta["remote_registered_at"] = datetime.utcnow().isoformat()
+            fresh.meta = meta
+            db.add(fresh)
+            db.commit()
         db.expire_all()
-        fresh = db.query(Asset).filter(Asset.asset_id == item.asset_id, Asset.user_id == current_user.id).first()
-        if fresh is None:
-            continue
-        remote = await _register_user_upload_asset_to_auth_server(fresh, request)
-        remote_asset_id = str((remote or {}).get("asset_id") or "").strip()
-        if not remote_asset_id:
-            continue
-        meta = dict(fresh.meta or {})
-        meta["remote_asset_id"] = remote_asset_id[:80]
-        meta["remote_registered_at"] = datetime.utcnow().isoformat()
-        fresh.meta = meta
-        db.add(fresh)
-        db.commit()
-    db.expire_all()
-    assets = []
-    for item in created:
-        fresh = db.query(Asset).filter(Asset.asset_id == item.asset_id, Asset.user_id == current_user.id).first()
-        if fresh is None:
-            continue
-        assets.append(
-            {
-                "asset_id": fresh.asset_id,
-                "filename": fresh.filename,
-                "segment_index": (fresh.meta or {}).get("segment_index"),
-                "creative_candidate_group": _creative_candidate_group(fresh.meta),
-                "tags": fresh.tags or "",
-            }
+        assets = []
+        for item in created:
+            fresh = db.query(Asset).filter(Asset.asset_id == item.asset_id, Asset.user_id == current_user.id).first()
+            if fresh is None:
+                continue
+            assets.append(
+                {
+                    "asset_id": fresh.asset_id,
+                    "filename": fresh.filename,
+                    "segment_index": (fresh.meta or {}).get("segment_index"),
+                    "duration_sec": duration_by_id.get(fresh.asset_id, 0),
+                    "creative_candidate_group": _creative_candidate_group(fresh.meta),
+                    "tags": fresh.tags or "",
+                }
+            )
+        result = {
+            "ok": True,
+            "source_asset_id": row.asset_id,
+            "segment_seconds": seconds,
+            "count": len(assets),
+            "assets": assets,
+        }
+        _set_split_progress(
+            current_user.id,
+            asset_id,
+            running=False,
+            ratio=1,
+            label=f"切片完成，共 {len(assets)} 段",
+            stage="done",
+            error="",
+            count=len(assets),
+            durations=[item.get("duration_sec") for item in assets],
         )
-    return {
-        "ok": True,
-        "source_asset_id": row.asset_id,
-        "segment_seconds": seconds,
-        "count": len(assets),
-        "assets": assets,
-    }
+        return result
+    except Exception as exc:
+        _set_split_progress(
+            current_user.id,
+            asset_id,
+            running=False,
+            ratio=1,
+            label=_split_error_text(exc),
+            stage="error",
+            error=_split_error_text(exc),
+        )
+        raise
 
 
 @router.post("/api/assets/{asset_id}/ai-tags", summary="用 AI 理解素材并写入标签")

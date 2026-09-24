@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -1993,12 +1994,68 @@ def _h5_client_command_payload(content: str) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else {}
 
 
+def _probe_media_duration(path: Path, ffmpeg: str) -> float:
+    probe = str(Path(ffmpeg).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe"))
+    if not Path(probe).is_file():
+        return 0.0
+    try:
+        proc = subprocess.run(
+            [probe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=30,
+            check=False,
+            creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+        )
+        return max(0.0, float((proc.stdout or "").strip() or 0))
+    except (OSError, ValueError):
+        return 0.0
+
+
+def _emit_ffmpeg_progress(line: str, duration: float, progress) -> None:
+    if progress is None:
+        return
+    text = (line or "").strip()
+    done = None
+    if text.startswith("out_time_us="):
+        try:
+            done = int(text.split("=", 1)[1]) / 1_000_000
+        except ValueError:
+            return
+    elif text.startswith("out_time_ms="):
+        try:
+            raw = int(text.split("=", 1)[1])
+        except ValueError:
+            return
+        done = raw / 1_000_000 if duration and raw > duration * 5000 else raw / 1000
+    elif text.startswith("out_time="):
+        clock = text.split("=", 1)[1]
+        parts = clock.split(":")
+        if len(parts) != 3:
+            return
+        try:
+            done = int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        except ValueError:
+            return
+    else:
+        return
+    ratio = 1.0 if duration <= 0 else max(0.0, min(1.0, done / duration))
+    label = f"正在切片 {done:.1f}/{duration:.1f} 秒" if duration else "正在切片"
+    try:
+        progress(ratio, label)
+    except Exception:
+        return
+
+
 def _split_online_video_file(
     source_path: Path,
     output_dir: Path,
     *,
     segment_seconds: int,
     max_segments: int,
+    progress=None,
 ) -> List[Path]:
     ffmpeg = find_ffmpeg()
     seconds = max(2, min(int(segment_seconds or 3), 60))
@@ -2022,35 +2079,86 @@ def _split_online_video_file(
         "veryfast",
         "-crf",
         "23",
+        "-g",
+        "10000",
+        "-keyint_min",
+        "10000",
+        "-sc_threshold",
+        "0",
+        "-force_key_frames",
+        f"expr:gte(t,n_forced*{seconds})",
         "-c:a",
         "aac",
         "-b:a",
         "128k",
-        "-force_key_frames",
-        f"expr:gte(t,n_forced*{seconds})",
         "-f",
         "segment",
         "-segment_time",
         str(seconds),
+        "-segment_time_delta",
+        "0.2",
         "-reset_timestamps",
         "1",
+        "-progress",
+        "pipe:1",
+        "-nostats",
         str(output_pattern),
     ]
+    duration = _probe_media_duration(source_path, ffmpeg)
+    clock = {"offset": 0.0, "last": 0.0, "shown": 0.0}
+
+    def _progress(ratio, label):
+        if progress is None:
+            return
+        if duration <= 0:
+            try:
+                progress(ratio, label)
+            except Exception:
+                return
+            return
+        done = max(0.0, min(duration, float(ratio or 0) * duration))
+        if clock["last"] > 0.4 and done + 0.25 < clock["last"]:
+            clock["offset"] += clock["last"]
+        clock["last"] = done
+        total_done = min(duration, clock["offset"] + done)
+        merged = max(clock["shown"], total_done / duration)
+        clock["shown"] = merged
+        try:
+            progress(merged, f"正在切片 {total_done:.1f}/{duration:.1f} 秒")
+        except Exception:
+            return
+
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+        creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+    )
+    err_box: List[str] = []
+
+    def _read_stderr() -> None:
+        try:
+            err_box.append(proc.stderr.read() if proc.stderr is not None else "")
+        except Exception:
+            return
+
+    err_thread = threading.Thread(target=_read_stderr, daemon=True)
+    err_thread.start()
     try:
-        proc = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="ignore",
-            timeout=3600,
-            check=False,
-            creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
-        )
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                _emit_ffmpeg_progress(line, duration, _progress)
+        return_code = proc.wait(timeout=3600)
     except subprocess.TimeoutExpired as exc:
+        proc.kill()
+        err_thread.join(timeout=2)
         raise RuntimeError("本机视频切片超过 60 分钟，已停止处理") from exc
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "ffmpeg segment failed").strip()[-1000:]
+    err_thread.join(timeout=2)
+    if return_code != 0:
+        detail = (err_box[0] if err_box else "ffmpeg segment failed").strip()[-1000:]
         raise RuntimeError(f"本机视频切片失败：{detail}")
     segments = sorted(output_dir.glob("segment_*.mp4"))[:segment_limit]
     segments = [path for path in segments if path.is_file() and path.stat().st_size > 0]
