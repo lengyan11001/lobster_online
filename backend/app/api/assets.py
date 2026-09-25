@@ -1341,6 +1341,14 @@ def _resize_image_if_needed(
 
 # ── Download from URL ─────────────────────────────────────────────
 
+class ShanJianMaterialPrepareReq(BaseModel):
+    """给闪剪成片准备合规素材：可按素材 ID，也可按素材分组名。"""
+
+    asset_ids: List[str] = []
+    groups: List[str] = []
+    max_edge: int = 2000
+
+
 class SaveAssetReq(BaseModel):
     url: str
     media_type: str = "image"
@@ -3439,6 +3447,74 @@ def list_creative_candidate_groups(
     return {"ok": True, "groups": _creative_candidate_group_summaries(rows)}
 
 
+@router.post("/api/assets/shanjian-prepare", summary="为闪剪成片准备合规素材副本（本地降分辨率）")
+async def prepare_shanjian_material_copies(
+    body: ShanJianMaterialPrepareReq,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    limit = max(320, min(int(body.max_edge or SHANJIAN_MATERIAL_MAX_EDGE), 4096))
+    wanted_groups = {str(item or "").strip() for item in (body.groups or []) if str(item or "").strip()}
+    wanted_ids = [str(item or "").strip() for item in (body.asset_ids or []) if str(item or "").strip()][:200]
+    rows: List[Asset] = []
+    if wanted_ids:
+        rows.extend(
+            db.query(Asset)
+            .filter(Asset.user_id == current_user.id, Asset.asset_id.in_(wanted_ids))
+            .all()
+        )
+    if wanted_groups:
+        candidates = (
+            db.query(Asset)
+            .filter(Asset.user_id == current_user.id, Asset.media_type.in_(("video", "image")))
+            .all()
+        )
+        for row in candidates:
+            if row in rows:
+                continue
+            if wanted_groups.intersection(_creative_candidate_groups(row.meta)):
+                rows.append(row)
+    items: List[Dict[str, Any]] = []
+    for row in rows:
+        try:
+            items.append(
+                await ensure_shanjian_compliant_copy(row, request=request, db=db, max_edge=limit)
+            )
+        except HTTPException as exc:
+            items.append(
+                {
+                    "asset_id": row.asset_id,
+                    "media_type": str(row.media_type or ""),
+                    "action": "failed",
+                    "error": str(getattr(exc, "detail", exc))[:300],
+                }
+            )
+        except Exception as exc:
+            logger.warning(
+                "[shanjian-media] prepare copy failed asset_id=%s err=%s",
+                row.asset_id,
+                f"{type(exc).__name__}: {exc}"[:200],
+            )
+            items.append(
+                {
+                    "asset_id": row.asset_id,
+                    "media_type": str(row.media_type or ""),
+                    "action": "failed",
+                    "error": f"{type(exc).__name__}: {exc}"[:300],
+                }
+            )
+    converted = [item for item in items if item.get("action") == "converted"]
+    return {
+        "ok": True,
+        "max_edge": limit,
+        "groups": sorted(wanted_groups),
+        "count": len(items),
+        "converted": len(converted),
+        "items": items,
+    }
+
+
 @router.post("/api/assets/{asset_id}/creative-candidate-groups", summary="加入创意成片备选素材组")
 def add_asset_to_creative_candidate_group(
     asset_id: str,
@@ -3496,6 +3572,355 @@ async def _materialize_library_file(asset: Asset, request: Request, directory: P
 
 _SPLIT_PROGRESS_LOCK = threading.Lock()
 _SPLIT_PROGRESS: Dict[str, Dict[str, Any]] = {}
+
+
+# ── 闪剪素材合规化（在本地把超分辨率素材压成合规副本） ────────────────────────
+# 闪剪成片对素材有硬限制：最长边不能超过 2000（上游返回 InvalidFile.Resolution
+# 时就是这条）。历史素材（例如 1080x2400 的竖版导出、2048 长边图片）会整单失败，
+# 所以在客户端先探测再压缩，只把合规副本交给闪剪，原文件与原本地素材行都不动。
+
+SHANJIAN_MATERIAL_MAX_EDGE = 2000
+_SHANJIAN_TOOL_CACHE: dict[str, str] = {}
+
+
+def _shanjian_tools() -> tuple[str, str]:
+    """Resolve (ffmpeg, ffprobe) for the 闪剪 material pass.
+
+    Prefers the binaries shipped with the client, then PATH, so a thin install
+    that relies on PATH still works.
+    """
+    cached_ffmpeg = _SHANJIAN_TOOL_CACHE.get("ffmpeg") or ""
+    cached_ffprobe = _SHANJIAN_TOOL_CACHE.get("ffprobe") or ""
+    if cached_ffmpeg and cached_ffprobe:
+        return cached_ffmpeg, cached_ffprobe
+    base = _BASE_DIR
+    exe = ".exe" if os.name == "nt" else ""
+    ffmpeg_candidates = [
+        os.environ.get("FFMPEG_BIN") or "",
+        str(base / "deps" / "ffmpeg" / f"ffmpeg{exe}"),
+        str(base / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / f"ffmpeg{exe}"),
+        shutil.which(f"ffmpeg{exe}") or "",
+        shutil.which("ffmpeg") or "",
+    ]
+    ffmpeg = next((item for item in ffmpeg_candidates if item and Path(item).exists()), "")
+    ffprobe_candidates = [
+        os.environ.get("FFPROBE_BIN") or "",
+        str(Path(ffmpeg).with_name(f"ffprobe{exe}")) if ffmpeg else "",
+        str(base / "deps" / "ffmpeg" / f"ffprobe{exe}"),
+        str(base / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / f"ffprobe{exe}"),
+        shutil.which(f"ffprobe{exe}") or "",
+        shutil.which("ffprobe") or "",
+    ]
+    ffprobe = next((item for item in ffprobe_candidates if item and Path(item).exists()), "")
+    _SHANJIAN_TOOL_CACHE["ffmpeg"] = ffmpeg
+    _SHANJIAN_TOOL_CACHE["ffprobe"] = ffprobe
+    return ffmpeg, ffprobe
+
+
+def probe_media_dimensions(source: Path) -> tuple[int, int, float]:
+    """Return (width, height, duration_seconds) for one local media file."""
+    _ffmpeg, ffprobe = _shanjian_tools()
+    if not ffprobe:
+        raise RuntimeError("本机缺少 ffprobe，无法校验素材分辨率")
+    proc = subprocess.run(
+        [
+            ffprobe,
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height:format=duration",
+            "-of", "json",
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=90,
+        check=False,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()[:300]
+        raise RuntimeError(f"无法读取素材信息：{detail or 'ffprobe failed'}")
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except Exception as exc:
+        raise RuntimeError("素材元数据解析失败") from exc
+    stream = ((payload.get("streams") or [{}])[0]) or {}
+    fmt = payload.get("format") or {}
+    try:
+        width = int(stream.get("width") or 0)
+    except Exception:
+        width = 0
+    try:
+        height = int(stream.get("height") or 0)
+    except Exception:
+        height = 0
+    try:
+        duration = float(fmt.get("duration") or 0.0)
+    except Exception:
+        duration = 0.0
+    return width, height, duration
+
+
+def shanjian_material_needs_downscale(
+    width: int,
+    height: int,
+    max_edge: int = SHANJIAN_MATERIAL_MAX_EDGE,
+) -> bool:
+    return max(int(width or 0), int(height or 0)) > int(max_edge)
+
+
+def shanjian_scaled_dimensions(
+    width: int,
+    height: int,
+    max_edge: int = SHANJIAN_MATERIAL_MAX_EDGE,
+) -> tuple[int, int]:
+    """Even-sized target box whose longest edge equals max_edge."""
+    width = max(1, int(width or 0))
+    height = max(1, int(height or 0))
+    limit = max(2, int(max_edge))
+    longest = max(width, height)
+    scale = 1.0 if longest <= limit else float(limit) / float(longest)
+    target_w = max(2, int(round(width * scale)))
+    target_h = max(2, int(round(height * scale)))
+    target_w -= target_w % 2
+    target_h -= target_h % 2
+    return max(2, target_w), max(2, target_h)
+
+
+def _shanjian_media_ext(media_type: str) -> str:
+    return ".jpg" if str(media_type or "").strip().lower() == "image" else ".mp4"
+
+
+def _shanjian_transcode_image(source: Path, dest: Path, *, target_w: int, target_h: int) -> bool:
+    try:
+        from PIL import Image
+    except Exception:
+        return False
+    try:
+        with Image.open(source) as img:
+            if getattr(img, "is_animated", False):
+                return False
+            if img.mode in ("RGBA", "LA") or "transparency" in img.info:
+                rgba = img.convert("RGBA")
+                background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+                background.alpha_composite(rgba)
+                converted = background.convert("RGB")
+            else:
+                converted = img.convert("RGB")
+            converted.resize((target_w, target_h), Image.Resampling.LANCZOS).save(
+                dest,
+                "JPEG",
+                quality=90,
+                optimize=True,
+                progressive=True,
+            )
+    except Exception:
+        return False
+    return dest.is_file() and dest.stat().st_size > 0
+
+
+def _transcode_shanjian_copy(source: Path, dest: Path, *, media_type: str, width: int, height: int) -> None:
+    """Shrink one material file so its longest edge fits the 闪剪 limit."""
+    target_w, target_h = shanjian_scaled_dimensions(width, height)
+    if str(media_type or "").strip().lower() == "image":
+        if _shanjian_transcode_image(source, dest, target_w=target_w, target_h=target_h):
+            return
+    ffmpeg, _ffprobe = _shanjian_tools()
+    if not ffmpeg:
+        raise RuntimeError("本机缺少 ffmpeg，无法压缩素材")
+    is_image = str(media_type or "").strip().lower() == "image"
+    if is_image:
+        command = [
+            ffmpeg, "-y", "-i", str(source),
+            "-vf", f"scale={target_w}:{target_h}",
+            "-q:v", "2",
+            str(dest),
+        ]
+    else:
+        command = [
+            ffmpeg, "-y", "-i", str(source),
+            "-map", "0:v:0", "-map", "0:a?",
+            "-vf", f"scale={target_w}:{target_h}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-max_muxing_queue_size", "2048",
+            str(dest),
+        ]
+    proc = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=1800,
+        check=False,
+    )
+    if proc.returncode != 0 or not dest.is_file() or dest.stat().st_size <= 0:
+        detail = (proc.stderr or proc.stdout or "ffmpeg failed").strip()[-400:]
+        raise RuntimeError(f"素材压缩失败：{detail}")
+
+
+def _shanjian_copy_meta(
+    source_meta: Optional[dict],
+    *,
+    group_name: str,
+    source_asset_id: str,
+    width: int,
+    height: int,
+    duration: float,
+    max_edge: int,
+) -> dict:
+    meta = dict(source_meta or {})
+    for key in (
+        "remote_asset_id",
+        "public_url_status",
+        "public_url_last_error",
+        "shanjian_compliant_asset_id",
+        "shanjian_group_moved_to",
+    ):
+        meta.pop(key, None)
+    if group_name:
+        meta["creative_candidate_group"] = group_name
+        meta["creative_candidate_groups"] = [group_name]
+    meta["layout"] = "user_upload"
+    meta["shanjian_max_edge"] = int(max_edge)
+    meta["shanjian_compliant_from"] = source_asset_id
+    meta["derived_from"] = source_asset_id
+    meta["derived_reason"] = "shanjian_material_max_edge"
+    meta["width"] = int(width or 0)
+    meta["height"] = int(height or 0)
+    meta["duration_sec"] = round(float(duration or 0.0), 3)
+    return meta
+
+
+async def ensure_shanjian_compliant_copy(
+    row: Asset,
+    *,
+    request: Request,
+    db: Session,
+    max_edge: int = SHANJIAN_MATERIAL_MAX_EDGE,
+) -> Dict[str, Any]:
+    """Guarantee one library asset has a copy the 闪剪 render API accepts.
+
+    The original row and file stay as they are; the shrunken copy is stored as
+    a new asset, keeps the material group, and takes over that group so the next
+    render picks the compliant file.
+    """
+    limit = max(320, min(int(max_edge or SHANJIAN_MATERIAL_MAX_EDGE), 4096))
+    media_type = str(row.media_type or "").strip().lower()
+    result: Dict[str, Any] = {"asset_id": row.asset_id, "media_type": media_type, "action": "skipped"}
+    if media_type not in {"video", "image"}:
+        result["reason"] = "media_type"
+        return result
+    meta = dict(row.meta or {})
+    group_name = _creative_candidate_group(meta)
+    if int(meta.get("shanjian_max_edge") or 0) == limit and str(meta.get("shanjian_compliant_from") or "").strip():
+        result.update({"action": "reused", "compliant_asset_id": row.asset_id, "filename": row.filename})
+        return result
+    existing_id = str(meta.get("shanjian_compliant_asset_id") or "").strip()
+    if existing_id:
+        existing = (
+            db.query(Asset)
+            .filter(Asset.asset_id == existing_id, Asset.user_id == row.user_id)
+            .first()
+        )
+        existing_meta = dict(getattr(existing, "meta", None) or {})
+        if (
+            existing is not None
+            and int(existing_meta.get("shanjian_max_edge") or 0) == limit
+            and _asset_local_path(existing)
+        ):
+            result.update(
+                {
+                    "action": "reused",
+                    "compliant_asset_id": existing.asset_id,
+                    "filename": existing.filename,
+                }
+            )
+            return result
+    with tempfile.TemporaryDirectory(prefix="lobster_shanjian_media_") as temp_name:
+        temp_dir = Path(temp_name)
+        source_path = await _materialize_library_file(row, request, temp_dir)
+        width, height, duration = await asyncio.to_thread(probe_media_dimensions, source_path)
+        result.update({"width": width, "height": height, "duration": duration})
+        if not shanjian_material_needs_downscale(width, height, limit):
+            result["reason"] = "within_limit"
+            return result
+        target_w, target_h = shanjian_scaled_dimensions(width, height, limit)
+        dest = temp_dir / f"shanjian{_shanjian_media_ext(media_type)}"
+        await asyncio.to_thread(
+            _transcode_shanjian_copy,
+            source_path,
+            dest,
+            media_type=media_type,
+            width=width,
+            height=height,
+        )
+        data = dest.read_bytes()
+        new_id, filename, size = _save_bytes(data, _shanjian_media_ext(media_type))
+        copy_meta = _shanjian_copy_meta(
+            meta,
+            group_name=group_name,
+            source_asset_id=row.asset_id,
+            width=target_w,
+            height=target_h,
+            duration=duration,
+            max_edge=limit,
+        )
+        copy_row = Asset(
+            asset_id=new_id,
+            user_id=row.user_id,
+            filename=filename,
+            media_type=media_type,
+            file_size=size,
+            source_url=None,
+            tags=row.tags,
+            meta=copy_meta,
+        )
+        db.add(copy_row)
+        upload_headers = _snapshot_auth_server_upload_headers(request)
+        if group_name:
+            original_meta = dict(meta)
+            original_meta.pop("creative_candidate_group", None)
+            original_meta.pop("creative_candidate_groups", None)
+            original_meta["shanjian_compliant_asset_id"] = new_id
+            original_meta["shanjian_group_moved_to"] = new_id
+            original_meta["shanjian_group_original"] = group_name
+            row.meta = original_meta
+            db.add(row)
+        db.commit()
+        result.update(
+            {
+                "action": "converted",
+                "compliant_asset_id": new_id,
+                "filename": filename,
+                "file_size": size,
+                "target_width": target_w,
+                "target_height": target_h,
+                "group": group_name,
+            }
+        )
+        try:
+            if upload_headers:
+                await asyncio.to_thread(_warm_asset_source_url_background, new_id, row.user_id, upload_headers)
+            db.expire_all()
+            fresh = db.query(Asset).filter(Asset.asset_id == new_id, Asset.user_id == row.user_id).first()
+            if fresh is not None:
+                await _register_user_upload_asset_to_auth_server(fresh, request)
+                if group_name:
+                    _sync_asset_labels_to_auth_server(fresh, group_name, fresh.tags, request, db)
+            if group_name:
+                _sync_asset_labels_to_auth_server(row, "", row.tags, request, db)
+        except Exception as exc:
+            logger.warning(
+                "[shanjian-media] publish compliant copy failed asset_id=%s err=%s",
+                row.asset_id,
+                f"{type(exc).__name__}: {exc}"[:200],
+            )
+            result["sync_warning"] = f"{type(exc).__name__}: {exc}"[:200]
+    return result
 
 
 def _split_progress_key(user_id: int, asset_id: str) -> str:

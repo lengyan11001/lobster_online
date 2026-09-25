@@ -10856,6 +10856,144 @@ async def _resolve_workflow_virtualman(
     return {"virtualman_id": fixed_id} if fixed_id else {}
 
 
+def _shanjian_template_group_names(source: Dict[str, Any]) -> List[str]:
+    """Collect 数字人素材分组 names off a workflow node."""
+    names: List[str] = []
+    for key in ("digital_human_asset_groups", "asset_groups", "template_asset_groups", "material_groups"):
+        raw = source.get(key)
+        values = raw if isinstance(raw, list) else ([raw] if isinstance(raw, str) else [])
+        for item in values:
+            for part in str(item or "").replace("，", ",").split(","):
+                name = part.strip()[:40]
+                if name and name not in names:
+                    names.append(name)
+    return names[:20]
+
+
+async def _fetch_active_personal_template_groups(
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+) -> List[str]:
+    """Read the live personal template's 数字人素材分组 from the cloud."""
+    if cloud is None or not base:
+        return []
+    try:
+        resp = await cloud.get(
+            f"{base}/api/ip-content/personal-default",
+            headers=headers,
+            timeout=httpx.Timeout(30.0, connect=10.0, read=30.0, write=15.0, pool=10.0),
+        )
+        data = resp.json() if resp.content else {}
+    except Exception as exc:
+        logger.warning(
+            "[H5-WORKFLOW] read personal template failed err=%s",
+            f"{type(exc).__name__}: {exc}"[:200],
+        )
+        return []
+    if not isinstance(data, dict):
+        return []
+    item = data.get("item") if isinstance(data.get("item"), dict) else data
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    return _shanjian_template_group_names(
+        {"digital_human_asset_groups": meta.get("digital_human_asset_groups")}
+    )
+
+
+async def _prepare_shanjian_template_materials(
+    source: Dict[str, Any],
+    *,
+    headers: Dict[str, str],
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    run_id: str = "",
+) -> Dict[str, Any]:
+    """Shrink oversized template materials locally before 闪剪 renders them.
+
+    闪剪 rejects material videos/images whose longest edge exceeds 2000, and the
+    library/group path never validated that. The copy is created on this machine
+    (no server-side transcode) and takes over the group membership.
+    """
+    use_template = _workflow_flag(source.get("use_template"), False) if "use_template" in source else False
+    template_mode = _workflow_text(source.get("template_mode"), 64).lower()
+    if not use_template and not template_mode:
+        return {"ok": True, "skipped": True, "reason": "no_template"}
+    groups = _shanjian_template_group_names(source)
+    if not groups and template_mode in {
+        "active_personal_template",
+        "personal_current",
+        "personal_default",
+        "current",
+    }:
+        groups = await _fetch_active_personal_template_groups(cloud, base, headers)
+    if not groups:
+        return {"ok": True, "skipped": True, "reason": "no_groups"}
+    jwt_token, installation_id = _auth_context()
+    uid = _safe_int(_decode_jwt_sub(jwt_token))
+    if uid <= 0:
+        return {"ok": True, "skipped": True, "reason": "no_user"}
+    from .assets import SHANJIAN_MATERIAL_MAX_EDGE, ensure_shanjian_compliant_copy
+
+    header_pairs = [
+        (str(key).lower().encode("latin-1", "ignore"), str(value).encode("latin-1", "ignore"))
+        for key, value in (headers or {}).items()
+    ]
+    if installation_id and not any(key == b"x-installation-id" for key, _value in header_pairs):
+        header_pairs.append((b"x-installation-id", str(installation_id).encode("latin-1", "ignore")))
+    local_request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/assets/shanjian-prepare",
+            "headers": header_pairs,
+        }
+    )
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Asset)
+            .filter(Asset.user_id == uid, Asset.media_type.in_(("video", "image")))
+            .all()
+        )
+        wanted = set(groups)
+        targets = [
+            row
+            for row in rows
+            if wanted.intersection(_asset_creative_candidate_groups(getattr(row, "meta", None)))
+        ]
+        converted: List[Dict[str, Any]] = []
+        failed: List[Dict[str, Any]] = []
+        for row in targets:
+            try:
+                item = await ensure_shanjian_compliant_copy(
+                    row,
+                    request=local_request,
+                    db=db,
+                    max_edge=SHANJIAN_MATERIAL_MAX_EDGE,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[H5-WORKFLOW] shanjian material prep failed run_id=%s asset_id=%s err=%s",
+                    run_id,
+                    row.asset_id,
+                    f"{type(exc).__name__}: {exc}"[:240],
+                )
+                failed.append({"asset_id": row.asset_id, "error": f"{type(exc).__name__}: {exc}"[:240]})
+                continue
+            if item.get("action") == "converted":
+                converted.append(item)
+        return {
+            "ok": True,
+            "groups": groups,
+            "candidates": len(targets),
+            "converted": len(converted),
+            "failed": failed,
+            "items": converted,
+        }
+    finally:
+        db.close()
+
+
 def _shanjian_video_create_payload(
     source: Dict[str, Any],
     *,
@@ -11041,6 +11179,35 @@ async def _run_shanjian_digital_human_workflow(
         await _workflow_event(cloud, base, headers, run_id, "正在使用所选音频驱动数字人2.0")
 
     await _workflow_event(cloud, base, headers, run_id, "正在提交数字人2.0视频任务")
+    try:
+        prepared = await _prepare_shanjian_template_materials(
+            source,
+            headers=headers,
+            cloud=cloud,
+            base=base,
+            run_id=run_id,
+        )
+        if prepared.get("converted"):
+            logger.info(
+                "[H5-WORKFLOW] shanjian material prep run_id=%s groups=%s converted=%s candidates=%s",
+                run_id,
+                prepared.get("groups"),
+                prepared.get("converted"),
+                prepared.get("candidates"),
+            )
+            await _workflow_event(
+                cloud,
+                base,
+                headers,
+                run_id,
+                f"已在本机把 {prepared['converted']} 个超出分辨率上限的素材压缩成合规副本，再交给闪剪",
+            )
+    except Exception as exc:
+        logger.warning(
+            "[H5-WORKFLOW] shanjian material prep error run_id=%s err=%s",
+            run_id,
+            f"{type(exc).__name__}: {exc}"[:240],
+        )
     create_data = await _post_cloud_api_json(
         "/api/shanjian-digital-human/video/create",
         _shanjian_video_create_payload(
