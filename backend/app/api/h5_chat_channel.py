@@ -10875,21 +10875,24 @@ async def _fetch_active_personal_template_groups(
     base: str,
     headers: Dict[str, str],
 ) -> List[str]:
-    """读「数字人素材分组」，与云端真正使用的模板行保持一致。
+    """读「数字人素材分组」，按云端同一规则解析模板行。
 
-    云端 `_default_digital_human_template` 取的是**最新更新的个人默认模板行**，
-    而 `/api/ip-content/personal-default` 是按设备槽位回答的；两者可能不是同一行
-    （2026-09-25 用户 54 就踩到这里：槽位行没有分组，最新行才有）。所以先读槽位行，
-    没有再遍历模板列表，挑真正带 digital_human_asset_groups 的那一行。
+    云端 `_default_digital_human_template` 的解析顺序是：
+      最新的「个人默认模板」行 -> 它 meta 里的 current_template_id -> 真正带
+      digital_human_template / digital_human_asset_groups 的那一行。
+    2026-09-25 用户 54 的槽位行（个人默认模板）自己没有分组字段，分组挂在
+    current_template_id 指向的那一行上；只读外层就会拿到空分组，本地预处理被跳过。
     """
     if cloud is None or not base:
         return []
     timeout = httpx.Timeout(30.0, connect=10.0, read=30.0, write=15.0, pool=10.0)
 
-    def _item_groups(payload: Any) -> List[str]:
-        item = payload
+    def _payload_item(payload: Any) -> Dict[str, Any]:
         if isinstance(payload, dict) and isinstance(payload.get("item"), dict):
-            item = payload.get("item")
+            return payload.get("item") or {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _groups_of(item: Any) -> List[str]:
         if not isinstance(item, dict):
             return []
         meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
@@ -10897,23 +10900,35 @@ async def _fetch_active_personal_template_groups(
             {"digital_human_asset_groups": meta.get("digital_human_asset_groups")}
         )
 
+    def _current_template_id(item: Any) -> int:
+        if not isinstance(item, dict):
+            return 0
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        raw = meta.get("current_template_id") or meta.get("template_id")
+        try:
+            return int(raw or 0)
+        except (TypeError, ValueError):
+            return 0
+
     try:
         resp = await cloud.get(
             f"{base}/api/ip-content/personal-default",
             headers=headers,
             timeout=timeout,
         )
-        slot_payload = resp.json() if resp.content else {}
+        personal = _payload_item(resp.json() if resp.content else {})
     except Exception as exc:
         logger.warning(
             "[H5-WORKFLOW] read personal default template failed err=%s",
             f"{type(exc).__name__}: {exc}"[:200],
         )
-        slot_payload = {}
-    slot_groups = _item_groups(slot_payload)
-    if slot_groups:
-        logger.info("[H5-WORKFLOW] template groups from personal default groups=%s", slot_groups)
-        return slot_groups
+        personal = {}
+
+    personal_groups = _groups_of(personal)
+    if personal_groups:
+        logger.info("[H5-WORKFLOW] template groups from personal default groups=%s", personal_groups)
+        return personal_groups
+
     try:
         resp = await cloud.get(
             f"{base}/api/ip-content/schedule-templates",
@@ -10930,12 +10945,35 @@ async def _fetch_active_personal_template_groups(
     items = listed.get("items") if isinstance(listed, dict) else None
     if not isinstance(items, list):
         return []
+
+    current_id = _current_template_id(personal)
+    if current_id:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                item_id = int(item.get("id") or 0)
+            except (TypeError, ValueError):
+                item_id = 0
+            if item_id != current_id:
+                continue
+            groups = _groups_of(item)
+            if groups:
+                logger.info(
+                    "[H5-WORKFLOW] template groups from current_template_id=%s name=%s groups=%s",
+                    current_id,
+                    str(item.get("name") or "")[:24],
+                    groups,
+                )
+                return groups
+            break
+
     preferred: Optional[Dict[str, Any]] = None
     fallback: Optional[Dict[str, Any]] = None
     for item in items:
         if not isinstance(item, dict):
             continue
-        groups = _item_groups(item)
+        groups = _groups_of(item)
         if not groups:
             continue
         meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}

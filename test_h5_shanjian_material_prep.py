@@ -414,3 +414,32 @@ def test_ensure_shanjian_compliant_copy_rejects_copy_still_over_limit(tmp_path, 
 
     assert db.added == []
     assert row.meta["creative_candidate_group"] == "数字人口播素材"
+
+
+def test_fetch_template_groups_follows_current_template_id():
+    """槽位行没有分组、分组挂在 current_template_id 指向的那一行（用户 54 的现场）。"""
+    cloud = _FakeTemplateCloud(
+        {
+            "/api/ip-content/personal-default": {
+                "ok": True,
+                "item": {
+                    "id": 312,
+                    "name": "个人默认模板",
+                    "meta": {"current_template_id": 14, "is_personal_default": True},
+                },
+            },
+            "/api/ip-content/schedule-templates": {
+                "ok": True,
+                "items": [
+                    {"id": 312, "name": "个人默认模板", "meta": {"current_template_id": 14, "is_personal_default": True}},
+                    {"id": 14, "name": "肖老师", "meta": {"digital_human_asset_groups": ["数字人口播素材"]}},
+                ],
+            },
+        }
+    )
+
+    groups = asyncio.run(
+        channel._fetch_active_personal_template_groups(cloud, "https://bhzn.top", {})
+    )
+
+    assert groups == ["数字人口播素材"]
