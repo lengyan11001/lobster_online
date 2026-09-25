@@ -254,12 +254,23 @@ def _validate_payload(pl: ComflySeedancePipelinePayload) -> None:
     if requested_total is None and requested_count is not None:
         requested_total = int(requested_count) * segment_seconds
 
-    allowed_totals = {segment_seconds * i for i in range(1, 7)}
+    allowed_totals = sorted({segment_seconds * i for i in range(1, 7)})
     if requested_total is not None and int(requested_total) not in allowed_totals:
-        allowed_text = "/".join(str(x) for x in sorted(allowed_totals))
-        raise HTTPException(status_code=400, detail=f"total_duration_seconds 仅支持 {allowed_text} 秒")
-    if requested_count is not None and int(requested_count) * segment_seconds != int(requested_total or segment_seconds * 2):
-        raise HTTPException(status_code=400, detail=f"segment_count/storyboard_count 必须与 total_duration_seconds / {segment_seconds} 一致")
+        wanted_total = int(requested_total)
+        if wanted_total > allowed_totals[-1]:
+            allowed_text = "/".join(str(x) for x in allowed_totals)
+            raise HTTPException(
+                status_code=400,
+                detail=f"total_duration_seconds 最多支持 {allowed_totals[-1]} 秒（可选 {allowed_text} 秒）",
+            )
+        # 不是单段时长的整数倍：向上取整到最近的合法总时长（例：16 秒 → 20 秒 / 2 段）
+        requested_total = next(x for x in allowed_totals if x >= wanted_total)
+        pl.total_duration_seconds = requested_total
+    if requested_count is not None and int(requested_count) * segment_seconds < int(requested_total or segment_seconds * 2):
+        raise HTTPException(
+            status_code=400,
+            detail=f"segment_count/storyboard_count 不足以覆盖 total_duration_seconds（每段 {segment_seconds} 秒）",
+        )
 
 
 async def _prepare_pipeline_input(

@@ -370,6 +370,29 @@ class RunLogger:
             self.manifest["errors"].append({"where": where, "message": message, "ts": datetime.now().isoformat()})
             self._save()
 
+    def provider_attempt(self, index: Any, stage: str, provider: Optional[Dict[str, Any]], error: str) -> None:
+        """Fallback 中途的失败只记在这里，不写 segments/errors —— 中间错误不对前端暴露。
+
+        只有某个分镜的**所有**渠道都失败时，才会把最后一次失败写进 segments/errors（终态）。
+        """
+        with self.lock:
+            attempts = self.manifest.setdefault("provider_attempts", [])
+            try:
+                segment_index = int(index)
+            except Exception:
+                segment_index = 0
+            attempts.append(
+                {
+                    "segment": segment_index,
+                    "stage": str(stage or ""),
+                    "channel": str((provider or {}).get("channel") or ""),
+                    "model": str((provider or {}).get("model") or ""),
+                    "error": str(error or "")[:600],
+                    "ts": datetime.now().isoformat(),
+                }
+            )
+            self._save()
+
     def finish(self, status: str, payload: Any = None) -> None:
         with self.lock:
             self.manifest["status"] = status
@@ -744,7 +767,7 @@ def _retry(action: str, attempts: int, delay: int, logger_obj: RunLogger, fn: Ca
             return fn(), i
         except Exception as exc:
             last = exc
-            logger_obj.error(action, f"attempt {i} failed: {exc}")
+            logger_obj.provider_attempt(0, action, None, f"attempt {i} failed: {exc}")
             if i >= max_attempts or _non_retryable(exc):
                 break
             if action.startswith("analyze") and not _is_transient_network_error(exc):
@@ -2148,6 +2171,7 @@ def _submit_segment_video_to_provider(
     provider: Dict[str, str],
     provider_index: int,
     submit_control: Optional[SubmitControl] = None,
+    report_failure: bool = True,
 ) -> Dict[str, Any]:
     index = int(segment_plan["index"])
     segment_reference_result = segment_plan["segment_reference_result"]
@@ -2187,19 +2211,26 @@ def _submit_segment_video_to_provider(
             submit_control.note_submit_success()
         return out
     except Exception as exc:
-        logger_obj.segment(
-            index,
-            f"submit_{provider_role}",
-            "failed",
-            error=_exception_summary(exc),
-            payload={
-                "video_channel": provider_channel,
-                "video_model": provider_model,
-                "provider_role": provider_role,
-                "request": _video_submit_debug_request(client, segment_plan, segment_reference_result, provider_model, provider_channel),
-                "exception": _exception_diagnostics(exc),
-            },
-        )
+        summary = _exception_summary(exc)
+        debug_payload = {
+            "video_channel": provider_channel,
+            "video_model": provider_model,
+            "provider_role": provider_role,
+            "request": _video_submit_debug_request(client, segment_plan, segment_reference_result, provider_model, provider_channel),
+            "exception": _exception_diagnostics(exc),
+        }
+        if report_failure:
+            logger_obj.segment(
+                index,
+                f"submit_{provider_role}",
+                "failed",
+                error=summary,
+                payload=debug_payload,
+            )
+        else:
+            # 后面还有渠道可试：中间失败只落 provider_attempts（前端看不到），调试详情仍写文件
+            logger_obj.provider_attempt(index, f"submit_{provider_role}", provider, summary)
+            logger_obj.write_json(f"segment_{index:02d}_submit_{provider_role}.json", debug_payload)
         if submit_control is not None and _is_insufficient_credit_error(exc):
             if submit_control.has_any_successful_submit():
                 reason = (
@@ -2242,7 +2273,6 @@ def _submit_segment_video(
                     "from_model": providers[0]["model"],
                     "to_channel": provider_channel,
                     "to_model": provider_model,
-                    "previous_error": last_error,
                 },
             )
         try:
@@ -2254,6 +2284,7 @@ def _submit_segment_video(
                 provider,
                 provider_index,
                 submit_control,
+                report_failure=(provider_index == len(providers)),
             )
         except Exception as exc:
             last_error = _exception_summary(exc)
@@ -2510,7 +2541,6 @@ def _run_segment_video_providers(
                     "to_channel": provider_channel,
                     "to_model": provider_model,
                     "provider_role": provider_role,
-                    "previous_error": last_error,
                 },
             )
         try:
@@ -2522,6 +2552,7 @@ def _run_segment_video_providers(
                 provider,
                 provider_index,
                 submit_control,
+                report_failure=(provider_index == len(providers)),
             )
             segment_result = _poll_segment_video(
                 client,
@@ -2534,20 +2565,23 @@ def _run_segment_video_providers(
             raise
         except Exception as exc:
             last_error = _exception_summary(exc)
-            logger_obj.segment(
-                index,
-                f"video_attempt_{provider_role}",
-                "failed",
-                error=_exception_summary(exc),
-                payload={
-                    "video_channel": provider_channel,
-                    "video_model": provider_model,
-                    "provider_role": provider_kind,
-                    "provider_stage_role": provider_role,
-                    "provider_attempt": provider_index,
-                    "exception": _exception_diagnostics(exc),
-                },
-            )
+            if provider_index == len(providers):
+                logger_obj.segment(
+                    index,
+                    f"video_attempt_{provider_role}",
+                    "failed",
+                    error=last_error,
+                    payload={
+                        "video_channel": provider_channel,
+                        "video_model": provider_model,
+                        "provider_role": provider_kind,
+                        "provider_stage_role": provider_role,
+                        "provider_attempt": provider_index,
+                        "exception": _exception_diagnostics(exc),
+                    },
+                )
+            else:
+                logger_obj.provider_attempt(index, f"video_attempt_{provider_role}", provider, last_error)
     raise PipelineError(f"segment {index:02d} video generation failed: {last_error}")
 
 
@@ -2745,15 +2779,25 @@ def _build_config(data: Input) -> PipelineConfig:
         else:
             raw_total = int(data.get("total_duration_seconds", 20))
         if raw_total not in allowed_totals:
-            raise PipelineError(f"total_duration_seconds must be one of {list(allowed_totals)}")
+            limit_total = max(allowed_totals)
+            if raw_total > limit_total:
+                raise PipelineError(
+                    f"total_duration_seconds 最多 {limit_total} 秒（可选：{sorted(allowed_totals)}）"
+                )
+            # 不是单段时长的整数倍：向上取整到最近的合法总时长（例：16 秒 → 20 秒 / 2 段）
+            rounded_total = min(x for x in sorted(allowed_totals) if x >= raw_total)
+            data["duration_adjusted_from"] = raw_total
+            raw_total = rounded_total
         raw_segment_duration = int(data.get("segment_duration_seconds", segment_seconds))
         if raw_segment_duration != segment_seconds:
             raise PipelineError(f"segment_duration_seconds must be exactly {segment_seconds}")
         segment_count = raw_total // segment_seconds
         if requested_segment_count is not None and int(requested_segment_count) != segment_count:
-            raise PipelineError(
-                f"segment_count/storyboard_count must match total_duration_seconds / {segment_seconds}"
-            )
+            # 段数与总时长不匹配时取较大值：宁可多一段，也不要少给时长
+            segment_count = max(int(requested_segment_count), segment_count)
+            if segment_count * segment_seconds != raw_total:
+                data["duration_adjusted_from"] = raw_total
+                raw_total = segment_count * segment_seconds
     base_url = (data.get("base_url") or "https://ai.comfly.org").rstrip("/")
     video_base_default = _default_video_base_url(video_channel, base_url)
     fallback_channel = _normalize_video_channel(str(data.get("video_fallback_channel") or data.get("fallback_video_channel") or "comfly"))
