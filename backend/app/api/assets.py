@@ -3858,6 +3858,14 @@ async def ensure_shanjian_compliant_copy(
             width=width,
             height=height,
         )
+        verified_width, verified_height, _verified_duration = await asyncio.to_thread(
+            probe_media_dimensions,
+            dest,
+        )
+        if max(int(verified_width or 0), int(verified_height or 0)) > limit:
+            raise RuntimeError(
+                f"压缩后仍超过闪剪上限：{verified_width}x{verified_height} > {limit}"
+            )
         data = dest.read_bytes()
         new_id, filename, size = _save_bytes(data, _shanjian_media_ext(media_type))
         copy_meta = _shanjian_copy_meta(

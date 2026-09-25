@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """闪剪素材合规化：本地把超出分辨率上限的素材压成副本再交给闪剪。"""
 
+import asyncio
+
 from types import SimpleNamespace
 
 import pytest
@@ -110,8 +112,11 @@ async def test_ensure_shanjian_compliant_copy_converts_and_moves_group(tmp_path,
     async def fake_materialize(_row, _request, directory):
         return source
 
-    def fake_probe(_path):
-        return 1080, 2400, 12.5
+    def fake_probe(path):
+        # 源素材超限，压缩后的副本必须在 2000 以内
+        if str(path).endswith("source.mp4"):
+            return 1080, 2400, 12.5
+        return 900, 2000, 12.5
 
     def fake_transcode(_source, dest, *, media_type, width, height):
         dest.write_bytes(b"small-video")
@@ -305,3 +310,107 @@ async def test_prepare_shanjian_template_materials_skips_without_template(monkey
     )
 
     assert result == {"ok": True, "skipped": True, "reason": "no_template"}
+
+class _FakeResponse:
+    def __init__(self, payload):
+        self._payload = payload
+        self.content = b"{}"
+
+    def json(self):
+        return self._payload
+
+
+class _FakeTemplateCloud:
+    def __init__(self, mapping):
+        self.mapping = mapping
+        self.calls = []
+
+    async def get(self, url, **_kwargs):
+        self.calls.append(url)
+        for key, payload in self.mapping.items():
+            if key in url:
+                return _FakeResponse(payload)
+        return _FakeResponse({})
+
+
+def test_fetch_template_groups_prefers_installation_slot_row():
+    cloud = _FakeTemplateCloud(
+        {
+            "/api/ip-content/personal-default": {
+                "ok": True,
+                "item": {"meta": {"digital_human_asset_groups": ["槽位分组"]}},
+            }
+        }
+    )
+
+    groups = asyncio.run(
+        channel._fetch_active_personal_template_groups(cloud, "https://bhzn.top", {})
+    )
+
+    assert groups == ["槽位分组"]
+    assert len(cloud.calls) == 1
+
+
+def test_fetch_template_groups_falls_back_to_template_carrying_groups():
+    """槽位行没有分组时，必须回退到云端真正使用的那一行（2026-09-25 的故障点）。"""
+    cloud = _FakeTemplateCloud(
+        {
+            "/api/ip-content/personal-default": {"ok": True, "item": {"meta": {}}},
+            "/api/ip-content/schedule-templates": {
+                "ok": True,
+                "items": [
+                    {"id": 312, "name": "个人默认模板", "meta": {"is_personal_default": True}},
+                    {"id": 14, "name": "肖老师", "meta": {"digital_human_asset_groups": ["数字人口播素材"]}},
+                ],
+            },
+        }
+    )
+
+    groups = asyncio.run(
+        channel._fetch_active_personal_template_groups(cloud, "https://bhzn.top", {})
+    )
+
+    assert groups == ["数字人口播素材"]
+    assert any("/api/ip-content/schedule-templates" in url for url in cloud.calls)
+
+
+def test_fetch_template_groups_returns_empty_when_no_template_has_groups():
+    cloud = _FakeTemplateCloud(
+        {
+            "/api/ip-content/personal-default": {"ok": True, "item": {"meta": {}}},
+            "/api/ip-content/schedule-templates": {
+                "ok": True,
+                "items": [{"id": 312, "name": "个人默认模板", "meta": {"is_personal_default": True}}],
+            },
+        }
+    )
+
+    assert asyncio.run(
+        channel._fetch_active_personal_template_groups(cloud, "https://bhzn.top", {})
+    ) == []
+
+
+def test_ensure_shanjian_compliant_copy_rejects_copy_still_over_limit(tmp_path, monkeypatch):
+    row = _asset("orig9")
+    db = FakeDB()
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+
+    async def fake_materialize(_row, _request, _directory):
+        return source
+
+    def fake_probe(_path):
+        return 1080, 2400, 1.0
+
+    def fake_transcode(_source, dest, **_kwargs):
+        dest.write_bytes(b"still-too-big")
+
+    monkeypatch.setattr(assets_api, "_materialize_library_file", fake_materialize)
+    monkeypatch.setattr(assets_api, "probe_media_dimensions", fake_probe)
+    monkeypatch.setattr(assets_api, "_transcode_shanjian_copy", fake_transcode)
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(assets_api.ensure_shanjian_compliant_copy(row, request=_request(), db=db))
+
+    assert db.added == []
+    assert row.meta["creative_candidate_group"] == "数字人口播素材"

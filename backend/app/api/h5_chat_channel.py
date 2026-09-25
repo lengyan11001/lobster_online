@@ -10875,30 +10875,87 @@ async def _fetch_active_personal_template_groups(
     base: str,
     headers: Dict[str, str],
 ) -> List[str]:
-    """Read the live personal template's 数字人素材分组 from the cloud."""
+    """读「数字人素材分组」，与云端真正使用的模板行保持一致。
+
+    云端 `_default_digital_human_template` 取的是**最新更新的个人默认模板行**，
+    而 `/api/ip-content/personal-default` 是按设备槽位回答的；两者可能不是同一行
+    （2026-09-25 用户 54 就踩到这里：槽位行没有分组，最新行才有）。所以先读槽位行，
+    没有再遍历模板列表，挑真正带 digital_human_asset_groups 的那一行。
+    """
     if cloud is None or not base:
         return []
+    timeout = httpx.Timeout(30.0, connect=10.0, read=30.0, write=15.0, pool=10.0)
+
+    def _item_groups(payload: Any) -> List[str]:
+        item = payload
+        if isinstance(payload, dict) and isinstance(payload.get("item"), dict):
+            item = payload.get("item")
+        if not isinstance(item, dict):
+            return []
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        return _shanjian_template_group_names(
+            {"digital_human_asset_groups": meta.get("digital_human_asset_groups")}
+        )
+
     try:
         resp = await cloud.get(
             f"{base}/api/ip-content/personal-default",
             headers=headers,
-            timeout=httpx.Timeout(30.0, connect=10.0, read=30.0, write=15.0, pool=10.0),
+            timeout=timeout,
         )
-        data = resp.json() if resp.content else {}
+        slot_payload = resp.json() if resp.content else {}
     except Exception as exc:
         logger.warning(
-            "[H5-WORKFLOW] read personal template failed err=%s",
+            "[H5-WORKFLOW] read personal default template failed err=%s",
+            f"{type(exc).__name__}: {exc}"[:200],
+        )
+        slot_payload = {}
+    slot_groups = _item_groups(slot_payload)
+    if slot_groups:
+        logger.info("[H5-WORKFLOW] template groups from personal default groups=%s", slot_groups)
+        return slot_groups
+    try:
+        resp = await cloud.get(
+            f"{base}/api/ip-content/schedule-templates",
+            headers=headers,
+            timeout=timeout,
+        )
+        listed = resp.json() if resp.content else {}
+    except Exception as exc:
+        logger.warning(
+            "[H5-WORKFLOW] read personal templates failed err=%s",
             f"{type(exc).__name__}: {exc}"[:200],
         )
         return []
-    if not isinstance(data, dict):
+    items = listed.get("items") if isinstance(listed, dict) else None
+    if not isinstance(items, list):
         return []
-    item = data.get("item") if isinstance(data.get("item"), dict) else data
-    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
-    return _shanjian_template_group_names(
-        {"digital_human_asset_groups": meta.get("digital_human_asset_groups")}
+    preferred: Optional[Dict[str, Any]] = None
+    fallback: Optional[Dict[str, Any]] = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        groups = _item_groups(item)
+        if not groups:
+            continue
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        entry = {"id": item.get("id"), "name": item.get("name"), "groups": groups}
+        if bool(meta.get("is_personal_default")):
+            if preferred is None:
+                preferred = entry
+        elif fallback is None:
+            fallback = entry
+    best = preferred or fallback
+    if best is None:
+        logger.info("[H5-WORKFLOW] no template carries digital_human_asset_groups")
+        return []
+    logger.info(
+        "[H5-WORKFLOW] template groups from template id=%s name=%s groups=%s",
+        best.get("id"),
+        str(best.get("name") or "")[:24],
+        best.get("groups"),
     )
-
+    return list(best.get("groups") or [])
 
 async def _prepare_shanjian_template_materials(
     source: Dict[str, Any],
@@ -10917,6 +10974,7 @@ async def _prepare_shanjian_template_materials(
     use_template = _workflow_flag(source.get("use_template"), False) if "use_template" in source else False
     template_mode = _workflow_text(source.get("template_mode"), 64).lower()
     if not use_template and not template_mode:
+        logger.info("[H5-WORKFLOW] shanjian material prep skipped reason=no_template run_id=%s", run_id)
         return {"ok": True, "skipped": True, "reason": "no_template"}
     groups = _shanjian_template_group_names(source)
     if not groups and template_mode in {
@@ -10927,10 +10985,12 @@ async def _prepare_shanjian_template_materials(
     }:
         groups = await _fetch_active_personal_template_groups(cloud, base, headers)
     if not groups:
+        logger.info("[H5-WORKFLOW] shanjian material prep skipped reason=no_groups run_id=%s", run_id)
         return {"ok": True, "skipped": True, "reason": "no_groups"}
     jwt_token, installation_id = _auth_context()
     uid = _safe_int(_decode_jwt_sub(jwt_token))
     if uid <= 0:
+        logger.warning("[H5-WORKFLOW] shanjian material prep skipped reason=no_user run_id=%s", run_id)
         return {"ok": True, "skipped": True, "reason": "no_user"}
     from .assets import SHANJIAN_MATERIAL_MAX_EDGE, ensure_shanjian_compliant_copy
 
@@ -10956,6 +11016,12 @@ async def _prepare_shanjian_template_materials(
             .all()
         )
         wanted = set(groups)
+        logger.info(
+            "[H5-WORKFLOW] shanjian material prep run_id=%s groups=%s local_assets=%s",
+            run_id,
+            groups,
+            len(rows),
+        )
         targets = [
             row
             for row in rows
