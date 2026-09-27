@@ -865,24 +865,14 @@ async def _resolve_template_material(token: str, installation_id: str) -> Dict[s
             if str(row.get("id") or "") == current_id:
                 chosen = row
                 break
-    def _material_score(row: Dict[str, Any]) -> int:
-        return ((1 if row.get("survey_id") else 0)
-                + (1 if (row.get("requirements") or {}) else 0)
-                + (1 if (row.get("memory_doc_ids") or []) else 0))
-
-    if not _has_material(chosen):
-        # 默认模板行：名字带"默认"或来源是个人配置。
-        # 同名多份时取资料最全的那份（最新那份可能还没挂资料调查）。
-        defaults = []
+    if not current_id:
+        # 没设"当前模板"就用默认配置那一行（列表按时间倒序，取最新的一条）
         for row in templates:
             row_meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
             name = str(row.get("name") or "")
-            if (str(row_meta.get("source") or "") == "online_personal_profile" or "默认" in name) \
-                    and _has_material(row):
-                defaults.append(row)
-        pool = defaults or [row for row in templates if _has_material(row)]
-        if pool:
-            chosen = max(pool, key=_material_score)
+            if str(row_meta.get("source") or "") == "online_personal_profile" or "默认" in name:
+                chosen = row
+                break
 
     out["memory_doc_ids"] = [str(x).strip() for x in (chosen.get("memory_doc_ids") or []) if str(x).strip()]
     survey_id = chosen.get("survey_id")
@@ -891,6 +881,13 @@ async def _resolve_template_material(token: str, installation_id: str) -> Dict[s
     requirements = chosen.get("requirements")
     if isinstance(requirements, dict) and requirements:
         out["requirements_text"] = _flatten_survey(requirements)[:2500]
+    if not out["memory_doc_ids"] and not out["survey_ids"] and not out["requirements_text"]:
+        # 模板里没选资料：拦住，让用户去选，不兜底、不默认全带
+        raise HTTPException(
+            status_code=400,
+            detail="IP 人设模板里还没有选资料（记忆文件 / 资料调查）：请先到「个人设置 → 个人记忆 / 资料调查」"
+                   "给模板选好资料，再回来做复刻。",
+        )
     logger.info("[wechat-article] template material template_id=%s memory=%s survey=%s",
                 chosen.get("id"), len(out["memory_doc_ids"]), out["survey_ids"])
     return out
@@ -1857,8 +1854,6 @@ async def generate_wechat_article(
             if survey_text:
                 blocks.append(survey_text)
             memory_text = "\n\n".join(blocks)
-            if not memory_text:
-                warnings.append("IP 人设默认模板里没有选定资料，本次只按参考文章的结构写（可去个人设置给模板选记忆文件/资料调查）。")
             article = await _call_article_remix_writer(body, source, memory_text, token, installation_id)
         else:
             article = await _call_article_writer(body, token, installation_id)
