@@ -86,7 +86,19 @@
       [ 'asOldPassword', 'asNewPassword', 'asConfirmPassword' ].forEach(function (id) {
         var el = $(id); if (el) el.value = '';
       });
-      setMsg('密码已更新，下次登录请使用新密码', false);
+      // 服务端已把旧会话全部失效，这里同步清本地登录态，走回登录页
+      setMsg('密码已修改，请用新密码重新登录…', false);
+      try { if (typeof token !== 'undefined') token = null; } catch (e) {}
+      try {
+        if (typeof clearStoredAuthToken === 'function') clearStoredAuthToken();
+        else localStorage.removeItem('token');
+      } catch (e) {
+        try { localStorage.removeItem('token'); } catch (e2) {}
+      }
+      if (typeof window.resetChatSessionsForLogout === 'function') {
+        try { window.resetChatSessionsForLogout(); } catch (e) {}
+      }
+      setTimeout(function () { window.location.reload(); }, 1200);
     }).catch(function (err) {
       setMsg('修改密码失败：' + (err && err.message ? err.message : '未知错误'), true);
     }).finally(function () { if (btn) btn.disabled = false; });
