@@ -206,7 +206,8 @@
         if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
         var items = Array.isArray(data && data.items) ? data.items : [];
         if (content) {
-          content.innerHTML = '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>搜索「' + escapeHtml(query) + '」</h3><span>' + items.length + ' 条</span></div>'
+          var searchFee = data && data.billing ? Number(data.billing.credits_charged || 0) : 0;
+        content.innerHTML = '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>搜索「' + escapeHtml(query) + '」</h3><span>' + items.length + ' 条 · 消耗 ' + searchFee + ' 算力</span></div>'
             + (items.length ? '<div class="douyin-desk-grid">' + items.map(itemCard).join('') + '</div>'
                             : '<div class="douyin-desk-empty">没搜到，换个词试试</div>') + '</section>';
           bindCards(content);
@@ -334,7 +335,9 @@
       }).then(function(data) {
         var taskId = String(data && data.task_id || '');
         if (!taskId) throw new Error('没有拿到任务号');
-        state.lastTask = { taskId: taskId, title: title, status: 'RUNNING' };
+        var charged = data && data.billing ? Number(data.billing.credits_charged || 0) : 0;
+        if (statusEl) statusEl.textContent = '已提交（扣 ' + charged + ' 算力）·生成中…';
+        state.lastTask = { taskId: taskId, title: title, status: 'RUNNING', credits: charged };
         renderLastTask();
         pollImitation(taskId, 1, statusEl, resultEl);
       }).catch(function(err) {
