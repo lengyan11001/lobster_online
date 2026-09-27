@@ -1,7 +1,7 @@
 (function() {
   // 2026-09-27 需求：信息台只保留两个榜；服务端已收敛请求集合，这里再兜一层，
   // 即使读到历史快照（含热搜/星图/创作者中心等旧分类）也只显示这两个。
-  var ALLOWED_CATEGORIES = ['热点榜', '内容榜'];
+  var ALLOWED_CATEGORIES = ['内容榜', '热点榜'];   // 内容榜排前面
 
   var state = {
     data: null,
@@ -39,14 +39,12 @@
 
   function render() {
     var fetched = document.getElementById('douyinDeskFetchedAt');
-    var summary = document.getElementById('douyinDeskSummary');
     var tabs = document.getElementById('douyinDeskTabs');
     var content = document.getElementById('douyinDeskContent');
     if (!content) return;
     var snapshot = state.data && state.data.snapshot;
     if (!snapshot) {
       if (fetched) fetched.textContent = '服务器尚未生成快照，将在每天 09:00（北京时间）采集';
-      if (summary) summary.innerHTML = '';
       if (tabs) tabs.innerHTML = '';
       content.innerHTML = '<div class="douyin-desk-empty">暂无平台数据</div>';
       return;
@@ -60,18 +58,7 @@
       if (categories.indexOf(category) < 0) categories.push(category);
     });
     if (categories.indexOf(state.category) < 0) state.category = categories[0] || '';
-    var stat = snapshot.summary || {};
-    if (fetched) fetched.textContent = '最近采集：' + formatTime(snapshot.fetched_at) + ' · 状态：' + (snapshot.status === 'success' ? '完整' : '部分可用');
-    if (summary) {
-      summary.innerHTML = [
-        [stat.item_count || 0, '平台数据'],
-        [(stat.success_count || 0) + '/' + (stat.endpoint_count || 0), '接口成功'],
-        [stat.failed_count || 0, '接口异常'],
-        [snapshot.snapshot_date || '-', '快照日期']
-      ].map(function(entry) {
-        return '<div class="douyin-desk-summary-item"><strong>' + escapeHtml(entry[0]) + '</strong><span>' + escapeHtml(entry[1]) + '</span></div>';
-      }).join('');
-    }
+    if (fetched) fetched.textContent = '最近采集：' + formatTime(snapshot.fetched_at);
     if (tabs) {
       tabs.innerHTML = categories.map(function(category) {
         return '<button type="button" class="douyin-desk-tab' + (category === state.category ? ' active' : '') + '" data-douyin-desk-category="' + escapeHtml(category) + '">' + escapeHtml(category) + '</button>';
@@ -82,42 +69,84 @@
     });
     content.innerHTML = visible.length ? visible.map(function(section) {
       var items = Array.isArray(section.items) ? section.items : [];
-      var cards = items.length ? items.map(function(item) {
-        var title = item.title || item.name || '热门内容';
-        var metaParts = [];
-        if (item.author && item.author !== title) metaParts.push('作者 ' + item.author);
-        if (item.value) metaParts.push(item.value);
-        if (item.detail) metaParts.push(item.detail);
-        var metrics = metricText(item);
-        if (metrics) metaParts.push(metrics);
-        var meta = metaParts.join(' · ') || '暂无指标';
-        var cover = item.cover_url && /^https?:\/\//i.test(String(item.cover_url))
-          ? '<img class="douyin-desk-cover" src="' + escapeHtml(item.cover_url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" />'
-          : '';
-        var body = '<div class="douyin-desk-item-main"><span class="douyin-desk-rank">' + escapeHtml(item.rank || '-') + '</span><span class="douyin-desk-item-title">' + escapeHtml(title) + '</span></div><div class="douyin-desk-item-meta">' + escapeHtml(meta) + '</div>';
-        if (item.url && /^https?:\/\//i.test(String(item.url))) {
-          body = '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">' + body + '<span class="douyin-desk-item-link">打开观看</span></a>';
-        }
-        var actions = '<div class="douyin-desk-item-actions">'
-          + '<button type="button" class="douyin-desk-imitation" data-douyin-imitation="1" data-douyin-item-id="' + escapeHtml(item.id || '') + '" data-douyin-title="' + escapeHtml(title) + '">做同款（换人）</button>'
-          + '<span class="douyin-desk-item-status" data-douyin-status="1"></span>'
-          + '</div><div class="douyin-desk-item-result" data-douyin-result="1"></div>';
-        return '<article class="douyin-desk-item">' + cover + body + actions + '</article>';
-      }).join('') : '<div class="douyin-desk-empty">该接口暂无可展示条目' + (section.error ? '：' + escapeHtml(section.error) : '') + '</div>';
+      var cards = items.length ? items.map(itemCard).join('') : '<div class="douyin-desk-empty">该接口暂无可展示条目' + (section.error ? '：' + escapeHtml(section.error) : '') + '</div>';
       return '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>' + escapeHtml(section.title || section.key || '数据') + '</h3><span>' + items.length + ' 条</span></div><div class="douyin-desk-grid">' + cards + '</div></section>';
     }).join('') : '<div class="douyin-desk-empty">该分类暂无数据</div>';
-    if (content) {
-      content.querySelectorAll('.douyin-desk-cover').forEach(function(image) {
-        image.addEventListener('error', function() { image.style.display = 'none'; });
-      });
-      content.querySelectorAll('[data-douyin-imitation]').forEach(function(button) {
-        button.addEventListener('click', function(event) {
-          event.preventDefault();
-          event.stopPropagation();
-          startImitation(button);
-        });
-      });
+    bindCards(content);
+  }
+
+  function itemCard(item) {
+    var title = item.title || item.name || '热门内容';
+    var metaParts = [];
+    if (item.category) metaParts.push(String(item.category));
+    if (item.section_title) metaParts.push(String(item.section_title));
+    if (item.author && item.author !== title) metaParts.push('作者 ' + item.author);
+    if (item.value) metaParts.push(item.value);
+    if (item.detail) metaParts.push(item.detail);
+    var metrics = metricText(item);
+    if (metrics) metaParts.push(metrics);
+    var meta = metaParts.join(' · ') || '暂无指标';
+    var cover = item.cover_url && /^https?:\/\//i.test(String(item.cover_url))
+      ? '<img class="douyin-desk-cover" src="' + escapeHtml(item.cover_url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" />'
+      : '';
+    var body = '<div class="douyin-desk-item-main"><span class="douyin-desk-rank">' + escapeHtml(item.rank || '-') + '</span><span class="douyin-desk-item-title">' + escapeHtml(title) + '</span></div><div class="douyin-desk-item-meta">' + escapeHtml(meta) + '</div>';
+    if (item.url && /^https?:\/\//i.test(String(item.url))) {
+      body = '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">' + body + '<span class="douyin-desk-item-link">打开观看</span></a>';
     }
+    var actions = '<div class="douyin-desk-item-actions">'
+      + (item.id ? '<button type="button" class="douyin-desk-imitation" data-douyin-imitation="1" data-douyin-item-id="' + escapeHtml(item.id || '') + '" data-douyin-title="' + escapeHtml(title) + '">做同款（换人）</button>' : '')
+      + '<span class="douyin-desk-item-status" data-douyin-status="1"></span>'
+      + '</div><div class="douyin-desk-item-result" data-douyin-result="1"></div>';
+    return '<article class="douyin-desk-item">' + cover + body + actions + '</article>';
+  }
+
+  function bindCards(root) {
+    if (!root) return;
+    root.querySelectorAll('.douyin-desk-cover').forEach(function(image) {
+      image.addEventListener('error', function() { image.style.display = 'none'; });
+    });
+    root.querySelectorAll('[data-douyin-imitation]').forEach(function(button) {
+      button.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        startImitation(button);
+      });
+    });
+  }
+
+  function searchDesk() {
+    var input = document.getElementById('douyinDeskSearchInput');
+    var content = document.getElementById('douyinDeskContent');
+    var clearBtn = document.getElementById('douyinDeskSearchClear');
+    var query = String(input && input.value || '').trim();
+    if (!query) return;
+    state.category = '';
+    if (content) content.innerHTML = '<div class="douyin-desk-empty">正在搜索「' + escapeHtml(query) + '」…</div>';
+    fetch(baseUrl() + '/api/douyin/platform-information-desk/search?q=' + encodeURIComponent(query), {
+      headers: typeof authHeaders === 'function' ? authHeaders() : {}
+    }).then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
+        var items = Array.isArray(data && data.items) ? data.items : [];
+        if (content) {
+          content.innerHTML = '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>搜索「' + escapeHtml(query) + '」</h3><span>' + items.length + ' 条</span></div>'
+            + (items.length ? '<div class="douyin-desk-grid">' + items.map(itemCard).join('') + '</div>'
+                            : '<div class="douyin-desk-empty">没搜到，换个词试试</div>') + '</section>';
+          bindCards(content);
+        }
+        if (clearBtn) clearBtn.classList.remove('hidden');
+      });
+    }).catch(function(error) {
+      if (content) content.innerHTML = '<div class="douyin-desk-empty">' + escapeHtml(error && error.message || '搜索失败') + '</div>';
+    });
+  }
+
+  function clearDeskSearch() {
+    var input = document.getElementById('douyinDeskSearchInput');
+    var clearBtn = document.getElementById('douyinDeskSearchClear');
+    if (input) input.value = '';
+    if (clearBtn) clearBtn.classList.add('hidden');
+    render();
   }
 
   function postJson(path, payload) {
@@ -243,6 +272,22 @@
     if (refresh && !refresh.dataset.bound) {
       refresh.dataset.bound = '1';
       refresh.addEventListener('click', load);
+    }
+    var searchBtn = document.getElementById('douyinDeskSearchBtn');
+    if (searchBtn && !searchBtn.dataset.bound) {
+      searchBtn.dataset.bound = '1';
+      searchBtn.addEventListener('click', searchDesk);
+      var clearBtn = document.getElementById('douyinDeskSearchClear');
+      if (clearBtn) clearBtn.addEventListener('click', clearDeskSearch);
+      var searchInput = document.getElementById('douyinDeskSearchInput');
+      if (searchInput) {
+        searchInput.addEventListener('keydown', function(event) {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            searchDesk();
+          }
+        });
+      }
     }
     if (tabs && !tabs.dataset.bound) {
       tabs.dataset.bound = '1';

@@ -271,3 +271,22 @@
   margin-top: 8px;
   border-radius: 6px;
 }
+
+
+.douyin-desk-search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0 4px;
+}
+
+.douyin-desk-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #deebf2;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #2b485d;
+}
