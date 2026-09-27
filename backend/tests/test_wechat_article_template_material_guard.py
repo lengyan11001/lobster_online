@@ -107,3 +107,52 @@ def test_missing_cloud_base_is_reported_as_read_failure(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         asyncio.run(wa._resolve_template_material("tok", "inst"))
     assert exc.value.status_code == 503
+
+
+class _PipelineBody:
+    idea = ""
+    topic = ""
+    source_url = "https://mp.weixin.qq.com/s/abc"
+    memory_document_ids = []
+    memory_document_titles = []
+    survey_ids = []
+    survey_names = []
+    extra_material = ""
+    style = ""
+    audience = ""
+    theme = "professional-clean"
+    include_images = False
+    image_model = ""
+    image_style = ""
+    image_aspect_ratio = "3:2"
+    image_count = 1
+    selected_image_urls = []
+    selected_asset_ids = []
+    upload_article_images = False
+
+
+class _PipelineSentinel(Exception):
+    pass
+
+
+class _PipelineUser:
+    id = 31
+
+
+def test_pipeline_accepts_remix_without_idea(monkeypatch):
+    """复刻只给链接、idea 为空时不能报"请输入主题"。"""
+    async def fake_generate(*args, **kwargs):
+        raise _PipelineSentinel()
+
+    monkeypatch.setattr(wa, "generate_wechat_article", fake_generate)
+    with pytest.raises(_PipelineSentinel):
+        asyncio.run(wa.run_wechat_article_pipeline(_PipelineBody(), None, _PipelineUser(), None))
+
+
+def test_pipeline_still_requires_idea_or_link():
+    body = _PipelineBody()
+    body.source_url = ""
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(wa.run_wechat_article_pipeline(body, None, _PipelineUser(), None))
+    assert exc.value.status_code == 400
+    assert "主题" in exc.value.detail

@@ -2110,8 +2110,13 @@ async def run_wechat_article_pipeline(
     db: Session = Depends(get_db),
 ):
     idea = (body.idea or body.topic or "").strip()
-    if not idea:
-        raise HTTPException(status_code=400, detail="请输入公众号文章主题或想法")
+    source_url = str(getattr(body, "source_url", "") or "").strip()
+    # 复刻模式只给链接、idea 本来就是空的：两者都没有才报错
+    if not idea and not source_url:
+        raise HTTPException(
+            status_code=400,
+            detail="请输入公众号文章主题或想法，或粘贴要复刻的公众号文章链接",
+        )
     theme_name = body.theme if body.theme in _THEMES else "professional-clean"
     generated = await generate_wechat_article(
         WechatArticleGenerateIn(
