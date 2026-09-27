@@ -18,6 +18,22 @@
       .replace(/'/g, '&#39;');
   }
 
+  function errorText(err) {
+    if (!err) return '操作失败';
+    var raw = err.message !== undefined && err.message !== null ? err.message : err;
+    if (typeof raw === 'string') return raw;
+    if (raw && typeof raw === 'object') {
+      var inner = raw.message || raw.detail || raw.error;
+      if (typeof inner === 'string' && inner) return inner;
+      try {
+        return JSON.stringify(raw).slice(0, 300);
+      } catch (e) {
+        return '操作失败';
+      }
+    }
+    return String(raw);
+  }
+
   function baseUrl() {
     return String(typeof API_BASE !== 'undefined' ? API_BASE : '').replace(/\/$/, '');
   }
@@ -137,7 +153,7 @@
         if (clearBtn) clearBtn.classList.remove('hidden');
       });
     }).catch(function(error) {
-      if (content) content.innerHTML = '<div class="douyin-desk-empty">' + escapeHtml(error && error.message || '搜索失败') + '</div>';
+      if (content) content.innerHTML = '<div class="douyin-desk-empty">' + escapeHtml(errorText(error)) + '</div>';
     });
   }
 
@@ -206,7 +222,7 @@
           pollImitation(taskId, tries + 1, statusEl, resultEl);
         });
       }).catch(function(err) {
-        if (statusEl) statusEl.textContent = '查询失败：' + (err && err.message || err);
+        if (statusEl) statusEl.textContent = '查询失败：' + errorText(err);
       });
     }, 6000);
   }
@@ -240,7 +256,7 @@
         if (!taskId) throw new Error('没有拿到任务号');
         pollImitation(taskId, 1, statusEl, resultEl);
       }).catch(function(err) {
-        if (statusEl) statusEl.textContent = '失败：' + (err && err.message || err);
+        if (statusEl) statusEl.textContent = '失败：' + errorText(err);
       });
     });
     input.click();
