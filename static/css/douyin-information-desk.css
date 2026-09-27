@@ -227,3 +227,47 @@
     grid-template-columns: 1fr;
   }
 }
+
+
+.douyin-desk-cover {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  background: #eef4f8;
+}
+
+.douyin-desk-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0 34px;
+}
+
+.douyin-desk-imitation {
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  color: #126c83;
+  background: #e4f4f7;
+}
+
+.douyin-desk-imitation:hover {
+  background: #d3edf3;
+}
+
+.douyin-desk-item-status {
+  color: #7b90a2;
+  font-size: 11px;
+}
+
+.douyin-desk-item-result video {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  border-radius: 6px;
+}

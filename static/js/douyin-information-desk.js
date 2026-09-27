@@ -85,14 +85,126 @@
         var metrics = metricText(item);
         if (metrics) metaParts.push(metrics);
         var meta = metaParts.join(' · ') || '暂无指标';
+        var cover = item.cover_url && /^https?:\/\//i.test(String(item.cover_url))
+          ? '<img class="douyin-desk-cover" src="' + escapeHtml(item.cover_url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" />'
+          : '';
         var body = '<div class="douyin-desk-item-main"><span class="douyin-desk-rank">' + escapeHtml(item.rank || '-') + '</span><span class="douyin-desk-item-title">' + escapeHtml(title) + '</span></div><div class="douyin-desk-item-meta">' + escapeHtml(meta) + '</div>';
         if (item.url && /^https?:\/\//i.test(String(item.url))) {
           body = '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">' + body + '<span class="douyin-desk-item-link">打开观看</span></a>';
         }
-        return '<article class="douyin-desk-item">' + body + '</article>';
+        var actions = '<div class="douyin-desk-item-actions">'
+          + '<button type="button" class="douyin-desk-imitation" data-douyin-imitation="1" data-douyin-title="' + escapeHtml(title) + '">做同款</button>'
+          + '<span class="douyin-desk-item-status" data-douyin-status="1"></span>'
+          + '</div><div class="douyin-desk-item-result" data-douyin-result="1"></div>';
+        return '<article class="douyin-desk-item">' + cover + body + actions + '</article>';
       }).join('') : '<div class="douyin-desk-empty">该接口暂无可展示条目' + (section.error ? '：' + escapeHtml(section.error) : '') + '</div>';
       return '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>' + escapeHtml(section.title || section.key || '数据') + '</h3><span>' + items.length + ' 条</span></div><div class="douyin-desk-grid">' + cards + '</div></section>';
     }).join('') : '<div class="douyin-desk-empty">该分类暂无数据</div>';
+    if (content) {
+      content.querySelectorAll('.douyin-desk-cover').forEach(function(image) {
+        image.addEventListener('error', function() { image.style.display = 'none'; });
+      });
+      content.querySelectorAll('[data-douyin-imitation]').forEach(function(button) {
+        button.addEventListener('click', function(event) {
+          event.preventDefault();
+          event.stopPropagation();
+          startImitation(button);
+        });
+      });
+    }
+  }
+
+  function postJson(path, payload) {
+    return fetch(baseUrl() + path, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, typeof authHeaders === 'function' ? authHeaders() : {}),
+      body: JSON.stringify(payload || {})
+    }).then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
+        return data;
+      });
+    });
+  }
+
+  function uploadReference(file) {
+    var form = new FormData();
+    form.append('file', file, file.name || 'imitation-image');
+    return fetch(baseUrl() + '/api/assets/upload-temp', {
+      method: 'POST',
+      headers: typeof authHeaders === 'function' ? authHeaders() : {},
+      body: form
+    }).then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok) throw new Error(data.detail || data.message || ('上传失败 HTTP ' + response.status));
+        var url = String(data.public_url || '').trim();
+        if (!url) throw new Error('参考图上传后没有拿到公网地址');
+        return url;
+      });
+    });
+  }
+
+  function pollImitation(taskId, tries, statusEl, resultEl) {
+    setTimeout(function() {
+      fetch(baseUrl() + '/api/douyin/platform-information-desk/imitation/' + encodeURIComponent(taskId), {
+        headers: typeof authHeaders === 'function' ? authHeaders() : {}
+      }).then(function(response) {
+        return response.json().catch(function() { return {}; }).then(function(data) {
+          if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
+          if (data.status === 'SUCCESS' && data.video_url) {
+            if (statusEl) statusEl.textContent = '已完成';
+            if (resultEl) {
+              resultEl.innerHTML = '<video controls playsinline preload="metadata" src="' + escapeHtml(data.video_url) + '"></video>'
+                + '<a class="douyin-desk-item-link" href="' + escapeHtml(data.video_url) + '" target="_blank" rel="noopener noreferrer">打开 / 下载</a>';
+            }
+            return;
+          }
+          if (data.done) {
+            if (statusEl) statusEl.textContent = '失败：' + String(data.fail_reason || '生成失败');
+            return;
+          }
+          if (statusEl) statusEl.textContent = '生成中 ' + String(data.progress || '') + '（第 ' + tries + ' 次查询）';
+          if (tries >= 40) {
+            if (statusEl) statusEl.textContent = '还在生成中，任务已提交';
+            return;
+          }
+          pollImitation(taskId, tries + 1, statusEl, resultEl);
+        });
+      }).catch(function(err) {
+        if (statusEl) statusEl.textContent = '查询失败：' + (err && err.message || err);
+      });
+    }, 6000);
+  }
+
+  function startImitation(button) {
+    var card = button.closest ? button.closest('.douyin-desk-item') : null;
+    var statusEl = card ? card.querySelector('[data-douyin-status]') : null;
+    var resultEl = card ? card.querySelector('[data-douyin-result]') : null;
+    var title = button.getAttribute('data-douyin-title') || '';
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.addEventListener('change', function() {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      if (statusEl) statusEl.textContent = '正在上传参考图…';
+      uploadReference(file).then(function(imageUrl) {
+        if (statusEl) statusEl.textContent = '已提交，正在生成（约 1-3 分钟）…';
+        return postJson('/api/douyin/platform-information-desk/imitation', {
+          image_url: imageUrl,
+          title: title,
+          duration: 5,
+          ratio: '9:16'
+        });
+      }).then(function(data) {
+        var taskId = String(data && data.task_id || '');
+        if (!taskId) throw new Error('没有拿到任务号');
+        pollImitation(taskId, 1, statusEl, resultEl);
+      }).catch(function(err) {
+        if (statusEl) statusEl.textContent = '失败：' + (err && err.message || err);
+      });
+    });
+    input.click();
   }
 
   function load() {
