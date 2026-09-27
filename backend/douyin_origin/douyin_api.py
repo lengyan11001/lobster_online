@@ -13361,6 +13361,85 @@ async def send_douyin_stranger_messages_for_monitor(
 
 _DOUYIN_MAINLAND_MOBILE_RE = re.compile(r"(?<!\d)1[\s-]*[3-9](?:[\s-]*\d){9}(?!\d)")
 
+# 微信号没有固定格式（6-20 位、字母开头、字母数字下划线减号），单靠正则误报很高：
+# 这里用「引导词 + 就近候选 + 格式校验」的规则兜底，真正拿不准的交给 AI 判断。
+_DOUYIN_WECHAT_HINT_WORDS = (
+    "微信", "徽信", "薇信", "威信", "微心", "唯心", "微❤", "微 信",
+    "vx", "v x", "wx", "w x", "v信", "v 信", "weixin", "wechat", "we chat",
+    "加我", "加下我", "加个微", "加个好友", "扣我", "企鹅", "qq",
+)
+_DOUYIN_WECHAT_ID_RE = re.compile(r"(?<![A-Za-z0-9_-])([A-Za-z][A-Za-z0-9_-]{5,19})(?![A-Za-z0-9_-])")
+# 这些是引导词本身/常见英文词，不能当成微信号
+_DOUYIN_WECHAT_ID_STOPWORDS = {
+    "wechat", "weixin", "wechatid", "contact", "douyin", "tiktok", "xiaohongshu",
+    "mobile", "phone", "number", "qqnumber", "whatsapp", "telegram", "vxnumber", "wxnumber",
+}
+_DOUYIN_WECHAT_MESSAGE_SPLIT_RE = re.compile(r"[\n\r，,。；;：:！!？?、\s]+")
+
+
+def looks_like_douyin_wechat_id(value: str) -> bool:
+    """格式校验：6-20 位、字母开头、只含字母数字下划线减号，且不能是纯引导词。"""
+    text = normalize_douyin_text(value)
+    if not text or len(text) < 6 or len(text) > 20:
+        return False
+    if not _DOUYIN_WECHAT_ID_RE.fullmatch(text):
+        return False
+    if text.lower() in _DOUYIN_WECHAT_ID_STOPWORDS:
+        return False
+    # 纯数字是手机号 / QQ，不走微信号
+    if text.isdigit():
+        return False
+    return True
+
+
+def _douyin_wechat_candidates_in(segment: str) -> List[str]:
+    return [m.group(1) for m in _DOUYIN_WECHAT_ID_RE.finditer(segment or "")]
+
+
+def extract_douyin_wechat_ids(rows: List[Dict]) -> List[str]:
+    """从对方消息里按「引导词 + 就近候选」抽微信号（对方没提引导词就不猜）。
+
+    - 同一段里出现「微信/vx/wx/加我…」→ 取该段里所有格式合法的候选（含写在引导词后面的）；
+    - 引导词单独成一句、微信号在下一段 → 也接受（很多人分两条发）。
+    """
+    found: List[str] = []
+    seen: Set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        source_parts: List[str] = []
+        messages = row.get("messages") if isinstance(row.get("messages"), list) else []
+        if messages:
+            source_parts.extend(
+                text for text in (_douyin_incoming_message_text(message) for message in messages) if text
+            )
+        for key in ("incoming_message", "preview_text", "content"):
+            text = _douyin_incoming_message_text({"text": row.get(key) or ""}) if row.get(key) else ""
+            if text:
+                source_parts.append(text)
+        segments: List[str] = []
+        for part in source_parts:
+            segments.extend(seg for seg in _DOUYIN_WECHAT_MESSAGE_SPLIT_RE.split(part) if seg)
+        pending_hint = False
+        for segment in segments:
+            lowered = segment.lower()
+            has_hint = any(word in lowered for word in _DOUYIN_WECHAT_HINT_WORDS)
+            if has_hint:
+                for candidate in _douyin_wechat_candidates_in(segment):
+                    if looks_like_douyin_wechat_id(candidate) and candidate not in seen:
+                        seen.add(candidate)
+                        found.append(candidate)
+                pending_hint = True
+                continue
+            if pending_hint:
+                # 引导词后面紧跟的这段如果整段就是一个合法候选，认它
+                stripped = normalize_douyin_text(segment)
+                if looks_like_douyin_wechat_id(stripped) and stripped not in seen:
+                    seen.add(stripped)
+                    found.append(stripped)
+                pending_hint = False
+    return found
+
 
 def _douyin_incoming_message_text(message: object) -> str:
     if not isinstance(message, dict):
@@ -13456,23 +13535,97 @@ def douyin_wechat_contact_entries(rows: List[Dict]) -> List[Dict[str, str]]:
             text = re.sub(r"[\s\-()（）]", "", normalize_douyin_text(number))
             if text:
                 numbers.append(text)
-        if not numbers:
+        wechat_ids: List[str] = []
+        for item in [*(row.get("wechat_ids") or []), row.get("ai_wechat_id") or ""]:
+            text = normalize_douyin_text(item)
+            if text and looks_like_douyin_wechat_id(text):
+                wechat_ids.append(text)
+        if not numbers and not wechat_ids:
             continue
         username = normalize_douyin_text(row.get("username") or "")
         conversation = normalize_douyin_text(row.get("conversation_source") or "")
-        for number in numbers:
-            if number in seen:
+        for value, kind in [(number, "mobile") for number in numbers] + [(wid, "wechat_id") for wid in wechat_ids]:
+            if value in seen:
                 continue
-            seen.add(number)
+            seen.add(value)
             entries.append(
                 {
-                    "value": number,
-                    "kind": "mobile",
+                    "value": value,
+                    "kind": kind,
                     "username": username,
                     "conversation_id": conversation,
                 }
             )
     return entries
+
+
+_DOUYIN_WECHAT_AI_CACHE: Dict[str, Dict[str, str]] = {}
+_DOUYIN_WECHAT_AI_CACHE_LIMIT = 500
+
+
+def _douyin_wechat_ai_text(row: Dict) -> str:
+    payload = row if isinstance(row, dict) else {}
+    parts: List[str] = []
+    messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+    for message in messages[-12:]:
+        text = _douyin_incoming_message_text(message)
+        if text:
+            parts.append(text)
+    for key in ("incoming_message", "preview_text"):
+        text = normalize_douyin_text(payload.get(key) or "")
+        if text and text not in parts:
+            parts.append(text)
+    return "\n".join(parts)[:1200]
+
+
+def douyin_wechat_hint_present(row: Dict) -> bool:
+    """消息里有没有「微信/加我」这类引导词——没有就不去花 AI token。"""
+    text = _douyin_wechat_ai_text(row).lower()
+    return bool(text) and any(word in text for word in _DOUYIN_WECHAT_HINT_WORDS)
+
+
+def extract_douyin_wechat_id_by_ai(row: Dict) -> Dict[str, str]:
+    """让 AI 在「理解对方话术」时顺便判断有没有留微信号。
+
+    只在消息里出现引导词时才调用（省 token），且只认格式合法的结果，避免 AI 编一个号出来。
+    返回 {"wechat_id": "", "evidence": "", "source": "ai"}。
+    """
+    text = _douyin_wechat_ai_text(row)
+    if not text:
+        return {"wechat_id": "", "evidence": "", "source": "ai"}
+    lowered = text.lower()
+    if not any(word in lowered for word in _DOUYIN_WECHAT_HINT_WORDS):
+        return {"wechat_id": "", "evidence": "", "source": "ai"}
+    cache_key = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    cached = _DOUYIN_WECHAT_AI_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached)
+    system_prompt = (
+        "你在帮销售整理抖音私信线索。只做信息抽取，不要闲聊。"
+        "只输出一个 JSON 对象，不要解释、不要代码块："
+        '{"wechat_id": "<对方明确留下的微信号，没有就空字符串>", '
+        '"evidence": "<原文里能证明的片段，没有就空字符串>"}'
+    )
+    user_prompt = (
+        f"对方发来的消息：\n{text}\n\n"
+        "只判断对方自己有没有留下微信号（wx/vx/微信/加我 后面的那串）；"
+        "没有就都返回空字符串，不要猜、不要把昵称或抖音号算进来。"
+    )
+    result = {"wechat_id": "", "evidence": "", "source": "ai"}
+    try:
+        raw = request_douyin_ai_comment(system_prompt, user_prompt, max_tokens=200, response_limit=400)
+        start, end = raw.find("{"), raw.rfind("}")
+        if start >= 0 and end > start:
+            parsed = json.loads(raw[start:end + 1])
+            candidate = normalize_douyin_text(parsed.get("wechat_id") or "")
+            if looks_like_douyin_wechat_id(candidate):
+                result["wechat_id"] = candidate
+                result["evidence"] = str(parsed.get("evidence") or "").strip()[:120]
+    except Exception as exc:  # noqa: BLE001
+        douyin_log(f"[抖音私信接管] AI 判断微信号失败：{exc}", "warning")
+    if len(_DOUYIN_WECHAT_AI_CACHE) < _DOUYIN_WECHAT_AI_CACHE_LIMIT:
+        _DOUYIN_WECHAT_AI_CACHE[cache_key] = dict(result)
+    return result
 
 
 async def _queue_douyin_wechat_friend_add(phone_numbers: List[str]) -> Dict[str, object]:
@@ -13743,6 +13896,25 @@ async def run_douyin_h5_stranger_message_task_once(
             # own outgoing messages instead of carrying them forward forever.
             merged_numbers = list(dict.fromkeys(current_numbers or old_numbers))
             row["phone_numbers"] = merged_numbers
+            current_wechat_ids = extract_douyin_wechat_ids([row])
+            if not current_wechat_ids and douyin_wechat_hint_present(row):
+                # 提到微信但规则抽不出来（用户随便起的号）→ 让 AI 顺手判断一次
+                try:
+                    ai_hit = await asyncio.to_thread(extract_douyin_wechat_id_by_ai, row)
+                    if str(ai_hit.get("wechat_id") or "").strip():
+                        current_wechat_ids = [str(ai_hit["wechat_id"]).strip()]
+                        row["ai_wechat_id"] = current_wechat_ids[0]
+                        row["ai_wechat_evidence"] = str(ai_hit.get("evidence") or "")[:120]
+                except Exception as exc:  # noqa: BLE001
+                    douyin_log(f"[抖音私信接管] AI 判断微信号异常：{exc}", "warning")
+            old_wechat_ids = [
+                str(item).strip()
+                for item in (existing.get("wechat_ids") or [])
+                if str(item).strip()
+            ]
+            merged_wechat_ids = list(dict.fromkeys(current_wechat_ids or old_wechat_ids))
+            if merged_wechat_ids:
+                row["wechat_ids"] = merged_wechat_ids
             existing_status = normalize_douyin_text(existing.get("wechat_add_status") or "").lower()
             row["wechat_add_status"] = existing_status or ("phone_detected" if merged_numbers else "")
             prepared_rows.append(row)
@@ -14043,6 +14215,8 @@ async def run_douyin_h5_stranger_message_task_once(
                     "detail_failures": detail_failures,
                     "reply": dict(reply_result),
                     "extracted_phone_numbers": phone_numbers,
+                "extracted_wechat_ids": extract_douyin_wechat_ids(locals().get("prepared_rows") or []),
+                    "extracted_wechat_ids": extract_douyin_wechat_ids(locals().get("prepared_rows") or []),
                     "wechat_add_targets": phone_numbers_to_queue,
                     "phone_contacts_skipped": phone_contacts_skipped,
                     "wechat_add_friend": wechat_add_friend_result,
@@ -14091,6 +14265,7 @@ async def run_douyin_h5_stranger_message_task_once(
                 "stranger_conversations": len(stranger_rows),
                 "reply": dict(reply_result),
                 "extracted_phone_numbers": phone_numbers,
+                "extracted_wechat_ids": extract_douyin_wechat_ids(locals().get("prepared_rows") or []),
                 "wechat_contact_entries": douyin_wechat_contact_entries(prepared_rows),
                 "wechat_add_targets": phone_numbers_to_queue,
                 "phone_contacts_skipped": phone_contacts_skipped,
@@ -14110,6 +14285,8 @@ async def run_douyin_h5_stranger_message_task_once(
                     "total_conversations": len(prepared_rows),
                     "processed_user_last": qualifying_users,
                     "extracted_phone_numbers": phone_numbers,
+                "extracted_wechat_ids": extract_douyin_wechat_ids(locals().get("prepared_rows") or []),
+                    "extracted_wechat_ids": extract_douyin_wechat_ids(locals().get("prepared_rows") or []),
                     "wechat_add_friend": wechat_add_friend_result,
                 },
             }
@@ -14467,8 +14644,18 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
         ]
         unseen_rows, seen_rows = split_unseen_douyin_stranger_message_rows(account["id"], unread_rows)
         extracted_phone_numbers = extract_douyin_mainland_mobile_numbers(unseen_rows)
+        extracted_wechat_ids = extract_douyin_wechat_ids(unseen_rows)
         for row in unseen_rows:
             row["phone_numbers"] = extract_douyin_mainland_mobile_numbers([row])
+            row["wechat_ids"] = extract_douyin_wechat_ids([row])
+            if not row["wechat_ids"] and douyin_wechat_hint_present(row):
+                try:
+                    ai_hit = await asyncio.to_thread(extract_douyin_wechat_id_by_ai, row)
+                    if str(ai_hit.get("wechat_id") or "").strip():
+                        row["wechat_ids"] = [str(ai_hit["wechat_id"]).strip()]
+                        row["ai_wechat_id"] = row["wechat_ids"][0]
+                except Exception as exc:  # noqa: BLE001
+                    douyin_log(f"[抖音陌生人消息监控] AI 判断微信号异常：{exc}", "warning")
         new_count = len(unseen_rows)
         total_count = len([row for row in rows if isinstance(row, dict)])
         unread_total = len(unread_rows)
