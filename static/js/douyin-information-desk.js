@@ -113,9 +113,12 @@
       + '<div class="douyin-desk-last-body">' + escapeHtml(String(task.title || task.taskId || '')) + '</div>'
       + (task.videoUrl
           ? '<video controls playsinline preload="metadata" src="' + escapeHtml(task.videoUrl) + '"></video>'
-            + '<a class="douyin-desk-item-link" href="' + escapeHtml(task.videoUrl) + '" target="_blank" rel="noopener noreferrer">打开 / 下载</a>'
+            + '<div class="douyin-desk-item-actions"><button type="button" class="douyin-desk-imitation" data-douyin-dl="' + escapeHtml(String(task.taskId || '')) + '">下载成片</button>'
+            + (task.assetId ? '<span class="douyin-desk-item-status">已入库素材库</span>' : '')
+            + '</div>'
           : (task.failReason ? '<div class="douyin-desk-last-fail">' + escapeHtml(task.failReason) + '</div>'
                              : '<div class="douyin-desk-last-tip">任务已提交，可点「生成历史」随时回来看成片</div>'));
+    bindDownloadButtons(box);
   }
 
   function loadHistory() {
@@ -136,7 +139,11 @@
             + '<div class="douyin-desk-history-meta">' + escapeHtml(formatTime(item.created_at)) + ' · ' + escapeHtml(item.model || '') + '</div>'
             + (item.video_url ? '<video controls playsinline preload="metadata" src="' + escapeHtml(item.video_url) + '"></video>'
                               : (item.fail_reason ? '<div class="douyin-desk-last-fail">' + escapeHtml(item.fail_reason) + '</div>' : ''))
-            + (item.video_url ? '<a class="douyin-desk-item-link" href="' + escapeHtml(item.video_url) + '" target="_blank" rel="noopener noreferrer">打开 / 下载</a>' : '')
+            + (item.video_url
+                ? '<div class="douyin-desk-item-actions"><button type="button" class="douyin-desk-imitation" data-douyin-dl="' + escapeHtml(item.task_id || '') + '">下载成片</button>'
+                  + (item.asset_id ? '<span class="douyin-desk-item-status">已入库</span>' : '')
+                  + '<a class="douyin-desk-item-link" href="' + escapeHtml(item.video_url) + '" target="_blank" rel="noopener noreferrer">在浏览器打开</a></div>'
+                : '')
             + '</article>';
         }).join('');
         content.innerHTML = '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>生成历史</h3>'
@@ -177,11 +184,26 @@
     return '<article class="douyin-desk-item">' + cover + body + actions + '</article>';
   }
 
+  function bindDownloadButtons(root) {
+    if (!root) return;
+    root.querySelectorAll('[data-douyin-dl]').forEach(function(button) {
+      if (button.dataset.bound) return;
+      button.dataset.bound = '1';
+      button.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        downloadImitation(button.getAttribute('data-douyin-dl'),
+                          button.getAttribute('data-douyin-name') || '');
+      });
+    });
+  }
+
   function bindCards(root) {
     if (!root) return;
     root.querySelectorAll('.douyin-desk-cover').forEach(function(image) {
       image.addEventListener('error', function() { image.style.display = 'none'; });
     });
+    bindDownloadButtons(root);
     root.querySelectorAll('[data-douyin-imitation]').forEach(function(button) {
       button.addEventListener('click', function(event) {
         event.preventDefault();
@@ -250,6 +272,44 @@
     return headers;
   }
 
+  // 成片下载：走 /imitation/{task_id}/download（带 attachment 头），不是打开原视频链接
+  function downloadImitation(taskId, name) {
+    if (!taskId) return;
+    var url = baseUrl() + '/api/douyin/platform-information-desk/imitation/' + encodeURIComponent(taskId) + '/download';
+    fetch(url, { headers: uploadHeaders() })
+      .then(function(response) {
+        if (!response.ok) {
+          return response.json().catch(function() { return {}; }).then(function(data) {
+            throw new Error(errorText(data && data.detail) || ('下载失败 HTTP ' + response.status));
+          });
+        }
+        return response.blob();
+      })
+      .then(function(blob) {
+        var objectUrl = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = String(name || ('douyin-imitation-' + taskId)).replace(/[\\/:*?"<>|]/g, '_') + '.mp4';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(function() { try { URL.revokeObjectURL(objectUrl); } catch (e) {} }, 60000);
+      })
+      .catch(function(err) {
+        console.warn('[douyin-desk] download failed', err);
+        var box = document.getElementById('douyinDeskLast');
+        if (box) {
+          var tip = box.querySelector('.douyin-desk-last-tip');
+          if (!tip) {
+            tip = document.createElement('div');
+            tip.className = 'douyin-desk-last-tip';
+            box.appendChild(tip);
+          }
+          tip.textContent = '下载失败：' + errorText(err);
+        }
+      });
+  }
+
   function uploadReference(file) {
     var form = new FormData();
     form.append('file', file, file.name || 'imitation-image');
@@ -275,14 +335,18 @@
         return response.json().catch(function() { return {}; }).then(function(data) {
           if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
           if (data.status === 'SUCCESS' && data.video_url) {
+            var playable = String(data.stored_url || data.video_url || '');
             if (state.lastTask && state.lastTask.taskId === taskId) {
-              state.lastTask = { taskId: taskId, title: state.lastTask.title, status: 'SUCCESS', videoUrl: data.video_url };
+              state.lastTask = { taskId: taskId, title: state.lastTask.title, status: 'SUCCESS',
+                                 videoUrl: playable, assetId: data.asset_id || '' };
               renderLastTask();
             }
-            if (statusEl) statusEl.textContent = '已完成';
+            if (statusEl) statusEl.textContent = data.asset_id ? '已完成（已入库）' : '已完成';
             if (resultEl) {
-              resultEl.innerHTML = '<video controls playsinline preload="metadata" src="' + escapeHtml(data.video_url) + '"></video>'
-                + '<a class="douyin-desk-item-link" href="' + escapeHtml(data.video_url) + '" target="_blank" rel="noopener noreferrer">打开 / 下载</a>';
+              resultEl.innerHTML = '<video controls playsinline preload="metadata" src="' + escapeHtml(playable) + '"></video>'
+                + '<div class="douyin-desk-item-actions"><button type="button" class="douyin-desk-imitation" data-douyin-dl="' + escapeHtml(taskId) + '">下载成片</button>'
+                + '<a class="douyin-desk-item-link" href="' + escapeHtml(playable) + '" target="_blank" rel="noopener noreferrer">在浏览器打开</a></div>';
+              bindDownloadButtons(resultEl);
             }
             return;
           }
