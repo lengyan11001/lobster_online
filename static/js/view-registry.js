@@ -67,7 +67,7 @@
 
   window.registerLobsterView('wechat-article', {
     html: '/static/views/wechat-article.html',
-    scripts: '/static/js/wechat-article.js?v=20260814-wechat-image-style',
+    scripts: '/static/js/wechat-article.js?v=20260927-remix-material-guard',
     init: 'loadWechatArticlePage',
     cache: 'reload'
   });

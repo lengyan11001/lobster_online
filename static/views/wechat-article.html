@@ -145,148 +145,12 @@
             </div>
             <p id="wechatRemixSourceMeta" class="meta" style="margin:0.35rem 0 0;">粘贴一条公众号文章链接，先抓正文确认能拿到内容。</p>
           </div>
-          <p class="meta" style="margin:0 0 0.6rem;">资料用你 IP 人设模板里选好的（记忆文件 / 资料调查）；模板里没选会提交失败，请先到「个人设置」给模板选好资料。</p>
-          <div class="btns wechat-article-primary-actions">
-            <button type="button" id="wechatArticleGenerateBtn" class="btn btn-primary">AI 生成文章</button>
-            <button type="button" id="wechatArticleRefreshPreviewBtn" class="btn btn-ghost" disabled>刷新预览</button>
-            <button type="button" id="wechatArticleDraftBtn" class="btn btn-ghost" disabled>推送草稿箱</button>
-          </div>
-          <div id="wechatArticleGeneratedMeta" class="wechat-article-generated-meta">
-            <p class="meta">生成后会在右侧显示公众号效果，确认后再推送草稿箱。</p>
-          </div>
-        </div>
-
-        <div class="wechat-article-preview-wrap">
-          <div class="wechat-article-preview-head">
-            <strong id="wechatArticlePreviewTitle">公众号预览</strong>
-            <span id="wechatArticlePreviewMeta" class="meta"></span>
-          </div>
-          <div id="wechatArticlePreview" class="wechat-article-preview">
-            <div class="wechat-article-empty-preview">
-              <strong>等待生成</strong>
-              <p>左侧输入主题或想法后，AI 会自动生成文章并完成公众号排版。</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div id="wechatArticlePanelRemix" class="wechat-article-panel" style="display:none;">
-      <div class="wechat-article-compose-grid">
-        <div class="wechat-article-editor">
-          <div class="form-row">
-            <label>公众号文章链接（参考它的写法）</label>
-            <div class="wechat-article-inline" style="align-items:flex-end;">
-              <input type="text" id="wechatRemixUrl" placeholder="https://mp.weixin.qq.com/s/..." autocomplete="off">
-              <button type="button" id="wechatRemixFetchBtn" class="btn btn-ghost btn-sm" style="white-space:nowrap;">抓正文</button>
-            </div>
-            <p id="wechatRemixSourceMeta" class="meta" style="margin:0.35rem 0 0;">粘贴一条公众号文章链接，先抓正文确认能拿到内容。</p>
-          </div>
-          <div class="form-row">
-            <label>结合的资料（下拉多选：记忆文件 + 资料调查；不选=用全部记忆）</label>
-            <div class="btns" style="margin:0 0 0.4rem;">
-              <button type="button" id="wechatRemixSourceReloadBtn" class="btn btn-ghost btn-sm">刷新</button>
-              <button type="button" id="wechatRemixSourceAllBtn" class="btn btn-ghost btn-sm">全选</button>
-              <button type="button" id="wechatRemixSourceNoneBtn" class="btn btn-ghost btn-sm">清空</button>
-            </div>
-            <select id="wechatRemixSources" multiple size="8" style="width:100%"></select>
-            <p id="wechatRemixSourceHint" class="meta" style="margin:0.35rem 0 0;">正在加载资料…</p>
-          </div>
-          <div class="btns wechat-article-primary-actions">
-            <button type="button" id="wechatArticleGenerateBtn" class="btn btn-primary">AI 生成文章</button>
-            <button type="button" id="wechatArticleRefreshPreviewBtn" class="btn btn-ghost" disabled>刷新预览</button>
-            <button type="button" id="wechatArticleDraftBtn" class="btn btn-ghost" disabled>推送草稿箱</button>
-          </div>
-          <div id="wechatArticleGeneratedMeta" class="wechat-article-generated-meta">
-            <p class="meta">生成后会在右侧显示公众号效果，确认后再推送草稿箱。</p>
-          </div>
-        </div>
-
-        <div class="wechat-article-preview-wrap">
-          <div class="wechat-article-preview-head">
-            <strong id="wechatArticlePreviewTitle">公众号预览</strong>
-            <span id="wechatArticlePreviewMeta" class="meta"></span>
-          </div>
-          <div id="wechatArticlePreview" class="wechat-article-preview">
-            <div class="wechat-article-empty-preview">
-              <strong>等待生成</strong>
-              <p>左侧输入主题或想法后，AI 会自动生成文章并完成公众号排版。</p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div id="wechatArticlePanelRemix" class="wechat-article-panel" style="display:none;">
-      <div class="wechat-article-compose-grid">
-        <div class="wechat-article-editor">
-          <div class="form-row">
-            <label>公众号文章链接（参考它的写法）</label>
-            <div class="wechat-article-inline" style="align-items:flex-end;">
-              <input type="text" id="wechatRemixUrl" placeholder="https://mp.weixin.qq.com/s/..." autocomplete="off">
-              <button type="button" id="wechatRemixFetchBtn" class="btn btn-ghost btn-sm" style="white-space:nowrap;">抓正文</button>
-            </div>
-            <p id="wechatRemixSourceMeta" class="meta" style="margin:0.35rem 0 0;">粘贴一条公众号文章链接，先抓正文确认能拿到内容。</p>
-          </div>
-          <div class="form-row">
-            <label>结合的记忆资料（不选=用全部记忆）</label>
-            <div class="btns" style="margin:0 0 0.4rem;">
-              <button type="button" id="wechatRemixMemoryAllBtn" class="btn btn-ghost btn-sm">全选</button>
-              <button type="button" id="wechatRemixMemoryNoneBtn" class="btn btn-ghost btn-sm">清空</button>
-              <button type="button" id="wechatRemixMemoryReloadBtn" class="btn btn-ghost btn-sm">刷新记忆</button>
-            </div>
-            <div id="wechatRemixMemoryList" class="wechat-article-selected-images"><p class="meta">正在加载记忆资料…</p></div>
-          </div>
-          <div class="form-row">
-            <label>额外要求（可空）</label>
-            <textarea id="wechatRemixExtra" rows="3" placeholder="例如：站在我们客户（餐饮老板）视角写，结尾加行动建议；不要提竞品。"></textarea>
-          </div>
-          <div class="wechat-article-inline">
-            <div class="form-row">
-              <label>目标读者</label>
-              <input type="text" id="wechatRemixAudience" placeholder="例如：餐饮老板、门店运营" autocomplete="off">
-            </div>
-            <div class="form-row">
-              <label>写作风格</label>
-              <select id="wechatRemixStyle">
-                <option value="专业、有观点、适合公众号阅读">专业观点</option>
-                <option value="简洁大气、商业分析、少废话">简洁商业</option>
-                <option value="亲切、有案例、有行动建议">亲切实用</option>
-                <option value="爆款标题感、节奏快、转化导向">转化导向</option>
-              </select>
-            </div>
-          </div>
-          <div class="wechat-article-inline">
-            <div class="form-row">
-              <label>排版主题</label>
-              <select id="wechatRemixTheme">
-                <option value="professional-clean">专业清爽</option>
-                <option value="minimal-gold">极简金色</option>
-                <option value="warm-editorial">暖色杂志</option>
-              </select>
-            </div>
-            <div class="form-row">
-              <label>自动配图</label>
-              <select id="wechatRemixImages">
-                <option value="1">生成配图</option>
-                <option value="0">不配图</option>
-              </select>
-            </div>
-            <div class="form-row">
-              <label>配图张数</label>
-              <select id="wechatRemixImageCount">
-                <option value="2">2 张</option>
-                <option value="3" selected>3 张</option>
-                <option value="4">4 张</option>
-              </select>
-            </div>
-          </div>
           <div class="btns wechat-article-primary-actions">
             <button type="button" id="wechatRemixGenerateBtn" class="btn btn-primary">生成复刻文章</button>
             <button type="button" id="wechatRemixPushBtn" class="btn btn-ghost" disabled>推送草稿箱</button>
           </div>
           <div class="wechat-article-generated-meta">
-            <p class="meta">复刻=沿用原文的行文逻辑与结构，事实用你的记忆资料，配图与排版跟 AI 创作一致。</p>
+            <p class="meta">复刻 = 沿用原文的行文逻辑与结构，事实只用你 IP 人设模板里选好的资料（记忆文件 / 资料调查）；模板里没选会在生成前拦住，请先到「个人设置 → 个人记忆 / 资料调查」给模板选好资料。</p>
           </div>
         </div>
 
@@ -298,7 +162,7 @@
           <div id="wechatRemixPreview" class="wechat-article-preview">
             <div class="wechat-article-empty-preview">
               <strong>等待复刻</strong>
-              <p>贴一条公众号文章链接，AI 会按它的写法，用你的资料写一篇新文章。</p>
+              <p>贴一条公众号文章链接，AI 会按它的写法，用你模板里选好的资料写一篇新文章。</p>
             </div>
           </div>
         </div>

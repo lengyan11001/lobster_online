@@ -641,6 +641,51 @@
       });
   }
 
+  var REMIX_NO_MATERIAL_MSG = 'IP 人设模板里还没有选资料（记忆文件 / 资料调查）：请先到「个人设置 → 个人记忆 / 资料调查」给模板选好资料，再回来做复刻。';
+
+  function remixRowHasMaterial(row) {
+    var data = row && typeof row === 'object' ? row : {};
+    var ids = Array.isArray(data.memory_doc_ids)
+      ? data.memory_doc_ids.filter(function(x) { return String(x || '').trim(); })
+      : [];
+    var req = data.requirements;
+    var hasReq = req && typeof req === 'object' ? Object.keys(req).length > 0 : !!String(req || '').trim();
+    return !!(ids.length || String(data.survey_id || '').trim() || hasReq);
+  }
+
+  // 复刻资料 = IP 人设模板里选好的（当前模板 → 没设当前模板时用默认配置行），不兜底、不默认全带
+  function ensureRemixTemplateMaterial() {
+    return Promise.all([
+      fetch(apiUrl('/api/ip-content/personal-default'), { headers: hdrs() })
+        .then(function(r) { return r.ok ? r.json() : {}; }).catch(function() { return {}; }),
+      fetch(apiUrl('/api/ip-content/schedule-templates'), { headers: hdrs() })
+        .then(function(r) { return r.ok ? r.json() : {}; }).catch(function() { return {}; })
+    ]).then(function(res) {
+      var item = (res[0] && res[0].item) || {};
+      var rows = (res[1] && Array.isArray(res[1].items)) ? res[1].items : [];
+      var meta = (item.meta && typeof item.meta === 'object') ? item.meta : {};
+      var currentId = String(meta.current_template_id || '').trim();
+      var chosen = item;
+      var i;
+      if (currentId) {
+        for (i = 0; i < rows.length; i++) {
+          if (String((rows[i] && rows[i].id) || '') === currentId) { chosen = rows[i]; break; }
+        }
+      } else {
+        for (i = 0; i < rows.length; i++) {
+          var rowMeta = (rows[i] && rows[i].meta && typeof rows[i].meta === 'object') ? rows[i].meta : {};
+          if (String(rowMeta.source || '') === 'online_personal_profile'
+            || String((rows[i] && rows[i].name) || '').indexOf('默认') >= 0) {
+            chosen = rows[i];
+            break;
+          }
+        }
+      }
+      if (!remixRowHasMaterial(chosen)) throw new Error(REMIX_NO_MATERIAL_MSG);
+      return chosen;
+    });
+  }
+
   function fetchRemixSource() {
     var url = field('wechatRemixUrl') ? field('wechatRemixUrl').value.trim() : '';
     var meta = field('wechatRemixSourceMeta');
@@ -678,10 +723,20 @@
     var url = field('wechatRemixUrl') ? field('wechatRemixUrl').value.trim() : '';
     if (!url) { showMsg('请先粘贴公众号文章链接。', true); return; }
     var btn = field('wechatRemixGenerateBtn');
-    setBusy(btn, true, '复刻中…');
+    setBusy(btn, true, '检查模板…');
     showMsg('', false);
+    ensureRemixTemplateMaterial()
+      .then(function() { runRemixGenerate(url, btn); })
+      .catch(function(err) {
+        showMsg(err && err.message ? err.message : '模板资料检查失败', true);
+        setBusy(btn, false);
+      });
+  }
+
+  function runRemixGenerate(url, btn) {
+    setBusy(btn, true, '复刻中…');
     if (field('wechatRemixPreview')) {
-      field('wechatRemixPreview').innerHTML = '<div class="wechat-article-empty-preview"><strong>正在复刻</strong><p>先抓参考文章，再用你的 IP 人设默认模板（记忆 + 资料调查）重写并排版。</p></div>';
+      field('wechatRemixPreview').innerHTML = '<div class="wechat-article-empty-preview"><strong>正在复刻</strong><p>先用你 IP 人设模板里选好的资料（记忆文件 / 资料调查）重写，再按原文逻辑排版配图。</p></div>';
     }
     fetch(apiUrl('/api/wechat-article/generate'), {
       method: 'POST',
