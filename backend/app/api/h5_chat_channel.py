@@ -780,6 +780,32 @@ def _build_publish_account_snapshot(jwt_token: str) -> List[Dict[str, Any]]:
         db.close()
 
 
+_wechat_contacts_heartbeat_state: Dict[str, Any] = {"hash": "", "sent": False}
+
+
+def _wechat_contacts_for_heartbeat() -> Optional[List[Dict[str, str]]]:
+    """通讯录只在变化后随心跳上报一次，没变就省略（服务端保留上一份快照）。
+
+    避免明文联系方式在每次心跳/状态轮询里反复搬运；需要时由
+    /api/h5-chat/wechat-contacts 按需拉取服务端已存的快照。
+    """
+    try:
+        contacts = _build_native_wechat_contact_snapshot()
+    except Exception:
+        return None
+    try:
+        payload_hash = hashlib.sha256(
+            json.dumps(contacts, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+    except Exception:
+        return contacts
+    if payload_hash == _wechat_contacts_heartbeat_state["hash"] and _wechat_contacts_heartbeat_state["sent"]:
+        return None
+    _wechat_contacts_heartbeat_state["hash"] = payload_hash
+    _wechat_contacts_heartbeat_state["sent"] = True
+    return contacts
+
+
 def _build_native_wechat_contact_snapshot() -> List[Dict[str, str]]:
     try:
         rows = native_wechat_engine.list_contacts(
@@ -1118,10 +1144,12 @@ async def refresh_h5_chat_device_heartbeat(
     payload = {
         "display_name": "local-online",
         "publish_accounts": _build_publish_account_snapshot(jwt_token),
-        "wechat_contacts": _build_native_wechat_contact_snapshot(),
         "capabilities": _h5_client_capabilities(),
         "remote_support": _remote_support_snapshot(),
     }
+    contacts = _wechat_contacts_for_heartbeat()
+    if contacts is not None:
+        payload["wechat_contacts"] = contacts
     return await _proxy_cloud_json(
         request,
         "POST",
@@ -13587,15 +13615,18 @@ async def h5_chat_poll_loop() -> None:
                 await _flush_task_control_outbox(client, headers)
                 now_loop = asyncio.get_event_loop().time()
                 if now_loop - last_heartbeat_at >= heartbeat_interval:
+                    heartbeat_payload = {
+                        "display_name": "local-online",
+                        "publish_accounts": _build_publish_account_snapshot(jwt_token),
+                        "capabilities": _h5_client_capabilities(),
+                        "remote_support": _remote_support_snapshot(),
+                    }
+                    contacts = _wechat_contacts_for_heartbeat()
+                    if contacts is not None:
+                        heartbeat_payload["wechat_contacts"] = contacts
                     heartbeat_resp = await client.post(
                         f"{base}/api/h5-chat/device-heartbeat",
-                        json={
-                            "display_name": "local-online",
-                            "publish_accounts": _build_publish_account_snapshot(jwt_token),
-                            "wechat_contacts": _build_native_wechat_contact_snapshot(),
-                            "capabilities": _h5_client_capabilities(),
-                            "remote_support": _remote_support_snapshot(),
-                        },
+                        json=heartbeat_payload,
                         headers=headers,
                     )
                     if heartbeat_resp.status_code == 401:
