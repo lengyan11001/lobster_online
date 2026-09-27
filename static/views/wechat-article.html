@@ -145,6 +145,89 @@
             </div>
             <p id="wechatRemixSourceMeta" class="meta" style="margin:0.35rem 0 0;">粘贴一条公众号文章链接，先抓正文确认能拿到内容。</p>
           </div>
+          <p class="meta" style="margin:0 0 0.6rem;">不用选资料：AI 会自动用你的 IP 人设默认模板（记忆 + 资料调查）结合抓到的正文来写。</p>
+          <div class="btns wechat-article-primary-actions">
+            <button type="button" id="wechatArticleGenerateBtn" class="btn btn-primary">AI 生成文章</button>
+            <button type="button" id="wechatArticleRefreshPreviewBtn" class="btn btn-ghost" disabled>刷新预览</button>
+            <button type="button" id="wechatArticleDraftBtn" class="btn btn-ghost" disabled>推送草稿箱</button>
+          </div>
+          <div id="wechatArticleGeneratedMeta" class="wechat-article-generated-meta">
+            <p class="meta">生成后会在右侧显示公众号效果，确认后再推送草稿箱。</p>
+          </div>
+        </div>
+
+        <div class="wechat-article-preview-wrap">
+          <div class="wechat-article-preview-head">
+            <strong id="wechatArticlePreviewTitle">公众号预览</strong>
+            <span id="wechatArticlePreviewMeta" class="meta"></span>
+          </div>
+          <div id="wechatArticlePreview" class="wechat-article-preview">
+            <div class="wechat-article-empty-preview">
+              <strong>等待生成</strong>
+              <p>左侧输入主题或想法后，AI 会自动生成文章并完成公众号排版。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="wechatArticlePanelRemix" class="wechat-article-panel" style="display:none;">
+      <div class="wechat-article-compose-grid">
+        <div class="wechat-article-editor">
+          <div class="form-row">
+            <label>公众号文章链接（参考它的写法）</label>
+            <div class="wechat-article-inline" style="align-items:flex-end;">
+              <input type="text" id="wechatRemixUrl" placeholder="https://mp.weixin.qq.com/s/..." autocomplete="off">
+              <button type="button" id="wechatRemixFetchBtn" class="btn btn-ghost btn-sm" style="white-space:nowrap;">抓正文</button>
+            </div>
+            <p id="wechatRemixSourceMeta" class="meta" style="margin:0.35rem 0 0;">粘贴一条公众号文章链接，先抓正文确认能拿到内容。</p>
+          </div>
+          <div class="form-row">
+            <label>结合的资料（下拉多选：记忆文件 + 资料调查；不选=用全部记忆）</label>
+            <div class="btns" style="margin:0 0 0.4rem;">
+              <button type="button" id="wechatRemixSourceReloadBtn" class="btn btn-ghost btn-sm">刷新</button>
+              <button type="button" id="wechatRemixSourceAllBtn" class="btn btn-ghost btn-sm">全选</button>
+              <button type="button" id="wechatRemixSourceNoneBtn" class="btn btn-ghost btn-sm">清空</button>
+            </div>
+            <select id="wechatRemixSources" multiple size="8" style="width:100%"></select>
+            <p id="wechatRemixSourceHint" class="meta" style="margin:0.35rem 0 0;">正在加载资料…</p>
+          </div>
+          <div class="btns wechat-article-primary-actions">
+            <button type="button" id="wechatArticleGenerateBtn" class="btn btn-primary">AI 生成文章</button>
+            <button type="button" id="wechatArticleRefreshPreviewBtn" class="btn btn-ghost" disabled>刷新预览</button>
+            <button type="button" id="wechatArticleDraftBtn" class="btn btn-ghost" disabled>推送草稿箱</button>
+          </div>
+          <div id="wechatArticleGeneratedMeta" class="wechat-article-generated-meta">
+            <p class="meta">生成后会在右侧显示公众号效果，确认后再推送草稿箱。</p>
+          </div>
+        </div>
+
+        <div class="wechat-article-preview-wrap">
+          <div class="wechat-article-preview-head">
+            <strong id="wechatArticlePreviewTitle">公众号预览</strong>
+            <span id="wechatArticlePreviewMeta" class="meta"></span>
+          </div>
+          <div id="wechatArticlePreview" class="wechat-article-preview">
+            <div class="wechat-article-empty-preview">
+              <strong>等待生成</strong>
+              <p>左侧输入主题或想法后，AI 会自动生成文章并完成公众号排版。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="wechatArticlePanelRemix" class="wechat-article-panel" style="display:none;">
+      <div class="wechat-article-compose-grid">
+        <div class="wechat-article-editor">
+          <div class="form-row">
+            <label>公众号文章链接（参考它的写法）</label>
+            <div class="wechat-article-inline" style="align-items:flex-end;">
+              <input type="text" id="wechatRemixUrl" placeholder="https://mp.weixin.qq.com/s/..." autocomplete="off">
+              <button type="button" id="wechatRemixFetchBtn" class="btn btn-ghost btn-sm" style="white-space:nowrap;">抓正文</button>
+            </div>
+            <p id="wechatRemixSourceMeta" class="meta" style="margin:0.35rem 0 0;">粘贴一条公众号文章链接，先抓正文确认能拿到内容。</p>
+          </div>
           <div class="form-row">
             <label>结合的记忆资料（不选=用全部记忆）</label>
             <div class="btns" style="margin:0 0 0.4rem;">

@@ -11,7 +11,7 @@
     source: null,
     generated: null,
     memoryDocs: [],
-    memorySelected: {}
+    surveys: []
   };
 
   function apiBase() {
@@ -172,7 +172,6 @@
       var panel = field('wechatArticlePanel' + k.charAt(0).toUpperCase() + k.slice(1));
       if (panel) panel.style.display = k === tab ? '' : 'none';
     });
-    if (tab === 'remix') loadRemixMemory();
     if (tab === 'drafts') loadDrafts();
     if (tab === 'settings') loadConfig();
   }
@@ -642,51 +641,6 @@
       });
   }
 
-  function remixMemoryIds() {
-    return Object.keys(remix.memorySelected).filter(function(id) { return !!remix.memorySelected[id]; });
-  }
-
-  function renderRemixMemory() {
-    var box = field('wechatRemixMemoryList');
-    if (!box) return;
-    if (!remix.memoryDocs.length) {
-      box.innerHTML = '<p class="meta">还没有记忆资料。可以到「个人记忆」上传资料后刷新；不选也能复刻（只用参考文章的结构）。</p>';
-      return;
-    }
-    box.innerHTML = remix.memoryDocs.map(function(doc) {
-      var id = String(doc.id || '');
-      var title = doc.title || doc.filename || id;
-      var meta = [doc.filename || '', doc.created_at || ''].filter(Boolean).join(' · ');
-      var checked = remix.memorySelected[id] ? ' checked' : '';
-      return '<label class="wechat-remix-memory-option" style="display:flex;gap:0.5rem;align-items:flex-start;padding:0.35rem 0;">'
-        + '<input type="checkbox" data-remix-memory-id="' + escapeHtml(id) + '"' + checked + '>'
-        + '<span><strong>' + escapeHtml(title) + '</strong>'
-        + (meta ? '<br><small class="meta">' + escapeHtml(meta) + '</small>' : '')
-        + '</span></label>';
-    }).join('');
-    box.querySelectorAll('[data-remix-memory-id]').forEach(function(input) {
-      input.addEventListener('change', function() {
-        var id = input.getAttribute('data-remix-memory-id') || '';
-        remix.memorySelected[id] = !!input.checked;
-      });
-    });
-  }
-
-  function loadRemixMemory() {
-    var box = field('wechatRemixMemoryList');
-    if (box && !remix.memoryDocs.length) box.innerHTML = '<p class="meta">正在加载记忆资料…</p>';
-    return fetch(apiUrl('/api/openclaw/memory/list'), { headers: typeof authHeaders === 'function' ? authHeaders() : {} })
-      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
-      .then(function(x) {
-        if (!x.ok || !x.data || x.data.ok === false) throw new Error((x.data && x.data.detail) || '记忆列表加载失败');
-        remix.memoryDocs = Array.isArray(x.data.documents) ? x.data.documents : [];
-        renderRemixMemory();
-      })
-      .catch(function(err) {
-        if (box) box.innerHTML = '<p class="meta">' + escapeHtml(err && err.message ? err.message : '记忆列表加载失败') + '</p>';
-      });
-  }
-
   function fetchRemixSource() {
     var url = field('wechatRemixUrl') ? field('wechatRemixUrl').value.trim() : '';
     var meta = field('wechatRemixSourceMeta');
@@ -723,29 +677,24 @@
   function generateRemix() {
     var url = field('wechatRemixUrl') ? field('wechatRemixUrl').value.trim() : '';
     if (!url) { showMsg('请先粘贴公众号文章链接。', true); return; }
-    var wantsImages = (field('wechatRemixImages') ? field('wechatRemixImages').value : '1') === '1';
-    var imageCount = parseInt((field('wechatRemixImageCount') && field('wechatRemixImageCount').value) || '3', 10) || 3;
     var btn = field('wechatRemixGenerateBtn');
     setBusy(btn, true, '复刻中…');
     showMsg('', false);
     if (field('wechatRemixPreview')) {
-      field('wechatRemixPreview').innerHTML = '<div class="wechat-article-empty-preview"><strong>正在复刻</strong><p>先抓参考文章，再用你的记忆资料重写并排版。</p></div>';
+      field('wechatRemixPreview').innerHTML = '<div class="wechat-article-empty-preview"><strong>正在复刻</strong><p>先抓参考文章，再用你的 IP 人设默认模板（记忆 + 资料调查）重写并排版。</p></div>';
     }
     fetch(apiUrl('/api/wechat-article/generate'), {
       method: 'POST',
       headers: hdrs(),
       body: JSON.stringify({
         source_url: url,
-        memory_document_ids: remixMemoryIds(),
-        extra_material: field('wechatRemixExtra') ? field('wechatRemixExtra').value.trim() : '',
-        idea: (remix.source && remix.source.title) || '',
-        audience: field('wechatRemixAudience') ? field('wechatRemixAudience').value.trim() : '',
-        style: field('wechatRemixStyle') ? field('wechatRemixStyle').value : '专业、有观点、适合公众号阅读',
-        theme: field('wechatRemixTheme') ? field('wechatRemixTheme').value : 'professional-clean',
-        include_images: wantsImages,
+        idea: '',
+        style: '专业、有观点、适合公众号阅读',
+        theme: 'professional-clean',
+        include_images: true,
         image_model: 'gpt-image-2',
         image_aspect_ratio: '16:9',
-        image_count: imageCount
+        image_count: 3
       })
     })
       .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
@@ -831,15 +780,6 @@
     field('wechatRemixFetchBtn') && field('wechatRemixFetchBtn').addEventListener('click', fetchRemixSource);
     field('wechatRemixGenerateBtn') && field('wechatRemixGenerateBtn').addEventListener('click', generateRemix);
     field('wechatRemixPushBtn') && field('wechatRemixPushBtn').addEventListener('click', pushRemixDraft);
-    field('wechatRemixMemoryReloadBtn') && field('wechatRemixMemoryReloadBtn').addEventListener('click', function() { remix.memoryDocs = []; loadRemixMemory(); });
-    field('wechatRemixMemoryAllBtn') && field('wechatRemixMemoryAllBtn').addEventListener('click', function() {
-      remix.memoryDocs.forEach(function(doc) { remix.memorySelected[String(doc.id || '')] = true; });
-      renderRemixMemory();
-    });
-    field('wechatRemixMemoryNoneBtn') && field('wechatRemixMemoryNoneBtn').addEventListener('click', function() {
-      remix.memorySelected = {};
-      renderRemixMemory();
-    });
     field('wechatArticleEditToggle') && field('wechatArticleEditToggle').addEventListener('change', function() {
       setEditVisible(!!field('wechatArticleEditToggle').checked);
     });

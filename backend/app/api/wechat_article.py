@@ -93,6 +93,9 @@ class WechatArticleGenerateIn(BaseModel):
     idea: str = Field("", description="用户输入的公众号主题、想法或素材")
     source_url: str = Field("", description="复刻模式：要参考的公众号文章链接（mp.weixin.qq.com/s/...）")
     memory_document_ids: List[str] = Field(default_factory=list, description="复刻模式：使用哪些记忆资料；留空=全部记忆")
+    memory_document_titles: List[str] = Field(default_factory=list, description="复刻模式：记忆资料标题（id 对不上时按标题兜底匹配）")
+    survey_ids: List[str] = Field(default_factory=list, description="复刻模式：使用哪些资料调查（IP 内容调研问卷）")
+    survey_names: List[str] = Field(default_factory=list, description="复刻模式：资料调查名称（兜底展示/匹配）")
     extra_material: str = Field("", description="复刻模式：额外补充要点/要求")
     style: str = "专业、有观点、适合公众号阅读"
     audience: str = ""
@@ -126,6 +129,9 @@ class WechatArticlePipelineIn(BaseModel):
     topic: str = ""
     source_url: str = Field("", description="复刻模式：要参考的公众号文章链接")
     memory_document_ids: List[str] = Field(default_factory=list, description="复刻模式：使用哪些记忆资料；留空=全部记忆")
+    memory_document_titles: List[str] = Field(default_factory=list, description="复刻模式：记忆资料标题（id 对不上时按标题兜底匹配）")
+    survey_ids: List[str] = Field(default_factory=list, description="复刻模式：使用哪些资料调查（IP 内容调研问卷）")
+    survey_names: List[str] = Field(default_factory=list, description="复刻模式：资料调查名称（兜底展示/匹配）")
     extra_material: str = Field("", description="复刻模式：额外补充要点/要求")
     style: str = "专业、有观点、适合公众号阅读"
     audience: str = ""
@@ -728,8 +734,12 @@ async def _fetch_official_article(url: str) -> Dict[str, Any]:
     }
 
 
-def _memory_material_text(user_id: int, doc_ids: Optional[List[str]] = None, *, limit: int = 6000) -> str:
-    """取用户的记忆资料作为复刻的事实来源：指定 doc_ids 就只取那几份，否则用全部记忆。"""
+def _memory_material_text(user_id: int, doc_ids: Optional[List[str]] = None, *,
+                          doc_titles: Optional[List[str]] = None, limit: int = 6000) -> str:
+    """取用户的记忆资料作为复刻的事实来源：指定 doc_ids 就只取那几份，否则用全部记忆。
+
+    H5 与客户端的记忆同源（OpenClawMemoryDocument），万一对不上 id 就按标题兜底匹配一次。
+    """
     if not user_id:
         return ""
     try:
@@ -742,6 +752,11 @@ def _memory_material_text(user_id: int, doc_ids: Optional[List[str]] = None, *, 
         if wanted:
             docs = _load_index(int(user_id))
             picked = [d for d in docs if str(d.get("id") or "") in wanted]
+            if not picked:
+                titles = {str(t).strip().lower() for t in (doc_titles or []) if str(t).strip()}
+                if titles:
+                    picked = [d for d in docs
+                              if str(d.get("title") or d.get("filename") or "").strip().lower() in titles]
             parts = []
             for doc in picked:
                 head = str(doc.get("title") or doc.get("filename") or doc.get("id") or "资料")
@@ -751,6 +766,64 @@ def _memory_material_text(user_id: int, doc_ids: Optional[List[str]] = None, *, 
     except Exception as exc:  # noqa: BLE001
         logger.warning("[wechat-article] memory material load failed user_id=%s err=%s", user_id, exc)
         return ""
+
+
+def _flatten_survey(value: Any, depth: int = 0) -> str:
+    """把资料调查的 JSON 答案摊平成文本（字段名未知也能用）。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [_flatten_survey(item, depth + 1) for item in value]
+        return "、".join(part for part in parts if part)
+    if isinstance(value, dict) and depth < 3:
+        lines = []
+        for key, item in value.items():
+            text = _flatten_survey(item, depth + 1)
+            if text:
+                lines.append(f"- {key}: {text}")
+        return "\n".join(lines)
+    return ""
+
+
+def _survey_material_text(user_id: int, survey_ids: Optional[List[str]] = None, *, limit: int = 4000) -> str:
+    """资料调查（IP 内容调研问卷）-> 文本，作为复刻的事实来源之一。"""
+    ids: List[int] = []
+    for raw in (survey_ids or []):
+        try:
+            ids.append(int(str(raw).strip()))
+        except (TypeError, ValueError):
+            continue
+    if not user_id:
+        return ""
+    try:
+        from ..db import SessionLocal
+        from ..models import IPContentProfileSurvey
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[wechat-article] survey model import failed: %s", exc)
+        return ""
+    db = SessionLocal()
+    try:
+        query = (db.query(IPContentProfileSurvey)
+                 .filter(IPContentProfileSurvey.user_id == int(user_id)))
+        if ids:
+            query = query.filter(IPContentProfileSurvey.id.in_(ids))
+        # 没选就带上全部（最近 5 份）——"选不选都行"
+        rows = query.order_by(IPContentProfileSurvey.updated_at.desc()).limit(5).all()
+        parts = []
+        for row in rows:
+            head = str(getattr(row, "name", "") or "资料调查")
+            body = _flatten_survey(getattr(row, "requirements", None))
+            parts.append(f"【资料调查：{head}】\n{body}" if body else f"【资料调查：{head}】")
+        return "\n\n".join(parts)[:limit]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[wechat-article] survey material load failed user_id=%s err=%s", user_id, exc)
+        return ""
+    finally:
+        db.close()
 
 
 async def _call_article_remix_writer(
@@ -1694,9 +1767,14 @@ async def generate_wechat_article(
     try:
         if source is not None:
             memory_text = _memory_material_text(current_user.id if current_user else 0,
-                                                body.memory_document_ids)
+                                                body.memory_document_ids,
+                                                doc_titles=body.memory_document_titles)
+            survey_text = _survey_material_text(current_user.id if current_user else 0,
+                                                getattr(body, "survey_ids", []))
+            if survey_text:
+                memory_text = (memory_text + "\n\n" + survey_text).strip()
             if not memory_text:
-                warnings.append("没读到记忆资料，本次只按参考文章的结构写通用内容（建议先在个人记忆里上传资料）。")
+                warnings.append("没读到记忆/资料调查，本次只按参考文章的结构写通用内容（建议先在个人记忆或资料调查里填内容）。")
             article = await _call_article_remix_writer(body, source, memory_text, token, installation_id)
         else:
             article = await _call_article_writer(body, token, installation_id)
