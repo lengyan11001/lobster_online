@@ -5,8 +5,13 @@
       <h2>抖音平台信息台</h2>
       <p id="douyinDeskFetchedAt">正在读取服务器快照...</p>
     </div>
-    <button type="button" class="btn btn-ghost" id="douyinDeskRefreshBtn" title="刷新服务器已入库的最新快照">刷新</button>
+    <div class="douyin-desk-header-actions">
+      <button type="button" class="btn btn-ghost" id="douyinDeskHistoryBtn" title="看自己做过的同款记录">生成历史</button>
+      <button type="button" class="btn btn-ghost" id="douyinDeskRefreshBtn" title="刷新服务器已入库的最新快照">刷新</button>
+    </div>
   </section>
+
+  <section class="douyin-desk-last" id="douyinDeskLast" hidden></section>
 
   <section class="douyin-desk-search">
     <input type="search" id="douyinDeskSearchInput" placeholder="输入关键词，搜你关注的榜单（例：火锅 探店）" />

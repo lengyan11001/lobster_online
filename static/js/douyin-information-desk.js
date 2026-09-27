@@ -6,7 +6,8 @@
   var state = {
     data: null,
     category: '',
-    loading: false
+    loading: false,
+    lastTask: null      // 本次会话最后发起的做同款任务（搜索/切 tab 也不会丢）
   };
 
   function escapeHtml(value) {
@@ -56,6 +57,7 @@
   function render() {
     var fetched = document.getElementById('douyinDeskFetchedAt');
     var tabs = document.getElementById('douyinDeskTabs');
+    renderLastTask();
     var content = document.getElementById('douyinDeskContent');
     if (!content) return;
     var snapshot = state.data && state.data.snapshot;
@@ -89,6 +91,65 @@
       return '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>' + escapeHtml(section.title || section.key || '数据') + '</h3><span>' + items.length + ' 条</span></div><div class="douyin-desk-grid">' + cards + '</div></section>';
     }).join('') : '<div class="douyin-desk-empty">该分类暂无数据</div>';
     bindCards(content);
+  }
+
+  function statusLabel(status) {
+    if (status === 'SUCCESS') return '已完成';
+    if (status === 'FAILED') return '失败';
+    return '生成中';
+  }
+
+  function renderLastTask() {
+    var box = document.getElementById('douyinDeskLast');
+    if (!box) return;
+    var task = state.lastTask;
+    if (!task) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = '<div class="douyin-desk-last-title">最近一次生成·' + escapeHtml(statusLabel(task.status)) + '</div>'
+      + '<div class="douyin-desk-last-body">' + escapeHtml(String(task.title || task.taskId || '')) + '</div>'
+      + (task.videoUrl
+          ? '<video controls playsinline preload="metadata" src="' + escapeHtml(task.videoUrl) + '"></video>'
+            + '<a class="douyin-desk-item-link" href="' + escapeHtml(task.videoUrl) + '" target="_blank" rel="noopener noreferrer">打开 / 下载</a>'
+          : (task.failReason ? '<div class="douyin-desk-last-fail">' + escapeHtml(task.failReason) + '</div>'
+                             : '<div class="douyin-desk-last-tip">任务已提交，可点「生成历史」随时回来看成片</div>'));
+  }
+
+  function loadHistory() {
+    var content = document.getElementById('douyinDeskContent');
+    if (content) content.innerHTML = '<div class="douyin-desk-empty">正在读取生成历史…</div>';
+    fetch(baseUrl() + '/api/douyin/platform-information-desk/imitation/history?limit=20', {
+      headers: typeof authHeaders === 'function' ? authHeaders() : {}
+    }).then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
+        var items = Array.isArray(data && data.items) ? data.items : [];
+        if (!content) return;
+        var rows = items.map(function(item) {
+          var status = statusLabel(item.status);
+          return '<article class="douyin-desk-history-item" data-douyin-history="' + escapeHtml(String(item.id)) + '">'
+            + '<div class="douyin-desk-history-head"><span class="douyin-desk-history-status is-' + escapeHtml(String(item.status || '').toLowerCase()) + '">' + escapeHtml(status) + '</span>'
+            + '<span class="douyin-desk-history-title">' + escapeHtml(item.title || item.task_id || '') + '</span></div>'
+            + '<div class="douyin-desk-history-meta">' + escapeHtml(formatTime(item.created_at)) + ' · ' + escapeHtml(item.model || '') + '</div>'
+            + (item.video_url ? '<video controls playsinline preload="metadata" src="' + escapeHtml(item.video_url) + '"></video>'
+                              : (item.fail_reason ? '<div class="douyin-desk-last-fail">' + escapeHtml(item.fail_reason) + '</div>' : ''))
+            + (item.video_url ? '<a class="douyin-desk-item-link" href="' + escapeHtml(item.video_url) + '" target="_blank" rel="noopener noreferrer">打开 / 下载</a>' : '')
+            + '</article>';
+        }).join('');
+        content.innerHTML = '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>生成历史</h3>'
+          + '<span>' + items.length + ' 条</span></div>'
+          + '<div class="douyin-desk-history-actions"><button type="button" class="btn btn-ghost" id="douyinDeskHistoryBack">返回榜单</button></div>'
+          + (items.length ? rows : '<div class="douyin-desk-empty">还没有生成记录，去榜单点「做同款（换人）」试试</div>')
+          + '</section>';
+        var back = document.getElementById('douyinDeskHistoryBack');
+        if (back) back.addEventListener('click', render);
+      });
+    }).catch(function(error) {
+      if (content) content.innerHTML = '<div class="douyin-desk-empty">' + escapeHtml(errorText(error)) + '</div>';
+    });
   }
 
   function itemCard(item) {
@@ -213,6 +274,10 @@
         return response.json().catch(function() { return {}; }).then(function(data) {
           if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
           if (data.status === 'SUCCESS' && data.video_url) {
+            if (state.lastTask && state.lastTask.taskId === taskId) {
+              state.lastTask = { taskId: taskId, title: state.lastTask.title, status: 'SUCCESS', videoUrl: data.video_url };
+              renderLastTask();
+            }
             if (statusEl) statusEl.textContent = '已完成';
             if (resultEl) {
               resultEl.innerHTML = '<video controls playsinline preload="metadata" src="' + escapeHtml(data.video_url) + '"></video>'
@@ -221,6 +286,11 @@
             return;
           }
           if (data.done) {
+            if (state.lastTask && state.lastTask.taskId === taskId) {
+              state.lastTask = { taskId: taskId, title: state.lastTask.title, status: 'FAILED',
+                                 failReason: String(data.fail_reason || '生成失败') };
+              renderLastTask();
+            }
             if (statusEl) statusEl.textContent = '失败：' + String(data.fail_reason || '生成失败');
             return;
           }
@@ -264,6 +334,8 @@
       }).then(function(data) {
         var taskId = String(data && data.task_id || '');
         if (!taskId) throw new Error('没有拿到任务号');
+        state.lastTask = { taskId: taskId, title: title, status: 'RUNNING' };
+        renderLastTask();
         pollImitation(taskId, 1, statusEl, resultEl);
       }).catch(function(err) {
         if (statusEl) statusEl.textContent = '失败：' + errorText(err);
@@ -298,6 +370,11 @@
     if (refresh && !refresh.dataset.bound) {
       refresh.dataset.bound = '1';
       refresh.addEventListener('click', load);
+    }
+    var historyBtn = document.getElementById('douyinDeskHistoryBtn');
+    if (historyBtn && !historyBtn.dataset.bound) {
+      historyBtn.dataset.bound = '1';
+      historyBtn.addEventListener('click', loadHistory);
     }
     var searchBtn = document.getElementById('douyinDeskSearchBtn');
     if (searchBtn && !searchBtn.dataset.bound) {
