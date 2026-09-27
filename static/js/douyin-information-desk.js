@@ -178,12 +178,22 @@
     });
   }
 
+  // 客户端的 authHeaders() 带 Content-Type: application/json，
+  // 直接拿来传 FormData 会丢掉 multipart boundary，服务端只能报 422。
+  function uploadHeaders() {
+    var headers = typeof authHeaders === 'function' ? Object.assign({}, authHeaders()) : {};
+    Object.keys(headers).forEach(function(key) {
+      if (String(key).toLowerCase() === 'content-type') delete headers[key];
+    });
+    return headers;
+  }
+
   function uploadReference(file) {
     var form = new FormData();
     form.append('file', file, file.name || 'imitation-image');
     return fetch(baseUrl() + '/api/assets/upload-temp', {
       method: 'POST',
-      headers: typeof authHeaders === 'function' ? authHeaders() : {},
+      headers: uploadHeaders(),
       body: form
     }).then(function(response) {
       return response.json().catch(function() { return {}; }).then(function(data) {
