@@ -1,4 +1,8 @@
 (function() {
+  // 2026-09-27 需求：信息台只保留两个榜；服务端已收敛请求集合，这里再兜一层，
+  // 即使读到历史快照（含热搜/星图/创作者中心等旧分类）也只显示这两个。
+  var ALLOWED_CATEGORIES = ['热点榜', '内容榜'];
+
   var state = {
     data: null,
     category: '',
@@ -47,7 +51,9 @@
       content.innerHTML = '<div class="douyin-desk-empty">暂无平台数据</div>';
       return;
     }
-    var sections = Array.isArray(snapshot.sections) ? snapshot.sections : [];
+    var sections = (Array.isArray(snapshot.sections) ? snapshot.sections : []).filter(function(section) {
+      return ALLOWED_CATEGORIES.indexOf(String(section && section.category || '').trim()) >= 0;
+    });
     var categories = [];
     sections.forEach(function(section) {
       var category = String(section && section.category || '其他').trim() || '其他';
