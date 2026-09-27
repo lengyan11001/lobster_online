@@ -642,6 +642,7 @@
   }
 
   var REMIX_NO_MATERIAL_MSG = 'IP 人设模板里还没有选资料（记忆文件 / 资料调查）：请先到「个人设置 → 个人记忆 / 资料调查」给模板选好资料，再回来做复刻。';
+  var REMIX_TEMPLATE_READ_FAILED_MSG = '读取 IP 人设模板失败（网络或登录状态异常），请稍后重试。';
 
   function remixRowHasMaterial(row) {
     var data = row && typeof row === 'object' ? row : {};
@@ -653,16 +654,41 @@
     return !!(ids.length || String(data.survey_id || '').trim() || hasReq);
   }
 
+  // IP 人设模板在云端：online 站点的 /api/ip-content/* 是本地后端，没有这些路由，必须走云端基址
+  function cloudBaseForTemplate() {
+    var base = (typeof API_BASE !== 'undefined' && API_BASE) ? API_BASE : (window.__API_BASE || '');
+    return String(base || '').replace(/\/$/, '');
+  }
+
+  function remixTemplateRead(path, withInstallation) {
+    var base = cloudBaseForTemplate();
+    if (!base) return Promise.resolve({ ok: false, err: new Error('no cloud base') });
+    var headers = typeof authHeaders === 'function' ? Object.assign({}, authHeaders() || {}) : {};
+    if (withInstallation && typeof getOrCreateInstallationId === 'function') {
+      headers['X-Installation-Id'] = getOrCreateInstallationId();
+    }
+    return fetch(base + path, { headers: headers })
+      .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function(data) { return { ok: true, data: data || {} }; })
+      .catch(function(err) { return { ok: false, err: err }; });
+  }
+
   // 复刻资料 = IP 人设模板里选好的（当前模板 → 没设当前模板时用默认配置行），不兜底、不默认全带
   function ensureRemixTemplateMaterial() {
     return Promise.all([
-      fetch(apiUrl('/api/ip-content/personal-default'), { headers: hdrs() })
-        .then(function(r) { return r.ok ? r.json() : {}; }).catch(function() { return {}; }),
-      fetch(apiUrl('/api/ip-content/schedule-templates'), { headers: hdrs() })
-        .then(function(r) { return r.ok ? r.json() : {}; }).catch(function() { return {}; })
+      remixTemplateRead('/api/ip-content/personal-default', true),
+      remixTemplateRead('/api/ip-content/schedule-templates', false)
     ]).then(function(res) {
-      var item = (res[0] && res[0].item) || {};
-      var rows = (res[1] && Array.isArray(res[1].items)) ? res[1].items : [];
+      if (!res[0].ok || !res[1].ok) {
+        // 读不到模板 ≠ 模板没选资料：不拦，交给设备端判定，避免误报
+        console.warn('[wechat-article] read remix template failed', res[0].err, res[1].err);
+        return { readFailed: true };
+      }
+      var item = (res[0].data && res[0].data.item) || {};
+      var rows = (res[1].data && Array.isArray(res[1].data.items)) ? res[1].data.items : [];
       var meta = (item.meta && typeof item.meta === 'object') ? item.meta : {};
       var currentId = String(meta.current_template_id || '').trim();
       var chosen = item;
@@ -726,9 +752,14 @@
     setBusy(btn, true, '检查模板…');
     showMsg('', false);
     ensureRemixTemplateMaterial()
-      .then(function() { runRemixGenerate(url, btn); })
+      .then(function(info) {
+        if (info && info.readFailed) {
+          showMsg('提示：没能读到 IP 人设模板（网络异常），本次资料以设备端模板为准。', false);
+        }
+        runRemixGenerate(url, btn);
+      })
       .catch(function(err) {
-        showMsg(err && err.message ? err.message : '模板资料检查失败', true);
+        showMsg(err && err.message ? err.message : REMIX_TEMPLATE_READ_FAILED_MSG, true);
         setBusy(btn, false);
       });
   }

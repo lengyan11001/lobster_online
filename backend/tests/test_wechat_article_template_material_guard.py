@@ -20,9 +20,10 @@ class _FakeResponse:
 
 
 class _FakeClient:
-    def __init__(self, default_item, templates):
+    def __init__(self, default_item, templates, status_code=200):
         self._default_item = default_item
         self._templates = templates
+        self._status_code = status_code
 
     async def __aenter__(self):
         return self
@@ -32,9 +33,9 @@ class _FakeClient:
 
     async def get(self, url, headers=None):
         if url.endswith("/api/ip-content/personal-default"):
-            return _FakeResponse({"item": self._default_item})
+            return _FakeResponse({"item": self._default_item}, status_code=self._status_code)
         if url.endswith("/api/ip-content/schedule-templates"):
-            return _FakeResponse({"items": self._templates})
+            return _FakeResponse({"items": self._templates}, status_code=self._status_code)
         raise AssertionError(url)
 
 
@@ -85,3 +86,24 @@ def test_template_with_survey_only_passes(monkeypatch):
         [{"id": "t2", "name": "只有资料调查", "memory_doc_ids": [], "survey_id": 5}],
     )
     assert out["survey_ids"] == ["5"]
+
+
+def test_read_failure_is_not_reported_as_missing_material(monkeypatch):
+    """接口读不到（500/网络）时必须报"读取失败"，不能误报"没选资料"。"""
+    monkeypatch.setattr(wa, "_server_proxy_base", lambda: "http://server.test")
+    monkeypatch.setattr(
+        wa.httpx, "AsyncClient",
+        lambda **kwargs: _FakeClient({}, [], status_code=500),
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(wa._resolve_template_material("tok", "inst"))
+    assert exc.value.status_code == 503
+    assert "读取 IP 人设模板失败" in exc.value.detail
+    assert "还没有选资料" not in exc.value.detail
+
+
+def test_missing_cloud_base_is_reported_as_read_failure(monkeypatch):
+    monkeypatch.setattr(wa, "_server_proxy_base", lambda: "")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(wa._resolve_template_material("tok", "inst"))
+    assert exc.value.status_code == 503

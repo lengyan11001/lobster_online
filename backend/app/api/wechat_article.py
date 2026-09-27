@@ -828,16 +828,19 @@ async def _resolve_template_material(token: str, installation_id: str) -> Dict[s
     顺序：当前模板（meta.current_template_id）→ 默认配置行（name 含"默认" / source=online_personal_profile）
     → personal-default 自身的字段。选了什么就带什么，不是全带。
     """
-    out: Dict[str, Any] = {"memory_doc_ids": [], "survey_ids": [], "requirements_text": ""}
+    out: Dict[str, Any] = {"memory_doc_ids": [], "survey_ids": [], "requirements_text": "", "read_failed": False}
     base = _server_proxy_base()
     if not token or not base:
-        return out
+        # 没有令牌/云端地址：属于"读不到模板"，不能当成"模板没选资料"
+        out["read_failed"] = True
+        raise HTTPException(status_code=503, detail="\u8bfb\u53d6 IP \u4eba\u8bbe\u6a21\u677f\u5931\u8d25\uff08\u7f51\u7edc\u6216\u767b\u5f55\u72b6\u6001\u5f02\u5e38\uff09\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002")
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     if installation_id:
         headers["X-Installation-Id"] = installation_id
 
     item: Dict[str, Any] = {}
     templates: List[Dict[str, Any]] = []
+    read_ok = False
     try:
         async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             resp = await client.get(f"{base}/api/ip-content/personal-default", headers=headers)
@@ -850,9 +853,16 @@ async def _resolve_template_material(token: str, installation_id: str) -> Dict[s
                 data2 = resp2.json() if resp2.content else {}
                 rows = data2.get("items") or data2.get("templates") or []
                 templates = [row for row in rows if isinstance(row, dict)]
+            read_ok = resp.status_code < 400 and resp2.status_code < 400
     except Exception as exc:  # noqa: BLE001
         logger.warning("[wechat-article] resolve template material failed: %s", exc)
-        return out
+        out["read_failed"] = True
+        raise HTTPException(status_code=503, detail="\u8bfb\u53d6 IP \u4eba\u8bbe\u6a21\u677f\u5931\u8d25\uff08\u7f51\u7edc\u6216\u767b\u5f55\u72b6\u6001\u5f02\u5e38\uff09\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002")
+    if not read_ok:
+        logger.warning("[wechat-article] resolve template material read failed: personal=%s templates=%s",
+                       resp.status_code, resp2.status_code)
+        out["read_failed"] = True
+        raise HTTPException(status_code=503, detail="\u8bfb\u53d6 IP \u4eba\u8bbe\u6a21\u677f\u5931\u8d25\uff08\u7f51\u7edc\u6216\u767b\u5f55\u72b6\u6001\u5f02\u5e38\uff09\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002")
 
     def _has_material(row: Dict[str, Any]) -> bool:
         return bool((row.get("memory_doc_ids") or []) or row.get("survey_id") or (row.get("requirements") or {}))
