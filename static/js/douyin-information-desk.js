@@ -99,7 +99,7 @@
           body = '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">' + body + '<span class="douyin-desk-item-link">打开观看</span></a>';
         }
         var actions = '<div class="douyin-desk-item-actions">'
-          + '<button type="button" class="douyin-desk-imitation" data-douyin-imitation="1" data-douyin-title="' + escapeHtml(title) + '">做同款</button>'
+          + '<button type="button" class="douyin-desk-imitation" data-douyin-imitation="1" data-douyin-item-id="' + escapeHtml(item.id || '') + '" data-douyin-title="' + escapeHtml(title) + '">做同款（换人）</button>'
           + '<span class="douyin-desk-item-status" data-douyin-status="1"></span>'
           + '</div><div class="douyin-desk-item-result" data-douyin-result="1"></div>';
         return '<article class="douyin-desk-item">' + cover + body + actions + '</article>';
@@ -187,20 +187,24 @@
     var statusEl = card ? card.querySelector('[data-douyin-status]') : null;
     var resultEl = card ? card.querySelector('[data-douyin-result]') : null;
     var title = button.getAttribute('data-douyin-title') || '';
+    var itemId = button.getAttribute('data-douyin-item-id') || '';
+    if (!itemId) {
+      if (statusEl) statusEl.textContent = '这条数据没有作品 id，换不了人';
+      return;
+    }
     var input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
     input.addEventListener('change', function() {
       var file = input.files && input.files[0];
       if (!file) return;
-      if (statusEl) statusEl.textContent = '正在上传参考图…';
+      if (statusEl) statusEl.textContent = '正在上传照片…';
       uploadReference(file).then(function(imageUrl) {
-        if (statusEl) statusEl.textContent = '已提交，正在生成（约 1-3 分钟）…';
+        if (statusEl) statusEl.textContent = '正在准备素材并提交换人（约 1-3 分钟）…';
         return postJson('/api/douyin/platform-information-desk/imitation', {
           image_url: imageUrl,
-          title: title,
-          duration: 5,
-          ratio: '9:16'
+          item_id: itemId,
+          title: title
         });
       }).then(function(data) {
         var taskId = String(data && data.task_id || '');
