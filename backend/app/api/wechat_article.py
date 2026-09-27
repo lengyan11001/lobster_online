@@ -736,15 +736,14 @@ async def _fetch_official_article(url: str) -> Dict[str, Any]:
 
 def _memory_material_text(user_id: int, doc_ids: Optional[List[str]] = None, *,
                           doc_titles: Optional[List[str]] = None, limit: int = 6000) -> str:
-    """取用户的记忆资料作为复刻的事实来源：指定 doc_ids 就只取那几份，否则用全部记忆。
+    """取指定几份记忆资料作为复刻的事实来源（只认传进来的 doc_ids，不再默认全带）。
 
     H5 与客户端的记忆同源（OpenClawMemoryDocument），万一对不上 id 就按标题兜底匹配一次。
     """
     if not user_id:
         return ""
     try:
-        from .openclaw_memory import (_load_index, _read_canonical_memory_content,
-                                      build_openclaw_memory_prompt_context)
+        from .openclaw_memory import _load_index, _read_canonical_memory_content
     except Exception:  # noqa: BLE001
         return ""
     try:
@@ -762,7 +761,7 @@ def _memory_material_text(user_id: int, doc_ids: Optional[List[str]] = None, *,
                 head = str(doc.get("title") or doc.get("filename") or doc.get("id") or "资料")
                 parts.append(f"【{head}】\n{_read_canonical_memory_content(doc, 1800)}")
             return "\n\n".join(parts)[:limit]
-        return str(build_openclaw_memory_prompt_context(int(user_id)) or "")[:limit]
+        return ""
     except Exception as exc:  # noqa: BLE001
         logger.warning("[wechat-article] memory material load failed user_id=%s err=%s", user_id, exc)
         return ""
@@ -797,7 +796,7 @@ def _survey_material_text(user_id: int, survey_ids: Optional[List[str]] = None, 
             ids.append(int(str(raw).strip()))
         except (TypeError, ValueError):
             continue
-    if not user_id:
+    if not user_id or not ids:
         return ""
     try:
         from ..db import SessionLocal
@@ -807,12 +806,9 @@ def _survey_material_text(user_id: int, survey_ids: Optional[List[str]] = None, 
         return ""
     db = SessionLocal()
     try:
-        query = (db.query(IPContentProfileSurvey)
-                 .filter(IPContentProfileSurvey.user_id == int(user_id)))
-        if ids:
-            query = query.filter(IPContentProfileSurvey.id.in_(ids))
-        # 没选就带上全部（最近 5 份）——"选不选都行"
-        rows = query.order_by(IPContentProfileSurvey.updated_at.desc()).limit(5).all()
+        rows = (db.query(IPContentProfileSurvey)
+                .filter(IPContentProfileSurvey.user_id == int(user_id),
+                        IPContentProfileSurvey.id.in_(ids)).all())
         parts = []
         for row in rows:
             head = str(getattr(row, "name", "") or "资料调查")
@@ -824,6 +820,80 @@ def _survey_material_text(user_id: int, survey_ids: Optional[List[str]] = None, 
         return ""
     finally:
         db.close()
+
+
+async def _resolve_template_material(token: str, installation_id: str) -> Dict[str, Any]:
+    """读用户的「IP 人设模板」，返回它选定的资料：记忆 doc_ids + 资料调查 id + 模板人设字段。
+
+    顺序：当前模板（meta.current_template_id）→ 默认配置行（name 含"默认" / source=online_personal_profile）
+    → personal-default 自身的字段。选了什么就带什么，不是全带。
+    """
+    out: Dict[str, Any] = {"memory_doc_ids": [], "survey_ids": [], "requirements_text": ""}
+    base = _server_proxy_base()
+    if not token or not base:
+        return out
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+
+    item: Dict[str, Any] = {}
+    templates: List[Dict[str, Any]] = []
+    try:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+            resp = await client.get(f"{base}/api/ip-content/personal-default", headers=headers)
+            if resp.status_code < 400:
+                data = resp.json() if resp.content else {}
+                if isinstance(data.get("item"), dict):
+                    item = data["item"]
+            resp2 = await client.get(f"{base}/api/ip-content/schedule-templates", headers=headers)
+            if resp2.status_code < 400:
+                data2 = resp2.json() if resp2.content else {}
+                rows = data2.get("items") or data2.get("templates") or []
+                templates = [row for row in rows if isinstance(row, dict)]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[wechat-article] resolve template material failed: %s", exc)
+        return out
+
+    def _has_material(row: Dict[str, Any]) -> bool:
+        return bool((row.get("memory_doc_ids") or []) or row.get("survey_id") or (row.get("requirements") or {}))
+
+    chosen = item
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    current_id = str(meta.get("current_template_id") or "").strip()
+    if current_id:
+        for row in templates:
+            if str(row.get("id") or "") == current_id:
+                chosen = row
+                break
+    def _material_score(row: Dict[str, Any]) -> int:
+        return ((1 if row.get("survey_id") else 0)
+                + (1 if (row.get("requirements") or {}) else 0)
+                + (1 if (row.get("memory_doc_ids") or []) else 0))
+
+    if not _has_material(chosen):
+        # 默认模板行：名字带"默认"或来源是个人配置。
+        # 同名多份时取资料最全的那份（最新那份可能还没挂资料调查）。
+        defaults = []
+        for row in templates:
+            row_meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+            name = str(row.get("name") or "")
+            if (str(row_meta.get("source") or "") == "online_personal_profile" or "默认" in name) \
+                    and _has_material(row):
+                defaults.append(row)
+        pool = defaults or [row for row in templates if _has_material(row)]
+        if pool:
+            chosen = max(pool, key=_material_score)
+
+    out["memory_doc_ids"] = [str(x).strip() for x in (chosen.get("memory_doc_ids") or []) if str(x).strip()]
+    survey_id = chosen.get("survey_id")
+    if survey_id:
+        out["survey_ids"] = [str(survey_id)]
+    requirements = chosen.get("requirements")
+    if isinstance(requirements, dict) and requirements:
+        out["requirements_text"] = _flatten_survey(requirements)[:2500]
+    logger.info("[wechat-article] template material template_id=%s memory=%s survey=%s",
+                chosen.get("id"), len(out["memory_doc_ids"]), out["survey_ids"])
+    return out
 
 
 async def _call_article_remix_writer(
@@ -1766,15 +1836,29 @@ async def generate_wechat_article(
     warnings: List[str] = []
     try:
         if source is not None:
-            memory_text = _memory_material_text(current_user.id if current_user else 0,
-                                                body.memory_document_ids,
+            uid = current_user.id if current_user else 0
+            memory_ids = [str(x).strip() for x in (body.memory_document_ids or []) if str(x).strip()]
+            survey_ids = [str(x).strip() for x in (getattr(body, "survey_ids", []) or []) if str(x).strip()]
+            persona_text = ""
+            if not memory_ids and not survey_ids:
+                # 没显式指定 -> 用「IP 人设默认模板」里选定的资料（不是全部）
+                tpl = await _resolve_template_material(token, installation_id)
+                memory_ids = tpl.get("memory_doc_ids") or []
+                survey_ids = tpl.get("survey_ids") or []
+                persona_text = str(tpl.get("requirements_text") or "")
+            blocks = []
+            if persona_text:
+                blocks.append("【IP 人设 / 模板资料】\n" + persona_text)
+            memory_text = _memory_material_text(uid, memory_ids,
                                                 doc_titles=body.memory_document_titles)
-            survey_text = _survey_material_text(current_user.id if current_user else 0,
-                                                getattr(body, "survey_ids", []))
+            if memory_text:
+                blocks.append(memory_text)
+            survey_text = _survey_material_text(uid, survey_ids)
             if survey_text:
-                memory_text = (memory_text + "\n\n" + survey_text).strip()
+                blocks.append(survey_text)
+            memory_text = "\n\n".join(blocks)
             if not memory_text:
-                warnings.append("没读到记忆/资料调查，本次只按参考文章的结构写通用内容（建议先在个人记忆或资料调查里填内容）。")
+                warnings.append("IP 人设默认模板里没有选定资料，本次只按参考文章的结构写（可去个人设置给模板选记忆文件/资料调查）。")
             article = await _call_article_remix_writer(body, source, memory_text, token, installation_id)
         else:
             article = await _call_article_writer(body, token, installation_id)
