@@ -343,3 +343,39 @@ def test_wechat_hint_present_gate():
 
     assert douyin_wechat_hint_present({"incoming_message": "加个微信吧"}) is True
     assert douyin_wechat_hint_present({"incoming_message": "多少钱？"}) is False
+
+def test_wechat_id_flows_same_path_as_phone(monkeypatch):
+    """微信号和手机号在微信里是同一个搜索框，所以走同一条路：能抽出来 + 能当加好友目标。"""
+    from douyin_api import extract_douyin_wechat_ids, douyin_wechat_contact_entries
+    import douyin_api
+
+    assert extract_douyin_wechat_ids([{"incoming_message": "加我微信 eiaiyuangong"}]) == ["eiaiyuangong"]
+    assert extract_douyin_wechat_ids([{"incoming_message": "VX：eiaiyuangong"}]) == ["eiaiyuangong"]
+    assert douyin_api.looks_like_douyin_wechat_id("eiaiyuangong") is True
+    assert douyin_api.looks_like_douyin_wechat_id("eiaiyuangon") is True   # 11 位也合法
+    assert douyin_api.looks_like_douyin_wechat_id("eiai") is False        # 太短
+
+    entries = douyin_wechat_contact_entries([
+        {"username": "运营", "conversation_source": "chat_inbox",
+         "phone_numbers": [], "wechat_ids": ["eiaiyuangong"]}
+    ])
+    assert entries == [{"value": "eiaiyuangong", "kind": "wechat_id",
+                        "username": "运营", "conversation_id": "chat_inbox"}]
+
+    # 加好友任务接受微信号（和手机号同一个调用）
+    captured = {}
+
+    class _FakeEngine:
+        LOCAL_DEFAULT_ACCOUNT_ID = 1
+
+        @staticmethod
+        async def create_add_friend_task(account_id, values):
+            captured["account_id"] = account_id
+            captured["values"] = list(values)
+            return {"id": "task-1"}
+
+    monkeypatch.setitem(sys.modules, "app.services.native_wechat_engine", _FakeEngine)
+    monkeypatch.setitem(sys.modules, "backend.app.services.native_wechat_engine", _FakeEngine)
+    result = asyncio.run(douyin_api._queue_douyin_wechat_friend_add(["eiaiyuangong"]))
+    assert result["queued"] is True
+    assert captured["values"] == ["eiaiyuangong"]

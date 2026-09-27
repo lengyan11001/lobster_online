@@ -13628,9 +13628,10 @@ def extract_douyin_wechat_id_by_ai(row: Dict) -> Dict[str, str]:
     return result
 
 
-async def _queue_douyin_wechat_friend_add(phone_numbers: List[str]) -> Dict[str, object]:
-    if not phone_numbers:
-        return {"enabled": True, "queued": False, "targets": [], "reason": "no_phone_number"}
+async def _queue_douyin_wechat_friend_add(contact_values: List[str]) -> Dict[str, object]:
+    """提交本机微信加好友任务：值可以是手机号，也可以是微信号（微信搜索是同一个输入框）。"""
+    if not contact_values:
+        return {"enabled": True, "queued": False, "targets": [], "reason": "no_contact"}
     try:
         try:
             from app.services import native_wechat_engine  # type: ignore
@@ -13638,20 +13639,20 @@ async def _queue_douyin_wechat_friend_add(phone_numbers: List[str]) -> Dict[str,
             from backend.app.services import native_wechat_engine  # type: ignore
         task = await native_wechat_engine.create_add_friend_task(
             native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID,
-            phone_numbers,
+            contact_values,
         )
         return {
             "enabled": True,
             "queued": True,
-            "targets": phone_numbers,
+            "targets": contact_values,
             "task_id": str(task.get("id") or "") if isinstance(task, dict) else "",
         }
     except Exception as exc:
-        douyin_log(f"[抖音私信接管] 手机号识别后提交加好友任务失败：{exc}", "error")
+        douyin_log(f"[抖音私信接管] 识别到联系方式后提交加好友任务失败：{exc}", "error")
         return {
             "enabled": True,
             "queued": False,
-            "targets": phone_numbers,
+            "targets": contact_values,
             "reason": str(exc),
         }
 
@@ -13915,8 +13916,10 @@ async def run_douyin_h5_stranger_message_task_once(
             merged_wechat_ids = list(dict.fromkeys(current_wechat_ids or old_wechat_ids))
             if merged_wechat_ids:
                 row["wechat_ids"] = merged_wechat_ids
+            # 微信里搜手机号 / 搜微信号是同一个输入框，所以两者走同一条路：当时加 or 上报池子
+            merged_contacts = list(dict.fromkeys([*merged_numbers, *merged_wechat_ids]))
             existing_status = normalize_douyin_text(existing.get("wechat_add_status") or "").lower()
-            row["wechat_add_status"] = existing_status or ("phone_detected" if merged_numbers else "")
+            row["wechat_add_status"] = existing_status or ("phone_detected" if merged_contacts else "")
             prepared_rows.append(row)
 
             def persist_row() -> None:
@@ -13929,7 +13932,7 @@ async def run_douyin_h5_stranger_message_task_once(
                 nonlocal phone_contacts_skipped
 
                 if wechat_add_friend_enabled and _h5_douyin_should_queue_wechat_add(existing_status):
-                    pending_targets = [phone for phone in merged_numbers if phone not in seen_queue_phones]
+                    pending_targets = [value for value in merged_contacts if value not in seen_queue_phones]
                     if pending_targets:
                         seen_queue_phones.update(pending_targets)
                         phone_numbers_to_queue.extend(pending_targets)
@@ -13956,7 +13959,7 @@ async def run_douyin_h5_stranger_message_task_once(
                 # the right-hand conversation bubbles fail to load. Keep the
                 # contact useful; the detail failure is still reported
                 # separately in the task result.
-                if merged_numbers:
+                if merged_contacts:
                     if row.get("last_message_is_user") is not False:
                         qualifying_users += 1
                     for phone in merged_numbers:
@@ -13973,7 +13976,7 @@ async def run_douyin_h5_stranger_message_task_once(
                     phone_numbers.append(phone)
 
             counted_user_last = False
-            if merged_numbers:
+            if merged_contacts:
                 if _h5_douyin_last_message_is_user(row):
                     qualifying_users += 1
                 await handle_phone_numbers()
@@ -14702,7 +14705,7 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
                 contact_value=contact_value,
             )
         wechat_add_friend_result = (
-            await _queue_douyin_wechat_friend_add(extracted_phone_numbers)
+            await _queue_douyin_wechat_friend_add([*extracted_phone_numbers, *extracted_wechat_ids])
             if wechat_add_friend_enabled
             else {"enabled": False, "queued": False, "targets": [], "reason": "disabled"}
         )

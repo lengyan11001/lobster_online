@@ -10275,6 +10275,25 @@ async def _resolve_parent_workflow_material(
 _MAINLAND_MOBILE_RE = re.compile(r"(?<!\d)(?:(?:\+?86)[\s-]*)?(1[3-9](?:[\s-]?\d){9})(?!\d)")
 
 
+def _extract_douyin_wechat_ids_from_result(value: Any, *, limit: int = 100) -> List[str]:
+    """从抖音私信接管结果里取微信号（结果字段 + 上报条目两种形态）。"""
+    payload = value if isinstance(value, dict) else {}
+    found: List[str] = []
+
+    def add(raw: Any) -> None:
+        text = str(raw or "").strip()
+        if not text or text in found or len(found) >= limit:
+            return
+        found.append(text)
+
+    for item in payload.get("extracted_wechat_ids") or []:
+        add(item)
+    for entry in payload.get("wechat_contact_entries") or []:
+        if isinstance(entry, dict) and str(entry.get("kind") or "").strip() == "wechat_id":
+            add(entry.get("value"))
+    return found
+
+
 def _extract_mainland_mobile_numbers(value: Any, *, limit: int = 100) -> List[str]:
     texts: List[str] = []
 
@@ -12347,7 +12366,12 @@ async def _run_client_workflow_action(
                 current_item=current_item,
             )
             if parent_runs:
-                extracted_phones = _extract_mainland_mobile_numbers(parent_runs[0].get("result_payload"))
+                # 微信里搜手机号和搜微信号是同一个输入框，两种值一起当目标
+                parent_payload = parent_runs[0].get("result_payload")
+                extracted_phones = _extract_mainland_mobile_numbers(parent_payload)
+                extracted_phones = list(dict.fromkeys(
+                    [*extracted_phones, *_extract_douyin_wechat_ids_from_result(parent_payload)]
+                ))
         targets = list(dict.fromkeys([*targets, *extracted_phones]))
         if not targets:
             if pool_mode:
