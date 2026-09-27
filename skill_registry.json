@@ -8,7 +8,13 @@
       "default_installed": true,
       "status": "available",
       "capabilities": {},
-      "tags": ["视频", "混剪", "片段", "配乐", "模板"]
+      "tags": [
+        "视频",
+        "混剪",
+        "片段",
+        "配乐",
+        "模板"
+      ]
     },
     "__retired_browser_use_skill": {
       "name": "Browser Use",
@@ -1093,7 +1099,7 @@
       },
       "capabilities": {
         "wewrite.article.pipeline": {
-          "description": "公众号文章整包流水线：用户只输入主题/想法，一次完成 AI 写文章、生成 3 张 16:9 横屏配图、公众号排版，并推送到微信公众号草稿箱。对话里写公众号文章并推草稿箱时优先使用本能力。",
+          "description": "公众号文章整包流水线：用户只输入主题/想法，一次完成 AI 写文章、生成 3 张 16:9 横屏配图、公众号排版，并推送到微信公众号草稿箱。对话里写公众号文章并推草稿箱时优先使用本能力。 也支持「复刻」：给一条公众号文章链接，抓正文后按原文逻辑、用用户记忆资料重写一篇新文章。",
           "upstream": "local",
           "upstream_tool": "invoke",
           "enabled": true,
@@ -1137,10 +1143,25 @@
               "image_aspect_ratio": {
                 "type": "string",
                 "description": "自动配图比例，默认横屏 16:9"
+              },
+              "source_url": {
+                "type": "string",
+                "description": "复刻模式：给一条公众号文章链接（mp.weixin.qq.com/s/...），按它的行文逻辑重写一篇；给了它就不用 idea"
+              },
+              "memory_document_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "复刻模式：使用哪些记忆资料；留空=用全部记忆"
+              },
+              "extra_material": {
+                "type": "string",
+                "description": "复刻模式：额外补充要点/要求"
               }
             },
             "required": [
-              "idea"
+              "idea_or_source_url"
             ]
           }
         },
