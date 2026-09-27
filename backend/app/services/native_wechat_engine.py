@@ -12481,16 +12481,39 @@ def _uia_find_add_friend_plus_button(root: Any) -> Optional[Any]:
     return best_node if best_score >= 30 else None
 
 
+def _find_named_node(hwnd: int, names: List[str], *, contains: bool = False) -> Optional[Any]:
+    root = _uia_foreground_or_main_root(hwnd)
+    node = _uia_find_by_names(root, names, contains=contains, max_depth=18)
+    if node is None and not contains:
+        node = _uia_find_by_names(root, names, contains=True, max_depth=18)
+    return node
+
+
+def _click_node_by_point(node: Any) -> bool:
+    """弹层菜单用物理点击更稳（Invoke/Click 有时不生效）。"""
+    rect = _uia_rect_tuple(node)
+    if rect is None:
+        return False
+    try:
+        _uia_click_screen_point((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
+        return True
+    except Exception:
+        return False
+
+
 def _open_local_add_friend_entry(hwnd: int, steps: List[Dict[str, Any]]) -> None:
     _ensure_local_tab(hwnd, "微信", strict=True)
     steps.append({"step": "switch_chat_tab", "ok": True})
+    time.sleep(0.5)   # 切完 tab 稍等，立刻点加号有时会被吞掉
 
-    root = _uia_foreground_or_main_root(hwnd)
-    plus_button = _uia_find_add_friend_plus_button(root)
-    if plus_button is not None:
-        _uia_click(plus_button)
-        steps.append({"step": "open_add_menu", "ok": True, "method": "uia", "button": _uia_control_text(plus_button)})
-    else:
+    def open_menu() -> None:
+        root = _uia_foreground_or_main_root(hwnd)
+        plus_button = _uia_find_add_friend_plus_button(root)
+        if plus_button is not None:
+            _uia_click(plus_button)
+            steps.append({"step": "open_add_menu", "ok": True, "method": "uia",
+                          "button": _uia_control_text(plus_button)})
+            return
         root_rect = _uia_rect_tuple(root)
         if root_rect is None:
             raise RuntimeError("未找到微信窗口位置，无法点击添加好友入口")
@@ -12499,15 +12522,34 @@ def _open_local_add_friend_entry(hwnd: int, steps: List[Dict[str, Any]]) -> None
         _uia_click_screen_point(left + 238, top + 40)
         steps.append({"step": "open_add_menu", "ok": True, "method": "coordinate"})
 
-    add_friend = _uia_click_first_named(hwnd, ["添加朋友"], timeout=4.0, contains=False)
-    if add_friend is None:
-        add_friend = _uia_click_first_named(hwnd, ["添加朋友"], timeout=2.0, contains=True)
-    if add_friend is None:
-        raise RuntimeError("未在加号菜单中找到“添加朋友”入口")
-    steps.append({"step": "open_add_friend_entry", "ok": True})
+    def click_entry(timeout: float) -> bool:
+        deadline = time.time() + max(0.5, timeout)
+        while time.time() < deadline:
+            node = _find_named_node(hwnd, ["添加朋友"])
+            if node is not None:
+                if _click_node_by_point(node):
+                    steps.append({"step": "open_add_friend_entry", "ok": True, "method": "point"})
+                    return True
+                _uia_click(node)
+                steps.append({"step": "open_add_friend_entry", "ok": True, "method": "node"})
+                return True
+            time.sleep(0.3)
+        return False
+
+    tried = 0
+    for attempt in range(1, 4):
+        tried = attempt
+        if attempt > 1:
+            # 上一次可能没点开（或者把菜单点开关了），先等菜单消失再重新点
+            time.sleep(0.4)
+        open_menu()
+        if click_entry(2.5 if attempt == 1 else 1.8):
+            return
+    raise RuntimeError(f"未在加号菜单中找到“添加朋友”入口（已尝试 {tried} 次）")
 
 
-def _manual_open_local_add_friend_form(hwnd: int, keyword: str, steps: List[Dict[str, Any]]) -> None:
+def _manual_search_once(hwnd: int, keyword: str, steps: List[Dict[str, Any]], *, attempt: int) -> bool:
+    """清空搜索框 -> 输入关键词 -> 回车/点搜索，返回"是否已经出结果"。"""
     search_edit = _uia_wait_for_edit(hwnd, timeout=6.0)
     if search_edit is None:
         add_entry = _uia_click_first_named(hwnd, ["添加朋友"], timeout=2.0, contains=False)
@@ -12517,20 +12559,48 @@ def _manual_open_local_add_friend_form(hwnd: int, keyword: str, steps: List[Dict
     if search_edit is None:
         raise RuntimeError("未找到新朋友搜索输入框")
 
+    # wxauto 先试过一遍，搜索框里可能有半截内容：先清空再输
+    try:
+        _uia_click(search_edit)
+        _send_hotkey("ctrl", "a", pause=0.1)
+        _send_hotkey("delete", pause=0.15)
+    except Exception:
+        pass
     _uia_set_text(search_edit, keyword)
-    steps.append({"step": "manual_search_friend_input", "ok": True, "keyword": keyword})
+    steps.append({"step": "manual_search_friend_input", "ok": True, "keyword": keyword, "attempt": attempt})
 
     _send_hotkey("enter", pause=0.35)
-    steps.append({"step": "manual_trigger_search", "ok": True, "method": "enter"})
-    time.sleep(0.8)
+    steps.append({"step": "manual_trigger_search", "ok": True, "method": "enter", "attempt": attempt})
+    time.sleep(0.9)
     root_after_enter = _uia_foreground_or_main_root(hwnd)
-    has_apply = _uia_find_by_names(root_after_enter, ["发送添加朋友申请"], contains=False, max_depth=18) is not None
-    has_result_button = _uia_find_by_names(root_after_enter, ["添加到通讯录", "申请添加朋友", "加为朋友"], contains=True, max_depth=18) is not None
-    if not has_apply and not has_result_button:
-        search_button = _uia_click_first_named(hwnd, ["搜索"], timeout=1.0, contains=False)
-        if search_button is not None:
-            steps.append({"step": "manual_trigger_search", "ok": True, "method": "button"})
-            time.sleep(0.8)
+    if _uia_find_by_names(root_after_enter, ["发送添加朋友申请"], contains=False, max_depth=18) is not None:
+        return True
+    if _uia_find_by_names(root_after_enter, ["添加到通讯录", "申请添加朋友", "加为朋友"], contains=True, max_depth=18) is not None:
+        return True
+    # 已是好友的资料卡也算"出结果"
+    for name in ("发消息", "语音聊天", "视频聊天"):
+        if _uia_find_by_names(root_after_enter, [name], contains=False, max_depth=18) is not None:
+            return True
+    search_button = _uia_click_first_named(hwnd, ["搜索"], timeout=1.0, contains=False)
+    if search_button is not None:
+        steps.append({"step": "manual_trigger_search", "ok": True, "method": "button", "attempt": attempt})
+        time.sleep(0.9)
+    return False
+
+
+def _manual_open_local_add_friend_form(hwnd: int, keyword: str, steps: List[Dict[str, Any]]) -> None:
+    for attempt in range(1, 4):
+        try:
+            if _manual_search_once(hwnd, keyword, steps, attempt=attempt):
+                break
+        except RuntimeError:
+            if attempt >= 3:
+                raise
+        steps.append({"step": "manual_search_retry", "ok": True, "attempt": attempt})
+    else:
+        if _local_friend_profile_is_existing_friend(hwnd):
+            raise FriendAlreadyAdded(f"该账号已经是好友：{keyword}")
+        raise RuntimeError("三次搜索都没出结果，可能未搜到用户、已是好友或微信限制")
 
     deadline = time.time() + 8.0
     apply_names = ["添加到通讯录", "申请添加朋友", "加为朋友"]
@@ -12552,6 +12622,8 @@ def _manual_open_local_add_friend_form(hwnd: int, keyword: str, steps: List[Dict
             continue
         time.sleep(0.3)
 
+    if _local_friend_profile_is_existing_friend(hwnd):
+        raise FriendAlreadyAdded(f"该账号已经是好友：{keyword}")
     raise RuntimeError("未找到搜索结果里的添加入口，可能未搜到用户、已是好友或微信限制")
 
 
@@ -12669,6 +12741,25 @@ def _close_local_add_friend_dialog(hwnd: int, steps: List[Dict[str, Any]], *, re
         return False
 
 
+class FriendAlreadyAdded(RuntimeError):
+    """搜索到的账号已经是好友（资料卡上是「发消息」而不是「添加到通讯录」）。
+
+    2026-09-27：eiaiyuangong 就是这种情况——以前会报「未进入发送添加朋友申请界面，
+    可能未搜到用户或已是好友」，任务记成 failed 还会重试。
+    """
+
+
+def _local_friend_profile_is_existing_friend(hwnd: int) -> bool:
+    try:
+        root = _uia_foreground_or_main_root(hwnd)
+    except Exception:
+        return False
+    for name in ("发消息", "语音聊天", "视频聊天"):
+        if _uia_find_by_names(root, [name], contains=False, max_depth=18) is not None:
+            return True
+    return False
+
+
 def _prepare_local_add_friend_form(
     account_id: str,
     keyword: str,
@@ -12688,28 +12779,52 @@ def _prepare_local_add_friend_form(
     _focus_local_wechat(hwnd)
     _open_local_add_friend_entry(hwnd, steps)
 
+    # 顺序很重要：先手动搜索（UIA，实测稳），wxauto 只当兜底。
+    # 反过来会被 wxauto 先跑一遍把搜索框搞脏，后面手动搜索就搜不出结果（2026-09-27 eiaiyuangong 实测）。
+    manual_error = ""
     try:
-        from wxauto4.ui.component import SearchNewFriendWnd  # type: ignore
-
-        wnd = SearchNewFriendWnd()
-        wnd.init()
-        missing_controls = [name for name in ("search_edit", "search_btn") if not hasattr(wnd, name)]
-        if missing_controls:
-            raise RuntimeError(f"SearchNewFriendWnd controls not initialized: {', '.join(missing_controls)}")
-        wnd.search(keyword)
-        steps.append({"step": "search_friend", "ok": True, "keyword": keyword})
-        time.sleep(1.0)
-        wnd.apply()
-        steps.append({"step": "open_apply_form", "ok": True})
-    except Exception as exc:
-        steps.append({"step": "wxauto_open_apply_form", "ok": False, "error": str(exc)})
+        _manual_open_local_add_friend_form(hwnd, keyword, steps)
+    except FriendAlreadyAdded:
+        raise
+    except Exception as manual_exc:
+        manual_error = str(manual_exc)
+        steps.append({"step": "manual_open_apply_form", "ok": False, "error": manual_error})
         try:
-            _manual_open_local_add_friend_form(hwnd, keyword, steps)
-        except Exception as fallback_exc:
-            raise RuntimeError(f"打开好友申请界面失败：{fallback_exc}") from fallback_exc
+            from wxauto4.ui.component import SearchNewFriendWnd  # type: ignore
+
+            wnd = SearchNewFriendWnd()
+            wnd.init()
+            missing_controls = [name for name in ("search_edit", "search_btn") if not hasattr(wnd, name)]
+            if missing_controls:
+                raise RuntimeError(f"SearchNewFriendWnd controls not initialized: {', '.join(missing_controls)}")
+            clear_edit = None
+            try:
+                clear_edit = _uia_wait_for_edit(hwnd, timeout=3.0)
+            except Exception:
+                clear_edit = None
+            if clear_edit is not None:
+                try:
+                    _uia_click(clear_edit)
+                    _send_hotkey("ctrl", "a", pause=0.1)
+                    _send_hotkey("delete", pause=0.15)
+                except Exception:
+                    pass
+            wnd.search(keyword)
+            steps.append({"step": "search_friend", "ok": True, "keyword": keyword, "method": "wxauto"})
+            time.sleep(1.0)
+            wnd.apply()
+            steps.append({"step": "open_apply_form", "ok": True, "method": "wxauto"})
+        except Exception as exc:
+            steps.append({"step": "wxauto_open_apply_form", "ok": False, "error": str(exc)})
+            raise RuntimeError(f"打开好友申请界面失败：手动={manual_error}；wxauto={exc}") from exc
+
+    if _local_friend_profile_is_existing_friend(hwnd):
+        raise FriendAlreadyAdded(f"该账号已经是好友：{keyword}")
 
     send_button = _find_local_add_friend_submit_button(hwnd, timeout=8.0)
     if send_button is None:
+        if _local_friend_profile_is_existing_friend(hwnd):
+            raise FriendAlreadyAdded(f"该账号已经是好友：{keyword}")
         raise RuntimeError("未进入发送添加朋友申请界面，可能未搜到用户或已是好友")
     form_root = _uia_foreground_or_main_root(hwnd)
 
@@ -12787,9 +12902,20 @@ def add_local_friend(
             ),
         )
         status = "prepared" if prepare_only else "submitted"
-    except Exception as exc:
-        status = "failed"
+    except FriendAlreadyAdded as exc:
+        # 已经是好友：不算失败，也不用重试
+        status = "already_friend"
         error = str(exc)
+        raw = {"message": "已经是好友，跳过"}
+    except Exception as exc:
+        # _run_local_driver_operation 会把异常重新包装，类型丢了，所以再按文案兜一层
+        if "已经是好友" in str(exc):
+            status = "already_friend"
+            error = str(exc)
+            raw = {"message": "已经是好友，跳过"}
+        else:
+            status = "failed"
+            error = str(exc)
     with _connect() as conn:
         conn.execute(
             """
@@ -12811,13 +12937,14 @@ def add_local_friend(
                 _now_iso(),
             ),
         )
-    if status not in {"prepared", "submitted"}:
+    if status not in {"prepared", "submitted", "already_friend"}:
         raise RuntimeError(error or "打开好友申请界面失败")
     return {
         "ok": True,
         "id": req_id,
         "status": status,
         "submitted": status == "submitted",
+        "already_friend": status == "already_friend",
         "raw": raw,
         "message": raw.get("message") or ("好友申请已提交" if status == "submitted" else "已打开好友申请确认界面"),
     }
