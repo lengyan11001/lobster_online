@@ -1320,10 +1320,11 @@
   function voiceParams(item) {
     var params = item && item.voice_params && typeof item.voice_params === 'object' ? item.voice_params : {};
     var style = getSelectedStyleForVoiceItem(item) || {};
+    // 读已保存的参数（之前这里硬编码 1/1/0，导致保存成功后再进来又变回默认值）
     return {
-      rate: '1',
-      volume: '1',
-      pitch: '0',
+      rate: String(numericParam(params.rate, 1, 0.5, 2)),
+      volume: String(numericParam(params.volume, 1, 0.1, 2)),
+      pitch: String(intParam(params.pitch, 0, -12, 12)),
       emotion: String(params.emotion || 'happy'),
       instructions: String(params.instructions || item && item.instructions || style.instructions || '')
     };
