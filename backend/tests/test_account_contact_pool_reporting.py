@@ -171,12 +171,12 @@ def test_pool_mode_is_recognized_for_native_add_friend():
     assert "server_reported_pool" in channel._WECHAT_CONTACT_POOL_SOURCE_MODES
     source = (ROOT / "backend" / "app" / "api" / "h5_chat_channel.py").read_text(encoding="utf-8")
     start = source.index('if action == "native_wechat_add_friend":')
-    body = source[start:start + 6000]
+    body = source[start:start + 12000]
     assert "_claim_reported_wechat_contacts(" in body
     assert "server_pool_empty" in body
     assert "_ack_reported_wechat_contacts(" in body
     douyin_branch = source.index('if action == "stranger_message":')
-    douyin_body = source[douyin_branch:douyin_branch + 3000]
+    douyin_body = source[douyin_branch:douyin_branch + 12000]
     assert "if not wechat_add_friend_enabled:" in douyin_body
     assert "_report_douyin_wechat_contacts_to_cloud(" in douyin_body
 
@@ -259,3 +259,50 @@ def test_native_add_friend_pool_empty_skips_with_hint(monkeypatch):
     assert result["skipped"] is True
     assert result["reason"] == "server_pool_empty"
     assert "自动提交好友申请" in result["message"]
+
+
+def test_native_add_friend_skipped_targets_reported_and_acked(monkeypatch):
+    """?????/??????????????? skipped??????????"add"?"""
+
+    async def fake_post_local(path, body, *, headers, timeout_seconds=7200.0, request_id=""):
+        return {
+            "ok": True,
+            "queued": False,
+            "skipped": True,
+            "message": "skipped targets",
+            "task": {
+                "id": "task-skip",
+                "status": "skipped",
+                "reason": "already_handled",
+                "skipped_targets": [{"target": "13800138000", "status": "skipped", "attempts": 3}],
+            },
+        }
+
+    monkeypatch.setattr(channel, "_post_local_api_json", fake_post_local)
+    cloud = _FakeCloud(
+        [
+            {
+                "ok": True,
+                "claimed": 1,
+                "items": [{"id": 9, "value": "13800138000", "kind": "mobile"}],
+            },
+            {"ok": True, "added": 1, "released": 0},
+        ]
+    )
+    result = asyncio.run(
+        channel._run_client_workflow_action(
+            "native_wechat_add_friend",
+            {"source_mode": "server_reported_pool", "account_id": "pc-wechat-default"},
+            headers={"Authorization": "Bearer t"},
+            run_id="",
+            cloud=cloud,
+            base="https://cloud.example",
+        )
+    )
+    assert result["skipped"] is True
+    assert result["reason"] == "already_handled"
+    assert result["skipped_targets"] == ["13800138000"]
+    assert "13800138000" in result["message"]
+    assert cloud.calls[1]["json"]["added"] == ["13800138000"]
+    text = channel._client_workflow_result_text("native_wechat_add_friend", result)
+    assert text

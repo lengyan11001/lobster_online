@@ -727,10 +727,27 @@ async def native_wechat_add_friend(
             bulk_import=body.bulk_import,
             client_request_id=body.client_request_id or _client_request_id(request),
         )
+        task_status = str(task.get("status") or "") if isinstance(task, dict) else ""
+        if task_status == "skipped":
+            handled = [
+                str(item.get("target") or "").strip()
+                for item in ((task.get("skipped_targets") if isinstance(task, dict) else None) or [])
+                if isinstance(item, dict) and str(item.get("target") or "").strip()
+            ]
+            return {
+                "ok": True,
+                "task": task,
+                "queued": False,
+                "skipped": True,
+                "reason": str(task.get("reason") or "already_handled") if isinstance(task, dict) else "already_handled",
+                "skipped_targets": handled,
+                "message": "\u8fd9\u4e9b\u76ee\u6807\u6b64\u524d\u5df2\u7ecf\u52a0\u8fc7\u6216\u5df2\u5224\u5b9a\u52a0\u4e0d\u4e86\uff0c\u672c\u6b21\u5df2\u8df3\u8fc7\uff0c\u4e0d\u518d\u91cd\u590d\u6dfb\u52a0\uff1a"
+                + "\u3001".join(handled[:5]) + ("\u2026" if len(handled) > 5 else ""),
+            }
         return {
             "ok": True,
             "task": task,
-            "queued": task.get("status") in {"pending", "queued", "running"},
+            "queued": task_status in {"pending", "queued", "running"},
             "message": "好友申请任务已加入队列，将按频率慢慢处理",
         }
     except Exception as exc:

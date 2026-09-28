@@ -815,7 +815,7 @@
   }
 
   function friendStatusText(status) {
-    var map = { queued: '待处理', pending: '待处理', running: '执行中', success: '已申请', failed: '失败', partial_failed: '部分成功', cancelled: '已停止' };
+    var map = { skipped: '\u5df2\u8df3\u8fc7\uff08\u4e4b\u524d\u52a0\u8fc7\u6216\u52a0\u4e0d\u4e86\uff09', queued: '待处理', pending: '待处理', running: '执行中', success: '已申请', failed: '失败', partial_failed: '部分成功', cancelled: '已停止' };
     return map[String(status || '').toLowerCase()] || status || '-';
   }
 
@@ -1421,6 +1421,11 @@
         prepare_only: false
       }
     }).then(function(data) {
+      if (data && (data.skipped || (data.task && data.task.status === 'skipped'))) {
+        setChip('nativeWechatFriendState', '\u5df2\u8df3\u8fc7');
+        setMsg((data && data.message) || '\u8fd9\u4e9b\u76ee\u6807\u4e4b\u524d\u5df2\u7ecf\u52a0\u8fc7\u6216\u5df2\u5224\u5b9a\u52a0\u4e0d\u4e86\uff0c\u672c\u6b21\u5df2\u8df3\u8fc7\u3002', false);
+        return loadFriendRecords();
+      }
       setChip('nativeWechatFriendState', '已排队');
       setMsg((data && data.message) || ('已加入队列：' + keywords.length + ' 个目标'), false);
       return loadTasks();
@@ -1464,6 +1469,11 @@
       method: 'POST',
       body: { account_id: id, keywords: keywords, apply_message: applyMessage, remark: remark, tags: tags, permission: permission, prepare_only: false, queue_only: true, client_request_id: requestId }
     }).then(function(data) {
+      if (data && (data.skipped || (data.task && data.task.status === 'skipped'))) {
+        setChip('nativeWechatFriendState', '\u5df2\u8df3\u8fc7');
+        setMsg((data && data.message) || '\u8fd9\u4e9b\u76ee\u6807\u4e4b\u524d\u5df2\u7ecf\u52a0\u8fc7\u6216\u5df2\u5224\u5b9a\u52a0\u4e0d\u4e86\uff0c\u672c\u6b21\u5df2\u8df3\u8fc7\u3002', false);
+        return loadFriendRecords();
+      }
       var modal = $('nativeWechatFriendAddModal');
       if (modal) modal.classList.remove('show');
       setChip('nativeWechatFriendState', '已入队');

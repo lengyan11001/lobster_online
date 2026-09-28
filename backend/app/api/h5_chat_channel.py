@@ -12449,6 +12449,22 @@ async def _run_client_workflow_action(
             raise
         result["targets"] = targets
         result["extracted_phones"] = extracted_phones
+        add_task = result.get("task") if isinstance(result.get("task"), dict) else {}
+        if str(add_task.get("status") or "").strip() == "skipped":
+            handled = [
+                str(item.get("target") or "").strip()
+                for item in (add_task.get("skipped_targets") or [])
+                if isinstance(item, dict) and str(item.get("target") or "").strip()
+            ]
+            result["skipped"] = True
+            result["reason"] = str(add_task.get("reason") or "already_handled")
+            result["skipped_targets"] = handled
+            result["message"] = (
+                "\u4e2a\u4eba\u5fae\u4fe1\u81ea\u52a8\u52a0\u597d\u53cb\uff1a\u8fd9\u6279\u76ee\u6807\uff08"
+                + "\u3001".join(handled[:5])
+                + ("\u2026" if len(handled) > 5 else "")
+                + "\uff09\u6b64\u524d\u5df2\u7ecf\u52a0\u8fc7\u6216\u5df2\u5224\u5b9a\u52a0\u4e0d\u4e86\uff0c\u672c\u6b21\u5df2\u8df3\u8fc7\uff0c\u4e0d\u518d\u91cd\u590d\u6dfb\u52a0\u3002"
+            )
         if claimed_pool_items:
             result["server_pool_items"] = [
                 {

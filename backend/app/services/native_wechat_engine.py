@@ -21182,6 +21182,17 @@ def list_friend_records(account_id: str = "", *, limit: int = 50, offset: int = 
             f"select * from wechat_tasks {where} order by created_at desc, id desc",
             tuple(params),
         ).fetchall()
+        if account_id:
+            state_rows = conn.execute(
+                "select * from wechat_friend_add_targets where account_id=?",
+                (account_id,),
+            ).fetchall()
+        else:
+            state_rows = conn.execute("select * from wechat_friend_add_targets").fetchall()
+    target_states = {}
+    for state_row in state_rows:
+        state = _row_to_dict(state_row)
+        target_states[f"{state.get('account_id')}|{state.get('target')}"] = state
     records: List[Dict[str, Any]] = []
     for row in rows:
         task = _row_to_dict(row)
@@ -21190,6 +21201,18 @@ def list_friend_records(account_id: str = "", *, limit: int = 50, offset: int = 
         if not targets:
             targets = [str(payload.get("keyword") or "")]
         for target in targets:
+            state = target_states.get(f"{task.get('account_id')}|{target}")
+            record_status = str(task.get("status") or "")
+            record_attempts = 0
+            record_error = str(task.get("error_message") or "")
+            if state:
+                record_attempts = int(state.get("attempts") or 0)
+                record_error = str(state.get("last_error") or record_error)
+                record_status = {
+                    "added": "success",
+                    "skipped": "skipped",
+                    "failed": "failed",
+                }.get(str(state.get("status") or ""), record_status)
             records.append({
                 "id": str(task.get("id") or ""),
                 "task_id": str(task.get("id") or ""),
@@ -21200,8 +21223,10 @@ def list_friend_records(account_id: str = "", *, limit: int = 50, offset: int = 
                 "remark": str(payload.get("remark") or ""),
                 "tags": payload.get("tags") if isinstance(payload.get("tags"), list) else [],
                 "permission": str(payload.get("permission") or ""),
-                "status": str(task.get("status") or ""),
-                "error_message": str(task.get("error_message") or ""),
+                "status": record_status,
+                "attempts": record_attempts,
+                "target_status": str((state or {}).get("status") or ""),
+                "error_message": record_error,
                 "created_at": str(task.get("created_at") or ""),
                 "updated_at": str(task.get("updated_at") or ""),
                 "processed": int(task.get("processed") or 0),

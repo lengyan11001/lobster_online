@@ -325,3 +325,35 @@ def test_already_friend_target_is_marked_added(monkeypatch, tmp_path):
     )
     assert again["status"] == "skipped"
     assert again["queued_total"] == 0
+
+
+def test_friend_records_mark_skipped_target(monkeypatch, tmp_path):
+    """????????? skipped ???????"skip"?"""
+    _prepare(monkeypatch, tmp_path)
+    _no_sleep_between_targets(monkeypatch)
+    monkeypatch.setattr(engine, "_enforce_local_friend_add_rate", lambda account_id: None)
+    monkeypatch.setattr(engine, "_notify_friend_add_scheduler", lambda account_id: None)
+
+    async def _fail_run(func, account_id, target, **kwargs):
+        raise RuntimeError("no such user")
+
+    monkeypatch.setattr(engine, "_run_local_wechat_async", _fail_run)
+    limit = engine._FRIEND_ADD_MAX_ATTEMPTS_DEFAULT
+    for index in range(limit):
+        asyncio.run(
+            engine.create_add_friend_task(
+                "pc-wechat-test",
+                ["13900139000"],
+                queue_only=True,
+                client_request_id="rec-%d" % index,
+            )
+        )
+        claimed = engine._claim_next_queued_friend_task("pc-wechat-test")
+        asyncio.run(engine._process_add_friend_task(claimed))
+
+    items = engine.list_friend_records("pc-wechat-test")["items"]
+    assert items
+    assert all(item["status"] == "skipped" for item in items)
+    assert all(item["target_status"] == "skipped" for item in items)
+    assert all(int(item["attempts"]) == limit for item in items)
+    assert items[0]["error_message"]
