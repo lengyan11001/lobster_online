@@ -689,6 +689,18 @@
     return 'processing';
   }
 
+  // 数字人训练状态：只有训练成功的能用来生成视频
+  function profileStatusInfo(item) {
+    var kind = taskStatusKind(item && item.status);
+    if (kind === 'success') return { kind: 'success', label: '训练成功', tone: 'success' };
+    if (kind === 'failed') return { kind: 'failed', label: '训练失败', tone: 'danger' };
+    return { kind: 'processing', label: '训练中', tone: 'processing' };
+  }
+
+  function profileIsReady(item) {
+    return profileStatusInfo(item).kind === 'success';
+  }
+
   function isTaskSuccessStatus(status) {
     return taskStatusKind(status) === 'success';
   }
@@ -743,7 +755,11 @@
       detail_url: item.source_url || item.cover_url || item.detail_url || '',
       section_label: item.section_label || '我的数字人',
       material_count: item.material_count || 1,
-      is_mine: true
+      is_mine: true,
+      status: String(item.status || '').trim(),
+      status_text: String(item.status_text || '').trim(),
+      error_message: String(item.error_message || '').trim(),
+      train_ready: taskStatusKind(item.status) === 'success'
     });
   }
 
@@ -2408,6 +2424,14 @@
   function renderAvatarCard(item) {
     var selected = state.selectedAvatar && state.selectedAvatar.avatar === item.avatar;
     var canDelete = !!(item && item.is_mine === true && item.id != null);
+    var mineCard = !!(item && item.is_mine === true);
+    var statusInfo = profileStatusInfo(item);
+    var statusLabel = mineCard ? statusInfo.label : '已就绪';
+    var statusTone = mineCard ? statusInfo.tone : 'success';
+    var statusHint = mineCard && statusInfo.kind === 'failed' && item.error_message
+      ? item.error_message
+      : (mineCard && statusInfo.kind === 'processing' ? '训练完成后才能用来生成视频' : '');
+    var canUse = !mineCard || statusInfo.kind === 'success';
     var tags = (item.tags || []).slice(0, 2).map(function(tag) {
       return '<span class="shanjian-card-tag">' + escapeHtml(tag) + '</span>';
     }).join('');
@@ -2421,17 +2445,18 @@
       + '<div class="shanjian-avatar-card-cover">'
       + coverImage(item)
       + '<span class="shanjian-avatar-card-badge">' + escapeHtml(item.section_label || '数字人') + '</span>'
-      + '<span class="shanjian-avatar-card-count">' + escapeHtml(countText) + '</span>'
+      + '<span class="shanjian-avatar-card-count" data-tone="' + escapeHtml(statusTone) + '" title="' + escapeHtml(statusHint || statusLabel) + '">' + escapeHtml(statusLabel) + '</span>'
       + '</div>'
       + '<div class="shanjian-avatar-card-body">'
       + '<div class="shanjian-avatar-card-main">'
       + '<div class="shanjian-avatar-card-title" title="' + escapeHtml(item.title) + '">' + escapeHtml(item.title) + '</div>'
       + '<div class="shanjian-avatar-card-tags">' + tags + '</div>'
       + '</div>'
-      + '<div class="shanjian-avatar-card-meta"><span>' + escapeHtml(countText) + '</span></div>'
+      + (statusHint ? '<div class="shanjian-avatar-card-tags"><span class="shanjian-card-tag" title="' + escapeHtml(statusHint) + '">' + escapeHtml(statusHint) + '</span></div>' : '')
+      + '<div class="shanjian-avatar-card-meta"><span>' + escapeHtml(canUse ? countText : statusLabel) + '</span></div>'
       + '<div class="shanjian-avatar-card-actions">'
       + '<button type="button" class="btn btn-ghost btn-sm shanjian-avatar-detail-btn shanjian-avatar-pick-btn" data-avatar-key="' + escapeHtml(key) + '">查看详情</button>'
-      + '<button type="button" class="btn ' + (selected ? 'btn-ghost' : 'btn-primary') + ' btn-sm shanjian-avatar-pick-btn" data-avatar-id="' + escapeHtml(item.avatar) + '">' + (selected ? '已选择' : '选择数字人') + '</button>'
+      + '<button type="button" class="btn ' + (selected ? 'btn-ghost' : 'btn-primary') + ' btn-sm shanjian-avatar-pick-btn" data-avatar-id="' + escapeHtml(item.avatar) + '" data-avatar-usable="' + (canUse ? '1' : '0') + '" data-avatar-status="' + escapeHtml(statusLabel) + '"' + (canUse ? '' : ' disabled title="' + escapeHtml(statusHint || (statusLabel + '：暂不能用来生成视频')) + '"') + '>' + escapeHtml(canUse ? (selected ? '已选择' : '选择数字人') : '不可用') + '</button>'
       + deleteBtn
       + '</div>'
       + '</div>'
@@ -2855,8 +2880,11 @@
 
       var all = (state.avatarLibrary.mine || []).concat(state.avatarLibrary.public || []);
       var matched = state.selectedAvatar && all.find(function(item) { return item.avatar === state.selectedAvatar.avatar; });
-      if (matched) {
+      var readyFirst = all.find(function(item) { return item && (item.is_mine !== true || profileIsReady(item)); });
+      if (matched && (matched.is_mine !== true || profileIsReady(matched))) {
         state.selectedAvatar = matched;
+      } else if (readyFirst) {
+        state.selectedAvatar = readyFirst;
       } else if (all.length) {
         state.selectedAvatar = all[0];
       } else {
@@ -3754,7 +3782,12 @@
       ? '正在生成真人视频模板剪辑视频...'
       : (mode === 'audio' ? '正在生成声音驱动视频...' : '正在生成数字人口播视频...');
 
-    if (!selectedProfileId) return showMessage('请先从右侧选择一个数字人。', true);
+    if (!selectedProfileId) return showMessage('请先从右侧选择一个数字人（只有训练成功的数字人能生成视频）。', true);
+    if (state.selectedAvatar && state.selectedAvatar.is_mine === true && !profileIsReady(state.selectedAvatar)) {
+      var statusInfo = profileStatusInfo(state.selectedAvatar);
+      var reason = state.selectedAvatar.error_message ? '：' + state.selectedAvatar.error_message : '';
+      return showMessage('这个数字人' + statusInfo.label + reason + '，请先选择训练成功的数字人。', true);
+    }
     if (mode === 'tts') {
       if (!voice) return showMessage('请先从右侧选择一个声音。', true);
       if (isConsumerPreviewVoice(voice)) return showMessage('该公共声音仅支持试听，请选择可生成公共声音或“我的声音”。', true);
@@ -4437,6 +4470,10 @@
       + '#content-shanjian-digital-human .shanjian-result-pill{display:inline-flex;align-items:center;gap:0.38rem;padding:0.42rem 0.74rem;border-radius:999px;background:rgba(124,94,255,0.10);color:#6a54e0;font-size:0.78rem;font-weight:700;}'
       + '#content-shanjian-digital-human #shanjianTaskStatusText[data-tone="success"]{color:#1f8f5f;background:rgba(31,143,95,0.12);}'
       + '#content-shanjian-digital-human #shanjianTaskStatusText[data-tone="danger"]{color:#c23b3b;background:rgba(194,59,59,0.12);}'
+      + '#content-shanjian-digital-human .shanjian-avatar-card-count[data-tone="success"]{color:#1f8f5f;background:rgba(31,143,95,0.12);}'
+      + '#content-shanjian-digital-human .shanjian-avatar-card-count[data-tone="danger"]{color:#c23b3b;background:rgba(194,59,59,0.12);}'
+      + '#content-shanjian-digital-human .shanjian-avatar-card-count[data-tone="processing"]{color:#5c57d8;background:rgba(92,87,216,0.12);}'
+      + '#content-shanjian-digital-human .shanjian-avatar-pick-btn[disabled]{opacity:.55;cursor:not-allowed;}'
       + '#content-shanjian-digital-human #shanjianTaskStatusText[data-tone="processing"]{color:#5c57d8;background:rgba(92,87,216,0.12);}'
       + '#content-shanjian-digital-human .shanjian-result-status-head{display:flex;gap:0.74rem;align-items:flex-start;}'
       + '#content-shanjian-digital-human .shanjian-result-spinner{flex:0 0 auto;width:34px;height:34px;border-radius:999px;border:3px solid rgba(124,94,255,0.14);border-top-color:#7c5eff;animation:viral-spin 0.85s linear infinite;}'
