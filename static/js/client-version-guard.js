@@ -10,6 +10,24 @@
   window.__lobsterVersionGuardReady = true;
 
   var RELOAD_KEY = '__lobster_version_guard_reloaded';
+  // 每个标签页会话最多自动强刷一次：否则"后端比代码旧"这种持续状态会变成无限重载
+  var SESSION_RELOAD_KEY = 'lobster_version_guard_reloaded_once';
+
+  function alreadyReloadedThisSession() {
+    try {
+      return !!window.sessionStorage.getItem(SESSION_RELOAD_KEY);
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function markReloadedThisSession() {
+    try {
+      window.sessionStorage.setItem(SESSION_RELOAD_KEY, String(Date.now()));
+    } catch (err) {
+      /* ignore */
+    }
+  }
 
   function normalize(value) {
     return String(value === undefined || value === null ? '' : value).trim();
@@ -82,9 +100,11 @@
           '请关闭客户端再打开，让后端跟着新代码重启'
         );
       }
-      // 版本不一致时自动强刷一次（后端刚被 launcher 重启的场景一次就好）
-      if ((state.mismatch || state.missingRoutes.length || state.backend_stale) && !window[RELOAD_KEY]) {
+      // 版本不一致时自动强刷一次（后端刚被 launcher 重启的场景一次就好）；
+      // 同一标签页会话只自动刷一次，之后只挂横幅提示，避免无限重载把界面卡死。
+      if ((state.mismatch || state.missingRoutes.length || state.backend_stale) && !window[RELOAD_KEY] && !alreadyReloadedThisSession()) {
         window[RELOAD_KEY] = true;
+        markReloadedThisSession();
         setTimeout(function () {
           try { location.reload(); } catch (err) { /* ignore */ }
         }, 1200);

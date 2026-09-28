@@ -151,7 +151,7 @@ window.registerLobsterView('alibaba-inquiries', {
 
   window.registerLobsterView('assets', {
     html: '/static/views/assets.html?v=20260806-content-record-categories',
-    scripts: '/static/js/publish.js?v=20260924-split-progress-v1'
+    scripts: '/static/js/publish.js?v=20260928-asset-action-menu-v4'
   });
 
   window.registerLobsterView('scheduled-tasks', {

@@ -3597,6 +3597,100 @@ function _wireAssetListThumbs(container) {
   });
 }
 
+function _assetActionMenuList(menu) {
+  if (!menu) return null;
+  // 浮动时列表挂在 body 上，不能再用 querySelector 找
+  if (menu._assetActionListFloating && menu._assetActionListRef && menu._assetActionListRef.isConnected) {
+    return menu._assetActionListRef;
+  }
+  return menu.querySelector('.asset-content-action-list');
+}
+
+function _closeFloatingAssetActionMenus(except) {
+  document.querySelectorAll('details.asset-content-action-menu[open]').forEach(function(menu) {
+    if (menu === except) return;
+    _restoreFloatingAssetActionMenu(menu);
+    menu.open = false;
+  });
+  // 卡片被重新渲染后，挂在 body 上的菜单要清掉，避免残留
+  document.querySelectorAll('body > .asset-content-action-list').forEach(function(list) {
+    var owner = list._assetActionMenuOwner;
+    if (!owner || !owner.isConnected) list.remove();
+  });
+}
+
+// 「操作」菜单默认向上弹；卡片本身 overflow:hidden，直接绝对定位会被裁掉一半。
+// 打开时把菜单挂到 body 上用 fixed 定位（放不下就向下弹），关闭时还原回卡片里。
+function _positionFloatingAssetActionMenu(menu) {
+  var list = _assetActionMenuList(menu);
+  var summary = menu.querySelector('summary');
+  if (!list || !summary) return;
+  menu._assetActionListRef = list;
+  if (list.parentNode !== document.body) {
+    menu._assetActionListHome = list.parentNode;
+    list._assetActionMenuOwner = menu;
+    document.body.appendChild(list);
+  }
+  list.style.position = 'fixed';
+  list.style.right = 'auto';
+  list.style.bottom = 'auto';
+  list.style.zIndex = '2147482000';
+  var rect = summary.getBoundingClientRect();
+  var gap = 6;
+  var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+  var vh = window.innerHeight || document.documentElement.clientHeight || 0;
+  var h = list.offsetHeight || 180;
+  var w = list.offsetWidth || 150;
+  var top = rect.top - gap - h;
+  if (top < 8) top = Math.min(vh - h - 8, rect.bottom + gap);
+  if (top < 8) top = 8;
+  var left = Math.min(Math.max(8, rect.right - w), Math.max(8, vw - w - 8));
+  list.style.top = Math.round(top) + 'px';
+  list.style.left = Math.round(left) + 'px';
+  menu._assetActionListFloating = true;
+}
+
+function _restoreFloatingAssetActionMenu(menu) {
+  var list = _assetActionMenuList(menu);
+  if (!list || !menu._assetActionListFloating) return;
+  list.style.position = '';
+  list.style.top = '';
+  list.style.left = '';
+  list.style.right = '';
+  list.style.bottom = '';
+  list.style.zIndex = '';
+  if (menu._assetActionListHome && menu._assetActionListHome.isConnected) {
+    try { menu._assetActionListHome.appendChild(list); } catch (e) { /* ignore */ }
+  }
+  menu._assetActionListFloating = false;
+}
+
+function _bindAssetActionMenuPositioning(container) {
+  if (!container) return;
+  container.querySelectorAll('details.asset-content-action-menu').forEach(function(menu) {
+    if (menu._assetActionMenuBound) return;
+    menu._assetActionMenuBound = true;
+    menu.addEventListener('toggle', function() {
+      if (menu.open) {
+        _closeFloatingAssetActionMenus(menu);
+        _positionFloatingAssetActionMenu(menu);
+      } else {
+        _restoreFloatingAssetActionMenu(menu);
+      }
+    });
+  });
+  if (!window.__assetActionMenuGlobalBound) {
+    window.__assetActionMenuGlobalBound = true;
+    document.addEventListener('click', function(event) {
+      var target = event.target;
+      var inside = target && target.closest ? target.closest('details.asset-content-action-menu, .asset-content-action-list') : null;
+      if (!inside) _closeFloatingAssetActionMenus(null);
+    }, true);
+    window.addEventListener('scroll', function() { _closeFloatingAssetActionMenus(null); }, true);
+    window.addEventListener('resize', function() { _closeFloatingAssetActionMenus(null); });
+  }
+}
+
 function _bindRenderedAssetListInteractions(el, assets) {
   if (!el) return;
   var assetMap = {};
@@ -3604,6 +3698,7 @@ function _bindRenderedAssetListInteractions(el, assets) {
     if (asset && asset.asset_id) assetMap[asset.asset_id] = asset;
   });
   _bindAssetContentActions(el, assetMap);
+  _bindAssetActionMenuPositioning(el);
   el.querySelectorAll('button[data-preview-asset]').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
@@ -4587,6 +4682,7 @@ var splitBtn = !isContentRecord && isVideo ? '<button type="button" class="btn b
   if (append) container.insertAdjacentHTML('beforeend', html);
   else container.innerHTML = html;
   _bindAssetCardActions(container);
+  _bindAssetActionMenuPositioning(container);
   _wireAssetListThumbs(container);
   _updateAssetBulkUi();
 }
