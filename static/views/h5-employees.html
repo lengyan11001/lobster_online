@@ -207,10 +207,10 @@
           <small>不勾选时本机不动微信：识别到的手机号上报到服务端账号池，由同账号的机器上加好友。</small>
         </label>
         <div class="oe-form-label" id="oeNodeNativeAddFriendField" hidden>
-          <span>个微加好友目标来源</span>
-          <label><input type="radio" name="oeNodeNativeAddFriendSource" value="local_import"> 本机导入名单（节点自己带的手机号/微信号）</label>
-          <label><input type="radio" name="oeNodeNativeAddFriendSource" value="douyin_private_message_phone"> 上级抖音私信结果（同一台机器刚跑完的私信接管）</label>
-          <label><input type="radio" name="oeNodeNativeAddFriendSource" value="server_reported_pool"> 服务端上报池（同账号跨机器共用）</label>
+          <span>个微加好友目标来源<small id="oeNodeNativeAddFriendTopHint" hidden>（一级节点只能选 ① 本机导入名单 或 ③ 服务端上报池；「上级抖音私信结果」只能作为「抖音私信接管」的下级动作）</small></span>
+          <label id="oeNodeAddFriendSourceLocal"><input type="radio" name="oeNodeNativeAddFriendSource" value="local_import"> ① 本机导入名单（节点自己带的手机号/微信号）</label>
+          <label id="oeNodeAddFriendSourceDouyin"><input type="radio" name="oeNodeNativeAddFriendSource" value="douyin_private_message_phone"> ② 上级抖音私信结果（同一台机器刚跑完的私信接管 · 仅作下级动作）</label>
+          <label id="oeNodeAddFriendSourcePool"><input type="radio" name="oeNodeNativeAddFriendSource" value="server_reported_pool"> ③ 服务端上报池（同账号跨机器共用）</label>
           <label>每轮领取数量<input id="oeNodeNativeAddFriendLimit" type="number" min="1" max="200" step="1" value="50"></label>
         </div>
         <div class="oe-form-label" id="oeNodeDouyinCollectionField" hidden>

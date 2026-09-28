@@ -625,20 +625,48 @@
     });
     return result;
   }
+  // 只有「来源=上级抖音私信结果」的独立加好友节点才需要折叠进「抖音私信接管」父节点；
+  // ①本机导入名单 / ③服务端上报池 自带目标清单，保持一级节点不动。
+  function nativeAddFriendSourceOf(node) {
+    var payload = workflowPayload(node), params = payload.params && typeof payload.params === 'object' ? payload.params : {};
+    var raw = String(params.source_mode || '').trim().toLowerCase();
+    if (['server_reported_pool','server_pool','reported_pool','reported_contacts','wechat_contact_pool'].indexOf(raw) >= 0) return 'server_reported_pool';
+    if (['douyin_private_message_phone','douyin_private_message_mobile','douyin_private_message_wechat_id'].indexOf(raw) >= 0) return 'douyin_private_message_phone';
+    return 'local_import';
+  }
+  function isParentBoundAddFriend(node) {
+    return childActionType(node) === 'native_wechat_add_friend' && nativeAddFriendSourceOf(node) === 'douyin_private_message_phone';
+  }
   function migrateDouyinAddFriendChildren(nodes) {
     var list = Array.isArray(nodes) ? listClone(nodes) : [];
-    var parents = list.filter(isDouyinPrivate), legacyRows = list.filter(function(node) { return childActionType(node) === 'native_wechat_add_friend'; });
-    if (!parents.length) return list;
-    var prepared = list.filter(function(node) { return childActionType(node) !== 'native_wechat_add_friend'; });
-    parents.forEach(function(parent) {
-      var payload = workflowPayload(parent), params = payload.params && typeof payload.params === 'object' ? Object.assign({}, payload.params) : {}, children = workflowChildren(parent), hadChild = children.some(function(child) { return childActionType(child) === 'native_wechat_add_friend'; });
+    var parents = list.filter(isDouyinPrivate), legacyRows = list.filter(isParentBoundAddFriend);
+    if (!parents.length || !legacyRows.length) return list;
+    var prepared = list.filter(function(node) { return !isParentBoundAddFriend(node); });
+    var lastIndex = parents.length - 1;
+    parents.forEach(function(parent, parentIdx) {
+      var parentFull = prepared.filter(function(node) { return node && node.id === parent.id; })[0] || parent;
+      var payload = workflowPayload(parentFull), params = payload.params && typeof payload.params === 'object' ? Object.assign({}, payload.params) : {}, children = workflowChildren(parentFull), hadChild = children.some(function(child) { return childActionType(child) === 'native_wechat_add_friend'; });
       params.wechat_add_friend_enabled = Object.prototype.hasOwnProperty.call(params, 'wechat_add_friend_enabled') ? !!params.wechat_add_friend_enabled : !!(hadChild || legacyRows.length);
       params.wechat_add_friend_targets_source = 'douyin_private_message_phone';
       delete params.wechat_add_friend_rules;
-      parent.plan = parent.plan && typeof parent.plan === 'object' ? parent.plan : {};
-      parent.plan.payload = Object.assign({}, payload, {params:params});
+      parentFull.plan = parentFull.plan && typeof parentFull.plan === 'object' ? parentFull.plan : {};
+      parentFull.plan.payload = Object.assign({}, payload, {params:params});
       var remaining = children.filter(function(child) { return childActionType(child) !== 'native_wechat_add_friend'; });
-      if (remaining.length) parent.children = remaining; else delete parent.children;
+      // 折叠过来的独立节点不再消失：作为可见下级挂到最后一个「抖音私信接管」节点上。
+      var adopted = parentIdx === lastIndex ? legacyRows.map(function(row) {
+        var child = Object.assign({}, row);
+        child.id = parentFull.id + '_native_' + String(row.time || '').replace(':', '') + '_' + String(row.id || '');
+        child.parent_node_id = parentFull.id;
+        child.action_type = 'native_wechat_add_friend';
+        child.type = 'native_wechat_add_friend';
+        child.ability_key = 'native_wechat_add_friend';
+        child.ability_label = row.ability_label || '个微自动加好友';
+        child.is_action_node = true;
+        child.sales_preset = true;
+        return child;
+      }) : [];
+      var merged = remaining.concat(adopted).sort(function(a, b) { return String(a.time || '').localeCompare(String(b.time || '')); });
+      if (merged.length) parentFull.children = merged; else delete parentFull.children;
     });
     return prepared;
   }
@@ -1188,6 +1216,17 @@
     var target=normalizeNativeAddFriendSource(value);
     Array.prototype.forEach.call(document.querySelectorAll('input[name="oeNodeNativeAddFriendSource"]'),function(input){input.checked=input.value === target;});
   }
+  function applyNativeAddFriendSourceScope() {
+    // 节点弹窗保存的都是「一级节点」：来源②依赖上级抖音私信接管，只能在下级动作里选。
+    var key = String((el('oeNodeKey') || {}).value || ''), isAddFriend = key === 'native_wechat_add_friend';
+    var douyinLabel = el('oeNodeAddFriendSourceDouyin'), hint = el('oeNodeNativeAddFriendTopHint');
+    if (douyinLabel) douyinLabel.hidden = isAddFriend;
+    if (hint) hint.hidden = !isAddFriend;
+    if (isAddFriend && nativeAddFriendSourceFromForm() === 'douyin_private_message_phone') {
+      setNativeAddFriendSource('server_reported_pool');
+      if (typeof toast === 'function') toast('一级节点不能选「上级抖音私信结果」，已切换到③服务端上报池');
+    }
+  }
   function nativeAddFriendSourceFromForm() {
     var checked=document.querySelector('input[name="oeNodeNativeAddFriendSource"]:checked');
     return normalizeNativeAddFriendSource(checked && checked.value);
@@ -1247,6 +1286,7 @@
     fillNodeOptions(node && node.ability_key,node && node.ability_label,node); el('oeNodeLabel').value=node && node.ability_label || option[1]; el('oeNodeNote').value=node && node.note || option[2] || option[1];
     el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; el('oeNodeWechatAddFriendEnabled').checked=boolParam(params.wechat_add_friend_enabled,false);
     setNativeAddFriendSource(nativeAddFriendSourceFromParams(params));
+    applyNativeAddFriendSourceScope();
     if (el('oeNodeNativeAddFriendLimit')) el('oeNodeNativeAddFriendLimit').value=Math.max(1,Math.min(200,Number(params.max_targets || params.server_pool_limit || 50)));
     if (el('oeNodeDouyinReplyMode')) {
       var optionExtraForReply=option[5] && typeof option[5] === 'object' ? option[5] : {};
@@ -1309,8 +1349,7 @@
         delete row.params.server_pool_limit; delete row.params.trigger;
         delete row.params.skip_without_clear_mobile; delete row.params.skip_without_clear_wechat_id;
       } else {
-        row.params.source_mode='douyin_private_message_phone'; row.params.trigger='clear_mobile'; row.params.skip_without_clear_mobile=true;
-        delete row.params.skip_without_clear_wechat_id; delete row.params.max_targets; delete row.params.server_pool_limit;
+        throw new Error('一级节点不能选「上级抖音私信结果」：请改选 ① 本机导入名单 或 ③ 服务端上报池；来源②请在「抖音私信接管」节点上用「添加下级」添加。');
       }
     }
     if (selectedSalesAction === 'stranger_message') {
