@@ -210,3 +210,118 @@ def test_add_friend_body_accepts_bulk_import_chunk():
 
     assert body.bulk_import is True
     assert len(body.keywords) == 100
+
+
+
+def _no_sleep_between_targets(monkeypatch):
+    async def _no_sleep(strategy, idx, total, *, kind):
+        return None
+
+    monkeypatch.setattr(engine, "_sleep_between_targets", _no_sleep)
+
+
+def test_failed_target_marked_skipped_and_not_requeued(monkeypatch, tmp_path):
+    """加不了的人连续失败到上限后标记成 skipped，下次不再重复下发。"""
+    _prepare(monkeypatch, tmp_path)
+    _no_sleep_between_targets(monkeypatch)
+    monkeypatch.setattr(engine, "_enforce_local_friend_add_rate", lambda account_id: None)
+    monkeypatch.setattr(engine, "_notify_friend_add_scheduler", lambda account_id: None)
+
+    async def _fail_run(func, account_id, target, **kwargs):
+        raise RuntimeError("对方设置了隐私，不能添加")
+
+    monkeypatch.setattr(engine, "_run_local_wechat_async", _fail_run)
+    limit = engine._FRIEND_ADD_MAX_ATTEMPTS_DEFAULT
+
+    for index in range(limit):
+        created = asyncio.run(
+            engine.create_add_friend_task(
+                "pc-wechat-test",
+                ["13800138000"],
+                queue_only=True,
+                client_request_id="loop-%d" % index,
+            )
+        )
+        assert created["status"] == "queued", created
+        claimed = engine._claim_next_queued_friend_task("pc-wechat-test")
+        assert claimed is not None
+        asyncio.run(engine._process_add_friend_task(claimed))
+        state = engine._friend_add_target_state("pc-wechat-test", "13800138000")
+        assert state["attempts"] == index + 1
+        assert state["status"] == ("skipped" if index + 1 >= limit else "failed")
+
+    again = asyncio.run(
+        engine.create_add_friend_task(
+            "pc-wechat-test",
+            ["13800138000"],
+            queue_only=True,
+            client_request_id="loop-final",
+        )
+    )
+    assert again["status"] == "skipped"
+    assert again["reason"] == "already_handled"
+    assert again["queued_total"] == 0
+    assert [item["target"] for item in again["skipped_targets"]] == ["13800138000"]
+    assert engine.list_friend_records("pc-wechat-test")["count"] == limit
+
+
+def test_submitted_target_is_marked_added_and_not_requeued(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _no_sleep_between_targets(monkeypatch)
+    monkeypatch.setattr(engine, "_enforce_local_friend_add_rate", lambda account_id: None)
+    monkeypatch.setattr(engine, "_notify_friend_add_scheduler", lambda account_id: None)
+
+    async def _ok_run(func, account_id, target, **kwargs):
+        return {"ok": True, "status": "submitted"}
+
+    monkeypatch.setattr(engine, "_run_local_wechat_async", _ok_run)
+    asyncio.run(
+        engine.create_add_friend_task(
+            "pc-wechat-test", ["wx_good"], queue_only=True, client_request_id="ok-1"
+        )
+    )
+    claimed = engine._claim_next_queued_friend_task("pc-wechat-test")
+    asyncio.run(engine._process_add_friend_task(claimed))
+    assert engine._friend_add_target_state("pc-wechat-test", "wx_good")["status"] == "added"
+
+    again = asyncio.run(
+        engine.create_add_friend_task(
+            "pc-wechat-test",
+            ["wx_good", "wx_new"],
+            queue_only=True,
+            client_request_id="ok-2",
+        )
+    )
+    assert again["status"] == "queued"
+    assert again["targets"] == ["wx_new"]
+    assert [item["target"] for item in again["skipped_targets"]] == ["wx_good"]
+
+
+def test_already_friend_target_is_marked_added(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _no_sleep_between_targets(monkeypatch)
+    monkeypatch.setattr(engine, "_enforce_local_friend_add_rate", lambda account_id: None)
+    monkeypatch.setattr(engine, "_notify_friend_add_scheduler", lambda account_id: None)
+
+    async def _already_run(func, account_id, target, **kwargs):
+        return {"ok": True, "status": "already_friend"}
+
+    monkeypatch.setattr(engine, "_run_local_wechat_async", _already_run)
+    asyncio.run(
+        engine.create_add_friend_task(
+            "pc-wechat-test", ["wx_friend"], queue_only=True, client_request_id="already-1"
+        )
+    )
+    claimed = engine._claim_next_queued_friend_task("pc-wechat-test")
+    asyncio.run(engine._process_add_friend_task(claimed))
+    state = engine._friend_add_target_state("pc-wechat-test", "wx_friend")
+    assert state["status"] == "added"
+    assert state["attempts"] == 0
+
+    again = asyncio.run(
+        engine.create_add_friend_task(
+            "pc-wechat-test", ["wx_friend"], queue_only=True, client_request_id="already-2"
+        )
+    )
+    assert again["status"] == "skipped"
+    assert again["queued_total"] == 0

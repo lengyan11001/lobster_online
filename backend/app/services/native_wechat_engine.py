@@ -701,6 +701,20 @@ def init_db() -> None:
             create index if not exists idx_wechat_group_members_group
             on wechat_group_members(account_id, group_key, updated_at desc);
 
+            create table if not exists wechat_friend_add_targets (
+                account_id text not null,
+                target text not null,
+                status text not null default 'pending',
+                attempts integer not null default 0,
+                last_error text,
+                last_attempt_at text,
+                created_at text not null,
+                updated_at text not null,
+                primary key (account_id, target)
+            );
+            create index if not exists idx_wechat_friend_add_targets_status
+            on wechat_friend_add_targets(account_id, status);
+
             create table if not exists wechat_friend_requests (
                 id text primary key,
                 account_id text not null,
@@ -15871,6 +15885,101 @@ def _task_row_by_id(task_id: str) -> Optional[Dict[str, Any]]:
     return _row_to_dict(row) if row else None
 
 
+_FRIEND_ADD_MAX_ATTEMPTS_DEFAULT = 3
+_FRIEND_ADD_HANDLED_STATUSES = {"added", "skipped"}
+
+
+def _friend_add_target_state(account_id: str, target: str) -> Dict[str, Any]:
+    account_id = str(account_id or "").strip()
+    target = str(target or "").strip()
+    if not account_id or not target:
+        return {}
+    with _connect() as conn:
+        row = conn.execute(
+            "select * from wechat_friend_add_targets where account_id=? and target=? limit 1",
+            (account_id, target),
+        ).fetchone()
+    return _row_to_dict(row) if row else {}
+
+
+def _filter_friend_add_targets(account_id: str, targets: List[str]) -> tuple[List[str], List[Dict[str, Any]]]:
+    """过滤掉已经加成功 / 已判定加不了的目标，避免同一个人反复循环。"""
+    allowed: List[str] = []
+    skipped: List[Dict[str, Any]] = []
+    for target in targets or []:
+        state = _friend_add_target_state(account_id, target)
+        status = str(state.get("status") or "").strip()
+        if status in _FRIEND_ADD_HANDLED_STATUSES:
+            skipped.append(
+                {
+                    "target": str(target),
+                    "status": status,
+                    "attempts": int(state.get("attempts") or 0),
+                    "error": str(state.get("last_error") or ""),
+                }
+            )
+            continue
+        allowed.append(str(target))
+    return allowed, skipped
+
+
+def _mark_friend_add_target(
+    account_id: str,
+    target: str,
+    *,
+    status: str,
+    error: str = "",
+    attempt: bool = False,
+) -> Dict[str, Any]:
+    account_id = str(account_id or "").strip()
+    target = str(target or "").strip()
+    if not account_id or not target:
+        return {}
+    now = _now_iso()
+    with _connect() as conn:
+        row = conn.execute(
+            "select * from wechat_friend_add_targets where account_id=? and target=? limit 1",
+            (account_id, target),
+        ).fetchone()
+        attempts = int(row["attempts"] or 0) if row else 0
+        if attempt:
+            attempts += 1
+        clean_error = str(error or "").strip()[:300]
+        if row:
+            conn.execute(
+                "update wechat_friend_add_targets set status=?, attempts=?, last_error=?, last_attempt_at=?, updated_at=?"
+                " where account_id=? and target=?",
+                (status, attempts, clean_error, now, now, account_id, target),
+            )
+        else:
+            conn.execute(
+                "insert into wechat_friend_add_targets(account_id, target, status, attempts, last_error, last_attempt_at, created_at, updated_at)"
+                " values(?,?,?,?,?,?,?,?)",
+                (account_id, target, status, attempts, clean_error, now, now, now),
+            )
+    return {"target": target, "status": status, "attempts": attempts, "last_error": str(error or "")[:300]}
+
+
+def _record_friend_add_outcome(
+    account_id: str,
+    target: str,
+    status: str,
+    error: str = "",
+    *,
+    max_attempts: int = 0,
+) -> Dict[str, Any]:
+    """把每个目标的结果落库：成功/已是好友 → 不再重试；连续失败到上限 → skipped 不再重试。"""
+    clean_status = str(status or "").strip().lower()
+    if clean_status in {"submitted", "prepared", "already_friend", "added"}:
+        return _mark_friend_add_target(account_id, target, status="added", error=error)
+    limit = max(1, int(max_attempts or _FRIEND_ADD_MAX_ATTEMPTS_DEFAULT))
+    state = _mark_friend_add_target(account_id, target, status="failed", error=error, attempt=True)
+    attempts = int(state.get("attempts") or 0)
+    if attempts >= limit:
+        state = _mark_friend_add_target(account_id, target, status="skipped", error=error)
+    return state
+
+
 async def create_add_friend_task(
     account_id: str,
     keywords: List[str],
@@ -15897,6 +16006,21 @@ async def create_add_friend_task(
     targets = _normalize_task_targets(keywords, max_targets=max_targets)
     if not targets:
         raise RuntimeError("缺少好友关键词")
+    # 已经加成功 / 已判定加不了的目标不再重复下发
+    targets, skipped_targets = _filter_friend_add_targets(account_id, targets)
+    if not targets:
+        return {
+            "id": str(client_request_id or uuid.uuid4().hex)[:140],
+            "account_id": account_id,
+            "task_type": "add_friend",
+            "targets": [],
+            "tasks": [],
+            "status": "skipped",
+            "planned_total": 0,
+            "queued_total": 0,
+            "skipped_targets": skipped_targets,
+            "reason": "already_handled",
+        }
     daily_limit = int(strategy.get("daily_friend_add_limit") or 0)
     added_today = _local_friend_request_count_today(account_id)
     if not bulk_import and daily_limit > 0 and added_today + len(targets) > daily_limit:
@@ -15955,6 +16079,7 @@ async def create_add_friend_task(
             "status": "queued",
             "planned_total": len(queued_tasks),
             "queued_total": len(queued_tasks),
+            "skipped_targets": skipped_targets,
         }
     task = _create_wechat_task(
         account_id=account_id,
@@ -15971,6 +16096,8 @@ async def create_add_friend_task(
         strategy=strategy,
         client_request_id=client_request_id,
     )
+    if skipped_targets and isinstance(task, dict):
+        task["skipped_targets"] = skipped_targets
     return task
 
 
@@ -16012,7 +16139,7 @@ async def _process_add_friend_task(task: Dict[str, Any]) -> Dict[str, Any]:
         for attempt in range(int(strategy.get("retry_max") or 0) + 1):
             try:
                 _enforce_local_friend_add_rate(account_id)
-                await _run_local_wechat_async(
+                result = await _run_local_wechat_async(
                     add_local_friend,
                     account_id,
                     target,
@@ -16023,6 +16150,7 @@ async def _process_add_friend_task(task: Dict[str, Any]) -> Dict[str, Any]:
                     prepare_only=bool(payload.get("prepare_only")),
                 )
                 ok = True
+                run_status = str((result or {}).get("status") or "submitted")
                 break
             except FriendAddDailyLimitReached as exc:
                 deferred = str(exc)
@@ -16038,9 +16166,18 @@ async def _process_add_friend_task(task: Dict[str, Any]) -> Dict[str, Any]:
             break
         if ok:
             success += 1
+            _record_friend_add_outcome(account_id, target, run_status)
         else:
             failed += 1
             last_error = err
+            # 失败记一次；连续失败到上限就标记 skipped，下次不再加这个人
+            _record_friend_add_outcome(
+                account_id,
+                target,
+                "failed",
+                err,
+                max_attempts=int(strategy.get("friend_add_max_attempts") or _FRIEND_ADD_MAX_ATTEMPTS_DEFAULT),
+            )
         _update_task_progress(
             task_id,
             base_processed + processed,

@@ -13641,11 +13641,16 @@ async def _queue_douyin_wechat_friend_add(contact_values: List[str]) -> Dict[str
             native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID,
             contact_values,
         )
+        task_status = str(task.get("status") or "") if isinstance(task, dict) else ""
+        queued = task_status not in {"skipped", "failed"}
         return {
             "enabled": True,
-            "queued": True,
+            "queued": queued,
             "targets": contact_values,
             "task_id": str(task.get("id") or "") if isinstance(task, dict) else "",
+            "status": task_status,
+            "skipped_targets": list(task.get("skipped_targets") or []) if isinstance(task, dict) else [],
+            "reason": str(task.get("reason") or "") if isinstance(task, dict) else "",
         }
     except Exception as exc:
         douyin_log(f"[抖音私信接管] 识别到联系方式后提交加好友任务失败：{exc}", "error")
