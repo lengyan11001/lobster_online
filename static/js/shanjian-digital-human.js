@@ -644,6 +644,25 @@
     return headers;
   }
 
+  // 数字人分身训练素材：和素材库/分组素材一样，在本机（设备端）先压一份合规副本再提交闪剪。
+  // 本机接口不可用时保持原样（不阻断提交）。
+  function prepareShanjianCompliantAssetIds(assetIds) {
+    var ids = (assetIds || []).filter(function(id) { return !!id; });
+    if (!ids.length) return Promise.resolve({});
+    return requestLibrary('/api/assets/shanjian-prepare', { asset_ids: ids, max_edge: getInlineMaterialMaxEdge() })
+      .then(function(data) {
+        var map = {};
+        ((data && data.items) || []).forEach(function(item) {
+          if (!item || !item.asset_id) return;
+          var next = String(item.compliant_asset_id || '').trim();
+          var action = String(item.action || '').trim();
+          if (next && (action === 'converted' || action === 'reused')) map[item.asset_id] = next;
+        });
+        return map;
+      })
+      .catch(function() { return {}; });
+  }
+
   function uploadAssetFile(file) {
     var fd = new FormData();
     fd.append('file', file);
@@ -3856,13 +3875,20 @@
       .then(function(results) {
         var imageAsset = results[0];
         var authAsset = results[1];
-        return request('/api/shanjian-digital-human/profile/train', {
-          title: title,
-          mode: 'image',
-          image_asset_id: imageAsset.asset_id,
-          auth_video_asset_id: authAsset && authAsset.asset_id ? authAsset.asset_id : '',
-          auth_text: authText,
-          make_default: true
+        return prepareShanjianCompliantAssetIds([
+          imageAsset.asset_id,
+          authAsset && authAsset.asset_id ? authAsset.asset_id : ''
+        ]).then(function(compliant) {
+          return request('/api/shanjian-digital-human/profile/train', {
+            title: title,
+            mode: 'image',
+            image_asset_id: compliant[imageAsset.asset_id] || imageAsset.asset_id,
+            auth_video_asset_id: authAsset && authAsset.asset_id
+              ? (compliant[authAsset.asset_id] || authAsset.asset_id)
+              : '',
+            auth_text: authText,
+            make_default: true
+          });
         });
       })
       .then(function(data) {
@@ -3916,13 +3942,15 @@
       .then(function(videoAsset) {
         var authPromise = authFile ? uploadAssetFile(authFile) : Promise.resolve(videoAsset);
         return authPromise.then(function(authAsset) {
-          return request('/api/shanjian-digital-human/profile/train', {
-            title: title,
-            mode: 'fast_video',
-            video_asset_id: videoAsset.asset_id,
-            auth_video_asset_id: authAsset.asset_id,
-            auth_text: authText,
-            make_default: true
+          return prepareShanjianCompliantAssetIds([videoAsset.asset_id, authAsset.asset_id]).then(function(compliant) {
+            return request('/api/shanjian-digital-human/profile/train', {
+              title: title,
+              mode: 'fast_video',
+              video_asset_id: compliant[videoAsset.asset_id] || videoAsset.asset_id,
+              auth_video_asset_id: compliant[authAsset.asset_id] || authAsset.asset_id,
+              auth_text: authText,
+              make_default: true
+            });
           });
         });
       })
