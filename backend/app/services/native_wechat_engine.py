@@ -18882,6 +18882,112 @@ def _clear_file_dialog_default_selection(
     return cleared
 
 
+def _moments_open_dialog_inline_error(root: Any) -> str:
+    """读出系统打开框里自带的错误文字（如「找不到文件」），方便诊断。"""
+    if root is None:
+        return ""
+    markers = ("找不到", "不存在", "无效", "错误", "not found", "invalid")
+    try:
+        nodes = _uia_walk(root, max_depth=12, max_nodes=600)
+    except Exception:
+        return ""
+    for node in nodes:
+        text = str(_uia_control_text(node) or "").strip()
+        if not text or len(text) > 80:
+            continue
+        low = text.lower()
+        if any(marker in text or marker in low for marker in markers):
+            return text
+    return ""
+
+
+def _open_dialog_confirm(
+    dialog_hwnd: int,
+    root: Any,
+    spec: str,
+    paths: List[str],
+    steps: List[Dict[str, Any]],
+    *,
+    label: str,
+    timeout: float = 10.0,
+) -> None:
+    """把文件名只写进选择框并确认；框没关就报错（带上框里的错误文字）。"""
+    _activate_window(dialog_hwnd)
+    edit = _file_dialog_filename_edit(root, timeout=8.0)
+    if edit is None:
+        steps.append({"step": "moments_picker_filename_missing", "ok": False, "windows": _top_level_windows()[:12]})
+        raise RuntimeError("朋友圈素材选择框里没找到文件名输入框，请重试")
+    # SetValue 只改文件名框，不会取消列表默认高亮。先清掉高亮再写入。
+    _clear_file_dialog_default_selection(root, steps)
+    if not _uia_set_text_verified(edit, spec, steps=steps, label=label):
+        steps.append({"step": "select_moments_files", "ok": False, "reason": "文件名输入框回读不一致", "spec": spec[:200]})
+        raise RuntimeError("朋友圈素材路径没有真正写进文件选择框，请重试")
+    # 写入后又高亮了别的文件时只清那一项。清选中有时会把文件名框抹掉，抹掉就写回再点打开。
+    if _clear_file_dialog_default_selection(root, steps, keep_names=[Path(path).name for path in paths]):
+        if not _moments_text_written(edit, spec):
+            if not _uia_set_text_verified(edit, spec, steps=steps, label=label + "_restore"):
+                steps.append({"step": "select_moments_files", "ok": False, "reason": "文件名输入框回读不一致", "spec": spec[:200]})
+                raise RuntimeError("朋友圈素材路径没有真正写进文件选择框，请重试")
+    steps.append({"step": "select_moments_files", "ok": True, "count": len(paths), "mode": label, "spec": spec[:200]})
+    _activate_window(dialog_hwnd)
+    open_btn = _file_dialog_open_button(root, timeout=3.0)
+    if open_btn is not None:
+        _uia_click(open_btn)
+    else:
+        steps.append({"step": "moments_picker_open_button_missing", "ok": True, "fallback": "enter"})
+        _send_hotkey("enter", pause=0.25)
+    if _wait_window_closed(dialog_hwnd, timeout=timeout):
+        steps.append({"step": "close_moments_file_picker", "ok": True, "mode": label})
+        return
+    # 编辑页已经拿到素材就不要再误杀（以前这里直接判失败，把已经加好的素材一起废掉）
+    ready_root = _uia_foreground_or_main_root(dialog_hwnd)
+    if _moments_publish_dialog_ready(ready_root) and not _moments_publish_rejection(ready_root):
+        try:
+            _activate_window(dialog_hwnd)
+            _send_hotkey("esc", pause=0.15)
+        except Exception:
+            pass
+        steps.append({"step": "close_moments_file_picker", "ok": True, "mode": label, "method": "editor_ready_after_timeout"})
+        return
+    inline_error = _moments_open_dialog_inline_error(root)
+    steps.append(
+        {
+            "step": "close_moments_file_picker",
+            "ok": False,
+            "mode": label,
+            "spec": spec[:200],
+            "inline_error": inline_error,
+            "error": "系统文件选择框未在规定时间内关闭",
+            "window": _window_state(dialog_hwnd),
+        }
+    )
+    raise RuntimeError(
+        "朋友圈素材选择框没能确认（选择框未关闭%s）"
+        % (("：" + inline_error) if inline_error else "")
+    )
+
+
+def _dismiss_open_dialog(dialog_hwnd: int, steps: List[Dict[str, Any]]) -> None:
+    """把卡住的选择框关掉，好走后面的逐张兜底。"""
+    if not dialog_hwnd:
+        return
+    try:
+        _activate_window(dialog_hwnd)
+        _send_hotkey("esc", pause=0.2)
+        _wait_window_closed(dialog_hwnd, timeout=3.0)
+        steps.append({"step": "dismiss_moments_file_picker", "ok": True})
+    except Exception as exc:  # noqa: BLE001
+        steps.append({"step": "dismiss_moments_file_picker", "ok": False, "error": str(exc)[:160]})
+
+
+def _add_moments_files_one_by_one(hwnd: int, files: List[Dict[str, Any]], steps: List[Dict[str, Any]]) -> None:
+    """多选失败时的兜底：每次只选一张（绝对路径），避开「目录+文件名」写法在某些系统上报「找不到文件」。"""
+    total = len(files)
+    for index, item in enumerate(files):
+        _add_moments_publish_files(hwnd, [item], steps)
+        steps.append({"step": "add_moments_files_one_by_one", "ok": True, "index": index + 1, "total": total})
+
+
 def _select_files_in_open_dialog(
     hwnd: int,
     files: List[Dict[str, Any]],
@@ -18889,7 +18995,8 @@ def _select_files_in_open_dialog(
     *,
     picker: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """在系统文件选择框里选素材：真等框、真查找、回读校验、按框自己的句柄判断关没关。"""
+    """在系统文件选择框里选素材：真等框、真查找、回读校验、按框自己的句柄判断关没关；
+    多张一次选不成功（常见于框里报「找不到文件」导致不关闭）时自动退回「每次一张」逐张添加。"""
     paths = [str(item.get("local_path") or "").strip() for item in files if str(item.get("local_path") or "").strip()]
     if not paths:
         return
@@ -18904,88 +19011,63 @@ def _select_files_in_open_dialog(
         raise RuntimeError("朋友圈素材选择框没打开（没找到系统文件选择框），请重试")
     dialog_hwnd = int(window.get("hwnd") or 0)
     root = window.get("root") or _uia_main_root(dialog_hwnd)
-    _activate_window(dialog_hwnd)
-    edit = window.get("edit") or _file_dialog_filename_edit(root, timeout=8.0)
-    if edit is None:
-        steps.append({"step": "moments_picker_filename_missing", "ok": False, "windows": _top_level_windows()[:12]})
-        raise RuntimeError("朋友圈素材选择框里没找到文件名输入框，请重试")
-    # SetValue 只改文件名框，不会取消列表默认高亮。先清掉高亮再写入。
-    _clear_file_dialog_default_selection(root, steps)
-    if not _uia_set_text_verified(edit, file_spec, steps=steps, label="moments_files"):
-        steps.append({"step": "select_moments_files", "ok": False, "reason": "文件名输入框回读不一致"})
-        raise RuntimeError("朋友圈素材路径没有真正写进文件选择框，请重试")
-    # 写入后又高亮了别的文件时只清那一项。清选中有时会把文件名框抹掉，抹掉就写回再点打开。
-    if _clear_file_dialog_default_selection(root, steps, keep_names=[Path(path).name for path in paths]):
-        if not _moments_text_written(edit, file_spec):
-            if not _uia_set_text_verified(edit, file_spec, steps=steps, label="moments_files_restore"):
-                steps.append({"step": "select_moments_files", "ok": False, "reason": "文件名输入框回读不一致"})
-                raise RuntimeError("朋友圈素材路径没有真正写进文件选择框，请重试")
-    same_folder = len(paths) > 1 and len({str(Path(path).parent) for path in paths}) == 1
-    steps.append(
-        {
-            "step": "select_moments_files",
-            "ok": True,
-            "count": len(paths),
-            "spec_mode": "directory_names" if same_folder else "absolute",
-        }
-    )
-    _activate_window(dialog_hwnd)
-    open_btn = _file_dialog_open_button(root, timeout=3.0)
-    if open_btn is not None:
-        _uia_click(open_btn)
-    else:
-        steps.append({"step": "moments_picker_open_button_missing", "ok": True, "fallback": "enter"})
-        _send_hotkey("enter", pause=0.25)
-    if _wait_window_closed(dialog_hwnd, timeout=10.0):
-        steps.append({"step": "close_moments_file_picker", "ok": True})
-        return
-    # 编辑页已经拿到素材就不要再误杀（以前这里直接判失败，把已经加好的素材一起废掉）
-    ready_root = _uia_foreground_or_main_root(hwnd)
-    if _moments_publish_dialog_ready(ready_root) and not _moments_publish_rejection(ready_root):
+    if len(paths) > 1:
         try:
-            _activate_window(dialog_hwnd)
-            _send_hotkey("esc", pause=0.15)
-        except Exception:
-            pass
-        steps.append({"step": "close_moments_file_picker", "ok": True, "method": "editor_ready_after_timeout"})
-        return
-    steps.append(
-        {
-            "step": "close_moments_file_picker",
-            "ok": False,
-            "error": "系统文件选择框未在规定时间内关闭",
-            "window": _window_state(dialog_hwnd),
-        }
-    )
-    try:
-        _activate_window(dialog_hwnd)
-        _send_hotkey("esc", pause=0.1)
-    except Exception:
-        pass
-    raise RuntimeError("朋友圈素材选择框没能确认（选择框未关闭），已终止本次发布")
+            _open_dialog_confirm(dialog_hwnd, root, file_spec, paths, steps, label="moments_files_multi")
+            return
+        except RuntimeError as exc:
+            steps.append(
+                {
+                    "step": "moments_multi_select_failed",
+                    "ok": False,
+                    "error": str(exc)[:200],
+                    "fallback": "one_by_one",
+                }
+            )
+            _dismiss_open_dialog(dialog_hwnd, steps)
+            _add_moments_files_one_by_one(hwnd, files, steps)
+            return
+    _open_dialog_confirm(dialog_hwnd, root, file_spec, paths, steps, label="moments_files_single")
 
 
 def _add_moments_publish_files(hwnd: int, files: List[Dict[str, Any]], steps: List[Dict[str, Any]]) -> None:
-    """点「+」打开素材选择框再选文件（发表入口没自动弹框时走这条兜底）。"""
+    """点「+」打开素材选择框再选文件（发表入口没自动弹框时走这条兜底）。
+
+    微信弹框偶尔第一次不出现：这里自己再点一次「+」重试，避免直接报「选择框未打开」。
+    """
     if not files:
         return
     root = _uia_foreground_or_main_root(hwnd)
     plus = _find_moments_publish_plus(root)
-    if plus is not None:
-        _uia_click(plus)
-        steps.append({"step": "open_moments_file_picker", "ok": True, "method": "uia"})
-    else:
+    rect = None
+    if plus is None:
         rect = _uia_rect_tuple(root)
         if rect is None:
             raise RuntimeError("未找到朋友圈发布窗口位置，无法添加素材")
-        left, top, _right, _bottom = rect
-        _uia_click_screen_point(left + 175, top + 215)
-        steps.append({"step": "open_moments_file_picker", "ok": True, "method": "coordinate"})
+
+    def click_plus(attempt: int) -> None:
+        if plus is not None:
+            _uia_click(plus)
+            steps.append({"step": "open_moments_file_picker", "ok": True, "method": "uia", "attempt": attempt})
+        else:
+            left, top, _right, _bottom = rect  # type: ignore[misc]
+            _uia_click_screen_point(left + 175, top + 215)
+            steps.append({"step": "open_moments_file_picker", "ok": True, "method": "coordinate", "attempt": attempt})
+
+    click_plus(1)
     picker = _find_moments_file_picker_window(
         wechat_pid=_window_process_id(hwnd),
         timeout=12.0,
         steps=steps,
     )
+    if picker is None:
+        steps.append({"step": "moments_file_picker_retry", "ok": True, "reason": "第一次没弹框"})
+        click_plus(2)
+        picker = _find_moments_file_picker_window(
+            wechat_pid=_window_process_id(hwnd),
+            timeout=12.0,
+            steps=steps,
+        )
     if picker is None:
         steps.append({"step": "moments_file_picker_missing", "ok": False, "after_plus": True})
         raise RuntimeError("点了「+」之后朋友圈素材选择框仍未出现，请重试")
