@@ -1405,6 +1405,18 @@ class DesktopApi:
     def startup_status(self) -> dict:
         return get_startup_status_snapshot()
 
+    def open_external_url(self, url: str = "") -> dict:
+        """用系统默认浏览器打开链接（选品广场等外部站点入口）。"""
+        target = str(url or "").strip()
+        if not target.lower().startswith(("http://", "https://")):
+            return {"ok": False, "error": "only http/https links can be opened"}
+        try:
+            open_browser(target)
+        except Exception as exc:  # noqa: BLE001
+            log(f"DesktopApi: open external url failed: {exc}")
+            return {"ok": False, "error": f"无法打开系统浏览器：{exc}"}
+        return {"ok": True, "url": target}
+
     def recover_local_services(self, reason: str = "network") -> dict:
         """Recover services owned by this desktop process without restarting the UI."""
         if not callable(self._recover_services):
