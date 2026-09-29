@@ -8855,7 +8855,7 @@ async def _run_scheduled_capability(
             resume_from_image = bool(cap_payload.get("resume_from_image"))
             uses_ip_daily_script = (
                 capability_id == "hifly.video.create_by_tts"
-                and str(cap_payload.get("script_source") or "").strip() == "ip_daily_industry_hot_oral"
+                and shanjian_uses_ip_daily_script(cap_payload)
             )
             provided_hifly_script = (
                 _hifly_script_text(cap_payload.get("script"))
@@ -10467,6 +10467,56 @@ def _workflow_script_candidate(value: Any, limit: int = 700) -> str:
     return text[:limit].strip()
 
 
+_SHANJIAN_ORAL_SOURCES: Dict[str, Dict[str, str]] = {
+    "ip_daily_industry_hot_oral": {
+        "task": "industry_hot_oral",
+        "path": "/api/ip-content/generate/industry-hot-oral",
+        "label": "行业热门口播文案",
+        "event": "正在调用 IP 日更生成行业热门口播文案",
+        "done_event": "行业热门口播文案已生成，正在用于数字人视频",
+        "sync_flag": "industry_oral_sync_before",
+    },
+    "ip_daily_professional_ip_oral": {
+        "task": "professional_ip_oral",
+        "path": "/api/ip-content/generate/professional-ip-oral",
+        "label": "专业 IP 口播文案",
+        "event": "正在调用 IP 日更生成专业 IP 口播文案",
+        "done_event": "专业 IP 口播文案已生成，正在用于数字人视频",
+        "sync_flag": "professional_ip_oral_sync_before",
+    },
+}
+_SHANJIAN_DEFAULT_ORAL_SOURCE = "ip_daily_industry_hot_oral"
+
+
+def shanjian_oral_sources(source: Dict[str, Any]) -> List[str]:
+    """数字人节点可选的口播来源列表（支持多选：行业口播 / IP 口播）。"""
+    raw = (source or {}).get("script_sources")
+    values: List[str] = []
+    if isinstance(raw, list):
+        values = [str(item or "").strip() for item in raw]
+    elif str(raw or "").strip():
+        values = [str(raw).strip()]
+    legacy = _workflow_text((source or {}).get("script_source"), 64)
+    if legacy:
+        values.append(legacy)
+    ordered = [value for value in values if value in _SHANJIAN_ORAL_SOURCES]
+    return list(dict.fromkeys(ordered)) or [_SHANJIAN_DEFAULT_ORAL_SOURCE]
+
+
+def shanjian_oral_source(source: Dict[str, Any]) -> str:
+    """本次运行用哪种口播：多选时每次随机挑一个（仍然取该类第一条）。"""
+    sources = shanjian_oral_sources(source)
+    return random.choice(sources) if len(sources) > 1 else sources[0]
+
+
+def shanjian_uses_ip_daily_script(source: Dict[str, Any]) -> bool:
+    """只有明确选了口播来源才走 IP 日更生成；空值保持旧行为。"""
+    raw = (source or {}).get("script_sources")
+    if isinstance(raw, list) and raw:
+        return any(str(item or "").strip() in _SHANJIAN_ORAL_SOURCES for item in raw)
+    return _workflow_text((source or {}).get("script_source"), 64) in _SHANJIAN_ORAL_SOURCES
+
+
 def _provided_shanjian_workflow_script(source: Dict[str, Any]) -> str:
     explicit = (
         _workflow_script_candidate(source.get("script"))
@@ -10474,7 +10524,7 @@ def _provided_shanjian_workflow_script(source: Dict[str, Any]) -> str:
     )
     if explicit:
         return explicit
-    if _workflow_text(source.get("script_source"), 64) == "ip_daily_industry_hot_oral":
+    if shanjian_uses_ip_daily_script(source):
         return ""
     return _workflow_script_candidate(source.get("prompt"))
 
@@ -10586,8 +10636,12 @@ async def _generate_shanjian_workflow_script(
     )
     title = _workflow_text(source.get("title") or label or "数字人口播", 80)
     language = _workflow_text(source.get("language") or source.get("target_language") or "zh-CN", 64)
+    oral_source = shanjian_oral_source(source)
+    oral = _SHANJIAN_ORAL_SOURCES[oral_source]
     if cloud is None or not base:
-        raise RuntimeError("数字人生成缺少云端连接，无法调用 IP 日更生成行业口播文案")
+        raise RuntimeError(
+            "数字人生成缺少云端连接，无法调用 IP 日更生成" + oral["label"]
+        )
 
     requirements = source.get("requirements") if isinstance(source.get("requirements"), dict) else {}
     keyword_ids = _workflow_int_ids(source.get("keyword_ids"), 20)
@@ -10597,7 +10651,7 @@ async def _generate_shanjian_workflow_script(
     missing: List[str] = []
     if not _workflow_has_content(requirements):
         missing.append("IP人设定位资料调查")
-    if not keywords:
+    if oral["task"] == "industry_hot_oral" and not keywords:
         missing.append("当前启用模板的行业关键词")
     if not (memory_doc_ids or memory_docs):
         missing.append("当前启用模板的记忆文件")
@@ -10607,25 +10661,32 @@ async def _generate_shanjian_workflow_script(
     persona_json = json.dumps(requirements, ensure_ascii=False, separators=(",", ":"))
     extra_requirements = "\n".join(
         [
-            "本次只生成 1 条行业热门口播文案，并直接作为数字人视频的完整口播脚本。",
+            f"本次只生成 1 条{oral['label']}，并直接作为数字人视频的完整口播脚本。",
             f"输出语种必须是：{_workflow_language_label(language)}。",
             "目标口播时长 20 到 25 秒；中文控制在 90 到 120 字且不得超过 120 字，英文控制在 45 到 60 词且不得超过 60 词，其他语种按同等时长控制。",
             "文案必须自然、完整、可直接口播，不写镜头指令、括号说明或虚构数据，不要为了凑长度重复表达。",
             f"IP人设资料：{persona_json[:2200]}",
         ]
     )[:4000]
-    await _workflow_event(cloud, base, headers, run_id, "正在调用 IP 日更生成行业热门口播文案")
+    await _workflow_event(cloud, base, headers, run_id, oral["event"])
     try:
         generated = await _await_cloud_json_with_progress(
             lambda: _post_cloud_api_json(
-                "/api/ip-content/generate/industry-hot-oral",
+                oral["path"],
                 {
-                    "keyword_ids": keyword_ids,
-                    "keyword_texts": keywords,
+                    **(
+                        {
+                            "competitor_ids": _workflow_int_ids(
+                                source.get("competitor_ids") or source.get("competitor_account_ids"), 20
+                            )
+                        }
+                        if oral["task"] == "professional_ip_oral"
+                        else {"keyword_ids": keyword_ids, "keyword_texts": keywords}
+                    ),
                     "memory_docs": memory_docs,
                     "extra_requirements": extra_requirements,
                     "count": 1,
-                    "sync_before": bool(source.get("industry_oral_sync_before", False)),
+                    "sync_before": bool(source.get(oral["sync_flag"], False)),
                     "group_id": run_id,
                 },
                 cloud=cloud,
@@ -10656,8 +10717,8 @@ async def _generate_shanjian_workflow_script(
             script = candidate_script
             break
     if not script:
-        raise RuntimeError("IP 日更未返回有效的行业口播文案，数字人任务未继续执行")
-    await _workflow_event(cloud, base, headers, run_id, "行业热门口播文案已生成，正在用于数字人视频")
+        raise RuntimeError("日更未返回有效的" + oral["label"] + "，数字人任务未继续执行")
+    await _workflow_event(cloud, base, headers, run_id, oral["done_event"])
     return {
         "title": _workflow_text(selected.get("title") or title or "数字人口播", 80),
         "script": script,
@@ -10666,6 +10727,8 @@ async def _generate_shanjian_workflow_script(
         "ip_daily_group_id": _workflow_text(generated.get("group_id"), 128),
         "ip_daily_record_id": _workflow_text(selected.get("record_id") or selected.get("id"), 128),
         "ip_daily_record": selected,
+        "ip_daily_task": oral["task"],
+        "oral_source": oral_source,
     }
 
 
@@ -10837,7 +10900,7 @@ async def _resolve_workflow_virtualman(
     selection_mode = _workflow_text(source.get("virtualman_selection_mode"), 32)
     rotation_enabled = selection_mode != "fixed" and (
         selection_mode in {"daily_round_robin", "daily_sequence"}
-        or _workflow_text(source.get("script_source"), 64) == "ip_daily_industry_hot_oral"
+        or shanjian_uses_ip_daily_script(source)
         or bool(context.get("workflow_node_id"))
     )
     if not rotation_enabled:

@@ -391,12 +391,24 @@
     var label = item[2];
     return {id:parent.id + '_action_' + (index + 1), time:item[0], parent_node_id:parent.id, action_type:'publish', type:'publish', platform:platform, ability_key:'publish_content', ability_label:label, department_id:'sales', department_name:'销售部', note:label + '，配文案、带标签发布', is_action_node:true, param_configured:true, plan:{title:label, task_kind:'client_workflow', content:'H5 工作流动作：' + label, payload:{action:'publish_content',params:{source_mode:'parent_latest_run',source_workflow_node_id:parent.id,source_workflow_node_label:parent.ability_label,platform:platform,media_type:platform === 'wechat_moments' ? 'image_text' : 'video',ai_publish_copy:!(platform === 'wechat_moments' && String(parent.ability_key || '') === 'ip_content_moments'),note:label}}}};
   }
+  var DIGITAL_HUMAN_ORAL_SOURCES = [
+    { value: 'ip_daily_industry_hot_oral', label: '行业口播' },
+    { value: 'ip_daily_professional_ip_oral', label: 'IP 口播' }
+  ];
+  function digitalHumanOralSourceParams(params) {
+    var raw = params && Array.isArray(params.script_sources) ? params.script_sources : [];
+    var picked = raw.map(function (value) { return String(value || '').trim(); })
+      .filter(function (value) { return DIGITAL_HUMAN_ORAL_SOURCES.some(function (item) { return item.value === value; }); });
+    if (!picked.length) picked = ['ip_daily_industry_hot_oral'];
+    return { script_sources: picked, script_source: picked[0] };
+  }
+
   function planForRow(row) {
     var prompt = row.note || row.label || '';
     if (row.key.indexOf('wechat_channels_') === 0 || row.soon) return {title:row.label,task_kind:'workflow_placeholder',content:'H5 工作流占位：' + row.label,payload:{action:'workflow_coming_soon',skip_execution:true,note:row.note || row.label,platform:'wechat_channels'}};
     if (row.key.indexOf('native_wechat_') === 0 || row.key === 'native_whatsapp_poll') return nativePlan(row.key, row);
     if (row.key === 'local_bestseller') return {title:'同城爆款视频',task_kind:'client_workflow',content:'H5 工作流：同城爆款视频',payload:{action:'local_bestseller_daily_video',params:baseScheduleParams(row,{note:prompt,prompt:prompt,days:30,day_mode:'workflow_elapsed'})}};
-    if (row.key === 'hifly.video.create_by_tts') return {title:'数字人口播视频',task_kind:'capability',content:'H5 工作流：数字人口播视频',payload:{capability_id:'hifly.video.create_by_tts',payload:{script:prompt,prompt:prompt}}};
+    if (row.key === 'hifly.video.create_by_tts') return {title:'数字人口播视频',task_kind:'capability',content:'H5 工作流：数字人口播视频',payload:{capability_id:'hifly.video.create_by_tts',payload:Object.assign({script:prompt,prompt:prompt},digitalHumanOralSourceParams(row.params))}};
     if (row.key === 'comfly.seedance.tvc.pipeline') return {title:'创意分镜头视频',task_kind:'capability',content:'H5 工作流：创意分镜头视频',payload:{capability_id:'comfly.seedance.tvc.pipeline',payload:{action:'start_pipeline',task_text:prompt,prompt:prompt,auto_save:true}}};
     if (row.key === 'comfly.daihuo.pipeline') return {title:'爆款TVC',task_kind:'capability',content:'H5 工作流：爆款TVC',payload:{capability_id:'comfly.daihuo.pipeline',payload:{action:'start_pipeline',task_text:prompt,prompt:prompt,auto_save:true}}};
     if (row.key === 'viral_video_remix') return {title:'爆款复制',task_kind:'client_workflow',content:'H5 工作流：爆款复制',payload:{action:'viral_video_remix_start',params:baseScheduleParams(row,{prompt:prompt,billing_confirmed:true,ratio:'9:16'})}};
@@ -1264,6 +1276,7 @@
     if (el('oeNodeDouyinKeywordField')) el('oeNodeDouyinKeywordField').hidden=douyinAiKeywords;
     if (el('oeNodeDouyinAiKeywordField')) el('oeNodeDouyinAiKeywordField').hidden=!douyinAiKeywords;
     if (el('oeNodeDouyinTouchField')) el('oeNodeDouyinTouchField').hidden=!douyinTouch;
+    if (el('oeNodeHiflyOralSourcesField')) el('oeNodeHiflyOralSourcesField').hidden=key !== 'hifly.video.create_by_tts';
     if (el('oeNodeDouyinFollowupField')) el('oeNodeDouyinFollowupField').hidden=!douyinTouch;
     var replyMode=String((el('oeNodeDouyinReplyCommentMode') || {}).value || '').toLowerCase();
     if (['','fixed','ai','rewrite'].indexOf(replyMode) < 0) replyMode='';
@@ -1318,6 +1331,11 @@
     if (el('oeNodeWhatsappMaxUnread')) el('oeNodeWhatsappMaxUnread').value=Math.max(1,Math.min(100,Number(params.max_unread_per_round || 50)));
     if (el('oeNodeWhatsappInstruction')) el('oeNodeWhatsappInstruction').value=String(params.reply_instruction || '');
     el('oeNodeMomentAction').value=String(params.moment_action || 'like_comment'); initMomentPicker('node',Array.isArray(params.contact_wx_nos) ? params.contact_wx_nos : params.targets);
+    if (el('oeNodeHiflyOralIndustry') || el('oeNodeHiflyOralIp')) {
+      var oralPicked=digitalHumanOralSourceParams(params).script_sources;
+      if (el('oeNodeHiflyOralIndustry')) el('oeNodeHiflyOralIndustry').checked=oralPicked.indexOf('ip_daily_industry_hot_oral') >= 0;
+      if (el('oeNodeHiflyOralIp')) el('oeNodeHiflyOralIp').checked=oralPicked.indexOf('ip_daily_professional_ip_oral') >= 0;
+    }
     syncNodeModalFields(); el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60);
   }
   function saveNodeFromModal() {
@@ -1407,6 +1425,13 @@
       delete row.params.followup_actions;
       row.params.customer_scope='precise_pool';
     } else { delete row.params.keyword; delete row.params.regions; delete row.params.max_results; delete row.params.max_users; delete row.params.mode; delete row.params.followup_actions; delete row.params.touch_actions; delete row.params.customer_scope; delete row.params.ai_keywords; delete row.params.ai_keyword_count; delete row.params.ai_keyword_avoid_days; delete row.params.ai_keyword_publish_days; }
+    if (key === 'hifly.video.create_by_tts') {
+      var oralSources=[];
+      if (el('oeNodeHiflyOralIndustry') && el('oeNodeHiflyOralIndustry').checked) oralSources.push('ip_daily_industry_hot_oral');
+      if (el('oeNodeHiflyOralIp') && el('oeNodeHiflyOralIp').checked) oralSources.push('ip_daily_professional_ip_oral');
+      if (!oralSources.length) oralSources=['ip_daily_industry_hot_oral'];
+      row.params.script_sources=oralSources; row.params.script_source=oralSources[0];
+    } else { delete row.params.script_sources; delete row.params.script_source; }
     delete row.params.followup_action; delete row.params.group_invite_rules;
     var next=existing ? Object.assign({},existing) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)};
     next.time=time; next.end_time=end; next.time_range=time + (end ? '-' + end : ''); next.ability_key=key; next.ability_label=label; next.note=note; next.plan=planForRow(row); if (existing) next.children=existing.children || existing.actions || [];

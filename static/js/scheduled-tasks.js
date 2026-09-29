@@ -1408,10 +1408,33 @@
     });
   }
 
+  var HIFLY_ORAL_SOURCE_OPTIONS = [
+    { value: 'ip_daily_industry_hot_oral', label: '行业口播' },
+    { value: 'ip_daily_professional_ip_oral', label: 'IP 口播' }
+  ];
+  function hiflyOralSourceMultiHtml(id, selected) {
+    var picked = Array.isArray(selected) ? selected.map(String) : [];
+    if (!picked.length) picked = ['ip_daily_industry_hot_oral'];
+    return '<select id="' + html(id) + '" multiple size="2" style="width:100%;box-sizing:border-box;padding:0.45rem;">'
+      + HIFLY_ORAL_SOURCE_OPTIONS.map(function (item) {
+          return '<option value="' + html(item.value) + '"' + (picked.indexOf(item.value) >= 0 ? ' selected' : '') + '>' + html(item.label) + '</option>';
+        }).join('')
+      + '</select>';
+  }
+  function selectedHiflyOralSources(id) {
+    var sel = document.getElementById(id);
+    if (!sel) return [];
+    return Array.prototype.map.call(sel.options || [], function (opt) { return opt.selected ? opt.value : ''; })
+      .filter(function (value) {
+        return HIFLY_ORAL_SOURCE_OPTIONS.some(function (item) { return item.value === value; });
+      });
+  }
+
   function renderHiflyFields(host) {
     host.innerHTML = compactGrid(
       fieldHtml('数字人', selectHtml('scheduledTaskHiflyAvatar', optionHtml('', '加载中...')))
       + fieldHtml('声音', selectHtml('scheduledTaskHiflyVoice', optionHtml('', '加载中...')))
+      + fieldHtml('口播来源（可多选，都选则每次随机一种）', hiflyOralSourceMultiHtml('scheduledTaskHiflyScriptSources', []), true)
     );
     fillHiflySelects();
     loadHiflyLibraries();
@@ -1518,9 +1541,13 @@
       var voice = val('scheduledTaskHiflyVoice');
       if (!avatar) throw new Error('请选择数字人');
       if (!voice) throw new Error('请选择声音');
+      var oralSources = selectedHiflyOralSources('scheduledTaskHiflyScriptSources');
+      if (!oralSources.length) oralSources = ['ip_daily_industry_hot_oral'];
       return {
         avatar: avatar,
-        voice: voice
+        voice: voice,
+        script_sources: oralSources,
+        script_source: oralSources[0]
       };
     }
     if (capabilityId === 'goal.video.pipeline') {
