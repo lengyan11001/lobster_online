@@ -171,7 +171,7 @@ def _saved_speech(job_dir: Path) -> dict[str, Any]:
 
 
 def _extract_reference_audio(source: Path, target: Path) -> None:
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _ffmpeg_executable()
     if not ffmpeg:
         raise RuntimeError("本机缺少 ffmpeg")
     process = subprocess.run(
@@ -448,6 +448,9 @@ def _hypit_env() -> dict[str, str]:
     env["NODE_COMPILE_CACHE"] = ""
     env["TSX_DISABLE_CACHE"] = "1"
     if os.name == "nt":
+        ffmpeg_dir = _bundled_ffmpeg_dir()
+        if ffmpeg_dir.is_dir():
+            env["PATH"] = str(ffmpeg_dir) + os.pathsep + (env.get("PATH") or "")
         system32 = str(Path(os.environ.get("WINDIR", r"C:\Windows")) / "System32")
         current_path = env.get("PATH") or ""
         # Hypit's Windows package installer resolves ``npm.cmd`` from PATH.
@@ -564,8 +567,8 @@ def _configure_runtime_browser(project_dir: Path) -> None:
 def _dependency_status() -> dict[str, Any]:
     root = _hypit_root()
     node = _node_executable()
-    ffmpeg = shutil.which("ffmpeg")
-    ffprobe = shutil.which("ffprobe")
+    ffmpeg = _ffmpeg_executable()
+    ffprobe = _ffprobe_executable()
     version = ""
     error = ""
     if root and node:
@@ -818,7 +821,7 @@ async def _download_generated(client: httpx.AsyncClient, url: str, destination: 
 
 
 def _extract_frame(source: Path, target: Path, seconds: float) -> None:
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = _ffmpeg_executable()
     if not ffmpeg:
         raise RuntimeError("本机缺少 ffmpeg")
     result = subprocess.run(
@@ -1697,6 +1700,41 @@ def _append_runtime_log(line: str) -> None:
     _write_runtime_state(log=[*log, text][-RUNTIME_LOG_LIMIT:])
 
 
+def _bundled_ffmpeg_dir() -> Path:
+    return ROOT / "deps" / "ffmpeg"
+
+
+def _ffmpeg_executable() -> str | None:
+    """优先包内 deps/ffmpeg（客户端不把它加 PATH），再 LOBSTER_FFMPEG_PATH，最后 PATH。"""
+    configured = str(os.environ.get("LOBSTER_FFMPEG_PATH") or "").strip()
+    if configured:
+        candidate = Path(configured)
+        if candidate.is_dir():
+            candidate = candidate / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        if candidate.is_file():
+            return str(candidate)
+    bundled = _bundled_ffmpeg_dir() / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    if bundled.is_file():
+        return str(bundled)
+    return shutil.which("ffmpeg")
+
+
+def _ffprobe_executable() -> str | None:
+    configured = str(os.environ.get("LOBSTER_FFMPEG_PATH") or "").strip()
+    if configured:
+        candidate = Path(configured)
+        if candidate.is_file():
+            candidate = candidate.with_name("ffprobe.exe" if os.name == "nt" else "ffprobe")
+        elif candidate.is_dir():
+            candidate = candidate / ("ffprobe.exe" if os.name == "nt" else "ffprobe")
+        if candidate.is_file():
+            return str(candidate)
+    bundled = _bundled_ffmpeg_dir() / ("ffprobe.exe" if os.name == "nt" else "ffprobe")
+    if bundled.is_file():
+        return str(bundled)
+    return shutil.which("ffprobe")
+
+
 def _npm_executable() -> str | None:
     """优先系统 npm（Hypit 的 Windows 包安装器从 PATH 找 npm.cmd），其次客户端自带目录。"""
     if os.name == "nt":
@@ -1720,6 +1758,8 @@ def _runtime_dependencies() -> list[dict[str, Any]]:
     npm = _npm_executable()
     chrome = _installed_chrome_path()
     engine_ok = _installed_hypit_registry_package(*_ENGINE_PACKAGE)
+    ffmpeg = _ffmpeg_executable()
+    ffprobe = _ffprobe_executable()
     return [
         {
             "key": "node",
@@ -1744,6 +1784,18 @@ def _runtime_dependencies() -> list[dict[str, Any]]:
             "label": "Hypit 运行时",
             "ok": bool(root),
             "detail": str(root or "未找到（放到客户端同级 ai-hypit/hypit，或设 HYPIT_ROOT）"),
+        },
+        {
+            "key": "ffmpeg",
+            "label": "ffmpeg 音视频工具",
+            "ok": bool(ffmpeg),
+            "detail": str(ffmpeg or "未找到（应在客户端 deps/ffmpeg/ffmpeg.exe）"),
+        },
+        {
+            "key": "ffprobe",
+            "label": "ffprobe 视频信息工具",
+            "ok": bool(ffprobe),
+            "detail": str(ffprobe or "未找到（应在客户端 deps/ffmpeg/ffprobe.exe）"),
         },
         {
             "key": "engine",

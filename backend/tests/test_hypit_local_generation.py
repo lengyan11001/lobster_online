@@ -396,9 +396,11 @@ def test_runtime_dependencies_report_missing_items(monkeypatch):
     monkeypatch.setattr(hypit_local, "_npm_executable", lambda: None)
     monkeypatch.setattr(hypit_local, "_installed_chrome_path", lambda: None)
     monkeypatch.setattr(hypit_local, "_installed_hypit_registry_package", lambda *a, **k: False)
+    monkeypatch.setattr(hypit_local, "_ffmpeg_executable", lambda: None)
+    monkeypatch.setattr(hypit_local, "_ffprobe_executable", lambda: None)
 
     items = hypit_local._runtime_dependencies()
-    assert [item["key"] for item in items] == ["node", "npm", "chrome", "hypit", "engine"]
+    assert [item["key"] for item in items] == ["node", "npm", "chrome", "hypit", "ffmpeg", "ffprobe", "engine"]
     assert all(item["ok"] is False for item in items)
 
 
@@ -439,3 +441,18 @@ def test_runtime_install_reports_missing_runtime(tmp_path, monkeypatch):
     state = hypit_local._runtime_state()
     assert state["status"] == "failed"
     assert "运行时" in state["error"]
+
+
+def test_ffmpeg_prefers_bundled_copy(tmp_path, monkeypatch):
+    """客户端不把 deps/ffmpeg 加 PATH，视频复刻必须优先用包内那份。"""
+    bundled = tmp_path / "deps" / "ffmpeg"
+    bundled.mkdir(parents=True)
+    (bundled / "ffmpeg.exe").write_bytes(b"bin")
+    (bundled / "ffprobe.exe").write_bytes(b"bin")
+    monkeypatch.setattr(hypit_local, "_bundled_ffmpeg_dir", lambda: bundled)
+
+    assert hypit_local._ffmpeg_executable() == str(bundled / "ffmpeg.exe")
+    assert hypit_local._ffprobe_executable() == str(bundled / "ffprobe.exe")
+
+    deps = {item["key"]: item["ok"] for item in hypit_local._runtime_dependencies()}
+    assert deps["ffmpeg"] is True and deps["ffprobe"] is True
