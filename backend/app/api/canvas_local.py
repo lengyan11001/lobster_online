@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,17 @@ def _run(ffmpeg: str, args: List[str], cwd: Path) -> None:
         raise HTTPException(status_code=500, detail="本机 ffmpeg 处理失败：%s" % tail)
 
 
+def _result_payload(out: Path, work: Path) -> Dict[str, str]:
+    """本机产物的对外描述：绝对路径（本机排查用）+ 相对名 + 页面可取的 URL。"""
+    name = "%s/%s" % (work.name, out.name)
+    return {
+        "output": str(out),
+        "name": name,
+        "url": "/api/canvas-local/media/" + name,
+        "where": "client",
+    }
+
+
 @router.get("/api/canvas-local/ffmpeg/status", summary="画布本机 ffmpeg 是否就绪")
 def canvas_local_ffmpeg_status() -> Dict[str, Any]:
     tools = _ffmpeg_tools()
@@ -179,13 +191,13 @@ async def canvas_local_ffmpeg(body: CanvasFfmpegIn) -> Dict[str, Any]:
             out = work / (body.output_name or "merged.mp4")
             args = build_ffmpeg_args(body, video=str(video), audio=str(audio), out_path=str(out))
             await asyncio.to_thread(_run, ffmpeg, args, work)
-            return {"ok": True, "output": str(out), "where": "client"}
+            return {"ok": True, **_result_payload(out, work)}
         if op == "trim_audio":
             audio = await _download(body.audio_url, work / ("audio." + (body.audio_format or "mp3")))
             out = work / (body.output_name or ("trimmed." + (body.output_format or "mp3")))
             args = build_ffmpeg_args(body, audio=str(audio), out_path=str(out))
             await asyncio.to_thread(_run, ffmpeg, args, work)
-            return {"ok": True, "output": str(out), "where": "client"}
+            return {"ok": True, **_result_payload(out, work)}
         if op == "concat_videos":
             if len(body.urls) < 2:
                 raise HTTPException(status_code=400, detail="拼接至少需要 2 个视频")
@@ -194,15 +206,45 @@ async def canvas_local_ffmpeg(body: CanvasFfmpegIn) -> Dict[str, Any]:
                 name = "part%02d.mp4" % idx
                 await _download(url, work / name)
                 names.append(name)
-            list_path = work / "list.txt"
-            list_path.write_text("\n".join("file '%s'" % n for n in names), encoding="utf-8")
             out = work / (body.output_name or "concat.mp4")
+            # build_ffmpeg_args 里的 concat 列表固定是「输出文件 + .txt」，必须写到同一个路径，
+            # 否则 ffmpeg 会报 "Error opening input file ...concat.mp4.txt"（2026-09-29 修）
+            list_path = Path(str(out) + ".txt")
+            list_path.write_text("\n".join("file '%s'" % n for n in names), encoding="utf-8")
             args = build_ffmpeg_args(body, inputs=names, out_path=str(out))
-            await asyncio.to_thread(_run, ffmpeg, args, work)
-            return {"ok": True, "output": str(out), "where": "client"}
+            try:
+                await asyncio.to_thread(_run, ffmpeg, args, work)
+            except HTTPException as first_error:
+                # -c copy 对不上（编码/参数不一致）时退回重编码，与原来浏览器里那段兜底一致
+                fallback = list(args)
+                copy_at = fallback.index("copy")
+                fallback[copy_at - 1:copy_at + 1] = ["-c:v", "libx264", "-c:a", "aac", "-preset", "fast"]
+                try:
+                    await asyncio.to_thread(_run, ffmpeg, fallback, work)
+                except HTTPException:
+                    raise first_error
+            return {"ok": True, **_result_payload(out, work)}
         video = await _download(body.video_url, work / "probe.bin")
         args = build_ffmpeg_args(body, video=str(video))
         await asyncio.to_thread(_run, ffmpeg, args, work)
         return {"ok": True, "output": "", "where": "client"}
     finally:
         pass
+
+
+@router.get("/api/canvas-local/media/{name:path}", summary="读取本机画布产物（页面播放/下载用）")
+def canvas_local_media(name: str):
+    """只允许读本机 runtime 里的画布产物；越界（.. / 绝对路径）一律 404。"""
+    root = _runtime_dir().resolve()
+    raw = str(name or "").strip().replace(chr(92), "/").lstrip("/")
+    parts = [part for part in raw.split("/") if part]
+    if not parts or any(part == ".." for part in parts):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    target = root.joinpath(*parts).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="文件不存在") from None
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(str(target))

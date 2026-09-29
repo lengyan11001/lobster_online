@@ -1,7 +1,11 @@
-"""画布本机 ffmpeg：工具解析 + 参数拼装（不依赖网络，不真跑长任务）。"""
+"""画布本机 ffmpeg：工具解析 + 参数拼装 + 一次真实的本机合并往返。"""
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from backend.app.api import canvas_local
 
@@ -35,3 +39,91 @@ def test_merge_args_and_trim_args():
     concat = canvas_local.CanvasFfmpegIn(op="concat_videos", urls=["a.mp4", "b.mp4"])
     cargs = canvas_local.build_ffmpeg_args(concat, out_path="c.mp4")
     assert "-f" in cargs and "concat" in cargs and "c.mp4.txt" in cargs
+
+
+def _local_client() -> TestClient:
+    app = FastAPI()
+    app.include_router(canvas_local.router)
+    return TestClient(app)
+
+
+def _make_media(ffmpeg: str, work: Path, name: str, args: list) -> Path:
+    out = work / name
+    proc = subprocess.run(
+        [ffmpeg, "-y", "-hide_banner", "-loglevel", "error"] + args + [str(out)],
+        capture_output=True,
+        timeout=180,
+    )
+    assert proc.returncode == 0, proc.stderr[-400:]
+    assert out.is_file() and out.stat().st_size > 0
+    return out
+
+
+def test_merge_round_trip_over_http(tmp_path, monkeypatch):
+    """真跑一次：本机 ffmpeg 合并 -> 接口给 URL -> 页面按 URL 取回产物。"""
+    monkeypatch.setenv("LOBSTER_RUNTIME_DIR", str(tmp_path))
+    ffmpeg = canvas_local._ffmpeg_tools()["ffmpeg"]
+    assert ffmpeg
+    src = tmp_path / "src"
+    src.mkdir()
+    video = _make_media(ffmpeg, src, "v.mp4", ["-f", "lavfi", "-i", "color=c=red:s=96x96:d=1", "-pix_fmt", "yuv420p"])
+    audio = _make_media(ffmpeg, src, "a.mp3", ["-f", "lavfi", "-i", "sine=frequency=440:duration=1"])
+
+    client = _local_client()
+    resp = client.post(
+        "/api/canvas-local/ffmpeg",
+        json={
+            "op": "merge_video_audio",
+            "video_url": str(video),
+            "audio_url": str(audio),
+            "mode": "replace",
+            "output_name": "merged.mp4",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["ok"] is True and payload["where"] == "client"
+    assert Path(payload["output"]).is_file()
+    assert payload["name"].endswith("/merged.mp4")
+    assert payload["url"] == "/api/canvas-local/media/" + payload["name"]
+
+    media = client.get(payload["url"])
+    assert media.status_code == 200, media.text
+    assert media.headers["content-type"].startswith("video/mp4")
+    assert len(media.content) > 1000
+    assert b"ftyp" in media.content[:64]
+
+
+def test_media_endpoint_serves_inside_and_blocks_escape(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOBSTER_RUNTIME_DIR", str(tmp_path))
+    job = tmp_path / "canvas_local" / "job1"
+    job.mkdir(parents=True)
+    (job / "ok.txt").write_text("ok", encoding="utf-8")
+    (tmp_path / "secret.txt").write_text("top-secret", encoding="utf-8")
+
+    client = _local_client()
+    assert client.get("/api/canvas-local/media/job1/ok.txt").text == "ok"
+    assert client.get("/api/canvas-local/media/job1/nope.txt").status_code == 404
+    assert client.get("/api/canvas-local/media/..%2Fsecret.txt").status_code == 404
+
+
+def test_concat_round_trip_over_http(tmp_path, monkeypatch):
+    """拼接曾经因为列表文件名和 ffmpeg 参数对不上（list.txt vs <out>.txt）直接 500。"""
+    monkeypatch.setenv("LOBSTER_RUNTIME_DIR", str(tmp_path))
+    ffmpeg = canvas_local._ffmpeg_tools()["ffmpeg"]
+    src = tmp_path / "src"
+    src.mkdir()
+    first = _make_media(ffmpeg, src, "a.mp4", ["-f", "lavfi", "-i", "color=c=red:s=64x64:d=1", "-pix_fmt", "yuv420p"])
+    second = _make_media(ffmpeg, src, "b.mp4", ["-f", "lavfi", "-i", "color=c=blue:s=64x64:d=1", "-pix_fmt", "yuv420p"])
+
+    client = _local_client()
+    resp = client.post(
+        "/api/canvas-local/ffmpeg",
+        json={"op": "concat_videos", "urls": [str(first), str(second)], "output_name": "concat.mp4"},
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert (Path(payload["output"]).parent / (Path(payload["output"]).name + ".txt")).is_file()
+    media = client.get(payload["url"])
+    assert media.status_code == 200, media.text
+    assert len(media.content) > 1000
