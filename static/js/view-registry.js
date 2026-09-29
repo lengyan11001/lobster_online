@@ -65,6 +65,10 @@
     html: '/static/views/publish.html'
   });
 
+  window.registerLobsterView('canvas-studio', {
+    html: '/static/views/canvas-studio.html?v=20260929-canvas-studio-v1',
+    cache: 'reload'
+  });
   window.registerLobsterView('wechat-article', {
     html: '/static/views/wechat-article.html',
     scripts: '/static/js/wechat-article.js?v=20260927-remix-material-guard',
