@@ -132,3 +132,83 @@ def test_multi_source_picks_one_of_both(monkeypatch):
         "/api/ip-content/generate/industry-hot-oral",
         "/api/ip-content/generate/professional-ip-oral",
     }
+
+
+# 下面这份 payload 是从真实编辑器函数（h5-employees.js planForRow / digitalHumanOralSourceParams）
+# 跑出来的原样结果，保证「勾选 IP口播 → 保存 → 下发到运行时」这条链上的字段名一致。
+PLAN_PAYLOAD_IP = {
+    "capability_id": "hifly.video.create_by_tts",
+    "payload": {
+        "script": "note-ip",
+        "prompt": "note-ip",
+        "script_sources": ["ip_daily_professional_ip_oral"],
+        "script_source": "ip_daily_professional_ip_oral",
+    },
+}
+PLAN_PAYLOAD_BOTH = {
+    "capability_id": "hifly.video.create_by_tts",
+    "payload": {
+        "script": "note-both",
+        "prompt": "note-both",
+        "script_sources": ["ip_daily_industry_hot_oral", "ip_daily_professional_ip_oral"],
+        "script_source": "ip_daily_industry_hot_oral",
+    },
+}
+
+
+def test_editor_plan_payload_reaches_the_gate():
+    """编辑器保存的 payload 要能被运行时认出来（否则又回到“用不上”）。"""
+    assert channel.shanjian_oral_sources(PLAN_PAYLOAD_IP["payload"]) == ["ip_daily_professional_ip_oral"]
+    assert channel.shanjian_uses_ip_daily_script(PLAN_PAYLOAD_IP["payload"]) is True
+    assert channel.shanjian_uses_ip_daily_script(PLAN_PAYLOAD_BOTH["payload"]) is True
+    assert channel.shanjian_oral_sources(PLAN_PAYLOAD_BOTH["payload"]) == [
+        "ip_daily_industry_hot_oral",
+        "ip_daily_professional_ip_oral",
+    ]
+
+
+def test_editor_plan_payload_ip_only_calls_professional_endpoint(monkeypatch):
+    calls = []
+    _stub_generation(monkeypatch, calls)
+    result = asyncio.run(
+        channel._generate_shanjian_workflow_script(
+            source=dict(PLAN_PAYLOAD_IP["payload"], requirements={"persona": "x"}, memory_doc_ids=["d1"]),
+            cloud=object(),
+            base="https://cloud.example",
+            headers={},
+            run_id="run-plan",
+        )
+    )
+    assert calls[0]["path"] == "/api/ip-content/generate/professional-ip-oral"
+    assert calls[0]["payload"]["count"] == 1
+    assert result["oral_source"] == "ip_daily_professional_ip_oral"
+    assert result["script"] == "测试正文"
+
+
+def test_editor_plan_payload_both_sources_random(monkeypatch):
+    calls = []
+    _stub_generation(monkeypatch, calls)
+    monkeypatch.setattr(channel.random, "choice", lambda items: items[1])
+    asyncio.run(
+        channel._generate_shanjian_workflow_script(
+            source=dict(PLAN_PAYLOAD_BOTH["payload"], requirements={"persona": "x"}, memory_doc_ids=["d1"]),
+            cloud=object(),
+            base="https://cloud.example",
+            headers={},
+            run_id="run-plan-2",
+        )
+    )
+    assert calls[0]["path"] == "/api/ip-content/generate/professional-ip-oral"
+
+    calls.clear()
+    monkeypatch.setattr(channel.random, "choice", lambda items: items[0])
+    asyncio.run(
+        channel._generate_shanjian_workflow_script(
+            source=dict(PLAN_PAYLOAD_BOTH["payload"], requirements={"persona": "x"}, memory_doc_ids=["d1"], keyword_ids=[1], keyword_texts=["k"]),
+            cloud=object(),
+            base="https://cloud.example",
+            headers={},
+            run_id="run-plan-3",
+        )
+    )
+    assert calls[0]["path"] == "/api/ip-content/generate/industry-hot-oral"
