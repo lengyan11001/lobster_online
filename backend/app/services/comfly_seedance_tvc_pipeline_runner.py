@@ -366,12 +366,16 @@ def collect_video_urls_from_pipeline_result(data: Dict[str, Any]) -> List[Tuple[
         u = (fv.get("url") or "").strip()
         if u.startswith("http"):
             return [(u, "final", "Seedance 成片")]
+        local_final = (fv.get("path") or "").strip()
+        if local_final:
+            return [(local_final, "final", "Seedance 成片")]
     out: List[Tuple[str, str, str]] = []
     for shot in data.get("completed_shots") or []:
         if not isinstance(shot, dict):
             continue
-        url = (shot.get("mp4url") or "").strip()
-        if not url.startswith("http"):
+        # 比例被裁/补过的分镜优先用本地纠偏文件，素材库里存的就是目标比例（9:16 等）
+        url = (shot.get("local_clip_path") or "").strip() or (shot.get("mp4url") or "").strip()
+        if not url.startswith("http") and not Path(url).is_file():
             continue
         tid = (shot.get("video_task_id") or "").strip()
         title = (shot.get("title_cn") or shot.get("scene_cn") or "").strip() or f"shot_{shot.get('index', '')}"

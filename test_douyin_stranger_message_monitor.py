@@ -284,3 +284,98 @@ def test_current_detail_direction_wins_over_stored_row(monkeypatch):
     assert current["last_message_text"] == "我刚发的"
     assert current["last_message_is_user"] is True
     assert current["reply_status"] == "sent"
+
+# ---------------- 私信里的微信号（2026-09-27） ----------------
+
+def test_extract_wechat_id_requires_hint_word():
+    from douyin_api import extract_douyin_wechat_ids, looks_like_douyin_wechat_id
+
+    # 有引导词 + 号（同一句 / 换行 / 空格分隔）都能抓
+    assert extract_douyin_wechat_ids([{"incoming_message": "我微信是 lisijia8888"}]) == ["lisijia8888"]
+    assert extract_douyin_wechat_ids([{"incoming_message": "vx：Meng2026-ok 加我"}]) == ["Meng2026-ok"]
+    assert extract_douyin_wechat_ids([{"incoming_message": "微信\nabc_123456"}]) == ["abc_123456"]
+    # 没有引导词不猜（避免把昵称/抖音号当微信号）
+    assert extract_douyin_wechat_ids([{"incoming_message": "lisijia8888 是我抖音号"}]) == []
+    # 只有引导词、后面没有合法候选
+    assert extract_douyin_wechat_ids([{"incoming_message": "加我微信聊"}]) == []
+
+
+def test_extract_wechat_id_ignores_phones_and_junk():
+    from douyin_api import extract_douyin_wechat_ids
+
+    # 手机号（纯数字）不算微信号，仍按手机号走
+    assert extract_douyin_wechat_ids([{"incoming_message": "微信同号 13927485337"}]) == []
+    # 太短 / 含中文 / 常见英文词
+    assert extract_douyin_wechat_ids([{"incoming_message": "微信 abc12"}]) == []
+    assert extract_douyin_wechat_ids([{"incoming_message": "微信 abcdefg中文"}]) == []
+    assert extract_douyin_wechat_ids([{"incoming_message": "wechat is wechat"}]) == []
+    # 多个候选去重
+    assert extract_douyin_wechat_ids([
+        {"incoming_message": "微信：lisijia8888"},
+        {"incoming_message": "微信号 lisijia8888"},
+    ]) == ["lisijia8888"]
+
+
+def test_wechat_contact_entries_include_wechat_kind():
+    from douyin_api import douyin_wechat_contact_entries
+
+    entries = douyin_wechat_contact_entries([
+        {
+            "username": "张老师",
+            "conversation_source": "chat_inbox",
+            "phone_numbers": ["13927485337"],
+            "wechat_ids": ["lisijia8888"],
+        }
+    ])
+    assert {"value": "13927485337", "kind": "mobile", "username": "张老师", "conversation_id": "chat_inbox"} in entries
+    assert {"value": "lisijia8888", "kind": "wechat_id", "username": "张老师", "conversation_id": "chat_inbox"} in entries
+
+    # 只有微信号、没有手机号时也要上报
+    only_wechat = douyin_wechat_contact_entries([
+        {"username": "李四", "wechat_ids": ["Meng2026-ok"]}
+    ])
+    assert [e["value"] for e in only_wechat] == ["Meng2026-ok"]
+    assert only_wechat[0]["kind"] == "wechat_id"
+
+
+def test_wechat_hint_present_gate():
+    from douyin_api import douyin_wechat_hint_present
+
+    assert douyin_wechat_hint_present({"incoming_message": "加个微信吧"}) is True
+    assert douyin_wechat_hint_present({"incoming_message": "多少钱？"}) is False
+
+def test_wechat_id_flows_same_path_as_phone(monkeypatch):
+    """微信号和手机号在微信里是同一个搜索框，所以走同一条路：能抽出来 + 能当加好友目标。"""
+    from douyin_api import extract_douyin_wechat_ids, douyin_wechat_contact_entries
+    import douyin_api
+
+    assert extract_douyin_wechat_ids([{"incoming_message": "加我微信 eiaiyuangong"}]) == ["eiaiyuangong"]
+    assert extract_douyin_wechat_ids([{"incoming_message": "VX：eiaiyuangong"}]) == ["eiaiyuangong"]
+    assert douyin_api.looks_like_douyin_wechat_id("eiaiyuangong") is True
+    assert douyin_api.looks_like_douyin_wechat_id("eiaiyuangon") is True   # 11 位也合法
+    assert douyin_api.looks_like_douyin_wechat_id("eiai") is False        # 太短
+
+    entries = douyin_wechat_contact_entries([
+        {"username": "运营", "conversation_source": "chat_inbox",
+         "phone_numbers": [], "wechat_ids": ["eiaiyuangong"]}
+    ])
+    assert entries == [{"value": "eiaiyuangong", "kind": "wechat_id",
+                        "username": "运营", "conversation_id": "chat_inbox"}]
+
+    # 加好友任务接受微信号（和手机号同一个调用）
+    captured = {}
+
+    class _FakeEngine:
+        LOCAL_DEFAULT_ACCOUNT_ID = 1
+
+        @staticmethod
+        async def create_add_friend_task(account_id, values):
+            captured["account_id"] = account_id
+            captured["values"] = list(values)
+            return {"id": "task-1"}
+
+    monkeypatch.setitem(sys.modules, "app.services.native_wechat_engine", _FakeEngine)
+    monkeypatch.setitem(sys.modules, "backend.app.services.native_wechat_engine", _FakeEngine)
+    result = asyncio.run(douyin_api._queue_douyin_wechat_friend_add(["eiaiyuangong"]))
+    assert result["queued"] is True
+    assert captured["values"] == ["eiaiyuangong"]

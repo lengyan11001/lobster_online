@@ -988,11 +988,8 @@ def test_moments_publish_entry_accepts_initial_file_picker(monkeypatch):
     monkeypatch.setattr(engine, "_uia_find_by_names", lambda *_args, **_kwargs: publish_entry)
     monkeypatch.setattr(engine, "_uia_click", lambda node: clicked.append(node))
     monkeypatch.setattr(engine, "_uia_control_text", lambda _node: "发表")
-    monkeypatch.setattr(
-        engine,
-        "_file_dialog_filename_edit",
-        lambda root: object() if root is picker_root else None,
-    )
+    picker_window = {"hwnd": 654, "class": "#32770", "title": "picker", "pid": 0, "root": picker_root}
+    monkeypatch.setattr(engine, "_find_moments_file_picker_window", lambda **_kwargs: picker_window)
 
     hwnd = engine._click_moments_publish_entry(123, steps, expect_file_picker=True)
 
@@ -1016,9 +1013,19 @@ def test_moments_publish_selects_initial_picker_before_compose(monkeypatch):
         lambda _hwnd, _steps, *, expect_file_picker=False: calls.append(("open_entry", expect_file_picker)) or 456,
     )
     monkeypatch.setattr(engine, "_uia_foreground_or_main_root", lambda _hwnd: picker_root)
-    monkeypatch.setattr(engine, "_file_dialog_filename_edit", lambda root: object() if root is picker_root else None)
-    monkeypatch.setattr(engine, "_select_files_in_open_dialog", lambda _hwnd, _files, _steps: calls.append("select_files"))
+    picker_window = {"hwnd": 654, "class": "#32770", "title": "picker", "pid": 0, "root": picker_root}
+    monkeypatch.setattr(engine, "_find_moments_file_picker_window", lambda **_kwargs: picker_window)
+    monkeypatch.setattr(
+        engine,
+        "_select_files_in_open_dialog",
+        lambda _hwnd, _files, _steps, **_kwargs: calls.append("select_files"),
+    )
     monkeypatch.setattr(engine, "_wait_for_moments_publish_dialog", lambda _hwnd, _steps: calls.append("wait_compose"))
+    monkeypatch.setattr(
+        engine,
+        "_verify_moments_attachments",
+        lambda _hwnd, _count, _steps: calls.append("verify_attachments"),
+    )
     monkeypatch.setattr(engine, "_focus_moments_publish_text", lambda _hwnd, _steps: calls.append("focus_text"))
     monkeypatch.setattr(engine, "_fill_moments_publish_text", lambda _hwnd, _text, _steps: calls.append("fill_text"))
     monkeypatch.setattr(engine, "_submit_moments_publish", lambda _hwnd, _steps: calls.append("submit"))
@@ -1035,6 +1042,7 @@ def test_moments_publish_selects_initial_picker_before_compose(monkeypatch):
         ("open_entry", True),
         "select_files",
         "wait_compose",
+        "verify_attachments",
         "focus_text",
         "fill_text",
         "submit",
@@ -1049,7 +1057,8 @@ def test_moments_publish_rejects_video_longer_than_wechat_limit(monkeypatch):
     monkeypatch.setattr(engine, "_probe_moments_video_duration", lambda _path: 50.916667)
 
     with pytest.raises(engine._MomentsPublishError, match="最长支持30秒") as error:
-        engine._publish_moments_local_once("pc-wechat-default", attachments=files)
+        # media_type=video：图文节点只发图片，视频素材必须按视频发布提交
+        engine._publish_moments_local_once("pc-wechat-default", attachments=files, media_type="video")
 
     assert error.value.steps == [
         {"step": "validate_moments_video", "ok": False, "duration_seconds": 50.917}
@@ -1662,7 +1671,9 @@ def test_open_next_visible_session_skips_official_container(monkeypatch):
     monkeypatch.setattr(engine, "_local_wechat_hwnd", lambda _account_id: 123)
     monkeypatch.setattr(engine, "_restore_local_chat_session_list", lambda _account_id: {"ok": True})
     monkeypatch.setattr(engine, "_uia_session_cells", lambda _root: [official, customer])
-    monkeypatch.setattr(engine, "_uia_click", lambda node: clicked.append(node.Name))
+    # _uia_click gained a keyword-only visibility flag; the row here has no
+    # bounds, which keeps the historical click path.
+    monkeypatch.setattr(engine, "_uia_click", lambda node, **_kwargs: clicked.append(node.Name))
     monkeypatch.setattr(engine.time, "sleep", lambda _seconds: None)
 
     item = engine._open_next_visible_session("pc-wechat-default", processed, {})
@@ -2001,20 +2012,33 @@ async def test_takeover_session_waits_after_each_round_and_finishes_last_started
     assert result["stop_reason"] == "session_deadline"
 
 
+def test_native_wechat_driver_backoff_grows_then_caps():
+    assert channel._native_wechat_driver_backoff_seconds(1) == 30.0
+    assert channel._native_wechat_driver_backoff_seconds(2) == 60.0
+    assert channel._native_wechat_driver_backoff_seconds(3) == 120.0
+    assert channel._native_wechat_driver_backoff_seconds(4) == 240.0
+    assert channel._native_wechat_driver_backoff_seconds(5) == 300.0
+    assert channel._native_wechat_driver_backoff_seconds(9) == 300.0
+
+
 @pytest.mark.asyncio
-async def test_takeover_session_stops_after_three_consecutive_driver_failures(monkeypatch):
+async def test_takeover_session_retries_driver_failures_until_the_window_ends(monkeypatch):
+    clock = {"now": 0.0}
     attempts = []
     sleeps = []
+    error = "\u5fae\u4fe1\u4f1a\u8bdd\u5217\u8868\u8bfb\u53d6\u4e3a\u7a7a\uff0c\u4f46\u754c\u9762\u53ef\u89c1 9 \u4e2a\u4f1a\u8bdd"
 
     async def post_local(_path, _body, **_kwargs):
-        attempts.append(len(attempts) + 1)
-        raise RuntimeError("未识别到可用的微信窗口")
+        attempts.append(clock["now"])
+        raise RuntimeError(error)
 
-    async def no_sleep(seconds):
+    async def advance_sleep(seconds):
         sleeps.append(seconds)
+        clock["now"] += seconds
 
+    monkeypatch.setattr(channel, "_takeover_monotonic", lambda: clock["now"])
     monkeypatch.setattr(channel, "_post_local_api_json", post_local)
-    monkeypatch.setattr(channel.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(channel.asyncio, "sleep", advance_sleep)
 
     result = await channel._run_native_wechat_takeover_session(
         account_id="pc-wechat-default",
@@ -2022,18 +2046,60 @@ async def test_takeover_session_stops_after_three_consecutive_driver_failures(mo
         cloud=None,
         base="",
         run_id="run",
-        rounds=120,
         interval_seconds=15,
-        session_seconds=1800,
+        session_seconds=400,
     )
 
-    assert attempts == [1, 2, 3]
-    assert sleeps == [15.0, 15.0]
+    assert attempts == [0.0, 30.0, 90.0, 210.0]
+    assert sleeps == [30.0, 60.0, 120.0, 190.0]
     assert result["completed_rounds"] == 0
-    assert result["failed"] == 3
+    assert result["failed"] == 4
     assert result["ok"] is False
-    assert result["stop_reason"] == "consecutive_driver_failures"
-    assert result["last_error"] == "未识别到可用的微信窗口"
+    assert result["stop_reason"] == "session_deadline"
+    assert result["last_error"] == error
+    assert result["consecutive_driver_failures"] == 4
+    assert result["driver_backoff_seconds"] == 240.0
+
+
+@pytest.mark.asyncio
+async def test_takeover_session_resets_driver_backoff_after_a_successful_round(monkeypatch):
+    clock = {"now": 0.0}
+    calls = {"n": 0}
+    sleeps = []
+
+    async def post_local(_path, _body, **_kwargs):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RuntimeError("wxauto empty")
+        clock["now"] += 20.0
+        return {"ok": True, "items": []}
+
+    async def advance_sleep(seconds):
+        sleeps.append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr(channel, "_takeover_monotonic", lambda: clock["now"])
+    monkeypatch.setattr(channel, "_post_local_api_json", post_local)
+    monkeypatch.setattr(channel.asyncio, "sleep", advance_sleep)
+
+    result = await channel._run_native_wechat_takeover_session(
+        account_id="pc-wechat-default",
+        headers={},
+        cloud=None,
+        base="",
+        run_id="run",
+        interval_seconds=15,
+        session_seconds=200,
+    )
+
+    assert sleeps == [30.0, 60.0, 15.0, 15.0, 15.0]
+    assert result["failed"] == 2
+    assert result["completed_rounds"] == 4
+    assert result["ok"] is True
+    assert result["stop_reason"] == "session_deadline"
+    assert result["consecutive_driver_failures"] == 0
+    assert result["driver_backoff_seconds"] == 0
+    assert result["last_error"] == ""
 
 
 @pytest.mark.asyncio
@@ -3893,6 +3959,18 @@ async def test_unverified_group_success_does_not_block_retry(tmp_path, monkeypat
     assert deduped["deduped"] is True
 
 
+@pytest.fixture(autouse=True)
+def _isolate_auto_reply_diagnostic_log(tmp_path_factory, monkeypatch):
+    """接管诊断日志必须隔离：否则跑测试会往生产 logs/native_wechat_auto_reply.jsonl
+
+    里写入 Recent N / Customer N 这类假会话，用户看接管记录就像"一直在空转"。
+    """
+    log_path = tmp_path_factory.mktemp("native_wechat_log") / "native_wechat_auto_reply.jsonl"
+    monkeypatch.setattr(engine, "NATIVE_WECHAT_AUTO_REPLY_LOG", log_path)
+    monkeypatch.setattr(engine, "_AUTO_REPLY_DIAGNOSTIC_ENABLED", True)
+    return log_path
+
+
 def test_unverified_group_claim_is_detected_and_sanitized():
     assert engine._reply_claims_existing_group("张老师，您已经在群里了哈") is True
     assert engine._reply_claims_existing_group("我先确认一下，再帮您安排") is False
@@ -3951,8 +4029,15 @@ def test_find_local_contact_list_falls_back_to_guess(monkeypatch):
 def test_session_cell_click_does_not_smoothly_move_pointer(monkeypatch):
     calls = []
 
+    class Rect:
+        left = 10
+        top = 20
+        right = 210
+        bottom = 60
+
     class FakeCell:
         ClassName = "mmui::ChatSessionCell"
+        BoundingRectangle = Rect()
 
         def Click(self, **kwargs):
             calls.append(kwargs)
@@ -3962,6 +4047,30 @@ def test_session_cell_click_does_not_smoothly_move_pointer(monkeypatch):
     engine._uia_click(FakeCell())
 
     assert calls == [{"simulateMove": False}]
+
+
+def test_off_screen_session_cell_is_never_clicked(monkeypatch):
+    calls = []
+
+    class ScrollItemPattern:
+        def ScrollIntoView(self):
+            return True
+
+    class FakeCell:
+        ClassName = "mmui::ChatSessionCell"
+
+        def GetScrollItemPattern(self):
+            return ScrollItemPattern()
+
+        def Click(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(engine, "_human_pause", lambda *args, **kwargs: None)
+
+    with pytest.raises(RuntimeError):
+        engine._uia_click(FakeCell())
+
+    assert calls == []
 
 
 def test_dismiss_session_ghost_windows_only_closes_matching_wechat_overlays(monkeypatch):
@@ -4160,3 +4269,63 @@ def test_send_message_action_summary_reports_counts_and_targets():
     assert "失败 1 个" in text
     assert "九变1" in text
     assert "记得去看演唱会" in text
+
+
+def test_empty_session_read_raises_so_driver_recovery_kicks_in(monkeypatch):
+    """diag_20260921042352_4d3c07e6：wxauto 读会话返回空，界面却有 9 个会话；必须抛错触发驱动重建。"""
+    class Box:
+        def go_top(self):
+            return True
+    class FakeWx:
+        SessionBox = Box()
+        def GetSession(self):
+            return []
+    monkeypatch.setattr(engine, "_get_wxauto4_client", lambda *_args, **_kwargs: FakeWx())
+    monkeypatch.setattr(engine, "_uia_visible_session_count", lambda _account_id: 9)
+    with pytest.raises(RuntimeError, match="会话列表读取为空"):
+        engine._sync_recent_sessions_from_wxauto4(engine.LOCAL_DEFAULT_ACCOUNT_ID)
+    # 界面里也确实没有会话（真·空账号）时不能报错
+    monkeypatch.setattr(engine, "_uia_visible_session_count", lambda _account_id: 0)
+    result = engine._sync_recent_sessions_from_wxauto4(engine.LOCAL_DEFAULT_ACCOUNT_ID)
+    assert result["ok"] is True and result["items"] == []
+    assert result["empty_scan_visible_count"] == 0
+
+
+def test_first_page_empty_read_waits_for_ready_and_retries(monkeypatch):
+    """首屏读空不能直接判"本轮没有会话"：先就绪等待，再重试（线上空转的另一半原因）。"""
+    calls = {"sessions": 0, "ready": 0}
+
+    class Box:
+        def go_top(self):
+            return True
+
+    class FakeWx:
+        SessionBox = Box()
+
+        def GetSession(self):
+            calls["sessions"] += 1
+            if calls["sessions"] < 3:
+                return []
+            return [{"name": "客户A", "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "content": "在吗"}]
+
+    monkeypatch.setattr(engine, "_get_wxauto4_client", lambda *_args, **_kwargs: FakeWx())
+    monkeypatch.setattr(
+        engine, "_ensure_local_session_list_ready", lambda _account_id: calls.__setitem__("ready", calls["ready"] + 1)
+    )
+    monkeypatch.setattr(engine, "_uia_visible_session_count", lambda _account_id: 9)
+    monkeypatch.setattr(
+        engine,
+        "_persist_session",
+        lambda _account_id, session, chat_type="unknown": {
+            "peer_id": session.get("peer_id"),
+            "display_name": session.get("display_name"),
+            "changed": False,
+            "chat_type": chat_type,
+        },
+    )
+    monkeypatch.setattr(engine, "time", type("T", (), {"sleep": staticmethod(lambda _s: None), "time": staticmethod(lambda: 0.0)}))
+
+    result = engine._sync_recent_sessions_from_wxauto4(engine.LOCAL_DEFAULT_ACCOUNT_ID)
+    assert calls["ready"] >= 1, "首屏读空后必须先尝试把微信拉回聊天列表"
+    assert result["ready_retries"] >= 1
+    assert result["scroll_rounds"] == 1

@@ -370,6 +370,29 @@ class RunLogger:
             self.manifest["errors"].append({"where": where, "message": message, "ts": datetime.now().isoformat()})
             self._save()
 
+    def provider_attempt(self, index: Any, stage: str, provider: Optional[Dict[str, Any]], error: str) -> None:
+        """Fallback 中途的失败只记在这里，不写 segments/errors —— 中间错误不对前端暴露。
+
+        只有某个分镜的**所有**渠道都失败时，才会把最后一次失败写进 segments/errors（终态）。
+        """
+        with self.lock:
+            attempts = self.manifest.setdefault("provider_attempts", [])
+            try:
+                segment_index = int(index)
+            except Exception:
+                segment_index = 0
+            attempts.append(
+                {
+                    "segment": segment_index,
+                    "stage": str(stage or ""),
+                    "channel": str((provider or {}).get("channel") or ""),
+                    "model": str((provider or {}).get("model") or ""),
+                    "error": str(error or "")[:600],
+                    "ts": datetime.now().isoformat(),
+                }
+            )
+            self._save()
+
     def finish(self, status: str, payload: Any = None) -> None:
         with self.lock:
             self.manifest["status"] = status
@@ -399,6 +422,42 @@ def _normalize_aspect_ratio(raw: str, default: str = "9:16") -> str:
     if s in {"1:1", "4:3", "3:4", "4:5", "5:4", "9:16", "16:9", "21:9"}:
         return s
     return default
+
+
+# 各比例的目标 w/h 与容差；成品尺寸用于把模型给的片子裁/补回目标比例
+_ASPECT_TARGETS: Dict[str, tuple] = {
+    "9:16": (9 / 16, 0.12),
+    "16:9": (16 / 9, 0.20),
+    "1:1": (1.0, 0.08),
+    "4:5": (4 / 5, 0.10),
+    "3:4": (3 / 4, 0.09),
+    "2:3": (2 / 3, 0.10),
+    "4:3": (4 / 3, 0.16),
+    "5:4": (5 / 4, 0.16),
+    "3:2": (3 / 2, 0.18),
+    "21:9": (21 / 9, 0.60),
+}
+
+_ASPECT_OUTPUT_SIZE: Dict[str, tuple] = {
+    "9:16": (720, 1280),
+    "16:9": (1280, 720),
+    "1:1": (1024, 1024),
+    "4:5": (864, 1080),
+    "3:4": (810, 1080),
+    "2:3": (720, 1080),
+    "4:3": (1080, 810),
+    "5:4": (1080, 864),
+    "3:2": (1080, 720),
+    "21:9": (1280, 548),
+}
+
+# 比例不符时的纠偏方式：cover=裁切填满（默认，短视频常用）/ contain=补黑边
+_ASPECT_FIT_MODE = "cover"
+
+
+def _aspect_output_size(aspect_ratio: str) -> tuple:
+    normalized = _normalize_aspect_ratio(aspect_ratio)
+    return _ASPECT_OUTPUT_SIZE.get(normalized) or _ASPECT_OUTPUT_SIZE["9:16"]
 
 
 def _as_bool(value: Any, default: bool) -> bool:
@@ -708,7 +767,7 @@ def _retry(action: str, attempts: int, delay: int, logger_obj: RunLogger, fn: Ca
             return fn(), i
         except Exception as exc:
             last = exc
-            logger_obj.error(action, f"attempt {i} failed: {exc}")
+            logger_obj.provider_attempt(0, action, None, f"attempt {i} failed: {exc}")
             if i >= max_attempts or _non_retryable(exc):
                 break
             if action.startswith("analyze") and not _is_transient_network_error(exc):
@@ -769,13 +828,34 @@ def _resolve_video_download_url(url: str, channel: str, base_url: str, task_id: 
 
 def _download_headers_for_url(url: str, api_key: str = "") -> Optional[Dict[str, str]]:
     parsed = urlparse(str(url or ""))
-    if "/api/comfly-proxy/xing/" not in parsed.path:
+    path = parsed.path or ""
+    # 走本服务代理取受保护素材（/content 之类）的接口都要带用户 token，否则服务端
+    # get_current_user 直接 401：openmind 兜底通道的成片以前就是这么永远下载失败的。
+    needs_auth = (
+        "/api/comfly-proxy/xing/" in path
+        or "/api/comfly-proxy/openmind/" in path
+        or path.rstrip("/").endswith("/content")
+    )
+    if not needs_auth:
         return None
     token = str(api_key or "").strip()
     if not token:
         return None
     auth = token if token.lower().startswith("bearer ") else f"Bearer {token}"
     return {"Authorization": auth, "Accept": "video/mp4,*/*"}
+
+
+def _video_submit_headers(segment_key: str = "") -> Dict[str, str]:
+    """视频提交请求头：带上「分镜段标识」。
+
+    服务端据此做「同段只扣一次」：同一段分镜换渠道重跑时，会把上一笔还没结算的预扣退回，
+    避免一段视频失败重试被扣多次（详见服务端 _supersede_previous_video_charge）。
+    """
+    headers: Dict[str, str] = {"Content-Type": "application/json"}
+    key = str(segment_key or "").strip()[:128]
+    if key:
+        headers["X-Lobster-Video-Segment"] = key
+    return headers
 
 
 def _download_file(
@@ -858,6 +938,56 @@ def _probe_video_dimensions(media_path: str, ffmpeg_path: str) -> Optional[Dict[
     return {"width": width, "height": height}
 
 
+def _conform_video_to_ratio(
+    src_path: str,
+    aspect_ratio: str,
+    ffmpeg_path: str,
+    out_path: Path,
+    *,
+    mode: str = "",
+) -> Optional[Path]:
+    """把成片裁/补到目标比例（cover=裁切填满，contain=补黑边）；失败返回 None。
+
+    图生视频模型常常跟着参考图出片（参考图 3:4 就出 3:4），所以比例不符时不再整段
+    报废、重跑所有渠道，而是先纠一次再继续用。
+    """
+    ffmpeg_binary = _resolve_tool_binary("ffmpeg", ffmpeg_path)
+    if not ffmpeg_binary:
+        return None
+    width, height = _aspect_output_size(aspect_ratio)
+    fit_mode = (mode or _ASPECT_FIT_MODE or "cover").strip().lower()
+    if fit_mode == "contain":
+        vf = (
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+            f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:black"
+        )
+    else:
+        vf = f"scale={width}:{height}:force_original_aspect_ratio=increase,crop={width}:{height}"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg_binary, "-y", "-i", str(src_path),
+        "-vf", vf,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-movflags", "+faststart",
+        str(out_path),
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    except (FileNotFoundError, OSError) as exc:
+        logger.warning(
+            "[seedance-aspect] conform failed: %s",
+            _exception_summary(exc, [ffmpeg_binary, "-vf", vf, str(src_path), str(out_path)]),
+        )
+        return None
+    if proc.returncode != 0 or not out_path.exists():
+        logger.warning(
+            "[seedance-aspect] conform ffmpeg returncode=%s target=%s src=%s stderr=%s",
+            proc.returncode, f"{width}x{height}", src_path, (proc.stderr or "")[-500:],
+        )
+        return None
+    return out_path
+
+
 def _probe_stream_types(media_path: str, ffmpeg_path: str) -> List[str]:
     ffprobe_binary = _ffprobe_binary_for(ffmpeg_path)
     if not ffprobe_binary:
@@ -904,6 +1034,18 @@ def _merge_completed_segments(config: PipelineConfig, logger_obj: RunLogger, seg
     for seg in sorted(segments, key=lambda item: int(item.get("index", 0))):
         index = int(seg.get("index", 0))
         clip_url = _first_text(seg, "mp4url")
+        # 校验阶段已经裁/补好的本地成片优先复用：既省一次下载，也保证合成用的是纠偏后的片子
+        validated_local = str(seg.get("local_clip_path") or "").strip()
+        if validated_local and Path(validated_local).is_file():
+            logger_obj.segment(
+                index,
+                "merge_download",
+                "success",
+                attempts=0,
+                payload={"index": index, "path": validated_local, "reused_validated_clip": True},
+            )
+            downloaded.append({"index": index, "path": validated_local, "url": clip_url, "reused": True})
+            continue
         download_url = _resolve_video_download_url(
             clip_url,
             str(seg.get("video_channel") or config.video_channel),
@@ -926,6 +1068,39 @@ def _merge_completed_segments(config: PipelineConfig, logger_obj: RunLogger, seg
         )
         logger_obj.segment(index, "merge_download", "success", attempts=attempts, payload={"index": index, "path": str(downloaded_path)})
         downloaded.append({"index": index, "path": str(downloaded_path), "url": clip_url})
+
+    # 合成前统一到目标比例：模型按参考图出片时可能是 3:4/1:1 等，先裁/补再拼接，
+    # 保证成片就是用户选的比例（抖音竖版 9:16 之类）。
+    normalized: List[Dict[str, Any]] = []
+    for item in downloaded:
+        clip_dimensions = _probe_video_dimensions(str(item["path"]), config.ffmpeg_path)
+        if clip_dimensions and _aspect_matches_request(clip_dimensions, config.aspect_ratio):
+            normalized.append(item)
+            continue
+        fit_path = clips_dir / f"segment_{int(item['index']):02d}_fit.mp4"
+        fitted = _conform_video_to_ratio(
+            str(item["path"]), config.aspect_ratio, config.ffmpeg_path, fit_path
+        )
+        fitted_dimensions = (
+            _probe_video_dimensions(str(fitted), config.ffmpeg_path) if fitted else None
+        )
+        if fitted and fitted_dimensions and _aspect_matches_request(fitted_dimensions, config.aspect_ratio):
+            logger_obj.segment(
+                int(item["index"]),
+                "merge_fit_aspect",
+                "adjusted",
+                payload={
+                    "index": item["index"],
+                    "source_dimensions": clip_dimensions or {},
+                    "dimensions": fitted_dimensions,
+                    "path": str(fitted),
+                    "fit_mode": _ASPECT_FIT_MODE,
+                },
+            )
+            normalized.append({**item, "path": str(fitted), "dimensions": fitted_dimensions, "fit_mode": _ASPECT_FIT_MODE})
+        else:
+            normalized.append(item)
+    downloaded = normalized
 
     merged_path = logger_obj.run_dir / "merged_output.mp4"
     if len(downloaded) == 1:
@@ -1431,6 +1606,7 @@ class ComflySeedanceClient:
         channel: str = "",
         model: str = "",
         base_url: str = "",
+        segment_key: str = "",
     ) -> tuple[Dict[str, Any], int]:
         # Apply the limit at the request boundary as well as during plan
         # construction so direct callers and all fallback providers are safe.
@@ -1457,7 +1633,7 @@ class ComflySeedanceClient:
             def call_dashscope() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/v2/videos/generations"
                 self._trace_request("dashscope_wan30_submit", vid_url, body)
-                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=180)
+                r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=180)
                 payload = self._check(r)
                 data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
                 output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
@@ -1512,7 +1688,7 @@ class ComflySeedanceClient:
             def call_openmind() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/openmind/v1/videos"
                 self._trace_request("openmind_video_submit", vid_url, body)
-                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=180)
+                r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=180)
                 payload = self._check(r)
                 data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
                 task_id = str(
@@ -1550,7 +1726,7 @@ class ComflySeedanceClient:
             def call_xai() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/xai/v1/videos/generations"
                 self._trace_request("xai_video_submit", vid_url, body)
-                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
+                r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=120)
                 payload = self._check(r)
                 request_id = str(payload.get("request_id") or payload.get("id") or payload.get("task_id") or "").strip()
                 if not request_id:
@@ -1584,7 +1760,7 @@ class ComflySeedanceClient:
             def call_xing() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/xing/v1/videos/generations"
                 self._trace_request("xing_seedance_submit", vid_url, body)
-                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=180)
+                r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=180)
                 payload = self._check(r)
                 data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
                 task_id = str(
@@ -1630,7 +1806,7 @@ class ComflySeedanceClient:
             def call_yunwu() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/v1/video/create"
                 self._trace_request("yunwu_video_submit", vid_url, body)
-                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
+                r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=120)
                 payload = self._check(r)
                 data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
                 task_id = str(payload.get("id") or payload.get("task_id") or data.get("id") or data.get("task_id") or "").strip()
@@ -1672,7 +1848,7 @@ class ComflySeedanceClient:
             def call_comfly_veo() -> Dict[str, Any]:
                 vid_url = f"{video_base_url}/v2/videos/generations"
                 self._trace_request("comfly_video_submit", vid_url, body)
-                r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
+                r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=120)
                 payload = self._check(r)
                 task_id = str(payload.get("id") or payload.get("task_id") or payload.get("video_id") or "").strip()
                 data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
@@ -1708,7 +1884,7 @@ class ComflySeedanceClient:
         def call() -> Dict[str, Any]:
             vid_url = f"{self.base_url}/seedance/v3/contents/generations/tasks"
             self._trace_request("seedance_submit", vid_url, body)
-            r = self.session.post(vid_url, headers={"Content-Type": "application/json"}, json=body, timeout=120)
+            r = self.session.post(vid_url, headers=_video_submit_headers(segment_key), json=body, timeout=120)
             payload = self._check(r)
             task_id = payload.get("id") or payload.get("task_id")
             if not isinstance(task_id, str) or not task_id:
@@ -1995,6 +2171,7 @@ def _submit_segment_video_to_provider(
     provider: Dict[str, str],
     provider_index: int,
     submit_control: Optional[SubmitControl] = None,
+    report_failure: bool = True,
 ) -> Dict[str, Any]:
     index = int(segment_plan["index"])
     segment_reference_result = segment_plan["segment_reference_result"]
@@ -2017,6 +2194,8 @@ def _submit_segment_video_to_provider(
             channel=provider_channel,
             model=provider_model,
             base_url=provider_base_url,
+            # 同一段分镜的所有渠道尝试共用一个段标识：服务端据此保证「同段只扣一次」
+            segment_key=f"{logger_obj.run_dir.name}:seg{index:02d}",
         )
         logger_obj.segment(index, f"submit_{provider_role}", "success", attempts=submit_attempts, payload=submit_result)
         out = dict(segment_plan)
@@ -2032,19 +2211,26 @@ def _submit_segment_video_to_provider(
             submit_control.note_submit_success()
         return out
     except Exception as exc:
-        logger_obj.segment(
-            index,
-            f"submit_{provider_role}",
-            "failed",
-            error=_exception_summary(exc),
-            payload={
-                "video_channel": provider_channel,
-                "video_model": provider_model,
-                "provider_role": provider_role,
-                "request": _video_submit_debug_request(client, segment_plan, segment_reference_result, provider_model, provider_channel),
-                "exception": _exception_diagnostics(exc),
-            },
-        )
+        summary = _exception_summary(exc)
+        debug_payload = {
+            "video_channel": provider_channel,
+            "video_model": provider_model,
+            "provider_role": provider_role,
+            "request": _video_submit_debug_request(client, segment_plan, segment_reference_result, provider_model, provider_channel),
+            "exception": _exception_diagnostics(exc),
+        }
+        if report_failure:
+            logger_obj.segment(
+                index,
+                f"submit_{provider_role}",
+                "failed",
+                error=summary,
+                payload=debug_payload,
+            )
+        else:
+            # 后面还有渠道可试：中间失败只落 provider_attempts（前端看不到），调试详情仍写文件
+            logger_obj.provider_attempt(index, f"submit_{provider_role}", provider, summary)
+            logger_obj.write_json(f"segment_{index:02d}_submit_{provider_role}.json", debug_payload)
         if submit_control is not None and _is_insufficient_credit_error(exc):
             if submit_control.has_any_successful_submit():
                 reason = (
@@ -2087,7 +2273,6 @@ def _submit_segment_video(
                     "from_model": providers[0]["model"],
                     "to_channel": provider_channel,
                     "to_model": provider_model,
-                    "previous_error": last_error,
                 },
             )
         try:
@@ -2099,6 +2284,7 @@ def _submit_segment_video(
                 provider,
                 provider_index,
                 submit_control,
+                report_failure=(provider_index == len(providers)),
             )
         except Exception as exc:
             last_error = _exception_summary(exc)
@@ -2210,14 +2396,17 @@ def _aspect_matches_request(dimensions: Dict[str, int], aspect_ratio: str) -> bo
     if width <= 0 or height <= 0:
         return True
     normalized = _normalize_aspect_ratio(aspect_ratio)
+    target = _ASPECT_TARGETS.get(normalized)
+    if not target:
+        return True
+    expected, tolerance = target
     actual = width / height
-    if normalized == "9:16":
-        return height > width and abs(actual - (9 / 16)) <= 0.12
-    if normalized == "16:9":
-        return width > height and abs(actual - (16 / 9)) <= 0.20
-    if normalized == "1:1":
-        return abs(actual - 1) <= 0.08
-    return True
+    # 竖版比例必须真的竖着，横版必须真的横着，避免 1:1 或反向尺寸被算成通过
+    if normalized in {"9:16", "4:5", "3:4", "2:3"} and width >= height:
+        return False
+    if normalized in {"16:9", "4:3", "5:4", "3:2", "21:9"} and width <= height:
+        return False
+    return abs(actual - expected) <= tolerance
 
 
 def _validate_segment_video_aspect(
@@ -2270,6 +2459,30 @@ def _validate_segment_video_aspect(
         "video_model": model,
     }
     if dimensions and not _aspect_matches_request(dimensions, aspect_ratio):
+        # 模型跟着参考图出片（参考图 3:4 → 成片 3:4）是常态，先裁/补到目标比例继续用，
+        # 不要因为比例不符就把整段丢给所有兜底渠道重跑（用户看到的就是这条 mismatch）。
+        fitted_path = _conform_video_to_ratio(
+            str(downloaded_path),
+            aspect_ratio,
+            client.config.ffmpeg_path,
+            validation_path.with_name(f"{validation_path.stem}_fitted{validation_path.suffix or '.mp4'}"),
+        )
+        fitted_dimensions = (
+            _probe_video_dimensions(str(fitted_path), client.config.ffmpeg_path) if fitted_path else None
+        )
+        if fitted_path and fitted_dimensions and _aspect_matches_request(fitted_dimensions, aspect_ratio):
+            payload = dict(
+                payload,
+                fitted=True,
+                fitted_path=str(fitted_path),
+                fitted_dimensions=fitted_dimensions,
+                fit_mode=_ASPECT_FIT_MODE,
+            )
+            segment_result["local_clip_path"] = str(fitted_path)
+            segment_result["aspect_fitted"] = True
+            segment_result["fitted_dimensions"] = fitted_dimensions
+            logger_obj.segment(index, f"aspect_check_{role}", "adjusted", attempts=attempts, payload=payload)
+            return
         logger_obj.segment(index, f"aspect_check_{role}", "failed", attempts=attempts, error="video aspect ratio mismatch", payload=payload)
         raise PipelineError(
             f"video aspect ratio mismatch: expected {aspect_ratio}, got {dimensions['width']}x{dimensions['height']} from {channel}/{model}"
@@ -2328,7 +2541,6 @@ def _run_segment_video_providers(
                     "to_channel": provider_channel,
                     "to_model": provider_model,
                     "provider_role": provider_role,
-                    "previous_error": last_error,
                 },
             )
         try:
@@ -2340,6 +2552,7 @@ def _run_segment_video_providers(
                 provider,
                 provider_index,
                 submit_control,
+                report_failure=(provider_index == len(providers)),
             )
             segment_result = _poll_segment_video(
                 client,
@@ -2352,29 +2565,38 @@ def _run_segment_video_providers(
             raise
         except Exception as exc:
             last_error = _exception_summary(exc)
-            logger_obj.segment(
-                index,
-                f"video_attempt_{provider_role}",
-                "failed",
-                error=_exception_summary(exc),
-                payload={
-                    "video_channel": provider_channel,
-                    "video_model": provider_model,
-                    "provider_role": provider_kind,
-                    "provider_stage_role": provider_role,
-                    "provider_attempt": provider_index,
-                    "exception": _exception_diagnostics(exc),
-                },
-            )
+            if provider_index == len(providers):
+                logger_obj.segment(
+                    index,
+                    f"video_attempt_{provider_role}",
+                    "failed",
+                    error=last_error,
+                    payload={
+                        "video_channel": provider_channel,
+                        "video_model": provider_model,
+                        "provider_role": provider_kind,
+                        "provider_stage_role": provider_role,
+                        "provider_attempt": provider_index,
+                        "exception": _exception_diagnostics(exc),
+                    },
+                )
+            else:
+                logger_obj.provider_attempt(index, f"video_attempt_{provider_role}", provider, last_error)
     raise PipelineError(f"segment {index:02d} video generation failed: {last_error}")
 
 
-def _direct_video_prompt(config: PipelineConfig) -> str:
+def _direct_video_prompt(
+    config: PipelineConfig,
+    reference_image_urls: Optional[List[str]] = None,
+) -> str:
+    # 参考图不在 PipelineConfig 上（由调用方按段传入），以前这里写 config.reference_image
+    # 会直接 AttributeError，把直出视频模式打挂（2026-09-22 修）。
+    has_reference = any(str(url or "").strip() for url in (reference_image_urls or []))
     prompt = (config.task_text or "").strip()
     if not prompt:
         prompt = (
             "基于参考图生成一段自然、连贯、适合短视频平台发布的图生视频。"
-            if config.reference_image
+            if has_reference
             else "根据创意提示词生成一段自然、连贯、适合短视频平台发布的文生视频。"
         )
     return _limit_video_prompt("\n".join(
@@ -2389,7 +2611,7 @@ def _direct_video_prompt(config: PipelineConfig) -> str:
 
 
 def _build_direct_segment_plan(config: PipelineConfig, reference_image_urls: List[str], index: int = 1) -> Dict[str, Any]:
-    video_prompt = _direct_video_prompt(config)
+    video_prompt = _direct_video_prompt(config, reference_image_urls)
     segment_index = max(1, int(index or 1))
     reference_url = reference_image_urls[0] if reference_image_urls else ""
     start_second = (segment_index - 1) * config.segment_duration_seconds
@@ -2557,15 +2779,25 @@ def _build_config(data: Input) -> PipelineConfig:
         else:
             raw_total = int(data.get("total_duration_seconds", 20))
         if raw_total not in allowed_totals:
-            raise PipelineError(f"total_duration_seconds must be one of {list(allowed_totals)}")
+            limit_total = max(allowed_totals)
+            if raw_total > limit_total:
+                raise PipelineError(
+                    f"total_duration_seconds 最多 {limit_total} 秒（可选：{sorted(allowed_totals)}）"
+                )
+            # 不是单段时长的整数倍：向上取整到最近的合法总时长（例：16 秒 → 20 秒 / 2 段）
+            rounded_total = min(x for x in sorted(allowed_totals) if x >= raw_total)
+            data["duration_adjusted_from"] = raw_total
+            raw_total = rounded_total
         raw_segment_duration = int(data.get("segment_duration_seconds", segment_seconds))
         if raw_segment_duration != segment_seconds:
             raise PipelineError(f"segment_duration_seconds must be exactly {segment_seconds}")
         segment_count = raw_total // segment_seconds
         if requested_segment_count is not None and int(requested_segment_count) != segment_count:
-            raise PipelineError(
-                f"segment_count/storyboard_count must match total_duration_seconds / {segment_seconds}"
-            )
+            # 段数与总时长不匹配时取较大值：宁可多一段，也不要少给时长
+            segment_count = max(int(requested_segment_count), segment_count)
+            if segment_count * segment_seconds != raw_total:
+                data["duration_adjusted_from"] = raw_total
+                raw_total = segment_count * segment_seconds
     base_url = (data.get("base_url") or "https://ai.comfly.org").rstrip("/")
     video_base_default = _default_video_base_url(video_channel, base_url)
     fallback_channel = _normalize_video_channel(str(data.get("video_fallback_channel") or data.get("fallback_video_channel") or "comfly"))

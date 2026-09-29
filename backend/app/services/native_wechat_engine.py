@@ -701,6 +701,20 @@ def init_db() -> None:
             create index if not exists idx_wechat_group_members_group
             on wechat_group_members(account_id, group_key, updated_at desc);
 
+            create table if not exists wechat_friend_add_targets (
+                account_id text not null,
+                target text not null,
+                status text not null default 'pending',
+                attempts integer not null default 0,
+                last_error text,
+                last_attempt_at text,
+                created_at text not null,
+                updated_at text not null,
+                primary key (account_id, target)
+            );
+            create index if not exists idx_wechat_friend_add_targets_status
+            on wechat_friend_add_targets(account_id, status);
+
             create table if not exists wechat_friend_requests (
                 id text primary key,
                 account_id text not null,
@@ -1935,7 +1949,12 @@ def list_accounts() -> List[Dict[str, Any]]:
     return out
 
 
-def local_driver_status(*, passive: bool = False) -> Dict[str, Any]:
+def local_driver_status(*, passive: bool = True) -> Dict[str, Any]:
+    """默认被动：只扫窗口/依赖，不激活微信窗口、不连 wxauto4。
+
+    以前默认被动关，前端每刷一次状态就会把微信窗口激活一次（用户会以为"被控制"）。
+    需要深度探测时显式传 passive=False（例如用户主动点「检测」）。
+    """
     init_db()
     return _local_driver_status(passive=passive)
 
@@ -3378,6 +3397,83 @@ def _auto_reply_history_state(account_id: str, peer_id: str, inbound: Dict[str, 
         return {"exists": False, "inbound_message_id": inbound_id, "error": f"history_lookup_failed: {exc}"[:500]}
 
 
+# 上一轮生成了回复但没发出去的状态：同一条入站消息再出现时直接复用旧文案，不再调 AI。
+_AUTO_REPLY_RETRYABLE_STATUSES = {
+    "failed",
+    "unknown",
+    "send_unconfirmed",
+    "group_invite_failed",
+    "ai_batch_failed",
+}
+
+
+def _auto_reply_peer_is_group_primary_contact(
+    configured_primary_contact: Any,
+    resolved_primary_contact: Any,
+    wechat_id: Any,
+    peer_id: Any,
+) -> bool:
+    """客户本人就是配置的"群邀请主联系人"时，这条会话不该被 AI 接管（2026-09-22 用户口径）。
+
+    线上事故：主联系人被配成客户 Wendy 的微信号 xkcmwu → 每轮都判"该拉群"→ 拉群不可执行
+    → 普通回复被抑制 → 同一条消息每 2 分钟重生成一次、客户永远收不到。
+    """
+    configured = {
+        str(value or "").strip().lower()
+        for value in (configured_primary_contact, resolved_primary_contact)
+    }
+    configured.discard("")
+    if not configured:
+        return False
+    current = {str(value or "").strip().lower() for value in (wechat_id, peer_id)}
+    current.discard("")
+    return bool(configured & current)
+
+
+def _cached_auto_reply_reply(
+    account_id: str,
+    peer_id: str,
+    inbound: Dict[str, Any],
+) -> Dict[str, Any]:
+    """取"上一轮已生成但没发出去"的回复全文（同一条入站消息）。
+
+    同一 inbound_message_id 说明客户的话没变，直接复用旧文案尝试发送，避免重复生成。
+    """
+    payload = inbound if isinstance(inbound, dict) else {}
+    inbound_id = _auto_reply_inbound_id(peer_id, payload)
+    if not inbound_id:
+        return {}
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                select status, reply_content, category, updated_at
+                from wechat_auto_reply_history
+                where account_id=? and peer_id=? and inbound_message_id=?
+                order by updated_at desc
+                limit 1
+                """,
+                (account_id, peer_id, inbound_id),
+            ).fetchone()
+    except Exception:
+        return {}
+    if not row:
+        return {}
+    status = str(row[0] or "").strip().lower()
+    reply = str(row[1] or "").strip()
+    if not reply or status not in _AUTO_REPLY_RETRYABLE_STATUSES:
+        return {}
+    return {
+        "should_reply": True,
+        "reply": reply,
+        "category": str(row[2] or ""),
+        "should_invite_group": False,
+        "reused_from_history": True,
+        "previous_status": status,
+        "generated_at": str(row[3] or ""),
+    }
+
+
 def _promote_session_preview_latest(account_id: str, peer_id: str, preview: Any) -> Optional[Dict[str, Any]]:
     """Align persisted ordering with the authoritative session-list preview.
 
@@ -4390,6 +4486,11 @@ def _build_auto_reply_report(result: Dict[str, Any], memory: Dict[str, Any]) -> 
         f"- \u65b0\u597d\u53cb\u6b22\u8fce\u8bed\uff1a\u5df2\u53d1\u9001 {report['friend_welcome_sent']} \u6761\uff0c"
         f"\u5931\u8d25 {report['friend_welcome_failed']} \u6761"
     )
+    if not report["session_count"]:
+        lines.append(
+            "- 本轮没有读到任何会话：微信会话列表读取为空（可能窗口刚恢复/驱动未就绪），"
+            "已尝试把微信拉回聊天列表并重试；下一轮会自动重扫"
+        )
     if report["stop_reason"] == "last_message_over_24h":
         lines.append("- 已读到最后消息超过 24 小时的会话，本轮停止继续往后检查")
     elif report["stop_reason"] == "cancelled":
@@ -4805,6 +4906,8 @@ async def run_auto_reply_once(
             else 0,
             driver_recovered=bool(session_data.get("driver_recovered")),
             driver_retry_count=int(session_data.get("driver_retry_count") or 0),
+            ready_retries=int(session_data.get("ready_retries") or 0),
+            empty_scan_visible_count=int(session_data.get("empty_scan_visible_count") or 0),
         )
         # Older/test drivers may not provide the wxauto4 time snapshot. Keep
         # their existing top-reset behavior; the precise-time path already
@@ -5445,6 +5548,44 @@ async def run_auto_reply_once(
                     )
                     result["items"].append(collection_result)
                     continue
+                if _auto_reply_peer_is_group_primary_contact(
+                    configured_primary_contact_for_batch,
+                    primary_contact_for_batch,
+                    resolved_wechat_id,
+                    peer_id,
+                ):
+                    # 客户本人就是配置的"群邀请主联系人"：按用户口径直接跳过，
+                    # 不生成回复、不回复，并落一条 terminal 历史避免每轮重来。
+                    result["skipped"] += 1
+                    collection_result.update(
+                        {
+                            "status": "skipped_primary_contact",
+                            "reply_suppressed": True,
+                            "skip_reason": "configured_group_invite_primary_contact",
+                        }
+                    )
+                    _record_auto_reply_history(
+                        account_id,
+                        resolved_wechat_id,
+                        inbound,
+                        reply="",
+                        category="",
+                        status="skipped",
+                        error="该联系人就是配置的拉群主联系人：按规则不生成、不回复",
+                    )
+                    log_event(
+                        "message_skipped_primary_contact",
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        chat_type=chat_type,
+                        inbound_message_id=_auto_reply_inbound_id(resolved_wechat_id, inbound),
+                        reason="configured_group_invite_primary_contact",
+                        configured_primary_contact=configured_primary_contact_for_batch,
+                        resolved_primary_contact=primary_contact_for_batch,
+                    )
+                    result["items"].append(collection_result)
+                    continue
                 log_event(
                     "message_candidate",
                     peer_id=peer_id,
@@ -5485,6 +5626,21 @@ async def run_auto_reply_once(
                     recent,
                 )
                 work_id = _auto_reply_work_id(account_id, resolved_wechat_id, inbound)
+                cached_reply = _cached_auto_reply_reply(account_id, resolved_wechat_id, inbound)
+                if cached_reply:
+                    # 客户这句话没变、上一轮已经生成过只是没发出去：直接复用旧文案，
+                    # 本轮跳过 AI 生成，执行阶段只负责"尝试发"。
+                    cached_replies_by_work_id[work_id] = cached_reply
+                    log_event(
+                        "reply_reused_from_history",
+                        work_id=work_id,
+                        peer_id=peer_id,
+                        actual_peer=actual_peer,
+                        display_name=display_name,
+                        inbound_message_id=_auto_reply_inbound_id(resolved_wechat_id, inbound),
+                        previous_status=str(cached_reply.get("previous_status") or ""),
+                        reply_preview=str(cached_reply.get("reply") or "")[:300],
+                    )
                 identity_mode = "nickname" if nickname_identity else "wechat_id"
                 request_item = {
                     "work_id": work_id,
@@ -5550,6 +5706,8 @@ async def run_auto_reply_once(
 
         result["ai_batch_candidate_count"] = len(batch_requests)
         batch_replies: Dict[str, Dict[str, Any]] = {}
+        # 上一轮已生成、这轮只需补发的回复（按 work_id 命中，不再请求 AI）
+        cached_replies_by_work_id: Dict[str, Dict[str, Any]] = {}
         batch_failures: Dict[str, str] = {}
         batch_size = 8
         executable_prepared = list(prepared_by_work_id.values())
@@ -5572,6 +5730,15 @@ async def run_auto_reply_once(
                     for item in chunk_prepared
                     if isinstance(item.get("request"), dict)
                 ]
+                # 命中"上一轮已生成回复"的条目不再请求 AI（空 chunk 时批量接口直接返回 {}），
+                # 直接把旧文案放进 batch_replies，执行阶段照常尝试发送。
+                chunk = [
+                    item
+                    for item in chunk
+                    if str(item.get("work_id") or "") not in cached_replies_by_work_id
+                ]
+                for cached_work_id, cached_reply_item in cached_replies_by_work_id.items():
+                    batch_replies.setdefault(cached_work_id, cached_reply_item)
                 log_event(
                     "ai_batch_started",
                     batch_index=batch_index,
@@ -6241,12 +6408,10 @@ async def run_auto_reply_once(
                     )
                     if not invite_ok:
                         result["group_invite_failed"] += 1
-                        result["skipped"] += 1
                         item_result.update(
                             {
                                 "status": "group_invite_failed",
                                 "group_invite_failed": True,
-                                "reply_suppressed": True,
                                 "skip_reason": "group_invite_failed",
                             }
                         )
@@ -6260,8 +6425,29 @@ async def run_auto_reply_once(
                             result=group_invite or {},
                             reason="invite_result_not_executable",
                         )
-                        result["items"].append(item_result)
-                        continue
+                        # 拉群执行不了（主联系人缺失/异常等）时不能把客户晾着：
+                        # 记下已经生成的回复，本轮直接当普通回复发出去（2026-09-22 用户口径）。
+                        _record_auto_reply_history(
+                            account_id,
+                            actual_peer,
+                            inbound,
+                            reply=str(llm_reply.get("reply") or ""),
+                            category=str(llm_reply.get("category") or ""),
+                            status="failed",
+                            error="group_invite_not_executable",
+                        )
+                        llm_reply["should_invite_group"] = False
+                        item_result["should_invite_group"] = False
+                        item_result["group_invite_downgraded_to_reply"] = True
+                        log_event(
+                            "group_invite_downgraded_to_reply",
+                            work_id=work_id,
+                            peer_id=peer_id,
+                            actual_peer=actual_peer,
+                            display_name=display_name,
+                            reason=str((group_invite or {}).get("reason") or "invite_result_not_executable"),
+                            reply_preview=str(llm_reply.get("reply") or "")[:300],
+                        )
                     _record_auto_reply_history(
                         account_id,
                         actual_peer,
@@ -6484,12 +6670,11 @@ async def run_auto_reply_once(
                         "identity_mode": "nickname" if nickname_identity else "wechat_id",
                         "display_name": display_name,
                     },
-                    # The execute-stage sync has already searched the
-                    # immutable WeChat ID and verified the selected chat.
-                    # Reuse that verified current chat for the actual send so
-                    # the contact is not searched and profile-confirmed a
-                    # second time.
-                    use_current_chat=True,
+                    # 发送阶段不复用"当前已打开会话"：execute 阶段打开的会话在真正发送前
+                    # 可能已被别的会话占用（线上 2026-09-17：回给"福永十亩地小管家"的
+                    # 内容被发进了"小洛神"；2026-09-15：回给小亮的内容发进了涛哥）。
+                    # 这里一律按已校验的微信号重新搜索 + 核实后再发。
+                    use_current_chat=_auto_reply_send_uses_current_chat(),
                     diagnostic_context={
                         "run_id": run_id,
                         "work_id": work_id,
@@ -8578,9 +8763,17 @@ def _resolve_scan_contact_wx_no(
             return ""
 
     for attempt in range(1, max(1, int(attempts)) + 1):
+        if not open_name:
+            # 调用方没带当前会话名：只读一次，不点行。
+            open_name = current_name()
+        if not open_name:
+            # 名字读不出来：重复点同一行不会有帮助（每次点击都会再切换一次会话，
+            # 线上就是这样把窗口反复抢走的）。本轮按昵称兜底，下一轮再看。
+            reason = "chat_name_unreadable"
+            break
         if not anchored(open_name):
-            # 当前打开的不是候选人：把这一行重新点一次（扫描本来就在点的行，
-            # 只改变选中项，不搜索、不改变列表顺序），然后轮询等它生效。
+            # 当前打开的是别人：把这一行重新点一次（只改变选中项，不搜索、
+            # 不改变列表顺序），然后轮询等它生效。
             if callable(select_row):
                 try:
                     select_row()
@@ -8816,6 +9009,12 @@ def _capture_auto_reply_scan_page(
             )
             # 读不到号的人不再丢：identity_mode=nickname 表示"按昵称搜着发"。
             nickname_identity = str(identity_reason or "").startswith("nickname_fallback")
+            if nickname_identity and _looks_like_wechat_id(target_wx_id):
+                # 会话行本身就带微信号（wxauto 行级字段）时优先用它：
+                # 昵称身份只在真的拿不到号时才用，避免把可用的行级身份丢掉。
+                wechat_id = target_wx_id
+                nickname_identity = False
+                identity_reason = "wxauto_session_id"
             _write_auto_reply_diagnostic(
                 "scan_session_identity_capture",
                 account_id=account_id,
@@ -8890,8 +9089,12 @@ def _sync_recent_sessions_from_wxauto4(
     normal_region_started = False
     pinned_count = 0
     stop_at_old_boundary = False
+    ready_retries = 0
     previous_signature: tuple[str, ...] = ()
     auto_reply_captures: Dict[str, Dict[str, Any]] = {}
+    # 同一轮扫描里同一个人只点一次：抓取失败（取号/类型没确认）也算点过，
+    # 下一轮再重试，避免把窗口反复抢来抢去（线上 2026-09-17 错发的诱因之一）。
+    capture_attempted: set[str] = set()
     try:
         try:
             box.go_top()
@@ -8902,6 +9105,18 @@ def _sync_recent_sessions_from_wxauto4(
         for index in range(page_limit):
             rounds = index + 1
             sessions = list(wx.GetSession() or [])
+            if not sessions and index == 0:
+                # 首屏读空：客户端刚启动 / 窗口刚恢复时 GetSession 会返回空，
+                # 直接当成"本轮没有会话"就是线上空转的根因
+                # （diag_20260921042352_4d3c07e6：这轮 0 条，5 秒后界面却有 9 个会话）。
+                # 把微信拉回聊天列表并等它就绪，最多重试 3 次。
+                for attempt in range(3):
+                    _ensure_local_session_list_ready(account_id)
+                    time.sleep(1.2 + 0.8 * attempt)
+                    sessions = list(wx.GetSession() or [])
+                    if sessions:
+                        ready_retries = attempt + 1
+                        break
             if not sessions:
                 scroll_completed = True
                 break
@@ -9015,9 +9230,13 @@ def _sync_recent_sessions_from_wxauto4(
                     sess
                     for sess in page_capture_sessions
                     if str(_session_from_obj(sess).get("peer_id") or "").strip()
-                    not in auto_reply_captures
+                    not in capture_attempted
                 ]
                 if page_capture_sessions:
+                    capture_attempted.update(
+                        str(_session_from_obj(sess).get("peer_id") or "").strip()
+                        for sess in page_capture_sessions
+                    )
                     auto_reply_captures.update(
                         _capture_auto_reply_scan_page(
                             account_id,
@@ -9080,6 +9299,18 @@ def _sync_recent_sessions_from_wxauto4(
                             "raw": session.get("raw") or {},
                         },
                     )
+        empty_scan_visible = 0
+        if not items and not groups:
+            # 线上事故（diag_20260921042352_4d3c07e6）：wxauto 的 GetSession()
+            # 返回空数组，但界面里明明有会话（UIA 能数到 9 个）。这种"空读取"
+            # 以前被当成"本轮没有会话"，不报错也就不触发驱动恢复，接管会一直
+            # 静默地 0 条会话、一条都不回。这里主动抛错，交给
+            # _run_local_driver_operation 的重建驱动 + 重试路径处理。
+            empty_scan_visible = _uia_visible_session_count(account_id)
+            if empty_scan_visible > 0:
+                raise RuntimeError(
+                    "微信会话列表读取为空，但界面可见 %d 个会话（wxauto 驱动疑似失效）" % empty_scan_visible
+                )
         return {
             "ok": True,
             "items": items,
@@ -9098,12 +9329,53 @@ def _sync_recent_sessions_from_wxauto4(
             "scroll_rounds": rounds,
             "scroll_completed": bool(scroll_completed),
             "auto_reply_captures": auto_reply_captures,
+            "empty_scan_visible_count": empty_scan_visible,
+            "ready_retries": ready_retries,
         }
     finally:
         try:
             box.go_top()
         except Exception:
             pass
+
+
+def _ensure_local_session_list_ready(account_id: str) -> bool:
+    """把本机微信拉回「聊天列表可见」状态：恢复窗口 + 微信页 + 退出公众号列表。
+
+    只在读取为空时调用，用来区分「真的没有会话」和「驱动/窗口还没就绪」。
+    """
+    ok = False
+    try:
+        window = _ensure_local_wechat_window_visible(wait_seconds=2.0)
+        ok = bool(window.get("ok")) or ok
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        _ensure_local_chat_tab(account_id)
+        ok = True
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        restored = _restore_local_chat_session_list(account_id)
+        ok = bool(restored.get("ok")) or ok
+    except Exception:  # noqa: BLE001
+        pass
+    return ok
+
+
+def _uia_visible_session_count(account_id: str) -> int:
+    """数一下界面上实际可见的会话行（只在读取结果为空时用来判断驱动是否失效）。"""
+    if not _module_available("uiautomation"):
+        return 0
+    try:
+        import uiautomation as auto  # type: ignore
+
+        hwnd = _local_wechat_hwnd(account_id)
+        if not hwnd:
+            return 0
+        return len(_uia_session_cells(auto.ControlFromHandle(int(hwnd))))
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def _session_from_uia_cell(cell: Any) -> Dict[str, Any]:
@@ -9520,10 +9792,18 @@ def _find_uia_session_cell(root: Any, peer_id: str) -> Optional[Any]:
     if not wanted:
         return None
     cells = _uia_session_cells(root)
+    matches: List[Any] = []
     for cell, item in zip(cells, _decorate_uia_session_items(cells)):
         if str(item.get("peer_id") or "").strip() == wanted:
+            matches.append(cell)
+    if not matches:
+        return None
+    # The virtualized list keeps scrolled-away rows in the tree with empty
+    # bounds; always prefer the copy that is really on screen.
+    for cell in matches:
+        if _uia_rect_tuple(cell) is not None:
             return cell
-    return None
+    return matches[0]
 
 
 def _open_next_visible_session(
@@ -9557,6 +9837,9 @@ def _open_next_visible_session(
 
     def click_next(items: List[Any]) -> Optional[Dict[str, Any]]:
         decorated = _decorate_uia_session_items(items)
+        # Some WeChat builds never expose row bounds; only trust empty bounds as
+        # "scrolled away" when the surrounding page does expose them.
+        bounds_available = any(_uia_rect_tuple(cell) is not None for cell in items)
         for cell, item in zip(items, decorated):
             peer_id = str(item.get("peer_id") or "").strip()
             if not peer_id or peer_id in processed:
@@ -9566,8 +9849,16 @@ def _open_next_visible_session(
                 # are not eligible for personal-message takeover.
                 processed.add(peer_id)
                 continue
+            if bounds_available and _uia_rect_tuple(cell) is None and not _uia_scroll_cell_into_view(cell):
+                # The virtualized list keeps scrolled-away rows in the tree
+                # with empty bounds. Leave the row unprocessed so the page
+                # scroll below can reach it instead of failing this click.
+                continue
             _dismiss_local_wechat_session_ghost_windows(hwnd)
-            _uia_click(cell)
+            try:
+                _uia_click(cell, require_bounds=bounds_available)
+            except RuntimeError:
+                continue
             time.sleep(random.uniform(0.35, 0.65))
             _dismiss_local_wechat_session_ghost_windows(hwnd)
             return item
@@ -9634,8 +9925,14 @@ def _open_local_session_by_uia(
         root = auto.ControlFromHandle(int(hwnd))
         cell = _find_uia_session_cell(root, target)
         if cell is not None:
+            bounds_available = any(_uia_rect_tuple(item) is not None for item in cells)
+            if bounds_available and _uia_rect_tuple(cell) is None:
+                _uia_scroll_cell_into_view(cell)
+                cell = _find_uia_session_cell(root, target) or cell
+            if bounds_available and _uia_rect_tuple(cell) is None:
+                raise RuntimeError("local WeChat session row found but not visible")
             _dismiss_local_wechat_session_ghost_windows(hwnd)
-            _uia_click(cell)
+            _uia_click(cell, require_bounds=bounds_available)
             time.sleep(random.uniform(0.35, 0.65))
             _dismiss_local_wechat_session_ghost_windows(hwnd)
             return {
@@ -11450,8 +11747,45 @@ def _uia_find_by_names(root: Any, names: List[str], *, contains: bool = False, m
     return None
 
 
-def _uia_click(node: Any) -> None:
+def _uia_scroll_cell_into_view(node: Any) -> bool:
+    """Bring a virtualized session row on screen; True when it has real bounds.
+
+    WeChat keeps rows that scrolled out of the viewport in the UIA tree with
+    ``BoundingRectangle`` (0,0,0,0).  Clicking such a row only logs
+    "Can not move cursor ... (0,0,0,0)" and leaves the chat list untouched, so
+    every later step of that round reports "page capture missing".
+    """
+    if _uia_rect_tuple(node) is not None:
+        return True
+    try:
+        pattern = node.GetScrollItemPattern()
+    except Exception:
+        pattern = None
+    if pattern is not None:
+        try:
+            pattern.ScrollIntoView()
+        except Exception:
+            pass
+        time.sleep(0.25)
+        if _uia_rect_tuple(node) is not None:
+            return True
+    return False
+
+
+def _uia_click(node: Any, *, require_bounds: bool = True) -> None:
+    """Click a UIA node; session rows are only clicked once they have real bounds.
+
+    ``require_bounds=False`` keeps the historical behaviour for WeChat builds whose
+    session rows never expose a ``BoundingRectangle``: there is no visibility
+    signal to trust, so clicking is still the only option.
+    """
     is_session_cell = _uia_control_class(node) == "mmui::ChatSessionCell"
+    if is_session_cell and require_bounds and _uia_rect_tuple(node) is None:
+        _uia_scroll_cell_into_view(node)
+    if is_session_cell and require_bounds and _uia_rect_tuple(node) is None:
+        # Off-screen (virtualized) row: do not burn a failed click on it.
+        # Callers skip the row and scroll to the next page instead.
+        raise RuntimeError("local WeChat session row is not visible")
     try:
         node.Click(simulateMove=not is_session_cell)
     except Exception:
@@ -12161,16 +12495,39 @@ def _uia_find_add_friend_plus_button(root: Any) -> Optional[Any]:
     return best_node if best_score >= 30 else None
 
 
+def _find_named_node(hwnd: int, names: List[str], *, contains: bool = False) -> Optional[Any]:
+    root = _uia_foreground_or_main_root(hwnd)
+    node = _uia_find_by_names(root, names, contains=contains, max_depth=18)
+    if node is None and not contains:
+        node = _uia_find_by_names(root, names, contains=True, max_depth=18)
+    return node
+
+
+def _click_node_by_point(node: Any) -> bool:
+    """弹层菜单用物理点击更稳（Invoke/Click 有时不生效）。"""
+    rect = _uia_rect_tuple(node)
+    if rect is None:
+        return False
+    try:
+        _uia_click_screen_point((rect[0] + rect[2]) // 2, (rect[1] + rect[3]) // 2)
+        return True
+    except Exception:
+        return False
+
+
 def _open_local_add_friend_entry(hwnd: int, steps: List[Dict[str, Any]]) -> None:
     _ensure_local_tab(hwnd, "微信", strict=True)
     steps.append({"step": "switch_chat_tab", "ok": True})
+    time.sleep(0.5)   # 切完 tab 稍等，立刻点加号有时会被吞掉
 
-    root = _uia_foreground_or_main_root(hwnd)
-    plus_button = _uia_find_add_friend_plus_button(root)
-    if plus_button is not None:
-        _uia_click(plus_button)
-        steps.append({"step": "open_add_menu", "ok": True, "method": "uia", "button": _uia_control_text(plus_button)})
-    else:
+    def open_menu() -> None:
+        root = _uia_foreground_or_main_root(hwnd)
+        plus_button = _uia_find_add_friend_plus_button(root)
+        if plus_button is not None:
+            _uia_click(plus_button)
+            steps.append({"step": "open_add_menu", "ok": True, "method": "uia",
+                          "button": _uia_control_text(plus_button)})
+            return
         root_rect = _uia_rect_tuple(root)
         if root_rect is None:
             raise RuntimeError("未找到微信窗口位置，无法点击添加好友入口")
@@ -12179,15 +12536,34 @@ def _open_local_add_friend_entry(hwnd: int, steps: List[Dict[str, Any]]) -> None
         _uia_click_screen_point(left + 238, top + 40)
         steps.append({"step": "open_add_menu", "ok": True, "method": "coordinate"})
 
-    add_friend = _uia_click_first_named(hwnd, ["添加朋友"], timeout=4.0, contains=False)
-    if add_friend is None:
-        add_friend = _uia_click_first_named(hwnd, ["添加朋友"], timeout=2.0, contains=True)
-    if add_friend is None:
-        raise RuntimeError("未在加号菜单中找到“添加朋友”入口")
-    steps.append({"step": "open_add_friend_entry", "ok": True})
+    def click_entry(timeout: float) -> bool:
+        deadline = time.time() + max(0.5, timeout)
+        while time.time() < deadline:
+            node = _find_named_node(hwnd, ["添加朋友"])
+            if node is not None:
+                if _click_node_by_point(node):
+                    steps.append({"step": "open_add_friend_entry", "ok": True, "method": "point"})
+                    return True
+                _uia_click(node)
+                steps.append({"step": "open_add_friend_entry", "ok": True, "method": "node"})
+                return True
+            time.sleep(0.3)
+        return False
+
+    tried = 0
+    for attempt in range(1, 4):
+        tried = attempt
+        if attempt > 1:
+            # 上一次可能没点开（或者把菜单点开关了），先等菜单消失再重新点
+            time.sleep(0.4)
+        open_menu()
+        if click_entry(2.5 if attempt == 1 else 1.8):
+            return
+    raise RuntimeError(f"未在加号菜单中找到“添加朋友”入口（已尝试 {tried} 次）")
 
 
-def _manual_open_local_add_friend_form(hwnd: int, keyword: str, steps: List[Dict[str, Any]]) -> None:
+def _manual_search_once(hwnd: int, keyword: str, steps: List[Dict[str, Any]], *, attempt: int) -> bool:
+    """清空搜索框 -> 输入关键词 -> 回车/点搜索，返回"是否已经出结果"。"""
     search_edit = _uia_wait_for_edit(hwnd, timeout=6.0)
     if search_edit is None:
         add_entry = _uia_click_first_named(hwnd, ["添加朋友"], timeout=2.0, contains=False)
@@ -12197,20 +12573,48 @@ def _manual_open_local_add_friend_form(hwnd: int, keyword: str, steps: List[Dict
     if search_edit is None:
         raise RuntimeError("未找到新朋友搜索输入框")
 
+    # wxauto 先试过一遍，搜索框里可能有半截内容：先清空再输
+    try:
+        _uia_click(search_edit)
+        _send_hotkey("ctrl", "a", pause=0.1)
+        _send_hotkey("delete", pause=0.15)
+    except Exception:
+        pass
     _uia_set_text(search_edit, keyword)
-    steps.append({"step": "manual_search_friend_input", "ok": True, "keyword": keyword})
+    steps.append({"step": "manual_search_friend_input", "ok": True, "keyword": keyword, "attempt": attempt})
 
     _send_hotkey("enter", pause=0.35)
-    steps.append({"step": "manual_trigger_search", "ok": True, "method": "enter"})
-    time.sleep(0.8)
+    steps.append({"step": "manual_trigger_search", "ok": True, "method": "enter", "attempt": attempt})
+    time.sleep(0.9)
     root_after_enter = _uia_foreground_or_main_root(hwnd)
-    has_apply = _uia_find_by_names(root_after_enter, ["发送添加朋友申请"], contains=False, max_depth=18) is not None
-    has_result_button = _uia_find_by_names(root_after_enter, ["添加到通讯录", "申请添加朋友", "加为朋友"], contains=True, max_depth=18) is not None
-    if not has_apply and not has_result_button:
-        search_button = _uia_click_first_named(hwnd, ["搜索"], timeout=1.0, contains=False)
-        if search_button is not None:
-            steps.append({"step": "manual_trigger_search", "ok": True, "method": "button"})
-            time.sleep(0.8)
+    if _uia_find_by_names(root_after_enter, ["发送添加朋友申请"], contains=False, max_depth=18) is not None:
+        return True
+    if _uia_find_by_names(root_after_enter, ["添加到通讯录", "申请添加朋友", "加为朋友"], contains=True, max_depth=18) is not None:
+        return True
+    # 已是好友的资料卡也算"出结果"
+    for name in ("发消息", "语音聊天", "视频聊天"):
+        if _uia_find_by_names(root_after_enter, [name], contains=False, max_depth=18) is not None:
+            return True
+    search_button = _uia_click_first_named(hwnd, ["搜索"], timeout=1.0, contains=False)
+    if search_button is not None:
+        steps.append({"step": "manual_trigger_search", "ok": True, "method": "button", "attempt": attempt})
+        time.sleep(0.9)
+    return False
+
+
+def _manual_open_local_add_friend_form(hwnd: int, keyword: str, steps: List[Dict[str, Any]]) -> None:
+    for attempt in range(1, 4):
+        try:
+            if _manual_search_once(hwnd, keyword, steps, attempt=attempt):
+                break
+        except RuntimeError:
+            if attempt >= 3:
+                raise
+        steps.append({"step": "manual_search_retry", "ok": True, "attempt": attempt})
+    else:
+        if _local_friend_profile_is_existing_friend(hwnd):
+            raise FriendAlreadyAdded(f"该账号已经是好友：{keyword}")
+        raise RuntimeError("三次搜索都没出结果，可能未搜到用户、已是好友或微信限制")
 
     deadline = time.time() + 8.0
     apply_names = ["添加到通讯录", "申请添加朋友", "加为朋友"]
@@ -12232,6 +12636,8 @@ def _manual_open_local_add_friend_form(hwnd: int, keyword: str, steps: List[Dict
             continue
         time.sleep(0.3)
 
+    if _local_friend_profile_is_existing_friend(hwnd):
+        raise FriendAlreadyAdded(f"该账号已经是好友：{keyword}")
     raise RuntimeError("未找到搜索结果里的添加入口，可能未搜到用户、已是好友或微信限制")
 
 
@@ -12349,6 +12755,25 @@ def _close_local_add_friend_dialog(hwnd: int, steps: List[Dict[str, Any]], *, re
         return False
 
 
+class FriendAlreadyAdded(RuntimeError):
+    """搜索到的账号已经是好友（资料卡上是「发消息」而不是「添加到通讯录」）。
+
+    2026-09-27：eiaiyuangong 就是这种情况——以前会报「未进入发送添加朋友申请界面，
+    可能未搜到用户或已是好友」，任务记成 failed 还会重试。
+    """
+
+
+def _local_friend_profile_is_existing_friend(hwnd: int) -> bool:
+    try:
+        root = _uia_foreground_or_main_root(hwnd)
+    except Exception:
+        return False
+    for name in ("发消息", "语音聊天", "视频聊天"):
+        if _uia_find_by_names(root, [name], contains=False, max_depth=18) is not None:
+            return True
+    return False
+
+
 def _prepare_local_add_friend_form(
     account_id: str,
     keyword: str,
@@ -12368,28 +12793,52 @@ def _prepare_local_add_friend_form(
     _focus_local_wechat(hwnd)
     _open_local_add_friend_entry(hwnd, steps)
 
+    # 顺序很重要：先手动搜索（UIA，实测稳），wxauto 只当兜底。
+    # 反过来会被 wxauto 先跑一遍把搜索框搞脏，后面手动搜索就搜不出结果（2026-09-27 eiaiyuangong 实测）。
+    manual_error = ""
     try:
-        from wxauto4.ui.component import SearchNewFriendWnd  # type: ignore
-
-        wnd = SearchNewFriendWnd()
-        wnd.init()
-        missing_controls = [name for name in ("search_edit", "search_btn") if not hasattr(wnd, name)]
-        if missing_controls:
-            raise RuntimeError(f"SearchNewFriendWnd controls not initialized: {', '.join(missing_controls)}")
-        wnd.search(keyword)
-        steps.append({"step": "search_friend", "ok": True, "keyword": keyword})
-        time.sleep(1.0)
-        wnd.apply()
-        steps.append({"step": "open_apply_form", "ok": True})
-    except Exception as exc:
-        steps.append({"step": "wxauto_open_apply_form", "ok": False, "error": str(exc)})
+        _manual_open_local_add_friend_form(hwnd, keyword, steps)
+    except FriendAlreadyAdded:
+        raise
+    except Exception as manual_exc:
+        manual_error = str(manual_exc)
+        steps.append({"step": "manual_open_apply_form", "ok": False, "error": manual_error})
         try:
-            _manual_open_local_add_friend_form(hwnd, keyword, steps)
-        except Exception as fallback_exc:
-            raise RuntimeError(f"打开好友申请界面失败：{fallback_exc}") from fallback_exc
+            from wxauto4.ui.component import SearchNewFriendWnd  # type: ignore
+
+            wnd = SearchNewFriendWnd()
+            wnd.init()
+            missing_controls = [name for name in ("search_edit", "search_btn") if not hasattr(wnd, name)]
+            if missing_controls:
+                raise RuntimeError(f"SearchNewFriendWnd controls not initialized: {', '.join(missing_controls)}")
+            clear_edit = None
+            try:
+                clear_edit = _uia_wait_for_edit(hwnd, timeout=3.0)
+            except Exception:
+                clear_edit = None
+            if clear_edit is not None:
+                try:
+                    _uia_click(clear_edit)
+                    _send_hotkey("ctrl", "a", pause=0.1)
+                    _send_hotkey("delete", pause=0.15)
+                except Exception:
+                    pass
+            wnd.search(keyword)
+            steps.append({"step": "search_friend", "ok": True, "keyword": keyword, "method": "wxauto"})
+            time.sleep(1.0)
+            wnd.apply()
+            steps.append({"step": "open_apply_form", "ok": True, "method": "wxauto"})
+        except Exception as exc:
+            steps.append({"step": "wxauto_open_apply_form", "ok": False, "error": str(exc)})
+            raise RuntimeError(f"打开好友申请界面失败：手动={manual_error}；wxauto={exc}") from exc
+
+    if _local_friend_profile_is_existing_friend(hwnd):
+        raise FriendAlreadyAdded(f"该账号已经是好友：{keyword}")
 
     send_button = _find_local_add_friend_submit_button(hwnd, timeout=8.0)
     if send_button is None:
+        if _local_friend_profile_is_existing_friend(hwnd):
+            raise FriendAlreadyAdded(f"该账号已经是好友：{keyword}")
         raise RuntimeError("未进入发送添加朋友申请界面，可能未搜到用户或已是好友")
     form_root = _uia_foreground_or_main_root(hwnd)
 
@@ -12467,9 +12916,20 @@ def add_local_friend(
             ),
         )
         status = "prepared" if prepare_only else "submitted"
-    except Exception as exc:
-        status = "failed"
+    except FriendAlreadyAdded as exc:
+        # 已经是好友：不算失败，也不用重试
+        status = "already_friend"
         error = str(exc)
+        raw = {"message": "已经是好友，跳过"}
+    except Exception as exc:
+        # _run_local_driver_operation 会把异常重新包装，类型丢了，所以再按文案兜一层
+        if "已经是好友" in str(exc):
+            status = "already_friend"
+            error = str(exc)
+            raw = {"message": "已经是好友，跳过"}
+        else:
+            status = "failed"
+            error = str(exc)
     with _connect() as conn:
         conn.execute(
             """
@@ -12491,13 +12951,14 @@ def add_local_friend(
                 _now_iso(),
             ),
         )
-    if status not in {"prepared", "submitted"}:
+    if status not in {"prepared", "submitted", "already_friend"}:
         raise RuntimeError(error or "打开好友申请界面失败")
     return {
         "ok": True,
         "id": req_id,
         "status": status,
         "submitted": status == "submitted",
+        "already_friend": status == "already_friend",
         "raw": raw,
         "message": raw.get("message") or ("好友申请已提交" if status == "submitted" else "已打开好友申请确认界面"),
     }
@@ -12634,7 +13095,7 @@ def _enforce_local_friend_add_rate(account_id: str) -> None:
     strategy = get_strategy()
     daily_limit = int(strategy.get("daily_friend_add_limit") or 0)
     if daily_limit > 0 and _local_friend_request_count_today(account_id) >= daily_limit:
-        raise RuntimeError(f"daily friend add limit reached: {daily_limit}")
+        raise FriendAddDailyLimitReached(f"daily friend add limit reached: {daily_limit}")
     min_gap = float(strategy.get("friend_add_min_gap") or 0)
     if min_gap <= 0:
         return
@@ -12658,36 +13119,269 @@ def _enforce_local_friend_add_rate(account_id: str) -> None:
         time.sleep(min_gap - elapsed)
 
 
-def _open_local_moments(hwnd: int, steps: List[Dict[str, Any]]) -> None:
-    _focus_local_wechat(hwnd)
-    root = _uia_foreground_or_main_root(hwnd)
-    nodes = _uia_walk(root, max_depth=8, max_nodes=240)
-    is_global_timeline = any(_uia_control_class(node) == "mmui::TimeLineListView" for node in nodes)
-    is_contact_album = any(
-        _uia_control_class(node) in {"mmui::AlbumBaseCell", "mmui::AlbumContentCell"} for node in nodes
-    )
-    if is_global_timeline and not is_contact_album:
-        steps.append({"step": "open_moments", "ok": True, "entry": "already_open"})
-        refresh = _uia_find_by_names(root, ["刷新"], contains=False, max_depth=10)
-        if refresh is not None:
-            _uia_click(refresh)
-            steps.append({"step": "refresh_moments", "ok": True})
-            time.sleep(1.5)
-        return
-    node = _uia_find_by_names(root, ["朋友圈"], contains=False, max_depth=18)
-    if node is None:
-        node = _uia_find_by_names(root, ["朋友圈"], contains=True, max_depth=18)
-    if node is None:
-        raise RuntimeError("未找到朋友圈入口，请确认 PC 微信左侧有朋友圈入口且当前账号支持")
-    _uia_click(node)
-    steps.append({"step": "open_moments", "ok": True, "entry": _uia_control_text(node)})
-    time.sleep(1.5)
-    root = _uia_foreground_or_main_root(hwnd)
+
+_MOMENTS_ENTRY_MISSING = "未找到朋友圈入口，请确认 PC 微信左侧有朋友圈入口且当前账号支持"
+_MOMENTS_NAV_SEARCH_NODES = 3200
+_MOMENTS_TIMELINE_CLASSES = {"mmui::TimeLineListView", "mmui::TimelineContentCell"}
+_MOMENTS_ALBUM_CLASSES = {"mmui::AlbumBaseCell", "mmui::AlbumContentCell"}
+
+
+def _root_native_handle(root: Any) -> int:
+    try:
+        return int(getattr(root, "NativeWindowHandle", 0) or 0)
+    except Exception:
+        return 0
+
+
+def _moments_nav_label_usable(text: str) -> bool:
+    value = str(text or "").strip()
+    # "聊天、朋友圈、微信运动等" is permission copy, not the left nav.
+    if not value or "、" in value or len(value) > 12:
+        return False
+    return "朋友圈" in value
+
+
+def _scan_moments_surface(root: Any, *, max_nodes: int = _MOMENTS_NAV_SEARCH_NODES) -> Dict[str, Any]:
+    """Classify a WeChat surface, or find the left-nav Moments entry.
+
+    ``_uia_find_by_names`` stops at 600 nodes. A busy chat list is walked
+    first, so the left nav is intermittently past that cap and publish fails
+    with "entry not found" even though the button is on screen. This walk
+    keeps going until the nav is found, but still returns early once the
+    timeline has had the old 240-node chance to identify itself.
+    """
+    exact_nav = None
+    fuzzy_nav = None
+    seen = 0
+    queue: List[tuple[Any, int]] = [(root, 0)]
+    while queue and seen < max_nodes:
+        node, depth = queue.pop(0)
+        seen += 1
+        class_name = _uia_control_class(node)
+        if class_name in _MOMENTS_ALBUM_CLASSES:
+            return {"kind": "contact_album", "nav": None, "seen": seen}
+        if class_name in _MOMENTS_TIMELINE_CLASSES:
+            return {"kind": "timeline", "nav": None, "seen": seen}
+        text = _uia_control_text(node)
+        if text == "朋友圈":
+            exact_nav = node
+        elif (
+            fuzzy_nav is None
+            and text
+            and text != "朋友圈"
+            and _moments_nav_label_usable(text)
+        ):
+            fuzzy_nav = node
+        if exact_nav is not None and seen >= 240:
+            return {"kind": "nav", "nav": exact_nav, "seen": seen}
+        if depth >= 18:
+            continue
+        try:
+            children = node.GetChildren()
+        except Exception:
+            children = []
+        queue.extend((child, depth + 1) for child in children or [])
+    nav = exact_nav or fuzzy_nav
+    if nav is not None:
+        return {"kind": "nav", "nav": nav, "seen": seen}
+    return {"kind": "none", "nav": None, "seen": seen}
+
+
+def _refresh_local_moments(root: Any, steps: List[Dict[str, Any]]) -> None:
     refresh = _uia_find_by_names(root, ["刷新"], contains=False, max_depth=10)
-    if refresh is not None:
-        _uia_click(refresh)
-        steps.append({"step": "refresh_moments", "ok": True})
-        time.sleep(1.5)
+    if refresh is None:
+        return
+    _uia_click(refresh)
+    steps.append({"step": "refresh_moments", "ok": True})
+    time.sleep(1.5)
+
+
+def _recover_local_moments_entry(hwnd: int, steps: List[Dict[str, Any]], attempt: int) -> None:
+    """Dismiss overlays and put the main left nav back before searching again."""
+    try:
+        _send_hotkey("esc", pause=0.1)
+    except Exception:
+        pass
+    try:
+        _focus_local_wechat(hwnd)
+    except Exception as exc:
+        steps.append(
+            {
+                "step": "recover_moments_nav",
+                "ok": False,
+                "attempt": attempt,
+                "error": str(exc)[:240],
+            }
+        )
+        time.sleep(0.4)
+        return
+    try:
+        _ensure_local_tab(hwnd, "微信")
+    except Exception:
+        pass
+    steps.append({"step": "recover_moments_nav", "ok": True, "attempt": attempt})
+    time.sleep(0.45)
+
+
+def _moments_search_roots(hwnd: int, attempt: int) -> List[Any]:
+    roots: List[Any] = []
+    handles: set[int] = set()
+
+    def add(root: Any) -> None:
+        if root is None:
+            return
+        handle = _root_native_handle(root)
+        if handle and handle in handles:
+            return
+        if handle:
+            handles.add(handle)
+        roots.append(root)
+
+    foreground = None
+    main = None
+    try:
+        foreground = _uia_foreground_or_main_root(hwnd)
+    except Exception:
+        foreground = None
+    try:
+        main = _uia_main_root(hwnd)
+    except Exception:
+        main = None
+    if attempt == 1:
+        add(foreground)
+        add(main)
+    else:
+        add(main)
+        add(foreground)
+    return roots
+
+
+def _usable_moments_surface(root: Any) -> Optional[Dict[str, Any]]:
+    surface = _scan_moments_surface(root)
+    if surface.get("kind") == "contact_album":
+        return None
+    if surface.get("kind") == "none" and int(surface.get("seen") or 0) < 80:
+        time.sleep(0.35)
+        surface = _scan_moments_surface(root)
+        if surface.get("kind") == "contact_album":
+            return None
+    if surface.get("kind") in {"timeline", "nav"}:
+        return surface
+    return surface if surface.get("kind") == "none" else None
+
+
+def _accept_open_moments(
+    hwnd: int,
+    surface: Dict[str, Any],
+    steps: List[Dict[str, Any]],
+    attempt: int,
+    *,
+    entry: str = "",
+) -> bool:
+    kind = str(surface.get("kind") or "")
+    if kind == "timeline":
+        steps.append(
+            {
+                "step": "open_moments",
+                "ok": True,
+                "entry": entry or "already_open",
+                "attempt": attempt,
+            }
+        )
+        try:
+            root = _uia_foreground_or_main_root(hwnd)
+        except Exception:
+            return True
+        _refresh_local_moments(root, steps)
+        return True
+    if kind != "nav" or surface.get("nav") is None:
+        return False
+    node = surface["nav"]
+    _uia_click(node)
+    steps.append(
+        {
+            "step": "open_moments",
+            "ok": True,
+            "entry": _uia_control_text(node),
+            "attempt": attempt,
+        }
+    )
+    time.sleep(1.5)
+    try:
+        root = _uia_foreground_or_main_root(hwnd)
+    except Exception:
+        return True
+    _refresh_local_moments(root, steps)
+    return True
+
+
+def _open_existing_global_moments(hwnd: int, steps: List[Dict[str, Any]], attempt: int) -> bool:
+    try:
+        moments_hwnd = int(_find_visible_local_moments_hwnd() or 0)
+    except Exception:
+        return False
+    if not moments_hwnd or moments_hwnd == int(hwnd or 0):
+        return False
+    try:
+        surface = _scan_moments_surface(_uia_main_root(moments_hwnd))
+    except Exception:
+        return False
+    if surface.get("kind") != "timeline":
+        return False
+    try:
+        _focus_local_wechat(moments_hwnd)
+    except Exception:
+        pass
+    return _accept_open_moments(
+        moments_hwnd,
+        surface,
+        steps,
+        attempt,
+        entry="existing_window",
+    )
+
+
+def _open_local_moments(hwnd: int, steps: List[Dict[str, Any]]) -> None:
+    """Open the global Moments timeline inside this publish.
+
+    A missed left-nav entry used to fail the whole publish immediately.
+    Search past the old 600-node cap, and when the entry is still absent,
+    dismiss overlays and return to the chat tab before looking again.
+    The nav is clicked only after it is found, so a retry cannot toggle
+    Moments closed.
+    """
+    last_seen = 0
+    for attempt in range(1, 4):
+        _focus_local_wechat(hwnd)
+        if _open_existing_global_moments(hwnd, steps, attempt):
+            return
+        found = False
+        for root in _moments_search_roots(hwnd, attempt):
+            try:
+                surface = _usable_moments_surface(root)
+            except Exception:
+                continue
+            if not surface:
+                continue
+            last_seen = max(last_seen, int(surface.get("seen") or 0))
+            if _accept_open_moments(hwnd, surface, steps, attempt):
+                found = True
+                break
+        if found:
+            return
+        steps.append(
+            {
+                "step": "open_moments_retry",
+                "ok": False,
+                "attempt": attempt,
+                "seen": last_seen,
+                "error": _MOMENTS_ENTRY_MISSING,
+            }
+        )
+        if attempt >= 3:
+            break
+        _recover_local_moments_entry(hwnd, steps, attempt)
+    raise RuntimeError(_MOMENTS_ENTRY_MISSING)
 
 
 def _find_local_contact_list(root: Any) -> Optional[Any]:
@@ -13606,6 +14300,65 @@ def _open_local_contact_profile_via_search(
     # itself is by the already captured WeChat ID; opening the profile again
     # adds no safety and can reintroduce a stale profile popup from the prior
     # candidate.  Moments callers keep the profile path below.
+    # The clicked search row must be the chat that actually opened.  A row with
+    # no rect (2026-09-15: selected_text=小亮, selected_rect=None) or a window
+    # still showing another contact means the click never switched the
+    # conversation; failing here keeps the send path from typing into whoever
+    # happens to be in front.
+    if not open_moments:
+        label_target = str(_session_display_name(selected_text) or "").strip()
+        if label_target:
+            label_key = _normalize_contact_lookup_key(label_target)
+            opened_chat_name = ""
+            row_matches = False
+            probe_wx: Optional[Any] = None
+            try:
+                probe_wx = _get_wxauto4_client(account_id, ensure_chat_tab=False)
+            except Exception:
+                probe_wx = None
+            if probe_wx is not None:
+                deadline = time.monotonic() + 2.5
+                while True:
+                    opened_chat_name = str(
+                        _session_display_name(
+                            str(
+                                (_current_local_chat_info(probe_wx, fallback_name="") or {}).get("chat_name") or ""
+                            ).strip()
+                        )
+                        or ""
+                    ).strip()
+                    opened_key = _normalize_contact_lookup_key(opened_chat_name)
+                    row_matches = bool(opened_key) and bool(label_key) and (
+                        label_key in opened_key or opened_key in label_key
+                    )
+                    if row_matches or time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.25)
+                steps.append(
+                    {
+                        "step": "verify_opened_contact_chat",
+                        "ok": bool(row_matches),
+                        "target": original_target,
+                        "wx_no": expected_wx_no,
+                        "selected_text": selected_text,
+                        "selected_rect_present": bool(selected_rect),
+                        "opened_chat_name": opened_chat_name,
+                    }
+                )
+                if opened_chat_name and not row_matches:
+                    _write_auto_reply_diagnostic(
+                        "contact_search_opened_other_chat",
+                        account_id=account_id,
+                        target=original_target,
+                        wx_no=expected_wx_no,
+                        selected_text=selected_text,
+                        selected_rect_present=bool(selected_rect),
+                        opened_chat_name=opened_chat_name,
+                    )
+                    raise RuntimeError(
+                        "contact search opened a different chat: "
+                        f"selected={selected_text} opened={opened_chat_name}"
+                    )
     if not open_moments:
         steps.append(
             {
@@ -15113,6 +15866,120 @@ async def _process_contact_moments_engage_target(
         _close_foreground_sns_window(hwnd, steps, reason="contact_engage_done")
 
 
+class FriendAddDailyLimitReached(RuntimeError):
+    """今日加好友额度已用完：任务要留在队列里等额度窗口重置，而不是标记失败。"""
+
+
+def _friend_add_quota_reset_seconds() -> float:
+    """距离下一次加好友日额度重置的秒数（留 2 分钟缓冲）。"""
+    now = datetime.utcnow()
+    tomorrow = datetime(now.year, now.month, now.day) + timedelta(days=1)
+    return max(60.0, (tomorrow - now).total_seconds() + 120.0)
+
+
+def _task_row_by_id(task_id: str) -> Optional[Dict[str, Any]]:
+    if not task_id:
+        return None
+    with _connect() as conn:
+        row = conn.execute("select * from wechat_tasks where id=? limit 1", (task_id,)).fetchone()
+    return _row_to_dict(row) if row else None
+
+
+_FRIEND_ADD_MAX_ATTEMPTS_DEFAULT = 3
+_FRIEND_ADD_HANDLED_STATUSES = {"added", "skipped"}
+
+
+def _friend_add_target_state(account_id: str, target: str) -> Dict[str, Any]:
+    account_id = str(account_id or "").strip()
+    target = str(target or "").strip()
+    if not account_id or not target:
+        return {}
+    with _connect() as conn:
+        row = conn.execute(
+            "select * from wechat_friend_add_targets where account_id=? and target=? limit 1",
+            (account_id, target),
+        ).fetchone()
+    return _row_to_dict(row) if row else {}
+
+
+def _filter_friend_add_targets(account_id: str, targets: List[str]) -> tuple[List[str], List[Dict[str, Any]]]:
+    """过滤掉已经加成功 / 已判定加不了的目标，避免同一个人反复循环。"""
+    allowed: List[str] = []
+    skipped: List[Dict[str, Any]] = []
+    for target in targets or []:
+        state = _friend_add_target_state(account_id, target)
+        status = str(state.get("status") or "").strip()
+        if status in _FRIEND_ADD_HANDLED_STATUSES:
+            skipped.append(
+                {
+                    "target": str(target),
+                    "status": status,
+                    "attempts": int(state.get("attempts") or 0),
+                    "error": str(state.get("last_error") or ""),
+                }
+            )
+            continue
+        allowed.append(str(target))
+    return allowed, skipped
+
+
+def _mark_friend_add_target(
+    account_id: str,
+    target: str,
+    *,
+    status: str,
+    error: str = "",
+    attempt: bool = False,
+) -> Dict[str, Any]:
+    account_id = str(account_id or "").strip()
+    target = str(target or "").strip()
+    if not account_id or not target:
+        return {}
+    now = _now_iso()
+    with _connect() as conn:
+        row = conn.execute(
+            "select * from wechat_friend_add_targets where account_id=? and target=? limit 1",
+            (account_id, target),
+        ).fetchone()
+        attempts = int(row["attempts"] or 0) if row else 0
+        if attempt:
+            attempts += 1
+        clean_error = str(error or "").strip()[:300]
+        if row:
+            conn.execute(
+                "update wechat_friend_add_targets set status=?, attempts=?, last_error=?, last_attempt_at=?, updated_at=?"
+                " where account_id=? and target=?",
+                (status, attempts, clean_error, now, now, account_id, target),
+            )
+        else:
+            conn.execute(
+                "insert into wechat_friend_add_targets(account_id, target, status, attempts, last_error, last_attempt_at, created_at, updated_at)"
+                " values(?,?,?,?,?,?,?,?)",
+                (account_id, target, status, attempts, clean_error, now, now, now),
+            )
+    return {"target": target, "status": status, "attempts": attempts, "last_error": str(error or "")[:300]}
+
+
+def _record_friend_add_outcome(
+    account_id: str,
+    target: str,
+    status: str,
+    error: str = "",
+    *,
+    max_attempts: int = 0,
+) -> Dict[str, Any]:
+    """把每个目标的结果落库：成功/已是好友 → 不再重试；连续失败到上限 → skipped 不再重试。"""
+    clean_status = str(status or "").strip().lower()
+    if clean_status in {"submitted", "prepared", "already_friend", "added"}:
+        return _mark_friend_add_target(account_id, target, status="added", error=error)
+    limit = max(1, int(max_attempts or _FRIEND_ADD_MAX_ATTEMPTS_DEFAULT))
+    state = _mark_friend_add_target(account_id, target, status="failed", error=error, attempt=True)
+    attempts = int(state.get("attempts") or 0)
+    if attempts >= limit:
+        state = _mark_friend_add_target(account_id, target, status="skipped", error=error)
+    return state
+
+
 async def create_add_friend_task(
     account_id: str,
     keywords: List[str],
@@ -15124,6 +15991,7 @@ async def create_add_friend_task(
     prepare_only: bool = False,
     client_request_id: str = "",
     queue_only: bool = False,
+    bulk_import: bool = False,
 ) -> Dict[str, Any]:
     init_db()
     existing = _existing_task_by_client_request_id(account_id, client_request_id)
@@ -15132,13 +16000,30 @@ async def create_add_friend_task(
     if not queue_only:
         _find_local_account(account_id)
     strategy = get_strategy()
-    max_targets = int(strategy.get("max_targets_per_task") or 0)
+    # bulk_import（文件导入）要求全量入队：不做单任务条数上限，也不在入队阶段校验日额度；
+    # 后面按设置的间隔一条条加好友，节流与日额度由执行层 _enforce_local_friend_add_rate 把控。
+    max_targets = 0 if bulk_import else int(strategy.get("max_targets_per_task") or 0)
     targets = _normalize_task_targets(keywords, max_targets=max_targets)
     if not targets:
         raise RuntimeError("缺少好友关键词")
+    # 已经加成功 / 已判定加不了的目标不再重复下发
+    targets, skipped_targets = _filter_friend_add_targets(account_id, targets)
+    if not targets:
+        return {
+            "id": str(client_request_id or uuid.uuid4().hex)[:140],
+            "account_id": account_id,
+            "task_type": "add_friend",
+            "targets": [],
+            "tasks": [],
+            "status": "skipped",
+            "planned_total": 0,
+            "queued_total": 0,
+            "skipped_targets": skipped_targets,
+            "reason": "already_handled",
+        }
     daily_limit = int(strategy.get("daily_friend_add_limit") or 0)
     added_today = _local_friend_request_count_today(account_id)
-    if daily_limit > 0 and added_today + len(targets) > daily_limit:
+    if not bulk_import and daily_limit > 0 and added_today + len(targets) > daily_limit:
         raise RuntimeError(f"daily friend add limit would be exceeded: {added_today}/{daily_limit}")
     if queue_only:
         # Leave room for the per-target suffix in client_request_id.
@@ -15194,6 +16079,7 @@ async def create_add_friend_task(
             "status": "queued",
             "planned_total": len(queued_tasks),
             "queued_total": len(queued_tasks),
+            "skipped_targets": skipped_targets,
         }
     task = _create_wechat_task(
         account_id=account_id,
@@ -15210,27 +16096,50 @@ async def create_add_friend_task(
         strategy=strategy,
         client_request_id=client_request_id,
     )
+    if skipped_targets and isinstance(task, dict):
+        task["skipped_targets"] = skipped_targets
     return task
 
 
-async def _process_add_friend_task(task: Dict[str, Any]) -> None:
+async def _process_add_friend_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    """执行一条加好友任务。
+
+    今日额度用尽时不烧任务：把还没处理的目标写回 payload.pending_targets，任务退回 queued，
+    等额度窗口重置后由调度器接着跑。这样文件导入进来的全量表可以跨天慢慢加完。
+    """
     task_id = str(task.get("id") or "")
     account_id = str(task.get("account_id") or "")
-    targets = _normalize_task_targets(list(task.get("targets") or []))
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
     strategy = task.get("strategy") if isinstance(task.get("strategy"), dict) else get_strategy()
+    pending = payload.get("pending_targets")
+    resuming = isinstance(pending, list) and bool(pending)
+    if resuming:
+        targets = _normalize_task_targets(list(pending))
+    else:
+        targets = _normalize_task_targets(list(task.get("targets") or []))
+    base_processed = int(task.get("processed") or 0) if resuming else 0
+    base_success = int(task.get("success") or 0) if resuming else 0
+    base_failed = int(task.get("failed") or 0) if resuming else 0
     success = 0
     failed = 0
     processed = 0
     last_error = ""
+    deferred = ""
+    consumed = 0
     for idx, target in enumerate(targets):
+        try:
+            _enforce_local_friend_add_rate(account_id)
+        except FriendAddDailyLimitReached as exc:
+            deferred = str(exc)
+            break
         processed += 1
+        consumed = idx + 1
         ok = False
         err = ""
         for attempt in range(int(strategy.get("retry_max") or 0) + 1):
             try:
                 _enforce_local_friend_add_rate(account_id)
-                await _run_local_wechat_async(
+                result = await _run_local_wechat_async(
                     add_local_friend,
                     account_id,
                     target,
@@ -15241,20 +16150,67 @@ async def _process_add_friend_task(task: Dict[str, Any]) -> None:
                     prepare_only=bool(payload.get("prepare_only")),
                 )
                 ok = True
+                run_status = str((result or {}).get("status") or "submitted")
+                break
+            except FriendAddDailyLimitReached as exc:
+                deferred = str(exc)
+                err = deferred
                 break
             except Exception as exc:
                 err = str(exc)
                 if attempt < int(strategy.get("retry_max") or 0):
                     await _sleep(float(strategy.get("retry_sleep") or 0))
+        if deferred:
+            processed -= 1
+            consumed = idx
+            break
         if ok:
             success += 1
+            _record_friend_add_outcome(account_id, target, run_status)
         else:
             failed += 1
             last_error = err
-        _update_task_progress(task_id, processed, success, failed, last_error)
+            # 失败记一次；连续失败到上限就标记 skipped，下次不再加这个人
+            _record_friend_add_outcome(
+                account_id,
+                target,
+                "failed",
+                err,
+                max_attempts=int(strategy.get("friend_add_max_attempts") or _FRIEND_ADD_MAX_ATTEMPTS_DEFAULT),
+            )
+        _update_task_progress(
+            task_id,
+            base_processed + processed,
+            base_success + success,
+            base_failed + failed,
+            last_error,
+        )
         await _sleep_between_targets(strategy, idx, len(targets), kind="add_friend")
+    total_processed = base_processed + processed
+    total_success = base_success + success
+    total_failed = base_failed + failed
+    if deferred:
+        remaining = targets[consumed:]
+        _update_task_payload(task_id, {"pending_targets": remaining, "deferred_reason": deferred})
+        _finish_task(task_id, "queued", total_processed, total_success, total_failed, deferred)
+        return {
+            "deferred": True,
+            "reason": deferred,
+            "remaining": len(remaining),
+            "processed": total_processed,
+            "success": total_success,
+            "failed": total_failed,
+        }
+    _update_task_payload(task_id, {"pending_targets": [], "deferred_reason": ""})
     status = "success" if failed == 0 else ("partial_failed" if success else "failed")
-    _finish_task(task_id, status, processed, success, failed, last_error)
+    _finish_task(task_id, status, total_processed, total_success, total_failed, last_error)
+    return {
+        "deferred": False,
+        "status": status,
+        "processed": total_processed,
+        "success": total_success,
+        "failed": total_failed,
+    }
 
 
 async def create_moments_publish_task(
@@ -16514,6 +17470,59 @@ def _submit_local_wechat_typed_message(
         "send_method": methods[-1],
         "attempts": 1,
     }
+def _local_send_chat_anchor(
+    wx: Any,
+    expected_display_name: Any,
+    *,
+    use_current_chat: bool = True,
+) -> Dict[str, Any]:
+    """Report whether the selected chat is the contact we intend to reply to.
+
+    The comparison deliberately stays inside the visible-name namespace: an
+    immutable WeChat ID never equals a nickname, so comparing the two rejected
+    correct sends (online 2026-09-01: current=九变, target=eiaiyuangong).  When
+    either name is unreadable the answer is "cannot tell" and the caller keeps
+    its previous behaviour instead of inventing a mismatch.
+    """
+    expected = str(_session_display_name(str(expected_display_name or "").strip()) or "").strip()
+    if not use_current_chat:
+        return {
+            "anchored": True,
+            "reanchor": False,
+            "reason": "chat_opened_by_id",
+            "current_chat": "",
+            "expected_display_name": expected,
+        }
+    info = _current_local_chat_info(wx, fallback_name="")
+    current = str(_session_display_name(str((info or {}).get("chat_name") or "").strip()) or "").strip()
+    if expected and not current:
+        # 期望的是某个具体的人，但当前会话标题读不出来：不能默认"就是目标"，
+        # 否则窗口被别的会话占用时会直接发错人（线上 2026-09-17）。
+        return {
+            "anchored": False,
+            "reanchor": True,
+            "reason": "current_chat_unreadable",
+            "current_chat": current,
+            "expected_display_name": expected,
+        }
+    if not expected:
+        return {
+            "anchored": True,
+            "reanchor": False,
+            "reason": "name_unavailable",
+            "current_chat": current,
+            "expected_display_name": expected,
+        }
+    matched = _normalize_contact_lookup_key(expected) == _normalize_contact_lookup_key(current)
+    return {
+        "anchored": bool(matched),
+        "reanchor": not matched,
+        "reason": "" if matched else "current_chat_is_another_contact",
+        "current_chat": current,
+        "expected_display_name": expected,
+    }
+
+
 def _verify_local_send_chat(
     wx: Any,
     expected_peer: str,
@@ -16521,6 +17530,7 @@ def _verify_local_send_chat(
     strict_private: bool = False,
     allow_group: bool = False,
     nickname_identity: bool = False,
+    expected_display_name: str = "",
 ) -> Dict[str, Any]:
     """Verify the selected WeChat chat immediately before typing or sending."""
     info = _current_local_chat_info(wx, fallback_name="")
@@ -16548,6 +17558,34 @@ def _verify_local_send_chat(
         chat_type = "direct"
     if strict_private and not _local_chat_type_is_private(chat_type):
         raise RuntimeError("未能确认当前微信会话是一对一私聊，已阻止发送")
+    # Name-space guard, evaluated before the ID-based comparison below.
+    # ``expected`` may be an immutable WeChat ID, which can never equal the
+    # visible nickname; compare the nickname the caller knows about with the
+    # nickname the chat window shows instead.  A matching name is proof enough
+    # and returns early, so the legacy ID-vs-nickname branch can no longer
+    # reject a correct conversation (2026-09-01: current=九变,
+    # target=eiaiyuangong).  No expected name means "cannot tell" and leaves
+    # the legacy behaviour untouched.
+    name_target = str(expected_display_name or "").strip()
+    if not name_target:
+        candidate = _session_display_name(expected)
+        name_target = "" if _looks_like_wechat_id(candidate) else candidate
+    if strict_private and name_target and not actual_peer:
+        raise RuntimeError(
+            "[chat_identity_unreadable] 当前微信会话标题读不出来，无法确认收件人，已阻止发送"
+        )
+    if name_target and actual_peer:
+        if _normalize_contact_lookup_key(name_target) == _normalize_contact_lookup_key(actual_peer):
+            return {
+                "chat_type": chat_type or "unknown",
+                "chat_name": actual_peer,
+                "expected_display_name": name_target,
+                "anchored": True,
+            }
+        if strict_private:
+            raise RuntimeError(
+                f"[chat_identity_mismatch] 当前微信会话与目标显示名不一致（当前={actual_peer}，目标={name_target}），已阻止发送"
+            )
     # A verified WeChat ID intentionally differs from the visible nickname.
     # The ID-based contact search above is the identity check in that case;
     # comparing the ID text to the nickname would reject every valid send.
@@ -16614,15 +17652,37 @@ def _send_text_local_slow_once(
     nickname_identity = str(raw_meta.get("identity_mode") or "").strip() == "nickname"
     if use_contact_search and not nickname_identity and not _looks_like_wechat_id(peer_id):
         raise RuntimeError("auto reply requires the captured WeChat ID; nickname search is disabled")
-    log_send_event(
-        "reply_chat_open_started" if not use_current_chat else "reply_chat_reused",
-        click_target=str(peer_id or ""),
-        click_mode="moments_contact_search" if use_contact_search else ("wxauto4_chat_with" if not use_current_chat else "current_chat"),
+    # Reusing the chat the execute stage opened is the fast path, but it is only
+    # safe while that chat is still the intended contact.  Read the visible
+    # chat title (same namespace as the caller's display name) and fall back to
+    # the WeChat-ID search when another conversation took the window.
+    expected_display_name = str(raw_meta.get("display_name") or "").strip()
+    send_anchor = _local_send_chat_anchor(
+        wx,
+        expected_display_name,
         use_current_chat=bool(use_current_chat),
+    )
+    reuse_current_chat = bool(use_current_chat) and not bool(send_anchor.get("reanchor"))
+    if send_anchor.get("reanchor"):
+        log_send_event(
+            "reply_chat_reanchor_required",
+            click_target=str(peer_id or ""),
+            current_chat=send_anchor.get("current_chat"),
+            expected_display_name=send_anchor.get("expected_display_name"),
+            reason=send_anchor.get("reason"),
+        )
+    log_send_event(
+        "reply_chat_open_started" if not reuse_current_chat else "reply_chat_reused",
+        click_target=str(peer_id or ""),
+        click_mode="moments_contact_search" if use_contact_search else ("wxauto4_chat_with" if not reuse_current_chat else "current_chat"),
+        use_current_chat=bool(reuse_current_chat),
+        reanchor_required=bool(send_anchor.get("reanchor")),
+        current_chat=send_anchor.get("current_chat"),
+        expected_display_name=send_anchor.get("expected_display_name"),
         text_chars=len(text),
         text_preview=text[:500],
     )
-    if not use_current_chat:
+    if not reuse_current_chat:
         try:
             if use_contact_search:
                 search_steps: List[Dict[str, Any]] = []
@@ -16660,6 +17720,14 @@ def _send_text_local_slow_once(
             )
             raise RuntimeError(f"open local WeChat chat failed: {exc}") from exc
         time.sleep(random.uniform(0.55, 1.1))
+    if bool(send_anchor.get("reanchor")):
+        log_send_event(
+            "reply_chat_reanchored",
+            click_target=str(peer_id or ""),
+            click_mode="moments_contact_search" if use_contact_search else "wxauto4_chat_with",
+            previous_chat=send_anchor.get("current_chat"),
+            expected_display_name=send_anchor.get("expected_display_name"),
+        )
     strict_private = driver_name == "native_wechat_auto_reply"
     # Group welcomes are the one intentional group send.  The caller still
     # supplies the freshly-created group name, which is checked below.
@@ -16670,6 +17738,7 @@ def _send_text_local_slow_once(
         strict_private=strict_private,
         allow_group=allow_group,
         nickname_identity=nickname_identity,
+        expected_display_name=expected_display_name,
     )
     _focus_local_wechat(hwnd)
     log_send_event(
@@ -16770,7 +17839,7 @@ def _send_text_local_slow_once(
         "hwnd": hwnd,
         "chat_selection_method": (
             "current_session"
-            if use_current_chat
+            if reuse_current_chat
             else "moments_contact_search"
             if use_contact_search
             else "wxauto4_chat_with"
@@ -16828,6 +17897,18 @@ def _send_text_local_slow(
         # restarts WeChat.
         retry_on_failure=True,
     )
+
+
+def _auto_reply_send_uses_current_chat() -> bool:
+    """Auto-reply sends must never reuse the window the execute stage left open.
+
+    The chat that was verified while reading the inbound message can be taken over
+    by another conversation before the reply is sent (online 2026-09-17: the reply
+    for "福永十亩地小管家" was typed into "小洛神"; 2026-09-15: 小亮's reply went to
+    涛哥).  Reopening by the verified WeChat ID immediately before sending is the
+    only way to guarantee the chosen recipient.
+    """
+    return False
 
 
 def _send_auto_reply_text_with_diagnostics(
@@ -16946,6 +18027,14 @@ def _moments_publish_rejection(root: Any) -> str:
         "视频过长",
         "不能分享此视频",
         "无法分享此视频",
+        # 图片侧：微信处理不了素材时只弹这些提示（以前识别不到，只能等超时）
+        "处理失败",
+        "图片处理失败",
+        "上传失败",
+        "图片过大",
+        "不支持的文件格式",
+        "不支持此文件",
+        "无法添加此图片",
     ):
         if marker in text:
             return marker
@@ -17010,7 +18099,10 @@ def _click_moments_publish_entry(
                 deadline = time.time() + (10.0 if attempt == 1 else 12.0)
                 while time.time() < deadline:
                     root = _uia_foreground_or_main_root(publish_hwnd)
-                    if expect_file_picker and _file_dialog_filename_edit(root) is not None:
+                    if expect_file_picker and _find_moments_file_picker_window(
+                        wechat_pid=_window_process_id(publish_hwnd),
+                        timeout=0.0,
+                    ) is not None:
                         steps.append({"step": "moments_file_picker_ready", "ok": True, "attempt": attempt})
                         return publish_hwnd
                     if _moments_publish_dialog_ready(root):
@@ -17335,101 +18427,709 @@ def _uia_targeted_child(root: Any, control_type: str, automation_ids: List[str])
     return None
 
 
-def _file_dialog_filename_edit(root: Any) -> Optional[Any]:
-    # The Windows common file dialog exposes the filename box as Edit/1148.
-    # Do not use _uia_walk here: a directory with many video thumbnails makes
-    # UIA enumerate every item and can hold the per-account WeChat lock.
-    node = _uia_targeted_child(root, "Edit", ["1148"])
-    if node is not None:
-        return node
-    for name in ("文件名:", "文件名(N):", "File name:"):
-        finder = getattr(root, "EditControl", None)
-        if not callable(finder):
-            break
+def _window_process_id(hwnd: Any) -> int:
+    try:
+        target = int(hwnd or 0)
+    except Exception:
+        return 0
+    if not target:
+        return 0
+    try:
+        import win32process  # type: ignore
+
+        return int(win32process.GetWindowThreadProcessId(target)[1] or 0)
+    except Exception:
+        return 0
+
+
+def _top_level_windows() -> List[Dict[str, Any]]:
+    """可见顶层窗口快照（hwnd/class/title/pid），仅用于诊断与选择框定位。
+
+    2026-09-22 事故：以前把「点完发表那一瞬间的前台窗口」当成文件选择框句柄，
+    前台还在微信主窗时就把主窗当选择框 → 8 秒后必然判定「框没关」（误杀），
+    同一时刻的搜索根也是主窗 → 从主窗里搜不到选择框的 Edit/1148，每个控件空等 10 秒。
+    """
+    try:
+        import win32gui  # type: ignore
+    except Exception:
+        return []
+    windows: List[Dict[str, Any]] = []
+
+    def _collect(hwnd: int, _param: Any) -> bool:
         try:
-            node = finder(searchDepth=8, Name=name)
+            if not win32gui.IsWindowVisible(int(hwnd)):
+                return True
+            windows.append(
+                {
+                    "hwnd": int(hwnd),
+                    "class": str(win32gui.GetClassName(hwnd) or ""),
+                    "title": str(win32gui.GetWindowText(hwnd) or "")[:120],
+                    "pid": _window_process_id(hwnd),
+                }
+            )
+        except Exception:
+            pass
+        return True
+
+    try:
+        win32gui.EnumWindows(_collect, None)
+    except Exception:
+        pass
+    return windows
+
+
+def _window_is_alive(hwnd: Any) -> bool:
+    try:
+        target = int(hwnd or 0)
+    except Exception:
+        return False
+    if not target:
+        return False
+    try:
+        import win32gui  # type: ignore
+
+        return bool(win32gui.IsWindow(target) and win32gui.IsWindowVisible(target))
+    except Exception:
+        return False
+
+
+def _activate_window(hwnd: Any) -> bool:
+    """把目标窗口切到前台，保证随后的点击/回车真的落在它身上。"""
+    try:
+        target = int(hwnd or 0)
+    except Exception:
+        return False
+    if not target:
+        return False
+    try:
+        import win32api  # type: ignore
+        import win32con  # type: ignore
+        import win32gui  # type: ignore
+        import win32process  # type: ignore
+
+        try:
+            win32gui.ShowWindow(target, win32con.SW_RESTORE)
+        except Exception:
+            pass
+        current_thread = win32api.GetCurrentThreadId()
+        target_thread = win32process.GetWindowThreadProcessId(target)[0]
+        foreground = win32gui.GetForegroundWindow()
+        foreground_thread = win32process.GetWindowThreadProcessId(foreground)[0] if foreground else 0
+        attached: List[int] = []
+        for thread_id in {target_thread, foreground_thread}:
+            if thread_id and thread_id != current_thread:
+                try:
+                    win32process.AttachThreadInput(current_thread, thread_id, True)
+                    attached.append(thread_id)
+                except Exception:
+                    pass
+        try:
+            try:
+                win32gui.BringWindowToTop(target)
+            except Exception:
+                pass
+            try:
+                win32gui.SetForegroundWindow(target)
+            except Exception:
+                pass
+        finally:
+            for thread_id in attached:
+                try:
+                    win32process.AttachThreadInput(current_thread, thread_id, False)
+                except Exception:
+                    pass
+        time.sleep(0.2)
+        return win32gui.GetForegroundWindow() == target
+    except Exception:
+        return False
+
+
+def _uia_resolve(node: Any, *, timeout: float = 0.0, interval: float = 0.2) -> Optional[Any]:
+    """把 uiautomation 的「懒控件」真正解析一次。
+
+    uiautomation 里 `root.EditControl(AutomationId='1148')` 只是构造了搜索条件，
+    控件不存在时同样是真值 —— 以前所有"找到了吗"的判断因此恒真（假成功）。
+    这里统一用 Exists() 真查找：找不到返回 None。
+    """
+    if node is None:
+        return None
+    exists = getattr(node, "Exists", None)
+    if not callable(exists):
+        return node
+    wait = max(0.0, float(timeout or 0.0))
+    for args in ((wait, interval, False), (wait, interval), ()):
+        try:
+            found = bool(exists(*args))
+        except TypeError:
+            continue
+        except Exception:
+            return None
+        return node if found else None
+    return None
+
+
+_MOMENTS_PICKER_DIALOG_CLASS = "#32770"
+_MOMENTS_PICKER_TITLE_HINTS = ("选择", "打开", "图片", "视频", "文件", "上传")
+
+
+def _window_looks_like_moments_picker(window: Dict[str, Any]) -> bool:
+    class_name = str(window.get("class") or "")
+    if class_name == _MOMENTS_PICKER_DIALOG_CLASS:
+        return True
+    title = str(window.get("title") or "")
+    if class_name.startswith("mmui::") and any(hint in title for hint in _MOMENTS_PICKER_TITLE_HINTS):
+        return True
+    return False
+
+
+def _find_moments_file_picker_window(
+    *,
+    wechat_pid: int = 0,
+    timeout: float = 0.0,
+    steps: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
+    """找一个"真的能用"的素材选择框：标准 #32770 或微信自绘对话框，且里面有文件名输入框。
+
+    只认可真正解析出文件名输入框的窗口，避免把微信主窗/别的窗口误当成选择框。
+    """
+    deadline = time.time() + max(0.0, float(timeout or 0.0))
+    while True:
+        for window in _top_level_windows():
+            if not _window_looks_like_moments_picker(window):
+                continue
+            class_name = str(window.get("class") or "")
+            pid = int(window.get("pid") or 0)
+            if wechat_pid and pid and pid != wechat_pid and class_name != _MOMENTS_PICKER_DIALOG_CLASS:
+                continue
+            root = _uia_main_root(int(window["hwnd"]))
+            edit = _file_dialog_filename_edit(root, timeout=0.2)
+            if edit is None:
+                continue
+            found = dict(window)
+            found["root"] = root
+            found["edit"] = edit
+            if steps is not None:
+                steps.append(
+                    {
+                        "step": "moments_file_picker_found",
+                        "ok": True,
+                        "hwnd": int(found["hwnd"]),
+                        "class": class_name,
+                        "title": str(found.get("title") or ""),
+                        "pid": pid,
+                    }
+                )
+            return found
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.25)
+
+
+def _window_state(hwnd: Any) -> Dict[str, Any]:
+    """单个窗口的当前状态，失败时写进 steps 供定位。"""
+    try:
+        target = int(hwnd or 0)
+    except Exception:
+        target = 0
+    state: Dict[str, Any] = {"hwnd": target, "alive": _window_is_alive(target)}
+    try:
+        import win32gui  # type: ignore
+
+        if target:
+            state["class"] = str(win32gui.GetClassName(target) or "")
+            state["title"] = str(win32gui.GetWindowText(target) or "")[:120]
+        state["foreground"] = int(win32gui.GetForegroundWindow() or 0)
+    except Exception:
+        pass
+    return state
+
+
+def _file_dialog_filename_edit(root: Any, *, timeout: float = 0.0) -> Optional[Any]:
+    """系统文件选择框的「文件名」输入框；找不到返回 None（真查找）。
+
+    2026-09-22 事故：以前返回的是未解析的懒控件（恒真），调用方的"等框出现"循环
+    第一轮就退出（等于不等待），之后就靠粘贴到"当时有焦点的窗口"，于是看起来
+    "素材填好了"，实际完全没校验。
+    """
+    if root is None:
+        return None
+    finder = getattr(root, "EditControl", None)
+    if not callable(finder):
+        return None
+    deadline = time.time() + float(timeout or 0.0)
+    while True:
+        try:
+            node = _uia_resolve(finder(searchDepth=8, AutomationId="1148"), timeout=0.0)
         except Exception:
             node = None
         if node is not None:
             return node
+        for name in ("文件名:", "文件名(N):", "File name:"):
+            try:
+                node = _uia_resolve(finder(searchDepth=8, Name=name), timeout=0.0)
+            except Exception:
+                node = None
+            if node is not None:
+                return node
+        # 兜底：部分 Windows/微信组合换了 AutomationId，退回"对话框里第一个可编辑框"
+        try:
+            for candidate in _uia_edit_controls(root):
+                if _uia_resolve(candidate, timeout=0.0) is not None:
+                    return candidate
+        except Exception:
+            pass
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.25)
+
+
+def _file_dialog_open_button(root: Any, *, timeout: float = 0.0) -> Optional[Any]:
+    """「打开(O)」按钮（Button/1）；找不到返回 None，调用方改用回车。"""
+    if root is None:
+        return None
+    finder = getattr(root, "ButtonControl", None)
+    if not callable(finder):
+        return None
+    deadline = time.time() + float(timeout or 0.0)
+    while True:
+        try:
+            node = _uia_resolve(finder(searchDepth=8, AutomationId="1"), timeout=0.0)
+        except Exception:
+            node = None
+        if node is not None:
+            return node
+        for name in ("打开(O)", "打开(&O)", "打开", "Open", "确定"):
+            try:
+                node = _uia_resolve(finder(searchDepth=8, Name=name), timeout=0.0)
+            except Exception:
+                node = None
+            if node is not None:
+                return node
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.2)
+
+
+def _moments_text_written(node: Any, expected: str) -> bool:
+    wanted = _compact_for_contains(expected)
+    if not wanted:
+        return True
+    current = _compact_for_contains(_uia_value_text(node) or _uia_control_text(node))
+    if wanted in current:
+        return True
+    marker = wanted
+    if '"' in str(expected or ""):
+        parts = [part for part in str(expected).split('"') if part.strip()]
+        if parts:
+            marker = _compact_for_contains(parts[0])
+    return bool(marker) and marker in current
+
+
+def _uia_set_text_verified(
+    node: Any,
+    text: str,
+    *,
+    steps: Optional[List[Dict[str, Any]]] = None,
+    label: str = "",
+) -> bool:
+    """写入并回读校验（以前只写不读，才会出现"看着成功了"的假 ok）。"""
+    value = str(text or "")
+    if _uia_resolve(node, timeout=0.0) is None:
+        if steps is not None:
+            steps.append({"step": "moments_picker_type_paths", "ok": False, "label": label, "reason": "control_missing"})
+        return False
+    try:
+        node.SetFocus()
+    except Exception:
+        pass
+    try:
+        node.Click(simulateMove=True)
+    except Exception:
+        pass
+    _human_pause("ui_input_sleep_min", "ui_input_sleep_max", floor=0.12)
+    method = "value_pattern"
+    wrote = False
+    try:
+        wrote = bool(_uia_try_set_value(node, value))
+    except Exception:
+        wrote = False
+    if not wrote or not _moments_text_written(node, value):
+        method = "clipboard"
+        try:
+            _send_hotkey("a", ctrl=True, pause=0.08)
+            _send_hotkey_quick("backspace")
+        except Exception:
+            pass
+        for chunk in re.findall(r"[\s\S]{1,120}", value):
+            _paste_text_quick(chunk)
+            time.sleep(0.05)
+    ok = _moments_text_written(node, value)
+    if steps is not None:
+        steps.append(
+            {
+                "step": "moments_picker_type_paths",
+                "ok": bool(ok),
+                "label": label,
+                "chars": len(value),
+                "method": method,
+            }
+        )
+    return bool(ok)
+
+
+def _wait_window_closed(hwnd: Any, *, timeout: float = 8.0) -> bool:
+    deadline = time.time() + max(0.5, float(timeout or 0.0))
+    while time.time() < deadline:
+        if not _window_is_alive(hwnd):
+            return True
+        time.sleep(0.25)
+    return False
+
+
+def _moments_open_dialog_file_spec(paths: List[str]) -> str:
+    """系统「打开」框要写入的文件名。
+
+    同目录多图写成「目录 + 文件名」。多段完整路径不会换掉列表里的默认高亮，
+    点「打开」时高亮项会和这几张一起提交，朋友圈就会每次多出一张。
+    """
+    cleaned = [str(path or "").strip().strip('"') for path in paths if str(path or "").strip().strip('"')]
+    if not cleaned:
+        return ""
+    if len(cleaned) > 1 and len({str(Path(path).parent) for path in cleaned}) == 1:
+        folder = str(Path(cleaned[0]).parent)
+        names = [Path(path).name for path in cleaned]
+        return " ".join(f'"{part}"' for part in (folder, *names))
+    return " ".join(f'"{path}"' for path in cleaned)
+
+
+def _uia_selection_item_pattern(node: Any) -> Any:
+    for getter in ("GetSelectionItemPattern", "SelectionItemPattern"):
+        try:
+            pattern = getattr(node, getter, None)
+            pattern = pattern() if callable(pattern) else pattern
+        except Exception:
+            pattern = None
+        if pattern is not None:
+            return pattern
     return None
 
 
-def _file_dialog_open_button(root: Any) -> Optional[Any]:
-    # Common dialog Open button is Button/1. If this control is unavailable,
-    # the caller uses Enter; do not fall back to another full UIA traversal.
-    node = _uia_targeted_child(root, "Button", ["1"])
-    return node
+def _uia_selection_item_selected(node: Any) -> bool:
+    pattern = _uia_selection_item_pattern(node)
+    if pattern is None:
+        return False
+    for source in (pattern, node):
+        for attr in ("IsSelected", "CurrentIsSelected"):
+            try:
+                value = getattr(source, attr, None)
+                if callable(value):
+                    value = value()
+            except Exception:
+                continue
+            if value is True or value == 1:
+                return True
+    return False
 
 
-def _select_files_in_open_dialog(hwnd: int, files: List[Dict[str, Any]], steps: List[Dict[str, Any]]) -> None:
-    paths = [str(item.get("local_path") or "").strip() for item in files if str(item.get("local_path") or "").strip()]
-    if not paths:
-        return
-    file_spec = " ".join(f'"{path}"' for path in paths)
-    deadline = time.time() + 10.0
-    edit = None
-    root = None
-    dialog_hwnd = 0
-    while time.time() < deadline:
-        root = _uia_foreground_or_main_root(hwnd)
+def _file_dialog_node_may_be_selected_item(node: Any) -> bool:
+    try:
+        control_type = str(getattr(node, "ControlTypeName", "") or "")
+    except Exception:
+        control_type = ""
+    class_name = _uia_control_class(node)
+    if any(token in control_type or token in class_name for token in ("ListItem", "DataItem")):
+        return True
+    if control_type or class_name:
+        return False
+    return any(hasattr(node, name) for name in ("GetSelectionItemPattern", "SelectionItemPattern"))
+
+
+def _clear_file_dialog_default_selection(
+    root: Any,
+    steps: Optional[List[Dict[str, Any]]] = None,
+    *,
+    keep_names: Optional[List[str]] = None,
+) -> int:
+    """清掉打开框里不属于本次素材的默认高亮，避免多打开一张。"""
+    keep = {str(name or "").strip().lower() for name in (keep_names or []) if str(name or "").strip()}
+    cleared = 0
+    if root is not None:
         try:
-            import win32gui  # type: ignore
-
-            dialog_hwnd = int(win32gui.GetForegroundWindow() or 0)
+            nodes = _uia_walk(root, max_depth=12, max_nodes=800)
         except Exception:
-            dialog_hwnd = 0
-        edit = _file_dialog_filename_edit(root)
-        if edit is not None:
-            break
-        time.sleep(0.25)
-    if edit is None or root is None:
-        raise RuntimeError("未找到系统文件选择框的文件名输入框")
-    _uia_set_text(edit, file_spec)
-    steps.append({"step": "select_moments_files", "ok": True, "count": len(paths)})
-    open_btn = _file_dialog_open_button(root)
+            nodes = []
+        for node in nodes:
+            if not _file_dialog_node_may_be_selected_item(node):
+                continue
+            if not _uia_selection_item_selected(node):
+                continue
+            if keep:
+                label = _uia_control_text(node).strip().lower()
+                base = Path(label).name.lower() if label else ""
+                if label in keep or base in keep:
+                    continue
+            pattern = _uia_selection_item_pattern(node)
+            remover = getattr(pattern, "RemoveFromSelection", None) if pattern is not None else None
+            if not callable(remover):
+                continue
+            try:
+                remover()
+                cleared += 1
+            except Exception:
+                continue
+    if steps is not None:
+        steps.append({"step": "moments_picker_clear_selection", "ok": True, "cleared": cleared})
+    return cleared
+
+
+def _moments_open_dialog_inline_error(root: Any) -> str:
+    """读出系统打开框里自带的错误文字（如「找不到文件」），方便诊断。"""
+    if root is None:
+        return ""
+    markers = ("找不到", "不存在", "无效", "错误", "not found", "invalid")
+    try:
+        nodes = _uia_walk(root, max_depth=12, max_nodes=600)
+    except Exception:
+        return ""
+    for node in nodes:
+        text = str(_uia_control_text(node) or "").strip()
+        if not text or len(text) > 80:
+            continue
+        low = text.lower()
+        if any(marker in text or marker in low for marker in markers):
+            return text
+    return ""
+
+
+def _open_dialog_confirm(
+    dialog_hwnd: int,
+    root: Any,
+    spec: str,
+    paths: List[str],
+    steps: List[Dict[str, Any]],
+    *,
+    label: str,
+    timeout: float = 10.0,
+) -> None:
+    """把文件名只写进选择框并确认；框没关就报错（带上框里的错误文字）。"""
+    _activate_window(dialog_hwnd)
+    edit = _file_dialog_filename_edit(root, timeout=8.0)
+    if edit is None:
+        steps.append({"step": "moments_picker_filename_missing", "ok": False, "windows": _top_level_windows()[:12]})
+        raise RuntimeError("朋友圈素材选择框里没找到文件名输入框，请重试")
+    # SetValue 只改文件名框，不会取消列表默认高亮。先清掉高亮再写入。
+    _clear_file_dialog_default_selection(root, steps)
+    if not _uia_set_text_verified(edit, spec, steps=steps, label=label):
+        steps.append({"step": "select_moments_files", "ok": False, "reason": "文件名输入框回读不一致", "spec": spec[:200]})
+        raise RuntimeError("朋友圈素材路径没有真正写进文件选择框，请重试")
+    # 写入后又高亮了别的文件时只清那一项。清选中有时会把文件名框抹掉，抹掉就写回再点打开。
+    if _clear_file_dialog_default_selection(root, steps, keep_names=[Path(path).name for path in paths]):
+        if not _moments_text_written(edit, spec):
+            if not _uia_set_text_verified(edit, spec, steps=steps, label=label + "_restore"):
+                steps.append({"step": "select_moments_files", "ok": False, "reason": "文件名输入框回读不一致", "spec": spec[:200]})
+                raise RuntimeError("朋友圈素材路径没有真正写进文件选择框，请重试")
+    steps.append({"step": "select_moments_files", "ok": True, "count": len(paths), "mode": label, "spec": spec[:200]})
+    _activate_window(dialog_hwnd)
+    open_btn = _file_dialog_open_button(root, timeout=3.0)
     if open_btn is not None:
         _uia_click(open_btn)
     else:
+        steps.append({"step": "moments_picker_open_button_missing", "ok": True, "fallback": "enter"})
         _send_hotkey("enter", pause=0.25)
-    close_deadline = time.time() + 8.0
-    while time.time() < close_deadline:
+    if _wait_window_closed(dialog_hwnd, timeout=timeout):
+        steps.append({"step": "close_moments_file_picker", "ok": True, "mode": label})
+        return
+    # 编辑页已经拿到素材就不要再误杀（以前这里直接判失败，把已经加好的素材一起废掉）
+    ready_root = _uia_foreground_or_main_root(dialog_hwnd)
+    if _moments_publish_dialog_ready(ready_root) and not _moments_publish_rejection(ready_root):
         try:
-            import win32gui  # type: ignore
-
-            if not dialog_hwnd or not win32gui.IsWindow(dialog_hwnd) or not win32gui.IsWindowVisible(dialog_hwnd):
-                steps.append({"step": "close_moments_file_picker", "ok": True})
-                return
+            _activate_window(dialog_hwnd)
+            _send_hotkey("esc", pause=0.15)
         except Exception:
-            # If the platform does not expose a window handle, the compose
-            # dialog check below will still catch a failed selection.
             pass
-        time.sleep(0.25)
+        steps.append({"step": "close_moments_file_picker", "ok": True, "mode": label, "method": "editor_ready_after_timeout"})
+        return
+    inline_error = _moments_open_dialog_inline_error(root)
+    steps.append(
+        {
+            "step": "close_moments_file_picker",
+            "ok": False,
+            "mode": label,
+            "spec": spec[:200],
+            "inline_error": inline_error,
+            "error": "系统文件选择框未在规定时间内关闭",
+            "window": _window_state(dialog_hwnd),
+        }
+    )
+    raise RuntimeError(
+        "朋友圈素材选择框没能确认（选择框未关闭%s）"
+        % (("：" + inline_error) if inline_error else "")
+    )
+
+
+def _dismiss_open_dialog(dialog_hwnd: int, steps: List[Dict[str, Any]]) -> None:
+    """把卡住的选择框关掉，好走后面的逐张兜底。"""
+    if not dialog_hwnd:
+        return
     try:
-        _send_hotkey("esc", pause=0.1)
-    except Exception:
-        pass
-    steps.append({"step": "close_moments_file_picker", "ok": False, "error": "系统文件选择框未在8秒内关闭"})
-    raise RuntimeError("系统文件选择框选择素材后未关闭，请重试")
+        _activate_window(dialog_hwnd)
+        _send_hotkey("esc", pause=0.2)
+        _wait_window_closed(dialog_hwnd, timeout=3.0)
+        steps.append({"step": "dismiss_moments_file_picker", "ok": True})
+    except Exception as exc:  # noqa: BLE001
+        steps.append({"step": "dismiss_moments_file_picker", "ok": False, "error": str(exc)[:160]})
+
+
+def _add_moments_files_one_by_one(hwnd: int, files: List[Dict[str, Any]], steps: List[Dict[str, Any]]) -> None:
+    """多选失败时的兜底：每次只选一张（绝对路径），避开「目录+文件名」写法在某些系统上报「找不到文件」。"""
+    total = len(files)
+    for index, item in enumerate(files):
+        _add_moments_publish_files(hwnd, [item], steps)
+        steps.append({"step": "add_moments_files_one_by_one", "ok": True, "index": index + 1, "total": total})
+
+
+def _select_files_in_open_dialog(
+    hwnd: int,
+    files: List[Dict[str, Any]],
+    steps: List[Dict[str, Any]],
+    *,
+    picker: Optional[Dict[str, Any]] = None,
+) -> None:
+    """在系统文件选择框里选素材：真等框、真查找、回读校验、按框自己的句柄判断关没关；
+    多张一次选不成功（常见于框里报「找不到文件」导致不关闭）时自动退回「每次一张」逐张添加。"""
+    paths = [str(item.get("local_path") or "").strip() for item in files if str(item.get("local_path") or "").strip()]
+    if not paths:
+        return
+    file_spec = _moments_open_dialog_file_spec(paths)
+    window = picker or _find_moments_file_picker_window(
+        wechat_pid=_window_process_id(hwnd),
+        timeout=10.0,
+        steps=steps,
+    )
+    if window is None:
+        steps.append({"step": "moments_file_picker_missing", "ok": False, "windows": _top_level_windows()[:12]})
+        raise RuntimeError("朋友圈素材选择框没打开（没找到系统文件选择框），请重试")
+    dialog_hwnd = int(window.get("hwnd") or 0)
+    root = window.get("root") or _uia_main_root(dialog_hwnd)
+    if len(paths) > 1:
+        try:
+            _open_dialog_confirm(dialog_hwnd, root, file_spec, paths, steps, label="moments_files_multi")
+            return
+        except RuntimeError as exc:
+            steps.append(
+                {
+                    "step": "moments_multi_select_failed",
+                    "ok": False,
+                    "error": str(exc)[:200],
+                    "fallback": "one_by_one",
+                }
+            )
+            _dismiss_open_dialog(dialog_hwnd, steps)
+            _add_moments_files_one_by_one(hwnd, files, steps)
+            return
+    _open_dialog_confirm(dialog_hwnd, root, file_spec, paths, steps, label="moments_files_single")
 
 
 def _add_moments_publish_files(hwnd: int, files: List[Dict[str, Any]], steps: List[Dict[str, Any]]) -> None:
+    """点「+」打开素材选择框再选文件（发表入口没自动弹框时走这条兜底）。
+
+    微信弹框偶尔第一次不出现：这里自己再点一次「+」重试，避免直接报「选择框未打开」。
+    """
     if not files:
         return
     root = _uia_foreground_or_main_root(hwnd)
     plus = _find_moments_publish_plus(root)
-    if plus is not None:
-        _uia_click(plus)
-        steps.append({"step": "open_moments_file_picker", "ok": True, "method": "uia"})
-    else:
+    rect = None
+    if plus is None:
         rect = _uia_rect_tuple(root)
         if rect is None:
             raise RuntimeError("未找到朋友圈发布窗口位置，无法添加素材")
-        left, top, _right, _bottom = rect
-        _uia_click_screen_point(left + 175, top + 215)
-        steps.append({"step": "open_moments_file_picker", "ok": True, "method": "coordinate"})
-    _select_files_in_open_dialog(hwnd, files, steps)
+
+    def click_plus(attempt: int) -> None:
+        if plus is not None:
+            _uia_click(plus)
+            steps.append({"step": "open_moments_file_picker", "ok": True, "method": "uia", "attempt": attempt})
+        else:
+            left, top, _right, _bottom = rect  # type: ignore[misc]
+            _uia_click_screen_point(left + 175, top + 215)
+            steps.append({"step": "open_moments_file_picker", "ok": True, "method": "coordinate", "attempt": attempt})
+
+    click_plus(1)
+    picker = _find_moments_file_picker_window(
+        wechat_pid=_window_process_id(hwnd),
+        timeout=12.0,
+        steps=steps,
+    )
+    if picker is None:
+        steps.append({"step": "moments_file_picker_retry", "ok": True, "reason": "第一次没弹框"})
+        click_plus(2)
+        picker = _find_moments_file_picker_window(
+            wechat_pid=_window_process_id(hwnd),
+            timeout=12.0,
+            steps=steps,
+        )
+    if picker is None:
+        steps.append({"step": "moments_file_picker_missing", "ok": False, "after_plus": True})
+        raise RuntimeError("点了「+」之后朋友圈素材选择框仍未出现，请重试")
+    _select_files_in_open_dialog(hwnd, files, steps, picker=picker)
     time.sleep(random.uniform(1.0, 2.0))
+
+
+def _verify_moments_attachments(hwnd: int, expected: int, steps: List[Dict[str, Any]]) -> None:
+    """确认素材真的进了发表页：微信拒绝素材要立刻报出来，别再静默往下走。"""
+    root = _uia_foreground_or_main_root(hwnd)
+    rejection = _moments_publish_rejection(root)
+    if rejection:
+        steps.append({"step": "moments_media_rejected", "ok": False, "error": rejection})
+        raise RuntimeError(f"微信朋友圈拒绝素材：{rejection}")
+    observed = 0
+    try:
+        for node in _uia_walk(root, max_depth=14, max_nodes=1200):
+            class_name = _uia_control_class(node)
+            if "Image" in class_name or "mmui::Album" in class_name:
+                observed += 1
+    except Exception:
+        observed = 0
+    steps.append(
+        {
+            "step": "moments_attachments_ready",
+            "ok": observed > 0,
+            "expected": int(expected),
+            "observed_nodes": observed,
+        }
+    )
+
+
+def _dismiss_moments_leftovers(hwnd: int, steps: List[Dict[str, Any]]) -> None:
+    """失败后清场：关掉残留的选择框/发表页，避免污染下一轮（2026-09-22 18:34 事故）。"""
+    try:
+        picker = _find_moments_file_picker_window(wechat_pid=_window_process_id(hwnd), timeout=0.0)
+    except Exception:
+        picker = None
+    if picker is not None:
+        _activate_window(int(picker.get("hwnd") or 0))
+        try:
+            _send_hotkey("esc", pause=0.15)
+        except Exception:
+            pass
+        steps.append({"step": "cleanup_moments_picker", "ok": True})
+    root = _uia_foreground_or_main_root(hwnd)
+    if not _moments_publish_dialog_ready(root):
+        return
+    cancel = _uia_find_by_names(root, ["取消"], contains=False, max_depth=16)
+    if cancel is not None:
+        try:
+            _uia_click(cancel)
+            steps.append({"step": "cleanup_moments_publish_dialog", "ok": True, "method": "cancel"})
+            return
+        except Exception:
+            pass
+    try:
+        _send_hotkey("esc", pause=0.15)
+        _send_hotkey("esc", pause=0.15)
+        steps.append({"step": "cleanup_moments_publish_dialog", "ok": True, "method": "esc"})
+    except Exception:
+        pass
 
 
 def _moments_ffprobe_path() -> str:
@@ -17532,10 +19232,10 @@ def _publish_moments_local_once(
     try:
         if not text and not files:
             raise RuntimeError("朋友圈发布缺少正文或素材")
+        # 节点类型决定发什么：图文节点只发图片，视频节点只发视频（不再混发）
+        files = _split_moments_media(files, media_type=media_type, steps=steps)
         image_count = sum(1 for file in files if file.get("kind") == "image")
         video_count = sum(1 for file in files if file.get("kind") == "video")
-        if image_count and video_count:
-            raise RuntimeError("朋友圈一次发布暂不混合图片和视频")
         if image_count > 9:
             raise RuntimeError("朋友圈图文一次最多选择9张图片")
         if video_count > 1:
@@ -17554,12 +19254,18 @@ def _publish_moments_local_once(
         _open_local_moments(hwnd, steps)
         publish_hwnd = _click_moments_publish_entry(hwnd, steps, expect_file_picker=bool(files))
         if files:
-            root = _uia_foreground_or_main_root(publish_hwnd)
-            if _file_dialog_filename_edit(root) is not None:
-                _select_files_in_open_dialog(publish_hwnd, files, steps)
-            else:
+            picker = _find_moments_file_picker_window(
+                wechat_pid=_window_process_id(publish_hwnd),
+                timeout=8.0,
+                steps=steps,
+            )
+            if picker is None:
+                steps.append({"step": "moments_file_picker_missing", "ok": False, "before_plus": True})
                 _add_moments_publish_files(publish_hwnd, files, steps)
+            else:
+                _select_files_in_open_dialog(publish_hwnd, files, steps, picker=picker)
             _wait_for_moments_publish_dialog(publish_hwnd, steps)
+            _verify_moments_attachments(publish_hwnd, len(files), steps)
         if text:
             _focus_moments_publish_text(publish_hwnd, steps)
             _fill_moments_publish_text(publish_hwnd, text, steps)
@@ -17582,6 +19288,10 @@ def _publish_moments_local_once(
             "driver": "pc_wechat_moments_uia",
         }
     except Exception as exc:
+        try:
+            _dismiss_moments_leftovers(int(item.get("hwnd") or 0), steps)
+        except Exception:
+            pass
         if isinstance(exc, _MomentsPublishError):
             raise
         raise _MomentsPublishError(str(exc), steps) from exc
@@ -18572,8 +20282,11 @@ async def _run_friend_add_scheduler(account_id: str) -> None:
         while get_friend_add_control(key).get("enabled"):
             task = _claim_next_queued_friend_task(key)
             if task:
+                defer_seconds = 0.0
                 try:
-                    await _process_add_friend_task(task)
+                    outcome = await _process_add_friend_task(task)
+                    if isinstance(outcome, dict) and outcome.get("deferred"):
+                        defer_seconds = _friend_add_quota_reset_seconds()
                 except Exception as exc:
                     _finish_task(
                         str(task.get("id") or ""),
@@ -18585,6 +20298,14 @@ async def _run_friend_add_scheduler(account_id: str) -> None:
                     )
                 if not get_friend_add_control(key).get("enabled"):
                     break
+                if defer_seconds > 0:
+                    # 今日额度用尽：任务已退回队列，睡到额度重置再继续，不空转也不烧队列。
+                    event.clear()
+                    try:
+                        await asyncio.wait_for(event.wait(), timeout=float(defer_seconds))
+                    except asyncio.TimeoutError:
+                        pass
+                    continue
                 interval = get_friend_add_control(key).get("interval_seconds") or 60
                 event.clear()
                 try:
@@ -18628,7 +20349,14 @@ async def _run_add_friend_task_background(task: Dict[str, Any]) -> None:
     account_id = str(task.get("account_id") or "").strip()
     task_id = str(task.get("id") or "")
     try:
-        await _process_add_friend_task(task)
+        while True:
+            outcome = await _process_add_friend_task(task)
+            if not (isinstance(outcome, dict) and outcome.get("deferred")):
+                break
+            refreshed = _task_row_by_id(task_id)
+            if refreshed:
+                task = refreshed
+            await _sleep(_friend_add_quota_reset_seconds())
     except asyncio.CancelledError:
         _finish_task(
             task_id,
@@ -19122,14 +20850,175 @@ def make_native_wechat_upload_path(filename: str) -> Path:
     return native_wechat_upload_dir() / f"{uuid.uuid4().hex}_{stem}{suffix}"
 
 
-def native_wechat_file_kind(path: Path, content_type: str = "") -> str:
-    suffix = path.suffix.lower()
-    ctype = (content_type or mimetypes.guess_type(str(path))[0] or "").lower()
-    if suffix in _IMAGE_SUFFIXES or ctype.startswith("image/"):
+_MEDIA_SNIFF_BYTES = 64
+
+
+def _sniff_media_kind(path: Path) -> str:
+    """按文件头判断真实媒体类型（图片/视频/未知）。
+
+    线上事故：朋友圈图文把「内容是 mov/mp4、文件名却是 .jpg」的素材当图片发出去，
+    微信直接弹「处理失败」。文件名和调用方声明的类型都不可信，必须看文件头。
+    """
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(_MEDIA_SNIFF_BYTES)
+    except OSError:
+        return ""
+    if len(head) < 12:
+        return ""
+    if head.startswith(b"\xff\xd8\xff") or head.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image"
-    if suffix in _VIDEO_SUFFIXES or ctype.startswith("video/"):
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "image"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image"
+    if head[4:8] == b"ftyp":
         return "video"
+    if head.startswith(b"\x1aE\xdf\xa3"):  # matroska/webm
+        return "video"
+    if head.startswith(b"RIFF") and head[8:12] == b"AVI ":
+        return "video"
+    if head.startswith(b"FLV\x01"):
+        return "video"
+    return ""
+
+
+def _sniff_image_format(path: Path) -> str:
+    """按文件头判断图片格式；微信朋友圈稳妥只支持 jpg/png。"""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(_MEDIA_SNIFF_BYTES)
+    except OSError:
+        return ""
+    if head.startswith(b"\xff\xd8\xff"):
+        return "jpeg"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "webp"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "gif"
+    return ""
+
+
+def native_wechat_file_kind(path: Path, content_type: str = "") -> str:
+    """真实类型优先：视频信号 > 图片信号 > 后缀。
+
+    旧顺序是「后缀是图片就先返回 image」，于是 `.jpg` 名的视频被判成图片，
+    图文发布把视频发给朋友圈导致微信处理失败。
+    """
+    ctype = (content_type or "").lower()
+    suffix = path.suffix.lower()
+    sniffed = _sniff_media_kind(path)
+    if ctype.startswith("video/") or sniffed == "video" or suffix in _VIDEO_SUFFIXES:
+        return "video"
+    if ctype.startswith("image/") or sniffed == "image" or suffix in _IMAGE_SUFFIXES:
+        return "image"
     return "file"
+
+
+def _aligned_media_path(path: Path, kind: str) -> Path:
+    """把扩展名纠正成真实类型（`.jpg` 里的视频 → `.mp4`），微信按扩展名解析素材。"""
+    if kind not in {"image", "video"}:
+        return path
+    suffix = path.suffix.lower()
+    if kind == "video" and suffix in _VIDEO_SUFFIXES:
+        return path
+    if kind == "image" and suffix in _IMAGE_SUFFIXES:
+        return path
+    target = path.with_suffix(".mp4" if kind == "video" else ".jpg")
+    if target == path:
+        return path
+    try:
+        if target.exists():
+            target.unlink(missing_ok=True)
+        path.rename(target)
+        return target
+    except OSError:
+        return path
+
+
+_MOMENTS_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
+_MOMENTS_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+
+
+def _split_moments_media(
+    files: List[Dict[str, Any]],
+    *,
+    media_type: str,
+    steps: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """按节点类型把素材分流：图文只发图片，视频只发视频（不再混发）。
+
+    以前不做分流，图文发布会把同一批素材里的视频一起带上（微信直接处理失败）。
+    """
+    want_video = str(media_type or "").strip().lower() == "video"
+    kept: List[Dict[str, Any]] = []
+    dropped_images: List[str] = []
+    dropped_videos: List[str] = []
+    for item in files:
+        kind = str(item.get("kind") or "").strip().lower()
+        name = str(item.get("filename") or Path(str(item.get("local_path") or "")).name)
+        if want_video:
+            if kind == "video":
+                kept.append(item)
+            else:
+                dropped_images.append(name)
+            continue
+        if kind == "video":
+            dropped_videos.append(name)
+            continue
+        if kind == "image":
+            path = Path(str(item.get("local_path") or name))
+            suffix = path.suffix.lower()
+            size = int(item.get("size") or 0)
+            image_format = _sniff_image_format(path) if path.exists() else ""
+            if image_format and image_format not in {"jpeg", "png"}:
+                dropped_images.append(name)
+                continue
+            if not image_format and suffix not in _MOMENTS_IMAGE_SUFFIXES:
+                dropped_images.append(name)
+                continue
+            if size and size > _MOMENTS_IMAGE_MAX_BYTES:
+                dropped_images.append(name)
+                continue
+            kept.append(item)
+            continue
+        dropped_images.append(name)
+    if dropped_videos:
+        steps.append(
+            {
+                "step": "skip_video_material_for_image_post",
+                "ok": True,
+                "count": len(dropped_videos),
+                "names": dropped_videos[:6],
+                "reason": "朋友圈图文只发图片，视频素材已跳过（视频请用视频发布）",
+            }
+        )
+    if dropped_images:
+        steps.append(
+            {
+                "step": "skip_unusable_image_material",
+                "ok": True,
+                "count": len(dropped_images),
+                "names": dropped_images[:6],
+                "reason": "只支持 jpg/png 且单张不超过 10MB",
+            }
+        )
+    if not kept:
+        if want_video:
+            raise RuntimeError(
+                "朋友圈视频发布没有可用视频素材（当前素材：%s）"
+                % ("、".join((dropped_images + dropped_videos)[:6]) or "空")
+            )
+        raise RuntimeError(
+            "朋友圈图文没有可用图片素材：本次素材是 %s，请改用视频发布或重新生成配图"
+            % ("、".join(dropped_videos[:6]) if dropped_videos else ("、".join(dropped_images[:6]) or "空"))
+        )
+    return kept
+
+
+
 
 
 def _resolve_native_wechat_attachment(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -19149,12 +21038,19 @@ def _resolve_native_wechat_attachment(item: Dict[str, Any]) -> Dict[str, Any]:
     filename = str(item.get("filename") or item.get("name") or path.name).strip() or path.name
     size = int(item.get("size") or path.stat().st_size)
     content_type = str(item.get("content_type") or mimetypes.guess_type(str(path))[0] or "application/octet-stream")
+    kind = native_wechat_file_kind(path, content_type)
+    # 扩展名要和真实内容一致：`.jpg` 名的视频要让微信看到 `.mp4`
+    aligned = _aligned_media_path(path, kind)
+    if aligned != path:
+        path = aligned
+        filename = Path(filename).with_suffix(path.suffix).name
+        content_type = mimetypes.guess_type(str(path))[0] or content_type
     return {
         "local_path": str(path),
         "filename": filename,
         "size": size,
         "content_type": content_type,
-        "kind": native_wechat_file_kind(path, content_type),
+        "kind": kind,
     }
 
 
@@ -19368,6 +21264,17 @@ def list_friend_records(account_id: str = "", *, limit: int = 50, offset: int = 
             f"select * from wechat_tasks {where} order by created_at desc, id desc",
             tuple(params),
         ).fetchall()
+        if account_id:
+            state_rows = conn.execute(
+                "select * from wechat_friend_add_targets where account_id=?",
+                (account_id,),
+            ).fetchall()
+        else:
+            state_rows = conn.execute("select * from wechat_friend_add_targets").fetchall()
+    target_states = {}
+    for state_row in state_rows:
+        state = _row_to_dict(state_row)
+        target_states[f"{state.get('account_id')}|{state.get('target')}"] = state
     records: List[Dict[str, Any]] = []
     for row in rows:
         task = _row_to_dict(row)
@@ -19376,6 +21283,18 @@ def list_friend_records(account_id: str = "", *, limit: int = 50, offset: int = 
         if not targets:
             targets = [str(payload.get("keyword") or "")]
         for target in targets:
+            state = target_states.get(f"{task.get('account_id')}|{target}")
+            record_status = str(task.get("status") or "")
+            record_attempts = 0
+            record_error = str(task.get("error_message") or "")
+            if state:
+                record_attempts = int(state.get("attempts") or 0)
+                record_error = str(state.get("last_error") or record_error)
+                record_status = {
+                    "added": "success",
+                    "skipped": "skipped",
+                    "failed": "failed",
+                }.get(str(state.get("status") or ""), record_status)
             records.append({
                 "id": str(task.get("id") or ""),
                 "task_id": str(task.get("id") or ""),
@@ -19386,8 +21305,10 @@ def list_friend_records(account_id: str = "", *, limit: int = 50, offset: int = 
                 "remark": str(payload.get("remark") or ""),
                 "tags": payload.get("tags") if isinstance(payload.get("tags"), list) else [],
                 "permission": str(payload.get("permission") or ""),
-                "status": str(task.get("status") or ""),
-                "error_message": str(task.get("error_message") or ""),
+                "status": record_status,
+                "attempts": record_attempts,
+                "target_status": str((state or {}).get("status") or ""),
+                "error_message": record_error,
                 "created_at": str(task.get("created_at") or ""),
                 "updated_at": str(task.get("updated_at") or ""),
                 "processed": int(task.get("processed") or 0),

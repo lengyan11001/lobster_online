@@ -453,3 +453,170 @@ def test_online_memory_generation_cleans_every_source_after_completion(monkeypat
     )
 
     assert calls == ["complete", "cleanup:source-one", "cleanup:source-two"]
+
+def test_online_split_forwards_group_and_tags_to_each_segment(monkeypatch):
+    uploads = []
+
+    async def fake_event(*_args):
+        return None
+
+    async def fake_download(_url, target):
+        target.write_bytes(b"source-video")
+        return target.stat().st_size
+
+    def fake_split(_source, output_dir, **_kwargs):
+        output_dir.mkdir(parents=True, exist_ok=True)
+        paths = [output_dir / "segment_000.mp4", output_dir / "segment_001.mp4"]
+        for path in paths:
+            path.write_bytes(b"segment")
+        return paths
+
+    async def fake_upload(*_args, **kwargs):
+        uploads.append(kwargs)
+        return {"asset_id": "segment-%s" % kwargs["segment_index"], "media_type": "video"}
+
+    class FakeCloud:
+        async def delete(self, url, **_kwargs):
+            return SimpleNamespace(status_code=200, text="", content=b"{}")
+
+    monkeypatch.setattr(channel, "_post_cloud_event", fake_event)
+    monkeypatch.setattr(channel, "_download_online_split_source", fake_download)
+    monkeypatch.setattr(channel, "_split_online_video_file", fake_split)
+    monkeypatch.setattr(channel, "_upload_online_split_segment", fake_upload)
+
+    result = asyncio.run(
+        channel._run_online_video_split_command(
+            FakeCloud(),
+            "https://server.example.com",
+            {"Authorization": "Bearer test"},
+            "split-message-id",
+            {
+                "source_asset_id": "source-asset",
+                "source_url": "https://cdn.example.com/source.mp4",
+                "source_filename": "source.mp4",
+                "creative_candidate_group": " spring hero ",
+                "tags": " hot, cover ",
+                "segment_seconds": 3,
+                "max_segments": 120,
+            },
+        )
+    )
+
+    assert result["total"] == 2
+    assert [item["creative_candidate_group"] for item in uploads] == ["spring hero", "spring hero"]
+    assert [item["tags"] for item in uploads] == ["hot, cover", "hot, cover"]
+
+
+def test_online_split_segment_form_includes_only_nonempty_labels(tmp_path):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"asset_id":"seg-1"}'
+        text = '{"asset_id":"seg-1"}'
+
+        def json(self):
+            return {"asset_id": "seg-1"}
+
+    class FakeCloud:
+        async def post(self, url, **kwargs):
+            captured["url"] = url
+            captured["data"] = dict(kwargs["data"])
+            return FakeResponse()
+
+    path = tmp_path / "segment_000.mp4"
+    path.write_bytes(b"segment")
+
+    asyncio.run(
+        channel._upload_online_split_segment(
+            FakeCloud(),
+            "https://server.example.com",
+            {},
+            path,
+            source_filename="source.mp4",
+            split_job_id="job-1",
+            segment_index=1,
+        )
+    )
+    assert "creative_candidate_group" not in captured["data"]
+    assert "tags" not in captured["data"]
+
+    asyncio.run(
+        channel._upload_online_split_segment(
+            FakeCloud(),
+            "https://server.example.com",
+            {},
+            path,
+            source_filename="source.mp4",
+            split_job_id="job-1",
+            segment_index=2,
+            creative_candidate_group="spring hero",
+            tags="hot,cover",
+        )
+    )
+    assert captured["data"]["creative_candidate_group"] == "spring hero"
+    assert captured["data"]["tags"] == "hot,cover"
+    assert captured["data"]["video_segment"] == "true"
+def test_online_video_split_keeps_requested_sixty_second_segments(tmp_path, monkeypatch):
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+    output = tmp_path / "segments"
+    commands = []
+
+    monkeypatch.setattr(channel, "find_ffmpeg", lambda: "C:/bundle/ffmpeg.exe")
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        pattern = str(command[-1])
+        Path(pattern.replace("%03d", "000")).write_bytes(b"one")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(channel.subprocess, "run", fake_run)
+    channel._split_online_video_file(source, output, segment_seconds=60, max_segments=120)
+    assert commands[0][commands[0].index("-segment_time") + 1] == "60"
+    assert commands[0][commands[0].index("-t") + 1] == "7200"
+
+
+def test_client_command_keep_source_does_not_cleanup(monkeypatch):
+    completed = []
+    cleaned = []
+
+    async def fake_run(*_args, **_kwargs):
+        return {
+            "total": 2,
+            "assets": [],
+            "action": "split_uploaded_video_asset",
+            "source_asset_id": "source-asset",
+        }
+
+    async def fake_complete(_cloud, _base, _headers, message_id, **kwargs):
+        completed.append((message_id, kwargs))
+
+    async def fake_cleanup(_cloud, _base, _headers, source_asset_id):
+        cleaned.append(source_asset_id)
+
+    monkeypatch.setattr(channel, "_run_online_video_split_command", fake_run)
+    monkeypatch.setattr(channel, "_complete_cloud_message", fake_complete)
+    monkeypatch.setattr(channel, "_cleanup_online_split_source", fake_cleanup)
+    command = {
+        "action": "split_uploaded_video_asset",
+        "source_asset_id": "source-asset",
+        "source_url": "https://cdn.example.com/source.mp4",
+        "keep_source": True,
+    }
+    item = {
+        "id": "message-id",
+        "content": channel._H5_CLIENT_COMMAND_PREFIX + json.dumps(command),
+    }
+    asyncio.run(
+        channel._run_client_command(
+            object(),
+            "https://server.example.com",
+            {"Authorization": "Bearer test"},
+            "jwt-token",
+            "installation-id",
+            item,
+        )
+    )
+    assert completed[0][0] == "message-id"
+    assert cleaned == []

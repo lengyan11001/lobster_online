@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -82,6 +83,10 @@ _active_scheduled_douyin_actions: Dict[str, str] = {}
 _active_client_workflow_actions: Dict[str, str] = {}
 _scheduled_douyin_precise_touch_claim_lock = asyncio.Lock()
 _SCHEDULED_DOUYIN_IDLE_POLL_SECONDS = 2.0
+# 等本地抖音空闲/拿执行锁都要有上限：被取消的任务可能留下残留占用，
+# 没上限的话整台机器会一直卡着（2026-09-22 演示点不动就是这个原因）。
+_SCHEDULED_DOUYIN_IDLE_WAIT_SECONDS = 300.0
+_SCHEDULED_DOUYIN_LOCK_WAIT_SECONDS = 120.0
 _SCHEDULED_DOUYIN_STOP_SETTLE_TIMEOUT_SECONDS = 20.0
 _WORKFLOW_NODE_STOP_TIMEOUT_SECONDS = 8.0
 _WORKFLOW_NODE_CANCEL_GRACE_SECONDS = 8.0
@@ -91,6 +96,12 @@ _SCHEDULED_COMPLETE_RETRY_STATUS = {500, 502, 503, 504}
 _SCHEDULED_TASK_TRANSIENT_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 _SCHEDULED_TASK_EVENT_TIMEOUT_SECONDS = 12.0
 _SCHEDULED_TASK_EVENT_ATTEMPTS = 3
+# 控制面（事件/心跳/完成上报）一次丢包不该让服务端以为任务停了：失败入本地队列，
+# 由 polling 循环稍后重投。队列有上限、有保鲜期，避免无界增长。
+_SCHEDULED_TASK_CONTROL_OUTBOX_LIMIT = 200
+_SCHEDULED_TASK_CONTROL_OUTBOX_MAX_AGE_SECONDS = 900.0
+_SCHEDULED_TASK_CONTROL_OUTBOX_FLUSH_PER_LOOP = 5
+_scheduled_task_control_outbox: List[Dict[str, Any]] = []
 _SCHEDULED_TASK_COMPLETION_ATTEMPTS = 5
 _SCHEDULED_TASK_COMPLETION_RETRY_DELAY_SECONDS = 2.0
 _SCHEDULED_TASK_COMPLETION_RETRY_SECONDS = 6 * 60 * 60
@@ -480,6 +491,25 @@ def _workflow_flag(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
+def self_comment_monitor_workflow_code(status: str, monitor_state: Optional[Dict[str, Any]] = None) -> int:
+    """个别作品评论没确认不算节点失败；自动回复一次都没发出去才算失败。
+
+    未确认的作品下轮会重试，不该把已经采到的评论整轮打红。
+    自动回复全失败是另一件事，必须让节点失败，否则界面上看起来回复成功了。
+    """
+    state = monitor_state if isinstance(monitor_state, dict) else {}
+    normalized = str(status or "").strip().lower()
+    reply_success = _safe_int(state.get("last_auto_reply_success") or 0)
+    reply_failed = _safe_int(state.get("last_auto_reply_failed") or 0)
+    auto_reply_on = bool(state.get("auto_reply_enabled"))
+    replies_all_failed = auto_reply_on and (reply_success + reply_failed) > 0 and reply_success <= 0
+    if replies_all_failed or normalized in {"failed", "error"}:
+        return 500
+    if normalized in {"completed", "skipped", "disabled", "partial", "stopped"}:
+        return 200
+    return 500
+
+
 def _parse_utc_datetime(value: Any) -> Optional[datetime]:
     raw = str(value or "").strip()
     if not raw:
@@ -748,6 +778,32 @@ def _build_publish_account_snapshot(jwt_token: str) -> List[Dict[str, Any]]:
         return []
     finally:
         db.close()
+
+
+_wechat_contacts_heartbeat_state: Dict[str, Any] = {"hash": "", "sent": False}
+
+
+def _wechat_contacts_for_heartbeat() -> Optional[List[Dict[str, str]]]:
+    """通讯录只在变化后随心跳上报一次，没变就省略（服务端保留上一份快照）。
+
+    避免明文联系方式在每次心跳/状态轮询里反复搬运；需要时由
+    /api/h5-chat/wechat-contacts 按需拉取服务端已存的快照。
+    """
+    try:
+        contacts = _build_native_wechat_contact_snapshot()
+    except Exception:
+        return None
+    try:
+        payload_hash = hashlib.sha256(
+            json.dumps(contacts, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+    except Exception:
+        return contacts
+    if payload_hash == _wechat_contacts_heartbeat_state["hash"] and _wechat_contacts_heartbeat_state["sent"]:
+        return None
+    _wechat_contacts_heartbeat_state["hash"] = payload_hash
+    _wechat_contacts_heartbeat_state["sent"] = True
+    return contacts
 
 
 def _build_native_wechat_contact_snapshot() -> List[Dict[str, str]]:
@@ -1088,10 +1144,12 @@ async def refresh_h5_chat_device_heartbeat(
     payload = {
         "display_name": "local-online",
         "publish_accounts": _build_publish_account_snapshot(jwt_token),
-        "wechat_contacts": _build_native_wechat_contact_snapshot(),
         "capabilities": _h5_client_capabilities(),
         "remote_support": _remote_support_snapshot(),
     }
+    contacts = _wechat_contacts_for_heartbeat()
+    if contacts is not None:
+        payload["wechat_contacts"] = contacts
     return await _proxy_cloud_json(
         request,
         "POST",
@@ -1447,6 +1505,7 @@ async def _post_task_control_request(
     label: str,
     run_id: str = "",
     attempts: int = _SCHEDULED_TASK_EVENT_ATTEMPTS,
+    enqueue_on_failure: bool = True,
 ) -> int:
     """Post task control data with a short timeout.
 
@@ -1469,7 +1528,8 @@ async def _post_task_control_request(
             response = await client.post(url, json=body, headers=headers, timeout=timeout)
             status = int(response.status_code)
             if status in _SCHEDULED_TASK_TRANSIENT_STATUS and attempt < attempts:
-                await asyncio.sleep(0.25 * (2 ** (attempt - 1)))
+                # 加抖动：几百个安装同时被上游 5xx 抖到时不至于一起重试打爆服务端。
+                await asyncio.sleep(0.25 * (2 ** (attempt - 1)) * random.uniform(0.6, 1.4))
                 continue
             _record_task_control_delivery(
                 run_id=run_id,
@@ -1482,7 +1542,7 @@ async def _post_task_control_request(
         except httpx.RequestError as exc:
             last_error = exc
             if attempt < attempts:
-                await asyncio.sleep(0.25 * (2 ** (attempt - 1)))
+                await asyncio.sleep(0.25 * (2 ** (attempt - 1)) * random.uniform(0.6, 1.4))
                 continue
         except Exception as exc:
             last_error = exc
@@ -1501,7 +1561,99 @@ async def _post_task_control_request(
         attempts=attempts,
         error=last_error,
     )
+    if enqueue_on_failure:
+        _enqueue_task_control_outbox(url=url, body=body, label=label, run_id=run_id, error=last_error)
     return 0
+
+
+def _enqueue_task_control_outbox(
+    *,
+    url: str,
+    body: Dict[str, Any],
+    label: str,
+    run_id: str,
+    error: Optional[Exception] = None,
+) -> None:
+    """控制面请求重试失败后入队，交给 polling 循环补投（同一次元数据，不重算）。"""
+    item = {
+        "url": str(url or ""),
+        "body": dict(body or {}),
+        "label": str(label or ""),
+        "run_id": str(run_id or ""),
+        "queued_at": datetime.now(timezone.utc).timestamp(),
+        "attempts": 0,
+        "last_error": str(error)[:200] if error else "",
+    }
+    if not item["url"]:
+        return
+    _scheduled_task_control_outbox.append(item)
+    logger.warning(
+        "[SCHEDULED-TASK] control outbox queued label=%s run_id=%s pending=%s error=%s",
+        item["label"],
+        item["run_id"] or "-",
+        len(_scheduled_task_control_outbox),
+        item["last_error"] or "-",
+    )
+    overflow = len(_scheduled_task_control_outbox) - max(1, int(_SCHEDULED_TASK_CONTROL_OUTBOX_LIMIT or 1))
+    for _ in range(max(0, overflow)):
+        dropped = _scheduled_task_control_outbox.pop(0)
+        logger.warning(
+            "[SCHEDULED-TASK] control outbox overflow, dropped label=%s run_id=%s",
+            dropped.get("label"),
+            dropped.get("run_id") or "-",
+        )
+
+
+async def _flush_task_control_outbox(
+    client: httpx.AsyncClient,
+    headers: Dict[str, str],
+    *,
+    limit: int = _SCHEDULED_TASK_CONTROL_OUTBOX_FLUSH_PER_LOOP,
+) -> None:
+    """按轮询节奏补投控制面请求：成功即出队，过期即丢弃。"""
+    if not _scheduled_task_control_outbox:
+        return
+    now_ts = datetime.now(timezone.utc).timestamp()
+    max_age = float(_SCHEDULED_TASK_CONTROL_OUTBOX_MAX_AGE_SECONDS or 0)
+    budget = max(1, int(limit or 1))
+    flushed = 0
+    remaining: List[Dict[str, Any]] = []
+    for item in list(_scheduled_task_control_outbox):
+        age = now_ts - float(item.get("queued_at") or now_ts)
+        if max_age > 0 and age > max_age:
+            logger.warning(
+                "[SCHEDULED-TASK] control outbox expired label=%s run_id=%s age=%.0fs",
+                item.get("label"),
+                item.get("run_id") or "-",
+                age,
+            )
+            continue
+        if flushed >= budget:
+            remaining.append(item)
+            continue
+        item["attempts"] = int(item.get("attempts") or 0) + 1
+        status = await _post_task_control_request(
+            client,
+            str(item.get("url") or ""),
+            dict(item.get("body") or {}),
+            headers,
+            label=f"{item.get('label')}:retry",
+            run_id=str(item.get("run_id") or ""),
+            attempts=1,
+            enqueue_on_failure=False,
+        )
+        flushed += 1
+        if not (200 <= int(status or 0) < 300):
+            remaining.append(item)
+            continue
+        logger.info(
+            "[SCHEDULED-TASK] control outbox redelivered label=%s run_id=%s attempts=%s age=%.0fs",
+            item.get("label"),
+            item.get("run_id") or "-",
+            item.get("attempts"),
+            age,
+        )
+    _scheduled_task_control_outbox[:] = remaining
 
 
 def _task_event_rejects_local_work(status_code: Any) -> bool:
@@ -1870,15 +2022,71 @@ def _h5_client_command_payload(content: str) -> Optional[Dict[str, Any]]:
     return data if isinstance(data, dict) else {}
 
 
+def _probe_media_duration(path: Path, ffmpeg: str) -> float:
+    probe = str(Path(ffmpeg).with_name("ffprobe.exe" if os.name == "nt" else "ffprobe"))
+    if not Path(probe).is_file():
+        return 0.0
+    try:
+        proc = subprocess.run(
+            [probe, "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=30,
+            check=False,
+            creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+        )
+        return max(0.0, float((proc.stdout or "").strip() or 0))
+    except (OSError, ValueError):
+        return 0.0
+
+
+def _emit_ffmpeg_progress(line: str, duration: float, progress) -> None:
+    if progress is None:
+        return
+    text = (line or "").strip()
+    done = None
+    if text.startswith("out_time_us="):
+        try:
+            done = int(text.split("=", 1)[1]) / 1_000_000
+        except ValueError:
+            return
+    elif text.startswith("out_time_ms="):
+        try:
+            raw = int(text.split("=", 1)[1])
+        except ValueError:
+            return
+        done = raw / 1_000_000 if duration and raw > duration * 5000 else raw / 1000
+    elif text.startswith("out_time="):
+        clock = text.split("=", 1)[1]
+        parts = clock.split(":")
+        if len(parts) != 3:
+            return
+        try:
+            done = int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+        except ValueError:
+            return
+    else:
+        return
+    ratio = 1.0 if duration <= 0 else max(0.0, min(1.0, done / duration))
+    label = f"正在切片 {done:.1f}/{duration:.1f} 秒" if duration else "正在切片"
+    try:
+        progress(ratio, label)
+    except Exception:
+        return
+
+
 def _split_online_video_file(
     source_path: Path,
     output_dir: Path,
     *,
     segment_seconds: int,
     max_segments: int,
+    progress=None,
 ) -> List[Path]:
     ffmpeg = find_ffmpeg()
-    seconds = max(2, min(int(segment_seconds or 3), 10))
+    seconds = max(2, min(int(segment_seconds or 3), 60))
     segment_limit = max(1, min(int(max_segments or 120), 120))
     output_dir.mkdir(parents=True, exist_ok=True)
     output_pattern = output_dir / "segment_%03d.mp4"
@@ -1899,35 +2107,86 @@ def _split_online_video_file(
         "veryfast",
         "-crf",
         "23",
+        "-g",
+        "10000",
+        "-keyint_min",
+        "10000",
+        "-sc_threshold",
+        "0",
+        "-force_key_frames",
+        f"expr:gte(t,n_forced*{seconds})",
         "-c:a",
         "aac",
         "-b:a",
         "128k",
-        "-force_key_frames",
-        f"expr:gte(t,n_forced*{seconds})",
         "-f",
         "segment",
         "-segment_time",
         str(seconds),
+        "-segment_time_delta",
+        "0.2",
         "-reset_timestamps",
         "1",
+        "-progress",
+        "pipe:1",
+        "-nostats",
         str(output_pattern),
     ]
+    duration = _probe_media_duration(source_path, ffmpeg)
+    clock = {"offset": 0.0, "last": 0.0, "shown": 0.0}
+
+    def _progress(ratio, label):
+        if progress is None:
+            return
+        if duration <= 0:
+            try:
+                progress(ratio, label)
+            except Exception:
+                return
+            return
+        done = max(0.0, min(duration, float(ratio or 0) * duration))
+        if clock["last"] > 0.4 and done + 0.25 < clock["last"]:
+            clock["offset"] += clock["last"]
+        clock["last"] = done
+        total_done = min(duration, clock["offset"] + done)
+        merged = max(clock["shown"], total_done / duration)
+        clock["shown"] = merged
+        try:
+            progress(merged, f"正在切片 {total_done:.1f}/{duration:.1f} 秒")
+        except Exception:
+            return
+
+    proc = subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="ignore",
+        creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+    )
+    err_box: List[str] = []
+
+    def _read_stderr() -> None:
+        try:
+            err_box.append(proc.stderr.read() if proc.stderr is not None else "")
+        except Exception:
+            return
+
+    err_thread = threading.Thread(target=_read_stderr, daemon=True)
+    err_thread.start()
     try:
-        proc = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="ignore",
-            timeout=3600,
-            check=False,
-            creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
-        )
+        if proc.stdout is not None:
+            for line in proc.stdout:
+                _emit_ffmpeg_progress(line, duration, _progress)
+        return_code = proc.wait(timeout=3600)
     except subprocess.TimeoutExpired as exc:
+        proc.kill()
+        err_thread.join(timeout=2)
         raise RuntimeError("本机视频切片超过 60 分钟，已停止处理") from exc
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout or "ffmpeg segment failed").strip()[-1000:]
+    err_thread.join(timeout=2)
+    if return_code != 0:
+        detail = (err_box[0] if err_box else "ffmpeg segment failed").strip()[-1000:]
         raise RuntimeError(f"本机视频切片失败：{detail}")
     segments = sorted(output_dir.glob("segment_*.mp4"))[:segment_limit]
     segments = [path for path in segments if path.is_file() and path.stat().st_size > 0]
@@ -1970,18 +2229,27 @@ async def _upload_online_split_segment(
     source_filename: str,
     split_job_id: str,
     segment_index: int,
+    creative_candidate_group: str = "",
+    tags: str = "",
 ) -> Dict[str, Any]:
+    form = {
+        "split_video": "false",
+        "source_upload_filename": source_filename,
+        "video_segment": "true",
+        "segment_index": str(segment_index),
+        "split_job_id": split_job_id,
+    }
+    group_name = creative_candidate_group.strip() if isinstance(creative_candidate_group, str) else ""
+    tag_text = tags.strip() if isinstance(tags, str) else ""
+    if group_name:
+        form["creative_candidate_group"] = group_name
+    if tag_text:
+        form["tags"] = tag_text
     with path.open("rb") as stream:
         response = await cloud.post(
             f"{base}/api/assets/upload",
             headers=headers,
-            data={
-                "split_video": "false",
-                "source_upload_filename": source_filename,
-                "video_segment": "true",
-                "segment_index": str(segment_index),
-                "split_job_id": split_job_id,
-            },
+            data=form,
             files={"file": (path.name, stream, "video/mp4")},
         )
     if response.status_code >= 400:
@@ -2003,7 +2271,9 @@ async def _run_online_video_split_command(
     source_asset_id = str(payload.get("source_asset_id") or "").strip()
     source_url = str(payload.get("source_url") or "").strip()
     source_filename = Path(str(payload.get("source_filename") or "source.mp4")).name
-    segment_seconds = max(2, min(int(payload.get("segment_seconds") or 3), 10))
+    creative_candidate_group = str(payload.get("creative_candidate_group") or "").strip()
+    upload_tags = str(payload.get("tags") or "").strip()
+    segment_seconds = max(2, min(int(payload.get("segment_seconds") or 3), 60))
     max_segments = max(1, min(int(payload.get("max_segments") or 120), 120))
     if not source_asset_id or not source_url:
         raise RuntimeError("Online 切片指令缺少原视频信息")
@@ -2078,6 +2348,8 @@ async def _run_online_video_split_command(
                         source_filename=source_filename,
                         split_job_id=message_id,
                         segment_index=index,
+                        creative_candidate_group=creative_candidate_group,
+                        tags=upload_tags,
                     )
                 )
                 await _post_cloud_event(
@@ -2138,6 +2410,57 @@ async def _cleanup_online_split_source(
             )
     except Exception as exc:
         logger.warning("[H5-CHAT] online split source cleanup failed asset_id=%s: %s", source_asset_id, exc)
+
+
+
+async def _run_fill_asset_ai_tags_command(
+    cloud: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    message_id: str,
+    payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    source_asset_id = str(payload.get("source_asset_id") or "").strip()
+    source_url = str(payload.get("source_url") or "").strip()
+    source_filename = Path(str(payload.get("source_filename") or "source.mp4")).name
+    group_name = str(payload.get("creative_candidate_group") or "")
+    media_type = str(payload.get("media_type") or "video").strip().lower() or "video"
+    if not source_asset_id or not source_url:
+        raise RuntimeError("AI\u7406\u89e3\u6307\u4ee4\u7f3a\u5c11\u7d20\u6750\u4fe1\u606f")
+    suffix = Path(source_filename).suffix.lower() or ".mp4"
+    with tempfile.TemporaryDirectory(prefix="lobster_asset_ai_tags_") as temp_name:
+        source_path = Path(temp_name) / f"source{suffix}"
+        await _post_cloud_event(
+            cloud,
+            base,
+            headers,
+            message_id,
+            "progress",
+            {"text": "Online \u6b63\u5728\u7406\u89e3\u7d20\u6750", "stage": "understand"},
+        )
+        await _download_online_split_source(source_url, source_path)
+        from ..services.asset_ai_understand import understand_asset_tags
+
+        tags = await asyncio.to_thread(
+            understand_asset_tags,
+            source_path,
+            media_type,
+            base_url=base,
+            headers=dict(headers),
+        )
+    response = await cloud.post(
+        f"{base}/api/assets/{source_asset_id}/labels",
+        json={"creative_candidate_group": group_name, "tags": tags},
+        headers=headers,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"\u5199\u56de\u6807\u7b7e\u5931\u8d25\uff1aHTTP {response.status_code} {(response.text or '')[:300]}")
+    return {
+        "mode": "client_command",
+        "action": "fill_asset_ai_tags",
+        "source_asset_id": source_asset_id,
+        "tags": tags,
+    }
 
 
 async def _download_online_memory_source(source_url: str, target: Path) -> bytes:
@@ -2447,12 +2770,13 @@ async def _run_client_command(
                 reply_text=f"视频切片完成，共生成 {result['total']} 段",
                 payload=result,
             )
-            await _cleanup_online_split_source(
-                cloud,
-                base,
-                headers,
-                str(result.get("source_asset_id") or ""),
-            )
+            if not (payload or {}).get("keep_source"):
+                await _cleanup_online_split_source(
+                    cloud,
+                    base,
+                    headers,
+                    str(result.get("source_asset_id") or ""),
+                )
             return
         if action == "parse_uploaded_memory_document":
             require_document_parser_runtime(refresh=True)
@@ -2488,11 +2812,22 @@ async def _run_client_command(
             for source_asset_id in result.get("source_asset_ids") or []:
                 await _cleanup_online_memory_source(cloud, base, headers, str(source_asset_id or ""))
             return
+        if action == "fill_asset_ai_tags":
+            result = await _run_fill_asset_ai_tags_command(cloud, base, headers, message_id, payload)
+            await _complete_cloud_message(
+                cloud,
+                base,
+                headers,
+                message_id,
+                reply_text="AI理解完成，已写入标签",
+                payload=result,
+            )
+            return
         raise RuntimeError(f"unsupported client command: {action or '-'}")
     except Exception as exc:
         if action == "split_uploaded_video_asset" and not split_result_ready:
             source_asset_id = str((payload or {}).get("source_asset_id") or "").strip()
-            if source_asset_id:
+            if source_asset_id and not (payload or {}).get("keep_source"):
                 await _cleanup_online_split_source(cloud, base, headers, source_asset_id)
         if action in {"parse_uploaded_memory_document", "generate_memory_documents_from_upload"} and not memory_result_ready:
             source_asset_ids = [str((payload or {}).get("source_asset_id") or "").strip()]
@@ -3617,6 +3952,37 @@ def _local_asset_to_native_wechat_attachment(asset_id: str) -> Optional[Dict[str
         db.close()
 
 
+_CONTENT_TYPE_SUFFIXES = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "video/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "video/x-msvideo": ".avi",
+    "video/webm": ".webm",
+}
+
+
+def _moments_extension_for_content_type(content_type: str, fallback_name: str, url: str) -> str:
+    """素材落盘扩展名只认真实 Content-Type；拿不到再看 URL，最后才用调用方文件名。
+
+    以前无论下载到什么都用 `moments-N.jpg`，于是视频被存成 .jpg，
+    微信朋友圈把它当图片处理直接报「处理失败」。
+    """
+    ctype = str(content_type or "").split(";", 1)[0].strip().lower()
+    if ctype in _CONTENT_TYPE_SUFFIXES:
+        return _CONTENT_TYPE_SUFFIXES[ctype]
+    for candidate in (str(fallback_name or ""), str(url or "")):
+        suffix = Path(candidate.split("?", 1)[0]).suffix.lower()
+        if suffix and len(suffix) <= 6:
+            return suffix
+    return ".bin"
+
+
+
+
 async def _download_url_to_native_wechat_attachment(
     url: str,
     *,
@@ -3627,7 +3993,15 @@ async def _download_url_to_native_wechat_attachment(
     clean_url = str(url or "").strip()
     if not clean_url:
         raise RuntimeError("朋友圈发布缺少素材 URL")
-    target = native_wechat_engine.make_native_wechat_upload_path(filename or _filename_from_url_for_moments(clean_url, media_type))
+    fallback_name = filename or _filename_from_url_for_moments(clean_url, media_type)
+
+    def _target_for(content_type_value: str) -> Path:
+        suffix = _moments_extension_for_content_type(content_type_value, fallback_name, clean_url)
+        return native_wechat_engine.make_native_wechat_upload_path(
+            str(Path(fallback_name).with_suffix(suffix).name) if fallback_name else "moments" + suffix
+        )
+
+    target = _target_for("")
     timeout = httpx.Timeout(600.0, connect=10.0, read=600.0, write=30.0, pool=10.0)
     req_headers = {"User-Agent": "Lobster-H5-Moments/1.0", "Accept": "*/*"}
     if _should_forward_auth_for_download_url(clean_url):
@@ -3645,6 +4019,15 @@ async def _download_url_to_native_wechat_attachment(
                     text = await resp.aread()
                     raise RuntimeError(f"朋友圈素材下载失败 HTTP {resp.status_code}: {text[:200]!r}")
                 content_type = str(resp.headers.get("content-type") or mimetypes.guess_type(str(target))[0] or "application/octet-stream").split(";", 1)[0]
+                # 响应头才是真实类型：`moments-2.jpg` 实际是 mov/mp4 时改存成 .mp4，
+                # 否则微信按 .jpg 解析视频，直接弹「处理失败」。
+                desired = _target_for(content_type)
+                if desired != target:
+                    try:
+                        target.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    target = desired
                 with target.open("wb") as out:
                     async for chunk in resp.aiter_bytes(1024 * 1024):
                         if not chunk:
@@ -3680,7 +4063,12 @@ async def _wechat_moments_attachments_from_draft(
     headers: Dict[str, str],
 ) -> List[Dict[str, Any]]:
     files: List[Dict[str, Any]] = []
+    draft_media_kind = str(draft.get("media_type") or "").strip().lower()
+    # 图文只认本节点生成的 image_urls / image_asset_ids；draft.attachments、source_url、
+    # asset_id 这些旧兜底不再参与（曾把视频、模板图当配图发出去）。视频发布仍走原字段。
     raw_attachments = draft.get("attachments") if isinstance(draft.get("attachments"), list) else []
+    if draft_media_kind != "video":
+        raw_attachments = []
     for item in raw_attachments:
         if not isinstance(item, dict):
             continue
@@ -3705,9 +4093,17 @@ async def _wechat_moments_attachments_from_draft(
                     headers=headers,
                 )
             )
-    asset_id = str(draft.get("asset_id") or "").strip()
+    # 节点类型决定素材：微信朋友圈图文只留图片，视频节点只留视频（不再混发）
+    draft_media_type = str(draft.get("media_type") or "").strip().lower()
+    if draft_media_type == "video":
+        files = [item for item in files if str(item.get("kind") or "").strip().lower() == "video"] or files
+    elif draft_media_type in ("", "image", "image_text"):
+        files = [item for item in files if str(item.get("kind") or "").strip().lower() != "video"]
+    asset_id = str(draft.get("asset_id") or "").strip() if draft_media_kind == "video" else ""
     media_type = str(draft.get("media_type") or "").strip()
-    source_url = str(draft.get("source_url") or draft.get("url") or "").strip()
+    source_url = (
+        str(draft.get("source_url") or draft.get("url") or "").strip() if draft_media_kind == "video" else ""
+    )
     if asset_id and not files:
         local = _local_asset_to_native_wechat_attachment(asset_id)
         if local:
@@ -4170,6 +4566,18 @@ def _scheduled_douyin_search_keyword(source: Dict[str, Any]) -> str:
     return keywords[0] if keywords else ""
 
 
+def _scheduled_douyin_ai_keyword_note(source: Any) -> str:
+    """AI 关键词没生成出来时，把原因写进任务结果，别让它静默降级。"""
+    params = source if isinstance(source, dict) else {}
+    reason = " ".join(str(params.get("ai_keyword_fallback") or "").split())
+    if not reason:
+        return ""
+    if len(reason) > 60:
+        reason = reason[:60] + "…"
+    words = _scheduled_douyin_search_keywords(params)
+    return f"（AI 关键词未生成：{reason}；本轮沿用 {len(words)} 个已有关键词）"
+
+
 _DOUYIN_AI_KEYWORD_HISTORY_FILE = "_lobster_runtime/douyin_ai_keywords.json"
 
 
@@ -4260,6 +4668,32 @@ def _record_douyin_ai_keywords(keywords: List[str]) -> None:
     _save_douyin_ai_keyword_history(rows, last_used=keywords)
 
 
+_DOUYIN_TAKEOVER_MEMORY_MAX_CHARS = 6000
+
+
+def _douyin_takeover_memory_text(source: Dict[str, Any]) -> str:
+    """记忆接管：优先用节点带下来的记忆文件正文（工作流模板里选的那份）。"""
+    texts = _douyin_ai_memory_texts(source.get("memory_docs"))
+    return "\n\n---\n\n".join(texts).strip()[:_DOUYIN_TAKEOVER_MEMORY_MAX_CHARS]
+
+
+def _douyin_takeover_memory_doc_ids(source: Dict[str, Any]) -> List[str]:
+    """节点只带了 doc_id 时，交给客户端按本机记忆库解析正文。"""
+    raw = source.get("memory_doc_ids")
+    if not isinstance(raw, list):
+        raw = source.get("memory_docs")
+    ids: List[str] = []
+    rows = raw if isinstance(raw, list) else []
+    for item in rows:
+        if isinstance(item, dict):
+            value = str(item.get("doc_id") or item.get("id") or "").strip()
+        else:
+            value = str(item or "").strip()
+        if value and value not in ids:
+            ids.append(value)
+    return ids[:3]
+
+
 def _douyin_ai_memory_texts(value: Any) -> List[str]:
     rows = value if isinstance(value, list) else []
     texts: List[str] = []
@@ -4339,10 +4773,27 @@ def _generate_douyin_ai_keywords(
         sections.append(f"希望搜索结果尽量落在最近 {publish_window} 天发布的新视频上。")
     sections.append(f"请给出最多 {count} 个本轮要用的新关键词。")
 
-    raw = request_douyin_ai_comment(system_prompt, "\n\n".join(sections), max_tokens=220)
+    raw = request_douyin_ai_comment(
+        system_prompt,
+        "\n\n".join(sections),
+        max_tokens=220,
+        # 关键词是 JSON（{"keywords":[...]}），而评论文案用的默认回包上限是 40 字，
+        # 会把 JSON 截断 → json.loads 失败 → 静默退回原关键词（2026-09-21 定位）。
+        response_limit=400,
+    )
+    preview = " ".join(str(raw or "").split())[:200]
+    logger.info("[AI-KEYWORD] 模型返回（前 200 字）：%s", preview or "(空)")
     keywords = _parse_douyin_ai_keywords(raw, limit=count)
     avoid = {str(item or "").strip().lower() for item in recent_keywords}
-    return [keyword for keyword in keywords if keyword.lower() not in avoid]
+    kept = [keyword for keyword in keywords if keyword.lower() not in avoid]
+    if keywords and not kept:
+        logger.warning(
+            "[AI-KEYWORD] 模型给出的 %s 个关键词都被近 7 天已用清单过滤（清单 %s 个）：%s",
+            len(keywords),
+            len(recent_keywords),
+            keywords,
+        )
+    return kept
 
 
 def _scheduled_douyin_wants_ai_keywords(context: Any, params: Any) -> bool:
@@ -4397,6 +4848,37 @@ async def _apply_scheduled_douyin_ai_keywords(
         # 也不要回头去用用户没配、也不该从 Online 取的关键词。
         return _douyin_ai_last_keywords()
 
+    def apply_fallback(rows: Any, *, used_ai: bool, reason: str) -> bool:
+        """兜底关键词一律按节点设置的数量截断。
+
+        节点里的 ``ai_keyword_count`` 是用户设置的"每轮搜几个"，AI 没给出新词时
+        也必须守住这个上限：之前回退直接用原关键词列表，一次搜了 9 个（2026-09-21）。
+        """
+        available = [str(item or "").strip() for item in (rows or []) if str(item or "").strip()]
+        if not available:
+            return False
+        capped = available[:count]
+        if len(available) > len(capped):
+            logger.warning(
+                "[AI-KEYWORD] 候选关键词 %s 个，按节点设置 ai_keyword_count=%s 截断为 %s 个",
+                len(available),
+                count,
+                len(capped),
+            )
+        merged["keywords"] = capped
+        merged["keyword"] = capped[0]
+        merged["ai_keywords_used"] = used_ai
+        merged["ai_keyword_fallback"] = reason
+        merged["ai_keyword_generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logger.warning(
+            "[AI-KEYWORD] %s，本轮使用 %s 个关键词（节点设置最多 %s 个）：%s",
+            reason,
+            len(capped),
+            count,
+            capped,
+        )
+        return True
+
     try:
         keywords = await asyncio.to_thread(
             _generate_douyin_ai_keywords,
@@ -4408,32 +4890,41 @@ async def _apply_scheduled_douyin_ai_keywords(
             publish_window=str(publish_days),
         )
     except Exception as exc:
-        fallback = last_ai_keywords()
-        if fallback:
-            logger.warning("[AI-KEYWORD] 生成失败，沿用上一次 AI 关键词：%s（%s）", fallback, exc)
-            merged["keywords"] = fallback
-            merged["keyword"] = fallback[0]
-            merged["ai_keywords_used"] = True
-            merged["ai_keyword_generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if apply_fallback(
+            last_ai_keywords(),
+            used_ai=True,
+            reason=f"AI 生成关键词失败（{exc}），沿用上一次 AI 关键词",
+        ):
             return merged
-        logger.warning("[AI-KEYWORD] 生成关键词失败，本轮沿用原关键词：%s", exc)
+        if apply_fallback(
+            _scheduled_douyin_search_keywords(merged),
+            used_ai=False,
+            reason=f"AI 生成关键词失败（{exc}），沿用原关键词",
+        ):
+            return merged
+        logger.warning("[AI-KEYWORD] 生成关键词失败，且没有可用的原关键词：%s", exc)
         return merged
     if not keywords:
-        fallback = last_ai_keywords()
-        if fallback:
-            logger.warning("[AI-KEYWORD] AI 没给出新词，沿用上一次 AI 关键词：%s", fallback)
-            merged["keywords"] = fallback
-            merged["keyword"] = fallback[0]
-            merged["ai_keywords_used"] = True
-            merged["ai_keyword_generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if apply_fallback(
+            last_ai_keywords(),
+            used_ai=True,
+            reason="AI 没给出新词，沿用上一次 AI 关键词",
+        ):
             return merged
-        logger.warning("[AI-KEYWORD] AI 没有给出可用关键词，本轮沿用原关键词")
+        if apply_fallback(
+            _scheduled_douyin_search_keywords(merged),
+            used_ai=False,
+            reason="AI 没有给出可用关键词，沿用原关键词",
+        ):
+            return merged
+        logger.warning("[AI-KEYWORD] AI 没有给出可用关键词，且没有可用的原关键词")
         return merged
 
     _record_douyin_ai_keywords(keywords)
     merged["keywords"] = keywords
     merged["keyword"] = keywords[0]
     merged["ai_keywords_used"] = True
+    merged.pop("ai_keyword_fallback", None)
     merged["ai_keyword_generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     # 保证新视频：默认按“最新发布 + 最近 N 天”搜索，节点里可以覆盖
     merged["search_sort_type"] = str(source.get("search_sort_type") or merged.get("search_sort_type") or "1")
@@ -4772,6 +5263,7 @@ def _merge_scheduled_douyin_stranger_params(
         "reply_prompt",
         "contact_value",
         "wechat_add_friend_enabled",
+        "wechat_add_friend_targets_source",
     ):
         if key not in task:
             continue
@@ -4804,6 +5296,56 @@ def _scheduled_douyin_skip_payload(
         payload.update(_scheduled_douyin_task_snapshot(selected_ids))
         payload["skipped_completed"] = int(payload.get("selected_videos_total") or 0)
     return payload
+
+
+def _douyin_collect_summary_text(result_payload: Dict[str, Any]) -> str:
+    """Describe what a collect run actually did.
+
+    "Selected" (approved by the video filter) is neither "started" nor
+    "collected": online 2026-09-15 (user 54, task 16467) the old wording said
+    "已采集 8 个视频的客户 823 人" while 6 of those 8 videos never rendered a
+    single comment.
+    """
+    payload = result_payload if isinstance(result_payload, dict) else {}
+    keyword_total = (
+        len(payload.get("keywords") or [])
+        or len(payload.get("keyword_summaries") or [])
+        or 1
+    )
+    search_total = _safe_int(payload.get("search_total"))
+    selected_total = max(
+        len(payload.get("selected_task_ids") or []),
+        _safe_int(payload.get("selected_videos_total")),
+    )
+    tasks: List[Dict[str, Any]] = []
+    final_state = payload.get("final_state")
+    if isinstance(final_state, dict) and isinstance(final_state.get("tasks"), list):
+        tasks = [row for row in final_state["tasks"] if isinstance(row, dict)]
+    started_total = _safe_int(payload.get("selected_count")) or len(tasks)
+    skipped_total = max(0, _safe_int(payload.get("skipped_completed")))
+    completed_total = sum(
+        1 for row in tasks if str(row.get("status") or "").strip().lower() == "completed"
+    )
+    failed_total = sum(
+        1 for row in tasks if str(row.get("status") or "").strip().lower() == "failed"
+    )
+    selected_video = payload.get("selected_video")
+    comments_collected = max(
+        _safe_int(payload.get("total_customers")),
+        _safe_int(selected_video.get("comments_collected")) if isinstance(selected_video, dict) else 0,
+    )
+    precise_total = max(
+        len(payload.get("precise_customers") or []),
+        _safe_int(payload.get("total_high_intent")),
+    )
+    text = f"搜索完成，共执行 {keyword_total} 个关键词，找到 {search_total} 个视频；"
+    text += f"选中 {selected_total} 个视频，实际启动 {started_total} 个"
+    if skipped_total:
+        text += f"（跳过已完成 {skipped_total} 个）"
+    if tasks:
+        text += f"，完成 {completed_total} 个、失败 {failed_total} 个"
+    text += f"，采集客户 {comments_collected} 人，精准客户 {precise_total} 人。"
+    return text
 
 
 def _scheduled_douyin_result_payload(
@@ -5194,6 +5736,7 @@ async def _run_scheduled_douyin_single_search_collect_action(params: Optional[Di
         result["msg"] = (
             f"搜索完成，找到 {len(normalized_results)} 个视频；已开始依次采集 {actual_started} 个视频的客户。"
             + (f" 已跳过 {skipped_existing} 个已完成任务。" if skipped_existing else "")
+            + _scheduled_douyin_ai_keyword_note(source)
         )
     return result
 
@@ -5220,6 +5763,8 @@ async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str,
             keyword,
         )
         keyword_params = dict(source)
+        # AI 关键词兜底提示只在合并结果里说一次，别每个关键词都重复一遍。
+        keyword_params.pop("ai_keyword_fallback", None)
         keyword_params["keywords"] = [keyword]
         keyword_params["keyword"] = keyword
         result = await _run_scheduled_douyin_single_search_collect_action(keyword_params)
@@ -5278,6 +5823,7 @@ async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str,
                 f"Completed {len(successful_results)}/{len(keywords)} configured keywords; "
                 f"found {sum(_safe_int(row.get('search_total')) for row in successful_results)} videos "
                 f"and started {len(selected_task_ids)} collection tasks."
+                + _scheduled_douyin_ai_keyword_note(source)
             ),
             "keyword": keywords[0],
             "keywords": keywords,
@@ -5285,6 +5831,13 @@ async def _run_scheduled_douyin_search_collect_action(params: Optional[Dict[str,
             "search_total": sum(_safe_int(row.get("search_total")) for row in successful_results),
             "selected_task_ids": selected_task_ids,
             "selected_videos_total": len(selected_task_ids),
+            # Each keyword starts its own batch: the combined payload must sum
+            # them instead of inheriting the first keyword's numbers (online
+            # 2026-09-15 reported 5 started while 8 tasks actually ran).
+            "selected_count": sum(_safe_int(row.get("selected_count")) for row in successful_results),
+            "skipped_completed": sum(
+                _safe_int(row.get("skipped_completed")) for row in successful_results
+            ),
             "selected_item_keys": selected_item_keys,
             "items": items[:100],
             "session_ids": session_ids,
@@ -5313,7 +5866,9 @@ def _scheduled_douyin_account_id(params: Optional[Dict[str, Any]]) -> int:
 def _scheduled_douyin_fixed_text(params: Optional[Dict[str, Any]], kind: str) -> str:
     source = params if isinstance(params, dict) else {}
     if kind == "message":
-        return str(source.get("message") or source.get("direct_message") or "你好，看到你的内容挺有启发，想交流一下。").strip()
+        # 不写死兜底：节点本来就不配话术，留空让客户端回落「私信互动」里保存的本地话术；
+        # 本地也没配时由调用方跳过并写日志，避免给所有人群发同一句。
+        return str(source.get("message") or source.get("direct_message") or "").strip()
     return str(source.get("comment_text") or source.get("comment") or "内容很有参考价值，学习了。").strip()
 
 
@@ -5603,6 +6158,7 @@ async def _wait_for_local_douyin_runtime_idle(run_id: str) -> None:
     _install_douyin_origin_import_path()
     from douyin_api import get_douyin_schedule_busy_reason  # type: ignore
 
+    deadline = asyncio.get_event_loop().time() + _SCHEDULED_DOUYIN_IDLE_WAIT_SECONDS
     last_reason = ""
     while True:
         reason = str(get_douyin_schedule_busy_reason(include_external=False) or "").strip()
@@ -5620,6 +6176,14 @@ async def _wait_for_local_douyin_runtime_idle(run_id: str) -> None:
                 reason,
             )
             last_reason = reason
+        if asyncio.get_event_loop().time() >= deadline:
+            logger.warning(
+                "[SCHEDULED-TASK] local Douyin worker still busy after %ss (holder=%s); continue anyway run_id=%s",
+                _SCHEDULED_DOUYIN_IDLE_WAIT_SECONDS,
+                last_reason or "-",
+                run_id,
+            )
+            return
         await asyncio.sleep(_SCHEDULED_DOUYIN_IDLE_POLL_SECONDS)
 
 
@@ -5722,6 +6286,10 @@ def _scheduled_douyin_action_users(
 
 def _scheduled_douyin_precise_touch_user_status(action: str, row: Dict[str, Any]) -> str:
     raw_status = str((row or {}).get("status") or "").strip().lower()
+    if raw_status in _TARGET_SKIPPED_STATES:
+        # 「该主页没有可用的私信入口」这类目标重试也没用：跟账号不存在一样按
+        # unavailable 落库（精确池的 done 状态，不会下一轮再领），但不算失败。
+        return "unavailable"
     success_statuses = {
         "reply_comments": {"completed", "success"},
         "mention_comment": {"completed", "success"},
@@ -5761,12 +6329,16 @@ _TARGET_FAILED_STATES = {
     "error",
     "cancelled",
     "canceled",
-    "skipped",
     "timeout",
     "timeout_stopped",
     "timeout_stop_pending",
     "stopped",
     "rejected",
+}
+_TARGET_SKIPPED_STATES = {
+    "skipped",
+    "unavailable",
+    "unreachable",
 }
 _TARGET_STARTED_STATES = {
     "queued",
@@ -5787,6 +6359,9 @@ def _normalize_target_state(raw: Any) -> str:
     text = str(raw or "").strip().lower()
     if text in _TARGET_SUCCESS_STATES:
         return "succeeded"
+    if text in _TARGET_SKIPPED_STATES:
+        # 不算失败、也不算未启动：这些目标本轮确实处理过，但对方不可达，重试无意义。
+        return "skipped"
     if text in _TARGET_FAILED_STATES:
         return "failed"
     if text in _TARGET_STARTED_STATES:
@@ -6082,6 +6657,64 @@ def _scheduled_douyin_changed_conversations(
     return [_scheduled_douyin_slim_conversation(row) for row in changed[: max(1, limit)]]
 
 
+
+def _scheduled_douyin_failure_reasons(
+    users: Optional[List[Dict[str, Any]]],
+    *,
+    limit: int = 3,
+) -> List[str]:
+    """失败原因去重后最多 3 条。成功、跳过、未启动不进摘要。"""
+    reasons: List[str] = []
+    seen = set()
+    for row in users or []:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").strip().lower()
+        if status not in _TARGET_FAILED_STATES:
+            continue
+        error = re.sub(r"\s+", " ", str(row.get("error") or "")).strip()
+        if not error:
+            continue
+        if len(error) > 100:
+            error = error[:100].rstrip()
+        if error in seen:
+            continue
+        seen.add(error)
+        reasons.append(error)
+        if len(reasons) >= max(1, int(limit or 3)):
+            break
+    return reasons
+
+
+def _scheduled_douyin_failure_reason_text(
+    users: Optional[List[Dict[str, Any]]],
+    *,
+    limit: int = 3,
+) -> str:
+    reasons = _scheduled_douyin_failure_reasons(users, limit=limit)
+    if not reasons:
+        return ""
+    return "失败原因：" + "；".join(reasons)
+
+
+def _scheduled_douyin_precise_touch_detail_line(item: Dict[str, Any]) -> str:
+    row = item if isinstance(item, dict) else {}
+    line = (
+        f"{row.get('label', '')}：选取 {row.get('selected', 0)}，处理 {row.get('processed', 0)}，"
+        f"成功 {row.get('success', 0)}，失败 {row.get('failed', 0)}，未启动 {row.get('not_started', 0)}"
+    )
+    if row.get("skipped"):
+        line += f"，跳过 {row.get('skipped')}"
+    reasons = [
+        str(reason).strip()
+        for reason in (row.get("failure_reasons") or [])
+        if str(reason).strip()
+    ]
+    if row.get("failed") and reasons:
+        line += "，失败原因：" + "；".join(reasons)
+    return line
+
+
 def _scheduled_douyin_completed_result(
     action: str,
     start_result: Dict[str, Any],
@@ -6109,6 +6742,10 @@ def _scheduled_douyin_completed_result(
             f"{label}执行完成：共 {stats.get('total', 0)}，已处理 {stats.get('processed', 0)}，"
             f"成功 {stats.get('success', 0)}，失败 {stats.get('failed', 0)}。"
         )
+    if _safe_int(stats.get("failed")) > 0:
+        reason_text = _scheduled_douyin_failure_reason_text(users)
+        if reason_text:
+            summary = f"{summary}{reason_text}。"
     result.update(
         {
             "msg": summary,
@@ -6133,7 +6770,14 @@ def _scheduled_douyin_completed_result(
     return result
 
 
-async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+async def _run_scheduled_douyin_sales_action(
+    action: str,
+    params: Optional[Dict[str, Any]],
+    *,
+    cloud: Optional[httpx.AsyncClient] = None,
+    base: str = "",
+    headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
     source = params if isinstance(params, dict) else {}
     account_id = _scheduled_douyin_account_id(source)
     max_users = max(1, min(_safe_int(source.get("max_users") or source.get("max_results") or 10) or 10, 200))
@@ -6196,7 +6840,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
             return {"code": 500, "msg": "抖音我的评论区执行没有返回结果。"}
         monitor_state = get_douyin_self_comment_monitor_state(account_id)
         status = str(result.get("status") or monitor_state.get("last_cycle_status") or "failed").strip().lower()
-        code = 200 if status in {"completed", "skipped", "disabled"} else 500
+        code = self_comment_monitor_workflow_code(status, monitor_state)
         return {
             **result,
             "code": code,
@@ -6248,6 +6892,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                     "processed": 0,
                     "success": 0,
                     "failed": 0,
+                    "skipped": 0,
                     "not_started": 0,
                     "started": False,
                     "result_code": 423,
@@ -6296,6 +6941,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                     "processed": 0,
                     "success": 0,
                     "failed": 0,
+                    "skipped": 0,
                     "not_started": 0,
                     "started": False,
                     "result_code": 204,
@@ -6382,6 +7028,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 mark_status = "failed" if failed_users else "completed"
             else:
                 completed_users = 0
+                skipped_users = 0
                 aggregate_error = str(
                     (touch_result or {}).get("msg")
                     or (touch_result or {}).get("message")
@@ -6407,6 +7054,8 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                         action_users.append(_scheduled_douyin_slim_user(fallback_row, touch_action))
                     if user_status == "completed":
                         completed_users += 1
+                    elif user_status == "unavailable":
+                        skipped_users += 1
                     await asyncio.to_thread(
                         update_douyin_precise_touch_users,
                         [selected_user],
@@ -6418,7 +7067,11 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                         started_at=str(user_result.get("started_at") or started_at).strip() or None,
                         finished_at=str(user_result.get("finished_at") or "").strip() or None,
                     )
-                mark_status = "completed" if completed_users == len(touch_users) else "failed"
+                # 只有「对方不可达」这种跳过时不算这轮没做成：它既不是失败也不该重试。
+                if touch_users and completed_users + skipped_users == len(touch_users):
+                    mark_status = "completed"
+                else:
+                    mark_status = "failed"
             if mark_status == "completed":
                 success_count += 1
             if touch_action == "reply_comments" and isinstance(user_results, list):
@@ -6445,12 +7098,21 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 # not process or fail any person in the current round.
                 action_success_users = 0
                 action_failed_users = 0
+                action_skipped_users = 0
                 action_processed_users = 0
                 action_not_started_users = selected_count
             else:
                 action_success_users = sum(status in {"completed", "success", "sent"} for status in status_values)
-                action_failed_users = sum(status in {"failed", "error", "cancelled", "skipped"} for status in status_values)
-                action_processed_users = min(selected_count, action_success_users + action_failed_users)
+                # 「对方不可达」按跳过计：处理过、但不计失败，也不会进「重试未启动」。
+                action_skipped_users = sum(status in _TARGET_SKIPPED_STATES for status in status_values)
+                action_failed_users = sum(
+                    status in {"failed", "error", "cancelled"} and status not in _TARGET_SKIPPED_STATES
+                    for status in status_values
+                )
+                action_processed_users = min(
+                    selected_count,
+                    action_success_users + action_skipped_users + action_failed_users,
+                )
                 action_not_started_users = max(0, selected_count - action_processed_users)
             action_stat = {
                 "action": touch_action,
@@ -6459,10 +7121,16 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 "processed": action_processed_users,
                 "success": min(selected_count, action_success_users),
                 "failed": min(selected_count, action_failed_users),
+                "skipped": min(selected_count, action_skipped_users),
                 "not_started": action_not_started_users,
                 "started": result_code == 200,
                 "result_code": result_code,
                 "error": str((touch_result or {}).get("msg") or "").strip() if isinstance(touch_result, dict) else "",
+                "failure_reasons": (
+                    _scheduled_douyin_failure_reasons(action_users)
+                    if action_failed_users
+                    else []
+                ),
             }
             action_stats.append(action_stat)
             results.append(
@@ -6491,7 +7159,7 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
         not_started_action_count = len(action_stats) - started_action_count
         failed_action_count = max(0, started_action_count - success_count)
         detail_summary = "；".join(
-            f"{item['label']}：选取 {item['selected']}，处理 {item['processed']}，成功 {item['success']}，失败 {item['failed']}，未启动 {item['not_started']}"
+            _scheduled_douyin_precise_touch_detail_line(item)
             for item in action_stats
         )
         summary = (
@@ -6518,12 +7186,14 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
                 "processed": started_action_count,
                 "success": success_count,
                 "failed": failed_action_count,
+                "skipped": 0,
                 "not_started": not_started_action_count,
                 "users": touched_total,
                 "selected_users": sum(item["selected"] for item in action_stats),
                 "processed_users": sum(item["processed"] for item in action_stats),
                 "success_users": sum(item["success"] for item in action_stats),
                 "failed_users": sum(item["failed"] for item in action_stats),
+                "skipped_users": sum(item.get("skipped", 0) for item in action_stats),
                 "not_started_users": sum(item["not_started"] for item in action_stats),
             },
         }
@@ -6716,22 +7386,125 @@ async def _run_scheduled_douyin_sales_action(action: str, params: Optional[Dict[
 
     if action == "stranger_message":
         from douyin_api import run_douyin_h5_stranger_message_task_once  # type: ignore
+        import douyin_api as _douyin_api_module  # type: ignore
 
-        result = await run_douyin_h5_stranger_message_task_once(
-            account_id=account_id,
-            max_conversations=100,
-            fixed_message=str(source.get("message") or "").strip(),
-            auto_reply_enabled=bool(source.get("auto_reply_enabled", True)),
-            wechat_add_friend_enabled=bool(source.get("wechat_add_friend_enabled", False)),
-            reply_mode=(
-                "ai_lead"
-                if str(source.get("reply_mode") or "").strip().lower() == "ai_lead"
-                else "fixed"
-            ),
-            reply_prompt=str(source.get("reply_prompt") or "").strip(),
-            contact_value=str(source.get("contact_value") or "").strip(),
+        wechat_add_friend_enabled = bool(source.get("wechat_add_friend_enabled", False))
+        douyin_reply_mode = str(source.get("reply_mode") or "").strip().lower()
+        if douyin_reply_mode not in {"fixed", "ai_lead", "ai_memory"}:
+            douyin_reply_mode = "fixed"
+        # 多轮循环接管（对齐个微私信接管）：默认 15 秒一轮，跑到节点时间窗结束自己收工。
+        interval_seconds = max(1, min(_safe_int(source.get("message_poll_interval_seconds")) or 15, 300))
+        h5_context = source.get("h5_context") if isinstance(source.get("h5_context"), dict) else {}
+        window_start = h5_context.get("workflow_node_time") or source.get("sales_schedule_start")
+        window_end = h5_context.get("workflow_node_end_time") or source.get("sales_schedule_end")
+        configured_minutes = _safe_int(source.get("takeover_session_minutes"))
+        derived_minutes = _workflow_minutes_between(window_start, window_end)
+        has_workflow_window = bool(str(window_start or "").strip())
+        session_minutes = configured_minutes or derived_minutes
+        if session_minutes <= 0:
+            session_minutes = 1 if has_workflow_window else 30
+        session_minutes = max(1, min(session_minutes, 1440))
+        deadline_monotonic = _takeover_monotonic() + float(session_minutes * 60)
+
+        rounds = 0
+        conversations_seen = 0
+        reply_total = 0
+        reply_success = 0
+        reply_failed = 0
+        stop_reason = "session_window_elapsed"
+        normalized: Dict[str, Any] = {}
+        while True:
+            if bool(getattr(_douyin_api_module, "douyin_stranger_message_stop_requested", False)):
+                stop_reason = "stop_requested"
+                break
+            rounds += 1
+            result = await run_douyin_h5_stranger_message_task_once(
+                account_id=account_id,
+                max_conversations=100,
+                fixed_message=str(source.get("message") or "").strip(),
+                auto_reply_enabled=bool(source.get("auto_reply_enabled", True)),
+                wechat_add_friend_enabled=wechat_add_friend_enabled,
+                reply_mode=douyin_reply_mode,
+                reply_prompt=str(source.get("reply_prompt") or "").strip(),
+                contact_value=str(source.get("contact_value") or "").strip(),
+                wechat_add_friend_targets_source=str(
+                    source.get("wechat_add_friend_targets_source") or ""
+                ).strip(),
+                memory_context=_douyin_takeover_memory_text(source),
+                memory_doc_ids=_douyin_takeover_memory_doc_ids(source),
+            )
+            if not isinstance(result, dict):
+                if rounds == 1:
+                    return {"code": 500, "msg": "抖音私信接管执行失败"}
+                stop_reason = "round_failed"
+                break
+            normalized = dict(result)
+            round_stats = result.get("stats") if isinstance(result.get("stats"), dict) else {}
+            round_reply = result.get("reply") if isinstance(result.get("reply"), dict) else {}
+            conversations_seen += _safe_int(round_stats.get("total"))
+            reply_total += _safe_int(round_reply.get("total"))
+            reply_success += _safe_int(round_reply.get("success"))
+            reply_failed += _safe_int(round_reply.get("failed"))
+            logger.info(
+                "[抖音私信接管] 第 %s 轮完成：会话 %s 个，本轮回复成功 %s 条%s（间隔 %ss，本节点共 %s 分钟）",
+                rounds,
+                _safe_int(round_stats.get("total")),
+                _safe_int(round_reply.get("success")),
+                f"，失败 {_safe_int(round_reply.get('failed'))} 条" if _safe_int(round_reply.get("failed")) else "",
+                interval_seconds,
+                session_minutes,
+            )
+            if _takeover_monotonic() + interval_seconds > deadline_monotonic:
+                stop_reason = "session_window_elapsed"
+                break
+            await asyncio.sleep(interval_seconds)
+
+        summary = (
+            f"抖音私信记忆接管正常收工（共 {rounds} 轮，间隔 {interval_seconds}s）："
+            f"处理会话 {conversations_seen} 个，回复成功 {reply_success} 条"
+            f"{f'，失败 {reply_failed} 条' if reply_failed else ''}"
+            f"；结束原因：{'节点时间到' if stop_reason == 'session_window_elapsed' else stop_reason}"
         )
-        return dict(result) if isinstance(result, dict) else {"code": 500, "msg": "抖音私信一次性任务执行失败"}
+        normalized["takeover_rounds"] = rounds
+        normalized["takeover_interval_seconds"] = interval_seconds
+        normalized["takeover_session_minutes"] = session_minutes
+        normalized["takeover_stop_reason"] = stop_reason
+        normalized["takeover_totals"] = {
+            "conversations": conversations_seen,
+            "reply_total": reply_total,
+            "reply_success": reply_success,
+            "reply_failed": reply_failed,
+        }
+        normalized["summary_text"] = summary
+        normalized["message"] = summary
+        normalized["msg"] = summary
+        # 没勾「自动提交好友申请」：本机不动微信，只把识别到的号码上报到账号级池子，
+        # 交给同账号的其它机器（个微自动加好友节点选「服务端上报池」）去加好友。
+        if not wechat_add_friend_enabled:
+            report = await _report_douyin_wechat_contacts_to_cloud(
+                cloud,
+                base,
+                headers or {},
+                result=normalized,
+                account_id=account_id,
+                account_label=str(source.get("sales_node_label") or "").strip(),
+            )
+            normalized["wechat_contact_report"] = report
+            if report.get("ok") and not report.get("skipped"):
+                logger.info(
+                    "[wechat-contact-pool] douyin report account=%s count=%s created=%s pending=%s",
+                    account_id,
+                    report.get("count"),
+                    report.get("created"),
+                    report.get("pending"),
+                )
+            elif not report.get("ok") and not report.get("skipped"):
+                logger.warning(
+                    "[wechat-contact-pool] douyin report failed account=%s reason=%s",
+                    account_id,
+                    report.get("reason"),
+                )
+        return normalized
 
     return {"code": 400, "msg": f"暂不支持的销售抖音动作：{action}"}
 
@@ -6823,7 +7596,13 @@ async def _run_scheduled_douyin_leads(
         if action == "search_collect":
             result = await _run_scheduled_douyin_search_collect_action(params)
         elif action in {"account_nurture", "self_comment_monitor", "precise_touch", "reply_comments", "mention_comment", "follow_comment", "direct_message", "stranger_message"}:
-            result = await _run_scheduled_douyin_sales_action(action, params)
+            result = await _run_scheduled_douyin_sales_action(
+                action,
+                params,
+                cloud=cloud,
+                base=base,
+                headers=headers,
+            )
         else:
             raise RuntimeError(f"暂不支持的抖音获客任务类型：{action}")
 
@@ -6910,11 +7689,7 @@ async def _run_scheduled_douyin_leads(
                         "抖音采集子任务未全部进入 completed/failed 终态，"
                         f"拒绝结束父任务（state={final_status or 'unknown'}）。"
                     )
-                result_text = (
-                    f"搜索完成，共执行 {keyword_total} 个关键词，找到 {search_total} 个视频；"
-                    f"已采集 {selected_video_total} 个视频的客户 {comments_collected} 人，"
-                    f"精准客户 {precise_total} 人。"
-                )
+                result_text = _douyin_collect_summary_text(result_payload)
                 await _complete_task_run(
                     cloud,
                     base,
@@ -7441,8 +8216,14 @@ async def _invoke_hifly_cloud_tts(
                 headers=headers,
                 timeout=poll_request_timeout,
             )
-        except httpx.TimeoutException:
-            last = {"ok": True, "task_id": task_id, "status": 2, "status_text": "查询超时，继续等待生成结果"}
+        except httpx.TransportError as exc:
+            logger.warning(
+                "[H5-WORKFLOW] hifly status poll retry task_id=%s waited=%s err=%s",
+                task_id,
+                waited,
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            last = {"ok": True, "task_id": task_id, "status": 2, "status_text": "查询连接中断，继续等待生成结果"}
             await asyncio.sleep(interval)
             waited += interval
             continue
@@ -7996,11 +8777,24 @@ async def _run_seedance_tvc_scheduled_pipeline(
     deadline = asyncio.get_running_loop().time() + max(30.0, float(timeout_seconds))
     last_job: Dict[str, Any] = {"ok": True, "status": "running", "job_id": job_id}
     while True:
-        job = await _get_local_api_json(
-            poll_path + ("&" if "?" in poll_path else "?") + "compact=false",
-            headers=headers,
-            timeout_seconds=180.0,
-        )
+        try:
+            job = await _get_local_api_json(
+                poll_path + ("&" if "?" in poll_path else "?") + "compact=false",
+                headers=headers,
+                timeout_seconds=180.0,
+            )
+        except Exception as exc:
+            if not _is_transient_poll_error(exc):
+                raise
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError("创意分镜头视频生成超时，查询进度时连接中断") from exc
+            logger.warning(
+                "[H5-WORKFLOW] seedance poll retry job_id=%s err=%s",
+                job_id,
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            await asyncio.sleep(interval)
+            continue
         last_job = job if isinstance(job, dict) else {"result": job}
         status = str(last_job.get("status") or "").strip().lower()
         if status == "failed":
@@ -8061,7 +8855,7 @@ async def _run_scheduled_capability(
             resume_from_image = bool(cap_payload.get("resume_from_image"))
             uses_ip_daily_script = (
                 capability_id == "hifly.video.create_by_tts"
-                and str(cap_payload.get("script_source") or "").strip() == "ip_daily_industry_hot_oral"
+                and shanjian_uses_ip_daily_script(cap_payload)
             )
             provided_hifly_script = (
                 _hifly_script_text(cap_payload.get("script"))
@@ -8561,11 +9355,24 @@ async def _wait_for_local_native_wechat_task(
     deadline = asyncio.get_running_loop().time() + max(30.0, float(timeout_seconds or 1800.0))
     terminal = {"success", "completed", "failed", "partial_failed", "cancelled", "canceled"}
     while True:
-        detail = await _get_local_api_json(
-            f"/api/native-wechat/tasks/{quote(task_id, safe='')}",
-            headers=headers,
-            timeout_seconds=30.0,
-        )
+        try:
+            detail = await _get_local_api_json(
+                f"/api/native-wechat/tasks/{quote(task_id, safe='')}",
+                headers=headers,
+                timeout_seconds=30.0,
+            )
+        except Exception as exc:
+            if not _is_transient_poll_error(exc):
+                raise
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError(f"本机微信任务等待超时，查询进度时连接中断：{task_id}") from exc
+            logger.warning(
+                "[H5-WORKFLOW] native wechat task poll retry task_id=%s err=%s",
+                task_id,
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            await asyncio.sleep(1.0)
+            continue
         current = detail.get("task") if isinstance(detail.get("task"), dict) else task
         status = str(current.get("status") or "").strip().lower()
         if status in terminal:
@@ -8767,11 +9574,23 @@ async def _wait_local_bestseller_video(
 
     deadline = asyncio.get_running_loop().time() + max(30.0, float(timeout_seconds))
     while True:
-        job = await _get_local_api_json(
-            poll_path + ("&" if "?" in poll_path else "?") + "compact=false",
-            headers=headers,
-            timeout_seconds=180.0,
-        )
+        try:
+            job = await _get_local_api_json(
+                poll_path + ("&" if "?" in poll_path else "?") + "compact=false",
+                headers=headers,
+                timeout_seconds=180.0,
+            )
+        except Exception as exc:
+            if not _is_transient_poll_error(exc):
+                raise
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError("同城爆款视频生成超时，查询进度时连接中断") from exc
+            logger.warning(
+                "[H5-WORKFLOW] local bestseller poll retry err=%s",
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            await asyncio.sleep(max(0.1, float(poll_interval_seconds)))
+            continue
         status = str(job.get("status") or "").strip().lower()
         if status == "failed":
             raise RuntimeError(str(job.get("error") or job.get("post_error") or "同城爆款视频生成失败")[:500])
@@ -8791,6 +9610,13 @@ async def _wait_local_bestseller_video(
         if asyncio.get_running_loop().time() >= deadline:
             raise RuntimeError("同城爆款视频生成超时，未取得最终成片")
         await asyncio.sleep(max(0.1, float(poll_interval_seconds)))
+
+
+def _is_transient_poll_error(exc: BaseException) -> bool:
+    """Status polls are safe to repeat. A create/submit call is not."""
+    if isinstance(exc, httpx.TransportError):
+        return True
+    return isinstance(exc, RuntimeError) and "不可达" in str(exc or "")
 
 
 async def _post_cloud_api_json(
@@ -8918,6 +9744,155 @@ async def _get_cloud_api_json(
     return data if isinstance(data, dict) else {"result": data}
 
 
+_WECHAT_CONTACT_POOL_BASE_PATH = "/api/wechat-contact-pool"
+# 个微自动加好友节点的目标来源：从服务端账号级上报池领取
+_WECHAT_CONTACT_POOL_SOURCE_MODES = {
+    "server_reported_pool",
+    "server_pool",
+    "reported_pool",
+    "reported_contacts",
+    "wechat_contact_pool",
+}
+_WECHAT_CONTACT_POOL_DEFAULT_LIMIT = 50
+_WECHAT_CONTACT_POOL_MAX_LIMIT = 200
+
+
+def _douyin_wechat_contact_entries(result: Any) -> List[Dict[str, str]]:
+    """抖音私信接管结果里「客户发来的号码」明细，用于上报服务端账号池。"""
+    payload = result if isinstance(result, dict) else {}
+    entries: List[Dict[str, str]] = []
+    raw = payload.get("wechat_contact_entries")
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value") or "").strip()
+            if not value:
+                continue
+            entries.append(
+                {
+                    "value": value,
+                    "kind": str(item.get("kind") or "mobile").strip() or "mobile",
+                    "username": str(item.get("username") or "").strip(),
+                    "conversation_id": str(item.get("conversation_id") or "").strip(),
+                }
+            )
+    if entries:
+        return entries
+    # 老版本执行结果没有明细字段，至少把号码带上，别丢掉这批线索。
+    return [
+        {"value": str(value).strip(), "kind": "mobile", "username": "", "conversation_id": ""}
+        for value in (payload.get("extracted_phone_numbers") or [])
+        if str(value).strip()
+    ]
+
+
+async def _report_douyin_wechat_contacts_to_cloud(
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    *,
+    result: Any,
+    account_id: Any = 0,
+    account_label: str = "",
+) -> Dict[str, Any]:
+    """把抖音私信识别到的号码上报到账号级池子（节点未勾选「自动提交好友申请」时走这里）。"""
+    entries = _douyin_wechat_contact_entries(result)
+    label = str(account_label or "").strip()
+    if not label and account_id:
+        label = f"抖音账号 {account_id}"
+    if not entries:
+        return {"ok": True, "skipped": True, "reason": "no_contact", "count": 0, "pending": 0}
+    if cloud is None or not base:
+        logger.warning("[wechat-contact-pool] report skipped: cloud api connection missing")
+        return {"ok": False, "reason": "cloud_missing", "count": len(entries), "pending": 0}
+    try:
+        data = await _post_cloud_api_json(
+            f"{_WECHAT_CONTACT_POOL_BASE_PATH}/report",
+            {"platform": "douyin", "account_label": label, "items": entries},
+            cloud=cloud,
+            base=base,
+            headers=headers,
+            timeout_seconds=45.0,
+        )
+    except Exception as exc:
+        logger.warning("[wechat-contact-pool] report failed account=%s: %s", account_id, exc)
+        return {"ok": False, "reason": str(exc)[:300], "count": len(entries), "pending": 0}
+    return {
+        "ok": True,
+        "count": len(entries),
+        "created": _safe_int(data.get("created")),
+        "refreshed": _safe_int(data.get("refreshed")),
+        "skipped": _safe_int(data.get("skipped")),
+        "pending": _safe_int(data.get("pending")),
+        "account_label": label,
+    }
+
+
+async def _claim_reported_wechat_contacts(
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    *,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """从账号级池子领取待添加的号码（领取即占用，同账号其它机器不会重复领同一条）。"""
+    cap = max(1, min(_safe_int(limit) or _WECHAT_CONTACT_POOL_DEFAULT_LIMIT, _WECHAT_CONTACT_POOL_MAX_LIMIT))
+    data = await _post_cloud_api_json(
+        f"{_WECHAT_CONTACT_POOL_BASE_PATH}/claim",
+        {"platform": "douyin", "limit": cap},
+        cloud=cloud,
+        base=base,
+        headers=headers,
+        timeout_seconds=45.0,
+    )
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    claimed: List[Dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        value = str(item.get("value") or "").strip()
+        if not value:
+            continue
+        claimed.append(
+            {
+                "value": value,
+                "kind": str(item.get("kind") or "mobile").strip() or "mobile",
+                "username": str(item.get("username") or "").strip(),
+                "account_label": str(item.get("account_label") or "").strip(),
+            }
+        )
+    return claimed
+
+
+async def _ack_reported_wechat_contacts(
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    *,
+    added: List[str],
+    failed: List[str],
+    error: str = "",
+) -> Dict[str, Any]:
+    """回执：提交成功的标为已加，失败的放回池子让同账号的机器再来。"""
+    if not added and not failed:
+        return {"ok": True, "added": 0, "released": 0}
+    if cloud is None or not base:
+        return {"ok": False, "reason": "cloud_missing"}
+    try:
+        return await _post_cloud_api_json(
+            f"{_WECHAT_CONTACT_POOL_BASE_PATH}/ack",
+            {"platform": "douyin", "added": added, "failed": failed, "error": str(error or "")[:500]},
+            cloud=cloud,
+            base=base,
+            headers=headers,
+            timeout_seconds=45.0,
+        )
+    except Exception as exc:
+        logger.warning("[wechat-contact-pool] ack failed: %s", exc)
+        return {"ok": False, "reason": str(exc)[:300]}
+
+
 def _parse_run_time(value: Any) -> Optional[datetime]:
     text = str(value or "").strip()
     if not text:
@@ -9009,6 +9984,22 @@ def _preferred_parent_material_media_type(params: Dict[str, Any]) -> str:
     return _normalize_parent_material_media_type(raw)
 
 
+_PARENT_MATERIAL_SKIP_KEYS = {
+    "template",
+    "requirements",
+    "digital_human_template",
+    "digital_human_resources",
+    "avatars",
+    "profile_photo_url",
+    "basic_profile",
+    "params",
+    "input_refs",
+    "request",
+    "prompt",
+    "h5_context",
+    "memory_docs",
+}
+
 def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Dict[str, Any]:
     video_ids: List[str] = []
     image_ids: List[str] = []
@@ -9017,15 +10008,39 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
     image_urls: List[str] = []
     other_urls: List[str] = []
     seen: set[str] = set()
-    skip_keys = {"params", "input_refs", "request", "prompt", "requirements", "h5_context"}
-    video_id_keys = {"video_asset_id", "final_video_asset_id", "video_material_id"}
-    image_id_keys = {"image_asset_id", "cover_asset_id", "final_image_asset_id", "image_material_id"}
-    generic_id_keys = {"asset_id", "final_asset_id", "material_asset_id", "saved_asset_id"}
-    video_url_keys = {"video_url", "video_uri", "video_file_url"}
-    image_url_keys = {"image_url", "cover_url", "image_file_url"}
-    generic_url_keys = {"url", "file_url", "public_url", "media_url"}
+    # 模板/资料类资源不是发布素材：数字人模板封面、形象演示视频、头像以前会被
+    # 递归抓成朋友圈配图（线上事故），这里整棵子树跳过。
+    skip_keys = {
+        "params",
+        "input_refs",
+        "request",
+        "prompt",
+        "requirements",
+        "h5_context",
+        "template",
+        "digital_human_template",
+        "digital_human_resources",
+        "avatars",
+        "basic_profile",
+        "profile_photo_url",
+        "memory_docs",
+    }
+    # 只认本节点产物的字段：以前把 cover_url / *_material_* / file_url 这类
+    # 也当素材，结果把模板封面、形象演示视频当成了发布素材（线上事故）。
+    video_id_keys = {"video_asset_id", "final_video_asset_id"}
+    image_id_keys = {"image_asset_id", "image_asset_ids", "final_image_asset_id"}
+    generic_id_keys = {"asset_id", "final_asset_id"}
+    video_url_keys = {"video_url", "video_uri"}
+    image_url_keys = {"image_url", "image_urls"}
+    generic_url_keys = {"url", "public_url"}
 
     def add(value: Any, kind: str, is_url: bool) -> None:
+        # url/id 常常是列表（image_urls/image_asset_ids）：逐项解析。
+        # 以前直接 str(list)，于是拿到的是 "['a1']" 这种垃圾素材（线上踩过）。
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                add(item, kind, is_url)
+            return
         text = str(value or "").strip()
         if not text or text in seen:
             return
@@ -9049,7 +10064,10 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
             item_kind = ""
         for raw_key, raw_value in value.items():
             key = str(raw_key or "").strip().lower()
-            if key in skip_keys:
+            # 参考图只给生图用，不是发布素材。reference_image_urls /
+            # reference_asset_ids / resume_reference_image_urls 整段跳过，
+            # 不能递归进去，否则砂锅菜这类参考图会被收进朋友圈。
+            if key in skip_keys or "reference" in key:
                 continue
             kind = "video" if key in video_id_keys or key in video_url_keys else "image" if key in image_id_keys or key in image_url_keys else item_kind
             if key in video_id_keys or key in image_id_keys or key in generic_id_keys:
@@ -9285,6 +10303,25 @@ async def _resolve_parent_workflow_material(
 _MAINLAND_MOBILE_RE = re.compile(r"(?<!\d)(?:(?:\+?86)[\s-]*)?(1[3-9](?:[\s-]?\d){9})(?!\d)")
 
 
+def _extract_douyin_wechat_ids_from_result(value: Any, *, limit: int = 100) -> List[str]:
+    """从抖音私信接管结果里取微信号（结果字段 + 上报条目两种形态）。"""
+    payload = value if isinstance(value, dict) else {}
+    found: List[str] = []
+
+    def add(raw: Any) -> None:
+        text = str(raw or "").strip()
+        if not text or text in found or len(found) >= limit:
+            return
+        found.append(text)
+
+    for item in payload.get("extracted_wechat_ids") or []:
+        add(item)
+    for entry in payload.get("wechat_contact_entries") or []:
+        if isinstance(entry, dict) and str(entry.get("kind") or "").strip() == "wechat_id":
+            add(entry.get("value"))
+    return found
+
+
 def _extract_mainland_mobile_numbers(value: Any, *, limit: int = 100) -> List[str]:
     texts: List[str] = []
 
@@ -9430,6 +10467,56 @@ def _workflow_script_candidate(value: Any, limit: int = 700) -> str:
     return text[:limit].strip()
 
 
+_SHANJIAN_ORAL_SOURCES: Dict[str, Dict[str, str]] = {
+    "ip_daily_industry_hot_oral": {
+        "task": "industry_hot_oral",
+        "path": "/api/ip-content/generate/industry-hot-oral",
+        "label": "行业热门口播文案",
+        "event": "正在调用 IP 日更生成行业热门口播文案",
+        "done_event": "行业热门口播文案已生成，正在用于数字人视频",
+        "sync_flag": "industry_oral_sync_before",
+    },
+    "ip_daily_professional_ip_oral": {
+        "task": "professional_ip_oral",
+        "path": "/api/ip-content/generate/professional-ip-oral",
+        "label": "专业 IP 口播文案",
+        "event": "正在调用 IP 日更生成专业 IP 口播文案",
+        "done_event": "专业 IP 口播文案已生成，正在用于数字人视频",
+        "sync_flag": "professional_ip_oral_sync_before",
+    },
+}
+_SHANJIAN_DEFAULT_ORAL_SOURCE = "ip_daily_industry_hot_oral"
+
+
+def shanjian_oral_sources(source: Dict[str, Any]) -> List[str]:
+    """数字人节点可选的口播来源列表（支持多选：行业口播 / IP 口播）。"""
+    raw = (source or {}).get("script_sources")
+    values: List[str] = []
+    if isinstance(raw, list):
+        values = [str(item or "").strip() for item in raw]
+    elif str(raw or "").strip():
+        values = [str(raw).strip()]
+    legacy = _workflow_text((source or {}).get("script_source"), 64)
+    if legacy:
+        values.append(legacy)
+    ordered = [value for value in values if value in _SHANJIAN_ORAL_SOURCES]
+    return list(dict.fromkeys(ordered)) or [_SHANJIAN_DEFAULT_ORAL_SOURCE]
+
+
+def shanjian_oral_source(source: Dict[str, Any]) -> str:
+    """本次运行用哪种口播：多选时每次随机挑一个（仍然取该类第一条）。"""
+    sources = shanjian_oral_sources(source)
+    return random.choice(sources) if len(sources) > 1 else sources[0]
+
+
+def shanjian_uses_ip_daily_script(source: Dict[str, Any]) -> bool:
+    """只有明确选了口播来源才走 IP 日更生成；空值保持旧行为。"""
+    raw = (source or {}).get("script_sources")
+    if isinstance(raw, list) and raw:
+        return any(str(item or "").strip() in _SHANJIAN_ORAL_SOURCES for item in raw)
+    return _workflow_text((source or {}).get("script_source"), 64) in _SHANJIAN_ORAL_SOURCES
+
+
 def _provided_shanjian_workflow_script(source: Dict[str, Any]) -> str:
     explicit = (
         _workflow_script_candidate(source.get("script"))
@@ -9437,7 +10524,7 @@ def _provided_shanjian_workflow_script(source: Dict[str, Any]) -> str:
     )
     if explicit:
         return explicit
-    if _workflow_text(source.get("script_source"), 64) == "ip_daily_industry_hot_oral":
+    if shanjian_uses_ip_daily_script(source):
         return ""
     return _workflow_script_candidate(source.get("prompt"))
 
@@ -9480,6 +10567,58 @@ async def _workflow_event(
     await _post_task_event(cloud, base, headers, run_id, "thinking", {"text": text})
 
 
+# 数字人节点前置"口播文案"的等待上限。服务端那条链（ip_content → sutui 代理）
+# 现在有 1500s 的总预算，这里给 1800s，保证"服务端还在跑"时客户端不会先放弃
+# ——之前的 600s 会让服务端白跑 20 分钟、文案生成出来也没人要。
+_SHANJIAN_SCRIPT_TIMEOUT_SECONDS = 1800.0
+_SHANJIAN_SCRIPT_PROGRESS_INTERVAL_SECONDS = 60.0
+
+
+async def _await_cloud_json_with_progress(
+    call,
+    *,
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+    run_id: str,
+    label: str,
+    timeout_seconds: float = _SHANJIAN_SCRIPT_TIMEOUT_SECONDS,
+    interval_seconds: float = _SHANJIAN_SCRIPT_PROGRESS_INTERVAL_SECONDS,
+):
+    """等一个可能很慢的云端调用，期间定期汇报进度。
+
+    上游模型排队时文案生成可能要十几分钟；期间必须让用户看到"还在跑"，
+    而不是界面静止，最后只收到一句 client workflow failed。
+    """
+    task = asyncio.ensure_future(call())
+    waited = 0.0
+    try:
+        while True:
+            done, _pending = await asyncio.wait({task}, timeout=interval_seconds)
+            if done:
+                return task.result()
+            waited += interval_seconds
+            if waited + interval_seconds > max(interval_seconds, timeout_seconds):
+                break
+            try:
+                await _workflow_event(
+                    cloud,
+                    base,
+                    headers,
+                    run_id,
+                    f"{label}生成中：上游模型排队，已等待 {int(waited // 60)} 分钟…",
+                )
+            except Exception:
+                pass
+        raise RuntimeError(
+            f"{label}等待超时（已等 {int(timeout_seconds // 60)} 分钟，上游模型排队中）"
+            "。本次节点先结束，稍后重试即可。"
+        )
+    finally:
+        if not task.done():
+            task.cancel()
+
+
 async def _generate_shanjian_workflow_script(
     *,
     source: Dict[str, Any],
@@ -9497,8 +10636,12 @@ async def _generate_shanjian_workflow_script(
     )
     title = _workflow_text(source.get("title") or label or "数字人口播", 80)
     language = _workflow_text(source.get("language") or source.get("target_language") or "zh-CN", 64)
+    oral_source = shanjian_oral_source(source)
+    oral = _SHANJIAN_ORAL_SOURCES[oral_source]
     if cloud is None or not base:
-        raise RuntimeError("数字人生成缺少云端连接，无法调用 IP 日更生成行业口播文案")
+        raise RuntimeError(
+            "数字人生成缺少云端连接，无法调用 IP 日更生成" + oral["label"]
+        )
 
     requirements = source.get("requirements") if isinstance(source.get("requirements"), dict) else {}
     keyword_ids = _workflow_int_ids(source.get("keyword_ids"), 20)
@@ -9508,7 +10651,7 @@ async def _generate_shanjian_workflow_script(
     missing: List[str] = []
     if not _workflow_has_content(requirements):
         missing.append("IP人设定位资料调查")
-    if not keywords:
+    if oral["task"] == "industry_hot_oral" and not keywords:
         missing.append("当前启用模板的行业关键词")
     if not (memory_doc_ids or memory_docs):
         missing.append("当前启用模板的记忆文件")
@@ -9518,30 +10661,47 @@ async def _generate_shanjian_workflow_script(
     persona_json = json.dumps(requirements, ensure_ascii=False, separators=(",", ":"))
     extra_requirements = "\n".join(
         [
-            "本次只生成 1 条行业热门口播文案，并直接作为数字人视频的完整口播脚本。",
+            f"本次只生成 1 条{oral['label']}，并直接作为数字人视频的完整口播脚本。",
             f"输出语种必须是：{_workflow_language_label(language)}。",
             "目标口播时长 20 到 25 秒；中文控制在 90 到 120 字且不得超过 120 字，英文控制在 45 到 60 词且不得超过 60 词，其他语种按同等时长控制。",
             "文案必须自然、完整、可直接口播，不写镜头指令、括号说明或虚构数据，不要为了凑长度重复表达。",
             f"IP人设资料：{persona_json[:2200]}",
         ]
     )[:4000]
-    await _workflow_event(cloud, base, headers, run_id, "正在调用 IP 日更生成行业热门口播文案")
-    generated = await _post_cloud_api_json(
-        "/api/ip-content/generate/industry-hot-oral",
-        {
-            "keyword_ids": keyword_ids,
-            "keyword_texts": keywords,
-            "memory_docs": memory_docs,
-            "extra_requirements": extra_requirements,
-            "count": 1,
-            "sync_before": bool(source.get("industry_oral_sync_before", False)),
-            "group_id": run_id,
-        },
-        cloud=cloud,
-        base=base,
-        headers=headers,
-        timeout_seconds=600.0,
-    )
+    await _workflow_event(cloud, base, headers, run_id, oral["event"])
+    try:
+        generated = await _await_cloud_json_with_progress(
+            lambda: _post_cloud_api_json(
+                oral["path"],
+                {
+                    **(
+                        {
+                            "competitor_ids": _workflow_int_ids(
+                                source.get("competitor_ids") or source.get("competitor_account_ids"), 20
+                            )
+                        }
+                        if oral["task"] == "professional_ip_oral"
+                        else {"keyword_ids": keyword_ids, "keyword_texts": keywords}
+                    ),
+                    "memory_docs": memory_docs,
+                    "extra_requirements": extra_requirements,
+                    "count": 1,
+                    "sync_before": bool(source.get(oral["sync_flag"], False)),
+                    "group_id": run_id,
+                },
+                cloud=cloud,
+                base=base,
+                headers=headers,
+                timeout_seconds=_SHANJIAN_SCRIPT_TIMEOUT_SECONDS,
+            ),
+            cloud=cloud,
+            base=base,
+            headers=headers,
+            run_id=run_id,
+            label="数字人口播文案",
+        )
+    except Exception as exc:
+        raise RuntimeError(f"数字人口播文案生成失败：{exc}") from exc
     records = generated.get("records") if isinstance(generated.get("records"), list) else []
     drafts = generated.get("drafts") if isinstance(generated.get("drafts"), list) else []
     selected: Dict[str, Any] = {}
@@ -9557,8 +10717,8 @@ async def _generate_shanjian_workflow_script(
             script = candidate_script
             break
     if not script:
-        raise RuntimeError("IP 日更未返回有效的行业口播文案，数字人任务未继续执行")
-    await _workflow_event(cloud, base, headers, run_id, "行业热门口播文案已生成，正在用于数字人视频")
+        raise RuntimeError("日更未返回有效的" + oral["label"] + "，数字人任务未继续执行")
+    await _workflow_event(cloud, base, headers, run_id, oral["done_event"])
     return {
         "title": _workflow_text(selected.get("title") or title or "数字人口播", 80),
         "script": script,
@@ -9567,6 +10727,8 @@ async def _generate_shanjian_workflow_script(
         "ip_daily_group_id": _workflow_text(generated.get("group_id"), 128),
         "ip_daily_record_id": _workflow_text(selected.get("record_id") or selected.get("id"), 128),
         "ip_daily_record": selected,
+        "ip_daily_task": oral["task"],
+        "oral_source": oral_source,
     }
 
 
@@ -9662,6 +10824,37 @@ def _select_daily_voice(
     return dict(normalized[(local_day.toordinal() + offset) % len(normalized)])
 
 
+def _resolve_workflow_voice(
+    source: Dict[str, Any],
+    *,
+    local_day: date,
+    rotation_key: str,
+    sequence_slot: Optional[int] = None,
+) -> Dict[str, Any]:
+    """以模板为准：模板指定了声音就用指定的；模板给了多个候选且要求轮换才轮换。"""
+    fixed_voice = _workflow_text(
+        source.get("voice") or source.get("speaker_id") or source.get("speakerId"), 128
+    )
+    candidates = _normalize_voice_candidates(source.get("voice_candidates"))
+    selection_mode = _workflow_text(source.get("voice_selection_mode"), 32)
+    rotate = len(candidates) > 1 and selection_mode in {"daily_round_robin", "daily_sequence"}
+    if fixed_voice and not rotate:
+        return {"voice": fixed_voice, "selection_mode": "fixed", "selection_source": "template"}
+    if not candidates:
+        if fixed_voice:
+            return {"voice": fixed_voice, "selection_mode": "fixed", "selection_source": "template"}
+        return {}
+    selected = _select_daily_voice(
+        candidates,
+        local_day=local_day,
+        rotation_key=rotation_key,
+        sequence_slot=sequence_slot,
+    )
+    selected["selection_mode"] = "daily_sequence" if sequence_slot is not None else "daily_round_robin"
+    selected["selection_source"] = "template"
+    return selected
+
+
 def _digital_human_rotation_context(
     source: Dict[str, Any],
     current_item: Optional[Dict[str, Any]],
@@ -9707,18 +10900,18 @@ async def _resolve_workflow_virtualman(
     selection_mode = _workflow_text(source.get("virtualman_selection_mode"), 32)
     rotation_enabled = selection_mode != "fixed" and (
         selection_mode in {"daily_round_robin", "daily_sequence"}
-        or _workflow_text(source.get("script_source"), 64) == "ip_daily_industry_hot_oral"
+        or shanjian_uses_ip_daily_script(source)
         or bool(context.get("workflow_node_id"))
     )
     if not rotation_enabled:
         return {"virtualman_id": fixed_id} if fixed_id else {}
 
-    # Refresh the server-side profile list before each generated workflow.
-    # A successful response is authoritative (including an empty list), while
-    # transient network failures retain the task snapshot as a fallback.
+    # 以模板为准：模板里带了候选形象时只用模板给定的形象，不再用服务端全量形象
+    # 列表覆盖（那会把"指定了某个形象"的节点轮换成账号里的另一个形象）。
     candidates = _normalize_virtualman_candidates(source.get("virtualman_candidates"))
+    template_candidates = list(candidates)
     profile_refresh_succeeded = False
-    if cloud is not None and base:
+    if not candidates and cloud is not None and base:
         try:
             response = await cloud.get(
                 f"{base}/api/shanjian-digital-human/profiles",
@@ -9733,6 +10926,24 @@ async def _resolve_workflow_virtualman(
             logger.warning("[H5-DIGITAL-HUMAN] profile refresh failed, using task snapshot: %s", exc)
 
     if candidates:
+        # 以模板为准：模板给了候选形象时只在这几个形象里取——只给一个（或给了明确
+        # 的 virtualman_id）就是固定形象，不参与日期/槽位轮换；模板完全没给候选时才
+        # 保持原来的"按账号当前可用形象轮换"行为。
+        template_rotation = (
+            bool(template_candidates)
+            and len(candidates) > 1
+            and selection_mode in {"daily_round_robin", "daily_sequence"}
+        )
+        if template_candidates and not template_rotation:
+            chosen = dict(candidates[0])
+            if fixed_id:
+                for item in candidates:
+                    if _workflow_text(item.get("virtualman_id"), 128) == fixed_id:
+                        chosen = dict(item)
+                        break
+            chosen["selection_mode"] = "fixed"
+            chosen["selection_source"] = "template"
+            return chosen
         local_day, rotation_key = _digital_human_rotation_context(source, current_item)
         sequence_slot = (
             max(0, _safe_int(source.get("virtualman_rotation_slot")))
@@ -9748,10 +10959,253 @@ async def _resolve_workflow_virtualman(
         selected["selection_mode"] = "daily_sequence" if sequence_slot is not None else "daily_round_robin"
         selected["selection_slot"] = sequence_slot
         selected["selection_date"] = local_day.isoformat()
+        selected["selection_source"] = "template" if template_candidates else "account_rotation"
         return selected
     if profile_refresh_succeeded:
         return {}
     return {"virtualman_id": fixed_id} if fixed_id else {}
+
+
+def _shanjian_template_group_names(source: Dict[str, Any]) -> List[str]:
+    """Collect 数字人素材分组 names off a workflow node."""
+    names: List[str] = []
+    for key in ("digital_human_asset_groups", "asset_groups", "template_asset_groups", "material_groups"):
+        raw = source.get(key)
+        values = raw if isinstance(raw, list) else ([raw] if isinstance(raw, str) else [])
+        for item in values:
+            for part in str(item or "").replace("，", ",").split(","):
+                name = part.strip()[:40]
+                if name and name not in names:
+                    names.append(name)
+    return names[:20]
+
+
+async def _fetch_active_personal_template_groups(
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    headers: Dict[str, str],
+) -> List[str]:
+    """读「数字人素材分组」，按云端同一规则解析模板行。
+
+    云端 `_default_digital_human_template` 的解析顺序是：
+      最新的「个人默认模板」行 -> 它 meta 里的 current_template_id -> 真正带
+      digital_human_template / digital_human_asset_groups 的那一行。
+    2026-09-25 用户 54 的槽位行（个人默认模板）自己没有分组字段，分组挂在
+    current_template_id 指向的那一行上；只读外层就会拿到空分组，本地预处理被跳过。
+    """
+    if cloud is None or not base:
+        return []
+    timeout = httpx.Timeout(30.0, connect=10.0, read=30.0, write=15.0, pool=10.0)
+
+    def _payload_item(payload: Any) -> Dict[str, Any]:
+        if isinstance(payload, dict) and isinstance(payload.get("item"), dict):
+            return payload.get("item") or {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _groups_of(item: Any) -> List[str]:
+        if not isinstance(item, dict):
+            return []
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        return _shanjian_template_group_names(
+            {"digital_human_asset_groups": meta.get("digital_human_asset_groups")}
+        )
+
+    def _current_template_id(item: Any) -> int:
+        if not isinstance(item, dict):
+            return 0
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        raw = meta.get("current_template_id") or meta.get("template_id")
+        try:
+            return int(raw or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    try:
+        resp = await cloud.get(
+            f"{base}/api/ip-content/personal-default",
+            headers=headers,
+            timeout=timeout,
+        )
+        personal = _payload_item(resp.json() if resp.content else {})
+    except Exception as exc:
+        logger.warning(
+            "[H5-WORKFLOW] read personal default template failed err=%s",
+            f"{type(exc).__name__}: {exc}"[:200],
+        )
+        personal = {}
+
+    personal_groups = _groups_of(personal)
+    if personal_groups:
+        logger.info("[H5-WORKFLOW] template groups from personal default groups=%s", personal_groups)
+        return personal_groups
+
+    try:
+        resp = await cloud.get(
+            f"{base}/api/ip-content/schedule-templates",
+            headers=headers,
+            timeout=timeout,
+        )
+        listed = resp.json() if resp.content else {}
+    except Exception as exc:
+        logger.warning(
+            "[H5-WORKFLOW] read personal templates failed err=%s",
+            f"{type(exc).__name__}: {exc}"[:200],
+        )
+        return []
+    items = listed.get("items") if isinstance(listed, dict) else None
+    if not isinstance(items, list):
+        return []
+
+    current_id = _current_template_id(personal)
+    if current_id:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                item_id = int(item.get("id") or 0)
+            except (TypeError, ValueError):
+                item_id = 0
+            if item_id != current_id:
+                continue
+            groups = _groups_of(item)
+            if groups:
+                logger.info(
+                    "[H5-WORKFLOW] template groups from current_template_id=%s name=%s groups=%s",
+                    current_id,
+                    str(item.get("name") or "")[:24],
+                    groups,
+                )
+                return groups
+            break
+
+    preferred: Optional[Dict[str, Any]] = None
+    fallback: Optional[Dict[str, Any]] = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        groups = _groups_of(item)
+        if not groups:
+            continue
+        meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+        entry = {"id": item.get("id"), "name": item.get("name"), "groups": groups}
+        if bool(meta.get("is_personal_default")):
+            if preferred is None:
+                preferred = entry
+        elif fallback is None:
+            fallback = entry
+    best = preferred or fallback
+    if best is None:
+        logger.info("[H5-WORKFLOW] no template carries digital_human_asset_groups")
+        return []
+    logger.info(
+        "[H5-WORKFLOW] template groups from template id=%s name=%s groups=%s",
+        best.get("id"),
+        str(best.get("name") or "")[:24],
+        best.get("groups"),
+    )
+    return list(best.get("groups") or [])
+
+async def _prepare_shanjian_template_materials(
+    source: Dict[str, Any],
+    *,
+    headers: Dict[str, str],
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    run_id: str = "",
+) -> Dict[str, Any]:
+    """Shrink oversized template materials locally before 闪剪 renders them.
+
+    闪剪 rejects material videos/images whose longest edge exceeds 2000, and the
+    library/group path never validated that. The copy is created on this machine
+    (no server-side transcode) and takes over the group membership.
+    """
+    use_template = _workflow_flag(source.get("use_template"), False) if "use_template" in source else False
+    template_mode = _workflow_text(source.get("template_mode"), 64).lower()
+    if not use_template and not template_mode:
+        logger.info("[H5-WORKFLOW] shanjian material prep skipped reason=no_template run_id=%s", run_id)
+        return {"ok": True, "skipped": True, "reason": "no_template"}
+    groups = _shanjian_template_group_names(source)
+    if not groups and template_mode in {
+        "active_personal_template",
+        "personal_current",
+        "personal_default",
+        "current",
+    }:
+        groups = await _fetch_active_personal_template_groups(cloud, base, headers)
+    if not groups:
+        logger.info("[H5-WORKFLOW] shanjian material prep skipped reason=no_groups run_id=%s", run_id)
+        return {"ok": True, "skipped": True, "reason": "no_groups"}
+    jwt_token, installation_id = _auth_context()
+    uid = _safe_int(_decode_jwt_sub(jwt_token))
+    if uid <= 0:
+        logger.warning("[H5-WORKFLOW] shanjian material prep skipped reason=no_user run_id=%s", run_id)
+        return {"ok": True, "skipped": True, "reason": "no_user"}
+    from .assets import SHANJIAN_MATERIAL_MAX_EDGE, ensure_shanjian_compliant_copy
+
+    header_pairs = [
+        (str(key).lower().encode("latin-1", "ignore"), str(value).encode("latin-1", "ignore"))
+        for key, value in (headers or {}).items()
+    ]
+    if installation_id and not any(key == b"x-installation-id" for key, _value in header_pairs):
+        header_pairs.append((b"x-installation-id", str(installation_id).encode("latin-1", "ignore")))
+    local_request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/assets/shanjian-prepare",
+            "headers": header_pairs,
+        }
+    )
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Asset)
+            .filter(Asset.user_id == uid, Asset.media_type.in_(("video", "image")))
+            .all()
+        )
+        wanted = set(groups)
+        logger.info(
+            "[H5-WORKFLOW] shanjian material prep run_id=%s groups=%s local_assets=%s",
+            run_id,
+            groups,
+            len(rows),
+        )
+        targets = [
+            row
+            for row in rows
+            if wanted.intersection(_asset_creative_candidate_groups(getattr(row, "meta", None)))
+        ]
+        converted: List[Dict[str, Any]] = []
+        failed: List[Dict[str, Any]] = []
+        for row in targets:
+            try:
+                item = await ensure_shanjian_compliant_copy(
+                    row,
+                    request=local_request,
+                    db=db,
+                    max_edge=SHANJIAN_MATERIAL_MAX_EDGE,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[H5-WORKFLOW] shanjian material prep failed run_id=%s asset_id=%s err=%s",
+                    run_id,
+                    row.asset_id,
+                    f"{type(exc).__name__}: {exc}"[:240],
+                )
+                failed.append({"asset_id": row.asset_id, "error": f"{type(exc).__name__}: {exc}"[:240]})
+                continue
+            if item.get("action") == "converted":
+                converted.append(item)
+        return {
+            "ok": True,
+            "groups": groups,
+            "candidates": len(targets),
+            "converted": len(converted),
+            "failed": failed,
+            "items": converted,
+        }
+    finally:
+        db.close()
 
 
 def _shanjian_video_create_payload(
@@ -9844,12 +11298,11 @@ async def _run_shanjian_digital_human_workflow(
     audio_asset_id = _workflow_text(source.get("audio_asset_id"), 128)
     audio_mode = drive_mode == "audio" or bool(audio_url or audio_asset_id)
     voice = _workflow_text(source.get("voice") or source.get("speaker_id") or source.get("speakerId"), 128)
-    voice_candidates = _normalize_voice_candidates(source.get("voice_candidates"))
-    if not audio_mode and voice_candidates:
+    if not audio_mode:
         local_day, rotation_key = _digital_human_rotation_context(source, current_item)
         sequence_slot = max(0, _safe_int(source.get("virtualman_rotation_slot"))) if "virtualman_rotation_slot" in source else None
-        selected_voice = _select_daily_voice(
-            voice_candidates,
+        selected_voice = _resolve_workflow_voice(
+            source,
             local_day=local_day,
             rotation_key=rotation_key,
             sequence_slot=sequence_slot,
@@ -9940,6 +11393,35 @@ async def _run_shanjian_digital_human_workflow(
         await _workflow_event(cloud, base, headers, run_id, "正在使用所选音频驱动数字人2.0")
 
     await _workflow_event(cloud, base, headers, run_id, "正在提交数字人2.0视频任务")
+    try:
+        prepared = await _prepare_shanjian_template_materials(
+            source,
+            headers=headers,
+            cloud=cloud,
+            base=base,
+            run_id=run_id,
+        )
+        if prepared.get("converted"):
+            logger.info(
+                "[H5-WORKFLOW] shanjian material prep run_id=%s groups=%s converted=%s candidates=%s",
+                run_id,
+                prepared.get("groups"),
+                prepared.get("converted"),
+                prepared.get("candidates"),
+            )
+            await _workflow_event(
+                cloud,
+                base,
+                headers,
+                run_id,
+                f"已在本机把 {prepared['converted']} 个超出分辨率上限的素材压缩成合规副本，再交给闪剪",
+            )
+    except Exception as exc:
+        logger.warning(
+            "[H5-WORKFLOW] shanjian material prep error run_id=%s err=%s",
+            run_id,
+            f"{type(exc).__name__}: {exc}"[:240],
+        )
     create_data = await _post_cloud_api_json(
         "/api/shanjian-digital-human/video/create",
         _shanjian_video_create_payload(
@@ -9975,14 +11457,43 @@ async def _run_shanjian_digital_human_workflow(
             body["record_id"] = record_id
         if task_id:
             body["task_id"] = task_id
-        last = await _post_cloud_api_json(
-            "/api/shanjian-digital-human/video/task",
-            body,
-            cloud=cloud,
-            base=base,
-            headers=headers,
-            timeout_seconds=180.0,
-        )
+        try:
+            last = await _post_cloud_api_json(
+                "/api/shanjian-digital-human/video/task",
+                body,
+                cloud=cloud,
+                base=base,
+                headers=headers,
+                timeout_seconds=180.0,
+            )
+        except Exception as exc:
+            if not _is_transient_poll_error(exc):
+                raise
+            logger.warning(
+                "[H5-WORKFLOW] digital human status poll retry task_id=%s record_id=%s waited=%s err=%s",
+                task_id or "-",
+                record_id or 0,
+                waited,
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            if waited >= poll_timeout:
+                last = {
+                    **last,
+                    "status": "processing",
+                    "poll_error": f"{type(exc).__name__}: {exc}"[:240],
+                }
+                break
+            await asyncio.sleep(interval)
+            waited += interval
+            if waited % 60 < interval:
+                await _workflow_event(
+                    cloud,
+                    base,
+                    headers,
+                    run_id,
+                    f"数字人2.0查询进度时云端暂时连不上，已等待 {waited} 秒，继续重试",
+                )
+            continue
         status = _workflow_text(last.get("status"), 64).lower()
         if status in {"succeed", "success", "completed", "complete", "done", "finished"}:
             record = last.get("record") if isinstance(last.get("record"), dict) else record
@@ -10088,6 +11599,16 @@ def _takeover_monotonic() -> float:
     return asyncio.get_running_loop().time()
 
 
+def _native_wechat_driver_backoff_seconds(consecutive_failures: int) -> float:
+    """Pause after a driver exception without ending an all-day takeover.
+
+    30s, 60s, 120s, 240s, then 300s. Three quick failures must not consume
+    the rest of a 00:00-23:59 window when wxauto only blipped.
+    """
+    step = max(0, int(consecutive_failures) - 1)
+    return float(min(300.0, 30.0 * (2 ** min(step, 4))))
+
+
 async def _run_native_wechat_takeover_session(
     *,
     account_id: str,
@@ -10138,7 +11659,9 @@ async def _run_native_wechat_takeover_session(
         _publish_takeover_session_state(run_id, output)
     last_config: Dict[str, Any] = {}
     consecutive_driver_failures = 0
-    max_consecutive_driver_failures = 3
+    # After a driver exception the next gap replaces the normal poll interval.
+    # 0 means use interval_seconds.
+    next_wait = 0.0
     stop_reason = ""
     round_number = 0
     if cloud is not None and base and run_id:
@@ -10156,11 +11679,13 @@ async def _run_native_wechat_takeover_session(
     while not stop_reason and _takeover_monotonic() < deadline_monotonic and (
         round_limit is None or round_number < round_limit
     ):
-        if round_number and interval:
+        wait_seconds = next_wait if next_wait > 0 else (interval if round_number else 0.0)
+        next_wait = 0.0
+        if wait_seconds:
             remaining = deadline_monotonic - _takeover_monotonic()
             if remaining <= 0:
                 break
-            await asyncio.sleep(min(interval, remaining))
+            await asyncio.sleep(min(wait_seconds, remaining))
         if _takeover_monotonic() >= deadline_monotonic:
             break
         round_number += 1
@@ -10243,6 +11768,9 @@ async def _run_native_wechat_takeover_session(
                 stop_reason = "local_wechat_busy" if reason == "running" else "local_wechat_not_executed"
                 break
             consecutive_driver_failures = 0
+            output["consecutive_driver_failures"] = 0
+            output["driver_backoff_seconds"] = 0
+            output["last_error"] = ""
             last_config = result.get("config") if isinstance(result.get("config"), dict) else last_config
             items = [item for item in (result.get("items") or []) if isinstance(item, dict)]
             output["completed_rounds"] += 1
@@ -10288,13 +11816,49 @@ async def _run_native_wechat_takeover_session(
                     stop_reason = "slot_ownership_changed"
                     break
         except Exception as exc:
+            # An empty wxauto read is often transient: the same machine can
+            # read the list again minutes later. Ending the session here used
+            # to consume the whole daily window (00:00-23:59) after ~2.5 min.
+            # Keep the run alive until the node deadline and back off so a
+            # dead driver does not grab the WeChat window every 15 seconds.
             consecutive_driver_failures += 1
             output["failed"] += 1
+            output["consecutive_driver_failures"] = consecutive_driver_failures
             output["rounds"].append({"round": round_number, "failed": 1, "error": str(exc)[:500]})
             output["last_error"] = str(exc)[:500]
-            if consecutive_driver_failures >= max_consecutive_driver_failures:
-                stop_reason = "consecutive_driver_failures"
-                break
+            next_wait = _native_wechat_driver_backoff_seconds(consecutive_driver_failures)
+            output["driver_backoff_seconds"] = next_wait
+            logger.warning(
+                "[SCHEDULED-TASK] native wechat driver read failed; retrying inside window round=%s consecutive=%s backoff=%.0fs error=%s",
+                round_number,
+                consecutive_driver_failures,
+                next_wait,
+                output["last_error"],
+            )
+            if cloud is not None and base and run_id:
+                event_status = await _post_task_event(
+                    cloud,
+                    base,
+                    headers,
+                    run_id,
+                    "running",
+                    {
+                        "text": (
+                            f"个微驱动暂时读不到会话，{int(next_wait)} 秒后重试"
+                            f"（连续第 {consecutive_driver_failures} 次）"
+                        ),
+                        "round": round_number,
+                        "session_seconds": duration_limit,
+                        "heartbeat": True,
+                        "driver_backoff_seconds": int(next_wait),
+                        "consecutive_driver_failures": consecutive_driver_failures,
+                        "takeover": _takeover_progress_patch(output),
+                    },
+                )
+                if _task_event_rejects_local_work(event_status):
+                    await _request_local_auto_reply_stop(account_id, headers)
+                    stop_reason = "slot_ownership_changed"
+                    break
     if not stop_reason and round_limit is not None and round_number >= round_limit and _takeover_monotonic() < deadline_monotonic:
         stop_reason = "round_limit"
     output["finished_at"] = datetime.utcnow().isoformat()
@@ -10461,13 +12025,25 @@ async def _run_native_wechat_group_invite_followup(
     deadline = asyncio.get_running_loop().time() + wait_seconds
     parent_runs: List[Dict[str, Any]] = []
     while True:
-        parent_runs = await _resolve_parent_workflow_results(
-            cloud,
-            base,
-            headers,
-            params=source,
-            current_item=current_item,
-        )
+        try:
+            parent_runs = await _resolve_parent_workflow_results(
+                cloud,
+                base,
+                headers,
+                params=source,
+                current_item=current_item,
+            )
+        except Exception as exc:
+            if not _is_transient_poll_error(exc):
+                raise
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError("等待上级节点结果超时，查询进度时连接中断") from exc
+            logger.warning(
+                "[H5-WORKFLOW] parent workflow poll retry err=%s",
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            await asyncio.sleep(poll_seconds)
+            continue
         if parent_runs or asyncio.get_running_loop().time() >= deadline:
             break
         await asyncio.sleep(poll_seconds)
@@ -10594,11 +12170,24 @@ async def _run_client_workflow_action(
         timeout_seconds = float(_clamp_int(source.get("poll_timeout_seconds"), 1200, 30, 7200))
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         while True:
-            job = await _get_local_api_json(
-                f"/api/comfly-image-studio/jobs/{job_id}",
-                headers=headers,
-                timeout_seconds=120.0,
-            )
+            try:
+                job = await _get_local_api_json(
+                    f"/api/comfly-image-studio/jobs/{job_id}",
+                    headers=headers,
+                    timeout_seconds=120.0,
+                )
+            except Exception as exc:
+                if not _is_transient_poll_error(exc):
+                    raise
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise RuntimeError(f"图片生成等待超时，查询进度时连接中断，任务ID：{job_id}") from exc
+                logger.warning(
+                    "[H5-WORKFLOW] image studio poll retry job_id=%s err=%s",
+                    job_id,
+                    f"{type(exc).__name__}: {exc}"[:240],
+                )
+                await asyncio.sleep(2.5)
+                continue
             status = str(job.get("status") or "").strip().lower()
             if status == "completed":
                 return _image_studio_completed_result(job, job_id=job_id, prompt=prompt)
@@ -10834,8 +12423,26 @@ async def _run_client_workflow_action(
     if action == "native_wechat_add_friend":
         targets = _workflow_target_list(source, "targets", "phones", "phone_numbers", "keywords", "keyword")
         extracted_phones: List[str] = []
+        claimed_pool_items: List[Dict[str, Any]] = []
         source_mode = str(source.get("source_mode") or "").strip().lower()
-        if source_mode in {
+        pool_mode = source_mode in _WECHAT_CONTACT_POOL_SOURCE_MODES
+        if pool_mode:
+            # 账号级上报池：抖音私信接管节点没勾「自动提交好友申请」时会上报到那里，
+            # 同账号的任意机器都能领（领取即占用，别的机器不会重复领同一条）。
+            if cloud is None or not base:
+                raise RuntimeError("自动加好友无法读取服务端上报池")
+            # 选了服务端池就只加池子里的号码，节点里残留的本地名单不再混进来
+            targets = []
+            claimed_pool_items = await _claim_reported_wechat_contacts(
+                cloud,
+                base,
+                headers,
+                limit=_safe_int(source.get("max_targets") or source.get("server_pool_limit") or 0)
+                or _WECHAT_CONTACT_POOL_DEFAULT_LIMIT,
+            )
+            extracted_phones = [str(item.get("value") or "").strip() for item in claimed_pool_items]
+            extracted_phones = [value for value in extracted_phones if value]
+        elif source_mode in {
             "douyin_private_message_phone",
             "douyin_private_message_mobile",
             "douyin_private_message_wechat_id",
@@ -10850,9 +12457,26 @@ async def _run_client_workflow_action(
                 current_item=current_item,
             )
             if parent_runs:
-                extracted_phones = _extract_mainland_mobile_numbers(parent_runs[0].get("result_payload"))
+                # 微信里搜手机号和搜微信号是同一个输入框，两种值一起当目标
+                parent_payload = parent_runs[0].get("result_payload")
+                extracted_phones = _extract_mainland_mobile_numbers(parent_payload)
+                extracted_phones = list(dict.fromkeys(
+                    [*extracted_phones, *_extract_douyin_wechat_ids_from_result(parent_payload)]
+                ))
         targets = list(dict.fromkeys([*targets, *extracted_phones]))
         if not targets:
+            if pool_mode:
+                return {
+                    "ok": True,
+                    "skipped": True,
+                    "reason": "server_pool_empty",
+                    "extracted_phones": [],
+                    "server_pool_items": [],
+                    "message": (
+                        "服务端上报池里没有待添加的号码：抖音私信接管节点不勾「自动提交好友申请」时，"
+                        "才会把识别到的号码上到池子里。"
+                    ),
+                }
             return {
                 "ok": True,
                 "skipped": True,
@@ -10860,22 +12484,67 @@ async def _run_client_workflow_action(
                 "extracted_phones": [],
                 "message": "本轮抖音私信未识别到客户发送的手机号，已跳过加好友",
             }
-        result = await _post_local_api_json(
-            "/api/native-wechat/friends/add",
-            {
-                "account_id": native_account_id,
-                "targets": targets,
-                "apply_message": str(source.get("apply_message") or "").strip(),
-                "remark": str(source.get("remark") or "").strip(),
-                "tags": source.get("tags") if isinstance(source.get("tags"), list) else [],
-                "permission": str(source.get("permission") or "朋友圈").strip() or "朋友圈",
-                "prepare_only": bool(source.get("prepare_only", False)),
-            },
-            headers=headers,
-            timeout_seconds=300.0,
-        )
+        try:
+            result = await _post_local_api_json(
+                "/api/native-wechat/friends/add",
+                {
+                    "account_id": native_account_id,
+                    "targets": targets,
+                    "apply_message": str(source.get("apply_message") or "").strip(),
+                    "remark": str(source.get("remark") or "").strip(),
+                    "tags": source.get("tags") if isinstance(source.get("tags"), list) else [],
+                    "permission": str(source.get("permission") or "朋友圈").strip() or "朋友圈",
+                    "prepare_only": bool(source.get("prepare_only", False)),
+                },
+                headers=headers,
+                timeout_seconds=300.0,
+            )
+        except Exception as exc:
+            if claimed_pool_items:
+                await _ack_reported_wechat_contacts(
+                    cloud,
+                    base,
+                    headers,
+                    added=[],
+                    failed=extracted_phones,
+                    error=str(exc),
+                )
+            raise
         result["targets"] = targets
         result["extracted_phones"] = extracted_phones
+        add_task = result.get("task") if isinstance(result.get("task"), dict) else {}
+        if str(add_task.get("status") or "").strip() == "skipped":
+            handled = [
+                str(item.get("target") or "").strip()
+                for item in (add_task.get("skipped_targets") or [])
+                if isinstance(item, dict) and str(item.get("target") or "").strip()
+            ]
+            result["skipped"] = True
+            result["reason"] = str(add_task.get("reason") or "already_handled")
+            result["skipped_targets"] = handled
+            result["message"] = (
+                "\u4e2a\u4eba\u5fae\u4fe1\u81ea\u52a8\u52a0\u597d\u53cb\uff1a\u8fd9\u6279\u76ee\u6807\uff08"
+                + "\u3001".join(handled[:5])
+                + ("\u2026" if len(handled) > 5 else "")
+                + "\uff09\u6b64\u524d\u5df2\u7ecf\u52a0\u8fc7\u6216\u5df2\u5224\u5b9a\u52a0\u4e0d\u4e86\uff0c\u672c\u6b21\u5df2\u8df3\u8fc7\uff0c\u4e0d\u518d\u91cd\u590d\u6dfb\u52a0\u3002"
+            )
+        if claimed_pool_items:
+            result["server_pool_items"] = [
+                {
+                    "value": str(item.get("value") or "").strip(),
+                    "username": str(item.get("username") or "").strip(),
+                    "account_label": str(item.get("account_label") or "").strip(),
+                }
+                for item in claimed_pool_items
+            ]
+            # 已经提交给本机微信加好友队列，回执标记为已加；失败的那部分放回池子。
+            result["server_pool_ack"] = await _ack_reported_wechat_contacts(
+                cloud,
+                base,
+                headers,
+                added=extracted_phones,
+                failed=[],
+            )
         return result
     if action == "native_wechat_moments_engage":
         targets = _workflow_target_list(source, "contact_wx_nos", "targets", "contacts", "names")
@@ -11620,6 +13289,7 @@ def _takeover_deadline_report(state: Dict[str, Any]) -> Dict[str, Any]:
         "finished_at": str(snapshot.get("finished_at") or ""),
         "last_round_summary": str(last_round.get("summary_text") or "").strip(),
         "session_summary": str(snapshot.get("summary_text") or "").strip(),
+        "last_error": str(snapshot.get("last_error") or "")[:500],
     }
 
 
@@ -11630,7 +13300,17 @@ def _takeover_deadline_text(report: Dict[str, Any]) -> str:
         "接管实况",
     ]
     if report["completed_rounds"] <= 0:
-        lines.append("- 接管已启动，但本节点时间内未完成一轮巡检")
+        failed = int(report.get("failed") or 0)
+        if failed > 0:
+            lines.append(
+                f"- 接管已启动，但个微驱动读不到会话（失败 {failed} 次）。"
+                "已在本节点时间内退避重试，没有完成一轮巡检"
+            )
+            last_error = str(report.get("last_error") or "").strip()
+            if last_error:
+                lines.append(f"- 最后一次错误：{last_error[:180]}")
+        else:
+            lines.append("- 接管已启动，但本节点时间内未完成一轮巡检")
     else:
         lines.append(
             f"- 已巡检：{report['completed_rounds']} 轮，耗时 {report['duration_label']}"
@@ -11856,7 +13536,18 @@ async def _process_scheduled_task_detached(
                 )
 
                 douyin_lock = douyin_schedule_execution_lock
-                await douyin_lock.acquire()
+                try:
+                    await asyncio.wait_for(
+                        douyin_lock.acquire(),
+                        timeout=_SCHEDULED_DOUYIN_LOCK_WAIT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "[SCHEDULED-TASK] local Douyin execution lock busy > %ss; skip run_id=%s",
+                        _SCHEDULED_DOUYIN_LOCK_WAIT_SECONDS,
+                        run_id,
+                    )
+                    return
                 douyin_lock_acquired = True
                 douyin_marker_id = f"server:{run_id}"
                 payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
@@ -11998,17 +13689,23 @@ async def h5_chat_poll_loop() -> None:
         try:
             timeout = httpx.Timeout(30.0, connect=10.0, read=30.0, write=10.0, pool=10.0)
             async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+                # 上一轮里失败的控制面请求（事件/心跳/完成上报）在这里补投，
+                # 避免一次 502 就让服务端认为任务停摆。
+                await _flush_task_control_outbox(client, headers)
                 now_loop = asyncio.get_event_loop().time()
                 if now_loop - last_heartbeat_at >= heartbeat_interval:
+                    heartbeat_payload = {
+                        "display_name": "local-online",
+                        "publish_accounts": _build_publish_account_snapshot(jwt_token),
+                        "capabilities": _h5_client_capabilities(),
+                        "remote_support": _remote_support_snapshot(),
+                    }
+                    contacts = _wechat_contacts_for_heartbeat()
+                    if contacts is not None:
+                        heartbeat_payload["wechat_contacts"] = contacts
                     heartbeat_resp = await client.post(
                         f"{base}/api/h5-chat/device-heartbeat",
-                        json={
-                            "display_name": "local-online",
-                            "publish_accounts": _build_publish_account_snapshot(jwt_token),
-                            "wechat_contacts": _build_native_wechat_contact_snapshot(),
-                            "capabilities": _h5_client_capabilities(),
-                            "remote_support": _remote_support_snapshot(),
-                        },
+                        json=heartbeat_payload,
                         headers=headers,
                     )
                     if heartbeat_resp.status_code == 401:

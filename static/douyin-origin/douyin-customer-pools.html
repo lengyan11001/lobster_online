@@ -1464,8 +1464,9 @@
 
         async function refreshCustomerPoolData(options = {}) {
             try {
+                // 列表只需要任务概要：改用 tasks-lite（不带评论明细），避免整页传几万条评论
                 const [taskRes, poolRes] = await Promise.all([
-                    fetch("/api/douyin/tasks"),
+                    fetch("/api/douyin/tasks-lite"),
                     fetch("/api/douyin/customer-pools"),
                 ]);
                 const taskData = await taskRes.json();
@@ -1578,11 +1579,28 @@
             await addDouyinCustomersToPrecise([user]);
         }
 
+        async function ensureTaskDetail(taskId) {
+            const id = Number(taskId || 0);
+            if (!id) return null;
+            const existing = douyinTasks.find((item) => Number(item.id || 0) === id);
+            if (existing && Array.isArray(existing.all_comments) && existing.all_comments.length) return existing;
+            try {
+                const response = await fetch(`/api/douyin/tasks/${id}`);
+                const data = await response.json();
+                if (data.code !== 200 || !data.task) return existing || null;
+                douyinTasks = douyinTasks.map((item) => Number(item.id || 0) === id ? { ...item, ...data.task } : item);
+                return douyinTasks.find((item) => Number(item.id || 0) === id) || null;
+            } catch (error) {
+                addLog(`读取视频明细失败：${error.message}`, "warning");
+                return existing || null;
+            }
+        }
+
         async function removeIntentUserByKey(key) {
             const user = collectHighIntentUsers().find((item) => userChoiceKey(item) === key);
             if (!user) return void addLog("未找到对应精准客户。", "warning");
             if (isMonitorCustomerRow(user)) return void addLog("同行监控沉淀的精准客户暂不支持在总客户池里直接移出，请回到监控链路处理。", "warning");
-            const task = douyinTasks.find((item) => Number(item.id || 0) === Number(user.task_id || 0));
+            const task = await ensureTaskDetail(user.task_id);
             if (!task) return void addLog("未找到对应来源视频任务。", "warning");
             const nextRows = buildTaskUserRows(task).filter((row) => row.checked && userChoiceKey(row) !== key && userChoiceLooseKey(row) !== userChoiceLooseKey(user));
             try {

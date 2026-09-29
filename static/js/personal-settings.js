@@ -55,7 +55,10 @@
     personalDigitalHumanResourceQuery: '',
     personalDigitalHumanResourcePage: 1,
     personalDigitalHumanResourceDraft: null,
-    personalDigitalHumanTemplateExplicitlyCleared: false
+    personalDigitalHumanTemplateExplicitlyCleared: false,
+    personalDigitalHumanAssetGroups: [],
+    personalDigitalHumanAssetGroupOptions: [],
+    personalDigitalHumanAssetGroupsLoaded: false
   };
 
   var DOC_TYPES = [
@@ -2594,7 +2597,8 @@
           state.personalDigitalHumanAvatarOptions = [];
           state.personalDigitalHumanVoiceOptions = [];
           renderPersonalDigitalHumanResources();
-        })
+        }),
+        loadPersonalDigitalHumanAssetGroups()
       ]).then(function() {
         renderAllLists();
         if (state.templateLoadError) {
@@ -2625,6 +2629,70 @@
     state.defaultItem = item;
   }
 
+  function normalizePersonalDigitalHumanAssetGroups(value) {
+    var raw = Array.isArray(value) ? value : (value ? [value] : []);
+    var seen = [];
+    raw.forEach(function(item) {
+      if (seen.length >= 20) return;
+      var name = String(item || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+      if (name && seen.indexOf(name) < 0) seen.push(name);
+    });
+    return seen;
+  }
+
+  function currentPersonalDigitalHumanAssetGroups() {
+    var selected = state.personalDigitalHumanAssetGroupSelected;
+    if (state.personalDigitalHumanAssetGroupsLoaded && selected) {
+      return normalizePersonalDigitalHumanAssetGroups(Object.keys(selected).filter(function(name) {
+        return !!selected[name];
+      }));
+    }
+    return normalizePersonalDigitalHumanAssetGroups(state.personalDigitalHumanAssetGroups);
+  }
+
+  function renderPersonalDigitalHumanAssetGroups() {
+    var el = $('psDigitalHumanAssetGroups');
+    if (!el) return;
+    var names = [];
+    (state.personalDigitalHumanAssetGroupOptions || []).forEach(function(row) {
+      var name = String(row && row.name || '').trim();
+      if (name && names.indexOf(name) < 0) names.push(name);
+    });
+    normalizePersonalDigitalHumanAssetGroups(state.personalDigitalHumanAssetGroups).forEach(function(name) {
+      if (names.indexOf(name) < 0) names.push(name);
+    });
+    var selected = {};
+    normalizePersonalDigitalHumanAssetGroups(state.personalDigitalHumanAssetGroups).forEach(function(name) {
+      selected[name] = true;
+    });
+    state.personalDigitalHumanAssetGroupSelected = selected;
+    renderTemplateOptions('psDigitalHumanAssetGroups', names.map(function(name) {
+      return { id: name, name: name };
+    }), {
+      kind: 'digital_human_asset_group',
+      label: '选择分组',
+      selected: selected,
+      empty: '暂无素材分组，请先在素材库里给素材设置分组。',
+      id: function(row) { return row.id; },
+      title: function(row) { return row.name; },
+      subtitle: function() { return ''; }
+    });
+  }
+
+  function loadPersonalDigitalHumanAssetGroups() {
+    if (!localBase()) return Promise.resolve();
+    return localJson('/api/assets/creative-candidate-groups').then(function(data) {
+      state.personalDigitalHumanAssetGroupOptions = Array.isArray(data && data.groups) ? data.groups : [];
+      state.personalDigitalHumanAssetGroupsLoaded = true;
+      if (state.personalDigitalHumanAssetGroupSelected) {
+        state.personalDigitalHumanAssetGroups = currentPersonalDigitalHumanAssetGroups();
+      }
+      renderPersonalDigitalHumanAssetGroups();
+    }).catch(function() {
+      state.personalDigitalHumanAssetGroupsLoaded = false;
+    });
+  }
+
   function saveTemplate() {
     var btn = $('psSaveTemplateBtn');
     var name = fieldValue('psTemplateName');
@@ -2653,7 +2721,7 @@
         requirements: templateRequirementsWithLanguage({}, language),
         meta: (function() {
           var currentMeta = state.defaultItem && state.defaultItem.meta && typeof state.defaultItem.meta === 'object' ? state.defaultItem.meta : {};
-          var meta = { source: 'personal_settings_template', language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate, digital_human_template_configured: true, digital_human_resources: clonePersonalDigitalHumanResources(state.personalDigitalHumanResources), digital_human_resources_configured: true };
+          var meta = { source: 'personal_settings_template', language: language, target_language: ipTemplateLanguageLabel(language), digital_human_template: digitalHumanTemplate, digital_human_template_configured: true, digital_human_resources: clonePersonalDigitalHumanResources(state.personalDigitalHumanResources), digital_human_resources_configured: true, digital_human_asset_groups: currentPersonalDigitalHumanAssetGroups() };
           if (currentMeta.current_template_id) meta.current_template_id = currentMeta.current_template_id;
           return meta;
         })()
@@ -2759,6 +2827,8 @@
     state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((row.meta || {}).digital_human_template);
     state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((row.meta || {}).digital_human_resources);
     state.personalDigitalHumanTemplateExplicitlyCleared = false;
+    state.personalDigitalHumanAssetGroups = normalizePersonalDigitalHumanAssetGroups((row.meta || {}).digital_human_asset_groups);
+    renderPersonalDigitalHumanAssetGroups();
     state.selectedKeywords = {};
     state.selectedCompetitors = {};
     state.selectedMemories = {};
@@ -2784,6 +2854,8 @@
     state.selectedMemories = {};
     state.personalSelectedDigitalHumanTemplate = clonePersonalDigitalHumanTemplate((state.defaultItem || {}).meta && state.defaultItem.meta.digital_human_template);
     state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((state.defaultItem || {}).meta && state.defaultItem.meta.digital_human_resources);
+    state.personalDigitalHumanAssetGroups = normalizePersonalDigitalHumanAssetGroups((state.defaultItem || {}).meta && state.defaultItem.meta.digital_human_asset_groups);
+    renderPersonalDigitalHumanAssetGroups();
     state.personalDigitalHumanTemplateDraft = null;
     state.personalDigitalHumanTemplateExplicitlyCleared = false;
     if ($('psTemplateName')) $('psTemplateName').value = '';
@@ -2805,6 +2877,8 @@
       state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((row.meta || {}).digital_human_template);
       state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((row.meta || {}).digital_human_resources);
       state.personalDigitalHumanTemplateExplicitlyCleared = false;
+      state.personalDigitalHumanAssetGroups = normalizePersonalDigitalHumanAssetGroups((row.meta || {}).digital_human_asset_groups);
+      renderPersonalDigitalHumanAssetGroups();
       (row.keyword_ids || []).forEach(function(value) { if (value) state.selectedKeywords[String(value)] = true; });
       (row.competitor_ids || []).forEach(function(value) { if (value) state.selectedCompetitors[String(value)] = true; });
       (row.memory_doc_ids || []).forEach(function(value) { if (value) state.selectedMemories[String(value)] = true; });
@@ -2838,6 +2912,8 @@
       state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((row.meta || {}).digital_human_template);
       state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((row.meta || {}).digital_human_resources);
     state.personalDigitalHumanTemplateExplicitlyCleared = false;
+    state.personalDigitalHumanAssetGroups = normalizePersonalDigitalHumanAssetGroups((row.meta || {}).digital_human_asset_groups);
+    renderPersonalDigitalHumanAssetGroups();
     (row.keyword_ids || []).forEach(function(value) { if (value) state.selectedKeywords[String(value)] = true; });
     (row.competitor_ids || []).forEach(function(value) { if (value) state.selectedCompetitors[String(value)] = true; });
     (row.memory_doc_ids || []).forEach(function(value) { if (value) state.selectedMemories[String(value)] = true; });
@@ -3521,7 +3597,18 @@
       if (item) pickProfilePhotoAsset(item.getAttribute('data-ps-photo-asset') || '');
     });
     document.addEventListener('keydown', function(ev) {
-      if (ev.key === 'Escape') closeAllPersonalSettingsEditors();
+      if (ev.key === 'Escape') {
+        // 资料调查弹窗同样只认「关闭」按钮：Esc 也不关，避免编辑到一半被清掉
+        var surveyModal = $('psSurveyEditorModal');
+        var surveyOpen = !!(surveyModal && surveyModal.classList.contains('is-visible'));
+        if (surveyOpen) {
+          document.querySelectorAll('.ps-editor-modal.is-visible').forEach(function(modal) {
+            if (modal.id !== 'psSurveyEditorModal') closePersonalSettingsEditor(modal);
+          });
+        } else {
+          closeAllPersonalSettingsEditors();
+        }
+      }
       if (ev.key === 'Escape' && state.profilePhotoPickerOpen) closeProfilePhotoPicker();
       if (ev.key === 'Escape' && $('psDigitalHumanResourceModal') && !$('psDigitalHumanResourceModal').hidden) {
         closePersonalDigitalHumanResourcePicker();
@@ -3686,7 +3773,13 @@
     });
     document.querySelectorAll('.ps-editor-modal').forEach(function(modal) {
       modal.addEventListener('click', function(ev) {
-        if (ev.target === modal || (ev.target && ev.target.closest && ev.target.closest('[data-close-ps-editor]'))) closePersonalSettingsEditor(modal);
+        if (ev.target === modal) {
+          // 资料调查弹窗：点遮罩不关（避免误点丢草稿），只能点「关闭」/「×」退出
+          if (modal.id === 'psSurveyEditorModal') return;
+          closePersonalSettingsEditor(modal);
+          return;
+        }
+        if (ev.target && ev.target.closest && ev.target.closest('[data-close-ps-editor]')) closePersonalSettingsEditor(modal);
       });
     });
     if ($('psCompetitorPlatform')) $('psCompetitorPlatform').addEventListener('change', updateCompetitorPlatformFields);

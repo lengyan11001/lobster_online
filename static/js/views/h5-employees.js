@@ -116,7 +116,7 @@
     var extraParams=extra && typeof extra === 'object' ? extra : null;
     var douyinAction=String(extraParams && extraParams.sales_action || '').trim().toLowerCase() || salesAction(String(note || normalizedLabel));
     var identity=normalizedKey === 'douyin_leads'
-      ? normalizedKey + '@@' + douyinAction + (extraParams && extraParams.ai_keywords ? '@ai' : '')
+      ? normalizedKey + '@@' + douyinAction + (extraParams && extraParams.ai_keywords ? '@ai' : '') + (extraParams && extraParams.memory_takeover ? '@memory' : '')
       : normalizedKey;
     if (!normalizedKey || !normalizedLabel || nodeOptionKeys[identity]) return;
     nodeOptionKeys[identity] = true;
@@ -155,6 +155,15 @@
     'AI 按 IP 人设和资料模板每轮生成新关键词，用过的词按天数去重，只搜最近发布的新视频。',
     '抖音',
     {sales_action:'search_collect', ai_keywords:true, ai_keyword_count:3, ai_keyword_avoid_days:7, ai_keyword_publish_days:7, customer_scope:'current_collection_batch'}
+  );
+  // 抖音私信记忆接管：一等公民节点，只出现在节点选择列表里（老节点、老排期不受影响）。
+  // 读取新私信后按记忆文件（IP人设定位-模板里选的那份）+ 会话上下文回复，不拉群、不引导加微信。
+  addNodeOption(
+    'douyin_leads',
+    '抖音私信记忆接管',
+    '抖音私信记忆接管：读取抖音新私信，按记忆文件（如百问百答）和会话上下文回复，不拉群、不引导加微信。',
+    '抖音',
+    {sales_action:'stranger_message', reply_mode:'ai_memory', memory_takeover:true, wechat_add_friend_targets_source:'douyin_private_message_phone'}
   );
 
   function nodeOptionPackageVisible(packageId) {
@@ -382,12 +391,24 @@
     var label = item[2];
     return {id:parent.id + '_action_' + (index + 1), time:item[0], parent_node_id:parent.id, action_type:'publish', type:'publish', platform:platform, ability_key:'publish_content', ability_label:label, department_id:'sales', department_name:'销售部', note:label + '，配文案、带标签发布', is_action_node:true, param_configured:true, plan:{title:label, task_kind:'client_workflow', content:'H5 工作流动作：' + label, payload:{action:'publish_content',params:{source_mode:'parent_latest_run',source_workflow_node_id:parent.id,source_workflow_node_label:parent.ability_label,platform:platform,media_type:platform === 'wechat_moments' ? 'image_text' : 'video',ai_publish_copy:!(platform === 'wechat_moments' && String(parent.ability_key || '') === 'ip_content_moments'),note:label}}}};
   }
+  var DIGITAL_HUMAN_ORAL_SOURCES = [
+    { value: 'ip_daily_industry_hot_oral', label: '行业口播' },
+    { value: 'ip_daily_professional_ip_oral', label: 'IP 口播' }
+  ];
+  function digitalHumanOralSourceParams(params) {
+    var raw = params && Array.isArray(params.script_sources) ? params.script_sources : [];
+    var picked = raw.map(function (value) { return String(value || '').trim(); })
+      .filter(function (value) { return DIGITAL_HUMAN_ORAL_SOURCES.some(function (item) { return item.value === value; }); });
+    if (!picked.length) picked = ['ip_daily_industry_hot_oral'];
+    return { script_sources: picked, script_source: picked[0] };
+  }
+
   function planForRow(row) {
     var prompt = row.note || row.label || '';
     if (row.key.indexOf('wechat_channels_') === 0 || row.soon) return {title:row.label,task_kind:'workflow_placeholder',content:'H5 工作流占位：' + row.label,payload:{action:'workflow_coming_soon',skip_execution:true,note:row.note || row.label,platform:'wechat_channels'}};
     if (row.key.indexOf('native_wechat_') === 0 || row.key === 'native_whatsapp_poll') return nativePlan(row.key, row);
     if (row.key === 'local_bestseller') return {title:'同城爆款视频',task_kind:'client_workflow',content:'H5 工作流：同城爆款视频',payload:{action:'local_bestseller_daily_video',params:baseScheduleParams(row,{note:prompt,prompt:prompt,days:30,day_mode:'workflow_elapsed'})}};
-    if (row.key === 'hifly.video.create_by_tts') return {title:'数字人口播视频',task_kind:'capability',content:'H5 工作流：数字人口播视频',payload:{capability_id:'hifly.video.create_by_tts',payload:{script:prompt,prompt:prompt}}};
+    if (row.key === 'hifly.video.create_by_tts') return {title:'数字人口播视频',task_kind:'capability',content:'H5 工作流：数字人口播视频',payload:{capability_id:'hifly.video.create_by_tts',payload:Object.assign({script:prompt,prompt:prompt},digitalHumanOralSourceParams(row.params))}};
     if (row.key === 'comfly.seedance.tvc.pipeline') return {title:'创意分镜头视频',task_kind:'capability',content:'H5 工作流：创意分镜头视频',payload:{capability_id:'comfly.seedance.tvc.pipeline',payload:{action:'start_pipeline',task_text:prompt,prompt:prompt,auto_save:true}}};
     if (row.key === 'comfly.daihuo.pipeline') return {title:'爆款TVC',task_kind:'capability',content:'H5 工作流：爆款TVC',payload:{capability_id:'comfly.daihuo.pipeline',payload:{action:'start_pipeline',task_text:prompt,prompt:prompt,auto_save:true}}};
     if (row.key === 'viral_video_remix') return {title:'爆款复制',task_kind:'client_workflow',content:'H5 工作流：爆款复制',payload:{action:'viral_video_remix_start',params:baseScheduleParams(row,{prompt:prompt,billing_confirmed:true,ratio:'9:16'})}};
@@ -616,20 +637,48 @@
     });
     return result;
   }
+  // 只有「来源=上级抖音私信结果」的独立加好友节点才需要折叠进「抖音私信接管」父节点；
+  // ①本机导入名单 / ③服务端上报池 自带目标清单，保持一级节点不动。
+  function nativeAddFriendSourceOf(node) {
+    var payload = workflowPayload(node), params = payload.params && typeof payload.params === 'object' ? payload.params : {};
+    var raw = String(params.source_mode || '').trim().toLowerCase();
+    if (['server_reported_pool','server_pool','reported_pool','reported_contacts','wechat_contact_pool'].indexOf(raw) >= 0) return 'server_reported_pool';
+    if (['douyin_private_message_phone','douyin_private_message_mobile','douyin_private_message_wechat_id'].indexOf(raw) >= 0) return 'douyin_private_message_phone';
+    return 'local_import';
+  }
+  function isParentBoundAddFriend(node) {
+    return childActionType(node) === 'native_wechat_add_friend' && nativeAddFriendSourceOf(node) === 'douyin_private_message_phone';
+  }
   function migrateDouyinAddFriendChildren(nodes) {
     var list = Array.isArray(nodes) ? listClone(nodes) : [];
-    var parents = list.filter(isDouyinPrivate), legacyRows = list.filter(function(node) { return childActionType(node) === 'native_wechat_add_friend'; });
-    if (!parents.length) return list;
-    var prepared = list.filter(function(node) { return childActionType(node) !== 'native_wechat_add_friend'; });
-    parents.forEach(function(parent) {
-      var payload = workflowPayload(parent), params = payload.params && typeof payload.params === 'object' ? Object.assign({}, payload.params) : {}, children = workflowChildren(parent), hadChild = children.some(function(child) { return childActionType(child) === 'native_wechat_add_friend'; });
+    var parents = list.filter(isDouyinPrivate), legacyRows = list.filter(isParentBoundAddFriend);
+    if (!parents.length || !legacyRows.length) return list;
+    var prepared = list.filter(function(node) { return !isParentBoundAddFriend(node); });
+    var lastIndex = parents.length - 1;
+    parents.forEach(function(parent, parentIdx) {
+      var parentFull = prepared.filter(function(node) { return node && node.id === parent.id; })[0] || parent;
+      var payload = workflowPayload(parentFull), params = payload.params && typeof payload.params === 'object' ? Object.assign({}, payload.params) : {}, children = workflowChildren(parentFull), hadChild = children.some(function(child) { return childActionType(child) === 'native_wechat_add_friend'; });
       params.wechat_add_friend_enabled = Object.prototype.hasOwnProperty.call(params, 'wechat_add_friend_enabled') ? !!params.wechat_add_friend_enabled : !!(hadChild || legacyRows.length);
       params.wechat_add_friend_targets_source = 'douyin_private_message_phone';
       delete params.wechat_add_friend_rules;
-      parent.plan = parent.plan && typeof parent.plan === 'object' ? parent.plan : {};
-      parent.plan.payload = Object.assign({}, payload, {params:params});
+      parentFull.plan = parentFull.plan && typeof parentFull.plan === 'object' ? parentFull.plan : {};
+      parentFull.plan.payload = Object.assign({}, payload, {params:params});
       var remaining = children.filter(function(child) { return childActionType(child) !== 'native_wechat_add_friend'; });
-      if (remaining.length) parent.children = remaining; else delete parent.children;
+      // 折叠过来的独立节点不再消失：作为可见下级挂到最后一个「抖音私信接管」节点上。
+      var adopted = parentIdx === lastIndex ? legacyRows.map(function(row) {
+        var child = Object.assign({}, row);
+        child.id = parentFull.id + '_native_' + String(row.time || '').replace(':', '') + '_' + String(row.id || '');
+        child.parent_node_id = parentFull.id;
+        child.action_type = 'native_wechat_add_friend';
+        child.type = 'native_wechat_add_friend';
+        child.ability_key = 'native_wechat_add_friend';
+        child.ability_label = row.ability_label || '个微自动加好友';
+        child.is_action_node = true;
+        child.sales_preset = true;
+        return child;
+      }) : [];
+      var merged = remaining.concat(adopted).sort(function(a, b) { return String(a.time || '').localeCompare(String(b.time || '')); });
+      if (merged.length) parentFull.children = merged; else delete parentFull.children;
     });
     return prepared;
   }
@@ -920,11 +969,18 @@
   function findOption(key, label, node) {
     if (String(key || '') === 'douyin_leads' && node) {
       var action=douyinNodeAction(node);
-      var wantsAiKeywords=boolParam(workflowParams(node).ai_keywords,false);
+      var nodeParams=workflowParams(node);
+      var wantsAiKeywords=boolParam(nodeParams.ai_keywords,false);
+      // 记忆接管节点和普通私信接管节点是同一个 action，必须靠这个标记区分，
+      // 否则编辑时会匹配到「抖音私信接管」，回复策略被改回固定话术。
+      var wantsMemoryTakeover=boolParam(nodeParams.memory_takeover,false)
+        || String(nodeParams.reply_mode || '').toLowerCase() === 'ai_memory'
+        || String(node && (node.note || node.ability_label) || '').indexOf('记忆接管') >= 0;
       var actionMatch=NODE_OPTIONS.find(function(item){
         if (item[0] !== key) return false;
         var extra=item[5] && typeof item[5] === 'object' ? item[5] : {};
         if (!!extra.ai_keywords !== wantsAiKeywords) return false;
+        if (!!extra.memory_takeover !== wantsMemoryTakeover) return false;
         return String(extra.sales_action || '').trim().toLowerCase() === action || salesAction(item[2] || item[1]) === action;
       });
       if (actionMatch) return actionMatch;
@@ -969,21 +1025,46 @@
   function demoNode(index) {
     var iid=selectedDeviceId();
     if (!iid) throw new Error('请先选择 Online 设备');
-    var plan=workflowDemoPlan(state.nodes[Number(index)]);
+    var node=state.nodes[Number(index)];
+    if (!node) throw new Error('未找到要演示的节点');
+    // 演示必须和"启动工作流"用同一段组装逻辑：节点里残留的 plan.payload 可能是旧版
+    // （例如数字人节点还留着 1.0 的 hifly.video.create_by_tts + 空参数，演示必然秒失败
+    // "请选择数字人"）。所以先让服务端按当前节点配置算一遍 plan，再下发一次性任务。
+    if (node.comingSoon || node.workflow_placeholder || node.plan && node.plan.payload && node.plan.payload.skip_execution) throw new Error('敬请期待');
+    var templateName=((el('oeTemplateName') && el('oeTemplateName').value) || '').trim() || String(state.selectedTemplate && state.selectedTemplate.name || '');
+    var templateMeta=Object.assign({}, state.editingMeta || (state.selectedTemplate && state.selectedTemplate.meta) || {});
+    var templateId=Number(state.editingId || state.selectedTemplate && state.selectedTemplate.id || 0);
+    if (!isFinite(templateId)) templateId=0;
     return runSubmission('demo',function(){
       return waitForOnlineDevice(iid).then(function(){
-        return api('/api/scheduled-tasks/tasks',{method:'POST',headers:{'X-Installation-Id':iid},json:{
-          title:plan.title,
-          task_kind:plan.task_kind,
-          content:plan.content,
-          payload:plan.payload,
-          schedule_type:'once',
-          interval_seconds:60,
-          start_at:'',
-          daily_times:[],
-          timezone_offset_minutes:-new Date().getTimezoneOffset(),
-          installation_ids:[iid]
-        }});
+        return api('/api/h5-workflows/demo-plan',{method:'POST',headers:{'X-Installation-Id':iid},json:{
+          name:templateName,
+          nodes:[clone(node)],
+          meta:templateMeta,
+          installation_id:iid,
+          template_id:templateId
+        }}).then(function(data){
+          if (data && data.plans && data.plans.length) return data.plans;
+          return [workflowDemoPlan(node)];
+        }).then(function(plans){
+          return plans.reduce(function(chain,plan){
+            return chain.then(function(){
+              var title=String(plan.title || node.ability_label || '员工节点');
+              return api('/api/scheduled-tasks/tasks',{method:'POST',headers:{'X-Installation-Id':iid},json:{
+                title:title.indexOf('演示-') === 0 ? title : '演示-' + title,
+                task_kind:plan.task_kind || 'client_workflow',
+                content:plan.content || ('Online 员工节点演示：' + (node.ability_label || '任务节点')),
+                payload:plan.payload || {},
+                schedule_type:'once',
+                interval_seconds:60,
+                start_at:'',
+                daily_times:[],
+                timezone_offset_minutes:-new Date().getTimezoneOffset(),
+                installation_ids:plan.server_side ? [] : [iid]
+              }});
+            });
+          },Promise.resolve());
+        });
       }).then(function(){if(typeof toast === 'function') toast('演示任务已下发，可在工作历史查看结果');});
     });
   }
@@ -1133,19 +1214,69 @@
   }
   window.addEventListener('focus', refreshDevicesOnForeground);
   document.addEventListener('visibilitychange', refreshDevicesOnForeground);
+  // 个微自动加好友节点的目标来源：本机导入名单 / 上级抖音私信结果 / 服务端账号上报池
+  function normalizeNativeAddFriendSource(value) {
+    var text=String(value || '').trim().toLowerCase();
+    if (['server_reported_pool','server_pool','reported_pool','reported_contacts','wechat_contact_pool'].indexOf(text) >= 0) return 'server_reported_pool';
+    if (['douyin_private_message_phone','douyin_private_message_mobile','douyin_private_message_wechat_id'].indexOf(text) >= 0) return 'douyin_private_message_phone';
+    return 'local_import';
+  }
+  function nativeAddFriendSourceFromParams(params) {
+    return normalizeNativeAddFriendSource(params && params.source_mode);
+  }
+  function setNativeAddFriendSource(value) {
+    var target=normalizeNativeAddFriendSource(value);
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="oeNodeNativeAddFriendSource"]'),function(input){input.checked=input.value === target;});
+  }
+  function applyNativeAddFriendSourceScope() {
+    // 节点弹窗保存的都是「一级节点」：来源②依赖上级抖音私信接管，只能在下级动作里选。
+    var key = String((el('oeNodeKey') || {}).value || ''), isAddFriend = key === 'native_wechat_add_friend';
+    var douyinLabel = el('oeNodeAddFriendSourceDouyin'), hint = el('oeNodeNativeAddFriendTopHint');
+    if (douyinLabel) douyinLabel.hidden = isAddFriend;
+    if (hint) hint.hidden = !isAddFriend;
+    if (isAddFriend && nativeAddFriendSourceFromForm() === 'douyin_private_message_phone') {
+      setNativeAddFriendSource('server_reported_pool');
+      if (typeof toast === 'function') toast('一级节点不能选「上级抖音私信结果」，已切换到③服务端上报池');
+    }
+  }
+  function nativeAddFriendSourceFromForm() {
+    var checked=document.querySelector('input[name="oeNodeNativeAddFriendSource"]:checked');
+    return normalizeNativeAddFriendSource(checked && checked.value);
+  }
   function syncNodeModalFields() {
-    var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), selectedSalesAction=key === 'douyin_leads' ? salesAction(option[2] || option[1]) : '', takeover=key === 'native_wechat_poll', whatsapp=key === 'native_whatsapp_poll', douyinPrivate=selectedSalesAction === 'stranger_message', douyinCollection=selectedSalesAction === 'search_collect', douyinTouch=selectedSalesAction === 'precise_touch';
+    var option=nodeOptionFromValue((el('oeNodeKey') || {}).value || ''), key=String(option[0] || ''), selectedSalesAction=key === 'douyin_leads' ? salesAction(option[2] || option[1]) : '', takeover=key === 'native_wechat_poll', whatsapp=key === 'native_whatsapp_poll';
+    // 「抖音私信记忆接管」和「抖音私信接管」是同一个 action：只要节点自己带了
+    // reply_mode=ai_memory / memory_takeover，就必须走私信接管表单，不能再按 action 反推，
+    // 否则会掉到"精准获客参数"里（地区/搜索数量/搜索方式这些跟接管无关的字段）。
+    var editingNode=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null;
+    var editingParams=editingNode ? workflowParams(editingNode) : {};
+    var memoryTakeover=!!(option[5] && typeof option[5] === 'object' && option[5].memory_takeover)
+      || boolParam(editingParams.memory_takeover,false)
+      || String(editingParams.reply_mode || '').toLowerCase() === 'ai_memory';
+    var douyinPrivate=key === 'douyin_leads' && (memoryTakeover || selectedSalesAction === 'stranger_message'), douyinCollection=key === 'douyin_leads' && !douyinPrivate && selectedSalesAction === 'search_collect', douyinTouch=selectedSalesAction === 'precise_touch';
     var optionExtra=option[5] && typeof option[5] === 'object' ? option[5] : {}, douyinAiKeywords=douyinCollection && !!optionExtra.ai_keywords;
     if (el('oeNodeGroupInviteField')) el('oeNodeGroupInviteField').hidden=!takeover;
     if (el('oeNodeWechatPrivateSessionLimitField')) el('oeNodeWechatPrivateSessionLimitField').hidden=!takeover;
     if (el('oeNodeWhatsappField')) el('oeNodeWhatsappField').hidden=!whatsapp;
-    if (el('oeNodeWechatAddFriendField')) el('oeNodeWechatAddFriendField').hidden=!douyinPrivate;
+    // 记忆接管只要选一份记忆文件：自动加好友那套先不占地方。
+    if (el('oeNodeWechatAddFriendField')) el('oeNodeWechatAddFriendField').hidden=!douyinPrivate || memoryTakeover;
+    if (el('oeNodeNativeAddFriendField')) el('oeNodeNativeAddFriendField').hidden=key !== 'native_wechat_add_friend';
     if (el('oeNodeDouyinReplyModeField')) el('oeNodeDouyinReplyModeField').hidden=!douyinPrivate;
+    // 新建/切到「抖音私信记忆接管」时，回复策略默认就是 AI 记忆接管。
+    // 只做"默认值"，不反向把已选好的值改回去（编辑老节点不能被悄悄改成固定话术）。
+    if (el('oeNodeDouyinReplyMode')) {
+      var replyModeExtra=option[5] && typeof option[5] === 'object' ? option[5] : {};
+      var currentReplyMode=String(el('oeNodeDouyinReplyMode').value || '').trim().toLowerCase();
+      if ((replyModeExtra.memory_takeover || memoryTakeover) && ['', 'fixed'].indexOf(currentReplyMode) >= 0) {
+        el('oeNodeDouyinReplyMode').value='ai_memory';
+      }
+    }
     if (el('oeNodeDouyinCollectionField')) el('oeNodeDouyinCollectionField').hidden=!douyinCollection;
     // 精准获客AI 的关键词由 AI 生成，隐藏"采集关键词"、换成 AI 选词设置。
     if (el('oeNodeDouyinKeywordField')) el('oeNodeDouyinKeywordField').hidden=douyinAiKeywords;
     if (el('oeNodeDouyinAiKeywordField')) el('oeNodeDouyinAiKeywordField').hidden=!douyinAiKeywords;
     if (el('oeNodeDouyinTouchField')) el('oeNodeDouyinTouchField').hidden=!douyinTouch;
+    if (el('oeNodeHiflyOralSourcesField')) el('oeNodeHiflyOralSourcesField').hidden=key !== 'hifly.video.create_by_tts';
     if (el('oeNodeDouyinFollowupField')) el('oeNodeDouyinFollowupField').hidden=!douyinTouch;
     var replyMode=String((el('oeNodeDouyinReplyCommentMode') || {}).value || '').toLowerCase();
     if (['','fixed','ai','rewrite'].indexOf(replyMode) < 0) replyMode='';
@@ -1167,7 +1298,15 @@
     var option=findOption(node && node.ability_key,node && node.ability_label,node);
     fillNodeOptions(node && node.ability_key,node && node.ability_label,node); el('oeNodeLabel').value=node && node.ability_label || option[1]; el('oeNodeNote').value=node && node.note || option[2] || option[1];
     el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; el('oeNodeWechatAddFriendEnabled').checked=boolParam(params.wechat_add_friend_enabled,false);
-    if (el('oeNodeDouyinReplyMode')) el('oeNodeDouyinReplyMode').value=String(params.reply_mode || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed';
+    setNativeAddFriendSource(nativeAddFriendSourceFromParams(params));
+    applyNativeAddFriendSourceScope();
+    if (el('oeNodeNativeAddFriendLimit')) el('oeNodeNativeAddFriendLimit').value=Math.max(1,Math.min(200,Number(params.max_targets || params.server_pool_limit || 50)));
+    if (el('oeNodeDouyinReplyMode')) {
+      var optionExtraForReply=option[5] && typeof option[5] === 'object' ? option[5] : {};
+      var nodeReplyMode=String(params.reply_mode || '').trim().toLowerCase();
+      if (['fixed', 'ai_lead', 'ai_memory'].indexOf(nodeReplyMode) < 0) nodeReplyMode='';
+      el('oeNodeDouyinReplyMode').value=nodeReplyMode || (optionExtraForReply.memory_takeover ? 'ai_memory' : 'fixed');
+    }
     if (el('oeNodeDouyinKeyword')) el('oeNodeDouyinKeyword').value=String(params.keyword || params.query || '');
     if (el('oeNodeDouyinAiKeywordCount')) el('oeNodeDouyinAiKeywordCount').value=Math.max(1,Math.min(8,Number(params.ai_keyword_count || 3)));
     if (el('oeNodeDouyinAiKeywordAvoidDays')) el('oeNodeDouyinAiKeywordAvoidDays').value=Math.max(1,Math.min(60,Number(params.ai_keyword_avoid_days || 7)));
@@ -1192,12 +1331,17 @@
     if (el('oeNodeWhatsappMaxUnread')) el('oeNodeWhatsappMaxUnread').value=Math.max(1,Math.min(100,Number(params.max_unread_per_round || 50)));
     if (el('oeNodeWhatsappInstruction')) el('oeNodeWhatsappInstruction').value=String(params.reply_instruction || '');
     el('oeNodeMomentAction').value=String(params.moment_action || 'like_comment'); initMomentPicker('node',Array.isArray(params.contact_wx_nos) ? params.contact_wx_nos : params.targets);
+    if (el('oeNodeHiflyOralIndustry') || el('oeNodeHiflyOralIp')) {
+      var oralPicked=digitalHumanOralSourceParams(params).script_sources;
+      if (el('oeNodeHiflyOralIndustry')) el('oeNodeHiflyOralIndustry').checked=oralPicked.indexOf('ip_daily_industry_hot_oral') >= 0;
+      if (el('oeNodeHiflyOralIp')) el('oeNodeHiflyOralIp').checked=oralPicked.indexOf('ip_daily_professional_ip_oral') >= 0;
+    }
     syncNodeModalFields(); el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60);
   }
   function saveNodeFromModal() {
-    requireEditableTemplate(); var option=nodeOptionFromValue(el('oeNodeKey').value), key=String(option[0] || ''), time=el('oeNodeTime').value, end=el('oeNodeEndTime').value, label=el('oeNodeLabel').value.trim() || option[1], note=el('oeNodeNote').value.trim() || option[2] || label;
+    requireEditableTemplate(); var selectNodeValue=String((el('oeNodeKey')||{}).value||''), option=nodeOptionFromValue(selectNodeValue); var typedLabel=String((el('oeNodeLabel')||{}).value||'').trim(), typedNote=String((el('oeNodeNote')||{}).value||'').trim(); /* 下拉可能在选完节点后被重建/重置：按用户看到的标题/说明回查真正的节点，别拿默认项去推动作。 */ if (typedLabel && option[1] !== typedLabel) { var byLabel=NODE_OPTIONS.find(function(item){return item[1]===typedLabel || (!!typedNote && item[2]===typedNote);}); if (byLabel) option=byLabel; } var optionSalesAction=option[5] && typeof option[5]==='object' ? String(option[5].sales_action||'').trim().toLowerCase() : '', key=String(option[0] || ''), time=el('oeNodeTime').value, end=el('oeNodeEndTime').value, label=el('oeNodeLabel').value.trim() || option[1], note=el('oeNodeNote').value.trim() || option[2] || label;
     if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择开始时间');
-    var existing=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, existingParams=workflowParams(existing), selectedSalesAction=key === 'douyin_leads' ? salesAction(option[2] || option[1]) : '', row={time:time,end:end,key:key,label:label,note:note,sales_action:selectedSalesAction,params:Object.assign({},existingParams,{group_invite_enabled:key === 'native_wechat_poll' && !!el('oeNodeGroupInviteEnabled').checked})};
+    var existing=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, existingParams=workflowParams(existing), selectedSalesAction=key === 'douyin_leads' ? (optionSalesAction || salesAction(option[2] || option[1])) : '', row={time:time,end:end,key:key,label:label,note:note,sales_action:selectedSalesAction,params:Object.assign({},existingParams,{group_invite_enabled:key === 'native_wechat_poll' && !!el('oeNodeGroupInviteEnabled').checked})};
     if (key === 'native_wechat_poll') row.params.private_sessions_per_round=Math.max(1,Math.min(100,Number(el('oeNodeWechatPrivateSessionLimit').value || 100)));
     else delete row.params.private_sessions_per_round;
     if (key === 'native_whatsapp_poll') {
@@ -1211,7 +1355,31 @@
     }
     if (key === 'native_wechat_moments_engage') { row.params.contact_wx_nos=momentSelectionValues('node'); row.params.targets=row.params.contact_wx_nos.slice(); row.params.moment_action=String(el('oeNodeMomentAction').value || 'like_comment'); row.params.max_scrolls=Number(row.params.max_scrolls || 6); if (!row.params.contact_wx_nos.length) throw new Error('请选择至少一个朋友圈联系人'); }
     else { delete row.params.contact_wx_nos; delete row.params.targets; delete row.params.moment_action; }
-    if (selectedSalesAction === 'stranger_message') { row.params.wechat_add_friend_enabled=!!el('oeNodeWechatAddFriendEnabled').checked; row.params.wechat_add_friend_targets_source='douyin_private_message_phone'; row.params.reply_mode=String((el('oeNodeDouyinReplyMode') || {}).value || 'fixed').toLowerCase() === 'ai_lead' ? 'ai_lead' : 'fixed'; }
+    if (key === 'native_wechat_add_friend') {
+      var addFriendSource=nativeAddFriendSourceFromForm();
+      if (addFriendSource === 'local_import') {
+        delete row.params.source_mode; delete row.params.trigger;
+        delete row.params.skip_without_clear_mobile; delete row.params.skip_without_clear_wechat_id;
+        delete row.params.max_targets; delete row.params.server_pool_limit;
+      } else if (addFriendSource === 'server_reported_pool') {
+        row.params.source_mode='server_reported_pool';
+        row.params.max_targets=Math.max(1,Math.min(200,Number((el('oeNodeNativeAddFriendLimit') || {}).value || 50)));
+        delete row.params.server_pool_limit; delete row.params.trigger;
+        delete row.params.skip_without_clear_mobile; delete row.params.skip_without_clear_wechat_id;
+      } else {
+        throw new Error('一级节点不能选「上级抖音私信结果」：请改选 ① 本机导入名单 或 ③ 服务端上报池；来源②请在「抖音私信接管」节点上用「添加下级」添加。');
+      }
+    }
+    if (selectedSalesAction === 'stranger_message') {
+      var optionExtraForSave=option[5] && typeof option[5] === 'object' ? option[5] : {};
+      var formReplyMode=String((el('oeNodeDouyinReplyMode') || {}).value || 'fixed').trim().toLowerCase();
+      row.params.wechat_add_friend_enabled=!!el('oeNodeWechatAddFriendEnabled').checked;
+      row.params.wechat_add_friend_targets_source='douyin_private_message_phone';
+      row.params.reply_mode=['ai_lead', 'ai_memory'].indexOf(formReplyMode) >= 0 ? formReplyMode : 'fixed';
+      if (optionExtraForSave.memory_takeover || row.params.reply_mode === 'ai_memory') row.params.memory_takeover=true; else delete row.params.memory_takeover;
+      // 记忆文件不在节点上选：统一到 Online「抖音获客 → 私信引流」里选，下发时读那份配置。
+      delete row.params.memory_doc_ids;
+    }
     else { delete row.params.wechat_add_friend_enabled; delete row.params.wechat_add_friend_targets_source; delete row.params.wechat_add_friend_rules; delete row.params.reply_mode; }
     if (key === 'douyin_leads' && selectedSalesAction === 'search_collect') {
       var optionExtra=option[5] && typeof option[5] === 'object' ? option[5] : {}, aiKeywords=!!optionExtra.ai_keywords;
@@ -1257,6 +1425,13 @@
       delete row.params.followup_actions;
       row.params.customer_scope='precise_pool';
     } else { delete row.params.keyword; delete row.params.regions; delete row.params.max_results; delete row.params.max_users; delete row.params.mode; delete row.params.followup_actions; delete row.params.touch_actions; delete row.params.customer_scope; delete row.params.ai_keywords; delete row.params.ai_keyword_count; delete row.params.ai_keyword_avoid_days; delete row.params.ai_keyword_publish_days; }
+    if (key === 'hifly.video.create_by_tts') {
+      var oralSources=[];
+      if (el('oeNodeHiflyOralIndustry') && el('oeNodeHiflyOralIndustry').checked) oralSources.push('ip_daily_industry_hot_oral');
+      if (el('oeNodeHiflyOralIp') && el('oeNodeHiflyOralIp').checked) oralSources.push('ip_daily_professional_ip_oral');
+      if (!oralSources.length) oralSources=['ip_daily_industry_hot_oral'];
+      row.params.script_sources=oralSources; row.params.script_source=oralSources[0];
+    } else { delete row.params.script_sources; delete row.params.script_source; }
     delete row.params.followup_action; delete row.params.group_invite_rules;
     var next=existing ? Object.assign({},existing) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)};
     next.time=time; next.end_time=end; next.time_range=time + (end ? '-' + end : ''); next.ability_key=key; next.ability_label=label; next.note=note; next.plan=planForRow(row); if (existing) next.children=existing.children || existing.actions || [];

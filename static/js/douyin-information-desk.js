@@ -1,8 +1,13 @@
 (function() {
+  // 2026-09-27 需求：信息台只保留两个榜；服务端已收敛请求集合，这里再兜一层，
+  // 即使读到历史快照（含热搜/星图/创作者中心等旧分类）也只显示这两个。
+  var ALLOWED_CATEGORIES = ['内容榜', '热点榜'];   // 内容榜排前面
+
   var state = {
     data: null,
     category: '',
-    loading: false
+    loading: false,
+    lastTask: null      // 本次会话最后发起的做同款任务（搜索/切 tab 也不会丢）
   };
 
   function escapeHtml(value) {
@@ -12,6 +17,22 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  function errorText(err) {
+    if (!err) return '操作失败';
+    var raw = err.message !== undefined && err.message !== null ? err.message : err;
+    if (typeof raw === 'string') return raw;
+    if (raw && typeof raw === 'object') {
+      var inner = raw.message || raw.detail || raw.error;
+      if (typeof inner === 'string' && inner) return inner;
+      try {
+        return JSON.stringify(raw).slice(0, 300);
+      } catch (e) {
+        return '操作失败';
+      }
+    }
+    return String(raw);
   }
 
   function baseUrl() {
@@ -35,37 +56,27 @@
 
   function render() {
     var fetched = document.getElementById('douyinDeskFetchedAt');
-    var summary = document.getElementById('douyinDeskSummary');
     var tabs = document.getElementById('douyinDeskTabs');
+    renderLastTask();
     var content = document.getElementById('douyinDeskContent');
     if (!content) return;
     var snapshot = state.data && state.data.snapshot;
     if (!snapshot) {
       if (fetched) fetched.textContent = '服务器尚未生成快照，将在每天 09:00（北京时间）采集';
-      if (summary) summary.innerHTML = '';
       if (tabs) tabs.innerHTML = '';
       content.innerHTML = '<div class="douyin-desk-empty">暂无平台数据</div>';
       return;
     }
-    var sections = Array.isArray(snapshot.sections) ? snapshot.sections : [];
+    var sections = (Array.isArray(snapshot.sections) ? snapshot.sections : []).filter(function(section) {
+      return ALLOWED_CATEGORIES.indexOf(String(section && section.category || '').trim()) >= 0;
+    });
     var categories = [];
     sections.forEach(function(section) {
       var category = String(section && section.category || '其他').trim() || '其他';
       if (categories.indexOf(category) < 0) categories.push(category);
     });
     if (categories.indexOf(state.category) < 0) state.category = categories[0] || '';
-    var stat = snapshot.summary || {};
-    if (fetched) fetched.textContent = '最近采集：' + formatTime(snapshot.fetched_at) + ' · 状态：' + (snapshot.status === 'success' ? '完整' : '部分可用');
-    if (summary) {
-      summary.innerHTML = [
-        [stat.item_count || 0, '平台数据'],
-        [(stat.success_count || 0) + '/' + (stat.endpoint_count || 0), '接口成功'],
-        [stat.failed_count || 0, '接口异常'],
-        [snapshot.snapshot_date || '-', '快照日期']
-      ].map(function(entry) {
-        return '<div class="douyin-desk-summary-item"><strong>' + escapeHtml(entry[0]) + '</strong><span>' + escapeHtml(entry[1]) + '</span></div>';
-      }).join('');
-    }
+    if (fetched) fetched.textContent = '最近采集：' + formatTime(snapshot.fetched_at);
     if (tabs) {
       tabs.innerHTML = categories.map(function(category) {
         return '<button type="button" class="douyin-desk-tab' + (category === state.category ? ' active' : '') + '" data-douyin-desk-category="' + escapeHtml(category) + '">' + escapeHtml(category) + '</button>';
@@ -76,23 +87,328 @@
     });
     content.innerHTML = visible.length ? visible.map(function(section) {
       var items = Array.isArray(section.items) ? section.items : [];
-      var cards = items.length ? items.map(function(item) {
-        var title = item.title || item.name || '热门内容';
-        var metaParts = [];
-        if (item.author && item.author !== title) metaParts.push('作者 ' + item.author);
-        if (item.value) metaParts.push(item.value);
-        if (item.detail) metaParts.push(item.detail);
-        var metrics = metricText(item);
-        if (metrics) metaParts.push(metrics);
-        var meta = metaParts.join(' · ') || '暂无指标';
-        var body = '<div class="douyin-desk-item-main"><span class="douyin-desk-rank">' + escapeHtml(item.rank || '-') + '</span><span class="douyin-desk-item-title">' + escapeHtml(title) + '</span></div><div class="douyin-desk-item-meta">' + escapeHtml(meta) + '</div>';
-        if (item.url && /^https?:\/\//i.test(String(item.url))) {
-          body = '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">' + body + '<span class="douyin-desk-item-link">打开观看</span></a>';
-        }
-        return '<article class="douyin-desk-item">' + body + '</article>';
-      }).join('') : '<div class="douyin-desk-empty">该接口暂无可展示条目' + (section.error ? '：' + escapeHtml(section.error) : '') + '</div>';
+      var cards = items.length ? items.map(itemCard).join('') : '<div class="douyin-desk-empty">该接口暂无可展示条目' + (section.error ? '：' + escapeHtml(section.error) : '') + '</div>';
       return '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>' + escapeHtml(section.title || section.key || '数据') + '</h3><span>' + items.length + ' 条</span></div><div class="douyin-desk-grid">' + cards + '</div></section>';
     }).join('') : '<div class="douyin-desk-empty">该分类暂无数据</div>';
+    bindCards(content);
+  }
+
+  function statusLabel(status) {
+    if (status === 'SUCCESS') return '已完成';
+    if (status === 'FAILED') return '失败';
+    return '生成中';
+  }
+
+  function renderLastTask() {
+    var box = document.getElementById('douyinDeskLast');
+    if (!box) return;
+    var task = state.lastTask;
+    if (!task) {
+      box.hidden = true;
+      box.innerHTML = '';
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = '<div class="douyin-desk-last-title">最近一次生成·' + escapeHtml(statusLabel(task.status)) + '</div>'
+      + '<div class="douyin-desk-last-body">' + escapeHtml(String(task.title || task.taskId || '')) + '</div>'
+      + (task.videoUrl
+          ? '<video controls playsinline preload="metadata" src="' + escapeHtml(task.videoUrl) + '"></video>'
+            + '<div class="douyin-desk-item-actions"><button type="button" class="douyin-desk-imitation" data-douyin-dl="' + escapeHtml(String(task.taskId || '')) + '">下载成片</button>'
+            + (task.assetId ? '<span class="douyin-desk-item-status">已入库素材库</span>' : '')
+            + '</div>'
+          : (task.failReason ? '<div class="douyin-desk-last-fail">' + escapeHtml(task.failReason) + '</div>'
+                             : '<div class="douyin-desk-last-tip">任务已提交，可点「生成历史」随时回来看成片</div>'));
+    bindDownloadButtons(box);
+  }
+
+  function loadHistory() {
+    var content = document.getElementById('douyinDeskContent');
+    if (content) content.innerHTML = '<div class="douyin-desk-empty">正在读取生成历史…</div>';
+    fetch(baseUrl() + '/api/douyin/platform-information-desk/imitation/history?limit=20', {
+      headers: typeof authHeaders === 'function' ? authHeaders() : {}
+    }).then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
+        var items = Array.isArray(data && data.items) ? data.items : [];
+        if (!content) return;
+        var rows = items.map(function(item) {
+          var status = statusLabel(item.status);
+          return '<article class="douyin-desk-history-item" data-douyin-history="' + escapeHtml(String(item.id)) + '">'
+            + '<div class="douyin-desk-history-head"><span class="douyin-desk-history-status is-' + escapeHtml(String(item.status || '').toLowerCase()) + '">' + escapeHtml(status) + '</span>'
+            + '<span class="douyin-desk-history-title">' + escapeHtml(item.title || item.task_id || '') + '</span></div>'
+            + '<div class="douyin-desk-history-meta">' + escapeHtml(formatTime(item.created_at)) + ' · ' + escapeHtml(item.model || '') + '</div>'
+            + (item.video_url ? '<video controls playsinline preload="metadata" src="' + escapeHtml(item.video_url) + '"></video>'
+                              : (item.fail_reason ? '<div class="douyin-desk-last-fail">' + escapeHtml(item.fail_reason) + '</div>' : ''))
+            + (item.video_url
+                ? '<div class="douyin-desk-item-actions"><button type="button" class="douyin-desk-imitation" data-douyin-dl="' + escapeHtml(item.task_id || '') + '">下载成片</button>'
+                  + (item.asset_id ? '<span class="douyin-desk-item-status">已入库</span>' : '')
+                  + '<a class="douyin-desk-item-link" href="' + escapeHtml(item.video_url) + '" target="_blank" rel="noopener noreferrer">在浏览器打开</a></div>'
+                : '')
+            + '</article>';
+        }).join('');
+        content.innerHTML = '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>生成历史</h3>'
+          + '<span>' + items.length + ' 条</span></div>'
+          + '<div class="douyin-desk-history-actions"><button type="button" class="btn btn-ghost" id="douyinDeskHistoryBack">返回榜单</button></div>'
+          + (items.length ? rows : '<div class="douyin-desk-empty">还没有生成记录，去榜单点「做同款（换人）」试试</div>')
+          + '</section>';
+        var back = document.getElementById('douyinDeskHistoryBack');
+        if (back) back.addEventListener('click', render);
+      });
+    }).catch(function(error) {
+      if (content) content.innerHTML = '<div class="douyin-desk-empty">' + escapeHtml(errorText(error)) + '</div>';
+    });
+  }
+
+  function itemCard(item) {
+    var title = item.title || item.name || '热门内容';
+    var metaParts = [];
+    if (item.category) metaParts.push(String(item.category));
+    if (item.section_title) metaParts.push(String(item.section_title));
+    if (item.author && item.author !== title) metaParts.push('作者 ' + item.author);
+    if (item.value) metaParts.push(item.value);
+    if (item.detail) metaParts.push(item.detail);
+    var metrics = metricText(item);
+    if (metrics) metaParts.push(metrics);
+    var meta = metaParts.join(' · ') || '暂无指标';
+    var cover = item.cover_url && /^https?:\/\//i.test(String(item.cover_url))
+      ? '<img class="douyin-desk-cover" src="' + escapeHtml(item.cover_url) + '" alt="" loading="lazy" referrerpolicy="no-referrer" />'
+      : '';
+    var body = '<div class="douyin-desk-item-main"><span class="douyin-desk-rank">' + escapeHtml(item.rank || '-') + '</span><span class="douyin-desk-item-title">' + escapeHtml(title) + '</span></div><div class="douyin-desk-item-meta">' + escapeHtml(meta) + '</div>';
+    if (item.url && /^https?:\/\//i.test(String(item.url))) {
+      body = '<a href="' + escapeHtml(item.url) + '" target="_blank" rel="noopener noreferrer">' + body + '<span class="douyin-desk-item-link">打开观看</span></a>';
+    }
+    var actions = '<div class="douyin-desk-item-actions">'
+      + (item.id ? '<button type="button" class="douyin-desk-imitation" data-douyin-imitation="1" data-douyin-item-id="' + escapeHtml(item.id || '') + '" data-douyin-title="' + escapeHtml(title) + '">做同款（换人）</button>' : '')
+      + '<span class="douyin-desk-item-status" data-douyin-status="1"></span>'
+      + '</div><div class="douyin-desk-item-result" data-douyin-result="1"></div>';
+    return '<article class="douyin-desk-item">' + cover + body + actions + '</article>';
+  }
+
+  function bindDownloadButtons(root) {
+    if (!root) return;
+    root.querySelectorAll('[data-douyin-dl]').forEach(function(button) {
+      if (button.dataset.bound) return;
+      button.dataset.bound = '1';
+      button.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        downloadImitation(button.getAttribute('data-douyin-dl'),
+                          button.getAttribute('data-douyin-name') || '');
+      });
+    });
+  }
+
+  function bindCards(root) {
+    if (!root) return;
+    root.querySelectorAll('.douyin-desk-cover').forEach(function(image) {
+      image.addEventListener('error', function() { image.style.display = 'none'; });
+    });
+    bindDownloadButtons(root);
+    root.querySelectorAll('[data-douyin-imitation]').forEach(function(button) {
+      button.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        startImitation(button);
+      });
+    });
+  }
+
+  function searchDesk() {
+    var input = document.getElementById('douyinDeskSearchInput');
+    var content = document.getElementById('douyinDeskContent');
+    var clearBtn = document.getElementById('douyinDeskSearchClear');
+    var query = String(input && input.value || '').trim();
+    if (!query) return;
+    state.category = '';
+    if (content) content.innerHTML = '<div class="douyin-desk-empty">正在搜索「' + escapeHtml(query) + '」…</div>';
+    fetch(baseUrl() + '/api/douyin/platform-information-desk/search?q=' + encodeURIComponent(query), {
+      headers: typeof authHeaders === 'function' ? authHeaders() : {}
+    }).then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
+        var items = Array.isArray(data && data.items) ? data.items : [];
+        if (content) {
+          var searchFee = data && data.billing ? Number(data.billing.credits_charged || 0) : 0;
+        content.innerHTML = '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>搜索「' + escapeHtml(query) + '」</h3><span>' + items.length + ' 条 · 消耗 ' + searchFee + ' 算力</span></div>'
+            + (items.length ? '<div class="douyin-desk-grid">' + items.map(itemCard).join('') + '</div>'
+                            : '<div class="douyin-desk-empty">没搜到，换个词试试</div>') + '</section>';
+          bindCards(content);
+        }
+        if (clearBtn) clearBtn.classList.remove('hidden');
+      });
+    }).catch(function(error) {
+      if (content) content.innerHTML = '<div class="douyin-desk-empty">' + escapeHtml(errorText(error)) + '</div>';
+    });
+  }
+
+  function clearDeskSearch() {
+    var input = document.getElementById('douyinDeskSearchInput');
+    var clearBtn = document.getElementById('douyinDeskSearchClear');
+    if (input) input.value = '';
+    if (clearBtn) clearBtn.classList.add('hidden');
+    render();
+  }
+
+  function postJson(path, payload) {
+    return fetch(baseUrl() + path, {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, typeof authHeaders === 'function' ? authHeaders() : {}),
+      body: JSON.stringify(payload || {})
+    }).then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
+        return data;
+      });
+    });
+  }
+
+  // 客户端的 authHeaders() 带 Content-Type: application/json，
+  // 直接拿来传 FormData 会丢掉 multipart boundary，服务端只能报 422。
+  function uploadHeaders() {
+    var headers = typeof authHeaders === 'function' ? Object.assign({}, authHeaders()) : {};
+    Object.keys(headers).forEach(function(key) {
+      if (String(key).toLowerCase() === 'content-type') delete headers[key];
+    });
+    return headers;
+  }
+
+  // 成片下载：走 /imitation/{task_id}/download（带 attachment 头），不是打开原视频链接
+  function downloadImitation(taskId, name) {
+    if (!taskId) return;
+    var url = baseUrl() + '/api/douyin/platform-information-desk/imitation/' + encodeURIComponent(taskId) + '/download';
+    fetch(url, { headers: uploadHeaders() })
+      .then(function(response) {
+        if (!response.ok) {
+          return response.json().catch(function() { return {}; }).then(function(data) {
+            throw new Error(errorText(data && data.detail) || ('下载失败 HTTP ' + response.status));
+          });
+        }
+        return response.blob();
+      })
+      .then(function(blob) {
+        var objectUrl = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = String(name || ('douyin-imitation-' + taskId)).replace(/[\\/:*?"<>|]/g, '_') + '.mp4';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(function() { try { URL.revokeObjectURL(objectUrl); } catch (e) {} }, 60000);
+      })
+      .catch(function(err) {
+        console.warn('[douyin-desk] download failed', err);
+        var box = document.getElementById('douyinDeskLast');
+        if (box) {
+          var tip = box.querySelector('.douyin-desk-last-tip');
+          if (!tip) {
+            tip = document.createElement('div');
+            tip.className = 'douyin-desk-last-tip';
+            box.appendChild(tip);
+          }
+          tip.textContent = '下载失败：' + errorText(err);
+        }
+      });
+  }
+
+  function uploadReference(file) {
+    var form = new FormData();
+    form.append('file', file, file.name || 'imitation-image');
+    return fetch(baseUrl() + '/api/assets/upload-temp', {
+      method: 'POST',
+      headers: uploadHeaders(),
+      body: form
+    }).then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok) throw new Error(data.detail || data.message || ('上传失败 HTTP ' + response.status));
+        var url = String(data.public_url || '').trim();
+        if (!url) throw new Error('参考图上传后没有拿到公网地址');
+        return url;
+      });
+    });
+  }
+
+  function pollImitation(taskId, tries, statusEl, resultEl) {
+    setTimeout(function() {
+      fetch(baseUrl() + '/api/douyin/platform-information-desk/imitation/' + encodeURIComponent(taskId), {
+        headers: typeof authHeaders === 'function' ? authHeaders() : {}
+      }).then(function(response) {
+        return response.json().catch(function() { return {}; }).then(function(data) {
+          if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
+          if (data.status === 'SUCCESS' && data.video_url) {
+            var playable = String(data.stored_url || data.video_url || '');
+            if (state.lastTask && state.lastTask.taskId === taskId) {
+              state.lastTask = { taskId: taskId, title: state.lastTask.title, status: 'SUCCESS',
+                                 videoUrl: playable, assetId: data.asset_id || '' };
+              renderLastTask();
+            }
+            if (statusEl) statusEl.textContent = data.asset_id ? '已完成（已入库）' : '已完成';
+            if (resultEl) {
+              resultEl.innerHTML = '<video controls playsinline preload="metadata" src="' + escapeHtml(playable) + '"></video>'
+                + '<div class="douyin-desk-item-actions"><button type="button" class="douyin-desk-imitation" data-douyin-dl="' + escapeHtml(taskId) + '">下载成片</button>'
+                + '<a class="douyin-desk-item-link" href="' + escapeHtml(playable) + '" target="_blank" rel="noopener noreferrer">在浏览器打开</a></div>';
+              bindDownloadButtons(resultEl);
+            }
+            return;
+          }
+          if (data.done) {
+            if (state.lastTask && state.lastTask.taskId === taskId) {
+              state.lastTask = { taskId: taskId, title: state.lastTask.title, status: 'FAILED',
+                                 failReason: String(data.fail_reason || '生成失败') };
+              renderLastTask();
+            }
+            if (statusEl) statusEl.textContent = '失败：' + String(data.fail_reason || '生成失败');
+            return;
+          }
+          if (statusEl) statusEl.textContent = '生成中 ' + String(data.progress || '') + '（第 ' + tries + ' 次查询）';
+          if (tries >= 40) {
+            if (statusEl) statusEl.textContent = '还在生成中，任务已提交';
+            return;
+          }
+          pollImitation(taskId, tries + 1, statusEl, resultEl);
+        });
+      }).catch(function(err) {
+        if (statusEl) statusEl.textContent = '查询失败：' + errorText(err);
+      });
+    }, 6000);
+  }
+
+  function startImitation(button) {
+    var card = button.closest ? button.closest('.douyin-desk-item') : null;
+    var statusEl = card ? card.querySelector('[data-douyin-status]') : null;
+    var resultEl = card ? card.querySelector('[data-douyin-result]') : null;
+    var title = button.getAttribute('data-douyin-title') || '';
+    var itemId = button.getAttribute('data-douyin-item-id') || '';
+    if (!itemId) {
+      if (statusEl) statusEl.textContent = '这条数据没有作品 id，换不了人';
+      return;
+    }
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.addEventListener('change', function() {
+      var file = input.files && input.files[0];
+      if (!file) return;
+      if (statusEl) statusEl.textContent = '正在上传照片…';
+      uploadReference(file).then(function(imageUrl) {
+        if (statusEl) statusEl.textContent = '正在准备素材并提交换人（约 1-3 分钟）…';
+        return postJson('/api/douyin/platform-information-desk/imitation', {
+          image_url: imageUrl,
+          item_id: itemId,
+          title: title
+        });
+      }).then(function(data) {
+        var taskId = String(data && data.task_id || '');
+        if (!taskId) throw new Error('没有拿到任务号');
+        var charged = data && data.billing ? Number(data.billing.credits_charged || 0) : 0;
+        if (statusEl) statusEl.textContent = '已提交（扣 ' + charged + ' 算力）·生成中…';
+        state.lastTask = { taskId: taskId, title: title, status: 'RUNNING', credits: charged };
+        renderLastTask();
+        pollImitation(taskId, 1, statusEl, resultEl);
+      }).catch(function(err) {
+        if (statusEl) statusEl.textContent = '失败：' + errorText(err);
+      });
+    });
+    input.click();
   }
 
   function load() {
@@ -121,6 +437,27 @@
     if (refresh && !refresh.dataset.bound) {
       refresh.dataset.bound = '1';
       refresh.addEventListener('click', load);
+    }
+    var historyBtn = document.getElementById('douyinDeskHistoryBtn');
+    if (historyBtn && !historyBtn.dataset.bound) {
+      historyBtn.dataset.bound = '1';
+      historyBtn.addEventListener('click', loadHistory);
+    }
+    var searchBtn = document.getElementById('douyinDeskSearchBtn');
+    if (searchBtn && !searchBtn.dataset.bound) {
+      searchBtn.dataset.bound = '1';
+      searchBtn.addEventListener('click', searchDesk);
+      var clearBtn = document.getElementById('douyinDeskSearchClear');
+      if (clearBtn) clearBtn.addEventListener('click', clearDeskSearch);
+      var searchInput = document.getElementById('douyinDeskSearchInput');
+      if (searchInput) {
+        searchInput.addEventListener('keydown', function(event) {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            searchDesk();
+          }
+        });
+      }
     }
     if (tabs && !tabs.dataset.bound) {
       tabs.dataset.bound = '1';

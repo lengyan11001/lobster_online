@@ -81,6 +81,9 @@ from .api.publish import router as publish_router
 from .api.creator_content import router as creator_content_router
 from .api.account_creator_schedule import router as account_creator_schedule_router
 from .api.alibaba_inquiries import router as alibaba_inquiries_router
+from .api.alibaba_reception import router as alibaba_reception_router
+from .api.alibaba_store_sync import router as alibaba_store_sync_router
+from .api.version_api import router as version_router
 from .api.logs_api import router as logs_router
 from .api.wechat_oa import router as wechat_oa_router
 from .api.msghelper_wechat import router as msghelper_wechat_router
@@ -961,6 +964,20 @@ async def _lifespan(app: FastAPI):
         logger.info("[启动] YouTube 定时上传已启动（按间隔分钟 + 素材队列）")
     except Exception as e:
         logger.warning("[启动] YouTube 定时上传未启动: %s", e)
+    try:
+        from .services.creator_metrics_daily_runner import creator_metrics_daily_background_loop
+
+        asyncio.create_task(creator_metrics_daily_background_loop())
+        logger.info("[启动] 发布数据（播放量）每日同步已启动（每天 02:00 北京时间；抖音+视频号）")
+    except Exception as e:
+        logger.warning("[启动] 发布数据每日同步未启动: %s", e)
+    try:
+        from .services.cloud_session_renew import cloud_token_renew_loop
+
+        asyncio.create_task(cloud_token_renew_loop())
+        logger.info("[启动] 云端登录态静默续签已启动（剩余不足 20 天时自动换新 token）")
+    except Exception as e:
+        logger.warning("[启动] 云端登录态静默续签未启动: %s", e)
     if wecom_router is not None:
         try:
             from .api.wecom import _execute_scheduled_messages
@@ -1091,6 +1108,9 @@ def create_app() -> FastAPI:
     app.include_router(creator_content_router, prefix="")
     app.include_router(account_creator_schedule_router, prefix="")
     app.include_router(alibaba_inquiries_router, prefix="")
+    app.include_router(alibaba_reception_router, prefix="")
+    app.include_router(alibaba_store_sync_router, prefix="")
+    app.include_router(version_router, prefix="")
     app.include_router(logs_router, prefix="")
     app.include_router(wechat_oa_router, prefix="")
     app.include_router(msghelper_wechat_router, prefix="")

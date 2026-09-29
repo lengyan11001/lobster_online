@@ -38,6 +38,9 @@ _LOG_CANDIDATES = [
     "logs/native_wechat_diagnostics.jsonl.1",
     "logs/native_wechat_auto_reply.jsonl",
     "logs/native_wechat_auto_reply.jsonl.1",
+    # 个人 WhatsApp 接管（桌面版 UIA）：诊断包里带上，才能看清"没识别到窗口"到底是哪种情况
+    "logs/native_whatsapp.jsonl",
+    "logs/native_whatsapp.jsonl.1",
     "app.log",
     "backend.log",
     "backend.log.1",

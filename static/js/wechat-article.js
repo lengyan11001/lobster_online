@@ -6,6 +6,14 @@
     assetPickerSelected: {}
   };
 
+  // 复刻：抓到的原文 + 记忆资料选择 + 复刻出来的文章
+  var remix = {
+    source: null,
+    generated: null,
+    memoryDocs: [],
+    surveys: []
+  };
+
   function apiBase() {
     return (typeof LOCAL_API_BASE !== 'undefined' ? LOCAL_API_BASE : '') || '';
   }
@@ -160,7 +168,7 @@
     document.querySelectorAll('.wechat-article-tab').forEach(function(btn) {
       btn.classList.toggle('active', btn.getAttribute('data-wechat-article-tab') === tab);
     });
-    ['compose', 'drafts', 'settings'].forEach(function(k) {
+    ['compose', 'remix', 'drafts', 'settings'].forEach(function(k) {
       var panel = field('wechatArticlePanel' + k.charAt(0).toUpperCase() + k.slice(1));
       if (panel) panel.style.display = k === tab ? '' : 'none';
     });
@@ -633,6 +641,205 @@
       });
   }
 
+  var REMIX_NO_MATERIAL_MSG = 'IP 人设模板里还没有选资料（记忆文件 / 资料调查）：请先到「个人设置 → 个人记忆 / 资料调查」给模板选好资料，再回来做复刻。';
+  var REMIX_TEMPLATE_READ_FAILED_MSG = '读取 IP 人设模板失败（网络或登录状态异常），请稍后重试。';
+
+  function remixRowHasMaterial(row) {
+    var data = row && typeof row === 'object' ? row : {};
+    var ids = Array.isArray(data.memory_doc_ids)
+      ? data.memory_doc_ids.filter(function(x) { return String(x || '').trim(); })
+      : [];
+    var req = data.requirements;
+    var hasReq = req && typeof req === 'object' ? Object.keys(req).length > 0 : !!String(req || '').trim();
+    return !!(ids.length || String(data.survey_id || '').trim() || hasReq);
+  }
+
+  // IP 人设模板在云端：online 站点的 /api/ip-content/* 是本地后端，没有这些路由，必须走云端基址
+  function cloudBaseForTemplate() {
+    var base = (typeof API_BASE !== 'undefined' && API_BASE) ? API_BASE : (window.__API_BASE || '');
+    return String(base || '').replace(/\/$/, '');
+  }
+
+  function remixTemplateRead(path, withInstallation) {
+    var base = cloudBaseForTemplate();
+    if (!base) return Promise.resolve({ ok: false, err: new Error('no cloud base') });
+    var headers = typeof authHeaders === 'function' ? Object.assign({}, authHeaders() || {}) : {};
+    if (withInstallation && typeof getOrCreateInstallationId === 'function') {
+      headers['X-Installation-Id'] = getOrCreateInstallationId();
+    }
+    return fetch(base + path, { headers: headers })
+      .then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      })
+      .then(function(data) { return { ok: true, data: data || {} }; })
+      .catch(function(err) { return { ok: false, err: err }; });
+  }
+
+  // 复刻资料 = IP 人设模板里选好的（当前模板 → 没设当前模板时用默认配置行），不兜底、不默认全带
+  function ensureRemixTemplateMaterial() {
+    return Promise.all([
+      remixTemplateRead('/api/ip-content/personal-default', true),
+      remixTemplateRead('/api/ip-content/schedule-templates', false)
+    ]).then(function(res) {
+      if (!res[0].ok || !res[1].ok) {
+        // 读不到模板 ≠ 模板没选资料：不拦，交给设备端判定，避免误报
+        console.warn('[wechat-article] read remix template failed', res[0].err, res[1].err);
+        return { readFailed: true };
+      }
+      var item = (res[0].data && res[0].data.item) || {};
+      var rows = (res[1].data && Array.isArray(res[1].data.items)) ? res[1].data.items : [];
+      var meta = (item.meta && typeof item.meta === 'object') ? item.meta : {};
+      var currentId = String(meta.current_template_id || '').trim();
+      var chosen = item;
+      var i;
+      if (currentId) {
+        for (i = 0; i < rows.length; i++) {
+          if (String((rows[i] && rows[i].id) || '') === currentId) { chosen = rows[i]; break; }
+        }
+      } else {
+        for (i = 0; i < rows.length; i++) {
+          var rowMeta = (rows[i] && rows[i].meta && typeof rows[i].meta === 'object') ? rows[i].meta : {};
+          if (String(rowMeta.source || '') === 'online_personal_profile'
+            || String((rows[i] && rows[i].name) || '').indexOf('默认') >= 0) {
+            chosen = rows[i];
+            break;
+          }
+        }
+      }
+      if (!remixRowHasMaterial(chosen)) throw new Error(REMIX_NO_MATERIAL_MSG);
+      return chosen;
+    });
+  }
+
+  function fetchRemixSource() {
+    var url = field('wechatRemixUrl') ? field('wechatRemixUrl').value.trim() : '';
+    var meta = field('wechatRemixSourceMeta');
+    if (!url) { showMsg('请先粘贴公众号文章链接。', true); return; }
+    var btn = field('wechatRemixFetchBtn');
+    setBusy(btn, true, '抓取中…');
+    if (meta) meta.textContent = '正在抓取正文…';
+    fetch(apiUrl('/api/wechat-article/fetch-article'), {
+      method: 'POST',
+      headers: hdrs(),
+      body: JSON.stringify({ url: url })
+    })
+      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+      .then(function(x) {
+        if (!x.ok) throw new Error((x.data && x.data.detail) || '抓取失败');
+        remix.source = (x.data && x.data.source) || null;
+        var s = remix.source || {};
+        if (meta) {
+          meta.textContent = '已抓到：《' + (s.title || '无标题') + '》'
+            + (s.author ? ' · ' + s.author : '')
+            + (s.published_at ? ' · ' + s.published_at : '')
+            + ' · ' + (s.word_count || 0) + ' 字（预览 ' + ((s.body || '').length) + ' 字）';
+        }
+        showMsg('已抓到参考文章，可以直接生成复刻文章。', false);
+      })
+      .catch(function(err) {
+        remix.source = null;
+        if (meta) meta.textContent = '抓取失败：' + (err && err.message ? err.message : '未知错误');
+        showMsg(err && err.message ? err.message : '抓取失败', true);
+      })
+      .finally(function() { setBusy(btn, false); });
+  }
+
+  function generateRemix() {
+    var url = field('wechatRemixUrl') ? field('wechatRemixUrl').value.trim() : '';
+    if (!url) { showMsg('请先粘贴公众号文章链接。', true); return; }
+    var btn = field('wechatRemixGenerateBtn');
+    setBusy(btn, true, '检查模板…');
+    showMsg('', false);
+    ensureRemixTemplateMaterial()
+      .then(function(info) {
+        if (info && info.readFailed) {
+          showMsg('提示：没能读到 IP 人设模板（网络异常），本次资料以设备端模板为准。', false);
+        }
+        runRemixGenerate(url, btn);
+      })
+      .catch(function(err) {
+        showMsg(err && err.message ? err.message : REMIX_TEMPLATE_READ_FAILED_MSG, true);
+        setBusy(btn, false);
+      });
+  }
+
+  function runRemixGenerate(url, btn) {
+    setBusy(btn, true, '复刻中…');
+    if (field('wechatRemixPreview')) {
+      field('wechatRemixPreview').innerHTML = '<div class="wechat-article-empty-preview"><strong>正在复刻</strong><p>先用你 IP 人设模板里选好的资料（记忆文件 / 资料调查）重写，再按原文逻辑排版配图。</p></div>';
+    }
+    fetch(apiUrl('/api/wechat-article/generate'), {
+      method: 'POST',
+      headers: hdrs(),
+      body: JSON.stringify({
+        source_url: url,
+        idea: '',
+        style: '专业、有观点、适合公众号阅读',
+        theme: 'professional-clean',
+        include_images: true,
+        image_model: 'gpt-image-2',
+        image_aspect_ratio: '16:9',
+        image_count: 3
+      })
+    })
+      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+      .then(function(x) {
+        if (!x.ok) throw new Error((x.data && x.data.detail) || '复刻失败');
+        var data = x.data || {};
+        remix.generated = data;
+        if (data.source) remix.source = data.source;
+        if (field('wechatRemixPreviewTitle')) field('wechatRemixPreviewTitle').textContent = data.title || '复刻预览';
+        if (field('wechatRemixPreviewMeta')) {
+          var warn = (data.warnings || []).length ? ' · ' + (data.warnings || []).join('；') : '';
+          field('wechatRemixPreviewMeta').textContent = (data.digest || '') + warn;
+        }
+        if (field('wechatRemixPreview')) field('wechatRemixPreview').innerHTML = data.html || '<p class="meta">暂无预览</p>';
+        if (field('wechatRemixPushBtn')) field('wechatRemixPushBtn').disabled = !(data.markdown || '').trim();
+        showMsg('复刻文章已生成，可在右侧确认效果后推送草稿箱。', false);
+      })
+      .catch(function(err) {
+        showMsg(err && err.message ? err.message : '复刻失败', true);
+        if (field('wechatRemixPreview')) {
+          field('wechatRemixPreview').innerHTML = '<div class="wechat-article-empty-preview"><strong>复刻失败</strong><p>'
+            + escapeHtml(err && err.message ? err.message : '未知错误') + '</p></div>';
+        }
+      })
+      .finally(function() { setBusy(btn, false); });
+  }
+
+  function pushRemixDraft() {
+    var data = remix.generated || {};
+    if (!(data.markdown || '').trim()) { showMsg('请先生成复刻文章。', true); return; }
+    var btn = field('wechatRemixPushBtn');
+    setBusy(btn, true, '推送中…');
+    fetch(apiUrl('/api/wechat-article/drafts'), {
+      method: 'POST',
+      headers: hdrs(),
+      body: JSON.stringify({
+        title: data.title || '',
+        digest: data.digest || '',
+        theme: data.theme || 'professional-clean',
+        markdown: data.markdown || '',
+        cover_image_url: (data.image && data.image.url) || '',
+        upload_article_images: true
+      })
+    })
+      .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d }; }); })
+      .then(function(x) {
+        if (!x.ok) throwApiError(x.data, '推送失败');
+        var draft = (x.data && x.data.draft) || {};
+        if (x.data && x.data.pushed) {
+          showMsg('已推送到公众号草稿箱：' + (draft.media_id || ''), false);
+        } else {
+          showMsg((x.data && x.data.message) || '文章已保存到本地，但推送草稿箱未完成。', true);
+        }
+        loadDrafts();
+      })
+      .catch(function(err) { showMsg(err && err.message ? err.message : '推送失败', true); })
+      .finally(function() { setBusy(btn, false); });
+  }
+
   function bindOnce() {
     var root = document.getElementById('content-wechat-article');
     if (!root || root.dataset.bound === '1') return;
@@ -656,6 +863,9 @@
       event.target.value = '';
     });
     field('wechatArticleAssetPickerBtn') && field('wechatArticleAssetPickerBtn').addEventListener('click', openAssetPicker);
+    field('wechatRemixFetchBtn') && field('wechatRemixFetchBtn').addEventListener('click', fetchRemixSource);
+    field('wechatRemixGenerateBtn') && field('wechatRemixGenerateBtn').addEventListener('click', generateRemix);
+    field('wechatRemixPushBtn') && field('wechatRemixPushBtn').addEventListener('click', pushRemixDraft);
     field('wechatArticleEditToggle') && field('wechatArticleEditToggle').addEventListener('change', function() {
       setEditVisible(!!field('wechatArticleEditToggle').checked);
     });

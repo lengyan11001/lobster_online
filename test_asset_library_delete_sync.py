@@ -197,3 +197,283 @@ def test_top_navigation_buttons_are_excluded_from_drag_capture():
     source = (Path(__file__).parent / "static" / "js" / "init.js").read_text(encoding="utf-8")
 
     assert "event.target.closest('button, a, input, select, textarea, [role=\"button\"]')" in source
+
+def test_optional_upload_labels_clean_without_rejecting_blank():
+    from fastapi import Form
+
+    assert assets._clean_creative_group_name_optional("  spring   hero  ") == "spring hero"
+    assert assets._clean_creative_group_name_optional("   ") == ""
+    assert assets._clean_creative_group_name_optional(Form("")) == ""
+    assert assets._clean_creative_group_name_optional(None) == ""
+    assert assets._clean_creative_group_name_optional("g" * 50) == "g" * 40
+    assert assets._clean_upload_tags(Form("")) is None
+    assert assets._clean_upload_tags("  ") is None
+    assert assets._clean_upload_tags("hot, hot, cover; hero detail") == "hot,cover,hero,detail"
+    assert assets._clean_upload_tags(",".join(f"t{i}" for i in range(20))) == ",".join(f"t{i}" for i in range(12))
+    assert assets._clean_upload_tags("x" * 80) == "x" * 40
+    auto = "auto," + ("y" * 3000)
+    assert assets._clean_upload_tags(auto) == auto[:2048]
+    try:
+        assets._clean_creative_group_name("   ")
+    except Exception as exc:
+        assert getattr(exc, "status_code", None) == 400
+    else:
+        raise AssertionError("required group name must still reject blanks")
+
+
+def test_asset_upload_stores_optional_group_and_tags(monkeypatch):
+    saved = []
+
+    class FakeDb:
+        @staticmethod
+        def in_transaction():
+            return False
+
+        def add(self, row):
+            saved.append(row)
+
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(assets, "_save_bytes", lambda data, ext: ("labeled", "labeled.png", len(data)))
+    request = Request({"type": "http", "method": "POST", "path": "/api/assets/upload", "headers": []})
+
+    result = asyncio.run(
+        assets.upload_asset(
+            request=request,
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="shot.png", file=io.BytesIO(b"png")),
+            creative_candidate_group="  spring   hero  ",
+            tags="hot, hot, cover",
+            current_user=SimpleNamespace(id=7),
+            db=FakeDb(),
+        )
+    )
+
+    assert result["creative_candidate_group"] == "spring hero"
+    assert saved[0].tags == "hot,cover"
+    assert saved[0].meta["creative_candidate_group"] == "spring hero"
+    assert saved[0].meta["creative_candidate_groups"] == ["spring hero"]
+    assert saved[0].meta["asset_origin"] == "user_upload"
+
+
+def test_asset_upload_ignores_omitted_form_defaults(monkeypatch):
+    saved = []
+
+    class FakeDb:
+        @staticmethod
+        def in_transaction():
+            return False
+
+        def add(self, row):
+            saved.append(row)
+
+        def commit(self):
+            return None
+
+    monkeypatch.setattr(assets, "_save_bytes", lambda data, ext: ("plain", "plain.pdf", 3))
+    request = Request({"type": "http", "method": "POST", "path": "/api/assets/upload", "headers": []})
+
+    asyncio.run(
+        assets.upload_asset(
+            request=request,
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="intro.pdf", file=io.BytesIO(b"pdf")),
+            current_user=SimpleNamespace(id=7),
+            db=FakeDb(),
+        )
+    )
+
+    assert saved[0].tags is None
+    assert "creative_candidate_group" not in saved[0].meta
+    assert "creative_candidate_groups" not in saved[0].meta
+
+
+def test_user_upload_save_url_cleans_labels_without_touching_generated_tags():
+    source = inspect.getsource(assets._save_asset_from_url_locked)
+    assert 'if asset_origin == "user_upload":' in source
+    assert "stored_tags = _clean_upload_tags(body.tags)" in source
+    assert "tags=stored_tags" in source
+    backfill = inspect.getsource(assets._maybe_backfill_prompt_model_on_dedupe)
+    assert "tags" not in backfill
+    assert "creative_candidate_group" not in backfill
+
+
+def test_creative_group_summaries_count_images_and_keep_other_media():
+    rows = [
+        SimpleNamespace(media_type="image", model="", meta={"creative_candidate_group": "A", "asset_origin": "user_upload"}),
+        SimpleNamespace(media_type="video", model="", meta={"creative_candidate_group": "A", "asset_origin": "user_upload"}),
+        SimpleNamespace(media_type="image", model="", meta={"creative_candidate_group": "B", "content_visibility": "hidden"}),
+        SimpleNamespace(media_type="image", model="shanjian-digital-human-template-media", meta={"creative_candidate_group": "C"}),
+        SimpleNamespace(media_type="document", model="", meta={"creative_candidate_group": "D", "asset_origin": "user_upload"}),
+        SimpleNamespace(media_type="image", model="", meta={"asset_origin": "user_upload"}),
+    ]
+
+    groups = {item["name"]: item for item in assets._creative_candidate_group_summaries(rows)}
+
+    assert groups["A"]["count"] == 1
+    assert groups["D"]["count"] == 0
+    assert "B" not in groups
+    assert "C" not in groups
+
+
+def test_upload_form_keeps_shared_optional_labels():
+    view = (Path(__file__).parent / "static" / "views" / "assets.html").read_text(encoding="utf-8")
+    page = (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
+    script = (Path(__file__).parent / "static" / "js" / "publish.js").read_text(encoding="utf-8")
+    assert 'id="assetUploadGroup"' not in view
+    assert 'id="assetUploadTags"' not in view
+    assert 'id="assetUploadDialogGroup"' in page
+    assert 'id="assetUploadDialogTags"' in page
+    assert "asset-upload-control" in view
+    assert "var uploadLabels = _assetUploadOptionalLabels();" in script
+    assert "if (uploadLabels.group) fd.append('creative_candidate_group', uploadLabels.group);" in script
+    assert "_rememberAssetUploadDialogLabels" in script
+    assert "assetUploadDialogGroup.value = ''" not in script
+    assert "assetUploadDialogTags.value = ''" not in script
+class _LabelDb:
+    def __init__(self, row):
+        self.row = row
+        self.added = []
+        self.commits = 0
+
+    def query(self, model):
+        return self
+
+    def filter(self, *args, **kwargs):
+        return self
+
+    def first(self):
+        return self.row
+
+    def add(self, row):
+        self.added.append(row)
+
+    def commit(self):
+        self.commits += 1
+
+
+def _label_request():
+    return Request({"type": "http", "method": "POST", "path": "/api/assets/local-asset/labels", "headers": []})
+
+
+def _patch_label_sync(monkeypatch, calls):
+    monkeypatch.setattr(assets, "_auth_server_base_url", lambda: "https://server.example.test")
+    monkeypatch.setattr(assets, "_forward_auth_headers", lambda request: {"Authorization": "Bearer test"})
+    monkeypatch.setattr(assets.httpx, "Client", lambda *args, **kwargs: _Client(calls, *args, **kwargs))
+
+
+def test_label_sync_registers_when_remote_id_missing(monkeypatch):
+    calls = []
+    _patch_label_sync(monkeypatch, calls)
+    row = _asset({"asset_origin": "user_upload", "keep": 1})
+    db = _LabelDb(row)
+
+    result = assets.update_asset_labels(
+        "local-asset",
+        assets.AssetLabelsReq(creative_candidate_group="spring hero", tags="hot,cover"),
+        _label_request(),
+        SimpleNamespace(id=1),
+        db,
+    )
+
+    assert result["ok"] is True
+    assert result["creative_candidate_group"] == "spring hero"
+    assert result["tags"] == "hot,cover"
+    assert [call[0] for call in calls] == ["POST"]
+    assert calls[0][1].endswith("/api/assets/register-url")
+    assert calls[0][2]["json"]["creative_candidate_group"] == "spring hero"
+    assert calls[0][2]["json"]["tags"] == "hot,cover"
+    assert "creative_candidate_groups" in calls[0][2]["json"]
+    assert row.meta["remote_asset_id"] == "remote-asset"
+    assert row.meta["keep"] == 1
+    assert row.tags == "hot,cover"
+    assert db.commits >= 1
+
+
+def test_label_sync_clears_existing_remote_asset(monkeypatch):
+    calls = []
+    _patch_label_sync(monkeypatch, calls)
+    row = _asset({
+        "asset_origin": "user_upload",
+        "remote_asset_id": "remote-9",
+        "keep": 1,
+        "creative_candidate_group": "old",
+        "creative_candidate_groups": ["old"],
+    })
+    row.tags = "old"
+    db = _LabelDb(row)
+
+    result = assets.update_asset_labels(
+        "local-asset",
+        assets.AssetLabelsReq(creative_candidate_group="", tags=""),
+        _label_request(),
+        SimpleNamespace(id=1),
+        db,
+    )
+
+    assert result["creative_candidate_group"] == ""
+    assert result["tags"] == ""
+    assert [call[0] for call in calls] == ["POST"]
+    assert calls[0][1].endswith("/api/assets/remote-9/labels")
+    assert calls[0][2]["json"] == {"creative_candidate_group": "", "tags": ""}
+    assert "creative_candidate_group" not in row.meta
+    assert "creative_candidate_groups" not in row.meta
+    assert row.meta["remote_asset_id"] == "remote-9"
+    assert row.meta["keep"] == 1
+    assert row.tags is None
+
+
+def test_label_sync_skips_request_when_blank_and_unregistered(monkeypatch):
+    calls = []
+    _patch_label_sync(monkeypatch, calls)
+    row = _asset({"asset_origin": "user_upload", "keep": 1})
+    db = _LabelDb(row)
+
+    result = assets.update_asset_labels(
+        "local-asset",
+        assets.AssetLabelsReq(creative_candidate_group="   ", tags="  "),
+        _label_request(),
+        SimpleNamespace(id=1),
+        db,
+    )
+
+    assert result["ok"] is True
+    assert calls == []
+    assert "remote_asset_id" not in row.meta
+    assert "creative_candidate_group" not in row.meta
+    assert row.tags is None
+    assert row.meta["keep"] == 1
+
+
+def test_label_sync_failure_keeps_local_save(monkeypatch):
+    class _BoomClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            raise RuntimeError("sync down")
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(assets, "_auth_server_base_url", lambda: "https://server.example.test")
+    monkeypatch.setattr(assets, "_forward_auth_headers", lambda request: {"Authorization": "Bearer test"})
+    monkeypatch.setattr(assets.httpx, "Client", _BoomClient)
+    row = _asset({"asset_origin": "user_upload", "remote_asset_id": "remote-9", "keep": 1})
+    db = _LabelDb(row)
+
+    result = assets.update_asset_labels(
+        "local-asset",
+        assets.AssetLabelsReq(creative_candidate_group="spring hero", tags="hot"),
+        _label_request(),
+        SimpleNamespace(id=1),
+        db,
+    )
+
+    assert result["ok"] is True
+    assert result["creative_candidate_group"] == "spring hero"
+    assert row.meta["creative_candidate_group"] == "spring hero"
+    assert row.meta["keep"] == 1
+    assert row.tags == "hot"
+    assert db.commits >= 1

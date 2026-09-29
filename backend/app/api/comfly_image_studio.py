@@ -246,7 +246,22 @@ async def _poll_comfly_proxy_job(
     while True:
         if asyncio.get_running_loop().time() >= deadline:
             raise HTTPException(status_code=504, detail="图片生成已提交，但等待服务端结果超时，请稍后刷新记录")
-        resp = await client.get(poll_url, headers=headers)
+        try:
+            resp = await client.get(poll_url, headers=headers)
+        except httpx.TransportError as exc:
+            logger.warning(
+                "[comfly_image_studio] poll retry url=%s err=%s",
+                poll_url,
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            await asyncio.sleep(interval)
+            interval = min(interval + 0.5, 5.0)
+            continue
+        if resp.status_code >= 500:
+            logger.warning("[comfly_image_studio] poll retry url=%s status=%s", poll_url, resp.status_code)
+            await asyncio.sleep(interval)
+            interval = min(interval + 0.5, 5.0)
+            continue
         if resp.status_code >= 400:
             raise HTTPException(status_code=resp.status_code, detail=_pick_error_detail(resp))
         try:

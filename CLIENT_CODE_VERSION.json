@@ -1,7 +1,7 @@
 {
-  "version": "2.0.52",
-  "build": 331,
-  "applied_at": "2026-09-14T18:04:07+08:00",
-  "note": "feat(creative): delete buttons on every generation record (seedance/image/batch/viral/ecommerce/cutcli); fix(ip-content): record rows no longer repeat 类型+条数",
-  "bundle_sha256": "34f593ee2092fe2b961d75c679d5a77fcb7fb6bbd24d400ecbafad74469241c0"
+  "version": "2.0.85",
+  "build": 379,
+  "applied_at": "2026-09-29T11:52:00+08:00",
+  "note": "本次客户端代码更新（build 379）：\n1) 工作流数字人节点新增「口播来源」多选：行业口播 / IP口播。只选一个就用那个；两个都选则每次随机挑一种，再取该类文案的第一条去生成数字人视频\n2) online 定时任务的数字人表单、以及员工工作流编辑器里的数字人节点，都加上了这个多选；旧配置（原来固定用行业口播）不受影响",
+  "bundle_sha256": "17b2d81bfc6aa58b5649eae45927e93ada9e041aa266111e19b4d366f9458cd7"
 }

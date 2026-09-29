@@ -1533,6 +1533,7 @@ var LOBSTER_MAIN_VIEWS = {
   agent: true,
   'openclaw-memory': true,
   'personal-settings': true,
+  'account-security': true,
   'creative-film-studio': true,
   'ppt-studio': true,
   'viral-tvc-studio': true,
@@ -1911,10 +1912,24 @@ function scheduleDashboardRecovery() {
   }, delay);
 }
 
+function clearLoginInputsForLogout() {
+  // 退出登录后不要再留着上次输入的账号/密码/手机号验证码，既避免被人看到，
+  // 也避免浏览器把残留值当成"保存的信息"继续提示。
+  ['loginAccount', 'loginPassword', 'registerPhone', 'registerSmsCode', 'registerCaptchaAnswer', 'ownWechatTokenInput'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  ['loginMsg', 'registerMsg', 'ownWechatPasteMsg'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) { el.textContent = ''; el.style.display = 'none'; }
+  });
+}
+
 function loadDashboard() {
   if (!token) {
     applyLobsterFeatureGates({});
     if (typeof window.resetChatSessionsForLogout === 'function') window.resetChatSessionsForLogout();
+    clearLoginInputsForLogout();
     document.getElementById('authPanel').style.display = 'block';
     document.getElementById('dashboard').classList.remove('visible');
     setAuthenticatedChrome(false);
@@ -2446,6 +2461,7 @@ function runAppViewInit(view) {
   if (view === 'logs') { if (typeof ensureLogsBindings === 'function') ensureLogsBindings(); }
   if (view === 'openclaw-memory' && typeof window.initOpenclawMemoryManager === 'function') window.initOpenclawMemoryManager();
   if (view === 'personal-settings' && typeof window.initPersonalSettingsView === 'function') window.initPersonalSettingsView();
+  if (view === 'account-security' && typeof window.initAccountSecurityView === 'function') window.initAccountSecurityView();
   if (view === 'creative-film-studio' && typeof window.initCreativeFilmStudioView === 'function') window.initCreativeFilmStudioView();
   if (view === 'messenger-config' && typeof loadMessengerConfigPage === 'function') loadMessengerConfigPage();
   if (view === 'youtube-accounts' && typeof loadYoutubeAccountsPage === 'function') loadYoutubeAccountsPage();

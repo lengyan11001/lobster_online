@@ -91,6 +91,12 @@ class WechatArticlePreviewIn(BaseModel):
 
 class WechatArticleGenerateIn(BaseModel):
     idea: str = Field("", description="用户输入的公众号主题、想法或素材")
+    source_url: str = Field("", description="复刻模式：要参考的公众号文章链接（mp.weixin.qq.com/s/...）")
+    memory_document_ids: List[str] = Field(default_factory=list, description="复刻模式：使用哪些记忆资料；留空=全部记忆")
+    memory_document_titles: List[str] = Field(default_factory=list, description="复刻模式：记忆资料标题（id 对不上时按标题兜底匹配）")
+    survey_ids: List[str] = Field(default_factory=list, description="复刻模式：使用哪些资料调查（IP 内容调研问卷）")
+    survey_names: List[str] = Field(default_factory=list, description="复刻模式：资料调查名称（兜底展示/匹配）")
+    extra_material: str = Field("", description="复刻模式：额外补充要点/要求")
     style: str = "专业、有观点、适合公众号阅读"
     audience: str = ""
     theme: str = "professional-clean"
@@ -101,6 +107,10 @@ class WechatArticleGenerateIn(BaseModel):
     image_count: int = 3
     selected_image_urls: List[str] = Field(default_factory=list)
     selected_asset_ids: List[str] = Field(default_factory=list)
+
+
+class WechatArticleFetchIn(BaseModel):
+    url: str = Field("", description="公众号文章链接")
 
 
 class WechatArticleDraftIn(BaseModel):
@@ -117,6 +127,12 @@ class WechatArticleDraftIn(BaseModel):
 class WechatArticlePipelineIn(BaseModel):
     idea: str = Field("", description="用户输入的公众号主题、想法或素材")
     topic: str = ""
+    source_url: str = Field("", description="复刻模式：要参考的公众号文章链接")
+    memory_document_ids: List[str] = Field(default_factory=list, description="复刻模式：使用哪些记忆资料；留空=全部记忆")
+    memory_document_titles: List[str] = Field(default_factory=list, description="复刻模式：记忆资料标题（id 对不上时按标题兜底匹配）")
+    survey_ids: List[str] = Field(default_factory=list, description="复刻模式：使用哪些资料调查（IP 内容调研问卷）")
+    survey_names: List[str] = Field(default_factory=list, description="复刻模式：资料调查名称（兜底展示/匹配）")
+    extra_material: str = Field("", description="复刻模式：额外补充要点/要求")
     style: str = "专业、有观点、适合公众号阅读"
     audience: str = ""
     theme: str = "professional-clean"
@@ -638,6 +654,330 @@ async def _call_article_writer(body: WechatArticleGenerateIn, token: str, instal
         normalized["digest"] = _digest(normalized["markdown"])
     if _looks_like_prompt_echo(normalized.get("image_prompt") or "", body.idea):
         normalized["image_prompt"] = ""
+    if not normalized.get("digest"):
+        normalized["digest"] = _digest(normalized["markdown"])
+    return normalized
+
+
+_OFFICIAL_ARTICLE_UA = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1 MicroMessenger/8.0.49"
+)
+_OFFICIAL_ARTICLE_MAX_CHARS = 6000
+_OFFICIAL_ARTICLE_MIN_CHARS = 200
+
+
+def _strip_html_text(raw: str) -> str:
+    text = re.sub(r"<script[\s\S]*?</script>", " ", raw or "", flags=re.I)
+    text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.I)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"</p>|</section>|</div>|</h[1-6]>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text)
+    text = re.sub(r"[ \t\u00a0]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+async def _fetch_official_article(url: str) -> Dict[str, Any]:
+    """抓微信公众号文章正文（复刻模式的输入）。
+
+    必须带浏览器/微信 UA：不带 UA 时微信会返回「环境异常」验证页，正文是空的（2026-09-27 实测）。
+    """
+    target = str(url or "").strip()
+    if not target.lower().startswith("http"):
+        raise HTTPException(status_code=400, detail="请输入公众号文章链接（https://mp.weixin.qq.com/s/...）")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(45.0, connect=15.0), trust_env=False,
+                                     follow_redirects=True) as client:
+            resp = await client.get(target, headers={"User-Agent": _OFFICIAL_ARTICLE_UA})
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"抓取文章失败：{exc}") from exc
+    html_text = resp.text or ""
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"抓取文章失败：HTTP {resp.status_code}")
+    if "环境异常" in html_text or "请在微信客户端打开" in html_text:
+        raise HTTPException(status_code=502, detail="微信返回了验证页，没能拿到正文，请稍后重试或换一条链接")
+
+    def _pick(pattern: str) -> str:
+        m = re.search(pattern, html_text, re.S)
+        return m.group(1).strip() if m else ""
+
+    title = _strip_html_text(_pick(r'<h1[^>]*class="rich_media_title"[^>]*>(.*?)</h1>')) or _pick(r'var msg_title = ["\'](.*?)["\']')
+    author = _strip_html_text(_pick(r'<a[^>]*id="js_name"[^>]*>(.*?)</a>')) or _pick(r'var author = ["\'](.*?)["\']')
+    published_at = ""
+    ct = _pick(r'var ct = "(\d+)"')
+    if ct.isdigit():
+        try:
+            published_at = datetime.utcfromtimestamp(int(ct)).strftime("%Y-%m-%d")
+        except Exception:  # noqa: BLE001
+            published_at = ""
+    body_html = _pick(r'<div[^>]*id="js_content"[^>]*>(.*?)</div>\s*<script')
+    if not body_html:
+        body_html = _pick(r'<div[^>]*class="rich_media_content[^"]*"[^>]*>(.*?)</div>\s*<script')
+    body = _strip_html_text(body_html)
+    if len(body) < _OFFICIAL_ARTICLE_MIN_CHARS:
+        raise HTTPException(status_code=502,
+                            detail="没抓到正文（文章可能已删除、需要登录，或不是公开文章）")
+    images = [u for u in re.findall(r'<img[^>]*?(?:data-src|src)="([^"]+)"', body_html) if u.startswith("http")]
+    clipped = body[:_OFFICIAL_ARTICLE_MAX_CHARS]
+    logger.info("[wechat-article] fetched official article url=%s title=%s chars=%s", target[:80], title[:40], len(body))
+    return {
+        "url": target,
+        "title": title[:120],
+        "author": author[:60],
+        "published_at": published_at,
+        "body": clipped,
+        "word_count": len(body),
+        "images": images[:6],
+        "truncated": len(body) > len(clipped),
+    }
+
+
+def _memory_material_text(user_id: int, doc_ids: Optional[List[str]] = None, *,
+                          doc_titles: Optional[List[str]] = None, limit: int = 6000) -> str:
+    """取指定几份记忆资料作为复刻的事实来源（只认传进来的 doc_ids，不再默认全带）。
+
+    H5 与客户端的记忆同源（OpenClawMemoryDocument），万一对不上 id 就按标题兜底匹配一次。
+    """
+    if not user_id:
+        return ""
+    try:
+        from .openclaw_memory import _load_index, _read_canonical_memory_content
+    except Exception:  # noqa: BLE001
+        return ""
+    try:
+        wanted = {str(x).strip() for x in (doc_ids or []) if str(x).strip()}
+        if wanted:
+            docs = _load_index(int(user_id))
+            picked = [d for d in docs if str(d.get("id") or "") in wanted]
+            if not picked:
+                titles = {str(t).strip().lower() for t in (doc_titles or []) if str(t).strip()}
+                if titles:
+                    picked = [d for d in docs
+                              if str(d.get("title") or d.get("filename") or "").strip().lower() in titles]
+            parts = []
+            for doc in picked:
+                head = str(doc.get("title") or doc.get("filename") or doc.get("id") or "资料")
+                parts.append(f"【{head}】\n{_read_canonical_memory_content(doc, 1800)}")
+            return "\n\n".join(parts)[:limit]
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[wechat-article] memory material load failed user_id=%s err=%s", user_id, exc)
+        return ""
+
+
+def _flatten_survey(value: Any, depth: int = 0) -> str:
+    """把资料调查的 JSON 答案摊平成文本（字段名未知也能用）。"""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        parts = [_flatten_survey(item, depth + 1) for item in value]
+        return "、".join(part for part in parts if part)
+    if isinstance(value, dict) and depth < 3:
+        lines = []
+        for key, item in value.items():
+            text = _flatten_survey(item, depth + 1)
+            if text:
+                lines.append(f"- {key}: {text}")
+        return "\n".join(lines)
+    return ""
+
+
+def _survey_material_text(user_id: int, survey_ids: Optional[List[str]] = None, *, limit: int = 4000) -> str:
+    """资料调查（IP 内容调研问卷）-> 文本，作为复刻的事实来源之一。"""
+    ids: List[int] = []
+    for raw in (survey_ids or []):
+        try:
+            ids.append(int(str(raw).strip()))
+        except (TypeError, ValueError):
+            continue
+    if not user_id or not ids:
+        return ""
+    try:
+        from ..db import SessionLocal
+        from ..models import IPContentProfileSurvey
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[wechat-article] survey model import failed: %s", exc)
+        return ""
+    db = SessionLocal()
+    try:
+        rows = (db.query(IPContentProfileSurvey)
+                .filter(IPContentProfileSurvey.user_id == int(user_id),
+                        IPContentProfileSurvey.id.in_(ids)).all())
+        parts = []
+        for row in rows:
+            head = str(getattr(row, "name", "") or "资料调查")
+            body = _flatten_survey(getattr(row, "requirements", None))
+            parts.append(f"【资料调查：{head}】\n{body}" if body else f"【资料调查：{head}】")
+        return "\n\n".join(parts)[:limit]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[wechat-article] survey material load failed user_id=%s err=%s", user_id, exc)
+        return ""
+    finally:
+        db.close()
+
+
+async def _resolve_template_material(token: str, installation_id: str) -> Dict[str, Any]:
+    """读用户的「IP 人设模板」，返回它选定的资料：记忆 doc_ids + 资料调查 id + 模板人设字段。
+
+    顺序：当前模板（meta.current_template_id）→ 默认配置行（name 含"默认" / source=online_personal_profile）
+    → personal-default 自身的字段。选了什么就带什么，不是全带。
+    """
+    out: Dict[str, Any] = {"memory_doc_ids": [], "survey_ids": [], "requirements_text": "", "read_failed": False}
+    base = _server_proxy_base()
+    if not token or not base:
+        # 没有令牌/云端地址：属于"读不到模板"，不能当成"模板没选资料"
+        out["read_failed"] = True
+        raise HTTPException(status_code=503, detail="\u8bfb\u53d6 IP \u4eba\u8bbe\u6a21\u677f\u5931\u8d25\uff08\u7f51\u7edc\u6216\u767b\u5f55\u72b6\u6001\u5f02\u5e38\uff09\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002")
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
+
+    item: Dict[str, Any] = {}
+    templates: List[Dict[str, Any]] = []
+    read_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+            resp = await client.get(f"{base}/api/ip-content/personal-default", headers=headers)
+            if resp.status_code < 400:
+                data = resp.json() if resp.content else {}
+                if isinstance(data.get("item"), dict):
+                    item = data["item"]
+            resp2 = await client.get(f"{base}/api/ip-content/schedule-templates", headers=headers)
+            if resp2.status_code < 400:
+                data2 = resp2.json() if resp2.content else {}
+                rows = data2.get("items") or data2.get("templates") or []
+                templates = [row for row in rows if isinstance(row, dict)]
+            read_ok = resp.status_code < 400 and resp2.status_code < 400
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[wechat-article] resolve template material failed: %s", exc)
+        out["read_failed"] = True
+        raise HTTPException(status_code=503, detail="\u8bfb\u53d6 IP \u4eba\u8bbe\u6a21\u677f\u5931\u8d25\uff08\u7f51\u7edc\u6216\u767b\u5f55\u72b6\u6001\u5f02\u5e38\uff09\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002")
+    if not read_ok:
+        logger.warning("[wechat-article] resolve template material read failed: personal=%s templates=%s",
+                       resp.status_code, resp2.status_code)
+        out["read_failed"] = True
+        raise HTTPException(status_code=503, detail="\u8bfb\u53d6 IP \u4eba\u8bbe\u6a21\u677f\u5931\u8d25\uff08\u7f51\u7edc\u6216\u767b\u5f55\u72b6\u6001\u5f02\u5e38\uff09\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002")
+
+    def _has_material(row: Dict[str, Any]) -> bool:
+        return bool((row.get("memory_doc_ids") or []) or row.get("survey_id") or (row.get("requirements") or {}))
+
+    chosen = item
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    current_id = str(meta.get("current_template_id") or "").strip()
+    if current_id:
+        for row in templates:
+            if str(row.get("id") or "") == current_id:
+                chosen = row
+                break
+    if not current_id:
+        # 没设"当前模板"就用默认配置那一行（列表按时间倒序，取最新的一条）
+        for row in templates:
+            row_meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
+            name = str(row.get("name") or "")
+            if str(row_meta.get("source") or "") == "online_personal_profile" or "默认" in name:
+                chosen = row
+                break
+
+    out["memory_doc_ids"] = [str(x).strip() for x in (chosen.get("memory_doc_ids") or []) if str(x).strip()]
+    survey_id = chosen.get("survey_id")
+    if survey_id:
+        out["survey_ids"] = [str(survey_id)]
+    requirements = chosen.get("requirements")
+    if isinstance(requirements, dict) and requirements:
+        out["requirements_text"] = _flatten_survey(requirements)[:2500]
+    if not out["memory_doc_ids"] and not out["survey_ids"] and not out["requirements_text"]:
+        # 模板里没选资料：拦住，让用户去选，不兜底、不默认全带
+        raise HTTPException(
+            status_code=400,
+            detail="IP 人设模板里还没有选资料（记忆文件 / 资料调查）：请先到「个人设置 → 个人记忆 / 资料调查」"
+                   "给模板选好资料，再回来做复刻。",
+        )
+    logger.info("[wechat-article] template material template_id=%s memory=%s survey=%s",
+                chosen.get("id"), len(out["memory_doc_ids"]), out["survey_ids"])
+    return out
+
+
+async def _call_article_remix_writer(
+    body: WechatArticleGenerateIn,
+    source: Dict[str, Any],
+    memory_text: str,
+    token: str,
+    installation_id: str,
+) -> Dict[str, Any]:
+    """复刻写作：按参考文章的行文逻辑/结构，用记忆资料里的事实写一篇全新文章。"""
+    asb = _server_proxy_base()
+    model = (
+        os.environ.get("WEWRITE_ARTICLE_MODEL")
+        or os.environ.get("LOBSTER_WEWRITE_ARTICLE_MODEL")
+        or getattr(settings, "lobster_orchestration_sutui_chat_model", "")
+        or "deepseek-chat"
+    )
+    system_prompt = (
+        "你是资深微信公众号主编。用户给你一篇『参考文章』和一份『自家资料』，"
+        "你要写一篇**全新的**公众号文章：题材方向沿用参考文章，行文逻辑、结构节奏、段落推进方式要像它，"
+        "但**事实、案例、数据、观点全部来自自家资料**。\n"
+        "硬性要求：\n"
+        "1. 严禁照抄参考文章句子，连续 8 个字以上不得与原文相同；严禁提到『参考文章/原文/复刻/改写』这类词。\n"
+        "2. 资料里没有的数字、案例、客户名不要编；资料不足时用通用表达，不要虚构。\n"
+        "3. 必须返回严格 JSON，不要 Markdown 代码块。字段：title、digest、markdown、image_prompt。\n"
+        "4. markdown 不要重复文章标题或一级标题，从导语或二级标题开始，可用自然段/二级标题/列表/引用，中文，适合微信阅读。\n"
+        "5. 需要自动配图时，image_prompt 写一条适合 gpt-image-2 的配图提示词。"
+    )
+    user_prompt = (
+        f"参考文章标题：{source.get('title') or '（无标题）'}\n"
+        f"参考文章作者：{source.get('author') or '（未知）'}\n"
+        f"参考文章发布时间：{source.get('published_at') or '（未知）'}\n"
+        f"参考文章正文：\n{source.get('body') or ''}\n\n"
+        f"自家资料（事实以此为准）：\n{memory_text or '（没有读到记忆资料，只能按参考文章结构写通用内容）'}\n\n"
+        f"额外要求：{str(body.extra_material or '').strip() or '（无）'}\n"
+        f"目标读者：{body.audience.strip() or '普通公众号读者'}\n"
+        f"写作风格：{body.style.strip() or '专业、有观点、适合公众号阅读'}\n"
+        f"是否自动配图：{'是' if body.include_images else '否'}\n\n"
+        "请直接输出 JSON（title/digest/markdown/image_prompt），不要解释过程。"
+    )
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+        "temperature": 0.75,
+    }
+    if token:
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {token}",
+            "X-Installation-Id": installation_id,
+        }
+        url = f"{asb}/api/sutui-chat/completions"
+    else:
+        local = _local_openai_chat_config()
+        if not local:
+            raise RuntimeError("未找到登录 Bearer，无法使用服务器 GPT 中转；也未配置本机 OpenAI 兼容文本模型接口。")
+        url = local["url"]
+        headers = local["headers"]
+        payload["model"] = local["model"]
+    async with httpx.AsyncClient(timeout=180.0, trust_env=False) as client:
+        resp = await client.post(url, json=payload, headers=headers)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"sutui-chat HTTP {resp.status_code}: {(resp.text or '')[:600]}")
+    data = resp.json() if resp.content else {}
+    try:
+        content = data["choices"][0]["message"]["content"]
+    except Exception:  # noqa: BLE001
+        content = json.dumps(data, ensure_ascii=False)
+    hint = str(body.extra_material or source.get("title") or "")
+    normalized = _normalize_generated_article(_extract_json_object(content), hint, body.include_images)
+    normalized["markdown"] = _strip_prompt_echo(normalized.get("markdown") or "", hint)
+    if _looks_like_prompt_echo(normalized.get("title") or "", hint):
+        normalized["title"] = _extract_title(normalized["markdown"], "")
     if not normalized.get("digest"):
         normalized["digest"] = _digest(normalized["markdown"])
     return normalized
@@ -1488,15 +1828,45 @@ async def generate_wechat_article(
     db: Session = Depends(get_db),
 ):
     idea = (body.idea or "").strip()
+    source: Optional[Dict[str, Any]] = None
+    if str(getattr(body, "source_url", "") or "").strip():
+        # 复刻模式：先抓参考文章正文
+        source = await _fetch_official_article(body.source_url)
+        if not idea:
+            idea = str(source.get("title") or "复刻这篇公众号文章")
     if not idea:
-        raise HTTPException(status_code=400, detail="请输入文章主题或想法")
+        raise HTTPException(status_code=400, detail="请输入文章主题或想法，或给一条公众号文章链接")
     theme_name = body.theme if body.theme in _THEMES else "professional-clean"
     token = _raw_token_from_request(request)
     current_user = _optional_local_user(request, db)
     installation_id = _installation_id_from_request(request, current_user.id if current_user else 0)
     warnings: List[str] = []
     try:
-        article = await _call_article_writer(body, token, installation_id)
+        if source is not None:
+            uid = current_user.id if current_user else 0
+            memory_ids = [str(x).strip() for x in (body.memory_document_ids or []) if str(x).strip()]
+            survey_ids = [str(x).strip() for x in (getattr(body, "survey_ids", []) or []) if str(x).strip()]
+            persona_text = ""
+            if not memory_ids and not survey_ids:
+                # 没显式指定 -> 用「IP 人设默认模板」里选定的资料（不是全部）
+                tpl = await _resolve_template_material(token, installation_id)
+                memory_ids = tpl.get("memory_doc_ids") or []
+                survey_ids = tpl.get("survey_ids") or []
+                persona_text = str(tpl.get("requirements_text") or "")
+            blocks = []
+            if persona_text:
+                blocks.append("【IP 人设 / 模板资料】\n" + persona_text)
+            memory_text = _memory_material_text(uid, memory_ids,
+                                                doc_titles=body.memory_document_titles)
+            if memory_text:
+                blocks.append(memory_text)
+            survey_text = _survey_material_text(uid, survey_ids)
+            if survey_text:
+                blocks.append(survey_text)
+            memory_text = "\n\n".join(blocks)
+            article = await _call_article_remix_writer(body, source, memory_text, token, installation_id)
+        else:
+            article = await _call_article_writer(body, token, installation_id)
     except Exception as exc:
         logger.warning("[wechat-article] AI article writer fallback user_id=%s err=%s", current_user.id if current_user else 0, exc)
         warnings.append("AI 成稿服务暂不可用，已使用本地结构化草稿兜底。")
@@ -1560,6 +1930,8 @@ async def generate_wechat_article(
     article_html = _render_markdown_to_wechat_html(markdown, theme_name)
     return {
         "ok": True,
+        "mode": "remix" if source is not None else "compose",
+        "source": source,
         "title": title,
         "digest": digest,
         "markdown": markdown,
@@ -1579,6 +1951,18 @@ async def generate_wechat_article(
         },
         "warnings": warnings,
     }
+
+
+@router.post("/api/wechat-article/fetch-article", summary="抓取公众号文章正文（复刻模式先看抓到什么）")
+async def fetch_wechat_article(
+    body: WechatArticleFetchIn,
+    current_user: _ServerUser = Depends(get_current_user_media_edit),
+):
+    article = await _fetch_official_article(body.url)
+    preview = dict(article)
+    preview["body"] = str(article.get("body") or "")[:1200]
+    preview["preview_only"] = True
+    return {"ok": True, "source": preview}
 
 
 @router.post("/api/wechat-article/drafts")
@@ -1726,12 +2110,20 @@ async def run_wechat_article_pipeline(
     db: Session = Depends(get_db),
 ):
     idea = (body.idea or body.topic or "").strip()
-    if not idea:
-        raise HTTPException(status_code=400, detail="请输入公众号文章主题或想法")
+    source_url = str(getattr(body, "source_url", "") or "").strip()
+    # 复刻模式只给链接、idea 本来就是空的：两者都没有才报错
+    if not idea and not source_url:
+        raise HTTPException(
+            status_code=400,
+            detail="请输入公众号文章主题或想法，或粘贴要复刻的公众号文章链接",
+        )
     theme_name = body.theme if body.theme in _THEMES else "professional-clean"
     generated = await generate_wechat_article(
         WechatArticleGenerateIn(
             idea=idea,
+            source_url=str(getattr(body, "source_url", "") or ""),
+            memory_document_ids=list(getattr(body, "memory_document_ids", []) or []),
+            extra_material=str(getattr(body, "extra_material", "") or ""),
             style=body.style,
             audience=body.audience,
             theme=theme_name,

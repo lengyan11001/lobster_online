@@ -13,6 +13,7 @@
 
     <div class="wechat-article-tabs" role="tablist" aria-label="公众号文章">
       <button type="button" class="wechat-article-tab active" data-wechat-article-tab="compose">AI 创作</button>
+      <button type="button" class="wechat-article-tab" data-wechat-article-tab="remix">复刻</button>
       <button type="button" class="wechat-article-tab" data-wechat-article-tab="drafts">草稿记录</button>
       <button type="button" class="wechat-article-tab" data-wechat-article-tab="settings">公众号配置</button>
     </div>
@@ -127,6 +128,41 @@
             <div class="wechat-article-empty-preview">
               <strong>等待生成</strong>
               <p>左侧输入主题或想法后，AI 会自动生成文章并完成公众号排版。</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="wechatArticlePanelRemix" class="wechat-article-panel" style="display:none;">
+      <div class="wechat-article-compose-grid">
+        <div class="wechat-article-editor">
+          <div class="form-row">
+            <label>公众号文章链接（参考它的写法）</label>
+            <div class="wechat-article-inline" style="align-items:flex-end;">
+              <input type="text" id="wechatRemixUrl" placeholder="https://mp.weixin.qq.com/s/..." autocomplete="off">
+              <button type="button" id="wechatRemixFetchBtn" class="btn btn-ghost btn-sm" style="white-space:nowrap;">抓正文</button>
+            </div>
+            <p id="wechatRemixSourceMeta" class="meta" style="margin:0.35rem 0 0;">粘贴一条公众号文章链接，先抓正文确认能拿到内容。</p>
+          </div>
+          <div class="btns wechat-article-primary-actions">
+            <button type="button" id="wechatRemixGenerateBtn" class="btn btn-primary">生成复刻文章</button>
+            <button type="button" id="wechatRemixPushBtn" class="btn btn-ghost" disabled>推送草稿箱</button>
+          </div>
+          <div class="wechat-article-generated-meta">
+            <p class="meta">复刻 = 沿用原文的行文逻辑与结构，事实只用你 IP 人设模板里选好的资料（记忆文件 / 资料调查）；模板里没选会在生成前拦住，请先到「个人设置 → 个人记忆 / 资料调查」给模板选好资料。</p>
+          </div>
+        </div>
+
+        <div class="wechat-article-preview-wrap">
+          <div class="wechat-article-preview-head">
+            <strong id="wechatRemixPreviewTitle">复刻预览</strong>
+            <span id="wechatRemixPreviewMeta" class="meta"></span>
+          </div>
+          <div id="wechatRemixPreview" class="wechat-article-preview">
+            <div class="wechat-article-empty-preview">
+              <strong>等待复刻</strong>
+              <p>贴一条公众号文章链接，AI 会按它的写法，用你模板里选好的资料写一篇新文章。</p>
             </div>
           </div>
         </div>

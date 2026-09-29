@@ -630,11 +630,99 @@ async def _combined_login_state(page: Any) -> Dict[str, Any]:
     }
 
 
+_INQUIRY_STATUS_CANDIDATES: tuple = (
+    "洽谈中", "报价中", "待回复", "已回复", "已关闭", "样品单", "商机",
+    "Ongoing", "Replied", "Unread", "Pending", "Closed", "Spam", "Starred",
+)
+_NOISE_LABEL_RE = re.compile(
+    r"(更新时间|创建时间|询价单号|查看详情|Inquiry from TM|翻译结果|Translation|Rae MA|TM 商机)"
+)
+_NAME_WITH_AVATAR_RE = re.compile(
+    r"(?:^|\s)([A-Za-z])\s+([A-Za-z0-9_\-\.&'\u4e00-\u9fa5][^\n]{1,60}?)\s+TM\b"
+)
+_NAME_BEFORE_TM_RE = re.compile(r"([A-Za-z0-9_\-\.&'\u4e00-\u9fa5][^\n]{1,60}?)\s+TM\b")
+_LABEL_PREFIX_RE = re.compile(
+    r"^(询价单号\s*[:：]\s*\d+\s*)?(更新时间\s*[:：]\s*[\d\-/]+\s*)?(创建时间\s*[:：]\s*[\d\-/]+\s*)?"
+)
+
+
+def _looks_like_noise_label(value: Any) -> bool:
+    """判断一个字段值是不是"标签噪音"（更新时间/创建时间/查看详情/Inquiry from TM…）。"""
+    text = str(value or "").strip()
+    if not text:
+        return True
+    if _NOISE_LABEL_RE.search(text):
+        return True
+    return bool(re.fullmatch(r"[\d\s\-/:.]+", text))
+
+
+def _clean_buyer_name(value: Any) -> str:
+    """只有像人名的才要：长度合理、不含标签、不含冒号、不是英文句首词。"""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text or len(text) > 60:
+        return ""
+    if _NOISE_LABEL_RE.search(text) or "：" in text or ":" in text:
+        return ""
+    if re.match(r"^(Inquiry|Re|Fwd|Hi|Hello|Dear)\b", text, re.I):
+        return ""
+    if not re.search(r"[A-Za-z\u4e00-\u9fa5]", text):
+        return ""
+    return text
+
+
+def _parse_inquiry_labels(text: str) -> Dict[str, Any]:
+    """按阿里会话列表行的中文标签解析：单号/更新时间/创建时间/状态/买家名/买家最后一句话。"""
+    body = re.sub(r"\s+", " ", str(text or "")).strip()
+    out: Dict[str, Any] = {}
+    match = re.search(
+        r"更新时间\s*[:：]\s*(20\d{2}[-/]\d{1,2}[-/]\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)", body
+    )
+    if match:
+        out["last_message_at"] = _parse_dt(match.group(1))
+    match = re.search(
+        r"创建时间\s*[:：]\s*(20\d{2}[-/]\d{1,2}[-/]\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?)", body
+    )
+    if match:
+        out["created_at_on_platform"] = _parse_dt(match.group(1))
+    for candidate in _INQUIRY_STATUS_CANDIDATES:
+        if candidate in body:
+            out["status"] = candidate
+            break
+
+    name = ""
+    match = _NAME_WITH_AVATAR_RE.search(body)
+    if match:
+        out["avatar_letter"] = match.group(1)
+        name = match.group(2).strip()
+    else:
+        match = _NAME_BEFORE_TM_RE.search(body)
+        if match:
+            name = match.group(1).strip()
+    name = _clean_buyer_name(name)
+    if not name:
+        return out
+    out["buyer_name"] = name[:255]
+
+    index = body.find(name)
+    head = body[:index].strip() if index > 0 else ""
+    head = re.sub(r"^.*?Inquiry from TM\s*\[?信息?\]?\s*", "", head).strip()
+    head = _LABEL_PREFIX_RE.sub("", head).strip()
+    head = re.sub(r"^(?:Inquiry from TM|[信息]+)\s*", "", head).strip()
+    head = re.sub(r"(?:^|\s)[A-Za-z](?:\s*)$", "", head).strip()
+    if len(head) >= 4 and not _looks_like_noise_label(head):
+        out["preview"] = head[:500]
+    return out
+
+
 def _parse_list_row(row: Dict[str, Any]) -> Dict[str, Any]:
     text = _compact(row.get("text") or "\n".join(row.get("lines") or []), 5000)
     lines = [str(x or "").strip() for x in (row.get("lines") or []) if str(x or "").strip()]
     if not lines and text:
         lines = [x.strip() for x in re.split(r"\s{2,}|\n+", text) if x.strip()]
+    # 阿里列表行是中文标签 + 头像字母 + 姓名 + 状态（如「询价单号：… 更新时间：… 创建时间：…
+    # Inquiry from TM [信息] A Alhassan Abdullahi TM 商机 Rae MA 洽谈中 查看详情」）。
+    # 按标签解析比按行猜要稳，这里统一走 _parse_inquiry_labels()。
+    labeled = _parse_inquiry_labels(text)
 
     inquiry_id = str(row.get("id") or "").strip()
     href = str(row.get("href") or "").strip()
@@ -643,8 +731,10 @@ def _parse_list_row(row: Dict[str, Any]) -> Dict[str, Any]:
         inquiry_id = m.group(1) if m else ""
 
     dates = re.findall(r"20\d{2}[-/]\d{1,2}[-/]\d{1,2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?", text)
-    status = ""
+    status = labeled.get("status") or ""
     for cand in ("Ongoing", "Unread", "Replied", "Pending", "Closed", "Spam", "Archived", "Starred"):
+        if status:
+            break
         if re.search(rf"\b{re.escape(cand)}\b", text, re.I):
             status = cand
             break
@@ -679,8 +769,18 @@ def _parse_list_row(row: Dict[str, Any]) -> Dict[str, Any]:
             preview = line[:500]
     if not title:
         title = lines[0][:255] if lines else f"询盘 {inquiry_id}"
+    if _looks_like_noise_label(title) or len(str(title)) > 120:
+        title = f"询盘 {inquiry_id}"
     if not preview:
         preview = text[:500]
+    if labeled.get("buyer_name") and _looks_like_noise_label(buyer):
+        buyer = labeled["buyer_name"]
+    elif buyer == labeled.get("buyer_name"):
+        pass
+    if labeled.get("preview") and _looks_like_noise_label(preview):
+        preview = labeled["preview"]
+    if labeled.get("subject") and _looks_like_noise_label(title):
+        title = labeled["subject"]
 
     return {
         "inquiry_id": inquiry_id,
@@ -689,9 +789,9 @@ def _parse_list_row(row: Dict[str, Any]) -> Dict[str, Any]:
         "status": status,
         "preview": preview,
         "source_url": href,
-        "last_message_at": _parse_dt(dates[0]) if dates else _first_platform_dt(text),
-        "created_at_on_platform": _parse_dt(dates[-1]) if dates else None,
-        "raw_text": text,
+        "last_message_at": labeled.get("last_message_at") or (_parse_dt(dates[0]) if dates else _first_platform_dt(text)),
+        "created_at_on_platform": labeled.get("created_at_on_platform") or (_parse_dt(dates[-1]) if dates else None),
+        "raw_text": (str(row.get("text") or "").strip() or text)[:5000],
         "raw": row,
     }
 
@@ -1619,6 +1719,37 @@ def _serialize_profile(row: Optional[AlibabaCustomerProfile]) -> Optional[Dict[s
     }
 
 
+def _normalize_archive_grade(grade: Any, score: Any = None) -> str:
+    """读的时候也把老数据（P2/P3 之类）收敛成 A/B/C/D。"""
+    try:
+        from .alibaba_backtest import normalize_grade
+
+        return normalize_grade(grade, score)
+    except Exception:
+        return str(grade or "").strip().upper()[:16]
+
+
+def _archive_placeholder_flag(
+    *,
+    display_name: str,
+    status: str,
+    evidence_count: int,
+    sources: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """占位档案 = 只有阿里原始字段、没跑出结论（提醒继续要信息，而不是当成已完成）。"""
+    try:
+        from .alibaba_backtest import is_placeholder_archive
+
+        return is_placeholder_archive({
+            "display_name": display_name,
+            "status": status,
+            "evidence_count": evidence_count,
+            "sources": sources or [],
+        })
+    except Exception:
+        return {"placeholder": False, "reasons": [], "suggested_status": status}
+
+
 def _serialize_archive(row: Optional[AlibabaCustomerArchive], db: Optional[Session] = None) -> Optional[Dict[str, Any]]:
     if not row:
         return None
@@ -1648,7 +1779,7 @@ def _serialize_archive(row: Optional[AlibabaCustomerArchive], db: Optional[Sessi
         "domain": row.domain or "",
         "email": row.email or "",
         "phone": row.phone or "",
-        "grade": row.grade or "",
+        "grade": _normalize_archive_grade(row.grade, row.score),
         "score": row.score,
         "summary": row.summary or "",
         "seed": row.seed or {},
@@ -1665,6 +1796,12 @@ def _serialize_archive(row: Optional[AlibabaCustomerArchive], db: Optional[Sessi
         },
         "pending_count": len(pending.get("items") or []) if isinstance(pending.get("items"), list) else 0,
         "evidence_count": int(evidence_count),
+        "placeholder": _archive_placeholder_flag(
+            display_name=row.display_name or "",
+            status=row.status or "",
+            evidence_count=int(evidence_count),
+            sources=[str(item.get("source_type") or "") for item in (evidence or []) if isinstance(item, dict)],
+        ),
         "last_enriched_at": _dt(row.last_enriched_at),
         "last_error": row.last_error or "",
         "created_at": _dt(row.created_at),
@@ -3910,12 +4047,25 @@ def _fallback_archive_profile(seed: Dict[str, Any], evidence: List[Dict[str, Any
     return result
 
 
-def _archive_status_from_profile(profile: Dict[str, Any], evidence: List[Dict[str, Any]]) -> str:
+def _archive_status_from_profile(
+    profile: Dict[str, Any],
+    evidence: List[Dict[str, Any]],
+    seed: Optional[Dict[str, Any]] = None,
+) -> str:
     entity = profile.get("entity_resolution") if isinstance(profile.get("entity_resolution"), dict) else {}
     pending = profile.get("pending_review") if isinstance(profile.get("pending_review"), dict) else {}
     pending_items = pending.get("items") if isinstance(pending.get("items"), list) else []
     external_count = len(_usable_archive_external_evidence(evidence))
     confidence = str(entity.get("confidence") or "").lower()
+    # 种子只有公司名或只有邮箱这类单锚点 → 信息本来就不够，别标成"待复核"，直接标待补信息
+    if seed is not None:
+        try:
+            from .alibaba_backtest import assess_info_sufficiency
+
+            if not assess_info_sufficiency(seed).get("can_enrich"):
+                return "needs_info"
+        except Exception:
+            pass
     if confidence == "low" or pending_items or external_count <= 0:
         return "needs_review"
     return "completed"
@@ -4156,10 +4306,14 @@ def _score_grade_from_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
         score = None
     if score is not None:
         score = max(0, min(100, score))
-    grade = str(lead_score.get("grade") or "").strip().upper()
-    if not grade and score is not None:
-        grade = "P0" if score >= 90 else ("P1" if score >= 80 else ("P2" if score >= 70 else ("P3" if score >= 60 else "P4")))
-    return {"score": score, "grade": grade[:16] if grade else ""}
+    # 分级口径统一成 A/B/C/D（模型之前会自己写 P0..P4，导致后面的结论映射认不出来）
+    try:
+        from .alibaba_backtest import normalize_grade
+
+        grade = normalize_grade(lead_score.get("grade"), score)
+    except Exception:
+        grade = str(lead_score.get("grade") or "").strip().upper()[:16]
+    return {"score": score, "grade": grade}
 
 
 async def _generate_archive_profile(
@@ -4322,7 +4476,7 @@ async def _run_archive_enrichment(
         db.commit()
         profile_payload = await _generate_archive_profile(request, seed, evidence)
         score_grade = _score_grade_from_profile(profile_payload)
-        status = _archive_status_from_profile(profile_payload, evidence)
+        status = _archive_status_from_profile(profile_payload, evidence, seed)
         basics = profile_payload.get("basics") if isinstance(profile_payload.get("basics"), dict) else {}
         entity = profile_payload.get("entity_resolution") if isinstance(profile_payload.get("entity_resolution"), dict) else {}
         field_evidence = _archive_field_evidence(seed, evidence, profile_payload)

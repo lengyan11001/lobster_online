@@ -227,3 +227,93 @@
     grid-template-columns: 1fr;
   }
 }
+
+
+.douyin-desk-cover {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  margin-bottom: 8px;
+  border-radius: 6px;
+  background: #eef4f8;
+}
+
+.douyin-desk-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0 34px;
+}
+
+.douyin-desk-imitation {
+  border: 0;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  color: #126c83;
+  background: #e4f4f7;
+}
+
+.douyin-desk-imitation:hover {
+  background: #d3edf3;
+}
+
+.douyin-desk-item-status {
+  color: #7b90a2;
+  font-size: 11px;
+}
+
+.douyin-desk-item-result video {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  border-radius: 6px;
+}
+
+
+.douyin-desk-search {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0 4px;
+}
+
+.douyin-desk-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #deebf2;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #2b485d;
+}
+
+
+.douyin-desk-header-actions { display: flex; gap: 8px; }
+
+.douyin-desk-last {
+  margin: 12px 0 0;
+  padding: 12px;
+  border: 1px solid #cfe9f0;
+  border-radius: 7px;
+  background: #f4fbfd;
+}
+
+.douyin-desk-last-title { color: #126c83; font-size: 12px; font-weight: 700; }
+.douyin-desk-last-body { margin-top: 4px; color: #2b485d; font-size: 13px; }
+.douyin-desk-last video { display: block; width: 100%; max-width: 360px; margin-top: 8px; border-radius: 6px; }
+.douyin-desk-last-tip { margin-top: 6px; color: #7b90a2; font-size: 12px; }
+.douyin-desk-last-fail { margin-top: 6px; color: #b4535f; font-size: 12px; }
+
+.douyin-desk-history-actions { margin-bottom: 10px; }
+.douyin-desk-history-item { padding: 12px; margin-bottom: 10px; border: 1px solid #deebf2; border-radius: 7px; background: #fff; }
+.douyin-desk-history-head { display: flex; align-items: center; gap: 8px; }
+.douyin-desk-history-title { color: #2b485d; font-size: 13px; min-width: 0; overflow-wrap: anywhere; }
+.douyin-desk-history-meta { margin-top: 6px; color: #7b90a2; font-size: 11px; }
+.douyin-desk-history-item video { display: block; width: 100%; max-width: 360px; margin-top: 8px; border-radius: 6px; }
+.douyin-desk-history-status { flex: 0 0 auto; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: #eef4f8; color: #4a6b80; }
+.douyin-desk-history-status.is-success { background: #e6f7ee; color: #1d7f4e; }
+.douyin-desk-history-status.is-failed { background: #fdecef; color: #b4535f; }

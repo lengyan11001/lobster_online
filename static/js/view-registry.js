@@ -28,15 +28,22 @@
   });
 
   window.registerLobsterView('personal-settings', {
-    html: '/static/views/personal-settings.html?v=20260910-survey-record-name-v1',
-    scripts: '/static/js/personal-settings.js?v=20260910-survey-record-name-v1',
+    html: '/static/views/personal-settings.html?v=20260921-survey-modal-close-only-v1',
+    scripts: '/static/js/personal-settings.js?v=20260921-survey-modal-close-only-v1',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
 
+  window.registerLobsterView('account-security', {
+    html: '/static/views/account-security.html?v=20260918-account-security-v1',
+    scripts: '/static/js/account-security.js?v=20260918-account-security-v1',
+    init: 'initAccountSecurityView',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('personal-whatsapp', {
-    html: '/static/views/personal-whatsapp.html?v=20260910-personal-whatsapp-workbench-v3',
-    scripts: '/static/js/personal-whatsapp.js?v=20260910-personal-whatsapp-workbench-v3',
+    html: '/static/views/personal-whatsapp.html?v=20260921-personal-whatsapp-group-v19',
+    scripts: '/static/js/personal-whatsapp.js?v=20260921-personal-whatsapp-group-v19',
     init: 'initPersonalWhatsappView',
     cache: 'reload'
   });
@@ -60,7 +67,7 @@
 
   window.registerLobsterView('wechat-article', {
     html: '/static/views/wechat-article.html',
-    scripts: '/static/js/wechat-article.js?v=20260814-wechat-image-style',
+    scripts: '/static/js/wechat-article.js?v=20260927-remix-material-guard',
     init: 'loadWechatArticlePage',
     cache: 'reload'
   });
@@ -113,12 +120,12 @@
     cache: 'reload'
   });
 
-  window.registerLobsterView('alibaba-inquiries', {
-    html: '/static/views/alibaba-inquiries.html?v=20260721-alibaba-doc-collapse',
-    scripts: '/static/js/alibaba-inquiries.js?v=20260722-alibaba-archive-jobs',
-    init: 'initAlibabaInquiriesView',
-    cache: 'reload'
-  });
+window.registerLobsterView('alibaba-inquiries', {
+  html: '/static/views/alibaba-inquiries.html?v=20260921-ali-store-v3',
+  scripts: '/static/js/alibaba-inquiries.js?v=20260921-ali-store-v3',
+  init: 'initAlibabaInquiriesView',
+  cache: 'reload'
+});
 
   window.registerLobsterView('juhe-wechat', {
     html: '/static/views/juhe-wechat.html?v=20260808-native-wechat-pagination-v1',
@@ -144,7 +151,7 @@
 
   window.registerLobsterView('assets', {
     html: '/static/views/assets.html?v=20260806-content-record-categories',
-    scripts: '/static/js/publish.js?v=20260807-digital-human-v2-20260807-content-publish-v1'
+    scripts: '/static/js/publish.js?v=20260928-asset-action-menu-v4'
   });
 
   window.registerLobsterView('scheduled-tasks', {
@@ -154,7 +161,7 @@
 
   window.registerLobsterView('billing', {
     html: '/static/views/billing.html',
-    scripts: '/static/js/views/billing.js?v=20260901-oem-recharge-gate-v1'
+    scripts: '/static/js/views/billing.js?v=20260921-credit-history-origin-v1'
   });
 
   window.registerLobsterView('sys-config', {

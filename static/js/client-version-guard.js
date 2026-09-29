@@ -1,0 +1,122 @@
+/**
+ * 前后端版本守卫：界面（static）与后端（backend）必须来自同一个包。
+ *
+ * 典型故障（2026-09-21）：某台机器界面已经升到 2.0.64/344，后端还是旧代码，
+ * 前端在调 /api/twilio-whatsapp/config 却一路 404，看起来像"功能坏了"。
+ * 这里把这种不一致直接摆在界面上，并自动尝试一次强刷。
+ */
+(function initLobsterVersionGuard() {
+  if (window.__lobsterVersionGuardReady) return;
+  window.__lobsterVersionGuardReady = true;
+
+  var RELOAD_KEY = '__lobster_version_guard_reloaded';
+  // 每个标签页会话最多自动强刷一次：否则"后端比代码旧"这种持续状态会变成无限重载
+  var SESSION_RELOAD_KEY = 'lobster_version_guard_reloaded_once';
+
+  function alreadyReloadedThisSession() {
+    try {
+      return !!window.sessionStorage.getItem(SESSION_RELOAD_KEY);
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function markReloadedThisSession() {
+    try {
+      window.sessionStorage.setItem(SESSION_RELOAD_KEY, String(Date.now()));
+    } catch (err) {
+      /* ignore */
+    }
+  }
+
+  function normalize(value) {
+    return String(value === undefined || value === null ? '' : value).trim();
+  }
+
+  function keyOf(version, build) {
+    var v = normalize(version);
+    var b = normalize(build);
+    return (v ? v : '?') + (b ? '-' + b : '');
+  }
+
+  function banner(text, detail) {
+    try {
+      var el = document.getElementById('lobsterVersionGuardBanner');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'lobsterVersionGuardBanner';
+        el.style.cssText = [
+          'position:fixed', 'top:0', 'left:0', 'right:0', 'z-index:2147483000',
+          'background:#b91c1c', 'color:#fff', 'font:13px/1.6 "Microsoft YaHei",sans-serif',
+          'padding:8px 14px', 'box-shadow:0 6px 18px rgba(0,0,0,.25)', 'white-space:pre-wrap'
+        ].join(';');
+        document.body.appendChild(el);
+      }
+      el.textContent = text + (detail ? '　' + detail : '');
+      document.title = '【版本不一致】' + document.title.replace(/^【版本不一致】/, '');
+    } catch (err) {
+      if (window.console) console.warn('[version-guard] banner failed', err);
+    }
+  }
+
+  function check() {
+    return Promise.all([
+      fetch('/api/version', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; }),
+      fetch('/static/client_version.json', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; })
+    ]).then(function (all) {
+      var backend = all[0];
+      var staticSide = all[1];
+      if (!backend) return;                     // 后端没起来：交给启动流程提示，不重复报警
+      var state = {
+        backend: backend,
+        staticSide: staticSide,
+        mismatch: false,
+        missingRoutes: backend.expected_routes_missing || []
+      };
+      var backendKey = keyOf(backend.client_version, backend.client_build);
+      var staticKey = keyOf(staticSide && staticSide.version, staticSide && staticSide.build);
+      if (staticSide && staticKey !== backendKey && staticKey !== '?-') {
+        state.mismatch = true;
+        banner(
+          '界面与后端版本不一致：界面 ' + staticKey + ' / 后端 ' + backendKey,
+          '正在重新加载；若反复出现，请关闭客户端再打开（或重新更新）'
+        );
+      }
+      if (state.missingRoutes.length) {
+        banner(
+          '后端缺少关键接口：' + state.missingRoutes.join('、'),
+          '说明后端代码不是当前这个包（半包/旧包），请重新更新或重启客户端'
+        );
+      }
+      // 包已经更新、但后端进程还是更新前启动的：也会表现成"界面有、接口 404"
+      var appliedAt = Date.parse(String(backend.applied_at || ''));
+      var startedAt = Date.parse(String(backend.backend_started_at || ''));
+      if (!isNaN(appliedAt) && !isNaN(startedAt) && startedAt + 5000 < appliedAt) {
+        state.backend_stale = true;
+        banner(
+          '后端进程还是更新前的（后端启动 ' + backend.backend_started_at + '，代码包 ' + backend.applied_at + '）',
+          '请关闭客户端再打开，让后端跟着新代码重启'
+        );
+      }
+      // 版本不一致时自动强刷一次（后端刚被 launcher 重启的场景一次就好）；
+      // 同一标签页会话只自动刷一次，之后只挂横幅提示，避免无限重载把界面卡死。
+      if ((state.mismatch || state.missingRoutes.length || state.backend_stale) && !window[RELOAD_KEY] && !alreadyReloadedThisSession()) {
+        window[RELOAD_KEY] = true;
+        markReloadedThisSession();
+        setTimeout(function () {
+          try { location.reload(); } catch (err) { /* ignore */ }
+        }, 1200);
+      }
+      window.__lobsterVersionState = state;
+      return state;
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function () { check(); });
+  } else {
+    check();
+  }
+})();

@@ -4684,6 +4684,25 @@ _NO_AUTO_SAVE_CAPABILITIES = frozenset({
     "sutui.guide",
 })
 
+# 过程类能力：产物只是链路中间态（转存/试听/预览），按口径不给用户展示
+# （素材库与内容库都隐藏，仍可按 id 取用）。2026-09-22 用户确认。
+_AUTO_SAVE_PROCESS_CAPABILITIES = frozenset({
+    "sutui.transfer_url",
+    "sutui.speak",
+})
+_AUTO_SAVE_PROCESS_CAPABILITY_TOKENS = ("preview", "transfer_url", "speak")
+
+
+def _auto_save_is_process_asset(capability_id: str, payload: Dict[str, Any]) -> bool:
+    """这个自动入库产物是不是过程件（不该出现在素材库/内容库）。"""
+    cid = str(capability_id or "").strip().lower()
+    effective = cid
+    if cid == "task.get_result" and isinstance(payload, dict):
+        effective = str(payload.get("capability_id") or "").strip().lower() or cid
+    if effective in _AUTO_SAVE_PROCESS_CAPABILITIES or cid in _AUTO_SAVE_PROCESS_CAPABILITIES:
+        return True
+    return any(token in effective for token in _AUTO_SAVE_PROCESS_CAPABILITY_TOKENS)
+
 async def _auto_save_generated_assets(
     upstream_resp: Any, capability_id: str, payload: Dict, token: Optional[str],
     request: Optional[Request] = None,
@@ -4780,6 +4799,10 @@ async def _auto_save_generated_assets(
             "media_type": mt,
             "tags": f"auto,{capability_id}",
         }
+        if _auto_save_is_process_asset(capability_id, payload):
+            # 转存/试听/预览类：只作为过程素材，素材库与内容库都不展示。
+            body["asset_origin"] = "intermediate"
+            body["content_visibility"] = "hidden"
         pt = (prompt_text or "").strip()
         if pt:
             body["prompt"] = pt[:500]

@@ -38,6 +38,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
+# 本机（单机版/内部调用）token 有效期；与云端 30 天保持一致，避免本机侧也频繁要求重新登录。
+LOCAL_TOKEN_EXPIRE_MINUTES = 60 * 24 * 30
 
 # 认证中心 GET /auth/me：并发发布等多路同时校验时，远端偶发 ConnectTimeout/502，对同一请求做有限次重试（非换路径兜底）。
 _AUTH_ME_MAX_ATTEMPTS = 3
@@ -50,8 +52,12 @@ _AUTH_ME_VALIDATION_LOCKS: Dict[str, asyncio.Lock] = {}
 # Explicit 401/403 responses are deterministic for the same bearer token.
 # Remember them briefly so an expired local session cannot hit public
 # /auth/me every few seconds through multiple local endpoints.
-_AUTH_ME_INVALID_CACHE: Dict[str, float] = {}
+# value = (下次可重试的 monotonic 时间, 连续失败次数)：401/403 后指数退避
+# （60s → 5min → 10min 封顶），成功一次就清零。避免过期 token 每 11 秒轮询认证中心
+# ——2026-09-17 那天全站 /auth/me 有 9048 次 401，绝大多数来自这种轮询。
+_AUTH_ME_INVALID_CACHE: Dict[str, tuple[float, int]] = {}
 _AUTH_ME_INVALID_CACHE_TTL_SECONDS = 60.0
+_AUTH_ME_INVALID_BACKOFF_SECONDS = (60.0, 300.0, 600.0)
 _AUTH_ME_STALE_GRACE_SECONDS = 900
 _SKILL_STORE_ADMIN_CACHE_LOCK = asyncio.Lock()
 _SKILL_STORE_ADMIN_CACHE: Dict[str, tuple[float, bool]] = {}
@@ -297,7 +303,9 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.utcnow() + (
+        expires_delta or timedelta(minutes=LOCAL_TOKEN_EXPIRE_MINUTES)
+    )
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.secret_key, algorithm=ALGORITHM)
 
@@ -359,6 +367,50 @@ def _server_user_from_internal_lobster_jwt(request: Request, token: str) -> Opti
     return _ServerUser(id=uid)
 
 
+def _auth_invalid_backoff_seconds(fail_count: int) -> float:
+    """401/403 后的退避秒数：60s → 300s → 600s（封顶）。"""
+    idx = max(0, min(int(fail_count) - 1, len(_AUTH_ME_INVALID_BACKOFF_SECONDS) - 1))
+    return float(_AUTH_ME_INVALID_BACKOFF_SECONDS[idx])
+
+
+def _is_loopback_request(request: Request) -> bool:
+    """登录态续签只允许本机调用（客户端绑定 127.0.0.1；防止被局域网其它机器利用）。"""
+    host = ""
+    try:
+        host = (getattr(getattr(request, "client", None), "host", "") or "").strip()
+    except Exception:
+        host = ""
+    return host in {"127.0.0.1", "::1", "localhost", "testclient", ""}
+
+
+@router.get("/local/auth/session", summary="本机云端登录态状态（给客户端界面/排障用）")
+async def local_cloud_session_status(request: Request) -> Dict[str, Any]:
+    from ..services.cloud_session_renew import session_status
+
+    if not _is_loopback_request(request):
+        raise HTTPException(status_code=403, detail="仅允许本机访问")
+    status = session_status()
+    return {"ok": True, **status}
+
+
+@router.post("/local/auth/renew", summary="静默续签本机云端登录态（30 天），返回新 token")
+async def local_cloud_session_renew(
+    request: Request,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """客户端界面在自己 token 失效时调这里：用本机保存的 token 换一个新的。
+
+    成功时返回新 token（界面写回 localStorage，用户无感）；失败返回 ok=false + reason，
+    界面再提示「登录状态已失效，请重新登录」。
+    """
+    from ..services.cloud_session_renew import renew_cloud_token
+
+    if not _is_loopback_request(request):
+        raise HTTPException(status_code=403, detail="仅允许本机访问")
+    result = await renew_cloud_token(force=bool(force))
+    return {"ok": bool(result.get("ok") and result.get("refreshed")), **result}
+
+
 async def get_current_user_for_local(
     request: Request,
     token: str = Depends(oauth2_scheme),
@@ -404,15 +456,14 @@ async def get_current_user_for_local(
         cache_key = hashlib.sha256(f"{token}\0{xi}\0{brand_mark}".encode("utf-8")).hexdigest()
         now_m = time.monotonic()
         async with _AUTH_ME_CACHE_LOCK:
-            invalid_until = _AUTH_ME_INVALID_CACHE.get(cache_key, 0.0)
+            invalid_entry = _AUTH_ME_INVALID_CACHE.get(cache_key)
+            invalid_until = invalid_entry[0] if invalid_entry else 0.0
             if invalid_until > now_m:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="登录状态已失效，请重新登录",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-            if invalid_until:
-                _AUTH_ME_INVALID_CACHE.pop(cache_key, None)
             hit = _AUTH_ME_CACHE.get(cache_key)
             if hit and hit[0] > now_m:
                 return _ServerUser(id=hit[1])
@@ -439,7 +490,8 @@ async def get_current_user_for_local(
 
         now_m = time.monotonic()
         async with _AUTH_ME_CACHE_LOCK:
-            invalid_until = _AUTH_ME_INVALID_CACHE.get(cache_key, 0.0)
+            invalid_entry = _AUTH_ME_INVALID_CACHE.get(cache_key)
+            invalid_until = invalid_entry[0] if invalid_entry else 0.0
             hit = _AUTH_ME_CACHE.get(cache_key)
         if invalid_until > now_m:
             release_validation_lock()
@@ -526,14 +578,24 @@ async def get_current_user_for_local(
                 if cache_key is not None:
                     async with _AUTH_ME_CACHE_LOCK:
                         _AUTH_ME_CACHE.pop(cache_key, None)
+                        prev_entry = _AUTH_ME_INVALID_CACHE.get(cache_key)
+                        fail_count = int(prev_entry[1]) + 1 if prev_entry else 1
+                        backoff = _auth_invalid_backoff_seconds(fail_count)
                         _AUTH_ME_INVALID_CACHE[cache_key] = (
-                            time.monotonic() + _AUTH_ME_INVALID_CACHE_TTL_SECONDS
+                            time.monotonic() + backoff,
+                            fail_count,
                         )
                         if len(_AUTH_ME_INVALID_CACHE) > 2000:
                             now_invalid = time.monotonic()
-                            for key, expires_at in list(_AUTH_ME_INVALID_CACHE.items()):
-                                if expires_at <= now_invalid:
+                            for key, entry in list(_AUTH_ME_INVALID_CACHE.items()):
+                                if entry[0] <= now_invalid:
                                     _AUTH_ME_INVALID_CACHE.pop(key, None)
+                    logger.warning(
+                        "[auth-local] 登录态 401/403（连续第 %s 次），%s 秒内不再向认证中心重复校验 path=%s",
+                        fail_count,
+                        int(backoff),
+                        request.url.path,
+                    )
                 release_validation_lock()
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,

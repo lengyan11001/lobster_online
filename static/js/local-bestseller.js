@@ -265,7 +265,14 @@
     if (el) el.value = value || '';
   }
 
-  function sanitizeVideoPromptNoSpeech(text) {
+  // 空镜日（无人物日）：与后端 _city_scene_only_days() 保持一致
+  var CITY_SCENE_ONLY_DAYS = [1, 3, 4, 5, 8];
+
+  function isCitySceneOnlyDay(day) {
+    return CITY_SCENE_ONLY_DAYS.indexOf(Number(day) || 0) !== -1;
+  }
+
+  function sanitizeVideoPromptNoSpeech(text, sceneOnly) {
     var out = String(text || '').trim();
     if (!out) return out;
     var protected = {};
@@ -280,6 +287,25 @@
         }
       });
     });
+    if (sceneOnly) {
+      // 空镜日：不做「看镜头 / 口播」这类人物向改写，只补无人约束与声音约束
+      Object.keys(protected).forEach(function(token) { out = out.split(token).join(protected[token]); });
+      out = out.split('口播').join('出镜').split('说话').join('出镜');
+      out = out.split('看镜头').join('让镜头缓缓扫过环境细节');
+      out = out.replace(/[，、\s]{2,}/g, '，');
+      var noPersonGuard = '空镜视频，全片不要出现人物主体，不要清晰正脸、不要人脸特写、不要半身或全身人像、不要摆拍人物、不要生成可辨认的五官；画面主体只能是街景、门店、商圈、社区、办公区、交通动线与环境细节（车辆、招牌灯光、树影、天气、光影变化）；如果确有路人，只能是远景或虚化的背景点缀、快速经过、不占画面主体、不停留、不面向镜头表演；如果首帧画面里已经出现了清晰人物，请把它弱化、虚化或移到远景，不要让它成为主体，也不要给它正脸动作。';
+      if (out.indexOf('全片不要出现人物主体') === -1) {
+        out += /[。；;.]$/.test(out) ? noPersonGuard : '。' + noPersonGuard;
+      }
+      var noPersonBgm = '视频必须伴随街头背景音和轻快节奏音乐，音量低，只做真实街头氛围和轻快节奏铺底；不要人声、不要旁白、不要歌词、不要人物发声。';
+      var noPersonOptionalBgm = '可加入轻微背景音乐或真实环境氛围感，音量低，不要人声、不要旁白、不要歌词、不要任何人物发声。';
+      if (out.indexOf(noPersonOptionalBgm) !== -1) {
+        out = out.split(noPersonOptionalBgm).join(noPersonBgm);
+      } else if (out.indexOf('街头背景音') === -1 || out.indexOf('轻快节奏音乐') === -1) {
+        out += /[。；;.]$/.test(out) ? noPersonBgm : '。' + noPersonBgm;
+      }
+      return out;
+    }
     [
       ['动作自然：走路、停下、看镜头、轻微招手或口播。', '动作自然：走路、停下、转身、低头整理东西、侧身工作或与环境自然互动；视频中间约第4-6秒要自然抬头看向镜头。'],
       ['动作自然：走路、停下、看镜头、轻微招手或口播', '动作自然：走路、停下、转身、低头整理东西、侧身工作或与环境自然互动；视频中间约第4-6秒要自然抬头看向镜头'],
@@ -823,7 +849,7 @@
   function normalizeItem(item) {
     item = item || {};
     item.subtitle_text = compactSubtitle(item.subtitle_text || item.ai_variant || (item.videohao && item.videohao.copy) || (item.douyin && item.douyin.copy) || '');
-    item.video_prompt = sanitizeVideoPromptNoSpeech(item.video_prompt || '');
+    item.video_prompt = sanitizeVideoPromptNoSpeech(item.video_prompt || '', isCitySceneOnlyDay(item.day));
     item.bgm = syncItemBgm(item);
     return item;
   }
@@ -845,7 +871,7 @@
       ai_variant: item.ai_variant || '',
       scene_prompt: item.scene_prompt || item.image_prompt || '',
       image_prompt: item.image_prompt || item.scene_prompt || '',
-      video_prompt: sanitizeVideoPromptNoSpeech(item.video_prompt || ''),
+      video_prompt: sanitizeVideoPromptNoSpeech(item.video_prompt || '', isCitySceneOnlyDay(item.day)),
       scene_asset_id: item.scene_asset_id || '',
       scene_url: item.scene_url || '',
       scene_preview_url: item.scene_preview_url || '',

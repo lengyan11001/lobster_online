@@ -5,6 +5,7 @@ import logging
 import re
 import shlex
 import subprocess
+import unicodedata
 import uuid
 from copy import deepcopy
 from pathlib import Path
@@ -253,12 +254,23 @@ def _validate_payload(pl: ComflySeedancePipelinePayload) -> None:
     if requested_total is None and requested_count is not None:
         requested_total = int(requested_count) * segment_seconds
 
-    allowed_totals = {segment_seconds * i for i in range(1, 7)}
+    allowed_totals = sorted({segment_seconds * i for i in range(1, 7)})
     if requested_total is not None and int(requested_total) not in allowed_totals:
-        allowed_text = "/".join(str(x) for x in sorted(allowed_totals))
-        raise HTTPException(status_code=400, detail=f"total_duration_seconds 仅支持 {allowed_text} 秒")
-    if requested_count is not None and int(requested_count) * segment_seconds != int(requested_total or segment_seconds * 2):
-        raise HTTPException(status_code=400, detail=f"segment_count/storyboard_count 必须与 total_duration_seconds / {segment_seconds} 一致")
+        wanted_total = int(requested_total)
+        if wanted_total > allowed_totals[-1]:
+            allowed_text = "/".join(str(x) for x in allowed_totals)
+            raise HTTPException(
+                status_code=400,
+                detail=f"total_duration_seconds 最多支持 {allowed_totals[-1]} 秒（可选 {allowed_text} 秒）",
+            )
+        # 不是单段时长的整数倍：向上取整到最近的合法总时长（例：16 秒 → 20 秒 / 2 段）
+        requested_total = next(x for x in allowed_totals if x >= wanted_total)
+        pl.total_duration_seconds = requested_total
+    if requested_count is not None and int(requested_count) * segment_seconds < int(requested_total or segment_seconds * 2):
+        raise HTTPException(
+            status_code=400,
+            detail=f"segment_count/storyboard_count 不足以覆盖 total_duration_seconds（每段 {segment_seconds} 秒）",
+        )
 
 
 async def _prepare_pipeline_input(
@@ -328,7 +340,7 @@ async def _prepare_pipeline_input(
         requested_count = int(pl.total_duration_seconds) // (8 if uses_yunwu_veo else 10)
     workflow_mode = (pl.workflow_mode or "storyboard").strip().lower().replace("-", "_") or "storyboard"
     logger.info(
-        "[seedance-tvc] prepared pipeline user_id=%s workflow_mode=%s references=%s segment_count=%s segment_seconds=%s video_channel=%s video_model=%s",
+        "[seedance-tvc] prepared pipeline user_id=%s workflow_mode=%s references=%s segment_count=%s segment_seconds=%s video_channel=%s video_model=%s aspect_ratio=%s resolution=%s",
         current_user.id,
         workflow_mode,
         len(reference_images),
@@ -336,6 +348,8 @@ async def _prepare_pipeline_input(
         pl.segment_duration_seconds,
         video_channel or "",
         video_model or pl.video_model or "",
+        pl.aspect_ratio or "",
+        pl.resolution or "",
     )
     return build_pipeline_input(
         reference_image=reference_images[0] if reference_images else "",
@@ -506,6 +520,8 @@ async def _save_local_final_video_asset(
     auth_header: str = "",
     installation_id: str = "",
     generation_task_id: str = "",
+    tags: str = "auto,comfly.seedance.tvc.pipeline,merged",
+    meta_extra: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     path_text = str(local_path or "").strip()
     if not path_text:
@@ -548,7 +564,12 @@ async def _save_local_final_video_asset(
     meta: Dict[str, Any] = {
         "seedance_final_video": True,
         "origin_local_path": str(path),
+        # 最终交付件：素材库「生成素材」与内容库可见。
+        "asset_origin": "generated",
+        "content_visibility": "visible",
     }
+    if meta_extra:
+        meta.update(meta_extra)
     if generation_task_id:
         meta["generation_task_id"] = generation_task_id[:128]
 
@@ -563,11 +584,17 @@ async def _save_local_final_video_asset(
             source_url=source_url,
             prompt=(prompt or "").strip()[:500] or None,
             model=(video_model or "").strip()[:128] or None,
-            tags="auto,comfly.seedance.tvc.pipeline,merged",
+            tags=tags,
             meta=meta,
         )
         db.add(asset)
         db.commit()
+        # 最终成片已经入库：同一任务的字幕件/合成件降级为中间产物，不给用户展示。
+        await asyncio.to_thread(
+            _demote_process_assets_for_job,
+            generation_task_id,
+            user_id=int(getattr(current_user, "id", 0) or 0),
+        )
         return {
             "asset_id": asset_id,
             "filename": filename,
@@ -576,6 +603,56 @@ async def _save_local_final_video_asset(
             "source_url": source_url,
             "path": str(local_asset_path),
         }
+    finally:
+        db.close()
+
+
+# 生成链路里的“过程件”型号：加字幕中间件（合成/加 BGM 的那份是交付件，不能埋掉）。
+# 按口径：素材库「生成素材」与内容库都只展示最终交付件，过程件一律不给用户看
+# （仍可按 asset_id 取用，不影响发布链路）。2026-09-22 用户确认。
+_PROCESS_ASSET_MODELS: tuple = (
+    "local-bestseller-caption-ffmpeg",
+)
+
+
+def _demote_process_assets_for_job(job_id: str, *, user_id: int = 0) -> int:
+    """最终成片入库后，把同一任务的过程件降级为中间产物（素材库/内容库都不展示）。"""
+    clean = str(job_id or "").strip()
+    if not clean:
+        return 0
+    db = SessionLocal()
+    changed = 0
+    try:
+        query = db.query(Asset).filter(Asset.model.in_(_PROCESS_ASSET_MODELS))
+        if int(user_id or 0) > 0:
+            query = query.filter(Asset.user_id == int(user_id))
+        rows = query.order_by(Asset.created_at.desc()).limit(400).all()
+        for row in rows:
+            meta = dict(row.meta or {}) if isinstance(row.meta, dict) else {}
+            job_keys = {
+                str(meta.get("seedance_job_id") or "").strip(),
+                str(meta.get("generation_task_id") or "").strip(),
+            }
+            if clean not in job_keys:
+                continue
+            if meta.get("asset_origin") == "intermediate" and meta.get("content_visibility") == "hidden":
+                continue
+            meta["asset_origin"] = "intermediate"
+            meta["content_visibility"] = "hidden"
+            meta["demoted_by"] = "final_asset_saved"
+            row.meta = meta
+            changed += 1
+        if changed:
+            db.commit()
+            logger.info(
+                "[seedance-tvc] demoted %s process asset(s) to intermediate job_id=%s",
+                changed,
+                clean,
+            )
+        return changed
+    except Exception as exc:
+        logger.warning("[seedance-tvc] demote process assets failed job_id=%s err=%s", clean, str(exc)[:200])
+        return 0
     finally:
         db.close()
 
@@ -591,6 +668,24 @@ async def _save_pipeline_videos(
 ) -> List[Dict[str, Any]]:
     saved: List[Dict[str, Any]] = []
     for url, task_id, title_hint in urls:
+        # 比例被裁/补过的分镜是本地文件（不是 URL）：直接按本地文件入库，保证素材库也是目标比例
+        if not str(url or "").startswith(("http://", "https://")):
+            local_row = await _save_local_final_video_asset(
+                local_path=url,
+                current_user=current_user,
+                prompt=title_hint or "",
+                video_model=video_model,
+                auth_header=auth_header or _request_auth_header(request),
+                installation_id=installation_id or _request_installation_id(request),
+                generation_task_id=task_id or "",
+                tags="auto,comfly.seedance.tvc.pipeline,shot",
+                meta_extra={"seedance_shot_clip": True},
+            )
+            if local_row:
+                saved.append({"source_url": url, "task_id": task_id, "asset": local_row})
+            else:
+                logger.warning("[seedance-tvc] local shot clip save skipped path=%s", url)
+            continue
         body = SaveAssetReq(
             url=url,
             media_type="video",
@@ -781,6 +876,74 @@ def _ass_color(hex_color: str) -> str:
     return f"&H00{bb}{gg}{rr}"
 
 
+_ASS_PLAY_RES_X = 1080
+_ASS_PLAY_RES_Y = 1920
+_ASS_SAFE_MARGIN_X = 52
+_ASS_SAFE_TOP = 96
+_ASS_SAFE_BOTTOM = 1810
+_ASS_NO_LINE_START = "，。！？、；：）】》》」』…·%"
+
+
+def _ass_char_units(ch: str) -> float:
+    if unicodedata.east_asian_width(ch) in ("W", "F"):
+        return 1.0
+    if ch.isspace():
+        return 0.35
+    return 0.55
+
+
+def _ass_display_units(text: str) -> float:
+    return sum(_ass_char_units(ch) for ch in str(text or ""))
+
+
+def _ass_max_units(font_size: int, *, margin_x: int = _ASS_SAFE_MARGIN_X) -> float:
+    usable = max(160, _ASS_PLAY_RES_X - 2 * int(margin_x))
+    return max(4.0, usable / max(1.0, float(font_size or 1)))
+
+
+def _ass_fit_font_size(text: str, *, base_size: int, margin_x: int = _ASS_SAFE_MARGIN_X, min_size: int) -> int:
+    """把字号压到该行刚好放得进画面（不小于 min_size）。"""
+    units = _ass_display_units(text)
+    if units <= 0:
+        return int(base_size)
+    usable = max(160, _ASS_PLAY_RES_X - 2 * int(margin_x))
+    fitted = int(usable / units)
+    return max(int(min_size), min(int(base_size), fitted))
+
+
+def _wrap_ass_line(text: str, *, font_size: int, margin_x: int = _ASS_SAFE_MARGIN_X, max_lines: int = 6) -> List[str]:
+    """\pos 事件不会自动换行，这里按显示宽度手动折行。"""
+    raw = str(text or "").strip()
+    if not raw:
+        return [""]
+    limit = _ass_max_units(font_size, margin_x=margin_x)
+    lines: List[str] = []
+    current = ""
+    used = 0.0
+    for ch in raw:
+        width = _ass_char_units(ch)
+        if current and used + width > limit:
+            if ch in _ASS_NO_LINE_START:
+                current += ch
+                lines.append(current)
+                current = ""
+                used = 0.0
+                continue
+            lines.append(current)
+            current = ch
+            used = width
+            continue
+        current += ch
+        used += width
+    if current:
+        lines.append(current)
+    if max_lines > 0 and len(lines) > max_lines:
+        head = lines[: max_lines - 1]
+        head.append("".join(lines[max_lines - 1 :]))
+        lines = head
+    return lines
+
+
 def _ass_event(style: str, text: str, *, start: str = "0:00:00.00", end: str = "0:00:10.00", margin_v: int = 0) -> str:
     return f"Dialogue: 0,{start},{end},{style},,0,0,{int(margin_v)},,{text}"
 
@@ -807,19 +970,38 @@ def _local_bestseller_rank_table_ass_content(subtitle_text: str, *, day: Any = N
     subtitle = lines[1] if len(lines) > 1 else "湖北竟然是南方"
     south = ["上海", "江苏", "浙江", "安徽", "江西", "湖北", "湖南", "四川", "重庆", "贵州", "云南", "福建", "广东", "广西", "海南"]
     north = ["北京", "天津", "河北", "山西", "内蒙古", "辽宁", "吉林", "黑龙江", "山东", "河南", "陕西", "甘肃", "青海", "宁夏", "新疆"]
-    events = [
-        _ass_event("RankTitleRed", _escape_ass_text(title), margin_v=64),
-        _ass_event("RankTitleYellow", _escape_ass_text(subtitle), margin_v=172),
+    # 顶部大红标题/黄副标题：先按画面宽度压字号，必要时折行，避免顶到画面外
+    title_font = _ass_fit_font_size(title, base_size=96, margin_x=54, min_size=58)
+    title_wrapped = _wrap_ass_line(title, font_size=title_font, margin_x=54, max_lines=2)
+    title_step = max(56, int(round(title_font * 1.2)))
+    subtitle_font = _ass_fit_font_size(subtitle, base_size=88, margin_x=54, min_size=54)
+    subtitle_wrapped = _wrap_ass_line(subtitle, font_size=subtitle_font, margin_x=54, max_lines=2)
+    subtitle_step = max(52, int(round(subtitle_font * 1.2)))
+    subtitle_y = 64 + len(title_wrapped) * title_step + 8
+    events: List[str] = []
+    for idx, piece in enumerate(title_wrapped):
+        events.append(_ass_event("RankTitleRed", rf"{{\pos(540,{64 + idx * title_step})\fs{title_font}}}" + _escape_ass_text(piece)))
+    for idx, piece in enumerate(subtitle_wrapped):
+        events.append(_ass_event("RankTitleYellow", rf"{{\pos(540,{subtitle_y + idx * subtitle_step})\fs{subtitle_font}}}" + _escape_ass_text(piece)))
+    list_start_y = 462
+    list_rows = max(len(south), len(north), 1)
+    # 行距自适应：保证最后一行（含字号高度）仍留在画面安全区内
+    list_bottom_limit = _ASS_SAFE_BOTTOM - 96
+    if list_rows <= 1:
+        list_step_y = 100
+    else:
+        list_step_y = min(100, max(72, int((list_bottom_limit - list_start_y) / (list_rows - 1))))
+    events.extend([
         _ass_event("RankHeader", r"{\pos(328,336)}南方"),
         _ass_event("RankHeader", r"{\pos(752,336)}北方"),
-        *_rank_list_events("RankList", south, x=328, start_y=462, step_y=100),
-        *_rank_list_events("RankList", north, x=752, start_y=462, step_y=100),
-    ]
+        *_rank_list_events("RankList", south, x=328, start_y=list_start_y, step_y=list_step_y),
+        *_rank_list_events("RankList", north, x=752, start_y=list_start_y, step_y=list_step_y),
+    ])
     return "\n".join([
         "[Script Info]",
         "ScriptType: v4.00+",
-        "PlayResX: 1080",
-        "PlayResY: 1920",
+        f"PlayResX: {_ASS_PLAY_RES_X}",
+        f"PlayResY: {_ASS_PLAY_RES_Y}",
         "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",
@@ -845,35 +1027,57 @@ def _local_bestseller_ass_content(subtitle_text: str, subtitle_style: Optional[D
     lines = _local_bestseller_caption_lines(subtitle_text)
     title = lines[0] if lines else ""
     body = lines[1:] if len(lines) > 1 else []
-    events: List[str] = []
-    stack: List[tuple[str, str]] = []
+    entries: List[tuple[str, str]] = []
     if title:
-        stack.append(("Title", title))
+        entries.append(("Title", title))
     if body:
-        stack.extend(("Body", line) for line in body[:4])
-    if stack:
-        use_top_layout = int(day or 0) in scene_only_days
+        entries.extend(("Body", line) for line in body[:4])
+
+    base_fonts = {"Title": 94, "Body": 88}
+    fonts = dict(base_fonts)
+    rendered: List[tuple[str, str]] = []
+    # 先按标准字号折行；行数太多就整体缩一号再折，保证整块字幕压在画面里
+    for scale in (1.0, 0.92, 0.84, 0.76):
+        fonts = {key: max(52, int(round(value * scale))) for key, value in base_fonts.items()}
+        rendered = []
+        for style_name, text in entries:
+            for piece in _wrap_ass_line(text, font_size=fonts[style_name]):
+                rendered.append((style_name, piece))
+        if len(rendered) <= 8:
+            break
+    rendered = rendered[:8]
+
+    use_top_layout = int(day or 0) in scene_only_days
+    if rendered:
+        max_font = max(fonts[style_name] for style_name, _ in rendered)
+        step = max(56, int(round(max_font * 1.22)))
+        height = (len(rendered) - 1) * step
         if use_top_layout:
-            step_y = 102 if variant == "large_center_stack" else 88
-            start_y = 288 if variant == "large_center_stack" else 312
-            if title:
-                events.append(_ass_event("Title", rf"{{\pos(540,132)}}" + _escape_ass_text(title)))
-            stack = [entry for entry in stack if entry[0] == "Body"]
+            start_y = _ASS_SAFE_TOP + 36
         else:
-            step_y = 102 if variant == "large_center_stack" else 92
             anchor_y = 1040 if variant == "large_center_stack" else 1010
-            start_y = int(round(anchor_y - ((len(stack) - 1) * step_y) / 2))
-        for idx, (event_style, text) in enumerate(stack):
-            y = start_y + idx * step_y
-            events.append(_ass_event(event_style, rf"{{\pos(540,{y})}}" + _escape_ass_text(text)))
+            start_y = int(round(anchor_y - height / 2))
+        start_y = max(_ASS_SAFE_TOP, start_y)
+        if start_y + height > _ASS_SAFE_BOTTOM:
+            start_y = max(_ASS_SAFE_TOP, _ASS_SAFE_BOTTOM - height)
+    else:
+        step = 102
+        start_y = 312 if use_top_layout else 1010
+
+    events: List[str] = []
+    cursor_y = start_y
+    for idx, (style_name, text) in enumerate(rendered):
+        y = start_y + idx * step
+        events.append(_ass_event(style_name, rf"{{\pos(540,{y})\fs{fonts[style_name]}}}" + _escape_ass_text(text)))
+        cursor_y = y
     if not events:
-        fallback_y = 312 if int(day or 0) in scene_only_days else 1010
+        fallback_y = 312 if use_top_layout else 1010
         events.append(_ass_event("Body", rf"{{\pos(540,{fallback_y})}}"))
     return "\n".join([
         "[Script Info]",
         "ScriptType: v4.00+",
-        "PlayResX: 1080",
-        "PlayResY: 1920",
+        f"PlayResX: {_ASS_PLAY_RES_X}",
+        f"PlayResY: {_ASS_PLAY_RES_Y}",
         "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",
@@ -1025,6 +1229,7 @@ def _save_local_bestseller_caption_asset(
     subtitle_text: str,
     job_id: str,
     day: Any,
+    content_visibility: str = "internal",
 ) -> Dict[str, Any]:
     data = output_path.read_bytes()
     aid = _gen_asset_id()
@@ -1050,6 +1255,9 @@ def _save_local_bestseller_caption_asset(
                 "seedance_job_id": job_id,
                 "local_bestseller_day": day,
                 "captioned": True,
+                # 加字幕件默认不对外（后面还有 BGM 合成件时它就是中间产物）；
+                # 只有当本任务没有 BGM（这一份就是交付件）时才标 visible。
+                "content_visibility": str(content_visibility or "internal").strip().lower() or "internal",
             },
         )
         db.add(row)
@@ -1106,6 +1314,10 @@ def _save_local_bestseller_post_asset(
                 "bgm_name": bgm_name,
                 "bgm_url": bgm_url,
                 "kind": kind,
+                # 合成/加 BGM 的这一份就是交付给用户的成片：可见；若之后另有最终件入库，
+                # _demote_process_assets_for_job 会把它降级为中间产物（这时它才是过程件）。
+                "asset_origin": "generated",
+                "content_visibility": "visible",
             },
         )
         db.add(row)
@@ -1159,6 +1371,9 @@ async def _caption_local_bestseller_video_if_needed(
             subtitle_text=subtitle_text,
             job_id=job_id,
             day=meta.get("day"),
+            # 有 BGM 时后面还会合成一份（那一份才是交付件），这里先不对外；
+            # 没有 BGM 时这份加字幕视频就是交付件。
+            content_visibility="internal" if str((meta.get("bgm") or {}).get("bgm_url") or "").strip() else "visible",
         )
 
 

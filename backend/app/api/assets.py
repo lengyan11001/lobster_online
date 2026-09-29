@@ -7,7 +7,9 @@ import logging
 import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -17,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, text
@@ -1339,6 +1341,14 @@ def _resize_image_if_needed(
 
 # ── Download from URL ─────────────────────────────────────────────
 
+class ShanJianMaterialPrepareReq(BaseModel):
+    """给闪剪成片准备合规素材：可按素材 ID，也可按素材分组名。"""
+
+    asset_ids: List[str] = []
+    groups: List[str] = []
+    max_edge: int = 2000
+
+
 class SaveAssetReq(BaseModel):
     url: str
     media_type: str = "image"
@@ -1346,6 +1356,7 @@ class SaveAssetReq(BaseModel):
     content_visibility: Optional[str] = None
     name: Optional[str] = None
     tags: Optional[str] = None
+    creative_candidate_group: Optional[str] = None
     prompt: Optional[str] = None
     model: Optional[str] = None
     # MCP sutui.transfer_url 自动入库：下载用 url（mcp 输出链），去重用转入链（通常为 v3），避免每次 transfer 换新 uuid 重复入库
@@ -1371,6 +1382,11 @@ class ChatSessionBackupReq(BaseModel):
 
 class CreativeCandidateGroupReq(BaseModel):
     group_name: str
+
+
+class AssetLabelsReq(BaseModel):
+    creative_candidate_group: str = ""
+    tags: str = ""
 
 
 def _asset_origin(meta: Optional[dict]) -> str:
@@ -1470,6 +1486,7 @@ def _sync_creative_candidate_group_to_auth_server(row: Asset, group_name: str, r
                     "creative_candidate_group": group_name,
                     "creative_candidate_groups": [group_name],
                 }
+                _copy_tags_into_register_payload(register_payload, row.tags)
                 resp = client.post(f"{base}/api/assets/register-url", json=register_payload, headers=headers)
                 if resp.status_code >= 400:
                     logger.warning(
@@ -1503,11 +1520,102 @@ def _sync_creative_candidate_group_to_auth_server(row: Asset, group_name: str, r
         logger.warning("[assets-sync] sync creative group exception asset_id=%s err=%s", row.asset_id, exc)
 
 
+def _sync_asset_labels_to_auth_server(row: Asset, group_name: str, tags: Optional[str], request: Request, db: Session) -> None:
+    """Push optional group/tags to the auth server. Local save stays successful if this fails."""
+    base = _auth_server_base_url()
+    headers = _forward_auth_headers(request)
+    if not base or "Authorization" not in headers:
+        return
+    source_url = (row.source_url or "").strip()
+    meta = dict(row.meta or {})
+    remote_asset_id = str(meta.get("remote_asset_id") or "").strip()
+    clean_tags = tags.strip() if isinstance(tags, str) else ""
+    try:
+        with httpx.Client(timeout=12.0, follow_redirects=True, trust_env=False) as client:
+            if not remote_asset_id:
+                if not group_name and not clean_tags:
+                    return
+                if not source_url.startswith(("http://", "https://")):
+                    return
+                register_payload = {
+                    "url": source_url,
+                    "media_type": row.media_type or "image",
+                    "filename": row.filename or "",
+                    "file_size": row.file_size or 0,
+                    "source_asset_id": row.asset_id,
+                    "asset_origin": _asset_origin(row.meta),
+                }
+                if group_name:
+                    register_payload["creative_candidate_group"] = group_name
+                    register_payload["creative_candidate_groups"] = [group_name]
+                if clean_tags:
+                    register_payload["tags"] = clean_tags
+                resp = client.post(f"{base}/api/assets/register-url", json=register_payload, headers=headers)
+                if resp.status_code >= 400:
+                    logger.warning("[assets-sync] register labels asset failed status=%s", resp.status_code)
+                    return
+                data = resp.json()
+                remote_asset_id = str((data or {}).get("asset_id") or "").strip()
+                if remote_asset_id:
+                    meta["remote_asset_id"] = remote_asset_id[:80]
+                    meta["remote_registered_at"] = datetime.utcnow().isoformat()
+                    row.meta = meta
+                    db.add(row)
+                    db.commit()
+                return
+            resp = client.post(
+                f"{base}/api/assets/{remote_asset_id}/labels",
+                json={"creative_candidate_group": group_name or "", "tags": clean_tags},
+                headers=headers,
+            )
+            if resp.status_code >= 400:
+                logger.warning(
+                    "[assets-sync] sync labels failed remote_asset_id=%s status=%s",
+                    remote_asset_id,
+                    resp.status_code,
+                )
+    except Exception as exc:
+        logger.warning("[assets-sync] sync labels exception asset_id=%s err=%s", row.asset_id, exc)
+
+
 def _clean_creative_group_name(value: str) -> str:
     name = re.sub(r"\s+", " ", str(value or "").strip())
     if not name:
         raise HTTPException(400, detail="备选组名字不能为空")
     return name[:40]
+
+
+
+def _clean_creative_group_name_optional(value: Any) -> str:
+    """Optional upload group. Empty is allowed and never raises."""
+    if not isinstance(value, str):
+        return ""
+    return re.sub(r"\s+", " ", value.strip())[:40]
+
+
+def _clean_upload_tags(value: Any) -> Optional[str]:
+    """Optional user-upload tags. Non-strings and blanks stay unset."""
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    if raw.startswith("auto,"):
+        return raw[:2048]
+    seen: List[str] = []
+    for part in re.split(r"[,，;；\s]+", raw):
+        tag = part.strip()[:40]
+        if not tag or tag in seen:
+            continue
+        seen.append(tag)
+        if len(seen) >= 12:
+            break
+    return ",".join(seen) if seen else None
+
+
+def _copy_tags_into_register_payload(payload: dict, tags: Optional[str]) -> None:
+    if isinstance(tags, str) and tags.strip():
+        payload["tags"] = tags.strip()
 
 
 def _safe_chat_backup_key(key: str) -> str:
@@ -1909,6 +2017,7 @@ async def _register_user_upload_asset_to_auth_server(
     if group_name:
         payload["creative_candidate_group"] = group_name
         payload["creative_candidate_groups"] = [group_name]
+    _copy_tags_into_register_payload(payload, asset.tags)
     try:
         async with httpx.AsyncClient(timeout=18.0, follow_redirects=True, trust_env=False) as client:
             resp = await client.post(f"{base}/api/assets/register-url", json=payload, headers=headers)
@@ -1987,6 +2096,7 @@ def _sync_remote_user_upload_assets(
             media_type=media,
             file_size=file_size,
             source_url=source_url,
+            tags=_clean_upload_tags(item.get("tags")),
             meta={
                 "asset_origin": "user_upload",
                 "remote_asset_id": remote_asset_id,
@@ -2018,6 +2128,20 @@ def _parse_remote_asset_created_at(raw: Any) -> Optional[datetime]:
         return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
     except (TypeError, ValueError):
         return None
+
+
+def _remote_asset_item_is_process(item: Dict[str, Any]) -> bool:
+    """云端条目是不是过程件（不该镜像进本地素材库）。
+
+    按口径：素材库只展示用户上传 + 最终交付件；中间产物（intermediate / internal /
+    hidden）既不在素材库也不在内容库出现（仍可按 asset_id 取用）。2026-09-22。
+    """
+    payload = item if isinstance(item, dict) else {}
+    origin = str(payload.get("asset_origin") or payload.get("origin") or "").strip().lower()
+    visibility = str(
+        payload.get("content_visibility") or payload.get("library_visibility") or ""
+    ).strip().lower()
+    return origin in {"intermediate", "internal"} or visibility in {"hidden", "internal", "intermediate"}
 
 
 def _sync_remote_generated_assets(
@@ -2096,7 +2220,11 @@ def _sync_remote_generated_assets(
     updated = 0
     now_iso = datetime.utcnow().isoformat()
     for item in items:
-        if not isinstance(item, dict) or item.get("asset_origin") == "user_upload":
+        if (
+            not isinstance(item, dict)
+            or item.get("asset_origin") == "user_upload"
+            or _remote_asset_item_is_process(item)
+        ):
             continue
         media = str(item.get("media_type") or "").strip().lower()
         if media not in ("image", "video") or (mt_filter and media != mt_filter):
@@ -2212,6 +2340,7 @@ def _register_local_user_upload_assets_to_auth_server(
             if group_name:
                 payload["creative_candidate_group"] = group_name
                 payload["creative_candidate_groups"] = [group_name]
+            _copy_tags_into_register_payload(payload, row.tags)
             try:
                 resp = client.post(f"{base}/api/assets/register-url", json=payload, headers=headers)
                 if resp.status_code >= 400:
@@ -2814,6 +2943,13 @@ async def _save_asset_from_url_locked(
     gtid = (body.generation_task_id or "").strip()
     if gtid:
         meta["generation_task_id"] = gtid[:128]
+    stored_tags = body.tags
+    if asset_origin == "user_upload":
+        stored_tags = _clean_upload_tags(body.tags)
+        upload_group = _clean_creative_group_name_optional(body.creative_candidate_group)
+        if upload_group:
+            meta["creative_candidate_group"] = upload_group
+            meta["creative_candidate_groups"] = [upload_group]
 
     log_url = body.url[:80] + ("..." if len(body.url) > 80 else "")
     if effective_url.strip() != (body.url or "").strip():
@@ -2830,7 +2966,7 @@ async def _save_asset_from_url_locked(
             source_url=source_url,
             prompt=body.prompt,
             model=body.model,
-            tags=body.tags,
+            tags=stored_tags,
             meta=meta,
         )
         db_ins.add(asset)
@@ -2944,6 +3080,8 @@ async def upload_asset(
     request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    creative_candidate_group: str = Form(""),
+    tags: str = Form(""),
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
@@ -2976,6 +3114,16 @@ async def upload_asset(
     )
     upload_headers = _snapshot_auth_server_upload_headers(request) if mtype == "image" else {}
     public_url_status = "preparing" if upload_headers else "deferred_until_use"
+    upload_group = _clean_creative_group_name_optional(creative_candidate_group)
+    upload_tags = _clean_upload_tags(tags)
+    upload_meta = {
+        "asset_origin": "user_upload",
+        "storage": "local",
+        "public_url_status": public_url_status,
+    }
+    if upload_group:
+        upload_meta["creative_candidate_group"] = upload_group
+        upload_meta["creative_candidate_groups"] = [upload_group]
     asset = Asset(
         asset_id=aid,
         user_id=current_user.id,
@@ -2983,11 +3131,8 @@ async def upload_asset(
         media_type=mtype,
         file_size=fsize,
         source_url=None,
-        meta={
-            "asset_origin": "user_upload",
-            "storage": "local",
-            "public_url_status": public_url_status,
-        },
+        tags=upload_tags,
+        meta=upload_meta,
     )
     db.add(asset)
     db.commit()
@@ -3046,6 +3191,9 @@ async def upload_asset(
         ),
         "local_only": not bool(asset.source_url),
         "public_url_status": "ready" if asset.source_url else public_url_status,
+        "tags": asset.tags or "",
+        "creative_candidate_group": _creative_candidate_group(asset.meta),
+        "creative_candidate_groups": _creative_candidate_groups(asset.meta),
     }
 
 
@@ -3096,10 +3244,13 @@ def list_assets(
     query = query.filter(
         ~meta_visibility.in_(("hidden", "internal", "intermediate"))
     )
-    if origin_filter == "user_upload":
-        query = query.filter(meta_origin == "user_upload")
-    elif origin_filter == "generated":
-        query = query.filter(meta_origin != "user_upload")
+    # A selected creative group is a material bucket shared by both libraries.
+    # The dropdown count is not origin-scoped, so keep every asset in that group.
+    if not creative_group_name:
+        if origin_filter == "user_upload":
+            query = query.filter(meta_origin == "user_upload")
+        elif origin_filter == "generated":
+            query = query.filter(meta_origin != "user_upload")
     if creative_group_name:
         matched = [
             row
@@ -3257,28 +3408,110 @@ def sync_generated_assets(
     }
 
 
+def _asset_hidden_from_creative_groups(row: Asset) -> bool:
+    meta = row.meta if isinstance(getattr(row, "meta", None), dict) else {}
+    visibility = str(meta.get("content_visibility") or meta.get("library_visibility") or "").strip().lower()
+    origin = str(meta.get("asset_origin") or meta.get("origin") or "").strip().lower()
+    if visibility in {"hidden", "internal", "intermediate"} or origin in {"internal", "intermediate"}:
+        return True
+    return str(getattr(row, "model", "") or "").strip() == "shanjian-digital-human-template-media"
+
+
+def _creative_candidate_group_summaries(rows: list) -> List[dict]:
+    groups: Dict[str, dict] = {}
+    for row in rows:
+        if _asset_hidden_from_creative_groups(row):
+            continue
+        name = _creative_candidate_group(getattr(row, "meta", None))
+        if not name:
+            continue
+        current = groups.setdefault(name, {"name": name, "count": 0, "use_count": 0, "last_used_at": ""})
+        if str(getattr(row, "media_type", "") or "").strip().lower() == "image":
+            current["count"] += 1
+        current["use_count"] += _creative_candidate_group_use_count(row.meta, name)
+        last_used = _creative_candidate_group_last_used_at(row.meta, name)
+        if last_used and (not current["last_used_at"] or last_used > current["last_used_at"]):
+            current["last_used_at"] = last_used
+    return [
+        item
+        for item in sorted(groups.values(), key=lambda item: (-int(item.get("count") or 0), str(item.get("name") or "")))
+    ]
+
+
 @router.get("/api/assets/creative-candidate-groups", summary="创意成片备选素材组列表")
 def list_creative_candidate_groups(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
-    rows = db.query(Asset).filter(Asset.user_id == current_user.id, Asset.media_type == "image").all()
-    groups: Dict[str, dict] = {}
+    rows = db.query(Asset).filter(Asset.user_id == current_user.id).all()
+    return {"ok": True, "groups": _creative_candidate_group_summaries(rows)}
+
+
+@router.post("/api/assets/shanjian-prepare", summary="为闪剪成片准备合规素材副本（本地降分辨率）")
+async def prepare_shanjian_material_copies(
+    body: ShanJianMaterialPrepareReq,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    limit = max(320, min(int(body.max_edge or SHANJIAN_MATERIAL_MAX_EDGE), 4096))
+    wanted_groups = {str(item or "").strip() for item in (body.groups or []) if str(item or "").strip()}
+    wanted_ids = [str(item or "").strip() for item in (body.asset_ids or []) if str(item or "").strip()][:200]
+    rows: List[Asset] = []
+    if wanted_ids:
+        rows.extend(
+            db.query(Asset)
+            .filter(Asset.user_id == current_user.id, Asset.asset_id.in_(wanted_ids))
+            .all()
+        )
+    if wanted_groups:
+        candidates = (
+            db.query(Asset)
+            .filter(Asset.user_id == current_user.id, Asset.media_type.in_(("video", "image")))
+            .all()
+        )
+        for row in candidates:
+            if row in rows:
+                continue
+            if wanted_groups.intersection(_creative_candidate_groups(row.meta)):
+                rows.append(row)
+    items: List[Dict[str, Any]] = []
     for row in rows:
-        name = _creative_candidate_group(row.meta)
-        if name:
-            current = groups.setdefault(name, {"name": name, "count": 0, "use_count": 0, "last_used_at": ""})
-            current["count"] += 1
-            current["use_count"] += _creative_candidate_group_use_count(row.meta, name)
-            last_used = _creative_candidate_group_last_used_at(row.meta, name)
-            if last_used and (not current["last_used_at"] or last_used > current["last_used_at"]):
-                current["last_used_at"] = last_used
+        try:
+            items.append(
+                await ensure_shanjian_compliant_copy(row, request=request, db=db, max_edge=limit)
+            )
+        except HTTPException as exc:
+            items.append(
+                {
+                    "asset_id": row.asset_id,
+                    "media_type": str(row.media_type or ""),
+                    "action": "failed",
+                    "error": str(getattr(exc, "detail", exc))[:300],
+                }
+            )
+        except Exception as exc:
+            logger.warning(
+                "[shanjian-media] prepare copy failed asset_id=%s err=%s",
+                row.asset_id,
+                f"{type(exc).__name__}: {exc}"[:200],
+            )
+            items.append(
+                {
+                    "asset_id": row.asset_id,
+                    "media_type": str(row.media_type or ""),
+                    "action": "failed",
+                    "error": f"{type(exc).__name__}: {exc}"[:300],
+                }
+            )
+    converted = [item for item in items if item.get("action") == "converted"]
     return {
         "ok": True,
-        "groups": [
-            item
-            for item in sorted(groups.values(), key=lambda row: (-int(row.get("count") or 0), str(row.get("name") or "")))
-        ],
+        "max_edge": limit,
+        "groups": sorted(wanted_groups),
+        "count": len(items),
+        "converted": len(converted),
+        "items": items,
     }
 
 
@@ -3305,7 +3538,752 @@ def add_asset_to_creative_candidate_group(
     return {"ok": True, "asset_id": row.asset_id, "group_name": group_name, "groups": [group_name]}
 
 
+_LABEL_MEDIA_TYPES = {"image", "video", "audio", "document"}
+
+
+
+class AssetSplitReq(BaseModel):
+    segment_seconds: int = 3
+
+
+def _local_library_file(asset: Asset) -> Optional[Path]:
+    filename = str(getattr(asset, "filename", "") or "").strip()
+    if not filename:
+        return None
+    candidate = ASSETS_DIR / Path(filename).name
+    return candidate if candidate.is_file() else None
+
+
+def _reject_intermediate_library_asset(asset: Asset) -> None:
+    meta = asset.meta if isinstance(asset.meta, dict) else {}
+    if meta.get("online_split_source") or str(meta.get("content_visibility") or "").strip() == "intermediate":
+        raise HTTPException(400, detail="中间素材不能再次处理")
+
+
+async def _materialize_library_file(asset: Asset, request: Request, directory: Path) -> Path:
+    local_path = _local_library_file(asset)
+    if local_path is not None:
+        return local_path
+    suffix = Path(str(asset.filename or "asset.bin")).suffix or ".bin"
+    target = directory / f"source{suffix}"
+    await asyncio.to_thread(_download_remote_asset_to_path, asset, target, request)
+    return target
+
+
+_SPLIT_PROGRESS_LOCK = threading.Lock()
+_SPLIT_PROGRESS: Dict[str, Dict[str, Any]] = {}
+
+
+# ── 闪剪素材合规化（在本地把超分辨率素材压成合规副本） ────────────────────────
+# 闪剪成片对素材有硬限制：最长边不能超过 2000（上游返回 InvalidFile.Resolution
+# 时就是这条）。历史素材（例如 1080x2400 的竖版导出、2048 长边图片）会整单失败，
+# 所以在客户端先探测再压缩，只把合规副本交给闪剪，原文件与原本地素材行都不动。
+
+SHANJIAN_MATERIAL_MAX_EDGE = 2000
+_SHANJIAN_TOOL_CACHE: dict[str, str] = {}
+
+
+def _shanjian_tools() -> tuple[str, str]:
+    """Resolve (ffmpeg, ffprobe) for the 闪剪 material pass.
+
+    Prefers the binaries shipped with the client, then PATH, so a thin install
+    that relies on PATH still works.
+    """
+    cached_ffmpeg = _SHANJIAN_TOOL_CACHE.get("ffmpeg") or ""
+    cached_ffprobe = _SHANJIAN_TOOL_CACHE.get("ffprobe") or ""
+    if cached_ffmpeg and cached_ffprobe:
+        return cached_ffmpeg, cached_ffprobe
+    base = _BASE_DIR
+    exe = ".exe" if os.name == "nt" else ""
+    ffmpeg_candidates = [
+        os.environ.get("FFMPEG_BIN") or "",
+        str(base / "deps" / "ffmpeg" / f"ffmpeg{exe}"),
+        str(base / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / f"ffmpeg{exe}"),
+        shutil.which(f"ffmpeg{exe}") or "",
+        shutil.which("ffmpeg") or "",
+    ]
+    ffmpeg = next((item for item in ffmpeg_candidates if item and Path(item).exists()), "")
+    ffprobe_candidates = [
+        os.environ.get("FFPROBE_BIN") or "",
+        str(Path(ffmpeg).with_name(f"ffprobe{exe}")) if ffmpeg else "",
+        str(base / "deps" / "ffmpeg" / f"ffprobe{exe}"),
+        str(base / "skills" / "comfly_veo3_daihuo_video" / "tools" / "ffmpeg" / "windows" / f"ffprobe{exe}"),
+        shutil.which(f"ffprobe{exe}") or "",
+        shutil.which("ffprobe") or "",
+    ]
+    ffprobe = next((item for item in ffprobe_candidates if item and Path(item).exists()), "")
+    _SHANJIAN_TOOL_CACHE["ffmpeg"] = ffmpeg
+    _SHANJIAN_TOOL_CACHE["ffprobe"] = ffprobe
+    return ffmpeg, ffprobe
+
+
+def probe_media_dimensions(source: Path) -> tuple[int, int, float]:
+    """Return (width, height, duration_seconds) for one local media file."""
+    _ffmpeg, ffprobe = _shanjian_tools()
+    if not ffprobe:
+        raise RuntimeError("本机缺少 ffprobe，无法校验素材分辨率")
+    proc = subprocess.run(
+        [
+            ffprobe,
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height:format=duration",
+            "-of", "json",
+            str(source),
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=90,
+        check=False,
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()[:300]
+        raise RuntimeError(f"无法读取素材信息：{detail or 'ffprobe failed'}")
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except Exception as exc:
+        raise RuntimeError("素材元数据解析失败") from exc
+    stream = ((payload.get("streams") or [{}])[0]) or {}
+    fmt = payload.get("format") or {}
+    try:
+        width = int(stream.get("width") or 0)
+    except Exception:
+        width = 0
+    try:
+        height = int(stream.get("height") or 0)
+    except Exception:
+        height = 0
+    try:
+        duration = float(fmt.get("duration") or 0.0)
+    except Exception:
+        duration = 0.0
+    return width, height, duration
+
+
+def shanjian_material_needs_downscale(
+    width: int,
+    height: int,
+    max_edge: int = SHANJIAN_MATERIAL_MAX_EDGE,
+) -> bool:
+    return max(int(width or 0), int(height or 0)) > int(max_edge)
+
+
+def shanjian_scaled_dimensions(
+    width: int,
+    height: int,
+    max_edge: int = SHANJIAN_MATERIAL_MAX_EDGE,
+) -> tuple[int, int]:
+    """Even-sized target box whose longest edge equals max_edge."""
+    width = max(1, int(width or 0))
+    height = max(1, int(height or 0))
+    limit = max(2, int(max_edge))
+    longest = max(width, height)
+    scale = 1.0 if longest <= limit else float(limit) / float(longest)
+    target_w = max(2, int(round(width * scale)))
+    target_h = max(2, int(round(height * scale)))
+    target_w -= target_w % 2
+    target_h -= target_h % 2
+    return max(2, target_w), max(2, target_h)
+
+
+def _shanjian_media_ext(media_type: str) -> str:
+    return ".jpg" if str(media_type or "").strip().lower() == "image" else ".mp4"
+
+
+def _shanjian_transcode_image(source: Path, dest: Path, *, target_w: int, target_h: int) -> bool:
+    try:
+        from PIL import Image
+    except Exception:
+        return False
+    try:
+        with Image.open(source) as img:
+            if getattr(img, "is_animated", False):
+                return False
+            if img.mode in ("RGBA", "LA") or "transparency" in img.info:
+                rgba = img.convert("RGBA")
+                background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+                background.alpha_composite(rgba)
+                converted = background.convert("RGB")
+            else:
+                converted = img.convert("RGB")
+            converted.resize((target_w, target_h), Image.Resampling.LANCZOS).save(
+                dest,
+                "JPEG",
+                quality=90,
+                optimize=True,
+                progressive=True,
+            )
+    except Exception:
+        return False
+    return dest.is_file() and dest.stat().st_size > 0
+
+
+def _transcode_shanjian_copy(source: Path, dest: Path, *, media_type: str, width: int, height: int) -> None:
+    """Shrink one material file so its longest edge fits the 闪剪 limit."""
+    target_w, target_h = shanjian_scaled_dimensions(width, height)
+    if str(media_type or "").strip().lower() == "image":
+        if _shanjian_transcode_image(source, dest, target_w=target_w, target_h=target_h):
+            return
+    ffmpeg, _ffprobe = _shanjian_tools()
+    if not ffmpeg:
+        raise RuntimeError("本机缺少 ffmpeg，无法压缩素材")
+    is_image = str(media_type or "").strip().lower() == "image"
+    if is_image:
+        command = [
+            ffmpeg, "-y", "-i", str(source),
+            "-vf", f"scale={target_w}:{target_h}",
+            "-q:v", "2",
+            str(dest),
+        ]
+    else:
+        command = [
+            ffmpeg, "-y", "-i", str(source),
+            "-map", "0:v:0", "-map", "0:a?",
+            "-vf", f"scale={target_w}:{target_h}",
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "21", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            "-max_muxing_queue_size", "2048",
+            str(dest),
+        ]
+    proc = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=1800,
+        check=False,
+    )
+    if proc.returncode != 0 or not dest.is_file() or dest.stat().st_size <= 0:
+        detail = (proc.stderr or proc.stdout or "ffmpeg failed").strip()[-400:]
+        raise RuntimeError(f"素材压缩失败：{detail}")
+
+
+def _shanjian_copy_meta(
+    source_meta: Optional[dict],
+    *,
+    group_name: str,
+    source_asset_id: str,
+    width: int,
+    height: int,
+    duration: float,
+    max_edge: int,
+) -> dict:
+    meta = dict(source_meta or {})
+    for key in (
+        "remote_asset_id",
+        "public_url_status",
+        "public_url_last_error",
+        "shanjian_compliant_asset_id",
+        "shanjian_group_moved_to",
+    ):
+        meta.pop(key, None)
+    if group_name:
+        meta["creative_candidate_group"] = group_name
+        meta["creative_candidate_groups"] = [group_name]
+    meta["layout"] = "user_upload"
+    meta["shanjian_max_edge"] = int(max_edge)
+    meta["shanjian_compliant_from"] = source_asset_id
+    meta["derived_from"] = source_asset_id
+    meta["derived_reason"] = "shanjian_material_max_edge"
+    meta["width"] = int(width or 0)
+    meta["height"] = int(height or 0)
+    meta["duration_sec"] = round(float(duration or 0.0), 3)
+    return meta
+
+
+async def ensure_shanjian_compliant_copy(
+    row: Asset,
+    *,
+    request: Request,
+    db: Session,
+    max_edge: int = SHANJIAN_MATERIAL_MAX_EDGE,
+) -> Dict[str, Any]:
+    """Guarantee one library asset has a copy the 闪剪 render API accepts.
+
+    The original row and file stay as they are; the shrunken copy is stored as
+    a new asset, keeps the material group, and takes over that group so the next
+    render picks the compliant file.
+    """
+    limit = max(320, min(int(max_edge or SHANJIAN_MATERIAL_MAX_EDGE), 4096))
+    media_type = str(row.media_type or "").strip().lower()
+    result: Dict[str, Any] = {"asset_id": row.asset_id, "media_type": media_type, "action": "skipped"}
+    if media_type not in {"video", "image"}:
+        result["reason"] = "media_type"
+        return result
+    meta = dict(row.meta or {})
+    group_name = _creative_candidate_group(meta)
+    if int(meta.get("shanjian_max_edge") or 0) == limit and str(meta.get("shanjian_compliant_from") or "").strip():
+        result.update({"action": "reused", "compliant_asset_id": row.asset_id, "filename": row.filename})
+        return result
+    existing_id = str(meta.get("shanjian_compliant_asset_id") or "").strip()
+    if existing_id:
+        existing = (
+            db.query(Asset)
+            .filter(Asset.asset_id == existing_id, Asset.user_id == row.user_id)
+            .first()
+        )
+        existing_meta = dict(getattr(existing, "meta", None) or {})
+        if (
+            existing is not None
+            and int(existing_meta.get("shanjian_max_edge") or 0) == limit
+            and _asset_local_path(existing)
+        ):
+            result.update(
+                {
+                    "action": "reused",
+                    "compliant_asset_id": existing.asset_id,
+                    "filename": existing.filename,
+                }
+            )
+            return result
+    with tempfile.TemporaryDirectory(prefix="lobster_shanjian_media_") as temp_name:
+        temp_dir = Path(temp_name)
+        source_path = await _materialize_library_file(row, request, temp_dir)
+        width, height, duration = await asyncio.to_thread(probe_media_dimensions, source_path)
+        result.update({"width": width, "height": height, "duration": duration})
+        if not shanjian_material_needs_downscale(width, height, limit):
+            result["reason"] = "within_limit"
+            return result
+        target_w, target_h = shanjian_scaled_dimensions(width, height, limit)
+        dest = temp_dir / f"shanjian{_shanjian_media_ext(media_type)}"
+        await asyncio.to_thread(
+            _transcode_shanjian_copy,
+            source_path,
+            dest,
+            media_type=media_type,
+            width=width,
+            height=height,
+        )
+        verified_width, verified_height, _verified_duration = await asyncio.to_thread(
+            probe_media_dimensions,
+            dest,
+        )
+        if max(int(verified_width or 0), int(verified_height or 0)) > limit:
+            raise RuntimeError(
+                f"压缩后仍超过闪剪上限：{verified_width}x{verified_height} > {limit}"
+            )
+        data = dest.read_bytes()
+        new_id, filename, size = _save_bytes(data, _shanjian_media_ext(media_type))
+        copy_meta = _shanjian_copy_meta(
+            meta,
+            group_name=group_name,
+            source_asset_id=row.asset_id,
+            width=target_w,
+            height=target_h,
+            duration=duration,
+            max_edge=limit,
+        )
+        copy_row = Asset(
+            asset_id=new_id,
+            user_id=row.user_id,
+            filename=filename,
+            media_type=media_type,
+            file_size=size,
+            source_url=None,
+            tags=row.tags,
+            meta=copy_meta,
+        )
+        db.add(copy_row)
+        upload_headers = _snapshot_auth_server_upload_headers(request)
+        if group_name:
+            original_meta = dict(meta)
+            original_meta.pop("creative_candidate_group", None)
+            original_meta.pop("creative_candidate_groups", None)
+            original_meta["shanjian_compliant_asset_id"] = new_id
+            original_meta["shanjian_group_moved_to"] = new_id
+            original_meta["shanjian_group_original"] = group_name
+            row.meta = original_meta
+            db.add(row)
+        db.commit()
+        result.update(
+            {
+                "action": "converted",
+                "compliant_asset_id": new_id,
+                "filename": filename,
+                "file_size": size,
+                "target_width": target_w,
+                "target_height": target_h,
+                "group": group_name,
+            }
+        )
+        try:
+            if upload_headers:
+                await asyncio.to_thread(_warm_asset_source_url_background, new_id, row.user_id, upload_headers)
+            db.expire_all()
+            fresh = db.query(Asset).filter(Asset.asset_id == new_id, Asset.user_id == row.user_id).first()
+            if fresh is not None:
+                await _register_user_upload_asset_to_auth_server(fresh, request)
+                if group_name:
+                    _sync_asset_labels_to_auth_server(fresh, group_name, fresh.tags, request, db)
+            if group_name:
+                _sync_asset_labels_to_auth_server(row, "", row.tags, request, db)
+        except Exception as exc:
+            logger.warning(
+                "[shanjian-media] publish compliant copy failed asset_id=%s err=%s",
+                row.asset_id,
+                f"{type(exc).__name__}: {exc}"[:200],
+            )
+            result["sync_warning"] = f"{type(exc).__name__}: {exc}"[:200]
+    return result
+
+
+def _split_progress_key(user_id: int, asset_id: str) -> str:
+    return f"{int(user_id)}:{asset_id}"
+
+
+def _set_split_progress(user_id: int, asset_id: str, **fields: Any) -> None:
+    key = _split_progress_key(user_id, asset_id)
+    with _SPLIT_PROGRESS_LOCK:
+        current = dict(_SPLIT_PROGRESS.get(key) or {})
+        current.update(fields)
+        current["updated_at"] = time.time()
+        _SPLIT_PROGRESS[key] = current
+
+
+def _split_progress_snapshot(user_id: int, asset_id: str) -> Dict[str, Any]:
+    key = _split_progress_key(user_id, asset_id)
+    with _SPLIT_PROGRESS_LOCK:
+        return dict(_SPLIT_PROGRESS.get(key) or {})
+
+
+def _split_error_text(exc: BaseException) -> str:
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()[:300]
+    return str(exc).strip()[:300] or "切片失败"
+
+
+@router.get("/api/assets/{asset_id}/split-progress", summary="查看视频切片进度")
+def get_saved_asset_split_progress(
+    asset_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    data = _split_progress_snapshot(current_user.id, asset_id)
+    if not data:
+        return {"ok": True, "running": False, "ratio": 0.0, "label": "", "stage": "idle"}
+    return {"ok": True, **data}
+
+
+@router.post("/api/assets/{asset_id}/split", summary="把已入库视频切成多段")
+async def split_saved_asset(
+    asset_id: str,
+    body: AssetSplitReq,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    row = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
+    if not row:
+        raise HTTPException(404, detail="素材不存在")
+    if (row.media_type or "").strip().lower() != "video":
+        raise HTTPException(400, detail="只有视频可以切片")
+    _reject_intermediate_library_asset(row)
+    seconds = max(2, min(int(body.segment_seconds or 3), 60))
+    from .h5_chat_channel import _probe_media_duration, _split_online_video_file, find_ffmpeg
+
+    _set_split_progress(
+        current_user.id,
+        asset_id,
+        running=True,
+        ratio=0.02,
+        label="正在准备原片",
+        stage="prepare",
+        error="",
+        count=0,
+    )
+    try:
+        upload_headers = _snapshot_auth_server_upload_headers(request)
+        source_meta = row.meta if isinstance(row.meta, dict) else {}
+        group_name = _creative_candidate_group(source_meta)
+        source_tags = row.tags if isinstance(row.tags, str) else None
+        created: list[Asset] = []
+        duration_by_id: Dict[str, float] = {}
+
+        def on_ffmpeg(ratio, label):
+            shown = max(0.0, min(1.0, float(ratio or 0)))
+            _set_split_progress(
+                current_user.id,
+                asset_id,
+                running=True,
+                ratio=0.05 + 0.55 * shown,
+                label=label or "正在切片",
+                stage="ffmpeg",
+                error="",
+            )
+
+        with tempfile.TemporaryDirectory(prefix="lobster_library_split_") as temp_name:
+            temp_dir = Path(temp_name)
+            source_path = await _materialize_library_file(row, request, temp_dir)
+            try:
+                segments = await asyncio.to_thread(
+                    _split_online_video_file,
+                    source_path,
+                    temp_dir / "segments",
+                    segment_seconds=seconds,
+                    max_segments=120,
+                    progress=on_ffmpeg,
+                )
+            except RuntimeError as exc:
+                raise HTTPException(500, detail=str(exc)[:500]) from exc
+            ffmpeg_bin = find_ffmpeg()
+            total_segments = len(segments)
+            for index, segment in enumerate(segments, start=1):
+                _set_split_progress(
+                    current_user.id,
+                    asset_id,
+                    running=True,
+                    ratio=0.62 + 0.10 * (index / max(total_segments, 1)),
+                    label=f"正在保存第 {index}/{total_segments} 段",
+                    stage="save",
+                    error="",
+                )
+                duration_sec = round(float(_probe_media_duration(segment, ffmpeg_bin) or 0), 3)
+                aid, fname, fsize = _save_bytes(segment.read_bytes(), ".mp4")
+                duration_by_id[aid] = duration_sec
+                meta = {
+                    "asset_origin": "user_upload",
+                    "storage": "local",
+                    "public_url_status": "preparing" if upload_headers else "deferred_until_use",
+                    "video_segment": True,
+                    "segment_index": index,
+                    "segment_seconds": seconds,
+                    "duration_sec": duration_sec,
+                    "split_source_asset_id": row.asset_id,
+                }
+                if group_name:
+                    meta["creative_candidate_group"] = group_name
+                    meta["creative_candidate_groups"] = [group_name]
+                created.append(
+                    Asset(
+                        asset_id=aid,
+                        user_id=current_user.id,
+                        filename=fname,
+                        media_type="video",
+                        file_size=fsize,
+                        source_url=None,
+                        tags=source_tags,
+                        meta=meta,
+                    )
+                )
+            db.add_all(created)
+            db.commit()
+        upload_total = len(created)
+        for index, item in enumerate(created, start=1):
+            _set_split_progress(
+                current_user.id,
+                asset_id,
+                running=True,
+                ratio=0.74 + 0.24 * ((index - 1) / max(upload_total, 1)),
+                label=f"正在入库第 {index}/{upload_total} 段",
+                stage="upload",
+                error="",
+                count=upload_total,
+            )
+            if not upload_headers:
+                continue
+            await asyncio.to_thread(_warm_asset_source_url_background, item.asset_id, current_user.id, upload_headers)
+            db.expire_all()
+            fresh = db.query(Asset).filter(Asset.asset_id == item.asset_id, Asset.user_id == current_user.id).first()
+            if fresh is None:
+                continue
+            remote = await _register_user_upload_asset_to_auth_server(fresh, request)
+            remote_asset_id = str((remote or {}).get("asset_id") or "").strip()
+            if not remote_asset_id:
+                continue
+            meta = dict(fresh.meta or {})
+            meta["remote_asset_id"] = remote_asset_id[:80]
+            meta["remote_registered_at"] = datetime.utcnow().isoformat()
+            fresh.meta = meta
+            db.add(fresh)
+            db.commit()
+        db.expire_all()
+        assets = []
+        for item in created:
+            fresh = db.query(Asset).filter(Asset.asset_id == item.asset_id, Asset.user_id == current_user.id).first()
+            if fresh is None:
+                continue
+            assets.append(
+                {
+                    "asset_id": fresh.asset_id,
+                    "filename": fresh.filename,
+                    "segment_index": (fresh.meta or {}).get("segment_index"),
+                    "duration_sec": duration_by_id.get(fresh.asset_id, 0),
+                    "creative_candidate_group": _creative_candidate_group(fresh.meta),
+                    "tags": fresh.tags or "",
+                }
+            )
+        result = {
+            "ok": True,
+            "source_asset_id": row.asset_id,
+            "segment_seconds": seconds,
+            "count": len(assets),
+            "assets": assets,
+        }
+        _set_split_progress(
+            current_user.id,
+            asset_id,
+            running=False,
+            ratio=1,
+            label=f"切片完成，共 {len(assets)} 段",
+            stage="done",
+            error="",
+            count=len(assets),
+            durations=[item.get("duration_sec") for item in assets],
+        )
+        return result
+    except Exception as exc:
+        _set_split_progress(
+            current_user.id,
+            asset_id,
+            running=False,
+            ratio=1,
+            label=_split_error_text(exc),
+            stage="error",
+            error=_split_error_text(exc),
+        )
+        raise
+
+
+@router.post("/api/assets/{asset_id}/ai-tags", summary="用 AI 理解素材并写入标签")
+async def fill_saved_asset_ai_tags(
+    asset_id: str,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    row = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
+    if not row:
+        raise HTTPException(404, detail="素材不存在")
+    media_type = (row.media_type or "").strip().lower()
+    if media_type not in {"image", "video"}:
+        raise HTTPException(400, detail="只支持图片或视频")
+    _reject_intermediate_library_asset(row)
+    from ..services.asset_ai_understand import understand_asset_tags
+
+    with tempfile.TemporaryDirectory(prefix="lobster_library_ai_") as temp_name:
+        source_path = await _materialize_library_file(row, request, Path(temp_name))
+        try:
+            tags = await asyncio.to_thread(
+                understand_asset_tags,
+                source_path,
+                media_type,
+                base_url=_auth_server_base_url(),
+                headers=_forward_auth_headers(request),
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(502, detail=str(exc)[:300]) from exc
+    group_name = _creative_candidate_group(row.meta if isinstance(row.meta, dict) else {})
+    return update_asset_labels(
+        asset_id,
+        AssetLabelsReq(creative_candidate_group=group_name, tags=tags),
+        request,
+        current_user,
+        db,
+    )
+
+
+@router.post("/api/assets/{asset_id}/labels", summary="编辑素材分组和标签")
+def update_asset_labels(
+    asset_id: str,
+    body: AssetLabelsReq,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    row = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
+    if not row:
+        raise HTTPException(404, detail="素材不存在")
+    media_type = (row.media_type or "").strip().lower()
+    if media_type not in _LABEL_MEDIA_TYPES:
+        raise HTTPException(400, detail="该素材类型不支持编辑分组和标签")
+    group_name = _clean_creative_group_name_optional(body.creative_candidate_group)
+    tags = _clean_upload_tags(body.tags if isinstance(body.tags, str) else "")
+    meta = dict(row.meta or {})
+    if group_name:
+        meta["creative_candidate_group"] = group_name
+        meta["creative_candidate_groups"] = [group_name]
+    else:
+        meta.pop("creative_candidate_group", None)
+        meta.pop("creative_candidate_groups", None)
+    row.meta = meta
+    row.tags = tags
+    db.add(row)
+    db.commit()
+    _sync_asset_labels_to_auth_server(row, group_name, tags, request, db)
+    return {
+        "ok": True,
+        "asset_id": row.asset_id,
+        "creative_candidate_group": group_name,
+        "creative_candidate_groups": [group_name] if group_name else [],
+        "tags": tags or "",
+    }
+
+
 # ── Get single + serve file ──────────────────────────────────────
+
+
+_POSTER_DIR = _BASE_DIR / "_lobster_runtime" / "asset_posters"
+_POSTER_GATE = threading.BoundedSemaphore(2)
+_POSTER_LOCKS_GUARD = threading.Lock()
+_POSTER_LOCKS: Dict[str, threading.Lock] = {}
+
+
+def _poster_lock(asset_id: str) -> threading.Lock:
+    with _POSTER_LOCKS_GUARD:
+        lock = _POSTER_LOCKS.get(asset_id)
+        if lock is None:
+            lock = threading.Lock()
+            _POSTER_LOCKS[asset_id] = lock
+        return lock
+
+
+def _ffmpeg_bin() -> Path:
+    name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    return _BASE_DIR / "deps" / "ffmpeg" / name
+
+
+def _ensure_video_poster(asset_id: str, source: Path) -> Path:
+    """HEVC 等浏览器不能直接画首帧的视频，抽一帧 JPEG 给素材库缩略图。"""
+    _POSTER_DIR.mkdir(parents=True, exist_ok=True)
+    dest = _POSTER_DIR / f"{asset_id}.jpg"
+    source_mtime = source.stat().st_mtime
+    if dest.exists() and dest.stat().st_size > 0 and dest.stat().st_mtime >= source_mtime:
+        return dest
+    ffmpeg = _ffmpeg_bin()
+    if not ffmpeg.exists():
+        raise HTTPException(500, detail="ffmpeg 不存在，无法生成视频缩略图")
+    with _poster_lock(asset_id):
+        source_mtime = source.stat().st_mtime
+        if dest.exists() and dest.stat().st_size > 0 and dest.stat().st_mtime >= source_mtime:
+            return dest
+        tmp = dest.with_suffix(".tmp.jpg")
+        last_err = ""
+        for ss in ("0.1", "0"):
+            try:
+                proc = subprocess.run(
+                    [
+                        str(ffmpeg), "-y", "-ss", ss, "-i", str(source),
+                        "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "4",
+                        "-update", "1", str(tmp),
+                    ],
+                    capture_output=True,
+                    timeout=40,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                last_err = "timeout"
+                continue
+            if tmp.exists() and tmp.stat().st_size > 0:
+                tmp.replace(dest)
+                return dest
+            last_err = (proc.stderr or b"").decode("utf-8", errors="replace")[-300:]
+        logger.warning("[assets] poster failed asset=%s err=%s", asset_id, last_err)
+        raise HTTPException(500, detail="视频缩略图生成失败")
+
 
 @router.get("/api/assets/{asset_id}/content", summary="素材文件内容（需登录，用于前端预览）")
 def get_asset_content(
@@ -3347,6 +4325,42 @@ def get_asset_content(
     }
     ct = mt_map.get((a.media_type or "").lower(), "application/octet-stream")
     return _stream_local_asset(path, ct, request)
+
+
+
+@router.get("/api/assets/{asset_id}/poster", summary="视频素材缩略图（抽一帧，需登录）")
+def get_asset_poster(
+    asset_id: str,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    a = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
+    if not a:
+        raise HTTPException(404, detail="素材不存在")
+    if (a.media_type or "").lower() != "video":
+        raise HTTPException(404, detail="不是视频")
+    filename = str(a.filename or "").strip()
+    if not filename:
+        source_hint = str(a.source_url or "").strip()
+        filename = _remote_asset_filename(
+            "",
+            source_hint,
+            str((a.meta or {}).get("remote_asset_id") or "").strip() or f"{a.asset_id}.bin",
+        )
+        a.filename = filename
+        db.add(a)
+        db.commit()
+    path = ASSETS_DIR / filename
+    if not path.exists():
+        if _asset_has_remote_source(a):
+            with _asset_remote_download_lock(a.asset_id):
+                if not path.exists():
+                    _download_remote_asset_to_path(a, path, request)
+        if not path.exists():
+            raise HTTPException(404, detail="文件不存在")
+    poster = _ensure_video_poster(a.asset_id, path)
+    return FileResponse(poster, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @router.post("/api/assets/{asset_id}/save-to-downloads", summary="保存素材到本机下载目录")

@@ -32,9 +32,13 @@ def test_scan_identity_falls_back_to_nickname_when_profile_has_no_id(monkeypatch
         lambda *args, **kwargs: {"ok": False, "wx_no": "", "reason": "profile_wx_no_missing"},
     )
 
-    # 通讯录里没有这个名字（改过备注），资料也读不到号 -> 用昵称身份继续。
+    # 通讯录里没有这个名字（改过备注），当前打开的会话就是这个人（扫描会带上当前行
+    # 名字），资料里也没有号 -> 用昵称身份继续。
     assert engine._resolve_scan_contact_wx_no(
-        ACCOUNT, display_name="余老师工作号", attempts=1
+        ACCOUNT,
+        display_name="余老师工作号",
+        current_chat_name="余老师工作号",
+        attempts=1,
     ) == ("余老师工作号", "nickname_fallback:profile_wx_no_missing")
 
 

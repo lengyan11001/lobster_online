@@ -64,6 +64,51 @@ OTA_PATHS_WITH_NODEJS_DEPS: tuple[str, ...] = OTA_PATHS + (
     # Retired OpenClaw dependencies are intentionally never included.
 )
 
+_BRAND_ASSET_SUFFIXES: tuple[str, ...] = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".ico",
+    ".icns",
+    ".webp",
+    ".svg",
+)
+
+
+def brand_asset_rel_paths(root: Path) -> tuple[str, ...]:
+    """「static 根目录下的品牌资源图」——OEM 安装包/品牌切换器就是往这里放图。
+
+    这些文件必须随常规网站 OTA 一起走，原因见 2026-09-20 的事故：
+    客户端更新器按 manifest.paths 对账，**列出的目录里"包里没有的文件"会被直接删除**
+    （scripts/check_client_code_update.py::_sync_tree_incremental）。服务器
+    发布脚本（scripts/publish_client_code_ota_to_server.py::manifest_paths_for_zip）
+    一旦把整根 "static" 写进 manifest，而包里又不带这些品牌图，客户端升级后
+    左上角 logo / 首页大图 / 页头合作方 logo 就全部 404（build 341 就是如此）。
+    """
+    static_root = root / "static"
+    if not static_root.is_dir():
+        return ()
+    assets: list[str] = []
+    for path in sorted(static_root.iterdir()):
+        if not path.is_file():
+            continue
+        if path.name.startswith("."):
+            continue
+        if path.suffix.lower() not in _BRAND_ASSET_SUFFIXES:
+            continue
+        assets.append(f"static/{path.name}")
+    return tuple(assets)
+
+
+def with_brand_assets(paths: tuple[str, ...], root: Path) -> tuple[str, ...]:
+    """把品牌资源图插到版本文件之前（版本文件保持最后，避免半包被当成已升级）。"""
+    version_rels = tuple(VERSION_FILE_RELS)
+    head = tuple(path for path in paths if path not in version_rels)
+    tail = tuple(path for path in paths if path in version_rels)
+    assets = tuple(path for path in brand_asset_rel_paths(root) if path not in head)
+    return head + assets + tail
+
+
 # Production OTA is intentionally limited to the web application plus the
 # small OEM switcher runtime. Desktop, MCP, OpenClaw and skills are distributed
 # by their dedicated installers or separate updates; including them here makes
@@ -73,6 +118,10 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     # and shipping only the updater leaves older helper scripts installed.
     "scripts",
     "backend",
+    # skills 随常规网站 OTA 一起走：只排除体积大/解压慢的（见 _OTA_SKIP_SKILL_ROOTS，
+    # 目前只有 skills/ppt_master ≈58MB/1.2 万文件），其余全部包含，避免像
+    # skills/comfly_seedance_tvc_video 这类管线因为不在 paths 里而永远更新不到客户端。
+    "skills",
     # Desktop Python runtime used by the stable OEM EXE shells. The branded
     # executables stay installed, while launcher and configurator behavior can
     # continue to receive OTA fixes.
@@ -274,6 +323,12 @@ OTA_SKIP_REL_PREFIXES: tuple[str, ...] = (
 )
 
 _OTA_SKIP_SKILLS_DIRS = {"runs", "job_runs", "output", "cache"}
+# 体积大、解压慢的 skill 不进 OTA（随安装包/单独分发提供）。2026-09-20 实测：
+#   skills/ppt_master = 57.9MB / 12107 个文件，占 skills 总量 92%（references/ai-image-comparison 43.6MB、
+#   templates/icons 9.6MB…）；排除它之后其余 20 个 skill 合计仅 4.9MB，所以除它之外都可以随常规 OTA 走。
+_OTA_SKIP_SKILL_ROOTS: tuple[str, ...] = (
+    "skills/ppt_master",
+)
 # Retired workbench payloads are kept in the source tree only for compatibility
 # with old imports; they must not be shipped in encrypted OTA updates.
 _OTA_RETIRED_SKILL_DIRS = (
@@ -459,6 +514,8 @@ def _skip_file(rel: str) -> bool:
     if r.endswith(".log"):
         return True
     if nr.lower().startswith(_OTA_RETIRED_SKILL_DIRS):
+        return True
+    if any(nr == p or nr.startswith(p + "/") for p in _OTA_SKIP_SKILL_ROOTS):
         return True
     if _is_pack_skipped_path(rel):
         return True
@@ -816,6 +873,8 @@ def _copy_tree_for_encrypted_ota(src: Path, dst: Path, rel: str) -> None:
                 continue
             if any(r.startswith(p + "/") or r == p for p in _OTA_SKIP_DIR_RELS):
                 continue
+            if any(r == p or r.startswith(p + "/") for p in _OTA_SKIP_SKILL_ROOTS):
+                continue
             if len(parts) >= 3 and parts[0] == "skills" and parts[2] in _OTA_SKIP_SKILLS_DIRS:
                 continue
             if (
@@ -1137,7 +1196,9 @@ def main() -> int:
             "CLIENT_CODE_VERSION.json",
         )
     elif args.website_only:
-        paths_tuple = WEBSITE_OTA_PATHS
+        # 常规网站 OTA 也必须带上 static 根目录的品牌资源图，否则客户端按
+        # manifest 对账时会把本地 OEM 品牌图删掉（2026-09-20 build 341 事故）。
+        paths_tuple = with_brand_assets(WEBSITE_OTA_PATHS, root)
     else:
         paths_tuple = OTA_PATHS_WITH_NODEJS_DEPS if args.with_nodejs_deps else OTA_PATHS
     if args.no_bundled_node_deps:
