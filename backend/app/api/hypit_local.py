@@ -409,6 +409,9 @@ def _hypit_root() -> Path | None:
     candidates = [Path(configured)] if configured else []
     candidates.extend(
         [
+            # OTA 会把包里的目录解到客户端根目录，两种位置都认。
+            ROOT / "aihypit" / "hypit",
+            ROOT / "deps" / "hypit",
             ROOT.parent / "aihypit" / "hypit",
             ROOT.parent.parent / "aihypit" / "hypit",
         ]
@@ -445,6 +448,10 @@ def _hypit_env() -> dict[str, str]:
     state_home = _hypit_state_home()
     env["HYPIT_STATE_HOME"] = str(state_home)
     env["NODE_DISABLE_COMPILE_CACHE"] = "1"
+    # 渲染用的是系统已装 Chrome（见 _configure_runtime_browser），
+    # 这里确保 puppeteer 安装时不去下自带 Chromium。
+    env["PUPPETEER_SKIP_DOWNLOAD"] = "1"
+    env["PUPPETEER_SKIP_CHROMIUM_DOWNLOAD"] = "1"
     env["NODE_COMPILE_CACHE"] = ""
     env["TSX_DISABLE_CACHE"] = "1"
     if os.name == "nt":

@@ -456,3 +456,22 @@ def test_ffmpeg_prefers_bundled_copy(tmp_path, monkeypatch):
 
     deps = {item["key"]: item["ok"] for item in hypit_local._runtime_dependencies()}
     assert deps["ffmpeg"] is True and deps["ffprobe"] is True
+
+
+def test_hypit_env_skips_puppeteer_browser_download(tmp_path, monkeypatch):
+    """用系统 Chrome：装依赖时不能去下一份 ~300MB 的 Chromium。"""
+    monkeypatch.setenv("PUPPETEER_SKIP_DOWNLOAD", "")
+    env = hypit_local._hypit_env()
+    assert env.get("PUPPETEER_SKIP_DOWNLOAD") == "1"
+    assert env.get("PUPPETEER_SKIP_CHROMIUM_DOWNLOAD") == "1"
+
+
+def test_hypit_root_accepts_runtime_inside_client_dir(tmp_path, monkeypatch):
+    """OTA 把运行时解到客户端根目录时也要能找到。"""
+    runtime = tmp_path / "aihypit" / "hypit"
+    (runtime / "bin").mkdir(parents=True)
+    (runtime / "bin" / "hypit.mjs").write_text("// cli", encoding="utf-8")
+    monkeypatch.setattr(hypit_local, "ROOT", tmp_path)
+    monkeypatch.delenv("HYPIT_ROOT", raising=False)
+
+    assert hypit_local._hypit_root() == runtime.resolve()
