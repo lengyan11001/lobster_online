@@ -127,3 +127,32 @@ def test_concat_round_trip_over_http(tmp_path, monkeypatch):
     media = client.get(payload["url"])
     assert media.status_code == 200, media.text
     assert len(media.content) > 1000
+
+def test_canvas_frame_seeds_canvas_session(tmp_path, monkeypatch):
+    """画布入口页：把本机登录态写进画布的 localStorage['user_info']，再进画布（不再弹扫码）。"""
+    from backend.app.api import canvas_cloud_proxy
+
+    monkeypatch.setenv("LOBSTER_RUNTIME_DIR", str(tmp_path))
+    monkeypatch.setattr(canvas_cloud_proxy, "auth_context", lambda: ("jwt-token", "inst-1"))
+
+    async def fake_profile():
+        return {"id": 7, "name": "张三", "phone": "", "email": "z@b.c", "credits": "88"}
+
+    monkeypatch.setattr(canvas_cloud_proxy, "cloud_profile", fake_profile)
+
+    client = _local_client()
+    session = client.get("/api/canvas-local/session")
+    assert session.status_code == 200
+    assert session.json()["logged_in"] is True
+    assert session.json()["user"]["id"] == 7
+    assert session.json()["token"] == "lobster-canvas"
+
+    frame = client.get("/api/canvas-local/canvas-frame")
+    assert frame.status_code == 200
+    assert "localStorage.setItem('user_info'" in frame.text
+    assert "/static/canvas-web/index.html" in frame.text
+    assert "张三" in frame.text
+
+    monkeypatch.setattr(canvas_cloud_proxy, "auth_context", lambda: ("", ""))
+    assert client.get("/api/canvas-local/session").json()["logged_in"] is False
+    assert "请先在客户端完成登录" in client.get("/api/canvas-local/canvas-frame").text

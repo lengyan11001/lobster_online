@@ -13,11 +13,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, Tuple
+import time
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from ..core.config import settings
 from ..services.cloud_session_renew import decode_jwt_payload, read_cloud_token, read_installation_id
@@ -48,6 +49,89 @@ def cloud_base() -> str:
     return base
 
 
+_SESSION_PATHS = {
+    "api/user_info",
+    "api/get_user_money",
+    "api/check_admin_permission",
+}
+
+_PROFILE_TTL_SECONDS = 60.0
+_profile_cache: Dict[str, Any] = {"at": 0.0, "data": {}}
+
+
+async def cloud_profile(force: bool = False) -> Dict[str, Any]:
+    """当前登录态的用户资料（认证中心 /auth/me，带 60s 缓存）。
+
+    拿不到就不阻塞画布：退回 JWT 里的 claims（id/邮箱等），credits 留空。
+    """
+    token, installation_id = auth_context()
+    if not token:
+        return {}
+    claims = decode_jwt_payload(token)
+    profile: Dict[str, Any] = {
+        "id": claims.get("sub"),
+        "email": claims.get("email") or "",
+        "phone": claims.get("phone") or claims.get("mobile") or "",
+        "name": claims.get("name") or claims.get("nickname") or "",
+    }
+    now = time.monotonic()
+    if not force and _profile_cache["data"] and (now - float(_profile_cache["at"])) < _PROFILE_TTL_SECONDS:
+        return dict(_profile_cache["data"])
+    base = (getattr(settings, "auth_server_base", None) or "").strip().rstrip("/")
+    if base:
+        headers = with_oem_brand_header({"Authorization": f"Bearer {token}", "Accept": "application/json"})
+        if installation_id:
+            headers["X-Installation-Id"] = installation_id
+        try:
+            async with httpx.AsyncClient(timeout=8.0, trust_env=False, follow_redirects=True) as client:
+                resp = await client.get(f"{base}/auth/me", headers=headers)
+            if resp.status_code < 400:
+                data = resp.json()
+                if isinstance(data, dict):
+                    for key in ("id", "name", "nickname", "phone", "email", "credits", "balance", "points_balance"):
+                        value = data.get(key)
+                        if value not in (None, ""):
+                            profile[key] = value
+                    if "credits" not in profile:
+                        for key in ("points_balance", "balance"):
+                            if data.get(key) not in (None, ""):
+                                profile["credits"] = data.get(key)
+                                break
+        except Exception as exc:  # noqa: BLE001 认证中心不可达时不阻塞画布
+            logger.info("[canvas] 取用户资料失败，用登录态兜底: %s", exc)
+    if not profile.get("name"):
+        profile["name"] = "用户 %s" % (profile.get("id") or "")
+    _profile_cache.update({"at": now, "data": dict(profile)})
+    return profile
+
+
+def canvas_session_payload(profile: Dict[str, Any]) -> Dict[str, Any]:
+    """画布页面要的会话：token 是本机占位值（真 token 由本机代理注入，不下发浏览器）。"""
+    credits = profile.get("credits")
+    return {
+        "token": "lobster-canvas",
+        "id": profile.get("id"),
+        "name": profile.get("name") or "",
+        "phone": profile.get("phone") or "",
+        "email": profile.get("email") or "",
+        "points_balance": credits,
+        "credits": credits,
+    }
+
+
+def _session_answer(normalized: str, profile: Dict[str, Any]) -> Optional[Response]:
+    """画布问「我是谁 / 我的余额 / 我是不是管理员」：本机直接回答，不打上游。"""
+    session = canvas_session_payload(profile)
+    if normalized == "api/user_info":
+        return JSONResponse({"code": 200, **session})
+    if normalized == "api/get_user_money":
+        credits = profile.get("credits")
+        return JSONResponse({"code": 200, "points_balance": credits, "money": credits, "data": {"points_balance": credits}})
+    if normalized == "api/check_admin_permission":
+        return JSONResponse({"code": 200, "data": {"is_admin": False}})
+    return None
+
+
 @router.api_route(
     "/canvas-api/{path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -61,6 +145,10 @@ async def canvas_cloud_proxy(path: str, request: Request) -> Response:
     token, installation_id = auth_context()
     if not token:
         raise HTTPException(status_code=401, detail="画布需要登录：本机还没有云端登录态，请先在客户端登录")
+
+    # 会话类接口本机回答：画布按这套判断「已登录」，不该再去问上游（上游只认服务器 key）
+    if normalized in _SESSION_PATHS:
+        return _session_answer(normalized, await cloud_profile())
 
     headers: Dict[str, str] = with_oem_brand_header(
         {"Authorization": f"Bearer {token}", "Accept": "application/json"}

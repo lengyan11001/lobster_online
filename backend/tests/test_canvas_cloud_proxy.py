@@ -71,3 +71,59 @@ def test_missing_server_base_is_503(monkeypatch, client):
     monkeypatch.setattr(canvas_cloud_proxy.settings, "auth_server_base", "", raising=False)
     resp = client.get("/canvas-api/api/v3/mcp/models")
     assert resp.status_code == 503
+
+
+def test_user_info_money_and_admin_answered_locally(monkeypatch, client):
+    """画布问「我是谁/余额/管理员」由本机回答，不去打上游（上游只认服务器 key）。"""
+
+    async def fake_profile():
+        return {"id": 42, "name": "测试用户", "phone": "13800000000", "email": "a@b.c", "credits": "123.5000"}
+
+    monkeypatch.setattr(canvas_cloud_proxy, "cloud_profile", fake_profile)
+
+    resp = client.post("/canvas-api/api/user_info", json={"token": "x"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["code"] == 200
+    assert body["id"] == 42
+    assert body["name"] == "测试用户"
+    assert body["token"] == "lobster-canvas"
+
+    resp = client.post("/canvas-api/api/get_user_money", json={"token": "x"})
+    assert resp.json()["points_balance"] == "123.5000"
+
+    resp = client.post("/canvas-api/api/check_admin_permission", json={})
+    assert resp.json()["data"]["is_admin"] is False
+
+
+def test_business_paths_still_forwarded(monkeypatch, client):
+    """业务接口（首页模板/素材列表）照旧转发，本机不截胡。"""
+    monkeypatch.setattr(canvas_cloud_proxy, "auth_context", lambda: ("jwt-token", "inst-1"))
+    monkeypatch.setattr(canvas_cloud_proxy, "cloud_base", lambda: "https://bhzn.top")
+    seen = {}
+
+    class FakeResponse:
+        status_code = 200
+        content = b'{"code": 200, "data": {"list": []}}'
+        headers = {"content-type": "application/json"}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def request(self, method, url, content=None, headers=None, params=None):
+            seen.update({"url": url, "params": params})
+            return FakeResponse()
+
+    monkeypatch.setattr(canvas_cloud_proxy.httpx, "AsyncClient", FakeClient)
+
+    resp = client.post("/canvas-api/api/v1/projects/public?skip=0&limit=12", json={})
+    assert resp.status_code == 200
+    assert seen["url"] == "https://bhzn.top/canvas-api/api/v1/projects/public"
+    assert seen["params"] == {"skip": "0", "limit": "12"}

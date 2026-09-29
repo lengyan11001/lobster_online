@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -248,3 +248,38 @@ def canvas_local_media(name: str):
     if not target.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
     return FileResponse(str(target))
+
+
+@router.get("/api/canvas-local/session", summary="画布会话（本机登录态 -> 画布用的用户信息）")
+async def canvas_local_session() -> Dict[str, Any]:
+    from .canvas_cloud_proxy import auth_context, canvas_session_payload, cloud_profile
+
+    token, _installation_id = auth_context()
+    if not token:
+        return {"ok": True, "logged_in": False, "user": {}, "token": ""}
+    payload = canvas_session_payload(await cloud_profile())
+    return {"ok": True, "logged_in": True, "token": payload["token"], "user": payload,
+            "credits": payload.get("credits")}
+
+
+@router.get("/api/canvas-local/canvas-frame", summary="画布入口页：写入会话后进画布（避免画布弹自己的登录/扫码）")
+async def canvas_local_canvas_frame() -> HTMLResponse:
+    import json as _json
+    from .canvas_cloud_proxy import auth_context, canvas_session_payload, cloud_profile
+
+    token, _installation_id = auth_context()
+    if not token:
+        return HTMLResponse(
+            "<!doctype html><meta charset=\"utf-8\">"
+            "<div style=\"font:15px/1.7 system-ui;padding:32px;color:#333\">"
+            "请先在客户端完成登录，再打开「灵感画布」。</div>",
+            headers={"Cache-Control": "no-store"},
+        )
+    payload = canvas_session_payload(await cloud_profile())
+    html = (
+        "<!doctype html><meta charset=\"utf-8\"><title>灵感画布</title>"
+        "<script>(function(){try{localStorage.setItem('user_info',JSON.stringify(%s));}"
+        "catch(e){}location.replace('/static/canvas-web/index.html');})();</script>"
+        % _json.dumps(payload, ensure_ascii=False)
+    )
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
