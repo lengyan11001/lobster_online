@@ -1660,3 +1660,200 @@ def get_local_contact_sheet(job_id: str, current_user: _ServerUser = Depends(get
     if not image_path.is_file():
         raise HTTPException(status_code=404, detail="视频关键帧联系表不存在")
     return FileResponse(image_path, media_type="image/jpeg", filename="hypit-contact-sheet.jpg")
+
+
+# ────────────────────────── 本机依赖安装（工作台里的「安装运行依赖」按钮） ──────────────────────────
+
+RUNTIME_WORKSPACE_DIR = JOBS_ROOT / "_runtime"
+RUNTIME_STATE_PATH = JOBS_ROOT / "runtime_install.json"
+RUNTIME_INSTALL_TASKS: dict[str, asyncio.Task] = {}
+RUNTIME_LOG_LIMIT = 300
+_ENGINE_PACKAGE = ("@hyperframes/engine", "0.7.101")
+
+
+def _runtime_state() -> dict[str, Any]:
+    try:
+        value = json.loads(RUNTIME_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _write_runtime_state(**patch: Any) -> dict[str, Any]:
+    state = _runtime_state()
+    state.update(patch)
+    state["updated_at"] = time.time()
+    RUNTIME_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    RUNTIME_STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    return state
+
+
+def _append_runtime_log(line: str) -> None:
+    text = str(line or "").rstrip()
+    if not text:
+        return
+    state = _runtime_state()
+    log = state.get("log") if isinstance(state.get("log"), list) else []
+    _write_runtime_state(log=[*log, text][-RUNTIME_LOG_LIMIT:])
+
+
+def _npm_executable() -> str | None:
+    """优先系统 npm（Hypit 的 Windows 包安装器从 PATH 找 npm.cmd），其次客户端自带目录。"""
+    if os.name == "nt":
+        system = Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "nodejs" / "npm.cmd"
+        if system.is_file():
+            return str(system)
+    found = shutil.which("npm")
+    if found:
+        return found
+    for name in ("npm.cmd", "npm"):
+        candidate = ROOT / "nodejs" / name
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _runtime_dependencies() -> list[dict[str, Any]]:
+    """依赖体检明细（界面上一条条显示）。"""
+    root = _hypit_root()
+    node = _node_executable()
+    npm = _npm_executable()
+    chrome = _installed_chrome_path()
+    engine_ok = _installed_hypit_registry_package(*_ENGINE_PACKAGE)
+    return [
+        {
+            "key": "node",
+            "label": "Node.js 运行时",
+            "ok": bool(node),
+            "detail": str(node or "未找到（客户端自带 nodejs/node.exe 或系统 node）"),
+        },
+        {
+            "key": "npm",
+            "label": "npm 包管理器",
+            "ok": bool(npm),
+            "detail": str(npm or "未找到 npm"),
+        },
+        {
+            "key": "chrome",
+            "label": "Chrome 浏览器",
+            "ok": bool(chrome),
+            "detail": str(chrome or "未检测到已安装的 Chrome（本机渲染需要）"),
+        },
+        {
+            "key": "hypit",
+            "label": "Hypit 运行时",
+            "ok": bool(root),
+            "detail": str(root or "未找到（放到客户端同级 ai-hypit/hypit，或设 HYPIT_ROOT）"),
+        },
+        {
+            "key": "engine",
+            "label": "渲染引擎 %s@%s" % _ENGINE_PACKAGE,
+            "ok": engine_ok,
+            "detail": "已安装" if engine_ok else "未安装（点「安装运行依赖」会自动下载）",
+        },
+    ]
+
+
+def _stream_hypit_command(root: Path, node: str, args: list[str], cwd: Path) -> None:
+    """跑 hypit 命令并把输出逐行写进安装日志（界面弹窗实时读）。"""
+    cmd = [node, str(root / "bin" / "hypit.mjs"), *args]
+    logger.info("Hypit runtime install: %s (cwd=%s)", " ".join(cmd[:6]), cwd)
+    process = subprocess.Popen(
+        cmd,
+        cwd=str(cwd),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=_hypit_env(),
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    tail: list[str] = []
+    stream = process.stdout
+    if stream is not None:
+        for line in stream:
+            text = line.rstrip()
+            if not text:
+                continue
+            tail = [*tail, text][-40:]
+            _append_runtime_log(text)
+    code = process.wait()
+    if code != 0:
+        raise RuntimeError(("\n".join(tail)[-1600:]) or ("Hypit 命令退出码 %s" % code))
+
+
+async def _run_runtime_install() -> None:
+    _write_runtime_state(
+        status="running", stage="正在检查本机依赖", percent=3,
+        log=[], error="", started_at=time.time(), finished_at=0,
+    )
+    try:
+        root, node = _hypit_root(), _node_executable()
+        if not root:
+            raise RuntimeError(
+                "未找到 Hypit 运行时目录（aihypit/hypit）。请把运行时放到客户端同级目录，或设置 HYPIT_ROOT 后重试。"
+            )
+        if not node:
+            raise RuntimeError("未找到 Node.js（客户端自带 nodejs/node.exe 或系统 node）")
+        if not _npm_executable():
+            raise RuntimeError("未找到 npm，请先安装 Node.js（含 npm）")
+        if not _installed_chrome_path():
+            raise RuntimeError("未检测到已安装的 Chrome：本机渲染需要系统 Chrome")
+        workspace = RUNTIME_WORKSPACE_DIR
+        workspace.mkdir(parents=True, exist_ok=True)
+        _write_runtime_state(stage="正在初始化运行环境", percent=12)
+        await asyncio.to_thread(
+            _stream_hypit_command, root, node, ["runtime", "init", "--workspace", str(workspace)], workspace
+        )
+        await asyncio.to_thread(_configure_runtime_browser, workspace)
+        _write_runtime_state(stage="正在下载并安装渲染依赖（首次较慢）", percent=25)
+        await asyncio.to_thread(
+            _stream_hypit_command, root, node, ["runtime", "up", "--workspace", str(workspace)], workspace
+        )
+        _write_runtime_state(stage="正在自检渲染环境", percent=95)
+        status = await asyncio.to_thread(_dependency_status)
+        if not status.get("ready"):
+            detail = str(status.get("error") or "").strip() or ("缺少 " + "、".join(status.get("missing") or []))
+            raise RuntimeError("依赖安装完成但自检未通过：" + detail)
+        _write_runtime_state(status="completed", stage="依赖已就绪", percent=100, error="", finished_at=time.time())
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Hypit runtime install failed")
+        _write_runtime_state(
+            status="failed", stage="依赖安装失败", error=_exception_message(exc)[:1600], finished_at=time.time()
+        )
+
+
+@router.get("/api/local/hypit/runtime/status")
+def hypit_runtime_status(_: _ServerUser = Depends(get_current_user_for_local)):
+    """依赖体检 + 安装进度（工作台弹窗轮询）。"""
+    task = RUNTIME_INSTALL_TASKS.get("runtime")
+    running = bool(task is not None and not task.done())
+    dependencies = _runtime_dependencies()
+    return {
+        "ok": True,
+        "ready": all(bool(item.get("ok")) for item in dependencies),
+        "dependencies": dependencies,
+        "install": {**_runtime_state(), "running": running},
+    }
+
+
+@router.post("/api/local/hypit/runtime/install")
+async def hypit_runtime_install(_: _ServerUser = Depends(get_current_user_for_local)):
+    """点一下就装：初始化 Hypit 运行环境并下载渲染依赖（幂等，已在装直接返回进度）。"""
+    task = RUNTIME_INSTALL_TASKS.get("runtime")
+    running = bool(task is not None and not task.done())
+    if not running:
+        task = asyncio.create_task(_run_runtime_install())
+        RUNTIME_INSTALL_TASKS["runtime"] = task
+        task.add_done_callback(lambda _task: RUNTIME_INSTALL_TASKS.pop("runtime", None))
+    install = _runtime_state() or {
+        "status": "running", "stage": "正在启动安装", "percent": 1, "log": [],
+    }
+    return {
+        "ok": True,
+        "started": not running,
+        "ready": False,
+        "dependencies": _runtime_dependencies(),
+        "install": {**install, "running": True},
+    }

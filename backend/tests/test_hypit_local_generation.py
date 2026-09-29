@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -387,3 +388,54 @@ def test_job_recovery_reports_only_persisted_stages(tmp_path, monkeypatch):
     assert restored["runtime_prepared"] is False
     assert restored["has_generation"] is True
     assert restored["has_build"] is False
+
+
+def test_runtime_dependencies_report_missing_items(monkeypatch):
+    monkeypatch.setattr(hypit_local, "_hypit_root", lambda: None)
+    monkeypatch.setattr(hypit_local, "_node_executable", lambda: None)
+    monkeypatch.setattr(hypit_local, "_npm_executable", lambda: None)
+    monkeypatch.setattr(hypit_local, "_installed_chrome_path", lambda: None)
+    monkeypatch.setattr(hypit_local, "_installed_hypit_registry_package", lambda *a, **k: False)
+
+    items = hypit_local._runtime_dependencies()
+    assert [item["key"] for item in items] == ["node", "npm", "chrome", "hypit", "engine"]
+    assert all(item["ok"] is False for item in items)
+
+
+def test_runtime_install_records_progress_and_completes(tmp_path, monkeypatch):
+    monkeypatch.setattr(hypit_local, "RUNTIME_STATE_PATH", tmp_path / "runtime_install.json")
+    monkeypatch.setattr(hypit_local, "RUNTIME_WORKSPACE_DIR", tmp_path / "workspace")
+    monkeypatch.setattr(hypit_local, "_hypit_root", lambda: tmp_path / "hypit")
+    monkeypatch.setattr(hypit_local, "_node_executable", lambda: "node")
+    monkeypatch.setattr(hypit_local, "_npm_executable", lambda: "npm")
+    monkeypatch.setattr(hypit_local, "_installed_chrome_path", lambda: tmp_path / "chrome.exe")
+    monkeypatch.setattr(hypit_local, "_configure_runtime_browser", lambda project_dir: None)
+    monkeypatch.setattr(hypit_local, "_dependency_status", lambda: {"ready": True})
+    monkeypatch.setattr(hypit_local, "_installed_hypit_registry_package", lambda *a, **k: True)
+
+    calls = []
+
+    def fake_stream(root, node, args, cwd):
+        calls.append(list(args[:2]))
+        hypit_local._append_runtime_log("installing " + " ".join(args[:2]))
+
+    monkeypatch.setattr(hypit_local, "_stream_hypit_command", fake_stream)
+
+    asyncio.run(hypit_local._run_runtime_install())
+
+    state = hypit_local._runtime_state()
+    assert calls == [["runtime", "init"], ["runtime", "up"]]
+    assert state["status"] == "completed"
+    assert int(state["percent"]) == 100
+    assert any("runtime up" in line for line in state["log"])
+
+
+def test_runtime_install_reports_missing_runtime(tmp_path, monkeypatch):
+    monkeypatch.setattr(hypit_local, "RUNTIME_STATE_PATH", tmp_path / "runtime_install.json")
+    monkeypatch.setattr(hypit_local, "_hypit_root", lambda: None)
+
+    asyncio.run(hypit_local._run_runtime_install())
+
+    state = hypit_local._runtime_state()
+    assert state["status"] == "failed"
+    assert "运行时" in state["error"]

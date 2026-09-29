@@ -3,6 +3,10 @@
 
   var state = {
     initialized: false,
+    ready: null,
+    dependencies: [],
+    installState: {},
+    installTimer: null,
     file: null,
     previewUrl: '',
     jobId: '',
@@ -221,6 +225,117 @@
         $('hypitResultEmpty').hidden = false;
       });
   }
+  function runtimeBase() { return localBase() + '/api/local/hypit'; }
+  function renderDependencies(list) {
+    var host = $('hypitRuntimeList');
+    if (!host) return;
+    host.innerHTML = (list || []).map(function(item) {
+      var ok = !!item.ok;
+      return '<div class="hypit-runtime-item" data-ok="' + (ok ? '1' : '0') + '">'
+        + '<span class="hypit-runtime-dot" aria-hidden="true">' + (ok ? '✓' : '✕') + '</span>'
+        + '<span class="hypit-runtime-label">' + errorText(item.label) + '</span>'
+        + '<span class="hypit-runtime-detail">' + errorText(item.detail) + '</span>'
+        + '</div>';
+    }).join('');
+  }
+  function refreshRuntimeStatus() {
+    return request('/api/local/hypit/runtime/status', { cache: 'no-store' }).then(function(data) {
+      state.ready = !!data.ready;
+      state.dependencies = data.dependencies || [];
+      state.installState = data.install || {};
+      renderDependencies(state.dependencies);
+      var button = $('hypitInstallButton');
+      if (button) button.hidden = state.ready;
+      var status = $('hypitRuntimeStatus');
+      if (status) {
+        if (state.ready) {
+          status.textContent = '已就绪，可以提交视频复刻。';
+          status.dataset.error = '0';
+        } else {
+          var missing = state.dependencies.filter(function(item) { return !item.ok; })
+            .map(function(item) { return errorText(item.label); }).join('、');
+          status.textContent = missing ? ('缺少：' + missing + '（点右上「安装运行依赖」）') : '未就绪，请安装运行依赖。';
+          status.dataset.error = '1';
+        }
+      }
+      updateSubmitState();
+      return data;
+    }).catch(function(error) {
+      var status = $('hypitRuntimeStatus');
+      if (status) { status.textContent = '依赖检查失败：' + errorText(error.message); status.dataset.error = '1'; }
+      throw error;
+    });
+  }
+  function updateSubmitState() {
+    var button = $('hypitSubmitButton');
+    if (button) button.disabled = state.busy || !state.file || state.ready === false;
+  }
+  function renderInstall(stateData) {
+    var install = stateData || {};
+    var percent = Math.max(0, Math.min(100, Number(install.percent || 0)));
+    if ($('hypitInstallBar')) $('hypitInstallBar').style.width = percent + '%';
+    if ($('hypitInstallStage')) $('hypitInstallStage').textContent = errorText(install.stage) || '安装中…';
+    if ($('hypitInstallLog')) {
+      var lines = Array.isArray(install.log) ? install.log : [];
+      var log = $('hypitInstallLog');
+      log.textContent = lines.join('\n');
+      log.scrollTop = log.scrollHeight;
+    }
+    var error = errorText(install.error);
+    var box = $('hypitInstallError');
+    if (box) { box.hidden = !error; box.textContent = error; }
+    var running = !!install.running;
+    if ($('hypitInstallStart')) $('hypitInstallStart').hidden = running || install.status === 'completed';
+    if ($('hypitInstallRetry')) $('hypitInstallRetry').hidden = !(install.status === 'failed');
+  }
+  function openInstallModal() {
+    var modal = $('hypitInstallModal');
+    if (modal) modal.hidden = false;
+    renderInstall(state.installState || {});
+  }
+  function closeInstallModal() {
+    var modal = $('hypitInstallModal');
+    if (modal) modal.hidden = true;
+  }
+  function pollInstall() {
+    if (state.installTimer) clearTimeout(state.installTimer);
+    request('/api/local/hypit/runtime/status', { cache: 'no-store' }).then(function(data) {
+      state.installState = data.install || {};
+      renderInstall(state.installState);
+      state.ready = !!data.ready;
+      renderDependencies(data.dependencies || []);
+      updateSubmitState();
+      var button = $('hypitInstallButton');
+      if (button) button.hidden = state.ready;
+      if (state.ready) {
+        closeInstallModal();
+        showMessage('运行依赖已就绪，可以提交视频复刻了。');
+        var status = $('hypitRuntimeStatus');
+        if (status) { status.textContent = '已就绪，可以提交视频复刻。'; status.dataset.error = '0'; }
+        return;
+      }
+      if ((state.installState || {}).running) {
+        state.installTimer = setTimeout(pollInstall, 1500);
+      }
+    }).catch(function(error) {
+      renderInstall({ status: 'failed', stage: '读取安装进度失败', error: errorText(error.message) });
+    });
+  }
+  function startInstall() {
+    openInstallModal();
+    if ($('hypitInstallStart')) $('hypitInstallStart').disabled = true;
+    request('/api/local/hypit/runtime/install', { method: 'POST', json: {} })
+      .then(function(data) {
+        state.installState = data.install || {};
+        renderInstall(state.installState);
+        if ($('hypitInstallStart')) $('hypitInstallStart').disabled = false;
+        pollInstall();
+      })
+      .catch(function(error) {
+        if ($('hypitInstallStart')) $('hypitInstallStart').disabled = false;
+        renderInstall({ status: 'failed', stage: '安装启动失败', error: errorText(error.message) });
+      });
+  }
   function bind() {
     if (state.initialized) return;
     state.initialized = true;
@@ -231,6 +346,17 @@
       event.target.value = '';
     });
     $('hypitSubmitButton').addEventListener('click', submitWorkflow);
+    var installButton = $('hypitInstallButton');
+    if (installButton) installButton.addEventListener('click', openInstallModal);
+    var installStart = $('hypitInstallStart');
+    if (installStart) installStart.addEventListener('click', startInstall);
+    var installRetry = $('hypitInstallRetry');
+    if (installRetry) installRetry.addEventListener('click', startInstall);
+    var installClose = $('hypitInstallClose');
+    if (installClose) installClose.addEventListener('click', closeInstallModal);
+    var installModal = $('hypitInstallModal');
+    if (installModal) installModal.addEventListener('click', function(event) { if (event.target === installModal) closeInstallModal(); });
+    refreshRuntimeStatus().catch(function() {});
     restoreWorkflow();
   }
   window.initHypitVideoStudioView = function() {

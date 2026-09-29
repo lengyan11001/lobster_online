@@ -150,3 +150,25 @@
   #content-hypit-video-studio .hypit-title-field input { width: 58vw; }
   #content-hypit-video-studio .hypit-format-row label { width: 50%; }
 }
+
+
+/* 运行依赖面板 + 安装弹窗 */
+.hypit-runtime-panel .hypit-section-heading { align-items: flex-start; }
+.hypit-compact-button { padding: 8px 16px; font-size: 13px; }
+.hypit-runtime-list { display: grid; gap: 6px; margin: 10px 0 6px; }
+.hypit-runtime-item { display: flex; gap: 8px; align-items: baseline; font-size: 13px; }
+.hypit-runtime-dot { width: 16px; flex: none; text-align: center; font-weight: 700; }
+.hypit-runtime-item[data-ok="1"] .hypit-runtime-dot { color: #16a34a; }
+.hypit-runtime-item[data-ok="0"] .hypit-runtime-dot { color: #dc2626; }
+.hypit-runtime-label { flex: none; min-width: 190px; }
+.hypit-runtime-detail { color: var(--dim, #8b8f86); word-break: break-all; }
+.hypit-runtime-status { font-size: 12px; color: var(--dim, #8b8f86); }
+.hypit-runtime-status[data-error="1"] { color: #dc2626; }
+.hypit-modal-mask { position: fixed; inset: 0; background: rgba(20, 22, 18, 0.45); display: flex; align-items: center; justify-content: center; z-index: 60; }
+.hypit-modal-mask[hidden] { display: none; }
+.hypit-modal { width: min(680px, 94vw); max-height: 86vh; display: flex; flex-direction: column; background: #fff; border-radius: 14px; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.2); }
+.hypit-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid rgba(0,0,0,.08); }
+.hypit-modal-body { padding: 16px 18px; overflow: auto; display: grid; gap: 12px; }
+.hypit-modal-foot { display: flex; gap: 10px; justify-content: flex-end; padding: 12px 18px; border-top: 1px solid rgba(0,0,0,.08); }
+.hypit-install-log { margin: 0; max-height: 300px; overflow: auto; background: #0f1115; color: #d6f5e0; font: 12px/1.55 ui-monospace, Consolas, monospace; padding: 12px; border-radius: 10px; white-space: pre-wrap; word-break: break-all; }
+.hypit-install-error { font-size: 13px; color: #dc2626; white-space: pre-wrap; word-break: break-word; }

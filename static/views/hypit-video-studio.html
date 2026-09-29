@@ -9,6 +9,39 @@
     </header>
 
     <div class="hypit-message" id="hypitMessage" role="status" aria-live="polite" hidden></div>
+
+    <section class="hypit-panel hypit-runtime-panel" id="hypitRuntimePanel">
+      <div class="hypit-section-heading">
+        <div>
+          <h3>运行依赖</h3>
+          <p>首次使用需要安装本机渲染依赖（约几百 MB，一次性）。</p>
+        </div>
+        <button type="button" class="hypit-primary-button hypit-compact-button" id="hypitInstallButton">安装运行依赖</button>
+      </div>
+      <div class="hypit-runtime-list" id="hypitRuntimeList"></div>
+      <div class="hypit-runtime-status" id="hypitRuntimeStatus" role="status" aria-live="polite">正在检查本机依赖…</div>
+    </section>
+
+    <div class="hypit-modal-mask" id="hypitInstallModal" hidden>
+      <div class="hypit-modal" role="dialog" aria-modal="true" aria-labelledby="hypitInstallTitle">
+        <div class="hypit-modal-head">
+          <b id="hypitInstallTitle">安装运行依赖</b>
+          <button type="button" class="hypit-text-button" id="hypitInstallClose">关闭</button>
+        </div>
+        <div class="hypit-modal-body">
+          <div class="hypit-progress" id="hypitInstallProgress">
+            <div class="hypit-progress-track"><span id="hypitInstallBar" style="width:0%"></span></div>
+            <span id="hypitInstallStage">准备中…</span>
+          </div>
+          <pre class="hypit-install-log" id="hypitInstallLog"></pre>
+          <div class="hypit-install-error" id="hypitInstallError" hidden></div>
+        </div>
+        <div class="hypit-modal-foot">
+          <button type="button" class="hypit-primary-button hypit-compact-button" id="hypitInstallStart">开始安装</button>
+          <button type="button" class="hypit-text-button" id="hypitInstallRetry" hidden>重试</button>
+        </div>
+      </div>
+    </div>
     <div class="hypit-workspace">
       <section class="hypit-panel hypit-input-panel">
         <div class="hypit-section-heading">

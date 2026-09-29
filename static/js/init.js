@@ -1630,6 +1630,7 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   'bihuo-25-video': 'bihuo_25_video_skill',
   'local-bestseller': 'local_bestseller_skill',
   'viral-video-remix': 'viral_video_remix_skill',
+  'hypit-video-studio': 'hypit_video_replication_skill',
   'hifly-digital-human': 'hifly_digital_human_skill',
   'shanjian-digital-human': 'hifly_digital_human_skill',
   'ecommerce-detail-studio': 'comfly_ecommerce_detail_skill',
