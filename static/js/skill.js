@@ -1627,6 +1627,13 @@ window._openHiddenWorkspaceView = function(view) {
     window._openBatchCreativeVideoView();
     return;
   }
+  if (target === 'hypit-video-studio' && typeof window.showLobsterView === 'function') {
+    window.showLobsterView('hypit-video-studio').catch(function(error) {
+      console.error('Failed to open Hypit video studio:', error);
+    });
+    try { location.hash = 'hypit-video-studio'; } catch (e1) {}
+    return;
+  }
   if (target === 'image-composer-studio' && typeof window._openImageComposerStudioView === 'function') {
     window._openImageComposerStudioView();
     return;

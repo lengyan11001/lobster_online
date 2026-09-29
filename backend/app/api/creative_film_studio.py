@@ -442,7 +442,14 @@ def _selected_memory_context(user_id: int, doc_ids: List[str]) -> tuple[str, Lis
     return "\n\n".join(parts).strip(), selected
 
 
-async def _call_sutui_chat(request: Request, user: _ServerUser, *, messages: List[Dict[str, str]], temperature: float = 0.72) -> str:
+async def _call_sutui_chat(
+    request: Request,
+    user: _ServerUser,
+    *,
+    messages: List[Dict[str, str]],
+    temperature: float = 0.72,
+    timeout: float = 120.0,
+) -> str:
     token = _raw_token_from_request(request)
     if not token:
         raise HTTPException(status_code=401, detail="需要登录后才能调用 AI 生成")
@@ -464,8 +471,13 @@ async def _call_sutui_chat(request: Request, user: _ServerUser, *, messages: Lis
         "Authorization": f"Bearer {token}",
         "X-Installation-Id": _installation_id_from_request(request, user.id),
     }
-    async with httpx.AsyncClient(timeout=120.0, trust_env=False) as client:
-        resp = await client.post(f"{_server_proxy_base()}/api/sutui-chat/completions", json=payload, headers=headers)
+    try:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            resp = await client.post(f"{_server_proxy_base()}/api/sutui-chat/completions", json=payload, headers=headers)
+    except httpx.TimeoutException as exc:
+        raise RuntimeError(f"AI 文本生成超时（{int(timeout)}秒），请稍后重试或缩短输入内容") from exc
+    except httpx.HTTPError as exc:
+        raise RuntimeError(f"AI 文本生成请求失败：{exc}") from exc
     if resp.status_code >= 400:
         raise HTTPException(status_code=502, detail=f"AI 文本生成失败 HTTP {resp.status_code}: {(resp.text or '')[:500]}")
     data = resp.json() if resp.content else {}

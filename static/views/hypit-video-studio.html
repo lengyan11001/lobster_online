@@ -1,0 +1,53 @@
+<div id="content-hypit-video-studio" class="content-block">
+  <main class="hypit-page">
+    <header class="hypit-page-head">
+      <div>
+        <span class="hypit-eyebrow">视频复刻工作台</span>
+        <h2>视频复刻</h2>
+        <p>选择参考视频并提交，系统自动分析、生成画面和视频，完成后展示成片。</p>
+      </div>
+    </header>
+
+    <div class="hypit-message" id="hypitMessage" role="status" aria-live="polite" hidden></div>
+    <div class="hypit-workspace">
+      <section class="hypit-panel hypit-input-panel">
+        <div class="hypit-section-heading">
+          <div><h3>参考视频</h3><p>视频文件和中间结果保存在本机任务目录。</p></div>
+        </div>
+        <input id="hypitVideoInput" type="file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska,.mp4,.mov,.webm,.mkv" hidden>
+        <button type="button" class="hypit-dropzone" id="hypitChooseVideo">
+          <span class="hypit-dropzone-mark" aria-hidden="true">+</span>
+          <strong id="hypitChooseVideoTitle">选择本地视频</strong>
+          <span>MP4、MOV、WebM、MKV，最大 1GB</span>
+        </button>
+        <div class="hypit-selected-file" id="hypitSelectedFile" hidden>
+          <video id="hypitVideoPreview" controls playsinline preload="metadata"></video>
+          <div class="hypit-file-row">
+            <div><strong id="hypitFilename"></strong><span id="hypitFileMeta"></span></div>
+            <button type="button" class="hypit-text-button" id="hypitReplaceVideo">更换</button>
+          </div>
+        </div>
+        <button type="button" class="hypit-primary-button" id="hypitSubmitButton" disabled>提交视频复刻</button>
+        <div class="hypit-progress" id="hypitProgress" hidden>
+          <div class="hypit-progress-track"><span id="hypitProgressBar"></span></div>
+          <span id="hypitProgressText">准备中…</span>
+        </div>
+      </section>
+
+      <section class="hypit-panel hypit-result-panel">
+        <div class="hypit-section-heading">
+          <div><h3>任务与成片</h3><p>提交后自动分析并生成，完成后可直接播放最终视频。</p></div>
+        </div>
+        <div class="hypit-empty" id="hypitResultEmpty">
+          <span aria-hidden="true">▧</span><strong>等待提交视频</strong><p>选择本地视频并提交后，这里会显示处理进度和最终成片。</p>
+        </div>
+        <div class="hypit-build-state" id="hypitTaskStatus" role="status" aria-live="polite">选择视频后提交复刻任务。</div>
+        <div class="hypit-video-facts" id="hypitVideoFacts"></div>
+        <section class="hypit-output-section" id="hypitOutputSection" hidden>
+          <h4>最终成片</h4>
+          <video id="hypitOutputVideo" controls playsinline preload="metadata"></video>
+        </section>
+      </section>
+    </div>
+  </main>
+</div>

@@ -1558,6 +1558,7 @@ var LOBSTER_HIDDEN_VIEWS = {
   'shanjian-smart-clip': true,
   'multi-clip-mixer': true,
   'batch-creative-video': true,
+  'hypit-video-studio': true,
   'global-leads': true,
   'ip-content-studio': true,
   'wechat-article': true,

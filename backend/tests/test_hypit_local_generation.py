@@ -1,0 +1,389 @@
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
+
+from backend.app.api import hypit_local
+
+
+def _project(tmp_path):
+    project = tmp_path / "hypit-project"
+    (project / "assets").mkdir(parents=True)
+    (project / "assets" / "reference.mp4").write_bytes(b"local source")
+    (project / "project.json").write_text(json.dumps({
+        "job_id": "a" * 32,
+        "source_name": "reference.mp4",
+        "width": 1080,
+        "height": 1920,
+        "scenes": [{
+            "start": 0, "end": 10, "caption": "字幕",
+            "image_prompt": "街头人物", "video_prompt": "缓慢前行",
+        }],
+    }), encoding="utf-8")
+    hypit_local._write_generation(project, {"status": "queued", "scenes": [{}]})
+    return project
+
+
+@pytest.mark.asyncio
+async def test_online_image_and_wan_video_then_local_hypit(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    requests = []
+
+    def frame(_, destination, __):
+        destination.write_bytes(b"jpeg")
+
+    async def server(_, method, path, __, **kwargs):
+        requests.append((method, path, kwargs))
+        if path.endswith("/edits/start"):
+            return {"job_id": "image-1"}
+        if path.endswith("/images/jobs/image-1"):
+            return {"status": "completed", "result": {"data": [{"url": "https://media.example/image.png"}]}}
+        if method == "POST":
+            return {"output": {"task_id": "wan-1"}}
+        return {"status": "completed", "url": "https://media.example/video.mp4"}
+
+    async def download(_, url, destination, __):
+        destination.write_bytes(url.encode())
+
+    def hypit(_, __, args, ___, timeout=300):
+        if args[0] == "check":
+            return {"ok": True}
+        return {"build": {"id": "build-test-1234"}}
+
+    monkeypatch.setattr(hypit_local, "_extract_frame", frame)
+    monkeypatch.setattr(hypit_local, "_server_json", server)
+    monkeypatch.setattr(hypit_local, "_download_generated", download)
+    monkeypatch.setattr(hypit_local, "_hypit_root", lambda: tmp_path)
+    monkeypatch.setattr(hypit_local, "_node_executable", lambda: "node")
+    monkeypatch.setattr(hypit_local, "_run_hypit_json", hypit)
+
+    await hypit_local._generate_hypit_media(project, "test-token", "test-installation")
+
+    state = hypit_local._read_generation(project)
+    assert state["status"] == "rendering"
+    assert state["scenes"][0]["image_job_id"] == "image-1"
+    assert state["scenes"][0]["video_task_id"] == "wan-1"
+    video_body = next(args["json"] for method, _, args in requests if method == "POST" and "json" in args)
+    assert video_body["image_url"] == "https://media.example/image.png"
+    assert video_body["duration"] == 10
+    assert 'src="./assets/take-01.mp4"' in (project / "main.svml").read_text(encoding="utf-8")
+    assert sum(method == "POST" for method, _, _ in requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_uncertain_video_submit_never_retries_paid_request(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    (project / "assets" / "image-01.png").write_bytes(b"image")
+    hypit_local._write_generation(project, {
+        "status": "queued",
+        "scenes": [{"image_url": "https://media.example/image.png"}],
+    })
+    requests = []
+
+    def frame(_, destination, __):
+        destination.write_bytes(b"jpeg")
+
+    async def server(_, method, path, __, **kwargs):
+        requests.append((method, path))
+        raise OSError("connection lost after upload")
+
+    monkeypatch.setattr(hypit_local, "_extract_frame", frame)
+    monkeypatch.setattr(hypit_local, "_server_json", server)
+
+    await hypit_local._generate_hypit_media(project, "token", "installation")
+    await hypit_local._generate_hypit_media(project, "token", "installation")
+
+    assert len(requests) == 1
+    state = hypit_local._read_generation(project)
+    assert state["scenes"][0]["video_submit_uncertain"] is True
+    assert "重复扣费" in state["error"]
+
+
+def test_image_ratio_and_video_poll_response():
+    assert hypit_local._image_size("1:1") == "1024x1024"
+    assert hypit_local._video_poll_result({"status": "completed", "url": "https://media.example/video.mp4"}) == (
+        "completed", "https://media.example/video.mp4", ""
+    )
+
+
+def test_speech_cues_use_recorded_timing_not_guessed_storyboard():
+    text, cues = hypit_local._speech_cues({
+        "stt_data": {"output": {
+            "text": "你好世界",
+            "utterances": [{
+                "text": "你好世界", "start_time": 200, "end_time": 2100,
+                "words": [
+                    {"text": "你好", "start_time": 200, "end_time": 900},
+                    {"text": "世界", "start_time": 1100, "end_time": 2100},
+                ],
+            }],
+        }},
+    }, 3)
+    assert text == "你好世界"
+    assert cues == [
+        {"start": 0.2, "end": 2.1, "text": "你好世界"},
+    ]
+
+
+def test_speech_cues_break_at_sentence_and_pause():
+    text, cues = hypit_local._speech_cues({"stt_data": {"output": {
+        "utterances": [{"words": [
+            {"text": "你好。", "start_time": 0, "end_time": 600},
+            {"text": "世界", "start_time": 900, "end_time": 1600},
+            {"text": "再见", "start_time": 2500, "end_time": 3000},
+        ]}],
+    }}}, 3)
+    assert text == "你好。世界再见"
+    assert cues == [
+        {"start": 0, "end": 0.6, "text": "你好。"},
+        {"start": 0.9, "end": 1.6, "text": "世界"},
+        {"start": 2.5, "end": 3, "text": "再见"},
+    ]
+
+
+def test_short_video_analysis_uses_fewer_frames_and_scenes():
+    assert hypit_local._analysis_frame_count(7) == 4
+    assert hypit_local._suggested_scene_count(7) == 1
+    assert hypit_local._generation_boundaries(10) == [(0.0, 10.0)]
+    assert hypit_local._wan_generation_duration(*hypit_local._generation_boundaries(10)[0]) == 10
+    assert len(hypit_local._generation_boundaries(31)) == 2
+    assert min(end - start for start, end in hypit_local._generation_boundaries(31)) >= 5
+    assert len(hypit_local._generation_boundaries(7.23)) == 1
+    assert hypit_local._wan_generation_duration(*hypit_local._generation_boundaries(7.23)[0]) == 8
+    assert hypit_local._analysis_frame_count(60) == 12
+    assert hypit_local._suggested_scene_count(60) == 2
+    assert hypit_local._suggested_scene_count(60) == len(hypit_local._generation_boundaries(60))
+
+
+def test_timeline_time_uses_exact_frame_boundaries():
+    assert hypit_local._timeline_time(7.233) == "217f"
+    assert hypit_local._timeline_time(0.2) == "6f"
+
+
+@pytest.mark.asyncio
+async def test_build_requires_recheck_after_transcription(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "speech.json").write_text(
+        json.dumps({"text": "真实口播", "cues": [{"start": 0, "end": 1, "text": "真实口播"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(hypit_local, "_project_dir", lambda *args: project)
+    monkeypatch.setattr(hypit_local, "_read_job", lambda *args: (job_dir, {}))
+    with pytest.raises(HTTPException, match="口播字幕已更新") as error:
+        await hypit_local.build_local_hypit_project(
+            "a" * 32, hypit_local.BuildIn(confirmed_external_generation=True),
+            None, SimpleNamespace(id=23),
+        )
+    assert error.value.status_code == 409
+
+
+def test_reference_audio_and_timed_captions_in_hypit_project(tmp_path):
+    project = _project(tmp_path)
+    scenes = [{"start": 0, "end": 8, "caption": "AI 猜的文字"}]
+    hypit_local._write_project_sources(
+        project, "reference.mp4", 1080, 1920, scenes, has_audio=True,
+        speech_cues=[{"start": 0.2, "end": 1.5, "text": "真实口播"}],
+    )
+    graph = (project / "main.svml").read_text(encoding="utf-8")
+    assert 'audio="default"' in graph
+    assert '<audio-track:Track id="reference-sound"' in graph
+    assert '<film:Track source={reference-sound.audio}/>' in graph
+    assert 'start="6f" end="45f"' in graph
+    assert "真实口播" in graph
+    assert "AI 猜的文字" not in graph
+    hypit_local._write_project_sources(project, "reference.mp4", 1080, 1920, scenes, has_audio=True)
+    assert "AI 猜的文字" not in (project / "main.svml").read_text(encoding="utf-8")
+
+
+def test_project_without_transcript_omits_empty_caption_track(tmp_path):
+    project = _project(tmp_path)
+    scenes = [{"start": 0, "end": 8, "caption": "不要臆造字幕"}]
+    hypit_local._write_project_sources(project, "reference.mp4", 1080, 1920, scenes, has_audio=True)
+    graph = (project / "main.svml").read_text(encoding="utf-8")
+    assert '<typo:Track id="captions"' not in graph
+    assert "captions.track" not in graph
+    assert '<audio-track:Track id="reference-sound"' in graph
+    assert "不要臆造字幕" not in graph
+
+
+def test_configure_runtime_uses_installed_chrome_without_managed_download(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    runtime_path = project / "hypit.runtime.json"
+    runtime_path.write_text(json.dumps({
+        "endpoints": {
+            "hyperframes.local": {
+                "use": "@hypit/provider-hyperframes-local",
+                "config": {"browserVersion": "152.0.7928.2"},
+            },
+        },
+    }), encoding="utf-8")
+    chrome = tmp_path / "chrome.exe"
+    chrome.write_bytes(b"chrome")
+    monkeypatch.setattr(hypit_local, "_installed_chrome_path", lambda: chrome)
+
+    hypit_local._configure_runtime_browser(project)
+
+    config = json.loads(runtime_path.read_text(encoding="utf-8"))["endpoints"]["hyperframes.local"]["config"]
+    assert config == {"chromePath": chrome.as_posix()}
+
+
+def test_hypit_environment_uses_shared_state_and_windows_system_tools(monkeypatch):
+    monkeypatch.setattr(hypit_local.os, "name", "nt")
+    monkeypatch.setattr(hypit_local, "_hypit_state_home", lambda: Path(r"C:\Users\tester\AppData\Local\Hypit"))
+    monkeypatch.setenv("PATH", r"C:\Tools\node")
+    monkeypatch.setenv("WINDIR", r"C:\Windows")
+
+    env = hypit_local._hypit_env()
+
+    assert env["HYPIT_STATE_HOME"] == r"C:\Users\tester\AppData\Local\Hypit"
+    assert env["NODE_DISABLE_COMPILE_CACHE"] == "1"
+    assert env["TSX_DISABLE_CACHE"] == "1"
+    assert env["PATH"].startswith(r"C:\Windows\System32;")
+
+
+def test_hypit_environment_prefers_system_npm_over_bundled_npm(tmp_path, monkeypatch):
+    node_dir = tmp_path / "nodejs"
+    node_dir.mkdir()
+    (node_dir / "npm.cmd").write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setattr(hypit_local.os, "name", "nt")
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path))
+    monkeypatch.setenv("PATH", r"D:\\lobster\\nodejs;" + str(node_dir) + r";C:\\Windows\\System32")
+
+    env = hypit_local._hypit_env()
+
+    assert env["PATH"].split(";")[0].lower() == str(node_dir).lower()
+
+
+def test_installed_hypit_package_is_verified_by_name_and_version(tmp_path, monkeypatch):
+    package = (
+        tmp_path / "packages" / "@hyperframes" / "engine" / "0.7.101"
+        / "node_modules" / "@hyperframes" / "engine"
+    )
+    package.mkdir(parents=True)
+    (package / "package.json").write_text(json.dumps({
+        "name": "@hyperframes/engine",
+        "version": "0.7.101",
+    }), encoding="utf-8")
+    monkeypatch.setattr(hypit_local, "_hypit_state_home", lambda: tmp_path)
+
+    assert hypit_local._installed_hypit_registry_package("@hyperframes/engine", "0.7.101")
+    assert not hypit_local._installed_hypit_registry_package("@hyperframes/engine", "0.7.102")
+
+
+def test_nonzero_npm_install_is_recoverable_only_when_exact_engine_is_installed(tmp_path, monkeypatch):
+    package = (
+        tmp_path / "packages" / "@hyperframes" / "engine" / "0.7.101"
+        / "node_modules" / "@hyperframes" / "engine"
+    )
+    package.mkdir(parents=True)
+    (package / "package.json").write_text(json.dumps({
+        "name": "@hyperframes/engine",
+        "version": "0.7.101",
+    }), encoding="utf-8")
+    monkeypatch.setattr(hypit_local, "_hypit_state_home", lambda: tmp_path)
+
+    assert hypit_local._has_recoverable_hypit_install_error(
+        RuntimeError("Installing @hyperframes/engine@0.7.101 · log C:\\Temp\\install.log")
+    )
+    assert not hypit_local._has_recoverable_hypit_install_error(
+        RuntimeError("npm install failed")
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_prepare_retries_shared_install_race(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    project.mkdir()
+    calls = []
+    monkeypatch.setattr(hypit_local, "_hypit_state_home", lambda: tmp_path / "state")
+
+    def run_hypit(_, __, args, ___):
+        calls.append(("run", args))
+        (project / ".hypit").mkdir(exist_ok=True)
+        (project / ".hypit" / "runtime").write_text("hypit.runtime.json", encoding="utf-8")
+        return ""
+
+    def configure(_):
+        calls.append(("configure",))
+
+    def run_json(_, __, args, ___, timeout=300):
+        calls.append(("json", args, timeout))
+        if len([item for item in calls if item[0] == "json"]) == 1:
+            package = (tmp_path / "state" / "packages" / "@hyperframes" / "engine" / "0.7.101"
+                       / "node_modules" / "@hyperframes" / "engine")
+            package.mkdir(parents=True)
+            (package / "package.json").write_text(json.dumps({
+                "name": "@hyperframes/engine", "version": "0.7.101",
+            }), encoding="utf-8")
+            raise RuntimeError(r"Installing @hyperframes/engine@0.7.101 · log C:\Temp\install.log")
+        return {"ready": True, "worker": "running"}
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(hypit_local, "_run_hypit", run_hypit)
+    monkeypatch.setattr(hypit_local, "_configure_runtime_browser", configure)
+    monkeypatch.setattr(hypit_local, "_run_hypit_json", run_json)
+    monkeypatch.setattr(hypit_local.asyncio, "sleep", no_sleep)
+
+    output = await hypit_local._ensure_hypit_runtime_ready(project, tmp_path, "node")
+
+    assert output["ready"] is True
+    assert [item[1] for item in calls if item[0] == "json"] == [
+        ["runtime", "up"],
+        ["runtime", "up"],
+    ]
+    assert calls.count(("configure",)) == 1
+
+
+@pytest.mark.parametrize("reply", [
+    '```json\n{"title":"复刻","scenes":[{"start":0,"end":5,"caption":"街头",},]}\n```',
+    '{"title":"复刻","scenes":[{"start":0,"end":5,"caption":"关于"街头"的视频"}]}',
+])
+def test_storyboard_parser_repairs_minor_model_json_errors(reply):
+    parsed = hypit_local._extract_json_object(reply)
+    scenes = hypit_local._normalize_scenes(parsed, 5)
+    assert parsed["title"] == "复刻"
+    assert len(scenes) == 1
+    assert scenes[0]["end"] == 5
+
+
+def test_storyboard_parser_rejects_non_storyboard_text():
+    with pytest.raises(ValueError, match="JSON 分镜"):
+        hypit_local._extract_json_object("抱歉，无法分析该视频")
+    with pytest.raises(ValueError, match="分镜列表"):
+        hypit_local._normalize_scenes(hypit_local._extract_json_object('{"title":"空"}'), 5)
+
+
+def test_job_recovery_reports_only_persisted_stages(tmp_path, monkeypatch):
+    monkeypatch.setattr(hypit_local, "JOBS_ROOT", tmp_path)
+    job_id = "a" * 32
+    job_dir = tmp_path / "23" / job_id
+    job_dir.mkdir(parents=True)
+    (job_dir / "job.json").write_text(
+        json.dumps({"job_id": job_id, "user_id": 23, "filename": "source.mp4"}),
+        encoding="utf-8",
+    )
+    user = SimpleNamespace(id=23)
+    initial = hypit_local.get_local_hypit_job(job_id, user)
+    assert initial["project_checked"] is False
+    assert initial["runtime_prepared"] is False
+    assert initial["has_generation"] is False
+    assert initial["has_build"] is False
+    assert initial["contact_sheet_url"].endswith(job_id + "/contact-sheet")
+
+    project = job_dir / "hypit-project"
+    (project / ".hypit").mkdir(parents=True)
+    (project / "project.json").write_text(json.dumps({"scenes": [{}]}), encoding="utf-8")
+    (project / ".hypit" / "runtime").write_text("local", encoding="utf-8")
+    (project / "generation.json").write_text("{}", encoding="utf-8")
+    restored = hypit_local.get_local_hypit_job(job_id, user)
+    assert restored["project_checked"] is True
+    assert restored["runtime_prepared"] is False
+    assert restored["has_generation"] is True
+    assert restored["has_build"] is False

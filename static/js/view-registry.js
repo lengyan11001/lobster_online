@@ -193,4 +193,12 @@
     init: 'initBatchCreativeVideoView',
     cache: 'reload'
   });
+
+  window.registerLobsterView('hypit-video-studio', {
+    html: '/static/views/hypit-video-studio.html?v=20260923-auto-v3',
+    css: '/static/css/hypit-video-studio.css?v=20260923-auto-v3',
+    scripts: '/static/js/hypit-video-studio.js?v=20260923-auto-v3',
+    init: 'initHypitVideoStudioView',
+    cache: 'reload'
+  });
 })();

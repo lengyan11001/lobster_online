@@ -25,6 +25,7 @@ from .api.openclaw_memory import router as openclaw_memory_router
 from .api.personal_settings import router as personal_settings_router
 from .api.h5_chat_channel import router as h5_chat_channel_router
 from .api.audio_transcription_local import router as audio_transcription_local_router
+from .api.hypit_local import router as hypit_local_router
 from .api.custom_config import router as custom_config_router
 from .api.billing import router as billing_router
 from .api.consumption_accounts import router as consumption_accounts_router
@@ -1050,6 +1051,7 @@ def create_app() -> FastAPI:
     app.include_router(personal_settings_router, prefix="")
     app.include_router(h5_chat_channel_router, prefix="")
     app.include_router(audio_transcription_local_router, prefix="")
+    app.include_router(hypit_local_router, prefix="")
     app.include_router(custom_config_router, prefix="")
     app.include_router(billing_router, prefix="")
     app.include_router(consumption_accounts_router, prefix="")
