@@ -318,6 +318,11 @@
     var inner=payload.payload && typeof payload.payload === 'object' ? payload.payload : {};
     if (payload.params && typeof payload.params === 'object') return payload.params;
     if (inner.params && typeof inner.params === 'object') return inner.params;
+    // 能力节点（数字人口播等）的参数直接放在 payload.payload 里，没有 params 层：
+    // 不回读这一层，「口播来源」这种勾选保存后再次打开就看不到（会显示成默认值）。
+    if (String(payload.capability_id || '').trim() && inner && typeof inner === 'object' && Object.keys(inner).length) {
+      return Object.assign({}, inner);
+    }
     if (plan.params && typeof plan.params === 'object') return plan.params;
     return node.params && typeof node.params === 'object' ? node.params : {};
   }

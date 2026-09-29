@@ -475,3 +475,13 @@ def test_hypit_root_accepts_runtime_inside_client_dir(tmp_path, monkeypatch):
     monkeypatch.delenv("HYPIT_ROOT", raising=False)
 
     assert hypit_local._hypit_root() == runtime.resolve()
+
+
+def test_workflow_params_reads_capability_payload():
+    """能力节点（数字人口播等）的参数直接在 plan.payload.payload：
+    员工编辑器必须能回读，否则「口播来源」这种勾选保存后再次打开就没了。"""
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[2] / "static" / "js" / "views" / "h5-employees.js").read_text(encoding="utf-8")
+    assert "payload.capability_id" in src
+    assert "script_sources" in src
