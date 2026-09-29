@@ -4,6 +4,7 @@ browser_chromium/
 browser_data/
 deps/
 assets/
+!static/canvas-web/assets/
 logs/
 dist/
 build/
