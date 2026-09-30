@@ -18,7 +18,7 @@
 
   function videoRequestForModel(model) {
     if (isOpenMindGrokModel(model)) return { model: 'grok-imagine-video-1.5-preview', channel: 'openmind' };
-    if (isYunwuVeoModel(model)) return { model: 'veo3.1', channel: 'yunwu' };
+    if (isYunwuVeoModel(model)) return { model: 'veo3.1', channel: 'openmind' };
     return { model: model, channel: '' };
   }
 

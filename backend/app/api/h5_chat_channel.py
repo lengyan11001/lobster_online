@@ -8632,7 +8632,8 @@ def _seedance_tvc_video_request(payload: Dict[str, Any]) -> tuple[str, str]:
     if _seedance_tvc_is_openmind_grok_model(ui_model):
         return _SEEDANCE_TVC_DEFAULT_MODEL, _SEEDANCE_TVC_DEFAULT_CHANNEL
     if _seedance_tvc_is_yunwu_veo_model(ui_model):
-        return "veo3.1", "yunwu"
+        # 影梦 1.0（yunwu-veo3.1-plus）改走 OpenMind，不再打 yunwu。
+        return "veo3.1", "openmind"
     if explicit_model:
         return explicit_model, explicit_channel
     return ui_model or _SEEDANCE_TVC_DEFAULT_MODEL, explicit_channel

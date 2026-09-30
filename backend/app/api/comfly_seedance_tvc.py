@@ -323,12 +323,14 @@ async def _prepare_pipeline_input(
         # provider, otherwise valid 5-30 second durations are rejected.
         video_channel = "dashscope"
     if video_model.lower().replace(" ", "") in {"yunwu-veo3.1-plus", "veo3.1-plus", "veo3.1"}:
-        video_channel = "yunwu"
+        # 影梦 1.0（历史值 yunwu-veo3.1-plus）不再走 yunwu，统一由 OpenMind（veo31）承载。
+        video_channel = "openmind"
         video_model = "veo3.1"
     if _is_grok_video_request(video_channel, video_model):
         video_channel = video_channel or "comfly"
     if video_channel in {"yunwu", "云雾", "雲霧"}:
-        video_channel = "yunwu"
+        # yunwu 通道已停用：任何历史 yunwu 选择都改走 OpenMind（veo3.1）。
+        video_channel = "openmind"
         video_base_url = video_base_url or pipe_base
         video_model = video_model or "veo3.1"
     policy = (

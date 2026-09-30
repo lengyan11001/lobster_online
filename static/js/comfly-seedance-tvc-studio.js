@@ -78,7 +78,8 @@
       return { model: 'grok-imagine-video-1.5-preview', channel: 'openmind' };
     }
     if (isYunwuVeoModel(model)) {
-      return { model: 'veo3.1', channel: 'yunwu' };
+      // yunwu channel retired: 影梦 1.0 now runs on OpenMind.
+      return { model: 'veo3.1', channel: 'openmind' };
     }
     return { model: model, channel: '' };
   }

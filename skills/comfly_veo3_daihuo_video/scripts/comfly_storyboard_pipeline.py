@@ -344,7 +344,8 @@ def _normalize_video_channel(raw: str) -> str:
     if s in {"openmind", "open-mind", "om", "openmindapi"}:
         return "openmind"
     if s in {"yunwu", "yw", "cloudmist", "cloud-mist", "云雾", "雲霧"}:
-        return "yunwu"
+        # yunwu retired: legacy configs run on OpenMind.
+        return "openmind"
     return "comfly"
 
 

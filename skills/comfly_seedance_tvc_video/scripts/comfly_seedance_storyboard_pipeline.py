@@ -515,7 +515,8 @@ def _normalize_video_channel(raw: str) -> str:
     if s in {"xing", "xingapi", "xing-seedance", "xing_seedance", "星链"}:
         return "xing"
     if s in {"yunwu", "yw", "cloudmist", "cloud-mist", "云雾", "雲霧"}:
-        return "yunwu"
+        # yunwu retired: legacy configs run on OpenMind.
+        return "openmind"
     if s in {"comfly", "veo", "veo3", "veo3.1", "veo31"}:
         return "comfly"
     return "seedance"

@@ -230,17 +230,17 @@ async def _prepare_pipeline_input(
         video_model = video_model or (getattr(settings, "comfly_daihuo_grok_video_model", None) or "grok-imagine-video-1.5-preview")
         if not video_fallbacks:
             video_fallbacks = [
-                {"channel": "yunwu", "model": "grok-video-3", "base_url": pipe_base},
+                {"channel": "openmind", "model": "grok-video-3", "base_url": pipe_base},
                 {"channel": "comfly", "model": "veo3.1-fast", "base_url": pipe_base},
-                {"channel": "yunwu", "model": "veo3.1", "base_url": pipe_base},
             ]
-        video_fallback_channel = video_fallback_channel or "yunwu"
+        video_fallback_channel = video_fallback_channel or "openmind"
         video_fallback_base_url = video_fallback_base_url or pipe_base
         video_fallback_model = video_fallback_model or "grok-video-3"
     if video_channel in {"yunwu", "云雾", "雲霧"}:
-        video_channel = "yunwu"
+        # yunwu 通道已停用：历史 yunwu 请求改走 OpenMind（影梦 1.0 -> veo3.1）。
+        video_channel = "openmind"
         video_base_url = video_base_url or pipe_base
-        video_model = video_model or (getattr(settings, "comfly_daihuo_yunwu_video_model", None) or "veo3.1")
+        video_model = video_model or "veo3.1"
         if not video_fallbacks:
             video_fallbacks = [{"channel": "comfly", "model": "veo3.1-fast", "base_url": pipe_base}]
         video_fallback_channel = video_fallback_channel or "comfly"
