@@ -28,7 +28,7 @@ _BASE = Path(__file__).resolve().parent.parent.parent.parent
 _LOG_FILE = (_BASE / "logs" / "app.log").resolve()
 _MAX_LINES = 5000
 _DEFAULT_TAIL = 2000
-_DIAGNOSTIC_TAIL_BYTES = 1536 * 1024
+_DIAGNOSTIC_TAIL_BYTES = 8 * 1024 * 1024   # 2026-09-30：原来 1.5MB 只覆盖几小时
 _DIAGNOSTIC_CONFIG_BYTES = 256 * 1024
 
 _LOG_CANDIDATES = [
@@ -206,6 +206,35 @@ def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
             summary["files"].append(
                 {"path": arcname, "source": str(path), "size": size, "truncated": truncated}
             )
+
+        # 2026-09-30：排查「一直进行中/字幕合成中」用这两样：
+        #   1) 运行目录清单（raw.mp4 多大、有没有 captioned.mp4 -> 判断卡在下载/ffmpeg/上传）
+        #   2) job 状态文件（每个 job 的 status/post_status/post_error）
+        try:
+            runs_root = (_BASE / "skills" / "comfly_seedance_tvc_video" / "runs").resolve()
+            if runs_root.is_dir():
+                lines = []
+                for item in sorted(runs_root.rglob("*")):
+                    if not item.is_file():
+                        continue
+                    try:
+                        stat = item.stat()
+                        lines.append("%s  %s  %s" % (item.relative_to(runs_root), stat.st_size, datetime.fromtimestamp(stat.st_mtime).isoformat(" ", "seconds")))
+                    except OSError:
+                        continue
+                zf.writestr("seedance_runs_files.txt", "\n".join(lines)[:2000000])
+                summary["files"].append({"path": "seedance_runs_files.txt", "entries": len(lines)})
+        except Exception as e:
+            summary["files"].append({"path": "seedance_runs_files.txt", "error": str(e)})
+
+        job_store = (_BASE / "_lobster_runtime" / "seedance_tvc_job_store.json").resolve()
+        if job_store.is_file():
+            try:
+                text, size, truncated = _read_tail_text(job_store, 2 * 1024 * 1024)
+                zf.writestr("seedance_job_store.json", _redact_text(text))
+                summary["files"].append({"path": "seedance_job_store.json", "size": size, "truncated": truncated})
+            except OSError as e:
+                summary["files"].append({"path": "seedance_job_store.json", "error": str(e)})
 
         for rel in _CONFIG_CANDIDATES:
             path = (_BASE / rel).resolve()
