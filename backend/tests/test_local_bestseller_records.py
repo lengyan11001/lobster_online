@@ -95,6 +95,15 @@ def test_record_row_restores_progress_and_materials():
     assert "if (event.target.closest('button') || event.target.closest('a')) return;" in js
 
 
+def test_local_bestseller_video_fallbacks_have_no_yunwu():
+    """同城爆款兜底链不许再出现云雾(yunwu)：openmind 主通道 + 我们自己的 comfly/xai。"""
+    src = (ROOT / "backend/app/api/local_bestseller.py").read_text(encoding="utf-8")
+    block = src.split("def _seedance_grok_video_fallbacks()", 1)[1].split("async def _submit_card_video_via_seedance", 1)[0]
+    assert "yunwu" not in block
+    assert '"channel": "comfly"' in block
+    assert block.index('"channel": "comfly"') < block.index('"channel": "xai"')
+
+
 def test_seedance_tvc_policy_fetch_passes_feature():
     """同城爆款要拿到自己的渠道策略（OpenMind 160），必须把 feature 传到策略接口。"""
     src = (ROOT / "backend/app/api/comfly_seedance_tvc.py").read_text(encoding="utf-8")

@@ -781,9 +781,11 @@ def _seedance_grok_model(model: str) -> str:
 
 
 def _seedance_grok_video_fallbacks() -> List[Dict[str, str]]:
+    # 用户口径（2026-09-30）：openmind 优先（主通道就是 openmind/grok-video-3），
+    # 兜底用我们自己的 comfly / xai；云雾通道彻底不用，wan/seedance 由服务端放最后。
     return [
-        {"channel": "yunwu", "model": "grok-video-3"},
-        {"channel": "comfly", "model": "veo3.1-fast"},
+        {"channel": "comfly", "model": "grok-imagine-video-1.5"},
+        {"channel": "xai", "model": "grok-imagine-video-1.5"},
     ]
 
 
