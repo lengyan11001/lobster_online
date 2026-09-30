@@ -1293,7 +1293,6 @@
                     <span id="localBestsellerEmptyHint">先选择照片并填写个人信息，再生成30天同城爆款方案。</span>
                   </div>
                   <div id="localBestsellerResultGrid" class="lb-result-grid"></div>
-                  <div id="localBestsellerRecords" class="lb-records" hidden></div>
                 </section>
               </div>
             </div>
@@ -1310,6 +1309,20 @@
                   <span id="localBestsellerAssetPickedCount">可多选；选 1 张则全部 Day 使用同一张</span>
                   <button type="button" id="localBestsellerApplyBatchSceneAssets" class="btn btn-primary btn-sm">应用到底图</button>
                 </div>
+              </div>
+            </div>
+
+            <div id="localBestsellerRecordsModal" class="lb-records-modal" aria-hidden="true">
+              <div class="lb-records-card">
+                <div class="lb-records-head">
+                  <strong>生产记录</strong>
+                  <button type="button" id="localBestsellerRecordsClose" aria-label="关闭">×</button>
+                </div>
+                <div class="lb-records-toolbar">
+                  <span class="lb-records-hint">本地任务账本（最近 30 条，账本按 3 天滚动）；完整产物在 skills/comfly_seedance_tvc_video/runs/job_runs 下。</span>
+                  <button type="button" class="btn btn-ghost btn-sm" data-lb-record-refresh>刷新</button>
+                </div>
+                <div id="localBestsellerRecordsList" class="lb-records-list"></div>
               </div>
             </div>
           </div>
