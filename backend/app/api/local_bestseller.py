@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal, get_db
+from ..services import local_bestseller_plan_store as plan_store
 from .assets import _is_internal_asset_http_url, get_asset_public_url
 from .auth import _ServerUser, get_current_user_for_local
 from .comfly_seedance_tvc import ComflySeedancePipelinePayload, start_seedance_tvc_pipeline_job
@@ -1118,3 +1119,70 @@ async def local_bestseller_video_batch(
 
     out = await asyncio.gather(*[_submit_one(card) for card in cards])
     return {"ok": True, "status": "submitted", "items": out}
+
+
+class LocalBestsellerPlanRecordBody(BaseModel):
+    plan_id: Optional[str] = Field(None, description="已有方案记录 ID；传了就更新这条（同一次方案的后续操作）")
+    days: Optional[int] = Field(None, ge=1, le=30)
+    profile: Optional[LocalBestsellerProfile] = None
+    items: List[Dict[str, Any]] = Field(default_factory=list, description="方案卡片原文：原样存、原样返回")
+
+
+@router.post("/api/local-bestseller/plans", summary="保存/更新同城爆款方案记录")
+async def local_bestseller_plans_save(
+    body: LocalBestsellerPlanRecordBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    items = [item for item in (body.items or []) if isinstance(item, dict)]
+    if not items:
+        raise HTTPException(status_code=400, detail="方案记录不能为空")
+    days = [int(item.get("day") or 0) for item in items if int(item.get("day") or 0) > 0]
+    day_start = min(days) if days else 1
+    day_end = max(days) if days else len(items)
+    profile = _clean_profile(body.profile) if body.profile is not None else {}
+    if (body.plan_id or "").strip() and plan_store.update_plan(
+        body.plan_id,
+        user_id=current_user.id,
+        items=items,
+        profile=profile,
+        day_start=day_start,
+        day_end=day_end,
+    ):
+        return {"ok": True, "plan_id": body.plan_id, "updated": True}
+    plan_id = plan_store.create_plan(
+        user_id=current_user.id,
+        items=items,
+        profile=profile,
+        day_start=day_start,
+        day_end=day_end,
+    )
+    return {"ok": True, "plan_id": plan_id, "created": True}
+
+
+@router.get("/api/local-bestseller/plans", summary="同城爆款方案记录列表")
+async def local_bestseller_plans_list(
+    limit: int = 30,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    return {"ok": True, "items": plan_store.list_plans(int(current_user.id), limit=limit)}
+
+
+@router.get("/api/local-bestseller/plans/{plan_id}", summary="同城爆款方案记录详情（原样返回卡片）")
+async def local_bestseller_plans_detail(
+    plan_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    plan = plan_store.get_plan(plan_id, user_id=int(current_user.id))
+    if not plan:
+        raise HTTPException(status_code=404, detail="plan record not found")
+    return {"ok": True, "plan": plan}
+
+
+@router.delete("/api/local-bestseller/plans/{plan_id}", summary="删除同城爆款方案记录")
+async def local_bestseller_plans_delete(
+    plan_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    if not plan_store.delete_plan(plan_id, user_id=int(current_user.id)):
+        raise HTTPException(status_code=404, detail="plan record not found")
+    return {"ok": True, "plan_id": plan_id}

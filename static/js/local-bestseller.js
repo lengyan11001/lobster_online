@@ -22,7 +22,10 @@
     videoGenerating: {},
     videoPolling: {},
     records: [],
-    recordsLoading: false
+    recordsLoading: false,
+    planId: '',
+    planSaveTimer: null,
+    planSaveSuppressUntil: 0
   };
 
   function $(id) {
@@ -974,44 +977,11 @@
         '<div class="lb-result-foot"><div class="lb-result-actions">' + sceneRefActions + renderActions + '</div><div class="lb-status-stack"><span data-status="' + escapeHtml(item.scene_status || item.status || 'ready') + '">' + escapeHtml(statusLabel(item.scene_status || item.status)) + '</span><span data-status="' + escapeHtml(item.video_status || 'ready') + '">' + escapeHtml(videoStatusLabel(item.video_status)) + '</span>' + videoTask + videoProgress + recordStamp + '</div></div>' +
       '</article>';
     }).join('');
+    schedulePlanSave();
   }
 
-  // ---- 生产记录：每次「合成视频」都会在本地 job 账本里留一条（feature=local_bestseller） ----
-  // 以弹窗展示，不在结果区常驻。
+  // ---- 方案记录：每次「生成方案」一条；方案里生成过的东西原样保存，点一条即回填 ----
   var RECORDS_LIMIT = 30;
-
-  function recordsStatusLabel(status) {
-    if (status === 'completed') return '已完成';
-    if (status === 'failed') return '失败';
-    if (status === 'running') return '生成中';
-    if (status === 'queued') return '排队中';
-    if (status === 'partial_failure') return '部分失败';
-    return status ? String(status) : '未知';
-  }
-
-  function recordTimeText(row) {
-    var ts = Number((row && (row.updated_at_ts || row.created_at_ts)) || 0);
-    if (!ts) return '';
-    var d = new Date(ts * 1000);
-    function pad(n) { return (n < 10 ? '0' : '') + n; }
-    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-  }
-
-  function recordVideoUrl(row) {
-    var result = row && row.result && typeof row.result === 'object' ? row.result : {};
-    var finalVideo = result.final_video && typeof result.final_video === 'object' ? result.final_video : {};
-    var assets = Array.isArray(result.saved_assets) ? result.saved_assets : (Array.isArray(row && row.saved_assets) ? row.saved_assets : []);
-    var savedUrl = '';
-    assets.forEach(function(entry) {
-      if (savedUrl) return;
-      var asset = entry && entry.asset && typeof entry.asset === 'object' ? entry.asset : {};
-      var kind = String((entry && entry.kind) || asset.kind || '').toLowerCase();
-      var url = asset.source_url || asset.open_url || '';
-      if (!url) return;
-      if (kind === 'local_bestseller_bgm_final' || kind === 'local_bestseller_caption_final' || !savedUrl) savedUrl = url;
-    });
-    return finalVideo.url || finalVideo.preview_url || finalVideo.local_preview_url || savedUrl || '';
-  }
 
   function recordsModalEl() {
     return $('localBestsellerRecordsModal');
@@ -1022,30 +992,53 @@
     return !!(modal && modal.classList.contains('is-visible'));
   }
 
+  function planTimeText(ts) {
+    var value = Number(ts || 0);
+    if (!value) return '';
+    var d = new Date(value * 1000);
+    function pad(n) { return (n < 10 ? '0' : '') + n; }
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  function planRecordTone(row) {
+    if (Number((row && row.failed) || 0) > 0) return 'failed';
+    if (Number((row && row.video_ready) || 0) > 0) return 'completed';
+    return 'running';
+  }
+
+  function planRecordLabel(row) {
+    if (Number((row && row.video_ready) || 0) > 0) return '有视频';
+    if (Number((row && row.scene_ready) || 0) > 0) return '有场景图';
+    return '仅方案';
+  }
+
   function renderRecords(message) {
     var list = $('localBestsellerRecordsList');
     if (!list || !recordsVisible()) return;
     var rows = Array.isArray(state.records) ? state.records : [];
     var hint = $('localBestsellerRecordsHint');
     if (hint) {
-      hint.textContent = '共 ' + rows.length + ' 条记录（最近 30 条，账本按 3 天滚动）；同一天多次生产会各占一条；完整产物在 skills/comfly_seedance_tvc_video/runs/job_runs 下。';
+      hint.textContent = '共 ' + rows.length + ' 条方案记录（最多 30 条）；每次点「生成方案」各一条，方案里生成过的场景图/视频原样保存，点一条即回填界面。';
     }
     var body = '';
     if (message) body += '<div class="lb-records-msg">' + escapeHtml(message) + '</div>';
-    if (!rows.length && !message) body += '<div class="lb-records-msg">还没有生产记录：先在结果卡上点「合成视频」。</div>';
+    if (!rows.length && !message) body += '<div class="lb-records-msg">还没有方案记录：先点「生成' + escapeHtml(planLabel()) + '方案」。</div>';
     body += rows.map(function(row) {
-      var day = row && row.day !== null && row.day !== undefined && row.day !== '' ? String(row.day) : '';
-      var url = recordVideoUrl(row);
-      var actions = [];
-      if (day) actions.push('<button type="button" class="btn btn-ghost btn-sm" data-lb-record-day="' + escapeHtml(day) + '">定位 Day ' + escapeHtml(day) + '</button>');
-      if (url) actions.push('<a class="btn btn-ghost btn-sm" href="' + escapeHtml(url) + '" target="_blank" rel="noopener">看片</a>');
-      var statusText = row && row.status ? row.status : '';
-      return '<div class="lb-record-row" data-status="' + escapeHtml(statusText) + '" data-lb-record-restore="' + escapeHtml(row && row.job_id ? row.job_id : '') + '" title="任务 ' + escapeHtml(row && row.job_id ? row.job_id : '') + ' · 点击回填到结果卡">' +
-        '<div class="lb-record-main"><strong>' + escapeHtml((row && row.title) || '同城爆款视频') + '</strong>' +
-        '<small>' + escapeHtml(recordTimeText(row)) + (day ? ' · Day ' + escapeHtml(day) : '') + (row && row.job_id ? ' · 任务 ' + escapeHtml(String(row.job_id).slice(0, 8)) : '') + '</small>' +
-        (row && row.error ? '<small class="lb-record-error">' + escapeHtml(String(row.error).slice(0, 200)) + '</small>' : '') +
+      var total = Number(row.card_count || 0);
+      var scene = Number(row.scene_ready || 0);
+      var video = Number(row.video_ready || 0);
+      var failed = Number(row.failed || 0);
+      var tone = planRecordTone(row);
+      var title = (row.title || '方案') + (row.plan_id && row.plan_id === state.planId ? '（当前）' : '');
+      var updated = Number(row.updated_at_ts || 0) - Number(row.created_at_ts || 0) > 5;
+      return '<div class="lb-record-row" data-status="' + escapeHtml(tone) + '" data-lb-record-plan="' + escapeHtml(row.plan_id || '') + '" title="点击把这条方案原样回填到界面">' +
+        '<div class="lb-record-main"><strong>' + escapeHtml(title) + '</strong>' +
+        '<small>生成 ' + escapeHtml(planTimeText(row.created_at_ts)) + (updated ? ' · 更新 ' + escapeHtml(planTimeText(row.updated_at_ts)) : '') + '</small>' +
+        '<small>卡片 ' + total + ' 天 · 场景图 ' + scene + '/' + total + ' · 视频 ' + video + '/' + total + (failed ? ' · 失败 ' + failed : '') + '</small>' +
         '</div>' +
-        '<div class="lb-record-side"><span data-status="' + escapeHtml(statusText) + '">' + escapeHtml(recordsStatusLabel(statusText)) + '</span>' + actions.join('') + '</div>' +
+        '<div class="lb-record-side"><span data-status="' + escapeHtml(tone) + '">' + escapeHtml(planRecordLabel(row)) + '</span>' +
+        '<button type="button" class="btn btn-ghost btn-sm" data-lb-record-delete="' + escapeHtml(row.plan_id || '') + '">删除</button>' +
+        '</div>' +
         '</div>';
     }).join('');
     list.innerHTML = body;
@@ -1057,19 +1050,19 @@
     if (!base) return Promise.resolve();
     if (state.recordsLoading && !force) return Promise.resolve();
     state.recordsLoading = true;
-    renderRecords('正在加载生产记录...');
-    return fetch(base + '/api/comfly-seedance-tvc/pipeline/jobs?limit=' + RECORDS_LIMIT + '&feature=local_bestseller', { headers: headersUpload() })
+    renderRecords('正在加载方案记录...');
+    return fetch(base + '/api/local-bestseller/plans?limit=' + RECORDS_LIMIT, { headers: headersUpload() })
       .then(function(resp) {
         return resp.json().then(function(data) { return { ok: resp.ok, data: data || {} }; });
       })
       .then(function(result) {
-        if (!result.ok) throw new Error((result.data && result.data.detail) || '生产记录加载失败');
+        if (!result.ok) throw new Error((result.data && result.data.detail) || '方案记录加载失败');
         state.records = Array.isArray(result.data.items) ? result.data.items : [];
         renderRecords('');
       })
       .catch(function(err) {
         state.records = [];
-        renderRecords((err && err.message) || '生产记录加载失败');
+        renderRecords((err && err.message) || '方案记录加载失败');
       })
       .finally(function() {
         state.recordsLoading = false;
@@ -1097,83 +1090,87 @@
     state.records = [];
   }
 
-  function focusRecordDay(day) {
-    var item = findPlanItem(day);
-    if (!item) {
-      showMessage('当前方案里没有 Day ' + day + '：先生成包含这一天的方案，才能定位到卡片。', true);
-      return;
-    }
-    closeRecords();
-    renderPlan();
-    var card = document.querySelector('#localBestsellerResultGrid [data-lb-card-day="' + String(day) + '"]');
-    if (!card) return;
-    card.classList.add('is-record-focus');
-    if (card.scrollIntoView) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    window.setTimeout(function() { card.classList.remove('is-record-focus'); }, 2500);
+  function restorePlanRecord(planId) {
+    var base = localBase();
+    if (!base || !planId) return;
+    fetch(base + '/api/local-bestseller/plans/' + encodeURIComponent(planId), { headers: headersUpload() })
+      .then(function(resp) {
+        return resp.json().then(function(data) { return { ok: resp.ok, data: data || {} }; });
+      })
+      .then(function(result) {
+        if (!result.ok) throw new Error((result.data && result.data.detail) || '方案记录读取失败');
+        var plan = (result.data && result.data.plan) || {};
+        var items = Array.isArray(plan.items) ? plan.items : [];
+        if (!items.length) throw new Error('这条方案记录里没有卡片');
+        state.plan = normalizePlan(items);
+        state.planId = plan.plan_id || planId;
+        var days = state.plan.map(function(item) { return Number(item.day) || 0; }).filter(function(day) { return day > 0; });
+        state.planStartDay = Number(plan.day_start) || (days.length ? Math.min.apply(null, days) : 1);
+        state.planEndDay = Number(plan.day_end) || (days.length ? Math.max.apply(null, days) : state.planStartDay);
+        syncPlanRangeInputs();
+        ensureBgmOptions();
+        state.planSaveSuppressUntil = Date.now() + 1500;
+        closeRecords();
+        renderPlan();
+        updateButtons();
+        pollSubmittedVideos(state.plan);
+        showMessage(
+          '已回填方案：Day ' + state.planStartDay + '-' + state.planEndDay +
+          '，共 ' + state.plan.length + ' 天（' + planTimeText(plan.updated_at_ts || plan.created_at_ts) + '）。',
+          false
+        );
+      })
+      .catch(function(err) {
+        showMessage((err && err.message) || '方案记录读取失败', true);
+      });
   }
 
-  function ensurePlanCardForDay(day, record) {
-    var item = findPlanItem(day);
-    if (item) return item;
-    var card = normalizeItem({
-      id: String(day),
-      day: Number(day),
-      title: (record && record.title) || ('Day ' + day),
-      stage: (record && record.stage) || '',
-      hashtags: [],
-      subtitle_text: '',
-      scene_prompt: '',
-      video_prompt: (record && record.prompt) || ''
-    });
-    state.plan.push(card);
-    state.plan.sort(function(a, b) { return Number(a.day) - Number(b.day); });
-    return card;
+  function deletePlanRecord(planId) {
+    var base = localBase();
+    if (!base || !planId) return;
+    fetch(base + '/api/local-bestseller/plans/' + encodeURIComponent(planId), { method: 'DELETE', headers: headersUpload() })
+      .then(function(resp) {
+        return resp.json().then(function(data) { return { ok: resp.ok, data: data || {} }; });
+      })
+      .then(function(result) {
+        if (!result.ok) throw new Error((result.data && result.data.detail) || '删除失败');
+        if (state.planId === planId) state.planId = '';
+        loadRecords(true);
+      })
+      .catch(function(err) {
+        showMessage((err && err.message) || '删除失败', true);
+      });
   }
 
-  function restoreRecord(jobId) {
-    var record = (state.records || []).filter(function(row) { return row && row.job_id === jobId; })[0];
-    if (!record) {
-      showMessage('这条生产记录已经不在本地账本里了。', true);
-      return;
-    }
-    var day = record.day === null || record.day === undefined || record.day === '' ? '' : String(record.day);
-    if (!day) {
-      showMessage('这条记录没有 Day 信息，无法回填到结果卡。', true);
-      return;
-    }
-    var item = ensurePlanCardForDay(day, record);
+  // ---- 方案快照：卡片一变就（防抖）写回这条方案记录 ----
+  function schedulePlanSave() {
+    if (!state.plan.length) return;
+    if (Date.now() < (state.planSaveSuppressUntil || 0)) return;
+    if (state.planSaveTimer) window.clearTimeout(state.planSaveTimer);
+    state.planSaveTimer = window.setTimeout(savePlanSnapshot, 800);
+  }
 
-    var result = record.result && typeof record.result === 'object' ? record.result : {};
-    var refs = Array.isArray(result.reference_image_urls) ? result.reference_image_urls : [];
-    if (refs.length && !item.image_url && !item.scene_url) item.image_url = refs[0];
-    if (record.prompt && !item.video_prompt) item.video_prompt = record.prompt;
-
-    item.video_task_id = record.job_id;
-    item.video_poll_path = '/api/comfly-seedance-tvc/pipeline/jobs/' + encodeURIComponent(record.job_id);
-    item.record_stamp = '生产记录 ' + recordTimeText(record) + ' · 任务 ' + String(record.job_id || '').slice(0, 8);
-    updateVideoItemFromJob(item, record);
-    if (record.error) item.error = record.error;
-
-    closeRecords();
-    renderPlan();
-    updateButtons();
-
-    var card = document.querySelector('#localBestsellerResultGrid [data-lb-card-day="' + day + '"]');
-    if (card) {
-      card.classList.add('is-record-focus');
-      if (card.scrollIntoView) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
-      window.setTimeout(function() { card.classList.remove('is-record-focus'); }, 2500);
-    }
-
-    var status = String(record.status || '').toLowerCase();
-    if (status === 'running' || status === 'queued' || item.video_status === 'running') {
-      pollVideoJob(day);
-    }
-    showMessage(
-      '已回填 ' + (record.title || ('Day ' + day + ' 视频')) +
-      '（' + recordTimeText(record) + ' / 任务 ' + String(record.job_id || '').slice(0, 8) + '）到结果卡。',
-      false
-    );
+  function savePlanSnapshot() {
+    state.planSaveTimer = null;
+    var base = localBase();
+    if (!base || !state.plan.length) return Promise.resolve();
+    return fetch(base + '/api/local-bestseller/plans', {
+      method: 'POST',
+      headers: headersJson(),
+      body: JSON.stringify({
+        plan_id: state.planId || null,
+        days: Number(state.planEndDay) || state.plan.length,
+        profile: getProfile(),
+        items: state.plan
+      })
+    })
+      .then(function(resp) {
+        return resp.json().then(function(data) { return { ok: resp.ok, data: data || {} }; });
+      })
+      .then(function(result) {
+        if (result.ok && result.data && result.data.plan_id) state.planId = result.data.plan_id;
+      })
+      .catch(function() {});
   }
 
   function statusLabel(status) {
@@ -1225,6 +1222,7 @@
       })
       .then(function(result) {
         if (!result.ok) throw new Error((result.data && result.data.detail) || '生成失败');
+        state.planId = '';
         state.bgmOptions = Array.isArray(result.data.bgm_options) ? result.data.bgm_options.map(function(option, idx) {
           return normalizeBgmOption(option, 'bgm-' + idx);
         }) : [];
@@ -1829,15 +1827,15 @@ if (captioning) {
         closeRecords();
         return;
       }
-      var recordDayBtn = event.target.closest('[data-lb-record-day]');
-      if (recordDayBtn) {
-        focusRecordDay(recordDayBtn.getAttribute('data-lb-record-day'));
+      var recordDelete = event.target.closest('[data-lb-record-delete]');
+      if (recordDelete) {
+        deletePlanRecord(recordDelete.getAttribute('data-lb-record-delete'));
         return;
       }
-      var recordRow = event.target.closest('[data-lb-record-restore]');
-      if (recordRow) {
+      var recordPlan = event.target.closest('[data-lb-record-plan]');
+      if (recordPlan) {
         if (event.target.closest('button') || event.target.closest('a')) return;
-        restoreRecord(recordRow.getAttribute('data-lb-record-restore'));
+        restorePlanRecord(recordPlan.getAttribute('data-lb-record-plan'));
         return;
       }
       var bgmOption = event.target.closest('[data-lb-bgm-option][data-lb-bgm-key]');

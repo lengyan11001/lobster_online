@@ -1283,7 +1283,7 @@
                       <button type="button" id="localBestsellerBatchSceneAssetBtn" class="btn btn-ghost btn-sm" disabled>批量选择素材库底图</button>
                       <button type="button" id="localBestsellerBatchSceneTopBtn" class="btn btn-primary btn-sm" disabled>批量合成场景图片</button>
                       <button type="button" id="localBestsellerBatchVideoTopBtn" class="btn btn-ghost btn-sm" disabled>批量合成视频</button>
-                      <button type="button" id="localBestsellerRecordsBtn" class="btn btn-ghost btn-sm">生产记录</button>
+                      <button type="button" id="localBestsellerRecordsBtn" class="btn btn-ghost btn-sm">方案记录</button>
                       <input type="file" id="localBestsellerCardSceneInput" accept="image/*" style="display:none;">
                       <input type="file" id="localBestsellerBatchSceneInput" accept="image/*" multiple style="display:none;">
                     </div>
@@ -1315,11 +1315,11 @@
             <div id="localBestsellerRecordsModal" class="lb-records-modal" aria-hidden="true">
               <div class="lb-records-card">
                 <div class="lb-records-head">
-                  <strong>生产记录</strong>
+                  <strong>方案记录</strong>
                   <button type="button" id="localBestsellerRecordsClose" aria-label="关闭">×</button>
                 </div>
                 <div class="lb-records-toolbar">
-                  <span class="lb-records-hint" id="localBestsellerRecordsHint">本地任务账本（最近 30 条，账本按 3 天滚动）；完整产物在 skills/comfly_seedance_tvc_video/runs/job_runs 下。</span>
+                  <span class="lb-records-hint" id="localBestsellerRecordsHint">每次「生成方案」各一条记录；方案里生成过的场景图/视频原样保存，点一条即回填界面。</span>
                   <button type="button" class="btn btn-ghost btn-sm" data-lb-record-refresh>刷新</button>
                 </div>
                 <div id="localBestsellerRecordsList" class="lb-records-list"></div>
