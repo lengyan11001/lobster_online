@@ -57,6 +57,11 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 _LOCAL_BESTSELLER_CAPTION_LOCK = asyncio.Lock()
 
+# 2026-09-30：字幕/BGM 步骤的"单步超时"。以前只有 ffmpeg 有 600s 超时，
+# 前面的成片下载是 httpx 分操作超时（连接慢速滴数据时永不触发）→ 一直占着上面那把全局锁，
+# 后面所有卡片就永久排队等锁（界面一直显示"字幕合成中"）。
+CAPTION_DOWNLOAD_TIMEOUT = 300.0
+
 
 class ComflySeedancePipelinePayload(BaseModel):
     asset_id: Optional[str] = Field(None, description="主参考图素材 ID，与 image_url 二选一")
@@ -1362,7 +1367,7 @@ async def _caption_local_bestseller_video_if_needed(
             _local_bestseller_ass_content(subtitle_text, subtitle_style, day=meta.get("day")),
             encoding="utf-8",
         )
-        await _download_video_to_path(video_url, raw_path)
+        await asyncio.wait_for(_download_video_to_path(video_url, raw_path), timeout=CAPTION_DOWNLOAD_TIMEOUT)
         await asyncio.to_thread(_run_caption_ffmpeg, _ffmpeg_path_from_job(job), raw_path, ass_path, out_path)
         return _save_local_bestseller_caption_asset(
             user_id=int(job.get("user_id") or 0),
@@ -1409,7 +1414,7 @@ async def _mix_local_bestseller_bgm_if_needed(
         bgm_path = work_dir / "bgm_track.m4a"
         out_path = work_dir / "bgm_final.mp4"
         await _download_media_to_path(video_ref, input_path)
-        await _download_media_to_path(bgm_url, bgm_path)
+        await asyncio.wait_for(_download_media_to_path(bgm_url, bgm_path), timeout=CAPTION_DOWNLOAD_TIMEOUT)
         await asyncio.to_thread(_run_bgm_ffmpeg, _ffmpeg_path_from_job(job), input_path, bgm_path, out_path, volume)
         return _save_local_bestseller_post_asset(
             user_id=int(job.get("user_id") or 0),
