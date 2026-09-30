@@ -127,6 +127,7 @@ async def _fetch_video_provider_policy(
     request: Request,
     model: str,
     channel: str,
+    feature: str = "",
 ) -> Dict[str, Any]:
     server_base = (get_settings().auth_server_base or "").strip().rstrip("/")
     auth = _request_auth_header(request)
@@ -136,7 +137,11 @@ async def _fetch_video_provider_policy(
         async with httpx.AsyncClient(timeout=12.0) as client:
             resp = await client.get(
                 f"{server_base}/api/comfly-proxy/video/provider-policy",
-                params={"model": model or "", "channel": channel or "", "feature": "seedance_tvc"},
+                params={
+                    "model": model or "",
+                    "channel": channel or "",
+                    "feature": (feature or "").strip() or "seedance_tvc",
+                },
                 headers={"Authorization": auth},
             )
         if resp.status_code >= 400:
@@ -298,6 +303,7 @@ async def _prepare_pipeline_input(
     db: Session,
     request: Request,
     effective_output_dir: str,
+    feature: str = "",
 ) -> Dict[str, Any]:
     reference_images = await resolve_reference_images_for_pipeline_async(
         user_id=current_user.id,
@@ -340,6 +346,7 @@ async def _prepare_pipeline_input(
             request=request,
             model=video_model or pl.video_model or "",
             channel=video_channel or pl.video_channel or "",
+            feature=feature,
         )
     )
     policy_providers = policy.get("providers") if isinstance(policy.get("providers"), list) else []
@@ -1742,12 +1749,15 @@ async def start_seedance_tvc_pipeline_job(
     runs_root = (pl.output_dir or "").strip() or _default_runs_root()
     job_id = uuid.uuid4().hex
     effective_dir = str(Path(runs_root) / "job_runs" / job_id) if pl.isolate_job_dir else runs_root
+    # 同城爆款走自己的渠道策略（OpenMind 160 积分），别被其它功能的 wan3.0 兜底顶掉。
+    feature = str((meta or {}).get("feature") or "").strip()
     inp = await _prepare_pipeline_input(
         pl=pl,
         current_user=current_user,
         db=db,
         request=request,
         effective_output_dir=effective_dir,
+        feature=feature,
     )
     auth_header = _request_auth_header(request)
     installation_id = _request_installation_id(request)

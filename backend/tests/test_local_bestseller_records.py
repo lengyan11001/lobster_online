@@ -64,13 +64,37 @@ def test_local_bestseller_view_has_records_entry():
     js = (ROOT / "static/js/local-bestseller.js").read_text(encoding="utf-8")
     html = (ROOT / "static/index.html").read_text(encoding="utf-8")
 
+    # 入口按钮 + 弹窗（生产记录不常驻在结果区）
     assert 'id="localBestsellerRecordsBtn"' in html
-    assert 'id="localBestsellerRecords"' in html
-    assert "function loadRecords(" in js
+    assert 'id="localBestsellerRecordsModal"' in html
+    assert 'id="localBestsellerRecordsList"' in html
+    assert 'id="localBestsellerRecordsClose"' in html
+    assert js.count("function openRecords(") == 1
+    assert js.count("function closeRecords(") == 1
+    assert "toggleRecords" not in js
     assert "&feature=local_bestseller" in js
     assert "data-lb-record-refresh" in js
     assert "data-lb-record-day" in js
     assert "function refreshRecordsIfOpen(" in js
+
+
+def test_seedance_tvc_policy_fetch_passes_feature():
+    """同城爆款要拿到自己的渠道策略（OpenMind 160），必须把 feature 传到策略接口。"""
+    src = (ROOT / "backend/app/api/comfly_seedance_tvc.py").read_text(encoding="utf-8")
+    assert '"feature": (feature or "").strip() or "seedance_tvc",' in src
+    assert "feature=feature," in src
+    assert 'feature = str((meta or {}).get("feature") or "").strip()' in src
+
+
+def test_local_bestseller_batch_buttons_give_feedback_without_plan():
+    """顶部批量按钮不能点了没反应：缺方案时给提示，只有提交中才禁用。"""
+    js = (ROOT / "static/js/local-bestseller.js").read_text(encoding="utf-8")
+
+    assert "再批量上传底图" in js
+    assert "batchSceneTopBtn.disabled = state.submitting;" in js
+    assert "batchVideoTopBtn.disabled = state.submitting;" in js
+    assert "batchSceneTopBtn.disabled = state.submitting || !hasPlan;" not in js
+    assert "batchVideoTopBtn.disabled = state.submitting || !hasPlan || !hasSceneImage;" not in js
 
 
 def test_records_endpoint_filters_local_bestseller_over_http(tmp_path, monkeypatch):
