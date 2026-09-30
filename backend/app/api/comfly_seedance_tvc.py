@@ -1759,7 +1759,7 @@ async def start_seedance_tvc_pipeline_job(
         job_id=job_id,
         auth_header=auth_header,
         installation_id=installation_id,
-        meta=meta,
+        meta={**(meta or {}), "title": title},
     )
     asyncio.create_task(sync_creative_job_to_cloud(
         auth_header=auth_header,
@@ -1866,6 +1866,13 @@ def _recent_job_summary(job: Dict[str, Any], request: Optional[Request] = None) 
     task = inp.get("task") if isinstance(inp.get("task"), dict) else {}
     prompt = str(task.get("text") or inp.get("task_text") or "").strip()
     meta = job.get("meta") if isinstance(job.get("meta"), dict) else {}
+    job_title = str(meta.get("title") or "").strip()
+    if not job_title:
+        meta_day = meta.get("day")
+        if str(meta.get("feature") or "").strip() == "local_bestseller" and meta_day not in (None, ""):
+            job_title = f"同城爆款 Day {meta_day} 视频"
+        else:
+            job_title = "创意视频任务"
     return {
         "job_id": payload.get("job_id"),
         "status": payload.get("status"),
@@ -1879,7 +1886,9 @@ def _recent_job_summary(job: Dict[str, Any], request: Optional[Request] = None) 
         "error": payload.get("error"),
         "result": payload.get("result"),
         "saved_assets": payload.get("saved_assets") or [],
-        "title": str(meta.get("title") or "创意视频任务"),
+        "title": job_title,
+        "feature": str(meta.get("feature") or ""),
+        "day": meta.get("day"),
         "prompt": prompt,
     }
 
@@ -1991,9 +2000,10 @@ async def comfly_seedance_pipeline_job_status(
 async def comfly_seedance_pipeline_jobs(
     request: Request,
     limit: int = 60,
+    feature: str = "",
     current_user: _ServerUser = Depends(get_current_user_media_edit),
 ):
-    rows = list_jobs_for_user(int(current_user.id), limit=limit)
+    rows = list_jobs_for_user(int(current_user.id), limit=limit, feature=feature)
     return {
         "ok": True,
         "items": [_recent_job_summary(job, request=request) for job in rows],

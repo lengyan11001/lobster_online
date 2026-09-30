@@ -166,7 +166,13 @@ def update_job(job_id: str, **fields: Any) -> bool:
         return True
 
 
-def list_jobs_for_user(user_id: int, *, limit: int = 60) -> List[Dict[str, Any]]:
+def list_jobs_for_user(
+    user_id: int,
+    *,
+    limit: int = 60,
+    feature: str = "",
+) -> List[Dict[str, Any]]:
+    wanted_feature = (feature or "").strip()
     now = time.time()
     with JOBS_LOCK:
         _ensure_loaded_unlocked()
@@ -175,6 +181,10 @@ def list_jobs_for_user(user_id: int, *, limit: int = 60) -> List[Dict[str, Any]]
             dict(job)
             for job in _JOBS.values()
             if int(job.get("user_id") or -1) == int(user_id)
+            and (
+                not wanted_feature
+                or str(((job.get("meta") or {}).get("feature") or "")).strip() == wanted_feature
+            )
         ]
         rows.sort(key=lambda item: float(item.get("updated_at_ts") or item.get("created_at_ts") or 0), reverse=True)
         rows = rows[: max(1, int(limit or 12))]

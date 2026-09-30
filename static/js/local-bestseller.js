@@ -20,7 +20,9 @@
     submitting: false,
     sceneGenerating: {},
     videoGenerating: {},
-    videoPolling: {}
+    videoPolling: {},
+    records: [],
+    recordsLoading: false
   };
 
   function $(id) {
@@ -956,7 +958,7 @@
       var clearSceneBtn = sceneRefUrl ? '<button type="button" class="btn btn-ghost btn-sm" data-lb-clear-scene-ref="' + escapeHtml(item.day) + '">清除底图</button>' : '';
       var sceneRefActions = '<div class="lb-card-actions lb-card-actions-ref"><button type="button" class="btn btn-ghost btn-sm" data-lb-upload-scene-ref="' + escapeHtml(item.day) + '">上传底图</button><button type="button" class="btn btn-ghost btn-sm" data-lb-pick-scene-ref="' + escapeHtml(item.day) + '">选择底图</button>' + clearSceneBtn + '</div>';
       var renderActions = '<div class="lb-card-actions lb-card-actions-render"><button type="button" class="btn btn-primary btn-sm lb-card-action-main" data-lb-scene="' + escapeHtml(item.day) + '" ' + (sceneBusy ? 'disabled' : '') + '>' + escapeHtml(sceneBtnText) + '</button><button type="button" class="btn btn-primary btn-sm lb-card-action-main lb-card-action-alt" data-lb-video="' + escapeHtml(item.day) + '" ' + (videoBusy || !hasVideoSource ? 'disabled' : '') + '>' + escapeHtml(videoBtnText) + '</button></div>';
-      return '<article class="lb-result-card">' +
+      return '<article class="lb-result-card" data-lb-card-day="' + escapeHtml(item.day) + '">' +
         '<div class="lb-result-head"><span>Day ' + escapeHtml(item.day) + '</span><strong>' + escapeHtml(item.title) + '</strong><em>' + escapeHtml(item.stage) + '</em></div>' +
         '<div class="lb-result-preview"><div class="lb-phone-frame' + ((previewUrl || hasVideo) ? ' has-image' : '') + (hasVideo ? ' has-video' : '') + '">' + renderEffectPreview(item, previewUrl) + '</div></div>' +
         '<div class="lb-result-body">' +
@@ -971,6 +973,128 @@
         '<div class="lb-result-foot"><div class="lb-result-actions">' + sceneRefActions + renderActions + '</div><div class="lb-status-stack"><span data-status="' + escapeHtml(item.scene_status || item.status || 'ready') + '">' + escapeHtml(statusLabel(item.scene_status || item.status)) + '</span><span data-status="' + escapeHtml(item.video_status || 'ready') + '">' + escapeHtml(videoStatusLabel(item.video_status)) + '</span>' + videoTask + videoProgress + '</div></div>' +
       '</article>';
     }).join('');
+  }
+
+  // ---- 生产记录：每次「合成视频」都会在本地 job 账本里留一条（feature=local_bestseller） ----
+  var RECORDS_LIMIT = 30;
+
+  function recordsStatusLabel(status) {
+    if (status === 'completed') return '已完成';
+    if (status === 'failed') return '失败';
+    if (status === 'running') return '生成中';
+    if (status === 'queued') return '排队中';
+    if (status === 'partial_failure') return '部分失败';
+    return status ? String(status) : '未知';
+  }
+
+  function recordTimeText(row) {
+    var ts = Number((row && (row.updated_at_ts || row.created_at_ts)) || 0);
+    if (!ts) return '';
+    var d = new Date(ts * 1000);
+    function pad(n) { return (n < 10 ? '0' : '') + n; }
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  function recordVideoUrl(row) {
+    var result = row && row.result && typeof row.result === 'object' ? row.result : {};
+    var finalVideo = result.final_video && typeof result.final_video === 'object' ? result.final_video : {};
+    var assets = Array.isArray(result.saved_assets) ? result.saved_assets : (Array.isArray(row && row.saved_assets) ? row.saved_assets : []);
+    var savedUrl = '';
+    assets.forEach(function(entry) {
+      if (savedUrl) return;
+      var asset = entry && entry.asset && typeof entry.asset === 'object' ? entry.asset : {};
+      var kind = String((entry && entry.kind) || asset.kind || '').toLowerCase();
+      var url = asset.source_url || asset.open_url || '';
+      if (!url) return;
+      if (kind === 'local_bestseller_bgm_final' || kind === 'local_bestseller_caption_final' || !savedUrl) savedUrl = url;
+    });
+    return finalVideo.url || finalVideo.preview_url || finalVideo.local_preview_url || savedUrl || '';
+  }
+
+  function renderRecords(message) {
+    var panel = $('localBestsellerRecords');
+    if (!panel || panel.hidden) return;
+    var rows = Array.isArray(state.records) ? state.records : [];
+    var head = '<div class="lb-records-head"><strong>生产记录</strong>' +
+      '<span class="lb-records-hint">读取本地任务账本（最近 ' + RECORDS_LIMIT + ' 条，账本按 3 天滚动）；完整产物在 skills/comfly_seedance_tvc_video/runs/job_runs 下。</span>' +
+      '<span class="lb-records-actions"><button type="button" class="btn btn-ghost btn-sm" data-lb-record-refresh>刷新</button>' +
+      '<button type="button" class="btn btn-ghost btn-sm" data-lb-record-close>收起</button></span></div>';
+    var body = '';
+    if (message) body += '<div class="lb-records-msg">' + escapeHtml(message) + '</div>';
+    if (!rows.length && !message) body += '<div class="lb-records-msg">还没有生产记录：先在下面卡片点「合成视频」。</div>';
+    body += rows.map(function(row) {
+      var day = row && row.day !== null && row.day !== undefined && row.day !== '' ? String(row.day) : '';
+      var url = recordVideoUrl(row);
+      var actions = [];
+      if (day) actions.push('<button type="button" class="btn btn-ghost btn-sm" data-lb-record-day="' + escapeHtml(day) + '">定位 Day ' + escapeHtml(day) + '</button>');
+      if (url) actions.push('<a class="btn btn-ghost btn-sm" href="' + escapeHtml(url) + '" target="_blank" rel="noopener">看片</a>');
+      var statusText = row && row.status ? row.status : '';
+      return '<div class="lb-record-row" data-status="' + escapeHtml(statusText) + '">' +
+        '<div class="lb-record-main"><strong>' + escapeHtml((row && row.title) || '同城爆款视频') + '</strong>' +
+        '<small>' + escapeHtml(recordTimeText(row)) + (day ? ' · Day ' + escapeHtml(day) : '') + (row && row.job_id ? ' · 任务 ' + escapeHtml(String(row.job_id).slice(0, 8)) : '') + '</small>' +
+        (row && row.error ? '<small class="lb-record-error">' + escapeHtml(String(row.error).slice(0, 200)) + '</small>' : '') +
+        '</div>' +
+        '<div class="lb-record-side"><span data-status="' + escapeHtml(statusText) + '">' + escapeHtml(recordsStatusLabel(statusText)) + '</span>' + actions.join('') + '</div>' +
+        '</div>';
+    }).join('');
+    panel.innerHTML = head + '<div class="lb-records-list">' + body + '</div>';
+  }
+
+  function loadRecords(force) {
+    var panel = $('localBestsellerRecords');
+    if (!panel) return Promise.resolve();
+    var base = localBase();
+    if (!base) return Promise.resolve();
+    if (state.recordsLoading && !force) return Promise.resolve();
+    state.recordsLoading = true;
+    renderRecords('正在加载生产记录...');
+    return fetch(base + '/api/comfly-seedance-tvc/pipeline/jobs?limit=' + RECORDS_LIMIT + '&feature=local_bestseller', { headers: headersUpload() })
+      .then(function(resp) {
+        return resp.json().then(function(data) { return { ok: resp.ok, data: data || {} }; });
+      })
+      .then(function(result) {
+        if (!result.ok) throw new Error((result.data && result.data.detail) || '生产记录加载失败');
+        state.records = Array.isArray(result.data.items) ? result.data.items : [];
+        renderRecords('');
+      })
+      .catch(function(err) {
+        state.records = [];
+        renderRecords((err && err.message) || '生产记录加载失败');
+      })
+      .finally(function() {
+        state.recordsLoading = false;
+      });
+  }
+
+  function refreshRecordsIfOpen() {
+    var panel = $('localBestsellerRecords');
+    if (!panel || panel.hidden) return;
+    loadRecords(true);
+  }
+
+  function toggleRecords() {
+    var panel = $('localBestsellerRecords');
+    if (!panel) return;
+    panel.hidden = !panel.hidden;
+    if (panel.hidden) {
+      state.records = [];
+      return;
+    }
+    loadRecords(true);
+  }
+
+  function focusRecordDay(day) {
+    var item = findPlanItem(day);
+    if (!item) {
+      showMessage('当前方案里没有 Day ' + day + '：先生成包含这一天的方案，才能定位到卡片。', true);
+      return;
+    }
+    renderPlan();
+    var card = document.querySelector('#localBestsellerResultGrid [data-lb-card-day="' + String(day) + '"]');
+    if (!card) return;
+    card.classList.add('is-record-focus');
+    if (card.scrollIntoView) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    window.setTimeout(function() { card.classList.remove('is-record-focus'); }, 2500);
   }
 
   function statusLabel(status) {
@@ -1198,11 +1322,13 @@ if (captioning) {
           if (current.video_status === 'completed') {
             delete state.videoPolling[key];
             showMessage('Day ' + current.day + ' 视频已完成。', false);
+            refreshRecordsIfOpen();
             return;
           }
           if (current.video_status === 'failed') {
             delete state.videoPolling[key];
             showMessage('Day ' + current.day + ' 视频失败：' + (current.video_progress_label || ''), true);
+            refreshRecordsIfOpen();
             return;
           }
           window.setTimeout(once, 5000);
@@ -1376,6 +1502,7 @@ if (captioning) {
         if (!result.ok) throw new Error((result.data && result.data.detail) || '视频合成提交失败');
         mergeReturnedItems([result.data.item]);
         pollSubmittedVideos([result.data.item]);
+        refreshRecordsIfOpen();
         showMessage('Day ' + day + ' 视频已提交到创意分镜 Grok 队列，卡片会自动刷新进度。', false);
       })
       .catch(function(err) {
@@ -1563,6 +1690,8 @@ if (captioning) {
     if (batchSceneAssetBtn) batchSceneAssetBtn.addEventListener('click', openBatchSceneAssetPicker);
     var resetBtn = $('localBestsellerResetBtn');
     if (resetBtn) resetBtn.addEventListener('click', resetAll);
+    var recordsBtn = $('localBestsellerRecordsBtn');
+    if (recordsBtn) recordsBtn.addEventListener('click', toggleRecords);
     var gender = $('localBestsellerGender');
     if (gender) gender.addEventListener('change', function() {
       var identity = $('localBestsellerIdentity');
@@ -1592,6 +1721,19 @@ if (captioning) {
       updateButtons();
     });
     document.addEventListener('click', function(event) {
+      if (event.target.closest('[data-lb-record-refresh]')) {
+        loadRecords(true);
+        return;
+      }
+      if (event.target.closest('[data-lb-record-close]')) {
+        toggleRecords();
+        return;
+      }
+      var recordDayBtn = event.target.closest('[data-lb-record-day]');
+      if (recordDayBtn) {
+        focusRecordDay(recordDayBtn.getAttribute('data-lb-record-day'));
+        return;
+      }
       var bgmOption = event.target.closest('[data-lb-bgm-option][data-lb-bgm-key]');
       if (bgmOption) {
         applyBgmSelection(bgmOption.getAttribute('data-lb-bgm-option'), bgmOption.getAttribute('data-lb-bgm-key'));
