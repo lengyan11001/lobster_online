@@ -1080,7 +1080,10 @@
     );
   }
 
-  function updateVideoItemFromJob(item, data) {
+  // 字幕合成：超过这个时间没有新状态就判为中断（重启后任务消失也由这条兜底）
+var CAPTION_STALE_MS = 20 * 60 * 1000;
+
+function updateVideoItemFromJob(item, data) {
     if (!item || !data) return;
     var status = String(data.status || '').toLowerCase();
     var postStatus = String(data.post_status || '').toLowerCase();
@@ -1089,6 +1092,19 @@
     var captionReady = !!data.caption_ready;
     var label = data.progress_label || data.progress_detail || '';
     var captioning = requiresCaption && !captionReady && (status === 'completed' || postStatus === 'captioning' || postStage === 'burn_subtitle');
+var nowTs = Date.now();
+if (captioning) {
+  if (!item.video_captioning_since) item.video_captioning_since = nowTs;
+  if (nowTs - Number(item.video_captioning_since || nowTs) > CAPTION_STALE_MS) {
+    item.video_captioning_since = 0;
+    item.video_status = 'completed';
+    item.status = 'video_completed';
+    item.video_progress_label = '字幕合成中断，可点「重新合成视频」';
+    return;
+  }
+} else {
+  item.video_captioning_since = 0;
+}
     if (captioning) label = '字幕合成中';
     if (captioning && status === 'completed') {
       status = 'running';
@@ -1192,13 +1208,23 @@
           window.setTimeout(once, 5000);
         })
         .catch(function(err) {
-          var current = findPlanItem(dayOrId);
-          if (current) {
-            current.video_progress_label = (err && err.message) || '视频任务状态查询失败';
-            renderPlan();
-          }
-          window.setTimeout(once, 8000);
-        });
+      var current = findPlanItem(dayOrId);
+      if (current && (current.video_captioning_since || String(current.video_progress_label || '').indexOf('字幕') >= 0)) {
+        // 重启/任务已不存在：字幕阶段的任务直接判中断，不再无限轮询（可点「重新合成视频」）
+        current.video_captioning_since = 0;
+        current.video_status = 'completed';
+        current.status = 'video_completed';
+        current.video_progress_label = '字幕合成中断（任务已中断/不存在），可点「重新合成视频」';
+        delete state.videoPolling[key];
+        renderPlan();
+        return;
+      }
+      if (current) {
+        current.video_progress_label = (err && err.message) || '视频任务状态查询失败';
+        renderPlan();
+      }
+      window.setTimeout(once, 8000);
+    });
     }
 
     once();
