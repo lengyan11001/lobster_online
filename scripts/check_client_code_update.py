@@ -1103,6 +1103,34 @@ def _copy_file_atomic(src: Path, dst: Path) -> None:
                 pass
 
 
+# ── 用户数据红线（2026-09-30）──────────────────────────────────────────────
+# 代码 OTA 会对 manifest.paths 里列出的目录做"包里没有的文件就删掉"的对账。
+# 这些目录属于用户运行期数据/本机私有资源，任何情况下都不允许在升级时被删除。
+_USER_DATA_PROTECTED_RELS: tuple[str, ...] = (
+    "static/generated",      # 运行时产出（数字人员工头像等）
+    "static/hifly_avatars",  # 用户自己视频的人脸/抠像图
+    "static/hifly_previews", # 预览缓存
+    "static/uploads",        # 用户上传
+    "static/branding",       # 品牌图（含本机 OEM 资源，2026-09-20 build 341 事故）
+    "static/local",          # 本地私有静态资源（若存在）
+    "data",
+    "logs",
+    "assets",
+    ".updates",
+    "chat_storage",
+    "temp_assets",
+    "openclaw/workspace",
+    "openclaw/logs",
+    "openclaw/identity",
+    "native_wechat_data",
+)
+
+
+def _is_user_data_protected(rel: str) -> bool:
+    """升级时不得删除/覆盖的用户数据路径。"""
+    return _path_under_any(rel, _USER_DATA_PROTECTED_RELS)
+
+
 def _path_under_any(rel: str, prefixes: tuple[str, ...]) -> bool:
     r = _norm_rel(rel)
     for prefix in prefixes:
@@ -1113,7 +1141,7 @@ def _path_under_any(rel: str, prefixes: tuple[str, ...]) -> bool:
 
 
 def _sync_tree_incremental(src: Path, dst: Path, *, preserve_rels: tuple[str, ...] = ()) -> dict[str, int]:
-    stats = {"copied": 0, "skipped": 0, "removed": 0}
+    stats = {"copied": 0, "skipped": 0, "removed": 0, "preserved": 0}
     dst.mkdir(parents=True, exist_ok=True)
     src_files: set[str] = set()
 
@@ -1123,7 +1151,7 @@ def _sync_tree_incremental(src: Path, dst: Path, *, preserve_rels: tuple[str, ..
         rel = path.relative_to(src).as_posix()
         root_rel = _norm_rel(str(dst.relative_to(ROOT)))
         full_rel = f"{root_rel}/{rel}" if root_rel else rel
-        if _path_under_any(full_rel, preserve_rels):
+        if _path_under_any(full_rel, preserve_rels) or _is_user_data_protected(full_rel):
             stats["skipped"] += 1
             continue
         src_files.add(rel)
@@ -1139,6 +1167,10 @@ def _sync_tree_incremental(src: Path, dst: Path, *, preserve_rels: tuple[str, ..
         root_rel = _norm_rel(str(dst.relative_to(ROOT)))
         full_rel = f"{root_rel}/{rel}" if root_rel else rel
         if _path_under_any(full_rel, preserve_rels):
+            continue
+        if _is_user_data_protected(full_rel):
+            # 红线：用户数据目录里的文件永不因升级而删除（即使它没在包里）
+            stats["preserved"] = stats.get("preserved", 0) + 1
             continue
         if rel not in src_files:
             try:

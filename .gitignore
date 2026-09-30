@@ -116,3 +116,6 @@ wxautox*/
 backend/douyin_origin/douyin_protocol/node_modules/.package-lock.json
 /家德诗花漾森语手部护理组合_20260427_165740
 /家德诗花漾森语手部护理组合_20260427_174551
+
+# 用户自己视频的人脸/抠像产出（本机私有，不得入库/随 OTA 外带）
+static/hifly_avatars/

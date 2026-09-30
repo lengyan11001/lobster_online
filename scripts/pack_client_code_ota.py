@@ -138,11 +138,10 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     "static/css",
     "static/js",
     "static/views",
-    # 灵感画布（canvas-studio 视图内嵌的画布本体）：漏了它客户端只有视图、没有画布本体，
-    # 会直接 404 /static/canvas-web/index.html（2026-09-30 build 381 线上事故）。
+    # 灵感画布代码/功能资源（canvas-studio 视图内嵌的画布本体）。
+    # 只放代码与功能资源；用户运行期产出目录（static/generated、static/hifly_avatars、
+    # static/hifly_previews、static/uploads…）绝不能列进来：清单里的目录会按"包里没有的文件"对账删除。
     "static/canvas-web",
-    "static/hifly_avatars",
-    "static/skill-cards",
     "static/douyin-origin",
     "static/vendor",
     "static/data",
@@ -517,6 +516,9 @@ def _skip_file(rel: str) -> bool:
     nr = _norm(rel)
     # Runtime logs are local diagnostics, never deployable client code.
     if r.endswith(".log"):
+        return True
+    # 源码映射是开发调试产物，不是运行必需的代码/功能资源：只带代码与功能部分。
+    if r.endswith(".map"):
         return True
     if nr.lower().startswith(_OTA_RETIRED_SKILL_DIRS):
         return True
