@@ -76,6 +76,9 @@ def test_local_bestseller_view_has_records_entry():
     assert "data-lb-record-refresh" in js
     assert "data-lb-record-day" in js
     assert "function refreshRecordsIfOpen(" in js
+    assert 'id="localBestsellerRecordsHint"' in html
+    assert "item.record_stamp = '生产记录 '" in js
+    assert "lb-record-stamp" in js
 
 
 def test_record_row_restores_progress_and_materials():

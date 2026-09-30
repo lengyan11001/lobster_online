@@ -955,6 +955,7 @@
       var videoBtnText = videoBusy ? '提交中...' : (item.video_task_id ? '重新合成视频' : '合成视频');
       var videoTask = item.video_task_id ? '<small class="lb-task-id">视频任务：' + escapeHtml(item.video_task_id) + '</small>' : '';
       var videoProgress = item.video_progress_label ? '<small class="lb-task-id">' + escapeHtml(item.video_progress_label) + '</small>' : '';
+      var recordStamp = item.record_stamp ? '<small class="lb-task-id lb-record-stamp">' + escapeHtml(item.record_stamp) + '</small>' : '';
       var clearSceneBtn = sceneRefUrl ? '<button type="button" class="btn btn-ghost btn-sm" data-lb-clear-scene-ref="' + escapeHtml(item.day) + '">清除底图</button>' : '';
       var sceneRefActions = '<div class="lb-card-actions lb-card-actions-ref"><button type="button" class="btn btn-ghost btn-sm" data-lb-upload-scene-ref="' + escapeHtml(item.day) + '">上传底图</button><button type="button" class="btn btn-ghost btn-sm" data-lb-pick-scene-ref="' + escapeHtml(item.day) + '">选择底图</button>' + clearSceneBtn + '</div>';
       var renderActions = '<div class="lb-card-actions lb-card-actions-render"><button type="button" class="btn btn-primary btn-sm lb-card-action-main" data-lb-scene="' + escapeHtml(item.day) + '" ' + (sceneBusy ? 'disabled' : '') + '>' + escapeHtml(sceneBtnText) + '</button><button type="button" class="btn btn-primary btn-sm lb-card-action-main lb-card-action-alt" data-lb-video="' + escapeHtml(item.day) + '" ' + (videoBusy || !hasVideoSource ? 'disabled' : '') + '>' + escapeHtml(videoBtnText) + '</button></div>';
@@ -970,7 +971,7 @@
           renderBgmControls(item) +
           '<div class="lb-tags">' + tags + '</div>' +
         '</div>' +
-        '<div class="lb-result-foot"><div class="lb-result-actions">' + sceneRefActions + renderActions + '</div><div class="lb-status-stack"><span data-status="' + escapeHtml(item.scene_status || item.status || 'ready') + '">' + escapeHtml(statusLabel(item.scene_status || item.status)) + '</span><span data-status="' + escapeHtml(item.video_status || 'ready') + '">' + escapeHtml(videoStatusLabel(item.video_status)) + '</span>' + videoTask + videoProgress + '</div></div>' +
+        '<div class="lb-result-foot"><div class="lb-result-actions">' + sceneRefActions + renderActions + '</div><div class="lb-status-stack"><span data-status="' + escapeHtml(item.scene_status || item.status || 'ready') + '">' + escapeHtml(statusLabel(item.scene_status || item.status)) + '</span><span data-status="' + escapeHtml(item.video_status || 'ready') + '">' + escapeHtml(videoStatusLabel(item.video_status)) + '</span>' + videoTask + videoProgress + recordStamp + '</div></div>' +
       '</article>';
     }).join('');
   }
@@ -1025,6 +1026,10 @@
     var list = $('localBestsellerRecordsList');
     if (!list || !recordsVisible()) return;
     var rows = Array.isArray(state.records) ? state.records : [];
+    var hint = $('localBestsellerRecordsHint');
+    if (hint) {
+      hint.textContent = '共 ' + rows.length + ' 条记录（最近 30 条，账本按 3 天滚动）；同一天多次生产会各占一条；完整产物在 skills/comfly_seedance_tvc_video/runs/job_runs 下。';
+    }
     var body = '';
     if (message) body += '<div class="lb-records-msg">' + escapeHtml(message) + '</div>';
     if (!rows.length && !message) body += '<div class="lb-records-msg">还没有生产记录：先在结果卡上点「合成视频」。</div>';
@@ -1035,7 +1040,7 @@
       if (day) actions.push('<button type="button" class="btn btn-ghost btn-sm" data-lb-record-day="' + escapeHtml(day) + '">定位 Day ' + escapeHtml(day) + '</button>');
       if (url) actions.push('<a class="btn btn-ghost btn-sm" href="' + escapeHtml(url) + '" target="_blank" rel="noopener">看片</a>');
       var statusText = row && row.status ? row.status : '';
-      return '<div class="lb-record-row" data-status="' + escapeHtml(statusText) + '" data-lb-record-restore="' + escapeHtml(row && row.job_id ? row.job_id : '') + '" title="点击把这条记录回填到结果卡">' +
+      return '<div class="lb-record-row" data-status="' + escapeHtml(statusText) + '" data-lb-record-restore="' + escapeHtml(row && row.job_id ? row.job_id : '') + '" title="任务 ' + escapeHtml(row && row.job_id ? row.job_id : '') + ' · 点击回填到结果卡">' +
         '<div class="lb-record-main"><strong>' + escapeHtml((row && row.title) || '同城爆款视频') + '</strong>' +
         '<small>' + escapeHtml(recordTimeText(row)) + (day ? ' · Day ' + escapeHtml(day) : '') + (row && row.job_id ? ' · 任务 ' + escapeHtml(String(row.job_id).slice(0, 8)) : '') + '</small>' +
         (row && row.error ? '<small class="lb-record-error">' + escapeHtml(String(row.error).slice(0, 200)) + '</small>' : '') +
@@ -1145,6 +1150,7 @@
 
     item.video_task_id = record.job_id;
     item.video_poll_path = '/api/comfly-seedance-tvc/pipeline/jobs/' + encodeURIComponent(record.job_id);
+    item.record_stamp = '生产记录 ' + recordTimeText(record) + ' · 任务 ' + String(record.job_id || '').slice(0, 8);
     updateVideoItemFromJob(item, record);
     if (record.error) item.error = record.error;
 
@@ -1163,7 +1169,11 @@
     if (status === 'running' || status === 'queued' || item.video_status === 'running') {
       pollVideoJob(day);
     }
-    showMessage('已把 Day ' + day + ' 的生产记录（进度/素材）回填到结果卡。', false);
+    showMessage(
+      '已回填 ' + (record.title || ('Day ' + day + ' 视频')) +
+      '（' + recordTimeText(record) + ' / 任务 ' + String(record.job_id || '').slice(0, 8) + '）到结果卡。',
+      false
+    );
   }
 
   function statusLabel(status) {
