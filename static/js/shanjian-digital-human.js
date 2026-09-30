@@ -767,7 +767,9 @@
     item = item || {};
     var kind = taskStatusKind(item.status);
     return Object.assign({}, item, {
-      status_kind: kind
+      status_kind: kind,
+      script_source: String(item.script_source || ''),
+      script_sources: Array.isArray(item.script_sources) ? item.script_sources : []
     });
   }
 
@@ -3035,6 +3037,15 @@
     }
     var statusBadge = '<span class="shanjian-result-pill" data-tone="' + statusTone + '">'
       + escapeHtml(item.status_text || '处理中') + '</span>';
+
+    var shanjianScriptSourceLabel = ({
+      ip_daily_industry_hot_oral: '行业口播',
+      ip_daily_professional_ip_oral: 'IP口播'
+    })[String(item.script_source || '')] || '';
+    var sourceBadge = shanjianScriptSourceLabel
+      ? '<span class="shanjian-result-pill" data-tone="info" title="本条口播文案来源">'
+        + escapeHtml(shanjianScriptSourceLabel) + '</span>'
+      : '';
     var openBtn = (videoUrl && statusKind === 'success')
       ? '<button type="button" class="btn btn-ghost btn-sm shanjian-video-history-play" data-task-id="'
         + escapeHtml(item.task_id || '') + '">预览</button>'
@@ -3058,6 +3069,7 @@
       + '<strong style="font-size:0.9rem;color:#243957;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'
       + escapeHtml(item.title || '数字人口播') + '</strong>'
       + statusBadge
+      + sourceBadge
       + '</div>'
       + (textSnippet ? '<div style="font-size:0.75rem;color:#75839a;line-height:1.45;">' + escapeHtml(textSnippet) + '</div>' : '')
       + '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + openBtn + downloadBtn + refreshBtn + deleteBtn + '</div>'
