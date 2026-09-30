@@ -138,6 +138,11 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     "static/css",
     "static/js",
     "static/views",
+    # 灵感画布（canvas-studio 视图内嵌的画布本体）：漏了它客户端只有视图、没有画布本体，
+    # 会直接 404 /static/canvas-web/index.html（2026-09-30 build 381 线上事故）。
+    "static/canvas-web",
+    "static/hifly_avatars",
+    "static/skill-cards",
     "static/douyin-origin",
     "static/vendor",
     "static/data",
