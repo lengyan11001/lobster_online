@@ -78,6 +78,23 @@ def test_local_bestseller_view_has_records_entry():
     assert "function refreshRecordsIfOpen(" in js
 
 
+def test_record_row_restores_progress_and_materials():
+    """点生产记录某一行：把该次的进度/素材回填到结果卡，并关闭弹窗。"""
+    js = (ROOT / "static/js/local-bestseller.js").read_text(encoding="utf-8")
+
+    assert 'data-lb-record-restore=' in js
+    assert js.count("function restoreRecord(") == 1
+    assert js.count("function ensurePlanCardForDay(") == 1
+    assert "updateVideoItemFromJob(item, record);" in js
+    assert "item.video_task_id = record.job_id;" in js
+    assert "item.video_poll_path = '/api/comfly-seedance-tvc/pipeline/jobs/'" in js
+    assert "result.reference_image_urls" in js
+    assert "closeRecords();\n    renderPlan();" in js
+    assert "pollVideoJob(day);" in js
+    # 行内按钮（定位/看片）不能被整行点击吃掉
+    assert "if (event.target.closest('button') || event.target.closest('a')) return;" in js
+
+
 def test_seedance_tvc_policy_fetch_passes_feature():
     """同城爆款要拿到自己的渠道策略（OpenMind 160），必须把 feature 传到策略接口。"""
     src = (ROOT / "backend/app/api/comfly_seedance_tvc.py").read_text(encoding="utf-8")

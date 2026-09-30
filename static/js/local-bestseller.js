@@ -976,6 +976,7 @@
   }
 
   // ---- 生产记录：每次「合成视频」都会在本地 job 账本里留一条（feature=local_bestseller） ----
+  // 以弹窗展示，不在结果区常驻。
   var RECORDS_LIMIT = 30;
 
   function recordsStatusLabel(status) {
@@ -1011,17 +1012,22 @@
     return finalVideo.url || finalVideo.preview_url || finalVideo.local_preview_url || savedUrl || '';
   }
 
+  function recordsModalEl() {
+    return $('localBestsellerRecordsModal');
+  }
+
+  function recordsVisible() {
+    var modal = recordsModalEl();
+    return !!(modal && modal.classList.contains('is-visible'));
+  }
+
   function renderRecords(message) {
-    var panel = $('localBestsellerRecords');
-    if (!panel || panel.hidden) return;
+    var list = $('localBestsellerRecordsList');
+    if (!list || !recordsVisible()) return;
     var rows = Array.isArray(state.records) ? state.records : [];
-    var head = '<div class="lb-records-head"><strong>生产记录</strong>' +
-      '<span class="lb-records-hint">读取本地任务账本（最近 ' + RECORDS_LIMIT + ' 条，账本按 3 天滚动）；完整产物在 skills/comfly_seedance_tvc_video/runs/job_runs 下。</span>' +
-      '<span class="lb-records-actions"><button type="button" class="btn btn-ghost btn-sm" data-lb-record-refresh>刷新</button>' +
-      '<button type="button" class="btn btn-ghost btn-sm" data-lb-record-close>收起</button></span></div>';
     var body = '';
     if (message) body += '<div class="lb-records-msg">' + escapeHtml(message) + '</div>';
-    if (!rows.length && !message) body += '<div class="lb-records-msg">还没有生产记录：先在下面卡片点「合成视频」。</div>';
+    if (!rows.length && !message) body += '<div class="lb-records-msg">还没有生产记录：先在结果卡上点「合成视频」。</div>';
     body += rows.map(function(row) {
       var day = row && row.day !== null && row.day !== undefined && row.day !== '' ? String(row.day) : '';
       var url = recordVideoUrl(row);
@@ -1029,7 +1035,7 @@
       if (day) actions.push('<button type="button" class="btn btn-ghost btn-sm" data-lb-record-day="' + escapeHtml(day) + '">定位 Day ' + escapeHtml(day) + '</button>');
       if (url) actions.push('<a class="btn btn-ghost btn-sm" href="' + escapeHtml(url) + '" target="_blank" rel="noopener">看片</a>');
       var statusText = row && row.status ? row.status : '';
-      return '<div class="lb-record-row" data-status="' + escapeHtml(statusText) + '">' +
+      return '<div class="lb-record-row" data-status="' + escapeHtml(statusText) + '" data-lb-record-restore="' + escapeHtml(row && row.job_id ? row.job_id : '') + '" title="点击把这条记录回填到结果卡">' +
         '<div class="lb-record-main"><strong>' + escapeHtml((row && row.title) || '同城爆款视频') + '</strong>' +
         '<small>' + escapeHtml(recordTimeText(row)) + (day ? ' · Day ' + escapeHtml(day) : '') + (row && row.job_id ? ' · 任务 ' + escapeHtml(String(row.job_id).slice(0, 8)) : '') + '</small>' +
         (row && row.error ? '<small class="lb-record-error">' + escapeHtml(String(row.error).slice(0, 200)) + '</small>' : '') +
@@ -1037,12 +1043,11 @@
         '<div class="lb-record-side"><span data-status="' + escapeHtml(statusText) + '">' + escapeHtml(recordsStatusLabel(statusText)) + '</span>' + actions.join('') + '</div>' +
         '</div>';
     }).join('');
-    panel.innerHTML = head + '<div class="lb-records-list">' + body + '</div>';
+    list.innerHTML = body;
   }
 
   function loadRecords(force) {
-    var panel = $('localBestsellerRecords');
-    if (!panel) return Promise.resolve();
+    if (!recordsVisible()) return Promise.resolve();
     var base = localBase();
     if (!base) return Promise.resolve();
     if (state.recordsLoading && !force) return Promise.resolve();
@@ -1067,20 +1072,24 @@
   }
 
   function refreshRecordsIfOpen() {
-    var panel = $('localBestsellerRecords');
-    if (!panel || panel.hidden) return;
+    if (!recordsVisible()) return;
     loadRecords(true);
   }
 
-  function toggleRecords() {
-    var panel = $('localBestsellerRecords');
-    if (!panel) return;
-    panel.hidden = !panel.hidden;
-    if (panel.hidden) {
-      state.records = [];
-      return;
-    }
+  function openRecords() {
+    var modal = recordsModalEl();
+    if (!modal) return;
+    modal.classList.add('is-visible');
+    modal.setAttribute('aria-hidden', 'false');
     loadRecords(true);
+  }
+
+  function closeRecords() {
+    var modal = recordsModalEl();
+    if (!modal) return;
+    modal.classList.remove('is-visible');
+    modal.setAttribute('aria-hidden', 'true');
+    state.records = [];
   }
 
   function focusRecordDay(day) {
@@ -1089,12 +1098,72 @@
       showMessage('当前方案里没有 Day ' + day + '：先生成包含这一天的方案，才能定位到卡片。', true);
       return;
     }
+    closeRecords();
     renderPlan();
     var card = document.querySelector('#localBestsellerResultGrid [data-lb-card-day="' + String(day) + '"]');
     if (!card) return;
     card.classList.add('is-record-focus');
     if (card.scrollIntoView) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
     window.setTimeout(function() { card.classList.remove('is-record-focus'); }, 2500);
+  }
+
+  function ensurePlanCardForDay(day, record) {
+    var item = findPlanItem(day);
+    if (item) return item;
+    var card = normalizeItem({
+      id: String(day),
+      day: Number(day),
+      title: (record && record.title) || ('Day ' + day),
+      stage: (record && record.stage) || '',
+      hashtags: [],
+      subtitle_text: '',
+      scene_prompt: '',
+      video_prompt: (record && record.prompt) || ''
+    });
+    state.plan.push(card);
+    state.plan.sort(function(a, b) { return Number(a.day) - Number(b.day); });
+    return card;
+  }
+
+  function restoreRecord(jobId) {
+    var record = (state.records || []).filter(function(row) { return row && row.job_id === jobId; })[0];
+    if (!record) {
+      showMessage('这条生产记录已经不在本地账本里了。', true);
+      return;
+    }
+    var day = record.day === null || record.day === undefined || record.day === '' ? '' : String(record.day);
+    if (!day) {
+      showMessage('这条记录没有 Day 信息，无法回填到结果卡。', true);
+      return;
+    }
+    var item = ensurePlanCardForDay(day, record);
+
+    var result = record.result && typeof record.result === 'object' ? record.result : {};
+    var refs = Array.isArray(result.reference_image_urls) ? result.reference_image_urls : [];
+    if (refs.length && !item.image_url && !item.scene_url) item.image_url = refs[0];
+    if (record.prompt && !item.video_prompt) item.video_prompt = record.prompt;
+
+    item.video_task_id = record.job_id;
+    item.video_poll_path = '/api/comfly-seedance-tvc/pipeline/jobs/' + encodeURIComponent(record.job_id);
+    updateVideoItemFromJob(item, record);
+    if (record.error) item.error = record.error;
+
+    closeRecords();
+    renderPlan();
+    updateButtons();
+
+    var card = document.querySelector('#localBestsellerResultGrid [data-lb-card-day="' + day + '"]');
+    if (card) {
+      card.classList.add('is-record-focus');
+      if (card.scrollIntoView) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      window.setTimeout(function() { card.classList.remove('is-record-focus'); }, 2500);
+    }
+
+    var status = String(record.status || '').toLowerCase();
+    if (status === 'running' || status === 'queued' || item.video_status === 'running') {
+      pollVideoJob(day);
+    }
+    showMessage('已把 Day ' + day + ' 的生产记录（进度/素材）回填到结果卡。', false);
   }
 
   function statusLabel(status) {
@@ -1584,10 +1653,23 @@ if (captioning) {
     if (title) title.textContent = hasPlan ? (currentPlanLabel() + '结果卡') : (planLabel() + '结果卡');
     var emptyHint = $('localBestsellerEmptyHint');
     if (emptyHint) emptyHint.textContent = '先选择照片并填写个人信息，再生成' + planLabel() + '同城爆款方案。';
-    if (batchSceneUploadBtn) batchSceneUploadBtn.disabled = state.submitting || !hasPlan;
-    if (batchSceneAssetBtn) batchSceneAssetBtn.disabled = state.submitting || !hasPlan;
-    if (batchSceneTopBtn) batchSceneTopBtn.disabled = state.submitting || !hasPlan;
-    if (batchVideoTopBtn) batchVideoTopBtn.disabled = state.submitting || !hasPlan || !hasSceneImage;
+    var planHint = hasPlan ? '' : '先生成' + planLabel() + '方案后才能用';
+    if (batchSceneUploadBtn) {
+      batchSceneUploadBtn.disabled = state.submitting;
+      batchSceneUploadBtn.title = planHint || '给所有卡片批量上传底图';
+    }
+    if (batchSceneAssetBtn) {
+      batchSceneAssetBtn.disabled = state.submitting;
+      batchSceneAssetBtn.title = planHint || '从素材库批量选择底图';
+    }
+    if (batchSceneTopBtn) {
+      batchSceneTopBtn.disabled = state.submitting;
+      batchSceneTopBtn.title = planHint || '按当前卡片批量合成场景图片';
+    }
+    if (batchVideoTopBtn) {
+      batchVideoTopBtn.disabled = state.submitting;
+      batchVideoTopBtn.title = planHint || (hasSceneImage ? '给已有场景图的卡片批量合成视频' : '先生成/选择场景图片后才能批量合成视频');
+    }
   }
 
   function resetAll() {
@@ -1685,13 +1767,21 @@ if (captioning) {
       batchSceneInput.value = '';
     });
     var batchSceneUploadBtn = $('localBestsellerBatchSceneUploadBtn');
-    if (batchSceneUploadBtn && batchSceneInput) batchSceneUploadBtn.addEventListener('click', function() { batchSceneInput.click(); });
+    if (batchSceneUploadBtn && batchSceneInput) batchSceneUploadBtn.addEventListener('click', function() {
+      if (!state.plan.length) {
+        showMessage('请先生成' + planLabel() + '方案，再批量上传底图。', true);
+        return;
+      }
+      batchSceneInput.click();
+    });
     var batchSceneAssetBtn = $('localBestsellerBatchSceneAssetBtn');
     if (batchSceneAssetBtn) batchSceneAssetBtn.addEventListener('click', openBatchSceneAssetPicker);
     var resetBtn = $('localBestsellerResetBtn');
     if (resetBtn) resetBtn.addEventListener('click', resetAll);
     var recordsBtn = $('localBestsellerRecordsBtn');
-    if (recordsBtn) recordsBtn.addEventListener('click', toggleRecords);
+    if (recordsBtn) recordsBtn.addEventListener('click', openRecords);
+    var recordsCloseBtn = $('localBestsellerRecordsClose');
+    if (recordsCloseBtn) recordsCloseBtn.addEventListener('click', closeRecords);
     var gender = $('localBestsellerGender');
     if (gender) gender.addEventListener('change', function() {
       var identity = $('localBestsellerIdentity');
@@ -1726,12 +1816,18 @@ if (captioning) {
         return;
       }
       if (event.target.closest('[data-lb-record-close]')) {
-        toggleRecords();
+        closeRecords();
         return;
       }
       var recordDayBtn = event.target.closest('[data-lb-record-day]');
       if (recordDayBtn) {
         focusRecordDay(recordDayBtn.getAttribute('data-lb-record-day'));
+        return;
+      }
+      var recordRow = event.target.closest('[data-lb-record-restore]');
+      if (recordRow) {
+        if (event.target.closest('button') || event.target.closest('a')) return;
+        restoreRecord(recordRow.getAttribute('data-lb-record-restore'));
         return;
       }
       var bgmOption = event.target.closest('[data-lb-bgm-option][data-lb-bgm-key]');
@@ -1826,6 +1922,10 @@ if (captioning) {
         state.selectedVideo = null;
         renderSelectedMedia();
       }
+    });
+    var recordsModal = recordsModalEl();
+    if (recordsModal) recordsModal.addEventListener('click', function(event) {
+      if (event.target === recordsModal) closeRecords();
     });
     document.addEventListener('fullscreenchange', syncLocalBestsellerVideoFullscreenState);
     document.addEventListener('webkitfullscreenchange', syncLocalBestsellerVideoFullscreenState);
