@@ -50,12 +50,42 @@ def _save_store_to_disk_unlocked() -> None:
     tmp.replace(_JOB_STORE_FILE)
 
 
+_NON_TERMINAL_STATUS = {"running", "queued", "pending", "submitted", "processing"}
+_NON_TERMINAL_POST = {"running", "queued", "captioning", "mixing_bgm", "burn_subtitle", "mix_bgm"}
+
+
+def _finalize_orphans_unlocked() -> bool:
+    """进程刚起来时（内存为空）把磁盘上"未完成"的 job 收尾成中断。
+
+    这些 job 的执行协程已经随上次进程结束而消失，永远不会再推进；
+    不收尾的话界面会一直显示"进行中/字幕合成中"（2026-09-30 线上现象）。
+    """
+    now = time.time()
+    changed = False
+    for job in _JOBS.values():
+        status = str(job.get("status") or "").strip().lower()
+        post_status = str(job.get("post_status") or "").strip().lower()
+        if status not in _NON_TERMINAL_STATUS and post_status not in _NON_TERMINAL_POST:
+            continue
+        if status in _NON_TERMINAL_STATUS:
+            job["status"] = "failed"
+            job["error"] = job.get("error") or "客户端重启中断，任务未完成"
+        job["post_status"] = "interrupted"
+        job["post_stage"] = ""
+        job["post_error"] = "客户端重启中断，字幕/合成未完成（可点「重新合成视频」）"
+        job["updated_at_ts"] = now
+        changed = True
+    return changed
+
+
 def _ensure_loaded_unlocked() -> None:
     if _JOBS:
         return
     disk_rows = _load_store_from_disk()
     if disk_rows:
         _JOBS.update(disk_rows)
+        if _finalize_orphans_unlocked():
+            _save_store_to_disk_unlocked()
 
 
 def _prune_stale_unlocked(now: float) -> None:

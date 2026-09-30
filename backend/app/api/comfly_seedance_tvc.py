@@ -57,6 +57,19 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 _LOCAL_BESTSELLER_CAPTION_LOCK = asyncio.Lock()
 
+# 2026-09-30：字幕合成原来是"全局一把锁"，一条卡住全站排队。
+# 改成按用户加锁：不同用户互不影响；同一用户内部仍然串行（避免同时跑多个 ffmpeg）。
+_LOCAL_BESTSELLER_CAPTION_LOCKS: Dict[int, asyncio.Lock] = {}
+
+
+def _caption_lock_for(user_id: int) -> asyncio.Lock:
+    key = int(user_id or 0)
+    lock = _LOCAL_BESTSELLER_CAPTION_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _LOCAL_BESTSELLER_CAPTION_LOCKS[key] = lock
+    return lock
+
 # 2026-09-30：字幕/BGM 步骤的"单步超时"。以前只有 ffmpeg 有 600s 超时，
 # 前面的成片下载是 httpx 分操作超时（连接慢速滴数据时永不触发）→ 一直占着上面那把全局锁，
 # 后面所有卡片就永久排队等锁（界面一直显示"字幕合成中"）。
@@ -1355,7 +1368,7 @@ async def _caption_local_bestseller_video_if_needed(
     if not video_url:
         raise RuntimeError("同城爆款字幕合成失败：未找到原视频 URL")
 
-    async with _LOCAL_BESTSELLER_CAPTION_LOCK:
+    async with _caption_lock_for(int(job.get("user_id") or 0)):
         update_job(job_id, post_status="captioning", post_stage="burn_subtitle")
         work_dir = Path(job.get("job_output_dir") or _default_runs_root()) / "caption_post"
         work_dir.mkdir(parents=True, exist_ok=True)
