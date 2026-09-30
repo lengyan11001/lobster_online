@@ -11259,6 +11259,8 @@ body.online-mastra-chat-compose .online-mastra-chat {
 #content-local-bestseller .lb-records-head button { border:0; background:transparent; font-size:1.4rem; line-height:1; color:#64748b; cursor:pointer; }
 #content-local-bestseller .lb-records-toolbar { flex:0 0 auto; display:flex; align-items:center; gap:0.6rem; padding:0.7rem 1.15rem 0; }
 #content-local-bestseller .lb-records-hint { flex:1 1 auto; font-size:0.75rem; color:#64748b; }
+#content-local-bestseller .lb-records-page { flex:0 0 auto; font-size:0.78rem; color:#475569; white-space:nowrap; }
+#content-local-bestseller .lb-records-toolbar .btn:disabled { opacity:0.45; cursor:not-allowed; }
 #content-local-bestseller .lb-records-list { flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:0.85rem 1.15rem 1.15rem; display:flex; flex-direction:column; gap:0.45rem; }
 #content-local-bestseller .lb-records-msg { font-size:0.84rem; color:#64748b; }
 #content-local-bestseller .lb-record-row { display:flex; align-items:center; gap:0.6rem; padding:0.6rem 0.7rem; border:1px solid #e8edf5; border-radius:10px; background:#f8fafc; }

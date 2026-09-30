@@ -149,6 +149,20 @@ def test_new_plan_is_a_new_record(plan_file):
     assert len(plan_file.list_plans(31)) == 2
 
 
+def test_plan_list_paging(plan_file):
+    for _ in range(5):
+        plan_file.create_plan(user_id=31, items=[_card(1)], day_start=1, day_end=1)
+    assert plan_file.count_plans(31) == 5
+
+    first = plan_file.list_plans(31, limit=2, offset=0)
+    second = plan_file.list_plans(31, limit=2, offset=2)
+    third = plan_file.list_plans(31, limit=2, offset=4)
+    assert len(first) == 2 and len(second) == 2 and len(third) == 1
+    seen = {row["plan_id"] for row in first} | {row["plan_id"] for row in second}
+    assert seen.isdisjoint({row["plan_id"] for row in third})
+    assert len({row["plan_id"] for row in plan_file.list_plans(31, limit=10)}) == 5
+
+
 # ---------- 3) 方案记录：HTTP 接口 ----------
 
 def test_plan_record_http_endpoints(plan_file):
@@ -184,6 +198,22 @@ def test_plan_record_http_endpoints(plan_file):
     assert client.get(f"/api/local-bestseller/plans/{plan_id}").status_code == 404
 
 
+def test_plan_list_http_paging(plan_file):
+    client = _plan_client()
+    for _ in range(3):
+        client.post("/api/local-bestseller/plans", json={"items": [_card(1)], "days": 1})
+
+    page1 = client.get("/api/local-bestseller/plans", params={"limit": 2, "offset": 0}).json()
+    assert page1["total"] == 3
+    assert len(page1["items"]) == 2
+    assert page1["limit"] == 2 and page1["offset"] == 0
+
+    page2 = client.get("/api/local-bestseller/plans", params={"limit": 2, "offset": 2}).json()
+    assert len(page2["items"]) == 1
+    assert page2["offset"] == 2
+    assert {row["plan_id"] for row in page1["items"]}.isdisjoint({row["plan_id"] for row in page2["items"]})
+
+
 def test_plan_save_rejects_empty_items(plan_file):
     client = _plan_client()
     assert client.post("/api/local-bestseller/plans", json={"items": []}).status_code == 400
@@ -202,11 +232,20 @@ def test_view_uses_plan_records_and_snapshots_plan():
     assert 'id="localBestsellerRecordsClose"' in html
 
     # 弹窗列方案、点一条原样回填
-    assert "local-bestseller/plans?limit=" in js
+    assert "'/api/local-bestseller/plans' + query" in js
     assert js.count("function restorePlanRecord(") == 1
     assert "state.plan = normalizePlan(items);" in js
     assert "data-lb-record-plan=" in js
     assert "data-lb-record-delete=" in js
+
+    # 分页：上一页/下一页 + 第 x/y 页
+    assert 'id="localBestsellerRecordsPage"' in html
+    assert "data-lb-record-prev" in html
+    assert "data-lb-record-next" in html
+    assert "function recordsPageCount(" in js
+    assert "'?limit=' + RECORDS_PAGE_SIZE + '&offset='" in js
+    assert "loadRecords(true, prevPage)" in js
+    assert "loadRecords(true, nextPage)" in js
 
     # 每次「生成方案」各一条 + 卡片变化自动写快照
     assert "state.planId = '';" in js

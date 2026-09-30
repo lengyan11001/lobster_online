@@ -1159,12 +1159,20 @@ async def local_bestseller_plans_save(
     return {"ok": True, "plan_id": plan_id, "created": True}
 
 
-@router.get("/api/local-bestseller/plans", summary="同城爆款方案记录列表")
+@router.get("/api/local-bestseller/plans", summary="同城爆款方案记录列表（分页）")
 async def local_bestseller_plans_list(
-    limit: int = 30,
+    limit: int = 10,
+    offset: int = 0,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
-    return {"ok": True, "items": plan_store.list_plans(int(current_user.id), limit=limit)}
+    user_id = int(current_user.id)
+    return {
+        "ok": True,
+        "items": plan_store.list_plans(user_id, limit=limit, offset=offset),
+        "total": plan_store.count_plans(user_id),
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/api/local-bestseller/plans/{plan_id}", summary="同城爆款方案记录详情（原样返回卡片）")

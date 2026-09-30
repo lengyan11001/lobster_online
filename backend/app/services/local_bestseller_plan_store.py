@@ -158,19 +158,32 @@ def update_plan(
         return True
 
 
-def list_plans(user_id: int, *, limit: int = 30) -> List[Dict[str, Any]]:
+def _rows_for_user_unlocked(user_id: int, now: float) -> List[Dict[str, Any]]:
+    _ensure_loaded_unlocked()
+    _prune_unlocked(now)
+    rows = [
+        _summary(plan)
+        for plan in _PLANS.values()
+        if int(plan.get("user_id") or -1) == int(user_id)
+    ]
+    rows.sort(key=lambda row: float(row.get("updated_at_ts") or row.get("created_at_ts") or 0), reverse=True)
+    return rows
+
+
+def list_plans(user_id: int, *, limit: int = 30, offset: int = 0) -> List[Dict[str, Any]]:
     now = time.time()
     with _LOCK:
-        _ensure_loaded_unlocked()
-        _prune_unlocked(now)
-        rows = [
-            _summary(plan)
-            for plan in _PLANS.values()
-            if int(plan.get("user_id") or -1) == int(user_id)
-        ]
-        rows.sort(key=lambda row: float(row.get("updated_at_ts") or row.get("created_at_ts") or 0), reverse=True)
+        rows = _rows_for_user_unlocked(user_id, now)
+        start = max(0, int(offset or 0))
+        size = max(1, int(limit or 30))
         _save_unlocked()
-        return rows[: max(1, int(limit or 30))]
+        return rows[start : start + size]
+
+
+def count_plans(user_id: int) -> int:
+    now = time.time()
+    with _LOCK:
+        return len(_rows_for_user_unlocked(user_id, now))
 
 
 def get_plan(plan_id: str, *, user_id: int) -> Optional[Dict[str, Any]]:

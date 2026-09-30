@@ -25,7 +25,9 @@
     recordsLoading: false,
     planId: '',
     planSaveTimer: null,
-    planSaveSuppressUntil: 0
+    planSaveSuppressUntil: 0,
+    recordsTotal: 0,
+    recordsPage: 1
   };
 
   function $(id) {
@@ -981,7 +983,7 @@
   }
 
   // ---- 方案记录：每次「生成方案」一条；方案里生成过的东西原样保存，点一条即回填 ----
-  var RECORDS_LIMIT = 30;
+  var RECORDS_PAGE_SIZE = 10;
 
   function recordsModalEl() {
     return $('localBestsellerRecordsModal');
@@ -1017,9 +1019,16 @@
     if (!list || !recordsVisible()) return;
     var rows = Array.isArray(state.records) ? state.records : [];
     var hint = $('localBestsellerRecordsHint');
+    var pages = recordsPageCount();
     if (hint) {
-      hint.textContent = '共 ' + rows.length + ' 条方案记录（最多 30 条）；每次点「生成方案」各一条，方案里生成过的场景图/视频原样保存，点一条即回填界面。';
+      hint.textContent = '共 ' + state.recordsTotal + ' 条方案记录 · 第 ' + state.recordsPage + '/' + pages + ' 页；每次点「生成方案」各一条，方案里生成过的场景图/视频原样保存，点一条即回填界面。';
     }
+    var pageLabel = $('localBestsellerRecordsPage');
+    if (pageLabel) pageLabel.textContent = '第 ' + state.recordsPage + '/' + pages + ' 页';
+    var prevBtn = document.querySelector('[data-lb-record-prev]');
+    if (prevBtn) prevBtn.disabled = state.recordsPage <= 1;
+    var nextBtn = document.querySelector('[data-lb-record-next]');
+    if (nextBtn) nextBtn.disabled = state.recordsPage >= pages;
     var body = '';
     if (message) body += '<div class="lb-records-msg">' + escapeHtml(message) + '</div>';
     if (!rows.length && !message) body += '<div class="lb-records-msg">还没有方案记录：先点「生成' + escapeHtml(planLabel()) + '方案」。</div>';
@@ -1044,20 +1053,30 @@
     list.innerHTML = body;
   }
 
-  function loadRecords(force) {
+  function recordsPageCount() {
+    var total = Number(state.recordsTotal || 0);
+    return Math.max(1, Math.ceil(total / RECORDS_PAGE_SIZE));
+  }
+
+  function loadRecords(force, page) {
     if (!recordsVisible()) return Promise.resolve();
     var base = localBase();
     if (!base) return Promise.resolve();
     if (state.recordsLoading && !force) return Promise.resolve();
+    var wanted = Math.max(1, Number(page) || Number(state.recordsPage) || 1);
     state.recordsLoading = true;
     renderRecords('正在加载方案记录...');
-    return fetch(base + '/api/local-bestseller/plans?limit=' + RECORDS_LIMIT, { headers: headersUpload() })
+    var query = '?limit=' + RECORDS_PAGE_SIZE + '&offset=' + ((wanted - 1) * RECORDS_PAGE_SIZE);
+    return fetch(base + '/api/local-bestseller/plans' + query, { headers: headersUpload() })
       .then(function(resp) {
         return resp.json().then(function(data) { return { ok: resp.ok, data: data || {} }; });
       })
       .then(function(result) {
         if (!result.ok) throw new Error((result.data && result.data.detail) || '方案记录加载失败');
         state.records = Array.isArray(result.data.items) ? result.data.items : [];
+        state.recordsTotal = Number(result.data.total);
+        if (!Number.isFinite(state.recordsTotal)) state.recordsTotal = state.records.length;
+        state.recordsPage = wanted;
         renderRecords('');
       })
       .catch(function(err) {
@@ -1135,7 +1154,9 @@
       .then(function(result) {
         if (!result.ok) throw new Error((result.data && result.data.detail) || '删除失败');
         if (state.planId === planId) state.planId = '';
-        loadRecords(true);
+        var page = Number(state.recordsPage) || 1;
+        if (state.records.length <= 1 && page > 1) page -= 1;
+        loadRecords(true, page);
       })
       .catch(function(err) {
         showMessage((err && err.message) || '删除失败', true);
@@ -1825,6 +1846,16 @@ if (captioning) {
       }
       if (event.target.closest('[data-lb-record-close]')) {
         closeRecords();
+        return;
+      }
+      if (event.target.closest('[data-lb-record-prev]')) {
+        var prevPage = Math.max(1, (Number(state.recordsPage) || 1) - 1);
+        if (prevPage !== state.recordsPage) loadRecords(true, prevPage);
+        return;
+      }
+      if (event.target.closest('[data-lb-record-next]')) {
+        var nextPage = Math.min(recordsPageCount(), (Number(state.recordsPage) || 1) + 1);
+        if (nextPage !== state.recordsPage) loadRecords(true, nextPage);
         return;
       }
       var recordDelete = event.target.closest('[data-lb-record-delete]');
