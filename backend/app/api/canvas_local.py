@@ -279,7 +279,18 @@ async def canvas_local_canvas_frame() -> HTMLResponse:
     html = (
         "<!doctype html><meta charset=\"utf-8\"><title>灵感画布</title>"
         "<script>(function(){try{localStorage.setItem('user_info',JSON.stringify(%s));}"
-        "catch(e){}location.replace('/static/canvas-web/index.html');})();</script>"
+        "catch(e){}location.replace('/static/canvas-web/index.html?v=20261001-guard-v2');})();</script>"
         % _json.dumps(payload, ensure_ascii=False)
     )
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/static/canvas-web/index.html", include_in_schema=False)
+def canvas_web_index_nostore():
+    """画布入口页永远不缓存：改了守卫/隐藏挂件后，客户端重启即生效（避免 WebView 用旧缓存）。"""
+    from fastapi.responses import FileResponse
+    root = Path(__file__).resolve().parents[3] / "static" / "canvas-web" / "index.html"
+    if not root.is_file():
+        raise HTTPException(status_code=404, detail="画布页面不存在")
+    return FileResponse(str(root), media_type="text/html",
+                        headers={"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"})
