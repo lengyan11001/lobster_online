@@ -4146,6 +4146,15 @@ def normalize_douyin_stranger_message_row(row: Dict) -> Dict:
             for item in (row.get("phone_numbers") or [])
             if str(item).strip()
         )),
+        "wechat_ids": list(dict.fromkeys(
+            str(item).strip()
+            for item in (row.get("wechat_ids") or [])
+            if str(item).strip()
+        )),
+        "ai_wechat_id": normalize_douyin_text(row.get("ai_wechat_id", "")),
+        "ai_wechat_evidence": normalize_douyin_text(row.get("ai_wechat_evidence", "")),
+        # 这一轮是否已经问过 AI「有没有微信号」（记忆接管在生成回复那次调用里顺带问了）
+        "ai_wechat_checked": bool(row.get("ai_wechat_checked", False)),
         "wechat_add_status": normalize_douyin_text(row.get("wechat_add_status", "")).lower(),
         "time_text": normalize_douyin_text(row.get("time_text", "")),
         "conversation_position": max(0, int(row.get("conversation_position", 0) or 0)),
@@ -13673,6 +13682,9 @@ def douyin_wechat_needs_ai(row: Dict) -> bool:
         return False
     if payload.get("phone_numbers"):
         return False
+    if payload.get("ai_wechat_checked"):
+        # 记忆接管生成回复的那次调用已经顺带问过「有没有微信号」了，别再花一次 token
+        return False
     return douyin_wechat_should_ask_ai(payload)
 
 
@@ -14652,6 +14664,8 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
                     )
                     final_message = str(reply_result.get("message") or "")
                     ai_wechat_id = str(reply_result.get("wechat_id") or "").strip()
+                    # 生成回复的那一次调用已经顺便回答过「有没有微信号」，本轮不再单独再调一次
+                    row["ai_wechat_checked"] = True
                     if ai_wechat_id:
                         # 记忆接管生成回复时 AI 顺手判出来的微信号：记在会话上，并一起走加好友/上报
                         takeover_ai_wechat_ids.add(ai_wechat_id)
@@ -14774,6 +14788,7 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
             if douyin_wechat_needs_ai(row):
                 try:
                     ai_hit = await asyncio.to_thread(extract_douyin_wechat_id_by_ai, row)
+                    row["ai_wechat_checked"] = True
                     if str(ai_hit.get("wechat_id") or "").strip():
                         row["wechat_ids"] = [str(ai_hit["wechat_id"]).strip()]
                         row["ai_wechat_id"] = row["wechat_ids"][0]

@@ -501,3 +501,29 @@ def test_takeover_memory_reply_also_judges_wechat_id(monkeypatch):
     monkeypatch.setattr(douyin_api, "request_douyin_ai_comment", fake_ai)
     legacy = douyin_api.generate_douyin_takeover_memory_reply(row, memory_context=memory, prompt_text="")
     assert isinstance(legacy, str) and "999" in legacy
+
+
+
+def test_single_ai_call_covers_reply_and_wechat_question():
+    """记忆接管：回复那次调用已经问过微信号，就不要再多调一次 AI。"""
+    from douyin_api import douyin_wechat_needs_ai, normalize_douyin_stranger_message_row
+
+    row = {"incoming_message": "哈喽 zm_kd3 沟通吧"}
+    assert douyin_wechat_needs_ai(row) is True
+
+    row["ai_wechat_checked"] = True                      # 记忆接管回复时已经问过
+    assert douyin_wechat_needs_ai(row) is False
+
+    normalized = normalize_douyin_stranger_message_row({
+        "conversation_key": "c1",
+        "username": "小亮",
+        "incoming_message": "哈喽 zm_kd3 沟通吧",
+        "wechat_ids": ["zm_kd3"],
+        "ai_wechat_id": "zm_kd3",
+        "ai_wechat_evidence": "哈喽 zm_kd3 沟通吧",
+        "ai_wechat_checked": True,
+    })
+    assert normalized["wechat_ids"] == ["zm_kd3"]
+    assert normalized["ai_wechat_id"] == "zm_kd3"
+    assert normalized["ai_wechat_checked"] is True
+    assert douyin_wechat_needs_ai(normalized) is False
