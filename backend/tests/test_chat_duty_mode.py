@@ -24,9 +24,10 @@ def test_chat_duty_mode_select_and_wiring():
     assert "function chatDutyMode(" in js
     assert "function applyChatDutyModeToRequest(" in js
     assert "function initChatDutyMode(" in js
-    assert "【客服模式】" in js
-    assert "只处理客服问题" in js
-    assert "要安排工作请把输入框左边的下拉切回「工作」" in js
+    # 客服模式不再在前端做判断/隔离：只把 duty_mode 交给服务端（服务端注入客服百问百答）
+    assert "【客服模式】" not in js
+    assert "只处理客服问题" not in js
+    assert "return String(message || '');" in js
 
     # 请求：message 用包装后的文本，并带上 duty_mode
     assert "var requestMessage = applyChatDutyModeToRequest(message);" in js

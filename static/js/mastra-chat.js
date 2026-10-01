@@ -1132,17 +1132,8 @@
   }
 
   function applyDutyModeToContent(content) {
-    var source = String(content || '');
-    if (dutyMode() !== 'service') return source;
-    return [
-      '【客服模式】现在只处理客服问题：客户咨询、售前售后、产品功能与价格、开通与退款、使用答疑、话术与催单、投诉安抚。',
-      '如果用户这条内容不是客服问题（例如让 AI 去创作/发帖/采集/跑工作流，或与客户无关的内部事务），不要执行、不要调用任何能力，直接回复：',
-      '“当前是客服模式，只处理客服问题；要安排工作请把输入框左侧的下拉切回「工作」。”，并停止。',
-      '回答客户问题时：先给可直接复制发给客户的答复（口语、简短），再补一句给老板看的内部提示（需要人工跟进就写明）。',
-      '不要编造系统里没有的功能；不确定就回复“我需要确认后再回复您”。',
-      '',
-      '用户消息：' + source
-    ].join('\n');
+    // 客服模式不在前端做判断/隔离：duty_mode 交给服务端，由服务端注入客服百问百答。
+    return String(content || '');
   }
 
   function syncDutyModeUi() {
@@ -1343,8 +1334,6 @@
     }).then(function (data) {
       var message = data.message || {};
       if (!message.id) throw new Error('服务器没有返回消息 ID');
-      // 气泡显示用户原文（客服模式的包装只发给 AI）
-      if (dutyModeValue === 'service' && text(message.content)) message.content = content;
       var item = { message: message, events: data.events || [] };
       state.historyItems.push(item);
       renderHistoryItem(item);

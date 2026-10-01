@@ -3704,7 +3704,7 @@ function resumeChatStreamForTaskPoll(sid, taskId) {
 // ---- AI 调度助手处理范围：工作 / 客服（客服模式下只把客服问题交给 AI）----
 var CHAT_DUTY_MODE_KEY = 'lobster_chat_duty_mode';
 var CHAT_DUTY_MODE_DEFAULT_LEAD = '告诉我您想做什么？我会尽力帮您完成~';
-var CHAT_DUTY_MODE_SERVICE_LEAD = '客服模式：只处理客服问题（客户咨询 / 售前售后 / 价格与开通 / 使用答疑 / 投诉安抚）~';
+var CHAT_DUTY_MODE_SERVICE_LEAD = '客服模式：按「客服百问百答」回答客户问题（咨询 / 售后 / 价格 / 使用 / 话术）~';
 
 function chatDutyMode() {
   var sel = document.getElementById('chatDutyModeSelect');
@@ -3716,17 +3716,9 @@ function chatDutyMode() {
 }
 
 function applyChatDutyModeToRequest(message) {
-  var text = String(message || '');
-  if (chatDutyMode() !== 'service') return text;
-  return [
-    '【客服模式】现在只处理客服问题：客户咨询、售前售后、产品功能与价格、开通与退款、使用答疑、话术与催单、投诉安抚。',
-    '如果用户这条内容不是客服问题（例如让 AI 去创作/发帖/采集/跑工作流、或与客户无关的内部事务），不要执行、不要调用任何能力，直接回复：',
-    '“当前是客服模式，只处理客服问题；要安排工作请把输入框左边的下拉切回「工作」。”，并停止。',
-    '回答客户问题时：先给可直接复制发给客户的答复（口语、简短、别带 markdown 表格），再补一句给老板看的内部提示（如需要人工跟进请写明）。',
-    '不要编造系统里没有的功能；不确定就回复“我需要确认后再回复您”。',
-    '',
-    '用户消息：' + text
-  ].join('\n');
+  // 客服模式不再在前端做任何判断/隔离：只把 duty_mode 带给服务端，
+  // 由服务端把「客服百问百答」整篇交给 LLM 去回答。
+  return String(message || '');
 }
 
 function syncChatDutyModeUi() {
