@@ -3747,7 +3747,10 @@ function initChatDutyMode() {
   try { saved = String(window.localStorage.getItem(CHAT_DUTY_MODE_KEY) || ''); } catch (e) { saved = ''; }
   if (saved === 'service' || saved === 'work') sel.value = saved;
   sel.addEventListener('change', function() {
-    try { window.localStorage.setItem(CHAT_DUTY_MODE_KEY, chatDutyMode()); } catch (e) {}
+    var mode = chatDutyMode();
+    try { window.localStorage.setItem(CHAT_DUTY_MODE_KEY, mode); } catch (e) {}
+    var mastraSelect = document.getElementById('onlineMastraDutyModeSelect');
+    if (mastraSelect) mastraSelect.value = mode;
     syncChatDutyModeUi();
   });
   syncChatDutyModeUi();

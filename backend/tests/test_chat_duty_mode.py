@@ -45,3 +45,32 @@ def test_customer_service_faq_is_shipped():
     for keyword in ("同城爆款", "积分", "方案记录", "客服模式", "H5", "OTA"):
         assert keyword in faq
     assert (ROOT / "docs/客服百问百答.md").read_text(encoding="utf-8") == faq
+
+def test_mastra_chat_also_has_duty_mode_and_shows_view_on_session_click():
+    """点输入框后进入的 Mastra 对话也必须有「范围」下拉；左侧点会话要先显示对话页。"""
+    html = (ROOT / "static/index.html").read_text(encoding="utf-8")
+    js = (ROOT / "static/js/mastra-chat.js").read_text(encoding="utf-8")
+
+    assert 'id="onlineMastraDutyModeSelect"' in html
+    assert "function dutyMode(" in js
+    assert "function applyDutyModeToContent(" in js
+    assert "function initDutyMode(" in js
+    assert "duty_mode: dutyModeValue" in js
+    assert "initDutyMode();" in js
+
+    # 两个下拉共用同一个选择（首页 composer 与 Mastra composer）
+    assert "el('chatDutyModeSelect')" in js
+    assert "lobster_chat_duty_mode" in js
+
+    # 不在首页时点左侧会话：先把对话页显示出来，再切会话/加载历史
+    assert "function ensureChatPageVisible(" in js
+    assert "return ensureChatPageVisible().then(apply);" in js
+    assert "showAppView('chat')" in js
+
+
+def test_home_and_mastra_duty_selects_stay_in_sync():
+    js_chat = (ROOT / "static/js/chat.js").read_text(encoding="utf-8")
+    js_mastra = (ROOT / "static/js/mastra-chat.js").read_text(encoding="utf-8")
+
+    assert "var mastraSelect = document.getElementById('onlineMastraDutyModeSelect');" in js_chat
+    assert "dutyModeSelects().forEach(function (other) { other.value = value; });" in js_mastra

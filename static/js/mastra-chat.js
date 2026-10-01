@@ -1115,21 +1115,90 @@
     });
   }
 
+  // ---- 处理范围：工作 / 客服（与首页输入框共用同一个选择）----
+  var DUTY_MODE_KEY = 'lobster_chat_duty_mode';
+
+  function dutyModeSelects() {
+    return [el('onlineMastraDutyModeSelect'), el('chatDutyModeSelect')].filter(Boolean);
+  }
+
+  function dutyMode() {
+    var sel = el('onlineMastraDutyModeSelect') || el('chatDutyModeSelect');
+    var value = sel && sel.value ? String(sel.value) : '';
+    if (!value) {
+      try { value = String(localStorage.getItem(DUTY_MODE_KEY) || ''); } catch (e) { value = ''; }
+    }
+    return value === 'service' ? 'service' : 'work';
+  }
+
+  function applyDutyModeToContent(content) {
+    var source = String(content || '');
+    if (dutyMode() !== 'service') return source;
+    return [
+      '【客服模式】现在只处理客服问题：客户咨询、售前售后、产品功能与价格、开通与退款、使用答疑、话术与催单、投诉安抚。',
+      '如果用户这条内容不是客服问题（例如让 AI 去创作/发帖/采集/跑工作流，或与客户无关的内部事务），不要执行、不要调用任何能力，直接回复：',
+      '“当前是客服模式，只处理客服问题；要安排工作请把输入框左侧的下拉切回「工作」。”，并停止。',
+      '回答客户问题时：先给可直接复制发给客户的答复（口语、简短），再补一句给老板看的内部提示（需要人工跟进就写明）。',
+      '不要编造系统里没有的功能；不确定就回复“我需要确认后再回复您”。',
+      '',
+      '用户消息：' + source
+    ].join('\n');
+  }
+
+  function syncDutyModeUi() {
+    var mode = dutyMode();
+    var input = el('onlineMastraInput');
+    if (input) {
+      input.setAttribute('placeholder', mode === 'service' ? '输入客户咨询、售后、价格、话术等客服问题' : '随心输入');
+    }
+  }
+
+  function initDutyMode() {
+    var selects = dutyModeSelects();
+    if (!selects.length) return;
+    var saved = '';
+    try { saved = String(localStorage.getItem(DUTY_MODE_KEY) || ''); } catch (e) { saved = ''; }
+    selects.forEach(function (sel) {
+      if (saved === 'service' || saved === 'work') sel.value = saved;
+      if (sel.dataset && sel.dataset.dutyBound === '1') return;
+      if (sel.dataset) sel.dataset.dutyBound = '1';
+      sel.addEventListener('change', function () {
+        var value = sel.value === 'service' ? 'service' : 'work';
+        try { localStorage.setItem(DUTY_MODE_KEY, value); } catch (e) {}
+        dutyModeSelects().forEach(function (other) { other.value = value; });
+        syncDutyModeUi();
+      });
+    });
+    syncDutyModeUi();
+  }
+
+  // 左侧「会话」点进去要保证对话页是显示的（否则切了会话也看不到内容）
+  function ensureChatPageVisible() {
+    var content = document.getElementById('content-chat');
+    if (!content) return Promise.resolve(null);
+    if (content.classList.contains('visible')) return Promise.resolve(null);
+    if (typeof window.showAppView !== 'function') return Promise.resolve(null);
+    return Promise.resolve(window.showAppView('chat')).catch(function () { return null; });
+  }
+
   function switchSession(id, options) {
     options = options || {};
     id = text(id);
     if (!id) return Promise.resolve();
-    if (id === text(state.activeSessionId) && state.historyItems.length) {
+    var apply = function () {
+      if (id === text(state.activeSessionId) && state.historyItems.length) {
+        if (options.compose !== false) enterCompose('', false);
+        return Promise.resolve();
+      }
+      closeAllStreams();
+      state.activeSessionId = id;
+      syncRunningUi();
+      storeSessionId(id);
       if (options.compose !== false) enterCompose('', false);
-      return Promise.resolve();
-    }
-    closeAllStreams();
-    state.activeSessionId = id;
-    syncRunningUi();
-    storeSessionId(id);
-    if (options.compose !== false) enterCompose('', false);
-    renderSessionHeader();
-    return loadHistory();
+      renderSessionHeader();
+      return loadHistory();
+    };
+    return ensureChatPageVisible().then(apply);
   }
 
   function loadSessions() {
@@ -1266,12 +1335,16 @@
     setComposerEnabled(false);
     if (input) input.value = '';
     resizeInput();
+    var wireContent = applyDutyModeToContent(content);
+    var dutyModeValue = dutyMode();
     request('/api/mastra-chat/messages', {
       method: 'POST',
-      json: { content: content, installation_id: installationId(), session_id: state.activeSessionId, attachments: attachments }
+      json: { content: wireContent, installation_id: installationId(), session_id: state.activeSessionId, attachments: attachments, duty_mode: dutyModeValue }
     }).then(function (data) {
       var message = data.message || {};
       if (!message.id) throw new Error('服务器没有返回消息 ID');
+      // 气泡显示用户原文（客服模式的包装只发给 AI）
+      if (dutyModeValue === 'service' && text(message.content)) message.content = content;
       var item = { message: message, events: data.events || [] };
       state.historyItems.push(item);
       renderHistoryItem(item);
@@ -1497,6 +1570,7 @@
   }
 
   function init() {
+    initDutyMode();
     ensureRichStyles();
     if (!el('onlineMastraChat')) return;
     bind();
