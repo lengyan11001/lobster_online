@@ -862,7 +862,9 @@
       if (!historical) finishMessage(messageId, false);
     }
     if (type === 'final') {
-      setBubbleText(live.bubble, payload.reply_text || payload.text || live.bubble.text || '处理完成。');
+      var finalText = payload.reply_text || payload.text || live.bubble.text || '处理完成。';
+      if (dutyMode() === 'service') finalText = cleanServiceReply(finalText);
+      setBubbleText(live.bubble, finalText);
       addMediaView(live.bubble, payload);
       if (!historical) finishMessage(messageId, false);
     }
@@ -1122,6 +1124,28 @@
 
   function dutyModeSelects() {
     return [el('onlineMastraDutyModeSelect'), el('chatDutyModeSelect')].filter(Boolean);
+  }
+
+  function cleanServiceReply(text) {
+    // 客服模式的答复只保留「可直接发给客户」的那段：去掉标记，砍掉内部提示部分
+    var value = String(text || '');
+    if (!value) return value;
+    var markers = ['【内部提示】', '内部提示：', '内部提示:', '【内部】', '（内部提示）', '【仅内部】'];
+    for (var i = 0; i < markers.length; i++) {
+      var idx = value.indexOf(markers[i]);
+      if (idx >= 0) value = value.slice(0, idx);
+    }
+    var labels = ['【可直接发给客户】', '【可直接发给客户的答复】', '【客户答复】', '【可发给客户】', '可直接发给客户：', '【答复】'];
+    var out = [];
+    value.split('\n').forEach(function (line) {
+      var stripped = line.trim();
+      if (!stripped) { out.push(''); return; }
+      labels.forEach(function (label) {
+        if (stripped.indexOf(label) === 0) stripped = stripped.slice(label.length).trim();
+      });
+      if (stripped) out.push(stripped);
+    });
+    return out.join('\n').trim();
   }
 
   function dutyMode() {

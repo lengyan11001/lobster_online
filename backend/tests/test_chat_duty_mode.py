@@ -78,3 +78,13 @@ def test_home_and_mastra_duty_selects_stay_in_sync():
 
     assert "var mastraSelect = document.getElementById('onlineMastraDutyModeSelect');" in js_chat
     assert "dutyModeSelects().forEach(function (other) { other.value = value; });" in js_mastra
+
+def test_service_reply_is_cleaned_before_display():
+    """客服模式只保留可直接发客户的一段：去标记 + 砍掉内部提示。"""
+    chat = (ROOT / "static/js/chat.js").read_text(encoding="utf-8")
+    mastra = (ROOT / "static/js/mastra-chat.js").read_text(encoding="utf-8")
+    for js in (chat, mastra):
+        assert "function cleanServiceReply(" in js
+        assert "【内部提示】" in js
+    assert "chatDutyMode() === 'service') return cleanServiceReply(r);" in chat
+    assert "if (dutyMode() === 'service') finalText = cleanServiceReply(finalText);" in mastra

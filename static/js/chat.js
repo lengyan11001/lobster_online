@@ -310,6 +310,28 @@ function _normalizeChatStreamErrorMessage(raw) {
   return s;
 }
 /** 将 done 事件里「错误：…」中的已知英文技术句替换为中文（兼容未重启的旧后端） */
+  function cleanServiceReply(text) {
+    // 客服模式的答复只保留「可直接发给客户」的那段：去掉标记，砍掉内部提示部分
+    var value = String(text || '');
+    if (!value) return value;
+    var markers = ['【内部提示】', '内部提示：', '内部提示:', '【内部】', '（内部提示）', '【仅内部】'];
+    for (var i = 0; i < markers.length; i++) {
+      var idx = value.indexOf(markers[i]);
+      if (idx >= 0) value = value.slice(0, idx);
+    }
+    var labels = ['【可直接发给客户】', '【可直接发给客户的答复】', '【客户答复】', '【可发给客户】', '可直接发给客户：', '【答复】'];
+    var out = [];
+    value.split('\n').forEach(function (line) {
+      var stripped = line.trim();
+      if (!stripped) { out.push(''); return; }
+      labels.forEach(function (label) {
+        if (stripped.indexOf(label) === 0) stripped = stripped.slice(label.length).trim();
+      });
+      if (stripped) out.push(stripped);
+    });
+    return out.join('\n').trim();
+  }
+
 function _normalizeAssistantStreamReply(reply) {
   var r = String(reply || '');
   var t = r.trim();
@@ -322,6 +344,7 @@ function _normalizeAssistantStreamReply(reply) {
   }
   var norm2 = _normalizeChatStreamErrorMessage(t);
   if (norm2 !== t) return norm2;
+  if (typeof chatDutyMode === 'function' && chatDutyMode() === 'service') return cleanServiceReply(r);
   return r;
 }
 /** 刷新续查 /chat/stream 失败时：不写入历史、保留 poll_resume，避免每次 F5 多一条重复错误 */
