@@ -161,6 +161,22 @@ def _start_mcp_if_needed():
         _logger.warning("[启动] MCP 自启失败: %s", e)
 
 
+
+def _start_canvas_if_needed():
+    """灵感画布跑在独立 origin（127.0.0.1:8003，画布挂自身根下）。
+
+    画布是 hash 路由 SPA，挂在主站子路径时 '/#/...' 会被解析到主站根，把 iframe
+    顶成客户端整页（未登录=登录页+套娃）。独立 origin 从根上避免这类 base 冲突。
+    失败不影响主站启动，前端会自动回退到主站内嵌入口。
+    """
+    try:
+        from backend.canvas_server import start_canvas_server
+
+        start_canvas_server()
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("[启动] 灵感画布服务启动失败: %s", exc)
+
+
 if __name__ == "__main__":
     # 记录本次会话并判定上一轮进程是「自己重启」还是「真崩溃」；结论会随
     # X-Previous-Client-Exit-Reason 上报，供云端回收上一轮 run 时分类。
@@ -172,6 +188,7 @@ if __name__ == "__main__":
     except Exception:
         pass
     _start_mcp_if_needed()
+    _start_canvas_if_needed()
     port = int(os.environ.get("PORT", str(settings.port)))
     edition = (getattr(settings, "lobster_edition", None) or "online").strip().lower()
     # 监听地址：与 edition 无关，统一用配置（.env 或环境变量 HOST）。start.bat 默认 HOST=0.0.0.0 以便局域网访问

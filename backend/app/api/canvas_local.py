@@ -279,7 +279,7 @@ async def canvas_local_canvas_frame() -> HTMLResponse:
     html = (
         "<!doctype html><meta charset=\"utf-8\"><title>灵感画布</title>"
         "<script>(function(){try{localStorage.setItem('user_info',JSON.stringify(%s));}"
-        "catch(e){}location.replace('/static/canvas-web/index.html?v=20261001-guard-v2');})();</script>"
+        "catch(e){}location.replace('/static/canvas-web/index.html?v=20261001-canvas-origin');})();</script>"
         % _json.dumps(payload, ensure_ascii=False)
     )
     return HTMLResponse(html, headers={"Cache-Control": "no-store"})

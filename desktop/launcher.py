@@ -35,6 +35,7 @@ DEFAULT_OVERSEAS_SERVER = "https://bhos.online"
 SHOW_WINDOW_TITLEBAR_ICON = True
 DEFAULT_PORT = 8000
 DEFAULT_MCP_PORT = 8001
+DEFAULT_CANVAS_PORT = 8003
 CONFIRM_CLOSE_BODY_TEMPLATE = (
     "\u786e\u5b9a\u8981\u5173\u95ed{title}\u5417\uff1f\n\n"
     "\u5982\u679c\u6b63\u5728\u5168\u5c4f\u9884\u89c8\u89c6\u9891\uff0c"
@@ -1234,11 +1235,21 @@ def stop_other_root_backends(preferred_port: int) -> None:
         stop_port_processes(port, "BackendDuplicate")
 
 
+def canvas_service_port() -> int:
+    """灵感画布独立 origin 的端口（与 backend/canvas_server.py 默认值保持一致）。"""
+    raw = str(read_env_value("LOBSTER_CANVAS_PORT", str(DEFAULT_CANVAS_PORT)) or "").strip()
+    try:
+        port = int(raw)
+    except ValueError:
+        port = DEFAULT_CANVAS_PORT
+    return port if 1024 <= port <= 65535 else DEFAULT_CANVAS_PORT
+
+
 def cleanup_owned_services(
     backend_proc: subprocess.Popen | None = None,
     mcp_proc: subprocess.Popen | None = None,
     *,
-    ports: tuple[int, ...] = (DEFAULT_PORT, DEFAULT_MCP_PORT, 18789),
+    ports: tuple[int, ...] = (DEFAULT_PORT, DEFAULT_MCP_PORT, DEFAULT_CANVAS_PORT, 18789),
 ) -> None:
     """Stop every service belonging to this desktop client.
 
@@ -1355,6 +1366,7 @@ def start_services_blocking(
     clear_startup_service_logs()
     env["PORT"] = str(port)
     env["MCP_PORT"] = str(mcp_port)
+    env["LOBSTER_CANVAS_PORT"] = str(canvas_service_port())
     ready_url = f"http://127.0.0.1:{port}/?desktop=1&v={int(time.time())}-{uuid.uuid4().hex[:8]}"
     log(f"target url={ready_url}")
     run_client_code_update(env)
@@ -2130,7 +2142,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                 runtime["mcp_proc"] = mcp_proc
                 if runtime["closing"].is_set():
                     log("webview closed during service startup; stopping newly started services")
-                    cleanup_owned_services(backend_proc, mcp_proc, ports=(port, mcp_port, 18789))
+                    cleanup_owned_services(backend_proc, mcp_proc, ports=(port, mcp_port, canvas_service_port(), 18789))
                     return
                 if ok:
                     window.load_url(actual_url)
@@ -2203,7 +2215,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         cleanup_owned_services(
             runtime.get("backend_proc") if isinstance(runtime.get("backend_proc"), subprocess.Popen) else None,
             runtime.get("mcp_proc") if isinstance(runtime.get("mcp_proc"), subprocess.Popen) else None,
-            ports=(port, mcp_port, 18789),
+            ports=(port, mcp_port, canvas_service_port(), 18789),
         )
 
 
@@ -2250,6 +2262,7 @@ def main() -> int:
         env["LOBSTER_BRAND_PROFILE_PATH"] = profile_path
     env["PORT"] = str(port)
     env["MCP_PORT"] = str(mcp_port)
+    env["LOBSTER_CANVAS_PORT"] = str(canvas_service_port())
 
     log(
         f"launcher root={ROOT} brand={brand_mark or '<blank>'} title={title!r} "

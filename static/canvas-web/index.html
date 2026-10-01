@@ -3,11 +3,14 @@
    这里把这类 URL 改写成画布自身路由，保证始终留在画布里。*/
 (function(){
   var ROOT="/static/canvas-web/";
+  /* 独立 origin 下画布挂在根：'/'、'/index.html'、'/#/...' 都还在画布里，必须放行。
+     只有旧的「主站子路径挂载」布局才需要把 '/#/...' 改写成 /static/canvas-web/index.html#/...。*/
+  function inCanvas(p){return p==="/"||p==="/index.html"||p.indexOf(ROOT)===0||p.indexOf("/canvas-api/")===0||p.indexOf("/api/canvas-local/")===0;}
   function keep(u){try{if(!u)return u;var x=new URL(u,location.href);if(x.origin!==location.origin)return u;
-    var p=x.pathname;if(p.indexOf(ROOT)===0||p.indexOf("/canvas-api/")===0||p.indexOf("/api/canvas-local/")===0)return u;
+    var p=x.pathname;if(inCanvas(p))return u;
     return ROOT+"index.html"+p+(x.search||"")+(x.hash||"");}catch(e){return u;}}
   function bad(u){try{if(!u)return false;var x=new URL(u,location.href);if(x.origin!==location.origin)return false;
-    var p=x.pathname;return p.indexOf(ROOT)!==0&&p.indexOf("/canvas-api/")!==0&&p.indexOf("/api/canvas-local/")!==0;}catch(e){return false;}}
+    return !inCanvas(x.pathname);}catch(e){return false;}}
   var ps=history.pushState.bind(history),rs=history.replaceState.bind(history);
   history.pushState=function(s,t,u){if(u!=null)u=keep(String(u));return ps(s,t,u);};
   history.replaceState=function(s,t,u){if(u!=null)u=keep(String(u));return rs(s,t,u);};
