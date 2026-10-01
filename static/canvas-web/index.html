@@ -2,10 +2,11 @@
    克隆/打开作品时会 pushState('/#/canvas-editor/<uuid>') 直接跳到站点根，导致 iframe 被顶成客户端整页（未登录=登录页 + 套娃）。
    这里把这类 URL 改写成画布自身路由，保证始终留在画布里。*/
 (function(){
+  /* 注意：ROOT 是「画布路由根」。主站子路径挂载时是 /static/canvas-web/（这里的默认值，
+     老客户端 8000 内嵌走这条，必须把 '/#/...' 改回画布内）；独立 origin（8003）时
+     backend/canvas_app.py 会把下面这行注入成 var ROOT="/";，于是同源跳转原样放行。*/
   var ROOT="/static/canvas-web/";
-  /* 独立 origin 下画布挂在根：'/'、'/index.html'、'/#/...' 都还在画布里，必须放行。
-     只有旧的「主站子路径挂载」布局才需要把 '/#/...' 改写成 /static/canvas-web/index.html#/...。*/
-  function inCanvas(p){return p==="/"||p==="/index.html"||p.indexOf(ROOT)===0||p.indexOf("/canvas-api/")===0||p.indexOf("/api/canvas-local/")===0;}
+  function inCanvas(p){return p.indexOf(ROOT)===0||p.indexOf("/canvas-api/")===0||p.indexOf("/api/canvas-local/")===0;}
   function keep(u){try{if(!u)return u;var x=new URL(u,location.href);if(x.origin!==location.origin)return u;
     var p=x.pathname;if(inCanvas(p))return u;
     return ROOT+"index.html"+p+(x.search||"")+(x.hash||"");}catch(e){return u;}}

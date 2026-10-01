@@ -12,16 +12,16 @@ pushState('/#/canvas-editor/<uuid>') 会被解析成主站根地址（'/#/...' -
   /canvas-api/{path}          -> canvas_cloud_proxy（注入本机登录态，转发云端画布接口）
   /api/canvas-local/*         -> canvas_local（本机会话注入 / ffmpeg / 产物读取）
   /static/canvas-web/{path}   -> webpack publicPath，资源按原样提供
-  /{path}                     -> 画布页面（html=True；'/' 与 '/index.html' 永远不缓存）
+  /{path}                     -> 画布页面（html=True；画布页面一律不缓存）
 """
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.app.api.canvas_cloud_proxy import router as canvas_cloud_proxy_router
@@ -33,6 +33,8 @@ CANVAS_WEB_DIR = Path(__file__).resolve().parents[1] / "static" / "canvas-web"
 CANVAS_BUILD = "20261001-canvas-origin"
 CLIENT_ROOT = str(Path(__file__).resolve().parents[1])
 _NOSTORE = {"Cache-Control": "no-store, must-revalidate", "Pragma": "no-cache"}
+_SUBPATH_ROOT = 'var ROOT="/static/canvas-web/";'
+_ORIGIN_ROOT = 'var ROOT="/";'
 
 app = FastAPI(
     title="Lobster Canvas",
@@ -49,8 +51,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(canvas_local_router, prefix="")
-app.include_router(canvas_cloud_proxy_router, prefix="")
+
+def _canvas_html() -> HTMLResponse:
+    """独立 origin 版的画布页面。
+
+    页面里的守卫脚本按「画布路由根」判断同源跳转。画布在独立 origin 里就挂在根下，
+    所以把 ROOT 换成 "/"：'/#/canvas-editor/<uuid>' 这类同源跳转原样放行（仍然留在画布
+    origin 内），不会再被改写成 /static/canvas-web/index.html#/...，URL 更干净。
+    """
+    path = CANVAS_WEB_DIR / "index.html"
+    try:
+        html = path.read_text(encoding="utf-8")
+    except OSError:
+        raise HTTPException(status_code=404, detail="画布页面不存在") from None
+    if _SUBPATH_ROOT in html:
+        html = html.replace(_SUBPATH_ROOT, _ORIGIN_ROOT)
+    return HTMLResponse(html, headers=dict(_NOSTORE))
 
 
 @app.get("/healthz", include_in_schema=False)
@@ -63,28 +79,29 @@ def canvas_healthz() -> JSONResponse:
     return JSONResponse({"ok": True, "service": "lobster-canvas", "build": CANVAS_BUILD, "client_root": CLIENT_ROOT})
 
 
-def _canvas_index() -> FileResponse:
-    return FileResponse(
-        str(CANVAS_WEB_DIR / "index.html"),
-        media_type="text/html",
-        headers=dict(_NOSTORE),
-    )
-
-
+# 画布页面：这三条必须在 include_router 之前注册，才能盖过 canvas_local 里的子路径入口
 @app.get("/", include_in_schema=False)
-def canvas_root() -> FileResponse:
-    return _canvas_index()
+def canvas_root() -> HTMLResponse:
+    return _canvas_html()
 
 
 @app.get("/index.html", include_in_schema=False)
-def canvas_index() -> FileResponse:
-    return _canvas_index()
+def canvas_index() -> HTMLResponse:
+    return _canvas_html()
 
+
+@app.get("/static/canvas-web/index.html", include_in_schema=False)
+def canvas_index_assets_path() -> HTMLResponse:
+    return _canvas_html()
+
+
+app.include_router(canvas_local_router, prefix="")
+app.include_router(canvas_cloud_proxy_router, prefix="")
 
 if CANVAS_WEB_DIR.is_dir():
     # webpack 里写死的 publicPath，画布按这个绝对路径取 js/css/字体
     app.mount("/static/canvas-web", StaticFiles(directory=str(CANVAS_WEB_DIR)), name="canvas-web-assets")
-    # 独立 origin 的根：画布页面本体（html=True -> / 返回 index.html）
+    # 独立 origin 的根：画布页面本体（html=True -> 未知路径不劫持，只服务真实文件）
     app.mount("/", StaticFiles(directory=str(CANVAS_WEB_DIR), html=True), name="canvas-web-root")
 else:  # pragma: no cover - 只在安装不完整时出现
     logger.warning("[canvas] 画布静态目录不存在：%s", CANVAS_WEB_DIR)
