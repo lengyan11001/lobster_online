@@ -6,3 +6,19 @@
     allow="clipboard-write; fullscreen"
   ></iframe>
 </div>
+
+  <script id="canvas-host-guard">/* 2026-10-01：宿主看门狗。画布内的整页跳转（location.href / window.location）拦不住，
+     这里兜底：只要 iframe 离开 /static/canvas-web/ 或 /api/canvas-local/，立刻把它拉回画布，
+     避免画布被顶成客户端整页（未登录态=登录页 + 套娃）。*/
+  (function () {
+    var FRAME = "/api/canvas-local/canvas-frame?v=3", CANVAS = "/static/canvas-web/", LOCAL = "/api/canvas-local/";
+    setInterval(function () {
+      var f = document.querySelector(".canvas-studio-shell iframe");
+      if (!f) return;
+      try {
+        var p = String((f.contentWindow && f.contentWindow.location && f.contentWindow.location.pathname) || "");
+        if (p && p.indexOf(CANVAS) !== 0 && p.indexOf(LOCAL) !== 0) { f.src = FRAME; }
+      } catch (e) { /* 未加载完/跨域忽略 */ }
+    }, 800);
+  })();
+  </script>

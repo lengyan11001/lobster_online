@@ -66,7 +66,7 @@
   });
 
   window.registerLobsterView('canvas-studio', {
-    html: '/static/views/canvas-studio.html?v=20260929-canvas-studio-v2',
+    html: '/static/views/canvas-studio.html?v=20261001-canvas-host-guard',
     cache: 'reload'
   });
   window.registerLobsterView('wechat-article', {
