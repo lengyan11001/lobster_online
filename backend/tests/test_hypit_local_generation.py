@@ -613,3 +613,61 @@ def test_tool_mirror_order_prefers_cdn():
     uv_urls = hypit_local._uv_urls()
     assert uv_urls[0].startswith("https://lobster-online-assets-")
     assert any("github.com/astral-sh/uv" in u for u in uv_urls)
+
+
+
+def test_sanitize_hypit_manifest_drops_pnpm_workspace_fields(tmp_path, monkeypatch):
+    """上游 package.json 里的 workspace:* 会让 npm 报 EUNSUPPORTEDPROTOCOL，装之前必须清掉。"""
+    import json as _json
+
+    dist = tmp_path / "hypit"
+    dist.mkdir()
+    (dist / "package.json").write_text(_json.dumps({
+        "name": "@hypit/hypit",
+        "version": "0.2.17",
+        "dependencies": {"tsx": "^4.0.0"},
+        "devDependencies": {"@hypit/artifact": "workspace:*"},
+        "workspaces": ["packages/*"],
+        "scripts": {"prepare": "pnpm build", "postinstall": "node x.js"},
+    }), encoding="utf-8")
+    monkeypatch.setattr(hypit_local, "RUNTIME_STATE_PATH", tmp_path / "state.json")
+
+    assert hypit_local._sanitize_hypit_dist_manifest(dist) is True
+    data = _json.loads((dist / "package.json").read_text(encoding="utf-8"))
+    assert "devDependencies" not in data and "workspaces" not in data
+    assert "prepare" not in data["scripts"] and data["scripts"]["postinstall"] == "node x.js"
+    assert data["dependencies"] == {"tsx": "^4.0.0"}
+
+
+def test_install_hypit_node_modules_retries_without_scripts(tmp_path, monkeypatch):
+    """第一次带 scripts 失败时，要自动带 --ignore-scripts 重试。"""
+    import subprocess as _sp
+
+    dist = tmp_path / "hypit"
+    dist.mkdir()
+    (dist / "package.json").write_text('{"name": "@hypit/hypit", "devDependencies": {"a": "workspace:*"}}', encoding="utf-8")
+    monkeypatch.setattr(hypit_local, "RUNTIME_STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(hypit_local, "_node_executable", lambda: "node")
+    monkeypatch.setattr(hypit_local, "_npm_executable", lambda: "npm")
+    monkeypatch.setattr(hypit_local, "_hypit_env", lambda: {})
+
+    calls = []
+
+    class _Proc:
+        def __init__(self, code, out=""):
+            self.returncode = code
+            self.stdout = out
+            self.stderr = ""
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        if "--ignore-scripts" not in args:
+            return _Proc(1, 'npm error code EUNSUPPORTEDPROTOCOL\nnpm error Unsupported URL Type "workspace:": workspace:*')
+        (dist / "node_modules").mkdir(exist_ok=True)
+        return _Proc(0)
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    hypit_local._install_hypit_node_modules(dist)
+
+    assert any("--ignore-scripts" in args for args in calls)
+    assert (dist / "node_modules").is_dir()

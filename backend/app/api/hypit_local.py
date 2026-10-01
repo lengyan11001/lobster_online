@@ -1934,6 +1934,41 @@ def _ensure_hypit_distribution() -> Path:
     return target
 
 
+def _sanitize_hypit_dist_manifest(dist_dir: Path) -> bool:
+    """把发行包 package.json 里 npm 装不了的东西清掉。
+
+    上游是 pnpm workspace：devDependencies 里写着 workspace:*，npm 读 manifest 时
+    直接报 EUNSUPPORTEDPROTOCOL（哪怕 --omit=dev 也一样）。运行依赖用不到这些，
+    装之前去掉 devDependencies / workspaces / prepare 之类的发布脚本。
+    """
+    path = dist_dir / "package.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    changed = False
+    for key in ("devDependencies", "workspaces"):
+        if key in data:
+            data.pop(key, None)
+            changed = True
+    scripts = data.get("scripts") if isinstance(data.get("scripts"), dict) else None
+    if scripts:
+        for key in ("prepare", "prepack", "prepublishOnly"):
+            if key in scripts:
+                scripts.pop(key, None)
+                changed = True
+        data["scripts"] = scripts
+    if changed:
+        try:
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        except OSError:
+            return False
+        _append_runtime_log("已按 npm 兼容性清理发行包 package.json（去掉 workspace:* 等 pnpm 字段）")
+    return changed
+
+
 def _install_hypit_node_modules(dist_dir: Path) -> None:
     """用包内 npm 在发行目录装运行依赖（Hypit 用 tsx 直接跑 TS 源码）。"""
     if (dist_dir / "node_modules").is_dir():
@@ -1944,17 +1979,26 @@ def _install_hypit_node_modules(dist_dir: Path) -> None:
         raise RuntimeError("未找到 Node.js（客户端自带 nodejs/node.exe）")
     if not npm:
         raise RuntimeError("未找到 npm（客户端自带 nodejs/npm.cmd）")
+    _sanitize_hypit_dist_manifest(dist_dir)
     _write_runtime_state(stage="正在安装 Hypit 运行依赖（首次较慢，约几百 MB）", percent=32)
     env = _hypit_env()
     registries = ["https://registry.npmmirror.com", ""]
-    last_error = ""
+    attempts: list[tuple[str, bool]] = []
     for registry in registries:
+        attempts.append((registry, False))
+        attempts.append((registry, True))   # 第二步带 --ignore-scripts 再试一次
+    last_error = ""
+    for registry, ignore_scripts in attempts:
         args = [npm, "install", "--omit=dev", "--no-audit", "--no-fund", "--loglevel=error"]
         if registry:
             args.append("--registry=" + registry)
+        if ignore_scripts:
+            args.append("--ignore-scripts")
         try:
-            _append_runtime_log("安装 Hypit 依赖：%s %s" % (" ".join(args[:3]),
-                                                            ("（registry=%s）" % registry) if registry else "（默认 registry）"))
+            _append_runtime_log("安装 Hypit 依赖：%s%s%s" % (
+                " ".join(args[:3]),
+                ("（registry=%s）" % registry) if registry else "（默认 registry）",
+                "（跳过 scripts）" if ignore_scripts else ""))
             proc = subprocess.run(args, cwd=str(dist_dir), capture_output=True, text=True,
                                   errors="replace", env=env, timeout=3600,
                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -1962,10 +2006,13 @@ def _install_hypit_node_modules(dist_dir: Path) -> None:
             if proc.returncode == 0 and (dist_dir / "node_modules").is_dir():
                 _append_runtime_log("Hypit 运行依赖安装完成")
                 return
+            if "EUNSUPPORTEDPROTOCOL" in tail and "workspace:" in tail:
+                # 兜底：package.json 又被写回 pnpm 依赖了，再清一遍往下试
+                _sanitize_hypit_dist_manifest(dist_dir)
             last_error = "退出码 %s：%s" % (proc.returncode, tail.strip()[-500:])
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)[:500]
-        _append_runtime_log("这一次安装失败，换下一个源重试：%s" % last_error[:200])
+        _append_runtime_log("这一次安装失败，换下一种方式重试：%s" % last_error[:200])
     raise RuntimeError("Hypit 运行依赖安装失败：%s" % last_error)
 
 
