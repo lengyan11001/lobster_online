@@ -599,3 +599,17 @@ def test_locate_hypit_dist_root_handles_npm_package_layout(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     assert hypit_local._locate_hypit_dist_root(empty) is None
+
+
+
+def test_tool_mirror_order_prefers_cdn():
+    """一键安装的下载源顺序：CDN → 我们域名 → npmmirror → 官方。"""
+    urls = hypit_local._hypit_dist_urls()
+    assert urls[0].startswith("https://lobster-online-assets-") and "assets/client-code/tools/hypit-" in urls[0]
+    assert any("bhzn.top/client/client-code/tools" in u for u in urls)
+    assert any("registry.npmmirror.com" in u for u in urls)
+    assert any("registry.npmjs.org" in u for u in urls)
+
+    uv_urls = hypit_local._uv_urls()
+    assert uv_urls[0].startswith("https://lobster-online-assets-")
+    assert any("github.com/astral-sh/uv" in u for u in uv_urls)

@@ -1697,7 +1697,18 @@ _ENGINE_PACKAGE = ("@hyperframes/engine", "0.7.101")
 # 起不来时自动回退 npmmirror / 官方 npm。
 _HYPIT_DIST_VERSION = (os.environ.get("HYPIT_DIST_VERSION") or "0.2.17").strip() or "0.2.17"
 _HYPIT_DIST_SUBDIR = ("aihypit", "hypit")
-_TOOLS_BASE = (os.environ.get("LOBSTER_TOOLS_BASE") or "https://bhzn.top/client/tools").rstrip("/")
+# 一键安装用的工具镜像（按顺序试）：CDN 优先（实测 3~4MB/s），我们自己的域名次之，
+# 再回退到 npmmirror / 官方。可用 LOBSTER_TOOLS_BASE 覆盖（逗号分隔多个）。
+_DEFAULT_TOOLS_BASES = (
+    "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/client-code/tools",
+    "https://bhzn.top/client/client-code/tools",
+)
+_TOOLS_BASES = [
+    base.strip().rstrip("/")
+    for base in (os.environ.get("LOBSTER_TOOLS_BASE") or "").split(",") + list(_DEFAULT_TOOLS_BASES)
+    if base and base.strip()
+]
+_TOOLS_BASE = _TOOLS_BASES[0]
 _UV_ARCHIVE_NAME = "uv-x86_64-pc-windows-msvc.zip" if os.name == "nt" else "uv-x86_64-unknown-linux-gnu.tar.gz"
 _DOWNLOAD_TIMEOUT = 900.0
 
@@ -1816,18 +1827,17 @@ def _hypit_dist_dir() -> Path:
 def _hypit_dist_urls() -> list[str]:
     version = _HYPIT_DIST_VERSION
     return [
-        f"{_TOOLS_BASE}/hypit-{version}.tgz",
+        *[f"{base}/hypit-{version}.tgz" for base in _TOOLS_BASES],
         f"https://registry.npmmirror.com/@hypit/hypit/-/hypit-{version}.tgz",
         f"https://registry.npmjs.org/@hypit/hypit/-/hypit-{version}.tgz",
     ]
 
 
 def _uv_urls() -> list[str]:
-    if os.name == "nt":
-        return [f"{_TOOLS_BASE}/{_UV_ARCHIVE_NAME}",
-                f"https://github.com/astral-sh/uv/releases/latest/download/{_UV_ARCHIVE_NAME}"]
-    return [f"{_TOOLS_BASE}/{_UV_ARCHIVE_NAME}",
-            f"https://github.com/astral-sh/uv/releases/latest/download/{_UV_ARCHIVE_NAME}"]
+    return [
+        *[f"{base}/{_UV_ARCHIVE_NAME}" for base in _TOOLS_BASES],
+        f"https://github.com/astral-sh/uv/releases/latest/download/{_UV_ARCHIVE_NAME}",
+    ]
 
 
 def _download_first_available(urls: list[str], target: Path, *, label: str = "") -> str:
