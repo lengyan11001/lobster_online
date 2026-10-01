@@ -32,7 +32,9 @@ def test_chat_duty_mode_select_and_wiring():
     # 请求：message 用包装后的文本，并带上 duty_mode
     assert "var requestMessage = applyChatDutyModeToRequest(message);" in js
     assert "message: requestMessage," in js
-    assert "duty_mode: dutyMode," in js
+    # 工作模式请求体保持原样：只有客服模式才带 duty_mode
+    assert "if (dutyMode === 'service') body.duty_mode = 'service';" in js
+    assert "CHAT_DUTY_PLACEHOLDER_BACKUP" in js
 
     # 初始化 + 记住选择
     assert "initChatDutyMode();" in js
@@ -56,7 +58,8 @@ def test_mastra_chat_also_has_duty_mode_and_shows_view_on_session_click():
     assert "function dutyMode(" in js
     assert "function applyDutyModeToContent(" in js
     assert "function initDutyMode(" in js
-    assert "duty_mode: dutyModeValue" in js
+    assert "if (dutyModeValue === 'service') payload.duty_mode = 'service';" in js
+    assert "DUTY_PLACEHOLDER_BACKUP" in js
     assert "initDutyMode();" in js
 
     # 两个下拉共用同一个选择（首页 composer 与 Mastra composer）

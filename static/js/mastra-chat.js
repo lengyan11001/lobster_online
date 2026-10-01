@@ -1117,6 +1117,8 @@
 
   // ---- 处理范围：工作 / 客服（与首页输入框共用同一个选择）----
   var DUTY_MODE_KEY = 'lobster_chat_duty_mode';
+  var DUTY_SERVICE_PLACEHOLDER = '输入客户咨询、售后、价格、话术等客服问题';
+  var DUTY_PLACEHOLDER_BACKUP = '';
 
   function dutyModeSelects() {
     return [el('onlineMastraDutyModeSelect'), el('chatDutyModeSelect')].filter(Boolean);
@@ -1137,10 +1139,18 @@
   }
 
   function syncDutyModeUi() {
+    // 只改客服模式的文案；切回「工作」恢复原 placeholder，工作模式行为不变。
     var mode = dutyMode();
     var input = el('onlineMastraInput');
-    if (input) {
-      input.setAttribute('placeholder', mode === 'service' ? '输入客户咨询、售后、价格、话术等客服问题' : '随心输入');
+    if (!input) return;
+    if (mode === 'service') {
+      if (input.getAttribute('placeholder') !== DUTY_SERVICE_PLACEHOLDER) {
+        DUTY_PLACEHOLDER_BACKUP = input.getAttribute('placeholder') || '随心输入';
+        input.setAttribute('placeholder', DUTY_SERVICE_PLACEHOLDER);
+      }
+    } else if (input.getAttribute('placeholder') === DUTY_SERVICE_PLACEHOLDER) {
+      input.setAttribute('placeholder', DUTY_PLACEHOLDER_BACKUP || '随心输入');
+      DUTY_PLACEHOLDER_BACKUP = '';
     }
   }
 
@@ -1330,7 +1340,12 @@
     var dutyModeValue = dutyMode();
     request('/api/mastra-chat/messages', {
       method: 'POST',
-      json: { content: wireContent, installation_id: installationId(), session_id: state.activeSessionId, attachments: attachments, duty_mode: dutyModeValue }
+      json: (function () {
+        // 工作模式保持原请求不变：只有客服模式才带 duty_mode
+        var payload = { content: wireContent, installation_id: installationId(), session_id: state.activeSessionId, attachments: attachments };
+        if (dutyModeValue === 'service') payload.duty_mode = 'service';
+        return payload;
+      })()
     }).then(function (data) {
       var message = data.message || {};
       if (!message.id) throw new Error('服务器没有返回消息 ID');

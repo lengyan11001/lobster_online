@@ -3705,6 +3705,9 @@ function resumeChatStreamForTaskPoll(sid, taskId) {
 var CHAT_DUTY_MODE_KEY = 'lobster_chat_duty_mode';
 var CHAT_DUTY_MODE_DEFAULT_LEAD = '告诉我您想做什么？我会尽力帮您完成~';
 var CHAT_DUTY_MODE_SERVICE_LEAD = '客服模式：按「客服百问百答」回答客户问题（咨询 / 售后 / 价格 / 使用 / 话术）~';
+var CHAT_DUTY_SERVICE_PLACEHOLDER = '输入客户咨询、售后、价格、话术等客服问题';
+var CHAT_DUTY_LEAD_BACKUP = '';
+var CHAT_DUTY_PLACEHOLDER_BACKUP = '';
 
 function chatDutyMode() {
   var sel = document.getElementById('chatDutyModeSelect');
@@ -3722,14 +3725,32 @@ function applyChatDutyModeToRequest(message) {
 }
 
 function syncChatDutyModeUi() {
+  // 只改客服模式的文案；切回「工作」恢复原文案，工作模式行为不变。
   var mode = chatDutyMode();
   var lead = document.getElementById('chatComposerLead');
   if (lead) {
-    if (mode === 'service') lead.textContent = CHAT_DUTY_MODE_SERVICE_LEAD;
-    else if (lead.textContent === CHAT_DUTY_MODE_SERVICE_LEAD) lead.textContent = CHAT_DUTY_MODE_DEFAULT_LEAD;
+    if (mode === 'service') {
+      if (lead.textContent !== CHAT_DUTY_MODE_SERVICE_LEAD) {
+        CHAT_DUTY_LEAD_BACKUP = lead.textContent || '';
+        lead.textContent = CHAT_DUTY_MODE_SERVICE_LEAD;
+      }
+    } else if (lead.textContent === CHAT_DUTY_MODE_SERVICE_LEAD) {
+      lead.textContent = CHAT_DUTY_LEAD_BACKUP || CHAT_DUTY_MODE_DEFAULT_LEAD;
+      CHAT_DUTY_LEAD_BACKUP = '';
+    }
   }
   var input = document.getElementById('chatInput');
-  if (input) input.setAttribute('placeholder', mode === 'service' ? '输入客户咨询、售后、价格、话术等客服问题' : '发送消息或输入 / 选择技能');
+  if (input) {
+    if (mode === 'service') {
+      if (input.getAttribute('placeholder') !== CHAT_DUTY_SERVICE_PLACEHOLDER) {
+        CHAT_DUTY_PLACEHOLDER_BACKUP = input.getAttribute('placeholder') || '发送消息或输入 / 选择技能';
+        input.setAttribute('placeholder', CHAT_DUTY_SERVICE_PLACEHOLDER);
+      }
+    } else if (input.getAttribute('placeholder') === CHAT_DUTY_SERVICE_PLACEHOLDER) {
+      input.setAttribute('placeholder', CHAT_DUTY_PLACEHOLDER_BACKUP || '发送消息或输入 / 选择技能');
+      CHAT_DUTY_PLACEHOLDER_BACKUP = '';
+    }
+  }
 }
 
 function initChatDutyMode() {
@@ -3815,12 +3836,13 @@ function sendChatMessage() {
   var requestMessage = applyChatDutyModeToRequest(message);
   var body = {
     message: requestMessage,
-    duty_mode: dutyMode,
     history: historyForRequest,
     session_id: sid,
     context_id: null,
     model: model || undefined
   };
+  // 工作模式保持原请求不变：只有客服模式才带 duty_mode
+  if (dutyMode === 'service') body.duty_mode = 'service';
   var directChk = document.getElementById('chatDirectLlmCheck');
   if (sessionMode !== CHAT_MODE_WORKSPACE && directChk && directChk.checked) body.direct_llm = true;
   if (attachIds.length) body.attachment_asset_ids = attachIds;
