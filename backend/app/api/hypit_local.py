@@ -9,8 +9,10 @@ import os
 import re
 import shutil
 import subprocess
+import tarfile
 import time
 import uuid
+import zipfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlparse
@@ -463,13 +465,18 @@ def _hypit_env() -> dict[str, str]:
         # Hypit's Windows package installer resolves ``npm.cmd`` from PATH.
         # The desktop may prepend its bundled npm. Use the installed npm first
         # when available, while Hypit itself still runs under the selected Node.
-        system_node_dir = Path(env.get("PROGRAMFILES", r"C:\Program Files")) / "nodejs"
+        system_node_dir = _bundled_node_dir() if (_bundled_node_dir() / "npm.cmd").is_file() else (
+            Path(env.get("PROGRAMFILES", r"C:\Program Files")) / "nodejs"
+        )
         npm_path = str(system_node_dir)
         paths = [part for part in current_path.split(os.pathsep) if part]
         if (system_node_dir / "npm.cmd").is_file():
             paths = [part for part in paths if os.path.normcase(os.path.normpath(part)) !=
                      os.path.normcase(os.path.normpath(npm_path))]
             paths.insert(0, npm_path)
+        uv_dir = ROOT / "deps" / "uv"
+        if uv_dir.is_dir():
+            paths.insert(0, str(uv_dir))
         if not any(os.path.normcase(os.path.normpath(part)) ==
                    os.path.normcase(os.path.normpath(system32)) for part in paths):
             paths.insert(0, system32)
@@ -534,6 +541,9 @@ def _has_recoverable_hypit_install_error(error: Exception) -> bool:
 
 
 def _installed_chrome_path() -> Path | None:
+    bundled = _bundled_chromium_path()
+    if bundled is not None:
+        return bundled
     if os.name != "nt":
         return None
     candidates = [
@@ -597,7 +607,9 @@ def _dependency_status() -> dict[str, Any]:
             error = str(exc)[:1200]
     missing = []
     if not root:
-        missing.append("Hypit CLI")
+        missing.append("Hypit CLI（发行包，点「安装运行依赖」会自动下载）")
+    elif not _hypit_node_modules_ready(root):
+        missing.append("Hypit 运行依赖（点「安装运行依赖」会自动安装）")
     if not node:
         missing.append("Node.js")
     if not ffmpeg:
@@ -1680,6 +1692,15 @@ RUNTIME_INSTALL_TASKS: dict[str, asyncio.Task] = {}
 RUNTIME_LOG_LIMIT = 300
 _ENGINE_PACKAGE = ("@hyperframes/engine", "0.7.101")
 
+# ── 一键安装（方案 A）：Hypit 发行包 / uv / 渲染浏览器 ──
+# 发行包版本跟上游走；镜像可放我们自己的静态目录（LOBSTER_TOOLS_BASE），
+# 起不来时自动回退 npmmirror / 官方 npm。
+_HYPIT_DIST_VERSION = (os.environ.get("HYPIT_DIST_VERSION") or "0.2.17").strip() or "0.2.17"
+_HYPIT_DIST_SUBDIR = ("aihypit", "hypit")
+_TOOLS_BASE = (os.environ.get("LOBSTER_TOOLS_BASE") or "https://bhzn.top/client/tools").rstrip("/")
+_UV_ARCHIVE_NAME = "uv-x86_64-pc-windows-msvc.zip" if os.name == "nt" else "uv-x86_64-unknown-linux-gnu.tar.gz"
+_DOWNLOAD_TIMEOUT = 900.0
+
 
 def _runtime_state() -> dict[str, Any]:
     try:
@@ -1742,20 +1763,233 @@ def _ffprobe_executable() -> str | None:
     return shutil.which("ffprobe")
 
 
+def _bundled_node_dir() -> Path:
+    return ROOT / "nodejs"
+
+
 def _npm_executable() -> str | None:
-    """优先系统 npm（Hypit 的 Windows 包安装器从 PATH 找 npm.cmd），其次客户端自带目录。"""
+    """优先【客户端自带】npm（用户机器不一定装了 Node），其次系统 PATH。"""
+    for name in ("npm.cmd", "npm"):
+        candidate = _bundled_node_dir() / name
+        if candidate.is_file():
+            return str(candidate)
+    found = shutil.which("npm")
+    if found:
+        return found
     if os.name == "nt":
         system = Path(os.environ.get("PROGRAMFILES", r"C:\Program Files")) / "nodejs" / "npm.cmd"
         if system.is_file():
             return str(system)
-    found = shutil.which("npm")
-    if found:
-        return found
-    for name in ("npm.cmd", "npm"):
-        candidate = ROOT / "nodejs" / name
+    return None
+
+
+def _bundled_chromium_path() -> Path | None:
+    """客户端自带 Chromium：渲染用它，不要求用户自己装 Chrome。"""
+    base = ROOT / "browser_chromium"
+    if not base.is_dir():
+        return None
+    for pattern in ("chromium-*/chrome-win64/chrome.exe", "chromium-*/chrome-win/chrome.exe",
+                    "chromium*/chrome-linux/chrome", "chromium*/chrome.exe"):
+        for candidate in sorted(base.glob(pattern), reverse=True):
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def _uv_executable() -> str | None:
+    """uv（本地 Python 程序/WhisperX 用）：优先包内 deps/uv，其次 PATH。"""
+    for name in ("uv.exe", "uv"):
+        candidate = ROOT / "deps" / "uv" / name
         if candidate.is_file():
             return str(candidate)
-    return None
+    return shutil.which("uv")
+
+
+def _hypit_node_modules_ready(root_dir: Path | None) -> bool:
+    return bool(root_dir) and (root_dir / "node_modules").is_dir()
+
+
+def _hypit_dist_dir() -> Path:
+    return ROOT.joinpath(*_HYPIT_DIST_SUBDIR)
+
+
+def _hypit_dist_urls() -> list[str]:
+    version = _HYPIT_DIST_VERSION
+    return [
+        f"{_TOOLS_BASE}/hypit-{version}.tgz",
+        f"https://registry.npmmirror.com/@hypit/hypit/-/hypit-{version}.tgz",
+        f"https://registry.npmjs.org/@hypit/hypit/-/hypit-{version}.tgz",
+    ]
+
+
+def _uv_urls() -> list[str]:
+    if os.name == "nt":
+        return [f"{_TOOLS_BASE}/{_UV_ARCHIVE_NAME}",
+                f"https://github.com/astral-sh/uv/releases/latest/download/{_UV_ARCHIVE_NAME}"]
+    return [f"{_TOOLS_BASE}/{_UV_ARCHIVE_NAME}",
+            f"https://github.com/astral-sh/uv/releases/latest/download/{_UV_ARCHIVE_NAME}"]
+
+
+def _download_first_available(urls: list[str], target: Path, *, label: str = "") -> str:
+    """按顺序试下载源，成功就落盘并返回 URL；全失败抛错（带上每个源的错误）。"""
+    import httpx
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    errors: list[str] = []
+    for url in urls:
+        tmp = target.with_suffix(target.suffix + ".part")
+        try:
+            _append_runtime_log("下载%s：%s" % (label, url))
+            with httpx.stream("GET", url, timeout=_DOWNLOAD_TIMEOUT, follow_redirects=True, trust_env=False) as resp:
+                if resp.status_code >= 400:
+                    errors.append("%s -> HTTP %s" % (url, resp.status_code))
+                    continue
+                total = 0
+                with tmp.open("wb") as fh:
+                    for chunk in resp.iter_bytes(1024 * 256):
+                        fh.write(chunk)
+                        total += len(chunk)
+            if total <= 0:
+                errors.append("%s -> 空文件" % url)
+                continue
+            tmp.replace(target)
+            _append_runtime_log("下载完成：%s（%.1f MB）" % (url, total / 1024 / 1024))
+            return url
+        except Exception as exc:  # noqa: BLE001 换下一个源
+            errors.append("%s -> %s" % (url, exc))
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+    raise RuntimeError("下载%s失败：%s" % (label, "；".join(errors)[-600:]))
+
+
+def _safe_extract_zip(archive: Path, dest: Path) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(archive) as zf:
+        for member in zf.namelist():
+            name = member.replace("\\", "/")
+            if name.startswith("/") or ".." in name.split("/"):
+                continue
+            zf.extract(member, dest)
+
+
+def _safe_extract_tar(archive: Path, dest: Path) -> None:
+    dest.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive) as tf:
+        for member in tf.getmembers():
+            name = member.name.replace("\\", "/")
+            if member.issym() or member.islnk() or name.startswith("/") or ".." in name.split("/"):
+                continue
+            tf.extract(member, dest)
+
+
+def _locate_hypit_dist_root(staging: Path) -> Path | None:
+    """npm 包解包后通常是 staging/package/bin/hypit.mjs；也兼容直接解到根的情况。"""
+    if (staging / "bin" / "hypit.mjs").is_file():
+        return staging
+    try:
+        candidates = [child for child in staging.iterdir()
+                      if child.is_dir() and (child / "bin" / "hypit.mjs").is_file()]
+    except OSError:
+        return None
+    return candidates[0] if candidates else None
+
+
+def _ensure_hypit_distribution() -> Path:
+    """确保 <ROOT>/aihypit/hypit 就位：没有就下载发行包并解包。"""
+    target = _hypit_dist_dir()
+    existing = _hypit_root()
+    if existing is not None and existing != target:
+        return existing
+    if (target / "bin" / "hypit.mjs").is_file():
+        return target
+    import tempfile
+
+    _write_runtime_state(stage="正在下载 Hypit 发行包（首次约 3 MB）", percent=10)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        archive = Path(tmp_dir) / ("hypit-%s.tgz" % _HYPIT_DIST_VERSION)
+        _download_first_available(_hypit_dist_urls(), archive, label="Hypit 发行包")
+        _write_runtime_state(stage="正在解包 Hypit 发行包", percent=22)
+        staging = Path(tmp_dir) / "unpack"
+        _safe_extract_tar(archive, staging)
+        dist_root = _locate_hypit_dist_root(staging)
+        if dist_root is None:
+            raise RuntimeError("Hypit 发行包内容异常（没有 bin/hypit.mjs）")
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(dist_root), str(target))
+    _append_runtime_log("Hypit 发行包已就位：%s（版本 %s）" % (target, _HYPIT_DIST_VERSION))
+    return target
+
+
+def _install_hypit_node_modules(dist_dir: Path) -> None:
+    """用包内 npm 在发行目录装运行依赖（Hypit 用 tsx 直接跑 TS 源码）。"""
+    if (dist_dir / "node_modules").is_dir():
+        return
+    node = _node_executable()
+    npm = _npm_executable()
+    if not node:
+        raise RuntimeError("未找到 Node.js（客户端自带 nodejs/node.exe）")
+    if not npm:
+        raise RuntimeError("未找到 npm（客户端自带 nodejs/npm.cmd）")
+    _write_runtime_state(stage="正在安装 Hypit 运行依赖（首次较慢，约几百 MB）", percent=32)
+    env = _hypit_env()
+    registries = ["https://registry.npmmirror.com", ""]
+    last_error = ""
+    for registry in registries:
+        args = [npm, "install", "--omit=dev", "--no-audit", "--no-fund", "--loglevel=error"]
+        if registry:
+            args.append("--registry=" + registry)
+        try:
+            _append_runtime_log("安装 Hypit 依赖：%s %s" % (" ".join(args[:3]),
+                                                            ("（registry=%s）" % registry) if registry else "（默认 registry）"))
+            proc = subprocess.run(args, cwd=str(dist_dir), capture_output=True, text=True,
+                                  errors="replace", env=env, timeout=3600,
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            tail = (proc.stdout or "")[-600:] + (proc.stderr or "")[-600:]
+            if proc.returncode == 0 and (dist_dir / "node_modules").is_dir():
+                _append_runtime_log("Hypit 运行依赖安装完成")
+                return
+            last_error = "退出码 %s：%s" % (proc.returncode, tail.strip()[-500:])
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)[:500]
+        _append_runtime_log("这一次安装失败，换下一个源重试：%s" % last_error[:200])
+    raise RuntimeError("Hypit 运行依赖安装失败：%s" % last_error)
+
+
+def _ensure_uv() -> str | None:
+    """确保 uv 可用（本地 Python 程序/WhisperX 需要）。"""
+    found = _uv_executable()
+    if found:
+        return found
+    target_dir = ROOT / "deps" / "uv"
+    import tempfile
+
+    _write_runtime_state(stage="正在下载 uv（约 18 MB）", percent=55)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        archive = Path(tmp_dir) / _UV_ARCHIVE_NAME
+        _download_first_available(_uv_urls(), archive, label="uv")
+        _write_runtime_state(stage="正在解包 uv", percent=58)
+        staging = Path(tmp_dir) / "unpack"
+        if archive.suffix == ".zip":
+            _safe_extract_zip(archive, staging)
+        else:
+            _safe_extract_tar(archive, staging)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for candidate in staging.rglob("uv*"):
+            if candidate.is_file() and candidate.suffix.lower() in {"", ".exe"} and "uv" in candidate.name.lower():
+                shutil.copy2(candidate, target_dir / candidate.name)
+        exe = target_dir / ("uv.exe" if os.name == "nt" else "uv")
+        if not exe.is_file():
+            raise RuntimeError("uv 解包后没找到可执行文件")
+        try:
+            exe.chmod(0o755)
+        except OSError:
+            pass
+    _append_runtime_log("uv 已就绪：%s" % exe)
+    return str(exe)
 
 
 def _runtime_dependencies() -> list[dict[str, Any]]:
@@ -1767,6 +2001,8 @@ def _runtime_dependencies() -> list[dict[str, Any]]:
     engine_ok = _installed_hypit_registry_package(*_ENGINE_PACKAGE)
     ffmpeg = _ffmpeg_executable()
     ffprobe = _ffprobe_executable()
+    uv = _uv_executable()
+    node_modules_ok = _hypit_node_modules_ready(root)
     return [
         {
             "key": "node",
@@ -1782,15 +2018,27 @@ def _runtime_dependencies() -> list[dict[str, Any]]:
         },
         {
             "key": "chrome",
-            "label": "Chrome 浏览器",
+            "label": "渲染浏览器",
             "ok": bool(chrome),
-            "detail": str(chrome or "未检测到已安装的 Chrome（本机渲染需要）"),
+            "detail": str(chrome or "未找到（客户端自带 browser_chromium 或系统 Chrome）"),
         },
         {
             "key": "hypit",
-            "label": "Hypit 运行时",
+            "label": "Hypit 发行包",
             "ok": bool(root),
-            "detail": str(root or "未找到（放到客户端同级 ai-hypit/hypit，或设 HYPIT_ROOT）"),
+            "detail": str(root or "未安装（点「安装运行依赖」会自动下载解包）"),
+        },
+        {
+            "key": "hypit_deps",
+            "label": "Hypit 运行依赖",
+            "ok": node_modules_ok,
+            "detail": "已安装" if node_modules_ok else "未安装（点「安装运行依赖」自动装，约几百 MB）",
+        },
+        {
+            "key": "uv",
+            "label": "uv（本地语音/文档程序）",
+            "ok": bool(uv),
+            "detail": str(uv or "未安装（点「安装运行依赖」会自动下载）"),
         },
         {
             "key": "ffmpeg",
@@ -1849,24 +2097,32 @@ async def _run_runtime_install() -> None:
     )
     try:
         root, node = _hypit_root(), _node_executable()
-        if not root:
-            raise RuntimeError(
-                "未找到 Hypit 运行时目录（aihypit/hypit）。请把运行时放到客户端同级目录，或设置 HYPIT_ROOT 后重试。"
-            )
         if not node:
             raise RuntimeError("未找到 Node.js（客户端自带 nodejs/node.exe 或系统 node）")
         if not _npm_executable():
-            raise RuntimeError("未找到 npm，请先安装 Node.js（含 npm）")
+            raise RuntimeError("未找到 npm（客户端自带 nodejs/npm.cmd）")
         if not _installed_chrome_path():
-            raise RuntimeError("未检测到已安装的 Chrome：本机渲染需要系统 Chrome")
+            raise RuntimeError("未找到渲染浏览器（客户端自带 browser_chromium 或系统 Chrome）")
+        # 1) 发行包：没有就下载解包到 <ROOT>/aihypit/hypit
+        if not root:
+            _write_runtime_state(stage="准备 Hypit 发行包", percent=8)
+            root = await asyncio.to_thread(_ensure_hypit_distribution)
+        # 2) 发行包自己的运行依赖（npm install --omit=dev）
+        await asyncio.to_thread(_install_hypit_node_modules, root)
+        # 3) uv（本地 Python 程序/WhisperX）
+        _write_runtime_state(stage="准备 uv", percent=52)
+        try:
+            await asyncio.to_thread(_ensure_uv)
+        except Exception as exc:  # noqa: BLE001 uv 装不上不阻断渲染主线
+            _append_runtime_log("uv 安装失败（不阻断渲染）：%s" % str(exc)[:300])
         workspace = RUNTIME_WORKSPACE_DIR
         workspace.mkdir(parents=True, exist_ok=True)
-        _write_runtime_state(stage="正在初始化运行环境", percent=12)
+        _write_runtime_state(stage="正在初始化运行环境", percent=62)
         await asyncio.to_thread(
             _stream_hypit_command, root, node, ["runtime", "init", "--workspace", str(workspace)], workspace
         )
         await asyncio.to_thread(_configure_runtime_browser, workspace)
-        _write_runtime_state(stage="正在下载并安装渲染依赖（首次较慢）", percent=25)
+        _write_runtime_state(stage="正在下载并安装渲染依赖（首次较慢）", percent=75)
         await asyncio.to_thread(
             _stream_hypit_command, root, node, ["runtime", "up", "--workspace", str(workspace)], workspace
         )

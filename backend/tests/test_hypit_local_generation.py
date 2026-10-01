@@ -247,17 +247,20 @@ def test_hypit_environment_uses_shared_state_and_windows_system_tools(monkeypatc
     assert env["PATH"].startswith(r"C:\Windows\System32;")
 
 
-def test_hypit_environment_prefers_system_npm_over_bundled_npm(tmp_path, monkeypatch):
+def test_hypit_environment_prefers_bundled_npm(tmp_path, monkeypatch):
+    """方案 A：包内 npm 优先（用户机器可能根本没装 Node），系统 npm 只做兜底。"""
     node_dir = tmp_path / "nodejs"
     node_dir.mkdir()
     (node_dir / "npm.cmd").write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setattr(hypit_local, "ROOT", tmp_path)
     monkeypatch.setattr(hypit_local.os, "name", "nt")
-    monkeypatch.setenv("PROGRAMFILES", str(tmp_path))
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path / "programfiles"))
     monkeypatch.setenv("PATH", r"D:\\lobster\\nodejs;" + str(node_dir) + r";C:\\Windows\\System32")
 
     env = hypit_local._hypit_env()
 
     assert env["PATH"].split(";")[0].lower() == str(node_dir).lower()
+    assert hypit_local._npm_executable() == str(node_dir / "npm.cmd")
 
 
 def test_installed_hypit_package_is_verified_by_name_and_version(tmp_path, monkeypatch):
@@ -400,7 +403,8 @@ def test_runtime_dependencies_report_missing_items(monkeypatch):
     monkeypatch.setattr(hypit_local, "_ffprobe_executable", lambda: None)
 
     items = hypit_local._runtime_dependencies()
-    assert [item["key"] for item in items] == ["node", "npm", "chrome", "hypit", "ffmpeg", "ffprobe", "engine"]
+    assert [item["key"] for item in items] == [
+        "node", "npm", "chrome", "hypit", "hypit_deps", "uv", "ffmpeg", "ffprobe", "engine"]
     assert all(item["ok"] is False for item in items)
 
 
@@ -414,6 +418,10 @@ def test_runtime_install_records_progress_and_completes(tmp_path, monkeypatch):
     monkeypatch.setattr(hypit_local, "_configure_runtime_browser", lambda project_dir: None)
     monkeypatch.setattr(hypit_local, "_dependency_status", lambda: {"ready": True})
     monkeypatch.setattr(hypit_local, "_installed_hypit_registry_package", lambda *a, **k: True)
+    # 方案 A：安装流程会先确保发行包/运行依赖/uv（这里 stub 掉，只验证主流程）
+    monkeypatch.setattr(hypit_local, "_ensure_hypit_distribution", lambda: tmp_path / "hypit")
+    monkeypatch.setattr(hypit_local, "_install_hypit_node_modules", lambda dist_dir: None)
+    monkeypatch.setattr(hypit_local, "_ensure_uv", lambda: "uv")
 
     calls = []
 
@@ -432,15 +440,24 @@ def test_runtime_install_records_progress_and_completes(tmp_path, monkeypatch):
     assert any("runtime up" in line for line in state["log"])
 
 
-def test_runtime_install_reports_missing_runtime(tmp_path, monkeypatch):
+def test_runtime_install_reports_dist_download_failure(tmp_path, monkeypatch):
+    """方案 A：发行包不再要求用户手放；下载失败要把原因写进安装状态。"""
     monkeypatch.setattr(hypit_local, "RUNTIME_STATE_PATH", tmp_path / "runtime_install.json")
     monkeypatch.setattr(hypit_local, "_hypit_root", lambda: None)
+    monkeypatch.setattr(hypit_local, "_node_executable", lambda: "node")
+    monkeypatch.setattr(hypit_local, "_npm_executable", lambda: "npm")
+    monkeypatch.setattr(hypit_local, "_installed_chrome_path", lambda: tmp_path / "chrome.exe")
+
+    def boom():
+        raise RuntimeError("下载 Hypit 发行包失败：全部镜像不可用")
+
+    monkeypatch.setattr(hypit_local, "_ensure_hypit_distribution", boom)
 
     asyncio.run(hypit_local._run_runtime_install())
 
     state = hypit_local._runtime_state()
     assert state["status"] == "failed"
-    assert "运行时" in state["error"]
+    assert "发行包" in state["error"]
 
 
 def test_ffmpeg_prefers_bundled_copy(tmp_path, monkeypatch):
@@ -485,3 +502,100 @@ def test_workflow_params_reads_capability_payload():
     src = (Path(__file__).resolve().parents[2] / "static" / "js" / "views" / "h5-employees.js").read_text(encoding="utf-8")
     assert "payload.capability_id" in src
     assert "script_sources" in src
+
+
+
+def test_bundled_chromium_and_npm_preferred(tmp_path, monkeypatch):
+    """渲染浏览器/包管理器都优先用客户端自带的（用户机器不一定装 Chrome/Node）。"""
+    chrome = tmp_path / "browser_chromium" / "chromium-1208" / "chrome-win64" / "chrome.exe"
+    chrome.parent.mkdir(parents=True)
+    chrome.write_bytes(b"chrome")
+    npm = tmp_path / "nodejs" / "npm.cmd"
+    npm.parent.mkdir(parents=True)
+    npm.write_text("@echo off", encoding="utf-8")
+    monkeypatch.setattr(hypit_local, "ROOT", tmp_path)
+
+    assert hypit_local._bundled_chromium_path() == chrome
+    assert hypit_local._installed_chrome_path() == chrome
+    assert hypit_local._npm_executable() == str(npm)
+
+
+def test_runtime_dependencies_reports_hypit_dist_and_uv(tmp_path, monkeypatch):
+    """依赖体检要把「发行包 / 运行依赖 / uv」分别列出来，缺了要提示点按钮安装。"""
+    monkeypatch.setattr(hypit_local, "ROOT", tmp_path)
+    monkeypatch.setattr(hypit_local, "_hypit_root", lambda: None)
+    monkeypatch.setattr(hypit_local, "_uv_executable", lambda: None)
+
+    items = {item["key"]: item for item in hypit_local._runtime_dependencies()}
+    assert items["hypit"]["ok"] is False and "安装运行依赖" in items["hypit"]["detail"]
+    assert items["hypit_deps"]["ok"] is False
+    assert items["uv"]["ok"] is False
+
+
+def test_safe_extract_tar_blocks_path_traversal(tmp_path):
+    import io
+    import tarfile
+
+    archive = tmp_path / "dist.tgz"
+    with tarfile.open(archive, "w:gz") as tf:
+        evil = tarfile.TarInfo("../evil.txt")
+        evil.size = 4
+        tf.addfile(evil, io.BytesIO(b"evil"))
+        good = tarfile.TarInfo("bin/hypit.mjs")
+        good.size = 4
+        tf.addfile(good, io.BytesIO(b"okay"))
+
+    dest = tmp_path / "out"
+    hypit_local._safe_extract_tar(archive, dest)
+    assert (dest / "bin" / "hypit.mjs").is_file()
+    assert not (tmp_path / "evil.txt").exists()
+
+
+def test_download_first_available_falls_back_to_next_source(tmp_path):
+    """第一个源挂了要自动换下一个源（装依赖最常见的失败点）。"""
+    import http.server
+    import socketserver
+    import threading
+
+    payload = b"hypit-dist-bytes" * 100
+    served = tmp_path / "served.tgz"
+    served.write_bytes(payload)
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(tmp_path), **kwargs)
+
+        def log_message(self, *args):
+            return
+
+    with socketserver.TCPServer(("127.0.0.1", 0), Handler) as srv:
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        target = tmp_path / "out" / "dist.tgz"
+        url = hypit_local._download_first_available(
+            ["http://127.0.0.1:1/nope.tgz", "http://127.0.0.1:%d/served.tgz" % port],
+            target,
+            label="测试",
+        )
+        srv.shutdown()
+
+    assert url.endswith("/served.tgz")
+    assert target.read_bytes() == payload
+
+
+
+def test_locate_hypit_dist_root_handles_npm_package_layout(tmp_path):
+    """npm 包解包后是 package/ 子目录（真实 tgz 就是这样），必须能找到发行根。"""
+    flat = tmp_path / "flat"
+    (flat / "bin").mkdir(parents=True)
+    (flat / "bin" / "hypit.mjs").write_text("x", encoding="utf-8")
+    assert hypit_local._locate_hypit_dist_root(flat) == flat
+
+    nested = tmp_path / "nested"
+    (nested / "package" / "bin").mkdir(parents=True)
+    (nested / "package" / "bin" / "hypit.mjs").write_text("x", encoding="utf-8")
+    assert hypit_local._locate_hypit_dist_root(nested) == nested / "package"
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert hypit_local._locate_hypit_dist_root(empty) is None
