@@ -682,21 +682,60 @@ def _safe_job_dir(user_id: int, job_id: str) -> Path:
     return directory
 
 
-def _run_hypit(root: Path, node: str, args: list[str], timeout: int) -> str:
-    result = subprocess.run(
-        [node, str(root / "bin" / "hypit.mjs"), *args],
-        cwd=str(root),
-        capture_output=True,
-        text=True,
-        errors="replace",
-        timeout=timeout,
-        env=_hypit_env(),
+_MISSING_PACKAGE_RE = re.compile(r"hypit\s+packages\s+install\s+([@A-Za-z0-9._/-]+)@([A-Za-z0-9.\-]+)")
+
+
+def _missing_hypit_package(detail: str) -> tuple[str, str] | None:
+    """从 hypit 的报错里认出「缺哪个包、装哪个版本」。"""
+    match = _MISSING_PACKAGE_RE.search(str(detail or ""))
+    if not match:
+        return None
+    return match.group(1).strip(), match.group(2).strip()
+
+
+def _install_hypit_package(root: Path, node: str, name: str, version: str) -> None:
+    """机器级安装一个 hypit 包（字体等）。"""
+    spec = "%s@%s" % (name, version)
+    _append_runtime_log("自动补装 Hypit 包：%s" % spec)
+    proc = subprocess.run(
+        [node, str(root / "bin" / "hypit.mjs"), "packages", "install", spec],
+        cwd=str(root), capture_output=True, text=True, errors="replace",
+        timeout=1800, env=_hypit_env(),
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-    if result.returncode != 0:
+    if proc.returncode != 0:
+        tail = ((proc.stdout or "") + (proc.stderr or "")).strip()[-800:]
+        raise RuntimeError("安装 Hypit 包 %s 失败：%s" % (spec, tail))
+    _append_runtime_log("Hypit 包已就绪：%s" % spec)
+
+
+def _run_hypit(root: Path, node: str, args: list[str], timeout: int) -> str:
+    auto_fix_left = 3
+    while True:
+        result = subprocess.run(
+            [node, str(root / "bin" / "hypit.mjs"), *args],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+            env=_hypit_env(),
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if result.returncode == 0:
+            return result.stdout or ""
         detail = (result.stderr or result.stdout or "Hypit 分析失败").strip()
+        missing = _missing_hypit_package(detail)
+        if missing and auto_fix_left > 0:
+            # 缺机器级包（例如授权字体）：装完自动重试，别让用户自己敲命令
+            auto_fix_left -= 1
+            try:
+                _install_hypit_package(root, node, missing[0], missing[1])
+            except Exception as exc:  # noqa: BLE001
+                raise RuntimeError("%s\n（自动安装 %s@%s 失败：%s）" % (
+                    detail[-2000:], missing[0], missing[1], str(exc)[:300])) from exc
+            continue
         raise RuntimeError(detail[-2400:])
-    return result.stdout or ""
 
 
 def _runtime_failure_detail(error: Exception) -> str:
@@ -1754,6 +1793,10 @@ _TOOLS_BASES = [
 ]
 _TOOLS_BASE = _TOOLS_BASES[0]
 _UV_ARCHIVE_NAME = "uv-x86_64-pc-windows-msvc.zip" if os.name == "nt" else "uv-x86_64-unknown-linux-gnu.tar.gz"
+# 一键安装时顺带预装的 Hypit 包（机器级共享）。授权字体缺了会在出片时直接报
+#   "@fontsource-variable/inter is needed by this authored font. Install it once with:
+#    hypit packages install @fontsource-variable/inter@5.3.0"
+_HYPIT_BASE_PACKAGES = ("@fontsource-variable/inter@5.3.0",)
 _DOWNLOAD_TIMEOUT = 900.0
 
 
@@ -2227,6 +2270,13 @@ async def _run_runtime_install() -> None:
         await asyncio.to_thread(
             _stream_hypit_command, root, node, ["runtime", "up", "--workspace", str(workspace)], workspace
         )
+        _write_runtime_state(stage="正在预装常用 Hypit 包（字体等）", percent=88)
+        for spec in _HYPIT_BASE_PACKAGES:
+            name, _, version = spec.partition("@")
+            try:
+                await asyncio.to_thread(_install_hypit_package, root, node, name, version)
+            except Exception as exc:  # noqa: BLE001 预装失败不阻断，真缺的时候 _run_hypit 会自动补
+                _append_runtime_log("预装 %s 失败（不阻断）：%s" % (spec, str(exc)[:200]))
         _write_runtime_state(stage="正在自检渲染环境", percent=95)
         status = await asyncio.to_thread(_dependency_status)
         if not status.get("ready"):

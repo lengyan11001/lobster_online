@@ -696,3 +696,47 @@ def test_installed_chrome_skips_broken_bundled_chromium(tmp_path, monkeypatch):
 
     monkeypatch.setattr(hypit_local, "_chrome_works", lambda path: False)
     assert hypit_local._installed_chrome_path() is None
+
+
+
+def test_missing_hypit_package_is_parsed_from_error():
+    """hypit 报 "hypit packages install <pkg>@<ver>" 时要能解析出来。"""
+    detail = ('{"format": "hypit.cli-error@1", "ok": false, "error": {"code": "CLI_ERROR", '
+              '"message": "@fontsource-variable/inter is needed by this authored font. '
+              'Install it once with: hypit packages install @fontsource-variable/inter@5.3.0"}}')
+    assert hypit_local._missing_hypit_package(detail) == ("@fontsource-variable/inter", "5.3.0")
+    assert hypit_local._missing_hypit_package("普通报错") is None
+
+
+def test_run_hypit_auto_installs_missing_package_and_retries(tmp_path, monkeypatch):
+    """缺包时：自动跑 hypit packages install，然后重试原命令，用户不用手敲。"""
+    import subprocess as _sp
+
+    monkeypatch.setattr(hypit_local, "RUNTIME_STATE_PATH", tmp_path / "state.json")
+    monkeypatch.setattr(hypit_local, "_hypit_env", lambda: {})
+    calls = []
+
+    class _Proc:
+        def __init__(self, code, out="", err=""):
+            self.returncode = code
+            self.stdout = out
+            self.stderr = err
+
+    error_json = ('{"format":"hypit.cli-error@1","ok":false,"error":{"code":"CLI_ERROR","message":'
+                  '"@fontsource-variable/inter is needed by this authored font. Install it once with: '
+                  'hypit packages install @fontsource-variable/inter@5.3.0"}}')
+
+    def fake_run(args, **kwargs):
+        calls.append(list(args))
+        if args[2] == "packages":
+            return _Proc(0, "installed")
+        if len([c for c in calls if c[2] != "packages"]) == 1:
+            return _Proc(1, "", error_json)
+        return _Proc(0, "build-ok")
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    out = hypit_local._run_hypit(tmp_path, "node", ["build", "--workspace", str(tmp_path)], 60)
+
+    assert out == "build-ok"
+    install_calls = [c for c in calls if c[2] == "packages"]
+    assert install_calls and install_calls[0][3] == "install" and install_calls[0][4] == "@fontsource-variable/inter@5.3.0"
