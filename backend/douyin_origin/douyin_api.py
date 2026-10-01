@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextvars
+import hashlib
 import json
 import os
 import random
@@ -13579,9 +13580,32 @@ def _douyin_wechat_ai_text(row: Dict) -> str:
 
 
 def douyin_wechat_hint_present(row: Dict) -> bool:
-    """消息里有没有「微信/加我」这类引导词——没有就不去花 AI token。"""
+    """消息里有没有「微信/加我」这类引导词。"""
     text = _douyin_wechat_ai_text(row).lower()
     return bool(text) and any(word in text for word in _DOUYIN_WECHAT_HINT_WORDS)
+
+
+def douyin_wechat_candidate_tokens(row: Dict) -> List[str]:
+    """消息里「像微信号」的候选（不带引导词也能捞出来，交给 AI 判断）。"""
+    text = _douyin_wechat_ai_text(row)
+    if not text:
+        return []
+    tokens: List[str] = []
+    for token in _DOUYIN_WECHAT_ID_RE.findall(text):
+        if looks_like_douyin_wechat_id(token) and token not in tokens:
+            tokens.append(token)
+    return tokens[:8]
+
+
+def douyin_wechat_should_ask_ai(row: Dict) -> bool:
+    """什么时候值得花 AI token 判断「对方有没有留微信号」。
+
+    以前只认「微信/vx/加我」这类引导词，客户直接甩号（“哈喽 zm_kd3 沟通吧”）永远抓不到；
+    现在只要消息里出现像微信号的候选就问 AI 一次，纯聊天（“多少钱？”“你好”）仍然不问。
+    """
+    if douyin_wechat_hint_present(row):
+        return True
+    return bool(douyin_wechat_candidate_tokens(row))
 
 
 def extract_douyin_wechat_id_by_ai(row: Dict) -> Dict[str, str]:
@@ -13593,8 +13617,9 @@ def extract_douyin_wechat_id_by_ai(row: Dict) -> Dict[str, str]:
     text = _douyin_wechat_ai_text(row)
     if not text:
         return {"wechat_id": "", "evidence": "", "source": "ai"}
-    lowered = text.lower()
-    if not any(word in lowered for word in _DOUYIN_WECHAT_HINT_WORDS):
+    candidates = douyin_wechat_candidate_tokens(row)
+    # 没有引导词、也没有像号的候选 = 纯聊天，不用花 token；有候选就交给 AI 判断
+    if not douyin_wechat_hint_present(row) and not candidates:
         return {"wechat_id": "", "evidence": "", "source": "ai"}
     cache_key = hashlib.sha256(text.encode("utf-8")).hexdigest()
     cached = _DOUYIN_WECHAT_AI_CACHE.get(cache_key)
@@ -13606,10 +13631,16 @@ def extract_douyin_wechat_id_by_ai(row: Dict) -> Dict[str, str]:
         '{"wechat_id": "<对方明确留下的微信号，没有就空字符串>", '
         '"evidence": "<原文里能证明的片段，没有就空字符串>"}'
     )
+    candidate_line = (
+        "消息里这些片段是疑似微信号候选：" + "、".join(candidates) + "\n" if candidates else ""
+    )
     user_prompt = (
         f"对方发来的消息：\n{text}\n\n"
-        "只判断对方自己有没有留下微信号（wx/vx/微信/加我 后面的那串）；"
-        "没有就都返回空字符串，不要猜、不要把昵称或抖音号算进来。"
+        f"{candidate_line}"
+        "判断对方自己有没有留下微信号：可能是「微信/vx/wx/加我」后面那串，"
+        "也可能是对方直接甩出来的一串号（客户经常不带任何引导词）。"
+        "只有能确定那是他本人的微信号时才返回；拿不准、或那串其实是他抖音号/昵称/订单号，"
+        "就返回空字符串。不要猜、不要自己编一个号。"
     )
     result = {"wechat_id": "", "evidence": "", "source": "ai"}
     try:
@@ -13903,7 +13934,7 @@ async def run_douyin_h5_stranger_message_task_once(
             merged_numbers = list(dict.fromkeys(current_numbers or old_numbers))
             row["phone_numbers"] = merged_numbers
             current_wechat_ids = extract_douyin_wechat_ids([row])
-            if not current_wechat_ids and douyin_wechat_hint_present(row):
+            if not current_wechat_ids and douyin_wechat_should_ask_ai(row):
                 # 提到微信但规则抽不出来（用户随便起的号）→ 让 AI 顺手判断一次
                 try:
                     ai_hit = await asyncio.to_thread(extract_douyin_wechat_id_by_ai, row)
@@ -14656,7 +14687,7 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
         for row in unseen_rows:
             row["phone_numbers"] = extract_douyin_mainland_mobile_numbers([row])
             row["wechat_ids"] = extract_douyin_wechat_ids([row])
-            if not row["wechat_ids"] and douyin_wechat_hint_present(row):
+            if not row["wechat_ids"] and douyin_wechat_should_ask_ai(row):
                 try:
                     ai_hit = await asyncio.to_thread(extract_douyin_wechat_id_by_ai, row)
                     if str(ai_hit.get("wechat_id") or "").strip():

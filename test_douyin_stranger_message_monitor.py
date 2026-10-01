@@ -379,3 +379,55 @@ def test_wechat_id_flows_same_path_as_phone(monkeypatch):
     result = asyncio.run(douyin_api._queue_douyin_wechat_friend_add(["eiaiyuangong"]))
     assert result["queued"] is True
     assert captured["values"] == ["eiaiyuangong"]
+
+
+
+def test_wechat_ai_judges_message_without_hint_word(monkeypatch):
+    """客户不带「微信/vx/加我」直接甩号时，也要交给 AI 判断，不能只靠规则。"""
+    from douyin_api import (
+        douyin_wechat_should_ask_ai,
+        douyin_wechat_candidate_tokens,
+        extract_douyin_wechat_id_by_ai,
+        extract_douyin_wechat_ids,
+    )
+
+    row = {"incoming_message": "哈喽 zm_kd3 沟通吧"}
+    assert extract_douyin_wechat_ids([row]) == []          # 规则保持保守：没引导词不猜
+    assert douyin_wechat_candidate_tokens(row) == ["zm_kd3"]
+    assert douyin_wechat_should_ask_ai(row) is True
+
+    row2 = {"incoming_message": "jin10190922 你找我吧"}
+    assert douyin_wechat_candidate_tokens(row2) == ["jin10190922"]
+    assert douyin_wechat_should_ask_ai(row2) is True
+
+    assert douyin_wechat_should_ask_ai({"incoming_message": "多少钱？"}) is False
+    assert douyin_wechat_should_ask_ai({"incoming_message": "在吗 你好"}) is False
+
+    seen_prompts = []
+
+    def fake_ai(system_prompt, user_prompt, **kwargs):
+        seen_prompts.append(user_prompt)
+        return '{"wechat_id": "zm_kd3", "evidence": "哈喽 zm_kd3 沟通吧"}'
+
+    monkeypatch.setattr(douyin_api, "request_douyin_ai_comment", fake_ai)
+    douyin_api._DOUYIN_WECHAT_AI_CACHE.clear()
+    hit = extract_douyin_wechat_id_by_ai(row)
+    assert hit["wechat_id"] == "zm_kd3"
+    assert hit["evidence"]
+    assert "zm_kd3" in seen_prompts[0] and "疑似微信号候选" in seen_prompts[0]
+
+    # AI 不能瞎编：格式不合法/是抖音号一律丢掉
+    monkeypatch.setattr(
+        douyin_api, "request_douyin_ai_comment",
+        lambda *a, **k: '{"wechat_id": "我的抖音号", "evidence": "x"}',
+    )
+    douyin_api._DOUYIN_WECHAT_AI_CACHE.clear()
+    assert extract_douyin_wechat_id_by_ai(row)["wechat_id"] == ""
+
+    # 纯聊天不去调 AI
+    calls = []
+    monkeypatch.setattr(douyin_api, "request_douyin_ai_comment",
+                        lambda *a, **k: calls.append(1) or "{}")
+    douyin_api._DOUYIN_WECHAT_AI_CACHE.clear()
+    assert extract_douyin_wechat_id_by_ai({"incoming_message": "多少钱？"})["wechat_id"] == ""
+    assert calls == []
