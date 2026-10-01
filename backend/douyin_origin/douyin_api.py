@@ -6885,13 +6885,17 @@ def build_douyin_takeover_conversation_context(row: Dict, *, limit: int = 8) -> 
     return "\n".join(lines)
 
 
-def generate_douyin_takeover_memory_reply(
+def generate_douyin_takeover_memory_reply_with_wechat(
     row: Dict,
     *,
     memory_context: str = "",
     prompt_text: str = "",
-) -> str:
-    """循环接管：只依据记忆文件 + 会话上下文回复，不拉群、不引导加联系方式。"""
+) -> Dict[str, str]:
+    """循环接管：依据记忆文件 + 多轮对话上下文回复，同时让 AI 判断有没有可能有微信号。
+
+    返回 {"message": "回复文本（1-2 行）", "wechat_id": "", "evidence": ""}。
+    微信号必须过 looks_like_douyin_wechat_id，AI 编的号 / 抖音号一律丢弃。
+    """
     memory_text = str(memory_context or "").strip()
     if not memory_text:
         raise RuntimeError("没有可用的记忆文件内容，无法生成接管回复。")
@@ -6913,7 +6917,15 @@ def generate_douyin_takeover_memory_reply(
         "5. 不要提 AI、系统、机器人、模板、引流这类词，不要让人看出是机器人在回复。\n"
         "6. 不要主动提微信、绿泡泡、微信号、QQ 等任何联系方式，也不要引导对方换平台沟通。\n"
         "7. 语气自然、像真人打字，不要长篇大论，不要营销腔。\n"
-        "8. 如果给了补充方向，必须优先遵守。"
+        "8. 如果给了补充方向，必须优先遵守。\n"
+        "9. 回复之前先判断一遍：对方在这段对话里有没有留下他自己的微信号？"
+        "客户经常不带「微信/vx/加我」这种字眼，直接甩一串号（例如 zm_kd3、jin10190922）。"
+        "只有能确定那是他本人的微信号才填进 wechat_id；"
+        "如果那串是他的抖音号、昵称、订单号，或者你只是猜测，就留空字符串，不要自己编一个号。\n"
+        "只输出一个 JSON 对象，不要解释、不要代码块："
+        '{"replies": ["<第一行回复>", "<第二行回复，没有就省略>"], '
+        '"wechat_id": "<对方自己的微信号，没有就空字符串>", '
+        '"evidence": "<原文里能证明的片段，没有就空字符串>"}'
     )
     user_prompt = (
         f"客户昵称：{username or '未知'}\n"
@@ -6921,12 +6933,38 @@ def generate_douyin_takeover_memory_reply(
         f"补充方向（高优先级）：{direction or '围绕记忆资料回答问题，自然承接对话'}\n\n"
         f"对话上下文（越靠后越新）：\n{conversation or '（本轮刚建立联系，没有更早的上下文）'}\n\n"
         f"参考记忆资料：\n{memory_text}\n\n"
-        "请只输出 1 到 2 行简短回复，每行一句。"
+        "请输出规定的 JSON：replies 里放 1 到 2 行简短回复（每行一句、不超过 40 字），"
+        "并顺手判断对方有没有留下微信号填进 wechat_id。"
     )
-    ai_text = request_douyin_ai_comment(system_prompt, user_prompt, max_tokens=320, response_limit=200)
+    ai_text = request_douyin_ai_comment(system_prompt, user_prompt, max_tokens=520, response_limit=900)
+    raw = str(ai_text or "").strip()
+    reply_lines: List[str] = []
+    wechat_id = ""
+    evidence = ""
+    start, end = raw.find("{"), raw.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(raw[start:end + 1])
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            replies = parsed.get("replies")
+            if isinstance(replies, str):
+                replies = [replies]
+            if isinstance(replies, list):
+                reply_lines = [str(item) for item in replies if str(item).strip()]
+            elif parsed.get("reply"):
+                reply_lines = [str(parsed.get("reply"))]
+            candidate = normalize_douyin_text(parsed.get("wechat_id") or "")
+            if looks_like_douyin_wechat_id(candidate):
+                wechat_id = candidate
+                evidence = str(parsed.get("evidence") or "").strip()[:120]
+    if not reply_lines:
+        # 兼容 AI 没按 JSON 回的旧行为：整段当回复，微信号留空
+        reply_lines = [raw]
     lines: List[str] = []
     seen: Set[str] = set()
-    for raw_line in str(ai_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+    for raw_line in "\n".join(reply_lines).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         line = clean_douyin_message_line(raw_line, limit=48)
         if not line or line in seen:
             continue
@@ -6938,7 +6976,22 @@ def generate_douyin_takeover_memory_reply(
             break
     if not lines:
         raise RuntimeError("AI 生成的接管回复不可用，本轮放弃发送，等下一轮。")
-    return "\n".join(lines)
+    return {"message": "\n".join(lines), "wechat_id": wechat_id, "evidence": evidence}
+
+
+def generate_douyin_takeover_memory_reply(
+    row: Dict,
+    *,
+    memory_context: str = "",
+    prompt_text: str = "",
+) -> str:
+    """兼容旧调用：只返回回复文本（记忆接管现在走 with_wechat 版本，顺便判微信号）。"""
+    result = generate_douyin_takeover_memory_reply_with_wechat(
+        row,
+        memory_context=memory_context,
+        prompt_text=prompt_text,
+    )
+    return str(result.get("message") or "")
 
 
 def generate_douyin_stranger_reply_message(
@@ -13608,6 +13661,21 @@ def douyin_wechat_should_ask_ai(row: Dict) -> bool:
     return bool(douyin_wechat_candidate_tokens(row))
 
 
+def douyin_wechat_needs_ai(row: Dict) -> bool:
+    """要不要为这条会话单独调 AI 判断微信号。
+
+    - 已经拿到手机号 → 跳过（微信里搜手机号一样能加，不用再花 token）；
+    - 已经有微信号 → 跳过；
+    - 纯聊天（没有引导词也没有像号的候选）→ 跳过。
+    """
+    payload = row if isinstance(row, dict) else {}
+    if payload.get("wechat_ids") or payload.get("ai_wechat_id"):
+        return False
+    if payload.get("phone_numbers"):
+        return False
+    return douyin_wechat_should_ask_ai(payload)
+
+
 def extract_douyin_wechat_id_by_ai(row: Dict) -> Dict[str, str]:
     """让 AI 在「理解对方话术」时顺便判断有没有留微信号。
 
@@ -13934,7 +14002,7 @@ async def run_douyin_h5_stranger_message_task_once(
             merged_numbers = list(dict.fromkeys(current_numbers or old_numbers))
             row["phone_numbers"] = merged_numbers
             current_wechat_ids = extract_douyin_wechat_ids([row])
-            if not current_wechat_ids and douyin_wechat_should_ask_ai(row):
+            if not current_wechat_ids and douyin_wechat_needs_ai(row):
                 # 提到微信但规则抽不出来（用户随便起的号）→ 让 AI 顺手判断一次
                 try:
                     ai_hit = await asyncio.to_thread(extract_douyin_wechat_id_by_ai, row)
@@ -14467,6 +14535,7 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
             "skipped": 0,
         }
         takeover_retry_pending_keys: Set[str] = set()
+        takeover_ai_wechat_ids: Set[str] = set()  # 记忆接管回复时 AI 顺手判出的微信号
         takeover_collect_kwargs: Dict[str, object] = {}
         if takeover_reply:
             if not memory_doc_ids:
@@ -14575,13 +14644,25 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
                     }
                 )
                 try:
-                    final_message = await asyncio.to_thread(
-                        generate_douyin_stranger_reply_message,
+                    reply_result = await asyncio.to_thread(
+                        generate_douyin_takeover_memory_reply_with_wechat,
                         row,
-                        mode="ai_memory",
                         prompt_text=reply_prompt,
                         memory_context=str(takeover_memory.get("text") or ""),
                     )
+                    final_message = str(reply_result.get("message") or "")
+                    ai_wechat_id = str(reply_result.get("wechat_id") or "").strip()
+                    if ai_wechat_id:
+                        # 记忆接管生成回复时 AI 顺手判出来的微信号：记在会话上，并一起走加好友/上报
+                        takeover_ai_wechat_ids.add(ai_wechat_id)
+                        row["wechat_ids"] = list(dict.fromkeys([*(row.get("wechat_ids") or []), ai_wechat_id]))
+                        row["ai_wechat_id"] = ai_wechat_id
+                        row["ai_wechat_evidence"] = str(reply_result.get("evidence") or "")[:120]
+                        douyin_log(
+                            f"[抖音陌生人消息监控] 记忆接管识别到疑似微信号：{ai_wechat_id}"
+                            f"（{username or '未知会话'}）",
+                            "info",
+                        )
                 except Exception as exc:
                     error_text = str(exc)
                     attempts = record_douyin_takeover_attempt(account["id"], row, error=error_text)
@@ -14684,10 +14765,13 @@ async def run_douyin_stranger_message_monitor_cycle(account_id: int, trigger_typ
         unseen_rows, seen_rows = split_unseen_douyin_stranger_message_rows(account["id"], unread_rows)
         extracted_phone_numbers = extract_douyin_mainland_mobile_numbers(unseen_rows)
         extracted_wechat_ids = extract_douyin_wechat_ids(unseen_rows)
+        if takeover_ai_wechat_ids:
+            # 记忆接管回复时 AI 判出来的微信号，和规则抽出来的一起走加好友 / 联系方式池上报
+            extracted_wechat_ids = list(dict.fromkeys([*extracted_wechat_ids, *sorted(takeover_ai_wechat_ids)]))
         for row in unseen_rows:
             row["phone_numbers"] = extract_douyin_mainland_mobile_numbers([row])
             row["wechat_ids"] = extract_douyin_wechat_ids([row])
-            if not row["wechat_ids"] and douyin_wechat_should_ask_ai(row):
+            if douyin_wechat_needs_ai(row):
                 try:
                     ai_hit = await asyncio.to_thread(extract_douyin_wechat_id_by_ai, row)
                     if str(ai_hit.get("wechat_id") or "").strip():

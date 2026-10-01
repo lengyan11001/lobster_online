@@ -431,3 +431,73 @@ def test_wechat_ai_judges_message_without_hint_word(monkeypatch):
     douyin_api._DOUYIN_WECHAT_AI_CACHE.clear()
     assert extract_douyin_wechat_id_by_ai({"incoming_message": "多少钱？"})["wechat_id"] == ""
     assert calls == []
+
+
+
+def test_wechat_ai_skipped_when_phone_already_found():
+    """拿到手机号就不折腾微信号（不再单独调 AI）；没手机号但有像号的候选才调。"""
+    from douyin_api import douyin_wechat_needs_ai
+
+    assert douyin_wechat_needs_ai({"incoming_message": "哈喽 zm_kd3 沟通吧"}) is True
+    assert douyin_wechat_needs_ai(
+        {"incoming_message": "哈喽 zm_kd3 沟通吧", "phone_numbers": ["13927485337"]}
+    ) is False
+    assert douyin_wechat_needs_ai(
+        {"incoming_message": "哈喽 zm_kd3 沟通吧", "wechat_ids": ["zm_kd3"]}
+    ) is False
+    assert douyin_wechat_needs_ai({"incoming_message": "多少钱？"}) is False
+
+
+def test_takeover_memory_reply_also_judges_wechat_id(monkeypatch):
+    """记忆接管多轮对话：请求回复时让 AI 直接给出「有没有可能有微信号」。"""
+    import json as _json
+
+    from douyin_api import generate_douyin_takeover_memory_reply_with_wechat
+
+    row = {
+        "username": "小亮",
+        "incoming_message": "哈喽 zm_kd3 沟通吧",
+        "messages": [
+            {"direction": "incoming", "text": "你们这个怎么卖"},
+            {"direction": "outgoing", "text": "看你要哪个版本"},
+            {"direction": "incoming", "text": "哈喽 zm_kd3 沟通吧"},
+        ],
+    }
+    memory = "## 百问百答\n问：多少钱？\n答：基础版 999 元。"
+
+    def fake_ai(system_prompt, user_prompt, **kwargs):
+        assert "wechat_id" in system_prompt
+        assert "zm_kd3" in user_prompt          # 对话上下文要带上
+        return _json.dumps(
+            {
+                "replies": ["基础版 999，含拍摄和剪辑", "你要竖屏还是横屏"],
+                "wechat_id": "zm_kd3",
+                "evidence": "哈喽 zm_kd3 沟通吧",
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(douyin_api, "request_douyin_ai_comment", fake_ai)
+    got = generate_douyin_takeover_memory_reply_with_wechat(
+        row, memory_context=memory, prompt_text="")
+    assert got["message"].splitlines() == ["基础版 999，含拍摄和剪辑", "你要竖屏还是横屏"]
+    assert got["wechat_id"] == "zm_kd3"
+    assert got["evidence"]
+
+    # AI 瞎填（抖音号/乱码）→ 丢掉微信号，但回复照用
+    monkeypatch.setattr(
+        douyin_api, "request_douyin_ai_comment",
+        lambda *a, **k: _json.dumps({"replies": ["好的"], "wechat_id": "我的抖音号"}, ensure_ascii=False),
+    )
+    got2 = generate_douyin_takeover_memory_reply_with_wechat(row, memory_context=memory, prompt_text="")
+    assert got2["wechat_id"] == "" and got2["message"] == "好的"
+
+    # AI 没按 JSON 回（旧行为）→ 整段当回复，微信号留空
+    monkeypatch.setattr(douyin_api, "request_douyin_ai_comment", lambda *a, **k: "第一行\n第二行")
+    got3 = generate_douyin_takeover_memory_reply_with_wechat(row, memory_context=memory, prompt_text="")
+    assert got3["message"] == "第一行\n第二行" and got3["wechat_id"] == ""
+
+    # 旧入口保持返回字符串
+    monkeypatch.setattr(douyin_api, "request_douyin_ai_comment", fake_ai)
+    legacy = douyin_api.generate_douyin_takeover_memory_reply(row, memory_context=memory, prompt_text="")
+    assert isinstance(legacy, str) and "999" in legacy
