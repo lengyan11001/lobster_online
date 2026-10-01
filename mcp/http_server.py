@@ -1099,8 +1099,32 @@ def _looks_like_material_asset_id(value: str) -> bool:
     return all(c in "0123456789abcdef" for c in s)
 
 
+_CATALOG_FILE_CACHE: Dict[str, Any] = {"stamp": None, "value": None}
+_UPSTREAM_URLS_CACHE: Dict[str, Any] = {"stamp": None, "value": None}
+
+
+def _file_stamp(path: Path) -> Any:
+    try:
+        st = path.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
 def _load_capability_catalog() -> Dict[str, Dict[str, Any]]:
-    """Reload catalog from files each time (hot-reload support)."""
+    """Catalog with hot reload: 文件没变就直接用内存里的（以前每次调用都读盘解析 30KB JSON）。"""
+    p_local = Path(__file__).resolve().parent / "capability_catalog.local.json"
+    p_base = Path(__file__).resolve().parent / "capability_catalog.json"
+    stamp = (_file_stamp(p_local), _file_stamp(p_base))
+    if _CATALOG_FILE_CACHE["stamp"] == stamp and _CATALOG_FILE_CACHE["value"] is not None:
+        return dict(_CATALOG_FILE_CACHE["value"])
+    value = _load_capability_catalog_uncached()
+    _CATALOG_FILE_CACHE["stamp"] = stamp
+    _CATALOG_FILE_CACHE["value"] = dict(value)
+    return dict(value)
+
+
+def _load_capability_catalog_uncached() -> Dict[str, Dict[str, Any]]:
     try:
         p_local = Path(__file__).resolve().parent / "capability_catalog.local.json"
         if p_local.exists():
