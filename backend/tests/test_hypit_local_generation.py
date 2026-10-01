@@ -401,6 +401,7 @@ def test_runtime_dependencies_report_missing_items(monkeypatch):
     monkeypatch.setattr(hypit_local, "_installed_hypit_registry_package", lambda *a, **k: False)
     monkeypatch.setattr(hypit_local, "_ffmpeg_executable", lambda: None)
     monkeypatch.setattr(hypit_local, "_ffprobe_executable", lambda: None)
+    monkeypatch.setattr(hypit_local, "_uv_executable", lambda: None)   # 本机装了 uv 也要按"缺失"算
 
     items = hypit_local._runtime_dependencies()
     assert [item["key"] for item in items] == [
@@ -516,6 +517,8 @@ def test_bundled_chromium_and_npm_preferred(tmp_path, monkeypatch):
     monkeypatch.setattr(hypit_local, "ROOT", tmp_path)
 
     assert hypit_local._bundled_chromium_path() == chrome
+    # 自带 Chromium 也要探活通过才会被选中（跑不起来就跳过）
+    monkeypatch.setattr(hypit_local, "_chrome_works", lambda path: Path(path) == chrome)
     assert hypit_local._installed_chrome_path() == chrome
     assert hypit_local._npm_executable() == str(npm)
 
@@ -671,3 +674,25 @@ def test_install_hypit_node_modules_retries_without_scripts(tmp_path, monkeypatc
 
     assert any("--ignore-scripts" in args for args in calls)
     assert (dist / "node_modules").is_dir()
+
+
+
+def test_installed_chrome_skips_broken_bundled_chromium(tmp_path, monkeypatch):
+    """自带 Chromium 探活失败时（--version 跑不起来）要跳到下一个可用的浏览器。"""
+    bundled = tmp_path / "browser_chromium" / "chromium-1208" / "chrome-win64" / "chrome.exe"
+    bundled.parent.mkdir(parents=True)
+    bundled.write_bytes(b"not-a-real-chrome")
+    system = tmp_path / "Google" / "Chrome" / "Application" / "chrome.exe"
+    system.parent.mkdir(parents=True)
+    system.write_bytes(b"real-chrome")
+    monkeypatch.setattr(hypit_local, "ROOT", tmp_path)
+    monkeypatch.setattr(hypit_local, "_CHROME_PROBE_CACHE", {})
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path))
+    monkeypatch.setenv("PROGRAMFILES(X86)", str(tmp_path / "x86"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+
+    monkeypatch.setattr(hypit_local, "_chrome_works", lambda path: Path(path) == system)
+    assert hypit_local._installed_chrome_path() == system
+
+    monkeypatch.setattr(hypit_local, "_chrome_works", lambda path: False)
+    assert hypit_local._installed_chrome_path() is None

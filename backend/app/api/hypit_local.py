@@ -540,21 +540,65 @@ def _has_recoverable_hypit_install_error(error: Exception) -> bool:
     return _installed_hypit_registry_package("@hyperframes/engine", "0.7.101")
 
 
+_CHROME_PROBE_CACHE: dict = {}
+
+
+def _chrome_works(path: Path) -> bool:
+    """这个浏览器能不能真的用来渲染：chrome --version 必须成功返回版本号。
+
+    2026-10-01 踩到的坑：客户端自带的是 Playwright 的 Chromium，它的默认 profile 目录被占/拒绝访问时
+    --version 直接失败（CreateFile ... 拒绝访问 / Lock file can not be created），
+    hypit 就判定 Render browser is unavailable → 复刻卡在「正在自动准备本机渲染环境」。
+    """
+    key = str(path).lower()
+    cached = _CHROME_PROBE_CACHE.get(key)
+    if cached is not None:
+        return cached == "ok"
+    ok = False
+    try:
+        proc = subprocess.run(
+            [str(path), "--version"], capture_output=True, text=True, errors="replace", timeout=20,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        ok = proc.returncode == 0 and bool((proc.stdout or "").strip())
+    except Exception:  # noqa: BLE001
+        ok = False
+    _CHROME_PROBE_CACHE[key] = "ok" if ok else "bad"
+    return ok
+
+
+def _browser_candidates() -> list:
+    """渲染浏览器候选顺序：系统 Chrome → 自带完整 Chromium → 自带 headless shell。"""
+    items: list = []
+    if os.name == "nt":
+        for env_name in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+            base = os.environ.get(env_name) or ""
+            if base:
+                items.append(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")
+        local = os.environ.get("LOCALAPPDATA") or ""
+        if local:
+            items.append(Path(local) / "Google" / "Chrome Beta" / "Application" / "chrome.exe")
+    base_dir = ROOT / "browser_chromium"
+    if base_dir.is_dir():
+        items += sorted(base_dir.glob("chromium-*/chrome-win64/chrome.exe"), reverse=True)
+        items += sorted(base_dir.glob("chromium-*/chrome-win/chrome.exe"), reverse=True)
+        items += sorted(base_dir.glob("chromium*/chrome-linux/chrome"), reverse=True)
+        items += sorted(
+            base_dir.glob("chromium_headless_shell-*/chrome-headless-shell-win64/chrome-headless-shell.exe"),
+            reverse=True,
+        )
+    return items
+
+
 def _installed_chrome_path() -> Path | None:
-    bundled = _bundled_chromium_path()
-    if bundled is not None:
-        return bundled
-    if os.name != "nt":
-        return None
-    candidates = [
-        Path(os.environ.get("PROGRAMFILES", r"C:\Program Files"))
-        / "Google" / "Chrome" / "Application" / "chrome.exe",
-        Path(os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"))
-        / "Google" / "Chrome" / "Application" / "chrome.exe",
-        Path(os.environ.get("LOCALAPPDATA", ""))
-        / "Google" / "Chrome" / "Application" / "chrome.exe",
-    ]
-    return next((path for path in candidates if path.is_file()), None)
+    """挑一个「真的能跑」的渲染浏览器（逐个探活），都不行返回 None。"""
+    for candidate in _browser_candidates():
+        try:
+            if candidate.is_file() and _chrome_works(candidate):
+                return candidate
+        except OSError:
+            continue
+    return None
 
 
 def _configure_runtime_browser(project_dir: Path) -> None:
