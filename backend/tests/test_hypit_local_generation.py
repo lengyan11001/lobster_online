@@ -740,3 +740,62 @@ def test_run_hypit_auto_installs_missing_package_and_retries(tmp_path, monkeypat
     assert out == "build-ok"
     install_calls = [c for c in calls if c[2] == "packages"]
     assert install_calls and install_calls[0][3] == "install" and install_calls[0][4] == "@fontsource-variable/inter@5.3.0"
+
+
+
+def test_finished_video_gets_public_url(tmp_path, monkeypatch):
+    """出片后 video_url 必须是公网 https 地址（不能给内网 127.0.0.1），本机地址单独留一份。"""
+    import asyncio as _asyncio
+
+    from backend.app.api import hypit_local as HL
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    (job_dir / "job.json").write_text('{"job_id": "j1"}', encoding="utf-8")
+    video = job_dir / "final.video.mp4"
+    video.write_bytes(b"mp4-bytes")
+
+    written = {}
+
+    class _Workflow(dict):
+        def update(self, **kwargs):
+            super().update(kwargs)
+            return self
+
+    workflow = _Workflow(status="running", stage="rendering", video_url="")
+
+    async def fake_upload(request, user, path):
+        return "https://cdn.example.com/final.mp4"
+
+    monkeypatch.setattr(HL, "_upload_local_result", fake_upload)
+    _asyncio.run(HL._finish_workflow_with_result(job_dir, workflow, video, request=None, current_user=None, job_id="j1"))
+
+    assert workflow["video_url"] == "https://cdn.example.com/final.mp4"
+    assert workflow["video_local_url"] == "/api/local/hypit/jobs/j1/workflow/video"
+    assert workflow["video_public_url"] == "https://cdn.example.com/final.mp4"
+
+
+def test_finished_video_falls_back_to_local_url_when_upload_fails(tmp_path, monkeypatch):
+    import asyncio as _asyncio
+
+    from backend.app.api import hypit_local as HL
+
+    job_dir = tmp_path / "job"
+    job_dir.mkdir()
+    video = job_dir / "final.video.mp4"
+    video.write_bytes(b"mp4-bytes")
+
+    class _Workflow(dict):
+        def update(self, **kwargs):
+            super().update(kwargs)
+            return self
+
+    async def boom(request, user, path):
+        raise RuntimeError("线上服务没有返回可用的成片链接")
+
+    monkeypatch.setattr(HL, "_upload_local_result", boom)
+    workflow = _Workflow(status="running")
+    _asyncio.run(HL._finish_workflow_with_result(job_dir, workflow, video, request=None, current_user=None, job_id="j2"))
+
+    assert workflow["video_url"] == "/api/local/hypit/jobs/j2/workflow/video"
+    assert workflow["video_public_url"] == ""

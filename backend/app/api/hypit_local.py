@@ -1366,6 +1366,61 @@ async def _generate_storyboard(
     return {"title": str(parsed.get("title") or "视频复刻")[:120], "scenes": scenes}
 
 
+async def _upload_local_result(request: Request, current_user: _ServerUser, path: Path) -> str:
+    """把本机成片上传到线上素材库，返回公网可访问地址。
+
+    生成结果绝不能给外网/其它机器一个 127.0.0.1 的内网地址（会被拒/下不动），
+    所以出片后先走 /api/assets/upload-temp 换 https 链接，video_url 用这个。
+    """
+    token = _raw_token_from_request(request)
+    if not token:
+        raise RuntimeError("缺少登录态，无法上传成片")
+    headers = _generation_headers(token, _installation_id_from_request(request, current_user.id))
+    timeout = httpx.Timeout(1800.0, connect=30.0, write=600.0)
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        with path.open("rb") as stream:
+            uploaded = await _server_json(
+                client, "POST", "/api/assets/upload-temp", headers,
+                files={"file": (path.name, stream, "video/mp4")},
+            )
+    url = str(uploaded.get("public_url") or uploaded.get("url") or "").strip()
+    if not url.startswith("https://"):
+        raise RuntimeError("线上服务没有返回可用的成片链接")
+    return url
+
+
+async def _finish_workflow_with_result(
+    job_dir: Path,
+    workflow: dict,
+    output_path: Path,
+    *,
+    request: Request,
+    current_user: _ServerUser,
+    job_id: str,
+) -> None:
+    """出片收尾：先把成片传到线上换成公网地址，再写 workflow.json。
+
+    本机地址（/api/local/... -> http://127.0.0.1:8000）在外面会被当成内网地址拒掉，
+    所以 video_url 用公网 https，本机地址单独放 video_local_url 备用。
+    """
+    local_url = f"/api/local/hypit/jobs/{job_id}/workflow/video"
+    public_url = ""
+    try:
+        public_url = await _upload_local_result(request, current_user, output_path)
+        _append_runtime_log("成片已上传线上：%s" % public_url)
+    except Exception as exc:  # noqa: BLE001 上传失败也别丢结果，先记本机地址
+        logger.warning("Hypit 成片上传线上失败，暂时保留本机地址 job=%s：%s", job_id, exc)
+        _append_runtime_log("成片上传线上失败（暂时用本机地址）：%s" % str(exc)[:300])
+    workflow.update(
+        status="completed",
+        stage="视频复刻完成",
+        video_url=public_url or local_url,
+        video_local_url=local_url,
+        video_public_url=public_url,
+    )
+    _write_workflow(job_dir, workflow)
+
+
 async def _run_auto_workflow(
     job_id: str,
     request: Request,
@@ -1482,8 +1537,9 @@ async def _run_auto_workflow(
         )
         if not output_path.is_file():
             raise RuntimeError("Hypit 没有导出最终视频文件")
-        workflow.update(status="completed", stage="视频复刻完成", video_url=f"/api/local/hypit/jobs/{job_id}/workflow/video")
-        _write_workflow(job_dir, workflow)
+        await _finish_workflow_with_result(
+            job_dir, workflow, output_path, request=request, current_user=current_user, job_id=job_id,
+        )
     except Exception as exc:
         logger.exception("local Hypit workflow failed job=%s user_id=%s", job_id, current_user.id)
         workflow.update(status="failed", stage="自动处理失败", error=_exception_message(exc)[:1200])
