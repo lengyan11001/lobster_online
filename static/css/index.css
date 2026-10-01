@@ -9045,6 +9045,10 @@ body.online-mastra-chat-compose .online-mastra-chat {
       box-shadow: 0 10px 20px rgba(91, 124, 255, 0.12);
       background: rgba(247, 250, 255, 1);
     }
+.chat-duty-mode { display:inline-flex; align-items:center; gap:0.35rem; padding:0.1rem 0.45rem; border:1px solid rgba(148,163,184,0.35); border-radius:999px; background:rgba(148,163,184,0.08); font-size:0.78rem; }
+.chat-duty-mode-label { opacity:0.7; }
+.chat-duty-mode select { border:0; background:transparent; color:inherit; font:inherit; outline:none; cursor:pointer; padding:0.1rem 0; }
+.chat-duty-mode select option { color:#0f172a; }
     .chat-skill-chip input {
       position: absolute;
       opacity: 0;

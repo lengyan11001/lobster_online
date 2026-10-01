@@ -3701,6 +3701,58 @@ function resumeChatStreamForTaskPoll(sid, taskId) {
     });
 }
 
+// ---- AI 调度助手处理范围：工作 / 客服（客服模式下只把客服问题交给 AI）----
+var CHAT_DUTY_MODE_KEY = 'lobster_chat_duty_mode';
+var CHAT_DUTY_MODE_DEFAULT_LEAD = '告诉我您想做什么？我会尽力帮您完成~';
+var CHAT_DUTY_MODE_SERVICE_LEAD = '客服模式：只处理客服问题（客户咨询 / 售前售后 / 价格与开通 / 使用答疑 / 投诉安抚）~';
+
+function chatDutyMode() {
+  var sel = document.getElementById('chatDutyModeSelect');
+  var value = sel ? String(sel.value || '') : '';
+  if (!value) {
+    try { value = String(window.localStorage.getItem(CHAT_DUTY_MODE_KEY) || ''); } catch (e) { value = ''; }
+  }
+  return value === 'service' ? 'service' : 'work';
+}
+
+function applyChatDutyModeToRequest(message) {
+  var text = String(message || '');
+  if (chatDutyMode() !== 'service') return text;
+  return [
+    '【客服模式】现在只处理客服问题：客户咨询、售前售后、产品功能与价格、开通与退款、使用答疑、话术与催单、投诉安抚。',
+    '如果用户这条内容不是客服问题（例如让 AI 去创作/发帖/采集/跑工作流、或与客户无关的内部事务），不要执行、不要调用任何能力，直接回复：',
+    '“当前是客服模式，只处理客服问题；要安排工作请把输入框左边的下拉切回「工作」。”，并停止。',
+    '回答客户问题时：先给可直接复制发给客户的答复（口语、简短、别带 markdown 表格），再补一句给老板看的内部提示（如需要人工跟进请写明）。',
+    '不要编造系统里没有的功能；不确定就回复“我需要确认后再回复您”。',
+    '',
+    '用户消息：' + text
+  ].join('\n');
+}
+
+function syncChatDutyModeUi() {
+  var mode = chatDutyMode();
+  var lead = document.getElementById('chatComposerLead');
+  if (lead) {
+    if (mode === 'service') lead.textContent = CHAT_DUTY_MODE_SERVICE_LEAD;
+    else if (lead.textContent === CHAT_DUTY_MODE_SERVICE_LEAD) lead.textContent = CHAT_DUTY_MODE_DEFAULT_LEAD;
+  }
+  var input = document.getElementById('chatInput');
+  if (input) input.setAttribute('placeholder', mode === 'service' ? '输入客户咨询、售后、价格、话术等客服问题' : '发送消息或输入 / 选择技能');
+}
+
+function initChatDutyMode() {
+  var sel = document.getElementById('chatDutyModeSelect');
+  if (!sel) return;
+  var saved = '';
+  try { saved = String(window.localStorage.getItem(CHAT_DUTY_MODE_KEY) || ''); } catch (e) { saved = ''; }
+  if (saved === 'service' || saved === 'work') sel.value = saved;
+  sel.addEventListener('change', function() {
+    try { window.localStorage.setItem(CHAT_DUTY_MODE_KEY, chatDutyMode()); } catch (e) {}
+    syncChatDutyModeUi();
+  });
+  syncChatDutyModeUi();
+}
+
 function sendChatMessage() {
   var input = document.getElementById('chatInput');
   var btn = document.getElementById('chatSendBtn');
@@ -3764,8 +3816,11 @@ function sendChatMessage() {
       model = 'sutui/' + subSel.value;
     }
   }
+  var dutyMode = chatDutyMode();
+  var requestMessage = applyChatDutyModeToRequest(message);
   var body = {
-    message: message,
+    message: requestMessage,
+    duty_mode: dutyMode,
     history: historyForRequest,
     session_id: sid,
     context_id: null,
@@ -4141,6 +4196,7 @@ startChatOpenClawStatusWatcher();
 bindChatComposerFocus();
 
 if (chatSendBtn) chatSendBtn.addEventListener('click', sendChatMessage);
+initChatDutyMode();
 var chatCancelBtn = document.getElementById('chatCancelBtn');
 if (chatCancelBtn) {
   chatCancelBtn.addEventListener('click', function() {
