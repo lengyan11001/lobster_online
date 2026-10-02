@@ -580,6 +580,12 @@ def _browser_candidates() -> list:
             items.append(Path(local) / "Google" / "Chrome Beta" / "Application" / "chrome.exe")
     base_dir = ROOT / "browser_chromium"
     if base_dir.is_dir():
+        # 渲染优先用自带 headless shell：hypit 官方认的就是它，纯无头不会弹窗口；
+        # 完整 Chromium / 系统 Chrome 只作后面兜底。
+        items = sorted(
+            base_dir.glob("chromium_headless_shell-*/chrome-headless-shell-win64/chrome-headless-shell.exe"),
+            reverse=True,
+        ) + items
         items += sorted(base_dir.glob("chromium-*/chrome-win64/chrome.exe"), reverse=True)
         items += sorted(base_dir.glob("chromium-*/chrome-win/chrome.exe"), reverse=True)
         items += sorted(base_dir.glob("chromium*/chrome-linux/chrome"), reverse=True)
@@ -1145,7 +1151,15 @@ async def _generate_hypit_media(project_dir: Path, token: str, installation_id: 
 
                 if not take.is_file():
                     if not row.get("image_url"):
-                        raise RuntimeError(f"{label} 已有本机图片，但缺少线上图片地址，已阻止无参考图的视频提交")
+                        # 从历史继续：本机图片还在，只是没记住线上地址 —— 补传一次换公网地址，
+                        # 否则视频生成拿不到参考图（以前会报「已阻止无参考图的视频提交」直接失败）。
+                        state["stage"] = f"{label}：补传本机图片换线上地址"
+                        _write_generation(project_dir, state)
+                        row["image_url"] = await _upload_result_with_token(
+                            token, installation_id, image, "image/png",
+                        )
+                        _write_generation(project_dir, state)
+                        _append_runtime_log("%s 本机图片已补传：%s" % (label, row["image_url"]))
                     if not row.get("video_task_id"):
                         if row.get("video_submit_uncertain"):
                             raise RuntimeError(f"{label} 视频提交结果未知，请核对线上任务后再继续，已阻止重复扣费")
@@ -1492,6 +1506,25 @@ async def _generate_storyboard(
     return {"title": str(parsed.get("title") or "视频复刻")[:120], "scenes": scenes}
 
 
+async def _upload_result_with_token(token: str, installation_id: str, path: Path,
+                                   content_type: str = "video/mp4") -> str:
+    """用指定登录态把一个本机文件传到线上素材库，返回公网地址。"""
+    if not str(token or "").strip():
+        raise RuntimeError("缺少登录态，无法上传文件")
+    headers = _generation_headers(token, installation_id)
+    timeout = httpx.Timeout(1800.0, connect=30.0, write=600.0)
+    async with _new_server_client(timeout) as client:
+        with path.open("rb") as stream:
+            uploaded = await _server_json(
+                client, "POST", "/api/assets/upload-temp", headers,
+                files={"file": (path.name, stream, content_type)},
+            )
+    url = str(uploaded.get("public_url") or uploaded.get("url") or "").strip()
+    if not url.startswith("https://"):
+        raise RuntimeError("线上服务没有返回可用的链接")
+    return url
+
+
 async def _upload_local_result(request: Request, current_user: _ServerUser, path: Path) -> str:
     """把本机成片上传到线上素材库，返回公网可访问地址。
 
@@ -1501,18 +1534,9 @@ async def _upload_local_result(request: Request, current_user: _ServerUser, path
     token = _raw_token_from_request(request)
     if not token:
         raise RuntimeError("缺少登录态，无法上传成片")
-    headers = _generation_headers(token, _installation_id_from_request(request, current_user.id))
-    timeout = httpx.Timeout(1800.0, connect=30.0, write=600.0)
-    async with _new_server_client(timeout) as client:
-        with path.open("rb") as stream:
-            uploaded = await _server_json(
-                client, "POST", "/api/assets/upload-temp", headers,
-                files={"file": (path.name, stream, "video/mp4")},
-            )
-    url = str(uploaded.get("public_url") or uploaded.get("url") or "").strip()
-    if not url.startswith("https://"):
-        raise RuntimeError("线上服务没有返回可用的成片链接")
-    return url
+    return await _upload_result_with_token(
+        token, _installation_id_from_request(request, current_user.id), path, "video/mp4",
+    )
 
 
 def _kill_hypit_browsers(*hints: str) -> int:
@@ -1528,6 +1552,7 @@ def _kill_hypit_browsers(*hints: str) -> int:
     markers.append(str(_hypit_state_home()).lower())
     markers.append(".hypit\\runtimes")
     markers.append("hyperframes")
+    markers.append("chrome-headless-shell")   # hypit 自己的无头渲染器，名字唯一，不会误伤用户 Chrome
     killed = 0
     try:
         proc = subprocess.run(
@@ -1809,6 +1834,19 @@ def list_local_hypit_jobs(
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
     return {"ok": True, "jobs": _list_job_summaries(int(current_user.id), limit)}
+
+
+@router.post("/api/local/hypit/jobs/{job_id}/delete", summary="删除一条历史记录")
+def delete_local_hypit_job(
+    job_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    job_dir, _metadata = _read_job(current_user.id, job_id)
+    active = AUTO_WORKFLOWS.get(job_id)
+    if active and not active.done():
+        raise HTTPException(status_code=409, detail="任务正在运行，等它结束再删除")
+    shutil.rmtree(job_dir, ignore_errors=True)
+    return {"ok": True, "job_id": job_id}
 
 
 @router.post("/api/local/hypit/jobs/{job_id}/resume", summary="从历史记录继续这个复刻任务")

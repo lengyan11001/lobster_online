@@ -396,6 +396,7 @@
         + '<div class="hypit-history-actions">'
         + (videoUrl ? '<button type="button" class="hypit-text-button" data-hypit-history-open="' + escapeAttr(item.job_id) + '" data-hypit-history-url="' + escapeAttr(String(item.video_local_url || videoUrl)) + '">看成片</button>' : '')
         + (item.can_resume ? '<button type="button" class="hypit-primary-button hypit-compact-button" data-hypit-history-resume="' + escapeAttr(item.job_id) + '">继续</button>' : '')
+        + '<button type="button" class="hypit-text-button" data-hypit-history-delete="' + escapeAttr(item.job_id) + '">删除</button>'
         + '</div>'
         + '</div>';
     }).join('');
@@ -440,6 +441,24 @@
       if (!target || !target.getAttribute) return;
       var resumeId = target.getAttribute('data-hypit-history-resume');
       if (resumeId) { resumeJob(resumeId); return; }
+      var deleteId = target.getAttribute('data-hypit-history-delete');
+      if (deleteId) {
+        if (!window.confirm('删除这条历史记录？本机任务目录（含参考视频和中间结果）会被删掉。')) return;
+        fetch(localBase() + '/api/local/hypit/jobs/' + encodeURIComponent(deleteId) + '/delete', {
+          method: 'POST', headers: headers(), cache: 'no-store'
+        }).then(function (response) {
+          return response.json().then(function (data) { return { ok: response.ok, data: data }; });
+        }).then(function (result) {
+          if (!result.ok || result.data.ok === false) throw new Error(errorText(result.data.detail) || '删除失败');
+          if (state.jobId === deleteId) {
+            state.jobId = '';
+            try { localStorage.removeItem('hypit-local-last-workflow'); } catch (error) {}
+          }
+          showMessage('已删除这条历史记录。');
+          loadHistory();
+        }).catch(function (error) { showMessage(errorText(error.message), true); });
+        return;
+      }
       var openId = target.getAttribute('data-hypit-history-open');
       if (openId) {
         state.jobId = openId;

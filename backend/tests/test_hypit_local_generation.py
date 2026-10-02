@@ -953,3 +953,23 @@ def test_windows_system_proxy_reads_registry_format(monkeypatch):
     monkeypatch.setattr(_winreg, "OpenKey", fake_open)
     monkeypatch.setattr(_winreg, "QueryValueEx", fake_query)
     assert hypit_local._windows_system_proxy() == "http://127.0.0.1:10808"
+
+
+
+def test_browser_candidates_prefer_headless_shell(tmp_path, monkeypatch):
+    """渲染浏览器优先 headless shell（纯无头，不弹窗），系统 Chrome 只作兜底。"""
+    base = tmp_path / "browser_chromium"
+    shell = base / "chromium_headless_shell-1208" / "chrome-headless-shell-win64" / "chrome-headless-shell.exe"
+    shell.parent.mkdir(parents=True)
+    shell.write_bytes(b"shell")
+    full = base / "chromium-1208" / "chrome-win64" / "chrome.exe"
+    full.parent.mkdir(parents=True)
+    full.write_bytes(b"chrome")
+    monkeypatch.setattr(hypit_local, "ROOT", tmp_path)
+    monkeypatch.setattr(hypit_local, "_CHROME_PROBE_CACHE", {})
+    monkeypatch.setattr(hypit_local, "_chrome_works", lambda path: True)
+    monkeypatch.setenv("PROGRAMFILES", str(tmp_path / "none"))
+    monkeypatch.setenv("PROGRAMFILES(X86)", str(tmp_path / "none2"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "none3"))
+
+    assert hypit_local._installed_chrome_path() == shell
