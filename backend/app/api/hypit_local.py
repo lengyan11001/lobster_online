@@ -870,13 +870,42 @@ async def _server_json(client: httpx.AsyncClient, method: str, path: str,
     return result
 
 
+# 只拦这些明确的私网/回环/链路本地。注意不能用 ip.is_global：
+# 国内大量机器用 Clash/Surge 之类的代理，域名会被解析成 fake-ip（198.18.0.0/15），
+# is_global 会判成"非公网" → 所有生成结果都被误杀（2026-10-02 用户就是这个）。
+_BLOCKED_MEDIA_NETS = tuple(ipaddress.ip_network(item) for item in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16",
+    "100.64.0.0/10", "0.0.0.0/8", "::1/128", "fc00::/7", "fe80::/10",
+))
+
+
+def _media_host_blocked(host: str) -> tuple[bool, str]:
+    """(是否内网, 解析结果说明)。域名解析不到不当内网，交给请求阶段报错。"""
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        blocked = any(literal in net for net in _BLOCKED_MEDIA_NETS)
+        return blocked, str(literal)
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        return False, "解析失败:%s" % exc
+    addresses = sorted({str(info[4][0]) for info in infos})
+    if not addresses:
+        return False, "无解析结果"
+    resolved = [ipaddress.ip_address(item) for item in addresses]
+    return all(any(item in net for net in _BLOCKED_MEDIA_NETS) for item in resolved), ",".join(addresses)
+
+
 def _public_media_url(url: str) -> str:
     parsed = urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
         raise RuntimeError("生成结果不是可下载的 HTTPS 地址")
-    for address in socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM):
-        if not ipaddress.ip_address(address[4][0]).is_global:
-            raise RuntimeError("生成结果地址指向内网，拒绝下载")
+    blocked, detail = _media_host_blocked(parsed.hostname)
+    if blocked:
+        raise RuntimeError("生成结果地址指向内网，拒绝下载（%s -> %s）" % (parsed.hostname, detail))
     return url
 
 
@@ -1389,6 +1418,66 @@ async def _upload_local_result(request: Request, current_user: _ServerUser, path
     return url
 
 
+def _kill_hypit_browsers(*hints: str) -> int:
+    r"""关掉 hypit 渲染留下的 Chrome/Chromium 进程（只杀命令行带 hypit 目录特征的）。
+
+    2026-10-02 用户反馈：执行多了会攒一堆浏览器窗口。这里按「命令行里出现
+    本任务工程目录 / .hypit\runtimes / %LOCALAPPDATA%\Hypit / hyperframes」来认，
+    不会误伤用户自己在用的 Chrome。
+    """
+    if os.name != "nt":
+        return 0
+    markers = [str(h).lower() for h in hints if h]
+    markers.append(str(_hypit_state_home()).lower())
+    markers.append(".hypit\\runtimes")
+    markers.append("hyperframes")
+    killed = 0
+    try:
+        proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+             "Get-CimInstance Win32_Process -Filter \"Name='chrome.exe' or Name='chromium.exe' "
+             "or Name='chrome-headless-shell.exe'\" | Select-Object ProcessId,CommandLine | "
+             "ConvertTo-Json -Compress"],
+            capture_output=True, text=True, errors="replace", timeout=40,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        parsed = json.loads((proc.stdout or "").strip() or "[]")
+        if isinstance(parsed, dict):
+            parsed = [parsed]
+        for row in parsed if isinstance(parsed, list) else []:
+            command = str(row.get("CommandLine") or "").lower()
+            if not command or not any(marker in command for marker in markers):
+                continue
+            try:
+                pid = int(row.get("ProcessId") or 0)
+            except (TypeError, ValueError):
+                continue
+            if pid <= 0:
+                continue
+            subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                           capture_output=True, timeout=20,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            killed += 1
+    except Exception as exc:  # noqa: BLE001 清理失败不能影响任务结果
+        logger.warning("清理 hypit 浏览器失败：%s", exc)
+    return killed
+
+
+async def _cleanup_hypit_browsers(project_dir: Path, root: Path | None, node: str | None) -> None:
+    """任务收尾：先让 runtime 自己停 Worker，再兜底杀掉遗留的渲染浏览器。"""
+    if root and node:
+        try:
+            await asyncio.to_thread(
+                _run_hypit, root, node, ["runtime", "down", "--workspace", str(project_dir)], 120,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("Hypit runtime down 未成功（继续兜底清理）：%s", str(exc)[:200])
+    killed = await asyncio.to_thread(_kill_hypit_browsers, str(project_dir))
+    if killed:
+        _append_runtime_log("已关闭 %d 个遗留的 Hypit 渲染浏览器" % killed)
+        logger.info("Hypit 收尾：关闭 %d 个遗留渲染浏览器 project=%s", killed, project_dir)
+
+
 async def _finish_workflow_with_result(
     job_dir: Path,
     workflow: dict,
@@ -1544,6 +1633,9 @@ async def _run_auto_workflow(
         logger.exception("local Hypit workflow failed job=%s user_id=%s", job_id, current_user.id)
         workflow.update(status="failed", stage="自动处理失败", error=_exception_message(exc)[:1200])
         _write_workflow(job_dir, workflow)
+    finally:
+        # 不管成功失败，都把它拉起来的浏览器关掉（否则执行多了会攒一堆窗口）
+        await _cleanup_hypit_browsers(project_dir, *(_hypit_root(), _node_executable()))
 
 
 @router.post("/api/local/hypit/workflows")

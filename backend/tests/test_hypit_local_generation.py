@@ -799,3 +799,67 @@ def test_finished_video_falls_back_to_local_url_when_upload_fails(tmp_path, monk
 
     assert workflow["video_url"] == "/api/local/hypit/jobs/j2/workflow/video"
     assert workflow["video_public_url"] == ""
+
+
+
+def test_kill_hypit_browsers_only_matches_hypit_markers(monkeypatch, tmp_path):
+    """收尾清理只杀命令行带 hypit 目录特征的 Chrome，不碰用户自己的浏览器。"""
+    import json as _json
+    import subprocess as _sp
+
+    state_home = tmp_path / "Hypit"
+    monkeypatch.setattr(hypit_local, "_hypit_state_home", lambda: state_home)
+    project = tmp_path / "proj"
+    rows = [
+        {"ProcessId": 111, "CommandLine": "chrome.exe --user-data-dir=%s\\profiles\\r1" % state_home},
+        {"ProcessId": 222, "CommandLine": "chrome.exe --user-data-dir=C:\\Users\\a\\Documents\\browse https://baidu.com"},
+        {"ProcessId": 333, "CommandLine": "chrome.exe --user-data-dir=%s\\.hypit\\runtimes\\local\\chrome" % project},
+    ]
+    kills = []
+
+    class _Proc:
+        def __init__(self, out=""):
+            self.stdout = out
+            self.stderr = ""
+            self.returncode = 0
+
+    def fake_run(args, **kwargs):
+        if isinstance(args, list) and args and args[0] == "taskkill":
+            kills.append(args)
+            return _Proc()
+        return _Proc(_json.dumps(rows))
+
+    monkeypatch.setattr(_sp, "run", fake_run)
+    killed = hypit_local._kill_hypit_browsers(str(project))
+
+    assert killed == 2
+    assert {call[2] for call in kills} == {"111", "333"}   # 用户自己的 222 不能动
+
+
+
+def test_public_media_url_allows_proxy_fake_ip_domains(monkeypatch):
+    """代理把域名解析成 fake-ip（198.18.x.x）时不能当成内网拒掉（用户 2026-10-02 的问题）。"""
+    def fake_getaddrinfo(host, port, **kwargs):
+        return [(2, 1, 6, "", ("198.18.3.79", 0))]
+
+    monkeypatch.setattr(hypit_local.socket, "getaddrinfo", fake_getaddrinfo)
+    url = "https://vip.edu888.top/media/x.png"
+    assert hypit_local._public_media_url(url) == url
+
+    # 域名解析到真正的私网才拦
+    monkeypatch.setattr(hypit_local.socket, "getaddrinfo",
+                        lambda host, port, **kw: [(2, 1, 6, "", ("192.168.1.9", 0))])
+    try:
+        hypit_local._public_media_url("https://internal.example.com/x.png")
+        raise AssertionError("私网域名必须被拒绝")
+    except RuntimeError as exc:
+        assert "内网" in str(exc) and "192.168.1.9" in str(exc)
+
+
+def test_public_media_url_blocks_literal_private_address():
+    for url in ("https://127.0.0.1/x.png", "https://10.0.0.5/v.mp4", "https://[::1]/x.png"):
+        try:
+            hypit_local._public_media_url(url)
+            raise AssertionError("字面私网地址必须被拒绝: " + url)
+        except RuntimeError as exc:
+            assert "内网" in str(exc)
