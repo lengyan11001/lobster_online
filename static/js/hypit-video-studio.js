@@ -172,9 +172,20 @@
     };
     xhr.send(form);
   }
+  function isAbsoluteUrl(value) {
+    return /^https?:\/\//i.test(String(value || ''));
+  }
   function showOutput(path) {
-    if (state.outputUrl) URL.revokeObjectURL(state.outputUrl);
-    return fetch(localBase() + path, { headers: headers(), cache: 'no-store' }).then(function(response) {
+    var target = String(path || '');
+    if (!target) return Promise.reject(new Error('成片地址为空'));
+    if (state.outputUrl) { URL.revokeObjectURL(state.outputUrl); state.outputUrl = ''; }
+    if (isAbsoluteUrl(target)) {
+      // 成片已经上传到线上（https）：直接给 video 用，别再拼本机 base、也别带本机 token
+      $('hypitOutputVideo').src = target;
+      $('hypitOutputSection').hidden = false;
+      return Promise.resolve();
+    }
+    return fetch(localBase() + target, { headers: headers(), cache: 'no-store' }).then(function(response) {
       if (!response.ok) throw new Error('最终视频暂时无法读取（HTTP ' + response.status + '）');
       return response.blob();
     }).then(function(blob) {
@@ -193,7 +204,7 @@
         if (workflow.status === 'completed') {
           showMessage('视频复刻完成，可以直接播放最终成片。');
           loadHistory();
-          return showOutput(workflow.video_url).catch(function(error) {
+          return showOutput(workflow.video_local_url || workflow.video_url).catch(function(error) {
             showMessage(errorText(error.message), true);
           });
         }
@@ -383,7 +394,7 @@
         + (stage ? '<em class="hypit-history-stage">' + escapeHtml(String(stage).slice(0, 160)) + '</em>' : '')
         + '</div>'
         + '<div class="hypit-history-actions">'
-        + (videoUrl ? '<button type="button" class="hypit-text-button" data-hypit-history-open="' + escapeAttr(item.job_id) + '">看成片</button>' : '')
+        + (videoUrl ? '<button type="button" class="hypit-text-button" data-hypit-history-open="' + escapeAttr(item.job_id) + '" data-hypit-history-url="' + escapeAttr(String(item.video_local_url || videoUrl)) + '">看成片</button>' : '')
         + (item.can_resume ? '<button type="button" class="hypit-primary-button hypit-compact-button" data-hypit-history-resume="' + escapeAttr(item.job_id) + '">继续</button>' : '')
         + '</div>'
         + '</div>';
@@ -432,6 +443,10 @@
       var openId = target.getAttribute('data-hypit-history-open');
       if (openId) {
         state.jobId = openId;
+        var openUrl = String(target.getAttribute('data-hypit-history-url') || '');
+        if (openUrl) {
+          showOutput(openUrl).catch(function(error) { showMessage(errorText(error.message), true); });
+        }
         pollWorkflow();
       }
     });
