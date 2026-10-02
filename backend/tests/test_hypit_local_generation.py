@@ -997,3 +997,19 @@ def test_paged_job_summaries(tmp_path, monkeypatch):
     assert total == 5 and len(page1) == 2 and len(page2) == 2
     assert page1[0]["job_id"] == "j4"          # 最新在前
     assert page1[0]["job_id"] != page2[0]["job_id"]
+
+
+
+def test_runtime_status_self_heals_stale_failure(tmp_path, monkeypatch):
+    """依赖都装好时，旧的失败状态要自愈，别让界面一直显示红色错误。"""
+    monkeypatch.setattr(hypit_local, "RUNTIME_STATE_PATH", tmp_path / "runtime_install.json")
+    monkeypatch.setattr(hypit_local, "RUNTIME_INSTALL_TASKS", {})
+    monkeypatch.setattr(hypit_local, "RUNTIME_STATE_PATH", tmp_path / "runtime_install.json")
+    hypit_local._write_runtime_state(status="failed", stage="依赖安装失败", percent=75,
+                                     error="Render browser is unavailable at ...", log=["old"])
+    monkeypatch.setattr(hypit_local, "_runtime_dependencies",
+                        lambda: [{"key": "node", "ok": True}, {"key": "chrome", "ok": True}])
+    out = hypit_local.hypit_runtime_status(_=None)
+    assert out["ready"] is True
+    assert out["install"]["status"] == "completed"
+    assert not str(out["install"].get("error") or "")

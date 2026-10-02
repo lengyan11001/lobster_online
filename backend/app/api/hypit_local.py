@@ -2805,11 +2805,18 @@ def hypit_runtime_status(_: _ServerUser = Depends(get_current_user_for_local)):
     task = RUNTIME_INSTALL_TASKS.get("runtime")
     running = bool(task is not None and not task.done())
     dependencies = _runtime_dependencies()
+    ready = all(bool(item.get("ok")) for item in dependencies)
+    install = {**_runtime_state(), "running": running}
+    if ready and not running and str(install.get("status") or "") == "failed":
+        # 依赖其实都装好了（例如上一次是浏览器探活失败）：把旧失败状态自愈掉，
+        # 否则界面会一直挂着上一次的红色错误。
+        install = {**_write_runtime_state(status="completed", stage="依赖已就绪", percent=100, error=""),
+                   "running": False}
     return {
         "ok": True,
-        "ready": all(bool(item.get("ok")) for item in dependencies),
+        "ready": ready,
         "dependencies": dependencies,
-        "install": {**_runtime_state(), "running": running},
+        "install": install,
     }
 
 

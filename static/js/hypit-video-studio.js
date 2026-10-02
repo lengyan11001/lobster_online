@@ -144,16 +144,22 @@
     var retry = $('hypitInstallRetry');
     var start = $('hypitInstallStart');
     if (!install) return;
-    if (progress) progress.hidden = false;
+    var ready = state.ready === true;
+    // 依赖都就绪了：只显示状态，不再挂上一次安装的红色错误和旧日志
+    if (progress) progress.hidden = ready;
     if (bar) bar.style.width = Math.max(0, Math.min(100, Number(install.percent || 0))) + '%';
-    if (stage) stage.textContent = install.stage || install.status || '';
-    if (log) log.textContent = (install.log || []).slice(-80).join('\n');
+    if (stage) stage.textContent = ready ? '依赖已就绪，无需安装。' : (install.stage || install.status || '');
+    if (log) {
+      log.hidden = ready;
+      log.textContent = ready ? '' : (install.log || []).slice(-80).join('\n');
+    }
     if (errorBox) {
       var error = String(install.error || '').trim();
-      errorBox.hidden = !error;
-      errorBox.textContent = error;
+      var showError = !!error && !ready;
+      errorBox.hidden = !showError;
+      errorBox.textContent = showError ? error : '';
     }
-    if (retry) retry.hidden = String(install.status || '') !== 'failed';
+    if (retry) retry.hidden = ready || String(install.status || '') !== 'failed';
     if (start) start.disabled = String(install.status || '') === 'running';
   }
   function openInstallModal() {
