@@ -193,3 +193,59 @@
 .hypit-history-stage { flex-basis: 100%; font-size: 12px; color: var(--text-secondary, #6b7280); font-style: normal; }
 .hypit-history-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .hypit-history-empty { font-size: 13px; color: var(--text-secondary, #6b7280); }
+
+
+/* ============ 视频复刻：列表 + 弹窗（2026-10-02 交互改版） ============ */
+.hypit-page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.hypit-head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.hypit-dep-chip {
+  border: 1px solid var(--border, #e5e7eb); background: var(--surface, #fff); color: var(--text-secondary, #6b7280);
+  border-radius: 999px; padding: 5px 12px; font-size: 12px; cursor: pointer;
+}
+.hypit-dep-chip[data-ok="1"] { border-color: #c6e6cd; color: #16794a; background: #f4fdf7; }
+.hypit-dep-chip[data-ok="0"] { border-color: #f3c2c2; color: #b42318; background: #fff6f6; }
+
+.hypit-record-list { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.hypit-record {
+  display: flex; align-items: stretch; gap: 14px; padding: 12px;
+  border: 1px solid var(--border, #e5e7eb); border-radius: 12px; background: var(--surface, #fff);
+}
+.hypit-record[data-status="failed"] { border-color: #f3c2c2; background: #fffafa; }
+.hypit-record[data-status="completed"] { border-color: #d6ead9; }
+.hypit-preview { display: flex; gap: 10px; flex-shrink: 0; }
+.hypit-preview-box {
+  position: relative; width: 168px; height: 220px; border-radius: 10px; overflow: hidden;
+  background: #0f1115; display: flex; align-items: center; justify-content: center;
+}
+.hypit-preview-label {
+  position: absolute; left: 6px; top: 6px; z-index: 2; font-size: 11px; color: #fff;
+  background: rgba(0, 0, 0, .45); border-radius: 6px; padding: 1px 6px;
+}
+.hypit-preview-video, .hypit-preview-img { width: 100%; height: 100%; object-fit: contain; background: #0f1115; }
+.hypit-preview-empty { font-size: 12px; color: #9aa3af; padding: 0 10px; text-align: center; }
+.hypit-record-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.hypit-record-head { display: flex; align-items: center; gap: 8px; }
+.hypit-record-head strong { font-size: 14px; }
+.hypit-record-meta { font-size: 12px; color: var(--text-secondary, #6b7280); }
+.hypit-record-stage { font-size: 12px; color: var(--text-secondary, #6b7280); font-style: normal; }
+.hypit-record-actions { display: flex; flex-direction: column; gap: 8px; justify-content: center; flex-shrink: 0; }
+.hypit-pager { display: flex; align-items: center; gap: 12px; justify-content: center; margin: 14px 0 4px; font-size: 12px; color: var(--text-secondary, #6b7280); }
+.hypit-field { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; font-size: 13px; }
+.hypit-field textarea {
+  width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border, #e5e7eb); font: inherit; resize: vertical;
+}
+.hypit-dropzone-compact { padding: 18px 12px; }
+.hypit-modal-wide { width: min(920px, 94vw); }
+.hypit-detail-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--text-secondary, #6b7280); }
+.hypit-detail-stage { font-size: 13px; margin-top: 6px; }
+.hypit-detail-video { width: 100%; max-height: 420px; border-radius: 10px; background: #0f1115; }
+.hypit-detail-sheet { width: 100%; border-radius: 10px; border: 1px solid var(--border, #e5e7eb); }
+.hypit-detail-speech { font-size: 13px; color: var(--text-secondary, #374151); white-space: pre-wrap; }
+.hypit-detail-link { font-size: 13px; }
+.hypit-scene { border: 1px solid var(--border, #e5e7eb); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+.hypit-scene-head { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.hypit-scene-assets { display: flex; gap: 10px; flex-wrap: wrap; }
+.hypit-scene-assets figure { margin: 0; width: 180px; }
+.hypit-scene-assets img, .hypit-scene-assets video { width: 100%; border-radius: 8px; background: #0f1115; }
+.hypit-scene-assets figcaption { font-size: 11px; color: var(--text-secondary, #6b7280); text-align: center; margin-top: 4px; }

@@ -208,9 +208,9 @@ window.registerLobsterView('alibaba-inquiries', {
   });
 
   window.registerLobsterView('hypit-video-studio', {
-    html: '/static/views/hypit-video-studio.html?v=20260929-hypit-install-v1',
-    css: '/static/css/hypit-video-studio.css?v=20260929-hypit-install-v1',
-    scripts: '/static/js/hypit-video-studio.js?v=20260929-hypit-install-v1',
+    html: '/static/views/hypit-video-studio.html?v=20261002-hypit-list-v1',
+    css: '/static/css/hypit-video-studio.css?v=20261002-hypit-list-v1',
+    scripts: '/static/js/hypit-video-studio.js?v=20261002-hypit-list-v1',
     init: 'initHypitVideoStudioView',
     cache: 'reload'
   });

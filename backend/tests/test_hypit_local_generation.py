@@ -973,3 +973,27 @@ def test_browser_candidates_prefer_headless_shell(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "none3"))
 
     assert hypit_local._installed_chrome_path() == shell
+
+
+
+def test_paged_job_summaries(tmp_path, monkeypatch):
+    """列表要支持分页（前端翻页用）。"""
+    import json as _json
+
+    monkeypatch.setattr(hypit_local, "JOBS_ROOT", tmp_path)
+    user_dir = tmp_path / "31"
+    for index in range(5):
+        job_dir = user_dir / ("j%d" % index)
+        job_dir.mkdir(parents=True)
+        (job_dir / "reference.mp4").write_bytes(b"v")
+        (job_dir / "job.json").write_text(_json.dumps({
+            "job_id": "j%d" % index, "user_id": 31, "filename": "ref%d.mp4" % index,
+            "probe": {"duration": 5}, "created_at": 1000.0 + index,
+        }), encoding="utf-8")
+        (job_dir / "workflow.json").write_text(_json.dumps({"status": "completed"}), encoding="utf-8")
+
+    page1, total = hypit_local._paged_job_summaries(31, page=1, page_size=2)
+    page2, _ = hypit_local._paged_job_summaries(31, page=2, page_size=2)
+    assert total == 5 and len(page1) == 2 and len(page2) == 2
+    assert page1[0]["job_id"] == "j4"          # 最新在前
+    assert page1[0]["job_id"] != page2[0]["job_id"]

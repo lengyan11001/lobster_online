@@ -1828,12 +1828,131 @@ def _list_job_summaries(user_id: int, limit: int = 30) -> list[dict[str, Any]]:
     return items[: max(1, min(100, int(limit or 30)))]
 
 
-@router.get("/api/local/hypit/jobs", summary="本机视频复刻历史记录")
+def _paged_job_summaries(user_id: int, page: int = 1, page_size: int = 10) -> tuple:
+    """分页版：返回 (当前页记录, 总数)。"""
+    root = JOBS_ROOT / str(int(user_id))
+    if not root.is_dir():
+        return [], 0
+    items: list[dict[str, Any]] = []
+    for job_dir in root.iterdir():
+        if not job_dir.is_dir():
+            continue
+        summary = _job_summary(int(user_id), job_dir)
+        if summary:
+            items.append(summary)
+    items.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
+    size = max(1, min(50, int(page_size or 10)))
+    index = max(1, int(page or 1))
+    start = (index - 1) * size
+    return items[start:start + size], len(items)
+
+
+@router.get("/api/local/hypit/jobs", summary="本机视频复刻历史记录（分页）")
 def list_local_hypit_jobs(
-    limit: int = 30,
+    limit: int = 0,
+    page: int = 1,
+    page_size: int = 10,
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
-    return {"ok": True, "jobs": _list_job_summaries(int(current_user.id), limit)}
+    size = int(limit) if int(limit or 0) > 0 else int(page_size or 10)
+    items, total = _paged_job_summaries(int(current_user.id), page, size)
+    return {
+        "ok": True,
+        "jobs": items,
+        "total": total,
+        "page": max(1, int(page or 1)),
+        "page_size": max(1, min(50, size)),
+        "pages": max(1, (total + max(1, min(50, size)) - 1) // max(1, min(50, size))),
+    }
+
+
+@router.get("/api/local/hypit/jobs/{job_id}/detail", summary="一条记录的详情与过程素材")
+def local_hypit_job_detail(
+    job_id: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """列表点开用：状态/阶段 + 原素材 + 每个分镜的过程素材 + 成片。"""
+    job_dir, metadata = _read_job(current_user.id, job_id)
+    workflow = _read_workflow(job_dir)
+    project_dir = job_dir / "hypit-project"
+    generation = _read_generation(project_dir) if project_dir.is_dir() else {}
+    assets_dir = project_dir / "assets"
+    base = f"/api/local/hypit/jobs/{job_id}/asset"
+
+    def asset(name: str) -> str:
+        return f"{base}/{name}" if (assets_dir / name).is_file() else ""
+
+    reference = ""
+    for suffix in ALLOWED_SUFFIXES:
+        if (job_dir / ("reference" + suffix)).is_file():
+            reference = f"{base}/reference{suffix}"
+            break
+    scenes: list[dict[str, Any]] = []
+    rows = generation.get("scenes") if isinstance(generation.get("scenes"), list) else []
+    for index, row in enumerate(rows):
+        payload = row if isinstance(row, dict) else {}
+        scenes.append({
+            "index": index + 1,
+            "frame": asset("frame-%02d.jpg" % (index + 1)),
+            "image": asset("image-%02d.png" % (index + 1)),
+            "take": asset("take-%02d.mp4" % (index + 1)),
+            "image_url": str(payload.get("image_url") or ""),
+            "video_url": str(payload.get("video_url") or ""),
+            "status": str(payload.get("status") or ""),
+            "stage": str(payload.get("stage") or ""),
+        })
+    return {
+        "ok": True,
+        "job": {**metadata, "job_id": job_id},
+        "workflow": workflow,
+        "generation": {
+            "status": str(generation.get("status") or ""),
+            "stage": str(generation.get("stage") or ""),
+            "error": str(generation.get("error") or ""),
+        },
+        "assets": {
+            "reference": reference,
+            "contact_sheet": f"{base}/contact-sheet.jpg" if (job_dir / "contact-sheet.jpg").is_file() else "",
+            "speech": str((_saved_speech(job_dir) or {}).get("text") or ""),
+            "scenes": scenes,
+        },
+        "final": {
+            "video_url": str(workflow.get("video_url") or ""),
+            "video_local_url": str(workflow.get("video_local_url") or f"/api/local/hypit/jobs/{job_id}/workflow/video"),
+        },
+    }
+
+
+@router.get("/api/local/hypit/jobs/{job_id}/asset/{name:path}", summary="读取任务过程素材")
+def local_hypit_job_asset(
+    job_id: str,
+    name: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """只允许读这个任务目录里的素材（参考视频 / 关键帧 / 生成图 / 生成视频 / 联系表）。"""
+    job_dir, _metadata = _read_job(current_user.id, job_id)
+    project_dir = job_dir / "hypit-project"
+    raw = str(name or "").strip().replace("\\", "/").lstrip("/")
+    parts = [part for part in raw.split("/") if part]
+    if not parts or any(part in {"..", "."} for part in parts):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    suffix = Path(parts[-1]).suffix.lower()
+    if suffix not in {".mp4", ".mov", ".webm", ".mkv", ".jpg", ".jpeg", ".png", ".webp", ".json", ".txt"}:
+        raise HTTPException(status_code=404, detail="文件不存在")
+    root = job_dir.resolve()
+    candidates = [job_dir.joinpath(*parts), project_dir.joinpath(*parts),
+                  project_dir.joinpath("assets", *parts)]
+    for target in candidates:
+        try:
+            resolved = target.resolve()
+        except OSError:
+            continue
+        if not resolved.is_file():
+            continue
+        if root != resolved and root not in resolved.parents:
+            continue
+        return FileResponse(str(resolved))
+    raise HTTPException(status_code=404, detail="文件不存在")
 
 
 @router.post("/api/local/hypit/jobs/{job_id}/delete", summary="删除一条历史记录")
