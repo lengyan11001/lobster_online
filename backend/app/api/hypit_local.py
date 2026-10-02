@@ -859,9 +859,106 @@ def _generation_headers(token: str, installation_id: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "X-Installation-Id": installation_id, "Accept": "application/json"}
 
 
+# 代理 fake-ip 环境（Clash/Surge 等）下直连必失败：探测本机代理，失败时自动改走代理。
+_LOCAL_PROXY_PORTS = (7890, 7897, 7891, 10809, 10808, 1080, 8889, 2080)
+_PROXY_STATE: dict = {"preferred": "", "checked": False}
+
+
+def _windows_system_proxy() -> str:
+    """Windows「系统代理」设置（Clash/Surge 的"系统代理"模式会写这里）。"""
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Internet Settings") as key:
+            enabled, _ = winreg.QueryValueEx(key, "ProxyEnable")
+            if not int(enabled or 0):
+                return ""
+            server, _ = winreg.QueryValueEx(key, "ProxyServer")
+    except Exception:  # noqa: BLE001
+        return ""
+    text = str(server or "").strip()
+    if not text:
+        return ""
+    if "=" in text:
+        parts = dict(item.split("=", 1) for item in text.split(";") if "=" in item)
+        text = parts.get("https") or parts.get("http") or ""
+    text = text.strip()
+    if not text:
+        return ""
+    return text if text.startswith("http") else "http://" + text
+
+
+def _probe_local_proxy_port() -> str:
+    """探测常见本地代理端口（Clash 7890/7897、v2ray 10809/10808…）。"""
+    for port in _LOCAL_PROXY_PORTS:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.4):
+                return "http://127.0.0.1:%d" % port
+        except OSError:
+            continue
+    return ""
+
+
+def _local_proxy_url() -> str:
+    """本机可用代理地址（没有就返回空串）。结果缓存，避免每次请求都探。"""
+    if _PROXY_STATE["checked"]:
+        return str(_PROXY_STATE["preferred"] or "")
+    _PROXY_STATE["checked"] = True
+    for name in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        value = (os.environ.get(name) or "").strip()
+        if value:
+            _PROXY_STATE["preferred"] = value
+            return value
+    system_proxy = _windows_system_proxy()
+    if system_proxy:
+        _PROXY_STATE["preferred"] = system_proxy
+        return system_proxy
+    probed = _probe_local_proxy_port()
+    if probed:
+        _PROXY_STATE["preferred"] = probed
+        logger.info("检测到本机代理 %s，线上请求将走代理", probed)
+    return probed
+
+
+def _preferred_proxy() -> str:
+    return str(_PROXY_STATE.get("preferred") or "")
+
+
+def _new_server_client(timeout: httpx.Timeout) -> httpx.AsyncClient:
+    """线上请求用的 client：已知要走代理就走代理，否则直连。"""
+    proxy = _preferred_proxy()
+    if proxy:
+        return httpx.AsyncClient(timeout=timeout, proxy=proxy)
+    return httpx.AsyncClient(timeout=timeout, trust_env=False)
+
+
 async def _server_json(client: httpx.AsyncClient, method: str, path: str,
                        headers: dict[str, str], **kwargs: Any) -> dict[str, Any]:
-    response = await client.request(method, _server_api_url(path), headers=headers, **kwargs)
+    url = _server_api_url(path)
+    connect_errors = (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError)
+    try:
+        response = None
+        for attempt in range(2):          # 先给直连一次重试机会（代理/TUN 抖动很常见）
+            try:
+                response = await client.request(method, url, headers=headers, **kwargs)
+                break
+            except connect_errors:
+                if attempt:
+                    raise
+                await asyncio.sleep(1.5)
+    except connect_errors as exc:
+        proxy = _local_proxy_url()
+        if not proxy:
+            raise RuntimeError(
+                "连不上线上服务 %s：%s（本机 DNS 若被代理接管成 198.18.x，请打开代理或给该域名放行）" % (url, exc)
+            ) from exc
+        _PROXY_STATE["preferred"] = proxy
+        logger.info("直连 %s 失败（%s），改走本机代理 %s 重试", url, exc, proxy)
+        async with httpx.AsyncClient(timeout=client.timeout, proxy=proxy) as retry_client:
+            response = await retry_client.request(method, url, headers=headers, **kwargs)
     if response.status_code >= 400:
         raise RuntimeError(f"线上生成接口 HTTP {response.status_code}: {response.text[:600]}")
     result = response.json()
@@ -989,7 +1086,7 @@ async def _generate_hypit_media(project_dir: Path, token: str, installation_id: 
     scene_states = state.setdefault("scenes", [{} for _ in scenes])
     try:
         timeout = httpx.Timeout(120.0, connect=30.0, read=120.0)
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        async with _new_server_client(timeout) as client:
             for index, scene in enumerate(scenes):
                 row = scene_states[index]
                 label = f"分镜 {index + 1}/{len(scenes)}"
@@ -1202,7 +1299,7 @@ async def _transcribe_locked(job_id: str, request: Request, current_user: _Serve
             raise RuntimeError("音频超过 120MB，请使用较短的参考视频")
         headers = _generation_headers(token, _installation_id_from_request(request, current_user.id))
         timeout = httpx.Timeout(1200.0, connect=30.0, write=240.0)
-        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+        async with _new_server_client(timeout) as client:
             with audio.open("rb") as stream:
                 uploaded = await _server_json(
                     client, "POST", "/api/assets/upload-temp", headers,
@@ -1406,7 +1503,7 @@ async def _upload_local_result(request: Request, current_user: _ServerUser, path
         raise RuntimeError("缺少登录态，无法上传成片")
     headers = _generation_headers(token, _installation_id_from_request(request, current_user.id))
     timeout = httpx.Timeout(1800.0, connect=30.0, write=600.0)
-    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+    async with _new_server_client(timeout) as client:
         with path.open("rb") as stream:
             uploaded = await _server_json(
                 client, "POST", "/api/assets/upload-temp", headers,
@@ -1510,11 +1607,24 @@ async def _finish_workflow_with_result(
     _write_workflow(job_dir, workflow)
 
 
+def _saved_storyboard(project_dir: Path) -> dict[str, Any] | None:
+    """已经生成过工程分镜就直接复用（从历史继续时不用重跑 AI 视觉分镜）。"""
+    try:
+        config = json.loads((project_dir / "project.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    scenes = config.get("scenes") if isinstance(config.get("scenes"), list) else []
+    if not scenes:
+        return None
+    return {"title": str(config.get("title") or "视频复刻"), "scenes": scenes, "cached": True}
+
+
 async def _run_auto_workflow(
     job_id: str,
     request: Request,
     current_user: _ServerUser,
     brief: str,
+    resume: bool = False,
 ) -> None:
     job_dir, metadata = _read_job(current_user.id, job_id)
     workflow = _read_workflow(job_dir)
@@ -1529,9 +1639,14 @@ async def _run_auto_workflow(
                 workflow.setdefault("warnings", []).append("口播转写未完成，已继续生成并保留原视频音轨")
                 _write_workflow(job_dir, workflow)
 
-        workflow.update(stage="AI 正在分析画面并生成分镜提示词")
-        _write_workflow(job_dir, workflow)
-        storyboard = await _generate_storyboard(job_dir, metadata, request, current_user, brief)
+        project_dir_hint = _project_dir(current_user.id, job_id)
+        storyboard = _saved_storyboard(project_dir_hint) if resume else None
+        if storyboard:
+            _append_runtime_log("从历史继续：复用已有分镜（%d 段）" % len(storyboard["scenes"]))
+        else:
+            workflow.update(stage="AI 正在分析画面并生成分镜提示词")
+            _write_workflow(job_dir, workflow)
+            storyboard = await _generate_storyboard(job_dir, metadata, request, current_user, brief)
         scenes = storyboard["scenes"]
 
         source_suffix = Path(str(metadata.get("filename") or "reference.mp4")).suffix.lower()
@@ -1638,6 +1753,88 @@ async def _run_auto_workflow(
         await _cleanup_hypit_browsers(project_dir, *(_hypit_root(), _node_executable()))
 
 
+def _job_summary(user_id: int, job_dir: Path) -> dict[str, Any] | None:
+    """把一条历史任务整理成列表项（状态/阶段/结果地址）。"""
+    try:
+        metadata = json.loads((job_dir / "job.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if int(metadata.get("user_id") or 0) != int(user_id):
+        return None
+    workflow = _read_workflow(job_dir)
+    probe = metadata.get("probe") or {}
+    try:
+        created = float(metadata.get("created_at") or metadata.get("submitted_at") or job_dir.stat().st_mtime)
+    except OSError:
+        created = 0.0
+    reference = any((job_dir / ("reference" + suffix)).is_file() for suffix in ALLOWED_SUFFIXES)
+    return {
+        "job_id": str(metadata.get("job_id") or job_dir.name),
+        "filename": str(metadata.get("filename") or ""),
+        "file_size": int(metadata.get("file_size") or 0),
+        "duration": float(probe.get("duration") or 0),
+        "width": int(probe.get("width") or 0),
+        "height": int(probe.get("height") or 0),
+        "brief": str(metadata.get("brief") or ""),
+        "created_at": created,
+        "status": str(workflow.get("status") or "unknown"),
+        "stage": str(workflow.get("stage") or ""),
+        "error": str(workflow.get("error") or ""),
+        "video_url": str(workflow.get("video_url") or ""),
+        "video_local_url": str(workflow.get("video_local_url") or ""),
+        "contact_sheet_url": f"/api/local/hypit/jobs/{job_dir.name}/contact-sheet",
+        "has_reference": reference,
+        "can_resume": bool(reference) and str(workflow.get("status") or "") != "completed",
+    }
+
+
+def _list_job_summaries(user_id: int, limit: int = 30) -> list[dict[str, Any]]:
+    root = JOBS_ROOT / str(int(user_id))
+    if not root.is_dir():
+        return []
+    items: list[dict[str, Any]] = []
+    for job_dir in root.iterdir():
+        if not job_dir.is_dir():
+            continue
+        summary = _job_summary(int(user_id), job_dir)
+        if summary:
+            items.append(summary)
+    items.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
+    return items[: max(1, min(100, int(limit or 30)))]
+
+
+@router.get("/api/local/hypit/jobs", summary="本机视频复刻历史记录")
+def list_local_hypit_jobs(
+    limit: int = 30,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    return {"ok": True, "jobs": _list_job_summaries(int(current_user.id), limit)}
+
+
+@router.post("/api/local/hypit/jobs/{job_id}/resume", summary="从历史记录继续这个复刻任务")
+async def resume_local_hypit_workflow(
+    job_id: str,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """继续历史任务：复用已下载的参考视频/关键帧/转写/分镜/已生成素材，只补没做完的步骤。"""
+    job_dir, metadata = _read_job(current_user.id, job_id)
+    active = AUTO_WORKFLOWS.get(job_id)
+    if active and not active.done():
+        return {"ok": True, "resumed": False, "running": True, "workflow": _read_workflow(job_dir)}
+    if not any((job_dir / ("reference" + suffix)).is_file() for suffix in ALLOWED_SUFFIXES):
+        raise HTTPException(status_code=404, detail="原始视频已不在本机，请重新提交一次")
+    workflow = _read_workflow(job_dir) or {}
+    workflow.update(status="queued", stage="从历史记录继续", error="")
+    _write_workflow(job_dir, workflow)
+    task = asyncio.create_task(
+        _run_auto_workflow(job_id, request, current_user, str(metadata.get("brief") or ""), resume=True)
+    )
+    AUTO_WORKFLOWS[job_id] = task
+    task.add_done_callback(lambda _: AUTO_WORKFLOWS.pop(job_id, None))
+    return {"ok": True, "resumed": True, "running": True, "workflow": workflow}
+
+
 @router.post("/api/local/hypit/workflows")
 async def submit_local_hypit_workflow(
     request: Request,
@@ -1647,7 +1844,14 @@ async def submit_local_hypit_workflow(
 ):
     analysis = await analyze_local_video(file, current_user)
     job_id = analysis["job_id"]
-    job_dir, _ = _read_job(current_user.id, job_id)
+    job_dir, metadata = _read_job(current_user.id, job_id)
+    # 历史记录/继续要用：把改编方向和提交时间写进 job.json
+    metadata.update({
+        "brief": str(brief or "")[:4000],
+        "submitted_at": time.time(),
+        "created_at": metadata.get("created_at") or time.time(),
+    })
+    (job_dir / "job.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     workflow = {
         "status": "queued",
         "stage": "任务已提交，准备自动分析",

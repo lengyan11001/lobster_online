@@ -172,3 +172,24 @@
 .hypit-modal-foot { display: flex; gap: 10px; justify-content: flex-end; padding: 12px 18px; border-top: 1px solid rgba(0,0,0,.08); }
 .hypit-install-log { margin: 0; max-height: 300px; overflow: auto; background: #0f1115; color: #d6f5e0; font: 12px/1.55 ui-monospace, Consolas, monospace; padding: 12px; border-radius: 10px; white-space: pre-wrap; word-break: break-all; }
 .hypit-install-error { font-size: 13px; color: #dc2626; white-space: pre-wrap; word-break: break-word; }
+
+/* 历史记录（视频复刻） */
+.hypit-history-panel { margin-top: 16px; }
+.hypit-history-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.hypit-history-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--border, #e5e7eb); border-radius: 10px;
+  background: var(--surface, #fff);
+}
+.hypit-history-item[data-status="failed"] { border-color: #f3c2c2; background: #fff7f7; }
+.hypit-history-item[data-status="completed"] { border-color: #c6e6cd; background: #f6fdf8; }
+.hypit-history-main { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.hypit-history-main strong { font-size: 13px; }
+.hypit-history-badge {
+  padding: 1px 8px; border-radius: 999px; font-size: 12px;
+  background: rgba(36, 92, 255, .1); color: #245cff;
+}
+.hypit-history-meta { font-size: 12px; color: var(--text-secondary, #6b7280); }
+.hypit-history-stage { flex-basis: 100%; font-size: 12px; color: var(--text-secondary, #6b7280); font-style: normal; }
+.hypit-history-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.hypit-history-empty { font-size: 13px; color: var(--text-secondary, #6b7280); }

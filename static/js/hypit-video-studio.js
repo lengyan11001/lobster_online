@@ -22,6 +22,12 @@
   function headers() {
     return typeof authHeaders === 'function' ? Object.assign({}, authHeaders() || {}) : {};
   }
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+  function escapeAttr(value) { return escapeHtml(value); }
   function errorText(value) {
     if (value == null) return '';
     if (typeof value === 'string') return value.trim();
@@ -151,6 +157,7 @@
       setBusy(false);
       setStatus((data.workflow && data.workflow.stage) || '任务已提交，正在自动处理。');
       showMessage('任务已提交。后续分析、素材生成和本机合成都将自动完成。');
+      loadHistory();
       pollWorkflow();
     };
     xhr.onerror = function() {
@@ -185,12 +192,14 @@
         setStatus(workflow.stage || '任务处理中…', workflow.status === 'failed');
         if (workflow.status === 'completed') {
           showMessage('视频复刻完成，可以直接播放最终成片。');
+          loadHistory();
           return showOutput(workflow.video_url).catch(function(error) {
             showMessage(errorText(error.message), true);
           });
         }
         if (workflow.status === 'failed' || workflow.status === 'paused') {
-          showMessage(workflow.error || workflow.stage || '任务未完成，请重新提交。', true);
+          showMessage(workflow.error || workflow.stage || '任务未完成，可从下方历史记录点“继续”。', true);
+          loadHistory();
           return;
         }
         state.pollTimer = setTimeout(pollWorkflow, 5000);
@@ -336,6 +345,98 @@
         renderInstall({ status: 'failed', stage: '安装启动失败', error: errorText(error.message) });
       });
   }
+
+  function historyTimeText(value) {
+    var stamp = Number(value || 0) * 1000;
+    if (!stamp) return '';
+    var date = new Date(stamp);
+    function pad(n) { return n < 10 ? '0' + n : '' + n; }
+    return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes());
+  }
+  function historyStatusText(item) {
+    var status = String((item && item.status) || '');
+    if (status === 'completed') return '已完成';
+    if (status === 'failed') return '失败';
+    if (status === 'running') return '进行中';
+    if (status === 'queued') return '排队中';
+    if (status === 'paused') return '已中断';
+    return status || '未知';
+  }
+  function renderHistory(items) {
+    var host = $('hypitHistoryList');
+    if (!host) return;
+    if (!items || !items.length) {
+      host.innerHTML = '<span class="hypit-history-empty">还没有提交记录。</span>';
+      return;
+    }
+    host.innerHTML = items.map(function (item) {
+      var size = item.file_size ? formatBytes(item.file_size) : '';
+      var duration = item.duration ? (Math.round(item.duration * 10) / 10) + ' 秒' : '';
+      var meta = [historyTimeText(item.created_at), duration, size].filter(Boolean).join(' · ');
+      var stage = item.stage || item.error || '';
+      var videoUrl = String(item.video_url || item.video_local_url || '');
+      return '<div class="hypit-history-item" data-status="' + escapeAttr(item.status) + '">'
+        + '<div class="hypit-history-main">'
+        + '<strong>' + escapeHtml(item.filename || item.job_id) + '</strong>'
+        + '<span class="hypit-history-badge">' + escapeHtml(historyStatusText(item)) + '</span>'
+        + '<span class="hypit-history-meta">' + escapeHtml(meta) + '</span>'
+        + (stage ? '<em class="hypit-history-stage">' + escapeHtml(String(stage).slice(0, 160)) + '</em>' : '')
+        + '</div>'
+        + '<div class="hypit-history-actions">'
+        + (videoUrl ? '<button type="button" class="hypit-text-button" data-hypit-history-open="' + escapeAttr(item.job_id) + '">看成片</button>' : '')
+        + (item.can_resume ? '<button type="button" class="hypit-primary-button hypit-compact-button" data-hypit-history-resume="' + escapeAttr(item.job_id) + '">继续</button>' : '')
+        + '</div>'
+        + '</div>';
+    }).join('');
+  }
+  function loadHistory() {
+    return request('/api/local/hypit/jobs?limit=20', { cache: 'no-store' })
+      .then(function (data) { renderHistory(data.jobs || []); })
+      .catch(function () {
+        var host = $('hypitHistoryList');
+        if (host) host.innerHTML = '<span class="hypit-history-empty">历史记录读取失败（本机服务是否在运行）。</span>';
+      });
+  }
+  function resumeJob(jobId) {
+    if (!jobId || state.busy) return;
+    setBusy(true, '正在从历史记录继续…');
+    return fetch(localBase() + '/api/local/hypit/jobs/' + encodeURIComponent(jobId) + '/resume', {
+      method: 'POST', headers: headers(), cache: 'no-store'
+    }).then(function (response) {
+      return response.json().then(function (data) { return { ok: response.ok, data: data }; });
+    }).then(function (result) {
+      if (!result.ok || result.data.ok === false) throw new Error(errorText(result.data.detail) || '继续失败');
+      state.jobId = jobId;
+      try { localStorage.setItem('hypit-local-last-workflow', jobId); } catch (error) {}
+      $('hypitChooseVideo').hidden = true;
+      $('hypitSelectedFile').hidden = false;
+      $('hypitResultEmpty').hidden = true;
+      setStatus((result.data.workflow && result.data.workflow.stage) || '已继续，正在自动处理…');
+      showMessage('已从历史记录继续：原参考视频、关键帧、口播和已生成的素材都会复用。');
+      pollWorkflow();
+      loadHistory();
+    }).catch(function (error) {
+      showMessage(errorText(error.message), true);
+    }).then(function () { setBusy(false); });
+  }
+  function bindHistoryPanel() {
+    var refresh = $('hypitHistoryRefresh');
+    if (refresh) refresh.addEventListener('click', function () { loadHistory(); });
+    var host = $('hypitHistoryList');
+    if (!host) return;
+    host.addEventListener('click', function (event) {
+      var target = event.target;
+      if (!target || !target.getAttribute) return;
+      var resumeId = target.getAttribute('data-hypit-history-resume');
+      if (resumeId) { resumeJob(resumeId); return; }
+      var openId = target.getAttribute('data-hypit-history-open');
+      if (openId) {
+        state.jobId = openId;
+        pollWorkflow();
+      }
+    });
+  }
+
   function bind() {
     if (state.initialized) return;
     state.initialized = true;
@@ -356,7 +457,9 @@
     if (installClose) installClose.addEventListener('click', closeInstallModal);
     var installModal = $('hypitInstallModal');
     if (installModal) installModal.addEventListener('click', function(event) { if (event.target === installModal) closeInstallModal(); });
+    bindHistoryPanel();
     refreshRuntimeStatus().catch(function() {});
+    loadHistory();
     restoreWorkflow();
   }
   window.initHypitVideoStudioView = function() {

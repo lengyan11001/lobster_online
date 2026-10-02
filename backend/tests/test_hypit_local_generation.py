@@ -863,3 +863,93 @@ def test_public_media_url_blocks_literal_private_address():
             raise AssertionError("字面私网地址必须被拒绝: " + url)
         except RuntimeError as exc:
             assert "内网" in str(exc)
+
+
+
+def test_job_summary_and_history_list(tmp_path, monkeypatch):
+    """历史记录：能看到状态/阶段/结果地址，能判断能不能继续。"""
+    monkeypatch.setattr(hypit_local, "JOBS_ROOT", tmp_path)
+    user_dir = tmp_path / "31"
+    job_dir = user_dir / "j1"
+    job_dir.mkdir(parents=True)
+    (job_dir / "reference.mp4").write_bytes(b"video")
+    (job_dir / "job.json").write_text(__import__("json").dumps({
+        "job_id": "j1", "user_id": 31, "filename": "ref.mp4", "file_size": 10,
+        "probe": {"duration": 7.2, "width": 720, "height": 1264}, "brief": "改成美食",
+        "created_at": 1000.0,
+    }), encoding="utf-8")
+    (job_dir / "workflow.json").write_text(__import__("json").dumps({
+        "status": "failed", "stage": "自动处理失败", "error": "xx", "video_url": "",
+    }), encoding="utf-8")
+
+    items = hypit_local._list_job_summaries(31)
+    assert len(items) == 1
+    item = items[0]
+    assert item["job_id"] == "j1" and item["status"] == "failed"
+    assert item["brief"] == "改成美食" and item["can_resume"] is True
+    assert item["contact_sheet_url"].endswith("/j1/contact-sheet")
+    assert hypit_local._list_job_summaries(99) == []
+
+
+def test_saved_storyboard_reused_on_resume(tmp_path):
+    """从历史继续时复用工程里已有的分镜，不重跑 AI。"""
+    project = tmp_path / "hypit-project"
+    project.mkdir()
+    (project / "project.json").write_text(__import__("json").dumps({
+        "title": "测试复刻", "scenes": [{"start": 0, "end": 3, "image_prompt": "p"}],
+    }), encoding="utf-8")
+    saved = hypit_local._saved_storyboard(project)
+    assert saved and saved["cached"] is True and len(saved["scenes"]) == 1
+    assert hypit_local._saved_storyboard(tmp_path / "nope") is None
+
+
+
+def test_local_proxy_detection_prefers_env_and_ports(monkeypatch):
+    """直连失败后要能找到本机代理：先看环境变量，再看常见端口。"""
+    monkeypatch.setattr(hypit_local, "_PROXY_STATE", {"preferred": "", "checked": False})
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7890")
+    assert hypit_local._local_proxy_url() == "http://127.0.0.1:7890"
+
+    monkeypatch.setattr(hypit_local, "_PROXY_STATE", {"preferred": "", "checked": False})
+    monkeypatch.delenv("HTTPS_PROXY", raising=False)
+    for name in ("https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.delenv(name, raising=False)
+
+    monkeypatch.setattr(hypit_local, "_windows_system_proxy", lambda: "")
+
+    def fake_connect(address, timeout=0.4):
+        if address[1] == 7897:
+            class _Sock:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *exc):
+                    return False
+
+            return _Sock()
+        raise OSError("closed")
+
+    monkeypatch.setattr(hypit_local.socket, "create_connection", fake_connect)
+    assert hypit_local._local_proxy_url() == "http://127.0.0.1:7897"
+
+
+def test_windows_system_proxy_reads_registry_format(monkeypatch):
+    """Clash 的系统代理写法（http=127.0.0.1:10808;https=...）要能解析出 https 那条。"""
+    import winreg as _winreg
+
+    class _Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_open(root, path):
+        return _Key()
+
+    def fake_query(key, name):
+        return (1, 0) if name == "ProxyEnable" else ("http=127.0.0.1:10808;https=127.0.0.1:10808", 0)
+
+    monkeypatch.setattr(_winreg, "OpenKey", fake_open)
+    monkeypatch.setattr(_winreg, "QueryValueEx", fake_query)
+    assert hypit_local._windows_system_proxy() == "http://127.0.0.1:10808"
