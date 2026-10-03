@@ -5166,6 +5166,13 @@ def _scheduled_douyin_online_config_params(
                     "reply_prompt": str(monitor.get("reply_prompt") or "").strip(),
                     "contact_value": str(monitor.get("contact_value") or "").strip(),
                     "wechat_add_friend_enabled": bool(monitor.get("wechat_add_friend_enabled", False)),
+                    # 记忆接管用的记忆文件在 Online 私信引流页选；把它一起带给一次性任务，
+                    # 避免任务进程里监控状态没恢复时读不到记忆文件。
+                    "memory_doc_ids": [
+                        str(item or "").strip()
+                        for item in (monitor.get("memory_doc_ids") or [])
+                        if str(item or "").strip()
+                    ],
                 }
             )
         return params
@@ -5264,12 +5271,19 @@ def _merge_scheduled_douyin_stranger_params(
         "contact_value",
         "wechat_add_friend_enabled",
         "wechat_add_friend_targets_source",
+        "memory_doc_ids",
     ):
         if key not in task:
             continue
         value = task.get(key)
         if key == "reply_mode":
-            value = "ai_lead" if str(value or "").strip().lower() == "ai_lead" else "fixed"
+            # H5 节点支持三种模式：固定文案 / AI 引导加微信 / AI 记忆接管。
+            # 旧代码这里只放行 ai_lead，把节点选中的 ai_memory 悄悄降级成
+            # fixed，于是「抖音私信记忆接管」节点实际发的是 Online 私信引流
+            # 里保存的那份固定文案（2026-10-03 用户 221 演示复现）。三种模式
+            # 必须原样保留，只有无法识别的值才回落到 fixed。
+            mode = str(value or "").strip().lower()
+            value = mode if mode in {"fixed", "ai_lead", "ai_memory"} else "fixed"
         if isinstance(value, bool):
             merged[key] = value
         elif value not in (None, "", []):

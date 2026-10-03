@@ -73,3 +73,64 @@ def test_stranger_param_merge_keeps_targets_source():
 
     assert merged["wechat_add_friend_targets_source"] == "douyin_private_message_phone"
     assert merged["reply_mode"] == "ai_lead"
+
+
+def test_memory_takeover_mode_survives_the_merge():
+    """记忆接管节点不能再被 Online 里的固定文案顶掉（2026-10-03 用户 221 演示复现）。
+
+    H5 节点下发 {"reply_mode": "ai_memory", "memory_takeover": true}，Online 私信引流
+    里另存着一份固定文案。旧代码在合并参数时只放行 ai_lead，把 ai_memory 降级成
+    fixed，于是节点选的是「AI 记忆接管」，实际发的却是那份固定话术。
+    """
+    merged = h5_chat_channel._merge_scheduled_douyin_stranger_params(
+        {"reply_mode": "fixed", "message": "亲，您一直发这段我没法判断您的需求呀。"},
+        {"reply_mode": "ai_memory", "wechat_add_friend_enabled": False},
+    )
+
+    assert merged["reply_mode"] == "ai_memory", merged
+    # 固定文案留着无妨（记忆接管分支不用它），但模式必须是节点选的记忆接管。
+    assert merged["message"] == "亲，您一直发这段我没法判断您的需求呀。"
+
+
+def test_fixed_and_ai_lead_modes_still_pass_through():
+    for mode in ("fixed", "ai_lead"):
+        merged = h5_chat_channel._merge_scheduled_douyin_stranger_params(
+            {"reply_mode": "fixed", "message": "固定文案"},
+            {"reply_mode": mode},
+        )
+        assert merged["reply_mode"] == mode, merged
+
+
+def test_unknown_reply_mode_falls_back_to_fixed():
+    merged = h5_chat_channel._merge_scheduled_douyin_stranger_params(
+        {"reply_mode": "ai_lead"},
+        {"reply_mode": "ai_auto"},
+    )
+
+    assert merged["reply_mode"] == "fixed", merged
+
+
+def test_memory_doc_ids_travel_with_the_task():
+    """Online 私信引流里选的记忆文件要跟着一次性任务下发。"""
+    params = h5_chat_channel._scheduled_douyin_online_config_params(
+        "stranger_message",
+        config={"douyin_default_account_id": 1},
+        plans=[],
+        search_sessions=[],
+        stranger_monitors=[
+            {
+                "account_id": 1,
+                "enabled": True,
+                "reply_mode": "ai_memory",
+                "reply_message": "固定文案",
+                "memory_doc_ids": ["doc-a", "  ", "doc-b"],
+            }
+        ],
+        self_comment_monitors=[],
+    )
+    # 空白项在拼参数时就丢掉，只保留真正选中的记忆文件。
+    assert params["memory_doc_ids"] == ["doc-a", "doc-b"]
+
+    merged = h5_chat_channel._merge_scheduled_douyin_stranger_params(params, {"reply_mode": "ai_memory"})
+    assert merged["reply_mode"] == "ai_memory"
+    assert merged["memory_doc_ids"] == ["doc-a", "doc-b"]
