@@ -1,7 +1,7 @@
 {
-  "version": "2.0.93",
-  "build": 387,
-  "applied_at": "2026-10-04T09:12:55+08:00",
-  "note": "2.0.93：修复抖音私信「记忆接管」——节点选中的记忆接管不再被 Online 私信引流里那份固定文案顶掉，记忆文件（如百问百答）真正用于生成回复；同时把 Online 选中的记忆文件随一次性任务下发",
-  "bundle_sha256": "149e338c2b2b3d7b869a188bcfadbda7f91ee5d5e0ae988ed83ac71b973ddbec"
+  "version": "2.0.94",
+  "build": 388,
+  "applied_at": "2026-10-04T18:15:28+08:00",
+  "note": "2.0.94：修 ffprobe/ffmpeg 音视频依赖链路——素材探针没有 ffprobe 时改用 ffmpeg 读取分辨率（闪剪素材准备不再被跳过）；安装包与「修复运行依赖」现在会同时补齐 ffmpeg.exe + ffprobe.exe",
+  "bundle_sha256": "abf364b30c91b063fa283beade51dbd53d3d814b06ba8331f4f6cac89b48e943"
 }
