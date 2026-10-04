@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+import shutil
 import json
 import subprocess
 import sys
@@ -265,6 +266,70 @@ def _verify_groups() -> list[dict[str, Any]]:
     return results
 
 
+_MEDIA_TOOL_NAMES: tuple[str, ...] = ("ffmpeg", "ffprobe")
+
+
+def _media_tools_missing() -> list[str]:
+    """本机缺哪些音视频工具：客户端包内 deps/ffmpeg 优先，其次 PATH。"""
+    suffix = ".exe" if os.name == "nt" else ""
+    missing: list[str] = []
+    for name in _MEDIA_TOOL_NAMES:
+        if (ROOT / "deps" / "ffmpeg" / f"{name}{suffix}").is_file():
+            continue
+        if shutil.which(f"{name}{suffix}") or shutil.which(name):
+            continue
+        missing.append(name)
+    return missing
+
+
+def _repair_media_tools(timeout: int) -> dict[str, Any]:
+    """补齐 deps/ffmpeg 下的 ffmpeg / ffprobe。
+
+    2026-10-04 diag_20261004083756_12ea0605：客户机只装了 ffmpeg、没有 ffprobe，
+    闪剪素材分辨率校验全部报「本机缺少 ffprobe，无法校验素材分辨率」，数字人口播
+    视频的素材准备被跳过。install.bat 以前也只下载 ffmpeg.exe，所以这里统一交给
+    scripts/ensure_ffmpeg_windows.py 把两个二进制都补上。
+    """
+    missing = _media_tools_missing()
+    if not missing:
+        return {"ok": True, "missing": [], "message": "本机 ffmpeg/ffprobe 已就绪", "log": ""}
+    if os.name != "nt":
+        return {
+            "ok": False,
+            "missing": missing,
+            "message": "非 Windows 客户端请用系统包管理器安装 ffmpeg（需同时提供 ffprobe）",
+            "log": "",
+        }
+    script = ROOT / "scripts" / "ensure_ffmpeg_windows.py"
+    if not script.is_file():
+        return {
+            "ok": False,
+            "missing": missing,
+            "message": "缺少 scripts/ensure_ffmpeg_windows.py，无法自动下载",
+            "log": "",
+        }
+    if str(os.environ.get("LOBSTER_OFFLINE_ONLY") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return {
+            "ok": False,
+            "missing": missing,
+            "message": "离线模式不联网下载 ffmpeg/ffprobe，请把 deps/ffmpeg 一起打包",
+            "log": "",
+        }
+    code, output = _run([sys.executable, str(script)], min(max(int(timeout or 0), 300), 1800))
+    still_missing = _media_tools_missing()
+    ok = code == 0 and not still_missing
+    return {
+        "ok": ok,
+        "missing": still_missing,
+        "message": (
+            "已补齐 deps/ffmpeg：" + "、".join(missing)
+            if ok
+            else "ffmpeg/ffprobe 补齐失败（仍缺：" + "、".join(still_missing or missing) + "）"
+        ),
+        "log": _tail(output),
+    }
+
+
 def repair_runtime_dependencies() -> dict[str, Any]:
     if not _REPAIR_LOCK.acquire(blocking=False):
         raise RuntimeDependencyRepairBusy("依赖修复正在运行，请等待当前任务完成")
@@ -284,7 +349,20 @@ def repair_runtime_dependencies() -> dict[str, Any]:
             }
 
         install_result = _install_requirements(timeout)
+        media_result = _repair_media_tools(timeout)
         checks = _verify_groups()
+        checks.append(
+            {
+                "key": "media",
+                "label": "音视频工具（ffmpeg/ffprobe）",
+                "ok": bool(media_result.get("ok")),
+                "message": str(media_result.get("message") or ""),
+                "failures": [
+                    {"module": str(name), "error": str(media_result.get("message") or "缺失")}
+                    for name in (media_result.get("missing") or [])
+                ],
+            }
+        )
         ok = bool(install_result.get("ok")) and all(bool(item.get("ok")) for item in checks)
         result = {
             "ok": ok,
@@ -292,6 +370,7 @@ def repair_runtime_dependencies() -> dict[str, Any]:
             "python": sys.version.split()[0],
             "tkinter_stub_created": tkinter_stub_created,
             "install": install_result,
+            "media": media_result,
             "checks": checks,
             "restart_recommended": bool(install_result.get("ok")),
             "duration_seconds": round(time.monotonic() - started, 1),

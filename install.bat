@@ -481,8 +481,8 @@ echo.
 
 REM Step 6b: ffmpeg for media.edit (Windows: deps\ffmpeg\ffmpeg.exe)
 echo [6b/7] ffmpeg for media edit...
-if exist "deps\ffmpeg\ffmpeg.exe" (
-    echo   [OK] deps\ffmpeg\ffmpeg.exe
+if exist "deps\ffmpeg\ffmpeg.exe" if exist "deps\ffmpeg\ffprobe.exe" (
+    echo   [OK] deps\ffmpeg\ffmpeg.exe + deps\ffmpeg\ffprobe.exe
     goto :ffmpeg_install_done
 )
 if exist "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\ffmpeg.exe" (
@@ -519,6 +519,12 @@ if not exist "deps\ffmpeg\ffmpeg.exe" (
     exit /b 1
 )
 echo   [OK] deps\ffmpeg\ffmpeg.exe
+if not exist "deps\ffmpeg\ffprobe.exe" (
+    echo   [WARN] deps\ffmpeg\ffprobe.exe missing - 数字人/闪剪素材分辨率校验、视频信息读取会不可用
+    echo         可在「系统配置 - 修复运行依赖」里补齐，或手动跑 scripts\ensure_ffmpeg_windows.py
+) else (
+    echo   [OK] deps\ffmpeg\ffprobe.exe
+)
 :ffmpeg_install_done
 echo.
 

@@ -344,7 +344,7 @@ if errorlevel 1 (
 echo.
 
 echo [6b/7] ffmpeg...
-if exist "deps\ffmpeg\ffmpeg.exe" goto :ffmpeg_ok
+if exist "deps\ffmpeg\ffmpeg.exe" if exist "deps\ffmpeg\ffprobe.exe" goto :ffmpeg_ok
 if not exist "scripts\ensure_ffmpeg_windows.py" (
     echo   [WARN] ensure_ffmpeg_windows.py missing
     goto :ffmpeg_ok

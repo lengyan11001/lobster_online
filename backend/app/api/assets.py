@@ -3617,11 +3617,63 @@ def _shanjian_tools() -> tuple[str, str]:
     return ffmpeg, ffprobe
 
 
+_FFMPEG_VIDEO_RES_RE = re.compile(r"(?<![\dA-Za-z])(\d{2,5})x(\d{2,5})(?![\dA-Za-z])")
+_FFMPEG_DURATION_RE = re.compile(r"Duration:\s*(\d+):(\d{2}):(\d{2}(?:\.\d+)?)")
+
+
+def parse_ffmpeg_probe_output(text: str) -> tuple[int, int, float]:
+    """从 `ffmpeg -i` 的输出里读 (宽, 高, 时长)。
+
+    本机没有 ffprobe 时的兜底：ffmpeg -i 会把流信息打到 stderr（进程以非 0 退出），
+    信息量足够判断素材有没有超过闪剪的分辨率上限。
+    """
+    width = 0
+    height = 0
+    duration = 0.0
+    for line in str(text or "").replace("\r", "\n").split("\n"):
+        if not duration:
+            match = _FFMPEG_DURATION_RE.search(line)
+            if match:
+                try:
+                    duration = (
+                        int(match.group(1)) * 3600 + int(match.group(2)) * 60 + float(match.group(3))
+                    )
+                except ValueError:
+                    duration = 0.0
+        if (not width or not height) and "Video:" in line:
+            match = _FFMPEG_VIDEO_RES_RE.search(line)
+            if match:
+                cand_w, cand_h = int(match.group(1)), int(match.group(2))
+                if cand_w >= 16 and cand_h >= 16:
+                    width, height = cand_w, cand_h
+    return width, height, duration
+
+
+def _probe_media_dimensions_with_ffmpeg(ffmpeg: str, source: Path) -> tuple[int, int, float]:
+    proc = subprocess.run(
+        [ffmpeg, "-hide_banner", "-i", str(source)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=90,
+        check=False,
+        creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
+    )
+    return parse_ffmpeg_probe_output(f"{proc.stderr or ''}\n{proc.stdout or ''}")
+
+
 def probe_media_dimensions(source: Path) -> tuple[int, int, float]:
     """Return (width, height, duration_seconds) for one local media file."""
-    _ffmpeg, ffprobe = _shanjian_tools()
+    ffmpeg, ffprobe = _shanjian_tools()
     if not ffprobe:
-        raise RuntimeError("本机缺少 ffprobe，无法校验素材分辨率")
+        # 只有 ffmpeg 也不算致命：分辨率可以直接从 ffmpeg -i 的输出里读。
+        if ffmpeg:
+            width, height, duration = _probe_media_dimensions_with_ffmpeg(ffmpeg, source)
+            if width > 0 and height > 0:
+                return width, height, duration
+            raise RuntimeError("本机没有 ffprobe，ffmpeg 也读不到素材分辨率，无法校验素材大小")
+        raise RuntimeError("本机缺少 ffmpeg/ffprobe，无法校验素材分辨率")
     proc = subprocess.run(
         [
             ffprobe,
