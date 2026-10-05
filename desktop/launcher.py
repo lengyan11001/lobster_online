@@ -2067,7 +2067,10 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             stop_event = runtime["watchdog_stop"]
             failures = 0
             health_url = f"http://127.0.0.1:{port}/api/health?fast=1"
-            while not stop_event.wait(2.0):
+            # 2026-10-05：心跳从 2s 放到 5s。2s 时客户机 backend.log 里
+            # 89.5% 的行都是这条探针（15 小时 2.2 万条），看着一直在刷新；
+            # 5s 仍然能在 ~15s 内发现后端真的挂了（连续 3 次失败才恢复）。
+            while not stop_event.wait(5.0):
                 # A long client workflow can briefly monopolize the backend
                 # event loop. Give the lightweight fast probe enough time to
                 # return, and rely on process/port liveness before recovery.

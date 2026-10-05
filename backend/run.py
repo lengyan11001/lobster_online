@@ -72,6 +72,33 @@ import uvicorn
 from backend.app.core.config import settings
 
 
+class _SuppressHealthProbeAccessFilter(logging.Filter):
+    """丢掉桌面守护进程的 ?fast=1 健康探针访问日志。
+
+    2026-10-05 用户机器 backend.log 分析：15 小时里 25,415 条请求有 22,754 条
+    是 /api/health?fast=1（89.5%，约每 2.4 秒一条，等于守护进程的 watchdog 心跳），
+    日志看着像"一直在刷新"。这条探针只是探活，不需要每次都记一行访问日志；
+    真正出问题时（探针失败/恢复）守护进程自己会写 desktop_launcher.log。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = getattr(record, "args", None)
+        if not args:
+            return True
+        try:
+            path = str(args[2] if len(args) > 2 else "")
+        except Exception:
+            return True
+        if "fast=1" in path and "recovery_probe" not in path:
+            return False
+        return True
+
+
+# uvicorn.run() 会重新配置日志，但 dictConfig 不会清掉已有 logger 的 filter，
+# 所以这里先挂上；只过滤「守护进程心跳」这一种，前端 recovery_probe 仍照常记录。
+logging.getLogger("uvicorn.access").addFilter(_SuppressHealthProbeAccessFilter())
+
+
 def _start_mcp_if_needed():
     """若 8001 未被占用则启动 MCP，使对话侧速推/能力可用。"""
     mcp_port = int(os.environ.get("MCP_PORT", str(getattr(settings, "mcp_port", 8001))))
