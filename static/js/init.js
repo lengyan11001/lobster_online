@@ -1988,10 +1988,13 @@ function loadDashboard() {
       if (typeof window.initMastraOnlineChat === 'function') window.initMastraOnlineChat();
       loadOnlineH5Employees();
       setTimeout(restoreDashboardViewAfterLogin, 0);
-      syncTosFromServerIfOnline();
-      syncContentRecordsFromLocalIfOnline();
-      syncAssetLibraryFromLocalIfOnline();
-      syncOpenclawMemoryFromServerIfOnline();
+      // 2026-10-05：这四个同步启动时会一起打本机后端（每个 0.5-2.4s，本机后端还要再去打云端），
+      // 实测启动阶段 requests 全挤在这几秒里，用户第一次点菜单就排在这些同步后面（所以"进来第一次点要等蛮久"）。
+      // 错开执行：界面先可用，同步慢慢在后台补。
+      setTimeout(syncTosFromServerIfOnline, 800);
+      setTimeout(syncContentRecordsFromLocalIfOnline, 3000);
+      setTimeout(syncAssetLibraryFromLocalIfOnline, 6000);
+      setTimeout(syncOpenclawMemoryFromServerIfOnline, 9000);
       if (EDITION === 'online') {
         loadSutuiBalance();
         var rBtn = document.getElementById('sutuiRechargeBtn');
