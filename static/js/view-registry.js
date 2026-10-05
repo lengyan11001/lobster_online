@@ -17,6 +17,11 @@
     html: '/static/views/skill-store.html?v=20260913-brand-v1'
   });
 
+  window.registerLobsterView('douyin-direct-messages', {
+    html: '/static/views/douyin-direct-messages.html?v=20261005-douyin-direct-messages',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('douyin-leads', {
     html: '/static/views/douyin-leads.html?v=20260611-search-scroll-final',
     cache: 'reload'

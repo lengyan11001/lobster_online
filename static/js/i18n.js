@@ -61,7 +61,7 @@
     '创建员工': 'Create Employee', '员工列表': 'Employees', '平台账号': 'Platform Accounts',
     '选择设备': 'Select Device', '切换设备': 'Switch Device', '我的': 'Profile', '工作流': 'Workflow',
     '销售员工': 'Sales Employee', 'AI海外员工': 'AI Global Employee', 'AI 海外员工': 'AI Global Employee',
-    '精准获客': 'Targeted Leads', '抖音私信接管': 'Douyin DM Assistant',
+    '精准获客': 'Targeted Leads', '抖音私信': 'Douyin DMs', '抖音私信接管': 'Douyin DM Assistant',
     '微信私信接管': 'WeChat DM Assistant', 'LinkedIn线索挖掘': 'LinkedIn Lead Mining',
     'LinkedIn 线索挖掘': 'LinkedIn Lead Mining', 'X线索采集': 'X Lead Collection',
     'X 线索采集': 'X Lead Collection', '全球获客': 'Global Leads', '新建任务': 'New Task',
