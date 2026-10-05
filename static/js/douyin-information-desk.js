@@ -453,6 +453,8 @@
     var video = copyState.videoUploadUrl || typedVideo;
     var image = copyState.imageUploadUrl || copyState.defaultImageUrl;
     var promptEl = copyEl('douyinCopyPrompt');
+    var resolutionEl = copyEl('douyinCopyResolution');
+    var resolution = String(resolutionEl && resolutionEl.value || '720P');
     var modeEl = copyEl('douyinCopyMode');
     var mode = String(modeEl && modeEl.value || copyState.mode || 'effect_copy');
     copyState.mode = mode;
@@ -463,6 +465,7 @@
       video_url: video,
       image_url: image,
       mode: mode,
+      resolution: resolution,
       prompt: String(promptEl && promptEl.value || '').trim(),
       title: '热门视频跟创'
     }).then(function(data) {
