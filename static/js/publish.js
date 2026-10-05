@@ -2084,6 +2084,13 @@ function _isSharedContentRecordType(value) {
   return ['article', 'wechat_article', 'ppt'].indexOf(String(value || '')) >= 0;
 }
 
+// 2026-10-05：画布/生成类产物落在云端内容记录（user_content_records）里，本地素材库只有
+// 客户端自己落的那些。生成的图片/视频/音频要把两边合起来显示，否则「刚在画布里生成的图
+// 在内容记录里查不到」。
+function _isMergeableCloudContentType(value) {
+  return ['image', 'video', 'audio'].indexOf(String(value || '')) >= 0;
+}
+
 function _assetCloudBase() {
   return (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '';
 }
@@ -4742,36 +4749,76 @@ function loadAssets(query, options) {
 
   _assetLibraryState.loading = true;
   var sharedContentMode = snap.origin === 'generated' && _isSharedContentRecordType(snap.mediaType);
-  var url = '';
+  var cloudBase = _assetCloudBase();
+  var mergeCloudContent = !sharedContentMode && snap.origin === 'generated'
+    && _isMergeableCloudContentType(snap.mediaType) && !!cloudBase;
+  if (sharedContentMode && !cloudBase) {
+    _assetLibraryState.loading = false;
+    el.innerHTML = '<div class="page-empty-card msg err">未配置云端 API_BASE，无法读取内容记录。</div>';
+    return;
+  }
+  var cloudContentUrl = cloudBase
+    ? (cloudBase + '/api/content-records?kind=' + encodeURIComponent(snap.mediaType)
+       + '&limit=' + _ASSET_PAGE_SIZE + '&offset=' + offset + '&compact=true')
+    : '';
+  var requests = [];
   if (sharedContentMode) {
-    var cloud = _assetCloudBase();
-    if (!cloud) {
-      _assetLibraryState.loading = false;
-      el.innerHTML = '<div class="page-empty-card msg err">未配置云端 API_BASE，无法读取内容记录。</div>';
-      return;
-    }
-    url = cloud + '/api/content-records?kind=' + encodeURIComponent(snap.mediaType) + '&limit=' + _ASSET_PAGE_SIZE + '&offset=' + offset + '&compact=true';
+    requests.push({ source: 'cloud', url: cloudContentUrl });
   } else {
-    url = publishLocalBase() + '/api/assets?limit=' + _ASSET_PAGE_SIZE + '&offset=' + offset;
-    if (snap.origin && !snap.creativeGroup) url += '&origin=' + encodeURIComponent(snap.origin);
-    if (snap.mediaType) url += '&media_type=' + encodeURIComponent(snap.mediaType);
-    if (snap.creativeGroup) url += '&creative_group=' + encodeURIComponent(snap.creativeGroup);
-    if (snap.query) url += '&q=' + encodeURIComponent(snap.query);
+    var localUrl = publishLocalBase() + '/api/assets?limit=' + _ASSET_PAGE_SIZE + '&offset=' + offset;
+    if (snap.origin && !snap.creativeGroup) localUrl += '&origin=' + encodeURIComponent(snap.origin);
+    if (snap.mediaType) localUrl += '&media_type=' + encodeURIComponent(snap.mediaType);
+    if (snap.creativeGroup) localUrl += '&creative_group=' + encodeURIComponent(snap.creativeGroup);
+    if (snap.query) localUrl += '&q=' + encodeURIComponent(snap.query);
+    requests.push({ source: 'local', url: localUrl });
+    if (mergeCloudContent) requests.push({ source: 'cloud', url: cloudContentUrl });
   }
 
-  fetch(url, { headers: authHeaders() })
-    .then(function(r) {
-      return r.json().catch(function() { return {}; }).then(function(d) {
-        if (!r.ok) throw new Error((d && d.detail) || ('HTTP ' + r.status));
-        return d;
+  Promise.all(requests.map(function(req) {
+    return fetch(req.url, { headers: authHeaders() })
+      .then(function(r) {
+        return r.json().catch(function() { return {}; }).then(function(d) {
+          if (!r.ok) throw new Error((d && d.detail) || ('HTTP ' + r.status));
+          return { source: req.source, data: d };
+        });
+      })
+      .catch(function(err) {
+        // 合并模式：云端读不到也要把本地素材显示出来，不能整页报错
+        if (req.source === 'cloud' && !sharedContentMode) return { source: req.source, data: {} };
+        throw err;
       });
-    })
-    .then(function(d) {
+  }))
+    .then(function(results) {
       if (seq !== _assetLibraryLoadSeq) return;
-      var assets = sharedContentMode
-        ? ((d && Array.isArray(d.items)) ? d.items.map(_normalizeSharedContentRecord) : [])
-        : ((d && Array.isArray(d.assets)) ? d.assets : []);
-      if (sharedContentMode && snap.query) {
+      var cloudData = null;
+      var localData = null;
+      results.forEach(function(res) {
+        if (res.source === 'cloud') cloudData = res.data;
+        else localData = res.data;
+      });
+      var assets = [];
+      if (sharedContentMode) {
+        assets = (cloudData && Array.isArray(cloudData.items)) ? cloudData.items.map(_normalizeSharedContentRecord) : [];
+      } else {
+        var cloudAssets = (cloudData && Array.isArray(cloudData.items))
+          ? cloudData.items.map(function(item) {
+              var normalized = _normalizeSharedContentRecord(item);
+              normalized.media_type = snap.mediaType || normalized.media_type;
+              return normalized;
+            })
+          : [];
+        var localAssets = (localData && Array.isArray(localData.assets)) ? localData.assets.slice() : [];
+        assets = cloudAssets.concat(localAssets);
+        var seenAssetUrl = {};
+        assets = assets.filter(function(item) {
+          var key = String((item && (item.source_url || item.open_url || item.file_url || item.asset_id)) || '');
+          if (!key) return true;
+          if (seenAssetUrl[key]) return false;
+          seenAssetUrl[key] = 1;
+          return true;
+        });
+      }
+      if (snap.query) {
         var needle = String(snap.query).toLowerCase();
         assets = assets.filter(function(item) {
           return [item.title, item.summary, item.prompt, item.filename].some(function(value) {
@@ -4785,9 +4832,18 @@ function loadAssets(query, options) {
           return itemOrigin === snap.origin;
         });
       }
-      var total = sharedContentMode
-        ? Number(d && d.pagination && d.pagination.total || assets.length)
-        : ((d && typeof d.total === 'number') ? d.total : assets.length);
+      var total = 0;
+      if (sharedContentMode) {
+        total = Number((cloudData && cloudData.pagination && cloudData.pagination.total) || assets.length);
+      } else {
+        var localTotal = (localData && typeof localData.total === 'number')
+          ? localData.total
+          : ((localData && Array.isArray(localData.assets)) ? localData.assets.length : 0);
+        var cloudTotal = (mergeCloudContent && cloudData && cloudData.pagination
+          && typeof cloudData.pagination.total === 'number') ? cloudData.pagination.total : 0;
+        total = localTotal + cloudTotal;
+      }
+      if (!total) total = assets.length;
       if (!assets.length && !append) {
         el.innerHTML = '<div class="page-empty-card">' + (snap.origin === 'generated' ? '当前分类暂无内容记录。' : '暂无素材。可上传本地文件或保存网络 URL。') + '</div>';
         _assetLibraryState = {
