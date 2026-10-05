@@ -1,7 +1,7 @@
 {
-  "version": "2.0.94",
-  "build": 388,
-  "applied_at": "2026-10-04T18:15:28+08:00",
-  "note": "2.0.94：修 ffprobe/ffmpeg 音视频依赖链路——素材探针没有 ffprobe 时改用 ffmpeg 读取分辨率（闪剪素材准备不再被跳过）；安装包与「修复运行依赖」现在会同时补齐 ffmpeg.exe + ffprobe.exe",
-  "bundle_sha256": "abf364b30c91b063fa283beade51dbd53d3d814b06ba8331f4f6cac89b48e943"
+  "version": "2.0.95",
+  "build": 389,
+  "applied_at": "2026-10-05T12:31:41+08:00",
+  "note": "2.0.95：画布入口页定制——去掉顶部「文档教程」死按钮；修好新手引导的「关闭」（受控 Joyride 下 close 不结束引导，现改为等效「跳过」）；继承 2.0.94 的 ffprobe/依赖修复",
+  "bundle_sha256": "eb5de3a8eb0c2433bc06a271d35c99a4b1434263732a5c2b2f47449a76ef27b8"
 }
