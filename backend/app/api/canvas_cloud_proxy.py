@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any, Dict, Optional, Tuple
@@ -163,19 +164,40 @@ async def canvas_cloud_proxy(path: str, request: Request) -> Response:
     body = await request.body()
     timeout = _UPLOAD_TIMEOUT if any(hint in normalized.lower() for hint in _UPLOAD_HINTS) else _DEFAULT_TIMEOUT
     url = f"{cloud_base()}/canvas-api/{normalized}"
-    try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
-            upstream = await client.request(
-                request.method,
-                url,
-                content=body or None,
-                headers=headers,
-                params=dict(request.query_params),
-            )
-    except httpx.TimeoutException as exc:
-        raise HTTPException(status_code=504, detail=f"服务器画布接口超时：{exc}") from exc
-    except httpx.TransportError as exc:
-        raise HTTPException(status_code=502, detail=f"连不上服务器画布接口：{exc}") from exc
+    # 2026-10-05：画布轮询断一次就被前端判失败（用户看到「暂时无法读取任务状态」），
+    # 这里对「网络错误 / 上游 5xx」做两次静默重试（只重试幂等的读接口 + 查询类），
+    # 生成类 POST 不重试（避免重复下单）。
+    retryable = (request.method.upper() in {"GET", "HEAD"}
+                 or "tasks/query" in normalized or "tasks/info" in normalized)
+    attempts = 3 if retryable else 1
+    last_error: Optional[Exception] = None
+    upstream = None
+    for attempt in range(attempts):
+        try:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
+                upstream = await client.request(
+                    request.method,
+                    url,
+                    content=body or None,
+                    headers=headers,
+                    params=dict(request.query_params),
+                )
+        except httpx.TimeoutException as exc:
+            last_error = exc
+        except httpx.TransportError as exc:
+            last_error = exc
+        else:
+            if upstream.status_code < 500 or attempt == attempts - 1:
+                break
+            last_error = None
+            logger.warning("[canvas] %s %s 上游 %s，重试 %s/%s",
+                           request.method, normalized, upstream.status_code, attempt + 2, attempts)
+        if attempt < attempts - 1:
+            await asyncio.sleep(0.6 * (attempt + 1))
+    if upstream is None:
+        if isinstance(last_error, httpx.TimeoutException):
+            raise HTTPException(status_code=504, detail=f"服务器画布接口超时：{last_error}") from last_error
+        raise HTTPException(status_code=502, detail=f"连不上服务器画布接口：{last_error}") from last_error
 
     logger.info("[canvas] %s %s -> %s", request.method, normalized, upstream.status_code)
     media_type = upstream.headers.get("content-type") or "application/json"

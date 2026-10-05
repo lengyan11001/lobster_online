@@ -40,3 +40,13 @@ def test_canvas_app_serves_patched_index_html():
     body = canvas_app._canvas_html().body.decode("utf-8")
     assert 'button[title="查看文档教程"]' in body
     assert "lobster-canvas-tour-close" in body
+
+
+def test_canvas_proxy_retries_transient_failures():
+    """画布轮询断一次就被前端判失败：客户端代理要对网络错误/5xx 静默重试。"""
+    src = (ROOT / "backend" / "app" / "api" / "canvas_cloud_proxy.py").read_text(encoding="utf-8")
+    assert "attempts = 3 if retryable else 1" in src
+    assert '"tasks/query" in normalized' in src
+    assert "await asyncio.sleep(0.6 * (attempt + 1))" in src
+    # 生成类 POST 不该重试（避免重复下单）
+    assert 'request.method.upper() in {"GET", "HEAD"}' in src
