@@ -788,27 +788,61 @@ def _flatten_survey(value: Any, depth: int = 0) -> str:
     return ""
 
 
-def _survey_material_text(user_id: int, survey_ids: Optional[List[str]] = None, *, limit: int = 4000) -> str:
-    """资料调查（IP 内容调研问卷）-> 文本，作为复刻的事实来源之一。"""
-    ids: List[int] = []
+async def _survey_material_text(user_id: int, survey_ids: Optional[List[str]] = None, *,
+                               limit: int = 4000, token: str = "", installation_id: str = "") -> str:
+    """资料调查（IP 内容调研问卷）-> 文本，作为复刻的事实/口径来源之一。
+
+    2026-10-05：这张表在云端（/api/ip-content/profile-surveys），本地单机版 models 里已经没有
+    IPContentProfileSurvey，所以以前这里 import 失败 → 资料调查永远为空（复刻少了一份资料）。
+    现在优先走云端拉，拉到就用；拉不到再退回本地老模型（有就用）。
+    """
+    ids: set = set()
     for raw in (survey_ids or []):
         try:
-            ids.append(int(str(raw).strip()))
+            ids.add(int(str(raw).strip()))
         except (TypeError, ValueError):
             continue
     if not user_id or not ids:
         return ""
+    base = _server_proxy_base()
+    if token and base:
+        try:
+            headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+            if installation_id:
+                headers["X-Installation-Id"] = installation_id
+            async with httpx.AsyncClient(timeout=20.0, trust_env=False) as client:
+                resp = await client.get(f"{base}/api/ip-content/profile-surveys", headers=headers)
+            if resp.status_code < 400:
+                data = resp.json() if resp.content else {}
+                rows = [row for row in (data.get("items") or []) if isinstance(row, dict)]
+                parts: List[str] = []
+                for row in rows:
+                    try:
+                        row_id = int(str(row.get("id")))
+                    except (TypeError, ValueError):
+                        continue
+                    if row_id not in ids:
+                        continue
+                    head = str(row.get("name") or "资料调查")
+                    body = _flatten_survey(row.get("requirements"))
+                    parts.append(f"【资料调查：{head}】\n{body}" if body else f"【资料调查：{head}】")
+                text = "\n\n".join(parts)[:limit]
+                if text:
+                    return text
+            else:
+                logger.warning("[wechat-article] survey material cloud http=%s", resp.status_code)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[wechat-article] survey material cloud failed user_id=%s err=%s", user_id, exc)
     try:
         from ..db import SessionLocal
         from ..models import IPContentProfileSurvey
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[wechat-article] survey model import failed: %s", exc)
+    except Exception:
         return ""
     db = SessionLocal()
     try:
         rows = (db.query(IPContentProfileSurvey)
                 .filter(IPContentProfileSurvey.user_id == int(user_id),
-                        IPContentProfileSurvey.id.in_(ids)).all())
+                        IPContentProfileSurvey.id.in_(sorted(ids))).all())
         parts = []
         for row in rows:
             head = str(getattr(row, "name", "") or "资料调查")
@@ -819,7 +853,10 @@ def _survey_material_text(user_id: int, survey_ids: Optional[List[str]] = None, 
         logger.warning("[wechat-article] survey material load failed user_id=%s err=%s", user_id, exc)
         return ""
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 async def _resolve_template_material(token: str, installation_id: str) -> Dict[str, Any]:
@@ -1866,7 +1903,8 @@ async def generate_wechat_article(
                                                 doc_titles=body.memory_document_titles)
             if memory_text:
                 blocks.append(memory_text)
-            survey_text = _survey_material_text(uid, survey_ids)
+            survey_text = await _survey_material_text(uid, survey_ids, token=token,
+                                                   installation_id=installation_id)
             if survey_text:
                 blocks.append(survey_text)
             memory_text = "\n\n".join(blocks)
