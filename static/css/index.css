@@ -852,12 +852,17 @@
       font-size: 0.86rem; line-height: 1.72;
     }
     .wechat-article-preview-head { display: flex; flex-direction: column; gap: 0.25rem; margin-bottom: 0.75rem; }
+    /* 2026-10-05：预览框原来是「页面里再套一个滚动容器（max-height + overflow:auto）」，
+       在客户端 WebView 里切 tab（显示/隐藏 公众号预览 / 复刻预览）时会触发嵌套滚动区重绘，
+       表现就是顶部导航和右侧面板闪一下。改成自然撑开、去掉内层滚动，视觉更稳。 */
     .wechat-article-preview {
-      min-height: 620px; max-height: 760px; overflow: auto; padding: 1.25rem;
+      min-height: 620px; padding: 1.25rem;
       border-radius: 18px; background: #fff; color: #1f2937;
       border: 1px solid rgba(34,49,78,0.08);
       box-shadow: inset 0 0 0 1px rgba(255,255,255,0.8);
     }
+    /* 切 tab 时页面高度保持稳定，避免内容突然变高/变矮把顶部导航带着重绘 */
+    .wechat-article-panel { min-height: 660px; }
     .wechat-article-switch {
       min-height: 43px; display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 0.7rem;
       border: 1px solid rgba(34,49,78,0.12); border-radius: 10px; background: #fff; color: #22324f;
