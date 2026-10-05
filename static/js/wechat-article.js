@@ -165,6 +165,7 @@
 
   function switchTab(tab) {
     tab = tab || 'compose';
+    state.tab = tab;
     document.querySelectorAll('.wechat-article-tab').forEach(function(btn) {
       btn.classList.toggle('active', btn.getAttribute('data-wechat-article-tab') === tab);
     });
@@ -877,7 +878,11 @@
 
   window.loadWechatArticlePage = function() {
     bindOnce();
-    switchTab('compose');
+    // 2026-10-05：以前每次进入这个页面都强制切回「AI 创作」，视图被重新显示时会把右侧面板
+    // 重新渲染一遍（顶部 tab + 右栏就闪一下）。改成只初始化一次，并保留用户上次所在的 tab。
+    if (state.tabReady) return;
+    state.tabReady = true;
+    switchTab(state.tab || 'compose');
   };
 
   window._openWechatArticleView = function() {
