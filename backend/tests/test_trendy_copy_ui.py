@@ -42,6 +42,8 @@ def test_desk_view_has_copy_panel_and_history_modal():
     ):
         assert marker in view, marker
     assert "复刻特效" in view and "复刻单人动作" in view
+    # 视频来源要写明支持抖音作品链接（2026-10-05：用户就是用 douyin.com/video/xxx 这种）
+    assert "douyin.com/video" in view
 
 
 def test_copy_modes_default_image_and_modal_wired_in_js():
