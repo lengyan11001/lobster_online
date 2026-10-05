@@ -588,6 +588,142 @@ def _fallback_article_markdown(idea: str, title: str = "", include_images: bool 
     return "\n".join(parts)
 
 
+_OVERLAP_STRIP_RE = re.compile(r"[#*\s>`\-\[\]()（）【】、，。！？：；“”\"'’,.!?:;]")
+
+
+def _overlap_norm(value: object) -> str:
+    return _OVERLAP_STRIP_RE.sub("", str(value or ""))
+
+
+def _longest_common_substring(a: str, b: str) -> "tuple[int, str]":
+    """最长公共子串（用于判断跟原文有没有整段照抄）。a 短、b 长。"""
+    if not a or not b:
+        return 0, ""
+    if len(a) > len(b):
+        a, b = b, a
+    best, best_s = 0, ""
+    prev = [0] * (len(b) + 1)
+    for i in range(1, len(a) + 1):
+        cur = [0] * (len(b) + 1)
+        ai = a[i - 1]
+        for j in range(1, len(b) + 1):
+            if ai == b[j - 1]:
+                cur[j] = prev[j - 1] + 1
+                if cur[j] > best:
+                    best = cur[j]
+                    best_s = a[i - best:i]
+        prev = cur
+    return best, best_s
+
+
+def _ngram_ratio(a: str, b: str, n: int = 12) -> float:
+    ga = {a[i:i + n] for i in range(0, max(0, len(a) - n + 1))}
+    gb = {b[i:i + n] for i in range(0, max(0, len(b) - n + 1))}
+    if not ga:
+        return 0.0
+    return len(ga & gb) / float(len(ga))
+
+
+async def _deoverlap_remix_markdown(
+    markdown: str,
+    source_body: str,
+    *,
+    token: str,
+    installation_id: str,
+    max_paragraphs: int = 12,
+    max_rounds: int = 2,
+) -> str:
+    """复刻第二遍：把跟原文雷同的段落挑出来，让模型用自己的话重写（最多两轮）。
+
+    2026-10-05 用户反馈：第一遍虽然要求「以原文为母本改写」，模型会整段照搬（文案一模一样，只有配图不同）。
+    这里做机器检测 + 定点重写：最长连续雷同 ≥16 字，或 12 字片段重合 ≥18% 的段落退回重写，
+    并把「具体跟原文雷同的那一段」一并给模型，要求把那段完全换说法。保持观点/信息点/段落位置不变。
+    最多两轮，避免无谓消耗；失败就返回当前稿件，不影响出稿。
+    """
+    src = _overlap_norm(source_body)
+    if not markdown or len(src) < 200 or not token:
+        return markdown
+    model = (
+        os.environ.get("WEWRITE_ARTICLE_MODEL")
+        or os.environ.get("LOBSTER_WEWRITE_ARTICLE_MODEL")
+        or getattr(settings, "lobster_orchestration_sutui_chat_model", "")
+        or "deepseek-chat"
+    )
+    paragraphs = str(markdown).split("\n\n")
+    for round_no in range(max(1, int(max_rounds))):
+        flagged = []
+        for idx, para in enumerate(paragraphs):
+            text = _overlap_norm(para)
+            if len(text) < 60:
+                continue
+            longest, sample = _longest_common_substring(text, src)
+            if longest >= 16 or _ngram_ratio(text, src, 12) >= 0.18:
+                flagged.append((idx, sample[:80]))
+            if len(flagged) >= max_paragraphs:
+                break
+        if not flagged:
+            if round_no:
+                logger.info("[wechat-article] deoverlap clean after round=%s", round_no)
+            return "\n\n".join(paragraphs)
+        payload = {
+            "task": "rewrite",
+            "instruction": (
+                "下面这些段落跟参考原文过于雷同（每段都给出了与原文重复最长的片段）。"
+                "请在不改变观点、信息点、段落位置和大致长度的前提下，用你自己的话整段重写："
+                "句式、用词、举例方式、罗列顺序都要换掉，给出的『雷同片段』必须完全换一种说法；"
+                "除了人名/品牌/产品/数字，任何连续 10 个字都不能与参考原文相同；"
+                "不要新增事实、不要删信息。只返回 JSON：{\"items\":[{\"index\":序号,\"text\":\"改写后的段落\"}]}"
+            ),
+            "source_excerpt": src[:4000],
+            "paragraphs": [{"index": i, "text": paragraphs[i], "overlap_snippet": s} for i, s in flagged],
+        }
+        try:
+            async with httpx.AsyncClient(timeout=180.0, trust_env=False) as client:
+                resp = await client.post(
+                    f"{_server_proxy_base()}/api/sutui-chat/completions",
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": "你是资深公众号编辑，擅长把同一段意思换一套说法重写。"},
+                            {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                        ],
+                        "stream": False,
+                        "temperature": 0.8,
+                    },
+                    headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}",
+                             "X-Installation-Id": installation_id},
+                )
+            if resp.status_code >= 400:
+                logger.warning("[wechat-article] deoverlap http=%s", resp.status_code)
+                return "\n\n".join(paragraphs)
+            data = resp.json() if resp.content else {}
+            content = data["choices"][0]["message"]["content"]
+        except Exception as exc:  # noqa: BLE001 重写失败不影响出稿
+            logger.warning("[wechat-article] deoverlap failed: %s", exc)
+            return "\n\n".join(paragraphs)
+        parsed = _extract_json_object(content) or {}
+        items = parsed.get("items") if isinstance(parsed.get("items"), list) else []
+        allowed = {i for i, _s in flagged}
+        replaced = 0
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            try:
+                idx = int(item.get("index"))
+            except (TypeError, ValueError):
+                continue
+            text = str(item.get("text") or "").strip()
+            if not text or idx not in allowed or idx < 0 or idx >= len(paragraphs):
+                continue
+            paragraphs[idx] = text
+            replaced += 1
+        logger.info("[wechat-article] deoverlap round=%s flagged=%s rewritten=%s",
+                    round_no + 1, len(flagged), replaced)
+        if not replaced:
+            break
+    return "\n\n".join(paragraphs)
+
+
 async def _call_article_writer(body: WechatArticleGenerateIn, token: str, installation_id: str) -> Dict[str, Any]:
     asb = _server_proxy_base()
     model = (
@@ -964,9 +1100,12 @@ async def _call_article_remix_writer(
         "2. 只改『谁在说、怎么说』：第一人称自称、对读者的称呼、语气词、行文口吻、账号身份，按我方人设资料调整；"
         "原文里的作者名、品牌名、产品名、案例主体，替换成我方资料里对应的说法（资料里没有对应就保留原文表述，"
         "不要删信息、不要换题）。\n"
-        "3. 允许保留原文的关键句与事实表述（关键句可原样引用 40 字以内），但禁止整段照搬；"
-        "不要为了躲重复而把内容改跑题。\n"
-        "4. 资料里没有的数字、案例、客户名不要编；严禁把参考文章的主题替换成我方资料里的其它主题。\n"
+        "3. 必须用自己的话重写：观点、论证顺序、小节结构、信息点照原文，但每一句都要换表达——"
+        "句式、用词、修辞、举例方式都要和原文明显不同；除了人名/品牌/产品/数字/必须照搬的术语，"
+        "任何连续 12 个字都不能与原文相同。整段照搬（复制粘贴式复刻）视为失败。\n"
+        "3.1 允许引用原文金句，但全篇不超过 2 处、每处不超过 30 字，并且引用后要用自己的话接着展开。\n"
+        "4. 资料里没有的数字、案例、客户名不要编；严禁把参考文章的主题替换成我方资料里的其它主题；\n"
+        "也不要为了改而改——改完必须还是同一件事、同样的观点和同样的信息量，只是说法是你自己的。\n"
         "5. 必须返回严格 JSON，不要 Markdown 代码块。字段：title、digest、markdown、image_prompt。\n"
         "6. markdown 不要重复文章标题或一级标题，从导语或二级标题开始，保留原文的小节顺序与数量，中文，适合微信阅读。\n"
         "7. 需要自动配图时，image_prompt 写一条适合 gpt-image-2 的配图提示词。"
@@ -1023,6 +1162,17 @@ async def _call_article_remix_writer(
         normalized["title"] = _extract_title(normalized["markdown"], "")
     if not normalized.get("digest"):
         normalized["digest"] = _digest(normalized["markdown"])
+    # 第二遍：把跟原文雷同的段落定点重写（用户反馈：改写完跟原文一模一样，只有配图不同）
+    if token:
+        try:
+            normalized["markdown"] = await _deoverlap_remix_markdown(
+                normalized.get("markdown") or "",
+                str(source.get("body") or ""),
+                token=token,
+                installation_id=installation_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[wechat-article] deoverlap skipped: %s", exc)
     return normalized
 
 
