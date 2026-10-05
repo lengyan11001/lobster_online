@@ -2374,42 +2374,6 @@ _AUTO_REPLY_CONTROL_KEYS = frozenset(
 
 
 # 2026-10-05 用户口径：联系方式只认 AI 的判断（对方不一定按固定格式写），客户端不做正则兜底，
-# 只把模型返回的 contact_shared 归一化后随 observe 一起上报，服务端负责落库。
-_SHARED_CONTACT_KINDS = ("wechat_id", "mobile", "qq", "email")
-
-
-def _collect_shared_contacts(items: Any) -> List[Dict[str, Any]]:
-    """把模型返回的 contact_shared 归一化成后端能直接落库的形态（不做任何猜测）。"""
-    if not isinstance(items, list):
-        return []
-    out: List[Dict[str, Any]] = []
-    seen: set = set()
-    for item in items[:20]:
-        if not isinstance(item, dict):
-            continue
-        value = str(item.get("value") or "").strip()
-        if not value:
-            continue
-        kind = str(item.get("kind") or "").strip().lower()
-        if kind not in _SHARED_CONTACT_KINDS:
-            kind = "wechat_id"
-        direction = str(item.get("direction") or "").strip().lower()
-        if direction not in {"inbound", "outbound"}:
-            direction = "inbound"
-        key = (kind, value.lower(), direction)
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({
-            "kind": kind,
-            "value": value[:120],
-            "evidence": str(item.get("evidence") or "")[:500],
-            "direction": direction,
-            "source": "model",
-        })
-    return out
-
-
 def _bool_value(value: Any, *, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -3949,7 +3913,6 @@ def _normalize_auto_reply_llm_content(
         "next_followup": str(parsed.get("next_followup") or "").strip()[:2000],
         "profile_updates": profile_updates,
         "learning_candidates": learning_candidates,
-        "contact_shared": _collect_shared_contacts(parsed.get("contact_shared")),
         "raw": content[:2000],
     }
 
@@ -4019,7 +3982,6 @@ async def _call_auto_reply_llm(
         f"本会话客户语种已检测为 {customer_language_label} ({customer_language})。reply 必须使用该语种；"
         "回复语言必须跟随对方最新消息：先判断‘对方最新消息’的主要自然语言，再让 reply 字段使用同一语种生成。模板语言、系统界面语言和历史配置语言都不能覆盖客户当前使用的语言。"
         "如果最新消息只有表情、数字、链接或短到无法判断语种，就参考最近几条对方消息的主要语言；仍无法判断时使用简体中文。不要擅自翻译客户消息，姓名、品牌名、网址、手机号和微信号等专有内容保持原样，JSON键名保持英文。"
-        "如果对方消息里给出了自己的联系方式（微信号、手机号、QQ、邮箱），必须提取到 contact_shared；只提取对方消息里的，我方模板或历史里的号码不算；没有就给空数组。"
         "必须返回 JSON：{\"should_reply\":true,\"category\":\"casual|product|price|service|cooperation|complaint|other\","
         "\"intent_level\":\"high|medium|low|none\",\"topic\":\"简短话题\","
         "\"conversation_summary\":\"结合历史画像更新后的累计摘要\",\"reply\":\"实际微信回复\","
@@ -4028,7 +3990,6 @@ async def _call_auto_reply_llm(
         "\"customer_profile\":{\"company\":\"\",\"role\":\"\",\"industry\":\"\",\"region\":\"\",\"needs\":[],\"budget\":\"\",\"timeline\":\"\",\"objections\":[],\"preferences\":[],\"interests\":[],\"products\":[],\"relationship\":\"\",\"notes\":\"\",\"tags\":[]},"
         "\"learning_candidates\":[{\"category\":\"tone|followup|service|general\",\"title\":\"\",\"content\":\"\",\"evidence\":\"\",\"confidence\":0,\"risk_level\":\"low|medium|high\"}],"
         "\"should_invite_group\":false,\"matched_group_keywords\":[],\"group_invite_reason\":\"判断依据\","
-        "\"contact_shared\":[{\"kind\":\"wechat_id|mobile|qq|email\",\"value\":\"\",\"evidence\":\"原文片段\",\"direction\":\"inbound|outbound\"}]}。"
     )
     user_prompt = (
         f"会话对象：{peer_name or '未命名'}\n\n"
@@ -6823,7 +6784,6 @@ async def run_auto_reply_once(
                             "next_followup": str(llm_reply.get("next_followup") or "")[:2000],
                             "profile_updates": llm_reply.get("profile_updates") if isinstance(llm_reply.get("profile_updates"), dict) else {},
                             "learning_candidates": llm_reply.get("learning_candidates") if isinstance(llm_reply.get("learning_candidates"), list) else [],
-                            "shared_contacts": _collect_shared_contacts(llm_reply.get("contact_shared")),
                             "payload": {
                                 "trigger": trigger,
                                 "processing_status": item_status,
