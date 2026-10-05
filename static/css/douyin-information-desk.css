@@ -317,3 +317,19 @@
 .douyin-desk-history-status { flex: 0 0 auto; padding: 2px 8px; border-radius: 999px; font-size: 11px; background: #eef4f8; color: #4a6b80; }
 .douyin-desk-history-status.is-success { background: #e6f7ee; color: #1d7f4e; }
 .douyin-desk-history-status.is-failed { background: #fdecef; color: #b4535f; }
+
+
+/* 2026-10-05 热门视频跟创：跟创面板 + 历史弹窗 */
+.douyin-desk-copy { border: 1px solid var(--border); border-radius: 12px; padding: 1rem; margin: 0 0 1rem; background: rgba(255,255,255,0.02); }
+.douyin-desk-copy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0.75rem; }
+.douyin-desk-field { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.85rem; color: var(--text-muted); }
+.douyin-desk-field input[type="url"], .douyin-desk-field select, .douyin-desk-field textarea { width: 100%; padding: 0.5rem 0.6rem; border: 1px solid var(--border); border-radius: 8px; background: rgba(255,255,255,0.04); color: var(--text); font-size: 0.85rem; box-sizing: border-box; }
+.douyin-desk-field-wide { grid-column: 1 / -1; }
+.douyin-desk-file-name { font-style: normal; font-size: 0.78rem; color: var(--text-muted); }
+.douyin-desk-copy-preview { max-width: 120px; max-height: 120px; border-radius: 8px; border: 1px solid var(--border); }
+.douyin-desk-copy-actions { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.85rem; flex-wrap: wrap; }
+.douyin-desk-copy-result video, .douyin-desk-modal-body video { width: 100%; max-width: 420px; border-radius: 10px; margin-top: 0.5rem; }
+.douyin-desk-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 9999; padding: 1rem; }
+.douyin-desk-modal[hidden] { display: none; }
+.douyin-desk-modal-card { width: min(760px, 100%); max-height: 86vh; overflow: auto; background: var(--panel, #fff); border: 1px solid var(--border); border-radius: 14px; padding: 1rem 1.1rem; }
+.douyin-desk-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.75rem; }

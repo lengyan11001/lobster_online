@@ -372,7 +372,301 @@
     }, 6000);
   }
 
+
+  // ---------------- 热门视频跟创：自定义视频来源 + 模式（2026-10-05） ----------------
+  var copyState = { videoUploadUrl: '', imageUploadUrl: '', defaultImageUrl: '', mode: 'effect_copy', taskId: '' };
+
+  function copyEl(id) { return document.getElementById(id); }
+
+  function setCopyStatus(text) {
+    var el = copyEl('douyinCopyStatus');
+    if (el) el.textContent = text || '';
+  }
+
+  function uploadFileToTemp(file, fallbackName) {
+    var form = new FormData();
+    form.append('file', file, file.name || fallbackName || 'upload');
+    return fetch(baseUrl() + '/api/assets/upload-temp', {
+      method: 'POST',
+      headers: uploadHeaders(),
+      body: form
+    }).then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok) throw new Error(data.detail || data.message || ('上传失败 HTTP ' + response.status));
+        var url = String(data.public_url || '').trim();
+        if (!url) throw new Error('上传后没有拿到公网地址');
+        return url;
+      });
+    });
+  }
+
+  function findHttpUrlDeep(node, depth) {
+    if (!node || depth > 4) return '';
+    if (typeof node === 'string') return /^https?:\/\//i.test(node) ? node : '';
+    if (typeof node !== 'object') return '';
+    if (Array.isArray(node)) {
+      for (var i = 0; i < node.length; i += 1) {
+        var found = findHttpUrlDeep(node[i], depth + 1);
+        if (found) return found;
+      }
+      return '';
+    }
+    var preferred = ['profile_photo_url', 'profile_photo', 'image_url', 'url'];
+    for (var k = 0; k < preferred.length; k += 1) {
+      var hit = findHttpUrlDeep(node[preferred[k]], depth + 1);
+      if (hit) return hit;
+    }
+    var keys = Object.keys(node);
+    for (var j = 0; j < keys.length; j += 1) {
+      var value = findHttpUrlDeep(node[keys[j]], depth + 1);
+      if (value) return value;
+    }
+    return '';
+  }
+
+  function showCopyPreview(url, tip) {
+    var image = copyEl('douyinCopyImagePreview');
+    var name = copyEl('douyinCopyImageName');
+    if (image) {
+      if (url) { image.src = url; image.hidden = false; } else { image.hidden = true; image.removeAttribute('src'); }
+    }
+    if (name) name.textContent = tip || (url ? '已选择' : '未选择');
+  }
+
+  function loadCopyDefaultImage() {
+    return fetch(baseUrl() + '/api/ip-content/personal-default', {
+      headers: typeof authHeaders === 'function' ? authHeaders() : {}
+    }).then(function(response) {
+      return response.json().catch(function() { return {}; });
+    }).then(function(data) {
+      var url = findHttpUrlDeep(data, 0);
+      if (!url) return '';
+      copyState.defaultImageUrl = url;
+      if (!copyState.imageUploadUrl) showCopyPreview(url, '默认：IP 人设里的形象照');
+      return url;
+    }).catch(function() { return ''; });
+  }
+
+  function createCopyTask() {
+    var videoInput = copyEl('douyinCopyVideoUrl');
+    var typedVideo = String(videoInput && videoInput.value || '').trim();
+    var video = copyState.videoUploadUrl || typedVideo;
+    var image = copyState.imageUploadUrl || copyState.defaultImageUrl;
+    var promptEl = copyEl('douyinCopyPrompt');
+    var modeEl = copyEl('douyinCopyMode');
+    var mode = String(modeEl && modeEl.value || copyState.mode || 'effect_copy');
+    copyState.mode = mode;
+    if (!video) { setCopyStatus('请先填视频链接，或上传一个本地视频'); return; }
+    if (!image) { setCopyStatus('请上传一张参考图（不传的话先在「IP人设定位」里放一张形象照）'); return; }
+    setCopyStatus('正在提交（约 1-3 分钟）…');
+    postJson('/api/douyin/platform-information-desk/imitation', {
+      video_url: video,
+      image_url: image,
+      mode: mode,
+      prompt: String(promptEl && promptEl.value || '').trim(),
+      title: '热门视频跟创'
+    }).then(function(data) {
+      var taskId = String(data && data.task_id || '');
+      if (!taskId) throw new Error('没有拿到任务号');
+      copyState.taskId = taskId;
+      var charged = data && data.billing ? Number(data.billing.credits_charged || 0) : 0;
+      setCopyStatus('已提交（扣 ' + charged + ' 算力）·生成中…');
+      pollImitation(taskId, 1, copyEl('douyinCopyStatus'), copyEl('douyinCopyResult'));
+    }).catch(function(err) {
+      setCopyStatus('失败：' + errorText(err));
+    });
+  }
+
+  function openCopyModal(title, html) {
+    var modal = copyEl('douyinCopyModal');
+    var titleEl = copyEl('douyinCopyModalTitle');
+    var body = copyEl('douyinCopyModalBody');
+    if (!modal || !body) return;
+    if (titleEl) titleEl.textContent = title || '';
+    body.innerHTML = html || '';
+    modal.hidden = false;
+  }
+
+  function closeCopyModal() {
+    var modal = copyEl('douyinCopyModal');
+    if (modal) modal.hidden = true;
+    var body = copyEl('douyinCopyModalBody');
+    if (body) body.innerHTML = '';
+  }
+
+  function renderCopyHistory(items) {
+    if (!items.length) return '<div class="douyin-desk-empty">还没有生成记录，上面填视频 + 图片点「创建任务」试试</div>';
+    return items.map(function(item) {
+      var status = statusLabel(item.status);
+      var video = item.video_url ? '<video controls playsinline preload="metadata" src="' + escapeHtml(item.video_url) + '"></video>' : '';
+      var actions = item.video_url
+        ? '<div class="douyin-desk-item-actions"><button type="button" class="douyin-desk-imitation" data-douyin-dl="' + escapeHtml(String(item.task_id || '')) + '">下载成片</button>'
+          + '<a class="douyin-desk-item-link" href="' + escapeHtml(item.video_url) + '" target="_blank" rel="noopener noreferrer">在浏览器打开</a></div>'
+        : '';
+      return '<article class="douyin-desk-history-item">'
+        + '<div class="douyin-desk-history-head"><span class="douyin-desk-history-status">' + escapeHtml(status) + '</span>'
+        + '<span class="douyin-desk-history-title">' + escapeHtml(item.source_desc || item.title || item.task_id || '') + '</span></div>'
+        + '<div class="douyin-desk-history-meta">' + escapeHtml(formatTime(item.created_at)) + ' · ' + escapeHtml(item.model || '') + '</div>'
+        + video
+        + (item.fail_reason ? '<div class="douyin-desk-last-fail">' + escapeHtml(item.fail_reason) + '</div>' : '')
+        + actions
+        + '</article>';
+    }).join('');
+  }
+
+  function openCopyHistory() {
+    openCopyModal('生成历史', '<div class="douyin-desk-empty">正在读取生成历史…</div>');
+    fetch(baseUrl() + '/api/douyin/platform-information-desk/imitation/history?limit=20', {
+      headers: typeof authHeaders === 'function' ? authHeaders() : {}
+    }).then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
+        var items = Array.isArray(data && data.items) ? data.items : [];
+        var body = copyEl('douyinCopyModalBody');
+        if (body) {
+          body.innerHTML = renderCopyHistory(items);
+          bindDownloadButtons(body);
+        }
+      });
+    }).catch(function(error) {
+      var body = copyEl('douyinCopyModalBody');
+      if (body) body.innerHTML = '<div class="douyin-desk-empty">' + escapeHtml(errorText(error)) + '</div>';
+    });
+  }
+
+  // 榜单卡片上的「跟创」：先选模式，再挑图片（原来直接弹图片选择）
+  function startCardCopy(button) {
+    var card = button.closest ? button.closest('.douyin-desk-item') : null;
+    var statusEl = card ? card.querySelector('[data-douyin-status]') : null;
+    var resultEl = card ? card.querySelector('[data-douyin-result]') : null;
+    var title = button.getAttribute('data-douyin-title') || '';
+    var itemId = button.getAttribute('data-douyin-item-id') || '';
+    if (!itemId) {
+      if (statusEl) statusEl.textContent = '这条数据没有作品 id，换不了人';
+      return;
+    }
+    openCopyModal('跟创：选模式并挑图片',
+      '<div class="douyin-desk-field"><span>跟创模式</span>'
+      + '<select id="douyinCardCopyMode">'
+      + '<option value="effect_copy">复刻特效（参考视频的特效用到图片人物上，场景街边）</option>'
+      + '<option value="action_copy">复刻单人动作（图片人物模仿视频里的动作）</option>'
+      + '<option value="person_swap">复刻人物（换人，原模式）</option>'
+      + '</select></div>'
+      + '<div class="douyin-desk-copy-actions"><button type="button" class="btn btn-primary" id="douyinCardCopyPick">选择图片并创建</button>'
+      + '<span class="douyin-desk-item-status" id="douyinCardCopyStatus"></span></div>');
+    var pick = copyEl('douyinCardCopyPick');
+    var status = copyEl('douyinCardCopyStatus');
+    if (!pick) return;
+    pick.addEventListener('click', function() {
+      var modeEl = copyEl('douyinCardCopyMode');
+      var mode = String(modeEl && modeEl.value || 'effect_copy');
+      var input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/*';
+      input.addEventListener('change', function() {
+        var file = input.files && input.files[0];
+        if (!file) return;
+        if (status) status.textContent = '正在上传照片…';
+        uploadReference(file).then(function(imageUrl) {
+          if (status) status.textContent = '正在提交换人（约 1-3 分钟）…';
+          return postJson('/api/douyin/platform-information-desk/imitation', {
+            image_url: imageUrl, item_id: itemId, title: title, mode: mode
+          });
+        }).then(function(data) {
+          closeCopyModal();
+          var taskId = String(data && data.task_id || '');
+          if (!taskId) throw new Error('没有拿到任务号');
+          var charged = data && data.billing ? Number(data.billing.credits_charged || 0) : 0;
+          if (statusEl) statusEl.textContent = '已提交（扣 ' + charged + ' 算力）·生成中…';
+          state.lastTask = { taskId: taskId, title: title, status: 'RUNNING', credits: charged };
+          renderLastTask();
+          pollImitation(taskId, 1, statusEl, resultEl);
+        }).catch(function(err) {
+          if (status) status.textContent = '失败：' + errorText(err);
+        });
+      });
+      input.click();
+    });
+  }
+
+  function initCopyPanel() {
+    var videoPick = copyEl('douyinCopyVideoPick');
+    var videoFile = copyEl('douyinCopyVideoFile');
+    if (videoPick && videoFile && !videoPick.dataset.bound) {
+      videoPick.dataset.bound = '1';
+      videoPick.addEventListener('click', function() { videoFile.click(); });
+      videoFile.addEventListener('change', function() {
+        var file = videoFile.files && videoFile.files[0];
+        if (!file) return;
+        var nameEl = copyEl('douyinCopyVideoName');
+        if (nameEl) nameEl.textContent = '上传中…';
+        setCopyStatus('正在上传本地视频…');
+        uploadFileToTemp(file, 'copy-video.mp4').then(function(url) {
+          copyState.videoUploadUrl = url;
+          if (nameEl) nameEl.textContent = String(file.name || '已上传');
+          setCopyStatus('本地视频已就绪，可以创建任务了');
+        }).catch(function(err) {
+          copyState.videoUploadUrl = '';
+          if (nameEl) nameEl.textContent = '上传失败';
+          setCopyStatus('上传视频失败：' + errorText(err));
+        });
+      });
+    }
+    var imagePick = copyEl('douyinCopyImagePick');
+    var imageFile = copyEl('douyinCopyImageFile');
+    if (imagePick && imageFile && !imagePick.dataset.bound) {
+      imagePick.dataset.bound = '1';
+      imagePick.addEventListener('click', function() { imageFile.click(); });
+      imageFile.addEventListener('change', function() {
+        var file = imageFile.files && imageFile.files[0];
+        if (!file) return;
+        setCopyStatus('正在上传参考图…');
+        uploadReference(file).then(function(url) {
+          copyState.imageUploadUrl = url;
+          showCopyPreview(url, '已选择：' + String(file.name || ''));
+          setCopyStatus('参考图已就绪');
+        }).catch(function(err) {
+          setCopyStatus('上传参考图失败：' + errorText(err));
+        });
+      });
+    }
+    var createBtn = copyEl('douyinCopyCreateBtn');
+    if (createBtn && !createBtn.dataset.bound) {
+      createBtn.dataset.bound = '1';
+      createBtn.addEventListener('click', createCopyTask);
+    }
+    var historyBtn = copyEl('douyinCopyHistoryBtn');
+    if (historyBtn && !historyBtn.dataset.bound) {
+      historyBtn.dataset.bound = '1';
+      historyBtn.addEventListener('click', openCopyHistory);
+    }
+    var closeBtn = copyEl('douyinCopyModalClose');
+    if (closeBtn && !closeBtn.dataset.bound) {
+      closeBtn.dataset.bound = '1';
+      closeBtn.addEventListener('click', closeCopyModal);
+    }
+    var modal = copyEl('douyinCopyModal');
+    if (modal && !modal.dataset.bound) {
+      modal.dataset.bound = '1';
+      modal.addEventListener('click', function(event) {
+        if (event.target === modal) closeCopyModal();
+      });
+    }
+    var modeEl = copyEl('douyinCopyMode');
+    if (modeEl && !modeEl.dataset.bound) {
+      modeEl.dataset.bound = '1';
+      modeEl.value = copyState.mode;
+      modeEl.addEventListener('change', function() { copyState.mode = String(modeEl.value || 'effect_copy'); });
+    }
+    return loadCopyDefaultImage();
+  }
+
+  // 卡片上的「跟创」走选模式流程（保留旧函数名，事件绑定不用改）
   function startImitation(button) {
+    return startCardCopy(button);
+  }
+
+  function _legacyStartImitation(button) {
     var card = button.closest ? button.closest('.douyin-desk-item') : null;
     var statusEl = card ? card.querySelector('[data-douyin-status]') : null;
     var resultEl = card ? card.querySelector('[data-douyin-result]') : null;
@@ -468,6 +762,7 @@
         render();
       });
     }
+    try { initCopyPanel(); } catch (e) { console.warn('[douyin-desk] copy panel init failed', e); }
     return load();
   };
 })();

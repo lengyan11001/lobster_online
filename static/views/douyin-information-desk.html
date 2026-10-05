@@ -2,7 +2,7 @@
   <section class="douyin-desk-header">
     <div>
       <span class="douyin-desk-kicker">DOUYIN PULSE</span>
-      <h2>抖音平台信息台</h2>
+      <h2>热门视频跟创</h2>
       <p id="douyinDeskFetchedAt">正在读取服务器快照...</p>
     </div>
     <div class="douyin-desk-header-actions">
@@ -12,6 +12,56 @@
   </section>
 
   <section class="douyin-desk-last" id="douyinDeskLast" hidden></section>
+
+  <section class="douyin-desk-copy" id="douyinDeskCopy">
+    <div class="douyin-desk-copy-grid">
+      <label class="douyin-desk-field">
+        <span>视频链接（直链）</span>
+        <input type="url" id="douyinCopyVideoUrl" placeholder="http(s)://...mp4 或粘贴可直链播放的视频地址" />
+      </label>
+      <label class="douyin-desk-field">
+        <span>或上传本地视频</span>
+        <input type="file" id="douyinCopyVideoFile" accept="video/*" hidden />
+        <button type="button" class="btn btn-ghost" id="douyinCopyVideoPick">选择本地视频</button>
+        <em class="douyin-desk-file-name" id="douyinCopyVideoName">未选择</em>
+      </label>
+      <label class="douyin-desk-field">
+        <span>参考图（不传就用 IP 人设里的形象照）</span>
+        <input type="file" id="douyinCopyImageFile" accept="image/*" hidden />
+        <button type="button" class="btn btn-ghost" id="douyinCopyImagePick">选择图片</button>
+        <em class="douyin-desk-file-name" id="douyinCopyImageName">未选择</em>
+        <img id="douyinCopyImagePreview" class="douyin-desk-copy-preview" alt="" hidden />
+      </label>
+      <label class="douyin-desk-field">
+        <span>跟创模式</span>
+        <select id="douyinCopyMode">
+          <option value="effect_copy">复刻特效（参考视频的特效用到图片人物上，场景街边）</option>
+          <option value="action_copy">复刻单人动作（图片人物模仿视频里的动作）</option>
+          <option value="person_swap">复刻人物（换人，原模式）</option>
+        </select>
+      </label>
+      <label class="douyin-desk-field douyin-desk-field-wide">
+        <span>提示词（留空就用所选模式的默认提示词）</span>
+        <textarea id="douyinCopyPrompt" rows="2" placeholder="选填：想强调的细节"></textarea>
+      </label>
+    </div>
+    <div class="douyin-desk-copy-actions">
+      <button type="button" class="btn btn-primary" id="douyinCopyCreateBtn">创建任务</button>
+      <button type="button" class="btn btn-ghost" id="douyinCopyHistoryBtn">历史记录</button>
+      <span class="douyin-desk-item-status" id="douyinCopyStatus"></span>
+    </div>
+    <div class="douyin-desk-copy-result" id="douyinCopyResult"></div>
+  </section>
+
+  <div class="douyin-desk-modal" id="douyinCopyModal" hidden>
+    <div class="douyin-desk-modal-card">
+      <div class="douyin-desk-modal-head">
+        <h3 id="douyinCopyModalTitle">生成历史</h3>
+        <button type="button" class="btn btn-ghost" id="douyinCopyModalClose">关闭</button>
+      </div>
+      <div class="douyin-desk-modal-body" id="douyinCopyModalBody"></div>
+    </div>
+  </div>
 
   <section class="douyin-desk-search">
     <input type="search" id="douyinDeskSearchInput" placeholder="输入关键词，搜你关注的榜单（例：火锅 探店）" />
