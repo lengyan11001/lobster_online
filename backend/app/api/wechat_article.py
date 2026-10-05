@@ -1898,17 +1898,65 @@ async def _create_wechat_draft(
     return str(media_id)
 
 
+_WECHAT_DEFAULT_COVER_REL = Path("wechat") / "default-cover.jpg"
+# 1x1 白 PNG（只在生成默认封面彻底失败时兜底；注意微信按 2.35:1 裁封面，1x1 会被判「封面裁剪失败」）
+_WECHAT_FALLBACK_COVER_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+)
+
+
+def _default_cover_path() -> Path:
+    try:
+        base = _config_doc_path(0).parent  # data/ 目录
+    except Exception:  # noqa: BLE001
+        base = Path.cwd() / "data"
+    return Path(base) / _WECHAT_DEFAULT_COVER_REL
+
+
+def _default_cover_bytes() -> bytes:
+    """生成符合公众号封面比例（2.35:1，900×383）的默认封面。
+
+    2026-10-05 事故：原来这里上传 1×1 白 PNG 当 thumb_media_id，微信 draft/add 会按 2.35:1
+    裁剪封面，1×1 裁不出来 → 错误码 53402「封面裁剪失败，请检查裁剪参数后重试」，
+    用户推送草稿一直失败（诊断日志 diag_20261005084518_bdaf2d65）。
+    """
+    path = _default_cover_path()
+    try:
+        if path.exists() and path.stat().st_size > 4096:
+            return path.read_bytes()
+    except OSError:
+        pass
+    try:
+        from PIL import Image as _PILImage, ImageDraw as _PILImageDraw
+        img = _PILImage.new("RGB", (900, 383), (247, 248, 250))
+        draw = _PILImageDraw.Draw(img)
+        for row in range(383):
+            level = 250 - int(row * 14 / 383)
+            draw.line([(0, row), (900, row)], fill=(level, level + 1, level + 5))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        img.save(path, "JPEG", quality=88, optimize=True)
+        logger.info("[wechat-article] built default wechat cover %s bytes=%s", path, path.stat().st_size)
+        return path.read_bytes()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[wechat-article] default cover build failed: %s", exc)
+        return base64.b64decode(_WECHAT_FALLBACK_COVER_B64)
+
+
 async def _default_thumb_media_id(access_token: str) -> str:
-    # 1x1 white PNG. WeChat draft/add normally requires thumb_media_id for articles.
-    raw = (
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
-    )
     return await _wechat_upload_bytes(
         access_token,
-        base64.b64decode(raw),
-        "wechat-default-cover.png",
+        _default_cover_bytes(),
+        "wechat-default-cover.jpg",
         permanent=True,
     )
+
+
+_FIRST_BODY_IMAGE_RE = re.compile(r"<img\b[^>]*\bsrc\s*=\s*[\"']([^\"']+)[\"']", re.IGNORECASE)
+
+
+def _first_body_image_url(html: str) -> str:
+    match = _FIRST_BODY_IMAGE_RE.search(str(html or ""))
+    return (match.group(1) or "").strip() if match else ""
 
 
 def _record_draft(user_id: int, item: Dict[str, Any]) -> Dict[str, Any]:
@@ -2221,7 +2269,17 @@ async def create_wechat_article_draft(
             data, filename = await _download_url(cover_image_url)
             thumb_media_id = await _wechat_upload_bytes(token, data, filename, permanent=True)
         else:
-            thumb_media_id = await _default_thumb_media_id(token)
+            # 没选封面：优先用正文里的第一张图当封面（微信按 2.35:1 裁，正文图基本都能裁），
+            # 拿不到再退回我们自己生成的 900×383 默认封面。
+            first_image = _first_body_image_url(article_html)
+            if first_image.startswith(("http://", "https://")):
+                try:
+                    data, filename = await _download_url(first_image)
+                    thumb_media_id = await _wechat_upload_bytes(token, data, filename, permanent=True)
+                except Exception as exc:  # noqa: BLE001 正文图当封面失败就用默认封面
+                    logger.info("[wechat-article] first body image as cover failed: %s", exc)
+            if not thumb_media_id:
+                thumb_media_id = await _default_thumb_media_id(token)
 
         media_id = await _create_wechat_draft(
             access_token=token,
