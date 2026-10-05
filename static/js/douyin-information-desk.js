@@ -455,17 +455,21 @@
     var promptEl = copyEl('douyinCopyPrompt');
     var resolutionEl = copyEl('douyinCopyResolution');
     var resolution = String(resolutionEl && resolutionEl.value || '720P');
+    var durationEl = copyEl('douyinCopyDuration');
+    var durationSeconds = parseInt(String(durationEl && durationEl.value || '0'), 10) || 0;
     var modeEl = copyEl('douyinCopyMode');
     var mode = String(modeEl && modeEl.value || copyState.mode || 'effect_copy');
     copyState.mode = mode;
     if (!video) { setCopyStatus('请先填视频链接，或上传一个本地视频'); return; }
     if (!image) { setCopyStatus('请上传一张参考图（不传的话先在「IP人设定位」里放一张形象照）'); return; }
-    setCopyStatus('正在提交（约 1-3 分钟）…');
+    setCopyStatus('正在提交（' + resolution + ' / ' + (durationSeconds > 0 ? durationSeconds + ' 秒' : '跟原片一样长')
+      + '，约 1-3 分钟）…');
     postJson('/api/douyin/platform-information-desk/imitation', {
       video_url: video,
       image_url: image,
       mode: mode,
       resolution: resolution,
+      duration_seconds: durationSeconds,
       prompt: String(promptEl && promptEl.value || '').trim(),
       title: '热门视频跟创'
     }).then(function(data) {
