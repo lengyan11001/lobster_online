@@ -474,6 +474,7 @@
       copyState.taskId = taskId;
       var charged = data && data.billing ? Number(data.billing.credits_charged || 0) : 0;
       setCopyStatus('已提交（扣 ' + charged + ' 算力）·生成中…');
+      closeCopyModalById('douyinCopyCreateModal');
       pollImitation(taskId, 1, copyEl('douyinCopyStatus'), copyEl('douyinCopyResult'));
     }).catch(function(err) {
       setCopyStatus('失败：' + errorText(err));
@@ -498,7 +499,11 @@
   }
 
   function renderCopyHistory(items) {
-    if (!items.length) return '<div class="douyin-desk-empty">还没有生成记录，上面填视频 + 图片点「创建任务」试试</div>';
+    if (!items.length) return '<div class="douyin-desk-empty">还没有生成记录，点「新建跟创」填视频 + 图片创建一条试试</div>';
+    copyHistoryItems = {};
+    items.forEach(function (item) {
+      if (item && item.task_id) copyHistoryItems[String(item.task_id)] = item;
+    });
     return items.map(function(item) {
       var status = statusLabel(item.status);
       var video = item.video_url ? '<video controls playsinline preload="metadata" src="' + escapeHtml(item.video_url) + '"></video>' : '';
@@ -506,7 +511,8 @@
         ? '<div class="douyin-desk-item-actions"><button type="button" class="douyin-desk-imitation" data-douyin-dl="' + escapeHtml(String(item.task_id || '')) + '">下载成片</button>'
           + '<a class="douyin-desk-item-link" href="' + escapeHtml(item.video_url) + '" target="_blank" rel="noopener noreferrer">在浏览器打开</a></div>'
         : '';
-      return '<article class="douyin-desk-history-item">'
+      return '<article class="douyin-desk-history-item douyin-desk-history-clickable" data-douyin-history-task="'
+        + escapeHtml(String(item.task_id || '')) + '">'
         + '<div class="douyin-desk-history-head"><span class="douyin-desk-history-status">' + escapeHtml(status) + '</span>'
         + '<span class="douyin-desk-history-title">' + escapeHtml(item.source_desc || item.title || item.task_id || '') + '</span></div>'
         + '<div class="douyin-desk-history-meta">' + escapeHtml(formatTime(item.created_at)) + ' · ' + escapeHtml(item.model || '') + '</div>'
@@ -515,6 +521,48 @@
         + actions
         + '</article>';
     }).join('');
+  }
+
+  var copyHistoryItems = {};
+
+  function openCopyModalById(modalId) {
+    var modal = copyEl(modalId);
+    if (modal) modal.hidden = false;
+  }
+
+  function closeCopyModalById(modalId) {
+    var modal = copyEl(modalId);
+    if (modal) modal.hidden = true;
+  }
+
+  function openCopyRecordDetail(taskId) {
+    var item = copyHistoryItems[String(taskId || "")];
+    if (!item) return;
+    var titleEl = copyEl('douyinCopyDetailTitle');
+    if (titleEl) titleEl.textContent = '跟创详情 · ' + statusLabel(item.status);
+    var body = copyEl('douyinCopyDetailBody');
+    if (!body) return;
+    var rows = [
+      ['时间', formatTime(item.created_at)],
+      ['模式 / 来源', String(item.source_desc || item.title || '-')],
+      ['上游任务号', String(item.task_id || '')],
+      ['状态', statusLabel(item.status) + (item.fail_reason ? ' · ' + item.fail_reason : '')],
+      ['计费 / 扣费', String(item.billable_seconds || 0) + ' 秒 · ' +
+        String(item.credits_charged || 0) + ' 算力' +
+        (item.credits_refunded ? '（已退 ' + item.credits_refunded + '）' : '')]
+    ].map(function (pair) {
+      return '<div><dt>' + escapeHtml(pair[0]) + '</dt><dd>' + escapeHtml(pair[1]) + '</dd></div>';
+    }).join('');
+    body.innerHTML = '<dl class="douyin-desk-detail-facts">' + rows + '</dl>'
+      + (item.video_url
+          ? '<video controls playsinline preload="metadata" src="' + escapeHtml(item.video_url) + '"></video>'
+            + '<div class="douyin-desk-item-actions"><button type="button" class="douyin-desk-imitation" data-douyin-dl="'
+            + escapeHtml(String(item.task_id || '')) + '">下载成片</button>'
+            + '<a class="douyin-desk-item-link" href="' + escapeHtml(item.video_url)
+            + '" target="_blank" rel="noopener noreferrer">在浏览器打开</a></div>'
+          : '<div class="douyin-desk-empty">还没有成片' + (item.fail_reason ? '：' + escapeHtml(item.fail_reason) : '（生成中）') + '</div>');
+    bindDownloadButtons(body);
+    openCopyModalById('douyinCopyDetailModal');
   }
 
   function openCopyHistory() {
@@ -529,6 +577,12 @@
         if (body) {
           body.innerHTML = renderCopyHistory(items);
           bindDownloadButtons(body);
+          body.querySelectorAll('[data-douyin-history-task]').forEach(function (node) {
+            node.addEventListener('click', function (event) {
+              if (event.target && event.target.closest && event.target.closest('button,a,video')) return;
+              openCopyRecordDetail(node.getAttribute('data-douyin-history-task'));
+            });
+          });
         }
       });
     }).catch(function(error) {
@@ -643,6 +697,25 @@
       historyBtn.dataset.bound = '1';
       historyBtn.addEventListener('click', openCopyHistory);
     }
+    var newBtn = copyEl('douyinCopyNewBtn');
+    if (newBtn && !newBtn.dataset.bound) {
+      newBtn.dataset.bound = '1';
+      newBtn.addEventListener('click', function () { openCopyModalById('douyinCopyCreateModal'); });
+    }
+    ['douyinCopyCreateClose', 'douyinCopyDetailClose'].forEach(function (closeId) {
+      var close = copyEl(closeId);
+      if (close && !close.dataset.bound) {
+        close.dataset.bound = '1';
+        close.addEventListener('click', function () { closeCopyModalById(closeId === 'douyinCopyCreateClose' ? 'douyinCopyCreateModal' : 'douyinCopyDetailModal'); });
+      }
+    });
+    ['douyinCopyCreateModal', 'douyinCopyDetailModal'].forEach(function (modalId) {
+      var node = copyEl(modalId);
+      if (node && !node.dataset.bound) {
+        node.dataset.bound = '1';
+        node.addEventListener('click', function (event) { if (event.target === node) node.hidden = true; });
+      }
+    });
     var closeBtn = copyEl('douyinCopyModalClose');
     if (closeBtn && !closeBtn.dataset.bound) {
       closeBtn.dataset.bound = '1';

@@ -333,3 +333,9 @@
 .douyin-desk-modal[hidden] { display: none; }
 .douyin-desk-modal-card { width: min(760px, 100%); max-height: 86vh; overflow: auto; background: var(--panel, #fff); border: 1px solid var(--border); border-radius: 14px; padding: 1rem 1.1rem; }
 .douyin-desk-modal-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.75rem; }
+
+.douyin-desk-history-clickable { cursor: pointer; }
+.douyin-desk-history-clickable:hover { border-color: var(--accent, #5f8f35); }
+.douyin-desk-detail-facts { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px; margin: 0 0 12px; font-size: 13px; }
+.douyin-desk-detail-facts dt { color: var(--text-muted); }
+.douyin-desk-detail-facts dd { margin: 0; word-break: break-all; }

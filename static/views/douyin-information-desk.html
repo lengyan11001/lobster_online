@@ -13,7 +13,21 @@
 
   <section class="douyin-desk-last" id="douyinDeskLast" hidden></section>
 
-  <section class="douyin-desk-copy" id="douyinDeskCopy">
+  <section class="douyin-desk-copy-actions" id="douyinCopyTopActions">
+    <button type="button" class="btn btn-primary" id="douyinCopyNewBtn">新建跟创</button>
+    <button type="button" class="btn btn-ghost" id="douyinCopyHistoryBtn">历史记录</button>
+    <span class="douyin-desk-item-status" id="douyinCopyStatus"></span>
+  </section>
+  <div class="douyin-desk-copy-result" id="douyinCopyResult"></div>
+
+  <div class="douyin-desk-modal" id="douyinCopyCreateModal" hidden>
+    <div class="douyin-desk-modal-card">
+      <div class="douyin-desk-modal-head">
+        <h3>新建跟创</h3>
+        <button type="button" class="btn btn-ghost" id="douyinCopyCreateClose">关闭</button>
+      </div>
+      <div class="douyin-desk-modal-body">
+
     <div class="douyin-desk-copy-grid">
       <label class="douyin-desk-field">
         <span>视频链接（抖音作品链接或视频直链）</span>
@@ -58,7 +72,19 @@
       <span class="douyin-desk-item-status" id="douyinCopyStatus"></span>
     </div>
     <div class="douyin-desk-copy-result" id="douyinCopyResult"></div>
-  </section>
+      </div>
+    </div>
+  </div>
+
+  <div class="douyin-desk-modal" id="douyinCopyDetailModal" hidden>
+    <div class="douyin-desk-modal-card">
+      <div class="douyin-desk-modal-head">
+        <h3 id="douyinCopyDetailTitle">跟创详情</h3>
+        <button type="button" class="btn btn-ghost" id="douyinCopyDetailClose">关闭</button>
+      </div>
+      <div class="douyin-desk-modal-body" id="douyinCopyDetailBody"></div>
+    </div>
+  </div>
 
   <div class="douyin-desk-modal" id="douyinCopyModal" hidden>
     <div class="douyin-desk-modal-card">
