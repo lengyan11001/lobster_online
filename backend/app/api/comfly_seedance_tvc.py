@@ -1518,14 +1518,18 @@ async def _seedance_job_runner(job_id: str) -> None:
     final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
     final_video_path = str(final_video.get("path") or "").strip()
 
+    # 同城爆款还要烧字幕 / 混 BGM：后处理结束前不能算 completed，
+    # 否则工作流会在成片之前就拿到 merged 草稿（线上已踩：发抖音发了没字幕没 BGM 的版本）。
+    job_meta = job.get("meta") if isinstance(job.get("meta"), dict) else {}
+    expects_post = str(job_meta.get("feature") or "").strip() == "local_bestseller"
     update_job(
         job_id,
-        status="completed",
+        status="post_processing" if expects_post else "completed",
         error=None,
         result=result,
         saved_assets=[],
-        post_status="running" if auto_save else None,
-        post_stage="saving_assets" if auto_save else None,
+        post_status="running" if (auto_save or expects_post) else None,
+        post_stage="saving_assets" if (auto_save or expects_post) else None,
     )
 
     if auto_save:

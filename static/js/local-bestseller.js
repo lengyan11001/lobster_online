@@ -1313,7 +1313,7 @@ function updateVideoItemFromJob(item, data) {
     var requiresCaption = !!data.requires_caption;
     var captionReady = !!data.caption_ready;
     var label = data.progress_label || data.progress_detail || '';
-    var captioning = requiresCaption && !captionReady && (status === 'completed' || postStatus === 'captioning' || postStage === 'burn_subtitle');
+    var captioning = requiresCaption && !captionReady && (status === 'completed' || status === 'post_processing' || postStatus === 'captioning' || postStatus === 'mixing_bgm' || postStage === 'burn_subtitle' || postStage === 'mix_bgm');
 var nowTs = Date.now();
 if (captioning) {
   if (!item.video_captioning_since) item.video_captioning_since = nowTs;
@@ -1327,8 +1327,9 @@ if (captioning) {
 } else {
   item.video_captioning_since = 0;
 }
-    if (captioning) label = '字幕合成中';
-    if (captioning && status === 'completed') {
+    var mixingBgm = postStatus === 'mixing_bgm' || postStage === 'mix_bgm';
+    if (captioning) label = mixingBgm ? '背景音乐合成中' : '字幕合成中';
+    if (captioning && (status === 'completed' || status === 'post_processing')) {
       status = 'running';
     }
     if (status === 'completed') {

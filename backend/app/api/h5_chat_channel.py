@@ -9549,16 +9549,147 @@ def _image_studio_completed_result(job: Dict[str, Any], *, job_id: str, prompt: 
     }
 
 
-def _local_bestseller_final_video(job: Dict[str, Any]) -> Dict[str, str]:
-    result = job.get("result") if isinstance(job.get("result"), dict) else {}
-    final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
-    asset_id = str(final_video.get("asset_id") or "").strip()
-    url = str(final_video.get("url") or final_video.get("source_url") or "").strip()
-    kind = str(final_video.get("kind") or "").strip()
-    if asset_id or url:
-        return {"asset_id": asset_id, "url": url, "kind": kind or "final_video"}
+_DRAFT_VIDEO_KINDS = {"merged_local", "draft", "draft_video", "stage_video", "local_bestseller_merged"}
+_DRAFT_VIDEO_MARKERS = ("merged_output.mp4", "caption_post/raw.mp4")
+_FINAL_VIDEO_KINDS = {"local_bestseller_bgm_final", "local_bestseller_captioned"}
 
-    priorities = {"local_bestseller_bgm_final": 3, "local_bestseller_captioned": 2, "merged_final": 1}
+
+def _video_ref_is_draft(ref: Any) -> bool:
+    """合并完成但还没烧字幕/混 BGM 的草稿（同城爆款的中间产物），不能拿去发布。"""
+    if not isinstance(ref, dict):
+        return False
+    kind = str(ref.get("kind") or "").strip().lower()
+    if kind in _DRAFT_VIDEO_KINDS:
+        return True
+    text = " ".join(
+        str(ref.get(key) or "")
+        for key in ("path", "url", "source_url", "local_preview_url", "preview_url")
+    ).replace("\\", "/").lower()
+    return any(marker in text for marker in _DRAFT_VIDEO_MARKERS)
+
+
+def _video_ref_dict(ref: Dict[str, Any], *, fallback_kind: str = "") -> Dict[str, str]:
+    asset_id = str(ref.get("asset_id") or ref.get("final_video_asset_id") or "").strip()
+    url = str(ref.get("source_url") or ref.get("url") or ref.get("local_preview_url") or "").strip()
+    kind = str(ref.get("kind") or fallback_kind or "").strip()
+    if not asset_id and not url:
+        return {}
+    return {"asset_id": asset_id, "url": url, "kind": kind}
+
+
+def _collect_postprocessed_video_refs(payload: Any) -> List[Dict[str, str]]:
+    """按 BGM 成片 > 字幕成片 收集后处理成片；草稿不参与。"""
+    found: Dict[str, Dict[str, str]] = {}
+
+    def visit(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for key, value in node.items():
+            name = str(key or "").strip().lower()
+            if name == "bgm_video" and isinstance(value, dict) and not _video_ref_is_draft(value):
+                ref = _video_ref_dict(value, fallback_kind="local_bestseller_bgm_final")
+                if ref:
+                    found.setdefault("bgm", ref)
+                continue
+            if name == "captioned_video" and isinstance(value, dict) and not _video_ref_is_draft(value):
+                ref = _video_ref_dict(value, fallback_kind="local_bestseller_captioned")
+                if ref:
+                    found.setdefault("captioned", ref)
+                continue
+            if name == "final_video" and isinstance(value, dict):
+                kind = str(value.get("kind") or "").strip().lower()
+                if kind in _FINAL_VIDEO_KINDS and not _video_ref_is_draft(value):
+                    ref = _video_ref_dict(value, fallback_kind=kind)
+                    if ref:
+                        found.setdefault("final_" + kind, ref)
+                continue
+            visit(value)
+
+    visit(payload)
+    ordered: List[Dict[str, str]] = []
+    for key in ("bgm", "captioned", "final_local_bestseller_bgm_final", "final_local_bestseller_captioned"):
+        ref = found.get(key)
+        if ref and ref not in ordered:
+            ordered.append(ref)
+    return ordered
+
+
+def _collect_draft_video_refs(payload: Any) -> set:
+    """payload 里所有草稿视频引用（url/path/asset_id），用于把草稿从发布素材里剔掉。"""
+    refs: set = set()
+
+    def add(ref: Dict[str, Any]) -> None:
+        for key in ("asset_id", "url", "source_url", "path", "local_preview_url", "preview_url"):
+            text = str(ref.get(key) or "").strip()
+            if text:
+                refs.add(text)
+
+    def visit(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+        if _video_ref_is_draft(node):
+            add(node)
+        for value in node.values():
+            visit(value)
+
+    visit(payload)
+    return refs
+
+
+def _payload_needs_local_bestseller_post(payload: Any) -> bool:
+    """同城爆款日更视频的 payload：还没有字幕/BGM 成片时，里面的视频都只是草稿。"""
+    if _collect_postprocessed_video_refs(payload):
+        return False
+    found = False
+
+    def visit(node: Any) -> None:
+        nonlocal found
+        if found:
+            return
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+        for key, value in node.items():
+            name = str(key or "").strip().lower()
+            if name == "mode" and str(value or "").strip().lower() == "daily_video":
+                found = True
+                return
+            if name == "kind" and str(value or "").strip().lower() in _DRAFT_VIDEO_KINDS:
+                found = True
+                return
+            if name == "hint" and "Merged local video completed" in str(value or ""):
+                found = True
+                return
+            visit(value)
+
+    visit(payload)
+    return found
+
+
+def _local_bestseller_final_video(job: Dict[str, Any]) -> Dict[str, str]:
+    """同城爆款的发布素材：字幕/BGM 成片优先；只有合并草稿时带 draft 标返回。
+
+    2026-10-07 事故：后处理（caption_post/bgm_final）还没跑完，节点就把
+    merged_output.mp4 当 final_video 交出去，发布动作照发，抖音收到的是没字幕没
+    BGM 的中间产物。现在成片优先、草稿标记，发布侧据此等待/跳过。
+    """
+    result = job.get("result") if isinstance(job.get("result"), dict) else {}
+    post = _collect_postprocessed_video_refs(result or job)
+    if post:
+        return dict(post[0])
+
+    priorities = {"local_bestseller_bgm_final": 3, "local_bestseller_captioned": 2}
     candidates: List[tuple[int, Dict[str, str]]] = []
     for item in job.get("saved_assets") if isinstance(job.get("saved_assets"), list) else []:
         if not isinstance(item, dict):
@@ -9567,9 +9698,23 @@ def _local_bestseller_final_video(job: Dict[str, Any]) -> Dict[str, str]:
         aid = str(item.get("asset_id") or asset.get("asset_id") or "").strip()
         source_url = str(item.get("source_url") or item.get("url") or asset.get("source_url") or asset.get("url") or "").strip()
         item_kind = str(item.get("kind") or "").strip()
-        if aid or source_url:
-            candidates.append((priorities.get(item_kind, 0), {"asset_id": aid, "url": source_url, "kind": item_kind}))
-    return max(candidates, key=lambda item: item[0])[1] if candidates else {}
+        if not (aid or source_url):
+            continue
+        if item_kind in priorities:
+            candidates.append((priorities[item_kind], {"asset_id": aid, "url": source_url, "kind": item_kind}))
+    if candidates:
+        return max(candidates, key=lambda item: item[0])[1]
+
+    final_video = result.get("final_video") if isinstance(result.get("final_video"), dict) else {}
+    asset_id = str(final_video.get("asset_id") or "").strip()
+    url = str(final_video.get("url") or final_video.get("source_url") or "").strip()
+    kind = str(final_video.get("kind") or "").strip()
+    if asset_id or url:
+        ref = {"asset_id": asset_id, "url": url, "kind": kind or "final_video"}
+        if _video_ref_is_draft(final_video) or _payload_needs_local_bestseller_post(job):
+            ref["draft"] = True
+        return ref
+    return {}
 
 
 async def _wait_local_bestseller_video(
@@ -9613,6 +9758,23 @@ async def _wait_local_bestseller_video(
             final_video = _local_bestseller_final_video(job)
             if not final_video:
                 raise RuntimeError("同城爆款视频任务已结束，但未取得最终视频素材")
+            if final_video.get("draft") or _video_ref_is_draft(final_video):
+                post_status = str(job.get("post_status") or "").strip().lower()
+                post_error = str(job.get("post_error") or "").strip()
+                if post_status == "failed" or post_error:
+                    raise RuntimeError(
+                        "同城爆款成片后处理（字幕/BGM）失败，只拿到合并草稿，本次不发布："
+                        + (post_error or post_status or "未知原因")[:300]
+                    )
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise RuntimeError("同城爆款成片还在后处理（字幕/BGM），超时未完成，本次不发布合并草稿")
+                logger.info(
+                    "[H5-WORKFLOW] local bestseller waiting post-processing post_stage=%s job_id=%s",
+                    job.get("post_stage"),
+                    job.get("job_id"),
+                )
+                await asyncio.sleep(max(0.1, float(poll_interval_seconds)))
+                continue
             completed_item = {
                 **item,
                 "video_status": "completed",
@@ -10145,39 +10307,57 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
             result["image_urls"] = image_urls[:9]
         return result
 
+    # 同城爆款这类会做后处理的节点：payload 里已经有字幕/BGM 成片时只用成片；
+    # 只有 merged 草稿时打 draft 标，交给发布侧等待/跳过，不要把草稿发出去。
+    post_refs = _collect_postprocessed_video_refs(payload)
+    draft_refs: set = set()
+    if post_refs:
+        video_ids = [str(item.get("asset_id") or "").strip() for item in post_refs if str(item.get("asset_id") or "").strip()]
+        video_urls = [str(item.get("url") or "").strip() for item in post_refs if str(item.get("url") or "").strip()]
+    else:
+        draft_refs = _collect_draft_video_refs(payload)
+        if _payload_needs_local_bestseller_post(payload):
+            draft_refs |= set(video_ids) | set(video_urls) | set(other_ids) | set(other_urls)
+
+    def _guard(result: Dict[str, Any]) -> Dict[str, Any]:
+        if not result or not draft_refs:
+            return result
+        refs = {str(result.get("asset_id") or "").strip(), str(result.get("url") or "").strip()}
+        return {**result, "draft": True} if refs & draft_refs else result
+
     preferred = _normalize_parent_material_media_type(preferred_media_type)
     if preferred == "image":
         if image_ids:
-            return asset_result(image_ids[0], "image", image_urls, other_urls)
+            return _guard(asset_result(image_ids[0], "image", image_urls, other_urls))
         if other_ids:
-            return asset_result(other_ids[0], "image", image_urls, other_urls)
+            return _guard(asset_result(other_ids[0], "image", image_urls, other_urls))
         if image_urls:
-            return url_result(image_urls[0], "image")
+            return _guard(url_result(image_urls[0], "image"))
         if video_ids:
-            return asset_result(video_ids[0], "video", video_urls, other_urls)
+            return _guard(asset_result(video_ids[0], "video", video_urls, other_urls))
         if video_urls:
-            return url_result(video_urls[0], "video")
+            return _guard(url_result(video_urls[0], "video"))
         if other_urls:
-            return url_result(other_urls[0], "image")
+            return _guard(url_result(other_urls[0], "image"))
     elif preferred == "video":
         if video_ids:
-            return asset_result(video_ids[0], "video", video_urls, other_urls)
+            return _guard(asset_result(video_ids[0], "video", video_urls, other_urls))
         if video_urls:
-            return url_result(video_urls[0], "video")
+            return _guard(url_result(video_urls[0], "video"))
         return {}
 
     if video_ids:
-        return asset_result(video_ids[0], "video", video_urls, other_urls)
+        return _guard(asset_result(video_ids[0], "video", video_urls, other_urls))
     if video_urls:
-        return url_result(video_urls[0], "video")
+        return _guard(url_result(video_urls[0], "video"))
     if image_ids:
-        return asset_result(image_ids[0], "image", image_urls, other_urls)
+        return _guard(asset_result(image_ids[0], "image", image_urls, other_urls))
     if image_urls:
-        return url_result(image_urls[0], "image")
+        return _guard(url_result(image_urls[0], "image"))
     if other_ids:
-        return asset_result(other_ids[0], "video", other_urls)
+        return _guard(asset_result(other_ids[0], "video", other_urls))
     if other_urls:
-        return url_result(other_urls[0], "video")
+        return _guard(url_result(other_urls[0], "video"))
     return {}
 
 
@@ -12668,6 +12848,35 @@ async def _run_client_workflow_action(
             )
             material = str(material_source.get("asset_id") or "").strip()
             source_url = str(material_source.get("url") or "").strip()
+            if material_source.get("draft"):
+                # 上级素材还是合并草稿（同城爆款字幕/BGM 还没做完）：等一会儿再取，
+                # 拿不到成片就跳过本次发布，绝不把中间产物发出去。
+                for attempt in range(4):
+                    logger.info(
+                        "[H5-WORKFLOW] parent material is a draft, wait before publish attempt=%s asset_id=%s run=%s",
+                        attempt + 1,
+                        material or "-",
+                        str(material_source.get("source_run_id") or ""),
+                    )
+                    await asyncio.sleep(15.0)
+                    material_source = await _resolve_parent_workflow_material(
+                        cloud,
+                        base,
+                        headers,
+                        params=source,
+                        current_item=current_item,
+                    )
+                    material = str(material_source.get("asset_id") or "").strip()
+                    source_url = str(material_source.get("url") or "").strip()
+                    if not material_source.get("draft"):
+                        break
+                if material_source.get("draft"):
+                    return {
+                        "ok": True,
+                        "skipped": True,
+                        "reason": "parent_video_not_ready",
+                        "message": "上级节点的成片还在后处理（字幕/BGM），本次不发布；等成片完成后再发。",
+                    }
         # A workflow may carry only the cloud asset ID. Resolve its public
         # source URL before checking the local asset DB so the same
         # materialization path works for direct and parent-linked publish
