@@ -359,10 +359,10 @@
       }
     }
     if (key === 'native_wechat_moments_engage') {
-      var momentTargets=Array.isArray(params.contact_wx_nos) ? params.contact_wx_nos : params.targets;
-      params.contact_wx_nos = Array.isArray(momentTargets) ? momentTargets.map(function(value){return String(value || '').trim();}).filter(Boolean) : [];
-      params.targets = params.contact_wx_nos.slice();
+      // 联系人不落在节点里：执行时读「微信协议助手→通讯录」确认过的那份（按本机账号存）
       params.max_scrolls = Number(params.max_scrolls || 6);
+      delete params.contact_wx_nos;
+      delete params.targets;
       ['group_invite_enabled','group_invite_memory_doc_id','group_invite_keywords','group_invite_contacts','group_invite_primary_contact','group_invite_primary_contact_name','group_invite_welcome_message','group_invite_rule_status','group_invite_targets_source','group_invite_members','group_invite_manager_contacts','followup_action','group_invite_rules','trigger'].forEach(function(name){ delete params[name]; });
     }
     if (key === 'native_wechat_poll') {
@@ -545,7 +545,7 @@
     var label=childActionLabel({action_type:type});
     var extra={source_workflow_node_id:String(parent.id || ''),source_workflow_node_label:String(parent.ability_label || parent.note || '')};
     if (type === 'native_wechat_add_friend') Object.assign(extra,{source_mode:'douyin_private_message_phone',trigger:'clear_mobile',skip_without_clear_mobile:true,targets:[]});
-    if (type === 'native_wechat_moments_engage') { var wxNos=Array.isArray(form.contact_wx_nos) ? form.contact_wx_nos.slice() : []; Object.assign(extra,{contact_wx_nos:wxNos,targets:wxNos.slice(),moment_action:String(form.moment_action || 'like_comment'),max_scrolls:6}); }
+    if (type === 'native_wechat_moments_engage') { Object.assign(extra,{moment_action:String(form.moment_action || 'like_comment'),max_scrolls:6}); }
     var row={time:time,end:end,key:key,label:label,note:label,params:{}};
     return Object.assign({},existing || {},{id:id,time:time,end_time:end,time_range:end ? time + '-' + end : time,parent_node_id:String(parent.id || ''),action_type:type,type:type,platform:'',ability_key:key,ability_label:label,department_id:parent.department_id || '',department_name:parent.department_name || '',note:label,is_action_node:true,param_configured:true,plan:nativePlan(key,row,extra)});
   }
@@ -1013,7 +1013,7 @@
   function closeNodeModal() { el('oeNodeModal').hidden=true; state.nodeEditIndex=-1; }
   function fillChildOptions(parent,selected) { var select=el('oeChildType'), options=childOptions(parent,selected); if (!select) return; select.innerHTML=options.map(function(item){return '<option value="' + esc(item[0]) + '">' + esc(item[1]) + '</option>';}).join(''); select.value=options.some(function(item){return item[0] === selected;}) ? selected : (options[0] && options[0][0] || 'publish'); }
   function syncChildModalFields() { var type=String(el('oeChildType') && el('oeChildType').value || 'publish'), publish=type === 'publish', field=el('oeChildPlatformField'); if (field) field.hidden=!publish; if (el('oeChildPlatform')) el('oeChildPlatform').disabled=!publish; syncMomentPicker('child',type === 'native_wechat_moments_engage'); }
-  function openChildModal(parentIndex,childId) { requireEditableTemplate(); var index=Number(parentIndex), parent=state.nodes[index]; if (!parent) throw new Error('未找到上级节点'); var existing=workflowChildren(parent).find(function(child){return String(child && child.id || '') === String(childId || '');}) || null; state.childParentIndex=index; state.childEditId=existing ? String(existing.id || '') : ''; el('oeChildModalTitle').textContent=existing ? '编辑下级动作' : '添加下级动作'; el('oeChildParent').textContent=parent.ability_label || parent.note || '上级节点'; el('oeChildTime').value=existing && existing.time || parent.end_time || parent.time || '09:00'; el('oeChildEndTime').value=existing && existing.end_time || ''; fillChildOptions(parent,existing ? childActionType(existing) : ''); el('oeChildPlatform').value=existing && existing.platform || 'douyin'; var childParams=workflowPayload(existing).params || {}; el('oeChildMomentAction').value=String(childParams.moment_action || 'like_comment'); initMomentPicker('child',Array.isArray(childParams.contact_wx_nos) ? childParams.contact_wx_nos : childParams.targets); syncChildModalFields(); el('oeChildModal').hidden=false; setTimeout(function(){el('oeChildTime').focus();},60); }
+  function openChildModal(parentIndex,childId) { requireEditableTemplate(); var index=Number(parentIndex), parent=state.nodes[index]; if (!parent) throw new Error('未找到上级节点'); var existing=workflowChildren(parent).find(function(child){return String(child && child.id || '') === String(childId || '');}) || null; state.childParentIndex=index; state.childEditId=existing ? String(existing.id || '') : ''; el('oeChildModalTitle').textContent=existing ? '编辑下级动作' : '添加下级动作'; el('oeChildParent').textContent=parent.ability_label || parent.note || '上级节点'; el('oeChildTime').value=existing && existing.time || parent.end_time || parent.time || '09:00'; el('oeChildEndTime').value=existing && existing.end_time || ''; fillChildOptions(parent,existing ? childActionType(existing) : ''); el('oeChildPlatform').value=existing && existing.platform || 'douyin'; var childParams=workflowPayload(existing).params || {}; el('oeChildMomentAction').value=String(childParams.moment_action || 'like_comment'); syncChildModalFields(); el('oeChildModal').hidden=false; setTimeout(function(){el('oeChildTime').focus();},60); }
   function closeChildModal() { if (el('oeChildModal')) el('oeChildModal').hidden=true; state.childParentIndex=-1; state.childEditId=''; }
   function removeChild(parentIndex,childId) { requireEditableTemplate(); var index=Number(parentIndex), parent=state.nodes[index]; if (!parent) return Promise.resolve(); var children=workflowChildren(parent).filter(function(child){return String(child && child.id || '') !== String(childId || '');}); state.nodes[index]=syncParentChildRules(Object.assign({},parent,{children:children})); renderEditor(); return saveTemplate(); }
   function payloadToSave() { requireEditableTemplate(); state.nodes=normalizeWorkflowTimeline(migrateGroupInviteNodes(state.nodes)); var name=(el('oeTemplateName').value || '').trim(); if (!name) throw new Error('请填写员工名称'); if (!state.nodes.length) throw new Error('请至少添加一个节点'); var meta=Object.assign({},state.editingMeta || {}); if (isSalesTemplate(state.selectedTemplate)) {meta.system_template_key='system_sales';meta.source=meta.source || 'system_mirror';} return {name:name,nodes:clone(state.nodes),meta:meta}; }
@@ -1335,7 +1335,7 @@
     if (el('oeNodeWhatsappTakeoverMinutes')) el('oeNodeWhatsappTakeoverMinutes').value=Math.max(1,Math.min(1440,Number(params.takeover_session_minutes || 30)));
     if (el('oeNodeWhatsappMaxUnread')) el('oeNodeWhatsappMaxUnread').value=Math.max(1,Math.min(100,Number(params.max_unread_per_round || 50)));
     if (el('oeNodeWhatsappInstruction')) el('oeNodeWhatsappInstruction').value=String(params.reply_instruction || '');
-    el('oeNodeMomentAction').value=String(params.moment_action || 'like_comment'); initMomentPicker('node',Array.isArray(params.contact_wx_nos) ? params.contact_wx_nos : params.targets);
+    el('oeNodeMomentAction').value=String(params.moment_action || 'like_comment');
     if (el('oeNodeHiflyOralIndustry') || el('oeNodeHiflyOralIp')) {
       var oralPicked=digitalHumanOralSourceParams(params).script_sources;
       if (el('oeNodeHiflyOralIndustry')) el('oeNodeHiflyOralIndustry').checked=oralPicked.indexOf('ip_daily_industry_hot_oral') >= 0;
@@ -1358,7 +1358,7 @@
     } else {
       delete row.params.account_id; delete row.params.message_poll_interval_seconds; delete row.params.takeover_session_minutes; delete row.params.max_unread_per_round; delete row.params.reply_instruction;
     }
-    if (key === 'native_wechat_moments_engage') { row.params.contact_wx_nos=momentSelectionValues('node'); row.params.targets=row.params.contact_wx_nos.slice(); row.params.moment_action=String(el('oeNodeMomentAction').value || 'like_comment'); row.params.max_scrolls=Number(row.params.max_scrolls || 6); if (!row.params.contact_wx_nos.length) throw new Error('请选择至少一个朋友圈联系人'); }
+    if (key === 'native_wechat_moments_engage') { row.params.moment_action=String(el('oeNodeMomentAction').value || 'like_comment'); row.params.max_scrolls=Number(row.params.max_scrolls || 6); delete row.params.contact_wx_nos; delete row.params.targets; }
     else { delete row.params.contact_wx_nos; delete row.params.targets; delete row.params.moment_action; }
     if (key === 'native_wechat_add_friend') {
       var addFriendSource=nativeAddFriendSourceFromForm();
@@ -1454,14 +1454,13 @@
     var existing=editId ? workflowChildren(parent).find(function(child){return String(child.id || '') === editId;}) : null;
     if (childOptions(parent,existing ? childActionType(existing) : '').map(function(item){return item[0];}).indexOf(type) < 0) throw new Error('这个上级节点不支持所选动作');
     if (type === 'publish' && ['douyin','toutiao','wechat_channels','wechat_moments'].indexOf(platform) < 0) throw new Error('暂时只支持抖音、头条、视频号和朋友圈');
-    if (type === 'native_wechat_moments_engage' && !momentSelectionValues('child').length) throw new Error('请选择至少一个朋友圈联系人');
     var children=workflowChildren(parent).slice(), duplicate=children.find(function(child){
       if (editId && String(child.id || '') === editId) return false;
       var childType=childActionType(child);
       return type === 'publish' ? childType === 'publish' && String(child.platform || '') === platform : childType === type;
     });
     if (duplicate) throw new Error(type === 'publish' ? '这个平台已经有发布动作了' : '这个下级动作已经添加过了');
-    var next=buildWorkflowChild(parent,{time:time,end_time:end,action_type:type,platform:platform,contact_wx_nos:momentSelectionValues('child'),moment_action:String(el('oeChildMomentAction').value || 'like_comment')},existing);
+    var next=buildWorkflowChild(parent,{time:time,end_time:end,action_type:type,platform:platform,moment_action:String(el('oeChildMomentAction').value || 'like_comment')},existing);
     children=children.filter(function(child){return String(child.id || '') !== String(next.id || '');}).concat(next).sort(function(a,b){return String(a.time || '').localeCompare(String(b.time || ''));});
     state.nodes[parentIndex]=syncParentChildRules(Object.assign({},parent,{children:children}));
     closeChildModal(); renderEditor();

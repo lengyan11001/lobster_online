@@ -798,6 +798,12 @@ def init_db() -> None:
                 updated_at text not null
             );
 
+            create table if not exists wechat_moments_engage_contacts (
+                account_id text primary key,
+                contact_wx_nos text not null default '[]',
+                updated_at text not null
+            );
+
             create table if not exists wechat_auto_reply_config (
                 account_id text primary key,
                 enabled integer not null default 0,
@@ -16578,7 +16584,12 @@ async def create_moments_engage_task(
         raise RuntimeError("没有检测到本机微信窗口")
     target_list = _normalize_task_targets(targets, max_targets=100)
     if not target_list:
-        raise RuntimeError("缺少朋友圈互动目标联系人")
+        # 节点不再带名单：读 Online「微信协议助手-通讯录」里确认过的朋友圈互动联系人
+        target_list = _normalize_task_targets(get_moments_engage_contacts(account_id), max_targets=100)
+    if not target_list:
+        raise RuntimeError(
+            "缺少朋友圈互动联系人：请到 Online「微信协议助手 → 通讯录」勾选联系人后点「确认为朋友圈互动联系人」"
+        )
     action = str(moment_action or "like_comment").strip().lower() or "like_comment"
     if action not in {"like", "comment", "like_comment", "both"}:
         raise RuntimeError("朋友圈互动动作只支持点赞、评论或点赞并评论")
@@ -20227,6 +20238,61 @@ def save_friend_add_control(account_id: str, *, interval_seconds: Optional[int] 
         )
     _notify_friend_add_scheduler(key)
     return get_friend_add_control(key)
+
+
+def get_moments_engage_contacts(account_id: str) -> List[str]:
+    """Online「微信协议助手-通讯录」里确认过的朋友圈互动联系人（按机器+账号存本机）。
+
+    工作流的「朋友圈点赞评论」节点不再存联系人，执行时读这份设置。
+    """
+    init_db()
+    key = str(account_id or "").strip()
+    if not key:
+        return []
+    with _connect() as conn:
+        row = conn.execute(
+            "select contact_wx_nos from wechat_moments_engage_contacts where account_id=? limit 1",
+            (key,),
+        ).fetchone()
+    if not row:
+        return []
+    try:
+        values = json.loads(row[0] or "[]")
+    except Exception:
+        values = []
+    cleaned = [
+        str(item or "").strip()[:240]
+        for item in (values if isinstance(values, list) else [])
+        if str(item or "").strip()
+    ]
+    return list(dict.fromkeys(cleaned))[:100]
+
+
+def save_moments_engage_contacts(account_id: str, contact_wx_nos: Any) -> Dict[str, Any]:
+    init_db()
+    key = str(account_id or "").strip()
+    if not key:
+        raise RuntimeError("missing account_id")
+    values = list(
+        dict.fromkeys(
+            str(item or "").strip()[:240]
+            for item in (contact_wx_nos if isinstance(contact_wx_nos, list) else [])
+            if str(item or "").strip()
+        )
+    )[:100]
+    now = _now_iso()
+    with _connect() as conn:
+        conn.execute(
+            """
+            insert into wechat_moments_engage_contacts(account_id, contact_wx_nos, updated_at)
+            values(?,?,?)
+            on conflict(account_id) do update set
+                contact_wx_nos=excluded.contact_wx_nos,
+                updated_at=excluded.updated_at
+            """,
+            (key, json.dumps(values, ensure_ascii=False), now),
+        )
+    return {"account_id": key, "contact_wx_nos": values, "updated_at": now}
 
 
 def _set_friend_add_control_enabled(account_id: str, enabled: bool) -> None:

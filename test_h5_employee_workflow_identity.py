@@ -142,22 +142,38 @@ def test_online_employee_editor_manages_supported_child_actions():
     assert "20260912-douyin-ai-keywords-v1" in registry
 
 
-def test_moments_nodes_save_paginated_contact_selection_as_wechat_ids():
+def test_moments_contacts_are_confirmed_in_wechat_assistant_not_on_the_node():
+    """朋友圈互动联系人不在节点里选：到「微信协议助手-通讯录」勾选并确认，节点只下发任务。"""
     script = _script()
     html = (ROOT / "static" / "views" / "h5-employees.html").read_text(encoding="utf-8")
+    juhe_html = (ROOT / "static" / "views" / "juhe-wechat.html").read_text(encoding="utf-8")
+    juhe_js = (ROOT / "static" / "js" / "juhe-wechat.js").read_text(encoding="utf-8")
     channel = (ROOT / "backend" / "app" / "api" / "h5_chat_channel.py").read_text(encoding="utf-8")
+    engine = (ROOT / "backend" / "app" / "services" / "native_wechat_engine.py").read_text(encoding="utf-8")
+    api = (ROOT / "backend" / "app" / "api" / "native_wechat.py").read_text(encoding="utf-8")
 
+    # 节点里只留提示，不再有联系人选择器 / 不再存名单
     assert 'id="oeNodeMomentField"' in html
     assert 'id="oeChildMomentField"' in html
-    assert 'id="oeNodeMomentPrev"' in html
-    assert 'id="oeNodeMomentNext"' in html
-    assert "var pageSize=20" in script
-    assert "params.contact_wx_nos" in script
-    assert "row.params.targets=row.params.contact_wx_nos.slice()" in script
-    assert "contact_wx_nos:momentSelectionValues('child')" in script
-    assert '_workflow_target_list(source, "contact_wx_nos", "targets", "contacts", "names")' in channel
+    assert 'id="oeNodeMomentPrev"' not in html
+    assert 'id="oeChildMomentPrev"' not in html
+    assert "确认为朋友圈互动联系人" in html
+    assert "delete row.params.contact_wx_nos" in script
+    assert "row.params.targets=row.params.contact_wx_nos.slice()" not in script
+    assert "contact_wx_nos:momentSelectionValues('child')" not in script
+
+    # 微信协议助手-通讯录：勾选 + 确认为朋友圈互动联系人
+    assert 'id="nativeWechatContactMomentsConfirmBtn"' in juhe_html
+    assert "function confirmMomentsContacts()" in juhe_js
+    assert "/api/native-wechat/moments/contacts" in juhe_js
+
+    # 本机保存 + 执行时读这份设置
+    assert "/api/native-wechat/moments/contacts" in api
+    assert "def get_moments_engage_contacts" in engine
+    assert "def save_moments_engage_contacts" in engine
+    assert "get_moments_engage_contacts(native_account_id)" in channel
+
     assert "function loadLocalWechatContacts()" in script
     assert "/api/native-wechat/contacts?account_id=pc-wechat-default" in script
     assert "loadDevices()" in script and "loadLocalWechatContacts()" in script
-    assert '"/api/h5-chat/devices/status"' in channel
     assert "proxy_h5_chat_devices_status" in channel

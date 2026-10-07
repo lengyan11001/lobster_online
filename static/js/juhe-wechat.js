@@ -916,6 +916,39 @@
     return map[status] || status || '-';
   }
 
+  function renderMomentsConfirmedContacts(values) {
+    var list = Array.isArray(values) ? values : [];
+    setChip('nativeWechatMomentsConfirmedCount', list.length
+      ? ('朋友圈互动联系人：' + list.length + ' 个')
+      : '朋友圈互动联系人：未确认');
+  }
+
+  function loadMomentsConfirmedContacts() {
+    var id = activeAccountId();
+    if (!id) { renderMomentsConfirmedContacts([]); return Promise.resolve(); }
+    return apiJson('/api/native-wechat/moments/contacts?account_id=' + encodeURIComponent(id))
+      .then(function(data) { renderMomentsConfirmedContacts(data && data.contact_wx_nos); })
+      .catch(function() { renderMomentsConfirmedContacts([]); });
+  }
+
+  function confirmMomentsContacts() {
+    var id = activeAccountId();
+    if (!id) { setMsg('请先选择微信账号', true); return Promise.resolve(); }
+    var targets = selectedContactValues();
+    if (!targets.length) { setMsg('请先在通讯录里勾选联系人', true); return Promise.resolve(); }
+    return apiJson('/api/native-wechat/moments/contacts', {
+      method: 'POST',
+      body: { account_id: id, contact_wx_nos: targets }
+    }).then(function(data) {
+      var saved = (data && data.contact_wx_nos) || [];
+      renderMomentsConfirmedContacts(saved);
+      setMsg('已确认 ' + saved.length + ' 个朋友圈互动联系人：工作流的「朋友圈点赞评论」节点会按这份名单执行。', false);
+      return data;
+    }).catch(function(err) {
+      setMsg(err.message || '确认朋友圈互动联系人失败', true);
+    });
+  }
+
   function switchTab(tab) {
     state.tab = tab || 'messages';
     document.querySelectorAll('[data-native-wechat-tab]').forEach(function(btn) {
@@ -926,7 +959,7 @@
     });
     if (state.tab === 'tasks') loadTasks();
     if (state.tab === 'friends') { loadFriendRecords(); loadFriendQueueControl(); }
-    if (state.tab === 'contacts') loadContacts();
+    if (state.tab === 'contacts') { loadContacts(); loadMomentsConfirmedContacts(); }
     if (state.tab === 'groups') {
       loadGroups();
       if (state.activeGroupKey) loadGroupMembers();
@@ -2351,6 +2384,8 @@
     if (contactMomentsCommentBtn) contactMomentsCommentBtn.addEventListener('click', submitMomentsComment);
     var contactCreateGroupBtn = $('nativeWechatContactCreateGroupBtn');
     if (contactCreateGroupBtn) contactCreateGroupBtn.addEventListener('click', createGroupFromSelectedContacts);
+    var contactMomentsConfirmBtn = $('nativeWechatContactMomentsConfirmBtn');
+    if (contactMomentsConfirmBtn) contactMomentsConfirmBtn.addEventListener('click', confirmMomentsContacts);
     var groupContactSearch = $('nativeWechatContactPickerSearch');
     if (groupContactSearch) groupContactSearch.addEventListener('input', debounce(function() {
       state.groupInviteContactSearch = groupContactSearch.value || '';

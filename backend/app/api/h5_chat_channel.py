@@ -12564,7 +12564,18 @@ async def _run_client_workflow_action(
     if action == "native_wechat_moments_engage":
         targets = _workflow_target_list(source, "contact_wx_nos", "targets", "contacts", "names")
         if not targets:
-            return {"ok": True, "skipped": True, "reason": "missing_targets", "message": "未配置朋友圈互动目标，已跳过"}
+            # 节点只下发任务：名单用 Online「微信协议助手-通讯录」里确认过的那份（存在本机）
+            try:
+                targets = native_wechat_engine.get_moments_engage_contacts(native_account_id)
+            except Exception:
+                targets = []
+        if not targets:
+            return {
+                "ok": True,
+                "skipped": True,
+                "reason": "missing_targets",
+                "message": "未配置朋友圈互动联系人：请到 Online「微信协议助手 → 通讯录」勾选联系人后点「确认为朋友圈互动联系人」",
+            }
         moment_action = str(source.get("moment_action") or source.get("mode") or "like_comment").strip().lower() or "like_comment"
         max_scrolls = max(1, min(_safe_int(source.get("max_scrolls") or 6), 30))
         submitted = await _post_local_api_json(

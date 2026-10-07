@@ -159,6 +159,11 @@ class MomentsEngageBody(BaseModel):
     max_scrolls: int = Field(default=6, ge=1, le=30)
 
 
+class MomentsContactsBody(BaseModel):
+    account_id: str = Field(min_length=1, max_length=160)
+    contact_wx_nos: List[str] = Field(default_factory=list, max_length=100)
+
+
 class MomentsPublishBody(BaseModel):
     account_id: str = Field(default="pc-wechat-default", min_length=1, max_length=160)
     content: str = Field(default="", max_length=4000)
@@ -806,6 +811,27 @@ async def native_wechat_friend_queue_stop(
         return {"ok": True, "control": await engine.stop_friend_add_queue(body.account_id)}
     except Exception as exc:
         _raise_native_wechat_error("friends_queue_stop", exc, account_id=body.account_id)
+
+
+@router.get("/api/native-wechat/moments/contacts")
+async def native_wechat_moments_contacts(
+    account_id: str = "",
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    if not account_id:
+        raise HTTPException(status_code=422, detail="missing account_id")
+    return {"ok": True, "account_id": account_id, "contact_wx_nos": engine.get_moments_engage_contacts(account_id)}
+
+
+@router.post("/api/native-wechat/moments/contacts")
+async def native_wechat_moments_contacts_save(
+    body: MomentsContactsBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    try:
+        return {"ok": True, **engine.save_moments_engage_contacts(body.account_id, body.contact_wx_nos)}
+    except Exception as exc:
+        _raise_native_wechat_error("moments_contacts", exc, account_id=body.account_id)
 
 
 @router.post("/api/native-wechat/moments/like")
