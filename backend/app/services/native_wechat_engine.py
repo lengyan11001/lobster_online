@@ -2503,6 +2503,11 @@ _AUTO_REPLY_LANGUAGE_ALIASES = {
     "chinese": "zh-CN",
     "中文": "zh-CN",
     "简体中文": "zh-CN",
+    "zh-tw": "zh-TW",
+    "zh-hant": "zh-TW",
+    "繁體中文": "zh-TW",
+    "繁体中文": "zh-TW",
+    "traditional chinese": "zh-TW",
     "en-us": "en",
     "en-gb": "en",
     "english": "en",
@@ -2519,6 +2524,7 @@ _AUTO_REPLY_LANGUAGE_ALIASES = {
 }
 _AUTO_REPLY_LANGUAGE_LABELS = {
     "zh-CN": "简体中文",
+    "zh-TW": "繁體中文",
     "en": "English",
     "ja": "日本語",
     "ko": "한국어",

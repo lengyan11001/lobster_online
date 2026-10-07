@@ -37,6 +37,7 @@
   var MOMENT_BATCH_JOBS_STORAGE_KEY = 'ipContentStudio.momentBatchJobs.v1';
   var IP_TEMPLATE_LANGUAGES = [
     ['zh-CN', '简体中文'],
+    ['zh-TW', '繁體中文'],
     ['en', 'English'],
     ['ja', '日本語'],
     ['ko', '한국어'],
@@ -99,6 +100,11 @@
       'zh-cn': 'zh-CN',
       chinese: 'zh-CN',
       '简体中文': 'zh-CN',
+      'zh-tw': 'zh-TW',
+      'zh-hant': 'zh-TW',
+      '繁體中文': 'zh-TW',
+      '繁体中文': 'zh-TW',
+      'traditional chinese': 'zh-TW',
       english: 'en',
       japanese: 'ja',
       korean: 'ko',

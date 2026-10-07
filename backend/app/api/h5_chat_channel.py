@@ -10462,6 +10462,8 @@ def _is_local_asset_missing_error(exc: Exception) -> bool:
 def _workflow_language_label(language: str) -> str:
     raw = _workflow_text(language, 64)
     lowered = raw.lower()
+    if lowered in {"zh-tw", "zh-hant", "繁體中文", "繁体中文", "traditional chinese"}:
+        return "繁體中文"
     if lowered in {"zh", "zh-cn", "中文", "简体中文", "chinese"}:
         return "中文"
     if lowered in {"en", "en-us", "english", "英文", "英语"}:
