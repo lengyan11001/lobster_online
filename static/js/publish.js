@@ -2276,7 +2276,9 @@ function _normalizeSharedContentRecord(item) {
   var imageRefs = _contentRecordImageRefs(item);
   var imageUrls = imageRefs.map(function(ref) { return ref.image_url; }).filter(Boolean);
   var imageAssetIds = imageRefs.map(function(ref) { return ref.image_asset_id; }).filter(Boolean);
-  var coverUrl = String(imageUrls[0] || '').trim();
+  // 2026-10-08：封面优先用记录自带的 cover_url/thumbnail_url（服务端生成的封面图），
+  // 其次才退回记录内嵌的图片引用；视频没有封面时前端会退回用视频首帧。
+  var coverUrl = String(item.cover_url || item.thumbnail_url || imageUrls[0] || '').trim();
   var sourceUrl = String(item.file_url || item.source_url || coverUrl || '').trim();
   // 2026-10-08：内容记录的 kind/文件后缀决定 media_type。
   // 以前一律写 document，导致画布生成的视频在「内容记录」里没有封面、点开预览也不出播放器。
@@ -2298,6 +2300,7 @@ function _normalizeSharedContentRecord(item) {
     filename: String(item.filename || item.title || _contentRecordDisplayLabel(item)),
     source_url: sourceUrl,
     cover_url: coverUrl,
+    thumbnail_url: coverUrl,
     image_urls: imageUrls,
     image_asset_ids: imageAssetIds,
     image_refs: imageRefs,
@@ -4632,7 +4635,14 @@ function _renderAssetCards(container, assets, append) {
         preview = '<div class="asset-preview-wrap" ' + wrapAttrs + '><div style="max-width:160px;max-height:120px;border-radius:6px;background:rgba(255,255,255,0.08);display:flex;align-items:center;justify-content:center;font-size:0.72rem;color:var(--text-muted);padding:0.5rem;">无缩略图<br>（未配置本机 API 或素材无文件）</div></div>';
       }
     } else if (isVideo) {
-      if (showThumb && blobOk) {
+      var coverLooksImage = !!safeDirectFallback && /\.(png|jpe?g|webp|gif|bmp)(\?|#|$)/i.test(safeDirectFallback);
+      if (showThumb && coverLooksImage) {
+        preview =
+          '<div class="asset-preview-wrap" ' + wrapAttrs +
+          '><img class="asset-list-thumb" data-prefer-content="0" data-direct-fallback="' + escapeAttr(safeDirectFallback) +
+          '" data-initial-src="' + escapeAttr(safeDirectFallback) + '" src="' + escapeAttr(safeDirectFallback) +
+          '" alt="" referrerpolicy="no-referrer" style="max-width:160px;max-height:120px;border-radius:6px;object-fit:cover;pointer-events:none;"></div>';
+      } else if (showThumb && blobOk) {
         preview =
           '<div class="asset-preview-wrap" ' + wrapAttrs +
           '><img class="asset-list-thumb" data-asset-id="' + escapeAttr(a.asset_id) +
