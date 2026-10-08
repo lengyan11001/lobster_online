@@ -4,7 +4,8 @@
 能力清单（同时登记在 skill_registry.json）：
   liepin.browser.open      {action: start|restart|status}
   liepin.login.status      {}
-  liepin.candidates.search {query, limit, filters?, need_detail?}
+  liepin.candidates.search {query, pages?, limit?, filters?, mode?}
+  liepin.candidates.suggest {keyword}
   liepin.candidates.detail {name, age?, confirm}
   liepin.chat.list         {limit}
   liepin.chat.send         {target, text, confirm}
@@ -73,15 +74,42 @@ def run(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
 
         if action == "liepin.candidates.search":
             query = (params.get("query") or "").strip()
+            limit = int(params.get("limit") or 20)
+            pages = int(params.get("pages") or 1)
+            filters = params.get("filters") or {}
+            mode = (params.get("mode") or "auto").lower()   # auto / protocol / browser
+            if mode in ("auto", "protocol"):
+                proto_err = ""
+                try:
+                    from .liepin_protocol import PROTO_FILTER_KEYS, LiepinProtocol
+
+                    proto = LiepinProtocol(port=int(params.get("cdp_port") or 9222))
+                    kw = {k: v for k, v in filters.items() if k in PROTO_FILTER_KEYS}
+                    res = proto.search_cards(query, pages=pages, **kw)
+                    cards = _filter_cards(res["cards"], filters)
+                    return {"ok": True, "mode": "protocol", "query": query, "total": res.get("total"),
+                            "pages": res.get("pages"), "count": len(cards), "cards": cards[:limit]}
+                except Exception as exc:
+                    proto_err = "%s: %s" % (type(exc).__name__, exc)
+                    if mode == "protocol":
+                        return {"ok": False, "mode": "protocol", "error": proto_err,
+                                "hint": "协议直连需要本机已登录的 Chrome（先 liepin.browser.open 扫码登录）"}
             if not query:
                 return {"ok": False, "error": "缺少 query（如：东南亚 销售总监 电表）"}
-            limit = int(params.get("limit") or 20)
             res = sess.search(query, limit=max(limit, 20))
             if not res.get("ok"):
+                res["protocol_error"] = locals().get("proto_err", "")
                 return res
-            cards = _filter_cards(res["cards"], params.get("filters"))
-            return {"ok": True, "query": query, "total": res.get("total"),
+            cards = _filter_cards(res["cards"], filters)
+            return {"ok": True, "mode": "browser", "query": query, "total": res.get("total"),
                     "count": len(cards), "cards": cards[:limit]}
+
+        if action == "liepin.candidates.suggest":
+            keyword = (params.get("keyword") or "").strip()
+            if not keyword:
+                return {"ok": False, "error": "缺少 keyword"}
+            from .liepin_protocol import LiepinProtocol
+            return {"ok": True, "keyword": keyword, "suggestions": LiepinProtocol().suggest(keyword)}
 
         if action == "liepin.candidates.detail":
             name = (params.get("name") or "").strip()

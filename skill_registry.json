@@ -1592,7 +1592,7 @@
     },
     "liepin_recruit_skill": {
       "name": "猎聘招聘",
-      "description": "驱动本机浏览器操作猎聘招聘端（lpt.liepin.com）：搜索人才、读取候选人卡片与关键字段、进入沟通页按话术发消息、导出候选人清单。账号扫码登录一次后长期复用登录态。",
+      "description": "猎聘招聘端（lpt.liepin.com）：先扫码登录，再搜人才 / 读候选人 / 沟通发消息 / 出候选人表。搜索走协议直连（api-lpt.liepin.com，无需浏览器界面），发消息与开简历走已登录浏览器。",
       "type": "builtin",
       "store_visibility": "online",
       "default_installed": false,
@@ -1644,7 +1644,7 @@
           }
         },
         "liepin.candidates.search": {
-          "description": "按关键词搜索猎聘人才库，返回结构化候选人卡片（姓名/年龄/年限/学历/现居/期望职位薪资/行业/公司履历/是否已沟通）。遇到风控自动重启窗口重试。",
+          "description": "搜索猎聘人才库，返回结构化候选人（姓名/性别/年龄/年限/学历/现居/期望城市/期望职位薪资/行业标签/公司履历/学校/活跃度/是否已沟通/res_id）。默认走协议直连（一次一页约 20 人，可翻页），失败自动回落到浏览器驱动。",
           "upstream": "local",
           "upstream_tool": "liepin",
           "enabled": true,
@@ -1655,21 +1655,36 @@
             "properties": {
               "query": {
                 "type": "string",
-                "description": "搜索词，如「东南亚 销售总监 电表」"
+                "description": "关键词，如「东南亚 销售总监 电表」；可为空（纯靠 filters 过滤）"
+              },
+              "pages": {
+                "type": "integer",
+                "default": 1,
+                "description": "抓几页（每页约 20 人）"
               },
               "limit": {
                 "type": "integer",
                 "default": 20
               },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "protocol",
+                  "browser"
+                ],
+                "default": "auto"
+              },
               "filters": {
                 "type": "object",
+                "description": "协议直连过滤条件",
                 "properties": {
                   "must_include": {
                     "type": "array",
                     "items": {
                       "type": "string"
                     },
-                    "description": "卡片文本必须包含的关键词"
+                    "description": "结果必须包含的关键词"
                   },
                   "cities": {
                     "type": "array",
@@ -1679,12 +1694,69 @@
                   },
                   "min_years": {
                     "type": "integer"
+                  },
+                  "dqs": {
+                    "type": "string",
+                    "description": "目前城市代码或中文，如 印度尼西亚/越南"
+                  },
+                  "want_dqs": {
+                    "type": "string",
+                    "description": "期望城市"
+                  },
+                  "jobtitles": {
+                    "type": "string"
+                  },
+                  "company": {
+                    "type": "string"
+                  },
+                  "workyears": {
+                    "type": "string",
+                    "description": "年限区间，如 0,99 / 8,99"
+                  },
+                  "edu_levels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "language": {
+                    "type": "string",
+                    "description": "语言要求，如 英语/印尼语"
+                  },
+                  "age": {
+                    "type": "string"
+                  },
+                  "sex": {
+                    "type": "string"
+                  },
+                  "active_status": {
+                    "type": "string"
+                  },
+                  "manage_exp": {
+                    "type": "string"
                   }
                 }
               }
             },
+            "required": []
+          }
+        },
+        "liepin.candidates.suggest": {
+          "description": "搜索词联想（协议直连），用于把用户口语化需求（如「东南亚电表销售」）变成猎聘能命中的关键词。",
+          "upstream": "local",
+          "upstream_tool": "liepin",
+          "enabled": true,
+          "is_default": false,
+          "unit_credits": 0,
+          "arg_schema": {
+            "type": "object",
+            "properties": {
+              "keyword": {
+                "type": "string"
+              }
+            },
             "required": [
-              "query"
+              "keyword"
             ]
           }
         },
