@@ -191,7 +191,9 @@ window.registerLobsterView('alibaba-inquiries', {
   });
 
   window.registerLobsterView('tutorial', {
-    html: '/static/views/tutorial.html?v=20260803-global-navigation'
+    html: '/static/views/tutorial.html?v=20261008-system-templates',
+    scripts: '/static/js/tutorial.js?v=20261008-system-templates',
+    init: 'initTutorialView'
   });
 
   window.registerLobsterView('h5-employees', {

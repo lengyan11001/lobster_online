@@ -3483,3 +3483,19 @@ html[data-brand="hikong"] .page:has(#dashboard.visible) .dashboard-main {
     animation: none;
   }
 }
+
+
+/* 2026-10-08 教程页 → 系统模板 */
+.app-tutorial-section { margin-top: 22px; }
+.app-tutorial-section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.app-tutorial-section-head h3 { margin: 0; font-size: 16px; }
+.app-tutorial-section-tools { display: inline-flex; align-items: center; gap: 10px; }
+.app-tutorial-hint { color: #64748b; font-size: 12px; margin: 4px 0 10px; }
+.app-tutorial-template-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.app-tutorial-template-card { border: 1px solid rgba(148, 163, 184, .35); border-radius: 12px; padding: 12px 14px; background: #fff; }
+.app-tutorial-template-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.app-tutorial-template-body { display: grid; gap: 6px; font-size: 12px; color: #334155; }
+.app-tutorial-template-body b { color: #0f172a; }
+.app-tutorial-template-body p { margin: 2px 0 0; line-height: 1.55; }
+.app-tutorial-template-actions { display: flex; gap: 8px; margin-top: 10px; }
+.app-tutorial-template-detail pre { white-space: pre-wrap; word-break: break-word; background: #f8fafc; border-radius: 8px; padding: 10px; font-size: 12px; line-height: 1.6; max-height: 320px; overflow: auto; }
