@@ -398,6 +398,53 @@ class LiepinSession:
         return {"ok": bool(ok), "target": target, "verified": bool(ok),
                 "note": "页面已出现该消息" if ok else "已提交但页面未回显，请人工确认"}
 
+    def open_detail(self, name: str, age: Optional[int] = None) -> Dict[str, Any]:
+        """打开候选人简历详情并抓取可见文本。
+
+        注意：会消耗猎聘「查看简历」权益，因此由上层强制 confirm=True。
+        猎聘详情面板是异步加载的，这里做「搜索 -> 点卡片 -> 等面板 -> 抓文本」，
+        若面板结构变化会显式报错，方便按需更新选择器（不做静默失败）。
+        """
+        res = self.search(name, limit=20)
+        if not res.get("ok"):
+            return {"ok": False, "error": "详情前置搜索失败：%s" % res.get("error")}
+        hit = None
+        for c in res.get("cards", []):
+            if c.get("name") == name and (age is None or c.get("age") == age):
+                hit = c
+                break
+        if hit is None:
+            return {"ok": False, "error": "搜索结果里没找到 %s（可能翻页或换词）" % name}
+        pg = self.page(need_search_box=True, retries=1)
+        clicked = pg.evaluate(
+            """(args) => {
+              const [name, ageS] = args;
+              const cards = Array.from(document.querySelectorAll('div,li,article,section'))
+                .filter(e => { const t = e.innerText || ''; const r = e.getBoundingClientRect();
+                               return t.includes(name) && (!ageS || t.includes(ageS)) && r.width > 600 && r.width < 1400 && t.length < 1500; });
+              if (!cards.length) return false;
+              cards.sort((a, b) => { const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+                                     return ra.width * ra.height - rb.width * rb.height; });
+              const card = cards[0];
+              const target = Array.from(card.querySelectorAll('a,span,div'))
+                .find(n => (n.innerText || '').trim() === name) || card;
+              target.click();
+              return true;
+            }""", [name, ("%d岁" % age) if age else ""])
+        if not clicked:
+            return {"ok": False, "error": "定位不到该候选人的卡片"}
+        pg.wait_for_timeout(6000)
+        detail = pg.evaluate(
+            """() => {
+              const panel = document.querySelector('[class*=resume-detail],[class*=detail-panel],[class*=drawer],[class*=modal]');
+              const src = panel || document.body;
+              return (src.innerText || '').replace(/\n{2,}/g, '\n').slice(0, 6000);
+            }""")
+        self.record("details", {"name": name, "age": age, "chars": len(detail or "")})
+        if not detail or len(detail) < 120:
+            return {"ok": False, "error": "详情面板没抓到内容（可能需要人工确认选择器或权益不足）", "url": pg.url}
+        return {"ok": True, "name": name, "url": pg.url, "text": detail}
+
     def status(self) -> Dict[str, Any]:
         return {"ok": True, "cdp_alive": self.cdp_alive(), "cdp_port": self.port,
                 "chromium": str(self.chrome) if self.chrome else None,
