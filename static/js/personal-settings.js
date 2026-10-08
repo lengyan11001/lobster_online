@@ -2942,7 +2942,7 @@
         });
         if (copied && !opts.keepCurrent) applyTemplate(copied, true);
         setMsg(opts.keepCurrent
-          ? ('已在「我的模板」里新增一条记录' + (copied ? '：' + templateName(copied) : '') + '，想启用再点「设为当前」。')
+          ? ('已在「我的模板」里新增一条记录' + (copied ? '：' + templateName(copied) : '') + '，想启用再点「设为当前」（启用前记得在模板里选一个你自己的资料调查）。')
           : '已复制为个人模板，可继续编辑。');
       });
     }).catch(function(err) {

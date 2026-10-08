@@ -116,7 +116,7 @@
       var data = {};
       try { data = await res.json(); } catch (e) {}
       if (!res.ok) throw new Error((data && data.detail) || ('HTTP ' + res.status));
-      alert('已在「我的模板」里新增一条记录：' + ((data.item && data.item.name) || it.name || '') + '\n到「个人设置 → 我的模板」里点「设为当前」即可启用。');
+      alert('已在「我的模板」里新增一条记录：' + ((data.item && data.item.name) || it.name || '') + '\n到「个人设置 → 我的模板」里点「设为当前」即可启用。\n（系统模板不带原作者的资料调查，启用前请在模板里选一个你自己的资料调查）');
     } catch (e) { alert('带入失败：' + (e && e.message ? e.message : e)); }
   }
 
