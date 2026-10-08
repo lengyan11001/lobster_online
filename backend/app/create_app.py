@@ -72,6 +72,7 @@ from .api.shanjian_digital_human import router as shanjian_digital_human_router
 from .api.multi_clip_mixer import router as multi_clip_mixer_router
 from .api.media_compat import router as media_compat_router
 from .api.douyin_origin import router as douyin_origin_router
+from .api.liepin_origin import router as liepin_origin_router
 try:
     from .api.ecommerce_publish import router as ecommerce_publish_router
 except ModuleNotFoundError as e:
@@ -1108,6 +1109,7 @@ def create_app() -> FastAPI:
     else:
         logger.info("ecommerce_publish router not found; using publish router for ecommerce account management")
     app.include_router(douyin_origin_router, prefix="")
+    app.include_router(liepin_origin_router, prefix="")
     app.include_router(publish_router, prefix="")
     app.include_router(creator_content_router, prefix="")
     app.include_router(account_creator_schedule_router, prefix="")

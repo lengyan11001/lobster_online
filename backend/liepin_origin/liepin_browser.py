@@ -29,6 +29,7 @@ DEAD_URL_PREFIXES = ("about:blank", "chrome-error://", "chrome://")
 DATE_RE = re.compile(r"20\d{2}\.\d{2}-")
 AGE_RE = re.compile(r"^\d{1,2}岁$")
 NAME_RE = re.compile(r"^\S+\*\*$")
+SCHOOL_RE = re.compile(r"大学|学院|学校|职院|职业技术学院")
 
 
 class LiepinError(RuntimeError):
@@ -93,11 +94,14 @@ def parse_card_text(text: str) -> Dict[str, Any]:
     for i, x in enumerate(parts):
         if DATE_RE.search(x):
             company = parts[i - 1] if i >= 1 else ""
-            if re.match(r"^\d{4}\.\d{2}", company):
+            if re.match(r"^\d{4}\.\d{2}", company) or not company:
+                continue
+            if SCHOOL_RE.search(company) or re.search(r"统招", x):   # 学校/学历段不算公司
+                out["school"] = "%s %s" % (company, x)
                 continue
             out["companies"].append({"company": company, "position": x})
     for x in parts:
-        if re.search(r"大学|学院|学校", x) and "统招" in x or re.search(r"(大学|学院).*(本科|硕士|博士|大专)", x):
+        if not out["school"] and SCHOOL_RE.search(x) and ("统招" in x or "非统招" in x):
             out["school"] = x
             break
     return out

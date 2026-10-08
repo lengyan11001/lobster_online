@@ -22,6 +22,11 @@
     cache: 'reload'
   });
 
+  window.registerLobsterView('liepin-recruit', {
+    html: '/static/views/liepin-recruit.html?v=20261008-liepin-skill-v1',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('douyin-leads', {
     html: '/static/views/douyin-leads.html?v=20260611-search-scroll-final',
     cache: 'reload'

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>猎聘招聘</title>
+<style>
+  :root { --line:#e5e7eb; --brand:#1f4e79; --soft:#f6f8fb; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Microsoft YaHei",system-ui,sans-serif; background:#fafbfc; color:#111827; }
+  .wrap { padding:16px 18px 40px; max-width:1280px; }
+  h1 { font-size:18px; margin:0 0 12px; color:var(--brand); }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:14px; }
+  .card h2 { font-size:14px; margin:0 0 10px; color:#374151; font-weight:600; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+  input[type=text], textarea, select { border:1px solid var(--line); border-radius:8px; padding:8px 10px; font-size:13px; font-family:inherit; }
+  input[type=text] { min-width:280px; }
+  textarea { width:100%; min-height:70px; }
+  button { border:0; border-radius:8px; padding:8px 14px; font-size:13px; background:var(--brand); color:#fff; cursor:pointer; }
+  button.ghost { background:#fff; color:var(--brand); border:1px solid var(--brand); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  .tag { display:inline-block; padding:2px 8px; border-radius:999px; background:var(--soft); border:1px solid var(--line); font-size:12px; margin-right:6px; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th,td { border-bottom:1px solid var(--line); padding:7px 8px; text-align:left; vertical-align:top; }
+  th { background:var(--soft); font-weight:600; color:#374151; position:sticky; top:0; }
+  .muted { color:#6b7280; font-size:12px; }
+  pre { background:#0f172a; color:#e2e8f0; padding:10px; border-radius:8px; font-size:12px; max-height:260px; overflow:auto; }
+  .ok { color:#059669; } .bad { color:#dc2626; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>猎聘招聘（本地浏览器驱动）</h1>
+
+  <div class="card">
+    <h2>1. 浏览器与登录</h2>
+    <div class="row">
+      <button id="btn-start">启动浏览器</button>
+      <button id="btn-restart" class="ghost">重启窗口</button>
+      <button id="btn-status" class="ghost">刷新状态</button>
+      <span id="status" class="muted">—</span>
+    </div>
+    <div class="muted">首次使用：点「启动浏览器」，在弹出的窗口里扫码登录猎聘（登录态会保留，后续免登录）。</div>
+  </div>
+
+  <div class="card">
+    <h2>2. 搜索人才</h2>
+    <div class="row">
+      <input type="text" id="q" placeholder="搜索关键词，如：东南亚 销售总监 电表" />
+      <input type="text" id="limit" value="20" style="width:70px" />
+      <button id="btn-search">搜索</button>
+      <button id="btn-export" class="ghost">导出 Excel</button>
+      <span id="searchInfo" class="muted"></span>
+    </div>
+    <div style="max-height:420px; overflow:auto">
+      <table>
+        <thead><tr><th>#</th><th>姓名</th><th>年龄</th><th>年限</th><th>学历</th><th>现居</th><th>期望职位/薪资</th><th>履历</th><th>状态</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="9" class="muted">还没有结果</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3. 沟通（发送消息，会真实触达）</h2>
+    <div class="row">
+      <button id="btn-chatlist" class="ghost">读取会话列表</button>
+      <input type="text" id="target" placeholder="候选人姓名（会话列表中的）" />
+      <input type="text" id="text" placeholder="消息内容" style="min-width:420px" />
+      <label class="muted"><input type="checkbox" id="confirm" /> 我已确认要发送</label>
+      <button id="btn-send">发送</button>
+    </div>
+    <div id="chatList" class="muted"></div>
+  </div>
+
+  <div class="card">
+    <h2>4. 执行日志</h2>
+    <pre id="log">ready</pre>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+function logLine(s) {
+  const el = $('log');
+  el.textContent = '[' + new Date().toLocaleTimeString() + '] ' + s + '\n' + el.textContent;
+}
+async function call(action, params) {
+  const res = await fetch('/api/liepin/action', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({action, params: params || {}})
+  });
+  return await res.json();
+}
+function setStatus(d) {
+  const s = d.browser || d;
+  const login = d.login || {};
+  $('status').innerHTML = '<span class="tag">CDP ' + (s.cdp_alive ? '已连接' : '未启动') + '</span>'
+    + '<span class="tag">' + (login.logged_in ? '已登录' : '未登录/未知') + '</span>'
+    + (login.account ? '<span class="tag">账号 ' + login.account + '</span>' : '');
+}
+$('btn-start').onclick = async () => { logLine('启动浏览器…'); const r = await call('liepin.browser.open', {action:'start'}); setStatus(r); logLine(JSON.stringify(r).slice(0,300)); };
+$('btn-restart').onclick = async () => { logLine('重启窗口…'); const r = await call('liepin.browser.open', {action:'restart'}); setStatus(r); logLine(JSON.stringify(r).slice(0,300)); };
+$('btn-status').onclick = async () => { const r = await call('liepin.browser.open', {action:'status'}); setStatus(r); logLine(JSON.stringify(r).slice(0,300)); };
+
+let lastRows = [];
+$('btn-search').onclick = async () => {
+  const q = $('q').value.trim(); if (!q) return;
+  $('btn-search').disabled = true; $('searchInfo').textContent = '搜索中…（遇到风控会自动重启窗口重试）';
+  try {
+    const r = await call('liepin.candidates.search', {query:q, limit: parseInt($('limit').value||'20',10)});
+    if (!r.ok) { logLine('搜索失败: ' + (r.error||'')); $('searchInfo').innerHTML = '<span class="bad">'+ (r.error||'失败') +'</span>'; return; }
+    lastRows = r.cards || [];
+    $('searchInfo').innerHTML = (r.total||'') + ' · 解析 ' + r.count + ' 人';
+    $('rows').innerHTML = lastRows.map((c,i) => '<tr><td>'+(i+1)+'</td><td>'+c.name+'</td><td>'+(c.age||'')+'</td><td>'+(c.years||'')+'</td><td>'
+      + (c.edu||'') + '</td><td>' + (c.city||'') + '</td><td>' + (c.expect||'') + '</td><td>'
+      + (c.companies||[]).map(x=>x.company+' '+x.position).join('<br>') + '</td><td>'
+      + (c.in_chat ? '<span class="tag">已在沟通</span>' : '') + '</td></tr>').join('') || '<tr><td colspan="9" class="muted">无结果</td></tr>';
+    logLine('搜索「'+q+'」 '+r.count+' 人');
+  } finally { $('btn-search').disabled = false; }
+};
+$('btn-export').onclick = async () => {
+  if (!lastRows.length) return logLine('没有可导出的结果');
+  const r = await call('liepin.report.export', {rows:lastRows, format:'xlsx'});
+  logLine('导出: ' + JSON.stringify(r).slice(0,200));
+};
+$('btn-chatlist').onclick = async () => {
+  const r = await call('liepin.chat.list', {limit:20});
+  $('chatList').innerHTML = r.ok ? (r.conversations||[]).slice(0,10).map(x=>'· '+x).join('<br>') : ('<span class="bad">'+(r.error||'')+'</span>');
+  logLine('会话列表: ' + (r.ok ? (r.conversations||[]).length : r.error));
+};
+$('btn-send').onclick = async () => {
+  const target = $('target').value.trim(), text = $('text').value.trim();
+  if (!target || !text) return logLine('请填写候选人姓名与消息内容');
+  if (!$('confirm').checked) return logLine('请先勾选「我已确认要发送」');
+  const r = await call('liepin.chat.send', {target, text, confirm:true});
+  logLine('发送: ' + JSON.stringify(r).slice(0,300));
+};
+call('liepin.browser.open', {action:'status'}).then(setStatus).catch(()=>{});
+</script>
+</body>
+</html>
