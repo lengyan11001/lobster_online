@@ -150,14 +150,26 @@ class LiepinProtocol:
             out["chat_quota"] = privs.get("b_open_chat")
         except Exception as exc:
             out["privilege_error"] = str(exc)[:120]
-        for key, api, data in (("unread", CHAT_UNREAD_API, {"imUserType": "2", "imApp": "1"}),
-                               ("new_hello", IM_NEW_HELLO_API, {"imUserType": "2", "imApp": "1"})):
+        for key, api, data in (("new_hello", IM_NEW_HELLO_API, {"imUserType": "2", "imApp": "1"}),):
             try:
                 r = self._post(api, data)
-                val = (r.get("data") or {})
-                out[key] = val.get("count") if key == "unread" else val.get("result")
+                out[key] = (r.get("data") or {}).get("result")
             except Exception:
                 out[key] = None
+        # 未读数：官方 unread-count 需要 imId（只有页面知道），这里用会话列表未读求和兜底
+        out["unread"] = None
+        try:
+            r = self._post(CHAT_UNREAD_API, {"imUserType": "2", "imApp": "1"})
+            out["unread"] = (r.get("data") or {}).get("count")
+        except Exception:
+            pass
+        if out["unread"] is None:
+            try:
+                cl = self.chat_list(page=0, page_size=50)
+                out["unread"] = sum(int(x.get("unread") or 0) for x in cl.get("list") or [])
+                out["unread_source"] = "chat_list_sum"
+            except Exception:
+                pass
         return out
 
     def chat_list(self, page: int = 0, page_size: int = 30) -> Dict[str, Any]:
@@ -177,8 +189,10 @@ class LiepinProtocol:
                 "time": it.get("lastMessageTime") or it.get("modifyTime"),
                 "raw": json.dumps(it, ensure_ascii=False)[:800],
             })
-        return {"total": d.get("totalCount"), "page": d.get("curPage"), "page_size": d.get("pageSize"),
-                "has_more": d.get("hasMore"), "count": len(rows), "list": rows}
+        total = d.get("totalCount") or None
+        return {"total": total, "page": d.get("curPage", 0), "page_size": d.get("pageSize") or 0,
+                "has_more": bool(d.get("hasMore")), "count": len(rows), "list": rows,
+                "note": "官方 totalCount 不稳定，翻页请以 has_more / 本页条数为准"}
 
     def applications(self, page: int = 0, page_size: int = 10) -> Dict[str, Any]:
         """求职者投递列表（分页）。"""
