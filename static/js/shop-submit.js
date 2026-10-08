@@ -8,7 +8,8 @@
     mine: [], mineTotal: 0, minePage: 1,
     detail: null,
     submit: null,
-    picker: { origin: 'user_upload', keyword: '', page: 1, size: 24, items: [], total: 0, picked: {}, loading: false }
+    picker: { origin: 'user_upload', keyword: '', page: 1, size: 24, items: [], total: 0, picked: {}, loading: false },
+    pricing: { image: 100, video: 300, audio: 100, default: 100 }
   };
 
   function base() {
@@ -120,6 +121,7 @@
     var host = document.getElementById('ssProducts');
     if (!host) return;
     bindOnce();
+    loadPricing().then(function () { if (state.tab === 'mine') renderMine(); });
     if (!state.products.length) loadProducts(true);
     else renderProducts();
     if (state.tab === 'mine' && !state.mine.length) loadMine(true);
@@ -191,6 +193,22 @@
         loadPicker(true);
       });
     });
+  }
+
+  async function loadPricing() {
+    try {
+      var data = await request('/api/shop/submissions/pricing');
+      if (data && data.credits) state.pricing = data.credits;
+    } catch (e) { /* price fallback */ }
+    return state.pricing;
+  }
+
+  function payoutOf(mediaType) {
+    var kind = String(mediaType || '').toLowerCase();
+    if (kind.indexOf('video') >= 0) return Number(state.pricing.video || 300);
+    if (kind.indexOf('image') >= 0) return Number(state.pricing.image || 100);
+    if (kind.indexOf('audio') >= 0) return Number(state.pricing.audio || 100);
+    return Number(state.pricing.default || 100);
   }
 
   async function loadProducts(reset) {
@@ -316,7 +334,8 @@
         + '<div class="ss-row-sub">\u5546\u54c1\uff1a' + esc(product.title || ('#' + it.product_id)) + (it.merchant && it.merchant.company_name ? ' \u00b7 ' + esc(it.merchant.company_name) : '') + '</div>'
         + '<div class="ss-row-sub">' + esc(fmtTime(it.created_at)) + (it.note ? ' \u00b7 ' + esc(it.note) : '') + '</div>'
         + '</div>'
-        + '<span class="ss-status ss-status-' + esc(it.status) + '">' + (statusMap[it.status] || esc(it.status)) + '</span>'
+        + '<span class="ss-status ss-status-' + esc(it.status) + '">' + (statusMap[it.status] || esc(it.status)) +
+            ' \u00b7 ' + (it.accepted ? '+' : '') + payoutOf(it.media_type) + ' \u79ef\u5206</span>'
         + '<div class="ss-row-actions">'
         + '<button type="button" class="btn btn-ghost btn-sm" data-ss-detail="' + it.product_id + '">\u5546\u54c1\u8be6\u60c5</button>'
         + '<a class="btn btn-outline btn-sm" href="' + esc(it.url) + '" target="_blank" rel="noopener">\u67e5\u770b\u7d20\u6750</a>'
@@ -391,7 +410,8 @@
     state.picker = { origin: 'user_upload', keyword: '', page: 1, size: 24, items: [], total: 0, picked: {}, loading: false };
     document.getElementById('ssSubmitTitle').textContent = '\u6295\u7a3f\u7d20\u6750';
     document.getElementById('ssSubmitMeta').textContent = (product.title || ('\u5546\u54c1 #' + product.id)) +
-      ((product.merchant && product.merchant.company_name) ? ' \u00b7 ' + product.merchant.company_name : '');
+      ((product.merchant && product.merchant.company_name) ? ' \u00b7 ' + product.merchant.company_name : '') +
+      '　采纳后你可得 ' + payoutOf('image') + ' 积分（图片）/ ' + payoutOf('video') + ' 积分（视频）';
     document.getElementById('ssSubmitNote').value = '';
     setMsg('ssSubmitMsg', '');
     document.querySelectorAll('#content-shop-submit [data-ss-origin]').forEach(function (c) {
