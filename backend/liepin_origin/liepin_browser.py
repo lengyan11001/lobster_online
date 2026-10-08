@@ -40,24 +40,52 @@ def _root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def find_chromium(root: Optional[Path] = None) -> Optional[Path]:
-    """定位客户端内置 Chromium。"""
+def find_chrome(root: Optional[Path] = None) -> Optional[Path]:
+    """定位「正常的 Chrome」：注册表 App Paths -> Program Files -> 用户目录 -> PATH -> 内置 Chromium 兜底。
+
+    抖音发布 / 抖音获客用的就是本机正常 Chrome（channel="chrome" + 独立 user_data_dir），
+    猎聘这里保持一致，不再强制使用客户端内置 Chromium。
+    """
     root = Path(root or _root())
     candidates: List[Path] = []
-    base = root / "browser_chromium"
-    if base.is_dir():
-        for child in sorted(base.glob("chromium-*")):
-            candidates.append(child / "chrome-win64" / "chrome.exe")
-            candidates.append(child / "chrome-win" / "chrome.exe")
-        candidates.append(base / "chrome.exe")
+    if os.name == "nt":
+        try:
+            import winreg  # type: ignore
+
+            for hive, sub in ((winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
+                              (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
+                              (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe")):
+                try:
+                    with winreg.OpenKey(hive, sub) as key:
+                        value, _ = winreg.QueryValueEx(key, "")
+                        if value:
+                            candidates.append(Path(str(value).strip('"').strip()))
+                except OSError:
+                    continue
+        except Exception:
+            pass
+    for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"), os.environ.get("LOCALAPPDATA")):
+        if base:
+            candidates.append(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")
     for exe in ("chrome.exe", "msedge.exe"):
         found = shutil.which(exe)
         if found:
             candidates.append(Path(found))
+    bundled = root / "browser_chromium"
+    if bundled.is_dir():
+        for child in sorted(bundled.glob("chromium-*")):
+            candidates.append(child / "chrome-win64" / "chrome.exe")
+            candidates.append(child / "chrome-win" / "chrome.exe")
+        candidates.append(bundled / "chrome.exe")
     for c in candidates:
         if c.is_file():
             return c
     return None
+
+
+def find_chromium(root: Optional[Path] = None) -> Optional[Path]:
+    """兼容旧调用：等价于 find_chrome()。"""
+    return find_chrome(root)
 
 
 def parse_card_text(text: str) -> Dict[str, Any]:
@@ -113,12 +141,19 @@ class LiepinSession:
     def __init__(self, root: Optional[Path] = None, port: int = CDP_PORT):
         self.root = Path(root or _root())
         self.port = port
-        self.chrome = find_chromium(self.root)
+        self.chrome = find_chrome(self.root)
         self._pw = None
         self._browser = None
         self._page = None
 
     # ---------- 台账 ----------
+    @property
+    def profile_dir(self) -> Path:
+        """独立用户资料目录：猎聘登录态存在这里，跟用户自己的浏览器互不干扰。"""
+        d = self.runtime_dir / "chrome-profile"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     @property
     def runtime_dir(self) -> Path:
         d = self.root / "_lobster_runtime" / "liepin"
@@ -183,8 +218,10 @@ class LiepinSession:
     def start_browser(self, url: str = SEARCH_URL, settle: float = 26.0) -> None:
         if not self.chrome:
             raise LiepinError("找不到客户端内置 Chromium（browser_chromium）")
+        profile = self.profile_dir
         args = ["--remote-debugging-port=%d" % self.port, "--remote-allow-origins=*",
-                "--no-first-run", "--no-default-browser-check", "--hide-crash-restore-bubble"]
+                "--no-first-run", "--no-default-browser-check", "--hide-crash-restore-bubble",
+                "--user-data-dir=%s" % profile]
         subprocess.Popen([str(self.chrome), *args, url], close_fds=True)
         time.sleep(settle)
 
@@ -246,10 +283,24 @@ class LiepinSession:
 
     # ---------- 动作 ----------
     def login_state(self) -> Dict[str, Any]:
-        pg = self.page(need_search_box=True, retries=1)
-        body = pg.evaluate("() => document.body.innerText.slice(0, 400)")
-        logged = "登录" not in body[:120] or "搜索人才" in body
-        return {"logged_in": bool(logged), "url": pg.url, "account": _guess_account(body)}
+        """只读检查登录态：**不重启窗口**（避免把用户正在扫码登录的窗口关掉）。"""
+        try:
+            if not self.cdp_alive():
+                return {"logged_in": False, "cdp_alive": False,
+                        "note": "浏览器未启动，先调用 liepin.browser.open (action=start)"}
+            self._ensure_connected()
+            pg = self._liepin_page()
+            if pg is None:
+                return {"logged_in": False, "cdp_alive": True,
+                        "note": "没有猎聘页面（可能刚启动还在加载，稍后重试）"}
+            body = pg.evaluate("() => document.body.innerText.slice(0, 600)")
+            url = pg.url or ""
+            need_login = ("登录" in body and "搜索人才" not in body) or "login" in url.lower()
+            return {"logged_in": not need_login, "url": url, "cdp_alive": True,
+                    "account": _guess_account(body), "need_scan": bool(need_login),
+                    "hint": body.replace("\n", " | ")[:160]}
+        except Exception as exc:
+            return {"logged_in": False, "error": str(exc)[:180]}
 
     def search(self, query: str, limit: int = 20, retries: int = 3) -> Dict[str, Any]:
         """搜索人才并返回结构化卡片。每次搜索都确保页面是"新鲜"的（猎聘风控）。"""
