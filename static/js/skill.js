@@ -1402,6 +1402,38 @@ window._openJuheWechatView = function() {
   try { location.hash = 'juhe-wechat'; } catch (e1) {}
 };
 
+window._openLiepinRecruitView = function() {
+  if (typeof window.registerLobsterView === 'function') {
+    window.registerLobsterView('liepin-recruit', {
+      html: '/static/views/liepin-recruit.html?v=20261008-liepin-skill-v1',
+      cache: 'reload'
+    });
+  }
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('liepin-recruit', document.querySelector('.nav-left-item[data-view="skill-store"]'))
+      .catch(function(err) {
+        console.error('Failed to open liepin-recruit', err);
+        alert('猎聘招聘页面加载失败，请刷新页面后重试。');
+      });
+    return;
+  }
+  _switchToHiddenView('liepin-recruit');
+  try { location.hash = 'liepin-recruit'; } catch (e1) {}
+};
+
+window._openWechatArticleWorkbenchView = function() {
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('wechat-article', document.querySelector('.nav-left-item[data-view="skill-store"]'))
+      .catch(function(err) {
+        console.error('Failed to open wechat-article', err);
+        alert('公众号文章页面加载失败，请刷新页面后重试。');
+      });
+    return;
+  }
+  _switchToHiddenView('wechat-article');
+  try { location.hash = 'wechat-article'; } catch (e1) {}
+};
+
 window._openLinkedinMiningView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('linkedin-mining', {
@@ -2105,6 +2137,22 @@ function _renderJuheWechatCard(pkg, showDebug) {
     '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '使用后台已绑定的微信实例执行检测、消息发送和调用记录查看。')) + cap + '</div>' +
     '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm juhe-wechat-entry-btn">进入工作台</button></div>' +
+  '</div>';
+}
+
+function _renderLiepinRecruitCard(pkg, showDebug) {
+  pkg = pkg || {};
+  var debugBadge = showDebug
+    ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
+    : '';
+  var tags = _skillStoreTagHtml(pkg.tags || ['猎聘', 'HR', '候选人']);
+  var cap = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
+  return '<div class="skill-store-card liepin-recruit-card" data-skill-package-id="' + escapeAttr(pkg.id || 'liepin_recruit_skill') + '" style="cursor:pointer;border-color:rgba(37,99,235,0.34);background:linear-gradient(135deg,rgba(37,99,235,0.08),rgba(14,165,233,0.05));">' +
+    '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可用</span></div>' +
+    '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || '猎聘招聘')) + '</div>' +
+    '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '')) + cap + '</div>' +
+    '<div class="card-tags">' + tags + '</div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm liepin-recruit-entry-btn">进入工作台</button></div>' +
   '</div>';
 }
 
@@ -3292,6 +3340,7 @@ function loadSkillStore() {
       var redditLeadsPkg = pkgById('reddit_leads');
       var xLeadsPkg = pkgById('x_leads');
       var tiktokLeadsPkg = pkgById('tiktok_leads');
+      var liepinRecruitPkg = pkgById('liepin_recruit_skill');
       var juheWechatPkg = pkgById('juhe_wechat_skill');
       var wechatTranscriptPkg = pkgById('wechat_channels_transcript_skill');
       var ai3dPkg = pkgById('ai_3d_model_skill');
@@ -3328,6 +3377,7 @@ function loadSkillStore() {
         if (globalLeadsPkg) html += _renderGlobalLeadsCard(globalLeadsPkg, !!(isSkillAdmin && globalLeadsPkg.store_visibility === 'debug'));
         if (alibabaInquiriesPkg) html += _renderAlibabaInquiriesCard(alibabaInquiriesPkg, !!(isSkillAdmin && alibabaInquiriesPkg.store_visibility === 'debug'));
         if (juheWechatPkg) html += _renderJuheWechatCard(juheWechatPkg, !!(isSkillAdmin && juheWechatPkg.store_visibility === 'debug'));
+        if (liepinRecruitPkg) html += _renderLiepinRecruitCard(liepinRecruitPkg, !!(isSkillAdmin && liepinRecruitPkg.store_visibility === 'debug'));
         if (wechatTranscriptPkg) html += _renderWechatChannelsTranscriptCard(wechatTranscriptPkg, !!(isSkillAdmin && wechatTranscriptPkg.store_visibility === 'debug'));
         if (ai3dPkg) html += _renderAi3dModelCard(ai3dPkg, !!(isSkillAdmin && ai3dPkg.store_visibility === 'debug'));
         if (browserUsePkg) {
@@ -3453,7 +3503,7 @@ function loadSkillStore() {
             '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || '\u516c\u4f17\u53f7\u6587\u7ae0')) + '</div>' +
             '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '')) + waCap + '</div>' +
             '<div class="card-tags">' + waTags + '</div>' +
-            '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wechat-article-entry-btn">\u53bb\u5bf9\u8bdd\u751f\u6210</button></div></div>';
+            '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wechat-article-entry-btn">\u8fdb\u5165\u5de5\u4f5c\u53f0</button></div></div>';
         }
         var statusBadge = '';
         var actionBtn = '';
@@ -3498,6 +3548,7 @@ function loadSkillStore() {
         _bindGlobalLeadsCardEntry();
         _bindAlibabaInquiriesCardEntry();
         _bindJuheWechatCardEntry();
+        _bindLiepinRecruitCardEntry();
         _bindWechatChannelsTranscriptCardEntry();
         _bindAi3dModelCardEntry();
         _bindPptStudioCardEntry();
@@ -3709,13 +3760,13 @@ function _bindWechatArticleCardEntry() {
   document.querySelectorAll('.wechat-article-card').forEach(function(card) {
     card.addEventListener('click', function(e) {
       if (e.target.closest('.card-actions')) return;
-      _openWechatArticleChatFlow();
+      if (typeof window._openWechatArticleWorkbenchView === 'function') window._openWechatArticleWorkbenchView();
     });
   });
   document.querySelectorAll('.wechat-article-entry-btn').forEach(function(btn) {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
-      _openWechatArticleChatFlow();
+      if (typeof window._openWechatArticleWorkbenchView === 'function') window._openWechatArticleWorkbenchView();
     });
   });
 }
@@ -4048,6 +4099,26 @@ function _bindJuheWechatCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openJuheWechatView === 'function') window._openJuheWechatView();
+    });
+  });
+}
+
+function _bindLiepinRecruitCardEntry() {
+  document.querySelectorAll('.liepin-recruit-card, [data-skill-package-id="liepin_recruit_skill"]').forEach(function(card) {
+    if (card.dataset.liepinRecruitEntryBound === '1') return;
+    card.dataset.liepinRecruitEntryBound = '1';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openLiepinRecruitView === 'function') window._openLiepinRecruitView();
+    });
+  });
+  document.querySelectorAll('.liepin-recruit-entry-btn').forEach(function(btn) {
+    if (btn.dataset.liepinRecruitEntryBound === '1') return;
+    btn.dataset.liepinRecruitEntryBound = '1';
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openLiepinRecruitView === 'function') window._openLiepinRecruitView();
     });
   });
 }
