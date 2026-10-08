@@ -1,0 +1,75 @@
+<section id="content-shop-submit" class="content-block app-shop-submit">
+  <div class="ss-hero">
+    <div>
+      <span class="ss-kicker">选品广场</span>
+      <h2>投稿</h2>
+      <p>给商家的商品投素材：从素材库或内容记录里挑一条或多条投过去；商家看中后会放进商品素材里，买家从你复制的邀请链接下单也算你的推广。</p>
+    </div>
+    <div class="ss-hero-actions">
+      <button type="button" class="btn btn-outline btn-sm" id="ssOpenPlaza">打开选品广场</button>
+      <button type="button" class="btn btn-outline btn-sm" id="ssRefresh">刷新</button>
+    </div>
+  </div>
+
+  <div class="ss-tabs" role="tablist">
+    <button type="button" class="ss-tab active" data-ss-tab="products" role="tab">商品</button>
+    <button type="button" class="ss-tab" data-ss-tab="mine" role="tab">我的投稿</button>
+  </div>
+
+  <div class="ss-bar" id="ssProductsBar">
+    <input id="ssKeyword" class="ss-input" placeholder="搜商品名 / 关键词，例如：手机壳">
+    <select id="ssSort" class="ss-input ss-select">
+      <option value="heat">按热度</option>
+      <option value="new">按最新上架</option>
+    </select>
+    <button type="button" class="btn btn-primary btn-sm" id="ssSearch">筛选</button>
+    <span class="ss-msg" id="ssMsg"></span>
+  </div>
+  <div class="ss-bar" id="ssMineBar" hidden>
+    <span class="ss-hint" id="ssMineHint">我投出去的素材</span>
+    <span class="ss-msg" id="ssMineMsg"></span>
+  </div>
+
+  <div id="ssProducts" class="ss-grid"><div class="ss-empty">加载中…</div></div>
+  <div id="ssMine" class="ss-list" hidden></div>
+  <div class="ss-pager" id="ssPager"></div>
+</section>
+
+<div class="modal-mask" id="ssDetailModal" onclick="if(event.target===this)window.ShopSubmit.closeDetail()">
+  <div class="modal-card ss-modal-card">
+    <h3 id="ssDetailTitle">投稿详情</h3>
+    <div class="modal-sub" id="ssDetailMeta"></div>
+    <div id="ssDetailBody"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-outline btn-sm" id="ssDetailInvite">复制邀请链接</button>
+      <button type="button" class="btn btn-primary btn-sm" id="ssDetailSubmit">投稿素材</button>
+      <button type="button" class="btn btn-outline btn-sm" onclick="window.ShopSubmit.closeDetail()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-mask" id="ssSubmitModal" onclick="if(event.target===this)window.ShopSubmit.closeSubmit()">
+  <div class="modal-card ss-modal-card">
+    <h3 id="ssSubmitTitle">投稿素材</h3>
+    <div class="modal-sub" id="ssSubmitMeta"></div>
+    <div class="ss-picker-bar">
+      <div class="ss-origin" role="tablist">
+        <button type="button" class="ss-chip active" data-ss-origin="user_upload">素材库</button>
+        <button type="button" class="ss-chip" data-ss-origin="generated">内容记录</button>
+      </div>
+      <input id="ssAssetKeyword" class="ss-input" placeholder="搜素材名 / 提示词">
+      <button type="button" class="btn btn-outline btn-sm" id="ssAssetSearch">搜索</button>
+      <span class="ss-picked-count" id="ssPickedCount">已选 0</span>
+    </div>
+    <div id="ssPicker" class="ss-picker"><div class="ss-empty">加载中…</div></div>
+    <div class="ss-pager" id="ssPickerPager"></div>
+    <label class="ss-note-row"><span>给商家的话（可选）</span>
+      <input id="ssSubmitNote" class="ss-input" maxlength="200" placeholder="例如：实拍图，可商用">
+    </label>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary btn-sm" id="ssSubmitGo">投递</button>
+      <button type="button" class="btn btn-outline btn-sm" onclick="window.ShopSubmit.closeSubmit()">关闭</button>
+    </div>
+    <div class="ss-msg" id="ssSubmitMsg"></div>
+  </div>
+</div>

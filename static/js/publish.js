@@ -2414,6 +2414,10 @@ function _assetContentActionDefinitions(asset) {
     (mediaType === 'image' || mediaType === 'video' || kind === 'ppt') &&
     (_assetPublishExistingAssetId(asset) || _assetPublishUrlCandidate(asset).url)
   ) add('publish', '发布');
+  if (
+    (mediaType === 'image' || mediaType === 'video') &&
+    (_assetPublishExistingAssetId(asset) || _assetPublishUrlCandidate(asset).url)
+  ) add('submit_material', '投稿到商家');
   return actions;
 }
 
@@ -2803,6 +2807,35 @@ function _assetPublishExistingAssetId(asset) {
   return '';
 }
 
+function _assetShopSubmitPayload(asset) {
+  asset = asset && typeof asset === 'object' ? asset : {};
+  var candidate = _assetPublishUrlCandidate(asset) || {};
+  var images = _contentRecordImageUrls(asset);
+  return {
+    asset_id: String(asset.asset_id || _assetPublishExistingAssetId(asset) || ''),
+    url: String(candidate.url || ''),
+    media_type: String(candidate.media_type || asset.media_type || ''),
+    title: String(asset.title || asset.filename || ''),
+    filename: String(asset.filename || ''),
+    cover_url: images.length ? images[0] : String(asset.cover_url || ''),
+    preview_url: String(asset.preview_url || asset.open_url || ''),
+    source_url: String(asset.source_url || '')
+  };
+}
+
+function _assetOpenShopSubmit(asset) {
+  var payload = _assetShopSubmitPayload(asset);
+  return _assetOpenWorkspace('shop-submit').then(function() {
+    return _assetWaitForElement('ssProducts');
+  }).then(function() {
+    if (window.ShopSubmit && typeof window.ShopSubmit.openForAssets === 'function') {
+      _assetMsgShow('素材已带入，选一个商品点「投稿」即可投递。', false);
+      return window.ShopSubmit.openForAssets([payload]);
+    }
+    throw new Error('投稿功能加载失败，请稍后重试');
+  });
+}
+
 function _assetPublishResolveTarget(asset) {
   var existingId = _assetPublishExistingAssetId(asset);
   if (existingId) return Promise.resolve({ asset_id: existingId, saved_from_url: false });
@@ -2986,6 +3019,7 @@ function _performAssetContentAction(asset, action) {
     if (action === 'generate_avatar') return _assetOpenAvatarClone(detail);
     if (action === 'publish_moments') return _assetOpenMomentsPublish(detail);
     if (action === 'publish') return _assetOpenPublish(detail);
+    if (action === 'submit_material') return _assetOpenShopSubmit(detail);
     throw new Error('当前操作暂不支持');
   });
 }

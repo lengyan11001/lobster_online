@@ -190,6 +190,11 @@ window.registerLobsterView('alibaba-inquiries', {
     scripts: '/static/js/views/agent.js?v=20260830-agent-no-poll-v1'
   });
 
+  window.registerLobsterView('shop-submit', {
+    html: '/static/views/shop-submit.html?v=20261008-shop-submit-v1',
+    scripts: '/static/js/shop-submit.js?v=20261008-shop-submit-v1',
+    init: 'initShopSubmitView'
+  });
   window.registerLobsterView('tutorial', {
     html: '/static/views/tutorial.html?v=20261008-system-templates-modal2',
     scripts: '/static/js/tutorial.js?v=20261008-system-templates-modal2',
