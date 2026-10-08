@@ -35,10 +35,13 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like
 CLIENT_ID = "40156"
 
 # 城市/地区代码（接口里 dqs 用代码；已知常用值，未知的直接传代码）
+# 实测过的城市代码（2026-10-08 用空关键词逐个验证返回城市）：
+#   350150 -> 印度尼西亚 ; 350070 -> 越南
+# 注意：350=日本/韩国、050090=深圳、050040=东莞，早期猜测是错的，已删除。
+# 未收录的城市请直接传城市代码（纯数字），不要再猜。
 DQ_CODES = {
     "印度尼西亚": "350150", "印尼": "350150", "雅加达": "350150",
-    "越南": "350", "马来西亚": "350070", "新加坡": "050090", "菲律宾": "050040",
-    "泰国": "350150", "东南亚": "350",
+    "越南": "350070",
 }
 PROTO_FILTER_KEYS = {"dqs", "want_dqs", "jobtitles", "company", "workyears", "edu_levels",
                      "language", "age", "sex", "active_status", "manage_exp", "title_keys"}
@@ -224,17 +227,29 @@ class LiepinProtocol:
                language: str = "", age: str = "", sex: str = "", active_status: str = "",
                manage_exp: str = "", title_keys: str = "") -> Dict[str, Any]:
         """一页人才搜索（20 条左右）。keys 为关键词，如「东南亚 电表」。"""
-        if dqs in DQ_CODES:
-            dqs = DQ_CODES[dqs]
-        if want_dqs in DQ_CODES:
-            want_dqs = DQ_CODES[want_dqs]
+        def _city(value: str, label: str) -> str:
+            v = (value or "").strip()
+            if not v:
+                return ""
+            if v in DQ_CODES:
+                return DQ_CODES[v]
+            if v.isdigit():
+                return v
+            raise LiepinProtocolError(
+                "未收录的城市「%s」（%s）：已收录 %s；其他城市请直接传城市代码（纯数字）"
+                % (v, label, "、".join(sorted(DQ_CODES))))
+
+        dqs = _city(dqs, "目前城市")
+        want_dqs = _city(want_dqs, "期望城市")
         cond = dict(DEFAULT_CONDITION)
-        cond.update({
+        # 只覆盖非空过滤条件；空字符串一律不传，避免把默认条件冲掉导致 0 结果
+        overrides = {
             "keys": keys, "curPage": int(page), "dqs": dqs, "wantDqs": want_dqs, "jobtitles": jobtitles,
             "companyKeys": company, "workyears": workyears, "eduLevels": edu_levels or [],
             "language_skills": language, "age": age, "sex": sex, "activeStatus": active_status,
             "manageExp": manage_exp, "titleKeys": title_keys,
-        })
+        }
+        cond.update({k: v for k, v in overrides.items() if v not in ("", None, [], {})})
         log_form = json.dumps({"skId": "", "fkId": "", "ckId": "", "searchScene": "button" if page == 0 else "page"})
         payload = self._post(SEARCH_API, {"cvSearchConditionInputVo": json.dumps(cond, ensure_ascii=False),
                                           "logForm": log_form})

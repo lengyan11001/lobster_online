@@ -92,9 +92,13 @@ def run(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                         one = proto.search(query, page=page_no, **kw)
                         cards = _filter_cards([to_card(c) for c in one.get("list") or []], filters)
                         total, has_more = one.get("total"), bool(one.get("list"))
+                        sess.record("searches", {"query": query, "page": page_no, "filters": filters,
+                                                 "total": total, "count": len(cards), "mode": "protocol"})
                         return {"ok": True, "mode": "protocol", "query": query, "total": total,
                                 "page": page_no, "page_size": len(cards), "has_more": has_more,
-                                "count": len(cards), "cards": cards[:limit]}
+                                "count": len(cards), "raw_count": len(one.get("list") or []),
+                                "filtered_out": max(0, len(one.get("list") or []) - len(cards)),
+                                "cards": cards[:limit]}
                     res = proto.search_cards(query, pages=pages, **kw)
                     cards = _filter_cards(res["cards"], filters)
                     return {"ok": True, "mode": "protocol", "query": query, "total": res.get("total"),

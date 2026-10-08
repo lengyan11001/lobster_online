@@ -72,9 +72,10 @@
   <div class="panel" id="panel-search">
     <div class="card">
       <div class="row">
-        <input type="text" id="q" placeholder="关键词，如：东南亚 销售总监 电表" />
+        <input type="text" id="q" placeholder="输入关键词，如：区域 销售总监" />
         <button id="btn-search">搜索</button>
         <button id="btn-filter" class="ghost">高级筛选</button>
+        <button id="btn-filter-clear" class="ghost">清除筛选</button>
         <button id="btn-export" class="ghost">导出 Excel</button>
         <span id="s-info" class="muted"></span>
       </div>
@@ -168,14 +169,14 @@
 <!-- 高级筛选弹窗 -->
 <div class="modal" id="md-filter"><div class="box">
   <h3>高级筛选</h3>
-  <div class="row"><label>目前城市</label><input type="text" id="f-dqs" placeholder="印度尼西亚 / 越南 / 泰国" />
-    <label>期望城市</label><input type="text" id="f-wantdqs" placeholder="可选" /></div>
-  <div class="row" style="margin-top:8px"><label>职位关键词</label><input type="text" id="f-jobtitles" placeholder="销售总监" />
-    <label>公司关键词</label><input type="text" id="f-company" placeholder="海兴 / 威胜 / 正泰" /></div>
-  <div class="row" style="margin-top:8px"><label>年限</label><input type="text" id="f-workyears" placeholder="8,99" style="width:110px" />
-    <label>语言</label><input type="text" id="f-language" placeholder="英语 / 印尼语" />
+  <div class="row"><label>目前城市</label><input type="text" id="f-dqs" placeholder="输入城市或地区名称（可留空）" />
+    <label>期望城市</label><input type="text" id="f-wantdqs" placeholder="可留空" /></div>
+  <div class="row" style="margin-top:8px"><label>职位关键词</label><input type="text" id="f-jobtitles" placeholder="如：销售总监、区域经理（可留空）" />
+    <label>公司关键词</label><input type="text" id="f-company" placeholder="公司名称关键词（可留空）" /></div>
+  <div class="row" style="margin-top:8px"><label>年限</label><input type="text" id="f-workyears" placeholder="最小,最大，如 8,99" style="width:150px" />
+    <label>语言</label><input type="text" id="f-language" placeholder="语言要求（可留空）" />
     <label>性别</label><select id="f-sex"><option value="">不限</option><option>男</option><option>女</option></select></div>
-  <div class="row" style="margin-top:8px"><label>结果必须包含</label><input type="text" id="f-must" placeholder="印尼,销售总监（逗号分隔）" style="min-width:320px" /></div>
+  <div class="row" style="margin-top:8px"><label>结果必须包含</label><input type="text" id="f-must" placeholder="多个关键词用逗号分隔（可留空）" style="min-width:320px" /></div>
   <div class="actions"><button class="ghost" data-close>取消</button><button id="f-apply">应用筛选</button><button class="ghost" id="f-clear">清空</button></div>
 </div></div>
 
@@ -259,9 +260,9 @@ async function doSearch(page) {
   $('s-info').textContent = '搜索中…';
   $('btn-search').disabled = true;
   try {
-    let cards = [], total = null, mode = '', lastCount = uiPages * perProtocolPage;
+    let cards = [], total = null, mode = '', lastCount = uiPages * perProtocolPage, r = null;
     for (let i = 0; i < uiPages; i++) {
-      const r = await api('/api/liepin/candidates/search',
+      r = await api('/api/liepin/candidates/search',
         { query: q, page: startProto + i, mode: 'protocol', filters: state.filters });
       if (!r.ok) { $('s-info').innerHTML = '<span class="bad">' + esc(r.error || '失败') + '</span>'; return; }
       if (total === null) { total = r.total; mode = r.mode; }
@@ -272,7 +273,16 @@ async function doSearch(page) {
     }
     state.cards = cards;
     state.hasMore = lastCount >= perProtocolPage;
-    $('s-info').innerHTML = (total || '') + ' · 本页 ' + cards.length + ' 人（' + mode + '）';
+    let filtered = Math.max(0, (r.raw_count || cards.length) - cards.length);
+    let msg = (total || '') + ' · 本页 ' + cards.length + ' 人（' + mode + '）';
+    if (cards.length === 0) {
+      msg += ' ⚠️ 没有结果';
+      if (total) msg += '（总数 ' + total + '，但被筛选条件过滤掉了，点「清除筛选」试试）';
+      else msg += '（换个关键词，或去掉筛选条件再试）';
+    } else if (filtered > 0) {
+      msg += '（另有 ' + filtered + ' 人被筛选条件过滤）';
+    }
+    $('s-info').innerHTML = msg;
     $('s-next').disabled = !state.hasMore;
     renderSearch();
   } finally { $('btn-search').disabled = false; }
@@ -292,6 +302,13 @@ $('f-apply').onclick = () => {
   closeModal('md-filter'); doSearch(1);
 };
 $('f-clear').onclick = () => { state.filters = {}; $('s-filtered').textContent = ''; closeModal('md-filter'); };
+$('btn-filter-clear').onclick = () => {
+  state.filters = {};
+  $('s-filtered').textContent = '';
+  ['f-dqs','f-wantdqs','f-jobtitles','f-company','f-workyears','f-language','f-must'].forEach(id => { if ($(id)) $(id).value = ''; });
+  log('已清除筛选条件');
+  doSearch(1);
+};
 $('btn-export').onclick = async () => {
   if (!state.cards.length) return log('没有可导出的结果');
   const r = await api('/api/liepin/report/export', { rows: state.cards, format: 'xlsx' });
