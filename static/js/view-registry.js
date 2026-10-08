@@ -192,7 +192,7 @@ window.registerLobsterView('alibaba-inquiries', {
 
   window.registerLobsterView('tutorial', {
     html: '/static/views/tutorial.html?v=20261008-system-templates',
-    scripts: '/static/js/tutorial.js?v=20261008-system-templates',
+    scripts: '/static/js/tutorial.js?v=20261008-system-templates-files',
     init: 'initTutorialView'
   });
 
