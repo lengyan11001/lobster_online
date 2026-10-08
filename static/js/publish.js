@@ -2278,10 +2278,23 @@ function _normalizeSharedContentRecord(item) {
   var imageAssetIds = imageRefs.map(function(ref) { return ref.image_asset_id; }).filter(Boolean);
   var coverUrl = String(imageUrls[0] || '').trim();
   var sourceUrl = String(item.file_url || item.source_url || coverUrl || '').trim();
+  // 2026-10-08：内容记录的 kind/文件后缀决定 media_type。
+  // 以前一律写 document，导致画布生成的视频在「内容记录」里没有封面、点开预览也不出播放器。
+  var recordKind = String(item.kind || '').trim().toLowerCase();
+  var mediaType = 'document';
+  if (recordKind === 'video') mediaType = 'video';
+  else if (recordKind === 'audio') mediaType = 'audio';
+  else if (recordKind === 'image') mediaType = 'image';
+  if (mediaType === 'document') {
+    var probeUrl = String(item.file_url || item.source_url || '').split('?')[0].toLowerCase();
+    if (/\.(mp4|mov|webm|m4v)$/.test(probeUrl)) mediaType = 'video';
+    else if (/\.(mp3|wav|m4a|aac)$/.test(probeUrl)) mediaType = 'audio';
+    else if (/\.(png|jpe?g|webp|gif)$/.test(probeUrl)) mediaType = 'image';
+  }
   return Object.assign({}, item, {
     asset_id: String(item.asset_id || item.record_id || ('content:' + (item.source || '') + ':' + (item.source_id || ''))),
     asset_origin: 'generated',
-    media_type: 'document',
+    media_type: mediaType,
     filename: String(item.filename || item.title || _contentRecordDisplayLabel(item)),
     source_url: sourceUrl,
     cover_url: coverUrl,
@@ -3110,6 +3123,14 @@ function _renderAssetPreviewStage(asset) {
         }).join('') + '</div>'
       : '';
     var fileUrl = String(asset.file_url || '').trim();
+    if (fileUrl && String(asset.media_type || '') === 'video') {
+      stage.innerHTML = '<video src="' + escapeAttr(fileUrl) + '" controls autoplay playsinline preload="metadata" style="max-width:100%;max-height:68vh;border-radius:12px;background:#000;box-shadow:0 20px 60px rgba(0,0,0,0.28);"></video>';
+      return;
+    }
+    if (fileUrl && String(asset.media_type || '') === 'audio') {
+      stage.innerHTML = '<audio src="' + escapeAttr(fileUrl) + '" controls autoplay style="width:min(560px,90%);"></audio>';
+      return;
+    }
     var body = content || summary || '当前记录暂无正文。';
     stage.innerHTML = '<article style="width:100%;max-width:780px;align-self:flex-start;padding:0.35rem;color:var(--text);">' +
       '<div style="display:flex;align-items:center;gap:0.45rem;margin-bottom:0.75rem;"><span class="asset-card-badge" style="background:#64748b;">' + escapeHtml(_contentRecordDisplayLabel(asset)) + '</span><strong style="font-size:1rem;">' + escapeHtml(asset.title || _contentRecordDisplayLabel(asset)) + '</strong></div>' +
