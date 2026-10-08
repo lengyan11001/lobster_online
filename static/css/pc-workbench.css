@@ -3504,3 +3504,12 @@ html[data-brand="hikong"] .page:has(#dashboard.visible) .dashboard-main {
 .app-tutorial-template-files b { color: #0f172a; }
 .app-tutorial-template-file { display: inline-block; margin: 4px 8px 0 0; padding: 2px 8px; border: 1px solid rgba(148,163,184,.35); border-radius: 999px; }
 .app-tutorial-template-file a { color: #2563eb; text-decoration: underline; margin-left: 4px; }
+
+.tutorial-st-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border:1px solid rgba(148,163,184,.35);border-radius:10px;background:#fff;margin-bottom:8px}
+.tutorial-st-row-main{display:flex;flex-direction:column;gap:2px;min-width:0}
+.tutorial-st-row-actions{display:inline-flex;gap:8px;flex:none}
+.tutorial-st-block{margin-bottom:12px}
+.tutorial-st-block b{display:block;margin-bottom:4px;color:#0f172a;font-size:13px}
+.tutorial-st-block pre{white-space:pre-wrap;word-break:break-word;background:#f8fafc;border-radius:8px;padding:10px;font-size:12.5px;line-height:1.6;margin:0;max-height:220px;overflow:auto}
+.tutorial-st-files{display:flex;flex-direction:column;gap:6px}
+.tutorial-st-file{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12.5px;border:1px solid rgba(148,163,184,.3);border-radius:8px;padding:6px 10px}

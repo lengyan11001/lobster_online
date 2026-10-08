@@ -2876,37 +2876,13 @@
   function useTemplate(id, btn) {
     var row = (state.templates || []).find(function(item) { return String(item.id || '') === String(id || ''); });
     if (row && row.source === 'agent') {
-      state.editingTemplateId = '';
-      state.selectedKeywords = {};
-      state.selectedCompetitors = {};
-      state.selectedMemories = {};
-      state.personalSelectedDigitalHumanTemplate = normalizePersonalDigitalHumanTemplate((row.meta || {}).digital_human_template);
-      state.personalDigitalHumanResources = clonePersonalDigitalHumanResources((row.meta || {}).digital_human_resources);
-      state.personalDigitalHumanTemplateExplicitlyCleared = false;
-      state.personalDigitalHumanAssetGroups = normalizePersonalDigitalHumanAssetGroups((row.meta || {}).digital_human_asset_groups);
-      renderPersonalDigitalHumanAssetGroups();
-      (row.keyword_ids || []).forEach(function(value) { if (value) state.selectedKeywords[String(value)] = true; });
-      (row.competitor_ids || []).forEach(function(value) { if (value) state.selectedCompetitors[String(value)] = true; });
-      (row.memory_doc_ids || []).forEach(function(value) { if (value) state.selectedMemories[String(value)] = true; });
-      (Array.isArray(row.keywords) ? row.keywords : []).forEach(function(resource) {
-        var resourceId = String(resource && resource.id || '');
-        if (resourceId && !state.keywords.some(function(item) { return String(item && item.id || '') === resourceId; })) state.keywords.push(resource);
-      });
-      (Array.isArray(row.competitors) ? row.competitors : []).forEach(function(resource) {
-        var resourceId = String(resource && resource.id || '');
-        if (resourceId && !state.competitors.some(function(item) { return String(item && item.id || '') === resourceId; })) state.competitors.push(resource);
-      });
-      (Array.isArray(row.memory_docs) ? row.memory_docs : []).forEach(function(resource) {
-        var resourceId = memoryId(resource);
-        if (resourceId && !state.memories.some(function(item) { return memoryId(item) === resourceId; })) state.memories.push(resource);
-      });
-      state.defaultItem = Object.assign({}, state.defaultItem || {}, { meta: Object.assign({}, (state.defaultItem && state.defaultItem.meta) || {}, { current_template_id: row.id }) });
-      if ($('psTemplateName')) $('psTemplateName').value = templateName(row);
-      setPersonalTemplateLanguage(templateLanguageFromParts(row.requirements, row.meta, row.language || row.target_language || state.personalTemplateLanguage));
-      renderAllLists();
-      setMsg('已填充代理商模板内容，请修改名称后保存为个人模板。');
+      // 2026-10-08：套用代理商/系统模板时只在「我的模板」里新增一条记录，
+      // 不接管当前正在使用的模板；用户想启用时再点「设为当前」。
+      if (!window.confirm('把模板「' + templateName(row) + '」带入我的模板？\n（会新增一条模板记录，不会覆盖你当前使用的模板）')) return;
+      copyTemplate(id, btn, { keepCurrent: true });
       return;
     }
+
     if (!row) {
       setMsg('模板不存在。', true);
       return;
@@ -2948,7 +2924,8 @@
     });
   }
 
-  function copyTemplate(id, btn) {
+  function copyTemplate(id, btn, opts) {
+    opts = opts || {};
     var row = (state.templates || []).find(function(item) { return String(item.id || '') === String(id || ''); });
     if (!row) {
       setMsg('模板不存在。', true);
@@ -2963,8 +2940,10 @@
         var copied = data.item || (state.templates || []).find(function(item) {
           return String(item.meta && item.meta.copied_from_template_id || '') === String(id);
         });
-        if (copied) applyTemplate(copied, true);
-        setMsg('已复制为个人模板，可继续编辑。');
+        if (copied && !opts.keepCurrent) applyTemplate(copied, true);
+        setMsg(opts.keepCurrent
+          ? ('已在「我的模板」里新增一条记录' + (copied ? '：' + templateName(copied) : '') + '，想启用再点「设为当前」。')
+          : '已复制为个人模板，可继续编辑。');
       });
     }).catch(function(err) {
       setMsg(err.message || '复制失败', true);

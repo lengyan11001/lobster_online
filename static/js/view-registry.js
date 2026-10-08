@@ -39,7 +39,7 @@
 
   window.registerLobsterView('personal-settings', {
     html: '/static/views/personal-settings.html?v=20260921-survey-modal-close-only-v1',
-    scripts: '/static/js/personal-settings.js?v=20260921-survey-modal-close-only-v1',
+    scripts: '/static/js/personal-settings.js?v=20261008-template-copy-keep-current',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
@@ -192,7 +192,7 @@ window.registerLobsterView('alibaba-inquiries', {
 
   window.registerLobsterView('tutorial', {
     html: '/static/views/tutorial.html?v=20261008-system-templates',
-    scripts: '/static/js/tutorial.js?v=20261008-system-templates-files',
+    scripts: '/static/js/tutorial.js?v=20261008-system-templates-modal2',
     init: 'initTutorialView'
   });
 

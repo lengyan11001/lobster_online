@@ -29,7 +29,19 @@
         <button type="button" class="btn btn-outline btn-sm" id="tutorialSystemTemplatesRefresh">刷新</button>
       </div>
     </div>
-    <p class="app-tutorial-hint">系统模板由官方提供，可以直接查看要求文案并下载成文件，用在自己的 IP 人设配置里。</p>
+    <p class="app-tutorial-hint">系统模板由官方提供；点任意一条看详情，可以复制内容，也可以「带入」成你自己的模板。</p>
     <div id="tutorialSystemTemplates" class="app-tutorial-template-list"><div class="empty">加载中…</div></div>
+  </div>
+  <div class="modal-mask" id="tutorialSystemTemplateModal" onclick="if(event.target===this)closeTutorialSystemTemplateModal()">
+    <div class="modal-card" style="max-width:760px;max-height:86vh;overflow:auto">
+      <h3 id="tutorialSystemTemplateModalTitle">系统模板</h3>
+      <div class="modal-sub" id="tutorialSystemTemplateModalMeta"></div>
+      <div id="tutorialSystemTemplateModalBody"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-outline btn-sm" id="tutorialSystemTemplateCopyBtn">复制内容</button>
+        <button type="button" class="btn btn-primary btn-sm" id="tutorialSystemTemplateApplyBtn">带入我的模板</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="closeTutorialSystemTemplateModal()">关闭</button>
+      </div>
+    </div>
   </div>
 </section>
