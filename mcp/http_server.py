@@ -87,10 +87,33 @@ _LOCAL_INVOKE_BACKEND: Dict[str, Tuple[str, float]] = {
     "wewrite.article.draft": ("/api/wechat-article/drafts", 120.0),
     "ppt.create": ("/api/create-ppt/run", 1800.0),
     "cutcli.template.customize": ("/api/cutcli/local/capability", 1800.0),
+    "liepin.session.info": ("/api/liepin/session/info", 60.0),
+    "liepin.browser.open": ("/api/liepin/browser/open", 150.0),
+    "liepin.login.status": ("/api/liepin/login/status", 60.0),
+    "liepin.candidates.search": ("/api/liepin/candidates/search", 180.0),
+    "liepin.candidates.suggest": ("/api/liepin/candidates/suggest", 60.0),
+    "liepin.candidates.detail": ("/api/liepin/candidates/detail", 300.0),
+    "liepin.chat.list": ("/api/liepin/chat/list", 120.0),
+    "liepin.chat.send": ("/api/liepin/chat/send", 150.0),
+    "liepin.applications.list": ("/api/liepin/applications/list", 120.0),
+    "liepin.ledger.read": ("/api/liepin/ledger/read", 60.0),
+    "liepin.report.export": ("/api/liepin/report/export", 120.0),
 }
 
 # 不在 MCP 内调认证中心 pre/record/refund：media.edit 免费；comfly.* 扣费在各自后端路由内处理。
-_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "create.video.pipeline", "hifly.video.create_by_tts", "ecommerce.publish", "wewrite.article.pipeline", "wewrite.article.generate", "wewrite.article.draft", "ppt.create", "cutcli.template.customize"})
+_INVOKE_NO_AUTH_CENTER_BILLING = frozenset({
+    "liepin.session.info",
+    "liepin.browser.open",
+    "liepin.login.status",
+    "liepin.candidates.search",
+    "liepin.candidates.suggest",
+    "liepin.candidates.detail",
+    "liepin.chat.list",
+    "liepin.chat.send",
+    "liepin.applications.list",
+    "liepin.ledger.read",
+    "liepin.report.export",
+"media.edit", "comfly.daihuo", "comfly.daihuo.pipeline", "comfly.seedance.tvc.pipeline", "comfly.ecommerce.detail_pipeline", "goal.video.pipeline", "create.video.pipeline", "hifly.video.create_by_tts", "ecommerce.publish", "wewrite.article.pipeline", "wewrite.article.generate", "wewrite.article.draft", "ppt.create", "cutcli.template.customize"})
 
 _LOCAL_PIPELINE_JOB_LOOKUP_SPECS: tuple[tuple[str, str, str], ...] = (
     ("comfly.daihuo.pipeline", "/api/comfly-daihuo/pipeline/jobs/{job_id}", "local_comfly_daihuo_job"),

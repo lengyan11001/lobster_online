@@ -7,7 +7,9 @@
   liepin.candidates.search {query, pages?, limit?, filters?, mode?}
   liepin.candidates.suggest {keyword}
   liepin.candidates.detail {name, age?, confirm}
-  liepin.chat.list         {limit}
+  liepin.session.info      {}                      # 账号/权益额度/未读/新招呼
+  liepin.chat.list         {page, page_size}      # 沟通会话列表（分页）
+  liepin.applications.list {page, page_size}      # 求职者投递列表（分页）
   liepin.chat.send         {target, text, confirm}
   liepin.ledger.read       {kind?}
   liepin.report.export     {rows, format, filename}
@@ -119,8 +121,35 @@ def run(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
                 return {"ok": False, "error": "打开简历详情会消耗猎聘查看权益，需 confirm=True"}
             return sess.open_detail(name, params.get("age"))
 
+        if action == "liepin.session.info":
+            from .liepin_protocol import LiepinProtocol
+
+            return {"ok": True, **LiepinProtocol(port=int(params.get("cdp_port") or 9222)).session_info()}
+
         if action == "liepin.chat.list":
-            return sess.chat_list(limit=int(params.get("limit") or 20))
+            page = int(params.get("page") or 0)
+            page_size = int(params.get("page_size") or params.get("limit") or 30)
+            mode = (params.get("mode") or "auto").lower()
+            if mode in ("auto", "protocol"):
+                try:
+                    from .liepin_protocol import LiepinProtocol
+
+                    res = LiepinProtocol(port=int(params.get("cdp_port") or 9222)).chat_list(page=page, page_size=page_size)
+                    return {"ok": True, "mode": "protocol", **res}
+                except Exception as exc:
+                    if mode == "protocol":
+                        return {"ok": False, "mode": "protocol", "error": str(exc)[:200]}
+                    proto_err = str(exc)[:200]
+            res = sess.chat_list(limit=page_size)
+            res["mode"] = "browser"
+            res["protocol_error"] = locals().get("proto_err", "")
+            return res
+
+        if action == "liepin.applications.list":
+            from .liepin_protocol import LiepinProtocol
+
+            return {"ok": True, **LiepinProtocol(port=int(params.get("cdp_port") or 9222)).applications(
+                page=int(params.get("page") or 0), page_size=int(params.get("page_size") or 10))}
 
         if action == "liepin.chat.send":
             return sess.chat_send((params.get("target") or "").strip(),

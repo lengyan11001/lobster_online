@@ -10,7 +10,7 @@ PKG = {
     "description": "猎聘招聘端（lpt.liepin.com）：先扫码登录，再搜人才 / 读候选人 / 沟通发消息 / 出候选人表。搜索走协议直连（api-lpt.liepin.com，无需浏览器界面），发消息与开简历走已登录浏览器。",
     "type": "builtin",
     "store_visibility": "online",
-    "default_installed": False,
+    "default_installed": True,
     "status": "available",
     "package_config": {
         "view": "liepin-recruit",
@@ -73,11 +73,28 @@ PKG = {
                 "confirm": {"type": "boolean", "description": "true 才会真正打开（消耗查看权益）"}},
                 "required": ["name", "confirm"]},
         },
+        "liepin.session.info": {
+            "description": "猎聘账号概览：登录账号、会员身份与到期时间、开聊额度(b_open_chat)、未读消息数、新招呼数。",
+            "upstream": "local", "upstream_tool": "liepin", "enabled": True,
+            "is_default": False, "unit_credits": 0,
+            "arg_schema": {"type": "object", "properties": {}},
+        },
+        "liepin.applications.list": {
+            "description": "猎聘求职者投递列表（分页）：投递人、期望职位、期望城市、学历。",
+            "upstream": "local", "upstream_tool": "liepin", "enabled": True,
+            "is_default": False, "unit_credits": 0,
+            "arg_schema": {"type": "object", "properties": {
+                "page": {"type": "integer", "default": 0},
+                "page_size": {"type": "integer", "default": 10}}},
+        },
         "liepin.chat.list": {
             "description": "读取猎聘「沟通」页的会话列表（全部/新招呼/我发起的/我回复的等）。",
             "upstream": "local", "upstream_tool": "liepin", "enabled": True,
             "is_default": False, "unit_credits": 0,
-            "arg_schema": {"type": "object", "properties": {"limit": {"type": "integer", "default": 20}}},
+            "arg_schema": {"type": "object", "properties": {
+                "page": {"type": "integer", "default": 0},
+                "page_size": {"type": "integer", "default": 30},
+                "mode": {"type": "string", "enum": ["auto", "protocol", "browser"], "default": "auto"}}},
         },
         "liepin.chat.send": {
             "description": "给沟通列表中的候选人发送消息（真实触达）。需要 confirm=true，且台账去重（相同内容不会重复发）。",

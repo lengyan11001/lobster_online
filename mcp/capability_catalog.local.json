@@ -110,7 +110,11 @@
         },
         "resolution": {
           "type": "string",
-          "enum": ["480p", "720p", "1080p"],
+          "enum": [
+            "480p",
+            "720p",
+            "1080p"
+          ],
           "default": "720p",
           "description": "视频分辨率"
         },
@@ -133,7 +137,12 @@
         },
         "function_mode": {
           "type": "string",
-          "enum": ["reference", "edit", "extend", "first_last_frame"],
+          "enum": [
+            "reference",
+            "edit",
+            "extend",
+            "first_last_frame"
+          ],
           "default": "reference",
           "description": "生成方式：参考生成、视频编辑、视频延长或首尾帧"
         },
@@ -288,7 +297,10 @@
         },
         "resolution": {
           "type": "string",
-          "enum": ["720p", "1080p"],
+          "enum": [
+            "720p",
+            "1080p"
+          ],
           "default": "720p"
         },
         "video_model": {
@@ -451,6 +463,322 @@
           "description": "Whether ai mode may generate supporting slide images through the existing image service. Default true."
         }
       }
+    }
+  },
+  "liepin.session.info": {
+    "description": "猎聘招聘端账号概览：登录账号、会员身份与到期时间、开聊额度(b_open_chat)、未读消息数、新招呼数。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  "liepin.browser.open": {
+    "description": "启动/重启猎聘浏览器窗口（本机 Chrome + 独立资料目录，用于扫码登录与发送消息）。action=start/restart/status。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "start",
+            "restart",
+            "status"
+          ],
+          "default": "start"
+        }
+      }
+    }
+  },
+  "liepin.login.status": {
+    "description": "查询猎聘登录状态（是否已登录、当前页面、当前账号）。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {}
+    }
+  },
+  "liepin.candidates.search": {
+    "description": "搜索猎聘人才库（协议直连，分页）。返回候选人：姓名/性别/年龄/年限/学历/现居/期望城市/期望职位薪资/行业标签/公司履历/学校/活跃度/是否已沟通/res_id/简历直链。可用 filters 精确过滤（城市、年限、语言、学历、关键词等）。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "关键词，如「东南亚 销售总监 电表」，可为空"
+        },
+        "pages": {
+          "type": "integer",
+          "default": 1,
+          "description": "抓几页（每页约 20 人）"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "protocol",
+            "browser"
+          ],
+          "default": "auto"
+        },
+        "filters": {
+          "type": "object",
+          "properties": {
+            "dqs": {
+              "type": "string",
+              "description": "目前城市，中文或代码，如 印度尼西亚/越南"
+            },
+            "want_dqs": {
+              "type": "string"
+            },
+            "jobtitles": {
+              "type": "string"
+            },
+            "company": {
+              "type": "string"
+            },
+            "workyears": {
+              "type": "string",
+              "description": "如 8,99"
+            },
+            "edu_levels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "language": {
+              "type": "string",
+              "description": "如 英语/印尼语"
+            },
+            "age": {
+              "type": "string"
+            },
+            "sex": {
+              "type": "string"
+            },
+            "active_status": {
+              "type": "string"
+            },
+            "manage_exp": {
+              "type": "string"
+            },
+            "must_include": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "cities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "min_years": {
+              "type": "integer"
+            }
+          }
+        }
+      }
+    }
+  },
+  "liepin.candidates.suggest": {
+    "description": "猎聘搜索词联想：把口语化需求转成能命中的关键词。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "keyword": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "keyword"
+      ]
+    }
+  },
+  "liepin.candidates.detail": {
+    "description": "打开候选人简历详情并抓取文本（消耗猎聘查看权益，必须 confirm=true）。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "age": {
+          "type": "integer"
+        },
+        "confirm": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "confirm"
+      ]
+    }
+  },
+  "liepin.chat.list": {
+    "description": "猎聘沟通会话列表（分页）：姓名/职位/公司/未读数/最后消息时间/im_id。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "page": {
+          "type": "integer",
+          "default": 0
+        },
+        "page_size": {
+          "type": "integer",
+          "default": 30
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "protocol",
+            "browser"
+          ],
+          "default": "auto"
+        }
+      }
+    }
+  },
+  "liepin.chat.send": {
+    "description": "给沟通会话里的候选人发消息（真实触达，必须 confirm=true，台账去重）。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "confirm": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "target",
+        "text",
+        "confirm"
+      ]
+    }
+  },
+  "liepin.applications.list": {
+    "description": "猎聘求职者投递列表（分页）：投递人、期望职位、期望城市、学历。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "page": {
+          "type": "integer",
+          "default": 0
+        },
+        "page_size": {
+          "type": "integer",
+          "default": 10
+        }
+      }
+    }
+  },
+  "liepin.ledger.read": {
+    "description": "猎聘技能动作台账：搜索记录 / 已发消息 / 已开简历。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "searches",
+            "messages",
+            "details"
+          ]
+        }
+      }
+    }
+  },
+  "liepin.report.export": {
+    "description": "把候选人行导出成 Excel/CSV，返回本机文件路径。",
+    "upstream": "local",
+    "upstream_tool": "invoke",
+    "enabled": true,
+    "is_default": false,
+    "unit_credits": 0,
+    "arg_schema": {
+      "type": "object",
+      "properties": {
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "xlsx",
+            "csv"
+          ]
+        },
+        "filename": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rows"
+      ]
     }
   }
 }

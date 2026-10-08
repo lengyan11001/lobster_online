@@ -25,6 +25,11 @@ API_BASE = "https://api-lpt.liepin.com/api/"
 SEARCH_API = API_BASE + "com.liepin.searchfront4r.b.search"
 SUGGEST_API = API_BASE + "com.liepin.searchfront4r.b.get-suggest"
 CHAT_UNREAD_API = API_BASE + "com.liepin.im.b.chat.unread-count"
+IM_LOGIN_USER_API = API_BASE + "com.liepin.im.common.login-user-info"
+IM_NEW_HELLO_API = API_BASE + "com.liepin.im.contact.get-new-hello"
+IM_CONTACT_LIST_API = API_BASE + "com.liepin.im.b.contact.get-contact-list"
+PRIVILEGE_API = API_BASE + "com.liepin.privilege.bpc.index.user-privilege"
+APPLY_LIST_API = API_BASE + "com.liepin.rapply.platform.e.serch-by-usere.v2"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
       "Chrome/145.0.0.0 Safari/537.36")
 CLIENT_ID = "40156"
@@ -122,6 +127,69 @@ class LiepinProtocol:
             return self._post(CHAT_UNREAD_API, {}).get("data")
         except Exception:
             return None
+
+    # ---------- IM / 沟通（协议） ----------
+    def session_info(self) -> Dict[str, Any]:
+        """登录账号信息 + 权益/额度 + 未读 + 新招呼（都是只读接口）。"""
+        out: Dict[str, Any] = {"mode": "protocol"}
+        try:
+            info = self._post(IM_LOGIN_USER_API, {"imId": "", "imApp": "1"})
+            d = info.get("data") or {}
+            out.update({"user_name": d.get("userNameShow"), "im_user_id": d.get("userId")})
+        except Exception as exc:
+            out["login_error"] = str(exc)[:120]
+        try:
+            pr = self._post(PRIVILEGE_API, {})
+            d = pr.get("data") or {}
+            privs = {p.get("operation"): {"used": p.get("usedCount"), "total": p.get("privilegeCount"),
+                                          "reset": p.get("nextResetTime"), "name": p.get("privilegeName")}
+                     for p in (d.get("identityPrivilege") or [])}
+            out["identity"] = d.get("identity")
+            out["expire_time"] = d.get("expireTime")
+            out["privileges"] = privs
+            out["chat_quota"] = privs.get("b_open_chat")
+        except Exception as exc:
+            out["privilege_error"] = str(exc)[:120]
+        for key, api, data in (("unread", CHAT_UNREAD_API, {"imUserType": "2", "imApp": "1"}),
+                               ("new_hello", IM_NEW_HELLO_API, {"imUserType": "2", "imApp": "1"})):
+            try:
+                r = self._post(api, data)
+                val = (r.get("data") or {})
+                out[key] = val.get("count") if key == "unread" else val.get("result")
+            except Exception:
+                out[key] = None
+        return out
+
+    def chat_list(self, page: int = 0, page_size: int = 30) -> Dict[str, Any]:
+        """沟通会话列表（分页）。"""
+        payload = self._post(IM_CONTACT_LIST_API, {"imUserType": "2", "imApp": "1",
+                                                   "pageSize": str(page_size), "curPage": str(page)})
+        d = payload.get("data") or {}
+        rows = []
+        for it in d.get("list") or []:
+            rows.append({
+                "im_id": it.get("oppositeImId") or it.get("imId"),
+                "name": it.get("oppositeName") or it.get("name") or it.get("userName"),
+                "title": it.get("oppositeTitle") or it.get("title"),
+                "company": it.get("oppositeCompany") or it.get("company"),
+                "unread": it.get("unReadCnt"),
+                "user_type": it.get("imUserType"),
+                "time": it.get("lastMessageTime") or it.get("modifyTime"),
+                "raw": json.dumps(it, ensure_ascii=False)[:800],
+            })
+        return {"total": d.get("totalCount"), "page": d.get("curPage"), "page_size": d.get("pageSize"),
+                "has_more": d.get("hasMore"), "count": len(rows), "list": rows}
+
+    def applications(self, page: int = 0, page_size: int = 10) -> Dict[str, Any]:
+        """求职者投递列表（分页）。"""
+        cond = {"applyStatus": 0, "pageSize": int(page_size), "curPage": int(page),
+                "applyTimeRange": "1", "filterAiReadNotMatch": True, "jobId": ""}
+        payload = self._post(APPLY_LIST_API, {"imId": "", "imApp": "1",
+                                              "applyCondition": json.dumps(cond, ensure_ascii=False),
+                                              "sfrom": "RES_IM_APPLY_LIST"})
+        d = payload.get("data") or {}
+        return {"total": d.get("totalCnt"), "page": d.get("curPage"), "count": len(d.get("datas") or []),
+                "list": d.get("datas") or []}
 
     def search(self, keys: str = "", page: int = 0, *, dqs: str = "", want_dqs: str = "",
                jobtitles: str = "", company: str = "", workyears: str = "0,99", edu_levels: Optional[list] = None,
