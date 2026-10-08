@@ -122,7 +122,10 @@
 
   function openModal(it) {
     var modal = document.getElementById('tutorialSystemTemplateModal');
-    if (!modal) return;
+    if (!modal) {
+      alert('详情弹窗未加载（页面资源未更新），请重启客户端或刷新页面后再试。');
+      return;
+    }
     modal.dataset.templateId = String(it.id);
     document.getElementById('tutorialSystemTemplateModalTitle').textContent = it.name || ('系统模板 #' + it.id);
     document.getElementById('tutorialSystemTemplateModalMeta').textContent = '更新时间：' + (fmtTime(it.updated_at) || '-');
@@ -156,12 +159,17 @@
     };
     var applyBtn = document.getElementById('tutorialSystemTemplateApplyBtn');
     applyBtn.onclick = function () { applySystemTemplate(it); };
+    modal.classList.add('visible');
     modal.classList.add('show');
+    modal.style.display = 'flex';
   }
 
   window.closeTutorialSystemTemplateModal = function () {
     var modal = document.getElementById('tutorialSystemTemplateModal');
-    if (modal) modal.classList.remove('show');
+    if (!modal) return;
+    modal.classList.remove('show');
+    modal.classList.remove('visible');
+    modal.style.display = '';
   };
 
   function renderList(host, hint, items) {
