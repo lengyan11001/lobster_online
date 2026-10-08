@@ -496,6 +496,24 @@ class LiepinSession:
             return {"ok": False, "error": "详情面板没抓到内容（可能需要人工确认选择器或权益不足）", "url": pg.url}
         return {"ok": True, "name": name, "url": pg.url, "text": detail}
 
+    def cookies(self) -> Dict[str, str]:
+        """从当前已登录的浏览器里读 cookie（复用已有连接，避免 Playwright 嵌套）。"""
+        self._ensure_connected()
+        pg = self._liepin_page()
+        if pg is None:
+            for ctx in self._browser.contexts:
+                pg = ctx.pages[0] if ctx.pages else ctx.new_page()
+                break
+        if pg is None:
+            raise LiepinError("没有可用的浏览器页面，先启动浏览器并登录")
+        cdp = pg.context.new_cdp_session(pg)
+        data = cdp.send("Network.getCookies", {"urls": ["https://api-lpt.liepin.com", "https://lpt.liepin.com"]})
+        jar = {c["name"]: c["value"] for c in data.get("cookies", [])}
+        if not jar:
+            raise LiepinError("拿不到猎聘 cookie：请先在技能页启动浏览器并扫码登录")
+        return jar
+
+
     def status(self) -> Dict[str, Any]:
         return {"ok": True, "cdp_alive": self.cdp_alive(), "cdp_port": self.port,
                 "chromium": str(self.chrome) if self.chrome else None,

@@ -63,7 +63,17 @@ class LiepinProtocolError(RuntimeError):
 
 
 def cookies_from_browser(port: int = 9222) -> Dict[str, str]:
-    """从本机已登录的 Chrome 里读猎聘 cookie（走 CDP，不碰用户密码）。"""
+    """从本机已登录的 Chrome 里读猎聘 cookie。
+
+    优先复用技能会话里已有的 Playwright 连接（避免同一进程里嵌套 sync_playwright），
+    只有在会话不可用时才自己连一次 CDP。
+    """
+    try:
+        from .liepin_actions import session as _session  # 延迟导入，避免循环依赖
+
+        return _session().cookies()
+    except Exception:
+        pass
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as pw:
