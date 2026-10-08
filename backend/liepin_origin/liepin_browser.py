@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """猎聘（lpt.liepin.com 招聘端）浏览器自动化底座。
 
-设计要点（与抖音发布/抖音获客同一套思路）：
-1. 浏览器用客户端自带的 Chromium（browser_chromium），带 --remote-debugging-port 启动；
-2. 登录态复用同一套用户资料目录，用户扫码/账号登录一次即可长期复用；
-3. 所有"界面操作"都封装成小能力（搜索/翻页/读卡片/开简历/进沟通页/发消息），不暴露裸导航；
-4. 猎聘有风控，会把页面置空（about:blank），因此每个动作都带「探测 -> 重启窗口 -> 重试」；
-5. 所有写操作（发消息）默认拒绝，必须显式 confirm=True，并写台账防止重复发。
+与抖音发布/抖音获客同一套思路：用本机正常 Chrome + 独立资料目录，用户扫码登录一次，
+之后由客户端驱动浏览器做事；简单只读的抓取走协议直连（liepin_protocol.py）。
+
+线程模型（重要）：
+  客户端后端是 FastAPI，同步端点跑在线程池里，而 Playwright 的 sync 对象**绑定线程**，
+  长期缓存连接会报 greenlet.error / TargetClosedError。所以这里**每次调用都新建连接、
+  用完立刻关闭**，只有 cookie 做短时缓存（避免重复连接）。
 """
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ import shutil
 import subprocess
 import time
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -31,6 +33,9 @@ AGE_RE = re.compile(r"^\d{1,2}岁$")
 NAME_RE = re.compile(r"^\S+\*\*$")
 SCHOOL_RE = re.compile(r"大学|学院|学校|职院|职业技术学院")
 
+_COOKIE_CACHE: Dict[str, Any] = {"ts": 0.0, "jar": None}
+COOKIE_TTL = 120.0
+
 
 class LiepinError(RuntimeError):
     pass
@@ -41,20 +46,18 @@ def _root() -> Path:
 
 
 def find_chrome(root: Optional[Path] = None) -> Optional[Path]:
-    """定位「正常的 Chrome」：注册表 App Paths -> Program Files -> 用户目录 -> PATH -> 内置 Chromium 兜底。
-
-    抖音发布 / 抖音获客用的就是本机正常 Chrome（channel="chrome" + 独立 user_data_dir），
-    猎聘这里保持一致，不再强制使用客户端内置 Chromium。
-    """
+    """定位「正常的 Chrome」：注册表 App Paths -> Program Files -> 用户目录 -> PATH -> 内置 Chromium 兜底。"""
     root = Path(root or _root())
     candidates: List[Path] = []
     if os.name == "nt":
         try:
             import winreg  # type: ignore
 
-            for hive, sub in ((winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
-                              (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
-                              (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe")):
+            for hive, sub in (
+                (winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
+                (winreg.HKEY_LOCAL_MACHINE, r"Software\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
+                (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"),
+            ):
                 try:
                     with winreg.OpenKey(hive, sub) as key:
                         value, _ = winreg.QueryValueEx(key, "")
@@ -84,16 +87,15 @@ def find_chrome(root: Optional[Path] = None) -> Optional[Path]:
 
 
 def find_chromium(root: Optional[Path] = None) -> Optional[Path]:
-    """兼容旧调用：等价于 find_chrome()。"""
+    """兼容旧调用。"""
     return find_chrome(root)
 
 
 def parse_card_text(text: str) -> Dict[str, Any]:
-    """把猎聘列表卡片文本解析成结构化字段（已在 150+ 真实卡片上验证）。"""
+    """把猎聘列表卡片文本解析成结构化字段。"""
     parts = [p.strip() for p in re.split(r"\s*\|\s*", text or "") if p.strip()]
     out: Dict[str, Any] = {"name": "", "age": None, "years": None, "edu": "", "city": "",
-                           "expect": "", "industry": "", "companies": [], "active": "",
-                           "school": ""}
+                           "expect": "", "industry": "", "companies": [], "active": "", "school": ""}
     idx = None
     for i, x in enumerate(parts):
         if NAME_RE.match(x) or (i + 1 < len(parts) and AGE_RE.match(parts[i + 1])):
@@ -124,7 +126,7 @@ def parse_card_text(text: str) -> Dict[str, Any]:
             company = parts[i - 1] if i >= 1 else ""
             if re.match(r"^\d{4}\.\d{2}", company) or not company:
                 continue
-            if SCHOOL_RE.search(company) or re.search(r"统招", x):   # 学校/学历段不算公司
+            if SCHOOL_RE.search(company) or re.search(r"统招", x):
                 out["school"] = "%s %s" % (company, x)
                 continue
             out["companies"].append({"company": company, "position": x})
@@ -135,28 +137,36 @@ def parse_card_text(text: str) -> Dict[str, Any]:
     return out
 
 
+def _guess_account(body: str) -> str:
+    text = re.sub(r"\s*\n\s*", " | ", body or "")
+    text = re.sub(r"\s*\|\s*", " | ", text)
+    for pat in (r"我的权益\s*\|\s*([\u4e00-\u9fa5A-Za-z]{2,6})\s*\|",
+                r"\|\s*([\u4e00-\u9fa5A-Za-z]{2,6})\s*\|\s*设置",
+                r"设置\s*\|\s*([\u4e00-\u9fa5A-Za-z]{2,6})"):
+        m = re.search(pat, text)
+        if m:
+            return m.group(1)
+    return ""
+
+
 class LiepinSession:
-    """一个猎聘浏览器会话（进程级单例由上层保证）。"""
+    """猎聘浏览器会话（无状态连接：每次调用新建/关闭，避免线程绑定问题）。"""
 
     def __init__(self, root: Optional[Path] = None, port: int = CDP_PORT):
         self.root = Path(root or _root())
         self.port = port
         self.chrome = find_chrome(self.root)
-        self._pw = None
-        self._browser = None
-        self._page = None
 
-    # ---------- 台账 ----------
+    # ---------- 目录 / 台账 ----------
     @property
-    def profile_dir(self) -> Path:
-        """独立用户资料目录：猎聘登录态存在这里，跟用户自己的浏览器互不干扰。"""
-        d = self.runtime_dir / "chrome-profile"
+    def runtime_dir(self) -> Path:
+        d = self.root / "_lobster_runtime" / "liepin"
         d.mkdir(parents=True, exist_ok=True)
         return d
 
     @property
-    def runtime_dir(self) -> Path:
-        d = self.root / "_lobster_runtime" / "liepin"
+    def profile_dir(self) -> Path:
+        d = self.runtime_dir / "chrome-profile"
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -213,129 +223,179 @@ class LiepinSession:
               "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; "
               "Stop-Process -Id $o -Force -ErrorAction SilentlyContinue") % pid
         subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True)
-        time.sleep(4)
+        _COOKIE_CACHE["jar"] = None
+        time.sleep(3)
 
-    def start_browser(self, url: str = SEARCH_URL, settle: float = 26.0) -> None:
+    def start_browser(self, url: str = SEARCH_URL, settle: float = 22.0) -> None:
         if not self.chrome:
-            raise LiepinError("找不到客户端内置 Chromium（browser_chromium）")
-        profile = self.profile_dir
+            raise LiepinError("找不到 Chrome（本机 Chrome 或客户端内置 Chromium）")
+        if self.cdp_alive():
+            return
         args = ["--remote-debugging-port=%d" % self.port, "--remote-allow-origins=*",
                 "--no-first-run", "--no-default-browser-check", "--hide-crash-restore-bubble",
-                "--user-data-dir=%s" % profile]
+                "--user-data-dir=%s" % self.profile_dir]
         subprocess.Popen([str(self.chrome), *args, url], close_fds=True)
+        _COOKIE_CACHE["jar"] = None
         time.sleep(settle)
 
     def restart_browser(self, url: str = SEARCH_URL) -> None:
         self.kill_browser()
-        self._page = None
-        self._browser = None
-        self.start_browser(url)
+        self.start_browser(url, settle=24.0)
 
-    # ---------- 连接 ----------
-    def _ensure_connected(self):
-        if self._browser is not None:
-            return self._browser
-        from playwright.sync_api import sync_playwright  # 延迟导入，避免无 playwright 环境启动失败
-        if self._pw is None:
-            self._pw = sync_playwright().start()
-        self._browser = self._pw.chromium.connect_over_cdp("http://127.0.0.1:%d" % self.port)
-        return self._browser
+    # ---------- 连接（每次调用新建） ----------
+    @contextmanager
+    def _connect(self):
+        from playwright.sync_api import sync_playwright  # 延迟导入
 
-    def _liepin_page(self):
-        if self._browser is None:
-            return None
-        for ctx in self._browser.contexts:
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.connect_over_cdp("http://127.0.0.1:%d" % self.port)
+        except Exception as exc:
+            pw.stop()
+            raise LiepinError("连接调试端口失败：%s" % exc)
+        try:
+            yield browser
+        finally:
+            try:
+                browser.close()
+            except Exception:
+                pass
+            try:
+                pw.stop()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _liepin_page(browser):
+        for ctx in browser.contexts:
             for pg in ctx.pages:
                 url = pg.url or ""
                 if url.startswith("https://lpt.liepin.com") and not url.startswith(DEAD_URL_PREFIXES):
                     return pg
         return None
 
-    def page(self, need_search_box: bool = True, retries: int = 2):
-        """拿到一个可用的猎聘页面；被风控置空时自动重启窗口重试。"""
-        for attempt in range(retries + 1):
+    def _with_page(self, fn, *, need_search_box: bool = False, tries: int = 2):
+        """打开连接 -> 找到可用页面（必要时重启窗口）-> 执行 fn(page) -> 关闭连接。"""
+        last = ""
+        for attempt in range(tries + 1):
             if not self.cdp_alive():
-                self.start_browser()
-            try:
-                self._ensure_connected()
-            except Exception as exc:
-                raise LiepinError("连接调试端口失败：%s" % exc)
-            pg = self._liepin_page()
-            if pg is not None:
-                if not need_search_box:
-                    self._page = pg
-                    return pg
-                ok = False
-                for _ in range(30):
-                    try:
-                        if pg.locator(SEARCH_BOX).count() > 0:
-                            ok = True
-                            break
-                    except Exception:
-                        break
-                    pg.wait_for_timeout(1500)
-                if ok:
-                    self._page = pg
-                    return pg
+                self.start_browser(settle=22.0)
+            with self._connect() as browser:
+                pg = self._liepin_page(browser)
+                if pg is not None:
+                    ready = True
+                    if need_search_box:
+                        ready = False
+                        for _ in range(20):
+                            try:
+                                if pg.locator(SEARCH_BOX).count() > 0:
+                                    ready = True
+                                    break
+                            except Exception:
+                                break
+                            pg.wait_for_timeout(1000)
+                    if ready:
+                        return fn(pg)
+                    last = "页面还没加载好"
+                else:
+                    last = "没有猎聘页面"
+            if attempt >= tries:
+                break
             time.sleep(2)
             self.restart_browser()
-        raise LiepinError("猎聘页面不可用（多次重启后仍拿不到页面）")
+        raise LiepinError("猎聘页面不可用（%s）" % (last or "多次重启后仍拿不到页面"))
 
-    # ---------- 动作 ----------
+    # ---------- 能力 ----------
+    def status(self) -> Dict[str, Any]:
+        return {"ok": True, "cdp_alive": self.cdp_alive(), "cdp_port": self.port,
+                "chromium": str(self.chrome) if self.chrome else None,
+                "profile_dir": str(self.profile_dir),
+                "ledger": {k: len(v) for k, v in self.ledger().items() if isinstance(v, list)}}
+
+    def cookies(self) -> Dict[str, str]:
+        """读猎聘 cookie（带 120s 缓存）。"""
+        now = time.time()
+        if _COOKIE_CACHE["jar"] and now - float(_COOKIE_CACHE["ts"] or 0) < COOKIE_TTL:
+            return dict(_COOKIE_CACHE["jar"])
+
+        def _read(pg):
+            cdp = pg.context.new_cdp_session(pg)
+            data = cdp.send("Network.getCookies", {"urls": ["https://api-lpt.liepin.com", "https://lpt.liepin.com"]})
+            return {c["name"]: c["value"] for c in data.get("cookies", [])}
+
+        jar = self._with_page(_read, need_search_box=False, tries=1)
+        if not jar:
+            raise LiepinError("拿不到猎聘 cookie：请先点「启动浏览器」扫码登录")
+        _COOKIE_CACHE["jar"] = jar
+        _COOKIE_CACHE["ts"] = now
+        return dict(jar)
+
     def login_state(self) -> Dict[str, Any]:
-        """只读检查登录态：**不重启窗口**（避免把用户正在扫码登录的窗口关掉）。"""
-        try:
-            if not self.cdp_alive():
-                return {"logged_in": False, "cdp_alive": False,
-                        "note": "浏览器未启动，先调用 liepin.browser.open (action=start)"}
-            self._ensure_connected()
-            pg = self._liepin_page()
-            if pg is None:
-                return {"logged_in": False, "cdp_alive": True,
-                        "note": "没有猎聘页面（可能刚启动还在加载，稍后重试）"}
-            body = pg.evaluate("() => document.body.innerText.slice(0, 600)")
+        """只读检查登录态：不重启窗口；先等页面加载，再判断是否登录。"""
+        if not self.cdp_alive():
+            return {"logged_in": False, "cdp_alive": False,
+                    "note": "浏览器未启动，先点「启动浏览器」（会打开正常 Chrome 供扫码登录）"}
+
+        def _check(pg):
+            body = pg.evaluate("() => document.body.innerText.slice(0, 800)")
             url = pg.url or ""
-            need_login = ("登录" in body and "搜索人才" not in body) or "login" in url.lower()
-            return {"logged_in": not need_login, "url": url, "cdp_alive": True,
-                    "account": _guess_account(body), "need_scan": bool(need_login),
+            has_box = pg.locator(SEARCH_BOX).count() > 0
+            account = _guess_account(body)
+            need_login = ("搜索人才" not in body and "登录" in body) or "/login" in url
+            return {"logged_in": bool(has_box or account) and not need_login, "url": url,
+                    "account": account, "need_scan": bool(need_login),
                     "hint": body.replace("\n", " | ")[:160]}
-        except Exception as exc:
-            return {"logged_in": False, "error": str(exc)[:180]}
+
+        try:
+            return self._with_page(_check, need_search_box=False, tries=1)
+        except LiepinError as exc:
+            return {"logged_in": False, "cdp_alive": True, "note": str(exc)[:160]}
+
+    def account_name(self) -> str:
+        try:
+            return self._with_page(lambda pg: _guess_account(pg.evaluate("() => document.body.innerText.slice(0, 800)")),
+                                   tries=1) or ""
+        except Exception:
+            return ""
 
     def search(self, query: str, limit: int = 20, retries: int = 3) -> Dict[str, Any]:
-        """搜索人才并返回结构化卡片。每次搜索都确保页面是"新鲜"的（猎聘风控）。"""
+        """搜索人才并返回结构化卡片（浏览器路径；协议路径见 liepin_protocol）。"""
         last_err = ""
         for attempt in range(retries):
             try:
-                pg = self.page(need_search_box=True, retries=1)
-                box = pg.locator(SEARCH_BOX).first
-                box.click(force=True, timeout=20000)
-                pg.keyboard.type(query, delay=30)
-                pg.wait_for_timeout(800)
-                try:
-                    pg.locator('button:has-text("搜索")').first.click(force=True, timeout=8000)
-                except Exception:
-                    pg.keyboard.press("Enter")
-                pg.wait_for_timeout(6000)
-                for _ in range(10):
+                def _do(pg):
+                    box = pg.locator(SEARCH_BOX).first
+                    box.click(force=True, timeout=20000)
+                    pg.keyboard.type(query, delay=30)
+                    pg.wait_for_timeout(800)
                     try:
-                        if "岁" in pg.evaluate("() => document.body.innerText"):
-                            break
+                        pg.locator('button:has-text("搜索")').first.click(force=True, timeout=8000)
                     except Exception:
-                        break
-                    pg.wait_for_timeout(1500)
-                body = pg.evaluate("() => document.body.innerText")
-                if "岁" not in body:
-                    last_err = "搜索结果为空（可能被风控置空）"
-                    self.restart_browser()
-                    continue
-                total = (re.search(r"共有[^\n]{0,20}", body) or [""])[0]
-                cards = self._read_cards(pg, limit)
-                self.record("searches", {"query": query, "total": total, "count": len(cards)})
-                return {"ok": True, "url": pg.url, "total": total, "count": len(cards), "cards": cards}
+                        pg.keyboard.press("Enter")
+                    pg.wait_for_timeout(6000)
+                    for _ in range(10):
+                        try:
+                            if "岁" in pg.evaluate("() => document.body.innerText"):
+                                break
+                        except Exception:
+                            break
+                        pg.wait_for_timeout(1200)
+                    body = pg.evaluate("() => document.body.innerText")
+                    if "岁" not in body:
+                        raise LiepinError("搜索结果为空（可能被风控置空）")
+                    total = (re.search(r"共有[^\n]{0,20}", body) or [""])[0]
+                    return {"total": total, "cards": self._read_cards(pg, limit)}
+
+                res = self._with_page(_do, need_search_box=True, tries=1)
+                self.record("searches", {"query": query, "total": res.get("total"), "count": len(res["cards"])})
+                return {"ok": True, "url": SEARCH_URL, "total": res.get("total"),
+                        "count": len(res["cards"]), "cards": res["cards"]}
             except Exception as exc:
                 last_err = str(exc)[:200]
-                self.restart_browser()
+                try:
+                    self.restart_browser()
+                except Exception:
+                    pass
         return {"ok": False, "error": last_err or "搜索失败", "query": query}
 
     def _read_cards(self, pg, limit: int) -> List[Dict[str, Any]]:
@@ -347,8 +407,7 @@ class LiepinSession:
                 if (!t.includes('岁') || t.length < 40 || t.length > 1500) return;
                 const r = el.getBoundingClientRect();
                 if (r.width < 600 || r.width > 1400) return;
-                const hasAction = /立即沟通|继续沟通|打招呼/.test(t);
-                out.push({t, hasAction, area: Math.round(r.width * r.height)});
+                out.push({t, hasAction: /立即沟通|继续沟通|打招呼/.test(t), area: Math.round(r.width * r.height)});
               });
               out.sort((a, b) => (b.hasAction ? 1 : 0) - (a.hasAction ? 1 : 0) || a.area - b.area);
               return out.slice(0, limit).map(x => x.t);
@@ -367,34 +426,21 @@ class LiepinSession:
             cards.append(card)
         return cards
 
-    def chat_page(self, retries: int = 2):
-        """打开「沟通」页（在线沟通 /chat/im）。"""
-        for _ in range(retries + 1):
-            pg = self.page(need_search_box=False, retries=1)
-            if "/chat" in (pg.url or ""):
-                return pg
-            try:
-                pg.locator('text="沟通"').first.click(force=True, timeout=8000)
-                pg.wait_for_timeout(6000)
-                if "/chat" in (pg.url or ""):
-                    return pg
-            except Exception:
-                pass
-            self.restart_browser()
-        raise LiepinError("无法进入猎聘沟通页")
-
     def chat_list(self, limit: int = 20) -> Dict[str, Any]:
-        pg = self.chat_page()
-        rows = pg.evaluate(
-            """(limit) => Array.from(document.querySelectorAll('div,li'))
-                 .filter(e => /(先生|女士|\\d{2}岁)/.test(e.innerText || '')
-                    && e.getBoundingClientRect().width > 150 && e.getBoundingClientRect().width < 520)
-                 .slice(0, limit)
-                 .map(e => (e.innerText || '').replace(/\\s*\\n\\s*/g, ' | ').trim().slice(0, 200))""", limit)
-        return {"ok": True, "url": pg.url, "conversations": rows or []}
+        def _do(pg):
+            rows = pg.evaluate(
+                """(limit) => Array.from(document.querySelectorAll('div,li'))
+                     .filter(e => /(先生|女士|\\d{2}岁)/.test(e.innerText || '')
+                        && e.getBoundingClientRect().width > 150 && e.getBoundingClientRect().width < 560)
+                     .slice(0, limit)
+                     .map(e => (e.innerText || '').replace(/\\s*\\n\\s*/g, ' | ').trim().slice(0, 200))""", limit)
+            return {"ok": True, "url": pg.url, "conversations": rows or []}
+        try:
+            return self._with_page(_do, tries=1)
+        except LiepinError as exc:
+            return {"ok": False, "error": str(exc)[:160]}
 
     def chat_send(self, target: str, text: str, confirm: bool = False) -> Dict[str, Any]:
-        """给会话列表里的某人发消息（写操作：必须 confirm=True，且写入台账）。"""
         if not confirm:
             return {"ok": False, "error": "写操作需 confirm=True（发送消息会真实触达候选人）"}
         if not text or not text.strip():
@@ -403,123 +449,97 @@ class LiepinSession:
         for item in led.get("messages", []):
             if item.get("target") == target and item.get("text") == text:
                 return {"ok": False, "error": "已发送过相同内容，跳过（防重复）", "ledger": item}
-        pg = self.chat_page()
-        opened = pg.evaluate(
-            """(target) => {
-              const rows = Array.from(document.querySelectorAll('div,li'))
-                .filter(e => (e.innerText || '').includes(target)
-                   && e.getBoundingClientRect().width > 150 && e.getBoundingClientRect().width < 520);
-              if (!rows.length) return false;
-              rows[0].click();
-              return true;
-            }""", target)
-        if not opened:
-            return {"ok": False, "error": "沟通列表里找不到该联系人（需先建立沟通关系）"}
-        pg.wait_for_timeout(4000)
-        box = None
-        for sel in ["textarea", '[contenteditable="true"]', 'input[placeholder*="输入"]']:
-            loc = pg.locator(sel).last
-            try:
-                if loc.count() > 0 and loc.is_visible():
-                    box = loc
-                    break
-            except Exception:
-                continue
-        if box is None:
-            return {"ok": False, "error": "未找到输入框（页面结构可能被风控改版，需重新探测）"}
-        box.click(force=True, timeout=8000)
-        pg.keyboard.type(text, delay=20)
-        pg.wait_for_timeout(1000)
-        sent = False
-        for sel in ['button:has-text("发送")', '[class*=send]']:
-            loc = pg.locator(sel).last
-            try:
-                if loc.count() > 0 and loc.is_visible():
-                    loc.click(force=True, timeout=6000)
-                    sent = True
-                    break
-            except Exception:
-                continue
-        if not sent:
-            pg.keyboard.press("Enter")
-        pg.wait_for_timeout(3000)
-        body = pg.evaluate("() => document.body.innerText")
-        ok = text[:14] in body
-        self.record("messages", {"target": target, "text": text, "verified": bool(ok)})
-        return {"ok": bool(ok), "target": target, "verified": bool(ok),
-                "note": "页面已出现该消息" if ok else "已提交但页面未回显，请人工确认"}
+
+        def _do(pg):
+            opened = pg.evaluate(
+                """(target) => {
+                  const rows = Array.from(document.querySelectorAll('div,li'))
+                    .filter(e => (e.innerText || '').includes(target)
+                       && e.getBoundingClientRect().width > 150 && e.getBoundingClientRect().width < 560);
+                  if (!rows.length) return false;
+                  rows[0].click();
+                  return true;
+                }""", target)
+            if not opened:
+                return {"ok": False, "error": "沟通列表里找不到该联系人（需先建立沟通关系）"}
+            pg.wait_for_timeout(4000)
+            box = None
+            for sel in ["textarea", '[contenteditable="true"]', 'input[placeholder*="输入"]']:
+                loc = pg.locator(sel).last
+                try:
+                    if loc.count() > 0 and loc.is_visible():
+                        box = loc
+                        break
+                except Exception:
+                    continue
+            if box is None:
+                return {"ok": False, "error": "未找到输入框（页面可能被风控置空，稍后再试）"}
+            box.click(force=True, timeout=8000)
+            pg.keyboard.type(text, delay=20)
+            pg.wait_for_timeout(1000)
+            sent = False
+            for sel in ['button:has-text("发送")', '[class*=send]']:
+                loc = pg.locator(sel).last
+                try:
+                    if loc.count() > 0 and loc.is_visible():
+                        loc.click(force=True, timeout=6000)
+                        sent = True
+                        break
+                except Exception:
+                    continue
+            if not sent:
+                pg.keyboard.press("Enter")
+            pg.wait_for_timeout(3000)
+            body = pg.evaluate("() => document.body.innerText")
+            ok = text[:14] in body
+            self.record("messages", {"target": target, "text": text, "verified": bool(ok)})
+            return {"ok": bool(ok), "target": target, "verified": bool(ok),
+                    "note": "页面已出现该消息" if ok else "已提交但页面未回显，请人工确认"}
+
+        try:
+            return self._with_page(_do, tries=1)
+        except LiepinError as exc:
+            return {"ok": False, "error": str(exc)[:160]}
 
     def open_detail(self, name: str, age: Optional[int] = None) -> Dict[str, Any]:
-        """打开候选人简历详情并抓取可见文本。
-
-        注意：会消耗猎聘「查看简历」权益，因此由上层强制 confirm=True。
-        猎聘详情面板是异步加载的，这里做「搜索 -> 点卡片 -> 等面板 -> 抓文本」，
-        若面板结构变化会显式报错，方便按需更新选择器（不做静默失败）。
-        """
+        """打开候选人简历详情并抓取可见文本（消耗查看权益，上层强制 confirm=True）。"""
         res = self.search(name, limit=20)
         if not res.get("ok"):
             return {"ok": False, "error": "详情前置搜索失败：%s" % res.get("error")}
-        hit = None
-        for c in res.get("cards", []):
-            if c.get("name") == name and (age is None or c.get("age") == age):
-                hit = c
-                break
-        if hit is None:
+        if not any(c.get("name") == name for c in res.get("cards", [])):
             return {"ok": False, "error": "搜索结果里没找到 %s（可能翻页或换词）" % name}
-        pg = self.page(need_search_box=True, retries=1)
-        clicked = pg.evaluate(
-            """(args) => {
-              const [name, ageS] = args;
-              const cards = Array.from(document.querySelectorAll('div,li,article,section'))
-                .filter(e => { const t = e.innerText || ''; const r = e.getBoundingClientRect();
-                               return t.includes(name) && (!ageS || t.includes(ageS)) && r.width > 600 && r.width < 1400 && t.length < 1500; });
-              if (!cards.length) return false;
-              cards.sort((a, b) => { const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-                                     return ra.width * ra.height - rb.width * rb.height; });
-              const card = cards[0];
-              const target = Array.from(card.querySelectorAll('a,span,div'))
-                .find(n => (n.innerText || '').trim() === name) || card;
-              target.click();
-              return true;
-            }""", [name, ("%d岁" % age) if age else ""])
-        if not clicked:
-            return {"ok": False, "error": "定位不到该候选人的卡片"}
-        pg.wait_for_timeout(6000)
-        detail = pg.evaluate(
-            """() => {
-              const panel = document.querySelector('[class*=resume-detail],[class*=detail-panel],[class*=drawer],[class*=modal]');
-              const src = panel || document.body;
-              return (src.innerText || '').replace(/\n{2,}/g, '\n').slice(0, 6000);
-            }""")
-        self.record("details", {"name": name, "age": age, "chars": len(detail or "")})
-        if not detail or len(detail) < 120:
-            return {"ok": False, "error": "详情面板没抓到内容（可能需要人工确认选择器或权益不足）", "url": pg.url}
-        return {"ok": True, "name": name, "url": pg.url, "text": detail}
 
-    def cookies(self) -> Dict[str, str]:
-        """从当前已登录的浏览器里读 cookie（复用已有连接，避免 Playwright 嵌套）。"""
-        self._ensure_connected()
-        pg = self._liepin_page()
-        if pg is None:
-            for ctx in self._browser.contexts:
-                pg = ctx.pages[0] if ctx.pages else ctx.new_page()
-                break
-        if pg is None:
-            raise LiepinError("没有可用的浏览器页面，先启动浏览器并登录")
-        cdp = pg.context.new_cdp_session(pg)
-        data = cdp.send("Network.getCookies", {"urls": ["https://api-lpt.liepin.com", "https://lpt.liepin.com"]})
-        jar = {c["name"]: c["value"] for c in data.get("cookies", [])}
-        if not jar:
-            raise LiepinError("拿不到猎聘 cookie：请先在技能页启动浏览器并扫码登录")
-        return jar
+        def _do(pg):
+            clicked = pg.evaluate(
+                """(args) => {
+                  const [name, ageS] = args;
+                  const cards = Array.from(document.querySelectorAll('div,li,article,section'))
+                    .filter(e => { const t = e.innerText || ''; const r = e.getBoundingClientRect();
+                                   return t.includes(name) && (!ageS || t.includes(ageS)) && r.width > 600 && r.width < 1400 && t.length < 1500; });
+                  if (!cards.length) return false;
+                  cards.sort((a, b) => { const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+                                         return ra.width * ra.height - rb.width * rb.height; });
+                  const card = cards[0];
+                  const target = Array.from(card.querySelectorAll('a,span,div'))
+                    .find(n => (n.innerText || '').trim() === name) || card;
+                  target.click();
+                  return true;
+                }""", [name, ("%d岁" % age) if age else ""])
+            if not clicked:
+                return {"ok": False, "error": "定位不到该候选人的卡片"}
+            pg.wait_for_timeout(6000)
+            detail = pg.evaluate(
+                """() => {
+                  const panel = document.querySelector('[class*=resume-detail],[class*=detail-panel],[class*=drawer],[class*=modal]');
+                  const src = panel || document.body;
+                  return (src.innerText || '').replace(/\\n{2,}/g, '\\n').slice(0, 6000);
+                }""")
+            self.record("details", {"name": name, "age": age, "chars": len(detail or "")})
+            if not detail or len(detail) < 120:
+                return {"ok": False, "error": "详情面板没抓到内容（可能选择器变化或权益不足）", "url": pg.url}
+            return {"ok": True, "name": name, "url": pg.url, "text": detail}
 
-
-    def status(self) -> Dict[str, Any]:
-        return {"ok": True, "cdp_alive": self.cdp_alive(), "cdp_port": self.port,
-                "chromium": str(self.chrome) if self.chrome else None,
-                "ledger": {k: len(v) for k, v in self.ledger().items() if isinstance(v, list)}}
-
-
-def _guess_account(body: str) -> str:
-    m = re.search(r"\|\s*([\u4e00-\u9fa5]{2,4})\s*\|\s*设置", body or "")
-    return m.group(1) if m else ""
+        try:
+            return self._with_page(_do, need_search_box=True, tries=1)
+        except LiepinError as exc:
+            return {"ok": False, "error": str(exc)[:160]}

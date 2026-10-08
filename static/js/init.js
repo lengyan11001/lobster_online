@@ -1635,6 +1635,7 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   'shanjian-digital-human': 'hifly_digital_human_skill',
   'ecommerce-detail-studio': 'comfly_ecommerce_detail_skill',
   'juhe-wechat': 'juhe_wechat_skill',
+  'liepin-recruit': 'liepin_recruit_skill',
   'wechat-channels-transcript': 'wechat_channels_transcript_skill',
   'ai-3d-model': 'ai_3d_model_skill',
   'wecom-config': 'wecom_reply',

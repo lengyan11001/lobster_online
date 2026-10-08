@@ -142,12 +142,16 @@ class LiepinProtocol:
     def session_info(self) -> Dict[str, Any]:
         """登录账号信息 + 权益/额度 + 未读 + 新招呼（都是只读接口）。"""
         out: Dict[str, Any] = {"mode": "protocol"}
+        # 账号名：login-user-info 需要当前用户自己的 imId（页面才知道），不带就报 5000
+        # 「当前用户与操作用户不一致」；这里改成从已登录页面顶部读取，读不到就留空，不报错。
+        out["user_name"] = ""
+        out["im_user_id"] = ""
         try:
-            info = self._post(IM_LOGIN_USER_API, {"imId": "", "imApp": "1"})
-            d = info.get("data") or {}
-            out.update({"user_name": d.get("userNameShow"), "im_user_id": d.get("userId")})
-        except Exception as exc:
-            out["login_error"] = str(exc)[:120]
+            from .liepin_actions import session as _session
+
+            out["user_name"] = _session().account_name() or ""
+        except Exception:
+            pass
         try:
             pr = self._post(PRIVILEGE_API, {})
             d = pr.get("data") or {}
