@@ -3513,3 +3513,17 @@ html[data-brand="hikong"] .page:has(#dashboard.visible) .dashboard-main {
 .tutorial-st-block pre{white-space:pre-wrap;word-break:break-word;background:#f8fafc;border-radius:8px;padding:10px;font-size:12.5px;line-height:1.6;margin:0;max-height:220px;overflow:auto}
 .tutorial-st-files{display:flex;flex-direction:column;gap:6px}
 .tutorial-st-file{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12.5px;border:1px solid rgba(148,163,184,.3);border-radius:8px;padding:6px 10px}
+
+/* 系统模板详情弹窗（教程页） */
+#tutorialSystemTemplateModal{position:fixed;inset:0;z-index:1400;display:none;align-items:center;justify-content:center;padding:18px;background:rgba(15,23,42,.55)}
+#tutorialSystemTemplateModal.visible{display:flex}
+#tutorialSystemTemplateModal .modal-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;box-shadow:0 24px 64px rgba(15,23,42,.28);padding:20px 22px;width:100%;max-width:760px;max-height:86vh;overflow:auto}
+#tutorialSystemTemplateModal .modal-card h3{margin:0 0 4px;font-size:17px;font-weight:600;color:#0f172a}
+#tutorialSystemTemplateModal .modal-card h3::before{content:'';display:inline-block;width:4px;height:16px;border-radius:2px;background:#0ea5e9;margin-right:8px;vertical-align:-2px}
+#tutorialSystemTemplateModal .modal-sub{font-size:12.5px;color:#64748b;margin-bottom:12px}
+#tutorialSystemTemplateModal .modal-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-top:16px}
+#tutorialSystemTemplateModal .modal-card .btn{white-space:nowrap}
+@media (max-width:640px){
+  #tutorialSystemTemplateModal{padding:0}
+  #tutorialSystemTemplateModal .modal-card{max-width:100%;max-height:92vh;border-radius:14px 14px 0 0;padding:16px}
+}
