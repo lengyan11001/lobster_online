@@ -136,3 +136,12 @@ def liepin_ledger_read(body: LedgerIn) -> Dict[str, Any]:
 @router.post("/report/export", summary="导出候选人 Excel/CSV")
 def liepin_report_export(body: ExportIn) -> Dict[str, Any]:
     return run("liepin.report.export", body.model_dump())
+
+@router.post("/cities", summary="可选城市列表（给界面下拉用）")
+def liepin_cities() -> Dict[str, Any]:
+    from .liepin_protocol import CITY_TREE
+
+    flat = {}
+    for group in CITY_TREE.values():
+        flat.update(group)
+    return {"ok": True, "groups": CITY_TREE, "cities": sorted(flat.keys())}

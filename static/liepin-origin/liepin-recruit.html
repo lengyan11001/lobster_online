@@ -169,8 +169,10 @@
 <!-- 高级筛选弹窗 -->
 <div class="modal" id="md-filter"><div class="box">
   <h3>高级筛选</h3>
-  <div class="row"><label>目前城市</label><input type="text" id="f-dqs" placeholder="输入城市或地区名称（可留空）" />
-    <label>期望城市</label><input type="text" id="f-wantdqs" placeholder="可留空" /></div>
+  <div class="row"><label>目前城市</label><input type="text" id="f-dqs" list="lp-city-list" placeholder="下拉选择城市（可留空）" />
+    <label>期望城市</label><input type="text" id="f-wantdqs" list="lp-city-list" placeholder="下拉选择城市（可留空）" /></div>
+  <div class="row"><span class="muted" id="city-hint">城市直接选名称即可，不用填代码</span></div>
+  <datalist id="lp-city-list"></datalist>
   <div class="row" style="margin-top:8px"><label>职位关键词</label><input type="text" id="f-jobtitles" placeholder="如：销售总监、区域经理（可留空）" />
     <label>公司关键词</label><input type="text" id="f-company" placeholder="公司名称关键词（可留空）" /></div>
   <div class="row" style="margin-top:8px"><label>年限</label><input type="text" id="f-workyears" placeholder="最小,最大，如 8,99" style="width:150px" />
@@ -234,7 +236,17 @@ async function refreshOverview() {
     log('账号信息：' + (r.user_name||'') + ' 未读=' + r.unread + ' 新招呼=' + r.new_hello);
   } catch (e) { log('账号信息失败 ' + e); }
 }
-$('btn-open').onclick = async () => { log('启动浏览器…'); const r = await api('/api/liepin/browser/open', {action:'start'}); log(JSON.stringify(r).slice(0,240)); refreshOverview(); };
+$('btn-open').onclick = async () => { log('启动浏览器…'); const r = await api('/api/liepin/browser/open', {action:'start'}); log(JSON.stringify(r).slice(0,240)); async function loadCities() {
+  try {
+    const r = await api('/api/liepin/cities', {});
+    const list = r.cities || [];
+    $('lp-city-list').innerHTML = list.map(c => '<option value="' + esc(c) + '"></option>').join('');
+    if ($('city-hint')) $('city-hint').textContent = '城市直接选名称即可，不用填代码（当前支持 ' + list.length + ' 个城市/地区）';
+    log('可选城市 ' + list.length + ' 个');
+  } catch (e) { log('城市列表加载失败 ' + e); }
+}
+loadCities();
+refreshOverview(); };
 $('btn-restart').onclick = async () => { const r = await api('/api/liepin/browser/open', {action:'restart'}); log(JSON.stringify(r).slice(0,240)); };
 $('btn-refresh').onclick = refreshOverview;
 

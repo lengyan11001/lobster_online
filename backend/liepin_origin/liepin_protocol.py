@@ -17,6 +17,7 @@ import json
 import re
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -43,6 +44,17 @@ DQ_CODES = {
     "印度尼西亚": "350150", "印尼": "350150", "雅加达": "350150",
     "越南": "350070",
 }
+def _load_city_tree() -> Dict[str, Dict[str, str]]:
+    """加载城市字典（city_codes.json）；缺失时退回内置的最小集合。"""
+    path = Path(__file__).resolve().parent / "city_codes.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"海外": dict(DQ_CODES)}
+
+
+CITY_TREE = _load_city_tree()
+
 PROTO_FILTER_KEYS = {"dqs", "want_dqs", "jobtitles", "company", "workyears", "edu_levels",
                      "language", "age", "sex", "active_status", "manage_exp", "title_keys"}
 
@@ -127,7 +139,12 @@ class LiepinProtocol:
         except Exception:
             raise LiepinProtocolError("返回不是 JSON：%s" % resp.text[:120])
         if payload.get("flag") != 1:
-            raise LiepinProtocolError("接口返回错误：%s %s" % (payload.get("code"), payload.get("msg")))
+            code, msg = payload.get("code"), payload.get("msg")
+            if not code and not msg:
+                raise LiepinProtocolError(
+                    "猎聘返回 flag=0（没有错误文案）：通常是搜索过于频繁、或当日搜索额度用完，"
+                    "过一会儿再试；如果一直这样，请在技能页点「启动浏览器」重新登录一次猎聘")
+            raise LiepinProtocolError("接口返回错误：%s %s" % (code, msg))
         return payload
 
     # ---------- 能力 ----------
@@ -228,16 +245,28 @@ class LiepinProtocol:
                manage_exp: str = "", title_keys: str = "") -> Dict[str, Any]:
         """一页人才搜索（20 条左右）。keys 为关键词，如「东南亚 电表」。"""
         def _city(value: str, label: str) -> str:
+            """把城市名解析成猎聘代码；支持「广东」「深圳」「印度尼西亚」这类中文名。"""
             v = (value or "").strip()
             if not v:
                 return ""
-            if v in DQ_CODES:
-                return DQ_CODES[v]
+            flat = {}
+            for group in CITY_TREE.values():
+                flat.update(group)
+            if v in flat:
+                return flat[v]
             if v.isdigit():
                 return v
+            # 模糊匹配：包含关系（如「深圳市」「深圳-南山」）
+            hits = [name for name in flat if v in name or name in v]
+            if len(hits) == 1:
+                return flat[hits[0]]
+            if len(hits) > 1:
+                raise LiepinProtocolError(
+                    "城市「%s」有多个匹配：%s，请写得更具体一点" % (v, "、".join(sorted(hits)[:6])))
+            groups = "、".join(sorted(flat)[:12])
             raise LiepinProtocolError(
-                "未收录的城市「%s」（%s）：已收录 %s；其他城市请直接传城市代码（纯数字）"
-                % (v, label, "、".join(sorted(DQ_CODES))))
+                "暂时不支持「%s」这个城市（%s）。当前可选例如：%s …；界面里点城市输入框会列出全部可选城市"
+                % (v, label, groups))
 
         dqs = _city(dqs, "目前城市")
         want_dqs = _city(want_dqs, "期望城市")
