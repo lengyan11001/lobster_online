@@ -83,14 +83,22 @@ def run(action: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
             if mode in ("auto", "protocol"):
                 proto_err = ""
                 try:
-                    from .liepin_protocol import PROTO_FILTER_KEYS, LiepinProtocol
+                    from .liepin_protocol import PROTO_FILTER_KEYS, LiepinProtocol, to_card
 
                     proto = LiepinProtocol(port=int(params.get("cdp_port") or 9222))
                     kw = {k: v for k, v in filters.items() if k in PROTO_FILTER_KEYS}
+                    page_no = int(params.get("page") or 0)
+                    if page_no > 0 or pages <= 1:
+                        one = proto.search(query, page=page_no, **kw)
+                        cards = _filter_cards([to_card(c) for c in one.get("list") or []], filters)
+                        total, has_more = one.get("total"), bool(one.get("list"))
+                        return {"ok": True, "mode": "protocol", "query": query, "total": total,
+                                "page": page_no, "page_size": len(cards), "has_more": has_more,
+                                "count": len(cards), "cards": cards[:limit]}
                     res = proto.search_cards(query, pages=pages, **kw)
                     cards = _filter_cards(res["cards"], filters)
                     return {"ok": True, "mode": "protocol", "query": query, "total": res.get("total"),
-                            "pages": res.get("pages"), "count": len(cards), "cards": cards[:limit]}
+                            "page": 0, "pages": res.get("pages"), "count": len(cards), "cards": cards[:limit]}
                 except Exception as exc:
                     proto_err = "%s: %s" % (type(exc).__name__, exc)
                     if mode == "protocol":

@@ -28,6 +28,7 @@ class BrowserIn(BaseModel):
 
 class SearchIn(BaseModel):
     query: str = ""
+    page: int = 0
     pages: int = 1
     limit: int = 20
     mode: str = "auto"

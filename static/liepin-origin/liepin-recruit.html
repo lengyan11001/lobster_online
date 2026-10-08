@@ -253,19 +253,32 @@ function renderSearch() {
 async function doSearch(page) {
   state.page = page || 1;
   const q = $('q').value.trim();
+  const perProtocolPage = 20;                       // 协议一页约 20 人
+  const uiPages = Math.max(1, Math.round(state.pageSize / perProtocolPage));  // 一个 UI 页 = 几个协议页
+  const startProto = (state.page - 1) * uiPages;
   $('s-info').textContent = '搜索中…';
-  const body = { query: q, pages: 1, limit: 200, mode: 'protocol', filters: state.filters };
-  // 分页用 offset：协议按页取，这里按页数直接抓对应页
-  body.pages = state.page * state.pageSize / 20;
-  const r = await api('/api/liepin/candidates/search', body);
-  if (!r.ok) { $('s-info').innerHTML = '<span class="bad">' + esc(r.error || '失败') + '</span>'; return; }
-  const all = r.cards || [];
-  state.cards = all.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
-  $('s-info').textContent = (r.total || '') + ' · 本页 ' + state.cards.length + ' 人（模式 ' + (r.mode||'') + '）';
-  renderSearch();
+  $('btn-search').disabled = true;
+  try {
+    let cards = [], total = null, mode = '', lastCount = uiPages * perProtocolPage;
+    for (let i = 0; i < uiPages; i++) {
+      const r = await api('/api/liepin/candidates/search',
+        { query: q, page: startProto + i, mode: 'protocol', filters: state.filters });
+      if (!r.ok) { $('s-info').innerHTML = '<span class="bad">' + esc(r.error || '失败') + '</span>'; return; }
+      if (total === null) { total = r.total; mode = r.mode; }
+      const got = r.cards || [];
+      cards = cards.concat(got);
+      lastCount = got.length;
+      if (got.length < perProtocolPage) break;      // 后面没有了
+    }
+    state.cards = cards;
+    state.hasMore = lastCount >= perProtocolPage;
+    $('s-info').innerHTML = (total || '') + ' · 本页 ' + cards.length + ' 人（' + mode + '）';
+    $('s-next').disabled = !state.hasMore;
+    renderSearch();
+  } finally { $('btn-search').disabled = false; }
 }
 $('btn-search').onclick = () => doSearch(1);
-$('s-next').onclick = () => doSearch(state.page + 1);
+$('s-next').onclick = () => { if (!state.hasMore) return; doSearch(state.page + 1); };
 $('s-prev').onclick = () => { if (state.page > 1) doSearch(state.page - 1); };
 $('s-pagesize').onchange = () => { state.pageSize = parseInt($('s-pagesize').value, 10); doSearch(1); };
 $('btn-filter').onclick = () => openModal('md-filter');
@@ -317,6 +330,7 @@ async function loadChat(page) {
     + esc(x.time||'') + '</td><td><button class="ghost mini" onclick="openSend(\'' + esc(x.name||'') + '\')">发消息</button></td></tr>').join('')
     : '<tr><td colspan="6" class="muted">没有会话</td></tr>';
   $('c-page').textContent = '第 ' + state.chatPage + ' 页';
+  $('c-next').disabled = !(r.has_more || (r.list||[]).length >= state.chatSize);
 }
 $('btn-chat-load').onclick = () => loadChat(1);
 $('c-next').onclick = () => loadChat(state.chatPage + 1);
