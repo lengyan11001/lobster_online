@@ -191,8 +191,8 @@ window.registerLobsterView('alibaba-inquiries', {
   });
 
   window.registerLobsterView('shop-submit', {
-    html: '/static/views/shop-submit.html?v=20261009-picker-tabs-v2',
-    scripts: '/static/js/shop-submit.js?v=20261009-picker-tabs-v2',
+    html: '/static/views/shop-submit.html?v=20261009-picker-type-v3',
+    scripts: '/static/js/shop-submit.js?v=20261009-picker-type-v3',
     init: 'initShopSubmitView'
   });
   window.registerLobsterView('tutorial', {
