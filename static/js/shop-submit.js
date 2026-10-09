@@ -454,17 +454,21 @@
     if (!host) return;
     var kw = document.getElementById('ssAssetKeyword');
     if (kw) state.picker.keyword = kw.value.trim();
+    var typeEl = document.getElementById('ssAssetType');
+    state.picker.mediaType = typeEl ? String(typeEl.value || '') : (state.picker.mediaType || '');
     state.picker.loading = true;
     host.innerHTML = '<div class="ss-empty">\u52a0\u8f7d\u4e2d\u2026</div>';
     var offset = (state.picker.page - 1) * state.picker.size;
     var originParam = state.picker.origin === 'generated' ? 'generated' : 'user_upload';
     var query = '?limit=' + state.picker.size + '&offset=' + offset + '&origin=' + encodeURIComponent(originParam) +
-      (state.picker.keyword ? '&q=' + encodeURIComponent(state.picker.keyword) : '');
+      (state.picker.keyword ? '&q=' + encodeURIComponent(state.picker.keyword) : '') +
+      (state.picker.mediaType ? '&media_type=' + encodeURIComponent(state.picker.mediaType) : '');
     var lb = localBase();
     var sources = [];
     if (originParam === 'generated') {
       // 与 Online「内容记录」同一份数据：云端 content-records（不是 /api/assets）
-      if (base()) sources.push({ key: 'content', url: base() + '/api/content-records?limit=' + state.picker.size + '&offset=' + offset + '&compact=true' });
+      if (base()) sources.push({ key: 'content', url: base() + '/api/content-records?limit=' + state.picker.size + '&offset=' + offset + '&compact=true' +
+        (state.picker.mediaType ? '&kind=' + encodeURIComponent(state.picker.mediaType) : '') });
     } else {
       if (lb) sources.push({ key: 'local', url: lb + '/api/assets' + query });
       if (base()) sources.push({ key: 'cloud', url: base() + '/api/assets' + query });
@@ -473,8 +477,11 @@
       rec = rec || {};
       var refs = rec.image_refs || rec.images || [];
       var first = (refs && refs[0]) || {};
-      var url = String(first.image_url || first.url || rec.url || rec.source_url || rec.video_url || '').trim();
-      var cover = String(first.image_url || first.cover_url || rec.cover_url || '').trim() || url;
+      var kind = String(rec.media_type || rec.kind || '').toLowerCase();
+      var videoUrl = String(rec.video_url || rec.play_url || rec.file_url || '').trim();
+      var anyUrl = String(rec.url || rec.source_url || first.image_url || first.url || '').trim();
+      var url = kind.indexOf('video') >= 0 ? (videoUrl || anyUrl) : (anyUrl || videoUrl);
+      var cover = String(first.image_url || first.cover_url || rec.cover_url || '').trim() || (kind.indexOf('video') >= 0 ? '' : url);
       return {
         asset_id: String(rec.asset_id || rec.id || ''),
         url: url,
@@ -495,7 +502,7 @@
           if (!data) return [];
           if (src.key === 'content') {
             var rows = data.items || data.records || [];
-            return rows.map(normalizeContentRecord).filter(function (x) { return x.url || x.cover_url; });
+            return rows.map(normalizeContentRecord).filter(function (x) { return !!(x.url || x.cover_url); });
           }
           return data.assets || data.items || [];
         })
