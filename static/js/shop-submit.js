@@ -616,6 +616,87 @@
     });
   };
 
+  // 内容记录里点「投稿」用：浮一个商品选择弹窗（不跳页面），选完直接进投稿弹窗
+  function ensurePickModal() {
+    var box = document.getElementById('ssPickProductModal');
+    if (box) return box;
+    box = document.createElement('div');
+    box.id = 'ssPickProductModal';
+    box.className = 'modal-mask';
+    box.style.cssText = 'position:fixed;inset:0;z-index:1500;display:none;align-items:center;justify-content:center;padding:18px;background:rgba(15,23,42,.55)';
+    box.innerHTML =
+      '<div class="ss-modal-card" style="background:#fff;border-radius:14px;box-shadow:0 24px 64px rgba(15,23,42,.28);padding:20px 22px;width:100%;max-width:720px;max-height:82vh;overflow:auto">'
+      + '<h3 style="margin:0 0 4px;font-size:17px;color:#0f172a">选择一个商品投稿</h3>'
+      + '<div class="modal-sub" id="ssPickSub" style="font-size:12.5px;color:#64748b;margin-bottom:10px"></div>'
+      + '<div style="display:flex;gap:8px;margin-bottom:10px">'
+      + '<input id="ssPickKw" placeholder="搜商品名 / 关键词" style="flex:1;border:1px solid rgba(148,163,184,.45);border-radius:9px;padding:7px 10px;font-size:13px">'
+      + '<button type="button" class="btn btn-outline btn-sm" id="ssPickSearch">搜索</button>'
+      + '</div>'
+      + '<div id="ssPickList" style="display:flex;flex-direction:column;gap:8px;max-height:46vh;overflow:auto"></div>'
+      + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">'
+      + '<button type="button" class="btn btn-outline btn-sm" id="ssPickCancel">取消</button></div>'
+      + '</div>';
+    document.body.appendChild(box);
+    box.addEventListener('click', function (ev) { if (ev.target === box) hidePickModal(); });
+    var cancel = box.querySelector('#ssPickCancel');
+    if (cancel) cancel.addEventListener('click', hidePickModal);
+    var search = box.querySelector('#ssPickSearch');
+    if (search) search.addEventListener('click', function () { loadPickList(true); });
+    var kw = box.querySelector('#ssPickKw');
+    if (kw) kw.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') loadPickList(true); });
+    return box;
+  }
+
+  function hidePickModal() {
+    var box = document.getElementById('ssPickProductModal');
+    if (box) box.style.display = 'none';
+  }
+
+  function loadPickList(reset) {
+    var list = document.getElementById('ssPickList');
+    if (!list) return Promise.resolve();
+    var kwEl = document.getElementById('ssPickKw');
+    if (reset) state.pickPage = 1;
+    state.pickKw = kwEl ? kwEl.value.trim() : (state.pickKw || '');
+    list.innerHTML = '<div class="ss-empty" style="padding:16px;text-align:center;color:#94a3b8">加载中…</div>';
+    return request('/api/shop/plaza?keyword=' + encodeURIComponent(state.pickKw || '') + '&sort=heat&page=1&size=30')
+      .then(function (data) {
+        var items = data.items || [];
+        state.pickProducts = items;
+        if (!items.length) { list.innerHTML = '<div class="ss-empty" style="padding:16px;text-align:center;color:#94a3b8">没找到商品</div>'; return; }
+        list.innerHTML = items.map(function (p) {
+          var cover = p.cover_url ? '<img src="' + esc(p.cover_url) + '" style="width:54px;height:54px;object-fit:cover;border-radius:8px;flex:none" alt="">' : '<span style="width:54px;height:54px;border-radius:8px;background:#f1f5f9;display:inline-block;flex:none"></span>';
+          return '<button type="button" data-ss-pick="' + p.id + '" style="display:flex;gap:10px;align-items:center;text-align:left;background:#fff;border:1px solid rgba(148,163,184,.35);border-radius:12px;padding:8px 10px;cursor:pointer">'
+            + cover
+            + '<span style="flex:1;min-width:0"><b style="font-size:13.5px;color:#0f172a">' + esc(p.title || ('商品 #' + p.id)) + '</b>'
+            + '<div style="font-size:12px;color:#64748b">' + esc((p.merchant && p.merchant.company_name) || '') + '</div></span>'
+            + '<span style="font-size:13px;color:#0f172a;font-weight:600">' + yuan(p.price_cents) + '</span></button>';
+        }).join('');
+        list.querySelectorAll('[data-ss-pick]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var id = Number(btn.getAttribute('data-ss-pick'));
+            var product = (state.pickProducts || []).filter(function (x) { return Number(x.id) === id; })[0];
+            if (!product) return;
+            hidePickModal();
+            openSubmit(product, state.pickItems || []);
+          });
+        });
+      })
+      .catch(function (e) {
+        list.innerHTML = '<div class="ss-empty" style="padding:16px;text-align:center;color:#dc2626">商品加载失败：' + esc(e.message) + '</div>';
+      });
+  }
+
+  window.ShopSubmit.pickProduct = function (items, opts) {
+    opts = opts || {};
+    state.pickItems = items || [];
+    var box = ensurePickModal();
+    var sub = box.querySelector('#ssPickSub');
+    if (sub) sub.textContent = '已带入 ' + (items || []).length + ' 个素材，选一个商品就进投稿确认' + (opts.from ? '（来自' + opts.from + '）' : '') + '。';
+    box.style.display = 'flex';
+    return loadPickList(true);
+  };
+
   window.ShopSubmit.openForAssets = function (items, opts) {
     return window.ShopSubmit.open(Object.assign({}, opts || {}, { items: items || [] }));
   };

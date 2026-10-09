@@ -2825,14 +2825,18 @@ function _assetShopSubmitPayload(asset) {
 
 function _assetOpenShopSubmit(asset) {
   var payload = _assetShopSubmitPayload(asset);
-  return _assetOpenWorkspace('shop-submit').then(function() {
-    return _assetWaitForElement('ssProducts');
-  }).then(function() {
-    if (window.ShopSubmit && typeof window.ShopSubmit.openForAssets === 'function') {
-      _assetMsgShow('素材已带入，选一个商品点「投稿」即可投递。', false);
-      return window.ShopSubmit.openForAssets([payload]);
+  // 先把投稿视图与脚本加载进来（只加载一次，不改当前页面）
+  return _assetOpenWorkspace('shop-submit').then(function () {
+    return _assetWaitForElement('ssPicker', 60);
+  }).then(function () {
+    var back = window.__lobsterShopSubmitBackView || 'assets';
+    if (typeof window.showAppView === 'function') {
+      try { window.showAppView(back); } catch (e) {}
     }
-    throw new Error('投稿功能加载失败，请稍后重试');
+    if (window.ShopSubmit && typeof window.ShopSubmit.pickProduct === 'function') {
+      return window.ShopSubmit.pickProduct([payload], { from: '内容记录' });
+    }
+    throw new Error('投稿功能加载失败，请重试');
   });
 }
 
