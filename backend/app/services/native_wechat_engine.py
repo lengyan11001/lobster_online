@@ -18985,12 +18985,52 @@ def _open_dialog_confirm(
     )
 
 
+def _dismiss_moments_error_box(dialog_hwnd: int, steps: Optional[List[Dict[str, Any]]] = None) -> bool:
+    """关掉系统文件选择框里弹的模态错误框（典型是「找不到文件」+「确定」）。
+
+    只按 esc 有时关不掉这种子窗口，导致后面的逐张兜底点不到「+」，用户会反复看到报错。
+    """
+    clicked = False
+    try:
+        root = _uia_main_root(int(dialog_hwnd or 0))
+    except Exception:
+        root = None
+    if root is not None:
+        try:
+            nodes = _uia_walk(root, max_depth=12, max_nodes=800)
+        except Exception:
+            nodes = []
+        for node in nodes:
+            try:
+                text = str(_uia_control_text(node) or "").strip()
+            except Exception:
+                continue
+            if text not in ("确定", "OK", "是(Y)", "关闭", "Close"):
+                continue
+            try:
+                _uia_click(node)
+                clicked = True
+                break
+            except Exception:
+                continue
+    if clicked:
+        try:
+            _wait_window_closed(int(dialog_hwnd or 0), timeout=1.5)
+        except Exception:
+            pass
+    if clicked and steps is not None:
+        steps.append({"step": "dismiss_moments_error_box", "ok": True})
+    return clicked
+
+
 def _dismiss_open_dialog(dialog_hwnd: int, steps: List[Dict[str, Any]]) -> None:
     """把卡住的选择框关掉，好走后面的逐张兜底。"""
     if not dialog_hwnd:
         return
     try:
         _activate_window(dialog_hwnd)
+        # 框里带模态错误提示（如「找不到文件」）时 esc 关不掉，先把「确定」点掉
+        _dismiss_moments_error_box(dialog_hwnd)
         _send_hotkey("esc", pause=0.2)
         _wait_window_closed(dialog_hwnd, timeout=3.0)
         steps.append({"step": "dismiss_moments_file_picker", "ok": True})
