@@ -524,8 +524,9 @@
               .filter(function (x) { return !!(x.url || x.cover_url); })
               // 文案/公众号/PPT 等文字类不进投稿列表（用户要求）
               .filter(function (x) {
+                // 只要图片和视频（音频/文案/PPT 都不进列表）
                 var k = String(x.media_type || '').toLowerCase();
-                return k.indexOf('image') >= 0 || k.indexOf('video') >= 0 || k.indexOf('audio') >= 0;
+                return k.indexOf('image') >= 0 || k.indexOf('video') >= 0;
               });
           }
           return data.assets || data.items || [];
@@ -542,18 +543,6 @@
       });
       state.picker.items = merged;
       state.picker.loading = false;
-      try {
-        var byType = {};
-        merged.forEach(function (x) {
-          var kk = String(x.media_type || '').toLowerCase();
-          var bucket = kk.indexOf('video') >= 0 ? 'video' : (kk.indexOf('audio') >= 0 ? 'audio' : (kk.indexOf('image') >= 0 ? 'image' : 'other'));
-          byType[bucket] = (byType[bucket] || 0) + 1;
-        });
-        var hint = document.getElementById('ssPickerCount');
-        if (hint) {
-          hint.textContent = '共 ' + merged.length + ' 条（图片 ' + (byType.image || 0) + ' / 视频 ' + (byType.video || 0) + ' / 音频 ' + (byType.audio || 0) + ' / 其它 ' + (byType.other || 0) + '）· 本页最多 ' + state.picker.size + ' 条';
-        }
-      } catch (e) {}
       if (!merged.length && lastError) {
         host.innerHTML = '<div class="ss-empty is-error">素材加载失败：' + esc(lastError.message) + '</div>';
         return;

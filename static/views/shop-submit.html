@@ -52,7 +52,6 @@
   <div class="modal-card ss-modal-card">
     <h3 id="ssSubmitTitle">投稿素材</h3>
     <div class="modal-sub" id="ssSubmitMeta"></div>
-    <div class="ss-hint" id="ssBuildStamp" style="font-size:11px;color:#94a3b8;margin:-6px 0 8px">构建 picker-thumb-v10</div>
     <div class="ss-picker-bar">
       <div class="ss-origin" role="tablist">
         <button type="button" class="ss-chip active" data-ss-origin="user_upload">素材库</button>
@@ -60,13 +59,12 @@
       </div>
       <input id="ssAssetKeyword" class="ss-input" placeholder="搜素材名 / 提示词">
       <select id="ssAssetType" class="ss-input ss-select">
-        <option value="">全部类型</option>
+        <option value="">全部</option>
         <option value="image">图片</option>
         <option value="video">视频</option>
-        <option value="audio">音频</option>
       </select>
       <button type="button" class="btn btn-outline btn-sm" id="ssAssetSearch">搜索</button>
-      <span class="ss-hint" id="ssPickerCount"></span><span class="ss-picked-count" id="ssPickedCount">已选 0</span>
+      <span class="ss-picked-count" id="ssPickedCount">已选 0</span>
     </div>
     <div id="ssPicker" class="ss-picker"><div class="ss-empty">加载中…</div></div>
     <div class="ss-pager" id="ssPickerPager"></div>
