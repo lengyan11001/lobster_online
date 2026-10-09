@@ -460,33 +460,63 @@
     var originParam = state.picker.origin === 'generated' ? 'generated' : 'user_upload';
     var query = '?limit=' + state.picker.size + '&offset=' + offset + '&origin=' + encodeURIComponent(originParam) +
       (state.picker.keyword ? '&q=' + encodeURIComponent(state.picker.keyword) : '');
-    var sources = [];
     var lb = localBase();
-    if (lb) sources.push(lb);
-    if (base()) sources.push(base());
+    var sources = [];
+    if (originParam === 'generated') {
+      // 与 Online「内容记录」同一份数据：云端 content-records（不是 /api/assets）
+      if (base()) sources.push({ key: 'content', url: base() + '/api/content-records?limit=' + state.picker.size + '&offset=' + offset + '&compact=true' });
+    } else {
+      if (lb) sources.push({ key: 'local', url: lb + '/api/assets' + query });
+      if (base()) sources.push({ key: 'cloud', url: base() + '/api/assets' + query });
+    }
+    function normalizeContentRecord(rec) {
+      rec = rec || {};
+      var refs = rec.image_refs || rec.images || [];
+      var first = (refs && refs[0]) || {};
+      var url = String(first.image_url || first.url || rec.url || rec.source_url || rec.video_url || '').trim();
+      var cover = String(first.image_url || first.cover_url || rec.cover_url || '').trim() || url;
+      return {
+        asset_id: String(rec.asset_id || rec.id || ''),
+        url: url,
+        preview_url: cover,
+        cover_url: cover,
+        media_type: String(rec.media_type || rec.kind || ''),
+        title: String(rec.title || rec.name || rec.summary || ''),
+        _content_record: true
+      };
+    }
     var merged = [];
     var seen = {};
     var lastError = null;
-    for (var i = 0; i < sources.length; i += 1) {
-      try {
-        var res = await fetch(sources[i] + '/api/assets' + query, { headers: headers() });
-        if (!res.ok) continue;
-        var data = await res.json();
-        (data.assets || data.items || []).forEach(function (item) {
-          var key = String(item.asset_id || item.url || item.filename || '');
+    return Promise.all(sources.map(function (src) {
+      return fetch(src.url, { headers: headers() })
+        .then(function (res) { return res.ok ? res.json() : null; })
+        .then(function (data) {
+          if (!data) return [];
+          if (src.key === 'content') {
+            var rows = data.items || data.records || [];
+            return rows.map(normalizeContentRecord).filter(function (x) { return x.url || x.cover_url; });
+          }
+          return data.assets || data.items || [];
+        })
+        .catch(function (e) { lastError = e; return []; });
+    })).then(function (lists) {
+      lists.forEach(function (rows) {
+        (rows || []).forEach(function (item) {
+          var key = String(item.asset_id || item.url || item.cover_url || '');
           if (!key || seen[key]) return;
           seen[key] = true;
           merged.push(item);
         });
-      } catch (e) { lastError = e; }
-    }
-    state.picker.items = merged;
-    state.picker.loading = false;
-    if (!merged.length && lastError) {
-      host.innerHTML = '<div class="ss-empty is-error">\u7d20\u6750\u52a0\u8f7d\u5931\u8d25\uff1a' + esc(lastError.message) + '</div>';
-      return;
-    }
-    renderPicker();
+      });
+      state.picker.items = merged;
+      state.picker.loading = false;
+      if (!merged.length && lastError) {
+        host.innerHTML = '<div class="ss-empty is-error">素材加载失败：' + esc(lastError.message) + '</div>';
+        return;
+      }
+      renderPicker();
+    });
   }
 
   function renderPicker() {
