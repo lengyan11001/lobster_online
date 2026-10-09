@@ -392,7 +392,7 @@
     var modal = document.getElementById('ssSubmitModal');
     if (!modal || !product) return;
     state.submit = { product: product };
-    state.picker = { origin: 'user_upload', keyword: '', page: 1, size: 24, items: [], total: 0, picked: {}, loading: false };
+    state.picker = { origin: 'user_upload', keyword: '', page: 1, size: 60, mediaType: '', items: [], total: 0, picked: {}, loading: false };
     document.getElementById('ssSubmitTitle').textContent = '\u6295\u7a3f\u7d20\u6750';
     document.getElementById('ssSubmitMeta').textContent = (product.title || ('\u5546\u54c1 #' + product.id)) +
       ((product.merchant && product.merchant.company_name) ? ' \u00b7 ' + product.merchant.company_name : '') +
