@@ -178,21 +178,6 @@
         }
       });
     });
-    var submitGo = document.getElementById('ssSubmitGo');
-    if (submitGo) submitGo.addEventListener('click', submitPicked);
-    var assetSearch = document.getElementById('ssAssetSearch');
-    if (assetSearch) assetSearch.addEventListener('click', function () { loadPicker(true); });
-    var assetKw = document.getElementById('ssAssetKeyword');
-    if (assetKw) assetKw.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') loadPicker(true); });
-    document.querySelectorAll('#content-shop-submit [data-ss-origin]').forEach(function (chip) {
-      chip.addEventListener('click', function () {
-        state.picker.origin = chip.getAttribute('data-ss-origin') || 'user_upload';
-        document.querySelectorAll('#content-shop-submit [data-ss-origin]').forEach(function (c) {
-          c.classList.toggle('active', c === chip);
-        });
-        loadPicker(true);
-      });
-    });
   }
 
   async function loadPricing() {
@@ -413,6 +398,7 @@
       ((product.merchant && product.merchant.company_name) ? ' \u00b7 ' + product.merchant.company_name : '') +
       '　采纳后你可得 ' + payoutOf('image') + ' 积分（图片）/ ' + payoutOf('video') + ' 积分（视频）';
     document.getElementById('ssSubmitNote').value = '';
+    bindSubmitModal();
     setMsg('ssSubmitMsg', '');
     document.querySelectorAll('#content-shop-submit [data-ss-origin]').forEach(function (c) {
       c.classList.toggle('active', c.getAttribute('data-ss-origin') === 'user_upload');
@@ -432,6 +418,36 @@
     state.submit = null;
   };
 
+  function bindSubmitModal() {
+    // 每次打开投稿弹窗都重绑一次：视图 HTML 被重新注入过的话，旧元素上的监听会丢
+    document.querySelectorAll('#content-shop-submit [data-ss-origin]').forEach(function (chip) {
+      if (chip.dataset.ssBound === '1') return;
+      chip.dataset.ssBound = '1';
+      chip.addEventListener('click', function () {
+        state.picker.origin = chip.getAttribute('data-ss-origin') || 'user_upload';
+        document.querySelectorAll('#content-shop-submit [data-ss-origin]').forEach(function (c) {
+          c.classList.toggle('active', c === chip);
+        });
+        loadPicker(true);
+      });
+    });
+    var search = document.getElementById('ssAssetSearch');
+    if (search && search.dataset.ssBound !== '1') {
+      search.dataset.ssBound = '1';
+      search.addEventListener('click', function () { loadPicker(true); });
+    }
+    var kw = document.getElementById('ssAssetKeyword');
+    if (kw && kw.dataset.ssBound !== '1') {
+      kw.dataset.ssBound = '1';
+      kw.addEventListener('keydown', function (ev) { if (ev.key === 'Enter') loadPicker(true); });
+    }
+    var go = document.getElementById('ssSubmitGo');
+    if (go && go.dataset.ssBound !== '1') {
+      go.dataset.ssBound = '1';
+      go.addEventListener('click', submitPicked);
+    }
+  }
+
   async function loadPicker(reset) {
     if (reset) state.picker.page = 1;
     var host = document.getElementById('ssPicker');
@@ -441,7 +457,8 @@
     state.picker.loading = true;
     host.innerHTML = '<div class="ss-empty">\u52a0\u8f7d\u4e2d\u2026</div>';
     var offset = (state.picker.page - 1) * state.picker.size;
-    var query = '?limit=' + state.picker.size + '&offset=' + offset + '&origin=' + encodeURIComponent(state.picker.origin) +
+    var originParam = state.picker.origin === 'generated' ? 'generated' : 'user_upload';
+    var query = '?limit=' + state.picker.size + '&offset=' + offset + '&origin=' + encodeURIComponent(originParam) +
       (state.picker.keyword ? '&q=' + encodeURIComponent(state.picker.keyword) : '');
     var sources = [];
     var lb = localBase();
@@ -477,7 +494,7 @@
     var pager = document.getElementById('ssPickerPager');
     if (!host) return;
     if (!state.picker.items.length) {
-      host.innerHTML = '<div class="ss-empty">\u6ca1\u6709\u627e\u5230\u7d20\u6750</div>';
+      host.innerHTML = '<div class="ss-empty">' + (state.picker.origin === 'generated' ? '\u5185\u5bb9\u8bb0\u5f55\u91cc\u6ca1\u6709\u53ef\u6295\u7684\u7d20\u6750' : '\u7d20\u6750\u5e93\u91cc\u6ca1\u6709\u53ef\u6295\u7684\u7d20\u6750') + '</div>';
       if (pager) pager.innerHTML = '';
       updatePickedCount();
       return;
