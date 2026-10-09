@@ -520,7 +520,13 @@
           if (!data) return [];
           if (src.key === 'content') {
             var rows = data.items || data.records || [];
-            return rows.map(normalizeContentRecord).filter(function (x) { return !!(x.url || x.cover_url); });
+            return rows.map(normalizeContentRecord)
+              .filter(function (x) { return !!(x.url || x.cover_url); })
+              // 文案/公众号/PPT 等文字类不进投稿列表（用户要求）
+              .filter(function (x) {
+                var k = String(x.media_type || '').toLowerCase();
+                return k.indexOf('image') >= 0 || k.indexOf('video') >= 0 || k.indexOf('audio') >= 0;
+              });
           }
           return data.assets || data.items || [];
         })
