@@ -2830,21 +2830,75 @@ function _assetShopSubmitPayload(asset) {
   };
 }
 
-function _assetOpenShopSubmit(asset) {
-  var payload = _assetShopSubmitPayload(asset);
-  // 先把投稿视图与脚本加载进来（只加载一次，不改当前页面）
-  return _assetOpenWorkspace('shop-submit').then(function () {
-    return _assetWaitForElement('ssPicker', 60);
-  }).then(function () {
-    var back = window.__lobsterShopSubmitBackView || 'assets';
-    if (typeof window.showAppView === 'function') {
-      try { window.showAppView(back); } catch (e) {}
+function _assetSubmitPickModal(payload) {
+  return new Promise(function (resolve) {
+    var old = document.getElementById('assetSubmitPickModal');
+    if (old) old.remove();
+    var box = document.createElement('div');
+    box.id = 'assetSubmitPickModal';
+    box.style.cssText = 'position:fixed;inset:0;z-index:1600;display:flex;align-items:center;justify-content:center;padding:18px;background:rgba(15,23,42,.55)';
+    box.innerHTML =
+      '<div style="background:#fff;border-radius:14px;box-shadow:0 24px 64px rgba(15,23,42,.28);padding:20px 22px;width:100%;max-width:720px;max-height:82vh;overflow:auto">'
+      + '<h3 style="margin:0 0 4px;font-size:17px;color:#0f172a">选择一个商品投稿</h3>'
+      + '<div style="font-size:12.5px;color:#64748b;margin-bottom:10px">已带入这条素材，选一个商品就提交投递（不会离开当前页面）</div>'
+      + '<div style="display:flex;gap:8px;margin-bottom:10px">'
+      + '<input id="assetSubmitPickKw" placeholder="搜商品名 / 关键词" style="flex:1;border:1px solid rgba(148,163,184,.45);border-radius:9px;padding:7px 10px;font-size:13px">'
+      + '<button type="button" class="btn btn-outline btn-sm" id="assetSubmitPickSearch">搜索</button></div>'
+      + '<div id="assetSubmitPickList" style="display:flex;flex-direction:column;gap:8px;max-height:46vh;overflow:auto"><div style="padding:16px;text-align:center;color:#94a3b8">加载中…</div></div>'
+      + '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">'
+      + '<button type="button" class="btn btn-outline btn-sm" id="assetSubmitPickCancel">取消</button></div></div>';
+    document.body.appendChild(box);
+    var listEl = box.querySelector('#assetSubmitPickList');
+    function close() { try { box.remove(); } catch (e) {} resolve(); }
+    function load() {
+      var kw = (box.querySelector('#assetSubmitPickKw') || {}).value || '';
+      listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#94a3b8">加载中…</div>';
+      fetch(_assetCloudBase() + '/api/shop/plaza?keyword=' + encodeURIComponent(kw.trim()) + '&sort=heat&page=1&size=30', { headers: authHeaders() })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          var items = (data && data.items) || [];
+          if (!items.length) { listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#94a3b8">没找到商品</div>'; return; }
+          listEl.innerHTML = items.map(function (p) {
+            var cover = p.cover_url ? '<img src="' + escapeAttr(p.cover_url) + '" style="width:54px;height:54px;object-fit:cover;border-radius:8px" alt="">' : '';
+            return '<button type="button" data-pick="' + p.id + '" style="display:flex;gap:10px;align-items:center;text-align:left;background:#fff;border:1px solid rgba(148,163,184,.35);border-radius:12px;padding:8px 10px;cursor:pointer">'
+              + cover + '<span style="flex:1"><b style="font-size:13.5px;color:#0f172a">' + escapeHtml(p.title || '') + '</b>'
+              + '<div style="font-size:12px;color:#64748b">' + escapeHtml((p.merchant && p.merchant.company_name) || '') + '</div></span>'
+              + '<span style="font-size:13px;font-weight:600">¥' + ((Number(p.price_cents || 0)) / 100) + '</span></button>';
+          }).join('');
+          listEl.querySelectorAll('[data-pick]').forEach(function (btn) {
+            btn.addEventListener('click', function () { submit(Number(btn.getAttribute('data-pick'))); });
+          });
+        })
+        .catch(function (e) { listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#dc2626">商品加载失败：' + escapeHtml(e.message) + '</div>'; });
     }
-    if (window.ShopSubmit && typeof window.ShopSubmit.pickProduct === 'function') {
-      return window.ShopSubmit.pickProduct([payload], { from: '内容记录' });
+    function submit(productId) {
+      listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#94a3b8">投递中…</div>';
+      fetch(_assetCloudBase() + '/api/shop/submissions', {
+        method: 'POST',
+        headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
+        body: JSON.stringify({ product_id: productId, source: 'online_content', items: [payload] })
+      }).then(function (r) { return r.json().catch(function () { return {}; }).then(function (d) { return { s: r.status, d: d }; }); })
+        .then(function (res) {
+          if (res.s !== 200) throw new Error((res.d && res.d.detail) || ('HTTP ' + res.s));
+          var title = (res.d.product && res.d.product.title) || '';
+          close();
+          _assetMsgShow('已投稿 ' + (res.d.total || 1) + ' 个素材给「' + title + '」，商家在后台就能看到。', false);
+        })
+        .catch(function (e) { listEl.innerHTML = '<div style="padding:16px;text-align:center;color:#dc2626">投递失败：' + escapeHtml(e.message) + '</div>'; });
     }
-    throw new Error('投稿功能加载失败，请重试');
+    box.querySelector('#assetSubmitPickCancel').addEventListener('click', close);
+    box.querySelector('#assetSubmitPickSearch').addEventListener('click', load);
+    box.querySelector('#assetSubmitPickKw').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') load(); });
+    box.addEventListener('click', function (ev) { if (ev.target === box) close(); });
+    load();
   });
+}
+
+function _assetOpenShopSubmit(asset) {
+  // 注意：这里不能切视图（切走再切回会让内容记录列表重新加载、操作菜单残留）
+  var payload = _assetShopSubmitPayload(asset);
+  if (typeof _closeFloatingAssetActionMenus === 'function') { try { _closeFloatingAssetActionMenus(null); } catch (e) {} }
+  return _assetSubmitPickModal(payload);
 }
 
 function _assetPublishResolveTarget(asset) {
