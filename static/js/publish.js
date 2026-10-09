@@ -2807,6 +2807,13 @@ function _assetPublishExistingAssetId(asset) {
   return '';
 }
 
+function _assetShopSubmitMediaType(candidate, asset) {
+  // 视频/图片按 URL 后缀兜底，避免把 mp4 标成 image（商家后台会照图片去预览 → 裂图）
+  var url = String((candidate && candidate.url) || (asset && asset.source_url) || '').toLowerCase().split('?')[0];
+  if (/\.(mp4|mov|m4v|webm|mkv|avi|flv|ts)$/.test(url)) return 'video';
+  return String((candidate && candidate.media_type) || (asset && asset.media_type) || 'image');
+}
+
 function _assetShopSubmitPayload(asset) {
   asset = asset && typeof asset === 'object' ? asset : {};
   var candidate = _assetPublishUrlCandidate(asset) || {};
@@ -2814,7 +2821,7 @@ function _assetShopSubmitPayload(asset) {
   return {
     asset_id: String(asset.asset_id || _assetPublishExistingAssetId(asset) || ''),
     url: String(candidate.url || ''),
-    media_type: String(candidate.media_type || asset.media_type || ''),
+    media_type: _assetShopSubmitMediaType(candidate, asset),
     title: String(asset.title || asset.filename || ''),
     filename: String(asset.filename || ''),
     cover_url: images.length ? images[0] : String(asset.cover_url || ''),
