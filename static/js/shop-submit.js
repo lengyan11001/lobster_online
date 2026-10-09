@@ -467,8 +467,16 @@
     var sources = [];
     if (originParam === 'generated') {
       // 与 Online「内容记录」同一份数据：云端 content-records（不是 /api/assets）
-      if (base()) sources.push({ key: 'content', url: base() + '/api/content-records?limit=' + state.picker.size + '&offset=' + offset + '&compact=true' +
-        (state.picker.mediaType ? '&kind=' + encodeURIComponent(state.picker.mediaType) : '') });
+      if (window.lobsterContentRecords && typeof window.lobsterContentRecords.list === 'function') {
+        sources.push({
+          key: 'content',
+          url: '',
+          call: window.lobsterContentRecords.list({ kind: state.picker.mediaType || '', offset: offset, limit: state.picker.size, query: '' })
+        });
+      } else if (base()) {
+        sources.push({ key: 'content', url: base() + '/api/content-records?limit=' + state.picker.size + '&offset=' + offset + '&compact=true' +
+          (state.picker.mediaType ? '&kind=' + encodeURIComponent(state.picker.mediaType) : '') });
+      }
     } else {
       if (lb) sources.push({ key: 'local', url: lb + '/api/assets' + query });
       if (base()) sources.push({ key: 'cloud', url: base() + '/api/assets' + query });
@@ -497,6 +505,13 @@
     var seen = {};
     var lastError = null;
     return Promise.all(sources.map(function (src) {
+      if (src.call) {
+        return src.call.then(function (d) {
+          var rows = (d && d.items) || [];
+          var toItem = window.lobsterContentRecords && window.lobsterContentRecords.toItem;
+          return rows.map(function (rec) { return toItem ? toItem(rec) : rec; });
+        }).catch(function (e) { lastError = e; return []; });
+      }
       return fetch(src.url, { headers: headers() })
         .then(function (res) { return res.ok ? res.json() : null; })
         .then(function (data) {
@@ -550,11 +565,12 @@
       return;
     }
     host.innerHTML = state.picker.items.map(function (item) {
-      var id = String(item.asset_id || item.url || '');
+      var id = String(item._key || item.asset_id || item.url || '');
       var picked = !!state.picker.picked[id];
       var thumb = item.cover_url || item.preview_url || item.open_url || item.source_url || '';
       var isVideo = String(item.media_type || '') === 'video';
-      return '<button type="button" class="ss-asset' + (picked ? ' is-picked' : '') + '" data-ss-asset="' + esc(id) + '">'
+      var submittable = item._submittable !== false;
+      return '<button type="button" class="ss-asset' + (picked ? ' is-picked' : '') + (submittable ? '' : ' is-disabled') + '" data-ss-asset="' + esc(id) + '"' + (submittable ? '' : ' title="\u6587\u5b57\u7c7b\u8bb0\u5f55\uff0c\u65e0\u6cd5\u4f5c\u4e3a\u7d20\u6750\u6295\u7a3f"') + '>'
         + '<span class="ss-asset-thumb">' + (thumb && !isVideo ? '<img src="' + esc(thumb) + '" alt="" loading="lazy">' : '<em>' + (isVideo ? '\u89c6\u9891' : '\u7d20\u6750') + '</em>') + '</span>'
         + '<span class="ss-asset-title">' + esc(item.title || item.filename || item.asset_id) + '</span>'
         + '<span class="ss-asset-tick">' + (picked ? '\u2713' : '') + '</span></button>';
@@ -562,8 +578,9 @@
     host.querySelectorAll('[data-ss-asset]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         var key = btn.getAttribute('data-ss-asset');
-        var item = state.picker.items.filter(function (x) { return String(x.asset_id || x.url || '') === key; })[0];
+        var item = state.picker.items.filter(function (x) { return String(x._key || x.asset_id || x.url || '') === key; })[0];
         if (!item) return;
+        if (item._submittable === false) { toast('这条是文字类记录，不能作为素材投稿', true); return; }
         if (state.picker.picked[key]) delete state.picker.picked[key];
         else state.picker.picked[key] = item;
         btn.classList.toggle('is-picked', !!state.picker.picked[key]);

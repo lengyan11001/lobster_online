@@ -2894,6 +2894,47 @@ function _assetSubmitPickModal(payload) {
   });
 }
 
+// 给「投稿」弹窗复用：与内容记录页完全同一套请求（URL/参数/鉴权都一样），保证两边条数一致
+window.lobsterContentRecords = {
+  list: function (params) {
+    params = params || {};
+    var base = _assetCloudBase();
+    if (!base) return Promise.reject(new Error('未配置云端 API_BASE'));
+    var url = base + '/api/content-records?limit=' + (params.limit || 60) + '&offset=' + (params.offset || 0) + '&compact=true';
+    if (params.kind) url += '&kind=' + encodeURIComponent(params.kind);
+    if (params.query) url += '&q=' + encodeURIComponent(params.query);
+    return fetch(url, { headers: authHeaders() }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (!r.ok) throw new Error((d && d.detail) || ('HTTP ' + r.status));
+        return { items: d.items || d.records || [], total: d.total || 0 };
+      });
+    });
+  },
+  // 内容记录条目 -> 可投稿素材（原文照抄字段，不做额外过滤）
+  toItem: function (rec) {
+    rec = rec || {};
+    var refs = rec.image_refs || rec.images || [];
+    var first = (refs && refs[0]) || {};
+    var kind = String(rec.media_type || rec.kind || '').toLowerCase();
+    var videoUrl = String(rec.video_url || rec.play_url || rec.file_url || '').trim();
+    var anyUrl = String(rec.url || rec.source_url || first.image_url || first.url || '').trim();
+    var url = kind.indexOf('video') >= 0 ? (videoUrl || anyUrl) : (anyUrl || videoUrl);
+    var cover = String(first.image_url || first.cover_url || rec.cover_url || '').trim();
+    return {
+      _key: 'rec:' + String(rec.id || rec.asset_id || ''),
+      asset_id: String(rec.asset_id || rec.id || ''),
+      url: url,
+      preview_url: cover || url,
+      cover_url: cover || (kind.indexOf('video') >= 0 ? '' : url),
+      media_type: kind,
+      kind: kind,
+      title: String(rec.title || rec.name || rec.summary || ''),
+      _submittable: !!(url || videoUrl),
+      _raw_kind: String(rec.kind || '')
+    };
+  }
+};
+
 function _assetOpenShopSubmit(asset) {
   // 注意：这里不能切视图（切走再切回会让内容记录列表重新加载、操作菜单残留）
   var payload = _assetShopSubmitPayload(asset);

@@ -167,7 +167,7 @@ window.registerLobsterView('alibaba-inquiries', {
 
   window.registerLobsterView('assets', {
     html: '/static/views/assets.html?v=20260806-content-record-categories',
-    scripts: '/static/js/publish.js?v=20261009-submit-picker-v1'
+    scripts: '/static/js/publish.js?v=20261009-same-source-v5'
   });
 
   window.registerLobsterView('scheduled-tasks', {
@@ -191,8 +191,8 @@ window.registerLobsterView('alibaba-inquiries', {
   });
 
   window.registerLobsterView('shop-submit', {
-    html: '/static/views/shop-submit.html?v=20261009-picker-type-v4',
-    scripts: '/static/js/shop-submit.js?v=20261009-picker-type-v4',
+    html: '/static/views/shop-submit.html?v=20261009-same-source-v5',
+    scripts: '/static/js/shop-submit.js?v=20261009-same-source-v5',
     init: 'initShopSubmitView'
   });
   window.registerLobsterView('tutorial', {
