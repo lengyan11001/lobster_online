@@ -575,9 +575,13 @@
       var label = title ? title : (when ? ('未命名 · ' + when) : (isVideo ? '视频素材' : '素材'));
       var thumbHtml;
       if (isVideo) {
-        // 视频直接用 <video> 当封面（浏览器会自动显示首帧），有封面图就叠一层
-        thumbHtml = '<video src="' + esc(item.url || '') + '" muted preload="metadata" playsinline'
-          + (thumb ? ' poster="' + esc(thumb) + '"' : '') + '></video>';
+        // 与「素材库 / 内容记录」页同一套做法：<video> + src 带 #t=0.1（跳到 0.1 秒取帧，避免开头黑帧）
+        var videoSrc = String(item.url || item.source_url || item.open_url || item.preview_url || '').trim();
+        var poster = String(item.cover_url || '').trim();
+        if (videoSrc) videoSrc += (videoSrc.indexOf('#') < 0 ? '#t=0.1' : '');
+        thumbHtml = '<video' + (videoSrc ? ' src="' + esc(videoSrc) + '"' : '')
+          + (poster ? ' poster="' + esc(poster) + '"' : '')
+          + ' muted preload="metadata" playsinline></video>';
       } else if (thumb) {
         thumbHtml = '<img src="' + esc(thumb) + '" alt="" loading="lazy">';
       } else {
