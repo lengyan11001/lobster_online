@@ -2919,7 +2919,7 @@ window.lobsterContentRecords = {
     var videoUrl = String(rec.video_url || rec.play_url || rec.file_url || '').trim();
     var anyUrl = String(rec.url || rec.source_url || first.image_url || first.url || '').trim();
     var url = kind.indexOf('video') >= 0 ? (videoUrl || anyUrl) : (anyUrl || videoUrl);
-    var cover = String(first.image_url || first.cover_url || rec.cover_url || '').trim();
+    var cover = String(first.image_url || first.cover_url || rec.cover_url || rec.thumb_url || rec.preview_url || '').trim();
     return {
       _key: 'rec:' + String(rec.id || rec.asset_id || ''),
       asset_id: String(rec.asset_id || rec.id || ''),
@@ -2928,7 +2928,9 @@ window.lobsterContentRecords = {
       cover_url: cover || (kind.indexOf('video') >= 0 ? '' : url),
       media_type: kind,
       kind: kind,
-      title: String(rec.title || rec.name || rec.summary || ''),
+      title: String(rec.title || rec.name || rec.summary || rec.creative_prompt || rec.prompt || rec.description || '').slice(0, 80),
+      created_at: String(rec.created_at || rec.updated_at || ''),
+      prompt: String(rec.creative_prompt || rec.prompt || '').slice(0, 120),
       _submittable: !!(url || videoUrl),
       _raw_kind: String(rec.kind || '')
     };

@@ -570,9 +570,24 @@
       var thumb = item.cover_url || item.preview_url || item.open_url || item.source_url || '';
       var isVideo = String(item.media_type || '') === 'video';
       var submittable = item._submittable !== false;
+      var title = String(item.title || item.filename || item.prompt || '').trim();
+      var when = String(item.created_at || '').replace('T', ' ').slice(5, 16);
+      var label = title ? title : (when ? ('未命名 · ' + when) : (isVideo ? '视频素材' : '素材'));
+      var thumbHtml;
+      if (isVideo) {
+        // 视频直接用 <video> 当封面（浏览器会自动显示首帧），有封面图就叠一层
+        thumbHtml = '<video src="' + esc(item.url || '') + '" muted preload="metadata" playsinline'
+          + (thumb ? ' poster="' + esc(thumb) + '"' : '') + '></video>';
+      } else if (thumb) {
+        thumbHtml = '<img src="' + esc(thumb) + '" alt="" loading="lazy">';
+      } else {
+        thumbHtml = '<em>' + (isVideo ? '\u89c6\u9891' : '\u7d20\u6750') + '</em>';
+      }
+      var sub = esc([(isVideo ? '视频' : (String(item.media_type || '').indexOf('audio') >= 0 ? '音频' : '图片')), when].filter(Boolean).join(' · '));
       return '<button type="button" class="ss-asset' + (picked ? ' is-picked' : '') + (submittable ? '' : ' is-disabled') + '" data-ss-asset="' + esc(id) + '"' + (submittable ? '' : ' title="\u6587\u5b57\u7c7b\u8bb0\u5f55\uff0c\u65e0\u6cd5\u4f5c\u4e3a\u7d20\u6750\u6295\u7a3f"') + '>'
-        + '<span class="ss-asset-thumb">' + (thumb && !isVideo ? '<img src="' + esc(thumb) + '" alt="" loading="lazy">' : '<em>' + (isVideo ? '\u89c6\u9891' : '\u7d20\u6750') + '</em>') + '</span>'
-        + '<span class="ss-asset-title">' + esc(item.title || item.filename || item.asset_id) + '</span>'
+        + '<span class="ss-asset-thumb">' + thumbHtml + '</span>'
+        + '<span class="ss-asset-title">' + esc(label) + '</span>'
+        + '<span class="ss-asset-sub" style="font-size:10.5px;color:#94a3b8">' + sub + '</span>'
         + '<span class="ss-asset-tick">' + (picked ? '\u2713' : '') + '</span></button>';
     }).join('');
     host.querySelectorAll('[data-ss-asset]').forEach(function (btn) {
