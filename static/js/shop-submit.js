@@ -400,7 +400,7 @@
     document.getElementById('ssSubmitNote').value = '';
     bindSubmitModal();
     setMsg('ssSubmitMsg', '');
-    document.querySelectorAll('#content-shop-submit [data-ss-origin]').forEach(function (c) {
+    document.querySelectorAll('#ssSubmitModal [data-ss-origin]').forEach(function (c) {
       c.classList.toggle('active', c.getAttribute('data-ss-origin') === 'user_upload');
     });
     modal.classList.add('visible');
@@ -420,12 +420,12 @@
 
   function bindSubmitModal() {
     // 每次打开投稿弹窗都重绑一次：视图 HTML 被重新注入过的话，旧元素上的监听会丢
-    document.querySelectorAll('#content-shop-submit [data-ss-origin]').forEach(function (chip) {
+    document.querySelectorAll('#ssSubmitModal [data-ss-origin]').forEach(function (chip) {
       if (chip.dataset.ssBound === '1') return;
       chip.dataset.ssBound = '1';
       chip.addEventListener('click', function () {
         state.picker.origin = chip.getAttribute('data-ss-origin') || 'user_upload';
-        document.querySelectorAll('#content-shop-submit [data-ss-origin]').forEach(function (c) {
+        document.querySelectorAll('#ssSubmitModal [data-ss-origin]').forEach(function (c) {
           c.classList.toggle('active', c === chip);
         });
         loadPicker(true);
