@@ -107,6 +107,36 @@ def _index_branding(requested_mark: str = "") -> Dict[str, Any]:
     return {"available": True, "mark": mark, **config}
 
 
+_BUILD_STAMP_CACHE = {}
+
+
+def _static_build_stamp():
+    """静态文件指纹：index.html 里的 ?v= 会追加 &b=<指纹>。
+
+    这样任何一次重载（托盘重开、点「刷新页面」）都请求新的 JS/CSS URL，
+    WebView 缓存不可能再命中旧文件 —— 不需要用户清缓存或杀进程。
+    """
+    if 'v' in _BUILD_STAMP_CACHE:
+        return _BUILD_STAMP_CACHE['v']
+    stamp = ''
+    try:
+        root = Path(__file__).resolve().parents[3] / 'static'
+        newest = 0.0
+        count = 0
+        for path in root.rglob('*'):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in {'.js', '.css', '.html', '.json'}:
+                continue
+            newest = max(newest, path.stat().st_mtime)
+            count += 1
+        stamp = '%d.%d' % (int(newest), count)
+    except Exception:
+        stamp = str(int(time.time()))
+    _BUILD_STAMP_CACHE['v'] = stamp
+    return stamp
+
+
 def render_index_html(template: str, requested_mark: str = "") -> str:
     """Inject branding into the index before returning it to the browser."""
     branding = _index_branding(requested_mark)
@@ -141,6 +171,9 @@ def render_index_html(template: str, requested_mark: str = "") -> str:
     for token, raw_value in values.items():
         value = raw_value if token == "__LOBSTER_HERO_SUBTITLE__" else escape(raw_value, quote=True)
         rendered = rendered.replace(token, value)
+    stamp = _static_build_stamp()
+    if stamp and '&b=' not in rendered:
+        rendered = re.sub(r'(\?v=[^"\'&\s]+)', r'\1&b=' + stamp, rendered)
     return rendered
 
 
