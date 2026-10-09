@@ -8,7 +8,7 @@
     mine: [], mineTotal: 0, minePage: 1,
     detail: null,
     submit: null,
-    picker: { origin: 'user_upload', keyword: '', page: 1, size: 24, items: [], total: 0, picked: {}, loading: false },
+    picker: { origin: 'user_upload', keyword: '', page: 1, size: 60, items: [], total: 0, picked: {}, loading: false },
     pricing: { image: 100, video: 300, audio: 100, default: 100 }
   };
 
@@ -483,6 +483,7 @@
       var url = kind.indexOf('video') >= 0 ? (videoUrl || anyUrl) : (anyUrl || videoUrl);
       var cover = String(first.image_url || first.cover_url || rec.cover_url || '').trim() || (kind.indexOf('video') >= 0 ? '' : url);
       return {
+        _key: 'rec:' + String(rec.id || rec.asset_id || Math.random().toString(36).slice(2)),
         asset_id: String(rec.asset_id || rec.id || ''),
         url: url,
         preview_url: cover,
@@ -510,7 +511,7 @@
     })).then(function (lists) {
       lists.forEach(function (rows) {
         (rows || []).forEach(function (item) {
-          var key = String(item.asset_id || item.url || item.cover_url || '');
+          var key = String(item._key || item.asset_id || item.url || item.cover_url || '');
           if (!key || seen[key]) return;
           seen[key] = true;
           merged.push(item);
@@ -518,6 +519,18 @@
       });
       state.picker.items = merged;
       state.picker.loading = false;
+      try {
+        var byType = {};
+        merged.forEach(function (x) {
+          var kk = String(x.media_type || '').toLowerCase();
+          var bucket = kk.indexOf('video') >= 0 ? 'video' : (kk.indexOf('audio') >= 0 ? 'audio' : (kk.indexOf('image') >= 0 ? 'image' : 'other'));
+          byType[bucket] = (byType[bucket] || 0) + 1;
+        });
+        var hint = document.getElementById('ssPickerCount');
+        if (hint) {
+          hint.textContent = '共 ' + merged.length + ' 条（图片 ' + (byType.image || 0) + ' / 视频 ' + (byType.video || 0) + ' / 音频 ' + (byType.audio || 0) + ' / 其它 ' + (byType.other || 0) + '）· 本页最多 ' + state.picker.size + ' 条';
+        }
+      } catch (e) {}
       if (!merged.length && lastError) {
         host.innerHTML = '<div class="ss-empty is-error">素材加载失败：' + esc(lastError.message) + '</div>';
         return;
