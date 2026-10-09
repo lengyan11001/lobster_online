@@ -467,6 +467,8 @@
     var sources = [];
     if (originParam === 'generated') {
       // 与 Online「内容记录」同一份数据：云端 content-records（不是 /api/assets）
+      // 与内容记录页一致：本地「生成类素材」+ 云端「内容记录」两份合并（页面就是这么合并的）
+      if (lb) sources.push({ key: 'local', url: lb + '/api/assets' + query });
       if (window.lobsterContentRecords && typeof window.lobsterContentRecords.list === 'function') {
         sources.push({
           key: 'content',
