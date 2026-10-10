@@ -2445,7 +2445,20 @@ async def run_wechat_article_pipeline(
             idea = str(oral.get("title") or "").strip()
     extra_material = str(getattr(body, "extra_material", "") or "")
     if oral_script:
-        extra_material = (extra_material + "\n\n【口播文案·写作依据】\n" + oral_script)[:9000]
+        # 口播文案是本次的主依据：正文围绕它改写，节点里填的原话降级为“补充要求”
+        node_brief = str(idea or "").strip()
+        idea = oral_script[:4000]
+        extra_material = "\n\n".join(
+            part
+            for part in (
+                extra_material,
+                "【写作依据】上面的主题来自 IP 日更产出的口播文案，请把这条文案改写成一篇完整的公众号文章："
+                "标题从文案核心观点提炼，正文按文案的信息点展开，可以补充解释与例子，但不要偏离它的观点。",
+                f"【节点补充要求】{node_brief}" if node_brief else "",
+                f"【口播文案原文】\n{oral_script[:4000]}",
+            )
+            if part
+        )[:9000]
     generated = await generate_wechat_article(
         WechatArticleGenerateIn(
             idea=idea,
