@@ -1151,11 +1151,11 @@ def ensure_desktop_runtime(env: dict[str, str]) -> bool:
 
 
 def wait_for_backend(port: int, seconds: int) -> bool:
-    health = f"http://127.0.0.1:{port}/api/health"
+    health = f"http://127.0.0.1:{port}/api/health?fast=1"
     home = f"http://127.0.0.1:{port}/"
     deadline = time.time() + seconds
     while time.time() < deadline:
-        if http_ready(health) or http_ready(home):
+        if http_ready(health, timeout=1.0) or port_open("127.0.0.1", port, timeout=0.3):
             return True
         time.sleep(0.8)
     return False
