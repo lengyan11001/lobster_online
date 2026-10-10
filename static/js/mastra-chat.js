@@ -194,11 +194,27 @@
     Object.keys(state.streams).concat(Object.keys(state.polls)).forEach(closeStream);
   }
 
-  function scrollToBottom() {
+  // 消息区 CSS 是 scroll-behavior: smooth，直接改 scrollTop 会「从顶部平滑滚下去」。
+  // instant=true 时临时关掉平滑，一次到位（打开历史会话用这个），避免看到跳动。
+  function pinScrollToBottom(box, instant) {
+    if (!box) return;
+    if (!instant) {
+      box.scrollTop = box.scrollHeight;
+      return;
+    }
+    var previous = box.style.scrollBehavior;
+    box.style.scrollBehavior = 'auto';
+    box.scrollTop = box.scrollHeight;
+    box.style.scrollBehavior = previous;
+  }
+
+  function scrollToBottom(instant) {
     var box = el('onlineMastraMessages');
     if (!box) return;
-    box.scrollTop = box.scrollHeight;
-    requestAnimationFrame(function () { box.scrollTop = box.scrollHeight; });
+    pinScrollToBottom(box, instant === true);
+    requestAnimationFrame(function () {
+      pinScrollToBottom(el('onlineMastraMessages'), instant === true);
+    });
   }
 
   function clearMessages() {
@@ -1099,7 +1115,8 @@
     clearMessages();
     state.historyItems = Array.isArray(items) ? items : [];
     state.historyItems.forEach(renderHistoryItem);
-    scrollToBottom();
+    // 打开历史会话：直接定位到底部（不要平滑滚动，否则会先看到顶部再滚下去）
+    scrollToBottom(true);
   }
 
   function loadHistory() {
