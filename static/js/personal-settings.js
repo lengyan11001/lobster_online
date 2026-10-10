@@ -1736,8 +1736,8 @@
     var box = $('psCurrentTemplateBox');
     if (!box) return;
     var current = state.defaultItem || {};
-    var keywordCount = Array.isArray(current.keyword_ids) ? current.keyword_ids.length : 0;
-    var competitorCount = Array.isArray(current.competitor_ids) ? current.competitor_ids.length : 0;
+    var keywordCount = Array.isArray(current.keywords) ? current.keywords.length : (Array.isArray(current.keyword_ids) ? current.keyword_ids.length : 0);
+    var competitorCount = Array.isArray(current.competitors) ? current.competitors.length : (Array.isArray(current.competitor_ids) ? current.competitor_ids.length : 0);
     var memoryCount = Array.isArray(current.memory_doc_ids) ? current.memory_doc_ids.length : 0;
     var meta = current.meta && typeof current.meta === 'object' ? current.meta : {};
     var languageLabel = ipTemplateLanguageLabel(templateLanguageFromParts(current.requirements, meta, ''));
@@ -1764,9 +1764,9 @@
     var page = psListPageRows(list.id, rows);
     list.innerHTML = page.rows.map(function(row) {
       var id = String(row.id || '');
-      var k = Array.isArray(row.keyword_ids) && row.keyword_ids.length ? row.keyword_ids.length : (Array.isArray(row.keywords) ? row.keywords.length : 0);
-      var c = Array.isArray(row.competitor_ids) && row.competitor_ids.length ? row.competitor_ids.length : (Array.isArray(row.competitors) ? row.competitors.length : 0);
-      var m = Array.isArray(row.memory_doc_ids) && row.memory_doc_ids.length ? row.memory_doc_ids.length : (Array.isArray(row.memory_docs) ? row.memory_docs.length : 0);
+      var k = Array.isArray(row.keywords) ? row.keywords.length : (Array.isArray(row.keyword_ids) ? row.keyword_ids.length : 0);
+      var c = Array.isArray(row.competitors) ? row.competitors.length : (Array.isArray(row.competitor_ids) ? row.competitor_ids.length : 0);
+      var m = Array.isArray(row.memory_docs) ? row.memory_docs.length : (Array.isArray(row.memory_doc_ids) ? row.memory_doc_ids.length : 0);
       var dh = row.meta && typeof row.meta === 'object' && row.meta.digital_human_template && typeof row.meta.digital_human_template === 'object'
         ? String(row.meta.digital_human_template.name || row.meta.digital_human_template.style_id || '已选数字人')
         : '未选数字人';
