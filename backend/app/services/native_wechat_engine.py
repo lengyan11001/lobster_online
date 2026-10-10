@@ -18519,6 +18519,14 @@ def _activate_window(hwnd: Any) -> bool:
         return False
     if not target:
         return False
+    # 目标不是系统弹窗时，先把残留的错误框/卡死选择框清掉；否则后面所有节点都点不动
+    try:
+        import win32gui as _sweep_gui  # type: ignore
+
+        if str(_sweep_gui.GetClassName(target) or "") != _MOMENTS_PICKER_DIALOG_CLASS:
+            _sweep_stray_dialogs_throttled()
+    except Exception:
+        pass
     try:
         import win32api  # type: ignore
         import win32con  # type: ignore
@@ -19023,6 +19031,121 @@ def _dismiss_moments_error_box(dialog_hwnd: int, steps: Optional[List[Dict[str, 
     return clicked
 
 
+_STRAY_ERROR_TITLE_HINTS = ("找不到文件", "文件不存在", "无法找到", "错误", "失败", "not found", "cannot find", "error")
+_STRAY_SWEEP_STATE: Dict[str, float] = {"at": 0.0}
+
+
+def _close_window_force(hwnd: Any) -> bool:
+    """兜底强关：直接发 WM_CLOSE。esc 点不掉的模态框靠这个收掉。"""
+    try:
+        import win32con  # type: ignore
+        import win32gui  # type: ignore
+    except Exception:
+        return False
+    try:
+        target = int(hwnd or 0)
+    except Exception:
+        return False
+    if not target:
+        return False
+    try:
+        win32gui.PostMessage(target, win32con.WM_CLOSE, 0, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _looks_like_stray_error_dialog(window: Dict[str, Any], *, allow_uia: bool = True) -> bool:
+    """系统模态错误框（典型：「找不到文件」+「确定」）。"""
+    if str(window.get("class") or "") != _MOMENTS_PICKER_DIALOG_CLASS:
+        return False
+    title = str(window.get("title") or "")
+    if any(hint in title for hint in _STRAY_ERROR_TITLE_HINTS):
+        return True
+    if not allow_uia or title:
+        return False
+    try:
+        root = _uia_main_root(int(window.get("hwnd") or 0))
+        return bool(_moments_open_dialog_inline_error(root))
+    except Exception:
+        return False
+
+
+def _clear_stray_wechat_dialogs(
+    steps: Optional[List[Dict[str, Any]]] = None,
+    *,
+    avoid_hwnd: int = 0,
+    limit: int = 6,
+) -> int:
+    """清掉上一次操作残留的系统弹窗（找不到文件的错误框 / 卡死的素材选择框）。
+
+    2026-10-10 事故：朋友圈选图报「找不到文件」后，那个模态错误框 esc 关不掉，
+    一直挡在微信前面 → 之后所有微信节点（点赞/评论/加好友/发消息/建群）全部点不动。
+    这里在每个节点真正动微信之前先扫一遍，哪怕这次失败也不给后面的节点留雷。
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return 0
+    avoid = int(avoid_hwnd or 0)
+    closed: List[Dict[str, Any]] = []
+    uia_checks = 0
+    for window in _top_level_windows():
+        if len(closed) >= limit:
+            break
+        try:
+            hwnd = int(window.get("hwnd") or 0)
+        except Exception:
+            continue
+        if not hwnd or hwnd == avoid:
+            continue
+        try:
+            is_picker = bool(_window_looks_like_moments_picker(window))
+        except Exception:
+            is_picker = False
+        is_error = False
+        try:
+            allow_uia = uia_checks < 3
+            is_error = bool(_looks_like_stray_error_dialog(window, allow_uia=allow_uia))
+            if allow_uia and str(window.get("class") or "") == _MOMENTS_PICKER_DIALOG_CLASS and not str(window.get("title") or ""):
+                uia_checks += 1
+        except Exception:
+            is_error = False
+        if not (is_picker or is_error):
+            continue
+        try:
+            if is_error:
+                _dismiss_moments_error_box(hwnd)      # 先点「确定」
+            _activate_window(hwnd)                    # 目标本身是弹窗，不会再触发清扫
+            _send_hotkey("esc", pause=0.2)
+            if not _wait_window_closed(hwnd, timeout=1.5):
+                _close_window_force(hwnd)             # 兜底 WM_CLOSE
+            if _wait_window_closed(hwnd, timeout=1.0):
+                closed.append(
+                    {
+                        "hwnd": hwnd,
+                        "class": str(window.get("class") or ""),
+                        "title": str(window.get("title") or "")[:60],
+                        "picker": is_picker,
+                        "error": is_error,
+                    }
+                )
+        except Exception:
+            continue
+    if closed and steps is not None:
+        steps.append(
+            {"step": "clear_stray_wechat_dialogs", "ok": True, "count": len(closed), "closed": closed[:limit]}
+        )
+    return len(closed)
+
+
+def _sweep_stray_dialogs_throttled(*, throttle: float = 5.0) -> int:
+    """节流版：任何节点切前台前最多 5 秒扫一次，避免频繁枚举窗口。"""
+    now = time.time()
+    if now - float(_STRAY_SWEEP_STATE.get("at") or 0.0) < float(throttle):
+        return 0
+    _STRAY_SWEEP_STATE["at"] = now
+    return _clear_stray_wechat_dialogs()
+
+
 def _dismiss_open_dialog(dialog_hwnd: int, steps: List[Dict[str, Any]]) -> None:
     """把卡住的选择框关掉，好走后面的逐张兜底。"""
     if not dialog_hwnd:
@@ -19160,6 +19283,11 @@ def _verify_moments_attachments(hwnd: int, expected: int, steps: List[Dict[str, 
 
 def _dismiss_moments_leftovers(hwnd: int, steps: List[Dict[str, Any]]) -> None:
     """失败后清场：关掉残留的选择框/发表页，避免污染下一轮（2026-09-22 18:34 事故）。"""
+    # 先做一次全局清扫：错误框不清掉，后面的微信节点会一直被挡
+    try:
+        _clear_stray_wechat_dialogs(steps, avoid_hwnd=int(hwnd or 0))
+    except Exception:
+        pass
     try:
         picker = _find_moments_file_picker_window(wechat_pid=_window_process_id(hwnd), timeout=0.0)
     except Exception:
@@ -19309,6 +19437,8 @@ def _publish_moments_local_once(
 
         _enforce_local_moments_publish_rate(account_id)
         hwnd = int(item.get("hwnd") or 0)
+        # 干净起步：先把上一轮残留的弹窗收掉，避免点不动微信
+        _clear_stray_wechat_dialogs(steps, avoid_hwnd=hwnd)
         _open_local_moments(hwnd, steps)
         publish_hwnd = _click_moments_publish_entry(hwnd, steps, expect_file_picker=bool(files))
         if files:
