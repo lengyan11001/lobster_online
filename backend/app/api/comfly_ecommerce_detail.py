@@ -11,6 +11,7 @@ from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.parse import unquote, urlparse
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
@@ -34,7 +35,13 @@ from ..services.comfly_ecommerce_detail_pipeline_runner import (
     run_pipeline_sync,
 )
 from ..services.comfly_veo_exec import LOCAL_COMFLY_CONFIG_USER_ID, _resolve_comfly_credentials
-from .assets import _save_bytes_or_tos, build_asset_file_url
+from .assets import (
+    _content_type_for_asset_filename,
+    _is_loopback_base,
+    _save_bytes_or_tos,
+    _upload_to_tos_guarded,
+    build_asset_file_url,
+)
 from .auth import _ServerUser, get_current_user_media_edit
 
 logger = logging.getLogger(__name__)
@@ -640,6 +647,60 @@ def _resolve_reference_inputs_for_pipeline(
     return out
 
 
+async def _public_image_ref_for_cloud(ref: str) -> str:
+    """把「本机文件路径 / 本机 127.0.0.1 预览地址」转成云端能用的公网地址（转存 TOS）。
+
+    云端只会去「下载」它拿到的图片地址：本机地址对它来说等于它自己（必然 404），
+    所以这里统一转换 —— 本机路径直接读文件、本机 URL 先取回字节，然后 put 到 TOS 拿公网链。
+    已经是公网地址（含现有 TOS 链）原样返回；转存不可用时返回原值交给下游兜底。
+    """
+    value = str(ref or "").strip()
+    if not value:
+        return value
+    is_http = value.startswith(("http://", "https://"))
+    if is_http and not _is_loopback_base(value):
+        return value  # 公网地址：云端自己能取到，不用转
+
+    import httpx  # noqa: PLC0415
+
+    if is_http:
+        # 本机预览地址：先从本机后端取回字节（同机自取，云端做不到这件事）
+        try:
+            async with httpx.AsyncClient(timeout=60, trust_env=False) as client:
+                response = await client.get(value)
+            if response.status_code >= 400:
+                raise HTTPException(
+                    status_code=400,
+                    detail="本机图片地址已失效（HTTP %s），请重新上传图片" % response.status_code,
+                )
+            data = response.content or b""
+            filename = Path(unquote(urlparse(value).path or "")).name or "image.jpg"
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400,
+                detail="读取本机图片失败：%s，请重新上传图片" % str(exc)[:120],
+            ) from exc
+    else:
+        path = _resolve_controlled_local_path(value)
+        if not path:
+            return value
+        data = Path(path).read_bytes()
+        filename = Path(path).name
+
+    if not data:
+        raise HTTPException(status_code=400, detail="图片内容为空，请重新上传图片")
+    content_type = _content_type_for_asset_filename(filename) or "image/jpeg"
+    object_key = "pipeline_inputs/%s%s" % (uuid.uuid4().hex, Path(filename).suffix.lower() or ".jpg")
+    tos_url = await asyncio.to_thread(_upload_to_tos_guarded, data, object_key, content_type)
+    if tos_url:
+        logger.info("[comfly_ecommerce_detail] 本机图片已转存公网地址 ref=%s", value[:70])
+        return str(tos_url).strip()
+    logger.warning("[comfly_ecommerce_detail] 本机图片转存失败，保留原值交给下游兜底 ref=%s", value[:70])
+    return value
+
+
 async def _prepare_pipeline_input(
     *,
     pl: EcommerceDetailPipelinePayload,
@@ -708,6 +769,14 @@ async def _prepare_pipeline_input(
             local_path=item.local_path,
         )
         resolved_icon_assets.append({"icon": str(item.icon or "").strip(), "url": resolved_url})
+    # 本机路径 / 本机 127.0.0.1 预览地址 → 统一转成公网地址（云端只认公网地址）
+    product_image = await _public_image_ref_for_cloud(product_image)
+    reference_images = [await _public_image_ref_for_cloud(item) for item in reference_images]
+    style_reference_images = [await _public_image_ref_for_cloud(item) for item in style_reference_images]
+    resolved_icon_assets = [
+        {**item, "url": await _public_image_ref_for_cloud(str(item.get("url") or ""))}
+        for item in resolved_icon_assets
+    ]
     api_base, api_key = _resolve_ecommerce_comfly_credentials(current_user.id, db, request)
     return build_pipeline_input(
         product_image=product_image,
