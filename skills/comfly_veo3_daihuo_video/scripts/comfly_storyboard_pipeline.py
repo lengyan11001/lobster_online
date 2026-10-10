@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import traceback
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode, urlparse
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -564,6 +564,10 @@ def _normalize_aspect_ratio_for_comfly(raw: str, *, default: str = "9:16") -> st
     return default
 
 
+# 本机地址：云端访问 127.0.0.1 等于访问它自己，必然取不到，必须先取回本地再上传
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
+
+
 class ComflyClient:
     def __init__(self, config: PipelineConfig, logger: RunLogger) -> None:
         self.config = config
@@ -636,18 +640,16 @@ class ComflyClient:
             raise PipelineError(f"Invalid payload: {payload}")
         return payload
 
-    def upload(self, src: str) -> tuple[str, int]:
-        if src.startswith("http://") or src.startswith("https://"):
-            return src, 0
-        path = Path(src)
-        if not path.exists():
-            raise PipelineError(f"Image file not found: {src}")
-
+    def _upload_bytes(self, data: bytes, filename: str) -> tuple[str, int]:
+        """把一段图片字节上传到 Comfly，返回 (云端 URL, 尝试次数)。"""
         def call() -> str:
             up_url = f"{self.base_url}/v1/files"
-            self._trace_request("upload_file", up_url, None, {"file": path.name, "multipart": True})
-            with path.open("rb") as f:
-                r = self.session.post(up_url, files={"file": (path.name, f, "application/octet-stream")}, timeout=120)
+            self._trace_request("upload_file", up_url, None, {"file": filename, "multipart": True})
+            r = self.session.post(
+                up_url,
+                files={"file": (filename or "image.jpg", data, "application/octet-stream")},
+                timeout=120,
+            )
             payload = self._check(r)
             url = payload.get("url")
             if not isinstance(url, str) or not url:
@@ -656,10 +658,45 @@ class ComflyClient:
 
         return _retry("upload", self.config.upload_retries, self.config.network_retry_delay_seconds, self.logger, call)
 
+    def _local_ref_bytes(self, src: str) -> Optional[tuple[bytes, str]]:
+        """src 是本机预览地址（127.0.0.1/localhost…）时取回本地字节；公网地址返回 None。"""
+        parsed = urlparse(str(src or "").strip())
+        if (parsed.hostname or "").lower() not in _LOOPBACK_HOSTS:
+            return None
+        response = self.session.get(src, timeout=120)
+        if response.status_code >= 400:
+            raise PipelineError(
+                f"Local image fetch failed HTTP {response.status_code}: {src}"
+                "（本机预览地址已失效，请重新上传参考图）"
+            )
+        data = response.content or b""
+        if not data:
+            raise PipelineError(f"Local image is empty: {src}")
+        name = Path(unquote(parsed.path or "")).name or "image.jpg"
+        return data, name
+
+    def upload(self, src: str) -> tuple[str, int]:
+        ref = str(src or "").strip()
+        if ref.startswith("http://") or ref.startswith("https://"):
+            # 本机地址不能透传给云端（云端访问 127.0.0.1 是它自己 → 404），先取回本地再上传
+            local = self._local_ref_bytes(ref)
+            if local is None:
+                return ref, 0
+            return self._upload_bytes(local[0], local[1])
+        path = Path(ref)
+        if not path.exists():
+            raise PipelineError(f"Image file not found: {src}")
+        return self._upload_bytes(path.read_bytes(), path.name)
+
     def analyze(self, model: str, prompt: str, image_urls: List[str]) -> tuple[Dict[str, Any], int]:
         content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
         for url in image_urls:
-            content.append({"type": "image_url", "image_url": {"url": url}})
+            ref = str(url or "").strip()
+            if not ref:
+                continue
+            if ref.startswith(("http://", "https://")) and (urlparse(ref).hostname or "").lower() in _LOOPBACK_HOSTS:
+                ref, _upload_attempts = self.upload(ref)
+            content.append({"type": "image_url", "image_url": {"url": ref}})
         body = {"model": model, "stream": False, "messages": [{"role": "user", "content": content}], "max_tokens": 4000}
 
         def call() -> Dict[str, Any]:
