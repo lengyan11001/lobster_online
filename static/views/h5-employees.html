@@ -250,6 +250,13 @@
           <label><input id="oeNodeHiflyOralIndustry" type="checkbox"> 行业口播</label>
           <label><input id="oeNodeHiflyOralIp" type="checkbox"> IP 口播</label>
         </div>
+        <div class="oe-form-label" id="oeNodeWewriteFieldsField" hidden>
+          <span>写作依据（口播来源，可多选，都选则每次随机一种）</span>
+          <label><input id="oeNodeWewriteOralIndustry" type="checkbox"> 行业口播</label>
+          <label><input id="oeNodeWewriteOralIp" type="checkbox"> IP 口播</label>
+          <label><input id="oeNodeWewriteSendDraft" type="checkbox"> 生成后发送到公众号草稿箱</label>
+          <small>文章按所选口播来源产出的文案 + 节点说明（主题）来写；勾了草稿箱会用「公众号文章」里配置好的公众号推送草稿，没勾就只生成不推送。</small>
+        </div>
         <label class="oe-form-label" hidden>互动动作<select id="oeNodeMomentAction"><option value="like_comment">点赞并评论</option><option value="like">只点赞</option><option value="comment">只评论</option></select></label>
         <label class="oe-form-label">显示标题<input id="oeNodeLabel" maxlength="160"></label>
         <label class="oe-form-label">节点说明<textarea id="oeNodeNote" maxlength="2000"></textarea></label>

@@ -127,6 +127,9 @@ class WechatArticleDraftIn(BaseModel):
 class WechatArticlePipelineIn(BaseModel):
     idea: str = Field("", description="用户输入的公众号主题、想法或素材")
     topic: str = ""
+    send_to_draft: bool = Field(True, description="是否推送到公众号草稿箱；不勾选则只生成本地草稿")
+    script_sources: List[str] = Field(default_factory=list, description="写作依据：口播来源（行业热门口播 / 专业 IP 口播），与数字人节点同源")
+    script_source: str = Field("", description="写作依据：单个口播来源（兼容旧客户端）")
     source_url: str = Field("", description="复刻模式：要参考的公众号文章链接")
     memory_document_ids: List[str] = Field(default_factory=list, description="复刻模式：使用哪些记忆资料；留空=全部记忆")
     memory_document_titles: List[str] = Field(default_factory=list, description="复刻模式：记忆资料标题（id 对不上时按标题兜底匹配）")
@@ -2354,6 +2357,60 @@ async def create_wechat_article_draft(
     return {"ok": True, "pushed": True, "push_status": "pushed", "draft": item}
 
 
+_ARTICLE_ORAL_PATHS: Dict[str, str] = {
+    "ip_daily_industry_hot_oral": "/api/ip-content/generate/industry-hot-oral",
+    "ip_daily_professional_ip_oral": "/api/ip-content/generate/professional-ip-oral",
+}
+_ARTICLE_ORAL_LABELS: Dict[str, str] = {
+    "ip_daily_industry_hot_oral": "行业热门口播文案",
+    "ip_daily_professional_ip_oral": "专业 IP 口播文案",
+}
+
+
+async def _fetch_article_oral_script(request: Request, source: str, topic: str, user_id: int) -> Dict[str, str]:
+    """取公众号文章的写作依据：复用数字人节点同一套口播来源（行业热门口播 / 专业 IP 口播）。"""
+    path = _ARTICLE_ORAL_PATHS.get(source)
+    label = _ARTICLE_ORAL_LABELS.get(source, "口播文案")
+    token = _raw_token_from_request(request)
+    if not path:
+        return {"script": "", "title": "", "source": source, "error": f"不支持的来源 {source}"}
+    if not token:
+        return {"script": "", "title": "", "source": source, "error": "缺少登录态"}
+    payload = {
+        "extra_requirements": (
+            f"本次只生成 1 条{label}，用于公众号文章的写作素材；"
+            f"主题方向：{topic or '按 IP 人设与关键词自行选题'}。"
+            "要求可读性强、有观点、有具体信息点，不要写镜头指令或括号说明。"
+        ),
+        "count": 1,
+        "sync_before": False,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=240.0, trust_env=False) as client:
+            resp = await client.post(
+                f"{_server_proxy_base()}{path}",
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {token}",
+                    "X-Installation-Id": _installation_id_from_request(request, user_id),
+                },
+            )
+        if resp.status_code >= 400:
+            return {"script": "", "title": "", "source": source, "error": f"HTTP {resp.status_code}"}
+        data = resp.json() if resp.content else {}
+    except Exception as exc:  # noqa: BLE001 取不到就按主题直接写，不阻塞出稿
+        return {"script": "", "title": "", "source": source, "error": str(exc)[:200]}
+    for bucket in ("records", "drafts"):
+        for item in data.get(bucket) or []:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("body") or item.get("content") or item.get("script") or item.get("text") or "").strip()
+            if text:
+                return {"script": text, "title": str(item.get("title") or "").strip(), "source": source, "error": ""}
+    return {"script": "", "title": "", "source": source, "error": "日更未返回文案"}
+
+
 @router.post("/api/wechat-article/pipeline")
 async def run_wechat_article_pipeline(
     body: WechatArticlePipelineIn,
@@ -2370,12 +2427,31 @@ async def run_wechat_article_pipeline(
             detail="请输入公众号文章主题或想法，或粘贴要复刻的公众号文章链接",
         )
     theme_name = body.theme if body.theme in _THEMES else "professional-clean"
+    # 写作依据：勾了「口播来源」就先用该来源产出文案（和数字人节点同源），再让 LLM 写文章
+    oral_sources = [item for item in (body.script_sources or []) if item in _ARTICLE_ORAL_PATHS]
+    if not oral_sources and body.script_source in _ARTICLE_ORAL_PATHS:
+        oral_sources = [body.script_source]
+    article_warnings: List[str] = []
+    oral_script = ""
+    if oral_sources:
+        oral = await _fetch_article_oral_script(request, oral_sources[0], idea, current_user.id)
+        oral_script = str(oral.get("script") or "")
+        if not oral_script:
+            article_warnings.append(
+                f"口播文案获取失败（{_ARTICLE_ORAL_LABELS.get(oral_sources[0], oral_sources[0])}）："
+                f"{oral.get('error') or '未知原因'}，本次按主题直接写作。"
+            )
+        elif not idea:
+            idea = str(oral.get("title") or "").strip()
+    extra_material = str(getattr(body, "extra_material", "") or "")
+    if oral_script:
+        extra_material = (extra_material + "\n\n【口播文案·写作依据】\n" + oral_script)[:9000]
     generated = await generate_wechat_article(
         WechatArticleGenerateIn(
             idea=idea,
             source_url=str(getattr(body, "source_url", "") or ""),
             memory_document_ids=list(getattr(body, "memory_document_ids", []) or []),
-            extra_material=str(getattr(body, "extra_material", "") or ""),
+            extra_material=extra_material,
             style=body.style,
             audience=body.audience,
             theme=theme_name,
@@ -2395,6 +2471,25 @@ async def run_wechat_article_pipeline(
     cover_image_url = ""
     if isinstance(image_urls, list) and image_urls:
         cover_image_url = str(image_urls[0] or "").strip()
+    if not body.send_to_draft:
+        # 没勾「发送到草稿箱」：只生成并保存本地草稿，不推公众号
+        logger.info(
+            "[wechat-article] pipeline skip draft user_id=%s title=%s",
+            current_user.id,
+            str(generated.get("title") or "")[:80],
+        )
+        return {
+            "ok": True,
+            "title": generated.get("title"),
+            "digest": generated.get("digest"),
+            "markdown": generated.get("markdown"),
+            "html": generated.get("html"),
+            "image": generated.get("image"),
+            "draft": {},
+            "pushed": False,
+            "push_status": "skipped",
+            "warnings": article_warnings + (generated.get("warnings") or []),
+        }
     draft_result = await create_wechat_article_draft(
         WechatArticleDraftIn(
             title=str(generated.get("title") or ""),
@@ -2428,7 +2523,7 @@ async def run_wechat_article_pipeline(
         "draft": draft,
         "pushed": pushed,
         "push_status": push_status or ("pushed" if pushed else "local_saved"),
-        "warnings": (generated.get("warnings") or []) + ([] if pushed else ["公众号推送未完成，文章已保存到本地。"]),
+        "warnings": article_warnings + (generated.get("warnings") or []) + ([] if pushed else ["公众号推送未完成，文章已保存到本地。"]),
     }
 
 

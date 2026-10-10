@@ -421,7 +421,7 @@
     if (row.key === 'ip_content_oral') return {title:'IP口播文案',task_kind:'ip_content_daily',content:'H5 工作流：IP口播文案',payload:{template_id:0,use_personal_default:true,tasks:['industry_hot_oral','professional_ip_oral'],sync_before:true,industry_count:5,ip_count:5,moments_count:20,requirements:{}}};
     if (row.key === 'ip_content_moments') return {title:'朋友圈图文',task_kind:'ip_content_daily',content:'H5 工作流：朋友圈图文',payload:{template_id:0,use_personal_default:true,tasks:['moments_candidate'],sync_before:true,industry_count:5,ip_count:5,moments_count:20,requirements:{}}};
     if (row.key === 'ip_content_daily') return {title:'IP日更文案',task_kind:'ip_content_daily',content:'H5 工作流：IP日更文案',payload:{template_id:0,use_personal_default:true,tasks:['industry_hot_oral','professional_ip_oral','moments_candidate'],sync_before:true,industry_count:5,ip_count:5,moments_count:20,requirements:{}}};
-    if (row.key === 'wewrite.article.pipeline') return {title:'公众号文章',task_kind:'capability',content:'H5 工作流：公众号文章',payload:{capability_id:'wewrite.article.pipeline',payload:{idea:prompt,style:'',include_images:true,image_count:3,image_aspect_ratio:'16:9'}}};
+    if (row.key === 'wewrite.article.pipeline') return {title:'公众号文章',task_kind:'capability',content:'H5 工作流：公众号文章',payload:{capability_id:'wewrite.article.pipeline',payload:Object.assign({idea:prompt,style:'',include_images:true,image_count:3,image_aspect_ratio:'16:9',send_to_draft:boolParam((row.params||{}).send_to_draft,false)},digitalHumanOralSourceParams(row.params))}};
     if (row.key === 'linkedin_leads') return {title:'LinkedIn线索挖掘',task_kind:'linkedin_mining',content:'H5 工作流：LinkedIn线索挖掘',payload:{title:'LinkedIn线索挖掘',keywords:[prompt],max_people:30,auto_run:true}};
     if (row.key === 'reddit_leads' || row.key === 'x_leads' || row.key === 'tiktok_leads') {
       var platform = row.key === 'reddit_leads' ? 'reddit' : row.key === 'x_leads' ? 'x' : 'tiktok';
@@ -1282,6 +1282,7 @@
     if (el('oeNodeDouyinAiKeywordField')) el('oeNodeDouyinAiKeywordField').hidden=!douyinAiKeywords;
     if (el('oeNodeDouyinTouchField')) el('oeNodeDouyinTouchField').hidden=!douyinTouch;
     if (el('oeNodeHiflyOralSourcesField')) el('oeNodeHiflyOralSourcesField').hidden=key !== 'hifly.video.create_by_tts';
+    if (el('oeNodeWewriteFieldsField')) el('oeNodeWewriteFieldsField').hidden=key !== 'wewrite.article.pipeline';
     if (el('oeNodeDouyinFollowupField')) el('oeNodeDouyinFollowupField').hidden=!douyinTouch;
     var replyMode=String((el('oeNodeDouyinReplyCommentMode') || {}).value || '').toLowerCase();
     if (['','fixed','ai','rewrite'].indexOf(replyMode) < 0) replyMode='';
@@ -1340,6 +1341,12 @@
       var oralPicked=digitalHumanOralSourceParams(params).script_sources;
       if (el('oeNodeHiflyOralIndustry')) el('oeNodeHiflyOralIndustry').checked=oralPicked.indexOf('ip_daily_industry_hot_oral') >= 0;
       if (el('oeNodeHiflyOralIp')) el('oeNodeHiflyOralIp').checked=oralPicked.indexOf('ip_daily_professional_ip_oral') >= 0;
+    }
+    if (String(option[0] || '') === 'wewrite.article.pipeline') {
+      var articleOralPicked=Array.isArray(params.script_sources) ? params.script_sources : [];
+      if (el('oeNodeWewriteOralIndustry')) el('oeNodeWewriteOralIndustry').checked=articleOralPicked.indexOf('ip_daily_industry_hot_oral') >= 0;
+      if (el('oeNodeWewriteOralIp')) el('oeNodeWewriteOralIp').checked=articleOralPicked.indexOf('ip_daily_professional_ip_oral') >= 0;
+      if (el('oeNodeWewriteSendDraft')) el('oeNodeWewriteSendDraft').checked=boolParam(params.send_to_draft,false);
     }
     syncNodeModalFields(); el('oeNodeModal').hidden=false; setTimeout(function(){el('oeNodeTime').focus();},60);
   }
@@ -1437,6 +1444,16 @@
       if (!oralSources.length) oralSources=['ip_daily_industry_hot_oral'];
       row.params.script_sources=oralSources; row.params.script_source=oralSources[0];
     } else { delete row.params.script_sources; delete row.params.script_source; }
+    if (key === 'wewrite.article.pipeline') {
+      var articleSources=[];
+      if (el('oeNodeWewriteOralIndustry') && el('oeNodeWewriteOralIndustry').checked) articleSources.push('ip_daily_industry_hot_oral');
+      if (el('oeNodeWewriteOralIp') && el('oeNodeWewriteOralIp').checked) articleSources.push('ip_daily_professional_ip_oral');
+      if (!articleSources.length) articleSources=['ip_daily_industry_hot_oral'];
+      row.params.script_sources=articleSources; row.params.script_source=articleSources[0];
+      row.params.send_to_draft=!!(el('oeNodeWewriteSendDraft') && el('oeNodeWewriteSendDraft').checked);
+    } else {
+      delete row.params.send_to_draft;
+    }
     delete row.params.followup_action; delete row.params.group_invite_rules;
     var next=existing ? Object.assign({},existing) : {id:'wf_' + Date.now().toString(36),department_id:'sales',department_name:'销售部',sales_preset:isSalesTemplate(state.selectedTemplate)};
     next.time=time; next.end_time=end; next.time_range=time + (end ? '-' + end : ''); next.ability_key=key; next.ability_label=label; next.note=note; next.plan=planForRow(row); if (existing) next.children=existing.children || existing.actions || [];
