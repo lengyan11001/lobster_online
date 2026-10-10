@@ -448,6 +448,10 @@ def _friendly_failure_message(exc: Exception, payload: Dict[str, Any]) -> tuple[
     return -500, f"Pipeline failed: {exc}"
 
 
+# 本机地址：云端访问 127.0.0.1 等于访问它自己，必然取不到，必须先取回本地再上传
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "0.0.0.0", "::1"}
+
+
 class ComflyClient:
     def __init__(self, config: PipelineConfig, logger: RunLogger) -> None:
         self.config = config
@@ -466,28 +470,55 @@ class ComflyClient:
             raise PipelineError(f"HTTP {response.status_code}: {payload}")
         return payload
 
-    def upload(self, src: str) -> tuple[str, int]:
-        if src.startswith("http://") or src.startswith("https://"):
-            return src, 0
-
-        path = _resolve_local_path(src)
-        if not path.exists():
-            raise PipelineError(f"Image file not found: {src}")
-
+    def _upload_bytes(self, data: bytes, filename: str) -> str:
+        """把一段图片字节上传到 Comfly，返回云端可访问的 URL。"""
         def call() -> str:
-            with path.open("rb") as f:
-                response = self.session.post(
-                    f"{self.base_url}/v1/files",
-                    files={"file": (path.name, f, "application/octet-stream")},
-                    timeout=120,
-                )
+            response = self.session.post(
+                f"{self.base_url}/v1/files",
+                files={"file": (filename or "image.jpg", data, "application/octet-stream")},
+                timeout=120,
+            )
             payload = self._check(response)
             url = payload.get("url")
             if not isinstance(url, str) or not url.strip():
                 raise PipelineError(f"Upload returned no url: {payload}")
             return url.strip()
 
-        return _retry("upload", self.config.upload_retries, self.config.network_retry_delay_seconds, self.logger, call)
+        url, _attempts = _retry(
+            "upload", self.config.upload_retries, self.config.network_retry_delay_seconds, self.logger, call
+        )
+        return url
+
+    def _local_ref_bytes(self, src: str) -> Optional[tuple[bytes, str]]:
+        """src 是本机预览地址（127.0.0.1/localhost…）时取回本地字节；公网地址返回 None。"""
+        parsed = urlparse(str(src or "").strip())
+        if (parsed.hostname or "").lower() not in _LOOPBACK_HOSTS:
+            return None
+        response = self.session.get(src, timeout=120)
+        if response.status_code >= 400:
+            raise PipelineError(
+                f"Local image fetch failed HTTP {response.status_code}: {src}"
+                "（本机预览地址已失效，请重新上传商品图/参考图）"
+            )
+        data = response.content or b""
+        if not data:
+            raise PipelineError(f"Local image is empty: {src}")
+        name = Path(unquote(parsed.path or "")).name or "image.jpg"
+        return data, name
+
+    def upload(self, src: str) -> tuple[str, int]:
+        ref = str(src or "").strip()
+        if ref.startswith("http://") or ref.startswith("https://"):
+            # 本机地址不能直接透传给云端（云端访问 127.0.0.1 是它自己 → 404），先取回本地再上传
+            local = self._local_ref_bytes(ref)
+            if local is None:
+                return ref, 0
+            return self._upload_bytes(local[0], local[1]), 0
+
+        path = _resolve_local_path(ref)
+        if not path.exists():
+            raise PipelineError(f"Image file not found: {src}")
+        return self._upload_bytes(path.read_bytes(), path.name), 0
 
     def analyze_json(
         self,
@@ -499,7 +530,12 @@ class ComflyClient:
     ) -> tuple[Dict[str, Any], int]:
         content: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
         for url in image_urls:
-            content.append({"type": "image_url", "image_url": {"url": url}})
+            ref = str(url or "").strip()
+            if not ref:
+                continue
+            if ref.startswith(("http://", "https://")) and (urlparse(ref).hostname or "").lower() in _LOOPBACK_HOSTS:
+                ref, _upload_attempts = self.upload(ref)
+            content.append({"type": "image_url", "image_url": {"url": ref}})
         body = {
             "model": model,
             "stream": False,
@@ -526,8 +562,15 @@ class ComflyClient:
         normalized_refs = [str(ref or "").strip() for ref in refs if str(ref or "").strip()]
         remote_refs: List[str] = []
         local_refs: List[Path] = []
+        local_blobs: List[tuple[str, bytes]] = []
         for ref in normalized_refs:
             if ref.startswith(("http://", "https://")):
+                # 本机预览地址云端取不到，取回本地后按本地图走（multipart 直传）
+                blob = self._local_ref_bytes(ref)
+                if blob is not None:
+                    if (blob[1], blob[0]) not in local_blobs:
+                        local_blobs.append((blob[1], blob[0]))
+                    continue
                 if ref not in remote_refs:
                     remote_refs.append(ref)
                 continue
@@ -549,7 +592,7 @@ class ComflyClient:
             body["image"] = remote_refs
 
         def call() -> Dict[str, Any]:
-            if local_refs:
+            if local_refs or local_blobs:
                 data = {k: str(v) for k, v in body.items() if k != "response_format"}
                 if remote_refs:
                     data["image"] = json.dumps(remote_refs, ensure_ascii=False)
@@ -560,6 +603,8 @@ class ComflyClient:
                         handle = path.open("rb")
                         opened.append(handle)
                         files.append(("image", (path.name, handle, _guess_mime_type(path))))
+                    for blob_name, blob_data in local_blobs:
+                        files.append(("image", (blob_name, blob_data, _guess_mime_type(Path(blob_name)))))
                     response = self.session.post(
                         f"{self.base_url}/v1/images/edits",
                         data=data,
