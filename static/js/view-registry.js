@@ -202,8 +202,8 @@ window.registerLobsterView('alibaba-inquiries', {
   });
 
   window.registerLobsterView('h5-employees', {
-    html: '/static/views/h5-employees.html?v=20260912-douyin-ai-keywords-v1',
-    scripts: '/static/js/views/h5-employees.js?v=20260912-douyin-ai-keywords-v1',
+    html: '/static/views/h5-employees.html?v=20261010-article-oral-draft-v1',
+    scripts: '/static/js/views/h5-employees.js?v=20261010-article-oral-draft-v1',
     init: 'initOnlineH5EmployeesView',
     cache: 'reload'
   });
