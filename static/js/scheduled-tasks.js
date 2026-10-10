@@ -543,6 +543,52 @@
       });
   }
 
+  function articleResultPayload(payload) {
+    var src = payload && typeof payload === 'object' ? payload : {};
+    var inner = src.payload && typeof src.payload === 'object' ? src.payload : src;
+    var images = inner.image && typeof inner.image === 'object' ? inner.image : {};
+    var urls = (Array.isArray(images.urls) ? images.urls : (Array.isArray(inner.image_urls) ? inner.image_urls : []))
+      .map(function (item) { return String(item || '').trim(); })
+      .filter(function (item) { return /^https?:\/\//i.test(item); });
+    var article = {
+      title: String(inner.title || src.title || '').trim(),
+      markdown: String(inner.markdown || src.markdown || '').trim(),
+      html: String(inner.html || src.html || '').trim(),
+      urls: urls,
+      pushStatus: String(inner.push_status || src.push_status || '').trim(),
+      pushed: inner.pushed === true || src.pushed === true
+    };
+    var looksLikeArticle = !!(article.title && (article.markdown || article.html || article.urls.length))
+      || /wewrite|article/i.test(String(src.capability_id || inner.capability_id || ''));
+    return looksLikeArticle ? article : null;
+  }
+
+  function articleResultBlockHtml(payload) {
+    var article = articleResultPayload(payload);
+    if (!article) return '';
+    var statusText = article.pushed
+      ? '已推送到公众号草稿箱'
+      : (article.pushStatus === 'skipped' ? '按节点设置：仅生成本地草稿，未推送' : '已生成，草稿箱未推送成功（检查「公众号文章」里的公众号配置）');
+    var safeHtml = article.html
+      ? String(article.html).replace(/<script[\s\S]*?<\/script>/gi, '').replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+      : '';
+    var out = '<div class="scheduled-run-detail-article">';
+    if (article.title) out += '<h4 style="margin:0 0 6px;">' + html(article.title) + '</h4>';
+    out += '<p class="meta">' + html(statusText) + '</p>';
+    if (article.urls.length) {
+      out += '<div style="display:flex;flex-direction:column;gap:8px;margin:10px 0;">'
+        + article.urls.map(function (url) {
+          return '<img src="' + html(url) + '" alt="" style="max-width:100%;border-radius:10px;display:block;">';
+        }).join('')
+        + '</div>';
+    }
+    out += safeHtml
+      ? '<div style="line-height:1.75;">' + safeHtml + '</div>'
+      : (article.markdown ? '<pre class="scheduled-run-detail-pre">' + html(article.markdown) + '</pre>' : '');
+    out += '</div>';
+    return out;
+  }
+
   function renderRunDetail(run, modal, body) {
     var payload = resultPayload(run);
     var urls = collectMediaUrls(run);
@@ -572,9 +618,10 @@
       }).join('') + '</div>'
       : '<p class="meta">未找到提示词字段。</p>';
     var resultText = runResultText(run);
-    var resultHtml = resultText
+    var articleHtml = articleResultBlockHtml(payload);
+    var resultHtml = articleHtml || (resultText
       ? '<pre class="scheduled-run-detail-pre">' + html(resultText) + '</pre>'
-      : '<p class="meta">无错误或文本结果。</p>';
+      : '<p class="meta">无错误或文本结果。</p>');
     var ipHtml = ipContentGroupHtml(payload);
     var targetsHtml = targetsDigestHtml(run);
     body.innerHTML = metaHtml
