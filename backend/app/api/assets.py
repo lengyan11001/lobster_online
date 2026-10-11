@@ -468,6 +468,30 @@ def _deep_extract_url_from_transfer_nested(obj: Any) -> Optional[str]:
     return None
 
 
+def _mcp_invoke_result_text(rpc_result) -> str:
+    """从 MCP tools/call 的 result 里取出正文（content[].text，兼容再包一层 result）。"""
+    if not isinstance(rpc_result, dict) or rpc_result.get("isError"):
+        return ""
+    for item in rpc_result.get("content") or []:
+        if not isinstance(item, dict) or item.get("type") != "text":
+            continue
+        text = str(item.get("text") or "")
+        try:
+            outer = json.loads(text)
+        except Exception:  # noqa: BLE001
+            if text.strip():
+                return text
+            continue
+        if isinstance(outer, dict):
+            inner = outer.get("result")
+            if isinstance(inner, str):
+                return inner
+            if inner is not None:
+                return json.dumps(inner, ensure_ascii=False)
+        return text
+    return ""
+
+
 def _extract_cdn_from_mcp_invoke_result(rpc_result: dict) -> Optional[str]:
     """解析 MCP tools/call 的 result（invoke_capability），读取 content[].text JSON 中的 result。"""
     if rpc_result.get("isError"):
@@ -4318,6 +4342,105 @@ def _merge_digest_transcript(digest: dict, transcript: str) -> dict:
     return merged
 
 
+_DIGEST_UNDERSTAND_PROMPT = (
+    "你是短视频内容理解助手。看完整条视频后只返回 JSON，不要解释："
+    '{"title":"不超过20字的主题","summary":"120字以内的内容要点（讲什么、给谁看、关键信息、画面里的文字）",'
+    '"tags":["标签1","标签2","标签3"]}。只描述真实内容，不要编造。'
+)
+
+
+def _digest_json_from_text(text: str) -> dict:
+    import json as _json
+    import re as _re
+
+    match = _re.search(r"\{.*\}", str(text or ""), _re.S)
+    if not match:
+        return {}
+    try:
+        data = _json.loads(match.group(0))
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def _video_understand_via_mcp(request: Request, user, video_url: str, prompt: str) -> dict:
+    """走服务器能力 video.understand（原生视频理解，openrouter/router/video），返回 {title, summary, tags}。"""
+    target = str(video_url or "").strip()
+    if not target.startswith("http"):
+        return {}
+    sutui_token = ""
+    try:
+        if user is not None:
+            from .consumption_accounts import get_effective_sutui_token
+
+            db_s = SessionLocal()
+            try:
+                sutui_token = get_effective_sutui_token(user, db_s) or ""
+            finally:
+                db_s.close()
+    except Exception:  # noqa: BLE001
+        sutui_token = ""
+    if not sutui_token:
+        try:
+            from mcp.http_server import _load_sutui_token
+
+            sutui_token = _load_sutui_token() or ""
+        except Exception:  # noqa: BLE001
+            sutui_token = ""
+    if not sutui_token:
+        logger.debug("[素材理解] 无速推 Token，跳过 video.understand")
+        return {}
+
+    hdrs: dict = {"Content-Type": "application/json"}
+    auth = (request.headers.get("Authorization") or "").strip() if request is not None else ""
+    if auth:
+        hdrs["Authorization"] = auth if auth.lower().startswith("bearer ") else f"Bearer {auth}"
+    xi = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip() if request is not None else ""
+    if xi:
+        hdrs["X-Installation-Id"] = xi
+    hdrs["X-Sutui-Token"] = sutui_token
+    mcp_url = f"http://127.0.0.1:{os.environ.get('MCP_PORT') or getattr(settings, 'mcp_port', 8001)}/mcp"
+    body = {
+        "jsonrpc": "2.0",
+        "id": "video-understand",
+        "method": "tools/call",
+        "params": {
+            "name": "invoke_capability",
+            "arguments": {
+                "capability_id": "video.understand",
+                "payload": {"video_urls": [target], "prompt": prompt or _DIGEST_UNDERSTAND_PROMPT},
+            },
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30.0, read=6.5 * 60.0, write=600.0, pool=60.0), trust_env=False) as client:
+            resp = await client.post(mcp_url, json=body, headers=hdrs)
+    except Exception:  # noqa: BLE001
+        logger.exception("[素材理解] video.understand 请求失败")
+        return {}
+    if resp.status_code >= 400:
+        logger.warning("[素材理解] video.understand HTTP %s %s", resp.status_code, (resp.text or "")[:300])
+        return {}
+    try:
+        rpc = resp.json() or {}
+    except Exception:  # noqa: BLE001
+        return {}
+    if rpc.get("error"):
+        logger.warning("[素材理解] video.understand 返回错误: %s", str(rpc.get("error"))[:300])
+        return {}
+    text = _mcp_invoke_result_text(rpc.get("result"))
+    data = _digest_json_from_text(text)
+    title = str(data.get("title") or "").strip()[:80]
+    summary = str(data.get("summary") or "").strip()[:2000]
+    raw_tags = data.get("tags")
+    tags = [str(item).strip() for item in raw_tags if str(item).strip()][:6] if isinstance(raw_tags, list) else []
+    if not (title or summary):
+        plain = str(text or "").strip()
+        if plain and not plain.startswith("{"):
+            summary = plain[:2000]
+    return {"title": title, "summary": summary, "tags": tags, "source": "video.understand"}
+
+
 @router.post("/api/assets/{asset_id}/ai-digest", summary="用多模态模型理解素材（多帧+画面字幕），返回标题/要点/标签")
 async def understand_saved_asset_digest(
     asset_id: str,
@@ -4334,18 +4457,29 @@ async def understand_saved_asset_digest(
     _reject_intermediate_library_asset(row)
     from ..services.asset_ai_understand import understand_asset_digest
 
-    with tempfile.TemporaryDirectory(prefix="lobster_library_digest_") as temp_name:
-        source_path = await _materialize_library_file(row, request, Path(temp_name))
+    digest: dict = {}
+    # 视频优先走服务器「原生视频理解」能力（openrouter/router/video，Gemini 级多模态）
+    if media_type == "video":
         try:
-            digest = await asyncio.to_thread(
-                understand_asset_digest,
-                source_path,
-                media_type,
-                base_url=_auth_server_base_url(),
-                headers=_forward_auth_headers(request),
+            digest = await _video_understand_via_mcp(
+                request, current_user, str(getattr(row, "source_url", "") or ""), _DIGEST_UNDERSTAND_PROMPT
             )
-        except (RuntimeError, ValueError) as exc:
-            raise HTTPException(502, detail=str(exc)[:300]) from exc
+        except Exception:  # noqa: BLE001
+            logger.exception("[素材理解] video.understand 异常，退回抽帧理解")
+            digest = {}
+    if not digest.get("summary"):
+        with tempfile.TemporaryDirectory(prefix="lobster_library_digest_") as temp_name:
+            source_path = await _materialize_library_file(row, request, Path(temp_name))
+            try:
+                digest = await asyncio.to_thread(
+                    understand_asset_digest,
+                    source_path,
+                    media_type,
+                    base_url=_auth_server_base_url(),
+                    headers=_forward_auth_headers(request),
+                )
+            except (RuntimeError, ValueError) as exc:
+                raise HTTPException(502, detail=str(exc)[:300]) from exc
     # 视频再补一层「口播全文」：把公网地址交给服务器 STT 转写，和画面要点合并
     if media_type == "video":
         transcript = await _stt_transcript_for_public_url(request, str(getattr(row, "source_url", "") or ""))
