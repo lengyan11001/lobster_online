@@ -6600,7 +6600,7 @@
                                     <div class="video-comment-field">
                                         <label for="douyin-interaction-prompt">AI 生成方向 / 核心观点</label>
                                         <textarea id="douyin-interaction-prompt" rows="3" placeholder="可选填写，例如：自然一点、像同行交流、先从对方评论切入、别太营销"></textarea>
-                                        <div class="video-comment-hint">不填也可以，系统会结合对方评论、来源视频和作者场景自动生成一条自然私信。如果你给了明确方向，模型必须围绕这个方向来写。</div>
+                                        <div class="video-comment-hint dm-preset-hint"><span>不填也可以，系统会结合对方评论、来源视频和作者场景自动生成一条自然私信；保存后下次打开会自动回填这条 AI 生成方向。</span><button type="button" class="btn btn-primary dm-preset-save-btn" onclick="saveDouyinInteractionPrompt(true)">保存生成方向</button></div>
                                     </div>
                                 </div>
                                 <div id="douyin-interaction-rewrite-wrap" class="video-comment-panel">
@@ -9188,7 +9188,8 @@
     <script>
         (() => {
             const storageKey = "douyin-interaction-rewrite-seed-v1";
-            const persistLocalSetting = (value) => fetch("/api/douyin/local-settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: { [storageKey]: value } }) }).catch(() => null);
+            const promptStorageKey = "douyin-interaction-ai-prompt-v1";
+            const persistLocalSetting = (value, key = storageKey) => fetch("/api/douyin/local-settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: { [key]: value } }) }).catch(() => null);
             window.loadDouyinInteractionRewrite = function() {
                 const seedEl = document.getElementById("douyin-interaction-seed-text");
                 if (!seedEl) return;
@@ -9218,7 +9219,32 @@
                 void persistLocalSetting(seedText);
                 if (showLog && typeof addLog === "function") addLog("已保存 AI 改写基准文案。", "success");
             };
-            document.addEventListener("DOMContentLoaded", () => window.loadDouyinInteractionRewrite());
+            window.loadDouyinInteractionPrompt = function() {
+                const promptEl = document.getElementById("douyin-interaction-prompt");
+                if (!promptEl) return;
+                try {
+                    promptEl.value = localStorage.getItem(promptStorageKey) || "";
+                } catch (error) {}
+                fetch("/api/douyin/local-settings").then(res => res.json()).then(data => {
+                    const remote = data?.settings?.[promptStorageKey];
+                    if (remote !== undefined && remote !== null && String(remote).trim()) promptEl.value = String(remote);
+                    else if (promptEl.value.trim()) void persistLocalSetting(promptEl.value.trim(), promptStorageKey);
+                }).catch(() => {});
+            };
+            window.saveDouyinInteractionPrompt = function(showLog = false) {
+                const promptEl = document.getElementById("douyin-interaction-prompt");
+                if (!promptEl) return;
+                const promptText = String(promptEl.value || "").trim();
+                try {
+                    localStorage.setItem(promptStorageKey, promptText);
+                } catch (error) {
+                    if (showLog && typeof addLog === "function") addLog(`保存生成方向失败：${error.message}`, "error");
+                    return;
+                }
+                void persistLocalSetting(promptText, promptStorageKey);
+                if (showLog && typeof addLog === "function") addLog(promptText ? "已保存 AI 生成方向。" : "已清空 AI 生成方向。", "success");
+            };
+            document.addEventListener("DOMContentLoaded", () => { window.loadDouyinInteractionRewrite(); window.loadDouyinInteractionPrompt(); });
         })();
     </script>
     <script>

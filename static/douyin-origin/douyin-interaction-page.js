@@ -19,6 +19,7 @@ const defaultDouyinInteractionMessage = "你好，我看到你对 OpenClaw 感�
 const douyinInteractionPresetCount = 10;
 const douyinInteractionPresetStorageKey = "douyin-interaction-message-presets-v1";
 const douyinInteractionRewriteStorageKey = "douyin-interaction-rewrite-seed-v1";
+const douyinInteractionPromptStorageKey = "douyin-interaction-ai-prompt-v1";
 
 function persistDouyinLocalSetting(key, value) {
     return fetch("/api/douyin/local-settings", {
@@ -503,6 +504,10 @@ function loadDouyinInteractionPresets() {
         const remoteSeed = data?.settings?.[douyinInteractionRewriteStorageKey];
         if (seedEl && remoteSeed) seedEl.value = String(remoteSeed);
         else if (seedEl && seedEl.value.trim()) void persistDouyinLocalSetting(douyinInteractionRewriteStorageKey, seedEl.value.trim());
+        const promptEl = document.getElementById("douyin-interaction-prompt");
+        const remotePrompt = data?.settings?.[douyinInteractionPromptStorageKey];
+        if (promptEl && remotePrompt) promptEl.value = String(remotePrompt);
+        else if (promptEl && promptEl.value.trim()) void persistDouyinLocalSetting(douyinInteractionPromptStorageKey, promptEl.value.trim());
     }).catch(() => {});
 }
 
@@ -568,6 +573,28 @@ function saveDouyinInteractionRewrite(showLog = false) {
     }
     void persistDouyinLocalSetting(douyinInteractionRewriteStorageKey, seedText);
     if (showLog) addLog("已保存 AI 改写基准文案。", "success");
+}
+
+function loadDouyinInteractionPrompt() {
+    const promptEl = document.getElementById("douyin-interaction-prompt");
+    if (!promptEl) return;
+    try {
+        promptEl.value = localStorage.getItem(douyinInteractionPromptStorageKey) || "";
+    } catch (error) {}
+}
+
+function saveDouyinInteractionPrompt(showLog = false) {
+    const promptEl = document.getElementById("douyin-interaction-prompt");
+    if (!promptEl) return;
+    const promptText = String(promptEl.value || "").trim();
+    try {
+        localStorage.setItem(douyinInteractionPromptStorageKey, promptText);
+    } catch (error) {
+        if (showLog) addLog(`保存生成方向失败：${error.message}`, "error");
+        return;
+    }
+    void persistDouyinLocalSetting(douyinInteractionPromptStorageKey, promptText);
+    if (showLog) addLog(promptText ? "已保存 AI 生成方向。" : "已清空 AI 生成方向。", "success");
 }
 
 function handleDouyinInteractionPresetInput() {
@@ -938,6 +965,7 @@ document.addEventListener("visibilitychange", () => {
 document.addEventListener("DOMContentLoaded", async () => {
     loadDouyinInteractionPresets();
     loadDouyinInteractionRewrite();
+    loadDouyinInteractionPrompt();
     renderCommentTimeFilter("interaction-time-filter", interactionTimeFilterDays);
     toggleDouyinInteractionOptions();
     changeDouyinInteractionIntervalUnit();

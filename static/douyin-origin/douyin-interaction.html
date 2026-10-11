@@ -415,6 +415,10 @@
                                         <div id="douyin-interaction-ai-wrap" class="interaction-mode-panel">
                                             <label for="douyin-interaction-prompt">AI 生成方向 / 核心观点</label>
                                             <textarea id="douyin-interaction-prompt" rows="4" placeholder="可选填写，例如：自然一点、像同行交流、先从对方评论切入、别太营销"></textarea>
+                                            <div class="dm-preset-hint">
+                                                <span>保存后下次打开私信互动会自动回填这条 AI 生成方向。</span>
+                                                <button type="button" class="btn btn-primary dm-preset-save-btn" onclick="saveDouyinInteractionPrompt(true)">保存生成方向</button>
+                                            </div>
                                         </div>
                                         <div id="douyin-interaction-rewrite-wrap" class="interaction-mode-panel">
                                             <label for="douyin-interaction-seed-text">私信基准文案</label>
@@ -528,6 +532,6 @@
             </main>
         </div>
     </div>
-    <script src="/static/douyin-origin/douyin-interaction-page.js?v=20260604a"></script>
+    <script src="/static/douyin-origin/douyin-interaction-page.js?v=20261011-ai-prompt-save"></script>
 </body>
 </html>
