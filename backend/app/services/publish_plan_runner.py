@@ -290,6 +290,26 @@ async def _ensure_asset_id(user: User, candidate: Dict[str, Any], tags: str) -> 
     return asset_id
 
 
+async def _understand_asset(user: User, asset_id: str, media_type: str) -> str:
+    """让模型先理解图片/视频（抽帧 + 视觉理解），返回可当作文案素材的描述；失败返回空串。"""
+    asset_id = str(asset_id or "").strip()
+    if not asset_id:
+        return ""
+    try:
+        payload = await _post_local(user, f"/api/assets/{asset_id}/ai-tags", json_body={})
+    except Exception:  # noqa: BLE001
+        logger.exception("[定时发布] 素材 AI 理解失败 asset=%s", asset_id)
+        return ""
+    item = payload.get("item") if isinstance(payload, dict) else None
+    text = ""
+    if isinstance(item, dict):
+        text = str(item.get("tags") or "").strip()
+    if not text and isinstance(payload, dict):
+        text = str(payload.get("tags") or "").strip()
+    logger.info("[定时发布] 素材理解完成 asset=%s media=%s 描述长度=%d", asset_id, media_type, len(text))
+    return text
+
+
 async def _build_copy(user: User, plan: PublishPlan, candidate: Dict[str, Any]) -> Tuple[str, str, str]:
     """LLM 先理解内容再写标题/文案/标签；用户填了标签就只用用户标签。"""
     user_tags = str(plan.tags or "").strip()
@@ -342,8 +362,13 @@ async def _publish_candidate(db, plan: PublishPlan, candidate: Dict[str, Any], u
         db.rollback()
         raise
     try:
+        asset_id = await _ensure_asset_id(user, candidate, str(plan.tags or ""))
+        # 先理解内容（图片看图 / 视频抽帧），没有现成提示词时用它当文案依据
+        if not str(candidate.get("prompt") or "").strip():
+            understanding = await _understand_asset(user, asset_id, str(candidate.get("media_type") or "video"))
+            if understanding:
+                candidate["prompt"] = understanding
         title, description, tags = await _build_copy(user, plan, candidate)
-        asset_id = await _ensure_asset_id(user, candidate, tags)
         item.asset_id = asset_id
         item.title = title
         item.description = description
