@@ -15,13 +15,16 @@ function bindPublishTabs() {
       tab.classList.add('active');
       var accounts = document.getElementById('pubTabAccounts');
       var tasks = document.getElementById('pubTabTasks');
+      var plans = document.getElementById('pubTabPlans');
       if (accounts) accounts.style.display = (target === 'accounts') ? '' : 'none';
       if (tasks) tasks.style.display = (target === 'tasks') ? '' : 'none';
+      if (plans) plans.style.display = (target === 'plans') ? '' : 'none';
       if (target === 'accounts') {
         hideAccountDetailPanel();
         loadAccounts();
       }
-      if (target === 'tasks') { loadTasks(); loadPublishPlans(); }
+      if (target === 'tasks') { loadTasks(); }
+      if (target === 'plans') { loadPublishPlans(); }
     });
   });
 }
@@ -5543,6 +5546,10 @@ function bindPublishRefreshButtons() {
   if (refreshPubBtn && !refreshPubBtn._publishRefreshBound) {
     refreshPubBtn._publishRefreshBound = true;
     refreshPubBtn.addEventListener('click', function() {
+      if (_currentPubTab === 'plans') {
+        loadPublishPlans();
+        return;
+      }
       if (_currentPubTab === 'accounts') {
         if (_detailAccountId) {
           var ac = _allAccounts.filter(function(a) { return a.id === _detailAccountId; })[0];
@@ -6235,7 +6242,6 @@ document.addEventListener('click', function(event) {
   var target = event.target;
   if (!target || !target.closest) return;
   if (target.closest('#pubPlanAddBtn')) { openPublishPlanDialog(null); return; }
-  if (target.closest('#pubPlanRefreshBtn')) { loadPublishPlans(); return; }
   if (target.closest('#pubPlanCloseBtn') || target.closest('#pubPlanCancelBtn')) { closePublishPlanDialog(); return; }
   if (target.closest('#pubPlanSaveBtn')) { submitPublishPlan(); return; }
   if (target.closest('#pubPlanBrowseBtn')) { _pubPlanPickFolder(); return; }

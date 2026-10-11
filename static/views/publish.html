@@ -1,10 +1,19 @@
 <div id="content-publish" class="content-block">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
               <div class="store-tabs">
+                <button type="button" class="pub-tab" data-pub-tab="plans">定时发布</button>
                 <button type="button" class="pub-tab active" data-pub-tab="accounts">账号</button>
                 <button type="button" class="pub-tab" data-pub-tab="tasks">发布记录</button>
               </div>
               <button type="button" id="refreshPublishBtn" class="btn btn-ghost btn-sm">刷新</button>
+            </div>
+
+            <!-- Plans Tab：定时发布 -->
+            <div id="pubTabPlans" class="pub-tab-panel" style="display:none;">
+              <div style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                <button type="button" id="pubPlanAddBtn" class="btn btn-primary btn-sm">＋ 定时发布</button>
+              </div>
+              <div id="publishPlanList" style="margin-top:0.5rem;"></div>
             </div>
 
             <!-- Accounts Tab -->
@@ -121,16 +130,9 @@
               </div>
             </div>
 
-            <!-- 发布任务：多来源（本地文件夹 / 素材库分组 / 内容记录）+ 每天条数/时间点 + 台账去重 -->
+            <!-- Tasks Tab：单次发布任务记录 -->
             <div id="pubTabTasks" class="pub-tab-panel" style="display:none;">
-              <div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                <span style="font-size:0.82rem;color:var(--text-muted);">定时发布</span>
-                <button type="button" id="pubPlanAddBtn" class="btn btn-primary btn-sm">＋ 定时发布</button>
-                <button type="button" id="pubPlanRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
-              </div>
-              <div id="publishPlanList" style="margin-top:0.5rem;"></div>
-              <div style="margin:1rem 0;border-top:1px solid rgba(255,255,255,0.08);"></div>
-              <div style="display:flex;align-items:center;gap:0.35rem;">
+              <div style="margin-top:0.75rem;display:flex;align-items:center;gap:0.35rem;">
                 <span style="font-size:0.82rem;color:var(--text-muted);">单次发布任务记录</span>
                 <button type="button" class="help-q" data-help-key="publish_tasks_tab" aria-label="说明">?</button>
               </div>
