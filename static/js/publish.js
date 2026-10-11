@@ -15,16 +15,14 @@ function bindPublishTabs() {
       tab.classList.add('active');
       var accounts = document.getElementById('pubTabAccounts');
       var tasks = document.getElementById('pubTabTasks');
-      var plans = document.getElementById('pubTabPlans');
       if (accounts) accounts.style.display = (target === 'accounts') ? '' : 'none';
       if (tasks) tasks.style.display = (target === 'tasks') ? '' : 'none';
-      if (plans) plans.style.display = (target === 'plans') ? '' : 'none';
       if (target === 'accounts') {
         hideAccountDetailPanel();
         loadAccounts();
       }
       if (target === 'tasks') { loadTasks(); }
-      if (target === 'plans') { loadPublishPlans(); }
+      loadPublishPlans();
     });
   });
 }
@@ -5546,10 +5544,6 @@ function bindPublishRefreshButtons() {
   if (refreshPubBtn && !refreshPubBtn._publishRefreshBound) {
     refreshPubBtn._publishRefreshBound = true;
     refreshPubBtn.addEventListener('click', function() {
-      if (_currentPubTab === 'plans') {
-        loadPublishPlans();
-        return;
-      }
       if (_currentPubTab === 'accounts') {
         if (_detailAccountId) {
           var ac = _allAccounts.filter(function(a) { return a.id === _detailAccountId; })[0];
@@ -5558,6 +5552,7 @@ function bindPublishRefreshButtons() {
         loadAccounts();
       }
       if (_currentPubTab === 'tasks') loadTasks();
+      loadPublishPlans();
     });
   }
 
@@ -5570,6 +5565,7 @@ function initPublishView() {
   bindPublishAccountDetailAndSchedule();
   hideAccountDetailPanel();
   loadAccounts();
+  loadPublishPlans();
   loadCreativeCandidateGroups();
 }
 

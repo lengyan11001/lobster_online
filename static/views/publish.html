@@ -1,20 +1,17 @@
 <div id="content-publish" class="content-block">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
               <div class="store-tabs">
-                <button type="button" class="pub-tab" data-pub-tab="plans">定时发布</button>
                 <button type="button" class="pub-tab active" data-pub-tab="accounts">账号</button>
                 <button type="button" class="pub-tab" data-pub-tab="tasks">发布记录</button>
               </div>
-              <button type="button" id="refreshPublishBtn" class="btn btn-ghost btn-sm">刷新</button>
+              <div style="display:flex;gap:0.4rem;align-items:center;">
+                <button type="button" id="pubPlanAddBtn" class="btn btn-primary btn-sm">＋ 定时发布</button>
+                <button type="button" id="refreshPublishBtn" class="btn btn-ghost btn-sm">刷新</button>
+              </div>
             </div>
 
-            <!-- Plans Tab：定时发布 -->
-            <div id="pubTabPlans" class="pub-tab-panel" style="display:none;">
-              <div style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                <button type="button" id="pubPlanAddBtn" class="btn btn-primary btn-sm">＋ 定时发布</button>
-              </div>
-              <div id="publishPlanList" style="margin-top:0.5rem;"></div>
-            </div>
+            <!-- 定时发布：两个 tab 下都常驻显示 -->
+            <div id="publishPlanList" style="margin-top:0.75rem;"></div>
 
             <!-- Accounts Tab -->
             <div id="pubTabAccounts" class="pub-tab-panel">
