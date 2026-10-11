@@ -1,0 +1,36 @@
+{
+  "style_id": "minimal_white",
+  "display_name": "极简白底电商风",
+  "aliases": ["minimal_white", "极简白底电商风"],
+  "visual_style": "minimal white ecommerce product design, bright neutral background, generous negative space, crisp softbox lighting, precise product cutout, clean premium catalog art direction",
+  "palette": ["纯白", "浅灰", "炭黑", "低饱和品牌色"],
+  "materials": ["哑光纸张", "磨砂塑料", "细腻织物", "干净金属"],
+  "lighting": {
+    "type": "bright_softbox",
+    "temperature": "neutral",
+    "description": "均匀明亮的中性柔光，边缘清晰，阴影极轻，突出产品真实颜色和结构"
+  },
+  "scene_objects": ["简洁台面", "浅灰几何台座", "极少量功能道具"],
+  "decorative_objects": ["细线框", "留白区域", "轻微几何切面"],
+  "negative_rules": ["禁止奶油家居风", "禁止复杂生活场景", "禁止高饱和背景", "禁止过多装饰", "禁止厚重阴影"],
+  "prompt_keywords_en": ["minimal white ecommerce", "clean catalog photography", "softbox lighting", "generous negative space", "precise product silhouette"],
+  "copy_tone": "表达清晰、克制、直接，优先突出产品名称、核心功能和关键参数",
+  "scene_direction": "以干净留白和准确产品展示为主，适合白底图、参数图和信息承载页",
+  "showcase_theme": {
+    "background": "#f5f6f7",
+    "card_white": "#ffffff",
+    "text": "#111827",
+    "muted": "#6b7280",
+    "accent": "#2563eb",
+    "chip_bg": "#111827",
+    "chip_text": "#ffffff",
+    "soft_line": "#e5e7eb"
+  },
+  "sku_theme": {
+    "dark": "#111827",
+    "light": "#ffffff",
+    "accent": "#2563eb",
+    "text_dark": "#ffffff",
+    "body_dark": "#374151"
+  }
+}

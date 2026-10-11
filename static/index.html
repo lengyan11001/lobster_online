@@ -592,11 +592,70 @@
                           <option value="creamy_vintage">中古孟菲斯风</option>
                           <option value="creamy_wood" selected>奶油原木风</option>
                           <option value="french_creamy">法式奶油风</option>
+                          <option value="minimal_white">极简白底电商风</option>
+                          <option value="amazon_infographic">Amazon 信息图风</option>
+                          <option value="amazon_lifestyle">Amazon 生活方式风</option>
+                          <option value="xiaohongshu_lifestyle">小红书种草风</option>
+                          <option value="tech_premium">科技高级感</option>
                         </select>
                       </div>
                       <div class="ecom-field">
                         <label for="ecomPageCountInput">详情页数</label>
                         <input type="number" id="ecomPageCountInput" min="1" max="20" value="12">
+                      </div>
+                    </div>
+                    <div class="ecom-field">
+                      <label for="ecomCustomStyleInput">自定义风格</label>
+                      <input type="text" id="ecomCustomStyleInput" placeholder="例如：亚马逊北美风格、白底+信息图、少文字、突出尺寸和对比">
+                    </div>
+                    <div class="ecom-inline-grid">
+                      <div class="ecom-field">
+                        <label for="ecomPlatformSelect">目标平台</label>
+                        <select id="ecomPlatformSelect">
+                          <option value="taobao">淘宝/天猫</option>
+                          <option value="douyin_shop">抖店</option>
+                          <option value="xiaohongshu">小红书</option>
+                          <option value="amazon">Amazon</option>
+                          <option value="shopee">Shopee</option>
+                          <option value="tiktok_shop">TikTok Shop</option>
+                          <option value="independent_site">独立站</option>
+                        </select>
+                      </div>
+                      <div class="ecom-field">
+                        <label for="ecomMarketSelect">目标市场</label>
+                        <select id="ecomMarketSelect">
+                          <option value="China" selected>中国</option>
+                          <option value="United States">美国</option>
+                          <option value="United Kingdom">英国</option>
+                          <option value="Southeast Asia">东南亚</option>
+                          <option value="Japan">日本</option>
+                          <option value="Korea">韩国</option>
+                          <option value="Middle East">中东</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div class="ecom-inline-grid">
+                      <div class="ecom-field">
+                        <label for="ecomLanguageSelect">图片文字语言</label>
+                        <select id="ecomLanguageSelect">
+                          <option value="Simplified Chinese" selected>中文</option>
+                          <option value="English">英文</option>
+                          <option value="Japanese">日文</option>
+                          <option value="Korean">韩文</option>
+                          <option value="Thai">泰文</option>
+                          <option value="Vietnamese">越南文</option>
+                          <option value="Arabic">阿语</option>
+                        </select>
+                      </div>
+                      <div class="ecom-field">
+                        <label for="ecomSubjectStrategySelect">画面主体策略</label>
+                        <select id="ecomSubjectStrategySelect">
+                          <option value="product_first" selected>产品优先</option>
+                          <option value="product_only">纯产品详情</option>
+                          <option value="lifestyle_scene">生活场景</option>
+                          <option value="human_seed">人物种草</option>
+                          <option value="pet_scene">宠物场景</option>
+                        </select>
                       </div>
                     </div>
                     <div class="ecom-inline-grid">
@@ -647,6 +706,19 @@
                         <label class="ecom-check"><input type="checkbox" id="ecomTargetDetail" checked>详情图</label>
                         <label class="ecom-check"><input type="checkbox" id="ecomTargetMaterial" checked>素材图</label>
                         <label class="ecom-check"><input type="checkbox" id="ecomTargetShowcase" checked>橱窗图</label>
+                      </div>
+                    </div>
+                    <div class="ecom-field">
+                      <label>详情页类型</label>
+                      <div class="ecom-choice-grid">
+                        <label class="ecom-check"><input type="checkbox" class="ecom-page-type" value="overview" checked>总览卖点</label>
+                        <label class="ecom-check"><input type="checkbox" class="ecom-page-type" value="feature" checked>核心卖点</label>
+                        <label class="ecom-check"><input type="checkbox" class="ecom-page-type" value="scene" checked>场景使用</label>
+                        <label class="ecom-check"><input type="checkbox" class="ecom-page-type" value="material" checked>材质细节</label>
+                        <label class="ecom-check"><input type="checkbox" class="ecom-page-type" value="spec_table" checked>尺寸参数</label>
+                        <label class="ecom-check"><input type="checkbox" class="ecom-page-type" value="comparison">对比说明</label>
+                        <label class="ecom-check"><input type="checkbox" class="ecom-page-type" value="steps">安装/使用步骤</label>
+                        <label class="ecom-check"><input type="checkbox" class="ecom-page-type" value="trust" checked>信任背书</label>
                       </div>
                     </div>
                     <div class="ecom-inline-grid">

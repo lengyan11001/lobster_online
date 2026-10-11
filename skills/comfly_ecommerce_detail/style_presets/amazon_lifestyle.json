@@ -1,0 +1,36 @@
+{
+  "style_id": "amazon_lifestyle",
+  "display_name": "Amazon 生活方式风",
+  "aliases": ["amazon_lifestyle", "Amazon生活方式风"],
+  "visual_style": "Amazon lifestyle product photography, realistic home or daily-use environment, natural daylight, credible scale, clear product-first composition, restrained commercial finish",
+  "palette": ["自然白", "浅木色", "中性灰", "低饱和绿色", "品牌强调色"],
+  "materials": ["真实木材", "棉麻织物", "磨砂金属", "透明玻璃"],
+  "lighting": {
+    "type": "natural_daylight",
+    "temperature": "neutral_warm",
+    "description": "明亮自然的日光，阴影柔和，体现真实使用环境和产品尺寸关系"
+  },
+  "scene_objects": ["真实居家空间", "日常使用道具", "比例参照物", "少量绿植"],
+  "decorative_objects": ["自然纹理", "轻微景深", "简洁收纳场景"],
+  "negative_rules": ["禁止样板间过度布置", "禁止人物抢主体", "禁止产品变形", "禁止网红滤镜", "禁止虚构使用场景"],
+  "prompt_keywords_en": ["Amazon lifestyle photography", "realistic home environment", "natural daylight", "credible product scale", "product-first composition"],
+  "copy_tone": "表达自然、具体、可信，强调真实使用体验和适用场景",
+  "scene_direction": "把产品放进可信的日常环境，展示怎么用、适合谁用，但始终保证产品清楚可见",
+  "showcase_theme": {
+    "background": "#f2f5f1",
+    "card_white": "#ffffff",
+    "text": "#1f2933",
+    "muted": "#68756b",
+    "accent": "#3f7d57",
+    "chip_bg": "#2f5d42",
+    "chip_text": "#ffffff",
+    "soft_line": "#dbe5dc"
+  },
+  "sku_theme": {
+    "dark": "#2f5d42",
+    "light": "#ffffff",
+    "accent": "#d28a3a",
+    "text_dark": "#ffffff",
+    "body_dark": "#dce8de"
+  }
+}

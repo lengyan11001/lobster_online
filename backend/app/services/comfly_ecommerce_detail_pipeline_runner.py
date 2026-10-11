@@ -138,6 +138,7 @@ def build_pipeline_input(
     platform: str,
     country: str,
     language: str,
+    target_market: str = "",
 ) -> Dict[str, object]:
     base = (api_base or "").strip().rstrip("/")
     if base.lower().endswith("/v1"):
@@ -204,6 +205,8 @@ def build_pipeline_input(
         inp["country"] = country.strip()
     if (language or "").strip():
         inp["language"] = language.strip()
+    if (target_market or "").strip():
+        inp["target_market"] = target_market.strip()
     return inp
 
 

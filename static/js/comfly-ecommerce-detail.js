@@ -1232,12 +1232,17 @@
       .split(/[,，]/)
       .map(function(item) { return String(item || '').trim(); })
       .filter(Boolean);
+    var pageTypes = Array.prototype.slice.call(document.querySelectorAll('.ecom-page-type:checked'))
+      .map(function(item) { return String(item.value || '').trim(); })
+      .filter(Boolean);
     return {
       include_pet: !!(byId('ecomIncludePetCheck') && byId('ecomIncludePetCheck').checked),
       pet_type: (byId('ecomPetTypeInput').value || '').trim(),
       include_human: !!(byId('ecomIncludeHumanCheck') && byId('ecomIncludeHumanCheck').checked),
       human_type: (byId('ecomHumanTypeInput').value || '').trim(),
-      decor_tags: decorTags
+      decor_tags: decorTags,
+      subject_strategy: (byId('ecomSubjectStrategySelect') && byId('ecomSubjectStrategySelect').value || 'product_first').trim(),
+      page_types: pageTypes
     };
   }
 
@@ -1282,6 +1287,10 @@
     var imagePreset = _selectedImageModelPreset();
     var categoryText = (byId('ecomProductDirectionInput').value || '').trim();
     var generationPrompt = (byId('ecomMainGenerationPromptInput') && byId('ecomMainGenerationPromptInput').value || '').trim();
+    var customStyle = (byId('ecomCustomStyleInput') && byId('ecomCustomStyleInput').value || '').trim();
+    var platform = (byId('ecomPlatformSelect') && byId('ecomPlatformSelect').value || 'taobao').trim();
+    var country = (byId('ecomMarketSelect') && byId('ecomMarketSelect').value || 'China').trim();
+    var language = (byId('ecomLanguageSelect') && byId('ecomLanguageSelect').value || 'Simplified Chinese').trim();
     var directionParts = [];
     if (categoryText) directionParts.push('商品类目：' + categoryText);
     if (generationPrompt) directionParts.push('主图生成要求：' + generationPrompt);
@@ -1294,7 +1303,7 @@
       brand: (byId('ecomBrandInput').value || '').trim(),
       selling_points: _parseSellingPoints(),
       specs: _parseSpecs(),
-      style: (byId('ecomStyleSelect').value || '').trim() || 'creamy_wood',
+      style: customStyle || ((byId('ecomStyleSelect').value || '').trim() || 'creamy_wood'),
       detail_template_id: (byId('ecomDetailTemplateSelect').value || '').trim() || 'detail_template_02',
       showcase_template_id: (byId('ecomShowcaseTemplateSelect').value || '').trim() || 'showcase_template_02',
       main_image_count: _numericOrDefault('ecomMainImageCountInput', 10, 1, 20),
@@ -1315,9 +1324,10 @@
       style_reference_image_urls: state.styleRefs.map(function(item) { return _resolveAssetPublicUrl(item); }).filter(Boolean),
       style_reference_local_paths: state.styleRefs.map(function(item) { return item.local_path; }).filter(Boolean),
       compliance_notes: _parseLines('ecomComplianceNotesInput'),
-      platform: 'ecommerce',
-      country: 'China',
-      language: 'zh-CN'
+      platform: platform,
+      country: country,
+      target_market: country,
+      language: language
     };
     var frontImage = { role: 'front' };
     if (mainLocalPath) frontImage.local_path = mainLocalPath;
@@ -1859,6 +1869,7 @@
       'ecomFilePrefixInput',
       'ecomSkuInput',
       'ecomBrandInput',
+      'ecomCustomStyleInput',
       'ecomSellingPointsInput',
       'ecomSpecsInput',
       'ecomComplianceNotesInput',
@@ -1869,6 +1880,10 @@
       if (byId(id)) byId(id).value = '';
     });
     if (byId('ecomStyleSelect')) byId('ecomStyleSelect').value = 'creamy_wood';
+    if (byId('ecomPlatformSelect')) byId('ecomPlatformSelect').value = 'taobao';
+    if (byId('ecomMarketSelect')) byId('ecomMarketSelect').value = 'China';
+    if (byId('ecomLanguageSelect')) byId('ecomLanguageSelect').value = 'Simplified Chinese';
+    if (byId('ecomSubjectStrategySelect')) byId('ecomSubjectStrategySelect').value = 'product_first';
     _setImageModelPreset(DEFAULT_IMAGE_MODEL_PRESET);
     if (byId('ecomDetailTemplateSelect')) byId('ecomDetailTemplateSelect').value = 'detail_template_02';
     if (byId('ecomShowcaseTemplateSelect')) byId('ecomShowcaseTemplateSelect').value = 'showcase_template_02';
@@ -1882,6 +1897,9 @@
     });
     if (byId('ecomIncludePetCheck')) byId('ecomIncludePetCheck').checked = false;
     if (byId('ecomIncludeHumanCheck')) byId('ecomIncludeHumanCheck').checked = false;
+    document.querySelectorAll('.ecom-page-type').forEach(function(item) {
+      item.checked = ['overview', 'feature', 'scene', 'material', 'spec_table', 'trust'].indexOf(item.value) >= 0;
+    });
     _renderMainAsset();
     _renderReferenceAssets();
     _renderRequestedOutputs();

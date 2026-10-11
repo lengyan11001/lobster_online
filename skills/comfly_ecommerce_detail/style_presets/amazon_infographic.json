@@ -1,0 +1,36 @@
+{
+  "style_id": "amazon_infographic",
+  "display_name": "Amazon 信息图风",
+  "aliases": ["amazon_infographic", "Amazon信息图风"],
+  "visual_style": "Amazon-style ecommerce infographic, clear product hero, modular benefit callouts, white and light gray background, restrained navy and orange accents, commercial catalog photography",
+  "palette": ["白色", "浅灰", "深海军蓝", "橙色强调"],
+  "materials": ["清晰塑料", "拉丝金属", "耐用织物", "自然木材"],
+  "lighting": {
+    "type": "clean_commercial",
+    "temperature": "neutral",
+    "description": "清晰均匀的商业摄影光线，产品轮廓明确，局部柔和高光，便于承载信息卡片"
+  },
+  "scene_objects": ["浅色台面", "尺寸比例道具", "功能示意小道具"],
+  "decorative_objects": ["细线引导", "圆角信息卡", "小面积橙色标记"],
+  "negative_rules": ["禁止浮夸海报", "禁止过多装饰", "禁止虚假认证徽章", "禁止虚构参数", "禁止文字拥挤"],
+  "prompt_keywords_en": ["Amazon ecommerce infographic", "clean product hero", "benefit callouts", "modular information layout", "navy and orange accent"],
+  "copy_tone": "表达客观、清楚、可验证，卖点和参数要短而有信息密度",
+  "scene_direction": "优先保证产品和功能说明清楚，背景克制，留出信息图和参数卡空间",
+  "showcase_theme": {
+    "background": "#f3f4f6",
+    "card_white": "#ffffff",
+    "text": "#172033",
+    "muted": "#64748b",
+    "accent": "#f97316",
+    "chip_bg": "#172033",
+    "chip_text": "#ffffff",
+    "soft_line": "#dbe2ea"
+  },
+  "sku_theme": {
+    "dark": "#172033",
+    "light": "#ffffff",
+    "accent": "#f97316",
+    "text_dark": "#ffffff",
+    "body_dark": "#475569"
+  }
+}

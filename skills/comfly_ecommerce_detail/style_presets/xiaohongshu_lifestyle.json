@@ -1,0 +1,36 @@
+{
+  "style_id": "xiaohongshu_lifestyle",
+  "display_name": "小红书种草风",
+  "aliases": ["xiaohongshu_lifestyle", "小红书种草风"],
+  "visual_style": "Xiaohongshu-inspired lifestyle product content, warm candid editorial photography, approachable daily scene, soft natural light, tasteful color blocking, product-first but relatable",
+  "palette": ["奶油白", "浅杏", "雾粉", "鼠尾草绿", "暖棕"],
+  "materials": ["棉麻", "陶瓷", "浅木", "磨砂玻璃", "自然纸张"],
+  "lighting": {
+    "type": "soft_editorial_daylight",
+    "temperature": "warm",
+    "description": "柔和自然光和轻微逆光，画面亲切通透，有生活记录感但不脏乱"
+  },
+  "scene_objects": ["真实桌面", "生活化收纳", "咖啡或茶具", "少量绿植"],
+  "decorative_objects": ["手写感小标签区域", "柔和色块", "轻微胶片颗粒感"],
+  "negative_rules": ["禁止过度网红滤镜", "禁止夸张贴纸", "禁止杂乱背景", "禁止虚假种草承诺", "禁止产品被道具遮挡"],
+  "prompt_keywords_en": ["Xiaohongshu lifestyle", "warm editorial product photography", "relatable daily scene", "soft natural light", "tasteful color blocking"],
+  "copy_tone": "表达亲切、有场景感、像真实体验分享，避免夸张和硬广腔",
+  "scene_direction": "以真实可代入的生活细节帮助用户理解产品，不靠堆装饰制造热闹",
+  "showcase_theme": {
+    "background": "#faf4ef",
+    "card_white": "#fffdfb",
+    "text": "#3b2a24",
+    "muted": "#8b7064",
+    "accent": "#e76f51",
+    "chip_bg": "#6d4035",
+    "chip_text": "#fffaf7",
+    "soft_line": "#f0ddd4"
+  },
+  "sku_theme": {
+    "dark": "#6d4035",
+    "light": "#fffaf7",
+    "accent": "#e76f51",
+    "text_dark": "#fffaf7",
+    "body_dark": "#f2d9cf"
+  }
+}

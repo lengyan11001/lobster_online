@@ -68,6 +68,8 @@ class EcommerceScenePreferences(BaseModel):
     include_human: Optional[bool] = None
     human_type: str = ""
     decor_tags: List[str] = Field(default_factory=list)
+    subject_strategy: str = "product_first"
+    page_types: List[str] = Field(default_factory=list)
 
 
 class EcommerceOutputTargets(BaseModel):
@@ -122,6 +124,7 @@ class EcommerceDetailPipelinePayload(BaseModel):
     platform: str = ""
     country: str = ""
     language: str = ""
+    target_market: str = ""
     analysis_model: Optional[str] = None
     image_model: Optional[str] = None
     detail_render_mode: Optional[str] = None
@@ -811,6 +814,7 @@ async def _prepare_pipeline_input(
         platform=pl.platform,
         country=pl.country,
         language=pl.language,
+        target_market=pl.target_market,
     )
 
 

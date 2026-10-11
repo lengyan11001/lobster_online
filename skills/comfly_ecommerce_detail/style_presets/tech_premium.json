@@ -1,0 +1,36 @@
+{
+  "style_id": "tech_premium",
+  "display_name": "科技高级感",
+  "aliases": ["tech_premium", "科技高级感"],
+  "visual_style": "premium technology product art direction, dark graphite environment, controlled cyan or electric blue accents, precise rim lighting, clean futuristic geometry, high-end commercial product photography",
+  "palette": ["石墨黑", "深灰", "冷白", "电光蓝", "少量青色"],
+  "materials": ["阳极氧化金属", "玻璃", "碳纤维", "精密塑料", "细腻橡胶"],
+  "lighting": {
+    "type": "controlled_rim_light",
+    "temperature": "cool_neutral",
+    "description": "受控的冷白轮廓光和局部蓝色反射，突出结构、边缘和材质层次，避免过曝"
+  },
+  "scene_objects": ["深色台座", "几何光带", "极简工作台", "轻微雾化空间"],
+  "decorative_objects": ["细窄光线", "精密网格", "低调几何切面"],
+  "negative_rules": ["禁止霓虹赛博朋克", "禁止过度发光", "禁止改变产品颜色", "禁止复杂 UI", "禁止虚构科技参数"],
+  "prompt_keywords_en": ["premium technology product photography", "dark graphite studio", "controlled rim lighting", "electric blue accent", "precise futuristic geometry"],
+  "copy_tone": "表达精准、克制、专业，突出结构、性能和使用效率，但不虚构参数",
+  "scene_direction": "用光线、材质和几何空间制造高级感，产品结构和真实细节始终优先",
+  "showcase_theme": {
+    "background": "#111827",
+    "card_white": "#1f2937",
+    "text": "#f8fafc",
+    "muted": "#94a3b8",
+    "accent": "#38bdf8",
+    "chip_bg": "#0f172a",
+    "chip_text": "#e0f2fe",
+    "soft_line": "#334155"
+  },
+  "sku_theme": {
+    "dark": "#0f172a",
+    "light": "#1f2937",
+    "accent": "#38bdf8",
+    "text_dark": "#f8fafc",
+    "body_dark": "#cbd5e1"
+  }
+}

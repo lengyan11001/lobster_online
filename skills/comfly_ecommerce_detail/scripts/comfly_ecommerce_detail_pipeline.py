@@ -804,6 +804,11 @@ STYLE_PRESET_ALIASES: Dict[str, str] = {
     "奶油中古风": "creamy_vintage",
     "奶油原木风": "creamy_wood",
     "法式奶油风": "french_creamy",
+    "minimal_white": "minimal_white",
+    "amazon_infographic": "amazon_infographic",
+    "amazon_lifestyle": "amazon_lifestyle",
+    "xiaohongshu_lifestyle": "xiaohongshu_lifestyle",
+    "tech_premium": "tech_premium",
 }
 _STYLE_PRESET_CACHE: Dict[str, Dict[str, Any]] = {}
 
@@ -837,6 +842,21 @@ def _load_style_preset(style_id: Any) -> Dict[str, Any]:
         return dict(cached)
     path = _style_preset_root() / f"{normalized}.json"
     if not path.is_file():
+        raw = str(style_id or "").strip()
+        if raw:
+            return {
+                "style_id": normalized or "custom_style",
+                "display_name": raw,
+                "visual_style": raw,
+                "palette": [],
+                "materials": [],
+                "scene_objects": [],
+                "decorative_objects": [],
+                "negative_rules": ["avoid making every page look identical", "avoid generic template repetition"],
+                "prompt_keywords_en": [raw],
+                "copy_tone": f"Follow the user's custom style direction: {raw}",
+                "scene_direction": raw,
+            }
         if normalized != DEFAULT_STYLE_PRESET_ID:
             return _load_style_preset(DEFAULT_STYLE_PRESET_ID)
         raise PipelineError(f"Style preset config not found: {normalized}")
@@ -908,6 +928,29 @@ def _product_identity_guardrails(analysis: Dict[str, Any]) -> List[str]:
         "Keep the product close to the visual center and safe area of the canvas with balanced breathing room; do not push the main product body against the edges unless the composition explicitly requires it",
         "If any product detail is unclear, stay conservative and preserve what is visible rather than inventing new details",
     ]
+
+
+def _subject_strategy_prompt(analysis: Dict[str, Any], *, context: str = "scene") -> str:
+    strategy = str(analysis.get("subject_strategy") or "product_first").strip().lower()
+    include_pet = False
+    include_human = False
+    prefs = analysis.get("scene_preferences")
+    if isinstance(prefs, dict):
+        include_pet = bool(prefs.get("include_pet"))
+        include_human = bool(prefs.get("include_human"))
+    if strategy == "product_only":
+        return "Subject strategy: product-only. Do not show people, pets, lifestyle actors, competing props, or anything that steals attention from the sellable product."
+    if strategy == "lifestyle_scene":
+        return "Subject strategy: lifestyle scene. Show a credible use environment, but the sellable product must remain large, clear, complete, and easy to inspect."
+    if strategy == "human_seed":
+        return "Subject strategy: human seeding content. A person may demonstrate or use the product, but the person must support the product story and must not replace, cover, or visually dominate the product."
+    if strategy == "pet_scene":
+        return "Subject strategy: pet scene. A pet may interact with the product, but the product remains the main commercial subject, clear and complete."
+    if include_pet and context != "product_only":
+        return "Subject strategy: product-first with pet context. Pet interaction is allowed only as supporting context; keep the product dominant, clear, and complete."
+    if include_human and context != "product_only":
+        return "Subject strategy: product-first with human context. A person may appear only to demonstrate scale or use; keep the product dominant, clear, and complete."
+    return "Subject strategy: product-first. The product must be the dominant subject; any props, people, pets, or backgrounds are supporting context only."
 
 
 def _style_theme(analysis: Dict[str, Any], key: str, defaults: Dict[str, str]) -> Dict[str, str]:
@@ -1186,6 +1229,9 @@ def _short_overlay_phrase(value: Any, max_chars: int = 8) -> str:
     text = _sanitize_copy_text(value)
     if not text:
         return ""
+    if re.search(r"[A-Za-z]", text) and " " in text:
+        words = [word.strip(" ,.;:!?()[]{}") for word in text.split() if word.strip(" ,.;:!?()[]{}")]
+        return " ".join(words[: max(1, min(5, max_chars // 2))])[: max(18, max_chars * 4)].strip()
     text = re.sub(r"[，。、“”‘’：；！!？?（）()\[\]{}<>《》·\-_/|]+", "", text)
     text = re.sub(r"\s+", "", text)
     return text[:max_chars]
@@ -1264,6 +1310,11 @@ def _locale_defaults(platform: str, country: str, language: str, target_market: 
         "language_name": language_name,
         "market": market,
     }
+
+
+def _is_chinese_language(language_name: Any) -> bool:
+    text = str(language_name or "").lower()
+    return any(token in text for token in ("zh", "chinese", "中文", "汉语", "simplified", "traditional"))
 
 
 def _build_config(data: Input) -> PipelineConfig:
@@ -1493,7 +1544,26 @@ def _merge_structured_inputs_into_analysis(analysis: Dict[str, Any], config: Pip
         result["style_reference_images"] = config.style_reference_images
     if config.scene_preferences:
         result["scene_preferences"] = config.scene_preferences
+        subject_strategy = _sanitize_copy_text(config.scene_preferences.get("subject_strategy") or "product_first")
+        page_types = [
+            _sanitize_copy_text(item)
+            for item in _safe_string_list(config.scene_preferences.get("page_types"))
+            if _sanitize_copy_text(item)
+        ]
+        result["subject_strategy"] = subject_strategy or "product_first"
+        if page_types:
+            result["page_type_preferences"] = page_types
         scene_hints: List[str] = []
+        if subject_strategy == "product_only":
+            scene_hints.append("纯产品详情：不出现人物、宠物或抢主体的生活道具")
+        elif subject_strategy == "product_first":
+            scene_hints.append("产品优先：产品必须是画面第一主体，人物/宠物/道具只能辅助")
+        elif subject_strategy == "lifestyle_scene":
+            scene_hints.append("生活场景：真实使用环境中展示产品，保持产品清晰可见")
+        elif subject_strategy == "human_seed":
+            scene_hints.append("人物种草：允许出现人物使用或展示产品，但不能遮挡产品核心结构")
+        elif subject_strategy == "pet_scene":
+            scene_hints.append("宠物场景：允许宠物互动，但产品仍是主角")
         if config.scene_preferences.get("include_pet"):
             pet_type = _sanitize_copy_text(config.scene_preferences.get("pet_type") or "宠物")
             scene_hints.append(f"包含{pet_type}互动场景")
@@ -1650,6 +1720,9 @@ def _page_copy_prompt(analysis: Dict[str, Any], slots: List[Dict[str, Any]], con
         "showcase_template_id": analysis.get("showcase_template_id"),
         "brand": analysis.get("brand"),
         "compliance_notes": analysis.get("compliance_notes"),
+        "subject_strategy": analysis.get("subject_strategy") or "product_first",
+        "page_type_preferences": analysis.get("page_type_preferences"),
+        "locale_profile": locale,
     }
     slot_lines = [
         json.dumps(
@@ -1675,13 +1748,14 @@ Rules:
 3. title must be plain text only. Do NOT use markdown, asterisks, HTML tags, bullets, numbering symbols, or emoji.
 4. The cover page must feel like a premium campaign poster with a strong reason-to-buy headline and elevated hero composition.
 5. subtitle one short sentence. highlights 2-4 short bullets.
-6. For the cover page only, every highlight must be no more than 8 Chinese characters.
+6. For the cover page only, every highlight must be short enough for a compact badge: no more than 8 Chinese characters or 5 words in Latin-script languages.
 7. image_prompt_en must be English and describe a clean ecommerce background with NO text, NO watermark, NO UI.
 8. Keep product appearance consistent across pages.
 9. Avoid unsafe hard claims.
 10. If user hints are provided, keep copy direction, category wording, and positioning aligned with those user hints.
 11. If structured selling points and specs are supplied, prioritize them over inferred copy. Do not contradict them.
 12. For slots like spec_table or parameter_summary, write cleaner and shorter copy suitable for specs cards and tabular information blocks.
+13. Follow the selected subject strategy exactly. Product-first keeps the product dominant; product-only excludes people and pets; lifestyle/human/pet modes may add those subjects only as supporting context.
 Product analysis:
 {json.dumps(analysis, ensure_ascii=False, indent=2)}
 User hints:
@@ -1699,6 +1773,8 @@ def _normalize_pages(plan: Dict[str, Any], slots: List[Dict[str, Any]], analysis
         raise PipelineError(f"Invalid page copy plan: {plan}")
 
     default_footer = str(analysis.get("hero_claim") or analysis.get("product_summary") or "").strip()
+    locale = analysis.get("locale_profile") if isinstance(analysis.get("locale_profile"), dict) else {}
+    compact_limit = 8 if _is_chinese_language(locale.get("language_name")) else 10
     pages: List[Dict[str, Any]] = []
     for idx, slot in enumerate(slots, 1):
         raw = raw_pages[idx - 1] if idx - 1 < len(raw_pages) and isinstance(raw_pages[idx - 1], dict) else {}
@@ -1709,10 +1785,14 @@ def _normalize_pages(plan: Dict[str, Any], slots: List[Dict[str, Any]], analysis
         if not highlights:
             highlights = DEFAULT_SELLING_POINTS[:3]
         if is_cover:
-            highlights = [_short_overlay_phrase(item, 8) for item in highlights]
+            highlights = [_short_overlay_phrase(item, compact_limit) for item in highlights]
             highlights = [item for item in highlights if item][:3]
             if not highlights:
-                highlights = [_short_overlay_phrase(item, 8) for item in DEFAULT_SELLING_POINTS[:3] if _short_overlay_phrase(item, 8)]
+                highlights = [
+                    _short_overlay_phrase(item, compact_limit)
+                    for item in DEFAULT_SELLING_POINTS[:3]
+                    if _short_overlay_phrase(item, compact_limit)
+                ]
         pages.append(
             {
                 "index": idx,
@@ -1744,6 +1824,7 @@ def _compose_page_background_prompt(page: Dict[str, Any], analysis: Dict[str, An
         f"Hero focus: {page.get('focus') or analysis.get('hero_claim') or analysis.get('product_name')}",
         f"Support highlights: {points}",
         f"Visual style: {style}",
+        _subject_strategy_prompt(analysis, context=slot_name or "detail"),
         "Create a clean mobile ecommerce detail page background with strong product visibility",
         "No text, no typography, no watermark, no UI, no sticker, no subtitles",
     ]
@@ -1754,9 +1835,14 @@ def _compose_page_background_prompt(page: Dict[str, Any], analysis: Dict[str, An
     if user_hints.get("product_direction_hint"):
         prompt_parts.append(f"User-specified category direction: {user_hints.get('product_direction_hint')}")
     if slot_name == "cover":
-        prompt_parts.append(
-            "Make it feel like a premium advertising poster cover, not a normal detail page. Prefer a lifestyle scene, aspirational usage scene, or campaign-style hero image with stronger storytelling and atmosphere. Avoid flat lay, avoid ghost mannequin, avoid plain isolated product-only composition unless absolutely necessary"
-        )
+        if str(analysis.get("subject_strategy") or "").strip().lower() == "product_only":
+            prompt_parts.append(
+                "Make it feel like a premium advertising poster cover through lighting, angle, scale, and background design while keeping a product-only composition."
+            )
+        else:
+            prompt_parts.append(
+                "Make it feel like a premium advertising poster cover, not a normal detail page. Prefer a lifestyle scene, aspirational usage scene, or campaign-style hero image with stronger storytelling and atmosphere. Avoid flat lay, avoid ghost mannequin, avoid plain isolated product-only composition unless the subject strategy requires it."
+            )
     elif slot_name == "spec_table":
         prompt_parts.append(
             "Prefer a cleaner and calmer product-detail background suitable for overlaying specification cards. Use simple composition, subtle depth, and avoid busy action."
@@ -1794,12 +1880,25 @@ def _compose_cover_background_prompt(page: Dict[str, Any], analysis: Dict[str, A
         f"Poster message: {summary}",
         f"Key benefits to visually support: {points}",
         f"Visual style: {style}",
+        _subject_strategy_prompt(analysis, context="cover"),
         "Create a cinematic campaign hero scene rather than a standard ecommerce product page",
-        "Show the product in a believable aspirational usage scenario with storytelling, atmosphere, depth, and strong visual focus",
-        "Prefer a fashion advertising composition, urban winter lifestyle scene, editorial campaign photography, premium magazine poster mood, natural environment context, confident hero framing",
-        "No collage, no split panels, no infographic layout, no white seamless studio background, no empty or awkwardly floating isolated-product composition, no flat lay, no mannequin, no ghost mannequin",
         "No text, no typography, no watermark, no logo, no UI, no sticker, no subtitles",
     ]
+    if str(analysis.get("subject_strategy") or "").strip().lower() == "product_only":
+        prompt_parts.extend(
+            [
+                "Build the campaign feel through refined lighting, premium set design, depth, and product-scale hero framing without people or pets.",
+                "No lifestyle actors, no pets, no mannequin, no ghost mannequin, no extra competing products, no flat lay unless it is the only way to show the product clearly.",
+            ]
+        )
+    else:
+        prompt_parts.extend(
+            [
+                "Show the product in a believable aspirational usage scenario with storytelling, atmosphere, depth, and strong visual focus",
+                "Prefer editorial campaign photography, premium magazine poster mood, natural environment context, and confident hero framing. Use people or pets only when the subject strategy allows it and keep them secondary.",
+                "No collage, no split panels, no infographic layout, no white seamless studio background, no empty or awkwardly floating isolated-product composition, no flat lay, no mannequin, no ghost mannequin",
+            ]
+        )
     prompt_parts.extend(_product_identity_guardrails(analysis))
     prompt_parts.extend(_style_prompt_details(analysis, include_copy_tone=True))
     if scenes:
@@ -1836,6 +1935,11 @@ def _direct_detail_spec_lines(page: Dict[str, Any], analysis: Dict[str, Any]) ->
 
 
 def _compose_direct_detail_page_prompt(page: Dict[str, Any], analysis: Dict[str, Any], config: PipelineConfig) -> str:
+    locale = analysis.get("locale_profile") or _locale_defaults(
+        config.platform, config.country, config.language, config.target_market
+    )
+    language_name = str(locale.get("language_name") or config.language or "Simplified Chinese").strip()
+    platform_name = str(locale.get("platform") or config.platform or "ecommerce").strip()
     product_name = str(
         analysis.get("product_name")
         or config.product_name_hint
@@ -1855,36 +1959,41 @@ def _compose_direct_detail_page_prompt(page: Dict[str, Any], analysis: Dict[str,
     trust_lines = _safe_string_list(analysis.get("trust_points"))[:3]
     copy_blocks: List[str] = []
     if title:
-        copy_blocks.append(f"标题：{title}")
+        copy_blocks.append(f"Title: {title}")
     if subtitle:
-        copy_blocks.append(f"副标题：{subtitle}")
+        copy_blocks.append(f"Subtitle: {subtitle}")
     if highlights:
-        copy_blocks.append("卖点：\n- " + "\n- ".join(highlights))
+        copy_blocks.append("Selling points:\n- " + "\n- ".join(highlights))
     if spec_lines:
-        copy_blocks.append("参数信息：\n- " + "\n- ".join(spec_lines))
+        copy_blocks.append("Specifications:\n- " + "\n- ".join(spec_lines))
     if footer:
-        copy_blocks.append(f"页脚短句：{footer}")
+        copy_blocks.append(f"Footer line: {footer}")
 
     layout_instruction = {
-        "cover": "Create a premium Chinese ecommerce detail cover with strong hero composition, one main title block, one short subtitle block, and 2-3 small supporting benefit chips.",
-        "overview": "Create a polished Chinese ecommerce detail section with one clear title, one short subtitle, and 3-4 structured supporting points.",
-        "feature": "Create a premium Chinese selling-point page with the product as hero and concise callout copy blocks around it.",
-        "scene": "Create a scene-driven Chinese detail page that highlights lifestyle use while preserving the exact product identity.",
-        "material": "Create a refined Chinese product-detail page focusing on material, craftsmanship, and close-up premium texture storytelling.",
-        "trust": "Create a Chinese trust-building detail page with concise assurance copy, neat icon-like information blocks, and premium layout.",
-        "spec_table": "Create a clean Chinese parameter page with structured information cards. Keep copy concise, legible, and suitable for a spec layout.",
-    }.get(slot_name, "Create a high-quality Chinese ecommerce detail page with premium layout and clean hierarchy.")
+        "cover": "Create a premium ecommerce detail cover with strong hero composition, one main title block, one short subtitle block, and 2-3 small supporting benefit chips.",
+        "overview": "Create a polished ecommerce detail section with one clear title, one short subtitle, and 3-4 structured supporting points.",
+        "feature": "Create a premium selling-point page with the product as hero and concise callout copy blocks around it.",
+        "scene": "Create a scene-driven detail page that highlights lifestyle use while preserving the exact product identity.",
+        "material": "Create a refined product-detail page focusing on material, craftsmanship, and close-up premium texture storytelling.",
+        "trust": "Create a trust-building detail page with concise assurance copy, neat icon-like information blocks, and premium layout.",
+        "spec_table": "Create a clean parameter page with structured information cards. Keep copy concise, legible, and suitable for a spec layout.",
+        "comparison": "Create a clear comparison page with simple before/after or pain-point/solution visual hierarchy.",
+        "steps": "Create a step-by-step usage or installation page with clear sequential cards.",
+    }.get(slot_name, "Create a high-quality ecommerce detail page with premium layout and clean hierarchy.")
+
+    subject_instruction = _subject_strategy_prompt(analysis, context=slot_name or "detail")
 
     prompt_parts = [
-        f"Design a final Chinese ecommerce detail page image for {product_name}.",
+        f"Design a final {language_name} {platform_name} ecommerce detail page image for {product_name}.",
         f"Product category: {category}.",
         f"Visual style: {style}.",
         layout_instruction,
+        subject_instruction,
         "This must be a finished detail-page visual, not a blank background and not a poster without content.",
         "Use exactly one single product that matches the reference product. Do not create a second garment, second box, bag, scarf, model, or accessory.",
         "Keep the visible product identity highly consistent with the reference, including silhouette, collar, neckline, sleeves, buttons, seams, proportions, color, material feel, and overall shape.",
         "The product in the final image must remain the same item as the reference, not a redesigned product.",
-        "All visible text must be clear Simplified Chinese with good legibility.",
+        f"All visible text must be clear {language_name} with good legibility.",
         "Do not invent fake English brands, fake logos, random watermarks, or unrelated product names.",
         "Do not add extra claims or parameters that are not provided below.",
         "Do not output a collage, moodboard, UI screenshot, website mockup, or fake packaging backstory.",
@@ -1897,7 +2006,7 @@ def _compose_direct_detail_page_prompt(page: Dict[str, Any], analysis: Dict[str,
     if trust_lines:
         prompt_parts.append("Trust cues: " + " / ".join(trust_lines))
     if copy_blocks:
-        prompt_parts.append("Use only these Chinese copy blocks:\n" + "\n\n".join(copy_blocks))
+        prompt_parts.append(f"Use only these {language_name} copy blocks:\n" + "\n\n".join(copy_blocks))
     return "\n".join(part for part in prompt_parts if part)
 
 
@@ -3368,6 +3477,14 @@ def _pad_points(points: List[str], minimum: int, fallback: List[str]) -> List[st
 
 
 def _build_page_slots(analysis: Dict[str, Any], page_count: int) -> List[Dict[str, Any]]:
+    requested_types = {
+        str(item or "").strip().lower()
+        for item in _safe_string_list(analysis.get("page_type_preferences"))
+        if str(item or "").strip()
+    }
+    if not requested_types:
+        requested_types = {"overview", "feature", "scene", "material", "spec_table", "trust"}
+    include_type = lambda key: key in requested_types
     selling_point_records = _normalize_selling_point_records(analysis.get("selling_point_records"))
     if not selling_point_records:
         selling_point_records = [{"title": item, "description": "", "icon": "", "priority": idx + 1} for idx, item in enumerate(_safe_string_list(analysis.get("selling_points"))[:8])]
@@ -3393,42 +3510,67 @@ def _build_page_slots(analysis: Dict[str, Any], page_count: int) -> List[Dict[st
         "metadata": {"template": "hero_cover", "style_id": analysis.get("style_id") or ""},
     }
 
-    detail_slots: List[Dict[str, Any]] = [
-        {
-            "slot": "overview",
-            "goal": "Summarize the top consumer benefits at a glance.",
-            "focus": summary,
-            "points": points[:4],
-            "show_number": True,
-            "metadata": {"template": "overview_summary"},
-        }
-    ]
-
-    feature_records = selling_point_records[:4] or [{"title": item, "description": "", "icon": "", "priority": idx + 1} for idx, item in enumerate(points[:4])]
-    for idx, item in enumerate(feature_records):
-        focus = str(item.get("title") or item.get("description") or points[min(idx, len(points) - 1)]).strip()
-        feature_points = _dedupe_strings(
-            [
-                str(item.get("title") or "").strip(),
-                str(item.get("description") or "").strip(),
-            ]
-            + points[idx : idx + 2]
-        )[:4]
+    detail_slots: List[Dict[str, Any]] = []
+    if include_type("overview"):
         detail_slots.append(
             {
-                "slot": "feature",
-                "goal": "Highlight one structured selling point with strong product-led composition.",
-                "focus": focus,
-                "points": feature_points or [focus],
-                "metadata": {
-                    "template": "feature_focus",
-                    "source": "selling_point",
-                    "icon": str(item.get("icon") or "").strip(),
-                },
+                "slot": "overview",
+                "goal": "Summarize the top consumer benefits at a glance.",
+                "focus": summary,
+                "points": points[:4],
+                "show_number": True,
+                "metadata": {"template": "overview_summary"},
             }
         )
 
-    if scenes:
+    feature_records = selling_point_records[:4] or [{"title": item, "description": "", "icon": "", "priority": idx + 1} for idx, item in enumerate(points[:4])]
+    if include_type("feature"):
+        for idx, item in enumerate(feature_records):
+            focus = str(item.get("title") or item.get("description") or points[min(idx, len(points) - 1)]).strip()
+            feature_points = _dedupe_strings(
+                [
+                    str(item.get("title") or "").strip(),
+                    str(item.get("description") or "").strip(),
+                ]
+                + points[idx : idx + 2]
+            )[:4]
+            detail_slots.append(
+                {
+                    "slot": "feature",
+                    "goal": "Highlight one structured selling point with strong product-led composition.",
+                    "focus": focus,
+                    "points": feature_points or [focus],
+                    "metadata": {
+                        "template": "feature_focus",
+                        "source": "selling_point",
+                        "icon": str(item.get("icon") or "").strip(),
+                    },
+                }
+            )
+
+    if include_type("comparison"):
+        detail_slots.append(
+            {
+                "slot": "comparison",
+                "goal": "Explain before/after, ordinary vs upgraded, or pain point vs solution in a clean comparison layout.",
+                "focus": points[0],
+                "points": points[:4],
+                "metadata": {"template": "feature_focus", "source": "comparison"},
+            }
+        )
+
+    if include_type("steps"):
+        detail_slots.append(
+            {
+                "slot": "steps",
+                "goal": "Show installation, usage, or care steps with clear sequential visual guidance.",
+                "focus": points[0],
+                "points": _dedupe_strings(_safe_string_list(analysis.get("care_points")) + points)[:4],
+                "metadata": {"template": "feature_focus", "source": "steps"},
+            }
+        )
+
+    if include_type("scene") and scenes:
         detail_slots.append(
             {
                 "slot": "scene",
@@ -3438,7 +3580,7 @@ def _build_page_slots(analysis: Dict[str, Any], page_count: int) -> List[Dict[st
                 "metadata": {"template": "scene_usage"},
             }
         )
-    if materials or structure:
+    if include_type("material") and (materials or structure):
         detail_slots.append(
             {
                 "slot": "material",
@@ -3448,7 +3590,7 @@ def _build_page_slots(analysis: Dict[str, Any], page_count: int) -> List[Dict[st
                 "metadata": {"template": "material_cleaning"},
             }
         )
-    if spec_entries:
+    if include_type("spec_table") and spec_entries:
         detail_slots.append(
             {
                 "slot": "spec_table",
@@ -3458,7 +3600,7 @@ def _build_page_slots(analysis: Dict[str, Any], page_count: int) -> List[Dict[st
                 "metadata": {"template": "spec_table", "spec_entries": spec_entries[:6]},
             }
         )
-    if trust_points or certs:
+    if include_type("trust") and (trust_points or certs):
         detail_slots.append(
             {
                 "slot": "trust",
@@ -4434,6 +4576,7 @@ def _compose_main_image_prompt(analysis: Dict[str, Any], *, aspect_ratio: str, s
         f"Create a premium ecommerce marketplace main image for {product_name}",
         f"Product category: {category}",
         f"Visual style: {style}",
+        _subject_strategy_prompt(analysis, context="main_image"),
         composition,
         framing,
         "The output must be image-only with no text overlay and no design layout",
@@ -4624,6 +4767,7 @@ def _compose_sku_scene_prompt(analysis: Dict[str, Any], shot: Optional[Dict[str,
         f"Create a premium ecommerce SKU scene image for {product_name}",
         f"Product category: {category}",
         f"Visual style: {style}",
+        _subject_strategy_prompt(analysis, context="sku"),
         composition,
         "Output image only with no text overlay and no design layout",
         "No title, no subtitle, no callout, no measurement label, no badge, no UI, no watermark, no logo, no collage",
