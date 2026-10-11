@@ -6061,19 +6061,26 @@ function _pubPlanLoadAccounts(platform, accountId) {
 
 function _pubPlanPickFolder() {
   var input = document.getElementById('pubPlanFolder');
-  var api = window.pywebview && window.pywebview.api;
-  if (!api || typeof api.pick_folder !== 'function') {
-    _pubPlanMsg('当前窗口不支持系统选择框，直接把文件夹路径粘贴到输入框即可。', true);
-    if (input) input.focus();
-    return;
-  }
   var initial = input ? String(input.value || '').trim() : '';
-  Promise.resolve(api.pick_folder('选择要发布的素材文件夹', initial)).then(function(res) {
+  var api = window.pywebview && window.pywebview.api;
+  var task;
+  if (api && typeof api.pick_folder === 'function') {
+    task = Promise.resolve(api.pick_folder('选择要发布的素材文件夹', initial));
+  } else {
+    // 桌面壳没有桥接时，让本地后端拉系统对话框（tkinter/WinForms），同样不依赖 exe 版本
+    task = _pubPlanFetch('/api/publish/pick-folder', { method: 'POST', body: JSON.stringify({ initial: initial }) });
+  }
+  var btn = document.getElementById('pubPlanBrowseBtn');
+  var original = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '选择中…'; }
+  task.then(function(res) {
     if (!res || res.cancelled) return;
     if (!res.ok) return _pubPlanMsg(res.error || '选择文件夹失败', true);
     if (input) input.value = res.path || '';
   }).catch(function(err) {
     _pubPlanMsg('选择文件夹失败：' + ((err && err.message) || err), true);
+  }).then(function() {
+    if (btn) { btn.disabled = false; btn.textContent = original || '选择文件夹'; }
   });
 }
 

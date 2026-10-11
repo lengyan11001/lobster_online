@@ -4,7 +4,11 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
+import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -22,6 +26,10 @@ router = APIRouter()
 
 _PLATFORMS = {"douyin", "wechat_channels"}
 _MAX_TIMES = 24
+
+
+class PickFolderReq(BaseModel):
+    initial: Optional[str] = None
 
 
 class PublishGroupItemReq(BaseModel):
@@ -315,3 +323,62 @@ async def run_publish_plan_now(
     if not result.get("ok"):
         raise HTTPException(400, detail=str(result.get("error") or "发布失败"))
     return result
+
+
+# ── 系统「选择文件夹」：本地后端直接拉原生对话框（不依赖桌面壳桥接） ──────
+_PICK_FOLDER_PS = """[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Windows.Forms | Out-Null
+if ($env:LOBSTER_PICK_DRYRUN) { [Console]::Out.Write($env:LOBSTER_PICK_DRYRUN); exit 0 }
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = '选择要发布的素材文件夹'
+$dialog.ShowNewFolderButton = $true
+$initial = $env:LOBSTER_PICK_INITIAL
+if ($initial -and (Test-Path -LiteralPath $initial)) { $dialog.SelectedPath = $initial }
+$result = $dialog.ShowDialog()
+if ($result -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) }
+"""
+
+
+def _pick_directory_native(initial: str = "") -> Dict[str, Any]:
+    """弹出系统文件夹选择框，返回 {"ok": True, "path": ...} / {"ok": False, "cancelled": True}。"""
+    if os.name != "nt":
+        return {"ok": False, "error": "当前系统不支持系统文件夹选择框"}
+    env = dict(os.environ)
+    env["LOBSTER_PICK_INITIAL"] = str(initial or "")
+    handle = tempfile.NamedTemporaryFile("w", suffix=".ps1", delete=False, encoding="utf-8-sig")
+    try:
+        handle.write(_PICK_FOLDER_PS)
+        handle.close()
+        proc = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-Sta", "-ExecutionPolicy", "Bypass", "-File", handle.name],
+            capture_output=True,
+            env=env,
+            timeout=1800,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "文件夹选择框超时未响应"}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("[定时发布] 打开系统文件夹选择框失败")
+        return {"ok": False, "error": f"无法打开系统文件夹选择框：{exc}"}
+    finally:
+        try:
+            os.unlink(handle.name)
+        except OSError:
+            pass
+    path = (proc.stdout or b"").decode("utf-8", "replace").strip()
+    if proc.returncode != 0 and not path:
+        err = (proc.stderr or b"").decode("utf-8", "replace").strip()[:300]
+        return {"ok": False, "error": err or f"文件夹选择框退出码 {proc.returncode}"}
+    if not path:
+        return {"ok": False, "cancelled": True}
+    return {"ok": True, "path": path}
+
+
+@router.post("/api/publish/pick-folder", summary="系统「选择文件夹」对话框（定时发布选本地文件夹）")
+async def pick_publish_folder(
+    body: PickFolderReq = PickFolderReq(),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    initial = str(body.initial or "").strip()
+    return await asyncio.to_thread(_pick_directory_native, initial)
