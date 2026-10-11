@@ -4238,6 +4238,46 @@ async def fill_saved_asset_ai_tags(
     )
 
 
+@router.post("/api/assets/{asset_id}/ai-digest", summary="用多模态模型理解素材（多帧+画面字幕），返回标题/要点/标签")
+async def understand_saved_asset_digest(
+    asset_id: str,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    row = db.query(Asset).filter(Asset.asset_id == asset_id, Asset.user_id == current_user.id).first()
+    if not row:
+        raise HTTPException(404, detail="素材不存在")
+    media_type = (row.media_type or "").strip().lower()
+    if media_type not in {"image", "video"}:
+        raise HTTPException(400, detail="只支持图片或视频")
+    _reject_intermediate_library_asset(row)
+    from ..services.asset_ai_understand import understand_asset_digest
+
+    with tempfile.TemporaryDirectory(prefix="lobster_library_digest_") as temp_name:
+        source_path = await _materialize_library_file(row, request, Path(temp_name))
+        try:
+            digest = await asyncio.to_thread(
+                understand_asset_digest,
+                source_path,
+                media_type,
+                base_url=_auth_server_base_url(),
+                headers=_forward_auth_headers(request),
+            )
+        except (RuntimeError, ValueError) as exc:
+            raise HTTPException(502, detail=str(exc)[:300]) from exc
+    meta = dict(row.meta or {})
+    meta["ai_digest"] = {
+        "title": digest.get("title") or "",
+        "summary": digest.get("summary") or "",
+        "tags": digest.get("tags") or [],
+        "frames": digest.get("frames") or 0,
+    }
+    row.meta = meta
+    db.commit()
+    return {"ok": True, "asset_id": row.asset_id, **meta["ai_digest"]}
+
+
 @router.post("/api/assets/{asset_id}/labels", summary="编辑素材分组和标签")
 def update_asset_labels(
     asset_id: str,

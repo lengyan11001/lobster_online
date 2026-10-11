@@ -36,13 +36,25 @@ def _image_data_urls(path: Path):
     return [_image_understand_data_url(path, max_side=1024, max_bytes=1_500_000)]
 
 
-def _video_frame_data_urls(path: Path):
+def _video_frame_times(duration: float, max_frames: int) -> list:
+    count = max(1, int(max_frames or 3))
+    if duration <= 0.4:
+        return [0.0]
+    if duration < 3:
+        count = min(count, 3)
+    elif duration < 10:
+        count = min(count, 4)
+    step = duration / (count + 1)
+    return [round(step * (index + 1), 3) for index in range(count)]
+
+
+def _video_frame_data_urls(path: Path, max_frames: int = 3):
     from ..api.ai_3d_model import _image_understand_data_url
     from .media_edit_exec import find_ffmpeg
 
     ffmpeg = find_ffmpeg()
     duration = _video_duration_seconds(ffmpeg, path)
-    times = [0.0] if duration <= 0.4 else [duration * 0.1, duration * 0.5, max(0.0, duration - 0.2)]
+    times = _video_frame_times(duration, max_frames)
     urls = []
     with tempfile.TemporaryDirectory(prefix="lobster_asset_ai_frames_") as temp_name:
         for index, timestamp in enumerate(times, start=1):
@@ -71,7 +83,7 @@ def _extract_frame(ffmpeg: str, source: Path, timestamp: float, dest: Path) -> b
     return dest.is_file() and dest.stat().st_size > 0
 
 
-def _complete_vision(base_url: str, headers: dict, data_urls) -> str:
+def _complete_vision(base_url: str, headers: dict, data_urls, prompt: str = "") -> str:
     base = str(base_url or "").strip().rstrip("/")
     if not base:
         raise RuntimeError("\u6ca1\u6709\u53ef\u7528\u7684\u8ba4\u8bc1\u4e2d\u5fc3\u5730\u5740")
@@ -88,7 +100,7 @@ def _complete_vision(base_url: str, headers: dict, data_urls) -> str:
         "messages": [
             {
                 "role": "user",
-                "content": [{"type": "text", "text": _PROMPT}]
+                "content": [{"type": "text", "text": prompt or _PROMPT}]
                 + [{"type": "image_url", "image_url": {"url": url}} for url in data_urls],
             }
         ],
@@ -134,3 +146,50 @@ def _run(command, timeout: int):
         check=False,
         creationflags=(subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0),
     )
+
+
+_DIGEST_PROMPT = (
+    "你是短视频内容理解助手。请看完这些画面后只返回 JSON，不要解释："
+    '{"title":"不超过20字的主题","summary":"80字以内的画面与内容要点（包含画面里出现的文字/字幕）",'
+    '"tags":["标签1","标签2","标签3"]}。'
+    "要求：只描述画面真实可见的内容，不要编造；tags 为 2 到 4 个短中文标签。"
+)
+
+
+def understand_asset_digest(
+    path: Path,
+    media_type: str,
+    *,
+    base_url: str,
+    headers: dict,
+    max_frames: int = 6,
+) -> dict:
+    """用服务器上的多模态模型理解素材（视频多帧抽帧 + 画面字幕），返回 {title, summary, tags}。"""
+    import json as _json
+
+    kind = str(media_type or "").strip().lower()
+    if kind not in {"image", "video"}:
+        raise RuntimeError("只支持图片或视频")
+    source = Path(path)
+    if not source.is_file():
+        raise RuntimeError("找不到素材文件")
+    data_urls = _image_data_urls(source) if kind == "image" else _video_frame_data_urls(source, max_frames)
+    if not data_urls:
+        raise RuntimeError("没有抽出可用于理解的画面")
+    text = _complete_vision(base_url, headers, data_urls, prompt=_DIGEST_PROMPT)
+    match = re.search(r"\{.*\}", str(text or ""), re.S)
+    data = {}
+    if match:
+        try:
+            data = _json.loads(match.group(0))
+        except ValueError:
+            data = {}
+    title = str(data.get("title") or "").strip()[:80]
+    summary = str(data.get("summary") or "").strip()[:2000]
+    raw_tags = data.get("tags")
+    tags = []
+    if isinstance(raw_tags, list):
+        tags = [str(item).strip() for item in raw_tags if str(item).strip()][:6]
+    if not summary:
+        summary = str(text or "").strip()[:2000]
+    return {"title": title, "summary": summary, "tags": tags, "frames": len(data_urls)}

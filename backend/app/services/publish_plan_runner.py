@@ -296,17 +296,36 @@ async def _understand_asset(user: User, asset_id: str, media_type: str) -> str:
     if not asset_id:
         return ""
     try:
-        payload = await _post_local(user, f"/api/assets/{asset_id}/ai-tags", json_body={})
+        payload = await _post_local(user, f"/api/assets/{asset_id}/ai-digest", json_body={})
+    except Exception:  # noqa: BLE001
+        logger.warning("[定时发布] 素材摘要理解失败，退回标签理解 asset=%s", asset_id)
+        payload = {}
+    if isinstance(payload, dict) and (payload.get("summary") or payload.get("title")):
+        summary = str(payload.get("summary") or "").strip()
+        title = str(payload.get("title") or "").strip()
+        extra = []
+        if title:
+            extra.append(title)
+        if summary:
+            extra.append(summary)
+        text = "；".join(extra)[:2000]
+        logger.info(
+            "[定时发布] 素材理解完成(多帧) asset=%s media=%s 帧=%s 要点长度=%d",
+            asset_id, media_type, payload.get("frames"), len(text),
+        )
+        return text
+    try:
+        fallback = await _post_local(user, f"/api/assets/{asset_id}/ai-tags", json_body={})
     except Exception:  # noqa: BLE001
         logger.exception("[定时发布] 素材 AI 理解失败 asset=%s", asset_id)
         return ""
-    item = payload.get("item") if isinstance(payload, dict) else None
+    item = fallback.get("item") if isinstance(fallback, dict) else None
     text = ""
     if isinstance(item, dict):
         text = str(item.get("tags") or "").strip()
-    if not text and isinstance(payload, dict):
-        text = str(payload.get("tags") or "").strip()
-    logger.info("[定时发布] 素材理解完成 asset=%s media=%s 描述长度=%d", asset_id, media_type, len(text))
+    if not text and isinstance(fallback, dict):
+        text = str(fallback.get("tags") or "").strip()
+    logger.info("[定时发布] 素材理解完成(标签兜底) asset=%s media=%s 描述长度=%d", asset_id, media_type, len(text))
     return text
 
 
