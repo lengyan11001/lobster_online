@@ -5925,7 +5925,8 @@ function _pubPlanMsg(text, isError) {
   var el = document.getElementById('pubPlanMsg');
   if (!el) return;
   el.textContent = text || '';
-  el.style.color = isError ? '#f87171' : '#34d399';
+  el.style.display = text ? 'block' : 'none';
+  el.style.color = isError ? 'var(--error)' : 'var(--success)';
 }
 
 function _pubPlanPlatformLabel(platform) {
@@ -5940,7 +5941,7 @@ function loadPublishPlans() {
     _pubPlanCache = (d && Array.isArray(d.plans)) ? d.plans : [];
     renderPublishPlans();
   }).catch(function(err) {
-    el.innerHTML = '<div class="page-empty-card">发布任务加载失败：' + escapeHtml((err && err.message) || String(err)) + '</div>';
+    el.innerHTML = '<div class="page-empty-card">加载失败：' + escapeHtml((err && err.message) || String(err)) + '</div>';
   });
 }
 
@@ -5957,7 +5958,7 @@ function renderPublishPlans() {
     if ((plan.source_groups || []).length) src.push('分组 ' + plan.source_groups.join('、'));
     if ((plan.source_records || []).length) src.push('内容记录 ' + plan.source_records.length + ' 条');
     var items = (plan.items || []).map(function(it) {
-      var color = it.status === 'success' ? '#34d399' : (it.status === 'failed' ? '#f87171' : '#fbbf24');
+      var color = it.status === 'success' ? 'var(--success)' : (it.status === 'failed' ? 'var(--error)' : 'var(--text-muted)');
       return '<div style="padding:2px 0;font-size:0.76rem;color:' + color + ';">' +
         escapeHtml(it.used_date + ' ' + (it.title || it.asset_key)) +
         ' · ' + escapeHtml(it.status) +
