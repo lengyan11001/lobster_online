@@ -779,7 +779,7 @@
     assetPickerState.earnLoading = true;
     renderAssetPicker();
     var url = cloud + '/api/shop/plaza?page=' + Number(assetPickerState.earnPage || 1) +
-      '&size=' + Number(assetPickerState.earnSize || 18) + '&sort=heat' +
+      '&size=' + Number(assetPickerState.earnSize || 18) + '&sort=heat&scope=earn' +
       (assetPickerState.earnKeyword ? '&keyword=' + encodeURIComponent(assetPickerState.earnKeyword) : '') +
       (assetPickerState.earnCategory ? '&category=' + encodeURIComponent(assetPickerState.earnCategory) : '');
     return fetch(url, { headers: authHeadersSafe() })
