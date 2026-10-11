@@ -5994,6 +5994,7 @@ function renderPublishPlans() {
           items +
         '</div>' +
         '<div style="display:flex;gap:0.35rem;align-items:flex-start;">' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-plan-edit="' + plan.id + '">编辑</button>' +
           '<button type="button" class="btn ' + (plan.enabled ? 'btn-ghost' : 'btn-primary') + ' btn-sm" data-plan-toggle="' + plan.id + '">' +
             (plan.enabled ? '暂停' : '启动') + '</button>' +
         '</div>' +
@@ -6130,6 +6131,21 @@ function _pubPlanRenderDetail(plan) {
   if (toggle) toggle.textContent = plan.enabled ? '暂停' : '启动';
 }
 
+function _pubPlanOpenById(planId) {
+  var plan = _pubPlanCache.filter(function(p) { return String(p.id) === String(planId); })[0];
+  if (plan) { openPublishPlanDialog(plan); return; }
+  loadPublishPlans();
+  _pubPlanFetch('/api/publish/plans').then(function(d) {
+    var rows = (d && Array.isArray(d.plans)) ? d.plans : [];
+    _pubPlanCache = rows;
+    var hit = rows.filter(function(p) { return String(p.id) === String(planId); })[0];
+    if (hit) openPublishPlanDialog(hit);
+    else _pubPlanMsg('这个定时发布已经不存在了。', true);
+  }).catch(function(err) {
+    _pubPlanMsg('打开失败：' + ((err && err.message) || err), true);
+  });
+}
+
 function openPublishPlanDialog(plan) {
   var modal = document.getElementById('pubPlanModal');
   if (!modal) return;
@@ -6230,6 +6246,12 @@ document.addEventListener('click', function(event) {
     if (row) row.parentNode.removeChild(row);
     return;
   }
+  var editBtn = target.closest('[data-plan-edit]');
+  if (editBtn) {
+    event.stopPropagation();
+    _pubPlanOpenById(editBtn.getAttribute('data-plan-edit'));
+    return;
+  }
   var toggleBtn = target.closest('[data-plan-toggle]');
   if (toggleBtn) {
     event.stopPropagation();
@@ -6263,9 +6285,7 @@ document.addEventListener('click', function(event) {
   }
   var openCard = target.closest('[data-plan-open]');
   if (openCard) {
-    var openId = openCard.getAttribute('data-plan-open');
-    var plan = _pubPlanCache.filter(function(p) { return String(p.id) === String(openId); })[0];
-    if (plan) openPublishPlanDialog(plan);
+    _pubPlanOpenById(openCard.getAttribute('data-plan-open'));
     return;
   }
 });
