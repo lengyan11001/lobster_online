@@ -5920,7 +5920,6 @@ function bindPublishAccountDetailAndSchedule() {
 // ── 定时发布（一行一条：每行一个时间点，到点发一个；台账去重；一个设备只跑一个） ──
 
 var _pubPlanCache = [];
-var _pubPlanDirPath = '';
 var _pubPlanEditingId = 0;
 
 function _pubPlanFetch(path, opts) {
@@ -6060,29 +6059,21 @@ function _pubPlanLoadAccounts(platform, accountId) {
   });
 }
 
-function _pubPlanRenderDirBrowser(data) {
-  var el = document.getElementById('pubPlanDirBrowser');
-  if (!el) return;
-  var dirs = (data && data.dirs) || [];
-  var parent = (data && data.parent) || '';
-  var current = (data && data.path) || '';
-  var html = '<div style="margin-bottom:0.3rem;color:var(--text-muted);">当前：' + escapeHtml(current || '常用位置') + '</div>';
-  if (parent) html += '<div><button type="button" class="btn btn-ghost btn-sm" data-plan-dir="' + escapeAttr(parent) + '">↑ 上一级</button></div>';
-  html += dirs.map(function(d) {
-    return '<div><button type="button" class="btn btn-ghost btn-sm" data-plan-dir="' + escapeAttr(d.path) + '">📁 ' + escapeHtml(d.name) + '</button></div>';
-  }).join('') || '<div style="color:var(--text-muted);">没有子目录</div>';
-  el.innerHTML = html;
-  el.style.display = 'block';
-}
-
-function _pubPlanBrowse(path) {
-  return _pubPlanFetch('/api/publish/plan-dirs' + (path ? ('?path=' + encodeURIComponent(path)) : '')).then(function(d) {
-    _pubPlanDirPath = (d && d.path) || '';
-    var input = document.getElementById('pubPlanFolder');
-    if (input && _pubPlanDirPath) input.value = _pubPlanDirPath;
-    _pubPlanRenderDirBrowser(d);
+function _pubPlanPickFolder() {
+  var input = document.getElementById('pubPlanFolder');
+  var api = window.pywebview && window.pywebview.api;
+  if (!api || typeof api.pick_folder !== 'function') {
+    _pubPlanMsg('当前窗口不支持系统选择框，直接把文件夹路径粘贴到输入框即可。', true);
+    if (input) input.focus();
+    return;
+  }
+  var initial = input ? String(input.value || '').trim() : '';
+  Promise.resolve(api.pick_folder('选择要发布的素材文件夹', initial)).then(function(res) {
+    if (!res || res.cancelled) return;
+    if (!res.ok) return _pubPlanMsg(res.error || '选择文件夹失败', true);
+    if (input) input.value = res.path || '';
   }).catch(function(err) {
-    _pubPlanMsg('浏览目录失败：' + ((err && err.message) || err), true);
+    _pubPlanMsg('选择文件夹失败：' + ((err && err.message) || err), true);
   });
 }
 
@@ -6149,8 +6140,6 @@ function openPublishPlanDialog(plan) {
   if (tags) tags.value = editing ? (editing.tags || '') : '';
   var platformSelect = document.getElementById('pubPlanPlatform');
   if (platformSelect) platformSelect.value = editing ? (editing.platform || 'douyin') : 'douyin';
-  var browser = document.getElementById('pubPlanDirBrowser');
-  if (browser) browser.style.display = 'none';
   var box = document.getElementById('pubPlanTimeRows');
   if (box) {
     box.innerHTML = '';
@@ -6226,7 +6215,7 @@ document.addEventListener('click', function(event) {
   if (target.closest('#pubPlanRefreshBtn')) { loadPublishPlans(); return; }
   if (target.closest('#pubPlanCloseBtn') || target.closest('#pubPlanCancelBtn')) { closePublishPlanDialog(); return; }
   if (target.closest('#pubPlanSaveBtn')) { submitPublishPlan(); return; }
-  if (target.closest('#pubPlanBrowseBtn')) { _pubPlanBrowse(_pubPlanDirPath || ''); return; }
+  if (target.closest('#pubPlanBrowseBtn')) { _pubPlanPickFolder(); return; }
   if (target.closest('#pubPlanAddTimeBtn')) { _pubPlanAddTimeRow('09:00'); return; }
   var removeRow = target.closest('[data-plan-time-remove]');
   if (removeRow) {
@@ -6234,8 +6223,6 @@ document.addEventListener('click', function(event) {
     if (row) row.parentNode.removeChild(row);
     return;
   }
-  var dirBtn = target.closest('[data-plan-dir]');
-  if (dirBtn) { _pubPlanBrowse(dirBtn.getAttribute('data-plan-dir')); return; }
   var toggleBtn = target.closest('[data-plan-toggle]');
   if (toggleBtn) {
     event.stopPropagation();

@@ -1502,6 +1502,29 @@ class DesktopApi:
         threading.Timer(0.35, close_active_window).start()
         return {"ok": True, "scheduled": True, "restart_required": True}
 
+    def pick_folder(self, title: str = "", initial: str = "") -> dict:
+        """系统「选择文件夹」对话框（定时发布选本地文件夹用）。"""
+        try:
+            import webview  # type: ignore
+
+            window = webview.active_window()
+            if window is None:
+                return {"ok": False, "error": "桌面窗口不可用"}
+            kwargs = {}
+            if initial:
+                try:
+                    kwargs["directory"] = str(Path(str(initial)).expanduser())
+                except Exception:
+                    pass
+            result = window.create_file_dialog(webview.FOLDER_DIALOG, **kwargs)
+        except Exception as exc:
+            log(f"pick folder dialog failed: {exc}")
+            return {"ok": False, "error": f"无法打开文件夹选择窗口：{exc}"}
+        if not result:
+            return {"ok": False, "cancelled": True}
+        picked = result[0] if isinstance(result, (list, tuple)) else result
+        return {"ok": True, "path": str(Path(str(picked)).expanduser())}
+
     def save_asset_as(self, asset_id: str, suggested_name: str = "") -> dict:
         source = asset_file_for_id(asset_id)
         if not source:
