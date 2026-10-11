@@ -4238,6 +4238,86 @@ async def fill_saved_asset_ai_tags(
     )
 
 
+_STT_TEXT_KEYS = ("text", "transcript", "content", "result_text", "full_text")
+
+
+def _digest_transcript_text(payload) -> str:
+    """从 STT 返回里挖出口播文稿（兼容 output/result/data/utterances 等嵌套）。"""
+    if isinstance(payload, dict):
+        for key in ("output", "result", "data", "stt_data"):
+            if key in payload:
+                value = payload.get(key)
+                if isinstance(value, str) and value.strip().startswith(("{", "[")):
+                    try:
+                        value = json.loads(value)
+                    except ValueError:
+                        pass
+                text = _digest_transcript_text(value)
+                if text:
+                    return text
+        for key in _STT_TEXT_KEYS:
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, list):
+                text = _digest_transcript_text({"utterances": value})
+                if text:
+                    return text
+        utterances = payload.get("utterances") or payload.get("segments")
+        if isinstance(utterances, list):
+            parts = []
+            for item in utterances:
+                if isinstance(item, dict):
+                    piece = str(item.get("text") or item.get("transcript") or "").strip()
+                    if piece:
+                        parts.append(piece)
+                elif isinstance(item, str) and item.strip():
+                    parts.append(item.strip())
+            return "".join(parts)
+        return ""
+    if isinstance(payload, list):
+        return _digest_transcript_text({"utterances": payload})
+    if isinstance(payload, str):
+        return payload.strip()
+    return ""
+
+
+async def _stt_transcript_for_public_url(request: Request, url: str) -> str:
+    """把视频/音频的公网地址交给服务器 STT，取回口播文稿；失败返回空串。"""
+    target = str(url or "").strip()
+    if not target.startswith("http"):
+        return ""
+    try:
+        async with httpx.AsyncClient(timeout=900.0, trust_env=False) as client:
+            resp = await client.post(
+                f"{_auth_server_base_url()}/api/cutcli/stt/transcribe",
+                json={"audio_url": target},
+                headers=_forward_auth_headers(request),
+            )
+    except Exception:  # noqa: BLE001
+        logger.exception("[素材理解] 口播转写请求失败")
+        return ""
+    if resp.status_code >= 400:
+        logger.warning("[素材理解] 口播转写失败 HTTP %s %s", resp.status_code, (resp.text or "")[:200])
+        return ""
+    try:
+        data = resp.json() or {}
+    except Exception:  # noqa: BLE001
+        return ""
+    return _digest_transcript_text(data)[:2000]
+
+
+def _merge_digest_transcript(digest: dict, transcript: str) -> dict:
+    text = str(transcript or "").strip()
+    if not text:
+        return digest
+    merged = dict(digest or {})
+    summary = str(merged.get("summary") or "").strip()
+    merged["summary"] = (summary + ("；" if summary else "") + "口播：" + text)[:2000]
+    merged["transcript"] = text
+    return merged
+
+
 @router.post("/api/assets/{asset_id}/ai-digest", summary="用多模态模型理解素材（多帧+画面字幕），返回标题/要点/标签")
 async def understand_saved_asset_digest(
     asset_id: str,
@@ -4266,12 +4346,17 @@ async def understand_saved_asset_digest(
             )
         except (RuntimeError, ValueError) as exc:
             raise HTTPException(502, detail=str(exc)[:300]) from exc
+    # 视频再补一层「口播全文」：把公网地址交给服务器 STT 转写，和画面要点合并
+    if media_type == "video":
+        transcript = await _stt_transcript_for_public_url(request, str(getattr(row, "source_url", "") or ""))
+        digest = _merge_digest_transcript(digest, transcript)
     meta = dict(row.meta or {})
     meta["ai_digest"] = {
         "title": digest.get("title") or "",
         "summary": digest.get("summary") or "",
         "tags": digest.get("tags") or [],
         "frames": digest.get("frames") or 0,
+        "transcript": digest.get("transcript") or "",
     }
     row.meta = meta
     db.commit()
