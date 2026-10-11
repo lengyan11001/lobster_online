@@ -1132,3 +1132,26 @@ class PublishPlanItem(Base):
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     used_date: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class PublishGroupItem(Base):
+    """发布分组条目：把内容记录 / 素材放进自定义分组，发布任务按分组取素材。"""
+
+    __tablename__ = "publish_group_items"
+    __table_args__ = (
+        UniqueConstraint("user_id", "group_name", "item_key", name="uq_publish_group_items_user_group_key"),
+        Index("ix_publish_group_items_user_group", "user_id", "group_name"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    group_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    item_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    kind: Mapped[str] = mapped_column(String(24), default="record", nullable=False)
+    media_type: Mapped[str] = mapped_column(String(16), default="video", nullable=False)
+    asset_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    local_path: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

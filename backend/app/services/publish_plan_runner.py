@@ -21,7 +21,7 @@ import httpx
 from ..api.auth import create_access_token
 from ..core.config import settings
 from ..db import SessionLocal
-from ..models import Asset, PublishPlan, PublishPlanItem, User
+from ..models import Asset, PublishGroupItem, PublishPlan, PublishPlanItem, User
 from .publish_copy_llm import PublishCopyLLMError, generate_publish_copy
 
 logger = logging.getLogger(__name__)
@@ -142,6 +142,36 @@ def _group_candidates(db, user_id: int, groups: List[str]) -> List[Dict[str, Any
     return out
 
 
+def _plan_group_candidates(db, user_id: int, names: List[str]) -> tuple[List[Dict[str, Any]], set]:
+    """发布分组（内容记录/素材归组）里的素材；返回 (候选列表, 真的有内容的分组名)。"""
+    out: List[Dict[str, Any]] = []
+    used: set = set()
+    for name in names:
+        rows = (
+            db.query(PublishGroupItem)
+            .filter(PublishGroupItem.user_id == int(user_id), PublishGroupItem.group_name == str(name))
+            .order_by(PublishGroupItem.id.asc())
+            .all()
+        )
+        if not rows:
+            continue
+        used.add(str(name))
+        for row in rows:
+            media_type = str(row.media_type or "").strip().lower()
+            out.append({
+                "key": f"group:{name}:{row.item_key}",
+                "kind": "group",
+                "label": str(row.title or row.item_key)[:80],
+                "path": str(row.local_path or ""),
+                "media_type": "image" if media_type == "image" else "video",
+                "asset_id": str(row.asset_id or ""),
+                "url": str(row.url or ""),
+                "prompt": str(row.prompt or "")[:2000],
+                "title": str(row.title or "")[:80],
+            })
+    return out, used
+
+
 def _record_candidates(records: List[Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for raw in (records or []):
@@ -174,7 +204,14 @@ def collect_candidates(db, plan: PublishPlan) -> List[Dict[str, Any]]:
         items.extend(_folder_candidates(plan.source_folder or ""))
     except Exception:  # noqa: BLE001
         logger.exception("[发布任务] 扫描本地文件夹失败 plan=%s", plan.id)
-    items.extend(_group_candidates(db, int(plan.user_id), plan.source_groups or []))
+    groups = [str(g).strip() for g in (plan.source_groups or []) if str(g).strip()]
+    plan_names = [g for g in groups if not g.startswith("lib:")]
+    lib_names = [g[4:] for g in groups if g.startswith("lib:")]
+    from_groups, used_names = _plan_group_candidates(db, int(plan.user_id), plan_names)
+    items.extend(from_groups)
+    # 旧计划里直接存的是「素材库分组」名：没有发布分组同名内容时按素材库分组解析
+    legacy_lib = [g for g in plan_names if g not in used_names]
+    items.extend(_group_candidates(db, int(plan.user_id), lib_names + legacy_lib))
     items.extend(_record_candidates(plan.source_records or []))
     seen = set()
     unique: List[Dict[str, Any]] = []

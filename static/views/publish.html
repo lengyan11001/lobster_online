@@ -155,12 +155,18 @@
                   <div id="pubPlanDirBrowser" style="display:none;margin-top:0.5rem;max-height:200px;overflow:auto;border:1px solid var(--border);border-radius:var(--radius-sm,8px);padding:0.5rem;font-size:0.82rem;"></div>
                 </div>
                 <div class="modal-field">
-                  <label>② 素材库分组</label>
+                  <label>② 分组（发布分组 / 素材库分组）</label>
                   <div id="pubPlanGroups" style="display:flex;flex-wrap:wrap;gap:0.4rem 0.9rem;font-size:0.85rem;">加载中…</div>
                 </div>
                 <div class="modal-field">
-                  <label>③ 内容记录</label>
-                  <div id="pubPlanRecords" style="max-height:200px;overflow:auto;font-size:0.85rem;">加载中…</div>
+                  <label>③ 内容记录 <span id="pubPlanRecordCount" style="color:var(--text-muted);font-weight:400;">已选 0 条</span></label>
+                  <div style="display:flex;gap:0.4rem;align-items:center;margin-bottom:0.4rem;flex-wrap:wrap;">
+                    <button type="button" id="pubPlanRecordAllBtn" class="btn btn-ghost btn-sm">全选</button>
+                    <button type="button" id="pubPlanRecordNoneBtn" class="btn btn-ghost btn-sm">清空</button>
+                    <input id="pubPlanRecordGroup" type="text" placeholder="分组名" style="width:150px;padding:0.4rem 0.5rem;font-size:0.85rem;background:var(--select-surface,#fff);border:1px solid var(--border);border-radius:var(--radius-sm,8px);color:var(--text);">
+                    <button type="button" id="pubPlanRecordGroupBtn" class="btn btn-ghost btn-sm">加入分组</button>
+                  </div>
+                  <div id="pubPlanRecords" style="max-height:220px;overflow:auto;font-size:0.85rem;">加载中…</div>
                 </div>
                 <div class="modal-field" style="display:flex;gap:0.9rem;flex-wrap:wrap;">
                   <div style="flex:0 0 auto;">

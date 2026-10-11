@@ -5997,30 +5997,86 @@ function _pubPlanGroupsSelected() {
   return out;
 }
 
+var _pubPlanRecordsCache = [];
+var _pubPlanRecordSel = {};
+
 function _pubPlanRecordsSelected() {
   var out = [];
-  document.querySelectorAll('#pubPlanRecords input[type=checkbox]:checked').forEach(function(box) {
-    var raw = box.getAttribute('data-record');
-    if (!raw) return;
-    try { out.push(JSON.parse(raw)); } catch (e) {}
+  Object.keys(_pubPlanRecordSel).forEach(function(idx) {
+    var rec = _pubPlanRecordsCache[parseInt(idx, 10)];
+    if (rec) out.push(rec);
   });
   return out;
+}
+
+function _pubPlanRenderRecords() {
+  var el = document.getElementById('pubPlanRecords');
+  if (!el) return;
+  var countEl = document.getElementById('pubPlanRecordCount');
+  var picked = Object.keys(_pubPlanRecordSel).length;
+  if (countEl) countEl.textContent = '已选 ' + picked + ' 条';
+  if (!_pubPlanRecordsCache.length) {
+    el.innerHTML = '<div style="color:var(--text-muted);">没有可发布的内容记录。</div>';
+    return;
+  }
+  el.innerHTML = _pubPlanRecordsCache.map(function(rec, idx) {
+    var on = !!_pubPlanRecordSel[idx];
+    return '<div data-rec-idx="' + idx + '" style="display:flex;gap:0.5rem;align-items:center;cursor:pointer;padding:0.3rem 0.4rem;border-radius:6px;' +
+      (on ? 'background:rgba(91,124,255,0.12);' : '') + '">' +
+      '<span style="width:1em;text-align:center;color:' + (on ? 'var(--accent)' : 'var(--text-muted)') + ';">' + (on ? '✓' : '○') + '</span>' +
+      '<span style="flex:1;">' + escapeHtml(rec.title || rec.source_id || rec.url.slice(0, 60)) +
+      ' <span style="color:var(--text-muted);">' + escapeHtml(rec.media_type) + '</span></span></div>';
+  }).join('');
+}
+
+function _pubPlanAddRecordsToGroup() {
+  var recs = _pubPlanRecordsSelected();
+  var nameInput = document.getElementById('pubPlanRecordGroup');
+  var name = String(nameInput && nameInput.value || '').trim();
+  if (!recs.length) return _pubPlanMsg('请先选中要归组的内容记录。', true);
+  if (!name) return _pubPlanMsg('请填写分组名。', true);
+  _pubPlanMsg('正在加入分组…', false);
+  var btn = document.getElementById('pubPlanRecordGroupBtn');
+  if (btn) btn.disabled = true;
+  _pubPlanFetch('/api/publish/groups', {
+    method: 'POST',
+    body: JSON.stringify({ group: name, items: recs.map(function(rec) {
+      return { kind: 'record', media_type: rec.media_type, url: rec.url, title: rec.title, prompt: rec.prompt,
+               source: rec.source, source_id: rec.source_id };
+    }) })
+  }).then(function(d) {
+    _pubPlanMsg('已加入分组「' + name + '」：新增 ' + ((d && d.added) || 0) + ' 条，已存在 ' + ((d && d.skipped) || 0) + ' 条。', false);
+    if (nameInput) nameInput.value = '';
+    _pubPlanLoadGroups();
+  }).catch(function(err) {
+    _pubPlanMsg('加入分组失败：' + ((err && err.message) || err), true);
+  }).then(function() {
+    if (btn) btn.disabled = false;
+  });
 }
 
 function _pubPlanLoadGroups() {
   var el = document.getElementById('pubPlanGroups');
   if (el) el.textContent = '加载中…';
-  return _pubPlanFetch('/api/assets/creative-candidate-groups').then(function(d) {
-    var groups = (d && Array.isArray(d.groups)) ? d.groups : [];
-    if (!el) return;
-    if (!groups.length) { el.textContent = '素材库里还没有分组。'; return; }
-    el.innerHTML = groups.map(function(g) {
+  return Promise.all([
+    _pubPlanFetch('/api/publish/groups').catch(function() { return {}; }),
+    _pubPlanFetch('/api/assets/creative-candidate-groups').catch(function() { return {}; })
+  ]).then(function(res) {
+    var mine = (res[0] && Array.isArray(res[0].groups)) ? res[0].groups : [];
+    var lib = (res[1] && Array.isArray(res[1].groups)) ? res[1].groups : [];
+    var html = mine.map(function(g) {
+      return '<label style="display:flex;gap:0.3rem;align-items:center;">' +
+        '<input type="checkbox" value="' + escapeAttr(String(g.name)) + '">' +
+        escapeHtml(String(g.name)) + ' <span style="color:var(--text-muted);">(' + (g.count || 0) + ')</span></label>';
+    }).join('');
+    html += lib.map(function(g) {
       var name = typeof g === 'string' ? g : String(g.name || g.group || '');
       if (!name) return '';
-      return '<label style="display:flex;gap:0.3rem;align-items:center;"><input type="checkbox" value="' + escapeAttr(name) + '">' + escapeHtml(name) + '</label>';
-    }).join('') || '素材库里还没有分组。';
-  }).catch(function(err) {
-    if (el) el.textContent = '分组加载失败：' + ((err && err.message) || err);
+      return '<label style="display:flex;gap:0.3rem;align-items:center;">' +
+        '<input type="checkbox" value="' + escapeAttr('lib:' + name) + '">' +
+        escapeHtml(name) + ' <span style="color:var(--text-muted);">素材库</span></label>';
+    }).join('');
+    if (el) el.innerHTML = html || '<span style="color:var(--text-muted);">还没有分组，可在下面把内容记录「加入分组」。</span>';
   });
 }
 
@@ -6045,9 +6101,8 @@ function _pubPlanLoadRecords() {
     }
     var usable = rows.filter(function(row) { return String(row && row.url || '').trim(); });
     if (!el) return;
-    if (!usable.length) { el.textContent = '内容记录里没有可发布的视频/图片。'; return; }
-    el.innerHTML = usable.map(function(row) {
-      var ref = {
+    _pubPlanRecordsCache = usable.map(function(row) {
+      return {
         source: String(row.source || ''),
         source_id: String(row.source_id || row.id || ''),
         url: String(row.url || ''),
@@ -6055,11 +6110,9 @@ function _pubPlanLoadRecords() {
         title: String(row.title || row.name || row.summary || '').slice(0, 120),
         prompt: String(row.creative_prompt || row.prompt || row.description || '').slice(0, 500)
       };
-      return '<label style="display:flex;gap:0.35rem;align-items:flex-start;padding:2px 0;">' +
-        '<input type="checkbox" data-record="' + escapeAttr(JSON.stringify(ref)) + '">' +
-        '<span>' + escapeHtml(ref.title || ref.source_id || ref.url.slice(0, 60)) +
-        ' <span style="color:var(--text-muted);">' + escapeHtml(ref.media_type) + '</span></span></label>';
-    }).join('');
+    });
+    _pubPlanRecordSel = {};
+    _pubPlanRenderRecords();
   }).catch(function(err) {
     if (el) el.textContent = '内容记录加载失败：' + ((err && err.message) || err);
   });
@@ -6235,4 +6288,30 @@ document.addEventListener('click', function(event) {
 
 document.addEventListener('change', function(event) {
   if (event.target && event.target.id === 'pubPlanPlatform') _pubPlanLoadAccounts();
+});
+
+
+document.addEventListener('click', function(event) {
+  var target = event.target;
+  if (!target || !target.closest) return;
+  var row = target.closest('[data-rec-idx]');
+  if (row) {
+    var idx = String(row.getAttribute('data-rec-idx'));
+    if (_pubPlanRecordSel[idx]) delete _pubPlanRecordSel[idx];
+    else _pubPlanRecordSel[idx] = true;
+    _pubPlanRenderRecords();
+    return;
+  }
+  if (target.closest('#pubPlanRecordAllBtn')) {
+    _pubPlanRecordSel = {};
+    _pubPlanRecordsCache.forEach(function(_, i) { _pubPlanRecordSel[i] = true; });
+    _pubPlanRenderRecords();
+    return;
+  }
+  if (target.closest('#pubPlanRecordNoneBtn')) {
+    _pubPlanRecordSel = {};
+    _pubPlanRenderRecords();
+    return;
+  }
+  if (target.closest('#pubPlanRecordGroupBtn')) { _pubPlanAddRecordsToGroup(); return; }
 });

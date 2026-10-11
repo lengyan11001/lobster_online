@@ -15,13 +15,30 @@ from sqlalchemy.orm import Session
 
 from .auth import _ServerUser, get_current_user_for_local
 from ..db import get_db
-from ..models import PublishAccount, PublishPlan, PublishPlanItem
+from ..models import PublishAccount, PublishGroupItem, PublishPlan, PublishPlanItem
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _PLATFORMS = {"douyin", "wechat_channels"}
 _MAX_TIMES = 24
+
+
+class PublishGroupItemReq(BaseModel):
+    kind: Optional[str] = "record"
+    media_type: Optional[str] = "video"
+    asset_id: Optional[str] = None
+    url: Optional[str] = None
+    local_path: Optional[str] = None
+    title: Optional[str] = None
+    prompt: Optional[str] = None
+    source: Optional[str] = None
+    source_id: Optional[str] = None
+
+
+class PublishGroupReq(BaseModel):
+    group: str
+    items: List[PublishGroupItemReq] = []
 
 
 class PublishPlanReq(BaseModel):
@@ -295,3 +312,122 @@ def browse_local_dirs(
         raise HTTPException(400, detail=f"没有权限访问：{raw}") from exc
     parent = str(target.parent) if target.parent != target else ""
     return {"path": str(target), "parent": parent, "dirs": dirs[:500]}
+
+
+def _group_item_key(item: PublishGroupItemReq) -> str:
+    if item.local_path:
+        return f"file:{item.local_path}"
+    if item.url:
+        return f"url:{item.url}"
+    if item.asset_id:
+        return f"asset:{item.asset_id}"
+    return ""
+
+
+@router.get("/api/publish/groups", summary="发布分组列表（内容记录/素材归组）")
+def list_publish_groups(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(PublishGroupItem)
+        .filter(PublishGroupItem.user_id == current_user.id)
+        .order_by(PublishGroupItem.group_name.asc(), PublishGroupItem.id.asc())
+        .all()
+    )
+    grouped: Dict[str, Dict[str, Any]] = {}
+    for row in rows:
+        bucket = grouped.setdefault(row.group_name, {"name": row.group_name, "count": 0, "video": 0, "image": 0})
+        bucket["count"] += 1
+        if str(row.media_type or "") == "image":
+            bucket["image"] += 1
+        else:
+            bucket["video"] += 1
+    return {"groups": list(grouped.values())}
+
+
+@router.post("/api/publish/groups", summary="把内容记录/素材加入发布分组")
+def create_publish_group(
+    body: PublishGroupReq,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    name = str(body.group or "").strip()[:64]
+    if not name:
+        raise HTTPException(400, detail="请填写分组名")
+    added = 0
+    skipped = 0
+    for item in (body.items or []):
+        key = _group_item_key(item)
+        if not key:
+            skipped += 1
+            continue
+        exists = (
+            db.query(PublishGroupItem)
+            .filter(
+                PublishGroupItem.user_id == current_user.id,
+                PublishGroupItem.group_name == name,
+                PublishGroupItem.item_key == key,
+            )
+            .first()
+        )
+        if exists is not None:
+            skipped += 1
+            continue
+        media_type = str(item.media_type or "").strip().lower()
+        db.add(PublishGroupItem(
+            user_id=current_user.id,
+            group_name=name,
+            item_key=key,
+            kind=str(item.kind or "record")[:24],
+            media_type="image" if media_type == "image" else "video",
+            asset_id=str(item.asset_id or "").strip() or None,
+            url=str(item.url or "").strip() or None,
+            local_path=str(item.local_path or "").strip() or None,
+            title=str(item.title or "")[:255] or None,
+            prompt=str(item.prompt or "")[:2000] or None,
+        ))
+        added += 1
+    db.commit()
+    logger.info("[发布分组] user=%s group=%s 新增=%s 跳过=%s", current_user.id, name, added, skipped)
+    return {"ok": True, "group": name, "added": added, "skipped": skipped}
+
+
+@router.delete("/api/publish/groups/{group_name}", summary="删除发布分组")
+def delete_publish_group(
+    group_name: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    name = str(group_name or "").strip()
+    if not name:
+        raise HTTPException(400, detail="分组名不能为空")
+    deleted = (
+        db.query(PublishGroupItem)
+        .filter(PublishGroupItem.user_id == current_user.id, PublishGroupItem.group_name == name)
+        .delete()
+    )
+    db.commit()
+    return {"ok": True, "deleted": int(deleted or 0)}
+
+
+@router.get("/api/publish/groups/{group_name}/items", summary="发布分组里的素材")
+def list_publish_group_items(
+    group_name: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    rows = (
+        db.query(PublishGroupItem)
+        .filter(PublishGroupItem.user_id == current_user.id, PublishGroupItem.group_name == str(group_name or "").strip())
+        .order_by(PublishGroupItem.id.asc())
+        .all()
+    )
+    return {"items": [
+        {
+            "id": row.id, "item_key": row.item_key, "kind": row.kind, "media_type": row.media_type,
+            "asset_id": row.asset_id or "", "url": row.url or "", "local_path": row.local_path or "",
+            "title": row.title or "",
+        }
+        for row in rows
+    ]}
