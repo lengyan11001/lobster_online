@@ -5493,8 +5493,7 @@ function loadTasks() {
     .then(function(d) {
       var tasks = (d && Array.isArray(d.tasks)) ? d.tasks : [];
       if (!tasks.length) {
-        el.innerHTML = '<div class="page-empty-card">暂无<strong>单次发布</strong>记录（对话触发的 publish 任务）。<br>' +
-          '若您配置的是账号上的<strong>间隔定时任务</strong>：请到<strong>发布账号</strong> → 点击该账号 → <strong>执行记录</strong> 或进入详情后点 <strong>任务列表</strong>（今日头条与抖音、小红书相同）。</div>';
+        el.innerHTML = '<div class="page-empty-card">暂无发布记录。</div>';
         return;
       }
       el.innerHTML = '<div class="publish-task-list">' + tasks.map(function(t) {
@@ -5936,7 +5935,7 @@ function _pubPlanPlatformLabel(platform) {
 function loadPublishPlans() {
   var el = document.getElementById('publishPlanList');
   if (!el) return;
-  el.innerHTML = '<div class="page-empty-card">发布任务加载中…</div>';
+  el.innerHTML = '<div class="page-empty-card">加载中…</div>';
   _pubPlanFetch('/api/publish/plans').then(function(d) {
     _pubPlanCache = (d && Array.isArray(d.plans)) ? d.plans : [];
     renderPublishPlans();
@@ -5949,7 +5948,7 @@ function renderPublishPlans() {
   var el = document.getElementById('publishPlanList');
   if (!el) return;
   if (!_pubPlanCache.length) {
-    el.innerHTML = '<div class="page-empty-card">还没有发布任务，点上面的「＋ 新增任务」：可以选本机文件夹、素材库分组或内容记录，设定每天条数和时间点，到点自动发布。</div>';
+    el.innerHTML = '<div class="page-empty-card">还没有发布任务，点右上「＋ 新增任务」。</div>';
     return;
   }
   el.innerHTML = '<div class="publish-task-list">' + _pubPlanCache.map(function(plan) {
@@ -5973,7 +5972,7 @@ function renderPublishPlans() {
           (plan.enabled ? '' : ' · 已暂停') + '</div>' +
         '<div class="publish-task-meta">来源：' + escapeHtml(src.join(' | ') || '未设置') + '</div>' +
         '<div class="publish-task-meta">已发 ' + plan.sent_total + ' 条（今天 ' + plan.sent_today + ' 条，失败 ' + plan.failed_total + '）' +
-          (plan.tags ? ' · 标签：' + escapeHtml(plan.tags) : ' · 标签：AI 生成') + '</div>' +
+          (plan.tags ? ' · 标签 ' + escapeHtml(plan.tags) : ' · 标签 AI') + '</div>' +
         '</div>' +
         '<div style="display:flex;gap:0.35rem;flex-wrap:wrap;justify-content:flex-end;">' +
           '<button type="button" class="btn btn-ghost btn-sm" data-plan-run="' + plan.id + '">立即执行一次</button>' +
