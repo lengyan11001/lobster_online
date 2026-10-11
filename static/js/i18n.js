@@ -32,6 +32,7 @@
     '抖音获客 - Online 全部关键词': 'Douyin Leads - All Online Keywords',
     '首页': 'Home', '技能商店': 'Skills', '发布中心': 'Publishing', '内容记录': 'Content',
     '素材库': 'Assets', '客资线索': 'Leads', '定时任务': 'Schedules', '消费记录': 'Billing',
+    '赚钱': 'Earn', '投稿': 'Earn',
     '系统配置': 'System Settings', '日志': 'Logs', '个人设置': 'Personal Settings',
     'AI执行台': 'AI Console', 'AI 执行台': 'AI Console', '教程': 'Tutorial', '用户': 'User',
     '版本': 'Version', '发现新版本': 'Update Available', '点击更新并自动重启': 'Update and restart',

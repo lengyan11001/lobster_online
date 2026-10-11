@@ -13409,3 +13409,18 @@ body.online-mastra-chat-compose .online-mastra-chat {
       opacity:1;
       background:#fff1f1;
     }
+
+
+/* 2026-10-11：「选择已有图片」弹窗多 tab（素材库 / 内容记录 / 赚钱投稿） */
+.asset-picker-tabs { display: flex; gap: 6px; margin: 8px 0; flex-wrap: wrap; }
+.asset-picker-tab { border: 1px solid rgba(127, 127, 127, .35); background: transparent; color: inherit; padding: 4px 14px; border-radius: 999px; cursor: pointer; font-size: 12px; line-height: 1.6; }
+.asset-picker-tab.is-active { background: #5b6cff; border-color: #5b6cff; color: #fff; }
+.asset-picker-earn-bar { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; flex-wrap: wrap; }
+.asset-picker-earn-bar[hidden] { display: none; }
+.asset-picker-earn-tip { font-size: 12px; opacity: .72; }
+.asset-picker-product { border: 1px solid rgba(127, 127, 127, .28); border-radius: 10px; overflow: hidden; cursor: pointer; background: rgba(127, 127, 127, .04); }
+.asset-picker-product:hover { border-color: #5b6cff; }
+.asset-picker-product img { width: 100%; height: 120px; object-fit: cover; display: block; }
+.asset-picker-product-title { font-size: 12px; padding: 6px 8px; line-height: 1.35; }
+.asset-picker-product-meta { font-size: 11px; opacity: .7; padding: 0 8px 8px; }
+.asset-picker-empty { grid-column: 1 / -1; font-size: 12px; opacity: .7; padding: 12px; text-align: center; }

@@ -42,7 +42,21 @@
     loading: false,
     items: [],
     selected: {},
-    query: ''
+    query: '',
+    // 2026-10-11：多 tab（素材库 / 内容记录 / 赚钱投稿）+ 赚钱投稿的商品与商家素材
+    tab: 'assets',
+    contentItems: [],
+    contentLoading: false,
+    earnProducts: [],
+    earnKeyword: '',
+    earnCategory: '',
+    earnPage: 1,
+    earnSize: 18,
+    earnTotal: 0,
+    earnLoading: false,
+    openProduct: null,
+    earnMaterials: [],
+    earnMaterialsLoading: false
   };
 
   var defaults = {
@@ -1327,6 +1341,7 @@
     if (mediaType && mediaType !== 'image') return null;
     return {
       asset_id: aid,
+      pick_key: aid,
       name: String((asset && asset.filename) || aid).trim() || aid,
       size: Number((asset && asset.file_size) || 0),
       url: resolveAssetMediaUrl(asset),
@@ -1340,8 +1355,8 @@
 
   function selectedAssetPickerItems() {
     var selected = assetPickerState.selected || {};
-    return (assetPickerState.items || []).filter(function(item) {
-      return item && selected[item.asset_id];
+    return pickerCurrentItems().filter(function(item) {
+      return item && item.pick_key && selected[item.pick_key];
     });
   }
 
@@ -1406,6 +1421,16 @@
       '<button type="button" class="seedance-asset-picker-close" aria-label="关闭">X</button>',
       '</div>',
       '<div class="seedance-asset-picker-tools">',
+      '<div class="asset-picker-tabs" role="tablist">',
+      '<button type="button" class="asset-picker-tab is-active" data-seedance-picker-tab="assets" role="tab">素材库</button>',
+      '<button type="button" class="asset-picker-tab" data-seedance-picker-tab="content" role="tab">内容记录</button>',
+      '<button type="button" class="asset-picker-tab" data-seedance-picker-tab="earn" role="tab">赚钱投稿</button>',
+      '</div>',
+      '<div class="asset-picker-earn-bar" id="seedanceAssetPickerEarnBar" hidden>',
+      '<select id="seedanceAssetPickerProductCategory"><option value="">全部分类</option></select>',
+      '<button type="button" class="btn btn-ghost btn-sm" id="seedanceAssetPickerProductBack" hidden>← 返回商品列表</button>',
+      '<span class="asset-picker-earn-tip" id="seedanceAssetPickerEarnTip"></span>',
+      '</div>',
       '<input type="search" id="seedanceAssetPickerSearch" placeholder="搜索文件名、提示词或标签">',
       '<button type="button" class="btn btn-ghost btn-sm" id="seedanceAssetPickerReload">刷新</button>',
       '</div>',
@@ -1440,13 +1465,41 @@
     if (search) {
       search.addEventListener('input', function(event) {
         assetPickerState.query = event.target.value || '';
+        if (assetPickerState.tab === 'earn') {
+          assetPickerState.earnKeyword = assetPickerState.query;
+          assetPickerState.earnPage = 1;
+          loadEarnProducts(true);
+          return;
+        }
         renderAssetPicker();
+      });
+    }
+    modal.querySelectorAll('[data-seedance-picker-tab]').forEach(function (tabBtn) {
+      tabBtn.addEventListener('click', function () { switchAssetPickerTab(tabBtn.getAttribute('data-seedance-picker-tab')); });
+    });
+    var earnBack = modal.querySelector('#seedanceAssetPickerProductBack');
+    if (earnBack) {
+      earnBack.addEventListener('click', function () {
+        assetPickerState.openProduct = null;
+        assetPickerState.earnMaterials = [];
+        assetPickerState.selected = {};
+        renderAssetPicker();
+      });
+    }
+    var earnCat = modal.querySelector('#seedanceAssetPickerProductCategory');
+    if (earnCat) {
+      earnCat.addEventListener('change', function () {
+        assetPickerState.earnCategory = String(earnCat.value || '');
+        assetPickerState.earnPage = 1;
+        loadEarnProducts(true);
       });
     }
     var reload = modal.querySelector('#seedanceAssetPickerReload');
     if (reload) {
       reload.addEventListener('click', function() {
-        loadAssetPickerItems(true);
+        if (assetPickerState.tab === 'earn') loadEarnProducts(true);
+      else if (assetPickerState.tab === 'content') loadContentPickerItems(true);
+      else loadAssetPickerItems(true);
       });
     }
     var confirm = modal.querySelector('#seedanceAssetPickerConfirm');
@@ -1469,6 +1522,7 @@
   }
 
   function renderAssetPicker() {
+    if (assetPickerState.tab && assetPickerState.tab !== 'assets') { renderPickerTabView(); return; }
     var modal = ensureAssetPickerModal();
     var grid = modal.querySelector('#seedanceAssetPickerGrid');
     var status = modal.querySelector('#seedanceAssetPickerStatus');
@@ -1559,6 +1613,329 @@
       });
   }
 
+  // ── 2026-10-11：「选择已有图片」多 tab（素材库 / 内容记录 / 赚钱投稿）──
+  function pickerCloudBase() {
+    return (typeof API_BASE !== 'undefined' ? (API_BASE || '') : '').replace(/\/$/, '');
+  }
+
+  function pickerTabTitle(tab) {
+    if (tab === 'content') return '从内容记录选择';
+    if (tab === 'earn') return '从商家商品素材选择';
+    return '选择素材库图片';
+  }
+
+  function pickerPurpose() {
+    return (($('seedanceReferencePurposeSelect') || {}).value || 'storyboard').trim() || 'storyboard';
+  }
+
+  function pickerCurrentItems() {
+    if (assetPickerState.tab === 'content') return filteredContentPickerItems();
+    if (assetPickerState.tab === 'earn') {
+      return assetPickerState.openProduct ? (assetPickerState.earnMaterials || []) : [];
+    }
+    return assetPickerState.items || [];
+  }
+
+  function switchAssetPickerTab(tab) {
+    var modal = ensureAssetPickerModal();
+    var next = (tab === 'content' || tab === 'earn') ? tab : 'assets';
+    assetPickerState.tab = next;
+    assetPickerState.selected = {};
+    if (next !== 'earn') assetPickerState.openProduct = null;
+    modal.querySelectorAll('[data-seedance-picker-tab]').forEach(function (btn) {
+      btn.classList.toggle('is-active', btn.getAttribute('data-seedance-picker-tab') === next);
+    });
+    var title = modal.querySelector('#seedanceAssetPickerTitle');
+    if (title) title.textContent = pickerTabTitle(next);
+    var search = modal.querySelector('#seedanceAssetPickerSearch');
+    if (search) {
+      search.value = next === 'earn' ? String(assetPickerState.earnKeyword || '') : '';
+      search.placeholder = next === 'earn' ? '搜商品名 / 关键词 / 店铺' : '搜索文件名、提示词或标签';
+    }
+    var earnBar = modal.querySelector('#seedanceAssetPickerEarnBar');
+    if (earnBar) earnBar.hidden = next !== 'earn';
+    var backBtn = modal.querySelector('#seedanceAssetPickerProductBack');
+    if (backBtn) backBtn.hidden = !(next === 'earn' && assetPickerState.openProduct);
+    var tip = modal.querySelector('#seedanceAssetPickerEarnTip');
+    if (tip) {
+      tip.textContent = next === 'earn'
+        ? (assetPickerState.openProduct ? '点图片选中；确认后自动存进你的素材库' : '点一个商品，展开看商家上传的图片')
+        : '';
+    }
+    if (next === 'content') loadContentPickerItems(false);
+    else if (next === 'earn') loadEarnProducts(false);
+    else loadAssetPickerItems(false);
+    renderAssetPicker();
+  }
+
+  function normalizePickerContentRecord(rec) {
+    rec = rec || {};
+    var kind = String(rec.media_type || rec.kind || '').toLowerCase();
+    if (kind.indexOf('image') < 0 && kind.indexOf('video') < 0) return null;
+    var refs = rec.image_refs || rec.images || [];
+    var first = (refs && refs[0]) || {};
+    var mediaType = kind.indexOf('video') >= 0 ? 'video' : 'image';
+    var url = mediaType === 'video'
+      ? String(rec.video_url || rec.play_url || rec.file_url || rec.url || '').trim()
+      : String(rec.url || rec.source_url || first.image_url || first.url || '').trim();
+    if (!url) return null;
+    return {
+      pick_key: 'content:' + String(rec.asset_id || rec.id || url),
+      asset_id: String(rec.asset_id || ''),
+      name: String(rec.title || rec.name || rec.summary || '内容记录素材').trim(),
+      size: 0,
+      objectUrl: url,
+      source_url: url,
+      prompt: String(rec.prompt || '').trim(),
+      purpose: pickerPurpose()
+    };
+  }
+
+  function filteredContentPickerItems() {
+    var query = String(assetPickerState.query || '').trim().toLowerCase();
+    var rows = assetPickerState.contentItems || [];
+    if (!query) return rows;
+    return rows.filter(function (item) {
+      return (String(item.name || '') + ' ' + String(item.prompt || '') + ' ' + String(item.source_url || '')).toLowerCase().indexOf(query) >= 0;
+    });
+  }
+
+  function loadContentPickerItems(force) {
+    var modal = ensureAssetPickerModal();
+    if (!force && assetPickerState.contentItems.length) {
+      renderAssetPicker();
+      return Promise.resolve(assetPickerState.contentItems);
+    }
+    assetPickerState.contentLoading = true;
+    renderAssetPicker();
+    var jobs = [];
+    var local = localBase();
+    var cloud = pickerCloudBase();
+    if (local) {
+      jobs.push(fetch(local + '/api/assets?media_type=image&limit=60', { headers: authHeadersSafe() })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          return ((d && d.assets) || []).map(normalizeAssetPickerItem).filter(Boolean).map(function (item) {
+            item.pick_key = 'content:' + item.asset_id;
+            return item;
+          });
+        })
+        .catch(function () { return []; }));
+    }
+    if (cloud) {
+      jobs.push(fetch(cloud + '/api/content-records?limit=60&offset=0&compact=true', { headers: authHeadersSafe() })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          return (((d && (d.items || d.records)) || []).map(normalizePickerContentRecord).filter(Boolean));
+        })
+        .catch(function () { return []; }));
+    }
+    return Promise.all(jobs).then(function (lists) {
+      var merged = [];
+      var seen = {};
+      lists.forEach(function (rows) {
+        (rows || []).forEach(function (item) {
+          var key = String(item.pick_key || item.asset_id || item.objectUrl || '');
+          if (!key || seen[key]) return;
+          seen[key] = true;
+          merged.push(item);
+        });
+      });
+      assetPickerState.contentItems = merged;
+      assetPickerState.contentLoading = false;
+      renderAssetPicker();
+      return merged;
+    });
+  }
+
+  function syncEarnCategories(products) {
+    var modal = ensureAssetPickerModal();
+    var sel = modal.querySelector('#seedanceAssetPickerProductCategory');
+    if (!sel) return;
+    var current = String(assetPickerState.earnCategory || '');
+    var cats = [];
+    (products || []).forEach(function (p) {
+      var c = String((p && p.category) || '').trim();
+      if (c && cats.indexOf(c) < 0) cats.push(c);
+    });
+    var html = '<option value="">全部分类</option>' + cats.map(function (c) {
+      return '<option value="' + escapeHtml(c) + '"' + (c === current ? ' selected' : '') + '>' + escapeHtml(c) + '</option>';
+    }).join('');
+    if (sel.innerHTML !== html) sel.innerHTML = html;
+  }
+
+  function loadEarnProducts(force) {
+    var modal = ensureAssetPickerModal();
+    if (!force && (assetPickerState.earnProducts || []).length) {
+      renderAssetPicker();
+      return Promise.resolve(assetPickerState.earnProducts);
+    }
+    var cloud = pickerCloudBase();
+    if (!cloud) {
+      assetPickerState.earnProducts = [];
+      var noBaseStatus = modal.querySelector('#seedanceAssetPickerStatus');
+      if (noBaseStatus) noBaseStatus.textContent = '未配置云端地址，读不到商家商品';
+      renderAssetPicker();
+      return Promise.resolve([]);
+    }
+    assetPickerState.earnLoading = true;
+    renderAssetPicker();
+    var url = cloud + '/api/shop/plaza?page=' + Number(assetPickerState.earnPage || 1) +
+      '&size=' + Number(assetPickerState.earnSize || 18) + '&sort=heat' +
+      (assetPickerState.earnKeyword ? '&keyword=' + encodeURIComponent(assetPickerState.earnKeyword) : '') +
+      (assetPickerState.earnCategory ? '&category=' + encodeURIComponent(assetPickerState.earnCategory) : '');
+    return fetch(url, { headers: authHeadersSafe() })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d || {} }; }); })
+      .then(function (res) {
+        assetPickerState.earnLoading = false;
+        if (!res.ok) throw new Error(responseErrorText(res.data, '商品加载失败'));
+        assetPickerState.earnProducts = Array.isArray(res.data.items) ? res.data.items : [];
+        assetPickerState.earnTotal = Number(res.data.total || assetPickerState.earnProducts.length);
+        syncEarnCategories(assetPickerState.earnProducts);
+        renderAssetPicker();
+        return assetPickerState.earnProducts;
+      })
+      .catch(function (err) {
+        assetPickerState.earnLoading = false;
+        assetPickerState.earnProducts = [];
+        var status = modal.querySelector('#seedanceAssetPickerStatus');
+        if (status) status.textContent = (err && err.message) || '商品加载失败';
+        renderAssetPicker();
+        return [];
+      });
+  }
+
+  function openEarnProduct(productId) {
+    var modal = ensureAssetPickerModal();
+    var product = (assetPickerState.earnProducts || []).filter(function (p) {
+      return Number(p && p.id) === Number(productId);
+    })[0] || null;
+    if (!product) return;
+    var cloud = pickerCloudBase();
+    assetPickerState.openProduct = product;
+    assetPickerState.selected = {};
+    assetPickerState.earnMaterials = [];
+    assetPickerState.earnMaterialsLoading = true;
+    var backBtn = modal.querySelector('#seedanceAssetPickerProductBack');
+    if (backBtn) backBtn.hidden = false;
+    var tip = modal.querySelector('#seedanceAssetPickerEarnTip');
+    if (tip) tip.textContent = '点图片选中；确认后自动存进你的素材库';
+    renderAssetPicker();
+    return fetch(cloud + '/api/shop/submissions/product/' + encodeURIComponent(String(product.id)), { headers: authHeadersSafe() })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d || {} }; }); })
+      .then(function (res) {
+        if (!res.ok) throw new Error(responseErrorText(res.data, '商品素材加载失败'));
+        var materials = Array.isArray(res.data.materials) ? res.data.materials.slice() : [];
+        if (!materials.length) {
+          var gallery = Array.isArray((res.data.product || {}).gallery) ? res.data.product.gallery : [];
+          materials = gallery.map(function (u, i) { return { url: u, title: '商品图 ' + (i + 1) }; });
+        }
+        assetPickerState.earnMaterials = materials.map(function (m, index) {
+          var url = String((m && m.url) || '').trim();
+          return {
+            pick_key: 'shop:' + String(product.id) + ':' + index,
+            asset_id: '',
+            name: String((m && m.title) || ('商品素材 ' + (index + 1))),
+            size: 0,
+            objectUrl: url,
+            source_url: url,
+            product_id: Number(product.id),
+            purpose: pickerPurpose()
+          };
+        }).filter(function (m) { return !!m.objectUrl; });
+        assetPickerState.earnMaterialsLoading = false;
+        renderAssetPicker();
+        return assetPickerState.earnMaterials;
+      })
+      .catch(function (err) {
+        assetPickerState.earnMaterialsLoading = false;
+        var status = modal.querySelector('#seedanceAssetPickerStatus');
+        if (status) status.textContent = (err && err.message) || '商品素材加载失败';
+        renderAssetPicker();
+        return [];
+      });
+  }
+
+  function importPickerAssetUrl(url) {
+    var local = localBase();
+    var target = String(url || '').trim();
+    if (!local || !/^https?:\/\//i.test(target)) return Promise.resolve('');
+    return fetch(local + '/api/assets/save-url', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
+      body: JSON.stringify({ url: target })
+    }).then(function (r) {
+      return r.json().then(function (d) { return { ok: r.ok, data: d || {} }; });
+    }).then(function (res) {
+      if (!res.ok) throw new Error(responseErrorText(res.data, '图片入库失败'));
+      return String(res.data.asset_id || '');
+    });
+  }
+
+  function renderEarnProductCard(product) {
+    var cover = String((product && (product.cover_url || ((product.gallery || [])[0] || ''))) || '');
+    return '<div class="asset-picker-product" data-seedance-product-id="' + escapeHtml(String(product.id || '')) + '">' +
+      (cover ? '<img src="' + escapeHtml(cover) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' : '') +
+      '<div class="asset-picker-product-title">' + escapeHtml(String(product.title || '未命名商品')) + '</div>' +
+      '<div class="asset-picker-product-meta">' + escapeHtml(String(((product.merchant || {}).company_name) || '商家')) +
+      (product.category ? ' · ' + escapeHtml(String(product.category)) : '') +
+      ' · 佣金 ' + (Number(product.commission_bp || 0) / 100) + '%</div></div>';
+  }
+
+  function renderPickerTabView() {
+    var modal = ensureAssetPickerModal();
+    var grid = modal.querySelector('#seedanceAssetPickerGrid');
+    var status = modal.querySelector('#seedanceAssetPickerStatus');
+    var count = modal.querySelector('#seedanceAssetPickerCount');
+    var confirm = modal.querySelector('#seedanceAssetPickerConfirm');
+    if (!grid || !status) return;
+    var tab = assetPickerState.tab;
+    var showingProducts = tab === 'earn' && !assetPickerState.openProduct;
+    var loading = tab === 'content' ? assetPickerState.contentLoading
+      : (showingProducts ? assetPickerState.earnLoading : assetPickerState.earnMaterialsLoading);
+    var picked = Object.keys(assetPickerState.selected || {}).length;
+    if (count) count.textContent = '已选择 ' + picked + (showingProducts ? ' 个商品' : ' 张');
+    if (confirm) {
+      confirm.textContent = '确认使用';
+      confirm.disabled = picked === 0;
+    }
+    if (loading) {
+      status.textContent = showingProducts ? '正在读取商家商品…' : '正在加载…';
+      grid.innerHTML = '<div class="asset-picker-empty">加载中…</div>';
+      return;
+    }
+    if (showingProducts) {
+      var products = assetPickerState.earnProducts || [];
+      status.textContent = products.length
+        ? ('共 ' + assetPickerState.earnTotal + ' 个可投稿商品，当前显示 ' + products.length + ' 个')
+        : '没有搜到可投稿的商品（换个词或换分类）';
+      grid.innerHTML = products.map(renderEarnProductCard).join('');
+      grid.querySelectorAll('[data-seedance-product-id]').forEach(function (card) {
+        card.addEventListener('click', function () {
+          openEarnProduct(card.getAttribute('data-seedance-product-id'));
+        });
+      });
+      return;
+    }
+    var items = pickerCurrentItems();
+    if (!items.length) {
+      status.textContent = tab === 'content' ? '内容记录里还没有图片' : '这个商品还没有商家上传的图片';
+      grid.innerHTML = '<div class="asset-picker-empty">' + escapeHtml(status.textContent) + '</div>';
+      return;
+    }
+    if (assetPickerState.openProduct) {
+      status.textContent = '「' + String(assetPickerState.openProduct.title || '') + '」商家图片 ' + items.length + ' 张';
+    } else {
+      status.textContent = '共 ' + items.length + ' 张素材';
+    }
+    grid.innerHTML = items.map(function (item) {
+      var selectedClass = assetPickerState.selected[item.pick_key] ? ' is-selected' : '';
+      return '<div class="asset-picker-card' + selectedClass + '" data-seedance-asset-id="' + escapeHtml(String(item.pick_key || item.asset_id || '')) + '">' +
+        '<img src="' + escapeHtml(String(item.objectUrl || item.source_url || '')) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' +
+        '<div class="asset-picker-card-title">' + escapeHtml(String(item.name || '')) + '</div></div>';
+    }).join('');
+  }
+
   function openAssetPicker() {
     var modal = ensureAssetPickerModal();
     assetPickerState.selected = {};
@@ -1567,8 +1944,21 @@
     if (search) search.value = '';
     modal.classList.add('is-visible');
     modal.setAttribute('aria-hidden', 'false');
-    loadAssetPickerItems(false).catch(function(err) {
-      showMessage((err && err.message) || '素材库图片加载失败');
+    switchAssetPickerTab(assetPickerState.tab || 'assets');
+  }
+
+  function resolvePickerItemsThenConfirm(items) {
+    var modal = ensureAssetPickerModal();
+    var confirmBtn = modal.querySelector('#seedanceAssetPickerConfirm');
+    if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = '正在存进素材库…'; }
+    Promise.all(items.map(function (item) {
+      if (item.asset_id || !(item.source_url || item.objectUrl)) return Promise.resolve();
+      return importPickerAssetUrl(String(item.source_url || item.objectUrl))
+        .then(function (assetId) { if (assetId) item.asset_id = assetId; })
+        .catch(function () { /* 单张失败不影响其它 */ });
+    })).then(function () {
+      if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = '确认使用'; }
+      confirmAssetPicker();
     });
   }
 
@@ -1582,6 +1972,10 @@
   function confirmAssetPicker() {
     var items = selectedAssetPickerItems();
     if (!items.length) return;
+    if (items.some(function (item) { return !item.asset_id && (item.source_url || item.objectUrl); })) {
+      resolvePickerItemsThenConfirm(items);
+      return;
+    }
     var incoming = items.map(function(item) {
       return {
         name: item.name,
