@@ -5917,11 +5917,11 @@ function bindPublishAccountDetailAndSchedule() {
 })();
 
 
-// ── 发布任务（多来源定时 + 台账去重） ──────────────────────────────
+// ── 定时发布（一行一条：每行一个时间点，到点发一个；台账去重；一个设备只跑一个） ──
 
 var _pubPlanCache = [];
 var _pubPlanDirPath = '';
-var _pubPlanOpen = false;
+var _pubPlanEditingId = 0;
 
 function _pubPlanFetch(path, opts) {
   var options = opts || {};
@@ -5946,6 +5946,13 @@ function _pubPlanPlatformLabel(platform) {
   return PLATFORM_NAMES[platform] || platform || '';
 }
 
+function _pubPlanSourceText(plan) {
+  var parts = [];
+  if (plan.source_folder) parts.push('文件夹 ' + plan.source_folder);
+  if ((plan.source_groups || []).length) parts.push('分组 ' + plan.source_groups.join('、'));
+  return parts.join(' | ') || '未设置来源';
+}
+
 function loadPublishPlans() {
   var el = document.getElementById('publishPlanList');
   if (!el) return;
@@ -5962,41 +5969,35 @@ function renderPublishPlans() {
   var el = document.getElementById('publishPlanList');
   if (!el) return;
   if (!_pubPlanCache.length) {
-    el.innerHTML = '<div class="page-empty-card">还没有发布任务，点右上「＋ 新增任务」。</div>';
+    el.innerHTML = '<div class="page-empty-card">还没有定时发布，点右上「＋ 定时发布」。</div>';
     return;
   }
   el.innerHTML = '<div class="publish-task-list">' + _pubPlanCache.map(function(plan) {
-    var src = [];
-    if (plan.source_folder) src.push('文件夹 ' + plan.source_folder);
-    if ((plan.source_groups || []).length) src.push('分组 ' + plan.source_groups.join('、'));
-    if ((plan.source_records || []).length) src.push('内容记录 ' + plan.source_records.length + ' 条');
-    var items = (plan.items || []).map(function(it) {
+    var items = (plan.items || []).slice(0, 3).map(function(it) {
       var color = it.status === 'success' ? 'var(--success)' : (it.status === 'failed' ? 'var(--error)' : 'var(--text-muted)');
-      return '<div style="padding:2px 0;font-size:0.76rem;color:' + color + ';">' +
-        escapeHtml(it.used_date + ' ' + (it.title || it.asset_key)) +
-        ' · ' + escapeHtml(it.status) +
-        (it.error ? ' · ' + escapeHtml(String(it.error).slice(0, 120)) : '') + '</div>';
+      return '<div style="font-size:0.76rem;color:' + color + ';">' +
+        escapeHtml((it.used_date || '') + ' ' + (it.title || it.asset_id || '')) +
+        (it.error ? ' · ' + escapeHtml(String(it.error).slice(0, 80)) : '') + '</div>';
     }).join('');
-    return '<div class="publish-task-item">' +
+    return '<div class="publish-task-item" data-plan-open="' + plan.id + '" style="cursor:pointer;">' +
       '<div class="publish-task-top">' +
-        '<div><div class="publish-task-title">' + escapeHtml(plan.name || ('发布任务 #' + plan.id)) + '</div>' +
-        '<div class="publish-task-meta">' + escapeHtml(_pubPlanPlatformLabel(plan.platform)) +
-          (plan.account_nickname ? ' · ' + escapeHtml(plan.account_nickname) : '') +
-          ' · 每天 ' + plan.daily_count + ' 条 · ' + escapeHtml((plan.times || []).join('、')) +
-          (plan.enabled ? '' : ' · 已暂停') + '</div>' +
-        '<div class="publish-task-meta">来源：' + escapeHtml(src.join(' | ') || '未设置') + '</div>' +
-        '<div class="publish-task-meta">已发 ' + plan.sent_total + ' 条（今天 ' + plan.sent_today + ' 条，失败 ' + plan.failed_total + '）' +
-          (plan.tags ? ' · 标签 ' + escapeHtml(plan.tags) : ' · 标签 AI') + '</div>' +
+        '<div style="flex:1;min-width:0;">' +
+          '<div class="publish-task-title">' + escapeHtml(plan.name || ('定时发布 #' + plan.id)) +
+            ' <span style="font-size:0.75rem;color:' + (plan.enabled ? 'var(--success)' : 'var(--text-muted)') + ';">' +
+            (plan.enabled ? '已启动' : '已暂停') + '</span></div>' +
+          '<div class="publish-task-meta">' + escapeHtml(_pubPlanPlatformLabel(plan.platform)) +
+            (plan.account_nickname ? ' · ' + escapeHtml(plan.account_nickname) : '') +
+            ' · 每天 ' + (plan.daily_count || (plan.times || []).length) + ' 条 · ' +
+            escapeHtml((plan.times || []).join('、')) + '</div>' +
+          '<div class="publish-task-meta">来源：' + escapeHtml(_pubPlanSourceText(plan)) + '</div>' +
+          '<div class="publish-task-meta">已发 ' + plan.sent_total + '（今天 ' + plan.sent_today + '，失败 ' + plan.failed_total + '）' +
+            (plan.tags ? ' · 标签 ' + escapeHtml(plan.tags) : ' · 标签 AI') + '</div>' +
+          items +
         '</div>' +
-        '<div style="display:flex;gap:0.35rem;flex-wrap:wrap;justify-content:flex-end;">' +
-          '<button type="button" class="btn btn-ghost btn-sm" data-plan-run="' + plan.id + '">立即执行一次</button>' +
-          '<button type="button" class="btn btn-ghost btn-sm" data-plan-toggle="' + plan.id + '">' + (plan.enabled ? '暂停' : '启用') + '</button>' +
-          '<button type="button" class="btn btn-ghost btn-sm" data-plan-items="' + plan.id + '">台账</button>' +
-          '<button type="button" class="btn btn-ghost btn-sm danger-text" data-plan-delete="' + plan.id + '">删除</button>' +
+        '<div style="display:flex;gap:0.35rem;align-items:flex-start;">' +
+          '<button type="button" class="btn ' + (plan.enabled ? 'btn-ghost' : 'btn-primary') + ' btn-sm" data-plan-toggle="' + plan.id + '">' +
+            (plan.enabled ? '暂停' : '启动') + '</button>' +
         '</div>' +
-      '</div>' +
-      '<div id="pubPlanItems' + plan.id + '" style="display:none;margin-top:0.4rem;border-top:1px solid rgba(255,255,255,0.08);padding-top:0.35rem;">' +
-        (items || '<div style="font-size:0.76rem;color:var(--text-muted);">还没有发布记录。</div>') +
       '</div>' +
     '</div>';
   }).join('') + '</div>';
@@ -6010,9 +6011,10 @@ function _pubPlanGroupsSelected() {
   return out;
 }
 
-function _pubPlanLoadGroups() {
+function _pubPlanLoadGroups(selected) {
   var el = document.getElementById('pubPlanGroups');
   if (el) el.textContent = '加载中…';
+  var picked = selected || [];
   return Promise.all([
     _pubPlanFetch('/api/publish/groups').catch(function() { return {}; }),
     _pubPlanFetch('/api/assets/creative-candidate-groups').catch(function() { return {}; })
@@ -6020,29 +6022,31 @@ function _pubPlanLoadGroups() {
     var mine = (res[0] && Array.isArray(res[0].groups)) ? res[0].groups : [];
     var lib = (res[1] && Array.isArray(res[1].groups)) ? res[1].groups : [];
     var html = mine.map(function(g) {
+      var name = String(g.name);
       return '<label style="display:flex;gap:0.3rem;align-items:center;">' +
-        '<input type="checkbox" value="' + escapeAttr(String(g.name)) + '">' +
-        escapeHtml(String(g.name)) + ' <span style="color:var(--text-muted);">(' + (g.count || 0) + ')</span></label>';
+        '<input type="checkbox" value="' + escapeAttr(name) + '"' + (picked.indexOf(name) >= 0 ? ' checked' : '') + '>' +
+        escapeHtml(name) + ' <span style="color:var(--text-muted);">(' + (g.count || 0) + ')</span></label>';
     }).join('');
     html += lib.map(function(g) {
       var name = typeof g === 'string' ? g : String(g.name || g.group || '');
       if (!name) return '';
+      var value = 'lib:' + name;
       return '<label style="display:flex;gap:0.3rem;align-items:center;">' +
-        '<input type="checkbox" value="' + escapeAttr('lib:' + name) + '">' +
+        '<input type="checkbox" value="' + escapeAttr(value) + '"' + (picked.indexOf(value) >= 0 ? ' checked' : '') + '>' +
         escapeHtml(name) + ' <span style="color:var(--text-muted);">素材库</span></label>';
     }).join('');
-    if (el) el.innerHTML = html || '<span style="color:var(--text-muted);">还没有分组，可在下面把内容记录「加入分组」。</span>';
+    if (el) el.innerHTML = html || '<span style="color:var(--text-muted);">还没有分组，可在「内容记录」卡片上点「加入分组」。</span>';
   });
 }
 
-function _pubPlanLoadAccounts() {
+function _pubPlanLoadAccounts(platform, accountId) {
   var select = document.getElementById('pubPlanAccount');
   if (!select) return Promise.resolve();
-  var platform = (document.getElementById('pubPlanPlatform') || {}).value || 'douyin';
+  var want = platform || (document.getElementById('pubPlanPlatform') || {}).value || 'douyin';
   select.innerHTML = '<option value="">加载中…</option>';
   return _pubPlanFetch('/api/accounts').then(function(d) {
     var rows = (d && (d.accounts || d.items || d.data)) || [];
-    var filtered = rows.filter(function(a) { return String(a.platform || '') === platform; });
+    var filtered = rows.filter(function(a) { return String(a.platform || '') === want; });
     if (!filtered.length) {
       select.innerHTML = '<option value="">（该平台还没有账号）</option>';
       return;
@@ -6050,7 +6054,8 @@ function _pubPlanLoadAccounts() {
     select.innerHTML = filtered.map(function(a) {
       return '<option value="' + escapeAttr(String(a.id)) + '">' + escapeHtml(a.nickname || ('账号 ' + a.id)) + '</option>';
     }).join('');
-  }).catch(function(err) {
+    if (accountId) select.value = String(accountId);
+  }).catch(function() {
     select.innerHTML = '<option value="">账号加载失败</option>';
   });
 }
@@ -6081,50 +6086,102 @@ function _pubPlanBrowse(path) {
   });
 }
 
-function openPublishPlanDialog() {
+var _pubPlanTimeRowHtml = function(value) {
+  return '<div data-plan-time-row style="display:flex;gap:0.4rem;align-items:center;margin-bottom:0.35rem;">' +
+    '<input type="time" data-plan-time value="' + escapeAttr(value || '09:00') + '" style="padding:0.4rem 0.5rem;font-size:0.88rem;background:var(--select-surface,#fff);border:1px solid var(--border);border-radius:var(--radius-sm,8px);color:var(--text);">' +
+    '<button type="button" class="btn btn-ghost btn-sm" data-plan-time-remove>删除</button></div>';
+};
+
+function _pubPlanAddTimeRow(value) {
+  var box = document.getElementById('pubPlanTimeRows');
+  if (!box) return;
+  box.insertAdjacentHTML('beforeend', _pubPlanTimeRowHtml(value));
+}
+
+function _pubPlanCollectTimes() {
+  var out = [];
+  document.querySelectorAll('#pubPlanTimeRows [data-plan-time]').forEach(function(input) {
+    var value = String(input.value || '').trim();
+    if (value && out.indexOf(value) < 0) out.push(value);
+  });
+  return out;
+}
+
+function _pubPlanRenderDetail(plan) {
+  var box = document.getElementById('pubPlanDetail');
+  if (!box) return;
+  if (!plan) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  var stats = document.getElementById('pubPlanDetailStats');
+  if (stats) {
+    stats.textContent = '已发 ' + plan.sent_total + ' 条（今天 ' + plan.sent_today + ' 条，失败 ' + plan.failed_total + '）' +
+      (plan.enabled ? ' · 已启动' : ' · 已暂停');
+  }
+  var list = document.getElementById('pubPlanDetailItems');
+  if (list) {
+    var rows = (plan.items || []).map(function(it) {
+      var color = it.status === 'success' ? 'var(--success)' : (it.status === 'failed' ? 'var(--error)' : 'var(--text-muted)');
+      return '<div style="padding:2px 0;color:' + color + ';">' +
+        escapeHtml((it.used_date || '') + ' ' + (it.title || it.asset_id || it.asset_key)) +
+        ' · ' + escapeHtml(it.status) +
+        (it.error ? ' · ' + escapeHtml(String(it.error).slice(0, 120)) : '') + '</div>';
+    }).join('');
+    list.innerHTML = rows || '<div style="color:var(--text-muted);">还没有发布记录。</div>';
+  }
+  var toggle = document.getElementById('pubPlanToggleBtn');
+  if (toggle) toggle.textContent = plan.enabled ? '暂停' : '启动';
+}
+
+function openPublishPlanDialog(plan) {
   var modal = document.getElementById('pubPlanModal');
   if (!modal) return;
-  _pubPlanOpen = true;
-  modal.style.display = 'flex';
-  _pubPlanMsg('', false);
+  var editing = plan || null;
+  _pubPlanEditingId = editing ? parseInt(editing.id, 10) || 0 : 0;
+  var title = document.getElementById('pubPlanTitle');
+  if (title) title.textContent = editing ? '定时发布详情' : '定时发布';
+  var saveBtn = document.getElementById('pubPlanSaveBtn');
+  if (saveBtn) saveBtn.textContent = editing ? '保存修改' : '创建并启动';
   var nameInput = document.getElementById('pubPlanName');
-  if (nameInput) nameInput.value = '';
+  if (nameInput) nameInput.value = editing ? (editing.name || '') : '';
   var folder = document.getElementById('pubPlanFolder');
-  if (folder) folder.value = '';
+  if (folder) folder.value = editing ? (editing.source_folder || '') : '';
   var tags = document.getElementById('pubPlanTags');
-  if (tags) tags.value = '';
-  var times = document.getElementById('pubPlanTimes');
-  if (times) times.value = '09:00';
-  var daily = document.getElementById('pubPlanDaily');
-  if (daily) daily.value = '1';
+  if (tags) tags.value = editing ? (editing.tags || '') : '';
+  var platformSelect = document.getElementById('pubPlanPlatform');
+  if (platformSelect) platformSelect.value = editing ? (editing.platform || 'douyin') : 'douyin';
   var browser = document.getElementById('pubPlanDirBrowser');
   if (browser) browser.style.display = 'none';
-  _pubPlanLoadGroups();
-  _pubPlanLoadAccounts();
+  var box = document.getElementById('pubPlanTimeRows');
+  if (box) {
+    box.innerHTML = '';
+    var times = editing && (editing.times || []).length ? editing.times : ['09:00'];
+    times.forEach(function(t) { _pubPlanAddTimeRow(t); });
+  }
+  _pubPlanMsg('', false);
+  _pubPlanRenderDetail(editing);
+  modal.style.display = 'flex';
+  _pubPlanLoadGroups(editing ? (editing.source_groups || []) : []);
+  _pubPlanLoadAccounts(editing ? editing.platform : 'douyin', editing ? editing.account_id : 0);
 }
 
 function closePublishPlanDialog() {
   var modal = document.getElementById('pubPlanModal');
   if (modal) modal.style.display = 'none';
-  _pubPlanOpen = false;
+  _pubPlanEditingId = 0;
 }
 
 function submitPublishPlan() {
   var platform = (document.getElementById('pubPlanPlatform') || {}).value || 'douyin';
   var accountSelect = document.getElementById('pubPlanAccount');
   var accountId = accountSelect ? parseInt(accountSelect.value, 10) || 0 : 0;
-  if (!accountId) return _pubPlanMsg('请选择发布账号（先在「发布账号」里添加）。', true);
+  if (!accountId) return _pubPlanMsg('请选择发布账号。', true);
   var accountNickname = '';
   if (accountSelect && accountSelect.selectedIndex >= 0) accountNickname = accountSelect.options[accountSelect.selectedIndex].text || '';
   var folder = String((document.getElementById('pubPlanFolder') || {}).value || '').trim();
   var groups = _pubPlanGroupsSelected();
-  if (!folder && !groups.length) {
-    return _pubPlanMsg('请至少选一个素材来源：本机文件夹或分组。', true);
-  }
-  var timesRaw = String((document.getElementById('pubPlanTimes') || {}).value || '').trim();
-  var times = timesRaw.split(/[,，\s]+/).map(function(t) { return t.trim(); }).filter(Boolean);
-  if (!times.length) return _pubPlanMsg('请填写发布时间，例如 09:00,18:30。', true);
-  var daily = parseInt((document.getElementById('pubPlanDaily') || {}).value, 10) || 1;
+  if (!folder && !groups.length) return _pubPlanMsg('请至少选一个来源：本机文件夹或分组。', true);
+  var times = _pubPlanCollectTimes();
+  if (!times.length) return _pubPlanMsg('请至少加一行发布时间。', true);
   var payload = {
     name: String((document.getElementById('pubPlanName') || {}).value || '').trim(),
     platform: platform,
@@ -6132,80 +6189,96 @@ function submitPublishPlan() {
     account_nickname: accountNickname,
     source_folder: folder,
     source_groups: groups,
-    daily_count: daily,
+    daily_count: times.length,
     times: times,
     tags: String((document.getElementById('pubPlanTags') || {}).value || '').trim(),
     ai_copy: true
   };
   var btn = document.getElementById('pubPlanSaveBtn');
-  if (btn) { btn.disabled = true; btn.textContent = '创建中…'; }
-  _pubPlanMsg('正在创建…', false);
-  _pubPlanFetch('/api/publish/plans', { method: 'POST', body: JSON.stringify(payload) }).then(function() {
-    _pubPlanMsg('发布任务已创建。', false);
+  if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
+  _pubPlanMsg('正在保存…', false);
+  var editingId = _pubPlanEditingId;
+  var req = editingId
+    ? _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(editingId), { method: 'PATCH', body: JSON.stringify(payload) })
+    : _pubPlanFetch('/api/publish/plans', { method: 'POST', body: JSON.stringify(payload) });
+  req.then(function() {
+    _pubPlanMsg('已保存。', false);
     closePublishPlanDialog();
     loadPublishPlans();
   }).catch(function(err) {
-    _pubPlanMsg('创建失败：' + ((err && err.message) || err), true);
+    _pubPlanMsg('保存失败：' + ((err && err.message) || err), true);
   }).then(function() {
-    if (btn) { btn.disabled = false; btn.textContent = '创建任务'; }
+    if (btn) { btn.disabled = false; btn.textContent = editingId ? '保存修改' : '创建并启动'; }
   });
+}
+
+function _pubPlanToggle(planId, nextEnabled) {
+  return _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(planId), {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled: !!nextEnabled })
+  }).then(function() { loadPublishPlans(); });
 }
 
 document.addEventListener('click', function(event) {
   var target = event.target;
   if (!target || !target.closest) return;
-  if (target.closest('#pubPlanAddBtn')) { openPublishPlanDialog(); return; }
+  if (target.closest('#pubPlanAddBtn')) { openPublishPlanDialog(null); return; }
   if (target.closest('#pubPlanRefreshBtn')) { loadPublishPlans(); return; }
   if (target.closest('#pubPlanCloseBtn') || target.closest('#pubPlanCancelBtn')) { closePublishPlanDialog(); return; }
   if (target.closest('#pubPlanSaveBtn')) { submitPublishPlan(); return; }
   if (target.closest('#pubPlanBrowseBtn')) { _pubPlanBrowse(_pubPlanDirPath || ''); return; }
+  if (target.closest('#pubPlanAddTimeBtn')) { _pubPlanAddTimeRow('09:00'); return; }
+  var removeRow = target.closest('[data-plan-time-remove]');
+  if (removeRow) {
+    var row = removeRow.closest('[data-plan-time-row]');
+    if (row) row.parentNode.removeChild(row);
+    return;
+  }
   var dirBtn = target.closest('[data-plan-dir]');
   if (dirBtn) { _pubPlanBrowse(dirBtn.getAttribute('data-plan-dir')); return; }
-  var runBtn = target.closest('[data-plan-run]');
-  if (runBtn) {
-    var runId = runBtn.getAttribute('data-plan-run');
-    runBtn.disabled = true;
-    runBtn.textContent = '发布中…';
-    _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(runId) + '/run-now', { method: 'POST' }).then(function() {
+  var toggleBtn = target.closest('[data-plan-toggle]');
+  if (toggleBtn) {
+    event.stopPropagation();
+    var tId = toggleBtn.getAttribute('data-plan-toggle');
+    var tPlan = _pubPlanCache.filter(function(p) { return String(p.id) === String(tId); })[0] || {};
+    if (!tPlan.enabled && !confirm('启动后其它定时发布会自动暂停（一个设备只跑一个），继续？')) return;
+    toggleBtn.disabled = true;
+    _pubPlanToggle(tId, !tPlan.enabled).catch(function(err) {
+      alert('操作失败：' + ((err && err.message) || err));
+    }).then(function() { toggleBtn.disabled = false; });
+    return;
+  }
+  var tgBtn = target.closest('#pubPlanToggleBtn');
+  if (tgBtn) {
+    var cur = _pubPlanCache.filter(function(p) { return String(p.id) === String(_pubPlanEditingId); })[0] || {};
+    if (!cur.enabled && !confirm('启动后其它定时发布会自动暂停（一个设备只跑一个），继续？')) return;
+    _pubPlanToggle(_pubPlanEditingId, !cur.enabled).then(function() {
+      closePublishPlanDialog();
       loadPublishPlans();
-    }).catch(function(err) {
-      alert('立即执行失败：' + ((err && err.message) || err));
-      runBtn.disabled = false;
-      runBtn.textContent = '立即执行一次';
     });
     return;
   }
-  var toggleBtn = target.closest('[data-plan-toggle]');
-  if (toggleBtn) {
-    var toggleId = toggleBtn.getAttribute('data-plan-toggle');
-    var plan = _pubPlanCache.filter(function(p) { return String(p.id) === String(toggleId); })[0] || {};
-    _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(toggleId), {
-      method: 'PATCH',
-      body: JSON.stringify({ enabled: !plan.enabled })
-    }).then(function() { loadPublishPlans(); });
+  var delBtn = target.closest('#pubPlanDeleteBtn');
+  if (delBtn && _pubPlanEditingId) {
+    if (!confirm('删除这个定时发布？台账记录一并删除，已发布内容不受影响。')) return;
+    _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(_pubPlanEditingId), { method: 'DELETE' }).then(function() {
+      closePublishPlanDialog();
+      loadPublishPlans();
+    });
     return;
   }
-  var itemsBtn = target.closest('[data-plan-items]');
-  if (itemsBtn) {
-    var box = document.getElementById('pubPlanItems' + itemsBtn.getAttribute('data-plan-items'));
-    if (box) box.style.display = box.style.display === 'none' ? 'block' : 'none';
-    return;
-  }
-  var delBtn = target.closest('[data-plan-delete]');
-  if (delBtn) {
-    var delId = delBtn.getAttribute('data-plan-delete');
-    if (!confirm('删除这个发布任务？（台账记录一并删除，已发布的内容不受影响）')) return;
-    _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(delId), { method: 'DELETE' }).then(function() { loadPublishPlans(); });
+  var openCard = target.closest('[data-plan-open]');
+  if (openCard) {
+    var openId = openCard.getAttribute('data-plan-open');
+    var plan = _pubPlanCache.filter(function(p) { return String(p.id) === String(openId); })[0];
+    if (plan) openPublishPlanDialog(plan);
     return;
   }
 });
 
 document.addEventListener('change', function(event) {
-  if (event.target && event.target.id === 'pubPlanPlatform') _pubPlanLoadAccounts();
+  if (event.target && event.target.id === 'pubPlanPlatform') _pubPlanLoadAccounts(event.target.value, 0);
 });
-
-
-
 
 // 内容记录 → 加入发布分组（分组在「发布任务 → 分组」里直接选）
 function _assetAddToPublishGroup(asset, btn) {

@@ -124,8 +124,8 @@
             <!-- 发布任务：多来源（本地文件夹 / 素材库分组 / 内容记录）+ 每天条数/时间点 + 台账去重 -->
             <div id="pubTabTasks" class="pub-tab-panel" style="display:none;">
               <div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                <span style="font-size:0.82rem;color:var(--text-muted);">发布任务</span>
-                <button type="button" id="pubPlanAddBtn" class="btn btn-primary btn-sm">＋ 新增任务</button>
+                <span style="font-size:0.82rem;color:var(--text-muted);">定时发布</span>
+                <button type="button" id="pubPlanAddBtn" class="btn btn-primary btn-sm">＋ 定时发布</button>
                 <button type="button" id="pubPlanRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
               </div>
               <div id="publishPlanList" style="margin-top:0.5rem;"></div>
@@ -139,12 +139,12 @@
             <div id="pubPlanModal" class="modal-mask" style="display:none;">
               <div class="modal" style="max-width:760px;width:min(760px,94vw);max-height:90vh;overflow:auto;">
                 <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:0.75rem;">
-                  <h4 style="margin:0;font-size:1.05rem;">新增发布任务</h4>
+                  <h4 id="pubPlanTitle" style="margin:0;font-size:1.05rem;">定时发布</h4>
                   <button type="button" id="pubPlanCloseBtn" class="btn btn-ghost btn-sm" aria-label="关闭">×</button>
                 </div>
                 <div class="modal-field" style="margin-top:0.9rem;">
                   <label for="pubPlanName">任务名（可选）</label>
-                  <input id="pubPlanName" type="text" placeholder="例如：抖音日更 3 条" style="width:100%;padding:0.5rem 0.55rem;font-size:0.88rem;background:var(--select-surface,#fff);border:1px solid var(--border);border-radius:var(--radius-sm,8px);color:var(--text);">
+                  <input id="pubPlanName" type="text" placeholder="例如：抖音日更" style="width:100%;padding:0.5rem 0.55rem;font-size:0.88rem;background:var(--select-surface,#fff);border:1px solid var(--border);border-radius:var(--radius-sm,8px);color:var(--text);">
                 </div>
                 <div class="modal-field">
                   <label for="pubPlanFolder">① 本机文件夹</label>
@@ -170,23 +170,28 @@
                     <label for="pubPlanAccount">账号</label>
                     <select id="pubPlanAccount" style="width:100%;padding:0.5rem 0.55rem;font-size:0.88rem;background:var(--select-surface,#fff);border:1px solid var(--border);border-radius:var(--radius-sm,8px);color:var(--text);"></select>
                   </div>
-                  <div style="flex:0 0 110px;">
-                    <label for="pubPlanDaily">每天条数</label>
-                    <input id="pubPlanDaily" type="number" min="1" max="50" value="1" style="width:100%;padding:0.5rem 0.55rem;font-size:0.88rem;background:var(--select-surface,#fff);border:1px solid var(--border);border-radius:var(--radius-sm,8px);color:var(--text);">
-                  </div>
-                  <div style="flex:1 1 180px;">
-                    <label for="pubPlanTimes">时间点</label>
-                    <input id="pubPlanTimes" type="text" placeholder="09:00,18:30" style="width:100%;padding:0.5rem 0.55rem;font-size:0.88rem;background:var(--select-surface,#fff);border:1px solid var(--border);border-radius:var(--radius-sm,8px);color:var(--text);">
-                  </div>
+                </div>
+                <div class="modal-field">
+                  <label>发布时间（一行一条，到点发一个）</label>
+                  <div id="pubPlanTimeRows"></div>
+                  <button type="button" id="pubPlanAddTimeBtn" class="btn btn-ghost btn-sm" style="margin-top:0.4rem;">＋ 添加一行</button>
                 </div>
                 <div class="modal-field">
                   <label for="pubPlanTags">标签（可选）</label>
                   <input id="pubPlanTags" type="text" placeholder="留空由 AI 生成" style="width:100%;padding:0.5rem 0.55rem;font-size:0.88rem;background:var(--select-surface,#fff);border:1px solid var(--border);border-radius:var(--radius-sm,8px);color:var(--text);">
                 </div>
+                <div id="pubPlanDetail" style="display:none;margin-top:0.5rem;">
+                  <div id="pubPlanDetailStats" style="font-size:0.85rem;color:var(--text-muted);"></div>
+                  <div id="pubPlanDetailItems" style="max-height:200px;overflow:auto;font-size:0.85rem;"></div>
+                  <div class="btns" style="justify-content:flex-start;margin-top:0.6rem;">
+                    <button type="button" id="pubPlanToggleBtn" class="btn btn-primary btn-sm">启动</button>
+                    <button type="button" id="pubPlanDeleteBtn" class="btn btn-ghost btn-sm danger-text">删除任务</button>
+                  </div>
+                </div>
                 <div id="pubPlanMsg" class="msg" style="display:none;margin-top:0.5rem;"></div>
                 <div class="btns" style="justify-content:flex-end;margin-top:1rem;">
                   <button type="button" id="pubPlanCancelBtn" class="btn btn-ghost">取消</button>
-                  <button type="button" id="pubPlanSaveBtn" class="btn btn-primary">创建任务</button>
+                  <button type="button" id="pubPlanSaveBtn" class="btn btn-primary">创建并启动</button>
                 </div>
               </div>
             </div>

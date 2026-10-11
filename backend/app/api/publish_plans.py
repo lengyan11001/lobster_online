@@ -57,6 +57,19 @@ class PublishPlanReq(BaseModel):
     enabled: Optional[bool] = None
 
 
+def _pause_other_plans(db: Session, user_id: int, keep_id: Optional[int] = None) -> int:
+    """一个设备只能启动一个定时发布：启动某个任务时，把其它任务停掉。"""
+    query = db.query(PublishPlan).filter(PublishPlan.user_id == int(user_id))
+    if keep_id:
+        query = query.filter(PublishPlan.id != int(keep_id))
+    stopped = 0
+    for row in query.all():
+        if row.enabled:
+            row.enabled = False
+            stopped += 1
+    return stopped
+
+
 def _clean_times(values: Optional[List[str]]) -> List[str]:
     out: List[str] = []
     for raw in (values or []):
@@ -177,7 +190,7 @@ def create_publish_plan(
         source_folder=folder or None,
         source_groups=groups,
         source_records=records,
-        daily_count=max(1, min(int(body.daily_count or 1), 50)),
+        daily_count=len(times),
         times=times,
         tags=str(body.tags or "").strip() or None,
         ai_copy=bool(body.ai_copy),
@@ -187,6 +200,11 @@ def create_publish_plan(
     db.add(plan)
     db.commit()
     db.refresh(plan)
+    if plan.enabled:
+        stopped = _pause_other_plans(db, current_user.id, keep_id=int(plan.id))
+        if stopped:
+            db.commit()
+            logger.info("[定时发布] 启动 plan=%s，已停掉其它 %s 个任务（一个设备只跑一个）", plan.id, stopped)
     logger.info(
         "[发布任务] 新建 plan=%s platform=%s 每天=%s 时间=%s 来源folder=%s groups=%s records=%s",
         plan.id, plan.platform, plan.daily_count, plan.times,
@@ -211,12 +229,28 @@ def update_publish_plan(
         raise HTTPException(404, detail="发布任务不存在")
     if body.enabled is not None:
         plan.enabled = bool(body.enabled)
+    if body.name is not None:
+        name = str(body.name or "").strip()
+        if name:
+            plan.name = name[:160]
+    platform = str(body.platform or "").strip().lower()
+    if platform in _PLATFORMS:
+        plan.platform = platform
     if body.times is not None:
         times = _clean_times(body.times)
         if times:
             plan.times = times
-    if body.daily_count:
-        plan.daily_count = max(1, min(int(body.daily_count), 50))
+            plan.daily_count = len(times)
+    if body.source_folder is not None:
+        folder = str(body.source_folder or "").strip()
+        if folder and not Path(folder).is_dir():
+            raise HTTPException(400, detail=f"本地文件夹不存在或不可访问：{folder}")
+        plan.source_folder = folder or None
+    if body.source_groups is not None:
+        groups = [str(g or "").strip() for g in (body.source_groups or []) if str(g or "").strip()]
+        plan.source_groups = groups
+    if body.source_records is not None:
+        plan.source_records = [r for r in (body.source_records or []) if isinstance(r, dict) and str(r.get("url") or "").strip()]
     if body.tags is not None:
         plan.tags = str(body.tags or "").strip() or None
     if body.ai_copy is not None:
@@ -233,6 +267,10 @@ def update_publish_plan(
         plan.account_nickname = acct.nickname
     if body.options is not None:
         plan.options = dict(body.options or {})
+    if plan.enabled:
+        stopped = _pause_other_plans(db, current_user.id, keep_id=int(plan.id))
+        if stopped:
+            logger.info("[定时发布] 启动 plan=%s，已停掉其它 %s 个任务（一个设备只跑一个）", plan.id, stopped)
     db.add(plan)
     db.commit()
     db.refresh(plan)
