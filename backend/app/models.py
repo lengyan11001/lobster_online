@@ -1070,3 +1070,65 @@ class ShanjianDigitalHumanVideoTask(Base):
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class PublishPlan(Base):
+    """本地「发布任务」：多来源（本地文件夹 / 素材库分组 / 内容记录）+ 每天条数 + 时间点 + 台账去重。"""
+
+    __tablename__ = "publish_plans"
+    __table_args__ = (Index("ix_publish_plans_user_enabled", "user_id", "enabled"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    platform: Mapped[str] = mapped_column(String(32), default="douyin", nullable=False)
+    account_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    account_nickname: Mapped[Optional[str]] = mapped_column(String(160), nullable=True)
+    """来源一：本机文件夹（递归扫描视频/图片文件，逐个发布）。"""
+    source_folder: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    """来源二：素材库创意分组名列表。"""
+    source_groups: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    """来源三：内容记录快照列表 [{source, source_id, url, media_type, title, prompt}]。"""
+    source_records: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    daily_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    """时间点列表，本地时间 HH:MM，例如 ["09:00", "18:30"]。"""
+    times: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    """用户自己填的标签；填了就只用用户标签，否则交给 LLM 生成。"""
+    tags: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ai_copy: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    """平台侧参数（抖音：douyin_cover_mode 等；视频号：wechat_channels_location 等）。"""
+    options: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    """已触发的槽位记录 {"2026-10-11|09:00": true}，避免同一天重复触发。"""
+    fired_slots: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    last_run_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+
+class PublishPlanItem(Base):
+    """发布任务台账：plan_id + asset_key 唯一，保证每个素材只发一次。"""
+
+    __tablename__ = "publish_plan_items"
+    __table_args__ = (
+        UniqueConstraint("plan_id", "asset_key", name="uq_publish_plan_items_plan_asset"),
+        Index("ix_publish_plan_items_plan_status", "plan_id", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    plan_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    asset_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(24), default="", nullable=False)
+    source_ref: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    asset_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    title: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    tags: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    task_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", nullable=False, index=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    used_date: Mapped[Optional[str]] = mapped_column(String(12), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

@@ -81,6 +81,7 @@ except ModuleNotFoundError as e:
     else:
         raise
 from .api.publish import router as publish_router
+from .api.publish_plans import router as publish_plans_router
 from .api.creator_content import router as creator_content_router
 from .api.account_creator_schedule import router as account_creator_schedule_router
 from .api.alibaba_inquiries import router as alibaba_inquiries_router
@@ -968,6 +969,13 @@ async def _lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("[启动] YouTube 定时上传未启动: %s", e)
     try:
+        from .services.publish_plan_runner import publish_plan_background_loop
+
+        asyncio.create_task(publish_plan_background_loop())
+        logger.info("[启动] 发布任务调度已启动（多来源 + 每天条数/时间点 + 台账去重）")
+    except Exception as e:
+        logger.warning("[启动] 发布任务调度未启动: %s", e)
+    try:
         from .services.creator_metrics_daily_runner import creator_metrics_daily_background_loop
 
         asyncio.create_task(creator_metrics_daily_background_loop())
@@ -1111,6 +1119,7 @@ def create_app() -> FastAPI:
     app.include_router(douyin_origin_router, prefix="")
     app.include_router(liepin_origin_router, prefix="")
     app.include_router(publish_router, prefix="")
+    app.include_router(publish_plans_router, prefix="")
     app.include_router(creator_content_router, prefix="")
     app.include_router(account_creator_schedule_router, prefix="")
     app.include_router(alibaba_inquiries_router, prefix="")

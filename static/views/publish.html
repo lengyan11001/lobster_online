@@ -124,12 +124,74 @@
               </div>
             </div>
 
-            <!-- Tasks Tab：单次 PublishTask；创作者定时任务见账号「执行记录」 -->
+            <!-- 发布任务：多来源（本地文件夹 / 素材库分组 / 内容记录）+ 每天条数/时间点 + 台账去重 -->
             <div id="pubTabTasks" class="pub-tab-panel" style="display:none;">
-              <div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.35rem;">
+              <div style="margin-top:0.5rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                <span style="font-size:0.82rem;color:var(--text-muted);">发布任务：选好素材来源、每天发几条、几点发，到点自动发布（每个素材只发一次）</span>
+                <button type="button" id="pubPlanAddBtn" class="btn btn-primary btn-sm">＋ 新增任务</button>
+                <button type="button" id="pubPlanRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
+              </div>
+              <div id="publishPlanList" style="margin-top:0.5rem;"></div>
+              <div style="margin:1rem 0;border-top:1px solid rgba(255,255,255,0.08);"></div>
+              <div style="display:flex;align-items:center;gap:0.35rem;">
                 <span style="font-size:0.82rem;color:var(--text-muted);">单次发布任务记录</span>
                 <button type="button" class="help-q" data-help-key="publish_tasks_tab" aria-label="说明">?</button>
               </div>
               <div id="taskList" style="margin-top:0.5rem;"></div>
+            </div>
+            <div id="pubPlanModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.55);align-items:center;justify-content:center;">
+              <div style="width:min(760px,94vw);max-height:88vh;display:flex;flex-direction:column;background:var(--card-bg,#1b1d23);border:1px solid rgba(255,255,255,0.12);border-radius:12px;overflow:hidden;">
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:0.75rem 0.9rem;border-bottom:1px solid rgba(255,255,255,0.08);">
+                  <strong style="font-size:0.95rem;">新增发布任务</strong>
+                  <button type="button" id="pubPlanCloseBtn" class="btn btn-ghost btn-sm">×</button>
+                </div>
+                <div style="padding:0.9rem;display:flex;flex-direction:column;gap:0.7rem;overflow:auto;">
+                  <label style="display:flex;gap:0.5rem;align-items:center;font-size:0.82rem;">任务名（可选）
+                    <input id="pubPlanName" type="text" placeholder="例如：抖音日更 3 条" style="flex:1;padding:0.35rem 0.5rem;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:inherit;">
+                  </label>
+                  <div style="font-size:0.82rem;color:var(--text-muted);">素材来源（可同时使用，按 文件夹 → 素材库分组 → 内容记录 的顺序取用）</div>
+                  <div style="border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:0.6rem;">
+                    <div style="font-size:0.82rem;margin-bottom:0.35rem;">① 本机文件夹</div>
+                    <div style="display:flex;gap:0.35rem;align-items:center;">
+                      <input id="pubPlanFolder" type="text" placeholder="例如 D:\\videos\\待发  （可点浏览选择）" style="flex:1;padding:0.35rem 0.5rem;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:inherit;">
+                      <button type="button" id="pubPlanBrowseBtn" class="btn btn-ghost btn-sm">浏览…</button>
+                    </div>
+                    <div id="pubPlanDirBrowser" style="display:none;margin-top:0.4rem;max-height:200px;overflow:auto;border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:0.4rem;font-size:0.8rem;"></div>
+                  </div>
+                  <div style="border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:0.6rem;">
+                    <div style="font-size:0.82rem;margin-bottom:0.35rem;">② 素材库分组（可多选）</div>
+                    <div id="pubPlanGroups" style="display:flex;flex-wrap:wrap;gap:0.4rem 0.8rem;font-size:0.82rem;">加载中…</div>
+                  </div>
+                  <div style="border:1px solid rgba(255,255,255,0.1);border-radius:8px;padding:0.6rem;">
+                    <div style="font-size:0.82rem;margin-bottom:0.35rem;">③ 内容记录（可多选，仅视频/图片）</div>
+                    <div id="pubPlanRecords" style="max-height:200px;overflow:auto;font-size:0.82rem;">加载中…</div>
+                  </div>
+                  <div style="display:flex;gap:0.8rem;flex-wrap:wrap;align-items:center;font-size:0.82rem;">
+                    <label style="display:flex;gap:0.35rem;align-items:center;">平台
+                      <select id="pubPlanPlatform" style="padding:0.3rem 0.45rem;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:inherit;">
+                        <option value="douyin">抖音</option>
+                        <option value="wechat_channels">视频号</option>
+                      </select>
+                    </label>
+                    <label style="display:flex;gap:0.35rem;align-items:center;">账号
+                      <select id="pubPlanAccount" style="min-width:180px;padding:0.3rem 0.45rem;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:inherit;"></select>
+                    </label>
+                    <label style="display:flex;gap:0.35rem;align-items:center;">每天发几条
+                      <input id="pubPlanDaily" type="number" min="1" max="50" value="1" style="width:70px;padding:0.3rem 0.45rem;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:inherit;">
+                    </label>
+                    <label style="display:flex;gap:0.35rem;align-items:center;">时间点
+                      <input id="pubPlanTimes" type="text" placeholder="09:00,13:30,20:00" style="width:200px;padding:0.3rem 0.45rem;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:inherit;">
+                    </label>
+                  </div>
+                  <label style="display:flex;gap:0.5rem;align-items:center;font-size:0.82rem;">标签（可选）
+                    <input id="pubPlanTags" type="text" placeholder="填了就用你填的标签；留空则由 AI 按视频内容生成" style="flex:1;padding:0.35rem 0.5rem;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.2);color:inherit;">
+                  </label>
+                  <div id="pubPlanMsg" style="font-size:0.8rem;color:#f87171;min-height:1.1em;"></div>
+                </div>
+                <div style="display:flex;justify-content:flex-end;gap:0.5rem;padding:0.7rem 0.9rem;border-top:1px solid rgba(255,255,255,0.08);">
+                  <button type="button" id="pubPlanCancelBtn" class="btn btn-ghost btn-sm">取消</button>
+                  <button type="button" id="pubPlanSaveBtn" class="btn btn-primary btn-sm">创建任务</button>
+                </div>
+              </div>
             </div>
           </div>
