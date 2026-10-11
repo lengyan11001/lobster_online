@@ -65,6 +65,30 @@ class PublishPlanReq(BaseModel):
     enabled: Optional[bool] = None
 
 
+def _resolve_plan_account(
+    db: Session,
+    user_id: int,
+    account_id: Optional[int],
+    account_nickname: Optional[str],
+) -> Optional[PublishAccount]:
+    """和 POST /api/publish 用同一套账号解析，避免「列表里有、保存说没有」。"""
+    try:
+        from .publish import _resolve_publish_account_for_request
+    except Exception:  # noqa: BLE001
+        logger.exception("[定时发布] 加载发布账号解析失败")
+        return None
+    try:
+        return _resolve_publish_account_for_request(
+            db,
+            int(user_id),
+            int(account_id) if account_id else None,
+            str(account_nickname or ""),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("[定时发布] 解析发布账号异常 account_id=%s nickname=%s", account_id, account_nickname)
+        return None
+
+
 def _pause_other_plans(db: Session, user_id: int, keep_id: Optional[int] = None) -> int:
     """一个设备只能启动一个定时发布：启动某个任务时，把其它任务停掉。"""
     query = db.query(PublishPlan).filter(PublishPlan.user_id == int(user_id))
@@ -179,15 +203,9 @@ def create_publish_plan(
         raise HTTPException(400, detail="请至少指定一个素材来源：本地文件夹、素材库分组或内容记录")
     if folder and not Path(folder).is_dir():
         raise HTTPException(400, detail=f"本地文件夹不存在或不可访问：{folder}")
-    acct = None
-    if body.account_id:
-        acct = (
-            db.query(PublishAccount)
-            .filter(PublishAccount.id == int(body.account_id), PublishAccount.user_id == current_user.id)
-            .first()
-        )
-        if acct is None:
-            raise HTTPException(404, detail="发布账号不存在，请先在「发布账号」里添加")
+    acct = _resolve_plan_account(db, current_user.id, body.account_id, body.account_nickname)
+    if (body.account_id or str(body.account_nickname or "").strip()) and acct is None:
+        raise HTTPException(404, detail="发布账号不存在，请先在「发布账号」里添加")
     plan = PublishPlan(
         user_id=current_user.id,
         name=(str(body.name or "").strip() or f"发布任务 {datetime.now().strftime('%m-%d %H:%M')}")[:160],
@@ -263,16 +281,12 @@ def update_publish_plan(
         plan.tags = str(body.tags or "").strip() or None
     if body.ai_copy is not None:
         plan.ai_copy = bool(body.ai_copy)
-    if body.account_id:
-        acct = (
-            db.query(PublishAccount)
-            .filter(PublishAccount.id == int(body.account_id), PublishAccount.user_id == current_user.id)
-            .first()
-        )
+    if body.account_id or str(body.account_nickname or "").strip():
+        acct = _resolve_plan_account(db, current_user.id, body.account_id, body.account_nickname)
         if acct is None:
             raise HTTPException(404, detail="发布账号不存在")
         plan.account_id = int(acct.id)
-        plan.account_nickname = acct.nickname
+        plan.account_nickname = acct.nickname or ""
     if body.options is not None:
         plan.options = dict(body.options or {})
     if plan.enabled:
@@ -328,13 +342,24 @@ async def run_publish_plan_now(
 # ── 系统「选择文件夹」：本地后端直接拉原生对话框（不依赖桌面壳桥接） ──────
 _PICK_FOLDER_PS = """[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
-if ($env:LOBSTER_PICK_DRYRUN) { [Console]::Out.Write($env:LOBSTER_PICK_DRYRUN); exit 0 }
 $dialog = New-Object System.Windows.Forms.FolderBrowserDialog
 $dialog.Description = '选择要发布的素材文件夹'
 $dialog.ShowNewFolderButton = $true
 $initial = $env:LOBSTER_PICK_INITIAL
 if ($initial -and (Test-Path -LiteralPath $initial)) { $dialog.SelectedPath = $initial }
-$result = $dialog.ShowDialog()
+# 用一个置顶的隐形宿主窗体当 owner，保证对话框弹在最前面（否则会藏在应用窗口后面，需要再点一次）
+$owner = New-Object System.Windows.Forms.Form
+$owner.TopMost = $true
+$owner.ShowInTaskbar = $false
+$owner.FormBorderStyle = 'None'
+$owner.Size = New-Object System.Drawing.Size(1, 1)
+$owner.StartPosition = 'Manual'
+$owner.Location = New-Object System.Drawing.Point(-2000, -2000)
+$owner.Show()
+$owner.Activate()
+if ($env:LOBSTER_PICK_DRYRUN) { $owner.Close(); [Console]::Out.Write($env:LOBSTER_PICK_DRYRUN); exit 0 }
+$result = $dialog.ShowDialog($owner)
+$owner.Close()
 if ($result -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Out.Write($dialog.SelectedPath) }
 """
 
