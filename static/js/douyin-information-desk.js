@@ -229,10 +229,38 @@
         var items = Array.isArray(data && data.items) ? data.items : [];
         if (content) {
           var searchFee = data && data.billing ? Number(data.billing.credits_charged || 0) : 0;
-        content.innerHTML = '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>搜索「' + escapeHtml(query) + '」</h3><span>' + items.length + ' 条 · 消耗 ' + searchFee + ' 算力</span></div>'
-            + (items.length ? '<div class="douyin-desk-grid">' + items.map(itemCard).join('') + '</div>'
-                            : '<div class="douyin-desk-empty">没搜到，换个词试试</div>') + '</section>';
+          var days = Number(data && data.days || 7) || 7;
+          var fallbackItems = Array.isArray(data && data.fallback_items) ? data.fallback_items : [];
+          var suggestions = Array.isArray(data && data.suggestions) ? data.suggestions : [];
+          var html = '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>搜索「'
+            + escapeHtml(query) + '」</h3><span>' + items.length + ' 条 · 最近 ' + days + ' 天 · 消耗 ' + searchFee + ' 算力</span></div>';
+          if (items.length) {
+            html += '<div class="douyin-desk-grid">' + items.map(itemCard).join('') + '</div>';
+          } else {
+            html += '<div class="douyin-desk-empty">'
+              + escapeHtml(String(data && data.fallback_reason || ('最近 ' + days + ' 天的榜单里没搜到「' + query + '」')))
+              + '，换个词，或先看今天的热榜 ↓</div>';
+            if (suggestions.length) {
+              html += '<div class="douyin-desk-copy-actions">' + suggestions.map(function (word) {
+                return '<button type="button" class="btn btn-ghost" data-douyin-suggest="' + escapeHtml(word) + '">'
+                  + escapeHtml(word) + '</button>';
+              }).join('') + '</div>';
+            }
+            if (fallbackItems.length) {
+              html += '<div class="douyin-desk-grid">' + fallbackItems.map(itemCard).join('') + '</div>';
+            }
+          }
+          html += '</section>';
+          content.innerHTML = html;
           bindCards(content);
+          content.querySelectorAll('[data-douyin-suggest]').forEach(function (button) {
+            button.addEventListener('click', function () {
+              var word = button.getAttribute('data-douyin-suggest') || '';
+              if (!word) return;
+              if (input) input.value = word;
+              searchDesk();
+            });
+          });
         }
         if (clearBtn) clearBtn.classList.remove('hidden');
       });
@@ -379,8 +407,11 @@
   function copyEl(id) { return document.getElementById(id); }
 
   function setCopyStatus(text) {
-    var el = copyEl('douyinCopyStatus');
-    if (el) el.textContent = text || '';
+    // 弹窗里的状态条（douyinCopyModalStatus）和页面顶部的状态条都要写，弹窗自成一个闭环
+    ['douyinCopyStatus', 'douyinCopyModalStatus'].forEach(function (id) {
+      var el = copyEl(id);
+      if (el) el.textContent = text || '';
+    });
   }
 
   function uploadFileToTemp(file, fallbackName) {
@@ -477,9 +508,9 @@
       if (!taskId) throw new Error('没有拿到任务号');
       copyState.taskId = taskId;
       var charged = data && data.billing ? Number(data.billing.credits_charged || 0) : 0;
-      setCopyStatus('已提交（扣 ' + charged + ' 算力）·生成中…');
-      closeCopyModalById('douyinCopyCreateModal');
-      pollImitation(taskId, 1, copyEl('douyinCopyStatus'), copyEl('douyinCopyResult'));
+      setCopyStatus('已提交（扣 ' + charged + ' 算力）·生成中…（弹窗里出片，也可以先关掉，之后在「历史记录」里找回）');
+      pollImitation(taskId, 1, copyEl('douyinCopyModalStatus') || copyEl('douyinCopyStatus'),
+                    copyEl('douyinCopyModalResult') || copyEl('douyinCopyResult'));
     }).catch(function(err) {
       setCopyStatus('失败：' + errorText(err));
     });
@@ -701,10 +732,18 @@
       historyBtn.dataset.bound = '1';
       historyBtn.addEventListener('click', openCopyHistory);
     }
-    var newBtn = copyEl('douyinCopyNewBtn');
-    if (newBtn && !newBtn.dataset.bound) {
-      newBtn.dataset.bound = '1';
-      newBtn.addEventListener('click', function () { openCopyModalById('douyinCopyCreateModal'); });
+    // 两个入口都开同一个弹窗：「新建跟创」和顶部「添加链接跟创」
+    ['douyinCopyNewBtn', 'douyinCopyMaterialBtn'].forEach(function (openId) {
+      var openBtn = copyEl(openId);
+      if (openBtn && !openBtn.dataset.bound) {
+        openBtn.dataset.bound = '1';
+        openBtn.addEventListener('click', function () { openCopyModalById('douyinCopyCreateModal'); });
+      }
+    });
+    var modalHistoryBtn = copyEl('douyinCopyModalHistoryBtn');
+    if (modalHistoryBtn && !modalHistoryBtn.dataset.bound) {
+      modalHistoryBtn.dataset.bound = '1';
+      modalHistoryBtn.addEventListener('click', openCopyHistory);
     }
     ['douyinCopyCreateClose', 'douyinCopyDetailClose'].forEach(function (closeId) {
       var close = copyEl(closeId);
