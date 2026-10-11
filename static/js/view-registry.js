@@ -59,9 +59,9 @@
   });
 
   window.registerLobsterView('douyin-information-desk', {
-    html: '/static/views/douyin-information-desk.html?v=20261011-douyin-copy-popup',
-    css: '/static/css/douyin-information-desk.css?v=20261011-douyin-copy-popup',
-    scripts: '/static/js/douyin-information-desk.js?v=20261011-douyin-copy-popup',
+    html: '/static/views/douyin-information-desk.html?v=20261011-douyin-tikhub-search',
+    css: '/static/css/douyin-information-desk.css?v=20261011-douyin-tikhub-search',
+    scripts: '/static/js/douyin-information-desk.js?v=20261011-douyin-tikhub-search',
     init: 'initDouyinInformationDeskView',
     cache: 'reload'
   });

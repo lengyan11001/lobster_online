@@ -48,9 +48,11 @@
 
   function metricText(item) {
     var metrics = item && item.metrics && typeof item.metrics === 'object' ? item.metrics : {};
-    var labels = { score: '热度分', hot_score: '热度', hot_value: '热度', heat: '热度', play_cnt: '播放', like_cnt: '点赞', follow_cnt: '涨粉', fans_cnt: '粉丝', new_like_cnt: '新增点赞', new_fans_cnt: '新增粉丝', publish_cnt: '发布', avg_play_cnt: '平均播放', video_count: '视频数', rank_diff: '上升', duration: '时长', like_rate: '点赞率', follow_rate: '涨粉率' };
-    return Object.keys(metrics).slice(0, 6).map(function(key) {
-      return (labels[key] || key.replace(/_/g, ' ')) + ' ' + metrics[key];
+    var labels = { score: '热度分', hot_score: '热度', hot_value: '热度', heat: '热度', play_cnt: '播放', play_count: '播放', like_cnt: '点赞', digg_count: '点赞', comment_count: '评论', collect_count: '收藏', share_count: '分享', duration_ms: '时长', follow_cnt: '涨粉', fans_cnt: '粉丝', new_like_cnt: '新增点赞', new_fans_cnt: '新增粉丝', publish_cnt: '发布', avg_play_cnt: '平均播放', video_count: '视频数', rank_diff: '上升', duration: '时长', like_rate: '点赞率', follow_rate: '涨粉率' };
+    return Object.keys(metrics).slice(0, 8).map(function(key) {
+      var value = metrics[key];
+      if (key === 'duration_ms') value = (Number(value) / 1000).toFixed(1) + 's';
+      return (labels[key] || key.replace(/_/g, ' ')) + ' ' + value;
     }).join(' · ');
   }
 
@@ -165,6 +167,7 @@
     if (item.category) metaParts.push(String(item.category));
     if (item.section_title) metaParts.push(String(item.section_title));
     if (item.author && item.author !== title) metaParts.push('作者 ' + item.author);
+    if (item.published_at) metaParts.push('发布 ' + formatTime(item.published_at));
     if (item.value) metaParts.push(item.value);
     if (item.detail) metaParts.push(item.detail);
     var metrics = metricText(item);
@@ -221,7 +224,7 @@
     if (!query) return;
     state.category = '';
     if (content) content.innerHTML = '<div class="douyin-desk-empty">正在搜索「' + escapeHtml(query) + '」…</div>';
-    fetch(baseUrl() + '/api/douyin/platform-information-desk/search?q=' + encodeURIComponent(query), {
+    fetch(baseUrl() + '/api/douyin/platform-information-desk/search?source=tikhub&q=' + encodeURIComponent(query), {
       headers: typeof authHeaders === 'function' ? authHeaders() : {}
     }).then(function(response) {
       return response.json().catch(function() { return {}; }).then(function(data) {
@@ -232,14 +235,24 @@
           var days = Number(data && data.days || 7) || 7;
           var fallbackItems = Array.isArray(data && data.fallback_items) ? data.fallback_items : [];
           var suggestions = Array.isArray(data && data.suggestions) ? data.suggestions : [];
+          var isLive = String(data && data.source || '') === 'tikhub';
+          var headNote = isLive
+            ? (items.length + ' 条 · 实时搜抖音' + (Number(data && data.provider_calls || 0) > 1 ? '（' + data.provider_calls + ' 次）' : '') + ' · 消耗 ' + searchFee + ' 算力')
+            : (items.length + ' 条 · 本地快照最近 ' + days + ' 天 · 消耗 ' + searchFee + ' 算力');
           var html = '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>搜索「'
-            + escapeHtml(query) + '」</h3><span>' + items.length + ' 条 · 最近 ' + days + ' 天 · 消耗 ' + searchFee + ' 算力</span></div>';
+            + escapeHtml(query) + '」</h3><span>' + headNote + '</span></div>';
           if (items.length) {
             html += '<div class="douyin-desk-grid">' + items.map(itemCard).join('') + '</div>';
           } else {
             html += '<div class="douyin-desk-empty">'
               + escapeHtml(String(data && data.fallback_reason || ('最近 ' + days + ' 天的榜单里没搜到「' + query + '」')))
               + '，换个词，或先看今天的热榜 ↓</div>';
+            if (String(data && data.notice || '').trim()) {
+              html += '<div class="douyin-desk-empty">提示：' + escapeHtml(String(data.notice).trim()) + '</div>';
+            }
+            if (isLive && Array.isArray(data && data.errors) && data.errors.length) {
+              html += '<div class="douyin-desk-empty">抖音接口报错：' + escapeHtml(data.errors.join('；')) + '</div>';
+            }
             if (suggestions.length) {
               html += '<div class="douyin-desk-copy-actions">' + suggestions.map(function (word) {
                 return '<button type="button" class="btn btn-ghost" data-douyin-suggest="' + escapeHtml(word) + '">'
