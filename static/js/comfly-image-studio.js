@@ -57,7 +57,7 @@
     earnKeyword: '',
     earnCategory: '',
     earnPage: 1,
-    earnSize: 18,
+    earnSize: 24,
     earnTotal: 0,
     earnLoading: false,
     openProduct: null,
@@ -923,6 +923,38 @@
         ? ('共 ' + assetPickerState.earnTotal + ' 个可投稿商品，当前显示 ' + products.length + ' 个')
         : '没有搜到可投稿的商品（换个词或换分类）';
       grid.innerHTML = products.map(renderEarnProductCard).join('');
+
+      // 分页条：共 N 个 · 第 X/Y 页 + 上一页/页码/下一页 + 跳页（商品多了不用一直滚）
+      (function () {
+        var total = Number(assetPickerState.earnTotal || products.length || 0);
+        var size = Number(assetPickerState.earnSize || 24);
+        var pages = Math.max(1, Math.ceil(total / size));
+        var cur = Math.max(1, Math.min(pages, Number(assetPickerState.earnPage || 1)));
+        var old = modal.querySelector('.asset-picker-earn-pager');
+        if (old) old.remove();
+        var nums = [];
+        for (var i = Math.max(1, cur - 2); i <= Math.min(pages, cur + 2); i += 1) nums.push(i);
+        var wrap = document.createElement('div');
+        wrap.className = 'asset-picker-earn-pager';
+        wrap.innerHTML = '<button type="button" data-earn-go="' + (cur - 1) + '"' + (cur <= 1 ? ' disabled' : '') + '>上一页</button>' +
+          nums.map(function (n) { return '<button type="button" data-earn-go="' + n + '"' + (n === cur ? ' class="is-active"' : '') + '>' + n + '</button>'; }).join('') +
+          '<button type="button" data-earn-go="' + (cur + 1) + '"' + (cur >= pages ? ' disabled' : '') + '>下一页</button>' +
+          '<span>共 ' + total + ' 个商品 · 第 ' + cur + '/' + pages + ' 页</span>' +
+          '<input type="number" min="1" max="' + pages + '" placeholder="跳页"><button type="button" data-earn-jump="1">跳转</button>';
+        grid.parentNode.insertBefore(wrap, grid.nextSibling);
+        wrap.querySelectorAll('[data-earn-go]').forEach(function (b) {
+          b.addEventListener('click', function () {
+            var n = Number(b.getAttribute('data-earn-go'));
+            if (n >= 1 && n <= pages && n !== cur) { assetPickerState.earnPage = n; loadEarnProducts(true); }
+          });
+        });
+        var jumpBtn = wrap.querySelector('[data-earn-jump]');
+        if (jumpBtn) jumpBtn.addEventListener('click', function () {
+          var input = wrap.querySelector('input');
+          var n = Math.min(pages, Math.max(1, Number((input || {}).value || 1)));
+          if (n !== cur) { assetPickerState.earnPage = n; loadEarnProducts(true); }
+        });
+      })();
       grid.querySelectorAll('[data-imglab-product-id]').forEach(function (card) {
         card.addEventListener('click', function () {
           openEarnProduct(card.getAttribute('data-imglab-product-id'));
