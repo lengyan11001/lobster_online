@@ -1558,6 +1558,80 @@
     }).catch(function(err) { setMsg(err.message || '停止加好友队列失败', true); });
   }
 
+  // 导出通讯录：CSV 表头与「加好友导入模板」完全一致，导出文件可直接在另一台机器导入加好友
+  function contactExportCsvLine(cells) {
+    return cells.map(function(value) {
+      var text = String(value == null ? '' : value);
+      return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+    }).join(',');
+  }
+
+  function exportContactsCsv() {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先连接或选择账号', true);
+    var accountName = '';
+    try {
+      var acct = (state.accounts || []).filter(function(a) { return String(a.id) === String(id); })[0];
+      accountName = acct ? String(acct.nickname || acct.display_name || acct.wx_no || id) : String(id);
+    } catch (_) { accountName = String(id); }
+
+    setMsg('正在导出通讯录…', false);
+    var rows = [];
+    var headers = ['contact', 'remark', 'apply_message', 'permission', 'tags'];
+    function fetchPage(offset) {
+      return requestJson('/api/native-wechat/contacts?account_id=' + encodeURIComponent(id)
+        + '&limit=200&offset=' + offset).then(function(data) {
+        var items = (data && (data.items || data.contacts)) || [];
+        var total = Number((data && (data.total || data.count)) || 0);
+        items.forEach(function(item) {
+          var contact = String(item.wx_no || item.contact_key || item.wxid || '').trim();
+          if (!contact) return;
+          var remark = String(item.remark || item.display_name || '').trim();
+          var tags = [];
+          if (Array.isArray(item.tags)) tags = item.tags.map(function(t) { return String(t || '').trim(); }).filter(Boolean);
+          else if (typeof item.tags === 'string' && item.tags.trim()) tags = item.tags.split(/[;,，；]/).map(function(t) { return t.trim(); }).filter(Boolean);
+          rows.push([contact, remark, '', '朋友圈', tags.join(';')]);
+        });
+        if (items.length && rows.length < total && offset + items.length < total) {
+          return fetchPage(offset + items.length);
+        }
+        return null;
+      });
+    }
+
+    return fetchPage(0).then(function() {
+      if (!rows.length) return setMsg('当前账号没有可导出的联系人（缺少微信号/wxid 的会跳过）', true);
+      var content = '\ufeff' + [contactExportCsvLine(headers)]
+        .concat(rows.map(contactExportCsvLine)).join('\n') + '\n';
+      var stamp = new Date().toISOString().slice(0, 10);
+      var safeName = String(accountName).replace(/[\\/:*?"<>|]/g, '_').slice(0, 40) || '通讯录';
+      var filename = '微信通讯录_' + safeName + '_' + stamp + '.csv';
+
+      function browserDownload() {
+        var blob = new Blob([content], { type: 'text/csv;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement('a');
+        link.href = url; link.download = filename; link.style.display = 'none';
+        document.body.appendChild(link); link.click();
+        window.setTimeout(function() { link.remove(); URL.revokeObjectURL(url); }, 1000);
+        setMsg('已导出 ' + rows.length + ' 位联系人（可直接在另一台机器导入加好友）', false);
+      }
+      if (window.pywebview && window.pywebview.api && typeof window.pywebview.api.save_text_file === 'function') {
+        return Promise.resolve(window.pywebview.api.save_text_file(filename, content)).then(function(result) {
+          if (result && result.cancelled) return;
+          if (result && result.ok) setMsg('已导出 ' + rows.length + ' 位联系人：' + (result.path || result.filename || ''), false);
+          else browserDownload();
+        }).catch(function() { browserDownload(); });
+      }
+      if (window.LobsterAndroid && typeof window.LobsterAndroid.saveTextFile === 'function') {
+        try { window.LobsterAndroid.saveTextFile(filename, 'text/csv', content); setMsg('已导出 ' + rows.length + ' 位联系人', false); return; } catch (_) {}
+      }
+      browserDownload();
+    }).catch(function(err) {
+      setMsg('导出失败：' + ((err && err.message) || err), true);
+    });
+  }
+
   function importFriendFiles(files) {
     files = Array.prototype.slice.call(files || []);
     if (!files.length) return;
@@ -2372,6 +2446,11 @@
       renderContacts();
     });
     var contactClearBtn = $('nativeWechatContactClearBtn');
+    var contactExportBtn = $('nativeWechatContactExportBtn');
+    if (contactExportBtn && !contactExportBtn._bound) {
+      contactExportBtn._bound = true;
+      contactExportBtn.addEventListener('click', function() { exportContactsCsv(); });
+    }
     if (contactClearBtn) contactClearBtn.addEventListener('click', function() {
       state.contactSelected = {};
       renderContacts();
