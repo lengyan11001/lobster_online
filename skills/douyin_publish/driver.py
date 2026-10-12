@@ -6,6 +6,8 @@ import logging
 import os
 import random
 import re
+import tempfile
+import time
 from typing import Any, Dict, List, Optional
 
 from publisher.pw_timeouts import ms as _pw_ms
@@ -2048,56 +2050,130 @@ class DouyinDriver(BaseDriver):
         await _human_delay(1, 2)
         await _dismiss_overlays(page, "video_tab")
 
-        # 与图文一致：页面上常有多个 file input（封面/图片 + 视频），必须选 accept 含 video 的
+        # 与图文一致：上传页/编辑页可能有多个 file input（封面图 + 视频），必须选 accept 含 video 的。
+        # 本机实测：抖音对不合法/不支持的视频会「静默忽略」（无 toast、无上传请求），
+        # 所以不能只看 set_input_files 有没有抛异常，必须验证页面是否真的开始上传。
         try:
             await page.wait_for_selector('input[type="file"]', state="attached", timeout=_pw_ms(15000))
         except Exception:
             pass
 
-        video_uploaded = False
-        file_input = await _douyin_find_video_file_input(page)
-        if file_input:
-            try:
-                await file_input.set_input_files(file_path)
-                logger.info("[DOUYIN-VIDEO] set_input_files on video input OK path=%s", file_path)
-                video_uploaded = True
-            except Exception as e:
-                logger.warning("[DOUYIN-VIDEO] set_input_files failed: %s", e)
+        upload_seen = {"v": False}
 
-        if not video_uploaded:
-            for ubs in ('button:has-text("上传视频")', 'text="点击上传"'):
+        def _on_upload_request(req):
+            try:
+                u = req.url or ""
+            except Exception:
+                return
+            if ("/upload/v1/tos" in u) or ("snssdk.com/upload" in u) or ("CommitImageUpload" in u):
+                upload_seen["v"] = True
+
+        try:
+            page.on("request", _on_upload_request)
+        except Exception:
+            pass
+
+        async def _douyin_upload_reacted(timeout_s: float = 6.0) -> bool:
+            """页面是否真的开始上传：URL 跳转 / 出现上传中标记 / 捕获到上传请求。"""
+            deadline = time.time() + timeout_s
+            while time.time() < deadline:
+                cur = page.url or ""
+                if "post/video" in cur or ("publish" in cur and "upload" not in cur):
+                    return True
                 try:
-                    ubtn = await page.query_selector(ubs)
-                    if ubtn and await ubtn.is_visible():
-                        async with page.expect_file_chooser(timeout=_pw_ms(8000)) as fc_info:
-                            await ubtn.click(timeout=_pw_ms(3000))
-                        fc = await fc_info.value
-                        await fc.set_files(file_path)
-                        logger.info("[DOUYIN-VIDEO] uploaded via filechooser selector=%s", ubs)
-                        video_uploaded = True
-                        break
-                except Exception as e:
-                    logger.debug("[DOUYIN-VIDEO] filechooser %s: %s", ubs, e)
+                    busy = await page.evaluate(_JS_DOUYIN_UPLOAD_BUSY)
+                except Exception:
+                    busy = ""
+                if busy == "busy":
+                    return True
+                if upload_seen["v"]:
+                    return True
+                await asyncio.sleep(0.5)
+            return False
 
+        video_uploaded = False
+        attempts = []
+
+        # 策略 1：点可见的「上传视频」入口触发系统文件选择器（最贴近真实用户手势，本机实测有效）
+        chooser_done = False
+        for _mk_entry in (
+            lambda: page.get_by_text("上传视频", exact=True).first,
+            lambda: page.locator('button:has-text("上传视频")').first,
+            lambda: page.locator('[class*="container-drag"]').first,
+        ):
+            if chooser_done:
+                break
+            try:
+                entry = _mk_entry()
+                if (await entry.count()) == 0 or not await entry.is_visible():
+                    continue
+                async with page.expect_file_chooser(timeout=_pw_ms(6000)) as fc_info:
+                    await entry.click(timeout=_pw_ms(4000))
+                fc = await fc_info.value
+                await fc.set_files(file_path)
+                chooser_done = True
+                logger.info("[DOUYIN-VIDEO] strategy1 file chooser fired, files set")
+                if await _douyin_upload_reacted():
+                    video_uploaded = True
+                    attempts.append("chooser=ok")
+                else:
+                    attempts.append("chooser=no-reaction")
+            except Exception as e:
+                attempts.append("chooser=" + str(e)[:60])
+
+        # 策略 2：按 accept 选视频 input 直接 set_input_files
+        if not video_uploaded:
+            file_input = await _douyin_find_video_file_input(page)
+            if file_input:
+                try:
+                    await file_input.set_input_files(file_path, timeout=_pw_ms(8000))
+                    logger.info("[DOUYIN-VIDEO] strategy2 set_input_files on video input")
+                    if await _douyin_upload_reacted():
+                        video_uploaded = True
+                        attempts.append("video-input=ok")
+                    else:
+                        attempts.append("video-input=no-reaction")
+                except Exception as e:
+                    attempts.append("video-input=" + str(e)[:80])
+
+        # 策略 3：页面级 set_input_files（自动等待，取第一个 file input）
         if not video_uploaded:
             try:
-                ubtn = await page.query_selector('[class*="upload"] button')
-                if ubtn and await ubtn.is_visible():
-                    async with page.expect_file_chooser(timeout=_pw_ms(8000)) as fc_info:
-                        await ubtn.click(timeout=_pw_ms(3000))
-                    fc = await fc_info.value
-                    await fc.set_files(file_path)
+                await page.set_input_files('input[type="file"]', file_path, timeout=_pw_ms(8000))
+                logger.info("[DOUYIN-VIDEO] strategy3 page.set_input_files")
+                if await _douyin_upload_reacted():
                     video_uploaded = True
+                    attempts.append("page-input=ok")
+                else:
+                    attempts.append("page-input=no-reaction")
             except Exception as e:
-                logger.debug("[DOUYIN-VIDEO] filechooser upload button: %s", e)
+                attempts.append("page-input=" + str(e)[:80])
 
         if not video_uploaded:
+            # 失败诊断：dump file input 清单 + 截图，写进错误文案，便于下次直接定位
+            diag = ""
+            try:
+                accs = await page.evaluate(
+                    "() => Array.from(document.querySelectorAll('input[type=file]')).map(i => i.getAttribute('accept'))"
+                )
+                diag = " inputs=" + str(accs)[:240]
+            except Exception:
+                pass
+            try:
+                shot_path = os.path.join(tempfile.gettempdir(), "douyin_video_upload_fail.png")
+                await page.screenshot(path=shot_path)
+                diag += " screenshot=" + shot_path
+            except Exception:
+                pass
+            logger.warning("[DOUYIN-VIDEO] upload failed attempts=%s%s", attempts, diag)
             _step("上传视频文件", False)
             return {
                 "ok": False,
-                "error": "无法将视频填入上传入口（多为误选仅图片的 file input，已改为按 accept 选视频）",
+                "error": "视频未能进入上传（页面无任何上传反应，常见于素材视频不合法/格式不被抖音接受，"
+                         "而非上传入口选错）；诊断=" + (" | ".join(attempts) if attempts else "n/a") + diag,
                 "applied": applied,
             }
+
 
         _step("上传视频文件", True)
         await asyncio.sleep(1.0)
