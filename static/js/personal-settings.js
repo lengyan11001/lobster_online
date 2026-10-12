@@ -1315,9 +1315,10 @@
       .catch(function() { return doc; });
   }
 
-  function bindOptionChecks(el, kind, selected) {
+  function bindOptionChecks(el, kind, selected, attributeName) {
     if (!el) return;
-    el.querySelectorAll('[data-ps-option="' + kind + '"]').forEach(function(input) {
+    var attr = attributeName || 'data-ps-option';
+    el.querySelectorAll('[' + attr + '="' + kind + '"]').forEach(function(input) {
       input.addEventListener('change', function() {
         selected[input.value] = input.checked;
       });
@@ -1400,9 +1401,12 @@
           '<span><strong>' + esc(titleFn(row)) + '</strong>' + (subtitle ? '<small>' + esc(subtitle) + '</small>' : '') + '</span>' +
         '</label>';
       }).join('') + '</div><div class="ps-multi-select-footer">' + psPagerMarkup('data-ps-multi-page', elId, info.page, info.totalPages) + '</div></div></details>';
-    bindOptionChecks(el, opts.kind, selected);
+    bindOptionChecks(el, opts.kind, selected, attrName);
     el.querySelectorAll('input[' + attrName + ']').forEach(function(input) {
-      input.addEventListener('change', function() { updatePsMultiSelectSummary(el, rows, idFn, titleFn, selected); });
+      input.addEventListener('change', function() {
+        selected[input.value] = input.checked;   // 2026-10-12：先写状态再算计数，之前这里慢一拍
+        updatePsMultiSelectSummary(el, rows, idFn, titleFn, selected);
+      });
     });
     el.querySelectorAll('[data-ps-select-all]').forEach(function(button) {
       button.addEventListener('click', function(ev) {
