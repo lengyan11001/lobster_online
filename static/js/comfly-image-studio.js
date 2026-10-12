@@ -756,13 +756,18 @@
     });
   }
 
-  function syncEarnCategories(products) {
+  function syncEarnCategories(products, serverCategories) {
     var modal = ensureAssetPickerModal();
     var sel = modal.querySelector('#imglabAssetPickerProductCategory');
     if (!sel) return;
     var current = String(assetPickerState.earnCategory || '');
     var cats = [];
-    (products || []).forEach(function (p) {
+    // 优先用服务端返回的「全量分类」，否则退回当前页商品的分类（只列当前页会漏）
+    (Array.isArray(serverCategories) ? serverCategories : []).forEach(function (c) {
+      var name = String(c || '').trim();
+      if (name && cats.indexOf(name) < 0) cats.push(name);
+    });
+    (cats.length ? [] : (products || [])).forEach(function (p) {
       var c = String((p && p.category) || '').trim();
       if (c && cats.indexOf(c) < 0) cats.push(c);
     });
@@ -799,7 +804,7 @@
         if (!res.ok) throw new Error(responseErrorText(res.data, '商品加载失败'));
         assetPickerState.earnProducts = Array.isArray(res.data.items) ? res.data.items : [];
         assetPickerState.earnTotal = Number(res.data.total || assetPickerState.earnProducts.length);
-        syncEarnCategories(assetPickerState.earnProducts);
+        syncEarnCategories(assetPickerState.earnProducts, res.data.categories);
         renderAssetPicker();
         return assetPickerState.earnProducts;
       })
@@ -932,7 +937,22 @@
       return;
     }
     if (assetPickerState.openProduct) {
-      status.textContent = '「' + String(assetPickerState.openProduct.title || '') + '」商家图片 ' + items.length + ' 张';
+      // 商品详情：标题 / 价格 / 划线价 / 规格 / 服务承诺 / 运费发货，方便决定做哪个
+      var op = assetPickerState.openProduct || {};
+      var otb = (op.specs && op.specs._taobao) || (op.media && op.media.specs && op.media.specs._taobao) || {};
+      var oparts = ['「' + escapeHtml(String(op.title || '')) + '」商家图片 ' + items.length + ' 张'];
+      var ometa = [];
+      if (Number(op.price_cents || 0) > 0) ometa.push('\u00a5' + (Number(op.price_cents) / 100).toFixed(2));
+      if (Number(op.market_price_cents || 0) > Number(op.price_cents || 0)) ometa.push('\u5212\u7ebf\u4ef7 \u00a5' + (Number(op.market_price_cents) / 100).toFixed(2));
+      if (op.category) ometa.push('\u7c7b\u76ee ' + escapeHtml(String(op.category)));
+      if (Number(op.stock || 0) > 0) ometa.push('\u5e93\u5b58 ' + Number(op.stock));
+      if (Number(op.commission_bp || 0) > 0) ometa.push('\u4f63\u91d1 ' + (Number(op.commission_bp) / 100) + '%');
+      if (ometa.length) oparts.push(ometa.join(' \u00b7 '));
+      if (Array.isArray(otb.promises) && otb.promises.length) oparts.push('\u670d\u52a1\uff1a' + otb.promises.map(function (t) { return escapeHtml(String(t)); }).join('\u3001'));
+      if (Array.isArray(otb.sku) && otb.sku.length) oparts.push('\u89c4\u683c\uff1a' + otb.sku.slice(0, 6).map(function (r) { return escapeHtml(String(r.n || '')) + (Number(r.p) > 0 ? '(\u00a5' + Number(r.p).toFixed(2) + ')' : ''); }).join('\u3001'));
+      var oship = [otb.shipDays, otb.shipping].filter(Boolean).join(' \u00b7 ');
+      if (oship) oparts.push(escapeHtml(String(oship)));
+      status.innerHTML = oparts.join('<br>');
     } else {
       status.textContent = '共 ' + items.length + ' 张素材';
     }
