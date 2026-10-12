@@ -31,6 +31,7 @@ _TICK_INTERVAL_SEC = 20
 _PUBLISH_TIMEOUT_SEC = 30 * 60
 _API_TIMEOUT_SEC = 180
 _MAX_FOLDER_FILES = 2000
+_MAX_RETRY_PER_ASSET = 3
 _VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".flv", ".wmv", ".webm"}
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 _MEDIA_EXTS = _VIDEO_EXTS | _IMAGE_EXTS
@@ -44,9 +45,32 @@ def _api_base_url() -> str:
 
 
 def _auth_headers(user) -> Dict[str, str]:
+    """本机 publish / 素材接口校验的是**云端登录态**（auth_server /auth/me），
+    必须带本机保存的云端 token（openclaw/.channel_fallback.json），不能用本机 JWT。"""
     user_id = int(getattr(user, "id", user))
-    token = create_access_token({"sub": str(user_id)})
-    return {"Authorization": f"Bearer {token}"}
+    try:
+        from .cloud_session_renew import decode_jwt_payload, read_cloud_token, read_installation_id
+    except Exception:  # noqa: BLE001
+        logger.exception("[发布任务] 读取云端登录态失败")
+        raise RuntimeError("读取本机云端登录态失败，请重启客户端后重试") from None
+    token = (read_cloud_token() or "").strip()
+    if not token:
+        raise RuntimeError("本机没有云端登录态（未登录或登录已过期），请登录后重试")
+    payload = decode_jwt_payload(token)
+    sub = str(payload.get("sub") or "").strip()
+    if sub and str(user_id) and sub != str(user_id):
+        logger.warning("[发布任务] 本机登录态 user=%s 与任务 user=%s 不一致，可能无权限", sub, user_id)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    brand = str(payload.get("brand_mark") or "").strip()
+    if brand:
+        headers["X-Lobster-Brand"] = brand
+    xi = (read_installation_id() or "").strip()
+    if xi:
+        headers["X-Installation-Id"] = xi
+    return headers
 
 
 def _media_type_of(filename: str) -> str:
@@ -222,13 +246,22 @@ def collect_candidates(db, plan: PublishPlan) -> List[Dict[str, Any]]:
             continue
         seen.add(item["key"])
         unique.append(item)
-    sent = {
-        str(row[0])
-        for row in db.query(PublishPlanItem.asset_key)
+    done: set = set()
+    failed_times: Dict[str, int] = {}
+    for key, status in (
+        db.query(PublishPlanItem.asset_key, PublishPlanItem.status)
         .filter(PublishPlanItem.plan_id == int(plan.id))
         .all()
-    }
-    return [item for item in unique if item["key"] not in sent]
+    ):
+        key = str(key)
+        if str(status) == "failed":
+            failed_times[key] = failed_times.get(key, 0) + 1
+        else:
+            done.add(key)
+    return [
+        item for item in unique
+        if item["key"] not in done and failed_times.get(item["key"], 0) < _MAX_RETRY_PER_ASSET
+    ]
 
 
 # ── 发布 ─────────────────────────────────────────────────────────────────
@@ -365,16 +398,29 @@ async def _build_copy(user: User, plan: PublishPlan, candidate: Dict[str, Any]) 
 
 async def _publish_candidate(db, plan: PublishPlan, candidate: Dict[str, Any], user: User) -> PublishPlanItem:
     today = datetime.now().strftime("%Y-%m-%d")
-    item = PublishPlanItem(
-        plan_id=int(plan.id),
-        user_id=int(plan.user_id),
-        asset_key=str(candidate["key"])[:500],
-        source_kind=str(candidate.get("kind") or ""),
-        source_ref=str(candidate.get("path") or candidate.get("url") or candidate.get("asset_id") or "")[:2000],
-        asset_id=str(candidate.get("asset_id") or ""),
-        status="pending",
-        used_date=today,
+    asset_key = str(candidate["key"])[:500]
+    item = (
+        db.query(PublishPlanItem)
+        .filter(PublishPlanItem.plan_id == int(plan.id), PublishPlanItem.asset_key == asset_key)
+        .first()
     )
+    if item is not None:
+        # 失败重试：复用同一行，避免 (plan_id, asset_key) 唯一约束冲突
+        item.status = "pending"
+        item.error = None
+        item.used_date = today
+        item.asset_id = str(candidate.get("asset_id") or "") or item.asset_id
+    else:
+        item = PublishPlanItem(
+            plan_id=int(plan.id),
+            user_id=int(plan.user_id),
+            asset_key=asset_key,
+            source_kind=str(candidate.get("kind") or ""),
+            source_ref=str(candidate.get("path") or candidate.get("url") or candidate.get("asset_id") or "")[:2000],
+            asset_id=str(candidate.get("asset_id") or ""),
+            status="pending",
+            used_date=today,
+        )
     db.add(item)
     try:
         db.commit()
