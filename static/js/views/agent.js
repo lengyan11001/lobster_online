@@ -1722,6 +1722,40 @@
 
   function apeEl(id) { return document.getElementById(id); }
 
+  var APE_MODAL_HTML = '<div class="agent-profile-extract-mask" data-ape-close="1"></div>' +
+    '<section class="agent-profile-extract-card" role="dialog" aria-modal="true">' +
+    '<header><div><strong>AI 提取：资料 / 关键词 / 同行 / 记忆</strong>' +
+    '<small id="agentProfileExtractSub">按「个人IP设置」的字段从这条记录里提取，核对修改后再保存</small></div>' +
+    '<button type="button" class="agent-profile-extract-close" data-ape-close="1" aria-label="关闭">×</button></header>' +
+    '<div id="agentProfileExtractBody" class="agent-profile-extract-body"></div>' +
+    '<div id="agentProfileExtractMsg" class="agent-profile-extract-msg"></div>' +
+    '<footer>' +
+    '<label class="agent-profile-extract-template"><input type="text" id="agentProfileExtractTemplateName" placeholder="模板名称（存为模板时用）"></label>' +
+    '<button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractCancel" data-ape-close="1">取消</button>' +
+    '<button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractSaveTemplate">存为模板</button>' +
+    '<button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractSave">仅保存资料调查</button>' +
+    '<button type="button" class="btn btn-primary btn-sm" id="agentProfileExtractSaveAll">全部保存</button>' +
+    '</footer></section>';
+
+  function apeEnsureModal() {
+    var node = document.getElementById('agentProfileExtract');
+    if (node) return node;
+    node = document.createElement('div');
+    node.id = 'agentProfileExtract';
+    node.className = 'agent-profile-extract';
+    node.hidden = true;
+    node.innerHTML = APE_MODAL_HTML;
+    document.body.appendChild(node);
+    return node;
+  }
+
+  function apeShow() {
+    var node = apeEl('agentProfileExtract');
+    if (!node) return;
+    node.hidden = false;
+    node.classList.add('is-open');
+  }
+
   function apeMsg(text, isError) {
     apeState.msg = text || '';
     apeState.error = !!isError;
@@ -1788,6 +1822,7 @@
       host.innerHTML = '<div class="agent-profile-extract-loading">正在读取这条记录并让 AI 提取…</div>';
       return;
     }
+    apeShow();
     var rows = (apeState.keywords || []).map(function (row, i) { return apeRowHtml('keyword', i, row); }).join('') +
       '<button type="button" class="agent-profile-extract-add" data-ape-add="keyword">+ 添加一条关键词</button>';
     var comps = (apeState.competitors || []).map(function (row, i) { return apeRowHtml('competitor', i, row); }).join('') +
@@ -1833,22 +1868,13 @@
 
   function openProfileExtract(recordId) {
     var source = apeRecordText(recordId);
-    var modal = apeEl('agentProfileExtract');
-    if (!modal) return;
-    // 视图每次重绘都会再生成一份模板里的弹窗（同 id）：
-    // 只保留一份并挂到 body（getElementById 会取到最前面那个隐藏的旧副本，导致弹窗“自己消失”）
-    var dupes = document.querySelectorAll('#agentProfileExtract');
-    for (var di = dupes.length - 1; di >= 0; di--) {
-      var node = dupes[di];
-      if (node !== modal && node.parentNode) node.parentNode.removeChild(node);
-    }
-    if (modal.parentNode !== document.body) document.body.appendChild(modal);
-    modal.hidden = false;
+    var modal = apeEnsureModal();
+    modal.classList.add('is-open');
     apeState.recordId = String(recordId || '');
     apeState.answers = null;
     apeState.loading = true;
     apeState.msg = '';
-    modal.hidden = false;
+    modal.classList.add('is-open');
     var sub = apeEl('agentProfileExtractSub');
     if (sub) sub.textContent = source.title ? ('来源记录：' + source.title) : '来源记录：' + apeState.recordId;
     apeRender();
@@ -1901,10 +1927,11 @@
 
   function apeClose() {
     var modal = apeEl('agentProfileExtract');
-    if (modal) modal.hidden = true;
+    if (modal) modal.classList.remove('is-open');
   }
 
   function apeSaveAll() {
+    apeShow();   // 保险：上一步保存后弹窗可能被外部原因隐藏，这里先恢复显示再读取表单
     var all = apeCollectAll();
     var kw = all.keywords, cp = all.competitors;
     var memDocs = {};
@@ -1968,6 +1995,7 @@
   }
 
   function apeSaveToSettings() {
+    apeShow();
     var answers = apeCollect();
     if (!Object.keys(answers).some(function (k) { return answers[k]; })) {
       apeMsg('先填一些内容再保存。', true);
@@ -2028,7 +2056,7 @@
   }
 
   function bindProfileExtract() {
-    var modal = apeEl('agentProfileExtract');
+    var modal = apeEnsureModal();
     if (modal && !modal.__apeBound) {
       modal.__apeBound = true;
       modal.addEventListener('click', function (event) {
@@ -2068,23 +2096,7 @@
         var node = apeEl('agentProfileExtract');
         if (node && !node.hidden) apeClose();
       });
-      // 视图每次重绘都会把模板里的弹窗重建一份（同 id），
-      // 不管的话 getElementById 会取到那份 hidden 新副本，弹窗就“自己消失”。监听并即时清掉。
-      if (!document.__apeDupeObserverBound) {
-        document.__apeDupeObserverBound = true;
-        var killDupes = function () {
-          var nodes = document.querySelectorAll('#agentProfileExtract');
-          if (nodes.length <= 1) return;
-          var keep = null;
-          for (var i = 0; i < nodes.length; i++) { if (nodes[i].parentNode === document.body) { keep = nodes[i]; break; } }
-          if (!keep) keep = nodes[nodes.length - 1];
-          for (var k = nodes.length - 1; k >= 0; k--) {
-            if (nodes[k] !== keep && nodes[k].parentNode) nodes[k].parentNode.removeChild(nodes[k]);
-          }
-          if (keep.parentNode !== document.body) document.body.appendChild(keep);
-        };
-        new MutationObserver(killDupes).observe(document.body, { childList: true, subtree: true });
-      }
+      // 弹窗已改为 JS 懒创建（见 apeEnsureModal），不再受视图重绘影响
     }
   }
 

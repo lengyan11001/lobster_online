@@ -1171,8 +1171,8 @@
     cursor: pointer; white-space: nowrap;
   }
   #content-agent .agent-task-card-extract:hover { background: rgba(120, 170, 255, .22); color: #fff; }
-  .agent-profile-extract { position: fixed; inset: 0; z-index: 1400; display: flex; align-items: center; justify-content: center; padding: 24px; }
-  .agent-profile-extract[hidden] { display: none; }
+  .agent-profile-extract { position: fixed; inset: 0; z-index: 1400; display: none; align-items: center; justify-content: center; padding: 24px; }
+  .agent-profile-extract.is-open { display: flex; }
   .agent-profile-extract-mask { position: absolute; inset: 0; background: rgba(6, 10, 18, .68); }
   .agent-profile-extract-card {
     position: relative; width: min(96vw, 880px); max-height: 88vh; display: flex; flex-direction: column; overflow: hidden;
@@ -1205,27 +1205,6 @@
   .agent-profile-extract-template { flex: 1 1 220px; }
   .agent-profile-extract-template input { width: 100%; background: #0c121c; border: 1px solid rgba(120, 170, 255, .18); border-radius: 9px; color: #e8eefb; padding: 8px 10px; font: inherit; }
 </style>
-<div id="agentProfileExtract" class="agent-profile-extract" hidden>
-  <div class="agent-profile-extract-mask" data-ape-close="1"></div>
-  <section class="agent-profile-extract-card" role="dialog" aria-modal="true" aria-labelledby="agentProfileExtractTitle">
-    <header>
-      <div>
-        <strong id="agentProfileExtractTitle">AI 提取个人资料</strong>
-        <small id="agentProfileExtractSub">按「个人IP设置 · 资料调查」的字段从这条记录里提取，核对修改后再保存</small>
-      </div>
-      <button type="button" class="agent-profile-extract-close" data-ape-close="1" aria-label="关闭">×</button>
-    </header>
-    <div id="agentProfileExtractBody" class="agent-profile-extract-body"></div>
-    <div id="agentProfileExtractMsg" class="agent-profile-extract-msg"></div>
-    <footer>
-      <label class="agent-profile-extract-template"><input type="text" id="agentProfileExtractTemplateName" placeholder="模板名称（存为模板时用，留空自动按时间命名）"></label>
-      <button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractCancel" data-ape-close="1">取消</button>
-      <button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractSaveTemplate">存为模板</button>
-      <button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractSave">仅保存资料调查</button>
-      <button type="button" class="btn btn-primary btn-sm" id="agentProfileExtractSaveAll">全部保存</button>
-    </footer>
-  </section>
-</div>
 <div id="agentMediaLightbox" class="agent-media-lightbox" hidden>
     <div class="agent-media-lightbox-panel">
       <button type="button" id="agentMediaLightboxClose" class="agent-media-lightbox-close" aria-label="关闭预览">×</button>
