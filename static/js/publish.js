@@ -5997,6 +5997,7 @@ function renderPublishPlans() {
           items +
         '</div>' +
         '<div style="display:flex;gap:0.35rem;align-items:flex-start;">' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-plan-run="' + plan.id + '">立即执行</button>' +
           '<button type="button" class="btn btn-ghost btn-sm" data-plan-edit="' + plan.id + '">编辑</button>' +
           '<button type="button" class="btn ' + (plan.enabled ? 'btn-ghost' : 'btn-primary') + ' btn-sm" data-plan-toggle="' + plan.id + '">' +
             (plan.enabled ? '暂停' : '启动') + '</button>' +
@@ -6227,6 +6228,26 @@ function submitPublishPlan() {
   });
 }
 
+function _pubPlanRunNow(planId, btn) {
+  if (!planId) return;
+  var original = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = '执行中…'; }
+  _pubPlanMsg('正在立即执行一次（要开浏览器，稍等）…', false);
+  _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(planId) + '/run-now', { method: 'POST' })
+    .then(function(d) {
+      var title = (d && d.title) || '';
+      var status = (d && d.status) || 'ok';
+      _pubPlanMsg('已执行：' + (title ? title + ' · ' : '') + status, false);
+      loadPublishPlans();
+    })
+    .catch(function(err) {
+      _pubPlanMsg('立即执行失败：' + ((err && err.message) || err), true);
+    })
+    .then(function() {
+      if (btn) { btn.disabled = false; btn.textContent = original || '立即执行'; }
+    });
+}
+
 function _pubPlanToggle(planId, nextEnabled) {
   return _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(planId), {
     method: 'PATCH',
@@ -6246,6 +6267,16 @@ document.addEventListener('click', function(event) {
   if (removeRow) {
     var row = removeRow.closest('[data-plan-time-row]');
     if (row) row.parentNode.removeChild(row);
+    return;
+  }
+  var runBtn = target.closest('[data-plan-run]');
+  if (runBtn) {
+    event.stopPropagation();
+    _pubPlanRunNow(runBtn.getAttribute('data-plan-run'), runBtn);
+    return;
+  }
+  if (target.closest('#pubPlanRunBtn')) {
+    _pubPlanRunNow(_pubPlanEditingId, document.getElementById('pubPlanRunBtn'));
     return;
   }
   var editBtn = target.closest('[data-plan-edit]');
