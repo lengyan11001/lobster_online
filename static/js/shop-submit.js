@@ -4,7 +4,7 @@
 
   var state = {
     tab: 'products',
-    products: [], total: 0, page: 1, size: 12, keyword: '', sort: 'heat',
+    products: [], total: 0, page: 1, size: 24, keyword: '', sort: 'heat', category: '',
     mine: [], mineTotal: 0, minePage: 1,
     detail: null,
     submit: null,
@@ -137,9 +137,71 @@
     if (state.tab === 'mine' && !state.mine.length) loadMine(true);
   };
 
+  // 类目筛选 + 分页条（商品多了以后按类目查、翻页、跳页）
+  function ensureCategorySelect() {
+    if (document.getElementById('ssCategory')) return;
+    var sortEl = document.getElementById('ssSort');
+    if (!sortEl || !sortEl.parentNode) return;
+    var sel = document.createElement('select');
+    sel.id = 'ssCategory';
+    sel.className = sortEl.className;
+    sel.innerHTML = '<option value="">全部分类</option>';
+    sel.addEventListener('change', function () { state.category = sel.value; state.page = 1; loadProducts(true); });
+    sortEl.parentNode.insertBefore(sel, sortEl);
+  }
+
+  function syncCategoryOptions(categories) {
+    var sel = document.getElementById('ssCategory');
+    if (!sel) return;
+    var list = Array.isArray(categories) ? categories.filter(Boolean) : [];
+    var html = '<option value="">全部分类</option>' + list.map(function (c) {
+      return '<option value="' + esc(String(c)) + '">' + esc(String(c)) + '</option>';
+    }).join('');
+    if (sel.innerHTML !== html) sel.innerHTML = html;
+    sel.value = state.category || '';
+  }
+
+  function renderSsPager() {
+    var pager = document.getElementById('ssPager');
+    if (!pager) return;
+    var total = Number(state.total || 0);
+    var size = Number(state.size || 24);
+    var pages = Math.max(1, Math.ceil(total / size));
+    var cur = Math.max(1, Math.min(pages, Number(state.page || 1)));
+    var nums = [];
+    for (var i = Math.max(1, cur - 2); i <= Math.min(pages, cur + 2); i += 1) nums.push(i);
+    pager.className = 'ss-pager';
+    pager.innerHTML = '<button type="button" class="btn btn-outline btn-sm" data-ss-go="' + (cur - 1) + '"' + (cur <= 1 ? ' disabled' : '') + '>上一页</button>' +
+      nums.map(function (n) { return '<button type="button" class="btn btn-outline btn-sm' + (n === cur ? ' is-active' : '') + '" data-ss-go="' + n + '">' + n + '</button>'; }).join('') +
+      '<button type="button" class="btn btn-outline btn-sm" data-ss-go="' + (cur + 1) + '"' + (cur >= pages ? ' disabled' : '') + '>下一页</button>' +
+      '<span class="ss-count">共 ' + total + ' 个商品 · 第 ' + cur + '/' + pages + ' 页</span>' +
+      '<input id="ssJump" type="number" min="1" max="' + pages + '" placeholder="跳页">' +
+      '<button type="button" class="btn btn-outline btn-sm" id="ssJumpGo">跳转</button>';
+    pager.querySelectorAll('[data-ss-go]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var n = Number(b.getAttribute('data-ss-go'));
+        if (n >= 1 && n <= pages && n !== cur) { state.page = n; loadProducts(true); }
+      });
+    });
+    var go = document.getElementById('ssJumpGo');
+    if (go) go.addEventListener('click', function () {
+      var n = Math.min(pages, Math.max(1, Number((document.getElementById('ssJump') || {}).value || 1)));
+      if (n !== cur) { state.page = n; loadProducts(true); }
+    });
+  }
+
   function bindOnce() {
     if (state.bound) return;
     state.bound = true;
+    var _origLoadProducts = loadProducts;
+    loadProducts = function (force) {
+      return _origLoadProducts(force).then(function (rows) {
+        ensureCategorySelect();
+        syncCategoryOptions(state.categories);
+        renderSsPager();
+        return rows;
+      });
+    };
     var search = document.getElementById('ssSearch');
     if (search) search.addEventListener('click', function () { loadProducts(true); });
     var kw = document.getElementById('ssKeyword');
@@ -215,8 +277,10 @@
     host.innerHTML = '<div class="ss-empty">\u52a0\u8f7d\u4e2d\u2026</div>';
     try {
       var data = await request('/api/shop/plaza?keyword=' + encodeURIComponent(state.keyword) +
+      (state.category ? '&category=' + encodeURIComponent(state.category) : '') +
         '&sort=' + encodeURIComponent(state.sort) + '&page=' + state.page + '&size=' + state.size);
       state.products = data.items || [];
+    state.categories = Array.isArray(data.categories) ? data.categories : [];
       state.total = Number(data.total || state.products.length);
       renderProducts();
     } catch (e) {
