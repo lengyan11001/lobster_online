@@ -561,8 +561,10 @@
       updatePickedCount();
       return;
     }
-    host.innerHTML = state.picker.items.map(function (item) {
-      var id = String(item._key || item.asset_id || item.url || '');
+    host.innerHTML = state.picker.items.map(function (item, index) {
+      // 选中的 key 必须唯一：工作台/分镜台传来的素材可能没有 _key/asset_id/public url，
+      // 原来的 ('' ) 会让多张互相覆盖 → 选 3 张只剩 1 张
+      var id = String(item._key || item.asset_id || item.url || ('idx-' + index + '-' + String(item.title || item.filename || '')));
       var picked = !!state.picker.picked[id];
       var thumb = item.cover_url || item.preview_url || item.open_url || item.source_url || '';
       var isVideo = String(item.media_type || '') === 'video';
@@ -673,10 +675,16 @@
       var items = [];
       for (var i = 0; i < picked.length; i += 1) {
         var row = await ensureCloudItem(picked[i]);
+        var cloudUrl = String(row.url || '');
+        var rawThumb = String(picked[i].cover_url || picked[i].preview_url || picked[i].thumb_url || '').trim();
+        // 只带公网可访问的缩略图；本地/内网/相对地址（blob:、127.0.0.1、/api/...）会让商家后台图裂。
+        // 图片素材没有公网缩略图时，直接用素材本身的公网地址当缩略图。
+        var thumb = isPublicUrl(rawThumb) ? rawThumb : '';
+        if (!thumb && String(row.media_type || '').indexOf('image') >= 0) thumb = cloudUrl;
         items.push({
           asset_id: row.asset_id,
-          url: row.url,
-          thumb_url: picked[i].cover_url || picked[i].preview_url || '',
+          url: cloudUrl,
+          thumb_url: thumb,
           media_type: row.media_type,
           title: row.title
         });
