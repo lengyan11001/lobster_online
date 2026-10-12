@@ -404,19 +404,24 @@
     setMsg('正在全选全部联系人…', false);
     var offset = 0;
     var added = 0;
+    var pages = 0;
     function step() {
-      return requestJson('/api/native-wechat/contacts?account_id=' + encodeURIComponent(id) + '&limit=200&offset=' + offset)
+      return apiJson('/api/native-wechat/contacts?account_id=' + encodeURIComponent(id) + '&limit=200&offset=' + offset)
         .then(function(data) {
           var items = (data && (data.items || data.contacts)) || [];
           var total = Number((data && (data.total || data.count)) || 0);
+          var newlyAdded = 0;
           items.forEach(function(item) {
             var value = contactValue(item);
             if (!value) return;
             var key = value.toLowerCase();
-            if (!state.contactSelected[key]) { state.contactSelected[key] = value; added += 1; }
+            if (!state.contactSelected[key]) { state.contactSelected[key] = value; added += 1; newlyAdded += 1; }
           });
           offset += items.length;
-          if (items.length && (!total || offset < total)) return step();
+          pages += 1;
+          // 保护：接口忽略 offset 或返回重复页时（本页没有新增）立刻停，避免一直转
+          if (items.length && newlyAdded === 0) return null;
+          if (items.length && pages < 200 && (!total || offset < total)) return step();
           renderContacts();
           setMsg('已选全部 ' + selectedContactValues().length + ' 位联系人（本次新增 ' + added + '），点「发送消息」带到发消息页', false);
         });
@@ -1604,9 +1609,10 @@
 
     setMsg('正在导出通讯录…', false);
     var rows = [];
+    var pages = 0;
     var headers = ['contact', 'remark', 'apply_message', 'permission', 'tags'];
     function fetchPage(offset) {
-      return requestJson('/api/native-wechat/contacts?account_id=' + encodeURIComponent(id)
+      return apiJson('/api/native-wechat/contacts?account_id=' + encodeURIComponent(id)
         + '&limit=200&offset=' + offset).then(function(data) {
         var items = (data && (data.items || data.contacts)) || [];
         var total = Number((data && (data.total || data.count)) || 0);
@@ -1619,7 +1625,8 @@
           else if (typeof item.tags === 'string' && item.tags.trim()) tags = item.tags.split(/[;,，；]/).map(function(t) { return t.trim(); }).filter(Boolean);
           rows.push([contact, remark, '', '朋友圈', tags.join(';')]);
         });
-        if (items.length && rows.length < total && offset + items.length < total) {
+        pages += 1;
+        if (items.length && pages < 200 && rows.length < total && offset + items.length < total) {
           return fetchPage(offset + items.length);
         }
         return null;
