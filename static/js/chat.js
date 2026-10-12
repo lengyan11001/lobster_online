@@ -1522,7 +1522,8 @@ function syncWechatArticleChatEntry() {
   chip.removeAttribute('data-chat-prompt');
   chip.removeAttribute('data-open-hidden-view');
   chip.setAttribute('data-jump-view', 'wechat-article');
-  chip.setAttribute('data-feature-gate', 'wewrite_official_account_skill');
+  // 服务端没有 wewrite_official_account_skill 这个功能位，挂了会被永久隐藏；这里不再设置
+  chip.removeAttribute('data-feature-gate');
   chip.title = '打开公众号文章页面';
   var desc = chip.querySelector('.chat-suggestion-chip-desc');
   if (desc) desc.textContent = '写文、配图、推草稿';
