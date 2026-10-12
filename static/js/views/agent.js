@@ -119,6 +119,19 @@
     return fetch(base + path, { headers: headers(), cache: 'no-store' }).then(parseJsonResponse);
   }
 
+  function postCloudJson(path, options) {
+    var base = cloudBase();
+    if (!base) return Promise.reject(new Error('服务器地址未配置'));
+    var opts = options || {};
+    var hs = headers();
+    hs['Content-Type'] = 'application/json';
+    return fetch(base + path, {
+      method: opts.method || 'POST',
+      headers: hs,
+      body: JSON.stringify(opts.body || {})
+    }).then(parseJsonResponse);
+  }
+
   function buildDashboardSnapshot(messageItems, runItems) {
     var msg = latestMessage(messageItems);
     var run = latestRun(runItems);
@@ -847,13 +860,14 @@
     html('agentVisualSwarm', items.map(function (item) {
       var progress = clampPercent(item.progress);
       return ''
-        + '<button type="button" class="agent-task-card' + (item.id === state.selectedSwarmId ? ' active' : '') + '" data-agent-id="' + h(item.id || '') + '" data-tone="' + h(item.tone || 'running') + '" style="--agent-progress:' + h(progress) + ';">'
+        + '<div class="agent-task-card' + (item.id === state.selectedSwarmId ? ' active' : '') + '" role="button" tabindex="0" data-agent-id="' + h(item.id || '') + '" data-tone="' + h(item.tone || 'running') + '" style="--agent-progress:' + h(progress) + ';">'
         + '  <div class="agent-task-card-head">'
         + '    <div class="agent-task-card-avatar"><img src="' + h(item.avatar || '/static/generated/agent/avatars/h5-boss-avatar.png') + '" alt="' + h(item.title || '任务头像') + '"></div>'
         + '    <div class="agent-task-card-title">'
         + '      <strong>' + h(item.title || '执行单元') + '</strong>'
         + '      <span>' + h(item.subtitle || '') + '</span>'
         + '    </div>'
+        + '    <button type="button" class="agent-task-card-extract" data-agent-extract="' + h(item.id || '') + '" title="用 AI 从这条记录里提取个人资料，核对后可保存到个人设置">提取资料</button>'
         + '  </div>'
         + '  <div class="agent-task-card-desc">' + h(item.detail || '') + '</div>'
         + '  <div class="agent-task-card-meta">'
@@ -869,7 +883,7 @@
         + '    <span>' + h(progress + '%') + '</span>'
         + '  </div>'
         + '  <div class="agent-task-card-progress"><div class="agent-task-card-progress-fill"></div></div>'
-        + '</button>';
+        + '</div>';
     }).join(''), true);
   }
 
@@ -1682,10 +1696,230 @@
     syncFullscreenButton();
   }
 
+  // ── 记录 → 个人IP资料：AI 提取 + 用户核对修改 + 保存/存模板 ───
+  // 字段与「个人IP设置 · 资料调查」一致（key 用 requirements 里的正式键名）
+  var APE_FIELDS = [
+    { key: 'profile_name', label: '你的名字 / 称呼', type: 'input', placeholder: '例如：张老师、阿杰、李总' },
+    { key: 'gender', label: '性别', type: 'select', options: [['', '未填写'], ['female', '女'], ['male', '男']] },
+    { key: 'birth_era', label: '出生年代', type: 'input', placeholder: '例如：80后、90后、00后' },
+    { key: 'current_province', label: '现在居住省份', type: 'input', placeholder: '例如：广东省' },
+    { key: 'current_city', label: '现在居住城市', type: 'input', placeholder: '例如：深圳市' },
+    { key: 'hometown', label: '籍贯 / 家乡', type: 'input', placeholder: '例如：湖南长沙' },
+    { key: 'role', label: '你是做什么的', type: 'input', placeholder: '例如：餐饮老板、家装设计师' },
+    { key: 'share_topic', label: '主要想分享什么内容', type: 'input', placeholder: '例如：门店经营、行业经验' },
+    { key: 'video_style', label: '希望的视频风格', type: 'input', placeholder: '例如：专业口播、轻松聊天' },
+    { key: 'after_view_action', label: '希望看完后做什么', type: 'input', placeholder: '例如：关注账号、私信咨询' },
+    { key: 'product', label: '在做什么产品 / 服务', type: 'textarea', placeholder: '产品、服务、卖点、价格带、交付方式' },
+    { key: 'target_customer', label: '最想服务哪类客户', type: 'textarea', placeholder: '客户身份、年龄、地区、需求与痛点' },
+    { key: 'advantages', label: '比同行好在哪里', type: 'textarea', placeholder: '资历、案例、服务或价格优势' }
+  ];
+  var apeState = { recordId: '', loading: false, msg: '', error: false };
+
+  function apeEl(id) { return document.getElementById(id); }
+
+  function apeMsg(text, isError) {
+    apeState.msg = text || '';
+    apeState.error = !!isError;
+    var node = apeEl('agentProfileExtractMsg');
+    if (!node) return;
+    node.textContent = apeState.msg;
+    node.className = 'agent-profile-extract-msg' + (isError ? ' is-error' : '');
+  }
+
+  function apeRecordText(recordId) {
+    var pools = [].concat(state.lastRecorderItems || [], state.lastRunItems || []);
+    var item = pools.filter(function (row) { return String(row && row.id) === String(recordId); })[0];
+    if (!item) return { title: '', text: '' };
+    var rp = item.resultPayload && typeof item.resultPayload === 'object' ? item.resultPayload : {};
+    var text = [rp.summary_text, rp.transcript_text, item.resultText, item.content, item.progressDetail]
+      .filter(function (v) { return String(v || '').trim(); })
+      .join('\n');
+    return { title: String(item.title || ''), text: text };
+  }
+
+  function apeFieldsHtml(answers) {
+    return APE_FIELDS.map(function (field) {
+      var value = answers && answers[field.key] != null ? String(answers[field.key]) : '';
+      var control;
+      if (field.type === 'select') {
+        control = '<select id="ape-' + field.key + '" data-ape-field="' + field.key + '">' +
+          (field.options || []).map(function (row) {
+            return '<option value="' + h(row[0]) + '"' + (String(row[0]) === value ? ' selected' : '') + '>' + h(row[1]) + '</option>';
+          }).join('') + '</select>';
+      } else if (field.type === 'textarea') {
+        control = '<textarea rows="3" id="ape-' + field.key + '" data-ape-field="' + field.key + '" placeholder="' + h(field.placeholder || '') + '">' + h(value) + '</textarea>';
+      } else {
+        control = '<input type="text" id="ape-' + field.key + '" data-ape-field="' + field.key + '" value="' + h(value) + '" placeholder="' + h(field.placeholder || '') + '">';
+      }
+      return '<label class="agent-profile-extract-field"><span>' + h(field.label) + '</span>' + control + '</label>';
+    }).join('');
+  }
+
+  function apeRender() {
+    var host = apeEl('agentProfileExtractBody');
+    if (!host) return;
+    if (apeState.loading) {
+      host.innerHTML = '<div class="agent-profile-extract-loading">正在读取这条记录并让 AI 提取资料…</div>';
+      return;
+    }
+    host.innerHTML = apeFieldsHtml(apeState.answers || {});
+  }
+
+  function openProfileExtract(recordId) {
+    var source = apeRecordText(recordId);
+    var modal = apeEl('agentProfileExtract');
+    if (!modal) return;
+    // 弹窗可能在 #content-agent（overflow/transform）里被裁切，扛到 body 下
+    if (modal.parentNode && modal.parentNode !== document.body) document.body.appendChild(modal);
+    apeState.recordId = String(recordId || '');
+    apeState.answers = null;
+    apeState.loading = true;
+    apeState.msg = '';
+    modal.hidden = false;
+    var sub = apeEl('agentProfileExtractSub');
+    if (sub) sub.textContent = source.title ? ('来源记录：' + source.title) : '来源记录：' + apeState.recordId;
+    apeRender();
+    apeMsg('');
+    var nameNode = apeEl('agentProfileExtractTemplateName');
+    if (nameNode) nameNode.value = '';
+    if (!String(source.text || '').trim()) {
+      apeState.loading = false; apeRender();
+      apeMsg('这条记录还没有摘要/转写文本，等秘书整理完成后再试。', true);
+      return;
+    }
+    postCloudJson('/api/ip-content/profile-extract', { method: 'POST', body: { title: source.title, text: source.text } })
+      .then(function (data) {
+        apeState.loading = false;
+        apeState.answers = (data && data.answers) || {};
+        apeRender();
+        var filled = Object.keys(apeState.answers).filter(function (k) { return String(apeState.answers[k] || '').trim(); }).length;
+        apeMsg('已提取 ' + filled + ' 项，请逐项核对修改后保存。');
+      })
+      .catch(function (err) {
+        apeState.loading = false;
+        apeState.answers = {};
+        apeRender();
+        apeMsg('提取失败：' + (err && err.message ? err.message : err), true);
+      });
+  }
+
+  function apeCollect() {
+    var out = {};
+    APE_FIELDS.forEach(function (field) {
+      var node = apeEl('ape-' + field.key);
+      out[field.key] = node ? String(node.value || '').trim() : '';
+    });
+    return out;
+  }
+
+  function apeSetBusy(id, busy, label) {
+    var node = apeEl(id);
+    if (!node) return;
+    node.disabled = !!busy;
+    if (label) node.textContent = label;
+  }
+
+  function apeClose() {
+    var modal = apeEl('agentProfileExtract');
+    if (modal) modal.hidden = true;
+  }
+
+  function apeSaveToSettings() {
+    var answers = apeCollect();
+    if (!Object.keys(answers).some(function (k) { return answers[k]; })) {
+      apeMsg('先填一些内容再保存。', true);
+      return;
+    }
+    apeSetBusy('agentProfileExtractSave', true, '保存中…');
+    apeMsg('正在写入个人设置…');
+    fetchCloudJson('/api/ip-content/personal-default')
+      .then(function (data) {
+        var item = (data && (data.item || data)) || {};
+        var req = Object.assign({}, item.requirements || {});
+        Object.keys(answers).forEach(function (key) { if (answers[key]) req[key] = answers[key]; });
+        return postCloudJson('/api/ip-content/personal-default', {
+          method: 'PUT',
+          body: {
+            name: item.name || '个人默认配置',
+            survey_id: item.survey_id || null,
+            keyword_ids: item.keyword_ids || [],
+            competitor_ids: item.competitor_ids || [],
+            memory_doc_ids: item.memory_doc_ids || [],
+            memory_docs: item.memory_docs || [],
+            requirements: req,
+            meta: Object.assign({}, item.meta || {}, { source: 'personal_settings_profile' })
+          }
+        });
+      })
+      .then(function () {
+        apeMsg('已保存。去「个人IP设置 → 资料调查」里可以看到这些内容。');
+      })
+      .catch(function (err) {
+        apeMsg('保存失败：' + (err && err.message ? err.message : err), true);
+      })
+      .then(function () { apeSetBusy('agentProfileExtractSave', false, '保存到个人设置'); });
+  }
+
+  function apeSaveAsTemplate() {
+    var answers = apeCollect();
+    var nameNode = apeEl('agentProfileExtractTemplateName');
+    var name = String((nameNode && nameNode.value) || '').trim() ||
+      ('个人设置模板 ' + new Date().toLocaleString('zh-CN'));
+    if (!Object.keys(answers).some(function (k) { return answers[k]; })) {
+      apeMsg('先填一些内容再存模板。', true);
+      return;
+    }
+    apeSetBusy('agentProfileExtractSaveTemplate', true, '存模板中…');
+    postCloudJson('/api/ip-content/schedule-templates', {
+      method: 'POST',
+      body: {
+        name: name,
+        requirements: answers,
+        meta: { source: 'personal_settings_profile', from_record: apeState.recordId }
+      }
+    }).then(function () {
+      apeMsg('已存为模板：' + name + '（在「个人IP设置 → 模板」里可以选用）');
+    }).catch(function (err) {
+      apeMsg('存模板失败：' + (err && err.message ? err.message : err), true);
+    }).then(function () { apeSetBusy('agentProfileExtractSaveTemplate', false, '存为模板'); });
+  }
+
+  function bindProfileExtract() {
+    var modal = apeEl('agentProfileExtract');
+    if (modal && !modal.__apeBound) {
+      modal.__apeBound = true;
+      modal.addEventListener('click', function (event) {
+        var target = event.target;
+        if (!target || !target.closest) return;
+        if (target.closest('[data-ape-close]')) { apeClose(); return; }
+        if (target.closest('#agentProfileExtractSave')) { apeSaveToSettings(); return; }
+        if (target.closest('#agentProfileExtractSaveTemplate')) { apeSaveAsTemplate(); return; }
+      });
+    }
+    if (!document.__apeDocumentBound) {
+      document.__apeDocumentBound = true;
+      document.addEventListener('click', function (event) {
+        var target = event.target;
+        if (!target || !target.closest) return;
+        var btn = target.closest('[data-agent-extract]');
+        if (!btn) return;
+        event.preventDefault();
+        event.stopPropagation();
+        openProfileExtract(btn.getAttribute('data-agent-extract') || '');
+      }, true);
+      document.addEventListener('keydown', function (event) {
+        if (event.key !== 'Escape') return;
+        var node = apeEl('agentProfileExtract');
+        if (node && !node.hidden) apeClose();
+      });
+    }
+  }
+
   window.loadAgentSubUsers = function loadAgentView() {
     bindRefreshButton();
     bindFullscreenButton();
     bindMediaPreview();
+    bindProfileExtract();
     bindSwarmSelection();
     bindSwarmScrollPagination();
     resetSwarmVisibleCount();
