@@ -1940,9 +1940,12 @@
     }
     grid.innerHTML = items.map(function (item) {
       var selectedClass = assetPickerState.selected[item.pick_key] ? ' is-selected' : '';
-      return '<div class="asset-picker-card' + selectedClass + '" data-seedance-asset-id="' + escapeHtml(String(item.pick_key || item.asset_id || '')) + '">' +
-        '<img src="' + escapeHtml(String(item.objectUrl || item.source_url || '')) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' +
-        '<div class="asset-picker-card-title">' + escapeHtml(String(item.name || '')) + '</div></div>';
+      // 用素材库选择器同款样式（缩略图网格 + 逐张「使用」勾选），不再是一张巨图
+      return '<div class="imglab-asset-picker-item' + selectedClass + '" data-seedance-asset-id="' + escapeHtml(String(item.pick_key || item.asset_id || '')) + '">' +
+        '<span class="imglab-asset-picker-thumb"><img src="' + escapeHtml(String(item.objectUrl || item.source_url || '')) + '" alt="" loading="lazy" referrerpolicy="no-referrer"></span>' +
+        '<span class="imglab-asset-picker-check">' + (assetPickerState.selected[item.pick_key] ? '\u2713' : '') + '</span>' +
+        '<span class="imglab-asset-picker-name">' + escapeHtml(String(item.name || '')) + '</span>' +
+        '<span class="imglab-asset-picker-meta">' + (assetPickerState.selected[item.pick_key] ? '已选（会作为参考图）' : '点一下选择使用') + '</span></div>';
     }).join('');
   }
 
