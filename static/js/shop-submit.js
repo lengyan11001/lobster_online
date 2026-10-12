@@ -431,13 +431,8 @@
     document.getElementById('ssDetailTitle').textContent = product.title || ('\u5546\u54c1 #' + product.id);
     document.getElementById('ssDetailMeta').textContent = (merchant.company_name ? merchant.company_name + ' \u00b7 ' : '') +
       yuan(product.price_cents) + ((product.commission_bp ? ' \u00b7 \u4f63\u91d1 ' + (Number(product.commission_bp) / 100).toFixed(1) + '%' : ''));
-    var materials = (data.materials || []).map(function (m) {
-      return '<a class="ss-material" href="' + esc(m.url) + '" target="_blank" rel="noopener">'
-        + (/\.(png|jpe?g|webp|gif)$/i.test(m.url) ? '<img src="' + esc(m.url) + '" alt="" loading="lazy">' : '<span>\u7d20\u6750</span>')
-        + '<small>' + esc(m.title) + '</small></a>';
-    }).join('');
     var mine = (data.my_submissions || []).map(function (it) {
-      return '<div class="ss-detail-mine"><a href="' + esc(it.url) + '" target="_blank" rel="noopener">' + esc(it.title || it.url) + '</a>'
+      return '<div class="ss-detail-mine"><a href="' + esc(shopMediaUrl(it.url)) + '" target="_blank" rel="noopener">' + esc(it.title || it.url) + '</a>'
         + '<span class="ss-hint">' + esc(fmtTime(it.created_at)) + '</span></div>';
     }).join('');
     var gallery = (product.gallery || []).map(shopMediaUrl).slice(0, 8).map(function (url) {
@@ -446,7 +441,6 @@
     document.getElementById('ssDetailBody').innerHTML =
       (product.subtitle ? '<div class="ss-detail-sub">' + esc(product.subtitle) + '</div>' : '')
       + '<div class="ss-detail-section"><b>\u5546\u54c1\u56fe</b><div class="ss-materials">' + (gallery || '<span class="ss-hint">\u6682\u65e0</span>') + '</div></div>'
-      + '<div class="ss-detail-section"><b>\u5546\u5bb6\u7d20\u6750\uff08' + (data.materials || []).length + '\uff09</b><div class="ss-materials">' + (materials || '<span class="ss-hint">\u6682\u65e0</span>') + '</div></div>'
       + '<div class="ss-detail-section"><b>\u6211\u6295\u7684\u7d20\u6750\uff08' + (data.my_submissions || []).length + '\uff09</b>' + (mine || '<span class="ss-hint">\u8fd8\u6ca1\u6295\u8fc7</span>') + '</div>';
     document.getElementById('ssDetailInvite').onclick = function () { copyInvite(product.id); };
     document.getElementById('ssDetailSubmit').onclick = function () { openSubmit(product); };
