@@ -397,6 +397,33 @@
       .some(function(value) { return String(value || '').trim() === wanted; });
   }
 
+  // 全选全部：按 200/页翻完整个通讯录，把每个账号下所有联系人都勾上（跨页保持选中）
+  function selectAllContactsAcrossPages() {
+    var id = activeAccountId();
+    if (!id) return setMsg('请先连接或选择账号', true);
+    setMsg('正在全选全部联系人…', false);
+    var offset = 0;
+    var added = 0;
+    function step() {
+      return requestJson('/api/native-wechat/contacts?account_id=' + encodeURIComponent(id) + '&limit=200&offset=' + offset)
+        .then(function(data) {
+          var items = (data && (data.items || data.contacts)) || [];
+          var total = Number((data && (data.total || data.count)) || 0);
+          items.forEach(function(item) {
+            var value = contactValue(item);
+            if (!value) return;
+            var key = value.toLowerCase();
+            if (!state.contactSelected[key]) { state.contactSelected[key] = value; added += 1; }
+          });
+          offset += items.length;
+          if (items.length && (!total || offset < total)) return step();
+          renderContacts();
+          setMsg('已选全部 ' + selectedContactValues().length + ' 位联系人（本次新增 ' + added + '），点「发送消息」带到发消息页', false);
+        });
+    }
+    return step().catch(function(err) { setMsg('全选失败：' + ((err && err.message) || err), true); });
+  }
+
   function selectedContactValues() {
     return Object.keys(state.contactSelected).map(function(key) { return state.contactSelected[key]; }).filter(Boolean);
   }
@@ -2445,6 +2472,8 @@
       });
       renderContacts();
     });
+    var contactSelectAllPagesBtn = $('nativeWechatContactSelectAllPagesBtn');
+    if (contactSelectAllPagesBtn) contactSelectAllPagesBtn.addEventListener('click', selectAllContactsAcrossPages);
     var contactClearBtn = $('nativeWechatContactClearBtn');
     var contactExportBtn = $('nativeWechatContactExportBtn');
     if (contactExportBtn && !contactExportBtn._bound) {
