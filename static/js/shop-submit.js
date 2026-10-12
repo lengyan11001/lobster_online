@@ -100,6 +100,16 @@
     return data;
   }
 
+  // 商品图在库里存的是相对路径（/shop-uploads/...），Online 站不提供该路径（404）→ 必须补成商城域名，
+  // 否则商品封面在客户端里是裂图。
+  function shopMediaUrl(url) {
+    var text = String(url || '').trim();
+    if (!text) return '';
+    if (/^https?:\/\//i.test(text) || /^data:|^blob:/i.test(text)) return text;
+    var base = 'https://shopcms.bhzn.top';
+    return base + (text.charAt(0) === '/' ? text : '/' + text);
+  }
+
   function isPublicUrl(url) {
     var text = String(url || '').trim();
     if (!/^https?:\/\//i.test(text)) return false;
@@ -227,7 +237,7 @@
       var merchant = p.merchant || {};
       var commission = (Number(p.commission_bp || 0) / 100).toFixed(1) + '%';
       return '<article class="ss-card" data-ss-product="' + p.id + '">'
-        + '<div class="ss-card-cover">' + (p.cover_url ? '<img src="' + esc(p.cover_url) + '" alt="" loading="lazy">' : '<span>\u65e0\u4e3b\u56fe</span>') + '</div>'
+        + '<div class="ss-card-cover">' + (p.cover_url ? '<img src="' + esc(shopMediaUrl(p.cover_url)) + '" alt="" loading="lazy">' : '<span>\u65e0\u4e3b\u56fe</span>') + '</div>'
         + '<div class="ss-card-body">'
         + '<strong class="ss-card-title">' + esc(p.title || ('\u5546\u54c1 #' + p.id)) + '</strong>'
         + '<div class="ss-card-sub">' + esc(merchant.company_name || '') + '</div>'
@@ -366,7 +376,7 @@
       return '<div class="ss-detail-mine"><a href="' + esc(it.url) + '" target="_blank" rel="noopener">' + esc(it.title || it.url) + '</a>'
         + '<span class="ss-hint">' + esc(fmtTime(it.created_at)) + '</span></div>';
     }).join('');
-    var gallery = (product.gallery || []).slice(0, 8).map(function (url) {
+    var gallery = (product.gallery || []).map(shopMediaUrl).slice(0, 8).map(function (url) {
       return '<a class="ss-material" href="' + esc(url) + '" target="_blank" rel="noopener"><img src="' + esc(url) + '" alt="" loading="lazy"></a>';
     }).join('');
     document.getElementById('ssDetailBody').innerHTML =

@@ -1521,6 +1521,16 @@
     });
   }
 
+  // 商品图在库里存的是相对路径（/shop-uploads/...），Online 站不提供该路径（404）→ 必须补成商城域名，
+  // 否则商品封面在客户端里是裂图。
+  function shopMediaUrl(url) {
+    var text = String(url || '').trim();
+    if (!text) return '';
+    if (/^https?:\/\//i.test(text) || /^data:|^blob:/i.test(text)) return text;
+    var base = 'https://shopcms.bhzn.top';
+    return base + (text.charAt(0) === '/' ? text : '/' + text);
+  }
+
   function renderAssetPicker() {
     if (assetPickerState.tab && assetPickerState.tab !== 'assets') { renderPickerTabView(); return; }
     var modal = ensureAssetPickerModal();
@@ -1873,7 +1883,7 @@
   }
 
   function renderEarnProductCard(product) {
-    var cover = String((product && (product.cover_url || ((product.gallery || [])[0] || ''))) || '');
+    var cover = shopMediaUrl(String((product && (product.cover_url || ((product.gallery || [])[0] || ''))) || ''));
     return '<div class="asset-picker-product" data-seedance-product-id="' + escapeHtml(String(product.id || '')) + '">' +
       (cover ? '<img src="' + escapeHtml(cover) + '" alt="" loading="lazy" referrerpolicy="no-referrer">' : '') +
       '<div class="asset-picker-product-title">' + escapeHtml(String(product.title || '未命名商品')) + '</div>' +
