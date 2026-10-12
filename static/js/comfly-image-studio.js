@@ -823,50 +823,30 @@
     var product = (assetPickerState.earnProducts || []).filter(function (p) {
       return Number(p && p.id) === Number(productId);
     })[0] || null;
-    if (!product) return;
-    var cloud = pickerCloudBase();
+    if (!product) return Promise.resolve([]);
     assetPickerState.openProduct = product;
     assetPickerState.selected = {};
     assetPickerState.earnMaterials = [];
     assetPickerState.earnMaterialsLoading = true;
-    var backBtn = modal.querySelector('#imglabAssetPickerProductBack');
+    var backBtn = modal.querySelector('#seedanceAssetPickerProductBack');
     if (backBtn) backBtn.hidden = false;
-    var tip = modal.querySelector('#imglabAssetPickerEarnTip');
+    var tip = modal.querySelector('#seedanceAssetPickerEarnTip');
     if (tip) tip.textContent = '点图片选中；确认后自动存进你的素材库';
+    var gallery = [];
+    var cover = shopMediaUrl(String(product.cover_url || ''));
+    if (cover) gallery.push(cover);
+    (Array.isArray(product.gallery) ? product.gallery : []).forEach(function (u) {
+      var abs = shopMediaUrl(String(u || '').trim());
+      if (abs && gallery.indexOf(abs) < 0) gallery.push(abs);
+    });
+    assetPickerState.earnMaterials = gallery.map(function (u, i) {
+      return { pick_key: 'shop:' + String(product.id) + ':' + i, asset_id: '',
+        name: i === 0 ? '商品主图' : ('商品图 ' + (i + 1)), size: 0,
+        objectUrl: u, source_url: u, product_id: Number(product.id), purpose: pickerPurpose() };
+    });
+    assetPickerState.earnMaterialsLoading = false;
     renderAssetPicker();
-    return fetch(cloud + '/api/shop/submissions/product/' + encodeURIComponent(String(product.id)), { headers: authHeadersSafe() })
-      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, data: d || {} }; }); })
-      .then(function (res) {
-        if (!res.ok) throw new Error(responseErrorText(res.data, '商品素材加载失败'));
-        var materials = Array.isArray(res.data.materials) ? res.data.materials.slice() : [];
-        if (!materials.length) {
-          var gallery = Array.isArray((res.data.product || {}).gallery) ? res.data.product.gallery : [];
-          materials = gallery.map(function (u, i) { return { url: u, title: '商品图 ' + (i + 1) }; });
-        }
-        assetPickerState.earnMaterials = materials.map(function (m, index) {
-          var url = String((m && m.url) || '').trim();
-          return {
-            pick_key: 'shop:' + String(product.id) + ':' + index,
-            asset_id: '',
-            name: String((m && m.title) || ('商品素材 ' + (index + 1))),
-            size: 0,
-            objectUrl: url,
-            source_url: url,
-            product_id: Number(product.id),
-            purpose: pickerPurpose()
-          };
-        }).filter(function (m) { return !!m.objectUrl; });
-        assetPickerState.earnMaterialsLoading = false;
-        renderAssetPicker();
-        return assetPickerState.earnMaterials;
-      })
-      .catch(function (err) {
-        assetPickerState.earnMaterialsLoading = false;
-        var status = modal.querySelector('#imglabAssetPickerStatus');
-        if (status) status.textContent = (err && err.message) || '商品素材加载失败';
-        renderAssetPicker();
-        return [];
-      });
+    return Promise.resolve(assetPickerState.earnMaterials);
   }
 
   function importPickerAssetUrl(url) {
