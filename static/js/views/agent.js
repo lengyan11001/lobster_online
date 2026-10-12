@@ -1866,11 +1866,13 @@
     };
   }
 
-  function openProfileExtract(recordId) {
-    var source = apeRecordText(recordId);
+  function openProfileExtract(recordId, override) {
+    var source = (override && String(override.text || '').trim())
+      ? { title: String(override.title || ''), text: String(override.text || '') }
+      : apeRecordText(recordId);
     var modal = apeEnsureModal();
     modal.classList.add('is-open');
-    apeState.recordId = String(recordId || '');
+    apeState.recordId = String((override && override.recordId) || recordId || '');
     apeState.answers = null;
     apeState.loading = true;
     apeState.msg = '';
@@ -2099,6 +2101,17 @@
       // 弹窗已改为 JS 懒创建（见 apeEnsureModal），不再受视图重绘影响
     }
   }
+
+  // 给其他视图（如「AI秘书 · 整理结果」）复用这个提取弹窗
+  window.LobsterProfileExtract = {
+    open: function (options) {
+      var opts = options || {};
+      bindProfileExtract();
+      apeEnsureModal();
+      openProfileExtract(opts.recordId || '', String(opts.text || '').trim() ? { text: opts.text, title: opts.title } : null);
+      return true;
+    }
+  };
 
   window.loadAgentSubUsers = function loadAgentView() {
     bindRefreshButton();

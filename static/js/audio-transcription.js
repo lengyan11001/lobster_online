@@ -584,6 +584,20 @@
     el('atDetailBack').addEventListener('click', showMain);
   }
 
+  // 摘要/转写 → 个人IP资料提取（复用 AI执行台 那个弹窗）
+  document.addEventListener('click', function (event) {
+    var btn = event.target && event.target.closest ? event.target.closest('[data-at-extract]') : null;
+    if (!btn) return;
+    event.preventDefault();
+    var row = state.detail || {};
+    var text = [summaryText(row), transcriptText(row)].filter(function (part) { return String(part || '').trim(); }).join('\n\n');
+    var title = String(row.display_name || row.source_name || row.file_name || row.filename || '秘书记录');
+    if (!text.trim()) { setMessage('这条记录还没有摘要/转写内容', true); return; }
+    if (!window.LobsterProfileExtract) { setMessage('提取组件未加载，请重启客户端', true); return; }
+    setMessage('正在打开提取弹窗…');
+    window.LobsterProfileExtract.open({ title: title, text: text, recordId: String(row.id || '') });
+  }, true);
+
   window.initAudioTranscriptionView = function initAudioTranscriptionView(root) {
     state.root = root || el('content-audio-transcription');
     if (!state.root) return Promise.resolve();
