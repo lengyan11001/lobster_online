@@ -1733,8 +1733,7 @@
     '<label class="agent-profile-extract-template"><input type="text" id="agentProfileExtractTemplateName" placeholder="模板名称（存为模板时用）"></label>' +
     '<button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractCancel" data-ape-close="1">取消</button>' +
     '<button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractSaveTemplate">存为模板</button>' +
-    '<button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractSave">仅保存资料调查</button>' +
-    '<button type="button" class="btn btn-primary btn-sm" id="agentProfileExtractSaveAll">全部保存</button>' +
+    '<button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractSave">保存到个人设置</button>' +
     '</footer></section>';
 
   function apeEnsureModal() {
@@ -2025,7 +2024,32 @@
         });
       })
       .then(function () {
-        apeMsg('已保存。去「个人IP设置 → 资料调查」里可以看到这些内容。');
+        // 资料写完后，把关键词 / 同行 / 记忆文件一起写进去（同一个按钮）
+        var kwRows = apeCollectRows('keyword').filter(function (row) { return row.keyword; });
+        var cpRows = apeCollectRows('competitor').filter(function (row) { return row.account || row.nickname; });
+        var memDocs = {};
+        APE_MEMORY_DOCS.forEach(function (doc) {
+          var node = apeEl('ape-mem-' + doc[0]);
+          var value = node ? String(node.value || '').trim() : '';
+          if (value) memDocs[doc[0]] = value;
+        });
+        var more = [];
+        kwRows.forEach(function (row) {
+          more.push(postCloudJson('/api/ip-content/keywords', { method: 'POST', body: { keyword: row.keyword, display_name: row.display_name || '', meta: { source: 'personal_settings' } } }));
+        });
+        cpRows.forEach(function (row) {
+          more.push(postCloudJson('/api/ip-content/competitors', { method: 'POST', body: { platform: row.platform || 'other', account: row.account || '', nickname: row.nickname || '', signature: '', avatar_url: '', verify_info: '', meta: { source: 'personal_settings' } } }));
+        });
+        if (Object.keys(memDocs).length) {
+          more.push(postCloudJson('/api/personal-settings/memory-documents/save', { method: 'POST', body: { title: '秘书提取：' + (apeState.recordId || ''), notes: '从 AI 秘书记录里提取', documents: memDocs } }));
+        }
+        if (!more.length) {
+          apeMsg('已保存。去「个人IP设置 → 资料调查」里可以看到这些内容。');
+          return null;
+        }
+        return Promise.all(more).then(function () {
+          apeMsg('已保存：资料调查 + 关键词 ' + kwRows.length + ' 条 + 同行 ' + cpRows.length + ' 个 + 记忆 ' + Object.keys(memDocs).length + ' 篇。');
+        });
       })
       .catch(function (err) {
         apeMsg('保存失败：' + (err && err.message ? err.message : err), true);
