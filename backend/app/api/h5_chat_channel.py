@@ -7427,6 +7427,7 @@ async def _run_scheduled_douyin_sales_action(
         reply_failed = 0
         stop_reason = "session_window_elapsed"
         normalized: Dict[str, Any] = {}
+        fatal_message = ""
         while True:
             if bool(getattr(_douyin_api_module, "douyin_stranger_message_stop_requested", False)):
                 stop_reason = "stop_requested"
@@ -7455,6 +7456,28 @@ async def _run_scheduled_douyin_sales_action(
             normalized = dict(result)
             round_stats = result.get("stats") if isinstance(result.get("stats"), dict) else {}
             round_reply = result.get("reply") if isinstance(result.get("reply"), dict) else {}
+            round_status = str(result.get("status") or "").strip().lower()
+            round_code = _safe_int(result.get("code"))
+            round_reason = str(result.get("reason") or "").strip()
+            round_message = str(result.get("message") or result.get("msg") or "").strip()
+            # 2026-10-12：早退（缺记忆文件 / 账号未登录 / 没在线账号 / 账号忙…）不带 stats，
+            # 原来只打「会话 0 个」，原因被吞掉 —— 用户只看到"都是错误的"，查不出为什么。
+            if not round_stats and (round_code >= 400 or round_status in {"failed", "skipped"}):
+                logger.warning(
+                    "[抖音私信接管] 第 %s 轮没能开始：status=%s code=%s reason=%s message=%s",
+                    rounds, round_status or "-", round_code, round_reason or "-", (round_message or "-")[:200],
+                )
+                fatal = (not round_reason) or (round_reason in DOUYIN_TAKEOVER_FATAL_REASONS)
+                if fatal:
+                    stop_reason = round_reason or "config_error"
+                    fatal_message = round_message or "抖音私信接管无法开始（原因未知）"
+                    logger.error("[抖音私信接管] 提前收工：%s（不再空转剩余轮次）", fatal_message[:200])
+                    break
+                if _takeover_monotonic() + interval_seconds > deadline_monotonic:
+                    stop_reason = round_reason or "round_failed"
+                    break
+                await asyncio.sleep(interval_seconds)
+                continue
             conversations_seen += _safe_int(round_stats.get("total"))
             reply_total += _safe_int(round_reply.get("total"))
             reply_success += _safe_int(round_reply.get("success"))
@@ -7473,12 +7496,23 @@ async def _run_scheduled_douyin_sales_action(
                 break
             await asyncio.sleep(interval_seconds)
 
-        summary = (
-            f"抖音私信记忆接管正常收工（共 {rounds} 轮，间隔 {interval_seconds}s）："
-            f"处理会话 {conversations_seen} 个，回复成功 {reply_success} 条"
-            f"{f'，失败 {reply_failed} 条' if reply_failed else ''}"
-            f"；结束原因：{'节点时间到' if stop_reason == 'session_window_elapsed' else stop_reason}"
-        )
+        if fatal_message:
+            summary = (
+                f"抖音私信接管没能开始（共 {rounds} 轮，间隔 {interval_seconds}s）：{fatal_message}"
+                f"（结束原因：{stop_reason}）"
+            )
+        elif not conversations_seen and not reply_total:
+            summary = (
+                f"抖音私信接管正常收工（共 {rounds} 轮，间隔 {interval_seconds}s）：账号正常，"
+                f"但这段时间没有需要接管的私信会话。"
+            )
+        else:
+            summary = (
+                f"抖音私信记忆接管正常收工（共 {rounds} 轮，间隔 {interval_seconds}s）："
+                f"处理会话 {conversations_seen} 个，回复成功 {reply_success} 条"
+                f"{f'，失败 {reply_failed} 条' if reply_failed else ''}"
+                f"；结束原因：{'节点时间到' if stop_reason == 'session_window_elapsed' else stop_reason}"
+            )
         normalized["takeover_rounds"] = rounds
         normalized["takeover_interval_seconds"] = interval_seconds
         normalized["takeover_session_minutes"] = session_minutes
@@ -7492,6 +7526,12 @@ async def _run_scheduled_douyin_sales_action(
         normalized["summary_text"] = summary
         normalized["message"] = summary
         normalized["msg"] = summary
+        if fatal_message:
+            # 没能开始时必须让这次任务明确 failed（原来会把上一轮的 400 配上"正常收工"的文案，
+            # 服务器上看到的就是"failed + 正常收工"，自相矛盾、无法排查）
+            normalized["status"] = "failed"
+            normalized["takeover_error"] = fatal_message
+            normalized["code"] = _safe_int(normalized.get("code")) or 400
         # 没勾「自动提交好友申请」：本机不动微信，只把识别到的号码上报到账号级池子，
         # 交给同账号的其它机器（个微自动加好友节点选「服务端上报池」）去加好友。
         if not wechat_add_friend_enabled:
@@ -7522,6 +7562,15 @@ async def _run_scheduled_douyin_sales_action(
 
     return {"code": 400, "msg": f"暂不支持的销售抖音动作：{action}"}
 
+
+
+# 2026-10-12：抖音私信接管「每轮都没能开始」时，这些原因不值得空转到节点结束
+# （账号没登录/没在线账号/同名监控在跑属于不可恢复；缺记忆文件/缺文案属于配置错误）
+DOUYIN_TAKEOVER_FATAL_REASONS = {
+    "no_online_account",
+    "account_waiting_login",
+    "stranger_message_monitor_running",
+}
 
 def _is_h5_douyin_one_shot(payload: Any, h5_context: Any = None) -> bool:
     payload_obj = payload if isinstance(payload, dict) else {}
