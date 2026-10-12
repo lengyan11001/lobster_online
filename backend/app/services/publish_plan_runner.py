@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -42,8 +43,9 @@ def _api_base_url() -> str:
     return f"http://127.0.0.1:{int(getattr(settings, 'port', 8000) or 8000)}"
 
 
-def _auth_headers(user: User) -> Dict[str, str]:
-    token = create_access_token({"sub": str(int(user.id))})
+def _auth_headers(user) -> Dict[str, str]:
+    user_id = int(getattr(user, "id", user))
+    token = create_access_token({"sub": str(user_id)})
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -471,14 +473,19 @@ async def run_plan_tick(db, now: Optional[datetime] = None) -> int:
                 continue
             user = db.query(User).filter(User.id == int(plan.user_id)).first()
             if user is None:
-                continue
+                # 本机 users 表可能没有云端账号那行；直接用 plan.user_id 发 token，不要静默跳过
+                user = SimpleNamespace(id=int(plan.user_id))
+                logger.info("[发布任务] 本机无 user_id=%s 的用户行，按该 id 直接调用本地接口 plan=%s", plan.user_id, plan.id)
             budget = max(0, int(plan.daily_count or 1) - _sent_today(db, plan, today))
             if budget <= 0:
+                logger.info("[发布任务] plan=%s 今天额度已用完（%s 条），跳过", plan.id, plan.daily_count)
                 continue
             candidates = collect_candidates(db, plan)
             if not candidates:
-                logger.info("[发布任务] 无未发布素材 plan=%s", plan.id)
+                logger.info("[发布任务] 无未发布素材 plan=%s（来源 folder=%s groups=%s）",
+                            plan.id, bool(plan.source_folder), list(plan.source_groups or []))
                 continue
+            logger.info("[发布任务] plan=%s 到点槽位=%s 待发候选=%d 今日剩余额度=%d", plan.id, slots, len(candidates), budget)
             fired_slots = dict(plan.fired_slots or {})
             for slot in slots:
                 if budget <= 0 or not candidates:
@@ -507,7 +514,7 @@ async def run_plan_once(plan_id: int) -> Dict[str, Any]:
             return {"ok": False, "error": "发布任务不存在"}
         user = db.query(User).filter(User.id == int(plan.user_id)).first()
         if user is None:
-            return {"ok": False, "error": "发布任务所属用户不存在"}
+            user = SimpleNamespace(id=int(plan.user_id))
         candidates = collect_candidates(db, plan)
         if not candidates:
             return {"ok": False, "error": "没有未发布的素材了（台账里都已发过）"}
