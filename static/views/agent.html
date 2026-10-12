@@ -1175,7 +1175,7 @@
   .agent-profile-extract[hidden] { display: none; }
   .agent-profile-extract-mask { position: absolute; inset: 0; background: rgba(6, 10, 18, .68); }
   .agent-profile-extract-card {
-    position: relative; width: min(96vw, 880px); max-height: 88vh; display: flex; flex-direction: column;
+    position: relative; width: min(96vw, 880px); max-height: 88vh; display: flex; flex-direction: column; overflow: hidden;
     background: #131a26; border: 1px solid rgba(120, 170, 255, .22); border-radius: 16px; padding: 18px 20px;
     color: #e8eefb; box-shadow: 0 24px 60px rgba(0, 0, 0, .5);
   }
@@ -1183,7 +1183,15 @@
   .agent-profile-extract-card header strong { display: block; font-size: 16px; }
   .agent-profile-extract-card header small { display: block; margin-top: 4px; color: #93a3bd; font-size: 12px; }
   .agent-profile-extract-close { margin-left: auto; border: 0; background: none; color: #93a3bd; font-size: 22px; line-height: 1; cursor: pointer; }
-  .agent-profile-extract-body { margin-top: 14px; overflow: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  .agent-profile-extract-body { margin-top: 14px; flex: 1 1 auto; min-height: 120px; overflow: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  .agent-profile-extract-section { grid-column: span 2; border: 1px solid rgba(120, 170, 255, .16); border-radius: 12px; padding: 10px 12px; }
+  .agent-profile-extract-section header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  .agent-profile-extract-section header small { color: #93a3bd; font-size: 11px; }
+  .agent-profile-extract-row { display: grid; grid-template-columns: 1.2fr 1.6fr auto; gap: 6px; margin-bottom: 6px; align-items: center; }
+  .agent-profile-extract-row[data-ape-row="competitor"] { grid-template-columns: 110px 1.3fr 1.3fr auto; }
+  .agent-profile-extract-row input, .agent-profile-extract-row select { background: #0c121c; border: 1px solid rgba(120, 170, 255, .18); border-radius: 8px; color: #e8eefb; padding: 6px 8px; font: inherit; }
+  .agent-profile-extract-row-del, .agent-profile-extract-add { background: none; border: 1px solid rgba(120, 170, 255, .28); color: #a9bcd8; border-radius: 999px; padding: 3px 10px; font-size: 11px; cursor: pointer; }
+  .agent-profile-extract-field.is-wide { grid-column: span 2; }
   .agent-profile-extract-field { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: #93a3bd; }
   .agent-profile-extract-field:nth-last-child(-n+3) { grid-column: span 2; }
   .agent-profile-extract-field input, .agent-profile-extract-field select, .agent-profile-extract-field textarea {
@@ -1193,7 +1201,7 @@
   .agent-profile-extract-loading { grid-column: span 2; padding: 26px 0; text-align: center; color: #93a3bd; }
   .agent-profile-extract-msg { margin-top: 10px; min-height: 18px; font-size: 12px; color: #7fd8a2; }
   .agent-profile-extract-msg.is-error { color: #ff8f8f; }
-  .agent-profile-extract-card footer { margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(120, 170, 255, .14); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .agent-profile-extract-card footer { flex: 0 0 auto; margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(120, 170, 255, .14); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .agent-profile-extract-template { flex: 1 1 220px; }
   .agent-profile-extract-template input { width: 100%; background: #0c121c; border: 1px solid rgba(120, 170, 255, .18); border-radius: 9px; color: #e8eefb; padding: 8px 10px; font: inherit; }
 </style>
@@ -1213,7 +1221,8 @@
       <label class="agent-profile-extract-template"><input type="text" id="agentProfileExtractTemplateName" placeholder="模板名称（存为模板时用，留空自动按时间命名）"></label>
       <button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractCancel" data-ape-close="1">取消</button>
       <button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractSaveTemplate">存为模板</button>
-      <button type="button" class="btn btn-primary btn-sm" id="agentProfileExtractSave">保存到个人设置</button>
+      <button type="button" class="btn btn-ghost btn-sm" id="agentProfileExtractSave">仅保存资料调查</button>
+      <button type="button" class="btn btn-primary btn-sm" id="agentProfileExtractSaveAll">全部保存</button>
     </footer>
   </section>
 </div>

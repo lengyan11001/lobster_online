@@ -1713,7 +1713,12 @@
     { key: 'target_customer', label: '最想服务哪类客户', type: 'textarea', placeholder: '客户身份、年龄、地区、需求与痛点' },
     { key: 'advantages', label: '比同行好在哪里', type: 'textarea', placeholder: '资历、案例、服务或价格优势' }
   ];
-  var apeState = { recordId: '', loading: false, msg: '', error: false };
+  var APE_MEMORY_DOCS = [
+    ['brand_product_intro', '产品介绍'],
+    ['product_service_faq', '百问百答'],
+    ['short_video_scripts', '短视频口播稿']
+  ];
+  var apeState = { recordId: '', loading: false, msg: '', error: false, profile: {}, keywords: [], competitors: [], memory: {} };
 
   function apeEl(id) { return document.getElementById(id); }
 
@@ -1755,22 +1760,90 @@
     }).join('');
   }
 
+  function apeRowHtml(kind, index, row) {
+    if (kind === 'keyword') {
+      return '<div class="agent-profile-extract-row" data-ape-row="keyword">' +
+        '<input type="text" data-ape-kw="keyword" value="' + h(row.keyword || '') + '" placeholder="关键词">' +
+        '<input type="text" data-ape-kw="display_name" value="' + h(row.display_name || '') + '" placeholder="备注/简称（可选）">' +
+        '<button type="button" class="agent-profile-extract-row-del" data-ape-rm="keyword" data-ape-idx="' + index + '">删</button></div>';
+    }
+    return '<div class="agent-profile-extract-row" data-ape-row="competitor">' +
+      '<select data-ape-cp="platform">' +
+      [['douyin', '抖音'], ['channels', '视频号'], ['xiaohongshu', '小红书'], ['kuaishou', '快手'], ['other', '其他']]
+        .map(function (o) { return '<option value="' + o[0] + '"' + (String(row.platform || '') === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') +
+      '</select>' +
+      '<input type="text" data-ape-cp="account" value="' + h(row.account || '') + '" placeholder="账号名 / ID">' +
+      '<input type="text" data-ape-cp="nickname" value="' + h(row.nickname || '') + '" placeholder="昵称/备注">' +
+      '<button type="button" class="agent-profile-extract-row-del" data-ape-rm="competitor" data-ape-idx="' + index + '">删</button></div>';
+  }
+
+  function apeSectionHtml(title, hint, inner) {
+    return '<section class="agent-profile-extract-section"><header><strong>' + h(title) + '</strong><small>' + h(hint) + '</small></header>' + inner + '</section>';
+  }
+
   function apeRender() {
     var host = apeEl('agentProfileExtractBody');
     if (!host) return;
     if (apeState.loading) {
-      host.innerHTML = '<div class="agent-profile-extract-loading">正在读取这条记录并让 AI 提取资料…</div>';
+      host.innerHTML = '<div class="agent-profile-extract-loading">正在读取这条记录并让 AI 提取…</div>';
       return;
     }
-    host.innerHTML = apeFieldsHtml(apeState.answers || {});
+    var rows = (apeState.keywords || []).map(function (row, i) { return apeRowHtml('keyword', i, row); }).join('') +
+      '<button type="button" class="agent-profile-extract-add" data-ape-add="keyword">+ 添加一条关键词</button>';
+    var comps = (apeState.competitors || []).map(function (row, i) { return apeRowHtml('competitor', i, row); }).join('') +
+      '<button type="button" class="agent-profile-extract-add" data-ape-add="competitor">+ 添加一个同行</button>';
+    var mem = APE_MEMORY_DOCS.map(function (doc) {
+      var value = (apeState.memory || {})[doc[0]] || '';
+      return '<label class="agent-profile-extract-field is-wide"><span>' + h(doc[1]) + '</span>' +
+        '<textarea rows="4" id="ape-mem-' + doc[0] + '" data-ape-mem="' + doc[0] + '">' + h(value) + '</textarea></label>';
+    }).join('');
+    host.innerHTML =
+      apeSectionHtml('① 资料调查', '同「个人IP设置 · 资料调查」', apeFieldsHtml(apeState.profile || {})) +
+      apeSectionHtml('② 关键词', '提炼后可一键写进「个人IP设置 · 关键词」', rows) +
+      apeSectionHtml('③ 同行', '记录里提到的账号，可写进「同行」', comps) +
+      apeSectionHtml('④ 记忆文件', '产品介绍 / 百问百答 / 短视频口播稿，可存成记忆', mem);
+  }
+
+  function apeCollectRows(kind) {
+    var attr = kind === 'keyword' ? 'data-ape-kw' : 'data-ape-cp';
+    return Array.prototype.map.call(document.querySelectorAll('[data-ape-row="' + kind + '"]'), function (row) {
+      var out = {};
+      Array.prototype.forEach.call(row.querySelectorAll('[' + attr + ']'), function (node) {
+        out[node.getAttribute(attr)] = String(node.value || '').trim();
+      });
+      return out;
+    }).filter(function (row) { return Object.keys(row).some(function (k) { return row[k]; }); });
+  }
+
+  function apeCollectAll() {
+    return {
+      profile: apeCollect(),
+      keywords: apeCollectRows('keyword'),
+      competitors: apeCollectRows('competitor'),
+      memory: (function () {
+        var out = {};
+        APE_MEMORY_DOCS.forEach(function (doc) {
+          var node = apeEl('ape-mem-' + doc[0]);
+          out[doc[0]] = node ? String(node.value || '').trim() : '';
+        });
+        return out;
+      })()
+    };
   }
 
   function openProfileExtract(recordId) {
     var source = apeRecordText(recordId);
     var modal = apeEl('agentProfileExtract');
     if (!modal) return;
-    // 弹窗可能在 #content-agent（overflow/transform）里被裁切，扛到 body 下
-    if (modal.parentNode && modal.parentNode !== document.body) document.body.appendChild(modal);
+    // 视图每次重绘都会再生成一份模板里的弹窗（同 id）：
+    // 只保留一份并挂到 body（getElementById 会取到最前面那个隐藏的旧副本，导致弹窗“自己消失”）
+    var dupes = document.querySelectorAll('#agentProfileExtract');
+    for (var di = dupes.length - 1; di >= 0; di--) {
+      var node = dupes[di];
+      if (node !== modal && node.parentNode) node.parentNode.removeChild(node);
+    }
+    if (modal.parentNode !== document.body) document.body.appendChild(modal);
+    modal.hidden = false;
     apeState.recordId = String(recordId || '');
     apeState.answers = null;
     apeState.loading = true;
@@ -1787,17 +1860,24 @@
       apeMsg('这条记录还没有摘要/转写文本，等秘书整理完成后再试。', true);
       return;
     }
-    postCloudJson('/api/ip-content/profile-extract', { method: 'POST', body: { title: source.title, text: source.text } })
+    postCloudJson('/api/ip-content/profile-extract', {
+      method: 'POST',
+      body: { title: source.title, text: source.text, targets: ['profile', 'keywords', 'competitors', 'memory'] }
+    })
       .then(function (data) {
         apeState.loading = false;
-        apeState.answers = (data && data.answers) || {};
+        apeState.profile = (data && (data.profile || data.answers)) || {};
+        apeState.keywords = (data && data.keywords) || [];
+        apeState.competitors = (data && data.competitors) || [];
+        apeState.memory = (data && data.memory) || {};
         apeRender();
-        var filled = Object.keys(apeState.answers).filter(function (k) { return String(apeState.answers[k] || '').trim(); }).length;
-        apeMsg('已提取 ' + filled + ' 项，请逐项核对修改后保存。');
+        var filled = Object.keys(apeState.profile).filter(function (k) { return String(apeState.profile[k] || '').trim(); }).length;
+        apeMsg('已提取：资料 ' + filled + ' 项 · 关键词 ' + apeState.keywords.length + ' 条 · 同行 ' + apeState.competitors.length + ' 个 · 记忆 ' +
+          Object.keys(apeState.memory).filter(function (k) { return String(apeState.memory[k] || '').trim(); }).length + ' 篇。请逐项核对修改后保存。');
       })
       .catch(function (err) {
         apeState.loading = false;
-        apeState.answers = {};
+        apeState.profile = {}; apeState.keywords = []; apeState.competitors = []; apeState.memory = {};
         apeRender();
         apeMsg('提取失败：' + (err && err.message ? err.message : err), true);
       });
@@ -1822,6 +1902,69 @@
   function apeClose() {
     var modal = apeEl('agentProfileExtract');
     if (modal) modal.hidden = true;
+  }
+
+  function apeSaveAll() {
+    var all = apeCollectAll();
+    var kw = all.keywords, cp = all.competitors;
+    var memDocs = {};
+    Object.keys(all.memory).forEach(function (k) { if (all.memory[k]) memDocs[k] = all.memory[k]; });
+    var jobs = [];
+    jobs.push(apeSaveProfileOnly(all.profile));
+    kw.forEach(function (row) {
+      if (!row.keyword) return;
+      jobs.push(postCloudJson('/api/ip-content/keywords', {
+        method: 'POST',
+        body: { keyword: row.keyword, display_name: row.display_name || '', meta: { source: 'personal_settings' } }
+      }));
+    });
+    cp.forEach(function (row) {
+      if (!row.account && !row.nickname) return;
+      jobs.push(postCloudJson('/api/ip-content/competitors', {
+        method: 'POST',
+        body: {
+          platform: row.platform || 'other',
+          account: row.account || '', nickname: row.nickname || '',
+          signature: '', avatar_url: '', verify_info: '',
+          meta: { source: 'personal_settings' }
+        }
+      }));
+    });
+    if (Object.keys(memDocs).length) {
+      jobs.push(postCloudJson('/api/personal-settings/memory-documents/save', {
+        method: 'POST',
+        body: { title: '秘书提取：' + (apeState.recordId || ''), notes: '从 AI 秘书记录里提取', documents: memDocs }
+      }));
+    }
+    apeSetBusy('agentProfileExtractSaveAll', true, '保存中…');
+    apeMsg('正在保存：资料 + ' + kw.length + ' 个关键词 + ' + cp.length + ' 个同行 + ' + Object.keys(memDocs).length + ' 篇记忆…');
+    Promise.all(jobs).then(function () {
+      apeMsg('已保存到个人IP设置（资料调查 / 关键词 / 同行 / 记忆）。');
+    }).catch(function (err) {
+      apeMsg('保存失败：' + (err && err.message ? err.message : err), true);
+    }).then(function () { apeSetBusy('agentProfileExtractSaveAll', false, '全部保存'); });
+  }
+
+  function apeSaveProfileOnly(answers) {
+    return fetchCloudJson('/api/ip-content/personal-default')
+      .then(function (data) {
+        var item = (data && (data.item || data)) || {};
+        var req = Object.assign({}, item.requirements || {});
+        Object.keys(answers || {}).forEach(function (key) { if (answers[key]) req[key] = answers[key]; });
+        return postCloudJson('/api/ip-content/personal-default', {
+          method: 'PUT',
+          body: {
+            name: item.name || '个人默认配置',
+            survey_id: item.survey_id || null,
+            keyword_ids: item.keyword_ids || [],
+            competitor_ids: item.competitor_ids || [],
+            memory_doc_ids: item.memory_doc_ids || [],
+            memory_docs: item.memory_docs || [],
+            requirements: req,
+            meta: Object.assign({}, item.meta || {}, { source: 'personal_settings_profile' })
+          }
+        });
+      });
   }
 
   function apeSaveToSettings() {
@@ -1892,7 +2035,20 @@
         var target = event.target;
         if (!target || !target.closest) return;
         if (target.closest('[data-ape-close]')) { apeClose(); return; }
+        if (target.closest('#agentProfileExtractSaveAll')) { apeSaveAll(); return; }
         if (target.closest('#agentProfileExtractSave')) { apeSaveToSettings(); return; }
+        var rm = target.closest('[data-ape-rm]');
+        if (rm) {
+          var kind = rm.getAttribute('data-ape-rm'), idx = Number(rm.getAttribute('data-ape-idx'));
+          var bag = kind === 'keyword' ? apeState.keywords : apeState.competitors;
+          bag.splice(idx, 1); apeRender(); return;
+        }
+        var add = target.closest('[data-ape-add]');
+        if (add) {
+          if (add.getAttribute('data-ape-add') === 'keyword') apeState.keywords.push({ keyword: '', display_name: '' });
+          else apeState.competitors.push({ platform: 'douyin', account: '', nickname: '' });
+          apeRender(); return;
+        }
         if (target.closest('#agentProfileExtractSaveTemplate')) { apeSaveAsTemplate(); return; }
       });
     }
@@ -1912,6 +2068,23 @@
         var node = apeEl('agentProfileExtract');
         if (node && !node.hidden) apeClose();
       });
+      // 视图每次重绘都会把模板里的弹窗重建一份（同 id），
+      // 不管的话 getElementById 会取到那份 hidden 新副本，弹窗就“自己消失”。监听并即时清掉。
+      if (!document.__apeDupeObserverBound) {
+        document.__apeDupeObserverBound = true;
+        var killDupes = function () {
+          var nodes = document.querySelectorAll('#agentProfileExtract');
+          if (nodes.length <= 1) return;
+          var keep = null;
+          for (var i = 0; i < nodes.length; i++) { if (nodes[i].parentNode === document.body) { keep = nodes[i]; break; } }
+          if (!keep) keep = nodes[nodes.length - 1];
+          for (var k = nodes.length - 1; k >= 0; k--) {
+            if (nodes[k] !== keep && nodes[k].parentNode) nodes[k].parentNode.removeChild(nodes[k]);
+          }
+          if (keep.parentNode !== document.body) document.body.appendChild(keep);
+        };
+        new MutationObserver(killDupes).observe(document.body, { childList: true, subtree: true });
+      }
     }
   }
 
