@@ -1140,7 +1140,152 @@ async def _scroll_publish_form_to_bottom(page: Any) -> None:
         logger.debug("[WECHAT-CHANNELS] scroll form bottom failed: %s", exc)
 
 
+_PUBLISH_DIALOG_JS = r"""
+() => {
+  const norm = (v) => String(v || '').replace(/\s+/g, '').trim();
+  const visible = (el) => {
+    if (!el || !el.getBoundingClientRect) return false;
+    const r = el.getBoundingClientRect();
+    const s = getComputedStyle(el);
+    return r.width > 5 && r.height > 5 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
+  };
+  const clearTags = (root) => {
+    if (!root || !root.querySelectorAll) return;
+    for (const el of root.querySelectorAll('[data-lobster-target]')) el.removeAttribute('data-lobster-target');
+    for (const el of root.querySelectorAll('*')) if (el.shadowRoot) clearTags(el.shadowRoot);
+  };
+  clearTags(document);
+  const roots = [];
+  const seen = new Set();
+  const walk = (root) => {
+    if (!root || seen.has(root)) return;
+    seen.add(root);
+    roots.push(root);
+    for (const el of (root.querySelectorAll ? root.querySelectorAll('*') : [])) {
+      if (el.shadowRoot) walk(el.shadowRoot);
+    }
+  };
+  walk(document);
+
+  const NO_REMIND = ['不再提醒', '以后不再提醒', '下次不再提醒', '不再提示'];
+  const PRIMARY = ['直接发表', '继续发表', '确认发表', '继续发布', '确认发布', '立即发表',
+                   '同意并发表', '同意并继续', '确定', '确认', '我知道了', '好的', '继续'];
+  const BLOCK = ['取消', '关闭', '放弃', '删除', '返回', '不保存', '稍后', '上一步'];
+
+  let notice = false, hasCheckbox = false, checkboxChecked = false;
+  let bestRank = 99, bestEl = null;
+  const buttons = [];
+  for (const root of roots) {
+    const all = root.querySelectorAll
+      ? root.querySelectorAll('button, [role="button"], a, label, span, div, p, input[type="checkbox"], [role="checkbox"]')
+      : [];
+    for (const el of all) {
+      if (!visible(el)) continue;
+      const text = norm(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '');
+      if (!text) continue;
+      if (NO_REMIND.some((t) => text.includes(t))) {
+        notice = true;
+        if (!hasCheckbox) {
+          const parent = el.closest('label, [role="checkbox"], .ant-checkbox-wrapper, div') || el;
+          const cb = el.matches('input[type="checkbox"], [role="checkbox"]') ? el
+                   : (parent.querySelector ? parent.querySelector('input[type="checkbox"], [role="checkbox"]') : null);
+          if (cb) {
+            checkboxChecked = 'checked' in cb ? !!cb.checked
+                            : String(cb.getAttribute ? cb.getAttribute('aria-checked') : '').toLowerCase() === 'true';
+            cb.setAttribute('data-lobster-target', 'notice-checkbox');
+            hasCheckbox = true;
+          } else {
+            const tgt = el.closest('button, [role="button"], a') || el;
+            tgt.setAttribute('data-lobster-target', 'notice-checkbox');
+            hasCheckbox = true;
+          }
+        }
+      }
+      const bt = el.matches('button, [role="button"], a') ? el : el.closest('button, [role="button"], a');
+      if (!bt || !visible(bt)) continue;
+      const btext = norm(bt.textContent || bt.getAttribute('aria-label') || bt.getAttribute('title') || text);
+      if (btext && btext.length <= 24 && buttons.indexOf(btext) < 0 && buttons.length < 40) buttons.push(btext);
+      if (BLOCK.some((t) => btext === t)) continue;
+      const r = bt.getBoundingClientRect();
+      if (r.width <= 24 || r.height <= 14) continue;
+      const rank = PRIMARY.findIndex((t) => btext === t || btext.includes(t));
+      if (rank >= 0 && rank < bestRank) { bestRank = rank; bestEl = bt; }
+    }
+  }
+  let continueText = '';
+  if (bestEl) {
+    bestEl.setAttribute('data-lobster-target', 'notice-continue');
+    continueText = norm(bestEl.textContent || bestEl.getAttribute('aria-label') || '');
+  }
+  return { notice, hasCheckbox, checkboxChecked, hasContinue: !!bestEl, continueText, buttons };
+}
+"""
+
+
+async def _probe_publish_dialogs(page: Any) -> Dict[str, Any]:
+    """遍历所有 frame（视频号助手是 wujie 微前端，弹窗常挂在子应用 frame 里）+ shadow root，
+    汇总「原创声明/二次确认」弹窗状态。
+
+    注意：命中元素会被打上 data-lobster-target 标记；点击必须走 _click_tagged()（在该元素所在 frame 内点击），
+    不能用 page.mouse 按坐标点，否则子 frame 内的坐标会算错。
+    """
+    merged: Dict[str, Any] = {
+        "notice": False, "has_checkbox": False, "checkbox_checked": False,
+        "has_continue": False, "continue_text": "", "buttons": [], "frames_with_hit": [],
+    }
+    for fr in list(getattr(page, "frames", []) or []):
+        try:
+            res = await fr.evaluate(_PUBLISH_DIALOG_JS)
+        except Exception:
+            continue
+        if not isinstance(res, dict):
+            continue
+        if res.get("notice") or res.get("hasContinue") or res.get("hasCheckbox"):
+            merged["frames_with_hit"].append((getattr(fr, "url", "") or "")[:90])
+        if res.get("notice"):
+            merged["notice"] = True
+        if res.get("hasCheckbox") and not merged["has_checkbox"]:
+            merged["has_checkbox"] = True
+            merged["checkbox_checked"] = bool(res.get("checkboxChecked"))
+        if res.get("hasContinue") and not merged["has_continue"]:
+            merged["has_continue"] = True
+            merged["continue_text"] = res.get("continueText") or ""
+        for txt in (res.get("buttons") or []):
+            if txt not in merged["buttons"]:
+                merged["buttons"].append(txt)
+    return merged
+
+
+async def _click_tagged(page: Any, tag: str) -> bool:
+    """在任意 frame 内点击带 data-lobster-target=tag 的可见元素（坐标在各自 frame 内计算，避免子 frame 坐标错位）。"""
+    for fr in list(getattr(page, "frames", []) or []):
+        try:
+            loc = fr.locator(f'[data-lobster-target="{tag}"]')
+            if await loc.count() == 0:
+                continue
+            el = loc.first
+            if not await el.is_visible():
+                continue
+        except Exception:
+            continue
+        for kwargs in ({"timeout": _pw_ms(6000)}, {"force": True, "timeout": _pw_ms(6000)}):
+            try:
+                await el.click(**kwargs)
+                return True
+            except Exception:
+                continue
+    return False
+
+
 async def _click_followup_confirm(page: Any) -> bool:
+    """点击发表后的二次确认/原创声明「继续」按钮。兼容 wujie 子 frame 与 shadow root。"""
+    try:
+        info = await _probe_publish_dialogs(page)
+        if isinstance(info, dict) and info.get("has_continue"):
+            if await _click_tagged(page, "notice-continue"):
+                return True
+    except Exception as exc:
+        logger.debug("[WECHAT-CHANNELS] followup confirm probe failed: %s", exc)
     labels = ("确认发表", "确定", "确认", "继续发表")
     for label in labels:
         btn = await _first_visible_locator(page, f'button:has-text("{label}")')
@@ -1160,125 +1305,38 @@ async def _click_followup_confirm(page: Any) -> bool:
 
 
 async def _handle_original_notice(page: Any, enabled: bool, _step) -> bool:
-    """Handle the post-submit original-rights reminder without blocking publish."""
+    """Handle the post-submit original-rights reminder without blocking publish.
+
+    视频号助手是 wujie 微前端，提示弹窗可能挂在子 frame / shadow root 里，原先只在主文档里找按钮，
+    导致「检测到原创提示但未找到继续按钮」。现在遍历所有 frame 并在元素所在 frame 内点击；
+    仍找不到时把弹窗内全部按钮文本写进步骤，便于下次直接定位。
+    """
     try:
-        result = await page.evaluate(
-            """
-            ({enabled}) => {
-              const roots = [];
-              const seen = new Set();
-              const walk = (root) => {
-                if (!root || seen.has(root)) return;
-                seen.add(root);
-                roots.push(root);
-                for (const el of (root.querySelectorAll ? root.querySelectorAll('*') : [])) {
-                  if (el.shadowRoot) walk(el.shadowRoot);
-                }
-              };
-              walk(document);
-              const norm = (value) => String(value || '').replace(/\\s+/g, '').trim();
-              const visible = (el) => {
-                if (!el || !el.getBoundingClientRect) return false;
-                const r = el.getBoundingClientRect();
-                const s = getComputedStyle(el);
-                return r.width > 5 && r.height > 5 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
-              };
-              const noRemind = ['不再提醒', '以后不再提醒', '下次不再提醒', '不再提示'];
-              let notice = false;
-              let checkbox = null;
-              let noRemindAction = null;
-              let continueButton = null;
-              for (const root of roots) {
-                const all = root.querySelectorAll ? root.querySelectorAll('button, [role="button"], label, span, div, p, input[type="checkbox"], [role="checkbox"]') : [];
-                for (const el of all) {
-                  if (!visible(el)) continue;
-                  const text = norm(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '');
-                  if (!text) continue;
-                  if (noRemind.some((token) => text.includes(token))) {
-                    notice = true;
-                    const parent = el.closest('label, [role="checkbox"], .ant-checkbox-wrapper, div') || el;
-                    const cb = el.matches('input[type="checkbox"], [role="checkbox"]') ? el : parent.querySelector?.('input[type="checkbox"], [role="checkbox"]');
-                    if (cb) {
-                      const r = cb.getBoundingClientRect();
-                      const checked = 'checked' in cb ? !!cb.checked : String(cb.getAttribute?.('aria-checked') || '').toLowerCase() === 'true';
-                      checkbox = { box: {x:r.left,y:r.top,width:r.width,height:r.height}, checked };
-                    } else if (el.matches('button, [role="button"]') || el.closest('button, [role="button"]') || el.classList.contains('no-tip-btn') || el.closest('.no-tip-btn')) {
-                      const target = el.closest('button, [role="button"], .no-tip-btn') || el;
-                      const r = target.getBoundingClientRect();
-                      noRemindAction = { box: {x:r.left,y:r.top,width:r.width,height:r.height}, text };
-                    }
-                  }
-                  const buttonTokens = ['直接发表', '继续发表', '确认发表', '确定', '我知道了', '继续'];
-                  const buttonTarget = el.matches('button, [role="button"]') ? el : el.closest('button, [role="button"]');
-                  if (!buttonTarget || !visible(buttonTarget)) continue;
-                  const buttonText = norm(buttonTarget.textContent || buttonTarget.getAttribute('aria-label') || buttonTarget.getAttribute('title') || text);
-                  const buttonRank = buttonTokens.findIndex((token) => buttonText === token || buttonText.includes(token));
-                  if (buttonRank >= 0) {
-                    const r = buttonTarget.getBoundingClientRect();
-                    if (r.width > 24 && r.height > 16 && (!continueButton || buttonRank < continueButton.rank)) {
-                      continueButton = {box:{x:r.left,y:r.top,width:r.width,height:r.height}, text: buttonText, rank: buttonRank};
-                    }
-                  }
-                }
-              }
-              return {notice, checkbox, noRemindAction, continueButton, enabled: !!enabled};
-            }
-            """,
-            {"enabled": bool(enabled)},
-        )
-        if not isinstance(result, dict) or not result.get("notice"):
+        info = await _probe_publish_dialogs(page)
+        if not info.get("notice"):
             return False
-        if bool(result.get("enabled", True)) and isinstance(result.get("checkbox"), dict):
-            checkbox = result["checkbox"]
-            if not checkbox.get("checked"):
-                await _human_click_box(page, checkbox.get("box") or {})
+        if bool(enabled) and info.get("has_checkbox") and not info.get("checkbox_checked"):
+            if await _click_tagged(page, "notice-checkbox"):
                 _step("勾选原创提示不再提醒", True)
-        elif bool(result.get("enabled", True)) and isinstance(result.get("noRemindAction"), dict):
-            action = result["noRemindAction"]
-            await _human_click_box(page, action.get("box") or {})
-            _step("点击原创提示不再提醒", True)
-            # The no-tip control only changes the reminder preference. The
-            # publish dialog still needs the explicit "直接发表" action.
-            await _delay(0.25, 0.6)
-            followup = await page.evaluate(
-                """
-                () => {
-                  const norm = (value) => String(value || '').replace(/\\s+/g, '').trim();
-                  const visible = (el) => {
-                    if (!el || !el.getBoundingClientRect) return false;
-                    const r = el.getBoundingClientRect();
-                    const s = getComputedStyle(el);
-                    return r.width > 24 && r.height > 16 && s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity || 1) > 0;
-                  };
-                  const tokens = ['直接发表', '继续发表', '确认发表', '确定', '我知道了', '继续'];
-                  for (const el of document.querySelectorAll('button, [role="button"]')) {
-                    if (!visible(el)) continue;
-                    const text = norm(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '');
-                    if (tokens.some((token) => text === token || text.includes(token))) {
-                      const r = el.getBoundingClientRect();
-                      return {box: {x:r.left,y:r.top,width:r.width,height:r.height}, text};
-                    }
-                  }
-                  return null;
-                }
-                """
-            )
-            if isinstance(followup, dict):
-                await _human_click_box(page, followup.get("box") or {})
-                _step("处理原创提示并继续发布", True, button=followup.get("text", ""))
+                await _delay(0.25, 0.6)
+                info = await _probe_publish_dialogs(page)
+        if info.get("has_continue"):
+            if await _click_tagged(page, "notice-continue"):
+                _step("处理原创提示并继续发布", True, button=info.get("continue_text", ""))
                 return True
-            return True
-        button = result.get("continueButton")
-        if isinstance(button, dict):
-            await _human_click_box(page, button.get("box") or {})
-            _step("处理原创提示并继续发布", True, button=button.get("text", ""))
-            return True
-        _step("检测到原创提示但未找到继续按钮", False)
+        _step(
+            "检测到原创提示但未找到继续按钮",
+            False,
+            buttons=(info.get("buttons") or [])[:20],
+            frames=(info.get("frames_with_hit") or [])[:5],
+            checkbox=bool(info.get("has_checkbox")),
+        )
         return False
     except Exception as exc:
         logger.warning("[WECHAT-CHANNELS] original notice handling failed: %s", exc)
         _step("处理原创提示并继续发布", False, error=str(exc))
         return False
+
 
 
 async def _verify_publish_result(page: Any, _step) -> Dict[str, Any]:
