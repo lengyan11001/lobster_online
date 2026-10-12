@@ -2,9 +2,9 @@
   if (typeof window.registerLobsterView !== 'function') return;
 
   window.registerLobsterView('audio-transcription', {
-    html: '/static/views/audio-transcription.html?v=20260810-ai-secretary-v2',
+    html: '/static/views/audio-transcription.html?v=20261012-agent-extract-v1',
     css: '/static/css/audio-transcription.css?v=20260810-ai-secretary-v2',
-    scripts: '/static/js/audio-transcription.js?v=20260826-auto-request-recovery-v1',
+    scripts: '/static/js/audio-transcription.js?v=20261012-agent-extract-v1',
     init: 'initAudioTranscriptionView'
   });
 
@@ -186,8 +186,8 @@ window.registerLobsterView('alibaba-inquiries', {
   });
 
   window.registerLobsterView('agent', {
-    html: '/static/views/agent.html?v=20260913-agent-brand-v1',
-    scripts: '/static/js/views/agent.js?v=20260830-agent-no-poll-v1'
+    html: '/static/views/agent.html?v=20261012-agent-extract-v1',
+    scripts: '/static/js/views/agent.js?v=20261012-agent-extract-v1'
   });
 
   window.registerLobsterView('shop-submit', {
