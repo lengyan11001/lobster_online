@@ -584,6 +584,21 @@
     el('atDetailBack').addEventListener('click', showMain);
   }
 
+  var EXTRACT_WIDGET_SRC = '/static/js/views/agent.js?v=20261012-agent-extract-v1';
+  function ensureProfileExtract() {
+    if (window.LobsterProfileExtract) return Promise.resolve(true);
+    if (window.__lobsterExtractLoading) return window.__lobsterExtractLoading;
+    window.__lobsterExtractLoading = new Promise(function (resolve) {
+      var node = document.createElement('script');
+      node.src = EXTRACT_WIDGET_SRC;
+      node.onload = function () { resolve(!!window.LobsterProfileExtract); };
+      node.onerror = function () { resolve(false); };
+      document.head.appendChild(node);
+      setTimeout(function () { resolve(!!window.LobsterProfileExtract); }, 6000);
+    });
+    return window.__lobsterExtractLoading;
+  }
+
   // 摘要/转写 → 个人IP资料提取（复用 AI执行台 那个弹窗）
   document.addEventListener('click', function (event) {
     var btn = event.target && event.target.closest ? event.target.closest('[data-at-extract]') : null;
@@ -593,9 +608,16 @@
     var text = [summaryText(row), transcriptText(row)].filter(function (part) { return String(part || '').trim(); }).join('\n\n');
     var title = String(row.display_name || row.source_name || row.file_name || row.filename || '秘书记录');
     if (!text.trim()) { setMessage('这条记录还没有摘要/转写内容', true); return; }
-    if (!window.LobsterProfileExtract) { setMessage('提取组件未加载，请重启客户端', true); return; }
     setMessage('正在打开提取弹窗…');
-    window.LobsterProfileExtract.open({ title: title, text: text, recordId: String(row.id || '') });
+    // 「整理结果」这个视图本身不会加载 agent.js，所以提取弹窗需要按需引入
+    ensureProfileExtract().then(function (ok) {
+      if (!ok || !window.LobsterProfileExtract) {
+        setMessage('提取组件加载失败，请重试或重启客户端', true);
+        try { window.alert('提取组件加载失败，请重试'); } catch (e) {}
+        return;
+      }
+      window.LobsterProfileExtract.open({ title: title, text: text, recordId: String(row.id || '') });
+    });
   }, true);
 
   window.initAudioTranscriptionView = function initAudioTranscriptionView(root) {
