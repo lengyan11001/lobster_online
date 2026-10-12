@@ -372,6 +372,11 @@ async def _build_copy(user: User, plan: PublishPlan, candidate: Dict[str, Any]) 
     tags = user_tags
     if plan.ai_copy:
         try:
+            from .cloud_session_renew import read_cloud_token
+
+            raw_token = (read_cloud_token() or "").strip()
+            if not raw_token:
+                raise PublishCopyLLMError("本机没有云端登录态，无法生成发布文案")
             title, description, generated_tags = await generate_publish_copy(
                 platform=str(plan.platform or "douyin"),
                 media_type=str(candidate.get("media_type") or "video"),
@@ -380,6 +385,7 @@ async def _build_copy(user: User, plan: PublishPlan, candidate: Dict[str, Any]) 
                 hint_title="",
                 hint_desc="",
                 hint_tags=user_tags,
+                raw_token=raw_token,
             )
             if user_tags:
                 tags = user_tags
