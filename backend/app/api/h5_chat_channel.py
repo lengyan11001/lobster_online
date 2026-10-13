@@ -1050,7 +1050,7 @@ async def _proxy_cloud_json(
                 headers=headers,
             )
     except httpx.RequestError as exc:
-        logger.warning("[SCHEDULED-TASK] proxy request failed path=%s: %s", path, exc)
+        logger.warning("[SCHEDULED-TASK] proxy request failed path=%s: %s: %r", path, type(exc).__name__, exc)
         raise HTTPException(status_code=503, detail="Cloud scheduled task service is unreachable") from exc
 
     try:
@@ -14139,6 +14139,6 @@ async def h5_chat_poll_loop() -> None:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            logger.warning("[H5-CHAT] poll loop error: %s", exc)
+            logger.warning("[H5-CHAT] poll loop error: %s: %r", type(exc).__name__, exc)
             poll_error_streak = min(poll_error_streak + 1, 5)
             await asyncio.sleep(min(30.0, 5.0 * (2 ** (poll_error_streak - 1))))

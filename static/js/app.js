@@ -692,6 +692,10 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
     lastReason: '',
     lastRecoveredAt: 0
   };
+  // 「跳闪」根因：网络类失败会触发整视图重绘，失败一多就变成白屏反复闪。
+  // 同一视图在下面这个间隔内只允许重绘一次；期间再次失败直接跳过重绘（调用方自己的重试照旧）。
+  var RECOVERY_RENDER_MIN_INTERVAL_MS = 60000;
+  var lastViewRecoveryAt = (recoveryState.viewRecoveredAt = recoveryState.viewRecoveredAt || {});
 
   function currentRecoveryView(metaView) {
     var view = String(metaView || '').trim();
@@ -709,6 +713,14 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
     meta = meta || {};
     var view = currentRecoveryView(meta.view);
     if (!view) return Promise.resolve(false);
+    var nowMs = Date.now();
+    if (nowMs - (lastViewRecoveryAt[view] || 0) < RECOVERY_RENDER_MIN_INTERVAL_MS) {
+      if (window.console && window.console.debug) {
+        window.console.debug('[network-recovery] 跳过重复重绘 view=' + view);
+      }
+      return Promise.resolve(false);
+    }
+    lastViewRecoveryAt[view] = nowMs;
 
     if (view === 'chat') {
       if (typeof window.refreshMastraOnlineChat === 'function') {
