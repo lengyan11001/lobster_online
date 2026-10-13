@@ -7377,53 +7377,125 @@ def _uia_rect(node: Any) -> Optional[tuple[float, float, float, float]]:
         return None
 
 
+_TAB_ALIASES = {
+    "\u5fae\u4fe1": ["\u5fae\u4fe1", "WeChat", "\u5fae\u4fe1(\u5de5\u4f5c)", "\u5fae\u4fe1\u5de5\u4f5c"],
+    "\u901a\u8baf\u5f55": ["\u901a\u8baf\u5f55", "Contacts", "\u8054\u7cfb\u4eba"],
+}
+_TAB_SHORTCUTS = {"\u5fae\u4fe1": "1", "\u901a\u8baf\u5f55": "2"}
+
+
+def _wechat_tab_candidates(tab_name: str) -> List[str]:
+    key = str(tab_name or "").strip()
+    return _TAB_ALIASES.get(key, [key] if key else [])
+
+
+def _find_tab_item(root: Any, names: List[str]) -> Optional[Any]:
+    """先精确匹配，再退到\u201c名字包含 + ClassName 带 TabBar\u201d，避免误点到聊天列表里的同名会话。"""
+    wanted = [str(x or "").strip() for x in names if str(x or "").strip()]
+    if not wanted:
+        return None
+    fallback = None
+    for node in _uia_walk(root, max_depth=12):
+        name = _uia_control_text(node)
+        if not name:
+            continue
+        if name in wanted:
+            return node
+        if fallback is None and any(t in name for t in wanted) and "TabBar" in _uia_control_class(node):
+            fallback = node
+    return fallback
+
+
+def _dump_wechat_nav(root: Any) -> List[dict]:
+    """失败时把导航栏上的项 dump 出来，写进日志/诊断，下一次一眼能看出是改名还是窗口没开。"""
+    out: List[dict] = []
+    try:
+        alias = [x for group in _TAB_ALIASES.values() for x in group]
+        for node in _uia_walk(root, max_depth=12):
+            cls = _uia_control_class(node)
+            name = _uia_control_text(node)
+            if not cls and not name:
+                continue
+            if "TabBar" in cls or name in alias:
+                out.append({"name": name, "class": cls})
+            if len(out) >= 10:
+                break
+    except Exception:
+        return out
+    return out
+
+
+def _click_uia_node(node: Any) -> None:
+    try:
+        node.Click(simulateMove=True)
+    except Exception:
+        node.Click(simulateMove=False)
+
+
 def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None:
+    """切换到本机微信的左侧页面（\u5fae\u4fe1 / \u901a\u8baf\u5f55）。
+
+    以前这里一旦找不到控件，就以 uiautomation 的 "Find Control Timeout" 失败收场：
+    每轮空转 60~90 秒、连 Ctrl+\u6570\u5b57 的热键兜底都走不到。现在改成有层次的短超时重试：
+      1) 还原 + 前置微信窗口，等它渲染；
+      2) 按候选控件名（\u5fae\u4fe1 / WeChat / \u5fae\u4fe1(\u5de5\u4f5c)\u2026）逐个 1.2 秒短超时查找并点击；
+      3) 失败则再还原一次窗口重试一轮（窗口被最小化/遮挡时第一轮常常找不到）；
+      4) 仍失败走 Ctrl+\u6570\u5b57 热键；
+      5) 最后才报错，并把导航栏项 dump 进日志，便于定位是改名还是窗口状态问题。
+    """
     if not hwnd or not _module_available("uiautomation"):
         return
-    try:
-        import uiautomation as auto  # type: ignore
+    import uiautomation as auto  # type: ignore
 
-        _focus_local_wechat(hwnd)
-        root = auto.ControlFromHandle(int(hwnd))
+    names = _wechat_tab_candidates(tab_name)
+    dumped: List[dict] = []
+    last_err: Any = None
+    for attempt in (0, 1):
         try:
-            root.SetActive()
-            root.SetFocus()
-        except Exception:
-            pass
-        clicked = False
-        btn = root.ButtonControl(Name=tab_name)
-        if btn.Exists(1.5):
+            _focus_local_wechat(hwnd)
+            time.sleep(0.5 if attempt else 0.15)
+            root = auto.ControlFromHandle(int(hwnd))
             try:
-                # Qt/WeChat tab items sometimes ignore UIA invoke-style clicks.
-                # A real pointer click is slower but switches tabs more reliably.
-                btn.Click(simulateMove=True)
+                root.SetActive()
+                root.SetFocus()
             except Exception:
-                btn.Click(simulateMove=False)
-            clicked = True
-            time.sleep(1.2)
-        if not clicked:
-            # Newer WeChat builds expose the left navigation item as an
-            # XTabBarItem rather than a ButtonControl.
-            nav = _uia_find_by_names(root, [tab_name], contains=False, max_depth=10)
-            if nav is not None:
+                pass
+            for nm in names:
                 try:
-                    nav.Click(simulateMove=True)
-                except Exception:
-                    nav.Click(simulateMove=False)
-                clicked = True
-                time.sleep(1.2)
-        if not clicked:
-            shortcut = {"\u5fae\u4fe1": "1", "\u901a\u8baf\u5f55": "2"}.get(tab_name)
-            if shortcut:
-                _send_hotkey(shortcut, ctrl=True, pause=0.8)
-                clicked = True
-                time.sleep(1.0)
-        if strict and not clicked:
-            raise RuntimeError(f"local WeChat tab not found: {tab_name}")
-    except Exception as exc:
-        if strict:
-            raise RuntimeError(f"切换本机微信页面失败：{exc}") from exc
-        return
+                    btn = root.ButtonControl(Name=nm)
+                    if btn.Exists(1.2):
+                        _click_uia_node(btn)
+                        time.sleep(1.0)
+                        return
+                except Exception as exc:
+                    last_err = exc
+                node = _find_tab_item(root, [nm])
+                if node is not None:
+                    try:
+                        _click_uia_node(node)
+                        time.sleep(1.0)
+                        return
+                    except Exception as exc:
+                        last_err = exc
+            if attempt == 0:
+                dumped = _dump_wechat_nav(root)
+        except Exception as exc:
+            last_err = exc
+        time.sleep(0.4)
+    shortcut = _TAB_SHORTCUTS.get(str(tab_name or "").strip())
+    if shortcut:
+        try:
+            _send_hotkey(shortcut, ctrl=True, pause=0.8)
+            time.sleep(1.0)
+            return
+        except Exception as exc:
+            last_err = exc
+    msg = "切换本机微信页面失败：%s（尝试=%s 导航项=%s 最后错误=%s）" % (
+        tab_name, names, dumped[:8], str(last_err)[:160],
+    )
+    logger.warning("[native-wechat] %s", msg[:500])
+    if strict:
+        raise RuntimeError(msg)
 
 
 def _ensure_local_chat_tab(account_id: str = "") -> None:
