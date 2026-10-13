@@ -199,7 +199,9 @@
     return status || '未知';
   }
   function previewHtml(item) {
-    var reference = item.has_reference ? assetUrl('/api/local/hypit/jobs/' + encodeURIComponent(item.job_id) + '/asset/reference.mp4') : '';
+    var referencePath = item.reference_url ||
+      ('/api/local/hypit/jobs/' + encodeURIComponent(item.job_id) + '/asset/reference.mp4');
+    var reference = item.has_reference ? assetUrl(referencePath) : '';
     var sheet = assetUrl(item.contact_sheet_url || '');
     var original = reference
       ? '<video class="hypit-preview-video" src="' + escapeAttr(reference) + '" muted playsinline preload="metadata"></video>'

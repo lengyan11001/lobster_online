@@ -1793,7 +1793,15 @@ def _job_summary(user_id: int, job_dir: Path) -> dict[str, Any] | None:
         created = float(metadata.get("created_at") or metadata.get("submitted_at") or job_dir.stat().st_mtime)
     except OSError:
         created = 0.0
-    reference = any((job_dir / ("reference" + suffix)).is_file() for suffix in ALLOWED_SUFFIXES)
+    # 参考素材是按原扩展名落盘的（reference.mp4 / reference.mov / reference.mkv / reference.webm）。
+    # 前端以前把地址硬编码成 .../asset/reference.mp4，传 .mov/.mkv 的素材就必然 404：
+    # 卡片在、封面/预览/播放全空。这里把真实文件名给前端。
+    reference_name = ""
+    for suffix in ALLOWED_SUFFIXES:
+        if (job_dir / ("reference" + suffix)).is_file():
+            reference_name = "reference" + suffix
+            break
+    reference = bool(reference_name)
     return {
         "job_id": str(metadata.get("job_id") or job_dir.name),
         "filename": str(metadata.get("filename") or ""),
@@ -1810,6 +1818,9 @@ def _job_summary(user_id: int, job_dir: Path) -> dict[str, Any] | None:
         "video_local_url": str(workflow.get("video_local_url") or ""),
         "contact_sheet_url": f"/api/local/hypit/jobs/{job_dir.name}/contact-sheet",
         "has_reference": reference,
+        "reference_url": (
+            f"/api/local/hypit/jobs/{job_dir.name}/asset/{reference_name}" if reference_name else ""
+        ),
         "can_resume": bool(reference) and str(workflow.get("status") or "") != "completed",
     }
 

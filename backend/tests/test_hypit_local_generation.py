@@ -1013,3 +1013,24 @@ def test_runtime_status_self_heals_stale_failure(tmp_path, monkeypatch):
     assert out["ready"] is True
     assert out["install"]["status"] == "completed"
     assert not str(out["install"].get("error") or "")
+
+def test_job_summary_reference_url_keeps_original_extension(tmp_path, monkeypatch):
+    """参考素材按原扩展名落盘时，卡片必须拿到带该扩展名的地址。
+
+    前端原先硬编码 /asset/reference.mp4，传 .mov/.mkv/.webm 的素材必然 404：
+    卡片在、封面/预览/播放全空。
+    """
+    monkeypatch.setattr(hypit_local, "JOBS_ROOT", tmp_path)
+    job_dir = tmp_path / "31" / "jmov"
+    job_dir.mkdir(parents=True)
+    (job_dir / "reference.mov").write_bytes(b"video")
+    (job_dir / "job.json").write_text(__import__("json").dumps({
+        "job_id": "jmov", "user_id": 31, "filename": "ref.mov", "file_size": 5,
+        "probe": {}, "created_at": 1.0,
+    }), encoding="utf-8")
+
+    item = hypit_local._list_job_summaries(31)[0]
+
+    assert item["has_reference"] is True
+    assert item["reference_url"].endswith("/jmov/asset/reference.mov"), item["reference_url"]
+    assert "reference.mp4" not in item["reference_url"]
