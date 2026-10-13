@@ -664,6 +664,71 @@ def webview2_runtime_available() -> bool:
     return find_fixed_webview2_runtime() is not None or system_webview2_runtime_available()
 
 
+# ---------------------------------------------------------------------------
+# 桌面壳抗闪（2026-10-13）
+# 现象：部分机器上鼠标移到右上角、或滚动界面时，WebView2 整屏闪一下。
+# 原因：WebView2 的硬件合成/DirectComposition 重绘时会短暂露出默认底板色，
+#       而带 backdrop-filter 的浮层（顶部 header / 下拉菜单）每次重绘都要回读
+#       底图，把这个抖动放大成肉眼可见的白闪。
+# 处理：① 底板色改成界面底色（闪也闪成同色）② 关掉 GPU 合成 / DirectComposition
+#       ③ 页面侧在桌面壳里禁用 backdrop-filter（static/css/common.css）
+# 开关：环境变量 LOBSTER_DESKTOP_WEBVIEW_ARGS（置空=不加参数），
+#       LOBSTER_DESKTOP_BG_COLOR（覆盖底板色）
+# ---------------------------------------------------------------------------
+SHELL_BACKGROUND_COLOR = os.environ.get("LOBSTER_DESKTOP_BG_COLOR", "#fbfaf8")
+DEFAULT_WEBVIEW_ARGS = "--disable-gpu-compositing --disable-direct-composition"
+
+
+def desktop_webview_args() -> str:
+    raw = os.environ.get("LOBSTER_DESKTOP_WEBVIEW_ARGS")
+    if raw is None:
+        return DEFAULT_WEBVIEW_ARGS
+    return " ".join(str(raw).split())
+
+
+def apply_desktop_webview_args(extra_args: str | None = None) -> bool:
+    """把额外 WebView2 启动参数注入 pywebview 的 CreationProperties。
+
+    pywebview 在 EdgeChrome.__init__ 里直接给 props.AdditionalBrowserArguments 赋值，
+    会覆盖 WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS 环境变量；所以这里把
+    CoreWebView2CreationProperties 换成代理对象，赋值时把参数一并带上。
+    """
+    args = desktop_webview_args() if extra_args is None else str(extra_args)
+    if os.name != "nt" or not args.strip():
+        return False
+    try:
+        from webview.platforms import edgechromium as edge  # type: ignore
+    except Exception as exc:
+        log(f"desktop webview args: import edgechromium failed: {exc}")
+        return False
+    real_cls = getattr(edge, "CoreWebView2CreationProperties", None)
+    if real_cls is None:
+        log("desktop webview args: CoreWebView2CreationProperties missing")
+        return False
+    if getattr(real_cls, "_lobster_webview_args_wrapped", False):
+        return True
+
+    class _CreationPropertiesProxy:
+        def __init__(self, real: object) -> None:
+            object.__setattr__(self, "_real", real)
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(object.__getattribute__(self, "_real"), name)
+
+        def __setattr__(self, name: str, value: object) -> None:
+            if name == "AdditionalBrowserArguments":
+                value = f"{value or ''} {args}".strip()
+            setattr(object.__getattribute__(self, "_real"), name, value)
+
+    def _factory(*f_args: object, **f_kwargs: object) -> _CreationPropertiesProxy:
+        return _CreationPropertiesProxy(real_cls(*f_args, **f_kwargs))
+
+    _factory._lobster_webview_args_wrapped = True  # type: ignore[attr-defined]
+    edge.CoreWebView2CreationProperties = _factory  # type: ignore[attr-defined]
+    log(f"desktop webview args applied: {args}")
+    return True
+
+
 def port_open(host: str, port: int, timeout: float = 0.5) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -1964,6 +2029,8 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         except Exception as exc:
             log(f"set bundled fixed WebView2 runtime failed: {exc}")
 
+    apply_desktop_webview_args()
+
     runtime: dict[str, object] = {
         "backend_proc": None,
         "mcp_proc": None,
@@ -2199,6 +2266,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             height=height,
             min_size=(900, 640),
             text_select=True,
+            background_color=SHELL_BACKGROUND_COLOR,
             js_api=DesktopApi(recover_local_services),
         )
 

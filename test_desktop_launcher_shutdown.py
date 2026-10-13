@@ -93,4 +93,5 @@ def test_run_window_always_cleans_services(monkeypatch):
     )
 
     assert ok is True
-    assert cleanup_calls == [(None, None, (8000, 8001, 18789))]
+    assert cleanup_calls == [(None, None, (8000, 8001, 8003, 18789))]
+

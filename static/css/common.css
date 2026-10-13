@@ -1157,3 +1157,19 @@
 html[data-language="en-US"] .logo-primary {
   margin-right: 0.25em;
 }
+
+/* ---------------------------------------------------------------------------
+   桌面壳（WebView2）抗闪：禁用 backdrop-filter。
+   部分机器上，带模糊的浮层（顶部 header、右上角下拉菜单）每次重绘都要回读底图，
+   滚动界面或鼠标移到顶部时会让 WebView2 整屏闪一下。模糊只是装饰，这里用不透明
+   底色兜底，观感一致但不再触发整屏重绘。
+   --------------------------------------------------------------------------- */
+html.is-desktop-shell { background: #fbfaf8; }
+html.is-desktop-shell *,
+html.is-desktop-shell *::before,
+html.is-desktop-shell *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+html.is-desktop-shell .header { background: #fffdfb; }
+html.is-desktop-shell .header-dropdown-menu { background: #ffffff; }

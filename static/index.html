@@ -1,6 +1,14 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
+  <script>
+    /* 桌面壳标记：WebView2 里禁用 backdrop-filter（滚动/悬停重绘时会整屏闪一下） */
+    try {
+      if (new URLSearchParams(location.search).get('desktop') === '1') {
+        document.documentElement.classList.add('is-desktop-shell');
+      }
+    } catch (e) {}
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script>
