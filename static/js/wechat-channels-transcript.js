@@ -473,13 +473,30 @@
    * - 抖音：用同步入库的条目（raw.video.play_addr 就是可下载直链）
    */
   /**
-   * 两个平台取作品是同一条路：IP 日更那套「同步同行」的结果（source-items 按 competitor_id 过滤）。
-   * 抖音的 raw.video.play_addr、视频号的 objectDesc.spec[0].url(+urlToken) 都由服务端在 _item_payload 里
-   * 统一抽成 video_url/decode_key/cover_url，页面只负责展示与下载。
+   * 作品来源：帖子两边都能从「同步同行」拿到，但**视频号的视频是加密流**，
+   * 解密要用的 decode_key 只在原有的 /api/wechat-channels-transcript/videos 结果里
+   * （同步入库的 raw 里没有 decode_key，直接下会得到加密流 → ffmpeg 报 moov atom not found）。
+   * 所以：视频号走原接口（带 url_token + decode_key，复用原来的下载/解密/提取链路）；
+   *      抖音走同步入库（raw.video.play_addr 就是可下载直链，无需解密）。
    */
   function loadItems(peer) {
     var host = $('wctItemList');
-    if (host) host.innerHTML = '<div class="wct-empty">正在读取已入库作品…</div>';
+    if (host) host.innerHTML = '<div class="wct-empty">正在拉取作品…</div>';
+    if (peer.platform === 'wechat_channels') {
+      return apiJson('/api/wechat-channels-transcript/videos', {
+        method: 'POST',
+        body: { username: peerAccount(peer), max_pages: 8, page_size: 20 }
+      }).then(function(data) {
+        state.items = Array.isArray(data.items) ? data.items : [];
+        renderItems();
+        return state.items;
+      }).catch(function(err) {
+        state.items = [];
+        renderItems();
+        setTask('作品拉取失败：' + (err.message || ''), true);
+        return [];
+      });
+    }
     var url = '/api/ip-content/source-items?source_type=user_post&limit=200&competitor_id=' + encodeURIComponent(peer.id)
       + '&platform=' + encodeURIComponent(peer.platform);
     return apiJson(url).then(function(data) {
@@ -496,9 +513,10 @@
   function renderItems() {
     var host = $('wctItemList');
     var hint = $('wctItemHint');
+    var isSph = !!(state.peer && state.peer.platform === 'wechat_channels');
     if (hint) hint.textContent = state.items.length
-      ? ('已入库 ' + state.items.length + ' 条，点右上角「同步作品」拉最新。')
-      : '还没同步过，点右上角「同步作品」。';
+      ? (isSph ? ('已拉取 ' + state.items.length + ' 条作品（含解密参数）。') : ('已入库 ' + state.items.length + ' 条，点右上角「同步作品」拉最新。'))
+      : (isSph ? '暂无作品，点右上角「同步作品」后重进详情。' : '还没同步过，点右上角「同步作品」。');
     if (!host) return;
     if (!state.items.length) { host.innerHTML = '<div class="wct-empty">暂无作品（点右上角「同步作品」）。</div>'; return; }
     host.innerHTML = state.items.map(function(item, index) {
