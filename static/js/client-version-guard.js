@@ -52,7 +52,17 @@
         ].join(';');
         document.body.appendChild(el);
       }
-      el.textContent = text + (detail ? '　' + detail : '');
+      el.textContent = '';
+      var span = document.createElement('span');
+      span.textContent = text + (detail ? '　' + detail : '');
+      el.appendChild(span);
+      // 不再自动刷新页面（会白屏闪一下）：给一个按钮，用户点了才刷
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = '立即刷新界面';
+      btn.style.cssText = 'margin-left:12px;padding:2px 10px;border:0;border-radius:4px;background:#fff;color:#b91c1c;font-weight:700;cursor:pointer';
+      btn.onclick = function () { try { location.reload(); } catch (err) {} };
+      el.appendChild(btn);
       document.title = '【版本不一致】' + document.title.replace(/^【版本不一致】/, '');
     } catch (err) {
       if (window.console) console.warn('[version-guard] banner failed', err);
@@ -100,14 +110,11 @@
           '请关闭客户端再打开，让后端跟着新代码重启'
         );
       }
-      // 版本不一致时自动强刷一次（后端刚被 launcher 重启的场景一次就好）；
-      // 同一标签页会话只自动刷一次，之后只挂横幅提示，避免无限重载把界面卡死。
-      if ((state.mismatch || state.missingRoutes.length || state.backend_stale) && !window[RELOAD_KEY] && !alreadyReloadedThisSession()) {
+      // 一律不自动 reload（自动刷新=白屏闪一下，用户明确要求不允许跳闪）；
+      // 只挂横幅 + 「立即刷新界面」按钮，由用户自己点。
+      if (state.mismatch || state.missingRoutes.length || state.backend_stale) {
         window[RELOAD_KEY] = true;
         markReloadedThisSession();
-        setTimeout(function () {
-          try { location.reload(); } catch (err) { /* ignore */ }
-        }, 1200);
       }
       window.__lobsterVersionState = state;
       return state;

@@ -709,6 +709,19 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
     return '';
   }
 
+  /** 视图是真的没渲染出来吗？（只有"空/缺失"才值得重画；正常渲染的视图绝不重画 → 不会闪） */
+  function lobsterViewLooksBroken(view) {
+    try {
+      var el = document.getElementById('content-' + view);
+      if (!el) el = document.querySelector('[data-view="' + view + '"]');
+      if (!el) return true;
+      var html = String(el.innerHTML || '').trim();
+      return html.length < 20;
+    } catch (e) {
+      return false;   // 判断不了就不重画（宁可不刷新，也不闪）
+    }
+  }
+
   function runRecovery(meta) {
     meta = meta || {};
     var view = currentRecoveryView(meta.view);
@@ -728,15 +741,23 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
       }
     }
 
+    // 视图已经正常渲染：网络抖动不该重画整个界面（重画=白屏闪一下）。
+    // 交给发起请求的那段代码自己重试（fetch 包装里已有退避重试）。
+    if (!lobsterViewLooksBroken(view)) {
+      if (window.console && window.console.debug) {
+        window.console.debug('[network-recovery] view 正常，跳过重绘 view=' + view + ' reason=' + (meta.reason || ''));
+      }
+      return Promise.resolve(false);
+    }
+
     if (typeof window.showAppView === 'function') {
+      if (window.console && window.console.warn) {
+        window.console.warn('[network-recovery] view 是空的，重画一次 view=' + view);
+      }
       return Promise.resolve(window.showAppView(view)).then(function() { return true; }).catch(function() { return false; });
     }
 
-    if (typeof window.location !== 'undefined' && window.location && typeof window.location.reload === 'function') {
-      window.location.reload();
-      return Promise.resolve(true);
-    }
-
+    // 不再用 location.reload()：整页刷新必然白屏闪一次
     return Promise.resolve(false);
   }
 
