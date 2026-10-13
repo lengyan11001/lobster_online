@@ -1,7 +1,7 @@
 {
-  "version": "2.0.113",
-  "build": 408,
-  "applied_at": "2026-10-13T11:39:55+08:00",
-  "note": "2.0.113：①视频复刻任务不再因 [WinError 5] 拒绝访问 失败 —— Windows 上 os.replace 被并发读取(前端轮询读 workflow.json)挡住，改为退避重试+仍失败就地写入 ②复刻卡片/详情的「原素材」显式走现成的视频兼容链路(H.265/HEVC/WebM 由 /api/media/compat 按需临时转 H.264)并生成 poster 封面图 ③添加复刻弹窗明确说明本地无法预览的编码创建后会自动转码展示",
-  "bundle_sha256": "feb5d003c970d287ff12bea402623644df5b2effd7593c5aa3b399b9b19282ff"
+  "version": "2.0.114",
+  "build": 409,
+  "applied_at": "2026-10-13T11:51:12+08:00",
+  "note": "2.0.114：视频复刻「添加」选完文件立即转码出可播放预览 —— 素材落盘后，已是 H.264 直接用，H.265/HEVC/MKV 调 media_compat 转成 H.264/AAC 并出 poster 封面，预览直接播转换结果；创建记录时用 preview_id 复用同一份文件，不重复上传；只在进行中/失败时显示状态（不再只弹提示）；预览目录 _preview/<uid>/<id> 24h 自动清理",
+  "bundle_sha256": "dcfe00da2ba276e64c9d215aad3998f1bc55c10259a21b79250a7f52616e63fc"
 }
