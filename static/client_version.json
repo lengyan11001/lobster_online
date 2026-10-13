@@ -1,7 +1,7 @@
 {
-  "version": "2.0.117",
-  "build": 412,
-  "applied_at": "2026-10-13T23:55:39+08:00",
-  "note": "2.0.117：①桌面壳抗闪（WebView2 底板同色 + 关 GPU 合成/DirectComposition + 桌面壳内禁用 backdrop-filter，修鼠标悬停右上角/滚动界面闪一下）②界面跳闪取证日志（谁重画/谁滚动/鼠标位置+调用栈，随诊断包上传）③修 index.html 模板 token 冲突导致的每次加载 SyntaxError ④微信会话读不到时抓 UIA 现场快照",
-  "bundle_sha256": "65b9e05808ab78dcf821fb16064996ca67705b22d4a874b651d2a7c911e31c58"
+  "version": "2.0.118",
+  "build": 413,
+  "applied_at": "2026-10-14T00:28:14+08:00",
+  "note": "2.0.118：紧急修复启动崩溃 —— 撤掉 build 412 里对 pywebview CoreWebView2CreationProperties 的 Python 代理（它让 WebView2 初始化直接崩、所有客户端起不来）；保留底板同色 + 桌面壳禁用 backdrop-filter。另：启动期不再联网补 ffmpeg/ffprobe（install*.bat 加跳过开关），界面取证 401 修复 + 启动噪声过滤。",
+  "bundle_sha256": "30dd6f5677668620634ca0503f0fd7691d8a0464e0c4f580cfc73da90fd336c9"
 }
