@@ -1,7 +1,7 @@
 {
-  "version": "2.0.116",
-  "build": 411,
-  "applied_at": "2026-10-13T22:52:19+08:00",
-  "note": "2.0.116：①彻底消除界面跳闪 —— 网络恢复不再把整个视图重绘（视图正常时 0 重绘，只有视图确实空/缺失才重画一次），并移除该路径的整页 reload；版本守卫不再自动刷新，改为红条+「立即刷新界面」按钮 ②作品提取：作品封面为空时从 raw 兜底取(thumbUrl+签名token)；音频上传超时 180s→600s 且报错带音频体积/地址 ③把 poll loop / proxy request 的空错误补上异常类型",
-  "bundle_sha256": "4f2a632fa770278dc11b447fd0c29c610cd1e03e97f981b011793a7aad3d67e0"
+  "version": "2.0.117",
+  "build": 412,
+  "applied_at": "2026-10-13T23:55:39+08:00",
+  "note": "2.0.117：①桌面壳抗闪（WebView2 底板同色 + 关 GPU 合成/DirectComposition + 桌面壳内禁用 backdrop-filter，修鼠标悬停右上角/滚动界面闪一下）②界面跳闪取证日志（谁重画/谁滚动/鼠标位置+调用栈，随诊断包上传）③修 index.html 模板 token 冲突导致的每次加载 SyntaxError ④微信会话读不到时抓 UIA 现场快照",
+  "bundle_sha256": "65b9e05808ab78dcf821fb16064996ca67705b22d4a874b651d2a7c911e31c58"
 }
