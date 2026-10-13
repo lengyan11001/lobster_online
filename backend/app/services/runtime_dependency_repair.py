@@ -330,6 +330,17 @@ def _repair_media_tools(timeout: int) -> dict[str, Any]:
     }
 
 
+def repair_media_tools(timeout: int = 900) -> dict[str, Any]:
+    """公开入口：补齐 deps/ffmpeg 下的 ffmpeg / ffprobe。
+
+    供各技能自己的「安装运行依赖」复用（例如视频复刻 hypit_local）：这些技能的自检里
+    本来就查 ffmpeg/ffprobe 两项，但它们原先只装 npm/python 依赖，缺 ffprobe 的机器
+    点多少次「安装运行依赖」都补不上，最后自检只报「缺少 ffprobe」。
+    """
+    return _repair_media_tools(timeout)
+
+
+
 def repair_runtime_dependencies() -> dict[str, Any]:
     if not _REPAIR_LOCK.acquire(blocking=False):
         raise RuntimeDependencyRepairBusy("依赖修复正在运行，请等待当前任务完成")

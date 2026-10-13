@@ -30,6 +30,7 @@ from .creative_film_studio import (
     _server_api_url,
 )
 from .wechat_article import _extract_image_url
+from ..services.runtime_dependency_repair import repair_media_tools
 
 
 logger = logging.getLogger(__name__)
@@ -2697,13 +2698,13 @@ def _runtime_dependencies() -> list[dict[str, Any]]:
             "key": "ffmpeg",
             "label": "ffmpeg 音视频工具",
             "ok": bool(ffmpeg),
-            "detail": str(ffmpeg or "未找到（应在客户端 deps/ffmpeg/ffmpeg.exe）"),
+            "detail": str(ffmpeg or "未找到（点「安装运行依赖」会自动下载到 deps/ffmpeg/ffmpeg.exe）"),
         },
         {
             "key": "ffprobe",
             "label": "ffprobe 视频信息工具",
             "ok": bool(ffprobe),
-            "detail": str(ffprobe or "未找到（应在客户端 deps/ffmpeg/ffprobe.exe）"),
+            "detail": str(ffprobe or "未找到（点「安装运行依赖」会自动下载到 deps/ffmpeg/ffprobe.exe）"),
         },
         {
             "key": "engine",
@@ -2756,6 +2757,18 @@ async def _run_runtime_install() -> None:
             raise RuntimeError("未找到 npm（客户端自带 nodejs/npm.cmd）")
         if not _installed_chrome_path():
             raise RuntimeError("未找到渲染浏览器（客户端自带 browser_chromium 或系统 Chrome）")
+        # 0) 音视频工具：视频复刻要用 ffmpeg/ffprobe（客户端 deps/ffmpeg）。
+        #    原先这里只装 npm/python 依赖，缺 ffprobe 的机器点多少次「安装运行依赖」
+        #    都补不上，最后自检只会报「缺少 ffprobe」。这里复用统一的音视频工具修复。
+        _write_runtime_state(stage="检查音视频工具（ffmpeg/ffprobe）", percent=6)
+        try:
+            media = await asyncio.to_thread(repair_media_tools, 900)
+            _append_runtime_log(
+                "音视频工具%s：%s" % ("已就绪" if media.get("ok") else "未补齐", media.get("message") or "")
+            )
+        except Exception as exc:  # noqa: BLE001 工具修复失败不阻断，末尾自检会给出明确缺失项
+            _append_runtime_log("音视频工具修复失败（不阻断后续步骤）：%s" % str(exc)[:300])
+
         # 1) 发行包：没有就下载解包到 <ROOT>/aihypit/hypit
         if not root:
             _write_runtime_state(stage="准备 Hypit 发行包", percent=8)
