@@ -1,7 +1,7 @@
 {
-  "version": "2.0.112",
-  "build": 407,
-  "applied_at": "2026-10-13T11:24:39+08:00",
-  "note": "2.0.112：①视频复刻卡片/详情的视频看不到封面、没有预览、播放没内容 —— 媒体接口原先只认 Bearer，而 <video>/<img> 发不出该头一律 401；改为复用短期 HMAC 签名(?uid&expiry&token, Bearer 仍兼容)，列表/详情/上传响应/作业详情的媒体地址全部带签名 ②参考素材按原扩展名落盘(reference.mov/.mkv/.webm)但前端写死 reference.mp4，非 mp4 素材 404；后端改为下发真实 reference_url ③成片地址优先公网 https，没有才用本机签名地址",
-  "bundle_sha256": "3c8b8547a118422c159dd275639e8680f117bcc281ded9d9339a43e8443128fb"
+  "version": "2.0.113",
+  "build": 408,
+  "applied_at": "2026-10-13T11:39:55+08:00",
+  "note": "2.0.113：①视频复刻任务不再因 [WinError 5] 拒绝访问 失败 —— Windows 上 os.replace 被并发读取(前端轮询读 workflow.json)挡住，改为退避重试+仍失败就地写入 ②复刻卡片/详情的「原素材」显式走现成的视频兼容链路(H.265/HEVC/WebM 由 /api/media/compat 按需临时转 H.264)并生成 poster 封面图 ③添加复刻弹窗明确说明本地无法预览的编码创建后会自动转码展示",
+  "bundle_sha256": "feb5d003c970d287ff12bea402623644df5b2effd7593c5aa3b399b9b19282ff"
 }
