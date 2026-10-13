@@ -2796,7 +2796,7 @@ async def _run_runtime_install() -> None:
                 _append_runtime_log("运行环境已存在，复用并重新选中现有 Profile（幂等）")
                 await asyncio.to_thread(
                     _stream_hypit_command, root, node,
-                    ["runtime", "use", "--workspace", str(workspace), str(profile_path)], workspace,
+                    ["runtime", "use", str(profile_path), "--workspace", str(workspace)], workspace,
                 )
             else:
                 await asyncio.to_thread(
