@@ -67,6 +67,25 @@
     if (!value) return '';
     return isAbsoluteUrl(value) ? value : localBase() + value;
   }
+  // app.js 里已有全局的视频兼容机制（lobsterVideoCompatUrl -> /api/media/compat，
+  // 后端按需把 H.265/HEVC/WebM 临时转成 H.264 再给浏览器播，并出海报图）。
+  // 原来只靠全局 MutationObserver 隐式改写，复刻这里没生效；这里显式走同一套。
+  function compatSrc(raw) {
+    var value = String(raw || '');
+    if (!value) return '';
+    if (typeof window.lobsterVideoCompatUrl === 'function') {
+      return window.lobsterVideoCompatUrl(value, '', '') || value;
+    }
+    return value;
+  }
+  function compatPoster(raw) {
+    var value = String(raw || '');
+    if (!value) return '';
+    if (typeof window.lobsterVideoPosterUrl === 'function') {
+      return window.lobsterVideoPosterUrl(value, 'video-cover.jpg') || '';
+    }
+    return '';
+  }
   function showMessage(text, isError) {
     var box = $('hypitMessage');
     if (!box) return;
@@ -201,10 +220,12 @@
   function previewHtml(item) {
     var referencePath = item.reference_url ||
       ('/api/local/hypit/jobs/' + encodeURIComponent(item.job_id) + '/asset/reference.mp4');
-    var reference = item.has_reference ? assetUrl(referencePath) : '';
+    var reference = item.has_reference ? referencePath : '';
     var sheet = assetUrl(item.contact_sheet_url || '');
     var original = reference
-      ? '<video class="hypit-preview-video" src="' + escapeAttr(reference) + '" muted playsinline preload="metadata"></video>'
+      ? '<video class="hypit-preview-video" src="' + escapeAttr(compatSrc(reference)) +
+        '" poster="' + escapeAttr(compatPoster(reference)) +
+        '" muted playsinline preload="metadata" controls></video>'
       : (sheet ? '<img class="hypit-preview-img" src="' + escapeAttr(sheet) + '" alt="">' : '<span class="hypit-preview-empty">原素材已删除</span>');
     // 成片优先用公网 https（无需鉴权、加载快）；没有时用本机地址（后端已带短期签名）
     var outputSrc = isAbsoluteUrl(item.video_url) ? item.video_url : (item.video_local_url || item.video_url);
@@ -301,7 +322,8 @@
       if (workflow.error) blocks.push('<div class="hypit-install-error">' + escapeHtml(String(workflow.error).slice(0, 400)) + '</div>');
       else if (workflow.stage) blocks.push('<div class="hypit-detail-stage">' + escapeHtml(String(workflow.stage)) + '</div>');
       if (assets.reference) {
-        blocks.push('<h4>原素材</h4><video class="hypit-detail-video" src="' + escapeAttr(assetUrl(assets.reference)) + '" controls playsinline preload="metadata"></video>');
+        blocks.push('<h4>原素材</h4><video class="hypit-detail-video" src="' + escapeAttr(compatSrc(assets.reference)) +
+          '" poster="' + escapeAttr(compatPoster(assets.reference)) + '" controls playsinline preload="metadata"></video>');
       }
       if (assets.contact_sheet) {
         blocks.push('<h4>关键帧联系表</h4><img class="hypit-detail-sheet" src="' + escapeAttr(assetUrl(assets.contact_sheet)) + '" alt="">');
@@ -365,11 +387,11 @@
       // 这不是文件坏了，创建记录后服务端用 ffmpeg 正常处理，所以只提示、不拦。
       preview.onloadedmetadata = function () {
         if (Number(preview.videoWidth || 0) === 0) {
-          setPreviewHint('浏览器无法预览这个视频的画面（多为 H.265/HEVC 编码）：时长能读出来但不显示图像，也不影响创建记录——服务端会用 ffmpeg 正常处理并出片。');
+          setPreviewHint('这是浏览器解不了的编码（多为 H.265/HEVC）：本地预览只能看到时长。创建记录后会自动转成 H.264 播放、并生成封面图，不影响出片。');
         }
       };
       preview.onerror = function () {
-        setPreviewHint('浏览器无法播放这个视频（编码或封装不被支持，例如 MKV/H.265）：不影响创建记录——服务端会用 ffmpeg 正常处理并出片。');
+        setPreviewHint('这是浏览器解不了的封装/编码（例如 MKV、H.265）：创建记录后会自动转成 H.264 播放、并生成封面图，不影响出片。');
       };
     }
     var selected = $('hypitSelectedFile');
