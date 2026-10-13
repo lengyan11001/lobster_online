@@ -1,17 +1,22 @@
-"""桌面壳抗闪（2026-10-13）。
+"""桌面壳抗闪（2026-10-13 引入，2026-10-14 修正）。
 
-现象：部分机器上鼠标移到右上角、或滚动界面时，WebView2 整屏闪一下。
-根因：WebView2 硬件合成/DirectComposition 重绘会短暂露出默认底板色，带
-      backdrop-filter 的浮层每次重绘又要回读底图，把抖动放大成可见白闪。
-修复：① 窗口底板色 = 界面底色 ② 关掉 GPU 合成/DirectComposition ③ 桌面壳里禁 backdrop-filter
+背景：
+- 2026-10-13 那版为了关 WebView2 的 GPU 合成，把 pywebview 的
+  CoreWebView2CreationProperties 换成了 Python 代理对象；pywebview 里
+  `self.webview.CreationProperties = props` 拿到 Python 对象、不是 .NET 类型，
+  WebView2 初始化直接崩（真机 exit=0xE0434352 CLR 异常 / 窗口永远不出来），
+  升级到 build 412 的机器全部启动不了。
+- 现在只保留零风险的两件事：窗口底板色 = 界面底色；桌面壳里禁用 backdrop-filter（纯 CSS）。
 
-这里验证壳侧两件事：窗口底板色、WebView2 启动参数注入。
+本文件守住这两点，并且**禁止再 monkeypatch pywebview 内部对象**。
 """
 import sys
-import types
+from pathlib import Path
 from types import SimpleNamespace
 
 from desktop import launcher
+
+LAUNCHER_SRC = (Path(__file__).resolve().parent / "desktop" / "launcher.py").read_text(encoding="utf-8")
 
 
 class _ClosingEvent:
@@ -23,58 +28,19 @@ class _ClosingEvent:
         return self
 
 
-class _FakeCreationProperties:
-    def __init__(self):
-        self.UserDataFolder = None
-        self.BrowserExecutableFolder = None
-        self.AdditionalBrowserArguments = ""
-
-
-def _install_fake_edgechromium(monkeypatch):
-    pkg = types.ModuleType("webview")
-    pkg.__path__ = []
-    platforms = types.ModuleType("webview.platforms")
-    platforms.__path__ = []
-    edge = types.ModuleType("webview.platforms.edgechromium")
-    edge.CoreWebView2CreationProperties = _FakeCreationProperties
-    pkg.settings = {}
-    pkg.platforms = platforms
-    platforms.edgechromium = edge
-    monkeypatch.setitem(sys.modules, "webview", pkg)
-    monkeypatch.setitem(sys.modules, "webview.platforms", platforms)
-    monkeypatch.setitem(sys.modules, "webview.platforms.edgechromium", edge)
-    return edge
-
-
-def test_apply_desktop_webview_args_keeps_pywebview_args(monkeypatch):
-    monkeypatch.delenv("LOBSTER_DESKTOP_WEBVIEW_ARGS", raising=False)
-    edge = _install_fake_edgechromium(monkeypatch)
-
-    assert launcher.apply_desktop_webview_args() is True
-
-    props = edge.CoreWebView2CreationProperties()
-    # pywebview 在 EdgeChrome.__init__ 里就是这么赋值的（直接覆盖，不看环境变量）
-    props.AdditionalBrowserArguments = "--disable-features=ElasticOverscroll"
-
-    assert props.AdditionalBrowserArguments.startswith("--disable-features=ElasticOverscroll")
-    assert "--disable-gpu-compositing" in props.AdditionalBrowserArguments
-    assert "--disable-direct-composition" in props.AdditionalBrowserArguments
-    # 代理对象要能正常透传 pywebview 用到的其它属性
-    props.UserDataFolder = r"C:\\tmp\\ud"
-    assert props.UserDataFolder == r"C:\\tmp\\ud"
-
-
-def test_desktop_webview_args_can_be_disabled(monkeypatch):
-    monkeypatch.setenv("LOBSTER_DESKTOP_WEBVIEW_ARGS", "")
-    assert launcher.desktop_webview_args() == ""
-    assert launcher.apply_desktop_webview_args() is False
+def test_launcher_never_patches_pywebview_internals():
+    """build 412 就是踩了这个坑：把 .NET 的 CreationProperties 换成 Python 代理。"""
+    code = "\n".join(
+        line for line in LAUNCHER_SRC.splitlines() if not line.strip().startswith("#")
+    )
+    assert "CoreWebView2CreationProperties" not in code
+    assert "webview.platforms" not in code
+    assert "AdditionalBrowserArguments" not in code
+    assert "disable-gpu-compositing" not in code
+    assert "apply_desktop_webview_args" not in code
 
 
 def test_run_window_uses_shell_background_color(monkeypatch):
-    monkeypatch.delenv("LOBSTER_DESKTOP_WEBVIEW_ARGS", raising=False)
-    monkeypatch.delenv("LOBSTER_DESKTOP_BG_COLOR", raising=False)
-    edge = _install_fake_edgechromium(monkeypatch)
-
     recorded = {}
     window = SimpleNamespace(
         events=SimpleNamespace(closing=_ClosingEvent()),
@@ -86,13 +52,12 @@ def test_run_window_uses_shell_background_color(monkeypatch):
         recorded["kwargs"] = kwargs
         return window
 
-    def start(callback, args, **_kwargs):
-        recorded["started"] = True
-        return callback(*args)
-
-    monkeypatch.setitem(sys.modules, "webview", SimpleNamespace(
-        settings={}, create_window=create_window, start=start,
-    ))
+    fake = SimpleNamespace(
+        settings={},
+        create_window=create_window,
+        start=lambda callback, args, **_kwargs: callback(*args),
+    )
+    monkeypatch.setitem(sys.modules, "webview", fake)
     monkeypatch.setattr(launcher, "webview2_runtime_available", lambda: True)
     monkeypatch.setattr(launcher, "ensure_desktop_runtime", lambda _env: True)
     monkeypatch.setattr(launcher, "find_fixed_webview2_runtime", lambda: None)
@@ -108,8 +73,13 @@ def test_run_window_uses_shell_background_color(monkeypatch):
     )
 
     assert ok is True
-    assert recorded["started"] is True
     assert recorded["kwargs"]["background_color"] == launcher.SHELL_BACKGROUND_COLOR
     assert launcher.SHELL_BACKGROUND_COLOR.lower() == "#fbfaf8"
-    # 启动参数也注入了（否则 create_window 之后 create_window 里的 pywebview 会覆盖掉）
-    assert getattr(edge.CoreWebView2CreationProperties, "_lobster_webview_args_wrapped", False) is True
+
+
+def test_desktop_shell_css_disables_backdrop_filter():
+    css = (Path(__file__).resolve().parent / "static" / "css" / "common.css").read_text(encoding="utf-8")
+    assert "html.is-desktop-shell" in css
+    assert "backdrop-filter: none !important" in css
+    html = (Path(__file__).resolve().parent / "static" / "index.html").read_text(encoding="utf-8")
+    assert "is-desktop-shell" in html
