@@ -144,8 +144,8 @@ def main() -> None:
             if path_part in {"/", "/index.html"}:
                 template = (STATIC / "index.html").read_text(encoding="utf-8")
                 overseas_flag = "true" if _is_truthy(_env_value("LOBSTER_IS_OVERSEAS_USER", "")) else "false"
-                rendered = template.replace("__LOBSTER_SERVER_PUBLIC__", json.dumps(api_base)[1:-1]).replace(
-                    "__LOBSTER_IS_OVERSEAS_USER__", overseas_flag
+                rendered = template.replace("__LOBSTER_SERVER_PUBLIC_VALUE__", json.dumps(api_base)[1:-1]).replace(
+                    "__LOBSTER_IS_OVERSEAS_VALUE__", overseas_flag
                 )
                 data = rendered.encode("utf-8")
                 self.send_response(200)

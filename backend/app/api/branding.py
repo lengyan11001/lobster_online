@@ -148,11 +148,11 @@ def render_index_html(template: str, requested_mark: str = "") -> str:
         for line in hero_subtitle.splitlines()
     )
     values = {
-        "__LOBSTER_BRANDING_AVAILABLE__": "true" if available else "false",
-        "__LOBSTER_SERVER_PUBLIC__": str(
+        "__LOBSTER_BRANDING_AVAILABLE_VALUE__": "true" if available else "false",
+        "__LOBSTER_SERVER_PUBLIC_VALUE__": str(
             (getattr(settings, "auth_server_base", None) or "https://bhzn.top").strip().rstrip("/")
         ),
-        "__LOBSTER_IS_OVERSEAS_USER__": "true" if bool(getattr(settings, "lobster_is_overseas_user", False)) else "false",
+        "__LOBSTER_IS_OVERSEAS_VALUE__": "true" if bool(getattr(settings, "lobster_is_overseas_user", False)) else "false",
         "__LOBSTER_BRAND_MARK__": str(branding.get("mark") or "").strip().lower() if available else "",
         "__LOBSTER_DOCUMENT_TITLE__": str(branding.get("document_title") or "") if available else "",
         "__LOBSTER_FAVICON_32__": str(icons.get("favicon_32") or _EMPTY_IMAGE) if available else _EMPTY_IMAGE,

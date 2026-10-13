@@ -8,9 +8,11 @@ import platform
 import re
 import sys
 import tempfile
+import threading
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -41,6 +43,9 @@ _LOG_CANDIDATES = [
     # 个人 WhatsApp 接管（桌面版 UIA）：诊断包里带上，才能看清"没识别到窗口"到底是哪种情况
     "logs/native_whatsapp.jsonl",
     "logs/native_whatsapp.jsonl.1",
+    # 客户端界面「跳闪/跳动」取证（鼠标一动就闪的现场），随诊断包一起带走
+    "logs/client_ui_trace.jsonl",
+    "logs/client_ui_trace.jsonl.1",
     "app.log",
     "backend.log",
     "backend.log.1",
@@ -382,3 +387,82 @@ async def upload_logs_diagnostics(
         },
         "server_response": payload,
     }
+
+
+# ---------------------------------------------------------------------------
+# 客户端界面「跳闪 / 跳动」取证（2026-10-13）
+#
+# 现象：某些页面上鼠标一移动，界面就闪/跳几下；但服务端日志里干干净净——
+#      没有 GET /（没有 reload）、没有重新拉视图 HTML。
+# 做法：static/js/ui-jump-trace.js 在客户端记录「谁把内容重画了、谁把页面滚了、
+#      出事前鼠标停在哪、调用栈是谁」，判定成一次跳闪就 POST 到这里落盘，
+#      文件进 _LOG_CANDIDATES，下次上传诊断包就能直接看到触发点。
+# ---------------------------------------------------------------------------
+_UI_TRACE_FILE = (_BASE / "logs" / "client_ui_trace.jsonl").resolve()
+_UI_TRACE_MAX_BYTES = 2 * 1024 * 1024
+_UI_TRACE_LOCK = threading.Lock()
+
+
+def append_client_ui_trace(payload: Any) -> int:
+    """追加一条界面取证记录到 logs/client_ui_trace.jsonl，返回写入字节数。"""
+    record = payload if isinstance(payload, dict) else {"payload": payload}
+    record.setdefault("received_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    data = (json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
+    path = _UI_TRACE_FILE
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    with _UI_TRACE_LOCK:
+        try:
+            if path.exists() and path.stat().st_size + len(data) > _UI_TRACE_MAX_BYTES:
+                rotated = path.with_name(path.name + ".1")
+                if rotated.exists():
+                    rotated.unlink()
+                path.replace(rotated)
+        except OSError:
+            pass
+        with path.open("ab") as handle:
+            handle.write(data)
+    return len(data)
+
+
+@router.post("/api/client-ui-trace", summary="客户端界面跳闪/跳动取证上报")
+async def post_client_ui_trace(
+    request: Request,
+    _: _ServerUser = Depends(get_current_user_media_edit),
+):
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {"payload": payload}
+    try:
+        written = append_client_ui_trace(payload)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"write failed: {exc}") from exc
+    events = payload.get("events")
+    logger.info(
+        "[ui-trace] POST events=%s reason=%s view=%s mouse_over=%s bytes=%s path=%s",
+        len(events) if isinstance(events, list) else "-",
+        payload.get("reason") or "",
+        payload.get("view") or "",
+        ((payload.get("mouse") or {}) if isinstance(payload.get("mouse"), dict) else {}).get("over") or "",
+        written,
+        _UI_TRACE_FILE,
+    )
+    return {"ok": True, "written": written, "path": str(_UI_TRACE_FILE)}
+
+
+@router.get("/api/client-ui-trace", summary="读取客户端界面取证日志（末尾 N 条）")
+async def get_client_ui_trace(
+    tail: int = Query(default=200, ge=1, le=5000, description="返回最后 N 条"),
+    _: _ServerUser = Depends(get_current_user_media_edit),
+):
+    path = _UI_TRACE_FILE
+    if not path.exists():
+        return PlainTextResponse("(空) 还没有界面取证记录", media_type="text/plain; charset=utf-8")
+    loop = asyncio.get_event_loop()
+    text, _total = await loop.run_in_executor(None, _read_log_tail, path, tail)
+    return PlainTextResponse(text or "(空)", media_type="text/plain; charset=utf-8")

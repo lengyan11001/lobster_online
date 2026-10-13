@@ -9,12 +9,16 @@
       }
     } catch (e) {}
   </script>
+  <script src="/static/js/ui-jump-trace.js?v=20261013-ui-jump-trace-v1"></script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script>
-    window.__LOBSTER_BRANDING_AVAILABLE__ = __LOBSTER_BRANDING_AVAILABLE__;
-    window.__LOBSTER_SERVER_PUBLIC__ = '__LOBSTER_SERVER_PUBLIC__';
-    window.__LOBSTER_CONFIGURED_OVERSEAS = __LOBSTER_IS_OVERSEAS_USER__;
+    // 右边 __LOBSTER_*_VALUE__ 才是服务端替换位（branding.py / serve_online_client.py）。
+    // 左边是 JS 真正要用的全局名，两边不能写同一个 token：以前两边写一样，替换后属性名
+    // 里出现了保留字和带冒号的 URL → 整段脚本 SyntaxError，下面的全局变量全都没赋值。
+    window.__LOBSTER_BRANDING_AVAILABLE__ = __LOBSTER_BRANDING_AVAILABLE_VALUE__;
+    window.__LOBSTER_SERVER_PUBLIC__ = '__LOBSTER_SERVER_PUBLIC_VALUE__';
+    window.__LOBSTER_CONFIGURED_OVERSEAS = __LOBSTER_IS_OVERSEAS_VALUE__;
     window.__LOBSTER_IS_OVERSEAS_USER = !!window.__LOBSTER_CONFIGURED_OVERSEAS;
   </script>
   <title>__LOBSTER_DOCUMENT_TITLE__</title>

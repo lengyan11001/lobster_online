@@ -39,6 +39,9 @@ ACCOUNTS_DIR = STATE_DIR / "accounts"
 DB_PATH = ROOT_DIR / "data" / "native_wechat_engine.db"
 LOG_DIR = ROOT_DIR / "logs"
 NATIVE_WECHAT_DIAGNOSTIC_LOG = LOG_DIR / "native_wechat_diagnostics.jsonl"
+
+# 最近一次「读不到微信会话」时的 UIA 现场（下一次诊断包会带出去）
+_LAST_WECHAT_UIA_SNAPSHOT: Dict[str, Any] = {}
 NATIVE_WECHAT_AUTO_REPLY_LOG = LOG_DIR / "native_wechat_auto_reply.jsonl"
 NATIVE_WECHAT_AUTO_REPLY_LOG_DISABLE_MARKER = LOG_DIR / "native_wechat_auto_reply.disabled"
 try:
@@ -484,6 +487,66 @@ def _raw_wechat_window_candidates(*, max_items: int = 120) -> Dict[str, Any]:
     return result
 
 
+def _safe_foreground_hwnd() -> int:
+    try:
+        import win32gui  # type: ignore
+
+        return int(win32gui.GetForegroundWindow() or 0)
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _capture_wechat_uia_failure(account_id: str, root: Any = None) -> None:
+    """会话读不到时，把微信窗口当时的 UIA 现场抓一份，随诊断包上传。
+
+    线上反复出现「界面明明有会话、驱动读不到」（wxauto4 + UIA 双失败），只看错误
+    文本判断不出是窗口没在前台、Tab 不在聊天页、还是控件类名变了。这里一次抓齐：
+    节点数、控件类名/类型直方图、会话候选样本、以及深度<=6 的前 200 个节点。
+    """
+    global _LAST_WECHAT_UIA_SNAPSHOT
+    snapshot: Dict[str, Any] = {
+        "account_id": str(account_id or ""),
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    try:
+        hwnd = 0
+        if root is None:
+            hwnd = int(_local_wechat_hwnd(account_id) or 0)
+            snapshot["hwnd"] = hwnd
+            if hwnd:
+                import uiautomation as auto  # type: ignore
+
+                root = auto.ControlFromHandle(hwnd)
+        else:
+            try:
+                hwnd = int(getattr(root, "NativeWindowHandle", 0) or 0)
+            except Exception:  # noqa: BLE001
+                hwnd = 0
+            snapshot["hwnd"] = hwnd
+        snapshot["foreground_hwnd"] = _safe_foreground_hwnd()
+        snapshot["foreground_is_wechat"] = bool(hwnd) and snapshot["foreground_hwnd"] == hwnd
+        if root is not None:
+            page = _diagnose_uia_page(root, include_tree=False)
+            page["tree_sample"] = [
+                _uia_node_debug(node, 0)
+                for node in _uia_walk(root, max_depth=6, max_nodes=200)
+            ]
+            snapshot.update(page)
+    except Exception as exc:  # noqa: BLE001
+        snapshot["error"] = str(exc)
+    _LAST_WECHAT_UIA_SNAPSHOT = _json_safe_value(snapshot)
+
+
+def _merge_wechat_uia_snapshot(extra: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """把最近一次 UIA 现场塞进诊断记录，只塞一次。"""
+    global _LAST_WECHAT_UIA_SNAPSHOT
+    merged: Dict[str, Any] = dict(extra or {})
+    if _LAST_WECHAT_UIA_SNAPSHOT and "wechat_uia_snapshot" not in merged:
+        merged["wechat_uia_snapshot"] = _LAST_WECHAT_UIA_SNAPSHOT
+        _LAST_WECHAT_UIA_SNAPSHOT = {}
+    return merged
+
+
 def create_native_wechat_diagnostic(
     operation: str,
     *,
@@ -508,7 +571,7 @@ def create_native_wechat_diagnostic(
         "recognized_windows": [],
         "raw_windows": {},
         "ensure_without_launch": {},
-        "extra": _json_safe_value(extra or {}),
+        "extra": _json_safe_value(_merge_wechat_uia_snapshot(extra)),
     }
     try:
         for name in (
@@ -9400,6 +9463,7 @@ def _sync_recent_sessions_from_wxauto4(
             # _run_local_driver_operation 的重建驱动 + 重试路径处理。
             empty_scan_visible = _uia_visible_session_count(account_id)
             if empty_scan_visible > 0:
+                _capture_wechat_uia_failure(account_id)
                 raise RuntimeError(
                     "微信会话列表读取为空，但界面可见 %d 个会话（wxauto 驱动疑似失效）" % empty_scan_visible
                 )
@@ -10115,6 +10179,7 @@ def _sync_local_sessions_from_uia(
         scan = _uia_collect_all_sessions(hwnd)
         sessions = list(scan.get("items") or [])
     if not sessions:
+        _capture_wechat_uia_failure(account_id, root=root)
         if passive:
             raise RuntimeError("被动收消息未读取到左侧会话，请确认微信当前停留在聊天页；本次不会自动激活或切换微信")
         raise RuntimeError("未读取到微信左侧会话，请确认微信主窗口在聊天页")
