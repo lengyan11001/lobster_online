@@ -142,6 +142,43 @@
     var raw = item && item.raw && typeof item.raw === 'object' ? item.raw : {};
     return String(getPath(raw, 'video.play_addr.url_list.0') || getPath(raw, 'play_url') || '');
   }
+  function appendToken(url, token) {
+    var value = String(url || '').trim();
+    var tok = String(token || '').trim().replace(/^[&?]/, '');
+    if (!value || !tok || value.indexOf('token=') >= 0) return value;
+    return value + (value.indexOf('?') >= 0 ? '&' : '?') + tok;
+  }
+  /** 作品封面：cover_url 常为空/要带签名，从 raw 里兜底取（视频号 objectDesc.spec[0].thumbUrl+thumbUrlToken）。 */
+  function itemCoverUrl(item) {
+    var direct = String((item && item.cover_url) || '').trim();
+    if (direct) return direct;
+    var raw = item && item.raw && typeof item.raw === 'object' ? item.raw : {};
+    var cover = String(
+      getPath(raw, 'objectDesc.spec.0.thumbUrl') ||
+      getPath(raw, 'objectDesc.spec.0.coverUrl') ||
+      getPath(raw, 'objectDesc.media.0.thumbUrl') ||
+      getPath(raw, 'objectDesc.media.0.coverUrl') ||
+      getPath(raw, 'video.cover.url_list.0') ||
+      getPath(raw, 'video.origin_cover.url_list.0') ||
+      getPath(raw, 'video.dynamic_cover.url_list.0') ||
+      // 原版/旧数据用的是下划线 path（object_desc.media[0].thumb_url / url）
+      getPath(raw, 'object_desc.media.0.thumb_url') ||
+      getPath(raw, 'object_desc.media.0.thumbUrl') ||
+      getPath(raw, 'object_desc.media.0.cover_url') ||
+      getPath(raw, 'objectDesc.mediaList.0.thumbUrl') ||
+      ''
+    ).trim();
+    if (!cover) return '';
+    var token = String(
+      getPath(raw, 'objectDesc.spec.0.thumbUrlToken') ||
+      getPath(raw, 'objectDesc.spec.0.coverUrlToken') ||
+      getPath(raw, 'objectDesc.media.0.thumbUrlToken') ||
+      getPath(raw, 'object_desc.media.0.thumb_url_token') ||
+      getPath(raw, 'object_desc.media.0.url_token') ||
+      ''
+    ).trim();
+    return appendToken(cover, token);
+  }
   function itemTitle(item) {
     var title = String((item && (item.title || item.description)) || '').trim();
     return title || String((item && item.item_key) || '未命名作品');
@@ -520,7 +557,7 @@
     if (!host) return;
     if (!state.items.length) { host.innerHTML = '<div class="wct-empty">暂无作品（点右上角「同步作品」）。</div>'; return; }
     host.innerHTML = state.items.map(function(item, index) {
-      var cover = thumbUrl(item.cover_url);
+      var cover = thumbUrl(itemCoverUrl(item));
       var coverHtml = cover
         ? '<img class="wct-cover" src="' + esc(cover) + '" alt="" loading="lazy" onerror="this.style.visibility=\'hidden\'">'
         : '<div class="wct-cover"></div>';
