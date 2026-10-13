@@ -379,7 +379,7 @@ def test_job_recovery_reports_only_persisted_stages(tmp_path, monkeypatch):
     assert initial["runtime_prepared"] is False
     assert initial["has_generation"] is False
     assert initial["has_build"] is False
-    assert initial["contact_sheet_url"].endswith(job_id + "/contact-sheet")
+    assert (job_id + "/contact-sheet") in initial["contact_sheet_url"]  # 现在会带签名 query
 
     project = job_dir / "hypit-project"
     (project / ".hypit").mkdir(parents=True)
@@ -887,7 +887,7 @@ def test_job_summary_and_history_list(tmp_path, monkeypatch):
     item = items[0]
     assert item["job_id"] == "j1" and item["status"] == "failed"
     assert item["brief"] == "改成美食" and item["can_resume"] is True
-    assert item["contact_sheet_url"].endswith("/j1/contact-sheet")
+    assert "/j1/contact-sheet" in item["contact_sheet_url"]  # 现在会带签名 query
     assert hypit_local._list_job_summaries(99) == []
 
 
@@ -1032,5 +1032,40 @@ def test_job_summary_reference_url_keeps_original_extension(tmp_path, monkeypatc
     item = hypit_local._list_job_summaries(31)[0]
 
     assert item["has_reference"] is True
-    assert item["reference_url"].endswith("/jmov/asset/reference.mov"), item["reference_url"]
+    assert "/jmov/asset/reference.mov" in item["reference_url"], item["reference_url"]
     assert "reference.mp4" not in item["reference_url"]
+
+def test_reference_url_is_signed_for_browser_tags(tmp_path, monkeypatch):
+    """媒体地址必须带签名：<video>/<img> 发不出 Authorization 头，只认 Bearer 就会 401 全空。"""
+    monkeypatch.setattr(hypit_local, "JOBS_ROOT", tmp_path)
+    job_dir = tmp_path / "31" / "jref"
+    job_dir.mkdir(parents=True)
+    (job_dir / "reference.mp4").write_bytes(b"video")
+    (job_dir / "job.json").write_text(__import__("json").dumps({
+        "job_id": "jref", "user_id": 31, "filename": "ref.mp4", "file_size": 5,
+        "probe": {}, "created_at": 1.0,
+    }), encoding="utf-8")
+
+    item = hypit_local._list_job_summaries(31)[0]
+
+    for field in ("reference_url", "contact_sheet_url"):
+        value = item[field]
+        assert "token=" in value and "expiry=" in value and "uid=31" in value, (field, value)
+
+
+def test_hypit_media_signature_roundtrip(monkeypatch):
+    """签名校验：对的放行，篡改/过期的拒绝。"""
+    monkeypatch.setattr(hypit_local, "_hypit_media_secret", lambda: b"unit-test-secret")
+    expiry = int(hypit_local.time.time()) + 60
+    token = hypit_local._hypit_media_token(31, "j1", "reference.mp4", expiry)
+
+    user = hypit_local._hypit_media_user(31, "j1", "reference.mp4", token, expiry)
+    assert user.id == 31
+
+    import pytest as _pytest
+    with _pytest.raises(Exception):
+        hypit_local._hypit_media_user(31, "j1", "reference.mp4", token + "x", expiry)
+    with _pytest.raises(Exception):
+        hypit_local._hypit_media_user(32, "j1", "reference.mp4", token, expiry)
+    with _pytest.raises(Exception):
+        hypit_local._hypit_media_user(31, "j1", "reference.mp4", token, int(hypit_local.time.time()) - 1)

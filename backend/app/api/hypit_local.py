@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import hmac
 import json
 import logging
 import math
@@ -185,6 +187,61 @@ def _extract_reference_audio(source: Path, target: Path) -> None:
     )
     if process.returncode or not target.is_file() or target.stat().st_size <= 128:
         raise RuntimeError(f"提取原视频音频失败：{process.stderr[-600:]}")
+
+
+# ── 媒体签名 URL ──────────────────────────────────────────────────────────────
+# <video>/<img> 发不出 Authorization 头，这些接口只认 Bearer 的话浏览器就看不到任何内容
+# （卡片在、封面/预览/播放全空）。这里复用 assets.py 同一套做法：短期 HMAC 签名走 query。
+_HYPIT_MEDIA_TOKEN_EXPIRY_SEC = 6 * 3600
+
+
+def _hypit_media_secret() -> bytes:
+    from ..core.config import get_settings
+
+    return str(get_settings().secret_key or "").encode("utf-8")
+
+
+def _hypit_media_token(user_id: int, job_id: str, resource: str, expiry: int) -> str:
+    raw = f"hypit-media:{int(user_id)}:{job_id}:{resource}:{int(expiry)}"
+    return hmac.new(_hypit_media_secret(), raw.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def hypit_signed_media_url(user_id: int, job_id: str, resource: str, path: str) -> str:
+    """给浏览器 <video>/<img> 直接加载的地址：带短期签名。"""
+    expiry = int(time.time()) + _HYPIT_MEDIA_TOKEN_EXPIRY_SEC
+    token = _hypit_media_token(user_id, job_id, resource, expiry)
+    joiner = "&" if "?" in path else "?"
+    return f"{path}{joiner}uid={int(user_id)}&expiry={expiry}&token={token}"
+
+
+def _signed_or_public(user_id: int, job_id: str, resource: str, url: str) -> str:
+    """公网 https 地址原样返回；本机相对地址补签名。"""
+    value = str(url or "")
+    if not value or value.lower().startswith(("http://", "https://")):
+        return value
+    return hypit_signed_media_url(user_id, job_id, resource, value)
+
+
+def _hypit_media_user(user_id: int, job_id: str, resource: str, token: str, expiry: Any) -> _ServerUser:
+    try:
+        ts = int(expiry or 0)
+    except (TypeError, ValueError):
+        ts = 0
+    if not token or ts < int(time.time()):
+        raise HTTPException(status_code=401, detail="登录状态已失效，请重新登录")
+    expected = _hypit_media_token(user_id, job_id, resource, ts)
+    if not hmac.compare_digest(expected, str(token)):
+        raise HTTPException(status_code=403, detail="媒体链接无效或已过期")
+    return _ServerUser(int(user_id))
+
+
+async def hypit_media_auth(request: Request, job_id: str, resource: str) -> _ServerUser:
+    """媒体接口鉴权：fetch 走 Bearer；<video>/<img> 走 ?uid=&expiry=&token= 签名。"""
+    auth = str(request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer ") and len(auth) > 7:
+        return await get_current_user_for_local(request, auth.split(" ", 1)[1].strip())
+    q = request.query_params
+    return _hypit_media_user(int(q.get("uid") or 0), job_id, resource, q.get("token") or "", q.get("expiry"))
 
 
 def _read_job(user_id: int, job_id: str) -> tuple[Path, dict[str, Any]]:
@@ -1272,7 +1329,9 @@ def get_local_hypit_job(job_id: str, current_user: _ServerUser = Depends(get_cur
         "job": metadata,
         "speech": _saved_speech(job_dir),
         "project": project,
-        "contact_sheet_url": f"/api/local/hypit/jobs/{job_id}/contact-sheet",
+        "contact_sheet_url": hypit_signed_media_url(
+            int(current_user.id), job_id, "contact-sheet", f"/api/local/hypit/jobs/{job_id}/contact-sheet"
+        ),
         "project_checked": bool(project),
         "runtime_prepared": False,
         "has_generation": _generation_path(project_dir).is_file(),
@@ -1420,7 +1479,9 @@ async def analyze_local_video(
             "filename": filename,
             "file_size": file_size,
             "probe": probe,
-            "contact_sheet_url": f"/api/local/hypit/jobs/{job_id}/contact-sheet",
+            "contact_sheet_url": hypit_signed_media_url(
+                int(current_user.id), job_id, "contact-sheet", f"/api/local/hypit/jobs/{job_id}/contact-sheet"
+            ),
         }
     except HTTPException:
         shutil.rmtree(job_dir, ignore_errors=True)
@@ -1814,12 +1875,23 @@ def _job_summary(user_id: int, job_dir: Path) -> dict[str, Any] | None:
         "status": str(workflow.get("status") or "unknown"),
         "stage": str(workflow.get("stage") or ""),
         "error": str(workflow.get("error") or ""),
-        "video_url": str(workflow.get("video_url") or ""),
-        "video_local_url": str(workflow.get("video_local_url") or ""),
-        "contact_sheet_url": f"/api/local/hypit/jobs/{job_dir.name}/contact-sheet",
+        "video_url": _signed_or_public(
+            int(metadata.get("user_id") or 0), job_dir.name, "workflow/video", str(workflow.get("video_url") or "")
+        ),
+        "video_local_url": _signed_or_public(
+            int(metadata.get("user_id") or 0), job_dir.name, "workflow/video", str(workflow.get("video_local_url") or "")
+        ),
+        "contact_sheet_url": hypit_signed_media_url(
+            int(metadata.get("user_id") or 0), job_dir.name, "contact-sheet",
+            f"/api/local/hypit/jobs/{job_dir.name}/contact-sheet",
+        ),
         "has_reference": reference,
         "reference_url": (
-            f"/api/local/hypit/jobs/{job_dir.name}/asset/{reference_name}" if reference_name else ""
+            hypit_signed_media_url(
+                int(metadata.get("user_id") or 0), job_dir.name, reference_name,
+                f"/api/local/hypit/jobs/{job_dir.name}/asset/{reference_name}",
+            )
+            if reference_name else ""
         ),
         "can_resume": bool(reference) and str(workflow.get("status") or "") != "completed",
     }
@@ -1892,12 +1964,15 @@ def local_hypit_job_detail(
     base = f"/api/local/hypit/jobs/{job_id}/asset"
 
     def asset(name: str) -> str:
-        return f"{base}/{name}" if (assets_dir / name).is_file() else ""
+        if not (assets_dir / name).is_file():
+            return ""
+        return hypit_signed_media_url(int(current_user.id), job_id, name, f"{base}/{name}")
 
     reference = ""
     for suffix in ALLOWED_SUFFIXES:
         if (job_dir / ("reference" + suffix)).is_file():
-            reference = f"{base}/reference{suffix}"
+            resource = "reference" + suffix
+            reference = hypit_signed_media_url(int(current_user.id), job_id, resource, f"{base}/{resource}")
             break
     scenes: list[dict[str, Any]] = []
     rows = generation.get("scenes") if isinstance(generation.get("scenes"), list) else []
@@ -1924,24 +1999,36 @@ def local_hypit_job_detail(
         },
         "assets": {
             "reference": reference,
-            "contact_sheet": f"{base}/contact-sheet.jpg" if (job_dir / "contact-sheet.jpg").is_file() else "",
+            "contact_sheet": (
+                hypit_signed_media_url(int(current_user.id), job_id, "contact-sheet.jpg", f"{base}/contact-sheet.jpg")
+                if (job_dir / "contact-sheet.jpg").is_file() else ""
+            ),
             "speech": str((_saved_speech(job_dir) or {}).get("text") or ""),
             "scenes": scenes,
         },
         "final": {
-            "video_url": str(workflow.get("video_url") or ""),
-            "video_local_url": str(workflow.get("video_local_url") or f"/api/local/hypit/jobs/{job_id}/workflow/video"),
+            "video_url": _signed_or_public(
+                int(current_user.id), job_id, "workflow/video", str(workflow.get("video_url") or "")
+            ),
+            "video_local_url": _signed_or_public(
+                int(current_user.id), job_id, "workflow/video",
+                str(workflow.get("video_local_url") or f"/api/local/hypit/jobs/{job_id}/workflow/video"),
+            ),
         },
     }
 
 
 @router.get("/api/local/hypit/jobs/{job_id}/asset/{name:path}", summary="读取任务过程素材")
-def local_hypit_job_asset(
+async def local_hypit_job_asset(
     job_id: str,
     name: str,
-    current_user: _ServerUser = Depends(get_current_user_for_local),
+    request: Request,
 ):
-    """只允许读这个任务目录里的素材（参考视频 / 关键帧 / 生成图 / 生成视频 / 联系表）。"""
+    """只允许读这个任务目录里的素材（参考视频 / 关键帧 / 生成图 / 生成视频 / 联系表）。
+
+    鉴权：fetch 走 Bearer；<video>/<img> 走 ?uid=&expiry=&token= 签名（浏览器标签带不了头）。
+    """
+    current_user = await hypit_media_auth(request, job_id, str(name or "").replace("\\", "/").lstrip("/"))
     job_dir, _metadata = _read_job(current_user.id, job_id)
     project_dir = job_dir / "hypit-project"
     raw = str(name or "").strip().replace("\\", "/").lstrip("/")
@@ -2056,10 +2143,8 @@ def get_local_hypit_workflow(
 
 
 @router.get("/api/local/hypit/jobs/{job_id}/workflow/video")
-def get_local_hypit_workflow_video(
-    job_id: str,
-    current_user: _ServerUser = Depends(get_current_user_for_local),
-):
+async def get_local_hypit_workflow_video(job_id: str, request: Request):
+    current_user = await hypit_media_auth(request, job_id, "workflow/video")
     project_dir = _project_dir(current_user.id, job_id)
     job_dir, _ = _read_job(current_user.id, job_id)
     workflow = _read_workflow(job_dir)
@@ -2271,7 +2356,8 @@ async def export_local_hypit_video(
 
 
 @router.get("/api/local/hypit/jobs/{job_id}/contact-sheet")
-def get_local_contact_sheet(job_id: str, current_user: _ServerUser = Depends(get_current_user_for_local)):
+async def get_local_contact_sheet(job_id: str, request: Request):
+    current_user = await hypit_media_auth(request, job_id, "contact-sheet")
     job_dir = _safe_job_dir(current_user.id, job_id)
     metadata_path = job_dir / "job.json"
     if not metadata_path.is_file():

@@ -206,14 +206,11 @@
     var original = reference
       ? '<video class="hypit-preview-video" src="' + escapeAttr(reference) + '" muted playsinline preload="metadata"></video>'
       : (sheet ? '<img class="hypit-preview-img" src="' + escapeAttr(sheet) + '" alt="">' : '<span class="hypit-preview-empty">原素材已删除</span>');
-    var output = '';
-    if (item.status === 'completed' && (item.video_url || item.video_local_url)) {
-      output = '<video class="hypit-preview-video" src="' + escapeAttr(assetUrl(item.video_local_url || item.video_url)) + '" controls playsinline preload="metadata"></video>';
-    } else if (item.video_url) {
-      output = '<video class="hypit-preview-video" src="' + escapeAttr(assetUrl(item.video_local_url || item.video_url)) + '" controls playsinline preload="metadata"></video>';
-    } else {
-      output = '<span class="hypit-preview-empty">' + escapeHtml(item.stage || '尚未生成成片') + '</span>';
-    }
+    // 成片优先用公网 https（无需鉴权、加载快）；没有时用本机地址（后端已带短期签名）
+    var outputSrc = isAbsoluteUrl(item.video_url) ? item.video_url : (item.video_local_url || item.video_url);
+    var output = outputSrc
+      ? '<video class="hypit-preview-video" src="' + escapeAttr(assetUrl(outputSrc)) + '" controls playsinline preload="metadata"></video>'
+      : '<span class="hypit-preview-empty">' + escapeHtml(item.stage || '尚未生成成片') + '</span>';
     return '<div class="hypit-preview">'
       + '<div class="hypit-preview-box"><span class="hypit-preview-label">原素材</span>' + original + '</div>'
       + '<div class="hypit-preview-box"><span class="hypit-preview-label">生成素材</span>' + output + '</div>'
@@ -316,7 +313,8 @@
         : '<div class="hypit-empty"><strong>还没有过程素材</strong></div>');
       if (final.video_url || final.video_local_url) {
         blocks.push('<h4>最终成片</h4><video class="hypit-detail-video" src="' +
-          escapeAttr(assetUrl(final.video_local_url || final.video_url)) + '" controls playsinline preload="metadata"></video>');
+          escapeAttr(assetUrl(isAbsoluteUrl(final.video_url) ? final.video_url : (final.video_local_url || final.video_url))) +
+        '" controls playsinline preload="metadata"></video>');
         if (String(final.video_url || '').indexOf('https://') === 0) {
           blocks.push('<p class="hypit-detail-link"><a href="' + escapeAttr(final.video_url) + '" target="_blank" rel="noopener">打开线上成片地址</a></p>');
         }
