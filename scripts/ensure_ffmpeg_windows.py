@@ -21,11 +21,24 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 DEST_DIR = BASE_DIR / "deps" / "ffmpeg"
 TARGET_BINARIES: tuple[str, ...] = ("ffmpeg.exe", "ffprobe.exe")
-ZIP_URL = os.environ.get(
-    "LOBSTER_FFMPEG_WIN64_ZIP",
+# 候选下载源（按顺序尝试）：env LOBSTER_FFMPEG_WIN64_ZIP 可覆盖（支持多个，空格/逗号/分号分隔）。
+# 第一个是 BtbN 完整包（约 200MB），第二个 gyan.dev essentials 包（约 115MB，另一个 CDN）。
+# 只为补一个 ffprobe 也得下整包，国内拉 GitHub 慢/超时是历史失败主因，所以留了备份源。
+DEFAULT_ZIP_URLS: tuple[str, ...] = (
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
+    "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
 )
+ZIP_URL = os.environ.get("LOBSTER_FFMPEG_WIN64_ZIP") or DEFAULT_ZIP_URLS[0]
 MIN_BYTES = 500_000
+
+
+def _candidate_zip_urls() -> list[str]:
+    raw = (os.environ.get("LOBSTER_FFMPEG_WIN64_ZIP") or "").strip()
+    if raw:
+        for sep in (",", ";", "\n"):
+            raw = raw.replace(sep, " ")
+        return [part for part in raw.split() if part]
+    return list(DEFAULT_ZIP_URLS)
 
 
 def _missing_binaries() -> list[str]:
@@ -55,13 +68,14 @@ def _find_ffmpeg_in_zip(z: zipfile.ZipFile) -> str:
     return _find_binary_in_zip(z, "ffmpeg.exe")
 
 
-def _download_zip(path: Path) -> None:
+def _download_zip(path: Path, url: str = "") -> None:
+    target = (url or ZIP_URL).strip()
     curl = shutil.which("curl")
     if not curl:
         raise RuntimeError("未找到 curl 可执行文件，无法下载 ffmpeg zip")
-    print(f"==> 下载: {ZIP_URL}")
+    print(f"==> 下载: {target}")
     r = subprocess.run(
-        [curl, "-fsSL", "-o", str(path), ZIP_URL],
+        [curl, "-fsSL", "-o", str(path), target],
         capture_output=True,
         text=True,
     )
@@ -96,14 +110,26 @@ def main() -> None:
         return
     print(f"==> 需要补齐: {', '.join(missing)}")
 
-    with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tf:
-        tmp_zip = Path(tf.name)
-    try:
-        _download_zip(tmp_zip)
-        for path in _extract_binaries(tmp_zip, missing):
-            print(f"==> 已写入: {path} ({path.stat().st_size} bytes)")
-    finally:
-        tmp_zip.unlink(missing_ok=True)
+    errors: list[str] = []
+    for url in _candidate_zip_urls():
+        tmp_zip: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tf:
+                tmp_zip = Path(tf.name)
+            _download_zip(tmp_zip, url)
+            for path in _extract_binaries(tmp_zip, missing):
+                print(f"==> 已写入: {path} ({path.stat().st_size} bytes)")
+            return
+        except Exception as exc:  # noqa: BLE001 换下一个源
+            errors.append(f"{url} -> {exc}")
+            print(f"==> 该下载源失败，尝试下一个: {exc}", file=sys.stderr)
+        finally:
+            if tmp_zip is not None:
+                try:
+                    tmp_zip.unlink(missing_ok=True)
+                except OSError:
+                    pass
+    raise RuntimeError("所有 ffmpeg 下载源都失败: " + " | ".join(errors)[:600])
 
 
 if __name__ == "__main__":

@@ -315,16 +315,22 @@ def _repair_media_tools(timeout: int) -> dict[str, Any]:
             "message": "离线模式不联网下载 ffmpeg/ffprobe，请把 deps/ffmpeg 一起打包",
             "log": "",
         }
-    code, output = _run([sys.executable, str(script)], min(max(int(timeout or 0), 300), 1800))
+    code, output = _run([sys.executable, str(script)], min(max(int(timeout or 0), 300), 3600))
     still_missing = _media_tools_missing()
     ok = code == 0 and not still_missing
+    reason = ""
+    if not ok:
+        # 把失败原因带出来（下载失败/超时/解压失败），否则界面只看到「仍缺 ffprobe」无从下手
+        lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
+        if lines:
+            reason = "；原因：" + " / ".join(lines[-2:])[:300]
     return {
         "ok": ok,
         "missing": still_missing,
         "message": (
             "已补齐 deps/ffmpeg：" + "、".join(missing)
             if ok
-            else "ffmpeg/ffprobe 补齐失败（仍缺：" + "、".join(still_missing or missing) + "）"
+            else "ffmpeg/ffprobe 补齐失败（仍缺：" + "、".join(still_missing or missing) + "）" + reason
         ),
         "log": _tail(output),
     }

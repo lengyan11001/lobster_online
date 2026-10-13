@@ -491,10 +491,11 @@ if exist "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\ffmpeg.exe" (
     copy /y "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\ffmpeg.exe" "deps\ffmpeg\ffmpeg.exe" >nul
     if exist "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\ffprobe.exe" copy /y "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\ffprobe.exe" "deps\ffmpeg\ffprobe.exe" >nul
     copy /y "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\*.dll" "deps\ffmpeg\" >nul 2>&1
-    if exist "deps\ffmpeg\ffmpeg.exe" (
+    if exist "deps\ffmpeg\ffmpeg.exe" if exist "deps\ffmpeg\ffprobe.exe" (
         echo   [OK] deps\ffmpeg populated from bundled skill ffmpeg
         goto :ffmpeg_install_done
     )
+    echo   [WARN] bundled skill ffmpeg has no ffprobe.exe, will download both binaries below
 )
 if /i "%LOBSTER_OFFLINE_ONLY%"=="1" (
     echo   [ERR] LOBSTER_OFFLINE_ONLY=1 but deps\ffmpeg\ffmpeg.exe missing. Full offline pack must include it ^(or copy from build machine^).

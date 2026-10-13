@@ -2762,7 +2762,7 @@ async def _run_runtime_install() -> None:
         #    都补不上，最后自检只会报「缺少 ffprobe」。这里复用统一的音视频工具修复。
         _write_runtime_state(stage="检查音视频工具（ffmpeg/ffprobe）", percent=6)
         try:
-            media = await asyncio.to_thread(repair_media_tools, 900)
+            media = await asyncio.to_thread(repair_media_tools, 2700)
             _append_runtime_log(
                 "音视频工具%s：%s" % ("已就绪" if media.get("ok") else "未补齐", media.get("message") or "")
             )
@@ -2784,9 +2784,29 @@ async def _run_runtime_install() -> None:
         workspace = RUNTIME_WORKSPACE_DIR
         workspace.mkdir(parents=True, exist_ok=True)
         _write_runtime_state(stage="正在初始化运行环境", percent=62)
-        await asyncio.to_thread(
-            _stream_hypit_command, root, node, ["runtime", "init", "--workspace", str(workspace)], workspace
-        )
+        # 幂等：hypit runtime init 用 wx 独占写 hypit.runtime.json，重复点「安装运行依赖」会
+        # 直接抛 CLI_ERROR「Runtime Profile already exists」，整条安装就断在这里。
+        # 已选好就跳过；只有 Profile、没有选择指针时用 runtime use 重新选中。
+        profile_path = workspace / "hypit.runtime.json"
+        selection_path = workspace / ".hypit" / "runtime"
+        try:
+            if selection_path.is_file():
+                _append_runtime_log("运行环境已存在且已选择，跳过 runtime init（幂等）")
+            elif profile_path.is_file():
+                _append_runtime_log("运行环境已存在，复用并重新选中现有 Profile（幂等）")
+                await asyncio.to_thread(
+                    _stream_hypit_command, root, node,
+                    ["runtime", "use", "--workspace", str(workspace), str(profile_path)], workspace,
+                )
+            else:
+                await asyncio.to_thread(
+                    _stream_hypit_command, root, node, ["runtime", "init", "--workspace", str(workspace)], workspace
+                )
+        except RuntimeError as exc:
+            if "already exists" in str(exc).lower():
+                _append_runtime_log("运行环境已存在（忽略重复创建）：%s" % str(exc)[:200])
+            else:
+                raise
         await asyncio.to_thread(_configure_runtime_browser, workspace)
         _write_runtime_state(stage="正在下载并安装渲染依赖（首次较慢）", percent=75)
         await asyncio.to_thread(
