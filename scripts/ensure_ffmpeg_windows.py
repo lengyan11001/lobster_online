@@ -22,9 +22,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DEST_DIR = BASE_DIR / "deps" / "ffmpeg"
 TARGET_BINARIES: tuple[str, ...] = ("ffmpeg.exe", "ffprobe.exe")
 # 候选下载源（按顺序尝试）：env LOBSTER_FFMPEG_WIN64_ZIP 可覆盖（支持多个，空格/逗号/分号分隔）。
-# 第一个是 BtbN 完整包（约 200MB），第二个 gyan.dev essentials 包（约 115MB，另一个 CDN）。
-# 只为补一个 ffprobe 也得下整包，国内拉 GitHub 慢/超时是历史失败主因，所以留了备份源。
+# 第一优先：我们自己在 TOS 上的副本（只含 ffmpeg.exe + ffprobe.exe，约 128MB，国内直连快）。
+# 备选：BtbN 完整包（约 200MB）、gyan.dev essentials 包（约 115MB，另一个 CDN）。
+LOBSTER_FFMPEG_WIN64_URL = (
+    "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com"
+    "/assets/ffmpeg/lobster-ffmpeg-win64.zip"
+)
 DEFAULT_ZIP_URLS: tuple[str, ...] = (
+    LOBSTER_FFMPEG_WIN64_URL,
     "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip",
     "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
 )

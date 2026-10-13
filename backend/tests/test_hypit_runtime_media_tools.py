@@ -61,8 +61,10 @@ def test_media_repair_failure_message_carries_reason(monkeypatch):
 def test_candidate_zip_urls_env_and_defaults(monkeypatch):
     module = _load_ensure_script()
     monkeypatch.delenv("LOBSTER_FFMPEG_WIN64_ZIP", raising=False)
-    assert len(module._candidate_zip_urls()) >= 2, "至少要有两个候选源，GitHub 拉不动时能换源"
-    assert "github.com/BtbN" in module._candidate_zip_urls()[0]
+    urls = module._candidate_zip_urls()
+    assert len(urls) >= 2, "至少要有两个候选源，第一个拉不动时能换源"
+    assert "tos-cn-guangzhou" in urls[0], "自家 TOS 副本必须排第一（客户端国内直连）"
+    assert any("github.com/BtbN" in u for u in urls[1:]), "GitHub 仍要保留作兜底"
     monkeypatch.setenv("LOBSTER_FFMPEG_WIN64_ZIP", "https://a/x.zip, https://b/y.zip")
     assert module._candidate_zip_urls() == ["https://a/x.zip", "https://b/y.zip"]
 
