@@ -12,49 +12,58 @@
     #content-wechat-channels-transcript .wct-card-head h3 { margin:0; font-size:16px; font-weight:900; }
     #content-wechat-channels-transcript .wct-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     #content-wechat-channels-transcript .wct-input,
-    #content-wechat-channels-transcript .wct-select { border:1px solid #cbd5e1; border-radius:8px; background:#fff; padding:9px 10px; font-size:14px; min-height:38px; box-sizing:border-box; }
-    #content-wechat-channels-transcript .wct-input { min-width:240px; flex:1; }
-    #content-wechat-channels-transcript .wct-meta { color:#64748b; font-size:12px; line-height:1.5; word-break:break-all; }
+    #content-wechat-channels-transcript .wct-select { border:1px solid #cbd5e1; border-radius:8px; background:#fff; padding:8px 10px; font-size:14px; min-height:36px; box-sizing:border-box; }
+    #content-wechat-channels-transcript .wct-input { min-width:220px; flex:1; }
+    #content-wechat-channels-transcript .wct-meta { color:#64748b; font-size:12px; line-height:1.5; }
     #content-wechat-channels-transcript .wct-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
     #content-wechat-channels-transcript .wct-msg { display:none; padding:9px 10px; border-radius:8px; font-size:13px; }
     #content-wechat-channels-transcript .wct-msg.ok { display:block; background:#ecfdf5; border:1px solid #a7f3d0; color:#047857; }
     #content-wechat-channels-transcript .wct-msg.err { display:block; background:#fff1f2; border:1px solid #fecdd3; color:#be123c; }
+    #content-wechat-channels-transcript .wct-statusbar { display:none; padding:8px 10px; border-radius:8px; font-size:13px; background:#eff6ff; border:1px solid #bfdbfe; color:#1d4ed8; }
+    #content-wechat-channels-transcript .wct-statusbar.on { display:block; }
+    #content-wechat-channels-transcript .wct-statusbar.err { background:#fff1f2; border-color:#fecdd3; color:#be123c; }
     #content-wechat-channels-transcript .wct-empty { color:#64748b; border:1px dashed #cbd5e1; border-radius:8px; padding:22px; text-align:center; background:#fff; }
 
-    #content-wechat-channels-transcript .wct-peer-list { display:grid; grid-template-columns:repeat(auto-fill,minmax(330px,1fr)); gap:10px; }
-    #content-wechat-channels-transcript .wct-peer { border:1px solid #dfe7f2; border-radius:8px; padding:12px; display:flex; flex-direction:column; gap:8px; background:#fff; }
-    #content-wechat-channels-transcript .wct-peer-head { display:flex; gap:10px; align-items:center; }
-    #content-wechat-channels-transcript .wct-avatar { width:44px; height:44px; border-radius:50%; object-fit:cover; background:#eef2f7; flex:0 0 auto; }
-    #content-wechat-channels-transcript .wct-peer-name { font-weight:900; font-size:15px; line-height:1.3; word-break:break-all; }
+    #content-wechat-channels-transcript .wct-table { border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; }
+    #content-wechat-channels-transcript .wct-thead,
+    #content-wechat-channels-transcript .wct-trow { display:grid; grid-template-columns:190px 78px minmax(0,1fr) 140px 96px 190px; gap:10px; align-items:center; padding:9px 12px; }
+    #content-wechat-channels-transcript .wct-thead { background:#f1f5f9; font-size:12px; font-weight:800; color:#475569; }
+    #content-wechat-channels-transcript .wct-trow { border-top:1px solid #eef2f7; font-size:13px; }
+    #content-wechat-channels-transcript .wct-trow:hover { background:#f8fafc; }
+    #content-wechat-channels-transcript .wct-cell { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    #content-wechat-channels-transcript .wct-cell.name { font-weight:800; }
+    #content-wechat-channels-transcript .wct-cell.mono { font-family:ui-monospace,Consolas,monospace; font-size:12px; color:#475569; }
     #content-wechat-channels-transcript .wct-badge { border-radius:999px; padding:1px 8px; font-size:11px; font-weight:800; white-space:nowrap; }
     #content-wechat-channels-transcript .wct-badge.douyin { background:#111827; color:#fff; }
     #content-wechat-channels-transcript .wct-badge.wechat_channels { background:#ecfdf5; color:#047857; border:1px solid #a7f3d0; }
-    #content-wechat-channels-transcript .wct-fields { display:grid; grid-template-columns:auto 1fr; gap:2px 10px; font-size:12.5px; color:#334155; }
-    #content-wechat-channels-transcript .wct-fields b { color:#64748b; font-weight:600; }
-    #content-wechat-channels-transcript .wct-peer-foot { display:flex; gap:8px; justify-content:flex-end; margin-top:2px; }
+    #content-wechat-channels-transcript .wct-trow-actions { display:flex; gap:6px; justify-content:flex-end; }
+
+    #content-wechat-channels-transcript .wct-detail-head { display:flex; align-items:center; gap:10px; padding:12px 14px; border-bottom:1px solid #e2e8f0; }
+    #content-wechat-channels-transcript .wct-detail-head b { font-size:16px; font-weight:900; }
+    #content-wechat-channels-transcript .wct-detail-grid { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:12px; padding:12px 14px; }
+    #content-wechat-channels-transcript .wct-item { border:1px solid #e2e8f0; border-radius:8px; padding:8px; display:grid; grid-template-columns:20px 72px minmax(0,1fr); gap:8px; align-items:start; margin-bottom:8px; }
+    #content-wechat-channels-transcript .wct-cover { width:72px; height:96px; object-fit:cover; border-radius:6px; background:#eef2f7; }
+    #content-wechat-channels-transcript .wct-item-title { font-weight:800; font-size:13px; line-height:1.4; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+    #content-wechat-channels-transcript .wct-item-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+    #content-wechat-channels-transcript .wct-result { border:1px solid #e2e8f0; border-radius:8px; padding:10px; margin-bottom:8px; background:#fbfdff; }
+    #content-wechat-channels-transcript .wct-result textarea { width:100%; min-height:100px; border:1px solid #cbd5e1; border-radius:6px; padding:8px; resize:vertical; box-sizing:border-box; font-size:13px; line-height:1.6; }
+    #content-wechat-channels-transcript .wct-task { border-radius:999px; padding:1px 8px; font-size:11px; font-weight:800; background:#eef2ff; color:#3730a3; white-space:nowrap; }
+    #content-wechat-channels-transcript .wct-task.done { background:#dcfce7; color:#166534; }
+    #content-wechat-channels-transcript .wct-task.run { background:#dbeafe; color:#1d4ed8; }
+    #content-wechat-channels-transcript .wct-task.fail { background:#fee2e2; color:#991b1b; }
+    #content-wechat-channels-transcript .wct-list-scroll { max-height:56vh; overflow:auto; }
 
     #content-wechat-channels-transcript .wct-modal-mask { position:fixed; inset:0; background:rgba(15,23,42,.42); display:flex; align-items:center; justify-content:center; z-index:80; padding:20px; }
     #content-wechat-channels-transcript .wct-modal-mask[hidden] { display:none !important; }
     #content-wechat-channels-transcript .wct-modal { background:#fff; border-radius:10px; width:min(760px,96vw); max-height:88vh; display:flex; flex-direction:column; overflow:hidden; }
-    #content-wechat-channels-transcript .wct-drawer { background:#fff; border-radius:10px; width:min(1080px,98vw); max-height:92vh; display:flex; flex-direction:column; overflow:hidden; }
     #content-wechat-channels-transcript .wct-modal-head { padding:12px 14px; border-bottom:1px solid #e2e8f0; display:flex; align-items:center; gap:10px; }
-    #content-wechat-channels-transcript .wct-modal-head b { font-size:16px; font-weight:900; }
     #content-wechat-channels-transcript .wct-modal-body { padding:14px; overflow:auto; display:flex; flex-direction:column; gap:10px; }
-    #content-wechat-channels-transcript .wct-cand { border:1px solid #dfe7f2; border-radius:8px; padding:10px; display:flex; gap:10px; align-items:center; }
+    #content-wechat-channels-transcript .wct-cand { border:1px solid #e2e8f0; border-radius:8px; padding:10px; display:flex; gap:10px; align-items:center; }
     #content-wechat-channels-transcript .wct-cand-list { display:flex; flex-direction:column; gap:8px; max-height:44vh; overflow:auto; }
-    #content-wechat-channels-transcript .wct-detail-grid { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(0,1fr); gap:12px; padding:0 14px 14px; overflow:auto; }
-    #content-wechat-channels-transcript .wct-item { border:1px solid #dfe7f2; border-radius:8px; padding:10px; display:grid; grid-template-columns:22px 96px minmax(0,1fr); gap:10px; align-items:start; }
-    #content-wechat-channels-transcript .wct-cover { width:96px; height:128px; object-fit:cover; border-radius:6px; background:#eef2f7; }
-    #content-wechat-channels-transcript .wct-item-title { font-weight:800; font-size:13.5px; line-height:1.4; word-break:break-word; }
-    #content-wechat-channels-transcript .wct-item-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
-    #content-wechat-channels-transcript .wct-result { border:1px solid #dfe7f2; border-radius:8px; padding:10px; margin-bottom:8px; background:#fbfdff; }
-    #content-wechat-channels-transcript .wct-result textarea { width:100%; min-height:104px; border:1px solid #cbd5e1; border-radius:6px; padding:8px; resize:vertical; box-sizing:border-box; font-size:13px; line-height:1.6; }
-    #content-wechat-channels-transcript .wct-status { display:inline-flex; border-radius:999px; padding:1px 8px; font-size:11px; font-weight:800; background:#eef2ff; color:#3730a3; }
-    #content-wechat-channels-transcript .wct-status.completed { background:#dcfce7; color:#166534; }
-    #content-wechat-channels-transcript .wct-status.failed { background:#fee2e2; color:#991b1b; }
-    #content-wechat-channels-transcript .wct-status.running { background:#dbeafe; color:#1d4ed8; }
     @media (max-width: 960px) {
       #content-wechat-channels-transcript .wct-hero { flex-direction:column; }
+      #content-wechat-channels-transcript .wct-thead { display:none; }
+      #content-wechat-channels-transcript .wct-trow { grid-template-columns:1fr; }
       #content-wechat-channels-transcript .wct-detail-grid { grid-template-columns:1fr; }
     }
   </style>
@@ -62,8 +71,8 @@
   <div class="wct-shell">
     <header class="wct-hero">
       <div>
-        <h2 class="wct-title">视频号 / 抖音 文案提取</h2>
-        <div class="wct-sub">先「添加同行」，进详情点「同步作品」拉最新作品，再对单条下载视频或提炼口播文案。</div>
+        <h2 class="wct-title">作品提取</h2>
+        <div class="wct-sub">添加同行 → 进详情同步作品 → 单条下载视频、批量提炼口播文案。</div>
       </div>
       <div class="wct-actions">
         <button type="button" class="btn btn-primary btn-sm" id="wctAddPeerBtn">添加同行</button>
@@ -73,13 +82,57 @@
     </header>
 
     <div id="wctMsg" class="wct-msg"></div>
+    <div id="wctTaskBar" class="wct-statusbar"></div>
 
-    <section class="wct-card">
+    <!-- 一级：同行列表 -->
+    <section class="wct-card" id="wctListView">
       <div class="wct-card-head">
         <h3>同行列表</h3>
-        <span class="wct-meta" id="wctPeerCount"></span>
+        <div class="wct-row" style="flex:1;justify-content:flex-end;">
+          <input id="wctPeerFilter" class="wct-input" placeholder="检索：昵称 / 账号 / 标签" style="max-width:320px;">
+          <span class="wct-meta" id="wctPeerCount"></span>
+        </div>
       </div>
       <div id="wctPeerList" class="wct-empty">还没有同行，点右上角「添加同行」。</div>
+    </section>
+
+    <!-- 二级：同行详情（不是弹窗） -->
+    <section class="wct-card" id="wctDetailView" hidden>
+      <div class="wct-detail-head">
+        <button type="button" class="btn btn-ghost btn-sm" id="wctDetailBack">← 返回列表</button>
+        <b id="wctDetailTitle">同行详情</b>
+        <span id="wctDetailBadge" class="wct-badge"></span>
+        <div class="wct-actions" style="margin-left:auto;">
+          <button type="button" class="btn btn-primary btn-sm" id="wctSyncBtn">同步作品</button>
+        </div>
+      </div>
+      <div class="wct-detail-grid">
+        <div>
+          <div class="wct-card-head" style="margin:0 0 8px;">
+            <h3>作品</h3>
+            <div class="wct-row">
+              <span class="wct-meta" id="wctItemHint">进入详情不会自动同步。</span>
+            </div>
+          </div>
+          <div class="wct-row" style="margin-bottom:8px;">
+            <button type="button" class="btn btn-ghost btn-sm" id="wctSelectAllBtn">全选</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="wctClearSelectBtn">清空</button>
+            <button type="button" class="btn btn-primary btn-sm" id="wctExtractBtn">批量提炼文案</button>
+          </div>
+          <div id="wctItemList" class="wct-list-scroll"><div class="wct-empty">暂无作品</div></div>
+        </div>
+        <div>
+          <div class="wct-card-head" style="margin:0 0 8px;">
+            <h3>文案结果</h3>
+            <div class="wct-row">
+              <button type="button" class="btn btn-ghost btn-sm" id="wctExportTxtBtn">导出 TXT</button>
+              <button type="button" class="btn btn-ghost btn-sm" id="wctExportCsvBtn">导出 CSV</button>
+            </div>
+          </div>
+          <div class="wct-meta" id="wctDetailMeta" style="margin-bottom:8px;"></div>
+          <div id="wctResultList"><div class="wct-empty">暂无结果</div></div>
+        </div>
+      </div>
     </section>
   </div>
 
@@ -101,44 +154,10 @@
           <button type="button" class="btn btn-primary btn-sm" id="wctSearchBtn">搜索</button>
         </div>
         <div class="wct-row">
-          <input id="wctTagsInput" class="wct-input" placeholder="行业标签（可选，便于筛选）">
+          <input id="wctTagsInput" class="wct-input" placeholder="行业标签（可选）">
           <button type="button" class="btn btn-ghost btn-sm" id="wctAddByIdBtn" hidden>按公开 ID 直接添加</button>
         </div>
         <div id="wctCandidates" class="wct-cand-list"></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="wct-modal-mask" id="wctDetailModal" hidden>
-    <div class="wct-drawer" role="dialog" aria-modal="true">
-      <div class="wct-modal-head">
-        <b id="wctDetailTitle">同行详情</b>
-        <span id="wctDetailBadge" class="wct-badge"></span>
-        <div class="wct-actions" style="margin-left:auto;">
-          <button type="button" class="btn btn-primary btn-sm" id="wctSyncBtn">同步作品</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="wctDetailClose">返回</button>
-        </div>
-      </div>
-      <div class="wct-modal-body" style="padding-bottom:0;">
-        <div id="wctDetailMeta" class="wct-meta">选择一家同行后可同步作品。</div>
-        <div class="wct-row">
-          <button type="button" class="btn btn-ghost btn-sm" id="wctSelectAllBtn">全选</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="wctClearSelectBtn">清空</button>
-          <button type="button" class="btn btn-primary btn-sm" id="wctExtractBtn">提炼文案</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="wctCopyAllBtn">复制全部</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="wctExportTxtBtn">导出 TXT</button>
-          <button type="button" class="btn btn-ghost btn-sm" id="wctExportCsvBtn">导出 CSV</button>
-        </div>
-      </div>
-      <div class="wct-detail-grid">
-        <div>
-          <div class="wct-card-head" style="margin:4px 0 8px;"><h3>作品</h3><span class="wct-meta" id="wctItemHint">进入详情不会自动同步，请点右上角「同步作品」。</span></div>
-          <div id="wctItemList" class="wct-empty">暂无作品</div>
-        </div>
-        <div>
-          <div class="wct-card-head" style="margin:4px 0 8px;"><h3>文案结果</h3><span class="wct-meta" id="wctResultHint">勾选作品后点「提炼文案」。</span></div>
-          <div id="wctResultList" class="wct-empty">暂无结果</div>
-        </div>
       </div>
     </div>
   </div>

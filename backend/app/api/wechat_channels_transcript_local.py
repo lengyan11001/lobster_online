@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import asyncio
 import csv
+import hashlib
 import io
 import json
 import logging
@@ -15,9 +16,10 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
+from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -34,6 +36,7 @@ router = APIRouter()
 
 _MAX_VIDEO_BYTES = 380 * 1024 * 1024
 _DECRYPT_PREFIX_BYTES = 131072
+_APP_ROOT = Path(__file__).resolve().parents[3]
 
 
 class LocalTranscriptBody(BaseModel):
@@ -869,11 +872,67 @@ def get_latest_wechat_channels_video_cache(
     return _cache_payload(account, videos)
 
 
+_THUMB_CACHE_DIR = _APP_ROOT / "cache" / "wct_thumbs"
+# 取不到图时返回 1x1 透明 PNG，避免浏览器显示「图裂」
+_THUMB_BLANK = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+)
+
+
+def _thumb_headers(url: str) -> Dict[str, str]:
+    """微信/抖音 CDN 会校验 Referer，缺了就 403（页面里就是「图裂」）。"""
+    host = ""
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except Exception:
+        host = ""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/148.0.0.0 Safari/537.36",
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+    }
+    if "qq.com" in host:
+        headers["Referer"] = "https://channels.weixin.qq.com/"
+    elif "douyin" in host or "douyinpic" in host or "byteimg" in host:
+        headers["Referer"] = "https://www.douyin.com/"
+    return headers
+
+
+@router.get("/api/wechat-channels-transcript/local-thumb", summary="封面/头像代理（CDN 直连会被拒）")
+def local_thumb(
+    url: str = Query(..., min_length=1, max_length=4096),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """把封面/头像取到本机再转给页面，拿不到就返回空白图（不再图裂）。"""
+    target = _clean_url(url)
+    if not target:
+        return Response(content=_THUMB_BLANK, media_type="image/png")
+    digest = hashlib.sha256(target.encode("utf-8")).hexdigest()
+    cached = _THUMB_CACHE_DIR / digest
+    if not cached.is_file():
+        try:
+            _THUMB_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            with httpx.Client(timeout=20.0, follow_redirects=True, trust_env=False) as client:
+                resp = client.get(target, headers=_thumb_headers(target))
+                if resp.status_code < 400 and resp.content:
+                    cached.write_bytes(resp.content)
+        except Exception as exc:
+            logger.debug("[wechat-channels-transcript-local] thumb fetch failed %s: %s", target[:120], exc)
+    if cached.is_file() and cached.stat().st_size > 0:
+        media = "image/jpeg"
+        head = cached.read_bytes()[:8]
+        if head.startswith(b"\x89PNG"):
+            media = "image/png"
+        elif head[:4] == b"RIFF":
+            media = "image/webp"
+        return Response(content=cached.read_bytes(), media_type=media, headers={"Cache-Control": "private, max-age=86400"})
+    return Response(content=_THUMB_BLANK, media_type="image/png")
+
+
 def _download_dir() -> Path:
     """下载目录：优先用户 Downloads/lobster-transcripts，退化到应用 data 目录。"""
     candidates = [Path.home() / "Downloads" / "lobster-transcripts"]
-    if (ROOT / "data").is_dir():
-        candidates.append(ROOT / "data" / "transcript_downloads")
+    if (_APP_ROOT / "data").is_dir():
+        candidates.append(_APP_ROOT / "data" / "transcript_downloads")
     target = candidates[0]
     try:
         target.mkdir(parents=True, exist_ok=True)
