@@ -869,6 +869,67 @@ def get_latest_wechat_channels_video_cache(
     return _cache_payload(account, videos)
 
 
+def _download_dir() -> Path:
+    """下载目录：优先用户 Downloads/lobster-transcripts，退化到应用 data 目录。"""
+    candidates = [Path.home() / "Downloads" / "lobster-transcripts"]
+    if (ROOT / "data").is_dir():
+        candidates.append(ROOT / "data" / "transcript_downloads")
+    target = candidates[0]
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        target = candidates[-1]
+        target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _download_filename(video: Dict[str, Any]) -> str:
+    base = _video_title_text(video, "video")
+    safe = "".join(ch for ch in base if ch not in '\\/:*?"<>|').strip()[:60] or "video"
+    key = _video_item_key(video)
+    suffix = ("_" + key[:8]) if key else ""
+    return f"{safe}{suffix}.mp4"
+
+
+@router.post("/api/wechat-channels-transcript/local-download", summary="把某条作品的原视频下载到本机")
+async def local_download_wechat_channels_video(
+    body: LocalTranscriptBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """详情页「下载视频」：下载（如有解密键则解密）到本机目录，返回路径并打开所在文件夹。"""
+    video = body.video if isinstance(body.video, dict) else {}
+    url = _video_url(video)
+    if not url:
+        raise HTTPException(status_code=400, detail="video_url is required")
+    keystream = b""
+    if _decode_key(video):
+        try:
+            keystream = base64.b64decode((body.keystream_b64 or "").strip(), validate=True)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="invalid keystream") from exc
+    target = _unique_export_path(_download_dir(), _download_filename(video))
+    try:
+        await asyncio.to_thread(_download_video, url, target)
+        if keystream:
+            await asyncio.to_thread(_decrypt_video_prefix, target, keystream)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.warning("[wechat-channels-transcript-local] download failed user_id=%s err=%s", current_user.id, exc, exc_info=True)
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail=str(exc)[:2000]) from exc
+    opened = await asyncio.to_thread(_open_folder_for_file, target)
+    return {
+        "ok": True,
+        "path": str(target),
+        "size": target.stat().st_size if target.exists() else 0,
+        "opened": bool(opened),
+    }
+
+
 @router.post("/api/wechat-channels-transcript/local-transcribe", summary="Download WeChat Channels video locally, extract audio, and transcribe on server")
 async def local_transcribe_wechat_channels_video(
     body: LocalTranscriptBody,
@@ -879,12 +940,16 @@ async def local_transcribe_wechat_channels_video(
     url = _video_url(video)
     if not url:
         raise HTTPException(status_code=400, detail="video_url is required")
-    if not _decode_key(video):
-        raise HTTPException(status_code=400, detail="decode_key is required")
-    try:
-        keystream = base64.b64decode((body.keystream_b64 or "").strip(), validate=True)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="invalid keystream") from exc
+    # 视频号需要 decode_key + keystream 解密；抖音等平台没有，直接按明文处理。
+    decode_key = _decode_key(video)
+    keystream = b""
+    if decode_key:
+        try:
+            keystream = base64.b64decode((body.keystream_b64 or "").strip(), validate=True)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="invalid keystream") from exc
+        if not keystream:
+            raise HTTPException(status_code=400, detail="keystream is required for this video")
     auth_headers = _auth_headers(request)
     if not auth_headers.get("Authorization"):
         raise HTTPException(status_code=401, detail="Authorization is required")
@@ -894,7 +959,8 @@ async def local_transcribe_wechat_channels_video(
     audio_path = work / "audio.wav"
     try:
         await asyncio.to_thread(_download_video, url, source)
-        await asyncio.to_thread(_decrypt_video_prefix, source, keystream)
+        if keystream:
+            await asyncio.to_thread(_decrypt_video_prefix, source, keystream)
         await asyncio.to_thread(_extract_audio, find_ffmpeg(), source, audio_path)
         audio_bytes = await asyncio.to_thread(audio_path.read_bytes)
         audio_url, diag = await _upload_bytes_to_auth_server(

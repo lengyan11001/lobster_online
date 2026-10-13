@@ -1,46 +1,42 @@
+/* 视频号 / 抖音 文案提取：同行 → 详情（同步 / 下载视频 / 提炼文案） */
 (function() {
-  var JOB_STORE_KEY = 'lobster_wechat_channels_transcript_jobs_v2';
-  var LAST_ACCOUNT_KEY = 'lobster_wechat_channels_transcript_last_account_v1';
+  var STORE_KEY = 'lobster_wct_results_v1';
   var WASM_BASE = '/static/vendor/wechat-video-decode';
   var KEYSTREAM_BYTES = 131072;
+  var PLATFORM_LABEL = { douyin: '抖音', wechat_channels: '视频号' };
 
   var state = {
-    accounts: [],
-    selectedAccount: null,
-    videos: [],
-    selectedKeys: new Set(),
-    jobs: [],
-    activeJobId: '',
-    processing: false,
+    peers: [],
+    candidates: [],
+    peer: null,
+    items: [],
+    selected: new Set(),
+    results: {},
+    detailOpen: false,
     wasmPromise: null,
     keystreamCache: {}
   };
 
   function $(id) { return document.getElementById(id); }
-
   function esc(text) {
-    if (typeof escapeHtml === 'function') return escapeHtml(String(text || ''));
-    return String(text || '').replace(/[&<>"']/g, function(ch) {
+    if (typeof escapeHtml === 'function') return escapeHtml(String(text == null ? '' : text));
+    return String(text == null ? '' : text).replace(/[&<>"']/g, function(ch) {
       return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
     });
   }
-
   function apiBase() {
     return (typeof API_BASE !== 'undefined' && API_BASE ? String(API_BASE) : '').replace(/\/$/, '');
   }
-
   function localBase() {
     var base = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE ? String(LOCAL_API_BASE) : '').replace(/\/$/, '');
     return base || window.location.origin;
   }
-
   function jsonHeaders() {
     var h = typeof authHeaders === 'function' ? Object.assign({}, authHeaders() || {}) : {};
     if (!h.Authorization && typeof token !== 'undefined' && token) h.Authorization = 'Bearer ' + token;
     h['Content-Type'] = 'application/json';
     return h;
   }
-
   function parseErr(data, fallback) {
     if (!data) return fallback || '请求失败';
     if (typeof data === 'string') return data;
@@ -49,7 +45,6 @@
     if (detail && typeof detail.message === 'string') return detail.message;
     try { return JSON.stringify(detail || data); } catch (e) { return fallback || '请求失败'; }
   }
-
   function apiJson(path, opts) {
     opts = opts || {};
     var base = apiBase();
@@ -65,7 +60,6 @@
       });
     });
   }
-
   function localJson(path, body) {
     return fetch(localBase() + path, {
       method: 'POST',
@@ -73,70 +67,36 @@
       body: JSON.stringify(body || {})
     }).then(function(resp) {
       return resp.json().catch(function() { return {}; }).then(function(data) {
-        if (!resp.ok) throw new Error(parseErr(data, '本机处理失败'));
+        if (!resp.ok) throw new Error(parseErr(data, '本机服务请求失败'));
         return data;
       });
     });
   }
-
-  function localGet(path) {
-    return fetch(localBase() + path, {
-      method: 'GET',
-      headers: jsonHeaders()
-    }).then(function(resp) {
-      return resp.json().catch(function() { return {}; }).then(function(data) {
-        if (!resp.ok) throw new Error(parseErr(data, '本机读取失败'));
-        return data;
-      });
-    });
+  function setMsg(text, isError) {
+    var box = $('wctMsg');
+    if (!box) return;
+    if (!text) { box.className = 'wct-msg'; box.textContent = ''; return; }
+    box.className = 'wct-msg ' + (isError ? 'err' : 'ok');
+    box.textContent = text;
   }
-
-  function setMsg(text, isErr) {
-    var node = $('wctMsg');
-    if (!node) return;
-    node.textContent = text || '';
-    node.className = text ? 'wct-msg ' + (isErr ? 'err' : 'ok') : 'wct-msg';
+  function platformLabel(value) { return PLATFORM_LABEL[value] || value || ''; }
+  function fmtCount(value) {
+    var n = Number(value || 0);
+    if (!n) return '';
+    if (n >= 10000) return (n / 10000).toFixed(1) + ' 万';
+    return String(n);
   }
-
-  function accountKey(account) {
-    return String(account && (account.username || account.finder_username || account.id) || '');
-  }
-
-  function videoKey(video) {
-    return String(video && (video.item_key || video.public_url || video.video_url) || '');
-  }
-
-  function videoTitle(video, fallback) {
-    var value = video && video.title;
-    if (Array.isArray(value)) {
-      for (var i = 0; i < value.length; i += 1) {
-        var nested = videoTitle({ title: value[i] }, '');
-        if (nested) return nested;
-      }
-      return fallback || '';
-    }
-    if (value && typeof value === 'object') {
-      return videoTitle({
-        title: value.shortTitle || value.title || value.desc || value.description || value.content || value.text
-      }, fallback);
-    }
-    var text = String(value || '').trim();
-    var m = text.match(/['"]shortTitle['"]\s*:\s*['"]([^'"]+)/);
-    if (m && m[1]) return m[1].trim();
-    return text || fallback || '';
-  }
-
   function getPath(obj, path) {
     var cur = obj;
     var parts = String(path || '').split('.');
     for (var i = 0; i < parts.length; i += 1) {
-      if (cur && Array.isArray(cur)) cur = cur[Number(parts[i])];
-      else if (cur && typeof cur === 'object') cur = cur[parts[i]];
+      if (cur == null) return '';
+      if (Array.isArray(cur)) cur = cur[Number(parts[i])];
+      else if (typeof cur === 'object') cur = cur[parts[i]];
       else return '';
     }
     return cur == null ? '' : cur;
   }
-
   function decodeKey(video) {
     var raw = video && video.raw && typeof video.raw === 'object' ? video.raw : {};
     return String(
@@ -151,332 +111,32 @@
       ''
     ).trim();
   }
-
-  function compactRaw(video) {
-    var raw = video && video.raw && typeof video.raw === 'object' ? video.raw : {};
-    var mediaUrl = getPath(raw, 'object_desc.media.0.url') ||
-      getPath(raw, 'objectDesc.media.0.url') ||
-      getPath(raw, 'objectDesc.mediaList.0.url') ||
-      getPath(raw, 'media.0.url') ||
-      getPath(raw, 'mediaList.0.url') ||
-      '';
-    var mediaToken = getPath(raw, 'object_desc.media.0.url_token') ||
-      getPath(raw, 'objectDesc.media.0.url_token') ||
-      getPath(raw, 'objectDesc.mediaList.0.url_token') ||
-      getPath(raw, 'media.0.url_token') ||
-      getPath(raw, 'mediaList.0.url_token') ||
-      '';
-    var key = decodeKey(video);
-    if (!mediaUrl && !mediaToken && !key) return {};
-    return { object_desc: { media: [{ url: mediaUrl, url_token: mediaToken, decode_key: key }] } };
+  function itemVideoUrl(item) {
+    if (item && item.video_url) return String(item.video_url);
+    var raw = item && item.raw && typeof item.raw === 'object' ? item.raw : {};
+    return String(
+      getPath(raw, 'video.play_addr.url_list.0') ||
+      getPath(raw, 'video.play_addr.url_list.1') ||
+      getPath(raw, 'video.play_addr_h264.url_list.0') ||
+      getPath(raw, 'aweme_detail.video.play_addr.url_list.0') ||
+      getPath(raw, 'play_url') ||
+      ''
+    );
   }
-
-  function compactVideo(video) {
-    return {
-      item_key: videoKey(video),
-      title: videoTitle(video, ''),
-      publish_time: video.publish_time || '',
-      video_url: video.video_url || '',
-      public_url: video.public_url || '',
-      cover_url: video.cover_url || '',
-      metrics: video.metrics && typeof video.metrics === 'object' ? video.metrics : {},
-      decode_key: decodeKey(video),
-      raw: compactRaw(video)
-    };
+  function itemTitle(item) {
+    var title = String((item && (item.title || item.description)) || '').trim();
+    return title || String((item && item.item_key) || '未命名作品');
   }
-
-  function statusLabel(status) {
-    var map = {
-      queued: '排队中',
-      running: '处理中',
-      completed: '完成',
-      failed: '失败',
-      pending: '待处理'
-    };
-    return map[status] || status || '-';
-  }
-
-  function nowText() {
-    var d = new Date();
-    function pad(n) { return n < 10 ? '0' + n : '' + n; }
-    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-  }
-
-  function saveJobs() {
-    try {
-      localStorage.setItem(JOB_STORE_KEY, JSON.stringify(state.jobs.slice(0, 50)));
-    } catch (e) {
-      console.warn('[wct] save jobs failed', e);
-    }
-    localJson('/api/wechat-channels-transcript/local-jobs', {
-      jobs: state.jobs.slice(0, 50)
-    }).catch(function(err) {
-      console.warn('[wct] save jobs db failed', err);
-    });
-  }
-
-  function applyCachedWorkspace(data, showMessage, keepAccounts) {
-    if (!data || !data.account || !Array.isArray(data.videos)) return false;
-    state.selectedAccount = data.account;
-    if (!keepAccounts) state.accounts = [data.account];
-    state.videos = data.videos || [];
-    state.selectedKeys = new Set(Array.isArray(data.selected_keys) ? data.selected_keys : state.videos.map(videoKey).filter(Boolean));
-    try { localStorage.setItem(LAST_ACCOUNT_KEY, accountKey(data.account)); } catch (e) {}
-    renderAccounts();
-    renderSelectedAccount();
-    renderVideos();
-    if (showMessage) setMsg('已恢复上次查询的视频列表：' + state.videos.length + ' 条', false);
-    return true;
-  }
-
-  function rememberCurrentVideos() {
-    if (!state.selectedAccount) return;
-    var key = accountKey(state.selectedAccount);
-    if (!key) return;
-    var videos = (state.videos || []).map(compactVideo);
-    try { localStorage.setItem(LAST_ACCOUNT_KEY, key); } catch (e) {}
-    return localJson('/api/wechat-channels-transcript/local-cache', {
-      account_key: key,
-      account: state.selectedAccount,
-      videos: videos,
-      selected_keys: Array.from(state.selectedKeys || [])
-    }).catch(function(err) {
-      console.warn('[wct] save video db cache failed', err);
-    });
-  }
-
-  function restoreVideosForAccount(account) {
-    var key = accountKey(account);
-    if (!key) return Promise.resolve(false);
-    return localGet('/api/wechat-channels-transcript/local-cache?account_key=' + encodeURIComponent(key))
-      .then(function(data) { return applyCachedWorkspace(data, true, true); })
-      .catch(function() { return false; });
-  }
-
-  function restoreLastWorkspace() {
-    var lastKey = '';
-    try { lastKey = localStorage.getItem(LAST_ACCOUNT_KEY) || ''; } catch (e) {}
-    var req = lastKey
-      ? localGet('/api/wechat-channels-transcript/local-cache?account_key=' + encodeURIComponent(lastKey)).catch(function() {
-          return localGet('/api/wechat-channels-transcript/local-cache/latest');
-        })
-      : localGet('/api/wechat-channels-transcript/local-cache/latest');
-    return req.then(function(data) {
-      return applyCachedWorkspace(data, false);
-    }).catch(function() {
-      return false;
-    });
-  }
-
-  function loadLocalJobs() {
-    function applyJobs(rows) {
-      state.jobs = Array.isArray(rows) ? rows : [];
-      var changed = false;
-      state.jobs.forEach(function(job) {
-        (job.items || []).forEach(function(item) {
-          if (item.status === 'running' || item.status === 'queued') {
-            item.status = 'pending';
-            item.stage = '上次中断，待重试';
-            changed = true;
-          }
-        });
-        if (job.status === 'running' || job.status === 'queued') {
-          job.status = 'failed';
-          changed = true;
-        }
-      });
-      if (changed) saveJobs();
-      if (!state.activeJobId && state.jobs.length) state.activeJobId = state.jobs[0].job_id;
-      renderJobs();
-    }
-
-    return localGet('/api/wechat-channels-transcript/local-jobs').then(function(data) {
-      var rows = Array.isArray(data && data.jobs) ? data.jobs : [];
-      if (rows.length) {
-        applyJobs(rows);
-        return;
-      }
-      var legacy = [];
-      try {
-        legacy = JSON.parse(localStorage.getItem(JOB_STORE_KEY) || '[]');
-      } catch (e) {
-        legacy = [];
-      }
-      applyJobs(Array.isArray(legacy) ? legacy : []);
-      if (state.jobs.length) saveJobs();
-    }).catch(function() {
-      var rows = [];
-      try {
-        rows = JSON.parse(localStorage.getItem(JOB_STORE_KEY) || '[]');
-      } catch (e) {
-        rows = [];
-      }
-      applyJobs(Array.isArray(rows) ? rows : []);
-    });
-  }
-
-  function activeJob() {
-    return state.jobs.filter(function(job) { return job.job_id === state.activeJobId; })[0] || null;
-  }
-
-  function updateJob(job) {
-    var found = false;
-    state.jobs = state.jobs.map(function(item) {
-      if (item.job_id === job.job_id) {
-        found = true;
-        return job;
-      }
-      return item;
-    });
-    if (!found) state.jobs.unshift(job);
-    state.activeJobId = job.job_id;
-    saveJobs();
-    renderJobs();
-  }
-
-  function updateProgress(job) {
-    var total = (job.items || []).length || 1;
-    var done = (job.items || []).filter(function(item) {
-      return item.status === 'completed' || item.status === 'failed';
-    }).length;
-    job.progress = Math.round(done / total * 100);
-    var completed = (job.items || []).filter(function(item) { return item.status === 'completed' && String(item.transcript || '').trim(); }).length;
-    var failed = (job.items || []).filter(function(item) { return item.status === 'failed'; }).length;
-    if (done >= total) {
-      job.status = completed > 0 ? 'completed' : 'failed';
-      job.completed_at = nowText();
-    } else if (done > 0 || job.status === 'running') {
-      job.status = 'running';
-    }
-    job.result_payload = { count: total, completed_count: completed, failed_count: failed };
-    updateJob(job);
-  }
-
-  function renderAccounts() {
-    var list = $('wctAccountList');
-    if (!list) return;
-    if (!state.accounts.length) {
-      list.className = 'wct-empty';
-      list.innerHTML = '暂无账号候选';
-      return;
-    }
-    list.className = 'wct-list';
-    list.innerHTML = state.accounts.map(function(account) {
-      var key = accountKey(account);
-      var active = state.selectedAccount && accountKey(state.selectedAccount) === key ? ' is-active' : '';
-      return '<div class="wct-item' + active + '" data-wct-account="' + esc(key) + '" style="cursor:pointer;">' +
-        (account.avatar_url ? '<img src="' + esc(account.avatar_url) + '" style="width:36px;height:36px;border-radius:50%;object-fit:cover;">' : '<span></span>') +
-        '<div><div class="wct-item-title">' + esc(account.display_name || account.nickname || key) + '</div>' +
-        '<div class="wct-meta">' + esc(key) + '</div>' +
-        '<div class="wct-meta">' + esc(account.signature || account.verify_info || '') + '</div></div>' +
-        '<button type="button" class="btn btn-primary btn-sm">选择</button>' +
-      '</div>';
-    }).join('');
-  }
-
-  function renderSelectedAccount() {
-    var node = $('wctSelectedAccount');
-    if (!node) return;
-    if (!state.selectedAccount) {
-      node.textContent = '请先选择账号';
-      return;
-    }
-    node.textContent = (state.selectedAccount.display_name || state.selectedAccount.nickname || accountKey(state.selectedAccount)) + ' · ' + accountKey(state.selectedAccount);
-  }
-
-  function renderVideos() {
-    var list = $('wctVideoList');
-    if (!list) return;
-    if (!state.videos.length) {
-      list.className = 'wct-empty';
-      list.innerHTML = state.selectedAccount ? '暂无作品，或作品里没有可下载视频链接。' : '选择账号后点击“拉取作品”。';
-      return;
-    }
-    list.className = 'wct-list';
-    list.innerHTML = state.videos.map(function(video, idx) {
-      var key = videoKey(video);
-      var checked = state.selectedKeys.has(key);
-      var title = videoTitle(video, '视频 ' + (idx + 1));
-      return '<label class="wct-item wct-video-row" style="grid-template-columns:24px minmax(0,1fr);cursor:pointer;">' +
-        '<input type="checkbox" data-wct-video="' + esc(key) + '"' + (checked ? ' checked' : '') + '>' +
-        '<div class="wct-item-title">' + esc(title) + '</div>' +
-      '</label>';
-    }).join('');
-  }
-
-  function renderJobs() {
-    var list = $('wctJobList');
-    if (!list) return;
-    if (!state.jobs.length) {
-      list.className = 'wct-empty';
-      list.innerHTML = '暂无记录';
-      renderResults();
-      return;
-    }
-    list.className = 'wct-list';
-    list.innerHTML = state.jobs.map(function(job) {
-      var active = job.job_id === state.activeJobId ? ' is-active' : '';
-      var count = (job.items || []).length || 0;
-      return '<div class="wct-item' + active + '" data-wct-job="' + esc(job.job_id) + '" style="grid-template-columns:minmax(0,1fr) auto;cursor:pointer;">' +
-        '<div><div class="wct-item-title">' + esc(job.title || job.job_id) + '</div>' +
-        '<div class="wct-meta">' + esc(job.created_at || '') + '</div>' +
-        '<div class="wct-meta">' + esc(count) + ' 条 · ' + esc(job.progress || 0) + '%</div></div>' +
-        '<span class="wct-status ' + esc(job.status || '') + '">' + esc(statusLabel(job.status)) + '</span>' +
-      '</div>';
-    }).join('');
-    renderResults();
-  }
-
-  function renderResults() {
-    var host = $('wctResultList');
-    var summary = $('wctJobSummary');
-    var job = activeJob();
-    if (!host) return;
-    if (!job) {
-      host.className = 'wct-empty';
-      host.innerHTML = '点击左侧记录查看结果。';
-      if (summary) summary.textContent = '点击左侧记录查看结果。';
-      return;
-    }
-    var items = job.items || [];
-    if (summary) summary.textContent = statusLabel(job.status) + ' · ' + (job.progress || 0) + '% · ' + items.length + ' 条';
-    if (!items.length) {
-      host.className = 'wct-empty';
-      host.innerHTML = '任务暂无明细';
-      return;
-    }
-    host.className = '';
-    host.innerHTML = items.map(function(item, idx) {
-      return '<div class="wct-output">' +
-        '<div class="wct-row" style="justify-content:space-between;margin-bottom:8px;">' +
-        '<div><strong>' + esc(idx + 1) + '. ' + esc(item.title || item.item_key || '') + '</strong><div class="wct-meta">' + esc(item.publish_time || '') + (item.stage ? ' · ' + esc(item.stage) : '') + '</div></div>' +
-        '<span class="wct-status ' + esc(item.status || '') + '">' + esc(statusLabel(item.status)) + '</span></div>' +
-        (item.error ? '<div class="wct-msg err" style="display:block;margin-bottom:8px;">' + esc(item.error) + '</div>' : '') +
-        '<textarea readonly>' + esc(item.transcript || '') + '</textarea>' +
-        '<div class="wct-actions" style="margin-top:8px;"><button type="button" class="btn btn-ghost btn-sm" data-wct-copy-one="' + esc(idx) + '">复制</button></div>' +
-      '</div>';
-    }).join('');
-  }
-
-  function selectedVideos() {
-    var keys = [];
-    document.querySelectorAll('[data-wct-video]').forEach(function(input) {
-      if (input.checked) keys.push(String(input.getAttribute('data-wct-video') || ''));
-    });
-    state.selectedKeys = new Set(keys);
-    var wanted = new Set(keys);
-    return state.videos.filter(function(video) { return wanted.has(videoKey(video)); });
-  }
-
   function bytesToBase64(bytes) {
-    var binary = '';
     var chunk = 0x8000;
+    var parts = [];
     for (var i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+      parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + chunk)));
     }
-    return btoa(binary);
+    return btoa(parts.join(''));
   }
 
+  /* ── 视频号解密参数（WASM，原样保留）── */
   function ensureWasm() {
     if (window.Module && window.Module.WxIsaac64) return Promise.resolve(window.Module);
     if (state.wasmPromise) return state.wasmPromise;
@@ -512,44 +172,29 @@
         return String(path || '').endsWith('.wasm') ? wasmUrl : path;
       };
       module.onRuntimeInitialized = function() {
-        if (typeof previousInit === 'function') {
-          try { previousInit(); } catch (e) {}
-        }
+        if (typeof previousInit === 'function') { try { previousInit(); } catch (e) {} }
         finish();
       };
       window.Module = module;
       pollTimer = setInterval(finish, 100);
       timeoutTimer = setTimeout(function() {
         clearInterval(pollTimer);
-        if (!done) {
-          done = true;
-          reject(new Error('微信视频解密模块加载超时'));
-        }
+        if (!done) { done = true; reject(new Error('视频号解密模块加载超时')); }
       }, 60000);
       var script = document.createElement('script');
       script.src = scriptUrl;
       script.async = true;
-      script.onload = function() {
-        finish();
-        setTimeout(finish, 300);
-      };
+      script.onload = function() { finish(); setTimeout(finish, 300); };
       script.onerror = function() {
         if (pollTimer) clearInterval(pollTimer);
         if (timeoutTimer) clearTimeout(timeoutTimer);
-        if (!done) {
-          done = true;
-          reject(new Error('微信视频解密模块加载失败'));
-        }
+        if (!done) { done = true; reject(new Error('视频号解密模块加载失败')); }
       };
       document.head.appendChild(script);
     });
-    state.wasmPromise = state.wasmPromise.catch(function(err) {
-      state.wasmPromise = null;
-      throw err;
-    });
+    state.wasmPromise = state.wasmPromise.catch(function(err) { state.wasmPromise = null; throw err; });
     return state.wasmPromise;
   }
-
   function generateKeystreamBase64(key) {
     key = String(key || '').trim();
     if (state.keystreamCache[key]) return Promise.resolve(state.keystreamCache[key]);
@@ -559,293 +204,491 @@
       instance.generate(KEYSTREAM_BYTES);
       if (instance.delete) instance.delete();
       var bytes = window.__wctIsaacBytes;
-      if (!bytes || bytes.length < KEYSTREAM_BYTES) throw new Error('微信视频解密参数生成失败');
+      if (!bytes || bytes.length < KEYSTREAM_BYTES) throw new Error('视频号解密参数生成失败');
       var b64 = bytesToBase64(bytes);
       state.keystreamCache[key] = b64;
       return b64;
     });
   }
+  function keystreamFor(item) {
+    var key = decodeKey(item);
+    if (!key) return Promise.resolve('');
+    return generateKeystreamBase64(key);
+  }
 
-  function processJob(jobId) {
-    if (state.processing) return Promise.resolve();
-    var job = state.jobs.filter(function(item) { return item.job_id === jobId; })[0];
-    if (!job) return Promise.resolve();
-    state.processing = true;
-    job.status = 'running';
-    updateJob(job);
-    var chain = Promise.resolve();
-    (job.items || []).forEach(function(item, idx) {
-      chain = chain.then(function() {
-        if (item.status === 'completed' && String(item.transcript || '').trim()) return null;
-        item.status = 'running';
-        item.stage = '生成解密参数';
-        item.error = '';
-        updateJob(job);
-        var key = decodeKey(item);
-        if (!key) throw new Error('缺少 decode_key，无法解密视频号文件');
-        return generateKeystreamBase64(key).then(function(keystream) {
-          item.stage = '本机下载视频并分离音频';
-          updateJob(job);
-          return localJson('/api/wechat-channels-transcript/local-transcribe', {
-            video: item,
-            keystream_b64: keystream
-          });
-        }).then(function(data) {
-          var transcript = String(data.transcript || '').trim();
-          if (!transcript) throw new Error('转写完成但没有返回文案，请重试或换一个视频');
-          item.status = 'completed';
-          item.stage = '转写完成';
-          item.transcript = transcript;
-          item.audio_url = data.audio_url || '';
-          item.stt_task_id = data.task_id || '';
-          item.error = '';
-          updateProgress(job);
-          setMsg('已完成 ' + (idx + 1) + '/' + (job.items || []).length, false);
+  /* ── 结果本地存档 ── */
+  function loadStore() {
+    try { state.results = JSON.parse(localStorage.getItem(STORE_KEY) || '{}') || {}; } catch (e) { state.results = {}; }
+  }
+  function saveStore() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(state.results)); } catch (e) {}
+  }
+  function resultKey(item) { return (state.peer ? state.peer.id : 0) + ':' + String((item && item.item_key) || ''); }
+
+  /* ── 同行列表 ── */
+  function loadPeers() {
+    return apiJson('/api/ip-content/competitors').then(function(data) {
+      state.peers = Array.isArray(data.items) ? data.items : [];
+      renderPeers();
+      return state.peers;
+    }).catch(function(err) {
+      setMsg(err.message || '同行列表加载失败', true);
+      state.peers = [];
+      renderPeers();
+      return [];
+    });
+  }
+  function peerFields(peer) {
+    var meta = (peer && peer.meta) || {};
+    if (peer.platform === 'douyin') {
+      return [
+        ['抖音号', meta.unique_id || meta.douyin_id || '—'],
+        ['粉丝', fmtCount(meta.follower_count) || '—'],
+        ['获赞', fmtCount(meta.like_count) || '—'],
+        ['作品', meta.aweme_count ? String(meta.aweme_count) : '—'],
+        ['简介', meta.signature || '—']
+      ];
+    }
+    return [
+      ['视频号 ID', meta.username || peer.account_key || '—'],
+      ['粉丝', fmtCount(meta.follower_count) || '—'],
+      ['认证', meta.verify_info || '—'],
+      ['简介', meta.signature || '—']
+    ];
+  }
+  function renderPeers() {
+    var host = $('wctPeerList');
+    var count = $('wctPeerCount');
+    if (!host) return;
+    if (count) count.textContent = state.peers.length ? ('共 ' + state.peers.length + ' 家同行') : '';
+    if (!state.peers.length) {
+      host.className = 'wct-empty';
+      host.innerHTML = '还没有同行，点右上角「添加同行」。';
+      return;
+    }
+    host.className = 'wct-peer-list';
+    host.innerHTML = state.peers.map(function(peer) {
+      var meta = peer.meta || {};
+      var avatar = meta.avatar_url ? '<img class="wct-avatar" src="' + esc(meta.avatar_url) + '" alt="">' : '<div class="wct-avatar"></div>';
+      var rows = peerFields(peer).map(function(pair) {
+        return '<b>' + esc(pair[0]) + '</b><span>' + esc(pair[1]) + '</span>';
+      }).join('');
+      var synced = peer.last_fetch_at ? ('上次同步 ' + String(peer.last_fetch_at).replace('T', ' ').slice(0, 16)) : '还没同步过';
+      return '<article class="wct-peer">'
+        + '<div class="wct-peer-head">' + avatar
+        + '<div style="min-width:0;"><div class="wct-peer-name">' + esc(peer.display_name || peer.account_key) + '</div>'
+        + '<span class="wct-badge ' + esc(peer.platform) + '">' + esc(platformLabel(peer.platform)) + '</span></div></div>'
+        + '<div class="wct-fields">' + rows + '</div>'
+        + '<div class="wct-meta">' + esc(synced) + (peer.industry_tags ? ' · ' + esc(peer.industry_tags) : '') + '</div>'
+        + '<div class="wct-peer-foot">'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-wct-peer-sync="' + esc(peer.id) + '">同步</button>'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-wct-peer-delete="' + esc(peer.id) + '">删除</button>'
+        + '<button type="button" class="btn btn-primary btn-sm" data-wct-peer-detail="' + esc(peer.id) + '">详情</button>'
+        + '</div></article>';
+    }).join('');
+  }
+  function findPeer(id) {
+    var target = String(id || '');
+    for (var i = 0; i < state.peers.length; i += 1) {
+      if (String(state.peers[i].id) === target) return state.peers[i];
+    }
+    return null;
+  }
+  function syncPeer(id, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '同步中…'; }
+    var peer = findPeer(id);
+    setMsg('正在同步 ' + ((peer && peer.display_name) || '同行') + ' 的最新作品…');
+    return apiJson('/api/ip-content/competitors/' + encodeURIComponent(id) + '/sync', { method: 'POST', body: { count: 20 } })
+      .then(function(data) {
+        var n = (data.items && data.items.length) || 0;
+        setMsg('同步完成，本次入库 ' + n + ' 条作品。');
+        return loadPeers().then(function() {
+          if (state.detailOpen && state.peer && String(state.peer.id) === String(id)) return loadItems(state.peer);
+          return null;
         });
-      }).catch(function(err) {
-        item.status = 'failed';
-        item.stage = '处理失败';
-        item.error = err && err.message ? err.message : String(err || '处理失败');
-        updateProgress(job);
-        setMsg(item.error, true);
+      })
+      .catch(function(err) { setMsg(err.message || '同步失败', true); })
+      .finally(function() { if (btn) { btn.disabled = false; btn.textContent = '同步'; } });
+  }
+  function deletePeer(id) {
+    if (!window.confirm('删除这家同行？已同步的作品不会删除。')) return Promise.resolve();
+    var peer = findPeer(id);
+    return apiJson('/api/ip-content/competitors/' + encodeURIComponent(id), { method: 'DELETE' })
+      .then(function() {
+        setMsg('已删除同行 ' + ((peer && peer.display_name) || ''));
+        if (state.peer && String(state.peer.id) === String(id)) closeDetail();
+        return loadPeers();
+      })
+      .catch(function(err) { setMsg(err.message || '删除失败', true); });
+  }
+
+  /* ── 添加同行弹窗 ── */
+  function openAddModal() {
+    var modal = $('wctAddModal');
+    if (modal) modal.hidden = false;
+    state.candidates = [];
+    renderCandidates();
+    updatePlatformFields();
+  }
+  function closeAddModal() {
+    var modal = $('wctAddModal');
+    if (modal) modal.hidden = true;
+  }
+  function currentPlatform() {
+    return ($('wctPlatform') && $('wctPlatform').value) || 'douyin';
+  }
+  function updatePlatformFields() {
+    var platform = currentPlatform();
+    var input = $('wctSearchInput');
+    var byId = $('wctAddByIdBtn');
+    if (input) input.placeholder = platform === 'douyin' ? '输入抖音昵称或抖音号' : '输入视频号昵称、sph 开头公开 ID 或 username';
+    if (byId) byId.hidden = platform !== 'wechat_channels';
+  }
+  function searchCandidates() {
+    var platform = currentPlatform();
+    var keyword = (($('wctSearchInput') && $('wctSearchInput').value) || '').trim();
+    if (!keyword) { setMsg('请先输入要搜索的昵称或账号', true); return; }
+    var btn = $('wctSearchBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '搜索中…'; }
+    var url = platform === 'wechat_channels'
+      ? '/api/ip-content/wechat-channels/users/search?q=' + encodeURIComponent(keyword)
+      : '/api/ip-content/douyin/users/search?q=' + encodeURIComponent(keyword);
+    apiJson(url).then(function(data) {
+      state.candidates = Array.isArray(data.items) ? data.items : [];
+      renderCandidates();
+      setMsg(state.candidates.length ? ('搜到 ' + state.candidates.length + ' 个账号，选一个添加。') : '没有搜到匹配账号，换个昵称再试。', !state.candidates.length);
+    }).catch(function(err) {
+      state.candidates = [];
+      renderCandidates();
+      setMsg(err.message || '搜索失败', true);
+    }).finally(function() { if (btn) { btn.disabled = false; btn.textContent = '搜索'; } });
+  }
+  function renderCandidates() {
+    var host = $('wctCandidates');
+    if (!host) return;
+    if (!state.candidates.length) { host.innerHTML = ''; return; }
+    host.innerHTML = state.candidates.map(function(cand, index) {
+      var avatar = cand.avatar_url ? '<img class="wct-avatar" src="' + esc(cand.avatar_url) + '" alt="">' : '<div class="wct-avatar"></div>';
+      var name = cand.display_name || cand.nickname || cand.unique_id || '';
+      var line = [cand.unique_id ? ('抖音号 ' + cand.unique_id) : '', cand.follower_count ? ('粉丝 ' + fmtCount(cand.follower_count)) : '', cand.verify_info || '']
+        .filter(Boolean).join(' · ');
+      return '<div class="wct-cand">' + avatar
+        + '<div style="min-width:0;flex:1;"><div class="wct-peer-name">' + esc(name) + '</div><div class="wct-meta">' + esc(line) + '</div>'
+        + '<div class="wct-meta">' + esc(cand.signature || '') + '</div></div>'
+        + '<button type="button" class="btn btn-primary btn-sm" data-wct-add-cand="' + index + '">添加</button></div>';
+    }).join('');
+  }
+  function addCandidate(index) {
+    var cand = state.candidates[Number(index)];
+    if (!cand) return;
+    var platform = currentPlatform();
+    var accountKey = platform === 'wechat_channels'
+      ? String(cand.username || cand.finder_username || cand.id || '').trim()
+      : String(cand.sec_user_id || cand.sec_uid || cand.id || '').trim();
+    if (!accountKey) { setMsg(platform === 'wechat_channels' ? '该候选缺少 username，不能添加' : '该候选缺少 sec_user_id，不能添加', true); return; }
+    var payload = {
+      platform: platform,
+      account_key: accountKey,
+      display_name: String(cand.display_name || cand.nickname || '').trim(),
+      homepage_url: String(cand.homepage_url || '').trim(),
+      industry_tags: (($('wctTagsInput') && $('wctTagsInput').value) || '').trim(),
+      meta: {
+        source: platform === 'wechat_channels' ? 'wechat_channels_user_search' : 'douyin_user_search',
+        unique_id: cand.unique_id || '',
+        username: cand.username || cand.finder_username || '',
+        uid: cand.uid || '',
+        nickname: cand.nickname || cand.display_name || '',
+        follower_count: cand.follower_count || 0,
+        aweme_count: cand.aweme_count || 0,
+        like_count: cand.like_count || 0,
+        signature: cand.signature || '',
+        avatar_url: cand.avatar_url || '',
+        verify_info: cand.verify_info || ''
+      }
+    };
+    apiJson('/api/ip-content/competitors', { method: 'POST', body: payload }).then(function() {
+      setMsg('同行已添加，进详情点「同步作品」即可拉作品。');
+      state.candidates = [];
+      renderCandidates();
+      if ($('wctSearchInput')) $('wctSearchInput').value = '';
+      closeAddModal();
+      return loadPeers();
+    }).catch(function(err) { setMsg(err.message || '添加同行失败', true); });
+  }
+  function addByPublicId() {
+    var channelId = (($('wctSearchInput') && $('wctSearchInput').value) || '').trim();
+    if (!channelId) { setMsg('请先输入视频号公开 ID（sph 开头）', true); return; }
+    apiJson('/api/ip-content/wechat-channels/competitors/by-channel-id', {
+      method: 'POST',
+      body: { channel_id: channelId, industry_tags: (($('wctTagsInput') && $('wctTagsInput').value) || '').trim() }
+    }).then(function() {
+      setMsg('已按公开 ID 添加视频号同行。');
+      closeAddModal();
+      return loadPeers();
+    }).catch(function(err) { setMsg(err.message || '按公开 ID 添加失败', true); });
+  }
+
+  /* ── 详情（二级界面，进入不自动同步）── */
+  function openDetail(id) {
+    var peer = findPeer(id);
+    if (!peer) return;
+    state.peer = peer;
+    state.selected = new Set();
+    state.items = [];
+    state.detailOpen = true;
+    var modal = $('wctDetailModal');
+    if (modal) modal.hidden = false;
+    var title = $('wctDetailTitle');
+    if (title) title.textContent = peer.display_name || peer.account_key;
+    var badge = $('wctDetailBadge');
+    if (badge) { badge.className = 'wct-badge ' + peer.platform; badge.textContent = platformLabel(peer.platform); }
+    var meta = $('wctDetailMeta');
+    if (meta) meta.textContent = peerFields(peer).map(function(pair) { return pair[0] + '：' + pair[1]; }).join('　');
+    renderItems();
+    renderResults();
+    return loadItems(peer);
+  }
+  function closeDetail() {
+    state.detailOpen = false;
+    state.peer = null;
+    state.items = [];
+    state.selected = new Set();
+    var modal = $('wctDetailModal');
+    if (modal) modal.hidden = true;
+  }
+  function loadItems(peer) {
+    var host = $('wctItemList');
+    if (host) { host.className = 'wct-empty'; host.innerHTML = '正在读取已入库作品…'; }
+    var url = '/api/ip-content/source-items?source_type=user_post&limit=200&competitor_id=' + encodeURIComponent(peer.id)
+      + '&platform=' + encodeURIComponent(peer.platform);
+    return apiJson(url).then(function(data) {
+      state.items = Array.isArray(data.items) ? data.items : [];
+      renderItems();
+      return state.items;
+    }).catch(function(err) {
+      state.items = [];
+      renderItems();
+      setMsg(err.message || '作品读取失败', true);
+      return [];
+    });
+  }
+  function renderItems() {
+    var host = $('wctItemList');
+    var hint = $('wctItemHint');
+    if (hint) hint.textContent = state.items.length ? ('已入库 ' + state.items.length + ' 条；点右上角「同步作品」可拉最新。') : '还没同步过，点右上角「同步作品」。';
+    if (!host) return;
+    if (!state.items.length) {
+      host.className = 'wct-empty';
+      host.innerHTML = '暂无作品（点右上角「同步作品」）。';
+      return;
+    }
+    host.className = '';
+    host.innerHTML = state.items.map(function(item, index) {
+      var key = String(item.item_key || index);
+      var cover = item.cover_url ? '<img class="wct-cover" src="' + esc(item.cover_url) + '" alt="">' : '<div class="wct-cover"></div>';
+      var meta = [];
+      if (item.publish_time) meta.push(String(item.publish_time).slice(0, 16));
+      var metrics = item.metrics || {};
+      if (metrics.digg_count || metrics.like_count) meta.push('赞 ' + fmtCount(metrics.digg_count || metrics.like_count));
+      if (metrics.comment_count) meta.push('评 ' + fmtCount(metrics.comment_count));
+      var stored = state.results[resultKey(item)];
+      var status = stored && stored.transcript ? '<span class="wct-status completed">已提取</span>' : '';
+      return '<article class="wct-item">'
+        + '<input type="checkbox" data-wct-pick="' + index + '"' + (state.selected.has(key) ? ' checked' : '') + '>'
+        + cover
+        + '<div><div class="wct-item-title">' + esc(itemTitle(item)) + ' ' + status + '</div>'
+        + '<div class="wct-meta">' + esc(meta.join(' · ')) + '</div>'
+        + '<div class="wct-item-actions">'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-wct-download="' + index + '">下载视频</button>'
+        + '<button type="button" class="btn btn-ghost btn-sm" data-wct-extract="' + index + '">提炼文案</button>'
+        + (item.public_url ? '<a class="btn btn-ghost btn-sm" href="' + esc(item.public_url) + '" target="_blank" rel="noopener">打开原页</a>' : '')
+        + '</div></div></article>';
+    }).join('');
+  }
+  function togglePick(index, checked) {
+    var item = state.items[Number(index)];
+    if (!item) return;
+    var key = String(item.item_key || index);
+    if (checked) state.selected.add(key); else state.selected.delete(key);
+  }
+  function pickAll(checked) {
+    state.selected = new Set();
+    if (checked) state.items.forEach(function(item, index) { state.selected.add(String(item.item_key || index)); });
+    renderItems();
+  }
+  function downloadItem(index) {
+    var item = state.items[Number(index)];
+    if (!item) return;
+    var url = itemVideoUrl(item);
+    if (!url) { setMsg('这条作品没有可下载的视频地址', true); return; }
+    setMsg('正在下载视频到本机…');
+    keystreamFor(item).then(function(keystream) {
+      return localJson('/api/wechat-channels-transcript/local-download', { video: item, keystream_b64: keystream });
+    }).then(function(data) {
+      setMsg('已下载：' + (data.path || '') + (data.opened ? '（已打开所在文件夹）' : ''));
+    }).catch(function(err) { setMsg(err.message || '下载失败', true); });
+  }
+  function extractItem(item) {
+    var url = itemVideoUrl(item);
+    if (!url) return Promise.reject(new Error('这条作品没有可提取的视频地址'));
+    return keystreamFor(item).then(function(keystream) {
+      return localJson('/api/wechat-channels-transcript/local-transcribe', { video: item, keystream_b64: keystream });
+    }).then(function(data) {
+      var transcript = String(data.transcript || '').trim();
+      if (!transcript) throw new Error('转写完成但没有返回文案');
+      state.results[resultKey(item)] = { title: itemTitle(item), transcript: transcript, at: Date.now() };
+      saveStore();
+      return transcript;
+    });
+  }
+  function extractSelected() {
+    if (!state.peer) return;
+    var list = state.items.filter(function(item, index) { return state.selected.has(String(item.item_key || index)); });
+    if (!list.length) { setMsg('请先勾选要提炼的作品', true); return; }
+    var btn = $('wctExtractBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '提炼中…'; }
+    var chain = Promise.resolve();
+    var failed = 0;
+    list.forEach(function(item, idx) {
+      chain = chain.then(function() {
+        setMsg('正在提炼 ' + (idx + 1) + '/' + list.length + '：' + itemTitle(item).slice(0, 30));
+        return extractItem(item).catch(function(err) { failed += 1; setMsg('第 ' + (idx + 1) + ' 条失败：' + err.message, true); });
       });
     });
-    return chain.finally(function() {
-      state.processing = false;
-      updateProgress(job);
-    });
+    chain.then(function() {
+      renderItems();
+      renderResults();
+      setMsg(failed ? ('提炼完成，失败 ' + failed + ' 条。') : '提炼完成，共 ' + list.length + ' 条。', !!failed);
+    }).finally(function() { if (btn) { btn.disabled = false; btn.textContent = '提炼文案'; } });
   }
-
-  function searchAccounts() {
-    var q = (($('wctKeywordInput') || {}).value || '').trim();
-    if (!q) return setMsg('请输入视频分享链接、视频号 ID、finder username 或昵称', true);
-    setMsg('正在解析账号...', false);
-    apiJson('/api/wechat-channels-transcript/users/search?q=' + encodeURIComponent(q)).then(function(data) {
-      state.accounts = data.items || [];
-      state.selectedAccount = null;
-      state.videos = [];
-      state.selectedKeys.clear();
-      renderAccounts();
-      renderSelectedAccount();
-      renderVideos();
-      setMsg(state.accounts.length ? '请选择要分析的视频号账号' : '没有解析到账号，请换分享链接、视频号 ID 或昵称再试', !state.accounts.length);
-    }).catch(function(err) {
-      setMsg(err.message || '账号解析失败', true);
-    });
+  function renderResults() {
+    var host = $('wctResultList');
+    var hint = $('wctResultHint');
+    if (!host) return;
+    var rows = state.items
+      .map(function(item) {
+        var stored = state.results[resultKey(item)];
+        return stored && stored.transcript ? { title: stored.title || itemTitle(item), transcript: stored.transcript } : null;
+      })
+      .filter(Boolean);
+    if (hint) hint.textContent = rows.length ? ('已提取 ' + rows.length + ' 条') : '勾选作品后点「提炼文案」。';
+    if (!rows.length) { host.className = 'wct-empty'; host.innerHTML = '暂无结果'; return; }
+    host.className = '';
+    host.innerHTML = rows.map(function(row) {
+      return '<div class="wct-result"><div class="wct-item-title" style="margin-bottom:6px;">' + esc(row.title) + '</div>'
+        + '<textarea readonly>' + esc(row.transcript) + '</textarea>'
+        + '<div class="wct-item-actions"><button type="button" class="btn btn-ghost btn-sm" data-wct-copy="1">复制这条</button></div></div>';
+    }).join('');
   }
-
-  function fetchVideos() {
-    if (!state.selectedAccount) return setMsg('请先选择账号', true);
-    var username = accountKey(state.selectedAccount);
-    setMsg('正在拉取作品...', false);
-    apiJson('/api/wechat-channels-transcript/videos', {
-      method: 'POST',
-      body: { username: username, max_pages: 8, page_size: 20 }
-    }).then(function(data) {
-      state.videos = data.items || [];
-      state.selectedKeys = new Set(state.videos.map(videoKey).filter(Boolean));
-      rememberCurrentVideos();
-      renderVideos();
-      setMsg('作品拉取完成：' + state.videos.length + ' 条', false);
-    }).catch(function(err) {
-      setMsg(err.message || '作品拉取失败', true);
-    });
+  function resultRows() {
+    if (!state.peer) return [];
+    return state.items.map(function(item) {
+      var stored = state.results[resultKey(item)];
+      return stored && stored.transcript ? stored : null;
+    }).filter(Boolean);
   }
-
-  function createJob() {
-    if (!state.selectedAccount) return setMsg('请先选择账号', true);
-    var videos = selectedVideos().map(compactVideo);
-    if (!videos.length) return setMsg('请至少选择一个作品', true);
-    var missing = videos.filter(function(video) { return !video.decode_key; }).length;
-    if (missing) return setMsg('有 ' + missing + ' 个作品缺少 decode_key，无法解密提取', true);
-    var job = {
-      job_id: 'local_wct_' + Date.now(),
-      status: 'queued',
-      stage: 'queued',
-      progress: 0,
-      title: '视频号文案提取：' + (state.selectedAccount.display_name || state.selectedAccount.nickname || accountKey(state.selectedAccount)),
-      created_at: nowText(),
-      items: videos.map(function(video) {
-        return Object.assign({}, video, { status: 'pending', stage: '待处理', transcript: '', error: '' });
-      }),
-      result_payload: { count: videos.length, completed_count: 0, failed_count: 0 }
-    };
-    updateJob(job);
-    setMsg('已创建本机处理任务，开始下载视频并分离音频。', false);
-    processJob(job.job_id);
+  function copyText(text) {
+    try { navigator.clipboard.writeText(text); setMsg('已复制到剪贴板。'); }
+    catch (e) { setMsg('复制失败，请手动选择文本。', true); }
   }
-
-  function resumeJob() {
-    var job = activeJob();
-    if (!job) return setMsg('请先选择一个任务', true);
-    if (state.processing) return setMsg('当前已有任务处理中', true);
-    (job.items || []).forEach(function(item) {
-      if (item.status !== 'completed' || !String(item.transcript || '').trim()) {
-        item.status = 'pending';
-        item.stage = '待重试';
-        item.error = '';
-      }
-    });
-    updateJob(job);
-    processJob(job.job_id);
+  function downloadFile(filename, content, type) {
+    var blob = new Blob([content], { type: type || 'text/plain;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function() { URL.revokeObjectURL(url); }, 3000);
   }
-
-  function allText(job) {
-    job = job || activeJob();
-    if (!job) return '';
-    return (job.items || []).map(function(item, idx) {
-      return '### ' + (idx + 1) + '. ' + (item.title || item.item_key || '') + '\n' + (item.transcript || '') + '\n';
-    }).join('\n');
+  function exportTxt() {
+    var rows = resultRows();
+    if (!rows.length) { setMsg('还没有可导出的文案', true); return; }
+    var text = rows.map(function(row, index) { return '【' + (index + 1) + '】' + row.title + '\n' + row.transcript; }).join('\n\n');
+    downloadFile('文案提取_' + (state.peer ? state.peer.platform : '') + '.txt', text);
   }
-
-  function exportToLocalFile(format) {
-    var job = activeJob();
-    if (!job) {
-      setMsg('请先选择一个任务', true);
-      return Promise.resolve();
-    }
-    var rows = (job.items || []).map(function(item) {
-      return {
-        title: item.title || item.item_key || '',
-        publish_time: item.publish_time || '',
-        status: statusLabel(item.status),
-        public_url: item.public_url || '',
-        video_url: item.video_url || '',
-        transcript: item.transcript || '',
-        error: item.error || ''
-      };
-    });
-    var text = allText(job);
-    if (format === 'txt' && !text.trim()) {
-      setMsg('暂无可导出文本', true);
-      return Promise.resolve();
-    }
-    if (format === 'csv' && !rows.length) {
-      setMsg('暂无可导出记录', true);
-      return Promise.resolve();
-    }
-    setMsg('正在导出...', false);
-    return localJson('/api/wechat-channels-transcript/export', {
-      format: format,
-      filename: 'wechat-channels-transcripts',
-      text: text,
-      rows: rows
-    }).then(function(data) {
-      setMsg('导出成功：' + (data.path || data.filename || ''), false);
-    }).catch(function(err) {
-      setMsg((err && err.message) || '导出失败', true);
-    });
-  }
-
   function exportCsv() {
-    return exportToLocalFile('csv');
+    var rows = resultRows();
+    if (!rows.length) { setMsg('还没有可导出的文案', true); return; }
+    function cell(value) { return '"' + String(value == null ? '' : value).replace(/"/g, '""') + '"'; }
+    var csv = '\ufeff' + ['标题,文案'].concat(rows.map(function(row) { return cell(row.title) + ',' + cell(row.transcript); })).join('\r\n');
+    downloadFile('文案提取_' + (state.peer ? state.peer.platform : '') + '.csv', csv, 'text/csv;charset=utf-8');
   }
 
-  function bind(root) {
-    var back = $('wctBackBtn');
-    if (back) back.addEventListener('click', function() {
-      var nav = document.querySelector('.nav-left-item[data-view="skill-store"]');
-      if (nav) nav.click();
+  function bind() {
+    var on = function(id, event, handler) { var el = $(id); if (el) el.addEventListener(event, handler); };
+    on('wctRefreshBtn', 'click', function() { setMsg(''); loadPeers(); });
+    on('wctAddPeerBtn', 'click', openAddModal);
+    on('wctAddClose', 'click', closeAddModal);
+    on('wctPlatform', 'change', updatePlatformFields);
+    on('wctSearchBtn', 'click', searchCandidates);
+    on('wctAddByIdBtn', 'click', addByPublicId);
+    on('wctSearchInput', 'keydown', function(ev) { if (ev.key === 'Enter') { ev.preventDefault(); searchCandidates(); } });
+    on('wctDetailClose', 'click', closeDetail);
+    on('wctSyncBtn', 'click', function() { if (state.peer) syncPeer(state.peer.id, $('wctSyncBtn')); });
+    on('wctSelectAllBtn', 'click', function() { pickAll(true); });
+    on('wctClearSelectBtn', 'click', function() { pickAll(false); });
+    on('wctExtractBtn', 'click', extractSelected);
+    on('wctCopyAllBtn', 'click', function() {
+      var rows = resultRows();
+      if (!rows.length) { setMsg('还没有可复制的文案', true); return; }
+      copyText(rows.map(function(row) { return row.title + '\n' + row.transcript; }).join('\n\n'));
     });
-    var search = $('wctSearchBtn');
-    if (search) search.addEventListener('click', searchAccounts);
-    var input = $('wctKeywordInput');
-    if (input) input.addEventListener('keydown', function(evt) { if (evt.key === 'Enter') searchAccounts(); });
-    var fetchBtn = $('wctFetchVideosBtn');
-    if (fetchBtn) fetchBtn.addEventListener('click', fetchVideos);
-    var allBtn = $('wctSelectAllBtn');
-    if (allBtn) allBtn.addEventListener('click', function() {
-      state.selectedKeys = new Set(state.videos.map(videoKey).filter(Boolean));
-      renderVideos();
+    on('wctExportTxtBtn', 'click', exportTxt);
+    on('wctExportCsvBtn', 'click', exportCsv);
+    on('wctPeerList', 'click', function(ev) {
+      var el = ev.target;
+      if (!el || !el.getAttribute) return;
+      if (el.getAttribute('data-wct-peer-sync')) syncPeer(el.getAttribute('data-wct-peer-sync'), el);
+      else if (el.getAttribute('data-wct-peer-delete')) deletePeer(el.getAttribute('data-wct-peer-delete'));
+      else if (el.getAttribute('data-wct-peer-detail')) openDetail(el.getAttribute('data-wct-peer-detail'));
     });
-    var clearBtn = $('wctClearSelectBtn');
-    if (clearBtn) clearBtn.addEventListener('click', function() {
-      state.selectedKeys.clear();
-      renderVideos();
+    on('wctCandidates', 'click', function(ev) {
+      var el = ev.target;
+      if (el && el.getAttribute && el.getAttribute('data-wct-add-cand') !== null) addCandidate(el.getAttribute('data-wct-add-cand'));
     });
-    var createBtn = $('wctCreateJobBtn');
-    if (createBtn) createBtn.addEventListener('click', createJob);
-    var refreshBtn = $('wctRefreshJobsBtn');
-    if (refreshBtn) refreshBtn.addEventListener('click', loadLocalJobs);
-    var resumeBtn = $('wctResumeJobBtn');
-    if (resumeBtn) resumeBtn.addEventListener('click', resumeJob);
-    var copyAll = $('wctCopyAllBtn');
-    if (copyAll) copyAll.addEventListener('click', function() {
-      var text = allText();
-      if (!text) return setMsg('暂无可复制文本', true);
-      navigator.clipboard.writeText(text).then(function() { setMsg('已复制全部文案', false); }).catch(function() { setMsg('复制失败', true); });
+    on('wctItemList', 'change', function(ev) {
+      var el = ev.target;
+      if (el && el.getAttribute && el.getAttribute('data-wct-pick') !== null) togglePick(el.getAttribute('data-wct-pick'), el.checked);
     });
-    var exportTxt = $('wctExportTxtBtn');
-    if (exportTxt) exportTxt.addEventListener('click', function() {
-      exportToLocalFile('txt');
-    });
-    var exportCsvBtn = $('wctExportCsvBtn');
-    if (exportCsvBtn) exportCsvBtn.addEventListener('click', exportCsv);
-
-    root.addEventListener('change', function(evt) {
-      var video = evt.target.closest('[data-wct-video]');
-      if (!video) return;
-      var key = String(video.getAttribute('data-wct-video') || '');
-      if (video.checked) state.selectedKeys.add(key);
-      else state.selectedKeys.delete(key);
-      if (state.selectedAccount) {
-        localJson('/api/wechat-channels-transcript/local-cache/selection', {
-          account_key: accountKey(state.selectedAccount),
-          selected_keys: Array.from(state.selectedKeys || [])
-        }).catch(function(err) {
-          console.warn('[wct] save selection failed', err);
-        });
+    on('wctItemList', 'click', function(ev) {
+      var el = ev.target;
+      if (!el || !el.getAttribute) return;
+      if (el.getAttribute('data-wct-download') !== null) downloadItem(el.getAttribute('data-wct-download'));
+      else if (el.getAttribute('data-wct-extract') !== null) {
+        var index = Number(el.getAttribute('data-wct-extract'));
+        var item = state.items[index];
+        if (!item) return;
+        setMsg('正在提炼：' + itemTitle(item).slice(0, 30));
+        extractItem(item).then(function() { renderItems(); renderResults(); setMsg('文案已提炼完成。'); })
+          .catch(function(err) { setMsg(err.message || '提炼失败', true); });
       }
     });
-    root.addEventListener('click', function(evt) {
-      var account = evt.target.closest('[data-wct-account]');
-      var job = evt.target.closest('[data-wct-job]');
-      var copyOne = evt.target.closest('[data-wct-copy-one]');
-      if (copyOne) {
-        var active = activeJob();
-        var idx = Number(copyOne.getAttribute('data-wct-copy-one'));
-        var item = active && active.items && active.items[idx];
-        var text = item && item.transcript || '';
-        if (!text) return setMsg('这条暂无可复制文本', true);
-        navigator.clipboard.writeText(text).then(function() { setMsg('已复制', false); }).catch(function() { setMsg('复制失败', true); });
-        return;
-      }
-      if (job) {
-        state.activeJobId = job.getAttribute('data-wct-job') || '';
-        renderJobs();
-        return;
-      }
-      if (account) {
-        var key = account.getAttribute('data-wct-account') || '';
-        state.selectedAccount = state.accounts.filter(function(item) { return accountKey(item) === key; })[0] || null;
-        renderAccounts();
-        renderSelectedAccount();
-        restoreVideosForAccount(state.selectedAccount).then(function(restored) {
-          if (!restored) {
-            state.videos = [];
-            state.selectedKeys.clear();
-            renderVideos();
-          }
-        });
-      }
+    on('wctResultList', 'click', function(ev) {
+      var el = ev.target;
+      if (!el || !el.getAttribute || el.getAttribute('data-wct-copy') === null) return;
+      var box = el.closest ? el.closest('.wct-result') : null;
+      var area = box ? box.querySelector('textarea') : null;
+      if (area) copyText(area.value);
+    });
+    ['wctAddModal', 'wctDetailModal'].forEach(function(id) {
+      var mask = $(id);
+      if (!mask) return;
+      mask.addEventListener('click', function(ev) {
+        if (ev.target !== mask) return;
+        if (id === 'wctAddModal') closeAddModal(); else closeDetail();
+      });
     });
   }
 
-  window.initWechatChannelsTranscriptView = function() {
-    var root = $('content-wechat-channels-transcript');
-    if (!root || root.dataset.bound === '1') return;
-    root.dataset.bound = '1';
-    bind(root);
-    renderAccounts();
-    renderSelectedAccount();
-    renderVideos();
-    restoreLastWorkspace().then(function(restored) {
-      if (!restored) {
-        renderAccounts();
-        renderSelectedAccount();
-        renderVideos();
-      }
-    });
-    loadLocalJobs();
-  };
+  function init() {
+    loadStore();
+    bind();
+    loadPeers();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
+  else init();
+
+  window.wctReload = function() { loadStore(); return loadPeers(); };
 })();
