@@ -1,3 +1,5 @@
+from pathlib import Path
+
 """客户端界面跳闪取证通道（2026-10-13）。
 
 线上现象：鼠标一动界面就闪/跳几下，但服务端日志里没有 reload、没有重新拉视图。
@@ -66,3 +68,30 @@ def test_ui_trace_empty_response_is_plain_text(tmp_path, monkeypatch):
     resp = _client().get("/api/client-ui-trace")
     assert resp.status_code == 200
     assert "还没有界面取证记录" in resp.text
+
+
+def _trace_js_code() -> str:
+    """ui-jump-trace.js 去掉注释后的代码（注释里会引用坏写法做说明）。"""
+    path = Path(__file__).resolve().parent / "static" / "js" / "ui-jump-trace.js"
+    js = path.read_text(encoding="utf-8")
+    return "\n".join(line for line in js.splitlines() if not line.strip().startswith("//"))
+
+
+def test_client_trace_script_uses_authenticated_fetch():
+    """sendBeacon 不能带 Authorization，落到鉴权接口上必然 401。
+
+    2026-10-13 真机实测：用 sendBeacon 的版本，8 次跳闪全部 401 被丢掉，一条没落盘。
+    """
+    code = _trace_js_code()
+    assert "sendBeacon" not in code
+    assert "headers: authHeaders()" in code
+    assert "localStorage.getItem('token')" in code
+
+
+def test_client_trace_ignores_startup_renders():
+    """只有「用户刚操作过」的结构性事件才算跳闪，否则启动时视图初始化会疯狂误报。"""
+    code = _trace_js_code()
+    assert "lastInputAt" in code
+    assert "settleUntil" in code
+    assert "since_input_ms" in code
+    assert "noteUserInput" in code
