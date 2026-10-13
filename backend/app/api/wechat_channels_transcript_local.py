@@ -381,6 +381,15 @@ def _decrypt_video_prefix(path: Path, keystream: bytes) -> None:
         raise RuntimeError("video decrypt failed: decode_key or keystream mismatch")
 
 
+def _human_size(size: int) -> str:
+    value = float(size or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return ("%.1f%s" % (value, unit)) if unit != "B" else ("%dB" % int(value))
+        value /= 1024
+    return "%dB" % int(size or 0)
+
+
 def _extract_audio(ffmpeg: str, source: Path, out_path: Path) -> None:
     proc = subprocess.run(
         [
@@ -1066,10 +1075,18 @@ async def local_transcribe_wechat_channels_video(
             "wechat_channels_audio.wav",
             "audio/wav",
             request,
-            timeout=180.0,
+            timeout=600.0,
         )
         if not audio_url:
-            raise RuntimeError("audio upload failed: " + _safe_error(diag))
+            raise RuntimeError(
+                "audio upload failed(%s): %s | url=%s attempts=%s"
+                % (
+                    _human_size(len(audio_bytes)),
+                    _safe_error(diag),
+                    str((diag or {}).get("upload_url") or "")[:160],
+                    str((diag or {}).get("attempt") or ""),
+                )
+            )
         stt_result = await asyncio.to_thread(_call_server_stt, audio_url, auth_headers)
         stt_data = stt_result.get("stt_data") if isinstance(stt_result.get("stt_data"), dict) else stt_result
         transcript = _transcript_text(stt_data)
