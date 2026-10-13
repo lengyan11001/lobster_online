@@ -162,11 +162,15 @@ if exist "%ROOT%\scripts\check_client_code_update.py" if exist "%ROOT%\CLIENT_CO
 :after_code_update
 echo.
 
+REM 2026-10-14: startup must not repair/download runtime deps. This used to run the full
+REM repair (which downloads ffmpeg/ffprobe from TOS, timeout up to 20 minutes) on every
+REM launch and could hang customer machines for a very long time. Now it only does a local
+REM check and tells the user to click System Config -> Repair Runtime Dependencies.
 if exist "scripts\repair_runtime_dependencies.py" (
-    echo [Repair] Checking runtime dependencies after update...
-    "%PYTHON%" "scripts\repair_runtime_dependencies.py"
+    echo [Repair] Checking runtime dependencies (no download at startup)...
+    "%PYTHON%" "scripts\repair_runtime_dependencies.py" --check-only
     if errorlevel 1 (
-        echo [WARN] Runtime dependency repair is incomplete. Open System Config and click Repair Runtime Dependencies.
+        echo [WARN] Some runtime dependencies are missing. Open System Config and click Repair Runtime Dependencies.
     ) else (
         echo [OK] Runtime dependencies are ready.
     )

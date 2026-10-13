@@ -497,6 +497,11 @@ if exist "skills\comfly_veo3_daihuo_video\tools\ffmpeg\windows\ffmpeg.exe" (
     )
     echo   [WARN] bundled skill ffmpeg has no ffprobe.exe, will download both binaries below
 )
+if /i "%LOBSTER_SKIP_FFMPEG_DOWNLOAD%"=="1" (
+    echo   [SKIP] startup: not downloading ffmpeg/ffprobe.
+    echo          Click "System Config - Repair Runtime Dependencies" when you need them.
+    goto :ffmpeg_install_done
+)
 if /i "%LOBSTER_OFFLINE_ONLY%"=="1" (
     echo   [ERR] LOBSTER_OFFLINE_ONLY=1 but deps\ffmpeg\ffmpeg.exe missing. Full offline pack must include it ^(or copy from build machine^).
     if not defined LOBSTER_SKIP_INSTALL_PAUSE pause

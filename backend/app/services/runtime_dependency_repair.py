@@ -315,6 +315,13 @@ def _repair_media_tools(timeout: int) -> dict[str, Any]:
             "message": "离线模式不联网下载 ffmpeg/ffprobe，请把 deps/ffmpeg 一起打包",
             "log": "",
         }
+    if str(os.environ.get("LOBSTER_SKIP_FFMPEG_DOWNLOAD") or "").strip().lower() in {"1", "true", "yes", "on"}:
+        return {
+            "ok": False,
+            "missing": missing,
+            "message": "启动期不自动下载 ffmpeg/ffprobe；需要时到「系统配置 → 修复运行依赖」里点一下",
+            "log": "",
+        }
     code, output = _run([sys.executable, str(script)], min(max(int(timeout or 0), 300), 3600))
     still_missing = _media_tools_missing()
     ok = code == 0 and not still_missing
@@ -333,6 +340,22 @@ def _repair_media_tools(timeout: int) -> dict[str, Any]:
             else "ffmpeg/ffprobe 补齐失败（仍缺：" + "、".join(still_missing or missing) + "）" + reason
         ),
         "log": _tail(output),
+    }
+
+
+def runtime_dependency_status() -> dict[str, Any]:
+    """只检查、不下载、不 pip（启动期用）。
+
+    2026-10-14：以前 start.bat 每次启动都跑完整 repair，缺 ffprobe 的机器会在启动时
+    从 TOS 下一整个 ffmpeg 包（超时上限 20 分钟），客户机经常卡到以为死机。
+    启动只报告缺什么，真正的补齐交给「系统配置 → 修复运行依赖」。
+    """
+    missing = _media_tools_missing()
+    return {
+        "ok": not missing,
+        "missing": missing,
+        "message": "本机 ffmpeg/ffprobe 已就绪" if not missing else "本机缺少：" + "、".join(missing),
+        "repair_needed": runtime_dependency_repair_needed(),
     }
 
 

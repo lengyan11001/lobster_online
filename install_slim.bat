@@ -349,6 +349,11 @@ if not exist "scripts\ensure_ffmpeg_windows.py" (
     echo   [WARN] ensure_ffmpeg_windows.py missing
     goto :ffmpeg_ok
 )
+if /i "%LOBSTER_SKIP_FFMPEG_DOWNLOAD%"=="1" (
+    echo   [SKIP] startup: not downloading ffmpeg/ffprobe.
+    echo          Click "System Config - Repair Runtime Dependencies" when you need them.
+    goto :ffmpeg_ok
+)
 mkdir "deps\ffmpeg" 2>nul
 %PYTHON% "%~dp0scripts\ensure_ffmpeg_windows.py"
 :ffmpeg_ok

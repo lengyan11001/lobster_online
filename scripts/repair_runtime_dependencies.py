@@ -17,7 +17,28 @@ from backend.app.services.runtime_dependency_repair import (  # noqa: E402
 )
 
 
+def _check_only() -> int:
+    """启动期入口：只查不装。返回 0=齐，3=缺（由调用方提示去界面点修复）。"""
+    from backend.app.services.runtime_dependency_repair import runtime_dependency_status
+
+    status = runtime_dependency_status()
+    # 只看「有没有真的缺东西」。repair marker 过期不代表有问题（它只说明上次没跑过完整 repair），
+    # 启动期不该为它报警，否则每台机器开机都弹一条 WARN。
+    if status.get("ok"):
+        print("[runtime-repair] startup check: dependencies ready (no download)", flush=True)
+        return 0
+    print(
+        "[runtime-repair] startup check: "
+        + str(status.get("message") or "")
+        + " -> not downloading at startup; click System Config - Repair Runtime Dependencies",
+        flush=True,
+    )
+    return 3
+
+
 def main() -> int:
+    if "--check-only" in sys.argv:
+        return _check_only()
     if "--force" not in sys.argv and not runtime_dependency_repair_needed():
         print("[runtime-repair] dependencies already verified", flush=True)
         return 0
