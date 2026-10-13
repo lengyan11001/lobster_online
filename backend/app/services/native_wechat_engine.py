@@ -10165,6 +10165,9 @@ def _sync_local_sessions_from_uia(
 
     hwnd = _local_wechat_hwnd(account_id)
     if not hwnd:
+        # 「未找到已登录主窗口」这类失败以前不留现场，诊断包里只剩一句错误文本，
+        # 分不清是微信没开、窗口被最小化，还是前台被别的程序占着。
+        _capture_wechat_uia_failure(account_id)
         raise RuntimeError("local WeChat window not found")
     if not passive:
         _ensure_local_tab(hwnd, "\u5fae\u4fe1", strict=True)

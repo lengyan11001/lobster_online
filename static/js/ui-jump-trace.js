@@ -33,9 +33,18 @@
   var events = [];
   var burstStamps = [];
   var lastMouse = null;
+  var lastInputAt = 0;
+  // 页面刚加载时视图本来就是「填容器」式的重绘（views/*.html 注入、日志页首次渲染…），
+  // 2026-10-13 真机实测：启动那 2 秒里报了 8 次「跳闪」，全是初始化噪声。
+  // 所以只有「用户刚动过鼠标/键盘/滚轮之后」发生的结构性事件才算跳闪。
+  var settleUntil = nowMs() + 4000;
   var wheelUntil = 0;
   var dirty = false;
   var scrollState = new WeakMap();
+
+  function noteUserInput() {
+    lastInputAt = nowMs();
+  }
 
   function nowMs() {
     return Date.now();
@@ -134,7 +143,9 @@
     if (STRUCTURAL[kind]) {
       burstStamps.push(nowMs());
       while (burstStamps.length && burstStamps[0] < nowMs() - BURST_WINDOW_MS) burstStamps.shift();
-      if (burstStamps.length >= BURST_MIN_EVENTS) {
+      var now = nowMs();
+      var sinceInput = lastInputAt ? now - lastInputAt : -1;
+      if (burstStamps.length >= BURST_MIN_EVENTS && now > settleUntil && sinceInput >= 0 && sinceInput <= 1500) {
         burstStamps = [];
         flush('burst');
       }
@@ -151,9 +162,22 @@
       view: currentView(),
       ua: navigator.userAgent,
       visibility: document.visibilityState || '',
+      since_input_ms: lastInputAt ? nowMs() - lastInputAt : -1,
       mouse: lastMouse,
       events: events.slice(-120),
     };
+  }
+
+  function authHeaders() {
+    var headers = { 'Content-Type': 'application/json' };
+    try {
+      var token = '';
+      if (typeof getStoredAuthToken === 'function') token = String(getStoredAuthToken() || '');
+      if (!token) token = String(window.localStorage.getItem('token') || '');
+      token = token.trim();
+      if (token) headers.Authorization = 'Bearer ' + token;
+    } catch (err) {}
+    return headers;
   }
 
   function flush(reason) {
@@ -163,21 +187,22 @@
     try {
       window.localStorage.setItem('lobster.ui_trace.tail', JSON.stringify(events.slice(-40)));
     } catch (err) {}
-    try {
-      if (navigator.sendBeacon) {
-        var blob = new Blob([payload], { type: 'application/json' });
-        if (navigator.sendBeacon(POST_URL, blob)) return true;
-      }
-    } catch (err) {}
+    // 只能用 fetch：navigator.sendBeacon 不能带 header，落到需要鉴权的接口上会 401。
+    // 2026-10-13 实测：真机上 8 次跳闪全部被 401 丢掉，一条没落盘。
     try {
       fetch(POST_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders(),
         body: payload,
         keepalive: true,
-      }).catch(function () {});
+      }).then(function (resp) {
+        if (!resp || !resp.ok) dirty = true;
+      }).catch(function () {
+        dirty = true;
+      });
       return true;
     } catch (err) {
+      dirty = true;
       return false;
     }
   }
@@ -266,6 +291,16 @@
     }, { passive: true, capture: true });
   }
 
+  function hookUserInputSignals() {
+    ['pointermove', 'mousemove', 'mousedown', 'mouseup', 'wheel', 'keydown', 'touchmove', 'touchstart'].forEach(function (name) {
+      document.addEventListener(name, noteUserInput, { passive: true, capture: true });
+    });
+    document.addEventListener('click', noteUserInput, true);
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState === 'visible') settleUntil = nowMs() + 1500;
+    });
+  }
+
   function hookMouseBreadcrumbs() {
     var lastAt = 0;
     document.addEventListener('mousemove', function (evt) {
@@ -305,6 +340,7 @@
 
   hookScrollCalls();
   hookContentWrites();
+  hookUserInputSignals();
   hookScrollWatch();
   hookMouseBreadcrumbs();
   hookGlobalSignals();
