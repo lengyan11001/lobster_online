@@ -498,6 +498,31 @@
     if (checked) state.items.forEach(function(item, index) { state.selected.add(itemKey(item, index)); });
     renderItems();
   }
+  function urlExpired(err) {
+    var msg = String((err && err.message) || '');
+    return /403|forbidden|expired|过期|失效/i.test(msg);
+  }
+  function itemByKey(key) {
+    for (var i = 0; i < state.items.length; i += 1) {
+      if (String(state.items[i].item_key) === String(key)) return state.items[i];
+    }
+    return null;
+  }
+  /** 作品链接是带签名的，会过期（403）：自动同步一次刷新链接再重试。 */
+  function runWithRefresh(item, index, label, action) {
+    var key = item.item_key;
+    return action(item).catch(function(err) {
+      if (!urlExpired(err) || !state.peer) throw err;
+      setItemTask(index, '链接过期，同步中…', 'run');
+      setTask(label + '：作品链接已过期（403），正在同步最新作品后重试…');
+      return syncPeer(state.peer.id).then(function() {
+        var fresh = itemByKey(key);
+        if (!fresh) throw err;
+        setTask(label + '：链接已刷新，重试中…');
+        return action(fresh);
+      });
+    });
+  }
   function downloadItem(index) {
     var item = state.items[Number(index)];
     if (!item) return;
@@ -509,8 +534,10 @@
     }
     setItemTask(index, '下载中…', 'run');
     setTask('正在下载：' + itemTitle(item).slice(0, 30));
-    keystreamFor(item).then(function(keystream) {
-      return localJson('/api/wechat-channels-transcript/local-download', { video: item, keystream_b64: keystream });
+    runWithRefresh(item, index, '下载视频', function (target) {
+      return keystreamFor(target).then(function(keystream) {
+        return localJson('/api/wechat-channels-transcript/local-download', { video: target, keystream_b64: keystream });
+      });
     }).then(function(data) {
       setItemTask(index, '已下载', 'done');
       setTask('已下载到：' + (data.path || '') + (data.opened ? '（已打开文件夹）' : ''));
@@ -519,25 +546,29 @@
       setTask('下载失败：' + (err.message || ''), true);
     });
   }
-  function extractItem(item) {
+  function extractItem(item, index) {
     var url = itemVideoUrl(item);
     if (!url) return Promise.reject(new Error('这条作品没有可提取的视频地址'));
-    return keystreamFor(item).then(function(keystream) {
-      return localJson('/api/wechat-channels-transcript/local-transcribe', { video: item, keystream_b64: keystream });
-    }).then(function(data) {
-      var transcript = String(data.transcript || '').trim();
-      if (!transcript) throw new Error('转写完成但没有返回文案');
-      state.results[resultKey(item)] = { title: itemTitle(item), transcript: transcript, at: Date.now() };
-      saveStore();
-      return transcript;
-    });
+    function once(target) {
+      return keystreamFor(target).then(function(keystream) {
+        return localJson('/api/wechat-channels-transcript/local-transcribe', { video: target, keystream_b64: keystream });
+      }).then(function(data) {
+        var transcript = String(data.transcript || '').trim();
+        if (!transcript) throw new Error('转写完成但没有返回文案');
+        state.results[resultKey(target)] = { title: itemTitle(target), transcript: transcript, at: Date.now() };
+        saveStore();
+        return transcript;
+      });
+    }
+    if (typeof index === 'number') return runWithRefresh(item, index, '提炼文案', once);
+    return once(item);
   }
   function extractOne(index) {
     var item = state.items[Number(index)];
     if (!item) return;
     setItemTask(index, '提炼中…', 'run');
     setTask('正在提炼：' + itemTitle(item).slice(0, 30));
-    extractItem(item).then(function() {
+    extractItem(item, index).then(function() {
       setItemTask(index, '已提取', 'done');
       renderItems();
       renderResults();
@@ -560,7 +591,7 @@
         var item = state.items[index];
         setItemTask(index, '提炼中…', 'run');
         setTask('正在提炼 ' + (order + 1) + '/' + picked.length + '：' + itemTitle(item).slice(0, 26));
-        return extractItem(item).then(function() { setItemTask(index, '已提取', 'done'); })
+        return extractItem(item, index).then(function() { setItemTask(index, '已提取', 'done'); })
           .catch(function() { failed += 1; setItemTask(index, '失败', 'fail'); });
       });
     });

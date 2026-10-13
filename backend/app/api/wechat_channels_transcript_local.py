@@ -897,6 +897,38 @@ def _thumb_headers(url: str) -> Dict[str, str]:
     return headers
 
 
+def _looks_like_heic(data: bytes) -> bool:
+    if len(data) < 12:
+        return False
+    brand = data[4:12]
+    return brand.startswith(b"ftyp") and (b"heic" in brand or b"heix" in brand or b"mif1" in brand or b"hevc" in brand)
+
+
+def _heic_to_jpeg(source: Path) -> bytes:
+    """HEIC 封面转 JPEG（只转一次，落盘缓存）。"""
+    target = source.with_suffix(".jpg")
+    if target.is_file() and target.stat().st_size > 0:
+        return target.read_bytes()
+    try:
+        ffmpeg = find_ffmpeg()
+    except Exception:
+        return b""
+    if not ffmpeg:
+        return b""
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", str(source),
+             "-frames:v", "1", "-vf", "scale=640:-2:force_original_aspect_ratio=decrease",
+             "-q:v", "3", str(target)],
+            capture_output=True, text=True, timeout=60,
+        )
+    except Exception:
+        return b""
+    if proc.returncode == 0 and target.is_file() and target.stat().st_size > 0:
+        return target.read_bytes()
+    return b""
+
+
 @router.get("/api/wechat-channels-transcript/local-thumb", summary="封面/头像代理（CDN 直连会被拒）")
 def local_thumb(
     url: str = Query(..., min_length=1, max_length=4096),
@@ -918,13 +950,20 @@ def local_thumb(
         except Exception as exc:
             logger.debug("[wechat-channels-transcript-local] thumb fetch failed %s: %s", target[:120], exc)
     if cached.is_file() and cached.stat().st_size > 0:
+        data = cached.read_bytes()
         media = "image/jpeg"
-        head = cached.read_bytes()[:8]
-        if head.startswith(b"\x89PNG"):
+        if data.startswith(b"\x89PNG"):
             media = "image/png"
-        elif head[:4] == b"RIFF":
+        elif data[:4] == b"RIFF":
             media = "image/webp"
-        return Response(content=cached.read_bytes(), media_type=media, headers={"Cache-Control": "private, max-age=86400"})
+        elif _looks_like_heic(data):
+            # 抖音封面常见 .heic（浏览器不认）→ 本机 ffmpeg 转 JPEG 再给页面
+            converted = _heic_to_jpeg(cached)
+            if converted:
+                data, media = converted, "image/jpeg"
+            else:
+                return Response(content=_THUMB_BLANK, media_type="image/png")
+        return Response(content=data, media_type=media, headers={"Cache-Control": "private, max-age=86400"})
     return Response(content=_THUMB_BLANK, media_type="image/png")
 
 
