@@ -7390,18 +7390,25 @@ def _wechat_tab_candidates(tab_name: str) -> List[str]:
 
 
 def _find_tab_item(root: Any, names: List[str]) -> Optional[Any]:
-    """先精确匹配，再退到\u201c名字包含 + ClassName 带 TabBar\u201d，避免误点到聊天列表里的同名会话。"""
+    """找左侧导航项：优先 ClassName 带 TabBar 的，且**跳过根窗口本身**。
+
+    根窗口的 Name 往往就叫\u201c\u5fae\u4fe1\u201d，如果不过滤，会返回根窗口并去点它（等于什么都没做）。
+    """
     wanted = [str(x or "").strip() for x in names if str(x or "").strip()]
     if not wanted:
         return None
     fallback = None
-    for node in _uia_walk(root, max_depth=12):
+    for idx, node in enumerate(_uia_walk(root, max_depth=12)):
+        if idx == 0:
+            continue
         name = _uia_control_text(node)
         if not name:
             continue
-        if name in wanted:
+        if not (name in wanted or any(t in name for t in wanted)):
+            continue
+        if "TabBar" in _uia_control_class(node):
             return node
-        if fallback is None and any(t in name for t in wanted) and "TabBar" in _uia_control_class(node):
+        if fallback is None:
             fallback = node
     return fallback
 
