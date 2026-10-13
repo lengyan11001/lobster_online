@@ -12,6 +12,8 @@
     total: 0,
     file: null,
     previewUrl: '',
+    previewId: '',
+    previewToken: 0,
     brief: '',
     jobId: '',
     busy: false,
@@ -378,21 +380,14 @@
     if (!file) return;
     if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
     state.file = file;
+    state.previewId = '';
     state.previewUrl = URL.createObjectURL(file);
     var preview = $('hypitVideoPreview');
     if (preview) {
+      preview.onloadedmetadata = null;
+      preview.onerror = null;
+      preview.removeAttribute('poster');
       preview.src = state.previewUrl;
-      setPreviewHint('');
-      // 有些素材（常见 H.265/HEVC，或 MKV）浏览器解不了画面：时长和进度条正常但画面全黑。
-      // 这不是文件坏了，创建记录后服务端用 ffmpeg 正常处理，所以只提示、不拦。
-      preview.onloadedmetadata = function () {
-        if (Number(preview.videoWidth || 0) === 0) {
-          setPreviewHint('这是浏览器解不了的编码（多为 H.265/HEVC）：本地预览只能看到时长。创建记录后会自动转成 H.264 播放、并生成封面图，不影响出片。');
-        }
-      };
-      preview.onerror = function () {
-        setPreviewHint('这是浏览器解不了的封装/编码（例如 MKV、H.265）：创建记录后会自动转成 H.264 播放、并生成封面图，不影响出片。');
-      };
     }
     var selected = $('hypitSelectedFile');
     if (selected) selected.hidden = false;
@@ -404,11 +399,63 @@
     if (meta) meta.textContent = formatBytes(file.size);
     var submit = $('hypitSubmitButton');
     if (submit) submit.disabled = false;
+    // 浏览器解不了 H.265/HEVC/MKV（时长能读、画面全黑）。选完文件就直接上传到本机服务
+    // 转成可播放的 H.264（只转一次），转好把预览换成转换后的地址；创建记录时复用这份文件，不重复上传。
+    uploadPreview(file);
+  }
+  function uploadPreview(file) {
+    if (!file) return;
+    var token = Date.now();
+    state.previewToken = token;
+    setPreviewHint('正在准备可播放预览…');
+    var form = new FormData();
+    form.append('file', file, file.name);
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', localBase() + '/api/local/hypit/preview', true);
+    xhr.timeout = 30 * 60 * 1000;
+    Object.keys(headers()).forEach(function (name) {
+      if (String(name).toLowerCase() !== 'content-type') xhr.setRequestHeader(name, headers()[name]);
+    });
+    xhr.upload.onprogress = function (event) {
+      if (state.previewToken !== token || !event.lengthComputable) return;
+      setPreviewHint('正在准备可播放预览… ' + Math.round(event.loaded * 100 / Math.max(1, event.total)) + '%');
+    };
+    xhr.onload = function () {
+      if (state.previewToken !== token) return;
+      var data = {};
+      try { data = JSON.parse(xhr.responseText || '{}'); } catch (error) {}
+      if (xhr.status < 200 || xhr.status >= 300 || data.ok === false) {
+        setPreviewHint('预览转换失败：' + (errorText(data.detail) || ('HTTP ' + xhr.status)) + '；直接创建记录也行。');
+        return;
+      }
+      state.previewId = String(data.preview_id || '');
+      var preview = $('hypitVideoPreview');
+      if (preview && data.video_url) {
+        preview.src = assetUrl(data.video_url);
+        if (data.poster_url) preview.setAttribute('poster', assetUrl(data.poster_url));
+        try { preview.load(); } catch (error) {}
+      }
+      setPreviewHint('');
+    };
+    xhr.onerror = function () {
+      if (state.previewToken !== token) return;
+      setPreviewHint('预览转换失败（连不上本机服务）；直接创建记录也行。');
+    };
+    xhr.ontimeout = function () {
+      if (state.previewToken !== token) return;
+      setPreviewHint('预览转换超时；直接创建记录也行。');
+    };
+    xhr.send(form);
   }
   function submitWorkflow() {
     if (!state.file || state.busy) return;
     var form = new FormData();
-    form.append('file', state.file, state.file.name);
+    if (state.previewId) {
+      // 预览时已经上传并转过码了，这里直接复用那份文件，不重复上传
+      form.append('preview_id', state.previewId);
+    } else {
+      form.append('file', state.file, state.file.name);
+    }
     var brief = $('hypitBrief');
     form.append('brief', brief ? String(brief.value || '') : '');
     setBusy(true);

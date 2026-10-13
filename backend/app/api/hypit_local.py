@@ -32,6 +32,7 @@ from .creative_film_studio import (
     _server_api_url,
 )
 from .wechat_article import _extract_image_url
+from ..services.media_compat import create_poster, is_browser_compatible, prepare_playback, probe_video
 from ..services.runtime_dependency_repair import repair_media_tools
 
 
@@ -242,6 +243,157 @@ async def hypit_media_auth(request: Request, job_id: str, resource: str) -> _Ser
         return await get_current_user_for_local(request, auth.split(" ", 1)[1].strip())
     q = request.query_params
     return _hypit_media_user(int(q.get("uid") or 0), job_id, resource, q.get("token") or "", q.get("expiry"))
+
+
+# ── 添加复刻：选完文件先出「可播放预览」────────────────────────────────────────
+# 浏览器解不了 H.265/HEVC/MKV 等，所以这里在用户选完文件时就把素材落盘并转成 H.264，
+# 预览直接播转码结果；创建记录时复用同一份文件，不重复上传。
+_PREVIEW_TTL_SEC = 24 * 3600
+
+
+def _preview_root() -> Path:
+    return JOBS_ROOT / "_preview"
+
+
+def _preview_dir(user_id: int, preview_id: str) -> Path:
+    safe = re.sub(r"[^0-9a-f]", "", str(preview_id or "").lower())[:64]
+    if len(safe) < 8:
+        raise HTTPException(status_code=400, detail="预览标识无效")
+    return _preview_root() / str(int(user_id)) / safe
+
+
+def _preview_meta_path(folder: Path) -> Path:
+    return folder / "preview.json"
+
+
+def _read_preview_meta(folder: Path) -> dict[str, Any]:
+    try:
+        return json.loads(_preview_meta_path(folder).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _prune_previews(user_id: int) -> None:
+    root = _preview_root() / str(int(user_id))
+    if not root.is_dir():
+        return
+    now = time.time()
+    for item in root.iterdir():
+        try:
+            if item.is_dir() and now - item.stat().st_mtime > _PREVIEW_TTL_SEC:
+                shutil.rmtree(item, ignore_errors=True)
+        except OSError:
+            continue
+
+
+def _prepare_preview_playback(source: Path, folder: Path) -> bool:
+    """已可播就用原文件；否则转成浏览器能播的 H.264（H.265/HEVC、MKV 等）。"""
+    try:
+        info = probe_video(source)
+    except Exception:  # noqa: BLE001 探测失败就当不可播，走转码
+        info = {}
+    if info and is_browser_compatible(info):
+        return True
+    return bool(prepare_playback(source, folder / "preview.mp4"))
+
+
+def _preview_media_type(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".webm":
+        return "video/webm"
+    if suffix == ".mkv":
+        return "video/x-matroska"
+    return "video/mp4"
+
+
+def _resolve_preview_source(folder: Path) -> Path | None:
+    meta = _read_preview_meta(folder)
+    name = str(meta.get("source") or "").strip()
+    if name:
+        candidate = folder / Path(name).name
+        if candidate.is_file():
+            return candidate
+    for suffix in ALLOWED_SUFFIXES:
+        candidate = folder / ("source" + suffix)
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+@router.post("/api/local/hypit/preview", summary="添加复刻：上传素材并生成可播放预览")
+async def create_local_hypit_preview(
+    file: UploadFile = File(...),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """选完文件就出画面：落盘 + 转 H.264（只做一次），创建记录时直接复用这份文件。"""
+    filename = Path(file.filename or "reference.mp4").name[:200]
+    suffix = Path(filename).suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise HTTPException(status_code=400, detail="预览仅支持 MP4、MOV、WebM、MKV")
+    await asyncio.to_thread(_prune_previews, int(current_user.id))
+    preview_id = uuid.uuid4().hex
+    folder = _preview_dir(int(current_user.id), preview_id)
+    await asyncio.to_thread(folder.mkdir, parents=True, exist_ok=True)
+    source = folder / ("source" + suffix)
+    try:
+        file_size = await _save_upload(file, source)
+        playable = await asyncio.to_thread(_prepare_preview_playback, source, folder)
+        poster_ok = await asyncio.to_thread(create_poster, source, folder / "poster.jpg")
+    except HTTPException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    except Exception as exc:  # noqa: BLE001
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"生成预览失败：{exc}")
+    meta = {
+        "preview_id": preview_id,
+        "user_id": int(current_user.id),
+        "filename": filename,
+        "file_size": file_size,
+        "source": source.name,
+        "playable": bool(playable),
+        "poster": bool(poster_ok),
+        "created_at": time.time(),
+    }
+    await asyncio.to_thread(
+        _preview_meta_path(folder).write_text,
+        json.dumps(meta, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    base = f"/api/local/hypit/preview/{preview_id}"
+    return {
+        "ok": True,
+        "preview_id": preview_id,
+        "filename": filename,
+        "file_size": file_size,
+        "playable": bool(playable),
+        "video_url": hypit_signed_media_url(int(current_user.id), preview_id, "preview/file", f"{base}/file"),
+        "poster_url": (
+            hypit_signed_media_url(int(current_user.id), preview_id, "preview/poster", f"{base}/poster")
+            if poster_ok else ""
+        ),
+    }
+
+
+@router.get("/api/local/hypit/preview/{preview_id}/file")
+async def get_local_hypit_preview_file(preview_id: str, request: Request):
+    user = await hypit_media_auth(request, preview_id, "preview/file")
+    folder = _preview_dir(int(user.id), preview_id)
+    converted = folder / "preview.mp4"
+    target = converted if converted.is_file() else _resolve_preview_source(folder)
+    if target is None or not target.is_file():
+        raise HTTPException(status_code=404, detail="预览文件不存在或已清理")
+    return FileResponse(str(target), media_type=_preview_media_type(target))
+
+
+@router.get("/api/local/hypit/preview/{preview_id}/poster")
+async def get_local_hypit_preview_poster(preview_id: str, request: Request):
+    user = await hypit_media_auth(request, preview_id, "preview/poster")
+    folder = _preview_dir(int(user.id), preview_id)
+    poster = folder / "poster.jpg"
+    if not poster.is_file():
+        raise HTTPException(status_code=404, detail="预览封面不存在")
+    return FileResponse(str(poster), media_type="image/jpeg")
 
 
 def _read_job(user_id: int, job_id: str) -> tuple[Path, dict[str, Any]]:
@@ -1435,15 +1587,27 @@ async def _transcribe_locked(job_id: str, request: Request, current_user: _Serve
 
 @router.post("/api/local/hypit/analyze")
 async def analyze_local_video(
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(default=None),
     current_user: _ServerUser = Depends(get_current_user_for_local),
+    preview_id: str = Form(default=""),
 ):
     status = await asyncio.to_thread(_dependency_status)
     if not status["ready"]:
         detail = status.get("error") or ("缺少依赖：" + "、".join(status.get("missing") or []))
         raise HTTPException(status_code=424, detail=detail)
 
-    filename = Path(file.filename or "reference.mp4").name[:200]
+    preview_source: Path | None = None
+    filename = ""
+    if str(preview_id or "").strip():
+        folder = _preview_dir(int(current_user.id), preview_id)
+        candidate = _resolve_preview_source(folder)
+        if candidate is not None:
+            preview_source = candidate
+            filename = str(_read_preview_meta(folder).get("filename") or candidate.name)[:200]
+    if not filename:
+        if file is None:
+            raise HTTPException(status_code=400, detail="没有拿到视频文件，请重新选择")
+        filename = Path(file.filename or "reference.mp4").name[:200]
     suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(status_code=400, detail="请选择 MP4、MOV、WebM 或 MKV 视频")
@@ -1453,7 +1617,12 @@ async def analyze_local_video(
     await asyncio.to_thread(job_dir.mkdir, parents=True, exist_ok=False)
     video_path = job_dir / ("reference" + suffix)
     try:
-        file_size = await _save_upload(file, video_path)
+        if preview_source is not None:
+            # 复用「添加复刻」时已上传/已转码的那份文件，避免二次上传
+            file_size = preview_source.stat().st_size
+            await asyncio.to_thread(shutil.move, str(preview_source), str(video_path))
+        else:
+            file_size = await _save_upload(file, video_path)
         async with ANALYZE_SEMAPHORE:
             root = _hypit_root()
             node = _node_executable()
@@ -2125,11 +2294,12 @@ async def resume_local_hypit_workflow(
 @router.post("/api/local/hypit/workflows")
 async def submit_local_hypit_workflow(
     request: Request,
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(default=None),
     brief: str = Form(default="", max_length=4000),
+    preview_id: str = Form(default=""),
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
-    analysis = await analyze_local_video(file, current_user)
+    analysis = await analyze_local_video(file, current_user, preview_id)
     job_id = analysis["job_id"]
     job_dir, metadata = _read_job(current_user.id, job_id)
     # 历史记录/继续要用：把改编方向和提交时间写进 job.json

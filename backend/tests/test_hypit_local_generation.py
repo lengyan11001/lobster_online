@@ -1111,3 +1111,68 @@ def test_atomic_replace_falls_back_to_inplace_write(tmp_path, monkeypatch):
     hypit_local._atomic_replace(temporary, target)
 
     assert target.read_text(encoding="utf-8") == "new"
+
+def test_preview_dir_rejects_bad_id_and_prunes_old(tmp_path, monkeypatch):
+    """预览目录：id 必须合法（防目录穿越），过期目录会被清理。"""
+    import pytest as _pytest
+
+    monkeypatch.setattr(hypit_local, "JOBS_ROOT", tmp_path)
+    with _pytest.raises(Exception):
+        hypit_local._preview_dir(31, "../etc")
+    with _pytest.raises(Exception):
+        hypit_local._preview_dir(31, "short")
+
+    folder = hypit_local._preview_dir(31, "a1b2c3d4e5f6")
+    folder.mkdir(parents=True)
+    stale = hypit_local._preview_dir(31, "ffffffff0000")
+    stale.mkdir(parents=True)
+    old = hypit_local.time.time() - hypit_local._PREVIEW_TTL_SEC - 60
+    import os as _os
+    _os.utime(stale, (old, old))
+
+    hypit_local._prune_previews(31)
+
+    assert folder.is_dir(), "新目录要保留"
+    assert not stale.exists(), "过期目录要清掉"
+
+
+def test_preview_source_resolution_prefers_meta(tmp_path, monkeypatch):
+    """创建记录时按 preview.json 找到那份已上传的文件；没有 meta 就按扩展名兜底。"""
+    monkeypatch.setattr(hypit_local, "JOBS_ROOT", tmp_path)
+    folder = hypit_local._preview_dir(31, "a1b2c3d4e5f6")
+    folder.mkdir(parents=True)
+    src = folder / "source.mov"
+    src.write_bytes(b"video")
+    (folder / "preview.json").write_text(
+        __import__("json").dumps({"source": "source.mov", "filename": "ref.mov"}), encoding="utf-8"
+    )
+
+    assert hypit_local._resolve_preview_source(folder) == src
+
+    (folder / "preview.json").unlink()
+    assert hypit_local._resolve_preview_source(folder) == src
+
+    src.unlink()
+    assert hypit_local._resolve_preview_source(folder) is None
+
+
+def test_preview_playback_keeps_compatible_source(tmp_path, monkeypatch):
+    """已是浏览器可播的素材不该再转码（避免白等一次 ffmpeg）。"""
+    monkeypatch.setattr(hypit_local, "probe_video", lambda path: {
+        "format": "mov,mp4,m4a,3gp,3g2,mj2", "video_codec": "h264",
+        "pixel_format": "yuv420p", "audio_codec": "aac", "has_video": True,
+    })
+    called = {"n": 0}
+    monkeypatch.setattr(hypit_local, "prepare_playback", lambda src, dst: called.__setitem__("n", called["n"] + 1) or True)
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"video")
+
+    assert hypit_local._prepare_preview_playback(source, tmp_path) is True
+    assert called["n"] == 0
+
+    monkeypatch.setattr(hypit_local, "probe_video", lambda path: {
+        "format": "mov,mp4,m4a,3gp,3g2,mj2", "video_codec": "hevc",
+        "pixel_format": "yuv420p", "audio_codec": "aac", "has_video": True,
+    })
+    assert hypit_local._prepare_preview_playback(source, tmp_path) is True
+    assert called["n"] == 1, "H.265 必须走转码"
