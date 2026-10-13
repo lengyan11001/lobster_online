@@ -971,8 +971,8 @@
       ]
     },
     "wechat_channels_transcript_skill": {
-      "name": "视频号文案提取",
-      "description": "输入视频号昵称查询账号，拉取作品并批量提取口播文案，支持复制和导出。",
+      "name": "作品提取",
+      "description": "添加视频号/抖音同行并同步作品，支持下载原视频、批量提取口播文案与导出。",
       "type": "builtin",
       "store_visibility": "online",
       "default_installed": true,

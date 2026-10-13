@@ -47,14 +47,48 @@
       });
     });
   }
-  function localJson(path, body) {
-    return fetch(localBase() + path, { method: 'POST', headers: jsonHeaders(), body: JSON.stringify(body || {}) })
-      .then(function(resp) {
-        return resp.json().catch(function() { return {}; }).then(function(data) {
-          if (!resp.ok) throw new Error(parseErr(data, '本机服务请求失败'));
-          return data;
-        });
+  /**
+   * 本机接口一律走 XMLHttpRequest：app.js 会全局改写 window.fetch（把网络类错误统一成
+   * 「连接正在自动恢复，请稍后重试」并自带重试），本机长任务（下载/转写）和 4xx 会被它干扰、
+   * 真实原因也看不出来。
+   */
+  function localJson(path, body, timeoutMs) {
+    return new Promise(function(resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', localBase() + path, true);
+      xhr.timeout = timeoutMs || 30 * 60 * 1000;
+      var hdr = jsonHeaders();
+      Object.keys(hdr).forEach(function(name) {
+        if (name.toLowerCase() === 'content-type') return;
+        try { xhr.setRequestHeader(name, hdr[name]); } catch (e) {}
       });
+      try { xhr.setRequestHeader('Content-Type', 'application/json'); } catch (e) {}
+      xhr.onload = function() {
+        var data = {};
+        try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) {}
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error(parseErr(data, '本机服务返回 HTTP ' + xhr.status)));
+          return;
+        }
+        if (data && data.ok === false) { reject(new Error(parseErr(data, '本机处理失败'))); return; }
+        resolve(data);
+      };
+      xhr.onerror = function() { reject(new Error('连不上本机服务（请确认客户端在运行）')); };
+      xhr.ontimeout = function() { reject(new Error('本机处理超时，请稍后重试')); };
+      xhr.send(JSON.stringify(body || {}));
+    });
+  }
+  /** 头像：底下垫首字母，图片加载失败自动隐藏（不再图裂） */
+  function avatarCell(avatarUrl, name, size) {
+    var url = thumbUrl(avatarUrl);
+    var letter = String(name || '?').trim().charAt(0) || '?';
+    var img = url
+      ? '<img src="' + esc(url) + '" alt="" loading="lazy" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;" onerror="this.style.display=\'none\'">'
+      : '';
+    return '<span style="position:relative;display:inline-block;width:' + size + 'px;height:' + size + 'px;border-radius:50%;'
+      + 'background:#eef2f7;color:#64748b;font-weight:800;text-align:center;line-height:' + size + 'px;'
+      + 'font-size:' + Math.round(size * 0.42) + 'px;overflow:hidden;vertical-align:-6px;margin-right:6px;">'
+      + esc(letter) + img + '</span>';
   }
   function thumbUrl(raw) {
     var url = String(raw || '').trim();
@@ -260,8 +294,7 @@
     }
     host.innerHTML = head + rows.map(function(peer) {
       var meta = peer.meta || {};
-      var avatar = thumbUrl(meta.avatar_url);
-      var avatarHtml = avatar ? '<img src="' + esc(avatar) + '" alt="" style="width:22px;height:22px;border-radius:50%;vertical-align:-5px;margin-right:6px;object-fit:cover;">' : '';
+      var avatarHtml = avatarCell(meta.avatar_url, peer.display_name || peer.account_key, 22);
       return '<div class="wct-trow">'
         + '<span class="wct-cell name" title="' + esc(peer.display_name) + '">' + avatarHtml + esc(peer.display_name || peer.account_key) + '</span>'
         + '<span class="wct-cell"><span class="wct-badge ' + esc(peer.platform) + '">' + esc(platformLabel(peer.platform)) + '</span></span>'
@@ -350,10 +383,7 @@
     if (!host) return;
     if (!state.candidates.length) { host.innerHTML = ''; return; }
     host.innerHTML = state.candidates.map(function(cand, index) {
-      var avatar = thumbUrl(cand.avatar_url);
-      var avatarHtml = avatar
-        ? '<img src="' + esc(avatar) + '" alt="" style="width:40px;height:40px;border-radius:50%;object-fit:cover;">'
-        : '<div style="width:40px;height:40px;border-radius:50%;background:#eef2f7;"></div>';
+      var avatarHtml = avatarCell(cand.avatar_url, cand.display_name || cand.nickname || cand.unique_id, 40);
       var name = cand.display_name || cand.nickname || cand.unique_id || '';
       var line = [cand.unique_id ? ('抖音号 ' + cand.unique_id) : '', cand.follower_count ? ('粉丝 ' + fmtCount(cand.follower_count)) : '', cand.verify_info || ''].filter(Boolean).join(' · ');
       return '<div class="wct-cand">' + avatarHtml

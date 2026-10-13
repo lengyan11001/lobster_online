@@ -151,8 +151,8 @@ window.registerLobsterView('alibaba-inquiries', {
   });
 
   window.registerLobsterView('wechat-channels-transcript', {
-    html: '/static/views/wechat-channels-transcript.html?v=20260626-wct-entry-cache',
-    scripts: '/static/js/wechat-channels-transcript.js?v=20260626-wct-entry-cache',
+    html: '/static/views/wechat-channels-transcript.html?v=20261013-wct-work-extract',
+    scripts: '/static/js/wechat-channels-transcript.js?v=20261013-wct-work-extract',
     init: 'initWechatChannelsTranscriptView',
     cache: 'reload'
   });

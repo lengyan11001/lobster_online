@@ -1547,8 +1547,8 @@ window._openAlibabaInquiriesView = function() {
 window._openWechatChannelsTranscriptView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('wechat-channels-transcript', {
-      html: '/static/views/wechat-channels-transcript.html?v=20260626-wct-entry-cache',
-      scripts: '/static/js/wechat-channels-transcript.js?v=20260626-wct-entry-cache',
+      html: '/static/views/wechat-channels-transcript.html?v=20261013-wct-work-extract',
+      scripts: '/static/js/wechat-channels-transcript.js?v=20261013-wct-work-extract',
       init: 'initWechatChannelsTranscriptView',
       cache: 'reload'
     });
@@ -2164,7 +2164,7 @@ function _renderWechatChannelsTranscriptCard(pkg, showDebug) {
   var tags = _skillStoreTagHtml(pkg.tags || ['视频号', 'TikHub', '文案提取']);
   return '<div class="skill-store-card wechat-channels-transcript-card" data-skill-package-id="' + escapeAttr(pkg.id || 'wechat_channels_transcript_skill') + '" style="cursor:pointer;border-color:rgba(14,165,233,0.34);background:linear-gradient(135deg,rgba(14,165,233,0.08),rgba(20,184,166,0.05));">' +
     '<div class="card-label">' + debugBadge + escapeHtml(pkg.type || 'skill') + ' <span class="badge-installed">可用</span></div>' +
-    '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || '视频号文案提取')) + '</div>' +
+    '<div class="card-value">' + escapeHtml(_skillStoreBrandSafeText(pkg.name || '作品提取')) + '</div>' +
     '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '查询视频号账号作品，批量下载视频并提取口播文案，可复制和导出。')) + '</div>' +
     '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wechat-channels-transcript-entry-btn">进入工作台</button></div>' +
