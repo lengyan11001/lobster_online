@@ -466,9 +466,31 @@
     if ($('wctDetailView')) $('wctDetailView').hidden = true;
     setTask('');
   }
+  /**
+   * 作品来源按平台分开：
+   * - 视频号：走原有的 /api/wechat-channels-transcript/videos（返回带 url_token / decode_key 的条目，
+   *   这是原来就能下载+解密提取的那条链路；同步入库的 raw 里没有 token，直接下会报 token not exist）
+   * - 抖音：用同步入库的条目（raw.video.play_addr 就是可下载直链）
+   */
   function loadItems(peer) {
     var host = $('wctItemList');
-    if (host) host.innerHTML = '<div class="wct-empty">正在读取已入库作品…</div>';
+    if (host) host.innerHTML = '<div class="wct-empty">正在拉取作品…</div>';
+    if (peer.platform === 'wechat_channels') {
+      var username = peerAccount(peer);
+      return apiJson('/api/wechat-channels-transcript/videos', {
+        method: 'POST',
+        body: { username: username, max_pages: 8, page_size: 20 }
+      }).then(function(data) {
+        state.items = Array.isArray(data.items) ? data.items : [];
+        renderItems();
+        return state.items;
+      }).catch(function(err) {
+        state.items = [];
+        renderItems();
+        setTask('作品拉取失败：' + (err.message || ''), true);
+        return [];
+      });
+    }
     var url = '/api/ip-content/source-items?source_type=user_post&limit=200&competitor_id=' + encodeURIComponent(peer.id)
       + '&platform=' + encodeURIComponent(peer.platform);
     return apiJson(url).then(function(data) {
@@ -485,7 +507,9 @@
   function renderItems() {
     var host = $('wctItemList');
     var hint = $('wctItemHint');
-    if (hint) hint.textContent = state.items.length ? ('已入库 ' + state.items.length + ' 条，点右上角「同步作品」拉最新。') : '还没同步过，点右上角「同步作品」。';
+    if (hint) hint.textContent = state.items.length
+      ? (state.peer && state.peer.platform === 'wechat_channels' ? ('已拉取 ' + state.items.length + ' 条作品。') : ('已入库 ' + state.items.length + ' 条，点右上角「同步作品」拉最新。'))
+      : (state.peer && state.peer.platform === 'wechat_channels' ? '点右上角「同步作品」或直接拉取。' : '还没同步过，点右上角「同步作品」。');
     if (!host) return;
     if (!state.items.length) { host.innerHTML = '<div class="wct-empty">暂无作品（点右上角「同步作品」）。</div>'; return; }
     host.innerHTML = state.items.map(function(item, index) {
