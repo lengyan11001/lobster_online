@@ -1,7 +1,7 @@
 {
-  "version": "2.0.110",
-  "build": 405,
-  "applied_at": "2026-10-13T10:31:06+08:00",
-  "note": "2.0.110：视频复刻（HiPit 工作台）点「安装运行依赖」时同步补齐 ffmpeg/ffprobe —— 原先只装 npm/发行包/uv 依赖，从不装音视频工具，缺 ffprobe 的机器点多少次都补不上、自检一直报「缺少 ffprobe」；现在会复用统一修复只补缺的那个二进制，并把体检文案改成「点安装运行依赖会自动下载到 deps/ffmpeg/ffprobe.exe」",
-  "bundle_sha256": "afa08a421194bf0febee1e78e3586d1c3e837682c9e1588ac8a674ef67c6760b"
+  "version": "2.0.111",
+  "build": 406,
+  "applied_at": "2026-10-13T11:14:27+08:00",
+  "note": "2.0.111：①视频复刻「安装运行依赖」重复点击不再报 CLI_ERROR「Runtime Profile already exists」(选择指针在就跳过 runtime init、只有 Profile 时用 runtime use 重选，已用真实 CLI 复现+验证) ②ffmpeg/ffprobe 依赖改走我们自己的 TOS 副本优先(assets/ffmpeg/lobster-ffmpeg-win64.zip，约128MB，国内直连)，GitHub BtbN 与 gyan.dev 降为兜底；失败原因带进提示；下载超时上限 1800→3600 秒 ③install.bat 修漏洞：从内置技能目录只拷到 ffmpeg.exe 就跳过下载，导致永远不补 ffprobe",
+  "bundle_sha256": "731839f1e636ea55a1996521f9d04d9e766068b5bdd5417e15f13fa3f56bac1c"
 }
