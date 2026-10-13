@@ -887,11 +887,42 @@ def _generation_path(project_dir: Path) -> Path:
     return project_dir / "generation.json"
 
 
+def _atomic_replace(temporary: Path, target: Path) -> None:
+    """原子替换，失败不丢任务。
+
+    Windows 上 os.replace 需要目标文件的 DELETE 共享权限：前端轮询会同时读
+    workflow.json / generation.json，一旦撞上就抛 WinError 5「拒绝访问」，整个复刻任务
+    直接失败（线上 diag：workflow\\.tmp -> workflow.json）。这里退避重试，仍失败则就地写入。
+    """
+    last: Exception | None = None
+    for delay in (0.0, 0.05, 0.15, 0.4, 1.0, 2.0):
+        if delay:
+            time.sleep(delay)
+        try:
+            os.replace(temporary, target)
+            return
+        except OSError as exc:  # WinError 5 / PermissionError：目标被占用
+            if isinstance(exc, PermissionError) or getattr(exc, "winerror", None) == 5:
+                last = exc
+                continue
+            raise
+    try:
+        payload = temporary.read_bytes()
+    except OSError:
+        raise last or RuntimeError("替换失败")
+    target.write_bytes(payload)
+    try:
+        temporary.unlink(missing_ok=True)
+    except OSError:
+        pass
+    logger.warning("[hypit] 原子替换被拒绝，已改为就地写入 target=%s err=%s", target, last)
+
+
 def _write_generation(project_dir: Path, state: dict[str, Any]) -> None:
     path = _generation_path(project_dir)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    _atomic_replace(temporary, path)
 
 
 def _read_generation(project_dir: Path) -> dict[str, Any]:
@@ -909,7 +940,7 @@ def _write_workflow(job_dir: Path, state: dict[str, Any]) -> None:
     path = _workflow_path(job_dir)
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    temporary.replace(path)
+    _atomic_replace(temporary, path)
 
 
 def _read_workflow(job_dir: Path) -> dict[str, Any]:
@@ -1107,7 +1138,7 @@ async def _download_generated(client: httpx.AsyncClient, url: str, destination: 
                 break
         if not count:
             raise RuntimeError("生成结果文件为空")
-        temporary.replace(destination)
+        _atomic_replace(temporary, destination)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -2556,7 +2587,7 @@ def _download_first_available(urls: list[str], target: Path, *, label: str = "")
             if total <= 0:
                 errors.append("%s -> 空文件" % url)
                 continue
-            tmp.replace(target)
+            _atomic_replace(tmp, target)
             _append_runtime_log("下载完成：%s（%.1f MB）" % (url, total / 1024 / 1024))
             return url
         except Exception as exc:  # noqa: BLE001 换下一个源

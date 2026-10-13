@@ -1069,3 +1069,45 @@ def test_hypit_media_signature_roundtrip(monkeypatch):
         hypit_local._hypit_media_user(32, "j1", "reference.mp4", token, expiry)
     with _pytest.raises(Exception):
         hypit_local._hypit_media_user(31, "j1", "reference.mp4", token, int(hypit_local.time.time()) - 1)
+
+def test_atomic_replace_retries_on_windows_access_denied(tmp_path, monkeypatch):
+    """Windows 上目标被占用时 os.replace 会 WinError 5：必须重试而不是让任务失败。"""
+    target = tmp_path / "workflow.json"
+    temporary = tmp_path / "workflow.tmp"
+    temporary.write_text("new", encoding="utf-8")
+    target.write_text("old", encoding="utf-8")
+
+    calls = {"n": 0}
+    real_replace = hypit_local.os.replace
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise PermissionError(13, "Access is denied")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(hypit_local.os, "replace", flaky)
+    monkeypatch.setattr(hypit_local.time, "sleep", lambda _seconds: None)
+
+    hypit_local._atomic_replace(temporary, target)
+
+    assert calls["n"] == 3, "应当重试到成功"
+    assert target.read_text(encoding="utf-8") == "new"
+    assert not temporary.exists()
+
+
+def test_atomic_replace_falls_back_to_inplace_write(tmp_path, monkeypatch):
+    """一直拒绝访问时也要把内容写进去，不能把整个复刻任务带崩。"""
+    target = tmp_path / "workflow.json"
+    temporary = tmp_path / "workflow.tmp"
+    temporary.write_text("new", encoding="utf-8")
+
+    def always_denied(src, dst):
+        raise PermissionError(13, "Access is denied")
+
+    monkeypatch.setattr(hypit_local.os, "replace", always_denied)
+    monkeypatch.setattr(hypit_local.time, "sleep", lambda _seconds: None)
+
+    hypit_local._atomic_replace(temporary, target)
+
+    assert target.read_text(encoding="utf-8") == "new"

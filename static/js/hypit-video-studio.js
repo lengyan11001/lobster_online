@@ -345,13 +345,33 @@
     var modal = $('hypitAddModal');
     if (modal) modal.hidden = true;
   }
+  function setPreviewHint(text) {
+    var hint = $('hypitPreviewHint');
+    if (!hint) return;
+    if (!text) { hint.hidden = true; hint.textContent = ''; return; }
+    hint.hidden = false;
+    hint.textContent = text;
+  }
   function selectFile(file) {
     if (!file) return;
     if (state.previewUrl) URL.revokeObjectURL(state.previewUrl);
     state.file = file;
     state.previewUrl = URL.createObjectURL(file);
     var preview = $('hypitVideoPreview');
-    if (preview) preview.src = state.previewUrl;
+    if (preview) {
+      preview.src = state.previewUrl;
+      setPreviewHint('');
+      // 有些素材（常见 H.265/HEVC，或 MKV）浏览器解不了画面：时长和进度条正常但画面全黑。
+      // 这不是文件坏了，创建记录后服务端用 ffmpeg 正常处理，所以只提示、不拦。
+      preview.onloadedmetadata = function () {
+        if (Number(preview.videoWidth || 0) === 0) {
+          setPreviewHint('浏览器无法预览这个视频的画面（多为 H.265/HEVC 编码）：时长能读出来但不显示图像，也不影响创建记录——服务端会用 ffmpeg 正常处理并出片。');
+        }
+      };
+      preview.onerror = function () {
+        setPreviewHint('浏览器无法播放这个视频（编码或封装不被支持，例如 MKV/H.265）：不影响创建记录——服务端会用 ffmpeg 正常处理并出片。');
+      };
+    }
     var selected = $('hypitSelectedFile');
     if (selected) selected.hidden = false;
     var choose = $('hypitChooseVideo');
