@@ -8295,10 +8295,13 @@ def _contacts_click_sticky_header(hwnd: int, contact_list: Any = None, account_i
         x = int(left + min(width * 0.5, row_h * dx_ratio))
         y = int(top + min(row_h * 0.5, row_h * dy_ratio) + 1)
         try:
-            _uia_click_screen_point(x, y)
+            clicked_ok = _uia_click_screen_point(x, y, expect_hwnd=int(hwnd), account_id_hint=account_id_hint)
         except Exception as exc:
             _contact_sync_debug(account_id_hint, stage="contacts_sticky_header_click_error",
                                 error=str(exc)[:160], x=x, y=y)
+            return False
+        if not clicked_ok:
+            # 这个点不属于微信窗口（被盖住/窗口被移动）→ 绝不往下点，直接交给无坐标兜底
             return False
         time.sleep(0.85)
         _contact_sync_debug(account_id_hint, stage="contacts_sticky_header_click",
@@ -12831,7 +12834,53 @@ def _uia_rect_tuple(node: Any) -> Optional[tuple[int, int, int, int]]:
     return left, top, right, bottom
 
 
-def _uia_click_screen_point(x: int, y: int) -> None:
+def _window_at_point(hwnd: int, x: int, y: int) -> Dict[str, Any]:
+    """这个屏幕点现在落在哪个窗口上 —— 判断它是不是我们要操作的那个窗口。
+
+    2026-10-14 事故：列表顶部那条「⌄ 联系人 739」在 UIA 里没有节点，只能按屏幕坐标点；
+    一旦微信窗口被别的窗口盖住/被移动，这个点就属于别的窗口 —— 点下去就“点到别的窗口”，
+    万一落在标题栏按钮上还会把那个窗口最小化/关掉（用户实测：窗口突然消失）。
+    """
+    info: Dict[str, Any] = {"ok": False, "x": int(x), "y": int(y), "expect": int(hwnd or 0)}
+    try:
+        import win32gui  # type: ignore
+    except Exception:
+        info["error"] = "no_pywin32"
+        return info
+    try:
+        under = int(win32gui.WindowFromPoint((int(x), int(y))) or 0)
+        root = int(win32gui.GetAncestor(under, 2) or 0)  # GA_ROOT
+        info["under"] = under
+        info["under_root"] = root
+        info["under_class"] = str(win32gui.GetClassName(under) or "")[:60]
+        info["under_title"] = str(win32gui.GetWindowText(under) or "")[:60]
+        expect = int(hwnd or 0)
+        info["ok"] = bool(expect) and (root == expect or under == expect)
+    except Exception as exc:
+        info["error"] = str(exc)[:160]
+    return info
+
+
+def _uia_click_screen_point(x: int, y: int, *, expect_hwnd: int = 0, account_id_hint: str = "") -> bool:
+    """按屏幕坐标点一下。
+
+    传了 ``expect_hwnd`` 就**必须先确认这个点确实落在那个窗口上**，不在就一个像素都不点
+    （返回 False），避免点歪到别的窗口。不传时保留旧行为（其它调用点暂未改）。
+    """
+    if expect_hwnd:
+        try:
+            _focus_local_wechat(int(expect_hwnd))
+        except Exception:
+            pass
+        guard = _window_at_point(int(expect_hwnd), int(x), int(y))
+        if not guard.get("ok"):
+            _contact_sync_debug(
+                account_id_hint, stage="click_point_refused", x=int(x), y=int(y),
+                reason="point_not_on_target_window", expect=int(expect_hwnd),
+                under=guard.get("under_class"), under_root=guard.get("under_root"),
+                under_title=guard.get("under_title"), error=guard.get("error"),
+            )
+            return False
     try:
         import win32api  # type: ignore
         import win32con  # type: ignore
@@ -12843,6 +12892,7 @@ def _uia_click_screen_point(x: int, y: int) -> None:
     time.sleep(0.04)
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, int(x), int(y), 0, 0)
     _human_pause(floor=0.45)
+    return True
 
 
 _FRIEND_REQUEST_ACCEPT_SUFFIXES = ("\u63a5\u53d7", "\u540c\u610f", "\u7b49\u5f85\u9a8c\u8bc1", "accept")
