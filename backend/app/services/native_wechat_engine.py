@@ -11067,6 +11067,19 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     _contacts_click_fence_open(_uia_rect(contact_list), account_id)
     _contact_sync_debug(account_id, stage="click_fence_open",
                         fence=str(_CONTACTS_CLICK_FENCE.get("rect")))
+    try:
+        _rect0 = _uia_rect(contact_list)
+        if _rect0 is not None and (float(_rect0[3]) - float(_rect0[1])) < 300:
+            _contact_sync_debug(account_id, stage="contacts_sync_failed", reason="window_too_small",
+                                list_rect=str(_rect0))
+            raise RuntimeError(
+                "\u5fae\u4fe1\u7a97\u53e3\u592a\u5c0f\uff08\u597d\u53cb\u5217\u8868\u53ef\u89c6\u9ad8\u5ea6\u4e0d\u5230 300px\uff09\uff0c"
+                "\u4e00\u6b21\u53ea\u80fd\u663e\u793a\u51e0\u884c\uff0c\u540c\u6b65\u4f1a\u5927\u91cf\u8df3\u884c\u3002"
+                "\u8bf7\u628a\u5fae\u4fe1\u7a97\u53e3\u62c9\u5927\u6216\u6700\u5927\u5316\u540e\u91cd\u8bd5")
+    except RuntimeError:
+        raise
+    except Exception:
+        pass
     existing_before = _contact_count(account_id)
     # 只做“够用”的滚动：联系人档标题已可见就一点都不滚（2026-10-14 反馈：不要多余操作）
     try:
@@ -11373,7 +11386,9 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             if clean not in persisted_names:
                 persisted_names.add(clean)
                 pending_records.append(seen[clean])
-                if len(pending_records) >= 20:
+                if pending_records:
+                    # 2026-10-14: checkpoint per contact - a run can be stopped or crash at any
+                    # time without losing what was already read.
                     _merge_contacts_snapshot(account_id, pending_records, chat_type="direct")
                     pending_records = []
             if len(seen) >= clean_limit:
@@ -12732,7 +12747,7 @@ def _read_contact_profile_wx_no_for_cell(
         return ""
     import uiautomation as auto  # type: ignore
 
-    timeout = _strategy_float("contact_profile_card_wait_seconds", 4.0)
+    timeout = _strategy_float("contact_profile_card_wait_seconds", 2.0)
     total_wait = max(2.0, float(timeout or 4.0))
     card = None
     polls = 0
@@ -12775,7 +12790,7 @@ def _read_contact_profile_wx_no_for_cell(
             _uia_click(_target_node)
         deadline = time.monotonic() + total_wait / 2
         while time.monotonic() < deadline:
-            time.sleep(0.4)
+            time.sleep(0.25)
             polls += 1
             try:
                 profile_root = auto.ControlFromHandle(int(hwnd))
