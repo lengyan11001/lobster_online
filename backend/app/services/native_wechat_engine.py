@@ -10944,17 +10944,24 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                     "连续 %d 轮都读不到联系人列表：请把微信切到「通讯录 → 联系人」页（不要停在某个联系人的资料页），"
                     "确认左侧列表里能看到联系人后重试" % empty_rounds
                 )
+            # ⚠️ 这里**一个点击都不发**（2026-10-14 真机教训：以前第 3 个空屏轮会去点「联系人」这一行，
+            # 而微信点分组行 = 跳到该档顶部/收起该档 → 用户看到的就是"滑到一半突然收起来、又从头开始"）。
+            # 空屏是"列表没渲染出内容"，不是"档被关掉了"，所以只做无点击的自救：
+            #   ① 重新定位一次列表控件；② 很小的往下一格（把 recycler 顶一下，让它重新渲染）；③ 等一会儿。
             try:
                 _ensure_local_contacts_tab(account_id)
-                if empty_rounds >= 3:
-                    # 第 3 轮起再试一次「收起已展开的分组 + 展开联系人档」，之后交给空屏上限兜底。
-                    _contacts_prepare_for_sync(hwnd, account_id)
                 root2 = auto.ControlFromHandle(int(hwnd))
-                contact_list = _uia_guess_contact_list(root2) or _uia_primary_contact_list(root2) or contact_list
+                refreshed_list = _uia_guess_contact_list(root2) or _uia_primary_contact_list(root2)
+                if refreshed_list is not None:
+                    contact_list = refreshed_list
+                    try:
+                        contact_list.WheelDown(wheelTimes=2)
+                    except Exception:
+                        pass
             except Exception as exc:
                 _contact_sync_debug(account_id, stage="empty_screen_recover_error", round=rounds,
                                     error=str(exc)[:160])
-            time.sleep(0.6)
+            time.sleep(0.8)
             continue
         empty_rounds = 0
         list_rect = _uia_rect(contact_list)
@@ -11990,13 +11997,16 @@ def _contact_row_clickable(list_rect: Any, row_rect: Any, *, margin: float = 6.0
     try:
         if not list_rect or not row_rect:
             return False
-        if (float(row_rect[3]) - float(row_rect[1])) < 20:
+        height = float(row_rect[3]) - float(row_rect[1])
+        if height < 20:
             return False
+        # 只看"行中心点"在不在列表可视区里：点下去一定落在这一行上，也不会点到列表顶上那条档标题。
+        # （2026-10-14 修正：原来要求"整行都在矩形里"，真机上 417 次被误判成不可点，白白漏掉读号。）
+        center_x = (float(row_rect[0]) + float(row_rect[2])) / 2.0
+        center_y = (float(row_rect[1]) + float(row_rect[3])) / 2.0
         return bool(
-            float(row_rect[1]) >= float(list_rect[1]) + margin
-            and float(row_rect[3]) <= float(list_rect[3]) - margin
-            and float(row_rect[0]) >= float(list_rect[0]) - 1
-            and float(row_rect[2]) <= float(list_rect[2]) + 1
+            float(list_rect[0]) - margin <= center_x <= float(list_rect[2]) + margin
+            and float(list_rect[1]) + margin <= center_y <= float(list_rect[3]) - margin
         )
     except (TypeError, ValueError, IndexError):
         return False

@@ -1628,10 +1628,20 @@ def test_contact_sync_aborts_when_the_contacts_screen_stays_empty(monkeypatch, t
     """一屏联系人都读不到（微信不在「通讯录 → 联系人」页）：有限次重试后明确失败，不再一直转。"""
     _fake_list, _names, stages = _fake_contact_scan(monkeypatch, tmp_path, total=0)
 
+    clicks = []
+    monkeypatch.setattr(engine, "_contacts_click_group_row",
+                        lambda *a, **k: (clicks.append((a, k)) or "联系人3733"))
+    prepares = []
+    monkeypatch.setattr(engine, "_contacts_prepare_for_sync",
+                        lambda hwnd, account_id="": (prepares.append(account_id) or
+                                                     {"ready": True, "attempts": 1, "skipped": ""}))
+
     with pytest.raises(RuntimeError) as info:
         engine._sync_local_contacts_from_uia("wechat-account-empty-screen", limit=10000)
 
     assert "读不到联系人列表" in str(info.value)
+    assert clicks == [], "空屏自救里不许点任何分组行（点它=微信跳到档顶/收起，用户看到的就是'突然收起+从头开始'）"
+    assert len(prepares) <= 1, "空屏自救里不许再跑 prepare（那正是以前点「联系人」的地方）；只允许开头那次"
     rounds = [item.get("round") for item in stages if item.get("stage") == "contacts_empty_round"]
     assert rounds, stages
     assert max(rounds) == engine._CONTACT_SYNC_EMPTY_SCREEN_LIMIT, rounds
@@ -1818,9 +1828,14 @@ def test_wx_fill_only_clicks_rows_that_are_fully_visible(monkeypatch, tmp_path):
     _use_temp_native_wechat_db(monkeypatch, tmp_path)
     list_node = _FakeRectList((100.0, 200.0, 400.0, 800.0))
     rows = [
-        types.SimpleNamespace(fake_rect=(100.0, 196.0, 400.0, 250.0), name="半截露头"),
+        # 中心在列表里（上下被裁一点）→ 允许点：真机上原来判"整行才算可见"，白漏了 417 次
+        types.SimpleNamespace(fake_rect=(100.0, 196.0, 400.0, 250.0), name="中心在列表里"),
+        # 整行都在里面 → 允许点
         types.SimpleNamespace(fake_rect=(100.0, 300.0, 400.0, 354.0), name="整行可见"),
-        types.SimpleNamespace(fake_rect=(100.0, 780.0, 400.0, 830.0), name="半截在底"),
+        # 完全在列表上方（贴到档标题上去了）→ 不点
+        types.SimpleNamespace(fake_rect=(100.0, 140.0, 400.0, 194.0), name="在列表上方"),
+        # 完全在列表下方 → 不点
+        types.SimpleNamespace(fake_rect=(100.0, 810.0, 400.0, 864.0), name="在列表下方"),
     ]
     monkeypatch.setattr(engine, "_uia_rect", lambda node: getattr(node, "fake_rect", None))
     monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda root: list_node)
@@ -1848,9 +1863,9 @@ def test_wx_fill_only_clicks_rows_that_are_fully_visible(monkeypatch, tmp_path):
 
     engine._sync_local_contacts_from_uia("wechat-account-row-guard", limit=10000)
 
-    assert clicked == ["整行可见"], "只有整行都在可视区里的行才允许点开资料卡"
+    assert clicked == ["中心在列表里", "整行可见"], "行中心在列表可视区里的行才允许点开资料卡"
     skipped = {item.get("target") for item in stages if item.get("stage") == "wx_fill_row_skipped"}
-    assert skipped == {"半截露头", "半截在底"}, skipped
+    assert skipped == {"在列表上方", "在列表下方"}, skipped
 
 
 # ---------------------------------------------------------------- 2026-10-14
