@@ -8400,8 +8400,13 @@ def _open_contacts_sublist(hwnd: int, account_id_hint: str = "") -> bool:
 
 
 def _contact_sync_max_rounds(limit: int) -> int:
+    """扫描轮数上限 —— **不截断**：给到远超任何真实联系人数（2026-10-14 用户要求）。
+
+    真正的停止条件只有两个：连续 6 轮列表不再推进（走到尾部）、或已读到 limit 条。
+    这里保留一个大到不可能触发的安全上限，防止异常情况下无限循环。
+    """
     clean_limit = max(1, min(int(limit or 10000), 10000))
-    return max(120, min(900, int(clean_limit / 4) + 120))
+    return max(5000, clean_limit * 3)
 
 
 def _existing_contact_wx_no_index(account_id: str) -> Dict[str, str]:
