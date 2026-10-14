@@ -12439,7 +12439,7 @@ def _uia_visible_contact_cell_rows(list_node: Any) -> List[Dict[str, Any]]:
     return rows
 
 
-def _row_clipped_under_header(list_rect: Any, row_rect: Any, *, header_band: float = 44.0) -> bool:
+def _row_clipped_under_header(list_rect: Any, row_rect: Any, *, header_band: float = 60.0) -> bool:
     """True when the row is (partly) hidden under the sticky group header.
 
     2026-10-14 live (diag_20261014124846_e6c9e471): the sync clicked a row whose rect was
@@ -12836,7 +12836,10 @@ def _read_contact_profile_wx_no_for_cell(
         # 2026-10-14: the card tree is not recognisable on the user's build
         # (card_not_confirmed every time), so read the ID from the window instead and
         # always put the contacts list back afterwards.
-        wx_no = _read_wx_no_from_window(hwnd, account_id, target)
+        # 2026-10-15: window-scan fallback DISABLED - it wrote the previous contact's ID
+        # (??'s x397823589) onto A???????-??15201180053. Only IDs read from a
+        # confirmed profile card are accepted now; unreadable means empty.
+        wx_no = ""
         if wx_no:
             try:
                 _persist_contact_wx_no(account_id, target, wx_no)
