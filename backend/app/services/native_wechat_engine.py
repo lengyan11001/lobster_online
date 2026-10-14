@@ -11142,6 +11142,13 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         if not names:
             empty_rounds += 1
             try:
+                # 2026-10-14: an empty screen usually means the group got collapsed by a
+                # stray click - reopen it (idempotent, never presses ESC).
+                _contacts_prepare_for_sync(hwnd, account_id)
+            except Exception as exc:
+                _contact_sync_debug(account_id, stage="contacts_reopen_error",
+                                    error=str(exc)[:140])
+            try:
                 # 2026-10-14: a row click can leave the profile pane covering the
                 # contacts list; put it back instead of counting empty rounds.
                 _restore_contacts_list_after_read(hwnd, account_id, "")
@@ -11239,6 +11246,15 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                     profile_attempted.add(normalized_name)
                     _contact_sync_debug(account_id, stage="wx_fill_row_skipped", target=clean,
                                         reason="row_not_clickable",
+                                        rect=str(_uia_rect(click_node)), list_rect=str(list_rect))
+                elif _row_clipped_under_header(list_rect, _uia_rect(click_node)):
+                    # 2026-10-14 (live): clicking a row whose top is above the list top hits the
+                    # sticky group header instead - that collapses the contacts group and the rest
+                    # of the screen disappears (diag_20261014124846_e6c9e471: rect y=400..454 with
+                    # list top 415). Skip it; the next scroll step brings the row back cleanly.
+                    profile_attempted.add(normalized_name)
+                    _contact_sync_debug(account_id, stage="wx_fill_row_skipped", target=clean,
+                                        reason="row_under_sticky_header",
                                         rect=str(_uia_rect(click_node)), list_rect=str(list_rect))
                 elif not _uia_rect(click_node):
                     _contact_sync_debug(account_id, stage="wx_fill_row_skipped", target=clean,
@@ -12296,6 +12312,26 @@ def _uia_visible_contact_cell_rows(list_node: Any) -> List[Dict[str, Any]]:
             queue.extend(grand_children[:20])
     rows.sort(key=lambda item: float(item.get("top") or 0))
     return rows
+
+
+def _row_clipped_under_header(list_rect: Any, row_rect: Any, *, header_band: float = 44.0) -> bool:
+    """True when the row is (partly) hidden under the sticky group header.
+
+    2026-10-14 live (diag_20261014124846_e6c9e471): the sync clicked a row whose rect was
+    (901,400,1101,454) while the list started at y=415 - the click landed on the sticky
+    "联系人" header and collapsed the whole group, after which every remaining row was
+    unreachable ("点完第一屏就把联系人列表关了"). Anything whose centre is in the top band of
+    the list is refused now.
+    """
+    if not list_rect or not row_rect:
+        return False
+    try:
+        top = float(list_rect[1])
+        bottom = float(list_rect[3])
+        centre = (float(row_rect[1]) + float(row_rect[3])) / 2.0
+    except (TypeError, ValueError, IndexError):
+        return False
+    return centre < top + float(header_band) or centre > bottom - 2.0
 
 
 def _contact_row_clickable(list_rect: Any, row_rect: Any, *, margin: float = 6.0) -> bool:
