@@ -8201,35 +8201,68 @@ def _contacts_entry_ready(hwnd: int) -> bool:
 
 
 def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
-    """点某个分组行（按其名字前缀找）；找不到返回空串。**只点一次**。
+    """点某个分组行（按其名字前缀找）把它展开；成功返回名字，没成功返回空串。
 
-    2026-10-14 教训：为了"更稳"加过验证重试、坐标兜底、expect_open 等，反而把用户那边的
-    列表状态搞乱（"连列表都展不开"）。回到最简单：UIA 节点点一下；节点点不动就按它的矩形
-    中心点一下（带"落点必须在微信窗口上"的校验）；点完不等、不验、不重试。
+    2026-10-14 线上「点不到联系人、展不开目录」的排查结论：微信窗口被别的窗口盖住时，
+    任何点击都会落到别人身上 —— 所以**点之前先把微信窗口拉到前台**（这一步以前被砍掉了）。
+    然后最多试 3 种点法，每种点完都验证一次（分组行变成展开 / 列表里能看到联系人行）：
+
+      1) UIA 节点点击（``node.Click``，点的是节点自己的中心）；
+      2) 前置窗口后再点一次（第一条常常因为窗口没激活而失效）；
+      3) 按这一行的矩形算屏幕坐标点（**落在行左侧三分之一**，那里是展开三角；
+         带「这个点必须落在微信窗口上」的校验，点歪一个像素都不点）。
+
+    验证用的是"分组行的 expanded 或 列表里能看到联系人行"，不会再做别的动作（不滚、不点标题）。
     """
-    scan = _contacts_row_scan(hwnd)
-    target = next(
-        (item for item in (scan.get("entries") or []) if str(item.get("name") or "").startswith(str(name_prefix or ""))),
-        None,
-    )
-    if target is None:
+    prefix = str(name_prefix or "")
+    if not prefix:
         return ""
     try:
-        _click_uia_node(target["node"])
-        return str(target.get("name") or "")
-    except Exception as exc:
-        _contact_sync_debug("", stage="contacts_group_click_error", target=str(name_prefix),
-                            method="uia_node", error=str(exc)[:120])
-    rect = _uia_rect(target["node"])
-    if rect:
+        _focus_local_wechat(hwnd)
+    except Exception:
+        pass
+    for method in ("uia_node", "uia_node_after_focus", "screen_left"):
+        scan = _contacts_row_scan(hwnd)
+        target = next(
+            (item for item in (scan.get("entries") or []) if str(item.get("name") or "").startswith(prefix)),
+            None,
+        )
+        if target is None:
+            return ""
+        clicked = ""
         try:
-            ok = _uia_click_screen_point(
-                int((rect[0] + rect[2]) / 2), int((rect[1] + rect[3]) / 2), expect_hwnd=int(hwnd)
-            )
-            if ok:
-                return str(target.get("name") or "")
-        except Exception:
-            pass
+            if method in ("uia_node", "uia_node_after_focus"):
+                if method == "uia_node_after_focus":
+                    try:
+                        _focus_local_wechat(hwnd)
+                        time.sleep(0.25)
+                    except Exception:
+                        pass
+                _click_uia_node(target["node"])
+                clicked = method
+            else:
+                rect = _uia_rect(target["node"])
+                if rect:
+                    left = float(rect[0]) + (float(rect[2]) - float(rect[0])) * 0.25
+                    x = int(left)
+                    y = int((float(rect[1]) + float(rect[3])) / 2)
+                    if _uia_click_screen_point(x, y, expect_hwnd=int(hwnd)):
+                        clicked = method
+        except Exception as exc:
+            _contact_sync_debug("", stage="contacts_group_click_error", target=prefix,
+                                method=method, error=str(exc)[:120])
+        if not clicked:
+            continue
+        time.sleep(0.8)
+        state = _contacts_group_state(hwnd, prefix)
+        if state or _contacts_entry_ready(hwnd):
+            _contact_sync_debug("", stage="contacts_group_click_ok", target=prefix,
+                                method=method, state=state)
+            return str(target.get("name") or "")
+        _contact_sync_debug("", stage="contacts_group_click_no_effect", target=prefix,
+                            method=method, state=state,
+                            row_rect=str(_uia_rect(target["node"])),
+                            list_rect=str(_uia_rect(_uia_primary_contact_list(_uia_main_root(hwnd)))))
     return ""
 
 
@@ -8249,6 +8282,11 @@ def _contacts_prepare_for_sync(hwnd: int, account_id_hint: str = "") -> Dict[str
     if not hwnd or not _module_available("uiautomation"):
         return result
     keep = _CONTACTS_GROUP_KEEP_OPEN[0]
+    try:
+        # 点击前把微信窗口拉到前台：被别的窗口盖住时点击会落到别人身上（"点不到"最常见的原因）
+        _focus_local_wechat(hwnd)
+    except Exception:
+        pass
     scan = _contacts_row_scan(hwnd)
     result["open_group"] = str(scan.get("open_group") or "")
     result["subpage"] = bool(scan.get("subpage"))
@@ -10827,6 +10865,26 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     empty_rounds = 0
     stuck_rounds = 0
     recovery_budget = 2
+    # 每次同步开头留一份"不点击"的结构快照：分组行（名字/class/是否展开/矩形）+ 列表矩形 + 窗口状态。
+    # 现场排查用（2026-10-14：线上"点不到联系人"只能靠这份快照判断到底是哪一层不对）。
+    try:
+        snap_root = auto.ControlFromHandle(int(hwnd))
+        snap_scan = _contacts_row_scan(hwnd)
+        _contact_sync_debug(
+            account_id, stage="contacts_probe",
+            window_rect=str(_uia_rect(snap_root)),
+            list_rect=str(_uia_rect(_uia_primary_contact_list(snap_root) or _uia_guess_contact_list(snap_root))),
+            open_group=str(snap_scan.get("open_group") or ""),
+            subpage=bool(snap_scan.get("subpage")),
+            items=len(snap_scan.get("items") or []),
+            entries=[
+                {"name": str(item.get("name") or "")[:40], "expanded": bool(item.get("expanded")),
+                 "rect": str(_uia_rect(item.get("node")))}
+                for item in (snap_scan.get("entries") or [])[:8]
+            ],
+        )
+    except Exception as exc:
+        _contact_sync_debug(account_id, stage="contacts_probe_error", error=str(exc)[:160])
     prepare_state: Dict[str, Any] = {}
     try:
         prepare_state = _contacts_prepare_for_sync(hwnd, account_id)
