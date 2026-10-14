@@ -1,7 +1,7 @@
 {
-  "version": "2.0.136",
-  "build": 431,
-  "applied_at": "2026-10-14T21:35:40+08:00",
-  "note": "2.0.136 fix: friend row clicks now go through our own guarded point click - focus WeChat, verify the window under the cursor really is that WeChat window (plus the click fence inside the friends list) and only then send the mouse event; node.Click() clicked blindly and on the user's machine one click even landed on a Chrome window while row clicks were swallowed in a loop (card_not_confirmed + pane_not_showing_target, then reopen group, over and over). Includes 2.0.135: the contacts list is picked by scoring which candidate has its own rows inside its own rect, and a mismatch aborts with contacts_list_mismatch instead of clicking.",
-  "bundle_sha256": "b848528966b29385e8f3d4e5c9e4d651632cbbe8d679ba8676d53c3dbf3547cb"
+  "version": "2.0.137",
+  "build": 432,
+  "applied_at": "2026-10-15T00:10:38+08:00",
+  "note": "2.0.137: content-record 加入分组 button now reaches clients - the assets view was loading publish.js with a cache buster (20261009) older than the commit (2026-10-11) that added the button, so any client that had that URL cached kept the old script; the buster is now 20261014-content-group-v12. Contacts sync: only rows inside the friends-list rect are used (contacts_list_mismatch aborts instead of clicking another window), rows hidden under the sticky header are refused, small 2-row nudges, zero ESC, row clicks verified against the window under the cursor, refuse to start when the list viewport is under 300px, checkpoint every contact immediately, faster card confirmation (~2-3s per contact) and after a collapse the list scrolls back to the last processed contact and continues from there (contacts_resume_anchor) instead of restarting at the head.",
+  "bundle_sha256": "40e78fa0489ccc09cb5d59992a48e238b31d6bf3f42b11859a04cc2f3192955e"
 }
