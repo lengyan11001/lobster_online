@@ -8384,6 +8384,11 @@ def _contacts_prepare_for_sync(hwnd: int, account_id_hint: str = "") -> Dict[str
         )
         if target is None:
             result["skipped"] = "contacts_row_not_visible"
+        elif _contacts_entry_ready(hwnd):
+            # 扫描说"收起"、可列表里明明还能看到联系人行 → 这是扫描误判，**绝对不点**：
+            # 我们这个点法是"切换"，点一下就真把开着的档收起来了（2026-10-14 真机对照实验：
+            # point_text 一次点击会让 联系人档 True→False）。
+            result["skipped"] = "scan_says_closed_but_rows_visible"
         else:
             clicked = _contacts_click_group_row(hwnd, keep)
             result["opened"] = clicked
