@@ -11829,22 +11829,110 @@ def _uia_visible_contact_cell_rows(list_node: Any) -> List[Dict[str, Any]]:
     return rows
 
 
+def _contact_profile_card_root(root: Any) -> Any:
+    """右侧「资料卡」的根节点（只在这里面读微信号，避免读到上一个人的卡）。
+
+    做法：先找到「微信号」这一行，再在分栏（mmui::XSplitterView）的直接子格里挑**包住它的那一格**
+    —— 通讯录页左边是联系人列表、右边是资料卡，包住标签的最小子格就是卡片本身。
+    （uiautomation 的控件只有 GetChildren、没有 GetParent，所以只能自上而下找容器。）
+    """
+    label = None
+    try:
+        for node in _uia_walk(root, max_depth=20, max_nodes=5000):
+            text = _uia_control_text(node)
+            if text and text.strip().rstrip(":：").startswith("微信号"):
+                label = node
+                break
+    except Exception:
+        return None
+    if label is None:
+        return None
+    label_rect = _uia_rect(label)
+    if label_rect is None:
+        return label
+    best = None
+    best_area = None
+    try:
+        for container in _uia_walk(root, max_depth=16, max_nodes=2000):
+            if "Splitter" not in _uia_control_class(container):
+                continue
+            for child in container.GetChildren():
+                rect = _uia_rect(child)
+                if rect is None:
+                    continue
+                if not (
+                    rect[0] <= label_rect[0]
+                    and rect[1] <= label_rect[1]
+                    and rect[2] >= label_rect[2]
+                    and rect[3] >= label_rect[3]
+                ):
+                    continue
+                area = (rect[2] - rect[0]) * (rect[3] - rect[1])
+                if best is None or area < best_area:
+                    best, best_area = child, area
+    except Exception:
+        return label
+    return best if best is not None else label
+
+
 def _read_contact_profile_wx_no_for_cell(
     hwnd: int,
     account_id: str,
     cell: Any,
     target: str,
 ) -> str:
-    """点开这一行的资料卡读微信号（行已经在视野里，不需要再按名字找一遍）。"""
+    """点开这一行的资料卡读微信号（行已经在视野里，不需要再按名字找一遍）。
+
+    关键：点完之后**要等右侧卡片真的换成这个人**再读（真机实测：点中的那次 0.3s 就换了，
+    点空了的那次十几秒都还是上一个人的卡）。等不到就返回空、不落库 —— 宁可这次学不到号，
+    也不能把上一个人的微信号写成本人的（2026-10-14 用户反馈「很多看上去不是微信号」）。
+    """
     if cell is None:
         return ""
     import uiautomation as auto  # type: ignore
 
-    _uia_click(cell)
+    timeout = _strategy_float("contact_profile_card_wait_seconds", 4.0)
+    total_wait = max(2.0, float(timeout or 4.0))
+    card = None
+    polls = 0
+    # 真机实测：通讯录里点一行，有时不会真的选中（右侧还是上一个人的卡）。所以：
+    #   1) 优先点行里那个「名字」控件（它比整行更稳），点不到再点整行；
+    #   2) 最多点两次；
+    #   3) 每次都等到"卡片确认是本人"再读，等不到就跳过（绝不读上一个人的卡）。
+    def _click_target() -> Any:
+        wanted = _normalize_contact_lookup_key(target)
+        try:
+            for child in cell.GetChildren():
+                if wanted and _normalize_contact_lookup_key(_uia_control_text(child)) == wanted:
+                    return child
+        except Exception:
+            pass
+        return cell
+
+    for _attempt in range(2):
+        _uia_click(_click_target())
+        deadline = time.monotonic() + total_wait / 2
+        while time.monotonic() < deadline:
+            time.sleep(0.4)
+            polls += 1
+            try:
+                profile_root = auto.ControlFromHandle(int(hwnd))
+                candidate = _contact_profile_card_root(profile_root)
+            except Exception:
+                candidate = None
+            if candidate is None:
+                continue
+            if _uia_profile_mentions_name(candidate, target):
+                card = candidate
+                break
+        if card is not None:
+            break
+    if card is None:
+        _contact_sync_debug(account_id, stage="wx_fill_skipped", target=target,
+                            reason="card_not_confirmed", polls=polls)
+        return ""
     try:
-        time.sleep(0.8)
-        profile_root = auto.ControlFromHandle(int(hwnd))
-        wx_no = _extract_contact_profile_wx_no(profile_root, expected_name=target)
+        wx_no = _extract_contact_profile_wx_no(card, expected_name=target)
     except Exception:
         return ""
     if wx_no:
@@ -11852,6 +11940,7 @@ def _read_contact_profile_wx_no_for_cell(
             _persist_contact_wx_no(account_id, target, wx_no)
         except Exception:
             pass
+        _contact_sync_debug(account_id, stage="wx_fill", target=target, wx_no=wx_no, polls=polls)
     return wx_no
 
 

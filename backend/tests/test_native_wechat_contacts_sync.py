@@ -1553,3 +1553,67 @@ def test_profile_card_rejects_values_that_are_not_wechat_ids(monkeypatch):
     got = _extract_from_fake_profile_card(
         monkeypatch, ["孙洪乾", "微信号", "_sunhongqian"], expected_name="孙洪乾")
     assert got == ""
+
+
+# ---------------------------------------------------------------- 2026-10-14
+# 真机实测：点一行之后，右侧资料卡**不是每次都会换人**（点空了那几次，十几秒还是上一个人的卡）。
+# 同步旧逻辑点完只等 0.8 秒、还在整个窗口里读 —— 于是把上一个人的微信号写成本人的号。
+
+
+def _fake_profile_card_reader(monkeypatch, cards, *, persist_to=None):
+    """cards：每次轮询时右侧卡片的内容（按轮询次数推进）。返回 (调用记录, 轮询状态)。"""
+    state = {"i": 0, "polls": 0}
+    calls = []
+
+    class FakeRoot:
+        pass
+
+    fake_auto = types.ModuleType("uiautomation")
+    fake_auto.ControlFromHandle = lambda hwnd: FakeRoot()
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_auto)
+    monkeypatch.setattr(engine, "_uia_click", lambda node: calls.append(("click", node)))
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: state.__setitem__("i", state["i"] + 1))
+    monkeypatch.setattr(engine, "_contact_profile_card_root", lambda root: cards[min(state["i"], len(cards) - 1)])
+    monkeypatch.setattr(engine, "_uia_profile_mentions_name",
+                        lambda card, name: card.get("name") == name)
+    monkeypatch.setattr(
+        engine, "_extract_contact_profile_wx_no",
+        lambda node, expected_name="": (node if isinstance(node, dict)
+                                        else cards[min(state["i"], len(cards) - 1)]).get("wx_no", ""),
+    )
+    persisted = []
+    monkeypatch.setattr(
+        engine, "_persist_contact_wx_no",
+        lambda account_id, target, wx_no, **kw: persisted.append((target, wx_no)) or {},
+    )
+    stages = []
+    monkeypatch.setattr(engine, "_contact_sync_debug", lambda account_id, **f: stages.append(f))
+    return calls, persisted, stages
+
+
+def test_profile_read_ignores_a_stale_card_from_the_previous_contact(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    # 右侧一直是上一个人的卡（卡里没有目标名字）
+    _calls, persisted, stages = _fake_profile_card_reader(
+        monkeypatch, [{"name": "上一个人", "wx_no": "someone_else_88"}])
+
+    got = engine._read_contact_profile_wx_no_for_cell(4242, "acct", object(), "目标")
+
+    assert got == "", "卡片没换成本人时不能读出任何微信号"
+    assert persisted == [], "更不能把上一个人的号写成本人的"
+    assert any(s.get("stage") == "wx_fill_skipped" for s in stages)
+
+
+def test_profile_read_waits_until_the_card_shows_the_clicked_contact(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    _calls, persisted, stages = _fake_profile_card_reader(
+        monkeypatch,
+        [{"name": "上一个人", "wx_no": "someone_else_88"},
+         {"name": "目标", "wx_no": "target_wx_77"}],
+    )
+
+    got = engine._read_contact_profile_wx_no_for_cell(4242, "acct", object(), "目标")
+
+    assert got == "target_wx_77"
+    assert persisted == [("目标", "target_wx_77")]
+    assert any(s.get("stage") == "wx_fill" for s in stages)
