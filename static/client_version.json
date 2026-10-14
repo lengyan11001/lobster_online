@@ -1,7 +1,7 @@
 {
-  "version": "2.0.139",
-  "build": 434,
-  "applied_at": "2026-10-15T00:40:42+08:00",
-  "note": "2.0.139: contacts sync follows the user rule - (1) when a row cannot be opened the nickname is kept and the row is simply skipped, no more reopening the contacts group on failure (that caused the endless collapse/restart-from-top loop); the group is only reopened when the friends list is genuinely empty, and then the list scrolls back to the last processed contact (contacts_resume_anchor); (2) when the friends-list viewport is shorter than 400px the top 120px are never clicked (they sit under the sticky contacts header). Keeps 2.0.138: window-scan fallback off (no wrong IDs), window/list binding, per-contact checkpoint, zero ESC.",
-  "bundle_sha256": "152fd4eebddc6d3eb4d5a38611bd1cdef9086e8f1d0e19902b575237799da259"
+  "version": "2.0.140",
+  "build": 435,
+  "applied_at": "2026-10-15T00:57:38+08:00",
+  "note": "2.0.140: contacts sync - (1) the guarded click refusing a point that is not on the WeChat window (when another window covers it) no longer falls back to a blind click; it stops with a readable error instead of hitting the contacts search box and popping a 公众号 dropdown. (2) an empty viewport right after our own wheel nudge is a virtualised-list rendering gap, not a collapse: re-poll ~1.4s (contacts_empty_transient) before reopening the contacts group, which removes most of the sudden collapse/reopen cycles seen in diag_20261014165447 (every one was preceded by scroll_moved visible=0). Keeps 2.0.139: skip failed rows, resume anchor, short-window top band.",
+  "bundle_sha256": "856dfb6c501ab95bc16a37c089e805d5cb33434bdfa2e877dc4162adbbed459e"
 }
