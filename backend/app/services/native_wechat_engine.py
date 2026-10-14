@@ -11188,6 +11188,24 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             ui_blank_rounds = 0
         if not names:
             empty_rounds += 1
+            # 2026-10-15 (diag_20261014165447): every collapse was preceded by our own wheel nudge
+            # (scroll_moved ... visible=0): the virtualised list renders 0 rows for a frame after
+            # scrolling, and we mistook that gap for a collapsed group. Re-poll before believing it.
+            _transient_empty = True
+            for _w in range(4):
+                time.sleep(0.35)
+                try:
+                    contact_list = _uia_strict_contact_list(_uia_main_root(hwnd)) or contact_list
+                    if _uia_visible_contact_cell_rows(contact_list):
+                        _transient_empty = False
+                        break
+                except Exception:
+                    pass
+            if not _transient_empty:
+                empty_rounds = 0
+                _contact_sync_debug(account_id, stage="contacts_empty_transient", round=rounds,
+                                    seen=len(seen))
+                continue
             try:
                 # 2026-10-14: an empty screen usually means the group got collapsed by a
                 # stray click - reopen it (idempotent, never presses ESC).
