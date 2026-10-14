@@ -8114,6 +8114,8 @@ _CONTACTS_GROUP_KEEP_OPEN = ("联系人",)
 _CONTACTS_GROUP_ROW_CLASS = "mmui::ContactsCellGroupView"
 # 打开后的“内容行”：联系人档是 ContactsCellItemView；新的朋友档是 XTableCell（好友申请）。
 _CONTACTS_OPEN_CONTENT_CLASSES = ("mmui::ContactsCellItemView", "mmui::XTableCell")
+# 主动点开「联系人」入口最多试几次（每次点完都校验：列表里真的能看到联系人才算成功）。
+_CONTACTS_OPEN_ATTEMPTS = 3
 
 
 def _contacts_row_scan(hwnd: int) -> Dict[str, Any]:
@@ -8172,69 +8174,178 @@ def _contacts_row_scan(hwnd: int) -> Dict[str, Any]:
     }
 
 
-def _contacts_click_group_row(hwnd: int, name_prefix: str) -> str:
-    """点某个分组行（按其名字前缀找）；找不到返回空串。只点一次，不重试。"""
+def _contacts_group_state(hwnd: int, name_prefix: str) -> Optional[bool]:
+    """某个分组现在是展开的吗；分组行不在视野里返回 None。"""
     scan = _contacts_row_scan(hwnd)
-    target = next(
-        (entry for entry in (scan.get("entries") or []) if str(entry.get("name") or "").startswith(str(name_prefix or ""))),
+    entry = next(
+        (item for item in (scan.get("entries") or []) if str(item.get("name") or "").startswith(str(name_prefix or ""))),
         None,
     )
-    if target is None:
-        return ""
+    if entry is None:
+        return None
+    return bool(entry.get("expanded"))
+
+
+def _contacts_entry_ready(hwnd: int) -> bool:
+    """「联系人」入口是不是真的开着：主列表里能看到联系人行。"""
+    if not hwnd or not _module_available("uiautomation"):
+        return False
+    import uiautomation as auto  # type: ignore
+
     try:
-        _click_uia_node(target["node"])
+        root = auto.ControlFromHandle(int(hwnd))
+        contact_list = _uia_primary_contact_list(root) or _uia_guess_contact_list(root)
+        return bool(contact_list is not None and _uia_visible_contact_cell_rows(contact_list))
     except Exception:
+        return False
+
+
+def _contacts_click_group_row(
+    hwnd: int,
+    name_prefix: str,
+    *,
+    expect_open: Optional[bool] = None,
+    attempts: int = 2,
+) -> str:
+    """点某个分组行（按名字前缀找），并可校验点击真的生效；找不到/点不动返回空串。
+
+    2026-10-14 线上「一直在那找不到联系人入口、等用户自己去点」的直接原因就在这里：
+    老实现只点一次、点完不校验 —— 窗口被别的程序盖住、节点是旧的、点歪了，它都不知道，
+    然后就去读一个没展开的列表。现在：
+
+    1. ``expect_open`` 不为 None 时，先把微信窗口拉到前台（点击落到别的窗口上是最常见的失败原因）；
+    2. 先按 UIA 节点点（``node.Click``）；失败或没生效 → 按这一行的矩形算屏幕坐标再点一次
+       （带「这个点必须落在微信窗口上」的校验，点歪一个像素都不点）；
+    3. 每次点完重新扫一次分组状态，``expect_open=True`` 时还接受「列表里已经能看到联系人行」；
+       点完没生效就再试一次，最后返回空串交给调用方报错。
+    """
+    prefix = str(name_prefix or "")
+    if not prefix:
         return ""
-    return str(target.get("name") or "")
+    tries = 1 if expect_open is None else max(1, min(int(attempts or 1), 3))
+    for _attempt in range(1, tries + 1):
+        scan = _contacts_row_scan(hwnd)
+        target = next(
+            (entry for entry in (scan.get("entries") or []) if str(entry.get("name") or "").startswith(prefix)),
+            None,
+        )
+        if target is None:
+            return ""
+        clicked = ""
+        if expect_open is not None:
+            try:
+                _focus_local_wechat(hwnd)
+            except Exception:
+                pass
+        try:
+            _click_uia_node(target["node"])
+            clicked = "uia_node"
+        except Exception as exc:
+            _contact_sync_debug("", stage="contacts_group_click_error", target=prefix,
+                                method="uia_node", error=str(exc)[:120])
+        if not clicked:
+            rect = _uia_rect(target["node"])
+            if rect:
+                ok = _uia_click_screen_point(
+                    int((rect[0] + rect[2]) / 2),
+                    int((rect[1] + rect[3]) / 2),
+                    expect_hwnd=int(hwnd),
+                )
+                clicked = "screen_point" if ok else ""
+                _contact_sync_debug("", stage="contacts_group_click", target=prefix,
+                                    method="screen_point", ok=bool(ok))
+        if not clicked:
+            return ""
+        if expect_open is None:
+            return str(target.get("name") or "")
+        time.sleep(0.9)
+        state = _contacts_group_state(hwnd, prefix)
+        if state == expect_open or (expect_open is True and _contacts_entry_ready(hwnd)):
+            return str(target.get("name") or "")
+        _contact_sync_debug("", stage="contacts_group_click_no_effect", target=prefix,
+                            method=clicked, state=state)
+        time.sleep(0.4)
+    return ""
 
 
 def _contacts_prepare_for_sync(hwnd: int, account_id_hint: str = "") -> Dict[str, Any]:
-    """进通讯录后只做两件事（各最多点一次，绝不反复点、不额外滚动）：
+    """把「联系人」入口**主动点开并确认真的开了**（最多 _CONTACTS_OPEN_ATTEMPTS 轮）。
 
-      1) 打开的若是别的档（新的朋友 / 群聊 / 公众号 / 服务号 / 企业微信联系人 / 我的企业），
-         点它的分组标题收起一次；
-      2) 「联系人」档没展开时，点它一次。
+    2026-10-14 线上反馈「同步时一直在那找不到联系人入口、等我自己去点」：老实现只在
+    「扫到联系人档是收起的」时才点一次，点完不校验；分组行不在视野里时更是直接 skip，
+    一行都不点 —— 于是就"等用户去点"。现在：
 
-    之后同步就照常滚读联系人，不再插别的动作（2026-10-14 反馈：不要多余操作）。
+      1) 先把微信窗口拉到前台（被别的窗口盖住时点击会落到别人身上）；
+      2) 打开的若是别的档（新的朋友 / 群聊 / 公众号…），点它的分组标题收起；
+      3) 「联系人」档没开就**主动点它**，点完校验（分组展开 或 列表里能看到联系人行）；
+      4) 分组行不在视野里 → 先回档顶（收起/展开）再试一轮；
+      5) 到上限还不行就返回 ready=False —— 调用方据此明确报错，不再静默去读空列表。
+
+    返回 result 里的 ``ready`` 才是"能不能开始读联系人"的唯一依据（老的 ``opened`` 只表示点了哪一下）。
     """
-    result: Dict[str, Any] = {"collapsed": "", "opened": "", "open_group": "", "subpage": False, "skipped": ""}
+    result: Dict[str, Any] = {
+        "collapsed": "", "opened": "", "open_group": "", "subpage": False,
+        "skipped": "", "ready": False, "attempts": 0, "method": "",
+    }
     if not hwnd or not _module_available("uiautomation"):
         return result
-    scan = _contacts_row_scan(hwnd)
-    result["open_group"] = str(scan.get("open_group") or "")
-    result["subpage"] = bool(scan.get("subpage"))
-    if not scan.get("entries"):
-        # 分组行不在视野里（列表被滚到中间）——同步本来就会滚回顶部，这里不额外滚
-        result["skipped"] = "no_group_rows_visible"
-        return result
-    if scan.get("subpage"):
-        clicked = _contacts_click_group_row(hwnd, str(scan.get("open_group") or ""))
-        result["collapsed"] = clicked
-        if clicked:
-            time.sleep(0.9)
-    scan = _contacts_row_scan(hwnd)
-    if scan.get("subpage"):
-        # 收不动就不硬来（原来在这里会反复点同一行）
-        result["skipped"] = "still_subpage:" + str(scan.get("open_group") or "")
-        _contact_sync_debug(account_id_hint, stage="contacts_prepare", **result)
-        return result
-    contacts_open = any(
-        str(entry.get("name") or "").startswith(_CONTACTS_GROUP_KEEP_OPEN[0]) and entry.get("expanded")
-        for entry in (scan.get("entries") or [])
-    )
-    if not contacts_open:
-        # 只有确认「联系人」是收起的才点它一次；已经展开就不点（盲点会把它收起来）
+    keep = _CONTACTS_GROUP_KEEP_OPEN[0]
+    try:
+        _focus_local_wechat(hwnd)
+    except Exception:
+        pass
+    for attempt in range(1, _CONTACTS_OPEN_ATTEMPTS + 1):
+        result["attempts"] = attempt
+        scan = _contacts_row_scan(hwnd)
+        result["open_group"] = str(scan.get("open_group") or "")
+        result["subpage"] = bool(scan.get("subpage"))
+        if scan.get("subpage"):
+            # 打开的是别的档：点它的标题收起，然后重新扫
+            clicked = _contacts_click_group_row(
+                hwnd, str(scan.get("open_group") or ""), expect_open=False, attempts=2
+            )
+            result["collapsed"] = clicked or result["collapsed"]
+            result["method"] = "collapse_other_group" if clicked else result["method"]
+            result["skipped"] = "" if clicked else "collapse_failed:" + str(scan.get("open_group") or "")
+            continue
+        contacts_open = any(
+            str(entry.get("name") or "").startswith(keep) and entry.get("expanded")
+            for entry in (scan.get("entries") or [])
+        )
+        if contacts_open or _contacts_entry_ready(hwnd):
+            result["ready"] = True
+            result["skipped"] = "" if contacts_open else "entry_already_visible"
+            break
+        if not scan.get("entries"):
+            # 分组行不在视野里：先回档顶（收起/展开），再试一轮
+            try:
+                _contacts_scroll_to_head(hwnd, None, account_id_hint)
+            except Exception as exc:
+                _contact_sync_debug(account_id_hint, stage="contacts_scroll_head_error",
+                                    error=str(exc)[:160])
+            result["skipped"] = "scrolled_to_head"
+            result["method"] = "scroll_to_head"
+            continue
         target = next(
-            (entry for entry in (scan.get("entries") or []) if str(entry.get("name") or "").startswith(_CONTACTS_GROUP_KEEP_OPEN[0])),
+            (entry for entry in (scan.get("entries") or []) if str(entry.get("name") or "").startswith(keep)),
             None,
         )
         if target is None:
             result["skipped"] = "contacts_row_not_visible"
-        else:
-            clicked = _contacts_click_group_row(hwnd, _CONTACTS_GROUP_KEEP_OPEN[0])
-            result["opened"] = clicked
-            if clicked:
-                time.sleep(0.9)
+            try:
+                _contacts_scroll_to_head(hwnd, None, account_id_hint)
+            except Exception:
+                pass
+            continue
+        opened = _contacts_click_group_row(hwnd, keep, expect_open=True, attempts=2)
+        result["opened"] = opened or result["opened"]
+        result["method"] = "click_contacts_row" if opened else result["method"]
+        result["skipped"] = "" if opened else "click_no_effect"
+        if opened:
+            # _contacts_click_group_row 已经校验过"真的展开了/列表里能看到联系人"，这里直接收工
+            result["ready"] = True
+            break
+    result["ready"] = bool(result["ready"] or _contacts_entry_ready(hwnd))
     _contact_sync_debug(account_id_hint, stage="contacts_prepare", **result)
     return result
 
@@ -10779,14 +10890,25 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     empty_rounds = 0
     stuck_rounds = 0
     recovery_budget = 2
+    prepare_state: Dict[str, Any] = {}
     try:
         prepare_state = _contacts_prepare_for_sync(hwnd, account_id)
         _contact_sync_debug(account_id, stage="open_contacts_sublist",
-                            opened=bool(not prepare_state.get("skipped") or prepare_state.get("opened")),
-                            clicked=bool(prepare_state.get("opened")),
+                            opened=bool(prepare_state.get("ready")),
+                            clicked=bool(prepare_state.get("opened") or prepare_state.get("collapsed")),
+                            attempts=int(prepare_state.get("attempts") or 0),
+                            method=prepare_state.get("method"),
                             skipped=prepare_state.get("skipped"))
     except Exception as exc:
         _contact_sync_debug(account_id, stage="contacts_prepare_error", error=str(exc)[:200])
+    if not prepare_state.get("ready"):
+        # 主动点过了、也校验过还是打不开：明确失败退出，而不是静默去读一个空列表。
+        _contact_sync_debug(account_id, stage="sync_aborted", reason="contacts_entry_unavailable",
+                            prepare=prepare_state, rounds=0, seen=0)
+        raise RuntimeError(
+            "打不开微信的「通讯录 → 联系人」入口（已主动点 %d 次并逐次校验）：请先把微信切到通讯录页的"
+            "「联系人」列表、确认左侧能看到联系人，再点同步" % int(prepare_state.get("attempts") or 0)
+        )
     for _idx in range(max_rounds):
         rounds = _idx + 1
         try:

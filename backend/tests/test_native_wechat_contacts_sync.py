@@ -1263,7 +1263,7 @@ def _fake_contact_scan(monkeypatch, tmp_path, *, total, stall_from=None, stall_c
         return {}
 
     monkeypatch.setattr(engine, "_contacts_prepare_for_sync", lambda hwnd, account_id="": {
-        "skipped": True, "collapsed": "", "opened": "",
+        "skipped": True, "collapsed": "", "opened": "", "ready": True, "attempts": 1, "method": "",
     })
     monkeypatch.setattr(engine, "_contacts_scroll_to_head", reset_to_head)
     monkeypatch.setattr(engine, "_contact_wx_fill_budget", lambda: 0)
@@ -1636,3 +1636,89 @@ def test_contact_sync_aborts_when_the_contacts_screen_stays_empty(monkeypatch, t
     assert rounds, stages
     assert max(rounds) == engine._CONTACT_SYNC_EMPTY_SCREEN_LIMIT, rounds
     assert any(item.get("stage") == "sync_aborted" and item.get("reason") == "empty_screen" for item in stages)
+
+
+# ---------------------------------------------------------------- 2026-10-14
+# 用户反馈：诊断包里 contacts_prepare 判定"已经是打开的"就一个点击都不发（clicked=false），
+# 分组行不在视野里时更是直接 skip —— 等于在等用户自己去点「联系人」。
+
+
+def _fake_contacts_scan(monkeypatch, *, expanded):
+    state = {"expanded": bool(expanded)}
+    scan_calls = {"n": 0}
+
+    def scan(_hwnd):
+        scan_calls["n"] += 1
+        return {
+            "entries": [{"name": "联系人3733", "expanded": state["expanded"], "node": object(),
+                         "top": 0.0, "cls": "mmui::ContactsCellGroupView"}],
+            "items": [],
+            "others": [],
+            "open_group": "联系人3733" if state["expanded"] else "",
+            "subpage": False,
+        }
+
+    monkeypatch.setattr(engine, "_contacts_row_scan", scan)
+    monkeypatch.setattr(engine, "_uia_rect", lambda node: (100.0, 200.0, 300.0, 254.0))
+    monkeypatch.setattr(engine, "_focus_local_wechat", lambda hwnd: None)
+    monkeypatch.setattr(engine, "_contacts_entry_ready", lambda hwnd: state["expanded"])
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
+    return state, scan_calls
+
+
+def test_contacts_prepare_actively_clicks_the_contacts_entry(monkeypatch):
+    """「联系人」是收起的：必须主动点它，点完校验通过才算 ready。"""
+    state, scan_calls = _fake_contacts_scan(monkeypatch, expanded=False)
+    clicks = []
+    monkeypatch.setattr(engine, "_click_uia_node", lambda node: (clicks.append(node), state.__setitem__("expanded", True)))
+
+    result = engine._contacts_prepare_for_sync(1234, "acct")
+
+    assert clicks, "收起的「联系人」必须被主动点开，不能等用户点"
+    assert result["ready"] is True
+    assert result["opened"] == "联系人3733"
+    assert result["attempts"] == 1
+    assert result["method"] == "click_contacts_row"
+
+
+def test_contacts_prepare_falls_back_to_a_screen_click_then_reports_failure(monkeypatch):
+    """UIA 节点点击失败要退到「按行矩形算坐标点」；点不动就明确 ready=False（不再假装成功）。"""
+    _state, _calls = _fake_contacts_scan(monkeypatch, expanded=False)
+    monkeypatch.setattr(engine, "_click_uia_node",
+                        lambda node: (_ for _ in ()).throw(RuntimeError("uia click failed")))
+    points = []
+
+    def screen_click(x, y, **kwargs):
+        points.append((x, y, kwargs))
+        return False
+
+    monkeypatch.setattr(engine, "_uia_click_screen_point", screen_click)
+    stages = []
+    monkeypatch.setattr(engine, "_contact_sync_debug", lambda account_id, **fields: stages.append(fields))
+
+    result = engine._contacts_prepare_for_sync(1234, "acct")
+
+    assert points, "UIA 点击失败后必须退到屏幕坐标点击"
+    assert points[0][2].get("expect_hwnd") == 1234, "坐标点击必须校验点落在微信窗口上"
+    assert result["ready"] is False
+    assert result["attempts"] == engine._CONTACTS_OPEN_ATTEMPTS
+
+
+def test_contact_sync_aborts_when_the_contacts_entry_cannot_be_opened(monkeypatch, tmp_path):
+    """主动点过、校验也过了还是打不开「联系人」入口 → 明确失败退出（不再静默读空列表）。"""
+    _fake_list, _names, stages = _fake_contact_scan(monkeypatch, tmp_path, total=5)
+    monkeypatch.setattr(
+        engine, "_contacts_prepare_for_sync",
+        lambda hwnd, account_id="": {
+            "ready": False, "attempts": 3, "opened": "", "collapsed": "",
+            "open_group": "联系人3733", "subpage": False, "skipped": "click_no_effect",
+            "method": "click_contacts_row",
+        },
+    )
+
+    with pytest.raises(RuntimeError) as info:
+        engine._sync_local_contacts_from_uia("wechat-account-entry-blocked", limit=10000)
+
+    assert "打不开" in str(info.value)
+    assert any(item.get("stage") == "sync_aborted" and item.get("reason") == "contacts_entry_unavailable"
+               for item in stages)
