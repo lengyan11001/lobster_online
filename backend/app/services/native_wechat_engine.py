@@ -8403,6 +8403,34 @@ def _contacts_prepare_for_sync(hwnd: int, account_id_hint: str = "") -> Dict[str
             None,
         )
         if target is None:
+            # 2026-10-14: the row is on screen but the scan does not report it (user: "\u8054\u7cfb\u4eba"
+            # "\u5c31\u5728\u5c4f\u5e55\u4e0a\u4f60\u4e5f\u4e0d\u70b9"). Walk the list itself and click the group
+            # cell the moment one is found - no reliance on entries/expanded flags.
+            try:
+                _lst = _uia_strict_contact_list(_uia_main_root(hwnd))
+                if _lst is not None:
+                    for _node in _uia_walk(_lst, max_depth=8, max_nodes=400):
+                        if _uia_control_class(_node) != _CONTACTS_GROUP_ROW_CLASS:
+                            continue
+                        if not _contact_group_key(_uia_control_text(_node)).startswith(keep):
+                            continue
+                        _text_node = _row_text_click_target(_node, _uia_control_text(_node))[0]
+                        _clicked = _contacts_point_click(hwnd, _text_node)
+                        _contact_sync_debug(account_id_hint, stage="contacts_expand_by_walk",
+                                            ok=bool(_clicked and _clicked[0]),
+                                            row=_uia_control_text(_node)[:24],
+                                            rect=str(_uia_rect(_node)))
+                        if _clicked and _clicked[0]:
+                            time.sleep(0.9)
+                            result["opened"] = _uia_control_text(_node)
+                            result["method"] = "walk_group_cell"
+                            _contact_sync_debug(account_id_hint, stage="contacts_prepare", **result)
+                            return result
+                        break
+            except Exception as exc:
+                _contact_sync_debug(account_id_hint, stage="contacts_expand_walk_error",
+                                    error=str(exc)[:140])
+        if target is None:
             # 2026-10-14: online (build 426) every single prepare ended as
             # contacts_row_not_visible and the contacts row was NEVER clicked, so the
             # group stayed collapsed and the run died with an empty screen. Stop giving
@@ -11292,12 +11320,12 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                             # 在通讯录页按 ESC = 退出/收起「联系人」列表 —— 用户看到的就是
                             # "我给他点开她还关了"：rows_back=0）。没有弹窗就什么都不按。
                             popup = _local_profile_popup_root(hwnd) is not None
-                            if popup:
-                                _send_hotkey("esc", pause=0.15)
-                                time.sleep(0.35)
+                            # 2026-10-14: ESC is gone from this workflow for good (the user is
+                            # right: three builds still pressed it here). It collapses the
+                            # contacts group on this build, so it is never sent again.
                             back = len(_uia_visible_contact_cell_rows(contact_list))
                             _contact_sync_debug(account_id, stage="wx_fill_card_closed", target=clean,
-                                                popup=popup, esc_sent=bool(popup), rows_back=back)
+                                                popup=popup, esc_sent=False, rows_back=back)
                             if not back:
                                 # 还是没回来：把列表控件重新定位一次（不发任何点击）
                                 try:
