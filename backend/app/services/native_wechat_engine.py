@@ -8252,8 +8252,11 @@ def _contact_wx_fill_budget() -> Optional[int]:
 def _contacts_click_sticky_header(hwnd: int, contact_list: Any = None, account_id_hint: str = "") -> bool:
     """点列表顶部那条「⌄ 联系人 739」粘性标题（UIA 里没有这个节点，只能按坐标点）。
 
-    实测（2026-10-14）：正滚在「联系人」档中间时，这条标题一直贴在列表最上方；
-    点它一下＝收起这一档，列表立即跳回分组总览，那里就能看到并点「联系人739」了。
+    坐标不是屏幕绝对坐标，而是**相对列表控件矩形**：每次实时取 `_uia_rect(列表)` 再叠加偏移，
+    所以窗口挪动/改大小/换分辨率都不受影响；偏移本身按“行高”算（行高随 DPI 缩放）：
+        行高 = 当前可见联系人行的高度中位数（没行时退回列表高度的 1/12）
+        点 (left + 行高*0.8, top + 行高*0.5)  ← 落在标题文字上
+    点完立刻验证（分组总览是否出现），不对就换一个偏移再点一次；再不行交给无坐标的整页上翻兜底。
     """
     rect = None
     try:
@@ -8262,15 +8265,47 @@ def _contacts_click_sticky_header(hwnd: int, contact_list: Any = None, account_i
         rect = None
     if not rect:
         return False
-    x = int(float(rect[0]) + 45)
-    y = int(float(rect[1]) + 18)
+    left, top, right, bottom = (float(x) for x in rect[:4])
+    width = max(1.0, right - left)
+    height = max(1.0, bottom - top)
+
+    row_h = 0.0
     try:
-        _uia_click_screen_point(x, y)
-    except Exception as exc:
-        _contact_sync_debug(account_id_hint, stage="contacts_sticky_header_click_error", error=str(exc)[:160])
-        return False
-    _contact_sync_debug(account_id_hint, stage="contacts_sticky_header_click", x=x, y=y)
-    return True
+        rows = _uia_visible_contact_cell_rows(contact_list)
+        heights = sorted(
+            float(r["node"].BoundingRectangle.bottom - r["node"].BoundingRectangle.top)
+            for r in rows
+            if getattr(r.get("node"), "BoundingRectangle", None)
+        )
+        if heights:
+            row_h = heights[len(heights) // 2]
+    except Exception:
+        row_h = 0.0
+    if row_h <= 0:
+        row_h = max(16.0, min(64.0, height / 12.0))
+
+    def _groups_visible() -> bool:
+        try:
+            scan = _contacts_row_scan(hwnd)
+            return any(str(e.get("name") or "").startswith(_CONTACTS_GROUP_KEEP_OPEN[0]) for e in (scan.get("entries") or []))
+        except Exception:
+            return False
+
+    for dx_ratio, dy_ratio in ((0.8, 0.5), (0.35, 0.5), (1.6, 0.5)):
+        x = int(left + min(width * 0.5, row_h * dx_ratio))
+        y = int(top + min(row_h * 0.5, row_h * dy_ratio) + 1)
+        try:
+            _uia_click_screen_point(x, y)
+        except Exception as exc:
+            _contact_sync_debug(account_id_hint, stage="contacts_sticky_header_click_error",
+                                error=str(exc)[:160], x=x, y=y)
+            return False
+        time.sleep(0.85)
+        _contact_sync_debug(account_id_hint, stage="contacts_sticky_header_click",
+                            x=x, y=y, row_h=round(row_h, 1), hit_group_overview=_groups_visible())
+        if _groups_visible():
+            return True
+    return False
 
 
 def _contacts_scroll_to_head(hwnd: int, contact_list: Any = None, account_id_hint: str = "", *, max_pageups: int = 20) -> Dict[str, Any]:
