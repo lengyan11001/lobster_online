@@ -1,7 +1,7 @@
 {
-  "version": "2.0.138",
-  "build": 433,
-  "applied_at": "2026-10-15T00:30:48+08:00",
-  "note": "2.0.138: contacts sync data-safety + fewer collapses. (1) the window-scan fallback is OFF: it wrote the previous contact's ID onto another contact (阿丹 x397823589 landed on A第三方房屋质检), now only IDs read from a confirmed profile card count - unreadable means empty, never wrong. (2) the sticky-header band widened 44 -> 60px so rows clipped under the 联系人 header are refused instead of collapsing the group. Keeps 2.0.137: content-record 加入分组 cache buster, window/list binding, per-contact checkpoint, resume anchor, zero ESC, guarded row clicks, window-too-small refusal.",
-  "bundle_sha256": "39580d42224164c4c481018d1f3de1d6d91a467806ee4950b9f626642a16eb89"
+  "version": "2.0.139",
+  "build": 434,
+  "applied_at": "2026-10-15T00:40:42+08:00",
+  "note": "2.0.139: contacts sync follows the user rule - (1) when a row cannot be opened the nickname is kept and the row is simply skipped, no more reopening the contacts group on failure (that caused the endless collapse/restart-from-top loop); the group is only reopened when the friends list is genuinely empty, and then the list scrolls back to the last processed contact (contacts_resume_anchor); (2) when the friends-list viewport is shorter than 400px the top 120px are never clicked (they sit under the sticky contacts header). Keeps 2.0.138: window-scan fallback off (no wrong IDs), window/list binding, per-contact checkpoint, zero ESC.",
+  "bundle_sha256": "152fd4eebddc6d3eb4d5a38611bd1cdef9086e8f1d0e19902b575237799da259"
 }
