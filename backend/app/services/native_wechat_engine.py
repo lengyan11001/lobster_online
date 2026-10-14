@@ -11159,6 +11159,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     collapsed_reopens = 0
     ui_blank_rounds = 0
     root = None
+    last_done_name = ""
     for _idx in range(max_rounds):
         rounds = _idx + 1
         try:
@@ -11191,6 +11192,26 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 # 2026-10-14: an empty screen usually means the group got collapsed by a
                 # stray click - reopen it (idempotent, never presses ESC).
                 _contacts_prepare_for_sync(hwnd, account_id)
+                # 2026-10-14: reopening the group jumps the list back to the top - scroll back to the
+                # last processed contact and carry on from there (never restart at the head).
+                if last_done_name:
+                    for _r in range(60):
+                        _vis = [str(x.get("name") or "") for x in
+                                _uia_visible_contact_cell_rows(contact_list)]
+                        if last_done_name in _vis:
+                            break
+                        try:
+                            contact_list.WheelDown(wheelTimes=2)
+                        except Exception:
+                            break
+                        time.sleep(0.25)
+                        try:
+                            contact_list = _uia_strict_contact_list(_uia_main_root(hwnd)) or contact_list
+                        except Exception:
+                            pass
+                    _contact_sync_debug(account_id, stage="contacts_resume_anchor",
+                                        anchor=last_done_name,
+                                        visible=len(_uia_visible_contact_cell_rows(contact_list)))
             except Exception as exc:
                 _contact_sync_debug(account_id, stage="contacts_reopen_error",
                                     error=str(exc)[:140])
@@ -11372,6 +11393,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                                     pass
                     except Exception as exc:
                         _contact_sync_debug(account_id, stage="wx_fill_card_close_error", error=str(exc)[:140])
+            last_done_name = clean
             seen[clean] = {
                 "contact_key": clean,
                 "display_name": clean,
