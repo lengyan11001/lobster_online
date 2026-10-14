@@ -1,7 +1,7 @@
 {
-  "version": "2.0.135",
-  "build": 430,
-  "applied_at": "2026-10-14T21:20:32+08:00",
-  "note": "2.0.135 fix: bind the contacts list to its own window. Among all candidates named contacts, pick the one whose own friend rows really fall inside its own rect; if more than half of the enumerated rows sit outside the list rect (another WeChat window / something covering it), stop immediately with contacts_list_mismatch and send no click at all. Includes everything from 2.0.134: zero ESC in the contacts flow, the contacts entry is clicked straight from the list tree, rows hidden under the sticky header are refused, pending rows get a 2-row nudge, and the cursor is parked inside the list before any wheel event.",
-  "bundle_sha256": "2e2109aa07388a635c379b15769374c0f895050025fe4d9e74a63ab28babddec"
+  "version": "2.0.136",
+  "build": 431,
+  "applied_at": "2026-10-14T21:35:40+08:00",
+  "note": "2.0.136 fix: friend row clicks now go through our own guarded point click - focus WeChat, verify the window under the cursor really is that WeChat window (plus the click fence inside the friends list) and only then send the mouse event; node.Click() clicked blindly and on the user's machine one click even landed on a Chrome window while row clicks were swallowed in a loop (card_not_confirmed + pane_not_showing_target, then reopen group, over and over). Includes 2.0.135: the contacts list is picked by scoring which candidate has its own rows inside its own rect, and a mismatch aborts with contacts_list_mismatch instead of clicking.",
+  "bundle_sha256": "b848528966b29385e8f3d4e5c9e4d651632cbbe8d679ba8676d53c3dbf3547cb"
 }
