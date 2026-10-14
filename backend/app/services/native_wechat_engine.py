@@ -12456,7 +12456,16 @@ def _row_clipped_under_header(list_rect: Any, row_rect: Any, *, header_band: flo
         centre = (float(row_rect[1]) + float(row_rect[3])) / 2.0
     except (TypeError, ValueError, IndexError):
         return False
-    return centre < top + float(header_band) or centre > bottom - 2.0
+    band = float(header_band)
+    # 2026-10-15 (user item 2): with a short window the sticky group header eats two rows, so
+    # the top band is widened - the first one or two rows are simply not clicked (a missed ID
+    # is fine, collapsing the group is not).
+    try:
+        if (bottom - top) < 400.0:
+            band = max(band, 120.0)
+    except Exception:
+        pass
+    return centre < top + band or centre > bottom - 2.0
 
 
 def _park_mouse_in_list(list_node: Any) -> bool:
