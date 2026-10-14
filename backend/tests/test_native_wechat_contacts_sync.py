@@ -1412,3 +1412,84 @@ def test_partial_sync_does_not_keep_legacy_junk_wx_no(monkeypatch, tmp_path):
     with engine._connect() as conn:
         wx_no = conn.execute("select wx_no from wechat_contacts where id='legacy-junk'").fetchone()[0]
     assert (wx_no or "") == ""
+
+
+# ---------------------------------------------------------------- 2026-10-14
+# 用户反馈「做一个功能，把本地已经同步的清除掉。很多脏数据」：
+# 「清空本地通讯录并重新同步」—— 只删本机缓存，清完立刻从头同步一遍。
+
+
+def test_reset_local_contacts_clears_then_resyncs(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    calls = []
+
+    monkeypatch.setattr(
+        engine, "clear_local_contacts",
+        lambda account_id: calls.append(("clear", account_id)) or {"ok": True, "removed": 412, "total_after": 0},
+    )
+    monkeypatch.setattr(
+        engine, "sync_local_contacts",
+        lambda account_id, limit=10000: calls.append(("sync", account_id, limit))
+        or {"ok": True, "count": 8, "total_after": 8},
+    )
+
+    result = engine.reset_local_contacts("pc-wechat-default", limit=10000)
+
+    assert calls == [("clear", "pc-wechat-default"), ("sync", "pc-wechat-default", 10000)]
+    assert result["cleared"] == 412
+    assert result["resynced"] is True
+    assert result["count"] == 8
+    assert result["total_after"] == 8
+
+
+def test_reset_local_contacts_reports_resync_failure_after_clearing(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        engine, "clear_local_contacts",
+        lambda account_id: {"ok": True, "removed": 5, "total_after": 0},
+    )
+
+    def boom(account_id, *, limit=10000):
+        raise RuntimeError("未读取到通讯录联系人，请确认微信已切到通讯录页后重试")
+
+    monkeypatch.setattr(engine, "sync_local_contacts", boom)
+
+    result = engine.reset_local_contacts("pc-wechat-default")
+
+    assert result["cleared"] == 5
+    assert result["ok"] is False
+    assert result["resynced"] is False
+    assert "通讯录" in result["sync_error"]
+
+
+def test_reset_contacts_endpoint_uses_engine_reset(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(
+        native_wechat_api.engine, "reset_local_contacts",
+        lambda account_id, limit=10000: seen.update({"account_id": account_id, "limit": limit})
+        or {"ok": True, "cleared": 3, "count": 1},
+    )
+
+    result = asyncio.run(native_wechat_api.native_wechat_reset_contacts(
+        native_wechat_api.SyncBody(account_id="pc-wechat-default"), current_user=None,
+    ))
+
+    assert seen == {"account_id": "pc-wechat-default", "limit": 10000}
+    assert result["cleared"] == 3
+
+
+def test_reset_contacts_button_and_endpoint_are_wired():
+    paths = {route.path for route in native_wechat_api.router.routes}
+    assert "/api/native-wechat/contacts/reset" in paths
+
+    root = Path(__file__).resolve().parents[2]
+    html = (root / "static" / "views" / "juhe-wechat.html").read_text(encoding="utf-8")
+    javascript = (root / "static" / "js" / "juhe-wechat.js").read_text(encoding="utf-8")
+    assert 'id="nativeWechatResetContactsBtn"' in html
+    assert html.index('id="nativeWechatClearContactsBtn"') < html.index('id="nativeWechatResetContactsBtn"')
+    assert "'/api/native-wechat/contacts/reset'" in javascript
+    assert "$('nativeWechatResetContactsBtn')" in javascript
+    registry = (root / "static" / "js" / "view-registry.js").read_text(encoding="utf-8")
+    # 改了这个视图就一定要带 cache buster（不锁具体版本串，避免每次 bump 都改测试）
+    assert "/static/views/juhe-wechat.html?v=" in registry
+    assert "/static/js/juhe-wechat.js?v=" in registry

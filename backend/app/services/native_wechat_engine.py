@@ -11097,6 +11097,37 @@ def clear_local_contacts(account_id: str) -> Dict[str, Any]:
     }
 
 
+def reset_local_contacts(account_id: str, *, limit: int = 10000) -> Dict[str, Any]:
+    """清空本地通讯录缓存，然后立刻从微信通讯录重新同步一遍（脏数据太多时的"一键重来"）。
+
+    只动本机缓存：微信里的联系人一个都不删。清空之后同步是从头扫，所以会拿到一份干净的
+    快照（配合 wx_no 闸门，昵称也不会再被当成微信号写进来）。同步失败不算整件事失败：
+    清空已经生效，返回里带 sync_error，界面上让用户直接点「同步通讯录」重试即可。
+    """
+    init_db()
+    account_id = str(account_id or "").strip()
+    if not account_id:
+        raise RuntimeError("missing account_id")
+    cleared = clear_local_contacts(account_id)
+    result: Dict[str, Any] = {
+        "ok": True,
+        "account_id": account_id,
+        "cleared": int(cleared.get("removed") or 0),
+        "cleared_before": int(cleared.get("total_after") or 0),
+        "resynced": False,
+    }
+    try:
+        synced = sync_local_contacts(account_id, limit=limit)
+    except Exception as exc:
+        result["ok"] = False
+        result["sync_error"] = str(exc)[:300]
+        return result
+    result.update(synced)
+    result["resynced"] = True
+    result["cleared"] = int(cleared.get("removed") or 0)
+    return result
+
+
 def _normalize_contact_lookup_key(value: Any) -> str:
     return _compact_for_contains(str(value or "")).lower()
 

@@ -481,6 +481,21 @@ async def native_wechat_clear_contacts(
         _raise_native_wechat_error("contacts_clear", exc, account_id=body.account_id)
 
 
+@router.post("/api/native-wechat/contacts/reset")
+async def native_wechat_reset_contacts(
+    body: SyncBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """清空本地通讯录缓存并立刻重新同步（脏数据太多时的"一键重来"）。"""
+    del current_user
+    try:
+        return await asyncio.to_thread(
+            engine.reset_local_contacts, body.account_id, limit=body.limit
+        )
+    except Exception as exc:
+        _raise_native_wechat_error("contacts_reset", exc, account_id=body.account_id)
+
+
 @router.post("/api/native-wechat/sessions/sync")
 async def native_wechat_sync_sessions(
     body: SyncBody,
