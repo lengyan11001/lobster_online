@@ -124,6 +124,9 @@ DEFAULT_STRATEGY: Dict[str, Any] = {
     "auto_reply_punctuation_sleep_min": 0.35,
     "auto_reply_punctuation_sleep_max": 0.9,
     "auto_reply_max_text_chars": 600,
+    # 每次同步顺带补多少个「还没微信号」的人（每个要点开资料卡读一次，约 1 秒）。
+    # 0 = 本次不补；默认 200，也可以给每个账号在 workflow/设置里覆盖。
+    "contact_wx_fill_budget": 200,
 }
 
 
@@ -8222,6 +8225,21 @@ def _contacts_prepare_for_sync(hwnd: int, account_id_hint: str = "") -> Dict[str
     return result
 
 
+def _contact_wx_fill_budget() -> int:
+    """本次同步最多补多少个微信号（0 = 不补）。可按账号 workflow 覆盖 contact_wx_fill_budget。"""
+    try:
+        raw = os.environ.get("LOBSTER_CONTACT_WX_FILL_BUDGET")
+    except Exception:
+        raw = None
+    for source in (raw, get_strategy().get("contact_wx_fill_budget")):
+        try:
+            value = int(str(source).strip())
+        except Exception:
+            continue
+        return max(0, min(value, 2000))
+    return 200
+
+
 def _contacts_scroll_to_head(hwnd: int, contact_list: Any = None, account_id_hint: str = "", *, max_rounds: int = 6) -> Dict[str, Any]:
     """把列表滚回「联系人」档开头 —— 标题已经在视野里就一点都不滚（不要多余的整屏滚动）。
 
@@ -10756,30 +10774,75 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         else:
             stuck_rounds = 0
 
-    # 后置补微信号：扫描完成后有限量地开资料卡（每次最多 60 个，多次同步逐步补齐），不再拖慢主流程
-    fill_quota = 60
-    for _name in list(seen.keys()):
-        if fill_quota <= 0:
-            break
-        _rec = seen.get(_name) or {}
-        if _rec.get("wxNo"):
-            continue
-        _key = _normalize_contact_lookup_key(_name)
-        if not _key or _key in profile_attempted:
-            continue
-        profile_attempted.add(_key)
-        profile_fallback_attempts += 1
+    # 后置补微信号：扫描完成后按列表顺序再从头部走一遍，遇到「还没有微信号」的人就点开资料卡读一个。
+    #
+    # 旧实现是拿扫描到的名字去当前 UIA 树里找行（_find_visible_contact_cell），但扫描结束时列表停在
+    # 尾部、顶部的人根本不在渲染范围 → 找不到 → 仍然扣一次 60 的配额 → 一次同步一个都补不上
+    # （2026-10-14 实测：库里最前面的 $细华$ / &良 都“找不到”）。对一个全新的 700 人账号，等于永远补不上。
+    # 现在改成“边走边补”：只对当前真的渲染出来、并且真的点开过的人计数；补满预算就停，下次同步接着补。
+    wx_fill_budget = _contact_wx_fill_budget()
+    wx_fill_rounds = 0
+    missing_wx_names = [name for name, rec in seen.items() if not (rec or {}).get("wxNo")]
+    _contact_sync_debug(account_id, stage="wx_fill_check", budget=wx_fill_budget,
+                        scanned=len(seen), missing=len(missing_wx_names),
+                        missing_sample=missing_wx_names[:8])
+    if wx_fill_budget > 0 and missing_wx_names:
         try:
-            _wx = _read_visible_contact_profile_wx_no(hwnd, account_id, _name)
-            if _wx:
-                _rec["wxNo"] = _wx
-                wx_no_index[_key] = _wx
-                profile_fallback_successes += 1
-            else:
-                profile_fallback_failures += 1
+            _contacts_scroll_to_head(hwnd, None, account_id)
         except Exception:
-            profile_fallback_failures += 1
-        fill_quota -= 1
+            pass
+        fill_stable = 0
+        last_fill_signature = ""
+        while wx_fill_rounds < max_rounds and profile_fallback_successes < wx_fill_budget:
+            wx_fill_rounds += 1
+            try:
+                root_fill = auto.ControlFromHandle(int(hwnd))
+                fill_list = _uia_guess_contact_list(root_fill) or _uia_primary_contact_list(root_fill)
+                fill_names = _uia_visible_contact_cell_names(fill_list) if fill_list is not None else []
+            except Exception:
+                break
+            for _name in fill_names:
+                if profile_fallback_successes >= wx_fill_budget:
+                    break
+                clean_fill = str(_name or "").strip()
+                if not clean_fill:
+                    continue
+                rec_fill = seen.get(clean_fill)
+                if rec_fill is None or rec_fill.get("wxNo"):
+                    # 不在本轮扫描名单里（或已有微信号）→ 不点
+                    continue
+                key_fill = _normalize_contact_lookup_key(clean_fill)
+                if not key_fill or key_fill in profile_attempted:
+                    continue
+                profile_attempted.add(key_fill)
+                profile_fallback_attempts += 1
+                try:
+                    wx_value = _read_visible_contact_profile_wx_no(hwnd, account_id, clean_fill)
+                except Exception:
+                    wx_value = ""
+                if wx_value:
+                    rec_fill["wxNo"] = wx_value
+                    wx_no_index[key_fill] = wx_value
+                    profile_fallback_successes += 1
+                    _contact_sync_debug(account_id, stage="wx_fill", target=clean_fill,
+                                        wx_no=wx_value, success=profile_fallback_successes,
+                                        budget=wx_fill_budget)
+                else:
+                    profile_fallback_failures += 1
+            signature_fill = "|".join(fill_names[-12:]) if fill_names else ""
+            fill_stable = fill_stable + 1 if signature_fill == last_fill_signature else 0
+            last_fill_signature = signature_fill
+            if fill_stable >= 3:
+                break
+            try:
+                if fill_list is not None:
+                    fill_list.WheelDown(wheelTimes=7)
+            except Exception:
+                break
+            time.sleep(0.3)
+        _contact_sync_debug(account_id, stage="wx_fill_done", budget=wx_fill_budget, rounds=wx_fill_rounds,
+                            attempts=profile_fallback_attempts, successes=profile_fallback_successes,
+                            failures=profile_fallback_failures)
     if pending_records:
         _merge_contacts_snapshot(account_id, pending_records, chat_type="direct")
         pending_records = []
@@ -10834,6 +10897,8 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         "profile_fallback_attempts": profile_fallback_attempts,
         "profile_fallback_successes": profile_fallback_successes,
         "profile_fallback_failures": profile_fallback_failures,
+        "wx_fill_budget": wx_fill_budget,
+        "wx_fill_rounds": wx_fill_rounds,
         "progress_saved": len(persisted_names),
     }
 
