@@ -11110,14 +11110,16 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 # 扫描就断在这、反复空屏（2026-10-14 日志 contacts_empty_round 44 次）。
                 try:
                     if not _uia_visible_contact_cell_rows(contact_list):
+                        # ⚠️ 只有"真的弹出式资料卡"才按 ESC（2026-10-14 真机日志：
+                        # 在通讯录页按 ESC = 退出/收起「联系人」列表 —— 用户看到的就是
+                        # "我给他点开她还关了"：rows_back=0）。没有弹窗就什么都不按。
                         popup = _local_profile_popup_root(hwnd) is not None
-                        _send_hotkey("esc", pause=0.15)
-                        if not popup:
+                        if popup:
                             _send_hotkey("esc", pause=0.15)
-                        time.sleep(0.35)
+                            time.sleep(0.35)
                         back = len(_uia_visible_contact_cell_rows(contact_list))
                         _contact_sync_debug(account_id, stage="wx_fill_card_closed", target=clean,
-                                            popup=popup, rows_back=back)
+                                            popup=popup, esc_sent=bool(popup), rows_back=back)
                         if not back:
                             # 还是没回来：把列表控件重新定位一次（不发任何点击）
                             try:
