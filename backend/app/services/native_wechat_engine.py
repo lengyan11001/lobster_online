@@ -12818,7 +12818,16 @@ def _read_contact_profile_wx_no_for_cell(
             except Exception:
                 _clicked = False
         if not _clicked:
-            _uia_click(_target_node)
+            # 2026-10-15: NEVER fall back to a blind click. The guarded click refused because the
+            # point was not on this WeChat window (log click_point_refused x=606 y=425 expect=...),
+            # and the blind fallback hit the contacts search box instead - that is what opened the
+            # search dropdown / a ??? popup and made the friends list disappear. Stop loudly.
+            _contact_sync_debug(account_id, stage="contacts_sync_failed", reason="click_point_refused",
+                                target=target, rect=str(_rect))
+            raise RuntimeError(
+                "\u5f53\u524d\u8981\u70b9\u7684\u4f4d\u7f6e\u4e0d\u5728\u5fae\u4fe1\u7a97\u53e3\u4e0a\uff08\u5fae\u4fe1\u53ef\u80fd\u88ab\u522b\u7684\u7a97\u53e3\u76d6\u4f4f\u6216\u88ab\u79fb\u52a8\u4e86\uff09\uff0c"
+                "\u5df2\u505c\u6b62\u540c\u6b65\uff0c\u6ca1\u6709\u53d1\u51fa\u4efb\u4f55\u76f2\u70b9\u3002\u8bf7\u628a\u5fae\u4fe1\u7a97\u53e3\u653e\u5230\u6700\u524d\u9762\u5e76\u4fdd\u6301\u53ef\u89c1\u540e\u91cd\u8bd5"
+            )
         deadline = time.monotonic() + total_wait / 2
         while time.monotonic() < deadline:
             time.sleep(0.25)
