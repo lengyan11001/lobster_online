@@ -8226,11 +8226,19 @@ def _row_text_click_target(row_node: Any, name: str) -> tuple[Any, str]:
 
 
 def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
-    """点某个分组行（按名字前缀找）把它展开；成功返回名字，没成功返回空串。
+    """把某个分组**树节点**展开；成功返回名字，没成功返回空串。
 
-    点哪儿：优先点这一行里的**文字节点**（``_row_text_click_target``），拿不到才点整行容器；
-    UIA 节点点不动就按该节点的矩形中心来一次（带「落点必须在微信窗口上」的校验）。
-    点之前先 _focus_local_wechat（无害的置前，别让点击落到别人身上）。
+    2026-10-14 线上：「联系人」这个树节点用鼠标点（行中心/文字上）在微信 4.x 上**不展开**。
+    所以按树节点的常规交互逐个试，一次只试一种，每种试完都验证
+    （分组行 expanded 或 列表里能看到联系人行），成功就停：
+
+      1) UIA 节点单击（优先点行里的文字节点，它的矩形跟肉眼一致）
+      2) 双击同一节点（Qt 树默认双击展开）
+      3) 键盘：SetFocus 后按 Right（树展开键）
+      4) 键盘：SetFocus 后按 Space
+      5) 按"行左侧三角"位置的屏幕坐标点一次（带落点必须落在微信窗口上的校验）
+
+    每种都写在日志里：``contacts_group_click_ok``(method) / ``contacts_group_click_no_effect``。
     """
     prefix = str(name_prefix or "")
     if not prefix:
@@ -8239,7 +8247,7 @@ def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
         _focus_local_wechat(hwnd)
     except Exception:
         pass
-    for attempt in (1, 2):
+    for method in ("single_click", "double_click", "key_right", "key_space", "triangle_point"):
         scan = _contacts_row_scan(hwnd)
         target = next(
             (item for item in (scan.get("entries") or []) if str(item.get("name") or "").startswith(prefix)),
@@ -8247,39 +8255,42 @@ def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
         )
         if target is None:
             return ""
-        node, how = _row_text_click_target(target["node"], str(target.get("name") or prefix))
-        clicked = ""
+        row_name = str(target.get("name") or prefix)
+        node, how = _row_text_click_target(target["node"], row_name)
+        done = False
         try:
-            _click_uia_node(node)
-            clicked = how
-        except Exception as exc:
-            _contact_sync_debug("", stage="contacts_group_click_error", target=prefix,
-                                method=how, error=str(exc)[:120])
-        if not clicked:
-            rect = _uia_rect(node)
-            if rect:
+            if method == "single_click":
+                _click_uia_node(node)
+                done = True
+            elif method == "double_click":
+                node.DoubleClick()
+                done = True
+            elif method in ("key_right", "key_space"):
                 try:
-                    if _uia_click_screen_point(
-                        int((float(rect[0]) + float(rect[2])) / 2),
-                        int((float(rect[1]) + float(rect[3])) / 2),
-                        expect_hwnd=int(hwnd),
-                    ):
-                        clicked = how + "+screen"
+                    node.SetFocus()
                 except Exception:
                     pass
-        if not clicked:
-            return ""
-        time.sleep(0.8)
+                _send_hotkey("right" if method == "key_right" else "space", pause=0.35)
+                done = True
+            else:
+                rect = _uia_rect(target["node"]) or _uia_rect(node)
+                if rect:
+                    x = int(float(rect[0]) + 14)
+                    y = int((float(rect[1]) + float(rect[3])) / 2)
+                    done = bool(_uia_click_screen_point(x, y, expect_hwnd=int(hwnd)))
+        except Exception as exc:
+            _contact_sync_debug("", stage="contacts_group_click_error", target=prefix,
+                                method=method, error=str(exc)[:120])
+        if not done:
+            continue
+        time.sleep(0.9)
         state = _contacts_group_state(hwnd, prefix)
-        if state or _contacts_entry_ready(hwnd):
-            _contact_sync_debug("", stage="contacts_group_click_ok", target=prefix,
-                                method=clicked, state=state)
-            return str(target.get("name") or "")
-        _contact_sync_debug("", stage="contacts_group_click_no_effect", target=prefix,
-                            method=clicked, state=state,
-                            node_rect=str(_uia_rect(node)), row_rect=str(_uia_rect(target["node"])),
-                            list_rect=str(_uia_rect(_uia_primary_contact_list(_uia_main_root(hwnd)))))
-        time.sleep(0.3)
+        rows = _contacts_entry_ready(hwnd)
+        _contact_sync_debug("", stage="contacts_group_click_ok" if (state or rows) else "contacts_group_click_no_effect",
+                            target=prefix, method=method, node=how, state=state, rows_visible=rows,
+                            node_rect=str(_uia_rect(node)), row_rect=str(_uia_rect(target["node"])))
+        if state or rows:
+            return row_name
     return ""
 
 
@@ -18218,6 +18229,12 @@ def _send_hotkey(key: str, *, ctrl: bool = False, pause: float = 0.2) -> None:
         "esc": win32con.VK_ESCAPE,
         "tab": win32con.VK_TAB,
         "backspace": win32con.VK_BACK,
+        # 树节点展开/收起常用键（2026-10-14：微信的「联系人」树节点点鼠标不展开，要用键盘）
+        "right": win32con.VK_RIGHT,
+        "left": win32con.VK_LEFT,
+        "up": win32con.VK_UP,
+        "down": win32con.VK_DOWN,
+        "space": win32con.VK_SPACE,
     }
     if len(key) == 1:
         vk = ord(key.upper())
