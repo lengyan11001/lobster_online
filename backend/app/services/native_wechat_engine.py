@@ -11221,7 +11221,7 @@ def _profile_field_label(value: Any) -> str:
     return ""
 
 
-def _extract_contact_profile_wx_no(root: Any) -> str:
+def _extract_contact_profile_wx_no(root: Any, *, expected_name: str = "") -> str:
     """Read the WeChat ID from a contact card: only the ``微信号`` value counts.
 
     An earlier version also had a last-resort rule: the first profile text
@@ -11231,7 +11231,17 @@ def _extract_contact_profile_wx_no(root: Any) -> str:
     nicknames were then used as if they were the WeChat ID, and short ones
     failed the ID format check and surfaced as "the card has an ID but we
     cannot read it".  Stay label-driven; never guess from unrelated text.
+
+    2026-10-14 用户反馈（附资料卡截图）：「点某个人的时候，右侧出这个不能取到准确的微信号码？
+    如果有人昵称全字母不是又要取错」—— 所以**每个 return 都过 `_sanitize_contact_wx_no`**：
+    资料卡上「微信号」那一栏并不总是微信号（企业微信/外部联系人的内部号、下划线开头的非标准值），
+    而老布局里标签后面那个节点有可能就是昵称；取到不像号的一律当「没读到」，
+    绝不把昵称（尤其全字母昵称）当成号返回。
     """
+
+    def accept(candidate: Any) -> str:
+        return _sanitize_contact_wx_no(candidate, expected_name)
+
     entries: List[tuple[str, str]] = []
     for node in _uia_walk(root, max_depth=20, max_nodes=5000):
         text = _uia_control_text(node)
@@ -11241,19 +11251,19 @@ def _extract_contact_profile_wx_no(root: Any) -> str:
     for text, _class_name in entries:
         match = re.search(r"\bwxid_[A-Za-z0-9_-]{6,}\b", _compact_for_contains(text))
         if match:
-            return match.group(0)
+            accepted = accept(match.group(0))
+            if accepted:
+                return accepted
     for idx, (text, _class_name) in enumerate(entries):
         compact = _compact_for_contains(text)
         # Label and value in one node: ``微信号：ID20010218``.
         match = re.search(r"微信号\s*[:：]\s*(.+)$", compact)
         if match:
             value = re.sub(r"\s+", "", str(match.group(1) or "")).strip()
-            if (
-                value
-                and not _profile_field_label(value)
-                and not any("\u4e00" <= char <= "\u9fff" for char in value)
-            ):
-                return value
+            if value and not _profile_field_label(value):
+                accepted = accept(value)
+                if accepted:
+                    return accepted
         if _profile_field_label(text) != "微信号":
             continue
         # Label and value in separate nodes: the next text node is the value.
@@ -11267,8 +11277,12 @@ def _extract_contact_profile_wx_no(root: Any) -> str:
             return ""
         match = re.search(r"\bwxid_[A-Za-z0-9_-]{6,}\b", _compact_for_contains(value))
         if match:
-            return match.group(0)
-        return value
+            accepted = accept(match.group(0))
+            if accepted:
+                return accepted
+        accepted = accept(value)
+        if accepted:
+            return accepted
     return ""
 
 
@@ -11830,7 +11844,7 @@ def _read_contact_profile_wx_no_for_cell(
     try:
         time.sleep(0.8)
         profile_root = auto.ControlFromHandle(int(hwnd))
-        wx_no = _extract_contact_profile_wx_no(profile_root)
+        wx_no = _extract_contact_profile_wx_no(profile_root, expected_name=target)
     except Exception:
         return ""
     if wx_no:
@@ -14402,7 +14416,7 @@ def _read_visible_contact_profile_wx_no(
     try:
         time.sleep(0.8)
         profile_root = auto.ControlFromHandle(int(hwnd))
-        wx_no = _extract_contact_profile_wx_no(profile_root)
+        wx_no = _extract_contact_profile_wx_no(profile_root, expected_name=target)
         if wx_no:
             persisted = _persist_contact_wx_no(account_id, target, wx_no)
             steps.append(
@@ -14479,7 +14493,7 @@ def _open_local_contact_profile(
             )
             time.sleep(0.8)
             profile_root = _uia_foreground_or_main_root(hwnd)
-            observed_wx_no = _extract_contact_profile_wx_no(profile_root)
+            observed_wx_no = _extract_contact_profile_wx_no(profile_root, expected_name=original_target)
             if expected_wx_no:
                 matched = bool(observed_wx_no) and observed_wx_no.casefold() == expected_wx_no.casefold()
                 steps.append(
@@ -14533,7 +14547,7 @@ def _open_local_contact_profile(
         return
     try:
         root = _uia_foreground_or_main_root(hwnd)
-        wx_no = _extract_contact_profile_wx_no(root)
+        wx_no = _extract_contact_profile_wx_no(root, expected_name=target)
         if wx_no:
             persisted = _persist_contact_wx_no(account_id, target, wx_no)
             steps.append({"step": "capture_contact_wx_no", "ok": True, "target": target, "wx_no": wx_no, "persisted": bool(persisted)})
@@ -14992,7 +15006,7 @@ def _read_current_private_chat_wx_no(
                     result["reason"] = "profile_name_mismatch"
                     result["selected_member_name"] = _uia_control_text(member)[:240]
                     return result
-                wx_no = str(_extract_contact_profile_wx_no(profile_root) or "").strip()
+                wx_no = str(_extract_contact_profile_wx_no(profile_root, expected_name=expected_display_name) or "").strip()
                 if _looks_like_wechat_id(wx_no):
                     result.update({"ok": True, "wx_no": wx_no, "reason": "profile_popup"})
                     return result
@@ -15389,7 +15403,7 @@ def _open_local_contact_profile_via_search(
     while time.monotonic() < deadline:
         profile_root = _local_profile_popup_root(hwnd)
         if profile_root is not None:
-            observed_wx_no = _extract_contact_profile_wx_no(profile_root)
+            observed_wx_no = _extract_contact_profile_wx_no(profile_root, expected_name=original_target)
             if observed_wx_no:
                 break
         time.sleep(0.25)

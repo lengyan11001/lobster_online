@@ -1493,3 +1493,63 @@ def test_reset_contacts_button_and_endpoint_are_wired():
     # 改了这个视图就一定要带 cache buster（不锁具体版本串，避免每次 bump 都改测试）
     assert "/static/views/juhe-wechat.html?v=" in registry
     assert "/static/js/juhe-wechat.js?v=" in registry
+
+
+# ---------------------------------------------------------------- 2026-10-14
+# 用户反馈（附微信资料卡截图）：「点某个人的时候，右侧出这个不能取到准确的微信号码？
+# 如果有人昵称全字母不是又要取错」。资料卡上「微信号」那一栏才是号，取到不像号的
+# 内容一律当"没读到"，绝不回落到昵称。
+
+
+def _extract_from_fake_profile_card(monkeypatch, texts, *, expected_name=""):
+    class FakeNode:
+        def __init__(self, text):
+            self.text = text
+
+    nodes = [FakeNode(item) for item in texts]
+    monkeypatch.setattr(engine, "_uia_walk", lambda root, **kwargs: nodes)
+    monkeypatch.setattr(
+        engine, "_uia_control_text",
+        lambda node, default="": str(getattr(node, "text", "") or ""),
+    )
+    try:
+        return engine._extract_contact_profile_wx_no(object(), expected_name=expected_name)
+    except TypeError:  # 旧签名没有 expected_name（基线跑这段，用来看「取错」这个真问题）
+        return engine._extract_contact_profile_wx_no(object())
+
+
+def test_profile_card_reads_the_wx_id_after_the_label(monkeypatch):
+    # 截图那张卡：昵称「A001.老朋友🇨🇳18599953320」，微信号：MM16003000
+    got = _extract_from_fake_profile_card(monkeypatch, [
+        "A001.老朋友\U0001F1E8\U0001F1F3 18599953320",
+        "微信号", "MM16003000",
+        "备注", "添加备注名",
+        "朋友圈", "来源", "通过手机通讯录添加",
+        "发消息", "语音聊天", "视频聊天",
+    ], expected_name="A001.老朋友\U0001F1E8\U0001F1F3 18599953320")
+    assert got == "MM16003000"
+
+
+def test_profile_card_never_falls_back_to_an_all_letter_nickname(monkeypatch):
+    # 这张卡没有微信号，标签后面那个节点就是昵称 → 必须当"没读到"，不能把 Jason 当号
+    got = _extract_from_fake_profile_card(
+        monkeypatch, ["Jason", "微信号", "Jason", "备注", "朋友圈"], expected_name="Jason")
+    assert got == ""
+
+    # 昵称是全字母、卡上也有真号 → 只能拿真号
+    got = _extract_from_fake_profile_card(
+        monkeypatch, ["Jason", "微信号：jason_wx88", "备注"], expected_name="Jason")
+    assert got == "jason_wx88"
+
+
+def test_profile_card_rejects_values_that_are_not_wechat_ids(monkeypatch):
+    # 企业微信/外部联系人的内部号不是微信号
+    got = _extract_from_fake_profile_card(
+        monkeypatch, ["外部联系人", "微信号", "mmo9cq808230H_H6h_Dl7dcBc6xKQM@weclaw"],
+        expected_name="外部联系人")
+    assert got == ""
+
+    # 下划线开头不符合微信号形态
+    got = _extract_from_fake_profile_card(
+        monkeypatch, ["孙洪乾", "微信号", "_sunhongqian"], expected_name="孙洪乾")
+    assert got == ""
