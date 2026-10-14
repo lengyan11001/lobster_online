@@ -1,7 +1,7 @@
 {
-  "version": "2.0.140",
-  "build": 435,
-  "applied_at": "2026-10-15T00:57:38+08:00",
-  "note": "2.0.140: contacts sync - (1) the guarded click refusing a point that is not on the WeChat window (when another window covers it) no longer falls back to a blind click; it stops with a readable error instead of hitting the contacts search box and popping a 公众号 dropdown. (2) an empty viewport right after our own wheel nudge is a virtualised-list rendering gap, not a collapse: re-poll ~1.4s (contacts_empty_transient) before reopening the contacts group, which removes most of the sudden collapse/reopen cycles seen in diag_20261014165447 (every one was preceded by scroll_moved visible=0). Keeps 2.0.139: skip failed rows, resume anchor, short-window top band.",
-  "bundle_sha256": "856dfb6c501ab95bc16a37c089e805d5cb33434bdfa2e877dc4162adbbed459e"
+  "version": "2.0.141",
+  "build": 436,
+  "applied_at": "2026-10-15T01:19:04+08:00",
+  "note": "2.0.141: contacts sync top-up behaviour + fewer interruptions. A refused click point (point not on the WeChat window) now activates WeChat and retries the guarded click once before the run stops - diag_20261014171335 logged 91 click_refused / 91 aborted rounds in a single run because WeChat was behind another window (only 76 of 600 clicks succeeded). Rows whose contact already has a WeChat ID are skipped, so each run only tops up the ones still missing an ID. Keeps 2.0.140: no blind clicks, transient-empty re-poll, skip failed rows, resume anchor.",
+  "bundle_sha256": "3c45a35eeda5b0a0caf1b24a2e30a99cd21d7c8d1362ee6e559f233a7609483d"
 }
