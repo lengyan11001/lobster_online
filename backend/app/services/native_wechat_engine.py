@@ -10694,16 +10694,23 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             break
         before_fp = _contact_visible_fingerprint(names)
         moved = False
-        for _method in ("wheel", "pagedown"):
+        # 每轮读的是“当前可见的一屏”，再往下推一屏。原来是 5 格/轮（一屏约 11.6 行、
+        # 每轮只推进约 6.7 行 → 739 人要 ~110 轮）；7 格/轮 ≈ 9.4 行，仍有交叠不会漏人，
+        # 轮数少三成、来回滚动也少三成（2026-10-14 反馈：不要一直往下滚）。
+        wheel_step = 7
+        for _method in ("wheel", "page"):
             try:
                 if _method == "wheel":
-                    contact_list.WheelDown(wheelTimes=5)
+                    contact_list.WheelDown(wheelTimes=wheel_step)
                 else:
+                    # 以前这里发 {PGDN}：uiautomation 这版不支持这种写法，每轮都报
+                    # "ord() expected a character"（日志里的 scroll_error 全是它）。
+                    # 改成“换一个更大步进再推一次”，仍然是两种方式尝试。
                     try:
                         contact_list.SetFocus()
                     except Exception:
                         pass
-                    auto.SendKeys("{PGDN}")
+                    contact_list.WheelDown(wheelTimes=wheel_step * 2)
                 time.sleep(0.35)
             except Exception as _ex:
                 _contact_sync_debug(account_id, stage="scroll_error", method=_method, round=rounds,
@@ -10777,6 +10784,23 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         _merge_contacts_snapshot(account_id, pending_records, chat_type="direct")
         pending_records = []
 
+    _contact_sync_debug(
+        account_id,
+        stage="sync_finished",
+        rounds=rounds,
+        seen=len(seen),
+        scroll_completed=completed,
+        limit_reached=hit_limit,
+        stuck_rounds=stuck_rounds,
+        empty_rounds=empty_rounds,
+        recovery_budget=recovery_budget,
+        max_rounds=max_rounds,
+        stopped=(
+            "scan_complete"
+            if completed
+            else ("limit" if hit_limit else ("max_rounds" if rounds >= max_rounds else "stuck_or_empty"))
+        ),
+    )
     if not seen:
         existing_now = []
         if _contact_count(account_id) > 0:
