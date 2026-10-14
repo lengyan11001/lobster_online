@@ -1,7 +1,7 @@
 {
-  "version": "2.0.130",
-  "build": 425,
-  "applied_at": "2026-10-14T19:20:02+08:00",
-  "note": "2.0.130：通讯录同步「开头卡住」修复 —— 切通讯录页 + 找联系人列表控件这一步加重试和逐步日志。①线上现象：用户点同步后卡在这一步，一行日志都不写（诊断包里只有 app.log 的 comtypes 导入，看不出卡在哪）；本机用 424 代码复现了同一个失败：直接报 local WeChat contact list not found、新增日志 0 行；②现在最多重试 3 轮：每轮先确认微信窗口（记窗口矩形/可见性）→ 切通讯录页 → 找列表控件（class=mmui::StickyHeaderRecyclerListView 且 name=通讯录；找不到再退回 guess/primary），每轮记 contacts_tab_result / contacts_list_lookup(attempt, hwnd, found, class, rect)，失败记 contacts_sync_failed(reason) 再抛错；③本机真机验证：改动前一行日志没有、直接失败；改动后读到 200 个联系人（rounds=20、empty_rounds=0、stuck_rounds=0、耗时 33.6s），并写出 contacts_sync_start/contacts_tab_result/contacts_list_lookup/contacts_probe/contacts_prepare。另含 2.0.129 全部内容（展开自己算坐标发鼠标点击、多策略点法、读号刹车、contacts_probe 结构快照、诊断包带同步日志、视频复刻 500 修复等）。",
-  "bundle_sha256": "e509a8ce9a22c9c910dd41b5191ed8da9d751d0d43c8793962129d8f0ee588fb"
+  "version": "2.0.131",
+  "build": 426,
+  "applied_at": "2026-10-14T19:38:27+08:00",
+  "note": "2.0.131：通讯录同步「展开联系人不再被自己关掉」——①ESC 只在真的检测到弹出式资料卡时才按（真机日志证据：在通讯录页按 ESC = 退出/收起联系人列表，用户看到的就是「我给他点开她还关了」，rows_back=0）；没有弹窗一个键都不发，日志记 esc_sent；②「点它展开」加两个信号保险：只有「扫描说联系人档收起」且「列表里看不到联系人行」都成立才点，两个信号打架时一个点击都不发（因为实测这个点法是切换：点一下会把开着的档收起来）；③真机对照实验（微信 4.1.7.59）：point_text 点文字节点 (628,427) 能切换、key_right / point_triangle 能展开、双击无效 —— 展开用的就是这套顺序；实验后已把用户列表恢复原状。另含 2.0.130 全部内容（同步开头重试+逐步日志、展开自己算坐标发鼠标点击、读号刹车、contacts_probe 等）。",
+  "bundle_sha256": "554ba68b8406a5bc1996989dc49bad1f2731b91d5ad5720db8c4481acf215254"
 }
