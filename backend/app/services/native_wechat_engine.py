@@ -7985,6 +7985,90 @@ def _contact_count(account_id: str) -> int:
     return int(row[0] if row else 0)
 
 
+def _scroll_contact_list_to_top(hwnd: int) -> None:
+    """把通讯录列表滚回顶部。用户手动滑到中间/子分区时，不滚回顶部会让后续翻页错位。"""
+    if not hwnd or not _module_available("uiautomation"):
+        return
+    import uiautomation as auto  # type: ignore
+
+    try:
+        root = auto.ControlFromHandle(int(hwnd))
+        lst = _uia_guess_contact_list(root) or _uia_primary_contact_list(root)
+        if lst is None:
+            return
+        # PageUp-ish: small wheel steps so we do not lose the window focus
+        try:
+            lst.SetFocus()
+        except Exception:
+            pass
+        for _ in range(30):
+            try:
+                lst.WheelUp(wheelTimes=5)
+            except Exception:
+                break
+            time.sleep(0.08)
+        time.sleep(0.3)
+    except Exception:
+        return
+
+
+def _contact_visible_fingerprint(names: Any) -> str:
+    import hashlib
+
+    text = "|".join(str(x or "").strip() for x in (names or []) if str(x or "").strip())
+    return hashlib.md5(text.encode("utf-8")).hexdigest()[:12] if text else ""
+
+
+def _contact_sync_debug(account_id: str, **fields: Any) -> None:
+    """把同步过程里“滚动到底有没有真的生效”写成一行日志。"""
+    try:
+        import json as _json
+        import time as _time
+        from pathlib import Path as _Path
+
+        root = _Path(__file__).resolve().parents[3]
+        out = root / "logs" / "native_wechat_contact_sync.jsonl"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        row: Dict[str, Any] = {"ts": _time.strftime("%Y-%m-%dT%H:%M:%S"), "account_id": account_id}
+        for key, value in fields.items():
+            row[key] = value if isinstance(value, (int, float, bool, type(None))) else str(value)[:200]
+        with out.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _open_contacts_sublist(hwnd: int, account_id_hint: str = "") -> bool:
+    """点开通讯录里的「联系人」二级入口（人在这一层，一级页只有分组）。"""
+    if not hwnd or not _module_available("uiautomation"):
+        return False
+    import uiautomation as auto  # type: ignore
+
+    try:
+        root = auto.ControlFromHandle(int(hwnd))
+    except Exception:
+        return False
+    for node in _uia_walk(root, max_depth=14):
+        try:
+            name = _uia_control_text(node)
+            if not name:
+                continue
+            cls = _uia_control_class(node)
+            if "MainTabBar" in cls:
+                continue
+            is_group_entry = ("ContactsCellGroupView" in cls) or ("Contact" in cls and "ListItem" in str(getattr(node, "ControlTypeName", "")))
+            # 实测：这个折叠入口的 Name 是「联系人739」（带计数，不是正好两个字），所以用前缀匹配。
+            if not (is_group_entry and (name.startswith("联系人") or name.startswith("通讯录管理"))):
+                continue
+            _click_uia_node(node)
+            time.sleep(1.2)
+            _contact_sync_debug(account_id_hint, stage="open_contacts_sublist_clicked", node=name, cls=cls)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def _contact_sync_max_rounds(limit: int) -> int:
     clean_limit = max(1, min(int(limit or 10000), 10000))
     return max(120, min(900, int(clean_limit / 4) + 120))
@@ -10327,6 +10411,21 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     profile_fallback_failures = 0
     profile_attempted: set[str] = set()
     rounds = 0
+    empty_rounds = 0
+    stuck_rounds = 0
+    try:
+        _ensure_local_contacts_tab(account_id)
+    except Exception:
+        pass
+    try:
+        opened = _open_contacts_sublist(hwnd, account_id)
+        _contact_sync_debug(account_id, stage="open_contacts_sublist", opened=opened)
+    except Exception:
+        pass
+    try:
+        _scroll_contact_list_to_top(hwnd)
+    except Exception:
+        pass
     for _idx in range(max_rounds):
         rounds = _idx + 1
         try:
@@ -10338,6 +10437,21 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             pass
         before = len(seen)
         names = _uia_visible_contact_cell_names(contact_list)
+        if not names:
+            empty_rounds += 1
+            if empty_rounds <= 3:
+                try:
+                    _ensure_local_contacts_tab(account_id)
+                    root2 = auto.ControlFromHandle(int(hwnd))
+                    contact_list = _uia_guess_contact_list(root2) or _uia_primary_contact_list(root2) or contact_list
+                    if empty_rounds == 3:
+                        _scroll_contact_list_to_top(hwnd)
+                except Exception:
+                    pass
+                time.sleep(0.5)
+                continue
+        else:
+            empty_rounds = 0
         for name in names:
             clean = str(name or "").strip()
             if not clean or clean in skip_names:
@@ -10381,19 +10495,60 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         if stable_rounds >= 6:
             completed = True
             break
-        try:
-            contact_list.WheelDown(wheelTimes=5)
-            time.sleep(0.2)
-        except Exception:
+        before_fp = _contact_visible_fingerprint(names)
+        moved = False
+        for _method in ("wheel", "pagedown"):
             try:
-                root = auto.ControlFromHandle(int(hwnd))
-                contact_list = _uia_guess_contact_list(root) or _uia_primary_contact_list(root) or contact_list
-                contact_list.WheelDown(wheelTimes=3)
+                if _method == "wheel":
+                    contact_list.WheelDown(wheelTimes=5)
+                else:
+                    try:
+                        contact_list.SetFocus()
+                    except Exception:
+                        pass
+                    auto.SendKeys("{PGDN}")
                 time.sleep(0.35)
+            except Exception as _ex:
+                _contact_sync_debug(account_id, stage="scroll_error", method=_method, round=rounds,
+                                    error=str(_ex)[:160], cls=str(getattr(contact_list, "ClassName", ""))[:40])
+                continue
+            try:
+                root_now = auto.ControlFromHandle(int(hwnd))
+                cur = _uia_guess_contact_list(root_now) or _uia_primary_contact_list(root_now) or contact_list
+                cur_names = _uia_visible_contact_cell_names(cur)
             except Exception:
+                cur, cur_names = contact_list, []
+            if _contact_visible_fingerprint(cur_names) != before_fp:
+                moved = True
+                contact_list = cur
+                _contact_sync_debug(account_id, stage="scroll_moved", method=_method, round=rounds,
+                                    seen=len(seen), visible=len(cur_names))
                 break
+            _contact_sync_debug(account_id, stage="scroll_stuck", method=_method, round=rounds,
+                                seen=len(seen), visible=len(cur_names),
+                                cls=str(getattr(contact_list, "ClassName", ""))[:40],
+                                name=str(getattr(contact_list, "Name", ""))[:40])
+        if not moved:
+            stuck_rounds += 1
+            _contact_sync_debug(account_id, stage="stuck_rounds", round=rounds, stuck=stuck_rounds, seen=len(seen))
+            if stuck_rounds >= 3:
+                break
+        else:
+            stuck_rounds = 0
 
     if not seen:
+        existing_now = []
+        if _contact_count(account_id) > 0:
+            return {
+                "ok": False,
+                "items": existing_now[:200],
+                "count": len(existing_now),
+                "total_after": _contact_count(account_id),
+                "source": "pc_wechat_uia_contacts",
+                "mode": "merge",
+                "rounds": rounds,
+                "error": "本轮没读到联系人（已返回库内已有数据），请确认微信在「通讯录」页后重试",
+            }
         raise RuntimeError("未读取到通讯录联系人，请确认微信已切到通讯录页后重试")
     items = _merge_contacts_snapshot(account_id, list(seen.values()), chat_type="direct")
     total_after = _contact_count(account_id)
