@@ -10400,6 +10400,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     # source for wx ids when the full driver API is unavailable.
     wx_no_index: Dict[str, str] = _existing_contact_wx_no_index(account_id)
     persisted_names: set[str] = set()
+    pending_records: List[Dict[str, Any]] = []
     stable_rounds = 0
     last_signature = ""
     completed = False
@@ -10458,18 +10459,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 continue
             wx_no = wx_no_index.get(_normalize_contact_lookup_key(clean), "")
             normalized_name = _normalize_contact_lookup_key(clean)
-            if not wx_no and normalized_name and normalized_name not in profile_attempted:
-                profile_attempted.add(normalized_name)
-                profile_fallback_attempts += 1
-                try:
-                    wx_no = _read_visible_contact_profile_wx_no(hwnd, account_id, clean)
-                    if wx_no:
-                        profile_fallback_successes += 1
-                        wx_no_index[normalized_name] = wx_no
-                    else:
-                        profile_fallback_failures += 1
-                except Exception:
-                    profile_fallback_failures += 1
+            # 扫描阶段只读可见名单，不开资料卡（开卡是最大的耗时源）；补微信号放到扫描结束后。
             seen[clean] = {
                 "contact_key": clean,
                 "display_name": clean,
@@ -10482,8 +10472,11 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 },
             }
             if clean not in persisted_names:
-                _merge_contacts_snapshot(account_id, [seen[clean]], chat_type="direct")
                 persisted_names.add(clean)
+                pending_records.append(seen[clean])
+                if len(pending_records) >= 20:
+                    _merge_contacts_snapshot(account_id, pending_records, chat_type="direct")
+                    pending_records = []
             if len(seen) >= clean_limit:
                 hit_limit = True
                 break
@@ -10535,6 +10528,34 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 break
         else:
             stuck_rounds = 0
+
+    # 后置补微信号：扫描完成后有限量地开资料卡（每次最多 60 个，多次同步逐步补齐），不再拖慢主流程
+    fill_quota = 60
+    for _name in list(seen.keys()):
+        if fill_quota <= 0:
+            break
+        _rec = seen.get(_name) or {}
+        if _rec.get("wxNo"):
+            continue
+        _key = _normalize_contact_lookup_key(_name)
+        if not _key or _key in profile_attempted:
+            continue
+        profile_attempted.add(_key)
+        profile_fallback_attempts += 1
+        try:
+            _wx = _read_visible_contact_profile_wx_no(hwnd, account_id, _name)
+            if _wx:
+                _rec["wxNo"] = _wx
+                wx_no_index[_key] = _wx
+                profile_fallback_successes += 1
+            else:
+                profile_fallback_failures += 1
+        except Exception:
+            profile_fallback_failures += 1
+        fill_quota -= 1
+    if pending_records:
+        _merge_contacts_snapshot(account_id, pending_records, chat_type="direct")
+        pending_records = []
 
     if not seen:
         existing_now = []
