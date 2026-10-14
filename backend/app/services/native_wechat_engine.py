@@ -126,7 +126,7 @@ DEFAULT_STRATEGY: Dict[str, Any] = {
     "auto_reply_max_text_chars": 600,
     # 每次同步顺带补多少个「还没微信号」的人（每个要点开资料卡读一次，约 1 秒）。
     # 0 = 本次不补；默认 200，也可以给每个账号在 workflow/设置里覆盖。
-    "contact_wx_fill_budget": 200,
+    "contact_wx_fill_budget": None,
 }
 
 
@@ -8225,45 +8225,112 @@ def _contacts_prepare_for_sync(hwnd: int, account_id_hint: str = "") -> Dict[str
     return result
 
 
-def _contact_wx_fill_budget() -> int:
-    """本次同步最多补多少个微信号（0 = 不补）。可按账号 workflow 覆盖 contact_wx_fill_budget。"""
+def _contact_wx_fill_budget() -> Optional[int]:
+    """本次同步补微信号的上限：None = 不限（默认，一次同步补完）；0 = 本次不补；N = 最多 N 个。
+
+    默认改成「不限」是因为 2026-10-14 的要求：同步完全才是目的，不考虑时间。
+    需要限速时用环境变量 LOBSTER_CONTACT_WX_FILL_BUDGET 或账号 workflow 的
+    contact_wx_fill_budget 覆盖。
+    """
     try:
         raw = os.environ.get("LOBSTER_CONTACT_WX_FILL_BUDGET")
     except Exception:
         raw = None
     for source in (raw, get_strategy().get("contact_wx_fill_budget")):
+        if source is None or str(source).strip() == "":
+            continue
         try:
             value = int(str(source).strip())
         except Exception:
             continue
+        if value < 0:
+            return None
         return max(0, min(value, 2000))
-    return 200
+    return None
 
 
-def _contacts_scroll_to_head(hwnd: int, contact_list: Any = None, account_id_hint: str = "", *, max_rounds: int = 6) -> Dict[str, Any]:
-    """把列表滚回「联系人」档开头 —— 标题已经在视野里就一点都不滚（不要多余的整屏滚动）。
+def _contacts_click_sticky_header(hwnd: int, contact_list: Any = None, account_id_hint: str = "") -> bool:
+    """点列表顶部那条「⌄ 联系人 739」粘性标题（UIA 里没有这个节点，只能按坐标点）。
 
-    以前每次进通讯录都先 WheelUp(40) 再 30×WheelUp(5)≈150 格，肉眼就是“进来先滑一大段”；
-    联系人档标题可见就说明已经在这一档的头部，直接开读即可。
+    实测（2026-10-14）：正滚在「联系人」档中间时，这条标题一直贴在列表最上方；
+    点它一下＝收起这一档，列表立即跳回分组总览，那里就能看到并点「联系人739」了。
     """
-    for round_no in range(1, max(1, int(max_rounds)) + 1):
+    rect = None
+    try:
+        rect = _uia_rect(contact_list) if contact_list is not None else None
+    except Exception:
+        rect = None
+    if not rect:
+        return False
+    x = int(float(rect[0]) + 45)
+    y = int(float(rect[1]) + 18)
+    try:
+        _uia_click_screen_point(x, y)
+    except Exception as exc:
+        _contact_sync_debug(account_id_hint, stage="contacts_sticky_header_click_error", error=str(exc)[:160])
+        return False
+    _contact_sync_debug(account_id_hint, stage="contacts_sticky_header_click", x=x, y=y)
+    return True
+
+
+def _contacts_scroll_to_head(hwnd: int, contact_list: Any = None, account_id_hint: str = "", *, max_pageups: int = 20) -> Dict[str, Any]:
+    """回到「联系人」档顶 —— **只用“收起/展开”，不做一点点滑动**（真机实测，用户给出的办法）。
+
+    1. 档标题在屏上（看到「联系人739」）→ 点它：已展开就点两下（收起+展开），没展开点一下 →
+       微信自己跳回这一档顶部；
+    2. 档标题不在屏上（正滚在档中间）→ 点列表顶部那条「⌄ 联系人 739」粘性标题 ＝ 收起这一档 →
+       列表跳回分组总览 → 回到第 1 步；
+    3. 前两步都没成（极端情况）→ 整页上翻（100 格/次 ≈ 6 屏）把标题翻出来，再走第 1 步。
+    """
+    keep = _CONTACTS_GROUP_KEEP_OPEN[0]
+    for attempt in range(1, 5):
         scan = _contacts_row_scan(hwnd)
-        head_visible = any(
-            str(entry.get("name") or "").startswith(_CONTACTS_GROUP_KEEP_OPEN[0]) and entry.get("expanded")
-            for entry in (scan.get("entries") or [])
+        row = next(
+            (entry for entry in (scan.get("entries") or []) if str(entry.get("name") or "").startswith(keep)),
+            None,
         )
-        if head_visible:
-            _contact_sync_debug(account_id_hint, stage="contacts_scroll_head", rounds=round_no - 1, needed=False)
-            return {"scrolled": round_no - 1, "head_visible": True}
+        if row is not None:
+            was_expanded = bool(row.get("expanded"))
+            if was_expanded:
+                _contacts_click_group_row(hwnd, keep)
+                time.sleep(0.75)
+            clicked = _contacts_click_group_row(hwnd, keep)
+            time.sleep(0.85)
+            _contact_sync_debug(account_id_hint, stage="contacts_scroll_head", mode="collapse_expand",
+                                attempt=attempt, was_expanded=was_expanded, clicked=bool(clicked))
+            return {"head_visible": True, "mode": "collapse_expand", "attempts": attempt}
+        if attempt <= 2 and _contacts_click_sticky_header(hwnd, contact_list, account_id_hint):
+            time.sleep(0.9)
+            continue
+        break
+
+    jumps = 0
+    for _ in range(max(1, int(max_pageups))):
+        scan = _contacts_row_scan(hwnd)
+        row = next(
+            (entry for entry in (scan.get("entries") or []) if str(entry.get("name") or "").startswith(keep)),
+            None,
+        )
+        if row is not None:
+            was_expanded = bool(row.get("expanded"))
+            if was_expanded:
+                _contacts_click_group_row(hwnd, keep)
+                time.sleep(0.75)
+            _contacts_click_group_row(hwnd, keep)
+            time.sleep(0.85)
+            _contact_sync_debug(account_id_hint, stage="contacts_scroll_head", mode="pageup_then_collapse_expand",
+                                jumps=jumps, was_expanded=was_expanded)
+            return {"head_visible": True, "mode": "pageup_then_collapse_expand", "jumps": jumps}
         if contact_list is None:
             break
         try:
-            contact_list.WheelUp(wheelTimes=8)
+            contact_list.WheelUp(wheelTimes=100)
         except Exception:
             break
-        time.sleep(0.25)
-    _contact_sync_debug(account_id_hint, stage="contacts_scroll_head", rounds=max_rounds, needed=True)
-    return {"scrolled": max_rounds, "head_visible": False}
+        jumps += 1
+        time.sleep(0.2)
+    _contact_sync_debug(account_id_hint, stage="contacts_scroll_head", mode="failed", jumps=jumps, head_visible=False)
+    return {"head_visible": False, "mode": "failed", "jumps": jumps}
 
 
 def _open_contacts_sublist(hwnd: int, account_id_hint: str = "") -> bool:
@@ -10639,6 +10706,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     profile_fallback_successes = 0
     profile_fallback_failures = 0
     profile_attempted: set[str] = set()
+    wx_fill_budget = _contact_wx_fill_budget()
     rounds = 0
     empty_rounds = 0
     stuck_rounds = 0
@@ -10661,7 +10729,8 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         except Exception:
             pass
         before = len(seen)
-        names = _uia_visible_contact_cell_names(contact_list)
+        rows_now = _uia_visible_contact_cell_rows(contact_list)
+        names = [row.get("name") or "" for row in rows_now]
         if not names:
             empty_rounds += 1
             if empty_rounds <= 3:
@@ -10675,13 +10744,35 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 continue
         else:
             empty_rounds = 0
-        for name in names:
-            clean = str(name or "").strip()
+        for row_now in rows_now:
+            clean = str(row_now.get("name") or "").strip()
             if not clean or clean in skip_names:
                 continue
-            wx_no = wx_no_index.get(_normalize_contact_lookup_key(clean), "")
             normalized_name = _normalize_contact_lookup_key(clean)
-            # 扫描阶段只读可见名单，不开资料卡（开卡是最大的耗时源）；补微信号放到扫描结束后。
+            wx_no = wx_no_index.get(normalized_name, "")
+            # 一次走完：滚到谁就顺手点开他的资料卡读微信号（不再“先扫全表、再回头补”两段）。
+            # 已有微信号的人不点（省时间）；上限默认不限，可用 contact_wx_fill_budget 控制。
+            if (
+                not wx_no
+                and wx_fill_budget != 0
+                and (wx_fill_budget is None or profile_fallback_successes < wx_fill_budget)
+                and normalized_name
+                and normalized_name not in profile_attempted
+            ):
+                profile_attempted.add(normalized_name)
+                profile_fallback_attempts += 1
+                try:
+                    wx_value = _read_contact_profile_wx_no_for_cell(hwnd, account_id, row_now.get("node"), clean)
+                except Exception:
+                    wx_value = ""
+                if wx_value:
+                    wx_no = wx_value
+                    wx_no_index[normalized_name] = wx_value
+                    profile_fallback_successes += 1
+                    _contact_sync_debug(account_id, stage="wx_fill", target=clean, wx_no=wx_value,
+                                        success=profile_fallback_successes, budget=wx_fill_budget)
+                else:
+                    profile_fallback_failures += 1
             seen[clean] = {
                 "contact_key": clean,
                 "display_name": clean,
@@ -10774,75 +10865,22 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         else:
             stuck_rounds = 0
 
-    # 后置补微信号：扫描完成后按列表顺序再从头部走一遍，遇到「还没有微信号」的人就点开资料卡读一个。
-    #
-    # 旧实现是拿扫描到的名字去当前 UIA 树里找行（_find_visible_contact_cell），但扫描结束时列表停在
-    # 尾部、顶部的人根本不在渲染范围 → 找不到 → 仍然扣一次 60 的配额 → 一次同步一个都补不上
-    # （2026-10-14 实测：库里最前面的 $细华$ / &良 都“找不到”）。对一个全新的 700 人账号，等于永远补不上。
-    # 现在改成“边走边补”：只对当前真的渲染出来、并且真的点开过的人计数；补满预算就停，下次同步接着补。
-    wx_fill_budget = _contact_wx_fill_budget()
-    wx_fill_rounds = 0
-    missing_wx_names = [name for name, rec in seen.items() if not (rec or {}).get("wxNo")]
-    _contact_sync_debug(account_id, stage="wx_fill_check", budget=wx_fill_budget,
-                        scanned=len(seen), missing=len(missing_wx_names),
-                        missing_sample=missing_wx_names[:8])
-    if wx_fill_budget > 0 and missing_wx_names:
-        try:
-            _contacts_scroll_to_head(hwnd, None, account_id)
-        except Exception:
-            pass
-        fill_stable = 0
-        last_fill_signature = ""
-        while wx_fill_rounds < max_rounds and profile_fallback_successes < wx_fill_budget:
-            wx_fill_rounds += 1
-            try:
-                root_fill = auto.ControlFromHandle(int(hwnd))
-                fill_list = _uia_guess_contact_list(root_fill) or _uia_primary_contact_list(root_fill)
-                fill_names = _uia_visible_contact_cell_names(fill_list) if fill_list is not None else []
-            except Exception:
-                break
-            for _name in fill_names:
-                if profile_fallback_successes >= wx_fill_budget:
-                    break
-                clean_fill = str(_name or "").strip()
-                if not clean_fill:
-                    continue
-                rec_fill = seen.get(clean_fill)
-                if rec_fill is None or rec_fill.get("wxNo"):
-                    # 不在本轮扫描名单里（或已有微信号）→ 不点
-                    continue
-                key_fill = _normalize_contact_lookup_key(clean_fill)
-                if not key_fill or key_fill in profile_attempted:
-                    continue
-                profile_attempted.add(key_fill)
-                profile_fallback_attempts += 1
-                try:
-                    wx_value = _read_visible_contact_profile_wx_no(hwnd, account_id, clean_fill)
-                except Exception:
-                    wx_value = ""
-                if wx_value:
-                    rec_fill["wxNo"] = wx_value
-                    wx_no_index[key_fill] = wx_value
-                    profile_fallback_successes += 1
-                    _contact_sync_debug(account_id, stage="wx_fill", target=clean_fill,
-                                        wx_no=wx_value, success=profile_fallback_successes,
-                                        budget=wx_fill_budget)
-                else:
-                    profile_fallback_failures += 1
-            signature_fill = "|".join(fill_names[-12:]) if fill_names else ""
-            fill_stable = fill_stable + 1 if signature_fill == last_fill_signature else 0
-            last_fill_signature = signature_fill
-            if fill_stable >= 3:
-                break
-            try:
-                if fill_list is not None:
-                    fill_list.WheelDown(wheelTimes=7)
-            except Exception:
-                break
-            time.sleep(0.3)
-        _contact_sync_debug(account_id, stage="wx_fill_done", budget=wx_fill_budget, rounds=wx_fill_rounds,
-                            attempts=profile_fallback_attempts, successes=profile_fallback_successes,
-                            failures=profile_fallback_failures)
+    # 收尾：把列表收回「联系人」档顶（收起+展开）—— 这样下次同步一进来就在档顶，0 次回滚。
+    try:
+        _contacts_scroll_to_head(hwnd, contact_list, account_id)
+    except Exception:
+        pass
+    # 补微信号已经并进上面的扫描循环（滚到谁就点谁），这里只汇总一行日志。
+    _contact_sync_debug(
+        account_id,
+        stage="wx_fill_done",
+        budget=wx_fill_budget,
+        attempts=profile_fallback_attempts,
+        successes=profile_fallback_successes,
+        failures=profile_fallback_failures,
+        scanned=len(seen),
+        missing_left=len([1 for rec in seen.values() if not (rec or {}).get("wxNo")]),
+    )
     if pending_records:
         _merge_contacts_snapshot(account_id, pending_records, chat_type="direct")
         pending_records = []
@@ -10856,6 +10894,9 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         limit_reached=hit_limit,
         stuck_rounds=stuck_rounds,
         empty_rounds=empty_rounds,
+        wx_fill_attempts=profile_fallback_attempts,
+        wx_fill_successes=profile_fallback_successes,
+        wx_fill_failures=profile_fallback_failures,
         recovery_budget=recovery_budget,
         max_rounds=max_rounds,
         stopped=(
@@ -10898,7 +10939,6 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         "profile_fallback_successes": profile_fallback_successes,
         "profile_fallback_failures": profile_fallback_failures,
         "wx_fill_budget": wx_fill_budget,
-        "wx_fill_rounds": wx_fill_rounds,
         "progress_saved": len(persisted_names),
     }
 
@@ -11562,6 +11602,62 @@ def _uia_visible_contact_cell_names(list_node: Any) -> List[str]:
         if grand_children:
             queue.extend(grand_children[:20])
     return names
+
+
+def _uia_visible_contact_cell_rows(list_node: Any) -> List[Dict[str, Any]]:
+    """当前渲染出来的联系人行（node + 名字），按屏幕顺序 —— 供“边走边点”直接点它自己的行。"""
+    rows: List[Dict[str, Any]] = []
+    try:
+        children = list_node.GetChildren()
+    except Exception:
+        children = []
+    queue = list(children)
+    seen_ids: set[int] = set()
+    while queue and len(rows) < 120:
+        child = queue.pop(0)
+        child_id = id(child)
+        if child_id in seen_ids:
+            continue
+        seen_ids.add(child_id)
+        if _uia_control_class(child) == "mmui::ContactsCellItemView":
+            name = _uia_control_text(child)
+            rect = _uia_rect(child)
+            if name:
+                rows.append({"node": child, "name": name, "top": (rect[1] if rect else 0)})
+        try:
+            grand_children = child.GetChildren()
+        except Exception:
+            grand_children = []
+        if grand_children:
+            queue.extend(grand_children[:20])
+    rows.sort(key=lambda item: float(item.get("top") or 0))
+    return rows
+
+
+def _read_contact_profile_wx_no_for_cell(
+    hwnd: int,
+    account_id: str,
+    cell: Any,
+    target: str,
+) -> str:
+    """点开这一行的资料卡读微信号（行已经在视野里，不需要再按名字找一遍）。"""
+    if cell is None:
+        return ""
+    import uiautomation as auto  # type: ignore
+
+    _uia_click(cell)
+    try:
+        time.sleep(0.8)
+        profile_root = auto.ControlFromHandle(int(hwnd))
+        wx_no = _extract_contact_profile_wx_no(profile_root)
+    except Exception:
+        return ""
+    if wx_no:
+        try:
+            _persist_contact_wx_no(account_id, target, wx_no)
+        except Exception:
+            pass
+    return wx_no
 
 
 def _sync_local_groups_from_uia(account_id: str, *, limit: int = 2000) -> Dict[str, Any]:
