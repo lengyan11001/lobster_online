@@ -8436,64 +8436,71 @@ def _contacts_click_sticky_header(hwnd: int, contact_list: Any = None, account_i
     return False
 
 
-def _contacts_scroll_to_head(hwnd: int, contact_list: Any = None, account_id_hint: str = "", *, max_pageups: int = 20) -> Dict[str, Any]:
-    """回到「联系人」档顶 —— **只用“收起/展开”，不做一点点滑动**（真机实测，用户给出的办法）。
+def _contacts_scroll_to_head(
+    hwnd: int,
+    contact_list: Any = None,
+    account_id_hint: str = "",
+    *,
+    max_pageups: int = 20,
+) -> Dict[str, Any]:
+    """滚回「联系人」档顶 —— **只用滚轮往上滚，绝不点分组标题/粘性标题**。
 
-    1. 档标题在屏上（看到「联系人739」）→ 点它：已展开就点两下（收起+展开），没展开点一下 →
-       微信自己跳回这一档顶部；
-    2. 档标题不在屏上（正滚在档中间）→ 点列表顶部那条「⌄ 联系人 739」粘性标题 ＝ 收起这一档 →
-       列表跳回分组总览 → 回到第 1 步；
-    3. 前两步都没成（极端情况）→ 整页上翻（100 格/次 ≈ 6 屏）把标题翻出来，再走第 1 步。
+    2026-10-14 线上反馈：「滑着的时候还会自己收起来联系人，然后就完全乱的」。原因是老实现
+    用"点分组标题两下（收起+展开）让微信跳回档顶"：第二下没点中，就把「联系人」档**留在收起
+    状态**，列表退化成分组总览，后面一个联系人都读不到；粘性标题那一下（按坐标点）还会点到
+    「通讯录管理/分组总览」上，同样把档收起。
+
+    现在：
+      1) 滚轮往上滚（每次 40 格），直到可见行不再变化（= 到顶）；
+      2) 全程不点任何标题；
+      3) 滚完校验「联系人」档还开着；万一发现被收起了（比如上一步的点击/别的动作），
+         用带校验的点击把它重新展开。
     """
     keep = _CONTACTS_GROUP_KEEP_OPEN[0]
-    for attempt in range(1, 5):
-        scan = _contacts_row_scan(hwnd)
-        row = next(
-            (entry for entry in (scan.get("entries") or []) if str(entry.get("name") or "").startswith(keep)),
-            None,
-        )
-        if row is not None:
-            was_expanded = bool(row.get("expanded"))
-            if was_expanded:
-                _contacts_click_group_row(hwnd, keep)
-                time.sleep(0.75)
-            clicked = _contacts_click_group_row(hwnd, keep)
-            time.sleep(0.85)
-            _contact_sync_debug(account_id_hint, stage="contacts_scroll_head", mode="collapse_expand",
-                                attempt=attempt, was_expanded=was_expanded, clicked=bool(clicked))
-            return {"head_visible": True, "mode": "collapse_expand", "attempts": attempt}
-        if attempt <= 2 and _contacts_click_sticky_header(hwnd, contact_list, account_id_hint):
-            time.sleep(0.9)
-            continue
-        break
+    result: Dict[str, Any] = {
+        "head_visible": False, "mode": "wheel_up", "rounds": 0, "ready": False, "reopened": False,
+    }
+    last_fingerprint = ""
+    for round_index in range(1, max(1, int(max_pageups)) + 1):
+        result["rounds"] = round_index
+        current_list = contact_list
+        try:
+            import uiautomation as auto  # type: ignore
 
-    jumps = 0
-    for _ in range(max(1, int(max_pageups))):
-        scan = _contacts_row_scan(hwnd)
-        row = next(
-            (entry for entry in (scan.get("entries") or []) if str(entry.get("name") or "").startswith(keep)),
-            None,
-        )
-        if row is not None:
-            was_expanded = bool(row.get("expanded"))
-            if was_expanded:
-                _contacts_click_group_row(hwnd, keep)
-                time.sleep(0.75)
-            _contacts_click_group_row(hwnd, keep)
-            time.sleep(0.85)
-            _contact_sync_debug(account_id_hint, stage="contacts_scroll_head", mode="pageup_then_collapse_expand",
-                                jumps=jumps, was_expanded=was_expanded)
-            return {"head_visible": True, "mode": "pageup_then_collapse_expand", "jumps": jumps}
-        if contact_list is None:
+            root = auto.ControlFromHandle(int(hwnd))
+            current_list = _uia_guess_contact_list(root) or _uia_primary_contact_list(root) or contact_list
+        except Exception:
+            current_list = contact_list
+        if current_list is None:
             break
         try:
-            contact_list.WheelUp(wheelTimes=100)
+            fingerprint = _contact_visible_fingerprint(_uia_visible_contact_cell_names(current_list))
         except Exception:
+            fingerprint = ""
+        if fingerprint and fingerprint == last_fingerprint:
+            result["head_visible"] = True
             break
-        jumps += 1
-        time.sleep(0.2)
-    _contact_sync_debug(account_id_hint, stage="contacts_scroll_head", mode="failed", jumps=jumps, head_visible=False)
-    return {"head_visible": False, "mode": "failed", "jumps": jumps}
+        last_fingerprint = fingerprint
+        try:
+            current_list.SetFocus()
+        except Exception:
+            pass
+        try:
+            current_list.WheelUp(wheelTimes=40)
+        except Exception as exc:
+            _contact_sync_debug(account_id_hint, stage="contacts_scroll_head_error", error=str(exc)[:160])
+            break
+        time.sleep(0.35)
+    state = _contacts_group_state(hwnd, keep)
+    if state is False or (state is None and not _contacts_entry_ready(hwnd)):
+        # 档被谁收起来了：用带校验的点击把它重新展开（不再赌"再点一下就回来"）
+        result["reopened"] = bool(_contacts_click_group_row(hwnd, keep, expect_open=True, attempts=2))
+    result["ready"] = bool(_contacts_entry_ready(hwnd) or _contacts_group_state(hwnd, keep))
+    _contact_sync_debug(
+        account_id_hint, stage="contacts_scroll_head", mode=result["mode"], rounds=result["rounds"],
+        head_visible=result["head_visible"], ready=result["ready"], reopened=result["reopened"],
+    )
+    return result
 
 
 def _open_contacts_sublist(hwnd: int, account_id_hint: str = "") -> bool:

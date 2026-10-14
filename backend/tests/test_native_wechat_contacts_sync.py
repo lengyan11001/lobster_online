@@ -1722,3 +1722,70 @@ def test_contact_sync_aborts_when_the_contacts_entry_cannot_be_opened(monkeypatc
     assert "打不开" in str(info.value)
     assert any(item.get("stage") == "sync_aborted" and item.get("reason") == "contacts_entry_unavailable"
                for item in stages)
+
+
+# ---------------------------------------------------------------- 2026-10-14
+# 用户反馈（诊断包 diag_20261014100507_32392721）：「滑着的时候还会自己收起来联系人，然后就完全乱的」。
+# 老 _contacts_scroll_to_head 靠"点分组标题两下（收起+展开）"回档顶，第二下没点中就把档留在收起状态。
+
+
+def _fake_contacts_head_env(monkeypatch, *, expanded, ready_after_click=True):
+    state = {"expanded": bool(expanded)}
+    clicks = []
+    wheels = []
+
+    class FakeList:
+        def SetFocus(self):
+            pass
+
+        def WheelUp(self, *, wheelTimes):
+            wheels.append(wheelTimes)
+
+    fake_auto = types.ModuleType("uiautomation")
+    fake_auto.ControlFromHandle = lambda hwnd: object()
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_auto)
+    monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda root: FakeList())
+    monkeypatch.setattr(engine, "_uia_primary_contact_list", lambda root: FakeList())
+    monkeypatch.setattr(engine, "_uia_visible_contact_cell_names", lambda lst: ["A", "B"])
+    monkeypatch.setattr(engine, "_contact_visible_fingerprint", lambda names: "same-fingerprint")
+    monkeypatch.setattr(engine, "_contacts_group_state", lambda hwnd, prefix: state["expanded"])
+    monkeypatch.setattr(engine, "_contacts_entry_ready", lambda hwnd: state["expanded"])
+
+    def click_group_row(hwnd, prefix, **kwargs):
+        clicks.append((prefix, kwargs))
+        if ready_after_click:
+            state["expanded"] = True
+        return prefix
+
+    monkeypatch.setattr(engine, "_contacts_click_group_row", click_group_row)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
+    stages = []
+    monkeypatch.setattr(engine, "_contact_sync_debug", lambda account_id, **fields: stages.append(fields))
+    return state, clicks, wheels, stages
+
+
+def test_scroll_to_head_uses_the_wheel_only_and_never_collapses_contacts(monkeypatch):
+    """已经在「联系人」档里：回档顶只能用滚轮，绝不能点分组标题（点一下就把档收起来了）。"""
+    state, clicks, wheels, stages = _fake_contacts_head_env(monkeypatch, expanded=True)
+
+    result = engine._contacts_scroll_to_head(1234, None, "acct")
+
+    assert wheels, "必须用滚轮往上滚"
+    assert clicks == [], "已经在联系人档里时不许点分组标题"
+    assert state["expanded"] is True
+    assert result["ready"] is True
+    assert result["mode"] == "wheel_up"
+    assert any(item.get("stage") == "contacts_scroll_head" and item.get("mode") == "wheel_up" for item in stages)
+
+
+def test_scroll_to_head_reopens_contacts_if_something_collapsed_it(monkeypatch):
+    """万一档被别的东西收起了：用带校验的点击重新展开，而不是把列表留在分组总览。"""
+    state, clicks, _wheels, _stages = _fake_contacts_head_env(monkeypatch, expanded=False)
+
+    result = engine._contacts_scroll_to_head(1234, None, "acct")
+
+    assert clicks, "档被收起了就必须重新展开"
+    assert clicks[0][1].get("expect_open") is True, "重新展开必须带校验"
+    assert state["expanded"] is True
+    assert result["reopened"] is True
+    assert result["ready"] is True
