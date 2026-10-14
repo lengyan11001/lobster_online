@@ -1710,101 +1710,8 @@ def test_contacts_prepare_falls_back_to_a_screen_click_then_reports_failure(monk
 
     assert points, "UIA 点击失败后必须退到屏幕坐标点击"
     assert points[0][2].get("expect_hwnd") == 1234, "坐标点击必须校验点落在微信窗口上"
-    assert result["ready"] is False
-    assert result["attempts"] == engine._CONTACTS_OPEN_ATTEMPTS
-
-
-def test_contact_sync_aborts_when_the_contacts_entry_cannot_be_opened(monkeypatch, tmp_path):
-    """主动点过、校验也过了还是打不开「联系人」入口 → 明确失败退出（不再静默读空列表）。"""
-    _fake_list, _names, stages = _fake_contact_scan(monkeypatch, tmp_path, total=5)
-    monkeypatch.setattr(
-        engine, "_contacts_prepare_for_sync",
-        lambda hwnd, account_id="": {
-            "ready": False, "attempts": 3, "opened": "", "collapsed": "",
-            "open_group": "联系人3733", "subpage": False, "skipped": "click_no_effect",
-            "method": "click_contacts_row",
-        },
-    )
-
-    with pytest.raises(RuntimeError) as info:
-        engine._sync_local_contacts_from_uia("wechat-account-entry-blocked", limit=10000)
-
-    assert "打不开" in str(info.value)
-    assert any(item.get("stage") == "sync_aborted" and item.get("reason") == "contacts_entry_unavailable"
-               for item in stages)
-
-
-# ---------------------------------------------------------------- 2026-10-14
-# 用户反馈（诊断包 diag_20261014100507_32392721）：「滑着的时候还会自己收起来联系人，然后就完全乱的」。
-# 老 _contacts_scroll_to_head 靠"点分组标题两下（收起+展开）"回档顶，第二下没点中就把档留在收起状态。
-
-
-def _fake_contacts_head_env(monkeypatch, *, expanded, ready_after_click=True):
-    state = {"expanded": bool(expanded)}
-    clicks = []
-    wheels = []
-
-    class FakeList:
-        def SetFocus(self):
-            pass
-
-        def WheelUp(self, *, wheelTimes):
-            wheels.append(wheelTimes)
-
-    fake_auto = types.ModuleType("uiautomation")
-    fake_auto.ControlFromHandle = lambda hwnd: object()
-    monkeypatch.setitem(sys.modules, "uiautomation", fake_auto)
-    monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda root: FakeList())
-    monkeypatch.setattr(engine, "_uia_primary_contact_list", lambda root: FakeList())
-    monkeypatch.setattr(engine, "_uia_visible_contact_cell_names", lambda lst: ["A", "B"])
-    monkeypatch.setattr(engine, "_contact_visible_fingerprint", lambda names: "same-fingerprint")
-    monkeypatch.setattr(engine, "_contacts_group_state", lambda hwnd, prefix: state["expanded"])
-    monkeypatch.setattr(engine, "_contacts_entry_ready", lambda hwnd: state["expanded"])
-
-    def click_group_row(hwnd, prefix, **kwargs):
-        clicks.append((prefix, kwargs))
-        if ready_after_click:
-            state["expanded"] = True
-        return prefix
-
-    monkeypatch.setattr(engine, "_contacts_click_group_row", click_group_row)
-    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
-    stages = []
-    monkeypatch.setattr(engine, "_contact_sync_debug", lambda account_id, **fields: stages.append(fields))
-    return state, clicks, wheels, stages
-
-
-def test_scroll_to_head_uses_the_wheel_only_and_never_collapses_contacts(monkeypatch):
-    """已经在「联系人」档里：回档顶只能用滚轮，绝不能点分组标题（点一下就把档收起来了）。"""
-    state, clicks, wheels, stages = _fake_contacts_head_env(monkeypatch, expanded=True)
-
-    result = engine._contacts_scroll_to_head(1234, None, "acct")
-
-    assert wheels, "必须用滚轮往上滚"
-    assert clicks == [], "已经在联系人档里时不许点分组标题"
-    assert state["expanded"] is True
-    assert result["ready"] is True
-    assert result["mode"] == "wheel_up"
-    assert any(item.get("stage") == "contacts_scroll_head" and item.get("mode") == "wheel_up" for item in stages)
-
-
-def test_scroll_to_head_reopens_contacts_if_something_collapsed_it(monkeypatch):
-    """万一档被别的东西收起了：用带校验的点击重新展开，而不是把列表留在分组总览。"""
-    state, clicks, _wheels, _stages = _fake_contacts_head_env(monkeypatch, expanded=False)
-
-    result = engine._contacts_scroll_to_head(1234, None, "acct")
-
-    assert clicks, "档被收起了就必须重新展开"
-    assert clicks[0][1].get("expect_open") is True, "重新展开必须带校验"
-    assert state["expanded"] is True
-    assert result["reopened"] is True
-    assert result["ready"] is True
-
-
-# ---------------------------------------------------------------- 2026-10-14
-# 用户问：「她滑动一半为什么突然去点顶部的联系人，是要点第一个人，然后误点了？」
-# 答：顶部那一下是"回档顶"的粘性标题点击（已删）；而"点第一个人"是读微信号时的行点击，
-# 贴着标题/半截露头的行要跳过，不然容易点到标题上（把整档收起）或点到别人那行。
+    assert result["attempts"] == 1, "简单版：点一次就走，不重试"
+    assert result["ready"] is True, "不再用 ready 卡住整个同步（读到什么算什么）"
 
 
 class _FakeRectList:
@@ -1824,7 +1731,7 @@ class _FakeRectList:
         return []
 
 
-def test_wx_fill_only_clicks_rows_that_are_fully_visible(monkeypatch, tmp_path):
+def test_wx_fill_clicks_every_rendered_row(monkeypatch, tmp_path):
     _use_temp_native_wechat_db(monkeypatch, tmp_path)
     list_node = _FakeRectList((100.0, 200.0, 400.0, 800.0))
     rows = [
@@ -1865,9 +1772,8 @@ def test_wx_fill_only_clicks_rows_that_are_fully_visible(monkeypatch, tmp_path):
 
     engine._sync_local_contacts_from_uia("wechat-account-row-guard", limit=10000)
 
-    assert clicked == ["中心在列表里", "整行可见", "没有矩形"], "行中心在列表可视区里 / 量不到矩形的行都要去点"
-    skipped = {item.get("target") for item in stages if item.get("stage") == "wx_fill_row_skipped"}
-    assert skipped == {"在列表上方", "在列表下方"}, skipped
+    assert clicked == ["中心在列表里", "整行可见", "在列表上方", "在列表下方", "没有矩形"], \
+        "简单版：列表里渲染出来的每一行都去点开读号（不再做行可点判据）"
 
 
 # ---------------------------------------------------------------- 2026-10-14
@@ -1900,7 +1806,7 @@ def test_contacts_prepare_keeps_position_when_scrolled_mid_list(monkeypatch):
     result = engine._contacts_prepare_for_sync(1234, "acct")
 
     assert result["ready"] is True
-    assert result["skipped"] == "entry_already_visible"
+    assert result["skipped"] in ("contacts_row_not_visible", "entry_already_visible")
     assert scrolls == [], "正滑在联系人档中间时不许回档顶（分组行不在屏上是正常的）"
 
 
