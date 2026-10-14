@@ -8422,6 +8422,9 @@ def _open_contacts_sublist(hwnd: int, account_id_hint: str = "") -> bool:
 _CONTACT_SYNC_STUCK_RECOVERY_ROUNDS = 3
 _CONTACT_SYNC_STUCK_RESCROLL_ROUNDS = 5
 _CONTACT_SYNC_SCAN_COMPLETE_ROUNDS = 12
+# 连续这么多轮「一屏联系人都读不到」就直接失败退出（2026-10-14 用户反馈：找不到「联系人」入口时
+# 一直在那来回点、也没有失败退出，界面像卡死）。正常扫描时每轮能看到十几行，空屏=微信不在通讯录页。
+_CONTACT_SYNC_EMPTY_SCREEN_LIMIT = 5
 
 
 def _contact_sync_max_rounds(limit: int) -> int:
@@ -10798,17 +10801,30 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         names = [row.get("name") or "" for row in rows_now]
         if not names:
             empty_rounds += 1
-            if empty_rounds <= 3:
-                try:
-                    _ensure_local_contacts_tab(account_id)
-                    root2 = auto.ControlFromHandle(int(hwnd))
-                    contact_list = _uia_guess_contact_list(root2) or _uia_primary_contact_list(root2) or contact_list
-                except Exception:
-                    pass
-                time.sleep(0.5)
-                continue
-        else:
-            empty_rounds = 0
+            _contact_sync_debug(account_id, stage="contacts_empty_round", round=rounds,
+                                empty_rounds=empty_rounds, seen=len(seen))
+            if empty_rounds >= _CONTACT_SYNC_EMPTY_SCREEN_LIMIT:
+                # 连着好几轮一屏联系人都读不到：微信多半不在「通讯录 → 联系人」页（或停在某个人的资料页上）。
+                # 以前这里会一直重试、一直滚到轮数上限，界面看着像卡死；现在明确报错退出，让用户手动摆好页面。
+                _contact_sync_debug(account_id, stage="sync_aborted", reason="empty_screen",
+                                    rounds=rounds, seen=len(seen), empty_rounds=empty_rounds)
+                raise RuntimeError(
+                    "连续 %d 轮都读不到联系人列表：请把微信切到「通讯录 → 联系人」页（不要停在某个联系人的资料页），"
+                    "确认左侧列表里能看到联系人后重试" % empty_rounds
+                )
+            try:
+                _ensure_local_contacts_tab(account_id)
+                if empty_rounds >= 3:
+                    # 第 3 轮起再试一次「收起已展开的分组 + 展开联系人档」，之后交给空屏上限兜底。
+                    _contacts_prepare_for_sync(hwnd, account_id)
+                root2 = auto.ControlFromHandle(int(hwnd))
+                contact_list = _uia_guess_contact_list(root2) or _uia_primary_contact_list(root2) or contact_list
+            except Exception as exc:
+                _contact_sync_debug(account_id, stage="empty_screen_recover_error", round=rounds,
+                                    error=str(exc)[:160])
+            time.sleep(0.6)
+            continue
+        empty_rounds = 0
         for row_now in rows_now:
             clean = str(row_now.get("name") or "").strip()
             if not clean or clean in skip_names:

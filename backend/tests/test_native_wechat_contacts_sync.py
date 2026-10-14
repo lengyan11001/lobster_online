@@ -1617,3 +1617,22 @@ def test_profile_read_waits_until_the_card_shows_the_clicked_contact(monkeypatch
     assert got == "target_wx_77"
     assert persisted == [("目标", "target_wx_77")]
     assert any(s.get("stage") == "wx_fill" for s in stages)
+
+
+# ---------------------------------------------------------------- 2026-10-14
+# 用户反馈（诊断包 diag_20261014094135_0b719d8a）：同步通讯录时"一直找不到联系人入口、来回点，
+# 又没有失败异常退出的逻辑"。日志里是 visible=0 的空屏一路 stuck+rescroll 到上限。
+
+
+def test_contact_sync_aborts_when_the_contacts_screen_stays_empty(monkeypatch, tmp_path):
+    """一屏联系人都读不到（微信不在「通讯录 → 联系人」页）：有限次重试后明确失败，不再一直转。"""
+    _fake_list, _names, stages = _fake_contact_scan(monkeypatch, tmp_path, total=0)
+
+    with pytest.raises(RuntimeError) as info:
+        engine._sync_local_contacts_from_uia("wechat-account-empty-screen", limit=10000)
+
+    assert "读不到联系人列表" in str(info.value)
+    rounds = [item.get("round") for item in stages if item.get("stage") == "contacts_empty_round"]
+    assert rounds, stages
+    assert max(rounds) == engine._CONTACT_SYNC_EMPTY_SCREEN_LIMIT, rounds
+    assert any(item.get("stage") == "sync_aborted" and item.get("reason") == "empty_screen" for item in stages)
