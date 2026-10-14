@@ -40,6 +40,9 @@ _LOG_CANDIDATES = [
     "logs/native_wechat_diagnostics.jsonl.1",
     "logs/native_wechat_auto_reply.jsonl",
     "logs/native_wechat_auto_reply.jsonl.1",
+    # 通讯录同步现场：停在第几轮、为什么停（stuck / limit / scan_complete）只写在这份日志里，
+    # 不带进包就会出现"停在几百条"却无从判断的情况（2026-10-14）。
+    "logs/native_wechat_contact_sync.jsonl",
     # 个人 WhatsApp 接管（桌面版 UIA）：诊断包里带上，才能看清"没识别到窗口"到底是哪种情况
     "logs/native_whatsapp.jsonl",
     "logs/native_whatsapp.jsonl.1",
@@ -170,6 +173,58 @@ def _external_log_candidates() -> list[tuple[str, Path]]:
     return candidates
 
 
+def _wechat_contact_sync_summary() -> dict:
+    """通讯录同步现场：库内条数 + 最后一次同步的停止原因，直接写进诊断包摘要。"""
+    info: dict[str, Any] = {}
+    db_path = (_BASE / "data" / "native_wechat_engine.db").resolve()
+    info["db_path"] = str(db_path)
+    if db_path.is_file():
+        try:
+            import sqlite3
+
+            conn = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True, timeout=1.0)
+            try:
+                rows = conn.execute(
+                    "select account_id, count(*) n, max(updated_at) last_at "
+                    "from wechat_contacts group by account_id"
+                ).fetchall()
+            finally:
+                conn.close()
+            info["contacts"] = [
+                {"account_id": str(r[0]), "count": int(r[1]), "last_written_at": str(r[2] or "")}
+                for r in rows
+            ]
+            info["contacts_total"] = sum(int(r[1]) for r in rows)
+        except Exception as exc:  # noqa: BLE001 - 诊断包永远要能打出来
+            info["contacts_error"] = str(exc)[:200]
+
+    log_path = (_BASE / "logs" / "native_wechat_contact_sync.jsonl").resolve()
+    records: list[dict] = []
+    if log_path.is_file():
+        try:
+            text, size, truncated = _read_tail_text(log_path, _DIAGNOSTIC_TAIL_BYTES)
+            info["log_size"] = size
+            info["log_truncated"] = truncated
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or line.startswith("[tail only:"):
+                    continue
+                try:
+                    parsed = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(parsed, dict):
+                    records.append(parsed)
+        except OSError as exc:
+            info["log_error"] = str(exc)[:200]
+    info["records"] = len(records)
+    info["last_stage"] = str((records[-1] if records else {}).get("stage") or "")
+    finished = [r for r in records if str(r.get("stage")) == "sync_finished"]
+    info["last_sync_finished"] = finished[-1] if finished else {}
+    info["tail_stages"] = records[-30:]
+    return info
+
+
 def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
     created_at = _utc_iso()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -284,6 +339,17 @@ def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
                 )
             except OSError as e:
                 summary["files"].append({"path": "openclaw/openclaw.json", "error": str(e)})
+
+        contact_sync: dict
+        try:
+            contact_sync = _wechat_contact_sync_summary()
+        except Exception as exc:  # noqa: BLE001
+            contact_sync = {"error": str(exc)[:200]}
+        zf.writestr(
+            "wechat_contact_sync_summary.json",
+            json.dumps(contact_sync, ensure_ascii=False, indent=2) + "\n",
+        )
+        summary["wechat_contact_sync"] = contact_sync
 
         zf.writestr(
             "diagnostic_summary.json",

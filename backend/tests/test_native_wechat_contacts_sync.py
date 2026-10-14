@@ -1199,3 +1199,133 @@ def test_clear_contacts_button_and_endpoint_are_wired():
     assert html.index('id="nativeWechatSyncContactsBtn"') < html.index('id="nativeWechatClearContactsBtn"')
     assert "'/api/native-wechat/contacts/clear'" in javascript
     assert "$('nativeWechatClearContactsBtn')" in javascript
+
+
+# ---------------------------------------------------------------- 2026-10-14
+# 线上反馈「通讯录加到 500 多条就不加了」：列表在某一屏推不动时，旧实现连续 3 轮就收摊
+# （还标记 partial），后面的联系人永远进不来。下面两个用例把「抽风几轮后还能继续」和
+# 「真的到底了要报扫到底」都钉住。
+
+
+def _fake_contact_scan(monkeypatch, tmp_path, *, total, stall_from=None, stall_calls=0):
+    """搭一个假的「通讯录」列表：滚一次推进一屏；可选在某处连续若干次推不动。"""
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    names = [f"联系人{index:04d}" for index in range(total)]
+    page = 13
+
+    class FakeContactList:
+        def __init__(self):
+            self.offset = 0
+            self.stall_left = stall_calls
+            self.ClassName = "mmui::StickyHeaderRecyclerListView"
+            self.Name = "通讯录"
+
+        def window(self):
+            if self.offset >= total:
+                return names[max(0, total - page):]
+            return names[self.offset:self.offset + page]
+
+        def SetFocus(self):
+            pass
+
+        def WheelDown(self, *, wheelTimes):
+            if stall_from is not None and self.stall_left > 0 and self.offset >= stall_from:
+                self.stall_left -= 1
+                return
+            self.offset = min(self.offset + 11, total)
+
+        def WheelUp(self, *, wheelTimes):
+            self.offset = max(0, self.offset - 11 * int(wheelTimes or 1))
+
+    fake_list = FakeContactList()
+
+    class FakeRoot:
+        def GetChildren(self):
+            return []
+
+    fake_auto = types.ModuleType("uiautomation")
+    fake_auto.ControlFromHandle = lambda hwnd: FakeRoot()
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_auto)
+    monkeypatch.setattr(engine, "_module_available", lambda name: True)
+    monkeypatch.setattr(engine, "_ensure_local_contacts_tab", lambda _account_id: 4242)
+    monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda _root: fake_list)
+    monkeypatch.setattr(engine, "_uia_primary_contact_list", lambda _root: fake_list)
+    monkeypatch.setattr(
+        engine,
+        "_uia_visible_contact_cell_rows",
+        lambda node: [{"name": name, "node": name} for name in node.window()],
+    )
+    monkeypatch.setattr(engine, "_uia_visible_contact_cell_names", lambda node: list(node.window()))
+
+    def reset_to_head(_hwnd, contact_list=None, account_id_hint=""):
+        if contact_list is not None:
+            contact_list.offset = 0
+        return {}
+
+    monkeypatch.setattr(engine, "_contacts_prepare_for_sync", lambda hwnd, account_id="": {
+        "skipped": True, "collapsed": "", "opened": "",
+    })
+    monkeypatch.setattr(engine, "_contacts_scroll_to_head", reset_to_head)
+    monkeypatch.setattr(engine, "_contact_wx_fill_budget", lambda: 0)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
+
+    stages = []
+    monkeypatch.setattr(
+        engine, "_contact_sync_debug",
+        lambda account_id, **fields: stages.append(fields),
+    )
+    return fake_list, names, stages
+
+
+def test_contact_sync_survives_a_transient_scroll_stall(monkeypatch, tmp_path):
+    total = 1000
+    _fake_contact_scan(monkeypatch, tmp_path, total=total, stall_from=520, stall_calls=16)
+
+    result = engine._sync_local_contacts_from_uia("wechat-account-stall", limit=10000)
+
+    assert result["count"] == total, f"列表抽风后应该接着加完，实际只加到 {result['count']} 条"
+    assert result["scroll_completed"] is True
+    assert result["partial"] is False
+
+
+def test_contact_sync_reports_complete_when_list_reaches_the_end(monkeypatch, tmp_path):
+    total = 600
+    _fake_contact_scan(monkeypatch, tmp_path, total=total)
+
+    result = engine._sync_local_contacts_from_uia("wechat-account-tail", limit=10000)
+
+    assert result["count"] == total
+    assert result["scroll_completed"] is True, result
+    assert result["partial"] is False, result
+
+
+def test_diagnostic_bundle_carries_the_contact_sync_log(monkeypatch, tmp_path):
+    import io as _io
+    import json as _json
+    import zipfile
+
+    from backend.app.api import logs_api
+
+    monkeypatch.setattr(logs_api, "_BASE", tmp_path)
+    monkeypatch.setattr(logs_api, "build_openclaw_status_snapshot", lambda: {"stub": True})
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "native_wechat_contact_sync.jsonl").write_text(
+        _json.dumps({"ts": "2026-10-14T16:19:00", "account_id": "pc-wechat-default",
+                     "stage": "stuck_rounds", "round": 51, "stuck": 3, "seen": 512},
+                    ensure_ascii=False) + "\n"
+        + _json.dumps({"ts": "2026-10-14T16:19:01", "account_id": "pc-wechat-default",
+                       "stage": "sync_finished", "rounds": 51, "seen": 512,
+                       "scroll_completed": False, "limit_reached": False,
+                       "stopped": "stuck_or_empty"}, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    _name, data, summary = logs_api._build_diagnostic_bundle()
+
+    with zipfile.ZipFile(_io.BytesIO(data)) as bundle:
+        bundled = bundle.namelist()
+    assert "logs/native_wechat_contact_sync.jsonl" in bundled
+    assert "wechat_contact_sync_summary.json" in bundled
+    sync = summary["wechat_contact_sync"]
+    assert sync["last_stage"] == "sync_finished"
+    assert sync["last_sync_finished"]["stopped"] == "stuck_or_empty"

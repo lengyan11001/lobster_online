@@ -8402,6 +8402,14 @@ def _open_contacts_sublist(hwnd: int, account_id_hint: str = "") -> bool:
     return False
 
 
+# 通讯录扫描「滚不动」时的容忍度（2026-10-14 用户反馈：不要加到几百条就不加了）。
+# 命中这三个阈值之前，同步绝不收摊；只有连续 _CONTACT_SYNC_SCAN_COMPLETE_ROUNDS 轮
+# 真的推不动（期间复原 + 重滚都试过）才判定「已经扫到底」。
+_CONTACT_SYNC_STUCK_RECOVERY_ROUNDS = 3
+_CONTACT_SYNC_STUCK_RESCROLL_ROUNDS = 5
+_CONTACT_SYNC_SCAN_COMPLETE_ROUNDS = 12
+
+
 def _contact_sync_max_rounds(limit: int) -> int:
     """扫描轮数上限 —— **不截断**：给到远超任何真实联系人数（2026-10-14 用户要求）。
 
@@ -10841,7 +10849,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         signature = "|".join(names[-16:])
         stable_rounds = stable_rounds + 1 if len(seen) == before and signature == last_signature else 0
         last_signature = signature
-        if stable_rounds >= 6:
+        if stable_rounds >= _CONTACT_SYNC_SCAN_COMPLETE_ROUNDS:
             completed = True
             break
         before_fp = _contact_visible_fingerprint(names)
@@ -10887,7 +10895,32 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         if not moved:
             stuck_rounds += 1
             _contact_sync_debug(account_id, stage="stuck_rounds", round=rounds, stuck=stuck_rounds, seen=len(seen))
-            if stuck_rounds >= 3:
+            if stuck_rounds >= _CONTACT_SYNC_SCAN_COMPLETE_ROUNDS:
+                # 连着这么多轮列表真的不动（期间复原、重滚都试过）= 已经扫到底了。
+                completed = True
+                break
+            if stuck_rounds >= _CONTACT_SYNC_STUCK_RESCROLL_ROUNDS:
+                # 一次抽风（资料卡正在关、微信忙、粘性标题挡了一下）不该让整轮同步收摊：
+                # 重新取一次控件、拉焦点、用更大步进再推一次，再多等一会儿。
+                try:
+                    fresh_root = auto.ControlFromHandle(int(hwnd))
+                    fresh_list = _uia_guess_contact_list(fresh_root) or _uia_primary_contact_list(fresh_root)
+                    if fresh_list is not None:
+                        contact_list = fresh_list
+                    try:
+                        contact_list.SetFocus()
+                    except Exception:
+                        pass
+                    contact_list.WheelDown(wheelTimes=wheel_step * 3)
+                except Exception as exc:
+                    _contact_sync_debug(account_id, stage="stuck_rescroll_error", round=rounds,
+                                        error=str(exc)[:160])
+                else:
+                    _contact_sync_debug(account_id, stage="stuck_rescroll", round=rounds,
+                                        stuck=stuck_rounds, seen=len(seen))
+                time.sleep(1.0)
+                continue
+            if stuck_rounds >= _CONTACT_SYNC_STUCK_RECOVERY_ROUNDS:
                 # 一级页里若有分组被展开（新的朋友/群聊/…），列表结构会变、滚不动；
                 # 先收起它们、确认「联系人」仍展开，再接着同步，而不是直接停（2026-10-14）。
                 recovered = False
@@ -10904,7 +10937,6 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                         recovery_budget -= 1
                         stuck_rounds = 0
                         continue
-                break
         else:
             stuck_rounds = 0
 
