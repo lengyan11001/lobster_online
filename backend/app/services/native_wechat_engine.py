@@ -8038,6 +8038,61 @@ def _contact_sync_debug(account_id: str, **fields: Any) -> None:
         pass
 
 
+_CONTACT_SEARCH_OPEN_DRIVERS = {"native_wechat_auto_reply", "native_wechat_verified_send"}
+
+# 会话身份/群聊护栏类失败：重试同一条路必然复现，任务层不再原地重试（2026-10-14）。
+_SEND_CHAT_IDENTITY_BLOCK_MARKERS = (
+    "不是私聊",
+    "疑似群聊",
+    "chat_identity_mismatch",
+    "chat_identity_unreadable",
+    "contact search opened a different chat",
+    "与目标不一致",
+)
+
+
+def _send_error_is_chat_identity_block(message: str) -> bool:
+    text = str(message or "")
+    return any(marker in text for marker in _SEND_CHAT_IDENTITY_BLOCK_MARKERS)
+
+
+def _send_path_debug(account_id: str, **fields: Any) -> None:
+    """把「搜索 → 点哪条 → 打开的是谁 → 发/被拦」写成一行 logs/native_wechat_send.jsonl。
+
+    2026-10-14 线上：批量发送搜到结果后没点「联系人」分组第一条，落到同名群聊被护栏拦住，
+    又在原地重试同一条路 —— 这份日志用来直接看到每一步的真实结果。
+    """
+    try:
+        import json as _json
+        import time as _time
+
+        out = LOG_DIR / "native_wechat_send.jsonl"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        row: Dict[str, Any] = {"ts": _time.strftime("%Y-%m-%dT%H:%M:%S"), "account_id": account_id}
+        for key, value in fields.items():
+            if isinstance(value, (int, float, bool, type(None))):
+                row[key] = value
+                continue
+            if isinstance(value, (list, dict, tuple)):
+                try:
+                    dumped = _json.dumps(value, ensure_ascii=False, default=str)
+                except Exception:
+                    dumped = ""
+                if dumped and len(dumped) <= 8000:
+                    try:
+                        row[key] = _json.loads(dumped)
+                        continue
+                    except Exception:
+                        pass
+                row[key] = (dumped or str(value))[:8000]
+                continue
+            row[key] = str(value)[:600]
+        with out.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def _open_contacts_sublist(hwnd: int, account_id_hint: str = "") -> bool:
     """点开通讯录里的「联系人」二级入口（人在这一层，一级页只有分组）。"""
     if not hwnd or not _module_available("uiautomation"):
@@ -17987,12 +18042,21 @@ def _send_text_local_slow_once(
     hwnd = int(item.get("hwnd") or 0)
     _focus_local_wechat(hwnd)
     driver_name = str(raw_meta.get("driver") or "").strip()
-    use_contact_search = driver_name == "native_wechat_auto_reply"
+    # 批量/手动发送（_send_text_local → driver=native_wechat_verified_send）以前把
+    # 「打开会话」交给 wxauto4 ChatWith(exact=True)，由它自己挑搜索结果：按微信号搜时
+    # 同名群聊会被选中 → 护栏判定 chat_type=group 拦住 → 同一条路重试再拦一次
+    # （2026-10-14 线上：eiaiyuangong / xingexiaohao123 一直发不出去）。现在两条发送
+    # 链路统一走接管那条已验证链路：搜微信号 → 只点「联系人」分组第一条 → 打开后校验。
+    use_contact_search = driver_name in _CONTACT_SEARCH_OPEN_DRIVERS
     # 读不到微信号的候选人用昵称身份发送：执行阶段已经按名字搜到并核对过当前会话，
     # 这里只是复用那个会话；名字对不上时 _verify_local_send_chat 会直接拦住。
     nickname_identity = str(raw_meta.get("identity_mode") or "").strip() == "nickname"
-    if use_contact_search and not nickname_identity and not _looks_like_wechat_id(peer_id):
+    peer_looks_like_wx_id = _looks_like_wechat_id(peer_id)
+    if driver_name == "native_wechat_auto_reply" and not nickname_identity and not peer_looks_like_wx_id:
         raise RuntimeError("auto reply requires the captured WeChat ID; nickname search is disabled")
+    if use_contact_search and not nickname_identity and not peer_looks_like_wx_id:
+        # 批量发送的目标可能本来就是昵称：按名字搜索，但依旧只认「联系人」分组。
+        nickname_identity = True
     # Reusing the chat the execute stage opened is the fast path, but it is only
     # safe while that chat is still the intended contact.  Read the visible
     # chat title (same namespace as the caller's display name) and fall back to
@@ -18037,12 +18101,23 @@ def _send_text_local_slow_once(
                     open_moments=False,
                     **(
                         {
-                            "fallback_display_name": str(raw_meta.get("display_name") or ""),
+                            "fallback_display_name": str(
+                                raw_meta.get("display_name") or peer_id or ""
+                            ),
                             "name_only": True,
                         }
                         if nickname_identity
                         else {}
                     ),
+                )
+                _send_path_debug(
+                    account_id,
+                    stage="open_target_chat",
+                    driver=driver_name or "",
+                    target=str(peer_id or ""),
+                    open_mode="contact_search",
+                    lookup_mode="display_name" if nickname_identity else "wechat_id",
+                    steps=search_steps,
                 )
                 log_send_event(
                     "reply_chat_search_verified",
@@ -18051,8 +18126,22 @@ def _send_text_local_slow_once(
                     steps=search_steps,
                 )
             else:
+                _send_path_debug(
+                    account_id,
+                    stage="open_target_chat",
+                    driver=driver_name or "",
+                    target=str(peer_id or ""),
+                    open_mode="wxauto4_chat_with",
+                )
                 wx.ChatWith(peer_id, exact=True, force=False)
         except Exception as exc:
+            _send_path_debug(
+                account_id,
+                stage="open_target_chat_failed",
+                driver=driver_name or "",
+                target=str(peer_id or ""),
+                error=str(exc)[:700],
+            )
             log_send_event(
                 "reply_chat_open_failed",
                 click_target=str(peer_id or ""),
@@ -18082,6 +18171,14 @@ def _send_text_local_slow_once(
         expected_display_name=expected_display_name,
     )
     _focus_local_wechat(hwnd)
+    _send_path_debug(
+        account_id,
+        stage="verify_target_chat",
+        driver=driver_name or "",
+        target=str(peer_id or ""),
+        strict_private=bool(strict_private),
+        verified_chat=verified_chat,
+    )
     log_send_event(
         "reply_chat_verified",
         click_target=str(peer_id or ""),
@@ -21152,6 +21249,20 @@ async def _process_send_task(task: Dict[str, Any]) -> None:
             except Exception as exc:
                 err = str(exc)
                 if attempt < int(strategy["retry_max"]):
+                    if _send_error_is_chat_identity_block(err):
+                        # 会话身份/群聊护栏类失败：重试同一条路必然复现（2026-10-14：
+                        # 打开会话落到同名群聊 → 护栏拦住 → retry_max 次原地重试）。
+                        # 立即结束这个目标的重试，把真实原因留在任务错误信息里。
+                        _send_path_debug(
+                            account_id,
+                            stage="skip_identical_retry",
+                            driver="native_wechat_verified_send",
+                            target=str(target or ""),
+                            attempt=attempt + 1,
+                            retry_max=int(strategy["retry_max"]),
+                            error=err[:700],
+                        )
+                        break
                     await _sleep(float(strategy["retry_sleep"]))
         if ok:
             success += 1
