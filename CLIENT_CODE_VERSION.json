@@ -1,7 +1,7 @@
 {
-  "version": "2.0.137",
-  "build": 432,
-  "applied_at": "2026-10-15T00:10:38+08:00",
-  "note": "2.0.137: content-record 加入分组 button now reaches clients - the assets view was loading publish.js with a cache buster (20261009) older than the commit (2026-10-11) that added the button, so any client that had that URL cached kept the old script; the buster is now 20261014-content-group-v12. Contacts sync: only rows inside the friends-list rect are used (contacts_list_mismatch aborts instead of clicking another window), rows hidden under the sticky header are refused, small 2-row nudges, zero ESC, row clicks verified against the window under the cursor, refuse to start when the list viewport is under 300px, checkpoint every contact immediately, faster card confirmation (~2-3s per contact) and after a collapse the list scrolls back to the last processed contact and continues from there (contacts_resume_anchor) instead of restarting at the head.",
-  "bundle_sha256": "40e78fa0489ccc09cb5d59992a48e238b31d6bf3f42b11859a04cc2f3192955e"
+  "version": "2.0.138",
+  "build": 433,
+  "applied_at": "2026-10-15T00:30:48+08:00",
+  "note": "2.0.138: contacts sync data-safety + fewer collapses. (1) the window-scan fallback is OFF: it wrote the previous contact's ID onto another contact (阿丹 x397823589 landed on A第三方房屋质检), now only IDs read from a confirmed profile card count - unreadable means empty, never wrong. (2) the sticky-header band widened 44 -> 60px so rows clipped under the 联系人 header are refused instead of collapsing the group. Keeps 2.0.137: content-record 加入分组 cache buster, window/list binding, per-contact checkpoint, resume anchor, zero ESC, guarded row clicks, window-too-small refusal.",
+  "bundle_sha256": "39580d42224164c4c481018d1f3de1d6d91a467806ee4950b9f626642a16eb89"
 }
