@@ -1,7 +1,7 @@
 {
-  "version": "2.0.118",
-  "build": 413,
-  "applied_at": "2026-10-14T00:28:14+08:00",
-  "note": "2.0.118：紧急修复启动崩溃 —— 撤掉 build 412 里对 pywebview CoreWebView2CreationProperties 的 Python 代理（它让 WebView2 初始化直接崩、所有客户端起不来）；保留底板同色 + 桌面壳禁用 backdrop-filter。另：启动期不再联网补 ffmpeg/ffprobe（install*.bat 加跳过开关），界面取证 401 修复 + 启动噪声过滤。",
-  "bundle_sha256": "30dd6f5677668620634ca0503f0fd7691d8a0464e0c4f580cfc73da90fd336c9"
+  "version": "2.0.119",
+  "build": 414,
+  "applied_at": "2026-10-14T14:26:29+08:00",
+  "note": "2.0.119：微信批量发送/接管发消息发不出去（一直在搜、落到同名群聊被护栏拦住）——打开目标会话改走接管那条已验证链路（搜微信号 → 只点「联系人」分组第一条 → 打开后校验当前会话），不再交给 wxauto4 ChatWith 自己挑结果；新增 logs/native_wechat_send.jsonl 逐步日志（搜了什么 / 点了哪条 / 打开的是谁 / 被拦原因）；身份/群聊类失败不再原地重试同一条路。",
+  "bundle_sha256": "65f234956260c358095c5e45172e224a0a2e6b9cb7c7acc8d7b08cf82139cda0"
 }
