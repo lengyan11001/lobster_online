@@ -167,7 +167,7 @@ window.registerLobsterView('alibaba-inquiries', {
 
   window.registerLobsterView('assets', {
     html: '/static/views/assets.html?v=20260806-content-record-categories',
-    scripts: '/static/js/publish.js?v=20261009-picker-clean-v11'
+    scripts: '/static/js/publish.js?v=20261014-content-group-v12'
   });
 
   window.registerLobsterView('scheduled-tasks', {
