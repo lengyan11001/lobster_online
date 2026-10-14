@@ -8095,19 +8095,18 @@ def _send_path_debug(account_id: str, **fields: Any) -> None:
 
 _CONTACTS_GROUP_KEEP_OPEN = ("联系人",)
 _CONTACTS_GROUP_ROW_CLASS = "mmui::ContactsCellGroupView"
-# 展开后的“内容行”：联系人档是 ContactsCellItemView；新的朋友档是 XTableCell（好友申请）。
+# 打开后的“内容行”：联系人档是 ContactsCellItemView；新的朋友档是 XTableCell（好友申请）。
 _CONTACTS_OPEN_CONTENT_CLASSES = ("mmui::ContactsCellItemView", "mmui::XTableCell")
 
 
 def _contacts_row_scan(hwnd: int) -> Dict[str, Any]:
-    """按屏幕顺序扫出通讯录列表里的行（实测微信 4.x / mmui 结构）。
+    """按屏幕顺序扫出当前可见的行，判断“哪一档是打开的”（不做任何点击/滚动）。
 
-    - 分组入口行：``mmui::ContactsCellGroupView``（新的朋友 / 群聊 / 公众号 / … / 联系人739）
-    - 打开后的内容行：``mmui::ContactsCellItemView``（联系人）或 ``mmui::XTableCell``（新的朋友里的好友申请）
-    展开状态只能按行顺序判断：**某分组行的下一行不是分组行 → 这一档是“打开”的**
-    （微信同一时刻只渲染一个打开的档位；打开别的档会把它自己收起来、把人收回去）。
+    分组行 = ``mmui::ContactsCellGroupView``；内容行 = ``ContactsCellItemView``（联系人）
+    或 ``XTableCell``（新的朋友里的好友申请）。微信同一时刻只渲染一个打开的档，
+    所以：**某分组行的下一行是内容行 → 这一档是打开的**。
     """
-    empty: Dict[str, Any] = {"entries": [], "items": [], "others": [], "open_group": "", "subpage": False, "rows": 0}
+    empty: Dict[str, Any] = {"entries": [], "items": [], "others": [], "open_group": "", "subpage": False}
     if not hwnd or not _module_available("uiautomation"):
         return empty
     import uiautomation as auto  # type: ignore
@@ -8124,7 +8123,7 @@ def _contacts_row_scan(hwnd: int) -> Dict[str, Any]:
         rect = _uia_rect(node)
         if rect is None:
             continue
-        if cls == _CONTACTS_GROUP_ROW_CLASS or _CONTACTS_GROUP_ROW_CLASS in cls:
+        if cls == _CONTACTS_GROUP_ROW_CLASS:
             kind = "group"
         elif cls in _CONTACTS_OPEN_CONTENT_CLASSES:
             kind = "content"
@@ -8137,10 +8136,7 @@ def _contacts_row_scan(hwnd: int) -> Dict[str, Any]:
     others: List[str] = []
     for index, row in enumerate(rows):
         if row["kind"] == "content":
-            if row["cls"] == "mmui::XTableCell":
-                others.append(str(row["name"] or ""))
-            else:
-                items.append(str(row["name"] or ""))
+            (others if row["cls"] == "mmui::XTableCell" else items).append(str(row["name"] or ""))
             continue
         nxt = rows[index + 1] if index + 1 < len(rows) else None
         entries.append({
@@ -8148,7 +8144,6 @@ def _contacts_row_scan(hwnd: int) -> Dict[str, Any]:
             "name": str(row["name"] or ""),
             "top": row["top"],
             "expanded": bool(nxt is not None and nxt["kind"] == "content"),
-            "next_name": str((nxt or {}).get("name") or ""),
         })
     open_group = next((entry["name"] for entry in entries if entry["expanded"]), "")
     return {
@@ -8157,183 +8152,100 @@ def _contacts_row_scan(hwnd: int) -> Dict[str, Any]:
         "others": others,
         "open_group": open_group,
         "subpage": bool(open_group) and not open_group.startswith(_CONTACTS_GROUP_KEEP_OPEN),
-        "rows": len(rows),
     }
 
 
-def _contacts_entries_digest(entries: Any) -> List[Dict[str, Any]]:
-    return [
-        {"name": str(item.get("name") or ""), "expanded": bool(item.get("expanded")), "next": str(item.get("next_name") or "")}
-        for item in (entries or [])
-    ]
-
-
-def _contacts_rows_digest(scan: Any) -> Dict[str, Any]:
-    scan = scan or {}
-    return {
-        "open_group": str(scan.get("open_group") or ""),
-        "subpage": bool(scan.get("subpage")),
-        "items": len(scan.get("items") or []),
-        "others": len(scan.get("others") or []),
-        "rows": int(scan.get("rows") or 0),
-        "entries": _contacts_entries_digest(scan.get("entries")),
-    }
-
-
-def _contacts_click_row(hwnd: int, name_prefix: str, account_id_hint: str = "", *, stage: str = "") -> bool:
+def _contacts_click_group_row(hwnd: int, name_prefix: str) -> str:
+    """点某个分组行（按其名字前缀找）；找不到返回空串。只点一次，不重试。"""
     scan = _contacts_row_scan(hwnd)
     target = next(
         (entry for entry in (scan.get("entries") or []) if str(entry.get("name") or "").startswith(str(name_prefix or ""))),
         None,
     )
     if target is None:
-        return False
+        return ""
     try:
         _click_uia_node(target["node"])
-    except Exception as exc:
-        _contact_sync_debug(account_id_hint, stage="contacts_click_error", name=target.get("name"), error=str(exc)[:160])
-        return False
-    _contact_sync_debug(account_id_hint, stage=stage or "contacts_click_row", name=target.get("name"))
-    return True
+    except Exception:
+        return ""
+    return str(target.get("name") or "")
 
 
-def _contacts_reset_to_root(hwnd: int, account_id_hint: str = "", *, max_attempts: int = 3) -> Dict[str, Any]:
-    """把通讯录拉回一级页（新的朋友/群聊/… 子页上点它的分组标题即可收起 —— 真机实测）。
+def _contacts_prepare_for_sync(hwnd: int, account_id_hint: str = "") -> Dict[str, Any]:
+    """进通讯录后只做两件事（各最多点一次，绝不反复点、不额外滚动）：
 
-    注意：切到「微信」再回「通讯录」**不会**复位子页（2026-10-14 真机验证），
-    接管「同意好友」那条流程收尾也是切回微信会话页（_ensure_local_chat_tab），
-    但在通讯录里要复位，只能点标题本身。
+      1) 打开的若是别的档（新的朋友 / 群聊 / 公众号 / 服务号 / 企业微信联系人 / 我的企业），
+         点它的分组标题收起一次；
+      2) 「联系人」档没展开时，点它一次。
+
+    之后同步就照常滚读联系人，不再插别的动作（2026-10-14 反馈：不要多余操作）。
     """
-    if not hwnd or not _module_available("uiautomation"):
-        return {"subpage": False, "attempts": 0}
-    attempts = max(1, int(max_attempts))
-    for attempt in range(1, attempts + 1):
-        scan = _contacts_row_scan(hwnd)
-        if not (scan.get("entries") or []):
-            # 子页被滚到中间时分组标题不在视野里：先滚回顶部，标题才会重新渲染出来。
-            try:
-                _scroll_contact_list_to_top(hwnd)
-            except Exception:
-                pass
-            time.sleep(0.4)
-            scan = _contacts_row_scan(hwnd)
-        if not (scan.get("entries") or []):
-            try:
-                _ensure_local_tab(hwnd, "通讯录")
-            except Exception:
-                pass
-            time.sleep(0.9)
-            try:
-                _scroll_contact_list_to_top(hwnd)
-            except Exception:
-                pass
-            scan = _contacts_row_scan(hwnd)
-            if not (scan.get("entries") or []):
-                return {"subpage": False, "attempts": attempt, "state": "no_rows"}
-        if not scan.get("subpage"):
-            return {"subpage": False, "attempts": attempt, "open_group": scan.get("open_group"),
-                    "items": len(scan.get("items") or []), "others": len(scan.get("others") or [])}
-        open_group = str(scan.get("open_group") or "")
-        clicked = _contacts_click_row(hwnd, open_group, account_id_hint, stage="contacts_reset_click_group")
-        _contact_sync_debug(account_id_hint, stage="contacts_reset_to_root", attempt=attempt,
-                            open_group=open_group, clicked=clicked)
-        if not clicked:
-            break
-        time.sleep(0.9)
-    scan = _contacts_row_scan(hwnd)
-    return {"subpage": bool(scan.get("subpage")), "attempts": attempts, "open_group": scan.get("open_group"),
-            "items": len(scan.get("items") or []), "others": len(scan.get("others") or [])}
-
-
-def _collapse_contacts_group_entries(
-    hwnd: int,
-    account_id_hint: str = "",
-    *,
-    keep: Any = _CONTACTS_GROUP_KEEP_OPEN,
-) -> Dict[str, Any]:
-    """收起所有“打开”的分组档，只留「联系人」这一档 —— 那才是要同步的通讯录内容。
-
-    用户手动打开过「新的朋友 / 群聊 / 公众号 / 服务号 / 企业微信联系人 / 我的企业」时，
-    列表里会混进它们的人，同步既读错人也会因为结构变化滚不动；点一次没变化就不再重复点同一行。
-    """
-    result: Dict[str, Any] = {"collapsed": [], "entries": [], "open_group": "", "scans": []}
+    result: Dict[str, Any] = {"collapsed": "", "opened": "", "open_group": "", "subpage": False, "skipped": ""}
     if not hwnd or not _module_available("uiautomation"):
         return result
-    keep_prefixes = tuple(str(item) for item in (keep or ()))
-    for pass_no in range(1, 4):
-        scan = _contacts_row_scan(hwnd)
-        result["scans"].append(_contacts_rows_digest(scan))
-        entries = scan.get("entries") or []
-        if not entries:
-            break
-        pending = [
-            entry for entry in entries
-            if entry.get("expanded") and not str(entry.get("name") or "").startswith(keep_prefixes)
-        ]
-        if not pending:
-            break
-        progressed = False
-        for entry in pending:
-            name = str(entry.get("name") or "")
-            state_before = _contacts_rows_digest(_contacts_row_scan(hwnd))
-            if not _contacts_click_row(hwnd, name, account_id_hint, stage="collapse_group_entry"):
-                continue
-            time.sleep(0.8)
-            state_after = _contacts_rows_digest(_contacts_row_scan(hwnd))
-            changed = (
-                state_after.get("open_group") != state_before.get("open_group")
-                or state_after.get("others") != state_before.get("others")
-                or state_after.get("items") != state_before.get("items")
-            )
-            if changed:
-                progressed = True
-                result["collapsed"].append(name)
-            _contact_sync_debug(account_id_hint, stage="collapse_group_entry_result",
-                                name=name, changed=changed, pass_no=pass_no)
-        if not progressed:
-            break
-    final = _contacts_row_scan(hwnd)
-    result["entries"] = _contacts_entries_digest(final.get("entries"))
-    result["open_group"] = str(final.get("open_group") or "")
-    return result
-
-
-def _ensure_contacts_sublist_open(hwnd: int, account_id_hint: str = "") -> Dict[str, Any]:
-    """确保「联系人」档是打开的：先复位一级页 → 再按需点一次；点不动就如实返回，不再反复点同一行。"""
-    if not hwnd or not _module_available("uiautomation"):
-        return {"open": False, "clicked": False, "reset": None}
-    reset = _contacts_reset_to_root(hwnd, account_id_hint)
-    clicked = False
-    for _attempt in range(2):
-        scan = _contacts_row_scan(hwnd)
-        entries = scan.get("entries") or []
-        target = next((entry for entry in entries if str(entry.get("name") or "").startswith(_CONTACTS_GROUP_KEEP_OPEN)), None)
-        if target is None:
-            if scan.get("items") and not scan.get("subpage"):
-                return {"open": True, "clicked": clicked, "reset": reset}
-            break
-        if target.get("expanded"):
-            _contact_sync_debug(account_id_hint, stage="contacts_sublist_already_open", node=target.get("name"))
-            return {"open": True, "clicked": clicked, "reset": reset}
-        digest_before = _contacts_rows_digest(scan)
-        if not _contacts_click_row(hwnd, _CONTACTS_GROUP_KEEP_OPEN[0], account_id_hint, stage="contacts_sublist_click"):
-            break
-        clicked = True
-        time.sleep(0.9)
-        scan_after = _contacts_row_scan(hwnd)
-        if _contacts_rows_digest(scan_after) == digest_before:
-            # 点了但界面没变 → 立刻收手（以前就是在这里对着同一行反复点）
-            _contact_sync_debug(account_id_hint, stage="contacts_sublist_click_noop", node=_CONTACTS_GROUP_KEEP_OPEN[0])
-            break
-        if scan_after.get("items"):
-            return {"open": True, "clicked": clicked, "reset": reset}
     scan = _contacts_row_scan(hwnd)
-    opened = bool(scan.get("items")) or any(
+    result["open_group"] = str(scan.get("open_group") or "")
+    result["subpage"] = bool(scan.get("subpage"))
+    if not scan.get("entries"):
+        # 分组行不在视野里（列表被滚到中间）——同步本来就会滚回顶部，这里不额外滚
+        result["skipped"] = "no_group_rows_visible"
+        return result
+    if scan.get("subpage"):
+        clicked = _contacts_click_group_row(hwnd, str(scan.get("open_group") or ""))
+        result["collapsed"] = clicked
+        if clicked:
+            time.sleep(0.9)
+    scan = _contacts_row_scan(hwnd)
+    if scan.get("subpage"):
+        # 收不动就不硬来（原来在这里会反复点同一行）
+        result["skipped"] = "still_subpage:" + str(scan.get("open_group") or "")
+        _contact_sync_debug(account_id_hint, stage="contacts_prepare", **result)
+        return result
+    contacts_open = any(
         str(entry.get("name") or "").startswith(_CONTACTS_GROUP_KEEP_OPEN[0]) and entry.get("expanded")
         for entry in (scan.get("entries") or [])
     )
-    _contact_sync_debug(account_id_hint, stage="contacts_sublist_ensure_open", opened=bool(opened), clicked=clicked)
-    return {"open": bool(opened), "clicked": clicked, "reset": reset}
+    if not contacts_open:
+        # 只有确认「联系人」是收起的才点它一次；已经展开就不点（盲点会把它收起来）
+        target = next(
+            (entry for entry in (scan.get("entries") or []) if str(entry.get("name") or "").startswith(_CONTACTS_GROUP_KEEP_OPEN[0])),
+            None,
+        )
+        if target is None:
+            result["skipped"] = "contacts_row_not_visible"
+        else:
+            clicked = _contacts_click_group_row(hwnd, _CONTACTS_GROUP_KEEP_OPEN[0])
+            result["opened"] = clicked
+            if clicked:
+                time.sleep(0.9)
+    _contact_sync_debug(account_id_hint, stage="contacts_prepare", **result)
+    return result
+
+
+def _contacts_scroll_to_head(hwnd: int, contact_list: Any = None, account_id_hint: str = "", *, max_rounds: int = 6) -> Dict[str, Any]:
+    """把列表滚回「联系人」档开头 —— 标题已经在视野里就一点都不滚（不要多余的整屏滚动）。
+
+    以前每次进通讯录都先 WheelUp(40) 再 30×WheelUp(5)≈150 格，肉眼就是“进来先滑一大段”；
+    联系人档标题可见就说明已经在这一档的头部，直接开读即可。
+    """
+    for round_no in range(1, max(1, int(max_rounds)) + 1):
+        scan = _contacts_row_scan(hwnd)
+        head_visible = any(
+            str(entry.get("name") or "").startswith(_CONTACTS_GROUP_KEEP_OPEN[0]) and entry.get("expanded")
+            for entry in (scan.get("entries") or [])
+        )
+        if head_visible:
+            _contact_sync_debug(account_id_hint, stage="contacts_scroll_head", rounds=round_no - 1, needed=False)
+            return {"scrolled": round_no - 1, "head_visible": True}
+        if contact_list is None:
+            break
+        try:
+            contact_list.WheelUp(wheelTimes=8)
+        except Exception:
+            break
+        time.sleep(0.25)
+    _contact_sync_debug(account_id_hint, stage="contacts_scroll_head", rounds=max_rounds, needed=True)
+    return {"scrolled": max_rounds, "head_visible": False}
 
 
 def _open_contacts_sublist(hwnd: int, account_id_hint: str = "") -> bool:
@@ -10685,9 +10597,9 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         raise RuntimeError("local WeChat contact list not found")
 
     existing_before = _contact_count(account_id)
+    # 只做“够用”的滚动：联系人档标题已可见就一点都不滚（2026-10-14 反馈：不要多余操作）
     try:
-        contact_list.WheelUp(wheelTimes=40)
-        time.sleep(0.35)
+        _contacts_scroll_to_head(hwnd, contact_list, account_id)
     except Exception:
         pass
 
@@ -10714,29 +10626,13 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     stuck_rounds = 0
     recovery_budget = 2
     try:
-        _ensure_local_contacts_tab(account_id)
-    except Exception:
-        pass
-    try:
-        reset_state = _contacts_reset_to_root(hwnd, account_id)
-        collapse_result = _collapse_contacts_group_entries(hwnd, account_id)
-        _contact_sync_debug(
-            account_id,
-            stage="collapse_contacts_groups",
-            reset=reset_state,
-            collapsed=collapse_result.get("collapsed"),
-            open_group=collapse_result.get("open_group"),
-            entries=collapse_result.get("entries"),
-        )
-        open_state = _ensure_contacts_sublist_open(hwnd, account_id)
+        prepare_state = _contacts_prepare_for_sync(hwnd, account_id)
         _contact_sync_debug(account_id, stage="open_contacts_sublist",
-                            opened=open_state.get("open"), clicked=open_state.get("clicked"))
+                            opened=bool(not prepare_state.get("skipped") or prepare_state.get("opened")),
+                            clicked=bool(prepare_state.get("opened")),
+                            skipped=prepare_state.get("skipped"))
     except Exception as exc:
         _contact_sync_debug(account_id, stage="contacts_prepare_error", error=str(exc)[:200])
-    try:
-        _scroll_contact_list_to_top(hwnd)
-    except Exception:
-        pass
     for _idx in range(max_rounds):
         rounds = _idx + 1
         try:
@@ -10755,12 +10651,6 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                     _ensure_local_contacts_tab(account_id)
                     root2 = auto.ControlFromHandle(int(hwnd))
                     contact_list = _uia_guess_contact_list(root2) or _uia_primary_contact_list(root2) or contact_list
-                    if empty_rounds == 2:
-                        _contacts_reset_to_root(hwnd, account_id)
-                        _collapse_contacts_group_entries(hwnd, account_id)
-                        _ensure_contacts_sublist_open(hwnd, account_id)
-                    if empty_rounds == 3:
-                        _scroll_contact_list_to_top(hwnd)
                 except Exception:
                     pass
                 time.sleep(0.5)
@@ -10844,17 +10734,10 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 recovered = False
                 if recovery_budget > 0:
                     try:
-                        reset_again = _contacts_reset_to_root(hwnd, account_id)
-                        collapse_again = _collapse_contacts_group_entries(hwnd, account_id)
-                        open_again = _ensure_contacts_sublist_open(hwnd, account_id)
-                        recovered = (
-                            bool(reset_again.get("subpage") is False and bool(open_again.get("clicked")))
-                            or bool(collapse_again.get("collapsed"))
-                            or bool(open_again.get("clicked"))
-                        )
+                        prepare_again = _contacts_prepare_for_sync(hwnd, account_id)
+                        recovered = bool(prepare_again.get("collapsed")) or bool(prepare_again.get("opened"))
                         _contact_sync_debug(account_id, stage="stuck_recovery", round=rounds,
-                                            reset=reset_again, collapsed=collapse_again.get("collapsed"),
-                                            reopened=open_again.get("clicked"), seen=len(seen))
+                                            recovered=recovered, prepare=prepare_again, seen=len(seen))
                     except Exception as exc:
                         _contact_sync_debug(account_id, stage="stuck_recovery_error", round=rounds,
                                             error=str(exc)[:160])
