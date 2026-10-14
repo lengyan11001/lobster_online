@@ -11112,6 +11112,8 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             "\u8bf7\u628a\u5fae\u4fe1\u5207\u5230\u300c\u901a\u8baf\u5f55\u300d\u9875\u3001\u4e0d\u8981\u505c\u5728\u5176\u4ed6\u9875\u9762\u6216\u88ab\u5176\u4ed6\u7a97\u53e3\u76d6\u4f4f\uff0c\u7136\u540e\u91cd\u8bd5\u540c\u6b65"
         )
     collapsed_reopens = 0
+    ui_blank_rounds = 0
+    root = None
     for _idx in range(max_rounds):
         rounds = _idx + 1
         try:
@@ -11124,6 +11126,19 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         before = len(seen)
         rows_now = _uia_visible_contact_cell_rows(contact_list)
         names = [row.get("name") or "" for row in rows_now]
+        if not names and (root is None or _uia_strict_contact_list(root) is None):
+            # 2026-10-14: the window stopped rendering its controls entirely (the tree came
+            # back empty after a click). Do not keep poking it - stop with a clear message.
+            ui_blank_rounds += 1
+            if ui_blank_rounds >= 5:
+                _contact_sync_debug(account_id, stage="contacts_sync_failed",
+                                    reason="wechat_ui_blank", rounds=rounds, seen=len(seen))
+                raise RuntimeError(
+                    "\u5fae\u4fe1\u754c\u9762\u6ca1\u6e32\u67d3\u51fa\u63a7\u4ef6\uff08\u63a7\u4ef6\u6811\u662f\u7a7a\u7684\uff09\uff0c\u540c\u6b65\u5df2\u505c\u6b62\u3002"
+                    "\u8bf7\u91cd\u542f\u5fae\u4fe1\u540e\u91cd\u8bd5\uff0c\u671f\u95f4\u4e0d\u8981\u53cd\u590d\u70b9\u540c\u6b65\u3002"
+                )
+        else:
+            ui_blank_rounds = 0
         if not names:
             empty_rounds += 1
             try:
@@ -11194,8 +11209,13 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             wx_no = wx_no_index.get(normalized_name, "")
             # 一次走完：滚到谁就顺手点开他的资料卡读微信号（不再“先扫全表、再回头补”两段）。
             # 已有微信号的人不点（省时间）；上限默认不限，可用 contact_wx_fill_budget 控制。
+            if (not wx_no and normalized_name and normalized_name not in profile_attempted
+                    and _uia_rect(row_now.get("node")) is None):
+                _contact_sync_debug(account_id, stage="wx_fill_row_skipped", target=clean,
+                                    reason="row_rect_missing", seen=len(seen))
             if (
                 not wx_no
+                and _uia_rect(row_now.get("node")) is not None
                 and wx_fill_budget != 0
                 and (wx_fill_budget is None or profile_fallback_successes < wx_fill_budget)
                 and normalized_name
@@ -11203,49 +11223,70 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             ):
                 profile_attempted.add(normalized_name)
                 profile_fallback_attempts += 1
-                _contact_sync_debug(account_id, stage="wx_fill_click", target=clean,
-                                    rect=str(_uia_rect(row_now.get("node"))),
-                                    consecutive_failures=wx_fill_consecutive_failures)
+                # 2026-10-14: re-resolve the row right before clicking it. After a scroll or a
+                # previous click the cached node rect can be stale (online it pointed above the
+                # list, so the click opened nothing and the previous contact pane stayed on screen).
+                click_node = row_now.get("node")
                 try:
-                    wx_value = _read_contact_profile_wx_no_for_cell(hwnd, account_id, row_now.get("node"), clean)
+                    fresh_rows = _uia_visible_contact_cell_rows(contact_list)
+                    fresh = next((r.get("node") for r in fresh_rows
+                                  if str(r.get("name") or "") == clean), None)
+                    if fresh is not None:
+                        click_node = fresh
                 except Exception:
-                    wx_value = ""
-                if wx_value:
-                    wx_no = wx_value
-                    wx_no_index[normalized_name] = wx_value
-                    profile_fallback_successes += 1
-                    _contact_sync_debug(account_id, stage="wx_fill", target=clean, wx_no=wx_value,
-                                        success=profile_fallback_successes, budget=wx_fill_budget)
+                    pass
+                if not _contact_row_clickable(list_rect, _uia_rect(click_node)):
+                    profile_attempted.add(normalized_name)
+                    _contact_sync_debug(account_id, stage="wx_fill_row_skipped", target=clean,
+                                        reason="row_not_clickable",
+                                        rect=str(_uia_rect(click_node)), list_rect=str(list_rect))
+                elif not _uia_rect(click_node):
+                    _contact_sync_debug(account_id, stage="wx_fill_row_skipped", target=clean,
+                                        reason="row_rect_missing_after_refresh")
                 else:
-                    profile_fallback_failures += 1
-                    # 2026-10-14 用户要求：不要因为几次读不到就整轮停止点卡片 ——
-                    # 「联系人点开就从第一个开始拿，依次点点完为止」。
-                    wx_fill_consecutive_failures += 1
-                # 读号（不管成没成）之后把资料卡收掉：真机上点开卡片后联系人行会消失（visible=0），
-                # 扫描就断在这、反复空屏（2026-10-14 日志 contacts_empty_round 44 次）。
-                try:
-                    if not _uia_visible_contact_cell_rows(contact_list):
-                        # ⚠️ 只有"真的弹出式资料卡"才按 ESC（2026-10-14 真机日志：
-                        # 在通讯录页按 ESC = 退出/收起「联系人」列表 —— 用户看到的就是
-                        # "我给他点开她还关了"：rows_back=0）。没有弹窗就什么都不按。
-                        popup = _local_profile_popup_root(hwnd) is not None
-                        if popup:
-                            _send_hotkey("esc", pause=0.15)
-                            time.sleep(0.35)
-                        back = len(_uia_visible_contact_cell_rows(contact_list))
-                        _contact_sync_debug(account_id, stage="wx_fill_card_closed", target=clean,
-                                            popup=popup, esc_sent=bool(popup), rows_back=back)
-                        if not back:
-                            # 还是没回来：把列表控件重新定位一次（不发任何点击）
-                            try:
-                                root3 = auto.ControlFromHandle(int(hwnd))
-                                fresh = _uia_strict_contact_list(root3)
-                                if fresh is not None:
-                                    contact_list = fresh
-                            except Exception:
-                                pass
-                except Exception as exc:
-                    _contact_sync_debug(account_id, stage="wx_fill_card_close_error", error=str(exc)[:140])
+                    _contact_sync_debug(account_id, stage="wx_fill_click", target=clean,
+                                        rect=str(_uia_rect(click_node)),
+                                        consecutive_failures=wx_fill_consecutive_failures)
+                    try:
+                        wx_value = _read_contact_profile_wx_no_for_cell(hwnd, account_id, row_now.get("node"), clean)
+                    except Exception:
+                        wx_value = ""
+                    if wx_value:
+                        wx_no = wx_value
+                        wx_no_index[normalized_name] = wx_value
+                        profile_fallback_successes += 1
+                        _contact_sync_debug(account_id, stage="wx_fill", target=clean, wx_no=wx_value,
+                                            success=profile_fallback_successes, budget=wx_fill_budget)
+                    else:
+                        profile_fallback_failures += 1
+                        # 2026-10-14 用户要求：不要因为几次读不到就整轮停止点卡片 ——
+                        # 「联系人点开就从第一个开始拿，依次点点完为止」。
+                        wx_fill_consecutive_failures += 1
+                    # 读号（不管成没成）之后把资料卡收掉：真机上点开卡片后联系人行会消失（visible=0），
+                    # 扫描就断在这、反复空屏（2026-10-14 日志 contacts_empty_round 44 次）。
+                    try:
+                        if not _uia_visible_contact_cell_rows(contact_list):
+                            # ⚠️ 只有"真的弹出式资料卡"才按 ESC（2026-10-14 真机日志：
+                            # 在通讯录页按 ESC = 退出/收起「联系人」列表 —— 用户看到的就是
+                            # "我给他点开她还关了"：rows_back=0）。没有弹窗就什么都不按。
+                            popup = _local_profile_popup_root(hwnd) is not None
+                            if popup:
+                                _send_hotkey("esc", pause=0.15)
+                                time.sleep(0.35)
+                            back = len(_uia_visible_contact_cell_rows(contact_list))
+                            _contact_sync_debug(account_id, stage="wx_fill_card_closed", target=clean,
+                                                popup=popup, esc_sent=bool(popup), rows_back=back)
+                            if not back:
+                                # 还是没回来：把列表控件重新定位一次（不发任何点击）
+                                try:
+                                    root3 = auto.ControlFromHandle(int(hwnd))
+                                    fresh = _uia_strict_contact_list(root3)
+                                    if fresh is not None:
+                                        contact_list = fresh
+                                except Exception:
+                                    pass
+                    except Exception as exc:
+                        _contact_sync_debug(account_id, stage="wx_fill_card_close_error", error=str(exc)[:140])
             seen[clean] = {
                 "contact_key": clean,
                 "display_name": clean,
@@ -12367,15 +12408,39 @@ def _card_matches_target(texts: List[str], target: str) -> bool:
     return False
 
 
+def _profile_pane_open(hwnd: int) -> bool:
+    """True while the contact profile pane is on screen (a WeChat-ID label exists).
+
+    2026-10-14 (diag_20261014122954_39701315 + local run): after reading one contact the pane
+    often stays open and swallows the very next row click - the pane keeps showing the previous
+    contact, the read is refused as stale, and roughly half of the rows never get read. This
+    helper lets the sync close the pane before touching the next row.
+    """
+    import uiautomation as auto  # type: ignore
+
+    label = "\u5fae\u4fe1\u53f7"
+    try:
+        root = auto.ControlFromHandle(int(hwnd))
+        for node in _uia_walk(root, max_depth=22, max_nodes=4000):
+            text = _uia_control_text(node)
+            if text and text.strip().rstrip(":\uff1a").startswith(label):
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def _read_wx_no_from_window(hwnd: int, account_id: str, target: str) -> str:
     """Fallback reader: take the WeChat ID straight from the window.
 
-    2026-10-14: on the user's machine the profile pane does open after the row click
-    but ``_contact_profile_card_root`` cannot recognise it, so every contact came back
-    as ``card_not_confirmed`` and no ID was ever written.  This helper does not depend
-    on the card control tree: it finds the WeChat-ID label anywhere in the window and
-    takes the value right next to it, still gated by ``_sanitize_contact_wx_no`` so a
-    nickname can never be stored as an ID.
+    2026-10-14: on the user's machine the profile pane does open after the row click but
+    ``_contact_profile_card_root`` cannot always recognise it, so this reads the ID next to
+    the WeChat-ID label instead.
+
+    2026-10-14 (2) diag_20261014122954_39701315: without a freshness check this helper wrote
+    the SAME id ("y13686813426") for many different contacts - when the click opened no new
+    card it simply re-read the previous contact's pane. It now refuses to answer unless the
+    pane actually shows the contact we just clicked (same name gate as the card reader).
     """
     import uiautomation as auto  # type: ignore
 
@@ -12394,18 +12459,27 @@ def _read_wx_no_from_window(hwnd: int, account_id: str, target: str) -> str:
                 break
     if label_rect is None:
         return ""
+    pane_texts: List[str] = []
     candidates: List[str] = []
     for node in nodes:
         rect = _uia_rect(node)
         if rect is None:
             continue
-        if not (label_rect[0] - 60 <= rect[0] <= label_rect[2] + 340):
+        if not (label_rect[0] - 420 <= rect[0] <= label_rect[2] + 340):
             continue
-        if not (label_rect[1] - 80 <= rect[1] <= label_rect[3] + 80):
+        if not (label_rect[1] - 520 <= rect[1] <= label_rect[3] + 220):
             continue
         text = _uia_control_text(node)
-        if text:
+        if not text:
+            continue
+        pane_texts.append(text)
+        if label_rect[1] - 60 <= rect[1] <= label_rect[3] + 60:
             candidates.append(text)
+    if not _card_matches_target(pane_texts, target):
+        _contact_sync_debug(account_id, stage="wx_fill_window_scan_rejected", target=target,
+                            reason="pane_not_showing_target",
+                            texts=[t[:24] for t in pane_texts[:12]])
+        return ""
     pattern = label_prefix + r"\s*[:\uff1a]\s*(.+)$"
     for text in candidates:
         match = re.search(pattern, _compact_for_contains(text))
@@ -12414,6 +12488,9 @@ def _read_wx_no_from_window(hwnd: int, account_id: str, target: str) -> str:
             _contact_sync_debug(account_id, stage="wx_fill_window_scan", target=target, wx_no=accepted)
             return accepted
     return ""
+
+
+_CONTACTS_RESTORE_LAST: List[float] = [0.0]
 
 
 def _restore_contacts_list_after_read(hwnd: int, account_id: str, target: str) -> bool:
@@ -12427,6 +12504,14 @@ def _restore_contacts_list_after_read(hwnd: int, account_id: str, target: str) -
 
     if _rows():
         return True
+    # 2026-10-14: never hammer the window. Repeated ESC / tab switching is what left the
+    # user's WeChat showing a blank window, so at most one restore attempt per 15s.
+    _now = time.time()
+    if _now - _CONTACTS_RESTORE_LAST[0] < 15.0:
+        _contact_sync_debug(account_id, stage="contacts_restore_skipped", target=target,
+                            reason="throttled")
+        return False
+    _CONTACTS_RESTORE_LAST[0] = _now
     _contact_sync_debug(account_id, stage="contacts_restore_start", target=target)
     try:
         _send_hotkey("esc", pause=0.3)
