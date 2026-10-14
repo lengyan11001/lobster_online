@@ -11241,6 +11241,28 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             continue
         empty_rounds = 0
         list_rect = _uia_rect(contact_list)
+        if list_rect is not None:
+            _outside = 0
+            _known = 0
+            for _r in rows_now:
+                _rr = _uia_rect_tuple(_r.get("node")) or _uia_rect(_r.get("node"))
+                if not _rr:
+                    continue
+                _known += 1
+                _cx = (float(_rr[0]) + float(_rr[2])) / 2
+                _cy = (float(_rr[1]) + float(_rr[3])) / 2
+                if not (list_rect[0] <= _cx <= list_rect[2] and list_rect[1] <= _cy <= list_rect[3]):
+                    _outside += 1
+            if _known and _outside >= max(3, _known // 2):
+                # 2026-10-14: the rows we enumerated do not belong to this list (another
+                # WeChat window / list). Stop before clicking a single one.
+                _contact_sync_debug(account_id, stage="contacts_list_mismatch",
+                                    rows=_known, outside=_outside, list_rect=str(list_rect),
+                                    sample=str(_uia_rect(rows_now[0].get("node"))))
+                raise RuntimeError(
+                    "\u6293\u5230\u7684\u597d\u53cb\u884c\u4e0d\u5c5e\u4e8e\u5f53\u524d\u901a\u8baf\u5f55\u5217\u8868\uff08\u5ea7\u6807\u5bf9\u4e0d\u4e0a\uff0c\u53ef\u80fd\u5f00\u4e86\u4e24\u4e2a\u5fae\u4fe1\u7a97\u53e3\u6216\u88ab\u522b\u7684\u7a97\u53e3\u76d6\u4f4f\uff09\uff0c"
+                    "\u5df2\u505c\u6b62\u540c\u6b65\uff0c\u4e00\u4e2a\u70b9\u51fb\u90fd\u6ca1\u53d1\u3002\u8bf7\u5173\u6389\u591a\u4f59\u7684\u5fae\u4fe1\u7a97\u53e3/\u522b\u7684\u7a97\u53e3\u540e\u91cd\u8bd5"
+                )
         for row_now in rows_now:
             clean = str(row_now.get("name") or "").strip()
             if not clean or clean in skip_names:
@@ -12195,12 +12217,36 @@ def _uia_strict_contact_list(root: Any) -> Optional[Any]:
     acting on anything else.
     """
     try:
-        for node in _uia_contact_recycler_lists(root):
-            if "\u901a\u8baf\u5f55" in _uia_control_text(node):
-                return node
+        candidates = [node for node in _uia_contact_recycler_lists(root)
+                      if "\u901a\u8baf\u5f55" in _uia_control_text(node)]
     except Exception:
-        pass
-    return None
+        return None
+    if not candidates:
+        return None
+    # 2026-10-14 (diag_20261014131523_85a720ec): the machine had rows from ANOTHER window in
+    # the tree (row rects x=301..501 while the real list is x=901..1101), so the sync clicked
+    # into a different window. Prefer the list whose own rows actually fall inside its rect.
+    best = None
+    best_score = -1
+    for node in candidates:
+        rect = _uia_rect_tuple(node) or _uia_rect(node)
+        if not rect:
+            continue
+        score = 0
+        try:
+            for row in _uia_visible_contact_cell_rows(node):
+                row_rect = _uia_rect_tuple(row.get("node")) or _uia_rect(row.get("node"))
+                if not row_rect:
+                    continue
+                cx = (float(row_rect[0]) + float(row_rect[2])) / 2
+                cy = (float(row_rect[1]) + float(row_rect[3])) / 2
+                if float(rect[0]) <= cx <= float(rect[2]) and float(rect[1]) <= cy <= float(rect[3]):
+                    score += 1
+        except Exception:
+            score = 0
+        if score > best_score:
+            best, best_score = node, score
+    return best if best is not None else candidates[0]
 
 
 def _uia_guess_contact_list(root: Any) -> Optional[Any]:
