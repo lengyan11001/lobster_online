@@ -12755,7 +12755,24 @@ def _read_contact_profile_wx_no_for_cell(
         # 2026-10-14 live probe on the user's WeChat: clicking the row (cell) node
         # opens the profile card reliably; the child text node was the target that
         # failed online (card_not_confirmed). Second attempt falls back to it.
-        _uia_click(cell if _attempt == 0 else _click_target())
+        # 2026-10-14 (diag_20261014132727_a8703b44): node.Click() clicks the coordinate blindly -
+        # on the user's machine a click even landed on a Chrome window and many row clicks were
+        # swallowed (card_not_confirmed + pane_not_showing_target in a loop). Route the click
+        # through our own guarded point click: it focuses the WeChat window, verifies the window
+        # under the cursor is that window (and the click fence), then clicks.
+        _target_node = cell if _attempt == 0 else _click_target()
+        _rect = _uia_rect_tuple(_target_node) or _uia_rect_tuple(cell)
+        _clicked = False
+        if _rect is not None:
+            _cx = int((float(_rect[0]) + float(_rect[2])) / 2)
+            _cy = int((float(_rect[1]) + float(_rect[3])) / 2)
+            try:
+                _clicked = bool(_uia_click_screen_point(_cx, _cy, expect_hwnd=int(hwnd),
+                                                        account_id_hint=account_id))
+            except Exception:
+                _clicked = False
+        if not _clicked:
+            _uia_click(_target_node)
         deadline = time.monotonic() + total_wait / 2
         while time.monotonic() < deadline:
             time.sleep(0.4)
