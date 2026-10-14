@@ -8383,18 +8383,69 @@ def _contacts_prepare_for_sync(hwnd: int, account_id_hint: str = "") -> Dict[str
             None,
         )
         if target is None:
-            result["skipped"] = "contacts_row_not_visible"
-        elif _contacts_entry_ready(hwnd):
+            # 2026-10-14: online (build 426) every single prepare ended as
+            # contacts_row_not_visible and the contacts row was NEVER clicked, so the
+            # group stayed collapsed and the run died with an empty screen. Stop giving
+            # up here:
+            #   1) rows already visible in the list => the group is open, the header just
+            #      scrolled off the top - nothing to click;
+            #   2) no row at all => switch back to the contacts tab and wait for the list
+            #      to render, then look for the row again.
+            list_now = None
+            rows_now: List[Dict[str, Any]] = []
+            try:
+                list_now = _uia_strict_contact_list(_uia_main_root(hwnd))
+                rows_now = _uia_visible_contact_cell_rows(list_now) if list_now is not None else []
+            except Exception:
+                rows_now = []
+            if rows_now:
+                result["skipped"] = "group_row_scrolled_off_but_rows_visible"
+            else:
+                rendered = False
+                for _wait in range(6):
+                    try:
+                        _ensure_local_contacts_tab(account_id_hint)
+                    except Exception:
+                        pass
+                    time.sleep(0.7)
+                    scan = _contacts_row_scan(hwnd)
+                    result["open_group"] = str(scan.get("open_group") or "") or result["open_group"]
+                    target = next(
+                        (entry for entry in (scan.get("entries") or [])
+                         if str(entry.get("name") or "").startswith(keep)),
+                        None,
+                    )
+                    try:
+                        rows_now = _uia_visible_contact_cell_rows(
+                            _uia_strict_contact_list(_uia_main_root(hwnd))
+                        )
+                    except Exception:
+                        rows_now = []
+                    rendered = bool(target is not None or rows_now)
+                    if rendered:
+                        break
+                result["wait_rounds"] = _wait + 1
+                if not rendered:
+                    result["skipped"] = "contacts_list_not_rendered"
+                    result["ready"] = False
+                    _contact_sync_debug(account_id_hint, stage="contacts_prepare", **result)
+                    return result
+        if target is not None and _contacts_entry_ready(hwnd):
             # 扫描说"收起"、可列表里明明还能看到联系人行 → 这是扫描误判，**绝对不点**：
             # 我们这个点法是"切换"，点一下就真把开着的档收起来了（2026-10-14 真机对照实验：
             # point_text 一次点击会让 联系人档 True→False）。
             result["skipped"] = "scan_says_closed_but_rows_visible"
-        else:
+        elif target is not None:
             clicked = _contacts_click_group_row(hwnd, keep)
             result["opened"] = clicked
             result["method"] = "click_contacts_row" if clicked else result["method"]
             if clicked:
                 time.sleep(0.9)
+                if not _contacts_entry_ready(hwnd):
+                    # clicked and the group is still closed - say so instead of pretending
+                    result["method"] = (result["method"] or "") + "_no_effect"
+                    _contact_sync_debug(account_id_hint, stage="contacts_group_click_no_effect",
+                                        target=keep, open_group=result.get("open_group"))
     _contact_sync_debug(account_id_hint, stage="contacts_prepare", **result)
     return result
 
@@ -11027,6 +11078,13 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     except Exception as exc:
         _contact_sync_debug(account_id, stage="contacts_prepare_error", error=str(exc)[:200])
     # 不再因为"入口没准备好"直接失败：读到什么算什么（2026-10-14：卡太死反而连列表都展不开）。
+    if not prepare_state.get("ready", True) and prepare_state.get("skipped") == "contacts_list_not_rendered":
+        _contact_sync_debug(account_id, stage="contacts_sync_failed",
+                            reason="contacts_list_not_rendered")
+        raise RuntimeError(
+            "\u5fae\u4fe1\u901a\u8baf\u5f55\u9875\u6ca1\u6709\u6e32\u67d3\u51fa\u8054\u7cfb\u4eba\u5217\u8868\uff08\u5df2\u5207\u56de\u300c\u901a\u8baf\u5f55\u300d\u9875\u7b49\u4e86\u51e0\u79d2\u4ecd\u4e3a\u7a7a\uff09\uff0c"
+            "\u8bf7\u628a\u5fae\u4fe1\u5207\u5230\u300c\u901a\u8baf\u5f55\u300d\u9875\u3001\u4e0d\u8981\u505c\u5728\u5176\u4ed6\u9875\u9762\u6216\u88ab\u5176\u4ed6\u7a97\u53e3\u76d6\u4f4f\uff0c\u7136\u540e\u91cd\u8bd5\u540c\u6b65"
+        )
     collapsed_reopens = 0
     for _idx in range(max_rounds):
         rounds = _idx + 1
