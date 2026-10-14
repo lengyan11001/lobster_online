@@ -1765,8 +1765,9 @@ def test_wx_fill_clicks_every_rendered_row(monkeypatch, tmp_path):
     monkeypatch.setattr(engine, "_contact_wx_fill_budget", lambda: None)
     monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
     clicked = []
+    # 读号成功：验证"列表里渲染出来的每一行都去点"（不再有行可点判据）
     monkeypatch.setattr(engine, "_read_contact_profile_wx_no_for_cell",
-                        lambda hwnd, account_id, cell, name: clicked.append(name) or "")
+                        lambda hwnd, account_id, cell, name: (clicked.append(name) or ("wx_" + name)))
     stages = []
     monkeypatch.setattr(engine, "_contact_sync_debug", lambda account_id, **fields: stages.append(fields))
 
@@ -1860,3 +1861,40 @@ def test_wx_fill_closes_the_profile_card_so_the_list_comes_back(monkeypatch, tmp
     assert keys and keys[0] == "esc", "读号后列表行没了，必须按 ESC 把资料卡收掉"
     closed = [item for item in stages if item.get("stage") == "wx_fill_card_closed"]
     assert closed and closed[0].get("rows_back") == 1, closed
+
+
+def test_wx_fill_stops_clicking_after_consecutive_failures(monkeypatch, tmp_path):
+    """连着 3 次都读不到号 → 这一轮别再点卡片了（不然就是"鼠标一直在点"却什么也读不到）。"""
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    list_node = _FakeRectList((100.0, 200.0, 400.0, 800.0))
+    rows = [types.SimpleNamespace(fake_rect=(100.0, 300.0 + i * 60, 400.0, 354.0 + i * 60), name=f"人{i}")
+            for i in range(6)]
+    monkeypatch.setattr(engine, "_uia_rect", lambda node: getattr(node, "fake_rect", None))
+    monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda root: list_node)
+    monkeypatch.setattr(engine, "_uia_primary_contact_list", lambda root: list_node)
+    monkeypatch.setattr(engine, "_uia_visible_contact_cell_rows",
+                        lambda node: [{"name": r.name, "node": r} for r in rows])
+    monkeypatch.setattr(engine, "_uia_visible_contact_cell_names", lambda node: [r.name for r in rows])
+    monkeypatch.setattr(engine, "_contact_visible_fingerprint", lambda names: "|".join(names))
+    monkeypatch.setattr(engine, "_ensure_local_contacts_tab", lambda account_id: 4242)
+    monkeypatch.setattr(engine, "_module_available", lambda name: True)
+    fake_auto = types.ModuleType("uiautomation")
+    fake_auto.ControlFromHandle = lambda hwnd: object()
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_auto)
+    monkeypatch.setattr(engine, "_contacts_prepare_for_sync", lambda hwnd, account_id="": {
+        "ready": True, "attempts": 1, "method": "", "skipped": "", "collapsed": "", "opened": "",
+    })
+    monkeypatch.setattr(engine, "_contacts_scroll_to_head", lambda *a, **k: {"ready": True})
+    monkeypatch.setattr(engine, "_contact_wx_fill_budget", lambda: None)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
+    clicked = []
+    monkeypatch.setattr(engine, "_read_contact_profile_wx_no_for_cell",
+                        lambda hwnd, account_id, cell, name: clicked.append(name) or "")
+    stages = []
+    monkeypatch.setattr(engine, "_contact_sync_debug", lambda account_id, **fields: stages.append(fields))
+
+    engine._sync_local_contacts_from_uia("wechat-account-wxfill-brake", limit=10000)
+
+    assert clicked == ["人0", "人1", "人2"], clicked
+    stopped = [item for item in stages if item.get("stage") == "wx_fill_stopped"]
+    assert stopped and stopped[0].get("reason") == "consecutive_card_not_confirmed", stages[-6:]

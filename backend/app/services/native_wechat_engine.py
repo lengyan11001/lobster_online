@@ -8200,19 +8200,37 @@ def _contacts_entry_ready(hwnd: int) -> bool:
         return False
 
 
+def _row_text_click_target(row_node: Any, name: str) -> tuple[Any, str]:
+    """返回"点这一行时该点哪个节点"：优先行里的**文字节点**，拿不到才退回整行容器。
+
+    2026-10-14 线上「点的位置不对」：整行容器（mmui::ContactsCellGroupView）的矩形经常不是
+    肉眼看到的那一条（可能覆盖整片列表/是旧值），按它的中心点就会点到别的行上去。行里那个
+    显示名字的文字节点矩形才和肉眼一致。
+    """
+    wanted = _normalize_contact_lookup_key(name)
+    try:
+        for child in row_node.GetChildren():
+            text = _normalize_contact_lookup_key(_uia_control_text(child))
+            if not text or not wanted:
+                continue
+            if not (text == wanted or wanted in text or text in wanted):
+                continue
+            rect = _uia_rect(child)
+            if rect is None:
+                continue
+            if (float(rect[2]) - float(rect[0])) >= 8 and (float(rect[3]) - float(rect[1])) >= 8:
+                return child, "row_text"
+    except Exception:
+        pass
+    return row_node, "row_node"
+
+
 def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
-    """点某个分组行（按其名字前缀找）把它展开；成功返回名字，没成功返回空串。
+    """点某个分组行（按名字前缀找）把它展开；成功返回名字，没成功返回空串。
 
-    2026-10-14 线上「点不到联系人、展不开目录」的排查结论：微信窗口被别的窗口盖住时，
-    任何点击都会落到别人身上 —— 所以**点之前先把微信窗口拉到前台**（这一步以前被砍掉了）。
-    然后最多试 3 种点法，每种点完都验证一次（分组行变成展开 / 列表里能看到联系人行）：
-
-      1) UIA 节点点击（``node.Click``，点的是节点自己的中心）；
-      2) 前置窗口后再点一次（第一条常常因为窗口没激活而失效）；
-      3) 按这一行的矩形算屏幕坐标点（**落在行左侧三分之一**，那里是展开三角；
-         带「这个点必须落在微信窗口上」的校验，点歪一个像素都不点）。
-
-    验证用的是"分组行的 expanded 或 列表里能看到联系人行"，不会再做别的动作（不滚、不点标题）。
+    点哪儿：优先点这一行里的**文字节点**（``_row_text_click_target``），拿不到才点整行容器；
+    UIA 节点点不动就按该节点的矩形中心来一次（带「落点必须在微信窗口上」的校验）。
+    点之前先 _focus_local_wechat（无害的置前，别让点击落到别人身上）。
     """
     prefix = str(name_prefix or "")
     if not prefix:
@@ -8221,7 +8239,7 @@ def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
         _focus_local_wechat(hwnd)
     except Exception:
         pass
-    for method in ("uia_node", "uia_node_after_focus", "screen_left"):
+    for attempt in (1, 2):
         scan = _contacts_row_scan(hwnd)
         target = next(
             (item for item in (scan.get("entries") or []) if str(item.get("name") or "").startswith(prefix)),
@@ -8229,40 +8247,39 @@ def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
         )
         if target is None:
             return ""
+        node, how = _row_text_click_target(target["node"], str(target.get("name") or prefix))
         clicked = ""
         try:
-            if method in ("uia_node", "uia_node_after_focus"):
-                if method == "uia_node_after_focus":
-                    try:
-                        _focus_local_wechat(hwnd)
-                        time.sleep(0.25)
-                    except Exception:
-                        pass
-                _click_uia_node(target["node"])
-                clicked = method
-            else:
-                rect = _uia_rect(target["node"])
-                if rect:
-                    left = float(rect[0]) + (float(rect[2]) - float(rect[0])) * 0.25
-                    x = int(left)
-                    y = int((float(rect[1]) + float(rect[3])) / 2)
-                    if _uia_click_screen_point(x, y, expect_hwnd=int(hwnd)):
-                        clicked = method
+            _click_uia_node(node)
+            clicked = how
         except Exception as exc:
             _contact_sync_debug("", stage="contacts_group_click_error", target=prefix,
-                                method=method, error=str(exc)[:120])
+                                method=how, error=str(exc)[:120])
         if not clicked:
-            continue
+            rect = _uia_rect(node)
+            if rect:
+                try:
+                    if _uia_click_screen_point(
+                        int((float(rect[0]) + float(rect[2])) / 2),
+                        int((float(rect[1]) + float(rect[3])) / 2),
+                        expect_hwnd=int(hwnd),
+                    ):
+                        clicked = how + "+screen"
+                except Exception:
+                    pass
+        if not clicked:
+            return ""
         time.sleep(0.8)
         state = _contacts_group_state(hwnd, prefix)
         if state or _contacts_entry_ready(hwnd):
             _contact_sync_debug("", stage="contacts_group_click_ok", target=prefix,
-                                method=method, state=state)
+                                method=clicked, state=state)
             return str(target.get("name") or "")
         _contact_sync_debug("", stage="contacts_group_click_no_effect", target=prefix,
-                            method=method, state=state,
-                            row_rect=str(_uia_rect(target["node"])),
+                            method=clicked, state=state,
+                            node_rect=str(_uia_rect(node)), row_rect=str(_uia_rect(target["node"])),
                             list_rect=str(_uia_rect(_uia_primary_contact_list(_uia_main_root(hwnd)))))
+        time.sleep(0.3)
     return ""
 
 
@@ -8511,6 +8528,8 @@ _CONTACT_SYNC_SCAN_COMPLETE_ROUNDS = 12
 # 连续这么多轮「一屏联系人都读不到」就直接失败退出（2026-10-14 用户反馈：找不到「联系人」入口时
 # 一直在那来回点、也没有失败退出，界面像卡死）。正常扫描时每轮能看到十几行，空屏=微信不在通讯录页。
 _CONTACT_SYNC_EMPTY_SCREEN_LIMIT = 8
+# 「读微信号」连续失败这么多次就停手：点开卡片也确认不了是本人时，继续点只会"鼠标一直点"却读不到号。
+_WX_FILL_CONSECUTIVE_FAILURE_LIMIT = 3
 
 
 def _contact_sync_max_rounds(limit: int) -> int:
@@ -10861,6 +10880,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     profile_fallback_failures = 0
     profile_attempted: set[str] = set()
     wx_fill_budget = _contact_wx_fill_budget()
+    wx_fill_consecutive_failures = 0
     rounds = 0
     empty_rounds = 0
     stuck_rounds = 0
@@ -10966,6 +10986,9 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             ):
                 profile_attempted.add(normalized_name)
                 profile_fallback_attempts += 1
+                _contact_sync_debug(account_id, stage="wx_fill_click", target=clean,
+                                    rect=str(_uia_rect(row_now.get("node"))),
+                                    consecutive_failures=wx_fill_consecutive_failures)
                 try:
                     wx_value = _read_contact_profile_wx_no_for_cell(hwnd, account_id, row_now.get("node"), clean)
                 except Exception:
@@ -10978,6 +11001,15 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                                         success=profile_fallback_successes, budget=wx_fill_budget)
                 else:
                     profile_fallback_failures += 1
+                    wx_fill_consecutive_failures += 1
+                    if wx_fill_consecutive_failures >= _WX_FILL_CONSECUTIVE_FAILURE_LIMIT:
+                        # 连着几次都读不到（点开卡片也确认不了是本人）→ 这一轮别再点卡片了，
+                        # 不然就是"鼠标一直在点"却什么也读不到（2026-10-14 用户反馈）。
+                        wx_fill_budget = 0
+                        _contact_sync_debug(account_id, stage="wx_fill_stopped",
+                                            reason="consecutive_card_not_confirmed",
+                                            failures=wx_fill_consecutive_failures,
+                                            seen=len(seen))
                 # 读号（不管成没成）之后把资料卡收掉：真机上点开卡片后联系人行会消失（visible=0），
                 # 扫描就断在这、反复空屏（2026-10-14 日志 contacts_empty_round 44 次）。
                 try:
