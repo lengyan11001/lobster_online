@@ -8010,7 +8010,7 @@ def _scroll_contact_list_to_top(hwnd: int) -> None:
 
     try:
         root = auto.ControlFromHandle(int(hwnd))
-        lst = _uia_guess_contact_list(root) or _uia_primary_contact_list(root)
+        lst = _uia_strict_contact_list(root)
         if lst is None:
             return
         # PageUp-ish: small wheel steps so we do not lose the window focus
@@ -8134,7 +8134,7 @@ def _contacts_row_scan(hwnd: int) -> Dict[str, Any]:
         root = auto.ControlFromHandle(int(hwnd))
     except Exception:
         return empty
-    contact_list = _uia_primary_contact_list(root) or _uia_guess_contact_list(root)
+    contact_list = _uia_strict_contact_list(root)
     scope = contact_list if contact_list is not None else root
     rows: List[Dict[str, Any]] = []
     for node in _uia_walk(scope, max_depth=16, max_nodes=2500):
@@ -8194,7 +8194,7 @@ def _contacts_entry_ready(hwnd: int) -> bool:
 
     try:
         root = auto.ControlFromHandle(int(hwnd))
-        contact_list = _uia_primary_contact_list(root) or _uia_guess_contact_list(root)
+        contact_list = _uia_strict_contact_list(root)
         return bool(contact_list is not None and _uia_visible_contact_cell_rows(contact_list))
     except Exception:
         return False
@@ -8330,7 +8330,7 @@ def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
         }
         # 只为排查服务的额外坐标：取不到就算了，绝不能让日志把主流程搞崩
         try:
-            dbg["list_rect"] = str(_uia_rect(_uia_primary_contact_list(_uia_main_root(hwnd))))
+            dbg["list_rect"] = str(_uia_rect(_uia_strict_contact_list(_uia_main_root(hwnd))))
         except Exception as exc:
             dbg["list_rect"] = "err:%s" % str(exc)[:60]
         _contact_sync_debug(
@@ -8517,7 +8517,7 @@ def _contacts_scroll_to_head(
             import uiautomation as auto  # type: ignore
 
             root = auto.ControlFromHandle(int(hwnd))
-            current_list = _uia_guess_contact_list(root) or _uia_primary_contact_list(root) or contact_list
+            current_list = _uia_strict_contact_list(root) or contact_list
         except Exception:
             current_list = contact_list
         if current_list is None:
@@ -8591,7 +8591,7 @@ _CONTACT_SYNC_STUCK_RESCROLL_ROUNDS = 5
 _CONTACT_SYNC_SCAN_COMPLETE_ROUNDS = 12
 # 连续这么多轮「一屏联系人都读不到」就直接失败退出（2026-10-14 用户反馈：找不到「联系人」入口时
 # 一直在那来回点、也没有失败退出，界面像卡死）。正常扫描时每轮能看到十几行，空屏=微信不在通讯录页。
-_CONTACT_SYNC_EMPTY_SCREEN_LIMIT = 8
+_CONTACT_SYNC_EMPTY_SCREEN_LIMIT = 12
 # 「读微信号」连续失败这么多次就停手：点开卡片也确认不了是本人时，继续点只会"鼠标一直点"却读不到号。
 _WX_FILL_CONSECUTIVE_FAILURE_LIMIT = 3
 
@@ -10899,19 +10899,18 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
 
     def _resolve_contact_list(list_hwnd: int) -> Any:
         root_now = auto.ControlFromHandle(int(list_hwnd))
-        found = None
-        queue = [(root_now, 0)]
-        while queue:
-            node, depth = queue.pop(0)
-            if _uia_control_class(node) == "mmui::StickyHeaderRecyclerListView" and _uia_control_text(node) == "\u901a\u8baf\u5f55":
-                found = node
-                break
-            if depth < 14:
-                try:
-                    queue.extend((child, depth + 1) for child in node.GetChildren())
-                except Exception:
-                    pass
-        return found or _uia_guess_contact_list(root_now) or _uia_primary_contact_list(root_now)
+        # 2026-10-14: never guess the list. Only class
+        # mmui::StickyHeaderRecyclerListView + name = Chinese word for
+        # contacts is accepted; otherwise return None so the caller aborts
+        # instead of acting on the chat/session list.
+        strict = _uia_strict_contact_list(root_now)
+        if strict is None:
+            try:
+                _contact_sync_debug(account_id, stage="contacts_list_strict_miss",
+                                    recyclers=len(_uia_contact_recycler_lists(root_now) or []))
+            except Exception:
+                pass
+        return strict
 
     # 切到通讯录页 + 找联系人列表控件：这一步以前失败就一行日志都不写（2026-10-14 线上：
     # 用户点同步后卡在这里，诊断包里只有 app.log 里的 comtypes 导入，看不出卡在哪）。
@@ -10953,8 +10952,12 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     if contact_list is None:
         _contact_sync_debug(account_id, stage="contacts_sync_failed", reason="contact_list_not_found",
                             hwnd=int(hwnd))
-        raise RuntimeError("local WeChat contact list not found")
+        raise RuntimeError("找不到通讯录列表（只认 通讯录 那一栏，认不出就不动手）")
 
+    # 2026-10-14: open the click fence once the real contacts list is known.
+    _contacts_click_fence_open(_uia_rect(contact_list), account_id)
+    _contact_sync_debug(account_id, stage="click_fence_open",
+                        fence=str(_CONTACTS_CLICK_FENCE.get("rect")))
     existing_before = _contact_count(account_id)
     # 只做“够用”的滚动：联系人档标题已可见就一点都不滚（2026-10-14 反馈：不要多余操作）
     try:
@@ -10981,6 +10984,12 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     profile_fallback_failures = 0
     profile_attempted: set[str] = set()
     wx_fill_budget = _contact_wx_fill_budget()
+    if wx_fill_budget == 0:
+        # 2026-10-14: a configured 0 made the whole run collect nicknames only
+        # (online wx_fill_done budget=0). The user wants every row opened.
+        _contact_sync_debug(account_id, stage="wx_fill_budget_override", configured=0,
+                            applied=None)
+        wx_fill_budget = None
     wx_fill_consecutive_failures = 0
     rounds = 0
     empty_rounds = 0
@@ -10994,7 +11003,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         _contact_sync_debug(
             account_id, stage="contacts_probe",
             window_rect=str(_uia_rect(snap_root)),
-            list_rect=str(_uia_rect(_uia_primary_contact_list(snap_root) or _uia_guess_contact_list(snap_root))),
+            list_rect=str(_uia_rect(_uia_strict_contact_list(snap_root))),
             open_group=str(snap_scan.get("open_group") or ""),
             subpage=bool(snap_scan.get("subpage")),
             items=len(snap_scan.get("items") or []),
@@ -11018,11 +11027,12 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     except Exception as exc:
         _contact_sync_debug(account_id, stage="contacts_prepare_error", error=str(exc)[:200])
     # 不再因为"入口没准备好"直接失败：读到什么算什么（2026-10-14：卡太死反而连列表都展不开）。
+    collapsed_reopens = 0
     for _idx in range(max_rounds):
         rounds = _idx + 1
         try:
             root = auto.ControlFromHandle(int(hwnd))
-            refreshed = _uia_guess_contact_list(root) or _uia_primary_contact_list(root)
+            refreshed = _uia_strict_contact_list(root)
             if refreshed is not None:
                 contact_list = refreshed
         except Exception:
@@ -11032,6 +11042,12 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         names = [row.get("name") or "" for row in rows_now]
         if not names:
             empty_rounds += 1
+            try:
+                # 2026-10-14: a row click can leave the profile pane covering the
+                # contacts list; put it back instead of counting empty rounds.
+                _restore_contacts_list_after_read(hwnd, account_id, "")
+            except Exception:
+                pass
             _contact_sync_debug(account_id, stage="contacts_empty_round", round=rounds,
                                 empty_rounds=empty_rounds, seen=len(seen))
             if empty_rounds >= _CONTACT_SYNC_EMPTY_SCREEN_LIMIT:
@@ -11056,7 +11072,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             try:
                 _ensure_local_contacts_tab(account_id)
                 root2 = auto.ControlFromHandle(int(hwnd))
-                refreshed_list = _uia_guess_contact_list(root2) or _uia_primary_contact_list(root2)
+                refreshed_list = _uia_strict_contact_list(root2)
                 if refreshed_list is not None:
                     contact_list = refreshed_list
                     try:
@@ -11067,6 +11083,22 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 _contact_sync_debug(account_id, stage="empty_screen_recover_error", round=rounds,
                                     error=str(exc)[:160])
             time.sleep(0.8)
+            continue
+        top_entries = {name for name in skip_names if len(name) > 1}
+        if (names and top_entries and collapsed_reopens < 5
+                and all((n or "").strip() in top_entries for n in names)):
+            collapsed_reopens += 1
+            # 2026-10-14: only the top level entries are visible, i.e. the contacts
+            # group got collapsed (a stray click/scroll collapses it). Clicking those
+            # rows only makes it worse - reopen the group and carry on.
+            _contact_sync_debug(account_id, stage="contacts_group_collapsed", round=rounds,
+                                seen=len(seen))
+            try:
+                _contacts_prepare_for_sync(hwnd, account_id)
+            except Exception as exc:
+                _contact_sync_debug(account_id, stage="contacts_collapsed_reopen_error",
+                                    round=rounds, error=str(exc)[:140])
+            time.sleep(0.6)
             continue
         empty_rounds = 0
         list_rect = _uia_rect(contact_list)
@@ -11102,15 +11134,9 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                                         success=profile_fallback_successes, budget=wx_fill_budget)
                 else:
                     profile_fallback_failures += 1
+                    # 2026-10-14 用户要求：不要因为几次读不到就整轮停止点卡片 ——
+                    # 「联系人点开就从第一个开始拿，依次点点完为止」。
                     wx_fill_consecutive_failures += 1
-                    if wx_fill_consecutive_failures >= _WX_FILL_CONSECUTIVE_FAILURE_LIMIT:
-                        # 连着几次都读不到（点开卡片也确认不了是本人）→ 这一轮别再点卡片了，
-                        # 不然就是"鼠标一直在点"却什么也读不到（2026-10-14 用户反馈）。
-                        wx_fill_budget = 0
-                        _contact_sync_debug(account_id, stage="wx_fill_stopped",
-                                            reason="consecutive_card_not_confirmed",
-                                            failures=wx_fill_consecutive_failures,
-                                            seen=len(seen))
                 # 读号（不管成没成）之后把资料卡收掉：真机上点开卡片后联系人行会消失（visible=0），
                 # 扫描就断在这、反复空屏（2026-10-14 日志 contacts_empty_round 44 次）。
                 try:
@@ -11129,7 +11155,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                             # 还是没回来：把列表控件重新定位一次（不发任何点击）
                             try:
                                 root3 = auto.ControlFromHandle(int(hwnd))
-                                fresh = _uia_guess_contact_list(root3) or _uia_primary_contact_list(root3)
+                                fresh = _uia_strict_contact_list(root3)
                                 if fresh is not None:
                                     contact_list = fresh
                             except Exception:
@@ -11190,7 +11216,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 continue
             try:
                 root_now = auto.ControlFromHandle(int(hwnd))
-                cur = _uia_guess_contact_list(root_now) or _uia_primary_contact_list(root_now) or contact_list
+                cur = _uia_strict_contact_list(root_now) or contact_list
                 cur_names = _uia_visible_contact_cell_names(cur)
             except Exception:
                 cur, cur_names = contact_list, []
@@ -11216,7 +11242,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 # 重新取一次控件、拉焦点、用更大步进再推一次，再多等一会儿。
                 try:
                     fresh_root = auto.ControlFromHandle(int(hwnd))
-                    fresh_list = _uia_guess_contact_list(fresh_root) or _uia_primary_contact_list(fresh_root)
+                    fresh_list = _uia_strict_contact_list(fresh_root)
                     if fresh_list is not None:
                         contact_list = fresh_list
                     try:
@@ -11359,12 +11385,15 @@ def sync_local_contacts(account_id: str, *, limit: int = 10000) -> Dict[str, Any
     # Contact sync is intentionally UIA-only. wxauto4's constructor can move
     # unsupported WeChat builds to the chat tab before reporting that its full
     # contacts API is unavailable, which corrupts this workflow's UI state.
-    return _run_local_driver_operation(
-        account_id,
-        "同步通讯录",
-        lambda: _sync_local_contacts_from_uia(account_id, limit=limit),
-        retry_on_failure=False,
-    )
+    try:
+        return _run_local_driver_operation(
+            account_id,
+            "同步通讯录",
+            lambda: _sync_local_contacts_from_uia(account_id, limit=limit),
+            retry_on_failure=False,
+        )
+    finally:
+        _contacts_click_fence_close()
 
 
 def clear_local_contacts(account_id: str) -> Dict[str, Any]:
@@ -11971,6 +12000,26 @@ def _uia_contact_list_score(node: Any) -> int:
     return score
 
 
+def _uia_strict_contact_list(root: Any) -> Optional[Any]:
+    """Return the local WeChat contacts list control, or None. Never guesses.
+
+    2026-10-14 incident: contacts sync fell back to guessing any
+    RecyclerView/ListView when the contacts list could not be found, so it
+    picked up the currently open chat/session list and the sync ended up
+    clicking the user's own conversations. This helper accepts only a list
+    whose class is mmui::StickyHeaderRecyclerListView AND whose name contains
+    the Chinese word for contacts. Callers must abort loudly instead of
+    acting on anything else.
+    """
+    try:
+        for node in _uia_contact_recycler_lists(root):
+            if "\u901a\u8baf\u5f55" in _uia_control_text(node):
+                return node
+    except Exception:
+        pass
+    return None
+
+
 def _uia_guess_contact_list(root: Any) -> Optional[Any]:
     candidates: List[tuple[int, Any]] = []
     for node in _uia_contact_recycler_lists(root):
@@ -12201,6 +12250,148 @@ def _contact_profile_card_root(root: Any) -> Any:
     return best if best is not None else label
 
 
+def _card_texts(card: Any) -> List[str]:
+    """资料卡里的短文本（去重、按顺序），用来判断"卡片有没有换人"。"""
+    out: List[str] = []
+    if card is None:
+        return out
+    try:
+        for node in _uia_walk(card, max_depth=20, max_nodes=3000):
+            text = _uia_control_text(node)
+            if text and len(text) < 60 and text not in out:
+                out.append(text)
+    except Exception:
+        return out
+    return out
+
+
+def _card_matches_target(texts: List[str], target: str) -> bool:
+    """卡片里有没有"这个人"。
+
+    先按名字精确比对（老办法）；再按"去掉空格和符号后互相包含"宽松比对 ——
+    线上常见：列表行显示备注、卡片顶部显示昵称，精确比对永远对不上，读号就全被跳过。
+    """
+    wanted = _normalize_contact_lookup_key(target)
+    if not wanted:
+        return False
+    for text in texts:
+        key = _normalize_contact_lookup_key(text)
+        if not key:
+            continue
+        if key == wanted or wanted in key or key in wanted:
+            return True
+    return False
+
+
+def _read_wx_no_from_window(hwnd: int, account_id: str, target: str) -> str:
+    """Fallback reader: take the WeChat ID straight from the window.
+
+    2026-10-14: on the user's machine the profile pane does open after the row click
+    but ``_contact_profile_card_root`` cannot recognise it, so every contact came back
+    as ``card_not_confirmed`` and no ID was ever written.  This helper does not depend
+    on the card control tree: it finds the WeChat-ID label anywhere in the window and
+    takes the value right next to it, still gated by ``_sanitize_contact_wx_no`` so a
+    nickname can never be stored as an ID.
+    """
+    import uiautomation as auto  # type: ignore
+
+    label_prefix = "\u5fae\u4fe1\u53f7"
+    try:
+        root = auto.ControlFromHandle(int(hwnd))
+        nodes = _uia_walk(root, max_depth=22, max_nodes=6000)
+    except Exception:
+        return ""
+    label_rect = None
+    for node in nodes:
+        text = _uia_control_text(node)
+        if text and text.strip().rstrip(":\uff1a").startswith(label_prefix):
+            label_rect = _uia_rect(node)
+            if label_rect is not None:
+                break
+    if label_rect is None:
+        return ""
+    candidates: List[str] = []
+    for node in nodes:
+        rect = _uia_rect(node)
+        if rect is None:
+            continue
+        if not (label_rect[0] - 60 <= rect[0] <= label_rect[2] + 340):
+            continue
+        if not (label_rect[1] - 80 <= rect[1] <= label_rect[3] + 80):
+            continue
+        text = _uia_control_text(node)
+        if text:
+            candidates.append(text)
+    pattern = label_prefix + r"\s*[:\uff1a]\s*(.+)$"
+    for text in candidates:
+        match = re.search(pattern, _compact_for_contains(text))
+        accepted = _sanitize_contact_wx_no(match.group(1) if match else text, target)
+        if accepted:
+            _contact_sync_debug(account_id, stage="wx_fill_window_scan", target=target, wx_no=accepted)
+            return accepted
+    return ""
+
+
+def _restore_contacts_list_after_read(hwnd: int, account_id: str, target: str) -> bool:
+    """Bring the contacts list back after a row click (the profile pane covers it)."""
+    def _rows() -> List[Any]:
+        try:
+            lst = _uia_strict_contact_list(_uia_main_root(int(hwnd)))
+            return _uia_visible_contact_cell_rows(lst) if lst is not None else []
+        except Exception:
+            return []
+
+    if _rows():
+        return True
+    _contact_sync_debug(account_id, stage="contacts_restore_start", target=target)
+    try:
+        _send_hotkey("esc", pause=0.3)
+    except Exception:
+        pass
+    if _rows():
+        _contact_sync_debug(account_id, stage="contacts_restore", target=target,
+                            restored=True, method="esc")
+        return True
+    fence_was = bool(_CONTACTS_CLICK_FENCE.get("on"))
+    if fence_was:
+        _CONTACTS_CLICK_FENCE["on"] = False
+    try:
+        _ensure_local_tab(int(hwnd), "\u5fae\u4fe1")
+        time.sleep(0.35)
+        _ensure_local_tab(int(hwnd), "\u901a\u8baf\u5f55", strict=True)
+    except Exception as exc:
+        _contact_sync_debug(account_id, stage="contacts_restore_error", target=target,
+                            error=str(exc)[:140])
+    finally:
+        if fence_was:
+            _CONTACTS_CLICK_FENCE["on"] = True
+    ok = bool(_rows())
+    _contact_sync_debug(account_id, stage="contacts_restore", target=target,
+                        restored=ok, method="tab_switch")
+    return ok
+
+
+def _contact_sync_card_probe(hwnd: int, account_id: str, target: str) -> None:
+    """Dump what the window really shows when the profile card cannot be recognised."""
+    import uiautomation as auto  # type: ignore
+
+    probe: List[Dict[str, Any]] = []
+    try:
+        root = auto.ControlFromHandle(int(hwnd))
+        for node in _uia_walk(root, max_depth=18, max_nodes=3000):
+            text = _uia_control_text(node)
+            if not text:
+                continue
+            if "\u5fae\u4fe1\u53f7" in text or "\u8d26\u53f7" in text or "\u53f7" in text:
+                probe.append({"text": text[:36], "cls": _uia_control_class(node)[:30],
+                              "rect": str(_uia_rect(node))})
+            if len(probe) >= 14:
+                break
+    except Exception as exc:
+        probe = [{"error": str(exc)[:80]}]
+    _contact_sync_debug(account_id, stage="wx_fill_card_probe", target=target, nodes=probe)
+
+
 def _read_contact_profile_wx_no_for_cell(
     hwnd: int,
     account_id: str,
@@ -12235,6 +12426,7 @@ def _read_contact_profile_wx_no_for_cell(
             pass
         return cell
 
+    before_texts = _card_texts(_contact_profile_card_root(auto.ControlFromHandle(int(hwnd))))
     for _attempt in range(2):
         _uia_click(_click_target())
         deadline = time.monotonic() + total_wait / 2
@@ -12248,14 +12440,35 @@ def _read_contact_profile_wx_no_for_cell(
                 candidate = None
             if candidate is None:
                 continue
-            if _uia_profile_mentions_name(candidate, target):
+            texts = _card_texts(candidate)
+            if _card_matches_target(texts, target):
+                card = candidate
+                break
+            # 名字对不上（列表显示备注、卡片显示昵称是常见情况）：只要这张卡片确实换了一张
+            # （内容与点击前不同）就先认它 —— 后面还要过 wx_no 闸门，不会把昵称当号写库。
+            if texts and texts != before_texts:
                 card = candidate
                 break
         if card is not None:
             break
     if card is None:
+        # 2026-10-14: the card tree is not recognisable on the user's build
+        # (card_not_confirmed every time), so read the ID from the window instead and
+        # always put the contacts list back afterwards.
+        wx_no = _read_wx_no_from_window(hwnd, account_id, target)
+        if wx_no:
+            try:
+                _persist_contact_wx_no(account_id, target, wx_no)
+            except Exception:
+                pass
+            _contact_sync_debug(account_id, stage="wx_fill", target=target, wx_no=wx_no,
+                                polls=polls, source="window_scan")
+            _restore_contacts_list_after_read(hwnd, account_id, target)
+            return wx_no
         _contact_sync_debug(account_id, stage="wx_fill_skipped", target=target,
                             reason="card_not_confirmed", polls=polls)
+        _contact_sync_card_probe(hwnd, account_id, target)
+        _restore_contacts_list_after_read(hwnd, account_id, target)
         return ""
     try:
         wx_no = _extract_contact_profile_wx_no(card, expected_name=target)
@@ -13130,6 +13343,10 @@ def _uia_click(node: Any, *, require_bounds: bool = True) -> None:
     session rows never expose a ``BoundingRectangle``: there is no visibility
     signal to trust, so clicking is still the only option.
     """
+    if _CONTACTS_CLICK_FENCE.get("on") and not _contacts_click_fence_node_ok(node):
+        # 2026-10-14: refuse every out-of-list click while the contacts sync runs.
+        _contacts_click_fence_refuse("uia_click", node=node)
+        return
     is_session_cell = _uia_control_class(node) == "mmui::ChatSessionCell"
     if is_session_cell and require_bounds and _uia_rect_tuple(node) is None:
         _uia_scroll_cell_into_view(node)
@@ -13428,12 +13645,89 @@ def _window_at_point(hwnd: int, x: int, y: int) -> Dict[str, Any]:
     return info
 
 
+# 2026-10-14: click fence for the contacts sync.
+# Incident: the contacts sync ended up clicking the user's own chat sessions.
+# Once the real contacts list is resolved the fence opens and only clicks on
+# that list (node inside it, or screen point inside its rectangle) are allowed;
+# everything else is refused and logged as stage=click_refused. Closed in
+# finally, so an exception cannot leave it on.
+_CONTACTS_CLICK_FENCE: Dict[str, Any] = {"on": False, "rect": None, "account": "", "refused": 0}
+
+
+def _contacts_click_fence_open(rect: Any, account_id: str) -> None:
+    _CONTACTS_CLICK_FENCE["on"] = True
+    _CONTACTS_CLICK_FENCE["rect"] = tuple(float(v) for v in rect) if rect else None
+    _CONTACTS_CLICK_FENCE["account"] = str(account_id or "")
+    _CONTACTS_CLICK_FENCE["refused"] = 0
+
+
+def _contacts_click_fence_close() -> int:
+    refused = int(_CONTACTS_CLICK_FENCE.get("refused") or 0)
+    if refused:
+        _contact_sync_debug(_CONTACTS_CLICK_FENCE.get("account") or "",
+                            stage="click_fence_closed", refused=refused)
+    _CONTACTS_CLICK_FENCE["on"] = False
+    _CONTACTS_CLICK_FENCE["rect"] = None
+    return refused
+
+
+def _contacts_click_fence_refuse(what: str, *, x: Any = None, y: Any = None, node: Any = None) -> None:
+    _CONTACTS_CLICK_FENCE["refused"] = int(_CONTACTS_CLICK_FENCE.get("refused") or 0) + 1
+    try:
+        _contact_sync_debug(
+            _CONTACTS_CLICK_FENCE.get("account") or "", stage="click_refused",
+            what=str(what)[:60], x=x, y=y,
+            node_class=_uia_control_class(node) if node is not None else "",
+            node_text=_uia_control_text(node)[:40] if node is not None else "",
+            fence=str(_CONTACTS_CLICK_FENCE.get("rect")),
+        )
+    except Exception:
+        pass
+
+
+def _contacts_click_fence_point_ok(x: Any, y: Any) -> bool:
+    rect = _CONTACTS_CLICK_FENCE.get("rect")
+    if not rect:
+        return False
+    try:
+        return rect[0] <= float(x) <= rect[2] and rect[1] <= float(y) <= rect[3]
+    except Exception:
+        return False
+
+
+def _contacts_click_fence_node_ok(node: Any) -> bool:
+    """True only for nodes belonging to the resolved contacts list."""
+    rect = _CONTACTS_CLICK_FENCE.get("rect")
+    if not rect:
+        return False
+    node_rect = _uia_rect_tuple(node)
+    if node_rect is not None:
+        if _contacts_click_fence_point_ok((node_rect[0] + node_rect[2]) // 2,
+                                          (node_rect[1] + node_rect[3]) // 2):
+            return True
+    cur = node
+    for _idx in range(12):
+        if cur is None:
+            break
+        if _uia_control_class(cur) == "mmui::StickyHeaderRecyclerListView" and \
+                "\u901a\u8baf\u5f55" in _uia_control_text(cur):
+            return True
+        try:
+            cur = cur.GetParentControl()
+        except Exception:
+            break
+    return False
+
+
 def _uia_click_screen_point(x: int, y: int, *, expect_hwnd: int = 0, account_id_hint: str = "") -> bool:
     """按屏幕坐标点一下。
 
     传了 ``expect_hwnd`` 就**必须先确认这个点确实落在那个窗口上**，不在就一个像素都不点
     （返回 False），避免点歪到别的窗口。不传时保留旧行为（其它调用点暂未改）。
     """
+    if _CONTACTS_CLICK_FENCE.get("on") and not _contacts_click_fence_point_ok(x, y):
+        _contacts_click_fence_refuse("screen_point", x=int(x), y=int(y))
+        return False
     if expect_hwnd:
         try:
             _focus_local_wechat(int(expect_hwnd))

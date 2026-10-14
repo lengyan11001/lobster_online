@@ -1250,6 +1250,7 @@ def _fake_contact_scan(monkeypatch, tmp_path, *, total, stall_from=None, stall_c
     monkeypatch.setattr(engine, "_ensure_local_contacts_tab", lambda _account_id: 4242)
     monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda _root: fake_list)
     monkeypatch.setattr(engine, "_uia_primary_contact_list", lambda _root: fake_list)
+    monkeypatch.setattr(engine, "_uia_strict_contact_list", lambda _root: fake_list)
     monkeypatch.setattr(
         engine,
         "_uia_visible_contact_cell_rows",
@@ -1574,6 +1575,7 @@ def _fake_profile_card_reader(monkeypatch, cards, *, persist_to=None):
     monkeypatch.setattr(engine, "_uia_click", lambda node: calls.append(("click", node)))
     monkeypatch.setattr(engine.time, "sleep", lambda *_: state.__setitem__("i", state["i"] + 1))
     monkeypatch.setattr(engine, "_contact_profile_card_root", lambda root: cards[min(state["i"], len(cards) - 1)])
+    monkeypatch.setattr(engine, "_card_texts", lambda card: [card.get("name", "")] if isinstance(card, dict) else [])
     monkeypatch.setattr(engine, "_uia_profile_mentions_name",
                         lambda card, name: card.get("name") == name)
     monkeypatch.setattr(
@@ -1754,6 +1756,7 @@ def test_wx_fill_clicks_every_rendered_row(monkeypatch, tmp_path):
     monkeypatch.setattr(engine, "_uia_rect", lambda node: getattr(node, "fake_rect", None))
     monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda root: list_node)
     monkeypatch.setattr(engine, "_uia_primary_contact_list", lambda root: list_node)
+    monkeypatch.setattr(engine, "_uia_strict_contact_list", lambda root: list_node)
     monkeypatch.setattr(engine, "_uia_visible_contact_cell_rows",
                         lambda node: [{"name": r.name, "node": r} for r in rows])
     monkeypatch.setattr(engine, "_uia_visible_contact_cell_names", lambda node: [r.name for r in rows])
@@ -1831,6 +1834,7 @@ def test_wx_fill_does_not_press_esc_without_a_real_popup_card(monkeypatch, tmp_p
     monkeypatch.setattr(engine, "_uia_rect", lambda node: getattr(node, "fake_rect", None))
     monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda root: list_node)
     monkeypatch.setattr(engine, "_uia_primary_contact_list", lambda root: list_node)
+    monkeypatch.setattr(engine, "_uia_strict_contact_list", lambda root: list_node)
     monkeypatch.setattr(engine, "_uia_visible_contact_cell_rows",
                         lambda node: [{"name": r.name, "node": r} for r in rows] if state["rows"] else [])
     monkeypatch.setattr(engine, "_uia_visible_contact_cell_names",
@@ -1878,6 +1882,7 @@ def test_wx_fill_presses_esc_when_a_popup_card_is_open(monkeypatch, tmp_path):
     monkeypatch.setattr(engine, "_uia_rect", lambda node: getattr(node, "fake_rect", None))
     monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda root: list_node)
     monkeypatch.setattr(engine, "_uia_primary_contact_list", lambda root: list_node)
+    monkeypatch.setattr(engine, "_uia_strict_contact_list", lambda root: list_node)
     monkeypatch.setattr(engine, "_uia_visible_contact_cell_rows",
                         lambda node: [{"name": r.name, "node": r} for r in rows] if state["rows"] else [])
     monkeypatch.setattr(engine, "_uia_visible_contact_cell_names",
@@ -1915,8 +1920,8 @@ def test_wx_fill_presses_esc_when_a_popup_card_is_open(monkeypatch, tmp_path):
 
 
 
-def test_wx_fill_stops_clicking_after_consecutive_failures(monkeypatch, tmp_path):
-    """连着 3 次都读不到号 → 这一轮别再点卡片了（不然就是"鼠标一直在点"却什么也读不到）。"""
+def test_wx_fill_keeps_clicking_until_the_end_even_if_reads_fail(monkeypatch, tmp_path):
+    """读不到号也要接着点下一个人（2026-10-14 用户要求：依次点点完为止，不要整轮停手）。"""
     _use_temp_native_wechat_db(monkeypatch, tmp_path)
     list_node = _FakeRectList((100.0, 200.0, 400.0, 800.0))
     rows = [types.SimpleNamespace(fake_rect=(100.0, 300.0 + i * 60, 400.0, 354.0 + i * 60), name=f"人{i}")
@@ -1924,6 +1929,7 @@ def test_wx_fill_stops_clicking_after_consecutive_failures(monkeypatch, tmp_path
     monkeypatch.setattr(engine, "_uia_rect", lambda node: getattr(node, "fake_rect", None))
     monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda root: list_node)
     monkeypatch.setattr(engine, "_uia_primary_contact_list", lambda root: list_node)
+    monkeypatch.setattr(engine, "_uia_strict_contact_list", lambda root: list_node)
     monkeypatch.setattr(engine, "_uia_visible_contact_cell_rows",
                         lambda node: [{"name": r.name, "node": r} for r in rows])
     monkeypatch.setattr(engine, "_uia_visible_contact_cell_names", lambda node: [r.name for r in rows])
@@ -1942,11 +1948,138 @@ def test_wx_fill_stops_clicking_after_consecutive_failures(monkeypatch, tmp_path
     clicked = []
     monkeypatch.setattr(engine, "_read_contact_profile_wx_no_for_cell",
                         lambda hwnd, account_id, cell, name: clicked.append(name) or "")
-    stages = []
-    monkeypatch.setattr(engine, "_contact_sync_debug", lambda account_id, **fields: stages.append(fields))
+    monkeypatch.setattr(engine, "_contact_sync_debug", lambda account_id, **fields: None)
 
-    engine._sync_local_contacts_from_uia("wechat-account-wxfill-brake", limit=10000)
+    engine._sync_local_contacts_from_uia("wechat-account-wxfill-until-end", limit=10000)
 
-    assert clicked == ["人0", "人1", "人2"], clicked
-    stopped = [item for item in stages if item.get("stage") == "wx_fill_stopped"]
-    assert stopped and stopped[0].get("reason") == "consecutive_card_not_confirmed", stages[-6:]
+    assert clicked == ["人0", "人1", "人2", "人3", "人4", "人5"], clicked
+
+
+# ---------------------------------------------------------------- 2026-10-14 (2)
+# Incident: the contacts sync ended up clicking the user's own chat sessions.
+# Root cause: when the contacts list could not be found it fell back to
+# _uia_guess_contact_list / _uia_primary_contact_list, which happily returned the
+# currently open chat/session RecyclerView. The sync then scrolled and clicked
+# inside that pane.
+# New contract: only class=mmui::StickyHeaderRecyclerListView AND name containing
+# "通讯录" is accepted; anything else must abort with a loud error
+# before touching the UI.
+
+
+def _fake_closed_ui(monkeypatch, tmp_path, *, recyclers, clicked):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+
+    class FakeRoot:
+        def GetChildren(self):
+            return []
+
+    fake_auto = types.ModuleType("uiautomation")
+    fake_auto.ControlFromHandle = lambda hwnd: FakeRoot()
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_auto)
+    monkeypatch.setattr(engine, "_module_available", lambda name: True)
+    monkeypatch.setattr(engine, "_ensure_local_contacts_tab", lambda _account_id: 4242)
+    monkeypatch.setattr(engine, "_uia_contact_recycler_lists", lambda _root: list(recyclers))
+    monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda _root: (recyclers or [None])[0])
+    monkeypatch.setattr(engine, "_uia_primary_contact_list", lambda _root: (recyclers or [None])[0])
+
+    def boom(*args, **kwargs):
+        clicked.append((args, kwargs))
+        raise AssertionError("must not touch the UI when the contacts list is unknown")
+
+    for name in ("_uia_click", "_uia_click_control_center", "_click_node_by_point",
+                 "_uia_click_screen_point", "_uia_click_first_named"):
+        monkeypatch.setattr(engine, name, boom)
+
+
+def _list_stub(class_name, name):
+    return type("ListNode", (), {"ClassName": class_name, "Name": name})()
+
+
+def test_strict_contact_list_only_accepts_the_contacts_recycler():
+    CN = "\u901a\u8baf\u5f55"
+    contacts = _list_stub("mmui::StickyHeaderRecyclerListView", CN)
+    sessions = _list_stub("mmui::StickyHeaderRecyclerListView", "\u5fae\u4fe1")
+    wrong_class = _list_stub("mmui::SessionListView", CN)
+
+    class Root:
+        def __init__(self, *kids):
+            self._kids = list(kids)
+
+        def GetChildren(self):
+            return list(self._kids)
+
+    # ??????????????????????
+    assert engine._uia_strict_contact_list(Root(sessions, contacts)) is contacts
+    # ??????????? None??????? fallback ??????
+    assert engine._uia_strict_contact_list(Root(sessions)) is None
+    # ???? StickyHeaderRecyclerListView ?????
+    assert engine._uia_strict_contact_list(Root(wrong_class)) is None
+    assert engine._uia_strict_contact_list(Root()) is None
+
+
+def test_contact_sync_refuses_to_guess_and_never_clicks(monkeypatch, tmp_path):
+    session_list = _list_stub("mmui::StickyHeaderRecyclerListView", "微信")
+    clicked = []
+    _fake_closed_ui(monkeypatch, tmp_path, recyclers=[session_list], clicked=clicked)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        engine._sync_local_contacts_from_uia("wechat-account-strict", limit=10000)
+
+    assert "找不到通讯录列表" in str(excinfo.value), excinfo.value
+    assert clicked == [], f"????????????????????? {clicked}"
+
+
+# ---------------------------------------------------------------- 2026-10-14 (3)
+# Incident: "you changed the contacts sync and it clicks my chat sessions".
+# The sync now opens a click fence once the real contacts list is resolved: any
+# click outside that list is refused (and logged), so it can never reach the
+# session column again.
+
+
+def _rect_stub(left, top, right, bottom):
+    return type("RectStub", (), {"left": left, "top": top, "right": right, "bottom": bottom})()
+
+
+def _node_stub(rect):
+    return type("NodeStub", (), {"BoundingRectangle": rect, "ClassName": "mmui::ContactsCellItemView",
+                                 "Name": "\u8054\u7cfb\u4eba", "GetParentControl": lambda self: None})()
+
+
+def test_click_fence_refuses_every_click_outside_the_contacts_list(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    engine._contacts_click_fence_open((100.0, 100.0, 300.0, 400.0), "wechat-account-fence")
+    try:
+        assert engine._contacts_click_fence_point_ok(150, 200) is True
+        assert engine._contacts_click_fence_point_ok(900, 300) is False
+        assert engine._contacts_click_fence_node_ok(_node_stub(_rect_stub(120, 150, 200, 190))) is True
+        # ??????????????????
+        assert engine._contacts_click_fence_node_ok(_node_stub(_rect_stub(800, 150, 900, 190))) is False
+
+        touched = []
+        monkeypatch.setattr(engine, "_focus_local_wechat", lambda *a, **k: touched.append("focus"))
+        monkeypatch.setattr(engine.time, "sleep", lambda *a, **k: touched.append("sleep"))
+        assert engine._uia_click_screen_point(900, 300) is False
+        assert touched == [], "?????????????"
+
+        node = _node_stub(_rect_stub(800, 150, 900, 190))
+        monkeypatch.setattr(engine, "_uia_rect_tuple", lambda n: (800, 150, 900, 190))
+        engine._uia_click(node)
+        assert touched == [], "?????????"
+    finally:
+        engine._contacts_click_fence_close()
+    assert engine._CONTACTS_CLICK_FENCE["on"] is False
+
+
+def test_contact_sync_closes_the_click_fence_even_on_failure(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    monkeypatch.setattr(engine, "_find_local_account", lambda account_id: {"account_id": account_id})
+    monkeypatch.setattr(engine, "_run_local_driver_operation",
+                        lambda account_id, label, fn, **kwargs: fn())
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(engine, "_sync_local_contacts_from_uia", explode)
+    with pytest.raises(RuntimeError):
+        engine.sync_local_contacts("wechat-account-fence-crash", limit=10)
+    assert engine._CONTACTS_CLICK_FENCE["on"] is False, "?????????????"
