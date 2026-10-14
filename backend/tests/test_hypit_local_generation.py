@@ -1176,3 +1176,109 @@ def test_preview_playback_keeps_compatible_source(tmp_path, monkeypatch):
     })
     assert hypit_local._prepare_preview_playback(source, tmp_path) is True
     assert called["n"] == 1, "H.265 必须走转码"
+
+
+# ---------------------------------------------------------------- 2026-10-14
+# 线上反馈（本机日志 backend.log）：「视频复刻上传视频，显示上传 99% 然后点创建报 Internal Server Error」。
+# 真因：POST /api/local/hypit/workflows → analyze_local_video 里 CLI 报 no video frame exists，
+# 紧接着 finally 里 `await file.close()` 对 None 崩成 AttributeError，把真正的错误盖成一个裸 500。
+
+
+def _prepare_hypit_preview(tmp_path, monkeypatch, *, preview_id="344a257e29d749bf93bccb3e53b4537f",
+                           filename="6f395160671edad32820d78a2588694c.mp4"):
+    monkeypatch.setattr(hypit_local, "JOBS_ROOT", tmp_path / "hypit_local")
+    monkeypatch.setattr(hypit_local, "_dependency_status", lambda: {"ready": True, "missing": []})
+    monkeypatch.setattr(hypit_local, "_hypit_root", lambda: tmp_path)
+    monkeypatch.setattr(hypit_local, "_node_executable", lambda: "node")
+    folder = hypit_local._preview_root() / "31" / preview_id
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "source.mp4").write_bytes(b"\x00" * 32)
+    (folder / "preview.mp4").write_bytes(b"\x00" * 32)
+    (folder / "preview.json").write_text(
+        json.dumps({"preview_id": preview_id, "user_id": 31, "filename": filename, "source": "source.mp4"}),
+        encoding="utf-8",
+    )
+    return preview_id
+
+
+def _fake_hypit_cli(monkeypatch, *, container_seconds=1.3, tile_error="", calls=None):
+    calls = calls if calls is not None else []
+
+    def run(root, node, args, timeout):
+        calls.append(list(args))
+        if args[:2] == ["media", "probe"]:
+            return json.dumps({"duration": container_seconds, "hasVideo": True, "hasAudio": True,
+                               "width": 480, "height": 854, "frameRate": 24})
+        if args[:2] == ["media", "tile"]:
+            if tile_error:
+                raise RuntimeError(tile_error)
+            Path(args[args.index("--to") + 1]).write_bytes(b"jpg")
+            return "{}"
+        raise AssertionError("unexpected hypit call: %r" % (args,))
+
+    monkeypatch.setattr(hypit_local, "_run_hypit", run)
+    return calls
+
+
+def test_video_remix_submit_keeps_the_real_reason_when_no_upload_file(tmp_path, monkeypatch):
+    """复用"添加复刻"已上传的预览文件时 file=None：分析失败也要把真原因报出来，不能再崩成 AttributeError。"""
+    preview_id = _prepare_hypit_preview(tmp_path, monkeypatch)
+    _fake_hypit_cli(monkeypatch, tile_error='{"code":"CLI_ERROR","message":"boom"}')
+    user = SimpleNamespace(id=31)
+
+    with pytest.raises(HTTPException) as info:
+        asyncio.run(hypit_local.analyze_local_video(None, user, preview_id))
+
+    assert info.value.status_code == 500
+    assert "本机视频分析失败" in str(info.value.detail)
+    assert "boom" in str(info.value.detail)
+
+
+def test_video_remix_samples_only_the_video_track(tmp_path, monkeypatch):
+    """容器比视频轨长（更长的音轨撑大的）：取帧必须全落在有画面的那一段里。
+
+    线上那个文件是「容器 1.3s / 视频轨 0.46s」，短到该直接给 400（见下面那个用例）；
+    这里用「容器 12s / 视频轨 6s」验证取帧区间：旧逻辑按容器时长取帧会取到 10s 这种没有画面的位置。
+    """
+    preview_id = _prepare_hypit_preview(tmp_path, monkeypatch)
+    calls = _fake_hypit_cli(monkeypatch, container_seconds=12.0)
+    monkeypatch.setattr(hypit_local, "_video_track_span", lambda path: (6.0, 150))
+    user = SimpleNamespace(id=31)
+
+    result = asyncio.run(hypit_local.analyze_local_video(None, user, preview_id))
+
+    tile = [call for call in calls if call[:2] == ["media", "tile"]][-1]
+    assert "--at" in tile, tile
+    times = [float(value) for value in tile[tile.index("--at") + 1].split(",")]
+    assert times == sorted(times)
+    assert all(value < 6.0 for value in times), times
+    assert "--frames" not in tile
+    assert result["ok"] is True
+
+
+def test_video_remix_no_usable_frame_returns_a_clear_400(tmp_path, monkeypatch):
+    preview_id = _prepare_hypit_preview(tmp_path, monkeypatch)
+    _fake_hypit_cli(monkeypatch, tile_error='{"format":"hypit.cli-error@1","error":{"code":"CLI_ERROR",'
+                                            '"message":"no video frame exists at or after 0.649 s"}}')
+    monkeypatch.setattr(hypit_local, "_video_track_span", lambda path: (1.2, 30))
+    user = SimpleNamespace(id=31)
+
+    with pytest.raises(HTTPException) as info:
+        asyncio.run(hypit_local.analyze_local_video(None, user, preview_id))
+
+    assert info.value.status_code == 400
+    assert "没有可用的画面" in str(info.value.detail)
+
+
+def test_video_remix_too_short_video_is_rejected_before_the_cli(tmp_path, monkeypatch):
+    preview_id = _prepare_hypit_preview(tmp_path, monkeypatch)
+    calls = _fake_hypit_cli(monkeypatch, container_seconds=0.46)
+    monkeypatch.setattr(hypit_local, "_video_track_span", lambda path: (0.458, 7))
+    user = SimpleNamespace(id=31)
+
+    with pytest.raises(HTTPException) as info:
+        asyncio.run(hypit_local.analyze_local_video(None, user, preview_id))
+
+    assert info.value.status_code == 400
+    assert "太短" in str(info.value.detail)
+    assert not [call for call in calls if call[:2] == ["media", "tile"]]

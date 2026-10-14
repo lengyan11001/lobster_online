@@ -128,6 +128,54 @@ def _analysis_frame_count(duration: float) -> int:
     return max(3, min(12, math.ceil(max(0, duration) / 2)))
 
 
+# 短于这个长度的画面，取帧只会落到"没有画面"的尾巴上，复刻也没有意义。
+MIN_ANALYZE_SECONDS = 1.0
+
+
+def _video_track_span(path: Path) -> tuple[float, int]:
+    """视频轨道自己有多长（秒）、有多少帧。
+
+    容器时长会被更长的音轨撑大（2026-10-14 线上实例：1.3 s 的容器里视频轨只有 0.46 s / 7 帧），
+    按容器时长均匀取帧就会取到「没有画面」的尾巴，hypit CLI 直接报
+    ``no video frame exists at or after 0.649 s`` —— 用户那侧只看到一个 500。
+    """
+    exe = _ffprobe_executable()
+    if not exe:
+        return 0.0, 0
+    try:
+        result = subprocess.run(
+            [
+                exe, "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=nb_frames,avg_frame_rate,duration", "-of", "json", str(path),
+            ],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=60,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        stream = (json.loads(result.stdout or "{}").get("streams") or [{}])[0]
+    except Exception:
+        return 0.0, 0
+    try:
+        frames = int(str(stream.get("nb_frames") or "0") or 0)
+    except ValueError:
+        frames = 0
+    rate = 0.0
+    try:
+        numerator, _, denominator = str(stream.get("avg_frame_rate") or "").partition("/")
+        rate = float(numerator) / float(denominator or 1)
+    except (TypeError, ValueError, ZeroDivisionError):
+        rate = 0.0
+    if frames > 0 and rate > 0:
+        return round(frames / rate, 3), frames
+    try:
+        seconds = float(stream.get("duration") or 0)
+    except (TypeError, ValueError):
+        seconds = 0.0
+    return (round(seconds, 3) if seconds > 0 else 0.0), frames
+
+
 def _suggested_scene_count(duration: float) -> int:
     return max(1, min(12, math.ceil(max(0, duration) / 30)))
 
@@ -1636,28 +1684,41 @@ async def analyze_local_video(
                 180,
             )
             probe = json.loads(probe_text)
-            frame_count = _analysis_frame_count(float(probe.get("duration") or 0))
+            container_seconds = float(probe.get("duration") or 0)
+            track_seconds, track_frames = await asyncio.to_thread(_video_track_span, video_path)
+            usable = min(value for value in (container_seconds, track_seconds) if value > 0) if (
+                container_seconds > 0 or track_seconds > 0
+            ) else 0.0
+            if usable <= 0:
+                raise HTTPException(status_code=400, detail="读不到这段视频的时长（文件可能损坏），请重新导出后再传")
+            if usable < MIN_ANALYZE_SECONDS or (track_frames and track_frames < 2):
+                raise HTTPException(
+                    status_code=400,
+                    detail="这段视频只有 %.2f 秒画面%s，太短了，复刻不了；请换一段更长的视频（建议 2 秒以上）"
+                    % (usable, ("（%d 帧）" % track_frames) if track_frames else ""),
+                )
+            frame_count = _analysis_frame_count(usable)
+            # 只按"真的有画面"的那段时间取帧：容器尾巴（更长的音轨）里没有帧，取到就会报 no video frame exists。
+            sample_times = [
+                round(usable * (index + 0.5) / frame_count, 3) for index in range(frame_count)
+            ]
+            samples = [value for value in sample_times if 0 <= value < usable]
             contact_sheet = job_dir / "contact-sheet.jpg"
-            await asyncio.to_thread(
-                _run_hypit,
-                root,
-                node,
-                [
-                    "media",
-                    "tile",
-                    str(video_path),
-                    "--frames",
-                    str(frame_count),
-                    "--cell",
-                    "360",
-                    "--columns",
-                    "3",
-                    "--to",
-                    str(contact_sheet),
-                    "--json",
-                ],
-                900,
-            )
+            tile_args = ["media", "tile", str(video_path)]
+            if len(samples) >= 2:
+                tile_args += ["--at", ",".join(str(value) for value in samples)]
+            else:  # 兜底：拿不到视频轨信息时按原来的容器时长取帧
+                tile_args += ["--frames", str(frame_count)]
+            tile_args += ["--cell", "360", "--columns", "3", "--to", str(contact_sheet), "--json"]
+            try:
+                await asyncio.to_thread(_run_hypit, root, node, tile_args, 900)
+            except RuntimeError as exc:
+                if "no video frame exists" in str(exc):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="这段视频没有可用的画面（画面太短或编码异常），请换一段正常录制的视频",
+                    ) from exc
+                raise
         if not contact_sheet.is_file():
             raise RuntimeError("Hypit 未生成视频关键帧联系表")
         metadata = {
@@ -1691,7 +1752,10 @@ async def analyze_local_video(
         shutil.rmtree(job_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail=f"本机视频分析失败：{str(exc)[:1600]}") from exc
     finally:
-        await file.close()
+        # 走「复用添加复刻时已上传的预览文件」这条路时 file 是 None：
+        # 以前这里直接 AttributeError，把真正的失败原因（例如 CLI_ERROR）盖成一个光秃秃的 500。
+        if file is not None:
+            await file.close()
 
 
 @router.post("/api/local/hypit/jobs/{job_id}/storyboard")
