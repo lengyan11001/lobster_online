@@ -12849,10 +12849,12 @@ def _read_contact_profile_wx_no_for_cell(
                                 polls=polls, source="window_scan")
             _restore_contacts_list_after_read(hwnd, account_id, target)
             return wx_no
+        # 2026-10-15 (user rule): a failed open is simply skipped - record the nickname and move
+        # on. Reopening the contacts group here is what caused the endless
+        # collapse-then-start-from-the-top loop, so nothing is reopened for a failure.
         _contact_sync_debug(account_id, stage="wx_fill_skipped", target=target,
                             reason="card_not_confirmed", polls=polls)
         _contact_sync_card_probe(hwnd, account_id, target)
-        _restore_contacts_list_after_read(hwnd, account_id, target)
         return ""
     try:
         wx_no = _extract_contact_profile_wx_no(card, expected_name=target)
