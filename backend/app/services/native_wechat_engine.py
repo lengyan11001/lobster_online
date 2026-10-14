@@ -8584,6 +8584,10 @@ def _contacts_scroll_to_head(
     last_fingerprint = ""
     for round_index in range(1, max(1, int(max_pageups)) + 1):
         result["rounds"] = round_index
+        try:
+            _park_mouse_in_list(contact_list)
+        except Exception:
+            pass
         current_list = contact_list
         try:
             import uiautomation as auto  # type: ignore
@@ -11348,6 +11352,8 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         for _method in ("wheel", "page"):
             try:
                 if _method == "wheel":
+                    # park the cursor inside the list first: the wheel follows the cursor
+                    _park_mouse_in_list(contact_list)
                     contact_list.WheelDown(wheelTimes=wheel_step)
                 else:
                     # 以前这里发 {PGDN}：uiautomation 这版不支持这种写法，每轮都报
@@ -12340,6 +12346,33 @@ def _row_clipped_under_header(list_rect: Any, row_rect: Any, *, header_band: flo
     except (TypeError, ValueError, IndexError):
         return False
     return centre < top + float(header_band) or centre > bottom - 2.0
+
+
+def _park_mouse_in_list(list_node: Any) -> bool:
+    """Put the cursor inside the contacts list before sending wheel events.
+
+    2026-10-14: uiautomation sends the wheel to wherever the cursor happens to be, not to the
+    control. On the user's machine (WeChat on the second monitor, window x=832..1740) the
+    cursor often sat over another window, so WheelUp/WheelDown did nothing and the list never
+    reached the top (log: contacts_scroll_head 20 rounds, head_visible=false) - which is why the
+    "contacts" group row was never visible and the sync could not click/expand it.
+    """
+    try:
+        import win32api  # type: ignore
+    except Exception:
+        return False
+    rect = _uia_rect_tuple(list_node) or _uia_rect(list_node)
+    if not rect:
+        return False
+    try:
+        left, top, right, bottom = (float(rect[0]), float(rect[1]), float(rect[2]), float(rect[3]))
+        x = int((left + right) / 2)
+        y = int(min(bottom - 20, max(top + 60, (top + bottom) / 2)))
+        win32api.SetCursorPos((x, y))
+        time.sleep(0.12)
+        return True
+    except Exception:
+        return False
 
 
 def _contact_row_clickable(list_rect: Any, row_rect: Any, *, margin: float = 6.0) -> bool:
