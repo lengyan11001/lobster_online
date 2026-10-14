@@ -11124,6 +11124,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         except Exception:
             pass
         before = len(seen)
+        deferred_rows = False
         rows_now = _uia_visible_contact_cell_rows(contact_list)
         names = [row.get("name") or "" for row in rows_now]
         if not names and (root is None or _uia_strict_contact_list(root) is None):
@@ -11243,7 +11244,8 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 except Exception:
                     pass
                 if not _contact_row_clickable(list_rect, _uia_rect(click_node)):
-                    profile_attempted.add(normalized_name)
+                    # 2026-10-14: do NOT blacklist - the row comes back after a small scroll
+                    deferred_rows = True
                     _contact_sync_debug(account_id, stage="wx_fill_row_skipped", target=clean,
                                         reason="row_not_clickable",
                                         rect=str(_uia_rect(click_node)), list_rect=str(list_rect))
@@ -11252,7 +11254,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                     # sticky group header instead - that collapses the contacts group and the rest
                     # of the screen disappears (diag_20261014124846_e6c9e471: rect y=400..454 with
                     # list top 415). Skip it; the next scroll step brings the row back cleanly.
-                    profile_attempted.add(normalized_name)
+                    deferred_rows = True
                     _contact_sync_debug(account_id, stage="wx_fill_row_skipped", target=clean,
                                         reason="row_under_sticky_header",
                                         rect=str(_uia_rect(click_node)), list_rect=str(list_rect))
@@ -11336,7 +11338,13 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         # 每轮读的是“当前可见的一屏”，再往下推一屏。原来是 5 格/轮（一屏约 11.6 行、
         # 每轮只推进约 6.7 行 → 739 人要 ~110 轮）；7 格/轮 ≈ 9.4 行，仍有交叠不会漏人，
         # 轮数少三成、来回滚动也少三成（2026-10-14 反馈：不要一直往下滚）。
-        wheel_step = 7
+        # 2026-10-14: while rows are still pending (clipped under the header / not laid out)
+        # only nudge the list, otherwise the 7-row jump skips over them and the log looks
+        # like "it never clicks row by row, it just scrolls".
+        wheel_step = 2 if deferred_rows else 7
+        if deferred_rows:
+            _contact_sync_debug(account_id, stage="scroll_small_step", round=rounds,
+                                seen=len(seen))
         for _method in ("wheel", "page"):
             try:
                 if _method == "wheel":
@@ -12549,13 +12557,17 @@ def _restore_contacts_list_after_read(hwnd: int, account_id: str, target: str) -
         return False
     _CONTACTS_RESTORE_LAST[0] = _now
     _contact_sync_debug(account_id, stage="contacts_restore_start", target=target)
+    # 2026-10-14: no ESC here. On this WeChat build ESC on the contacts page closes or
+    # collapses the contacts group, and pressing it over and over is what ended up leaving the
+    # window blank. Try reopening the group instead (idempotent, no key presses).
     try:
-        _send_hotkey("esc", pause=0.3)
-    except Exception:
-        pass
+        _contacts_prepare_for_sync(int(hwnd), account_id)
+    except Exception as exc:
+        _contact_sync_debug(account_id, stage="contacts_restore_prepare_error",
+                            error=str(exc)[:140])
     if _rows():
         _contact_sync_debug(account_id, stage="contacts_restore", target=target,
-                            restored=True, method="esc")
+                            restored=True, method="reopen_group")
         return True
     fence_was = bool(_CONTACTS_CLICK_FENCE.get("on"))
     if fence_was:
