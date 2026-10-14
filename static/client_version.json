@@ -1,7 +1,7 @@
 {
-  "version": "2.0.129",
-  "build": 424,
-  "applied_at": "2026-10-14T19:10:37+08:00",
-  "note": "2.0.129：通讯录同步「点准」——展开改成我们自己算坐标、自己发鼠标点击；多策略逐个试。①不再用 uiautomation 的 node.Click()（它按节点缓存矩形算落点，线上点不准就是它）；改成按节点矩形自己算屏幕坐标、先校验落点确实在微信窗口上、再自己发鼠标事件；②展开联系人按人的点法逐个试：点行里文字节点中心 → 点整行中心 → 双击 → 键盘右方向键 → 空格 → 行左侧三角；一次一种、每种点完验证（分组展开 或 列表里出现联系人行），成功即停；③点击前先把微信窗口置前；④读号加刹车：连续 3 次卡片没确认是本人就本轮停止点卡片（不再鼠标一直点）；⑤新增排查日志：contacts_probe（窗口/列表/分组行矩形+展开状态）、contacts_group_click_ok/no_effect（method、(x,y)、落点下面是什么窗口、各矩形）、wx_fill_click(rect)。真机已验证：新逻辑 method=point_text 一次点开一个收起的分组（点 (628,247)，guard=under=微信 ok=True）。另含 2.0.128 全部内容（展开只点一次、读号优化全保留、空屏明确失败退出、清空并重新同步、诊断包带同步日志、视频复刻 500 修复等）。",
-  "bundle_sha256": "35e44b5d378c7119b6c5715e5df75a37c117888dd64a535cd08844481b4fdf16"
+  "version": "2.0.130",
+  "build": 425,
+  "applied_at": "2026-10-14T19:20:02+08:00",
+  "note": "2.0.130：通讯录同步「开头卡住」修复 —— 切通讯录页 + 找联系人列表控件这一步加重试和逐步日志。①线上现象：用户点同步后卡在这一步，一行日志都不写（诊断包里只有 app.log 的 comtypes 导入，看不出卡在哪）；本机用 424 代码复现了同一个失败：直接报 local WeChat contact list not found、新增日志 0 行；②现在最多重试 3 轮：每轮先确认微信窗口（记窗口矩形/可见性）→ 切通讯录页 → 找列表控件（class=mmui::StickyHeaderRecyclerListView 且 name=通讯录；找不到再退回 guess/primary），每轮记 contacts_tab_result / contacts_list_lookup(attempt, hwnd, found, class, rect)，失败记 contacts_sync_failed(reason) 再抛错；③本机真机验证：改动前一行日志没有、直接失败；改动后读到 200 个联系人（rounds=20、empty_rounds=0、stuck_rounds=0、耗时 33.6s），并写出 contacts_sync_start/contacts_tab_result/contacts_list_lookup/contacts_probe/contacts_prepare。另含 2.0.129 全部内容（展开自己算坐标发鼠标点击、多策略点法、读号刹车、contacts_probe 结构快照、诊断包带同步日志、视频复刻 500 修复等）。",
+  "bundle_sha256": "e509a8ce9a22c9c910dd41b5191ed8da9d751d0d43c8793962129d8f0ee588fb"
 }
