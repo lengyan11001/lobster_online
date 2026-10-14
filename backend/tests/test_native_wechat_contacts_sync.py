@@ -1836,6 +1836,8 @@ def test_wx_fill_only_clicks_rows_that_are_fully_visible(monkeypatch, tmp_path):
         types.SimpleNamespace(fake_rect=(100.0, 140.0, 400.0, 194.0), name="在列表上方"),
         # 完全在列表下方 → 不点
         types.SimpleNamespace(fake_rect=(100.0, 810.0, 400.0, 864.0), name="在列表下方"),
+        # 拿不到矩形（真机上很常见）→ 照点，不能因为量不到就不读号
+        types.SimpleNamespace(name="没有矩形"),
     ]
     monkeypatch.setattr(engine, "_uia_rect", lambda node: getattr(node, "fake_rect", None))
     monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda root: list_node)
@@ -1863,7 +1865,7 @@ def test_wx_fill_only_clicks_rows_that_are_fully_visible(monkeypatch, tmp_path):
 
     engine._sync_local_contacts_from_uia("wechat-account-row-guard", limit=10000)
 
-    assert clicked == ["中心在列表里", "整行可见"], "行中心在列表可视区里的行才允许点开资料卡"
+    assert clicked == ["中心在列表里", "整行可见", "没有矩形"], "行中心在列表可视区里 / 量不到矩形的行都要去点"
     skipped = {item.get("target") for item in stages if item.get("stage") == "wx_fill_row_skipped"}
     assert skipped == {"在列表上方", "在列表下方"}, skipped
 
@@ -1900,3 +1902,55 @@ def test_contacts_prepare_keeps_position_when_scrolled_mid_list(monkeypatch):
     assert result["ready"] is True
     assert result["skipped"] == "entry_already_visible"
     assert scrolls == [], "正滑在联系人档中间时不许回档顶（分组行不在屏上是正常的）"
+
+
+# ---------------------------------------------------------------- 2026-10-14
+# 真机日志：点开资料卡读号之后联系人行会消失（visible=0），扫描断在这里、反复空屏。
+# 现在读号完（不管成没成）要主动把卡片收掉，让列表回来。
+
+
+def test_wx_fill_closes_the_profile_card_so_the_list_comes_back(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    list_node = _FakeRectList((100.0, 200.0, 400.0, 800.0))
+    rows = [types.SimpleNamespace(fake_rect=(100.0, 300.0, 400.0, 354.0), name="甲")]
+    state = {"rows": 1}          # 1 = 列表里能看到行；0 = 被资料卡挡住
+
+    def visible_rows(node):
+        return [{"name": r.name, "node": r} for r in rows] if state["rows"] else []
+
+    monkeypatch.setattr(engine, "_uia_rect", lambda node: getattr(node, "fake_rect", None))
+    monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda root: list_node)
+    monkeypatch.setattr(engine, "_uia_primary_contact_list", lambda root: list_node)
+    monkeypatch.setattr(engine, "_uia_visible_contact_cell_rows", visible_rows)
+    monkeypatch.setattr(engine, "_uia_visible_contact_cell_names",
+                        lambda node: [r.name for r in rows] if state["rows"] else [])
+    monkeypatch.setattr(engine, "_contact_visible_fingerprint", lambda names: "|".join(names))
+    monkeypatch.setattr(engine, "_ensure_local_contacts_tab", lambda account_id: 4242)
+    monkeypatch.setattr(engine, "_module_available", lambda name: True)
+    fake_auto = types.ModuleType("uiautomation")
+    fake_auto.ControlFromHandle = lambda hwnd: object()
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_auto)
+    monkeypatch.setattr(engine, "_contacts_prepare_for_sync", lambda hwnd, account_id="": {
+        "ready": True, "attempts": 1, "method": "", "skipped": "", "collapsed": "", "opened": "",
+    })
+    monkeypatch.setattr(engine, "_contacts_scroll_to_head", lambda *a, **k: {"ready": True})
+    monkeypatch.setattr(engine, "_contact_wx_fill_budget", lambda: None)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(engine, "_local_profile_popup_root", lambda hwnd: None)
+
+    def read_card(hwnd, account_id, cell, name):
+        state["rows"] = 0        # 点开卡片后列表行消失
+        return ""
+
+    monkeypatch.setattr(engine, "_read_contact_profile_wx_no_for_cell", read_card)
+    keys = []
+    monkeypatch.setattr(engine, "_send_hotkey", lambda key, **kw: (keys.append(key),
+                                                                 state.__setitem__("rows", 1)))
+    stages = []
+    monkeypatch.setattr(engine, "_contact_sync_debug", lambda account_id, **fields: stages.append(fields))
+
+    engine._sync_local_contacts_from_uia("wechat-account-card-close", limit=10000)
+
+    assert keys and keys[0] == "esc", "读号后列表行没了，必须按 ESC 把资料卡收掉"
+    closed = [item for item in stages if item.get("stage") == "wx_fill_card_closed"]
+    assert closed and closed[0].get("rows_back") == 1, closed

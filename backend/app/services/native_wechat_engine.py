@@ -8262,8 +8262,11 @@ def _contacts_click_group_row(
         state = _contacts_group_state(hwnd, prefix)
         if state == expect_open or (expect_open is True and _contacts_entry_ready(hwnd)):
             return str(target.get("name") or "")
+        row_rect = _uia_rect(target["node"])
+        list_rect = _uia_rect(contact_list) if contact_list is not None else None
         _contact_sync_debug("", stage="contacts_group_click_no_effect", target=prefix,
-                            method=clicked, state=state)
+                            method=clicked, state=state,
+                            row_rect=str(row_rect), list_rect=str(list_rect))
         time.sleep(0.4)
     return ""
 
@@ -8545,7 +8548,7 @@ _CONTACT_SYNC_STUCK_RESCROLL_ROUNDS = 5
 _CONTACT_SYNC_SCAN_COMPLETE_ROUNDS = 12
 # 连续这么多轮「一屏联系人都读不到」就直接失败退出（2026-10-14 用户反馈：找不到「联系人」入口时
 # 一直在那来回点、也没有失败退出，界面像卡死）。正常扫描时每轮能看到十几行，空屏=微信不在通讯录页。
-_CONTACT_SYNC_EMPTY_SCREEN_LIMIT = 5
+_CONTACT_SYNC_EMPTY_SCREEN_LIMIT = 8
 
 
 def _contact_sync_max_rounds(limit: int) -> int:
@@ -10940,6 +10943,12 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 # 以前这里会一直重试、一直滚到轮数上限，界面看着像卡死；现在明确报错退出，让用户手动摆好页面。
                 _contact_sync_debug(account_id, stage="sync_aborted", reason="empty_screen",
                                     rounds=rounds, seen=len(seen), empty_rounds=empty_rounds)
+                if len(seen) > 0:
+                    raise RuntimeError(
+                        "扫描到第 %d 个联系人时，微信那侧的联系人列表连续 %d 轮读不到内容（列表没渲染出来）。"
+                        "请重试；如果反复出现，把微信窗口拉大一点、别让它最小化或被别的窗口盖住后再试"
+                        % (len(seen), empty_rounds)
+                    )
                 raise RuntimeError(
                     "连续 %d 轮都读不到联系人列表：请把微信切到「通讯录 → 联系人」页（不要停在某个联系人的资料页），"
                     "确认左侧列表里能看到联系人后重试" % empty_rounds
@@ -10999,6 +11008,29 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                                         success=profile_fallback_successes, budget=wx_fill_budget)
                 else:
                     profile_fallback_failures += 1
+                # 读号（不管成没成）之后把资料卡收掉：真机上点开卡片后联系人行会消失（visible=0），
+                # 扫描就断在这、反复空屏（2026-10-14 日志 contacts_empty_round 44 次）。
+                try:
+                    if not _uia_visible_contact_cell_rows(contact_list):
+                        popup = _local_profile_popup_root(hwnd) is not None
+                        _send_hotkey("esc", pause=0.15)
+                        if not popup:
+                            _send_hotkey("esc", pause=0.15)
+                        time.sleep(0.35)
+                        back = len(_uia_visible_contact_cell_rows(contact_list))
+                        _contact_sync_debug(account_id, stage="wx_fill_card_closed", target=clean,
+                                            popup=popup, rows_back=back)
+                        if not back:
+                            # 还是没回来：把列表控件重新定位一次（不发任何点击）
+                            try:
+                                root3 = auto.ControlFromHandle(int(hwnd))
+                                fresh = _uia_guess_contact_list(root3) or _uia_primary_contact_list(root3)
+                                if fresh is not None:
+                                    contact_list = fresh
+                            except Exception:
+                                pass
+                except Exception as exc:
+                    _contact_sync_debug(account_id, stage="wx_fill_card_close_error", error=str(exc)[:140])
             seen[clean] = {
                 "contact_key": clean,
                 "display_name": clean,
@@ -11995,21 +12027,27 @@ def _contact_row_clickable(list_rect: Any, row_rect: Any, *, margin: float = 6.0
     等下一轮滚动时它整行露出来了再点（每轮推进约 9 行、有重叠，每个人都轮得到）。
     """
     try:
+        # 默认就是"可以点"：真机上微信的行/列表矩形并不总可信（2026-10-14 日志里 776 次被判
+        # "不在可视区"，等于白白不去读号）。uiautomation 点的是节点自己的中心，本来就稳。
         if not list_rect or not row_rect:
-            return False
-        height = float(row_rect[3]) - float(row_rect[1])
-        if height < 20:
-            return False
-        # 只看"行中心点"在不在列表可视区里：点下去一定落在这一行上，也不会点到列表顶上那条档标题。
-        # （2026-10-14 修正：原来要求"整行都在矩形里"，真机上 417 次被误判成不可点，白白漏掉读号。）
-        center_x = (float(row_rect[0]) + float(row_rect[2])) / 2.0
-        center_y = (float(row_rect[1]) + float(row_rect[3])) / 2.0
-        return bool(
-            float(list_rect[0]) - margin <= center_x <= float(list_rect[2]) + margin
-            and float(list_rect[1]) + margin <= center_y <= float(list_rect[3]) - margin
-        )
+            return True
+        try:
+            left, top, right, bottom = (float(list_rect[0]), float(list_rect[1]),
+                                        float(list_rect[2]), float(list_rect[3]))
+            r_left, r_top, r_right, r_bottom = (float(row_rect[0]), float(row_rect[1]),
+                                                float(row_rect[2]), float(row_rect[3]))
+        except (TypeError, ValueError, IndexError):
+            return True
+        height = r_bottom - r_top
+        if height < 20 or height > 400 or right <= left or bottom <= top:
+            return True
+        center_x = (r_left + r_right) / 2.0
+        center_y = (r_top + r_bottom) / 2.0
+        # 只有"行中心明显跑到列表外面"（差出半行以上）才跳过 —— 那才是会点到档标题/别人那行的情况。
+        slack = max(6.0, height * 0.5, float(margin or 0))
+        return bool(left - slack <= center_x <= right + slack and top - slack <= center_y <= bottom + slack)
     except (TypeError, ValueError, IndexError):
-        return False
+        return True
 
 
 def _contact_profile_card_root(root: Any) -> Any:
