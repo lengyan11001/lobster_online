@@ -1160,6 +1160,14 @@
       if (!isCurrentRequest('contacts', sequence) || id !== activeAccountId()) return;
       if (!applyPaginationResponse(meta, data)) return loadContacts(meta.page);
       state.contacts = Array.isArray(data.items) ? data.items : [];
+      (function () {
+        var chip = $('nativeWechatContactWxStats');
+        if (!chip) return;
+        var total = Number(data.count || 0);
+        var withWx = Number(data.with_wx_no || 0);
+        var pct = total ? Math.round(withWx * 100 / total) : 0;
+        chip.textContent = '??? ' + withWx + ' / ' + total + '?' + pct + '%?';
+      })();
       renderContacts();
       renderAutoReplyConfig();
     }).catch(function(err) {

@@ -23552,7 +23552,12 @@ def list_contacts(account_id: str, *, limit: int = 100, offset: int = 0, keyword
             f"select * from wechat_contacts {where} order by updated_at desc, id desc limit ? offset ?",
             tuple(params + [int(limit), int(offset)]),
         ).fetchall()
-    return {"items": [_row_to_dict(row) for row in rows], "count": int(total), "limit": limit, "offset": offset}
+    with_wx = conn.execute(
+        f"select count(*) from wechat_contacts {where} and wx_no is not null and wx_no != ''",
+        tuple(params),
+    ).fetchone()[0]
+    # 2026-10-15: the UI shows "how many contacts already carry a WeChat ID".
+    return {"items": [_row_to_dict(row) for row in rows], "count": int(total), "with_wx_no": int(with_wx), "limit": limit, "offset": offset}
 
 
 def list_groups(account_id: str, *, limit: int = 100, offset: int = 0, keyword: str = "") -> Dict[str, Any]:
