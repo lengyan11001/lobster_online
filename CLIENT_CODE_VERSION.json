@@ -1,7 +1,7 @@
 {
-  "version": "2.0.134",
-  "build": 429,
-  "applied_at": "2026-10-14T21:06:45+08:00",
-  "note": "2.0.134：通讯录同步——一个 ESC 都不按 + 「联系人」那一行直接在列表里点了。用户反馈两点：①「不要跟我说联系人在屏幕外，我眼看着联系人他不去点」；②「不按 esc 你已经发了 3 版，还在按」。①【ESC 清零】通讯录流程里最后一处 ESC（只在弹出式资料卡时才按的那处）也删掉了，整条流程 _send_hotkey 调用数=0；本机真机实测（拦截按键发送做记录）跑完一整轮：发送的按键列表 = []。以前会按 ESC 的是「恢复列表」那一步，这台微信在通讯录页按 ESC 会把「联系人」档整个收掉，越按越乱。②【点得到联系人】不再依赖可见行扫描：收起着的时候直接在列表控件树里遍历找分组行（class=mmui::ContactsCellGroupView 且名字以「联系人」开头），找到就点（日志 contacts_expand_by_walk）；扫描说没看到、但列表里其实有这一行时也能点开。③【不点到分组条】行中心落在列表顶部 44px 内（会被置顶的「联系人」分组条压住）→ 不点，记 row_under_sticky_header；这类行不再拉黑，挂为待点，只小步滚 2 行把它们带回可点区域（scroll_small_step）。④【滚轮跟着光标走】滚之前先把鼠标移进列表矩形（_park_mouse_in_list）——你这台机微信在第二屏，光标常停在别的窗口，滚轮事件根本没落到列表里（历史日志：滚 20 轮 head_visible=false）。⑤【空屏先重开分组】列表空了先重新展开「联系人」再计空轮，恢复流程限流 15 秒一次。验证：本机真机跑 limit=6 受限同步 —— 结果 ok=true、按键发送列表为空、ESC=0；之前一对一验过 A→maibaobao888888kefu、A000燕子→A000000yanzi、A001.老朋友→MM16003000，每读一个可见行 7→7。",
-  "bundle_sha256": "52267c503752a3f0233f3f7b801659317f1d4245a49c21b600c44061e3644186"
+  "version": "2.0.135",
+  "build": 430,
+  "applied_at": "2026-10-14T21:20:32+08:00",
+  "note": "2.0.135 fix: bind the contacts list to its own window. Among all candidates named contacts, pick the one whose own friend rows really fall inside its own rect; if more than half of the enumerated rows sit outside the list rect (another WeChat window / something covering it), stop immediately with contacts_list_mismatch and send no click at all. Includes everything from 2.0.134: zero ESC in the contacts flow, the contacts entry is clicked straight from the list tree, rows hidden under the sticky header are refused, pending rows get a 2-row nudge, and the cursor is parked inside the list before any wheel event.",
+  "bundle_sha256": "2e2109aa07388a635c379b15769374c0f895050025fe4d9e74a63ab28babddec"
 }
