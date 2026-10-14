@@ -144,8 +144,8 @@ window.registerLobsterView('alibaba-inquiries', {
 });
 
   window.registerLobsterView('juhe-wechat', {
-    html: '/static/views/juhe-wechat.html?v=20261014-reset-contacts-v1',
-    scripts: '/static/js/juhe-wechat.js?v=20261014-reset-contacts-v1',
+    html: '/static/views/juhe-wechat.html?v=20261014-clear-only-v2',
+    scripts: '/static/js/juhe-wechat.js?v=20261014-clear-only-v2',
     init: 'initJuheWechatView',
     cache: 'reload'
   });

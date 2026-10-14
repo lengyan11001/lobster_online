@@ -1486,10 +1486,16 @@ def test_reset_contacts_button_and_endpoint_are_wired():
     root = Path(__file__).resolve().parents[2]
     html = (root / "static" / "views" / "juhe-wechat.html").read_text(encoding="utf-8")
     javascript = (root / "static" / "js" / "juhe-wechat.js").read_text(encoding="utf-8")
-    assert 'id="nativeWechatResetContactsBtn"' in html
-    assert html.index('id="nativeWechatClearContactsBtn"') < html.index('id="nativeWechatResetContactsBtn"')
-    assert "'/api/native-wechat/contacts/reset'" in javascript
-    assert "$('nativeWechatResetContactsBtn')" in javascript
+    # 2026-10-14: clear and sync must not be one button any more - the bundled
+    # "clear + resync" entry is gone, the clear button only clears.
+    assert 'id="nativeWechatResetContactsBtn"' not in html
+    assert "$('nativeWechatResetContactsBtn')" not in javascript
+    assert "function resetContacts()" not in javascript
+    assert "'/api/native-wechat/contacts/reset'" not in javascript
+    assert "resetPagination('contacts')" in javascript
+    assert "loadContacts(1), loadPeers()" in javascript
+    assert "cache: 'no-store'" in javascript
+    assert "function refreshContacts()" in javascript
     registry = (root / "static" / "js" / "view-registry.js").read_text(encoding="utf-8")
     # 改了这个视图就一定要带 cache buster（不锁具体版本串，避免每次 bump 都改测试）
     assert "/static/views/juhe-wechat.html?v=" in registry

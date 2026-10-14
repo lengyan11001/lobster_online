@@ -244,7 +244,7 @@
     opts = opts || {};
     var base = apiBase();
     if (!base) return Promise.reject(new Error('未配置本机 API 地址'));
-    var req = { method: opts.method || 'GET', headers: authHeaderJson() };
+    var req = { method: opts.method || 'GET', headers: authHeaderJson(), cache: 'no-store' };
     if (opts.body !== undefined) req.body = JSON.stringify(opts.body || {});
     return fetch(base + path, req).then(function(resp) {
       return resp.json().catch(function() { return {}; }).then(function(data) {
@@ -258,7 +258,7 @@
     opts = opts || {};
     var base = (typeof API_BASE !== 'undefined' && API_BASE) ? String(API_BASE).replace(/\/$/, '') : '';
     if (!base) return Promise.reject(new Error('未配置云端 API 地址'));
-    var req = { method: opts.method || 'GET', headers: authHeaderJson() };
+    var req = { method: opts.method || 'GET', headers: authHeaderJson(), cache: 'no-store' };
     if (opts.body !== undefined) req.body = JSON.stringify(opts.body || {});
     return fetch(base + path, req).then(function(resp) {
       return resp.json().catch(function() { return {}; }).then(function(data) {
@@ -1133,6 +1133,14 @@
     });
   }
 
+  function refreshContacts() {
+    // 2026-10-14: "refresh" = page 1 + no cached response, otherwise a cleared list can
+    // keep showing old rows until the app is restarted.
+    resetPagination('contacts');
+    beginRequest('contacts');
+    return loadContacts(1);
+  }
+
   function loadContacts(page) {
     var id = activeAccountId();
     var keyword = (($('nativeWechatContactSearch') || {}).value || '').trim();
@@ -1455,46 +1463,21 @@
       method: 'POST',
       body: { account_id: id }
     }).then(function(data) {
+      // 2026-10-14: clear is clear - blank the table and paging right away so the panel
+      // is empty immediately, then re-read page 1 from the cleared db.
+      state.contacts = [];
       state.contactSelected = {};
+      resetPagination('contacts');
       renderContactSelectionState();
+      renderContacts();
+      renderPagination('contacts');
       setMsg('已清除本地通讯录：删除 ' + (Number(data.removed) || 0) + ' 条，剩余 ' + (Number(data.total_after) || 0) + ' 条', false);
-      return Promise.all([loadContacts(), loadPeers()]);
+      return Promise.all([loadContacts(1), loadPeers()]);
     }).catch(function(err) {
       setMsg(err.message || '清除通讯录失败', true);
     });
   }
 
-  // 脏数据一键重来：清空本机通讯录缓存后立刻从头同步一遍（不碰微信里的联系人）。
-  function resetContacts() {
-    var id = activeAccountId();
-    if (!id) return setMsg('请先选择账号', true);
-    var contactsMeta = (state.pagination && state.pagination.contacts) || {};
-    var total = Number(contactsMeta.total || 0);
-    var message = '清空本机通讯录缓存并重新同步？\n\n'
-      + '· 只删本机保存的通讯录（当前 ' + total + ' 条），不会删除也没有影响微信里的联系人；\n'
-      + '· 清空后会立刻从微信通讯录重新同步一遍，人多的账号要等一会儿。';
-    if (typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm(message)) {
-      return;
-    }
-    setMsg('正在清空本机通讯录并重新同步，请稍候...', false);
-    return apiJson('/api/native-wechat/contacts/reset', {
-      method: 'POST',
-      body: { account_id: id, limit: 10000 }
-    }).then(function(data) {
-      state.contactSelected = {};
-      renderContactSelectionState();
-      var cleared = Number(data.cleared) || 0;
-      if (data.sync_error) {
-        setMsg('已清空 ' + cleared + ' 条，但重新同步失败：' + data.sync_error + '（可点「同步通讯录」重试）', true);
-      } else {
-        setMsg('已清空 ' + cleared + ' 条并重新同步：本次读取 ' + (Number(data.count) || 0)
-          + ' 条，库内共 ' + (Number(data.total_after) || 0) + ' 条', false);
-      }
-      return Promise.all([loadContacts(), loadPeers()]);
-    }).catch(function(err) {
-      setMsg(err.message || '清空并重新同步失败', true);
-    });
-  }
 
   function submitFriendQueue() {
     var id = activeAccountId();
@@ -2402,7 +2385,7 @@
       ['nativeWechatRefreshAccountsBtn2', loadAccounts],
       ['nativeWechatRefreshStrategyBtn', loadStrategy],
       ['nativeWechatRefreshPeersBtn', loadPeers],
-      ['nativeWechatRefreshContactsBtn', loadContacts],
+      ['nativeWechatRefreshContactsBtn', refreshContacts],
       ['nativeWechatRefreshGroupsBtn', loadGroups],
       ['nativeWechatRefreshMessagesBtn', syncActiveMessages],
       ['nativeWechatRefreshTasksBtn', loadTasks]
@@ -2479,8 +2462,6 @@
     if (syncContactsBtn) syncContactsBtn.addEventListener('click', syncContacts);
     var clearContactsBtn = $('nativeWechatClearContactsBtn');
     if (clearContactsBtn) clearContactsBtn.addEventListener('click', clearContacts);
-    var resetContactsBtn = $('nativeWechatResetContactsBtn');
-    if (resetContactsBtn) resetContactsBtn.addEventListener('click', resetContacts);
     var syncGroupMembersBtn = $('nativeWechatSyncGroupMembersBtn');
     if (syncGroupMembersBtn) syncGroupMembersBtn.addEventListener('click', syncGroupMembers);
     var loadOlderMessagesBtn = $('nativeWechatLoadOlderMessagesBtn');
