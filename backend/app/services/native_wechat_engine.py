@@ -8225,20 +8225,47 @@ def _row_text_click_target(row_node: Any, name: str) -> tuple[Any, str]:
     return row_node, "row_node"
 
 
+def _contacts_point_click(hwnd: int, node: Any) -> tuple[bool, int, int, str]:
+    """按节点矩形算屏幕坐标点一下（我们自己发鼠标事件，不用 uiautomation 的 Click）。
+
+    返回 (是否点了, x, y, 点下面是什么窗口/控件的说明)。点之前会校验这个点确实落在
+    微信窗口上（`_uia_click_screen_point(expect_hwnd=...)`），点歪一个像素都不点。
+    """
+    rect = _uia_rect(node)
+    if rect is None:
+        return False, 0, 0, "no_rect"
+    x = int((float(rect[0]) + float(rect[2])) / 2)
+    y = int((float(rect[1]) + float(rect[3])) / 2)
+    guard = ""
+    try:
+        guard_info = _window_at_point(int(hwnd), x, y)
+        guard = "under=%s/%s ok=%s" % (guard_info.get("under_class"), guard_info.get("under_title"),
+                                       guard_info.get("ok"))
+    except Exception as exc:
+        guard = "guard_error:%s" % str(exc)[:60]
+    try:
+        ok = bool(_uia_click_screen_point(x, y, expect_hwnd=int(hwnd)))
+    except Exception as exc:
+        return False, x, y, guard + " click_error:%s" % str(exc)[:60]
+    return ok, x, y, guard
+
+
 def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
     """把某个分组**树节点**展开；成功返回名字，没成功返回空串。
 
-    2026-10-14 线上：「联系人」这个树节点用鼠标点（行中心/文字上）在微信 4.x 上**不展开**。
-    所以按树节点的常规交互逐个试，一次只试一种，每种试完都验证
-    （分组行 expanded 或 列表里能看到联系人行），成功就停：
+    2026-10-14 线上已确认：**用户自己鼠标点这一行能展开，程序点不展开** → 说明是我们"没点准"，
+    所以这里不再用 uiautomation 的 ``node.Click()``（它按节点缓存矩形算点，那个值在那边不可信），
+    改成我们自己算坐标 + 自己发鼠标事件，并按"人的点法"从最可能的位置开始试，一次一种、点完验证：
 
-      1) UIA 节点单击（优先点行里的文字节点，它的矩形跟肉眼一致）
-      2) 双击同一节点（Qt 树默认双击展开）
-      3) 键盘：SetFocus 后按 Right（树展开键）
-      4) 键盘：SetFocus 后按 Space
-      5) 按"行左侧三角"位置的屏幕坐标点一次（带落点必须落在微信窗口上的校验）
+      1) 点这一行**文字节点**的中心（肉眼看到的名字上）
+      2) 点这一行**整行矩形**的中心
+      3) 双击文字节点（一部分列表是双击展开）
+      4) 键盘：SetFocus 后按 Right（树展开键）
+      5) 键盘：SetFocus 后按 Space
+      6) 点这一行**左侧三角**位置（行左 14px、垂直居中）
 
-    每种都写在日志里：``contacts_group_click_ok``(method) / ``contacts_group_click_no_effect``。
+    每种点完都验证（分组 expanded 或 列表里能看到联系人行），并记日志：
+    ``contacts_group_click_ok`` / ``contacts_group_click_no_effect``（带 method / (x,y) / 点下面的窗口 / 矩形）。
     """
     prefix = str(name_prefix or "")
     if not prefix:
@@ -8247,7 +8274,7 @@ def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
         _focus_local_wechat(hwnd)
     except Exception:
         pass
-    for method in ("single_click", "double_click", "key_right", "key_space", "triangle_point"):
+    for method in ("point_text", "point_row", "double_text", "key_right", "key_space", "point_triangle"):
         scan = _contacts_row_scan(hwnd)
         target = next(
             (item for item in (scan.get("entries") or []) if str(item.get("name") or "").startswith(prefix)),
@@ -8256,28 +8283,38 @@ def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
         if target is None:
             return ""
         row_name = str(target.get("name") or prefix)
-        node, how = _row_text_click_target(target["node"], row_name)
+        text_node, how = _row_text_click_target(target["node"], row_name)
         done = False
+        px = py = 0
+        guard = ""
         try:
-            if method == "single_click":
-                _click_uia_node(node)
-                done = True
-            elif method == "double_click":
-                node.DoubleClick()
+            if method == "point_text":
+                done, px, py, guard = _contacts_point_click(hwnd, text_node)
+            elif method == "point_row":
+                done, px, py, guard = _contacts_point_click(hwnd, target["node"])
+            elif method == "double_text":
+                try:
+                    text_node.SetFocus()
+                except Exception:
+                    pass
+                text_node.DoubleClick()
                 done = True
             elif method in ("key_right", "key_space"):
                 try:
-                    node.SetFocus()
+                    text_node.SetFocus()
                 except Exception:
                     pass
                 _send_hotkey("right" if method == "key_right" else "space", pause=0.35)
                 done = True
             else:
-                rect = _uia_rect(target["node"]) or _uia_rect(node)
+                rect = _uia_rect(target["node"]) or _uia_rect(text_node)
                 if rect:
-                    x = int(float(rect[0]) + 14)
-                    y = int((float(rect[1]) + float(rect[3])) / 2)
-                    done = bool(_uia_click_screen_point(x, y, expect_hwnd=int(hwnd)))
+                    px = int(float(rect[0]) + 14)
+                    py = int((float(rect[1]) + float(rect[3])) / 2)
+                    guard_info = _window_at_point(int(hwnd), px, py)
+                    guard = "under=%s/%s ok=%s" % (guard_info.get("under_class"), guard_info.get("under_title"),
+                                                   guard_info.get("ok"))
+                    done = bool(_uia_click_screen_point(px, py, expect_hwnd=int(hwnd)))
         except Exception as exc:
             _contact_sync_debug("", stage="contacts_group_click_error", target=prefix,
                                 method=method, error=str(exc)[:120])
@@ -8286,9 +8323,20 @@ def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
         time.sleep(0.9)
         state = _contacts_group_state(hwnd, prefix)
         rows = _contacts_entry_ready(hwnd)
-        _contact_sync_debug("", stage="contacts_group_click_ok" if (state or rows) else "contacts_group_click_no_effect",
-                            target=prefix, method=method, node=how, state=state, rows_visible=rows,
-                            node_rect=str(_uia_rect(node)), row_rect=str(_uia_rect(target["node"])))
+        dbg: Dict[str, Any] = {
+            "target": prefix, "method": method, "node": how, "state": state, "rows_visible": rows,
+            "x": px, "y": py, "guard": guard,
+            "node_rect": str(_uia_rect(text_node)), "row_rect": str(_uia_rect(target["node"])),
+        }
+        # 只为排查服务的额外坐标：取不到就算了，绝不能让日志把主流程搞崩
+        try:
+            dbg["list_rect"] = str(_uia_rect(_uia_primary_contact_list(_uia_main_root(hwnd))))
+        except Exception as exc:
+            dbg["list_rect"] = "err:%s" % str(exc)[:60]
+        _contact_sync_debug(
+            "", stage="contacts_group_click_ok" if (state or rows) else "contacts_group_click_no_effect",
+            **dbg,
+        )
         if state or rows:
             return row_name
     return ""

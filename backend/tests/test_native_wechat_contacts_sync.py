@@ -1679,12 +1679,17 @@ def _fake_contacts_scan(monkeypatch, *, expanded):
 def test_contacts_prepare_actively_clicks_the_contacts_entry(monkeypatch):
     """「联系人」是收起的：必须主动点它，点完校验通过才算 ready。"""
     state, scan_calls = _fake_contacts_scan(monkeypatch, expanded=False)
-    clicks = []
-    monkeypatch.setattr(engine, "_click_uia_node", lambda node: (clicks.append(node), state.__setitem__("expanded", True)))
+    points = []
+    monkeypatch.setattr(engine, "_window_at_point",
+                        lambda hwnd, x, y: {"ok": True, "under_class": "Qt51514QWindowIcon", "under_title": "微信"})
+    monkeypatch.setattr(engine, "_uia_click_screen_point",
+                        lambda x, y, **kw: (points.append((x, y, kw)),
+                                            state.__setitem__("expanded", True))[0])
 
     result = engine._contacts_prepare_for_sync(1234, "acct")
 
-    assert clicks, "收起的「联系人」必须被主动点开，不能等用户点"
+    assert points, "收起的「联系人」必须被主动点开，不能等用户点"
+    assert points[0][2].get("expect_hwnd") == 1234, "落点必须先校验在微信窗口上"
     assert result["ready"] is True
     assert result["opened"] == "联系人3733"
     assert result["attempts"] == 1
@@ -1694,8 +1699,8 @@ def test_contacts_prepare_actively_clicks_the_contacts_entry(monkeypatch):
 def test_contacts_prepare_falls_back_to_a_screen_click_then_reports_failure(monkeypatch):
     """UIA 节点点击失败要退到「按行矩形算坐标点」；点不动就明确 ready=False（不再假装成功）。"""
     _state, _calls = _fake_contacts_scan(monkeypatch, expanded=False)
-    monkeypatch.setattr(engine, "_click_uia_node",
-                        lambda node: (_ for _ in ()).throw(RuntimeError("uia click failed")))
+    monkeypatch.setattr(engine, "_window_at_point",
+                        lambda hwnd, x, y: {"ok": True, "under_class": "Qt51514QWindowIcon", "under_title": "微信"})
     points = []
 
     def screen_click(x, y, **kwargs):
@@ -1708,9 +1713,9 @@ def test_contacts_prepare_falls_back_to_a_screen_click_then_reports_failure(monk
 
     result = engine._contacts_prepare_for_sync(1234, "acct")
 
-    assert points, "UIA 点击失败后必须退到屏幕坐标点击"
-    assert points[0][2].get("expect_hwnd") == 1234, "坐标点击必须校验点落在微信窗口上"
-    assert result["attempts"] == 1, "简单版：点一次就走，不重试"
+    assert points, "必须真的发出鼠标点击（我们自己算坐标点，不用 uiautomation 的 Click）"
+    assert points[0][2].get("expect_hwnd") == 1234, "落点必须先校验在微信窗口上"
+    assert result["attempts"] == 1, "点完就走，不重试"
     assert result["ready"] is True, "不再用 ready 卡住整个同步（读到什么算什么）"
 
 
