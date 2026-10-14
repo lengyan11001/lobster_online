@@ -8317,7 +8317,10 @@ def _contacts_prepare_for_sync(hwnd: int, account_id_hint: str = "") -> Dict[str
             result["skipped"] = "" if contacts_open else "entry_already_visible"
             break
         if not scan.get("entries"):
-            # 分组行不在视野里：先回档顶（收起/展开），再试一轮
+            # 注：正滑在「联系人」档中间时分组行本来就不在屏上 —— 那种情况上面
+            # `_contacts_entry_ready(hwnd)` 已经判为 ready 并 break 了，走不到这里；
+            # 能走到这里说明连联系人行都看不到，才需要回档顶/重新展开。
+            # （2026-10-14 用户反馈：以前这里会见"还没到底"就回顶部，白扫。）
             try:
                 _contacts_scroll_to_head(hwnd, None, account_id_hint)
             except Exception as exc:
@@ -10954,6 +10957,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             time.sleep(0.6)
             continue
         empty_rounds = 0
+        list_rect = _uia_rect(contact_list)
         for row_now in rows_now:
             clean = str(row_now.get("name") or "").strip()
             if not clean or clean in skip_names:
@@ -10969,6 +10973,11 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                 and normalized_name
                 and normalized_name not in profile_attempted
             ):
+                if not _contact_row_clickable(list_rect, _uia_rect(row_now.get("node"))):
+                    # 半截露头/贴着档标题的行先不点：点下去容易点到标题（把档收起）或点到别人那行。
+                    _contact_sync_debug(account_id, stage="wx_fill_row_skipped", target=clean,
+                                        reason="row_not_fully_visible")
+                    continue
                 profile_attempted.add(normalized_name)
                 profile_fallback_attempts += 1
                 try:
@@ -11099,11 +11108,8 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         else:
             stuck_rounds = 0
 
-    # 收尾：把列表收回「联系人」档顶（收起+展开）—— 这样下次同步一进来就在档顶，0 次回滚。
-    try:
-        _contacts_scroll_to_head(hwnd, contact_list, account_id)
-    except Exception:
-        pass
+    # 收尾：**不动列表**（2026-10-14 用户反馈：还没扫到底就自己跳回顶部，白扫）。
+    # 下次同步开头本来就会滚回档顶，这里再滚一次只会让用户看着列表无缘无故跳回去。
     # 补微信号已经并进上面的扫描循环（滚到谁就点谁），这里只汇总一行日志。
     _contact_sync_debug(
         account_id,
@@ -11972,6 +11978,28 @@ def _uia_visible_contact_cell_rows(list_node: Any) -> List[Dict[str, Any]]:
             queue.extend(grand_children[:20])
     rows.sort(key=lambda item: float(item.get("top") or 0))
     return rows
+
+
+def _contact_row_clickable(list_rect: Any, row_rect: Any, *, margin: float = 6.0) -> bool:
+    """这一行是不是"整行都在列表可视区里"，值得去点它开资料卡。
+
+    2026-10-14 真机：贴着档标题（粘性标题）的第一行、以及只露半截的上下两行，点下去容易点到
+    标题上（那一下会把整个「联系人」档收起来）或点到相邻的人 —— 这种行这一轮先不点，
+    等下一轮滚动时它整行露出来了再点（每轮推进约 9 行、有重叠，每个人都轮得到）。
+    """
+    try:
+        if not list_rect or not row_rect:
+            return False
+        if (float(row_rect[3]) - float(row_rect[1])) < 20:
+            return False
+        return bool(
+            float(row_rect[1]) >= float(list_rect[1]) + margin
+            and float(row_rect[3]) <= float(list_rect[3]) - margin
+            and float(row_rect[0]) >= float(list_rect[0]) - 1
+            and float(row_rect[2]) <= float(list_rect[2]) + 1
+        )
+    except (TypeError, ValueError, IndexError):
+        return False
 
 
 def _contact_profile_card_root(root: Any) -> Any:

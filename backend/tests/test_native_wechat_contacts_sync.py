@@ -1789,3 +1789,99 @@ def test_scroll_to_head_reopens_contacts_if_something_collapsed_it(monkeypatch):
     assert state["expanded"] is True
     assert result["reopened"] is True
     assert result["ready"] is True
+
+
+# ---------------------------------------------------------------- 2026-10-14
+# 用户问：「她滑动一半为什么突然去点顶部的联系人，是要点第一个人，然后误点了？」
+# 答：顶部那一下是"回档顶"的粘性标题点击（已删）；而"点第一个人"是读微信号时的行点击，
+# 贴着标题/半截露头的行要跳过，不然容易点到标题上（把整档收起）或点到别人那行。
+
+
+class _FakeRectList:
+    def __init__(self, rect):
+        self.fake_rect = rect
+
+    def SetFocus(self):
+        pass
+
+    def WheelDown(self, *, wheelTimes):
+        pass
+
+    def WheelUp(self, *, wheelTimes):
+        pass
+
+    def GetChildren(self):
+        return []
+
+
+def test_wx_fill_only_clicks_rows_that_are_fully_visible(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    list_node = _FakeRectList((100.0, 200.0, 400.0, 800.0))
+    rows = [
+        types.SimpleNamespace(fake_rect=(100.0, 196.0, 400.0, 250.0), name="半截露头"),
+        types.SimpleNamespace(fake_rect=(100.0, 300.0, 400.0, 354.0), name="整行可见"),
+        types.SimpleNamespace(fake_rect=(100.0, 780.0, 400.0, 830.0), name="半截在底"),
+    ]
+    monkeypatch.setattr(engine, "_uia_rect", lambda node: getattr(node, "fake_rect", None))
+    monkeypatch.setattr(engine, "_uia_guess_contact_list", lambda root: list_node)
+    monkeypatch.setattr(engine, "_uia_primary_contact_list", lambda root: list_node)
+    monkeypatch.setattr(engine, "_uia_visible_contact_cell_rows",
+                        lambda node: [{"name": r.name, "node": r} for r in rows])
+    monkeypatch.setattr(engine, "_uia_visible_contact_cell_names", lambda node: [r.name for r in rows])
+    monkeypatch.setattr(engine, "_contact_visible_fingerprint", lambda names: "|".join(names))
+    monkeypatch.setattr(engine, "_ensure_local_contacts_tab", lambda account_id: 4242)
+    monkeypatch.setattr(engine, "_module_available", lambda name: True)
+    fake_auto = types.ModuleType("uiautomation")
+    fake_auto.ControlFromHandle = lambda hwnd: object()
+    monkeypatch.setitem(sys.modules, "uiautomation", fake_auto)
+    monkeypatch.setattr(engine, "_contacts_prepare_for_sync", lambda hwnd, account_id="": {
+        "skipped": True, "collapsed": "", "opened": "", "ready": True, "attempts": 1, "method": "",
+    })
+    monkeypatch.setattr(engine, "_contacts_scroll_to_head", lambda *a, **k: {"ready": True})
+    monkeypatch.setattr(engine, "_contact_wx_fill_budget", lambda: None)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
+    clicked = []
+    monkeypatch.setattr(engine, "_read_contact_profile_wx_no_for_cell",
+                        lambda hwnd, account_id, cell, name: clicked.append(name) or "")
+    stages = []
+    monkeypatch.setattr(engine, "_contact_sync_debug", lambda account_id, **fields: stages.append(fields))
+
+    engine._sync_local_contacts_from_uia("wechat-account-row-guard", limit=10000)
+
+    assert clicked == ["整行可见"], "只有整行都在可视区里的行才允许点开资料卡"
+    skipped = {item.get("target") for item in stages if item.get("stage") == "wx_fill_row_skipped"}
+    assert skipped == {"半截露头", "半截在底"}, skipped
+
+
+# ---------------------------------------------------------------- 2026-10-14
+# 用户追问：「她滑动看数据又没到底，干什么要回顶部？」——收尾不该回顶；滑在档中间也不该回顶。
+
+
+def test_sync_does_not_jump_back_to_the_top_when_it_stops(monkeypatch, tmp_path):
+    _fake_list, _names, _stages = _fake_contact_scan(monkeypatch, tmp_path, total=5)
+    calls = []
+    monkeypatch.setattr(engine, "_contacts_scroll_to_head",
+                        lambda *a, **k: (calls.append(a) or {"ready": True}))
+
+    engine._sync_local_contacts_from_uia("wechat-account-no-top-jump", limit=10000)
+
+    assert len(calls) <= 1, "只允许开头那次回顶；收尾（没到底就结束）不许再跳回顶部"
+
+
+def test_contacts_prepare_keeps_position_when_scrolled_mid_list(monkeypatch):
+    monkeypatch.setattr(engine, "_contacts_row_scan",
+                        lambda hwnd: {"entries": [], "items": ["A"], "others": [],
+                                      "open_group": "", "subpage": False})
+    monkeypatch.setattr(engine, "_contacts_entry_ready", lambda hwnd: True)
+    monkeypatch.setattr(engine, "_focus_local_wechat", lambda hwnd: None)
+    monkeypatch.setattr(engine.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(engine, "_contact_sync_debug", lambda account_id, **fields: None)
+    scrolls = []
+    monkeypatch.setattr(engine, "_contacts_scroll_to_head",
+                        lambda *a, **k: (scrolls.append(a) or {"ready": True}))
+
+    result = engine._contacts_prepare_for_sync(1234, "acct")
+
+    assert result["ready"] is True
+    assert result["skipped"] == "entry_already_visible"
+    assert scrolls == [], "正滑在联系人档中间时不许回档顶（分组行不在屏上是正常的）"
