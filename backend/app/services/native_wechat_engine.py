@@ -10890,27 +10890,64 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     import uiautomation as auto  # type: ignore
 
     clean_limit = max(1, min(int(limit or 10000), 10000))
-    hwnd = _ensure_local_contacts_tab(account_id)
-    if not hwnd:
-        raise RuntimeError("local WeChat window not found")
-    root = auto.ControlFromHandle(int(hwnd))
+    _contact_sync_debug(account_id, stage="contacts_sync_start", limit=clean_limit)
+
+    def _resolve_contact_list(list_hwnd: int) -> Any:
+        root_now = auto.ControlFromHandle(int(list_hwnd))
+        found = None
+        queue = [(root_now, 0)]
+        while queue:
+            node, depth = queue.pop(0)
+            if _uia_control_class(node) == "mmui::StickyHeaderRecyclerListView" and _uia_control_text(node) == "\u901a\u8baf\u5f55":
+                found = node
+                break
+            if depth < 14:
+                try:
+                    queue.extend((child, depth + 1) for child in node.GetChildren())
+                except Exception:
+                    pass
+        return found or _uia_guess_contact_list(root_now) or _uia_primary_contact_list(root_now)
+
+    # 切到通讯录页 + 找联系人列表控件：这一步以前失败就一行日志都不写（2026-10-14 线上：
+    # 用户点同步后卡在这里，诊断包里只有 app.log 里的 comtypes 导入，看不出卡在哪）。
+    # 现在：最多 3 轮，每轮都记"窗口状态 / 切页结果 / 找没找到列表（class+矩形）"，失败也留现场。
+    hwnd = 0
     contact_list = None
-    queue = [(root, 0)]
-    while queue:
-        node, depth = queue.pop(0)
-        if _uia_control_class(node) == "mmui::StickyHeaderRecyclerListView" and _uia_control_text(node) == "\u901a\u8baf\u5f55":
-            contact_list = node
-            break
-        if depth < 14:
+    for attempt in range(1, 4):
+        try:
+            visible = _ensure_local_wechat_window_visible(wait_seconds=4.0)
+            wins_now = visible.get("windows") or []
+            _contact_sync_debug(account_id, stage="contacts_tab_result", attempt=attempt,
+                                windows=len(wins_now),
+                                win_rect=str((wins_now[0] or {}).get("rect")) if wins_now else "",
+                                win_visible=bool((wins_now[0] or {}).get("is_visible")) if wins_now else False)
+        except Exception as exc:
+            _contact_sync_debug(account_id, stage="contacts_window_error", attempt=attempt,
+                                error=str(exc)[:140])
+        try:
+            hwnd = int(_ensure_local_contacts_tab(account_id) or hwnd)
+        except Exception as exc:
+            _contact_sync_debug(account_id, stage="contacts_tab_error", attempt=attempt, error=str(exc)[:140])
+        if hwnd:
             try:
-                queue.extend((child, depth + 1) for child in node.GetChildren())
-            except Exception:
-                pass
+                contact_list = _resolve_contact_list(hwnd)
+            except Exception as exc:
+                contact_list = None
+                _contact_sync_debug(account_id, stage="contacts_list_error", attempt=attempt,
+                                    error=str(exc)[:140])
+        _contact_sync_debug(account_id, stage="contacts_list_lookup", attempt=attempt, hwnd=int(hwnd or 0),
+                            found=bool(contact_list is not None),
+                            cls=str(_uia_control_class(contact_list))[:40] if contact_list is not None else "",
+                            rect=str(_uia_rect(contact_list)) if contact_list is not None else "")
+        if contact_list is not None:
+            break
+        time.sleep(1.5)
+    if not hwnd:
+        _contact_sync_debug(account_id, stage="contacts_sync_failed", reason="wechat_window_not_found")
+        raise RuntimeError("local WeChat window not found")
     if contact_list is None:
-        contact_list = _uia_guess_contact_list(root)
-    if contact_list is None:
-        contact_list = _uia_primary_contact_list(root)
-    if contact_list is None:
+        _contact_sync_debug(account_id, stage="contacts_sync_failed", reason="contact_list_not_found",
+                            hwnd=int(hwnd))
         raise RuntimeError("local WeChat contact list not found")
 
     existing_before = _contact_count(account_id)
