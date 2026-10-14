@@ -1329,3 +1329,86 @@ def test_diagnostic_bundle_carries_the_contact_sync_log(monkeypatch, tmp_path):
     sync = summary["wechat_contact_sync"]
     assert sync["last_stage"] == "sync_finished"
     assert sync["last_sync_finished"]["stopped"] == "stuck_or_empty"
+
+
+# ---------------------------------------------------------------- 2026-10-14
+# 线上反馈「已经同步的很多看上去就不是微信号」：用户 142 上报的 475 条里 427 条的 wx_no
+# 就是昵称本身（392 条含中文/emoji，例如「Cindy智能魔镜厂家🇨🇳」）。名字不是号。
+
+
+def test_contact_records_never_store_a_nickname_as_wx_no(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    account_id = "wechat-account-wxno"
+
+    saved = engine._merge_contacts_snapshot(account_id, [
+        {"contact_key": "Cindy智能魔镜厂家\U0001F1E8\U0001F1F3", "display_name": "Cindy智能魔镜厂家\U0001F1E8\U0001F1F3", "wxNo": "Cindy智能魔镜厂家\U0001F1E8\U0001F1F3",
+         "source": "pc_wechat_uia_contacts"},
+        {"contact_key": "Doris Yao", "display_name": "Doris Yao", "wxNo": "xcyuwu1314",
+         "source": "pc_wechat_uia_contacts"},
+        {"contact_key": "董李平", "display_name": "董李平", "wxNo": "wxid_loj7m8ic8llw11",
+         "source": "pc_wechat_uia_contacts"},
+        {"contact_key": "外部联系人", "display_name": "外部联系人",
+         "wxNo": "mmo9cq808230H_H6h_Dl7dcBc6xKQM@weclaw", "source": "pc_wechat_uia_contacts"},
+    ])
+
+    stored = {item["contact_key"]: item["wx_no"] for item in saved}
+    assert stored["Cindy智能魔镜厂家\U0001F1E8\U0001F1F3"] == ""
+    assert stored["外部联系人"] == ""
+    assert stored["Doris Yao"] == "xcyuwu1314"
+    assert stored["董李平"] == "wxid_loj7m8ic8llw11"
+
+    page = engine.list_contacts(account_id, limit=50, offset=0)
+    assert {item["contact_key"]: item["wx_no"] for item in page["items"]} == stored
+
+
+def test_init_db_clears_legacy_nickname_wx_no(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+
+    def insert(row_id, key, wx_no):
+        with engine._connect() as conn:
+            conn.execute(
+                "insert into wechat_contacts"
+                "(id, account_id, contact_key, display_name, remark, wx_no, source, raw_json, created_at, updated_at)"
+                " values(?,?,?,?,?,?,?,?,?,?)",
+                (row_id, "acct", key, key, "", wx_no, "pc_wechat_uia_contacts", "{}",
+                 "2026-08-14T00:00:00", "2026-08-14T00:00:00"),
+            )
+
+    insert("legacy-junk", "Cindy智能魔镜厂家\U0001F1E8\U0001F1F3", "Cindy智能魔镜厂家\U0001F1E8\U0001F1F3")
+    insert("legacy-junk-2", "邓建恒", "邓建恒")
+    insert("legacy-weclaw", "外部联系人", "mmo9cq808230H_H6h_Dl7dcBc6xKQM@weclaw")
+    insert("legacy-good", "Doris Yao", "xcyuwu1314")
+
+    engine._CONTACT_WX_NO_CLEANED_PATHS.discard(str(engine.DB_PATH))
+    engine.init_db()
+
+    with engine._connect() as conn:
+        rows = {row["id"]: str(row["wx_no"] or "") for row in conn.execute("select id, wx_no from wechat_contacts")}
+    assert rows["legacy-junk"] == ""
+    assert rows["legacy-junk-2"] == ""
+    assert rows["legacy-weclaw"] == ""
+    assert rows["legacy-good"] == "xcyuwu1314"
+
+
+def test_partial_sync_does_not_keep_legacy_junk_wx_no(monkeypatch, tmp_path):
+    _use_temp_native_wechat_db(monkeypatch, tmp_path)
+    account_id = "wechat-account-legacy-junk"
+    engine._CONTACT_WX_NO_CLEANED_PATHS.add(str(engine.DB_PATH))  # 先不触发清理，模拟"老库"
+
+    with engine._connect() as conn:
+        conn.execute(
+            "insert into wechat_contacts"
+            "(id, account_id, contact_key, display_name, remark, wx_no, source, raw_json, created_at, updated_at)"
+            " values(?,?,?,?,?,?,?,?,?,?)",
+            ("legacy-junk", account_id, "大鹏", "大鹏", "", "大鹏", "pc_wechat_uia_contacts", "{}",
+             "2026-08-14T00:00:00", "2026-08-14T00:00:00"),
+        )
+
+    # 本轮同步没学到这个人的号（资料卡没读到）→ 不能把"大鹏"继续当微信号留着
+    engine._merge_contacts_snapshot(account_id, [{
+        "contact_key": "大鹏", "display_name": "大鹏", "wxNo": "", "source": "pc_wechat_uia_contacts",
+    }])
+
+    with engine._connect() as conn:
+        wx_no = conn.execute("select wx_no from wechat_contacts where id='legacy-junk'").fetchone()[0]
+    assert (wx_no or "") == ""

@@ -1009,6 +1009,8 @@ def init_db() -> None:
                     (_now_iso(),),
                 )
                 _AUTO_REPLY_STARTUP_RECONCILED = True
+        # 存量脏数据：老版本把显示名当微信号写进 wx_no（含中文/emoji），清一次让下次同步重新学。
+        _cleanup_junk_contact_wx_no(conn)
 
 
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
@@ -7898,7 +7900,11 @@ def _build_contact_record(account_id: str, contact: Dict[str, Any], *, now: Opti
     if not contact_key:
         return {}
     source = str(contact.get("source") or "local").strip() or "local"
-    wx_no = str(contact.get("wxNo") or contact.get("wx_no") or contact.get("username") or "").strip()
+    wx_no = _sanitize_contact_wx_no(
+        contact.get("wxNo") or contact.get("wx_no") or contact.get("username") or "",
+        display_name,
+        contact.get("remark"),
+    )
     remark = str(contact.get("remark") or "").strip()
     raw = dict(contact)
     return {
@@ -7922,7 +7928,15 @@ def _write_contact_record(conn: sqlite3.Connection, record: Dict[str, Any], *, c
         on conflict(account_id, contact_key) do update set
           display_name=excluded.display_name,
           remark=excluded.remark,
-          wx_no=coalesce(nullif(excluded.wx_no, ''), wechat_contacts.wx_no),
+          -- 新值是空的、存量值又不像微信号（昵称/含中文/带 @ 的内部号）时清空，不把脏数据一直背下去
+          wx_no=case
+            when excluded.wx_no <> '' then excluded.wx_no
+            when length(wechat_contacts.wx_no) between 6 and 28
+                 and wechat_contacts.wx_no glob '[0-9A-Za-z]*'
+                 and wechat_contacts.wx_no not glob '*[^0-9A-Za-z_-]*'
+              then wechat_contacts.wx_no
+            else ''
+          end,
           source=excluded.source,
           raw_json=excluded.raw_json,
           updated_at=excluded.updated_at
@@ -11458,6 +11472,67 @@ def _looks_like_profile_wechat_id(value: str) -> bool:
     """
     text = str(value or "").strip()
     return bool(text and re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z_-]{5,}", text))
+
+
+# 微信号的真实形态：6-28 位、字母数字开头、只含 A-Za-z0-9_-（wxid_xxx 也落在里面）。
+_CONTACT_WX_NO_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]{5,27}")
+_CONTACT_WX_NO_CLEANED_PATHS: set[str] = set()
+
+
+def _sanitize_contact_wx_no(value: Any, *aliases: Any) -> str:
+    """只放行真的像微信号的值；名字不是号，其余一律返回空串。
+
+    2026-10-14 线上（用户 142 上报的 475 条里 427 条的 wx_no 就是昵称本身，392 条含中文/
+    emoji，例如「Cindy智能魔镜厂家🇨🇳」）：这种值一旦写进库，会被
+    ``_existing_contact_wx_no_index``（按显示名回填）和 upsert 的 coalesce 反复沿用，
+    越滚越多，还可能被当成"身份"去搜索/发送。统一在这里卡住：
+
+    - 必须 6-28 位、字母数字开头、只含 A-Za-z0-9_-（正常微信号 + wxid_xxx）；
+    - 不能等于这条联系人自己的名字 / 备注（contact_key 不算：会话侧建的联系人，
+      contact_key 本身就是 wxid_xxx，那种相等是正常的）。
+    """
+    text = str(value or "").strip()
+    if not text or not _CONTACT_WX_NO_RE.fullmatch(text):
+        return ""
+    key = _normalize_contact_lookup_key(text)
+    for alias in aliases:
+        alias_key = _normalize_contact_lookup_key(alias)
+        if alias_key and alias_key == key:
+            return ""
+    return text
+
+
+def _cleanup_junk_contact_wx_no(conn: sqlite3.Connection) -> int:
+    """清掉存量里"根本不是微信号"的 wx_no，好让下一轮通讯录同步按资料卡重新学真号。
+
+    只清明确不可能的值（含中文/emoji/空格/@/超长/等于昵称）：``xcyuwu1314``、
+    ``wxid_loj7m8ic8llw11`` 这类原样保留。同一个 DB 文件每个进程只跑一次。
+    """
+    marker = str(DB_PATH)
+    if marker in _CONTACT_WX_NO_CLEANED_PATHS:
+        return 0
+    _CONTACT_WX_NO_CLEANED_PATHS.add(marker)
+    cleared = 0
+    try:
+        rows = conn.execute(
+            "select id, contact_key, display_name, remark, wx_no from wechat_contacts "
+            "where nullif(trim(wx_no), '') is not null"
+        ).fetchall()
+        for row in rows:
+            current = str(row["wx_no"] or "")
+            if _sanitize_contact_wx_no(current, row["display_name"], row["remark"]) == current:
+                continue
+            conn.execute("update wechat_contacts set wx_no='' where id=?", (row["id"],))
+            cleared += 1
+    except Exception:
+        return cleared
+    if cleared:
+        try:
+            logging.getLogger(__name__).info("[通讯录] 已清理 %d 条不是微信号的 wx_no，下次同步会重新学", cleared)
+        except Exception:
+            pass
+    return cleared
+
 
 
 def _resolve_local_contact_wx_no(account_id: str, target: str) -> str:
