@@ -12836,6 +12836,20 @@ def _read_contact_profile_wx_no_for_cell(
             except Exception:
                 _clicked = False
         if not _clicked:
+            # 2026-10-15 (diag_20261014171335: 91 click_refused in one run): when the point is not
+            # on the WeChat window, bring WeChat to the front and retry once before giving up.
+            try:
+                _focus_local_wechat(hwnd)
+                time.sleep(0.4)
+            except Exception:
+                pass
+            if _rect is not None:
+                try:
+                    _clicked = bool(_uia_click_screen_point(_cx, _cy, expect_hwnd=int(hwnd),
+                                                             account_id_hint=account_id))
+                except Exception:
+                    _clicked = False
+        if not _clicked:
             # 2026-10-15: NEVER fall back to a blind click. The guarded click refused because the
             # point was not on this WeChat window (log click_point_refused x=606 y=425 expect=...),
             # and the blind fallback hit the contacts search box instead - that is what opened the
