@@ -8118,6 +8118,19 @@ _CONTACTS_OPEN_CONTENT_CLASSES = ("mmui::ContactsCellItemView", "mmui::XTableCel
 _CONTACTS_OPEN_ATTEMPTS = 3
 
 
+def _contact_group_key(text: Any) -> str:
+    """Group row name without the badge count.
+
+    2026-10-14 live check on the user's WeChat: the contacts list shows
+    ``\u901a\u8baf\u5f55\u7ba1\u7406`` / ``\u65b0\u7684\u670b\u53cb`` / ``\u516c\u4f17\u53f746`` / ``\u670d\u52a1\u53f7146`` /
+    ``\u4f01\u4e1a\u5fae\u4fe1\u8054\u7cfb\u4eba99`` / ``\u6211\u7684\u4f01\u4e1a4`` / ``\u8054\u7cfb\u4eba738`` - the count is glued onto
+    the name and changes whenever a contact is added. Strip it so matching never
+    depends on the number.
+    """
+    text = str(text or "").strip()
+    return re.sub(r"[\s\u3000]*\d+$", "", text).strip()
+
+
 def _contacts_row_scan(hwnd: int) -> Dict[str, Any]:
     """按屏幕顺序扫出当前可见的行，判断“哪一档是打开的”（不做任何点击/滚动）。
 
@@ -8161,6 +8174,7 @@ def _contacts_row_scan(hwnd: int) -> Dict[str, Any]:
         entries.append({
             "node": row["node"],
             "name": str(row["name"] or ""),
+            "key": _contact_group_key(row["name"]),
             "top": row["top"],
             "expanded": bool(nxt is not None and nxt["kind"] == "content"),
         })
@@ -8170,15 +8184,18 @@ def _contacts_row_scan(hwnd: int) -> Dict[str, Any]:
         "items": items,
         "others": others,
         "open_group": open_group,
-        "subpage": bool(open_group) and not open_group.startswith(_CONTACTS_GROUP_KEEP_OPEN),
+        "subpage": bool(open_group) and not _contact_group_key(open_group).startswith(
+            _CONTACTS_GROUP_KEEP_OPEN),
     }
 
 
 def _contacts_group_state(hwnd: int, name_prefix: str) -> Optional[bool]:
     """某个分组现在是展开的吗；分组行不在视野里返回 None。"""
     scan = _contacts_row_scan(hwnd)
+    prefix = str(name_prefix or "")
     entry = next(
-        (item for item in (scan.get("entries") or []) if str(item.get("name") or "").startswith(str(name_prefix or ""))),
+        (item for item in (scan.get("entries") or [])
+         if _contact_group_key(item.get("key") or item.get("name")).startswith(prefix)),
         None,
     )
     if entry is None:
@@ -8277,7 +8294,8 @@ def _contacts_click_group_row(hwnd: int, name_prefix: str, **_ignored) -> str:
     for method in ("point_text", "point_row", "double_text", "key_right", "key_space", "point_triangle"):
         scan = _contacts_row_scan(hwnd)
         target = next(
-            (item for item in (scan.get("entries") or []) if str(item.get("name") or "").startswith(prefix)),
+            (item for item in (scan.get("entries") or [])
+             if _contact_group_key(item.get("key") or item.get("name")).startswith(prefix)),
             None,
         )
         if target is None:
@@ -8374,12 +8392,14 @@ def _contacts_prepare_for_sync(hwnd: int, account_id_hint: str = "") -> Dict[str
             time.sleep(0.9)
         scan = _contacts_row_scan(hwnd)
     contacts_open = any(
-        str(entry.get("name") or "").startswith(keep) and entry.get("expanded")
+        _contact_group_key(entry.get("key") or entry.get("name")).startswith(keep)
+        and entry.get("expanded")
         for entry in (scan.get("entries") or [])
     )
     if not contacts_open:
         target = next(
-            (entry for entry in (scan.get("entries") or []) if str(entry.get("name") or "").startswith(keep)),
+            (entry for entry in (scan.get("entries") or [])
+             if _contact_group_key(entry.get("key") or entry.get("name")).startswith(keep)),
             None,
         )
         if target is None:
@@ -8412,7 +8432,7 @@ def _contacts_prepare_for_sync(hwnd: int, account_id_hint: str = "") -> Dict[str
                     result["open_group"] = str(scan.get("open_group") or "") or result["open_group"]
                     target = next(
                         (entry for entry in (scan.get("entries") or [])
-                         if str(entry.get("name") or "").startswith(keep)),
+                         if _contact_group_key(entry.get("key") or entry.get("name")).startswith(keep)),
                         None,
                     )
                     try:
@@ -8512,7 +8532,8 @@ def _contacts_click_sticky_header(hwnd: int, contact_list: Any = None, account_i
     def _groups_visible() -> bool:
         try:
             scan = _contacts_row_scan(hwnd)
-            return any(str(e.get("name") or "").startswith(_CONTACTS_GROUP_KEEP_OPEN[0]) for e in (scan.get("entries") or []))
+            return any(_contact_group_key(e.get("key") or e.get("name")).startswith(
+                _CONTACTS_GROUP_KEEP_OPEN[0]) for e in (scan.get("entries") or []))
         except Exception:
             return False
 
@@ -8692,6 +8713,11 @@ def _existing_contact_wx_no_index(account_id: str) -> Dict[str, str]:
 def _wechat_contact_skip_names() -> set[str]:
     return {
         "新的朋友",
+        "服务号",
+        "我的企业",
+        "通讯录管理",
+        "视频号",
+        "订阅号",
         "群聊",
         "标签",
         "公众号",
@@ -11142,9 +11168,9 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                                     error=str(exc)[:160])
             time.sleep(0.8)
             continue
-        top_entries = {name for name in skip_names if len(name) > 1}
+        top_entries = {_contact_group_key(name) for name in skip_names if len(name) > 1}
         if (names and top_entries and collapsed_reopens < 5
-                and all((n or "").strip() in top_entries for n in names)):
+                and all(_contact_group_key(n) in top_entries for n in names)):
             collapsed_reopens += 1
             # 2026-10-14: only the top level entries are visible, i.e. the contacts
             # group got collapsed (a stray click/scroll collapses it). Clicking those
@@ -12486,7 +12512,10 @@ def _read_contact_profile_wx_no_for_cell(
 
     before_texts = _card_texts(_contact_profile_card_root(auto.ControlFromHandle(int(hwnd))))
     for _attempt in range(2):
-        _uia_click(_click_target())
+        # 2026-10-14 live probe on the user's WeChat: clicking the row (cell) node
+        # opens the profile card reliably; the child text node was the target that
+        # failed online (card_not_confirmed). Second attempt falls back to it.
+        _uia_click(cell if _attempt == 0 else _click_target())
         deadline = time.monotonic() + total_wait / 2
         while time.monotonic() < deadline:
             time.sleep(0.4)
