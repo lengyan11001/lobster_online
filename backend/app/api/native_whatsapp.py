@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io as _io
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
@@ -607,3 +607,227 @@ async def native_whatsapp_auto_reply_diagnostics(
 ):
     del current_user
     return engine.auto_reply_diagnostics(limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-15（二）：协议直连 —— 读接口 + 关键节点日志 + 中风险发送（限速）
+# ---------------------------------------------------------------------------
+
+
+class WhatsAppWebCheckBody(BaseModel):
+    phones: List[str] = Field(default_factory=list, max_length=100)
+
+
+class WhatsAppWebSendBody(BaseModel):
+    account_id: str = Field(default=engine.DEFAULT_ACCOUNT_ID, min_length=1, max_length=160)
+    targets: List[str] = Field(default_factory=list, max_length=50)
+    text: str = Field(default="", max_length=4000)
+    image_path: str = Field(default="", max_length=500)
+    file_path: str = Field(default="", max_length=500)
+    caption: str = Field(default="", max_length=1000)
+    min_gap: Optional[int] = Field(default=None, ge=3, le=600)
+    max_gap: Optional[int] = Field(default=None, ge=3, le=900)
+    pause_every: Optional[int] = Field(default=None, ge=1, le=100)
+    pause_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
+    daily_limit: Optional[int] = Field(default=None, ge=0, le=1000)
+    auto_start: bool = False
+
+
+class WhatsAppWebSendControlBody(BaseModel):
+    account_id: str = Field(default=engine.DEFAULT_ACCOUNT_ID, min_length=1, max_length=160)
+    min_gap: Optional[int] = Field(default=None, ge=3, le=600)
+    max_gap: Optional[int] = Field(default=None, ge=3, le=900)
+    pause_every: Optional[int] = Field(default=None, ge=1, le=100)
+    pause_seconds: Optional[int] = Field(default=None, ge=0, le=3600)
+    daily_limit: Optional[int] = Field(default=None, ge=0, le=1000)
+
+
+@router.get("/api/native-whatsapp/web/chats")
+async def native_whatsapp_web_chats(
+    refresh: int = 0,
+    wait: int = 25,
+    keyword: str = "",
+    limit: int = 200,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """会话列表（协议）。refresh=1 才真连一次协议，平时读本地账，页面刷新不会每次干等 20 秒。"""
+    del current_user
+    try:
+        return await asyncio.to_thread(engine.web_chats, refresh=bool(refresh), wait=wait, keyword=keyword, limit=limit)
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.get("/api/native-whatsapp/web/groups")
+async def native_whatsapp_web_groups(
+    refresh: int = 0,
+    wait: int = 20,
+    limit: int = 200,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    try:
+        return await asyncio.to_thread(engine.web_groups, refresh=bool(refresh), wait=wait, limit=limit)
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.get("/api/native-whatsapp/web/messages")
+async def native_whatsapp_web_messages(
+    jid: str,
+    refresh: int = 0,
+    limit: int = 50,
+    wait: int = 12,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """读消息走协议（不再用 UIA 点界面）：refresh=1 真拉一次并落库。"""
+    del current_user
+    try:
+        return await asyncio.to_thread(engine.web_messages, jid, refresh=bool(refresh), limit=limit, wait=wait)
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.post("/api/native-whatsapp/web/check")
+async def native_whatsapp_web_check(
+    body: WhatsAppWebCheckBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    try:
+        return await asyncio.to_thread(engine.web_check, body.phones)
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.get("/api/native-whatsapp/web/profile")
+async def native_whatsapp_web_profile(
+    jid: str,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    try:
+        return await asyncio.to_thread(engine.web_profile, jid)
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.get("/api/native-whatsapp/web/protocol/log")
+async def native_whatsapp_web_protocol_log(
+    limit: int = 50,
+    event: str = "",
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """关键节点账本（logs/whatsapp_protocol.jsonl 的最后 N 条）：以后查问题只看这里。"""
+    del current_user
+    return await asyncio.to_thread(engine.protocol_log, limit=limit, event=event)
+
+
+@router.get("/api/native-whatsapp/web/send/config")
+async def native_whatsapp_web_send_config(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    return {
+        "ok": True,
+        "control": await asyncio.to_thread(engine.get_send_control),
+        "summary": await asyncio.to_thread(engine.send_queue_summary),
+    }
+
+
+@router.post("/api/native-whatsapp/web/send/config")
+async def native_whatsapp_web_send_config_save(
+    body: WhatsAppWebSendControlBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    _ensure_default_account(body.account_id)
+    del current_user
+    try:
+        control = await asyncio.to_thread(
+            engine.save_send_control,
+            body.account_id,
+            min_gap=body.min_gap,
+            max_gap=body.max_gap,
+            pause_every=body.pause_every,
+            pause_seconds=body.pause_seconds,
+            daily_limit=body.daily_limit,
+        )
+        return {"ok": True, "control": control, "summary": await asyncio.to_thread(engine.send_queue_summary)}
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.get("/api/native-whatsapp/web/send/queue")
+async def native_whatsapp_web_send_queue(
+    limit: int = 20,
+    offset: int = 0,
+    status: str = "",
+    keyword: str = "",
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    records = await asyncio.to_thread(engine.list_send_records, "", limit=limit, offset=offset, status=status, keyword=keyword)
+    return {
+        "ok": True,
+        "control": await asyncio.to_thread(engine.get_send_control),
+        "summary": await asyncio.to_thread(engine.send_queue_summary),
+        **records,
+    }
+
+
+@router.post("/api/native-whatsapp/web/send")
+async def native_whatsapp_web_send(
+    body: WhatsAppWebSendBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """中风险：入队发送（白名单 + 去重 + 限速；默认不自动启动队列）。"""
+    _ensure_default_account(body.account_id)
+    del current_user
+    try:
+        result = await asyncio.to_thread(
+            engine.enqueue_send,
+            body.targets,
+            text=body.text,
+            image_path=body.image_path,
+            file_path=body.file_path,
+            caption=body.caption,
+            min_gap=body.min_gap,
+            max_gap=body.max_gap,
+            pause_every=body.pause_every,
+            pause_seconds=body.pause_seconds,
+            daily_limit=body.daily_limit,
+        )
+        if body.auto_start and result.get("queued"):
+            result["control"] = await engine.start_send_queue(body.account_id)
+            result["summary"] = engine.send_queue_summary(body.account_id)
+        return result
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.post("/api/native-whatsapp/web/send/start")
+async def native_whatsapp_web_send_start(
+    body: WhatsAppRunBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    _ensure_default_account(body.account_id)
+    del current_user
+    try:
+        control = await engine.start_send_queue(body.account_id)
+        return {"ok": True, "control": control, "summary": engine.send_queue_summary(body.account_id)}
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.post("/api/native-whatsapp/web/send/stop")
+async def native_whatsapp_web_send_stop(
+    body: WhatsAppRunBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    _ensure_default_account(body.account_id)
+    del current_user
+    try:
+        control = await engine.stop_send_queue(body.account_id)
+        return {"ok": True, "control": control, "summary": engine.send_queue_summary(body.account_id)}
+    except Exception as exc:
+        raise _desktop_error(exc) from exc

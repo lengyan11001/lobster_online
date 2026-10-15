@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import sqlite3
 import shutil
@@ -164,6 +165,24 @@ def _append_log(event: str, **fields: Any) -> None:
         logging.getLogger(__name__).debug("failed to write native WhatsApp log", exc_info=True)
 
 
+_MIGRATED_PATHS: set = set()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """老库的轻量迁移：create table if not exists 不会补列，缺列就 alter 一次。"""
+    try:
+        existing = {str(row[1]) for row in conn.execute("pragma table_info(%s)" % table).fetchall()}
+    except sqlite3.Error:
+        return
+    if column in existing or not existing:
+        return
+    try:
+        conn.execute("alter table %s add column %s %s" % (table, column, ddl))
+        conn.commit()
+    except sqlite3.Error:
+        logging.getLogger(__name__).debug("failed to add column %s.%s", table, column, exc_info=True)
+
+
 def _connect() -> sqlite3.Connection:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(DB_PATH), timeout=10, check_same_thread=False)
@@ -264,11 +283,55 @@ def _connect() -> sqlite3.Connection:
             last_stopped_at text,
             updated_at text not null
         );
-        """
+        
+        create table if not exists whatsapp_web_chats (
+            id text primary key,
+            account_id text not null,
+            jid text not null,
+            name text,
+            is_group integer not null default 0,
+            unread integer not null default 0,
+            ts integer not null default 0,
+            updated_at text not null,
+            unique(account_id, jid)
+        );
+        create index if not exists idx_whatsapp_web_chats_ts
+        on whatsapp_web_chats(account_id, ts desc);
+
+        create table if not exists whatsapp_web_messages (
+            id text primary key,
+            account_id text not null,
+            jid text not null,
+            msg_id text not null,
+            from_me integer not null default 0,
+            ts integer not null default 0,
+            content text,
+            created_at text not null,
+            unique(account_id, msg_id)
+        );
+        create index if not exists idx_whatsapp_web_messages_jid
+        on whatsapp_web_messages(account_id, jid, ts asc);
+
+        create table if not exists whatsapp_send_control (
+            account_id text primary key,
+            enabled integer not null default 0,
+            min_gap integer not null default 12,
+            max_gap integer not null default 28,
+            pause_every integer not null default 3,
+            pause_seconds integer not null default 120,
+            daily_limit integer not null default 80,
+            running integer not null default 0,
+            last_started_at text,
+            last_stopped_at text,
+            updated_at text not null
+        );
+"""
     )
+    path_key = str(DB_PATH)
+    if path_key not in _MIGRATED_PATHS:
+        _MIGRATED_PATHS.add(path_key)
+        _ensure_column(conn, "whatsapp_contacts", "jid", "text")
     return conn
-
-
 def _stable_key(prefix: str, value: str) -> str:
     normalized = re.sub(r"\s+", " ", str(value or "").strip()).casefold()
     return f"{prefix}_{hashlib.sha1(normalized.encode('utf-8')).hexdigest()[:24]}"
@@ -1814,13 +1877,14 @@ def _persist_contact(contact: Dict[str, Any]) -> Dict[str, Any]:
     with _DB_LOCK, _connect() as conn:
         conn.execute(
             """
-            insert into whatsapp_contacts(id, account_id, contact_key, display_name, first_name, last_name, username, phone, country_code, source, raw_json, created_at, updated_at)
-            values(?,?,?,?,?,?,?,?,?,?,?,?,?)
+            insert into whatsapp_contacts(id, account_id, contact_key, display_name, first_name, last_name, username, phone, country_code, source, raw_json, jid, created_at, updated_at)
+            values(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             on conflict(account_id, contact_key) do update set
               display_name=excluded.display_name, first_name=excluded.first_name, last_name=excluded.last_name, username=excluded.username,
-              phone=excluded.phone, country_code=excluded.country_code, source=excluded.source, raw_json=excluded.raw_json, updated_at=excluded.updated_at
+              phone=excluded.phone, country_code=excluded.country_code, source=excluded.source, raw_json=excluded.raw_json,
+              jid=case when excluded.jid != '' then excluded.jid else whatsapp_contacts.jid end, updated_at=excluded.updated_at
             """,
-            (contact_key, DEFAULT_ACCOUNT_ID, contact_key, display_name, first_name, last_name, username, phone, str(contact.get("country_code") or "")[:20], str(contact.get("source") or "desktop"), _json_text(contact), now, now),
+            (contact_key, DEFAULT_ACCOUNT_ID, contact_key, display_name, first_name, last_name, username, phone, str(contact.get("country_code") or "")[:20], str(contact.get("source") or "desktop"), _json_text(contact), str(contact.get("jid") or "")[:200], now, now),
         )
     return {**contact, "contact_key": contact_key, "display_name": display_name, "updated_at": now}
 
@@ -1867,11 +1931,26 @@ def _node_exe() -> str:
     raise RuntimeError("没找到 Node（nodejs/node.exe），无法走 WhatsApp Web 协议")
 
 
-def _run_bridge(argv: List[str], *, timeout: int = 120) -> Dict[str, Any]:
+def _run_bridge(argv: List[str], *, timeout: int = 120, record: bool = True) -> Dict[str, Any]:
+    """跑一次桥接命令。
+
+    record=True 时把这次命令的关键节点写进 logs/whatsapp_protocol.jsonl
+    （cmd / ok / elapsed_ms / received / partial / error / stderr 尾巴），
+    以后查「为什么通讯录是 0」只看这一个文件 + 状态文件就够。
+    """
     if not WEB_BRIDGE_PATH.is_file():
         raise RuntimeError("找不到 scripts/whatsapp_web_bridge.mjs")
     command = [_node_exe(), str(WEB_BRIDGE_PATH)] + [str(item) for item in argv]
-    proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
+    if record:
+        command += ["--ledger", str(PROTOCOL_LOG_PATH)]
+    label = str(argv[0] if argv else "")
+    started = time.monotonic()
+    try:
+        proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
+    except subprocess.TimeoutExpired as exc:
+        if record:
+            _append_protocol("cmd", cmd=label, ok=False, timed_out=True, timeout=timeout, elapsed_ms=int((time.monotonic() - started) * 1000))
+        raise RuntimeError("桥接命令超时（%ss）：%s" % (timeout, label)) from exc
     payload: Dict[str, Any] = {}
     for line in (proc.stdout or "").splitlines():
         line = line.strip()
@@ -1883,6 +1962,19 @@ def _run_bridge(argv: List[str], *, timeout: int = 120) -> Dict[str, Any]:
             continue
         if isinstance(data, dict) and "ok" in data:
             payload = data
+    if record:
+        _append_protocol(
+            "cmd",
+            cmd=label,
+            ok=bool(payload.get("ok")),
+            exit_code=int(proc.returncode or 0),
+            received=payload.get("count"),
+            with_phone=payload.get("with_phone"),
+            partial=payload.get("partial"),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+            error=str(payload.get("error") or "")[:200],
+            stderr=(proc.stderr or "").strip()[-300:],
+        )
     if not payload:
         raise RuntimeError((proc.stderr or proc.stdout or "桥接脚本没有输出").strip()[-400:])
     if not payload.get("ok") and payload.get("error"):
@@ -1899,23 +1991,32 @@ def _read_web_login_state() -> Dict[str, Any]:
 
 
 def web_login_status() -> Dict[str, Any]:
-    """绑定状态：已绑定（读 creds）/ 等待扫码（带 qr）/ 未绑定。"""
+    """绑定状态：已绑定（读 creds）/ 等待扫码（带 qr）/ 未绑定。
+
+    state 带上桥接状态机的轨迹（connecting / qr / reconnecting(515) / linked / logged_out），
+    attempt 是第几次重连、error 是最后一次断开码 —— 页面只显示三种状态，细节都在这里和协议日志里。
+    """
     state = _read_web_login_state()
     creds = {"linked": False, "me": {}}
     try:
-        creds = _run_bridge(["status", "--auth", str(WEB_AUTH_DIR)], timeout=60)
+        creds = _run_bridge(["status", "--auth", str(WEB_AUTH_DIR)], timeout=60, record=False)
     except Exception as exc:
         state.setdefault("error", str(exc)[:200])
     linked = bool(creds.get("linked"))
     running = bool(_WEB_LOGIN_PROC is not None and _WEB_LOGIN_PROC.poll() is None)
+    protocol_state = "linked" if linked else str(state.get("state") or ("qr" if state.get("qr") else "idle"))
     return {
         "can_protocol": WEB_BRIDGE_PATH.is_file(),
         "linked": linked,
-        "me": creds.get("me") or {},
+        "me": creds.get("me") or state.get("me") or {},
         "login_running": running,
-        "state": "linked" if linked else str(state.get("state") or ("qr" if state.get("qr") else "idle")),
+        "state": protocol_state,
         "qr": "" if linked else str(state.get("qr") or ""),
         "auth_dir": str(WEB_AUTH_DIR),
+        "state_file": str(WEB_LOGIN_STATE),
+        "attempt": int(state.get("attempt") or 0),
+        "error": str(state.get("error") or ""),
+        "state_at": str(state.get("at") or ""),
     }
 
 
@@ -1956,36 +2057,84 @@ def web_logout() -> Dict[str, Any]:
     return result
 
 
-def web_sync_contacts(*, timeout: int = 180) -> Dict[str, Any]:
-    """走协议拉整本通讯录（名字 + 手机号）并写库。"""
+def web_sync_contacts(*, timeout: int = 180, resume: bool = True) -> Dict[str, Any]:
+    """走协议拉整本通讯录（名字 + 手机号）并写库。
+
+    分批 + 续传 + partial（用户点名要的这三点）：
+      - 桥接每收够一批就往 logs/whatsapp_protocol.jsonl 追加一条 contacts_chunk
+        （progress / received / partial / 前 3 条原始字段 sample，用来核对字段有没有变）；
+      - 通讯录落在 WEB_CONTACT_CACHE，--resume 先读缓存再补增量，中断了不用从头再来；
+      - 首次 history 同步没下发完（partial）也算成功，只是提示可以再点一次续传。
+    """
     _claim_action("同步 WhatsApp 通讯录（协议）")
+    started = time.monotonic()
     try:
-        payload = _run_bridge(["contacts", "--auth", str(WEB_AUTH_DIR), "--timeout", str(max(5000, timeout * 1000 // 2))], timeout=timeout)
+        argv = [
+            "contacts",
+            "--auth", str(WEB_AUTH_DIR),
+            "--cache", str(WEB_CONTACT_CACHE),
+            "--timeout", str(max(5000, timeout * 1000 // 2)),
+        ]
+        if resume:
+            argv.append("--resume")
+        payload = _run_bridge(argv, timeout=timeout)
         saved = 0
         with_phone = 0
         for row in payload.get("contacts") or []:
-            phone = str(row.get("phone") or "").strip()
+            data = row if isinstance(row, dict) else {}
+            phone = str(data.get("phone") or "").strip()
+            name = str(data.get("name") or data.get("notify") or phone or data.get("id") or "").strip()
             contact = _persist_contact({
-                "display_name": str(row.get("name") or row.get("notify") or phone or row.get("id") or "").strip(),
+                "display_name": name,
                 "phone": phone,
                 "source": "web_protocol",
-                "jid": str(row.get("id") or ""),
+                "jid": str(data.get("id") or ""),
             })
             if contact:
                 saved += 1
                 if phone:
                     with_phone += 1
+        received = int(payload.get("count") or 0)
+        partial = bool(payload.get("partial"))
+        history_ok = bool(payload.get("history_ok"))
+        if not history_ok and not received:
+            message = (
+                "协议同步完成：本次没拿到 history 数据包（0 个联系人）。"
+                "首次同步只在下一次配对时下发，请「解绑 → 重新扫码」一次"
+            )
+        elif partial:
+            message = (
+                "协议同步（部分）：%d 个联系人，其中 %d 个带手机号；history 还没下发完，"
+                "可以再点一次「同步通讯录」续传" % (saved, with_phone)
+            )
+        else:
+            message = "协议同步完成：%d 个联系人，其中 %d 个带手机号" % (saved, with_phone)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
         result = {
             "ok": True,
             "count": saved,
             "with_phone": with_phone,
-            "received": int(payload.get("count") or 0),
-            "message": "协议同步完成：%d 个联系人，其中 %d 个带手机号" % (saved, with_phone),
+            "received": received,
+            "partial": partial,
+            "history_ok": history_ok,
+            "resumed_from": int(payload.get("resumed_from") or 0),
+            "elapsed_ms": elapsed_ms,
+            "message": message,
         }
-        _record_operation("web_sync_contacts", "", "success", result["message"], result)
+        _append_protocol(
+            "contacts_saved",
+            saved=saved,
+            with_phone=with_phone,
+            received=received,
+            partial=partial,
+            history_ok=history_ok,
+            elapsed_ms=elapsed_ms,
+        )
+        _record_operation("web_sync_contacts", "", "success", message, result)
         return result
     except Exception as exc:
         _record_operation("web_sync_contacts", "", "failed", str(exc)[:300])
+        _append_protocol("contacts_failed", error=str(exc)[:300], elapsed_ms=int((time.monotonic() - started) * 1000))
         raise
     finally:
         _release_action()
@@ -4283,3 +4432,749 @@ def auto_reply_diagnostics(limit: int = 20) -> Dict[str, Any]:
     except OSError:
         pass
     return {"ok": True, "state": auto_reply_state(), "last_run": last_run, "events": events}
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-15（二）：协议读接口 + 关键节点账本 + 中风险发送（白名单 / 限速 / 落账）
+#
+# 记账原则（用户要的「关键节点数据存好，以后查问题」）：
+#   logs/whatsapp_web_login.json   只写「当前真相」：state / qr / me / error / attempt / at
+#   logs/whatsapp_protocol.jsonl   只追加「发生过什么」：桥接的进度（qr/515/contacts_chunk）
+#                                  + 后端的每条 cmd（received/saved/with_phone/partial/耗时/错误）
+#   出问题时把这两个文件 + data/native_whatsapp/state.db 一起发过来就能复盘。
+# ---------------------------------------------------------------------------
+
+WEB_CONTACT_CACHE = STATE_DIR / "web_contacts_cache.json"
+
+SEND_MIN_GAP_SECONDS = 12
+SEND_MAX_GAP_SECONDS = 28
+SEND_PAUSE_EVERY = 3
+SEND_PAUSE_SECONDS = 120
+SEND_DAILY_LIMIT = 80
+SEND_MAX_CONSECUTIVE_FAILURES = 5
+
+_SEND_SCHEDULERS: Dict[str, Any] = {}
+_SEND_WAKE_EVENTS: Dict[str, Any] = {}
+_SEND_RUNTIME: Dict[str, Dict[str, Any]] = {}
+
+
+PROTOCOL_LOG_PATH = LOG_PATH.parent / "whatsapp_protocol.jsonl"
+
+
+def _append_protocol(event: str, **fields: Any) -> None:
+    """关键节点账本（只追加）。谁在什么时候做了什么、拿到多少、为什么失败。"""
+    try:
+        PROTOCOL_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"at": _now_iso(), "event": str(event), "source": "engine", **fields}
+        with PROTOCOL_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+    except Exception:
+        logging.getLogger(__name__).debug("failed to write whatsapp protocol log", exc_info=True)
+
+
+def protocol_log(*, limit: int = 50, event: str = "") -> Dict[str, Any]:
+    """页面「协议日志」：最后 N 条关键节点（新的在前）。"""
+    safe = max(1, min(int(limit or 50), 500))
+    rows: List[Dict[str, Any]] = []
+    try:
+        with PROTOCOL_LOG_PATH.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(item, dict):
+                    rows.append(item)
+    except FileNotFoundError:
+        rows = []
+    except Exception:
+        logging.getLogger(__name__).debug("failed to read whatsapp protocol log", exc_info=True)
+    wanted = str(event or "").strip()
+    if wanted:
+        rows = [row for row in rows if str(row.get("event") or "") == wanted]
+    rows = rows[-safe:]
+    rows.reverse()
+    return {"ok": True, "count": len(rows), "path": str(PROTOCOL_LOG_PATH), "items": rows}
+
+
+# ── 协议读：会话 / 消息 / 群 / 号码校验 / 资料 ────────────────────────────────
+
+def _web_jid_digits(value: str) -> str:
+    head = str(value or "").split("@")[0].split(":")[0]
+    return re.sub(r"[^0-9]", "", head)
+
+
+def _normalize_web_jid(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "@" in raw:
+        return raw
+    digits = re.sub(r"[^0-9]", "", raw)
+    return (digits + "@s.whatsapp.net") if digits else ""
+
+
+def _persist_web_chats(rows: Iterable[Any]) -> int:
+    now = _now_iso()
+    saved = 0
+    with _DB_LOCK, _connect() as conn:
+        for row in rows or []:
+            data = row if isinstance(row, dict) else {}
+            jid = str(data.get("id") or "").strip()
+            if not jid:
+                continue
+            conn.execute(
+                "insert into whatsapp_web_chats(id, account_id, jid, name, is_group, unread, ts, updated_at) "
+                "values(?,?,?,?,?,?,?,?) on conflict(account_id, jid) do update set "
+                "name=case when excluded.name != '' then excluded.name else whatsapp_web_chats.name end, "
+                "is_group=excluded.is_group, unread=excluded.unread, ts=excluded.ts, updated_at=excluded.updated_at",
+                (
+                    _stable_key("webchat", jid),
+                    DEFAULT_ACCOUNT_ID,
+                    jid,
+                    str(data.get("name") or data.get("subject") or "")[:300],
+                    1 if data.get("group") else 0,
+                    int(data.get("unread") or 0),
+                    int(data.get("ts") or 0),
+                    now,
+                ),
+            )
+            saved += 1
+    return saved
+
+
+def _persist_web_messages(rows: Iterable[Any]) -> int:
+    now = _now_iso()
+    saved = 0
+    with _DB_LOCK, _connect() as conn:
+        for row in rows or []:
+            data = row if isinstance(row, dict) else {}
+            jid = str(data.get("chat") or "").strip()
+            msg_id = str(data.get("id") or "").strip()
+            if not jid or not msg_id:
+                continue
+            conn.execute(
+                "insert into whatsapp_web_messages(id, account_id, jid, msg_id, from_me, ts, content, created_at) "
+                "values(?,?,?,?,?,?,?,?) on conflict(account_id, msg_id) do update set "
+                "content=excluded.content, from_me=excluded.from_me, ts=excluded.ts",
+                (
+                    _stable_key("webmsg", jid + "|" + msg_id),
+                    DEFAULT_ACCOUNT_ID,
+                    jid,
+                    msg_id,
+                    1 if data.get("from_me") else 0,
+                    int(data.get("ts") or 0),
+                    str(data.get("text") or "")[:4000],
+                    now,
+                ),
+            )
+            saved += 1
+    return saved
+
+
+def list_web_chats(*, limit: int = 200, keyword: str = "", groups_only: bool = False) -> List[Dict[str, Any]]:
+    safe = max(1, min(int(limit or 200), 500))
+    clauses = ["account_id=?"]
+    params: List[Any] = [DEFAULT_ACCOUNT_ID]
+    if groups_only:
+        clauses.append("is_group=1")
+    like = str(keyword or "").strip()
+    if like:
+        clauses.append("(name like ? or jid like ?)")
+        params.extend(["%" + like + "%", "%" + like + "%"])
+    with _connect() as conn:
+        rows = conn.execute(
+            "select * from whatsapp_web_chats where " + " and ".join(clauses) + " order by ts desc, updated_at desc limit ?",
+            tuple(params + [safe]),
+        ).fetchall()
+    return [_row_public(row) for row in rows]
+
+
+def list_web_messages(jid: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+    safe = max(1, min(int(limit or 50), 500))
+    with _connect() as conn:
+        rows = conn.execute(
+            "select * from whatsapp_web_messages where account_id=? and jid=? order by ts asc, created_at asc limit ?",
+            (DEFAULT_ACCOUNT_ID, str(jid or ""), safe),
+        ).fetchall()
+    return [_row_public(row) for row in rows]
+
+
+def web_chats(*, refresh: bool = False, wait: int = 25, keyword: str = "", limit: int = 200) -> Dict[str, Any]:
+    """会话列表：refresh=1 时真连一次协议拉最新的，然后从本地账读（页面刷新不会每次都等 20s）。"""
+    refreshed = False
+    saved = 0
+    if refresh:
+        payload = _run_bridge(
+            ["chats", "--auth", str(WEB_AUTH_DIR), "--wait", str(max(6000, int(wait) * 1000))],
+            timeout=max(90, int(wait) + 60),
+        )
+        saved = _persist_web_chats(payload.get("chats") or [])
+        refreshed = True
+    items = list_web_chats(limit=limit, keyword=keyword)
+    return {"ok": True, "refreshed": refreshed, "saved": saved, "count": len(items), "items": items}
+
+
+def web_groups(*, refresh: bool = False, wait: int = 20, limit: int = 200) -> Dict[str, Any]:
+    refreshed = False
+    saved = 0
+    if refresh:
+        payload = _run_bridge(
+            ["groups", "--auth", str(WEB_AUTH_DIR), "--wait", str(max(4000, int(wait) * 1000))],
+            timeout=max(90, int(wait) + 60),
+        )
+        saved = _persist_web_chats([{**(row or {}), "group": True} for row in (payload.get("groups") or [])])
+        refreshed = True
+    items = list_web_chats(limit=limit, groups_only=True)
+    return {"ok": True, "refreshed": refreshed, "saved": saved, "count": len(items), "items": items}
+
+
+def web_messages(jid: str, *, refresh: bool = False, limit: int = 50, wait: int = 12) -> Dict[str, Any]:
+    """读消息（协议，不再走 UIA）：refresh=1 真拉一次并落库，之后页面直接读本地。"""
+    target = str(jid or "").strip()
+    if not target:
+        raise RuntimeError("缺少 jid（会话标识）")
+    refreshed = False
+    scanned = 0
+    if refresh:
+        payload = _run_bridge(
+            [
+                "messages",
+                "--auth", str(WEB_AUTH_DIR),
+                "--chat", target,
+                "--limit", str(max(1, min(int(limit or 50), 500))),
+                "--wait", str(max(4000, int(wait) * 1000)),
+            ],
+            timeout=max(90, int(wait) + 60),
+        )
+        scanned = int(payload.get("scanned") or 0)
+        _persist_web_messages(payload.get("messages") or [])
+        refreshed = True
+    items = list_web_messages(target, limit=limit)
+    return {"ok": True, "jid": target, "refreshed": refreshed, "scanned": scanned, "count": len(items), "items": items}
+
+
+def web_check(phones: Iterable[Any]) -> Dict[str, Any]:
+    """号码校验：这批号到底有没有注册 WhatsApp（onWhatsApp，只读）。"""
+    values = [str(item).strip() for item in (phones or []) if str(item).strip()]
+    if not values:
+        raise RuntimeError("请填写要校验的号码（每行一个或用逗号分隔）")
+    payload = _run_bridge(
+        ["check", "--auth", str(WEB_AUTH_DIR), "--phones", ",".join(values[:100])],
+        timeout=180,
+    )
+    results = payload.get("results") or []
+    return {
+        "ok": True,
+        "count": len(results),
+        "exists": len([row for row in results if isinstance(row, dict) and row.get("exists")]),
+        "items": results,
+        "message": "校验完成：%d 个号码，其中 %d 个已注册 WhatsApp"
+        % (len(results), len([row for row in results if isinstance(row, dict) and row.get("exists")])),
+    }
+
+
+def web_profile(jid: str) -> Dict[str, Any]:
+    """头像 + 签名（只读），顺手把号码补进联系人表。"""
+    target = _normalize_web_jid(jid)
+    if not target:
+        raise RuntimeError("请填写 jid 或手机号")
+    payload = _run_bridge(["profile", "--auth", str(WEB_AUTH_DIR), "--jid", target], timeout=120)
+    digits = _web_jid_digits(target)
+    if digits:
+        try:
+            _persist_contact({"display_name": digits, "phone": digits, "source": "web_protocol", "jid": target})
+        except Exception:
+            logging.getLogger(__name__).debug("failed to cache profile contact", exc_info=True)
+    return {
+        "ok": True,
+        "jid": str(payload.get("jid") or target),
+        "about": str(payload.get("about") or ""),
+        "set_at": str(payload.get("set_at") or ""),
+        "picture": str(payload.get("picture") or ""),
+        "exists": payload.get("exists"),
+    }
+
+
+# ── 中风险：发送（白名单 + 去重 + 限速 + 逐条落账，默认关闭）─────────────────
+
+def _normalize_send_control(row: Optional[sqlite3.Row], account_id: str) -> Dict[str, Any]:
+    data = dict(row) if row else {}
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+
+    def _int_field(name: str, fallback: int) -> int:
+        raw = data.get(name)
+        if raw is None or raw == "":
+            return fallback
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return fallback
+
+    min_gap = max(3, min(_int_field("min_gap", SEND_MIN_GAP_SECONDS), 600))
+    max_gap = max(min_gap, min(_int_field("max_gap", SEND_MAX_GAP_SECONDS), 900))
+    pause_every = max(1, min(_int_field("pause_every", SEND_PAUSE_EVERY), 100))
+    pause_seconds = max(0, min(_int_field("pause_seconds", SEND_PAUSE_SECONDS), 3600))
+    daily_limit = max(0, min(_int_field("daily_limit", SEND_DAILY_LIMIT), 1000))
+    scheduler = _SEND_SCHEDULERS.get(key)
+    runtime = _SEND_RUNTIME.get(key) or {}
+    return {
+        "account_id": key,
+        "enabled": bool(data.get("enabled") or 0),
+        "running": bool(runtime.get("running")),
+        "min_gap": min_gap,
+        "max_gap": max_gap,
+        "pause_every": pause_every,
+        "pause_seconds": pause_seconds,
+        "daily_limit": daily_limit,
+        "sent_today": _send_count_today(key),
+        "last_started_at": str(data.get("last_started_at") or ""),
+        "last_stopped_at": str(data.get("last_stopped_at") or ""),
+        "next_action_at": str(runtime.get("next_action_at") or ""),
+        "last_error": str(runtime.get("last_error") or ""),
+        "schedule_alive": bool(scheduler is not None and not scheduler.done()),
+    }
+
+
+def get_send_control(account_id: str = "") -> Dict[str, Any]:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    with _connect() as conn:
+        row = conn.execute("select * from whatsapp_send_control where account_id=? limit 1", (key,)).fetchone()
+    return _normalize_send_control(row, key)
+
+
+def save_send_control(
+    account_id: str = "",
+    *,
+    min_gap: Optional[int] = None,
+    max_gap: Optional[int] = None,
+    pause_every: Optional[int] = None,
+    pause_seconds: Optional[int] = None,
+    daily_limit: Optional[int] = None,
+) -> Dict[str, Any]:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    current = get_send_control(key)
+    values = {
+        "min_gap": current["min_gap"] if min_gap is None else max(3, min(int(min_gap), 600)),
+        "max_gap": current["max_gap"] if max_gap is None else max(3, min(int(max_gap), 900)),
+        "pause_every": current["pause_every"] if pause_every is None else max(1, min(int(pause_every), 100)),
+        "pause_seconds": current["pause_seconds"] if pause_seconds is None else max(0, min(int(pause_seconds), 3600)),
+        "daily_limit": current["daily_limit"] if daily_limit is None else max(0, min(int(daily_limit), 1000)),
+    }
+    values["max_gap"] = max(values["min_gap"], values["max_gap"])
+    now = _now_iso()
+    with _DB_LOCK, _connect() as conn:
+        conn.execute(
+            "insert into whatsapp_send_control(account_id, enabled, min_gap, max_gap, pause_every, pause_seconds, daily_limit, running, updated_at) "
+            "values(?,?,?,?,?,?,?,?,?) on conflict(account_id) do update set min_gap=excluded.min_gap, max_gap=excluded.max_gap, "
+            "pause_every=excluded.pause_every, pause_seconds=excluded.pause_seconds, daily_limit=excluded.daily_limit, updated_at=excluded.updated_at",
+            (key, 1 if current["enabled"] else 0, values["min_gap"], values["max_gap"], values["pause_every"], values["pause_seconds"], values["daily_limit"], 1 if current["running"] else 0, now),
+        )
+    _append_protocol("send_control_saved", account_id=key, **values)
+    return get_send_control(key)
+
+
+def _set_send_control_enabled(account_id: str, enabled: bool) -> None:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    current = get_send_control(key)
+    now = _now_iso()
+    with _DB_LOCK, _connect() as conn:
+        conn.execute(
+            "insert into whatsapp_send_control(account_id, enabled, min_gap, max_gap, pause_every, pause_seconds, daily_limit, running, "
+            "last_started_at, last_stopped_at, updated_at) values(?,?,?,?,?,?,?,?,?,?,?) on conflict(account_id) do update set "
+            "enabled=excluded.enabled, running=excluded.running, "
+            "last_started_at=case when excluded.enabled=1 then excluded.last_started_at else whatsapp_send_control.last_started_at end, "
+            "last_stopped_at=case when excluded.enabled=0 then excluded.last_stopped_at else whatsapp_send_control.last_stopped_at end, "
+            "updated_at=excluded.updated_at",
+            (
+                key,
+                1 if enabled else 0,
+                current["min_gap"], current["max_gap"], current["pause_every"], current["pause_seconds"], current["daily_limit"],
+                1 if enabled else 0,
+                now if enabled else None,
+                now if not enabled else None,
+                now,
+            ),
+        )
+    runtime = _SEND_RUNTIME.setdefault(key, {})
+    runtime["running"] = bool(enabled)
+    if not enabled:
+        runtime["next_action_at"] = ""
+    _append_protocol("send_control_toggled", account_id=key, enabled=bool(enabled))
+
+
+def _notify_send_scheduler(account_id: str) -> None:
+    event = _SEND_WAKE_EVENTS.get(str(account_id or "").strip() or DEFAULT_ACCOUNT_ID)
+    if event is not None:
+        event.set()
+
+
+def _send_count_today(account_id: str) -> int:
+    """今天已经真发出去的条数（成功才算，失败不占额度）。"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _connect() as conn:
+        row = conn.execute(
+            "select count(*) as n from whatsapp_tasks where account_id=? and task_type='send' and status in ('success','partial_failed') "
+            "and substr(updated_at, 1, 10) = ?",
+            (account_id, today),
+        ).fetchone()
+    return int(row["n"] if row else 0)
+
+
+def send_whitelist_reason(jid: str) -> str:
+    """白名单：只发「已有会话」或「已有联系人」的 jid；陌生号一律拒（返回拒绝原因，空串=通过）。"""
+    target = str(jid or "").strip()
+    if not target:
+        return "目标为空"
+    if not target.endswith("@s.whatsapp.net") and not target.endswith("@g.us"):
+        return "只支持 jid 形式（先同步会话/通讯录再选）"
+    with _connect() as conn:
+        row = conn.execute(
+            "select 1 from whatsapp_web_chats where account_id=? and jid=? and is_group=0 limit 1",
+            (DEFAULT_ACCOUNT_ID, target),
+        ).fetchone()
+        if row:
+            return ""
+        row = conn.execute(
+            "select 1 from whatsapp_contacts where account_id=? and jid=? limit 1",
+            (DEFAULT_ACCOUNT_ID, target),
+        ).fetchone()
+        if row:
+            return ""
+        digits = _web_jid_digits(target)
+        if digits:
+            row = conn.execute(
+                "select 1 from whatsapp_contacts where account_id=? and phone is not null and phone != '' and phone like ? limit 1",
+                (DEFAULT_ACCOUNT_ID, "%" + digits),
+            ).fetchone()
+            if row:
+                return ""
+    return "不在已有会话/通讯录里（陌生号不发，避免封号）"
+
+
+def _send_targets(values: Iterable[Any]) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for item in values or []:
+        if isinstance(item, dict):
+            jid = _normalize_web_jid(item.get("jid") or item.get("target") or item.get("phone") or "")
+            extra = {key: str(item.get(key) or "") for key in ("text", "image", "file", "caption")}
+        else:
+            jid = _normalize_web_jid(item)
+            extra = {}
+        if jid:
+            out.append({"jid": jid, **extra})
+    return out
+
+
+def enqueue_send(
+    targets: Iterable[Any],
+    *,
+    text: str = "",
+    image_path: str = "",
+    file_path: str = "",
+    caption: str = "",
+    min_gap: Optional[int] = None,
+    max_gap: Optional[int] = None,
+    pause_every: Optional[int] = None,
+    pause_seconds: Optional[int] = None,
+    daily_limit: Optional[int] = None,
+    client_request_id: str = "",
+) -> Dict[str, Any]:
+    """把要发的内容逐条入队（一条任务 = 一个目标），由限速调度器慢慢发。
+
+    三道闸门（用户点名要的）：
+      1. 白名单：目标必须已经是「已有会话 / 已有联系人」，陌生号直接拒；
+      2. 去重：同一批里同一 jid 只留一条；队列里已有同号未发的也不重复入队；
+      3. 限速：单条 min_gap–max_gap 随机、每 pause_every 条停 pause_seconds、日上限 daily_limit。
+    """
+    account_id = DEFAULT_ACCOUNT_ID
+    candidates = _send_targets(targets)
+    if not candidates:
+        raise RuntimeError("没有可用的发送目标（先同步会话或通讯录，再从列表里选）")
+    if min_gap is not None or max_gap is not None or pause_every is not None or pause_seconds is not None or daily_limit is not None:
+        save_send_control(
+            account_id,
+            min_gap=min_gap,
+            max_gap=max_gap,
+            pause_every=pause_every,
+            pause_seconds=pause_seconds,
+            daily_limit=daily_limit,
+        )
+    body = str(text or "")[:4000]
+    unique: Dict[str, Dict[str, Any]] = {}
+    skipped: List[Dict[str, str]] = []
+    for row in candidates:
+        jid = row["jid"]
+        if jid in unique:
+            skipped.append({"target": jid, "reason": "同一批重复目标"})
+            continue
+        unique[jid] = row
+    queued = 0
+    task_ids: List[str] = []
+    for index, (jid, row) in enumerate(unique.items()):
+        reason = send_whitelist_reason(jid)
+        if reason:
+            skipped.append({"target": jid, "reason": reason})
+            continue
+        payload = {
+            "text": str(row.get("text") or body)[:4000],
+            "image": str(row.get("image") or image_path or "")[:500],
+            "file": str(row.get("file") or file_path or "")[:500],
+            "caption": str(row.get("caption") or caption or "")[:1000],
+            "kind": "image" if (row.get("image") or image_path) else ("file" if (row.get("file") or file_path) else "text"),
+        }
+        if not payload["text"] and not payload["image"] and not payload["file"]:
+            skipped.append({"target": jid, "reason": "内容为空"})
+            continue
+        batch_key = (str(client_request_id or uuid.uuid4().hex)[:100] + ":%d" % index)
+        existing = _existing_task_by_client_request_id(account_id, batch_key)
+        if existing:
+            continue
+        pending = _pending_send_task_for(account_id, jid)
+        if pending:
+            skipped.append({"target": jid, "reason": "队列里已有发给该号的待发任务"})
+            continue
+        _persist_task_row(
+            account_id=account_id,
+            task_type="send",
+            targets=[{"jid": jid}],
+            payload=payload,
+            client_request_id=batch_key,
+            status="queued",
+        )
+        task_ids.append(batch_key)
+        queued += 1
+    _record_operation(
+        "send_enqueue",
+        "",
+        "success" if queued else "skipped",
+        "入队 %d 条，跳过 %d 条" % (queued, len(skipped)),
+        {"queued": queued, "skipped": skipped[:20]},
+    )
+    _append_protocol("send_enqueued", queued=queued, skipped=len(skipped), reasons=[row["reason"] for row in skipped[:5]])
+    _notify_send_scheduler(account_id)
+    return {"ok": True, "queued": queued, "skipped": skipped, "control": get_send_control(account_id), "summary": send_queue_summary(account_id)}
+
+
+def _pending_send_task_for(account_id: str, jid: str) -> Optional[Dict[str, Any]]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "select * from whatsapp_tasks where account_id=? and task_type='send' and status in ('queued','running') order by created_at asc",
+            (account_id,),
+        ).fetchall()
+    for row in rows:
+        task = _row_to_task(row)
+        targets = task.get("targets") or []
+        first = targets[0] if targets else {}
+        if isinstance(first, dict) and str(first.get("jid") or "") == jid:
+            return task
+    return None
+
+
+def _bridge_send_one(jid: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    argv = ["send", "--auth", str(WEB_AUTH_DIR), "--to", jid]
+    if payload.get("text"):
+        argv += ["--text", str(payload["text"])]
+    if payload.get("image"):
+        argv += ["--image", str(payload["image"])]
+    if payload.get("file"):
+        argv += ["--file", str(payload["file"])]
+    if payload.get("caption"):
+        argv += ["--caption", str(payload["caption"])]
+    return _run_bridge(argv, timeout=int(payload.get("timeout") or 180))
+
+
+async def _process_send_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    task_id = str(task.get("id") or "")
+    targets = task.get("targets") or []
+    first = targets[0] if targets else {}
+    jid = str(first.get("jid") or "") if isinstance(first, dict) else str(first or "")
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    if not jid:
+        _finish_task(task_id, "failed", 1, 0, 1, "任务里没有目标")
+        return {"status": "failed"}
+    reason = send_whitelist_reason(jid)
+    if reason:
+        _finish_task(task_id, "failed", 1, 0, 1, reason)
+        _record_operation("send", jid, "failed", reason)
+        _append_protocol("send_blocked", to=jid, reason=reason)
+        return {"status": "failed", "error": reason}
+    try:
+        result = await asyncio.to_thread(_bridge_send_one, jid, payload)
+    except Exception as exc:  # noqa: BLE001
+        message = str(exc)[:300]
+        _finish_task(task_id, "failed", 1, 0, 1, message)
+        _record_operation("send", jid, "failed", message, {"kind": payload.get("kind")})
+        _append_protocol("send_failed", to=jid, kind=payload.get("kind"), error=message)
+        return {"status": "failed", "error": message}
+    _finish_task(task_id, "success", 1, 1, 0, "")
+    _record_operation(
+        "send",
+        jid,
+        "success",
+        "已发送（%s，%.1fs）" % (str(payload.get("kind") or "text"), (int(result.get("elapsed_ms") or 0) / 1000.0)),
+        {"msg_id": result.get("id"), "kind": payload.get("kind")},
+    )
+    _append_protocol("send_ok", to=jid, kind=payload.get("kind"), msg_id=str(result.get("id") or ""), elapsed_ms=int(result.get("elapsed_ms") or 0))
+    return {"status": "success", "msg_id": result.get("id")}
+
+
+async def _run_send_scheduler(account_id: str) -> None:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    event = _SEND_WAKE_EVENTS.setdefault(key, asyncio.Event())
+    runtime = _SEND_RUNTIME.setdefault(key, {})
+    runtime["running"] = True
+    sent_since_pause = 0
+    failures = 0
+    try:
+        while get_send_control(key).get("enabled"):
+            task = _claim_next_queued_task(key, "send")
+            if not task:
+                runtime["next_action_at"] = ""
+                event.clear()
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=2.0)
+                except asyncio.TimeoutError:
+                    pass
+                continue
+            control = get_send_control(key)
+            limit = int(control.get("daily_limit") or 0)
+            if limit > 0 and _send_count_today(key) >= limit:
+                runtime["next_action_at"] = ""
+                runtime["last_error"] = "今日发送额度已用完（上限 %d 条）" % limit
+                _append_protocol("send_daily_limit", limit=limit)
+                # 把任务放回队列，等明天（或用户改额度）
+                with _DB_LOCK, _connect() as conn:
+                    conn.execute(
+                        "update whatsapp_tasks set status='queued', updated_at=? where id=? and status='running'",
+                        (_now_iso(), str(task.get("id") or "")),
+                    )
+                event.clear()
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=float(_friend_add_quota_reset_seconds()))
+                except asyncio.TimeoutError:
+                    pass
+                continue
+            try:
+                outcome = await _process_send_task(task)
+                ok = isinstance(outcome, dict) and outcome.get("status") == "success"
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                runtime["last_error"] = str(exc)[:200]
+                _finish_task(str(task.get("id") or ""), "failed", 1, 0, 1, str(exc))
+            if not get_send_control(key).get("enabled"):
+                break
+            wait_seconds = 0.0
+            if ok:
+                failures = 0
+                sent_since_pause += 1
+                if sent_since_pause >= int(control.get("pause_every") or SEND_PAUSE_EVERY):
+                    wait_seconds = float(control.get("pause_seconds") or SEND_PAUSE_SECONDS)
+                    sent_since_pause = 0
+                else:
+                    wait_seconds = random.uniform(float(control.get("min_gap") or SEND_MIN_GAP_SECONDS), float(control.get("max_gap") or SEND_MAX_GAP_SECONDS))
+            else:
+                failures += 1
+                runtime["last_error"] = str(runtime.get("last_error") or "发送失败")
+                if failures >= SEND_MAX_CONSECUTIVE_FAILURES:
+                    _set_send_control_enabled(key, False)
+                    _record_operation("send_queue_stopped", "", "failed", "连续失败 %d 条，已自动停止发送队列（先查日志再开）" % failures)
+                    _append_protocol("send_queue_auto_stopped", failures=failures)
+                    break
+                wait_seconds = min(300.0, 15.0 * (2 ** (failures - 1)))
+            wait_seconds = max(1.0, wait_seconds)
+            runtime["next_action_at"] = (datetime.now().astimezone() + timedelta(seconds=wait_seconds)).isoformat()
+            event.clear()
+            try:
+                await asyncio.wait_for(event.wait(), timeout=wait_seconds)
+            except asyncio.TimeoutError:
+                pass
+    except asyncio.CancelledError:
+        raise
+    finally:
+        runtime["running"] = False
+        runtime["next_action_at"] = ""
+        current = _SEND_SCHEDULERS.get(key)
+        if current is asyncio.current_task():
+            _SEND_SCHEDULERS.pop(key, None)
+            _SEND_WAKE_EVENTS.pop(key, None)
+
+
+async def start_send_queue(account_id: str = "") -> Dict[str, Any]:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    _set_send_control_enabled(key, True)
+    current = _SEND_SCHEDULERS.get(key)
+    if current is None or current.done():
+        _SEND_SCHEDULERS[key] = asyncio.create_task(_run_send_scheduler(key), name="whatsapp-send-" + key[-8:])
+    _notify_send_scheduler(key)
+    _append_log("send_queue_started", account_id=key)
+    return get_send_control(key)
+
+
+async def stop_send_queue(account_id: str = "") -> Dict[str, Any]:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    _set_send_control_enabled(key, False)
+    _notify_send_scheduler(key)
+    _append_log("send_queue_stopped", account_id=key)
+    return get_send_control(key)
+
+
+def list_send_records(
+    account_id: str = "",
+    *,
+    limit: int = 50,
+    offset: int = 0,
+    status: str = "",
+    keyword: str = "",
+) -> Dict[str, Any]:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    clauses = ["account_id=?", "task_type='send'"]
+    params: List[Any] = [key]
+    wanted = str(status or "").strip()
+    if wanted:
+        clauses.append("status=?")
+        params.append(wanted)
+    like = str(keyword or "").strip()
+    if like:
+        clauses.append("(targets like ? or payload like ?)")
+        params.extend(["%" + like + "%", "%" + like + "%"])
+    where = " where " + " and ".join(clauses)
+    safe_limit = max(1, min(int(limit or 50), 200))
+    safe_offset = max(0, int(offset or 0))
+    with _connect() as conn:
+        total = int(conn.execute("select count(*) from whatsapp_tasks" + where, tuple(params)).fetchone()[0])
+        rows = conn.execute(
+            "select * from whatsapp_tasks" + where + " order by created_at desc, id desc limit ? offset ?",
+            tuple(params + [safe_limit, safe_offset]),
+        ).fetchall()
+    return {"items": [_row_to_task(row) for row in rows], "total": total, "limit": safe_limit, "offset": safe_offset}
+
+
+def send_queue_summary(account_id: str = "") -> Dict[str, Any]:
+    key = str(account_id or "").strip() or DEFAULT_ACCOUNT_ID
+    with _connect() as conn:
+        rows = conn.execute(
+            "select status, count(*) as n from whatsapp_tasks where account_id=? and task_type='send' group by status",
+            (key,),
+        ).fetchall()
+    by_status = {str(row["status"]): int(row["n"] or 0) for row in rows}
+    control = get_send_control(key)
+    return {
+        "queued": by_status.get("queued", 0),
+        "running": by_status.get("running", 0),
+        "success": by_status.get("success", 0) + by_status.get("partial_failed", 0),
+        "failed": by_status.get("failed", 0),
+        "sent_today": control.get("sent_today", 0),
+        "daily_limit": control.get("daily_limit", 0),
+        "min_gap": control.get("min_gap"),
+        "max_gap": control.get("max_gap"),
+        "pause_every": control.get("pause_every"),
+        "pause_seconds": control.get("pause_seconds"),
+        "enabled": control.get("enabled"),
+        "running_now": control.get("running"),
+        "next_action_at": control.get("next_action_at"),
+        "last_error": control.get("last_error"),
+    }

@@ -348,7 +348,7 @@
     state.tab = tab;
     document.querySelectorAll('#content-personal-whatsapp .pwa-tab').forEach(function(node){node.classList.toggle('active',node.dataset.pwaTab===tab);});
     document.querySelectorAll('#content-personal-whatsapp .pwa-panel').forEach(function(node){node.classList.toggle('active',node.dataset.pwaPanel===tab);});
-    if(tab==='contacts'){loadContacts().catch(function(e){showError(e.message);});}
+    if(tab==='contacts'){ensureProtocolPanel();loadContacts().catch(function(e){showError(e.message);});loadProtocolPanel().catch(function(){});}
   if(tab==='sessions')loadSessions().catch(function(e){showError(e.message);});
     if(tab==='records')loadRecords().catch(function(e){showError(e.message);});
     if(tab==='friends'){loadFriendQueue().catch(function(e){showError(e.message);});loadFriendRecords().catch(function(e){showError(e.message);});}
@@ -722,5 +722,296 @@
       return '<div class="pwa-record"><div class="pwa-item-title">' + esc(item.event || '事件') + ' <span class="pwa-badge">' + esc(item.ts || '') + '</span></div><div class="pwa-meta">' + esc(detail.join(' · ') || '-') + '</div></div>';
     }).join('') : '<div class="pwa-empty">暂无日志</div>';
   }
-  window.initPersonalWhatsappView=function(){bind();loadMemoryDocs().catch(function(){});loadBase().then(function(){renderTakeoverSummary();}).catch(function(error){showError(error.message||'WhatsApp 状态读取失败');});loadFriendQueue().catch(function(){});loadAutoReply().catch(function(){});};
+
+  // ── 协议直连：会话 / 读消息 / 群 / 号码校验 / 头像资料 / 发送（限速） / 协议日志 ──
+  var proto = { chats: [], messages: [], control: {}, summary: {}, records: [], log: [], target: '', chatKeyword: '' };
+
+  function protoRows(rows, render, empty) {
+    return (rows && rows.length) ? rows.map(render).join('') : '<div class="pwa-empty">' + esc(empty) + '</div>';
+  }
+  function protoOn(id, fn) { var node = $(id); if (node) node.addEventListener('click', fn); }
+  function setProtoState(message, isErr) {
+    var node = $('personalWhatsappProtocolState');
+    if (!node) return;
+    node.textContent = message || '';
+    node.style.color = isErr ? '#c0392b' : '';
+  }
+
+  function ensureProtocolPanel() {
+    if ($('personalWhatsappProtocolBlock')) { bindProtocolPanel(); return; }
+    var markup = '<div id="personalWhatsappProtocolBlock" style="border:1px solid rgba(37,211,102,.35);border-radius:12px;padding:12px;margin:10px 0;background:rgba(255,255,255,.72);">'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><strong style="font-size:14px;">协议直连（读消息 / 群 / 校验 / 发送）</strong><span class="pwa-meta" id="personalWhatsappProtocolState">未加载</span></div>'
+      + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;"><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoChatsBtn">刷新会话（协议）</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoGroupsBtn">刷新群聊（协议）</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoLogBtn">刷新协议日志</button><span class="pwa-meta" id="personalWhatsappProtoTarget">发送目标：未选择</span></div>'
+      + '<div class="pwa-toolbar"><input id="personalWhatsappProtoChatSearch" class="pwa-input" placeholder="搜索会话（名称 / jid）" style="flex:1;min-width:180px"></div>'
+      + '<div id="personalWhatsappProtoChatList" class="pwa-list"><div class="pwa-empty">点「刷新会话（协议）」读取（走协议，不再点界面）</div></div>'
+      + '<div id="personalWhatsappProtoMessageList" class="pwa-list"><div class="pwa-muted">点会话里的「读消息」把该会话的消息读进来</div></div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-top:12px;">'
+      + '<div class="pwa-item" style="display:block;"><strong style="font-size:13px;">号码校验</strong><textarea id="personalWhatsappProtoCheckInput" class="pwa-textarea" placeholder="一行一个号码，或逗号分隔（带国家码，如 8613800138000）"></textarea><div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappProtoCheckBtn">校验</button></div><div id="personalWhatsappProtoCheckResult" class="pwa-list"></div></div>'
+      + '<div class="pwa-item" style="display:block;"><strong style="font-size:13px;">头像 / 签名</strong><input id="personalWhatsappProtoProfileInput" class="pwa-input" placeholder="jid 或手机号"><div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappProtoProfileBtn">读取资料</button></div><div id="personalWhatsappProtoProfileResult" class="pwa-list"></div></div>'
+      + '</div>'
+      + '<div style="border-top:1px dashed rgba(0,0,0,.12);margin:12px 0 8px;"></div>'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><strong style="font-size:14px;">发送（中风险 · 默认关闭 · 只发已有会话）</strong><span class="pwa-meta" id="personalWhatsappProtoSendState">—</span></div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:8px 0;">'
+      + '<label class="pwa-field"><span class="pwa-muted">单条最小间隔(秒)</span><input id="personalWhatsappProtoSendMinGap" class="pwa-input" type="number" min="3" max="600" value="12"></label>'
+      + '<label class="pwa-field"><span class="pwa-muted">单条最大间隔(秒)</span><input id="personalWhatsappProtoSendMaxGap" class="pwa-input" type="number" min="3" max="900" value="28"></label>'
+      + '<label class="pwa-field"><span class="pwa-muted">每 N 条停</span><input id="personalWhatsappProtoSendPauseEvery" class="pwa-input" type="number" min="1" max="100" value="3"></label>'
+      + '<label class="pwa-field"><span class="pwa-muted">停顿秒数</span><input id="personalWhatsappProtoSendPauseSeconds" class="pwa-input" type="number" min="0" max="3600" value="120"></label>'
+      + '<label class="pwa-field"><span class="pwa-muted">日上限</span><input id="personalWhatsappProtoSendDailyLimit" class="pwa-input" type="number" min="0" max="1000" value="80"></label>'
+      + '</div>'
+      + '<textarea id="personalWhatsappProtoSendText" class="pwa-textarea" placeholder="发送内容（发给上面选中的会话）"></textarea>'
+      + '<label class="pwa-muted"><input type="checkbox" id="personalWhatsappProtoSendAutoStart"> 入队后立即启动队列</label>'
+      + '<div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappProtoSendBtn">加入发送队列</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoSendSaveBtn">保存限速</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoSendStartBtn">启动队列</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoSendStopBtn">停止队列</button></div>'
+      + '<div id="personalWhatsappProtoSendSummary" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;"></div>'
+      + '<div id="personalWhatsappProtoSendRecords" class="pwa-list"><div class="pwa-empty">暂无发送记录</div></div>'
+      + '<div style="margin-top:12px;"><strong style="font-size:13px;">协议日志（关键节点）</strong><div id="personalWhatsappProtoLog" class="pwa-list"><div class="pwa-empty">点「刷新协议日志」读取</div></div></div>'
+      + '</div>';
+    var anchor = $('personalWhatsappWebBlock');
+    if (anchor && anchor.parentNode) anchor.insertAdjacentHTML('afterend', markup);
+    else {
+      var panel = document.querySelector('#content-personal-whatsapp [data-pwa-panel="contacts"]');
+      var host = panel ? (panel.querySelector('.pwa-card') || panel) : null;
+      if (!host) return;
+      host.insertAdjacentHTML('afterbegin', markup);
+    }
+    bindProtocolPanel();
+  }
+
+  function bindProtocolPanel() {
+    var root = $('personalWhatsappProtocolBlock');
+    if (!root || root.dataset.protoBound === '1') return;
+    root.dataset.protoBound = '1';
+    protoOn('personalWhatsappProtoChatsBtn', function () { loadProtoChats(true).catch(function (e) { setProtoState(e.message || '读取会话失败', true); }); });
+    protoOn('personalWhatsappProtoGroupsBtn', function () { loadProtoGroups(true).catch(function (e) { setProtoState(e.message || '读取群聊失败', true); }); });
+    protoOn('personalWhatsappProtoLogBtn', function () { loadProtocolLog().catch(function (e) { setProtoState(e.message || '读取日志失败', true); }); });
+    protoOn('personalWhatsappProtoCheckBtn', function () { runProtoCheck(); });
+    protoOn('personalWhatsappProtoProfileBtn', function () { runProtoProfile(); });
+    protoOn('personalWhatsappProtoSendSaveBtn', function () { saveProtoSendControl(); });
+    protoOn('personalWhatsappProtoSendBtn', function () { submitProtoSend(); });
+    protoOn('personalWhatsappProtoSendStartBtn', function () { toggleProtoSendQueue(true); });
+    protoOn('personalWhatsappProtoSendStopBtn', function () { toggleProtoSendQueue(false); });
+    var search = $('personalWhatsappProtoChatSearch');
+    if (search) search.addEventListener('input', debounce(function () { proto.chatKeyword = text(search.value).trim(); loadProtoChats(false).catch(function () {}); }, 300));
+    var list = $('personalWhatsappProtoChatList');
+    if (list) list.addEventListener('click', function (ev) {
+      var read = ev.target.closest('[data-proto-read]');
+      if (read) { readProtoMessages(read.getAttribute('data-proto-read')); return; }
+      var pick = ev.target.closest('[data-proto-target]');
+      if (pick) { proto.target = pick.getAttribute('data-proto-target'); renderProtoTarget(); }
+    });
+  }
+
+  function renderProtoTarget() {
+    var node = $('personalWhatsappProtoTarget');
+    if (node) node.textContent = proto.target ? ('发送目标：' + proto.target) : '发送目标：未选择';
+  }
+
+  function loadProtocolPanel() {
+    ensureProtocolPanel();
+    return Promise.all([loadProtoChats(false), loadProtoSendPanel(), loadProtocolLog()]).then(function () {});
+  }
+
+  function loadProtoChats(refresh) {
+    var params = '?limit=200&refresh=' + (refresh ? 1 : 0) + (proto.chatKeyword ? ('&keyword=' + encodeURIComponent(proto.chatKeyword)) : '');
+    if (refresh) setProtoState('正在走协议读取会话…', false);
+    return request('/api/native-whatsapp/web/chats' + params).then(function (data) {
+      proto.chats = Array.isArray(data.items) ? data.items : [];
+      var host = $('personalWhatsappProtoChatList');
+      if (host) host.innerHTML = protoRows(proto.chats, function (row) {
+        var jid = text(row.jid);
+        return '<div class="pwa-item"><div class="pwa-item-title">' + esc(row.name || (row.is_group ? '未命名群聊' : jid)) + (row.is_group ? ' <span class="pwa-badge">群聊</span>' : '') + '</div>'
+          + '<div class="pwa-meta">' + esc(jid) + (row.unread ? (' · 未读 ' + esc(row.unread)) : '') + '</div>'
+          + '<div class="pwa-contact-actions"><button class="btn btn-ghost btn-sm" data-proto-read="' + esc(jid) + '">读消息</button>'
+          + (row.is_group ? '' : '<button class="btn btn-primary btn-sm" data-proto-target="' + esc(jid) + '">选为发送目标</button>') + '</div></div>';
+      }, '暂无会话（先「同步通讯录」或点刷新从协议读一次）');
+      if (refresh) setProtoState('协议会话已更新：' + proto.chats.length + ' 条', false);
+      renderProtoTarget();
+      return data;
+    });
+  }
+
+  function loadProtoGroups(refresh) {
+    if (refresh) setProtoState('正在走协议读取群聊…', false);
+    return request('/api/native-whatsapp/web/groups?limit=200&refresh=' + (refresh ? 1 : 0)).then(function (data) {
+      var rows = Array.isArray(data.items) ? data.items : [];
+      var host = $('personalWhatsappProtoChatList');
+      if (host) host.innerHTML = protoRows(rows, function (row) {
+        return '<div class="pwa-item"><div class="pwa-item-title">' + esc(row.name || '未命名群聊') + ' <span class="pwa-badge">群聊</span></div><div class="pwa-meta">' + esc(text(row.jid)) + '</div></div>';
+      }, '暂无群聊');
+      if (refresh) setProtoState('协议群聊已更新：' + rows.length + ' 个', false);
+      return data;
+    });
+  }
+
+  function readProtoMessages(jid) {
+    setProtoState('正在读 ' + jid + ' 的消息…', false);
+    return request('/api/native-whatsapp/web/messages?refresh=1&limit=60&jid=' + encodeURIComponent(jid)).then(function (data) {
+      var host = $('personalWhatsappProtoMessageList');
+      var rows = Array.isArray(data.items) ? data.items : [];
+      if (host) host.innerHTML = '<div class="pwa-item-title">' + esc(jid) + ' <span class="pwa-badge">' + rows.length + ' 条</span></div>' + protoRows(rows, function (row) {
+        return '<div class="pwa-bubble ' + (row.from_me ? 'outbound' : 'inbound') + '">' + esc(row.content || '') + '</div>';
+      }, '这次没读到消息（首次同步可能还没下发）');
+      setProtoState('已读 ' + rows.length + ' 条（协议直读，不再走 UIA）', false);
+      return data;
+    });
+  }
+
+  function runProtoCheck() {
+    var raw = text($('personalWhatsappProtoCheckInput') && $('personalWhatsappProtoCheckInput').value).split(/[,\n\s]+/).filter(Boolean);
+    if (!raw.length) { setProtoState('先填写要校验的号码', true); return Promise.resolve(); }
+    setProtoState('正在校验 ' + raw.length + ' 个号码…', false);
+    return request('/api/native-whatsapp/web/check', { method: 'POST', json: { phones: raw } }).then(function (data) {
+      var host = $('personalWhatsappProtoCheckResult');
+      var rows = Array.isArray(data.items) ? data.items : [];
+      if (host) host.innerHTML = protoRows(rows, function (row) {
+        return '<div class="pwa-record"><div class="pwa-item-title">' + esc(text(row.input)) + ' <span class="pwa-badge">' + (row.exists ? '已注册' : '没有') + '</span></div><div class="pwa-meta">' + esc(text(row.jid || row.error || '')) + '</div></div>';
+      }, '没有结果');
+      setProtoState(data.message || '校验完成', false);
+      return data;
+    }).catch(function (err) { setProtoState(err.message || '校验失败', true); });
+  }
+
+  function runProtoProfile() {
+    var jid = text($('personalWhatsappProtoProfileInput') && $('personalWhatsappProtoProfileInput').value).trim();
+    if (!jid) { setProtoState('先填写 jid 或手机号', true); return Promise.resolve(); }
+    setProtoState('正在读资料…', false);
+    return request('/api/native-whatsapp/web/profile?jid=' + encodeURIComponent(jid)).then(function (data) {
+      var host = $('personalWhatsappProtoProfileResult');
+      if (host) host.innerHTML = '<div class="pwa-record"><div class="pwa-item-title">' + esc(text(data.jid)) + '</div>'
+        + '<div class="pwa-meta">签名：' + esc(text(data.about) || '（没设签名或不可见）') + '</div>'
+        + '<div class="pwa-meta">头像：' + esc(text(data.picture) || '（没头像或不可见）') + '</div></div>'
+        + (data.picture ? ('<div style="margin-top:6px;"><img src="' + esc(data.picture) + '" alt="头像" style="width:64px;height:64px;border-radius:50%;background:#fff;"></div>') : '');
+      setProtoState('资料已读取', false);
+      return data;
+    }).catch(function (err) { setProtoState(err.message || '读取资料失败', true); });
+  }
+
+  function protoSendFields() {
+    return {
+      account_id: ACCOUNT_ID,
+      min_gap: numberField('personalWhatsappProtoSendMinGap', 12, 3, 600),
+      max_gap: numberField('personalWhatsappProtoSendMaxGap', 28, 3, 900),
+      pause_every: numberField('personalWhatsappProtoSendPauseEvery', 3, 1, 100),
+      pause_seconds: numberField('personalWhatsappProtoSendPauseSeconds', 120, 0, 3600),
+      daily_limit: numberField('personalWhatsappProtoSendDailyLimit', 80, 0, 1000)
+    };
+  }
+
+  function fillProtoSendControl(control) {
+    control = control || {};
+    var map = {
+      personalWhatsappProtoSendMinGap: control.min_gap,
+      personalWhatsappProtoSendMaxGap: control.max_gap,
+      personalWhatsappProtoSendPauseEvery: control.pause_every,
+      personalWhatsappProtoSendPauseSeconds: control.pause_seconds,
+      personalWhatsappProtoSendDailyLimit: control.daily_limit
+    };
+    Object.keys(map).forEach(function (id) { var node = $(id); if (node && map[id] != null) node.value = map[id]; });
+  }
+
+  function renderProtoSendState() {
+    var node = $('personalWhatsappProtoSendState');
+    var summary = proto.summary || {};
+    if (!node) return;
+    node.textContent = (summary.enabled ? '队列运行中' : '队列已停止')
+      + ' · 今日 ' + Number(summary.sent_today || 0) + '/' + Number(summary.daily_limit || 0)
+      + ' · 排队 ' + Number(summary.queued || 0)
+      + (summary.next_action_at ? (' · 下一条 ' + text(summary.next_action_at).slice(11, 19)) : '')
+      + (summary.last_error ? (' · ' + summary.last_error) : '');
+    node.style.color = summary.last_error ? '#c0392b' : '';
+  }
+
+  function loadProtoSendPanel() {
+    return request('/api/native-whatsapp/web/send/queue?limit=20').then(function (data) {
+      proto.control = data.control || {};
+      proto.summary = data.summary || {};
+      proto.records = Array.isArray(data.items) ? data.items : [];
+      fillProtoSendControl(proto.control);
+      renderProtoSendState();
+      var host = $('personalWhatsappProtoSendSummary');
+      if (host) {
+        host.innerHTML = statusCard('今日已发', Number(proto.summary.sent_today || 0) + ' / ' + Number(proto.summary.daily_limit || 0), proto.summary.sent_today >= proto.summary.daily_limit && proto.summary.daily_limit ? 'bad' : '')
+          + statusCard('排队', Number(proto.summary.queued || 0), '')
+          + statusCard('成功', Number(proto.summary.success || 0), 'good')
+          + statusCard('失败', Number(proto.summary.failed || 0), proto.summary.failed ? 'bad' : '');
+      }
+      var list = $('personalWhatsappProtoSendRecords');
+      if (list) list.innerHTML = protoRows(proto.records, function (row) {
+        var targets = Array.isArray(row.targets) ? row.targets : [];
+        var first = targets[0] || {};
+        var jid = typeof first === 'string' ? first : text(first.jid);
+        return '<div class="pwa-record ' + (row.status === 'failed' ? 'failed' : '') + '"><div class="pwa-item-title">' + esc(jid || '发送') + ' <span class="pwa-badge">' + esc(friendStatusText(row.status)) + '</span></div><div class="pwa-meta">' + esc(text((row.payload || {}).text || '').slice(0, 80)) + '</div><div class="pwa-meta">' + esc(row.error_message || '') + ' ' + esc(row.updated_at || '') + '</div></div>';
+      }, '暂无发送记录');
+      return data;
+    });
+  }
+
+  function saveProtoSendControl() {
+    setProtoState('正在保存限速参数…', false);
+    return request('/api/native-whatsapp/web/send/config', { method: 'POST', json: protoSendFields() }).then(function (data) {
+      proto.control = data.control || {};
+      proto.summary = data.summary || proto.summary;
+      fillProtoSendControl(proto.control); renderProtoSendState();
+      toastMessage('发送限速已保存');
+      setProtoState('限速已保存：单条 ' + proto.control.min_gap + '–' + proto.control.max_gap + 's，每 ' + proto.control.pause_every + ' 条停 ' + proto.control.pause_seconds + 's，日上限 ' + proto.control.daily_limit, false);
+      return data;
+    }).catch(function (err) { setProtoState(err.message || '保存失败', true); });
+  }
+
+  function submitProtoSend() {
+    var content = text($('personalWhatsappProtoSendText') && $('personalWhatsappProtoSendText').value).trim();
+    if (!proto.target) { setProtoState('先在会话列表里选一个发送目标（只发已有会话，陌生号会被拒）', true); return Promise.resolve(); }
+    if (!content) { setProtoState('发送内容不能为空', true); return Promise.resolve(); }
+    var autoStart = !!($('personalWhatsappProtoSendAutoStart') && $('personalWhatsappProtoSendAutoStart').checked);
+    var body = protoSendFields();
+    body.targets = [proto.target];
+    body.text = content;
+    body.auto_start = autoStart;
+    setProtoState('正在入队…', false);
+    return request('/api/native-whatsapp/web/send', { method: 'POST', json: body }).then(function (data) {
+      var skipped = Array.isArray(data.skipped) ? data.skipped : [];
+      if (data.queued) {
+        toastMessage('已入队 ' + data.queued + ' 条');
+        setProtoState('已入队 ' + data.queued + ' 条' + (skipped.length ? ('，跳过 ' + skipped.length + ' 条：' + text(skipped[0].reason)) : ''), false);
+      } else {
+        setProtoState('没有入队：' + (skipped.length ? text(skipped[0].reason) : '内容为空') + '（发送前请把限速和队列确认好）', true);
+      }
+      proto.control = data.control || proto.control;
+      proto.summary = data.summary || proto.summary;
+      renderProtoSendState();
+      return loadProtoSendPanel();
+    }).catch(function (err) { setProtoState(err.message || '入队失败', true); });
+  }
+
+  function toggleProtoSendQueue(start) {
+    var path = start ? '/api/native-whatsapp/web/send/start' : '/api/native-whatsapp/web/send/stop';
+    setProtoState(start ? '正在启动发送队列…' : '正在停止发送队列…', false);
+    return request(path, { method: 'POST', json: { account_id: ACCOUNT_ID } }).then(function (data) {
+      proto.control = data.control || proto.control;
+      proto.summary = data.summary || proto.summary;
+      renderProtoSendState();
+      toastMessage(start ? '发送队列已启动（按限速慢慢发）' : '发送队列已停止');
+      setProtoState(start ? '队列已启动：按限速逐条发送，连续失败会自动停' : '队列已停止', false);
+      return loadProtoSendPanel();
+    }).catch(function (err) { setProtoState(err.message || '操作失败', true); });
+  }
+
+  function loadProtocolLog() {
+    return request('/api/native-whatsapp/web/protocol/log?limit=50').then(function (data) {
+      proto.log = Array.isArray(data.items) ? data.items : [];
+      var host = $('personalWhatsappProtoLog');
+      if (host) host.innerHTML = protoRows(proto.log, function (row) {
+        var detail = [];
+        Object.keys(row || {}).forEach(function (key) {
+          if (key === 'at' || key === 'event' || key === 'source') return;
+          var value = row[key];
+          if (value && typeof value === 'object') detail.push(key + '=' + JSON.stringify(value).slice(0, 90));
+          else detail.push(key + '=' + text(value));
+        });
+        return '<div class="pwa-record"><div class="pwa-item-title">' + esc(row.event || '事件') + ' <span class="pwa-badge">' + esc(text(row.at || '').slice(11, 19)) + '</span></div><div class="pwa-meta">' + esc(detail.join(' · ')) + '</div></div>';
+      }, '暂无协议日志（点刷新，或先扫码绑定一次）');
+      return data;
+    });
+  }
+
+  window.initPersonalWhatsappView=function(){ensureProtocolPanel();bind();loadProtocolPanel().catch(function(){});loadMemoryDocs().catch(function(){});loadBase().then(function(){renderTakeoverSummary();}).catch(function(error){showError(error.message||'WhatsApp 状态读取失败');});loadFriendQueue().catch(function(){});loadAutoReply().catch(function(){});};
 })();

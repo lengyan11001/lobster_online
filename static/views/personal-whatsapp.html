@@ -40,6 +40,32 @@
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappWebLoginBtn">扫码绑定</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappWebSyncBtn">同步通讯录</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappWebExportBtn">导出 CSV</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappWebLogoutBtn">解绑</button><span class="pwa-meta" id="personalWhatsappContactStats">已取号 —</span></div>
             <div id="personalWhatsappWebQrWrap" style="display:none;text-align:center;"><img id="personalWhatsappWebQrImg" alt="WhatsApp 扫码绑定" style="width:220px;height:220px;background:#fff;border-radius:8px;"><div class="pwa-meta">手机 WhatsApp → 设置 → 已连接的设备 → 连接设备</div></div>
           </div>
+          <div id="personalWhatsappProtocolBlock" style="border:1px solid rgba(37,211,102,.35);border-radius:12px;padding:12px;margin:10px 0;background:rgba(255,255,255,.72);">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><strong style="font-size:14px;">协议直连（读消息 / 群 / 校验 / 发送）</strong><span class="pwa-meta" id="personalWhatsappProtocolState">未加载</span></div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;"><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoChatsBtn">刷新会话（协议）</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoGroupsBtn">刷新群聊（协议）</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoLogBtn">刷新协议日志</button><span class="pwa-meta" id="personalWhatsappProtoTarget">发送目标：未选择</span></div>
+            <div class="pwa-toolbar"><input id="personalWhatsappProtoChatSearch" class="pwa-input" placeholder="搜索会话（名称 / jid）" style="flex:1;min-width:180px"></div>
+            <div id="personalWhatsappProtoChatList" class="pwa-list"><div class="pwa-empty">点「刷新会话（协议）」读取（走协议，不再点界面）</div></div>
+            <div id="personalWhatsappProtoMessageList" class="pwa-list"><div class="pwa-muted">点会话里的「读消息」把该会话的消息读进来</div></div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-top:12px;">
+              <div class="pwa-item" style="display:block;"><strong style="font-size:13px;">号码校验</strong><textarea id="personalWhatsappProtoCheckInput" class="pwa-textarea" placeholder="一行一个号码，或逗号分隔（带国家码，如 8613800138000）"></textarea><div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappProtoCheckBtn">校验</button></div><div id="personalWhatsappProtoCheckResult" class="pwa-list"></div></div>
+              <div class="pwa-item" style="display:block;"><strong style="font-size:13px;">头像 / 签名</strong><input id="personalWhatsappProtoProfileInput" class="pwa-input" placeholder="jid 或手机号"><div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappProtoProfileBtn">读取资料</button></div><div id="personalWhatsappProtoProfileResult" class="pwa-list"></div></div>
+            </div>
+            <div style="border-top:1px dashed rgba(0,0,0,.12);margin:12px 0 8px;"></div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><strong style="font-size:14px;">发送（中风险 · 默认关闭 · 只发已有会话）</strong><span class="pwa-meta" id="personalWhatsappProtoSendState">—</span></div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:8px 0;">
+              <label class="pwa-field"><span class="pwa-muted">单条最小间隔(秒)</span><input id="personalWhatsappProtoSendMinGap" class="pwa-input" type="number" min="3" max="600" value="12"></label>
+              <label class="pwa-field"><span class="pwa-muted">单条最大间隔(秒)</span><input id="personalWhatsappProtoSendMaxGap" class="pwa-input" type="number" min="3" max="900" value="28"></label>
+              <label class="pwa-field"><span class="pwa-muted">每 N 条停</span><input id="personalWhatsappProtoSendPauseEvery" class="pwa-input" type="number" min="1" max="100" value="3"></label>
+              <label class="pwa-field"><span class="pwa-muted">停顿秒数</span><input id="personalWhatsappProtoSendPauseSeconds" class="pwa-input" type="number" min="0" max="3600" value="120"></label>
+              <label class="pwa-field"><span class="pwa-muted">日上限</span><input id="personalWhatsappProtoSendDailyLimit" class="pwa-input" type="number" min="0" max="1000" value="80"></label>
+            </div>
+            <textarea id="personalWhatsappProtoSendText" class="pwa-textarea" placeholder="发送内容（发给上面选中的会话）"></textarea>
+            <label class="pwa-muted"><input type="checkbox" id="personalWhatsappProtoSendAutoStart"> 入队后立即启动队列</label>
+            <div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappProtoSendBtn">加入发送队列</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoSendSaveBtn">保存限速</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoSendStartBtn">启动队列</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoSendStopBtn">停止队列</button></div>
+            <div id="personalWhatsappProtoSendSummary" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;"></div>
+            <div id="personalWhatsappProtoSendRecords" class="pwa-list"><div class="pwa-empty">暂无发送记录</div></div>
+            <div style="margin-top:12px;"><strong style="font-size:13px;">协议日志（关键节点）</strong><div id="personalWhatsappProtoLog" class="pwa-list"><div class="pwa-empty">点「刷新协议日志」读取</div></div></div>
+          </div>
           <div class="pwa-toolbar"><input id="personalWhatsappContactSearch" class="pwa-input" placeholder="搜索姓名 / 手机号 / @用户名" style="flex:1;min-width:180px"></div>
           <div id="personalWhatsappContactList" class="pwa-list"><div class="pwa-empty">暂无联系人，先点上面「同步通讯录」</div></div>
           <div id="personalWhatsappContactPagination" class="pwa-pagination"></div>
@@ -48,6 +74,7 @@
       <section class="pwa-panel" data-pwa-panel="sessions">
         <div class="pwa-grid">
           <div class="pwa-card"><div class="pwa-card-head"><div><h3>会话</h3><div class="pwa-muted">缓存查询不操作桌面；点同步才读取 WhatsApp。</div></div><button type="button" class="btn btn-primary btn-sm" id="personalWhatsappSyncSessionsBtn">同步会话</button></div><div class="pwa-toolbar"><input id="personalWhatsappSessionSearch" class="pwa-input" placeholder="搜索会话或消息" style="flex:1;min-width:180px"><select id="personalWhatsappSessionType" class="pwa-select" style="width:110px"><option value="">全部</option><option value="direct">个人</option><option value="group">群聊</option></select></div><div id="personalWhatsappSessionList" class="pwa-list"><div class="pwa-empty">暂无会话</div></div><div id="personalWhatsappSessionPagination" class="pwa-pagination"></div></div>
+          <div class="pwa-card"><div class="pwa-card-head"><div><h3>群聊</h3><div class="pwa-muted">从已同步会话里识别出的群聊。</div></div></div><div id="personalWhatsappGroupList" class="pwa-list"><div class="pwa-empty">暂无已识别群聊；先同步会话，群聊会自动归入这里</div></div><div id="personalWhatsappGroupPagination" class="pwa-pagination"></div></div>
           <div class="pwa-card"><div class="pwa-card-head"><div><h3 id="personalWhatsappActiveSession">请选择会话</h3><div id="personalWhatsappActiveSessionSub" class="pwa-muted">选择后可从桌面同步右侧消息。</div></div><button type="button" class="btn btn-ghost btn-sm" id="personalWhatsappOpenSessionBtn" disabled>打开并同步</button></div><div id="personalWhatsappMessageList" class="pwa-message-list"><div class="pwa-empty">暂无消息</div></div><div class="pwa-field"><label>发送消息</label><textarea id="personalWhatsappSendContent" class="pwa-textarea" placeholder="输入回复内容，发送后会读取新的出站气泡确认"></textarea></div><div class="pwa-btn-row"><button type="button" class="btn btn-primary" id="personalWhatsappSendBtn" disabled>发送并确认</button><span class="pwa-muted" id="personalWhatsappSendState">待发送</span></div></div>
         </div>
       </section>
