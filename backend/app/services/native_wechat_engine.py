@@ -11669,8 +11669,8 @@ def update_contact_wx_no(account_id: str, contact_key: str, wx_no: str) -> Dict[
     if not account_id or not contact_key:
         raise RuntimeError("missing account_id or contact_key")
     value = str(wx_no or "").strip()
-    if value and not _looks_like_wechat_id(value):
-        raise RuntimeError("?????????????+6?????/??/???/????????????")
+    if value and not _looks_like_profile_wechat_id(value):
+        raise RuntimeError("微信号格式不对：需要 6 位以上字母/数字/下划线/减号（留空 = 清空）")
     with _connect() as conn:
         cur = conn.execute(
             "update wechat_contacts set wx_no=?, updated_at=? where account_id=? and contact_key=?",

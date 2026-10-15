@@ -258,8 +258,10 @@
               <input id="nativeWechatContactMomentsDryRun" type="checkbox">只探测
             </label>
           </div>
-          <input id="nativeWechatContactSearch" class="native-wechat-input" placeholder="搜索昵称、备注、微信号" style="width:100%;margin-bottom:10px;">
-              <select class="native-wechat-input" id="nativeWechatContactHasWx" style="max-width:150px;"><option value="all">??</option><option value="yes">?????</option><option value="no">????</option></select>
+          <div class="native-wechat-contact-search-row" style="display:flex;gap:10px;align-items:center;margin-bottom:10px;">
+          <input id="nativeWechatContactSearch" class="native-wechat-input" placeholder="搜索昵称、备注、微信号" style="flex:1;margin-bottom:0;">
+            <select class="native-wechat-input" id="nativeWechatContactHasWx" style="max-width:170px;margin-bottom:0;flex:none;"><option value="all">全部</option><option value="yes">已有微信号</option><option value="no">没微信号</option></select>
+          </div>
           <div id="nativeWechatContactList" class="native-wechat-empty">暂无联系人</div>
           <div id="nativeWechatContactPagination" class="native-wechat-pagination"></div>
         </div>
@@ -471,6 +473,25 @@
           <label>两次取任务的间隔（秒）</label>
           <input id="nativeWechatFriendIntervalInput" class="native-wechat-input" type="number" min="1" max="86400" value="60">
           <div class="native-wechat-actions" style="justify-content:flex-end;"><button type="button" class="btn btn-primary" id="nativeWechatFriendSettingsSaveBtn">保存设置</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="native-wechat-modal-mask" id="nativeWechatContactEditModal">
+      <div class="native-wechat-modal">
+        <div class="native-wechat-modal-head">
+          <h3 style="margin:0;">修改微信号</h3>
+          <button type="button" class="btn btn-ghost btn-sm" data-native-wechat-close>关闭</button>
+        </div>
+        <div class="native-wechat-muted" id="nativeWechatContactEditWho" style="margin-bottom:10px;"></div>
+        <div class="native-wechat-form-block">
+          <label>微信号（留空 = 清空）</label>
+          <input id="nativeWechatContactEditInput" class="native-wechat-input" placeholder="6 位以上字母/数字/下划线/减号" autocomplete="off">
+        </div>
+        <div class="native-wechat-actions" style="justify-content:flex-end;">
+          <button type="button" class="btn btn-ghost btn-sm" id="nativeWechatContactEditClearBtn">清空</button>
+          <button type="button" class="btn btn-ghost btn-sm" data-native-wechat-close>取消</button>
+          <button type="button" class="btn btn-primary btn-sm" id="nativeWechatContactEditSaveBtn">保存</button>
         </div>
       </div>
     </div>

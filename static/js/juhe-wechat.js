@@ -693,12 +693,20 @@
       var value = contactValue(item);
       var key = value.toLowerCase();
       var checked = state.contactSelected[key] ? ' checked' : '';
+      var rowKey = String(item.contact_key || item.id || '').trim();
+      var rowWx = String(item.wx_no || '').trim();
+      var editButton = rowKey
+        ? '<button type="button" class="btn btn-ghost btn-sm" data-native-contact-edit="' + esc(rowKey) +
+          '" data-native-contact-edit-wx="' + esc(rowWx) + '" data-native-contact-edit-label="' + esc(contactTitle(item)) +
+          '" style="flex:none;">改号</button>'
+        : '';
       return '<label class="native-wechat-item" style="display:flex;gap:10px;align-items:flex-start;">' +
         '<input type="checkbox" data-native-contact-select="' + esc(value) + '"' + checked + ' style="margin-top:3px;">' +
-        '<span style="min-width:0;">' +
+        '<span style="min-width:0;flex:1;">' +
           '<span class="native-wechat-item-title" style="display:block;">' + esc(contactTitle(item)) + '</span>' +
           '<span class="native-wechat-meta" style="display:block;">' + esc(contactSub(item)) + '</span>' +
         '</span>' +
+        editButton +
       '</label>';
     }).join('');
     renderContactSelectionState();
@@ -1166,7 +1174,7 @@
         var total = Number(data.count || 0);
         var withWx = Number(data.with_wx_no || 0);
         var pct = total ? Math.round(withWx * 100 / total) : 0;
-        chip.textContent = '??? ' + withWx + ' / ' + total + '?' + pct + '%?';
+        chip.textContent = '已取号 ' + withWx + ' / ' + total + '（' + pct + '%）';
       })();
       renderContacts();
       renderAutoReplyConfig();
@@ -2159,6 +2167,52 @@
     });
   }
 
+  function openContactEditModal(contactKey, currentWx, label) {
+    state.contactEditKey = String(contactKey || '');
+    var who = $('nativeWechatContactEditWho');
+    if (who) {
+      who.textContent = label
+        ? ('联系人：' + label + '（记录键 ' + state.contactEditKey + '）')
+        : ('记录键 ' + state.contactEditKey);
+    }
+    var input = $('nativeWechatContactEditInput');
+    if (input) input.value = String(currentWx || '');
+    var modal = $('nativeWechatContactEditModal');
+    if (modal) modal.classList.add('show');
+    if (input) { input.focus(); input.select(); }
+  }
+
+  function saveContactEditWx(clear) {
+    var id = activeAccountId();
+    var key = String(state.contactEditKey || '').trim();
+    var input = $('nativeWechatContactEditInput');
+    var value = clear ? '' : String((input && input.value) || '').trim();
+    if (!id) return setMsg('请先选择本机微信账号', true);
+    if (!key) return setMsg('没有定位到这条联系人记录，请刷新后重试', true);
+    if (value && !/^[0-9A-Za-z][0-9A-Za-z_-]{5,}$/.test(value)) {
+      return setMsg('微信号格式不对：需要 6 位以上字母/数字/下划线/减号（留空 = 清空）', true);
+    }
+    var btn = $('nativeWechatContactEditSaveBtn');
+    if (btn) btn.disabled = true;
+    return apiJson('/api/native-wechat/contacts/update', {
+      method: 'POST',
+      body: { account_id: id, contact_key: key, wx_no: value }
+    }).then(function(data) {
+      var changed = (data && typeof data.changed !== 'undefined') ? Number(data.changed) : 1;
+      if (!changed) {
+        setMsg('没有找到这条联系人记录，可能已被清空或重新同步过。', true);
+      } else {
+        setMsg(value ? ('已把微信号改为 ' + value) : '已清空这条记录的微信号', false);
+      }
+      closeModals();
+      return loadContacts((state.pagination.contacts || {}).page || 1);
+    }).catch(function(err) {
+      setMsg(err.message || '修改微信号失败', true);
+    }).finally(function() {
+      if (btn) btn.disabled = false;
+    });
+  }
+
   function closeModals() {
     document.querySelectorAll('.native-wechat-modal-mask.show').forEach(function(node) {
       node.classList.remove('show');
@@ -2385,6 +2439,14 @@
     if (peerSearch) peerSearch.addEventListener('input', debounce(function() { loadPeers(1); }, 250));
     var contactHasWx = $('nativeWechatContactHasWx');
     if (contactHasWx) contactHasWx.addEventListener('change', function() { loadContacts(1); });
+    var contactEditSaveBtn = $('nativeWechatContactEditSaveBtn');
+    if (contactEditSaveBtn) contactEditSaveBtn.addEventListener('click', function() { saveContactEditWx(false); });
+    var contactEditClearBtn = $('nativeWechatContactEditClearBtn');
+    if (contactEditClearBtn) contactEditClearBtn.addEventListener('click', function() { saveContactEditWx(true); });
+    var contactEditInput = $('nativeWechatContactEditInput');
+    if (contactEditInput) contactEditInput.addEventListener('keydown', function(evt) {
+      if (evt.key === 'Enter') { evt.preventDefault(); saveContactEditWx(false); }
+    });
     var contactSearch = $('nativeWechatContactSearch');
     if (contactSearch) contactSearch.addEventListener('input', debounce(function() { loadContacts(1); }, 250));
     var groupSearch = $('nativeWechatGroupSearch');
@@ -2541,6 +2603,17 @@
       btn.addEventListener('click', closeModals);
     });
     root.addEventListener('click', function(evt) {
+      var editWxButton = evt.target.closest('[data-native-contact-edit]');
+      if (editWxButton) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        openContactEditModal(
+          editWxButton.getAttribute('data-native-contact-edit') || '',
+          editWxButton.getAttribute('data-native-contact-edit-wx') || '',
+          editWxButton.getAttribute('data-native-contact-edit-label') || ''
+        );
+        return;
+      }
       var pageButton = evt.target.closest('[data-native-page-list][data-native-page-action]');
       if (pageButton) {
         if (pageButton.disabled) return;
