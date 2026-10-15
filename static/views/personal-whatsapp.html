@@ -25,13 +25,26 @@
       <div id="personalWhatsappError" class="pwa-msg"></div>
       <div id="personalWhatsappStatus" class="pwa-status"></div>
       <nav class="pwa-tabs" id="personalWhatsappTabs">
-        <button class="pwa-tab active" data-pwa-tab="overview">状态</button><button class="pwa-tab" data-pwa-tab="sessions">会话</button><button class="pwa-tab" data-pwa-tab="friends">加好友</button><button class="pwa-tab" data-pwa-tab="takeover">接管设置</button><button class="pwa-tab" data-pwa-tab="records">执行记录</button>
+        <button class="pwa-tab active" data-pwa-tab="overview">状态</button><button class="pwa-tab" data-pwa-tab="sessions">会话</button><button class="pwa-tab" data-pwa-tab="friends">加好友</button><button class="pwa-tab" data-pwa-tab="takeover">接管设置</button><button class="pwa-tab" data-pwa-tab="records">执行记录</button><button class="pwa-tab" data-pwa-tab="contacts">通讯录</button>
       </nav>
 
       <section class="pwa-panel active" data-pwa-panel="overview">
         <div class="pwa-card"><div class="pwa-card-head"><div><h3>桌面能力</h3><div class="pwa-muted">能力来自当前 Windows WhatsApp 暴露的 UIA 控件，不使用截图识别。</div></div></div><div class="pwa-capability"><div><strong>会话与消息</strong><span>同步列表、打开会话、读取气泡、发送并确认</span></div><div><strong>群聊</strong><span>只做查看与手动回复，自动接管一律跳过群聊</span></div><div><strong>批量加好友</strong><span>一行一个目标入队，按间隔逐条加，带日额度与重试</span></div><div><strong>接管方式</strong><span>手动一轮 / 常驻循环，只处理未读一对一会话</span></div><div><strong>国家/地区</strong><span>支持任意国家码</span></div><div><strong class="off">未伪造能力</strong><span>WhatsApp 不具备朋友圈功能，因此不展示无效入口</span></div></div></div>
       </section>
 
+      <section class="pwa-panel" data-pwa-panel="contacts">
+        <div class="pwa-card">
+          <div class="pwa-card-head"><div><h3>通讯录</h3><div class="pwa-muted">走 WhatsApp 协议（扫码一次）拿名字 + 手机号，可导出 CSV 给其他设备。</div></div><button type="button" class="btn btn-primary btn-sm" id="personalWhatsappRefreshContactsBtn">刷新</button></div>
+          <div id="personalWhatsappWebBlock" style="border:1px solid rgba(37,211,102,.35);border-radius:12px;padding:12px;margin:10px 0;background:rgba(255,255,255,.72);">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><strong style="font-size:14px;">通讯录（WhatsApp 协议直连）</strong><span class="pwa-meta" id="personalWhatsappWebState">检查中…</span></div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappWebLoginBtn">扫码绑定</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappWebSyncBtn">同步通讯录</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappWebExportBtn">导出 CSV</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappWebLogoutBtn">解绑</button><span class="pwa-meta" id="personalWhatsappContactStats">已取号 —</span></div>
+            <div id="personalWhatsappWebQrWrap" style="display:none;text-align:center;"><img id="personalWhatsappWebQrImg" alt="WhatsApp 扫码绑定" style="width:220px;height:220px;background:#fff;border-radius:8px;"><div class="pwa-meta">手机 WhatsApp → 设置 → 已连接的设备 → 连接设备</div></div>
+          </div>
+          <div class="pwa-toolbar"><input id="personalWhatsappContactSearch" class="pwa-input" placeholder="搜索姓名 / 手机号 / @用户名" style="flex:1;min-width:180px"></div>
+          <div id="personalWhatsappContactList" class="pwa-list"><div class="pwa-empty">暂无联系人，先点上面「同步通讯录」</div></div>
+          <div id="personalWhatsappContactPagination" class="pwa-pagination"></div>
+        </div>
+      </section>
       <section class="pwa-panel" data-pwa-panel="sessions">
         <div class="pwa-grid">
           <div class="pwa-card"><div class="pwa-card-head"><div><h3>会话</h3><div class="pwa-muted">缓存查询不操作桌面；点同步才读取 WhatsApp。</div></div><button type="button" class="btn btn-primary btn-sm" id="personalWhatsappSyncSessionsBtn">同步会话</button></div><div class="pwa-toolbar"><input id="personalWhatsappSessionSearch" class="pwa-input" placeholder="搜索会话或消息" style="flex:1;min-width:180px"><select id="personalWhatsappSessionType" class="pwa-select" style="width:110px"><option value="">全部</option><option value="direct">个人</option><option value="group">群聊</option></select></div><div id="personalWhatsappSessionList" class="pwa-list"><div class="pwa-empty">暂无会话</div></div><div id="personalWhatsappSessionPagination" class="pwa-pagination"></div></div>

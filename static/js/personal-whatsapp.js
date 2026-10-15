@@ -271,7 +271,7 @@
     if (b('personalWhatsappWebLogoutBtn')) b('personalWhatsappWebLogoutBtn').addEventListener('click', function () { logoutWhatsappWeb(); });
   }
 
-  function renderContacts() { ensureWhatsappWebBlock(); var host=$('personalWhatsappContactList');if(!host)return;host.innerHTML=state.contacts.length?state.contacts.map(function(row){var target=row.username||row.phone||row.display_name||'';return '<div class="pwa-item"><div class="pwa-item-title">'+esc(row.display_name||'未命名')+'</div><div class="pwa-meta">'+esc(row.username?('@'+row.username):'')+(row.username&&row.phone?' · ':'')+esc(row.phone||'')+'</div><div class="pwa-contact-actions"><button class="btn btn-primary btn-sm" data-pwa-contact-chat="'+esc(target)+'">打开会话</button></div></div>';}).join(''):'<div class="pwa-empty">暂无联系人，请先同步通讯录</div>';renderPagination('personalWhatsappContactPagination','contacts'); }
+  function renderContacts() { var host=$('personalWhatsappContactList');if(!host)return;host.innerHTML=state.contacts.length?state.contacts.map(function(row){var target=row.username||row.phone||row.display_name||'';return '<div class="pwa-item"><div class="pwa-item-title">'+esc(row.display_name||'未命名')+'</div><div class="pwa-meta">'+esc(row.username?('@'+row.username):'')+(row.username&&row.phone?' · ':'')+esc(row.phone||'')+'</div><div class="pwa-contact-actions"><button class="btn btn-primary btn-sm" data-pwa-contact-chat="'+esc(target)+'">打开会话</button></div></div>';}).join(''):'<div class="pwa-empty">暂无联系人，请先同步通讯录</div>';renderPagination('personalWhatsappContactPagination','contacts'); }
   function loadRecords(){var meta=state.pages.records;return request('/api/native-whatsapp/operations?'+query(meta)).then(function(data){state.records=Array.isArray(data.items)?data.items:[];meta.total=Number(data.total||0);renderRecords();});}
   function renderRecords(){var host=$('personalWhatsappRecordList');if(!host)return;host.innerHTML=state.records.length?state.records.map(function(row){return '<div class="pwa-record '+(row.status==='failed'?'failed':'')+'"><div class="pwa-item-title">'+esc(row.action||'操作')+' · '+esc(row.target||'无目标')+' <span class="pwa-badge">'+esc(row.status==='success'?'成功':'失败')+'</span></div><div class="pwa-meta">'+esc(row.message||'')+'</div><div class="pwa-meta">'+esc(row.created_at||'')+'</div></div>';}).join(''):'<div class="pwa-empty">暂无操作记录</div>';renderPagination('personalWhatsappRecordPagination','records');}
 
@@ -279,7 +279,8 @@
     state.tab = tab;
     document.querySelectorAll('#content-personal-whatsapp .pwa-tab').forEach(function(node){node.classList.toggle('active',node.dataset.pwaTab===tab);});
     document.querySelectorAll('#content-personal-whatsapp .pwa-panel').forEach(function(node){node.classList.toggle('active',node.dataset.pwaPanel===tab);});
-    if(tab==='sessions')loadSessions().catch(function(e){showError(e.message);});
+    if(tab==='contacts'){loadContacts().catch(function(e){showError(e.message);});}
+  if(tab==='sessions')loadSessions().catch(function(e){showError(e.message);});
     if(tab==='records')loadRecords().catch(function(e){showError(e.message);});
     if(tab==='friends'){loadFriendQueue().catch(function(e){showError(e.message);});loadFriendRecords().catch(function(e){showError(e.message);});}
     if(tab==='takeover'){loadAutoReply().catch(function(e){showError(e.message);});loadDiagnostics().catch(function(e){showError(e.message);});}
@@ -300,7 +301,14 @@
     $('personalWhatsappRefreshRecordsBtn').addEventListener('click',function(){loadRecords().catch(function(e){showError(e.message);});});
     $('personalWhatsappAddFriendBtn').addEventListener('click',function(){openFriendAddModal();});
     $('personalWhatsappAddContactBtn').addEventListener('click',function(){openModal('personalWhatsappContactModal');});
-    $('personalWhatsappContactSubmitBtn').addEventListener('click',function(){runBusy('正在填写桌面联系人表单...',submitSingleContact).catch(function(){});});
+    $('personalWhatsappRefreshContactsBtn').addEventListener('click',function(){loadContacts(1);});
+  $('personalWhatsappContactSearch').addEventListener('input',function(){state.pages.contacts.keyword=this.value;loadContacts(1);});
+  $('personalWhatsappWebLoginBtn').addEventListener('click',function(){startWhatsappWebLogin();});
+  $('personalWhatsappWebSyncBtn').addEventListener('click',function(){syncWhatsappContactsViaProtocol();});
+  $('personalWhatsappWebExportBtn').addEventListener('click',function(){exportWhatsappContactsCsv();});
+  $('personalWhatsappWebLogoutBtn').addEventListener('click',function(){logoutWhatsappWeb();});
+  $('personalWhatsappContactList').addEventListener('click',function(ev){var b=ev.target.closest('[data-pwa-contact-edit]');if(!b)return;var key=b.getAttribute('data-pwa-contact-edit')||'';var cur=b.getAttribute('data-pwa-contact-phone')||'';var next=window.prompt('修改手机号（留空 = 清空），带国家码如 8613800138000',cur);if(next===null)return;request('/api/native-whatsapp/contacts/update',{method:'POST',json:{contact_key:key,phone:String(next).trim()}}).then(function(){return loadContacts();}).catch(function(err){setWebState(err.message||'修改失败',true);});});
+  $('personalWhatsappContactSubmitBtn').addEventListener('click',function(){runBusy('正在填写桌面联系人表单...',submitSingleContact).catch(function(){});});
     $('personalWhatsappAddFriendSubmitBtn').addEventListener('click',function(){runBusy('正在提交好友申请...',submitFriendQueue).catch(function(){});});
     $('personalWhatsappFriendQueueStartBtn').addEventListener('click',function(){runBusy('正在启动加好友队列...',startFriendQueue).catch(function(){});});
     $('personalWhatsappFriendQueueStopBtn').addEventListener('click',function(){runBusy('正在停止加好友队列...',stopFriendQueue).catch(function(){});});
