@@ -11656,6 +11656,31 @@ def sync_local_contacts(account_id: str, *, limit: int = 10000) -> Dict[str, Any
         _contacts_click_fence_close()
 
 
+def update_contact_wx_no(account_id: str, contact_key: str, wx_no: str) -> Dict[str, Any]:
+    """Manually set/clear one contact's WeChat ID (user asked for an edit action).
+
+    Passing an empty value clears the field. Anything that looks like a nickname (Chinese
+    characters, spaces, punctuation-only) is rejected so a nickname can never be stored as an
+    ID - same gate the automatic reader uses.
+    """
+    init_db()
+    account_id = str(account_id or "").strip()
+    contact_key = str(contact_key or "").strip()
+    if not account_id or not contact_key:
+        raise RuntimeError("missing account_id or contact_key")
+    value = str(wx_no or "").strip()
+    if value and not _looks_like_wechat_id(value):
+        raise RuntimeError("?????????????+6?????/??/???/????????????")
+    with _connect() as conn:
+        cur = conn.execute(
+            "update wechat_contacts set wx_no=?, updated_at=? where account_id=? and contact_key=?",
+            (value, _now_iso(), account_id, contact_key),
+        )
+        changed = int(cur.rowcount or 0)
+    return {"ok": True, "account_id": account_id, "contact_key": contact_key,
+            "wx_no": value, "changed": changed, "total_after": _contact_count(account_id)}
+
+
 def clear_local_contacts(account_id: str) -> Dict[str, Any]:
     """Clear the locally cached address book for one account.
 

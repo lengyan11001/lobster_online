@@ -58,6 +58,12 @@ class AutoReplyDiagnosticsBody(BaseModel):
     enabled: bool
 
 
+class ContactUpdateBody(BaseModel):
+    account_id: str = Field(min_length=1, max_length=160)
+    contact_key: str = Field(min_length=1, max_length=400)
+    wx_no: str = Field(default="", max_length=120)
+
+
 class SyncBody(BaseModel):
     account_id: str = Field(min_length=1, max_length=160)
     limit: int = Field(default=10000, ge=1, le=10000)
@@ -481,6 +487,16 @@ async def native_wechat_clear_contacts(
         _raise_native_wechat_error("contacts_clear", exc, account_id=body.account_id)
 
 
+@router.post("/api/native-wechat/contacts/update")
+async def native_wechat_update_contact(
+    body: ContactUpdateBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    return await asyncio.to_thread(
+        engine.update_contact_wx_no, body.account_id, body.contact_key, body.wx_no or ""
+    )
+
+
 @router.post("/api/native-wechat/contacts/reset")
 async def native_wechat_reset_contacts(
     body: SyncBody,
@@ -511,11 +527,12 @@ async def native_wechat_sync_sessions(
 async def native_wechat_contacts(
     account_id: str,
     keyword: str = "",
+    has_wx: str = Query(default="all", pattern="^(all|yes|no)$"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     current_user: _ServerUser = Depends(get_current_user_for_local),
 ):
-    return {"ok": True, **engine.list_contacts(account_id, limit=limit, offset=offset, keyword=keyword)}
+    return {"ok": True, **engine.list_contacts(account_id, limit=limit, offset=offset, keyword=keyword, has_wx=has_wx)}
 
 
 @router.post("/api/native-wechat/groups/sync")
