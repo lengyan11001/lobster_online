@@ -61,100 +61,45 @@
   }
 
   function statusCard(label, value, tone) { return '<div class="pwa-stat"><span>' + esc(label) + '</span><strong style="color:' + (tone === 'good' ? '#087443' : tone === 'bad' ? '#b42318' : '#3f5a4e') + '">' + esc(value) + '</strong></div>'; }
-  function statusDiagnostics(s) {
-    var v = state.version || {};
-    var deps = s.dependencies || {};
-    var sources = s.dependency_sources || {};
-    var depErrors = s.dependency_errors || {};
-    var caps = s.capabilities || {};
-    var repair = s.auto_repair || {};
-    var processes = Array.isArray(s.processes) ? s.processes : [];
-    var candidates = Array.isArray(s.candidates) ? s.candidates : [];
-    var depKeys = Object.keys(deps);
-    var depOk = depKeys.filter(function(key) { return deps[key]; }).length;
-    var fallbackReady = {
-      psutil: caps.process_scan === 'ctypes',
-      pyperclip: caps.clipboard === 'win32clipboard' || caps.clipboard === 'ctypes'
-    };
-    var depText = depKeys.map(function(key) {
-      if (deps[key]) return key + ':\u2713' + (sources[key] === 'vendor' ? '(内置副本)' : '');
-      return key + ':\u2717' + (fallbackReady[key] ? '(已兜底)' : '');
-    }).join('\u3000');
-    var openErrors = Object.keys(depErrors).filter(function(key) { return !fallbackReady[key]; });
-    var depErrorText = openErrors.map(function(key) { return key + ' \u2192 ' + depErrors[key]; }).join('\uff1b');
-    var capText = '进程枚举 ' + (caps.process_scan || '-') + ' / 剪贴板 ' + (caps.clipboard || '-') + ' / UIA ' + (caps.uia || '-');
-    var repairText = repair.running
-      ? '正在自动修复运行依赖…'
-      : (repair.message ? ((repair.ok ? '上次自动修复：成功' : '上次自动修复：失败') + '（' + repair.message + '）') : '');
-    var built = (v.static_version || '-') + '-' + (v.static_build == null ? '-' : v.static_build);
-    var summary = '版本 ' + built + ' · 依赖 ' + depOk + '/' + depKeys.length + ' 可用 · ' + capText;
-    var rows = candidates.map(function(row) {
-      return '<tr><td>' + esc(row.title || '') + '</td><td>' + esc(row.class_name || '') + '</td>'
-        + '<td>' + esc(row.process_name || '') + '</td>'
-        + '<td>' + (row.is_visible === false ? '隐藏' : (row.is_iconic ? '最小化' : '正常')) + '</td>'
-        + '<td>' + esc(row.match_by || '') + '</td></tr>';
-    }).join('');
-    var detail = '<div id="personalWhatsappDiagDetail" style="display:none;margin-top:0.5rem;font-size:0.78rem;line-height:1.75;color:#3f5a4e;">'
-      + '版本：界面 ' + esc(v.static_version || '-') + '-' + esc(v.static_build == null ? '-' : v.static_build)
-      + ' / 后端 ' + esc(v.client_version || '-') + '-' + esc(v.client_build == null ? '-' : v.client_build)
-      + (v.expected_routes_missing && v.expected_routes_missing.length
-        ? ' <span style="color:#b42318;">后端缺接口：' + esc(v.expected_routes_missing.join('、')) + '</span>' : '')
-      + '<br>依赖：' + esc(depText)
-      + '<br>能力：' + esc(capText)
-      + (depErrorText ? '<br><span style="color:#b42318;">依赖错误：' + esc(depErrorText) + '</span>' : '')
-      + (repairText ? '<br>' + esc(repairText) : '')
-      + '<br>原因：' + esc(s.reason || '（无）')
-      + '<br>WhatsApp 进程：' + (processes.length
-        ? esc(processes.map(function(p) { return (p.name || '?') + '(' + p.pid + ')'; }).join('、'))
-        : '（没检测到进程）')
-      + (candidates.length
-        ? '<div style="margin-top:0.5rem;overflow:auto;"><table style="width:100%;font-size:0.76rem;border-collapse:collapse;">'
-          + '<thead><tr><th align="left">窗口标题</th><th align="left">窗口类名</th><th align="left">进程</th><th align="left">状态</th><th align="left">命中</th></tr></thead>'
-          + '<tbody>' + rows + '</tbody></table></div>'
-        : '<br>没有扫到候选窗口：请确认 WhatsApp 主窗口已打开（不是托盘/最小化）。')
-      + '</div>';
-    return '<div style="grid-column:1/-1;margin-top:0.6rem;font-size:0.78rem;line-height:1.7;color:#3f5a4e;">'
-      + '<div>' + esc(summary) + '</div>'
-      + (s.ok ? '' : '<div style="color:#b42318;">原因：' + esc(s.reason || '（无）') + '</div>')
-      + '<div style="margin-top:0.4rem;"><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappCopyDiag">复制诊断信息</button>'
-      + ' <button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappDiagToggle">查看诊断详情</button>'
-      + (s.ok ? '' : ' <button class="btn btn-primary btn-sm" type="button" id="personalWhatsappRepairDeps">修复运行依赖</button>')
-      + '</div>' + detail + '</div>';
-  }
   function renderStatus() {
     var s = state.status || {};
     var host = $('personalWhatsappStatus'); if (!host) return;
-    host.innerHTML = statusCard('桌面客户端', s.desktop_found ? '已检测' : '未检测', s.desktop_found ? 'good' : 'bad') + statusCard('登录状态', s.logged_in ? '已登录' : '未登录', s.logged_in ? 'good' : 'bad') + statusCard('UIA 控件', s.ok ? '可用' : '不可用', s.ok ? 'good' : 'bad') + statusCard('未读会话', Number(s.unread_count || 0), s.unread_count ? 'good' : '') + statusCard('当前操作', s.running ? (s.active_action || '执行中') : '空闲', s.running ? '' : 'good') + statusDiagnostics(s);
-    var copy = $('personalWhatsappCopyDiag');
-    if (copy) copy.addEventListener('click', function() {
-      var payload = JSON.stringify({ version: state.version || {}, status: state.status || {} }, null, 1);
-      var done = function() { toastMessage('诊断信息已复制，发给技术支持即可'); };
-      try {
-        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(payload).then(done, done); return; }
-      } catch (e) {}
-      window.prompt('复制下面的诊断信息', payload);
-    });
-    var diagToggle = $('personalWhatsappDiagToggle');
-    if (diagToggle) diagToggle.addEventListener('click', function() {
-      var detail = $('personalWhatsappDiagDetail');
-      if (!detail) return;
-      var show = detail.style.display === 'none';
-      detail.style.display = show ? 'block' : 'none';
-      diagToggle.textContent = show ? '收起诊断详情' : '查看诊断详情';
-    });
-    var repairBtn = $('personalWhatsappRepairDeps');
-    if (repairBtn) repairBtn.addEventListener('click', function() {
-      runBusy('正在修复运行依赖（首次可能要几分钟）...', function() {
-        return request('/api/settings/repair-runtime-dependencies', { method: 'POST', json: {} }).then(function(data) {
-          var ok = data && data.ok;
-          var message = (data && data.message) || '';
-          showNotice((ok ? '运行依赖修复完成。' : '运行依赖仍有缺失：') + message);
-          toastMessage(ok ? '依赖修复完成' : '依赖仍不完整，请看提示');
-          return loadBase();
-        });
-      }).catch(function() {});
-    });
+    host.innerHTML = statusCard('桌面客户端', s.desktop_found ? '已检测' : '未检测', s.desktop_found ? 'good' : 'bad') + statusCard('登录状态', s.logged_in ? '已登录' : '未登录', s.logged_in ? 'good' : 'bad') + statusCard('UIA 接管', s.ok ? '正常' : '不可用', s.ok ? 'good' : 'bad') + statusCard('未读会话', Number(s.unread_count || 0), s.unread_count ? 'good' : '') + statusCard('当前动作', s.running ? (s.active_action || '执行中') : '空闲', s.running ? '' : 'good');
+    renderRuntimeNotice(s);
   }
+
+  // 只有真的缺依赖 / 桌面端异常时，状态里才多出这一块（正常时整块隐藏，不再堆一堆没人看的诊断）
+  function renderRuntimeNotice(s) {
+    var wrap = $('personalWhatsappDepsWarn');
+    if (!wrap) return;
+    var deps = s.dependencies || {};
+    var missing = Object.keys(deps).filter(function (key) { return !deps[key]; });
+    var problems = [];
+    if (missing.length) problems.push('缺少依赖：' + missing.join('、') + '（点「修复运行依赖」）');
+    if (!s.ok && s.reason) problems.push(String(s.reason));
+    if (s.repair_done) problems.push('上次自动修复：' + String(s.repair_done));
+    if (!problems.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = 'block';
+    var text = $('personalWhatsappDepsWarnText');
+    if (text) text.textContent = problems.join('；');
+    var detail = $('personalWhatsappDiagDetail');
+    if (detail) detail.innerHTML = runtimeDetailHtml(s);
+  }
+
+  function runtimeDetailHtml(s) {
+    var deps = s.dependencies || {};
+    var sources = s.dependency_sources || {};
+    var caps = s.capabilities || {};
+    var processes = Array.isArray(s.processes) ? s.processes : [];
+    var v = state.version || {};
+    return '版本：' + esc(v.static_version || '-') + '-' + esc(v.static_build == null ? '-' : v.static_build)
+      + ' / 客户端：' + esc(v.client_version || '-') + '-' + esc(v.client_build == null ? '-' : v.client_build)
+      + '<br>依赖：' + esc(Object.keys(deps).map(function (key) { return key + (deps[key] ? ':\u2713' + (sources[key] === 'vendor' ? '(内置副本)' : '') : ':\u2717'); }).join('\u3000'))
+      + '<br>能力：进程扫描 ' + esc(caps.process_scan || '-') + ' / 剪贴板 ' + esc(caps.clipboard || '-') + ' / UIA ' + esc(caps.uia || '-')
+      + '<br>原因：' + esc(s.reason || '（无）')
+      + '<br>WhatsApp 进程：' + (processes.length ? esc(processes.map(function (p) { return (p.name || '?') + '(' + p.pid + ')'; }).join('、')) : '（没检测到进程）');
+  }
+
   function loadMemoryDocs() {
     return request('/api/openclaw/memory/list').then(function(data) {
       state.memoryDocs = Array.isArray(data.documents) ? data.documents : [];
@@ -348,7 +293,9 @@
     state.tab = tab;
     document.querySelectorAll('#content-personal-whatsapp .pwa-tab').forEach(function(node){node.classList.toggle('active',node.dataset.pwaTab===tab);});
     document.querySelectorAll('#content-personal-whatsapp .pwa-panel').forEach(function(node){node.classList.toggle('active',node.dataset.pwaPanel===tab);});
-    if(tab==='contacts'){ensureProtocolPanel();loadContacts().catch(function(e){showError(e.message);});loadProtocolPanel().catch(function(){});}
+    if(tab==='overview'){loadProtocolOverview().catch(function(e){showError(e.message);});loadWhatsappWebState().catch(function(){});loadWhatsappContactStats().catch(function(){});loadProtoWatch().catch(function(){});}
+    if(tab==='contacts'){loadContacts().catch(function(e){showError(e.message);});loadProtocolLog().catch(function(){});}
+    if(tab==='sessions'){loadProtoChats(false).catch(function(){});loadProtoSendPanel().catch(function(){});}
   if(tab==='sessions')loadSessions().catch(function(e){showError(e.message);});
     if(tab==='records')loadRecords().catch(function(e){showError(e.message);});
     if(tab==='friends'){loadFriendQueue().catch(function(e){showError(e.message);});loadFriendRecords().catch(function(e){showError(e.message);});}
@@ -371,6 +318,9 @@
     $('personalWhatsappAddFriendBtn').addEventListener('click',function(){openFriendAddModal();});
     $('personalWhatsappAddContactBtn').addEventListener('click',function(){openModal('personalWhatsappContactModal');});
     $('personalWhatsappRefreshContactsBtn').addEventListener('click',function(){loadContacts(1);});
+    if ($('personalWhatsappCopyDiag')) $('personalWhatsappCopyDiag').addEventListener('click',function(){var payload=JSON.stringify({version:state.version||{},status:state.status||{}},null,1);var done=function(){toastMessage('诊断信息已复制，发给支持即可');};try{if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(payload).then(done,done);return;}}catch(e){}window.prompt('复制下面的诊断信息',payload);});
+    if ($('personalWhatsappDiagToggle')) $('personalWhatsappDiagToggle').addEventListener('click',function(){var detail=$('personalWhatsappDiagDetail');if(!detail)return;var show=detail.style.display==='none';detail.style.display=show?'block':'none';this.textContent=show?'收起诊断详情':'查看诊断详情';});
+    if ($('personalWhatsappRepairDeps')) $('personalWhatsappRepairDeps').addEventListener('click',function(){runBusy('正在修复运行依赖（首次可能需要下载）...',function(){return request('/api/settings/repair-runtime-dependencies',{method:'POST',json:{}}).then(function(data){var ok=data&&data.ok;showNotice((ok?'依赖已修复完成。':'仍有依赖缺失。')+((data&&data.message)||''));toastMessage(ok?'依赖修复完成':'依赖仍不可用，请看提示');return loadBase();});}).catch(function(){});});
   $('personalWhatsappContactSearch').addEventListener('input',function(){state.pages.contacts.keyword=this.value;loadContacts(1);});
   $('personalWhatsappWebLoginBtn').addEventListener('click',function(){startWhatsappWebLogin();});
   $('personalWhatsappWebSyncBtn').addEventListener('click',function(){syncWhatsappContactsViaProtocol();});
@@ -738,42 +688,7 @@
   }
 
   function ensureProtocolPanel() {
-    if ($('personalWhatsappProtocolBlock')) { bindProtocolPanel(); return; }
-    var markup = '<div id="personalWhatsappProtocolBlock" style="border:1px solid rgba(37,211,102,.35);border-radius:12px;padding:12px;margin:10px 0;background:rgba(255,255,255,.72);">'
-      + '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><strong style="font-size:14px;">协议直连（读消息 / 群 / 校验 / 发送）</strong><span class="pwa-meta" id="personalWhatsappProtocolState">未加载</span></div>'
-      + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;"><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoChatsBtn">刷新会话（协议）</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoGroupsBtn">刷新群聊（协议）</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoLogBtn">刷新协议日志</button><span class="pwa-meta" id="personalWhatsappProtoTarget">发送目标：未选择</span></div>'
-      + '<div class="pwa-toolbar"><input id="personalWhatsappProtoChatSearch" class="pwa-input" placeholder="搜索会话（名称 / jid）" style="flex:1;min-width:180px"></div>'
-      + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px;"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappProtoWatchToggleBtn">开启常驻（接新好友）</button><span class="pwa-meta" id="personalWhatsappProtoWatchState">常驻未开启</span></div>'
-      + '<div id="personalWhatsappProtoChatList" class="pwa-list"><div class="pwa-empty">点「刷新会话（协议）」读取（走协议，不再点界面）</div></div>'
-      + '<div id="personalWhatsappProtoMessageList" class="pwa-list"><div class="pwa-muted">点会话里的「读消息」把该会话的消息读进来</div></div>'
-      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-top:12px;">'
-      + '<div class="pwa-item" style="display:block;"><strong style="font-size:13px;">号码校验</strong><textarea id="personalWhatsappProtoCheckInput" class="pwa-textarea" placeholder="一行一个号码，或逗号分隔（带国家码，如 8613800138000）"></textarea><div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappProtoCheckBtn">校验</button></div><div id="personalWhatsappProtoCheckResult" class="pwa-list"></div></div>'
-      + '<div class="pwa-item" style="display:block;"><strong style="font-size:13px;">头像 / 签名</strong><input id="personalWhatsappProtoProfileInput" class="pwa-input" placeholder="jid 或手机号"><div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappProtoProfileBtn">读取资料</button></div><div id="personalWhatsappProtoProfileResult" class="pwa-list"></div></div>'
-      + '</div>'
-      + '<div style="border-top:1px dashed rgba(0,0,0,.12);margin:12px 0 8px;"></div>'
-      + '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><strong style="font-size:14px;">发送（中风险 · 默认关闭 · 只发已有会话）</strong><span class="pwa-meta" id="personalWhatsappProtoSendState">—</span></div>'
-      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:8px 0;">'
-      + '<label class="pwa-field"><span class="pwa-muted">单条最小间隔(秒)</span><input id="personalWhatsappProtoSendMinGap" class="pwa-input" type="number" min="3" max="600" value="12"></label>'
-      + '<label class="pwa-field"><span class="pwa-muted">单条最大间隔(秒)</span><input id="personalWhatsappProtoSendMaxGap" class="pwa-input" type="number" min="3" max="900" value="28"></label>'
-      + '<label class="pwa-field"><span class="pwa-muted">每 N 条停</span><input id="personalWhatsappProtoSendPauseEvery" class="pwa-input" type="number" min="1" max="100" value="3"></label>'
-      + '<label class="pwa-field"><span class="pwa-muted">停顿秒数</span><input id="personalWhatsappProtoSendPauseSeconds" class="pwa-input" type="number" min="0" max="3600" value="120"></label>'
-      + '<label class="pwa-field"><span class="pwa-muted">日上限</span><input id="personalWhatsappProtoSendDailyLimit" class="pwa-input" type="number" min="0" max="1000" value="80"></label>'
-      + '</div>'
-      + '<textarea id="personalWhatsappProtoSendText" class="pwa-textarea" placeholder="发送内容（发给上面选中的会话）"></textarea>'
-      + '<label class="pwa-muted"><input type="checkbox" id="personalWhatsappProtoSendAutoStart"> 入队后立即启动队列</label>'
-      + '<div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappProtoSendBtn">加入发送队列</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoSendSaveBtn">保存限速</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoSendStartBtn">启动队列</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoSendStopBtn">停止队列</button></div>'
-      + '<div id="personalWhatsappProtoSendSummary" style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;"></div>'
-      + '<div id="personalWhatsappProtoSendRecords" class="pwa-list"><div class="pwa-empty">暂无发送记录</div></div>'
-      + '<div style="margin-top:12px;"><strong style="font-size:13px;">协议日志（关键节点）</strong><div id="personalWhatsappProtoLog" class="pwa-list"><div class="pwa-empty">点「刷新协议日志」读取</div></div></div>'
-      + '</div>';
-    var anchor = $('personalWhatsappWebBlock');
-    if (anchor && anchor.parentNode) anchor.insertAdjacentHTML('afterend', markup);
-    else {
-      var panel = document.querySelector('#content-personal-whatsapp [data-pwa-panel="contacts"]');
-      var host = panel ? (panel.querySelector('.pwa-card') || panel) : null;
-      if (!host) return;
-      host.insertAdjacentHTML('afterbegin', markup);
-    }
+    // 结构现在写在视图里（static/views/personal-whatsapp.html），这里只保证事件绑上
     bindProtocolPanel();
   }
 
@@ -808,11 +723,37 @@
   }
 
   function loadProtocolPanel() {
-    ensureProtocolPanel();
-    return Promise.all([loadProtoChats(false), loadProtoSendPanel(), loadProtocolLog(), loadProtoWatch()]).then(function () {});
+    return Promise.all([loadProtocolOverview(), loadProtoChats(false), loadProtoSendPanel(), loadProtocolLog(), loadProtoWatch(), loadWhatsappWebState(), loadWhatsappContactStats()]).then(function () {});
   }
 
   // 常驻：登录之后接「后面新加的好友」——长连接 + 每次重连/每 N 秒按版本游标补增量，不需要重新扫码。
+
+  // 扫码后拿到的信息：账号 / 号码 / 联系人 / 协议会话 / 常驻增量，都摆在「状态」里
+  function loadProtocolOverview() {
+    var host = $('personalWhatsappWebInfo');
+    if (!host) return Promise.resolve();
+    return Promise.all([
+      request('/api/native-whatsapp/web/login').catch(function () { return {}; }),
+      request('/api/native-whatsapp/contacts/stats').catch(function () { return {}; }),
+      request('/api/native-whatsapp/web/chats?limit=200&refresh=0').catch(function () { return { count: 0 }; }),
+      request('/api/native-whatsapp/web/groups?limit=200&refresh=0').catch(function () { return { count: 0 }; }),
+      request('/api/native-whatsapp/web/watch').catch(function () { return {}; })
+    ]).then(function (rows) {
+      var login = rows[0] || {}; var stats = rows[1] || {}; var chats = rows[2] || {}; var groups = rows[3] || {}; var watch = rows[4] || {};
+      var me = login.me || {};
+      var account = me.phone ? ('+' + me.phone) : (me.name || '');
+      host.innerHTML = statusCard('绑定账号', login.linked ? (account || '已绑定') : '未绑定', login.linked ? 'good' : 'bad')
+        + statusCard('绑定名称', me.name || '—', '')
+        + statusCard('联系人', Number(stats.total || 0) + ' 个', '')
+        + statusCard('其中带手机号', Number(stats.with_phone || 0) + ' 个', '')
+        + statusCard('协议会话', Number(chats.count || 0) + ' 个', '')
+        + statusCard('群聊', Number(groups.count || 0) + ' 个', '')
+        + statusCard('常驻增量', watch.running ? ('新好友 ' + Number(watch.contacts_new || 0) + ' / 新消息 ' + Number(watch.messages || 0)) : '未开启', watch.running ? 'good' : '')
+        + statusCard('登录进程', login.state ? String(login.state) : 'idle', login.error ? 'bad' : '');
+      return rows;
+    });
+  }
+
   function loadProtoWatch() {
     if (!$('personalWhatsappProtoWatchState')) return Promise.resolve();
     return request('/api/native-whatsapp/web/watch').then(function (data) {
@@ -1043,5 +984,5 @@
     });
   }
 
-  window.initPersonalWhatsappView=function(){ensureProtocolPanel();bind();loadProtocolPanel().catch(function(){});loadMemoryDocs().catch(function(){});loadBase().then(function(){renderTakeoverSummary();}).catch(function(error){showError(error.message||'WhatsApp 状态读取失败');});loadFriendQueue().catch(function(){});loadAutoReply().catch(function(){});};
+  window.initPersonalWhatsappView=function(){bind();loadProtocolPanel().catch(function(){});loadMemoryDocs().catch(function(){});loadBase().then(function(){renderTakeoverSummary();}).catch(function(error){showError(error.message||'WhatsApp 状态读取失败');});loadFriendQueue().catch(function(){});loadAutoReply().catch(function(){});};
 })();
