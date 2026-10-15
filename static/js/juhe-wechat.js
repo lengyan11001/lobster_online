@@ -185,6 +185,20 @@
     if (typeof data === 'string') return data;
     var detail = data.detail || data.error || data.message || data.msg;
     if (typeof detail === 'string' && detail.trim()) return withDiagnostic(detail.trim(), data);
+    if (Array.isArray(detail) && detail.length) {
+      // 2026-10-15: FastAPI 校验失败返回的 detail 是数组，以前只能显示“请求失败”。
+      var first = detail[0] || {};
+      var rawMsg = String(first.msg || first.message || '').trim();
+      var loc = Array.isArray(first.loc) ? first.loc.filter(function(part) { return part !== 'body'; }).join('.') : '';
+      var atMost = /at most (\d+) items/.exec(rawMsg);
+      if (atMost) {
+        var got = /not (\d+)/.exec(rawMsg);
+        rawMsg = loc + '：一次最多 ' + atMost[1] + ' 个' + (got ? '（本次 ' + got[1] + ' 个）' : '');
+      } else if (loc && rawMsg) {
+        rawMsg = loc + '：' + rawMsg;
+      }
+      if (rawMsg) return withDiagnostic(rawMsg, data);
+    }
     if (detail && typeof detail === 'object') {
       if (typeof detail.message === 'string') return withDiagnostic(detail.message, data);
       if (typeof detail.msg === 'string') return withDiagnostic(detail.msg, data);
@@ -2142,15 +2156,17 @@
     setMsg(state.sendFiles.length ? '正在上传附件...' : '正在发送...', false);
     Promise.all(state.sendFiles.map(uploadWechatFile)).then(function(files) {
       setMsg('正在加入发送队列...', false);
-      return apiJson('/api/native-wechat/messages/send', {
-      method: 'POST',
-        body: { account_id: id, to_usernames: recipients, content: content, target_type: 'direct', attachments: files }
-      });
-    }).then(function(data) {
-      var failed = Number(data.failed_count || 0);
-      var taskError = data && data.task && data.task.error_message ? String(data.task.error_message) : '';
-      setChip('nativeWechatSendState', failed ? '发送失败' : '已排队');
-      setMsg(failed ? ('发送失败' + (taskError ? '：' + taskError : '，请查看任务记录')) : ('已加入队列：' + recipients.length + ' 个目标'), failed > 0);
+      return submitSendBatches(id, recipients, content, files);
+    }).then(function(result) {
+      var failed = Number(result.failed || 0);
+      var queued = Number(result.queued || 0);
+      var taskError = result.errors.length ? result.errors[0] : '';
+      setChip('nativeWechatSendState', failed ? (queued ? '部分失败' : '发送失败') : '已排队');
+      if (failed) {
+        setMsg('已提交 ' + queued + ' 个，失败 ' + failed + ' 个' + (taskError ? '：' + taskError : ''), true);
+      } else {
+        setMsg('已加入队列：' + recipients.length + ' 个目标' + (result.tasks.length > 1 ? '（' + result.tasks.length + ' 批）' : ''), false);
+      }
       if (!failed) {
         var input = $('nativeWechatSendContent');
         if (input) input.value = '';
@@ -2165,6 +2181,42 @@
       setChip('nativeWechatSendState', '发送失败');
       setMsg(err.message || '发送失败', true);
     });
+  }
+
+  // 2026-10-15: 服务端 SendTextBody.to_usernames 单次上限 100，选了几百人一次发 = 422
+  // （界面只显示“请求失败”）。这里按 100 个一批依次提交，最后汇总队列/失败数。
+  var NATIVE_WECHAT_SEND_BATCH_SIZE = 100;
+
+  function submitSendBatches(id, recipients, content, files) {
+    var batches = [];
+    for (var i = 0; i < recipients.length; i += NATIVE_WECHAT_SEND_BATCH_SIZE) {
+      batches.push(recipients.slice(i, i + NATIVE_WECHAT_SEND_BATCH_SIZE));
+    }
+    var result = { queued: 0, failed: 0, tasks: [], errors: [] };
+    var done = 0;
+    return batches.reduce(function(chain, batch) {
+      return chain.then(function() {
+        return apiJson('/api/native-wechat/messages/send', {
+          method: 'POST',
+          body: { account_id: id, to_usernames: batch, content: content, target_type: 'direct', attachments: files }
+        }).then(function(data) {
+          var failedInBatch = Number((data && data.failed_count) || 0);
+          var accepted = data && data.queued ? batch.length : Number((data && data.success_count) || 0);
+          result.queued += Math.max(0, accepted || 0);
+          result.failed += failedInBatch;
+          if (data && data.task && data.task.id) result.tasks.push(data.task.id);
+        }).catch(function(err) {
+          result.failed += batch.length;
+          result.errors.push((err && err.message) || '发送失败');
+        }).then(function() {
+          done += 1;
+          if (batches.length > 1) {
+            setMsg('正在加入发送队列... ' +
+              Math.min(done * NATIVE_WECHAT_SEND_BATCH_SIZE, recipients.length) + ' / ' + recipients.length, false);
+          }
+        });
+      });
+    }, Promise.resolve()).then(function() { return result; });
   }
 
   function openContactEditModal(contactKey, currentWx, label) {
