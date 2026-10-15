@@ -388,6 +388,23 @@ async function cmdContacts(a) {
   let lastEventAt = 0;
   const samples = [];
   const chatsSeen = new Map();
+  const messagesSeen = new Map();
+  const rememberHistoryMessage = (msg) => {
+    if (!msg || !msg.key) return;
+    const key = msg.key;
+    const chat = String(key.remoteJid || "");
+    if (!chat) return;
+    const id = String(key.id || "");
+    if (!id) return;
+    messagesSeen.set(id, {
+      id,
+      chat,
+      from_me: !!key.fromMe,
+      ts: Number(msg.messageTimestamp || 0),
+      text: extractText(msg),
+    });
+    lastEventAt = Date.now();
+  };
   const rememberChat = (row) => {
     if (!row || !row.id) return;
     const jid = String(row.id);
@@ -453,8 +470,9 @@ async function cmdContacts(a) {
       if (payload && (payload.isLatest === true || progress >= 100)) historyDone = true;
       ((payload && payload.contacts) || []).forEach(remember);
       ((payload && payload.chats) || []).forEach(rememberChat);
+      ((payload && payload.messages) || []).forEach(rememberHistoryMessage);
       lastEventAt = Date.now();
-      appendLedger({ event: "contacts_history", packets: historyPackets, progress: historyProgress, contacts: ((payload && payload.contacts) || []).length, chats: ((payload && payload.chats) || []).length, is_latest: !!(payload && payload.isLatest) });
+      appendLedger({ event: "contacts_history", packets: historyPackets, progress: historyProgress, contacts: ((payload && payload.contacts) || []).length, chats: ((payload && payload.chats) || []).length, messages: ((payload && payload.messages) || []).length, is_latest: !!(payload && payload.isLatest) });
     });
 
     const connectedAt = Date.now();
@@ -489,7 +507,8 @@ async function cmdContacts(a) {
     sample: samples.slice(0, 3),
   });
   const chats = Array.from(chatsSeen.values());
-  appendLedger({ event: "contacts_chats", received: chats.length });
+  const historyMessages = Array.from(messagesSeen.values()).slice(0, 500);
+  appendLedger({ event: "contacts_chats", received: chats.length, messages: historyMessages.length });
   emit({
     ok: true,
     count: contacts.length,
@@ -500,6 +519,7 @@ async function cmdContacts(a) {
     attempts: outcome.attempts || 0,
     contacts,
     chats,
+    messages: historyMessages,
     me: creds.me,
   });
   process.exit(0);
@@ -608,8 +628,39 @@ async function cmdMessages(a) {
   const jid = String(a.chat || a.jid || "").trim();
   const limit = Math.max(1, Math.min(Number(a.limit || 50), 500));
   const waitMs = Math.max(4000, Number(a.wait || 12000));
+  const fetchCount = Math.max(0, Math.min(Number(a.fetch || 0), 500));
+  const anchorId = String(a["anchor-id"] || a.anchorId || "").trim();
+  const anchorTs = Number(a["anchor-ts"] || a.anchorTs || 0);
   const { sock } = await openSocket(authDir);
   await waitForOpen(sock);
+  // 新配对的设备默认只拿得到「最近一段」历史（服务端按 recentSyncDaysLimit 控制），
+  // 更早的会话要靠这个按需请求让手机补发（官方 Web 往上翻加载更早消息用的是同一条指令）。
+  if (fetchCount > 0) {
+    if (!jid) {
+      emit({ ok: false, error: "按需拉历史需要 --chat <jid>" });
+      process.exit(0);
+    }
+    if (typeof sock.fetchMessageHistory !== "function") {
+      appendLedger({ event: "messages_fetch_unsupported" });
+    } else {
+      // 刚 open 就发这条 iq 会被 "Connection Closed" 打断（发信通道稍晚于 open 事件就绪），
+      // 所以先等一拍，失败再重试一次。
+      const key = { remoteJid: jid, fromMe: String(a["anchor-fromme"] || a.anchorFromMe || "") === "1", id: anchorId };
+      const anchor = anchorTs || Date.now();
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          await sleepMs(1500 * attempt);
+          appendLedger({ event: "messages_fetch_start", chat: jid, count: fetchCount, anchor_id: anchorId, anchor_ts: anchor, attempt });
+          await sock.fetchMessageHistory(fetchCount, key, anchor);
+          appendLedger({ event: "messages_fetch_sent", chat: jid, count: fetchCount, attempt });
+          break;
+        } catch (err) {
+          appendLedger({ event: "messages_fetch_failed", chat: jid, attempt, error: String((err && err.message) || err).slice(0, 200) });
+          if (attempt === 2) break;
+        }
+      }
+    }
+  }
   const rows = new Map();
   const take = (msg) => {
     if (!msg) return;

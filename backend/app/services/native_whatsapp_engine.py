@@ -1806,9 +1806,69 @@ def _send_current_message(hwnd: int, text: str) -> Dict[str, Any]:
     return {"sent": sent, "last_message": latest}
 
 
+_SESSION_LABEL_NOISE = {
+    "个人主页详情", "聊天列表", "搜索", "视频通话", "语音通话", "所有", "未读", "特别关注", "群聊",
+    "名字", "姓氏", "用户名", "国家/地区", "电话号码", "将联系人信息同步到手机", "今天", "昨天",
+    "已送达", "已读", "未读消息", "端到端加密", "新建聊天", "新建群组",
+}
+
+
+def _looks_like_ui_label(value: str) -> bool:
+    """UIA 抓窗口文本时会把界面标签/时间/未读数当成会话名（实测出现过「个人主页详情」「1」）。"""
+    label = str(value or "").strip()
+    if not label:
+        return True
+    if label in _SESSION_LABEL_NOISE:
+        return True
+    if re.fullmatch(r"\d+", label):
+        return True
+    if re.fullmatch(r"(上午|下午|晚上|凌晨|今天|昨天)?\s*\d{1,2}:\d{2}", label):
+        return True
+    if label.endswith(("：", ":")) and len(label) <= 24:
+        return True
+    if label.endswith(("条未读消息", "已进行端到端加密", "端到端加密")):
+        return True
+    return False
+
+
+def _contact_name_match(candidate: str) -> bool:
+    name = str(candidate or "").strip()
+    if not name:
+        return False
+    with _connect() as conn:
+        row = conn.execute(
+            "select 1 from whatsapp_contacts where account_id=? and lower(display_name)=lower(?) limit 1",
+            (DEFAULT_ACCOUNT_ID, name),
+        ).fetchone()
+    return bool(row)
+
+
+def _session_display_name(peer_name: str, header: Iterable[Any], fallback: str = "") -> str:
+    """会话名：原值像 UI 标签时，从窗口标题栏里挑一个真名；能对上已入库联系人的优先。"""
+    original = str(peer_name or "").strip()
+    if original and not _looks_like_ui_label(original):
+        return original[:500]
+    candidates = []
+    for item in header or []:
+        name = str(item or "").strip()
+        if not name or _looks_like_ui_label(name):
+            continue
+        if name.casefold() == original.casefold():
+            continue
+        candidates.append(name)
+    for name in candidates:
+        if _contact_name_match(name):
+            return name[:500]
+    if candidates:
+        return candidates[0][:500]
+    return (original or str(fallback or "未命名会话"))[:500]
+
+
 def _persist_session_snapshot(snapshot: Dict[str, Any], *, row_name: str = "", unread_count: int = 0) -> Dict[str, Any]:
-    peer_name = str(snapshot.get("peer_name") or row_name or "未命名会话").strip()[:500]
-    peer_key = _stable_key("peer", peer_name)
+    raw_peer_name = str(snapshot.get("peer_name") or row_name or "未命名会话").strip()[:500]
+    header = snapshot.get("header") if isinstance(snapshot.get("header"), (list, tuple)) else []
+    peer_name = _session_display_name(raw_peer_name, header, row_name)
+    peer_key = _stable_key("peer", raw_peer_name)
     now = _now_iso()
     messages = [item for item in (snapshot.get("messages") or []) if isinstance(item, dict)]
     last = snapshot.get("last_message") if isinstance(snapshot.get("last_message"), dict) else (messages[-1] if messages else {})
@@ -1891,7 +1951,19 @@ def _persist_contact(contact: Dict[str, Any]) -> Dict[str, Any]:
 
 def list_sessions(*, limit: int = 50, offset: int = 0, keyword: str = "", chat_type: str = "") -> Dict[str, Any]:
     kind = str(chat_type or "").strip().lower()
-    return _query_page("whatsapp_sessions", limit=limit, offset=offset, keyword=keyword, where="chat_type=?" if kind in {"direct", "group"} else "", params=(kind,) if kind else ())
+    page = _query_page("whatsapp_sessions", limit=limit, offset=offset, keyword=keyword, where="chat_type=?" if kind in {"direct", "group"} else "", params=(kind,) if kind else ())
+    # 老库里可能存着抓错的会话名（UI 标签）：读的时候按标题栏纠正一次，不改库也立刻显示对
+    for item in page.get("items") or []:
+        stored = str(item.get("display_name") or "")
+        if not _looks_like_ui_label(stored):
+            continue
+        raw = item.get("raw") if isinstance(item.get("raw"), dict) else {}
+        header = raw.get("header") if isinstance(raw.get("header"), (list, tuple)) else []
+        fixed = _session_display_name(stored, header, "")
+        if fixed and fixed != stored:
+            item["display_name"] = fixed
+            item["display_name_from"] = "header"
+    return page
 
 
 def list_messages(peer_key: str, *, limit: int = 100, offset: int = 0) -> Dict[str, Any]:
