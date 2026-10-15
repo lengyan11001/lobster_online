@@ -1366,7 +1366,15 @@ def _dependency_report() -> Dict[str, Any]:
     errors: Dict[str, str] = {}
     if uia_module is None:
         errors["uiautomation"] = uia_error
-    for name in ("win32gui", "win32process", "pyperclip", "psutil"):
+    # 2026-10-15 客户机复现：这里以前只探了 win32gui/win32process/pyperclip/psutil，
+    # 漏了 WHATSAPP_REQUIRED_MODULES 里的 pywinauto —— deps 里根本没有这个键，
+    # 于是 deps.get("pywinauto") 永远是 None，界面一直报“缺少依赖：pywinauto
+    # （点「修复运行依赖」）”，装什么都不会好，自动修复还会每 3 小时白跑一次。
+    # 现在直接按“必需清单 + 可选清单”探，后续往 REQUIRED 里加模块不会再漏。
+    probe_names = list(dict.fromkeys(list(WHATSAPP_REQUIRED_MODULES) + ["pyperclip", "psutil"]))
+    for name in probe_names:
+        if name == "uiautomation":
+            continue  # 上面已经按“已装 / 内置副本”两级探过了
         ok, error = _module_probe(name)
         deps[name] = ok
         sources[name] = _module_source(sys.modules.get(name)) if ok else "missing"
