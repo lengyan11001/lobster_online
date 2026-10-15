@@ -1,7 +1,7 @@
 {
-  "version": "2.0.144",
-  "build": 439,
-  "applied_at": "2026-10-15T13:48:44+08:00",
-  "note": "2.0.144: multi-clip mixer output control + ratio-aware shanjian template cards. 成片设置 now offers 成片比例 (竖屏 9:16 default / 横屏 16:9) and 画面填充 (铺满裁切 default / 模糊铺底 / 完整黑边): the ratio decides the base merge canvas (9:16 -> 720x1280, 16:9 -> 1280x720, empty keeps following the first clip) and is sent to the shanjian template list so the picker only shows templates of that ratio - realMan and virtualman have 10 16:9 templates each, newsMixCutting has none and now says so instead of showing an empty grid. Fill modes: cover = scale-to-cover + crop, blur = the same frame blurred behind a fitted foreground, fit = the old letterbox. Template cards are now drawn in each template's own ratio (9:16 tall, 16:9 wide, 1:1 square, 3/4 fallback) instead of one portrait box. Also keeps 2.0.143: scene + 色系/风格 name tags, the dropped 支持正文 filter, contacts bulk-send batching (100 per request) and the WhatsApp dependency false-alarm fix.",
-  "bundle_sha256": "8ba1c7682cdca74ac31e1e6cba0612b3933e49532c9bfeee4bfcb226134dcbdd"
+  "version": "2.0.145",
+  "build": 440,
+  "applied_at": "2026-10-15T17:07:19+08:00",
+  "note": "WhatsApp 协议直连补齐：状态页=扫码绑定+扫码后信息（号码/名称/联系人/协议会话/群/常驻增量）；tab 顺序 状态→会话→通讯录→加好友；解绑改成真解绑（sock.logout 从手机已连接设备移除）+ 失败如实提示；绑定/解绑/同步后页面自动刷新（20s 轻轮询）；协议常驻增量（新好友/新会话/新消息自动入库，不需重新扫码）；修复 515 重连握手与首次全量通讯录（history 字段 id/name/lid/phoneNumber、分批+续传+partial）；会话名不再抓成 UI 标签；中风险发送+限速（白名单只发已有会话、去重、12-28s、每3条停120s、日上限80，默认关闭）。",
+  "bundle_sha256": "94c45806c28312bc3bbd5166ec951b840d9fecc5244550bc7f9d33c6d24a438f"
 }
