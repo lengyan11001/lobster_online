@@ -698,3 +698,154 @@ def protocol_log(*, limit: int = 80) -> Dict[str, Any]:
     except Exception:
         _logger.debug("failed to read Telegram protocol log", exc_info=True)
     return {"ok": True, "items": items, "path": str(PROTOCOL_PATH), "count": len(items)}
+
+
+# ── 运行依赖体检 / 修复 ────────────────────────────────────────────────
+# 形状照视频复刻（hypit_local）那套：一条条列依赖 + 一个「安装 / 修复运行依赖」按钮，
+# 修复走客户端已有的 runtime_dependency_repair（deps/wheels 离线优先，缺了才联网）。
+_REPAIR_STATE_NAME = "dependency_repair.json"
+_REPAIR_LOG_LINES = 60
+_repair_lock = threading.Lock()
+_repair_thread: Optional[threading.Thread] = None
+
+
+def _repair_state_path() -> Path:
+    return STATE_DIR / _REPAIR_STATE_NAME
+
+
+def _read_repair_state() -> Dict[str, Any]:
+    defaults: Dict[str, Any] = {"status": "idle", "stage": "", "percent": 0, "error": "", "log": [], "source": "", "updated_at": ""}
+    try:
+        path = _repair_state_path()
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                defaults.update(data)
+    except Exception:
+        _logger.debug("failed to read Telegram repair state", exc_info=True)
+    return defaults
+
+
+def _write_repair_state(**fields: Any) -> Dict[str, Any]:
+    state = _read_repair_state()
+    state.update(fields)
+    state["updated_at"] = _now_iso()
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        _repair_state_path().write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        _logger.debug("failed to write Telegram repair state", exc_info=True)
+    return state
+
+
+def _wheel_hint(prefix: str) -> str:
+    wheels = ROOT_DIR / "deps" / "wheels"
+    try:
+        if wheels.is_dir():
+            hits = sorted(item.name for item in wheels.glob(prefix + "-*.whl"))
+            if hits:
+                return "本机未安装；离线包已备：" + hits[-1]
+            return "本机未安装，deps/wheels 里也没有 " + prefix + " 的离线包"
+    except Exception:
+        _logger.debug("failed to scan wheel dir", exc_info=True)
+    return "本机未安装"
+
+
+def runtime_dependencies() -> List[Dict[str, Any]]:
+    """依赖体检明细：界面上一条条显示，缺哪条一目了然。"""
+    telethon_ok, telethon_source = _module_probe("telethon")
+    pyaes_ok, pyaes_source = _module_probe("pyaes")
+    return [
+        {
+            "key": "telethon",
+            "label": "Telethon（MTProto 客户端）",
+            "ok": telethon_ok,
+            "detail": telethon_source or _wheel_hint("telethon"),
+            "required_for": "P2 只读同步",
+        },
+        {
+            "key": "pyaes",
+            "label": "pyaes（MTProto 加密）",
+            "ok": pyaes_ok,
+            "detail": pyaes_source or _wheel_hint("pyaes"),
+            "required_for": "P2 只读同步",
+        },
+        {
+            "key": "bridge",
+            "label": "桥接脚本 telegram_bridge.py",
+            "ok": BRIDGE_PATH.exists(),
+            "detail": str(BRIDGE_PATH),
+            "required_for": "P1 登录",
+        },
+    ]
+
+
+def runtime_status() -> Dict[str, Any]:
+    dependencies = runtime_dependencies()
+    running = bool(_repair_thread is not None and _repair_thread.is_alive())
+    install = {**_read_repair_state(), "running": running}
+    ready = all(bool(item.get("ok")) for item in dependencies)
+    if ready and not running and str(install.get("status") or "") == "failed":
+        # 依赖其实都装好了（上一次可能是网络/超时）：把旧的失败态自愈掉，别一直挂红
+        install = {**_write_repair_state(status="completed", stage="依赖已就绪", percent=100, error=""), "running": False}
+    return {
+        "ok": True,
+        "ready": ready,
+        "dependencies": dependencies,
+        "install": install,
+        "python": sys.executable,
+        "wheels_dir": str(ROOT_DIR / "deps" / "wheels"),
+    }
+
+
+def _repair_worker() -> None:
+    _write_repair_state(status="running", stage="正在安装 Telegram 运行依赖（本地离线包优先）", percent=10, error="", log=[])
+    try:
+        from .runtime_dependency_repair import repair_runtime_dependencies
+
+        result = repair_runtime_dependencies() or {}
+        install = result.get("install") if isinstance(result.get("install"), dict) else {}
+        checks = result.get("checks") if isinstance(result.get("checks"), list) else []
+        # 日志按通用修复服务的真实字段拼：pip 的原文 + 每一项体检结论
+        log: List[str] = []
+        for line in str(install.get("log") or "").splitlines():
+            if line.strip():
+                log.append(line.rstrip())
+        for item in checks:
+            if not isinstance(item, dict):
+                continue
+            log.append(("[就绪] " if item.get("ok") else "[缺失] ") + str(item.get("label") or item.get("key") or ""))
+            for failure in item.get("failures") or []:
+                if isinstance(failure, dict):
+                    log.append("    " + str(failure.get("module") or "") + ": " + str(failure.get("error") or "")[:200])
+        ok = bool(result.get("ok"))
+        _write_repair_state(
+            status="completed" if ok else "failed",
+            stage="依赖已就绪" if ok else "部分依赖仍不可用",
+            percent=100,
+            source=str(install.get("source") or ""),
+            error="" if ok else str(result.get("message") or install.get("message") or "")[:600],
+            log=[line for line in log if line.strip()][-_REPAIR_LOG_LINES:],
+        )
+        _append_protocol("dependency_repair", ok=ok, source=str(install.get("source") or ""), seconds=result.get("duration_seconds"))
+    except Exception as exc:
+        message = str(exc)[:600]
+        _write_repair_state(status="failed", stage="依赖安装失败", percent=100, error=message)
+        _append_protocol("dependency_repair_failed", error=message[:300])
+
+
+
+
+def repair_dependencies() -> Dict[str, Any]:
+    """幂等：已经在装就直接返回进度；真正的安装丢后台线程，接口马上返回。"""
+    global _repair_thread
+    with _repair_lock:
+        running = bool(_repair_thread is not None and _repair_thread.is_alive())
+        if not running:
+            _write_repair_state(status="running", stage="正在启动修复", percent=1, error="", log=[])
+            _repair_thread = threading.Thread(target=_repair_worker, daemon=True, name="lobster-telegram-repair")
+            _repair_thread.start()
+            _append_protocol("dependency_repair_started")
+    status = runtime_status()
+    status["started"] = not running
+    return status

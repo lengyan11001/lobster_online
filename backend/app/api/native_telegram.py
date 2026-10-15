@@ -65,6 +65,23 @@ async def native_telegram_dependencies(current_user: _ServerUser = Depends(get_c
     return {"ok": True, "dependency": engine.dependency_report()}
 
 
+@router.get("/api/native-telegram/runtime/status")
+async def native_telegram_runtime_status(current_user: _ServerUser = Depends(get_current_user_for_local)):
+    """依赖体检 + 安装进度（页面轮询用），形状照视频复刻 hypit_local。"""
+    del current_user
+    return engine.runtime_status()
+
+
+@router.post("/api/native-telegram/runtime/install")
+async def native_telegram_runtime_install(current_user: _ServerUser = Depends(get_current_user_for_local)):
+    """点一下就装：deps/wheels 离线包优先，幂等，已在装直接返回进度。"""
+    del current_user
+    try:
+        return engine.repair_dependencies()
+    except Exception as exc:
+        raise _telegram_error(exc) from exc
+
+
 @router.get("/api/native-telegram/protocol/log")
 async def native_telegram_protocol_log(
     limit: int = 80,

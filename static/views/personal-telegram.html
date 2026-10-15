@@ -48,9 +48,12 @@
           </div>
 
           <div class="pwa-card" id="personalTelegramDepsCard">
-            <div class="pwa-card-head"><div><h3>运行依赖</h3><div class="pwa-muted" id="personalTelegramDepsText">检查中…</div></div><div class="pwa-btn-row"><button class="btn btn-ghost btn-sm" type="button" id="personalTelegramCopyDiag">复制诊断信息</button></div></div>
-            <div id="personalTelegramDepsDetail" style="font-size:0.78rem;line-height:1.7;color:#3f5a66;white-space:pre-wrap;"></div>
-            <div class="pwa-muted" style="margin-top:8px;">P0 不依赖 telethon 也能打开页面；只有 P2 只读同步必须装 telethon（桥接脚本 + telethon 两样齐了才算 read_ready）。</div>
+            <div class="pwa-card-head"><div><h3>运行依赖</h3><div class="pwa-muted" id="personalTelegramDepsText">检查中…</div></div><div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalTelegramRepairDeps">安装 / 修复运行依赖</button><button class="btn btn-ghost btn-sm" type="button" id="personalTelegramCopyDiag">复制诊断信息</button></div></div>
+            <div id="personalTelegramDepsList" class="pwa-list" style="max-height:none;"></div>
+            <div id="personalTelegramInstallState" class="pwa-muted" style="margin-top:8px;"></div>
+            <div id="personalTelegramInstallLog" class="pwa-muted" style="display:none;margin-top:6px;max-height:170px;overflow:auto;white-space:pre-wrap;font-size:0.74rem;line-height:1.6;"></div>
+            <div id="personalTelegramDepsDetail" style="display:none;font-size:0.78rem;line-height:1.7;color:#3f5a66;white-space:pre-wrap;"></div>
+            <div class="pwa-muted" style="margin-top:8px;">修复走客户端自带离线包（deps/wheels 优先，缺了才联网补齐），装完不用重启客户端；P2 只读同步要求 telethon 就绪。</div>
           </div>
         </div>
       </section>

@@ -173,3 +173,68 @@ def test_bridge_unknown_command_lists_known_ones(tmp_path):
     assert payload["ok"] is False
     assert payload["error"] == "unknown_command"
     assert "contacts" in payload["known"]
+
+
+# ── 运行依赖体检 / 修复（照「视频复刻」hypit_local 那套）────────────────────
+BUNDLED_PYTHON = ROOT / "python" / "python.exe"
+
+
+def test_runtime_status_lists_dependencies(sandbox_engine):
+    data = sandbox_engine.runtime_status()
+    assert data["ok"] is True
+    keys = [item["key"] for item in data["dependencies"]]
+    assert keys == ["telethon", "pyaes", "bridge"], "体检要一条条列出来，缺哪条一目了然"
+    for item in data["dependencies"]:
+        assert item["label"] and item["detail"], "每条都要有中文名和说明"
+    assert "status" in data["install"]
+    assert data["install"]["running"] is False
+
+
+def test_missing_module_points_at_the_offline_wheel(sandbox_engine):
+    telethon = [item for item in sandbox_engine.runtime_dependencies() if item["key"] == "telethon"][0]
+    if not telethon["ok"]:
+        assert "离线包" in telethon["detail"], "缺依赖时要告诉用户离线包在不在，否则点修复也不知道能不能成"
+
+
+def test_repair_is_wired_end_to_end():
+    api = (ROOT / "backend" / "app" / "api" / "native_telegram.py").read_text(encoding="utf-8")
+    assert '/api/native-telegram/runtime/status' in api
+    assert '/api/native-telegram/runtime/install' in api
+    html = (ROOT / "static" / "views" / "personal-telegram.html").read_text(encoding="utf-8")
+    assert 'id="personalTelegramRepairDeps"' in html, "二级界面上必须有「安装 / 修复运行依赖」按钮"
+    assert 'id="personalTelegramDepsList"' in html
+    js = (ROOT / "static" / "js" / "personal-telegram.js").read_text(encoding="utf-8")
+    assert "'/api/native-telegram/runtime/install'" in js
+    assert "function repairDeps()" in js and "function pollInstall()" in js
+
+
+def test_runtime_repair_knows_about_telegram():
+    source = (ROOT / "backend" / "app" / "services" / "runtime_dependency_repair.py").read_text(encoding="utf-8")
+    assert '("telegram", "Telegram 接管", ("telethon", "pyaes"))' in source, \
+        "通用『修复运行依赖』也要能修 Telegram 这一组"
+
+
+def test_offline_wheels_exist_for_telegram():
+    wheels = ROOT / "deps" / "wheels"
+    assert list(wheels.glob("telethon-*.whl")), "deps/wheels 里必须有 telethon 的离线包（客户机没网时要靠它）"
+    assert list(wheels.glob("pyaes-*.whl")), "pyaes 只有 sdist，要预先构建成 wheel 放进来"
+
+
+def test_requirements_list_telegram_stack():
+    req = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    assert "telethon" in req and "pyaes" in req
+    full = (ROOT / "requirements-full.txt").read_text(encoding="utf-8")
+    assert "telethon==" in full and "pyaes==" in full
+
+
+def test_bundled_runtime_can_import_telethon():
+    """客户端跑的是自带的 python：离线包装没装进去，只有它能证明。"""
+    if not BUNDLED_PYTHON.exists():
+        pytest.skip("没有自带 python（非客户端环境）")
+    proc = subprocess.run(
+        [str(BUNDLED_PYTHON), str(BRIDGE), "status", "--auth", str(ROOT / "data" / "native_telegram" / "session")],
+        capture_output=True, encoding="utf-8", errors="replace", timeout=90, cwd=str(ROOT),
+    )
+    payload = json.loads([ln for ln in proc.stdout.strip().splitlines() if ln.strip()][-1])
+    assert payload["dependency"]["telethon"] is True, \
+        "自带运行时里 telethon 应该已经装好（离线包在 deps/wheels，README 说的一步就能补）"

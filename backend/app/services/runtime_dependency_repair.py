@@ -53,6 +53,9 @@ _IMPORT_GROUPS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         ("uiautomation", "comtypes", "win32clipboard", "win32gui", "win32process", "pyperclip", "psutil",
          "pywinauto"),
     ),
+    # 个人 Telegram 走 MTProto（Telethon），不是 UIA：缺 telethon 连"登录"这一步都走不到，
+    # 单独一组，"安装 / 修复运行依赖"和状态接口才能把它报出来。
+    ("telegram", "Telegram 接管", ("telethon", "pyaes")),
 )
 
 

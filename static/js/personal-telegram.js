@@ -131,13 +131,7 @@
 
   function renderDeps() {
     var dep = (state.status || {}).dependency || {};
-    var node = $('personalTelegramDepsText');
     var detail = $('personalTelegramDepsDetail');
-    if (node) {
-      node.textContent = dep.read_ready
-        ? '就绪：桥接脚本 + telethon 都在，只读同步可以跑（P2 接入中）。'
-        : (dep.hint || '依赖缺失，只读同步跑不起来。');
-    }
     if (detail) {
       detail.textContent = [
         'telethon: ' + (dep.telethon ? '已安装 ' + text(dep.telethon_source) : '未安装'),
@@ -150,6 +144,65 @@
         'session 文件: ' + text((state.status || {}).transport && state.status.transport.session_file)
       ].join('\n');
     }
+  }
+
+  // ── 运行依赖体检 / 修复（形状照「视频复刻」那套：一条条列出来 + 一个按钮）────
+  function renderRuntimeDeps(data) {
+    var status = data || {};
+    var deps = status.dependencies || [];
+    var host = $('personalTelegramDepsList');
+    if (host) {
+      host.innerHTML = deps.length ? deps.map(function(item) {
+        var chip = item.ok ? '<span class="pwa-chip">已就绪</span>' : '<span class="pwa-chip bad">缺失</span>';
+        return '<div class="pwa-record' + (item.ok ? '' : ' failed') + '"><div class="pwa-item-title">' + esc(item.label || item.key) + ' ' + chip + '</div>' +
+          '<div class="pwa-meta">' + esc(item.detail || '') + (item.required_for ? ' · 影响：' + esc(item.required_for) : '') + '</div></div>';
+      }).join('') : '<div class="pwa-empty">没有可检查项</div>';
+    }
+    var textNode = $('personalTelegramDepsText');
+    if (textNode) textNode.textContent = status.ready ? '依赖就绪（telethon 已可用）' : '有依赖缺失 —— 点「安装 / 修复运行依赖」';
+    var install = status.install || {};
+    var stateNode = $('personalTelegramInstallState');
+    if (stateNode) {
+      stateNode.textContent = (install.status && install.status !== 'idle')
+        ? ('安装：' + (install.running ? '进行中' : install.status) + (install.stage ? ' · ' + install.stage : '') + (install.error ? ' · ' + install.error : ''))
+        : '';
+    }
+    var logNode = $('personalTelegramInstallLog');
+    if (logNode) {
+      var lines = install.log || [];
+      logNode.style.display = lines.length ? 'block' : 'none';
+      logNode.textContent = lines.slice(-40).join('\n');
+    }
+  }
+
+  function loadRuntimeDeps() {
+    return request('/api/native-telegram/runtime/status').then(function(data) {
+      state.runtime = data || {};
+      renderRuntimeDeps(state.runtime);
+      return data;
+    });
+  }
+
+  function pollInstall() {
+    if (state.installTimer) clearTimeout(state.installTimer);
+    state.installTimer = setTimeout(function() {
+      loadRuntimeDeps().then(function(data) {
+        if ((data.install || {}).running) { pollInstall(); return; }
+        var ok = (data.install || {}).status === 'completed';
+        showNotice(ok ? '依赖已修复完成' : '依赖安装结束（仍有缺失）');
+        loadStatus().catch(function() {});
+      }).catch(function() {});
+    }, 3000);
+  }
+
+  function repairDeps() {
+    return runBusy('正在修复运行依赖（首次可能需要下载，请勿关闭客户端）…', function() {
+      return request('/api/native-telegram/runtime/install', { method: 'POST', json: {} }).then(function(data) {
+        renderRuntimeDeps(data || {});
+        pollInstall();
+        return data;
+      });
+    });
   }
 
   // ── 登录 ────────────────────────────────────────────────────────────────
@@ -348,13 +401,15 @@
         switchTab(node.dataset.pwaTab);
         if (node.dataset.pwaTab === 'chats') loadChats().catch(function() {});
         if (node.dataset.pwaTab === 'contacts') loadContacts().catch(function() {});
+    loadRuntimeDeps().catch(function() {});
         if (node.dataset.pwaTab === 'settings') loadConfig().catch(function() {});
         if (node.dataset.pwaTab === 'records') { loadRecords().catch(function() {}); loadProtocol().catch(function() {}); }
       });
     });
     var bindClick = function(id, handler) { var node = $(id); if (node) node.addEventListener('click', handler); };
     bindClick('personalTelegramRefreshBtn', function() { runBusy('正在刷新…', function() { return loadStatus(); }); });
-    bindClick('personalTelegramDepsBtn', function() { runBusy('正在检查依赖…', function() { return loadStatus(); }); });
+    bindClick('personalTelegramDepsBtn', function() { runBusy('正在检查依赖…', function() { return loadRuntimeDeps(); }); });
+    bindClick('personalTelegramRepairDeps', repairDeps);
     bindClick('personalTelegramLoginStartBtn', loginStart);
     bindClick('personalTelegramCodeBtn', function() { loginInput('code', text($('personalTelegramCode') && $('personalTelegramCode').value).trim()); });
     bindClick('personalTelegramPasswordBtn', function() { loginInput('password', text($('personalTelegramPassword') && $('personalTelegramPassword').value)); });
