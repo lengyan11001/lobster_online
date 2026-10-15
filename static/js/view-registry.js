@@ -144,8 +144,8 @@ window.registerLobsterView('alibaba-inquiries', {
 });
 
   window.registerLobsterView('juhe-wechat', {
-    html: '/static/views/juhe-wechat.html?v=20261015-send-batches-v5',
-    scripts: '/static/js/juhe-wechat.js?v=20261015-send-batches-v5',
+    html: '/static/views/juhe-wechat.html?v=20261015-send-strategy-batch-v6',
+    scripts: '/static/js/juhe-wechat.js?v=20261015-send-strategy-batch-v6',
     init: 'initJuheWechatView',
     cache: 'reload'
   });

@@ -2183,36 +2183,59 @@
     });
   }
 
-  // 2026-10-15: 服务端 SendTextBody.to_usernames 单次上限 100，选了几百人一次发 = 422
-  // （界面只显示“请求失败”）。这里按 100 个一批依次提交，最后汇总队列/失败数。
-  var NATIVE_WECHAT_SEND_BATCH_SIZE = 100;
+  // 2026-10-15: 两层限制都要遵守：
+  //   1) 服务端策略 max_targets_per_task（默认 30）——每个发送任务的接收人上限，超了引擎直接报
+  //      too many targets in one task: max 30（2026-10-15 客户反馈：按 100 分批后 100 失败 / 12 成功）；
+  //   2) SendTextBody.to_usernames 单次上限 100（超了 422）。
+  // 所以批大小 = min(策略值, 100)；策略没加载到就按 30 兑底。
+  var NATIVE_WECHAT_SEND_TARGETS_FALLBACK = 30;
+  var NATIVE_WECHAT_SEND_API_LIMIT = 100;
+
+  function nativeWechatSendBatchSize() {
+    var fromStrategy = Number(((state.strategy || {}).max_targets_per_task) || 0);
+    var size = fromStrategy > 0 ? fromStrategy : NATIVE_WECHAT_SEND_TARGETS_FALLBACK;
+    return Math.max(1, Math.min(size, NATIVE_WECHAT_SEND_API_LIMIT));
+  }
+
+  function submitOneBatch(id, batch, content, files, result, depth) {
+    return apiJson('/api/native-wechat/messages/send', {
+      method: 'POST',
+      body: { account_id: id, to_usernames: batch, content: content, target_type: 'direct', attachments: files }
+    }).then(function(data) {
+      var failedInBatch = Number((data && data.failed_count) || 0);
+      var accepted = data && data.queued ? batch.length : Number((data && data.success_count) || 0);
+      result.queued += Math.max(0, accepted || 0);
+      result.failed += failedInBatch;
+      if (data && data.task && data.task.id) result.tasks.push(data.task.id);
+    }).catch(function(err) {
+      var message = (err && err.message) || '发送失败';
+      // 上限校验错误是“什么都没发”的安全错误，可以自动拆小重试（其他错误不重试，避免重复发）
+      var tooMany = /too many targets in one task: max (\d+)/.exec(String(message));
+      if (tooMany && depth < 3 && batch.length > 1) {
+        var limit = Math.max(1, Math.min(Number(tooMany[1]) || 1, batch.length - 1));
+        return submitOneBatch(id, batch.slice(0, limit), content, files, result, depth + 1)
+          .then(function() { return submitOneBatch(id, batch.slice(limit), content, files, result, depth + 1); });
+      }
+      result.failed += batch.length;
+      result.errors.push(message);
+    });
+  }
 
   function submitSendBatches(id, recipients, content, files) {
+    var batchSize = nativeWechatSendBatchSize();
     var batches = [];
-    for (var i = 0; i < recipients.length; i += NATIVE_WECHAT_SEND_BATCH_SIZE) {
-      batches.push(recipients.slice(i, i + NATIVE_WECHAT_SEND_BATCH_SIZE));
+    for (var i = 0; i < recipients.length; i += batchSize) {
+      batches.push(recipients.slice(i, i + batchSize));
     }
     var result = { queued: 0, failed: 0, tasks: [], errors: [] };
     var done = 0;
     return batches.reduce(function(chain, batch) {
       return chain.then(function() {
-        return apiJson('/api/native-wechat/messages/send', {
-          method: 'POST',
-          body: { account_id: id, to_usernames: batch, content: content, target_type: 'direct', attachments: files }
-        }).then(function(data) {
-          var failedInBatch = Number((data && data.failed_count) || 0);
-          var accepted = data && data.queued ? batch.length : Number((data && data.success_count) || 0);
-          result.queued += Math.max(0, accepted || 0);
-          result.failed += failedInBatch;
-          if (data && data.task && data.task.id) result.tasks.push(data.task.id);
-        }).catch(function(err) {
-          result.failed += batch.length;
-          result.errors.push((err && err.message) || '发送失败');
-        }).then(function() {
+        return submitOneBatch(id, batch, content, files, result, 0).then(function() {
           done += 1;
           if (batches.length > 1) {
             setMsg('正在加入发送队列... ' +
-              Math.min(done * NATIVE_WECHAT_SEND_BATCH_SIZE, recipients.length) + ' / ' + recipients.length, false);
+              Math.min(done * batchSize, recipients.length) + ' / ' + recipients.length, false);
           }
         });
       });
