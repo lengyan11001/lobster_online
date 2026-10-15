@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import re
 from urllib.parse import urlparse
 
 import httpx
@@ -46,6 +47,11 @@ class MultiClipRenderBody(BaseModel):
     bgm_volume: float = Field(0.24, ge=0, le=1)
     clip_mode: str = Field("fixed", max_length=32)
     output_index: int = Field(1, ge=1, le=50)
+    # 2026-10-15: 成片画布与填充方式交给用户选。
+    # output_ratio 例 "9:16" / "16:9"；空 = 跟随第一个片段（旧行为）。
+    output_ratio: str = Field("", max_length=16)
+    # fill_mode: cover = 铺满（裁切） / blur = 模糊铺底 + 完整画面 / fit = 完整 + 黑边；空 = 旧行为
+    fill_mode: str = Field("", max_length=16)
 
 
 def _find_ffprobe(ffmpeg: str) -> str:
@@ -289,7 +295,28 @@ def _probe_video(path: Path, ffprobe: str) -> Dict[str, Any]:
     }
 
 
-def _output_size(width: int, height: int) -> tuple[int, int]:
+_RATIO_RE = re.compile(r"^\s*(\d{1,3})\s*:\s*(\d{1,3})\s*$")
+
+
+def _ratio_pair(ratio: str) -> tuple[int, int] | None:
+    match = _RATIO_RE.match(str(ratio or ""))
+    if not match:
+        return None
+    width, height = int(match.group(1)), int(match.group(2))
+    if not (1 <= width <= 100 and 1 <= height <= 100):
+        return None
+    return width, height
+
+
+def _output_size(width: int, height: int, *, ratio: str = "") -> tuple[int, int]:
+    """画布尺寸：给了 ratio（如 9:16）就按它算（长边 1280）；否则跟随第一个片段（旧行为）。"""
+    pair = _ratio_pair(ratio)
+    if pair:
+        ratio_w, ratio_h = pair
+        scale = 1280.0 / max(ratio_w, ratio_h)
+        out_width = max(2, int(round(ratio_w * scale)) // 2 * 2)
+        out_height = max(2, int(round(ratio_h * scale)) // 2 * 2)
+        return out_width, out_height
     if width <= 0 or height <= 0:
         return 1280, 720
     max_side = 1280
@@ -391,7 +418,12 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
         if target_duration > 0:
             _extend_visual_segments_to_target(normalized, target_duration)
 
-        target_width, target_height = _output_size(normalized[0]["width"], normalized[0]["height"])
+        target_width, target_height = _output_size(
+            normalized[0]["width"], normalized[0]["height"], ratio=body.output_ratio
+        )
+        fill_mode = str(body.fill_mode or "").strip().lower()
+        if fill_mode not in {"cover", "blur", "fit"}:
+            fill_mode = "cover" if _ratio_pair(body.output_ratio) else "fit"
         command: List[str] = [ffmpeg, "-y"]
         for path in resolved_paths:
             command.extend(["-i", str(path)])
@@ -404,14 +436,37 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
             end = item["end_sec"]
             duration = item["duration"]
             pad_after = max(0.0, float(item.get("pad_after") or 0))
-            video_filter = (
-                f"[{index}:v:0]trim=start={start}:end={end},setpts=PTS-STARTPTS,"
-                f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
-                f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2:black,"
-            )
-            if pad_after > 0.001:
-                video_filter += f"tpad=stop_mode=clone:stop_duration={pad_after},"
-            video_filter += "setsar=1,fps=30,format=yuv420p[v%d]" % index
+            head = f"[{index}:v:0]trim=start={start}:end={end},setpts=PTS-STARTPTS,"
+            tail = f"tpad=stop_mode=clone:stop_duration={pad_after}," if pad_after > 0.001 else ""
+            tail += "setsar=1,fps=30,format=yuv420p[v%d]" % index
+            if fill_mode == "cover":
+                # 铺满（裁切）：先按长边放到盖住画布，再从中间裁
+                video_filter = (
+                    head
+                    + f"scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
+                    + f"crop={target_width}:{target_height},"
+                    + tail
+                )
+            elif fill_mode == "blur":
+                # 模糊铺底：同一张画面放大模糊做背景，前景完整居中
+                video_filter = (
+                    head
+                    + f"split=2[b{index}][f{index}];"
+                    + f"[b{index}]scale={target_width}:{target_height}:force_original_aspect_ratio=increase,"
+                    + f"crop={target_width}:{target_height},boxblur=luma_radius=24:luma_power=1,"
+                    + f"eq=brightness=-0.08[bg{index}];"
+                    + f"[f{index}]scale={target_width}:{target_height}:force_original_aspect_ratio=decrease[fg{index}];"
+                    + f"[bg{index}][fg{index}]overlay=(W-w)/2:(H-h)/2,"
+                    + tail
+                )
+            else:
+                # 旧行为：完整画面 + 黑边
+                video_filter = (
+                    head
+                    + f"scale={target_width}:{target_height}:force_original_aspect_ratio=decrease,"
+                    + f"pad={target_width}:{target_height}:(ow-iw)/2:(oh-ih)/2:black,"
+                    + tail
+                )
             filters.append(video_filter)
             if use_main_audio:
                 concat_inputs.append(f"[v{index}]")

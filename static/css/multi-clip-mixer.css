@@ -277,3 +277,7 @@
 .mcm-template-category.is-active .mcm-template-tag-count {
   color: #1d4ed8;
 }
+.mcm-template-category-hint {
+  color: #94a3b8;
+  font-size: 12px;
+}

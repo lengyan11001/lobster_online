@@ -13,6 +13,8 @@
     templateCatalogProvider: '',
     templateScene: 'newsMixCutting',
     templateColors: {},
+    outputRatio: '9:16',
+    fillMode: 'cover',
     templateStyles: {},
     selectedTemplate: null,
     shanjianTemplateDetail: null,
@@ -987,6 +989,7 @@
     if (choiceArea) choiceArea.hidden = randomTemplate;
     syncTemplateSceneUI();
     syncTemplateTagUI();
+    syncOutputOptionUI();
     grid.innerHTML = randomTemplate ? '' : state.templates.map(function(item) {
       var selected = state.selectedTemplate && String(state.selectedTemplate.id) === String(item.id);
       var cover = templateImage(item);
@@ -1535,6 +1538,52 @@
     return true;
   }
 
+  // 2026-10-15：成片比例与画面填充交给用户选；
+  // 比例同时决定（1）基础成片画布（后端 output_ratio）和（2）闪剪模板的筛选（上游 ratio 参数）。
+  var MIXER_OUTPUT_RATIOS = [
+    ['9:16', '竖屏 9:16'],
+    ['16:9', '横屏 16:9']
+  ];
+
+  var MIXER_FILL_MODES = [
+    ['cover', '铺满（裁切）'],
+    ['blur', '模糊铺底'],
+    ['fit', '完整（黑边）']
+  ];
+
+  function currentOutputRatio() {
+    var value = String(state.outputRatio || '9:16');
+    return MIXER_OUTPUT_RATIOS.some(function (pair) { return pair[0] === value; }) ? value : 
+      '9:16';
+  }
+
+  function currentFillMode() {
+    var value = String(state.fillMode || 'cover');
+    return MIXER_FILL_MODES.some(function (pair) { return pair[0] === value; }) ? value : 
+      'cover';
+  }
+
+  function mixerOptionChips(options, attr, value) {
+    return options.map(function (pair) {
+      var active = pair[0] === value;
+      return '<button type="button" class="mcm-template-category' + (active ? ' is-active' : '') + '" ' + attr +
+        '="' + pair[0] + '" aria-pressed="' + (active ? 'true' : 'false') + '">' + pair[1] + '</button>';
+    }).join('');
+  }
+
+  function syncOutputOptionUI() {
+    var ratioList = $('mcmOutputRatioList');
+    if (ratioList) ratioList.innerHTML = mixerOptionChips(MIXER_OUTPUT_RATIOS, 'data-mcm-output-ratio', currentOutputRatio());
+    var fillList = $('mcmFillModeList');
+    if (fillList) fillList.innerHTML = mixerOptionChips(MIXER_FILL_MODES, 'data-mcm-fill-mode', currentFillMode());
+    var hint = $('mcmOutputRatioHint');
+    if (hint) {
+      hint.textContent = currentOutputRatio() === '16:9'
+        ? '成片 1280x720；闪剪模板只筛 16:9（真人/数字人各 10 套，资讯混剪没有）'
+        : '成片 720x1280；闪剪模板筛 9:16';
+    }
+  }
+
   function syncTemplateChips(row, attr, value) {
     if (!row) return;
     Array.prototype.forEach.call(row.querySelectorAll('[' + attr + ']'), function(btn) {
@@ -1587,6 +1636,7 @@
     if (provider === 'shanjian') {
       return post('/api/shanjian-smart-clip/templates', {
         scene: currentMixerTemplateScene(),
+        ratio: currentOutputRatio(),
         page_size: 36,
         sort_by: 'desc'
       }).then(function(data) {
@@ -1598,7 +1648,18 @@
           selectTemplate(state.templateCatalog.find(function(item) { return String(item.id) === String(state.selectedTemplate.id); }) || null);
         }
         filterTemplates();
-        if (!state.templateCatalog.length) throw new Error('闪剪暂时没有返回可用模板。');
+        if (!state.templateCatalog.length) {
+          var sceneLabel = '';
+          MIXER_TEMPLATE_SCENES.some(function (pair) {
+            if (pair[0] === currentMixerTemplateScene()) { sceneLabel = pair[1]; return true; }
+            return false;
+          });
+          if (currentOutputRatio() === '16:9') {
+            throw new Error('闪剪在「' + (sceneLabel || currentMixerTemplateScene()) + '」场景下没有 16:9 模板：把「成片比例」改回竖屏 9:16，或把「场景」切到真人模板 / 数字人模板。');
+          }
+          throw new Error('闪剪暂时没有返回可用模板。');
+        }
+
         return state.templates;
       });
     }
@@ -1888,7 +1949,9 @@
       output_index: runIndex,
       bgm_url: music ? music.bgm_url : '',
       bgm_name: music ? music.music_name : '',
-      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24))
+      bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24)),
+      output_ratio: currentOutputRatio(),
+      fill_mode: currentFillMode()
     }).then(function(baseResult) {
       state.lastBaseResult = baseResult;
       progress('merge', 'done', '第 ' + runIndex + '/' + totalRuns + ' 条基础成片完成，共 ' + formatSeconds(baseResult.duration));
@@ -2130,7 +2193,33 @@
         filterTemplates();
       });
     });
+    ['mcmOutputRatioList', 'mcmFillModeList'].forEach(function(listId) {
+      var list = $(listId);
+      if (!list) return;
+      list.addEventListener('click', function(event) {
+        var ratioBtn = event.target.closest('[data-mcm-output-ratio]');
+        if (ratioBtn) {
+          var next = String(ratioBtn.getAttribute('data-mcm-output-ratio') || '9:16');
+          if (next === currentOutputRatio()) return;
+          state.outputRatio = next;
+          if (currentTemplateProvider() === 'shanjian') {
+            state.templateCatalog = [];
+            state.templateCatalogProvider = '';
+            state.selectedTemplate = null;
+            loadTemplates(true).catch(function(error) { showMessage(error.message, true); });
+          }
+          renderTemplates();
+          return;
+        }
+        var fillBtn = event.target.closest('[data-mcm-fill-mode]');
+        if (fillBtn) {
+          state.fillMode = String(fillBtn.getAttribute('data-mcm-fill-mode') || 'cover');
+          renderTemplates();
+        }
+      });
+    });
     if ($('mcmTemplateScenes')) $('mcmTemplateScenes').addEventListener('click', function(event) {
+
       var btn = event.target.closest('[data-mcm-template-scene]');
       if (!btn) return;
       var scene = String(btn.getAttribute('data-mcm-template-scene') || '');
