@@ -209,9 +209,9 @@ window.registerLobsterView('alibaba-inquiries', {
   });
 
   window.registerLobsterView('multi-clip-mixer', {
-    html: '/static/views/multi-clip-mixer.html?v=20261015-output-ratio-v6',
-    css: '/static/css/multi-clip-mixer.css?v=20261015-output-ratio-v6',
-    scripts: '/static/js/multi-clip-mixer.js?v=20261015-output-ratio-v6',
+    html: '/static/views/multi-clip-mixer.html?v=20261015-ratio-cards-v7',
+    css: '/static/css/multi-clip-mixer.css?v=20261015-ratio-cards-v7',
+    scripts: '/static/js/multi-clip-mixer.js?v=20261015-ratio-cards-v7',
     init: 'initMultiClipMixerView',
     cache: 'reload'
   });

@@ -65,7 +65,10 @@
 .mcm-template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 9px; max-height: 420px; overflow-y: auto; }
 .mcm-template-card { min-width: 0; padding: 0; overflow: hidden; border: 1px solid #e0e4eb; border-radius: 7px; background: #fff; cursor: pointer; text-align: left; }
 .mcm-template-card:hover, .mcm-template-card.is-selected { border-color: #e5484d; box-shadow: 0 0 0 1px rgba(229, 72, 77, .12); }
-.mcm-template-card img, .mcm-template-card video, .mcm-template-placeholder { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; background: #eef1f5; }
+.mcm-template-card { --mcm-card-ratio: 3 / 4; }
+/* 卡片比例跟模板：9:16 高、 16:9 宽；无 ratio 的模板回到 3/4 */
+.mcm-template-card img, .mcm-template-card video, .mcm-template-placeholder { display: block; width: 100%; aspect-ratio: var(--mcm-card-ratio); object-fit: cover; background: #eef1f5; }
+
 .mcm-template-card video { pointer-events: none; }
 .mcm-template-placeholder { display: grid; place-items: center; color: #8a93a2; font-size: 11px; }
 .mcm-template-card span { display: block; overflow: hidden; padding: 8px; color: #30394b; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }

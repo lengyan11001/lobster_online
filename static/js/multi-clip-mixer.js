@@ -981,6 +981,15 @@
     return root + (url.charAt(0) === '/' ? url : '/' + url);
   }
 
+  // 2026-10-15：卡片预览按模板自己的比例渲染（9:16 高、 16:9 宽），
+  // 不再把所有模板（包括 16:9 的）都按一个竖版框显示。
+  function templateRatioStyle(item) {
+    var text = String((item || {}).ratio || '').replace(/\s+/g, '');
+    if (!/^\d{1,3}:\d{1,3}$/.test(text)) return '';
+    var parts = text.split(':');
+    return ' style="--mcm-card-ratio: ' + Number(parts[0]) + ' / ' + Number(parts[1]) + '"';
+  }
+
   function renderTemplates() {
     var grid = $('mcmTemplateGrid');
     if (!grid) return;
@@ -999,7 +1008,7 @@
         : (demo
           ? '<video src="' + escapeHtml(demo) + '" muted playsinline preload="metadata"></video>'
           : '<span class="mcm-template-placeholder">暂无样片</span>');
-      return '<button type="button" class="mcm-template-card' + (selected ? ' is-selected' : '') + '" data-template-id="' + escapeHtml(item.id) + '" title="双击预览模板">'
+      return '<button type="button" class="mcm-template-card' + (selected ? ' is-selected' : '') + '" data-template-id="' + escapeHtml(item.id) + '"' + templateRatioStyle(item) + ' title="双击预览模板">'
         + media + '<span>' + escapeHtml(item.name || '未命名模板') + '</span></button>';
     }).join('');
     if ($('mcmTemplatePicked')) $('mcmTemplatePicked').textContent = randomTemplate ? '每条随机选择' : (state.selectedTemplate ? ('已选：' + (state.selectedTemplate.name || '剪辑模板')) : '还未选择');
