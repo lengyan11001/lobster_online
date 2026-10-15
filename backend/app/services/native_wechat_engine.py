@@ -8696,6 +8696,13 @@ _CONTACT_SYNC_SCAN_COMPLETE_ROUNDS = 12
 # 连续这么多轮「一屏联系人都读不到」就直接失败退出（2026-10-14 用户反馈：找不到「联系人」入口时
 # 一直在那来回点、也没有失败退出，界面像卡死）。正常扫描时每轮能看到十几行，空屏=微信不在通讯录页。
 _CONTACT_SYNC_EMPTY_SCREEN_LIMIT = 12
+# 2026-10-15 (diag_20261015012713): after we close a profile card the contact rows can stay
+# unrendered for several seconds. 4 x 0.35s was far too short to tell "re-rendering" from
+# "the group got collapsed", so every one of them turned into a 联系人 group-row click.
+_CONTACT_SYNC_EMPTY_REPOLL_SECONDS = 6.0
+# An empty screen this soon after our own profile-card read is never evidence of a collapsed
+# group: never click the group row in that window (clicking it is what collapses/jumps the list).
+_CONTACT_SYNC_CARD_RECENT_SECONDS = 25.0
 # 「读微信号」连续失败这么多次就停手：点开卡片也确认不了是本人时，继续点只会"鼠标一直点"却读不到号。
 _WX_FILL_CONSECUTIVE_FAILURE_LIMIT = 3
 
@@ -11160,6 +11167,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     ui_blank_rounds = 0
     root = None
     last_done_name = ""
+    last_card_close_at = 0.0
     for _idx in range(max_rounds):
         rounds = _idx + 1
         try:
@@ -11191,9 +11199,15 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             # 2026-10-15 (diag_20261014165447): every collapse was preceded by our own wheel nudge
             # (scroll_moved ... visible=0): the virtualised list renders 0 rows for a frame after
             # scrolling, and we mistook that gap for a collapsed group. Re-poll before believing it.
+            # 2026-10-15 (diag_20261015012713): 4x0.35s was far too short - 31/31 empty reads sat
+            # within 12s after our own profile-card close and every 1.4s re-poll still saw 0 rows,
+            # so all of them became 联系人 group-row clicks. Poll for _CONTACT_SYNC_EMPTY_REPOLL_SECONDS.
             _transient_empty = True
-            for _w in range(4):
-                time.sleep(0.35)
+            _repolls = 0
+            _repoll_until = time.time() + _CONTACT_SYNC_EMPTY_REPOLL_SECONDS
+            while time.time() < _repoll_until:
+                _repolls += 1
+                time.sleep(0.5)
                 try:
                     contact_list = _uia_strict_contact_list(_uia_main_root(hwnd)) or contact_list
                     if _uia_visible_contact_cell_rows(contact_list):
@@ -11204,35 +11218,67 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
             if not _transient_empty:
                 empty_rounds = 0
                 _contact_sync_debug(account_id, stage="contacts_empty_transient", round=rounds,
-                                    seen=len(seen))
+                                    seen=len(seen), repolls=_repolls)
                 continue
-            try:
-                # 2026-10-14: an empty screen usually means the group got collapsed by a
-                # stray click - reopen it (idempotent, never presses ESC).
-                _contacts_prepare_for_sync(hwnd, account_id)
-                # 2026-10-14: reopening the group jumps the list back to the top - scroll back to the
-                # last processed contact and carry on from there (never restart at the head).
-                if last_done_name:
-                    for _r in range(60):
-                        _vis = [str(x.get("name") or "") for x in
-                                _uia_visible_contact_cell_rows(contact_list)]
-                        if last_done_name in _vis:
+            _card_age = (time.time() - last_card_close_at) if last_card_close_at else None
+            _card_recent = bool(_card_age is not None and _card_age <= _CONTACT_SYNC_CARD_RECENT_SECONDS)
+            _contact_sync_debug(account_id, stage="contacts_empty_persistent", round=rounds,
+                                seen=len(seen), repolls=_repolls, card_recent=_card_recent,
+                                card_age=(round(_card_age, 1) if _card_age is not None else None))
+            if _card_recent:
+                # diag_20261015012713: right after reading a profile card the contact rows are gone
+                # for a while. Clicking the 联系人 group row in that state makes WeChat jump that
+                # section to its top / collapse it - the "suddenly collapses and starts over" the
+                # user sees. This path never sends a click: re-read, wait, re-read.
+                try:
+                    _restore_contacts_list_after_read(hwnd, account_id, "")
+                except Exception:
+                    pass
+                _waited = 0
+                while _waited < int(_CONTACT_SYNC_EMPTY_REPOLL_SECONDS / 0.5):
+                    time.sleep(0.5)
+                    _waited += 1
+                    try:
+                        contact_list = _uia_strict_contact_list(_uia_main_root(hwnd)) or contact_list
+                        if _uia_visible_contact_cell_rows(contact_list):
                             break
-                        try:
-                            contact_list.WheelDown(wheelTimes=2)
-                        except Exception:
-                            break
-                        time.sleep(0.25)
-                        try:
-                            contact_list = _uia_strict_contact_list(_uia_main_root(hwnd)) or contact_list
-                        except Exception:
-                            pass
-                    _contact_sync_debug(account_id, stage="contacts_resume_anchor",
-                                        anchor=last_done_name,
-                                        visible=len(_uia_visible_contact_cell_rows(contact_list)))
-            except Exception as exc:
-                _contact_sync_debug(account_id, stage="contacts_reopen_error",
-                                    error=str(exc)[:140])
+                    except Exception:
+                        pass
+                if _uia_visible_contact_cell_rows(contact_list):
+                    empty_rounds = 0
+                    _contact_sync_debug(account_id, stage="contacts_empty_transient", round=rounds,
+                                        seen=len(seen), repolls=_repolls, after_card=True)
+                    continue
+                _contact_sync_debug(account_id, stage="contacts_empty_after_card", round=rounds,
+                                    seen=len(seen), waited=_waited)
+            else:
+                try:
+                    # 2026-10-14: an empty screen usually means the group got collapsed by a
+                    # stray click - reopen it (idempotent, never presses ESC).
+                    _contacts_prepare_for_sync(hwnd, account_id)
+                    # 2026-10-14: reopening the group jumps the list back to the top - scroll back to the
+                    # last processed contact and carry on from there (never restart at the head).
+                    if last_done_name:
+                        for _r in range(60):
+                            _vis = [str(x.get("name") or "") for x in
+                                    _uia_visible_contact_cell_rows(contact_list)]
+                            if last_done_name in _vis:
+                                break
+                            try:
+                                contact_list.WheelDown(wheelTimes=2)
+                            except Exception:
+                                break
+                            time.sleep(0.25)
+                            try:
+                                contact_list = _uia_strict_contact_list(_uia_main_root(hwnd)) or contact_list
+                            except Exception:
+                                pass
+                        _contact_sync_debug(account_id, stage="contacts_resume_anchor",
+                                            anchor=last_done_name,
+                                            visible=len(_uia_visible_contact_cell_rows(contact_list)))
+                except Exception as exc:
+                    _contact_sync_debug(account_id, stage="contacts_reopen_error",
+                                        error=str(exc)[:140])
             try:
                 # 2026-10-14: a row click can leave the profile pane covering the
                 # contacts list; put it back instead of counting empty rounds.
@@ -11398,6 +11444,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
                             # right: three builds still pressed it here). It collapses the
                             # contacts group on this build, so it is never sent again.
                             back = len(_uia_visible_contact_cell_rows(contact_list))
+                            last_card_close_at = time.time()
                             _contact_sync_debug(account_id, stage="wx_fill_card_closed", target=clean,
                                                 popup=popup, esc_sent=False, rows_back=back)
                             if not back:
