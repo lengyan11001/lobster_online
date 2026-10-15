@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="/static/css/multi-clip-mixer.css?v=20261015-scene-only-v4">
+<link rel="stylesheet" href="/static/css/multi-clip-mixer.css?v=20261015-name-tags-v5">
 <div id="content-multi-clip-mixer" class="content-block">
   <div class="mcm-page">
     <header class="mcm-header">
@@ -85,6 +85,15 @@
                 <button type="button" class="mcm-template-category is-active" data-mcm-template-scene="newsMixCutting" aria-pressed="true">资讯混剪</button>
                 <button type="button" class="mcm-template-category" data-mcm-template-scene="realMan" aria-pressed="false">真人模板</button>
                 <button type="button" class="mcm-template-category" data-mcm-template-scene="virtualman" aria-pressed="false">数字人模板</button>
+              </div>
+              <div class="mcm-template-categories" id="mcmTemplateColors" hidden>
+                <span class="mcm-template-category-label">色系</span>
+                <span class="mcm-template-tag-list" id="mcmTemplateColorList"></span>
+              </div>
+              <div class="mcm-template-categories" id="mcmTemplateStyles" hidden>
+                <span class="mcm-template-category-label">风格</span>
+                <span class="mcm-template-tag-list" id="mcmTemplateStyleList"></span>
+                <span class="mcm-template-category-hint" id="mcmTemplateTagHint"></span>
               </div>
               <div id="mcmTemplateGrid" class="mcm-template-grid"></div>
               <button id="mcmTemplateMoreBtn" type="button" class="btn btn-ghost btn-sm" hidden>加载更多</button>

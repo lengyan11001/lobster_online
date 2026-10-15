@@ -259,3 +259,21 @@
   font-size: 12px;
   font-weight: 600;
 }
+
+.mcm-template-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcm-template-tag-count {
+  margin-left: 4px;
+  color: #94a3b8;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.mcm-template-category.is-active .mcm-template-tag-count {
+  color: #1d4ed8;
+}

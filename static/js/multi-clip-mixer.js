@@ -12,6 +12,8 @@
     templateCatalog: [],
     templateCatalogProvider: '',
     templateScene: 'newsMixCutting',
+    templateColors: {},
+    templateStyles: {},
     selectedTemplate: null,
     shanjianTemplateDetail: null,
     shanjianTemplateDetailId: '',
@@ -984,6 +986,7 @@
     var choiceArea = $('mcmTemplateChoiceArea');
     if (choiceArea) choiceArea.hidden = randomTemplate;
     syncTemplateSceneUI();
+    syncTemplateTagUI();
     grid.innerHTML = randomTemplate ? '' : state.templates.map(function(item) {
       var selected = state.selectedTemplate && String(state.selectedTemplate.id) === String(item.id);
       var cover = templateImage(item);
@@ -1415,6 +1418,123 @@
     return MIXER_TEMPLATE_SCENES.some(function(pair) { return pair[0] === scene; }) ? scene : 'newsMixCutting';
   }
 
+  // 2026-10-15：上游列表只有 id/name/coverUrl/demoUrl/ratio/scene（无 tags、无分类接口），
+  // ratio 全是 9:16，额外筛选参数也被忽略 —— 所以更细的分类只能从名字里推。
+  var MIXER_TEMPLATE_COLOR_TAGS = [
+    ['白', ['白', 'white', 'ขาว']],
+    ['黄', ['黄', 'yellow', 'เหลือง']],
+    ['红', ['红', 'red', 'แดง']],
+    ['绿', ['绿', 'green', 'เขียว']],
+    ['蓝', ['蓝', 'blue', 'cyan', 'ฟ้า']],
+    ['黑', ['黑', 'black', 'dark', 'ดำ']],
+    ['金', ['金', 'gold']],
+    ['紫', ['紫', 'purple', 'violet', 'ม่วง']],
+    ['粉', ['粉', 'pink', 'ชมพู']],
+    ['橙', ['橙', 'orange', 'ส้ม']],
+    ['灰', ['灰', 'gray', 'grey']],
+    ['多彩', ['多彩', '彩色', 'colorful', 'rainbow']]
+  ];
+
+  var MIXER_TEMPLATE_STYLE_TAGS = [
+    ['标题', ['标题', 'title']],
+    ['字幕', ['字幕', 'subtitle']],
+    ['大字', ['大字', '大标题', 'big']],
+    ['双语', ['双语', 'bilingual']],
+    ['渐变', ['渐变', 'gradient']],
+    ['科技', ['科技', 'tech', 'neon', 'glow', '霓虹']],
+    ['简约', ['简约', '简洁', '简易', 'simple', 'minimal', 'clean']],
+    ['高级', ['高级', '质感', 'premium', 'luxury']],
+    ['醒目', ['醒目', '重点', '强调', 'highlight', 'promo']],
+    ['对比', ['对比', 'contrast']],
+    ['分层', ['分层', 'layered', 'layer', 'block']],
+    ['描边', ['描边', 'outline', 'stroke']],
+    ['背景', ['背景', '底', 'background']],
+    ['展示', ['展示', 'showcase', 'show']],
+    ['翻转', ['翻转', '切入', 'flip', 'switch']],
+    ['百搭', ['百搭', '通用', '常规', 'alternati', 'versatile']],
+    ['门店推广', ['门店', '店面']],
+    ['励志展示', ['励志', 'motivat', 'inspir']],
+    ['产品推广', ['产品', 'product']],
+    ['活动节日', ['活动', '节日', '促销', '七夕', '春节', '新年', '中秋', '国庆', '双11', '双十一', '圣诞']],
+    ['口播/人设', ['口播', '人设', '口述']]
+  ];
+
+  function templateNameHasToken(name, token) {
+    var text = String(name || '');
+    if (!text || !token) return false;
+    if (/^[a-z0-9]+$/i.test(token)) {
+      // 英文词按边界匹配：Subtitle 不算命中 Title
+      // 允许英文复数：Subtitles 也要命中 subtitle，但 Subtitle 不能误命中 Title
+      return new RegExp('(^|[^a-z0-9])' + token + 's?([^a-z0-9]|$)', 'i').test(text);
+    }
+    return text.toLowerCase().indexOf(String(token).toLowerCase()) >= 0;
+  }
+
+  function templateTagList(name, groups) {
+    return (groups || []).filter(function (pair) {
+      return pair[1].some(function (token) { return templateNameHasToken(name, token); });
+    }).map(function (pair) { return pair[0]; });
+  }
+
+  function templateColorsOf(item) {
+    return templateTagList((item || {}).name, MIXER_TEMPLATE_COLOR_TAGS);
+  }
+
+  function templateStylesOf(item) {
+    return templateTagList((item || {}).name, MIXER_TEMPLATE_STYLE_TAGS);
+  }
+
+  function templateTagCounts() {
+    var colors = {}, styles = {};
+    (state.templateCatalog || []).forEach(function (item) {
+      templateColorsOf(item).forEach(function (tag) { colors[tag] = (colors[tag] || 0) + 1; });
+      templateStylesOf(item).forEach(function (tag) { styles[tag] = (styles[tag] || 0) + 1; });
+    });
+    return { colors: colors, styles: styles };
+  }
+
+  function templateTagButtons(counts, attr, selected) {
+    return Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; }).map(function (tag) {
+      var active = !!(selected || {})[tag];
+      return '<button type="button" class="mcm-template-category' + (active ? ' is-active' : '') + '" ' +
+        attr + '="' + tag + '" aria-pressed="' + (active ? 'true' : 'false') + '">' + tag +
+        '<i class="mcm-template-tag-count">' + counts[tag] + '</i></button>';
+    }).join('');
+  }
+
+  function syncTemplateTagUI() {
+    var isShanjian = currentTemplateProvider() === 'shanjian';
+    var colorRow = $('mcmTemplateColors');
+    var styleRow = $('mcmTemplateStyles');
+    if (colorRow) colorRow.hidden = !isShanjian;
+    if (styleRow) styleRow.hidden = !isShanjian;
+    if (!isShanjian) return;
+    var counts = templateTagCounts();
+    var colorList = $('mcmTemplateColorList');
+    var styleList = $('mcmTemplateStyleList');
+    if (colorList) colorList.innerHTML = templateTagButtons(counts.colors, 'data-mcm-template-color', state.templateColors);
+    if (styleList) styleList.innerHTML = templateTagButtons(counts.styles, 'data-mcm-template-style', state.templateStyles);
+    var hint = $('mcmTemplateTagHint');
+    if (hint) {
+      var picked = Object.keys(state.templateColors || {}).length + Object.keys(state.templateStyles || {}).length;
+      hint.textContent = picked ? ('已筛选 ' + state.templates.length + ' / ' + state.templateCatalog.length) : '';
+    }
+  }
+
+  function templateMatchesTags(item) {
+    var colors = Object.keys(state.templateColors || {});
+    var styles = Object.keys(state.templateStyles || {});
+    if (colors.length) {
+      var itemColors = templateColorsOf(item);
+      if (!colors.some(function (tag) { return itemColors.indexOf(tag) >= 0; })) return false;
+    }
+    if (styles.length) {
+      var itemStyles = templateStylesOf(item);
+      if (!styles.some(function (tag) { return itemStyles.indexOf(tag) >= 0; })) return false;
+    }
+    return true;
+  }
+
   function syncTemplateChips(row, attr, value) {
     if (!row) return;
     Array.prototype.forEach.call(row.querySelectorAll('[' + attr + ']'), function(btn) {
@@ -1438,6 +1558,7 @@
   function filterTemplates() {
     var search = String((($('mcmTemplateSearch') || {}).value || '')).trim().toLowerCase();
     state.templates = state.templateCatalog.filter(function(item) {
+      if (!templateMatchesTags(item)) return false;
       if (!search) return true;
       var tags = Array.isArray(item.tags) ? item.tags.join(' ') : '';
       return [item.name, item.description, item.id, tags].join(' ').toLowerCase().indexOf(search) >= 0;
@@ -1994,6 +2115,21 @@
       clearTimeout(searchTimer);
       searchTimer = setTimeout(filterTemplates, 200);
     });
+    ['mcmTemplateColorList', 'mcmTemplateStyleList'].forEach(function(listId) {
+      var list = $(listId);
+      if (!list) return;
+      list.addEventListener('click', function(event) {
+        var btn = event.target.closest('[data-mcm-template-color], [data-mcm-template-style]');
+        if (!btn) return;
+        var color = btn.getAttribute('data-mcm-template-color');
+        var style = btn.getAttribute('data-mcm-template-style');
+        var bag = color ? state.templateColors : state.templateStyles;
+        var tag = color || style;
+        if (!tag) return;
+        if (bag[tag]) delete bag[tag]; else bag[tag] = true;
+        filterTemplates();
+      });
+    });
     if ($('mcmTemplateScenes')) $('mcmTemplateScenes').addEventListener('click', function(event) {
       var btn = event.target.closest('[data-mcm-template-scene]');
       if (!btn) return;
@@ -2002,6 +2138,8 @@
       state.templateScene = scene;
       state.templateCatalog = [];
       state.templateCatalogProvider = '';
+      state.templateColors = {};
+      state.templateStyles = {};
       state.selectedTemplate = null;
       loadTemplates(true).catch(function(error) { showMessage(error.message, true); });
     });
