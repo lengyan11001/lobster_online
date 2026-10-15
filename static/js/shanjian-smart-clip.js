@@ -17,7 +17,6 @@
     templates: [],
     templateSid: '',
     templateScene: 'realMan',
-    onlyBodyTemplates: false,
     selectedTemplate: null,
     templateDetail: null,
     realManVideoUrl: '',
@@ -99,18 +98,6 @@
       var active = item.value === state.templateScene;
       return '<button type="button" class="sj-tab' + (active ? ' is-active' : '') + '" data-scene="' + escapeHtml(item.value) + '">' + escapeHtml(item.label) + '</button>';
     }).join('');
-    if (!el.querySelector('#sjOnlyBodyTemplates')) {
-      var wrap = document.createElement('label');
-      wrap.className = 'sj-tab sj-tab-check';
-      wrap.innerHTML = '<input type="checkbox" id="sjOnlyBodyTemplates"> 只看支持正文的模板';
-      el.appendChild(wrap);
-      var box = wrap.querySelector('#sjOnlyBodyTemplates');
-      box.checked = !!state.onlyBodyTemplates;
-      box.addEventListener('change', function() {
-        state.onlyBodyTemplates = !!box.checked;
-        renderTemplates();
-      });
-    }
     var hint = el.parentNode ? el.parentNode.querySelector('.sj-scene-hint') : null;
     if (!hint && el.parentNode) {
       hint = document.createElement('div');
@@ -217,32 +204,18 @@
       + '<button type="button" class="sj-card sj-template-card' + (selected ? ' is-selected' : '') + '" data-template-id="' + escapeHtml(item.id) + '" title="双击预览样片">'
       + '<span class="sj-cover"><img src="' + escapeHtml(item.coverUrl || placeholder(item.name)) + '" alt="' + escapeHtml(item.name || '模板') + '" loading="lazy" referrerpolicy="no-referrer"></span>'
       + '<span class="sj-card-body"><strong>' + escapeHtml(item.name || '未命名模板') + '</strong>'
-      + templateCapabilityBadge(item)
       + '</span>'
       + '</button>';
-  }
-
-  // 闪剪模板的能力：有 subtitleLayer 才会用到我们传过去的正文（header 用标题）。
-  function templateCapabilityBadge(item) {
-    var layers = item && item.layers ? item.layers : null;
-    if (!layers || !layers.ok) return '';
-    var supports = !!layers.subtitle;
-    var size = layers.subtitle_size ? '（' + escapeHtml(layers.subtitle_size) + '）' : '';
-    return '<em class="sj-cap' + (supports ? ' is-on' : '') + '">' + (supports ? '支持正文' + size : '仅标题') + '</em>';
   }
 
   function renderTemplates() {
     var grid = $('sjClipTemplateGrid');
     var empty = $('sjClipTemplateEmpty');
     if (!grid) return;
-    var rows = (state.templates || []).filter(function(item) {
-      if (!state.onlyBodyTemplates) return true;
-      return !!(item.layers && item.layers.subtitle);
-    });
+    var rows = state.templates || [];
     grid.innerHTML = rows.map(templateCard).join('');
     if (empty) {
       empty.style.display = rows.length ? 'none' : 'block';
-      if (!rows.length && state.onlyBodyTemplates) empty.textContent = '当前场景下没有“支持正文”的模板，取消勾选可看全部。';
     }
     var more = $('sjClipLoadMoreTemplatesBtn');
     if (more) more.style.display = state.templateSid ? '' : 'none';

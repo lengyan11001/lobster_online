@@ -11,9 +11,7 @@
     templates: [],
     templateCatalog: [],
     templateCatalogProvider: '',
-    templateCategory: 'all',
     templateScene: 'newsMixCutting',
-    templateLayersLoading: false,
     selectedTemplate: null,
     shanjianTemplateDetail: null,
     shanjianTemplateDetailId: '',
@@ -985,7 +983,7 @@
     var randomTemplate = currentClipMode() === 'random' && (($('mcmRandomTemplateSwitch') || {}).checked);
     var choiceArea = $('mcmTemplateChoiceArea');
     if (choiceArea) choiceArea.hidden = randomTemplate;
-    syncTemplateCategoryUI();
+    syncTemplateSceneUI();
     grid.innerHTML = randomTemplate ? '' : state.templates.map(function(item) {
       var selected = state.selectedTemplate && String(state.selectedTemplate.id) === String(item.id);
       var cover = templateImage(item);
@@ -996,8 +994,7 @@
           ? '<video src="' + escapeHtml(demo) + '" muted playsinline preload="metadata"></video>'
           : '<span class="mcm-template-placeholder">暂无样片</span>');
       return '<button type="button" class="mcm-template-card' + (selected ? ' is-selected' : '') + '" data-template-id="' + escapeHtml(item.id) + '" title="双击预览模板">'
-        + '<span class="mcm-template-thumb">' + media + templateLayerBadges(item) + '</span>'
-        + '<span class="mcm-template-name">' + escapeHtml(item.name || '未命名模板') + '</span></button>';
+        + media + '<span>' + escapeHtml(item.name || '未命名模板') + '</span></button>';
     }).join('');
     if ($('mcmTemplatePicked')) $('mcmTemplatePicked').textContent = randomTemplate ? '每条随机选择' : (state.selectedTemplate ? ('已选：' + (state.selectedTemplate.name || '剪辑模板')) : '还未选择');
     if ($('mcmTemplateMoreBtn')) $('mcmTemplateMoreBtn').hidden = true;
@@ -1418,58 +1415,6 @@
     return MIXER_TEMPLATE_SCENES.some(function(pair) { return pair[0] === scene; }) ? scene : 'newsMixCutting';
   }
 
-  function applyTemplateLayers(map) {
-    if (!map) return 0;
-    var applied = 0;
-    state.templateCatalog.forEach(function(item) {
-      var layers = map[String(item.id)];
-      if (layers && layers.ok) { item.layers = layers; applied += 1; }
-    });
-    return applied;
-  }
-
-  function batchTemplateLayers(ids) {
-    return post('/api/shanjian-smart-clip/template-layers', { ids: ids }).then(function(data) {
-      return (data && data.layers) || {};
-    });
-  }
-
-  function detailTemplateLayers(ids) {
-    // 服务端还没上「批量补图层」接口时的回退：逐个拉详情（并发 5）
-    var out = {};
-    var queue = ids.slice();
-    function worker() {
-      if (!queue.length) return Promise.resolve();
-      var id = queue.shift();
-      return post('/api/shanjian-smart-clip/template-detail', { template_id: id }).then(function(data) {
-        var layers = ((data || {}).item || {}).layers;
-        if (layers && layers.ok) out[id] = layers;
-      }).catch(function() { return null; }).then(worker);
-    }
-    var workers = [];
-    for (var i = 0; i < 5; i += 1) workers.push(worker());
-    return Promise.all(workers).then(function() { return out; });
-  }
-
-  // 2026-10-15: 列表接口不带 videoStructInfo，图层得单独补 —— 这就是之前“支持正文筛出来是空的”原因
-  function detectTemplateLayers() {
-    if (currentTemplateProvider() !== 'shanjian' || state.templateLayersLoading) return Promise.resolve(0);
-    var ids = state.templateCatalog.filter(function(item) {
-      return item.id && !(item.layers && item.layers.ok);
-    }).map(function(item) { return String(item.id); });
-    if (!ids.length) return Promise.resolve(0);
-    state.templateLayersLoading = true;
-    syncTemplateCategoryUI();
-    return batchTemplateLayers(ids.slice(0, 80))
-      .catch(function() { return detailTemplateLayers(ids.slice(0, 40)); })
-      .then(function(map) { return applyTemplateLayers(map); })
-      .catch(function() { return 0; })
-      .finally(function() {
-        state.templateLayersLoading = false;
-        filterTemplates();
-      });
-  }
-
   function syncTemplateChips(row, attr, value) {
     if (!row) return;
     Array.prototype.forEach.call(row.querySelectorAll('[' + attr + ']'), function(btn) {
@@ -1479,61 +1424,20 @@
     });
   }
 
-  function templateLayers(item) {
-    var layers = (item || {}).layers;
-    return (layers && typeof layers === 'object') ? layers : null;
-  }
-
-  // 2026-10-15 v2: 封面上的小浮层（最多 3 个 + 余额），不占卡片高度
-  function templateLayerBadges(item) {
-    var layers = templateLayers(item);
-    if (!layers || !layers.ok) return '';
-    var pairs = [['header', '标题'], ['subtitle', '字幕'], ['figure', '人物'], ['ip', '形象'], ['background', '背景']];
-    var chips = pairs.filter(function(pair) { return !!layers[pair[0]]; }).map(function(pair) {
-      return '<span class="mcm-template-badge">' + pair[1] + '</span>';
-    });
-    if (!chips.length) return '';
-    var extra = chips.length > 3 ? '<span class="mcm-template-badge is-more">+' + (chips.length - 3) + '</span>' : '';
-    return '<span class="mcm-template-badges">' + chips.slice(0, 3).join('') + extra + '</span>';
-  }
-
-  // 2026-10-15: 闪剪模板分类——all / 支持正文 / 不含正文（依据服务端返回的 layers）
-  function templateMatchesCategory(item, category) {
-    var cat = String(category || 'all');
-    if (cat === 'all') return true;
-    var layers = templateLayers(item);
-    if (!layers || !layers.ok) return false;
-    if (cat === 'body') return !!layers.supports_body;
-    if (cat === 'no_body') return !layers.supports_body;
-    return true;
-  }
-
-  function syncTemplateCategoryUI() {
+  // 2026-10-15 v2（客户确认后去掉分类）：闪剪模板抽样 110/110
+  // （3 个场景）全都带 subtitleLayer，“支持正文/不含正文”没有区分度，
+  // 能否填正文与模板无关（混剪场景本来就不合成正文）。
+  function syncTemplateSceneUI() {
     var isShanjian = currentTemplateProvider() === 'shanjian';
     var sceneRow = $('mcmTemplateScenes');
-    var row = $('mcmTemplateCategories');
     if (sceneRow) sceneRow.hidden = !isShanjian;
-    if (row) row.hidden = !isShanjian;
     if (!isShanjian) return;
     syncTemplateChips(sceneRow, 'data-mcm-template-scene', currentMixerTemplateScene());
-    syncTemplateChips(row, 'data-mcm-template-category', String(state.templateCategory || 'all'));
-    var hint = $('mcmTemplateCategoryHint');
-    if (!hint) return;
-    var total = state.templateCatalog.length;
-    var known = state.templateCatalog.filter(function(item) { return item.layers && item.layers.ok; }).length;
-    var parts = [];
-    if (state.templateLayersLoading) parts.push('正在检测模板图层 ' + known + ' / ' + total + '…');
-    else if (known && known < total) parts.push('已检测 ' + known + ' / ' + total);
-    if (String(state.templateCategory || 'all') !== 'all') parts.push('已筛选 ' + state.templates.length + ' 个');
-    hint.textContent = parts.join('，');
   }
 
   function filterTemplates() {
     var search = String((($('mcmTemplateSearch') || {}).value || '')).trim().toLowerCase();
-    // 分类只对闪剪模板生效（本地模板没有 layers）
-    var category = currentTemplateProvider() === 'shanjian' ? String(state.templateCategory || 'all') : 'all';
     state.templates = state.templateCatalog.filter(function(item) {
-      if (!templateMatchesCategory(item, category)) return false;
       if (!search) return true;
       var tags = Array.isArray(item.tags) ? item.tags.join(' ') : '';
       return [item.name, item.description, item.id, tags].join(' ').toLowerCase().indexOf(search) >= 0;
@@ -1574,8 +1478,6 @@
         }
         filterTemplates();
         if (!state.templateCatalog.length) throw new Error('闪剪暂时没有返回可用模板。');
-        // 2026-10-15: 列表不带图层，这里异步补一次（不阻塞模板列表显示）
-        detectTemplateLayers();
         return state.templates;
       });
     }
@@ -2091,13 +1993,6 @@
     if ($('mcmTemplateSearch')) $('mcmTemplateSearch').addEventListener('input', function() {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(filterTemplates, 200);
-    });
-    if ($('mcmTemplateCategories')) $('mcmTemplateCategories').addEventListener('click', function(event) {
-      var btn = event.target.closest('[data-mcm-template-category]');
-      if (!btn) return;
-      state.templateCategory = String(btn.getAttribute('data-mcm-template-category') || 'all');
-      filterTemplates();
-      if (String(state.templateCategory) !== 'all') detectTemplateLayers();
     });
     if ($('mcmTemplateScenes')) $('mcmTemplateScenes').addEventListener('click', function(event) {
       var btn = event.target.closest('[data-mcm-template-scene]');
