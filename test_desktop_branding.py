@@ -215,3 +215,27 @@ def test_header_partner_logo_is_only_configured_for_daka():
     assert "header_partner_logo" not in registry["marks"]["bihuo"]["icons"]
     assert registry["marks"]["daka"]["icons"]["header_partner_logo"] == "/static/daka_header_partner.jpg"
     assert (launcher.ROOT / "static" / "daka_header_partner.jpg").is_file()
+
+
+def test_login_hero_title_is_the_bihuo_execution_system():
+    """登录页那行大标题：默认品牌必须是「必火AI执行系统」，不许再出现内部代号「龙虾」。"""
+    registry = json.loads(
+        (launcher.ROOT / "static" / "branding" / "brands.json").read_text(encoding="utf-8")
+    )
+    default_mark = registry["default_mark"]
+    assert default_mark == "bihuo"
+    hero = registry["marks"][default_mark]["hero_title"]
+    assert hero == "必火AI执行系统"
+    assert "龙虾" not in hero
+
+
+def test_every_brand_hero_title_uses_its_own_brand_name():
+    """OEM 用 OEM 自己的名字：每个 mark 的 hero_title 都要以自己的品牌名开头。"""
+    registry = json.loads(
+        (launcher.ROOT / "static" / "branding" / "brands.json").read_text(encoding="utf-8")
+    )
+    for mark, profile in registry["marks"].items():
+        brand_word = str(profile.get("logo_primary") or "").strip()
+        hero = str(profile.get("hero_title") or "").strip()
+        assert brand_word, mark + " 少了 logo_primary"
+        assert hero.startswith(brand_word), mark + " 的 hero_title 没用自己品牌名：" + hero
