@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io as _io
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from ..services import native_whatsapp_engine as engine
@@ -55,6 +58,14 @@ class WhatsAppContactBody(BaseModel):
     username: str = Field(default="", max_length=240)
     phone: str = Field(default="", max_length=80)
     country_code: str = Field(default="+86", max_length=20)
+
+
+
+class WhatsAppContactUpdateBody(BaseModel):
+    account_id: str = Field(default=engine.DEFAULT_ACCOUNT_ID, min_length=1, max_length=160)
+    contact_key: str = Field(min_length=1, max_length=240)
+    phone: str = Field(default="", max_length=80)
+    display_name: str = Field(default="", max_length=500)
 
 
 def _ensure_default_account(account_id: str) -> None:
@@ -224,6 +235,97 @@ async def native_whatsapp_add_contact(
             username=body.username,
             phone=body.phone,
             country_code=body.country_code,
+        )
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.get("/api/native-whatsapp/web/login")
+async def native_whatsapp_web_login_status(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    return {"ok": True, **(await asyncio.to_thread(engine.web_login_status))}
+
+
+@router.post("/api/native-whatsapp/web/login")
+async def native_whatsapp_web_login_start(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    try:
+        return {"ok": True, **(await asyncio.to_thread(engine.web_login_start))}
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.post("/api/native-whatsapp/web/logout")
+async def native_whatsapp_web_logout(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    try:
+        return {"ok": True, **(await asyncio.to_thread(engine.web_logout))}
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.post("/api/native-whatsapp/web/contacts/sync")
+async def native_whatsapp_web_sync_contacts(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    try:
+        return await asyncio.to_thread(engine.web_sync_contacts)
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.get("/api/native-whatsapp/contacts/stats")
+async def native_whatsapp_contact_stats(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    return {"ok": True, **(await asyncio.to_thread(engine.contact_stats))}
+
+
+@router.get("/api/native-whatsapp/contacts/export")
+async def native_whatsapp_contacts_export(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    rows = await asyncio.to_thread(engine.export_contacts)
+    buf = _io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["手机号", "名字", "名", "姓", "@用户名", "来源", "更新时间"])
+    for row in rows:
+        writer.writerow([
+            str(row.get("phone") or ""),
+            str(row.get("display_name") or ""),
+            str(row.get("first_name") or ""),
+            str(row.get("last_name") or ""),
+            str(row.get("username") or ""),
+            str(row.get("source") or ""),
+            str(row.get("updated_at") or ""),
+        ])
+    payload = "\ufeff" + buf.getvalue()
+    return Response(
+        content=payload,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=whatsapp-contacts.csv"},
+    )
+
+
+@router.post("/api/native-whatsapp/contacts/update")
+async def native_whatsapp_update_contact(
+    body: WhatsAppContactUpdateBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    del current_user
+    _ensure_default_account(body.account_id)
+    try:
+        return await asyncio.to_thread(
+            engine.update_contact, body.contact_key, phone=body.phone, display_name=body.display_name
         )
     except Exception as exc:
         raise _desktop_error(exc) from exc

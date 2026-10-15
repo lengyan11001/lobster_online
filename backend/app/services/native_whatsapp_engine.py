@@ -8,6 +8,8 @@ import logging
 import os
 import re
 import sqlite3
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -1841,6 +1843,193 @@ def list_messages(peer_key: str, *, limit: int = 100, offset: int = 0) -> Dict[s
 
 def list_contacts(*, limit: int = 50, offset: int = 0, keyword: str = "") -> Dict[str, Any]:
     return _query_page("whatsapp_contacts", limit=limit, offset=offset, keyword=keyword)
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-15：WhatsApp Web 协议（Baileys，客户端已内置）
+# 一次扫码绑定 → 会话持久保存在 auth 目录，之后读通讯录/导出都不用再扫。
+# UIA（点界面）只留给协议没有的动作（发消息/加好友）。
+# ---------------------------------------------------------------------------
+WEB_BRIDGE_PATH = ROOT_DIR / "scripts" / "whatsapp_web_bridge.mjs"
+WEB_AUTH_DIR = ROOT_DIR / ".openclaw" / "whatsapp_web" / "pc"
+WEB_LOGIN_STATE = LOG_PATH.parent / "whatsapp_web_login.json"
+_WEB_LOGIN_PROC: Optional[Any] = None
+_WEB_LOGIN_LOCK = threading.Lock()
+
+
+def _node_exe() -> str:
+    for candidate in (ROOT_DIR / "nodejs" / "node.exe", ROOT_DIR / "nodejs" / "node"):
+        if candidate.is_file():
+            return str(candidate)
+    found = shutil.which("node")
+    if found:
+        return found
+    raise RuntimeError("没找到 Node（nodejs/node.exe），无法走 WhatsApp Web 协议")
+
+
+def _run_bridge(argv: List[str], *, timeout: int = 120) -> Dict[str, Any]:
+    if not WEB_BRIDGE_PATH.is_file():
+        raise RuntimeError("找不到 scripts/whatsapp_web_bridge.mjs")
+    command = [_node_exe(), str(WEB_BRIDGE_PATH)] + [str(item) for item in argv]
+    proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, encoding="utf-8", errors="replace")
+    payload: Dict[str, Any] = {}
+    for line in (proc.stdout or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            data = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(data, dict) and "ok" in data:
+            payload = data
+    if not payload:
+        raise RuntimeError((proc.stderr or proc.stdout or "桥接脚本没有输出").strip()[-400:])
+    if not payload.get("ok") and payload.get("error"):
+        raise RuntimeError(str(payload["error"])[:300])
+    return payload
+
+
+def _read_web_login_state() -> Dict[str, Any]:
+    try:
+        data = json.loads(WEB_LOGIN_STATE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def web_login_status() -> Dict[str, Any]:
+    """绑定状态：已绑定（读 creds）/ 等待扫码（带 qr）/ 未绑定。"""
+    state = _read_web_login_state()
+    creds = {"linked": False, "me": {}}
+    try:
+        creds = _run_bridge(["status", "--auth", str(WEB_AUTH_DIR)], timeout=60)
+    except Exception as exc:
+        state.setdefault("error", str(exc)[:200])
+    linked = bool(creds.get("linked"))
+    running = bool(_WEB_LOGIN_PROC is not None and _WEB_LOGIN_PROC.poll() is None)
+    return {
+        "can_protocol": WEB_BRIDGE_PATH.is_file(),
+        "linked": linked,
+        "me": creds.get("me") or {},
+        "login_running": running,
+        "state": "linked" if linked else str(state.get("state") or ("qr" if state.get("qr") else "idle")),
+        "qr": "" if linked else str(state.get("qr") or ""),
+        "auth_dir": str(WEB_AUTH_DIR),
+    }
+
+
+def web_login_start() -> Dict[str, Any]:
+    """开始绑定：后台跑桥接的 login，它把二维码写进状态文件，页面轮询 web_login_status 就能看到。"""
+    global _WEB_LOGIN_PROC
+    current = web_login_status()
+    if current.get("linked"):
+        return current
+    with _WEB_LOGIN_LOCK:
+        if _WEB_LOGIN_PROC is None or _WEB_LOGIN_PROC.poll() is not None:
+            try:
+                WEB_LOGIN_STATE.parent.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            _WEB_LOGIN_PROC = subprocess.Popen(
+                [_node_exe(), str(WEB_BRIDGE_PATH), "login", "--auth", str(WEB_AUTH_DIR), "--state", str(WEB_LOGIN_STATE)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+    return web_login_status()
+
+
+def web_logout() -> Dict[str, Any]:
+    global _WEB_LOGIN_PROC
+    with _WEB_LOGIN_LOCK:
+        if _WEB_LOGIN_PROC is not None and _WEB_LOGIN_PROC.poll() is None:
+            try:
+                _WEB_LOGIN_PROC.kill()
+            except Exception:
+                pass
+        _WEB_LOGIN_PROC = None
+    result = _run_bridge(["logout", "--auth", str(WEB_AUTH_DIR)], timeout=60)
+    try:
+        WEB_LOGIN_STATE.unlink(missing_ok=True)
+    except Exception:
+        pass
+    _record_operation("web_logout", "", "success", "已解除 WhatsApp Web 绑定")
+    return result
+
+
+def web_sync_contacts(*, timeout: int = 180) -> Dict[str, Any]:
+    """走协议拉整本通讯录（名字 + 手机号）并写库。"""
+    _claim_action("同步 WhatsApp 通讯录（协议）")
+    try:
+        payload = _run_bridge(["contacts", "--auth", str(WEB_AUTH_DIR), "--timeout", str(max(5000, timeout * 1000 // 2))], timeout=timeout)
+        saved = 0
+        with_phone = 0
+        for row in payload.get("contacts") or []:
+            phone = str(row.get("phone") or "").strip()
+            contact = _persist_contact({
+                "display_name": str(row.get("name") or row.get("notify") or phone or row.get("id") or "").strip(),
+                "phone": phone,
+                "source": "web_protocol",
+                "jid": str(row.get("id") or ""),
+            })
+            if contact:
+                saved += 1
+                if phone:
+                    with_phone += 1
+        result = {
+            "ok": True,
+            "count": saved,
+            "with_phone": with_phone,
+            "received": int(payload.get("count") or 0),
+            "message": "协议同步完成：%d 个联系人，其中 %d 个带手机号" % (saved, with_phone),
+        }
+        _record_operation("web_sync_contacts", "", "success", result["message"], result)
+        return result
+    except Exception as exc:
+        _record_operation("web_sync_contacts", "", "failed", str(exc)[:300])
+        raise
+    finally:
+        _release_action()
+
+
+def update_contact(contact_key: str, *, phone: str = "", display_name: str = "") -> Dict[str, Any]:
+    """手工改手机号 / 改名（给缺号的人补上，导出给其他设备用）。"""
+    key = str(contact_key or "").strip()
+    if not key:
+        raise RuntimeError("缺少 contact_key")
+    value = str(phone or "").strip()[:80]
+    name = str(display_name or "").strip()[:500]
+    with _DB_LOCK, _connect() as conn:
+        if name:
+            cur = conn.execute(
+                "update whatsapp_contacts set phone=?, display_name=?, updated_at=? where contact_key=?",
+                (value, name, _now_iso(), key),
+            )
+        else:
+            cur = conn.execute(
+                "update whatsapp_contacts set phone=?, updated_at=? where contact_key=?",
+                (value, _now_iso(), key),
+            )
+        changed = int(cur.rowcount or 0)
+    _record_operation("update_contact", key, "success" if changed else "skipped", "改号 %s" % (value or "（清空）"))
+    return {"ok": True, "contact_key": key, "phone": value, "changed": changed, **contact_stats()}
+
+
+def contact_stats() -> Dict[str, Any]:
+    with _DB_LOCK, _connect() as conn:
+        total = conn.execute("select count(*) from whatsapp_contacts").fetchone()[0]
+        with_phone = conn.execute("select count(*) from whatsapp_contacts where phone is not null and phone != ''").fetchone()[0]
+    return {"total": int(total), "with_phone": int(with_phone)}
+
+
+def export_contacts() -> List[Dict[str, Any]]:
+    with _DB_LOCK, _connect() as conn:
+        rows = conn.execute(
+            "select display_name, phone, first_name, last_name, username, source, updated_at from whatsapp_contacts "
+            "order by (phone is null or phone = '') asc, updated_at desc"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 
 
 def list_operations(*, limit: int = 50, offset: int = 0, keyword: str = "") -> Dict[str, Any]:
