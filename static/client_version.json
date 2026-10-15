@@ -1,7 +1,7 @@
 {
-  "version": "2.0.142",
-  "build": 437,
-  "applied_at": "2026-10-15T08:26:02+08:00",
-  "note": "2.0.142: contacts list gets a manual WeChat-ID editor and a live ratio. Every row now carries a 「改号」 button that opens a modal prefilled with the current id; saving (or clearing) posts POST /api/native-wechat/contacts/update and refreshes the row plus the new 「已取号 X / Y（Z%）」 chip next to 同步通讯录 (fed by with_wx_no on GET /contacts). The search row gets an inline 全部 / 已有微信号 / 没微信号 dropdown (has_wx=all|yes|no) that reloads page 1 and combines with the keyword. Also repairs the dropdown + chip labels an ASCII-encoded patch had written as '??', and the manual-edit gate accepts phone-style ids while rejecting a nickname/too-short value with a readable Chinese message instead of question marks.",
-  "bundle_sha256": "a29cc35a6bc47bc93cd9abee8e7cbc302635c6e48ea11549e279014020e87d08"
+  "version": "2.0.143",
+  "build": 438,
+  "applied_at": "2026-10-15T12:15:00+08:00",
+  "note": "2.0.143: shanjian template picking rework + contacts 群发 fix + WhatsApp dependency false alarm fix. Templates now have 场景 chips (资讯混剪 / 真人模板 / 数字人模板) that drive both the list request and the submit scene, plus two locally derived tag rows read from the template name - 色系 and 风格 - each chip showing how many templates it matches, OR inside a group, AND across groups and with the keyword search. The 支持正文/不含正文 filter and the per-card layer chips are gone (production measured 110/110 templates across the three scenes carry all five layers, so they had no discriminating power, and body text is not a template property). Contacts bulk send now splits recipients into batches of 100 (the API caps a single request at 100 and answered 422, which the UI showed as 请求失败) with progress and a per-batch summary, one failed batch no longer stops the rest, and FastAPI validation errors render as readable text. WhatsApp status no longer claims 缺少依赖：pywinauto on machines where everything is installed - the dependency report never probed pywinauto, so WHATSAPP_REQUIRED_MODULES always counted it missing (and the 3-hourly auto-repair fired for nothing).",
+  "bundle_sha256": "641f25d2a5c43c46ae9fa3d0aad7adce644bc451398475308681ec67a144b7cf"
 }
