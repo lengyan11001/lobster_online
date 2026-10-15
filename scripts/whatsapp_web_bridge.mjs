@@ -13,7 +13,7 @@
 //   watch    --auth <dir> [--interval s]   stay connected: push live contact/chat/message events as JSONL
 //                                          on stdout and re-run the app-state delta every --interval seconds.
 //                                          This is the "official client" behaviour - no re-pairing, ever.
-//   logout   --auth <dir>                  remove the local link
+//   logout   --auth <dir> [--localonly]    unlink on WhatsApp (sock.logout) + remove the local session
 //   selftest                               offline check of the pure helpers
 // Global: --ledger <file> appends one JSON line per key node (state transitions + sync chunks) so a
 // later "why did it fail" only needs that file; the backend appends its own "cmd" lines (with the
@@ -505,11 +505,44 @@ async function cmdProfile(a) {
   setTimeout(() => process.exit(0), 200);
 }
 
+// 解绑：先让 WhatsApp 把这台设备从「已连接的设备」里删掉（sock.logout()，等价手机上的退出登录），
+// 再清掉本地会话。老实现只删本地文件 —— 手机上那台设备还挂着，看着像「解绑没生效」。
+// 远程没解掉就如实回报 remote=failed，让页面提示用户去手机上手动移除，不假装成功。
 async function cmdLogout(a) {
   const authDir = path.resolve(a.auth || ".");
-  try { fs.rmSync(authDir, { recursive: true, force: true }); } catch (err) { /* ignore */ }
-  appendLedger({ event: "web_logout", auth_dir: authDir });
-  emit({ ok: true, removed: authDir });
+  const creds = readCreds(authDir);
+  const localOnly = ["1", "true", "yes"].indexOf(String(a.localonly || "").toLowerCase()) >= 0;
+  let remote = "skipped";
+  let error = "";
+  if (creds.linked && !localOnly) {
+    let sock = null;
+    try {
+      ({ sock } = await openSocket(authDir));
+      const ready = await waitForOpen(sock, 20000);
+      if (!ready) throw new Error("连接没建立起来（可能已经被手机解绑）");
+      if (typeof sock.logout !== "function") throw new Error("这版 Baileys 没有 sock.logout()");
+      await sock.logout();
+      remote = "removed";
+      appendLedger({ event: "web_logout_remote", result: "removed", me: creds.me });
+    } catch (err) {
+      remote = "failed";
+      error = String((err && err.message) || err).slice(0, 200);
+      appendLedger({ event: "web_logout_remote", result: "failed", error });
+    } finally {
+      try { if (sock) sock.end(undefined); } catch (err) { /* ignore */ }
+    }
+  } else {
+    appendLedger({ event: "web_logout_remote", result: "skipped", reason: localOnly ? "local_only" : "no_local_creds" });
+  }
+  let localRemoved = false;
+  try {
+    fs.rmSync(authDir, { recursive: true, force: true });
+    localRemoved = true;
+  } catch (err) {
+    if (!error) error = String((err && err.message) || err).slice(0, 200);
+  }
+  appendLedger({ event: "web_logout", remote, local_removed: localRemoved, error });
+  emit({ ok: true, remote, local_removed: localRemoved, error, removed: authDir, me: creds.me });
   process.exit(0);
 }
 

@@ -31,8 +31,8 @@
       <section class="pwa-panel active" data-pwa-panel="overview">
         <div class="pwa-card">
           <div class="pwa-card-head"><div><h3>WhatsApp 绑定（扫码）</h3><div class="pwa-muted">手机 WhatsApp → 设置 → 已连接的设备 → 连接设备。扫一次即可：之后新好友 / 新会话 / 新消息由常驻增量同步，不需要再扫。</div></div><span class="pwa-meta" id="personalWhatsappWebState">检查中…</span></div>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappWebLoginBtn">扫码绑定</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappWebSyncBtn">同步通讯录</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappWebExportBtn">导出 CSV</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappWebLogoutBtn">解绑</button></div>
-          <div id="personalWhatsappWebQrWrap" style="display:none;text-align:center;"><img id="personalWhatsappWebQrImg" alt="WhatsApp 扫码绑定" style="width:220px;height:220px;background:#fff;border-radius:8px;"><div class="pwa-meta">手机 WhatsApp → 设置 → 已连接的设备 → 连接设备</div></div>
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappWebLoginBtn">扫码绑定</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappWebSyncBtn">同步通讯录</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappWebExportBtn">导出 CSV</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappWebLogoutBtn">解绑设备</button></div>
+          <div id="personalWhatsappWebQrWrap" style="display:none;text-align:center;"><img id="personalWhatsappWebQrImg" alt="WhatsApp 扫码绑定" style="width:220px;height:220px;background:#fff;border-radius:8px;"><div class="pwa-meta">手机 WhatsApp → 设置 → 已连接的设备 → 连接设备</div><div class="pwa-meta">解绑：点上面的「解绑设备」会同时把这台设备从手机列表里移除；也可以直接在手机上移除，效果一样。</div></div>
           <div id="personalWhatsappWebInfo" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;"></div>
         </div>
         <div class="pwa-card" id="personalWhatsappDepsWarn" style="display:none;">

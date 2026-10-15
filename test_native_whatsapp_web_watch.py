@@ -154,3 +154,76 @@ def test_watch_defaults_to_stopped(isolated_watch_state):
     assert status["state"] == "stopped"
     assert status["interval_seconds"] == engine.WATCH_DEFAULT_INTERVAL
     assert status["auth_dir"].endswith("whatsapp_web" + "\\" + "pc") or "whatsapp_web" in status["auth_dir"]
+
+
+def test_web_logout_unlinks_remotely_and_reports(isolated_watch_state, monkeypatch):
+    """解绑要真的通知 WhatsApp（sock.logout），不是只删本地文件。"""
+    calls = {}
+
+    def fake_bridge(argv, *, timeout=120, record=True):
+        calls["argv"] = argv
+        return {"ok": True, "remote": "removed", "local_removed": True, "error": ""}
+
+    monkeypatch.setattr(engine, "_run_bridge", fake_bridge)
+    result = engine.web_logout()
+
+    assert calls["argv"][0] == "logout"
+    assert result["remote"] == "removed"
+    assert "已解绑" in result["message"]
+    assert "手机上" in result["message"]
+    events = [item["event"] for item in _events(isolated_watch_state)]
+    assert "web_logout" in events
+
+
+def test_web_logout_tells_the_user_to_unlink_on_the_phone_when_remote_fails(isolated_watch_state, monkeypatch):
+    """远程没解掉就如实说，不许假装成功。"""
+    monkeypatch.setattr(
+        engine, "_run_bridge",
+        lambda argv, **kwargs: {"ok": True, "remote": "failed", "local_removed": True, "error": "Connection Closed"},
+    )
+    result = engine.web_logout()
+
+    assert result["remote"] == "failed"
+    assert "没解除成功" in result["message"]
+    assert "已连接的设备" in result["message"]
+    operations = engine.list_operations(limit=5)
+    assert operations["items"][0]["status"] == "skipped"
+    assert "手动移除" in operations["items"][0]["message"]
+
+
+def test_web_logout_without_local_creds_points_at_the_phone(isolated_watch_state, monkeypatch):
+    monkeypatch.setattr(
+        engine, "_run_bridge",
+        lambda argv, **kwargs: {"ok": True, "remote": "skipped", "local_removed": True, "error": ""},
+    )
+    result = engine.web_logout()
+
+    assert result["remote"] == "skipped"
+    assert "手动移除" in result["message"]
+
+
+def test_web_logout_stops_the_resident_watch_first(isolated_watch_state, monkeypatch):
+    """解绑前必须先停常驻，否则它拿着会话继续连着，远程解绑会被它抢。"""
+    class FakeProc:
+        stdout = None
+        terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+    proc = FakeProc()
+    engine._WEB_WATCH["proc"] = proc
+    engine._WEB_WATCH["state"] = "ready"
+    monkeypatch.setattr(
+        engine, "_run_bridge",
+        lambda argv, **kwargs: {"ok": True, "remote": "removed", "local_removed": True, "error": ""},
+    )
+
+    engine.web_logout()
+
+    assert proc.terminated is True
+    assert engine._WEB_WATCH["proc"] is None
+    assert engine.web_watch_status()["running"] is False

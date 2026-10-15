@@ -2040,7 +2040,15 @@ def web_login_start() -> Dict[str, Any]:
 
 
 def web_logout() -> Dict[str, Any]:
+    """解绑：先让 WhatsApp 把这台设备从「已连接的设备」里移除（sock.logout()，等价手机上的退出登录），
+    再清掉本地会话。
+
+    老实现只删本地文件，手机上那台设备还挂着 —— 看着就是「解绑没生效」。现在远程没解掉会如实回报，
+    页面照实提示「请到手机上手动移除」，不再假装成功。
+    """
     global _WEB_LOGIN_PROC
+    if web_watch_status().get("running"):
+        web_watch_stop()
     with _WEB_LOGIN_LOCK:
         if _WEB_LOGIN_PROC is not None and _WEB_LOGIN_PROC.poll() is None:
             try:
@@ -2048,13 +2056,36 @@ def web_logout() -> Dict[str, Any]:
             except Exception:
                 pass
         _WEB_LOGIN_PROC = None
-    result = _run_bridge(["logout", "--auth", str(WEB_AUTH_DIR)], timeout=60)
+    result = _run_bridge(["logout", "--auth", str(WEB_AUTH_DIR)], timeout=90)
+    remote = str(result.get("remote") or "skipped")
+    local_removed = bool(result.get("local_removed"))
+    error = str(result.get("error") or "")
+    if remote == "removed":
+        message = "已解绑：手机上「已连接的设备」里这台设备会被移除；下次要用请重新扫码（扫一次即可）"
+    elif remote == "failed":
+        message = (
+            "本机会话已清空，但手机端没解除成功（%s）。"
+            "请在手机 WhatsApp → 设置 → 已连接的设备 里手动移除这台设备" % (error or "原因未知")
+        )
+    else:
+        message = (
+            "本地已经没有可解绑的会话（已清空）。"
+            "如果手机上还显示这台设备，请在手机 WhatsApp → 设置 → 已连接的设备 里手动移除"
+        )
     try:
         WEB_LOGIN_STATE.unlink(missing_ok=True)
     except Exception:
         pass
-    _record_operation("web_logout", "", "success", "已解除 WhatsApp Web 绑定")
-    return result
+    payload = {
+        "ok": True,
+        "remote": remote,
+        "local_removed": local_removed,
+        "error": error,
+        "message": message,
+    }
+    _append_protocol("web_logout", remote=remote, local_removed=local_removed, error=error)
+    _record_operation("web_logout", "", "success" if remote == "removed" else "skipped", message, payload)
+    return payload
 
 
 def web_sync_contacts(*, timeout: int = 180, resume: bool = True) -> Dict[str, Any]:
