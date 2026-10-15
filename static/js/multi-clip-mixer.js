@@ -11,6 +11,7 @@
     templates: [],
     templateCatalog: [],
     templateCatalogProvider: '',
+    templateCategory: 'all',
     selectedTemplate: null,
     shanjianTemplateDetail: null,
     shanjianTemplateDetailId: '',
@@ -982,6 +983,7 @@
     var randomTemplate = currentClipMode() === 'random' && (($('mcmRandomTemplateSwitch') || {}).checked);
     var choiceArea = $('mcmTemplateChoiceArea');
     if (choiceArea) choiceArea.hidden = randomTemplate;
+    syncTemplateCategoryUI();
     grid.innerHTML = randomTemplate ? '' : state.templates.map(function(item) {
       var selected = state.selectedTemplate && String(state.selectedTemplate.id) === String(item.id);
       var cover = templateImage(item);
@@ -992,7 +994,8 @@
           ? '<video src="' + escapeHtml(demo) + '" muted playsinline preload="metadata"></video>'
           : '<span class="mcm-template-placeholder">暂无样片</span>');
       return '<button type="button" class="mcm-template-card' + (selected ? ' is-selected' : '') + '" data-template-id="' + escapeHtml(item.id) + '" title="双击预览模板">'
-        + media + '<span>' + escapeHtml(item.name || '未命名模板') + '</span></button>';
+        + media + '<span>' + escapeHtml(item.name || '未命名模板') + '</span>'
+        + templateLayerBadges(item) + '</button>';
     }).join('');
     if ($('mcmTemplatePicked')) $('mcmTemplatePicked').textContent = randomTemplate ? '每条随机选择' : (state.selectedTemplate ? ('已选：' + (state.selectedTemplate.name || '剪辑模板')) : '还未选择');
     if ($('mcmTemplateMoreBtn')) $('mcmTemplateMoreBtn').hidden = true;
@@ -1402,9 +1405,58 @@
     return state.overlayTexts;
   }
 
+  function templateLayers(item) {
+    var layers = (item || {}).layers;
+    return (layers && typeof layers === 'object') ? layers : null;
+  }
+
+  function templateLayerBadges(item) {
+    var layers = templateLayers(item);
+    if (!layers || !layers.ok) return '';
+    var pairs = [['header', '标题'], ['subtitle', '字幕'], ['figure', '人物'], ['ip', '形象'], ['background', '背景']];
+    var html = pairs.filter(function(pair) { return !!layers[pair[0]]; }).map(function(pair) {
+      return '<span class="mcm-template-badge">' + pair[1] + '</span>';
+    }).join('');
+    return html ? '<span class="mcm-template-badges">' + html + '</span>' : '';
+  }
+
+  // 2026-10-15: 闪剪模板分类——all / 支持正文 / 不含正文（依据服务端返回的 layers）
+  function templateMatchesCategory(item, category) {
+    var cat = String(category || 'all');
+    if (cat === 'all') return true;
+    var layers = templateLayers(item);
+    if (!layers || !layers.ok) return false;
+    if (cat === 'body') return !!layers.supports_body;
+    if (cat === 'no_body') return !layers.supports_body;
+    return true;
+  }
+
+  function syncTemplateCategoryUI() {
+    var row = $('mcmTemplateCategories');
+    if (!row) return;
+    var isShanjian = currentTemplateProvider() === 'shanjian';
+    row.hidden = !isShanjian;
+    if (!isShanjian) return;
+    var category = String(state.templateCategory || 'all');
+    Array.prototype.forEach.call(row.querySelectorAll('[data-mcm-template-category]'), function(btn) {
+      var active = String(btn.getAttribute('data-mcm-template-category')) === category;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+    var hint = $('mcmTemplateCategoryHint');
+    if (hint) {
+      hint.textContent = category === 'all'
+        ? ''
+        : ('已筛选 ' + state.templates.length + ' / ' + state.templateCatalog.length + ' 个模板');
+    }
+  }
+
   function filterTemplates() {
     var search = String((($('mcmTemplateSearch') || {}).value || '')).trim().toLowerCase();
+    // 分类只对闪剪模板生效（本地模板没有 layers）
+    var category = currentTemplateProvider() === 'shanjian' ? String(state.templateCategory || 'all') : 'all';
     state.templates = state.templateCatalog.filter(function(item) {
+      if (!templateMatchesCategory(item, category)) return false;
       if (!search) return true;
       var tags = Array.isArray(item.tags) ? item.tags.join(' ') : '';
       return [item.name, item.description, item.id, tags].join(' ').toLowerCase().indexOf(search) >= 0;
@@ -1960,6 +2012,12 @@
     if ($('mcmTemplateSearch')) $('mcmTemplateSearch').addEventListener('input', function() {
       clearTimeout(searchTimer);
       searchTimer = setTimeout(filterTemplates, 200);
+    });
+    if ($('mcmTemplateCategories')) $('mcmTemplateCategories').addEventListener('click', function(event) {
+      var btn = event.target.closest('[data-mcm-template-category]');
+      if (!btn) return;
+      state.templateCategory = String(btn.getAttribute('data-mcm-template-category') || 'all');
+      filterTemplates();
     });
     if ($('mcmTemplateMoreBtn')) $('mcmTemplateMoreBtn').addEventListener('click', function() {
       loadTemplates(false).catch(function(error) { showMessage(error.message, true); });

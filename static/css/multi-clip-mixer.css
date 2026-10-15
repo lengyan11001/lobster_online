@@ -222,3 +222,55 @@
   .mcm-modal-actions span { display: none; }
   #mcmPreviewSegmentBtn { grid-column: 1 / -1; }
 }
+
+/* 2026-10-15: 闪剪模板分类——按模板自带的图层（layers/subports_body）筛选 */
+.mcm-template-categories {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 10px;
+}
+
+.mcm-template-categories[hidden] {
+  display: none;
+}
+
+.mcm-template-category {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid #dbe3ef;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mcm-template-category.is-active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.mcm-template-category-hint {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.mcm-template-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.mcm-template-badge {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  font-size: 11px;
+  line-height: 16px;
+}
