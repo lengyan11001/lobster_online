@@ -1573,6 +1573,8 @@ var LOBSTER_HIDDEN_VIEWS = {
   'ai-3d-model': true,
   'openclaw-skill-chat': true,
   'personal-whatsapp': true
+,
+  'personal-telegram': true
 };
 var _restoringDashboardView = false;
 var _suppressNextHashApply = false;

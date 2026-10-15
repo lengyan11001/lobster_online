@@ -58,6 +58,13 @@
     cache: 'reload'
   });
 
+  window.registerLobsterView('personal-telegram', {
+    html: '/static/views/personal-telegram.html?v=20261015-personal-telegram-p0',
+    scripts: '/static/js/personal-telegram.js?v=20261015-personal-telegram-p0',
+    init: 'initPersonalTelegramView',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('douyin-information-desk', {
     html: '/static/views/douyin-information-desk.html?v=20261011-douyin-tikhub-search',
     css: '/static/css/douyin-information-desk.css?v=20261011-douyin-tikhub-search',

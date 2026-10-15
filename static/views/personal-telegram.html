@@ -1,0 +1,117 @@
+<section id="content-personal-telegram" class="content-block">
+  <div class="pwa-page">
+    <style>
+      .pwa-page{min-height:calc(100vh - 72px);padding:18px;background:radial-gradient(circle at 10% 0,rgba(34,158,217,.16),transparent 34%),linear-gradient(135deg,#eaf6fd 0%,#f8fbfd 48%,#eef1f6 100%);color:#12212b}.pwa-shell{max-width:1320px;margin:0 auto}.pwa-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}.pwa-kicker{margin:0 0 5px;color:#1a6f9c;font-size:12px;font-weight:900;letter-spacing:.12em;text-transform:uppercase}.pwa-title{margin:0;font-size:26px;font-weight:950;letter-spacing:-.025em}.pwa-sub{margin:7px 0 0;color:#5f7079;font-size:13px;line-height:1.6}.pwa-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.pwa-msg{display:none;margin:13px 0 0;border:1px solid rgba(15,118,110,.2);border-radius:14px;padding:10px 12px;background:rgba(255,255,255,.75);color:#0f766e;white-space:pre-wrap}.pwa-msg.err{color:#b42318;border-color:rgba(180,35,24,.2);background:rgba(255,242,240,.88)}.pwa-status{display:grid;grid-template-columns:repeat(5,minmax(130px,1fr));gap:9px;margin-top:14px}.pwa-stat{border:1px solid rgba(20,72,102,.13);border-radius:16px;padding:11px 12px;background:rgba(255,255,255,.77);box-shadow:0 12px 30px rgba(24,60,88,.06)}.pwa-stat span{display:block;color:#72858f;font-size:11px}.pwa-stat strong{display:block;margin-top:4px;font-size:15px;word-break:break-all}.pwa-tabs{display:flex;gap:7px;margin:15px 0 12px;padding:5px;border:1px solid rgba(20,72,102,.12);border-radius:17px;background:rgba(255,255,255,.62);overflow-x:auto}.pwa-tab{border:0;border-radius:12px;padding:9px 15px;background:transparent;color:#5d7280;font-weight:900;white-space:nowrap;cursor:pointer}.pwa-tab.active{background:#1a6f9c;color:#fff;box-shadow:0 9px 24px rgba(26,111,156,.2)}.pwa-panel{display:none}.pwa-panel.active{display:block}.pwa-grid{display:grid;grid-template-columns:minmax(300px,.86fr) minmax(480px,1.45fr);gap:12px;align-items:start}.pwa-card{min-width:0;border:1px solid rgba(20,72,102,.13);border-radius:20px;background:rgba(255,255,255,.82);box-shadow:0 18px 44px rgba(24,60,88,.07);padding:15px;backdrop-filter:blur(14px)}.pwa-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:11px}.pwa-card h3{margin:0;font-size:16px;font-weight:950}.pwa-muted{color:#68787f;font-size:12px;line-height:1.55}.pwa-input,.pwa-textarea,.pwa-select{width:100%;box-sizing:border-box;border:1px solid rgba(20,72,102,.17);border-radius:12px;background:#fff;color:#12212b;font:inherit;outline:none}.pwa-input,.pwa-select{height:39px;padding:0 11px}.pwa-textarea{min-height:102px;padding:10px 11px;resize:vertical;line-height:1.55}.pwa-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.pwa-field{display:grid;gap:5px}.pwa-field.full{grid-column:1/-1}.pwa-field label{font-size:12px;font-weight:850;color:#48606d}.pwa-list{display:grid;gap:8px;max-height:570px;overflow:auto;padding-right:2px}.pwa-item{border:1px solid rgba(20,72,102,.12);border-radius:15px;background:rgba(255,255,255,.82);padding:10px;cursor:pointer}.pwa-item:hover,.pwa-item.active{border-color:#1a6f9c;box-shadow:0 0 0 2px rgba(26,111,156,.09)}.pwa-item-title{font-weight:900;word-break:break-word}.pwa-meta{margin-top:4px;color:#6b7d86;font-size:12px;line-height:1.45;word-break:break-word}.pwa-badge{display:inline-flex;align-items:center;border-radius:999px;padding:3px 7px;background:#e7f3fa;color:#1a6f9c;font-size:11px;font-weight:900}.pwa-message-list{display:flex;flex-direction:column;gap:9px;min-height:260px;max-height:480px;overflow:auto;padding:8px 2px}.pwa-bubble{max-width:82%;border-radius:15px;padding:9px 11px;line-height:1.5;white-space:pre-wrap;word-break:break-word}.pwa-bubble.inbound{align-self:flex-start;background:#fff;border:1px solid rgba(20,72,102,.13)}.pwa-bubble.outbound{align-self:flex-end;background:#d7ecf8}.pwa-bubble.unknown{align-self:center;background:#f2f4f5;color:#66766e}.pwa-toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:10px}.pwa-pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:10px;color:#6b7d86;font-size:12px;flex-wrap:wrap}.pwa-empty{border:1px dashed rgba(20,72,102,.18);border-radius:14px;padding:28px 12px;text-align:center;color:#77878f}.pwa-record{border-left:3px solid #86a2b0;padding:7px 10px;background:rgba(255,255,255,.68);border-radius:0 12px 12px 0}.pwa-record.failed{border-left-color:#d44b3e}.pwa-run-items{display:grid;gap:8px;margin-top:10px}.pwa-btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.pwa-chip{display:inline-flex;flex:0 0 auto;align-items:center;white-space:nowrap;border-radius:999px;padding:4px 10px;background:rgba(26,111,156,.12);color:#1a6f9c;font-size:12px;font-weight:900}
+      .pwa-chip.warn{background:rgba(245,158,11,.16);color:#9a5b06}
+      .pwa-chip.bad{background:rgba(244,63,94,.12);color:#be123c}
+      .pwa-table-wrap{overflow:auto;border-radius:14px}
+      .pwa-table{width:100%;border-collapse:collapse;font-size:13px}
+      .pwa-table th,.pwa-table td{padding:9px 8px;border-bottom:1px solid rgba(20,72,102,.1);text-align:left;vertical-align:top;word-break:break-word}
+      .pwa-table th{color:#48606d;font-size:12px}
+      .ptg-step{border:1px solid rgba(20,72,102,.14);border-radius:15px;padding:11px 12px;background:rgba(255,255,255,.7)}
+      .ptg-step.active{border-color:#1a6f9c;box-shadow:0 0 0 2px rgba(26,111,156,.1)}
+      @media(max-width:900px){.pwa-status{grid-template-columns:repeat(2,minmax(0,1fr))}.pwa-grid{grid-template-columns:1fr}.pwa-fields{grid-template-columns:1fr}.pwa-page{padding:12px}.pwa-card{padding:13px}}
+    </style>
+    <div class="pwa-shell">
+      <header class="pwa-head">
+        <div><p class="pwa-kicker">Desktop Telegram</p><h2 class="pwa-title">个人 Telegram 助手</h2><p class="pwa-sub">用你自己的 Telegram 号登录一次（手机号 + 验证码 + 两步验证），之后读通讯录（含手机号）、会话和历史消息。当前版本是 P0 骨架：登录链路已就位，只读同步按 P2 接入。</p></div>
+        <div class="pwa-actions"><button type="button" class="btn btn-ghost btn-sm" id="personalTelegramRefreshBtn">刷新状态</button><button type="button" class="btn btn-ghost btn-sm" id="personalTelegramDepsBtn">检查依赖</button></div>
+      </header>
+      <div id="personalTelegramError" class="pwa-msg"></div>
+      <div id="personalTelegramStatus" class="pwa-status"></div>
+      <nav class="pwa-tabs" id="personalTelegramTabs">
+        <button class="pwa-tab active" data-pwa-tab="overview">状态</button><button class="pwa-tab" data-pwa-tab="chats">会话</button><button class="pwa-tab" data-pwa-tab="contacts">通讯录</button><button class="pwa-tab" data-pwa-tab="friends">加好友</button><button class="pwa-tab" data-pwa-tab="settings">接管设置</button><button class="pwa-tab" data-pwa-tab="records">执行记录</button>
+      </nav>
+
+      <section class="pwa-panel active" data-pwa-panel="overview">
+        <div class="pwa-grid">
+          <div class="pwa-card">
+            <div class="pwa-card-head"><div><h3>绑定你的 Telegram 号</h3><div class="pwa-muted">Telegram 不是扫码：手机号 → 验证码 →（开了两步验证才要）密码。登一次就把 session 落在本机，重启不用再登。</div></div><span class="pwa-meta" id="personalTelegramLoginState">未登录</span></div>
+
+            <div class="ptg-step" id="personalTelegramStepPhone">
+              <label class="pwa-field"><span class="pwa-muted">手机号（国际格式，例如 +8613800000000）</span><input id="personalTelegramPhone" class="pwa-input" placeholder="+8613800000000" autocomplete="off"></label>
+              <div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalTelegramLoginStartBtn">开始登录</button><button class="btn btn-ghost btn-sm" type="button" id="personalTelegramLoginCancelBtn">取消</button><span class="pwa-meta" id="personalTelegramPhoneHint">先在手机 Telegram 上保持在线，验证码会发到 App 里</span></div>
+            </div>
+
+            <div class="ptg-step" id="personalTelegramStepCode">
+              <label class="pwa-field"><span class="pwa-muted">验证码</span><input id="personalTelegramCode" class="pwa-input" placeholder="Telegram App 里收到的 5 位数字" autocomplete="off" inputmode="numeric"></label>
+              <div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalTelegramCodeBtn">提交验证码</button><span class="pwa-meta" id="personalTelegramCodeHint">找不到验证码？看 Telegram App 里「Telegram」这个官方对话</span></div>
+            </div>
+
+            <div class="ptg-step" id="personalTelegramStepPassword">
+              <label class="pwa-field"><span class="pwa-muted">两步验证密码（2FA）</span><input id="personalTelegramPassword" class="pwa-input" type="password" placeholder="账号设置里的两步验证密码" autocomplete="off"></label>
+              <div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalTelegramPasswordBtn">提交 2FA 密码</button><span class="pwa-meta">没开两步验证的号不会走到这一步</span></div>
+            </div>
+
+            <div class="pwa-btn-row"><button class="btn btn-ghost btn-sm" type="button" id="personalTelegramLogoutBtn">解除绑定（删本地 session）</button></div>
+            <div id="personalTelegramMeInfo" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;"></div>
+          </div>
+
+          <div class="pwa-card" id="personalTelegramDepsCard">
+            <div class="pwa-card-head"><div><h3>运行依赖</h3><div class="pwa-muted" id="personalTelegramDepsText">检查中…</div></div><div class="pwa-btn-row"><button class="btn btn-ghost btn-sm" type="button" id="personalTelegramCopyDiag">复制诊断信息</button></div></div>
+            <div id="personalTelegramDepsDetail" style="font-size:0.78rem;line-height:1.7;color:#3f5a66;white-space:pre-wrap;"></div>
+            <div class="pwa-muted" style="margin-top:8px;">P0 不依赖 telethon 也能打开页面；只有 P2 只读同步必须装 telethon（桥接脚本 + telethon 两样齐了才算 read_ready）。</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="pwa-panel" data-pwa-panel="chats">
+        <div class="pwa-card">
+          <div class="pwa-card-head"><div><h3>会话（协议直连）</h3><div class="pwa-muted">走 MTProto 读会话列表和历史，不点界面。P2 接入；现在这张表是空的，接口已经通。</div></div><span class="pwa-meta" id="personalTelegramChatState">未加载</span></div>
+          <div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalTelegramSyncChatsBtn">同步会话（P2）</button><button class="btn btn-ghost btn-sm" type="button" id="personalTelegramLoadChatsBtn">读本地会话表</button></div>
+          <div class="pwa-toolbar" style="margin-top:10px;"><input id="personalTelegramChatSearch" class="pwa-input" placeholder="搜索会话（名称）" style="flex:1;min-width:180px"></div>
+          <div id="personalTelegramChatList" class="pwa-list"><div class="pwa-empty">还没有同步数据</div></div>
+          <div id="personalTelegramMessageList" class="pwa-message-list"><div class="pwa-muted">点会话读取该会话的本地消息</div></div>
+        </div>
+      </section>
+
+      <section class="pwa-panel" data-pwa-panel="contacts">
+        <div class="pwa-card">
+          <div class="pwa-card-head"><div><h3>通讯录（含手机号）</h3><div class="pwa-muted">这是走用户协议而不是 Bot API 的唯一理由：Bot 拿不到你的通讯录和手机号。P2 接入。</div></div><span class="pwa-meta" id="personalTelegramContactState">未加载</span></div>
+          <div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalTelegramSyncContactsBtn">同步通讯录（P2）</button><button class="btn btn-ghost btn-sm" type="button" id="personalTelegramLoadContactsBtn">读本地通讯录</button></div>
+          <div class="pwa-toolbar" style="margin-top:10px;"><input id="personalTelegramContactSearch" class="pwa-input" placeholder="搜索姓名 / 手机号" style="flex:1;min-width:180px"></div>
+          <div id="personalTelegramContactList" class="pwa-list"><div class="pwa-empty">还没有同步数据</div></div>
+        </div>
+      </section>
+
+      <section class="pwa-panel" data-pwa-panel="friends">
+        <div class="pwa-card">
+          <div class="pwa-card-head"><div><h3>加好友 / 导入通讯录</h3><div class="pwa-muted">P4 接入，且只在只读链路验完之后才做。</div></div><span class="pwa-chip warn">P4 未接入</span></div>
+          <div class="pwa-muted">Telegram 侧的对应动作是 <code>contacts.ImportContacts</code>（把手机号批量导入成联系人）。风控口径：沿用 WhatsApp 的 45 秒间隔 / 日限 30，且新号不进队列。这一档在规划稿里排最后，理由是它是唯一会触发平台风控的动作。</div>
+        </div>
+      </section>
+
+      <section class="pwa-panel" data-pwa-panel="settings">
+        <div class="pwa-card">
+          <div class="pwa-card-head"><div><h3>接管设置</h3><div class="pwa-muted">api_id / api_hash 属于凭据：只落本机 <code>data/native_telegram/config.json</code>，接口不回吐 api_hash 明文，也绝不进 git / OTA 包。</div></div><span class="pwa-meta" id="personalTelegramConfigState">未加载</span></div>
+          <div class="pwa-fields">
+            <label class="pwa-field"><span class="pwa-muted">api_id</span><input id="personalTelegramApiId" class="pwa-input" placeholder="my.telegram.org/apps 给的数字" autocomplete="off"></label>
+            <label class="pwa-field"><span class="pwa-muted">api_hash</span><input id="personalTelegramApiHash" class="pwa-input" placeholder="留空 = 不修改已保存的值" autocomplete="off"></label>
+            <label class="pwa-field"><span class="pwa-muted">手机号</span><input id="personalTelegramConfigPhone" class="pwa-input" placeholder="+8613800000000" autocomplete="off"></label>
+            <label class="pwa-field"><span class="pwa-muted">代理（可选，socks5://host:port）</span><input id="personalTelegramProxy" class="pwa-input" placeholder="留空 = 直连" autocomplete="off"></label>
+            <label class="pwa-field"><span class="pwa-muted">自动回复轮询间隔(秒)</span><input id="personalTelegramInterval" class="pwa-input" type="number" min="1" max="300" value="15"></label>
+            <label class="pwa-field"><span class="pwa-muted">每轮最多处理未读</span><input id="personalTelegramMaxUnread" class="pwa-input" type="number" min="1" max="100" value="50"></label>
+            <label class="pwa-field full"><span class="pwa-muted">回复口径 / 接管说明</span><textarea id="personalTelegramInstruction" class="pwa-textarea" placeholder="P4 自动回复时使用的口径"></textarea></label>
+          </div>
+          <div class="pwa-btn-row"><button class="btn btn-primary btn-sm" type="button" id="personalTelegramSaveConfigBtn">保存设置</button><button class="btn btn-ghost btn-sm" type="button" id="personalTelegramLoadConfigBtn">重新读取</button></div>
+          <div class="pwa-muted" style="margin-top:10px;">限速口径（照 WhatsApp 最严那份，P3 生效）：单条随机间隔 12-28 秒、每 3 条停 120 秒、日上限 80；加好友 45 秒间隔、日限 30；白名单只发已有会话。</div>
+        </div>
+      </section>
+
+      <section class="pwa-panel" data-pwa-panel="records">
+        <div class="pwa-grid">
+          <div class="pwa-card">
+            <div class="pwa-card-head"><div><h3>执行记录</h3><div class="pwa-muted">每次动作一条，失败带原因</div></div><span class="pwa-meta" id="personalTelegramRecordState">未加载</span></div>
+            <div class="pwa-btn-row"><button class="btn btn-ghost btn-sm" type="button" id="personalTelegramLoadRecordsBtn">刷新记录</button></div>
+            <div id="personalTelegramRecordList" class="pwa-list" style="margin-top:10px;max-height:460px;"><div class="pwa-empty">暂无记录</div></div>
+          </div>
+          <div class="pwa-card">
+            <div class="pwa-card-head"><div><h3>协议关键节点</h3><div class="pwa-muted" id="personalTelegramProtocolPath">logs/telegram_protocol.jsonl</div></div><span class="pwa-meta" id="personalTelegramProtocolState">未加载</span></div>
+            <div class="pwa-btn-row"><button class="btn btn-ghost btn-sm" type="button" id="personalTelegramLoadProtocolBtn">刷新协议日志</button></div>
+            <div id="personalTelegramProtocolList" class="pwa-list" style="margin-top:10px;max-height:460px;"><div class="pwa-empty">暂无日志</div></div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</section>

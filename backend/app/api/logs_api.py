@@ -46,6 +46,9 @@ _LOG_CANDIDATES = [
     # 个人 WhatsApp 接管（桌面版 UIA）：诊断包里带上，才能看清"没识别到窗口"到底是哪种情况
     "logs/native_whatsapp.jsonl",
     "logs/native_whatsapp.jsonl.1",
+    # 个人 Telegram（用户协议）：登录/同步的关键节点，诊断包里要能看见"卡在哪一步"
+    "logs/telegram_protocol.jsonl",
+    "logs/native_telegram.jsonl",
     # 客户端界面「跳闪/跳动」取证（鼠标一动就闪的现场），随诊断包一起带走
     "logs/client_ui_trace.jsonl",
     "logs/client_ui_trace.jsonl.1",

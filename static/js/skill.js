@@ -1606,6 +1606,18 @@ window._openPersonalWhatsappView = function() {
   try { location.hash = 'personal-whatsapp'; } catch (e2) {}
 };
 
+window._openPersonalTelegramView = function() {
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('personal-telegram').catch(function(error) {
+      console.error('Failed to open personal Telegram view:', error);
+      alert('个人 Telegram 助手页面加载失败，请刷新页面后重试。' + (error && error.message ? '\n' + error.message : ''));
+    });
+    try { location.hash = 'personal-telegram'; } catch (e1) {}
+    return;
+  }
+  try { location.hash = 'personal-telegram'; } catch (e2) {}
+};
+
 window._openHiddenWorkspaceView = function(view) {
   var target = String(view || '').trim();
   if (!target) return;
@@ -1672,6 +1684,10 @@ window._openHiddenWorkspaceView = function(view) {
   }
   if (target === 'personal-whatsapp' && typeof window._openPersonalWhatsappView === 'function') {
     window._openPersonalWhatsappView();
+    return;
+  }
+  if (target === 'personal-telegram' && typeof window._openPersonalTelegramView === 'function') {
+    window._openPersonalTelegramView();
     return;
   }
   if (target === 'local-bestseller' && typeof window.initLocalBestsellerView === 'function') {
@@ -1835,6 +1851,19 @@ function _renderPersonalWhatsappCard(pkg) {
     '<div class="card-desc">' + escapeHtml(desc) + '</div>' +
     '<div class="card-tags"><span class="tag">WhatsApp</span><span class="tag">桌面客户端</span><span class="tag">工作流</span></div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm personal-whatsapp-entry-btn">打开控制台</button></div></div>';
+}
+
+function _renderPersonalTelegramCard(pkg) {
+  pkg = pkg || {};
+  var title = _skillStoreBrandSafeText((pkg.name && String(pkg.name).trim()) || '个人 Telegram 助手');
+  var desc = _skillStoreBrandSafeText((pkg.description && String(pkg.description).trim()) ||
+    '用你自己的 Telegram 号读通讯录（含手机号）、会话和历史消息，并在工作流里做私聊接管。');
+  return '<div class="skill-store-card personal-telegram-card" data-skill-package-id="' + escapeAttr(pkg.id || 'personal_telegram_assistant') + '" style="cursor:pointer;border-color:rgba(34,158,217,0.42);background:linear-gradient(135deg,rgba(34,158,217,0.10),transparent);">' +
+    '<div class="card-label">个人号 <span class="badge-installed">可配置</span></div>' +
+    '<div class="card-value">' + escapeHtml(title) + '</div>' +
+    '<div class="card-desc">' + escapeHtml(desc) + '</div>' +
+    '<div class="card-tags"><span class="tag">Telegram</span><span class="tag">用户协议</span><span class="tag">工作流</span></div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm personal-telegram-entry-btn">打开控制台</button></div></div>';
 }
 
 function _renderXSkillCard() {
@@ -2905,6 +2934,7 @@ var _SKILL_STORE_SIMPLE_COPY_BY_ID = {
   'comfly_ecommerce_detail_skill': { title: '电商详情页', desc: '生成商品套图' },
   'hifly_digital_human_skill': { title: '数字人口播', desc: '生成数字人口播' },
   'personal_whatsapp_assistant': { title: '个人whatapp助手', desc: '管理本机 WhatsApp 接管' },
+  'personal_telegram_assistant': { title: '个人 Telegram 助手', desc: '用个人号读通讯录与会话' },
   'openclaw_weixin_channel': { title: '微信助手', desc: '微信通道授权' },
   'wewrite_official_account_skill': { title: '公众号文章', desc: '写文、配图、推草稿' },
   'openclaw_memory_skill': { title: '个人记忆', desc: '管理本机资料' },
@@ -2985,6 +3015,7 @@ var _SKILL_STORE_ICON_BY_ID = {
   'comfly_ecommerce_detail_skill': { icon: 'bag', tone: 'rose' },
   'hifly_digital_human_skill': { icon: 'user', tone: 'violet' },
   'personal_whatsapp_assistant': { icon: 'message', tone: 'green' },
+  'personal_telegram_assistant': { icon: 'message', tone: 'indigo' },
   'openclaw_weixin_channel': { icon: 'message', tone: 'green' },
   'wewrite_official_account_skill': { icon: 'file', tone: 'coral' },
   'openclaw_memory_skill': { icon: 'database', tone: 'teal' },
@@ -3014,6 +3045,7 @@ var _SKILL_STORE_ICON_BY_CLASS = {
   'ecommerce-detail-card': _SKILL_STORE_ICON_BY_ID.comfly_ecommerce_detail_skill,
   'hifly-digital-human-card': _SKILL_STORE_ICON_BY_ID.hifly_digital_human_skill,
   'personal-whatsapp-card': _SKILL_STORE_ICON_BY_ID.personal_whatsapp_assistant,
+  'personal-telegram-card': _SKILL_STORE_ICON_BY_ID.personal_telegram_assistant,
   'openclaw-weixin-card': _SKILL_STORE_ICON_BY_ID.openclaw_weixin_channel,
   'wechat-article-card': _SKILL_STORE_ICON_BY_ID.wewrite_official_account_skill,
   'openclaw-memory-card': _SKILL_STORE_ICON_BY_ID.openclaw_memory_skill,
@@ -3038,6 +3070,7 @@ var _SKILL_STORE_ICON_PATTERNS = [
   [/电商上架|电商详情|上架套图|详情图|SKU/i, _SKILL_STORE_ICON_BY_ID.comfly_ecommerce_detail_skill],
   [/必火数字人|数字人/i, _SKILL_STORE_ICON_BY_ID.hifly_digital_human_skill],
   [/个人whatapp|个人whatsapp|桌面版 whatsapp/i, _SKILL_STORE_ICON_BY_ID.personal_whatsapp_assistant],
+  [/个人 telegram|个人telegram|telegram 助手/i, _SKILL_STORE_ICON_BY_ID.personal_telegram_assistant],
   [/微信助手|openclaw.*微信|weixin/i, _SKILL_STORE_ICON_BY_ID.openclaw_weixin_channel],
   [/公众号|微信文章|微信推文|wewrite/i, _SKILL_STORE_ICON_BY_ID.wewrite_official_account_skill],
   [/个人记忆|memory/i, _SKILL_STORE_ICON_BY_ID.openclaw_memory_skill],
@@ -3242,6 +3275,7 @@ function _decorateSkillImageCards(el) {
     'meta-social-card',
   'twilio-whatsapp-card',
     'personal-whatsapp-card',
+    'personal-telegram-card',
     'messenger-reply-card',
     'wecom-reply-card',
     'ecommerce-publish-card',
@@ -3327,6 +3361,14 @@ function loadSkillStore() {
       var shanjianPkg = pkgById('shanjian_smart_clip');
       var multiClipPkg = pkgById('multi_clip_mixer_skill');
       var personalWhatsappPkg = pkgById('personal_whatsapp_assistant');
+      var personalTelegramPkg = pkgById('personal_telegram_assistant') || {
+        id: 'personal_telegram_assistant',
+        name: '个人 Telegram 助手',
+        description: '用你自己的 Telegram 号读通讯录（含手机号）、会话和历史消息，并在工作流里做私聊接管。',
+        type: 'builtin',
+        status: 'available',
+        tags: ['Telegram', '用户协议', '工作流']
+      };
       var metaPkg = pkgById('meta_social');
       var cutcliPkg = pkgById('cutcli_template_skill') || pkgById('cutcli_templates_skill') || pkgById('cutcli_template_studio');
       var legacyIpContentPkg = pkgById('ip_content_daily_skill');
@@ -3366,6 +3408,7 @@ function loadSkillStore() {
         if (shanjianPkg) html += _renderShanjianSmartClipCard();
         if (multiClipPkg) html += _renderMultiClipMixerCard();
         if (personalWhatsappPkg) html += _renderPersonalWhatsappCard(personalWhatsappPkg);
+        if (personalTelegramPkg) html += _renderPersonalTelegramCard(personalTelegramPkg);
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (metaPkg) html += _renderMetaSocialCard({ pkg: metaPkg });
         if (ipContentOralPkg) html += _renderIpContentStudioCard(ipContentOralPkg, !!(isSkillAdmin && ipContentOralPkg.store_visibility === 'debug'), 'oral');
@@ -3422,6 +3465,7 @@ function loadSkillStore() {
           if (pkg.id === 'shanjian_smart_clip') return '';
           if (pkg.id === 'multi_clip_mixer_skill') return '';
           if (pkg.id === 'personal_whatsapp_assistant') return '';
+          if (pkg.id === 'personal_telegram_assistant') return '';
           if (pkg.id === 'cutcli_template_skill') return '';
           if (pkg.id === 'cutcli_templates_skill') return '';
           if (pkg.id === 'cutcli_template_studio') return '';
@@ -3532,6 +3576,7 @@ function loadSkillStore() {
         _bindMessengerCardEntry();
         _bindTwilioWhatsappCardEntry();
         _bindPersonalWhatsappCardEntry();
+        _bindPersonalTelegramCardEntry();
         _bindYoutubePublishCardEntry();
         _bindMetaSocialCardEntry();
         _bindSeedanceTvcCardEntry();
@@ -3687,6 +3732,26 @@ function _bindTwilioWhatsappCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       _openTwilioWhatsappConfigView();
+    });
+  });
+}
+
+function _bindPersonalTelegramCardEntry() {
+  document.querySelectorAll('.personal-telegram-card, [data-skill-package-id="personal_telegram_assistant"]').forEach(function(card) {
+    if (card.dataset.personalTelegramEntryBound === '1') return;
+    card.dataset.personalTelegramEntryBound = '1';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openPersonalTelegramView === 'function') window._openPersonalTelegramView();
+    });
+  });
+  document.querySelectorAll('.personal-telegram-entry-btn').forEach(function(btn) {
+    if (btn.dataset.personalTelegramEntryBound === '1') return;
+    btn.dataset.personalTelegramEntryBound = '1';
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openPersonalTelegramView === 'function') window._openPersonalTelegramView();
     });
   });
 }
