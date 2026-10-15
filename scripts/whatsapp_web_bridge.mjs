@@ -95,13 +95,15 @@ async function openSocket(authDir, opts = {}) {
     auth: state,
     version,
     printQRInTerminal: false,
-    syncFullHistory: false,
+    // 必须开：通讯录是随首次 history/app-state 同步下来的（关了就永远 0 个）
+    syncFullHistory: true,
     markOnlineOnConnect: false,
+    shouldSyncHistoryMessage: () => true,
     browser: ["Lobster", "Chrome", "1.0"],
     ...opts.socket,
   });
   sock.ev.on("creds.update", saveCreds);
-  return { sock, DisconnectReason };
+  return { sock, DisconnectReason, baileys };
 }
 
 async function cmdLogin(a) {
@@ -176,16 +178,28 @@ async function cmdContacts(a) {
   sock.ev.on("messaging-history.set", (payload) => {
     ((payload && payload.contacts) || []).forEach(remember);
   });
+  const waitMs = Math.max(8000, Number(a.wait || 45000));
+  const settleMs = Math.max(4000, Number(a.settle || 12000));
+  let lastEvent = 0;
+  const bump = () => { lastEvent = Date.now(); };
+  sock.ev.on("contacts.upsert", bump);
+  sock.ev.on("contacts.update", bump);
+  sock.ev.on("messaging-history.set", (payload) => {
+    bump();
+    const list = ((payload && payload.contacts) || []).length;
+    if (list) process.stderr.write("history contacts=" + list + "\n");
+  });
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => resolve(), timeout);
-    sock.ev.on("connection.update", (update) => {
-      if (update && update.connection === "open") {
-        setTimeout(() => { clearTimeout(timer); resolve(); }, Math.max(1500, Number(a.settle || 4000)));
+    const started = Date.now();
+    const timer = setTimeout(() => resolve(), waitMs);
+    const idle = setInterval(() => {
+      if (lastEvent && Date.now() - lastEvent >= settleMs && Date.now() - started > 6000) {
+        clearTimeout(timer); clearInterval(idle); resolve();
       }
-    });
+    }, 1000);
     sock.ev.on("connection.update", (update) => {
       if (update && update.connection === "close") {
-        clearTimeout(timer);
+        clearTimeout(timer); clearInterval(idle);
         reject(new Error("连接被关闭（会话可能已在手机上退出登录）"));
       }
     });
@@ -207,9 +221,121 @@ async function cmdLogout(a) {
   process.exit(0);
 }
 
+async function cmdChats(a) {
+  const authDir = path.resolve(a.auth || ".");
+  const waitMs = Math.max(6000, Number(a.wait || 20000));
+  const { sock } = await openSocket(authDir);
+  const chats = new Map();
+  const remember = (row) => {
+    if (!row || !row.id) return;
+    const id = String(row.id);
+    if (id.includes("broadcast") || id.includes("newsletter")) return;
+    const prev = chats.get(id) || {};
+    chats.set(id, {
+      ...prev,
+      id,
+      name: String(row.name || row.subject || prev.name || "").trim(),
+      group: id.includes("@g.us"),
+      unread: Number(row.unreadCount || prev.unread || 0),
+      ts: Number(row.conversationTimestamp || prev.ts || 0),
+      phone: digitsFromJid(id),
+    });
+  };
+  sock.ev.on("chats.upsert", (rows) => (rows || []).forEach(remember));
+  sock.ev.on("chats.update", (rows) => (rows || []).forEach(remember));
+  sock.ev.on("messaging-history.set", (payload) => ((payload && payload.chats) || []).forEach(remember));
+  await new Promise((resolve) => setTimeout(resolve, waitMs));
+  try { Object.values((sock.store || {}).chats || {}).forEach(remember); } catch (err) { /* ignore */ }
+  const rows = Array.from(chats.values()).sort((x, y) => (y.ts || 0) - (x.ts || 0));
+  process.stdout.write(JSON.stringify({ ok: true, count: rows.length, chats: rows }) + "\n");
+  try { sock.end(undefined); } catch (err) { /* ignore */ }
+  setTimeout(() => process.exit(0), 200);
+}
+
+async function cmdMessages(a) {
+  const authDir = path.resolve(a.auth || ".");
+  const jid = String(a.chat || a.jid || "").trim();
+  const limit = Math.max(1, Math.min(Number(a.limit || 50), 500));
+  if (!jid) { process.stdout.write(JSON.stringify({ ok: false, error: "需要 --chat <jid>" }) + "\n"); process.exit(0); }
+  const { sock } = await openSocket(authDir);
+  const rows = [];
+  sock.ev.on("messages.upsert", (payload) => {
+    ((payload && payload.messages) || []).forEach((msg) => {
+      const key = msg.key || {};
+      rows.push({
+        id: String(key.id || ""),
+        chat: String(key.remoteJid || ""),
+        from_me: !!key.fromMe,
+        ts: Number(msg.messageTimestamp || 0),
+        text: extractText(msg) ,
+      });
+    });
+  });
+  await new Promise((resolve) => setTimeout(resolve, Math.max(4000, Number(a.wait || 12000))));
+  const filtered = rows.filter((row) => row.chat === jid).slice(-limit);
+  process.stdout.write(JSON.stringify({ ok: true, chat: jid, count: filtered.length, messages: filtered }) + "\n");
+  try { sock.end(undefined); } catch (err) { /* ignore */ }
+  setTimeout(() => process.exit(0), 200);
+}
+
+function extractText(msg) {
+  try {
+    const m = msg.message || {};
+    const inner = m.ephemeralMessage ? m.ephemeralMessage.message : m;
+    return String(
+      inner.conversation ||
+      (inner.extendedTextMessage && inner.extendedTextMessage.text) ||
+      (inner.imageMessage && (inner.imageMessage.caption || "[图片]")) ||
+      (inner.videoMessage && (inner.videoMessage.caption || "[视频]")) ||
+      (inner.audioMessage && "[语音]") ||
+      (inner.documentMessage && (inner.documentMessage.fileName || "[文件]")) ||
+      ""
+    ).trim();
+  } catch (err) { return ""; }
+}
+
+async function cmdGroups(a) {
+  const authDir = path.resolve(a.auth || ".");
+  const { sock } = await openSocket(authDir);
+  const rows = new Map();
+  const remember = (row) => {
+    if (!row || !row.id || !String(row.id).includes("@g.us")) return;
+    const prev = rows.get(String(row.id)) || {};
+    rows.set(String(row.id), { ...prev, id: String(row.id), name: String(row.subject || row.name || prev.name || "").trim() });
+  };
+  sock.ev.on("groups.upsert", (rowsIn) => (rowsIn || []).forEach(remember));
+  sock.ev.on("groups.update", (rowsIn) => (rowsIn || []).forEach(remember));
+  await new Promise((resolve) => setTimeout(resolve, Math.max(4000, Number(a.wait || 12000))));
+  try { Object.values((sock.store || {}).chats || {}).forEach((row) => { if (String(row.id || "").includes("@g.us")) remember(row); }); } catch (err) { /* ignore */ }
+  const list = Array.from(rows.values());
+  process.stdout.write(JSON.stringify({ ok: true, count: list.length, groups: list }) + "\n");
+  try { sock.end(undefined); } catch (err) { /* ignore */ }
+  setTimeout(() => process.exit(0), 200);
+}
+
+async function cmdCheck(a) {
+  const authDir = path.resolve(a.auth || ".");
+  const raw = String(a.phones || "").split(/[,\s]+/).filter(Boolean);
+  if (!raw.length) { process.stdout.write(JSON.stringify({ ok: false, error: "需要 --phones a,b" }) + "\n"); process.exit(0); }
+  const { sock } = await openSocket(authDir);
+  const onWa = (sock.onWhatsApp || (baileys && baileys.onWhatsApp) || (() => Promise.resolve([]))).bind(sock);
+  const out = [];
+  for (const phone of raw.slice(0, 100)) {
+    const digits = String(phone).replace(/[^0-9]/g, "");
+    if (!digits) { out.push({ input: phone, exists: false }); continue; }
+    try {
+      const res = await onWa.call(sock, digits + "@s.whatsapp.net");
+      out.push({ input: phone, digits, exists: !!(res && res[0] && res[0].exists), jid: (res && res[0] && res[0].jid) || "" });
+    } catch (err) { out.push({ input: phone, digits, exists: false, error: String(err.message || err).slice(0, 80) }); }
+  }
+  process.stdout.write(JSON.stringify({ ok: true, count: out.length, results: out }) + "\n");
+  try { sock.end(undefined); } catch (err) { /* ignore */ }
+  setTimeout(() => process.exit(0), 200);
+}
+
 const a = args();
 const cmd = (a._[0] || "").toLowerCase();
-const run = { login: cmdLogin, status: cmdStatus, contacts: cmdContacts, logout: cmdLogout }[cmd];
+const run = { login: cmdLogin, status: cmdStatus, contacts: cmdContacts, logout: cmdLogout, chats: cmdChats, messages: cmdMessages, groups: cmdGroups, check: cmdCheck }[cmd];
 if (!run) {
   process.stdout.write(JSON.stringify({ ok: false, error: "未知命令：" + cmd }) + "\n");
   process.exit(2);
