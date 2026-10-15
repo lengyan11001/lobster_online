@@ -1,7 +1,7 @@
 {
-  "version": "2.0.143",
-  "build": 438,
-  "applied_at": "2026-10-15T12:15:00+08:00",
-  "note": "2.0.143: shanjian template picking rework + contacts 群发 fix + WhatsApp dependency false alarm fix. Templates now have 场景 chips (资讯混剪 / 真人模板 / 数字人模板) that drive both the list request and the submit scene, plus two locally derived tag rows read from the template name - 色系 and 风格 - each chip showing how many templates it matches, OR inside a group, AND across groups and with the keyword search. The 支持正文/不含正文 filter and the per-card layer chips are gone (production measured 110/110 templates across the three scenes carry all five layers, so they had no discriminating power, and body text is not a template property). Contacts bulk send now splits recipients into batches of 100 (the API caps a single request at 100 and answered 422, which the UI showed as 请求失败) with progress and a per-batch summary, one failed batch no longer stops the rest, and FastAPI validation errors render as readable text. WhatsApp status no longer claims 缺少依赖：pywinauto on machines where everything is installed - the dependency report never probed pywinauto, so WHATSAPP_REQUIRED_MODULES always counted it missing (and the 3-hourly auto-repair fired for nothing).",
-  "bundle_sha256": "641f25d2a5c43c46ae9fa3d0aad7adce644bc451398475308681ec67a144b7cf"
+  "version": "2.0.144",
+  "build": 439,
+  "applied_at": "2026-10-15T13:48:44+08:00",
+  "note": "2.0.144: multi-clip mixer output control + ratio-aware shanjian template cards. 成片设置 now offers 成片比例 (竖屏 9:16 default / 横屏 16:9) and 画面填充 (铺满裁切 default / 模糊铺底 / 完整黑边): the ratio decides the base merge canvas (9:16 -> 720x1280, 16:9 -> 1280x720, empty keeps following the first clip) and is sent to the shanjian template list so the picker only shows templates of that ratio - realMan and virtualman have 10 16:9 templates each, newsMixCutting has none and now says so instead of showing an empty grid. Fill modes: cover = scale-to-cover + crop, blur = the same frame blurred behind a fitted foreground, fit = the old letterbox. Template cards are now drawn in each template's own ratio (9:16 tall, 16:9 wide, 1:1 square, 3/4 fallback) instead of one portrait box. Also keeps 2.0.143: scene + 色系/风格 name tags, the dropped 支持正文 filter, contacts bulk-send batching (100 per request) and the WhatsApp dependency false-alarm fix.",
+  "bundle_sha256": "8ba1c7682cdca74ac31e1e6cba0612b3933e49532c9bfeee4bfcb226134dcbdd"
 }
