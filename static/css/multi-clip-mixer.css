@@ -259,20 +259,53 @@
   font-size: 12px;
 }
 
-.mcm-template-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 4px;
+/* 图层标签：盖在封面底部的小浮层。必须用 .mcm-template-card x 提权，
+   否则会被上面的 .mcm-template-card span { display:block; padding:8px } 盖掉（之前就是这样变成竖排的）。 */
+.mcm-template-card .mcm-template-thumb {
+  position: relative;
+  display: block;
+  padding: 0;
+  overflow: hidden;
 }
 
-.mcm-template-badge {
-  padding: 1px 6px;
-  border-radius: 6px;
-  background: rgba(37, 99, 235, 0.1);
-  color: #2563eb;
-  font-size: 11px;
+.mcm-template-card .mcm-template-name {
+  display: block;
+  overflow: hidden;
+  padding: 8px;
+  color: #30394b;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcm-template-card .mcm-template-badges {
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  bottom: 5px;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.mcm-template-card .mcm-template-badge {
+  display: inline-block;
+  flex: 0 0 auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.62);
+  color: #fff;
+  font-size: 10px;
   line-height: 16px;
+  white-space: nowrap;
+}
+
+.mcm-template-card .mcm-template-badge.is-more {
+  background: rgba(15, 23, 42, 0.42);
 }
 
 .mcm-template-category-label {

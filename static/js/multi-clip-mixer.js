@@ -996,8 +996,8 @@
           ? '<video src="' + escapeHtml(demo) + '" muted playsinline preload="metadata"></video>'
           : '<span class="mcm-template-placeholder">暂无样片</span>');
       return '<button type="button" class="mcm-template-card' + (selected ? ' is-selected' : '') + '" data-template-id="' + escapeHtml(item.id) + '" title="双击预览模板">'
-        + media + '<span>' + escapeHtml(item.name || '未命名模板') + '</span>'
-        + templateLayerBadges(item) + '</button>';
+        + '<span class="mcm-template-thumb">' + media + templateLayerBadges(item) + '</span>'
+        + '<span class="mcm-template-name">' + escapeHtml(item.name || '未命名模板') + '</span></button>';
     }).join('');
     if ($('mcmTemplatePicked')) $('mcmTemplatePicked').textContent = randomTemplate ? '每条随机选择' : (state.selectedTemplate ? ('已选：' + (state.selectedTemplate.name || '剪辑模板')) : '还未选择');
     if ($('mcmTemplateMoreBtn')) $('mcmTemplateMoreBtn').hidden = true;
@@ -1484,14 +1484,17 @@
     return (layers && typeof layers === 'object') ? layers : null;
   }
 
+  // 2026-10-15 v2: 封面上的小浮层（最多 3 个 + 余额），不占卡片高度
   function templateLayerBadges(item) {
     var layers = templateLayers(item);
     if (!layers || !layers.ok) return '';
     var pairs = [['header', '标题'], ['subtitle', '字幕'], ['figure', '人物'], ['ip', '形象'], ['background', '背景']];
-    var html = pairs.filter(function(pair) { return !!layers[pair[0]]; }).map(function(pair) {
+    var chips = pairs.filter(function(pair) { return !!layers[pair[0]]; }).map(function(pair) {
       return '<span class="mcm-template-badge">' + pair[1] + '</span>';
-    }).join('');
-    return html ? '<span class="mcm-template-badges">' + html + '</span>' : '';
+    });
+    if (!chips.length) return '';
+    var extra = chips.length > 3 ? '<span class="mcm-template-badge is-more">+' + (chips.length - 3) + '</span>' : '';
+    return '<span class="mcm-template-badges">' + chips.slice(0, 3).join('') + extra + '</span>';
   }
 
   // 2026-10-15: 闪剪模板分类——all / 支持正文 / 不含正文（依据服务端返回的 layers）
