@@ -10,6 +10,9 @@
 //   groups   --auth <dir> [--wait ms]      group list
 //   check    --auth <dir> --phones a,b     onWhatsApp lookups
 //   send     --auth <dir> --to <jid> --text <s> [--image p | --file p] [--caption s]
+//   watch    --auth <dir> [--interval s]   stay connected: push live contact/chat/message events as JSONL
+//                                          on stdout and re-run the app-state delta every --interval seconds.
+//                                          This is the "official client" behaviour - no re-pairing, ever.
 //   logout   --auth <dir>                  remove the local link
 //   selftest                               offline check of the pure helpers
 // Global: --ledger <file> appends one JSON line per key node (state transitions + sync chunks) so a
@@ -676,6 +679,149 @@ async function cmdSend(a) {
   setTimeout(() => process.exit(0), 300);
 }
 
+function slimContact(row) {
+  if (!row || !row.id) return null;
+  return {
+    id: String(row.id),
+    name: String(row.name || "").trim(),
+    notify: String(row.notify || "").trim(),
+    verifiedName: String(row.verifiedName || "").trim(),
+    phoneNumber: String(row.phoneNumber || "").trim(),
+  };
+}
+
+function slimChat(row) {
+  if (!row || !row.id) return null;
+  const id = String(row.id);
+  return {
+    id,
+    name: String(row.name || row.subject || "").trim(),
+    group: id.includes("@g.us"),
+    unread: Number(row.unreadCount || 0),
+    ts: Number(row.conversationTimestamp || 0),
+  };
+}
+
+function slimMessage(msg) {
+  if (!msg || !msg.key) return null;
+  const key = msg.key;
+  return {
+    id: String(key.id || ""),
+    chat: String(key.remoteJid || ""),
+    from_me: !!key.fromMe,
+    ts: Number(msg.messageTimestamp || 0),
+    text: extractText(msg),
+  };
+}
+
+// 常驻监听：官方客户端就是这么干的 —— 保持一条长连接，服务端把联系人/会话/消息的变化推下来；
+// 重连时用 app-state 的版本游标（app-state-sync-version-*.json）只拉「上次之后」的增量。
+// 所以永远不需要重新扫码，只有 401（手机上解绑）才需要重扫一次。
+async function cmdWatch(a) {
+  const authDir = path.resolve(a.auth || ".");
+  const stateFile = a.state ? path.resolve(a.state) : "";
+  const intervalMs = Math.max(60000, Number(a.interval || 300) * 1000);
+  const creds = readCreds(authDir);
+  if (!creds.linked) {
+    emit({ ok: false, error: "还没有扫码绑定，请先在页面上扫码" });
+    process.exit(0);
+  }
+  const collections = ["critical_block", "critical_unblock_low", "regular", "regular_high", "regular_low"];
+  const COLLECTIONS = collections;
+  const line = (payload) => {
+    try { process.stdout.write(JSON.stringify({ at: Date.now(), ...payload }) + "\n"); } catch (err) { /* ignore */ }
+  };
+  let stopRequested = false;
+  const onStop = () => { stopRequested = true; appendLedger({ event: "watch_stop_signal" }); };
+  process.on("SIGINT", onStop);
+  process.on("SIGTERM", onStop);
+
+  emit({ ok: true, state: "watching", me: creds.me, interval_seconds: intervalMs / 1000 });
+  appendLedger({ event: "watch_start", interval_seconds: intervalMs / 1000, me: creds.me });
+
+  let attempt = 0;
+  while (!stopRequested) {
+    attempt += 1;
+    let sock = null;
+    try {
+      ({ sock } = await openSocket(authDir));
+    } catch (err) {
+      const message = String((err && err.message) || err).slice(0, 200);
+      appendLedger({ event: "watch_open_failed", attempt, error: message });
+      line({ event: "error", where: "open", error: message });
+      await sleepMs(3000);
+      continue;
+    }
+    let closed = "";
+    sock.ev.on("connection.update", (update) => {
+      if (!update) return;
+      if (update.connection === "open") {
+        writeState(stateFile, { state: "watching", qr: "", me: readCreds(authDir).me, attempt, at: Date.now() });
+        line({ event: "state", value: "open", attempt });
+      } else if (update.connection === "close") {
+        closed = connectionCode(update.lastDisconnect) || "closed";
+        appendLedger({ event: "watch_close", attempt, code: closed, reason: reasonText(update.lastDisconnect) });
+        line({ event: "state", value: "closed", code: closed, attempt });
+      }
+    });
+    sock.ev.on("contacts.upsert", (rows) => line({ event: "contacts_upsert", rows: (rows || []).map(slimContact).filter(Boolean) }));
+    sock.ev.on("contacts.update", (rows) => line({ event: "contacts_update", rows: (rows || []).map(slimContact).filter(Boolean) }));
+    sock.ev.on("chats.upsert", (rows) => line({ event: "chats_upsert", rows: (rows || []).map(slimChat).filter(Boolean) }));
+    sock.ev.on("chats.update", (rows) => line({ event: "chats_update", rows: (rows || []).map(slimChat).filter(Boolean) }));
+    sock.ev.on("groups.upsert", (rows) => line({ event: "groups_upsert", rows: (rows || []).map(slimChat).filter(Boolean) }));
+    sock.ev.on("groups.update", (rows) => line({ event: "groups_update", rows: (rows || []).map(slimChat).filter(Boolean) }));
+    sock.ev.on("messages.upsert", (payload) => {
+      const rows = (((payload || {}).messages) || []).map(slimMessage).filter(Boolean);
+      if (rows.length) line({ event: "messages_upsert", type: String((payload || {}).type || ""), rows });
+    });
+
+    const ready = await waitForOpen(sock, 20000);
+    appendLedger({ event: "watch_ready", attempt, ready });
+    line({ event: "state", value: ready ? "ready" : "not_ready", attempt });
+
+    if (ready) {
+      // 每次（重）连都先补一次增量：只拉上次版本之后的 patch
+      try {
+        await sock.resyncAppState(COLLECTIONS, false);
+        line({ event: "resync", reason: "connect", attempt });
+      } catch (err) {
+        line({ event: "resync_failed", reason: "connect", error: String((err && err.message) || err).slice(0, 160) });
+      }
+      // 之后按 interval 周期补增量（相当于官方客户端的后台同步节拍）
+      while (!stopRequested && !closed) {
+        const slice = 5000;
+        let waited = 0;
+        while (waited < intervalMs && !stopRequested && !closed) {
+          await sleepMs(Math.min(slice, intervalMs - waited));
+          waited += slice;
+          line({ event: "heartbeat", at: Date.now(), attempt });
+        }
+        if (stopRequested || closed) break;
+        try {
+          await sock.resyncAppState(COLLECTIONS, false);
+          line({ event: "resync", reason: "interval", attempt });
+        } catch (err) {
+          line({ event: "resync_failed", reason: "interval", error: String((err && err.message) || err).slice(0, 160) });
+          break;
+        }
+      }
+    }
+    try { sock.end(undefined); } catch (err) { /* ignore */ }
+    if (stopRequested) break;
+    if (String(closed) === "401") {
+      appendLedger({ event: "watch_logged_out" });
+      writeState(stateFile, { state: "logged_out", qr: "", me: {}, error: "设备已在手机上退出登录", at: Date.now() });
+      line({ event: "logged_out" });
+      break;
+    }
+    await sleepMs(Math.min(60000, 3000 * attempt));
+  }
+
+  appendLedger({ event: "watch_end", attempt });
+  emit({ ok: true, state: "stopped" });
+  process.exit(0);
+}
+
 // 离线自检：不连 WhatsApp，只跑纯函数（本地验证用）。
 function cmdSelftest() {
   const checks = [];
@@ -695,6 +841,10 @@ function cmdSelftest() {
   expect("sample_fields", sample.fields.includes("notify"), true);
   expect("sample_notify", sample.notify, "Ann");
   expect("sample_blank", sample.verifiedName, "");
+  expect("slim_contact", slimContact({ id: "8613800138000@s.whatsapp.net", notify: "Ann" }), { id: "8613800138000@s.whatsapp.net", name: "", notify: "Ann", verifiedName: "", phoneNumber: "" });
+  expect("slim_contact_null", slimContact({}), null);
+  expect("slim_chat_group", slimChat({ id: "120363000000000000@g.us", subject: "Team", unreadCount: 2 }), { id: "120363000000000000@g.us", name: "Team", group: true, unread: 2, ts: 0 });
+  expect("slim_message", slimMessage({ key: { id: "m1", remoteJid: "8613800138000@s.whatsapp.net", fromMe: true }, messageTimestamp: 5, message: { conversation: "hi" } }), { id: "m1", chat: "8613800138000@s.whatsapp.net", from_me: true, ts: 5, text: "hi" });
   const before = LEDGER;
   LEDGER = path.join(process.env.TEMP || "/tmp", "wa_bridge_selftest.jsonl");
   try { fs.rmSync(LEDGER, { force: true }); } catch (err) { /* ignore */ }
@@ -710,7 +860,7 @@ function cmdSelftest() {
 const a = args();
 LEDGER = a.ledger ? path.resolve(a.ledger) : "";
 const cmd = (a._[0] || "").toLowerCase();
-const run = { login: cmdLogin, status: cmdStatus, contacts: cmdContacts, profile: cmdProfile, logout: cmdLogout, chats: cmdChats, messages: cmdMessages, groups: cmdGroups, check: cmdCheck, send: cmdSend, selftest: cmdSelftest }[cmd];
+const run = { login: cmdLogin, status: cmdStatus, contacts: cmdContacts, watch: cmdWatch, profile: cmdProfile, logout: cmdLogout, chats: cmdChats, messages: cmdMessages, groups: cmdGroups, check: cmdCheck, send: cmdSend, selftest: cmdSelftest }[cmd];
 if (!run) {
   emit({ ok: false, error: "未知命令：" + cmd });
   process.exit(2);

@@ -5178,3 +5178,236 @@ def send_queue_summary(account_id: str = "") -> Dict[str, Any]:
         "next_action_at": control.get("next_action_at"),
         "last_error": control.get("last_error"),
     }
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-15（三）：协议常驻 —— 登录之后怎么接住「后面新加的好友」
+#
+# 官方客户端不是每次重登：它保持一条长连接，服务端把联系人/会话/消息的变化推下来；
+# 重连时用 app-state 的版本游标（app-state-sync-version-*.json）只拉上次之后的增量。
+# 这里照做：watch 常驻连接 -> 逐行 JSONL 事件 -> 落库 + 记账；只有 401（手机解绑）才要重新扫码。
+# ---------------------------------------------------------------------------
+
+WATCH_DEFAULT_INTERVAL = 300          # 每次增量同步的间隔（秒）
+_WEB_WATCH_LOCK = threading.RLock()
+_WEB_WATCH: Dict[str, Any] = {
+    "proc": None,
+    "reader": None,
+    "started_at": 0.0,
+    "interval": WATCH_DEFAULT_INTERVAL,
+    "state": "stopped",
+    "attempt": 0,
+    "lines": 0,
+    "contacts_new": 0,
+    "contacts_updated": 0,
+    "chats": 0,
+    "messages": 0,
+    "last_event": "",
+    "last_at": 0.0,
+    "last_error": "",
+    "logged_out": False,
+}
+
+
+def _watch_alive() -> bool:
+    proc = _WEB_WATCH.get("proc")
+    return bool(proc is not None and proc.poll() is None)
+
+
+def web_watch_status() -> Dict[str, Any]:
+    """常驻状态：是否在跑 / 已经收到多少条 / 最近一条事件是什么（查问题先看这个）。"""
+    with _WEB_WATCH_LOCK:
+        alive = _watch_alive()
+        return {
+            "ok": True,
+            "running": alive,
+            "state": _WEB_WATCH.get("state") or ("running" if alive else "stopped"),
+            "interval_seconds": int(_WEB_WATCH.get("interval") or WATCH_DEFAULT_INTERVAL),
+            "attempt": int(_WEB_WATCH.get("attempt") or 0),
+            "lines": int(_WEB_WATCH.get("lines") or 0),
+            "contacts_new": int(_WEB_WATCH.get("contacts_new") or 0),
+            "contacts_updated": int(_WEB_WATCH.get("contacts_updated") or 0),
+            "chats": int(_WEB_WATCH.get("chats") or 0),
+            "messages": int(_WEB_WATCH.get("messages") or 0),
+            "last_event": str(_WEB_WATCH.get("last_event") or ""),
+            "last_at": _WEB_WATCH.get("last_at") or 0,
+            "last_error": str(_WEB_WATCH.get("last_error") or ""),
+            "logged_out": bool(_WEB_WATCH.get("logged_out")),
+            "started_at": _WEB_WATCH.get("started_at") or 0,
+            "auth_dir": str(WEB_AUTH_DIR),
+        }
+
+
+def _contact_key_for(jid: str, phone: str, name: str) -> str:
+    username = ""
+    identity = username or phone or name or jid
+    return _stable_key("contact", identity) if identity else ""
+
+
+def _contact_row_exists(contact_key: str) -> bool:
+    if not contact_key:
+        return False
+    with _connect() as conn:
+        row = conn.execute(
+            "select 1 from whatsapp_contacts where account_id=? and contact_key=? limit 1",
+            (DEFAULT_ACCOUNT_ID, contact_key),
+        ).fetchone()
+    return bool(row)
+
+
+def _handle_watch_event(payload: Dict[str, Any]) -> None:
+    """常驻进程的每一行事件 -> 落库 + 记账（新好友/新会话/新消息都从这里进来）。"""
+    if not isinstance(payload, dict):
+        return
+    kind = str(payload.get("event") or "").strip()
+    with _WEB_WATCH_LOCK:
+        _WEB_WATCH["lines"] = int(_WEB_WATCH.get("lines") or 0) + 1
+        _WEB_WATCH["last_event"] = kind
+        _WEB_WATCH["last_at"] = time.time()
+        if kind == "state":
+            _WEB_WATCH["state"] = str(payload.get("value") or "")
+        if payload.get("attempt"):
+            _WEB_WATCH["attempt"] = int(payload.get("attempt") or 0)
+        if payload.get("error"):
+            _WEB_WATCH["last_error"] = str(payload.get("error"))[:200]
+        if kind == "logged_out":
+            _WEB_WATCH["state"] = "logged_out"
+            _WEB_WATCH["logged_out"] = True
+
+    if kind in {"contacts_upsert", "contacts_update"}:
+        new_count = 0
+        updated = 0
+        for row in payload.get("rows") or []:
+            data = row if isinstance(row, dict) else {}
+            jid = str(data.get("id") or "").strip()
+            if not jid:
+                continue
+            phone = _web_jid_digits(jid)
+            name = str(data.get("name") or data.get("notify") or data.get("verifiedName") or "").strip()
+            key = _contact_key_for(jid, phone, name)
+            existed = _contact_row_exists(key)
+            _persist_contact({
+                "display_name": name or phone or jid,
+                "phone": phone,
+                "source": "web_protocol_watch",
+                "jid": jid,
+            })
+            if existed:
+                updated += 1
+            else:
+                new_count += 1
+                _record_operation("contact_added", jid, "success", "协议常驻收到新联系人：%s" % (name or phone or jid))
+        if new_count or updated:
+            with _WEB_WATCH_LOCK:
+                _WEB_WATCH["contacts_new"] = int(_WEB_WATCH.get("contacts_new") or 0) + new_count
+                _WEB_WATCH["contacts_updated"] = int(_WEB_WATCH.get("contacts_updated") or 0) + updated
+            _append_protocol("contact_delta", kind=kind, new=new_count, updated=updated)
+        return
+
+    if kind in {"chats_upsert", "chats_update", "groups_upsert", "groups_update"}:
+        rows = [row for row in (payload.get("rows") or []) if isinstance(row, dict)]
+        saved = _persist_web_chats(rows)
+        if saved:
+            with _WEB_WATCH_LOCK:
+                _WEB_WATCH["chats"] = int(_WEB_WATCH.get("chats") or 0) + saved
+            _append_protocol("chat_delta", kind=kind, saved=saved)
+        return
+
+    if kind == "messages_upsert":
+        rows = [row for row in (payload.get("rows") or []) if isinstance(row, dict)]
+        saved = _persist_web_messages(rows)
+        if saved:
+            with _WEB_WATCH_LOCK:
+                _WEB_WATCH["messages"] = int(_WEB_WATCH.get("messages") or 0) + saved
+            _append_protocol("message_delta", saved=saved, dir=str(payload.get("type") or ""))
+        return
+
+    if kind in {"resync", "resync_failed", "heartbeat", "watch_start", "watch_end", "watch_ready"}:
+        _append_protocol("watch_" + kind, **{k: v for k, v in payload.items() if k not in {"event", "at"}})
+
+
+def _watch_reader(proc: Any) -> None:
+    try:
+        assert proc.stdout is not None
+        for raw in proc.stdout:
+            line = str(raw or "").strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+            _handle_watch_event(payload)
+    except Exception:
+        logging.getLogger(__name__).debug("whatsapp watch reader stopped", exc_info=True)
+    finally:
+        with _WEB_WATCH_LOCK:
+            _WEB_WATCH["proc"] = None
+            _WEB_WATCH["reader"] = None
+            if str(_WEB_WATCH.get("state") or "") != "logged_out":
+                _WEB_WATCH["state"] = "stopped"
+        _append_protocol("watch_reader_exit")
+
+
+def web_watch_start(interval: int = 0) -> Dict[str, Any]:
+    """起常驻（幂等）：已绑定的账号保持长连接接增量，新好友/新会话/新消息自动入库，不用重新扫码。"""
+    seconds = int(interval or 0) or int(WEB_WATCH.get("interval") or WATCH_DEFAULT_INTERVAL)
+    seconds = max(60, min(seconds, 3600))
+    creds = web_login_status()
+    if not creds.get("linked"):
+        raise RuntimeError("还没有扫码绑定，请先在页面上扫码")
+    with _WEB_WATCH_LOCK:
+        if _watch_alive():
+            _WEB_WATCH["interval"] = seconds
+            return web_watch_status()
+        WEB_LOGIN_STATE.parent.mkdir(parents=True, exist_ok=True)
+        proc = subprocess.Popen(
+            [
+                _node_exe(), str(WEB_BRIDGE_PATH), "watch",
+                "--auth", str(WEB_AUTH_DIR),
+                "--state", str(WEB_LOGIN_STATE),
+                "--ledger", str(PROTOCOL_LOG_PATH),
+                "--interval", str(seconds),
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
+        )
+        _WEB_WATCH.update({
+            "proc": proc,
+            "started_at": time.time(),
+            "interval": seconds,
+            "state": "starting",
+            "attempt": 0,
+            "lines": 0,
+            "contacts_new": 0,
+            "contacts_updated": 0,
+            "chats": 0,
+            "messages": 0,
+            "last_event": "",
+            "last_at": 0.0,
+            "last_error": "",
+            "logged_out": False,
+        })
+        reader = threading.Thread(target=_watch_reader, args=(proc,), name="lobster-whatsapp-watch", daemon=True)
+        _WEB_WATCH["reader"] = reader
+        reader.start()
+    _append_protocol("watch_launched", interval_seconds=seconds)
+    _record_operation("watch_start", "", "success", "协议常驻已启动（每 %d 秒补一次增量）" % seconds)
+    _append_log("whatsapp_watch_started", interval_seconds=seconds)
+    return web_watch_status()
+
+
+def web_watch_stop() -> Dict[str, Any]:
+    """停常驻（不影响绑定，下次想接增量再点一下就起来）。"""
+    with _WEB_WATCH_LOCK:
+        proc = _WEB_WATCH.get("proc")
+        _WEB_WATCH["proc"] = None
+        _WEB_WATCH["state"] = "stopped"
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.terminate()
+        except Exception:
+            logging.getLogger(__name__).debug("failed to stop whatsapp watch", exc_info=True)
+    _append_protocol("watch_stopped_by_user")
+    _record_operation("watch_stop", "", "success", "协议常驻已停止")
+    return web_watch_status()

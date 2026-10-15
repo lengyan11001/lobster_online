@@ -52,8 +52,8 @@
   });
 
   window.registerLobsterView('personal-whatsapp', {
-    html: '/static/views/personal-whatsapp.html?v=20261015-personal-whatsapp-protocol-v20',
-    scripts: '/static/js/personal-whatsapp.js?v=20261015-personal-whatsapp-protocol-v20',
+    html: '/static/views/personal-whatsapp.html?v=20261015-personal-whatsapp-watch-v21',
+    scripts: '/static/js/personal-whatsapp.js?v=20261015-personal-whatsapp-watch-v21',
     init: 'initPersonalWhatsappView',
     cache: 'reload'
   });

@@ -44,6 +44,7 @@
             <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><strong style="font-size:14px;">协议直连（读消息 / 群 / 校验 / 发送）</strong><span class="pwa-meta" id="personalWhatsappProtocolState">未加载</span></div>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;"><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoChatsBtn">刷新会话（协议）</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoGroupsBtn">刷新群聊（协议）</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoLogBtn">刷新协议日志</button><span class="pwa-meta" id="personalWhatsappProtoTarget">发送目标：未选择</span></div>
             <div class="pwa-toolbar"><input id="personalWhatsappProtoChatSearch" class="pwa-input" placeholder="搜索会话（名称 / jid）" style="flex:1;min-width:180px"></div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px;"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappProtoWatchToggleBtn">开启常驻（接新好友）</button><span class="pwa-meta" id="personalWhatsappProtoWatchState">常驻未开启</span></div>
             <div id="personalWhatsappProtoChatList" class="pwa-list"><div class="pwa-empty">点「刷新会话（协议）」读取（走协议，不再点界面）</div></div>
             <div id="personalWhatsappProtoMessageList" class="pwa-list"><div class="pwa-muted">点会话里的「读消息」把该会话的消息读进来</div></div>
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-top:12px;">

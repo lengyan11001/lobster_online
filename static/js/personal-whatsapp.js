@@ -743,6 +743,7 @@
       + '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;"><strong style="font-size:14px;">协议直连（读消息 / 群 / 校验 / 发送）</strong><span class="pwa-meta" id="personalWhatsappProtocolState">未加载</span></div>'
       + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:10px 0;"><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoChatsBtn">刷新会话（协议）</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoGroupsBtn">刷新群聊（协议）</button><button class="btn btn-ghost btn-sm" type="button" id="personalWhatsappProtoLogBtn">刷新协议日志</button><span class="pwa-meta" id="personalWhatsappProtoTarget">发送目标：未选择</span></div>'
       + '<div class="pwa-toolbar"><input id="personalWhatsappProtoChatSearch" class="pwa-input" placeholder="搜索会话（名称 / jid）" style="flex:1;min-width:180px"></div>'
+      + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px;"><button class="btn btn-primary btn-sm" type="button" id="personalWhatsappProtoWatchToggleBtn">开启常驻（接新好友）</button><span class="pwa-meta" id="personalWhatsappProtoWatchState">常驻未开启</span></div>'
       + '<div id="personalWhatsappProtoChatList" class="pwa-list"><div class="pwa-empty">点「刷新会话（协议）」读取（走协议，不再点界面）</div></div>'
       + '<div id="personalWhatsappProtoMessageList" class="pwa-list"><div class="pwa-muted">点会话里的「读消息」把该会话的消息读进来</div></div>'
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-top:12px;">'
@@ -783,6 +784,7 @@
     protoOn('personalWhatsappProtoChatsBtn', function () { loadProtoChats(true).catch(function (e) { setProtoState(e.message || '读取会话失败', true); }); });
     protoOn('personalWhatsappProtoGroupsBtn', function () { loadProtoGroups(true).catch(function (e) { setProtoState(e.message || '读取群聊失败', true); }); });
     protoOn('personalWhatsappProtoLogBtn', function () { loadProtocolLog().catch(function (e) { setProtoState(e.message || '读取日志失败', true); }); });
+    protoOn('personalWhatsappProtoWatchToggleBtn', function () { toggleProtoWatch().catch(function (e) { setProtoState(e.message || '常驻操作失败', true); }); });
     protoOn('personalWhatsappProtoCheckBtn', function () { runProtoCheck(); });
     protoOn('personalWhatsappProtoProfileBtn', function () { runProtoProfile(); });
     protoOn('personalWhatsappProtoSendSaveBtn', function () { saveProtoSendControl(); });
@@ -807,7 +809,35 @@
 
   function loadProtocolPanel() {
     ensureProtocolPanel();
-    return Promise.all([loadProtoChats(false), loadProtoSendPanel(), loadProtocolLog()]).then(function () {});
+    return Promise.all([loadProtoChats(false), loadProtoSendPanel(), loadProtocolLog(), loadProtoWatch()]).then(function () {});
+  }
+
+  // 常驻：登录之后接「后面新加的好友」——长连接 + 每次重连/每 N 秒按版本游标补增量，不需要重新扫码。
+  function loadProtoWatch() {
+    if (!$('personalWhatsappProtoWatchState')) return Promise.resolve();
+    return request('/api/native-whatsapp/web/watch').then(function (data) {
+      proto.watch = data || {};
+      var node = $('personalWhatsappProtoWatchState');
+      if (node) {
+        node.textContent = data.running
+          ? ('常驻中：新好友 ' + Number(data.contacts_new || 0) + ' · 新会话 ' + Number(data.chats || 0) + ' · 新消息 ' + Number(data.messages || 0) + (data.last_event ? (' · ' + data.last_event) : ''))
+          : (data.logged_out ? '常驻已停：手机解绑了，请重新扫码一次' : '常驻未开启（开启后新好友/新消息自动入库）');
+        node.style.color = data.running ? '' : '#8a6d3b';
+      }
+      var btn = $('personalWhatsappProtoWatchToggleBtn');
+      if (btn) btn.textContent = data.running ? '停止常驻' : '开启常驻（接新好友）';
+      return data;
+    }).catch(function (err) {
+      var node = $('personalWhatsappProtoWatchState');
+      if (node) node.textContent = err.message || '常驻状态读取失败';
+    });
+  }
+
+  function toggleProtoWatch() {
+    var start = !(proto.watch && proto.watch.running);
+    return request(start ? '/api/native-whatsapp/web/watch/start' : '/api/native-whatsapp/web/watch/stop', { method: 'POST', json: { account_id: ACCOUNT_ID } })
+      .then(function (data) { proto.watch = data || {}; return loadProtoWatch(); })
+      .then(function () { toastMessage(start ? '协议常驻已开启：新好友/新会话/新消息会自动入库' : '协议常驻已停止'); });
   }
 
   function loadProtoChats(refresh) {

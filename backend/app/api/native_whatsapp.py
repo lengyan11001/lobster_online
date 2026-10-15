@@ -831,3 +831,48 @@ async def native_whatsapp_web_send_stop(
         return {"ok": True, "control": control, "summary": engine.send_queue_summary(body.account_id)}
     except Exception as exc:
         raise _desktop_error(exc) from exc
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-15（三）：协议常驻（登录之后接「后面新加的好友」，不需要重新扫码）
+# ---------------------------------------------------------------------------
+
+
+class WhatsAppWebWatchBody(BaseModel):
+    account_id: str = Field(default=engine.DEFAULT_ACCOUNT_ID, min_length=1, max_length=160)
+    interval_seconds: int = Field(default=0, ge=0, le=3600)
+
+
+@router.get("/api/native-whatsapp/web/watch")
+async def native_whatsapp_web_watch_status(
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """常驻状态：在跑 / 收到多少新联系人、新会话、新消息 / 最近事件 / 是否被解绑。"""
+    del current_user
+    return await asyncio.to_thread(engine.web_watch_status)
+
+
+@router.post("/api/native-whatsapp/web/watch/start")
+async def native_whatsapp_web_watch_start(
+    body: WhatsAppWebWatchBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    _ensure_default_account(body.account_id)
+    del current_user
+    try:
+        return await asyncio.to_thread(engine.web_watch_start, body.interval_seconds)
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
+
+
+@router.post("/api/native-whatsapp/web/watch/stop")
+async def native_whatsapp_web_watch_stop(
+    body: WhatsAppWebWatchBody,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    _ensure_default_account(body.account_id)
+    del current_user
+    try:
+        return await asyncio.to_thread(engine.web_watch_stop)
+    except Exception as exc:
+        raise _desktop_error(exc) from exc
