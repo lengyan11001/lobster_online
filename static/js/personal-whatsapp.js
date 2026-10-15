@@ -255,6 +255,75 @@
   function renderMessages() { var host = $('personalWhatsappMessageList'); if (!host) return; host.innerHTML = state.messages.length ? state.messages.map(function(row) { var direction = ['inbound','outbound'].indexOf(row.direction) >= 0 ? row.direction : 'unknown'; return '<div class="pwa-bubble ' + direction + '">' + esc(row.content || '') + '</div>'; }).join('') : '<div class="pwa-empty">暂无消息，点击“打开并同步”读取桌面气泡</div>'; host.scrollTop = host.scrollHeight; }
 
   function loadContacts() { var meta=state.pages.contacts; return request('/api/native-whatsapp/contacts?' + query(meta)).then(function(data){state.contacts=Array.isArray(data.items)?data.items:[];meta.total=Number(data.total||0);renderContacts();}); }
+  var whatsappWebPoll = null;
+  function setWebState(text, isErr) { var n = $('personalWhatsappWebState'); if (!n) return; n.textContent = text; n.style.color = isErr ? '#c0392b' : ''; }
+  function renderWebQr(qr) {
+    var wrap = $('personalWhatsappWebQrWrap'); var img = $('personalWhatsappWebQrImg');
+    if (!wrap || !img) return;
+    if (!qr) { wrap.style.display = 'none'; img.removeAttribute('src'); return; }
+    img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=2&data=' + encodeURIComponent(qr);
+    wrap.style.display = 'block';
+  }
+  function loadWhatsappContactStats() {
+    if (!$('personalWhatsappContactStats')) return Promise.resolve();
+    return request('/api/native-whatsapp/contacts/stats').then(function (data) {
+      var node = $('personalWhatsappContactStats');
+      if (node) node.textContent = '已取号 ' + Number(data.with_phone || 0) + ' / ' + Number(data.total || 0);
+    }).catch(function () {});
+  }
+  function loadWhatsappWebState() {
+    if (!$('personalWhatsappWebState')) return Promise.resolve();
+    return request('/api/native-whatsapp/web/login').then(function (data) {
+      if (data.linked) {
+        var me = data.me || {};
+        setWebState('已绑定：' + (me.phone ? ('+' + me.phone) : (me.name || '设备已连接')), false);
+        renderWebQr('');
+        if (whatsappWebPoll) { clearInterval(whatsappWebPoll); whatsappWebPoll = null; }
+      } else if (data.qr) { setWebState('等待扫码…', false); renderWebQr(data.qr); }
+      else { setWebState('未绑定（点「扫码绑定」）', false); renderWebQr(''); }
+    }).catch(function (err) { setWebState(err.message || '状态读取失败', true); });
+  }
+  function startWhatsappWebLogin() {
+    setWebState('正在生成二维码…', false);
+    return request('/api/native-whatsapp/web/login', { method: 'POST' }).then(function (data) {
+      if (data.linked) return loadWhatsappWebState();
+      if (data.qr) { renderWebQr(data.qr); setWebState('等待扫码…', false); }
+      else { setWebState('正在启动绑定程序，稍等…', false); }
+      if (whatsappWebPoll) clearInterval(whatsappWebPoll);
+      whatsappWebPoll = setInterval(loadWhatsappWebState, 2500);
+      setTimeout(function () { if (whatsappWebPoll) { clearInterval(whatsappWebPoll); whatsappWebPoll = null; } }, 180000);
+    }).catch(function (err) { setWebState(err.message || '生成二维码失败', true); });
+  }
+  function syncWhatsappContactsViaProtocol() {
+    setWebState('正在走协议同步通讯录…', false);
+    return request('/api/native-whatsapp/web/contacts/sync', { method: 'POST' }).then(function (data) {
+      setWebState(data.message || ('同步完成：' + data.count + ' 个'), false);
+      return Promise.all([loadContacts(), loadWhatsappContactStats()]);
+    }).catch(function (err) { setWebState(err.message || '协议同步失败', true); });
+  }
+  function exportWhatsappContactsCsv() {
+    var rows = []; var offset = 0;
+    function next() {
+      return request('/api/native-whatsapp/contacts?limit=200&offset=' + offset).then(function (data) {
+        var items = data.items || [];
+        items.forEach(function (item) { rows.push([String(item.phone || ''), String(item.display_name || ''), String(item.username || ''), String(item.source || '')]); });
+        offset += items.length;
+        if (items.length && offset < Number(data.total || 0)) return next();
+        var csv = '﻿手机号,名字,@用户名,来源\n' + rows.map(function (r) { return r.map(function (c) { return '"' + String(c).replace(/"/g, '""') + '"'; }).join(','); }).join('\n');
+        var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a'); a.href = url; a.download = 'whatsapp-contacts.csv'; document.body.appendChild(a); a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); a.remove(); }, 800);
+        setWebState('已导出 ' + rows.length + ' 条到 CSV', false);
+      });
+    }
+    return next().catch(function (err) { setWebState(err.message || '导出失败', true); });
+  }
+  function logoutWhatsappWeb() {
+    if (!window.confirm('确定解除当前机器上的 WhatsApp Web 绑定？')) return Promise.resolve();
+    return request('/api/native-whatsapp/web/logout', { method: 'POST' }).then(function () { return loadWhatsappWebState(); });
+  }
+
   function ensureWhatsappWebBlock() {
     if (document.getElementById('personalWhatsappWebBlock')) return;
     var host = document.getElementById('personalWhatsappContactList') || document.querySelector('.pwa-shell') || document.body;
