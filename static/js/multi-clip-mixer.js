@@ -12,6 +12,8 @@
     templateCatalog: [],
     templateCatalogProvider: '',
     templateCategory: 'all',
+    templateScene: 'newsMixCutting',
+    templateLayersLoading: false,
     selectedTemplate: null,
     shanjianTemplateDetail: null,
     shanjianTemplateDetailId: '',
@@ -1405,6 +1407,78 @@
     return state.overlayTexts;
   }
 
+  var MIXER_TEMPLATE_SCENES = [
+    ['newsMixCutting', '\u8d44\u8baf\u6df7\u526a'],
+    ['realMan', '\u771f\u4eba\u6a21\u677f'],
+    ['virtualman', '\u6570\u5b57\u4eba\u6a21\u677f']
+  ];
+
+  function currentMixerTemplateScene() {
+    var scene = String(state.templateScene || 'newsMixCutting');
+    return MIXER_TEMPLATE_SCENES.some(function(pair) { return pair[0] === scene; }) ? scene : 'newsMixCutting';
+  }
+
+  function applyTemplateLayers(map) {
+    if (!map) return 0;
+    var applied = 0;
+    state.templateCatalog.forEach(function(item) {
+      var layers = map[String(item.id)];
+      if (layers && layers.ok) { item.layers = layers; applied += 1; }
+    });
+    return applied;
+  }
+
+  function batchTemplateLayers(ids) {
+    return post('/api/shanjian-smart-clip/template-layers', { ids: ids }).then(function(data) {
+      return (data && data.layers) || {};
+    });
+  }
+
+  function detailTemplateLayers(ids) {
+    // 服务端还没上「批量补图层」接口时的回退：逐个拉详情（并发 5）
+    var out = {};
+    var queue = ids.slice();
+    function worker() {
+      if (!queue.length) return Promise.resolve();
+      var id = queue.shift();
+      return post('/api/shanjian-smart-clip/template-detail', { template_id: id }).then(function(data) {
+        var layers = ((data || {}).item || {}).layers;
+        if (layers && layers.ok) out[id] = layers;
+      }).catch(function() { return null; }).then(worker);
+    }
+    var workers = [];
+    for (var i = 0; i < 5; i += 1) workers.push(worker());
+    return Promise.all(workers).then(function() { return out; });
+  }
+
+  // 2026-10-15: 列表接口不带 videoStructInfo，图层得单独补 —— 这就是之前“支持正文筛出来是空的”原因
+  function detectTemplateLayers() {
+    if (currentTemplateProvider() !== 'shanjian' || state.templateLayersLoading) return Promise.resolve(0);
+    var ids = state.templateCatalog.filter(function(item) {
+      return item.id && !(item.layers && item.layers.ok);
+    }).map(function(item) { return String(item.id); });
+    if (!ids.length) return Promise.resolve(0);
+    state.templateLayersLoading = true;
+    syncTemplateCategoryUI();
+    return batchTemplateLayers(ids.slice(0, 80))
+      .catch(function() { return detailTemplateLayers(ids.slice(0, 40)); })
+      .then(function(map) { return applyTemplateLayers(map); })
+      .catch(function() { return 0; })
+      .finally(function() {
+        state.templateLayersLoading = false;
+        filterTemplates();
+      });
+  }
+
+  function syncTemplateChips(row, attr, value) {
+    if (!row) return;
+    Array.prototype.forEach.call(row.querySelectorAll('[' + attr + ']'), function(btn) {
+      var active = String(btn.getAttribute(attr)) === value;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  }
+
   function templateLayers(item) {
     var layers = (item || {}).layers;
     return (layers && typeof layers === 'object') ? layers : null;
@@ -1432,23 +1506,23 @@
   }
 
   function syncTemplateCategoryUI() {
-    var row = $('mcmTemplateCategories');
-    if (!row) return;
     var isShanjian = currentTemplateProvider() === 'shanjian';
-    row.hidden = !isShanjian;
+    var sceneRow = $('mcmTemplateScenes');
+    var row = $('mcmTemplateCategories');
+    if (sceneRow) sceneRow.hidden = !isShanjian;
+    if (row) row.hidden = !isShanjian;
     if (!isShanjian) return;
-    var category = String(state.templateCategory || 'all');
-    Array.prototype.forEach.call(row.querySelectorAll('[data-mcm-template-category]'), function(btn) {
-      var active = String(btn.getAttribute('data-mcm-template-category')) === category;
-      btn.classList.toggle('is-active', active);
-      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-    });
+    syncTemplateChips(sceneRow, 'data-mcm-template-scene', currentMixerTemplateScene());
+    syncTemplateChips(row, 'data-mcm-template-category', String(state.templateCategory || 'all'));
     var hint = $('mcmTemplateCategoryHint');
-    if (hint) {
-      hint.textContent = category === 'all'
-        ? ''
-        : ('已筛选 ' + state.templates.length + ' / ' + state.templateCatalog.length + ' 个模板');
-    }
+    if (!hint) return;
+    var total = state.templateCatalog.length;
+    var known = state.templateCatalog.filter(function(item) { return item.layers && item.layers.ok; }).length;
+    var parts = [];
+    if (state.templateLayersLoading) parts.push('正在检测模板图层 ' + known + ' / ' + total + '…');
+    else if (known && known < total) parts.push('已检测 ' + known + ' / ' + total);
+    if (String(state.templateCategory || 'all') !== 'all') parts.push('已筛选 ' + state.templates.length + ' 个');
+    hint.textContent = parts.join('，');
   }
 
   function filterTemplates() {
@@ -1484,7 +1558,7 @@
     }
     if (provider === 'shanjian') {
       return post('/api/shanjian-smart-clip/templates', {
-        scene: 'newsMixCutting',
+        scene: currentMixerTemplateScene(),
         page_size: 36,
         sort_by: 'desc'
       }).then(function(data) {
@@ -1497,6 +1571,8 @@
         }
         filterTemplates();
         if (!state.templateCatalog.length) throw new Error('闪剪暂时没有返回可用模板。');
+        // 2026-10-15: 列表不带图层，这里异步补一次（不阻塞模板列表显示）
+        detectTemplateLayers();
         return state.templates;
       });
     }
@@ -1677,7 +1753,7 @@
       if (supportsIpLayer && description) structLayers.push({ markCode: 'ipLayer', show: true });
       return post('/api/shanjian-smart-clip/submit', {
       title: title,
-      scene: 'newsMixCutting',
+      scene: currentMixerTemplateScene(),
       style_id: state.selectedTemplate.id,
       materials: [{ type: 'video', fileUrl: videoUrl, soundSwitch: true }],
       material_sound_switch: true,
@@ -2018,6 +2094,18 @@
       if (!btn) return;
       state.templateCategory = String(btn.getAttribute('data-mcm-template-category') || 'all');
       filterTemplates();
+      if (String(state.templateCategory) !== 'all') detectTemplateLayers();
+    });
+    if ($('mcmTemplateScenes')) $('mcmTemplateScenes').addEventListener('click', function(event) {
+      var btn = event.target.closest('[data-mcm-template-scene]');
+      if (!btn) return;
+      var scene = String(btn.getAttribute('data-mcm-template-scene') || '');
+      if (!scene || scene === state.templateScene) return;
+      state.templateScene = scene;
+      state.templateCatalog = [];
+      state.templateCatalogProvider = '';
+      state.selectedTemplate = null;
+      loadTemplates(true).catch(function(error) { showMessage(error.message, true); });
     });
     if ($('mcmTemplateMoreBtn')) $('mcmTemplateMoreBtn').addEventListener('click', function() {
       loadTemplates(false).catch(function(error) { showMessage(error.message, true); });

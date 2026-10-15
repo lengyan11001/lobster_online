@@ -274,3 +274,9 @@
   font-size: 11px;
   line-height: 16px;
 }
+
+.mcm-template-category-label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
