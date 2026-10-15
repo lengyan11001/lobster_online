@@ -243,9 +243,10 @@ async function primeSocket(sock, options = {}) {
   if (!ready || !sock.resyncAppState) return ready;
   try {
     const collections = ["critical_block", "critical_unblock_low", "regular", "regular_high", "regular_low"];
-    appendLedger({ event: "contacts_resync_start", collections });
-    await sock.resyncAppState(collections, false);
-    appendLedger({ event: "contacts_resync_done" });
+    const full = !!options.full;
+    appendLedger({ event: "contacts_resync_start", collections, full });
+    await sock.resyncAppState(collections, full);
+    appendLedger({ event: "contacts_resync_done", full });
   } catch (err) {
     appendLedger({ event: "contacts_resync_failed", error: String((err && err.message) || err).slice(0, 200) });
   }
@@ -386,6 +387,22 @@ async function cmdContacts(a) {
   let pending = 0;
   let lastEventAt = 0;
   const samples = [];
+  const chatsSeen = new Map();
+  const rememberChat = (row) => {
+    if (!row || !row.id) return;
+    const jid = String(row.id);
+    if (jid.includes("broadcast") || jid.includes("newsletter")) return;
+    const prev = chatsSeen.get(jid) || {};
+    chatsSeen.set(jid, {
+      ...prev,
+      id: jid,
+      name: String(row.name || row.subject || prev.name || "").trim(),
+      group: jid.includes("@g.us"),
+      unread: Number(row.unreadCount || prev.unread || 0),
+      ts: Number(row.conversationTimestamp || prev.ts || 0),
+    });
+    lastEventAt = Date.now();
+  };
 
   const saveCache = () => {
     if (!cacheFile) return;
@@ -426,12 +443,16 @@ async function cmdContacts(a) {
   const outcome = await withConnection(authDir, async (sock, ctx) => {
     sock.ev.on("contacts.upsert", (rows) => (rows || []).forEach(remember));
     sock.ev.on("contacts.update", (rows) => (rows || []).forEach(remember));
+    sock.ev.on("chats.upsert", (rows) => (rows || []).forEach(rememberChat));
+    sock.ev.on("chats.update", (rows) => (rows || []).forEach(rememberChat));
+    sock.ev.on("groups.upsert", (rows) => (rows || []).forEach(rememberChat));
     sock.ev.on("messaging-history.set", (payload) => {
       historyPackets += 1;
       const progress = Number((payload && payload.progress) || 0);
       if (progress) historyProgress = progress;
       if (payload && (payload.isLatest === true || progress >= 100)) historyDone = true;
       ((payload && payload.contacts) || []).forEach(remember);
+      ((payload && payload.chats) || []).forEach(rememberChat);
       lastEventAt = Date.now();
       appendLedger({ event: "contacts_history", packets: historyPackets, progress: historyProgress, contacts: ((payload && payload.contacts) || []).length, chats: ((payload && payload.chats) || []).length, is_latest: !!(payload && payload.isLatest) });
     });
@@ -467,6 +488,8 @@ async function cmdContacts(a) {
     attempts: outcome.attempts || 0,
     sample: samples.slice(0, 3),
   });
+  const chats = Array.from(chatsSeen.values());
+  appendLedger({ event: "contacts_chats", received: chats.length });
   emit({
     ok: true,
     count: contacts.length,
@@ -476,6 +499,7 @@ async function cmdContacts(a) {
     resumed_from: resumedFrom,
     attempts: outcome.attempts || 0,
     contacts,
+    chats,
     me: creds.me,
   });
   process.exit(0);
@@ -550,7 +574,7 @@ async function cmdChats(a) {
   const authDir = path.resolve(a.auth || ".");
   const waitMs = Math.max(6000, Number(a.wait || 20000));
   const { sock } = await openSocket(authDir);
-  await primeSocket(sock);
+  await primeSocket(sock, { full: String(a.full || "") !== "" && String(a.full) !== "0" });
   const chats = new Map();
   const remember = (row) => {
     if (!row || !row.id) return;

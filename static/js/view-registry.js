@@ -52,8 +52,8 @@
   });
 
   window.registerLobsterView('personal-whatsapp', {
-    html: '/static/views/personal-whatsapp.html?v=20261015-personal-whatsapp-friends-queue-logout-v24',
-    scripts: '/static/js/personal-whatsapp.js?v=20261015-personal-whatsapp-friends-queue-logout-v24',
+    html: '/static/views/personal-whatsapp.html?v=20261015-personal-whatsapp-friends-queue-autorefresh-v26',
+    scripts: '/static/js/personal-whatsapp.js?v=20261015-personal-whatsapp-friends-queue-autorefresh-v26',
     init: 'initPersonalWhatsappView',
     cache: 'reload'
   });

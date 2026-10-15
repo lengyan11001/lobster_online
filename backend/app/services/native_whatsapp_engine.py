@@ -2125,6 +2125,7 @@ def web_sync_contacts(*, timeout: int = 180, resume: bool = True) -> Dict[str, A
                 saved += 1
                 if phone:
                     with_phone += 1
+        chats_saved = _persist_web_chats(payload.get("chats") or [])
         received = int(payload.get("count") or 0)
         partial = bool(payload.get("partial"))
         history_ok = bool(payload.get("history_ok"))
@@ -2144,6 +2145,7 @@ def web_sync_contacts(*, timeout: int = 180, resume: bool = True) -> Dict[str, A
         result = {
             "ok": True,
             "count": saved,
+            "chats": chats_saved,
             "with_phone": with_phone,
             "received": received,
             "partial": partial,
@@ -2155,6 +2157,7 @@ def web_sync_contacts(*, timeout: int = 180, resume: bool = True) -> Dict[str, A
         _append_protocol(
             "contacts_saved",
             saved=saved,
+            chats=chats_saved,
             with_phone=with_phone,
             received=received,
             partial=partial,
@@ -4634,15 +4637,15 @@ def list_web_messages(jid: str, *, limit: int = 50) -> List[Dict[str, Any]]:
     return [_row_public(row) for row in rows]
 
 
-def web_chats(*, refresh: bool = False, wait: int = 25, keyword: str = "", limit: int = 200) -> Dict[str, Any]:
+def web_chats(*, refresh: bool = False, wait: int = 25, keyword: str = "", limit: int = 200, full: bool = False) -> Dict[str, Any]:
     """会话列表：refresh=1 时真连一次协议拉最新的，然后从本地账读（页面刷新不会每次都等 20s）。"""
     refreshed = False
     saved = 0
     if refresh:
-        payload = _run_bridge(
-            ["chats", "--auth", str(WEB_AUTH_DIR), "--wait", str(max(6000, int(wait) * 1000))],
-            timeout=max(90, int(wait) + 60),
-        )
+        argv = ["chats", "--auth", str(WEB_AUTH_DIR), "--wait", str(max(6000, int(wait) * 1000))]
+        if full:
+            argv.append("--full")
+        payload = _run_bridge(argv, timeout=max(90, int(wait) + 60))
         saved = _persist_web_chats(payload.get("chats") or [])
         refreshed = True
     items = list_web_chats(limit=limit, keyword=keyword)

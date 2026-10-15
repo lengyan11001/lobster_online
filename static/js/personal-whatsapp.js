@@ -216,22 +216,78 @@
       if (node) node.textContent = '已取号 ' + Number(data.with_phone || 0) + ' / ' + Number(data.total || 0);
     }).catch(function () {});
   }
-  function loadWhatsappWebState() {
+  // 解绑 / 绑定 / 同步之后，页面上跟协议有关的东西一起刷新，不用手动 F5
+  function refreshAfterWebChange() {
+    return Promise.all([
+      loadProtocolOverview().catch(function () {}),
+      loadWhatsappContactStats().catch(function () {}),
+      loadProtoWatch().catch(function () {}),
+      loadContacts().catch(function () {}),
+      loadProtoChats(false).catch(function () {})
+    ]);
+  }
+
+  function ensureProtoWatchStarted() {
+    if (proto.watch && proto.watch.running) return loadProtoWatch();
+    return request('/api/native-whatsapp/web/watch/start', { method: 'POST', json: { account_id: ACCOUNT_ID } })
+      .then(function () { return loadProtoWatch(); })
+      .catch(function () { return loadProtoWatch(); });
+  }
+
+  // 页面开着的时候每 20s 轻量对一次状态：手机侧解绑、扫码完成、常驻掉了，都能自己反映出来
+  var whatsappWebPollAll = null;
+  function startProtoWatchPoll() {
+    if (whatsappWebPollAll) return;
+    whatsappWebPollAll = setInterval(function () {
+      if (document.hidden) return;
+      if (!$('personalWhatsappWebState')) return;
+      loadWhatsappWebState().catch(function () {});
+      loadProtoWatch().catch(function () {});
+    }, 20000);
+  }
+
+  var whatsappWebLinked = null;
+  function loadWhatsappWebState(options) {
     if (!$('personalWhatsappWebState')) return Promise.resolve();
+    var opts = options || {};
     return request('/api/native-whatsapp/web/login').then(function (data) {
+      var wasLinked = whatsappWebLinked;
+      whatsappWebLinked = !!data.linked;
       if (data.linked) {
         var me = data.me || {};
         setWebState('已绑定：' + (me.phone ? ('+' + me.phone) : (me.name || '设备已连接')), false);
         renderWebQr('');
         if (whatsappWebPoll) { clearInterval(whatsappWebPoll); whatsappWebPoll = null; }
-      } else if (data.qr) { setWebState('等待扫码…', false); renderWebQr(data.qr); }
-      else { setWebState('未绑定（点「扫码绑定」）', false); renderWebQr(''); }
+      } else if (data.qr) {
+        setWebState('等待扫码…', false);
+        renderWebQr(data.qr);
+      } else {
+        setWebState('未绑定（点「扫码绑定」）', false);
+        renderWebQr('');
+      }
+      if (wasLinked === null) {
+        if (whatsappWebLinked && !(proto.watch && proto.watch.running)) ensureProtoWatchStarted();
+        return data;
+      }
+      if (wasLinked !== whatsappWebLinked) {
+        if (whatsappWebLinked) {
+          toastMessage('已绑定 WhatsApp：正在刷新数据并开启常驻增量');
+          ensureProtoWatchStarted();
+        } else {
+          toastMessage('已解绑 WhatsApp（手机上这台设备也会被移除）');
+          proto.watch = {};
+        }
+        refreshAfterWebChange();
+      } else if (opts.refreshAll && whatsappWebLinked) {
+        refreshAfterWebChange();
+      }
+      return data;
     }).catch(function (err) { setWebState(err.message || '状态读取失败', true); });
   }
   function startWhatsappWebLogin() {
     setWebState('正在生成二维码…', false);
     return request('/api/native-whatsapp/web/login', { method: 'POST' }).then(function (data) {
-      if (data.linked) return loadWhatsappWebState();
+      if (data.linked) return loadWhatsappWebState({ refreshAll: true });
       if (data.qr) { renderWebQr(data.qr); setWebState('等待扫码…', false); }
       else { setWebState('正在启动绑定程序，稍等…', false); }
       if (whatsappWebPoll) clearInterval(whatsappWebPoll);
@@ -243,7 +299,8 @@
     setWebState('正在走协议同步通讯录…', false);
     return request('/api/native-whatsapp/web/contacts/sync', { method: 'POST' }).then(function (data) {
       setWebState(data.message || ('同步完成：' + data.count + ' 个'), false);
-      return Promise.all([loadContacts(), loadWhatsappContactStats()]);
+      toastMessage(data.message || ('同步完成：' + data.count + ' 个联系人'));
+      return refreshAfterWebChange();
     }).catch(function (err) { setWebState(err.message || '协议同步失败', true); });
   }
   function exportWhatsappContactsCsv() {
@@ -265,8 +322,16 @@
     return next().catch(function (err) { setWebState(err.message || '导出失败', true); });
   }
   function logoutWhatsappWeb() {
-    if (!window.confirm('确定解除当前机器上的 WhatsApp Web 绑定？')) return Promise.resolve();
-    return request('/api/native-whatsapp/web/logout', { method: 'POST' }).then(function () { return loadWhatsappWebState(); });
+    if (!window.confirm('解绑会把这台设备从手机 WhatsApp 的「已连接的设备」里移除，之后要用得重新扫码；也可以直接在手机上移除这台设备（效果一样）。继续？')) return Promise.resolve();
+    setWebState('正在解绑…', false);
+    return request('/api/native-whatsapp/web/logout', { method: 'POST' }).then(function (data) {
+      var message = (data && data.message) || '已解绑';
+      toastMessage(message);
+      setWebState(message, !!(data && data.remote === 'failed'));
+      return loadWhatsappWebState().then(function () { return refreshAfterWebChange(); });
+    }).catch(function (err) {
+      setWebState(err.message || '解绑请求失败（确认后端已重启加载新代码）', true);
+    });
   }
 
   function ensureWhatsappWebBlock() {
@@ -984,5 +1049,5 @@
     });
   }
 
-  window.initPersonalWhatsappView=function(){bind();loadProtocolPanel().catch(function(){});loadMemoryDocs().catch(function(){});loadBase().then(function(){renderTakeoverSummary();}).catch(function(error){showError(error.message||'WhatsApp 状态读取失败');});loadFriendQueue().catch(function(){});loadAutoReply().catch(function(){});};
+  window.initPersonalWhatsappView=function(){bind();startProtoWatchPoll();loadProtocolPanel().catch(function(){});loadMemoryDocs().catch(function(){});loadBase().then(function(){renderTakeoverSummary();}).catch(function(error){showError(error.message||'WhatsApp 状态读取失败');});loadFriendQueue().catch(function(){});loadAutoReply().catch(function(){});};
 })();
