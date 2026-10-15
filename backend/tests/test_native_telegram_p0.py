@@ -100,6 +100,18 @@ def test_skill_store_has_personal_telegram_card():
     assert "personal_telegram_assistant" in skill
 
 
+def test_skill_store_entry_is_server_gated_not_hardcoded():
+    """技能商店入口是服务器权限控制的：服务端没下发这个技能包，本地就不该出现这张卡。"""
+    skill = (ROOT / "static" / "js" / "skill.js").read_text(encoding="utf-8")
+    assert "var personalTelegramPkg = pkgById('personal_telegram_assistant');" in skill, \
+        "入口必须只看服务端下发的技能包，不能在本地兜一个写死的包"
+    assert "var personalTelegramPkg = pkgById('personal_telegram_assistant') ||" not in skill, \
+        "不许本地写死技能包"
+    init = (ROOT / "static" / "js" / "init.js").read_text(encoding="utf-8")
+    assert "'personal-telegram': 'personal_telegram_assistant'" in init, \
+        "视图权限闸门要和 personal-whatsapp 一样交给服务端特性位"
+
+
 def test_create_app_mounts_native_telegram_router():
     source = (ROOT / "backend" / "app" / "create_app.py").read_text(encoding="utf-8")
     assert "from .api.native_telegram import router as native_telegram_router" in source

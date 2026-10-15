@@ -3361,14 +3361,8 @@ function loadSkillStore() {
       var shanjianPkg = pkgById('shanjian_smart_clip');
       var multiClipPkg = pkgById('multi_clip_mixer_skill');
       var personalWhatsappPkg = pkgById('personal_whatsapp_assistant');
-      var personalTelegramPkg = pkgById('personal_telegram_assistant') || {
-        id: 'personal_telegram_assistant',
-        name: '个人 Telegram 助手',
-        description: '用你自己的 Telegram 号读通讯录（含手机号）、会话和历史消息，并在工作流里做私聊接管。',
-        type: 'builtin',
-        status: 'available',
-        tags: ['Telegram', '用户协议', '工作流']
-      };
+      // 技能商店入口一律由服务端下发的技能包决定（pkgById 筛的就是服务端 packages），本地不写死
+      var personalTelegramPkg = pkgById('personal_telegram_assistant');
       var metaPkg = pkgById('meta_social');
       var cutcliPkg = pkgById('cutcli_template_skill') || pkgById('cutcli_templates_skill') || pkgById('cutcli_template_studio');
       var legacyIpContentPkg = pkgById('ip_content_daily_skill');

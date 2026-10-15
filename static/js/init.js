@@ -1618,6 +1618,7 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   logs: 'logs_entry',
   'personal-settings': 'personal_settings_entry',
   'personal-whatsapp': 'personal_whatsapp_assistant',
+  'personal-telegram': 'personal_telegram_assistant',
   agent: 'agent_entry',
   'openclaw-memory': 'openclaw_memory_skill',
   'creative-film-studio': 'goal_video_pipeline_skill',
