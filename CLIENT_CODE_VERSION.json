@@ -1,7 +1,7 @@
 {
-  "version": "2.0.141",
-  "build": 436,
-  "applied_at": "2026-10-15T01:19:04+08:00",
-  "note": "2.0.141: contacts sync top-up behaviour + fewer interruptions. A refused click point (point not on the WeChat window) now activates WeChat and retries the guarded click once before the run stops - diag_20261014171335 logged 91 click_refused / 91 aborted rounds in a single run because WeChat was behind another window (only 76 of 600 clicks succeeded). Rows whose contact already has a WeChat ID are skipped, so each run only tops up the ones still missing an ID. Keeps 2.0.140: no blind clicks, transient-empty re-poll, skip failed rows, resume anchor.",
-  "bundle_sha256": "3c45a35eeda5b0a0caf1b24a2e30a99cd21d7c8d1362ee6e559f233a7609483d"
+  "version": "2.0.142",
+  "build": 437,
+  "applied_at": "2026-10-15T08:26:02+08:00",
+  "note": "2.0.142: contacts list gets a manual WeChat-ID editor and a live ratio. Every row now carries a 「改号」 button that opens a modal prefilled with the current id; saving (or clearing) posts POST /api/native-wechat/contacts/update and refreshes the row plus the new 「已取号 X / Y（Z%）」 chip next to 同步通讯录 (fed by with_wx_no on GET /contacts). The search row gets an inline 全部 / 已有微信号 / 没微信号 dropdown (has_wx=all|yes|no) that reloads page 1 and combines with the keyword. Also repairs the dropdown + chip labels an ASCII-encoded patch had written as '??', and the manual-edit gate accepts phone-style ids while rejecting a nickname/too-short value with a readable Chinese message instead of question marks.",
+  "bundle_sha256": "a29cc35a6bc47bc93cd9abee8e7cbc302635c6e48ea11549e279014020e87d08"
 }
