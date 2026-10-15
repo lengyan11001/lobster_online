@@ -23563,10 +23563,14 @@ def list_peers(
     return {"items": items, "count": int(total), "limit": limit, "offset": offset}
 
 
-def list_contacts(account_id: str, *, limit: int = 100, offset: int = 0, keyword: str = "") -> Dict[str, Any]:
+def list_contacts(account_id: str, *, limit: int = 100, offset: int = 0, keyword: str = "", has_wx: str = "all") -> Dict[str, Any]:
     init_db()
     params: List[Any] = [account_id]
     where = "where account_id=? and source in ('pc_wechat_uia_contacts','pc_wechat_uia_contact_profile','wx_driver_contacts','local','manual')"
+    if has_wx == "yes":
+        where += " and wx_no is not null and wx_no != ''"
+    elif has_wx == "no":
+        where += " and (wx_no is null or wx_no = '')"
     if keyword:
         where += " and (display_name like ? or remark like ? or wx_no like ? or contact_key like ?)"
         like = f"%{keyword}%"
