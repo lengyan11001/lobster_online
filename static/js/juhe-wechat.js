@@ -1154,7 +1154,7 @@
     }
     var sequence = beginRequest('contacts');
     var path = '/api/native-wechat/contacts?account_id=' + encodeURIComponent(id) +
-      '&limit=' + meta.limit + '&offset=' + ((meta.page - 1) * meta.limit) +
+      '&has_wx=' + (($('nativeWechatContactHasWx') || {}).value || 'all') + '&limit=' + meta.limit + '&offset=' + ((meta.page - 1) * meta.limit) +
       (keyword ? '&keyword=' + encodeURIComponent(keyword) : '');
     return apiJson(path).then(function(data) {
       if (!isCurrentRequest('contacts', sequence) || id !== activeAccountId()) return;
@@ -2383,6 +2383,8 @@
     });
     var peerSearch = $('nativeWechatPeerSearch');
     if (peerSearch) peerSearch.addEventListener('input', debounce(function() { loadPeers(1); }, 250));
+    var contactHasWx = $('nativeWechatContactHasWx');
+    if (contactHasWx) contactHasWx.addEventListener('change', function() { loadContacts(1); });
     var contactSearch = $('nativeWechatContactSearch');
     if (contactSearch) contactSearch.addEventListener('input', debounce(function() { loadContacts(1); }, 250));
     var groupSearch = $('nativeWechatGroupSearch');
