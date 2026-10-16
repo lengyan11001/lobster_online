@@ -11151,6 +11151,8 @@ _CONTACT_KB_CARD_POLL_SECONDS = 1.2
 _CONTACT_KB_ROW_REFRESH_EVERY = 5
 _CONTACT_KB_CARD_POLL_INTERVAL = 0.03
 _CONTACT_KB_STALE_STEPS = 3
+# 连续这么多次"读不到详情面板"才放弃（读不到 ≠ 到底了；上限只是防死循环）。
+_CONTACT_KB_UNREADABLE_LIMIT = 30
 
 
 def _contact_scan_mode() -> str:
@@ -11224,16 +11226,18 @@ def _contact_sync_keyboard_scan(
     clean_limit = max(1, min(int(limit or 10000), 10000))
     skip = set(skip_names or set())
     total_contacts = 0
-    for _row in _uia_visible_contact_cell_rows(contact_list) or []:
-        _nm = str(_row.get("name") or "")
-        if _nm.startswith("联系人"):
-            _m = re.search(r"\d+", _nm)
+    # 照鹰牛 ListItems.ContactsListItem = {"control_type":"ListItem","name":"联系人\d+",
+    #                                      "class_name":"mmui::ContactsCellGroupView"}：
+    # 用**正则精确找那一行**（不是遍历可见行 —— 分组行不在 visible rows 里，所以上一版 total=0）。
+    try:
+        _root_total = auto.ControlFromHandle(int(hwnd))
+        _group_row = _root_total.ListItemControl(searchDepth=20, RegexName=r"^联系人\d+$")
+        if _group_row.Exists(0.5):
+            _m = re.search(r"\d+", _uia_control_text(_group_row))
             if _m:
-                try:
-                    total_contacts = int(_m.group(0))
-                except Exception:
-                    total_contacts = 0
-            break
+                total_contacts = int(_m.group(0))
+    except Exception as exc:
+        _contact_sync_debug(account_id, stage="keyboard_total_error", error=str(exc)[:140])
     step_interval = _contact_kb_interval(total_contacts)
     _contact_sync_debug(account_id, stage="keyboard_interval", total=total_contacts, interval=step_interval)
     seen: Dict[str, Dict[str, Any]] = {}
@@ -11241,6 +11245,7 @@ def _contact_sync_keyboard_scan(
     learned = 0
     steps = 0
     stale = 0
+    unreadable = 0
     anchor_done = False
     completed = False
     prev_texts: List[str] = []
@@ -11296,8 +11301,21 @@ def _contact_sync_keyboard_scan(
         card_root = _contact_profile_card_root(root_now) or root_now
         return card_root
 
-    def _quick_texts() -> List[str]:
-        return _card_texts(_card_root_now(), max_depth=8, max_nodes=500)
+    def _quick_texts(wide: bool = False) -> List[str]:
+        """读当前详情面板的文本快照。
+
+        2026-10-16 实测：预算压到 8 层/500 节点时**一个文本都读不到**
+        （keyboard_card_stale decision=wait texts=0），而锚点那一步用默认预算就拿到了微信号
+        —— 所以先试小预算，读不到就自动放大（12/1200 → 20/3000），
+        绝不能把"读不到"当成"没换人"。
+        """
+        root_now = _card_root_now()
+        if wide:
+            return _card_texts(root_now, max_depth=20, max_nodes=3000)
+        texts = _card_texts(root_now, max_depth=12, max_nodes=1200)
+        if texts:
+            return texts
+        return _card_texts(root_now, max_depth=20, max_nodes=3000)
 
     def _refresh_rows(force: bool = False) -> List[Dict[str, Any]]:
         nonlocal rows, rows_until_refresh
@@ -11361,6 +11379,22 @@ def _contact_sync_keyboard_scan(
                 break
             time.sleep(_CONTACT_KB_CARD_POLL_INTERVAL)
         if decision != "read":
+            if not cur_texts:
+                # 读不到详情面板 ≠ 没换人（2026-10-16：texts=0 被当成 stale，3 次就收工）。
+                card_root = None
+                _ensure_wechat_foreground_for_keys(hwnd)
+                cur_texts = _quick_texts(wide=True)
+                if not cur_texts:
+                    unreadable += 1
+                    _contact_sync_debug(account_id, stage="keyboard_card_unreadable", step=steps,
+                                        unreadable=unreadable, rows=len(rows),
+                                        first_row=str((rows[0].get("name") if rows else "") or "")[:24])
+                    if unreadable >= _CONTACT_KB_UNREADABLE_LIMIT:
+                        completed = bool(rows)
+                        break
+                    time.sleep(step_interval)
+                    continue
+                unreadable = 0
             stale += 1
             # 卡片没换人可能是：焦点被抢（键没送到微信）/ 卡片根换了 / 真的到底了。
             # 前两种都要能自愈：先把前台要回来、再重取卡片根重读一次。
@@ -11429,6 +11463,7 @@ def _contact_sync_keyboard_scan(
         "stopped": stopped,
         "contacts_total": total_contacts,
         "step_interval": step_interval,
+        "unreadable": unreadable,
     }
 
 

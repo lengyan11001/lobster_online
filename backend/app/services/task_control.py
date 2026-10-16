@@ -182,7 +182,7 @@ def task_status() -> Dict[str, Any]:
 
 
 # ── 悬浮键进程 ───────────────────────────────────────────────────────────
-def overlay_command(*, idle_seconds: int = 90, port: int = 0) -> list[str]:
+def overlay_command(*, idle_seconds: int = 8, port: int = 0) -> list[str]:
     argv = [
         sys.executable,
         str(OVERLAY_SCRIPT),
@@ -260,7 +260,7 @@ def overlay_status() -> Dict[str, Any]:
     }
 
 
-def ensure_overlay(*, idle_seconds: int = 90, port: int = 0) -> Dict[str, Any]:
+def ensure_overlay(*, idle_seconds: int = 8, port: int = 0) -> Dict[str, Any]:
     """确保悬浮键在跑（已经在跑就直接返回）。起不来不影响主任务。"""
     status = overlay_status()
     if status.get("running"):

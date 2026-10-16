@@ -127,7 +127,7 @@ PAGE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
-    parser.add_argument("--idle-seconds", type=int, default=90)
+    parser.add_argument("--idle-seconds", type=int, default=8)  # 任务结束 8 秒后就自动消失（用户反馈 90 秒太久）
     parser.add_argument("--width", type=int, default=196)
     parser.add_argument("--height", type=int, default=86)
     parser.add_argument("--margin", type=int, default=24)

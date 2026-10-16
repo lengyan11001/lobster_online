@@ -105,12 +105,18 @@ def test_step_key_never_sleeps_like_a_human(engine):
     assert "_human_pause(" not in scan_body, "键盘走列表里每一步都不该再睡人工延迟"
 
 
-def test_card_read_uses_a_small_budget_every_step(engine):
-    """每步只做小预算快读（500 节点 / 8 层），确认换人后才做完整提取。"""
+def test_card_read_escalates_the_budget_instead_of_reporting_empty(engine):
+    """2026-10-16 实测：预算压到 8 层/500 节点时一个文本都读不到（texts=0），
+    被当成"卡片没换人"→ 3 次就收工（同步只走 1 步、只认一屏 11 个）。
+    所以每步读取必须**自适应放大预算**，并且"读不到"绝不能算"没换人"。"""
     source = ENGINE_PATH.read_text(encoding="utf-8")
-    assert "_card_texts(_card_root_now(), max_depth=8, max_nodes=500)" in source
+    assert "def _quick_texts(wide: bool = False)" in source
+    assert "max_depth=12, max_nodes=1200" in source
+    assert "return _card_texts(root_now, max_depth=20, max_nodes=3000)" in source, "读不到就放大到满预算"
     assert "def _card_texts(card: Any, *, max_depth: int = 20, max_nodes: int = 3000)" in source, \
         "默认预算保持不变，避免影响其它调用方"
+    assert '_CONTACT_KB_UNREADABLE_LIMIT' in source, "连续读不到要有上限，防死循环"
+    assert 'stage="keyboard_card_unreadable"' in source
 
 
 def test_click_mode_still_leaves_the_legacy_path_untouched():
