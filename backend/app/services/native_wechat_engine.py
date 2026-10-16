@@ -87,9 +87,12 @@ DEFAULT_STRATEGY: Dict[str, Any] = {
     "friend_add_sleep_min": 60.0,
     "friend_add_sleep_max": 180.0,
     "friend_add_min_gap": 60.0,
-    "friend_add_batch_size": 2,
-    "friend_add_batch_sleep": 600,
-    "daily_friend_add_limit": 20,
+    # 2026-10-16 对照鹰牛 FriendSettings.add_new_friend / Contacts.check_new_friends 的口径收敛：
+    #   他们 docstring 原话「单次≤8人, 每日≤4次, 间隔≥2小时, 无论新老号超过这个频率大概率封号」。
+    #   我们原来是"每 2 条歇 10 分钟、日限 20"（≈2 小时能跑完 20 条），比他们激进约 2.5 倍。
+    "friend_add_batch_size": 8,
+    "friend_add_batch_sleep": 7200,
+    "daily_friend_add_limit": 8,
     "moments_like_sleep_min": 20.0,
     "moments_like_sleep_max": 60.0,
     "moments_scroll_sleep_min": 3.0,
@@ -766,6 +769,17 @@ def init_db() -> None:
             );
             create index if not exists idx_wechat_group_members_group
             on wechat_group_members(account_id, group_key, updated_at desc);
+
+            -- 2026-10-16：通过好友申请也要记账（照鹰牛 check_new_friends 的口径：
+            -- 单次≤8人 / 每日≤4次 / 间隔≥2小时，超了大概率封号）。以前我们这条链完全没有限速。
+            create table if not exists wechat_friend_accept_batches (
+                id text primary key,
+                account_id text not null,
+                batch_at text not null,
+                accepted integer not null default 0
+            );
+            create index if not exists idx_wechat_friend_accept_batches
+            on wechat_friend_accept_batches(account_id, batch_at desc);
 
             create table if not exists wechat_friend_add_targets (
                 account_id text not null,
@@ -15127,21 +15141,59 @@ def _accept_local_friend_requests_once(
     }
 
 
+# 通过好友申请的限速（照鹰牛 Contacts.check_new_friends 的 docstring 原文：
+# 「limit: 通过验证的上限数:单次≤8人,每日≤4次,间隔≥2小时,无论新老号超过这个频率大概率封号」）。
+FRIEND_ACCEPT_MAX_PER_BATCH = 8
+FRIEND_ACCEPT_DAILY_BATCHES = 4
+FRIEND_ACCEPT_MIN_GAP_SECONDS = 7200
+
+
 def accept_local_friend_requests(
     account_id: str,
     *,
-    max_accepts: int = 20,
+    max_accepts: int = FRIEND_ACCEPT_MAX_PER_BATCH,
     max_scrolls: int = 24,
 ) -> Dict[str, Any]:
-    return _run_local_driver_operation(
+    """检查并通过好友申请（带限速闸门）。
+
+    2026-10-16：照鹰牛 Contacts.check_new_friends 的口径加闸门 —— 单次≤8人、每日≤4次、间隔≥2小时。
+    被闸门挡住时**返回 skipped 而不是抛错**（自动回复循环照常跑，只是这一轮不通过申请）。
+    """
+    key = str(account_id or "").strip()
+    rate = _friend_accept_rate_state(key)
+    if rate.get("blocked"):
+        try:
+            _write_auto_reply_diagnostic("friend_accept_rate_limited", account_id=key, **rate)
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "rate_limited",
+            "checked": 0,
+            "accepted": 0,
+            "failed": 0,
+            "rate": rate,
+            "message": "本轮不通过好友申请：" + str(rate.get("reason") or ""),
+        }
+    capped = max(1, min(int(max_accepts or FRIEND_ACCEPT_MAX_PER_BATCH), FRIEND_ACCEPT_MAX_PER_BATCH))
+    result = _run_local_driver_operation(
         account_id,
         "检查微信好友申请",
         lambda: _accept_local_friend_requests_once(
             account_id,
-            max_accepts=max_accepts,
+            max_accepts=capped,
             max_scrolls=max_scrolls,
         ),
     )
+    try:
+        accepted_count = int((result or {}).get("accepted") or 0)
+        if accepted_count > 0:
+            _record_friend_accept_batch(key, accepted_count)
+        result["rate"] = _friend_accept_rate_state(key)
+    except Exception:
+        pass
+    return result
 
 
 def _uia_find_add_friend_plus_button(root: Any) -> Optional[Any]:
@@ -15301,9 +15353,7 @@ def _manual_open_local_add_friend_form(hwnd: int, keyword: str, steps: List[Dict
                 raise
         steps.append({"step": "manual_search_retry", "ok": True, "attempt": attempt})
     else:
-        if _local_friend_profile_is_existing_friend(hwnd):
-            raise FriendAlreadyAdded(f"该账号已经是好友：{keyword}")
-        raise RuntimeError("三次搜索都没出结果，可能未搜到用户、已是好友或微信限制")
+        raise _classify_local_add_friend_failure(hwnd, keyword)
 
     deadline = time.time() + 8.0
     apply_names = ["添加到通讯录", "申请添加朋友", "加为朋友"]
@@ -15325,9 +15375,7 @@ def _manual_open_local_add_friend_form(hwnd: int, keyword: str, steps: List[Dict
             continue
         time.sleep(0.3)
 
-    if _local_friend_profile_is_existing_friend(hwnd):
-        raise FriendAlreadyAdded(f"该账号已经是好友：{keyword}")
-    raise RuntimeError("未找到搜索结果里的添加入口，可能未搜到用户、已是好友或微信限制")
+    raise _classify_local_add_friend_failure(hwnd, keyword)
 
 
 def _find_local_add_friend_submit_button(hwnd: int, *, timeout: float = 5.0) -> Optional[Any]:
@@ -15444,6 +15492,19 @@ def _close_local_add_friend_dialog(hwnd: int, steps: List[Dict[str, Any]], *, re
         return False
 
 
+class FriendSearchNotFound(RuntimeError):
+    """搜索不到这个人（未注册微信，或不允许通过这种方式被搜索到）。
+
+    2026-10-16 对照鹰牛 FriendSettings.add_new_friend 的三态判定：
+    他们按控件存在性区分 NotFoundError / NotFriendError / "没有添加到通讯录入口"，
+    我们以前只有"已是好友"+一句泛化 RuntimeError，现场分不清是哪一种。
+    """
+
+
+class FriendAddBlocked(RuntimeError):
+    """搜到了资料卡，但没有「添加到通讯录」入口 —— 对方设置了不允许被添加。"""
+
+
 class FriendAlreadyAdded(RuntimeError):
     """搜索到的账号已经是好友（资料卡上是「发消息」而不是「添加到通讯录」）。
 
@@ -15463,6 +15524,23 @@ def _local_friend_profile_is_existing_friend(hwnd: int) -> bool:
     return False
 
 
+def _classify_local_add_friend_failure(hwnd: int, keyword: str) -> RuntimeError:
+    """把加好友失败分成三类（照鹰牛：搜不到 / 已是好友 / 对方不允许被添加）。"""
+    if _local_friend_profile_is_existing_friend(hwnd):
+        return FriendAlreadyAdded(f"该账号已经是好友：{keyword}")
+    try:
+        has_card = _local_profile_popup_root(hwnd) is not None
+    except Exception:
+        has_card = False
+    if has_card:
+        return FriendAddBlocked(
+            f"搜到了 {keyword} 的资料卡，但没有「添加到通讯录」入口（对方可能设置了不允许被添加）"
+        )
+    return FriendSearchNotFound(
+        f"搜索不到 {keyword} 对应的微信用户（可能未注册微信，或不允许通过这个方式被搜索）"
+    )
+
+
 def _prepare_local_add_friend_form(
     account_id: str,
     keyword: str,
@@ -15470,7 +15548,8 @@ def _prepare_local_add_friend_form(
     apply_message: str = "",
     remark: str = "",
     tags: Optional[List[str]] = None,
-    permission: str = "朋友圈",
+    # 默认「仅聊天」：照鹰牛 add_new_friend(chat_only) 的默认，别一加好友就给陌生人开朋友圈。
+    permission: str = "仅聊天",
     submit_final: bool = False,
 ) -> Dict[str, Any]:
     if not _module_available("uiautomation"):
@@ -15540,7 +15619,7 @@ def _prepare_local_add_friend_form(
         _uia_set_text(edits[1], remark)
         filled["remark"] = True
 
-    permission = str(permission or "朋友圈").strip()
+    permission = str(permission or "仅聊天").strip()
     if permission:
         perm_node = _uia_find_by_names(form_root, [permission], contains=False, max_depth=18)
         if perm_node is None and permission == "朋友圈":
@@ -15577,7 +15656,8 @@ def add_local_friend(
     apply_message: str = "",
     remark: str = "",
     tags: Optional[List[str]] = None,
-    permission: str = "朋友圈",
+    # 默认「仅聊天」：照鹰牛 add_new_friend(chat_only) 的默认，别一加好友就给陌生人开朋友圈。
+    permission: str = "仅聊天",
     prepare_only: bool = False,
 ) -> Dict[str, Any]:
     init_db()
@@ -18578,6 +18658,69 @@ _FRIEND_ADD_MAX_ATTEMPTS_DEFAULT = 3
 _FRIEND_ADD_HANDLED_STATUSES = {"added", "skipped"}
 
 
+def _friend_accept_rate_state(account_id: str) -> Dict[str, Any]:
+    """「通过好友申请」的当日额度与最小间隔（照鹰牛那条 8/4 次/2 小时的口径）。
+
+    我们以前对这条链**完全没有限速**：run_auto_reply_once 每跑一轮就能通过最多 10 个，
+    自动回复循环多快就通过多快 —— 这是最容易被判骚扰的一条路。
+    """
+    key = str(account_id or "").strip()
+    today = datetime.utcnow().date().isoformat()
+    batches: List[sqlite3.Row] = []
+    try:
+        with _connect() as conn:
+            batches = conn.execute(
+                "select batch_at, accepted from wechat_friend_accept_batches "
+                "where account_id=? and batch_at >= ? order by batch_at desc",
+                (key, today),
+            ).fetchall()
+    except Exception:
+        batches = []
+    batches_today = len(batches)
+    last_at = str(batches[0]["batch_at"]) if batches else ""
+    wait_seconds = 0.0
+    if last_at:
+        try:
+            elapsed = (datetime.utcnow() - datetime.fromisoformat(last_at)).total_seconds()
+            wait_seconds = max(0.0, FRIEND_ACCEPT_MIN_GAP_SECONDS - elapsed)
+        except Exception:
+            wait_seconds = 0.0
+    reason = ""
+    if batches_today >= FRIEND_ACCEPT_DAILY_BATCHES:
+        reason = f"今日已通过 {batches_today} 批（上限 {FRIEND_ACCEPT_DAILY_BATCHES} 批/天）"
+    elif wait_seconds > 0:
+        reason = (
+            f"距上次通过不足 {int(FRIEND_ACCEPT_MIN_GAP_SECONDS // 60)} 分钟，"
+            f"还需等 {int(wait_seconds // 60)} 分钟"
+        )
+    return {
+        "batches_today": batches_today,
+        "daily_batch_limit": FRIEND_ACCEPT_DAILY_BATCHES,
+        "max_per_batch": FRIEND_ACCEPT_MAX_PER_BATCH,
+        "min_gap_seconds": FRIEND_ACCEPT_MIN_GAP_SECONDS,
+        "last_batch_at": last_at,
+        "wait_seconds": round(wait_seconds, 1),
+        "blocked": bool(reason),
+        "reason": reason,
+    }
+
+
+def _record_friend_accept_batch(account_id: str, accepted: int) -> None:
+    try:
+        with _connect() as conn:
+            conn.execute(
+                "insert into wechat_friend_accept_batches(id, account_id, batch_at, accepted) values(?,?,?,?)",
+                (
+                    uuid.uuid4().hex,
+                    str(account_id or "").strip(),
+                    datetime.utcnow().isoformat(),
+                    int(accepted or 0),
+                ),
+            )
+    except Exception:
+        logging.getLogger(__name__).debug("failed to record friend accept batch", exc_info=True)
+
+
 def _friend_add_target_state(account_id: str, target: str) -> Dict[str, Any]:
     account_id = str(account_id or "").strip()
     target = str(target or "").strip()
@@ -18676,7 +18819,8 @@ async def create_add_friend_task(
     apply_message: str = "",
     remark: str = "",
     tags: Optional[List[str]] = None,
-    permission: str = "朋友圈",
+    # 默认「仅聊天」：照鹰牛 add_new_friend(chat_only) 的默认，别一加好友就给陌生人开朋友圈。
+    permission: str = "仅聊天",
     prepare_only: bool = False,
     client_request_id: str = "",
     queue_only: bool = False,
@@ -18779,7 +18923,7 @@ async def create_add_friend_task(
             "apply_message": str(apply_message or ""),
             "remark": str(remark or ""),
             "tags": tags or [],
-            "permission": str(permission or "朋友圈"),
+            "permission": str(permission or "仅聊天"),
             "prepare_only": bool(prepare_only),
         },
         strategy=strategy,
@@ -18835,7 +18979,7 @@ async def _process_add_friend_task(task: Dict[str, Any]) -> Dict[str, Any]:
                     apply_message=str(payload.get("apply_message") or ""),
                     remark=str(payload.get("remark") or ""),
                     tags=list(payload.get("tags") or []),
-                    permission=str(payload.get("permission") or "朋友圈"),
+                    permission=str(payload.get("permission") or "仅聊天"),
                     prepare_only=bool(payload.get("prepare_only")),
                 )
                 ok = True

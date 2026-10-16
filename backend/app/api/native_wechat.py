@@ -125,7 +125,8 @@ class AddFriendBody(BaseModel):
     apply_message: str = Field(default="", max_length=120)
     remark: str = Field(default="", max_length=120)
     tags: List[str] = Field(default_factory=list, max_length=20)
-    permission: str = Field(default="朋友圈", max_length=20)
+    # 照鹰牛默认：仅聊天（要放开由用户在界面上显式选）
+    permission: str = Field(default="仅聊天", max_length=20)
     prepare_only: bool = False
     queue_only: bool = False
     bulk_import: bool = False
