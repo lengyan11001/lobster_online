@@ -84,9 +84,15 @@ DEFAULT_STRATEGY: Dict[str, Any] = {
     "batch_sleep": 120,
     "max_targets_per_task": 30,
     "daily_send_limit": 80,
-    "friend_add_sleep_min": 60.0,
-    "friend_add_sleep_max": 180.0,
-    "friend_add_min_gap": 60.0,
+    # 2026-10-16 追加：批次内「单人之间」的停顿也照鹰牛口径收敛（对上一条）。
+    #   鹰牛一个批次里的 8 个人是**连着加**的 —— add_new_friend 里除了 8s/5s 的控件等待
+    #   没有任何 sleep，节奏完全交给「8 人一批 + 批间隔≥2 小时」。
+    #   我们原来在批内又插 60–180 秒单人停顿，一批 8 人光等待就 8–24 分钟，
+    #   反而让 7200 秒的批间隔失去意义。收敛为 20–45 秒：仍比他们慢（他们≈15 秒/人），
+    #   整批约 3–6 分钟，正好卡进「8 人 / 2 小时」的节奏里。
+    "friend_add_sleep_min": 20.0,
+    "friend_add_sleep_max": 45.0,
+    "friend_add_min_gap": 20.0,
     # 2026-10-16 对照鹰牛 FriendSettings.add_new_friend / Contacts.check_new_friends 的口径收敛：
     #   他们 docstring 原话「单次≤8人, 每日≤4次, 间隔≥2小时, 无论新老号超过这个频率大概率封号」。
     #   我们原来是"每 2 条歇 10 分钟、日限 20"（≈2 小时能跑完 20 条），比他们激进约 2.5 倍。
@@ -23743,7 +23749,7 @@ async def _sleep_between_targets(strategy: Dict[str, Any], idx: int, total: int,
         if (idx + 1) % batch_size == 0:
             await _sleep(float(strategy.get("friend_add_batch_sleep") or 0))
             return
-        low = float(strategy.get("friend_add_sleep_min") or 60)
+        low = float(strategy.get("friend_add_sleep_min") or 20)
         high = max(low, float(strategy.get("friend_add_sleep_max") or low))
         await _sleep(random.uniform(low, high))
         return

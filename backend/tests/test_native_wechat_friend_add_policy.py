@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import pathlib
 import sys
 
@@ -33,6 +34,36 @@ def test_active_friend_add_rate_matches_their_numbers():
     assert int(strategy["daily_friend_add_limit"]) == 8, "照鹰牛：单次≤8、日≤4 次的口径"
     assert int(strategy["friend_add_batch_size"]) == 8
     assert int(strategy["friend_add_batch_sleep"]) >= 7200, "批与批之间至少 2 小时"
+
+
+def test_inner_pause_matches_their_batch_rhythm():
+    """鹰牛批内是**连着加**的（add_new_friend 里除了 8s/5s 的控件等待没有任何 sleep），
+    控速完全交给「8 人一批 + 批间隔≥2 小时」。我们原来还在批内插 60–180 秒单人停顿，
+    一批 8 人光等待就 8–24 分钟，反而让 7200 秒的批间隔失去意义。"""
+    strategy = engine.get_strategy()
+    assert (float(strategy["friend_add_sleep_min"]), float(strategy["friend_add_sleep_max"])) == (20.0, 45.0)
+    assert float(strategy["friend_add_min_gap"]) == 20.0
+    # 整批纯等待必须明显短于批间隔，否则「8 人 / 2 小时」根本不成立
+    assert float(strategy["friend_add_sleep_max"]) * 8 < int(strategy["friend_add_batch_sleep"]) / 4
+
+
+def test_sleep_between_targets_keeps_add_friend_batch_rhythm(monkeypatch):
+    """_sleep_between_targets(kind="add_friend")：批内 20–45 秒，第 batch_size 人后走批间隔。"""
+    recorded = []
+
+    async def fake_sleep(seconds):
+        recorded.append(float(seconds))
+
+    monkeypatch.setattr(engine, "_sleep", fake_sleep)
+    strategy = engine.get_strategy()
+    batch_size = int(strategy["friend_add_batch_size"])
+    for idx in range(batch_size):
+        asyncio.run(engine._sleep_between_targets(strategy, idx, 20, kind="add_friend"))
+
+    assert recorded[-1] == float(strategy["friend_add_batch_sleep"]), "第 8 个人之后要睡满批间隔"
+    inner = recorded[:-1]
+    assert len(inner) == batch_size - 1
+    assert all(20.0 <= value <= 45.0 for value in inner), inner
 
 
 def test_accept_request_rate_constants():
