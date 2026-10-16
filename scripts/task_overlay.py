@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -37,6 +38,7 @@ class OverlayApi:
         self._control = control
         self._idle_seconds = int(idle_seconds)
         self._window = None
+        self._hotkey_note = ""
 
     def attach(self, window) -> None:
         self._window = window
@@ -56,6 +58,7 @@ class OverlayApi:
             "stopped": bool(state.get("stopped")),
             "overlay_pid": int(overlay.get("pid") or 0),
             "idle_seconds": self._idle_seconds,
+            "hotkey_note": self._hotkey_note,
         }
 
     def pause(self):
@@ -70,6 +73,30 @@ class OverlayApi:
     def resume(self):
         self._control.clear_stop()
         return self.status()
+
+    # ── 全局热键回调（抄竞品 InputGuard 的 Alt+R / Alt+Q）──────────────────
+    def set_hotkey_note(self, note: str) -> None:
+        self._hotkey_note = str(note or "")[:80]
+
+    def toggle_pause(self, reason: str = "hotkey"):
+        """Alt+R：暂停 ↔ 恢复（和按钮同义）。"""
+        try:
+            if self._control.stop_requested():
+                return self.resume()
+        except Exception:
+            pass
+        return self.pause()
+
+    def stop_and_close(self, reason: str = "hotkey"):
+        """Alt+Q：有序停机 —— 先请求暂停/停止，再关掉悬浮窗（竞品的 Alt+Q 退出）。"""
+        try:
+            self._control.request_stop(reason)
+            if self._control.task_status().get("running"):
+                self._control.stop_all(reason)
+        except Exception:
+            pass
+        self.close()
+        return {"ok": True, "stopped": True}
 
     def close(self):
         try:
@@ -92,10 +119,12 @@ PAGE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
   #close{border:0;border-radius:10px;width:30px;padding:12px 0;background:rgba(255,255,255,.14);color:#cfd8dd;
          font-size:14px;cursor:pointer}
   #state{color:#9fb3bf;font-size:11px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #hint{color:#6f8794;font-size:10px;text-align:center;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </style></head><body>
 <div class="wrap">
   <div class="row"><button id="btn">暂停任务</button><button id="close">×</button></div>
   <div id="state">检查中…</div>
+  <div id="hint">Alt+R 暂停/继续 · Alt+Q 停止并关闭</div>
 </div>
 <script>
   var paused = false;
@@ -105,7 +134,9 @@ PAGE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
     b.textContent = paused ? '继续' : '暂停任务';
     b.className = paused ? 'paused' : '';
     var t = s.running ? (s.label || '任务') + ' · ' + Math.round(s.elapsed || 0) + 's' : '当前没有在跑的任务';
-    document.getElementById('state').textContent = paused ? ('已请求暂停 · ' + t) : t;
+    var note = String(s.hotkey_note || '');
+    document.getElementById('state').textContent = (note && note.indexOf('Alt') < 0)
+      ? note : (paused ? ('已请求暂停 · ' + t) : t);
   }
   function tick() {
     if (!window.pywebview || !window.pywebview.api) { document.getElementById('state').textContent = '悬浮键已启动（等待桥接…）'; return; }
@@ -122,6 +153,73 @@ PAGE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
   setInterval(tick, 1000);
   setTimeout(tick, 300);
 </script></body></html>"""
+
+
+# ── 全局热键：抄竞品（ai-bot-pc 的 InputGuard）──────────────────────────────
+# 竞品跑自动化时会挂键盘钩子 + 屏幕状态条，文案「微信自动化运行中，Alt+Q退出，Alt+R临时解锁」：
+#   Alt+R 暂停/恢复、Alt+Q 有序停机。
+# 我们用 win32 RegisterHotKey 挂在自己的消息窗口上（不装钩子、不锁用户键鼠），
+# 好处是不管前台是微信还是别的窗口，按了都生效。
+HOTKEY_ID_PAUSE = 0xB001
+HOTKEY_ID_STOP = 0xB002
+_MOD_ALT = 0x0001
+_MOD_NOREPEAT = 0x4000
+_VK_R = 0x52
+_VK_Q = 0x51
+
+
+def _start_hotkey_listener(api) -> None:
+    def run() -> None:
+        try:
+            import win32api  # type: ignore
+            import win32con  # type: ignore
+            import win32gui  # type: ignore
+        except Exception as exc:
+            api.set_hotkey_note("热键不可用：%s" % exc)
+            return
+
+        def on_message(hwnd, msg, wparam, lparam):
+            try:
+                if msg == win32con.WM_HOTKEY:
+                    if wparam == HOTKEY_ID_PAUSE:
+                        api.toggle_pause("hotkey")
+                    elif wparam == HOTKEY_ID_STOP:
+                        api.stop_and_close("hotkey")
+                    return 0
+            except Exception:
+                pass
+            return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
+
+        try:
+            wc = win32gui.WNDCLASS()
+            wc.hInstance = win32api.GetModuleHandle(None)
+            wc.lpszClassName = "LobsterTaskOverlayHotkeys"
+            wc.lpfnWndProc = on_message
+            try:
+                win32gui.RegisterClass(wc)
+            except Exception:
+                pass
+            hwnd = win32gui.CreateWindow(
+                wc.lpszClassName, "LobsterTaskOverlayHotkeys", 0, 0, 0, 0, 0,
+                win32con.HWND_MESSAGE, 0, wc.hInstance, None,
+            )
+            ok = []
+            try:
+                win32gui.RegisterHotKey(hwnd, HOTKEY_ID_PAUSE, _MOD_ALT | _MOD_NOREPEAT, _VK_R)
+                ok.append("Alt+R")
+            except Exception:
+                pass
+            try:
+                win32gui.RegisterHotKey(hwnd, HOTKEY_ID_STOP, _MOD_ALT | _MOD_NOREPEAT, _VK_Q)
+                ok.append("Alt+Q")
+            except Exception:
+                pass
+            api.set_hotkey_note("热键 " + " / ".join(ok) if ok else "热键注册失败（被别的程序占用？）")
+            win32gui.PumpMessages()
+        except Exception as exc:
+            api.set_hotkey_note("热键注册失败：%s" % exc)
+
+    threading.Thread(target=run, daemon=True, name="lobster-overlay-hotkeys").start()
 
 
 def main() -> int:
@@ -169,6 +267,7 @@ def main() -> int:
         hidden=True,
     )
     api.attach(window)
+    _start_hotkey_listener(api)
 
     idle_limit = int(args.idle_seconds or 0)
     last_busy = time.monotonic()

@@ -7521,6 +7521,7 @@ def _dump_wechat_nav(root: Any) -> List[dict]:
 
 
 def _click_uia_node(node: Any) -> None:
+    _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
     try:
         node.Click(simulateMove=True)
     except Exception:
@@ -9438,12 +9439,31 @@ def _task_stop_requested() -> bool:
         return False
 
 
+PAUSED_MESSAGE = "\u5df2\u6682\u505c\uff1a\u70b9\u60ac\u6d6e\u952e\u300c\u7ee7\u7eed\u300d\u6216\u6309 Alt+R \u518d\u7ee7\u7eed"
+
+
+class TaskPaused(RuntimeError):
+    """用户按了暂停（悬浮键 / Alt+R）——自动化必须立刻停手，而不是接着点微信。
+
+    2026-10-16：对照竞品（ai-bot-pc 的 InputGuard：Alt+R 暂停/恢复、Alt+Q 退出）补齐。
+    以前只有通讯录同步那两处长循环查标记，通过好友 / 加好友队列 / 批量发消息都不查，
+    用户按了暂停的感受就是"她还在控制，只能管客户端"。
+    """
+
+
+def _paused_guard() -> None:
+    """每个底层动作（点击 / 按键）前都查一次：暂停了就抛 TaskPaused 让所有循环立刻收手。"""
+    if _task_stop_requested():
+        raise TaskPaused(PAUSED_MESSAGE)
+
+
 def _run_local_driver_operation(
     account_id: str,
     operation: str,
     callback: Callable[[], Any],
     *,
     retry_on_failure: bool = True,
+    force: bool = False,
 ) -> Any:
     # Do not let stale UI requests queue behind a stuck WeChat control. A
     # queued request could execute against a different chat after the first
@@ -9453,12 +9473,13 @@ def _run_local_driver_operation(
     _task_ctl = _task_control()
     if _task_ctl is not None:
         try:
-            # 2026-10-16 实测事故：用户在 12:24:17 点了悬浮键「暂停」，标记一直留着 →
-            # 12:24:23 那次同步一开跑就被掐（contacts_keyboard_stopped step=0 names=0）。
-            # 用户主动点同步 = 他就是要跑，所以新任务开始先把上一次的暂停标记清掉。
-            if _task_ctl.stop_requested():
-                _task_ctl.clear_stop()
-                _contact_sync_debug(account_id, stage="stop_flag_cleared_on_start")
+            # 2026-10-16 改：不再“新任务开始就把暂停标记清掉”。
+            # 以前那个行为会把用户刚按下的暂停静默取消（任何自动回复/发消息都会走到这里）。
+            # 现在暂停中直接拒绝启动，由用户点「继续」/Alt+R 恢复（竞品也是这个语义）。
+            if _task_ctl.stop_requested() and not force:
+                raise TaskPaused(PAUSED_MESSAGE)
+        except TaskPaused:
+            raise
         except Exception:
             pass
         try:
@@ -9490,6 +9511,9 @@ def _run_local_driver_operation(
                 return _annotate_local_driver_recovery(result, recovery_after)
             return result
         except Exception as initial_exc:
+            if isinstance(initial_exc, TaskPaused):
+                # 暂停不是故障：不重建驱动、不重试，直接上报。
+                raise
             if not retry_on_failure:
                 raise
             if isinstance(initial_exc, _LocalWeChatSendUncertain):
@@ -14360,6 +14384,7 @@ def _uia_click(node: Any, *, require_bounds: bool = True) -> None:
     session rows never expose a ``BoundingRectangle``: there is no visibility
     signal to trust, so clicking is still the only option.
     """
+    _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
     if _CONTACTS_CLICK_FENCE.get("on") and not _contacts_click_fence_node_ok(node):
         # 2026-10-14: refuse every out-of-list click while the contacts sync runs.
         _contacts_click_fence_refuse("uia_click", node=node)
@@ -14742,6 +14767,7 @@ def _uia_click_screen_point(x: int, y: int, *, expect_hwnd: int = 0, account_id_
     传了 ``expect_hwnd`` 就**必须先确认这个点确实落在那个窗口上**，不在就一个像素都不点
     （返回 False），避免点歪到别的窗口。不传时保留旧行为（其它调用点暂未改）。
     """
+    _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
     if _CONTACTS_CLICK_FENCE.get("on") and not _contacts_click_fence_point_ok(x, y):
         _contacts_click_fence_refuse("screen_point", x=int(x), y=int(y))
         return False
@@ -19725,6 +19751,7 @@ def _clipboard_text(value: str) -> None:
 
 
 def _send_hotkey_quick(key: str, *, ctrl: bool = False) -> None:
+    _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
     try:
         import win32api  # type: ignore
         import win32con  # type: ignore
@@ -19752,6 +19779,7 @@ def _paste_text_quick(text: str) -> None:
 
 
 def _send_hotkey(key: str, *, ctrl: bool = False, pause: float = 0.2) -> None:
+    _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
     try:
         import win32api  # type: ignore
         import win32con  # type: ignore
@@ -19856,6 +19884,7 @@ def _contact_kb_interval(total: int) -> float:
 
 def _key_down_fast(key: str) -> None:
     """按住不放（对照鹰牛 pyautogui.keyDown('down')）——他们的列表就是这么往下的。"""
+    _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
     try:
         import win32api  # type: ignore
         import win32con  # type: ignore
@@ -19892,6 +19921,7 @@ def _send_hotkey_fast(key: str) -> None:
     策略里的 ui_input_sleep_min/max（默认 0.35~1.2 秒）—— 每步睡一次，739 个好友就是 5~15 分钟。
     这一步是"列表导航"不是"对外动作"，不需要拟人延迟（2026-10-16 用户反馈：太快不了）。
     """
+    _paused_guard()  # 暂停即停手：键盘走列表的每一个 {DOWN} 之前都查
     try:
         import win32api  # type: ignore
         import win32con  # type: ignore
