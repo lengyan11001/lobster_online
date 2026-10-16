@@ -8609,6 +8609,41 @@ def _contacts_scroll_to_head(
     result: Dict[str, Any] = {
         "head_visible": False, "mode": "wheel_up", "rounds": 0, "ready": False, "reopened": False,
     }
+    # 2026-10-16（对照鹰牛 Contacts.switch_to_first_friend）：他们回顶是 SetFocus + {HOME}，不是滚轮。
+    # 滚轮每滚一次虚拟列表会渲染出 0 行的空档，我们以前把那个空档误判成"分组被收起"，
+    # 还白白滚 20 轮 × 0.35s。这里先试 HOME（两次），成了就直接返回。
+    try:
+        import uiautomation as _auto_home  # type: ignore
+
+        _list_home = _uia_strict_contact_list(_auto_home.ControlFromHandle(int(hwnd))) or contact_list
+    except Exception:
+        _list_home = contact_list
+    if _list_home is not None:
+        try:
+            _list_home.SetFocus()
+        except Exception:
+            pass
+        for _home_attempt in range(2):
+            try:
+                _send_hotkey_fast("home")
+            except Exception:
+                break
+            time.sleep(0.25)
+            try:
+                _names_home = _uia_visible_contact_cell_names(_list_home)
+            except Exception:
+                _names_home = []
+            if _names_home:
+                result.update({
+                    "head_visible": True,
+                    "mode": "home_key",
+                    "rounds": _home_attempt + 1,
+                })
+                state_home = _contacts_group_state(hwnd, keep)
+                if state_home is False or (state_home is None and not _contacts_entry_ready(hwnd)):
+                    result["reopened"] = bool(_contacts_click_group_row(hwnd, keep, expect_open=True, attempts=2))
+                result["ready"] = bool(_contacts_entry_ready(hwnd) or _contacts_group_state(hwnd, keep))
+                return result
     last_fingerprint = ""
     for round_index in range(1, max(1, int(max_pageups)) + 1):
         result["rounds"] = round_index
@@ -8657,7 +8692,16 @@ def _contacts_scroll_to_head(
 
 
 def _open_contacts_sublist(hwnd: int, account_id_hint: str = "") -> bool:
-    """点开通讯录里的「联系人」二级入口（人在这一层，一级页只有分组）。"""
+    """点开通讯录里的「联系人」二级入口（人在这一层，一级页只有分组）。
+
+    2026-10-16（对照鹰牛 WeChatTools.Navigator.open_contacts / Tools.collapse_contacts）：
+    他们**从不用坐标去点粘性标题**，而是
+      a) 按控件名找到分组行（ContactsListItem / NewFriendListItem / …），click_input 之后
+         **校验 class_name != mmui::ContactsCellGroupView**（防止点到分组头把档收起）；
+      b) 点开之后 SetFocus 到列表再发 {HOME} 回顶（Contacts.switch_to_first_friend 同款）。
+    我们原来是"按坐标点那个「⌄ 联系人 739」粘性标题"（UIA 里没这个节点），点偏一点就把分组收起，
+    线上表现就是"它自己不展开、要人手动展开"。现在改成先用带校验的分组行点击。
+    """
     if not hwnd or not _module_available("uiautomation"):
         return False
     import uiautomation as auto  # type: ignore
@@ -8666,6 +8710,36 @@ def _open_contacts_sublist(hwnd: int, account_id_hint: str = "") -> bool:
         root = auto.ControlFromHandle(int(hwnd))
     except Exception:
         return False
+    # 已经在「联系人」列表里（能读到联系人行）就不用展开。
+    try:
+        if _contacts_entry_ready(hwnd):
+            return True
+    except Exception:
+        pass
+    for _prefix in ("联系人", "通讯录管理"):
+        try:
+            clicked_name = _contacts_click_group_row(hwnd, _prefix)
+        except Exception as exc:
+            _contact_sync_debug(account_id_hint, stage="open_contacts_group_click_error",
+                                prefix=_prefix, error=str(exc)[:160])
+            continue
+        if not clicked_name:
+            continue
+        _contact_sync_debug(account_id_hint, stage="open_contacts_sublist_clicked",
+                            node=clicked_name, cls="group_row")
+        # 鹰牛的做法：点开后把焦点给列表，再 {HOME} 回顶 —— 后面从第一个联系人开始走。
+        try:
+            _list_now = _uia_strict_contact_list(auto.ControlFromHandle(int(hwnd)))
+            if _list_now is not None:
+                _list_now.SetFocus()
+        except Exception:
+            pass
+        try:
+            _send_hotkey_fast("home")
+        except Exception:
+            pass
+        time.sleep(0.4)
+        return True
     for node in _uia_walk(root, max_depth=14):
         try:
             name = _uia_control_text(node)
@@ -9308,6 +9382,25 @@ def _collect_local_driver_recovery(target: Dict[str, Any], source: Any) -> None:
         events.append(dict(recovery))
 
 
+def _task_control():
+    """全局暂停控制（悬浮键写标记、引擎循环查标记）。拿不到就退化成 None，不影响主流程。"""
+    try:
+        from . import task_control  # type: ignore
+
+        return task_control
+    except Exception:
+        return None
+
+
+def _task_stop_requested() -> bool:
+    """悬浮键/接口按下"暂停"后为 True。长循环每一步都查它，做优雅收尾而不是被杀进程。"""
+    control = _task_control()
+    try:
+        return bool(control and control.stop_requested())
+    except Exception:
+        return False
+
+
 def _run_local_driver_operation(
     account_id: str,
     operation: str,
@@ -9320,6 +9413,14 @@ def _run_local_driver_operation(
     # operation finishes and click the wrong control.
     if not _LOCAL_WECHAT_UI_LOCK.acquire(timeout=0.75):
         raise RuntimeError("\u5fae\u4fe1\u6b63\u5728\u5904\u7406\u4e0a\u4e00\u9879\u64cd\u4f5c\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5")
+    _task_ctl = _task_control()
+    if _task_ctl is not None:
+        try:
+            # 任务开始：报告"谁在跑"。悬浮键由 task_control 的看门狗拉起 —— 跑够 6 秒才弹，
+            # 免得"发一条消息"这种秒级操作也闪一下窗。
+            _task_ctl.begin_task("wechat", operation, account_id)
+        except Exception:
+            _task_ctl = None
     try:
         _prepare_local_automation_thread()
         recovery_before = _latest_local_driver_recovery(account_id)
@@ -9375,6 +9476,12 @@ def _run_local_driver_operation(
             recovery = _mark_local_driver_recovery(account_id, recovery, recovered=True)
             return _annotate_local_driver_recovery(result, recovery)
     finally:
+        if _task_ctl is not None:
+            try:
+                # 任务结束：悬浮键据此自动隐藏（空闲多久由 --idle-seconds 决定）。
+                _task_ctl.end_task()
+            except Exception:
+                pass
         _LOCAL_WECHAT_UI_LOCK.release()
 
 
@@ -11161,7 +11268,13 @@ def _contact_sync_keyboard_scan(
         rows_until_refresh -= 1
         return rows
 
+    stopped = False
     while steps < _CONTACT_KB_STEPS_MAX and len(seen) < clean_limit:
+        if _task_stop_requested():
+            # 悬浮键/接口按了暂停：把已经读到的落库后收尾（不半途丢数据）。
+            stopped = True
+            _contact_sync_debug(account_id, stage="contacts_keyboard_stopped", step=steps, names=len(seen))
+            break
         rows = _refresh_rows(force=not anchor_done)
         if not rows:
             if not anchor_done:
@@ -11258,6 +11371,7 @@ def _contact_sync_keyboard_scan(
         "partial": not completed,
         "wx_no_source": "keyboard_walk_fast",
         "progress_saved": len(seen),
+        "stopped": stopped,
     }
 
 
@@ -11445,6 +11559,10 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     last_card_close_at = 0.0
     for _idx in range(max_rounds):
         rounds = _idx + 1
+        if _task_stop_requested():
+            # 悬浮键/接口按了暂停：停止继续滚动/点击，已读到的在下面照常落库（partial）。
+            _contact_sync_debug(account_id, stage="contacts_stopped_by_user", round=rounds, seen=len(seen))
+            break
         try:
             root = auto.ControlFromHandle(int(hwnd))
             refreshed = _uia_strict_contact_list(root)
@@ -11932,6 +12050,7 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
         "profile_fallback_failures": profile_fallback_failures,
         "wx_fill_budget": wx_fill_budget,
         "progress_saved": len(persisted_names),
+        "stopped": _task_stop_requested(),
     }
 
 

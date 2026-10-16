@@ -119,3 +119,26 @@ def test_click_mode_still_leaves_the_legacy_path_untouched():
     assert "def _read_contact_profile_wx_no_for_cell(" in source
     assert "wx_fill_click" in source
     assert "def _sync_local_contacts_from_uia(" in source
+
+
+def test_contacts_group_is_expanded_by_verified_row_click_not_coordinates():
+    """2026-10-16：展开「联系人」必须用带校验的分组行点击（鹰牛 Tools.collapse_contacts 的做法），
+    不能用坐标去点粘性标题 —— 粘性标题在 UIA 里没节点，点偏一点就把档收起，
+    线上表现就是"它自己不展开、要人手动展开"。"""
+    source = ENGINE_PATH.read_text(encoding="utf-8")
+    body = source.split("def _open_contacts_sublist(")[1].split("\ndef ")[0]
+    assert "_contacts_click_group_row(hwnd, _prefix)" in body, "展开要走带校验的分组行点击"
+    assert "_contacts_entry_ready(hwnd)" in body, "已经展开就直接返回，别乱点"
+    assert '_send_hotkey_fast("home")' in body, "点开后要 {HOME} 回顶（鹰牛 switch_to_first_friend 同款）"
+
+
+def test_scroll_to_head_prefers_the_home_key():
+    """回顶优先 {HOME}，滚轮只做兜底：滚轮会让虚拟列表渲染出 0 行的空档，
+    以前被误判成"分组被收起"，还白白滚 20 轮 × 0.35s。"""
+    source = ENGINE_PATH.read_text(encoding="utf-8")
+    body = source.split("def _contacts_scroll_to_head(")[1].split("def _open_contacts_sublist(")[0]
+    home_at = body.find('_send_hotkey_fast("home")')
+    wheel_at = body.find("WheelUp(")
+    assert home_at >= 0, "要有 {HOME} 快路径"
+    assert '"mode": "home_key"' in body
+    assert wheel_at > home_at, "滚轮必须排在 {HOME} 后面（只做兜底）"
