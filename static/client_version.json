@@ -1,7 +1,7 @@
 {
-  "version": "2.0.147",
-  "build": 442,
-  "applied_at": "2026-10-16T23:08:57+08:00",
-  "note": "抖音获客·私信互动记住上次选择的私信方式（固定文案/AI生成/AI改写）：独立页 douyin-interaction-page.js 与工作台内联 douyin.html 两处都加 douyin-interaction-mode-v1 双写回填；话术/生成方向/改写文案三个保存按钮一并保存当前模式",
-  "bundle_sha256": "4ce7e1483a86f88223174f880d754783767fa7eec18534f6330f5c1221e7298a"
+  "version": "2.0.148",
+  "build": 443,
+  "applied_at": "2026-10-16T23:20:30+08:00",
+  "note": "用户端「教程 → 系统模板」列表与详情一起显示关联关键词/同行账号：列表行加「关键词 N 个 · 同行账号 M 个」，详情弹窗新增「关联关键词」「关联同行账号」两块（同行账号带平台），复制内容补两节；配套服务端 /api/ip-content/system-templates 已回传 keywords[]/competitors[]",
+  "bundle_sha256": "6e026ceba7f2280399d99daa5af840241ef64dab006b2038a314a15e5a2c8b76"
 }
