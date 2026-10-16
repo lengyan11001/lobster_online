@@ -813,10 +813,20 @@ _DIRECT_LLM_USER_PREFIX = (
 )
 
 
-def _wrap_last_user_for_direct_llm(messages: List[Dict[str, str]]) -> None:
+def _wrap_last_user_for_direct_llm(messages: List[Dict[str, Any]]) -> None:
     if not messages or messages[-1].get("role") != "user":
         return
-    c = (messages[-1].get("content") or "").strip()
+    content = messages[-1].get("content")
+    if isinstance(content, list):
+        # 多模态 content：只给 text part 加前缀，图片 part 原样保留
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text_value = str(part.get("text") or "")
+                if text_value.strip():
+                    part["text"] = _DIRECT_LLM_USER_PREFIX + text_value
+                break
+        return
+    c = str(content or "").strip()
     if not c:
         return
     messages[-1]["content"] = _DIRECT_LLM_USER_PREFIX + c
@@ -8526,6 +8536,151 @@ def _build_user_content_with_attachments(
     return user_content or "（无文字）"
 
 
+_IMAGE_ATTACHMENT_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic", ".heif", ".avif")
+
+
+def _looks_like_image_attachment_url(url: str) -> bool:
+    """判断附件 URL 是不是图片（视频/音频不进多模态 part，仍交给工具/生成链路）。"""
+    u = str(url or "").strip().lower()
+    if not u:
+        return False
+    if u.startswith("data:image/"):
+        return True
+    if not u.startswith(("http://", "https://")):
+        return False
+    path = u.split("?", 1)[0].split("#", 1)[0]
+    return path.endswith(_IMAGE_ATTACHMENT_SUFFIXES)
+
+
+def _attachment_image_urls_for_turn(
+    payload: ChatRequest,
+    request: Optional[Request] = None,
+    db=None,
+    user_id: Optional[int] = None,
+) -> List[str]:
+    """本轮用户消息里的图片附件 URL（显式 URL + 素材 ID 解析），最多 _MAX_VIDEO_IMAGE_ATTACHMENTS 张。"""
+    urls: List[str] = []
+    for u in (getattr(payload, "attachment_image_urls", None) or [])[: _MAX_VIDEO_IMAGE_ATTACHMENTS]:
+        s = str(u or "").strip()
+        if s:
+            urls.append(s)
+    if getattr(payload, "attachment_asset_ids", None) and db is not None and user_id is not None:
+        urls.extend(
+            _get_attachment_public_urls(
+                getattr(payload, "attachment_asset_ids", None), request, db, user_id
+            )
+        )
+    out: List[str] = []
+    for u in urls:
+        s = str(u or "").strip()
+        if s and _looks_like_image_attachment_url(s) and s not in out:
+            out.append(s)
+    return out[: _MAX_VIDEO_IMAGE_ATTACHMENTS]
+
+
+# ── 会话级附件短期记忆（Online 侧）：解决“上传的图，下一轮/失败后就记不住” ──────
+_SESSION_ATTACHMENT_MEMORY: Dict[str, Dict[str, Any]] = {}
+_SESSION_ATTACHMENT_MEMORY_MAX = 300
+_SESSION_ATTACHMENT_MEMORY_TURNS = 6
+_SESSION_MEDIA_REFERENCE_RE = re.compile(
+    r"(理解|看懂|识别|提取|看图|看下|看看|图片|图里|这张|那张|刚才|上面|之前|刚传|刚发|这个图|素材)",
+    re.IGNORECASE,
+)
+
+
+def _turn_memory_key(payload: ChatRequest) -> str:
+    sid = str(getattr(payload, "session_id", "") or "").strip()
+    if sid:
+        return "s:" + sid[:120]
+    cid = str(getattr(payload, "context_id", "") or "").strip()
+    if cid:
+        return "c:" + cid[:120]
+    return ""
+
+
+def _remember_turn_attachments(key: str, urls: List[str], asset_ids: List[str]) -> None:
+    if not key or not urls:
+        return
+    if len(_SESSION_ATTACHMENT_MEMORY) >= _SESSION_ATTACHMENT_MEMORY_MAX:
+        for stale in list(_SESSION_ATTACHMENT_MEMORY)[:60]:
+            _SESSION_ATTACHMENT_MEMORY.pop(stale, None)
+    _SESSION_ATTACHMENT_MEMORY[key] = {
+        "urls": [str(u) for u in urls][: _MAX_VIDEO_IMAGE_ATTACHMENTS],
+        "asset_ids": [str(a) for a in asset_ids][: _MAX_VIDEO_IMAGE_ATTACHMENTS],
+        "turns_left": _SESSION_ATTACHMENT_MEMORY_TURNS,
+        "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+def _recall_turn_attachments(key: str, text: str) -> Dict[str, Any]:
+    """本轮没带附件、但用户在说“这张/之前的图”→ 用会话里最近一次上传的素材。"""
+    mem = _SESSION_ATTACHMENT_MEMORY.get(key)
+    if not mem or not mem.get("urls"):
+        return {"urls": [], "recalled": False}
+    if int(mem.get("turns_left") or 0) <= 0:
+        _SESSION_ATTACHMENT_MEMORY.pop(key, None)
+        return {"urls": [], "recalled": False}
+    if not _SESSION_MEDIA_REFERENCE_RE.search(str(text or "")):
+        return {"urls": [], "recalled": False}
+    return {"urls": list(mem.get("urls") or []), "recalled": True}
+
+
+def _consume_turn_memory(key: str) -> None:
+    """成功一轮消耗一次；失败不消耗（重试还认得那张图）。"""
+    mem = _SESSION_ATTACHMENT_MEMORY.get(key)
+    if not mem:
+        return
+    mem["turns_left"] = int(mem.get("turns_left") or 0) - 1
+    if mem["turns_left"] <= 0:
+        _SESSION_ATTACHMENT_MEMORY.pop(key, None)
+
+
+def _build_user_message_with_attachments(
+    payload: ChatRequest,
+    request: Optional[Request] = None,
+    db=None,
+    user_id: Optional[int] = None,
+    *,
+    inject_images: bool = True,
+) -> Dict[str, Any]:
+    """组装本轮 user 消息：有图片附件时直接给多模态 content（text + image_url parts）。
+
+    背景（2026-10-16）：附件以前只以“文本行 URL”进 messages，指望模型自己调 image.understand；
+    2026-09-10 主模型换成 deepseek-flash 之后，这一步不再稳定触发（调用被写成文本/干脆不调），
+    于是模型回答“没收到图片”。把图作为多模态 part 直接交给模型，就不再依赖模型自觉调工具。
+    服务端 /api/sutui-chat/completions 会识别 has_images，并自动选支持 image_url 的视觉模型。
+    """
+    text_content = _build_user_content_with_attachments(payload, request, db=db, user_id=user_id)
+    memory_key = _turn_memory_key(payload)
+    if not inject_images:
+        return {"role": "user", "content": text_content}
+    try:
+        image_urls = _attachment_image_urls_for_turn(payload, request, db=db, user_id=user_id)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.warning("[CHAT] 解析附件图片 URL 失败（本轮不注入多模态）", exc_info=True)
+        image_urls = []
+    recalled = False
+    if image_urls:
+        _remember_turn_attachments(
+            memory_key, image_urls, list(getattr(payload, "attachment_asset_ids", None) or [])
+        )
+    else:
+        recalled_mem = _recall_turn_attachments(memory_key, text_content)
+        if recalled_mem["urls"]:
+            image_urls = recalled_mem["urls"]
+            recalled = True
+            text_content = text_content + "\n\n（本次没有新上传，按会话里最近上传的素材理解）"
+            logger.info("[CHAT] 召回会话里最近上传的图片 %d 张", len(image_urls))
+    if not image_urls:
+        return {"role": "user", "content": text_content}
+    logger.info("[CHAT] 本轮注入多模态图片 %d 张（附件 image_url 直给模型）", len(image_urls))
+    content: List[Dict[str, Any]] = [{"type": "text", "text": text_content}]
+    content.extend({"type": "image_url", "image_url": {"url": u}} for u in image_urls)
+    return {"role": "user", "content": content}
+
+
 @router.post("/chat", summary="智能对话")
 async def chat_endpoint(
     request: Request,
@@ -8703,7 +8858,11 @@ async def chat_endpoint(
             messages.append({"role": m.role, "content": content})
     if len(messages) > MAX_HISTORY + 1:
         messages = [messages[0]] + messages[-MAX_HISTORY:]
-    messages.append({"role": "user", "content": _build_user_content_with_attachments(payload, request, db=db, user_id=current_user.id)})
+    messages.append(
+        _build_user_message_with_attachments(
+            payload, request, db=db, user_id=current_user.id, inject_images=not direct_llm
+        )
+    )
     if direct_llm:
         _wrap_last_user_for_direct_llm(messages)
 
@@ -9114,12 +9273,13 @@ async def _chat_stream_events(
         stream_attachment_urls: List[str] = []
         try:
             messages.append(
-                {
-                    "role": "user",
-                    "content": _build_user_content_with_attachments(
-                        payload, _request_for_assets, db=db, user_id=current_user.id
-                    ),
-                }
+                _build_user_message_with_attachments(
+                    payload,
+                    _request_for_assets,
+                    db=db,
+                    user_id=current_user.id,
+                    inject_images=not direct_llm,
+                )
             )
             if direct_llm:
                 _wrap_last_user_for_direct_llm(messages)

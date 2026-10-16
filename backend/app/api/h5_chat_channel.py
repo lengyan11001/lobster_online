@@ -2843,6 +2843,94 @@ async def _run_client_command(
         await _complete_cloud_message(cloud, base, headers, message_id, error=str(exc)[:500] or "client command failed")
 
 
+# ── 会话级附件短期记忆（解决“上传的图，下一轮/失败后就记不住”）─────────────────
+_H5_ATTACHMENT_MEMORY: Dict[str, Dict[str, Any]] = {}
+_H5_ATTACHMENT_MEMORY_MAX = 200
+_H5_ATTACHMENT_MEMORY_TURNS = 6
+_H5_MEDIA_REFERENCE_RE = re.compile(
+    r"(理解|看懂|识别|提取|看图|看下|看看|图片|图里|这张|那张|刚才|上面|之前|刚传|刚发|这个图|素材)",
+    re.IGNORECASE,
+)
+
+
+def _h5_memory_key(item: Dict[str, Any]) -> str:
+    sid = str(item.get("session_id") or "").strip()
+    if sid:
+        return "s:" + sid[:120]
+    return "m:" + str(item.get("id") or "").strip()[:120]
+
+
+def _h5_remember_attachments(key: str, urls: List[str], asset_ids: List[str]) -> None:
+    if not key or not urls:
+        return
+    if len(_H5_ATTACHMENT_MEMORY) >= _H5_ATTACHMENT_MEMORY_MAX:
+        for stale in list(_H5_ATTACHMENT_MEMORY)[:50]:
+            _H5_ATTACHMENT_MEMORY.pop(stale, None)
+    _H5_ATTACHMENT_MEMORY[key] = {
+        "urls": [str(u) for u in urls][:8],
+        "asset_ids": [str(a) for a in asset_ids][:8],
+        "turns_left": _H5_ATTACHMENT_MEMORY_TURNS,
+        "at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def _h5_recall_attachments(key: str, text: str) -> Dict[str, Any]:
+    """本轮没带附件、但用户在说“这张/之前的图”→ 把最近一次上传的素材带回来。"""
+    mem = _H5_ATTACHMENT_MEMORY.get(key)
+    if not mem or not mem.get("urls"):
+        return {"urls": [], "asset_ids": [], "recalled": False}
+    if int(mem.get("turns_left") or 0) <= 0:
+        _H5_ATTACHMENT_MEMORY.pop(key, None)
+        return {"urls": [], "asset_ids": [], "recalled": False}
+    if not _H5_MEDIA_REFERENCE_RE.search(str(text or "")):
+        return {"urls": [], "asset_ids": [], "recalled": False}
+    return {
+        "urls": list(mem.get("urls") or []),
+        "asset_ids": list(mem.get("asset_ids") or []),
+        "recalled": True,
+    }
+
+
+def _h5_consume_memory_turn(key: str) -> None:
+    """一轮成功用完就消耗一次；失败不消耗（下次重试还认得那张图）。"""
+    mem = _H5_ATTACHMENT_MEMORY.get(key)
+    if not mem:
+        return
+    mem["turns_left"] = int(mem.get("turns_left") or 0) - 1
+    if mem["turns_left"] <= 0:
+        _H5_ATTACHMENT_MEMORY.pop(key, None)
+
+
+def _h5_user_content_parts(text: str, urls: List[str]) -> Any:
+    """有图片 → 多模态 content（text + image_url parts）；否则纯文本。
+
+    背景（2026-10-16）：以前只把图片 URL 写进文本、指望模型自己调 image.understand；
+    2026-09-10 主模型换成 deepseek-flash 后这一步不再稳定触发，模型会答“没收到图片”。
+    """
+    images = [
+        str(u).strip()
+        for u in (urls or [])
+        if str(u or "").strip().startswith(("http://", "https://"))
+    ][:8]
+    if not images:
+        return text
+    parts: List[Dict[str, Any]] = [{"type": "text", "text": text}]
+    parts.extend({"type": "image_url", "image_url": {"url": u}} for u in images)
+    return parts
+
+
+def _h5_apply_attachment_memory(item: Dict[str, Any], clean_content: str, attachment_urls: List[str], attachment_asset_ids: List[str]):
+    """返回 (urls, asset_ids, recalled, memory_key)：本轮的附件 + 是否来自记忆。"""
+    key = _h5_memory_key(item)
+    if attachment_urls:
+        _h5_remember_attachments(key, attachment_urls, attachment_asset_ids)
+        return attachment_urls, attachment_asset_ids, False, key
+    recalled = _h5_recall_attachments(key, clean_content)
+    if recalled["urls"]:
+        return recalled["urls"], recalled["asset_ids"], True, key
+    return attachment_urls, attachment_asset_ids, False, key
+
+
 async def _run_direct_chat(
     cloud: httpx.AsyncClient,
     base: str,
@@ -2856,6 +2944,15 @@ async def _run_direct_chat(
     clean_content, attachment_asset_ids, attachment_urls = _extract_mobile_upload_attachments(content)
     if not message_id or not (clean_content or attachment_urls):
         return
+    attachment_urls, attachment_asset_ids, attachments_recalled, _h5_mem_key = _h5_apply_attachment_memory(
+        item, clean_content, attachment_urls, attachment_asset_ids
+    )
+    if attachments_recalled:
+        logger.info(
+            "[H5-CHAT] recalled last uploaded attachment message_id=%s urls=%d",
+            message_id,
+            len(attachment_urls),
+        )
 
     event_status = await _post_cloud_event(
         cloud,
@@ -2875,11 +2972,14 @@ async def _run_direct_chat(
     }
     if attachment_urls:
         payload["attachment_image_urls"] = attachment_urls
+        if attachments_recalled:
+            payload["message"] = payload["message"] + "\n\n（本次没有新上传，按会话里最近上传的素材理解）"
         logger.info(
-            "[H5-CHAT] mobile upload attachments injected message_id=%s asset_ids=%s urls=%d",
+            "[H5-CHAT] mobile upload attachments injected message_id=%s asset_ids=%s urls=%d recalled=%s",
             message_id,
             attachment_asset_ids,
             len(attachment_urls),
+            attachments_recalled,
         )
     payload.update(_chat_turn_payload_fields(item, "h5"))
     timeout = httpx.Timeout(360.0, connect=10.0, read=360.0, write=30.0, pool=10.0)
@@ -2927,6 +3027,7 @@ async def _run_direct_chat(
         if final_error:
             await _complete_cloud_message(cloud, base, headers, message_id, error=final_error)
         else:
+            _h5_consume_memory_turn(_h5_mem_key)
             refs = _scheduled_refs_with_asset_urls(result_refs, jwt_token)
             await _complete_cloud_message(
                 cloud,
@@ -2954,6 +3055,15 @@ async def _run_openclaw_chat(
     clean_content, attachment_asset_ids, attachment_urls = _extract_mobile_upload_attachments(content)
     if not message_id or not (clean_content or attachment_urls):
         return
+    attachment_urls, attachment_asset_ids, attachments_recalled, _h5_mem_key = _h5_apply_attachment_memory(
+        item, clean_content, attachment_urls, attachment_asset_ids
+    )
+    if attachments_recalled:
+        logger.info(
+            "[H5-CHAT] recalled last uploaded attachment message_id=%s urls=%d",
+            message_id,
+            len(attachment_urls),
+        )
     await _post_cloud_event(cloud, base, headers, message_id, "thinking", {"text": "已交给本机 OpenClaw"})
     user_content = clean_content or "请根据上传图片继续处理。"
     if attachment_urls:
@@ -2962,9 +3072,18 @@ async def _run_openclaw_chat(
             for idx, url in enumerate(attachment_urls)
         )
         user_content += f"\n\n{_MOBILE_UPLOAD_TITLE}\n{upload_lines}"
+    if attachments_recalled:
+        user_content += "\n\n（本次没有新上传，按会话里最近上传的素材理解）"
+    user_payload = _h5_user_content_parts(user_content, attachment_urls)
+    logger.info(
+        "[H5-CHAT] openclaw user message multimodal=%s urls=%d recalled=%s",
+        isinstance(user_payload, list),
+        len(attachment_urls),
+        attachments_recalled,
+    )
     messages = [
-        {"role": "system", "content": "你是用户的手机会话助手。根据用户消息自然完成任务，使用中文回复。"},
-        {"role": "user", "content": user_content},
+        {"role": "system", "content": "这是用户的手机会话首字。请按用户消息自然、简洁地用中文回复。"},
+        {"role": "user", "content": user_payload},
     ]
     try:
         reply = await try_openclaw(
@@ -2984,6 +3103,7 @@ async def _run_openclaw_chat(
                 error="OpenClaw 无有效回复，请检查本机 OpenClaw Gateway 是否启动。",
             )
             return
+        _h5_consume_memory_turn(_h5_mem_key)
         await _complete_cloud_message(
             cloud,
             base,
