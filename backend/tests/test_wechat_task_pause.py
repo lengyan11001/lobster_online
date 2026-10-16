@@ -38,7 +38,6 @@ def test_paused_guard_raises_only_when_paused(monkeypatch):
 def test_action_primitives_all_pass_the_pause_gate():
     src = ENGINE.read_text(encoding="utf-8")
     for fn in (
-        "_click_uia_node",
         "_uia_click",
         "_uia_click_screen_point",
         "_send_hotkey_quick",
@@ -51,6 +50,17 @@ def test_action_primitives_all_pass_the_pause_gate():
     # _key_up_fast 是收尾（松开按住的键），必须还能跑，不能拦
     idx = src.index("def _key_up_fast(")
     assert "_paused_guard()" not in src[idx : idx + 400]
+
+
+def test_pause_never_blocks_bringing_wechat_up():
+    """2026-10-16 事故：_click_uia_node 也挂了闸门，点同步时连微信窗口都拉不起来/切不过去。
+
+    切页、把窗口拉到前台是**导航**，不是对外动作 —— 暂停不该挡它。
+    """
+    src = ENGINE.read_text(encoding="utf-8")
+    idx = src.index("def _click_uia_node(")
+    # 只看"真的调用"（带注释的那种写法），注释里提到函数名不算
+    assert "_paused_guard()  #" not in src[idx : idx + 600]
 
 
 def _fake_control(monkeypatch, *, stopped: bool, calls: list):
@@ -179,3 +189,30 @@ def test_overlay_toggle_pause_and_stop(monkeypatch):
     assert state["stopped"] is False
     api.stop_and_close("hotkey")  # Alt+Q：先停机再关窗
     assert state["stopped"] is True and state["closed"] == 1
+
+
+# ── 暂停标记 TTL（2026-10-16 事故：15:01 按的暂停把 15:31 的同步整条掐死）──
+def test_stop_flag_expires_after_ttl(monkeypatch, tmp_path):
+    import os
+    import time as _time
+
+    from backend.app.services import task_control
+
+    flag = tmp_path / "stop.flag"
+    monkeypatch.setattr(task_control, "STOP_FLAG", flag, raising=False)
+
+    flag.write_text('{"at": "2026-10-16T15:01:14", "reason": "overlay"}', encoding="utf-8")
+    monkeypatch.setattr(task_control, "STOP_FLAG_TTL_SECONDS", 600, raising=False)
+    assert task_control.stop_requested() is True, "新标记要生效"
+    os.utime(flag, (_time.time() - 3600, _time.time() - 3600))
+    assert task_control.stop_requested() is False, "过期标记必须自动作废，不能把产品锁死"
+    assert not flag.exists(), "过期标记会被清掉"
+
+
+def test_fresh_stop_flag_still_blocks(monkeypatch, tmp_path):
+    from backend.app.services import task_control
+
+    flag = tmp_path / "stop.flag"
+    monkeypatch.setattr(task_control, "STOP_FLAG", flag, raising=False)
+    flag.write_text("{}", encoding="utf-8")
+    assert task_control.stop_requested() is True

@@ -7521,7 +7521,9 @@ def _dump_wechat_nav(root: Any) -> List[dict]:
 
 
 def _click_uia_node(node: Any) -> None:
-    _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
+    # 2026-10-16 事故：这里原来也挂了 _paused_guard()，结果"点同步通讯录"时先要 _ensure_local_tab
+    # 切到通讯录页，闸门一抛异常 → 连微信窗口都拉不起来/切不过去（用户报"微信都拉不起来了"）。
+    # 切页、把窗口拉到前台属于**导航**，不是对外动作：暂停不该挡它。
     try:
         node.Click(simulateMove=True)
     except Exception:

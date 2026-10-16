@@ -61,9 +61,31 @@ def request_stop(reason: str = "overlay") -> Dict[str, Any]:
     return {"ok": True, "stopped": True, **payload}
 
 
-def stop_requested() -> bool:
+# 暂停标记最多活 10 分钟。2026-10-16 事故：用户 15:01 按了暂停、忘了点「继续」，
+# 15:31 再点"同步通讯录"时闸门先把操作掐了 —— 连微信窗口都拉不起来。过期自动作废，
+# 谁想长时间暂停就再按一次（悬浮键/Alt+R）。
+STOP_FLAG_TTL_SECONDS = 600
+
+
+def stop_expired_seconds() -> float:
+    """标记已经放了多久（秒）；没有标记返回 0。"""
     try:
-        return STOP_FLAG.exists()
+        if not STOP_FLAG.exists():
+            return 0.0
+        return max(0.0, time.time() - STOP_FLAG.stat().st_mtime)
+    except Exception:
+        return 0.0
+
+
+def stop_requested(*, ttl_seconds: Optional[float] = None) -> bool:
+    try:
+        if not STOP_FLAG.exists():
+            return False
+        ttl = STOP_FLAG_TTL_SECONDS if ttl_seconds is None else float(ttl_seconds)
+        if ttl > 0 and stop_expired_seconds() > ttl:
+            clear_stop()
+            return False
+        return True
     except Exception:
         return False
 
