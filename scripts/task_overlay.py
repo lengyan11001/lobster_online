@@ -109,17 +109,23 @@ class OverlayApi:
 
 PAGE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <style>
+  /* 2026-10-16 换成产品自己的色调：深空底 + 品牌蓝（与客户端设计令牌一致） */
+  :root{--brand:#5b7cff;--brand-hi:#7c93ff;--brand-deep:#3f5cf0;--bg0:rgba(18,18,30,.97);--bg1:rgba(10,10,18,.97);
+        --text:#e4e4e7;--muted:#a1a1aa;--line:rgba(91,124,255,.28)}
   html,body{margin:0;padding:0;background:transparent;font-family:"Microsoft YaHei",system-ui,sans-serif}
-  .wrap{display:flex;flex-direction:column;gap:4px;background:rgba(18,26,32,.92);border-radius:14px;
-        padding:8px;box-shadow:0 10px 26px rgba(0,0,0,.35)}
+  .wrap{display:flex;flex-direction:column;gap:4px;padding:8px;border-radius:14px;
+        background:linear-gradient(180deg,var(--bg0),var(--bg1));
+        border:1px solid var(--line);box-shadow:0 10px 26px rgba(4,8,24,.5)}
   .row{display:flex;gap:6px;align-items:center}
-  #btn{flex:1;border:0;border-radius:11px;padding:12px 10px;font-size:15px;font-weight:800;color:#fff;
-       background:linear-gradient(135deg,#e5484d,#c62a2f);cursor:pointer}
-  #btn.paused{background:linear-gradient(135deg,#2f9e5f,#1f7a46)}
-  #close{border:0;border-radius:10px;width:30px;padding:12px 0;background:rgba(255,255,255,.14);color:#cfd8dd;
+  #btn{flex:1;border:0;border-radius:11px;padding:12px 10px;font-size:15px;font-weight:800;color:#fff;cursor:pointer;
+       background:linear-gradient(135deg,var(--brand),var(--brand-deep));box-shadow:0 4px 12px rgba(91,124,255,.34)}
+  #btn:hover{background:linear-gradient(135deg,var(--brand-hi),var(--brand))}
+  #btn.paused{background:linear-gradient(135deg,var(--brand-hi),#6b83f5);box-shadow:0 4px 12px rgba(124,147,255,.3)}
+  #close{border:0;border-radius:10px;width:30px;padding:12px 0;background:rgba(91,124,255,.16);color:#aeb9e8;
          font-size:14px;cursor:pointer}
-  #state{color:#9fb3bf;font-size:11px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  #hint{color:#6f8794;font-size:10px;text-align:center;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #close:hover{background:rgba(239,68,68,.24);color:#ffd7d7}
+  #state{color:var(--muted);font-size:11px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #hint{color:#7883b8;font-size:10px;text-align:center;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </style></head><body>
 <div class="wrap">
   <div class="row"><button id="btn">暂停任务</button><button id="close">×</button></div>
