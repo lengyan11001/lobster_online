@@ -12,6 +12,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import mimetypes
 import os
+import queue
 import random
 import re
 import secrets
@@ -7521,6 +7522,7 @@ def _dump_wechat_nav(root: Any) -> List[dict]:
 
 
 def _click_uia_node(node: Any) -> None:
+    _epoch_guard()  # 导航动作不过暂停闸门，但卡超时被放弃的老线程依然不许点
     # 2026-10-16 事故：这里原来也挂了 _paused_guard()，结果"点同步通讯录"时先要 _ensure_local_tab
     # 切到通讯录页，闸门一抛异常 → 连微信窗口都拉不起来/切不过去（用户报"微信都拉不起来了"）。
     # 切页、把窗口拉到前台属于**导航**，不是对外动作：暂停不该挡它。
@@ -7591,7 +7593,7 @@ def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None
     msg = "切换本机微信页面失败：%s（尝试=%s 导航项=%s 最后错误=%s）" % (
         tab_name, names, dumped[:8], str(last_err)[:160],
     )
-    logger.warning("[native-wechat] %s", msg[:500])
+    logging.getLogger(__name__).warning("[native-wechat] %s", msg[:500])
     if strict:
         raise RuntimeError(msg)
 
@@ -9454,9 +9456,142 @@ class TaskPaused(RuntimeError):
 
 
 def _paused_guard() -> None:
-    """每个底层动作（点击 / 按键）前都查一次：暂停了就抛 TaskPaused 让所有循环立刻收手。"""
+    """每个底层动作（点击 / 按键）前都查一次：暂停了就抛 TaskPaused 让所有循环立刻收手。
+
+    顺手记一次"还有动作"的心跳：卡死看门狗据此判断操作是"在慢慢做"还是"整条卡住"
+    （见 _call_in_ui_executor / UIA_STALL_TIMEOUT_SECONDS）。
+    """
+    _ui_progress_tick("action")
     if _task_stop_requested():
         raise TaskPaused(PAUSED_MESSAGE)
+
+
+# ── UIA 执行器 + 卡死看门狗（抄竞品 ai-bot-pc 的 _UIAExecutor）────────────────
+# 竞品：UIA 调用跑在常驻执行线程上，单次调用超时就报「微信界面自动化调用超时（N s 无响应）」
+# 并「执行器线程已重建」。Python 杀不掉卡在 COM 里的线程，所以照抄它的**语义**：
+#   · 所有微信操作都在一个**常驻执行线程**上跑（wxauto4/UIA 句柄是线程绑定的，常驻才不会每单重建）；
+#   · 看门狗盯"多久没有动作了"（每个底层动作都会 _ui_progress_tick()），超过
+#     UIA_STALL_TIMEOUT_SECONDS 就：纪元 +1 → 丢掉整个执行器 → 下次操作自动建新的；
+#     调用方立刻拿到明确错误（可以重试），UI 锁放掉，产品不被那条卡死的线程拖住；
+#   · 纪元对不上的老线程（僵尸）下次想动微信时被 _epoch_guard() 拦住，不会点歪到别的会话。
+# 2026-10-16 事故背景：15:00:52 那次同步卡在 UIA/COM 里 5 分 44 秒没有任何日志，
+# 按暂停也没反应 —— 就是缺这一层。
+UIA_STALL_TIMEOUT_SECONDS = 180.0
+_UI_EXECUTOR_STATE: Dict[str, Any] = {"epoch": 0, "executor": None}
+_UI_PROGRESS: Dict[str, Any] = {"at": 0.0, "what": ""}
+
+
+class TaskAbandoned(RuntimeError):
+    """这个操作已经被放弃（卡超时后引擎重建了执行器）—— 僵尸线程不许再动微信。"""
+
+
+def _ui_progress_tick(what: str = "") -> None:
+    _UI_PROGRESS["at"] = time.monotonic()
+    if what:
+        _UI_PROGRESS["what"] = str(what)[:80]
+
+
+def _ui_progress_age() -> float:
+    at = float(_UI_PROGRESS.get("at") or 0.0)
+    return max(0.0, time.monotonic() - at) if at else 0.0
+
+
+def _epoch_guard() -> None:
+    """只放行"当前这一代"执行器线程；被放弃的老线程一律停手。"""
+    current = getattr(_LOCAL_WECHAT_THREAD_STATE, "epoch", None)
+    if current is None:
+        return  # 不是我们执行器里的线程（比如直接调用/测试）：不做判断
+    if int(current) != int(_UI_EXECUTOR_STATE.get("epoch") or 0):
+        raise TaskAbandoned(
+            "该微信自动化操作已被放弃（卡超时后执行器已重建），请重新发起"
+        )
+
+
+class _UiaExecutor:
+    """常驻的单线程执行器：同一个 thread id 跑所有微信操作。"""
+
+    def __init__(self, epoch: int):
+        self.epoch = int(epoch)
+        self._queue: "queue.Queue" = queue.Queue()
+        self.thread = threading.Thread(
+            target=self._loop, name="lobster-uia-exec-%s" % self.epoch, daemon=True
+        )
+        self.thread.start()
+
+    def _loop(self) -> None:
+        _LOCAL_WECHAT_THREAD_STATE.epoch = self.epoch
+        try:
+            _prepare_local_automation_thread()
+        except Exception:
+            logger.debug("[native-wechat] uia executor thread prepare failed", exc_info=True)
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+            fn, box, done = item
+            try:
+                box["result"] = fn()
+            except BaseException as exc:  # noqa: BLE001 - 原样带回调用方
+                box["error"] = exc
+            finally:
+                done.set()
+
+    def submit(self, fn: Any, box: Dict[str, Any], done: threading.Event) -> None:
+        self._queue.put((fn, box, done))
+
+
+def _ui_executor() -> "_UiaExecutor":
+    executor = _UI_EXECUTOR_STATE.get("executor")
+    if executor is None:
+        executor = _UiaExecutor(int(_UI_EXECUTOR_STATE.get("epoch") or 0))
+        _UI_EXECUTOR_STATE["executor"] = executor
+    return executor
+
+
+def _abandon_ui_executor(what: str, *, account_id: str = "") -> int:
+    """丢掉卡住的执行器并 +1 纪元；下次操作自动建新线程（竞品的「执行器线程已重建」）。"""
+    epoch = int(_UI_EXECUTOR_STATE.get("epoch") or 0) + 1
+    _UI_EXECUTOR_STATE["epoch"] = epoch
+    _UI_EXECUTOR_STATE["executor"] = None
+    logging.getLogger(__name__).warning(
+        "[native-wechat] UIA 执行器已重建 epoch=%s 原因=%s account=%s", epoch, what, account_id
+    )
+    try:
+        _contact_sync_debug(account_id, stage="uia_executor_rebuilt", reason=str(what)[:60], epoch=epoch)
+    except Exception:
+        pass
+    return epoch
+
+
+def _call_in_ui_executor(
+    fn: Any,
+    *,
+    operation: str,
+    account_id: str = "",
+    stall_seconds: Optional[float] = None,
+) -> Any:
+    """把操作交给常驻执行器跑；调用方在这里等，并盯着"有没有卡死"。"""
+    executor = _ui_executor()
+    box: Dict[str, Any] = {}
+    done = threading.Event()
+    _ui_progress_tick("start:" + str(operation)[:40])
+    executor.submit(fn, box, done)
+    limit = UIA_STALL_TIMEOUT_SECONDS if stall_seconds is None else float(stall_seconds)
+    while not done.wait(2.0):
+        age = _ui_progress_age()
+        if limit > 0 and age > limit:
+            epoch = _abandon_ui_executor("stall:%.0fs" % age, account_id=account_id)
+            logging.getLogger(__name__).warning(
+                "[native-wechat] 微信界面自动化调用超时（%.0f 秒没有任何动作）operation=%s account=%s epoch=%s",
+                age, operation, account_id, epoch,
+            )
+            raise RuntimeError(
+                "微信界面自动化调用超时（%.0f 秒没有任何动作）—— 微信可能卡死，"
+                "建议重启微信后重试；引擎已自动重建执行器" % age
+            )
+    if "error" in box:
+        raise box["error"]
+    return box.get("result")
 
 
 def _run_local_driver_operation(
@@ -9491,62 +9626,67 @@ def _run_local_driver_operation(
         except Exception:
             _task_ctl = None
     try:
-        _prepare_local_automation_thread()
-        recovery_before = _latest_local_driver_recovery(account_id)
+        def body() -> Any:
+            # 注意：这一段整体跑在**常驻执行器线程**上（wxauto4/UIA 句柄是线程绑定的），
+            # 调用方线程只在 _call_in_ui_executor 里等 + 盯卡死。
+            _prepare_local_automation_thread()
+            recovery_before = _latest_local_driver_recovery(account_id)
 
-        def invoke() -> Any:
-            previous = bool(getattr(_LOCAL_WECHAT_THREAD_STATE, "operation_handles_recovery", False))
-            _LOCAL_WECHAT_THREAD_STATE.operation_handles_recovery = retry_on_failure
-            try:
-                return callback()
-            finally:
-                _LOCAL_WECHAT_THREAD_STATE.operation_handles_recovery = previous
+            def invoke() -> Any:
+                previous = bool(getattr(_LOCAL_WECHAT_THREAD_STATE, "operation_handles_recovery", False))
+                _LOCAL_WECHAT_THREAD_STATE.operation_handles_recovery = retry_on_failure
+                try:
+                    return callback()
+                finally:
+                    _LOCAL_WECHAT_THREAD_STATE.operation_handles_recovery = previous
 
-        try:
-            result = invoke()
-            recovery_after = _latest_local_driver_recovery(account_id)
-            if (
-                recovery_after.get("recovered")
-                and recovery_after.get("finished_at")
-                and recovery_after.get("finished_at") != recovery_before.get("finished_at")
-            ):
-                return _annotate_local_driver_recovery(result, recovery_after)
-            return result
-        except Exception as initial_exc:
-            if isinstance(initial_exc, TaskPaused):
-                # 暂停不是故障：不重建驱动、不重试，直接上报。
-                raise
-            if not retry_on_failure:
-                raise
-            if isinstance(initial_exc, _LocalWeChatSendUncertain):
-                # A click already occurred. Rebuilding the driver and replaying
-                # the operation could send the same text a second time.
-                raise
-            recovery = _recover_local_wechat_driver(
-                account_id,
-                operation=operation,
-                error=str(initial_exc),
-            )
-            if not recovery.get("ok"):
-                raise RuntimeError(
-                    f"{operation}\u5931\u8d25\uff0c\u81ea\u52a8\u6062\u590d\u9a71\u52a8\u672a\u6210\u529f\uff1a"
-                    f"{recovery.get('error') or initial_exc}"
-                ) from initial_exc
             try:
                 result = invoke()
-            except Exception as retry_exc:
-                recovery = _mark_local_driver_recovery(
+                recovery_after = _latest_local_driver_recovery(account_id)
+                if (
+                    recovery_after.get("recovered")
+                    and recovery_after.get("finished_at")
+                    and recovery_after.get("finished_at") != recovery_before.get("finished_at")
+                ):
+                    return _annotate_local_driver_recovery(result, recovery_after)
+                return result
+            except Exception as initial_exc:
+                if isinstance(initial_exc, TaskPaused):
+                    # 暂停不是故障：不重建驱动、不重试，直接上报。
+                    raise
+                if not retry_on_failure:
+                    raise
+                if isinstance(initial_exc, _LocalWeChatSendUncertain):
+                    # A click already occurred. Rebuilding the driver and replaying
+                    # the operation could send the same text a second time.
+                    raise
+                recovery = _recover_local_wechat_driver(
                     account_id,
-                    recovery,
-                    recovered=False,
-                    retry_error=str(retry_exc),
+                    operation=operation,
+                    error=str(initial_exc),
                 )
-                raise RuntimeError(
-                    f"{operation}\u5931\u8d25\uff0c\u81ea\u52a8\u6062\u590d\u540e\u91cd\u8bd5\u4ecd\u5931\u8d25\uff1a{retry_exc}\uff1b"
-                    "\u8bf7\u624b\u52a8\u91cd\u542f\u5fae\u4fe1\u5e76\u91cd\u65b0\u767b\u5f55\u540e\u518d\u8bd5"
-                ) from retry_exc
-            recovery = _mark_local_driver_recovery(account_id, recovery, recovered=True)
-            return _annotate_local_driver_recovery(result, recovery)
+                if not recovery.get("ok"):
+                    raise RuntimeError(
+                        f"{operation}\u5931\u8d25\uff0c\u81ea\u52a8\u6062\u590d\u9a71\u52a8\u672a\u6210\u529f\uff1a"
+                        f"{recovery.get('error') or initial_exc}"
+                    ) from initial_exc
+                try:
+                    result = invoke()
+                except Exception as retry_exc:
+                    recovery = _mark_local_driver_recovery(
+                        account_id,
+                        recovery,
+                        recovered=False,
+                        retry_error=str(retry_exc),
+                    )
+                    raise RuntimeError(
+                        f"{operation}\u5931\u8d25\uff0c\u81ea\u52a8\u6062\u590d\u540e\u91cd\u8bd5\u4ecd\u5931\u8d25\uff1a{retry_exc}\uff1b"
+                        "\u8bf7\u624b\u52a8\u91cd\u542f\u5fae\u4fe1\u5e76\u91cd\u65b0\u767b\u5f55\u540e\u518d\u8bd5"
+                    ) from retry_exc
+                recovery = _mark_local_driver_recovery(account_id, recovery, recovered=True)
+                return _annotate_local_driver_recovery(result, recovery)
+        return _call_in_ui_executor(body, operation=operation, account_id=account_id)
+
     finally:
         if _task_ctl is not None:
             try:
@@ -14442,7 +14582,8 @@ def _uia_click(node: Any, *, require_bounds: bool = True) -> None:
     session rows never expose a ``BoundingRectangle``: there is no visibility
     signal to trust, so clicking is still the only option.
     """
-    _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
+    _paused_guard()  # 暂停即停手
+    _epoch_guard()  # 卡超时被放弃的老执行器线程不许再动微信：每一步动作前都查（对照竞品的全局暂停）
     if _CONTACTS_CLICK_FENCE.get("on") and not _contacts_click_fence_node_ok(node):
         # 2026-10-14: refuse every out-of-list click while the contacts sync runs.
         # 2026-10-16: 但"列表挪了位"不算越界 —— 按当前 rect 刷新一次再判，别把整片点击白拒。
@@ -14889,7 +15030,8 @@ def _uia_click_screen_point(x: int, y: int, *, expect_hwnd: int = 0, account_id_
     传了 ``expect_hwnd`` 就**必须先确认这个点确实落在那个窗口上**，不在就一个像素都不点
     （返回 False），避免点歪到别的窗口。不传时保留旧行为（其它调用点暂未改）。
     """
-    _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
+    _paused_guard()  # 暂停即停手
+    _epoch_guard()  # 卡超时被放弃的老执行器线程不许再动微信：每一步动作前都查（对照竞品的全局暂停）
     if _CONTACTS_CLICK_FENCE.get("on") and not _contacts_click_fence_point_ok(x, y):
         if not _contacts_click_fence_refresh_for_point(x, y, expect_hwnd):
             _contacts_click_fence_refuse("screen_point", x=int(x), y=int(y))
@@ -19943,7 +20085,8 @@ def _clipboard_text(value: str) -> None:
 
 
 def _send_hotkey_quick(key: str, *, ctrl: bool = False) -> None:
-    _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
+    _paused_guard()  # 暂停即停手
+    _epoch_guard()  # 卡超时被放弃的老执行器线程不许再动微信：每一步动作前都查（对照竞品的全局暂停）
     try:
         import win32api  # type: ignore
         import win32con  # type: ignore
@@ -19971,7 +20114,8 @@ def _paste_text_quick(text: str) -> None:
 
 
 def _send_hotkey(key: str, *, ctrl: bool = False, pause: float = 0.2) -> None:
-    _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
+    _paused_guard()  # 暂停即停手
+    _epoch_guard()  # 卡超时被放弃的老执行器线程不许再动微信：每一步动作前都查（对照竞品的全局暂停）
     try:
         import win32api  # type: ignore
         import win32con  # type: ignore
@@ -20076,7 +20220,8 @@ def _contact_kb_interval(total: int) -> float:
 
 def _key_down_fast(key: str) -> None:
     """按住不放（对照鹰牛 pyautogui.keyDown('down')）——他们的列表就是这么往下的。"""
-    _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
+    _paused_guard()  # 暂停即停手
+    _epoch_guard()  # 卡超时被放弃的老执行器线程不许再动微信：每一步动作前都查（对照竞品的全局暂停）
     try:
         import win32api  # type: ignore
         import win32con  # type: ignore
@@ -20113,7 +20258,8 @@ def _send_hotkey_fast(key: str) -> None:
     策略里的 ui_input_sleep_min/max（默认 0.35~1.2 秒）—— 每步睡一次，739 个好友就是 5~15 分钟。
     这一步是"列表导航"不是"对外动作"，不需要拟人延迟（2026-10-16 用户反馈：太快不了）。
     """
-    _paused_guard()  # 暂停即停手：键盘走列表的每一个 {DOWN} 之前都查
+    _paused_guard()  # 暂停即停手
+    _epoch_guard()  # 卡超时被放弃的老执行器线程不许再动微信：键盘走列表的每一个 {DOWN} 之前都查
     try:
         import win32api  # type: ignore
         import win32con  # type: ignore
