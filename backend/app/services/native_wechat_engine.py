@@ -11005,6 +11005,223 @@ def sync_local_sessions(
     )
 
 
+# ── 通讯录「键盘走列表」快扫（2026-10-16；对照鹰牛 pyweixin 的 get_next_item）──────────
+# 原点击路径的代价：每读一个人点一次行 → 点空了会读到上一个人的卡、点偏了会点到粘性标题
+# 把分组收起、点完还得把列表恢复回去（native_wechat_engine 里那一堆 row_not_clickable /
+# row_under_sticky_header / contacts_empty_round 都是这么来的）。
+# 新路径：只在第一行点一次建立「资料卡已打开」的锚点，之后每步只发一次 {DOWN}（不移动鼠标），
+# 右侧资料卡跟着选中项刷新，轮询到「卡片换人了」再读微信号；读到的名字必须能对回当前可见行，
+# 对不上就不写（宁可不学号，也不写错人）。任何一步认不出 → ok=False，调用方回落原点击路径。
+_CONTACT_KB_STEPS_MAX = 2000
+_CONTACT_KB_CARD_POLL_SECONDS = 1.2
+_CONTACT_KB_CARD_POLL_INTERVAL = 0.08
+_CONTACT_KB_STALE_STEPS = 3
+
+
+def _contact_scan_mode() -> str:
+    """通讯录扫描模式：keyboard（默认）= 键盘走列表；click = 原来的逐行点击。
+
+    LOBSTER_WECHAT_CONTACT_SCAN=click 可在不改代码的情况下临时回退（用于现场对比/排查）。
+    """
+    import os
+
+    raw_mode = str(os.environ.get("LOBSTER_WECHAT_CONTACT_SCAN") or "").strip().lower()
+    if raw_mode in {"click", "legacy", "0", "off", "false"}:
+        return "click"
+    return "keyboard"
+
+
+def _keyboard_walk_should_read(prev_texts: Any, cur_texts: Any) -> str:
+    """纯函数：这一步该 read / wait / stop（方便单测，不碰 UIA）。
+
+    - 卡片文本为空：wait（还在渲染）
+    - 与上一步不同：read（换人了，可以读）
+    - 与上一步完全相同：stop（到底了 / 焦点丢了 —— 绝不能再读，否则会把上一个人的号写成本人）
+    """
+    cur = [str(x or "").strip() for x in (cur_texts or []) if str(x or "").strip()]
+    if not cur:
+        return "wait"
+    prev = [str(x or "").strip() for x in (prev_texts or []) if str(x or "").strip()]
+    if prev and cur == prev:
+        return "stop"
+    return "read"
+
+
+def _match_card_texts_to_visible_name(card_texts: Any, rows: Any) -> str:
+    """纯函数：把资料卡上的名字对回当前可见行；对不上返回空串（调用方据此跳过，不写库）。"""
+    candidates = [
+        str(row.get("name") or "").strip()
+        for row in (rows or [])
+        if isinstance(row, dict) and str(row.get("name") or "").strip()
+    ]
+    if not candidates:
+        return ""
+    normalized = {
+        _normalize_contact_lookup_key(name): name for name in candidates if _normalize_contact_lookup_key(name)
+    }
+    for text in (card_texts or []):
+        key = _normalize_contact_lookup_key(str(text or "").strip())
+        if key and key in normalized:
+            return normalized[key]
+    return ""
+
+
+def _contact_sync_keyboard_scan(
+    account_id: str,
+    hwnd: int,
+    contact_list: Any,
+    *,
+    limit: int,
+    skip_names: Any,
+    wx_no_index: Dict[str, str],
+) -> Dict[str, Any]:
+    """键盘沿通讯录往下走读资料卡（新路径）。返回与 _sync_local_contacts_from_uia 同形状的 dict。"""
+    import uiautomation as auto  # type: ignore
+
+    clean_limit = max(1, min(int(limit or 10000), 10000))
+    skip = set(skip_names or set())
+    seen: Dict[str, Dict[str, Any]] = {}
+    pending: List[Dict[str, Any]] = []
+    learned = 0
+    steps = 0
+    stale = 0
+    anchor_done = False
+    completed = False
+    prev_texts: List[str] = []
+
+    def _flush() -> None:
+        nonlocal pending
+        if not pending:
+            return
+        _merge_contacts_snapshot(account_id, list(pending), chat_type="direct")
+        pending = []
+
+    def _ensure(name: str) -> Optional[Dict[str, Any]]:
+        clean = str(name or "").strip()
+        if not clean or clean in skip:
+            return None
+        item = seen.get(clean)
+        if item is None:
+            known_wx = wx_no_index.get(_normalize_contact_lookup_key(clean), "")
+            item = {
+                "contact_key": clean,
+                "display_name": clean,
+                "name": clean,
+                "wxNo": known_wx,
+                "source": "pc_wechat_uia_contacts_keyboard",
+                "raw": {"source": "pc_wechat_uia_contacts_keyboard", "wxNo": known_wx},
+            }
+            seen[clean] = item
+        return item
+
+    def _record(name: str, wx_no: str) -> None:
+        nonlocal learned
+        item = _ensure(name)
+        if item is None or not wx_no or item.get("wxNo"):
+            return
+        item["wxNo"] = wx_no
+        item["raw"] = {"source": "pc_wechat_uia_contacts_keyboard", "wxNo": wx_no}
+        learned += 1
+        pending.append(item)
+        _flush()
+        _contact_sync_debug(account_id, stage="keyboard_wx_no", target=str(name), wx_no=wx_no, learned=learned)
+
+    def _card_texts_now() -> List[str]:
+        try:
+            root_now = auto.ControlFromHandle(int(hwnd))
+        except Exception:
+            return []
+        card_now = _contact_profile_card_root(root_now)
+        return _card_texts(card_now or root_now)
+
+    while steps < _CONTACT_KB_STEPS_MAX and len(seen) < clean_limit:
+        rows = _uia_visible_contact_cell_rows(contact_list)
+        if not rows:
+            if not anchor_done:
+                return {"ok": False, "reason": "no_visible_rows"}
+            break
+        for row in rows:
+            _ensure(str(row.get("name") or ""))
+        if len(seen) >= clean_limit:
+            break
+        if not anchor_done:
+            first = next((r for r in rows if str(r.get("name") or "").strip() not in skip), None)
+            if first is None:
+                return {"ok": False, "reason": "no_anchor_row"}
+            anchor_name = str(first.get("name") or "").strip()
+            try:
+                anchor_wx = _read_contact_profile_wx_no_for_cell(hwnd, account_id, first.get("node"), anchor_name)
+            except Exception as exc:
+                _contact_sync_debug(account_id, stage="keyboard_anchor_error", error=str(exc)[:160])
+                return {"ok": False, "reason": "anchor_click_failed", "error": str(exc)[:200]}
+            anchor_done = True
+            if anchor_wx:
+                wx_no_index[_normalize_contact_lookup_key(anchor_name)] = anchor_wx
+                _record(anchor_name, anchor_wx)
+            prev_texts = _card_texts_now()
+            steps += 1
+            continue
+        _send_hotkey("down", pause=0.0)
+        decision = "wait"
+        cur_texts: List[str] = []
+        deadline = time.monotonic() + _CONTACT_KB_CARD_POLL_SECONDS
+        while time.monotonic() < deadline:
+            time.sleep(_CONTACT_KB_CARD_POLL_INTERVAL)
+            cur_texts = _card_texts_now()
+            decision = _keyboard_walk_should_read(prev_texts, cur_texts)
+            if decision == "read":
+                break
+        if decision != "read":
+            stale += 1
+            _contact_sync_debug(account_id, stage="keyboard_card_stale", step=steps, stale=stale)
+            if stale >= _CONTACT_KB_STALE_STEPS:
+                completed = True
+                break
+            continue
+        stale = 0
+        prev_texts = list(cur_texts)
+        steps += 1
+        try:
+            root_now = auto.ControlFromHandle(int(hwnd))
+        except Exception:
+            continue
+        card_now = _contact_profile_card_root(root_now)
+        try:
+            wx_value = str(_extract_contact_profile_wx_no(card_now or root_now, expected_name="") or "").strip()
+        except Exception:
+            wx_value = ""
+        if not wx_value:
+            continue
+        rows_after = _uia_visible_contact_cell_rows(contact_list) or rows
+        matched_name = _match_card_texts_to_visible_name(cur_texts, rows_after)
+        if not matched_name:
+            _contact_sync_debug(account_id, stage="keyboard_card_unmatched", step=steps)
+            continue
+        wx_no_index[_normalize_contact_lookup_key(matched_name)] = wx_value
+        _record(matched_name, wx_value)
+    _flush()
+
+    items = _merge_contacts_snapshot(account_id, list(seen.values()), chat_type="direct")
+    _contact_sync_debug(account_id, stage="contacts_keyboard_done", steps=steps,
+                        names=len(seen), learned=learned, completed=completed)
+    return {
+        "ok": True,
+        "items": items[:200],
+        "count": len(items),
+        "total_after": _contact_count(account_id),
+        "source": "pc_wechat_uia_contacts_keyboard",
+        "mode": "merge",
+        "scroll_completed": completed,
+        "limit_reached": len(seen) >= clean_limit,
+        "rounds": 1,
+        "keyboard_steps": steps,
+        "keyboard_wx_no_learned": learned,
+        "partial": not completed,
+        "wx_no_source": "keyboard_walk",
+        "progress_saved": len(seen),
+    }
+
+
 def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dict[str, Any]:
     if not _module_available("uiautomation"):
         raise RuntimeError("uiautomation is required to sync local contacts")
@@ -11108,6 +11325,25 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     hit_limit = False
     max_rounds = _contact_sync_max_rounds(clean_limit)
     skip_names = _wechat_contact_skip_names()
+
+    # 键盘快扫（2026-10-16 新路径）：只在第一行点一次，之后纯键盘 {DOWN} 走列表读资料卡，
+    # 对照鹰牛 pyweixin 的 get_next_item —— 不逐行点鼠标、不需要恢复列表位置。
+    # 任何一步失败/认不出就返回 ok=False，自动回落到下面的点击路径（原逻辑一行未改）。
+    if _contact_scan_mode() == "keyboard":
+        try:
+            _kb_result = _contact_sync_keyboard_scan(
+                account_id, hwnd, contact_list,
+                limit=clean_limit, skip_names=skip_names, wx_no_index=wx_no_index,
+            )
+        except Exception as _kb_exc:
+            _kb_result = {"ok": False, "reason": "exception", "error": str(_kb_exc)[:200]}
+        if isinstance(_kb_result, dict) and _kb_result.get("ok"):
+            return _kb_result
+        _contact_sync_debug(
+            account_id, stage="contacts_keyboard_fallback",
+            reason=str((_kb_result or {}).get("reason") or ""),
+            detail=str((_kb_result or {}).get("error") or "")[:160],
+        )
     profile_fallback_attempts = 0
     profile_fallback_successes = 0
     profile_fallback_failures = 0

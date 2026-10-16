@@ -1832,6 +1832,8 @@ def test_contacts_prepare_keeps_position_when_scrolled_mid_list(monkeypatch):
 
 def test_wx_fill_does_not_press_esc_without_a_real_popup_card(monkeypatch, tmp_path):
     """列表行没了但没有弹出式资料卡时：一个键都不许按（在通讯录页按 ESC = 退出/收起联系人列表）。"""
+    # 点击路径的用例：显式切到 click 模式（2026-10-16 起默认走键盘快扫）。
+    monkeypatch.setenv("LOBSTER_WECHAT_CONTACT_SCAN", "click")
     _use_temp_native_wechat_db(monkeypatch, tmp_path)
     list_node = _FakeRectList((100.0, 200.0, 400.0, 800.0))
     rows = [types.SimpleNamespace(fake_rect=(100.0, 300.0, 400.0, 354.0), name="甲")]
@@ -1928,6 +1930,8 @@ def test_wx_fill_presses_esc_when_a_popup_card_is_open(monkeypatch, tmp_path):
 
 def test_wx_fill_keeps_clicking_until_the_end_even_if_reads_fail(monkeypatch, tmp_path):
     """读不到号也要接着点下一个人（2026-10-14 用户要求：依次点点完为止，不要整轮停手）。"""
+    # 点击路径的用例：显式切到 click 模式（2026-10-16 起默认走键盘快扫）。
+    monkeypatch.setenv("LOBSTER_WECHAT_CONTACT_SCAN", "click")
     _use_temp_native_wechat_db(monkeypatch, tmp_path)
     list_node = _FakeRectList((100.0, 200.0, 400.0, 800.0))
     rows = [types.SimpleNamespace(fake_rect=(100.0, 300.0 + i * 60, 400.0, 354.0 + i * 60), name=f"人{i}")

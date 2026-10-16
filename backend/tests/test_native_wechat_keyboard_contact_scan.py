@@ -1,0 +1,99 @@
+"""通讯录「键盘走列表」快扫（2026-10-16）。
+
+背景：原来的同步是"滚一屏 → 逐行点开资料卡读微信号"，点空了会读到上一个人的卡、
+点偏了会点到粘性标题把分组收起、点完还要把列表恢复回去（线上那一堆
+row_not_clickable / row_under_sticky_header / contacts_empty_round 都来自这里）。
+
+新路径：只在第一行点一次建立锚点，之后只发 {DOWN}，资料卡跟着选中项刷新后再读。
+这里测的是**不依赖 UIA 的纯逻辑**（模式开关、步进决策、名字对账），
+真实键盘行为要在真机上验（LOBSTER_WECHAT_CONTACT_SCAN=click 可随时回退）。
+"""
+from __future__ import annotations
+
+import pathlib
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+ENGINE_PATH = ROOT / "backend" / "app" / "services" / "native_wechat_engine.py"
+
+
+@pytest.fixture(scope="module")
+def engine():
+    import sys
+
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from backend.app.services import native_wechat_engine as module
+
+    return module
+
+
+def test_scan_mode_defaults_to_keyboard(engine, monkeypatch):
+    monkeypatch.delenv("LOBSTER_WECHAT_CONTACT_SCAN", raising=False)
+    assert engine._contact_scan_mode() == "keyboard", "默认走键盘快扫（可随时用环境变量回退）"
+
+
+@pytest.mark.parametrize("raw", ["click", "legacy", "0", "off", "false", "CLICK"])
+def test_scan_mode_env_falls_back_to_click(engine, monkeypatch, raw):
+    monkeypatch.setenv("LOBSTER_WECHAT_CONTACT_SCAN", raw)
+    assert engine._contact_scan_mode() == "click"
+
+
+def test_scan_mode_ignores_unknown_values(engine, monkeypatch):
+    monkeypatch.setenv("LOBSTER_WECHAT_CONTACT_SCAN", "whatever")
+    assert engine._contact_scan_mode() == "keyboard"
+
+
+def test_walk_decision_waits_on_empty_card(engine):
+    assert engine._keyboard_walk_should_read(["张三"], []) == "wait"
+
+
+def test_walk_decision_reads_when_card_changed(engine):
+    assert engine._keyboard_walk_should_read(["张三", "广东 深圳"], ["李四", "广东 广州"]) == "read"
+
+
+def test_walk_decision_stops_when_card_is_unchanged(engine):
+    """卡片没换人就必须停：继续读会把上一个人的微信号写成本人的（线上就是这么错的）。"""
+    same = ["张三", "微信号: zhangsan"]
+    assert engine._keyboard_walk_should_read(same, list(same)) == "stop"
+    assert engine._keyboard_walk_should_read(same, same) == "stop"
+
+
+def test_match_card_texts_to_visible_name_exact(engine):
+    rows = [{"name": "张三"}, {"name": "李四"}]
+    assert engine._match_card_texts_to_visible_name(["李四", "微信号: lisi"], rows) == "李四"
+
+
+def test_match_card_texts_to_visible_name_normalized(engine):
+    """卡片上的名字常带空白；归一化只看"去掉空白后的名字"，返回值是库里那个（已 strip 的）名字。"""
+    rows = [{"name": " 张 三 "}]
+    assert engine._match_card_texts_to_visible_name(["张  三"], rows) == "张 三"
+    assert engine._match_card_texts_to_visible_name([" 张三 "], rows) == "张 三"
+
+
+def test_match_card_texts_returns_empty_when_not_found(engine):
+    """对不上就返回空 —— 调用方据此跳过，绝不给不认识的人写号。"""
+    rows = [{"name": "张三"}]
+    assert engine._match_card_texts_to_visible_name(["王五", "微信号: wangwu"], rows) == ""
+    assert engine._match_card_texts_to_visible_name([], rows) == ""
+    assert engine._match_card_texts_to_visible_name(["张三"], []) == ""
+
+
+def test_keyboard_scan_is_wired_into_contact_sync():
+    source = ENGINE_PATH.read_text(encoding="utf-8")
+    assert "def _contact_sync_keyboard_scan(" in source
+    assert "_contact_scan_mode() == \"keyboard\"" in source, "同步入口要按模式分流"
+    assert "_contact_sync_keyboard_scan(" in source.split("def _sync_local_contacts_from_uia(")[1], \
+        "键盘路径必须挂在 _sync_local_contacts_from_uia 里"
+    assert 'stage="contacts_keyboard_fallback"' in source, "键盘路径失败要能自动回落并留痕"
+    assert '_send_hotkey("down", pause=0.0)' in source, "步进必须走键盘，不移动鼠标"
+    assert "def _contact_sync_card_probe" in source, "原有诊断路径保持不变"
+
+
+def test_click_mode_still_leaves_the_legacy_path_untouched():
+    """回退模式必须还是原来那条路：逐行点击的读取器仍在、且没被改名/删除。"""
+    source = ENGINE_PATH.read_text(encoding="utf-8")
+    assert "def _read_contact_profile_wx_no_for_cell(" in source
+    assert "wx_fill_click" in source
+    assert "def _sync_local_contacts_from_uia(" in source
