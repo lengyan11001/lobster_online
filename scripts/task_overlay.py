@@ -165,6 +165,8 @@ def main() -> int:
         resizable=False,
         background_color="#121A20",
         js_api=api,
+        # 先"隐藏创建"：样式要在显示之前打上，否则创建那一下就已经把它激活成前台了。
+        hidden=True,
     )
     api.attach(window)
 
@@ -178,8 +180,72 @@ def main() -> int:
         except Exception:
             return False
 
+    def _keep_non_activating(window_title: str, *, seconds: float = 10.0) -> None:
+        """把悬浮窗设成"置顶但永不激活"，并且**反复重打**：
+
+        实测（2026-10-16）：只打一次没用 —— WinForms 的 Show() 会把扩展样式盖回去，
+        窗口照样抢走键盘焦点，正在跑的自动化发的 {DOWN}/{HOME} 全打到它身上
+        （同步只走 1 步、只认了一屏 11 个人）。所以前 10 秒每 0.5 秒重打一次，
+        并且一旦发现前台变成了悬浮窗，就把焦点还给上一个窗口。
+        """
+        try:
+            import win32con  # type: ignore
+            import win32gui  # type: ignore
+        except Exception:
+            return
+        deadline = time.monotonic() + max(2.0, float(seconds))
+        previous = 0
+        while time.monotonic() < deadline:
+            try:
+                hwnd = win32gui.FindWindow(None, window_title)
+                if hwnd:
+                    ex = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                    want = ex | win32con.WS_EX_NOACTIVATE | win32con.WS_EX_TOPMOST | win32con.WS_EX_TOOLWINDOW
+                    if ex != want:
+                        win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, want)
+                    win32gui.SetWindowPos(
+                        hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
+                    )
+                    if win32gui.GetForegroundWindow() == hwnd:
+                        # 它把自己弄到前台了：还回去（还给上一个非悬浮窗）。
+                        if previous and previous != hwnd and win32gui.IsWindow(previous):
+                            try:
+                                win32gui.SetForegroundWindow(previous)
+                            except Exception:
+                                pass
+                    else:
+                        previous = win32gui.GetForegroundWindow()
+            except Exception:
+                pass
+            time.sleep(0.5)
+
     def _watch_idle() -> None:
         nonlocal last_busy, last_status
+        # 顺序很重要：窗口此时还是隐藏的 —— 先打 NOACTIVATE/TOPMOST，再 show。
+        try:
+            import win32gui as _wg0
+
+            previous = int(_wg0.GetForegroundWindow() or 0)
+        except Exception:
+            previous = 0
+        _keep_non_activating("任务暂停", seconds=1.0)
+        try:
+            window.show()
+        except Exception:
+            pass
+        # 实测：WinForms 的 Show() 还是会把自己激活成前台（一次）。
+        # 但此刻"它"就是前台进程，所以它说话管用 —— 立刻把前台还给刚才那个窗口。
+        try:
+            import win32con as _wc
+            import win32gui as _wg
+            hwnd_self = _wg.FindWindow(None, "任务暂停")
+            if hwnd_self and _wg.GetForegroundWindow() == hwnd_self and previous and previous != hwnd_self and _wg.IsWindow(previous):
+                _wg.SetForegroundWindow(previous)
+                _wg.ShowWindow(previous, _wc.SW_SHOW)
+        except Exception:
+            pass
+        _keep_non_activating("任务暂停", seconds=10.0)
         while True:
             time.sleep(2.0)
             if _is_closed():

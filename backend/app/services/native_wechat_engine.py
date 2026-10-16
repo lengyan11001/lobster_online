@@ -8623,8 +8623,10 @@ def _contacts_scroll_to_head(
             _list_home.SetFocus()
         except Exception:
             pass
+        _ensure_wechat_foreground_for_keys(hwnd, force=True)
         for _home_attempt in range(2):
             try:
+                _ensure_wechat_foreground_for_keys(hwnd)
                 _send_hotkey_fast("home")
             except Exception:
                 break
@@ -11269,6 +11271,8 @@ def _contact_sync_keyboard_scan(
         return rows
 
     stopped = False
+    # 发键盘前先把前台要回来（悬浮键/别的窗口可能抢走焦点）。
+    _ensure_wechat_foreground_for_keys(hwnd, force=True)
     while steps < _CONTACT_KB_STEPS_MAX and len(seen) < clean_limit:
         if _task_stop_requested():
             # 悬浮键/接口按了暂停：把已经读到的落库后收尾（不半途丢数据）。
@@ -11302,6 +11306,8 @@ def _contact_sync_keyboard_scan(
             prev_texts = _quick_texts()
             steps += 1
             continue
+        # 每步都过一遍前台闸门（只在不是微信时才真的去拉，通常只是一次 GetForegroundWindow）。
+        _ensure_wechat_foreground_for_keys(hwnd)
         _send_hotkey_fast("down")
         decision = "wait"
         cur_texts: List[str] = []
@@ -11316,7 +11322,9 @@ def _contact_sync_keyboard_scan(
             time.sleep(_CONTACT_KB_CARD_POLL_INTERVAL)
         if decision != "read":
             stale += 1
-            # 卡片可能只是换了个根节点（滚动后重建）：重解析一次再判断，别急着认定到底了。
+            # 卡片没换人可能是：焦点被抢（键没送到微信）/ 卡片根换了 / 真的到底了。
+            # 前两种都要能自愈：先把前台要回来、再重取卡片根重读一次。
+            _ensure_wechat_foreground_for_keys(hwnd)
             card_root = None
             cur_texts = _quick_texts()
             if _keyboard_walk_should_read(prev_texts, cur_texts) == "read":
@@ -11324,7 +11332,8 @@ def _contact_sync_keyboard_scan(
                 prev_texts = list(cur_texts)
                 decision = "read"
             else:
-                _contact_sync_debug(account_id, stage="keyboard_card_stale", step=steps, stale=stale)
+                _contact_sync_debug(account_id, stage="keyboard_card_stale", step=steps, stale=stale,
+                                    foreground=_foreground_hwnd_safe(), wechat=int(hwnd or 0))
                 if stale >= _CONTACT_KB_STALE_STEPS:
                     completed = True
                     break
@@ -19540,6 +19549,58 @@ def _send_hotkey(key: str, *, ctrl: bool = False, pause: float = 0.2) -> None:
     if ctrl:
         win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
     _human_pause("ui_input_sleep_min", "ui_input_sleep_max", floor=max(0.0, pause))
+
+
+def _ensure_wechat_foreground_for_keys(hwnd: int, *, force: bool = False) -> bool:
+    """发键盘之前确认"前台窗口就是微信"。不是就拉一次回来。
+
+    2026-10-16 实测：悬浮暂停键（置顶窗）在任务开始 6 秒后弹出，抢走键盘焦点 →
+    我们发的 {HOME}/{DOWN} 全打到它身上，同步只走了 1 步、只认了一屏 11 个人。
+    """
+    if not hwnd:
+        return False
+    try:
+        import win32gui  # type: ignore
+
+        if not force and int(win32gui.GetForegroundWindow() or 0) == int(hwnd):
+            return True
+    except Exception:
+        pass
+    try:
+        return bool(_focus_local_wechat(int(hwnd)))
+    except Exception:
+        return False
+
+
+def _foreground_hwnd_safe() -> int:
+    try:
+        import win32gui  # type: ignore
+
+        return int(win32gui.GetForegroundWindow() or 0)
+    except Exception:
+        return 0
+
+
+def _ensure_wechat_foreground_for_keys(hwnd: int, *, force: bool = False) -> bool:
+    """发键盘之前确认"前台窗口就是微信"。不是就拉一次回来。
+
+    2026-10-16 实测：悬浮暂停键（置顶窗）在任务开始 6 秒后弹出、抢走键盘焦点 →
+    我们发的 {HOME}/{DOWN} 全打到它身上：同步只走了 1 步、只认了一屏 11 个人，
+    回顶也从 {HOME} 退回滚轮（多花 7 秒）。
+    """
+    if not hwnd:
+        return False
+    try:
+        import win32gui  # type: ignore
+
+        if not force and int(win32gui.GetForegroundWindow() or 0) == int(hwnd):
+            return True
+    except Exception:
+        pass
+    try:
+        return bool(_focus_local_wechat(int(hwnd)))
+    except Exception:
+        return False
 
 
 def _send_hotkey_fast(key: str) -> None:

@@ -142,3 +142,26 @@ def test_scroll_to_head_prefers_the_home_key():
     assert home_at >= 0, "要有 {HOME} 快路径"
     assert '"mode": "home_key"' in body
     assert wheel_at > home_at, "滚轮必须排在 {HOME} 后面（只做兜底）"
+
+
+def test_key_sends_are_gated_on_wechat_being_foreground():
+    """2026-10-16 实测事故：悬浮键弹出后抢走键盘焦点，{HOME}/{DOWN} 全打到它身上，
+    同步只走 1 步、只认了一屏 11 个人。所以每次发键前都要确认前台是微信。"""
+    source = ENGINE_PATH.read_text(encoding="utf-8")
+    assert "def _ensure_wechat_foreground_for_keys(" in source
+    scan = source.split("def _contact_sync_keyboard_scan(")[1].split("def _sync_local_contacts_from_uia(")[0]
+    assert "_ensure_wechat_foreground_for_keys(hwnd, force=True)" in scan, "走进列表前先要回前台"
+    assert '_ensure_wechat_foreground_for_keys(hwnd)\n        _send_hotkey_fast("down")' in scan, \
+        "每一按 {DOWN} 之前都要过前台闸门"
+    head = source.split("def _contacts_scroll_to_head(")[1].split("def _open_contacts_sublist(")[0]
+    assert "_ensure_wechat_foreground_for_keys(hwnd" in head, "回顶发 {HOME} 前也要确认前台"
+
+
+def test_overlay_window_never_takes_focus():
+    """悬浮窗必须 WS_EX_NOACTIVATE：否则它一弹出来就把键盘焦点从微信抢走。"""
+    script = (ROOT / "scripts" / "task_overlay.py").read_text(encoding="utf-8")
+    assert "WS_EX_NOACTIVATE" in script
+    assert "SWP_NOACTIVATE" in script
+    assert "_keep_non_activating(" in script, "样式要反复重打（Show() 会把它盖回去）"
+    assert "hidden=True" in script, "先隐藏创建，再打样式，最后 show"
+    assert "SetForegroundWindow(previous)" in script, "show 那一下的激活要当场还给上一个窗口"
