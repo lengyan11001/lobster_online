@@ -14,12 +14,14 @@ let interactionMessageStatusFilter = "all";
 let interactionPollTimer = 0;
 let interactionPollInFlight = false;
 let douyinInteractionPresetState = { activeIndex: 0, presets: [] };
+let douyinInteractionModeReady = false;
 
 const defaultDouyinInteractionMessage = "你好，我看到你对 OpenClaw 感兴趣，方便交流一下你现在最想解决的问题吗？";
 const douyinInteractionPresetCount = 10;
 const douyinInteractionPresetStorageKey = "douyin-interaction-message-presets-v1";
 const douyinInteractionRewriteStorageKey = "douyin-interaction-rewrite-seed-v1";
 const douyinInteractionPromptStorageKey = "douyin-interaction-ai-prompt-v1";
+const douyinInteractionModeStorageKey = "douyin-interaction-mode-v1";
 
 function persistDouyinLocalSetting(key, value) {
     return fetch("/api/douyin/local-settings", {
@@ -492,6 +494,7 @@ function loadDouyinInteractionPresets() {
     }
     douyinInteractionPresetState = normalizeDouyinInteractionPresetState(parsed);
     applyDouyinInteractionPresetToForm();
+    loadDouyinInteractionMode();
     fetch("/api/douyin/local-settings").then(res => res.json()).then(data => {
         const remote = data?.settings?.[douyinInteractionPresetStorageKey];
         if (remote && typeof remote === "object") {
@@ -508,6 +511,10 @@ function loadDouyinInteractionPresets() {
         const remotePrompt = data?.settings?.[douyinInteractionPromptStorageKey];
         if (promptEl && remotePrompt) promptEl.value = String(remotePrompt);
         else if (promptEl && promptEl.value.trim()) void persistDouyinLocalSetting(douyinInteractionPromptStorageKey, promptEl.value.trim());
+        const remoteMode = data?.settings?.[douyinInteractionModeStorageKey];
+        if (remoteMode) applyDouyinInteractionMode(remoteMode, false);
+        else saveDouyinInteractionMode(false);
+        douyinInteractionModeReady = true;
     }).catch(() => {});
 }
 
@@ -541,6 +548,7 @@ function applyDouyinInteractionPresetToForm() {
 }
 
 function saveDouyinInteractionPreset(showLog = false) {
+    saveDouyinInteractionMode(false);
     const messageEl = document.getElementById("douyin-interaction-message");
     if (!messageEl) return;
     douyinInteractionPresetState = normalizeDouyinInteractionPresetState(douyinInteractionPresetState);
@@ -558,6 +566,7 @@ function loadDouyinInteractionRewrite() {
 }
 
 function saveDouyinInteractionRewrite(showLog = false) {
+    saveDouyinInteractionMode(false);
     const seedEl = document.getElementById("douyin-interaction-seed-text");
     if (!seedEl) return;
     const seedText = String(seedEl.value || "").trim();
@@ -584,6 +593,7 @@ function loadDouyinInteractionPrompt() {
 }
 
 function saveDouyinInteractionPrompt(showLog = false) {
+    saveDouyinInteractionMode(false);
     const promptEl = document.getElementById("douyin-interaction-prompt");
     if (!promptEl) return;
     const promptText = String(promptEl.value || "").trim();
@@ -631,6 +641,38 @@ function toggleDouyinInteractionOptions() {
                 : "直接发送你填写的统一私信。每换一行，系统就顺序发送一条单独消息。";
     }
     refreshActionState();
+    if (douyinInteractionModeReady) persistDouyinInteractionMode(mode);
+}
+
+function persistDouyinInteractionMode(mode) {
+    const value = ["fixed", "ai", "rewrite"].includes(String(mode || "").toLowerCase()) ? String(mode).toLowerCase() : "fixed";
+    try {
+        localStorage.setItem(douyinInteractionModeStorageKey, value);
+    } catch (error) {}
+    void persistDouyinLocalSetting(douyinInteractionModeStorageKey, value);
+}
+
+function applyDouyinInteractionMode(mode, persist = false) {
+    const select = document.getElementById("douyin-interaction-mode");
+    const clean = normalize(mode).toLowerCase();
+    const value = ["fixed", "ai", "rewrite"].includes(clean) ? clean : "fixed";
+    if (select) select.value = value;
+    toggleDouyinInteractionOptions();
+    if (persist) persistDouyinInteractionMode(value);
+}
+
+function loadDouyinInteractionMode() {
+    let localMode = "";
+    try {
+        localMode = localStorage.getItem(douyinInteractionModeStorageKey) || "";
+    } catch (error) {}
+    applyDouyinInteractionMode(localMode || getDouyinInteractionMode(), false);
+}
+
+function saveDouyinInteractionMode(showLog = false) {
+    const mode = getDouyinInteractionMode();
+    persistDouyinInteractionMode(mode);
+    if (showLog) addLog(`已保存私信方式：${getDouyinInteractionModeLabel(mode)}。`, "success");
 }
 
 function getDouyinInteractionIntervalUnit() {

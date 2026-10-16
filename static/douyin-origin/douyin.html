@@ -9189,6 +9189,8 @@
         (() => {
             const storageKey = "douyin-interaction-rewrite-seed-v1";
             const promptStorageKey = "douyin-interaction-ai-prompt-v1";
+            const modeStorageKey = "douyin-interaction-mode-v1";
+            const interactionModes = ["fixed", "ai", "rewrite"];
             const persistLocalSetting = (value, key = storageKey) => fetch("/api/douyin/local-settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings: { [key]: value } }) }).catch(() => null);
             window.loadDouyinInteractionRewrite = function() {
                 const seedEl = document.getElementById("douyin-interaction-seed-text");
@@ -9202,7 +9204,41 @@
                     else if (seedEl.value.trim()) void persistLocalSetting(seedEl.value.trim());
                 }).catch(() => {});
             };
+            window.applyDouyinInteractionMode = function(value, persist = false) {
+                const select = document.getElementById("douyin-interaction-mode");
+                const clean = String(value || "").trim().toLowerCase();
+                const mode = interactionModes.includes(clean) ? clean : "fixed";
+                if (select) select.value = mode;
+                if (typeof toggleDouyinInteractionOptions === "function") toggleDouyinInteractionOptions();
+                if (persist) void persistLocalSetting(mode, modeStorageKey);
+            };
+            window.loadDouyinInteractionMode = function() {
+                const select = document.getElementById("douyin-interaction-mode");
+                if (!select) return;
+                let localMode = "";
+                try {
+                    localMode = localStorage.getItem(modeStorageKey) || "";
+                } catch (error) {}
+                if (localMode) window.applyDouyinInteractionMode(localMode, false);
+                fetch("/api/douyin/local-settings").then(res => res.json()).then(data => {
+                    const remote = data?.settings?.[modeStorageKey];
+                    if (remote) window.applyDouyinInteractionMode(remote, false);
+                    else void persistLocalSetting(String(select.value || "fixed").toLowerCase(), modeStorageKey);
+                }).catch(() => {});
+            };
+            window.saveDouyinInteractionMode = function(showLog = false) {
+                const select = document.getElementById("douyin-interaction-mode");
+                if (!select) return;
+                const raw = String(select.value || "").trim().toLowerCase();
+                const mode = interactionModes.includes(raw) ? raw : "fixed";
+                try {
+                    localStorage.setItem(modeStorageKey, mode);
+                } catch (error) {}
+                void persistLocalSetting(mode, modeStorageKey);
+                if (showLog && typeof addLog === "function") addLog(`已保存私信方式：${{ fixed: "固定文案", ai: "AI 生成", rewrite: "AI 改写" }[mode]}。`, "success");
+            };
             window.saveDouyinInteractionRewrite = function(showLog = false) {
+                window.saveDouyinInteractionMode(false);
                 const seedEl = document.getElementById("douyin-interaction-seed-text");
                 if (!seedEl) return;
                 const seedText = String(seedEl.value || "").trim();
@@ -9232,6 +9268,7 @@
                 }).catch(() => {});
             };
             window.saveDouyinInteractionPrompt = function(showLog = false) {
+                window.saveDouyinInteractionMode(false);
                 const promptEl = document.getElementById("douyin-interaction-prompt");
                 if (!promptEl) return;
                 const promptText = String(promptEl.value || "").trim();
@@ -9244,7 +9281,12 @@
                 void persistLocalSetting(promptText, promptStorageKey);
                 if (showLog && typeof addLog === "function") addLog(promptText ? "已保存 AI 生成方向。" : "已清空 AI 生成方向。", "success");
             };
-            document.addEventListener("DOMContentLoaded", () => { window.loadDouyinInteractionRewrite(); window.loadDouyinInteractionPrompt(); });
+            document.addEventListener("DOMContentLoaded", () => {
+                window.loadDouyinInteractionRewrite();
+                window.loadDouyinInteractionPrompt();
+                window.loadDouyinInteractionMode();
+                document.getElementById("douyin-interaction-mode")?.addEventListener("change", () => window.saveDouyinInteractionMode(false));
+            });
         })();
     </script>
     <script>
