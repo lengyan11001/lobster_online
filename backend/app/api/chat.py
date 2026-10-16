@@ -1254,6 +1254,22 @@ async def get_customer_service_reply(
     return _openclaw_failure_detail("抱歉，当前未配置对话模型，无法回复。")
 
 
+def _messages_have_image_parts(messages: Any) -> bool:
+    """消息里是否已经带了多模态图片 part（用于放宽本轮 LLM 超时）。"""
+    if not isinstance(messages, list):
+        return False
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        content = m.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") in {"image_url", "image"}:
+                return True
+    return False
+
+
 def _last_user_content(cur: List[Dict]) -> str:
     """从对话列表中取最后一条**真实**用户消息的文本（跳过「工具调用结果」等合成 user 条）。"""
     _skip_prefixes = (
@@ -7421,6 +7437,12 @@ async def _chat_openai(
     cur = list(msgs)
     _aid_list = attachment_asset_ids if attachment_asset_ids is not None else []
     _max_rounds = _effective_max_tool_rounds()
+    # 带图轮次：上游要做视觉理解 + 工具往返，比纯文本慢得多（实测 120s 会 ReadTimeout）
+    _turn_has_images = _messages_have_image_parts(cur)
+    _llm_call_timeout = 300.0 if _turn_has_images else 120.0
+    if _turn_has_images:
+        # 图已直给模型，正常两轮（看图 -> 回答）就够；不封顶会在上游形成 6 万 tokens 级别的长循环
+        _max_rounds = min(_max_rounds, 2)
     for rnd in range(_max_rounds):
         _publish_autofill_ctx.set(
             {
@@ -7434,7 +7456,7 @@ async def _chat_openai(
             body["tools"] = oai_tools
             body["tool_choice"] = "auto"
 
-        resp = await _post_openai_compat_chat_completions(url, body, hdrs, timeout=120.0)
+        resp = await _post_openai_compat_chat_completions(url, body, hdrs, timeout=_llm_call_timeout)
         if resp.status_code != 200:
             _raise_api_err(resp, model=f"{cfg.get('provider','')}/{cfg.get('model_name','')}")
 
@@ -7506,6 +7528,25 @@ async def _chat_openai(
                         _cap_id = (_pl_inner.get("capability_id") or "").strip()
                 else:
                     _cap_id = ""
+                # 图片已经作为多模态附件直给模型：不要再走（当前会报错 + 触发重复调用拦截 + 死循环烧额度）的 image.understand
+                if (
+                    fn.get("name") == "invoke_capability"
+                    and _cap_id in {"image.understand", "image.understand_url"}
+                    and _messages_have_image_parts(cur)
+                ):
+                    logger.info("[CHAT] image already attached; short-circuit %s tool call", _cap_id)
+                    cur.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "content": json.dumps(
+                            {
+                                "ok": True,
+                                "note": "图片已经作为多模态附件直接提供给你，请直接阅读图片内容回答用户，不需要再调用任何工具。",
+                            },
+                            ensure_ascii=False,
+                        ),
+                    })
+                    continue
                 if fn.get("name") == "invoke_capability" and _cap_id == "media.edit":
                     pl0 = a.get("payload") if isinstance(a.get("payload"), dict) else {}
                     logger.info(
@@ -8027,7 +8068,7 @@ async def _chat_openai(
                 "model": model, "messages": cur, "stream": False,
                 "tools": oai_tools, "tool_choice": "required",
             }
-            resp2 = await _post_openai_compat_chat_completions(url, body_retry, hdrs, timeout=120.0)
+            resp2 = await _post_openai_compat_chat_completions(url, body_retry, hdrs, timeout=_llm_call_timeout)
             if resp2.status_code == 200:
                 choice2 = (resp2.json().get("choices") or [{}])[0]
                 msg2 = choice2.get("message", {})
@@ -8441,6 +8482,8 @@ def _build_user_content_with_attachments(
     request: Optional[Request] = None,
     db=None,
     user_id: Optional[int] = None,
+    *,
+    images_attached: bool = False,
 ) -> str:
     user_content = (payload.message or "").strip()
     explicit_image_urls = [
@@ -8458,8 +8501,11 @@ def _build_user_content_with_attachments(
         user_content += "\n\n【用户本条消息上传的素材】\n"
         user_content += f"- 素材类型：{media_summary}\n"
         user_content += "- 生成类 prompt 只写画面/动作；发布平台、账号、标题、正文、话题必须留给 publish_content，不要写进 image.generate/video.generate prompt。\n"
-        if wants_understand:
-            user_content += "- 用户本轮要求理解/分析素材：必须调用 image.understand；禁止调用 image.generate、video.generate、media.edit 或爆款TVC管线。\n"
+        if wants_understand and images_attached:
+            user_content += "- 图片已经作为多模态附件直接提供给你（本条消息里就能看到），请直接阅读图片内容回答；不要调用 image.understand。\n"
+            user_content += "- 禁止调用 image.generate、video.generate、media.edit 或爆款TVC工具。\n"
+        elif wants_understand:
+            user_content += "- 用户是要理解图片/视频素材，请调用 image.understand；禁止调用 image.generate、video.generate、media.edit 或爆款TVC工具。\n"
         elif wants_video:
             user_content += "- 用户本轮要求视频生成：必须优先调用 video.generate；不要改用爆款TVC管线。\n"
             user_content += "- 有附件时，后端会把下方公网 URL 注入 video.generate 的 filePaths/media_files/images/image_files，必要时注入 image_url。\n"
@@ -8518,8 +8564,11 @@ def _build_user_content_with_attachments(
             if media_summary:
                 user_content += f"- 素材类型：{media_summary}\n"
             user_content += "- 生成类 prompt 只写画面/动作；发布平台、账号、标题、正文、话题必须留给 publish_content，不要写进 image.generate/video.generate prompt。\n"
-            if wants_understand:
-                user_content += "- 用户本轮要求理解/分析素材：必须按素材类型调用 image.understand 或 video.understand；禁止调用 image.generate、video.generate、media.edit 或爆款TVC管线。\n"
+            if wants_understand and images_attached:
+                user_content += "- 图片已经作为多模态附件直接提供给你（本条消息里就能看到），请直接阅读图片内容回答；不要调用 image.understand。\n"
+                user_content += "- 禁止调用 image.generate、video.generate、media.edit 或爆款TVC工具。\n"
+            elif wants_understand:
+                user_content += "- 用户是要理解图片/视频素材，请按素材类型调用 image.understand 或 video.understand；禁止调用 image.generate、video.generate、media.edit 或爆款TVC工具。\n"
             elif wants_video:
                 if wants_tvc:
                     user_content += "- 用户明确要求爆款TVC/带货/分镜时，才使用 comfly.daihuo.pipeline。\n"
@@ -8646,36 +8695,41 @@ def _build_user_message_with_attachments(
     """组装本轮 user 消息：有图片附件时直接给多模态 content（text + image_url parts）。
 
     背景（2026-10-16）：附件以前只以“文本行 URL”进 messages，指望模型自己调 image.understand；
-    2026-09-10 主模型换成 deepseek-flash 之后，这一步不再稳定触发（调用被写成文本/干脆不调），
+    2026-09-10 主模型换成 deepseek-flash 之后这一步不再稳定触发（调用被写成文本/干脆不调），
     于是模型回答“没收到图片”。把图作为多模态 part 直接交给模型，就不再依赖模型自觉调工具。
     服务端 /api/sutui-chat/completions 会识别 has_images，并自动选支持 image_url 的视觉模型。
     """
-    text_content = _build_user_content_with_attachments(payload, request, db=db, user_id=user_id)
     memory_key = _turn_memory_key(payload)
-    if not inject_images:
-        return {"role": "user", "content": text_content}
-    try:
-        image_urls = _attachment_image_urls_for_turn(payload, request, db=db, user_id=user_id)
-    except HTTPException:
-        raise
-    except Exception:
-        logger.warning("[CHAT] 解析附件图片 URL 失败（本轮不注入多模态）", exc_info=True)
-        image_urls = []
+    image_urls: List[str] = []
     recalled = False
-    if image_urls:
-        _remember_turn_attachments(
-            memory_key, image_urls, list(getattr(payload, "attachment_asset_ids", None) or [])
-        )
-    else:
-        recalled_mem = _recall_turn_attachments(memory_key, text_content)
-        if recalled_mem["urls"]:
-            image_urls = recalled_mem["urls"]
-            recalled = True
-            text_content = text_content + "\n\n（本次没有新上传，按会话里最近上传的素材理解）"
-            logger.info("[CHAT] 召回会话里最近上传的图片 %d 张", len(image_urls))
+    if inject_images:
+        try:
+            image_urls = _attachment_image_urls_for_turn(payload, request, db=db, user_id=user_id)
+        except HTTPException:
+            raise
+        except Exception:
+            logger.warning("[CHAT] 解析附件图片 URL 失败（本轮不注入多模态）", exc_info=True)
+            image_urls = []
+        if image_urls:
+            _remember_turn_attachments(
+                memory_key, image_urls, list(getattr(payload, "attachment_asset_ids", None) or [])
+            )
+        else:
+            recalled_mem = _recall_turn_attachments(memory_key, str(getattr(payload, "message", "") or ""))
+            if recalled_mem["urls"]:
+                image_urls = recalled_mem["urls"]
+                recalled = True
+                logger.info("[CHAT] 召回会话里最近上传的图片 %d 张", len(image_urls))
+
+    text_content = _build_user_content_with_attachments(
+        payload, request, db=db, user_id=user_id, images_attached=bool(image_urls)
+    )
+    if recalled:
+        text_content = text_content + "\n\n（本次没有新上传，按会话里最近上传的素材理解）"
     if not image_urls:
         return {"role": "user", "content": text_content}
-    logger.info("[CHAT] 本轮注入多模态图片 %d 张（附件 image_url 直给模型）", len(image_urls))
+
+    logger.info("[CHAT] 本轮注入多模态图片 %d 张（附件 image_url 直给模型，recalled=%s）", len(image_urls), recalled)
     content: List[Dict[str, Any]] = [{"type": "text", "text": text_content}]
     content.extend({"type": "image_url", "image_url": {"url": u}} for u in image_urls)
     return {"role": "user", "content": content}

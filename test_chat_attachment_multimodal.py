@@ -136,3 +136,33 @@ def test_h5_memory_recall_remember_and_consume():
 
     h5_mod._h5_consume_memory_turn(key)
     assert key in h5_mod._H5_ATTACHMENT_MEMORY  # 成功一轮只消耗次数，不立刻清空
+
+
+def test_hint_tells_model_not_to_call_understand_when_image_is_attached():
+    """图已经多模态直给模型时，提示词必须换成“别调 image.understand”（工具链路本身就报错）。"""
+    msg = chat_mod._build_user_message_with_attachments(
+        _payload("理解一下这张图片", urls=["https://example.com/a.jpg"])
+    )
+    text_part = msg["content"][0]["text"]
+    assert "不要调用 image.understand" in text_part
+    assert "图片已经作为多模态附件直接提供给你" in text_part
+
+
+def test_hint_keeps_tool_instruction_when_no_image_part_injected():
+    """只有视频附件（不注入图片 part）时，仍保留“调用 image/video.understand”的旧提示。"""
+    msg = chat_mod._build_user_message_with_attachments(
+        _payload("理解一下这个视频", urls=["https://example.com/v.mp4"])
+    )
+    text_part = msg["content"]
+    assert isinstance(text_part, str)
+    assert "image.understand" in text_part
+    assert "不要调用 image.understand" not in text_part
+
+
+def test_image_turn_gets_longer_llm_timeout():
+    """带图轮次要放宽 LLM 超时（120s 实测 ReadTimeout）。"""
+    assert chat_mod._messages_have_image_parts(
+        [{"role": "user", "content": [{"type": "text", "text": "x"}, {"type": "image_url", "image_url": {"url": "u"}}]}]
+    ) is True
+    assert chat_mod._messages_have_image_parts([{"role": "user", "content": "x"}]) is False
+    assert chat_mod._messages_have_image_parts(None) is False
