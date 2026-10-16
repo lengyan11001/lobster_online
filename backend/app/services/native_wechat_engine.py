@@ -11014,7 +11014,9 @@ def sync_local_sessions(
 # 对不上就不写（宁可不学号，也不写错人）。任何一步认不出 → ok=False，调用方回落原点击路径。
 _CONTACT_KB_STEPS_MAX = 2000
 _CONTACT_KB_CARD_POLL_SECONDS = 1.2
-_CONTACT_KB_CARD_POLL_INTERVAL = 0.08
+# 每步只做一次小预算快读（500 节点）；把名字对上、或连续几屏都没换人时再刷新可见行。
+_CONTACT_KB_ROW_REFRESH_EVERY = 5
+_CONTACT_KB_CARD_POLL_INTERVAL = 0.03
 _CONTACT_KB_STALE_STEPS = 3
 
 
@@ -11075,7 +11077,15 @@ def _contact_sync_keyboard_scan(
     skip_names: Any,
     wx_no_index: Dict[str, str],
 ) -> Dict[str, Any]:
-    """键盘沿通讯录往下走读资料卡（新路径）。返回与 _sync_local_contacts_from_uia 同形状的 dict。"""
+    """键盘沿通讯录往下走读资料卡（新路径）。返回与 _sync_local_contacts_from_uia 同形状的 dict。
+
+    性能口径（2026-10-16 第二轮，用户反馈"还能更快"）：
+    - 步进用 _send_hotkey_fast（**不做 human pause**：_send_hotkey 会按策略睡 0.35~1.2 秒/次）；
+    - 资料卡根节点**缓存**，不再每步做一次 5000 节点的全窗口查找；
+    - 每步只用 500 节点/8 层的小预算快读判断"卡片换没换人"，确认换人后才做完整提取；
+    - 按完之后**立刻**先读一次（多数情况卡片 20~40ms 就刷新了），不是先睡 80ms；
+    - 可见行只在每 5 步、或名字对不上时刷新一次（列表一屏一屏地变，不必每步翻树）。
+    """
     import uiautomation as auto  # type: ignore
 
     clean_limit = max(1, min(int(limit or 10000), 10000))
@@ -11088,6 +11098,9 @@ def _contact_sync_keyboard_scan(
     anchor_done = False
     completed = False
     prev_texts: List[str] = []
+    rows: List[Dict[str, Any]] = []
+    rows_until_refresh = 0
+    card_root: Any = None
 
     def _flush() -> None:
         nonlocal pending
@@ -11126,16 +11139,30 @@ def _contact_sync_keyboard_scan(
         _flush()
         _contact_sync_debug(account_id, stage="keyboard_wx_no", target=str(name), wx_no=wx_no, learned=learned)
 
-    def _card_texts_now() -> List[str]:
+    def _card_root_now() -> Any:
+        nonlocal card_root
+        if card_root is not None:
+            return card_root
         try:
             root_now = auto.ControlFromHandle(int(hwnd))
         except Exception:
-            return []
-        card_now = _contact_profile_card_root(root_now)
-        return _card_texts(card_now or root_now)
+            return None
+        card_root = _contact_profile_card_root(root_now) or root_now
+        return card_root
+
+    def _quick_texts() -> List[str]:
+        return _card_texts(_card_root_now(), max_depth=8, max_nodes=500)
+
+    def _refresh_rows(force: bool = False) -> List[Dict[str, Any]]:
+        nonlocal rows, rows_until_refresh
+        if force or not rows or rows_until_refresh <= 0:
+            rows = _uia_visible_contact_cell_rows(contact_list) or rows
+            rows_until_refresh = _CONTACT_KB_ROW_REFRESH_EVERY
+        rows_until_refresh -= 1
+        return rows
 
     while steps < _CONTACT_KB_STEPS_MAX and len(seen) < clean_limit:
-        rows = _uia_visible_contact_cell_rows(contact_list)
+        rows = _refresh_rows(force=not anchor_done)
         if not rows:
             if not anchor_done:
                 return {"ok": False, "reason": "no_visible_rows"}
@@ -11155,29 +11182,40 @@ def _contact_sync_keyboard_scan(
                 _contact_sync_debug(account_id, stage="keyboard_anchor_error", error=str(exc)[:160])
                 return {"ok": False, "reason": "anchor_click_failed", "error": str(exc)[:200]}
             anchor_done = True
+            card_root = None
             if anchor_wx:
                 wx_no_index[_normalize_contact_lookup_key(anchor_name)] = anchor_wx
                 _record(anchor_name, anchor_wx)
-            prev_texts = _card_texts_now()
+            prev_texts = _quick_texts()
             steps += 1
             continue
-        _send_hotkey("down", pause=0.0)
+        _send_hotkey_fast("down")
         decision = "wait"
         cur_texts: List[str] = []
         deadline = time.monotonic() + _CONTACT_KB_CARD_POLL_SECONDS
-        while time.monotonic() < deadline:
-            time.sleep(_CONTACT_KB_CARD_POLL_INTERVAL)
-            cur_texts = _card_texts_now()
+        while True:
+            cur_texts = _quick_texts()
             decision = _keyboard_walk_should_read(prev_texts, cur_texts)
             if decision == "read":
                 break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(_CONTACT_KB_CARD_POLL_INTERVAL)
         if decision != "read":
             stale += 1
-            _contact_sync_debug(account_id, stage="keyboard_card_stale", step=steps, stale=stale)
-            if stale >= _CONTACT_KB_STALE_STEPS:
-                completed = True
-                break
-            continue
+            # 卡片可能只是换了个根节点（滚动后重建）：重解析一次再判断，别急着认定到底了。
+            card_root = None
+            cur_texts = _quick_texts()
+            if _keyboard_walk_should_read(prev_texts, cur_texts) == "read":
+                stale = 0
+                prev_texts = list(cur_texts)
+                decision = "read"
+            else:
+                _contact_sync_debug(account_id, stage="keyboard_card_stale", step=steps, stale=stale)
+                if stale >= _CONTACT_KB_STALE_STEPS:
+                    completed = True
+                    break
+                continue
         stale = 0
         prev_texts = list(cur_texts)
         steps += 1
@@ -11192,8 +11230,9 @@ def _contact_sync_keyboard_scan(
             wx_value = ""
         if not wx_value:
             continue
-        rows_after = _uia_visible_contact_cell_rows(contact_list) or rows
-        matched_name = _match_card_texts_to_visible_name(cur_texts, rows_after)
+        matched_name = _match_card_texts_to_visible_name(cur_texts, rows)
+        if not matched_name:
+            matched_name = _match_card_texts_to_visible_name(cur_texts, _refresh_rows(force=True))
         if not matched_name:
             _contact_sync_debug(account_id, stage="keyboard_card_unmatched", step=steps)
             continue
@@ -11217,7 +11256,7 @@ def _contact_sync_keyboard_scan(
         "keyboard_steps": steps,
         "keyboard_wx_no_learned": learned,
         "partial": not completed,
-        "wx_no_source": "keyboard_walk",
+        "wx_no_source": "keyboard_walk_fast",
         "progress_saved": len(seen),
     }
 
@@ -12898,13 +12937,16 @@ def _contact_profile_card_root(root: Any) -> Any:
     return best if best is not None else label
 
 
-def _card_texts(card: Any) -> List[str]:
-    """资料卡里的短文本（去重、按顺序），用来判断"卡片有没有换人"。"""
+def _card_texts(card: Any, *, max_depth: int = 20, max_nodes: int = 3000) -> List[str]:
+    """资料卡里的短文本（去重、按顺序），用来判断"卡片有没有换人"。
+
+    max_depth/max_nodes 可调小：键盘走列表时每步都要读一次，用 500/8 的预算就够了，
+    不必每次把整张卡（3000 节点）遍历一遍。"""
     out: List[str] = []
     if card is None:
         return out
     try:
-        for node in _uia_walk(card, max_depth=20, max_nodes=3000):
+        for node in _uia_walk(card, max_depth=max_depth, max_nodes=max_nodes):
             text = _uia_control_text(node)
             if text and len(text) < 60 and text not in out:
                 out.append(text)
@@ -19379,6 +19421,34 @@ def _send_hotkey(key: str, *, ctrl: bool = False, pause: float = 0.2) -> None:
     if ctrl:
         win32api.keybd_event(win32con.VK_CONTROL, 0, win32con.KEYEVENTF_KEYUP, 0)
     _human_pause("ui_input_sleep_min", "ui_input_sleep_max", floor=max(0.0, pause))
+
+
+def _send_hotkey_fast(key: str) -> None:
+    """极简按键：只发按下/抬起，**不做 human pause**。
+
+    通讯录键盘走列表每个联系人要按一次 {DOWN}，而 _send_hotkey 结尾的 _human_pause 用的是
+    策略里的 ui_input_sleep_min/max（默认 0.35~1.2 秒）—— 每步睡一次，739 个好友就是 5~15 分钟。
+    这一步是"列表导航"不是"对外动作"，不需要拟人延迟（2026-10-16 用户反馈：太快不了）。
+    """
+    try:
+        import win32api  # type: ignore
+        import win32con  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("本机微信控制组件不可用：缺少 pywin32 键盘模块") from exc
+    vk_map = {
+        "down": win32con.VK_DOWN,
+        "up": win32con.VK_UP,
+        "pgdn": win32con.VK_NEXT,
+        "page_down": win32con.VK_NEXT,
+        "end": win32con.VK_END,
+        "home": win32con.VK_HOME,
+        "tab": win32con.VK_TAB,
+    }
+    vk = int(vk_map.get(str(key or "").strip().lower()) or 0)
+    if not vk:
+        raise RuntimeError(f"不支持的无延迟按键：{key}")
+    win32api.keybd_event(vk, 0, 0, 0)
+    win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
 
 
 def _send_keys(keys: str, *, pause: float = 0.2) -> None:

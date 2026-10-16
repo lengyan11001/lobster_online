@@ -87,8 +87,30 @@ def test_keyboard_scan_is_wired_into_contact_sync():
     assert "_contact_sync_keyboard_scan(" in source.split("def _sync_local_contacts_from_uia(")[1], \
         "键盘路径必须挂在 _sync_local_contacts_from_uia 里"
     assert 'stage="contacts_keyboard_fallback"' in source, "键盘路径失败要能自动回落并留痕"
-    assert '_send_hotkey("down", pause=0.0)' in source, "步进必须走键盘，不移动鼠标"
+    assert '_send_hotkey_fast("down")' in source, "步进必须走键盘、且用无延迟按键，不移动鼠标"
+    assert "def _send_hotkey_fast(" in source
+    # 每按一次 {DOWN} 都不能再走 human pause：_send_hotkey 结尾的 _human_pause 默认 0.35~1.2 秒
+    fast_body = source.split("def _send_hotkey_fast(")[1].split("def _send_keys(")[0]
+    assert "_human_pause(" not in fast_body, "无延迟按键里不能再睡"
     assert "def _contact_sync_card_probe" in source, "原有诊断路径保持不变"
+
+
+def test_step_key_never_sleeps_like_a_human(engine):
+    """每按一次 {DOWN} 都睡 0.35~1.2 秒是上一版的瓶颈（739 个好友 = 5~15 分钟）。"""
+    source = ENGINE_PATH.read_text(encoding="utf-8")
+    fast_body = source.split("def _send_hotkey_fast(")[1].split("def _send_keys(")[0]
+    assert "time.sleep" not in fast_body and "_human_pause(" not in fast_body
+    scan_body = source.split("def _contact_sync_keyboard_scan(")[1].split("def _sync_local_contacts_from_uia(")[0]
+    assert "_send_hotkey_fast(\"down\")" in scan_body
+    assert "_human_pause(" not in scan_body, "键盘走列表里每一步都不该再睡人工延迟"
+
+
+def test_card_read_uses_a_small_budget_every_step(engine):
+    """每步只做小预算快读（500 节点 / 8 层），确认换人后才做完整提取。"""
+    source = ENGINE_PATH.read_text(encoding="utf-8")
+    assert "_card_texts(_card_root_now(), max_depth=8, max_nodes=500)" in source
+    assert "def _card_texts(card: Any, *, max_depth: int = 20, max_nodes: int = 3000)" in source, \
+        "默认预算保持不变，避免影响其它调用方"
 
 
 def test_click_mode_still_leaves_the_legacy_path_untouched():
