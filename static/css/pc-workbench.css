@@ -3513,6 +3513,8 @@ html[data-brand="hikong"] .page:has(#dashboard.visible) .dashboard-main {
 .tutorial-st-block pre{white-space:pre-wrap;word-break:break-word;background:#f8fafc;border-radius:8px;padding:10px;font-size:12.5px;line-height:1.6;margin:0;max-height:220px;overflow:auto}
 .tutorial-st-files{display:flex;flex-direction:column;gap:6px}
 .tutorial-st-file{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:12.5px;border:1px solid rgba(148,163,184,.3);border-radius:8px;padding:6px 10px}
+.tutorial-st-chips{display:flex;flex-wrap:wrap;gap:6px}
+.tutorial-st-chip{display:inline-block;padding:3px 10px;border-radius:999px;background:#eef2ff;color:#3746a8;font-size:12px;font-weight:600;line-height:1.7}
 
 /* 系统模板详情弹窗（教程页） */
 #tutorialSystemTemplateModal{position:fixed;inset:0;z-index:1400;display:none;align-items:center;justify-content:center;padding:18px;background:rgba(15,23,42,.55)}

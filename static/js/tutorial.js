@@ -34,6 +34,39 @@
     try { return new Date(v).toLocaleString('zh-CN'); } catch (e) { return String(v); }
   }
 
+  function namesOf(items, labelFn, count) {
+    var list = Array.isArray(items) ? items : [];
+    if (!list.length) {
+      var n = Number(count || 0);
+      return n > 0 ? ('共 ' + n + ' 个') : '';
+    }
+    return list.map(labelFn).join('、');
+  }
+
+  function keywordLabel(k) {
+    return k.display_name || k.keyword || ('#' + k.id);
+  }
+
+  function competitorLabel(c) {
+    var name = c.display_name || c.account_key || ('#' + c.id);
+    var platform = c.platform === 'wechat_channels' ? '视频号' : (c.platform === 'douyin' ? '抖音' : (c.platform || ''));
+    return platform ? name + '（' + platform + '）' : name;
+  }
+
+  function resourceBlock(title, items, labelFn, count) {
+    var list = Array.isArray(items) ? items : [];
+    var body;
+    if (list.length) {
+      body = '<div class="tutorial-st-chips">' + list.map(function (x) {
+        return '<span class="tutorial-st-chip">' + esc(labelFn(x)) + '</span>';
+      }).join('') + '</div>';
+    } else {
+      var n = Number(count || 0);
+      body = '<pre>' + esc(n > 0 ? ('共 ' + n + ' 个（本次未带名称，刷新页面重试）') : '（无）') + '</pre>';
+    }
+    return '<div class="tutorial-st-block"><b>' + esc(title) + '</b>' + body + '</div>';
+  }
+
   function templateText(it) {
     return [
       '模板名称：' + (it.name || ''),
@@ -43,6 +76,10 @@
       '【朋友圈文案要求】', (it.moments || '（未填写）'),
       '',
       '【出图要求】', (it.image || '（未填写）'),
+      '',
+      '【关联关键词】', (namesOf(it.keywords, keywordLabel, it.keyword_count) || '（无）'),
+      '',
+      '【关联同行账号】', (namesOf(it.competitors, competitorLabel, it.competitor_count) || '（无）'),
     ].join('\n');
   }
 
@@ -134,6 +171,8 @@
       '<div class="tutorial-st-block"><b>口播要求</b><pre>' + esc(it.oral || '（未填写）') + '</pre></div>'
       + '<div class="tutorial-st-block"><b>朋友圈文案要求</b><pre>' + esc(it.moments || '（未填写）') + '</pre></div>'
       + '<div class="tutorial-st-block"><b>出图要求</b><pre>' + esc(it.image || '（未填写）') + '</pre></div>'
+      + resourceBlock('关联关键词', it.keywords, keywordLabel, it.keyword_count)
+      + resourceBlock('关联同行账号', it.competitors, competitorLabel, it.competitor_count)
       + (files.length
           ? '<div class="tutorial-st-block"><b>资料文件</b><div class="tutorial-st-files">'
             + files.map(function (f) {
@@ -178,9 +217,14 @@
     if (!items.length) { host.innerHTML = '<div class="empty">暂无系统模板</div>'; return; }
     host.innerHTML = items.map(function (it) {
       var files = (it.memory_files || []).length;
+      var keywordCount = Number(it.keyword_count || (Array.isArray(it.keywords) ? it.keywords.length : 0) || 0);
+      var competitorCount = Number(it.competitor_count || (Array.isArray(it.competitors) ? it.competitors.length : 0) || 0);
       return '<div class="tutorial-st-row" data-open-template="' + it.id + '">'
         + '<div class="tutorial-st-row-main"><strong>' + esc(it.name || ('模板 #' + it.id)) + '</strong>'
-        + '<span class="app-tutorial-hint">' + (fmtTime(it.updated_at) || '') + (files ? ' · 资料文件 ' + files + ' 个' : '') + '</span></div>'
+        + '<span class="app-tutorial-hint">' + (fmtTime(it.updated_at) || '')
+        + (keywordCount ? ' · 关键词 ' + keywordCount + ' 个' : '')
+        + (competitorCount ? ' · 同行账号 ' + competitorCount + ' 个' : '')
+        + (files ? ' · 资料文件 ' + files + ' 个' : '') + '</span></div>'
         + '<div class="tutorial-st-row-actions">'
         + '<button type="button" class="btn btn-outline btn-sm" data-open-template-btn="' + it.id + '">详情</button>'
         + '<button type="button" class="btn btn-primary btn-sm" data-apply-template="' + it.id + '">带入</button>'
