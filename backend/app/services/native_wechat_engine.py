@@ -11272,8 +11272,8 @@ def _contact_sync_keyboard_scan(
                 "display_name": clean,
                 "name": clean,
                 "wxNo": known_wx,
-                "source": "pc_wechat_uia_contacts_keyboard",
-                "raw": {"source": "pc_wechat_uia_contacts_keyboard", "wxNo": known_wx},
+                "source": "pc_wechat_uia_contacts",
+                "raw": {"source": "pc_wechat_uia_contacts", "path": "keyboard_walk", "wxNo": known_wx},
             }
             seen[clean] = item
         return item
@@ -11284,7 +11284,7 @@ def _contact_sync_keyboard_scan(
         if item is None or not wx_no or item.get("wxNo"):
             return
         item["wxNo"] = wx_no
-        item["raw"] = {"source": "pc_wechat_uia_contacts_keyboard", "wxNo": wx_no}
+        item["raw"] = {"source": "pc_wechat_uia_contacts_keyboard", "wxNo": wx_no, "path": "keyboard_walk"}
         learned += 1
         pending.append(item)
         _flush()
@@ -11450,7 +11450,7 @@ def _contact_sync_keyboard_scan(
         "items": items[:200],
         "count": len(items),
         "total_after": _contact_count(account_id),
-        "source": "pc_wechat_uia_contacts_keyboard",
+        "source": "pc_wechat_uia_contacts",
         "mode": "merge",
         "scroll_completed": completed,
         "limit_reached": len(seen) >= clean_limit,
@@ -24231,7 +24231,13 @@ def list_peers(
 def list_contacts(account_id: str, *, limit: int = 100, offset: int = 0, keyword: str = "", has_wx: str = "all") -> Dict[str, Any]:
     init_db()
     params: List[Any] = [account_id]
-    where = "where account_id=? and source in ('pc_wechat_uia_contacts','pc_wechat_uia_contact_profile','wx_driver_contacts','local','manual')"
+    # 2026-10-16：键盘路径曾用过一个新 source 值（pc_wechat_uia_contacts_keyboard），
+    # 但下面这个白名单没带上它 → 同步读到了 731 个、界面只显示 2 个（旧的）。两边都要认。
+    where = (
+        "where account_id=? and source in ("
+        "'pc_wechat_uia_contacts','pc_wechat_uia_contacts_keyboard','pc_wechat_uia_contact_profile',"
+        "'wx_driver_contacts','local','manual')"
+    )
     if has_wx == "yes":
         where += " and wx_no is not null and wx_no != ''"
     elif has_wx == "no":
