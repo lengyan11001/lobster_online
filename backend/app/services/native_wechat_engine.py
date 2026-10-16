@@ -12862,24 +12862,80 @@ def _uia_contact_list_score(node: Any) -> int:
     return score
 
 
+_CONTACTS_GROUP_WORDS = (
+    "\u8054\u7cfb\u4eba",        # 联系人
+    "\u65b0\u7684\u670b\u53cb",  # 新的朋友
+    "\u7fa4\u804a",              # 群聊
+    "\u6807\u7b7e",              # 标签
+    "\u516c\u4f17\u53f7",        # 公众号
+    "\u4f01\u4e1a\u5fae\u4fe1",  # 企业微信
+    "\u6211\u7684\u6536\u85cf",  # 我的收藏
+)
+
+
+def _uia_list_has_session_rows(node: Any) -> bool:
+    """True 表示这个列表里有会话行（mmui::ChatSessionCell）—— 那是聊天列表，绝不能当通讯录用。"""
+    try:
+        children = node.GetChildren()
+    except Exception:
+        return False
+    for child in children[:80]:
+        try:
+            if _uia_control_class(child) == "mmui::ChatSessionCell":
+                return True
+            if any(_uia_control_class(g) == "mmui::ChatSessionCell" for g in (child.GetChildren() or [])[:20]):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _uia_contacts_list_reason(node: Any) -> str:
+    """这个列表为什么算通讯录（只用于日志）。"""
+    name = _uia_control_text(node)
+    if "\u901a\u8baf\u5f55" in name:
+        return "name_contacts"
+    if any(word in name for word in _CONTACTS_GROUP_WORDS):
+        return "name_group"
+    return "contact_rows"
+
+
 def _uia_strict_contact_list(root: Any) -> Optional[Any]:
     """Return the local WeChat contacts list control, or None. Never guesses.
 
     2026-10-14 incident: contacts sync fell back to guessing any
     RecyclerView/ListView when the contacts list could not be found, so it
     picked up the currently open chat/session list and the sync ended up
-    clicking the user's own conversations. This helper accepts only a list
-    whose class is mmui::StickyHeaderRecyclerListView AND whose name contains
-    the Chinese word for contacts. Callers must abort loudly instead of
-    acting on anything else.
+    clicking the user's own conversations. So the hard rule stays: **含有会话行
+    （mmui::ChatSessionCell）的列表一律不算通讯录**；Callers must abort loudly
+    instead of acting on anything else.
+
+    2026-10-16 放宽（现场 13:00 那次 recyclers=1 但 found=False，整条同步直接失败）：
+    WeChat 4.x 的 StickyHeaderRecyclerListView 的 Name 是**当前展开分组**的标题，
+    窗口挪动/分组变了就不叫「通讯录」了。所以判据改成多信号，任一成立即接受：
+      1) Name 含「通讯录」（原判据）；
+      2) Name 含任一通讯录分组词（联系人 / 新的朋友 / 群聊 / 标签 / 公众号 / 企业微信联系人 / 我的收藏）；
+      3) 列表里有 mmui::ContactsCellItemView 行（会话列表是 ChatSessionCell，不会误判）。
     """
     try:
-        candidates = [node for node in _uia_contact_recycler_lists(root)
-                      if "\u901a\u8baf\u5f55" in _uia_control_text(node)]
+        resolved: List[tuple[Any, str]] = []
+        for node in _uia_contact_recycler_lists(root):
+            if _uia_list_has_session_rows(node):
+                continue
+            name = _uia_control_text(node)
+            if "\u901a\u8baf\u5f55" in name:
+                resolved.append((node, "name_contacts"))
+                continue
+            if any(word in name for word in _CONTACTS_GROUP_WORDS):
+                resolved.append((node, "name_group"))
+                continue
+            if _uia_visible_contact_cell_rows(node):
+                resolved.append((node, "contact_rows"))
     except Exception:
         return None
-    if not candidates:
+    if not resolved:
         return None
+    candidates = [item[0] for item in resolved]
     # 2026-10-14 (diag_20261014131523_85a720ec): the machine had rows from ANOTHER window in
     # the tree (row rects x=301..501 while the real list is x=901..1101), so the sync clicked
     # into a different window. Prefer the list whose own rows actually fall inside its rect.
@@ -14387,8 +14443,10 @@ def _uia_click(node: Any, *, require_bounds: bool = True) -> None:
     _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
     if _CONTACTS_CLICK_FENCE.get("on") and not _contacts_click_fence_node_ok(node):
         # 2026-10-14: refuse every out-of-list click while the contacts sync runs.
-        _contacts_click_fence_refuse("uia_click", node=node)
-        return
+        # 2026-10-16: 但"列表挪了位"不算越界 —— 按当前 rect 刷新一次再判，别把整片点击白拒。
+        if not _contacts_click_fence_refresh_for_node(node):
+            _contacts_click_fence_refuse("uia_click", node=node)
+            return
     is_session_cell = _uia_control_class(node) == "mmui::ChatSessionCell"
     if is_session_cell and require_bounds and _uia_rect_tuple(node) is None:
         _uia_scroll_cell_into_view(node)
@@ -14693,14 +14751,60 @@ def _window_at_point(hwnd: int, x: int, y: int) -> Dict[str, Any]:
 # that list (node inside it, or screen point inside its rectangle) are allowed;
 # everything else is refused and logged as stage=click_refused. Closed in
 # finally, so an exception cannot leave it on.
-_CONTACTS_CLICK_FENCE: Dict[str, Any] = {"on": False, "rect": None, "account": "", "refused": 0}
+_CONTACTS_CLICK_FENCE: Dict[str, Any] = {"on": False, "rect": None, "account": "", "refused": 0,
+                                         "refreshed": 0, "win_rect": None}
 
 
-def _contacts_click_fence_open(rect: Any, account_id: str) -> None:
+def _contacts_click_fence_open(rect: Any, account_id: str, *, win_rect: Any = None) -> None:
     _CONTACTS_CLICK_FENCE["on"] = True
     _CONTACTS_CLICK_FENCE["rect"] = tuple(float(v) for v in rect) if rect else None
     _CONTACTS_CLICK_FENCE["account"] = str(account_id or "")
     _CONTACTS_CLICK_FENCE["refused"] = 0
+    _CONTACTS_CLICK_FENCE["win_rect"] = tuple(float(v) for v in win_rect) if win_rect else None
+
+
+def _contacts_click_fence_list_ancestor(node: Any) -> Optional[Any]:
+    """向上找这个节点所属的**通讯录列表**（2026-10-16：不再只认 Name 里带「通讯录」）。
+
+    这就是围栏真正想表达的意思：只准点通讯录列表里的东西。用"节点在不在通讯录列表里"判定，
+    比"节点在不在打开围栏那一刻冻结的矩形里"稳得多 —— 窗口一挪，旧矩形就把整片点击全拒了
+    （现场 13:00:12：win_rect=[809,9,1809,1009] 而 fence=(100,100,300,400)，refused=2）。
+    """
+    cur = node
+    for _idx in range(14):
+        if cur is None:
+            break
+        try:
+            if _uia_control_class(cur) == "mmui::StickyHeaderRecyclerListView" and not _uia_list_has_session_rows(cur):
+                name = _uia_control_text(cur)
+                if ("\u901a\u8baf\u5f55" in name or any(w in name for w in _CONTACTS_GROUP_WORDS)
+                        or _uia_visible_contact_cell_rows(cur)):
+                    return cur
+        except Exception:
+            pass
+        try:
+            cur = cur.GetParentControl()
+        except Exception:
+            break
+    return None
+
+
+def _contacts_click_fence_refresh_for_node(node: Any) -> bool:
+    """节点在通讯录列表里、只是列表挪了位 → 用当前 rect 重开围栏并放行。"""
+    ancestor = _contacts_click_fence_list_ancestor(node)
+    if ancestor is None:
+        return False
+    rect = _uia_rect(ancestor)
+    if not rect:
+        return False
+    _CONTACTS_CLICK_FENCE["rect"] = tuple(float(v) for v in rect)
+    _CONTACTS_CLICK_FENCE["refreshed"] = int(_CONTACTS_CLICK_FENCE.get("refreshed") or 0) + 1
+    try:
+        _contact_sync_debug(_CONTACTS_CLICK_FENCE.get("account") or "",
+                            stage="click_fence_rect_refreshed", rect=str(_CONTACTS_CLICK_FENCE["rect"]))
+    except Exception:
+        pass
+    return True
 
 
 def _contacts_click_fence_close() -> int:
@@ -14738,7 +14842,9 @@ def _contacts_click_fence_point_ok(x: Any, y: Any) -> bool:
 
 
 def _contacts_click_fence_node_ok(node: Any) -> bool:
-    """True only for nodes belonging to the resolved contacts list."""
+    """True 表示这个节点允许点：① 它就在通讯录列表里（首选判据）；② 或落在围栏矩形内。"""
+    if _contacts_click_fence_list_ancestor(node) is not None:
+        return True
     rect = _CONTACTS_CLICK_FENCE.get("rect")
     if not rect:
         return False
@@ -14747,18 +14853,32 @@ def _contacts_click_fence_node_ok(node: Any) -> bool:
         if _contacts_click_fence_point_ok((node_rect[0] + node_rect[2]) // 2,
                                           (node_rect[1] + node_rect[3]) // 2):
             return True
-    cur = node
-    for _idx in range(12):
-        if cur is None:
-            break
-        if _uia_control_class(cur) == "mmui::StickyHeaderRecyclerListView" and \
-                "\u901a\u8baf\u5f55" in _uia_control_text(cur):
-            return True
-        try:
-            cur = cur.GetParentControl()
-        except Exception:
-            break
     return False
+
+
+def _contacts_click_fence_refresh_for_point(x: Any, y: Any, expect_hwnd: int = 0) -> bool:
+    """按屏幕坐标点击时，围栏 rect 过期就按"当前通讯录列表 rect"刷新一次再放行。"""
+    if not expect_hwnd:
+        return False
+    try:
+        import uiautomation as auto  # type: ignore
+
+        root = auto.ControlFromHandle(int(expect_hwnd))
+        current = _uia_strict_contact_list(root)
+        if current is None:
+            return False
+        rect = _uia_rect(current)
+        if not rect:
+            return False
+        if not (float(rect[0]) <= float(x) <= float(rect[2]) and float(rect[1]) <= float(y) <= float(rect[3])):
+            return False
+        _CONTACTS_CLICK_FENCE["rect"] = tuple(float(v) for v in rect)
+        _CONTACTS_CLICK_FENCE["refreshed"] = int(_CONTACTS_CLICK_FENCE.get("refreshed") or 0) + 1
+        _contact_sync_debug(_CONTACTS_CLICK_FENCE.get("account") or "",
+                            stage="click_fence_rect_refreshed", rect=str(_CONTACTS_CLICK_FENCE["rect"]))
+        return True
+    except Exception:
+        return False
 
 
 def _uia_click_screen_point(x: int, y: int, *, expect_hwnd: int = 0, account_id_hint: str = "") -> bool:
@@ -14769,8 +14889,9 @@ def _uia_click_screen_point(x: int, y: int, *, expect_hwnd: int = 0, account_id_
     """
     _paused_guard()  # 暂停即停手：每一步动作前都查（对照竞品的全局暂停）
     if _CONTACTS_CLICK_FENCE.get("on") and not _contacts_click_fence_point_ok(x, y):
-        _contacts_click_fence_refuse("screen_point", x=int(x), y=int(y))
-        return False
+        if not _contacts_click_fence_refresh_for_point(x, y, expect_hwnd):
+            _contacts_click_fence_refuse("screen_point", x=int(x), y=int(y))
+            return False
     if expect_hwnd:
         try:
             _focus_local_wechat(int(expect_hwnd))
@@ -14915,7 +15036,107 @@ def _visible_pending_friend_requests(root: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def _uia_list_children(node: Any) -> List[Any]:
+    try:
+        return list(node.GetChildren() or [])
+    except Exception:
+        return []
+
+
+def _uia_find_friend_requests_entry(contact_list: Any, root: Any) -> tuple[Optional[Any], int]:
+    """找「新的朋友」那一行，顺便给出它在本列表可见 children 里的序号（键盘要用来数 {DOWN}）。"""
+    children = _uia_list_children(contact_list) if contact_list is not None else []
+    for index, node in enumerate(children):
+        if _uia_control_text(node).replace(" ", "").startswith("\u65b0\u7684\u670b\u53cb"):
+            return node, index
+    entry = _uia_find_by_names(root, ["\u65b0\u7684\u670b\u53cb"], contains=True, max_depth=18)
+    return entry, 0
+
+
+def _uia_friend_requests_expanded(root: Any) -> Optional[Any]:
+    """「新的朋友」展开成功就返回那个列表：判据是出现了 mmui::XTableCell 内容行。"""
+    request_list = _uia_primary_contact_list(root)
+    if request_list is None:
+        return None
+    if any(_uia_control_class(node) == "mmui::XTableCell" for node in _uia_list_children(request_list)):
+        return request_list
+    return None
+
+
+def _kb_expand_friend_requests(hwnd: int, contact_list: Any, entry_index: int) -> bool:
+    """键盘展开「新的朋友」：列表拿焦点 → {HOME} 回顶 → {DOWN}×序号 → {RIGHT}，边做边校验。
+
+    对照鹰牛 pyweixin：Navigator.open_contacts 是点侧栏 + 对 Lists.ContactsList 走 type_keys；
+    Tools.collapse_contacts 拿到分区项后也是逐个 click_input + 用 class_name 校验。
+    我们这里键盘只走"列表 → 目标行 → 展开"，不碰鼠标坐标（点击围栏也拦不到键盘）。
+    """
+    import uiautomation as auto  # type: ignore
+
+    _focus_local_wechat(hwnd)
+    try:
+        contact_list.SetFocus()
+    except Exception:
+        pass
+    _send_hotkey_fast("home")
+    time.sleep(0.2)
+    steps = max(0, min(int(entry_index or 0), 6))
+    for _idx in range(steps):
+        _send_hotkey_fast("down")
+        time.sleep(0.08)
+    _send_hotkey_fast("right")
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        try:
+            if _uia_friend_requests_expanded(auto.ControlFromHandle(int(hwnd))) is not None:
+                _contact_sync_debug("", stage="friend_requests_expand",
+                                    method="keyboard", index=steps, ok=True)
+                return True
+        except Exception:
+            pass
+        time.sleep(0.25)
+    _contact_sync_debug("", stage="friend_requests_expand", method="keyboard", index=steps, ok=False)
+    return False
+
+
+def _open_friend_requests_list_by_click(hwnd: int, entry: Any) -> Any:
+    """兜底：老的鼠标点击路径（原来那套逻辑，包成函数）。"""
+    import uiautomation as auto  # type: ignore
+
+    deadline = time.time() + 5.0
+    next_retry_at = 0.0
+    while time.time() < deadline:
+        now = time.time()
+        if now >= next_retry_at:
+            _uia_click(entry)
+            next_retry_at = now + 1.2
+        time.sleep(0.3)
+        root = auto.ControlFromHandle(int(hwnd))
+        request_list = _uia_friend_requests_expanded(root)
+        if request_list is not None:
+            _contact_sync_debug("", stage="friend_requests_expand", method="click", ok=True)
+            return request_list
+        children = _uia_list_children(_uia_primary_contact_list(root))
+        refreshed_entry = next(
+            (
+                node
+                for node in children
+                if _uia_control_text(node).replace(" ", "").startswith("\u65b0\u7684\u670b\u53cb")
+            ),
+            None,
+        )
+        if refreshed_entry is not None:
+            entry = refreshed_entry
+    _contact_sync_debug("", stage="friend_requests_expand", method="click", ok=False)
+    raise RuntimeError("\u6253\u5f00\u5fae\u4fe1\u201c\u65b0\u7684\u670b\u53cb\u201d\u540e\u672a\u8bfb\u53d6\u5230\u597d\u53cb\u7533\u8bf7\u5217\u8868")
+
+
 def _open_friend_requests_list(hwnd: int) -> Any:
+    """展开并返回「新的朋友」列表（键盘优先，点击兜底）。
+
+    2026-10-16（对照鹰牛 pyweixin 的 Navigator.open_contacts + Tools.collapse_contacts）：
+      以前这里只有"鼠标点它一下 + 轮询校验"，窗口挪了、点击被围栏拒了都会静默变成"展不开"。
+      现在先走键盘（不依赖鼠标坐标、天然绕过点击围栏），键盘校验不过才回退点击。
+    """
     import uiautomation as auto  # type: ignore
 
     root = auto.ControlFromHandle(int(hwnd))
@@ -14930,54 +15151,23 @@ def _open_friend_requests_list(hwnd: int) -> Any:
 
     root = auto.ControlFromHandle(int(hwnd))
     contact_list = _uia_primary_contact_list(root)
-    entry = None
-    if contact_list is not None:
+    entry, entry_index = _uia_find_friend_requests_entry(contact_list, root)
+    if entry is None and entry_index <= 0:
+        raise RuntimeError("\u672a\u627e\u5230\u5fae\u4fe1\u201c\u65b0\u7684\u670b\u53cb\u201d\u5165\u53e3")
+
+    if _contact_scan_mode() != "click":
         try:
-            children = contact_list.GetChildren()
-        except Exception:
-            children = []
-        entry = next(
-            (
-                node
-                for node in children
-                if _uia_control_text(node).replace(" ", "").startswith("\u65b0\u7684\u670b\u53cb")
-            ),
-            None,
-        )
+            if _kb_expand_friend_requests(hwnd, contact_list, entry_index):
+                return _uia_friend_requests_expanded(auto.ControlFromHandle(int(hwnd))) or contact_list
+        except Exception as exc:
+            _contact_sync_debug("", stage="friend_requests_expand",
+                                method="keyboard", ok=False, error=str(exc)[:120])
+
     if entry is None:
         entry = _uia_find_by_names(root, ["\u65b0\u7684\u670b\u53cb"], contains=True, max_depth=18)
     if entry is None:
         raise RuntimeError("\u672a\u627e\u5230\u5fae\u4fe1\u201c\u65b0\u7684\u670b\u53cb\u201d\u5165\u53e3")
-
-    deadline = time.time() + 5.0
-    next_retry_at = 0.0
-    while time.time() < deadline:
-        now = time.time()
-        if now >= next_retry_at:
-            _uia_click(entry)
-            next_retry_at = now + 1.2
-        time.sleep(0.3)
-        root = auto.ControlFromHandle(int(hwnd))
-        request_list = _uia_primary_contact_list(root)
-        if request_list is None:
-            continue
-        try:
-            children = request_list.GetChildren()
-        except Exception:
-            children = []
-        if any(_uia_control_class(node) == "mmui::XTableCell" for node in children):
-            return request_list
-        refreshed_entry = next(
-            (
-                node
-                for node in children
-                if _uia_control_text(node).replace(" ", "").startswith("\u65b0\u7684\u670b\u53cb")
-            ),
-            None,
-        )
-        if refreshed_entry is not None:
-            entry = refreshed_entry
-    raise RuntimeError("\u6253\u5f00\u5fae\u4fe1\u201c\u65b0\u7684\u670b\u53cb\u201d\u540e\u672a\u8bfb\u53d6\u5230\u597d\u53cb\u7533\u8bf7\u5217\u8868")
+    return _open_friend_requests_list_by_click(hwnd, entry)
 
 
 def _find_pending_friend_request(hwnd: int, request_key: str) -> Optional[Dict[str, Any]]:
@@ -19935,6 +20125,10 @@ def _send_hotkey_fast(key: str) -> None:
         "end": win32con.VK_END,
         "home": win32con.VK_HOME,
         "tab": win32con.VK_TAB,
+        # 2026-10-16：展开通讯录分组要用（抄鹰牛 type_keys 展开那一档）
+        "right": win32con.VK_RIGHT,
+        "left": win32con.VK_LEFT,
+        "enter": win32con.VK_RETURN,
     }
     vk = int(vk_map.get(str(key or "").strip().lower()) or 0)
     if not vk:
