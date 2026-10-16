@@ -87,7 +87,7 @@ def test_keyboard_scan_is_wired_into_contact_sync():
     assert "_contact_sync_keyboard_scan(" in source.split("def _sync_local_contacts_from_uia(")[1], \
         "键盘路径必须挂在 _sync_local_contacts_from_uia 里"
     assert 'stage="contacts_keyboard_fallback"' in source, "键盘路径失败要能自动回落并留痕"
-    assert '_send_hotkey_fast("down")' in source, "步进必须走键盘、且用无延迟按键，不移动鼠标"
+    assert '_key_down_fast("down")' in source, "步进必须走键盘（按住），不移动鼠标"
     assert "def _send_hotkey_fast(" in source
     # 每按一次 {DOWN} 都不能再走 human pause：_send_hotkey 结尾的 _human_pause 默认 0.35~1.2 秒
     fast_body = source.split("def _send_hotkey_fast(")[1].split("def _send_keys(")[0]
@@ -101,7 +101,7 @@ def test_step_key_never_sleeps_like_a_human(engine):
     fast_body = source.split("def _send_hotkey_fast(")[1].split("def _send_keys(")[0]
     assert "time.sleep" not in fast_body and "_human_pause(" not in fast_body
     scan_body = source.split("def _contact_sync_keyboard_scan(")[1].split("def _sync_local_contacts_from_uia(")[0]
-    assert "_send_hotkey_fast(\"down\")" in scan_body
+    assert "_key_down_fast(\"down\")" in scan_body
     assert "_human_pause(" not in scan_body, "键盘走列表里每一步都不该再睡人工延迟"
 
 
@@ -151,8 +151,11 @@ def test_key_sends_are_gated_on_wechat_being_foreground():
     assert "def _ensure_wechat_foreground_for_keys(" in source
     scan = source.split("def _contact_sync_keyboard_scan(")[1].split("def _sync_local_contacts_from_uia(")[0]
     assert "_ensure_wechat_foreground_for_keys(hwnd, force=True)" in scan, "走进列表前先要回前台"
-    assert '_ensure_wechat_foreground_for_keys(hwnd)\n        _send_hotkey_fast("down")' in scan, \
-        "每一按 {DOWN} 之前都要过前台闸门"
+    # 每一按 {DOWN} 之前都要过前台闸门（现在推进段带"点下一行"兜底，缩进会变，
+    # 所以按"闸门必须出现在发键之前"来判断，而不是钉死缩进）。
+    guard_at = scan.index("_ensure_wechat_foreground_for_keys(hwnd)")
+    send_at = scan.index('_key_down_fast("down")')
+    assert guard_at < send_at, "每一按 {DOWN} 之前都要过前台闸门"
     head = source.split("def _contacts_scroll_to_head(")[1].split("def _open_contacts_sublist(")[0]
     assert "_ensure_wechat_foreground_for_keys(hwnd" in head, "回顶发 {HOME} 前也要确认前台"
 
@@ -165,3 +168,25 @@ def test_overlay_window_never_takes_focus():
     assert "_keep_non_activating(" in script, "样式要反复重打（Show() 会把它盖回去）"
     assert "hidden=True" in script, "先隐藏创建，再打样式，最后 show"
     assert "SetForegroundWindow(previous)" in script, "show 那一下的激活要当场还给上一个窗口"
+
+
+def test_advance_uses_hold_down_like_they_do(engine):
+    """照鹰牛 Contacts.get_friends_detail：pyautogui.keyDown('down') + sleep(interval) +
+    每步 win32gui.GetForegroundWindow() 校验（不等于微信就把焦点要回来）。
+    我们要的是同一效果 —— 不再有任何"点鼠标换行"的兜底。"""
+    source = ENGINE_PATH.read_text(encoding="utf-8")
+    assert "def _key_down_fast(" in source and "def _key_up_fast(" in source, "要有按住/松开"
+    scan = source.split("def _contact_sync_keyboard_scan(")[1].split("def _sync_local_contacts_from_uia(")[0]
+    assert '_key_down_fast("down")' in scan and '_key_up_fast("down")' in scan
+    assert "time.sleep(step_interval)" in scan, "按住之后要按 interval 睡（他们就是这么控制速度）"
+    assert "_click_next_row" not in scan, "不要回退到点鼠标"
+    assert "_contacts_point_click" not in scan.split("def _quick_texts")[1] if "def _quick_texts" in scan else True
+
+
+def test_step_interval_matches_their_tiers(engine):
+    """他们的分档：>2000 → 0.2s；1000~2000 → 0.1s；<1000 → 0（他们不睡）。
+    这就是"他们非常快"的一半原因 —— 好友少时几乎零等待。"""
+    assert engine._contact_kb_interval(500) <= 0.02
+    assert engine._contact_kb_interval(1500) == 0.1
+    assert engine._contact_kb_interval(3000) == 0.2
+    assert engine._contact_kb_interval(0) <= 0.02

@@ -8624,15 +8624,30 @@ def _contacts_scroll_to_head(
         except Exception:
             pass
         _ensure_wechat_foreground_for_keys(hwnd, force=True)
+        # 对照鹰牛 Navigator.open_contacts：他们拿到列表是 **click_input() 点一下**再 type_keys("{HOME}")。
+        # 只 SetFocus() 不够 —— 微信的列表是自绘控件，UIA 的 SetFocus 经常不落地，键盘焦点还在窗口别处，
+        # {HOME}/{DOWN} 自然没反应（实测 12:23:57 回顶还是退回滚轮 10 轮 = 白等 28 秒）。
+        try:
+            _rows_home = _uia_visible_contact_cell_rows(_list_home)
+        except Exception:
+            _rows_home = []
+        if _rows_home:
+            try:
+                _contacts_point_click(hwnd, _rows_home[0].get("node"))
+                time.sleep(0.2)
+            except Exception:
+                pass
         for _home_attempt in range(2):
             try:
                 _ensure_wechat_foreground_for_keys(hwnd)
                 _send_hotkey_fast("home")
             except Exception:
                 break
-            time.sleep(0.25)
+            time.sleep(0.3)
             try:
-                _names_home = _uia_visible_contact_cell_names(_list_home)
+                # 重新解析列表节点再读：滚动后旧节点可能已经失效（以前会误判成"没到顶"）。
+                _list_re = _uia_strict_contact_list(_auto_home.ControlFromHandle(int(hwnd))) or _list_home
+                _names_home = _uia_visible_contact_cell_names(_list_re)
             except Exception:
                 _names_home = []
             if _names_home:
@@ -9417,6 +9432,15 @@ def _run_local_driver_operation(
         raise RuntimeError("\u5fae\u4fe1\u6b63\u5728\u5904\u7406\u4e0a\u4e00\u9879\u64cd\u4f5c\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5")
     _task_ctl = _task_control()
     if _task_ctl is not None:
+        try:
+            # 2026-10-16 实测事故：用户在 12:24:17 点了悬浮键「暂停」，标记一直留着 →
+            # 12:24:23 那次同步一开跑就被掐（contacts_keyboard_stopped step=0 names=0）。
+            # 用户主动点同步 = 他就是要跑，所以新任务开始先把上一次的暂停标记清掉。
+            if _task_ctl.stop_requested():
+                _task_ctl.clear_stop()
+                _contact_sync_debug(account_id, stage="stop_flag_cleared_on_start")
+        except Exception:
+            pass
         try:
             # 任务开始：报告"谁在跑"。悬浮键由 task_control 的看门狗拉起 —— 跑够 6 秒才弹，
             # 免得"发一条消息"这种秒级操作也闪一下窗。
@@ -11199,6 +11223,19 @@ def _contact_sync_keyboard_scan(
 
     clean_limit = max(1, min(int(limit or 10000), 10000))
     skip = set(skip_names or set())
+    total_contacts = 0
+    for _row in _uia_visible_contact_cell_rows(contact_list) or []:
+        _nm = str(_row.get("name") or "")
+        if _nm.startswith("联系人"):
+            _m = re.search(r"\d+", _nm)
+            if _m:
+                try:
+                    total_contacts = int(_m.group(0))
+                except Exception:
+                    total_contacts = 0
+            break
+    step_interval = _contact_kb_interval(total_contacts)
+    _contact_sync_debug(account_id, stage="keyboard_interval", total=total_contacts, interval=step_interval)
     seen: Dict[str, Dict[str, Any]] = {}
     pending: List[Dict[str, Any]] = []
     learned = 0
@@ -11306,9 +11343,12 @@ def _contact_sync_keyboard_scan(
             prev_texts = _quick_texts()
             steps += 1
             continue
-        # 每步都过一遍前台闸门（只在不是微信时才真的去拉，通常只是一次 GetForegroundWindow）。
+        # 照鹰牛：每步先确保前台是微信（他们的 main_window.set_focus），再**按住** {DOWN}
+        # 一小会儿再松开 —— 他们用的是 pyautogui.keyDown('down') + sleep(interval)。
         _ensure_wechat_foreground_for_keys(hwnd)
-        _send_hotkey_fast("down")
+        _key_down_fast("down")
+        time.sleep(step_interval)
+        _key_up_fast("down")
         decision = "wait"
         cur_texts: List[str] = []
         deadline = time.monotonic() + _CONTACT_KB_CARD_POLL_SECONDS
@@ -11332,8 +11372,12 @@ def _contact_sync_keyboard_scan(
                 prev_texts = list(cur_texts)
                 decision = "read"
             else:
-                _contact_sync_debug(account_id, stage="keyboard_card_stale", step=steps, stale=stale,
-                                    foreground=_foreground_hwnd_safe(), wechat=int(hwnd or 0))
+                _contact_sync_debug(
+                    account_id, stage="keyboard_card_stale", step=steps, stale=stale,
+                    decision=decision, texts=len(cur_texts), prev_texts=len(prev_texts),
+                    rows=len(rows), first_row=str((rows[0].get("name") if rows else "") or "")[:24],
+                    foreground=_foreground_hwnd_safe(), wechat=int(hwnd or 0),
+                )
                 if stale >= _CONTACT_KB_STALE_STEPS:
                     completed = True
                     break
@@ -11358,6 +11402,8 @@ def _contact_sync_keyboard_scan(
         if not matched_name:
             _contact_sync_debug(account_id, stage="keyboard_card_unmatched", step=steps)
             continue
+        # 原来这里记"锚点行位置"给鼠标兜底用；2026-10-16 已按鹰牛改成纯键盘推进（按住 {DOWN}），
+        # 不再有点击兜底，所以这块一起去掉。
         wx_no_index[_normalize_contact_lookup_key(matched_name)] = wx_value
         _record(matched_name, wx_value)
     _flush()
@@ -11381,6 +11427,8 @@ def _contact_sync_keyboard_scan(
         "wx_no_source": "keyboard_walk_fast",
         "progress_saved": len(seen),
         "stopped": stopped,
+        "contacts_total": total_contacts,
+        "step_interval": step_interval,
     }
 
 
@@ -19601,6 +19649,55 @@ def _ensure_wechat_foreground_for_keys(hwnd: int, *, force: bool = False) -> boo
         return bool(_focus_local_wechat(int(hwnd)))
     except Exception:
         return False
+
+
+def _contact_kb_interval(total: int) -> float:
+    """每步之间的间隔 —— 照鹰牛 Contacts.get_friends_detail 的分档：
+
+        total > 2000 → 0.2s
+        1000 < total <= 2000 → 0.1s
+        total < 1000 → 0（他们直接不睡；我们留 0.01 让列表渲染一帧）
+    """
+    try:
+        count = int(total or 0)
+    except Exception:
+        count = 0
+    if count > 2000:
+        return 0.2
+    if count > 1000:
+        return 0.1
+    return 0.01 if count > 0 else 0.02
+
+
+def _key_down_fast(key: str) -> None:
+    """按住不放（对照鹰牛 pyautogui.keyDown('down')）——他们的列表就是这么往下的。"""
+    try:
+        import win32api  # type: ignore
+        import win32con  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("本机微信控制组件不可用：缺少 pywin32 键盘模块") from exc
+    vk_map = {"down": win32con.VK_DOWN, "up": win32con.VK_UP, "pgdn": win32con.VK_NEXT, "home": win32con.VK_HOME}
+    vk = int(vk_map.get(str(key or "").strip().lower()) or 0)
+    if not vk:
+        raise RuntimeError(f"不支持的按键：{key}")
+    win32api.keybd_event(vk, 0, 0, 0)
+
+
+def _key_up_fast(key: str) -> None:
+    """松开上面按住的键。"""
+    try:
+        import win32api  # type: ignore
+        import win32con  # type: ignore
+    except Exception:
+        return
+    vk_map = {"down": win32con.VK_DOWN, "up": win32con.VK_UP, "pgdn": win32con.VK_NEXT, "home": win32con.VK_HOME}
+    vk = int(vk_map.get(str(key or "").strip().lower()) or 0)
+    if not vk:
+        return
+    try:
+        win32api.keybd_event(vk, 0, win32con.KEYEVENTF_KEYUP, 0)
+    except Exception:
+        pass
 
 
 def _send_hotkey_fast(key: str) -> None:
