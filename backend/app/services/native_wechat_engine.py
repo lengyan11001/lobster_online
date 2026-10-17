@@ -1499,12 +1499,14 @@ def _ensure_local_wechat_window_visible(*, wait_seconds: float = 4.0, allow_laun
         "launch": {},
         "processes": [],
     }
+    _ui_progress_tick("ensure_window:scan")
     windows = _scan_local_wechat_windows(max_age_seconds=0)
     initial_windows = windows
     if windows and _wechat_window_rank(windows[0]) >= 32:
         result.update({"ok": True, "windows": windows})
         return result
 
+    _ui_progress_tick("ensure_window:restore")
     restore = _restore_hidden_wechat_windows()
     result["restore"] = restore
     if restore.get("restored"):
@@ -1563,6 +1565,7 @@ def _ensure_local_wechat_window_visible(*, wait_seconds: float = 4.0, allow_laun
         )
     except Exception:
         pass
+    _ui_progress_tick("ensure_window:launch")
     launch = _launch_wechat_single_instance()
     launch["had_process"] = bool(processes)
     result["launch"] = launch
@@ -1666,9 +1669,23 @@ def _probe_wechat_uia_unlocked(hwnd: int) -> Dict[str, Any]:
 
 
 def _probe_wechat_uia(hwnd: int) -> Dict[str, Any]:
-    with _LOCAL_WECHAT_UI_LOCK:
+    """UIA 探测（只用于状态展示）。
+
+    2026-10-17 死锁修复：_scan_local_wechat_windows 会在**驱动操作内部**被调用，
+    而驱动操作由调用线程持着 _LOCAL_WECHAT_UI_LOCK；RLock 不跨线程可重入，
+    executor 线程在这里 with 锁就会死等到看门狗超时（本机/线上都是 46s/181s 无动作）。
+    这里改成非阻塞拿锁：忙就跳过探测，绝不再等锁。
+    """
+    if not _LOCAL_WECHAT_UI_LOCK.acquire(blocking=False):
+        return {"available": False, "skipped": True, "reason": "微信正在执行其他操作，跳过 UIA 探测"}
+    try:
         _prepare_local_automation_thread()
         return _probe_wechat_uia_unlocked(hwnd)
+    finally:
+        try:
+            _LOCAL_WECHAT_UI_LOCK.release()
+        except Exception:
+            pass
 
 
 def _probe_wxauto4_unlocked(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -7644,7 +7661,7 @@ def _click_uia_node(node: Any) -> None:
 
 
 def _wechat_tab_ready(hwnd: int, tab_name: str, *, timeout: float = 1.2) -> bool:
-    """切页后校验：目标页的关键控件真的出现了才算切换成功（有界等待）。"""
+    """切页后校验：目标页的内容信号出现了才算切成功（有界等待）。"""
     if not hwnd or not _module_available("uiautomation"):
         return False
     try:
@@ -7656,18 +7673,17 @@ def _wechat_tab_ready(hwnd: int, tab_name: str, *, timeout: float = 1.2) -> bool
     deadline = time.time() + max(0.4, float(timeout))
     while time.time() < deadline:
         try:
+            # 2026-10-17 本机实测：会话页的「消息/会话」在 depth 13~14 才出现，
+            # depth 12 会漏（误判成没切过去），所以这里固定 14/6000。
             nodes = _uia_walk(root, max_depth=14, max_nodes=6000)
             texts = {(_uia_control_text(n) or "").strip() for n in nodes}
             classes = {_uia_control_class(n) for n in nodes}
             if name == "通讯录":
-                # 2026-10-17 本机实测（微信 4.x）：通讯录页会出现「新的朋友」分组；
-                # 会话页不会。类名兜底：ContactsTableBaseView / ContactsCellGroupView。
                 if "新的朋友" in texts or "群聊" in texts or "标签" in texts:
                     return True
                 if "mmui::ContactsTableBaseView" in classes or "mmui::ContactsCellGroupView" in classes:
                     return True
             elif name == "微信":
-                # 会话页会出现「消息」标题 + 「会话」分组；通讯录页不会。
                 if "消息" in texts and "会话" in texts:
                     return True
                 if "mmui::ChatSessionList" in classes or "mmui::ChatSessionCell" in classes:
@@ -7676,7 +7692,6 @@ def _wechat_tab_ready(hwnd: int, tab_name: str, *, timeout: float = 1.2) -> bool
             return False
         time.sleep(0.15)
     return False
-
 
 def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None:
     """切换到本机微信的左侧页面（\u5fae\u4fe1 / \u901a\u8baf\u5f55）。
@@ -7695,6 +7710,7 @@ def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None
     dumped: List[dict] = []
     last_err: Any = None
     for attempt in (0, 1):
+        _ui_progress_tick("tab_switch:%s:attempt%d" % (str(tab_name), attempt + 1))
         try:
             _focus_local_wechat(hwnd)
             time.sleep(0.4 if attempt == 0 else 0.9)
@@ -7705,11 +7721,13 @@ def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None
         # 1) 热键优先：不依赖控件名，窗口被托盘还原后也稳
         if shortcut:
             try:
+                _ui_progress_tick("tab_switch:hotkey")
                 _send_hotkey(str(shortcut), ctrl=True, pause=0.8)
             except TaskPaused:
                 raise
             except Exception as exc:
                 last_err = exc
+            _ui_progress_tick("tab_switch:verify")
             if _wechat_tab_ready(hwnd, tab_name):
                 _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
                                     method="hotkey", attempt=attempt + 1)
@@ -7726,8 +7744,10 @@ def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None
                 try:
                     btn = root.ButtonControl(Name=nm)
                     if btn.Exists(1.0):
+                        _ui_progress_tick("tab_switch:click_button")
                         _click_uia_node(btn)
                         time.sleep(0.8)
+                        _ui_progress_tick("tab_switch:verify")
                         if _wechat_tab_ready(hwnd, tab_name):
                             _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
                                                 method="uia_button", attempt=attempt + 1)
@@ -7739,8 +7759,10 @@ def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None
                 node = _find_tab_item(root, [nm])
                 if node is not None:
                     try:
+                        _ui_progress_tick("tab_switch:click_node")
                         _click_uia_node(node)
                         time.sleep(0.8)
+                        _ui_progress_tick("tab_switch:verify")
                         if _wechat_tab_ready(hwnd, tab_name):
                             _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
                                                 method="uia_node", attempt=attempt + 1)
@@ -9723,6 +9745,12 @@ def _abandon_ui_executor(what: str, *, account_id: str = "") -> int:
     epoch = int(_UI_EXECUTOR_STATE.get("epoch") or 0) + 1
     _UI_EXECUTOR_STATE["epoch"] = epoch
     _UI_EXECUTOR_STATE["executor"] = None
+    try:
+        # 卡死的 uiautomation 全局 client 必须一起丢掉，否则新执行器线程复用它，
+        # 所有 UIA 调用都会排在卡死的调用后面（2026-10-17 本机实测：重建后仍然 46 秒超时）。
+        _reset_local_automation_clients()
+    except Exception:
+        pass
     logging.getLogger(__name__).warning(
         "[native-wechat] UIA 执行器已重建 epoch=%s 原因=%s account=%s", epoch, what, account_id
     )
