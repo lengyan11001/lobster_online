@@ -2330,6 +2330,22 @@
         <label for="assetPublishTagsInput">标签</label>
         <input id="assetPublishTagsInput" type="text" maxlength="2000" placeholder="可留空" style="width:100%;margin-top:0.35rem;padding:0.5rem 0.55rem;font-size:0.88rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:var(--radius-sm);color:var(--text);">
       </div>
+      <div class="modal-field" style="margin-top:0.9rem;padding-top:0.9rem;border-top:1px solid rgba(255,255,255,0.08);">
+        <label for="assetPublishLabelType">添加标签（可选）</label>
+        <select id="assetPublishLabelType" onchange="_assetPublishRenderLabelFields(this.value)" style="width:100%;margin-top:0.35rem;padding:0.5rem 0.55rem;font-size:0.88rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:var(--radius-sm);color:var(--text);">
+          <option value="">不添加</option>
+          <option value="location">位置</option>
+          <option value="groupbuy">团购</option>
+          <option value="cart">购物车</option>
+          <option value="movie">影视演艺</option>
+          <option value="miniapp">小程序</option>
+          <option value="gamepad">游戏手柄</option>
+          <option value="soda_playlist">汽水歌单</option>
+          <option value="mark_all">标记万物</option>
+        </select>
+        <div id="assetPublishLabelFields" style="margin-top:0.6rem;display:grid;gap:0.55rem;"></div>
+        <div id="assetPublishLabelHint" class="meta" style="margin-top:0.4rem;font-size:0.74rem;line-height:1.55;">仅抖音账号支持；按抖音发布页要求填写，账号无权限或信息不匹配时发布会中止。</div>
+      </div>
       <div id="assetPublishAssetInfo" style="margin-top:0.2rem;padding:0.8rem 0.9rem;border-radius:12px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);font-size:0.8rem;line-height:1.6;word-break:break-word;"></div>
       <div class="btns" style="justify-content:flex-end;margin-top:1rem;">
         <button type="button" id="assetPublishModalCancel" class="btn btn-ghost">取消</button>
@@ -2899,7 +2915,7 @@
   <script defer src="/static/js/shanjian-smart-clip.js?v=20261015-drop-body-filter-v2"></script>
   <script defer src="/static/js/cutcli-template-studio.js?v=20260914-record-delete-v1"></script>
   <script defer src="/static/js/wecom-contacts.js?v=20260416i"></script>
-  <script defer src="/static/js/publish.js?v=20261009-picker-clean-v11"></script>
+  <script defer src="/static/js/publish.js?v=20261017-label-ui-v1"></script>
   <script defer src="/static/js/scheduled-tasks.js?v=20260905-ip-content-split-v1"></script>
   <link rel="stylesheet" href="/static/css/task-center.css?v=20260821-task-center-round-v3">
   <script defer src="/static/js/task-center.js?v=20260831-auth-gated-v1"></script>

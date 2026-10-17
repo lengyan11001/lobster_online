@@ -71,3 +71,16 @@ def test_short_label_title_truncates_to_ten_chars():
     assert d._douyin_short_label_title("美食火锅潮汕牛肉火锅2人餐") == "美食火锅潮汕牛肉火锅"
     assert d._douyin_short_label_title("  双人火锅  \n￥59.6") == "双人火锅"
     assert len(d._douyin_short_label_title("a" * 20)) == 10
+
+
+def test_cart_label_keeps_required_short_title():
+    opts = {
+        "douyin_label": {
+            "type": "cart",
+            "link": "https://haohuo.jinritemai.com/ecommerce/trade/detail/index.html?id=1",
+            "short_title": "去油抹布",
+        }
+    }
+    label = d._douyin_label_options(opts)
+    assert label["type"] == "cart"
+    assert label["short_title"] == "去油抹布"

@@ -2122,21 +2122,39 @@ async def _douyin_apply_anchor_label(
     # ---- 购物车 -------------------------------------------------------
     if label_type == "cart":
         links_raw = raw.get("links")
+        links: List[tuple[str, str]] = []
         if isinstance(links_raw, str):
-            links = [links_raw]
+            links = [(links_raw.strip(), "")]
         elif isinstance(links_raw, list):
-            links = [str(x).strip() for x in links_raw if str(x).strip()]
-        else:
-            links = []
+            for item in links_raw:
+                if isinstance(item, dict):
+                    item_link = str(item.get("link") or item.get("url") or "").strip()
+                    item_title = str(item.get("short_title") or item.get("title") or "").strip()
+                else:
+                    item_link = str(item).strip()
+                    item_title = ""
+                if item_link:
+                    links.append((item_link, item_title))
         if not links:
             link = str(raw.get("link") or raw.get("url") or "").strip()
             if link:
-                links = [link]
+                links = [(link, "")]
         if not links:
             return _fail("购物车标签需要 link（商品链接）或 links 列表")
 
         attached = 0
-        for idx, link in enumerate(links):
+        for idx, (link, link_short_title) in enumerate(links):
+            short_title = str(
+                link_short_title
+                or raw.get("short_title")
+                or raw.get("title")
+                or ""
+            ).strip()[:10]
+            if not short_title:
+                return _fail(
+                    "购物车标签需要 short_title（商品短标题，最多10个汉字）",
+                    link=link,
+                )
             try:
                 cart_input = await _douyin_first_visible(
                     jump.locator('input[placeholder="粘贴商品链接"]')
@@ -2183,12 +2201,53 @@ async def _douyin_apply_anchor_label(
                 title = _douyin_find_text_value(
                     data.get("data") or {}, ("title", "product_title", "name", "product_name")
                 )
+                # 抖音校验链接后会弹「编辑商品」，商品短标题是必填项；
+                # 不填短标题直接点完成/关闭会导致购物车标签消失。
+                modal_input = await _douyin_first_visible(
+                    page.locator('input[placeholder="请输入商品短标题"]')
+                )
+                if modal_input:
+                    await _douyin_clear_and_type(page, modal_input, short_title, 10)
+                    await asyncio.sleep(0.4)
+                    done = await _douyin_first_visible_text(page, "完成编辑")
+                    if not done:
+                        modal = page.locator('.semi-modal-wrap:visible').filter(has_text="编辑商品").first
+                        try:
+                            done = await _douyin_first_visible(modal.get_by_text("完成", exact=True))
+                        except Exception:
+                            done = None
+                    if not done:
+                        return _fail(
+                            "商品链接校验成功，但未找到「完成编辑」按钮",
+                            link=link,
+                            short_title=short_title,
+                        )
+                    await done.click()
+                    await asyncio.sleep(1.5)
+                    still_open = await _douyin_first_visible(
+                        page.locator('input[placeholder="请输入商品短标题"]')
+                    )
+                    if still_open:
+                        return _fail(
+                            "商品短标题未保存，编辑商品弹窗仍未关闭",
+                            link=link,
+                            short_title=short_title,
+                        )
+                anchor_text = (await anchor.inner_text()).strip()
+                if "已添加商品" not in anchor_text and short_title not in anchor_text:
+                    return _fail(
+                        "购物车商品未挂载成功",
+                        link=link,
+                        short_title=short_title,
+                        anchor=anchor_text,
+                    )
                 attached += 1
                 _step(
-                    f"{flow_label}购物车链接已校验",
+                    f"{flow_label}购物车链接已校验并填写短标题",
                     True,
                     index=idx + 1,
                     title=title or None,
+                    short_title=short_title,
                 )
             except Exception as exc:
                 return _fail(f"购物车标签填写失败: {exc}", link=link)

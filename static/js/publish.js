@@ -2971,6 +2971,112 @@ function _assetPublishResolveTarget(asset) {
   });
 }
 
+
+function _assetPublishLabelInputStyle() {
+  return 'width:100%;margin-top:0.25rem;padding:0.5rem 0.55rem;font-size:0.86rem;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:var(--radius-sm);color:var(--text);';
+}
+
+function _assetPublishLabelField(label, inputHtml) {
+  return '<div><label style="font-size:0.78rem;color:var(--text-muted);">' + label + '</label>' + inputHtml + '</div>';
+}
+
+function _assetPublishLabelTextInput(id, placeholder, maxlength) {
+  return '<input id="' + id + '" type="text" maxlength="' + String(maxlength || 200) + '" placeholder="' + escapeHtml(placeholder || '') + '" style="' + _assetPublishLabelInputStyle() + '">';
+}
+
+function _assetPublishRenderLabelFields(type) {
+  var box = document.getElementById('assetPublishLabelFields');
+  var hint = document.getElementById('assetPublishLabelHint');
+  if (!box) return;
+  type = String(type || '');
+  var html = '';
+  var hintText = '仅抖音账号支持；按抖音发布页要求填写，账号无权限或信息不匹配时发布会中止。';
+  var style = _assetPublishLabelInputStyle();
+  if (type === 'cart') {
+    html += _assetPublishLabelField('商品链接', _assetPublishLabelTextInput('assetPublishLabelLink', 'https://haohuo.jinritemai.com/...', 500));
+    html += _assetPublishLabelField('商品短标题（必填，最多10个汉字）', _assetPublishLabelTextInput('assetPublishLabelShortTitle', '例如：去油抹布', 10));
+    hintText = '粘贴商品链接后，抖音会弹出“编辑商品”；脚本会自动填短标题并点“完成编辑”。';
+  } else if (type === 'groupbuy') {
+    html += _assetPublishLabelField('商品关键词', _assetPublishLabelTextInput('assetPublishLabelKeyword', '例如：火锅', 80));
+    html += _assetPublishLabelField('推广标题（必填，最多10个汉字）', _assetPublishLabelTextInput('assetPublishLabelTitle', '例如：双人火锅', 10));
+    html += _assetPublishLabelField('指定商品（可选）', _assetPublishLabelTextInput('assetPublishLabelSelect', '不填则选第一个', 120));
+    hintText = '团购需要推广标题；脚本会搜索关键词、选商品、填标题并添加。';
+  } else if (type === 'location') {
+    html += _assetPublishLabelField('位置关键词', _assetPublishLabelTextInput('assetPublishLabelKeyword', '例如：深圳万象前海', 80));
+    html += '<div><label style="font-size:0.78rem;color:var(--text-muted);">模式</label><select id="assetPublishLabelMode" style="' + style + '"><option value="带货模式">带货模式</option><option value="打卡模式">打卡模式</option></select></div>';
+    html += _assetPublishLabelField('指定位置（可选）', _assetPublishLabelTextInput('assetPublishLabelSelect', '不填则选第一个', 120));
+  } else if (type === 'movie') {
+    html += _assetPublishLabelField('IP名称', _assetPublishLabelTextInput('assetPublishLabelKeyword', '例如：少年的你', 80));
+    html += _assetPublishLabelField('指定结果（可选）', _assetPublishLabelTextInput('assetPublishLabelSelect', '不填则选第一个', 120));
+  } else if (type === 'miniapp') {
+    html += _assetPublishLabelField('抖音小程序链接', _assetPublishLabelTextInput('assetPublishLabelLink', '从抖音小程序内复制的分享链接', 500));
+    hintText = '普通网页链接会报“链接格式错误”，必须用抖音小程序内分享的链接。';
+  } else if (type === 'gamepad') {
+    html += _assetPublishLabelField('游戏名称', _assetPublishLabelTextInput('assetPublishLabelKeyword', '例如：王者荣耀', 80));
+    html += '<label style="display:flex;align-items:center;gap:0.45rem;font-size:0.78rem;color:var(--text-muted);line-height:1.5;"><input id="assetPublishLabelAllowNoPromotion" type="checkbox" style="width:auto;"> 未开通推广权限时仅挂载，不参与激励</label>';
+    hintText = '账号未开通游戏推广权限时，默认中止；勾选后才走“暂不开通，仅添加”。';
+  } else if (type === 'soda_playlist') {
+    html += _assetPublishLabelField('歌单关键词', _assetPublishLabelTextInput('assetPublishLabelKeyword', '例如：晴天', 80));
+    html += _assetPublishLabelField('指定歌单（可选）', _assetPublishLabelTextInput('assetPublishLabelSelect', '不填则选第一个', 120));
+  } else if (type === 'mark_all') {
+    html += _assetPublishLabelField('物品关键词', _assetPublishLabelTextInput('assetPublishLabelKeyword', '例如：手机', 80));
+    html += _assetPublishLabelField('指定物品（可选）', _assetPublishLabelTextInput('assetPublishLabelSelect', '不填则选第一个', 120));
+    hintText = '输入关键词后，抖音会弹出“标记同款好物”商品列表；脚本会选匹配项。';
+  }
+  box.innerHTML = html;
+  if (hint) hint.textContent = hintText;
+}
+
+function _assetPublishReadLabelOptions() {
+  var typeEl = document.getElementById('assetPublishLabelType');
+  var type = typeEl ? String(typeEl.value || '').trim() : '';
+  if (!type) return null;
+  function _val(id) {
+    var el = document.getElementById(id);
+    return el ? String(el.value || '').trim() : '';
+  }
+  var out = { type: type };
+  var keyword = _val('assetPublishLabelKeyword');
+  var select = _val('assetPublishLabelSelect');
+  var link = _val('assetPublishLabelLink');
+  var mode = _val('assetPublishLabelMode');
+  var title = _val('assetPublishLabelTitle');
+  var shortTitle = _val('assetPublishLabelShortTitle');
+  if (keyword) out.keyword = keyword;
+  if (select) out.select = select;
+  if (link) out.link = link;
+  if (mode) out.mode = mode;
+  if (title) out.title = title;
+  if (shortTitle) out.short_title = shortTitle;
+  var allow = document.getElementById('assetPublishLabelAllowNoPromotion');
+  if (allow && allow.checked) out.allow_without_promotion = true;
+  return out;
+}
+
+function _assetPublishValidateLabel(label) {
+  if (!label) return '';
+  if (label.type === 'cart') {
+    if (!label.link) return '购物车：请填写商品链接。';
+    if (!label.short_title) return '购物车：请填写商品短标题（最多10个汉字）。';
+  } else if (label.type === 'groupbuy') {
+    if (!label.keyword) return '团购：请填写商品关键词。';
+    if (!label.title) return '团购：请填写推广标题（最多10个汉字）。';
+  } else if (label.type === 'location') {
+    if (!label.keyword) return '位置：请填写位置关键词。';
+  } else if (label.type === 'movie') {
+    if (!label.keyword) return '影视演艺：请填写IP名称。';
+  } else if (label.type === 'miniapp') {
+    if (!label.link) return '小程序：请填写抖音小程序链接。';
+  } else if (label.type === 'gamepad') {
+    if (!label.keyword) return '游戏手柄：请填写游戏名称。';
+  } else if (label.type === 'soda_playlist') {
+    if (!label.keyword) return '汽水歌单：请填写歌单关键词。';
+  } else if (label.type === 'mark_all') {
+    if (!label.keyword) return '标记万物：请填写物品关键词。';
+  }
+  return '';
+}
+
 function _assetPublishSetBusy(busy) {
   _assetPublishModalState.busy = !!busy;
   var submit = document.getElementById('assetPublishModalSubmit');
@@ -2984,6 +3090,8 @@ function _assetPublishSetBusy(busy) {
   if (cancel) cancel.disabled = !!busy;
   if (close) close.disabled = !!busy;
   if (select) select.disabled = !!busy || !(_assetPublishModalState.accounts || []).length;
+  var labelType = document.getElementById('assetPublishLabelType');
+  if (labelType) labelType.disabled = !!busy;
 }
 
 function _closeAssetPublishModal() {
@@ -2995,6 +3103,7 @@ function _closeAssetPublishModal() {
 }
 
 function _assetShowPublishModal(asset) {
+  try { if (typeof bindAssetLibraryUi === 'function') bindAssetLibraryUi(); } catch (e) {}
   var existingId = _assetPublishExistingAssetId(asset);
   var candidate = existingId ? { url: '', media_type: '' } : _assetPublishUrlCandidate(asset);
   if (!existingId && !candidate.url) return Promise.reject(new Error('当前记录没有可发布的素材'));
@@ -3018,6 +3127,11 @@ function _assetShowPublishModal(asset) {
   if (titleInput) titleInput.value = '';
   if (descInput) descInput.value = '';
   if (tagsInput) tagsInput.value = '';
+  var labelTypeInput = document.getElementById('assetPublishLabelType');
+  if (labelTypeInput) {
+    labelTypeInput.value = '';
+    _assetPublishRenderLabelFields('');
+  }
   if (info) {
     var targetId = existingId || '提交时自动转存';
     var promptLine = sourcePrompt ? sourcePrompt.slice(0, 180) + (sourcePrompt.length > 180 ? '...' : '') : '暂无提示词';
@@ -3045,6 +3159,12 @@ function _submitAssetPublishModal() {
   var userTitle = String(titleInput && titleInput.value || '').trim();
   var userDesc = String(descInput && descInput.value || '').trim();
   var userTags = String(tagsInput && tagsInput.value || '').trim();
+  var labelOptions = _assetPublishReadLabelOptions();
+  var labelError = _assetPublishValidateLabel(labelOptions);
+  if (labelError) return _assetPublishMsgShow(labelError, true);
+  if (labelOptions && String(account.platform || '').toLowerCase() !== 'douyin') {
+    return _assetPublishMsgShow('添加标签仅支持抖音账号。', true);
+  }
   var sourcePrompt = _assetPublishSourcePrompt(asset);
   var autoCopy = !userTitle && !userDesc && !userTags;
 
@@ -3068,6 +3188,7 @@ function _submitAssetPublishModal() {
       payload.description = sourcePrompt.slice(0, 2000) || String(asset.title || asset.filename || '作品发布').slice(0, 240);
       payload.tags = _assetContentTags(asset);
     }
+    if (labelOptions) payload.options.douyin_label = labelOptions;
     if (target.saved_from_url) payload.options._saved_from_url = String(target.source_url || '').slice(0, 300);
     _assetPublishMsgShow('正在发布到 ' + _assetPublishAccountLabel(account) + '...', false);
     return fetch(publishLocalBase() + '/api/publish', {
@@ -5360,6 +5481,13 @@ function bindAssetLibraryUi() {
   if (assetPublishAccountSelect && !assetPublishAccountSelect._assetLibraryBound) {
     assetPublishAccountSelect._assetLibraryBound = true;
     assetPublishAccountSelect.addEventListener('change', _assetPublishUpdateAccountMeta);
+  }
+  var assetPublishLabelType = document.getElementById('assetPublishLabelType');
+  if (assetPublishLabelType && !assetPublishLabelType._assetLibraryBound) {
+    assetPublishLabelType._assetLibraryBound = true;
+    assetPublishLabelType.addEventListener('change', function() {
+      _assetPublishRenderLabelFields(assetPublishLabelType.value);
+    });
   }
 
   // Upload local files; prepare a public URL only when a later action needs one.

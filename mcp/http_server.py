@@ -2474,7 +2474,7 @@ def _tool_definitions(
                             "- 抖音添加标签（最多一个）：douyin_label:{type:\"cart\", link:\"商品链接\"}；"
                             "type 可选 location/groupbuy/cart/movie/miniapp/gamepad/soda_playlist/mark_all。"
                             "location 用 keyword，可加 mode（带货模式/打卡模式）；groupbuy 用 keyword+title（推广标题≤10字）；"
-                            "cart 用 link 或 links；movie/soda_playlist 用 keyword，可选 select 指定结果；"
+                            "cart 用 link 或 links，并填 short_title（商品短标题≤10字）；movie/soda_playlist 用 keyword，可选 select 指定结果；"
                             "miniapp 用 link（抖音小程序内分享链接）；gamepad 用 keyword，未开通推广权限时默认中止，"
                             "如仅挂载不参与激励可设 allow_without_promotion:true；mark_all 用 keyword，可选 select 指定物品。"
                             "账号无该标签入口/权限、链接不可用或指定结果不存在时，发布会中止并返回错误，不会静默跳过。\n"
