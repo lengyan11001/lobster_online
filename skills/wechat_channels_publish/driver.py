@@ -1304,7 +1304,15 @@ async def _click_followup_confirm(page: Any) -> bool:
     return False
 
 
-async def _handle_original_notice(page: Any, enabled: bool, _step) -> bool:
+_NOTICE_SUBMIT_WORDS = ("发表", "确认", "提交")
+
+
+def _notice_button_is_submit(text: str) -> bool:
+    """原创提示弹窗上的按钮是不是"真提交"。视频号常见「我知道了」只是关闭提示，点完还要再点发表。"""
+    return any(word in str(text or "") for word in _NOTICE_SUBMIT_WORDS)
+
+
+async def _handle_original_notice(page: Any, enabled: bool, _step) -> str:
     """Handle the post-submit original-rights reminder without blocking publish.
 
     视频号助手是 wujie 微前端，提示弹窗可能挂在子 frame / shadow root 里，原先只在主文档里找按钮，
@@ -1314,7 +1322,7 @@ async def _handle_original_notice(page: Any, enabled: bool, _step) -> bool:
     try:
         info = await _probe_publish_dialogs(page)
         if not info.get("notice"):
-            return False
+            return ""
         if bool(enabled) and info.get("has_checkbox") and not info.get("checkbox_checked"):
             if await _click_tagged(page, "notice-checkbox"):
                 _step("勾选原创提示不再提醒", True)
@@ -1322,8 +1330,9 @@ async def _handle_original_notice(page: Any, enabled: bool, _step) -> bool:
                 info = await _probe_publish_dialogs(page)
         if info.get("has_continue"):
             if await _click_tagged(page, "notice-continue"):
-                _step("处理原创提示并继续发布", True, button=info.get("continue_text", ""))
-                return True
+                text = str(info.get("continue_text") or "")
+                _step("处理原创提示并继续发布", True, button=text)
+                return text
         _step(
             "检测到原创提示但未找到继续按钮",
             False,
@@ -1331,11 +1340,11 @@ async def _handle_original_notice(page: Any, enabled: bool, _step) -> bool:
             frames=(info.get("frames_with_hit") or [])[:5],
             checkbox=bool(info.get("has_checkbox")),
         )
-        return False
+        return ""
     except Exception as exc:
         logger.warning("[WECHAT-CHANNELS] original notice handling failed: %s", exc)
         _step("处理原创提示并继续发布", False, error=str(exc))
-        return False
+        return ""
 
 
 
@@ -1533,14 +1542,36 @@ class WechatChannelsDriver(BaseDriver):
             if notice_no_remind is None:
                 notice_no_remind = True
             notice_handled = False
+            notice_button = ""
             for attempt in range(4):
-                if await _handle_original_notice(page, bool(notice_no_remind), _step):
+                notice_button = await _handle_original_notice(page, bool(notice_no_remind), _step)
+                if notice_button:
                     notice_handled = True
                     break
                 if attempt < 3:
                     await asyncio.sleep(0.6)
             if not notice_handled and await _click_followup_confirm(page):
                 _step("确认发表", True)
+
+            # 2026-10-17 线上（diag_20261017090024_4f4cac8a）：点发表后弹「原创声明」，
+            # 我们的「继续」实际点的是「我知道了」——这只是关掉提示，发表并没有提交，
+            # 于是 45 秒后停在 /platform/post/create 报"发布结果未明确识别"。
+            # 如果弹窗按钮不是"发表/确认/提交"，说明只是关闭提示：再点一次发表。
+            if notice_handled and not _notice_button_is_submit(notice_button):
+                _step("原创提示已关闭，再次点击发表", True, notice_button=notice_button)
+                await asyncio.sleep(0.8)
+                retry_btn = await _wait_publish_ready(page, 20, _step)
+                if retry_btn:
+                    try:
+                        await _human_click(page, retry_btn, timeout_ms=12000)
+                    except Exception:
+                        await retry_btn.click(force=True, timeout=_pw_ms(12000))
+                    _step("再次点击发表", True)
+                    for _ in range(2):
+                        again = await _handle_original_notice(page, bool(notice_no_remind), _step)
+                        if again:
+                            break
+                        await asyncio.sleep(0.5)
 
             result = await _verify_publish_result(page, _step)
             result["applied"] = applied
