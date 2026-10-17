@@ -1,7 +1,7 @@
 {
-  "version": "2.0.148",
-  "build": 443,
-  "applied_at": "2026-10-16T23:20:30+08:00",
-  "note": "用户端「教程 → 系统模板」列表与详情一起显示关联关键词/同行账号：列表行加「关键词 N 个 · 同行账号 M 个」，详情弹窗新增「关联关键词」「关联同行账号」两块（同行账号带平台），复制内容补两节；配套服务端 /api/ip-content/system-templates 已回传 keywords[]/competitors[]",
-  "bundle_sha256": "6e026ceba7f2280399d99daa5af840241ef64dab006b2038a314a15e5a2c8b76"
+  "version": "2.0.149",
+  "build": 444,
+  "applied_at": "2026-10-17T13:09:29+08:00",
+  "note": "微信自动拉起：检测/同步通讯录/所有本机微信动作前置『确保微信在』——exe 走注册表 InstallPath（照竞品 pyweixin），没开就 startfile 启动、进程在但窗口不可读再单实例唤起、最多等 20s、登录窗可识别、45s 冷却；检测接口默认 launch=1，前端提示自动拉起与失败原因；同步通讯录新增 contacts_wechat_ensure 阶段日志",
+  "bundle_sha256": "6dfef829a5b2a995be9d90c01d97b7cc4beb9ff6667353552d4609a2555029c2"
 }
