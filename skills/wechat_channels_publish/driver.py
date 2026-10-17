@@ -1168,12 +1168,13 @@ _PUBLISH_DIALOG_JS = r"""
   walk(document);
 
   const NO_REMIND = ['不再提醒', '以后不再提醒', '下次不再提醒', '不再提示'];
-  const PRIMARY = ['直接发表', '继续发表', '确认发表', '继续发布', '确认发布', '立即发表',
+  const PRIMARY = ['声明原创', '直接发表', '继续发表', '确认发表', '继续发布', '确认发布', '立即发表',
                    '同意并发表', '同意并继续', '确定', '确认', '我知道了', '好的', '继续'];
+  const CONSENT = ['我已阅读', '原创声明须知', '使用条款'];
   const BLOCK = ['取消', '关闭', '放弃', '删除', '返回', '不保存', '稍后', '上一步'];
 
   let notice = false, hasCheckbox = false, checkboxChecked = false;
-  let bestRank = 99, bestEl = null;
+  let bestRank = 99, bestEl = null, cancelEl = null;
   const buttons = [];
   for (const root of roots) {
     const all = root.querySelectorAll
@@ -1183,7 +1184,8 @@ _PUBLISH_DIALOG_JS = r"""
       if (!visible(el)) continue;
       const text = norm(el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || '');
       if (!text) continue;
-      if (NO_REMIND.some((t) => text.includes(t))) {
+      const isConsent = CONSENT.some((t) => text.includes(t));
+      if (NO_REMIND.some((t) => text.includes(t)) || isConsent) {
         notice = true;
         if (!hasCheckbox) {
           const parent = el.closest('label, [role="checkbox"], .ant-checkbox-wrapper, div') || el;
@@ -1205,6 +1207,7 @@ _PUBLISH_DIALOG_JS = r"""
       if (!bt || !visible(bt)) continue;
       const btext = norm(bt.textContent || bt.getAttribute('aria-label') || bt.getAttribute('title') || text);
       if (btext && btext.length <= 24 && buttons.indexOf(btext) < 0 && buttons.length < 40) buttons.push(btext);
+      if (btext === '取消' && !cancelEl) cancelEl = bt;
       if (BLOCK.some((t) => btext === t)) continue;
       const r = bt.getBoundingClientRect();
       if (r.width <= 24 || r.height <= 14) continue;
@@ -1216,8 +1219,10 @@ _PUBLISH_DIALOG_JS = r"""
   if (bestEl) {
     bestEl.setAttribute('data-lobster-target', 'notice-continue');
     continueText = norm(bestEl.textContent || bestEl.getAttribute('aria-label') || '');
+    if (cancelEl) cancelEl.setAttribute('data-lobster-target', 'notice-cancel');
   }
-  return { notice, hasCheckbox, checkboxChecked, hasContinue: !!bestEl, continueText, buttons };
+  return { notice, hasCheckbox, checkboxChecked, hasContinue: !!bestEl, continueText,
+           hasCancel: !!cancelEl, buttons };
 }
 """
 
@@ -1231,7 +1236,8 @@ async def _probe_publish_dialogs(page: Any) -> Dict[str, Any]:
     """
     merged: Dict[str, Any] = {
         "notice": False, "has_checkbox": False, "checkbox_checked": False,
-        "has_continue": False, "continue_text": "", "buttons": [], "frames_with_hit": [],
+        "has_continue": False, "continue_text": "", "has_cancel": False,
+        "buttons": [], "frames_with_hit": [],
     }
     for fr in list(getattr(page, "frames", []) or []):
         try:
@@ -1250,6 +1256,8 @@ async def _probe_publish_dialogs(page: Any) -> Dict[str, Any]:
         if res.get("hasContinue") and not merged["has_continue"]:
             merged["has_continue"] = True
             merged["continue_text"] = res.get("continueText") or ""
+        if res.get("hasCancel"):
+            merged["has_cancel"] = True
         for txt in (res.get("buttons") or []):
             if txt not in merged["buttons"]:
                 merged["buttons"].append(txt)
@@ -1304,7 +1312,7 @@ async def _click_followup_confirm(page: Any) -> bool:
     return False
 
 
-_NOTICE_SUBMIT_WORDS = ("发表", "确认", "提交")
+_NOTICE_SUBMIT_WORDS = ("发表", "确认", "提交", "声明原创")
 
 
 def _notice_button_is_submit(text: str) -> bool:
@@ -1312,7 +1320,7 @@ def _notice_button_is_submit(text: str) -> bool:
     return any(word in str(text or "") for word in _NOTICE_SUBMIT_WORDS)
 
 
-async def _handle_original_notice(page: Any, enabled: bool, _step) -> str:
+async def _handle_original_notice(page: Any, enabled: bool, _step, *, declare_original: bool = True) -> str:
     """Handle the post-submit original-rights reminder without blocking publish.
 
     视频号助手是 wujie 微前端，提示弹窗可能挂在子 frame / shadow root 里，原先只在主文档里找按钮，
@@ -1321,13 +1329,19 @@ async def _handle_original_notice(page: Any, enabled: bool, _step) -> str:
     """
     try:
         info = await _probe_publish_dialogs(page)
-        if not info.get("notice"):
+        if not info.get("notice") and not info.get("has_continue"):
             return ""
         if bool(enabled) and info.get("has_checkbox") and not info.get("checkbox_checked"):
             if await _click_tagged(page, "notice-checkbox"):
-                _step("勾选原创提示不再提醒", True)
+                _step("勾选原创提示不再提醒/同意条款", True)
                 await _delay(0.25, 0.6)
                 info = await _probe_publish_dialogs(page)
+        # 2026-10-17：用户截图里的弹窗是「原创权益」——勾选"我已阅读并同意《原创声明须知》和《使用条款》"
+        # +「取消」/「声明原创」。不声明原创就点取消，回到编辑页再点发表（不带原创）。
+        if not declare_original and info.get("has_cancel") and info.get("has_continue"):
+            if await _click_tagged(page, "notice-cancel"):
+                _step("原创权益弹窗选择取消（不声明原创）", True)
+                return "取消"
         if info.get("has_continue"):
             if await _click_tagged(page, "notice-continue"):
                 text = str(info.get("continue_text") or "")
@@ -1541,10 +1555,16 @@ class WechatChannelsDriver(BaseDriver):
             )
             if notice_no_remind is None:
                 notice_no_remind = True
+            declare_original = _option_bool(
+                options, "wechat_channels_original", "channels_original", "original", "is_original"
+            )
+            declare_original = True if declare_original is None else bool(declare_original)
             notice_handled = False
             notice_button = ""
             for attempt in range(4):
-                notice_button = await _handle_original_notice(page, bool(notice_no_remind), _step)
+                notice_button = await _handle_original_notice(
+                    page, bool(notice_no_remind), _step, declare_original=declare_original
+                )
                 if notice_button:
                     notice_handled = True
                     break
@@ -1568,7 +1588,9 @@ class WechatChannelsDriver(BaseDriver):
                         await retry_btn.click(force=True, timeout=_pw_ms(12000))
                     _step("再次点击发表", True)
                     for _ in range(2):
-                        again = await _handle_original_notice(page, bool(notice_no_remind), _step)
+                        again = await _handle_original_notice(
+                            page, bool(notice_no_remind), _step, declare_original=declare_original
+                        )
                         if again:
                             break
                         await asyncio.sleep(0.5)
