@@ -2357,8 +2357,8 @@
   }
 
   function detectLocalWechat() {
-    setMsg('正在检测本机微信...', false);
-    return apiJson('/api/native-wechat/local/status').then(function(status) {
+    setMsg('正在检测本机微信（没开会自动拉起，最多等 20 秒）...', false);
+    return apiJson('/api/native-wechat/local/status?launch=1').then(function(status) {
       state.driver = status || null;
       if (status && (status.diagnostic || status.diagnostic_code)) state.lastDiagnostic = status;
       return loadAccounts().then(function(items) {
@@ -2367,7 +2367,16 @@
     }).then(function(result) {
       var status = result.status || {};
       var items = result.items || [];
+      var launch = status.launch || {};
       if (!items.length) {
+        if (launch && launch.launched) {
+          setMsg('已调起微信：' + (launch.path || '') + '。请确认主窗口已登录后再点一次检测。', true);
+          return;
+        }
+        if (launch && launch.errors && launch.errors.length) {
+          setMsg('未能拉起微信：' + String(launch.errors[0] || launch.reason || '').slice(0, 160), true);
+          return;
+        }
         if (state.lastDiagnostic || status.diagnostic || status.diagnostic_code) {
           setMsg(withDiagnostic('\u672a\u68c0\u6d4b\u5230\u672c\u673a\u5fae\u4fe1\uff0c\u8bf7\u6253\u5f00\u5df2\u767b\u5f55\u7684 PC \u5fae\u4fe1\u4e3b\u7a97\u53e3\u540e\u91cd\u8bd5\u3002', state.lastDiagnostic || status), true);
           return;

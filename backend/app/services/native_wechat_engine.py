@@ -76,6 +76,11 @@ WECHAT_WINDOW_CLASSES = {
     "mmui::MainWindow",
 }
 
+# 2026-10-17: 检测/同步通讯录要能自己把微信拉起来（竞品 pyweixin 的 WeChatTools 也是
+# 读注册表 InstallPath 后 startfile）。这里做进程内节流，避免自动回复轮询时反复启动。
+_LAST_WECHAT_LAUNCH_ATTEMPT = 0.0
+_WECHAT_LAUNCH_COOLDOWN_SECONDS = 45.0
+
 
 DEFAULT_STRATEGY: Dict[str, Any] = {
     "send_sleep_min": 12.0,
@@ -1221,6 +1226,45 @@ def _wechat_process_candidates() -> List[Dict[str, Any]]:
     return out
 
 
+def _registry_wechat_install_paths() -> List[str]:
+    """从注册表读微信安装目录（竞品 pyweixin/WeChatTools 读的就是 InstallPath）。"""
+    out: List[str] = []
+    try:
+        import winreg  # type: ignore
+    except Exception:
+        return out
+    locations = (
+        (winreg.HKEY_CURRENT_USER, r"Software\Tencent\Weixin"),
+        (winreg.HKEY_LOCAL_MACHINE, r"Software\Tencent\Weixin"),
+        (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Tencent\Weixin"),
+        (winreg.HKEY_CURRENT_USER, r"Software\Tencent\WeChat"),
+        (winreg.HKEY_LOCAL_MACHINE, r"Software\Tencent\WeChat"),
+        (winreg.HKEY_LOCAL_MACHINE, r"Software\WOW6432Node\Tencent\WeChat"),
+    )
+    for hive, sub in locations:
+        try:
+            with winreg.OpenKey(hive, sub) as key:
+                for value_name in ("InstallPath", "InstallDir", "Path", "Executable"):
+                    try:
+                        raw, _kind = winreg.QueryValueEx(key, value_name)
+                    except OSError:
+                        continue
+                    base = str(raw or "").strip().strip('"')
+                    if not base:
+                        continue
+                    item = Path(base)
+                    candidates = [item] if item.suffix.lower() == ".exe" else [
+                        item / "Weixin.exe",
+                        item / "WeChat.exe",
+                    ]
+                    for cand in candidates:
+                        if cand.is_file():
+                            out.append(str(cand))
+        except OSError:
+            continue
+    return out
+
+
 def _known_wechat_exe_paths() -> List[str]:
     paths: List[str] = []
     for meta in _wechat_process_candidates():
@@ -1232,16 +1276,24 @@ def _known_wechat_exe_paths() -> List[str]:
             and exe not in paths
         ):
             paths.append(exe)
-    for raw in (
-        os.environ.get("WECHAT_EXE", ""),
-        r"C:\Program Files\Tencent\Weixin\Weixin.exe",
-        r"C:\Program Files (x86)\Tencent\Weixin\Weixin.exe",
-        r"C:\Program Files\Tencent\WeChat\WeChat.exe",
-        r"C:\Program Files (x86)\Tencent\WeChat\WeChat.exe",
+    for exe in _registry_wechat_install_paths():
+        if exe not in paths:
+            paths.append(exe)
+    for base in (
+        os.environ.get("ProgramFiles", ""),
+        os.environ.get("ProgramFiles(x86)", ""),
+        os.environ.get("LOCALAPPDATA", ""),
     ):
-        text = str(raw or "").strip()
-        if text and Path(text).is_file() and text not in paths:
-            paths.append(text)
+        text = str(base or "").strip()
+        if not text:
+            continue
+        for rel in (r"Tencent\Weixin\Weixin.exe", r"Tencent\WeChat\WeChat.exe"):
+            cand = str(Path(text) / rel)
+            if Path(cand).is_file() and cand not in paths:
+                paths.append(cand)
+    override = str(os.environ.get("WECHAT_EXE", "") or "").strip()
+    if override and Path(override).is_file() and override not in paths:
+        paths.insert(0, override)
     return paths
 
 
@@ -1398,24 +1450,43 @@ def _dismiss_local_wechat_session_ghosts_for_account(account_id: str) -> Dict[st
 
 
 def _launch_wechat_single_instance() -> Dict[str, Any]:
-    result: Dict[str, Any] = {"launched": False, "path": "", "errors": []}
-    for exe in _known_wechat_exe_paths():
+    """启动/唤起本机微信（单实例）。没装或找不到 exe 时把原因带回去。"""
+    result: Dict[str, Any] = {
+        "launched": False,
+        "path": "",
+        "errors": [],
+        "action": "",
+        "candidates": [],
+    }
+    candidates = _known_wechat_exe_paths()
+    result["candidates"] = candidates[:5]
+    if not candidates:
+        result["action"] = "wechat_exe_not_found"
+        result["errors"].append("未找到微信安装路径（注册表 InstallPath / Weixin.exe / WeChat.exe 都没有）")
+        return result
+    for exe in candidates:
         try:
             os.startfile(exe)  # type: ignore[attr-defined]
-            result.update({"launched": True, "path": exe})
+            result.update({"launched": True, "path": exe, "action": "startfile"})
             time.sleep(1.2)
             _clear_local_windows_cache()
             return result
         except Exception as exc:
             result["errors"].append(f"os.startfile {exe}: {exc}")
             try:
-                subprocess.Popen([exe], cwd=str(Path(exe).parent), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                result.update({"launched": True, "path": exe})
+                subprocess.Popen(
+                    [exe],
+                    cwd=str(Path(exe).parent),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                result.update({"launched": True, "path": exe, "action": "popen"})
                 time.sleep(1.2)
                 _clear_local_windows_cache()
                 return result
             except Exception as sub_exc:
                 result["errors"].append(f"popen {exe}: {sub_exc}")
+    result["action"] = "launch_error"
     return result
 
 
@@ -1448,40 +1519,77 @@ def _ensure_local_wechat_window_visible(*, wait_seconds: float = 4.0, allow_laun
         result.update({"ok": True, "action": "visible_window_low_confidence", "windows": initial_windows})
         return result
 
+    global _LAST_WECHAT_LAUNCH_ATTEMPT
+
     processes = _wechat_process_candidates()
     if processes:
         result["processes"] = _wechat_process_brief(processes)
-        result["action"] = "wechat_process_running_without_readable_window"
-        result["launch"] = {
-            "launched": False,
-            "skipped": True,
-            "reason": "微信进程已存在，但没有找到可复用主窗口；为避免打开一个新的未登录微信，本次不再启动 Weixin.exe。",
-        }
-        return result
 
-    result["processes"] = []
     if not allow_launch:
-        result["action"] = "no_wechat_window_launch_disabled"
+        if processes:
+            result["action"] = "wechat_process_running_without_readable_window"
+            result["launch"] = {
+                "launched": False,
+                "skipped": True,
+                "reason": "微信进程已存在，但没有找到可复用主窗口；本次未尝试启动（allow_launch=False）。",
+            }
+        else:
+            result["action"] = "no_wechat_window_launch_disabled"
+            result["launch"] = {
+                "launched": False,
+                "skipped": True,
+                "reason": "launch disabled for detection/sync to avoid opening a second login window",
+            }
+        return result
+
+    # allow_launch=True：照竞品把微信拉起来。
+    #  - 进程不在：直接启动（已登录的微信会直接出主窗口）
+    #  - 进程在但窗口不可读（托盘/最小化/刚启动）：再 startfile 一次做单实例唤起
+    now = time.time()
+    if now - float(_LAST_WECHAT_LAUNCH_ATTEMPT or 0.0) < _WECHAT_LAUNCH_COOLDOWN_SECONDS:
+        result["action"] = "launch_cooldown"
         result["launch"] = {
             "launched": False,
             "skipped": True,
-            "reason": "launch disabled for detection/sync to avoid opening a second login window",
+            "had_process": bool(processes),
+            "reason": "刚尝试过启动微信，%.0f 秒内不重复启动" % _WECHAT_LAUNCH_COOLDOWN_SECONDS,
         }
         return result
-
+    _LAST_WECHAT_LAUNCH_ATTEMPT = now
+    try:
+        logging.getLogger(__name__).info(
+            "[native-wechat] ensure wechat: launching (had_process=%s, candidates=%s)",
+            bool(processes), len(_known_wechat_exe_paths()),
+        )
+    except Exception:
+        pass
     launch = _launch_wechat_single_instance()
+    launch["had_process"] = bool(processes)
     result["launch"] = launch
     if launch.get("launched"):
-        deadline = time.time() + max(1.0, float(wait_seconds))
+        deadline = time.time() + max(2.0, float(wait_seconds))
         while time.time() < deadline:
             windows = _scan_local_wechat_windows(max_age_seconds=0)
             if windows:
-                result.update({"ok": True, "action": "launch_single_instance", "windows": windows})
+                best_rank = _wechat_window_rank(windows[0])
+                result["windows"] = windows
+                result["ok"] = True
+                result["action"] = "launch_single_instance" if best_rank >= 24 else "launch_login_window"
+                try:
+                    logging.getLogger(__name__).info(
+                        "[native-wechat] ensure wechat: window ready action=%s rank=%s",
+                        result["action"], best_rank,
+                    )
+                except Exception:
+                    pass
                 return result
             # Some WeChat builds first create a hidden main window, then show it
             # on the second single-instance activation.
             _restore_hidden_wechat_windows()
-            time.sleep(0.4)
+            time.sleep(0.5)
+        result["action"] = "launch_wait_timeout"
+    else:
+        result["action"] = launch.get("action") or "launch_failed"
     return result
 
 
@@ -1745,7 +1853,7 @@ def _local_action_driver_ready() -> bool:
         return False
 
 
-def _local_driver_status(*, passive: bool = False) -> Dict[str, Any]:
+def _local_driver_status(*, passive: bool = False, launch: bool = False) -> Dict[str, Any]:
     deps: Dict[str, bool] = {}
     for name in (
         "win32gui",
@@ -1761,7 +1869,10 @@ def _local_driver_status(*, passive: bool = False) -> Dict[str, Any]:
         deps[name] = _module_available(name)
     restore_info: Dict[str, Any] = {}
     windows = _scan_local_wechat_windows(max_age_seconds=0)
-    if not windows and not passive:
+    if not windows and launch:
+        restore_info = _ensure_local_wechat_window_visible(wait_seconds=20.0, allow_launch=True)
+        windows = restore_info.get("windows") or []
+    elif not windows and not passive:
         restore_info = _ensure_local_wechat_window_visible()
         windows = restore_info.get("windows") or []
     if passive:
@@ -1782,6 +1893,7 @@ def _local_driver_status(*, passive: bool = False) -> Dict[str, Any]:
         "windows": windows,
         "count": len(windows),
         "restore": restore_info,
+        "launch": restore_info.get("launch") or {},
     }
 
 
@@ -2044,14 +2156,13 @@ def list_accounts() -> List[Dict[str, Any]]:
     return out
 
 
-def local_driver_status(*, passive: bool = True) -> Dict[str, Any]:
-    """默认被动：只扫窗口/依赖，不激活微信窗口、不连 wxauto4。
+def local_driver_status(*, passive: bool = True, launch: bool = False) -> Dict[str, Any]:
+    """passive=True 只扫窗口/依赖（轮询用）；launch=True 时没窗口会主动把微信拉起来。
 
-    以前默认被动关，前端每刷一次状态就会把微信窗口激活一次（用户会以为"被控制"）。
-    需要深度探测时显式传 passive=False（例如用户主动点「检测」）。
+    用户主动点「检测」传 launch=True：不用先手动打开微信，产品自己拉起来。
     """
     init_db()
-    return _local_driver_status(passive=passive)
+    return _local_driver_status(passive=passive, launch=launch)
 
 
 def _uia_node_debug(node: Any, depth: int) -> Dict[str, Any]:
@@ -9630,6 +9741,11 @@ def _run_local_driver_operation(
             # 注意：这一段整体跑在**常驻执行器线程**上（wxauto4/UIA 句柄是线程绑定的），
             # 调用方线程只在 _call_in_ui_executor 里等 + 盯卡死。
             _prepare_local_automation_thread()
+            try:
+                # 所有本机微信动作统一前置：没开/被托盘就拉起来（竞品同样每次都确保微信在）。
+                _ensure_local_wechat_window_visible(wait_seconds=20.0, allow_launch=True)
+            except Exception:
+                pass
             recovery_before = _latest_local_driver_recovery(account_id)
 
             def invoke() -> Any:
@@ -11683,7 +11799,14 @@ def _sync_local_contacts_from_uia(account_id: str, *, limit: int = 10000) -> Dic
     contact_list = None
     for attempt in range(1, 4):
         try:
-            visible = _ensure_local_wechat_window_visible(wait_seconds=4.0)
+            visible = _ensure_local_wechat_window_visible(wait_seconds=20.0, allow_launch=True)
+            _contact_sync_debug(account_id, stage="contacts_wechat_ensure", attempt=attempt,
+                                ok=bool(visible.get("ok")),
+                                action=str(visible.get("action") or ""),
+                                windows=len(visible.get("windows") or []),
+                                launched=bool((visible.get("launch") or {}).get("launched")),
+                                launch_path=str((visible.get("launch") or {}).get("path") or "")[:160],
+                                launch_reason=str((visible.get("launch") or {}).get("reason") or "")[:140])
             wins_now = visible.get("windows") or []
             _contact_sync_debug(account_id, stage="contacts_tab_result", attempt=attempt,
                                 windows=len(wins_now),
@@ -19970,7 +20093,7 @@ async def send_text(account_id: str, peer_id: str, text: str, *, context_token: 
 def _find_local_account(account_id: str) -> Dict[str, Any]:
     hwnd = _local_hwnd_from_account_id(account_id)
     if not hwnd:
-        restored = _ensure_local_wechat_window_visible()
+        restored = _ensure_local_wechat_window_visible(wait_seconds=20.0, allow_launch=True)
         hwnd = int(((restored.get("windows") or [{}])[0]).get("hwnd") or 0)
     if not hwnd:
         raise RuntimeError("本机微信账号标识无效")
