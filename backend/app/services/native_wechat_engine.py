@@ -7643,28 +7643,79 @@ def _click_uia_node(node: Any) -> None:
         node.Click(simulateMove=False)
 
 
+def _wechat_tab_ready(hwnd: int, tab_name: str, *, timeout: float = 1.2) -> bool:
+    """切页后校验：目标页的关键控件真的出现了才算切换成功（有界等待）。"""
+    if not hwnd or not _module_available("uiautomation"):
+        return False
+    try:
+        import uiautomation as auto  # type: ignore
+        root = auto.ControlFromHandle(int(hwnd))
+    except Exception:
+        return False
+    name = str(tab_name or "").strip()
+    deadline = time.time() + max(0.4, float(timeout))
+    while time.time() < deadline:
+        try:
+            nodes = _uia_walk(root, max_depth=14, max_nodes=6000)
+            texts = {(_uia_control_text(n) or "").strip() for n in nodes}
+            classes = {_uia_control_class(n) for n in nodes}
+            if name == "通讯录":
+                # 2026-10-17 本机实测（微信 4.x）：通讯录页会出现「新的朋友」分组；
+                # 会话页不会。类名兜底：ContactsTableBaseView / ContactsCellGroupView。
+                if "新的朋友" in texts or "群聊" in texts or "标签" in texts:
+                    return True
+                if "mmui::ContactsTableBaseView" in classes or "mmui::ContactsCellGroupView" in classes:
+                    return True
+            elif name == "微信":
+                # 会话页会出现「消息」标题 + 「会话」分组；通讯录页不会。
+                if "消息" in texts and "会话" in texts:
+                    return True
+                if "mmui::ChatSessionList" in classes or "mmui::ChatSessionCell" in classes:
+                    return True
+        except Exception:
+            return False
+        time.sleep(0.15)
+    return False
+
+
 def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None:
     """切换到本机微信的左侧页面（\u5fae\u4fe1 / \u901a\u8baf\u5f55）。
 
-    以前这里一旦找不到控件，就以 uiautomation 的 "Find Control Timeout" 失败收场：
-    每轮空转 60~90 秒、连 Ctrl+\u6570\u5b57 的热键兜底都走不到。现在改成有层次的短超时重试：
-      1) 还原 + 前置微信窗口，等它渲染；
-      2) 按候选控件名（\u5fae\u4fe1 / WeChat / \u5fae\u4fe1(\u5de5\u4f5c)\u2026）逐个 1.2 秒短超时查找并点击；
-      3) 失败则再还原一次窗口重试一轮（窗口被最小化/遮挡时第一轮常常找不到）；
-      4) 仍失败走 Ctrl+\u6570\u5b57 热键；
-      5) 最后才报错，并把导航栏项 dump 进日志，便于定位是改名还是窗口状态问题。
+    2026-10-17 事故（本机 + 线上诊断 diag_20261017045223）：窗口明明在，UIA 找不到
+    「通讯录」导航项时整条同步直接失败，而且第一次 UIA 调用还可能一卡 181 秒。
+    现在改成**热键优先**（Ctrl+1 / Ctrl+2，竞品也是这么切），切完必须校验目标页控件真的出现，
+    再退到控件点击兜底；每一步都写 tab_switch_* 阶段日志，失败原因不再靠猜。
     """
     if not hwnd or not _module_available("uiautomation"):
         return
     import uiautomation as auto  # type: ignore
 
     names = _wechat_tab_candidates(tab_name)
+    shortcut = _TAB_SHORTCUTS.get(str(tab_name or "").strip())
     dumped: List[dict] = []
     last_err: Any = None
     for attempt in (0, 1):
         try:
             _focus_local_wechat(hwnd)
-            time.sleep(0.5 if attempt else 0.15)
+            time.sleep(0.4 if attempt == 0 else 0.9)
+        except TaskPaused:
+            raise
+        except Exception as exc:
+            last_err = exc
+        # 1) 热键优先：不依赖控件名，窗口被托盘还原后也稳
+        if shortcut:
+            try:
+                _send_hotkey(str(shortcut), ctrl=True, pause=0.8)
+            except TaskPaused:
+                raise
+            except Exception as exc:
+                last_err = exc
+            if _wechat_tab_ready(hwnd, tab_name):
+                _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
+                                    method="hotkey", attempt=attempt + 1)
+                return
+        # 2) 控件点击兜底（只做短超时查找，不再空转几十秒）
+        try:
             root = auto.ControlFromHandle(int(hwnd))
             try:
                 root.SetActive()
@@ -7674,36 +7725,44 @@ def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None
             for nm in names:
                 try:
                     btn = root.ButtonControl(Name=nm)
-                    if btn.Exists(1.2):
+                    if btn.Exists(1.0):
                         _click_uia_node(btn)
-                        time.sleep(1.0)
-                        return
+                        time.sleep(0.8)
+                        if _wechat_tab_ready(hwnd, tab_name):
+                            _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
+                                                method="uia_button", attempt=attempt + 1)
+                            return
+                except TaskPaused:
+                    raise
                 except Exception as exc:
                     last_err = exc
                 node = _find_tab_item(root, [nm])
                 if node is not None:
                     try:
                         _click_uia_node(node)
-                        time.sleep(1.0)
-                        return
+                        time.sleep(0.8)
+                        if _wechat_tab_ready(hwnd, tab_name):
+                            _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
+                                                method="uia_node", attempt=attempt + 1)
+                            return
+                    except TaskPaused:
+                        raise
                     except Exception as exc:
                         last_err = exc
             if attempt == 0:
                 dumped = _dump_wechat_nav(root)
+        except TaskPaused:
+            raise
         except Exception as exc:
             last_err = exc
+        _contact_sync_debug("", stage="tab_switch_retry", tab=str(tab_name), attempt=attempt + 1,
+                            names=str(names), last_error=str(last_err)[:140])
         time.sleep(0.4)
-    shortcut = _TAB_SHORTCUTS.get(str(tab_name or "").strip())
-    if shortcut:
-        try:
-            _send_hotkey(shortcut, ctrl=True, pause=0.8)
-            time.sleep(1.0)
-            return
-        except Exception as exc:
-            last_err = exc
     msg = "切换本机微信页面失败：%s（尝试=%s 导航项=%s 最后错误=%s）" % (
         tab_name, names, dumped[:8], str(last_err)[:160],
     )
+    _contact_sync_debug("", stage="tab_switch_failed", tab=str(tab_name), names=str(names),
+                        nav=str(dumped[:6]), last_error=str(last_err)[:160])
     logging.getLogger(__name__).warning("[native-wechat] %s", msg[:500])
     if strict:
         raise RuntimeError(msg)
@@ -9587,7 +9646,7 @@ def _paused_guard() -> None:
 #   · 纪元对不上的老线程（僵尸）下次想动微信时被 _epoch_guard() 拦住，不会点歪到别的会话。
 # 2026-10-16 事故背景：15:00:52 那次同步卡在 UIA/COM 里 5 分 44 秒没有任何日志，
 # 按暂停也没反应 —— 就是缺这一层。
-UIA_STALL_TIMEOUT_SECONDS = 180.0
+UIA_STALL_TIMEOUT_SECONDS = 45.0
 _UI_EXECUTOR_STATE: Dict[str, Any] = {"epoch": 0, "executor": None}
 _UI_PROGRESS: Dict[str, Any] = {"at": 0.0, "what": ""}
 
@@ -9740,6 +9799,9 @@ def _run_local_driver_operation(
         def body() -> Any:
             # 注意：这一段整体跑在**常驻执行器线程**上（wxauto4/UIA 句柄是线程绑定的），
             # 调用方线程只在 _call_in_ui_executor 里等 + 盯卡死。
+            # 2026-10-17：卡超时被放弃的老执行器线程可能随后才把队列里的任务捞起来，
+            # 这里先查纪元，僵尸线程直接退出，避免"报超时之后又偷偷动微信"。
+            _epoch_guard()
             _prepare_local_automation_thread()
             try:
                 # 所有本机微信动作统一前置：没开/被托盘就拉起来（竞品同样每次都确保微信在）。
@@ -12487,13 +12549,25 @@ def sync_local_contacts(account_id: str, *, limit: int = 10000) -> Dict[str, Any
     # Contact sync is intentionally UIA-only. wxauto4's constructor can move
     # unsupported WeChat builds to the chat tab before reporting that its full
     # contacts API is unavailable, which corrupts this workflow's UI state.
-    try:
+    def _run_once() -> Dict[str, Any]:
         return _run_local_driver_operation(
             account_id,
             "同步通讯录",
             lambda: _sync_local_contacts_from_uia(account_id, limit=limit),
             retry_on_failure=False,
         )
+
+    try:
+        try:
+            return _run_once()
+        except RuntimeError as exc:
+            # 2026-10-17：执行器卡超时后会被重建（epoch+1）。通讯录同步是只读操作，
+            # 换新执行器再跑一次即可自愈，不让用户看到"点了没反应三分钟然后报错"。
+            if "界面自动化调用超时" not in str(exc):
+                raise
+            _contact_sync_debug(account_id, stage="contacts_sync_retry_after_stall",
+                                error=str(exc)[:140])
+            return _run_once()
     finally:
         _contacts_click_fence_close()
 
