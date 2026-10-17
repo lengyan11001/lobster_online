@@ -1700,6 +1700,749 @@ async def _douyin_is_creator_login_page(page: Any) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Anchor labels (添加标签) — location / groupbuy / cart / movie / miniapp /
+# gamepad / soda playlist / mark-all product
+# ---------------------------------------------------------------------------
+
+_DOUYIN_LABEL_CODES: Dict[str, str] = {
+    "location": "-11",
+    "groupbuy": "13010",
+    "cart": "-10",
+    "movie": "11",
+    "miniapp": "4",
+    "gamepad": "13017",
+    "soda_playlist": "13006",
+    "mark_all": "13093",
+}
+
+_DOUYIN_LABEL_DISPLAY: Dict[str, str] = {
+    "location": "位置",
+    "groupbuy": "团购",
+    "cart": "购物车",
+    "movie": "影视演艺",
+    "miniapp": "小程序",
+    "gamepad": "游戏手柄",
+    "soda_playlist": "汽水歌单",
+    "mark_all": "标记万物",
+}
+
+_DOUYIN_LABEL_ALIASES: Dict[str, str] = {
+    "location": "location",
+    "poi": "location",
+    "位置": "location",
+    "groupbuy": "groupbuy",
+    "group_buy": "groupbuy",
+    "group-buy": "groupbuy",
+    "团购": "groupbuy",
+    "cart": "cart",
+    "goods": "cart",
+    "product": "cart",
+    "shopping_cart": "cart",
+    "shopping-cart": "cart",
+    "购物车": "cart",
+    "小黄车": "cart",
+    "movie": "movie",
+    "film": "movie",
+    "ip": "movie",
+    "影视演艺": "movie",
+    "影视": "movie",
+    "miniapp": "miniapp",
+    "mini_app": "miniapp",
+    "mini-app": "miniapp",
+    "小程序": "miniapp",
+    "gamepad": "gamepad",
+    "game": "gamepad",
+    "game_pad": "gamepad",
+    "游戏手柄": "gamepad",
+    "游戏": "gamepad",
+    "soda_playlist": "soda_playlist",
+    "soda_song": "soda_playlist",
+    "soda": "soda_playlist",
+    "playlist": "soda_playlist",
+    "汽水歌单": "soda_playlist",
+    "汽水单曲": "soda_playlist",
+    "mark_all": "mark_all",
+    "mark-all": "mark_all",
+    "mark": "mark_all",
+    "标记万物": "mark_all",
+}
+
+
+def _douyin_merged_options(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(options, dict):
+        return {}
+    merged: Dict[str, Any] = {}
+    inner = options.get("douyin")
+    if isinstance(inner, dict):
+        merged.update(inner)
+    merged.update(options)
+    return merged
+
+
+def _douyin_label_options(options: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Return the requested 抖音「添加标签」 config, or {} when not requested."""
+    merged = _douyin_merged_options(options)
+    for key in ("douyin_label", "douyin_anchor", "label"):
+        raw = merged.get(key)
+        if isinstance(raw, dict):
+            return dict(raw)
+        if isinstance(raw, list) and raw and isinstance(raw[0], dict):
+            return dict(raw[0])
+
+    # Backward-compatible aliases already documented in the MCP schema.
+    goods = merged.get("goods")
+    if isinstance(goods, dict) and goods.get("enabled") is not False:
+        data = dict(goods)
+        if data.get("link") or data.get("links"):
+            data.setdefault("type", "cart")
+        elif data.get("keyword") or data.get("name") or data.get("select"):
+            data.setdefault("type", "mark_all")
+        if data.get("type"):
+            return data
+
+    location = merged.get("location")
+    if isinstance(location, str) and location.strip():
+        return {"type": "location", "keyword": location.strip()}
+    return {}
+
+
+def _douyin_normalize_label_type(value: Any) -> str:
+    key = str(value or "").strip().lower()
+    return _DOUYIN_LABEL_ALIASES.get(key, "")
+
+
+def _douyin_label_fail(message: str, **detail: Any) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"error": message}
+    out.update({k: v for k, v in detail.items() if v not in (None, "", [], {})})
+    return out
+
+
+async def _douyin_first_visible(loc: Any) -> Any:
+    try:
+        count = await loc.count()
+    except Exception:
+        return None
+    for i in range(count):
+        try:
+            item = loc.nth(i)
+            if await item.is_visible():
+                return item
+        except Exception:
+            continue
+    return None
+
+
+async def _douyin_first_visible_text(root: Any, text: str) -> Any:
+    try:
+        loc = root.get_by_text(text, exact=True)
+    except Exception:
+        return None
+    return await _douyin_first_visible(loc)
+
+
+async def _douyin_type_active(page: Any, text: str, *, link_like: bool = False) -> None:
+    value = str(text or "")
+    if not value:
+        return
+    if link_like or len(value) > 40:
+        # Long URLs / pasted links: insert in one shot, then give React a beat.
+        try:
+            await page.keyboard.insert_text(value)
+            await asyncio.sleep(0.5)
+            return
+        except Exception:
+            pass
+    await page.keyboard.type(value, delay=_douyin_type_delay_ms())
+
+
+async def _douyin_wait_choose_semi_option(
+    page: Any,
+    wanted: str,
+    _step: Any,
+    label: str,
+    *,
+    timeout_s: float = 15.0,
+) -> tuple[str, str]:
+    """Wait for a visible Semi select popup, then click the matching/first option.
+
+    Returns (selected_text, error).  ``wanted`` is matched against the option's
+    first line or full text.  If ``wanted`` is given but absent, this returns an
+    error instead of silently choosing a different item.
+    """
+    deadline = time.time() + max(1.0, float(timeout_s))
+    last_texts: List[str] = []
+    while time.time() < deadline:
+        opts = page.locator(".semi-select-option:visible")
+        try:
+            count = await opts.count()
+        except Exception:
+            count = 0
+        items: List[tuple[int, str]] = []
+        for i in range(count):
+            try:
+                text = (await opts.nth(i).inner_text()).strip()
+            except Exception:
+                continue
+            if not text or text in ("暂无数据", "暂无更多推荐"):
+                continue
+            if text.startswith("未搜索到") or "加载中" in text:
+                continue
+            items.append((i, text))
+        if items:
+            last_texts = [t for _, t in items]
+            pick: Optional[tuple[int, str]] = None
+            if wanted:
+                for i, text in items:
+                    first_line = text.splitlines()[0].strip()
+                    if wanted == first_line or wanted in text:
+                        pick = (i, text)
+                        break
+            else:
+                pick = items[0]
+            if pick is None:
+                return "", (
+                    f"未找到匹配项「{wanted}」；当前可选："
+                    + " | ".join(last_texts[:8])
+                )
+            try:
+                await opts.nth(pick[0]).click()
+                await asyncio.sleep(0.8)
+                return pick[1], ""
+            except Exception as exc:
+                return "", f"选择「{wanted or last_texts[0]}」失败: {exc}"
+        await asyncio.sleep(0.4)
+    suffix = ("；最后可见：" + " | ".join(last_texts[:8])) if last_texts else ""
+    return "", f"{label}未返回可选结果{suffix}"
+
+
+def _douyin_short_label_title(text: str, limit: int = 10) -> str:
+    first_line = (text or "").splitlines()[0].strip()
+    first_line = re.sub(r"\s+", "", first_line)
+    return first_line[:limit]
+
+
+def _douyin_find_text_value(obj: Any, keys: tuple[str, ...]) -> str:
+    if not isinstance(obj, dict):
+        return ""
+    for key in keys:
+        value = obj.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    for value in obj.values():
+        if isinstance(value, dict):
+            found = _douyin_find_text_value(value, keys)
+            if found:
+                return found
+    return ""
+
+
+async def _douyin_apply_anchor_label(
+    page: Any,
+    options: Optional[Dict[str, Any]],
+    _step: Any,
+    flow_label: str,
+) -> Optional[Dict[str, Any]]:
+    """Apply one 抖音「添加标签」 anchor.
+
+    Returns None on success/no-op, or a dict with ``error`` on failure.  Any
+    requested label that cannot be attached MUST abort publishing; we never
+    silently skip a user-supplied label.
+    """
+    raw = _douyin_label_options(options)
+    if not raw:
+        return None
+    if "enabled" in raw and not _douyin_bool_opt(raw.get("enabled")):
+        _step(f"{flow_label}标签已禁用", True, skipped=True)
+        return None
+
+    raw_type = raw.get("type") or raw.get("label_type") or raw.get("kind")
+    label_type = _douyin_normalize_label_type(raw_type)
+    if not label_type:
+        return _douyin_label_fail(
+            f"不支持的抖音标签类型: {raw_type!r}；可选: "
+            + ", ".join(_DOUYIN_LABEL_DISPLAY.keys()),
+            label_type=raw_type,
+        )
+
+    display = _DOUYIN_LABEL_DISPLAY[label_type]
+    required = raw.get("required", True)
+    required = True if required is None else _douyin_bool_opt(required)
+
+    def _fail(message: str, **detail: Any) -> Dict[str, Any]:
+        _step(f"{flow_label}标签「{display}」失败", False, error=message, **detail)
+        return _douyin_label_fail(message, label_type=label_type, **detail)
+
+    anchor = page.locator('[class*="anchor-part-"]').first
+    try:
+        if await anchor.count() == 0 or not await anchor.is_visible():
+            if not required:
+                _step(f"{flow_label}标签「{display}」不可用，已按 required=false 跳过", True, skipped=True)
+                return None
+            return _fail(f"抖音标签「{display}」不可用：页面没有「扩展信息/添加标签」区域")
+        await anchor.scroll_into_view_if_needed()
+        await asyncio.sleep(0.3)
+    except Exception as exc:
+        return _fail(f"抖音标签「{display}」定位失败: {exc}")
+
+    # Open the main type selector and verify this account actually exposes it.
+    try:
+        type_select = anchor.locator(".semi-select").first
+        await type_select.click()
+        await asyncio.sleep(0.4)
+    except Exception as exc:
+        return _fail(f"抖音标签「{display}」打开类型下拉失败: {exc}")
+
+    code = _DOUYIN_LABEL_CODES[label_type]
+    candidates = page.locator(f'.semi-select-option:has(div[data-code="{code}"])')
+    try:
+        count = await candidates.count()
+    except Exception:
+        count = 0
+    option_index = None
+    for i in range(count):
+        try:
+            if await candidates.nth(i).is_visible():
+                option_index = i
+        except Exception:
+            continue
+    if option_index is None:
+        try:
+            await page.keyboard.press("Escape")
+        except Exception:
+            pass
+        if not required:
+            _step(f"{flow_label}标签「{display}」入口不存在，已按 required=false 跳过", True, skipped=True)
+            return None
+        return _fail(
+            f"抖音标签「{display}」不可用：当前账号没有该标签入口或无权限；已中止发布",
+            code=code,
+        )
+    try:
+        await candidates.nth(option_index).click()
+        await asyncio.sleep(0.8)
+        _step(f"{flow_label}选择标签类型「{display}」", True)
+    except Exception as exc:
+        return _fail(f"抖音标签「{display}」选择失败: {exc}")
+
+    jump = page.locator("#douyin_creator_pc_anchor_jump")
+
+    # ---- 位置 ---------------------------------------------------------
+    if label_type == "location":
+        keyword = str(raw.get("keyword") or raw.get("location") or "").strip()
+        if not keyword:
+            return _fail("位置标签需要 keyword（例如：深圳市南山区）")
+        mode = str(raw.get("mode") or raw.get("location_mode") or "").strip()
+        if mode:
+            try:
+                mode_select = jump.locator(".semi-select").first
+                await mode_select.click()
+                await asyncio.sleep(0.4)
+                mode_selected, mode_err = await _douyin_wait_choose_semi_option(
+                    page, mode, _step, "位置模式", timeout_s=6
+                )
+                if mode_err:
+                    return _fail(mode_err)
+                await asyncio.sleep(0.4)
+            except Exception as exc:
+                return _fail(f"位置标签选择模式失败: {exc}")
+        try:
+            ctrl = jump.locator(".semi-select").last
+            await ctrl.click()
+            await asyncio.sleep(0.4)
+            await _douyin_type_active(page, keyword)
+            selected, err = await _douyin_wait_choose_semi_option(
+                page, str(raw.get("select") or raw.get("name") or "").strip(), _step, display
+            )
+            if err:
+                return _fail(err)
+            anchor_text = (await anchor.inner_text()).strip()
+            if keyword not in anchor_text and selected.splitlines()[0] not in anchor_text:
+                return _fail("位置已选择但页面未显示该位置", selected=selected)
+            _step(f"{flow_label}标签「位置」完成", True, value=selected.splitlines()[0])
+            return None
+        except Exception as exc:
+            return _fail(f"位置标签填写失败: {exc}")
+
+    # ---- 团购 ---------------------------------------------------------
+    if label_type == "groupbuy":
+        keyword = str(raw.get("keyword") or "").strip()
+        if not keyword:
+            return _fail("团购标签需要 keyword（例如：火锅）")
+        try:
+            ctrl = jump.locator(".semi-select").last
+            await ctrl.click()
+            await asyncio.sleep(0.4)
+            await _douyin_type_active(page, keyword)
+            selected, err = await _douyin_wait_choose_semi_option(
+                page, str(raw.get("select") or raw.get("name") or "").strip(), _step, display
+            )
+            if err:
+                return _fail(err)
+        except Exception as exc:
+            return _fail(f"团购商品搜索失败: {exc}")
+
+        title = str(raw.get("title") or raw.get("promotion_title") or "").strip()
+        if not title:
+            title = _douyin_short_label_title(selected, 10)
+        title = title[:10]
+        if not title:
+            return _fail("团购标签需要推广标题（title，最多10字）")
+        try:
+            title_input = await _douyin_first_visible(page.locator('input[placeholder*="如"]'))
+            if not title_input:
+                return _fail("团购商品已选中，但推广标题输入框未出现")
+            await _douyin_clear_and_type(page, title_input, title, 10)
+            await asyncio.sleep(0.4)
+            add_btn = None
+            add_candidates = page.get_by_text("添加", exact=True)
+            for i in range(await add_candidates.count()):
+                try:
+                    item = add_candidates.nth(i)
+                    if await item.is_visible():
+                        add_btn = item
+                except Exception:
+                    continue
+            if not add_btn:
+                return _fail("团购商品已选中，但未找到「添加」按钮")
+            await add_btn.click()
+            await asyncio.sleep(2.0)
+        except Exception as exc:
+            return _fail(f"团购标签提交失败: {exc}")
+
+        body = await page.inner_text("body")
+        if "未填写推广标题" in body:
+            return _fail("团购标签提交失败：平台提示未填写推广标题", title=title)
+        anchor_text = (await anchor.inner_text()).strip()
+        if title not in anchor_text:
+            return _fail("团购标签提交后未显示推广标题", title=title, anchor=anchor_text)
+        _step(f"{flow_label}标签「团购」完成", True, value=title)
+        return None
+
+    # ---- 购物车 -------------------------------------------------------
+    if label_type == "cart":
+        links_raw = raw.get("links")
+        if isinstance(links_raw, str):
+            links = [links_raw]
+        elif isinstance(links_raw, list):
+            links = [str(x).strip() for x in links_raw if str(x).strip()]
+        else:
+            links = []
+        if not links:
+            link = str(raw.get("link") or raw.get("url") or "").strip()
+            if link:
+                links = [link]
+        if not links:
+            return _fail("购物车标签需要 link（商品链接）或 links 列表")
+
+        attached = 0
+        for idx, link in enumerate(links):
+            try:
+                cart_input = await _douyin_first_visible(
+                    jump.locator('input[placeholder="粘贴商品链接"]')
+                )
+                if not cart_input:
+                    return _fail("购物车标签输入框未出现")
+                await cart_input.fill(link)
+                await asyncio.sleep(0.4)
+                add_link = await _douyin_first_visible_text(page, "添加链接")
+                if not add_link:
+                    return _fail("购物车标签未找到「添加链接」按钮")
+                try:
+                    async with page.expect_response(
+                        lambda r: "/web/api/media/shop/promotion/link/" in (r.url or ""),
+                        timeout=_pw_ms(15000),
+                    ) as resp_info:
+                        await add_link.click()
+                    response = await resp_info.value
+                    try:
+                        data = await response.json()
+                    except Exception:
+                        data = {}
+                except Exception as exc:
+                    body = await page.inner_text("body")
+                    if "未搜索到对应商品" in body:
+                        return _fail("购物车链接不可用：未搜索到对应商品", link=link)
+                    if "不支持添加该链接商品" in body:
+                        return _fail("购物车链接不可用：不支持添加该链接商品", link=link)
+                    return _fail(f"购物车链接校验未返回结果: {exc}", link=link)
+
+                status_code = int(data.get("status_code") or 0)
+                body = await page.inner_text("body")
+                if "未搜索到对应商品" in body:
+                    return _fail("购物车链接不可用：未搜索到对应商品", link=link)
+                if "不支持添加该链接商品" in body:
+                    return _fail("购物车链接不可用：不支持添加该链接商品", link=link)
+                if status_code != 0:
+                    msg = str(
+                        data.get("status_msg")
+                        or data.get("status_message")
+                        or "商品链接不可用"
+                    ).strip()
+                    return _fail(f"购物车链接不可用: {msg}", link=link, platform_status=status_code)
+                title = _douyin_find_text_value(
+                    data.get("data") or {}, ("title", "product_title", "name", "product_name")
+                )
+                attached += 1
+                _step(
+                    f"{flow_label}购物车链接已校验",
+                    True,
+                    index=idx + 1,
+                    title=title or None,
+                )
+            except Exception as exc:
+                return _fail(f"购物车标签填写失败: {exc}", link=link)
+        if attached == 0:
+            return _fail("购物车标签未添加任何商品")
+        _step(f"{flow_label}标签「购物车」完成", True, count=attached)
+        return None
+
+    # ---- 影视演艺 / 汽水歌单 ------------------------------------------
+    if label_type in ("movie", "soda_playlist"):
+        keyword = str(raw.get("keyword") or raw.get("name") or "").strip()
+        if not keyword:
+            return _fail(f"{display}标签需要 keyword")
+        try:
+            ctrl = jump.locator(".semi-select").last
+            await ctrl.click()
+            await asyncio.sleep(0.4)
+            await _douyin_type_active(page, keyword)
+            wanted = str(raw.get("select") or raw.get("name") or "").strip()
+            if wanted == keyword:
+                wanted = ""
+            selected, err = await _douyin_wait_choose_semi_option(page, wanted, _step, display)
+            if err:
+                return _fail(err)
+            anchor_text = (await anchor.inner_text()).strip()
+            first_line = selected.splitlines()[0].strip()
+            if first_line and first_line not in anchor_text:
+                return _fail(f"{display}已选择但页面未显示结果", selected=selected)
+            _step(f"{flow_label}标签「{display}」完成", True, value=first_line)
+            return None
+        except Exception as exc:
+            return _fail(f"{display}标签填写失败: {exc}")
+
+    # ---- 小程序 -------------------------------------------------------
+    if label_type == "miniapp":
+        link = str(raw.get("link") or raw.get("url") or raw.get("keyword") or "").strip()
+        if not link:
+            return _fail("小程序标签需要 link（抖音小程序内分享复制的链接）")
+        try:
+            ctrl = jump.locator(".semi-select").last
+            await ctrl.click()
+            await asyncio.sleep(0.4)
+            await _douyin_type_active(page, link, link_like=True)
+            selected, err = await _douyin_wait_choose_semi_option(
+                page, str(raw.get("select") or raw.get("name") or "").strip(), _step, display, timeout_s=15
+            )
+            if err:
+                body = await page.inner_text("body")
+                if "链接格式错误" in body:
+                    return _fail("小程序链接格式错误：请从抖音小程序内复制分享链接", link=link)
+                if "暂无数据" in body:
+                    return _fail("小程序链接无匹配结果", link=link)
+                return _fail(err, link=link)
+            anchor_text = (await anchor.inner_text()).strip()
+            first_line = selected.splitlines()[0].strip()
+            if first_line and first_line not in anchor_text:
+                return _fail("小程序已选择但页面未显示结果", selected=selected)
+            _step(f"{flow_label}标签「小程序」完成", True, value=first_line)
+            return None
+        except Exception as exc:
+            return _fail(f"小程序标签填写失败: {exc}")
+
+    # ---- 游戏手柄 -----------------------------------------------------
+    if label_type == "gamepad":
+        keyword = str(raw.get("keyword") or raw.get("name") or "").strip()
+        if not keyword:
+            return _fail("游戏手柄标签需要 keyword（游戏名称）")
+        try:
+            ctrl = jump.locator(".semi-select").last
+            await ctrl.click()
+            await asyncio.sleep(0.4)
+            await _douyin_type_active(page, keyword)
+            deadline = time.time() + 15
+            title_loc = page.locator('[class*="anchor-game-option__rt__title-name"]')
+            picked_title = ""
+            while time.time() < deadline:
+                visible_titles: List[tuple[int, str]] = []
+                try:
+                    count = await title_loc.count()
+                except Exception:
+                    count = 0
+                for i in range(count):
+                    try:
+                        item = title_loc.nth(i)
+                        if not await item.is_visible():
+                            continue
+                        text = (await item.inner_text()).strip().splitlines()[0]
+                        if text:
+                            visible_titles.append((i, text))
+                    except Exception:
+                        continue
+                if visible_titles:
+                    wanted = str(raw.get("select") or raw.get("name") or "").strip()
+                    pick = None
+                    if wanted:
+                        for i, text in visible_titles:
+                            if wanted == text or wanted in text:
+                                pick = (i, text)
+                                break
+                    else:
+                        pick = visible_titles[0]
+                    if pick is None:
+                        return _fail(
+                            f"游戏手柄未找到匹配游戏「{wanted}」；可选："
+                            + " | ".join(t for _, t in visible_titles[:8])
+                        )
+                    picked_title = pick[1]
+                    await title_loc.nth(pick[0]).click()
+                    break
+                await asyncio.sleep(0.4)
+            if not picked_title:
+                return _fail("游戏手柄未返回游戏列表")
+
+            await asyncio.sleep(1.5)
+            modal_text = ""
+            modals = page.locator('.semi-modal-wrap:visible, [role="dialog"]:visible')
+            try:
+                modal_count = await modals.count()
+            except Exception:
+                modal_count = 0
+            for i in range(modal_count):
+                try:
+                    text = (await modals.nth(i).inner_text()).strip()
+                    if text:
+                        modal_text += "\n" + text
+                except Exception:
+                    continue
+            if "推广权限未开通" in modal_text or "开通游戏短视频推广条件" in modal_text:
+                allow = _douyin_bool_opt(raw.get("allow_without_promotion", False))
+                if not allow:
+                    return _fail(
+                        "账号未开通游戏推广权限；已中止发布。"
+                        "如只需挂载游戏锚点、不参与激励，请设置 allow_without_promotion=true",
+                        game=picked_title,
+                    )
+                only_add = await _douyin_first_visible_text(page, "暂不开通，仅添加")
+                if not only_add:
+                    return _fail("游戏推广弹窗中未找到「暂不开通，仅添加」", game=picked_title)
+                await only_add.click()
+                await asyncio.sleep(2.0)
+            elif "开通并添加" in modal_text:
+                allow = _douyin_bool_opt(raw.get("allow_without_promotion", False))
+                if not allow:
+                    return _fail(
+                        "账号游戏推广权限未开通；已中止发布。"
+                        "如只需挂载游戏锚点，请设置 allow_without_promotion=true",
+                        game=picked_title,
+                    )
+                only_add = await _douyin_first_visible_text(page, "暂不开通，仅添加")
+                if only_add:
+                    await only_add.click()
+                    await asyncio.sleep(2.0)
+
+            anchor_text = (await anchor.inner_text()).strip()
+            if picked_title not in anchor_text:
+                return _fail("游戏已选择但页面未显示该游戏", game=picked_title, anchor=anchor_text)
+            _step(f"{flow_label}标签「游戏手柄」完成", True, value=picked_title)
+            return None
+        except Exception as exc:
+            return _fail(f"游戏手柄标签填写失败: {exc}")
+
+    # ---- 标记万物 -----------------------------------------------------
+    if label_type == "mark_all":
+        keyword = str(raw.get("keyword") or raw.get("name") or "").strip()
+        if not keyword:
+            return _fail("标记万物标签需要 keyword（物品关键词）")
+        try:
+            inp = await _douyin_first_visible(
+                jump.locator('input[placeholder="请输入或选择标记的物品"]')
+            )
+            if not inp:
+                return _fail("标记万物输入框未出现")
+            await inp.click()
+            await asyncio.sleep(0.2)
+            await _douyin_type_active(page, keyword)
+            deadline = time.time() + 15
+            rows: List[dict[str, Any]] = []
+            while time.time() < deadline:
+                rows = await page.evaluate(
+                    """
+                    () => {
+                      const pop = [...document.querySelectorAll('.semi-popover-wrapper')]
+                        .find(el => (el.innerText || '').includes('标记同款好物'));
+                      if (!pop) return [];
+                      const vis = el => {
+                        const r = el.getBoundingClientRect();
+                        return r.width > 0 && r.height > 0;
+                      };
+                      const out = [];
+                      pop.querySelectorAll('[class^="option-"]').forEach(row => {
+                        if (!vis(row)) return;
+                        const name = row.querySelector('[class^="name-"]');
+                        const extra = row.querySelector('[class^="extra-"]');
+                        const title = name ? (name.innerText || '').trim() : '';
+                        if (title) out.push({title, extra: extra ? (extra.innerText || '').trim() : ''});
+                      });
+                      return out;
+                    }
+                    """
+                )
+                if rows:
+                    break
+                await asyncio.sleep(0.4)
+            if not rows:
+                body = await page.inner_text("body")
+                if "暂无" in body or "无匹配" in body:
+                    return _fail(f"标记万物未找到「{keyword}」对应物品")
+                return _fail("标记万物未返回可选物品")
+            wanted = str(raw.get("select") or raw.get("name") or "").strip()
+            pick = None
+            if wanted:
+                for row in rows:
+                    if wanted == row["title"] or wanted in row["title"]:
+                        pick = row
+                        break
+            else:
+                pick = rows[0]
+            if pick is None:
+                return _fail(
+                    f"标记万物未找到匹配物品「{wanted}」；可选："
+                    + " | ".join(str(r.get("title")) for r in rows[:8])
+                )
+            pop = page.locator(".semi-popover-wrapper:visible").filter(has_text="标记同款好物").first
+            try:
+                target = await _douyin_first_visible(pop.get_by_text(pick["title"], exact=True))
+            except Exception:
+                target = None
+            if not target:
+                return _fail("标记万物结果已出现但无法点击", item=pick["title"])
+            await target.click()
+            value = ""
+            for _ in range(12):
+                await asyncio.sleep(0.4)
+                try:
+                    value = await page.evaluate(
+                        """() => {
+                          const el = document.querySelector('#douyin_creator_pc_anchor_jump input');
+                          return el ? (el.value || '') : '';
+                        }"""
+                    )
+                except Exception:
+                    value = ""
+                if pick["title"] in (value or ""):
+                    break
+            if pick["title"] not in (value or ""):
+                return _fail("标记万物已点击但输入框未显示该物品", item=pick["title"], value=value)
+            _step(f"{flow_label}标签「标记万物」完成", True, value=pick["title"])
+            return None
+        except Exception as exc:
+            return _fail(f"标记万物标签填写失败: {exc}")
+
+    return _fail(f"抖音标签「{display}」尚未实现")
+
+
 # ===========================================================================
 # DouyinDriver
 # ===========================================================================
@@ -1983,6 +2726,15 @@ class DouyinDriver(BaseDriver):
                 await _douyin_dismiss_hashtag_suggestion(page, "image_after_desc")
         else:
             _step("填写描述/文案", False)
+
+        label_error = await _douyin_apply_anchor_label(page, options, _step, "图文")
+        if label_error:
+            return {
+                "ok": False,
+                "error": label_error.get("error") or "抖音标签应用失败",
+                "label": label_error,
+                "applied": applied,
+            }
 
         await _human_delay(1, 2)
         await _dismiss_overlays(page, "image_before_publish")
@@ -2320,6 +3072,15 @@ class DouyinDriver(BaseDriver):
 
         if text and ("#" in text or (tags and str(tags).strip())):
             await _douyin_dismiss_hashtag_suggestion(page, "video_after_desc")
+
+        label_error = await _douyin_apply_anchor_label(page, options, _step, "视频")
+        if label_error:
+            return {
+                "ok": False,
+                "error": label_error.get("error") or "抖音标签应用失败",
+                "label": label_error,
+                "applied": applied,
+            }
 
         _s = _pw_scale()
         # 封面与填表后仍可能长时间转码；小视频原先 floor=60s 易超时，提高到 120s（上限仍 180*s）
