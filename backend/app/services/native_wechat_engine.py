@@ -11537,7 +11537,8 @@ def sync_local_sessions(
 # 新路径：只在第一行点一次建立「资料卡已打开」的锚点，之后每步只发一次 {DOWN}（不移动鼠标），
 # 右侧资料卡跟着选中项刷新，轮询到「卡片换人了」再读微信号；读到的名字必须能对回当前可见行，
 # 对不上就不写（宁可不学号，也不写错人）。任何一步认不出 → ok=False，调用方回落原点击路径。
-_CONTACT_KB_STEPS_MAX = 2000
+_CONTACT_KB_STEPS_MAX = 2000          # 枚举不到总数时的兜底步数
+_CONTACT_KB_STEPS_CAP = 20000         # 硬上限：防死循环
 _CONTACT_KB_CARD_POLL_SECONDS = 1.2
 # 每步只做一次小预算快读（500 节点）；把名字对上、或连续几屏都没换人时再刷新可见行。
 _CONTACT_KB_ROW_REFRESH_EVERY = 5
@@ -11595,6 +11596,23 @@ def _match_card_texts_to_visible_name(card_texts: Any, rows: Any) -> str:
     return ""
 
 
+def _contact_kb_steps_budget(total_contacts: int) -> int:
+    """本次键盘扫描的步数预算。
+
+    2026-10-17 线上：通讯录枚举出 3728 人，但步数写死 2000，扫到 1988 个就收工
+    （contacts_keyboard_done steps=2000 names=1988 completed=false），剩下 1700+
+    永远进不了库。预算至少要覆盖枚举总数，再留 20% 冗余给渲染重复/空卡。
+    """
+    try:
+        total = int(total_contacts or 0)
+    except (TypeError, ValueError):
+        total = 0
+    if total <= 0:
+        return _CONTACT_KB_STEPS_MAX
+    margin = max(50, int(total * 0.2))
+    return max(_CONTACT_KB_STEPS_MAX, min(total + margin, _CONTACT_KB_STEPS_CAP))
+
+
 def _contact_sync_keyboard_scan(
     account_id: str,
     hwnd: int,
@@ -11631,7 +11649,9 @@ def _contact_sync_keyboard_scan(
     except Exception as exc:
         _contact_sync_debug(account_id, stage="keyboard_total_error", error=str(exc)[:140])
     step_interval = _contact_kb_interval(total_contacts)
-    _contact_sync_debug(account_id, stage="keyboard_interval", total=total_contacts, interval=step_interval)
+    step_budget = _contact_kb_steps_budget(total_contacts)
+    _contact_sync_debug(account_id, stage="keyboard_interval", total=total_contacts,
+                        interval=step_interval, steps_budget=step_budget)
     seen: Dict[str, Dict[str, Any]] = {}
     pending: List[Dict[str, Any]] = []
     learned = 0
@@ -11720,7 +11740,7 @@ def _contact_sync_keyboard_scan(
     stopped = False
     # 发键盘前先把前台要回来（悬浮键/别的窗口可能抢走焦点）。
     _ensure_wechat_foreground_for_keys(hwnd, force=True)
-    while steps < _CONTACT_KB_STEPS_MAX and len(seen) < clean_limit:
+    while steps < step_budget and len(seen) < clean_limit:
         if _task_stop_requested():
             # 悬浮键/接口按了暂停：把已经读到的落库后收尾（不半途丢数据）。
             stopped = True
@@ -11836,7 +11856,8 @@ def _contact_sync_keyboard_scan(
 
     items = _merge_contacts_snapshot(account_id, list(seen.values()), chat_type="direct")
     _contact_sync_debug(account_id, stage="contacts_keyboard_done", steps=steps,
-                        names=len(seen), learned=learned, completed=completed)
+                        names=len(seen), learned=learned, completed=completed,
+                        steps_budget=step_budget)
     return {
         "ok": True,
         "items": items[:200],
@@ -11848,6 +11869,7 @@ def _contact_sync_keyboard_scan(
         "limit_reached": len(seen) >= clean_limit,
         "rounds": 1,
         "keyboard_steps": steps,
+        "keyboard_steps_budget": step_budget,
         "keyboard_wx_no_learned": learned,
         "partial": not completed,
         "wx_no_source": "keyboard_walk_fast",

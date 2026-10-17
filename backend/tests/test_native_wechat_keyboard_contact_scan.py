@@ -189,6 +189,17 @@ def test_advance_uses_hold_down_like_they_do(engine):
     assert "_contacts_point_click" not in scan.split("def _quick_texts")[1] if "def _quick_texts" in scan else True
 
 
+def test_step_budget_covers_the_enumerated_contact_total(engine):
+    """2026-10-17 线上：枚举出 3728 人的通讯录只扫了 2000 步就停（names=1988，completed=false）。
+    步数预算必须覆盖枚举总数，而不是写死 2000。"""
+    assert engine._contact_kb_steps_budget(3728) >= 3728
+    assert engine._contact_kb_steps_budget(0) == engine._CONTACT_KB_STEPS_MAX
+    assert engine._contact_kb_steps_budget(50000) == engine._CONTACT_KB_STEPS_CAP
+    source = ENGINE_PATH.read_text(encoding="utf-8")
+    scan = source.split("def _contact_sync_keyboard_scan(")[1].split("def _sync_local_contacts_from_uia(")[0]
+    assert "while steps < step_budget" in scan, "循环不能再写死 _CONTACT_KB_STEPS_MAX"
+
+
 def test_step_interval_matches_their_tiers(engine):
     """他们的分档：>2000 → 0.2s；1000~2000 → 0.1s；<1000 → 0（他们不睡）。
     这就是"他们非常快"的一半原因 —— 好友少时几乎零等待。"""
