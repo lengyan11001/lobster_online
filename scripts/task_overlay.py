@@ -1,26 +1,48 @@
-"""全局悬浮「暂停任务」键（pywebview 置顶小窗，2026-10-16）。
+# -*- coding: utf-8 -*-
+"""全局悬浮「暂停任务」键（原生 Win32 自绘，2026-10-17 重写）。
 
-问题：微信/抖音这些自动化跑起来之后，界面上没有统一的"停"，只能去结束进程。
-这个脚本由后端拉起（task_control.ensure_overlay），是一个**置顶、无边框、可拖动**的小窗：
-  - 大字按钮「暂停任务」→ 写 data/task_control/stop.flag（各引擎循环立刻能看见）
-  - 暂停后按钮变「继续」→ 清掉标记
-  - 上面一行显示"谁在跑 + 跑了多久"（读 data/task_control/status.json）
-  - 空闲超过 --idle-seconds（默认 90 秒）自动退出，不常驻打扰
-
-用文件通信而不是 HTTP：不需要登录态，后端正忙（自动化占着线程）时也能立刻生效。
-
-⚠️ 摆位注意：窗口默认贴右下角。自动化点击有"鼠标下必须是目标窗口"的保护
-（_uia_click_screen_point 的 expect_hwnd 检查），所以别把它拖到微信窗口上，
-否则那一片区域的点击会被守卫生效地拒绝。
+为什么重写：原 pywebview 版本在部分机器上 WebView2 初始化会卡住 → 窗口全黑；
+而且 WinForms 的 Show() 会在任务栏留下一个没有图标的空白条目，关掉窗口也不消失。
+现在直接用 WS_POPUP + WS_EX_TOOLWINDOW 自绘（创建即不进任务栏），不依赖 WebView2：
+  · 大字按钮「暂停任务 / 继续」，右侧 × 停止并关闭
+  · 一行状态：谁在跑 + 跑了多久（读 data/task_control/status.json）
+  · Alt+R 暂停/继续 · Alt+Q 停止并关闭（与按钮同义）
+  · 空闲超过 --idle-seconds 自动退出
 """
 from __future__ import annotations
 
 import argparse
-import json
+import ctypes
 import sys
 import threading
 import time
+from ctypes import wintypes
 from pathlib import Path
+
+import win32api
+import win32con
+import win32gui
+
+gdi32 = ctypes.windll.gdi32
+user32 = ctypes.windll.user32
+
+WIDTH = 196
+HEIGHT = 92
+COL_BG = (18, 18, 30)
+COL_BORDER = (43, 58, 122)
+COL_BTN = (91, 124, 255)
+COL_BTN_HOVER = (124, 147, 255)
+COL_CLOSE = (27, 36, 64)
+COL_CLOSE_HOVER = (74, 32, 40)
+COL_TEXT = (228, 228, 231)
+COL_MUTED = (161, 161, 170)
+COL_HINT = (120, 131, 184)
+
+WM_APP_TICK = win32con.WM_APP + 1
+
+
+def _colorref(rgb):
+    return int(rgb[0]) | (int(rgb[1]) << 8) | (int(rgb[2]) << 16)
 
 
 def _load_control(root: Path):
@@ -32,32 +54,27 @@ def _load_control(root: Path):
 
 
 class OverlayApi:
-    """暴露给页面 JS：status / pause / resume / close。"""
+    """给热键回调/关闭用的小门面（保持和老版本同名方法）。"""
 
-    def __init__(self, control, *, idle_seconds: int = 90):
+    def __init__(self, control, *, idle_seconds: int = 90, overlay=None):
         self._control = control
         self._idle_seconds = int(idle_seconds)
-        self._window = None
+        self._overlay = overlay
         self._hotkey_note = ""
 
-    def attach(self, window) -> None:
-        self._window = window
+    def attach(self, overlay) -> None:
+        self._overlay = overlay
+
+    def set_hotkey_note(self, note: str) -> None:
+        self._hotkey_note = str(note or "")[:80]
 
     def status(self):
-        # 每次被页面调用就落一次心跳：后台/支持侧据此判断"悬浮键活着且桥是通的"。
-        try:
-            self._control.overlay_heartbeat()
-        except Exception:
-            pass
         state = self._control.task_status()
-        overlay = self._control.overlay_status()
         return {
             "running": bool(state.get("running")),
             "label": str(state.get("label") or state.get("kind") or ""),
             "elapsed": float(state.get("elapsed_seconds") or 0.0),
             "stopped": bool(state.get("stopped")),
-            "overlay_pid": int(overlay.get("pid") or 0),
-            "idle_seconds": self._idle_seconds,
             "hotkey_note": self._hotkey_note,
         }
 
@@ -74,12 +91,7 @@ class OverlayApi:
         self._control.clear_stop()
         return self.status()
 
-    # ── 全局热键回调（抄竞品 InputGuard 的 Alt+R / Alt+Q）──────────────────
-    def set_hotkey_note(self, note: str) -> None:
-        self._hotkey_note = str(note or "")[:80]
-
     def toggle_pause(self, reason: str = "hotkey"):
-        """Alt+R：暂停 ↔ 恢复（和按钮同义）。"""
         try:
             if self._control.stop_requested():
                 return self.resume()
@@ -88,7 +100,6 @@ class OverlayApi:
         return self.pause()
 
     def stop_and_close(self, reason: str = "hotkey"):
-        """Alt+Q：有序停机 —— 先请求暂停/停止，再关掉悬浮窗（竞品的 Alt+Q 退出）。"""
         try:
             self._control.request_stop(reason)
             if self._control.task_status().get("running"):
@@ -99,73 +110,280 @@ class OverlayApi:
         return {"ok": True, "stopped": True}
 
     def close(self):
+        if self._overlay is not None:
+            self._overlay.close()
+
+
+class Overlay:
+    PADDING = 8
+    BTN_H = 42
+    CLOSE_W = 24
+
+    def __init__(self, control, api, *, width=WIDTH, height=HEIGHT, margin=24, idle_seconds=8):
+        self.control = control
+        self.api = api
+        self.width = int(width)
+        self.height = int(height)
+        self.idle_seconds = int(idle_seconds)
+        self.hwnd = 0
+        self._hover = ""
+        self._drag = None
+        self._moved = 0
+        self._last_busy = time.monotonic()
+        self._state = {"running": False, "stopped": False, "label": "", "elapsed": 0.0}
+        self._hint = "Alt+R 暂停/继续 · Alt+Q 停止并关闭"
+        self._fonts = {}
+        self._register_class()
+        sw = win32api.GetSystemMetrics(0)
+        sh = win32api.GetSystemMetrics(1)
+        x = max(0, sw - self.width - int(margin))
+        y = max(0, sh - self.height - int(margin) - 80)
+        self.hwnd = win32gui.CreateWindowEx(
+            win32con.WS_EX_TOOLWINDOW | win32con.WS_EX_TOPMOST | win32con.WS_EX_NOACTIVATE,
+            "LobsterTaskOverlayWnd", "任务暂停", win32con.WS_POPUP,
+            x, y, self.width, self.height, 0, 0, win32api.GetModuleHandle(None), None,
+        )
+        rgn = gdi32.CreateRoundRectRgn(0, 0, self.width + 1, self.height + 1, 18, 18)
+        user32.SetWindowRgn(self.hwnd, rgn, True)
+        self._start_status_thread()
+        win32gui.ShowWindow(self.hwnd, win32con.SW_SHOWNOACTIVATE)
+        win32gui.SetWindowPos(
+            self.hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+            win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
+        )
+
+    # ── win32 plumbing ────────────────────────────────────────────────
+    def _register_class(self) -> None:
+        wc = win32gui.WNDCLASS()
+        wc.hInstance = win32api.GetModuleHandle(None)
+        wc.lpszClassName = "LobsterTaskOverlayWnd"
+        wc.lpfnWndProc = self._wnd_proc
+        wc.hCursor = win32gui.LoadCursor(0, win32con.IDC_ARROW)
         try:
-            if self._window is not None:
-                self._window.destroy()
+            win32gui.RegisterClass(wc)
         except Exception:
             pass
-        return {"ok": True}
+
+    def _font(self, size: int, bold: bool):
+        key = (size, bold)
+        if key not in self._fonts:
+            weight = win32con.FW_BOLD if bold else win32con.FW_NORMAL
+            self._fonts[key] = gdi32.CreateFontW(
+                -int(size), 0, 0, 0, weight, 0, 0, 0, win32con.DEFAULT_CHARSET,
+                win32con.OUT_DEFAULT_PRECIS, win32con.CLIP_DEFAULT_PRECIS,
+                win32con.CLEARTYPE_QUALITY, win32con.DEFAULT_PITCH | win32con.FF_SWISS,
+                "Microsoft YaHei",
+            )
+        return self._fonts[key]
+
+    def _text(self, hdc, text, rect, size, color, bold=False):
+        old = gdi32.SelectObject(hdc, self._font(size, bold))
+        gdi32.SetTextColor(hdc, _colorref(color))
+        gdi32.SetBkMode(hdc, 1)  # TRANSPARENT
+        r = wintypes.RECT(*rect)
+        user32.DrawTextW(hdc, str(text), -1, ctypes.byref(r), 0x00000001 | 0x00000004 | 0x00080000 | 0x00000020)  # CENTER|VCENTER|SINGLELINE|TABSTOP
+        gdi32.SelectObject(hdc, old)
+
+    def _fill(self, hdc, rect, color, radius=0):
+        brush = gdi32.CreateSolidBrush(_colorref(color))
+        pen = gdi32.CreatePen(win32con.PS_SOLID, 0, _colorref(color))
+        ob = gdi32.SelectObject(hdc, brush)
+        op = gdi32.SelectObject(hdc, pen)
+        if radius:
+            gdi32.RoundRect(hdc, rect[0], rect[1], rect[2], rect[3], radius, radius)
+        else:
+            gdi32.Rectangle(hdc, rect[0], rect[1], rect[2], rect[3])
+        gdi32.SelectObject(hdc, op)
+        gdi32.SelectObject(hdc, ob)
+        gdi32.DeleteObject(brush)
+        gdi32.DeleteObject(pen)
+
+    def _pause_rect(self):
+        return (self.PADDING, self.PADDING, self.width - self.PADDING - self.CLOSE_W - 6, self.PADDING + self.BTN_H)
+
+    def _close_rect(self):
+        left = self.width - self.PADDING - self.CLOSE_W
+        return (left, self.PADDING, self.width - self.PADDING, self.PADDING + self.BTN_H)
+
+    def _hit(self, x, y):
+        px1, py1, px2, py2 = self._pause_rect()
+        if px1 <= x <= px2 and py1 <= y <= py2:
+            return "pause"
+        cx1, cy1, cx2, cy2 = self._close_rect()
+        if cx1 <= x <= cx2 and cy1 <= y <= cy2:
+            return "close"
+        return ""
+
+    def _paint(self):
+        hdc, ps = win32gui.BeginPaint(self.hwnd)
+        try:
+            self._fill(hdc, (0, 0, self.width, self.height), COL_BG, radius=18)
+            # 1px 品牌蓝描边
+            pen = gdi32.CreatePen(win32con.PS_SOLID, 1, _colorref(COL_BORDER))
+            brush = gdi32.GetStockObject(win32con.NULL_BRUSH)
+            op = gdi32.SelectObject(hdc, pen)
+            ob = gdi32.SelectObject(hdc, brush)
+            gdi32.RoundRect(hdc, 0, 0, self.width, self.height, 18, 18)
+            gdi32.SelectObject(hdc, ob)
+            gdi32.SelectObject(hdc, op)
+            gdi32.DeleteObject(pen)
+
+            paused = bool(self._state.get("stopped"))
+            btn_color = COL_BTN_HOVER if (self._hover == "pause" or paused) else COL_BTN
+            self._fill(hdc, self._pause_rect(), btn_color, radius=10)
+            self._text(hdc, "继续" if paused else "暂停任务",
+                       (self._pause_rect()[0], self._pause_rect()[1], self._pause_rect()[2], self._pause_rect()[3]),
+                       15, (255, 255, 255), bold=True)
+            close_color = COL_CLOSE_HOVER if self._hover == "close" else COL_CLOSE
+            self._fill(hdc, self._close_rect(), close_color, radius=8)
+            self._text(hdc, "×", self._close_rect(), 15, (174, 185, 232) if self._hover != "close" else (255, 215, 215))
+
+            running = bool(self._state.get("running"))
+            label = str(self._state.get("label") or "任务")
+            elapsed = int(float(self._state.get("elapsed") or 0))
+            if paused:
+                state_text = "已请求暂停 · " + (label + " · %ds" % elapsed if running else "当前没有在跑的任务")
+            elif running:
+                state_text = "%s · %ds" % (label, elapsed)
+            else:
+                state_text = "当前没有在跑的任务"
+            self._text(hdc, state_text, (6, self.PADDING + self.BTN_H + 4, self.width - 6, self.PADDING + self.BTN_H + 20),
+                       10, COL_MUTED)
+            self._text(hdc, self._hint, (6, self.PADDING + self.BTN_H + 20, self.width - 6, self.height - 2),
+                       8, COL_HINT)
+        finally:
+            win32gui.EndPaint(self.hwnd, ps)
+
+    def _on_down(self, x, y):
+        hit = self._hit(x, y)
+
+        if hit:
+            self._hover = hit
+            win32gui.InvalidateRect(self.hwnd, None, True)
+            return
+        rect = win32gui.GetWindowRect(self.hwnd)
+        self._drag = (x, y, rect[0], rect[1])
+        self._moved = 0
+
+    def _on_move(self, x, y):
+        if self._drag:
+            dx = abs(x - self._drag[0])
+            dy = abs(y - self._drag[1])
+            self._moved = max(self._moved, dx + dy)
+            nx = self._drag[2] + (x - self._drag[0])
+            ny = self._drag[3] + (y - self._drag[1])
+            win32gui.SetWindowPos(
+                self.hwnd, win32con.HWND_TOPMOST, nx, ny, 0, 0,
+                win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
+            )
+            return
+        hit = self._hit(x, y)
+        if hit != self._hover:
+            self._hover = hit
+            win32gui.InvalidateRect(self.hwnd, None, True)
+
+    def _on_up(self, x, y):
+        if self._drag:
+            moved = self._moved
+            self._drag = None
+            if moved <= 4:
+                hit = self._hit(x, y)
+                if hit == "pause":
+                    self._toggle()
+                elif hit == "close":
+                    self.api.stop_and_close("overlay")
+            return
+        # 2026-10-17：按在按钮上时没有拖拽状态，up 事件要按落点命中处理（否则按钮点不动）
+        hit = self._hit(x, y)
+
+        if hit == "pause":
+            self._toggle()
+        elif hit == "close":
+            self.api.stop_and_close("overlay")
+
+    def _toggle(self):
+        try:
+            if self.control.stop_requested():
+                self.api.resume()
+            else:
+                self.api.pause()
+        except Exception:
+            pass
+        self._refresh()
+
+    def _wnd_proc(self, hwnd, msg, wparam, lparam):
+        if msg == win32con.WM_PAINT:
+            self._paint()
+            return 0
+        if msg == win32con.WM_ERASEBKGND:
+            return 1
+        if msg == win32con.WM_LBUTTONDOWN:
+            self._on_down(win32api.LOWORD(lparam), win32api.HIWORD(lparam))
+            return 0
+        if msg == win32con.WM_MOUSEMOVE:
+            self._on_move(win32api.LOWORD(lparam), win32api.HIWORD(lparam))
+            return 0
+        if msg == win32con.WM_LBUTTONUP:
+            self._on_up(win32api.LOWORD(lparam), win32api.HIWORD(lparam))
+            return 0
+        if msg == WM_APP_TICK:
+            self._refresh()
+            return 0
+        if msg == win32con.WM_CLOSE:
+            win32gui.DestroyWindow(hwnd)
+            return 0
+        if msg == win32con.WM_DESTROY:
+            win32gui.PostQuitMessage(0)
+            return 0
+        return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
+
+    def _refresh(self):
+        try:
+            state = self.control.task_status()
+        except Exception:
+            state = {}
+        self._state = {
+            "running": bool(state.get("running")),
+            "stopped": bool(state.get("stopped")),
+            "label": str(state.get("label") or state.get("kind") or "任务"),
+            "elapsed": float(state.get("elapsed_seconds") or 0.0),
+        }
+        if self._state["running"] or self._state["stopped"]:
+            self._last_busy = time.monotonic()
+        try:
+            win32gui.InvalidateRect(self.hwnd, None, True)
+        except Exception:
+            pass
+
+    def _start_status_thread(self):
+        def loop():
+            while True:
+                time.sleep(1.0)
+                try:
+                    win32gui.PostMessage(self.hwnd, WM_APP_TICK, 0, 0)
+                except Exception:
+                    return
+                if self.idle_seconds > 0 and not self._state["running"] and not self._state["stopped"]:
+                    if time.monotonic() - self._last_busy > self.idle_seconds:
+                        try:
+                            win32gui.PostMessage(self.hwnd, win32con.WM_CLOSE, 0, 0)
+                        except Exception:
+                            pass
+                        return
+
+        threading.Thread(target=loop, daemon=True, name="lobster-overlay-status").start()
+
+    def close(self):
+        try:
+            win32gui.PostMessage(self.hwnd, win32con.WM_CLOSE, 0, 0)
+        except Exception:
+            pass
+
+    def pump(self):
+        win32gui.PumpMessages()
 
 
-PAGE = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
-<style>
-  /* 2026-10-16 换成产品自己的色调：深空底 + 品牌蓝（与客户端设计令牌一致） */
-  :root{--brand:#5b7cff;--brand-hi:#7c93ff;--brand-deep:#3f5cf0;--bg0:rgba(18,18,30,.97);--bg1:rgba(10,10,18,.97);
-        --text:#e4e4e7;--muted:#a1a1aa;--line:rgba(91,124,255,.28)}
-  html,body{margin:0;padding:0;background:transparent;font-family:"Microsoft YaHei",system-ui,sans-serif}
-  .wrap{display:flex;flex-direction:column;gap:4px;padding:8px;border-radius:14px;
-        background:linear-gradient(180deg,var(--bg0),var(--bg1));
-        border:1px solid var(--line);box-shadow:0 10px 26px rgba(4,8,24,.5)}
-  .row{display:flex;gap:6px;align-items:center}
-  #btn{flex:1;border:0;border-radius:11px;padding:12px 10px;font-size:15px;font-weight:800;color:#fff;cursor:pointer;
-       background:linear-gradient(135deg,var(--brand),var(--brand-deep));box-shadow:0 4px 12px rgba(91,124,255,.34)}
-  #btn:hover{background:linear-gradient(135deg,var(--brand-hi),var(--brand))}
-  #btn.paused{background:linear-gradient(135deg,var(--brand-hi),#6b83f5);box-shadow:0 4px 12px rgba(124,147,255,.3)}
-  #close{border:0;border-radius:10px;width:30px;padding:12px 0;background:rgba(91,124,255,.16);color:#aeb9e8;
-         font-size:14px;cursor:pointer}
-  #close:hover{background:rgba(239,68,68,.24);color:#ffd7d7}
-  #state{color:var(--muted);font-size:11px;text-align:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  #hint{color:#7883b8;font-size:10px;text-align:center;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-</style></head><body>
-<div class="wrap">
-  <div class="row"><button id="btn">暂停任务</button><button id="close">×</button></div>
-  <div id="state">检查中…</div>
-  <div id="hint">Alt+R 暂停/继续 · Alt+Q 停止并关闭</div>
-</div>
-<script>
-  var paused = false;
-  function render(s) {
-    paused = !!s.stopped;
-    var b = document.getElementById('btn');
-    b.textContent = paused ? '继续' : '暂停任务';
-    b.className = paused ? 'paused' : '';
-    var t = s.running ? (s.label || '任务') + ' · ' + Math.round(s.elapsed || 0) + 's' : '当前没有在跑的任务';
-    var note = String(s.hotkey_note || '');
-    document.getElementById('state').textContent = (note && note.indexOf('Alt') < 0)
-      ? note : (paused ? ('已请求暂停 · ' + t) : t);
-  }
-  function tick() {
-    if (!window.pywebview || !window.pywebview.api) { document.getElementById('state').textContent = '悬浮键已启动（等待桥接…）'; return; }
-    window.pywebview.api.status().then(render).catch(function(){});
-  }
-  document.getElementById('btn').addEventListener('click', function () {
-    if (!window.pywebview || !window.pywebview.api) return;
-    var call = paused ? window.pywebview.api.resume() : window.pywebview.api.pause();
-    call.then(render).catch(function(){});
-  });
-  document.getElementById('close').addEventListener('click', function () {
-    if (window.pywebview && window.pywebview.api) window.pywebview.api.close();
-  });
-  setInterval(tick, 1000);
-  setTimeout(tick, 300);
-</script></body></html>"""
-
-
-# ── 全局热键：抄竞品（ai-bot-pc 的 InputGuard）──────────────────────────────
-# 竞品跑自动化时会挂键盘钩子 + 屏幕状态条，文案「微信自动化运行中，Alt+Q退出，Alt+R临时解锁」：
-#   Alt+R 暂停/恢复、Alt+Q 有序停机。
-# 我们用 win32 RegisterHotKey 挂在自己的消息窗口上（不装钩子、不锁用户键鼠），
-# 好处是不管前台是微信还是别的窗口，按了都生效。
+# ── 全局热键（不装钩子，RegisterHotKey 挂在消息窗口上）──────────────────
 HOTKEY_ID_PAUSE = 0xB001
 HOTKEY_ID_STOP = 0xB002
 _MOD_ALT = 0x0001
@@ -177,16 +395,16 @@ _VK_Q = 0x51
 def _start_hotkey_listener(api) -> None:
     def run() -> None:
         try:
-            import win32api  # type: ignore
-            import win32con  # type: ignore
-            import win32gui  # type: ignore
+            import win32api as _wa
+            import win32con as _wc
+            import win32gui as _wg
         except Exception as exc:
             api.set_hotkey_note("热键不可用：%s" % exc)
             return
 
         def on_message(hwnd, msg, wparam, lparam):
             try:
-                if msg == win32con.WM_HOTKEY:
+                if msg == _wc.WM_HOTKEY:
                     if wparam == HOTKEY_ID_PAUSE:
                         api.toggle_pause("hotkey")
                     elif wparam == HOTKEY_ID_STOP:
@@ -194,34 +412,34 @@ def _start_hotkey_listener(api) -> None:
                     return 0
             except Exception:
                 pass
-            return win32gui.DefWindowProc(hwnd, msg, wparam, lparam)
+            return _wg.DefWindowProc(hwnd, msg, wparam, lparam)
 
         try:
-            wc = win32gui.WNDCLASS()
-            wc.hInstance = win32api.GetModuleHandle(None)
+            wc = _wg.WNDCLASS()
+            wc.hInstance = _wa.GetModuleHandle(None)
             wc.lpszClassName = "LobsterTaskOverlayHotkeys"
             wc.lpfnWndProc = on_message
             try:
-                win32gui.RegisterClass(wc)
+                _wg.RegisterClass(wc)
             except Exception:
                 pass
-            hwnd = win32gui.CreateWindow(
+            hwnd = _wg.CreateWindow(
                 wc.lpszClassName, "LobsterTaskOverlayHotkeys", 0, 0, 0, 0, 0,
-                win32con.HWND_MESSAGE, 0, wc.hInstance, None,
+                _wc.HWND_MESSAGE, 0, wc.hInstance, None,
             )
             ok = []
             try:
-                win32gui.RegisterHotKey(hwnd, HOTKEY_ID_PAUSE, _MOD_ALT | _MOD_NOREPEAT, _VK_R)
+                _wg.RegisterHotKey(hwnd, HOTKEY_ID_PAUSE, _MOD_ALT | _MOD_NOREPEAT, _VK_R)
                 ok.append("Alt+R")
             except Exception:
                 pass
             try:
-                win32gui.RegisterHotKey(hwnd, HOTKEY_ID_STOP, _MOD_ALT | _MOD_NOREPEAT, _VK_Q)
+                _wg.RegisterHotKey(hwnd, HOTKEY_ID_STOP, _MOD_ALT | _MOD_NOREPEAT, _VK_Q)
                 ok.append("Alt+Q")
             except Exception:
                 pass
             api.set_hotkey_note("热键 " + " / ".join(ok) if ok else "热键注册失败（被别的程序占用？）")
-            win32gui.PumpMessages()
+            _wg.PumpMessages()
         except Exception as exc:
             api.set_hotkey_note("热键注册失败：%s" % exc)
 
@@ -231,151 +449,24 @@ def _start_hotkey_listener(api) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=str(Path(__file__).resolve().parents[1]))
-    parser.add_argument("--idle-seconds", type=int, default=8)  # 任务结束 8 秒后就自动消失（用户反馈 90 秒太久）
-    parser.add_argument("--width", type=int, default=196)
-    parser.add_argument("--height", type=int, default=86)
+    parser.add_argument("--idle-seconds", type=int, default=8)
+    parser.add_argument("--width", type=int, default=WIDTH)
+    parser.add_argument("--height", type=int, default=HEIGHT)
     parser.add_argument("--margin", type=int, default=24)
-    parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--port", type=int, default=0)  # 兼容旧参数，未使用
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
     control = _load_control(root)
     api = OverlayApi(control, idle_seconds=args.idle_seconds)
-
-    try:
-        import webview  # type: ignore
-    except Exception as exc:
-        sys.stderr.write("pywebview 不可用：%s\n" % exc)
-        return 2
-
-    x = y = None
-    try:
-        screen = webview.screens[0]
-        x = max(0, int(screen.width) - int(args.width) - int(args.margin))
-        y = max(0, int(screen.height) - int(args.height) - int(args.margin) - 80)
-    except Exception:
-        pass
-
-    window = webview.create_window(
-        "任务暂停",
-        html=PAGE,
-        width=int(args.width),
-        height=int(args.height),
-        x=x,
-        y=y,
-        frameless=True,
-        easy_drag=True,
-        on_top=True,
-        resizable=False,
-        background_color="#121A20",
-        js_api=api,
-        # 先"隐藏创建"：样式要在显示之前打上，否则创建那一下就已经把它激活成前台了。
-        hidden=True,
+    overlay = Overlay(
+        control, api,
+        width=args.width, height=args.height,
+        margin=args.margin, idle_seconds=args.idle_seconds,
     )
-    api.attach(window)
+    api.attach(overlay)
     _start_hotkey_listener(api)
-
-    idle_limit = int(args.idle_seconds or 0)
-    last_busy = time.monotonic()
-    last_status = {"running": False}
-
-    def _is_closed() -> bool:
-        try:
-            return bool(getattr(window, "events", None) and window.events.closed.is_set())
-        except Exception:
-            return False
-
-    def _keep_non_activating(window_title: str, *, seconds: float = 10.0) -> None:
-        """把悬浮窗设成"置顶但永不激活"，并且**反复重打**：
-
-        实测（2026-10-16）：只打一次没用 —— WinForms 的 Show() 会把扩展样式盖回去，
-        窗口照样抢走键盘焦点，正在跑的自动化发的 {DOWN}/{HOME} 全打到它身上
-        （同步只走 1 步、只认了一屏 11 个人）。所以前 10 秒每 0.5 秒重打一次，
-        并且一旦发现前台变成了悬浮窗，就把焦点还给上一个窗口。
-        """
-        try:
-            import win32con  # type: ignore
-            import win32gui  # type: ignore
-        except Exception:
-            return
-        deadline = time.monotonic() + max(2.0, float(seconds))
-        previous = 0
-        while time.monotonic() < deadline:
-            try:
-                hwnd = win32gui.FindWindow(None, window_title)
-                if hwnd:
-                    ex = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
-                    want = ex | win32con.WS_EX_NOACTIVATE | win32con.WS_EX_TOPMOST | win32con.WS_EX_TOOLWINDOW
-                    if ex != want:
-                        win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, want)
-                    win32gui.SetWindowPos(
-                        hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                        win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
-                    )
-                    if win32gui.GetForegroundWindow() == hwnd:
-                        # 它把自己弄到前台了：还回去（还给上一个非悬浮窗）。
-                        if previous and previous != hwnd and win32gui.IsWindow(previous):
-                            try:
-                                win32gui.SetForegroundWindow(previous)
-                            except Exception:
-                                pass
-                    else:
-                        previous = win32gui.GetForegroundWindow()
-            except Exception:
-                pass
-            time.sleep(0.5)
-
-    def _watch_idle() -> None:
-        nonlocal last_busy, last_status
-        # 顺序很重要：窗口此时还是隐藏的 —— 先打 NOACTIVATE/TOPMOST，再 show。
-        try:
-            import win32gui as _wg0
-
-            previous = int(_wg0.GetForegroundWindow() or 0)
-        except Exception:
-            previous = 0
-        _keep_non_activating("任务暂停", seconds=1.0)
-        try:
-            window.show()
-        except Exception:
-            pass
-        # 实测：WinForms 的 Show() 还是会把自己激活成前台（一次）。
-        # 但此刻"它"就是前台进程，所以它说话管用 —— 立刻把前台还给刚才那个窗口。
-        try:
-            import win32con as _wc
-            import win32gui as _wg
-            hwnd_self = _wg.FindWindow(None, "任务暂停")
-            if hwnd_self and _wg.GetForegroundWindow() == hwnd_self and previous and previous != hwnd_self and _wg.IsWindow(previous):
-                _wg.SetForegroundWindow(previous)
-                _wg.ShowWindow(previous, _wc.SW_SHOW)
-        except Exception:
-            pass
-        _keep_non_activating("任务暂停", seconds=10.0)
-        while True:
-            time.sleep(2.0)
-            if _is_closed():
-                return
-            try:
-                last_status = control.task_status()
-            except Exception:
-                last_status = {"running": False}
-            if last_status.get("running") or last_status.get("stopped"):
-                last_busy = time.monotonic()
-                continue
-            if idle_limit > 0 and (time.monotonic() - last_busy) > idle_limit:
-                try:
-                    window.destroy()
-                except Exception:
-                    pass
-                return
-
-    try:
-        webview.start(_watch_idle, gui=None)
-    except TypeError:
-        webview.start(_watch_idle)
-    finally:
-        # 退出时**不动**暂停标记：用户是按了暂停才关的，标记该由用户点「继续」清。
-        pass
+    overlay.pump()
     return 0
 
 
