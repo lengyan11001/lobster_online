@@ -2163,6 +2163,44 @@ def _chat_model_from_request(request: Request) -> str:
     return (request.headers.get("X-Chat-Model") or request.headers.get("x-chat-model") or "").strip()
 
 
+async def _ensure_publish_asset_public_url(
+    asset: Asset,
+    user_id: int,
+    request: Request,
+) -> str:
+    """Return a public URL for publish.
+
+    Local uploads are stored with source_url=NULL and public_url_status=
+    "deferred_until_use" (see /api/assets/upload).  Generation paths can also
+    leave a local-only row when TOS upload fails.  Before publishing we must
+    lazily mirror the local file to the auth server/TOS instead of rejecting it.
+    """
+    current = str(getattr(asset, "source_url", None) or "").strip()
+    if current.startswith(("http://", "https://")):
+        lowered = current.lower()
+        if not any(token in lowered for token in ("/api/assets/file", "127.0.0.1", "localhost", "0.0.0.0")):
+            return current
+
+    from .assets import get_asset_public_url
+    from ..db import SessionLocal
+
+    asset_id = str(getattr(asset, "asset_id", "") or "").strip()
+    if not asset_id:
+        return ""
+
+    def _refresh() -> str:
+        db = SessionLocal()
+        try:
+            return str(get_asset_public_url(asset_id, user_id, request, db) or "").strip()
+        finally:
+            db.close()
+
+    refreshed = await asyncio.to_thread(_refresh)
+    if refreshed:
+        asset.source_url = refreshed
+    return refreshed
+
+
 @router.post("/api/publish", summary="发布素材到平台")
 async def create_publish_task(
     request: Request,
@@ -2436,12 +2474,15 @@ async def create_publish_task(
         from .assets import ASSETS_DIR
 
         async def _resolve_asset_path(a: Asset):
-            """返回 (path_str, temp_path_to_delete)。仅用公网 source_url 下载到临时文件，不使用本地路径。"""
-            url = getattr(a, "source_url", None) or ""
-            if not (url.startswith("http://") or url.startswith("https://")):
+            """返回 (path_str, temp_path_to_delete)。优先用公网 source_url；本地素材先懒转存。"""
+            url = await _ensure_publish_asset_public_url(a, current_user.id, request)
+            if not url:
                 raise HTTPException(
                     400,
-                    detail="素材未上传至火山（无公网链接），请先在素材管理中上传并同步至火山后再发布。",
+                    detail=(
+                        "素材没有公网链接，且自动转存失败。请确认本地素材文件存在、登录态有效、"
+                        "服务器 /api/assets/upload-temp 可用后重试。"
+                    ),
                 )
             async with httpx.AsyncClient(timeout=120.0) as c:
                 r = await c.get(url)
