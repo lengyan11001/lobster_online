@@ -260,6 +260,20 @@ def cached_start_entry_asset(root: Path, profile: dict) -> Path | None:
     return candidate
 
 
+def _assert_start_entry_written(target: Path, payload: Path) -> None:
+    """写完 start.exe 再读一遍；不一致就报错，别让'切换成功但入口还是旧 exe'静默发生。"""
+    try:
+        same = (
+            target.is_file()
+            and target.stat().st_size == payload.stat().st_size
+            and target.read_bytes() == payload.read_bytes()
+        )
+    except OSError as exc:
+        raise RuntimeError(f"统一启动程序 {START_ENTRY_NAME} 校验失败：{exc}") from exc
+    if not same:
+        raise RuntimeError(f"统一启动程序 {START_ENTRY_NAME} 写入后与品牌启动器不一致：{target}")
+
+
 def install_start_entry(root: Path, launcher: Path, source: Path | None = None) -> Path:
     """Mirror the branded launcher EXE into the unified ``start.exe`` entry.
 
@@ -288,6 +302,7 @@ def install_start_entry(root: Path, launcher: Path, source: Path | None = None) 
         raise RuntimeError(f"统一启动程序 {START_ENTRY_NAME} 写入失败：{exc}") from exc
     try:
         os.replace(partial, target)
+        _assert_start_entry_written(target, payload)
         return target
     except OSError as first_error:
         # A running autostart image can refuse an in-place replace: move it aside.
@@ -303,6 +318,7 @@ def install_start_entry(root: Path, launcher: Path, source: Path | None = None) 
                 f"统一启动程序 {START_ENTRY_NAME} 无法更新（请先退出客户端再切换）：{first_error} / {exc}"
             ) from exc
         stale.unlink(missing_ok=True)
+        _assert_start_entry_written(target, payload)
         return target
     finally:
         partial.unlink(missing_ok=True)
