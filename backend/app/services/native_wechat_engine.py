@@ -33,6 +33,7 @@ import httpx
 
 from ..core.config import settings
 
+logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 STATE_DIR = ROOT_DIR / "openclaw" / "openclaw-weixin"
@@ -157,6 +158,15 @@ _AUTO_REPLY_STOP_REQUESTS: set[str] = set()
 _AUTO_REPLY_STARTUP_RECONCILED = False
 _AUTO_REPLY_STARTUP_RECONCILE_LOCK = threading.Lock()
 _WECHAT_INTELLIGENCE_CIRCUIT_UNTIL = 0.0
+# Per-peer UI recovery circuit breaker: one broken/ghost chat must not block
+# every other conversation in the same watch round.
+_AUTO_REPLY_RECOVER_FAIL_LIMIT = 3
+_AUTO_REPLY_RECOVER_FAILURES: Dict[str, Dict[str, int]] = {}
+_AUTO_REPLY_RECOVER_FAILURES_LOCK = threading.Lock()
+# Coarse "driver busy" marker.  The auto-reply scan may skip this round instead
+# of queueing behind a long contact-sync/group-send operation and timing out.
+_UI_EXECUTOR_BUSY: Dict[str, Any] = {}
+_UI_EXECUTOR_BUSY_LOCK = threading.Lock()
 _LOCAL_WECHAT_UI_LOCK = threading.RLock()
 _LOCAL_WECHAT_THREAD_STATE = threading.local()
 _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID = 0
@@ -173,6 +183,10 @@ _LOCAL_WECHAT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=1,
     thread_name_prefix="lobster-wechat",
 )
+
+
+class _LocalWeChatWindowHung(RuntimeError):
+    """WeChat main window is visibly hung; do not enter UIA and do not retry."""
 
 # Friend additions have deliberately long anti-spam pauses. Keep them out of
 # the account task queue so those pauses cannot delay message, group, or media
@@ -3135,6 +3149,74 @@ def _release_auto_reply_run(account_id: str) -> None:
         _AUTO_REPLY_ACTIVE_RUNS.discard(str(account_id or "").strip())
 
 
+def _auto_reply_recover_failure_count(account_id: str, peer_id: str) -> int:
+    account_key = str(account_id or "").strip()
+    peer_key = str(peer_id or "").strip()
+    if not account_key or not peer_key:
+        return 0
+    with _AUTO_REPLY_RECOVER_FAILURES_LOCK:
+        return int((_AUTO_REPLY_RECOVER_FAILURES.get(account_key) or {}).get(peer_key) or 0)
+
+
+def _note_auto_reply_recover_failure(account_id: str, peer_id: str, reason: str = "") -> int:
+    account_key = str(account_id or "").strip()
+    peer_key = str(peer_id or "").strip()
+    if not account_key or not peer_key:
+        return 0
+    with _AUTO_REPLY_RECOVER_FAILURES_LOCK:
+        per_account = _AUTO_REPLY_RECOVER_FAILURES.setdefault(account_key, {})
+        count = int(per_account.get(peer_key) or 0) + 1
+        per_account[peer_key] = count
+        return count
+
+
+def _clear_auto_reply_recover_failure(account_id: str, peer_id: str) -> None:
+    account_key = str(account_id or "").strip()
+    peer_key = str(peer_id or "").strip()
+    if not account_key or not peer_key:
+        return
+    with _AUTO_REPLY_RECOVER_FAILURES_LOCK:
+        per_account = _AUTO_REPLY_RECOVER_FAILURES.get(account_key)
+        if not per_account:
+            return
+        per_account.pop(peer_key, None)
+        if not per_account:
+            _AUTO_REPLY_RECOVER_FAILURES.pop(account_key, None)
+
+
+def _auto_reply_recover_circuit_open(account_id: str, peer_id: str) -> bool:
+    return _auto_reply_recover_failure_count(account_id, peer_id) >= _AUTO_REPLY_RECOVER_FAIL_LIMIT
+
+
+def _set_ui_executor_busy(operation: str, account_id: str = "") -> None:
+    with _UI_EXECUTOR_BUSY_LOCK:
+        _UI_EXECUTOR_BUSY.clear()
+        _UI_EXECUTOR_BUSY.update(
+            {
+                "operation": str(operation or "").strip()[:120],
+                "account_id": str(account_id or "").strip(),
+                "started_at": time.time(),
+            }
+        )
+
+
+def _clear_ui_executor_busy() -> None:
+    with _UI_EXECUTOR_BUSY_LOCK:
+        _UI_EXECUTOR_BUSY.clear()
+
+
+def _ui_executor_busy_info() -> Dict[str, Any]:
+    with _UI_EXECUTOR_BUSY_LOCK:
+        if not _UI_EXECUTOR_BUSY:
+            return {}
+        info = dict(_UI_EXECUTOR_BUSY)
+    try:
+        info["age_seconds"] = round(max(0.0, time.time() - float(info.get("started_at") or 0.0)), 1)
+    except Exception:
+        info["age_seconds"] = 0.0
+    return info
+
+
 def request_auto_reply_stop(account_id: str) -> Dict[str, Any]:
     """Ask the current local round to stop after its active UI call returns."""
     normalized = str(account_id or "").strip()
@@ -4965,6 +5047,24 @@ async def run_auto_reply_once(
     if not _claim_auto_reply_run(account_id):
         log_event("run_skipped", reason="running")
         return {"ok": True, "skipped": True, "reason": "running", "config": get_auto_reply_config(account_id)}
+    busy = _ui_executor_busy_info()
+    if busy:
+        log_event(
+            "run_skipped",
+            reason="driver_busy",
+            busy_operation=str(busy.get("operation") or ""),
+            busy_account_id=str(busy.get("account_id") or ""),
+            busy_age_seconds=float(busy.get("age_seconds") or 0),
+        )
+        skip_result = {
+            "ok": True,
+            "skipped": True,
+            "reason": "driver_busy",
+            "busy": busy,
+            "config": cfg,
+        }
+        _finish_auto_reply_run(account_id, skip_result)
+        return skip_result
     started_monotonic = time.monotonic()
     started_at = _now_iso()
     log_event("run_started", started_at=started_at)
@@ -5191,6 +5291,27 @@ async def run_auto_reply_once(
         for session in sessions:
             peer_id = str(session.get("peer_id") or "").strip()
             display_name = _session_display_name(session.get("display_name") or peer_id)
+            if _auto_reply_recover_circuit_open(account_id, peer_id):
+                fail_count = _auto_reply_recover_failure_count(account_id, peer_id)
+                result["skipped"] += 1
+                result["items"].append(
+                    {
+                        "peer_id": peer_id,
+                        "display_name": display_name,
+                        "status": "recover_circuit_open",
+                        "skip_reason": "recover_circuit_open",
+                        "recover_fail_count": fail_count,
+                    }
+                )
+                log_event(
+                    "session_skipped",
+                    peer_id=peer_id,
+                    display_name=display_name,
+                    status="recover_circuit_open",
+                    reason="recover_circuit_open",
+                    recover_fail_count=fail_count,
+                )
+                continue
             decision = _auto_reply_session_prefilter(account_id, session)
             action = str(decision.get("action") or "skip")
             reason = str(decision.get("reason") or "prefilter_skipped")
@@ -5356,6 +5477,7 @@ async def run_auto_reply_once(
                             "direction_source": "wxauto_page_immediate_capture",
                         }
                     )
+                    _clear_auto_reply_recover_failure(account_id, peer_id)
                     result["items"].append(collection_result)
                     continue
                 chat_info = sync_result.get("chat_info") if isinstance(sync_result.get("chat_info"), dict) else {}
@@ -5402,6 +5524,7 @@ async def run_auto_reply_once(
                         collection_target=collection_target,
                         collection_target_source=collection_target_source,
                     )
+                    _note_auto_reply_recover_failure(account_id, peer_id, "session_target_mismatch")
                     result["items"].append(collection_result)
                     continue
                 if session.get("session_snapshot_fresh") and (
@@ -5430,6 +5553,7 @@ async def run_auto_reply_once(
                         collection_target=collection_target,
                         collection_target_source=collection_target_source,
                     )
+                    _note_auto_reply_recover_failure(account_id, peer_id, "fresh_message_snapshot_missing")
                     result["items"].append(collection_result)
                     continue
                 chat_type = _normalize_local_chat_type((chat_info or {}).get("chat_type"))
@@ -5449,6 +5573,7 @@ async def run_auto_reply_once(
                     if _local_chat_type_is_private(known_type):
                         chat_type = known_type
                 latest_after_sync = sync_result.get("latest_message") if isinstance(sync_result.get("latest_message"), dict) else {}
+                _clear_auto_reply_recover_failure(account_id, peer_id)
                 diagnostic_latest = (
                     sync_result.get("fresh_latest_message")
                     if "fresh_latest_message" in sync_result
@@ -5918,6 +6043,7 @@ async def run_auto_reply_once(
                     recent_context_chars=len(recent),
                 )
             except Exception as collection_exc:
+                _note_auto_reply_recover_failure(account_id, peer_id, "collection_failed")
                 result["failed"] += 1
                 collection_result.update(
                     {
@@ -9866,6 +9992,10 @@ def _run_local_driver_operation(
                     # A click already occurred. Rebuilding the driver and replaying
                     # the operation could send the same text a second time.
                     raise
+                if isinstance(initial_exc, _LocalWeChatWindowHung):
+                    # The main window did not answer a 1s Win32 probe.  Rebuilding
+                    # the UIA executor cannot unstick a hung WeChat process.
+                    raise
                 recovery = _recover_local_wechat_driver(
                     account_id,
                     operation=operation,
@@ -9891,7 +10021,11 @@ def _run_local_driver_operation(
                     ) from retry_exc
                 recovery = _mark_local_driver_recovery(account_id, recovery, recovered=True)
                 return _annotate_local_driver_recovery(result, recovery)
-        return _call_in_ui_executor(body, operation=operation, account_id=account_id)
+        _set_ui_executor_busy(operation, account_id)
+        try:
+            return _call_in_ui_executor(body, operation=operation, account_id=account_id)
+        finally:
+            _clear_ui_executor_busy()
 
     finally:
         if _task_ctl is not None:
@@ -11498,6 +11632,14 @@ def _sync_local_sessions_once(
 ) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
+    if not passive:
+        try:
+            _prepare_wechat_ui_for_operation(account_id, operation="scan")
+        except _LocalWeChatWindowHung:
+            raise
+        except Exception as exc:
+            logger.warning("[native-wechat] UI 预检失败，已中止本轮: %s", str(exc)[:240])
+            raise
     if account_id in _AUTO_REPLY_TIME_SCAN_ACCOUNTS and not passive and not recent_only:
         # Do not fall back to UIA's calendar labels here: automatic takeover
         # must only process rows with a precise wxauto4 timestamp.
@@ -21253,6 +21395,12 @@ def _send_text_local_slow_once(
     wx = _get_wxauto4_client(account_id)
     hwnd = int(item.get("hwnd") or 0)
     _focus_local_wechat(hwnd)
+    try:
+        _prepare_wechat_ui_for_operation(account_id, main_hwnd=hwnd, operation="send")
+    except _LocalWeChatWindowHung:
+        raise
+    except Exception as exc:
+        logger.info("[native-wechat] 发送前 UI 预检失败（继续由发送链路处理）: %s", str(exc)[:200])
     driver_name = str(raw_meta.get("driver") or "").strip()
     # 批量/手动发送（_send_text_local → driver=native_wechat_verified_send）以前把
     # 「打开会话」交给 wxauto4 ChatWith(exact=True)，由它自己挑搜索结果：按微信号搜时
@@ -22776,6 +22924,280 @@ def _sweep_stray_dialogs_throttled(*, throttle: float = 5.0) -> int:
         return 0
     _STRAY_SWEEP_STATE["at"] = now
     return _clear_stray_wechat_dialogs()
+
+
+_WECHAT_BENIGN_WINDOW_CLASSES = frozenset(
+    {
+        "Base_PowerMessageWindow",
+        "WxTrayIconMessageWindow",
+        "MSCTFIME UI",
+        "IME",
+        "crashpad_SessionEndWatcher",
+        "DisplayICC_SystemMessageWindow",
+        "Chrome_SystemMessageWindow",
+    }
+)
+_WECHAT_POPUP_CLASS_HINTS = (
+    "toolsavebits",
+    "qwindowtool",
+    "searchwindow",
+    "sns",
+    "miniprogram",
+    "webview",
+    "popup",
+    "dialog",
+)
+_WECHAT_POPUP_TITLE_HINTS = (
+    "搜一搜",
+    "朋友圈",
+    "小程序",
+    "截图",
+    "图片",
+    "视频",
+    "文件",
+    "工具",
+)
+
+
+def _wechat_main_window_health(
+    account_id: str = "",
+    *,
+    hwnd: int = 0,
+    timeout_ms: int = 1000,
+) -> Dict[str, Any]:
+    """Fast Win32 health probe: visible / iconic / hung / message-pump responsive."""
+    try:
+        import win32gui  # type: ignore
+    except Exception as exc:
+        return {"ok": False, "hwnd": int(hwnd or 0), "error": f"win32gui unavailable: {exc}"}
+    try:
+        target = int(hwnd or _local_wechat_hwnd(account_id) or 0)
+    except Exception:
+        target = 0
+    if not target or not win32gui.IsWindow(target):
+        return {"ok": False, "hwnd": target, "visible": False, "iconic": False, "hung": False, "responsive": False, "error": "微信主窗口不存在"}
+    visible = bool(win32gui.IsWindowVisible(target))
+    iconic = bool(win32gui.IsIconic(target))
+    hung = False
+    responsive = False
+    send_error = ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.WinDLL("user32", use_last_error=True)
+        user32.IsHungAppWindow.argtypes = [wintypes.HWND]
+        user32.IsHungAppWindow.restype = wintypes.BOOL
+        user32.SendMessageTimeoutW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+            wintypes.UINT,
+            wintypes.UINT,
+            ctypes.POINTER(ctypes.c_size_t),
+        ]
+        user32.SendMessageTimeoutW.restype = ctypes.c_size_t
+        hung = bool(user32.IsHungAppWindow(wintypes.HWND(target)))
+        result = ctypes.c_size_t(0)
+        ok = user32.SendMessageTimeoutW(
+            wintypes.HWND(target),
+            0,
+            0,
+            0,
+            0x0002,
+            max(100, int(timeout_ms)),
+            ctypes.byref(result),
+        )
+        responsive = bool(ok)
+        if not ok:
+            send_error = f"SendMessageTimeout err={ctypes.get_last_error()}"
+    except Exception as exc:
+        send_error = str(exc)[:200]
+    healthy = bool(visible and not iconic and not hung and responsive)
+    return {
+        "ok": healthy,
+        "hwnd": target,
+        "visible": visible,
+        "iconic": iconic,
+        "hung": hung,
+        "responsive": responsive,
+        "error": "" if healthy else (send_error or "微信主窗口无响应/不可见"),
+    }
+
+
+def _wechat_popup_should_close(cls: str, title: str, win_area: int, main_area: int) -> bool:
+    """Pure classifier used by popup cleanup; keeps the window rules testable."""
+    cls = str(cls or "")
+    title = str(title or "")
+    if cls in _WECHAT_BENIGN_WINDOW_CLASSES:
+        return False
+    class_hit = any(hint in cls.casefold() for hint in _WECHAT_POPUP_CLASS_HINTS)
+    title_hit = any(hint in title for hint in _WECHAT_POPUP_TITLE_HINTS)
+    small_tool = bool(
+        win_area
+        and main_area
+        and win_area < int(main_area) * 0.35
+        and cls != "Qt51514QWindowIcon"
+    )
+    return bool(class_hit or title_hit or small_tool)
+
+
+def _close_wechat_popups(
+    account_id: str = "",
+    *,
+    main_hwnd: int = 0,
+    limit: int = 8,
+) -> Dict[str, Any]:
+    """Close visible WeChat popups/tool windows and bring the main window front."""
+    try:
+        import win32gui  # type: ignore
+    except Exception as exc:
+        return {"ok": False, "closed": [], "error": f"win32gui unavailable: {exc}"}
+    try:
+        main = int(main_hwnd or _local_wechat_hwnd(account_id) or 0)
+    except Exception:
+        main = 0
+    if not main or not win32gui.IsWindow(main):
+        return {"ok": False, "closed": [], "error": "微信主窗口不存在"}
+    health = _wechat_main_window_health(hwnd=main)
+    if not health.get("ok"):
+        return {"ok": False, "closed": [], "hung": bool(health.get("hung")), "health": health, "error": "微信主窗口卡死/不可见/无响应"}
+    main_pid = _window_process_id(main)
+    if not main_pid:
+        return {"ok": False, "closed": [], "error": "无法读取微信主窗口进程"}
+    try:
+        ml, mt, mr, mb = win32gui.GetWindowRect(main)
+        main_area = max(1, int(mr - ml) * int(mb - mt))
+    except Exception:
+        main_area = 0
+    closed: List[Dict[str, Any]] = []
+    for window in _top_level_windows():
+        if len(closed) >= max(1, int(limit)):
+            break
+        try:
+            hwnd = int(window.get("hwnd") or 0)
+            pid = int(window.get("pid") or 0)
+            cls = str(window.get("class") or "")
+            title = str(window.get("title") or "")
+        except Exception:
+            continue
+        if not hwnd or hwnd == main or pid != main_pid:
+            continue
+        try:
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            win_area = max(0, int(right - left)) * max(0, int(bottom - top))
+        except Exception:
+            win_area = 0
+        if not _wechat_popup_should_close(cls, title, win_area, main_area):
+            continue
+        try:
+            _ui_progress_tick("popup_cleanup:%s" % (cls or title or hwnd))
+            _activate_window(hwnd)
+            _send_hotkey("esc", pause=0.12)
+            if not _wait_window_closed(hwnd, timeout=0.8):
+                _close_window_force(hwnd)
+            if _wait_window_closed(hwnd, timeout=0.8):
+                closed.append({"hwnd": hwnd, "class": cls[:80], "title": title[:80]})
+                logger.info("[native-wechat] 已关闭微信顶层弹窗 hwnd=%s class=%s title=%s", hwnd, cls[:80], title[:80])
+            else:
+                logger.info("[native-wechat] 关闭微信顶层窗口失败 hwnd=%s class=%s title=%s", hwnd, cls[:80], title[:80])
+        except TaskPaused:
+            raise
+        except Exception as exc:
+            logger.info("[native-wechat] 清理微信弹窗异常（忽略） hwnd=%s err=%s", hwnd, str(exc)[:160])
+    try:
+        _activate_window(main)
+        _focus_local_wechat(main)
+    except Exception:
+        pass
+    logger.info("[native-wechat] [弹窗清理] main=%s closed=%s", main, len(closed))
+    return {"ok": True, "main_hwnd": main, "closed": closed, "count": len(closed)}
+
+
+def _scroll_chat_session_list_to_top(hwnd: int) -> bool:
+    """Best-effort: put the chat session list back at the top before scanning."""
+    if not hwnd or not _module_available("uiautomation"):
+        return False
+    try:
+        import uiautomation as auto  # type: ignore
+
+        root = auto.ControlFromHandle(int(hwnd))
+        for node in _uia_walk(root, max_depth=10, max_nodes=2500):
+            cls = _uia_control_class(node).casefold()
+            if "chatsessionlist" not in cls and "sessionlist" not in cls:
+                continue
+            try:
+                pattern = node.GetScrollPattern()
+                pattern.SetScrollPercent(-1, 0.0)
+                return True
+            except Exception:
+                pass
+            try:
+                node.SetFocus()
+                for _ in range(20):
+                    node.WheelUp(wheelTimes=5)
+                    time.sleep(0.03)
+                return True
+            except Exception:
+                continue
+    except Exception as exc:
+        logger.debug("[native-wechat] scroll session list failed: %s", str(exc)[:160])
+    return False
+
+
+def _reanchor_chat_tab(account_id: str = "", *, main_hwnd: int = 0) -> Dict[str, Any]:
+    """Return to the chat tab and reset the session list position."""
+    try:
+        main = int(main_hwnd or _local_wechat_hwnd(account_id) or 0)
+    except Exception:
+        main = 0
+    if not main:
+        return {"ok": False, "error": "微信主窗口不存在"}
+    try:
+        _ensure_local_tab(main, "微信", strict=False)
+    except TaskPaused:
+        raise
+    except Exception as exc:
+        logger.info("[native-wechat] 界面回正失败（继续）: %s", str(exc)[:160])
+    scrolled = _scroll_chat_session_list_to_top(main)
+    try:
+        _activate_window(main)
+    except Exception:
+        pass
+    logger.info("[native-wechat] 界面已回正到聊天页签 hwnd=%s scrolled=%s", main, bool(scrolled))
+    return {"ok": True, "main_hwnd": main, "scrolled": bool(scrolled)}
+
+
+def _prepare_wechat_ui_for_operation(
+    account_id: str = "",
+    *,
+    main_hwnd: int = 0,
+    operation: str = "scan",
+) -> Dict[str, Any]:
+    """Preflight: restore/hung-check -> close popups -> reanchor chat tab."""
+    if os.name != "nt" or os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"ok": True, "skipped": True, "reason": "non_windows_or_test"}
+    try:
+        _ensure_local_wechat_window_visible(wait_seconds=3.0, allow_launch=False)
+    except Exception as exc:
+        logger.info("[native-wechat] ensure window before %s failed: %s", operation, str(exc)[:160])
+    health = _wechat_main_window_health(account_id, hwnd=main_hwnd)
+    if not health.get("ok"):
+        if health.get("hung"):
+            raise _LocalWeChatWindowHung(
+                "微信主窗口无响应（IsHungAppWindow/SendMessageTimeout 超时），已跳过本轮，请重启微信后重试"
+            )
+        raise RuntimeError(
+            "微信主窗口不可用（%s）；请确认微信已登录且窗口未最小化" % (health.get("error") or "unknown")
+        )
+    popup = _close_wechat_popups(account_id, main_hwnd=int(health.get("hwnd") or main_hwnd or 0))
+    if popup.get("hung"):
+        raise _LocalWeChatWindowHung(
+            "微信主窗口在清理弹窗时无响应，已跳过本轮，请重启微信后重试"
+        )
+    reanchor = _reanchor_chat_tab(account_id, main_hwnd=int(health.get("hwnd") or main_hwnd or 0))
+    return {"ok": True, "health": health, "popup": popup, "reanchor": reanchor}
 
 
 def _dismiss_open_dialog(dialog_hwnd: int, steps: List[Dict[str, Any]]) -> None:
