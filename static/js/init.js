@@ -1988,7 +1988,8 @@ function loadDashboard() {
       var heroEl = document.getElementById('pageHero');
       if (heroEl) heroEl.style.display = 'none';
       loadModelSelector(d.preferred_model);
-      if (!document.getElementById('onlineMastraChat')) initChatSessions();
+      // 首页/会话列表仍然使用旧 chat 的会话存储；mastra 入口存在时也必须初始化，否则每次进来都是新会话。
+      initChatSessions();
       if (typeof window.initMastraOnlineChat === 'function') window.initMastraOnlineChat();
       loadOnlineH5Employees();
       setTimeout(restoreDashboardViewAfterLogin, 0);
@@ -2558,6 +2559,17 @@ function showAppView(view, sourceEl, recoveryOptions) {
 }
 window.showAppView = showAppView;
 window.showLobsterView = showAppView;
+
+document.querySelectorAll('.nav-left-item[data-view="chat"], .chat-sidebar-entry[data-view="chat"]').forEach(function(el) {
+  el.addEventListener('click', function() {
+    // 即使视图切换被复用/跳过，也要恢复上次停留的会话。
+    setTimeout(function() {
+      if (typeof window.restoreLastChatSessionForHome === 'function') {
+        window.restoreLastChatSessionForHome();
+      }
+    }, 80);
+  });
+});
 
 document.querySelectorAll('.nav-left-item').forEach(function(el) {
   el.addEventListener('click', function() {

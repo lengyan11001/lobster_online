@@ -2258,7 +2258,21 @@ function initChatSessions() {
 /** 首页/AI调度助手入口：恢复上次停留的会话，而不是停在空的新会话。 */
 function restoreLastChatSessionForHome() {
   if (typeof getLobsterBrandMark === 'function' && getLobsterBrandMark() !== 'bihuo') return false;
-  if (!Array.isArray(chatSessions) || !chatSessions.length) return false;
+  if (!Array.isArray(chatSessions) || !chatSessions.length) {
+    // 本地还没加载到时，先从服务端备份恢复；最多重试 2 次，避免空转。
+    var retries = Number(window.__restoreLastChatRetryCount || 0);
+    if (retries < 2) {
+      window.__restoreLastChatRetryCount = retries + 1;
+      if (typeof restoreChatSessionsFromBackendIfEmpty === 'function') {
+        restoreChatSessionsFromBackendIfEmpty();
+      }
+      setTimeout(function() {
+        restoreLastChatSessionForHome();
+      }, 1200);
+    }
+    return false;
+  }
+  window.__restoreLastChatRetryCount = 0;
   var hasMessages = function(session) {
     return !!(session && Array.isArray(session.messages) && session.messages.length);
   };

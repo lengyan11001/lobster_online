@@ -3664,3 +3664,63 @@ html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-input-row {
     padding: 0.85rem;
   }
 }
+
+/* 必火首页：欢迎区缩小并居中，输入框仍贴底 */
+html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-empty-state {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+html[data-brand="bihuo"] #content-chat .chat-home-codex {
+  width: min(700px, 100%);
+  max-width: 700px;
+  margin: 0 auto;
+}
+html[data-brand="bihuo"] #content-chat .chat-home-codex-head {
+  margin: 0 0 14px;
+  text-align: center;
+}
+html[data-brand="bihuo"] #content-chat .chat-home-codex-title {
+  margin: 10px 0 4px;
+  font-size: 24px;
+  line-height: 1.25;
+}
+html[data-brand="bihuo"] #content-chat .chat-home-codex-subtitle {
+  font-size: 13px;
+  line-height: 1.55;
+}
+html[data-brand="bihuo"] #content-chat .chat-home-codex-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  width: min(620px, 100%);
+  max-width: 620px;
+  margin: 0 auto;
+}
+html[data-brand="bihuo"] #content-chat .chat-home-codex-card {
+  min-height: 92px;
+  padding: 12px 14px 11px;
+  gap: 4px;
+}
+html[data-brand="bihuo"] #content-chat .chat-home-codex-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  font-size: 11px;
+}
+html[data-brand="bihuo"] #content-chat .chat-home-codex-card h3 {
+  font-size: 14px;
+}
+html[data-brand="bihuo"] #content-chat .chat-home-codex-card p {
+  font-size: 12px;
+  line-height: 1.45;
+}
+html[data-brand="bihuo"] #content-chat .chat-home-codex-hint {
+  margin: 12px 0 0;
+  text-align: center;
+  font-size: 12px;
+}
+
+html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-home-hero {
+  flex: 1 1 auto;
+  align-content: center;
+}
