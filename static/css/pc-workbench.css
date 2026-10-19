@@ -51,7 +51,7 @@
 
 .page:has(#dashboard.visible) .logo-mark {
   width: auto;
-  height: 36px;
+  height: 52px;
   flex: 0 0 auto;
   border-radius: 8px;
   object-fit: contain;

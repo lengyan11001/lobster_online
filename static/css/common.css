@@ -149,8 +149,8 @@
     }
     .logo-mark {
       width: auto;
-      height: 40px;
-      max-width: 200px;
+      height: 60px;
+      max-width: 220px;
       flex-shrink: 0;
       border-radius: 8px;
       object-fit: contain;
