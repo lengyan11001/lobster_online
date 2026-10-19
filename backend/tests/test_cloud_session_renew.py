@@ -198,6 +198,7 @@ def test_client_wires_renew_and_backoff():
     app_js = (root / "static" / "js" / "app.js").read_text(encoding="utf-8", errors="replace")
     assert "renewStoredTokenSilently" in app_js
     assert "/api/local/auth/renew" in app_js
+    assert "renewStoredTokenSilently('')" in app_js, "页面没有 token 时也要能从本机登录态恢复"
     assert "refreshed: true" in app_js
     create = (root / "backend" / "app" / "create_app.py").read_text(encoding="utf-8", errors="replace")
     assert "cloud_token_renew_loop" in create

@@ -459,7 +459,17 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
     authRecoveryPromise = Promise.resolve().then(function() {
       var latest = storedToken();
       try { token = latest; } catch (e) {}
-      if (!latest) return { valid: false, changed: latest !== previousToken, token: latest };
+      if (!latest) {
+        // 页面 localStorage 没有 token（WebView 存储被清过/换过），但本机后端
+        // .channel_fallback.json 里还有登录态：让后端换一个新 token 交给页面，自动恢复登录。
+        return renewStoredTokenSilently('').then(function(fresh) {
+          if (fresh) {
+            try { token = fresh; } catch (e) {}
+            return { valid: true, refreshed: true, changed: true, token: fresh };
+          }
+          return { valid: false, changed: latest !== previousToken, token: latest };
+        });
+      }
       if (latest !== previousToken) return { valid: true, changed: true, token: latest };
       return validateStoredToken(latest).then(function(state) {
         if (state === 'invalid') {
