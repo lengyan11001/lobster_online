@@ -495,7 +495,7 @@ document.documentElement.setAttribute('data-brand', getLobsterBrandMark());
       method: 'POST',
       cache: 'no-store',
       headers: { 'Content-Type': 'application/json' },
-      body: '{}'
+      body: JSON.stringify({ token: previousToken || '' })
     }).then(function(response) {
       if (response.status !== 200) return '';
       return response.json().then(function(data) {

@@ -149,13 +149,19 @@ def test_401_backoff_ladder_and_reset_semantics():
 
 @pytest.mark.asyncio
 async def test_local_renew_endpoint(monkeypatch):
-    async def _fake_renew(*, force: bool = False):
+    calls = {}
+
+    async def _fake_renew(*, token: str = "", force: bool = False):
+        calls["token"] = token
+        calls["force"] = force
         return {"ok": True, "refreshed": True, "token": "new-token", "expires_in": 2592000,
                 "expires_at": "2026-10-17T02:00:00Z"}
 
     monkeypatch.setattr(renew, "renew_cloud_token", _fake_renew)
     body = await local_auth.local_cloud_session_renew(request=_LoopbackRequest())
     assert body["ok"] is True and body["token"] == "new-token"
+    assert calls["force"] is True, "界面主动要求续签时必须强制换新（不能因 not_due 返回空）"
+    assert calls["token"] == "old-token", "应优先使用界面传来的 token"
 
     with pytest.raises(HTTPException) as err:
         await local_auth.local_cloud_session_renew(request=_LoopbackRequest(host="10.0.0.8"))
@@ -182,6 +188,9 @@ class _LoopbackRequest:
         self.headers: dict = {}
         self.query_params: dict = {}
         self.state = type("_S", (), {})()
+
+    async def json(self):
+        return {"token": "old-token"}
 
 
 def test_client_wires_renew_and_backoff():

@@ -407,7 +407,17 @@ async def local_cloud_session_renew(
 
     if not _is_loopback_request(request):
         raise HTTPException(status_code=403, detail="仅允许本机访问")
-    result = await renew_cloud_token(force=bool(force))
+    # 界面只会在 token 已被拒绝时调这里，必须强制换新：如果还按「剩余 > 20 天就 not_due」，
+    # 界面拿不到新 token，就只能弹「登录状态已失效」。优先用界面传来的 token，
+    # 它可能比 .channel_fallback.json 里的更新。
+    token = ""
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            token = str(body.get("token") or "").strip()
+    except Exception:
+        token = ""
+    result = await renew_cloud_token(token=token, force=True)
     return {"ok": bool(result.get("ok") and result.get("refreshed")), **result}
 
 
