@@ -937,6 +937,9 @@ var DEPRECATED_INSTALLATION_IDS = {
 };
 var LOBSTER_INSTALLATION_STORAGE_KEY = 'lobster_installation_id';
 var LOBSTER_DEVICE_SEED_STORAGE_KEY = 'lobster_device_seed';
+var _lobsterInstallationIdCache = String((typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_ID__) || '').trim();
+var _lobsterDeviceSeedCache = String((typeof window !== 'undefined' && window.__LOBSTER_DEVICE_SEED__) || '').trim();
+var _installationIdentityPersistTimer = 0;
 var LOBSTER_MACHINE_INSTANCE_STORAGE_KEY = 'lobster_machine_instance_id';
 
 function rawInstallationId(value) {
@@ -959,11 +962,11 @@ function generateLobsterInstallationId() {
 }
 
 function currentStoredInstallationId() {
-  try { return localStorage.getItem(LOBSTER_INSTALLATION_STORAGE_KEY) || ''; } catch (e) { return ''; }
+  return _lobsterInstallationIdCache;
 }
 
 function currentStoredLobsterDeviceSeed() {
-  try { return localStorage.getItem(LOBSTER_DEVICE_SEED_STORAGE_KEY) || ''; } catch (e) { return ''; }
+  return _lobsterDeviceSeedCache;
 }
 
 function currentStoredLobsterMachineInstanceId() {
@@ -1014,8 +1017,9 @@ function loadLobsterMachineInstanceId() {
 function setLobsterDeviceSeed(value, meta) {
   var next = String(value || '').trim();
   if (!isValidLobsterInstallationId(next)) throw new Error('invalid device id');
-  var prev = currentStoredLobsterDeviceSeed();
-  try { localStorage.setItem(LOBSTER_DEVICE_SEED_STORAGE_KEY, next); } catch (e) {}
+  var prev = _lobsterDeviceSeedCache;
+  _lobsterDeviceSeedCache = next;
+  try { window.__LOBSTER_DEVICE_SEED__ = next; } catch (e0) {}
   if (prev !== next && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
     try {
       window.dispatchEvent(new CustomEvent('lobster:device-seed-changed', {
@@ -1023,21 +1027,19 @@ function setLobsterDeviceSeed(value, meta) {
       }));
     } catch (e2) {}
   }
+  scheduleInstallationIdentityPersist();
   return next;
 }
 
 function getOrCreateLobsterDeviceSeed() {
   var seed = currentStoredLobsterDeviceSeed();
-  if (isDeprecatedInstallationId(seed)) {
-    try { localStorage.removeItem(LOBSTER_DEVICE_SEED_STORAGE_KEY); } catch (e0) {}
-    seed = '';
-  }
+  if (isDeprecatedInstallationId(seed)) seed = '';
   if (isValidLobsterInstallationId(seed)) return seed;
   var existing = currentStoredInstallationId();
-  if (isValidLobsterInstallationId(existing) && !/^u\d+-[a-f0-9]{32}$/i.test(existing)) {
+  if (isValidLobsterInstallationId(existing)) {
     return setLobsterDeviceSeed(rawInstallationId(existing), { reason: 'migrate_from_installation_id' });
   }
-  return setLobsterDeviceSeed(generateLobsterInstallationId(), { reason: 'local_seed_initial' });
+  return setLobsterDeviceSeed(generateLobsterInstallationId(), { reason: 'file_seed_initial' });
 }
 
 function randomizeLobsterDeviceSeed(meta) {
@@ -1047,8 +1049,9 @@ function randomizeLobsterDeviceSeed(meta) {
 function setLobsterInstallationId(value, meta) {
   var next = String(value || '').trim();
   if (!isValidLobsterInstallationId(next)) throw new Error('invalid installation id');
-  var prev = currentStoredInstallationId();
-  try { localStorage.setItem(LOBSTER_INSTALLATION_STORAGE_KEY, next); } catch (e) {}
+  var prev = _lobsterInstallationIdCache;
+  _lobsterInstallationIdCache = next;
+  try { window.__LOBSTER_INSTALLATION_ID__ = next; } catch (e0) {}
   if (prev !== next && typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
     try {
       window.dispatchEvent(new CustomEvent('lobster:installation-id-changed', {
@@ -1056,7 +1059,52 @@ function setLobsterInstallationId(value, meta) {
       }));
     } catch (e2) {}
   }
+  scheduleInstallationIdentityPersist();
   return next;
+}
+
+function persistInstallationIdentityToFile() {
+  var base = String((typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? LOCAL_API_BASE : '').replace(/\/$/, '');
+  if (!base || typeof fetch !== 'function') return Promise.resolve(false);
+  var iid = currentStoredInstallationId();
+  var seed = currentStoredLobsterDeviceSeed();
+  if (!isValidLobsterInstallationId(iid) && !isValidLobsterInstallationId(seed)) return Promise.resolve(false);
+  return fetch(base + '/api/settings/installation-identity', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ installation_id: iid || '', device_seed: seed || '' })
+  }).then(function (resp) {
+    if (!resp.ok) return false;
+    return resp.json().catch(function () { return {}; }).then(function (data) {
+      var authoritativeIid = String((data && data.installation_id) || '').trim();
+      var authoritativeSeed = String((data && data.device_seed) || '').trim();
+      if (isValidLobsterInstallationId(authoritativeIid)) {
+        _lobsterInstallationIdCache = authoritativeIid;
+        try { window.__LOBSTER_INSTALLATION_ID__ = authoritativeIid; } catch (e1) {}
+      }
+      if (isValidLobsterInstallationId(authoritativeSeed)) {
+        _lobsterDeviceSeedCache = authoritativeSeed;
+        try { window.__LOBSTER_DEVICE_SEED__ = authoritativeSeed; } catch (e2) {}
+      }
+      try {
+        localStorage.removeItem(LOBSTER_INSTALLATION_STORAGE_KEY);
+        localStorage.removeItem(LOBSTER_DEVICE_SEED_STORAGE_KEY);
+      } catch (e) {}
+      try {
+        window.__LOBSTER_INSTALLATION_FILE_PRESENT__ = true;
+        window.__LOBSTER_INSTALLATION_NEEDS_WRITE__ = false;
+      } catch (e3) {}
+      return true;
+    });
+  }).catch(function () { return false; });
+}
+
+function scheduleInstallationIdentityPersist() {
+  if (_installationIdentityPersistTimer) clearTimeout(_installationIdentityPersistTimer);
+  _installationIdentityPersistTimer = setTimeout(function () {
+    _installationIdentityPersistTimer = 0;
+    persistInstallationIdentityToFile();
+  }, 60);
 }
 
 function uniqueInstallationRequestHeaders(json) {
@@ -1150,14 +1198,10 @@ function scheduleInitialInstallationIdCheck(candidate) {
 
 function getOrCreateInstallationId() {
   var v = currentStoredInstallationId();
-  if (isDeprecatedInstallationId(v)) {
-    try { localStorage.removeItem(LOBSTER_INSTALLATION_STORAGE_KEY); } catch (e0) {}
-    v = '';
-  }
+  if (isDeprecatedInstallationId(v)) v = '';
   if (isValidLobsterInstallationId(v)) return v;
-  var u = setLobsterInstallationId(getOrCreateLobsterDeviceSeed(), { reason: 'local_initial' });
-  scheduleInitialInstallationIdCheck(u);
-  return u;
+  var seed = getOrCreateLobsterDeviceSeed();
+  return setLobsterInstallationId(seed, { reason: 'file_initial' });
 }
 
 window.generateLobsterInstallationId = generateLobsterInstallationId;
@@ -1172,6 +1216,11 @@ window.loadLobsterMachineInstanceId = loadLobsterMachineInstanceId;
 window.requestUniqueLobsterInstallationId = requestUniqueLobsterInstallationId;
 window.bindLobsterInstallationId = bindLobsterInstallationId;
 window.loadLobsterInstallationIdStatus = loadLobsterInstallationIdStatus;
+window.persistInstallationIdentityToFile = persistInstallationIdentityToFile;
+
+if (typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_NEEDS_WRITE__) {
+  persistInstallationIdentityToFile();
+}
 
 function authHeaders() {
   try { token = getStoredAuthToken(); } catch (e) {}

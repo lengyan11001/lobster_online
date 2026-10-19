@@ -2922,7 +2922,44 @@
 <script defer src="/static/js/client-version-guard.js?v=20260928-guard-once-per-session-v2"></script>
   <script defer src="/static/js/view-loader.js?v=20260624-reload-existing-views"></script>
   <script defer src="/static/js/view-registry.js?v=20261015-whatsapp-autorefresh-v7"></script>
-  <script defer src="/static/js/app.js?v=20260904-video-compat-v1"></script>
+  <script>
+  (function () {
+    var filePresent = "__LOBSTER_INSTALLATION_FILE_PRESENT__" === "true";
+    var installationId = "__LOBSTER_INSTALLATION_ID__";
+    var deviceSeed = "__LOBSTER_DEVICE_SEED__";
+    var migrated = false;
+    function valid(v) { return /^[a-zA-Z0-9_-]{8,128}$/.test(String(v || '').trim()); }
+    function raw(v) { var s = String(v || '').trim(); var i = s.indexOf('--'); return i >= 0 ? s.slice(i + 2) : s; }
+    if (!filePresent) {
+      try {
+        var oldId = localStorage.getItem('lobster_installation_id') || '';
+        var oldSeed = localStorage.getItem('lobster_device_seed') || '';
+        if (valid(oldId)) { installationId = String(oldId).trim(); migrated = true; }
+        if (valid(oldSeed)) { deviceSeed = String(oldSeed).trim(); migrated = true; }
+      } catch (e) {}
+      if (!valid(installationId) && valid(deviceSeed)) installationId = deviceSeed;
+      if (!valid(deviceSeed) && valid(installationId)) deviceSeed = raw(installationId);
+      if (!valid(deviceSeed)) {
+        var bytes = new Uint8Array(16);
+        if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(bytes);
+        else for (var i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+        deviceSeed = Array.prototype.map.call(bytes, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+        installationId = deviceSeed;
+      }
+    } else {
+      try {
+        localStorage.removeItem('lobster_installation_id');
+        localStorage.removeItem('lobster_device_seed');
+      } catch (e) {}
+    }
+    window.__LOBSTER_INSTALLATION_ID__ = installationId || '';
+    window.__LOBSTER_DEVICE_SEED__ = deviceSeed || '';
+    window.__LOBSTER_INSTALLATION_FILE_PRESENT__ = filePresent;
+    window.__LOBSTER_INSTALLATION_MIGRATED__ = !!migrated;
+    window.__LOBSTER_INSTALLATION_NEEDS_WRITE__ = !filePresent;
+  })();
+  </script>
+  <script defer src="/static/js/app.js?v=20261019-file-identity-v1"></script>
   <script defer src="/static/js/hifly-digital-human.js?v=20260904-video-compat-v1"></script>
   <script defer src="/static/js/chat.js?v=20261019-session-strict-v2"></script>
   <script defer src="/static/js/mastra-chat.js?v=20261019-no-plus-v1"></script>

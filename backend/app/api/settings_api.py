@@ -38,6 +38,10 @@ from ..services.chat_route_mode import (
     normalize_chat_route_mode,
     set_chat_route_mode,
 )
+from ..services.installation_identity import (
+    read_installation_identity,
+    write_installation_identity,
+)
 from ..services.runtime_dependency_repair import (
     RuntimeDependencyRepairBusy,
     repair_runtime_dependencies,
@@ -528,6 +532,11 @@ class MachineIdentityResponse(BaseModel):
     machine_instance_id: str
 
 
+class InstallationIdentityRequest(BaseModel):
+    installation_id: Optional[str] = None
+    device_seed: Optional[str] = None
+
+
 class RemoteSupportRequest(BaseModel):
     enabled: bool
 
@@ -645,6 +654,21 @@ def get_settings(current_user: User = Depends(get_current_user)):
 @router.get("/api/settings/machine-identity", response_model=MachineIdentityResponse)
 def get_machine_identity():
     return MachineIdentityResponse(machine_instance_id=_get_or_create_machine_instance_id())
+
+
+@router.get("/api/settings/installation-identity", summary="Read the file-backed installation identity")
+def get_installation_identity():
+    return read_installation_identity()
+
+
+@router.post("/api/settings/installation-identity", summary="Persist the file-backed installation identity")
+def save_installation_identity(body: InstallationIdentityRequest):
+    try:
+        data = write_installation_identity(body.installation_id, body.device_seed)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    logger.info("[installation-identity] persisted path=%s", data.get("path"))
+    return {"ok": True, **data}
 
 
 def _remote_support_payload() -> dict[str, Any]:

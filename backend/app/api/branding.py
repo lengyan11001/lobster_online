@@ -11,6 +11,7 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 
 from ..core.config import settings
+from ..services.installation_identity import read_installation_identity
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +148,7 @@ def render_index_html(template: str, requested_mark: str = "") -> str:
         f'<span class="hero-subtitle-line">{escape(line)}</span>'
         for line in hero_subtitle.splitlines()
     )
+    identity = read_installation_identity()
     values = {
         "__LOBSTER_BRANDING_AVAILABLE_VALUE__": "true" if available else "false",
         "__LOBSTER_SERVER_PUBLIC_VALUE__": str(
@@ -166,6 +168,9 @@ def render_index_html(template: str, requested_mark: str = "") -> str:
         "__LOBSTER_PARTNER_LOGO__": str(icons.get("header_partner_logo") or "") if available else "",
         "__LOBSTER_PARTNER_ALT__": str(icons.get("header_partner_logo_alt") or "") if available else "",
         "__LOBSTER_PARTNER_VISIBILITY__": "" if available and icons.get("header_partner_logo") else "hidden",
+        "__LOBSTER_INSTALLATION_ID__": str(identity.get("installation_id") or ""),
+        "__LOBSTER_DEVICE_SEED__": str(identity.get("device_seed") or ""),
+        "__LOBSTER_INSTALLATION_FILE_PRESENT__": "true" if identity.get("present") else "false",
     }
     rendered = str(template or "")
     for token, raw_value in values.items():
