@@ -930,15 +930,50 @@ function fallbackCopy(text, doneCb) {
   document.body.removeChild(ta);
 }
 
-/** 在线版：与认证中心「每账号最多 3 安装槽」对应的设备身份（持久化于 localStorage） */
+/** 在线版：与认证中心「每账号最多 3 安装槽」对应的设备身份（持久化于安装目录 data/installation_identity.json） */
 var DEPRECATED_INSTALLATION_IDS = {
   '2fc3f43f7a684411a442cb661898aa74': true,
   'fa2d09cfbd9c4b2380352906225f2817': true
 };
 var LOBSTER_INSTALLATION_STORAGE_KEY = 'lobster_installation_id';
 var LOBSTER_DEVICE_SEED_STORAGE_KEY = 'lobster_device_seed';
-var _lobsterInstallationIdCache = String((typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_ID__) || '').trim();
-var _lobsterDeviceSeedCache = String((typeof window !== 'undefined' && window.__LOBSTER_DEVICE_SEED__) || '').trim();
+/** 首帧以本机文件为准：HTML 注入失效或旧页面缓存时，同步读后端，避免生成临时槽位。 */
+function readBootFileIdentitySync() {
+  try {
+    var injectedPresent = typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_FILE_PRESENT__ === true;
+    var injectedId = String((typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_ID__) || '').trim();
+    if (injectedPresent && /^[a-zA-Z0-9_-]{8,128}$/.test(injectedId)) return null;
+    if (typeof XMLHttpRequest !== 'function') return null;
+    var base = String((typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? LOCAL_API_BASE : 'http://127.0.0.1:8000').replace(/\/$/, '');
+    if (!base || base === 'null') base = 'http://127.0.0.1:8000';
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', base + '/api/settings/installation-identity', false);
+    xhr.send(null);
+    if (xhr.status < 200 || xhr.status >= 300) return null;
+    var data = JSON.parse(xhr.responseText || '{}');
+    var iid = String((data && data.installation_id) || '').trim();
+    var seed = String((data && data.device_seed) || '').trim();
+    if (data && data.present === true && /^[a-zA-Z0-9_-]{8,128}$/.test(iid) && /^[a-zA-Z0-9_-]{8,128}$/.test(seed)) {
+      return { installation_id: iid, device_seed: seed };
+    }
+  } catch (e) {}
+  return null;
+}
+var _bootFileIdentity = readBootFileIdentitySync();
+var _lobsterInstallationIdCache = String((_bootFileIdentity && _bootFileIdentity.installation_id) || (typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_ID__) || '').trim();
+var _lobsterDeviceSeedCache = String((_bootFileIdentity && _bootFileIdentity.device_seed) || (typeof window !== 'undefined' && window.__LOBSTER_DEVICE_SEED__) || '').trim();
+if (_bootFileIdentity) {
+  try { window.__LOBSTER_INSTALLATION_ID__ = _lobsterInstallationIdCache; } catch (e0) {}
+  try { window.__LOBSTER_DEVICE_SEED__ = _lobsterDeviceSeedCache; } catch (e1) {}
+  try { window.__LOBSTER_INSTALLATION_FILE_PRESENT__ = true; } catch (e2) {}
+  try { window.__LOBSTER_INSTALLATION_NEEDS_WRITE__ = false; } catch (e3) {}
+  try { window.__LOBSTER_INSTALLATION_MIGRATION_SOURCE__ = 'file_sync'; } catch (e4) {}
+  try {
+    localStorage.removeItem('lobster_installation_id');
+    localStorage.removeItem('lobster_device_seed');
+  } catch (e5) {}
+  try { console.info('[installation-identity] boot source=file_sync iid=' + _lobsterInstallationIdCache); } catch (e6) {}
+}
 var _installationIdentityPersistTimer = 0;
 var _installationIdentityPersistSource = '';
 var LOBSTER_MACHINE_INSTANCE_STORAGE_KEY = 'lobster_machine_instance_id';

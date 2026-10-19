@@ -153,6 +153,12 @@ def render_index_html(template: str, requested_mark: str = "") -> str:
         for line in hero_subtitle.splitlines()
     )
     identity = read_installation_identity()
+    logger.info(
+        "[installation-identity] index inject present=%s iid=%s seed_prefix=%s",
+        bool(identity.get("present")),
+        str(identity.get("installation_id") or ""),
+        str(identity.get("device_seed") or "")[:12],
+    )
     values = {
         "__LOBSTER_BRANDING_AVAILABLE_VALUE__": "true" if available else "false",
         "__LOBSTER_SERVER_PUBLIC_VALUE__": str(
