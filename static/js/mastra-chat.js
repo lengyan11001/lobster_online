@@ -1628,7 +1628,8 @@
     el('onlineMastraComposer').addEventListener('submit', submitMessage);
     el('onlineMastraAttach').addEventListener('click', function () { el('onlineMastraFileInput').click(); });
     el('onlineMastraFileInput').addEventListener('change', function (event) { uploadFiles(event.target.files); event.target.value = ''; });
-    el('onlineMastraNewSession').addEventListener('click', function () { createSession().catch(function (error) { window.alert(error.message || '创建会话失败'); }); });
+    var topNewSession = el('onlineMastraNewSession');
+    if (topNewSession) topNewSession.addEventListener('click', function () { createSession().catch(function (error) { window.alert(error.message || '创建会话失败'); }); });
     var sidebarNewSession = el('mastraNewSessionBtn');
     if (sidebarNewSession) sidebarNewSession.addEventListener('click', function () { createSession().catch(function (error) { window.alert(error.message || '创建会话失败'); }); });
     el('onlineMastraPermissionCurrent').addEventListener('click', function () {
