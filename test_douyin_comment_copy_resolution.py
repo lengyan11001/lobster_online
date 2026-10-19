@@ -117,3 +117,13 @@ def test_active_preset_slot_wins_over_older_filled_slot():
     )
     assert params["comment_mode"] == "ai"
     assert params["comment_prompt"] == "当前选中的话术槽"
+
+def test_resolved_copy_reports_online_source():
+    local_params = _scheduled_douyin_online_config_params(
+        "follow_comment", plans=[], local_settings=VIDEO_AI_SETTINGS
+    )
+    assert local_params["_copy_source"] == "local:video"
+    plan_params = _scheduled_douyin_online_config_params(
+        "follow_comment", plans=SHARED_AI_PLANS, local_settings={}
+    )
+    assert plan_params["_copy_source"] == "plan:collect_precise"

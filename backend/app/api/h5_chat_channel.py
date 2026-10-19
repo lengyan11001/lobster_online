@@ -5249,11 +5249,20 @@ def _scheduled_douyin_comment_copy(
             return bool(copy.get("text"))
         return False
 
-    candidates = [local_follow, local_video] if prefer == "follow" else [local_video, local_follow]
-    candidates.append(pack_plan(follow_plan, "comment"))
-    candidates.append(pack_plan(collect_plan, "reply_comment"))
-    copy = next((item for item in candidates if usable(item)), {})
+    candidates = (
+        [("local:follow", local_follow), ("local:video", local_video)]
+        if prefer == "follow"
+        else [("local:video", local_video), ("local:follow", local_follow)]
+    )
+    candidates.append(("plan:follow_comment", pack_plan(follow_plan, "comment")))
+    candidates.append(("plan:collect_precise", pack_plan(collect_plan, "reply_comment")))
+    copy: Dict[str, Any] = {}
     resolved: Dict[str, str] = {}
+    for source, item in candidates:
+        if usable(item):
+            copy = item
+            resolved["_copy_source"] = source
+            break
     if copy.get("mode"):
         resolved["comment_mode"] = str(copy["mode"])
     if copy.get("text"):
@@ -5389,6 +5398,7 @@ def _scheduled_douyin_online_config_params(
                     "messages": [local_message] if local_message else [],
                     "message_prompt": local_interaction.get("prompt") or "",
                     "message_seed_text": local_interaction.get("seed") or "",
+                    "_message_copy_source": "local:interaction",
                 }
             )
         elif interaction:
@@ -5400,6 +5410,7 @@ def _scheduled_douyin_online_config_params(
                     "messages": [message] if message else [],
                     "message_prompt": str(interaction.get("message_prompt") or "").strip(),
                     "message_seed_text": str(interaction.get("message_seed_text") or "").strip(),
+                    "_message_copy_source": "plan:interaction",
                 }
             )
         if interaction and not follow:
@@ -5423,6 +5434,7 @@ def _scheduled_douyin_online_config_params(
                     "messages": [local_message] if local_message else [],
                     "message_prompt": local_interaction.get("prompt") or "",
                     "message_seed_text": local_interaction.get("seed") or "",
+                    "_message_copy_source": "local:interaction",
                 }
             )
         elif plan:
@@ -5434,6 +5446,7 @@ def _scheduled_douyin_online_config_params(
                     "messages": [message] if message else [],
                     "message_prompt": str(plan.get("message_prompt") or "").strip(),
                     "message_seed_text": str(plan.get("message_seed_text") or "").strip(),
+                    "_message_copy_source": "plan:interaction",
                 }
             )
         return params
@@ -7106,6 +7119,24 @@ async def _run_scheduled_douyin_sales_action(
             if value not in (None, "", []):
                 source[target] = value
                 break
+    if action in {"reply_comments", "mention_comment", "follow_comment"}:
+        logger.info(
+            "[SCHEDULED-TASK] douyin comment config action=%s source=%s mode=%s text_len=%d prompt_len=%d",
+            action,
+            str(source.get("_copy_source") or "none"),
+            str(source.get("comment_mode") or "fixed"),
+            len(str(source.get("comment_text") or "")),
+            len(str(source.get("comment_prompt") or "")),
+        )
+    elif action == "direct_message":
+        logger.info(
+            "[SCHEDULED-TASK] douyin message config action=%s source=%s mode=%s message_len=%d prompt_len=%d",
+            action,
+            str(source.get("_message_copy_source") or "none"),
+            str(source.get("message_mode") or "fixed"),
+            len(str(source.get("message") or "")),
+            len(str(source.get("message_prompt") or "")),
+        )
     account_id = _scheduled_douyin_account_id(source)
     max_users = max(1, min(_safe_int(source.get("max_users") or source.get("max_results") or 10) or 10, 200))
     interval_minutes_min = max(1, min(_safe_int(source.get("interval_minutes_min") or 4) or 4, 60))
