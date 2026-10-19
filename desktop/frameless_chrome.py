@@ -49,7 +49,7 @@ _user32.CallWindowProcW.argtypes = [ctypes.c_ssize_t, wintypes.HWND, wintypes.UI
 _state: dict[int, tuple] = {}
 
 
-def apply(hwnd: int, *, drag_height: int = 36, border: int = 6) -> bool:
+def apply(hwnd: int, *, drag_height: int = 10, border: int = 6) -> bool:
     """给已创建的窗口加无边框样式 + 拖动/缩放支持。失败返回 False。"""
     if not hwnd:
         return False

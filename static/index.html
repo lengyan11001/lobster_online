@@ -57,6 +57,7 @@
         <button type="button" class="nav-left-item" data-view="agent" data-feature-gate="agent_entry" id="navAgent">AI执行台</button>
         <button type="button" class="nav-left-item nav-hidden-route" data-view="tutorial" data-feature-gate="tutorial_entry" hidden>教程</button>
       </nav>
+      <div class="header-right-group">
       <div class="header-actions" id="headerActions" style="display: none;">
         <span id="sutuiBalanceWrap" data-feature-gate="billing_entry" data-feature-gate-preserve-display="1" style="display:none;margin-right:0.75rem;font-size:0.85rem;color:var(--text-muted);align-items:center;gap:0.5rem;">
           <span class="sutui-balance-badge" aria-hidden="true">
@@ -107,6 +108,12 @@
             <div class="header-dropdown-divider"></div>
             <button type="button" id="logout">退出登录</button>
           </div>
+        </div>
+      </div>
+      <div class="window-controls" id="windowControls" hidden>
+          <button type="button" data-win="min" title="最小化" aria-label="最小化">&#x2013;</button>
+          <button type="button" data-win="max" title="最大化" aria-label="最大化">&#x25A1;</button>
+          <button type="button" class="win-close" data-win="close" title="关闭" aria-label="关闭">&#x2715;</button>
         </div>
       </div>
     </header>
@@ -2921,29 +2928,20 @@
   <script defer src="/static/js/task-center.js?v=20260831-auth-gated-v1"></script>
   <script defer src="/static/js/init.js?v=20260929-hypit-install-v1"></script>
 <script defer src="/static/js/shop-plaza-entry.js?v=20260928-shop-plaza-v2"></script>
-<div class="window-titlebar" id="windowTitlebar" hidden>
-  <div class="window-titlebar-drag" aria-hidden="true"></div>
-  <div class="window-controls" id="windowControls">
-    <button type="button" data-win="min" title="最小化" aria-label="最小化">&#x2013;</button>
-    <button type="button" data-win="max" title="最大化" aria-label="最大化">&#x25A1;</button>
-    <button type="button" class="win-close" data-win="close" title="关闭" aria-label="关闭">&#x2715;</button>
-  </div>
-</div>
+
+
 <script>
 (function () {
-  var bar = document.getElementById('windowTitlebar');
-  if (!bar) return;
+  var box = document.getElementById('windowControls');
+  if (!box) return;
   function api() { return (window.pywebview && window.pywebview.api) || null; }
   function show() {
     var a = api();
-    if (a && typeof a.window_close === 'function') {
-      bar.hidden = false;
-      document.body.classList.add('has-window-titlebar');
-    }
+    if (a && typeof a.window_close === 'function') box.hidden = false;
   }
   window.addEventListener('pywebviewready', show);
   setTimeout(show, 800);
-  bar.addEventListener('click', function (e) {
+  box.addEventListener('click', function (e) {
     var btn = e.target && e.target.closest ? e.target.closest('button[data-win]') : null;
     if (!btn) return;
     var a = api(); if (!a) return;
