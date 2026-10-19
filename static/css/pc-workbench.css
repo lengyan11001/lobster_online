@@ -3640,3 +3640,27 @@ html[data-brand="bihuo"] #content-chat .chat-home-capabilities,
 html[data-brand="bihuo"] #content-chat .chat-home-helper {
   display: none !important;
 }
+
+/* 必火首页：空态输入框与会话内输入框对齐（宽度、左右边距、贴底位置） */
+html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty {
+  padding: 1.1rem 1.35rem 1rem;
+  justify-content: flex-start;
+}
+html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-empty-state {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  min-height: 0;
+}
+html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-input-row {
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  padding: 7.2px 0 0;
+}
+@media (max-height: 680px) {
+  html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty {
+    padding: 0.85rem;
+  }
+}

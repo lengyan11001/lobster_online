@@ -2458,6 +2458,10 @@ function runAppViewInit(view) {
       if (typeof setChatMode === 'function') setChatMode('default');
       refreshModelSelector();
     }
+    // 从首页或侧边栏进入时，恢复上次停留的会话；没有历史会话才停在新会话。
+    if (typeof window.restoreLastChatSessionForHome === 'function') {
+      window.restoreLastChatSessionForHome();
+    }
   }
   if (view === 'skill-store') { loadSkillStore(); if (typeof initOnlineSkillStore === 'function') initOnlineSkillStore(); }
   if (view === 'publish') { if (typeof initPublishView === 'function') initPublishView(); }

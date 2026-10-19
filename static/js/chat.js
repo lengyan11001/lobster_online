@@ -2255,6 +2255,40 @@ function initChatSessions() {
   }, 0);
 }
 
+/** 首页/AI调度助手入口：恢复上次停留的会话，而不是停在空的新会话。 */
+function restoreLastChatSessionForHome() {
+  if (!Array.isArray(chatSessions) || !chatSessions.length) return false;
+  var hasMessages = function(session) {
+    return !!(session && Array.isArray(session.messages) && session.messages.length);
+  };
+  var isDefaultMode = function(session) {
+    return !session || _getSessionMode(session) === CHAT_MODE_DEFAULT;
+  };
+  var lastSid = getLastActiveChatSessionIdFromStorage();
+  var target = '';
+  if (lastSid) {
+    var last = getSessionById(lastSid);
+    if (hasMessages(last) && isDefaultMode(last)) target = String(last.id);
+  }
+  if (!target) {
+    var best = null;
+    chatSessions.forEach(function(session) {
+      if (!hasMessages(session) || !isDefaultMode(session)) return;
+      if (!best || Number(session.updatedAt || 0) > Number(best.updatedAt || 0)) best = session;
+    });
+    if (best) target = String(best.id);
+  }
+  if (!target) return false;
+  if (String(currentSessionId || '') !== target) {
+    switchChatSession(target);
+  } else {
+    renderCurrentSessionMessages();
+  }
+  if (typeof renderChatSessionList === 'function') renderChatSessionList();
+  return true;
+}
+window.restoreLastChatSessionForHome = restoreLastChatSessionForHome;
+
 /** 模型常用 Markdown 行内代码包裹 URL，导致无法点击；去掉 URL 两侧反引号 */
 function stripBackticksAroundUrls(text) {
   if (!text) return text;
