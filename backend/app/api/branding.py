@@ -11,7 +11,11 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 
 from ..core.config import settings
-from ..services.installation_identity import read_installation_identity
+try:
+    from ..services.installation_identity import read_installation_identity
+except Exception:
+    def read_installation_identity():
+        return {"present": False, "installation_id": "", "device_seed": ""}
 
 logger = logging.getLogger(__name__)
 

@@ -90,6 +90,20 @@ def persist_channel_fallback_for_login(
         hdr = (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip()
         if hdr:
             xi = hdr
+    # Keep the channel fallback aligned with the install-dir slot file; a
+    # stale header/body must not create a second presence identity.
+    try:
+        from .installation_identity import read_installation_identity
+        file_installation_id = str(read_installation_identity().get("installation_id") or "").strip()
+        if file_installation_id and file_installation_id != xi:
+            logger.info(
+                "openclaw channel fallback identity aligned file_iid=%s previous_iid=%s",
+                file_installation_id,
+                xi,
+            )
+            xi = file_installation_id
+    except Exception:
+        pass
 
     if user_id is not None and db is not None:
         user = db.query(User).filter(User.id == user_id).first()

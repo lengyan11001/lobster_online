@@ -405,10 +405,29 @@ def _decode_jwt_sub(token: str) -> str:
 def _auth_context() -> tuple[str, str]:
     jwt_token, installation_id = read_channel_fallback()
     jwt_token = (jwt_token or getattr(settings, "openclaw_sutui_fallback_jwt", None) or "").strip()
-    installation_id = (
+    fallback_installation_id = (
         (installation_id or "").strip()
         or (getattr(settings, "openclaw_sutui_fallback_installation_id", None) or "").strip()
     )
+    # The slot file is the single source of truth.  The channel fallback can
+    # still hold an older seed written by a previous login/flow; using it for
+    # presence creates a ghost device slot (2026-10-19 diag).
+    try:
+        from ..services.installation_identity import read_installation_identity
+        file_identity = read_installation_identity()
+    except Exception:
+        file_identity = {}
+    file_installation_id = str(file_identity.get("installation_id") or "").strip()
+    if file_installation_id:
+        if fallback_installation_id and fallback_installation_id != file_installation_id:
+            logger.info(
+                "[H5-CHAT] installation identity file wins file_iid=%s fallback_iid=%s",
+                file_installation_id,
+                fallback_installation_id,
+            )
+        installation_id = file_installation_id
+    else:
+        installation_id = fallback_installation_id
     if jwt_token and not installation_id:
         sub = _decode_jwt_sub(jwt_token)
         installation_id = f"h5-local-{sub}" if sub else "h5-local"

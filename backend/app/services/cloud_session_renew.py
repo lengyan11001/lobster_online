@@ -77,6 +77,15 @@ def read_cloud_token() -> str:
 
 
 def read_installation_id() -> str:
+    # Prefer the install-dir slot file over the OpenClaw channel fallback.
+    try:
+        from .installation_identity import read_installation_identity
+        file_identity = read_installation_identity()
+        file_installation_id = str(file_identity.get("installation_id") or "").strip()
+        if file_installation_id:
+            return file_installation_id
+    except Exception:
+        pass
     _jwt_token, installation_id = read_channel_fallback()
     installation_id = (installation_id or "").strip()
     if installation_id:

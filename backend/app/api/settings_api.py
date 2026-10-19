@@ -38,10 +38,17 @@ from ..services.chat_route_mode import (
     normalize_chat_route_mode,
     set_chat_route_mode,
 )
-from ..services.installation_identity import (
-    read_installation_identity,
-    write_installation_identity,
-)
+try:
+    from ..services.installation_identity import (
+        read_installation_identity,
+        write_installation_identity,
+    )
+except Exception:
+    def read_installation_identity():
+        return {"present": False, "installation_id": "", "device_seed": ""}
+
+    def write_installation_identity(*args, **kwargs):
+        raise RuntimeError("installation identity module unavailable")
 from ..services.runtime_dependency_repair import (
     RuntimeDependencyRepairBusy,
     repair_runtime_dependencies,
