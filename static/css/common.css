@@ -1197,6 +1197,6 @@ html.is-desktop-shell .header-dropdown-menu { background: #ffffff; }
 /* ---- 必火品牌专用（只影响 data-brand=bihuo，其他 OEM 品牌保持 32px）---- */
 html[data-brand="bihuo"] .logo-mark {
   width: auto !important;
-  height: 60px !important;
-  max-width: 220px;
+  height: 40px !important;
+  max-width: 180px;
 }
