@@ -1251,7 +1251,8 @@
       var chosen = state.sessions.some(function (row) { return text(row.id) === stored; }) ? stored : text(state.sessions[0] && state.sessions[0].id);
       renderSessionHeader();
       if (!chosen) return createSession({ compose: false });
-      if (chosen !== text(state.activeSessionId) || !state.historyItems.length) return switchSession(chosen, { compose: false });
+      if (chosen !== text(state.activeSessionId) || !state.historyItems.length) return switchSession(chosen, { compose: true });
+      if (!state.composing) enterCompose('', false);
       return state.sessions;
     });
   }
@@ -1572,7 +1573,16 @@
     }, true);
     document.addEventListener('click', function (event) {
       var homeTrigger = event.target.closest && event.target.closest('[data-view="chat"]');
-      if (homeTrigger) setTimeout(resetToHome, 0);
+      if (!homeTrigger) return;
+      // 首页/AI调度助手：恢复上次停留的会话，而不是强制回空态。
+      setTimeout(function () {
+        var id = text(state.activeSessionId) || getStoredSessionId();
+        if (id && state.sessions.some(function (row) { return text(row.id) === text(id); })) {
+          switchSession(id, { compose: true });
+        } else {
+          loadSessions().catch(function () {});
+        }
+      }, 0);
     });
   }
 
