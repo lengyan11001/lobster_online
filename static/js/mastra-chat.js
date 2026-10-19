@@ -148,8 +148,9 @@
       return '<div class="chat-session-item' + active + '" data-mastra-session-id="' + id + '">' +
         '<div class="session-row"><div class="session-leading"><span class="session-bubble-icon">◌</span></div>' +
         '<div class="session-copy"><div class="session-title"><div class="session-title-row"><span>' +
-        escapeHtml(row.title || '新会话') + '</span><span class="session-mode-badge">' +
-        escapeHtml(permissionLabel(row.permission_mode)) + '</span></div></div>' +
+        escapeHtml(row.title || '新会话') + '</span>' +
+        (Number(row.message_count || 0) > 0 ? '<span class="session-mode-badge">' + escapeHtml(permissionLabel(row.permission_mode)) + '</span>' : '') +
+        '</div></div>' +
         '<div class="session-preview">' + escapeHtml(sessionPreview(row)) + '</div></div>' +
         '<button type="button" class="session-delete-btn" data-mastra-delete-session="' + id + '" title="删除会话" aria-label="删除会话">×</button></div>' +
         '<div class="session-time">' + escapeHtml(formatTime(row.updated_at || row.created_at)) + '</div></div>';
@@ -183,8 +184,10 @@
     var label = el('onlineMastraPermissionLabel');
     var button = el('onlineMastraPermissionCurrent');
     var value = session ? permissionLabel(session.permission_mode) : '需要确认';
+    var hasWork = !!(session && (Number(session.message_count || 0) > 0 || state.historyItems.length > 0 || state.sending));
     if (label) label.textContent = value;
     if (button) {
+      button.hidden = !hasWork;
       button.title = value === '完全访问' ? '当前会话已完全授权，任务会直接执行' : '当前会话需要在执行任务前确认';
       button.setAttribute('aria-label', '执行权限：' + value);
     }
@@ -1175,6 +1178,7 @@
     state.lastEventIds = {};
     clearMessages();
     state.historyItems = Array.isArray(items) ? items : [];
+    renderPermissionControl();
     if (!state.historyItems.length) {
       renderWelcome();
       return;
@@ -1476,6 +1480,7 @@
     }
     storeSessionId(state.activeSessionId);
     state.sending = true;
+    renderPermissionControl();
     setComposerEnabled(false);
     if (input) input.value = '';
     resizeInput();
@@ -1495,6 +1500,7 @@
       var item = { message: message, events: data.events || [] };
       state.historyItems.push(item);
       renderHistoryItem(item);
+      renderPermissionControl();
       state.uploads = [];
       renderUploadList();
       state.sending = false;

@@ -13655,6 +13655,11 @@ html[data-brand="bihuo"] .chat-home-copy { max-width: none; }
   color: #3556d8;
 }
 
+/* 必火：左上角不再重复显示「AI调度助手」头部，侧边栏已经有入口。 */
+html[data-brand="bihuo"] #content-chat .online-mastra-chat-head {
+  display: none !important;
+}
+
 /* 2026-10-19：Mastra 新会话中间引导卡片（仅必火） */
 .online-mastra-welcome {
   min-height: 100%;
