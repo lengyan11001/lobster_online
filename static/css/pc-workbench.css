@@ -3724,3 +3724,49 @@ html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-home-hero {
   flex: 1 1 auto;
   align-content: center;
 }
+
+/* 必火首页：输入区与会话内完全共用同一套尺寸和外观 */
+html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-composer-shell {
+  min-height: auto;
+  padding: 8.8px;
+  gap: 14.4px;
+  border: 1px solid rgba(34, 49, 78, 0.12);
+  border-radius: 26px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(248, 250, 255, 0.95));
+  box-shadow: 0 18px 42px rgba(36, 54, 88, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-composer-body {
+  min-height: 58px;
+  gap: 12px;
+}
+html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-composer-lead {
+  display: none;
+}
+html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-input-row textarea {
+  min-height: 33.6px;
+  padding: 0;
+  color: inherit;
+  font-size: 15.68px;
+  line-height: 26.656px;
+}
+html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-composer-footer {
+  padding-top: 0;
+  border-top: none;
+  flex-wrap: wrap;
+  gap: 14.4px;
+}
+html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-icon-btn {
+  width: 42px;
+  height: 42px;
+  border: 1px solid rgba(34, 49, 78, 0.1);
+  background: #fff;
+  color: rgb(37, 53, 82);
+  box-shadow: 0 10px 22px rgba(36, 54, 88, 0.06);
+  font-size: 16px;
+}
+html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-send-btn {
+  width: 42px;
+  height: 42px;
+  background: linear-gradient(180deg, #5f7dff 0%, #4f6de2 100%);
+  box-shadow: 0 14px 28px rgba(79, 109, 226, 0.3);
+}

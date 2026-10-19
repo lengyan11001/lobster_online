@@ -1095,6 +1095,7 @@ function renderCurrentSessionMessages() {
   }
   container.scrollTop = container.scrollHeight;
   refreshChatInputState();
+  if (typeof syncChatWorkspaceState === 'function') syncChatWorkspaceState();
 }
 
 /** 刷新后仅「有可续查的 task_poll task_id」才保留 pending；否则流已断无法恢复，不应再显示正在思考 */
@@ -2027,7 +2028,11 @@ function createNewSession(mode) {
 }
 function switchChatSession(id) {
   var sid = id != null ? String(id) : '';
-  if (currentSessionId === sid) return;
+  if (currentSessionId === sid) {
+    // 视图切换后 DOM 可能被清空；同一个会话也要重新渲染一次。
+    renderCurrentSessionMessages();
+    return;
+  }
   saveCurrentSessionToStore();
   currentSessionId = sid;
   saveLastActiveChatSessionToStorage(sid);
