@@ -179,9 +179,21 @@ def render_index_html(template: str, requested_mark: str = "") -> str:
         "__LOBSTER_INSTALLATION_FILE_PRESENT__": "true" if identity.get("present") else "false",
     }
     rendered = str(template or "")
+    # These three tokens are also JS global property names in the inline
+    # installation-identity bootstrap. Replace only their quoted placeholder
+    # form; a global replace would corrupt `window.__LOBSTER_...__` into an
+    # invalid assignment like `window.u31-... = ...`.
+    quoted_only_tokens = {
+        "__LOBSTER_INSTALLATION_ID__",
+        "__LOBSTER_DEVICE_SEED__",
+        "__LOBSTER_INSTALLATION_FILE_PRESENT__",
+    }
     for token, raw_value in values.items():
         value = raw_value if token == "__LOBSTER_HERO_SUBTITLE__" else escape(raw_value, quote=True)
-        rendered = rendered.replace(token, value)
+        if token in quoted_only_tokens:
+            rendered = rendered.replace(f'"{token}"', f'"{value}"')
+        else:
+            rendered = rendered.replace(token, value)
     stamp = _static_build_stamp()
     if stamp and '&b=' not in rendered:
         rendered = re.sub(r'(\?v=[^"\'&\s]+)', r'\1&b=' + stamp, rendered)

@@ -588,6 +588,20 @@ function applyBrandingFromApi() {
       var accent = document.getElementById('brandLogoAccent');
       if (primary && b.logo_primary != null) primary.textContent = b.logo_primary;
       if (accent && b.logo_accent != null) accent.textContent = b.logo_accent;
+      var authLoginLogo = document.getElementById('authLoginLogo');
+      if (authLoginLogo) {
+        authLoginLogo.src = b.mark === 'bihuo' ? '/static/bihu_mark_64.png' : (icons.logo_mark || authLoginLogo.src);
+      }
+      var authLoginBrandName = document.getElementById('authLoginBrandName');
+      if (authLoginBrandName) {
+        var loginBrandText = (((primary && primary.textContent) || '') + ((accent && accent.textContent) || '')).trim();
+        if (!loginBrandText) {
+          loginBrandText = b.mark === 'bihuo'
+            ? '必火智能'
+            : String(b.document_title || '').replace(/\s*AI.*$/i, '').trim();
+        }
+        authLoginBrandName.textContent = loginBrandText || '必火智能';
+      }
       var heroH = document.getElementById('brandHeroTitle');
       var heroP = document.getElementById('brandHeroSubtitle');
       if (heroH && b.hero_title != null) heroH.textContent = b.hero_title;
@@ -1005,6 +1019,19 @@ if (loginForm) {
   });
 }
 
+(function bindAuthPasswordToggle() {
+  var button = document.getElementById('authPasswordToggle');
+  var input = document.getElementById('loginPassword');
+  if (!button || !input) return;
+  button.addEventListener('click', function() {
+    var show = input.type === 'password';
+    input.type = show ? 'text' : 'password';
+    button.classList.toggle('is-visible', show);
+    button.setAttribute('aria-pressed', show ? 'true' : 'false');
+    button.setAttribute('aria-label', show ? '隐藏密码' : '显示密码');
+  });
+})();
+
 var _registerSmsCooldownTimer = null;
 function setRegisterSmsButtonCooldown(sec) {
   var btn = document.getElementById('registerSendSmsBtn');
@@ -1015,13 +1042,13 @@ function setRegisterSmsButtonCooldown(sec) {
   }
   if (sec <= 0) {
     btn.disabled = false;
-    btn.textContent = '获取短信验证码';
+    btn.textContent = '获取验证码';
     return;
   }
   var left = sec;
   btn.disabled = true;
   function tick() {
-    btn.textContent = left > 0 ? ('已发送（' + left + 's）') : '获取短信验证码';
+    btn.textContent = left > 0 ? ('已发送（' + left + 's）') : '获取验证码';
     if (left <= 0) {
       btn.disabled = false;
       if (_registerSmsCooldownTimer) clearInterval(_registerSmsCooldownTimer);
