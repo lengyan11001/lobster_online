@@ -2271,6 +2271,10 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             except Exception as exc:
                 log(f"frameless chrome failed: {exc}")
 
+        # 只有必火品牌用无边框标题栏（其他 OEM 品牌保持系统原生标题栏）
+        _brand_mark = str((_ACTIVE_DESKTOP_BRANDING or {}).get("mark") or "").strip().lower()
+        _use_frameless = _brand_mark == "bihuo"
+
         window = webview.create_window(
             title,
             html=desktop_loading_html(url, title),
@@ -2280,9 +2284,10 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             text_select=True,
             background_color=SHELL_BACKGROUND_COLOR,
             js_api=DesktopApi(recover_local_services),
-            frameless=True,
+            frameless=_use_frameless,
         )
-        window.events.shown += _apply_frameless_chrome
+        if _use_frameless:
+            window.events.shown += _apply_frameless_chrome
 
         def confirm_window_close() -> bool | None:
             if _ALLOW_WINDOW_CLOSE:

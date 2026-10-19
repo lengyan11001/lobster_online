@@ -2937,7 +2937,8 @@
   function api() { return (window.pywebview && window.pywebview.api) || null; }
   function show() {
     var a = api();
-    if (a && typeof a.window_close === 'function') box.hidden = false;
+    var mark = (document.documentElement.getAttribute('data-brand') || '').toLowerCase();
+    if (a && typeof a.window_close === 'function' && mark === 'bihuo') box.hidden = false;
   }
   window.addEventListener('pywebviewready', show);
   setTimeout(show, 800);

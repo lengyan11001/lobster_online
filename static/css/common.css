@@ -148,9 +148,8 @@
       white-space: nowrap;
     }
     .logo-mark {
-      width: auto;
-      height: 60px;
-      max-width: 220px;
+      width: 32px;
+      height: 32px;
       flex-shrink: 0;
       border-radius: 8px;
       object-fit: contain;
@@ -1193,3 +1192,11 @@ html.is-desktop-shell .header-dropdown-menu { background: #ffffff; }
 }
 .window-controls button:hover { background: rgba(15, 23, 42, 0.12); color: #0f172a; }
 .window-controls .win-close:hover { background: #e5484d; color: #ffffff; }
+
+
+/* ---- 必火品牌专用（只影响 data-brand=bihuo，其他 OEM 品牌保持 32px）---- */
+html[data-brand="bihuo"] .logo-mark {
+  width: auto !important;
+  height: 60px !important;
+  max-width: 220px;
+}
