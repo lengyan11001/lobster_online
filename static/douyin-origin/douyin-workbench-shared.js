@@ -1866,3 +1866,21 @@ let douyinSelfCommentMonitorState={},douyinSelfCommentMonitorResults=[],douyinSe
             getStrangerMonitorElements("wechatAddFriend").forEach(el=>{el.checked=!!monitor.wechat_add_friend_enabled});
         };
         async function startDouyinStrangerMessageMonitor(){const accountId=Number(ensureDouyinStrangerLeadAccountSelection()||0),maxConversations=Math.max(5,Math.min(parseInt(getStrangerMonitorFieldValue("maxConversations","100"),10)||100,100)),replyMode=getDouyinStrangerReplyMode(),message=normalize(getStrangerMonitorFieldValue("message","")||""),replyPrompt=normalize(getStrangerMonitorFieldValue("prompt","")||""),contactValue=normalize(getStrangerMonitorFieldValue("contact","")||""),autoReplyEnabled=isDouyinStrangerMonitorAutoReplyEnabled(),wechatAddFriendEnabled=getStrangerMonitorFieldValue("wechatAddFriend","false")==="true",memoryDocId=normalize(getStrangerMonitorFieldValue("memoryDoc","")||""),buttons=[document.getElementById("stranger-message-monitor-start-btn"),document.getElementById("interaction-stranger-monitor-start-btn")];if(!accountId)return void addLog("请先选择一个可用的抖音账号。","warning");if(autoReplyEnabled&&replyMode==="ai_memory"&&!memoryDocId)return void addLog("开启记忆接管前，请先选择一个用于回复的记忆文件（例如「百问百答」）。","warning");if(autoReplyEnabled&&replyMode==="ai_lead"&&!contactValue)return void addLog("开启自动回复监控前，请先填写绿泡泡联系方式。","warning");buttons.forEach(button=>setBtn(button,true,"开启监控","开启中..."));try{const res=await fetch("/api/douyin/stranger-messages/monitor/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({account_id:accountId,interval_minutes:30,max_conversations:maxConversations,auto_reply_enabled:autoReplyEnabled,reply_mode:replyMode,message,reply_prompt:replyPrompt,contact_value:contactValue,memory_doc_ids:memoryDocId?[memoryDocId]:[],wechat_add_friend_enabled:wechatAddFriendEnabled})}),data=await res.json();if(data.code===200){douyinStrangerMessageMonitorStates=Object.fromEntries((Array.isArray(data.monitors)?data.monitors:[]).map(item=>[String(Number(item.account_id||0)||0),item]));douyinStrangerMessageMonitorState=getCurrentDouyinStrangerMonitorState();addLog(data.msg||(autoReplyEnabled?"陌生人消息监控已开启，并会自动回复新增未读会话。":"陌生人消息监控已开启，当前只监控新的未读会话。"),"success");await updateDouyinStrangerMessageStatus(true)}else addLog(data.msg||data.detail||"开启陌生人消息监控失败。","error")}catch(error){addLog(`开启陌生人消息监控失败：${error.message}`,"error")}finally{buttons.forEach(button=>setBtn(button,false,"开启监控","开启中..."));refreshActionState()}}
+
+document.addEventListener("DOMContentLoaded", () => {
+    // 视频评论/关注评论面板改完即写入本机配置，避免只改了界面但工作流仍读旧话术。
+    const wireDouyinCommentPresetAutosave = (kind) => {
+        if (typeof getDouyinCommentPresetConfig !== "function") return;
+        const config = getDouyinCommentPresetConfig(kind);
+        if (!config) return;
+        const save = () => {
+            try {
+                saveDouyinCommentPreset(kind, false);
+            } catch (error) {}
+        };
+        [config.modeId, config.textId, config.promptId, config.seedId, config.minId, config.maxId]
+            .forEach((id) => document.getElementById(id)?.addEventListener("change", save));
+    };
+    wireDouyinCommentPresetAutosave("video");
+    wireDouyinCommentPresetAutosave("follow");
+});
