@@ -1,7 +1,7 @@
 {
-  "version": "2.0.154",
-  "build": 449,
-  "applied_at": "2026-10-19T20:39:09+08:00",
-  "note": "槽位安装目录文件持久化+首次迁移/覆盖日志",
-  "bundle_sha256": "97a1ea5da3bf05229d7acbecf8a95fae4499bbbcb73632ef8e0e5f7206511339"
+  "version": "2.0.155",
+  "build": 450,
+  "applied_at": "2026-10-19T21:10:52+08:00",
+  "note": "槽位心跳统一文件身份+防御式导入",
+  "bundle_sha256": "e5de2e3fb878d8fe25e25ee5da1a4a3ed70c48e3194e9bb4e4231530f543a22e"
 }
