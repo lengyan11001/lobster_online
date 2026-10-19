@@ -2257,6 +2257,7 @@ function initChatSessions() {
 
 /** 首页/AI调度助手入口：恢复上次停留的会话，而不是停在空的新会话。 */
 function restoreLastChatSessionForHome() {
+  if (typeof getLobsterBrandMark === 'function' && getLobsterBrandMark() !== 'bihuo') return false;
   if (!Array.isArray(chatSessions) || !chatSessions.length) return false;
   var hasMessages = function(session) {
     return !!(session && Array.isArray(session.messages) && session.messages.length);
