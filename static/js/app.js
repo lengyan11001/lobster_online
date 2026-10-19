@@ -940,6 +940,7 @@ var LOBSTER_DEVICE_SEED_STORAGE_KEY = 'lobster_device_seed';
 var _lobsterInstallationIdCache = String((typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_ID__) || '').trim();
 var _lobsterDeviceSeedCache = String((typeof window !== 'undefined' && window.__LOBSTER_DEVICE_SEED__) || '').trim();
 var _installationIdentityPersistTimer = 0;
+var _installationIdentityPersistSource = '';
 var LOBSTER_MACHINE_INSTANCE_STORAGE_KEY = 'lobster_machine_instance_id';
 
 function rawInstallationId(value) {
@@ -1027,6 +1028,7 @@ function setLobsterDeviceSeed(value, meta) {
       }));
     } catch (e2) {}
   }
+  _installationIdentityPersistSource = String((meta && meta.reason) || 'device_seed_update');
   scheduleInstallationIdentityPersist();
   return next;
 }
@@ -1059,6 +1061,7 @@ function setLobsterInstallationId(value, meta) {
       }));
     } catch (e2) {}
   }
+  _installationIdentityPersistSource = String((meta && meta.reason) || 'installation_id_update');
   scheduleInstallationIdentityPersist();
   return next;
 }
@@ -1069,10 +1072,14 @@ function persistInstallationIdentityToFile() {
   var iid = currentStoredInstallationId();
   var seed = currentStoredLobsterDeviceSeed();
   if (!isValidLobsterInstallationId(iid) && !isValidLobsterInstallationId(seed)) return Promise.resolve(false);
+  var source = String(window.__LOBSTER_INSTALLATION_MIGRATION_SOURCE__ || _installationIdentityPersistSource || 'client_write');
+  try {
+    console.info('[installation-identity] persist start source=' + source + ' iid=' + (iid || '') + ' seed_prefix=' + String(seed || '').slice(0, 12));
+  } catch (e0) {}
   return fetch(base + '/api/settings/installation-identity', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ installation_id: iid || '', device_seed: seed || '' })
+    body: JSON.stringify({ installation_id: iid || '', device_seed: seed || '', source: source })
   }).then(function (resp) {
     if (!resp.ok) return false;
     return resp.json().catch(function () { return {}; }).then(function (data) {
@@ -1093,6 +1100,7 @@ function persistInstallationIdentityToFile() {
       try {
         window.__LOBSTER_INSTALLATION_FILE_PRESENT__ = true;
         window.__LOBSTER_INSTALLATION_NEEDS_WRITE__ = false;
+        console.info('[installation-identity] persist ok source=' + source + ' iid=' + (authoritativeIid || '') + ' ignored=' + !!((data && data.ignored)));
       } catch (e3) {}
       return true;
     });

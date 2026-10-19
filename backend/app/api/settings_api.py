@@ -535,6 +535,7 @@ class MachineIdentityResponse(BaseModel):
 class InstallationIdentityRequest(BaseModel):
     installation_id: Optional[str] = None
     device_seed: Optional[str] = None
+    source: Optional[str] = None
 
 
 class RemoteSupportRequest(BaseModel):
@@ -664,10 +665,20 @@ def get_installation_identity():
 @router.post("/api/settings/installation-identity", summary="Persist the file-backed installation identity")
 def save_installation_identity(body: InstallationIdentityRequest):
     try:
-        data = write_installation_identity(body.installation_id, body.device_seed)
+        data = write_installation_identity(
+            body.installation_id,
+            body.device_seed,
+            source=str(body.source or "api").strip()[:80],
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    logger.info("[installation-identity] persisted path=%s", data.get("path"))
+    logger.info(
+        "[installation-identity] api persisted source=%s iid=%s ignored=%s path=%s",
+        str(body.source or "api")[:80],
+        str(data.get("installation_id") or ""),
+        bool(data.get("ignored")),
+        data.get("path"),
+    )
     return {"ok": True, **data}
 
 

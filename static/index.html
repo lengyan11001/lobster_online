@@ -2957,6 +2957,12 @@
     window.__LOBSTER_INSTALLATION_FILE_PRESENT__ = filePresent;
     window.__LOBSTER_INSTALLATION_MIGRATED__ = !!migrated;
     window.__LOBSTER_INSTALLATION_NEEDS_WRITE__ = !filePresent;
+    window.__LOBSTER_INSTALLATION_MIGRATION_SOURCE__ = filePresent ? 'file' : (migrated ? 'legacy_local_storage' : 'new_install');
+    try {
+      console.info('[installation-identity] page init source=' + window.__LOBSTER_INSTALLATION_MIGRATION_SOURCE__ +
+        ' present=' + filePresent + ' iid=' + (installationId || '') +
+        ' seed_prefix=' + String(deviceSeed || '').slice(0, 12) + ' needs_write=' + (!filePresent));
+    } catch (e) {}
   })();
   </script>
   <script defer src="/static/js/app.js?v=20261019-file-identity-v1"></script>
