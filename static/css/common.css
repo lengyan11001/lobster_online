@@ -1173,3 +1173,30 @@ html.is-desktop-shell *::after {
 }
 html.is-desktop-shell .header { background: #fffdfb; }
 html.is-desktop-shell .header-dropdown-menu { background: #ffffff; }
+
+
+/* 自定义窗口按钮（frameless 标题栏）：右上角最小化/最大化/关闭 */
+.window-controls {
+  position: fixed;
+  top: 6px;
+  right: 10px;
+  z-index: 10000;
+  display: flex;
+  gap: 2px;
+}
+.window-controls[hidden] { display: none !important; }
+.window-controls button {
+  width: 30px;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.window-controls button:hover { background: rgba(15, 23, 42, 0.08); color: #0f172a; }
+.window-controls .win-close:hover { background: #e5484d; color: #ffffff; }
+body.has-window-controls .header-actions { margin-right: 106px; }

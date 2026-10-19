@@ -1435,6 +1435,49 @@ class DesktopApi:
     def startup_status(self) -> dict:
         return get_startup_status_snapshot()
 
+    def window_minimize(self) -> dict:
+        """自定义标题栏：最小化。"""
+        try:
+            import webview  # type: ignore
+            window = webview.active_window()
+            if window is not None:
+                window.minimize()
+            return {"ok": True}
+        except Exception as exc:  # noqa: BLE001
+            log(f"DesktopApi: minimize failed: {exc}")
+            return {"ok": False, "error": str(exc)}
+
+    def window_toggle_maximize(self) -> dict:
+        """自定义标题栏：最大化/还原。"""
+        try:
+            import webview  # type: ignore
+            import ctypes
+            window = webview.active_window()
+            if window is None:
+                return {"ok": False, "error": "no window"}
+            hwnd = int(window.native.Handle.ToInt64())
+            user32 = ctypes.windll.user32
+            user32.ShowWindow(hwnd, 9 if user32.IsZoomed(hwnd) else 3)
+            return {"ok": True, "maximized": bool(user32.IsZoomed(hwnd))}
+        except Exception as exc:  # noqa: BLE001
+            log(f"DesktopApi: maximize failed: {exc}")
+            return {"ok": False, "error": str(exc)}
+
+    def window_close(self) -> dict:
+        """自定义标题栏：关闭（走 WM_CLOSE，保留关闭确认流程）。"""
+        try:
+            import webview  # type: ignore
+            import ctypes
+            window = webview.active_window()
+            if window is None:
+                return {"ok": False, "error": "no window"}
+            hwnd = int(window.native.Handle.ToInt64())
+            ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)
+            return {"ok": True}
+        except Exception as exc:  # noqa: BLE001
+            log(f"DesktopApi: close failed: {exc}")
+            return {"ok": False, "error": str(exc)}
+
     def open_external_url(self, url: str = "") -> dict:
         """用系统默认浏览器打开链接（选品广场等外部站点入口）。"""
         target = str(url or "").strip()

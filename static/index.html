@@ -2921,5 +2921,34 @@
   <script defer src="/static/js/task-center.js?v=20260831-auth-gated-v1"></script>
   <script defer src="/static/js/init.js?v=20260929-hypit-install-v1"></script>
 <script defer src="/static/js/shop-plaza-entry.js?v=20260928-shop-plaza-v2"></script>
+<div class="window-controls" id="windowControls" hidden>
+  <button type="button" data-win="min" title="最小化" aria-label="最小化">&#x2013;</button>
+  <button type="button" data-win="max" title="最大化" aria-label="最大化">&#x25A1;</button>
+  <button type="button" class="win-close" data-win="close" title="关闭" aria-label="关闭">&#x2715;</button>
+</div>
+<script>
+(function () {
+  var box = document.getElementById('windowControls');
+  if (!box) return;
+  function api() { return (window.pywebview && window.pywebview.api) || null; }
+  function show() {
+    var a = api();
+    if (a && typeof a.window_close === 'function') { box.hidden = false; document.body.classList.add('has-window-controls'); }
+  }
+  window.addEventListener('pywebviewready', show);
+  setTimeout(show, 800);
+  box.addEventListener('click', function (e) {
+    var btn = e.target && e.target.closest ? e.target.closest('button[data-win]') : null;
+    if (!btn) return;
+    var a = api(); if (!a) return;
+    var kind = btn.getAttribute('data-win');
+    try {
+      if (kind === 'min') a.window_minimize();
+      else if (kind === 'max') a.window_toggle_maximize();
+      else a.window_close();
+    } catch (err) {}
+  });
+})();
+</script>
 </body>
 </html>

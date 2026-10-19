@@ -94,7 +94,7 @@ def apply(hwnd: int, *, drag_height: int = 10, border: int = 6) -> bool:
                     return HTTOP
                 if cy >= ch - edge:
                     return HTBOTTOM
-                if 0 <= cy < drag:
+                if 0 <= cy < drag and cx < cw - 150:
                     return HTCAPTION
                 return HTCLIENT
         except Exception:
