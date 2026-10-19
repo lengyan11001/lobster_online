@@ -11426,8 +11426,18 @@ def _sync_local_sessions_from_uia(
         # 分不清是微信没开、窗口被最小化，还是前台被别的程序占着。
         _capture_wechat_uia_failure(account_id)
         raise RuntimeError("local WeChat window not found")
+    # 通讯录/新的朋友扫描会留下 Qt51514QWindowToolSaveBits 浮层；残留时
+    # 读会话的 UIA 遍历会卡 46 秒。读列表前先清掉，再切回微信页。
+    try:
+        _dismiss_local_wechat_session_ghost_windows(int(hwnd))
+    except Exception:
+        pass
     if not passive:
         _ensure_local_tab(hwnd, "\u5fae\u4fe1", strict=True)
+        try:
+            _dismiss_local_wechat_session_ghost_windows(int(hwnd))
+        except Exception:
+            pass
     root = auto.ControlFromHandle(int(hwnd))
     scan = {"rounds": 1, "completed": True}
     if passive:
