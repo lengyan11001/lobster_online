@@ -2211,6 +2211,23 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                 except Exception:
                     pass
 
+        def _apply_frameless_chrome() -> None:
+            """去掉原生标题栏（图标+文案）；任务栏按钮/缩放/顶部拖动由 frameless_chrome 补回。"""
+            try:
+                from desktop.frameless_chrome import apply as _apply_chrome
+            except ModuleNotFoundError:
+                from frameless_chrome import apply as _apply_chrome
+            try:
+                hwnd = int(window.native.Handle.ToInt64())
+            except Exception as exc:
+                log(f"frameless chrome: no native handle ({exc})")
+                return
+            try:
+                _apply_chrome(hwnd)
+                log(f"frameless chrome applied hwnd={hwnd}")
+            except Exception as exc:
+                log(f"frameless chrome failed: {exc}")
+
         window = webview.create_window(
             title,
             html=desktop_loading_html(url, title),
@@ -2220,7 +2237,9 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             text_select=True,
             background_color=SHELL_BACKGROUND_COLOR,
             js_api=DesktopApi(recover_local_services),
+            frameless=True,
         )
+        window.events.shown += _apply_frameless_chrome
 
         def confirm_window_close() -> bool | None:
             if _ALLOW_WINDOW_CLOSE:
