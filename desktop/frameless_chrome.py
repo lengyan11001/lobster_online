@@ -3,7 +3,7 @@
 去掉原生标题栏（图标 + 文案），但保留：
 - 任务栏按钮与应用图标（WS_EX_APPWINDOW + WinForms Icon）
 - 边缘缩放（WS_THICKFRAME）
-- 顶部 10px 细条拖动（WM_NCHITTEST → HTCAPTION）
+- 顶部 36px 标题栏拖动（WM_NCHITTEST → HTCAPTION，右侧按钮区除外）
 """
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ _user32.CallWindowProcW.argtypes = [ctypes.c_ssize_t, wintypes.HWND, wintypes.UI
 _state: dict[int, tuple] = {}
 
 
-def apply(hwnd: int, *, drag_height: int = 10, border: int = 6) -> bool:
+def apply(hwnd: int, *, drag_height: int = 36, border: int = 6) -> bool:
     """给已创建的窗口加无边框样式 + 拖动/缩放支持。失败返回 False。"""
     if not hwnd:
         return False

@@ -1174,19 +1174,24 @@ html.is-desktop-shell *::after {
 html.is-desktop-shell .header { background: #fffdfb; }
 html.is-desktop-shell .header-dropdown-menu { background: #ffffff; }
 
-
-/* 自定义窗口按钮（frameless 标题栏）：右上角最小化/最大化/关闭 */
-.window-controls {
+/* 自定义标题栏（frameless）：只放最小化/最大化/关闭，没有图标和文案 */
+.window-titlebar {
   position: fixed;
-  top: 6px;
-  right: 10px;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 36px;
   z-index: 10000;
   display: flex;
-  gap: 2px;
+  align-items: center;
+  background: #fffdfb;
+  border-bottom: 1px solid rgba(34, 49, 78, 0.06);
 }
-.window-controls[hidden] { display: none !important; }
+.window-titlebar[hidden] { display: none !important; }
+.window-titlebar-drag { flex: 1 1 auto; height: 100%; }
+.window-controls { display: flex; gap: 2px; padding-right: 10px; }
 .window-controls button {
-  width: 30px;
+  width: 34px;
   height: 26px;
   border: 0;
   border-radius: 6px;
@@ -1199,4 +1204,4 @@ html.is-desktop-shell .header-dropdown-menu { background: #ffffff; }
 }
 .window-controls button:hover { background: rgba(15, 23, 42, 0.08); color: #0f172a; }
 .window-controls .win-close:hover { background: #e5484d; color: #ffffff; }
-body.has-window-controls .header-actions { margin-right: 106px; }
+body.has-window-titlebar .page { padding-top: calc(1rem + 36px); }
