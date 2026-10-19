@@ -2273,22 +2273,20 @@ function restoreLastChatSessionForHome() {
     return false;
   }
   window.__restoreLastChatRetryCount = 0;
-  var hasMessages = function(session) {
-    return !!(session && Array.isArray(session.messages) && session.messages.length);
-  };
   var isDefaultMode = function(session) {
     return !session || _getSessionMode(session) === CHAT_MODE_DEFAULT;
   };
   var lastSid = getLastActiveChatSessionIdFromStorage();
   var target = '';
-  if (lastSid) {
-    var last = getSessionById(lastSid);
-    if (hasMessages(last) && isDefaultMode(last)) target = String(last.id);
-  }
-  if (!target) {
+  // 严格恢复用户最后点开的会话：即使它是空会话，也不能跳到别的对话。
+  if (lastSid && getSessionById(lastSid)) {
+    target = String(lastSid);
+  } else if (currentSessionId && getSessionById(currentSessionId)) {
+    target = String(currentSessionId);
+  } else {
     var best = null;
     chatSessions.forEach(function(session) {
-      if (!hasMessages(session) || !isDefaultMode(session)) return;
+      if (!isDefaultMode(session)) return;
       if (!best || Number(session.updatedAt || 0) > Number(best.updatedAt || 0)) best = session;
     });
     if (best) target = String(best.id);
@@ -3796,6 +3794,79 @@ function applyChatDutyModeToRequest(message) {
   return String(message || '');
 }
 
+function syncChatDutyModeTrigger(select) {
+  if (!select) return;
+  var wrap = select.closest ? select.closest('.chat-duty-mode') : null;
+  if (!wrap) return;
+  var mode = select.value === 'service' ? 'service' : 'work';
+  var valueEl = wrap.querySelector('.chat-duty-mode-value');
+  if (valueEl) valueEl.textContent = mode === 'service' ? '客服' : '工作';
+  wrap.querySelectorAll('.chat-duty-mode-menu [data-duty-mode]').forEach(function(button) {
+    var active = button.getAttribute('data-duty-mode') === mode;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-selected', active ? 'true' : 'false');
+  });
+}
+
+function enhanceChatDutyModeSelect(select) {
+  if (!select || select.dataset.dutyModeEnhanced === '1') return;
+  var wrap = select.closest ? select.closest('.chat-duty-mode') : null;
+  if (!wrap) return;
+  select.dataset.dutyModeEnhanced = '1';
+  select.classList.add('chat-duty-mode-native');
+  select.setAttribute('tabindex', '-1');
+
+  var trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'chat-duty-mode-trigger';
+  trigger.setAttribute('aria-haspopup', 'listbox');
+  trigger.setAttribute('aria-expanded', 'false');
+  trigger.innerHTML = '<span class="chat-duty-mode-value"></span><span class="chat-duty-mode-caret" aria-hidden="true"></span>';
+
+  var menu = document.createElement('div');
+  menu.className = 'chat-duty-mode-menu';
+  menu.setAttribute('role', 'listbox');
+  menu.innerHTML = '<button type="button" role="option" data-duty-mode="work">工作</button>'
+    + '<button type="button" role="option" data-duty-mode="service">客服</button>';
+
+  wrap.appendChild(trigger);
+  wrap.appendChild(menu);
+
+  function closeMenu() {
+    menu.classList.remove('is-open');
+    trigger.setAttribute('aria-expanded', 'false');
+  }
+  function openMenu() {
+    document.querySelectorAll('.chat-duty-mode-menu.is-open').forEach(function(other) {
+      if (other !== menu) other.classList.remove('is-open');
+    });
+    menu.classList.add('is-open');
+    trigger.setAttribute('aria-expanded', 'true');
+  }
+
+  trigger.addEventListener('click', function(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (menu.classList.contains('is-open')) closeMenu();
+    else openMenu();
+  });
+  menu.addEventListener('click', function(event) {
+    var option = event.target.closest('[data-duty-mode]');
+    if (!option) return;
+    event.preventDefault();
+    event.stopPropagation();
+    select.value = option.getAttribute('data-duty-mode') || 'work';
+    syncChatDutyModeTrigger(select);
+    closeMenu();
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  document.addEventListener('click', function(event) {
+    if (!wrap.contains(event.target)) closeMenu();
+  });
+  select.addEventListener('change', function() { syncChatDutyModeTrigger(select); });
+  syncChatDutyModeTrigger(select);
+}
+
 function syncChatDutyModeUi() {
   // 只改客服模式的文案；切回「工作」恢复原文案，工作模式行为不变。
   var mode = chatDutyMode();
@@ -3823,6 +3894,10 @@ function syncChatDutyModeUi() {
       CHAT_DUTY_PLACEHOLDER_BACKUP = '';
     }
   }
+  ['chatDutyModeSelect', 'onlineMastraDutyModeSelect'].forEach(function(id) {
+    var select = document.getElementById(id);
+    if (select) syncChatDutyModeTrigger(select);
+  });
 }
 
 function initChatDutyMode() {
@@ -3838,6 +3913,15 @@ function initChatDutyMode() {
     if (mastraSelect) mastraSelect.value = mode;
     syncChatDutyModeUi();
   });
+  enhanceChatDutyModeSelect(sel);
+  var mastraSelect = document.getElementById('onlineMastraDutyModeSelect');
+  if (mastraSelect) {
+    enhanceChatDutyModeSelect(mastraSelect);
+    mastraSelect.addEventListener('change', function() {
+      sel.value = mastraSelect.value === 'service' ? 'service' : 'work';
+      syncChatDutyModeUi();
+    });
+  }
   syncChatDutyModeUi();
 }
 

@@ -13534,3 +13534,69 @@ html[data-brand="bihuo"] .chat-home-copy { max-width: none; }
 @media (max-width: 620px) {
   .chat-home-codex-grid { grid-template-columns: 1fr; }
 }
+
+/* 2026-10-19：范围下拉改为自定义菜单，避免原生 select 在窗口底部弹不出来 */
+.chat-duty-mode { position: relative; }
+.chat-duty-mode > select.chat-duty-mode-native {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+.chat-duty-mode-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  outline: none;
+}
+.chat-duty-mode-caret {
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  opacity: 0.55;
+  transition: transform 0.15s ease;
+}
+.chat-duty-mode-trigger[aria-expanded="true"] .chat-duty-mode-caret { transform: rotate(180deg); }
+.chat-duty-mode-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  min-width: 116px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid rgba(34, 49, 78, 0.12);
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(36, 54, 88, 0.16);
+  display: none;
+  z-index: 60;
+}
+.chat-duty-mode-menu.is-open { display: block; }
+.chat-duty-mode-menu button {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-duty-mode-menu button:hover,
+.chat-duty-mode-menu button.is-active {
+  background: #eef3ff;
+  color: #3556d8;
+}
