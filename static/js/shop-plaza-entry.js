@@ -4,7 +4,7 @@
  */
 (function () {
   'use strict';
-  var SHOP_PLAZA_URL = 'https://shop.bhzn.top/plaza.html';
+  var SHOP_PLAZA_URL = 'https://shop.bhzn.top/plaza.html?v=20261019-plaza-v1';
 
   function clientToken() {
     try {
@@ -19,7 +19,7 @@
   function buildUrl() {
     var url = SHOP_PLAZA_URL;
     var token = clientToken();
-    if (token) url += '?token=' + encodeURIComponent(token);
+    if (token) url += '&token=' + encodeURIComponent(token);
     return url;
   }
 

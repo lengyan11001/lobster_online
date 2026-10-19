@@ -215,10 +215,10 @@
     });
     var plaza = document.getElementById('ssOpenPlaza');
     if (plaza) plaza.addEventListener('click', function () {
-      var url = 'https://shop.bhzn.top/plaza.html';
+      var url = 'https://shop.bhzn.top/plaza.html?v=20261019-plaza-v1';
       try {
         var token = typeof getStoredAuthToken === 'function' ? getStoredAuthToken() : localStorage.getItem('token');
-        if (token) url += '?token=' + encodeURIComponent(token);
+        if (token) url += '&token=' + encodeURIComponent(token);
       } catch (e) { /* ignore */ }
       try { window.open(url, '_blank', 'noopener'); } catch (e) { copyText(url); }
     });
