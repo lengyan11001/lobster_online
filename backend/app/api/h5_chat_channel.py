@@ -5142,6 +5142,52 @@ def _scheduled_douyin_latest_config(rows: Any, *, row_type: str = "") -> Dict[st
     return candidates[-1]
 
 
+def _scheduled_douyin_comment_copy(plans: Any) -> Dict[str, str]:
+    """Resolve the comment copy shared by 视频评论 and 关注评论.
+
+    The scheduler keeps the 「视频评论」 switch on the collect_precise plan
+    (``reply_comment_*``), while 关注评论 has its own follow_comment plan
+    (``comment_*``).  Workflow nodes often only reference follow_comment and
+    never save that plan, so the shared 视频评论 copy must be the fallback.
+    """
+    follow = _scheduled_douyin_latest_config(plans, row_type="follow_comment")
+    collect = _scheduled_douyin_latest_config(plans, row_type="collect_precise")
+
+    def pack(row: Dict[str, Any], prefix: str) -> Dict[str, str]:
+        mode = str(row.get(f"{prefix}_mode") or "").strip().lower()
+        if mode not in {"fixed", "ai", "rewrite"}:
+            mode = ""
+        return {
+            "mode": mode,
+            "text": str(row.get(f"{prefix}_text") or "").strip(),
+            "prompt": str(row.get(f"{prefix}_prompt") or "").strip(),
+            "seed": str(row.get(f"{prefix}_seed_text") or "").strip(),
+        }
+
+    def usable(copy: Dict[str, str]) -> bool:
+        if copy["mode"] == "ai":
+            return True
+        if copy["mode"] == "rewrite":
+            return bool(copy["seed"] or copy["prompt"] or copy["text"])
+        if copy["mode"] == "fixed":
+            return bool(copy["text"])
+        return False
+
+    own = pack(follow, "comment")
+    shared = pack(collect, "reply_comment")
+    copy = own if usable(own) else (shared if usable(shared) else own)
+    resolved: Dict[str, str] = {}
+    if copy["mode"]:
+        resolved["comment_mode"] = copy["mode"]
+    if copy["text"]:
+        resolved["comment_text"] = copy["text"]
+    if copy["prompt"]:
+        resolved["comment_prompt"] = copy["prompt"]
+    if copy["seed"]:
+        resolved["comment_seed_text"] = copy["seed"]
+    return resolved
+
+
 def _scheduled_douyin_online_config_params(
     action: str,
     *,
@@ -5230,17 +5276,37 @@ def _scheduled_douyin_online_config_params(
     if action_key in {"reply_comments", "mention_comment", "follow_comment"}:
         plan = _scheduled_douyin_latest_config(plans, row_type="follow_comment")
         if plan:
+            params["max_users"] = _safe_int(plan.get("max_users_per_run") or 10) or 10
+            params["interval_minutes_min"] = plan.get("follow_interval_minutes_min", 4)
+            params["interval_minutes_max"] = plan.get("follow_interval_minutes_max", 6)
+        params.update(_scheduled_douyin_comment_copy(plans))
+        return params
+
+    if action_key == "precise_touch":
+        # 精准触达节点自身通常不保存话术；话术来自 Online 的「视频评论」
+        # (collect_precise.reply_comment_*)、「关注评论」(follow_comment.comment_*)
+        # 和「私信互动」(interaction.message_*)。
+        params.update(_scheduled_douyin_comment_copy(plans))
+        follow = _scheduled_douyin_latest_config(plans, row_type="follow_comment")
+        if follow:
+            params["max_users"] = _safe_int(follow.get("max_users_per_run") or 10) or 10
+            params["interval_minutes_min"] = follow.get("follow_interval_minutes_min", 4)
+            params["interval_minutes_max"] = follow.get("follow_interval_minutes_max", 6)
+        interaction = _scheduled_douyin_latest_config(plans, row_type="interaction")
+        if interaction:
+            message = str(interaction.get("message") or "").strip()
             params.update(
                 {
-                    "max_users": _safe_int(plan.get("max_users_per_run") or 10) or 10,
-                    "comment_mode": str(plan.get("comment_mode") or "fixed").strip() or "fixed",
-                    "comment_text": str(plan.get("comment_text") or "").strip(),
-                    "comment_prompt": str(plan.get("comment_prompt") or "").strip(),
-                    "comment_seed_text": str(plan.get("comment_seed_text") or "").strip(),
-                    "interval_minutes_min": plan.get("follow_interval_minutes_min", 4),
-                    "interval_minutes_max": plan.get("follow_interval_minutes_max", 6),
+                    "message_mode": str(interaction.get("message_mode") or "fixed").strip() or "fixed",
+                    "message": message,
+                    "messages": [message] if message else [],
+                    "message_prompt": str(interaction.get("message_prompt") or "").strip(),
+                    "message_seed_text": str(interaction.get("message_seed_text") or "").strip(),
                 }
             )
+            if not follow:
+                params["interval_minutes_min"] = interaction.get("interaction_interval_minutes_min", 4)
+                params["interval_minutes_max"] = interaction.get("interaction_interval_minutes_max", 6)
         return params
 
     if action_key == "direct_message":
@@ -6003,7 +6069,8 @@ def _scheduled_douyin_fixed_text(params: Optional[Dict[str, Any]], kind: str) ->
         # 不写死兜底：节点本来就不配话术，留空让客户端回落「私信互动」里保存的本地话术；
         # 本地也没配时由调用方跳过并写日志，避免给所有人群发同一句。
         return str(source.get("message") or source.get("direct_message") or "").strip()
-    return str(source.get("comment_text") or source.get("comment") or "内容很有参考价值，学习了。").strip()
+    # 没配话术时返回空串，由启动接口明确提示，绝不自动套用写死文案。
+    return str(source.get("comment_text") or source.get("comment") or "").strip()
 
 
 def _scheduled_douyin_interaction_users(
@@ -6170,6 +6237,19 @@ def _merge_scheduled_douyin_precise_touch_params(
         "sales_schedule_end",
         "sales_schedule_duration_minutes",
         "sales_node_label",
+        "comment_mode",
+        "comment_text",
+        "comment_prompt",
+        "comment_seed_text",
+        "reply_comment_mode",
+        "reply_comment_text",
+        "reply_comment_prompt",
+        "reply_comment_seed_text",
+        "message_mode",
+        "message",
+        "messages",
+        "message_prompt",
+        "message_seed_text",
     ):
         if key in workflow and workflow.get(key) not in (None, "", []):
             merged[key] = (
@@ -6183,6 +6263,18 @@ def _merge_scheduled_douyin_precise_touch_params(
     elif "followup_actions" in merged:
         merged["touch_actions"] = _scheduled_douyin_followup_actions(merged.get("followup_actions"))
         merged.pop("followup_actions", None)
+    # 标签页保存的是 reply_comment_*，执行侧统一读 comment_*。
+    for target, aliases in (
+        ("comment_mode", ("reply_comment_mode", "comment_mode")),
+        ("comment_text", ("reply_comment_text", "comment_text")),
+        ("comment_prompt", ("reply_comment_prompt", "comment_prompt")),
+        ("comment_seed_text", ("reply_comment_seed_text", "comment_seed_text")),
+    ):
+        for alias in aliases:
+            value = workflow.get(alias)
+            if value not in (None, "", []):
+                merged[target] = value
+                break
     merged["customer_scope"] = "precise_pool"
     return merged
 
@@ -6912,7 +7004,20 @@ async def _run_scheduled_douyin_sales_action(
     base: str = "",
     headers: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    source = params if isinstance(params, dict) else {}
+    source = dict(params) if isinstance(params, dict) else {}
+    for target, aliases in (
+        ("comment_mode", ("reply_comment_mode",)),
+        ("comment_text", ("reply_comment_text",)),
+        ("comment_prompt", ("reply_comment_prompt",)),
+        ("comment_seed_text", ("reply_comment_seed_text",)),
+    ):
+        if source.get(target) not in (None, "", []):
+            continue
+        for alias in aliases:
+            value = source.get(alias)
+            if value not in (None, "", []):
+                source[target] = value
+                break
     account_id = _scheduled_douyin_account_id(source)
     max_users = max(1, min(_safe_int(source.get("max_users") or source.get("max_results") or 10) or 10, 200))
     interval_minutes_min = max(1, min(_safe_int(source.get("interval_minutes_min") or 4) or 4, 60))
@@ -7100,10 +7205,24 @@ async def _run_scheduled_douyin_sales_action(
                 if identity_key:
                     touched_user_keys.add(identity_key)
 
-            sub_params = dict(source)
             sub_params = _load_scheduled_douyin_online_config_params(touch_action)
-            for key in ("interval_minutes_min", "interval_minutes_max"):
-                if key in source and source.get(key) not in (None, "", []):
+            # 节点/Online 已解析好的话术必须带到每个子动作；否则子动作按空配置
+            # 重跑，评论又会落回写死文案。
+            for key in (
+                "account_id",
+                "comment_mode",
+                "comment_text",
+                "comment_prompt",
+                "comment_seed_text",
+                "message_mode",
+                "message",
+                "messages",
+                "message_prompt",
+                "message_seed_text",
+                "interval_minutes_min",
+                "interval_minutes_max",
+            ):
+                if source.get(key) not in (None, "", []):
                     sub_params[key] = source.get(key)
             sub_params["users"] = touch_users
             sub_params["selected_users"] = touch_users
