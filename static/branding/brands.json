@@ -3,8 +3,8 @@
   "marks": {
     "bihuo": {
       "document_title": "必火AI员工",
-      "logo_primary": "必火",
-      "logo_accent": "AI员工",
+      "logo_primary": "",
+      "logo_accent": "",
       "hero_title": "必火AI执行系统",
       "hero_subtitle": "必火智能的远景：\n成为全球领先的企业AI员工解决方案服务商",
       "icons": {
@@ -13,8 +13,8 @@
         "loading_mark": "/static/bihu_64.png",
         "home_visual": "/static/bihu_source.png",
         "logo_mark": "/static/bihu_lockup_h.png",
-        "logo_mark_width": 122,
-        "logo_mark_height": 32
+        "logo_mark_width": 152,
+        "logo_mark_height": 40
       },
       "install": {
         "desktop_ico": "static/bihu_box.ico",
