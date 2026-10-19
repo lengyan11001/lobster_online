@@ -39,7 +39,8 @@ def resolve_build_brand(root: Path) -> tuple[str, Path]:
     mark = requested if requested in marks else default_mark
     config = marks.get(mark) if isinstance(marks.get(mark), dict) else {}
     install = config.get("install") if isinstance(config.get("install"), dict) else {}
-    icon_rel = str(install.get("desktop_ico") or "static/bihu_box.ico").strip().replace("/", os.sep)
+    # launcher_ico：启动器 exe 的 PE 图标（第一张完整 logo）；desktop_ico：桌面快捷方式图标。
+    icon_rel = str(install.get("launcher_ico") or install.get("desktop_ico") or "static/bihu_box.ico").strip().replace("/", os.sep)
     return mark, root / icon_rel
 
 
