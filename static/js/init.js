@@ -2451,16 +2451,33 @@ function decorateWorkspaceSubsections() {
 }
 decorateWorkspaceSubsections();
 
+function _isBihuoChatBrand() {
+  try {
+    return typeof getLobsterBrandMark === 'function' && getLobsterBrandMark() === 'bihuo';
+  } catch (e) {
+    return false;
+  }
+}
+
 function runAppViewInit(view) {
   applyLobsterFeatureGates(LOBSTER_FEATURE_FLAGS);
   decorateWorkspaceSubsections();
   if (view === 'chat') {
-    if (!document.getElementById('onlineMastraChat')) {
+    var chatEntryIntent = String(window.__LOBSTER_CHAT_ENTRY_INTENT__ || '');
+    window.__LOBSTER_CHAT_ENTRY_INTENT__ = '';
+    var mastraChat = document.getElementById('onlineMastraChat');
+    if (!mastraChat) {
       if (typeof setChatMode === 'function') setChatMode('default');
       refreshModelSelector();
     }
-    // 从首页或侧边栏进入时，恢复上次停留的会话；没有历史会话才停在新会话。
-    if (typeof window.restoreLastChatSessionForHome === 'function') {
+    if (mastraChat && _isBihuoChatBrand()) {
+      if (chatEntryIntent === 'mastra_new' && typeof window.startMastraNewSession === 'function') {
+        window.startMastraNewSession().catch(function() {});
+      } else if (chatEntryIntent === 'mastra_last' && typeof window.openMastraLastSession === 'function') {
+        window.openMastraLastSession().catch(function() {});
+      }
+      // 默认交给 mastra 自己恢复上次会话，避免和旧 chat 的恢复逻辑互相覆盖。
+    } else if (typeof window.restoreLastChatSessionForHome === 'function') {
       window.restoreLastChatSessionForHome();
     }
   }
@@ -2503,6 +2520,7 @@ function showAppView(view, sourceEl, recoveryOptions) {
     requestedRoute = 'assets:' + assetOrigin;
   }
   view = baseView;
+  if (view !== 'chat') window.__LOBSTER_CHAT_ENTRY_INTENT__ = '';
   if (!_isFeatureGatedViewAllowed(view)) {
     var fallbackView = _firstAllowedDashboardView();
     try { if (fallbackView) localStorage.setItem(LOBSTER_LAST_VIEW_KEY, fallbackView); } catch (e0) {}
@@ -2560,14 +2578,17 @@ function showAppView(view, sourceEl, recoveryOptions) {
 window.showAppView = showAppView;
 window.showLobsterView = showAppView;
 
-document.querySelectorAll('.nav-left-item[data-view="chat"], .chat-sidebar-entry[data-view="chat"]').forEach(function(el) {
+document.querySelectorAll('.nav-left-item[data-view="chat"]').forEach(function(el) {
   el.addEventListener('click', function() {
-    // 即使视图切换被复用/跳过，也要恢复上次停留的会话。
-    setTimeout(function() {
-      if (typeof window.restoreLastChatSessionForHome === 'function') {
-        window.restoreLastChatSessionForHome();
-      }
-    }, 80);
+    // 顶部「首页」：进入新会话并显示欢迎文案。
+    if (_isBihuoChatBrand()) window.__LOBSTER_CHAT_ENTRY_INTENT__ = 'mastra_new';
+  });
+});
+
+document.querySelectorAll('.chat-sidebar-entry[data-view="chat"]').forEach(function(el) {
+  el.addEventListener('click', function() {
+    // 侧边栏「AI调度助手」：恢复上次停留的会话。
+    if (_isBihuoChatBrand()) window.__LOBSTER_CHAT_ENTRY_INTENT__ = 'mastra_last';
   });
 });
 

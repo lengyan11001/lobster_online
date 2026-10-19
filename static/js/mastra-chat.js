@@ -232,8 +232,8 @@
     }
     box.innerHTML = [
       '<div class="online-mastra-welcome" id="onlineMastraEmpty">',
-      '<div class="online-mastra-welcome-kicker">必火 AI 执行系统</div>',
-      '<h2 class="online-mastra-welcome-title">您好，我是 <strong>必火 AI 员工</strong></h2>',
+      '<div class="online-mastra-welcome-kicker"><span aria-hidden="true">✦</span> 您好，欢迎进入 必火智能AI执行系统</div>',
+      '<h2 class="online-mastra-welcome-title">告诉我，我们今天要做些什么？</h2>',
       '<p class="online-mastra-welcome-subtitle">说清目标，我按岗位把活做完。</p>',
       '<div class="online-mastra-welcome-grid">',
       '<div class="online-mastra-welcome-card"><strong>营销创作</strong><span>文案、图片、视频，一句话直接产出可发布内容。</span></div>',
@@ -1293,12 +1293,30 @@
       if (!session.id) throw new Error('创建会话失败');
       state.sessions = [session].concat(state.sessions.filter(function (row) { return text(row.id) !== text(session.id); }));
       state.activeSessionId = text(session.id);
-      storeSessionId(state.activeSessionId);
+      if (options.store !== false) storeSessionId(state.activeSessionId);
       state.historyItems = [];
       if (options.compose !== false) enterCompose('', true);
       renderSessionHeader();
-      clearMessages();
+      renderWelcome();
       return session;
+    });
+  }
+
+  function startNewSession() {
+    var active = activeSession();
+    if (active && Number(active.message_count || 0) === 0 && !state.historyItems.length) {
+      enterCompose('', true);
+      renderWelcome();
+      return Promise.resolve(active);
+    }
+    return createSession({ compose: true, store: false });
+  }
+
+  function openLastSession() {
+    return loadSessions().then(function() {
+      if (!state.activeSessionId) return createSession({ compose: true });
+      if (!state.composing) return switchSession(state.activeSessionId, { compose: true });
+      return true;
     });
   }
 
@@ -1403,6 +1421,7 @@
       createSession({ compose: false }).then(function () { submitMessage(event); }).catch(function (error) { window.alert(error.message || '会话创建失败'); });
       return;
     }
+    storeSessionId(state.activeSessionId);
     state.sending = true;
     setComposerEnabled(false);
     if (input) input.value = '';
@@ -1689,6 +1708,8 @@
     });
   }
 
+  window.startMastraNewSession = startNewSession;
+  window.openMastraLastSession = openLastSession;
   window.initMastraOnlineChat = init;
   window.refreshMastraOnlineChat = refresh;
 })();
