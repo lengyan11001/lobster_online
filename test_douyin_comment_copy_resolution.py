@@ -100,3 +100,20 @@ def test_direct_message_uses_online_interaction_preset():
 
 def test_missing_comment_copy_never_falls_back_to_hardcoded_text():
     assert _scheduled_douyin_fixed_text({}, "comment") == ""
+
+def test_active_preset_slot_wins_over_older_filled_slot():
+    settings = {
+        "douyin-video-comment-presets-v1": {
+            "activeIndex": 2,
+            "presets": [
+                {"mode": "fixed", "comment_text": "旧话术"},
+                {"mode": "fixed", "comment_text": "旧话术2"},
+                {"mode": "ai", "comment_prompt": "当前选中的话术槽"},
+            ],
+        }
+    }
+    params = _scheduled_douyin_online_config_params(
+        "precise_touch", plans=[], local_settings=settings
+    )
+    assert params["comment_mode"] == "ai"
+    assert params["comment_prompt"] == "当前选中的话术槽"

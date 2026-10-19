@@ -5157,11 +5157,10 @@ def _douyin_active_preset(payload: Any) -> Dict[str, Any]:
     if not isinstance(presets, list) or not presets:
         return {}
     index = _safe_int(payload.get("activeIndex", payload.get("active_index")))
-    candidates = []
-    if 0 <= index < len(presets):
-        candidates.append(presets[index])
-    candidates.extend(presets)
-    for item in candidates:
+    # 默认选中的是哪个话术槽就用哪个，不能因为当前槽没填内容就偷偷换到别的槽。
+    if 0 <= index < len(presets) and isinstance(presets[index], dict):
+        return dict(presets[index])
+    for item in presets:
         if isinstance(item, dict) and any(
             str(item.get(key) or "").strip()
             for key in ("mode", "comment_mode", "comment_text", "comment_prompt", "comment_seed_text")
@@ -5196,7 +5195,7 @@ def _douyin_local_interaction_copy(local_settings: Any) -> Dict[str, Any]:
         if isinstance(presets, list) and presets:
             if 0 <= index < len(presets):
                 message = str(presets[index] or "").strip()
-            if not message:
+            else:
                 message = next(
                     (str(item or "").strip() for item in presets if str(item or "").strip()),
                     "",
