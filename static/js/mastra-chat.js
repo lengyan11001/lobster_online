@@ -230,20 +230,56 @@
       clearMessages();
       return;
     }
+    var welcomeInput = el('onlineMastraInput');
+    if (welcomeInput) {
+      var chatDuty = el('chatDutyModeSelect');
+      var mastraDuty = el('onlineMastraDutyModeSelect');
+      // 新会话欢迎态默认「工作」，与设计稿一致；用户仍可在底部切到「客服」。
+      if (chatDuty) chatDuty.value = 'work';
+      if (mastraDuty) mastraDuty.value = 'work';
+      try { localStorage.setItem(DUTY_MODE_KEY, 'work'); } catch (e) {}
+      if (typeof syncChatDutyModeUi === 'function') syncChatDutyModeUi();
+      welcomeInput.setAttribute('placeholder', '随心输入');
+    }
     box.innerHTML = [
       '<div class="online-mastra-welcome" id="onlineMastraEmpty">',
       '<div class="online-mastra-welcome-kicker"><span aria-hidden="true">✦</span> 您好，欢迎进入 必火智能AI执行系统</div>',
       '<h2 class="online-mastra-welcome-title">告诉我，我们今天要做些什么？</h2>',
       '<p class="online-mastra-welcome-subtitle">说清目标，我按岗位把活做完。</p>',
       '<div class="online-mastra-welcome-grid">',
-      '<div class="online-mastra-welcome-card"><strong>营销创作</strong><span>文案、图片、视频，一句话直接产出可发布内容。</span></div>',
-      '<div class="online-mastra-welcome-card"><strong>获客增长</strong><span>抖音线索采集、评论互动、私信跟进，按工作流跑完。</span></div>',
-      '<div class="online-mastra-welcome-card"><strong>私域销冠</strong><span>个微 / 企微接管会话，按记忆话术自动跟进客户。</span></div>',
-      '<div class="online-mastra-welcome-card"><strong>岗位工作流</strong><span>把重复动作交给 AI 员工，按时间自动执行。</span></div>',
+      '<div class="online-mastra-welcome-card" role="button" tabindex="0" data-mastra-welcome-prompt="营销创作："><strong>营销创作</strong><span>文案、图片、视频，一句话直接产出可发布内容。</span></div>',
+      '<div class="online-mastra-welcome-card" role="button" tabindex="0" data-mastra-welcome-prompt="获客增长："><strong>获客增长</strong><span>抖音线索采集、评论互动、私信跟进，按工作流跑完。</span></div>',
+      '<div class="online-mastra-welcome-card" role="button" tabindex="0" data-mastra-welcome-prompt="私域销冠："><strong>私域销冠</strong><span>个微 / 企微接管会话，按记忆话术自动跟进客户。</span></div>',
+      '<div class="online-mastra-welcome-card" role="button" tabindex="0" data-mastra-welcome-prompt="岗位工作流："><strong>岗位工作流</strong><span>把重复动作交给 AI 员工，按时间自动执行。</span></div>',
       '</div>',
       '<p class="online-mastra-welcome-hint">直接在下方输入需求，或从上面选一个方向开始新会话。</p>',
       '</div>'
     ].join('');
+    box.querySelectorAll('[data-mastra-welcome-prompt]').forEach(function(card) {
+      function chooseCard() {
+        var prompt = card.getAttribute('data-mastra-welcome-prompt') || '';
+        Promise.resolve(startNewSession()).catch(function() {
+          enterCompose('', true);
+        }).then(function() {
+          var input = el('onlineMastraInput');
+          if (input) {
+            input.value = prompt;
+            resizeInput();
+            input.focus();
+          }
+          box.querySelectorAll('[data-mastra-welcome-prompt]').forEach(function(item) {
+            item.classList.toggle('is-selected', item.getAttribute('data-mastra-welcome-prompt') === prompt);
+          });
+        });
+      }
+      card.addEventListener('click', chooseCard);
+      card.addEventListener('keydown', function(event) {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          chooseCard();
+        }
+      });
+    });
   }
 
   function enterCompose(initialValue, focusInput) {
@@ -1210,7 +1246,13 @@
 
   function syncDutyModeUi() {
     // 只改客服模式的文案；切回「工作」恢复原 placeholder，工作模式行为不变。
-    var mode = dutyMode();
+    var select = el('onlineMastraDutyModeSelect');
+    var chatSelect = el('chatDutyModeSelect');
+    // 两个范围下拉共用同一状态；旧 chat 下拉已显示「工作」时，mastra 这里不能还停留在「客服」。
+    if (select && chatSelect && chatSelect.value) {
+      select.value = chatSelect.value === 'service' ? 'service' : 'work';
+    }
+    var mode = select ? (select.value === 'service' ? 'service' : 'work') : dutyMode();
     var input = el('onlineMastraInput');
     if (!input) return;
     if (mode === 'service') {
@@ -1302,7 +1344,18 @@
     });
   }
 
+  function resetDutyModeToWork() {
+    var mastraSelect = el('onlineMastraDutyModeSelect');
+    var chatSelect = el('chatDutyModeSelect');
+    if (mastraSelect) mastraSelect.value = 'work';
+    if (chatSelect) chatSelect.value = 'work';
+    try { localStorage.setItem(DUTY_MODE_KEY, 'work'); } catch (e) {}
+    syncDutyModeUi();
+    if (typeof syncChatDutyModeUi === 'function') syncChatDutyModeUi();
+  }
+
   function startNewSession() {
+    resetDutyModeToWork();
     var active = activeSession();
     if (active && Number(active.message_count || 0) === 0 && !state.historyItems.length) {
       enterCompose('', true);

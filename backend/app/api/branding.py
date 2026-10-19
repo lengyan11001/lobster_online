@@ -112,17 +112,14 @@ def _index_branding(requested_mark: str = "") -> Dict[str, Any]:
     return {"available": True, "mark": mark, **config}
 
 
-_BUILD_STAMP_CACHE = {}
-
-
 def _static_build_stamp():
     """静态文件指纹：index.html 里的 ?v= 会追加 &b=<指纹>。
 
     这样任何一次重载（托盘重开、点「刷新页面」）都请求新的 JS/CSS URL，
     WebView 缓存不可能再命中旧文件 —— 不需要用户清缓存或杀进程。
+    这里必须每次重新计算：后端常驻时改了前端文件，永久缓存会让 b 指纹
+    停在进程启动时，刷新页面仍命中旧 JS/CSS。
     """
-    if 'v' in _BUILD_STAMP_CACHE:
-        return _BUILD_STAMP_CACHE['v']
     stamp = ''
     try:
         root = Path(__file__).resolve().parents[3] / 'static'
@@ -138,7 +135,6 @@ def _static_build_stamp():
         stamp = '%d.%d' % (int(newest), count)
     except Exception:
         stamp = str(int(time.time()))
-    _BUILD_STAMP_CACHE['v'] = stamp
     return stamp
 
 

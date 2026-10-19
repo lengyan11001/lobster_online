@@ -5928,6 +5928,12 @@ body.online-mastra-chat-compose .online-mastra-chat {
   box-sizing: border-box;
 }
 .online-mastra-composer textarea:focus { box-shadow: none; }
+.online-mastra-composer textarea:focus,
+.online-mastra-composer textarea:focus-visible {
+  border: 0 !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
 .online-mastra-composer textarea:disabled { background: #f4f6fa; cursor: wait; }
 .online-mastra-composer-foot { justify-content: space-between; gap: 1rem; width: 100%; margin: 0; }
 .online-mastra-composer-hint { color: #9aa6b8; font-size: 0.72rem; }
@@ -6123,38 +6129,86 @@ body.online-mastra-chat-compose .online-mastra-chat {
 .online-mastra-modal-actions button.primary:hover:not(:disabled) { background: #4a68f0; color: #fff; transform: translateY(-1px); }
 .online-mastra-modal-actions button:disabled { opacity: 0.55; cursor: wait; }
 
-.online-mastra-composer { border-radius: 18px; }
-.online-mastra-composer:focus-within {
-  border-color: rgba(95, 125, 255, 0.58);
-  box-shadow: 0 0 0 4px rgba(95, 125, 255, 0.1), 0 16px 38px rgba(36, 54, 88, 0.12);
+.online-mastra-composer {
+  width: min(800px, calc(100% - 2rem));
+  padding: 10px;
+  border: 1px solid #f3f4f6;
+  border-radius: 18px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.05);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
-.online-mastra-composer textarea::placeholder { color: #a7b1c0; }
-.online-mastra-composer-left { gap: 0.4rem; }
+.online-mastra-composer:focus-within {
+  border-color: #bfdbfe;
+  box-shadow: 0 0 0 4px rgba(239, 246, 255, 0.55), 0 8px 30px rgba(0, 0, 0, 0.05);
+}
+.online-mastra-composer textarea {
+  min-height: 58px;
+  padding: 8px 12px;
+  color: #374151;
+  font-size: 14px;
+  line-height: 1.625;
+}
+.online-mastra-composer textarea::placeholder { color: #d1d5db; }
+.online-mastra-composer-foot { gap: 12px; margin-top: 8px; padding: 0 4px; }
+.online-mastra-composer-left { gap: 8px; }
+.online-mastra-composer-actions { gap: 12px; }
 .online-mastra-attach-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid #f3f4f6;
+  border-radius: 999px;
+  background: #f9fafb;
+  color: #9ca3af;
+  font-size: 14px;
+}
+.online-mastra-attach-btn:hover { border-color: #e5e7eb; background: #f3f4f6; color: #6b7280; }
+.online-mastra-permission-current {
+  min-height: 26px;
+  padding: 0 10px;
+  gap: 6px;
+  border: 1px solid rgba(254, 226, 226, 0.5);
+  border-radius: 6px;
+  background: rgba(254, 242, 242, 0.8);
+  color: #ef4444;
+  font-size: 11px;
+}
+.online-mastra-permission-current:hover { background: #fee2e2; }
+.online-mastra-permission-icon {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ef4444;
+  font-size: 0;
+  overflow: hidden;
+}
+.online-mastra-duty-mode {
+  padding: 3px 9px;
+  border: 1px solid #f3f4f6;
+  border-radius: 6px;
+  background: rgba(249, 250, 251, 0.8);
+  color: #6b7280;
+  font-size: 11px;
+}
+.online-mastra-duty-mode .chat-duty-mode-label { opacity: 0.7; }
+.online-mastra-model-label {
+  margin-right: 4px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #9ca3af;
+  font-size: 11px;
+  font-weight: 300;
+}
+.online-mastra-send-btn {
   width: 32px;
   height: 32px;
-  border: 1px solid rgba(34, 49, 78, 0.12);
-  border-radius: 10px;
-  background: #fff;
-  color: #52627a;
-  font-size: 1.05rem;
+  background: #3b82f6;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  font-size: 12px;
+  transition: background 0.18s ease, transform 0.18s ease;
 }
-.online-mastra-attach-btn:hover { border-color: rgba(95, 125, 255, 0.4); background: #f7f9ff; color: #3656d6; }
-.online-mastra-permission-current {
-  min-height: 32px;
-  padding: 0 0.6rem;
-  border-radius: 999px;
-  background: rgba(240, 92, 47, 0.08);
-}
-.online-mastra-permission-current:hover { background: rgba(240, 92, 47, 0.14); }
-.online-mastra-model-label { padding: 0.2rem 0.5rem; border-radius: 999px; background: rgba(34, 49, 78, 0.05); }
-.online-mastra-send-btn {
-  width: 36px;
-  height: 36px;
-  background: linear-gradient(145deg, #5f7dff, #7ea0ff);
-  box-shadow: 0 6px 16px rgba(95, 125, 255, 0.32);
-}
-.online-mastra-send-btn:hover:not(:disabled) { background: linear-gradient(145deg, #4a68f0, #6b8cff); transform: translateY(-1px); }
+.online-mastra-send-btn:hover:not(:disabled) { background: #2563eb; transform: scale(1.05); }
+.online-mastra-send-btn:active:not(:disabled) { transform: scale(0.95); }
 .online-mastra-send-btn:disabled { background: #c8ccd6; box-shadow: none; cursor: not-allowed; transform: none; }
 
 @media (max-width: 768px) {
@@ -13615,67 +13669,97 @@ html[data-brand="bihuo"] .chat-home-copy { max-width: none; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
-  border: 1px solid rgba(91, 124, 255, 0.14);
+  padding: 6px 16px;
+  border: 1px solid rgba(219, 234, 254, 0.6);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.68);
-  color: #4d68dc;
+  background: rgba(255, 255, 255, 0.6);
+  color: #2563eb;
   font-size: 12px;
-  font-weight: 600;
-  box-shadow: 0 2px 10px rgba(36, 54, 88, 0.04);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 .online-mastra-welcome-title {
-  margin: 14px 0 6px;
-  color: #1e2c44;
-  font-size: clamp(28px, 2.4vw, 34px);
+  margin: 20px 0 16px;
+  color: #1f2937;
+  font-size: clamp(30px, 2.4vw, 34px);
   line-height: 1.25;
-  font-weight: 600;
-  letter-spacing: 0;
+  font-weight: 500;
+  letter-spacing: -0.02em;
 }
-.online-mastra-welcome-title strong { color: #5a78f6; font-weight: 600; }
 .online-mastra-welcome-subtitle {
   margin: 0;
-  color: #74829a;
+  color: #9ca3af;
   font-size: 14px;
   line-height: 1.6;
+  font-weight: 300;
 }
 .online-mastra-welcome-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  width: min(780px, 100%);
-  margin: 18px auto 0;
+  gap: 16px;
+  width: min(800px, 100%);
+  margin: 32px auto 0;
   text-align: left;
 }
 .online-mastra-welcome-card {
   min-height: 100px;
-  padding: 15px 17px 14px;
-  border: 1px solid rgba(34, 49, 78, 0.08);
+  padding: 20px;
+  border: 1px solid #f3f4f6;
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.86);
-  box-shadow: 0 8px 22px rgba(36, 54, 88, 0.045);
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: none;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   display: flex;
   flex-direction: column;
   justify-content: center;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+.online-mastra-welcome-card:hover,
+.online-mastra-welcome-card:focus-visible,
+.online-mastra-welcome-card:active {
+  border-color: #bfdbfe;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.04);
+}
+.online-mastra-welcome-card:focus-visible,
+.online-mastra-welcome-card.is-selected {
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12), 0 8px 30px rgba(0, 0, 0, 0.04);
+}
+.online-mastra-welcome-card.is-selected {
+  border-color: #bfdbfe;
+  background: rgba(255, 255, 255, 0.94);
 }
 .online-mastra-welcome-card strong {
   display: block;
-  margin-bottom: 5px;
-  color: #22314d;
+  margin-bottom: 8px;
+  color: #1f2937;
   font-size: 15px;
   line-height: 1.3;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+.online-mastra-welcome-card:hover strong,
+.online-mastra-welcome-card:focus-visible strong {
+  color: #2563eb;
 }
 .online-mastra-welcome-card span {
   display: block;
-  color: #7c8899;
-  font-size: 12.5px;
-  line-height: 1.55;
+  color: #9ca3af;
+  font-size: 12px;
+  line-height: 1.625;
+  font-weight: 300;
 }
 .online-mastra-welcome-hint {
-  margin: 15px 0 0;
-  color: #98a3b3;
-  font-size: 12.5px;
+  margin: 20px 0 0;
+  color: #9ca3af;
+  font-size: 12px;
   line-height: 1.5;
+  font-weight: 300;
 }
 @media (max-width: 720px) {
   .online-mastra-welcome-grid { grid-template-columns: 1fr; }
