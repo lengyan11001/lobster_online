@@ -223,6 +223,29 @@
     box.innerHTML = '<div class="online-mastra-empty" id="onlineMastraEmpty">开始一轮新的对话</div>';
   }
 
+  function renderWelcome() {
+    var box = el('onlineMastraMessages');
+    if (!box) return;
+    if (brandMark() !== 'bihuo') {
+      clearMessages();
+      return;
+    }
+    box.innerHTML = [
+      '<div class="online-mastra-welcome" id="onlineMastraEmpty">',
+      '<div class="online-mastra-welcome-kicker">必火 AI 执行系统</div>',
+      '<h2 class="online-mastra-welcome-title">您好，我是 <strong>必火 AI 员工</strong></h2>',
+      '<p class="online-mastra-welcome-subtitle">说清目标，我按岗位把活做完。</p>',
+      '<div class="online-mastra-welcome-grid">',
+      '<div class="online-mastra-welcome-card"><strong>营销创作</strong><span>文案、图片、视频，一句话直接产出可发布内容。</span></div>',
+      '<div class="online-mastra-welcome-card"><strong>获客增长</strong><span>抖音线索采集、评论互动、私信跟进，按工作流跑完。</span></div>',
+      '<div class="online-mastra-welcome-card"><strong>私域销冠</strong><span>个微 / 企微接管会话，按记忆话术自动跟进客户。</span></div>',
+      '<div class="online-mastra-welcome-card"><strong>岗位工作流</strong><span>把重复动作交给 AI 员工，按时间自动执行。</span></div>',
+      '</div>',
+      '<p class="online-mastra-welcome-hint">直接在下方输入需求，或从上面选一个方向开始新会话。</p>',
+      '</div>'
+    ].join('');
+  }
+
   function enterCompose(initialValue, focusInput) {
     state.composing = true;
     syncActiveViewClass();
@@ -1094,6 +1117,8 @@
   function renderHistoryItem(item) {
     var message = item && item.message ? item.message : {};
     if (!message.id) return;
+    var welcome = el('onlineMastraEmpty');
+    if (welcome) welcome.remove();
     var userBubble = createBubble('user', message.content || (message.attachments && message.attachments.length ? '已添加 ' + message.attachments.length + ' 个素材' : ''));
     addAttachmentView(userBubble, message.attachments || []);
     var final = ['completed', 'failed', 'cancelled'].indexOf(text(message.status)) >= 0;
@@ -1114,6 +1139,10 @@
     state.lastEventIds = {};
     clearMessages();
     state.historyItems = Array.isArray(items) ? items : [];
+    if (!state.historyItems.length) {
+      renderWelcome();
+      return;
+    }
     state.historyItems.forEach(renderHistoryItem);
     // 打开历史会话：直接定位到底部（不要平滑滚动，否则会先看到顶部再滚下去）
     scrollToBottom(true);
