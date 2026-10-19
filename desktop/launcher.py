@@ -2274,6 +2274,9 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         # 只有必火品牌用无边框标题栏（其他 OEM 品牌保持系统原生标题栏）
         _brand_mark = str((_ACTIVE_DESKTOP_BRANDING or {}).get("mark") or "").strip().lower()
         _use_frameless = _brand_mark == "bihuo"
+        # 无边框窗口的上下边缘会露出窗口底色；必火登录页顶部是浅青蓝，
+        # 用暖白色 #fbfaf8 会形成一条明显白边，这里跟登录页顶部同色。
+        _window_background = "#eaf6fb" if _use_frameless else SHELL_BACKGROUND_COLOR
 
         window = webview.create_window(
             title,
@@ -2282,7 +2285,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             height=height,
             min_size=(900, 640),
             text_select=True,
-            background_color=SHELL_BACKGROUND_COLOR,
+            background_color=_window_background,
             js_api=DesktopApi(recover_local_services),
             frameless=_use_frameless,
         )

@@ -13771,6 +13771,9 @@ html[data-brand="bihuo"] #content-chat .online-mastra-chat-head {
 }
 
 /* 2026-10-19：登录页按设计稿还原（仅访客登录态） */
+html:has(.header.auth-guest) {
+  background: #eaf6fb;
+}
 body:has(.header.auth-guest) {
   background:
     radial-gradient(rgba(100, 116, 139, 0.055) 1px, transparent 1px) 0 0 / 24px 24px,
