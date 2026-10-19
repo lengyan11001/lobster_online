@@ -50,9 +50,9 @@
 }
 
 .page:has(#dashboard.visible) .logo-mark {
-  width: 30px;
+  width: auto;
   height: 30px;
-  flex: 0 0 30px;
+  flex: 0 0 auto;
   border-radius: 8px;
   object-fit: contain;
 }
