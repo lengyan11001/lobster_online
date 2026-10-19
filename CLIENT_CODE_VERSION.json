@@ -1,7 +1,7 @@
 {
-  "version": "2.0.153",
-  "build": 448,
-  "applied_at": "2026-10-19T13:06:11+08:00",
-  "note": "必火首页新会话/Mastra会话恢复/范围下拉/微信接管残留浮层清理/登录态续签/桌面标题栏等",
-  "bundle_sha256": "446824b1c6d941742bc0b5d338c47da9bea55dd267c7ea60a64bd3ada7c0b4ce"
+  "version": "2.0.154",
+  "build": 449,
+  "applied_at": "2026-10-19T20:39:09+08:00",
+  "note": "槽位安装目录文件持久化+首次迁移/覆盖日志",
+  "bundle_sha256": "97a1ea5da3bf05229d7acbecf8a95fae4499bbbcb73632ef8e0e5f7206511339"
 }
