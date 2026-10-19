@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Regression: 视频评论 copy must follow the Online setting, never a hardcoded line."""
+"""Regression: touch copy comes from Online's saved settings, not workflow nodes."""
 import sys
 from pathlib import Path
 
@@ -11,6 +11,20 @@ from backend.app.api.h5_chat_channel import (  # noqa: E402
     _scheduled_douyin_online_config_params,
 )
 
+VIDEO_AI_SETTINGS = {
+    "douyin-video-comment-presets-v1": {
+        "activeIndex": 0,
+        "presets": [
+            {
+                "mode": "ai",
+                "comment_text": "",
+                "comment_prompt": "结合视频内容写一句评论",
+                "comment_seed_text": "",
+            }
+        ],
+    }
+}
+
 SHARED_AI_PLANS = [
     {
         "id": 1,
@@ -18,37 +32,70 @@ SHARED_AI_PLANS = [
         "updated_at": "2026-10-18 10:00:00",
         "reply_precise_comments": True,
         "reply_comment_mode": "ai",
-        "reply_comment_prompt": "结合视频内容写一句评论",
+        "reply_comment_prompt": "计划里的方向",
     }
 ]
 
 
-def test_precise_touch_uses_video_comment_ai_copy():
-    params = _scheduled_douyin_online_config_params("precise_touch", plans=SHARED_AI_PLANS)
+def test_precise_touch_uses_online_video_comment_ai_preset():
+    params = _scheduled_douyin_online_config_params(
+        "precise_touch", plans=[], local_settings=VIDEO_AI_SETTINGS
+    )
     assert params["comment_mode"] == "ai"
     assert params["comment_prompt"] == "结合视频内容写一句评论"
 
 
-def test_follow_comment_with_empty_legacy_plan_falls_back_to_video_comment_copy():
-    plans = [
-        {"type": "follow_comment", "updated_at": "2026-10-18 11:00:00",
-         "comment_mode": "fixed", "comment_text": ""},
-        {"type": "collect_precise", "reply_comment_mode": "ai",
-         "reply_comment_prompt": "p"},
-    ]
-    params = _scheduled_douyin_online_config_params("follow_comment", plans=plans)
+def test_follow_comment_uses_follow_preset_then_video_preset():
+    settings = {
+        "douyin-follow-comment-presets-v1": {
+            "activeIndex": 0,
+            "presets": [{"mode": "fixed", "comment_text": ""}],
+        },
+        "douyin-video-comment-presets-v1": {
+            "activeIndex": 0,
+            "presets": [{"mode": "ai", "comment_prompt": "视频评论方向"}],
+        },
+    }
+    params = _scheduled_douyin_online_config_params(
+        "follow_comment", plans=[], local_settings=settings
+    )
     assert params["comment_mode"] == "ai"
-    assert params["comment_prompt"] == "p"
+    assert params["comment_prompt"] == "视频评论方向"
 
 
-def test_workflow_node_reply_comment_copy_wins_in_precise_touch_merge():
+def test_older_install_falls_back_to_scheduler_plan_copy():
+    params = _scheduled_douyin_online_config_params(
+        "follow_comment", plans=SHARED_AI_PLANS, local_settings={}
+    )
+    assert params["comment_mode"] == "ai"
+    assert params["comment_prompt"] == "计划里的方向"
+
+
+def test_workflow_node_copy_does_not_override_online_config():
     merged = _merge_scheduled_douyin_precise_touch_params(
-        {"comment_mode": "fixed", "comment_text": "old"},
-        {"reply_comment_mode": "ai", "reply_comment_prompt": "x",
+        {"comment_mode": "fixed", "comment_text": "online"},
+        {"reply_comment_mode": "ai", "reply_comment_prompt": "node",
          "touch_actions": ["follow_comment"]},
     )
-    assert merged["comment_mode"] == "ai"
-    assert merged["comment_prompt"] == "x"
+    assert merged["comment_mode"] == "fixed"
+    assert merged["comment_text"] == "online"
+    assert "reply_comment_mode" not in merged
+    assert "comment_prompt" not in merged
+
+
+def test_direct_message_uses_online_interaction_preset():
+    settings = {
+        "douyin-interaction-message-presets-v1": {
+            "activeIndex": 1,
+            "presets": ["第一条", "第二条私信"],
+        },
+        "douyin-interaction-mode-v1": "fixed",
+    }
+    params = _scheduled_douyin_online_config_params(
+        "direct_message", plans=[], local_settings=settings
+    )
+    assert params["message_mode"] == "fixed"
+    assert params["message"] == "第二条私信"
 
 
 def test_missing_comment_copy_never_falls_back_to_hardcoded_text():
