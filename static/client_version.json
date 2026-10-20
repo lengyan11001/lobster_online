@@ -1,7 +1,7 @@
 {
-  "version": "2.0.166",
-  "build": 463,
-  "applied_at": "2026-10-20T15:26:10+08:00",
-  "note": "切页恢复热键方案；扫描链路补细粒度心跳",
-  "bundle_sha256": "2c1951f825d5db5ddaeda10383491476b1e0ffc02ab60cdedef26c1d26c957ef"
+  "version": "2.0.167",
+  "build": 464,
+  "applied_at": "2026-10-20T15:41:18+08:00",
+  "note": "移除 wxauto4 IsOnline 调用，避免 scan:client 卡死",
+  "bundle_sha256": "aa2c2dd6970dcb264d9a0ed6c0d2bc0a37bf6d4f0a6b1b7e04bc1fa59a275a5e"
 }
