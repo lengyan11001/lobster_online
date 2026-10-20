@@ -1,7 +1,7 @@
 {
-  "version": "2.0.164",
-  "build": 461,
-  "applied_at": "2026-10-20T13:44:21+08:00",
-  "note": "切页全部去掉 UIA 校验；扫描前用 wxauto4 导航栏切聊天页",
-  "bundle_sha256": "0273b751855625f7601fe86eacc87d276950af70fe85794e95b1636de94f7ef6"
+  "version": "2.0.165",
+  "build": 462,
+  "applied_at": "2026-10-20T13:55:10+08:00",
+  "note": "微信/通讯录切页改为绝对坐标点导航图标，彻底不走 UIA",
+  "bundle_sha256": "8cac0cca7527c4808f1ee35e433a6f4e4223afaa434936e845aa6aa9d6a86cd5"
 }
