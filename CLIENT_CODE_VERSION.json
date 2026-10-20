@@ -1,7 +1,7 @@
 {
-  "version": "2.0.158",
-  "build": 454,
-  "applied_at": "2026-10-20T11:12:21+08:00",
-  "note": "启动页聚光灯Logo+隐藏解压日志；登录页与窗口细节同步",
-  "bundle_sha256": "ad5bbbf03229d7b2388ffbb37bc6b97b0a82e4597b8bfd644b8b2da41306b484"
+  "version": "2.0.159",
+  "build": 455,
+  "applied_at": "2026-10-20T12:34:43+08:00",
+  "note": "修复微信自动化锁死；槽位固化禁止服务器重签覆盖；登录页与品牌图标同步",
+  "bundle_sha256": "2d6be0e8beecca4b9b9aa6cb49c08d84b07d2352a9553b210b4b6b3c34ac91b0"
 }
