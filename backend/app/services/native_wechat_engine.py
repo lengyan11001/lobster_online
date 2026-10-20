@@ -170,6 +170,7 @@ _UI_EXECUTOR_BUSY_LOCK = threading.Lock()
 _LOCAL_WECHAT_UI_LOCK = threading.RLock()
 _LOCAL_WECHAT_THREAD_STATE = threading.local()
 _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID = 0
+_LOCAL_WECHAT_WINDOW_SIGNATURE: tuple[int, int] = (0, 0)
 _LOCAL_WECHAT_DRIVER_RECOVERY: Dict[str, Dict[str, Any]] = {}
 _LOCAL_WXAUTO4_CLIENTS: Dict[tuple[str, int], Any] = {}
 # Accounts doing an automatic-takeover scan use wxauto4's precise timestamps.
@@ -9633,6 +9634,16 @@ def _reset_local_automation_clients() -> Dict[str, Any]:
                 reset.append(module_name)
         except Exception as exc:
             errors.append(f"{module_name}: {exc}")
+    try:
+        # wxauto4 的 uilock 是全局 RLock。执行器线程卡在 uilock 里被超时放弃后，
+        # 这个 RLock 仍然被僵尸线程持有；只重建线程/客户端不解锁，下一轮会继续
+        # 卡在同一个锁上（表现为重启微信也没用、每轮都 46 秒超时）。
+        from wxauto4.utils import lock as _wxauto4_lock
+
+        _wxauto4_lock.LockManager.thread_lock = threading.RLock()
+        reset.append("wxauto4.utils.lock.LockManager.thread_lock")
+    except Exception as exc:
+        errors.append(f"wxauto4.utils.lock: {exc}")
     _LOCAL_WECHAT_AUTOMATION_OWNER_THREAD_ID = threading.get_ident()
     return {"reset": reset, "errors": errors}
 
@@ -9904,14 +9915,15 @@ def _call_in_ui_executor(
     while not done.wait(2.0):
         age = _ui_progress_age()
         if limit > 0 and age > limit:
+            last_step = str(_UI_PROGRESS.get("what") or "")[:80]
             epoch = _abandon_ui_executor("stall:%.0fs" % age, account_id=account_id)
             logging.getLogger(__name__).warning(
-                "[native-wechat] 微信界面自动化调用超时（%.0f 秒没有任何动作）operation=%s account=%s epoch=%s",
-                age, operation, account_id, epoch,
+                "[native-wechat] 微信界面自动化调用超时（%.0f 秒没有任何动作）operation=%s account=%s epoch=%s last_step=%s",
+                age, operation, account_id, epoch, last_step,
             )
             raise RuntimeError(
                 "微信界面自动化调用超时（%.0f 秒没有任何动作）—— 微信可能卡死，"
-                "建议重启微信后重试；引擎已自动重建执行器" % age
+                "建议重启微信后重试；引擎已自动重建执行器（最后动作=%s）" % (age, last_step or "unknown")
             )
     if "error" in box:
         raise box["error"]
@@ -9931,6 +9943,24 @@ def _run_local_driver_operation(
     # operation finishes and click the wrong control.
     if not _LOCAL_WECHAT_UI_LOCK.acquire(timeout=0.75):
         raise RuntimeError("\u5fae\u4fe1\u6b63\u5728\u5904\u7406\u4e0a\u4e00\u9879\u64cd\u4f5c\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5")
+    try:
+        global _LOCAL_WECHAT_WINDOW_SIGNATURE
+        _windows_now = _scan_local_wechat_windows(max_age_seconds=0)
+        _sig_now = (
+            int((_windows_now[0] if _windows_now else {}).get("hwnd") or 0),
+            int((_windows_now[0] if _windows_now else {}).get("pid") or 0),
+        )
+        if _sig_now != (0, 0) and _sig_now != _LOCAL_WECHAT_WINDOW_SIGNATURE:
+            if _LOCAL_WECHAT_WINDOW_SIGNATURE != (0, 0):
+                logger.info(
+                    "[native-wechat] 微信窗口已变化，重建自动化客户端 old=%s new=%s",
+                    _LOCAL_WECHAT_WINDOW_SIGNATURE,
+                    _sig_now,
+                )
+                _reset_local_automation_clients()
+            _LOCAL_WECHAT_WINDOW_SIGNATURE = _sig_now
+    except Exception:
+        pass
     _task_ctl = _task_control()
     if _task_ctl is not None:
         try:
@@ -10056,7 +10086,9 @@ def _new_wxauto4_client(account_id: str = "", *, ensure_chat_tab: bool = True) -
                 time.sleep(0.35 * attempt)
             if ensure_chat_tab:
                 _ensure_local_chat_tab(account_id)
+            _ui_progress_tick("wxauto4_client:create")
             wx = wxauto4.WeChat(debug=False, resize=False, ads=False)
+            _ui_progress_tick("wxauto4_client:created")
             _bound_wxauto4_file_logger()
             _restore_backend_file_logger()
             online_check = getattr(wx, "IsOnline", None)
@@ -10642,6 +10674,7 @@ def _sync_recent_sessions_from_wxauto4(
     # 下一轮再重试，避免把窗口反复抢来抢去（线上 2026-09-17 错发的诱因之一）。
     capture_attempted: set[str] = set()
     try:
+        _ui_progress_tick("wxauto4_sessions:go_top")
         try:
             box.go_top()
             time.sleep(0.15)
@@ -10650,6 +10683,7 @@ def _sync_recent_sessions_from_wxauto4(
         page_limit = max(1, min(int(max_pages or 1), 200))
         for index in range(page_limit):
             rounds = index + 1
+            _ui_progress_tick("wxauto4_sessions:page%d" % rounds)
             sessions = list(wx.GetSession() or [])
             if not sessions and index == 0:
                 # 首屏读空：客户端刚启动 / 窗口刚恢复时 GetSession 会返回空，
