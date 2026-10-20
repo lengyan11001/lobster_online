@@ -601,6 +601,8 @@ function applyBrandingFromApi() {
             : String(b.document_title || '').replace(/\s*AI.*$/i, '').trim();
         }
         authLoginBrandName.textContent = loginBrandText || '必火智能';
+        var visionLabel = document.getElementById('authLoginVisionLabel');
+        if (visionLabel) visionLabel.textContent = (loginBrandText || '必火智能') + '的愿景：';
       }
       var heroH = document.getElementById('brandHeroTitle');
       var heroP = document.getElementById('brandHeroSubtitle');
@@ -1030,6 +1032,124 @@ if (loginForm) {
     button.setAttribute('aria-pressed', show ? 'true' : 'false');
     button.setAttribute('aria-label', show ? '隐藏密码' : '显示密码');
   });
+})();
+
+(function bindForgotPasswordModal() {
+  var modal = document.getElementById('forgotPasswordModal');
+  var openBtn = document.getElementById('authForgotPasswordBtn');
+  if (!modal || !openBtn) return;
+  var phoneEl = document.getElementById('forgotPhone');
+  var smsEl = document.getElementById('forgotSmsCode');
+  var newEl = document.getElementById('forgotNewPassword');
+  var confirmEl = document.getElementById('forgotConfirmPassword');
+  var sendBtn = document.getElementById('forgotSendSmsBtn');
+  var submitBtn = document.getElementById('forgotSubmitBtn');
+  var msgEl = document.getElementById('forgotMsg');
+  var timer = null;
+
+  function base() {
+    try { return String((typeof API_BASE !== 'undefined' && API_BASE) ? API_BASE : '').replace(/\/$/, ''); }
+    catch (e) { return ''; }
+  }
+  function setMsg(text, isErr) {
+    if (!msgEl) return;
+    msgEl.textContent = text || '';
+    msgEl.className = 'forgot-msg' + (text ? ' show ' + (isErr ? 'err' : 'ok') : '');
+  }
+  function validPhone() {
+    var digits = String((phoneEl && phoneEl.value) || '').replace(/\D/g, '');
+    return /^1[3-9]\d{9}$/.test(digits) ? digits : '';
+  }
+  function cooldown(sec) {
+    if (!sendBtn) return;
+    if (timer) { clearInterval(timer); timer = null; }
+    var left = Number(sec || 0);
+    if (left <= 0) { sendBtn.disabled = false; sendBtn.textContent = '获取验证码'; return; }
+    sendBtn.disabled = true;
+    function tick() {
+      sendBtn.textContent = left > 0 ? ('已发送(' + left + 's)') : '获取验证码';
+      if (left <= 0) { sendBtn.disabled = false; if (timer) clearInterval(timer); timer = null; return; }
+      left -= 1;
+    }
+    tick();
+    timer = setInterval(tick, 1000);
+  }
+  function closeModal() {
+    modal.hidden = true;
+    document.body.classList.remove('forgot-modal-open');
+    setMsg('', false);
+  }
+  function openModal() {
+    setMsg('', false);
+    modal.hidden = false;
+    document.body.classList.add('forgot-modal-open');
+    setTimeout(function () { if (phoneEl) phoneEl.focus(); }, 0);
+  }
+  function sendCode() {
+    var phone = validPhone();
+    if (!phone) return setMsg('请输入有效的 11 位手机号', true);
+    if (!base()) return setMsg('未配置认证服务地址', true);
+    if (sendBtn) sendBtn.disabled = true;
+    setMsg('正在发送验证码…', false);
+    fetch(base() + '/auth/password/reset/send-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: phone, brand_mark: typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo' })
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, status: r.status, data: d }; });
+    }).then(function (x) {
+      if (!x.ok) throw new Error((x.data && (x.data.detail || x.data.message)) || ('发送失败 (' + x.status + ')'));
+      setMsg('验证码已发送，请查收', false);
+      cooldown(60);
+    }).catch(function (e) {
+      if (sendBtn) sendBtn.disabled = false;
+      setMsg('发送验证码失败：' + (e && e.message ? e.message : '网络错误'), true);
+    });
+  }
+  function submitReset() {
+    var phone = validPhone();
+    var code = String((smsEl && smsEl.value) || '').trim();
+    var pwd = String((newEl && newEl.value) || '');
+    var confirm = String((confirmEl && confirmEl.value) || '');
+    if (!phone) return setMsg('请输入有效的 11 位手机号', true);
+    if (!code) return setMsg('请输入短信验证码', true);
+    if (pwd.length < 6) return setMsg('新密码至少 6 位', true);
+    if (pwd.length > 128) return setMsg('新密码不能超过 128 位', true);
+    if (pwd !== confirm) return setMsg('两次输入的新密码不一致', true);
+    if (!base()) return setMsg('未配置认证服务地址', true);
+    if (submitBtn) submitBtn.disabled = true;
+    setMsg('正在重置密码…', false);
+    fetch(base() + '/auth/password/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: phone, code: code, new_password: pwd, brand_mark: typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : 'bihuo' })
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) { return { ok: r.ok, status: r.status, data: d }; });
+    }).then(function (x) {
+      if (!x.ok) throw new Error((x.data && (x.data.detail || x.data.message)) || ('重置失败 (' + x.status + ')'));
+      setMsg('密码已重置，请用新密码登录', false);
+      if (smsEl) smsEl.value = '';
+      if (newEl) newEl.value = '';
+      if (confirmEl) confirmEl.value = '';
+      setTimeout(function () {
+        closeModal();
+        try { setAuthLoginTab('password'); } catch (e) {}
+        var account = document.getElementById('loginAccount');
+        if (account) { account.value = phone; account.focus(); }
+      }, 1200);
+    }).catch(function (e) {
+      if (submitBtn) submitBtn.disabled = false;
+      setMsg('重置密码失败：' + (e && e.message ? e.message : '网络错误'), true);
+    });
+  }
+  openBtn.addEventListener('click', openModal);
+  modal.addEventListener('click', function (event) {
+    var t = event.target;
+    if (t === modal || (t && t.getAttribute && t.getAttribute('data-forgot-close') === '1')) closeModal();
+  });
+  if (sendBtn) sendBtn.addEventListener('click', sendCode);
+  if (submitBtn) submitBtn.addEventListener('click', submitReset);
+  document.addEventListener('keydown', function (event) { if (event.key === 'Escape' && !modal.hidden) closeModal(); });
 })();
 
 var _registerSmsCooldownTimer = null;
