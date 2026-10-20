@@ -1,7 +1,7 @@
 {
-  "version": "2.0.161",
-  "build": 457,
-  "applied_at": "2026-10-20T12:59:19+08:00",
-  "note": "微信页签切换跳过 UIA 树校验，避开 ChatSessionList GetChildren 卡死",
-  "bundle_sha256": "08c9b43bdd797772c8baa378922992f5c44bf57e1dcdf26a9775042008fd4cca"
+  "version": "2.0.162",
+  "build": 458,
+  "applied_at": "2026-10-20T13:11:11+08:00",
+  "note": "会话扫描移除 UIA 置顶探测，固定 12 页上限，避开 GetChildren 卡死",
+  "bundle_sha256": "ebea7dc091848ae4dd8010350fcbead91435552f4a320894ca911c1f919f1261"
 }
