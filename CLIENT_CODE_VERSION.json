@@ -1,7 +1,7 @@
 {
-  "version": "2.0.163",
-  "build": 459,
-  "applied_at": "2026-10-20T13:27:05+08:00",
-  "note": "回正聊天页不再走 UIA 遍历，避开 GetChildren 卡死",
-  "bundle_sha256": "3fbb49e03bfb3023cbc7e17f3d1117b46b04a903a31834f7546f8d788a2cb1bc"
+  "version": "2.0.164",
+  "build": 461,
+  "applied_at": "2026-10-20T13:44:21+08:00",
+  "note": "切页全部去掉 UIA 校验；扫描前用 wxauto4 导航栏切聊天页",
+  "bundle_sha256": "0273b751855625f7601fe86eacc87d276950af70fe85794e95b1636de94f7ef6"
 }
