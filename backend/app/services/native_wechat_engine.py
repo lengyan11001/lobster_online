@@ -7833,6 +7833,40 @@ def _wechat_tab_ready(hwnd: int, tab_name: str, *, timeout: float = 1.2) -> bool
         time.sleep(0.15)
     return False
 
+def _click_wechat_nav_icon(hwnd: int, tab_name: str) -> bool:
+    """Click the left navigation icon by absolute coordinates (no UIA).
+
+    WeChat 4.1.7.59's UIA tree can block in GetChildren() for 46s on some
+    accounts.  The nav icons are at a stable offset from the window rect:
+      chat:    left+38, top+97   (96 DPI)
+      contact: left+38, top+145
+    Scale by the window DPI so 125%/150% displays still hit the icon.
+    """
+    try:
+        import win32api
+        import win32con
+        import win32gui
+
+        left, top, right, bottom = win32gui.GetWindowRect(int(hwnd))
+        try:
+            dpi = int(ctypes.windll.user32.GetDpiForWindow(int(hwnd)) or 96)
+        except Exception:
+            dpi = 96
+        scale = max(0.75, min(2.0, dpi / 96.0))
+        offset_y = 97 if str(tab_name).strip() == "微信" else 145
+        x = int(left + 38 * scale)
+        y = int(top + offset_y * scale)
+        _focus_local_wechat(int(hwnd))
+        time.sleep(0.2)
+        win32api.SetCursorPos((x, y))
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        time.sleep(0.45)
+        return True
+    except Exception:
+        return False
+
+
 def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None:
     """切换到本机微信的左侧页面（\u5fae\u4fe1 / \u901a\u8baf\u5f55）。
 
@@ -7867,11 +7901,15 @@ def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None
                 raise
             except Exception as exc:
                 last_err = exc
+            # 微信/通讯录用绝对坐标点左侧导航图标，彻底不走 UIA。
+            if str(tab_name).strip() in {"微信", "通讯录"}:
+                _ui_progress_tick("tab_switch:mouse_nav")
+                clicked = _click_wechat_nav_icon(int(hwnd), str(tab_name))
+                _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
+                                    method="mouse_nav" if clicked else "hotkey_no_verify",
+                                    attempt=attempt + 1)
+                return
             _ui_progress_tick("tab_switch:done")
-            # 不做任何 UIA 内容校验：WeChat 4.1.7.59 在部分账号上只要遍历
-            # 树就会把 GetChildren() 卡死 46s（diag_20261020053933 最后动作
-            # =tab_switch:verify，微信/通讯录都会中招）。热键是竞品同款做法，
-            # 切错时后面的读会话/通讯录会给出明确失败，不再整轮空等。
             _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
                                 method="hotkey_no_verify", attempt=attempt + 1)
             return
@@ -10666,13 +10704,6 @@ def _sync_recent_sessions_from_wxauto4(
     per-row filter and must never terminate the scan.
     """
     wx = _get_wxauto4_client(account_id)
-    # 用 wxauto4 自己的导航栏切到聊天页：比 Ctrl+1 可靠，而且不遍历 UIA 树。
-    # 这一步解决“GetSession 返回空 / 读不到会话”的根因（Ctrl+1 偶发没生效）。
-    try:
-        wx.NavigationBox.switch_to_chat_page()
-        time.sleep(0.2)
-    except Exception:
-        pass
     box = getattr(wx, "SessionBox", None)
     if box is None:
         raise RuntimeError("wxauto4 SessionBox is unavailable")
