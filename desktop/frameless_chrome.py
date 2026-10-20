@@ -46,6 +46,8 @@ _user32.ScreenToClient.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)
 _user32.CallWindowProcW.restype = ctypes.c_ssize_t
 _user32.CallWindowProcW.argtypes = [ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 
+WM_NCCALCSIZE = 0x0083
+
 _state: dict[int, tuple] = {}
 
 
@@ -70,6 +72,11 @@ def apply(hwnd: int, *, drag_height: int = 10, border: int = 6) -> bool:
 
     def _proc(h, msg, wparam, lparam):
         try:
+            # WS_THICKFRAME keeps native resize hit-testing, but it also adds a
+            # white non-client frame. Make the client area cover the whole
+            # window; WM_NCHITTEST below still returns the resize edges.
+            if msg == WM_NCCALCSIZE and wparam:
+                return 0
             if msg == WM_NCHITTEST:
                 sx = ctypes.c_short(lparam & 0xFFFF).value
                 sy = ctypes.c_short((lparam >> 16) & 0xFFFF).value
@@ -104,4 +111,7 @@ def apply(hwnd: int, *, drag_height: int = 10, border: int = 6) -> bool:
     cb = _WNDPROC(_proc)
     _state[hwnd] = (cb, old_proc)
     _user32.SetWindowLongPtrW(hwnd, GWL_WNDPROC, ctypes.cast(cb, ctypes.c_void_p).value)
+    # The first SWP_FRAMECHANGED above happened before our WndProc was
+    # installed, so the WM_NCCALCSIZE handler had not removed the frame yet.
+    _user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED)
     return True
