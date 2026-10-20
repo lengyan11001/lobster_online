@@ -23,8 +23,8 @@
 
 .page:has(#dashboard.visible) .header {
   width: 100%;
-  min-height: 72px;
-  height: 72px;
+  min-height: 80px;
+  height: 80px;
   margin: 0;
   padding: 16px 20px 0;
   flex-wrap: nowrap;
@@ -77,7 +77,7 @@
   order: initial;
   flex: 1 1 auto;
   min-width: 0;
-  min-height: 55px;
+  min-height: 64px;
   margin: 0;
   padding: 0;
   display: flex;
@@ -97,9 +97,12 @@
 
 .page:has(#dashboard.visible) .app-top-nav .nav-left-item {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   min-width: auto;
-  min-height: 55px;
+  min-height: 64px;
   padding: 0 2px;
   border: 0;
   border-radius: 0;
@@ -192,7 +195,7 @@
 
 .page:has(#dashboard.visible) #dashboard.visible {
   width: 100%;
-  height: calc(100dvh - 72px);
+  height: calc(100dvh - 80px);
   min-height: 0;
   margin: 0;
   padding: 0;
