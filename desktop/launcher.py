@@ -46,7 +46,7 @@ BLANK_HTML = """<!doctype html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title></title></head>
 <body></body>
 </html>"""
-LOADING_HTML = """<!doctype html>
+LOADING_HTML = r"""<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
