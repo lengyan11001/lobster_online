@@ -22,11 +22,11 @@ def test_login_icon_has_shine_effect_and_cache_is_busted():
 def test_dashboard_header_has_top_breathing_room():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "static" / "css" / "pc-workbench.css").read_text(encoding="utf-8")
-    assert "/static/css/pc-workbench.css?v=20261020-nav-64-centered-v1" in html
-    assert "min-height: 80px;" in css
-    assert "padding: 16px 20px 0;" in css
+    assert "/static/css/pc-workbench.css?v=20261020-nav-64-centered-v2" in html
+    assert "min-height: 64px;" in css
+    assert "padding: 0 20px;" in css
     assert "min-height: 64px;" in css
     assert "align-items: center;" in css
-    assert "height: calc(100dvh - 80px);" in css
+    assert "height: calc(100dvh - 64px);" in css
     assert "padding-bottom: 32px;" in css
     assert "padding-bottom: 48px;" in css
