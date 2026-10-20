@@ -23,10 +23,10 @@
 
 .page:has(#dashboard.visible) .header {
   width: 100%;
-  min-height: 56px;
-  height: 56px;
+  min-height: 64px;
+  height: 64px;
   margin: 0;
-  padding: 0 20px;
+  padding: 8px 20px 0;
   flex-wrap: nowrap;
   gap: 18px;
   border: 0;
@@ -192,7 +192,7 @@
 
 .page:has(#dashboard.visible) #dashboard.visible {
   width: 100%;
-  height: calc(100dvh - 56px);
+  height: calc(100dvh - 64px);
   min-height: 0;
   margin: 0;
   padding: 0;
@@ -3814,4 +3814,20 @@ html[data-brand="bihuo"] #content-chat #chatWorkspace.is-empty .chat-send-btn {
   height: 42px;
   background: linear-gradient(180deg, #5f7dff 0%, #4f6de2 100%);
   box-shadow: 0 14px 28px rgba(79, 109, 226, 0.3);
+}
+
+/* Keep the chat composer clear of the window bottom for both home and active chats. */
+.page:has(#dashboard.visible) #content-chat .chat-workspace {
+  padding-bottom: 32px;
+}
+.page:has(#dashboard.visible) #content-chat #chatWorkspace.is-empty {
+  padding-bottom: 48px;
+}
+@media (max-width: 768px) {
+  .page:has(#dashboard.visible) #content-chat .chat-workspace {
+    padding-bottom: 24px;
+  }
+  .page:has(#dashboard.visible) #content-chat #chatWorkspace.is-empty {
+    padding-bottom: 36px;
+  }
 }

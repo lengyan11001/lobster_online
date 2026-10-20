@@ -18,3 +18,13 @@ def test_login_icon_has_shine_effect_and_cache_is_busted():
     assert "/static/css/index.css?v=20261020-login-shine-v1" in html
     assert "authLogoShine" in css
     assert "auth-logo" in css
+
+def test_dashboard_header_has_top_breathing_room():
+    html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
+    css = (ROOT / "static" / "css" / "pc-workbench.css").read_text(encoding="utf-8")
+    assert "/static/css/pc-workbench.css?v=20261020-header-composer-spacing-v1" in html
+    assert "min-height: 64px;" in css
+    assert "padding: 8px 20px 0;" in css
+    assert "height: calc(100dvh - 64px);" in css
+    assert "padding-bottom: 32px;" in css
+    assert "padding-bottom: 48px;" in css
