@@ -457,6 +457,14 @@ def load_desktop_branding(root: Path | None = None) -> dict[str, object]:
         )
         remote_profile = resolve_factory_oem_branding(root, configured_oem_code, server_base)
         if remote_profile:
+            remote_mark = str(remote_profile.get("mark") or "").strip().lower()
+            if remote_mark == "bihuo":
+                local_config = marks.get("bihuo") if isinstance(marks.get("bihuo"), dict) else {}
+                if local_config:
+                    profile = dict(local_config)
+                    profile["mark"] = "bihuo"
+                    log("OEM profile mark=bihuo; using local bihu branding assets")
+                    return profile
             return remote_profile
         log(f"OEM branding unavailable code={configured_oem_code}; keeping desktop branding blank")
         return {"mark": "", "_branding_unavailable": True, "_oem_code": configured_oem_code}
@@ -491,29 +499,32 @@ def configure_desktop_branding() -> dict[str, object]:
     return profile
 
 
-def refresh_oem_desktop_shortcut(branding: dict[str, object]) -> None:
+def refresh_oem_desktop_shortcut(branding: dict[str, object], only_existing: bool = False) -> None:
     profile_path = str(branding.get("_cache_profile_path") or "").strip()
-    if os.name != "nt" or not profile_path:
+    if os.name != "nt":
         return
     script = ROOT / "scripts" / "create_desktop_shortcut.ps1"
     if not script.is_file():
         return
     try:
+        command = [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(script),
+            "-Root",
+            str(ROOT),
+            "-BrandMark",
+            str(branding.get("mark") or ""),
+        ]
+        if profile_path:
+            command += ["-BrandProfilePath", profile_path]
+        if only_existing:
+            command.append("-OnlyExisting")
         result = subprocess.run(
-            [
-                "powershell",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                str(script),
-                "-Root",
-                str(ROOT),
-                "-BrandMark",
-                str(branding.get("mark") or ""),
-                "-BrandProfilePath",
-                profile_path,
-            ],
+            command,
             cwd=str(ROOT),
             capture_output=True,
             text=True,
@@ -2350,6 +2361,8 @@ def main() -> int:
     configure_windows_app_identity(brand_mark)
     if branding.get("_oem_code"):
         refresh_oem_desktop_shortcut(branding)
+    elif brand_mark == "bihuo":
+        refresh_oem_desktop_shortcut(branding, only_existing=True)
 
     if not (ROOT / "backend").is_dir() or not (ROOT / "static").is_dir():
         message_box(desktop_brand_title(APP_NAME, branding), f"客户端目录不完整，找不到 backend/static。\n\n当前目录：{ROOT}")

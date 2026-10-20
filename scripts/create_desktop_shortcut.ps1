@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Root,
     [string]$BrandMark = '',
-    [string]$BrandProfilePath = ''
+    [string]$BrandProfilePath = '',
+    [switch]$OnlyExisting
 )
 
 $ErrorActionPreference = 'Stop'
@@ -108,6 +109,10 @@ $desc = [string]$inst.shortcut_description
 if ([string]::IsNullOrWhiteSpace($desc)) { $desc = 'Bihuo AI Employee local client' }
 
 $lnkPath = Join-Path $desktop $lnkName
+if ($OnlyExisting -and -not (Test-Path -LiteralPath $lnkPath)) {
+    Write-Host "[desktop-shortcut] skipped (missing, only-existing)"
+    exit 2
+}
 try {
     $shell = New-Object -ComObject WScript.Shell
     $sc = $shell.CreateShortcut($lnkPath)

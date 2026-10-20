@@ -14076,30 +14076,6 @@ body:has(.header.auth-guest) .auth-forgot {
   text-decoration: none;
 }
 body:has(.header.auth-guest) .auth-forgot:hover { color: #2563eb; }
-body:has(.header.auth-guest) .auth-agree-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  margin-top: 24px;
-  color: #9ca3af;
-  font-size: 12px;
-  line-height: 1.5;
-}
-body:has(.header.auth-guest) .auth-agree-row input {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: #3b82f6;
-  cursor: pointer;
-}
-body:has(.header.auth-guest) .auth-agree-row label { cursor: pointer; }
-body:has(.header.auth-guest) .auth-agree-row a {
-  color: #3b82f6;
-  text-decoration: none;
-}
-body:has(.header.auth-guest) .auth-agree-row a:hover { color: #2563eb; }
 body:has(.header.auth-guest) .auth-panel-hint {
   margin: 0;
   color: rgba(156, 163, 175, 0.8);
@@ -14353,9 +14329,6 @@ body:has(.header.auth-guest) .auth-login-vision-text {
   font-weight: 300;
   letter-spacing: 0.01em;
   white-space: nowrap;
-}
-body:has(.header.auth-guest) .auth-agree-row {
-  margin-top: 24px;
 }
 @media (max-width: 640px) {
   body:has(.header.auth-guest) .auth-login-subtitle { white-space: normal; }
