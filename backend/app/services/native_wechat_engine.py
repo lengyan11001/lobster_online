@@ -7890,11 +7890,10 @@ def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None
                         _ui_progress_tick("tab_switch:click_button")
                         _click_uia_node(btn)
                         time.sleep(0.8)
-                        _ui_progress_tick("tab_switch:verify")
-                        if _wechat_tab_ready(hwnd, tab_name):
-                            _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
-                                                method="uia_button", attempt=attempt + 1)
-                            return
+                        # 点击后也不再做 UIA 内容校验，避免 GetChildren 卡死。
+                        _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
+                                            method="uia_button_no_verify", attempt=attempt + 1)
+                        return
                 except TaskPaused:
                     raise
                 except Exception as exc:
@@ -7905,11 +7904,9 @@ def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None
                         _ui_progress_tick("tab_switch:click_node")
                         _click_uia_node(node)
                         time.sleep(0.8)
-                        _ui_progress_tick("tab_switch:verify")
-                        if _wechat_tab_ready(hwnd, tab_name):
-                            _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
-                                                method="uia_node", attempt=attempt + 1)
-                            return
+                        _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
+                                            method="uia_node_no_verify", attempt=attempt + 1)
+                        return
                     except TaskPaused:
                         raise
                     except Exception as exc:
