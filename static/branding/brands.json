@@ -10,7 +10,7 @@
       "icons": {
         "favicon_32": "/static/bihu_32.png",
         "apple_touch": "/static/bihu_128.png",
-        "loading_mark": "/static/bihu_64.png",
+        "loading_mark": "/static/bihu_mark_64.png",
         "home_visual": "/static/bihu_source.png",
         "logo_mark": "/static/bihu_stack.png",
         "logo_mark_width": 68,

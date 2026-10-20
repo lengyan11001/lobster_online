@@ -127,7 +127,14 @@
       <div class="auth-login-hero">
         <img class="auth-login-logo" id="authLoginLogo" src="__LOBSTER_LOGO_MARK__" alt="">
         <h1 class="auth-login-title">欢迎回到 <span id="authLoginBrandName">必火智能</span></h1>
-        <p class="auth-login-subtitle" id="authLoginSubtitle"><span id="authLoginVisionLabel">必火智能的愿景：</span><br><span>成为全球领先的企业AI员工解决方案服务商</span></p>
+        <p class="auth-login-subtitle" id="authLoginSubtitle">您的全能 AI 执行助手已就绪</p>
+        <div class="auth-login-vision" role="note">
+          <span class="auth-login-vision-label">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M15.7 8.3l-2.3 5.1-5.1 2.3 2.3-5.1z" fill="currentColor"/></svg>愿景
+          </span>
+          <span class="auth-login-vision-divider" aria-hidden="true"></span>
+          <span class="auth-login-vision-text">成为全球领先的企业 AI 员工解决方案服务商</span>
+        </div>
       </div>
       <div class="auth-card">
         <div id="authRegisterView" class="auth-view">
@@ -188,6 +195,13 @@
             <button type="button" id="ownWechatTokenBtn" class="btn" style="display:block;margin:0 auto;">使用 Token 登录</button>
             <p id="ownWechatPasteMsg" class="msg" style="display:none;margin-top:0.5rem;font-size:0.85rem;"></p>
           </div>
+        </div>
+        <div class="auth-agree-row">
+          <input type="checkbox" id="authAgree">
+          <label for="authAgree">我已阅读并同意</label>
+          <a href="#" onclick="return false;">《服务协议》</a>
+          <span>与</span>
+          <a href="#" onclick="return false;">《隐私政策》</a>
         </div>
       </div>
       <p id="authPanelHint" class="auth-panel-hint">登录后即可解锁：营销创作 <span>|</span> 智能获客 <span>|</span> 私域接管</p>
