@@ -23210,7 +23210,10 @@ def _reanchor_chat_tab(account_id: str = "", *, main_hwnd: int = 0) -> Dict[str,
         raise
     except Exception as exc:
         logger.info("[native-wechat] 界面回正失败（继续）: %s", str(exc)[:160])
-    scrolled = _scroll_chat_session_list_to_top(main)
+    # 不再用 UIA 遍历找会话列表并滚到顶部：WeChat 4.1.7.59 在 GetChildren()
+    # 卡死 46s（diag_20261020052117 last_step=uia_walk_children:72）。
+    # wxauto4 扫描自己会 box.go_top()，这里只负责切回微信页。
+    scrolled = False
     try:
         _activate_window(main)
     except Exception:
