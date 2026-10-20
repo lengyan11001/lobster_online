@@ -589,8 +589,12 @@ function applyBrandingFromApi() {
       if (primary && b.logo_primary != null) primary.textContent = b.logo_primary;
       if (accent && b.logo_accent != null) accent.textContent = b.logo_accent;
       var authLoginLogo = document.getElementById('authLoginLogo');
+      var authLoginLogoShell = document.getElementById('authLoginLogoShell');
       if (authLoginLogo) {
         authLoginLogo.src = b.mark === 'bihuo' ? '/static/bihu_mark_64.png' : (icons.logo_mark || authLoginLogo.src);
+        if (authLoginLogoShell) {
+          authLoginLogoShell.style.setProperty('--auth-logo', 'url("' + authLoginLogo.src.replace(/"/g, '%22') + '")');
+        }
       }
       var authLoginBrandName = document.getElementById('authLoginBrandName');
       if (authLoginBrandName) {

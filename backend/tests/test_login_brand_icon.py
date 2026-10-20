@@ -10,6 +10,11 @@ def test_login_uses_program_mark_icon():
     assert not (ROOT / "static" / "bihu_login_mark.svg").exists()
 
 
-def test_login_icon_script_cache_is_busted():
+def test_login_icon_has_shine_effect_and_cache_is_busted():
     html = (ROOT / "static" / "index.html").read_text(encoding="utf-8")
-    assert "/static/js/init.js?v=20261020-login-icon-v1" in html
+    css = (ROOT / "static" / "css" / "index.css").read_text(encoding="utf-8")
+    assert 'id="authLoginLogoShell"' in html
+    assert "/static/js/init.js?v=20261020-login-shine-v1" in html
+    assert "/static/css/index.css?v=20261020-login-shine-v1" in html
+    assert "authLogoShine" in css
+    assert "auth-logo" in css

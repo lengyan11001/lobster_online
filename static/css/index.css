@@ -13845,12 +13845,78 @@ body:has(.header.auth-guest) .auth-login-hero {
   text-align: center;
   margin-bottom: 24px;
 }
-body:has(.header.auth-guest) .auth-login-logo {
-  display: block;
+body:has(.header.auth-guest) .auth-login-logo-shell {
+  --auth-logo: url('/static/bihu_mark_64.png');
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 48px;
   height: 32px;
-  object-fit: contain;
   margin: 0 auto 16px;
+  isolation: isolate;
+}
+body:has(.header.auth-guest) .auth-login-logo-shell::before {
+  content: '';
+  position: absolute;
+  inset: -12px -18px;
+  z-index: -1;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(47, 109, 246, .26) 0%, rgba(16, 182, 201, .12) 45%, transparent 72%);
+  filter: blur(8px);
+  opacity: .42;
+  animation: authLogoHalo 5s ease-in-out infinite;
+}
+body:has(.header.auth-guest) .auth-login-logo-shell::after {
+  content: '';
+  position: absolute;
+  top: -24%;
+  bottom: -24%;
+  left: -85%;
+  width: 58%;
+  background: linear-gradient(105deg, transparent 0%, rgba(255, 255, 255, .18) 30%, rgba(255, 255, 255, 1) 50%, rgba(255, 255, 255, .22) 70%, transparent 100%);
+  transform: skewX(-18deg);
+  mix-blend-mode: screen;
+  -webkit-mask-image: var(--auth-logo);
+  mask-image: var(--auth-logo);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  opacity: 0;
+  pointer-events: none;
+  animation: authLogoShine 5s ease-in-out infinite;
+}
+body:has(.header.auth-guest) .auth-login-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 10px rgba(47, 109, 246, .14));
+  animation: authLogoBreath 5s ease-in-out infinite;
+}
+@keyframes authLogoShine {
+  0%, 68% { left: -95%; opacity: 0; }
+  72% { opacity: 1; }
+  84% { left: 130%; opacity: 1; }
+  88%, 100% { left: 130%; opacity: 0; }
+}
+@keyframes authLogoHalo {
+  0%, 68%, 100% { opacity: .42; transform: scale(.92); }
+  76% { opacity: 1; transform: scale(1.35); }
+  86% { opacity: .55; transform: scale(1.06); }
+}
+@keyframes authLogoBreath {
+  0%, 68%, 100% { filter: drop-shadow(0 4px 10px rgba(47, 109, 246, .14)) brightness(1); }
+  76% { filter: drop-shadow(0 0 20px rgba(56, 189, 248, .58)) brightness(1.35) saturate(1.14); }
+  84% { filter: drop-shadow(0 5px 14px rgba(47, 109, 246, .24)) brightness(1.08); }
+}
+@media (prefers-reduced-motion: reduce) {
+  body:has(.header.auth-guest) .auth-login-logo-shell::before,
+  body:has(.header.auth-guest) .auth-login-logo-shell::after,
+  body:has(.header.auth-guest) .auth-login-logo { animation: none; }
 }
 body:has(.header.auth-guest) .auth-login-title {
   margin: 0 0 8px;
