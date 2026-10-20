@@ -141,12 +141,32 @@ def write_installation_identity(
     # are ignored and the caller receives the file's authoritative identity.
     existing = read_installation_identity()
     incoming_signed = bool(re.match(r"^u\d+-", iid))
+    existing_iid = str(existing.get("installation_id") or "").strip()
+    existing_user = re.match(r"^u(\d+)-", existing_iid)
+    incoming_user = re.match(r"^u(\d+)-", iid)
+    keep_existing = False
+    keep_reason = ""
     if existing.get("present") and not incoming_signed:
+        keep_existing = True
+        keep_reason = "incoming_unsigned"
+    elif (
+        existing.get("present")
+        and existing_user
+        and incoming_user
+        and existing_user.group(1) == incoming_user.group(1)
+    ):
+        # 同一个用户下，槽位一旦落文件就不再跟着 machine_id/brand/seed 变化。
+        # 服务器重新签发（换机器指纹、换品牌前缀、OTA 后重建 seed）也不能覆盖，
+        # 否则就是用户看到的“固化后槽位又变了”。换账号（u<id> 不同）仍允许更新。
+        keep_existing = True
+        keep_reason = "same_user_signed"
+    if keep_existing:
         logger.info(
-            "[installation-identity] write ignored source=%s incoming_iid=%s existing_iid=%s path=%s",
+            "[installation-identity] write ignored source=%s reason=%s incoming_iid=%s existing_iid=%s path=%s",
             source or "unknown",
+            keep_reason,
             _prefix(iid),
-            existing.get("installation_id") or "",
+            existing_iid,
             existing.get("path") or "",
         )
         return {**existing, "ignored": True}
