@@ -7833,40 +7833,6 @@ def _wechat_tab_ready(hwnd: int, tab_name: str, *, timeout: float = 1.2) -> bool
         time.sleep(0.15)
     return False
 
-def _click_wechat_nav_icon(hwnd: int, tab_name: str) -> bool:
-    """Click the left navigation icon by absolute coordinates (no UIA).
-
-    WeChat 4.1.7.59's UIA tree can block in GetChildren() for 46s on some
-    accounts.  The nav icons are at a stable offset from the window rect:
-      chat:    left+38, top+97   (96 DPI)
-      contact: left+38, top+145
-    Scale by the window DPI so 125%/150% displays still hit the icon.
-    """
-    try:
-        import win32api
-        import win32con
-        import win32gui
-
-        left, top, right, bottom = win32gui.GetWindowRect(int(hwnd))
-        try:
-            dpi = int(ctypes.windll.user32.GetDpiForWindow(int(hwnd)) or 96)
-        except Exception:
-            dpi = 96
-        scale = max(0.75, min(2.0, dpi / 96.0))
-        offset_y = 97 if str(tab_name).strip() == "微信" else 145
-        x = int(left + 38 * scale)
-        y = int(top + offset_y * scale)
-        _focus_local_wechat(int(hwnd))
-        time.sleep(0.2)
-        win32api.SetCursorPos((x, y))
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-        time.sleep(0.45)
-        return True
-    except Exception:
-        return False
-
-
 def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None:
     """切换到本机微信的左侧页面（\u5fae\u4fe1 / \u901a\u8baf\u5f55）。
 
@@ -7901,14 +7867,7 @@ def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None
                 raise
             except Exception as exc:
                 last_err = exc
-            # 微信/通讯录用绝对坐标点左侧导航图标，彻底不走 UIA。
-            if str(tab_name).strip() in {"微信", "通讯录"}:
-                _ui_progress_tick("tab_switch:mouse_nav")
-                clicked = _click_wechat_nav_icon(int(hwnd), str(tab_name))
-                _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
-                                    method="mouse_nav" if clicked else "hotkey_no_verify",
-                                    attempt=attempt + 1)
-                return
+            # 入口本身是可点的：只发 Ctrl+1/2，不再点坐标、不再读 UIA 树。
             _ui_progress_tick("tab_switch:done")
             _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
                                 method="hotkey_no_verify", attempt=attempt + 1)
@@ -10703,7 +10662,9 @@ def _sync_recent_sessions_from_wxauto4(
     GetSession is page-scoped. A stale row, including a pinned row, is only a
     per-row filter and must never terminate the scan.
     """
+    _ui_progress_tick("scan:client")
     wx = _get_wxauto4_client(account_id)
+    _ui_progress_tick("scan:client_ready")
     box = getattr(wx, "SessionBox", None)
     if box is None:
         raise RuntimeError("wxauto4 SessionBox is unavailable")
@@ -10725,7 +10686,7 @@ def _sync_recent_sessions_from_wxauto4(
     # 下一轮再重试，避免把窗口反复抢来抢去（线上 2026-09-17 错发的诱因之一）。
     capture_attempted: set[str] = set()
     try:
-        _ui_progress_tick("wxauto4_sessions:go_top")
+        _ui_progress_tick("scan:go_top")
         try:
             box.go_top()
             time.sleep(0.15)
@@ -10734,8 +10695,9 @@ def _sync_recent_sessions_from_wxauto4(
         page_limit = max(1, min(int(max_pages or 1), 200))
         for index in range(page_limit):
             rounds = index + 1
-            _ui_progress_tick("wxauto4_sessions:page%d" % rounds)
+            _ui_progress_tick("scan:page%d:get" % rounds)
             sessions = list(wx.GetSession() or [])
+            _ui_progress_tick("scan:page%d:got_%d" % (rounds, len(sessions)))
             if not sessions and index == 0:
                 # 首屏读空：客户端刚启动 / 窗口刚恢复时 GetSession 会返回空，
                 # 直接当成"本轮没有会话"就是线上空转的根因
@@ -10761,7 +10723,9 @@ def _sync_recent_sessions_from_wxauto4(
             # GetChildren() 卡死 46s（diag_20261020050830 last_step=uia_walk_children:72）。
             # 置顶行改由「连续 3 行超过 24h 才停」来容忍，不再依赖 UIA。
             pinned_names: Optional[set[str]] = set()
-            for sess in sessions:
+            for _item_index, sess in enumerate(sessions):
+                if _item_index % 5 == 0:
+                    _ui_progress_tick("scan:page%d:item%d" % (rounds, _item_index))
                 session = _session_from_obj(sess)
                 peer_id = str(session.get("peer_id") or "").strip()
                 if not peer_id:
