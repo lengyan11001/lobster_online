@@ -10674,6 +10674,13 @@ def _sync_recent_sessions_from_wxauto4(
     per-row filter and must never terminate the scan.
     """
     wx = _get_wxauto4_client(account_id)
+    # 用 wxauto4 自己的导航栏切到聊天页：比 Ctrl+1 可靠，而且不遍历 UIA 树。
+    # 这一步解决“GetSession 返回空 / 读不到会话”的根因（Ctrl+1 偶发没生效）。
+    try:
+        wx.NavigationBox.switch_to_chat_page()
+        time.sleep(0.2)
+    except Exception:
+        pass
     box = getattr(wx, "SessionBox", None)
     if box is None:
         raise RuntimeError("wxauto4 SessionBox is unavailable")
