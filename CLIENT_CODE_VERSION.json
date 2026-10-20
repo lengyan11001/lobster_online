@@ -1,7 +1,7 @@
 {
-  "version": "2.0.157",
-  "build": 452,
-  "applied_at": "2026-10-19T23:53:40+08:00",
-  "note": "选品广场新版入口与商品页",
-  "bundle_sha256": "bc18dd3748e1d866bb1939d54fd211786d4227e1d557248c3d02ffc77d268572"
+  "version": "2.0.158",
+  "build": 454,
+  "applied_at": "2026-10-20T11:12:21+08:00",
+  "note": "启动页聚光灯Logo+隐藏解压日志；登录页与窗口细节同步",
+  "bundle_sha256": "ad5bbbf03229d7b2388ffbb37bc6b97b0a82e4597b8bfd644b8b2da41306b484"
 }
