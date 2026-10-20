@@ -1,7 +1,7 @@
 {
-  "version": "2.0.162",
-  "build": 458,
-  "applied_at": "2026-10-20T13:11:11+08:00",
-  "note": "会话扫描移除 UIA 置顶探测，固定 12 页上限，避开 GetChildren 卡死",
-  "bundle_sha256": "ebea7dc091848ae4dd8010350fcbead91435552f4a320894ca911c1f919f1261"
+  "version": "2.0.163",
+  "build": 459,
+  "applied_at": "2026-10-20T13:27:05+08:00",
+  "note": "回正聊天页不再走 UIA 遍历，避开 GetChildren 卡死",
+  "bundle_sha256": "3fbb49e03bfb3023cbc7e17f3d1117b46b04a903a31834f7546f8d788a2cb1bc"
 }
