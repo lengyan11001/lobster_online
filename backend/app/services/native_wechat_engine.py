@@ -7867,19 +7867,14 @@ def _ensure_local_tab(hwnd: int, tab_name: str, *, strict: bool = False) -> None
                 raise
             except Exception as exc:
                 last_err = exc
-            _ui_progress_tick("tab_switch:verify")
-            # 微信 4.x 的 ChatSessionList 在部分账号上 GetChildren 会卡死 46s
-            # （diag_20261020045800 最后动作=uia_walk_children:72）。
-            # Ctrl+1 本身是可靠的，竞品也不做 UIA 遍历校验；这里直接认为切成功，
-            # 后面读会话读不到会立刻报明确错误，不再让整轮卡在树遍历上。
-            if str(tab_name or "").strip() == "微信":
-                _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
-                                    method="hotkey_no_verify", attempt=attempt + 1)
-                return
-            if _wechat_tab_ready(hwnd, tab_name):
-                _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
-                                    method="hotkey", attempt=attempt + 1)
-                return
+            _ui_progress_tick("tab_switch:done")
+            # 不做任何 UIA 内容校验：WeChat 4.1.7.59 在部分账号上只要遍历
+            # 树就会把 GetChildren() 卡死 46s（diag_20261020053933 最后动作
+            # =tab_switch:verify，微信/通讯录都会中招）。热键是竞品同款做法，
+            # 切错时后面的读会话/通讯录会给出明确失败，不再整轮空等。
+            _contact_sync_debug("", stage="tab_switch_ok", tab=str(tab_name),
+                                method="hotkey_no_verify", attempt=attempt + 1)
+            return
         # 2) 控件点击兜底（只做短超时查找，不再空转几十秒）
         try:
             root = auto.ControlFromHandle(int(hwnd))
