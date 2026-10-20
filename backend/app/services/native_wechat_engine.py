@@ -10727,16 +10727,10 @@ def _sync_recent_sessions_from_wxauto4(
             # a row can reorder wxauto's SessionBox; doing that before the
             # filtering pass used to make the same page collapse to only the
             # last few rows (and silently drop real private candidates).
-            pinned_names = _wxauto4_visible_pinned_names(account_id)
-            if pinned_names:
-                page_names = {
-                    str(_session_from_obj(sess).get("display_name") or "").strip()
-                    for sess in sessions
-                }
-                if not pinned_names.intersection(page_names):
-                    # UIA can lag one repaint behind roll_down. Do not use a
-                    # stale pinned set as an old-row boundary.
-                    pinned_names = None
+            # 不再用 UIA 探测置顶集合：WeChat 4.1.7.59 上这条遍历会在
+            # GetChildren() 卡死 46s（diag_20261020050830 last_step=uia_walk_children:72）。
+            # 置顶行改由「连续 3 行超过 24h 才停」来容忍，不再依赖 UIA。
+            pinned_names: Optional[set[str]] = set()
             for sess in sessions:
                 session = _session_from_obj(sess)
                 peer_id = str(session.get("peer_id") or "").strip()
@@ -10809,12 +10803,8 @@ def _sync_recent_sessions_from_wxauto4(
                         normal_region_started = True
                     if age_seconds >= 24 * 60 * 60 and not is_non_private and not session["pinned"]:
                         old_boundary = True
-                        # Stop at the first old ordinary row. A pinned old
-                        # row is explicitly excluded above and never forms a
-                        # boundary for the chronological ordinary list.
-                        if pinned_names is not None:
-                            stop_at_old_boundary = True
-                            break
+                        # 不再按“第一行过期”提前停：顶部可能有旧的置顶会话。
+                        # max_pages=12 已经限制了总页数，多扫几页很便宜。
                     if age_seconds < 0 or age_seconds >= 24 * 60 * 60:
                         continue
                 else:
@@ -11700,6 +11690,7 @@ def _sync_local_sessions_once(
         # must only process rows with a precise wxauto4 timestamp.
         return _sync_recent_sessions_from_wxauto4(
             account_id,
+            max_pages=12,
             capture_auto_reply=capture_auto_reply,
         )
     try:
