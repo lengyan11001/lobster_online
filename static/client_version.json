@@ -1,7 +1,7 @@
 {
-  "version": "2.0.165",
-  "build": 462,
-  "applied_at": "2026-10-20T13:55:10+08:00",
-  "note": "微信/通讯录切页改为绝对坐标点导航图标，彻底不走 UIA",
-  "bundle_sha256": "8cac0cca7527c4808f1ee35e433a6f4e4223afaa434936e845aa6aa9d6a86cd5"
+  "version": "2.0.166",
+  "build": 463,
+  "applied_at": "2026-10-20T15:26:10+08:00",
+  "note": "切页恢复热键方案；扫描链路补细粒度心跳",
+  "bundle_sha256": "2c1951f825d5db5ddaeda10383491476b1e0ffc02ab60cdedef26c1d26c957ef"
 }
