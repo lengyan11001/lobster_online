@@ -53,44 +53,108 @@ LOADING_HTML = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>__APP_TITLE__</title>
   <style>
+    :root {
+      --brand: #2f6df6;
+      --brand-cyan: #10b6c9;
+      --ink: #102033;
+      --muted: #64748b;
+      --line: #e6edf7;
+    }
+    * { box-sizing: border-box; }
     html, body {
       margin: 0;
       width: 100%;
       height: 100%;
+      overflow: hidden;
       background: #f7f9fc;
-      color: #102033;
+      color: var(--ink);
       font-family: "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
     }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 18% 18%, rgba(16, 182, 201, .13), transparent 34%),
+        radial-gradient(circle at 82% 78%, rgba(47, 109, 246, .12), transparent 38%),
+        linear-gradient(180deg, #fbfdff 0%, #f4f8fd 100%);
+    }
     .wrap {
+      position: relative;
+      z-index: 1;
       min-height: 100%;
       display: flex;
       align-items: center;
       justify-content: center;
+      padding: 24px;
     }
     .panel {
-      width: 420px;
-      max-width: calc(100vw - 48px);
-      padding: 34px 36px;
-      border: 1px solid #dbe4f2;
-      border-radius: 12px;
-      background: #fff;
-      box-shadow: 0 18px 45px rgba(22, 40, 70, .12);
+      width: 460px;
+      max-width: calc(100vw - 40px);
+      padding: 42px 42px 30px;
+      border: 1px solid rgba(219, 228, 242, .92);
+      border-radius: 28px;
+      background: rgba(255, 255, 255, .93);
+      box-shadow:
+        0 28px 70px rgba(22, 40, 70, .12),
+        0 0 0 1px rgba(255, 255, 255, .72) inset;
+      text-align: center;
     }
-    .brand {
+    .logo-stage {
+      position: relative;
+      width: 172px;
+      height: 148px;
+      margin: 0 auto 18px;
       display: flex;
       align-items: center;
-      gap: 12px;
-      font-size: 24px;
-      font-weight: 700;
+      justify-content: center;
+      isolation: isolate;
     }
-    .brand img {
-      width: 36px;
-      height: 36px;
+    .logo-stage::before {
+      content: "";
+      position: absolute;
+      inset: -34px -46px;
+      z-index: -1;
+      border-radius: 50%;
+      background: radial-gradient(circle at center,
+        rgba(47, 109, 246, .30) 0%,
+        rgba(16, 182, 201, .16) 36%,
+        rgba(16, 182, 201, 0) 72%);
+      filter: blur(14px);
+      animation: spotlightPulse 4s ease-in-out infinite;
+    }
+    .logo-stage::after {
+      content: "";
+      position: absolute;
+      inset: 9px 22px;
+      z-index: -1;
+      border-radius: 50%;
+      border: 1px solid rgba(47, 109, 246, .14);
+      box-shadow:
+        0 0 52px rgba(47, 109, 246, .16),
+        inset 0 0 42px rgba(16, 182, 201, .08);
+      animation: haloPulse 4s ease-in-out infinite;
+    }
+    .brand-logo {
+      position: relative;
+      z-index: 1;
+      width: 116px;
+      height: 116px;
       object-fit: contain;
+      animation: logoBreathe 3.2s ease-in-out infinite;
+      will-change: transform, filter;
+    }
+    .brand-name {
+      font-size: 23px;
+      line-height: 1.35;
+      font-weight: 700;
+      letter-spacing: .01em;
+      color: var(--ink);
     }
     .text {
-      margin-top: 18px;
-      font-size: 15px;
+      margin-top: 10px;
+      font-size: 14px;
       line-height: 1.7;
       color: #526173;
     }
@@ -107,56 +171,77 @@ LOADING_HTML = """<!doctype html>
       width: 4%;
       border-radius: inherit;
       background: linear-gradient(90deg, #2f6df6, #10b6c9);
+      box-shadow: 0 0 16px rgba(47, 109, 246, .34);
       transition: width .28s ease;
     }
     .stage {
-      margin-top: 14px;
+      margin-top: 15px;
+      min-height: 22px;
       font-size: 14px;
       color: #23324a;
       font-weight: 700;
     }
     .detail {
-      margin-top: 6px;
-      min-height: 22px;
-      font-size: 13px;
-      line-height: 1.55;
-      color: #6b7890;
-      word-break: break-all;
-    }
-    .logs {
-      margin-top: 14px;
-      padding-top: 12px;
-      border-top: 1px solid #edf1f7;
-      display: grid;
-      gap: 5px;
+      margin-top: 5px;
+      min-height: 20px;
       font-size: 12px;
-      color: #7c8799;
+      line-height: 1.55;
+      color: var(--muted);
+      word-break: break-word;
     }
-    .log-line {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    .detail:empty { display: none; }
+    @keyframes logoBreathe {
+      0%, 100% {
+        transform: scale(1);
+        filter: drop-shadow(0 10px 18px rgba(47, 109, 246, .16)) drop-shadow(0 0 10px rgba(16, 182, 201, .10));
+      }
+      50% {
+        transform: scale(1.06);
+        filter: drop-shadow(0 14px 28px rgba(47, 109, 246, .28)) drop-shadow(0 0 30px rgba(16, 182, 201, .42));
+      }
+    }
+    @keyframes spotlightPulse {
+      0%, 100% { opacity: .58; transform: scale(.92); }
+      50% { opacity: 1; transform: scale(1.12); }
+    }
+    @keyframes haloPulse {
+      0%, 100% { opacity: .45; transform: scale(.92); }
+      50% { opacity: .95; transform: scale(1.08); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .brand-logo, .logo-stage::before, .logo-stage::after { animation: none; }
+    }
+    @media (max-width: 520px) {
+      .panel { padding: 34px 26px 26px; border-radius: 24px; }
+      .logo-stage { width: 150px; height: 132px; }
+      .brand-logo { width: 96px; height: 96px; }
+      .brand-name { font-size: 20px; }
     }
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="panel">
-      <div class="brand">
-        <img src="__LOADING_MARK__" alt="">
-        <span>__APP_TITLE__</span>
+      <div class="logo-stage">
+        <img class="brand-logo" src="__LOADING_MARK__" alt="">
       </div>
+      <div class="brand-name">__APP_TITLE__</div>
       <div class="text">正在打开客户端，请稍候...</div>
       <div class="progress"><span id="progressFill"></span></div>
       <div class="stage" id="startupStage">正在启动...</div>
       <div class="detail" id="startupDetail">准备检查更新和启动本地服务。</div>
-      <div class="logs" id="startupLogs"></div>
     </div>
   </div>
   <script>
     (function(){
       function text(v){ return v == null ? '' : String(v); }
-      function esc(v){ return text(v).replace(/[&<>"']/g, function(c){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]); }); }
+      function cleanDetail(v){
+        var t = text(v).trim();
+        if (!t) return '';
+        if (/解压|解包|extract|unzip|apply_path|覆盖文件|压缩包|\.zip/i.test(t)) return '';
+        if (t.length > 140) return '';
+        return t;
+      }
       function render(s){
         if (!s) return;
         var pct = Number(s.percent || 0);
@@ -164,11 +249,7 @@ LOADING_HTML = """<!doctype html>
         pct = Math.max(3, Math.min(100, pct));
         document.getElementById('progressFill').style.width = pct + '%';
         document.getElementById('startupStage').textContent = text(s.message || '正在启动...');
-        document.getElementById('startupDetail').textContent = text(s.detail || '');
-        var logs = Array.isArray(s.logs) ? s.logs : [];
-        document.getElementById('startupLogs').innerHTML = logs.slice(-5).map(function(item){
-          return '<div class="log-line">' + esc(item.time) + ' · ' + esc(item.message) + '</div>';
-        }).join('');
+        document.getElementById('startupDetail').textContent = cleanDetail(s.detail);
       }
       async function poll(){
         try {
@@ -221,12 +302,24 @@ _STARTUP_STATUS: dict[str, object] = {
 }
 
 
+def _startup_detail_for_ui(detail: str) -> str:
+    """Keep the launch screen clean: never surface package extraction/file paths."""
+    value = str(detail or "").strip()
+    if not value:
+        return ""
+    if re.search(r"解压|解包|extract|unzip|apply_path|覆盖文件|压缩包|\.zip", value, re.IGNORECASE):
+        return ""
+    if len(value) > 140:
+        return ""
+    return value
+
+
 def set_startup_status(stage: str, message: str, *, detail: str = "", percent: int | None = None) -> None:
     item = {
         "time": time.strftime("%H:%M:%S"),
         "stage": str(stage or "startup"),
         "message": str(message or ""),
-        "detail": str(detail or ""),
+        "detail": _startup_detail_for_ui(detail),
         "percent": max(0, min(100, int(percent))) if percent is not None else None,
     }
     with _STARTUP_STATUS_LOCK:
@@ -1028,17 +1121,17 @@ def update_startup_status_from_code_line(line: str) -> None:
     elif "stop_services_done" in lower:
         set_startup_status("update_stop_done", "旧服务已停止", detail=text, percent=56)
     elif "extract_start" in lower:
-        set_startup_status("update_extract", "正在解压更新包", detail=text, percent=60)
+        set_startup_status("update_extract", "正在准备更新", detail=text, percent=60)
     elif "extract_done" in lower:
-        set_startup_status("update_apply", "正在准备覆盖文件", detail=text, percent=62)
+        set_startup_status("update_apply", "正在应用更新", detail=text, percent=62)
     elif "apply_path" in lower:
-        set_startup_status("update_apply", "正在覆盖更新文件", detail=text, percent=66)
+        set_startup_status("update_apply", "正在应用更新", detail=text, percent=66)
     elif "ppt_runtime_install_start" in lower:
         set_startup_status("update_ppt_runtime", "正在安装PPT运行依赖", detail=text, percent=72)
     elif "ppt_runtime_install_done" in lower:
         set_startup_status("update_ppt_runtime_done", "PPT运行依赖已就绪", detail=text, percent=76)
     elif "apply_start" in lower or "覆盖" in text or "解压" in text:
-        set_startup_status("update_apply", "正在安装更新", detail=text, percent=62)
+        set_startup_status("update_apply", "正在应用更新", detail=text, percent=62)
     elif "apply_done" in lower or "已覆盖更新" in text:
         set_startup_status("update_done", "更新安装完成", detail=text, percent=78)
     elif "already_latest" in lower or "已是最新" in text:
