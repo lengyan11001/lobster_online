@@ -7800,21 +7800,34 @@ def _wechat_tab_ready(hwnd: int, tab_name: str, *, timeout: float = 1.2) -> bool
     deadline = time.time() + max(0.4, float(timeout))
     while time.time() < deadline:
         try:
-            # 2026-10-17 本机实测：会话页的「消息/会话」在 depth 13~14 才出现，
-            # depth 12 会漏（误判成没切过去），所以这里固定 14/6000。
-            nodes = _uia_walk(root, max_depth=14, max_nodes=6000)
-            texts = {(_uia_control_text(n) or "").strip() for n in nodes}
-            classes = {_uia_control_class(n) for n in nodes}
-            if name == "通讯录":
-                if "新的朋友" in texts or "群聊" in texts or "标签" in texts:
-                    return True
-                if "mmui::ContactsTableBaseView" in classes or "mmui::ContactsCellGroupView" in classes:
-                    return True
-            elif name == "微信":
-                if "消息" in texts and "会话" in texts:
-                    return True
-                if "mmui::ChatSessionList" in classes or "mmui::ChatSessionCell" in classes:
-                    return True
+            # 只找目标页的“第一个信号”，命中就返回，不再把 6000 个节点全走完。
+            # 会话页的「消息/会话」在 depth 13~14 才出现，所以深度仍保留 14。
+            queue = [(root, 0)]
+            seen = 0
+            while queue and seen < 6000:
+                node, depth = queue.pop(0)
+                seen += 1
+                if seen % 50 == 0:
+                    _ui_progress_tick("tab_verify:%s:%d" % (name, seen))
+                cls = _uia_control_class(node)
+                if name == "通讯录":
+                    if cls in {"mmui::ContactsTableBaseView", "mmui::ContactsCellGroupView"}:
+                        return True
+                elif name == "微信":
+                    if cls in {"mmui::ChatSessionList", "mmui::ChatSessionCell"}:
+                        return True
+                if depth < 14:
+                    text = (_uia_control_text(node) or "").strip()
+                    if name == "通讯录" and text in {"新的朋友", "群聊", "标签"}:
+                        return True
+                    if name == "微信" and text in {"消息", "会话"}:
+                        return True
+                    try:
+                        _ui_progress_tick("tab_verify_children:%d" % seen)
+                        children = node.GetChildren()
+                    except Exception:
+                        children = []
+                    queue.extend((child, depth + 1) for child in children)
         except Exception:
             return False
         time.sleep(0.15)
@@ -14960,9 +14973,13 @@ def _uia_walk(root: Any, *, max_depth: int = 16, max_nodes: int = 600) -> List[A
     while queue and len(nodes) < max_nodes:
         node, depth = queue.pop(0)
         nodes.append(node)
+        if len(nodes) % 50 == 0:
+            _ui_progress_tick("uia_walk:%d" % len(nodes))
         if depth >= max_depth:
             continue
         try:
+            # GetChildren 是唯一可能卡在 COM 里的调用；先打点，真卡住仍由看门狗兜底。
+            _ui_progress_tick("uia_walk_children:%d" % len(nodes))
             children = node.GetChildren()
         except Exception:
             children = []
