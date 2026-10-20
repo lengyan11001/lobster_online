@@ -590,7 +590,7 @@ function applyBrandingFromApi() {
       if (accent && b.logo_accent != null) accent.textContent = b.logo_accent;
       var authLoginLogo = document.getElementById('authLoginLogo');
       if (authLoginLogo) {
-        authLoginLogo.src = b.mark === 'bihuo' ? '/static/bihu_login_mark.svg' : (icons.logo_mark || authLoginLogo.src);
+        authLoginLogo.src = b.mark === 'bihuo' ? '/static/bihu_mark_64.png' : (icons.logo_mark || authLoginLogo.src);
       }
       var authLoginBrandName = document.getElementById('authLoginBrandName');
       if (authLoginBrandName) {
