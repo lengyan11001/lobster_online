@@ -1,7 +1,7 @@
 {
-  "version": "2.0.160",
-  "build": 456,
-  "applied_at": "2026-10-20T12:53:12+08:00",
-  "note": "微信页签校验改为命中即返回并补 UIA 遍历心跳；回复发送仍用本机 UIA 原生路径",
-  "bundle_sha256": "a167a089e587f97ce7a79027149aca67a30ec7c3419e3d6aa0e44e6a772843d5"
+  "version": "2.0.161",
+  "build": 457,
+  "applied_at": "2026-10-20T12:59:19+08:00",
+  "note": "微信页签切换跳过 UIA 树校验，避开 ChatSessionList GetChildren 卡死",
+  "bundle_sha256": "08c9b43bdd797772c8baa378922992f5c44bf57e1dcdf26a9775042008fd4cca"
 }
