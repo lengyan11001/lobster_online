@@ -12233,6 +12233,7 @@ async def _run_native_wechat_takeover_session(
     interval_seconds: float = 15.0,
     session_seconds: Optional[float] = None,
     config_override: Optional[Dict[str, Any]] = None,
+    check_friend_requests: bool = True,
 ) -> Dict[str, Any]:
     # The interval starts after a round finishes. Bound the whole session by wall-clock
     # time so slow WeChat scans do not outlive the configured end time.
@@ -12329,9 +12330,10 @@ async def _run_native_wechat_takeover_session(
                     {
                         "account_id": account_id,
                         "force": True,
-                        # Every workflow round checks friend requests before
-                        # scanning/replying to sessions.
-                        "check_friend_requests": True,
+                        # The workflow node decides whether this round should
+                        # also accept friend requests; unchecked means only
+                        # poll/reply to existing conversations.
+                        "check_friend_requests": bool(check_friend_requests),
                         "config_override": config_override or {},
                     },
                     headers=headers,
@@ -12998,6 +13000,7 @@ async def _run_client_workflow_action(
                 interval_seconds=interval_seconds,
                 session_seconds=session_seconds,
                 config_override=config_override,
+                check_friend_requests=source.get("accept_friend_requests_once", True) is not False,
             )
         finally:
             if run_id:

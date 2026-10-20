@@ -1261,6 +1261,7 @@
     var douyinPrivate=key === 'douyin_leads' && (memoryTakeover || selectedSalesAction === 'stranger_message'), douyinCollection=key === 'douyin_leads' && !douyinPrivate && selectedSalesAction === 'search_collect', douyinTouch=selectedSalesAction === 'precise_touch';
     var optionExtra=option[5] && typeof option[5] === 'object' ? option[5] : {}, douyinAiKeywords=douyinCollection && !!optionExtra.ai_keywords;
     if (el('oeNodeGroupInviteField')) el('oeNodeGroupInviteField').hidden=!takeover;
+    if (el('oeNodeAcceptFriendRequestsField')) el('oeNodeAcceptFriendRequestsField').hidden=!takeover;
     if (el('oeNodeWechatPrivateSessionLimitField')) el('oeNodeWechatPrivateSessionLimitField').hidden=!takeover;
     if (el('oeNodeWhatsappField')) el('oeNodeWhatsappField').hidden=!whatsapp;
     // 记忆接管只要选一份记忆文件：自动加好友那套先不占地方。
@@ -1303,7 +1304,9 @@
     el('oeNodeTime').value=node && node.time || '09:00'; el('oeNodeEndTime').value=node && node.end_time || '';
     var option=findOption(node && node.ability_key,node && node.ability_label,node);
     fillNodeOptions(node && node.ability_key,node && node.ability_label,node); el('oeNodeLabel').value=node && node.ability_label || option[1]; el('oeNodeNote').value=node && node.note || option[2] || option[1];
-    el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled; el('oeNodeWechatAddFriendEnabled').checked=boolParam(params.wechat_add_friend_enabled,false);
+    el('oeNodeGroupInviteEnabled').checked=!!params.group_invite_enabled;
+    if (el('oeNodeAcceptFriendRequests')) el('oeNodeAcceptFriendRequests').checked=params.accept_friend_requests_once !== false;
+    el('oeNodeWechatAddFriendEnabled').checked=boolParam(params.wechat_add_friend_enabled,false);
     setNativeAddFriendSource(nativeAddFriendSourceFromParams(params));
     applyNativeAddFriendSourceScope();
     if (el('oeNodeNativeAddFriendLimit')) el('oeNodeNativeAddFriendLimit').value=Math.max(1,Math.min(200,Number(params.max_targets || params.server_pool_limit || 50)));
@@ -1354,8 +1357,13 @@
     requireEditableTemplate(); var selectNodeValue=String((el('oeNodeKey')||{}).value||''), option=nodeOptionFromValue(selectNodeValue); var typedLabel=String((el('oeNodeLabel')||{}).value||'').trim(), typedNote=String((el('oeNodeNote')||{}).value||'').trim(); /* 下拉可能在选完节点后被重建/重置：按用户看到的标题/说明回查真正的节点，别拿默认项去推动作。 */ if (typedLabel && option[1] !== typedLabel) { var byLabel=NODE_OPTIONS.find(function(item){return item[1]===typedLabel || (!!typedNote && item[2]===typedNote);}); if (byLabel) option=byLabel; } var optionSalesAction=option[5] && typeof option[5]==='object' ? String(option[5].sales_action||'').trim().toLowerCase() : '', key=String(option[0] || ''), time=el('oeNodeTime').value, end=el('oeNodeEndTime').value, label=el('oeNodeLabel').value.trim() || option[1], note=el('oeNodeNote').value.trim() || option[2] || label;
     if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('请选择开始时间');
     var existing=state.nodeEditIndex >= 0 ? state.nodes[state.nodeEditIndex] : null, existingParams=workflowParams(existing), selectedSalesAction=key === 'douyin_leads' ? (optionSalesAction || salesAction(option[2] || option[1])) : '', row={time:time,end:end,key:key,label:label,note:note,sales_action:selectedSalesAction,params:Object.assign({},existingParams,{group_invite_enabled:key === 'native_wechat_poll' && !!el('oeNodeGroupInviteEnabled').checked})};
-    if (key === 'native_wechat_poll') row.params.private_sessions_per_round=Math.max(1,Math.min(100,Number(el('oeNodeWechatPrivateSessionLimit').value || 100)));
-    else delete row.params.private_sessions_per_round;
+    if (key === 'native_wechat_poll') {
+      row.params.private_sessions_per_round=Math.max(1,Math.min(100,Number(el('oeNodeWechatPrivateSessionLimit').value || 100)));
+      row.params.accept_friend_requests_once=!!(el('oeNodeAcceptFriendRequests') && el('oeNodeAcceptFriendRequests').checked);
+    } else {
+      delete row.params.private_sessions_per_round;
+      delete row.params.accept_friend_requests_once;
+    }
     if (key === 'native_whatsapp_poll') {
       row.params.account_id=String((el('oeNodeWhatsappAccountId') || {}).value || 'desktop-whatsapp-default').trim() || 'desktop-whatsapp-default';
       row.params.message_poll_interval_seconds=Math.max(1,Math.min(300,Number((el('oeNodeWhatsappInterval') || {}).value || 15)));

@@ -185,6 +185,10 @@
           <span>自动拉群</span>
           <span><input id="oeNodeGroupInviteEnabled" type="checkbox"> 命中拉群规则后立即执行</span>
         </label>
+        <label class="oe-form-label" id="oeNodeAcceptFriendRequestsField" hidden>
+          <span>好友申请</span>
+          <span><input id="oeNodeAcceptFriendRequests" type="checkbox" checked> 本轮同意好友申请（取消后只轮询对话）</span>
+        </label>
         <label class="oe-form-label" id="oeNodeWechatPrivateSessionLimitField" hidden>
           <span>本轮个人会话数量</span>
           <span><input id="oeNodeWechatPrivateSessionLimit" type="number" min="1" max="100" step="1" value="100"> 达到数量后进入下一轮</span>

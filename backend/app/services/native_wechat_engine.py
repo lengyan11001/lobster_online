@@ -9824,15 +9824,24 @@ class TaskAbandoned(RuntimeError):
     """这个操作已经被放弃（卡超时后引擎重建了执行器）—— 僵尸线程不许再动微信。"""
 
 
+def _ui_progress_clock() -> float:
+    # Tests monkeypatch engine.time with a tiny fake that only exposes
+    # sleep()/time(); fall back instead of breaking every progress tick.
+    try:
+        return float(time.monotonic())
+    except AttributeError:
+        return float(time.time())
+
+
 def _ui_progress_tick(what: str = "") -> None:
-    _UI_PROGRESS["at"] = time.monotonic()
+    _UI_PROGRESS["at"] = _ui_progress_clock()
     if what:
         _UI_PROGRESS["what"] = str(what)[:80]
 
 
 def _ui_progress_age() -> float:
     at = float(_UI_PROGRESS.get("at") or 0.0)
-    return max(0.0, time.monotonic() - at) if at else 0.0
+    return max(0.0, _ui_progress_clock() - at) if at else 0.0
 
 
 def _epoch_guard() -> None:
@@ -10077,7 +10086,12 @@ def _run_local_driver_operation(
         _LOCAL_WECHAT_UI_LOCK.release()
 
 
-def _new_wxauto4_client(account_id: str = "", *, ensure_chat_tab: bool = True) -> Any:
+def _new_wxauto4_client(
+    account_id: str = "",
+    *,
+    ensure_chat_tab: bool = True,
+    check_online: bool = True,
+) -> Any:
     try:
         import wxauto4  # type: ignore
     except Exception as exc:
@@ -10101,8 +10115,12 @@ def _new_wxauto4_client(account_id: str = "", *, ensure_chat_tab: bool = True) -
             _ui_progress_tick("wxauto4_client:created")
             _bound_wxauto4_file_logger()
             _restore_backend_file_logger()
-            # 不再调 IsOnline()：初始化完成后直接交给 GetSession() 验证。
             _ui_progress_tick("wxauto4_client:ready")
+            if not check_online:
+                return wx
+            online_check = getattr(wx, "IsOnline", None)
+            if callable(online_check) and not bool(online_check()):
+                raise RuntimeError("wxauto4 \u672a\u8bc6\u522b\u5230\u5df2\u767b\u5f55\u7684\u5fae\u4fe1\u4e3b\u7a97\u53e3")
             return wx
         except Exception as exc:
             errors.append(f"attempt {attempt}: {str(exc)[:500]}")
@@ -10120,26 +10138,39 @@ def _get_wxauto4_client(account_id: str = "", *, ensure_chat_tab: bool = True) -
     again -- that is the 46s stall seen as last_step=scan:client.
     """
     if getattr(_LOCAL_WECHAT_THREAD_STATE, "epoch", None) is not None:
-        return _get_wxauto4_client_unlocked(account_id, ensure_chat_tab=ensure_chat_tab)
+        # Executor thread: caller already holds the UI lock, and IsOnline()
+        # is a UIA call that can block on this account.
+        return _get_wxauto4_client_unlocked(account_id, ensure_chat_tab=ensure_chat_tab, check_online=False)
     with _LOCAL_WECHAT_UI_LOCK:
-        return _get_wxauto4_client_unlocked(account_id, ensure_chat_tab=ensure_chat_tab)
+        return _get_wxauto4_client_unlocked(account_id, ensure_chat_tab=ensure_chat_tab, check_online=True)
 
 
-def _get_wxauto4_client_unlocked(account_id: str = "", *, ensure_chat_tab: bool = True) -> Any:
+def _get_wxauto4_client_unlocked(
+    account_id: str = "",
+    *,
+    ensure_chat_tab: bool = True,
+    check_online: bool = True,
+) -> Any:
     _prepare_local_automation_thread()
     cache_key = (str(account_id or "").strip(), threading.get_ident())
     cached = _LOCAL_WXAUTO4_CLIENTS.get(cache_key)
     if cached is not None:
-        # 不再调 IsOnline()：它也是一次 UIA 调用，在这个账号上会卡 46s。
-        # 客户端失效时 GetSession() 会返回空，empty_scan 分支会触发重建。
         _ui_progress_tick("scan:client_cached")
-        return cached
+        if not check_online:
+            return cached
+        online_check = getattr(cached, "IsOnline", None)
+        try:
+            if not callable(online_check) or bool(online_check()):
+                return cached
+        except Exception:
+            pass
+        _LOCAL_WXAUTO4_CLIENTS.pop(cache_key, None)
     if bool(getattr(_LOCAL_WECHAT_THREAD_STATE, "operation_handles_recovery", False)):
-        client = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
+        client = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab, check_online=check_online)
         _LOCAL_WXAUTO4_CLIENTS[cache_key] = client
         return client
     try:
-        client = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
+        client = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab, check_online=check_online)
         _LOCAL_WXAUTO4_CLIENTS[cache_key] = client
         return client
     except Exception as initial_exc:
@@ -10151,7 +10182,7 @@ def _get_wxauto4_client_unlocked(account_id: str = "", *, ensure_chat_tab: bool 
         )
         if recovery.get("ok"):
             try:
-                wx = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
+                wx = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab, check_online=check_online)
                 _mark_local_driver_recovery(account_id, recovery, recovered=True)
                 _LOCAL_WXAUTO4_CLIENTS[cache_key] = wx
                 return wx
@@ -15849,7 +15880,7 @@ def _accept_local_friend_requests_once(
     account_id: str,
     *,
     max_accepts: int = 20,
-    max_scrolls: int = 24,
+    max_scrolls: int = 2,
 ) -> Dict[str, Any]:
     init_db()
     _find_local_account(account_id)
@@ -15861,7 +15892,7 @@ def _accept_local_friend_requests_once(
     if not hwnd:
         raise RuntimeError("\u6ca1\u6709\u68c0\u6d4b\u5230\u672c\u673a\u5fae\u4fe1\u7a97\u53e3")
     accepted_limit = max(1, min(int(max_accepts or 20), 50))
-    scroll_limit = max(1, min(int(max_scrolls or 24), 60))
+    scroll_limit = max(1, min(int(max_scrolls or 2), 60))
     accepted = 0
     failed = 0
     scanned_keys: set[str] = set()
@@ -15970,7 +16001,7 @@ def accept_local_friend_requests(
     account_id: str,
     *,
     max_accepts: int = FRIEND_ACCEPT_MAX_PER_BATCH,
-    max_scrolls: int = 24,
+    max_scrolls: int = 2,
 ) -> Dict[str, Any]:
     """检查并通过好友申请（带限速闸门）。
 
