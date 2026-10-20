@@ -10112,51 +10112,64 @@ def _new_wxauto4_client(account_id: str = "", *, ensure_chat_tab: bool = True) -
 
 
 def _get_wxauto4_client(account_id: str = "", *, ensure_chat_tab: bool = True) -> Any:
+    """Return a wxauto4 client without deadlocking the UIA executor thread.
+
+    _run_local_driver_operation holds _LOCAL_WECHAT_UI_LOCK on the caller thread
+    while the operation runs on the executor thread.  A RLock is owned by the
+    thread that acquired it, so the executor thread must NOT try to acquire it
+    again -- that is the 46s stall seen as last_step=scan:client.
+    """
+    if getattr(_LOCAL_WECHAT_THREAD_STATE, "epoch", None) is not None:
+        return _get_wxauto4_client_unlocked(account_id, ensure_chat_tab=ensure_chat_tab)
     with _LOCAL_WECHAT_UI_LOCK:
-        _prepare_local_automation_thread()
-        cache_key = (str(account_id or "").strip(), threading.get_ident())
-        cached = _LOCAL_WXAUTO4_CLIENTS.get(cache_key)
-        if cached is not None:
-            # 不再调 IsOnline()：它也是一次 UIA 调用，在这个账号上会卡 46s。
-            # 客户端失效时 GetSession() 会返回空，empty_scan 分支会触发重建。
-            _ui_progress_tick("scan:client_cached")
-            return cached
-        if bool(getattr(_LOCAL_WECHAT_THREAD_STATE, "operation_handles_recovery", False)):
-            client = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
-            _LOCAL_WXAUTO4_CLIENTS[cache_key] = client
-            return client
-        try:
-            client = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
-            _LOCAL_WXAUTO4_CLIENTS[cache_key] = client
-            return client
-        except Exception as initial_exc:
-            recovery = _recover_local_wechat_driver(
-                account_id,
-                operation="wxauto4_connect",
-                error=str(initial_exc),
-                ensure_chat_tab=ensure_chat_tab,
-            )
-            if recovery.get("ok"):
-                try:
-                    wx = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
-                    _mark_local_driver_recovery(account_id, recovery, recovered=True)
-                    _LOCAL_WXAUTO4_CLIENTS[cache_key] = wx
-                    return wx
-                except Exception as retry_exc:
-                    _mark_local_driver_recovery(
-                        account_id,
-                        recovery,
-                        recovered=False,
-                        retry_error=str(retry_exc),
-                    )
-                    initial_exc = retry_exc
-            windows = _scan_local_wechat_windows(max_age_seconds=0)
-            version = str((windows[0] if windows else {}).get("version") or "")
-            if version and not _version_lte(version, WXAUTO4_MAX_PLUS_VERSION):
-                raise RuntimeError(
-                    f"\u5f53\u524d\u5fae\u4fe1\u7248\u672c {version} \u9ad8\u4e8e wxauto4 \u5df2\u77e5\u9002\u914d\u7248\u672c\uff0c\u5b8c\u6574\u901a\u8baf\u5f55/\u7fa4\u80fd\u529b\u4e0d\u53ef\u7528"
-                ) from initial_exc
-            raise RuntimeError(str(initial_exc)) from initial_exc
+        return _get_wxauto4_client_unlocked(account_id, ensure_chat_tab=ensure_chat_tab)
+
+
+def _get_wxauto4_client_unlocked(account_id: str = "", *, ensure_chat_tab: bool = True) -> Any:
+    _prepare_local_automation_thread()
+    cache_key = (str(account_id or "").strip(), threading.get_ident())
+    cached = _LOCAL_WXAUTO4_CLIENTS.get(cache_key)
+    if cached is not None:
+        # 不再调 IsOnline()：它也是一次 UIA 调用，在这个账号上会卡 46s。
+        # 客户端失效时 GetSession() 会返回空，empty_scan 分支会触发重建。
+        _ui_progress_tick("scan:client_cached")
+        return cached
+    if bool(getattr(_LOCAL_WECHAT_THREAD_STATE, "operation_handles_recovery", False)):
+        client = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
+        _LOCAL_WXAUTO4_CLIENTS[cache_key] = client
+        return client
+    try:
+        client = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
+        _LOCAL_WXAUTO4_CLIENTS[cache_key] = client
+        return client
+    except Exception as initial_exc:
+        recovery = _recover_local_wechat_driver(
+            account_id,
+            operation="wxauto4_connect",
+            error=str(initial_exc),
+            ensure_chat_tab=ensure_chat_tab,
+        )
+        if recovery.get("ok"):
+            try:
+                wx = _new_wxauto4_client(account_id, ensure_chat_tab=ensure_chat_tab)
+                _mark_local_driver_recovery(account_id, recovery, recovered=True)
+                _LOCAL_WXAUTO4_CLIENTS[cache_key] = wx
+                return wx
+            except Exception as retry_exc:
+                _mark_local_driver_recovery(
+                    account_id,
+                    recovery,
+                    recovered=False,
+                    retry_error=str(retry_exc),
+                )
+                initial_exc = retry_exc
+        windows = _scan_local_wechat_windows(max_age_seconds=0)
+        version = str((windows[0] if windows else {}).get("version") or "")
+        if version and not _version_lte(version, WXAUTO4_MAX_PLUS_VERSION):
+            raise RuntimeError(
+                f"\u5f53\u524d\u5fae\u4fe1\u7248\u672c {version} \u9ad8\u4e8e wxauto4 \u5df2\u77e5\u9002\u914d\u7248\u672c\uff0c\u5b8c\u6574\u901a\u8baf\u5f55/\u7fa4\u80fd\u529b\u4e0d\u53ef\u7528"
+            ) from initial_exc
+        raise RuntimeError(str(initial_exc)) from initial_exc
 
 
 def sync_local_sessions_legacy(account_id: str) -> Dict[str, Any]:
