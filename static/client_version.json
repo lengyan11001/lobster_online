@@ -1,7 +1,7 @@
 {
-  "version": "2.0.167",
-  "build": 464,
-  "applied_at": "2026-10-20T15:41:18+08:00",
-  "note": "移除 wxauto4 IsOnline 调用，避免 scan:client 卡死",
-  "bundle_sha256": "aa2c2dd6970dcb264d9a0ed6c0d2bc0a37bf6d4f0a6b1b7e04bc1fa59a275a5e"
+  "version": "2.0.168",
+  "build": 465,
+  "applied_at": "2026-10-20T16:06:16+08:00",
+  "note": "修复 UIA executor 重复获取 UI 锁导致的 scan:client 死锁",
+  "bundle_sha256": "9cb8317aa953c6f97c95db455c212bec6e6380532b6a926005c89f670e40a07a"
 }
