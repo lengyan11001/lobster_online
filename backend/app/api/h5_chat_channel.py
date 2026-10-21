@@ -10758,18 +10758,14 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
 
     preferred = _normalize_parent_material_media_type(preferred_media_type)
     if preferred == "image":
+        # 2026-10-21：朋友圈图文只允许图片素材。父节点 3 张图因为积分不足全失败时，
+        # 这里以前会回退去取视频（user 352 拿了个 196.2 秒视频，被 30 秒上限拦下）。
+        # 不再回退：没有图片就返回空，让发布侧明确报“上级节点没有图片素材”。
         if image_ids:
             return _guard(asset_result(image_ids[0], "image", image_urls, other_urls))
-        if other_ids:
-            return _guard(asset_result(other_ids[0], "image", image_urls, other_urls))
         if image_urls:
             return _guard(url_result(image_urls[0], "image"))
-        if video_ids:
-            return _guard(asset_result(video_ids[0], "video", video_urls, other_urls))
-        if video_urls:
-            return _guard(url_result(video_urls[0], "video"))
-        if other_urls:
-            return _guard(url_result(other_urls[0], "image"))
+        return {}
     elif preferred == "video":
         if video_ids:
             return _guard(asset_result(video_ids[0], "video", video_urls, other_urls))
@@ -10922,6 +10918,9 @@ async def _resolve_parent_workflow_material(
         publish_context = _extract_parent_publish_context(parent_result_payload)
         candidates.append({**material, **publish_context, "source_run_id": str(parent.get("source_run_id") or "")})
     if not candidates:
+        preferred = _normalize_parent_material_media_type(_preferred_parent_material_media_type(params))
+        if preferred == "image":
+            raise RuntimeError("上级节点没有图片素材（朋友圈图文只能发布图片，请先让上级节点出图）")
         raise RuntimeError("上级节点还没有可发布的素材")
     return candidates[0]
 
