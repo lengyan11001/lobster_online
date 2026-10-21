@@ -901,7 +901,7 @@
     if (submitHint) {
       submitHint.textContent = hasTemplate
         ? '已选择真人视频模板，提交时会自动带上模板场景和剪辑参数。'
-        : '不选模板时按「个人默认配置」里当前选中的模板执行；没有配置模板才走普通数字人口播。';
+        : '不选模板时会走普通数字人口播；选了模板后才会切到真人视频模板剪辑。';
     }
     syncTemplateOptionsSummary();
   }
@@ -2338,7 +2338,7 @@
       el.innerHTML = ''
         + '<div class="shanjian-selected-empty">'
         + '<strong>当前不使用模板</strong>'
-        + '<span>不选模板时，提交任务会按「个人默认配置」里当前选中的模板执行；没有配置模板才会走普通数字人口播。</span>'
+        + '<span>不选模板时，提交任务会走普通数字人口播；选了模板后，才会切到真人视频模板剪辑。</span>'
         + '</div>';
       return;
     }
