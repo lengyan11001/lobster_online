@@ -812,11 +812,38 @@
     return 'lobster_seedance_tvc_jobs_' + String(uid || 'anon');
   }
 
+  // 2026-10-21：记录列表只在 localStorage 里，任务被本地 store/云端清理后，
+  // 旧记录仍带着 running 状态，界面上就会永远显示"生成中"（用户 314 卡了两天）。
+  // 超过 STALE_RUNNING_MS 没有进度更新的运行中记录，直接按"中断"收尾。
+  var STALE_RUNNING_MS = 3 * 60 * 60 * 1000;
+
+  function expireStaleRememberedJobs(rows) {
+    var now = Date.now();
+    (rows || []).forEach(function(item) {
+      if (!item || typeof item !== 'object') return;
+      var status = String(item.status || '').trim().toLowerCase();
+      if (!/^(running|queued|pending|submitted|processing)$/.test(status)) return;
+      var updated = Number(item.updatedAt || item.updated_at_ts || 0) || 0;
+      if (!updated) {
+        updated = Number(item.createdAt || item.created_at_ts || 0) || 0;
+      }
+      if (!updated || now - updated <= STALE_RUNNING_MS) return;
+      item.status = 'failed';
+      item.error = item.error || '任务已中断：超过 3 小时没有进度更新，请删除后重新生成。';
+      item.progress = { last_steps: [{ name: '任务已中断', status: 'failed' }] };
+      item.progressPercent = 100;
+      item.progressLabel = '任务已中断';
+      item.progressDetail = item.error;
+      item.updatedAt = now;
+    });
+    return rows;
+  }
+
   function loadRecentJobs() {
     try {
       var raw = window.localStorage ? window.localStorage.getItem(jobsStorageKey()) : '';
       var rows = JSON.parse(raw || '[]');
-      state.recentJobs = Array.isArray(rows) ? rows.slice(0, RECENT_JOB_LIMIT) : [];
+      state.recentJobs = Array.isArray(rows) ? expireStaleRememberedJobs(rows.slice(0, RECENT_JOB_LIMIT)) : [];
     } catch (e) {
       state.recentJobs = [];
     }
@@ -854,9 +881,11 @@
         updatedAt: item.updatedAt || old.updatedAt || Date.now()
       });
     });
-    state.recentJobs = Object.keys(byId).map(function(id) { return byId[id]; })
-      .sort(function(a, b) { return Number(b.updatedAt || 0) - Number(a.updatedAt || 0); })
-      .slice(0, RECENT_JOB_LIMIT);
+    state.recentJobs = expireStaleRememberedJobs(
+      Object.keys(byId).map(function(id) { return byId[id]; })
+        .sort(function(a, b) { return Number(b.updatedAt || 0) - Number(a.updatedAt || 0); })
+        .slice(0, RECENT_JOB_LIMIT)
+    );
     saveRecentJobs();
   }
 
