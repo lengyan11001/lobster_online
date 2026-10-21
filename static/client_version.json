@@ -1,7 +1,7 @@
 {
-  "version": "2.0.170",
-  "build": 467,
-  "applied_at": "2026-10-21T15:31:52+08:00",
-  "note": "登录态401自动续签-无边框拖动条修复",
-  "bundle_sha256": "05314ca6cb3d281d32e195098cf5872dc0b2def166bedc7796cf1d7971fe1af9"
+  "version": "2.0.171",
+  "build": 468,
+  "applied_at": "2026-10-21T18:37:08+08:00",
+  "note": "数字人模板口径修复+素材提交前校验",
+  "bundle_sha256": "3015ba6324acd910cab2fb99cd58417172a8c6d3f2c057be652285081ac0a2c0"
 }
