@@ -32,6 +32,7 @@
 <body>
   <div class="page">
             <header class="header auth-guest" id="appHeader">
+    <div class="window-drag-strip pywebview-drag-region" id="windowDragStrip" hidden aria-hidden="true"></div>
       <div class="header-left">
         <div class="logo">
           <img class="logo-mark" id="brandLogoMark" src="__LOBSTER_LOGO_MARK__" width="32" height="32" alt="">
@@ -3042,6 +3043,8 @@
     var a = api();
     var mark = (document.documentElement.getAttribute('data-brand') || '').toLowerCase();
     if (a && typeof a.window_close === 'function' && mark === 'bihuo') box.hidden = false;
+    var strip = document.getElementById('windowDragStrip');
+    if (strip && mark === 'bihuo') strip.hidden = false;
   }
   window.addEventListener('pywebviewready', show);
   setTimeout(show, 800);

@@ -1193,6 +1193,17 @@ html.is-desktop-shell .header-dropdown-menu { background: #ffffff; }
 .window-controls button:hover { background: rgba(15, 23, 42, 0.12); color: #0f172a; }
 .window-controls .win-close:hover { background: #e5484d; color: #ffffff; }
 
+/* 2026-10-21：无边框窗口只允许顶部这条 10px 拖动，避免整页 mousedown 拖窗口 */
+.window-drag-strip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 150px;
+  height: 10px;
+  z-index: 80;
+  cursor: move;
+}
+
 
 /* ---- 必火品牌专用（只影响 data-brand=bihuo，其他 OEM 品牌保持 32px）---- */
 html[data-brand="bihuo"] .logo-mark {

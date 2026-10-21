@@ -2392,6 +2392,10 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
             background_color=_window_background,
             js_api=DesktopApi(recover_local_services),
             frameless=_use_frameless,
+            # 2026-10-21：pywebview 的 easy_drag 在 frameless 下会给整页挂
+            # window mousedown → 点正文/选文字也会拖动窗口。关掉它，只让
+            # 顶部 pywebview-drag-region 拖动条生效。
+            easy_drag=False,
         )
         if _use_frameless:
             window.events.shown += _apply_frameless_chrome
