@@ -176,85 +176,92 @@ function escapeSlotText(value) {
   });
 }
 
-function loadInstallationSlotTemplates() {
-  var hint = document.getElementById('installationSlotTemplateHint');
-  var select = document.getElementById('installationSlotTemplateSelect');
+function loadInstallationSlotAliases() {
+  var hint = document.getElementById('installationSlotAliasHint');
+  var select = document.getElementById('installationSlotAliasSelect');
   var base = installationSlotCloudBase();
   var iid = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
-  if (!hint || !base || !iid) return Promise.resolve(null);
-  return fetch(base + '/api/ip-content/slot-templates', { headers: authHeaders() })
+  if (!hint || !select || !base || !iid) return Promise.resolve(null);
+  return fetch(base + '/api/installation-id/aliases', { headers: authHeaders() })
     .then(function(response) {
       return response.json().catch(function() { return {}; }).then(function(data) {
-        if (!response.ok) throw new Error(data.detail || data.message || '模板列表读取失败');
+        if (!response.ok) throw new Error(data.detail || data.message || '设备别名读取失败');
         return data;
       });
     })
     .then(function(data) {
       var items = Array.isArray(data.items) ? data.items : [];
-      if (select) {
-        var currentValue = String(data.current_template_id || '');
-        select.innerHTML = '<option value="">请选择模板</option>' + items.map(function(item) {
-          var suffix = item.installation_id ? '（槽位 ' + String(item.installation_id).slice(-8) + '）' : '';
-          var label = String(item.name || '') + suffix;
-          return '<option value="' + escapeSlotText(String(item.id)) + '">' + escapeSlotText(label) + '</option>';
-        }).join('');
-        select.value = currentValue && items.some(function(item) { return String(item.id) === currentValue; })
-          ? currentValue
-          : '';
-      }
+      select.innerHTML = '<option value="">请选择设备别名</option>' + items.map(function(item) {
+        var tail = String(item.installation_id || '').slice(-8);
+        var label = String(item.alias || '') + '（槽位 ' + tail + '）' + (item.online ? ' · 在线' : '');
+        return '<option value="' + escapeSlotText(item.alias) + '">' + escapeSlotText(label) + '</option>';
+      }).join('');
       var current = items.find(function(item) {
-        return String(item.id || '') === String(data.current_template_id || '');
+        return String(item.installation_id || '') === String(iid);
       });
-      hint.textContent = current
-        ? ('当前槽位关联的模板：' + String(current.name || '') + (current.installation_id ? '（槽位 ' + String(current.installation_id).slice(-8) + '）' : ''))
-        : '当前槽位还没有关联模板：从下拉列表选择后点“关联到当前槽位”。';
+      if (current) {
+        select.value = String(current.alias || '');
+        hint.textContent = '当前槽位对应的别名：' + String(current.alias || '');
+      } else {
+        hint.textContent = '当前槽位没有匹配到别名；如果槽位乱过，选原来那台设备的别名，点“恢复到这个槽位”。';
+      }
       hint.style.color = '';
       return data;
     })
     .catch(function(err) {
-      hint.textContent = (err && err.message) || '模板列表读取失败';
+      hint.textContent = (err && err.message) || '设备别名读取失败';
       hint.style.color = 'var(--danger, #dc2626)';
       return null;
     });
 }
 
-function linkInstallationSlotTemplate() {
-  var select = document.getElementById('installationSlotTemplateSelect');
-  var btn = document.getElementById('linkInstallationSlotTemplateBtn');
+function restoreInstallationSlotAlias() {
+  var select = document.getElementById('installationSlotAliasSelect');
+  var btn = document.getElementById('restoreInstallationSlotAliasBtn');
   var base = installationSlotCloudBase();
-  var iid = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
-  var templateId = select ? String(select.value || '').trim() : '';
-  if (!select || !base || !iid) {
-    showInstallationSlotMsg('当前槽位或服务器地址不可用', true);
+  var alias = select ? String(select.value || '').trim() : '';
+  if (!select || !base) {
+    showInstallationSlotMsg('当前服务器地址不可用', true);
     return;
   }
-  if (!templateId) {
-    showInstallationSlotMsg('请先从下拉列表选择要关联的模板', true);
+  if (!alias) {
+    showInstallationSlotMsg('请先选择设备别名', true);
     return;
   }
+  if (!window.confirm('恢复后会改用别名「' + alias + '」原来的槽位，当前槽位的配置不再使用。确定继续？')) return;
   var oldText = btn ? btn.textContent : '';
   if (btn) {
     btn.disabled = true;
-    btn.textContent = '关联中...';
+    btn.textContent = '恢复中...';
   }
-  fetch(base + '/api/ip-content/slot-templates/link', {
+  fetch(base + '/api/installation-id/aliases/restore', {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ template_id: Number(templateId) })
+    body: JSON.stringify({ alias: alias })
   }).then(function(response) {
     return response.json().catch(function() { return {}; }).then(function(data) {
-      if (!response.ok) throw new Error(data.detail || data.message || '关联失败');
+      if (!response.ok) throw new Error(data.detail || data.message || '恢复失败');
       return data;
     });
   }).then(function(data) {
-    showInstallationSlotMsg('已把当前槽位关联到模板：' + String(data.template_name || ''), false);
-    return loadInstallationSlotTemplates();
+    var next = String(data && data.installation_id || '').trim();
+    if (!next) throw new Error('服务器没有返回这个别名的槽位');
+    if (typeof setLobsterInstallationId === 'function') {
+      setLobsterInstallationId(next, { reason: 'alias_restore' });
+    } else {
+      try { localStorage.setItem('lobster_installation_id', next); } catch (e) {}
+    }
+    renderInstallationSlotId({ ok: true });
+    return syncLocalInstallationSlotId(next).catch(function() { return null; }).then(function() {
+      showInstallationSlotMsg('已切回别名「' + alias + '」的槽位：' + next + '。请刷新页面（或重启客户端）让所有页面使用新槽位。', false);
+      return loadInstallationSlotAliases();
+    });
   }).catch(function(err) {
-    showInstallationSlotMsg((err && err.message) || '关联失败', true);
+    showInstallationSlotMsg((err && err.message) || '恢复失败', true);
   }).finally(function() {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = oldText || '关联到当前槽位';
+      btn.textContent = oldText || '恢复到这个槽位';
     }
   });
 }
@@ -286,7 +293,7 @@ function loadInstallationSlotStatus() {
     .then(function(status) {
       renderInstallationSlotId(status || {});
       return loadInstallationSlotAlias().then(function() {
-        loadInstallationSlotTemplates();
+        loadInstallationSlotAliases();
         showInstallationSlotMsg('', false);
         return status;
       });
@@ -802,9 +809,9 @@ var saveInstallationSlotAliasBtn = document.getElementById('saveInstallationSlot
 if (saveInstallationSlotAliasBtn) saveInstallationSlotAliasBtn.addEventListener('click', function() {
   saveInstallationSlotAlias();
 });
-var linkInstallationSlotTemplateBtn = document.getElementById('linkInstallationSlotTemplateBtn');
-if (linkInstallationSlotTemplateBtn) linkInstallationSlotTemplateBtn.addEventListener('click', function() {
-  linkInstallationSlotTemplate();
+var restoreInstallationSlotAliasBtn = document.getElementById('restoreInstallationSlotAliasBtn');
+if (restoreInstallationSlotAliasBtn) restoreInstallationSlotAliasBtn.addEventListener('click', function() {
+  restoreInstallationSlotAlias();
 });
 var randomizeInstallationSlotIdBtn = document.getElementById('randomizeInstallationSlotIdBtn');
 if (randomizeInstallationSlotIdBtn) randomizeInstallationSlotIdBtn.addEventListener('click', function() {
