@@ -253,8 +253,12 @@ function restoreInstallationSlotAlias() {
     }
     renderInstallationSlotId({ ok: true });
     return syncLocalInstallationSlotId(next).catch(function() { return null; }).then(function() {
-      showInstallationSlotMsg('已切回别名「' + alias + '」的槽位：' + next + '。请刷新页面（或重启客户端）让所有页面使用新槽位。', false);
-      return loadInstallationSlotAliases();
+      showInstallationSlotMsg('已切回别名「' + alias + '」的槽位：' + next + '，正在刷新页面加载这个槽位的数据…', false);
+      // 槽位换了，Online 里的设备/员工/模板/任务全都按槽位取数：整页重载一次，数据立即跟着切过去。
+      window.setTimeout(function() {
+        try { window.location.reload(); } catch (err) {}
+      }, 600);
+      return null;
     });
   }).catch(function(err) {
     showInstallationSlotMsg((err && err.message) || '恢复失败', true);
