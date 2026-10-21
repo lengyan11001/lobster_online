@@ -1,7 +1,7 @@
 {
-  "version": "2.0.169",
-  "build": 466,
-  "applied_at": "2026-10-21T10:13:51+08:00",
-  "note": "分镜头TOS400修复-僵尸任务收尾-微信接管开关",
-  "bundle_sha256": "f3315d0c960552ff5a8d2163549d123d1225485cded2a7baf115cf8e8df0d973"
+  "version": "2.0.170",
+  "build": 467,
+  "applied_at": "2026-10-21T15:31:52+08:00",
+  "note": "登录态401自动续签-无边框拖动条修复",
+  "bundle_sha256": "05314ca6cb3d281d32e195098cf5872dc0b2def166bedc7796cf1d7971fe1af9"
 }
