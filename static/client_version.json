@@ -1,7 +1,7 @@
 {
-  "version": "2.0.168",
-  "build": 465,
-  "applied_at": "2026-10-20T16:06:16+08:00",
-  "note": "修复 UIA executor 重复获取 UI 锁导致的 scan:client 死锁",
-  "bundle_sha256": "9cb8317aa953c6f97c95db455c212bec6e6380532b6a926005c89f670e40a07a"
+  "version": "2.0.169",
+  "build": 466,
+  "applied_at": "2026-10-21T10:13:51+08:00",
+  "note": "分镜头TOS400修复-僵尸任务收尾-微信接管开关",
+  "bundle_sha256": "f3315d0c960552ff5a8d2163549d123d1225485cded2a7baf115cf8e8df0d973"
 }
