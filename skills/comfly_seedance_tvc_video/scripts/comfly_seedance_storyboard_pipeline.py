@@ -1461,6 +1461,43 @@ class ComflySeedanceClient:
 
         return _retry("upload", self.config.upload_retries, self.config.network_retry_delay_seconds, self.logger, call)
 
+    def _media_session(self) -> requests.Session:
+        """下载第三方素材（TOS/OSS 等）专用 session。
+
+        2026-10-21：以前复用 self.session，会把 Comfly 的
+        Authorization: Bearer <apikey> 和 Accept: application/json
+        一起发到对象存储。火山 TOS 对带 Authorization 的匿名 GET 直接回
+        400 Bad Request（实测同一 URL：不带 200，带 Bearer 400），
+        用户 314 的分镜头任务就是在第一步参考图下载就失败的。
+        """
+        session = getattr(self, "_media_session_obj", None)
+        if session is None:
+            session = requests.Session()
+            session.trust_env = False
+            session.headers.clear()
+            session.headers.update({"User-Agent": "lobster-seedance-tvc/1.0", "Accept": "*/*"})
+            self._media_session_obj = session
+        return session
+
+    def _download_media_bytes(self, url: str, *, retries: int = 3) -> requests.Response:
+        last_error: Optional[str] = None
+        for attempt in range(max(1, int(retries))):
+            try:
+                resp = self._media_session().get(url, timeout=120, allow_redirects=True)
+            except requests.RequestException as exc:
+                last_error = f"{type(exc).__name__}: {exc}"
+                if attempt + 1 >= retries:
+                    break
+                time.sleep(min(2.0 * (attempt + 1), 5.0))
+                continue
+            if resp.status_code == 200:
+                return resp
+            last_error = f"HTTP {resp.status_code}: {(resp.text or '')[:200]}"
+            if resp.status_code not in {400, 403, 408, 425, 429, 500, 502, 503, 504} or attempt + 1 >= retries:
+                break
+            time.sleep(min(2.0 * (attempt + 1), 5.0))
+        raise PipelineError(f"参考图片下载失败：{last_error or 'unknown error'}（{url[:300]}）")
+
     def _image_url_to_data_url(self, image_url: str) -> str:
         src = str(image_url or "").strip()
         if not src:
@@ -1471,8 +1508,7 @@ class ComflySeedanceClient:
         content: bytes
         mime_type = "image/png"
         if src.startswith(("http://", "https://")):
-            resp = self.session.get(src, timeout=120, allow_redirects=True)
-            resp.raise_for_status()
+            resp = self._download_media_bytes(src)
             content = resp.content
             header_mime = (resp.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
             if header_mime.startswith("image/"):

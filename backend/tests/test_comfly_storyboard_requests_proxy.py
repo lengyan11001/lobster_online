@@ -117,6 +117,10 @@ def test_seedance_storyboard_analysis_retries_remote_disconnect_beyond_default(t
         return _Response()
 
     client.session.post = _post
+    # 2026-10-21: 参考图下载改走独立的无鉴权 media session，这里直接跳过图片抓取
+    client._download_media_bytes = lambda url, retries=3: type(
+        "R", (), {"status_code": 200, "content": b"img", "headers": {"content-type": "image/jpeg"}}
+    )()
 
     result, attempts = client.analyze(["https://cdn.example.test/ref.jpg"])
 
@@ -154,7 +158,8 @@ def test_seedance_storyboard_analysis_encodes_remote_images_as_data_urls(tmp_pat
         seen["body"] = json
         return _ChatResponse()
 
-    client.session.get = _get
+    # 2026-10-21: 媒体下载走独立 session，mock 新的下载入口
+    client._download_media_bytes = lambda url, retries=3: _ImageResponse()
     client.session.post = _post
 
     result, attempts = client.analyze(["https://cdn.example.test/ref.jpg"])
