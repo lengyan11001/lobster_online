@@ -88,7 +88,7 @@ function renderInstallationSlotId(status) {
   }
   if (hintEl) {
     if (status && status.duplicate) {
-      hintEl.textContent = '服务器检测到这个槽位还被其他账号/设备记录使用，建议点击“随机更换”。';
+      hintEl.textContent = '服务器检测到该槽位正在另一台设备/账号上在线使用，建议点击“随机更换”。';
       hintEl.style.color = 'var(--danger, #dc2626)';
     } else if (status && status.ok) {
       hintEl.textContent = '服务器已确认当前槽位可用于当前账号。';
