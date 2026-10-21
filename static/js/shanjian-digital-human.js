@@ -1685,15 +1685,28 @@
     };
   }
 
-  function normalizeMaterialAsset(item) {
+  function isPublicAssetUrl(url) {
+    var value = String(url || '');
+    return /^https?:\/\//i.test(value) && !/localhost|127\.0\.0\.1/i.test(value);
+  }
+
+  function normalizeMaterialAsset(item, cloudIds) {
     item = item || {};
     var mediaType = String(item.media_type || '').trim().toLowerCase();
     if (mediaType !== 'image' && mediaType !== 'video') return null;
-    var assetId = String(item.asset_id || '').trim();
+    // 列表口径与素材库一致（本机 /api/assets）：本地行用 remote_asset_id 映射到云端 id，
+    // 没有映射的（还没同步到云端）保留本地 id，由服务端按 fileUrl 兜底。
+    var remoteId = String(item.remote_asset_id || '').trim();
+    var sourceUrl = normalizeAssetUrl(item.source_url || '');
+    var publicSource = isPublicAssetUrl(sourceUrl);
+    // 本机只存在本地、又没同步到云端的素材，云端剪辑取不到文件，不在列表里出现。
+    if (!cloudIds && !remoteId && !publicSource) return null;
+    var assetId = cloudIds ? String(item.asset_id || '').trim() : (remoteId || String(item.asset_id || '').trim());
     if (!assetId) return null;
-    var thumb = normalizeAssetUrl(item.preview_url || item.open_url || item.source_url || '');
+    var thumb = normalizeAssetUrl(item.preview_url || item.open_url || sourceUrl || '');
     return {
       asset_id: assetId,
+      cloud_linked: !!(cloudIds || remoteId),
       name: String(item.filename || item.name || assetId).trim() || assetId,
       media_type: mediaType,
       file_size: Number(item.file_size || 0) || 0,
@@ -1701,8 +1714,8 @@
       width: Number(item.width || 0) || 0,
       height: Number(item.height || 0) || 0,
       preview_url: thumb,
-      open_url: normalizeAssetUrl(item.open_url || item.source_url || item.preview_url || ''),
-      source_url: normalizeAssetUrl(item.source_url || ''),
+      open_url: publicSource ? sourceUrl : normalizeAssetUrl(item.open_url || item.source_url || item.preview_url || ''),
+      source_url: sourceUrl,
       selected_key: assetId
     };
   }
@@ -1942,7 +1955,7 @@
       return {
         asset_id: assetId,
         type: type,
-        fileUrl: String((item && (item.open_url || item.preview_url || item.source_url)) || '').trim(),
+        fileUrl: String((item && (item.source_url || item.open_url || item.preview_url)) || '').trim(),
         name: String(item && item.name || assetId).trim()
       };
     }).filter(Boolean);
@@ -1955,7 +1968,14 @@
   // 提交前校验：已选素材是否还在素材库里（被删掉的不要带进任务）。
   function submitVideoCreate(body) {
     var rows = (body && body.materials) || [];
-    var ids = rows.map(function(item) { return String(item && item.asset_id || '').trim(); }).filter(Boolean);
+    var linked = {};
+    (state.selectedMaterials || []).forEach(function(item) {
+      var id = String(item && item.asset_id || '').trim();
+      if (id) linked[id] = item.cloud_linked !== false;
+    });
+    var ids = rows
+      .map(function(item) { return String(item && item.asset_id || '').trim(); })
+      .filter(function(id) { return id && linked[id] !== false; });
     if (!ids.length) return request('/api/shanjian-digital-human/video/create', body);
     var names = {};
     (state.selectedMaterials || []).forEach(function(item) {
@@ -2289,7 +2309,11 @@
     }
     state.materialPicker.loading = true;
     renderMaterialPicker();
-    return fetch((cloudBaseUrl() || baseUrl()) + '/api/assets?limit=120', {
+    // 和素材库用同一个数据源：优先本机 /api/assets（素材库就是读它），H5 没有本机时退回云端。
+    var localBase = baseUrl();
+    var apiBase = localBase || cloudBaseUrl();
+    var fromCloud = !localBase;
+    return fetch(apiBase + '/api/assets?limit=120', {
       headers: authHeadersSafe()
     }).then(function(resp) {
       return resp.json().catch(function() { return {}; }).then(function(data) {
@@ -2298,7 +2322,7 @@
           throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
         }
         var rows = Array.isArray(data.assets) ? data.assets : (Array.isArray(data.items) ? data.items : []);
-        state.materialPicker.items = rows.map(normalizeMaterialAsset).filter(Boolean);
+        state.materialPicker.items = rows.map(function(row) { return normalizeMaterialAsset(row, fromCloud); }).filter(Boolean);
         state.materialPicker.loading = false;
         renderMaterialPicker();
         return state.materialPicker.items;

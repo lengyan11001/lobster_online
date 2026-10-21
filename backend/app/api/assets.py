@@ -2389,11 +2389,16 @@ def _register_local_user_upload_assets_to_auth_server(
 
 
 def _delete_remote_user_upload_asset(asset: Asset, request: Request) -> None:
-    """Delete the cloud copy first so a later sync cannot restore the local row."""
-    if _asset_origin(asset.meta) != "user_upload":
-        return
+    """Delete the cloud copy first so a later sync cannot restore the local row.
+
+    素材库和数字人口播/选品等页面读的是同一份素材：本机删了但云端还留着，
+    另一处就会继续显示已删除的素材。所以只要是同步到云端的素材（有
+    remote_asset_id），删除时都要把云端那份一起删掉，不只是用户上传件。
+    """
     meta = dict(asset.meta or {})
     remote_asset_id = str(meta.get("remote_asset_id") or "").strip()
+    if _asset_origin(asset.meta) != "user_upload" and not remote_asset_id:
+        return
     base = _auth_server_base_url()
     headers = _forward_auth_headers(request)
     if not base or "Authorization" not in headers:
