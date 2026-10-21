@@ -1948,6 +1948,41 @@
     }).filter(Boolean);
   }
 
+  function createApiBase() {
+    return cloudBaseUrl() || baseUrl();
+  }
+
+  // 提交前校验：已选素材是否还在素材库里（被删掉的不要带进任务）。
+  function submitVideoCreate(body) {
+    var rows = (body && body.materials) || [];
+    var ids = rows.map(function(item) { return String(item && item.asset_id || '').trim(); }).filter(Boolean);
+    if (!ids.length) return request('/api/shanjian-digital-human/video/create', body);
+    var names = {};
+    (state.selectedMaterials || []).forEach(function(item) {
+      var id = String(item && item.asset_id || '').trim();
+      if (id) names[id] = String(item.name || id);
+    });
+    return requestTo(createApiBase(), '/api/assets/lookup', { asset_ids: ids })
+      .then(function(data) {
+        var missing = ((data && data.missing) || []).map(function(id) { return String(id); });
+        if (!missing.length) return request('/api/shanjian-digital-human/video/create', body);
+        var missingSet = {};
+        missing.forEach(function(id) { missingSet[id] = true; });
+        state.selectedMaterials = (state.selectedMaterials || []).filter(function(item) {
+          return !missingSet[String(item && item.asset_id || '')];
+        });
+        renderSelectedMaterials();
+        var labels = missing.map(function(id) { return names[id] || id; });
+        throw new Error('有 ' + missing.length + ' 个已选素材已在素材库里被删除：'
+          + labels.join('、') + '。已从本次选择中移除，请确认后重新提交。');
+      })
+      .catch(function(err) {
+        if (err && err.message && err.message.indexOf('已在素材库里被删除') >= 0) throw err;
+        // 校验接口不可用时照常提交，不阻断主流程
+        return request('/api/shanjian-digital-human/video/create', body);
+      });
+  }
+
   function renderSelectedMaterials() {
     var el = $('shanjianSelectedMaterialsPreview');
     var count = $('shanjianSelectedMaterialsCount');
@@ -3873,7 +3908,7 @@
           Object.assign(body, templateOptions);
           body.materials = materialRows();
         }
-        return request('/api/shanjian-digital-human/video/create', body);
+        return submitVideoCreate(body);
       }).then(function(data) {
         startTask('video', taskKindLabel, data.task_id || '', 'local');
         updateTaskStatus('等待中', 'processing');
@@ -3927,7 +3962,7 @@
         Object.assign(body, templateOptions);
         body.materials = materialRows();
       }
-      return request('/api/shanjian-digital-human/video/create', body);
+      return submitVideoCreate(body);
     }).then(function(data) {
       startTask('video', taskKindLabel, data.task_id || '', 'local');
       updateTaskStatus('等待中', 'processing');
