@@ -178,7 +178,7 @@ function escapeSlotText(value) {
 
 function loadInstallationSlotTemplates() {
   var hint = document.getElementById('installationSlotTemplateHint');
-  var options = document.getElementById('installationSlotTemplateOptions');
+  var select = document.getElementById('installationSlotTemplateSelect');
   var base = installationSlotCloudBase();
   var iid = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
   if (!hint || !base || !iid) return Promise.resolve(null);
@@ -191,18 +191,23 @@ function loadInstallationSlotTemplates() {
     })
     .then(function(data) {
       var items = Array.isArray(data.items) ? data.items : [];
-      if (options) {
-        options.innerHTML = items.map(function(item) {
+      if (select) {
+        var currentValue = String(data.current_template_id || '');
+        select.innerHTML = '<option value="">请选择模板</option>' + items.map(function(item) {
           var suffix = item.installation_id ? '（槽位 ' + String(item.installation_id).slice(-8) + '）' : '';
-          return '<option value="' + escapeSlotText(item.name) + '" label="' + escapeSlotText(String(item.name || '') + suffix) + '"></option>';
+          var label = String(item.name || '') + suffix;
+          return '<option value="' + escapeSlotText(String(item.id)) + '">' + escapeSlotText(label) + '</option>';
         }).join('');
+        select.value = currentValue && items.some(function(item) { return String(item.id) === currentValue; })
+          ? currentValue
+          : '';
       }
       var current = items.find(function(item) {
         return String(item.id || '') === String(data.current_template_id || '');
       });
       hint.textContent = current
         ? ('当前槽位关联的模板：' + String(current.name || '') + (current.installation_id ? '（槽位 ' + String(current.installation_id).slice(-8) + '）' : ''))
-        : '当前槽位还没有关联模板：输入模板名或从下拉列表选择，点“关联到当前槽位”。';
+        : '当前槽位还没有关联模板：从下拉列表选择后点“关联到当前槽位”。';
       hint.style.color = '';
       return data;
     })
@@ -214,17 +219,17 @@ function loadInstallationSlotTemplates() {
 }
 
 function linkInstallationSlotTemplate() {
-  var input = document.getElementById('installationSlotTemplateInput');
+  var select = document.getElementById('installationSlotTemplateSelect');
   var btn = document.getElementById('linkInstallationSlotTemplateBtn');
   var base = installationSlotCloudBase();
   var iid = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
-  var name = input ? String(input.value || '').trim() : '';
-  if (!input || !base || !iid) {
+  var templateId = select ? String(select.value || '').trim() : '';
+  if (!select || !base || !iid) {
     showInstallationSlotMsg('当前槽位或服务器地址不可用', true);
     return;
   }
-  if (!name) {
-    showInstallationSlotMsg('请输入或选择要关联的模板名', true);
+  if (!templateId) {
+    showInstallationSlotMsg('请先从下拉列表选择要关联的模板', true);
     return;
   }
   var oldText = btn ? btn.textContent : '';
@@ -235,14 +240,13 @@ function linkInstallationSlotTemplate() {
   fetch(base + '/api/ip-content/slot-templates/link', {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ template_name: name })
+    body: JSON.stringify({ template_id: Number(templateId) })
   }).then(function(response) {
     return response.json().catch(function() { return {}; }).then(function(data) {
       if (!response.ok) throw new Error(data.detail || data.message || '关联失败');
       return data;
     });
   }).then(function(data) {
-    if (input) input.value = String(data.template_name || '');
     showInstallationSlotMsg('已把当前槽位关联到模板：' + String(data.template_name || ''), false);
     return loadInstallationSlotTemplates();
   }).catch(function(err) {

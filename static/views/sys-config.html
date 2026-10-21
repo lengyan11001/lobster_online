@@ -50,8 +50,9 @@
           <button type="button" id="saveInstallationSlotAliasBtn" class="btn btn-ghost btn-sm">保存系统别名</button>
         </div>
         <div style="display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap;margin-top:0.55rem;max-width:58rem;">
-          <input type="text" id="installationSlotTemplateInput" list="installationSlotTemplateOptions" maxlength="160" placeholder="输入或选择要关联的模板名" style="flex:1 1 18rem;min-width:12rem;">
-          <datalist id="installationSlotTemplateOptions"></datalist>
+          <select id="installationSlotTemplateSelect" style="flex:1 1 18rem;min-width:12rem;">
+            <option value="">加载模板中...</option>
+          </select>
           <button type="button" id="linkInstallationSlotTemplateBtn" class="btn btn-ghost btn-sm">关联到当前槽位</button>
         </div>
         <div class="form-hint" id="installationSlotTemplateHint" style="margin-top:0.4rem;">当前槽位关联的模板：加载中...</div>
