@@ -901,8 +901,9 @@
     if (submitHint) {
       submitHint.textContent = hasTemplate
         ? '已选择真人视频模板，提交时会自动带上模板场景和剪辑参数。'
-        : '不选模板时会走普通数字人口播；选了模板后才会切到真人视频模板剪辑。';
+        : '不选模板时按「个人默认配置」里当前选中的模板执行；没有配置模板才走普通数字人口播。';
     }
+    syncTemplateOptionsSummary();
   }
 
   function slugColor(text) {
@@ -2312,7 +2313,11 @@
   }
 
   function selectTemplate(item, shouldScroll) {
+    var previousId = state.selectedTemplate && state.selectedTemplate.id ? String(state.selectedTemplate.id) : '';
     state.selectedTemplate = item ? normalizeTemplateItem(item) : null;
+    var nextId = state.selectedTemplate && state.selectedTemplate.id ? String(state.selectedTemplate.id) : '';
+    // 换模板时回到模板自身默认参数（全开），避免上一次的开关状态把模板效果静默关掉。
+    if (previousId !== nextId && nextId) resetTemplateClipOptions();
     renderSelectedTemplate();
     renderTemplateLibrary();
     syncTemplateModeUI();
@@ -2333,7 +2338,7 @@
       el.innerHTML = ''
         + '<div class="shanjian-selected-empty">'
         + '<strong>当前不使用模板</strong>'
-        + '<span>不选模板时，提交任务会走普通数字人口播；选了模板后，才会切到真人视频模板剪辑。</span>'
+        + '<span>不选模板时，提交任务会按「个人默认配置」里当前选中的模板执行；没有配置模板才会走普通数字人口播。</span>'
         + '</div>';
       return;
     }
@@ -3003,15 +3008,56 @@
     return loadTemplateLibrary(true, false);
   }
 
+  var TEMPLATE_SWITCH_IDS = [
+    'shanjianTemplateHeaderSwitch',
+    'shanjianTemplateMaterialSwitch',
+    'shanjianTemplateSubtitleSwitch',
+    'shanjianTemplateKeywordSwitch'
+  ];
+
   function currentTemplateClipOptions() {
+    function switchOn(id) {
+      var el = $(id);
+      // 元素缺失时按模板默认（开启）处理，绝不静默变成 false。
+      return el ? !!el.checked : true;
+    }
     return {
-      header_switch: !!(($('shanjianTemplateHeaderSwitch') || {}).checked),
-      material_switch: !!(($('shanjianTemplateMaterialSwitch') || {}).checked),
-      subtitle_switch: !!(($('shanjianTemplateSubtitleSwitch') || {}).checked),
-      keyword_switch: !!(($('shanjianTemplateKeywordSwitch') || {}).checked),
-      material_sound_switch: !!(($('shanjianTemplateMaterialSoundSwitch') || {}).checked),
+      header_switch: switchOn('shanjianTemplateHeaderSwitch'),
+      material_switch: switchOn('shanjianTemplateMaterialSwitch'),
+      subtitle_switch: switchOn('shanjianTemplateSubtitleSwitch'),
+      keyword_switch: switchOn('shanjianTemplateKeywordSwitch'),
+      material_sound_switch: switchOn('shanjianTemplateMaterialSoundSwitch'),
       material_match_way: (($('shanjianTemplateMatchWaySelect') || {}).value || 'fuzzyMatch').trim() || 'fuzzyMatch'
     };
+  }
+
+  function resetTemplateClipOptions() {
+    TEMPLATE_SWITCH_IDS.forEach(function(id) {
+      var el = $(id);
+      if (el) el.checked = true;
+    });
+    var sound = $('shanjianTemplateMaterialSoundSwitch');
+    if (sound) sound.checked = false;
+    var match = $('shanjianTemplateMatchWaySelect');
+    if (match) match.value = 'fuzzyMatch';
+    syncTemplateOptionsSummary();
+  }
+
+  function syncTemplateOptionsSummary() {
+    var el = $('shanjianTemplateOptionsSummary');
+    if (!el) return;
+    if (!(state.selectedTemplate && state.selectedTemplate.id)) {
+      el.textContent = '只有选中了右侧模板库里的真人视频模板，下面这些智能剪辑参数才会生效。';
+      return;
+    }
+    var options = currentTemplateClipOptions();
+    function mark(on) { return on ? '开启' : '关闭'; }
+    el.textContent = '本次提交将按当前设置应用：片头开场' + mark(options.header_switch)
+      + ' / 智能配图' + mark(options.material_switch)
+      + ' / 自动字幕' + mark(options.subtitle_switch)
+      + ' / 关键词高亮' + mark(options.keyword_switch)
+      + '；素材匹配：' + (options.material_match_way === 'preciseMatch' ? '精准匹配' : '模糊匹配')
+      + '；保留素材原声：' + mark(options.material_sound_switch) + '。';
   }
 
   function selectedTemplateScene() {
@@ -4085,6 +4131,9 @@
       loadVoices().catch(function(err) { showMessage(err && err.message ? err.message : '声音列表刷新失败', true); });
     });
     if ($('shanjianGenerateBtn')) $('shanjianGenerateBtn').addEventListener('click', generateVideo);
+    TEMPLATE_SWITCH_IDS.concat(['shanjianTemplateMaterialSoundSwitch', 'shanjianTemplateMatchWaySelect']).forEach(function(id) {
+      if ($(id)) $(id).addEventListener('change', syncTemplateOptionsSummary);
+    });
     if ($('shanjianVideoModeTtsBtn')) $('shanjianVideoModeTtsBtn').addEventListener('click', function() { setVideoCreateMode('tts'); });
     if ($('shanjianVideoModeAudioBtn')) $('shanjianVideoModeAudioBtn').addEventListener('click', function() { setVideoCreateMode('audio'); });
     if ($('shanjianAvatarLibraryTabBtn')) $('shanjianAvatarLibraryTabBtn').addEventListener('click', function() { setActiveView('avatar'); });
@@ -4605,7 +4654,7 @@
               <div id="shanjianTemplateSmartParams" class="shanjian-template-param-panel" style="display:none;">
                 <div class="shanjian-template-param-head">
                   <strong>模板剪辑参数</strong>
-                  <span>只有选中了右侧模板库里的真人视频模板，下面这些智能剪辑参数才会生效。</span>
+                  <span id="shanjianTemplateOptionsSummary">只有选中了右侧模板库里的真人视频模板，下面这些智能剪辑参数才会生效。</span>
                 </div>
                 <div class="shanjian-template-switch-grid">
                   <label class="shanjian-template-switch"><input type="checkbox" id="shanjianTemplateHeaderSwitch" checked><span>片头开场</span></label>

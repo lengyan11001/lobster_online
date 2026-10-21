@@ -11877,8 +11877,17 @@ def _shanjian_video_create_payload(
         payload["video_duration"] = 30
         payload["hard_max_duration"] = 30
 
-    if "use_template" in source:
-        use_template = _workflow_flag(source.get("use_template"), False)
+    # 节点只带了 style_id（老模板/老节点）时也要算“套用模板”，不能静默出裸视频。
+    inferred_template = bool(
+        _workflow_text(source.get("style_id"), 128)
+        or _workflow_text(source.get("template_scene"), 32)
+    )
+    if "use_template" in source or inferred_template:
+        use_template = (
+            _workflow_flag(source.get("use_template"), False)
+            if "use_template" in source
+            else inferred_template
+        )
         payload["use_template"] = use_template
         if use_template:
             for key in (
