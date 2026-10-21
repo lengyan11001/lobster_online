@@ -170,6 +170,91 @@ function saveInstallationSlotAlias() {
   });
 }
 
+function escapeSlotText(value) {
+  return String(value || '').replace(/[&<>"]/g, function(ch) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch];
+  });
+}
+
+function loadInstallationSlotTemplates() {
+  var hint = document.getElementById('installationSlotTemplateHint');
+  var options = document.getElementById('installationSlotTemplateOptions');
+  var base = installationSlotCloudBase();
+  var iid = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
+  if (!hint || !base || !iid) return Promise.resolve(null);
+  return fetch(base + '/api/ip-content/slot-templates', { headers: authHeaders() })
+    .then(function(response) {
+      return response.json().catch(function() { return {}; }).then(function(data) {
+        if (!response.ok) throw new Error(data.detail || data.message || '模板列表读取失败');
+        return data;
+      });
+    })
+    .then(function(data) {
+      var items = Array.isArray(data.items) ? data.items : [];
+      if (options) {
+        options.innerHTML = items.map(function(item) {
+          var suffix = item.installation_id ? '（槽位 ' + String(item.installation_id).slice(-8) + '）' : '';
+          return '<option value="' + escapeSlotText(item.name) + '" label="' + escapeSlotText(String(item.name || '') + suffix) + '"></option>';
+        }).join('');
+      }
+      var current = items.find(function(item) {
+        return String(item.id || '') === String(data.current_template_id || '');
+      });
+      hint.textContent = current
+        ? ('当前槽位关联的模板：' + String(current.name || '') + (current.installation_id ? '（槽位 ' + String(current.installation_id).slice(-8) + '）' : ''))
+        : '当前槽位还没有关联模板：输入模板名或从下拉列表选择，点“关联到当前槽位”。';
+      hint.style.color = '';
+      return data;
+    })
+    .catch(function(err) {
+      hint.textContent = (err && err.message) || '模板列表读取失败';
+      hint.style.color = 'var(--danger, #dc2626)';
+      return null;
+    });
+}
+
+function linkInstallationSlotTemplate() {
+  var input = document.getElementById('installationSlotTemplateInput');
+  var btn = document.getElementById('linkInstallationSlotTemplateBtn');
+  var base = installationSlotCloudBase();
+  var iid = typeof getOrCreateInstallationId === 'function' ? getOrCreateInstallationId() : '';
+  var name = input ? String(input.value || '').trim() : '';
+  if (!input || !base || !iid) {
+    showInstallationSlotMsg('当前槽位或服务器地址不可用', true);
+    return;
+  }
+  if (!name) {
+    showInstallationSlotMsg('请输入或选择要关联的模板名', true);
+    return;
+  }
+  var oldText = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = '关联中...';
+  }
+  fetch(base + '/api/ip-content/slot-templates/link', {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ template_name: name })
+  }).then(function(response) {
+    return response.json().catch(function() { return {}; }).then(function(data) {
+      if (!response.ok) throw new Error(data.detail || data.message || '关联失败');
+      return data;
+    });
+  }).then(function(data) {
+    if (input) input.value = String(data.template_name || '');
+    showInstallationSlotMsg('已把当前槽位关联到模板：' + String(data.template_name || ''), false);
+    return loadInstallationSlotTemplates();
+  }).catch(function(err) {
+    showInstallationSlotMsg((err && err.message) || '关联失败', true);
+  }).finally(function() {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = oldText || '关联到当前槽位';
+    }
+  });
+}
+
 function syncLocalInstallationSlotId(iid) {
   if (!iid || !LOCAL_API_BASE) return Promise.resolve({ ok: false, skipped: true });
   return fetch((LOCAL_API_BASE || '') + '/api/settings/installation-id/sync', {
@@ -197,6 +282,7 @@ function loadInstallationSlotStatus() {
     .then(function(status) {
       renderInstallationSlotId(status || {});
       return loadInstallationSlotAlias().then(function() {
+        loadInstallationSlotTemplates();
         showInstallationSlotMsg('', false);
         return status;
       });
@@ -711,6 +797,10 @@ if (copyInstallationSlotIdBtn) copyInstallationSlotIdBtn.addEventListener('click
 var saveInstallationSlotAliasBtn = document.getElementById('saveInstallationSlotAliasBtn');
 if (saveInstallationSlotAliasBtn) saveInstallationSlotAliasBtn.addEventListener('click', function() {
   saveInstallationSlotAlias();
+});
+var linkInstallationSlotTemplateBtn = document.getElementById('linkInstallationSlotTemplateBtn');
+if (linkInstallationSlotTemplateBtn) linkInstallationSlotTemplateBtn.addEventListener('click', function() {
+  linkInstallationSlotTemplate();
 });
 var randomizeInstallationSlotIdBtn = document.getElementById('randomizeInstallationSlotIdBtn');
 if (randomizeInstallationSlotIdBtn) randomizeInstallationSlotIdBtn.addEventListener('click', function() {
