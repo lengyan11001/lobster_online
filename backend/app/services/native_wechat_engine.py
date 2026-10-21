@@ -14753,9 +14753,14 @@ def _sync_local_messages_once(
                     target,
                     search_steps,
                     open_moments=False,
+                    # 2026-10-21：以前只认 diagnostic_context.expected_display_name，
+                    # 执行阶段该字段为空时 fallback_name 为空，昵称兜底整段被跳过，
+                    # wxid 搜不到就直接失败（wxid_0yt6ghltx8n822）。这里补上
+                    # display_target（本轮会话的显示名），保证昵称兜底一定有机会执行。
                     fallback_display_name=str(
                         diagnostic_context.get("expected_display_name") or ""
                     )
+                    or str(display_target or "").strip()
                     or (target if nickname_identity else ""),
                     name_only=nickname_identity,
                 )
@@ -14780,6 +14785,7 @@ def _sync_local_messages_once(
                 target_peer_id=target,
                 target_display_name=display_target,
                 click_mode=click_mode,
+                steps=locals().get("search_steps") or [],
                 error=str(exc)[:500],
             )
             raise
