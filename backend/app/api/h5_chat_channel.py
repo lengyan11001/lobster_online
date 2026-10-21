@@ -44,6 +44,7 @@ from ..services.document_text_extractor import (
 from ..db import SessionLocal
 from ..models import Asset, PublishAccount
 from ..services import native_wechat_engine
+from ..services.cloud_auth_retry import request_with_auth_retry
 from ..services import native_whatsapp_engine
 from ..services.openclaw_channel_auth_store import clear_channel_fallback, read_channel_fallback
 from ..services.client_exit_marker import (
@@ -1061,7 +1062,9 @@ async def _proxy_cloud_json(
     headers = _cloud_headers_from_request(request)
     try:
         async with httpx.AsyncClient(timeout=timeout_sec, trust_env=False) as client:
-            resp = await client.request(
+            # 401 统一走续签+重试一次，避免 token 过期后界面静默停轮询
+            resp = await request_with_auth_retry(
+                client,
                 method,
                 f"{base}{path}",
                 params=params,
@@ -1078,6 +1081,8 @@ async def _proxy_cloud_json(
         data = {}
     if resp.status_code >= 400:
         detail = data.get("detail") if isinstance(data, dict) else ""
+        if resp.status_code == 401:
+            raise HTTPException(status_code=401, detail="登录已失效，请重新登录")
         raise HTTPException(status_code=resp.status_code, detail=detail or resp.text[:500] or f"HTTP {resp.status_code}")
     if isinstance(data, dict):
         return data
@@ -1105,7 +1110,9 @@ async def proxy_h5_chat_messages(
 
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(
+            resp = await request_with_auth_retry(
+                client,
+                "GET",
                 f"{base}/api/h5-chat/messages",
                 params={"limit": limit},
                 headers=_headers(jwt_token, installation_id),
@@ -1417,7 +1424,9 @@ async def _post_cloud_event(
     payload: Optional[Dict[str, Any]] = None,
 ) -> int:
     try:
-        response = await client.post(
+        response = await request_with_auth_retry(
+            client,
+            "POST",
             f"{base}/api/h5-chat/messages/{message_id}/event",
             json={"type": event_type, "payload": payload or {}},
             headers=headers,
@@ -1438,7 +1447,9 @@ async def _complete_cloud_message(
     error: str = "",
     payload: Optional[Dict[str, Any]] = None,
 ) -> None:
-    response = await client.post(
+    response = await request_with_auth_retry(
+        client,
+        "POST",
         f"{base}/api/h5-chat/messages/{message_id}/complete",
         json={"reply_text": reply_text, "error": error, "payload": payload or {}},
         headers=headers,
@@ -1544,7 +1555,9 @@ async def _post_task_control_request(
     last_error: Optional[Exception] = None
     for attempt in range(1, attempts + 1):
         try:
-            response = await client.post(url, json=body, headers=headers, timeout=timeout)
+            response = await request_with_auth_retry(
+                client, "POST", url, json=body, headers=headers, timeout=timeout
+            )
             status = int(response.status_code)
             if status in _SCHEDULED_TASK_TRANSIENT_STATUS and attempt < attempts:
                 # 加抖动：几百个安装同时被上游 5xx 抖到时不至于一起重试打爆服务端。
@@ -3385,7 +3398,9 @@ async def _call_scheduled_llm(
         "temperature": temperature,
     }
     async with httpx.AsyncClient(timeout=90.0, trust_env=False) as client:
-        resp = await client.post(f"{base}/api/sutui-chat/completions", json=body, headers=headers)
+        resp = await request_with_auth_retry(
+            client, "POST", f"{base}/api/sutui-chat/completions", json=body, headers=headers
+        )
     if resp.status_code >= 400:
         raise RuntimeError(f"sutui-chat HTTP {resp.status_code}: {(resp.text or '')[:500]}")
     data = resp.json() if resp.content else {}
@@ -14262,7 +14277,9 @@ async def _process_publish_request_detached(
                 {"run_id": run_id, "publish_draft": draft},
             )
             result = await _submit_local_publish_draft(draft=draft, headers=headers)
-            await client.post(
+            await request_with_auth_retry(
+                client,
+                "POST",
                 f"{base}/api/scheduled-tasks/runs/{run_id}/publish-complete",
                 json={"publish_result": result},
                 headers=headers,
@@ -14270,7 +14287,9 @@ async def _process_publish_request_detached(
         except Exception as exc:
             logger.exception("[SCHEDULED-TASK] publish request failed run_id=%s", run_id)
             try:
-                await client.post(
+                await request_with_auth_retry(
+                    client,
+                    "POST",
                     f"{base}/api/scheduled-tasks/runs/{run_id}/publish-complete",
                     json={"error": str(exc)[:500] or "发布失败", "publish_result": {}},
                     headers=headers,
@@ -14359,7 +14378,9 @@ async def h5_chat_poll_loop() -> None:
                     contacts = _wechat_contacts_for_heartbeat()
                     if contacts is not None:
                         heartbeat_payload["wechat_contacts"] = contacts
-                    heartbeat_resp = await client.post(
+                    heartbeat_resp = await request_with_auth_retry(
+                        client,
+                        "POST",
                         f"{base}/api/h5-chat/device-heartbeat",
                         json=heartbeat_payload,
                         headers=headers,
@@ -14394,7 +14415,9 @@ async def h5_chat_poll_loop() -> None:
                 h5_slots = max(0, max_h5_concurrency - len(active_items))
                 if h5_slots > 0 and now_loop - last_h5_poll_at >= h5_active_interval:
                     last_h5_poll_at = now_loop
-                    resp = await client.get(f"{base}/api/h5-chat/pending", params={"limit": h5_slots}, headers=headers)
+                    resp = await request_with_auth_retry(
+                        client, "GET", f"{base}/api/h5-chat/pending", params={"limit": h5_slots}, headers=headers
+                    )
                     if resp.status_code == 401:
                         logger.warning("[H5-CHAT] cloud auth rejected; waiting for next login token")
                         clear_channel_fallback("h5_pending_401")
@@ -14422,13 +14445,17 @@ async def h5_chat_poll_loop() -> None:
                 )
                 if task_slots > 0 and now_loop - last_task_poll_at >= task_poll_interval:
                     last_task_poll_at = now_loop
-                    task_resp = await client.get(
+                    task_resp = await request_with_auth_retry(
+                        client,
+                        "GET",
                         f"{base}/api/scheduled-tasks/pending",
                         params={"limit": task_slots},
                         headers=headers,
                     )
                     if task_resp.status_code == 401:
-                        logger.warning("[SCHEDULED-TASK] cloud auth rejected; waiting for next login token")
+                        logger.warning("[SCHEDULED-TASK] 登录已失效（续签也失败），请重新登录")
+                        clear_channel_fallback("scheduled_task_pending_401")
+                        last_heartbeat_at = 0.0
                         await asyncio.sleep(sleep_missing_auth)
                         continue
                     if task_resp.status_code == 409:
@@ -14453,13 +14480,17 @@ async def h5_chat_poll_loop() -> None:
                 )
                 if publish_slots > 0 and now_loop - last_publish_poll_at >= publish_poll_interval:
                     last_publish_poll_at = now_loop
-                    publish_resp = await client.get(
+                    publish_resp = await request_with_auth_retry(
+                        client,
+                        "GET",
                         f"{base}/api/scheduled-tasks/publish/pending",
                         params={"limit": publish_slots},
                         headers=headers,
                     )
                     if publish_resp.status_code == 401:
-                        logger.warning("[SCHEDULED-PUBLISH] cloud auth rejected; waiting for next login token")
+                        logger.warning("[SCHEDULED-PUBLISH] 登录已失效（续签也失败），请重新登录")
+                        clear_channel_fallback("scheduled_publish_pending_401")
+                        last_heartbeat_at = 0.0
                         await asyncio.sleep(sleep_missing_auth)
                         continue
                     if publish_resp.status_code == 409:
