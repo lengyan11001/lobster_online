@@ -45,22 +45,26 @@
       if (!el) {
         el = document.createElement('div');
         el.id = 'lobsterVersionGuardBanner';
+        // 小号浮条：不铺满顶栏，右侧给窗口控制按钮（最小化/最大化/关闭）留位置，绝不遮挡关闭按钮。
         el.style.cssText = [
-          'position:fixed', 'top:0', 'left:0', 'right:0', 'z-index:2147483000',
-          'background:#b91c1c', 'color:#fff', 'font:13px/1.6 "Microsoft YaHei",sans-serif',
-          'padding:8px 14px', 'box-shadow:0 6px 18px rgba(0,0,0,.25)', 'white-space:pre-wrap'
+          'position:fixed', 'top:6px', 'left:8px', 'right:auto', 'z-index:2147483000',
+          'max-width:min(620px, calc(100vw - 190px))',
+          'background:#b91c1c', 'color:#fff', 'font:12px/1.45 "Microsoft YaHei",sans-serif',
+          'padding:4px 10px', 'border-radius:6px',
+          'box-shadow:0 2px 8px rgba(0,0,0,.18)', 'white-space:normal'
         ].join(';');
         document.body.appendChild(el);
       }
       el.textContent = '';
+      el.title = text + (detail ? '\n' + detail : '');
       var span = document.createElement('span');
-      span.textContent = text + (detail ? '　' + detail : '');
+      span.textContent = text;
       el.appendChild(span);
       // 不再自动刷新页面（会白屏闪一下）：给一个按钮，用户点了才刷
       var btn = document.createElement('button');
       btn.type = 'button';
       btn.textContent = '立即刷新界面';
-      btn.style.cssText = 'margin-left:12px;padding:2px 10px;border:0;border-radius:4px;background:#fff;color:#b91c1c;font-weight:700;cursor:pointer';
+      btn.style.cssText = 'margin-left:8px;padding:1px 8px;border:0;border-radius:4px;background:#fff;color:#b91c1c;font:12px/1.4 "Microsoft YaHei",sans-serif;font-weight:700;cursor:pointer;vertical-align:middle';
       btn.onclick = function () { try { location.reload(); } catch (err) {} };
       el.appendChild(btn);
       document.title = '【版本不一致】' + document.title.replace(/^【版本不一致】/, '');
@@ -90,14 +94,14 @@
       if (staticSide && staticKey !== backendKey && staticKey !== '?-') {
         state.mismatch = true;
         banner(
-          '界面与后端版本不一致：界面 ' + staticKey + ' / 后端 ' + backendKey,
-          '正在重新加载；若反复出现，请关闭客户端再打开（或重新更新）'
+          '版本不一致：界面 ' + staticKey + ' / 后端 ' + backendKey,
+          '点「立即刷新界面」；反复出现就重启客户端'
         );
       }
       if (state.missingRoutes.length) {
         banner(
           '后端缺少关键接口：' + state.missingRoutes.join('、'),
-          '说明后端代码不是当前这个包（半包/旧包），请重新更新或重启客户端'
+          '请重新更新或重启客户端'
         );
       }
       // 包已经更新、但后端进程还是更新前启动的：也会表现成"界面有、接口 404"
@@ -106,8 +110,8 @@
       if (!isNaN(appliedAt) && !isNaN(startedAt) && startedAt + 5000 < appliedAt) {
         state.backend_stale = true;
         banner(
-          '后端进程还是更新前的（后端启动 ' + backend.backend_started_at + '，代码包 ' + backend.applied_at + '）',
-          '请关闭客户端再打开，让后端跟着新代码重启'
+          '后端进程还是更新前的，请重启客户端',
+          '后端启动 ' + backend.backend_started_at + ' / 代码包 ' + backend.applied_at
         );
       }
       // 一律不自动 reload（自动刷新=白屏闪一下，用户明确要求不允许跳闪）；
