@@ -1,7 +1,7 @@
 {
-  "version": "2.0.174",
-  "build": 471,
-  "applied_at": "2026-10-22T17:47:39+08:00",
-  "note": "身份文件补写 machine/brand",
-  "bundle_sha256": "8d12e2083445d20262541011b83527cc60f1c1dcbd94c60b733e53f1cb25247b"
+  "version": "2.0.175",
+  "build": 472,
+  "applied_at": "2026-10-22T18:16:22+08:00",
+  "note": "身份文件自动补写机器身份",
+  "bundle_sha256": "ccf8f00aeb7fce7d1ab74e303cd54a0f449b515c7ff8d6915440174e884b2d2a"
 }
