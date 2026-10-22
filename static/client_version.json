@@ -1,7 +1,7 @@
 {
-  "version": "2.0.182",
-  "build": 479,
-  "applied_at": "2026-10-22T20:02:18+08:00",
-  "note": "slot: unique machine id from guid+smbios+mac, legacy id list",
-  "bundle_sha256": "b7ca91897d10ae4ed2a1be6e8b98cf552e193b8b0c5a2cb49f5e3f8167649870"
+  "version": "2.0.183",
+  "build": 480,
+  "applied_at": "2026-10-22T21:38:14+08:00",
+  "note": "slot: adopt server-pinned slot on bind",
+  "bundle_sha256": "4925f5b9595ffd92808791e29529231905c984759fea19ba6af5ab4b98371b34"
 }
