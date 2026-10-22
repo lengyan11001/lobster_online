@@ -2992,6 +2992,17 @@
     }
     window.__LOBSTER_INSTALLATION_ID__ = installationId || '';
     window.__LOBSTER_DEVICE_SEED__ = deviceSeed || '';
+    // 机器身份也从同一个文件回填：WebView 缓存被清掉时，known_machine 仍然能认出这台机器，
+    // 服务器就不会再给同一台设备发新的槽位。
+    try {
+      var fileMachineId = "__LOBSTER_MACHINE_INSTANCE_ID__";
+      if (valid(fileMachineId)) {
+        window.__LOBSTER_MACHINE_INSTANCE_ID__ = String(fileMachineId).trim();
+        if (!localStorage.getItem('lobster_machine_instance_id')) {
+          localStorage.setItem('lobster_machine_instance_id', String(fileMachineId).trim());
+        }
+      }
+    } catch (e) {}
     window.__LOBSTER_INSTALLATION_FILE_PRESENT__ = filePresent;
     window.__LOBSTER_INSTALLATION_MIGRATED__ = !!migrated;
     window.__LOBSTER_INSTALLATION_NEEDS_WRITE__ = !filePresent;

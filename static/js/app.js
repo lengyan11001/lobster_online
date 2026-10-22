@@ -1114,7 +1114,14 @@ function persistInstallationIdentityToFile() {
   return fetch(base + '/api/settings/installation-identity', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ installation_id: iid || '', device_seed: seed || '', source: source })
+    body: JSON.stringify({
+      installation_id: iid || '',
+      device_seed: seed || '',
+      machine_instance_id: (typeof currentStoredLobsterMachineInstanceId === 'function'
+        ? (currentStoredLobsterMachineInstanceId() || '')
+        : (function () { try { return localStorage.getItem('lobster_machine_instance_id') || ''; } catch (e) { return ''; } })()),
+      source: source
+    })
   }).then(function (resp) {
     if (!resp.ok) return false;
     return resp.json().catch(function () { return {}; }).then(function (data) {

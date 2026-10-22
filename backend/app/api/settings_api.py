@@ -542,6 +542,7 @@ class MachineIdentityResponse(BaseModel):
 class InstallationIdentityRequest(BaseModel):
     installation_id: Optional[str] = None
     device_seed: Optional[str] = None
+    machine_instance_id: Optional[str] = None
     source: Optional[str] = None
 
 
@@ -676,6 +677,7 @@ def save_installation_identity(body: InstallationIdentityRequest):
             body.installation_id,
             body.device_seed,
             source=str(body.source or "api").strip()[:80],
+            machine_instance_id=body.machine_instance_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

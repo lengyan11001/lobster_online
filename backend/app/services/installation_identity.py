@@ -23,6 +23,45 @@ _DEFAULT_FILE = CLIENT_ROOT / "data" / "installation_identity.json"
 INSTALLATION_IDENTITY_FILE = Path(
     os.environ.get("LOBSTER_INSTALLATION_IDENTITY_FILE") or str(_DEFAULT_FILE)
 )
+
+
+def _fallback_file() -> Path:
+    """机器级备份：安装目录被 OTA 覆盖/无写权限时，仍然能读回原槽位。"""
+    override = os.environ.get("LOBSTER_INSTALLATION_IDENTITY_FALLBACK")
+    if override:
+        return Path(override)
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    if base:
+        return Path(base) / "Lobster" / "installation_identity.json"
+    return Path.home() / ".lobster" / "installation_identity.json"
+
+
+def _read_identity_file(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    installation_id = normalize_identity_value(data.get("installation_id"))
+    device_seed = normalize_identity_value(data.get("device_seed"))
+    machine_instance_id = normalize_identity_value(data.get("machine_instance_id"))
+    if not installation_id and not device_seed:
+        return None
+    if not installation_id:
+        installation_id = device_seed
+    if not device_seed:
+        device_seed = raw_device_seed(installation_id)
+    return {
+        "present": True,
+        "installation_id": installation_id,
+        "device_seed": device_seed,
+        "machine_instance_id": machine_instance_id,
+        "path": str(path),
+        "reason": "ok",
+    }
 _VALID_ID = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 _LAST_READ_SIGNATURE: Optional[tuple] = None
 
@@ -49,6 +88,7 @@ def _empty(path: Optional[Path] = None, reason: str = "") -> Dict[str, Any]:
         "present": False,
         "installation_id": "",
         "device_seed": "",
+        "machine_instance_id": "",
         "path": str(path or INSTALLATION_IDENTITY_FILE),
         "reason": reason,
     }
@@ -82,40 +122,51 @@ def _log_read(result: Dict[str, Any], reason: str) -> None:
 
 
 def read_installation_identity() -> Dict[str, Any]:
-    path = Path(INSTALLATION_IDENTITY_FILE)
-    if not path.is_file():
-        result = _empty(path, "file_missing")
-        _log_read(result, "file_missing")
+    primary = Path(INSTALLATION_IDENTITY_FILE)
+    result = _read_identity_file(primary)
+    if result is not None:
+        _log_read(result, "ok")
         return result
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        result = _empty(path, "invalid_json")
-        _log_read(result, f"invalid_json:{exc.__class__.__name__}")
+    fallback = _fallback_file()
+    result = _read_identity_file(fallback)
+    if result is not None:
+        logger.info("[installation-identity] primary missing, using fallback path=%s", fallback)
+        _log_read(result, "fallback")
         return result
-    if not isinstance(data, dict):
-        result = _empty(path, "invalid_payload")
-        _log_read(result, "invalid_payload")
-        return result
-    installation_id = normalize_identity_value(data.get("installation_id"))
-    device_seed = normalize_identity_value(data.get("device_seed"))
-    if not installation_id and not device_seed:
-        result = _empty(path, "empty_identity")
-        _log_read(result, "empty_identity")
-        return result
-    if not installation_id:
-        installation_id = device_seed
-    if not device_seed:
-        device_seed = raw_device_seed(installation_id)
-    result = {
-        "present": True,
-        "installation_id": installation_id,
-        "device_seed": device_seed,
-        "path": str(path),
-        "reason": "ok",
-    }
-    _log_read(result, "ok")
+    result = _empty(primary, "file_missing")
+    _log_read(result, "file_missing")
     return result
+
+
+def _write_identity_files(iid: str, seed: str, machine_id: str) -> Optional[Dict[str, Any]]:
+    """主文件 + 机器级备份都写；主目录无权限时，备份仍能保住槽位。"""
+    payload = {
+        "version": 1,
+        "installation_id": iid,
+        "device_seed": seed,
+        "machine_instance_id": machine_id or "",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    written: list[Path] = []
+    for path in (Path(INSTALLATION_IDENTITY_FILE), _fallback_file()):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            os.replace(str(tmp), str(path))
+            written.append(path)
+        except OSError as exc:
+            logger.warning("[installation-identity] write failed iid=%s path=%s error=%s", _prefix(iid), path, exc)
+    if not written:
+        return None
+    return {
+        "present": True,
+        "installation_id": iid,
+        "device_seed": seed,
+        "machine_instance_id": machine_id or "",
+        "path": str(written[0]),
+        "paths": [str(path) for path in written],
+    }
 
 
 def write_installation_identity(
@@ -123,9 +174,11 @@ def write_installation_identity(
     device_seed: Any,
     *,
     source: str = "",
+    machine_instance_id: Any = None,
 ) -> Dict[str, Any]:
     iid = normalize_identity_value(installation_id)
     seed = normalize_identity_value(device_seed)
+    machine_id = normalize_identity_value(machine_instance_id)
     if not iid and not seed:
         raise ValueError("installation_id or device_seed is required")
     if not iid:
@@ -169,41 +222,26 @@ def write_installation_identity(
             existing_iid,
             existing.get("path") or "",
         )
+        # 槽位保持不变，但机器身份还是要补写，否则换槽位后 known_machine 对不上。
+        if machine_id and not existing.get("machine_instance_id"):
+            updated = _write_identity_files(
+                existing_iid,
+                raw_device_seed(existing_iid) or normalize_identity_value(existing.get("device_seed")),
+                machine_id,
+            )
+            if updated:
+                return {**updated, "ignored": True}
         return {**existing, "ignored": True}
 
-    path = Path(INSTALLATION_IDENTITY_FILE)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "version": 1,
-            "installation_id": iid,
-            "device_seed": seed,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
-        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.replace(str(tmp), str(path))
-    except OSError as exc:
-        logger.warning(
-            "[installation-identity] write failed source=%s iid=%s path=%s error=%s",
-            source or "unknown",
-            _prefix(iid),
-            path,
-            exc,
-        )
-        raise
-
+    updated = _write_identity_files(iid, seed, machine_id or normalize_identity_value(existing.get("machine_instance_id")))
+    if not updated:
+        raise OSError("unable to persist installation identity")
     logger.info(
         "[installation-identity] write ok source=%s iid=%s seed_prefix=%s signed=%s path=%s",
         source or "unknown",
         iid,
         _prefix(seed, 12),
         incoming_signed,
-        path,
+        updated.get("path"),
     )
-    return {
-        "present": True,
-        "installation_id": iid,
-        "device_seed": seed,
-        "path": str(path),
-    }
+    return updated
