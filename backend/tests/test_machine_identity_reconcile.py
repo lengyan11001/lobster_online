@@ -37,3 +37,32 @@ def test_machine_identity_is_noop_when_already_aligned(tmp_path, monkeypatch):
     loaded = mod.read_installation_identity()
     assert loaded["machine_instance_id"] == hardware
     assert loaded["legacy_machine_instance_id"] == ""
+# -*- coding: utf-8 -*-
+"""POST without a hardware machine id must let the server fill it, not write the stale one."""
+from backend.app.api import settings_api
+from backend.app.services import installation_identity as mod
+
+
+def test_save_without_machine_writes_hardware_id(tmp_path, monkeypatch):
+    path = tmp_path / "installation_identity.json"
+    monkeypatch.setattr(mod, "INSTALLATION_IDENTITY_FILE", path)
+    monkeypatch.setattr(mod, "_fallback_file", lambda: tmp_path / "fallback.json")
+    mod.write_installation_identity(
+        "u260-" + "a" * 32, "a" * 32, machine_instance_id="m1a0474c3a3dcc8b"
+    )
+    hardware = "mw" + "e" * 48
+    monkeypatch.setattr(settings_api, "_get_or_create_machine_instance_id", lambda: hardware)
+
+    body = settings_api.InstallationIdentityRequest(
+        installation_id="u260-" + "a" * 32,
+        device_seed="a" * 32,
+        machine_instance_id="",
+        source="boot_persist",
+    )
+    result = settings_api.save_installation_identity(body)
+
+    assert result.get("ok") is True
+    loaded = mod.read_installation_identity()
+    assert loaded["machine_instance_id"] == hardware
+    assert loaded["legacy_machine_instance_id"] == "m1a0474c3a3dcc8b"
+    assert loaded["installation_id"] == "u260-" + "a" * 32

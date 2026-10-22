@@ -1178,9 +1178,17 @@ function persistInstallationIdentityToFile() {
     body: JSON.stringify({
       installation_id: iid || '',
       device_seed: seed || '',
-      machine_instance_id: (typeof currentStoredLobsterMachineInstanceId === 'function'
-        ? (currentStoredLobsterMachineInstanceId() || '')
-        : (function () { try { return localStorage.getItem('lobster_machine_instance_id') || ''; } catch (e) { return ''; } })()),
+      // 只上报硬件机器 id（mw…）；老镜像里的 m… 一律交给本地服务端按 MachineGuid 重新判定，
+      // 否则 localStorage 里的陈旧值会把文件里的机器 id 写回旧值，槽位判定跟着回退。
+      machine_instance_id: (function () {
+        try {
+          var stored = (typeof currentStoredLobsterMachineInstanceId === 'function'
+            ? (currentStoredLobsterMachineInstanceId() || '')
+            : '');
+          stored = String(stored).trim();
+          return stored.indexOf('mw') === 0 ? stored : '';
+        } catch (eM) { return ''; }
+      })(),
       source: source,
       brand_mark: (typeof getLobsterBrandMark === 'function' ? (getLobsterBrandMark() || '') : ''),
       force: !!_installationIdentityPersistForce
@@ -1190,6 +1198,10 @@ function persistInstallationIdentityToFile() {
     return resp.json().catch(function () { return {}; }).then(function (data) {
       var authoritativeIid = String((data && data.installation_id) || '').trim();
       var authoritativeSeed = String((data && data.device_seed) || '').trim();
+      var authoritativeMachine = String((data && data.machine_instance_id) || '').trim();
+      if (authoritativeMachine && typeof setLobsterMachineInstanceId === 'function') {
+        try { setLobsterMachineInstanceId(authoritativeMachine, { reason: 'identity_persist' }); } catch (eM2) {}
+      }
       if (isValidLobsterInstallationId(authoritativeIid)) {
         _lobsterInstallationIdCache = authoritativeIid;
         try { window.__LOBSTER_INSTALLATION_ID__ = authoritativeIid; } catch (e1) {}
