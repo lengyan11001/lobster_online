@@ -927,6 +927,11 @@ function repairAuthenticatedInstallationSlot(tok, options) {
     var next = String(data && data.installation_id || '').trim();
     if (next && next !== current && typeof setLobsterInstallationId === 'function') {
       setLobsterInstallationId(next, { reason: 'server_signed_bind', device_id: data && data.device_id });
+      // 启动时 bind 会连发两次，延迟持久化会和下一次 bind 抢时序，这里立刻落盘一次，
+      // 保证服务端指定的槽位写进 installation_identity 文件。
+      if (typeof persistInstallationIdentityToFile === 'function') {
+        try { persistInstallationIdentityToFile(); } catch (ePersist) {}
+      }
     }
     var effective = next || current;
     return syncLocalInstallationSlotCache(effective, t).then(function() {
