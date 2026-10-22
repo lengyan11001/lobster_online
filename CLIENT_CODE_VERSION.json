@@ -1,7 +1,7 @@
 {
-  "version": "2.0.179",
-  "build": 476,
-  "applied_at": "2026-10-22T19:08:15+08:00",
-  "note": "slot: reconcile stale machine id on identity read",
-  "bundle_sha256": "9d25e7064b4f785ff8fd55ce701f22c2a6d24b5b49324429eda6efeb98731ca2"
+  "version": "2.0.180",
+  "build": 477,
+  "applied_at": "2026-10-22T19:21:19+08:00",
+  "note": "slot: machine-identity rewrites identity file machine id",
+  "bundle_sha256": "8afa7b7b903837cdc76e41dd777e55672199620a0b5d3034c2b90eda742b3b49"
 }
