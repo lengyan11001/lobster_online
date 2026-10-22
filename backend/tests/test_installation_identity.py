@@ -94,3 +94,21 @@ def test_force_write_overrides_frozen_slot(tmp_path, monkeypatch):
 
     assert forced["installation_id"] == "u260-" + "b" * 32
     assert mod.read_installation_identity()["installation_id"] == "u260-" + "b" * 32
+
+def test_ignored_write_still_backfills_machine_and_brand(tmp_path, monkeypatch):
+    path = tmp_path / "installation_identity.json"
+    monkeypatch.setattr(mod, "INSTALLATION_IDENTITY_FILE", path)
+    monkeypatch.setattr(mod, "_fallback_file", lambda: tmp_path / "fallback.json")
+
+    mod.write_installation_identity("u260-" + "a" * 32, "a" * 32)
+    result = mod.write_installation_identity(
+        "u260-" + "a" * 32,
+        "a" * 32,
+        machine_instance_id="machine-a",
+        brand_mark="hikong",
+    )
+
+    assert result["ignored"] is True
+    loaded = mod.read_installation_identity()
+    assert loaded["machine_instance_id"] == "machine-a"
+    assert loaded["brand_mark"] == "hikong"

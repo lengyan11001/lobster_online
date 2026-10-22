@@ -3029,6 +3029,8 @@
       localStorage.removeItem('lobster_device_seed');
     } catch (e) {}
     window.__LOBSTER_INSTALLATION_FILE_PRESENT__ = !!filePresent;
+    window.__LOBSTER_IDENTITY_FILE_HAS_MACHINE__ = valid(machineId);
+    window.__LOBSTER_IDENTITY_FILE_HAS_BRAND__ = !!identityBrand;
     window.__LOBSTER_INSTALLATION_MIGRATED__ = source === 'ensure' && !!legacyCandidate();
     window.__LOBSTER_INSTALLATION_NEEDS_WRITE__ = !filePresent;
     window.__LOBSTER_INSTALLATION_MIGRATION_SOURCE__ = source;

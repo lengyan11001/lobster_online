@@ -989,6 +989,14 @@ try {
 var _installationIdentityPersistTimer = 0;
 var _installationIdentityPersistSource = '';
 var _installationIdentityPersistForce = false;
+
+// 文件里缺 machine/brand（老文件）时，启动后补写一次，保证文件是完整的事实来源。
+if (typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_FILE_PRESENT__ &&
+    (!window.__LOBSTER_IDENTITY_FILE_HAS_MACHINE__ || !window.__LOBSTER_IDENTITY_FILE_HAS_BRAND__)) {
+  setTimeout(function () {
+    try { persistInstallationIdentityToFile(); } catch (e) {}
+  }, 1500);
+}
 var LOBSTER_MACHINE_INSTANCE_STORAGE_KEY = 'lobster_machine_instance_id';
 
 function rawInstallationId(value) {
@@ -1152,6 +1160,7 @@ function persistInstallationIdentityToFile() {
         ? (currentStoredLobsterMachineInstanceId() || '')
         : (function () { try { return localStorage.getItem('lobster_machine_instance_id') || ''; } catch (e) { return ''; } })()),
       source: source,
+      brand_mark: (typeof getLobsterBrandMark === 'function' ? (getLobsterBrandMark() || '') : ''),
       force: !!_installationIdentityPersistForce
     })
   }).then(function (resp) {

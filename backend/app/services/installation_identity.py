@@ -275,11 +275,14 @@ def write_installation_identity(
             existing.get("path") or "",
         )
         # 槽位保持不变，但机器身份还是要补写，否则换槽位后 known_machine 对不上。
-        if machine_id and not existing.get("machine_instance_id"):
+        need_machine = bool(machine_id) and not existing.get("machine_instance_id")
+        need_brand = bool(brand) and brand != str(existing.get("brand_mark") or "")
+        if need_machine or need_brand:
             updated = _write_identity_files(
                 existing_iid,
                 raw_device_seed(existing_iid) or normalize_identity_value(existing.get("device_seed")),
-                machine_id,
+                machine_id or str(existing.get("machine_instance_id") or ""),
+                brand or str(existing.get("brand_mark") or ""),
             )
             if updated:
                 return {**updated, "ignored": True}
