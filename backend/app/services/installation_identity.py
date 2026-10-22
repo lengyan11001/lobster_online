@@ -49,6 +49,7 @@ def _read_identity_file(path: Path) -> Optional[Dict[str, Any]]:
     installation_id = normalize_identity_value(data.get("installation_id"))
     device_seed = normalize_identity_value(data.get("device_seed"))
     machine_instance_id = normalize_identity_value(data.get("machine_instance_id"))
+    legacy_machine_instance_id = normalize_identity_value(data.get("legacy_machine_instance_id"))
     brand_mark = str(data.get("brand_mark") or "").strip().lower()[:64]
     if not installation_id and not device_seed:
         return None
@@ -61,6 +62,7 @@ def _read_identity_file(path: Path) -> Optional[Dict[str, Any]]:
         "installation_id": installation_id,
         "device_seed": device_seed,
         "machine_instance_id": machine_instance_id,
+        "legacy_machine_instance_id": legacy_machine_instance_id,
         "brand_mark": brand_mark,
         "path": str(path),
         "reason": "ok",
@@ -96,6 +98,7 @@ def _empty(path: Optional[Path] = None, reason: str = "") -> Dict[str, Any]:
         "installation_id": "",
         "device_seed": "",
         "machine_instance_id": "",
+        "legacy_machine_instance_id": "",
         "brand_mark": "",
         "path": str(path or INSTALLATION_IDENTITY_FILE),
         "reason": reason,
@@ -177,13 +180,14 @@ def ensure_installation_identity(brand_mark: str = "", candidate: Any = "") -> D
     return updated
 
 
-def _write_identity_files(iid: str, seed: str, machine_id: str, brand_mark: str = "") -> Optional[Dict[str, Any]]:
+def _write_identity_files(iid: str, seed: str, machine_id: str, brand_mark: str = "", legacy_machine_id: str = "") -> Optional[Dict[str, Any]]:
     """主文件 + 机器级备份都写；主目录无权限时，备份仍能保住槽位。"""
     payload = {
         "version": 1,
         "installation_id": iid,
         "device_seed": seed,
         "machine_instance_id": machine_id or "",
+        "legacy_machine_instance_id": legacy_machine_id or "",
         "brand_mark": str(brand_mark or "").strip().lower()[:64],
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -204,6 +208,7 @@ def _write_identity_files(iid: str, seed: str, machine_id: str, brand_mark: str 
         "installation_id": iid,
         "device_seed": seed,
         "machine_instance_id": machine_id or "",
+        "legacy_machine_instance_id": legacy_machine_id or "",
         "brand_mark": str(brand_mark or "").strip().lower()[:64],
         "path": str(written[0]),
         "paths": [str(path) for path in written],
@@ -277,7 +282,7 @@ def write_installation_identity(
             existing.get("path") or "",
         )
         # 槽位保持不变，但机器身份还是要补写，否则换槽位后 known_machine 对不上。
-        need_machine = bool(machine_id) and not existing.get("machine_instance_id")
+        need_machine = bool(machine_id) and machine_id != str(existing.get("machine_instance_id") or "")
         need_brand = bool(brand) and brand != str(existing.get("brand_mark") or "")
         if need_machine or need_brand:
             updated = _write_identity_files(
@@ -285,16 +290,23 @@ def write_installation_identity(
                 raw_device_seed(existing_iid) or normalize_identity_value(existing.get("device_seed")),
                 machine_id or str(existing.get("machine_instance_id") or ""),
                 brand or str(existing.get("brand_mark") or ""),
+                str(existing.get("machine_instance_id") or "") if machine_id and machine_id != str(existing.get("machine_instance_id") or "") else str(existing.get("legacy_machine_instance_id") or ""),
             )
             if updated:
                 return {**updated, "ignored": True}
         return {**existing, "ignored": True}
 
+    existing_machine = normalize_identity_value(existing.get("machine_instance_id"))
+    resolved_machine = machine_id or existing_machine
+    legacy_machine = normalize_identity_value(existing.get("legacy_machine_instance_id"))
+    if existing_machine and resolved_machine and existing_machine != resolved_machine:
+        legacy_machine = existing_machine
     updated = _write_identity_files(
         iid,
         seed,
-        machine_id or normalize_identity_value(existing.get("machine_instance_id")),
+        resolved_machine,
         brand or str(existing.get("brand_mark") or ""),
+        legacy_machine,
     )
     if not updated:
         raise OSError("unable to persist installation identity")

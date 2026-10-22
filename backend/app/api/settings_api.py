@@ -589,25 +589,44 @@ def _machine_identity_file() -> Path:
     return candidates[0] if candidates else _CLIENT_ROOT / "openclaw" / "identity" / _MACHINE_ID_FILE_NAME
 
 
+def _remember_machine_identity(value: str) -> None:
+    """把硬件派生的机器身份写回本机文件（保留创建时间）。"""
+    path = _machine_identity_file()
+    legacy = ""
+    try:
+        if path.is_file():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            current = _normalize_installation_id(str(data.get("machine_instance_id") or ""))
+            previous_legacy = _normalize_installation_id(str(data.get("legacy_machine_instance_id") or ""))
+            if current and current != value:
+                legacy = current
+            elif previous_legacy and previous_legacy != value:
+                legacy = previous_legacy
+    except Exception:
+        pass
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "machine_instance_id": value,
+            "legacy_machine_instance_id": legacy if legacy and legacy != value else "",
+            "created_at_ms": int(time.time() * 1000),
+        }
+        tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(str(tmp), str(path))
+    except OSError as exc:
+        logger.warning("[installation-identity] machine identity write failed path=%s err=%s", path, exc)
+
+
 def _get_or_create_machine_instance_id() -> str:
     global _MACHINE_INSTANCE_ID_CACHE
     cached = _normalize_installation_id(_MACHINE_INSTANCE_ID_CACHE)
     if cached:
         return cached
-    candidates = _machine_identity_candidates()
-    for path in candidates:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            value = _normalize_installation_id(str(data.get("machine_instance_id") or ""))
-            if value:
-                _MACHINE_INSTANCE_ID_CACHE = value
-                return value
-        except Exception:
-            pass
-
-    # Keep the identity outside the application directory. If an older
-    # install has no machine_identity.json yet, Windows' MachineGuid lets an
-    # OTA/reinstall recover the same logical slot instead of making a new one.
+    # 2026-10-22：出厂镜像会把 machine_identity.json 一起打包，导致多台机器
+    # 共用同一个机器身份（56 个账号共用一个 m1a0474…）。机器身份必须来自硬件，
+    # 所以 Windows 上优先用 MachineGuid 派生；文件里的旧 id 只作为 legacy 保留。
     if os.name == "nt":
         try:
             import winreg  # type: ignore
@@ -620,6 +639,18 @@ def _get_or_create_machine_instance_id() -> str:
             guid = str(guid or "").strip()
             if guid:
                 value = "mw" + hashlib.sha256(guid.encode("utf-8")).hexdigest()[:48]
+                _MACHINE_INSTANCE_ID_CACHE = value
+                _remember_machine_identity(value)
+                return value
+        except Exception:
+            pass
+
+    candidates = _machine_identity_candidates()
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            value = _normalize_installation_id(str(data.get("machine_instance_id") or ""))
+            if value:
                 _MACHINE_INSTANCE_ID_CACHE = value
                 return value
         except Exception:

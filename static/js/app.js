@@ -954,8 +954,9 @@ function readBootFileIdentitySync() {
     var iid = String((data && data.installation_id) || '').trim();
     var seed = String((data && data.device_seed) || '').trim();
     var machine = String((data && data.machine_instance_id) || '').trim();
+    var legacyMachine = String((data && data.legacy_machine_instance_id) || '').trim();
     if (data && data.present === true && /^[a-zA-Z0-9_-]{8,128}$/.test(iid) && /^[a-zA-Z0-9_-]{8,128}$/.test(seed)) {
-      return { installation_id: iid, device_seed: seed, machine_instance_id: machine };
+      return { installation_id: iid, device_seed: seed, machine_instance_id: machine, legacy_machine_instance_id: legacyMachine };
     }
   } catch (e) {}
   return null;
@@ -973,6 +974,10 @@ if (_bootFileIdentity) {
       if (!localStorage.getItem('lobster_machine_instance_id')) {
         localStorage.setItem('lobster_machine_instance_id', _bootMachine);
       }
+    }
+    var _bootLegacyMachine = String(_bootFileIdentity.legacy_machine_instance_id || '').trim();
+    if (/^[a-zA-Z0-9_-]{8,128}$/.test(_bootLegacyMachine)) {
+      window.__LOBSTER_LEGACY_MACHINE_ID__ = _bootLegacyMachine;
     }
   } catch (eMachine) {}
   try { window.__LOBSTER_INSTALLATION_FILE_PRESENT__ = true; } catch (e2) {}
@@ -1279,6 +1284,7 @@ function bindLobsterInstallationId(options) {
       installation_id: bindCurrent,
       device_id: deviceId,
       machine_instance_id: machineInstanceId || null,
+      legacy_machine_instance_id: (typeof window !== 'undefined' ? (window.__LOBSTER_LEGACY_MACHINE_ID__ || '') : ''),
       force_new: !!options.forceNew
     })
   }).then(function(resp) {
