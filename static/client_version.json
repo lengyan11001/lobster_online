@@ -1,7 +1,7 @@
 {
-  "version": "2.0.181",
-  "build": 478,
-  "applied_at": "2026-10-22T19:50:11+08:00",
-  "note": "identity: log machine refresh instead of write ignored",
-  "bundle_sha256": "676db3ead02bcdf54e9571b837581288f70d87f1128e981399ef81813156e9ad"
+  "version": "2.0.182",
+  "build": 479,
+  "applied_at": "2026-10-22T20:02:18+08:00",
+  "note": "slot: unique machine id from guid+smbios+mac, legacy id list",
+  "bundle_sha256": "b7ca91897d10ae4ed2a1be6e8b98cf552e193b8b0c5a2cb49f5e3f8167649870"
 }
