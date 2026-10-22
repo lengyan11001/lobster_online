@@ -314,6 +314,33 @@ def _build_diagnostic_bundle() -> tuple[str, bytes, dict]:
             zf.writestr(arcname, _redact_text(text))
             summary["files"].append({"path": rel, "size": size, "truncated": truncated, "redacted": True})
 
+        # 身份文件：槽位/机器/品牌排查看的就是这几份，直接放进诊断包。
+        try:
+            import os as _os
+            identity_paths = [("installation_identity.json", (_BASE / "data" / "installation_identity.json"))]
+            for env_name, arc in (("LOCALAPPDATA", "installation_identity.localappdata.json"),
+                                  ("PROGRAMDATA", "machine_identity.programdata.json"),
+                                  ("LOCALAPPDATA", "machine_identity.localappdata.json")):
+                root = str(_os.environ.get(env_name) or "").strip()
+                if not root:
+                    continue
+                name = "installation_identity.json" if arc.startswith("installation_identity") else "machine_identity.json"
+                sub = "Lobster" if name == "installation_identity.json" else "LobsterOnline"
+                identity_paths.append((arc, Path(root) / sub / name))
+            identity_paths.append(("machine_identity.client.json", _BASE / "openclaw" / "identity" / "machine_identity.json"))
+            for arcname, path in identity_paths:
+                try:
+                    path = Path(path).resolve()
+                    if not path.is_file():
+                        continue
+                    text = path.read_text(encoding="utf-8", errors="replace")[:20000]
+                    zf.writestr(arcname, _redact_text(text))
+                    summary["files"].append({"path": arcname, "source": str(path), "size": path.stat().st_size})
+                except OSError as exc:
+                    summary["files"].append({"path": arcname, "error": str(exc)})
+        except Exception as exc:
+            summary["files"].append({"path": "installation_identity.json", "error": str(exc)})
+
         openclaw_status: dict | None = None
         try:
             openclaw_status = build_openclaw_status_snapshot()

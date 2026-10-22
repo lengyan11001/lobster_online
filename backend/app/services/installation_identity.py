@@ -297,11 +297,13 @@ def write_installation_identity(
     if not updated:
         raise OSError("unable to persist installation identity")
     logger.info(
-        "[installation-identity] write ok source=%s iid=%s seed_prefix=%s signed=%s path=%s",
+        "[installation-identity] write ok source=%s iid=%s seed_prefix=%s signed=%s machine=%s brand=%s path=%s",
         source or "unknown",
         iid,
         _prefix(seed, 12),
         incoming_signed,
+        _prefix(updated.get("machine_instance_id"), 20) or "<empty>",
+        str(updated.get("brand_mark") or "<empty>"),
         updated.get("path"),
     )
     return updated
