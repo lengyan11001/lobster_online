@@ -41,6 +41,7 @@ from ..services.chat_route_mode import (
 try:
     from ..services.installation_identity import (
         ensure_installation_identity,
+        merge_legacy_machine_ids,
         read_installation_identity,
         write_installation_identity,
     )
@@ -597,11 +598,10 @@ def _remember_machine_identity(value: str) -> None:
         if path.is_file():
             data = json.loads(path.read_text(encoding="utf-8"))
             current = _normalize_installation_id(str(data.get("machine_instance_id") or ""))
-            previous_legacy = _normalize_installation_id(str(data.get("legacy_machine_instance_id") or ""))
-            if current and current != value:
-                legacy = current
-            elif previous_legacy and previous_legacy != value:
-                legacy = previous_legacy
+            previous_legacy = str(data.get("legacy_machine_instance_id") or "")
+            merged = merge_legacy_machine_ids(current, previous_legacy, exclude=value)
+            if merged:
+                legacy = merged
     except Exception:
         pass
     try:
@@ -619,6 +619,66 @@ def _remember_machine_identity(value: str) -> None:
         logger.warning("[installation-identity] machine identity write failed path=%s err=%s", path, exc)
 
 
+def _hardware_machine_signals() -> list[str]:
+    """本机硬件指纹：MachineGuid + 主板 SMBIOS UUID + 网卡 MAC。
+
+    磁盘整盘克隆的机器 MachineGuid 是一样的（本次两台设备都算出了同一个 mw…），
+    只用 MachineGuid 无法区分克隆机，必须叠加固件/网卡这类每台机器不同的信号。
+    """
+    signals: list[str] = []
+    if os.name != "nt":
+        return signals
+    try:
+        import winreg  # type: ignore
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Cryptography",
+        ) as key:
+            guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+        guid = str(guid or "").strip()
+        if guid:
+            signals.append("guid:" + guid.lower())
+    except Exception:
+        pass
+    try:
+        import subprocess
+
+        flags = 0x08000000 if os.name == "nt" else 0
+        out = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "(Get-CimInstance Win32_ComputerSystemProduct).UUID",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            creationflags=flags,
+        )
+        smbios = ""
+        for line in (out.stdout or "").strip().splitlines():
+            line = line.strip()
+            if line:
+                smbios = line
+        if smbios and smbios.upper() not in {
+            "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
+            "00000000-0000-0000-0000-000000000000",
+        }:
+            signals.append("smbios:" + smbios.upper())
+    except Exception:
+        pass
+    try:
+        node = uuid.getnode()
+        if node:
+            signals.append("mac:%012x" % node)
+    except Exception:
+        pass
+    return signals
+
+
 def _get_or_create_machine_instance_id() -> str:
     global _MACHINE_INSTANCE_ID_CACHE
     cached = _normalize_installation_id(_MACHINE_INSTANCE_ID_CACHE)
@@ -627,23 +687,12 @@ def _get_or_create_machine_instance_id() -> str:
     # 2026-10-22：出厂镜像会把 machine_identity.json 一起打包，导致多台机器
     # 共用同一个机器身份（56 个账号共用一个 m1a0474…）。机器身份必须来自硬件，
     # 所以 Windows 上优先用 MachineGuid 派生；文件里的旧 id 只作为 legacy 保留。
-    if os.name == "nt":
-        try:
-            import winreg  # type: ignore
-
-            with winreg.OpenKey(
-                winreg.HKEY_LOCAL_MACHINE,
-                r"SOFTWARE\Microsoft\Cryptography",
-            ) as key:
-                guid, _ = winreg.QueryValueEx(key, "MachineGuid")
-            guid = str(guid or "").strip()
-            if guid:
-                value = "mw" + hashlib.sha256(guid.encode("utf-8")).hexdigest()[:48]
-                _MACHINE_INSTANCE_ID_CACHE = value
-                _remember_machine_identity(value)
-                return value
-        except Exception:
-            pass
+    signals = _hardware_machine_signals()
+    if signals:
+        value = "mw" + hashlib.sha256("|".join(signals).encode("utf-8")).hexdigest()[:48]
+        _MACHINE_INSTANCE_ID_CACHE = value
+        _remember_machine_identity(value)
+        return value
 
     candidates = _machine_identity_candidates()
     for path in candidates:

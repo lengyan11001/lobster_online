@@ -49,7 +49,7 @@ def _read_identity_file(path: Path) -> Optional[Dict[str, Any]]:
     installation_id = normalize_identity_value(data.get("installation_id"))
     device_seed = normalize_identity_value(data.get("device_seed"))
     machine_instance_id = normalize_identity_value(data.get("machine_instance_id"))
-    legacy_machine_instance_id = normalize_identity_value(data.get("legacy_machine_instance_id"))
+    legacy_machine_instance_id = merge_legacy_machine_ids(data.get("legacy_machine_instance_id"))
     brand_mark = str(data.get("brand_mark") or "").strip().lower()[:64]
     if not installation_id and not device_seed:
         return None
@@ -79,6 +79,21 @@ def _prefix(value: Any, size: int = 18) -> str:
 def normalize_identity_value(value: Any) -> str:
     text = str(value or "").strip()
     return text if _VALID_ID.fullmatch(text) else ""
+
+
+def merge_legacy_machine_ids(*values: Any, exclude: str = "") -> str:
+    """把历次机器 id 合并成逗号列表（去重、剔除当前值）。
+
+    磁盘整盘克隆的机器会算出同一个硬件 id，之后更换算法时新旧 id 都要能认作
+    "同一台机器自己"，否则绑定会被判成克隆机而换槽位。
+    """
+    seen: list[str] = []
+    for raw in values:
+        for part in re.split(r"[,;\s]+", str(raw or "").strip()):
+            item = normalize_identity_value(part)
+            if item and item != exclude and item not in seen:
+                seen.append(item)
+    return ",".join(seen)
 
 
 def raw_device_seed(value: Any) -> str:
@@ -290,7 +305,11 @@ def write_installation_identity(
                 raw_device_seed(existing_iid) or normalize_identity_value(existing.get("device_seed")),
                 machine_id or str(existing.get("machine_instance_id") or ""),
                 brand or str(existing.get("brand_mark") or ""),
-                str(existing.get("machine_instance_id") or "") if machine_id and machine_id != str(existing.get("machine_instance_id") or "") else str(existing.get("legacy_machine_instance_id") or ""),
+                merge_legacy_machine_ids(
+                    existing.get("machine_instance_id"),
+                    existing.get("legacy_machine_instance_id"),
+                    exclude=str(machine_id or ""),
+                ),
             )
             if updated:
                 logger.info(
@@ -307,7 +326,11 @@ def write_installation_identity(
     resolved_machine = machine_id or existing_machine
     legacy_machine = normalize_identity_value(existing.get("legacy_machine_instance_id"))
     if existing_machine and resolved_machine and existing_machine != resolved_machine:
-        legacy_machine = existing_machine
+        legacy_machine = merge_legacy_machine_ids(
+            existing_machine,
+            existing.get("legacy_machine_instance_id"),
+            exclude=resolved_machine,
+        )
     updated = _write_identity_files(
         iid,
         seed,

@@ -66,3 +66,23 @@ def test_save_without_machine_writes_hardware_id(tmp_path, monkeypatch):
     assert loaded["machine_instance_id"] == hardware
     assert loaded["legacy_machine_instance_id"] == "m1a0474c3a3dcc8b"
     assert loaded["installation_id"] == "u260-" + "a" * 32
+
+def test_machine_change_accumulates_legacy_ids(tmp_path, monkeypatch):
+    path = tmp_path / "installation_identity.json"
+    monkeypatch.setattr(mod, "INSTALLATION_IDENTITY_FILE", path)
+    monkeypatch.setattr(mod, "_fallback_file", lambda: tmp_path / "fallback.json")
+    iid = "u260-" + "a" * 32
+    first = "mw" + "a" * 48
+    second = "mw" + "b" * 48
+    mod.write_installation_identity(iid, "a" * 32, machine_instance_id=first)
+    mod.write_installation_identity(iid, "a" * 32, machine_instance_id=second)
+
+    loaded = mod.read_installation_identity()
+    assert loaded["machine_instance_id"] == second
+    assert set(loaded["legacy_machine_instance_id"].split(",")) == {first}
+
+    third = "mw" + "c" * 48
+    mod.write_installation_identity(iid, "a" * 32, machine_instance_id=third)
+    loaded = mod.read_installation_identity()
+    assert loaded["machine_instance_id"] == third
+    assert set(loaded["legacy_machine_instance_id"].split(",")) == {first, second}
