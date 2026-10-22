@@ -112,3 +112,16 @@ def test_ignored_write_still_backfills_machine_and_brand(tmp_path, monkeypatch):
     loaded = mod.read_installation_identity()
     assert loaded["machine_instance_id"] == "machine-a"
     assert loaded["brand_mark"] == "hikong"
+
+
+def test_same_user_signed_switch_is_honored(tmp_path, monkeypatch):
+    """云端把设备钉到另一个槽位时，本地必须接受这个签名槽位。"""
+    path = tmp_path / "installation_identity.json"
+    monkeypatch.setattr(mod, "INSTALLATION_IDENTITY_FILE", path)
+    monkeypatch.setattr(mod, "_fallback_file", lambda: tmp_path / "fallback.json")
+    first = mod.write_installation_identity("u260-" + "a" * 32, "a" * 32)
+    switched = mod.write_installation_identity("u260-" + "b" * 32, "b" * 32)
+
+    assert first["installation_id"] == "u260-" + "a" * 32
+    assert switched["installation_id"] == "u260-" + "b" * 32
+    assert mod.read_installation_identity()["installation_id"] == "u260-" + "b" * 32

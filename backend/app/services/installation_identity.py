@@ -271,6 +271,7 @@ def write_installation_identity(
         and existing_user
         and incoming_user
         and existing_user.group(1) == incoming_user.group(1)
+        and iid == existing_iid
     ):
         # 同一个用户下，槽位一旦落文件就不再跟着 machine_id/brand/seed 变化。
         # 服务器重新签发（换机器指纹、换品牌前缀、OTA 后重建 seed）也不能覆盖，
