@@ -537,6 +537,11 @@ function applyBrandingFromApi() {
           var emptyText = document.getElementById(id);
           if (emptyText) emptyText.textContent = '';
         });
+        // 登录页也必须是“干净的”：OEM 品牌拉不到时不能露出打包默认的“必火智能”。
+        var emptyLoginBrand = document.getElementById('authLoginBrandName');
+        if (emptyLoginBrand) emptyLoginBrand.textContent = '';
+        var emptyVision = document.getElementById('authLoginVision');
+        if (emptyVision) emptyVision.style.display = 'none';
         var emptyPartner = document.getElementById('brandPartnerLogo');
         if (emptyPartner) {
           emptyPartner.hidden = true;
@@ -602,11 +607,19 @@ function applyBrandingFromApi() {
         if (!loginBrandText) {
           loginBrandText = b.mark === 'bihuo'
             ? '必火智能'
-            : String(b.document_title || '').replace(/\s*AI.*$/i, '').trim();
+            : String(b.display_name || b.document_title || '').replace(/\s*AI.*$/i, '').trim();
         }
-        authLoginBrandName.textContent = loginBrandText || '必火智能';
+        authLoginBrandName.textContent = loginBrandText || (b.mark === 'bihuo' ? '必火智能' : '');
         var visionLabel = document.getElementById('authLoginVisionLabel');
-        if (visionLabel) visionLabel.textContent = (loginBrandText || '必火智能') + '的愿景：';
+        if (visionLabel) visionLabel.textContent = (loginBrandText || '') + '的愿景：';
+        var visionBox = document.getElementById('authLoginVision');
+        var visionText = document.getElementById('authLoginVisionText');
+        var visionCopy = String(
+          b.login_vision
+          || (b.mark === 'bihuo' ? '成为全球领先的企业 AI 员工解决方案服务商' : '')
+        ).trim();
+        if (visionText) visionText.textContent = visionCopy;
+        if (visionBox) visionBox.style.display = visionCopy ? '' : 'none';
       }
       var heroH = document.getElementById('brandHeroTitle');
       var heroP = document.getElementById('brandHeroSubtitle');

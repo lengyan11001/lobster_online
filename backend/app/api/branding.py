@@ -168,6 +168,26 @@ def render_index_html(template: str, requested_mark: str = "") -> str:
         "__LOBSTER_LOGO_MARK__": str(icons.get("logo_mark") or _EMPTY_IMAGE) if available else _EMPTY_IMAGE,
         "__LOBSTER_LOGO_PRIMARY__": str(branding.get("logo_primary") or "") if available else "",
         "__LOBSTER_LOGO_ACCENT__": str(branding.get("logo_accent") or "") if available else "",
+        "__LOBSTER_BRAND_NAME__": (
+            str(branding.get("display_name") or "").strip()
+            or (
+                str(branding.get("logo_primary") or "").strip()
+                + str(branding.get("logo_accent") or "").strip()
+            )
+            or str(branding.get("document_title") or "").strip()
+        )
+        if available
+        else "",
+        "__LOBSTER_LOGIN_VISION__": (
+            str(branding.get("login_vision") or "").strip()
+            or (
+                "成为全球领先的企业 AI 员工解决方案服务商"
+                if str(branding.get("mark") or "").strip().lower() == "bihuo"
+                else ""
+            )
+        )
+        if available
+        else "",
         "__LOBSTER_HERO_TITLE__": str(branding.get("hero_title") or "") if available else "",
         "__LOBSTER_HERO_SUBTITLE__": subtitle_html,
         "__LOBSTER_HOME_VISUAL__": str(icons.get("home_visual") or _EMPTY_IMAGE) if available else _EMPTY_IMAGE,
