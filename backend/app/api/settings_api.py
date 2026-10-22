@@ -40,12 +40,16 @@ from ..services.chat_route_mode import (
 )
 try:
     from ..services.installation_identity import (
+        ensure_installation_identity,
         read_installation_identity,
         write_installation_identity,
     )
 except Exception:
     def read_installation_identity():
         return {"present": False, "installation_id": "", "device_seed": ""}
+
+    def ensure_installation_identity(brand_mark: str = "", candidate: Any = ""):
+        return read_installation_identity()
 
     def write_installation_identity(*args, **kwargs):
         raise RuntimeError("installation identity module unavailable")
@@ -543,6 +547,8 @@ class InstallationIdentityRequest(BaseModel):
     installation_id: Optional[str] = None
     device_seed: Optional[str] = None
     machine_instance_id: Optional[str] = None
+    brand_mark: Optional[str] = None
+    force: Optional[bool] = None
     source: Optional[str] = None
 
 
@@ -665,8 +671,28 @@ def get_machine_identity():
     return MachineIdentityResponse(machine_instance_id=_get_or_create_machine_instance_id())
 
 
-@router.get("/api/settings/installation-identity", summary="Read the file-backed installation identity")
-def get_installation_identity():
+class IdentityEventRequest(BaseModel):
+    event: Optional[str] = None
+    detail: Optional[dict] = None
+
+
+@router.post("/api/settings/installation-identity/event", summary="Log an identity event for diagnostics")
+def log_installation_identity_event(body: IdentityEventRequest):
+    try:
+        logger.info(
+            "[installation-identity] event=%s detail=%s",
+            str(body.event or "")[:80],
+            json.dumps(body.detail or {}, ensure_ascii=False)[:600],
+        )
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@router.get("/api/settings/installation-identity", summary="Read (or create) the file-backed installation identity")
+def get_installation_identity(ensure: int = 0, brand: str = "", candidate: str = ""):
+    if ensure:
+        return ensure_installation_identity(brand, candidate)
     return read_installation_identity()
 
 
@@ -678,6 +704,8 @@ def save_installation_identity(body: InstallationIdentityRequest):
             body.device_seed,
             source=str(body.source or "api").strip()[:80],
             machine_instance_id=body.machine_instance_id,
+            brand_mark=body.brand_mark,
+            force=bool(body.force),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

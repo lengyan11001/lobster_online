@@ -237,7 +237,12 @@ function restoreInstallationSlotAlias() {
   fetch(base + '/api/installation-id/aliases/restore', {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ alias: alias })
+    body: JSON.stringify({
+      alias: alias,
+      machine_instance_id: (typeof getCachedLobsterMachineInstanceId === 'function'
+        ? (getCachedLobsterMachineInstanceId() || '')
+        : '')
+    })
   }).then(function(response) {
     return response.json().catch(function() { return {}; }).then(function(data) {
       if (!response.ok) throw new Error(data.detail || data.message || '恢复失败');
@@ -247,7 +252,8 @@ function restoreInstallationSlotAlias() {
     var next = String(data && data.installation_id || '').trim();
     if (!next) throw new Error('服务器没有返回这个别名的槽位');
     if (typeof setLobsterInstallationId === 'function') {
-      setLobsterInstallationId(next, { reason: 'alias_restore' });
+      // 显式恢复：允许覆盖已固化的槽位（写入 force=true 才会生效）。
+      setLobsterInstallationId(next, { reason: 'alias_restore', force: true });
     } else {
       try { localStorage.setItem('lobster_installation_id', next); } catch (e) {}
     }

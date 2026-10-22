@@ -198,6 +198,7 @@ def render_index_html(template: str, requested_mark: str = "") -> str:
         "__LOBSTER_DEVICE_SEED__": str(identity.get("device_seed") or ""),
         "__LOBSTER_INSTALLATION_FILE_PRESENT__": "true" if identity.get("present") else "false",
         "__LOBSTER_MACHINE_INSTANCE_ID__": str(identity.get("machine_instance_id") or ""),
+        "__LOBSTER_IDENTITY_BRAND__": str(identity.get("brand_mark") or ""),
     }
     rendered = str(template or "")
     # These three tokens are also JS global property names in the inline

@@ -2962,55 +2962,81 @@
   <script defer src="/static/js/view-registry.js?v=20261015-whatsapp-autorefresh-v7"></script>
   <script>
   (function () {
+    // 唯一事实来源：本机 data/installation_identity.json（+ %LOCALAPPDATA% 备份）。
+    // 页面不再自己随机生成槽位：文件没有就让本机后端当场创建并落盘。
     var filePresent = "__LOBSTER_INSTALLATION_FILE_PRESENT__" === "true";
     var installationId = "__LOBSTER_INSTALLATION_ID__";
     var deviceSeed = "__LOBSTER_DEVICE_SEED__";
-    var migrated = false;
+    var machineId = "__LOBSTER_MACHINE_INSTANCE_ID__";
+    var identityBrand = "__LOBSTER_IDENTITY_BRAND__";
+    var source = filePresent ? 'file' : 'ensure';
     function valid(v) { return /^[a-zA-Z0-9_-]{8,128}$/.test(String(v || '').trim()); }
     function raw(v) { var s = String(v || '').trim(); var i = s.indexOf('--'); return i >= 0 ? s.slice(i + 2) : s; }
-    if (!filePresent) {
-      try {
-        var oldId = localStorage.getItem('lobster_installation_id') || '';
-        var oldSeed = localStorage.getItem('lobster_device_seed') || '';
-        if (valid(oldId)) { installationId = String(oldId).trim(); migrated = true; }
-        if (valid(oldSeed)) { deviceSeed = String(oldSeed).trim(); migrated = true; }
-      } catch (e) {}
-      if (!valid(installationId) && valid(deviceSeed)) installationId = deviceSeed;
-      if (!valid(deviceSeed) && valid(installationId)) deviceSeed = raw(installationId);
-      if (!valid(deviceSeed)) {
-        var bytes = new Uint8Array(16);
-        if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(bytes);
-        else for (var i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
-        deviceSeed = Array.prototype.map.call(bytes, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
-        installationId = deviceSeed;
-      }
-    } else {
-      try {
-        localStorage.removeItem('lobster_installation_id');
-        localStorage.removeItem('lobster_device_seed');
-      } catch (e) {}
+    function legacyCandidate() {
+      try { return localStorage.getItem('lobster_installation_id') || localStorage.getItem('lobster_device_seed') || ''; } catch (e) { return ''; }
     }
+    function ensureFromFile() {
+      try {
+        var candidate = !filePresent ? legacyCandidate() : '';
+        var url = '/api/settings/installation-identity?ensure=1&brand=' + encodeURIComponent(identityBrand || '') +
+          (candidate ? '&candidate=' + encodeURIComponent(candidate) : '');
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', url, false);
+        xhr.send(null);
+        if (xhr.status < 200 || xhr.status >= 300) return null;
+        return JSON.parse(xhr.responseText || '{}');
+      } catch (e) { return null; }
+    }
+    if (!filePresent || !valid(installationId) || !valid(deviceSeed)) {
+      var ensured = ensureFromFile();
+      if (ensured && valid(ensured.installation_id) && valid(ensured.device_seed)) {
+        installationId = ensured.installation_id;
+        deviceSeed = ensured.device_seed;
+        if (valid(ensured.machine_instance_id)) machineId = ensured.machine_instance_id;
+        if (ensured.brand_mark) identityBrand = ensured.brand_mark;
+        filePresent = true;
+        source = 'ensure';
+      }
+    }
+    if (!valid(deviceSeed)) {
+      // 后端不可用（纯网页模式）：只在内存里生成，绝不写 localStorage；
+      // 后端恢复后由 app.js 写入文件。
+      var bytes = new Uint8Array(16);
+      if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(bytes);
+      else for (var i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+      deviceSeed = Array.prototype.map.call(bytes, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+      installationId = deviceSeed;
+      source = 'memory_only';
+    }
+    if (!valid(installationId)) installationId = deviceSeed;
+    if (!valid(deviceSeed)) deviceSeed = raw(installationId);
     window.__LOBSTER_INSTALLATION_ID__ = installationId || '';
     window.__LOBSTER_DEVICE_SEED__ = deviceSeed || '';
-    // 机器身份也从同一个文件回填：WebView 缓存被清掉时，known_machine 仍然能认出这台机器，
-    // 服务器就不会再给同一台设备发新的槽位。
-    try {
-      var fileMachineId = "__LOBSTER_MACHINE_INSTANCE_ID__";
-      if (valid(fileMachineId)) {
-        window.__LOBSTER_MACHINE_INSTANCE_ID__ = String(fileMachineId).trim();
+    if (valid(machineId)) {
+      window.__LOBSTER_MACHINE_INSTANCE_ID__ = String(machineId).trim();
+      try {
         if (!localStorage.getItem('lobster_machine_instance_id')) {
-          localStorage.setItem('lobster_machine_instance_id', String(fileMachineId).trim());
+          localStorage.setItem('lobster_machine_instance_id', String(machineId).trim());
         }
-      }
-    } catch (e) {}
-    window.__LOBSTER_INSTALLATION_FILE_PRESENT__ = filePresent;
-    window.__LOBSTER_INSTALLATION_MIGRATED__ = !!migrated;
-    window.__LOBSTER_INSTALLATION_NEEDS_WRITE__ = !filePresent;
-    window.__LOBSTER_INSTALLATION_MIGRATION_SOURCE__ = filePresent ? 'file' : (migrated ? 'legacy_local_storage' : 'new_install');
+      } catch (e) {}
+    }
+    if (identityBrand) {
+      window.__LOBSTER_BRAND_MARK = identityBrand;
+      try { localStorage.setItem('lobster_active_brand_mark', identityBrand); } catch (e) {}
+    }
     try {
-      console.info('[installation-identity] page init source=' + window.__LOBSTER_INSTALLATION_MIGRATION_SOURCE__ +
+      localStorage.removeItem('lobster_installation_id');
+      localStorage.removeItem('lobster_device_seed');
+    } catch (e) {}
+    window.__LOBSTER_INSTALLATION_FILE_PRESENT__ = !!filePresent;
+    window.__LOBSTER_INSTALLATION_MIGRATED__ = source === 'ensure' && !!legacyCandidate();
+    window.__LOBSTER_INSTALLATION_NEEDS_WRITE__ = !filePresent;
+    window.__LOBSTER_INSTALLATION_MIGRATION_SOURCE__ = source;
+    try {
+      console.info('[installation-identity] page init source=' + source +
         ' present=' + filePresent + ' iid=' + (installationId || '') +
-        ' seed_prefix=' + String(deviceSeed || '').slice(0, 12) + ' needs_write=' + (!filePresent));
+        ' seed_prefix=' + String(deviceSeed || '').slice(0, 12) +
+        ' machine=' + String(machineId || '') + ' brand=' + (identityBrand || ''));
     } catch (e) {}
   })();
   </script>

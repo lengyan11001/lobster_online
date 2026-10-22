@@ -974,8 +974,21 @@ if (_bootFileIdentity) {
   } catch (e5) {}
   try { console.info('[installation-identity] boot source=file_sync iid=' + _lobsterInstallationIdCache); } catch (e6) {}
 }
+// 每次启动都把身份快照写进本机日志：诊断包里能直接看到“这次用的是哪个文件、哪个槽位、哪个机器”。
+try {
+  reportInstallationIdentityEvent('boot', {
+    source: (typeof window !== 'undefined' ? (window.__LOBSTER_INSTALLATION_MIGRATION_SOURCE__ || '') : ''),
+    file_present: !!(typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_FILE_PRESENT__),
+    iid: (typeof window !== 'undefined' ? (window.__LOBSTER_INSTALLATION_ID__ || '') : ''),
+    seed_prefix: String((typeof window !== 'undefined' ? (window.__LOBSTER_DEVICE_SEED__ || '') : '')).slice(0, 12),
+    machine: (typeof window !== 'undefined' ? (window.__LOBSTER_MACHINE_INSTANCE_ID__ || '') : ''),
+    brand: (typeof window !== 'undefined' ? (window.__LOBSTER_BRAND_MARK || '') : ''),
+    legacy_id: (function () { try { return localStorage.getItem('lobster_installation_id') || ''; } catch (e) { return ''; } })()
+  });
+} catch (eBoot) {}
 var _installationIdentityPersistTimer = 0;
 var _installationIdentityPersistSource = '';
+var _installationIdentityPersistForce = false;
 var LOBSTER_MACHINE_INSTANCE_STORAGE_KEY = 'lobster_machine_instance_id';
 
 function rawInstallationId(value) {
@@ -1097,8 +1110,21 @@ function setLobsterInstallationId(value, meta) {
     } catch (e2) {}
   }
   _installationIdentityPersistSource = String((meta && meta.reason) || 'installation_id_update');
+  if (meta && meta.force) _installationIdentityPersistForce = true;
   scheduleInstallationIdentityPersist();
   return next;
+}
+
+function reportInstallationIdentityEvent(event, detail) {
+  try {
+    var base = String((typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? LOCAL_API_BASE : '').replace(/\/$/, '');
+    if (!base || typeof fetch !== 'function') return;
+    fetch(base + '/api/settings/installation-identity/event', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event: String(event || ''), detail: detail || {} })
+    }).catch(function () {});
+  } catch (e) {}
 }
 
 function persistInstallationIdentityToFile() {
@@ -1111,6 +1137,11 @@ function persistInstallationIdentityToFile() {
   try {
     console.info('[installation-identity] persist start source=' + source + ' iid=' + (iid || '') + ' seed_prefix=' + String(seed || '').slice(0, 12));
   } catch (e0) {}
+  reportInstallationIdentityEvent('persist_start', {
+    source: source, iid: iid || '', seed_prefix: String(seed || '').slice(0, 12),
+    machine: (typeof currentStoredLobsterMachineInstanceId === 'function' ? currentStoredLobsterMachineInstanceId() : ''),
+    brand: (typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : '')
+  });
   return fetch(base + '/api/settings/installation-identity', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1120,7 +1151,8 @@ function persistInstallationIdentityToFile() {
       machine_instance_id: (typeof currentStoredLobsterMachineInstanceId === 'function'
         ? (currentStoredLobsterMachineInstanceId() || '')
         : (function () { try { return localStorage.getItem('lobster_machine_instance_id') || ''; } catch (e) { return ''; } })()),
-      source: source
+      source: source,
+      force: !!_installationIdentityPersistForce
     })
   }).then(function (resp) {
     if (!resp.ok) return false;
@@ -1144,9 +1176,18 @@ function persistInstallationIdentityToFile() {
         window.__LOBSTER_INSTALLATION_NEEDS_WRITE__ = false;
         console.info('[installation-identity] persist ok source=' + source + ' iid=' + (authoritativeIid || '') + ' ignored=' + !!((data && data.ignored)));
       } catch (e3) {}
+      reportInstallationIdentityEvent('persist_ok', {
+        source: source, iid: authoritativeIid || '', ignored: !!((data && data.ignored)),
+        paths: (data && data.paths) || [], path: (data && data.path) || ''
+      });
+      _installationIdentityPersistForce = false;
       return true;
     });
-  }).catch(function () { return false; });
+  }).catch(function (err) {
+    _installationIdentityPersistForce = false;
+    reportInstallationIdentityEvent('persist_failed', { source: source, iid: iid || '', error: String((err && err.message) || err || '') });
+    return false;
+  });
 }
 
 function scheduleInstallationIdentityPersist() {
@@ -1199,11 +1240,17 @@ function bindLobsterInstallationId(options) {
   if (!deviceId && options.forceNew) deviceId = randomizeLobsterDeviceSeed({ reason: 'bind_force_new' });
   if (!deviceId) deviceId = getOrCreateLobsterDeviceSeed();
   var machineInstanceId = String(options.machineInstanceId || options.machine_instance_id || getCachedLobsterMachineInstanceId() || '').trim();
+  var bindCurrent = options.installationId || getOrCreateInstallationId();
+  reportInstallationIdentityEvent('bind_start', {
+    current: bindCurrent || '', device: String(deviceId || '').slice(0, 24),
+    machine: machineInstanceId || '', force_new: !!options.forceNew,
+    brand: (typeof getLobsterBrandMark === 'function' ? getLobsterBrandMark() : '')
+  });
   return fetch(base + '/api/installation-id/bind', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({
-      installation_id: options.installationId || getOrCreateInstallationId(),
+      installation_id: bindCurrent,
       device_id: deviceId,
       machine_instance_id: machineInstanceId || null,
       force_new: !!options.forceNew
@@ -1211,6 +1258,11 @@ function bindLobsterInstallationId(options) {
   }).then(function(resp) {
     return resp.json().catch(function() { return {}; }).then(function(data) {
       if (!resp.ok || !data.installation_id) throw new Error(data.detail || data.message || 'installation id bind failed');
+      reportInstallationIdentityEvent('bind_ok', {
+        current: bindCurrent || '', returned: data.installation_id || '',
+        changed: String(data.installation_id || '') !== String(bindCurrent || ''),
+        reason: data.signature_reason || '', signed: !!data.signed
+      });
       return data;
     });
   });

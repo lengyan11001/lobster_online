@@ -57,3 +57,40 @@ def test_fallback_file_restores_slot_when_install_dir_lost(tmp_path, monkeypatch
     assert loaded["present"] is True
     assert loaded["installation_id"] == "u260-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     assert loaded["machine_instance_id"] == "m-machine"
+
+def test_ensure_creates_and_reuses_file_identity(tmp_path, monkeypatch):
+    path = tmp_path / "installation_identity.json"
+    monkeypatch.setattr(mod, "INSTALLATION_IDENTITY_FILE", path)
+    monkeypatch.setattr(mod, "_fallback_file", lambda: tmp_path / "fallback.json")
+
+    first = mod.ensure_installation_identity("hikong")
+    assert first["present"] is True
+    assert first["installation_id"]
+    assert first["machine_instance_id"] == ""
+    assert first["brand_mark"] == "hikong"
+    assert path.is_file()
+
+    second = mod.ensure_installation_identity("hikong")
+    assert second["installation_id"] == first["installation_id"]
+
+
+def test_ensure_uses_legacy_candidate_once(tmp_path, monkeypatch):
+    path = tmp_path / "installation_identity.json"
+    monkeypatch.setattr(mod, "INSTALLATION_IDENTITY_FILE", path)
+    monkeypatch.setattr(mod, "_fallback_file", lambda: tmp_path / "fallback.json")
+
+    created = mod.ensure_installation_identity("bihuo", candidate="u260-" + "d" * 32)
+
+    assert created["installation_id"] == "u260-" + "d" * 32
+    assert created["device_seed"] == "d" * 32
+
+def test_force_write_overrides_frozen_slot(tmp_path, monkeypatch):
+    path = tmp_path / "installation_identity.json"
+    monkeypatch.setattr(mod, "INSTALLATION_IDENTITY_FILE", path)
+    monkeypatch.setattr(mod, "_fallback_file", lambda: tmp_path / "fallback.json")
+
+    mod.write_installation_identity("u260-" + "a" * 32, "a" * 32)
+    forced = mod.write_installation_identity("u260-" + "b" * 32, "b" * 32, force=True)
+
+    assert forced["installation_id"] == "u260-" + "b" * 32
+    assert mod.read_installation_identity()["installation_id"] == "u260-" + "b" * 32

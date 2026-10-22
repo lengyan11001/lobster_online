@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 import os
 import re
 from datetime import datetime, timezone
@@ -48,6 +49,7 @@ def _read_identity_file(path: Path) -> Optional[Dict[str, Any]]:
     installation_id = normalize_identity_value(data.get("installation_id"))
     device_seed = normalize_identity_value(data.get("device_seed"))
     machine_instance_id = normalize_identity_value(data.get("machine_instance_id"))
+    brand_mark = str(data.get("brand_mark") or "").strip().lower()[:64]
     if not installation_id and not device_seed:
         return None
     if not installation_id:
@@ -59,6 +61,7 @@ def _read_identity_file(path: Path) -> Optional[Dict[str, Any]]:
         "installation_id": installation_id,
         "device_seed": device_seed,
         "machine_instance_id": machine_instance_id,
+        "brand_mark": brand_mark,
         "path": str(path),
         "reason": "ok",
     }
@@ -80,6 +83,10 @@ def raw_device_seed(value: Any) -> str:
     text = normalize_identity_value(value)
     if "--" in text:
         text = text.split("--", 1)[1]
+    # 服务器签发的槽位是 ``u<userId>-<seed>``：seed 必须取后半段，
+    # 否则会把整个签名 id 当成 seed 再签一次。
+    if re.match(r"^u\d+-", text):
+        text = text.split("-", 1)[1]
     return normalize_identity_value(text)
 
 
@@ -89,6 +96,7 @@ def _empty(path: Optional[Path] = None, reason: str = "") -> Dict[str, Any]:
         "installation_id": "",
         "device_seed": "",
         "machine_instance_id": "",
+        "brand_mark": "",
         "path": str(path or INSTALLATION_IDENTITY_FILE),
         "reason": reason,
     }
@@ -138,13 +146,43 @@ def read_installation_identity() -> Dict[str, Any]:
     return result
 
 
-def _write_identity_files(iid: str, seed: str, machine_id: str) -> Optional[Dict[str, Any]]:
+def ensure_installation_identity(brand_mark: str = "", candidate: Any = "") -> Dict[str, Any]:
+    """文件是唯一事实来源：文件没有就当场创建并落盘，绝不返回内存里的临时值。"""
+    existing = read_installation_identity()
+    brand = str(brand_mark or "").strip().lower()[:64]
+    if existing.get("present") and existing.get("installation_id") and existing.get("device_seed"):
+        if brand and brand != str(existing.get("brand_mark") or ""):
+            updated = _write_identity_files(
+                existing["installation_id"],
+                existing["device_seed"],
+                existing.get("machine_instance_id") or "",
+                brand,
+            )
+            if updated:
+                return updated
+        return existing
+    candidate_id = normalize_identity_value(candidate)
+    if candidate_id:
+        # 旧版本把 id 存在 localStorage：首次落文件时沿用它，避免第一次升级就换槽位。
+        iid = candidate_id
+        seed = raw_device_seed(candidate_id) or candidate_id
+    else:
+        seed = secrets.token_hex(16)
+        iid = seed
+    updated = _write_identity_files(iid, seed, existing.get("machine_instance_id") or "", brand)
+    if updated is None:
+        raise OSError("unable to create installation identity file")
+    return updated
+
+
+def _write_identity_files(iid: str, seed: str, machine_id: str, brand_mark: str = "") -> Optional[Dict[str, Any]]:
     """主文件 + 机器级备份都写；主目录无权限时，备份仍能保住槽位。"""
     payload = {
         "version": 1,
         "installation_id": iid,
         "device_seed": seed,
         "machine_instance_id": machine_id or "",
+        "brand_mark": str(brand_mark or "").strip().lower()[:64],
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     written: list[Path] = []
@@ -164,6 +202,7 @@ def _write_identity_files(iid: str, seed: str, machine_id: str) -> Optional[Dict
         "installation_id": iid,
         "device_seed": seed,
         "machine_instance_id": machine_id or "",
+        "brand_mark": str(brand_mark or "").strip().lower()[:64],
         "path": str(written[0]),
         "paths": [str(path) for path in written],
     }
@@ -175,10 +214,13 @@ def write_installation_identity(
     *,
     source: str = "",
     machine_instance_id: Any = None,
+    brand_mark: Any = None,
+    force: bool = False,
 ) -> Dict[str, Any]:
     iid = normalize_identity_value(installation_id)
     seed = normalize_identity_value(device_seed)
     machine_id = normalize_identity_value(machine_instance_id)
+    brand = str(brand_mark or "").strip().lower()[:64]
     if not iid and not seed:
         raise ValueError("installation_id or device_seed is required")
     if not iid:
@@ -213,6 +255,16 @@ def write_installation_identity(
         # 否则就是用户看到的“固化后槽位又变了”。换账号（u<id> 不同）仍允许更新。
         keep_existing = True
         keep_reason = "same_user_signed"
+    if force:
+        # 只有“用户在系统设置里手动恢复某个别名”这种显式动作才允许覆盖已固化的槽位。
+        logger.info(
+            "[installation-identity] forced write source=%s incoming_iid=%s existing_iid=%s",
+            source or "unknown",
+            _prefix(iid),
+            existing_iid,
+        )
+        keep_existing = False
+        keep_reason = "forced"
     if keep_existing:
         logger.info(
             "[installation-identity] write ignored source=%s reason=%s incoming_iid=%s existing_iid=%s path=%s",
@@ -233,7 +285,12 @@ def write_installation_identity(
                 return {**updated, "ignored": True}
         return {**existing, "ignored": True}
 
-    updated = _write_identity_files(iid, seed, machine_id or normalize_identity_value(existing.get("machine_instance_id")))
+    updated = _write_identity_files(
+        iid,
+        seed,
+        machine_id or normalize_identity_value(existing.get("machine_instance_id")),
+        brand or str(existing.get("brand_mark") or ""),
+    )
     if not updated:
         raise OSError("unable to persist installation identity")
     logger.info(
