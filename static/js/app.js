@@ -1307,6 +1307,15 @@ function bindLobsterInstallationId(options) {
         changed: String(data.installation_id || '') !== String(bindCurrent || ''),
         reason: data.signature_reason || '', signed: !!data.signed
       });
+      // 任何调用方发起 bind，只要服务端返回了不同槽位就立刻采用并落盘，
+      // 不再依赖各页面自己处理返回值。
+      var nextBindId = String(data.installation_id || '').trim();
+      if (nextBindId && nextBindId !== String(bindCurrent || '') && typeof setLobsterInstallationId === 'function') {
+        try {
+          setLobsterInstallationId(nextBindId, { reason: 'bind_response' });
+          if (typeof persistInstallationIdentityToFile === 'function') persistInstallationIdentityToFile();
+        } catch (eBindId) {}
+      }
       return data;
     });
   });
