@@ -953,8 +953,9 @@ function readBootFileIdentitySync() {
     var data = JSON.parse(xhr.responseText || '{}');
     var iid = String((data && data.installation_id) || '').trim();
     var seed = String((data && data.device_seed) || '').trim();
+    var machine = String((data && data.machine_instance_id) || '').trim();
     if (data && data.present === true && /^[a-zA-Z0-9_-]{8,128}$/.test(iid) && /^[a-zA-Z0-9_-]{8,128}$/.test(seed)) {
-      return { installation_id: iid, device_seed: seed };
+      return { installation_id: iid, device_seed: seed, machine_instance_id: machine };
     }
   } catch (e) {}
   return null;
@@ -965,6 +966,15 @@ var _lobsterDeviceSeedCache = String((_bootFileIdentity && _bootFileIdentity.dev
 if (_bootFileIdentity) {
   try { window.__LOBSTER_INSTALLATION_ID__ = _lobsterInstallationIdCache; } catch (e0) {}
   try { window.__LOBSTER_DEVICE_SEED__ = _lobsterDeviceSeedCache; } catch (e1) {}
+  try {
+    var _bootMachine = String(_bootFileIdentity.machine_instance_id || '').trim();
+    if (/^[a-zA-Z0-9_-]{8,128}$/.test(_bootMachine)) {
+      window.__LOBSTER_MACHINE_INSTANCE_ID__ = _bootMachine;
+      if (!localStorage.getItem('lobster_machine_instance_id')) {
+        localStorage.setItem('lobster_machine_instance_id', _bootMachine);
+      }
+    }
+  } catch (eMachine) {}
   try { window.__LOBSTER_INSTALLATION_FILE_PRESENT__ = true; } catch (e2) {}
   try { window.__LOBSTER_INSTALLATION_NEEDS_WRITE__ = false; } catch (e3) {}
   try { window.__LOBSTER_INSTALLATION_MIGRATION_SOURCE__ = 'file_sync'; } catch (e4) {}
