@@ -691,19 +691,33 @@ def log_installation_identity_event(body: IdentityEventRequest):
 
 @router.get("/api/settings/installation-identity", summary="Read (or create) the file-backed installation identity")
 def get_installation_identity(ensure: int = 0, brand: str = "", candidate: str = ""):
-    if ensure:
-        return ensure_installation_identity(brand, candidate)
-    return read_installation_identity()
+    data = ensure_installation_identity(brand, candidate) if ensure else read_installation_identity()
+    # 老文件可能没有机器身份：这里补一次，保证“文件里有全部身份字段”。
+    try:
+        if data.get("present") and not data.get("machine_instance_id"):
+            filled = write_installation_identity(
+                data.get("installation_id"),
+                data.get("device_seed"),
+                source="identity_read_fill",
+                machine_instance_id=_get_or_create_machine_instance_id(),
+                brand_mark=brand or data.get("brand_mark") or "",
+            )
+            if filled:
+                return filled
+    except Exception:
+        pass
+    return data
 
 
 @router.post("/api/settings/installation-identity", summary="Persist the file-backed installation identity")
 def save_installation_identity(body: InstallationIdentityRequest):
     try:
+        machine_value = body.machine_instance_id or _get_or_create_machine_instance_id()
         data = write_installation_identity(
             body.installation_id,
             body.device_seed,
             source=str(body.source or "api").strip()[:80],
-            machine_instance_id=body.machine_instance_id,
+            machine_instance_id=machine_value,
             brand_mark=body.brand_mark,
             force=bool(body.force),
         )
