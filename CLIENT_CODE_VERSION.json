@@ -1,7 +1,7 @@
 {
-  "version": "2.0.183",
-  "build": 480,
-  "applied_at": "2026-10-22T21:38:14+08:00",
-  "note": "slot: adopt server-pinned slot on bind",
-  "bundle_sha256": "4925f5b9595ffd92808791e29529231905c984759fea19ba6af5ab4b98371b34"
+  "version": "2.0.184",
+  "build": 481,
+  "applied_at": "2026-10-22T21:42:20+08:00",
+  "note": "slot: accept cloud-pinned signed slot",
+  "bundle_sha256": "8db3de312f44982493526b227f39ad74d95f0e2bb92b1eb6c8d2a966c4e03b84"
 }
