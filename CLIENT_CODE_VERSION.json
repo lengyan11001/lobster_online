@@ -1,7 +1,7 @@
 {
-  "version": "2.0.178",
-  "build": 475,
-  "applied_at": "2026-10-22T18:55:22+08:00",
-  "note": "硬件机器身份+克隆设备分槽",
-  "bundle_sha256": "14f35ea00c18b77a2a4e627bfb97720ae26b31b52eb89f19e8f54391f6c6fcc9"
+  "version": "2.0.179",
+  "build": 476,
+  "applied_at": "2026-10-22T19:08:15+08:00",
+  "note": "slot: reconcile stale machine id on identity read",
+  "bundle_sha256": "9d25e7064b4f785ff8fd55ce701f22c2a6d24b5b49324429eda6efeb98731ca2"
 }
