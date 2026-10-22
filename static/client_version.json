@@ -1,7 +1,7 @@
 {
-  "version": "2.0.173",
-  "build": 470,
-  "applied_at": "2026-10-22T17:37:55+08:00",
-  "note": "槽位文件唯一来源+别名恢复强写+身份日志",
-  "bundle_sha256": "c04c160646cdb4fd73050ae8a0ebe0c1a4c649d8248ebfc54143f2ae8b1d5163"
+  "version": "2.0.174",
+  "build": 471,
+  "applied_at": "2026-10-22T17:47:39+08:00",
+  "note": "身份文件补写 machine/brand",
+  "bundle_sha256": "8d12e2083445d20262541011b83527cc60f1c1dcbd94c60b733e53f1cb25247b"
 }
