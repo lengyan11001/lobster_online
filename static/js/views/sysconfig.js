@@ -253,7 +253,9 @@ function restoreInstallationSlotAlias() {
     }
     renderInstallationSlotId({ ok: true });
     return syncLocalInstallationSlotId(next).catch(function() { return null; }).then(function() {
-      showInstallationSlotMsg('已切回别名「' + alias + '」的槽位：' + next + '，正在刷新页面加载这个槽位的数据…', false);
+      var moved = Number(data && data.moved_defaults || 0);
+      var movedText = moved > 0 ? ('，并把 ' + moved + ' 个默认发布账号一起迁到这个槽位') : '';
+      showInstallationSlotMsg('已切回别名「' + alias + '」的槽位：' + next + movedText + '，正在刷新页面加载这个槽位的数据…', false);
       // 槽位换了，Online 里的设备/员工/模板/任务全都按槽位取数：整页重载一次，数据立即跟着切过去。
       window.setTimeout(function() {
         try { window.location.reload(); } catch (err) {}
