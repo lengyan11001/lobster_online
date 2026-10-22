@@ -723,18 +723,22 @@ def log_installation_identity_event(body: IdentityEventRequest):
 @router.get("/api/settings/installation-identity", summary="Read (or create) the file-backed installation identity")
 def get_installation_identity(ensure: int = 0, brand: str = "", candidate: str = ""):
     data = ensure_installation_identity(brand, candidate) if ensure else read_installation_identity()
-    # 老文件可能没有机器身份：这里补一次，保证“文件里有全部身份字段”。
+    # 硬件机器身份是唯一真值：文件里还留着镜像带出来的旧 m id 时，就地回写成硬件
+    # 派生值（旧值落 legacy），保证“所有数据从文件取”时读到的也是硬件 id，不再回退。
     try:
-        if data.get("present") and not data.get("machine_instance_id"):
-            filled = write_installation_identity(
-                data.get("installation_id"),
-                data.get("device_seed"),
-                source="identity_read_fill",
-                machine_instance_id=_get_or_create_machine_instance_id(),
-                brand_mark=brand or data.get("brand_mark") or "",
-            )
-            if filled:
-                return filled
+        if data.get("present"):
+            hardware_machine = _get_or_create_machine_instance_id()
+            file_machine = str(data.get("machine_instance_id") or "").strip()
+            if hardware_machine and hardware_machine != file_machine:
+                filled = write_installation_identity(
+                    data.get("installation_id"),
+                    data.get("device_seed"),
+                    source="identity_read_reconcile",
+                    machine_instance_id=hardware_machine,
+                    brand_mark=brand or data.get("brand_mark") or "",
+                )
+                if filled:
+                    return filled
     except Exception:
         pass
     return data
