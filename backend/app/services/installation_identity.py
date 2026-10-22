@@ -274,7 +274,7 @@ def write_installation_identity(
         keep_reason = "forced"
     if keep_existing:
         logger.info(
-            "[installation-identity] write ignored source=%s reason=%s incoming_iid=%s existing_iid=%s path=%s",
+            "[installation-identity] write kept_slot source=%s reason=%s incoming_iid=%s existing_iid=%s path=%s",
             source or "unknown",
             keep_reason,
             _prefix(iid),
@@ -293,6 +293,13 @@ def write_installation_identity(
                 str(existing.get("machine_instance_id") or "") if machine_id and machine_id != str(existing.get("machine_instance_id") or "") else str(existing.get("legacy_machine_instance_id") or ""),
             )
             if updated:
+                logger.info(
+                    "[installation-identity] machine refreshed source=%s iid=%s machine=%s legacy=%s",
+                    source or "unknown",
+                    _prefix(existing_iid),
+                    _prefix(updated.get("machine_instance_id"), 20) or "<empty>",
+                    _prefix(updated.get("legacy_machine_instance_id"), 20) or "<empty>",
+                )
                 return {**updated, "ignored": True}
         return {**existing, "ignored": True}
 
