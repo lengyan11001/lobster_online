@@ -986,7 +986,14 @@ if (_bootFileIdentity) {
 }
 // 每次启动都把身份快照写进本机日志：诊断包里能直接看到“这次用的是哪个文件、哪个槽位、哪个机器”。
 try {
+  var _bootFileNow = (typeof readBootFileIdentitySync === 'function') ? readBootFileIdentitySync() : null;
+  var _bootFileMachine = String((_bootFileNow && _bootFileNow.machine_instance_id) || '').trim();
+  if (_bootFileMachine && !window.__LOBSTER_MACHINE_INSTANCE_ID__) {
+    window.__LOBSTER_MACHINE_INSTANCE_ID__ = _bootFileMachine;
+    try { localStorage.setItem('lobster_machine_instance_id', _bootFileMachine); } catch (eBootM) {}
+  }
   reportInstallationIdentityEvent('boot', {
+    file_machine: _bootFileMachine,
     source: (typeof window !== 'undefined' ? (window.__LOBSTER_INSTALLATION_MIGRATION_SOURCE__ || '') : ''),
     file_present: !!(typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_FILE_PRESENT__),
     iid: (typeof window !== 'undefined' ? (window.__LOBSTER_INSTALLATION_ID__ || '') : ''),

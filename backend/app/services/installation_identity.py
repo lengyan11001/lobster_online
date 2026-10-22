@@ -115,9 +115,11 @@ def _log_read(result: Dict[str, Any], reason: str) -> None:
     _LAST_READ_SIGNATURE = signature
     if result.get("present"):
         logger.info(
-            "[installation-identity] read present=True iid=%s seed_prefix=%s path=%s reason=%s",
+            "[installation-identity] read present=True iid=%s seed_prefix=%s machine=%s brand=%s path=%s reason=%s",
             result.get("installation_id") or "",
             _prefix(result.get("device_seed"), 12),
+            _prefix(result.get("machine_instance_id"), 20) or "<empty>",
+            str(result.get("brand_mark") or "<empty>"),
             result.get("path") or "",
             reason or "ok",
         )
