@@ -1,7 +1,7 @@
 {
-  "version": "2.0.177",
-  "build": 474,
-  "applied_at": "2026-10-22T18:36:10+08:00",
-  "note": "启动从身份文件同步机器身份",
-  "bundle_sha256": "cecb075727ecb923ef171e0be97e42534f0588aa4559235d3105833dd1978f71"
+  "version": "2.0.178",
+  "build": 475,
+  "applied_at": "2026-10-22T18:55:22+08:00",
+  "note": "硬件机器身份+克隆设备分槽",
+  "bundle_sha256": "14f35ea00c18b77a2a4e627bfb97720ae26b31b52eb89f19e8f54391f6c6fcc9"
 }
