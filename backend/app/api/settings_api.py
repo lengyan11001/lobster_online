@@ -697,9 +697,37 @@ def get_settings(current_user: User = Depends(get_current_user)):
     return {"preferred_model": preferred}
 
 
+def _reconcile_identity_file_machine(machine_id: str) -> None:
+    """把硬件机器 id 回写进 installation_identity 文件（旧值落 legacy）。
+
+    客户端启动只调用 machine-identity，不会走 installation-identity 的 GET，
+    所以回写必须挂在这里，否则镜像带出来的旧 m id 会一直留在文件里。
+    """
+    machine = str(machine_id or "").strip()
+    if not machine:
+        return
+    try:
+        data = read_installation_identity()
+        if not data.get("present"):
+            return
+        if str(data.get("machine_instance_id") or "").strip() == machine:
+            return
+        write_installation_identity(
+            data.get("installation_id"),
+            data.get("device_seed"),
+            source="machine_identity_reconcile",
+            machine_instance_id=machine,
+            brand_mark=data.get("brand_mark") or "",
+        )
+    except Exception as exc:  # pragma: no cover - 文件写入失败不影响启动
+        logger.warning("[installation-identity] reconcile failed machine=%s err=%s", machine[:20], exc)
+
+
 @router.get("/api/settings/machine-identity", response_model=MachineIdentityResponse)
 def get_machine_identity():
-    return MachineIdentityResponse(machine_instance_id=_get_or_create_machine_instance_id())
+    machine = _get_or_create_machine_instance_id()
+    _reconcile_identity_file_machine(machine)
+    return MachineIdentityResponse(machine_instance_id=machine)
 
 
 class IdentityEventRequest(BaseModel):
