@@ -353,13 +353,14 @@ def _account_browser_profile_and_options(
             # （channel=chrome），让 UA、H.264/AAC 解码能力与用户手动打开
             # Chrome 一致；不要退回 Playwright 自带 Chromium。
             opts = dict(opts)
-            if not opts.get("channel") and not opts.get("executable_path"):
-                opts["channel"] = "chrome"
+            # TikTok 走独立 profile 的 CDP 模式：Chrome 由我们自己启动，
+            # 不再带 Playwright 的 --no-sandbox/--enable-automation 指纹。
+            opts["tiktok_cdp"] = True
+            opts["cdp_start_url"] = "https://www.tiktok.com/tiktokstudio/upload?from=upload"
             if not opts.get("viewport"):
                 opts["viewport"] = {"width": 1440, "height": 960}
             logger.info(
-                "[PUBLISH][TIKTOK] browser channel=%s profile=%s",
-                opts.get("channel") or opts.get("executable_path") or "default",
+                "[PUBLISH][TIKTOK] browser cdp=True profile=%s",
                 profile_dir,
             )
         return profile_dir, opts

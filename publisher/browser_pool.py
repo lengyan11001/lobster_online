@@ -230,6 +230,7 @@ _CDP_URL = (
 )
 _cdp_browser: Any = None
 _douyin_cdp_browsers: Dict[int, Any] = {}
+_tiktok_cdp_browsers: Dict[int, Any] = {}
 
 
 def _cdp_enabled() -> bool:
@@ -465,6 +466,63 @@ async def _ensure_douyin_cdp_context(
         if not _is_port_open(port):
             raise RuntimeError(f"抖音账号 Chrome 启动失败，调试端口 {port} 未打开。")
     return await _connect_douyin_cdp_context(profile_dir, port)
+
+
+def _tiktok_cdp_port_from_profile(profile_dir: str, browser_options=None) -> int:
+    opts = browser_options or {}
+    explicit = opts.get("tiktok_cdp_port") or opts.get("cdp_port")
+    if explicit:
+        return int(explicit)
+    digest = int(hashlib.sha1(str(profile_dir).encode("utf-8", "ignore")).hexdigest()[:6], 16)
+    return 9333 + (digest % 100)
+
+
+async def _connect_tiktok_cdp_context(profile_dir: str, port: int):
+    global _pw_instance
+    try:
+        from playwright.async_api import async_playwright
+    except ImportError:
+        raise RuntimeError("playwright 未安装")
+    if _pw_instance is None:
+        _pw_instance = await async_playwright().__aenter__()
+    browser = _tiktok_cdp_browsers.get(port)
+    if browser is None or not browser.is_connected():
+        logger.info("[BROWSER][TIKTOK-CDP] connect_over_cdp port=%s profile=%s", port, profile_dir[-80:])
+        browser = await _pw_instance.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+        _tiktok_cdp_browsers[port] = browser
+    contexts = list(getattr(browser, "contexts", []) or [])
+    if not contexts:
+        raise RuntimeError(f"TikTok Chrome 调试端口 {port} 没有可用 context")
+    ctx = contexts[0]
+    try:
+        setattr(ctx, "_lobster_cdp_external", True)
+    except Exception:
+        pass
+    return ctx
+
+
+async def _ensure_tiktok_cdp_context(profile_dir: str, *, start_url: str = "https://www.tiktok.com/tiktokstudio/upload?from=upload", browser_options=None):
+    opts = browser_options or {}
+    start_url = str(opts.get("start_url") or opts.get("cdp_start_url") or start_url).strip() or start_url
+    port = _tiktok_cdp_port_from_profile(profile_dir, browser_options)
+    Path(profile_dir).mkdir(parents=True, exist_ok=True)
+    if not _is_port_open(port):
+        await _terminate_chrome_for_profile(profile_dir, reason=f"prepare tiktok cdp port {port}")
+        chrome_path = _find_chrome_executable()
+        if not chrome_path:
+            raise RuntimeError("未找到 Google Chrome，无法启动 CDP 模式")
+        cmd = [chrome_path, f"--remote-debugging-port={port}", f"--user-data-dir={profile_dir}", "--profile-directory=Default", "--no-first-run", "--no-default-browser-check", "--remote-allow-origins=*", "--new-window", start_url]
+        creationflags = int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) or 0) if sys.platform == "win32" else 0
+        logger.info("[BROWSER][TIKTOK-CDP] launch chrome profile=%s port=%s url=%s", profile_dir[-80:], port, start_url)
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=creationflags, close_fds=True)
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            if _is_port_open(port):
+                break
+            await asyncio.sleep(0.35)
+        if not _is_port_open(port):
+            raise RuntimeError(f"TikTok Chrome 启动失败，调试端口 {port} 未打开")
+    return await _connect_tiktok_cdp_context(profile_dir, port)
 
 
 async def _connect_cdp_browser() -> Any:
@@ -1001,6 +1059,12 @@ async def open_login_browser(
         return {"logged_in": False, "message": f"不支持的平台: {platform}"}
 
     opts = browser_options if browser_options is not None else _default_browser_options()
+    if platform == "tiktok" and opts.get("tiktok_cdp"):
+        ctx = await _ensure_tiktok_cdp_context(profile_dir, start_url=login_url, browser_options=opts)
+        page = await _get_page_and_focus(ctx)
+        await page.goto(login_url, wait_until="domcontentloaded", timeout=navigation_timeout_ms(60000))
+        logger.info("[BROWSER][TIKTOK-CDP] login page opened url=%s", page.url)
+        return {"logged_in": False, "message": "TikTok CDP 浏览器已打开，请扫码登录（登录态保存在该专用 profile）"}
     await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
     ctx, created_new = await _acquire_context(
         profile_dir, new_headless=False, browser_options=opts
@@ -1079,6 +1143,18 @@ async def open_and_check_browser(
         return {"logged_in": False, "message": f"不支持的平台: {platform}"}
 
     opts = browser_options if browser_options is not None else _default_browser_options()
+    if platform == "tiktok" and opts.get("tiktok_cdp"):
+        ctx = await _ensure_tiktok_cdp_context(profile_dir, start_url=login_url, browser_options=opts)
+        page = await _get_page_and_focus(ctx)
+        if login_url:
+            try:
+                await page.goto(login_url, wait_until="domcontentloaded", timeout=navigation_timeout_ms(60000))
+                await asyncio.sleep(1)
+            except Exception:
+                pass
+        driver = driver_cls()
+        logged_in = await driver.check_login(page, navigate=False)
+        return {"logged_in": bool(logged_in), "message": "TikTok CDP 浏览器已打开，当前已登录" if logged_in else "TikTok CDP 浏览器已打开，请扫码登录"}
     await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
     ctx, created_new = await _acquire_context(
         profile_dir, new_headless=False, browser_options=opts
@@ -1135,6 +1211,14 @@ async def check_browser_login(
         return False
 
     opts = browser_options if browser_options is not None else _default_browser_options()
+    if platform == "tiktok" and opts.get("tiktok_cdp"):
+        try:
+            ctx = await _ensure_tiktok_cdp_context(profile_dir, browser_options=opts)
+            page = await _get_page_and_focus(ctx)
+            driver = driver_cls()
+            return bool(await driver.check_login(page, navigate=False))
+        except Exception:
+            return False
     key = _storage_key(profile_dir, opts)
 
     async with _lock:
@@ -2491,13 +2575,21 @@ async def run_publish_task(
     driver = driver_cls()
     opts = browser_options if browser_options is not None else _default_browser_options()
     logger.info("[PUBLISH] acquiring browser context...")
-    await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
-    ctx, created_new = await _acquire_context(
-        profile_dir, new_headless=False, browser_options=opts
-    )
-    logger.info("[PUBLISH] context acquired (new=%s)", created_new)
+    is_tiktok_cdp = platform == "tiktok" and bool(opts.get("tiktok_cdp"))
+    if is_tiktok_cdp:
+        ctx = await _ensure_tiktok_cdp_context(profile_dir, browser_options=opts)
+        created_new = False
+        page = await _get_page_and_focus(ctx)
+        logger.info("[PUBLISH][TIKTOK-CDP] context acquired")
+    else:
+        await _ensure_visible_interactive_context(profile_dir, browser_options=opts)
+        ctx, created_new = await _acquire_context(
+            profile_dir, new_headless=False, browser_options=opts
+        )
+        logger.info("[PUBLISH] context acquired (new=%s)", created_new)
     try:
-        page, ctx = await _get_page_with_reacquire(profile_dir, ctx, browser_options=opts)
+        if not is_tiktok_cdp:
+            page, ctx = await _get_page_with_reacquire(profile_dir, ctx, browser_options=opts)
         logger.info("[PUBLISH] page ready, checking login...")
         _publish_log_url(page, "1_after_acquire_page")
 
