@@ -104,7 +104,7 @@ def normalize_publish_texts(
 
     if plat == "tiktok":
         # TikTok 只有一个 caption 输入框，标题+描述+话题合并，上限 2200 字符。
-        caption_max = 2200
+        caption_max = 4000
         suffix = _douyin_tag_suffix(g)
         combined = (t + ("\n" if t and d else "") + d + suffix).strip()
         if len(combined) > caption_max:

@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?from=upload"
 HOME_URL = "https://www.tiktok.com/tiktokstudio"
 LOGIN_URL = "https://www.tiktok.com/login?redirect_url=https%3A%2F%2Fwww.tiktok.com%2Ftiktokstudio%2Fupload"
-MAX_CAPTION = 2200
+MAX_CAPTION = 4000
 
 _VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".webm", ".avi", ".mkv"}
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
@@ -28,6 +28,7 @@ _FILE_SELECTORS = (
     'input[type="file"]',
 )
 _CAPTION_SELECTORS = (
+    '[data-e2e="caption_container"] div[contenteditable="true"]',
     'div[contenteditable="true"]',
     'div[data-e2e="caption-input"]',
     'div.public-DraftEditor-content',
@@ -114,7 +115,7 @@ async def _wait_visible(page: Any, selectors: tuple[str, ...], timeout_ms: int =
 
 
 async def _dismiss_dialogs(page: Any) -> int:
-    """关掉 TikTok 的引导/升级/权限弹窗。"""
+    """关掉 TikTok 的引导/升级/权限/内容检查弹窗。"""
     clicked = 0
     names = re.compile(r"^(got it|ok|continue|not now|maybe later|知道了|我知道了|稍后|以后再说|关闭|×)$", re.I)
     for _ in range(3):
@@ -128,6 +129,18 @@ async def _dismiss_dialogs(page: Any) -> int:
         except Exception:
             pass
         break
+    try:
+        dialogs = await page.locator('[role="dialog"]').all()
+        for dialog in dialogs:
+            text = (await dialog.inner_text(timeout=800)) or ""
+            if any(k in text for k in ("内容检查", "自动内容", "content check", "Content Check")):
+                buttons = await dialog.locator("button").all()
+                if buttons:
+                    await buttons[0].click(force=True, timeout=3000)
+                    clicked += 1
+                    await asyncio.sleep(0.5)
+    except Exception:
+        pass
     return clicked
 
 
@@ -200,6 +213,21 @@ class TikTokDriver(BaseDriver):
             if n:
                 _step("关闭弹窗", True, count=n)
 
+            discard = page.locator('button[data-e2e="discard_post_button"]').first
+            if await discard.count():
+                try:
+                    await discard.click(force=True, timeout=5000)
+                    await asyncio.sleep(0.6)
+                    dialogs = await page.locator('[role="dialog"]').all()
+                    if dialogs:
+                        btns = await dialogs[-1].locator("button").all()
+                        if btns:
+                            await btns[-1].click(force=True, timeout=3000)
+                    await asyncio.sleep(1.0)
+                    _step("放弃旧草稿", True)
+                except Exception as exc:
+                    logger.info("[TIKTOK-PUBLISH] discard draft skipped: %s", exc)
+
             if not await self._passive_login_check(page):
                 return {"ok": False, "need_login": True, "error": "TikTok 未登录，请在打开的浏览器中登录后重试", "applied": applied}
 
@@ -225,6 +253,9 @@ class TikTokDriver(BaseDriver):
                 _step("等待上传完成", False)
                 return {"ok": False, "error": "视频上传后未出现描述编辑框，请检查网络或 TikTok 页面是否改版", "applied": applied}
             _step("视频上传完成", True)
+            n2 = await _dismiss_dialogs(page)
+            if n2:
+                _step("关闭上传后弹窗", True, count=n2)
 
             caption = build_tiktok_caption(title, description, tags)
             if caption:
@@ -246,6 +277,10 @@ class TikTokDriver(BaseDriver):
                         return {"ok": False, "error": f"填写 TikTok 描述失败: {exc}", "applied": applied}
             else:
                 _step("填写标题/描述/话题", True, skipped="empty")
+
+            if options.get("dry_run"):
+                _step("dry run：不点击发布", True)
+                return {"ok": True, "dry_run": True, "url": page.url, "applied": applied}
 
             # 等发布按钮变可用（上传/版权检查未完成时按钮是 disabled）。
             post_btn = None
@@ -275,6 +310,11 @@ class TikTokDriver(BaseDriver):
             await post_btn.scroll_into_view_if_needed()
             await post_btn.click(timeout=10000)
             _step("点击发布按钮", True)
+            for _ in range(2):
+                await asyncio.sleep(0.8)
+                n3 = await _dismiss_dialogs(page)
+                if n3:
+                    _step("关闭发布后弹窗", True, count=n3)
 
             # 可能弹出版权/确认提示，继续发布。
             for _ in range(3):
