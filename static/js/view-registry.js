@@ -79,7 +79,7 @@
   });
 
   window.registerLobsterView('publish', {
-    html: '/static/views/publish.html?v=20261023-tiktok-publish-v1'
+    html: '/static/views/publish.html?v=20261023-tiktok-publish-v2'
   });
 
   window.registerLobsterView('canvas-studio', {
@@ -174,7 +174,7 @@ window.registerLobsterView('alibaba-inquiries', {
 
   window.registerLobsterView('assets', {
     html: '/static/views/assets.html?v=20260806-content-record-categories',
-    scripts: '/static/js/publish.js?v=20261023-tiktok-publish-v1'
+    scripts: '/static/js/publish.js?v=20261023-tiktok-publish-v2'
   });
 
   window.registerLobsterView('scheduled-tasks', {
