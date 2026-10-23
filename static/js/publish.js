@@ -2661,6 +2661,29 @@ function _assetPublishMsgShow(text, isErr) {
   msg.style.display = text ? 'block' : 'none';
 }
 
+var _assetPublishToastTimer = null;
+function _assetPublishToast(text, isErr) {
+  if (!text) return;
+  var node = document.getElementById('assetPublishToast');
+  if (!node) {
+    node = document.createElement('div');
+    node.id = 'assetPublishToast';
+    node.style.cssText = 'position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:2600;max-width:min(90vw,560px);padding:10px 16px;border-radius:12px;font-size:13px;line-height:1.5;box-shadow:0 12px 32px rgba(15,23,42,0.18);pointer-events:none;transition:opacity .2s ease;';
+    document.body.appendChild(node);
+  }
+  node.textContent = text;
+  node.style.background = isErr ? '#fef2f2' : '#ecfdf5';
+  node.style.color = isErr ? '#dc2626' : '#047857';
+  node.style.border = '1px solid ' + (isErr ? 'rgba(220,38,38,0.18)' : 'rgba(16,185,129,0.2)');
+  node.style.display = 'block';
+  node.style.opacity = '1';
+  if (_assetPublishToastTimer) clearTimeout(_assetPublishToastTimer);
+  _assetPublishToastTimer = setTimeout(function() {
+    node.style.opacity = '0';
+    _assetPublishToastTimer = setTimeout(function() { node.style.display = 'none'; }, 200);
+  }, isErr ? 9000 : 4000);
+}
+
 function _assetPublishIsOnlineAccount(account) {
   var status = String(account && account.status || '').trim().toLowerCase();
   return status === 'active' || status === 'online';
@@ -3094,8 +3117,8 @@ function _assetPublishSetBusy(busy) {
   if (labelType) labelType.disabled = !!busy;
 }
 
-function _closeAssetPublishModal() {
-  if (_assetPublishModalState.busy) return;
+function _closeAssetPublishModal(force) {
+  if (_assetPublishModalState.busy && force !== true) return;
   var modal = document.getElementById('assetPublishModal');
   if (modal) modal.style.display = 'none';
   _assetPublishModalState.asset = null;
@@ -3169,7 +3192,8 @@ function _submitAssetPublishModal() {
   var autoCopy = !userTitle && !userDesc && !userTags;
 
   _assetPublishSetBusy(true);
-  _assetPublishMsgShow('正在准备素材...', false);
+  _closeAssetPublishModal(true);
+  _assetPublishToast('正在准备素材...', false);
   _assetPublishResolveTarget(asset).then(function(target) {
     var payload = {
       asset_id: target.asset_id,
@@ -3190,7 +3214,7 @@ function _submitAssetPublishModal() {
     }
     if (labelOptions) payload.options.douyin_label = labelOptions;
     if (target.saved_from_url) payload.options._saved_from_url = String(target.source_url || '').slice(0, 300);
-    _assetPublishMsgShow('正在发布到 ' + _assetPublishAccountLabel(account) + '...', false);
+    _assetPublishToast('正在发布到 ' + _assetPublishAccountLabel(account) + '...', false);
     return fetch(publishLocalBase() + '/api/publish', {
       method: 'POST',
       headers: Object.assign({ 'Content-Type': 'application/json' }, authHeaders()),
@@ -3200,19 +3224,19 @@ function _submitAssetPublishModal() {
     var data = x.d || {};
     if (!x.ok) throw new Error(data.detail || data.message || ('HTTP ' + x.status));
     if (data.need_login) {
-      _assetPublishMsgShow('账号需要登录，浏览器已打开，请登录后重试。', true);
+      _assetPublishToast('账号需要登录，浏览器已打开，请登录后重试。', true);
       return;
     }
     if (data.status === 'success') {
-      _assetPublishMsgShow('发布成功。' + (data.result_url ? ' ' + data.result_url : ''), false);
+      _assetPublishToast('发布成功。' + (data.result_url ? ' ' + data.result_url : ''), false);
     } else if (data.status === 'pending' || data.status === 'publishing') {
-      _assetPublishMsgShow('发布任务已提交，任务 ID：' + (data.task_id || '-'), false);
+      _assetPublishToast('发布任务已提交，任务 ID：' + (data.task_id || '-'), false);
     } else {
-      _assetPublishMsgShow(data.error || data.detail || '发布失败', true);
+      _assetPublishToast(data.error || data.detail || '发布失败', true);
     }
     if (_currentPubTab === 'tasks') loadTasks();
   }).catch(function(error) {
-    _assetPublishMsgShow((error && error.message) || '发布失败', true);
+    _assetPublishToast((error && error.message) || '发布失败', true);
   }).finally(function() {
     _assetPublishSetBusy(false);
   });
