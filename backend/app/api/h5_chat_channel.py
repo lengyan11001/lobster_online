@@ -3651,8 +3651,11 @@ async def _generate_scheduled_content(
         script = _hifly_script_text(data.get("script"))
         if not script:
             script = _fallback_hifly_script(task_title)
+        # 片头标题必须用文案标题：模型没给标题就取文案首句，
+        # 不能回落到节点名（"数字人口播"会直接印在视频片头上）。
+        title = _workflow_digital_human_title(data.get("title"), script)
         return {
-            "title": title or "数字人口播",
+            "title": title,
             "script": script,
             "caption_hint": str(data.get("caption_hint") or "").strip()[:200],
             "creative_angle": creative_angle,
@@ -10978,6 +10981,26 @@ def _extract_mainland_mobile_numbers(value: Any, *, limit: int = 100) -> List[st
     return out
 
 
+def _workflow_digital_human_title(raw_title: Any, script: Any) -> str:
+    """闪剪把 title 渲染成片头，必须用文案标题；没有标题时取文案首句，不用节点名。"""
+    title = _workflow_text(raw_title, 80)
+    if title:
+        return title
+    text = str(script or "").strip()
+    for line in text.splitlines():
+        line = line.strip().strip("\u201c\u201d\"' ")
+        if not line:
+            continue
+        for sep in ("\u3002", "\uff01", "\uff1f", "\uff1b", ";", "!", "?", "\uff0c", ","):
+            if sep in line:
+                line = line.split(sep, 1)[0]
+                break
+        line = line.strip()
+        if line:
+            return line[:30]
+    return "\u6570\u5b57\u4eba\u53e3\u64ad"
+
+
 def _workflow_text(value: Any, limit: int = 500) -> str:
     text = re.sub(r"\s+", " ", str(value or "").strip())
     return text[:limit] if text else ""
@@ -11987,7 +12010,7 @@ async def _run_shanjian_digital_human_workflow(
                 run_id=run_id,
             )
     script = generated["script"]
-    title = generated["title"] or "数字人口播"
+    title = _workflow_digital_human_title(generated.get("title"), script)
     language = generated["language"] or "zh-CN"
 
     tts_data: Dict[str, Any] = {}
