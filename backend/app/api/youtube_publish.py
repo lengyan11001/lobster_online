@@ -237,25 +237,17 @@ class YoutubeOauthStartBody(BaseModel):
 def _open_url_in_system_chrome(url: str) -> Dict[str, Any]:
     try:
         chrome_path = _find_chrome_executable()
-        if sys.platform == "win32":
-            ps = (
-                "$p = Start-Process -FilePath $args[0] -ArgumentList $args[1] -PassThru; "
-                "Start-Sleep -Milliseconds 700; "
-                "$ws = New-Object -ComObject WScript.Shell; "
-                "$null = $ws.AppActivate($p.Id)"
-            )
-            subprocess.Popen(
-                ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps, chrome_path, url],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0),
-            )
-        else:
-            subprocess.Popen(
-                [chrome_path, url],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+        if not chrome_path:
+            return {"ok": False, "message": "未找到 Google Chrome，请安装 Chrome 或配置 CHROME_PATH"}
+        # Launch Chrome directly. The old PowerShell `-Command ... $args` form
+        # never received its arguments on Windows PowerShell 5.1, so Popen
+        # succeeded while Chrome was never started.
+        subprocess.Popen(
+            [chrome_path, "--new-window", url],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0) or 0),
+        )
         return {"ok": True, "message": f"已用 Google Chrome 打开授权页: {chrome_path}"}
     except Exception as e:
         logger.warning("[youtube-publish] open system Chrome failed: %s", e)

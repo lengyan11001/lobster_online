@@ -88,20 +88,39 @@
   var _youtubeScheduleAid = '';
   var _oauthRefreshTimer = null;
 
-  function startOauthRefreshPolling() {
+  function stopOauthRefreshPolling() {
     if (_oauthRefreshTimer) {
       clearInterval(_oauthRefreshTimer);
       _oauthRefreshTimer = null;
     }
+  }
+
+  function startOauthRefreshPolling() {
+    stopOauthRefreshPolling();
     var tries = 0;
-    _oauthRefreshTimer = setInterval(function() {
+    function tick() {
       tries += 1;
-      renderList();
-      if (tries >= 60) {
-        clearInterval(_oauthRefreshTimer);
-        _oauthRefreshTimer = null;
-      }
-    }, 2000);
+      fetch(apiUrl('/api/youtube-publish/accounts'), {
+        headers: typeof authHeaders === 'function' ? authHeaders() : {}
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(rows) {
+          rows = Array.isArray(rows) ? rows : [];
+          var changed = JSON.stringify(rows) !== JSON.stringify(_lastAccounts || []);
+          if (changed) {
+            _lastAccounts = rows;
+            renderList();
+          }
+          var ready = rows.some(function(a) {
+            return String((a && a.status) || '').toLowerCase() === 'ready';
+          });
+          if (ready || tries >= 60) stopOauthRefreshPolling();
+        })
+        .catch(function() {
+          if (tries >= 60) stopOauthRefreshPolling();
+        });
+    }
+    _oauthRefreshTimer = setInterval(tick, 3000);
   }
 
   function statusLabel(st) {
