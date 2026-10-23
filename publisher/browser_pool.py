@@ -674,17 +674,32 @@ async def _acquire_context(
     launch_kwargs["ignore_default_args"] = _ida
 
     Path(profile_dir).mkdir(parents=True, exist_ok=True)
+    # Playwright defaults to --no-sandbox, which makes Chrome show the
+    # "unsupported command-line flag" warning and is a strong automation
+    # signal for Google/TikTok.  System Chrome supports the normal sandbox;
+    # retry without it only if the host environment rejects it.
+    launch_kwargs["chromium_sandbox"] = True
     logger.info(
-        "[BROWSER] launch persistent context profile=%s headless=%s channel=%s executable=%s viewport=%s",
+        "[BROWSER] launch persistent context profile=%s headless=%s channel=%s executable=%s viewport=%s sandbox=True",
         profile_dir[-80:],
         bool(new_headless),
         launch_kwargs.get("channel") or "",
         "set" if launch_kwargs.get("executable_path") else "",
         launch_kwargs.get("viewport"),
     )
-    ctx = await _pw_instance.chromium.launch_persistent_context(
-        profile_dir, **launch_kwargs,
-    )
+    try:
+        ctx = await _pw_instance.chromium.launch_persistent_context(
+            profile_dir, **launch_kwargs,
+        )
+    except Exception as launch_exc:
+        launch_kwargs.pop("chromium_sandbox", None)
+        logger.warning(
+            "[BROWSER] sandbox launch failed, retrying without sandbox: %s",
+            str(launch_exc)[:300],
+        )
+        ctx = await _pw_instance.chromium.launch_persistent_context(
+            profile_dir, **launch_kwargs,
+        )
     try:
         await ctx.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
