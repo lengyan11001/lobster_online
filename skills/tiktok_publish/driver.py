@@ -144,6 +144,24 @@ async def _dismiss_dialogs(page: Any) -> int:
     return clicked
 
 
+async def _find_photo_tab(page: Any, timeout_ms: int = 30000) -> Any:
+    """照片 tab 在页面异步渲染；按 role=tab 的可见文案等待，不依赖固定 2 秒。"""
+    deadline = asyncio.get_event_loop().time() + timeout_ms / 1000.0
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            for el in await page.locator('[role="tab"]').all():
+                try:
+                    text = (await el.inner_text(timeout=300)).strip()
+                    if text in ("照片", "Photo", "photo") and await el.is_visible(timeout=300):
+                        return el
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
+    return None
+
+
 async def _find_photo_post_button(page: Any, timeout_ms: int = 300000) -> Any:
     """照片发布的「发布」按钮没有 data-e2e，按 primary 按钮 + 文案定位。"""
     deadline = asyncio.get_event_loop().time() + timeout_ms / 1000.0
@@ -257,10 +275,8 @@ class TikTokDriver(BaseDriver):
                 _step("关闭弹窗", True, count=n)
 
             if is_image:
-                tab = page.get_by_role("tab", name=re.compile(r"^(照片|photo)$", re.I)).first
-                if not await tab.count():
-                    tab = page.get_by_role("button", name=re.compile(r"^(照片|photo)$", re.I)).first
-                if await tab.count():
+                tab = await _find_photo_tab(page)
+                if tab is not None:
                     await tab.click(timeout=5000)
                     await asyncio.sleep(1.2)
                     _step("切换到照片发布", True)
