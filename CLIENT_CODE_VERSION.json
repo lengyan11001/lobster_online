@@ -1,7 +1,7 @@
 {
-  "version": "2.0.184",
-  "build": 481,
-  "applied_at": "2026-10-22T21:42:20+08:00",
-  "note": "slot: accept cloud-pinned signed slot",
-  "bundle_sha256": "8db3de312f44982493526b227f39ad74d95f0e2bb92b1eb6c8d2a966c4e03b84"
+  "version": "2.0.185",
+  "build": 482,
+  "applied_at": "2026-10-23T12:56:37+08:00",
+  "note": "TikTok lead tabs/search history; publish modal close",
+  "bundle_sha256": "8fd2676442ce2da3162918e76bb5ad18520a44122f01830c437cdd0b73125ef5"
 }
