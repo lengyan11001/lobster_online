@@ -18,7 +18,8 @@
     tiktokDiscoveredAccounts: [],
     tiktokVideoResults: [],
     tiktokSelectedVideos: [],
-    tiktokVideoKeyword: ''
+    tiktokVideoKeyword: '',
+    tiktokVideoHistory: []
   };
 
   function $(id) { return document.getElementById(id); }
@@ -301,6 +302,78 @@
     return (state.tiktokSelectedVideos || []).map(function(item) { return String(item.aweme_id || ''); }).filter(Boolean);
   }
 
+  function tiktokVideoHistoryKey() {
+    return 'tiktok_video_search_history_v1';
+  }
+
+  function loadTikTokVideoHistory() {
+    try {
+      var rows = JSON.parse(localStorage.getItem(tiktokVideoHistoryKey()) || '[]');
+      state.tiktokVideoHistory = Array.isArray(rows) ? rows.filter(function(row) { return row && row.keyword; }).slice(0, 12) : [];
+    } catch (e) {
+      state.tiktokVideoHistory = [];
+    }
+    renderTikTokVideoHistory();
+  }
+
+  function saveTikTokVideoHistory() {
+    try { localStorage.setItem(tiktokVideoHistoryKey(), JSON.stringify((state.tiktokVideoHistory || []).slice(0, 12))); } catch (e) {}
+  }
+
+  function renderTikTokVideoHistory() {
+    var host = $('slVideoHistory');
+    if (!host) return;
+    var rows = state.tiktokVideoHistory || [];
+    if (!rows.length) {
+      host.innerHTML = '<span class="sl-meta">还没有搜索记录，搜过的关键词会保存在这里。</span>';
+      return;
+    }
+    host.innerHTML = rows.map(function(row) {
+      var active = String(row.keyword) === String(state.tiktokVideoKeyword || '') ? ' is-active' : '';
+      var total = Number(row.total || 0);
+      return '<button type="button" class="sl-history-chip' + active + '" data-history-keyword="' + esc(row.keyword) + '">'
+        + esc(row.keyword) + '<span>' + (total ? esc(total) + ' 条' : '') + '</span></button>';
+    }).join('');
+  }
+
+  function recordTikTokVideoSearch(keyword, videos) {
+    keyword = String(keyword || '').trim();
+    if (!keyword) return;
+    videos = Array.isArray(videos) ? videos : [];
+    var row = {
+      keyword: keyword,
+      total: videos.length,
+      videos: videos.slice(0, 20),
+      searched_at: new Date().toISOString()
+    };
+    state.tiktokVideoHistory = [row].concat((state.tiktokVideoHistory || []).filter(function(item) {
+      return item.keyword !== keyword;
+    })).slice(0, 12);
+    saveTikTokVideoHistory();
+    renderTikTokVideoHistory();
+  }
+
+  function restoreTikTokVideoSearch(keyword) {
+    var row = (state.tiktokVideoHistory || []).filter(function(item) { return item.keyword === keyword; })[0];
+    if (!row) return;
+    state.tiktokVideoKeyword = row.keyword;
+    state.tiktokVideoResults = Array.isArray(row.videos) ? row.videos : [];
+    var input = $('slVideoKeyword');
+    if (input) input.value = row.keyword;
+    renderTikTokVideoResults(state.tiktokVideoResults);
+    renderTikTokVideoHistory();
+    var status = $('slVideoSearchStatus');
+    if (status) status.textContent = '已恢复「' + row.keyword + '」上次搜索的 ' + state.tiktokVideoResults.length + ' 条视频。';
+    setMsg('已恢复上次搜索记录。', false);
+  }
+
+  function clearTikTokVideoHistory() {
+    state.tiktokVideoHistory = [];
+    saveTikTokVideoHistory();
+    renderTikTokVideoHistory();
+    setMsg('搜索记录已清空。', false);
+  }
+
   function renderTikTokSelectedVideos() {
     var rows = state.tiktokSelectedVideos || [];
     var count = $('slVideoSelectedCount');
@@ -406,6 +479,7 @@
         var videos = Array.isArray(data.videos) ? data.videos : [];
         state.tiktokVideoKeyword = keyword;
         state.tiktokVideoResults = videos;
+        recordTikTokVideoSearch(keyword, videos);
         renderTikTokVideoResults(videos);
         if (status) status.textContent = videos.length
           ? ('关键词「' + keyword + '」找到 ' + videos.length + ' 条视频，勾选后点下面按钮建任务。')
@@ -457,6 +531,7 @@
       renderTikTokDiscoverList(state.tiktokDiscoveredAccounts);
       renderTikTokVideoResults(state.tiktokVideoResults);
       renderTikTokSelectedVideos();
+      loadTikTokVideoHistory();
     } else if (state.tab === 'keyword-search' || state.tab === 'discover') {
       switchTab('new');
     }
@@ -1406,6 +1481,16 @@
     if (clearVideosBtn && clearVideosBtn.dataset.bound !== '1') { clearVideosBtn.dataset.bound = '1'; clearVideosBtn.addEventListener('click', clearSelectedTikTokVideos); }
     var clearSelectedBtn = $('slClearSelectedVideosBtn');
     if (clearSelectedBtn && clearSelectedBtn.dataset.bound !== '1') { clearSelectedBtn.dataset.bound = '1'; clearSelectedBtn.addEventListener('click', clearSelectedTikTokVideos); }
+    var clearHistoryBtn = $('slClearVideoHistoryBtn');
+    if (clearHistoryBtn && clearHistoryBtn.dataset.bound !== '1') { clearHistoryBtn.dataset.bound = '1'; clearHistoryBtn.addEventListener('click', clearTikTokVideoHistory); }
+    var historyHost = $('slVideoHistory');
+    if (historyHost && historyHost.dataset.bound !== '1') {
+      historyHost.dataset.bound = '1';
+      historyHost.addEventListener('click', function(evt) {
+        var btn = evt.target && evt.target.closest ? evt.target.closest('[data-history-keyword]') : null;
+        if (btn) restoreTikTokVideoSearch(btn.getAttribute('data-history-keyword'));
+      });
+    }
     var stepList = $('slStepList');
     if (stepList && stepList.dataset.bound !== '1') {
       stepList.dataset.bound = '1';

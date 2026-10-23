@@ -598,6 +598,23 @@
         flex-wrap: wrap;
         margin: 0.6rem 0;
       }
+      .sl-video-history { margin: 0.3rem 0 0.55rem; }
+      .sl-video-history-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+      .sl-video-history-head .btn-sm { padding: 0.28rem 0.6rem; font-size: 0.75rem; }
+      .sl-video-history-list { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.35rem; }
+      .sl-history-chip {
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        background: rgba(255, 255, 255, 0.82);
+        color: #475569;
+        border-radius: 999px;
+        padding: 0.28rem 0.62rem;
+        font-size: 0.76rem;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      .sl-history-chip:hover { border-color: rgba(37, 99, 235, 0.28); color: var(--sl-accent); }
+      .sl-history-chip.is-active { background: var(--sl-accent-soft); border-color: rgba(37, 99, 235, 0.28); color: var(--sl-accent); }
+      .sl-history-chip span { margin-left: 0.28rem; color: #94a3b8; font-weight: 400; }
       .sl-video-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -770,6 +787,13 @@
         <div class="sl-video-toolbar">
           <span id="slVideoSearchStatus" class="sl-meta">回车即可搜索。勾选搜索结果后，任务只分析所选视频。</span>
           <span id="slVideoSelectedCount" class="sl-badge">已选 0 条视频</span>
+        </div>
+        <div class="sl-video-history">
+          <div class="sl-video-history-head">
+            <span class="sl-meta">最近搜索</span>
+            <button type="button" id="slClearVideoHistoryBtn" class="btn btn-ghost btn-sm">清空历史</button>
+          </div>
+          <div id="slVideoHistory" class="sl-video-history-list"></div>
         </div>
         <div id="slVideoResults" class="sl-video-grid"><div class="sl-meta">还没有搜索结果。</div></div>
         <div class="sl-row-actions" style="margin-top:0.75rem;">
