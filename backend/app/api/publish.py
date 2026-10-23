@@ -348,6 +348,20 @@ def _account_browser_profile_and_options(
                 profile_dir,
                 douyin_front,
             )
+        if acct.platform == "tiktok":
+            # TikTok 对浏览器指纹/媒体编码很敏感。优先使用系统 Chrome 品牌
+            # （channel=chrome），让 UA、H.264/AAC 解码能力与用户手动打开
+            # Chrome 一致；不要退回 Playwright 自带 Chromium。
+            opts = dict(opts)
+            if not opts.get("channel") and not opts.get("executable_path"):
+                opts["channel"] = "chrome"
+            if not opts.get("viewport"):
+                opts["viewport"] = {"width": 1440, "height": 960}
+            logger.info(
+                "[PUBLISH][TIKTOK] browser channel=%s profile=%s",
+                opts.get("channel") or opts.get("executable_path") or "default",
+                profile_dir,
+            )
         return profile_dir, opts
 
     origin_account = _select_origin_douyin_account(acct)
