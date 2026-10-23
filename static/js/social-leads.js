@@ -969,11 +969,19 @@
   function renderJobs() {
     var host = $('slJobList');
     if (!host) return;
+    var digest = JSON.stringify({ active: state.activeJobId, jobs: state.jobs.map(function(job) {
+      return [job.job_id, job.status, job.progress, job.title, job.error, buildLeads(job).length, (job.steps || []).length];
+    }) });
     if (!state.jobs.length) {
-      host.innerHTML = '<div class="sl-meta">暂无任务。</div>';
+      if (state.jobsDigest !== digest) {
+        state.jobsDigest = digest;
+        host.innerHTML = '<div class="sl-meta">暂无任务。</div>';
+      }
       renderActiveJob();
       return;
     }
+    if (state.jobsDigest === digest) { renderActiveJob(); return; }
+    state.jobsDigest = digest;
     host.innerHTML = state.jobs.map(function(job) {
       var active = job.job_id === state.activeJobId ? ' is-active' : '';
       return '<div class="sl-item' + active + '" data-sl-job-id="' + esc(job.job_id) + '">'
