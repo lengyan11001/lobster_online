@@ -1466,8 +1466,8 @@ window._openSocialLeadsView = function(platform) {
   window.__socialLeadsPlatform = nextPlatform;
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('social-leads', {
-      html: '/static/views/social-leads.html?v=20261023-tiktok-leads-v2',
-      scripts: '/static/js/social-leads.js?v=20261023-tiktok-leads-v2',
+      html: '/static/views/social-leads.html?v=20261023-tiktok-leads-v3',
+      scripts: '/static/js/social-leads.js?v=20261023-tiktok-leads-v3',
       init: 'initSocialLeadsView',
       cache: 'reload'
     });

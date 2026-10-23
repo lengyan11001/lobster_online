@@ -409,6 +409,18 @@
       .sl-tiktok-limits { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.55rem; margin-bottom: 0.75rem; }
       .social-leads-page.is-tiktok .sl-grid { grid-template-columns: minmax(320px, 1fr); }
       .sl-tiktok-limits .sl-field { margin-bottom: 0; }
+      .sl-tiktok-discovery { margin-bottom: 0.85rem; }
+      .sl-tiktok-search-row { display:flex; gap:0.45rem; align-items:center; flex-wrap:wrap; }
+      .sl-tiktok-search-row input { flex:1 1 260px; height:38px; border:1px solid var(--sl-border); border-radius:8px; padding:0 0.6rem; background:#fff; }
+      .sl-keyword-chips { display:flex; flex-wrap:wrap; gap:0.35rem; margin:0.55rem 0; }
+      .sl-keyword-chip { border:1px solid var(--sl-border); background:#fff; color:#334155; border-radius:999px; padding:0.3rem 0.6rem; font-size:0.78rem; cursor:pointer; }
+      .sl-keyword-chip.is-active { background:var(--sl-accent); border-color:var(--sl-accent); color:#fff; }
+      .sl-discover-list, .sl-monitor-list { max-height:220px; overflow:auto; margin-top:0.4rem; }
+      .sl-discover-row, .sl-monitor-row { display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.55rem; border:1px solid var(--sl-border); border-radius:8px; background:#fff; margin-bottom:0.4rem; }
+      .sl-discover-row .sl-row-main, .sl-monitor-row .sl-row-main { flex:1 1 auto; min-width:0; }
+      .sl-discover-row strong, .sl-monitor-row strong { display:block; font-size:0.86rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+      .sl-discover-row .sl-meta, .sl-monitor-row .sl-meta { display:block; margin-top:0.15rem; }
+      .sl-discover-row button, .sl-monitor-row button { flex:0 0 auto; }
       .sl-lead-comment { margin: 0.35rem 0; padding: 0.45rem 0.55rem; border-left: 3px solid var(--sl-accent); border-radius: 6px; background: #f8fafc; color: #1f2937; font-size: 0.85rem; line-height: 1.55; }
       .sl-legacy { display:flex; align-items:center; gap:0.55rem; flex-wrap:wrap; margin-bottom:0.65rem; padding:0.65rem 0.75rem; border:1px solid rgba(234,88,12,0.22); border-radius:9px; background:#fff7ed; color:#9a3412; font-size:0.82rem; line-height:1.5; }
       .sl-legacy b { flex:0 0 auto; }
@@ -450,6 +462,19 @@
     </nav>
 
     <section class="sl-panel is-active" data-sl-panel="new">
+      <div id="slTikTokDiscovery" class="sl-card sl-tiktok-discovery" style="display:none;">
+        <div class="sl-card-title"><span>1. 关键词拓词</span><span class="sl-meta">输入种子词，扩展后搜索同行</span></div>
+        <div class="sl-inline sl-tiktok-search-row">
+          <input id="slSeedKeyword" type="text" placeholder="例如：notebook / 定制笔记本 / 企业礼品">
+          <button type="button" id="slExpandKeywordsBtn" class="btn btn-primary btn-sm">AI 拓词</button>
+          <button type="button" id="slDiscoverBtn" class="btn btn-ghost btn-sm">搜索同行</button>
+        </div>
+        <div id="slKeywordChips" class="sl-keyword-chips"></div>
+        <div id="slDiscoverList" class="sl-list sl-discover-list"></div>
+        <div class="sl-card-title" style="margin-top:0.9rem;"><span>2. 监控同行</span><button type="button" id="slClearMonitorBtn" class="btn btn-ghost btn-sm">清空</button></div>
+        <div id="slMonitorList" class="sl-list sl-monitor-list"></div>
+        <div class="sl-meta">勾选的同行会自动带入下方采集任务；监控列表保存在本机，下次打开还在。</div>
+      </div>
       <div class="sl-grid">
         <div class="sl-card">
           <div class="sl-card-title">采集输入</div>

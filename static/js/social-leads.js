@@ -11,7 +11,11 @@
     pollTimer: null,
     autoResumeJobs: {},
     templates: [],
-    templatesLoading: false
+    templatesLoading: false,
+    tiktokKeywords: [],
+    tiktokSelectedKeywords: {},
+    tiktokMonitorTargets: [],
+    tiktokDiscoveredAccounts: []
   };
 
   function $(id) { return document.getElementById(id); }
@@ -120,6 +124,165 @@
     state.autoResumeJobs = {};
   }
 
+  function tiktokMonitorStorageKey() {
+    return 'tiktok_monitor_targets_v1';
+  }
+
+  function loadTikTokMonitorTargets() {
+    try {
+      var rows = JSON.parse(localStorage.getItem(tiktokMonitorStorageKey()) || '[]');
+      state.tiktokMonitorTargets = Array.isArray(rows) ? rows.filter(function(row) { return row && row.handle; }) : [];
+    } catch (e) {
+      state.tiktokMonitorTargets = [];
+    }
+    renderTikTokMonitorTargets();
+  }
+
+  function saveTikTokMonitorTargets() {
+    try { localStorage.setItem(tiktokMonitorStorageKey(), JSON.stringify(state.tiktokMonitorTargets || [])); } catch (e) {}
+  }
+
+  function syncTikTokAccountsInput() {
+    var input = $('slAccountsInput');
+    if (!input) return;
+    var handles = (state.tiktokMonitorTargets || []).filter(function(row) { return row.selected; }).map(function(row) { return row.handle; });
+    input.value = handles.join('\n');
+  }
+
+  function renderTikTokMonitorTargets() {
+    var host = $('slMonitorList');
+    if (!host) return;
+    var rows = state.tiktokMonitorTargets || [];
+    if (!rows.length) {
+      host.innerHTML = '<div class="sl-meta">还没有监控同行。先用上面的拓词搜索，把同行加入监控。</div>';
+      return;
+    }
+    host.innerHTML = rows.map(function(row) {
+      var followers = Number(row.followers || 0);
+      var meta = ['@' + row.handle, followers ? (Math.round(followers / 100) / 10) + 'K 粉丝' : '', row.matched_keywords && row.matched_keywords.length ? '来自 ' + row.matched_keywords.slice(0, 2).join('、') : ''].filter(Boolean).join(' · ');
+      return '<div class="sl-monitor-row"><input type="checkbox" data-monitor-toggle="' + esc(row.handle) + '" ' + (row.selected ? 'checked' : '') + '><div class="sl-row-main"><strong>' + esc(row.name || row.handle) + '</strong><span class="sl-meta">' + esc(meta) + '</span></div><button type="button" class="btn btn-ghost btn-sm" data-remove-monitor="' + esc(row.handle) + '">移除</button></div>';
+    }).join('');
+    host.querySelectorAll('[data-monitor-toggle]').forEach(function(input) {
+      input.addEventListener('change', function() {
+        var handle = input.getAttribute('data-monitor-toggle');
+        state.tiktokMonitorTargets = state.tiktokMonitorTargets.map(function(row) {
+          if (row.handle === handle) row.selected = !!input.checked;
+          return row;
+        });
+        saveTikTokMonitorTargets();
+        syncTikTokAccountsInput();
+      });
+    });
+    host.querySelectorAll('[data-remove-monitor]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var handle = btn.getAttribute('data-remove-monitor');
+        state.tiktokMonitorTargets = state.tiktokMonitorTargets.filter(function(row) { return row.handle !== handle; });
+        saveTikTokMonitorTargets();
+        renderTikTokMonitorTargets();
+        syncTikTokAccountsInput();
+      });
+    });
+  }
+
+  function addTikTokMonitorTarget(account) {
+    account = account || {};
+    var handle = String(account.handle || account.unique_id || '').replace(/^@/, '').trim();
+    if (!handle) return;
+    var exists = (state.tiktokMonitorTargets || []).some(function(row) { return row.handle === handle; });
+    if (!exists) {
+      state.tiktokMonitorTargets.unshift({
+        handle: handle,
+        name: account.name || handle,
+        followers: Number(account.followers || 0),
+        avatar_url: account.avatar_url || '',
+        matched_keywords: Array.isArray(account.matched_keywords) ? account.matched_keywords : [],
+        selected: true,
+        added_at: new Date().toISOString()
+      });
+      saveTikTokMonitorTargets();
+    }
+    renderTikTokMonitorTargets();
+    syncTikTokAccountsInput();
+    setMsg('已加入监控：@' + handle, false);
+  }
+
+  function renderTikTokKeywordChips() {
+    var host = $('slKeywordChips');
+    if (!host) return;
+    var words = state.tiktokKeywords || [];
+    if (!words.length) {
+      host.innerHTML = '<span class="sl-meta">输入种子词后点「AI 拓词」，会生成可勾选的关键词。</span>';
+      return;
+    }
+    host.innerHTML = words.map(function(word) {
+      return '<button type="button" class="sl-keyword-chip' + (state.tiktokSelectedKeywords[word] ? ' is-active' : '') + '" data-keyword-chip="' + esc(word) + '">' + esc(word) + '</button>';
+    }).join('');
+    host.querySelectorAll('[data-keyword-chip]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var word = btn.getAttribute('data-keyword-chip');
+        if (state.tiktokSelectedKeywords[word]) delete state.tiktokSelectedKeywords[word];
+        else state.tiktokSelectedKeywords[word] = true;
+        renderTikTokKeywordChips();
+      });
+    });
+  }
+
+  function renderTikTokDiscoverList(accounts) {
+    var host = $('slDiscoverList');
+    if (!host) return;
+    state.tiktokDiscoveredAccounts = Array.isArray(accounts) ? accounts : [];
+    if (!state.tiktokDiscoveredAccounts.length) {
+      host.innerHTML = '<div class="sl-meta">还没有发现同行。先勾选关键词，再点「搜索同行」。</div>';
+      return;
+    }
+    host.innerHTML = state.tiktokDiscoveredAccounts.map(function(account) {
+      var handle = String(account.handle || account.unique_id || '').replace(/^@/, '');
+      var watched = (state.tiktokMonitorTargets || []).some(function(row) { return row.handle === handle; });
+      var followers = Number(account.followers || 0);
+      return '<div class="sl-discover-row"><div class="sl-row-main"><strong>' + esc(account.name || handle) + '</strong><span class="sl-meta">@' + esc(handle) + (followers ? ' · ' + (Math.round(followers / 100) / 10) + 'K 粉丝' : '') + (account.matched_keywords && account.matched_keywords.length ? ' · ' + esc(account.matched_keywords.slice(0, 2).join('、')) : '') + '</span></div><button type="button" class="btn btn-ghost btn-sm" data-add-competitor="' + esc(handle) + '" ' + (watched ? 'disabled' : '') + '>' + (watched ? '已监控' : '加入监控') + '</button></div>';
+    }).join('');
+    host.querySelectorAll('[data-add-competitor]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var handle = btn.getAttribute('data-add-competitor');
+        var account = state.tiktokDiscoveredAccounts.filter(function(row) { return String(row.handle || row.unique_id || '').replace(/^@/, '') === handle; })[0];
+        addTikTokMonitorTarget(account);
+      });
+    });
+  }
+  function expandTikTokKeywords() {
+    var seed = ($('slSeedKeyword') || {}).value || '';
+    seed = String(seed).trim();
+    if (!seed) { setMsg('请输入种子关键词。', true); return; }
+    var btn = $('slExpandKeywordsBtn');
+    if (btn) btn.disabled = true;
+    setMsg('正在拓词...', false);
+    apiJson('/api/social-leads/tiktok/expand-keywords', { method: 'POST', body: { seed_keyword: seed, count: 10 } })
+      .then(function(data) {
+        state.tiktokKeywords = Array.isArray(data.keywords) ? data.keywords : [];
+        state.tiktokSelectedKeywords = {};
+        state.tiktokKeywords.forEach(function(word) { state.tiktokSelectedKeywords[word] = true; });
+        renderTikTokKeywordChips();
+        setMsg('拓词完成，共 ' + state.tiktokKeywords.length + ' 个关键词。', false);
+      })
+      .catch(function(err) { setMsg(err.message || '拓词失败', true); })
+      .finally(function() { if (btn) btn.disabled = false; });
+  }
+
+  function discoverTikTokCompetitors() {
+    var words = Object.keys(state.tiktokSelectedKeywords || {});
+    if (!words.length) words = (state.tiktokKeywords || []).slice(0, 5);
+    if (!words.length) { setMsg('请先拓词并选择至少一个关键词。', true); return; }
+    var btn = $('slDiscoverBtn');
+    if (btn) btn.disabled = true;
+    setMsg('正在按关键词搜索同行...', false);
+    apiJson('/api/social-leads/tiktok/discover-competitors', { method: 'POST', body: { keywords: words, limit: 20 } })
+      .then(function(data) {
+        renderTikTokDiscoverList(data.accounts || []);
+        setMsg('发现 ' + ((data.accounts || []).length) + ' 个同行账号。', false);
+      })
+      .catch(function(err) { setMsg(err.message || '搜索同行失败', true); })
+      .finally(function() { if (btn) btn.disabled = false; });
+  }
   function syncPlatform(value) {
     var next = normalizePlatform(value || window.__socialLeadsPlatform || state.platform || 'reddit') || 'reddit';
     state.platform = next;
@@ -131,6 +294,8 @@
     }
     var isTikTok = state.platform === 'tiktok';
     if ($('slTikTokHero')) $('slTikTokHero').style.display = isTikTok ? '' : 'none';
+    if ($('slTikTokDiscovery')) $('slTikTokDiscovery').style.display = isTikTok ? '' : 'none';
+    if (isTikTok) { loadTikTokMonitorTargets(); renderTikTokKeywordChips(); renderTikTokDiscoverList(state.tiktokDiscoveredAccounts); }
     if ($('slTikTokLimits')) $('slTikTokLimits').style.display = isTikTok ? '' : 'none';
     if ($('slTemplateCard')) $('slTemplateCard').style.display = isTikTok ? 'none' : '';
     if ($('slCreateTemplateBtn')) $('slCreateTemplateBtn').style.display = isTikTok ? 'none' : '';
@@ -193,8 +358,8 @@
       title: ($('slJobTitleInput') || {}).value || '',
       keywords: keywords,
       intent_prompt: isTikTok ? keywords.join('\n') : '',
-      source_keywords: !isTikTok && (state.platform === 'x') && mode === 'community' ? sourceValues : [],
-      accounts: mode === 'account' ? lines(($('slAccountsInput') || {}).value) : [],
+      source_keywords: isTikTok ? Object.keys(state.tiktokSelectedKeywords || {}) : ((state.platform === 'x') && mode === 'community' ? sourceValues : []),
+      accounts: isTikTok ? Array.from(new Set((state.tiktokMonitorTargets || []).filter(function(row) { return row.selected; }).map(function(row) { return row.handle; }).concat(lines(($('slAccountsInput') || {}).value)))) : (mode === 'account' ? lines(($('slAccountsInput') || {}).value) : []),
       post_ids: [],
       communities: state.platform === 'reddit' && mode === 'community' ? sourceValues : [],
       country: '',
@@ -591,8 +756,8 @@
       setMsg('Reddit 账号和社区请选择一种并填写。', true);
       return;
     }
-    if (state.platform === 'tiktok' && !body.accounts.length) {
-      setMsg('请填写至少一个 TikTok 同行主页或 @unique_id。', true);
+    if (state.platform === 'tiktok' && !body.accounts.length && !body.source_keywords.length) {
+      setMsg('请选择监控同行，或先拓词并勾选关键词。', true);
       return;
     }
     if (state.platform === 'x' && !body.accounts.length && !body.source_keywords.length) {
@@ -1003,6 +1168,21 @@
   }
 
   function bindEvents() {
+    var expandBtn = $('slExpandKeywordsBtn');
+    if (expandBtn && expandBtn.dataset.bound !== '1') { expandBtn.dataset.bound = '1'; expandBtn.addEventListener('click', expandTikTokKeywords); }
+    var discoverBtn = $('slDiscoverBtn');
+    if (discoverBtn && discoverBtn.dataset.bound !== '1') { discoverBtn.dataset.bound = '1'; discoverBtn.addEventListener('click', discoverTikTokCompetitors); }
+    var clearMonitorBtn = $('slClearMonitorBtn');
+    if (clearMonitorBtn && clearMonitorBtn.dataset.bound !== '1') {
+      clearMonitorBtn.dataset.bound = '1';
+      clearMonitorBtn.addEventListener('click', function() {
+        state.tiktokMonitorTargets = [];
+        saveTikTokMonitorTargets();
+        renderTikTokMonitorTargets();
+        syncTikTokAccountsInput();
+        setMsg('监控同行已清空。', false);
+      });
+    }
     document.querySelectorAll('#content-social-leads [data-sl-tab]').forEach(function(btn) {
       if (btn.dataset.socialLeadsTabBound === '1') return;
       btn.dataset.socialLeadsTabBound = '1';
