@@ -9783,9 +9783,14 @@ async def _post_local_api_json(
     try:
         data = resp.json() if resp.content else {}
     except Exception:
-        data = {"detail": (resp.text or "")[:1000]}
+        data = {"detail": _friendly_cloud_error(resp.status_code, resp.text)}
     if resp.status_code >= 400:
-        raise RuntimeError(str(data.get("detail") or data.get("message") or data or resp.text)[:500])
+        raise RuntimeError(
+            _friendly_cloud_error(
+                resp.status_code,
+                data.get("detail") or data.get("message") or data or resp.text,
+            )
+        )
     if isinstance(data, dict) and data.get("ok") is False:
         raise RuntimeError(str(data.get("detail") or data.get("error") or data.get("message") or data)[:500])
     return data if isinstance(data, dict) else {"result": data}
@@ -9874,9 +9879,14 @@ async def _post_local_api_form(
     try:
         data = resp.json() if resp.content else {}
     except Exception:
-        data = {"detail": (resp.text or "")[:1000]}
+        data = {"detail": _friendly_cloud_error(resp.status_code, resp.text)}
     if resp.status_code >= 400:
-        raise RuntimeError(str(data.get("detail") or data.get("message") or data or resp.text)[:500])
+        raise RuntimeError(
+            _friendly_cloud_error(
+                resp.status_code,
+                data.get("detail") or data.get("message") or data or resp.text,
+            )
+        )
     if isinstance(data, dict) and data.get("ok") is False:
         raise RuntimeError(str(data.get("detail") or data.get("error") or data.get("message") or data)[:500])
     return data if isinstance(data, dict) else {"result": data}
@@ -9897,9 +9907,14 @@ async def _get_local_api_json(
     try:
         data = resp.json() if resp.content else {}
     except Exception:
-        data = {"detail": (resp.text or "")[:1000]}
+        data = {"detail": _friendly_cloud_error(resp.status_code, resp.text)}
     if resp.status_code >= 400:
-        raise RuntimeError(str(data.get("detail") or data.get("message") or data or resp.text)[:500])
+        raise RuntimeError(
+            _friendly_cloud_error(
+                resp.status_code,
+                data.get("detail") or data.get("message") or data or resp.text,
+            )
+        )
     if isinstance(data, dict) and data.get("ok") is False:
         raise RuntimeError(str(data.get("detail") or data.get("error") or data.get("message") or data)[:500])
     return data if isinstance(data, dict) else {"result": data}
@@ -10230,6 +10245,20 @@ def _is_transient_poll_error(exc: BaseException) -> bool:
     return isinstance(exc, RuntimeError) and "不可达" in str(exc or "")
 
 
+_CLOUD_HTML_ERROR_RE = re.compile(
+    r"<(!doctype|html|head|body|title)\b|bad gateway|gateway time-?out|service unavailable",
+    re.I,
+)
+
+
+def _friendly_cloud_error(status: int, text: Any) -> str:
+    """云端/网关返回 HTML 错误页时，别把 HTML 原样抛给界面。"""
+    raw = str(text or "").strip()
+    if status in (502, 503, 504) or _CLOUD_HTML_ERROR_RE.search(raw):
+        return f"云端服务暂时不可用（HTTP {status}），请稍后重试"
+    return raw[:500]
+
+
 async def _post_cloud_api_json(
     path: str,
     body: Dict[str, Any],
@@ -10246,9 +10275,14 @@ async def _post_cloud_api_json(
     try:
         data = resp.json() if resp.content else {}
     except Exception:
-        data = {"detail": (resp.text or "")[:1000]}
+        data = {"detail": _friendly_cloud_error(resp.status_code, resp.text)}
     if resp.status_code >= 400:
-        raise RuntimeError(str(data.get("detail") or data.get("message") or data or resp.text)[:500])
+        raise RuntimeError(
+            _friendly_cloud_error(
+                resp.status_code,
+                data.get("detail") or data.get("message") or data or resp.text,
+            )
+        )
     if isinstance(data, dict) and data.get("ok") is False:
         raise RuntimeError(str(data.get("detail") or data.get("error") or data.get("message") or data)[:500])
     return data if isinstance(data, dict) else {"result": data}
@@ -10349,9 +10383,14 @@ async def _get_cloud_api_json(
     try:
         data = resp.json() if resp.content else {}
     except Exception:
-        data = {"detail": (resp.text or "")[:1000]}
+        data = {"detail": _friendly_cloud_error(resp.status_code, resp.text)}
     if resp.status_code >= 400:
-        raise RuntimeError(str(data.get("detail") or data.get("message") or data or resp.text)[:500])
+        raise RuntimeError(
+            _friendly_cloud_error(
+                resp.status_code,
+                data.get("detail") or data.get("message") or data or resp.text,
+            )
+        )
     return data if isinstance(data, dict) else {"result": data}
 
 
@@ -12057,7 +12096,7 @@ async def _run_shanjian_digital_human_workflow(
         try:
             tts_data = tts_resp.json() if tts_resp.content else {}
         except Exception:
-            tts_data = {"detail": (tts_resp.text or "")[:1000]}
+            tts_data = {"detail": _friendly_cloud_error(tts_resp.status_code, tts_resp.text)}
         if not isinstance(tts_data, dict):
             tts_data = {"result": tts_data}
         if tts_resp.status_code >= 400 or tts_data.get("ok") is False:
