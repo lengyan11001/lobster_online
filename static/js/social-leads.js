@@ -618,7 +618,7 @@
       renderTikTokVideoResults(state.tiktokVideoResults);
       renderTikTokSelectedVideos();
       loadTikTokVideoHistory();
-    } else if (state.tab === 'keyword-search' || state.tab === 'discover') {
+    } else if (state.tab === 'keyword-search' || state.tab === 'discover' || state.tab === 'browser') {
       switchTab('new');
     }
     if ($('slTikTokLimits')) $('slTikTokLimits').style.display = isTikTok ? '' : 'none';
