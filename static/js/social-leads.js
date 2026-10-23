@@ -1,7 +1,7 @@
 (function() {
   var state = {
     platform: 'reddit',
-    tab: 'new',
+    tab: '',
     jobs: [],
     activeJobId: '',
     activeOutputId: '',
@@ -15,7 +15,10 @@
     tiktokKeywords: [],
     tiktokSelectedKeywords: {},
     tiktokMonitorTargets: [],
-    tiktokDiscoveredAccounts: []
+    tiktokDiscoveredAccounts: [],
+    tiktokVideoResults: [],
+    tiktokSelectedVideos: [],
+    tiktokVideoKeyword: ''
   };
 
   function $(id) { return document.getElementById(id); }
@@ -254,7 +257,9 @@
     seed = String(seed).trim();
     if (!seed) { setMsg('请输入种子关键词。', true); return; }
     var btn = $('slExpandKeywordsBtn');
-    if (btn) btn.disabled = true;
+    if (btn) { btn.disabled = true; btn.textContent = '拓词中…'; }
+    var status = $('slDiscoverStatus');
+    if (status) status.textContent = '正在生成相关关键词…';
     setMsg('正在拓词...', false);
     apiJson('/api/social-leads/tiktok/expand-keywords', { method: 'POST', body: { seed_keyword: seed, count: 10 } })
       .then(function(data) {
@@ -265,7 +270,7 @@
         setMsg('拓词完成，共 ' + state.tiktokKeywords.length + ' 个关键词。', false);
       })
       .catch(function(err) { setMsg(err.message || '拓词失败', true); })
-      .finally(function() { if (btn) btn.disabled = false; });
+      .finally(function() { if (btn) { btn.disabled = false; btn.textContent = 'AI 拓词'; } });
   }
 
   function discoverTikTokCompetitors() {
@@ -273,16 +278,165 @@
     if (!words.length) words = (state.tiktokKeywords || []).slice(0, 5);
     if (!words.length) { setMsg('请先拓词并选择至少一个关键词。', true); return; }
     var btn = $('slDiscoverBtn');
-    if (btn) btn.disabled = true;
+    if (btn) { btn.disabled = true; btn.textContent = '搜索中…'; }
+    var status = $('slDiscoverStatus');
+    if (status) status.textContent = '正在按关键词搜索同行，通常需要几秒…';
     setMsg('正在按关键词搜索同行...', false);
     apiJson('/api/social-leads/tiktok/discover-competitors', { method: 'POST', body: { keywords: words, limit: 20 } })
       .then(function(data) {
-        renderTikTokDiscoverList(data.accounts || []);
-        setMsg('发现 ' + ((data.accounts || []).length) + ' 个同行账号。', false);
+        var accounts = data.accounts || [];
+        renderTikTokDiscoverList(accounts);
+        if (status) status.textContent = accounts.length ? ('找到 ' + accounts.length + ' 个同行，点「加入监控」后可在任务设置里批量采集。') : '没有找到同行，换个关键词再试。';
+        setMsg(accounts.length ? ('发现 ' + accounts.length + ' 个同行账号。') : '没有找到同行，换个关键词再试。', !accounts.length);
       })
-      .catch(function(err) { setMsg(err.message || '搜索同行失败', true); })
-      .finally(function() { if (btn) btn.disabled = false; });
+      .catch(function(err) { if (status) status.textContent = '搜索失败：' + (err.message || '请稍后重试'); setMsg(err.message || '搜索同行失败', true); })
+      .finally(function() { if (btn) { btn.disabled = false; btn.textContent = '搜索同行'; } });
   }
+  function isVideoSelected(id) {
+    id = String(id || '');
+    return (state.tiktokSelectedVideos || []).some(function(item) { return String(item.aweme_id || '') === id; });
+  }
+
+  function videoSelectedIds() {
+    return (state.tiktokSelectedVideos || []).map(function(item) { return String(item.aweme_id || ''); }).filter(Boolean);
+  }
+
+  function renderTikTokSelectedVideos() {
+    var rows = state.tiktokSelectedVideos || [];
+    var count = $('slVideoSelectedCount');
+    if (count) count.textContent = '已选 ' + rows.length + ' 条视频';
+    var useBtn = $('slUseVideosBtn');
+    if (useBtn) {
+      useBtn.disabled = !rows.length;
+      useBtn.textContent = rows.length ? ('用所选 ' + rows.length + ' 条视频建任务') : '用所选视频建任务';
+    }
+    var hint = $('slSelectedVideosHint');
+    if (hint) hint.style.display = rows.length ? '' : 'none';
+    var list = $('slSelectedVideoList');
+    if (list) {
+      list.innerHTML = rows.map(function(item) {
+        return '<span class="sl-selected-video-chip">' + esc(compactText(item.title || item.aweme_id, 26))
+          + '<button type="button" data-remove-video="' + esc(item.aweme_id) + '" aria-label="移除">×</button></span>';
+      }).join('');
+      list.querySelectorAll('[data-remove-video]').forEach(function(btn) {
+        btn.addEventListener('click', function() { removeSelectedVideo(btn.getAttribute('data-remove-video')); });
+      });
+    }
+    document.querySelectorAll('#content-social-leads [data-video-pick]').forEach(function(card) {
+      var selected = isVideoSelected(card.getAttribute('data-video-pick'));
+      card.classList.toggle('is-selected', selected);
+      var box = card.querySelector('input[type="checkbox"]');
+      if (box) box.checked = selected;
+    });
+  }
+
+  function addSelectedVideo(video) {
+    video = video || {};
+    var id = String(video.aweme_id || '').trim();
+    if (!id || isVideoSelected(id)) return;
+    if ((state.tiktokSelectedVideos || []).length >= 30) {
+      setMsg('一次最多选择 30 条视频。', true);
+      return;
+    }
+    state.tiktokSelectedVideos.push(video);
+    renderTikTokSelectedVideos();
+  }
+
+  function removeSelectedVideo(id) {
+    id = String(id || '');
+    state.tiktokSelectedVideos = (state.tiktokSelectedVideos || []).filter(function(item) { return String(item.aweme_id || '') !== id; });
+    renderTikTokSelectedVideos();
+  }
+
+  function renderTikTokVideoResults(videos) {
+    var host = $('slVideoResults');
+    if (!host) return;
+    videos = Array.isArray(videos) ? videos : [];
+    if (!videos.length) {
+      host.innerHTML = state.tiktokVideoKeyword
+        ? '<div class="sl-meta">没有搜到视频。换个关键词再试，或去「拓词找同行」按同行采集。</div>'
+        : '<div class="sl-meta">还没有搜索结果。输入关键词后点「搜索视频」。</div>';
+      return;
+    }
+    host.innerHTML = videos.map(function(video) {
+      var id = String(video.aweme_id || '');
+      var cover = video.cover_url
+        ? '<img src="' + esc(video.cover_url) + '" alt="" loading="lazy" referrerpolicy="no-referrer">'
+        : '<div class="sl-video-noimg">无封面</div>';
+      var stats = [['播放', video.play_count], ['点赞', video.digg_count], ['评论', video.comment_count]].filter(function(pair) {
+        return Number(pair[1]) > 0;
+      }).map(function(pair) { return pair[0] + ' ' + Number(pair[1]); }).join(' · ');
+      return '<div class="sl-video-card' + (isVideoSelected(id) ? ' is-selected' : '') + '" data-video-pick="' + esc(id) + '">'
+        + '<div class="sl-video-cover">' + cover
+        + '<label class="sl-video-check"><input type="checkbox" ' + (isVideoSelected(id) ? 'checked' : '') + '></label></div>'
+        + '<div class="sl-video-body"><strong>' + esc(compactText(video.title || '(无标题)', 70)) + '</strong>'
+        + '<span class="sl-meta">@' + esc(video.author_handle || '') + (video.author_name ? ' · ' + esc(video.author_name) : '') + '</span>'
+        + '<span class="sl-video-stats">' + esc(stats || '暂无互动数据') + '</span>'
+        + (video.url ? '<a href="' + esc(video.url) + '" target="_blank" rel="noopener">打开视频</a>' : '')
+        + '</div></div>';
+    }).join('');
+    host.querySelectorAll('[data-video-pick]').forEach(function(card) {
+      var id = card.getAttribute('data-video-pick');
+      var video = videos.filter(function(item) { return String(item.aweme_id || '') === id; })[0];
+      var box = card.querySelector('input[type="checkbox"]');
+      if (box) {
+        box.addEventListener('change', function(evt) {
+          evt.stopPropagation();
+          if (box.checked) addSelectedVideo(video);
+          else removeSelectedVideo(id);
+        });
+      }
+      card.addEventListener('click', function(evt) {
+        if (evt.target && evt.target.closest && (evt.target.closest('a') || evt.target.closest('label') || evt.target.tagName === 'INPUT')) return;
+        if (isVideoSelected(id)) removeSelectedVideo(id);
+        else addSelectedVideo(video);
+      });
+    });
+  }
+
+  function searchTikTokVideos() {
+    var keyword = String(($('slVideoKeyword') || {}).value || '').trim();
+    if (!keyword) { setMsg('请输入要搜索的视频关键词。', true); return; }
+    var btn = $('slSearchVideosBtn');
+    var status = $('slVideoSearchStatus');
+    if (btn) { btn.disabled = true; btn.textContent = '搜索中…'; }
+    if (status) status.textContent = '正在搜索 TikTok 视频，请稍候…';
+    apiJson('/api/social-leads/tiktok/search-videos', { method: 'POST', body: { keyword: keyword, count: 20 } })
+      .then(function(data) {
+        var videos = Array.isArray(data.videos) ? data.videos : [];
+        state.tiktokVideoKeyword = keyword;
+        state.tiktokVideoResults = videos;
+        renderTikTokVideoResults(videos);
+        if (status) status.textContent = videos.length
+          ? ('关键词「' + keyword + '」找到 ' + videos.length + ' 条视频，勾选后点下面按钮建任务。')
+          : ('关键词「' + keyword + '」没有搜到视频，换个词再试。');
+        setMsg(videos.length ? ('找到 ' + videos.length + ' 条视频。') : '没有搜到视频，换个关键词试试。', !videos.length);
+      })
+      .catch(function(err) {
+        if (status) status.textContent = '搜索失败：' + (err.message || '请稍后重试');
+        setMsg(err.message || '搜索视频失败', true);
+      })
+      .finally(function() {
+        if (btn) { btn.disabled = false; btn.textContent = '搜索视频'; }
+      });
+  }
+
+  function useSelectedTikTokVideos() {
+    var rows = state.tiktokSelectedVideos || [];
+    if (!rows.length) { setMsg('请先勾选要分析的视频。', true); return; }
+    switchTab('new');
+    renderTikTokSelectedVideos();
+    setMsg('已选 ' + rows.length + ' 条视频。填写客户标准和采集数量后开始分析。', false);
+    var kw = $('slKeywordsInput');
+    if (kw && !String(kw.value || '').trim()) kw.focus();
+  }
+
+  function clearSelectedTikTokVideos() {
+    state.tiktokSelectedVideos = [];
+    renderTikTokSelectedVideos();
+    setMsg('已清空所选视频。', false);
+  }
+
   function syncPlatform(value) {
     var next = normalizePlatform(value || window.__socialLeadsPlatform || state.platform || 'reddit') || 'reddit';
     state.platform = next;
@@ -294,8 +448,18 @@
     }
     var isTikTok = state.platform === 'tiktok';
     if ($('slTikTokHero')) $('slTikTokHero').style.display = isTikTok ? '' : 'none';
-    if ($('slTikTokDiscovery')) $('slTikTokDiscovery').style.display = isTikTok ? '' : 'none';
-    if (isTikTok) { loadTikTokMonitorTargets(); renderTikTokKeywordChips(); renderTikTokDiscoverList(state.tiktokDiscoveredAccounts); }
+    document.querySelectorAll('#content-social-leads [data-tiktok-only]').forEach(function(el) {
+      el.style.display = isTikTok ? '' : 'none';
+    });
+    if (isTikTok) {
+      loadTikTokMonitorTargets();
+      renderTikTokKeywordChips();
+      renderTikTokDiscoverList(state.tiktokDiscoveredAccounts);
+      renderTikTokVideoResults(state.tiktokVideoResults);
+      renderTikTokSelectedVideos();
+    } else if (state.tab === 'keyword-search' || state.tab === 'discover') {
+      switchTab('new');
+    }
     if ($('slTikTokLimits')) $('slTikTokLimits').style.display = isTikTok ? '' : 'none';
     if ($('slTemplateCard')) $('slTemplateCard').style.display = isTikTok ? 'none' : '';
     if ($('slCreateTemplateBtn')) $('slCreateTemplateBtn').style.display = isTikTok ? 'none' : '';
@@ -360,7 +524,7 @@
       intent_prompt: isTikTok ? keywords.join('\n') : '',
       source_keywords: isTikTok ? Object.keys(state.tiktokSelectedKeywords || {}) : ((state.platform === 'x') && mode === 'community' ? sourceValues : []),
       accounts: isTikTok ? Array.from(new Set((state.tiktokMonitorTargets || []).filter(function(row) { return row.selected; }).map(function(row) { return row.handle; }).concat(lines(($('slAccountsInput') || {}).value)))) : (mode === 'account' ? lines(($('slAccountsInput') || {}).value) : []),
-      post_ids: [],
+      post_ids: isTikTok ? videoSelectedIds() : [],
       communities: state.platform === 'reddit' && mode === 'community' ? sourceValues : [],
       country: '',
       search_type: '',
@@ -756,8 +920,8 @@
       setMsg('Reddit 账号和社区请选择一种并填写。', true);
       return;
     }
-    if (state.platform === 'tiktok' && !body.accounts.length && !body.source_keywords.length) {
-      setMsg('请选择监控同行，或先拓词并勾选关键词。', true);
+    if (state.platform === 'tiktok' && !body.accounts.length && !body.source_keywords.length && !body.post_ids.length) {
+      setMsg('请选择要分析的视频、监控同行，或先拓词并勾选关键词。', true);
       return;
     }
     if (state.platform === 'x' && !body.accounts.length && !body.source_keywords.length) {
@@ -829,7 +993,7 @@
         renderJobs();
         renderActiveJob();
         loadJobDetail(state.activeJobId);
-        switchTab('runs');
+        switchTab('run-detail');
       });
     });
     renderActiveJob();
@@ -851,50 +1015,103 @@
     if (job && jobPlatform(job) !== state.platform) job = null;
     var bar = $('slProgressBar');
     if (bar) bar.style.width = Math.max(0, Math.min(100, Number(job && job.progress || 0))) + '%';
+    var summaryHtml = '';
+    if (!job) {
+      summaryHtml = '<div class="sl-meta">请选择左侧任务。</div>';
+    } else {
+      var leads = buildLeads(job);
+      summaryHtml = '<div class="sl-box"><h4>' + esc(job.title || (platformLabel() + '线索采集')) + '</h4>'
+        + '<div class="sl-badges">' + statusBadge(job.status) + '<span class="sl-badge">' + esc(Number(job.progress || 0)) + '%</span><span class="sl-badge">' + esc(leads.length) + ' 客户</span><span class="sl-badge">' + esc((job.steps || []).length) + ' 步</span></div>'
+        + (job.error ? '<div class="sl-source-desc" style="color:#be123c;">' + esc(job.error) + '</div>' : '')
+        + '<div class="sl-meta">创建于 ' + esc(fmtTime(job.created_at)) + '</div></div>';
+    }
+    var summary = $('slRunSummary');
+    if (summary) summary.innerHTML = summaryHtml;
+    var runHead = $('slRunHead');
+    if (runHead) runHead.innerHTML = summaryHtml;
+    var openBtn = $('slOpenRunDetailBtn');
+    if (openBtn) openBtn.disabled = !job;
     renderSteps(job);
     renderLeads(job);
     renderOutputs(job);
   }
-
   function renderSteps(job) {
     var host = $('slStepList');
     if (!host) return;
     if (!job) {
       host.innerHTML = '<div class="sl-meta">请选择一个任务。</div>';
+      state.stepsDigest = '';
       return;
     }
-    host.innerHTML = (job.steps || []).map(function(step, idx) {
-      var st = step.status || 'pending';
-      var active = step.key === state.activeStepKey ? ' is-active' : '';
-      var sourceCount = stepSources(job, step.key).length;
-      return '<div class="sl-step is-' + esc(st) + active + '" data-sl-step-key="' + esc(step.key || '') + '">'
-        + '<span class="sl-step-dot">' + esc(idx + 1) + '</span>'
-        + '<div><strong>' + esc(step.label || step.key) + '</strong>'
-        + '<span class="sl-meta">' + esc(step.detail || '') + '</span>'
-        + (sourceCount ? '<span class="sl-meta">已保存 ' + esc(sourceCount) + ' 条采集明细，点击查看</span>' : '')
-        + (step.error ? '<span class="sl-meta" style="color:#be123c;">' + esc(step.error) + '</span>' : '')
-        + '</div><div class="sl-row-actions">' + statusBadge(st)
-        + '</div></div>';
-    }).join('');
-    var detail = $('slStepDetail');
-    if (detail) {
-      if ((job.steps || []).length && !job.steps.some(function(step) { return step.key === state.activeStepKey; })) {
-        state.activeStepKey = (job.steps || [])[0].key || '';
-      }
-      var selected = (job.steps || []).filter(function(step) { return step.key === state.activeStepKey; })[0] || null;
-      var rows = stepSources(job, selected && selected.key);
-      detail.innerHTML = selected
-        ? '<div class="sl-box"><h4>' + esc(selected.label || selected.key) + '</h4><span class="sl-meta">' + esc(selected.detail || '') + '</span><div class="sl-badges">' + statusBadge(selected.status || 'pending') + '<span class="sl-badge">' + esc(rows.length) + ' 条明细</span></div></div>' + renderSourceCards(rows, '这一步还没有保存采集明细。')
-        : '<div class="sl-meta">请选择左侧步骤。</div>';
+    var steps = Array.isArray(job.steps) ? job.steps : [];
+    if (steps.length && !steps.some(function(step) { return step.key === state.activeStepKey; })) {
+      state.activeStepKey = steps[0].key || '';
     }
+    var digest = JSON.stringify({ active: state.activeStepKey, steps: steps.map(function(step) {
+      return [step.key, step.status, step.error, stepSources(job, step.key).length];
+    }) });
+    if (state.stepsDigest !== digest) {
+      state.stepsDigest = digest;
+      host.innerHTML = steps.map(function(step, idx) {
+        var st = step.status || 'pending';
+        var active = step.key === state.activeStepKey ? ' is-active' : '';
+        var sourceCount = stepSources(job, step.key).length;
+        return '<div class="sl-step is-' + esc(st) + active + '" data-sl-step-key="' + esc(step.key || '') + '">'
+          + '<span class="sl-step-dot">' + esc(idx + 1) + '</span>'
+          + '<div><strong>' + esc(step.label || step.key) + '</strong>'
+          + '<span class="sl-meta" data-step-detail>' + esc(step.detail || '') + '</span>'
+          + (step.error ? '<span class="sl-meta" style="color:#be123c;">' + esc(step.error) + '</span>' : '')
+          + '</div><div class="sl-row-actions">' + statusBadge(st)
+          + '<button type="button" class="btn btn-ghost btn-sm" data-open-step="' + esc(step.key || '') + '">查看明细' + (sourceCount ? ' (' + esc(sourceCount) + ')' : '') + '</button>'
+          + '</div></div>';
+      }).join('');
+    }
+    // 进度文案单独更新，避免轮询时整段列表重绘造成闪烁和点击丢失
     host.querySelectorAll('[data-sl-step-key]').forEach(function(node) {
-      node.addEventListener('click', function(e) {
-        state.activeStepKey = node.getAttribute('data-sl-step-key') || '';
-        renderSteps(activeJob());
-      });
+      var key = node.getAttribute('data-sl-step-key');
+      var step = steps.filter(function(item) { return item.key === key; })[0];
+      var detail = node.querySelector('[data-step-detail]');
+      if (step && detail) detail.textContent = step.detail || '';
     });
   }
 
+  function openStepDetail(stepKey) {
+    var job = activeJob();
+    if (!job) return;
+    state.activeStepKey = stepKey || state.activeStepKey || '';
+    var steps = Array.isArray(job.steps) ? job.steps : [];
+    var selected = steps.filter(function(step) { return step.key === state.activeStepKey; })[0] || null;
+    var rows = stepSources(job, selected && selected.key);
+    var modal = $('slStepModal');
+    if (!modal) return;
+    var title = $('slStepModalTitle');
+    var meta = $('slStepModalMeta');
+    var body = $('slStepModalBody');
+    if (title) title.textContent = selected ? (selected.label || selected.key || '步骤明细') : '步骤明细';
+    if (meta) meta.innerHTML = selected
+      ? '<span class="sl-badge">' + esc(rows.length) + ' 条明细</span> ' + esc(selected.detail || '')
+      : '请选择一个步骤。';
+    if (body) body.innerHTML = renderSourceCards(rows, '这一步还没有保存采集明细。任务执行中会持续写入，稍后刷新再看。');
+    modal.hidden = false;
+    document.body.classList.add('sl-modal-open');
+  }
+
+  function closeStepDetail() {
+    var modal = $('slStepModal');
+    if (modal) modal.hidden = true;
+    document.body.classList.remove('sl-modal-open');
+  }
+
+  function renderStepDetail(job) {
+    var detail = $('slStepDetail');
+    if (!detail) return;
+    var steps = job && Array.isArray(job.steps) ? job.steps : [];
+    var selected = steps.filter(function(step) { return step.key === state.activeStepKey; })[0] || null;
+    var rows = stepSources(job, selected && selected.key);
+    detail.innerHTML = selected
+      ? '<div class="sl-box"><h4>' + esc(selected.label || selected.key) + '</h4><span class="sl-meta">' + esc(selected.detail || '') + '</span><div class="sl-badges">' + statusBadge(selected.status || 'pending') + '<span class="sl-badge">' + esc(rows.length) + ' 条明细</span></div></div>' + renderSourceCards(rows, '这一步还没有保存采集明细。')
+      : '<div class="sl-meta">请选择左侧步骤。</div>';
+  }
   function leadKey(item) {
     item = item || {};
     return String(item.candidate_key || item.handle || item.url || item.name || 'unknown-lead').slice(0, 240);
@@ -1168,6 +1385,45 @@
   }
 
   function bindEvents() {
+    var searchVideosBtn = $('slSearchVideosBtn');
+    if (searchVideosBtn && searchVideosBtn.dataset.bound !== '1') { searchVideosBtn.dataset.bound = '1'; searchVideosBtn.addEventListener('click', searchTikTokVideos); }
+    var videoKeyword = $('slVideoKeyword');
+    if (videoKeyword && videoKeyword.dataset.bound !== '1') {
+      videoKeyword.dataset.bound = '1';
+      videoKeyword.addEventListener('keydown', function(evt) { if (evt.key === 'Enter') { evt.preventDefault(); searchTikTokVideos(); } });
+    }
+    var useVideosBtn = $('slUseVideosBtn');
+    if (useVideosBtn && useVideosBtn.dataset.bound !== '1') { useVideosBtn.dataset.bound = '1'; useVideosBtn.addEventListener('click', useSelectedTikTokVideos); }
+    var clearVideosBtn = $('slClearVideosBtn');
+    if (clearVideosBtn && clearVideosBtn.dataset.bound !== '1') { clearVideosBtn.dataset.bound = '1'; clearVideosBtn.addEventListener('click', clearSelectedTikTokVideos); }
+    var clearSelectedBtn = $('slClearSelectedVideosBtn');
+    if (clearSelectedBtn && clearSelectedBtn.dataset.bound !== '1') { clearSelectedBtn.dataset.bound = '1'; clearSelectedBtn.addEventListener('click', clearSelectedTikTokVideos); }
+    var stepList = $('slStepList');
+    if (stepList && stepList.dataset.bound !== '1') {
+      stepList.dataset.bound = '1';
+      stepList.addEventListener('click', function(evt) {
+        var btn = evt.target && evt.target.closest ? evt.target.closest('[data-open-step]') : null;
+        if (btn) { openStepDetail(btn.getAttribute('data-open-step')); return; }
+        var row = evt.target && evt.target.closest ? evt.target.closest('[data-sl-step-key]') : null;
+        if (row) openStepDetail(row.getAttribute('data-sl-step-key'));
+      });
+    }
+    var stepModalClose = $('slStepModalClose');
+    if (stepModalClose && stepModalClose.dataset.bound !== '1') { stepModalClose.dataset.bound = '1'; stepModalClose.addEventListener('click', closeStepDetail); }
+    var stepModal = $('slStepModal');
+    if (stepModal && stepModal.dataset.bound !== '1') {
+      stepModal.dataset.bound = '1';
+      stepModal.addEventListener('click', function(evt) { if (evt.target === stepModal) closeStepDetail(); });
+    }
+    if (!document.body.dataset.slEscBound) {
+      document.body.dataset.slEscBound = '1';
+      document.addEventListener('keydown', function(evt) { if (evt.key === 'Escape') closeStepDetail(); });
+    }
+    var runRefreshBtn = $('slRunRefreshBtn');
+    if (runRefreshBtn && runRefreshBtn.dataset.bound !== '1') {
+      runRefreshBtn.dataset.bound = '1';
+      runRefreshBtn.addEventListener('click', function() { if (state.activeJobId) loadJobDetail(state.activeJobId); });
+    }
     var expandBtn = $('slExpandKeywordsBtn');
     if (expandBtn && expandBtn.dataset.bound !== '1') { expandBtn.dataset.bound = '1'; expandBtn.addEventListener('click', expandTikTokKeywords); }
     var discoverBtn = $('slDiscoverBtn');
@@ -1211,6 +1467,8 @@
     if (saveBtn && saveBtn.dataset.bound !== '1') { saveBtn.dataset.bound = '1'; saveBtn.addEventListener('click', saveDraft); }
     var loadBtn = $('slLoadDraftBtn');
     if (loadBtn && loadBtn.dataset.bound !== '1') { loadBtn.dataset.bound = '1'; loadBtn.addEventListener('click', loadDraft); }
+    var openRunDetailBtn = $('slOpenRunDetailBtn');
+    if (openRunDetailBtn && openRunDetailBtn.dataset.bound !== '1') { openRunDetailBtn.dataset.bound = '1'; openRunDetailBtn.addEventListener('click', function() { if (state.activeJobId) switchTab('run-detail'); }); }
     var refreshBtn = $('socialLeadsRefreshBtn');
     if (refreshBtn && refreshBtn.dataset.bound !== '1') { refreshBtn.dataset.bound = '1'; refreshBtn.addEventListener('click', function() { loadJobs(false); }); }
     var backBtn = $('socialLeadsBackBtn');
@@ -1230,6 +1488,7 @@
         window.__socialLeadsPlatform = order[(idx + 1) % order.length];
         resetRunState(true);
         syncPlatform(window.__socialLeadsPlatform);
+        switchTab(state.platform === 'tiktok' ? 'keyword-search' : 'new');
         renderJobs();
         loadJobs(true);
       });
@@ -1254,7 +1513,7 @@
       renderJobs();
     }
     bindEvents();
-    switchTab(state.tab || 'new');
+    switchTab(state.tab || (state.platform === 'tiktok' ? 'keyword-search' : 'new'));
     loadJobs(true);
   };
 })();

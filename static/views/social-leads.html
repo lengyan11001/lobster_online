@@ -429,8 +429,39 @@
       .sl-comment-item { margin-bottom: 0.55rem; padding: 0.55rem 0.65rem; border: 1px solid var(--sl-border); border-radius: 8px; background: #fff; }
       .sl-comment-item p { margin: 0 0 0.3rem; color: #111827; font-size: 0.9rem; line-height: 1.6; }
       .sl-comment-item a { display: inline-block; margin-top: 0.2rem; }
+      .social-leads-page:not(.is-tiktok) [data-tiktok-only] { display: none !important; }
+      .sl-video-toolbar { display:flex; align-items:center; justify-content:space-between; gap:0.5rem; flex-wrap:wrap; margin:0.55rem 0; }
+      .sl-video-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:0.6rem; }
+      .sl-video-card { border:1px solid var(--sl-border); border-radius:10px; background:#fff; overflow:hidden; cursor:pointer; transition:border-color .15s, box-shadow .15s; }
+      .sl-video-card.is-selected { border-color:var(--sl-accent); box-shadow:0 0 0 2px rgba(234,88,12,0.16); }
+      .sl-video-cover { position:relative; aspect-ratio:9/13; background:#0f172a; }
+      .sl-video-cover img { width:100%; height:100%; object-fit:cover; display:block; }
+      .sl-video-noimg { display:flex; align-items:center; justify-content:center; height:100%; color:rgba(255,255,255,0.5); font-size:0.78rem; }
+      .sl-video-check { position:absolute; top:0.4rem; right:0.4rem; width:24px; height:24px; display:flex; align-items:center; justify-content:center; border-radius:6px; background:rgba(15,23,42,0.66); }
+      .sl-video-check input { width:16px; height:16px; margin:0; cursor:pointer; }
+      .sl-video-body { padding:0.5rem 0.55rem 0.6rem; }
+      .sl-video-body strong { display:block; font-size:0.82rem; line-height:1.4; max-height:2.8em; overflow:hidden; }
+      .sl-video-body .sl-meta { display:block; margin-top:0.2rem; }
+      .sl-video-stats { display:block; margin-top:0.25rem; color:#475569; font-size:0.75rem; }
+      .sl-video-body a { display:inline-block; margin-top:0.35rem; font-size:0.76rem; color:var(--sl-accent-2); }
+      .sl-selected-videos { margin-bottom:0.85rem; border-left:3px solid var(--sl-accent); }
+      .sl-selected-video-list { display:flex; flex-wrap:wrap; gap:0.35rem; margin:0.25rem 0 0.45rem; }
+      .sl-selected-video-chip { display:inline-flex; align-items:center; gap:0.3rem; max-width:100%; padding:0.22rem 0.3rem 0.22rem 0.55rem; border:1px solid var(--sl-border); border-radius:999px; background:#fff; font-size:0.76rem; }
+      .sl-selected-video-chip button { border:0; background:transparent; color:#94a3b8; font-size:0.9rem; line-height:1; cursor:pointer; padding:0 0.2rem; }
+      .sl-run-head { margin-bottom:0.6rem; }
+      .sl-step-list { margin-top:0.75rem; }
+      .sl-step { cursor:pointer; }
+      .sl-step .sl-row-actions { display:flex; align-items:center; gap:0.35rem; }
+      .sl-modal { position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; padding:1rem; background:rgba(15,23,42,0.55); }
+      .sl-modal[hidden] { display:none; }
+      .sl-modal-card { width:min(780px, 100%); max-height:88vh; display:flex; flex-direction:column; border-radius:14px; background:#fff; box-shadow:0 24px 70px rgba(15,23,42,0.35); overflow:hidden; }
+      .sl-modal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:0.75rem; padding:0.8rem 1rem; border-bottom:1px solid var(--sl-border); background:#f8fafc; }
+      .sl-modal-head strong { display:block; font-size:0.95rem; }
+      .sl-modal-body { overflow:auto; padding:0.8rem 1rem 1rem; }
+      body.sl-modal-open { overflow:hidden; }
       @media (max-width: 900px) {
         .sl-tiktok-limits { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .sl-video-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }    </style>
 
     <header class="sl-head">
@@ -452,28 +483,61 @@
       <div class="sl-tiktok-kicker">TIKTOK LEAD ENGINE</div>
       <div class="sl-tiktok-title">从同行评论区，找到真正想买的人</div>
       <div class="sl-tiktok-sub">录入同行主页 → 同步视频 → 采集评论 → 筛出问价格、问起订量、要方案的客户。</div>
-      <div class="sl-tiktok-flow"><span>01 同行</span><i></i><span>02 视频</span><i></i><span>03 评论</span><i></i><span>04 精准客户</span></div>
+      <div class="sl-tiktok-flow"><span>01 关键词 / 同行</span><i></i><span>02 选视频</span><i></i><span>03 采集评论</span><i></i><span>04 精准客户</span></div>
     </div>
     <nav class="sl-tabs" aria-label="社媒线索采集">
-      <button type="button" class="sl-tab is-active" data-sl-tab="new">新建任务</button>
+      <button type="button" class="sl-tab" data-sl-tab="keyword-search" data-tiktok-only>关键词搜视频</button>
+      <button type="button" class="sl-tab" data-sl-tab="discover" data-tiktok-only>拓词找同行</button>
+      <button type="button" class="sl-tab is-active" data-sl-tab="new">任务设置</button>
       <button type="button" class="sl-tab" data-sl-tab="runs">任务记录</button>
       <button type="button" class="sl-tab" data-sl-tab="leads">精准客户</button>
       <button type="button" class="sl-tab" data-sl-tab="outputs">采集明细</button>
     </nav>
 
-    <section class="sl-panel is-active" data-sl-panel="new">
-      <div id="slTikTokDiscovery" class="sl-card sl-tiktok-discovery" style="display:none;">
-        <div class="sl-card-title"><span>1. 关键词拓词</span><span class="sl-meta">输入种子词，扩展后搜索同行</span></div>
+    <section class="sl-panel" data-sl-panel="keyword-search" data-tiktok-only>
+      <div class="sl-card">
+        <div class="sl-card-title"><span>关键词搜视频</span><span class="sl-meta">直接搜 TikTok 视频，勾选后只分析这些视频的评论</span></div>
+        <div class="sl-inline sl-tiktok-search-row">
+          <input id="slVideoKeyword" type="text" placeholder="输入视频关键词，例如：custom notebook 或 定制笔记本">
+          <button type="button" id="slSearchVideosBtn" class="btn btn-primary btn-sm">搜索视频</button>
+        </div>
+        <div class="sl-video-toolbar">
+          <span id="slVideoSearchStatus" class="sl-meta">回车即可搜索。勾选搜索结果后，任务只分析所选视频。</span>
+          <span id="slVideoSelectedCount" class="sl-badge">已选 0 条视频</span>
+        </div>
+        <div id="slVideoResults" class="sl-video-grid"><div class="sl-meta">还没有搜索结果。</div></div>
+        <div class="sl-row-actions" style="margin-top:0.75rem;">
+          <button type="button" id="slUseVideosBtn" class="btn btn-primary" disabled>用所选视频建任务</button>
+          <button type="button" id="slClearVideosBtn" class="btn btn-ghost">清空选择</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="sl-panel" data-sl-panel="discover" data-tiktok-only>
+      <div class="sl-card sl-tiktok-discovery">
+        <div class="sl-card-title"><span>拓词找同行</span><span class="sl-meta">先拓词，再按词搜索同行，加入监控后批量采集</span></div>
         <div class="sl-inline sl-tiktok-search-row">
           <input id="slSeedKeyword" type="text" placeholder="例如：notebook / 定制笔记本 / 企业礼品">
           <button type="button" id="slExpandKeywordsBtn" class="btn btn-primary btn-sm">AI 拓词</button>
           <button type="button" id="slDiscoverBtn" class="btn btn-ghost btn-sm">搜索同行</button>
         </div>
         <div id="slKeywordChips" class="sl-keyword-chips"></div>
+        <div id="slDiscoverStatus" class="sl-meta"></div>
         <div id="slDiscoverList" class="sl-list sl-discover-list"></div>
-        <div class="sl-card-title" style="margin-top:0.9rem;"><span>2. 监控同行</span><button type="button" id="slClearMonitorBtn" class="btn btn-ghost btn-sm">清空</button></div>
+        <div class="sl-card-title" style="margin-top:0.9rem;"><span>监控同行</span><button type="button" id="slClearMonitorBtn" class="btn btn-ghost btn-sm">清空</button></div>
         <div id="slMonitorList" class="sl-list sl-monitor-list"></div>
-        <div class="sl-meta">勾选的同行会自动带入下方采集任务；监控列表保存在本机，下次打开还在。</div>
+        <div class="sl-meta">勾选的同行会自动带入任务设置里的「同行账号」；监控列表保存在本机，下次打开还在。</div>
+        <div class="sl-row-actions" style="margin-top:0.7rem;">
+          <button type="button" class="btn btn-ghost btn-sm" data-sl-tab="new">去任务设置</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="sl-panel is-active" data-sl-panel="new">
+      <div id="slSelectedVideosHint" class="sl-card sl-selected-videos" style="display:none;">
+        <div class="sl-card-title"><span>本次只分析已选视频</span><button type="button" id="slClearSelectedVideosBtn" class="btn btn-ghost btn-sm">清空</button></div>
+        <div id="slSelectedVideoList" class="sl-selected-video-list"></div>
+        <div class="sl-meta">已选视频会替代同行视频同步，直接进入评论采集和线索筛选。</div>
       </div>
       <div class="sl-grid">
         <div class="sl-card">
@@ -523,25 +587,36 @@
     </section>
 
     <section class="sl-panel" data-sl-panel="runs">
-      <div class="sl-run-grid">
+      <div class="sl-grid">
         <div class="sl-card">
-          <div class="sl-card-title">任务记录</div>
+          <div class="sl-card-title"><span>任务记录</span><span class="sl-meta">点任务查看执行详情</span></div>
           <div id="slJobList" class="sl-list"></div>
         </div>
-        <div class="sl-run-main">
-          <div class="sl-card">
-            <div class="sl-card-title">
-              <span>执行步骤</span>
-              <span class="sl-auto-hint">自动执行并刷新</span>
-            </div>
-            <div class="sl-progress"><span id="slProgressBar"></span></div>
-            <div id="slStepList" style="margin-top:0.75rem;"></div>
+        <div class="sl-card">
+          <div class="sl-card-title">任务概览</div>
+          <div id="slRunSummary" class="sl-detail">
+            <div class="sl-meta">请选择左侧任务。</div>
           </div>
-          <div class="sl-card">
-            <div class="sl-card-title">步骤采集明细</div>
-            <div id="slStepDetail" class="sl-detail"></div>
+          <div class="sl-row-actions" style="margin-top:0.65rem;">
+            <button type="button" id="slOpenRunDetailBtn" class="btn btn-primary btn-sm">查看执行详情</button>
           </div>
         </div>
+      </div>
+    </section>
+
+    <section class="sl-panel" data-sl-panel="run-detail">
+      <div class="sl-card">
+        <div class="sl-card-title">
+          <span>执行详情</span>
+          <div class="sl-row-actions">
+            <button type="button" id="slRunRefreshBtn" class="btn btn-ghost btn-sm">刷新</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-sl-tab="runs">返回任务记录</button>
+          </div>
+        </div>
+        <div id="slRunHead" class="sl-run-head"></div>
+        <div class="sl-progress"><span id="slProgressBar"></span></div>
+        <div id="slStepList" class="sl-step-list"></div>
+        <div class="sl-meta" style="margin-top:0.6rem;">点任意步骤查看该步骤的采集明细，明细在弹窗中打开。</div>
       </div>
     </section>
 
@@ -576,5 +651,18 @@
         </div>
       </div>
     </section>
+
+    <div id="slStepModal" class="sl-modal" hidden>
+      <div class="sl-modal-card" role="dialog" aria-modal="true" aria-labelledby="slStepModalTitle">
+        <div class="sl-modal-head">
+          <div style="min-width:0;">
+            <strong id="slStepModalTitle">步骤明细</strong>
+            <div id="slStepModalMeta" class="sl-meta"></div>
+          </div>
+          <button type="button" id="slStepModalClose" class="btn btn-ghost btn-sm">关闭</button>
+        </div>
+        <div id="slStepModalBody" class="sl-modal-body"></div>
+      </div>
+    </div>
   </div>
 </div>
