@@ -2,42 +2,61 @@
   <div class="social-leads-page">
     <style>
       .social-leads-page {
-        --sl-accent: #ea580c;
-        --sl-accent-2: #0f766e;
+        --sl-accent: #2563eb;
+        --sl-accent-2: #06b6d4;
+        --sl-accent-soft: rgba(37, 99, 235, 0.10);
         --sl-ink: #111827;
-        --sl-muted: #667085;
-        --sl-border: rgba(17,24,39,0.12);
+        --sl-muted: #6b7280;
+        --sl-border: rgba(148, 163, 184, 0.22);
+        --sl-card-bg: rgba(255, 255, 255, 0.86);
         min-height: calc(100vh - 72px);
-        padding: 1rem;
-        background: linear-gradient(135deg, #fff7ed 0%, #f8fafc 48%, #ecfeff 100%);
+        padding: 1.25rem;
+        background:
+          radial-gradient(rgba(100, 116, 139, 0.05) 1px, transparent 1px) 0 0 / 24px 24px,
+          radial-gradient(circle at 0% 0%, rgba(6, 182, 212, 0.14), transparent 36%),
+          radial-gradient(circle at 100% 100%, rgba(59, 130, 246, 0.14), transparent 40%),
+          #f8fafc;
         color: var(--sl-ink);
       }
       .social-leads-page.is-x {
-        --sl-accent: #111827;
-        --sl-accent-2: #2563eb;
-        background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 46%, #ecfeff 100%);
+        background:
+          radial-gradient(rgba(100, 116, 139, 0.05) 1px, transparent 1px) 0 0 / 24px 24px,
+          radial-gradient(circle at 0% 0%, rgba(6, 182, 212, 0.12), transparent 36%),
+          radial-gradient(circle at 100% 100%, rgba(99, 102, 241, 0.14), transparent 40%),
+          #f8fafc;
       }
       .sl-head {
         display: flex;
         justify-content: space-between;
         gap: 1rem;
         align-items: flex-start;
-        margin-bottom: 0.85rem;
+        margin-bottom: 1rem;
       }
       .sl-kicker {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.28rem 0.68rem;
+        border-radius: 999px;
+        background: var(--sl-accent-soft);
         color: var(--sl-accent);
         font-size: 0.76rem;
-        font-weight: 900;
+        font-weight: 700;
+        letter-spacing: 0.01em;
       }
       .sl-title {
-        margin: 0.12rem 0 0;
-        font-size: 1.35rem;
-        line-height: 1.25;
+        margin: 0.6rem 0 0;
+        color: #111827;
+        font-size: clamp(1.35rem, 2vw, 1.7rem);
+        line-height: 1.2;
+        font-weight: 500;
+        letter-spacing: -0.03em;
       }
       .sl-subtitle {
-        margin-top: 0.28rem;
+        margin-top: 0.42rem;
         color: var(--sl-muted);
-        font-size: 0.9rem;
+        font-size: 0.86rem;
+        font-weight: 300;
+        line-height: 1.65;
       }
       .sl-actions,
       .sl-row-actions {
@@ -46,119 +65,168 @@
         flex-wrap: wrap;
         justify-content: flex-end;
       }
+      .social-leads-page .btn {
+        border-radius: 12px;
+        font-weight: 500;
+      }
+      .social-leads-page .btn-primary {
+        border: 0;
+        background: linear-gradient(90deg, #06b6d4 0%, #2563eb 100%);
+        color: #fff;
+        box-shadow: 0 8px 20px -6px rgba(59, 130, 246, 0.4);
+      }
+      .social-leads-page .btn-primary:hover {
+        background: linear-gradient(90deg, #22d3ee 0%, #3b82f6 100%);
+        box-shadow: 0 10px 25px -6px rgba(59, 130, 246, 0.5);
+      }
+      .social-leads-page .btn-primary:disabled {
+        opacity: 0.55;
+        box-shadow: none;
+        cursor: not-allowed;
+      }
+      .social-leads-page .btn-ghost {
+        border: 1px solid rgba(148, 163, 184, 0.26);
+        background: rgba(255, 255, 255, 0.9);
+        color: #475569;
+      }
+      .social-leads-page .btn-ghost:hover {
+        border-color: rgba(37, 99, 235, 0.28);
+        background: #fff;
+        color: var(--sl-accent);
+      }
       .sl-tabs {
         display: flex;
-        gap: 0.35rem;
-        padding: 0.3rem;
-        border: 1px solid var(--sl-border);
-        background: rgba(255,255,255,0.78);
-        border-radius: 10px;
+        gap: 4px;
+        padding: 4px;
+        border: 0;
+        border-radius: 14px;
+        background: rgba(243, 244, 246, 0.72);
+        box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.16);
         overflow-x: auto;
-        margin-bottom: 0.85rem;
+        margin-bottom: 1rem;
       }
       .sl-tab {
         border: 0;
         background: transparent;
-        color: #334155;
-        padding: 0.52rem 0.76rem;
-        border-radius: 8px;
-        font-weight: 900;
+        color: #6b7280;
+        padding: 0.52rem 0.8rem;
+        border-radius: 10px;
+        font-size: 0.84rem;
+        font-weight: 500;
         white-space: nowrap;
         cursor: pointer;
+        transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+      }
+      .sl-tab:hover {
+        color: #374151;
+        background: rgba(255, 255, 255, 0.6);
       }
       .sl-tab.is-active {
-        background: var(--sl-accent);
-        color: #fff;
+        background: #fff;
+        color: #1f2937;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
       }
-      .sl-panel {
-        display: none;
-      }
-      .sl-panel.is-active {
-        display: block;
-      }
-      .sl-grid.is-single {
-        grid-template-columns: minmax(320px, 760px);
-      }
+      .sl-panel { display: none; }
+      .sl-panel.is-active { display: block; }
+      .sl-grid.is-single { grid-template-columns: minmax(320px, 760px); }
       .sl-grid {
         display: grid;
         grid-template-columns: minmax(320px, 0.85fr) minmax(460px, 1.15fr);
-        gap: 0.85rem;
+        gap: 0.9rem;
         align-items: start;
       }
       .sl-run-grid {
         display: grid;
         grid-template-columns: minmax(300px, 0.65fr) minmax(520px, 1.35fr);
-        gap: 0.85rem;
+        gap: 0.9rem;
         align-items: start;
       }
-      .sl-run-main {
-        display: grid;
-        gap: 0.85rem;
-      }
+      .sl-run-main { display: grid; gap: 0.9rem; }
       .sl-card {
-        background: rgba(255,255,255,0.92);
-        border: 1px solid var(--sl-border);
-        border-radius: 12px;
-        padding: 0.9rem;
-        box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
+        background: var(--sl-card-bg);
+        border: 1px solid rgba(255, 255, 255, 0.85);
+        border-radius: 24px;
+        padding: 1.1rem 1.15rem;
+        box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.05), 0 0 20px rgba(59, 130, 246, 0.03);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
       }
       .sl-card-title {
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 0.5rem;
-        font-weight: 900;
-        margin-bottom: 0.7rem;
+        color: #111827;
+        font-size: 0.95rem;
+        font-weight: 500;
+        margin-bottom: 0.75rem;
       }
+      .sl-card-title .sl-meta { font-weight: 400; }
       .sl-field {
         display: grid;
-        gap: 0.35rem;
-        margin-bottom: 0.75rem;
+        gap: 0.4rem;
+        margin-bottom: 0.8rem;
       }
       .sl-field label {
-        font-size: 0.78rem;
-        font-weight: 900;
-        color: #334155;
-      }
-      .sl-source-toggle {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 0.5rem;
-        margin-bottom: 0.75rem;
-      }
-      .sl-source-toggle label {
-        border: 1px solid rgba(15,23,42,0.14);
-        border-radius: 10px;
-        background: rgba(255,255,255,0.82);
-        padding: 0.62rem 0.72rem;
-        display: flex;
-        gap: 0.45rem;
-        align-items: center;
-        font-weight: 900;
-        color: #334155;
-        cursor: pointer;
-      }
-      .sl-source-toggle label:has(input:checked) {
-        color: #fff;
-        background: var(--sl-accent);
-        border-color: transparent;
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: #374151;
       }
       .sl-field input,
       .sl-field textarea,
       .sl-field select {
         width: 100%;
-        border: 1px solid rgba(15,23,42,0.16);
-        border-radius: 9px;
-        background: #fff;
-        color: var(--sl-ink);
-        padding: 0.58rem 0.68rem;
-        font-size: 0.9rem;
+        height: 48px;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 12px;
+        background: rgba(241, 245, 249, 0.9);
+        color: #1f2937;
+        padding: 0 16px;
+        font-size: 14px;
         outline: none;
+        transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
       }
       .sl-field textarea {
-        min-height: 94px;
-        line-height: 1.55;
+        height: auto;
+        min-height: 96px;
+        padding: 12px 16px;
+        line-height: 1.6;
         resize: vertical;
+      }
+      .sl-field input::placeholder,
+      .sl-field textarea::placeholder,
+      .sl-tiktok-search-row input::placeholder { color: #9ca3af; opacity: 1; }
+      .sl-field input:focus,
+      .sl-field textarea:focus,
+      .sl-field select:focus,
+      .sl-tiktok-search-row input:focus {
+        background: #fff;
+        border-color: #bfdbfe;
+        box-shadow: 0 0 0 2px rgba(219, 234, 254, 0.9);
+      }
+      .sl-source-toggle {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.5rem;
+        margin-bottom: 0.8rem;
+      }
+      .sl-source-toggle label {
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.82);
+        padding: 0.65rem 0.75rem;
+        display: flex;
+        gap: 0.45rem;
+        align-items: center;
+        font-size: 0.84rem;
+        font-weight: 500;
+        color: #475569;
+        cursor: pointer;
+      }
+      .sl-source-toggle label:has(input:checked) {
+        color: var(--sl-accent);
+        background: var(--sl-accent-soft);
+        border-color: rgba(37, 99, 235, 0.22);
       }
       .sl-inline {
         display: grid;
@@ -169,27 +237,28 @@
         display: inline-flex;
         align-items: center;
         gap: 0.35rem;
-        color: #334155;
+        color: #475569;
         font-size: 0.84rem;
-        font-weight: 800;
+        font-weight: 500;
       }
-      .sl-checkline input {
-        width: auto;
-      }
+      .sl-checkline input { width: auto; accent-color: var(--sl-accent); }
       .sl-msg {
         display: none;
-        margin-bottom: 0.8rem;
-        padding: 0.65rem 0.75rem;
-        border-radius: 9px;
-        border: 1px solid rgba(14,116,144,0.24);
-        background: rgba(14,116,144,0.08);
-        color: #155e75;
+        margin-bottom: 0.9rem;
+        padding: 0.72rem 0.9rem;
+        border-radius: 14px;
+        border: 1px solid rgba(6, 182, 212, 0.22);
+        background: rgba(236, 254, 255, 0.85);
+        color: #0e7490;
+        font-size: 0.84rem;
+        font-weight: 500;
+        line-height: 1.5;
         white-space: pre-line;
       }
       .sl-msg.err {
-        border-color: rgba(225,29,72,0.28);
-        background: rgba(225,29,72,0.08);
-        color: #be123c;
+        border-color: rgba(220, 38, 38, 0.2);
+        background: #fef2f2;
+        color: #dc2626;
       }
       .sl-list {
         display: grid;
@@ -206,13 +275,23 @@
         overflow: auto;
         overscroll-behavior: contain;
       }
-      .sl-template-item {
-        border: 1px solid rgba(15,23,42,0.1);
-        border-radius: 10px;
-        background: #fff;
-        padding: 0.72rem;
+      .sl-template-item,
+      .sl-item,
+      .sl-lead,
+      .sl-source-card,
+      .sl-evidence,
+      .sl-box,
+      .sl-discover-row,
+      .sl-monitor-row,
+      .sl-comment-item {
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.72);
       }
-      .sl-template-item strong {
+      .sl-template-item { padding: 0.78rem; }
+      .sl-template-item strong,
+      .sl-item strong,
+      .sl-lead strong {
         display: block;
         line-height: 1.45;
         word-break: break-word;
@@ -225,29 +304,28 @@
       }
       .sl-item,
       .sl-lead {
-        border: 1px solid rgba(15,23,42,0.1);
-        border-radius: 10px;
-        background: #fff;
-        padding: 0.72rem;
+        padding: 0.78rem;
         cursor: pointer;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+      }
+      .sl-item:hover,
+      .sl-lead:hover,
+      .sl-template-item:hover {
+        background: #fff;
+        border-color: rgba(37, 99, 235, 0.2);
       }
       .sl-item.is-active,
       .sl-lead.is-active {
-        border-color: color-mix(in srgb, var(--sl-accent) 52%, transparent);
-        box-shadow: 0 0 0 2px color-mix(in srgb, var(--sl-accent) 12%, transparent);
-      }
-      .sl-item strong,
-      .sl-lead strong {
-        display: block;
-        line-height: 1.45;
-        word-break: break-word;
+        background: #fff;
+        border-color: rgba(37, 99, 235, 0.36);
+        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.10);
       }
       .sl-meta {
         display: block;
-        margin-top: 0.25rem;
+        margin-top: 0.28rem;
         color: var(--sl-muted);
         font-size: 0.82rem;
-        line-height: 1.45;
+        line-height: 1.5;
         word-break: break-word;
       }
       .sl-badges {
@@ -261,50 +339,52 @@
         align-items: center;
         min-height: 22px;
         border-radius: 999px;
-        padding: 0.12rem 0.45rem;
-        background: color-mix(in srgb, var(--sl-accent) 10%, white);
+        padding: 0.12rem 0.5rem;
+        background: var(--sl-accent-soft);
         color: var(--sl-accent);
-        font-weight: 900;
+        font-weight: 500;
         font-size: 0.72rem;
       }
-      .sl-badge.done { background: rgba(16,185,129,0.12); color: #047857; }
-      .sl-badge.fail { background: rgba(244,63,94,0.12); color: #be123c; }
-      .sl-badge.run { background: rgba(245,158,11,0.14); color: #92400e; }
+      .sl-badge.done { background: rgba(16, 185, 129, 0.12); color: #047857; }
+      .sl-badge.fail { background: rgba(244, 63, 94, 0.12); color: #be123c; }
+      .sl-badge.run { background: rgba(245, 158, 11, 0.14); color: #92400e; }
       .sl-auto-hint {
         display: inline-flex;
         align-items: center;
         min-height: 28px;
         border-radius: 999px;
         padding: 0.18rem 0.62rem;
-        background: rgba(16,185,129,0.12);
+        background: rgba(16, 185, 129, 0.12);
         color: #047857;
         font-size: 0.76rem;
-        font-weight: 900;
+        font-weight: 500;
       }
       .sl-progress {
         height: 8px;
         border-radius: 999px;
-        background: rgba(15,23,42,0.08);
+        background: rgba(148, 163, 184, 0.18);
         overflow: hidden;
       }
       .sl-progress span {
         display: block;
         height: 100%;
         width: 0;
-        background: linear-gradient(90deg, var(--sl-accent), var(--sl-accent-2));
+        border-radius: inherit;
+        background: linear-gradient(90deg, #06b6d4, #2563eb);
+        transition: width 0.3s ease;
       }
       .sl-step {
         display: grid;
         grid-template-columns: 28px minmax(0, 1fr) auto;
         gap: 0.6rem;
         align-items: start;
-        padding: 0.65rem 0;
-        border-bottom: 1px solid rgba(15,23,42,0.08);
+        padding: 0.7rem 0;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.14);
         cursor: pointer;
       }
       .sl-step.is-active {
-        background: color-mix(in srgb, var(--sl-accent) 8%, transparent);
-        border-radius: 10px;
+        background: var(--sl-accent-soft);
+        border-radius: 12px;
         padding-left: 0.45rem;
         padding-right: 0.45rem;
       }
@@ -316,36 +396,19 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        background: rgba(15,23,42,0.08);
+        background: rgba(148, 163, 184, 0.16);
         color: #475569;
         font-size: 0.74rem;
-        font-weight: 900;
+        font-weight: 500;
       }
       .sl-step.is-completed .sl-step-dot { background: #10b981; color: #fff; }
       .sl-step.is-running .sl-step-dot { background: #f59e0b; color: #fff; }
       .sl-step.is-failed .sl-step-dot { background: #ef4444; color: #fff; }
-      .sl-detail {
-        display: grid;
-        gap: 0.7rem;
-      }
-      .sl-box {
-        border: 1px solid rgba(15,23,42,0.1);
-        border-radius: 10px;
-        background: #f8fafc;
-        padding: 0.75rem;
-      }
-      .sl-box h4 {
-        margin: 0 0 0.4rem;
-        font-size: 0.9rem;
-      }
+      .sl-detail { display: grid; gap: 0.7rem; }
+      .sl-box { padding: 0.8rem; background: rgba(248, 250, 252, 0.8); }
+      .sl-box h4 { margin: 0 0 0.4rem; font-size: 0.92rem; font-weight: 500; }
       .sl-source-card,
-      .sl-evidence {
-        border: 1px solid rgba(15,23,42,0.1);
-        border-radius: 10px;
-        background: #fff;
-        padding: 0.72rem;
-        margin-top: 0.55rem;
-      }
+      .sl-evidence { padding: 0.78rem; margin-top: 0.55rem; }
       .sl-source-head {
         display: flex;
         align-items: center;
@@ -356,113 +419,316 @@
         margin-top: 0.45rem;
         color: #334155;
         font-size: 0.86rem;
-        line-height: 1.55;
+        line-height: 1.6;
         white-space: pre-wrap;
         word-break: break-word;
       }
-      .sl-kv-list {
-        display: grid;
-        gap: 0.45rem;
-      }
+      .sl-kv-list { display: grid; gap: 0.45rem; }
       .sl-kv {
         display: grid;
         grid-template-columns: 96px minmax(0, 1fr);
         gap: 0.65rem;
         padding: 0.45rem 0;
-        border-bottom: 1px solid rgba(15,23,42,0.07);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.14);
       }
       .sl-kv:last-child { border-bottom: 0; }
-      .sl-kv span {
-        color: var(--sl-muted);
-        font-size: 0.8rem;
-      }
-      .sl-kv strong {
+      .sl-kv span { color: var(--sl-muted); font-size: 0.8rem; }
+      .sl-kv strong { color: #111827; font-size: 0.85rem; line-height: 1.5; word-break: break-word; }
+      .sl-tiktok-hero {
+        margin-bottom: 0.9rem;
+        border: 1px solid rgba(255, 255, 255, 0.9);
+        border-radius: 24px;
         color: #111827;
-        font-size: 0.85rem;
-        line-height: 1.45;
-        word-break: break-word;
+        background:
+          radial-gradient(circle at 100% 0%, rgba(6, 182, 212, 0.16), transparent 42%),
+          radial-gradient(circle at 0% 100%, rgba(59, 130, 246, 0.12), transparent 40%),
+          rgba(255, 255, 255, 0.88);
+        box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.06), 0 0 20px rgba(59, 130, 246, 0.03);
+        backdrop-filter: blur(20px);
       }
+      .sl-tiktok-kicker {
+        color: var(--sl-accent);
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+      }
+      .sl-tiktok-title {
+        margin-top: 0.3rem;
+        color: #111827;
+        font-size: 1.35rem;
+        font-weight: 500;
+        letter-spacing: -0.02em;
+        line-height: 1.3;
+      }
+      .sl-tiktok-sub {
+        margin-top: 0.35rem;
+        color: var(--sl-muted);
+        font-size: 0.86rem;
+        font-weight: 300;
+        line-height: 1.65;
+      }
+      .sl-tiktok-flow {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        margin-top: 0.75rem;
+      }
+      .sl-tiktok-flow span {
+        padding: 0.3rem 0.62rem;
+        border-radius: 999px;
+        background: rgba(37, 99, 235, 0.08);
+        border: 1px solid rgba(37, 99, 235, 0.12);
+        color: #3b5bdb;
+        font-size: 0.75rem;
+        font-weight: 500;
+      }
+      .sl-tiktok-flow i { width: 1rem; height: 1px; background: #cbd5e1; }
+      .sl-tiktok-limits {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.55rem;
+        margin-bottom: 0.8rem;
+      }
+      .social-leads-page.is-tiktok [data-sl-panel="new"] .sl-grid { grid-template-columns: minmax(320px, 1fr); }
+      .sl-tiktok-limits .sl-field { margin-bottom: 0; }
+      .sl-tiktok-discovery { margin-bottom: 0.9rem; }
+      .sl-tiktok-search-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+      .sl-tiktok-search-row input {
+        flex: 1 1 260px;
+        height: 48px;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 12px;
+        padding: 0 16px;
+        background: rgba(241, 245, 249, 0.9);
+        color: #1f2937;
+        font-size: 14px;
+        outline: none;
+      }
+      .sl-keyword-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.6rem 0; }
+      .sl-keyword-chip {
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        background: rgba(255, 255, 255, 0.82);
+        color: #475569;
+        border-radius: 999px;
+        padding: 0.32rem 0.68rem;
+        font-size: 0.78rem;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+      }
+      .sl-keyword-chip:hover { border-color: rgba(37, 99, 235, 0.24); color: var(--sl-accent); }
+      .sl-keyword-chip.is-active {
+        background: var(--sl-accent-soft);
+        border-color: rgba(37, 99, 235, 0.28);
+        color: var(--sl-accent);
+      }
+      .sl-discover-list,
+      .sl-monitor-list { max-height: 220px; overflow: auto; margin-top: 0.4rem; }
+      .sl-discover-row,
+      .sl-monitor-row {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.55rem 0.6rem;
+        margin-bottom: 0.4rem;
+        background: rgba(255, 255, 255, 0.78);
+      }
+      .sl-discover-row .sl-row-main,
+      .sl-monitor-row .sl-row-main { flex: 1 1 auto; min-width: 0; }
+      .sl-discover-row strong,
+      .sl-monitor-row strong {
+        display: block;
+        font-size: 0.86rem;
+        font-weight: 500;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .sl-discover-row .sl-meta,
+      .sl-monitor-row .sl-meta { display: block; margin-top: 0.15rem; }
+      .sl-discover-row button,
+      .sl-monitor-row button { flex: 0 0 auto; }
+      .sl-discover-row input[type="checkbox"],
+      .sl-monitor-row input[type="checkbox"] { accent-color: var(--sl-accent); width: 16px; height: 16px; }
+      .sl-lead-comment {
+        margin: 0.35rem 0;
+        padding: 0.5rem 0.6rem;
+        border-left: 3px solid var(--sl-accent);
+        border-radius: 8px;
+        background: rgba(37, 99, 235, 0.05);
+        color: #1f2937;
+        font-size: 0.85rem;
+        line-height: 1.6;
+      }
+      .sl-legacy {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        flex-wrap: wrap;
+        margin-bottom: 0.65rem;
+        padding: 0.65rem 0.75rem;
+        border: 1px solid rgba(245, 158, 11, 0.24);
+        border-radius: 14px;
+        background: #fffbeb;
+        color: #b45309;
+        font-size: 0.82rem;
+        line-height: 1.5;
+      }
+      .sl-legacy b { flex: 0 0 auto; }
+      .sl-legacy span { flex: 1 1 220px; }
+      .sl-legacy button {
+        flex: 0 0 auto;
+        border: 0;
+        border-radius: 10px;
+        background: linear-gradient(90deg, #06b6d4 0%, #2563eb 100%);
+        color: #fff;
+        padding: 0.38rem 0.72rem;
+        cursor: pointer;
+      }
+      .sl-comment-item { margin-bottom: 0.55rem; padding: 0.6rem 0.7rem; }
+      .sl-comment-item p { margin: 0 0 0.3rem; color: #111827; font-size: 0.9rem; line-height: 1.65; }
+      .sl-comment-item a { display: inline-block; margin-top: 0.2rem; color: var(--sl-accent); }
+      .social-leads-page:not(.is-tiktok) [data-tiktok-only] { display: none !important; }
+      .sl-video-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin: 0.6rem 0;
+      }
+      .sl-video-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 0.65rem;
+      }
+      .sl-video-card {
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.82);
+        overflow: hidden;
+        cursor: pointer;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+      }
+      .sl-video-card:hover { border-color: rgba(37, 99, 235, 0.24); transform: translateY(-1px); }
+      .sl-video-card.is-selected {
+        border-color: rgba(37, 99, 235, 0.5);
+        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+      }
+      .sl-video-cover { position: relative; aspect-ratio: 9/13; background: #0f172a; }
+      .sl-video-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+      .sl-video-noimg {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 100%;
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 0.78rem;
+      }
+      .sl-video-check {
+        position: absolute;
+        top: 0.4rem;
+        right: 0.4rem;
+        width: 24px;
+        height: 24px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.66);
+        backdrop-filter: blur(4px);
+      }
+      .sl-video-check input { width: 16px; height: 16px; margin: 0; cursor: pointer; accent-color: var(--sl-accent); }
+      .sl-video-body { padding: 0.55rem 0.6rem 0.65rem; }
+      .sl-video-body strong {
+        display: block;
+        font-size: 0.82rem;
+        font-weight: 500;
+        line-height: 1.45;
+        max-height: 2.9em;
+        overflow: hidden;
+      }
+      .sl-video-body .sl-meta { display: block; margin-top: 0.2rem; }
+      .sl-video-stats { display: block; margin-top: 0.25rem; color: #64748b; font-size: 0.75rem; }
+      .sl-video-body a { display: inline-block; margin-top: 0.35rem; font-size: 0.76rem; color: var(--sl-accent); }
+      .sl-selected-videos { margin-bottom: 0.9rem; border-left: 3px solid var(--sl-accent); }
+      .sl-selected-video-list { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.25rem 0 0.45rem; }
+      .sl-selected-video-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        max-width: 100%;
+        padding: 0.24rem 0.32rem 0.24rem 0.58rem;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.86);
+        font-size: 0.76rem;
+      }
+      .sl-selected-video-chip button {
+        border: 0;
+        background: transparent;
+        color: #94a3b8;
+        font-size: 0.9rem;
+        line-height: 1;
+        cursor: pointer;
+        padding: 0 0.2rem;
+      }
+      .sl-selected-video-chip button:hover { color: #2563eb; }
+      .sl-run-head { margin-bottom: 0.65rem; }
+      .sl-step-list { margin-top: 0.8rem; }
+      .sl-step .sl-row-actions { display: flex; align-items: center; gap: 0.35rem; }
+      .sl-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 1200;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        background: rgba(15, 23, 42, 0.42);
+        backdrop-filter: blur(4px);
+      }
+      .sl-modal[hidden] { display: none; }
+      .sl-modal-card {
+        width: min(780px, 100%);
+        max-height: 88vh;
+        display: flex;
+        flex-direction: column;
+        border: 1px solid rgba(255, 255, 255, 0.85);
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.96);
+        box-shadow: 0 28px 70px rgba(15, 23, 42, 0.22);
+        overflow: hidden;
+      }
+      .sl-modal-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.9rem 1.1rem;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+        background: rgba(248, 250, 252, 0.9);
+      }
+      .sl-modal-head strong { display: block; font-size: 0.95rem; font-weight: 500; }
+      .sl-modal-body { overflow: auto; padding: 0.9rem 1.1rem 1.1rem; }
+      body.sl-modal-open { overflow: hidden; }
       @media (max-width: 980px) {
         .sl-head,
-        .sl-actions {
-          justify-content: flex-start;
-        }
+        .sl-actions { justify-content: flex-start; }
         .sl-grid,
         .sl-run-grid,
-        .sl-inline {
-          grid-template-columns: 1fr;
-        }
+        .sl-inline { grid-template-columns: 1fr; }
       }
-      .sl-tiktok-hero {
-        margin-bottom: 0.85rem;
-        border: 0;
-        color: #fff;
-        background: linear-gradient(135deg, #071b3a 0%, #0b2f5c 55%, #0e6b68 100%);
-        box-shadow: 0 16px 38px rgba(8, 35, 70, 0.18);
-      }
-      .sl-tiktok-kicker { color: #6ee7f2; font-size: 0.72rem; font-weight: 900; letter-spacing: 0.16em; }
-      .sl-tiktok-title { margin-top: 0.25rem; font-size: 1.35rem; font-weight: 900; line-height: 1.3; }
-      .sl-tiktok-sub { margin-top: 0.3rem; color: rgba(255,255,255,0.76); font-size: 0.88rem; line-height: 1.6; }
-      .sl-tiktok-flow { display: flex; align-items: center; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.7rem; }
-      .sl-tiktok-flow span { padding: 0.28rem 0.5rem; border-radius: 999px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.16); font-size: 0.75rem; }
-      .sl-tiktok-flow i { width: 1rem; height: 1px; background: rgba(255,255,255,0.24); }
-      .sl-tiktok-limits { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.55rem; margin-bottom: 0.75rem; }
-      .social-leads-page.is-tiktok .sl-grid { grid-template-columns: minmax(320px, 1fr); }
-      .sl-tiktok-limits .sl-field { margin-bottom: 0; }
-      .sl-tiktok-discovery { margin-bottom: 0.85rem; }
-      .sl-tiktok-search-row { display:flex; gap:0.45rem; align-items:center; flex-wrap:wrap; }
-      .sl-tiktok-search-row input { flex:1 1 260px; height:38px; border:1px solid var(--sl-border); border-radius:8px; padding:0 0.6rem; background:#fff; }
-      .sl-keyword-chips { display:flex; flex-wrap:wrap; gap:0.35rem; margin:0.55rem 0; }
-      .sl-keyword-chip { border:1px solid var(--sl-border); background:#fff; color:#334155; border-radius:999px; padding:0.3rem 0.6rem; font-size:0.78rem; cursor:pointer; }
-      .sl-keyword-chip.is-active { background:var(--sl-accent); border-color:var(--sl-accent); color:#fff; }
-      .sl-discover-list, .sl-monitor-list { max-height:220px; overflow:auto; margin-top:0.4rem; }
-      .sl-discover-row, .sl-monitor-row { display:flex; align-items:center; gap:0.5rem; padding:0.5rem 0.55rem; border:1px solid var(--sl-border); border-radius:8px; background:#fff; margin-bottom:0.4rem; }
-      .sl-discover-row .sl-row-main, .sl-monitor-row .sl-row-main { flex:1 1 auto; min-width:0; }
-      .sl-discover-row strong, .sl-monitor-row strong { display:block; font-size:0.86rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-      .sl-discover-row .sl-meta, .sl-monitor-row .sl-meta { display:block; margin-top:0.15rem; }
-      .sl-discover-row button, .sl-monitor-row button { flex:0 0 auto; }
-      .sl-lead-comment { margin: 0.35rem 0; padding: 0.45rem 0.55rem; border-left: 3px solid var(--sl-accent); border-radius: 6px; background: #f8fafc; color: #1f2937; font-size: 0.85rem; line-height: 1.55; }
-      .sl-legacy { display:flex; align-items:center; gap:0.55rem; flex-wrap:wrap; margin-bottom:0.65rem; padding:0.65rem 0.75rem; border:1px solid rgba(234,88,12,0.22); border-radius:9px; background:#fff7ed; color:#9a3412; font-size:0.82rem; line-height:1.5; }
-      .sl-legacy b { flex:0 0 auto; }
-      .sl-legacy span { flex:1 1 220px; }
-      .sl-legacy button { flex:0 0 auto; border:0; border-radius:7px; background:#ea580c; color:#fff; padding:0.35rem 0.7rem; cursor:pointer; }
-      .sl-comment-item { margin-bottom: 0.55rem; padding: 0.55rem 0.65rem; border: 1px solid var(--sl-border); border-radius: 8px; background: #fff; }
-      .sl-comment-item p { margin: 0 0 0.3rem; color: #111827; font-size: 0.9rem; line-height: 1.6; }
-      .sl-comment-item a { display: inline-block; margin-top: 0.2rem; }
-      .social-leads-page:not(.is-tiktok) [data-tiktok-only] { display: none !important; }
-      .sl-video-toolbar { display:flex; align-items:center; justify-content:space-between; gap:0.5rem; flex-wrap:wrap; margin:0.55rem 0; }
-      .sl-video-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(180px, 1fr)); gap:0.6rem; }
-      .sl-video-card { border:1px solid var(--sl-border); border-radius:10px; background:#fff; overflow:hidden; cursor:pointer; transition:border-color .15s, box-shadow .15s; }
-      .sl-video-card.is-selected { border-color:var(--sl-accent); box-shadow:0 0 0 2px rgba(234,88,12,0.16); }
-      .sl-video-cover { position:relative; aspect-ratio:9/13; background:#0f172a; }
-      .sl-video-cover img { width:100%; height:100%; object-fit:cover; display:block; }
-      .sl-video-noimg { display:flex; align-items:center; justify-content:center; height:100%; color:rgba(255,255,255,0.5); font-size:0.78rem; }
-      .sl-video-check { position:absolute; top:0.4rem; right:0.4rem; width:24px; height:24px; display:flex; align-items:center; justify-content:center; border-radius:6px; background:rgba(15,23,42,0.66); }
-      .sl-video-check input { width:16px; height:16px; margin:0; cursor:pointer; }
-      .sl-video-body { padding:0.5rem 0.55rem 0.6rem; }
-      .sl-video-body strong { display:block; font-size:0.82rem; line-height:1.4; max-height:2.8em; overflow:hidden; }
-      .sl-video-body .sl-meta { display:block; margin-top:0.2rem; }
-      .sl-video-stats { display:block; margin-top:0.25rem; color:#475569; font-size:0.75rem; }
-      .sl-video-body a { display:inline-block; margin-top:0.35rem; font-size:0.76rem; color:var(--sl-accent-2); }
-      .sl-selected-videos { margin-bottom:0.85rem; border-left:3px solid var(--sl-accent); }
-      .sl-selected-video-list { display:flex; flex-wrap:wrap; gap:0.35rem; margin:0.25rem 0 0.45rem; }
-      .sl-selected-video-chip { display:inline-flex; align-items:center; gap:0.3rem; max-width:100%; padding:0.22rem 0.3rem 0.22rem 0.55rem; border:1px solid var(--sl-border); border-radius:999px; background:#fff; font-size:0.76rem; }
-      .sl-selected-video-chip button { border:0; background:transparent; color:#94a3b8; font-size:0.9rem; line-height:1; cursor:pointer; padding:0 0.2rem; }
-      .sl-run-head { margin-bottom:0.6rem; }
-      .sl-step-list { margin-top:0.75rem; }
-      .sl-step { cursor:pointer; }
-      .sl-step .sl-row-actions { display:flex; align-items:center; gap:0.35rem; }
-      .sl-modal { position:fixed; inset:0; z-index:1200; display:flex; align-items:center; justify-content:center; padding:1rem; background:rgba(15,23,42,0.55); }
-      .sl-modal[hidden] { display:none; }
-      .sl-modal-card { width:min(780px, 100%); max-height:88vh; display:flex; flex-direction:column; border-radius:14px; background:#fff; box-shadow:0 24px 70px rgba(15,23,42,0.35); overflow:hidden; }
-      .sl-modal-head { display:flex; align-items:flex-start; justify-content:space-between; gap:0.75rem; padding:0.8rem 1rem; border-bottom:1px solid var(--sl-border); background:#f8fafc; }
-      .sl-modal-head strong { display:block; font-size:0.95rem; }
-      .sl-modal-body { overflow:auto; padding:0.8rem 1rem 1rem; }
-      body.sl-modal-open { overflow:hidden; }
       @media (max-width: 900px) {
         .sl-tiktok-limits { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .sl-video-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      }    </style>
+      }
+      @media (max-width: 640px) {
+        .social-leads-page { padding: 0.85rem; }
+        .sl-card { border-radius: 20px; padding: 0.95rem; }
+      }
+    </style>
 
     <header class="sl-head">
       <div>
