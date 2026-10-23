@@ -511,6 +511,92 @@
     setMsg('已清空所选视频。', false);
   }
 
+  function renderBrowserVideos(videos) {
+    var host = $('slBrowserVideoList');
+    if (!host) return;
+    videos = Array.isArray(videos) ? videos : [];
+    if (!videos.length) {
+      host.innerHTML = '<div class="sl-meta">没有搜到视频，换个关键词再试。</div>';
+      return;
+    }
+    host.innerHTML = videos.map(function(video) {
+      var url = String(video.url || '');
+      var title = compactText(video.title || video.card_text || '(无标题)', 120);
+      var handle = String(video.author_handle || '');
+      return '<div class="sl-discover-row">'
+        + '<div class="sl-row-main"><strong>' + esc(title) + '</strong>'
+        + '<span class="sl-meta">@' + esc(handle) + (video.keyword ? ' · ' + esc(video.keyword) : '') + '</span></div>'
+        + '<button type="button" class="btn btn-primary btn-sm" data-browser-collect="' + esc(url) + '">采集评论</button>'
+        + '</div>';
+    }).join('');
+  }
+
+  function renderBrowserLeads(leads) {
+    var host = $('slBrowserLeadList');
+    var count = $('slBrowserLeadCount');
+    leads = Array.isArray(leads) ? leads : [];
+    if (count) count.textContent = leads.length + ' 条';
+    if (!host) return;
+    if (!leads.length) {
+      host.innerHTML = '<div class="sl-meta">还没有意向客户。先搜索视频并采集评论。</div>';
+      return;
+    }
+    host.innerHTML = leads.map(function(lead) {
+      var handle = String(lead.handle || '');
+      var url = String(lead.profile_url || (handle ? 'https://www.tiktok.com/@' + handle : ''));
+      return '<div class="sl-source-card">'
+        + '<div class="sl-source-head"><strong>@' + esc(handle || lead.display_name || 'unknown') + '</strong><span class="sl-badge">' + esc(lead.score || 0) + ' 分</span></div>'
+        + '<span class="sl-meta">' + esc((lead.matched_terms || []).join(' · ')) + '</span>'
+        + '<div class="sl-source-desc">' + esc(lead.comment_text || '') + '</div>'
+        + (url ? '<div class="sl-meta"><a href="' + esc(url) + '" target="_blank" rel="noopener">打开主页</a></div>' : '')
+        + '</div>';
+    }).join('');
+  }
+
+  function browserSearchTikTok() {
+    var keyword = String(($('slBrowserKeyword') || {}).value || '').trim();
+    if (!keyword) { setMsg('请输入搜索关键词。', true); return; }
+    var btn = $('slBrowserSearchBtn');
+    var status = $('slBrowserStatus');
+    if (btn) { btn.disabled = true; btn.textContent = '搜索中…'; }
+    if (status) status.textContent = '正在用 TikTok 浏览器搜索「' + keyword + '」…';
+    localJson('/api/social-leads/tiktok/browser/search', { keyword: keyword, limit: 20 })
+      .then(function(data) {
+        var videos = Array.isArray(data.videos) ? data.videos : [];
+        renderBrowserVideos(videos);
+        if (status) status.textContent = videos.length ? ('找到 ' + videos.length + ' 条视频，点「采集评论」。') : '没有搜到视频，换个关键词再试。';
+      })
+      .catch(function(err) {
+        if (status) status.textContent = '搜索失败：' + (err.message || '');
+        setMsg(err.message || '搜索失败', true);
+      })
+      .finally(function() {
+        if (btn) { btn.disabled = false; btn.textContent = '搜索视频'; }
+      });
+  }
+
+  function browserCollectTikTokComments(url, btn) {
+    if (!url) return;
+    var status = $('slBrowserStatus');
+    var intent = String(($('slBrowserIntent') || {}).value || '').trim();
+    if (btn) { btn.disabled = true; btn.textContent = '采集中…'; }
+    if (status) status.textContent = '正在打开视频并采集评论…';
+    localJson('/api/social-leads/tiktok/browser/comments', { video_url: url, max_comments: 100, intent_prompt: intent, max_leads: 100 })
+      .then(function(data) {
+        var leads = Array.isArray(data.leads) ? data.leads : [];
+        renderBrowserLeads(leads);
+        if (status) status.textContent = '采集完成：评论 ' + (data.total_comments || 0) + ' 条，筛出 ' + leads.length + ' 位意向客户。';
+        setMsg('采集完成，筛出 ' + leads.length + ' 位意向客户。', false);
+      })
+      .catch(function(err) {
+        if (status) status.textContent = '采集失败：' + (err.message || '');
+        setMsg(err.message || '采集评论失败', true);
+      })
+      .finally(function() {
+        if (btn) { btn.disabled = false; btn.textContent = '采集评论'; }
+      });
+  }
+
   function syncPlatform(value) {
     var next = normalizePlatform(value || window.__socialLeadsPlatform || state.platform || 'reddit') || 'reddit';
     state.platform = next;
@@ -1468,6 +1554,21 @@
   }
 
   function bindEvents() {
+    var browserSearchBtn = $('slBrowserSearchBtn');
+    if (browserSearchBtn && browserSearchBtn.dataset.bound !== '1') { browserSearchBtn.dataset.bound = '1'; browserSearchBtn.addEventListener('click', browserSearchTikTok); }
+    var browserKeyword = $('slBrowserKeyword');
+    if (browserKeyword && browserKeyword.dataset.bound !== '1') {
+      browserKeyword.dataset.bound = '1';
+      browserKeyword.addEventListener('keydown', function(evt) { if (evt.key === 'Enter') { evt.preventDefault(); browserSearchTikTok(); } });
+    }
+    var browserVideoList = $('slBrowserVideoList');
+    if (browserVideoList && browserVideoList.dataset.bound !== '1') {
+      browserVideoList.dataset.bound = '1';
+      browserVideoList.addEventListener('click', function(evt) {
+        var btn = evt.target && evt.target.closest ? evt.target.closest('[data-browser-collect]') : null;
+        if (btn) browserCollectTikTokComments(btn.getAttribute('data-browser-collect'), btn);
+      });
+    }
     var searchVideosBtn = $('slSearchVideosBtn');
     if (searchVideosBtn && searchVideosBtn.dataset.bound !== '1') { searchVideosBtn.dataset.bound = '1'; searchVideosBtn.addEventListener('click', searchTikTokVideos); }
     var videoKeyword = $('slVideoKeyword');

@@ -771,6 +771,7 @@
     <nav class="sl-tabs" aria-label="社媒线索采集">
       <button type="button" class="sl-tab" data-sl-tab="keyword-search" data-tiktok-only>关键词搜视频</button>
       <button type="button" class="sl-tab" data-sl-tab="discover" data-tiktok-only>拓词找同行</button>
+      <button type="button" class="sl-tab" data-sl-tab="browser" data-tiktok-only>浏览器获客</button>
       <button type="button" class="sl-tab is-active" data-sl-tab="new">任务设置</button>
       <button type="button" class="sl-tab" data-sl-tab="runs">任务记录</button>
       <button type="button" class="sl-tab" data-sl-tab="leads">精准客户</button>
@@ -820,6 +821,26 @@
         <div class="sl-row-actions" style="margin-top:0.7rem;">
           <button type="button" class="btn btn-ghost btn-sm" data-sl-tab="new">去任务设置</button>
         </div>
+      </div>
+    </section>
+
+    <section class="sl-panel" data-sl-panel="browser" data-tiktok-only>
+      <div class="sl-card">
+        <div class="sl-card-title"><span>浏览器获客</span><span class="sl-meta">用已登录的 TikTok 浏览器搜索视频、采集评论、筛意向客户</span></div>
+        <div class="sl-inline sl-tiktok-search-row">
+          <input id="slBrowserKeyword" type="text" placeholder="关键词，例如：custom notebook / 定制笔记本">
+          <button type="button" id="slBrowserSearchBtn" class="btn btn-primary btn-sm">搜索视频</button>
+        </div>
+        <div class="sl-field" style="margin-top:0.55rem;">
+          <label for="slBrowserIntent">客户意向词（可选，逗号分隔）</label>
+          <input id="slBrowserIntent" type="text" placeholder="price, moq, where to buy, 价格, 起订量">
+        </div>
+        <div id="slBrowserStatus" class="sl-meta">输入关键词后搜索 TikTok 视频，再点视频右侧「采集评论」。</div>
+        <div id="slBrowserVideoList" class="sl-list" style="margin-top:0.55rem;"></div>
+      </div>
+      <div class="sl-card" style="margin-top:0.85rem;">
+        <div class="sl-card-title"><span>意向客户</span><span id="slBrowserLeadCount" class="sl-badge">0 条</span></div>
+        <div id="slBrowserLeadList" class="sl-list"></div>
       </div>
     </section>
 

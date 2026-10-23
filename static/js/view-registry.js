@@ -130,8 +130,8 @@
   });
 
   window.registerLobsterView('social-leads', {
-    html: '/static/views/social-leads.html?v=20261023-tiktok-leads-v6',
-    scripts: '/static/js/social-leads.js?v=20261023-tiktok-leads-v6',
+    html: '/static/views/social-leads.html?v=20261023-tiktok-leads-v7',
+    scripts: '/static/js/social-leads.js?v=20261023-tiktok-leads-v7',
     init: 'initSocialLeadsView',
     cache: 'reload'
   });
