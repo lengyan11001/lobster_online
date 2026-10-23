@@ -9324,7 +9324,7 @@ async def _run_scheduled_capability(
                 )
             elif provided_hifly_script:
                 generated = {
-                    "title": task_title or str(cap_payload.get("title") or "数字人口播"),
+                    "title": _resolved_digital_human_title(cap_payload.get("title"), task_title, provided_hifly_script),
                     "script": provided_hifly_script,
                     "caption_hint": task_title,
                     "language": str(cap_payload.get("language") or "zh-CN").strip() or "zh-CN",
@@ -9414,7 +9414,7 @@ async def _run_scheduled_capability(
                 cap_payload = dict(original_cap_payload or {})
                 cap_payload.update(
                     {
-                        "title": (generated.get("title") or task_title or "数字人口播")[:80],
+                        "title": _resolved_digital_human_title(generated.get("title"), task_title, skill_prompt),
                         "avatar": avatar,
                         "virtualman_id": str(cap_payload.get("virtualman_id") or avatar).strip(),
                         "voice": voice,
@@ -10999,6 +10999,23 @@ def _workflow_digital_human_title(raw_title: Any, script: Any) -> str:
         if line:
             return line[:30]
     return "\u6570\u5b57\u4eba\u53e3\u64ad"
+
+
+_DIGITAL_HUMAN_GENERIC_TITLES = {
+    "\u6570\u5b57\u4eba\u53e3\u64ad",
+    "\u6570\u5b57\u4eba\u53e3\u64ad\u89c6\u9891",
+    "\u6570\u5b57\u4eba\u89c6\u9891",
+    "\u80fd\u529b\u5b9a\u65f6\u4efb\u52a1",
+}
+
+
+def _resolved_digital_human_title(explicit_title: Any, task_title: Any, script: Any) -> str:
+    """片头标题优先级：显式标题 > 任务标题（非通用名）> 文案首句。"""
+    for candidate in (explicit_title, task_title):
+        text = _workflow_text(candidate, 80)
+        if text and text not in _DIGITAL_HUMAN_GENERIC_TITLES:
+            return text
+    return _workflow_digital_human_title("", script)
 
 
 def _workflow_text(value: Any, limit: int = 500) -> str:
