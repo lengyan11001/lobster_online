@@ -130,8 +130,8 @@
   });
 
   window.registerLobsterView('social-leads', {
-    html: '/static/views/social-leads.html?v=20260630-social-leads-platform-isolation',
-    scripts: '/static/js/social-leads.js?v=20260630-social-leads-platform-isolation',
+    html: '/static/views/social-leads.html?v=20261023-tiktok-leads-v1',
+    scripts: '/static/js/social-leads.js?v=20261023-tiktok-leads-v1',
     init: 'initSocialLeadsView',
     cache: 'reload'
   });

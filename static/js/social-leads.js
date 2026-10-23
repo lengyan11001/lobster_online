@@ -125,10 +125,25 @@
     state.platform = next;
     window.__socialLeadsPlatform = next;
     var page = document.querySelector('#content-social-leads .social-leads-page');
-    if (page) page.classList.toggle('is-x', state.platform === 'x');
-    if ($('socialLeadsKicker')) $('socialLeadsKicker').textContent = platformLabel() + ' 线索采集';
-    if ($('socialLeadsTitle')) $('socialLeadsTitle').textContent = platformLabel() + ' 公开信息采集工作台';
-    if ($('socialLeadsSubtitle')) $('socialLeadsSubtitle').textContent = '只采集公开信息，不执行评论、发布或私信动作';
+    if (page) {
+      page.classList.toggle('is-x', state.platform === 'x');
+      page.classList.toggle('is-tiktok', state.platform === 'tiktok');
+    }
+    var isTikTok = state.platform === 'tiktok';
+    if ($('slTikTokHero')) $('slTikTokHero').style.display = isTikTok ? '' : 'none';
+    if ($('slTikTokLimits')) $('slTikTokLimits').style.display = isTikTok ? '' : 'none';
+    if ($('slTemplateCard')) $('slTemplateCard').style.display = isTikTok ? 'none' : '';
+    if ($('slCreateTemplateBtn')) $('slCreateTemplateBtn').style.display = isTikTok ? 'none' : '';
+    if ($('slRuleHint')) $('slRuleHint').style.display = isTikTok ? 'none' : '';
+    var sourceToggle = document.querySelector('#content-social-leads .sl-source-toggle');
+    if (sourceToggle) sourceToggle.style.display = isTikTok ? 'none' : '';
+    if ($('socialLeadsKicker')) $('socialLeadsKicker').textContent = isTikTok ? 'TikTok 精准获客' : (platformLabel() + ' 线索采集');
+    if ($('socialLeadsTitle')) $('socialLeadsTitle').textContent = isTikTok ? '从同行评论区找精准客户' : (platformLabel() + ' 公开信息采集工作台');
+    if ($('socialLeadsSubtitle')) $('socialLeadsSubtitle').textContent = isTikTok ? '任务是任务，结果是结果：先创建采集，再在任务记录里看客户' : '只采集公开信息，不执行评论、发布或私信动作';
+    if ($('slKeywordsLabel')) $('slKeywordsLabel').textContent = isTikTok ? '什么算精准客户（必填）' : '精准用户方向关键词（必填）';
+    if ($('slKeywordsInput')) $('slKeywordsInput').placeholder = isTikTok ? '用一句话描述理想客户，例如：想采购定制笔记本的企业采购，问价格、起订量、交期，想印 logo' : '用户想抓哪类精准用户。每行一个，例如：AI automation\\nlead generation';
+    if ($('slAccountsLabel')) $('slAccountsLabel').textContent = isTikTok ? '同行账号（必填）' : '账号';
+    if ($('slAccountsInput')) $('slAccountsInput').placeholder = isTikTok ? '每行一个 TikTok 同行主页或 @unique_id，例如：@brand' : '每行一个。Reddit 可填 u/xxx；TikTok/X 可填 @xxx 或主页链接';
     document.querySelectorAll('#content-social-leads [data-reddit-only]').forEach(function(el) {
       el.style.display = state.platform === 'reddit' ? '' : 'none';
     });
@@ -156,6 +171,7 @@
   }
 
   function sourceMode() {
+    if (state.platform === 'tiktok') return 'account';
     var checked = document.querySelector('#content-social-leads input[name="slSourceMode"]:checked');
     return checked ? checked.value : 'account';
   }
@@ -170,11 +186,14 @@
   function readInputs() {
     var mode = sourceMode();
     var sourceValues = lines(($('slCommunitiesInput') || {}).value);
+    var keywords = lines(($('slKeywordsInput') || {}).value);
+    var isTikTok = state.platform === 'tiktok';
     return {
       platform: state.platform,
       title: ($('slJobTitleInput') || {}).value || '',
-      keywords: lines(($('slKeywordsInput') || {}).value),
-      source_keywords: (state.platform === 'tiktok' || state.platform === 'x') && mode === 'community' ? sourceValues : [],
+      keywords: keywords,
+      intent_prompt: isTikTok ? keywords.join('\n') : '',
+      source_keywords: !isTikTok && (state.platform === 'x') && mode === 'community' ? sourceValues : [],
       accounts: mode === 'account' ? lines(($('slAccountsInput') || {}).value) : [],
       post_ids: [],
       communities: state.platform === 'reddit' && mode === 'community' ? sourceValues : [],
@@ -182,7 +201,10 @@
       search_type: '',
       sort: 'NEW',
       time_range: 'day',
-      max_items: 100,
+      max_items: isTikTok ? Number(($('slMaxLeadsInput') || {}).value || 50) : 100,
+      max_videos: isTikTok ? Number(($('slMaxVideosInput') || {}).value || 12) : 20,
+      max_comments_per_video: isTikTok ? Number(($('slMaxCommentsInput') || {}).value || 100) : 100,
+      time_range_days: isTikTok ? Number(($('slDaysInput') || {}).value || 30) : 30,
       include_comments: true,
       include_account_posts: true,
       auto_run: true
@@ -569,8 +591,8 @@
       setMsg('Reddit 账号和社区请选择一种并填写。', true);
       return;
     }
-    if (state.platform === 'tiktok' && !body.accounts.length && !body.source_keywords.length) {
-      setMsg('TikTok 账号和来源词请选择一种并填写。', true);
+    if (state.platform === 'tiktok' && !body.accounts.length) {
+      setMsg('请填写至少一个 TikTok 同行主页或 @unique_id。', true);
       return;
     }
     if (state.platform === 'x' && !body.accounts.length && !body.source_keywords.length) {
@@ -628,7 +650,7 @@
       return '<div class="sl-item' + active + '" data-sl-job-id="' + esc(job.job_id) + '">'
         + '<strong>' + esc(job.title || (platformLabel() + '线索采集')) + '</strong>'
         + '<span class="sl-meta">' + esc(fmtTime(job.created_at)) + ' · ' + esc(job.progress || 0) + '%</span>'
-        + '<div class="sl-badges">' + statusBadge(job.status) + '<span class="sl-badge">' + esc((job.steps || []).length) + ' 步</span></div>'
+        + '<div class="sl-badges">' + statusBadge(job.status) + '<span class="sl-badge">' + esc(buildLeads(job).length) + ' 客户</span><span class="sl-badge">' + esc((job.steps || []).length) + ' 步</span></div>'
         + (job.error ? '<span class="sl-meta" style="color:#be123c;">' + esc(job.error) + '</span>' : '')
         + '</div>';
     }).join('');
@@ -713,8 +735,27 @@
     return String(item.candidate_key || item.handle || item.url || item.name || 'unknown-lead').slice(0, 240);
   }
 
+  function leadComments(lead) {
+    return lead && Array.isArray(lead.comments) ? lead.comments : [];
+  }
+
+  function leadCommentText(lead) {
+    if (!lead) return '';
+    if (lead.comment_text) return String(lead.comment_text);
+    var comments = leadComments(lead);
+    return comments.length ? String(comments[0].text || '') : '';
+  }
+
+  function epochText(value) {
+    var n = Number(value || 0);
+    if (!n) return '';
+    var ms = n > 1000000000000 ? n : n * 1000;
+    return fmtTime(new Date(ms).toISOString());
+  }
+
   function buildLeads(job) {
-    var rows = job && job.result_payload && job.result_payload.candidates;
+    var payload = job && job.result_payload && typeof job.result_payload === 'object' ? job.result_payload : {};
+    var rows = Array.isArray(payload.leads) ? payload.leads : payload.candidates;
     if (!Array.isArray(rows)) rows = [];
     return rows.map(function(item) {
       return Object.assign({}, item, { key: leadKey(item) });
@@ -728,13 +769,12 @@
     var leads = buildLeads(job);
     if (!job) {
       list.innerHTML = '<div class="sl-meta">请选择一个任务。</div>';
-      detail.innerHTML = '<div class="sl-meta">请选择左侧线索。</div>';
+      detail.innerHTML = '<div class="sl-meta">请选择左侧客户。</div>';
       return;
     }
     if (!leads.length) {
-      var sources = job && Array.isArray(job.source_items) ? job.source_items : [];
-      list.innerHTML = '<div class="sl-meta">暂无归并线索。</div>';
-      detail.innerHTML = '<div class="sl-box"><h4>已采集到的内容</h4><span class="sl-meta">当前没有可归并成账号的线索，但可以先查看采集明细。</span></div>' + renderSourceCards(sources, '还没有采集明细。');
+      list.innerHTML = '<div class="sl-meta">这个任务还没有筛出精准客户。可以回到任务记录查看采集步骤，或放宽客户描述后重新创建任务。</div>';
+      detail.innerHTML = '<div class="sl-box"><h4>还没有精准客户</h4><span class="sl-meta">先确认评论是否采集成功，再看平台高意向和客户描述是否过窄。</span></div>';
       return;
     }
     if (!state.activeLeadKey || !leads.some(function(x) { return x.key === state.activeLeadKey; })) {
@@ -742,16 +782,23 @@
     }
     list.innerHTML = leads.map(function(lead) {
       var active = lead.key === state.activeLeadKey ? ' is-active' : '';
-      var title = lead.name || lead.handle || lead.url || lead.source_reason || lead.candidate_key || '-';
-      var sub = [lead.handle ? '@' + lead.handle : '', lead.url || '', lead.source_reason || lead.source_type || ''].filter(Boolean).join(' · ');
-      var relevance = lead.keyword_relevance || {};
-      var matched = Array.isArray(relevance.matched_keywords) ? relevance.matched_keywords.join('、') : '';
+      var title = lead.name || lead.handle || lead.url || lead.candidate_key || '-';
+      var region = lead.region || '';
+      var language = lead.language || lead.comment_language || '';
+      var followers = Number(lead.followers || 0);
+      var sub = [lead.handle ? '@' + lead.handle : '', region, language, followers ? (followers >= 1000 ? (Math.round(followers / 100) / 10) + 'K 粉丝' : followers + ' 粉丝') : ''].filter(Boolean).join(' · ');
+      var comment = leadCommentText(lead);
+      var comments = leadComments(lead);
+      var matched = (lead.keyword_relevance && lead.keyword_relevance.matched_keywords) || [];
       return '<div class="sl-lead' + active + '" data-sl-lead-key="' + esc(lead.key) + '">'
         + '<strong>' + esc(title) + '</strong>'
-        + '<span class="sl-meta">' + esc(sub) + '</span>'
-        + (lead.bio ? '<span class="sl-meta">' + esc(compactText(lead.bio, 120)) + '</span>' : '')
-        + '<div class="sl-badges"><span class="sl-badge">评分 ' + esc(lead.score || '-') + '</span><span class="sl-badge">' + esc((lead.evidence || []).length) + ' 条证据</span>' + (matched ? '<span class="sl-badge">命中 ' + esc(matched) + '</span>' : '') + '</div>'
-        + '</div>';
+        + '<span class="sl-meta">' + esc(sub || 'TikTok 用户') + '</span>'
+        + (comment ? '<div class="sl-lead-comment">“' + esc(compactText(comment, 180)) + '”</div>' : '')
+        + '<div class="sl-badges"><span class="sl-badge">意向 ' + esc(lead.score || lead.intent_score || '-') + '</span>'
+        + (lead.platform_high_intent ? '<span class="sl-badge done">平台高意向</span>' : '')
+        + (comments.length ? '<span class="sl-badge">' + esc(comments.length) + ' 条评论证据</span>' : '')
+        + (matched.length ? '<span class="sl-badge">命中 ' + esc(matched.join('、')) + '</span>' : '')
+        + '</div></div>';
     }).join('');
     list.querySelectorAll('[data-sl-lead-key]').forEach(function(node) {
       node.addEventListener('click', function() {
@@ -761,37 +808,48 @@
     });
     renderLeadDetail(leads.filter(function(x) { return x.key === state.activeLeadKey; })[0] || leads[0]);
   }
-
   function renderLeadDetail(lead) {
     var host = $('slLeadDetail');
     if (!host) return;
     if (!lead) {
-      host.innerHTML = '<div class="sl-meta">请选择左侧线索。</div>';
+      host.innerHTML = '<div class="sl-meta">请选择左侧客户。</div>';
       return;
     }
-    var evidence = Array.isArray(lead.evidence) ? lead.evidence : [];
-    var relevance = lead.keyword_relevance || {};
-    var matched = Array.isArray(relevance.matched_keywords) ? relevance.matched_keywords.join('、') : '';
+    var comments = leadComments(lead);
     var reasons = Array.isArray(lead.intent_reasons) ? lead.intent_reasons : [];
-    var evidenceHtml = evidence.length ? evidence.map(function(ev, idx) {
-      return '<div class="sl-evidence"><strong>证据 ' + esc(idx + 1) + ' · ' + esc(typeLabel(ev.source_type)) + '</strong>'
+    var relevance = lead.keyword_relevance || {};
+    var matched = Array.isArray(relevance.matched_keywords) ? relevance.matched_keywords : [];
+    var profileUrl = lead.profile_url || lead.url || '';
+    var commentHtml = comments.length ? comments.slice(0, 8).map(function(item) {
+      var meta = [item.video_title || '', epochText(item.comment_time), item.likes ? ('点赞 ' + item.likes) : '', item.language || ''].filter(Boolean).join(' · ');
+      return '<div class="sl-comment-item"><p>“' + esc(item.text || '') + '”</p><span class="sl-meta">' + esc(meta) + '</span>'
+        + (item.video_url ? '<a class="sl-meta" href="' + esc(item.video_url) + '" target="_blank" rel="noopener">看来源视频</a>' : '')
+        + '</div>';
+    }).join('') : (lead.comment_text ? '<div class="sl-comment-item"><p>“' + esc(lead.comment_text) + '”</p></div>' : '<div class="sl-meta">这条客户没有可展示的评论原文。</div>');
+    var evidence = Array.isArray(lead.evidence) ? lead.evidence : [];
+    var evidenceHtml = evidence.length ? evidence.slice(0, 6).map(function(ev, idx) {
+      return '<div class="sl-evidence"><strong>来源 ' + esc(idx + 1) + ' · ' + esc(typeLabel(ev.source_type)) + '</strong>'
         + (ev.title ? '<span class="sl-meta">' + esc(ev.title) + '</span>' : '')
-        + (ev.description ? '<div class="sl-source-desc">' + esc(compactText(ev.description, 360)) + '</div>' : '')
+        + (ev.description ? '<div class="sl-source-desc">' + esc(compactText(ev.description, 280)) + '</div>' : '')
         + (ev.url ? '<span class="sl-meta"><a href="' + esc(ev.url) + '" target="_blank" rel="noopener">打开来源</a></span>' : '')
         + '</div>';
-    }).join('') : '<div class="sl-meta">暂无证据。</div>';
-    host.innerHTML = '<div class="sl-box"><h4>' + esc(lead.name || lead.handle || lead.url || '-') + '</h4>'
+    }).join('') : '<div class="sl-meta">暂无补充证据。</div>';
+    var meta = [lead.region || '', lead.language || lead.comment_language || '', lead.followers ? (lead.followers + ' 粉丝') : ''].filter(Boolean).join(' · ');
+    host.innerHTML = '<div class="sl-box"><h4>' + esc(lead.name || lead.handle || 'TikTok 客户') + '</h4>'
       + (lead.handle ? '<div class="sl-meta">@' + esc(lead.handle) + '</div>' : '')
-      + (lead.url ? '<div class="sl-meta"><a href="' + esc(lead.url) + '" target="_blank" rel="noopener">' + esc(lead.url) + '</a></div>' : '')
-      + '<div class="sl-badges"><span class="sl-badge">评分 ' + esc(lead.score || '-') + '</span><span class="sl-badge">' + esc(evidence.length) + ' 条证据</span></div></div>'
-      + '<div class="sl-box"><h4>精准判断</h4>'
-      + '<div class="sl-badges">' + (matched ? '<span class="sl-badge">命中关键词 ' + esc(matched) + '</span>' : '<span class="sl-badge">未直接命中关键词</span>') + '</div>'
-      + '<div class="sl-source-desc">' + esc(reasons.length ? reasons.join('；') : '暂无判断理由') + '</div></div>'
-      + '<div class="sl-box"><h4>公开信息</h4><div class="sl-meta">' + esc(lead.bio || '暂无简介/正文。') + '</div></div>'
-      + '<div class="sl-box"><h4>指标</h4><div class="sl-badges">' + metricChips(lead.metrics || {}) + '</div></div>'
+      + (meta ? '<div class="sl-meta">' + esc(meta) + '</div>' : '')
+      + (profileUrl ? '<div class="sl-meta"><a href="' + esc(profileUrl) + '" target="_blank" rel="noopener">打开 TikTok 主页</a></div>' : '')
+      + '<div class="sl-badges"><span class="sl-badge">意向 ' + esc(lead.score || lead.intent_score || '-') + '</span>'
+      + (lead.platform_high_intent ? '<span class="sl-badge done">平台高意向</span>' : '')
+      + '<span class="sl-badge">' + esc(comments.length || (lead.comment_text ? 1 : 0)) + ' 条评论</span></div></div>'
+      + '<div class="sl-box"><h4>他咨询了什么</h4>' + commentHtml + '</div>'
+      + '<div class="sl-box"><h4>为什么是精准客户</h4>'
+      + '<div class="sl-badges">' + (matched.length ? '<span class="sl-badge">命中 ' + esc(matched.join('、')) + '</span>' : '<span class="sl-badge">补充判断</span>') + '</div>'
+      + '<div class="sl-source-desc">' + esc(reasons.length ? reasons.join('；') : '平台高意向评论或客户描述命中') + '</div></div>'
+      + '<div class="sl-box"><h4>客户资料</h4><div class="sl-meta">' + esc(lead.bio || '暂无主页简介。') + '</div>'
+      + '<div class="sl-badges">' + metricChips(lead.metrics || {}) + '</div></div>'
       + '<div class="sl-box"><h4>来源依据</h4>' + evidenceHtml + '</div>';
   }
-
   function renderOutputs(job) {
     var list = $('slOutputList');
     var detail = $('slOutputDetail');

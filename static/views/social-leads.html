@@ -393,7 +393,29 @@
           grid-template-columns: 1fr;
         }
       }
-    </style>
+      .sl-tiktok-hero {
+        margin-bottom: 0.85rem;
+        border: 0;
+        color: #fff;
+        background: linear-gradient(135deg, #071b3a 0%, #0b2f5c 55%, #0e6b68 100%);
+        box-shadow: 0 16px 38px rgba(8, 35, 70, 0.18);
+      }
+      .sl-tiktok-kicker { color: #6ee7f2; font-size: 0.72rem; font-weight: 900; letter-spacing: 0.16em; }
+      .sl-tiktok-title { margin-top: 0.25rem; font-size: 1.35rem; font-weight: 900; line-height: 1.3; }
+      .sl-tiktok-sub { margin-top: 0.3rem; color: rgba(255,255,255,0.76); font-size: 0.88rem; line-height: 1.6; }
+      .sl-tiktok-flow { display: flex; align-items: center; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.7rem; }
+      .sl-tiktok-flow span { padding: 0.28rem 0.5rem; border-radius: 999px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.16); font-size: 0.75rem; }
+      .sl-tiktok-flow i { width: 1rem; height: 1px; background: rgba(255,255,255,0.24); }
+      .sl-tiktok-limits { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.55rem; margin-bottom: 0.75rem; }
+      .social-leads-page.is-tiktok .sl-grid { grid-template-columns: minmax(320px, 1fr); }
+      .sl-tiktok-limits .sl-field { margin-bottom: 0; }
+      .sl-lead-comment { margin: 0.35rem 0; padding: 0.45rem 0.55rem; border-left: 3px solid var(--sl-accent); border-radius: 6px; background: #f8fafc; color: #1f2937; font-size: 0.85rem; line-height: 1.55; }
+      .sl-comment-item { margin-bottom: 0.55rem; padding: 0.55rem 0.65rem; border: 1px solid var(--sl-border); border-radius: 8px; background: #fff; }
+      .sl-comment-item p { margin: 0 0 0.3rem; color: #111827; font-size: 0.9rem; line-height: 1.6; }
+      .sl-comment-item a { display: inline-block; margin-top: 0.2rem; }
+      @media (max-width: 900px) {
+        .sl-tiktok-limits { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }    </style>
 
     <header class="sl-head">
       <div>
@@ -410,10 +432,16 @@
 
     <div id="socialLeadsMsg" class="sl-msg"></div>
 
+    <div id="slTikTokHero" class="sl-card sl-tiktok-hero" style="display:none;">
+      <div class="sl-tiktok-kicker">TIKTOK LEAD ENGINE</div>
+      <div class="sl-tiktok-title">从同行评论区，找到真正想买的人</div>
+      <div class="sl-tiktok-sub">录入同行主页 → 同步视频 → 采集评论 → 筛出问价格、问起订量、要方案的客户。</div>
+      <div class="sl-tiktok-flow"><span>01 同行</span><i></i><span>02 视频</span><i></i><span>03 评论</span><i></i><span>04 精准客户</span></div>
+    </div>
     <nav class="sl-tabs" aria-label="社媒线索采集">
-      <button type="button" class="sl-tab is-active" data-sl-tab="new">新建采集</button>
-      <button type="button" class="sl-tab" data-sl-tab="runs">执行过程</button>
-      <button type="button" class="sl-tab" data-sl-tab="leads">线索名单</button>
+      <button type="button" class="sl-tab is-active" data-sl-tab="new">新建任务</button>
+      <button type="button" class="sl-tab" data-sl-tab="runs">任务记录</button>
+      <button type="button" class="sl-tab" data-sl-tab="leads">精准客户</button>
       <button type="button" class="sl-tab" data-sl-tab="outputs">采集明细</button>
     </nav>
 
@@ -426,7 +454,7 @@
             <input id="slJobTitleInput" type="text" placeholder="例如：AI工具潜在线索采集">
           </div>
           <div class="sl-field">
-            <label for="slKeywordsInput">精准用户方向关键词（必填）</label>
+            <label id="slKeywordsLabel" for="slKeywordsInput">精准用户方向关键词（必填）</label>
             <textarea id="slKeywordsInput" required placeholder="用户想抓哪类精准用户。每行一个，例如：AI automation&#10;lead generation"></textarea>
           </div>
           <div class="sl-source-toggle">
@@ -438,10 +466,16 @@
             <textarea id="slCommunitiesInput" placeholder="每行一个，例如：Entrepreneur&#10;SaaS"></textarea>
           </div>
           <div class="sl-field" data-sl-source-field="account">
-            <label for="slAccountsInput">账号</label>
+            <label id="slAccountsLabel" for="slAccountsInput">账号</label>
             <textarea id="slAccountsInput" placeholder="每行一个。Reddit 可填 u/xxx；TikTok/X 可填 @xxx 或主页链接"></textarea>
           </div>
-          <div class="sl-meta">采集规则固定为近 24 小时公开视频/帖子和评论；获取资料后按上面的关键词方向筛选精准用户。</div>
+          <div id="slTikTokLimits" class="sl-tiktok-limits" style="display:none;">
+            <div class="sl-field"><label for="slDaysInput">最近天数</label><input id="slDaysInput" type="number" min="1" max="365" value="30"></div>
+            <div class="sl-field"><label for="slMaxVideosInput">最多视频</label><input id="slMaxVideosInput" type="number" min="1" max="50" value="12"></div>
+            <div class="sl-field"><label for="slMaxCommentsInput">每条视频评论</label><input id="slMaxCommentsInput" type="number" min="1" max="500" value="100"></div>
+            <div class="sl-field"><label for="slMaxLeadsInput">最多客户</label><input id="slMaxLeadsInput" type="number" min="1" max="100" value="50"></div>
+          </div>
+          <div id="slRuleHint" class="sl-meta">采集规则固定为近 24 小时公开视频/帖子和评论；获取资料后按上面的关键词方向筛选精准用户。</div>
           <div class="sl-row-actions">
             <button type="button" id="slStartJobBtn" class="btn btn-primary">开始采集</button>
             <button type="button" id="slCreateTemplateBtn" class="btn btn-ghost">创建模板</button>
@@ -449,7 +483,7 @@
             <button type="button" id="slLoadDraftBtn" class="btn btn-ghost">读取上次输入</button>
           </div>
         </div>
-        <div class="sl-card">
+        <div class="sl-card" id="slTemplateCard">
           <div class="sl-card-title">
             <span>采集模板</span>
             <button type="button" id="slRefreshTemplatesBtn" class="btn btn-ghost btn-sm">刷新</button>
