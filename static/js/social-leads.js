@@ -650,7 +650,7 @@
       return '<div class="sl-item' + active + '" data-sl-job-id="' + esc(job.job_id) + '">'
         + '<strong>' + esc(job.title || (platformLabel() + '线索采集')) + '</strong>'
         + '<span class="sl-meta">' + esc(fmtTime(job.created_at)) + ' · ' + esc(job.progress || 0) + '%</span>'
-        + '<div class="sl-badges">' + statusBadge(job.status) + '<span class="sl-badge">' + esc(buildLeads(job).length) + ' 客户</span><span class="sl-badge">' + esc((job.steps || []).length) + ' 步</span></div>'
+        + '<div class="sl-badges">' + statusBadge(job.status) + (isLegacyTikTokJob(job) ? '<span class="sl-badge">旧版数据</span>' : '') + '<span class="sl-badge">' + esc(buildLeads(job).length) + ' 客户</span><span class="sl-badge">' + esc((job.steps || []).length) + ' 步</span></div>'
         + (job.error ? '<span class="sl-meta" style="color:#be123c;">' + esc(job.error) + '</span>' : '')
         + '</div>';
     }).join('');
@@ -762,6 +762,11 @@
     });
   }
 
+  function isLegacyTikTokJob(job) {
+    if (!job || String(job.platform || '').toLowerCase() !== 'tiktok') return false;
+    var payload = job.result_payload && typeof job.result_payload === 'object' ? job.result_payload : {};
+    return !Array.isArray(payload.leads);
+  }
   function renderLeads(job) {
     var list = $('slLeadList');
     var detail = $('slLeadDetail');
@@ -780,7 +785,10 @@
     if (!state.activeLeadKey || !leads.some(function(x) { return x.key === state.activeLeadKey; })) {
       state.activeLeadKey = leads[0].key;
     }
-    list.innerHTML = leads.map(function(lead) {
+    var legacyBanner = isLegacyTikTokJob(job)
+      ? '<div class="sl-legacy"><b>这是旧版本任务</b><span>旧任务只保存了少量候选，没有评论原文；请新建任务重新采集。</span><button type="button" data-sl-go-new="1">新建任务</button></div>'
+      : '';
+    list.innerHTML = legacyBanner + leads.map(function(lead) {
       var active = lead.key === state.activeLeadKey ? ' is-active' : '';
       var title = lead.name || lead.handle || lead.url || lead.candidate_key || '-';
       var region = lead.region || '';
@@ -800,6 +808,9 @@
         + (matched.length ? '<span class="sl-badge">命中 ' + esc(matched.join('、')) + '</span>' : '')
         + '</div></div>';
     }).join('');
+    list.querySelectorAll('[data-sl-go-new]').forEach(function(node) {
+      node.addEventListener('click', function() { switchTab('new'); });
+    });
     list.querySelectorAll('[data-sl-lead-key]').forEach(function(node) {
       node.addEventListener('click', function() {
         state.activeLeadKey = node.getAttribute('data-sl-lead-key') || '';
