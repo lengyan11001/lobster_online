@@ -8,6 +8,7 @@ from skills.alibaba1688_publish import Alibaba1688Driver
 from skills.taobao_publish import TaobaoDriver
 from skills.pinduoduo_publish import PinduoduoDriver
 from skills.wechat_channels_publish import WechatChannelsDriver
+from skills.tiktok_publish import TikTokDriver
 
 DRIVERS = {
     "douyin": DouyinDriver,
@@ -19,4 +20,5 @@ DRIVERS = {
     "taobao": TaobaoDriver,
     "pinduoduo": PinduoduoDriver,
     "wechat_channels": WechatChannelsDriver,
+    "tiktok": TikTokDriver,
 }

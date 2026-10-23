@@ -52,6 +52,9 @@ def _platform_copy_limits(platform: str, media_type: str) -> str:
         else:
             lines.append("标题：最多 30 个字。")
         lines.append("描述：宜控制在 400 字以内（平台描述与话题合并后总长约 ≤500 字）。")
+    elif p == "tiktok":
+        lines.append("标题：不超过 100 个字。")
+        lines.append("描述：与标题、话题合并后不超过 2200 个字符，建议 300 字以内。")
     elif p == "toutiao":
         lines.append("标题：最多 30 个字。")
         lines.append("简介/正文：宜充实、口语化，最多约 5000 字以内。")
@@ -157,6 +160,7 @@ async def generate_publish_copy(
         "xiaohongshu": "小红书",
         "toutiao": "今日头条/头条号",
         "wechat_channels": "视频号",
+        "tiktok": "TikTok",
         "bilibili": "B站",
         "kuaishou": "快手",
     }.get((platform or "").strip().lower(), platform or "该平台")

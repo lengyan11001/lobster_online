@@ -27,8 +27,8 @@ function bindPublishTabs() {
   });
 }
 
-var PLATFORM_NAMES = { douyin: '抖音', bilibili: 'B站', xiaohongshu: '小红书', kuaishou: '快手', toutiao: '今日头条', wechat_channels: '视频号', douyin_shop: '抖店', xiaohongshu_shop: '小红书店铺', alibaba1688: '1688', taobao: '淘宝', pinduoduo: '拼多多' };
-var PUBLISH_ACCOUNT_PLATFORMS = ['douyin', 'wechat_channels', 'bilibili', 'xiaohongshu', 'kuaishou', 'toutiao'];
+var PLATFORM_NAMES = { douyin: '抖音', bilibili: 'B站', xiaohongshu: '小红书', kuaishou: '快手', toutiao: '今日头条', wechat_channels: '视频号', tiktok: 'TikTok', douyin_shop: '抖店', xiaohongshu_shop: '小红书店铺', alibaba1688: '1688', taobao: '淘宝', pinduoduo: '拼多多' };
+var PUBLISH_ACCOUNT_PLATFORMS = ['douyin', 'tiktok', 'wechat_channels', 'bilibili', 'xiaohongshu', 'kuaishou', 'toutiao'];
 var ECOMMERCE_ACCOUNT_PLATFORMS = ['douyin_shop', 'xiaohongshu_shop', 'alibaba1688', 'taobao', 'pinduoduo'];
 var ECOMMERCE_PLATFORMS = { douyin_shop: true, xiaohongshu_shop: true, alibaba1688: true, taobao: true, pinduoduo: true };
 var _currentAccountType = 'publish';

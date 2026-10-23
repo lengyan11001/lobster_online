@@ -1030,6 +1030,7 @@ SUPPORTED_PLATFORMS = {
     "kuaishou": {"name": "快手", "login_url": "https://cp.kuaishou.com"},
     "toutiao": {"name": "今日头条", "login_url": "https://mp.toutiao.com/auth/page/login?redirect_url=JTJGcHJvZmlsZV92NCUyRg=="},
     "wechat_channels": {"name": "视频号", "login_url": "https://channels.weixin.qq.com/platform"},
+    "tiktok": {"name": "TikTok", "login_url": "https://www.tiktok.com/login?redirect_url=https%3A%2F%2Fwww.tiktok.com%2Ftiktokstudio%2Fupload"},
     "douyin_shop": {"name": "抖店", "login_url": "https://fxg.jinritemai.com/"},
     "xiaohongshu_shop": {"name": "小红书店铺", "login_url": "https://ark.xiaohongshu.com/"},
     "alibaba1688": {"name": "1688", "login_url": "https://work.1688.com/"},

@@ -102,6 +102,17 @@ def normalize_publish_texts(
             d = d[:desc_max]
         return t, d, g, warnings
 
+    if plat == "tiktok":
+        # TikTok 只有一个 caption 输入框，标题+描述+话题合并，上限 2200 字符。
+        caption_max = 2200
+        suffix = _douyin_tag_suffix(g)
+        combined = (t + ("\n" if t and d else "") + d + suffix).strip()
+        if len(combined) > caption_max:
+            room = max(0, caption_max - len(suffix) - (len(t) + 1 if t and d else len(t)))
+            warnings.append(f"TikTok 标题+描述+话题已超过 {caption_max} 字，已缩短描述（原 {len(combined)} 字）")
+            d = d[:room]
+        return t, d, g, warnings
+
     if plat == "wechat_channels":
         title_max, desc_max = 16, 1000
         normalized_title = _wechat_channels_short_title(t)

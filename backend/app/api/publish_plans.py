@@ -24,7 +24,7 @@ from ..models import PublishAccount, PublishGroupItem, PublishPlan, PublishPlanI
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_PLATFORMS = {"douyin", "wechat_channels"}
+_PLATFORMS = {"douyin", "wechat_channels", "tiktok"}
 _MAX_TIMES = 24
 
 
@@ -192,7 +192,7 @@ def create_publish_plan(
 ):
     platform = str(body.platform or "").strip().lower()
     if platform not in _PLATFORMS:
-        raise HTTPException(400, detail="平台只支持抖音（douyin）或视频号（wechat_channels）")
+        raise HTTPException(400, detail="平台只支持抖音（douyin）、TikTok（tiktok）或视频号（wechat_channels）")
     times = _clean_times(body.times)
     if not times:
         raise HTTPException(400, detail="请至少设置一个发布时间（HH:MM）")
