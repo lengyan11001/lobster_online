@@ -1459,23 +1459,23 @@ window._openLinkedinMiningView = function() {
 };
 
 window._openTikTokLeadsWorkbench = function() {
-  window.__socialLeadsPlatform = 'tiktok';
   if (typeof window.registerLobsterView === 'function') {
-    window.registerLobsterView('tiktok-leads', {
-      html: '/static/views/tiktok-leads.html?v=20261024-tiktok-workbench-v1',
+    window.registerLobsterView('tiktok-workbench', {
+      html: '/static/views/tiktok-workbench.html?v=20261024-tiktok-workbench-v1',
       cache: 'reload'
     });
   }
   if (typeof window.showLobsterView === 'function') {
-    window.showLobsterView('tiktok-leads', document.querySelector('.nav-left-item[data-view="skill-store"]'))
+    window.showLobsterView('tiktok-workbench', document.querySelector('.nav-left-item[data-view="skill-store"]'))
       .catch(function(err) {
-        console.error('Failed to open tiktok-leads', err);
-        alert('TikTok 获客页面加载失败，请刷新页面后重试。' + (err && err.message ? '\n' + err.message : ''));
+        console.error('Failed to open tiktok-workbench', err);
+        alert('TikTok获客页面加载失败，请刷新页面后重试。' + (err && err.message ? '\n' + err.message : ''));
       });
+    try { location.hash = 'tiktok-workbench'; } catch (e0) {}
     return;
   }
-  _switchToHiddenView('tiktok-leads');
-  try { location.hash = 'tiktok-leads'; } catch (e1) {}
+  _switchToHiddenView('tiktok-workbench');
+  try { location.hash = 'tiktok-workbench'; } catch (e1) {}
 };
 
 window._openSocialLeadsView = function(platform) {
@@ -1483,10 +1483,6 @@ window._openSocialLeadsView = function(platform) {
   if (nextPlatform === 'twitter' || nextPlatform === 'x_leads') nextPlatform = 'x';
   if (nextPlatform === 'tiktok_leads' || nextPlatform === 'tik_tok') nextPlatform = 'tiktok';
   if (['reddit', 'x', 'tiktok'].indexOf(nextPlatform) < 0) nextPlatform = 'reddit';
-  if (nextPlatform === 'tiktok' && typeof window._openTikTokLeadsWorkbench === 'function') {
-    window._openTikTokLeadsWorkbench();
-    return;
-  }
   window.__socialLeadsPlatform = nextPlatform;
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('social-leads', {
@@ -1658,6 +1654,10 @@ window._openHiddenWorkspaceView = function(view) {
   }
   if (target === 'shanjian-digital-human' && typeof window._openShanjianDigitalHumanView === 'function') {
     window._openShanjianDigitalHumanView();
+    return;
+  }
+  if (target === 'tiktok-workbench' && typeof window._openTikTokLeadsWorkbench === 'function') {
+    window._openTikTokLeadsWorkbench();
     return;
   }
   if (target === 'douyin-workbench' && typeof window._openDouyinWorkbenchView === 'function') {
@@ -2098,6 +2098,25 @@ function _renderLinkedinMiningCard(pkg, showDebug) {
     '<div class="card-desc">' + escapeHtml(_skillStoreBrandSafeText(pkg.description || '输入LinkedIn主页、公司、关键词或话题，自动同步数据并生成线索分析报告。')) + cap + '</div>' +
     '<div class="card-tags">' + tags + '</div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm linkedin-mining-entry-btn">进入工作台</button></div>' +
+  '</div>';
+}
+
+function _tiktokWorkbenchAllowed() {
+  try {
+    if (typeof window.isLobsterFeatureAllowed !== 'function') return true;
+    return !!window.isLobsterFeatureAllowed('tiktok_leads_access');
+  } catch (e) {
+    return false;
+  }
+}
+
+function _renderTikTokWorkbenchCard() {
+  return '<div class="skill-store-card tiktok-workbench-card" data-skill-package-id="tiktok_workbench" style="cursor:pointer;border-color:rgba(236,72,153,0.4);background:linear-gradient(135deg,rgba(15,23,42,0.08),rgba(236,72,153,0.08));">' +
+    '<div class="card-label">skill <span class="badge-installed">可用</span></div>' +
+    '<div class="card-value">TikTok获客</div>' +
+    '<div class="card-desc">独立获客工作台：关键词搜索、同行监控、评论采集、意向筛选与客户池。与「TikTok线索采集」数据互不影响。</div>' +
+    '<div class="card-tags"><span class="tag">TikTok</span><span class="tag">搜索采集</span><span class="tag">同行监控</span><span class="tag">客户池</span></div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm tiktok-workbench-entry-btn">进入工作台</button></div>' +
   '</div>';
 }
 
@@ -3435,6 +3454,7 @@ function loadSkillStore() {
         if (redditLeadsPkg) html += _renderSocialLeadsCard(redditLeadsPkg, 'reddit', !!(isSkillAdmin && redditLeadsPkg.store_visibility === 'debug'));
         if (xLeadsPkg) html += _renderSocialLeadsCard(xLeadsPkg, 'x', !!(isSkillAdmin && xLeadsPkg.store_visibility === 'debug'));
         if (tiktokLeadsPkg) html += _renderSocialLeadsCard(tiktokLeadsPkg, 'tiktok', !!(isSkillAdmin && tiktokLeadsPkg.store_visibility === 'debug'));
+        if (_tiktokWorkbenchAllowed()) html += _renderTikTokWorkbenchCard();
         if (globalLeadsPkg) html += _renderGlobalLeadsCard(globalLeadsPkg, !!(isSkillAdmin && globalLeadsPkg.store_visibility === 'debug'));
         if (alibabaInquiriesPkg) html += _renderAlibabaInquiriesCard(alibabaInquiriesPkg, !!(isSkillAdmin && alibabaInquiriesPkg.store_visibility === 'debug'));
         if (juheWechatPkg) html += _renderJuheWechatCard(juheWechatPkg, !!(isSkillAdmin && juheWechatPkg.store_visibility === 'debug'));
@@ -3608,6 +3628,7 @@ function loadSkillStore() {
         _bindIpContentStudioCardEntry();
         _bindLinkedinMiningCardEntry();
         _bindSocialLeadsCardEntry();
+  _bindTikTokWorkbenchCard();
         _bindGlobalLeadsCardEntry();
         _bindAlibabaInquiriesCardEntry();
         _bindJuheWechatCardEntry();
@@ -4085,6 +4106,26 @@ function _bindLinkedinMiningCardEntry() {
       e.stopPropagation();
       if (typeof window._openLinkedinMiningView === 'function') window._openLinkedinMiningView();
     });
+  });
+}
+
+function _bindTikTokWorkbenchCard() {
+  document.querySelectorAll('.tiktok-workbench-card, [data-skill-package-id="tiktok_workbench"]').forEach(function(card) {
+    if (card.dataset.tiktokWorkbenchBound === '1') return;
+    card.dataset.tiktokWorkbenchBound = '1';
+    card.style.cursor = 'pointer';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openTikTokLeadsWorkbench === 'function') window._openTikTokLeadsWorkbench();
+    });
+    var btn = card.querySelector('.tiktok-workbench-entry-btn');
+    if (btn) {
+      btn.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof window._openTikTokLeadsWorkbench === 'function') window._openTikTokLeadsWorkbench();
+      });
+    }
   });
 }
 

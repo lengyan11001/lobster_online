@@ -32,8 +32,8 @@
     cache: 'reload'
   });
 
-  window.registerLobsterView('tiktok-leads', {
-    html: '/static/views/tiktok-leads.html?v=20261024-tiktok-workbench-v1',
+  window.registerLobsterView('tiktok-workbench', {
+    html: '/static/views/tiktok-workbench.html?v=20261024-tiktok-workbench-v1',
     cache: 'reload'
   });
 

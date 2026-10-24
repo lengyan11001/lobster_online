@@ -1739,6 +1739,7 @@ var LOBSTER_HIDDEN_VIEWS = {
   'reddit-leads': true,
   'x-leads': true,
   'tiktok-leads': true,
+  'tiktok-workbench': true,
   'ai-3d-model': true,
   'openclaw-skill-chat': true,
   'personal-whatsapp': true
@@ -1826,7 +1827,7 @@ var LOBSTER_VIEW_FEATURE_GATES = {
   'linkedin-mining': 'linkedin_mining_skill',
   'reddit-leads': 'reddit_leads_access',
   'x-leads': 'x_leads_access',
-  'tiktok-leads': 'tiktok_leads_access',
+  'tiktok-workbench': 'tiktok_leads_access',
   'social-leads': ['reddit_leads_access', 'x_leads_access', 'tiktok_leads_access', 'reddit_leads', 'x_leads', 'tiktok_leads'],
   tutorial: 'tutorial_entry',
 };
