@@ -1,7 +1,7 @@
 """TikTok 版评论区/搜索采集器（工作台引擎）。
 
 与抖音版保持同一套方法名和返回结构，内部使用 TikTok 页面 DOM。
-未接入的能力（私信/群/提及等）会抛出明确异常，不做假数据。
+私信、陌生人私信、群成员、评论 @ 提及、账号养护均按 TikTok 页面 DOM 单独实现。
 """
 from __future__ import annotations
 
@@ -880,38 +880,774 @@ class TikTokCommentScraper:
         comment_result = await self.send_video_comment(video_url, comment_text, expected_title=expected_username, logger=logger)
         return {"success": True, "followed": result.get("followed"), "video_url": video_url, "comment": comment_result}
 
-    async def send_video_comment_mentions(self, *args, **kwargs):
-        raise TikTokPrivateMessageUnavailable(_UNAVAILABLE_MESSAGE)
+    # ------------------------------------------------------------------ 私信 / 消息中心
+    async def open_chat_workspace_page(self, logger: Optional[Callable[[str, str], None]] = None) -> Page:
+        page = await self._new_page(logger=logger)
+        try:
+            await page.goto("https://www.tiktok.com/messages", wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(4500)
+            return page
+        except Exception:
+            try:
+                await page.close()
+            except Exception:
+                pass
+            raise
 
-    async def list_chat_groups(self, *args, **kwargs):
-        raise TikTokPrivateMessageUnavailable(_UNAVAILABLE_MESSAGE)
+    async def _list_conversations(self, page: Page) -> List[Dict]:
+        rows = await page.evaluate(
+            """
+            () => {
+              const out = [];
+              const seen = new Set();
+              const push = (username, href, row) => {
+                if (!username || seen.has(username) || !row) return;
+                const img = row.querySelector('img');
+                const rect = row.getBoundingClientRect();
+                const text = String(row.innerText || '');
+                const lines = text.split(String.fromCharCode(10)).map((s) => s.trim()).filter(Boolean);
+                // 真正的会话条目：有头像、有昵称+最后一条消息、尺寸像列表行
+                if (!img || lines.length < 2 || rect.width < 180 || rect.height < 40) return;
+                seen.add(username);
+                out.push({username: username, profile_url: href ? ('https://www.tiktok.com' + href) : '', lines: lines, avatar: img ? (img.currentSrc || img.src || '') : ''});
+              };
+              for (const a of document.querySelectorAll('a[href^="/@"]')) {
+                const rect = a.getBoundingClientRect();
+                if (rect.width < 30 || rect.height < 16) continue;
+                if (rect.left > window.innerWidth * 0.6) continue;
+                if (!a.closest('[class*="ChatList"], [class*="ChatItem"], [class*="DivChat"], [data-e2e*="dm"]')) continue;
+                const href = a.getAttribute('href') || '';
+                const username = href.slice(2).split('/')[0].split('?')[0];
+                let row = a;
+                for (let i = 0; i < 6 && row.parentElement; i++) {
+                  if (row.getBoundingClientRect().width > 180) break;
+                  row = row.parentElement;
+                }
+                push(username, href, row);
+              }
+              for (const node of document.querySelectorAll('[class*="DivChatItem"], [data-e2e="dm-conversation-item"]')) {
+                const rect = node.getBoundingClientRect();
+                if (rect.width < 120 || rect.height < 30) continue;
+                const link = node.querySelector('a[href^="/@"]');
+                const href = link ? link.getAttribute('href') : '';
+                let username = href ? href.slice(2).split('/')[0].split('?')[0] : '';
+                const lines = String(node.innerText || '').split(String.fromCharCode(10)).map((s) => s.trim()).filter(Boolean);
+                if (!username) username = lines[0] || '';
+                push(username, href, node);
+              }
+              return out;
+            }
+            """
+        )
+        result = []
+        for index, row in enumerate(rows or []):
+            lines = [str(item) for item in (row.get("lines") or []) if str(item).strip()]
+            username = str(row.get("username", "") or "").strip()
+            if not username:
+                continue
+            preview = ""
+            for line in lines:
+                if line and line != username:
+                    preview = line
+            result.append(
+                {
+                    "username": username,
+                    "profile_url": str(row.get("profile_url", "") or "").strip(),
+                    "avatar_url": str(row.get("avatar", "") or "").strip(),
+                    "preview_text": preview,
+                    "time_text": lines[-1] if len(lines) > 1 and lines[-1] != preview else "",
+                    "index": index,
+                    "is_group": bool(row.get("is_group")),
+                }
+            )
+        return result
 
-    async def collect_stranger_private_messages(self, *args, **kwargs):
-        raise TikTokPrivateMessageUnavailable(_UNAVAILABLE_MESSAGE)
+    async def _open_conversation_by_username(self, page: Page, username: str, profile_url: str = "") -> bool:
+        username = str(username or "").strip()
+        if not username:
+            return False
+        clicked = await page.evaluate(
+            """
+            (username) => {
+              const wanted = String(username || '').trim().toLowerCase();
+              const rows = Array.from(document.querySelectorAll('a[href^="/@"], [class*="DivChatItem"], [data-e2e="dm-conversation-item"]'));
+              for (const node of rows) {
+                const rect = node.getBoundingClientRect();
+                if (rect.width < 30 || rect.height < 16) continue;
+                const href = node.getAttribute('href') || '';
+                const handle = href ? href.slice(2).split('/')[0].split('?')[0].toLowerCase() : '';
+                const lines = String(node.innerText || '').toLowerCase().split(String.fromCharCode(10)).map((s) => s.trim());
+                if (handle === wanted || lines.indexOf(wanted) >= 0) {
+                  (node.closest('a') || node).click();
+                  return true;
+                }
+                if (String(node.innerText || '').toLowerCase().indexOf('@' + wanted) >= 0) {
+                  (node.closest('a') || node).click();
+                  return true;
+                }
+              }
+              return false;
+            }
+            """,
+            username,
+        )
+        if not clicked:
+            return False
+        await page.wait_for_timeout(2500)
+        return True
+    async def open_chat_page_conversation(self, page: Page, row: Dict) -> tuple[bool, str]:
+        username = str((row or {}).get("username", "") or "").strip()
+        profile_url = str((row or {}).get("profile_url", "") or "").strip()
+        if not username and profile_url:
+            username = profile_url.rstrip("/").split("/@")[-1].split("/")[0]
+        if not username:
+            return False, "缺少会话用户名"
+        try:
+            if not str(page.url or "").startswith("https://www.tiktok.com/messages"):
+                await page.goto("https://www.tiktok.com/messages", wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(3500)
+            opened = await self._open_conversation_by_username(page, username, profile_url)
+            if not opened and profile_url:
+                await page.goto(profile_url, wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(2500)
+                clicked = await page.evaluate(
+                    """
+                    () => {
+                      const nodes = Array.from(document.querySelectorAll('button, [role="button"], a'));
+                      const btn = nodes.find((n) => /^(message|\u53d1\u6d88\u606f|\u804a\u5929)$/i.test(String(n.innerText || '').trim()));
+                      if (btn) { btn.click(); return true; }
+                      const icon = document.querySelector('[data-e2e="message-button"], [data-e2e="dm-button"]');
+                      if (icon) { icon.click(); return true; }
+                      return false;
+                    }
+                    """
+                )
+                if clicked:
+                    await page.wait_for_timeout(3500)
+                    opened = True
+            if not opened:
+                return False, f"消息列表中没有找到 {username} 的会话"
+            return True, ""
+        except Exception as exc:
+            return False, f"打开会话失败：{exc}"
 
-    async def collect_chat_page_private_messages(self, *args, **kwargs):
-        raise TikTokPrivateMessageUnavailable(_UNAVAILABLE_MESSAGE)
+    async def _read_messages(self, page: Page) -> List[Dict]:
+        rows = await page.evaluate(
+            """
+            () => {
+              const container = document.querySelector('[class*="DivMessageListContainer"], [class*="DivChatMessageList"], [data-e2e="dm-message-list"]');
+              const nodes = Array.from(document.querySelectorAll('[data-e2e="dm-message"], [class*="DivMessageItem"], [class*="DivMessageBubble"], [class*="DivChatMessageItem"]'));
+              const holder = container ? container.getBoundingClientRect() : { left: 0, width: window.innerWidth };
+              const mid = holder.left + holder.width / 2;
+              const out = [];
+              for (const node of nodes) {
+                const rect = node.getBoundingClientRect();
+                if (rect.width < 10 || rect.height < 8) continue;
+                const text = String(node.innerText || '').trim();
+                if (!text) continue;
+                out.push({ text: text, direction: rect.left + rect.width / 2 > mid ? 'outgoing' : 'incoming', top: rect.top });
+              }
+              out.sort((a, b) => a.top - b.top);
+              return out.map((m) => ({ text: m.text, direction: m.direction, time_text: '' }));
+            }
+            """
+        )
+        return [row for row in (rows or []) if str(row.get("text", "")).strip()]
 
-    async def collect_chat_page_conversation_detail(self, *args, **kwargs):
-        raise TikTokPrivateMessageUnavailable(_UNAVAILABLE_MESSAGE)
+    async def extract_chat_page_conversation_detail(self, page: Page) -> Dict:
+        header = {}
+        try:
+            header = await page.evaluate(
+                """
+                () => {
+                  const head = document.querySelector('[class*="RightPanelHeader"], [class*="DivChatHeader"], [data-e2e="dm-conversation-header"]');
+                  const link = head ? head.querySelector('a[href^="/@"]') : document.querySelector('a[href^="/@"]');
+                  const avatar = head ? head.querySelector('img') : null;
+                  return {
+                    profile_url: link ? ('https://www.tiktok.com' + link.getAttribute('href')) : '',
+                    username: link ? link.getAttribute('href').slice(2).split('/')[0] : '',
+                    avatar_url: avatar ? (avatar.currentSrc || avatar.src || '') : ''
+                  };
+                }
+                """
+            )
+        except Exception:
+            header = {}
+        messages = await self._read_messages(page)
+        incoming = [m for m in messages if m.get("direction") == "incoming"]
+        outgoing = [m for m in messages if m.get("direction") == "outgoing"]
+        return {
+            "username": str((header or {}).get("username", "") or ""),
+            "avatar_url": str((header or {}).get("avatar_url", "") or ""),
+            "profile_url": str((header or {}).get("profile_url", "") or ""),
+            "incoming_message": str(incoming[-1].get("text", "") if incoming else ""),
+            "reply_message": str(outgoing[-1].get("text", "") if outgoing else ""),
+            "messages": messages,
+        }
 
-    async def extract_chat_page_conversation_detail(self, *args, **kwargs):
-        raise TikTokPrivateMessageUnavailable(_UNAVAILABLE_MESSAGE)
+    async def collect_chat_page_conversation_detail(self, row: Dict, logger: Optional[Callable[[str, str], None]] = None) -> Dict:
+        page = await self.open_chat_workspace_page(logger=logger)
+        try:
+            opened, reason = await self.open_chat_page_conversation(page, row or {})
+            if not opened:
+                raise RuntimeError(reason or "未找到目标会话")
+            return await self.extract_chat_page_conversation_detail(page)
+        finally:
+            try:
+                await page.close()
+            except Exception:
+                pass
+    async def _collect_chat_rows(
+        self,
+        *,
+        page: Optional[Page],
+        max_conversations: int,
+        should_stop: Optional[Callable[[], bool]],
+        logger: Optional[Callable[[str, str], None]],
+        progress_callback: Optional[Callable[[int, int, str], None]],
+        item_callback: Optional[Callable[[Dict], Awaitable[None]]],
+        include_details: bool,
+        strangers_only: bool,
+        source: str,
+    ) -> List[Dict]:
+        own_page = page is None
+        work_page = page or await self.open_chat_workspace_page(logger=logger)
+        rows: List[Dict] = []
+        limit = max(1, int(max_conversations or 1))
+        try:
+            conversations = await self._list_conversations(work_page)
+            total = min(len(conversations), limit)
+            for index, conv in enumerate(conversations[:limit], start=1):
+                if should_stop and should_stop():
+                    break
+                username = str(conv.get("username", "") or "")
+                opened = await self._open_conversation_by_username(work_page, username)
+                messages: List[Dict] = []
+                if opened:
+                    await work_page.wait_for_timeout(1200)
+                    if include_details or not strangers_only:
+                        messages = await self._read_messages(work_page)
+                elif not strangers_only:
+                    if progress_callback:
+                        try:
+                            progress_callback(index, total, username)
+                        except Exception:
+                            pass
+                    continue
+                incoming = [m for m in messages if m.get("direction") == "incoming"]
+                outgoing = [m for m in messages if m.get("direction") == "outgoing"]
+                if strangers_only:
+                    if not incoming:
+                        continue
+                    if outgoing and messages and messages[-1].get("direction") == "outgoing":
+                        continue
+                row = {
+                    "conversation_key": f"tiktok:{self.account_id or 0}:{username}",
+                    "conversation_id": username,
+                    "username": username,
+                    "avatar_url": str(conv.get("avatar_url", "") or ""),
+                    "profile_url": str(conv.get("profile_url", "") or ""),
+                    "preview_text": str(incoming[-1].get("text", "") if incoming else (conv.get("preview_text", "") or "")),
+                    "incoming_message": str(incoming[-1].get("text", "") if incoming else (conv.get("preview_text", "") or "")),
+                    "last_message_text": str(messages[-1].get("text", "") if messages else (conv.get("preview_text", "") or "")),
+                    "last_message_is_user": bool(messages and messages[-1].get("direction") == "incoming"),
+                    "has_user_message": bool(incoming),
+                    "time_text": str(conv.get("time_text", "") or ""),
+                    "unread_count": 0,
+                    "conversation_position": int(conv.get("index", index) or index),
+                    "stranger_index": int(conv.get("index", index) or index),
+                    "conversation_source": source,
+                    "messages": messages,
+                    "account_id": int(self.account_id or 0),
+                    "collected_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }
+                rows.append(row)
+                if item_callback:
+                    try:
+                        await item_callback(row)
+                    except Exception as exc:
+                        self._emit(logger, f"[TikTok私信] 单条回调失败：{exc}", "warning")
+                if progress_callback:
+                    try:
+                        progress_callback(index, total, username)
+                    except Exception:
+                        pass
+            return rows
+        finally:
+            if own_page:
+                try:
+                    await work_page.close()
+                except Exception:
+                    pass
 
-    async def open_chat_workspace_page(self, *args, **kwargs):
-        raise TikTokPrivateMessageUnavailable(_UNAVAILABLE_MESSAGE)
+    async def collect_chat_page_private_messages(
+        self,
+        max_conversations: int = 50,
+        should_stop: Optional[Callable[[], bool]] = None,
+        logger: Optional[Callable[[str, str], None]] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        item_callback: Optional[Callable[[Dict], Awaitable[None]]] = None,
+        page: Optional[Page] = None,
+    ) -> List[Dict]:
+        return await self._collect_chat_rows(
+            page=page,
+            max_conversations=max_conversations,
+            should_stop=should_stop,
+            logger=logger,
+            progress_callback=progress_callback,
+            item_callback=item_callback,
+            include_details=True,
+            strangers_only=False,
+            source="chat_inbox",
+        )
 
-    async def open_chat_page_conversation(self, *args, **kwargs):
-        raise TikTokPrivateMessageUnavailable(_UNAVAILABLE_MESSAGE)
+    async def collect_stranger_private_messages(
+        self,
+        max_conversations: int = 50,
+        should_stop: Optional[Callable[[], bool]] = None,
+        logger: Optional[Callable[[str, str], None]] = None,
+        include_details: bool = False,
+        item_callback: Optional[Callable[[Dict], Awaitable[None]]] = None,
+        page: Optional[Page] = None,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    ) -> List[Dict]:
+        return await self._collect_chat_rows(
+            page=page,
+            max_conversations=max_conversations,
+            should_stop=should_stop,
+            logger=logger,
+            progress_callback=progress_callback,
+            item_callback=item_callback,
+            include_details=include_details,
+            strangers_only=True,
+            source="stranger_messages",
+        )
+    async def _find_chat_input(self, page: Page):
+        selectors = [
+            '[data-e2e="dm-input"] div[contenteditable="true"]',
+            'div[contenteditable="true"][role="textbox"]',
+            'div[contenteditable="true"]',
+            'textarea',
+        ]
+        for selector in selectors:
+            try:
+                locator = page.locator(selector).last
+                if await locator.count() == 0:
+                    continue
+                await locator.wait_for(state="visible", timeout=4000)
+                return locator
+            except Exception:
+                continue
+        return None
 
-    async def send_open_chat_message(self, *args, **kwargs):
-        raise TikTokPrivateMessageUnavailable(_UNAVAILABLE_MESSAGE)
+    async def send_open_chat_message(
+        self,
+        page: Page,
+        message: str,
+        logger: Optional[Callable[[str, str], None]] = None,
+        username: str = "",
+    ) -> Dict:
+        parts = [
+            str(part).strip()
+            for part in str(message or "").replace("\r\n", "\n").replace("\r", "\n").split("\n")
+            if str(part).strip()
+        ]
+        if not parts:
+            raise ValueError("私信内容不能为空")
+        input_box = await self._find_chat_input(page)
+        if input_box is None:
+            raise RuntimeError("当前会话没有找到私信输入框（会话可能还没打开）")
+        sent: List[str] = []
+        for index, part in enumerate(parts, start=1):
+            await input_box.click()
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Backspace")
+            await page.keyboard.type(part, delay=25)
+            await page.wait_for_timeout(200)
+            await page.keyboard.press("Enter")
+            await page.wait_for_timeout(1200)
+            delivered = False
+            try:
+                editor_text = await input_box.evaluate("(el) => String(el.textContent || '').trim()")
+                delivered = not editor_text
+            except Exception:
+                delivered = False
+            if not delivered:
+                try:
+                    delivered = await page.evaluate(
+                        """
+                        (text) => {
+                          const needle = String(text || '').trim();
+                          if (!needle) return false;
+                          const nodes = Array.from(document.querySelectorAll('[data-e2e="dm-message"], [class*="DivMessageItem"], [class*="DivMessageBubble"]'));
+                          return nodes.some((n) => String(n.innerText || '').indexOf(needle) >= 0);
+                        }
+                        """,
+                        part,
+                    )
+                except Exception:
+                    delivered = False
+            if not delivered:
+                raise RuntimeError(f"第 {index} 条消息已回车，但未确认发出")
+            sent.append(part)
+            self._emit(logger, f"[TikTok私信] 已发送第 {index}/{len(parts)} 条：{username or '-'}", "success")
+            if index < len(parts):
+                await page.wait_for_timeout(600)
+        return {"success": True, "messages": sent, "message_count": len(sent)}
+    async def send_private_message(
+        self,
+        profile_url: str,
+        message: str,
+        expected_username: str = "",
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> Dict:
+        profile_url = str(profile_url or "").strip()
+        if not profile_url:
+            raise ValueError("缺少用户主页地址")
+        page = await self._new_page(logger=logger)
+        try:
+            await page.goto(profile_url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(2500)
+            clicked = await page.evaluate(
+                """
+                () => {
+                  const nodes = Array.from(document.querySelectorAll('button, [role="button"], a'));
+                  const btn = nodes.find((n) => /^(message|\u53d1\u6d88\u606f|\u804a\u5929)$/i.test(String(n.innerText || '').trim()));
+                  if (btn) { btn.click(); return true; }
+                  const icon = document.querySelector('[data-e2e="message-button"], [data-e2e="dm-button"]');
+                  if (icon) { icon.click(); return true; }
+                  return false;
+                }
+                """
+            )
+            if not clicked:
+                raise RuntimeError(f"{expected_username or profile_url} 主页没有可用的“发消息”入口")
+            await page.wait_for_timeout(3500)
+            result = await self.send_open_chat_message(page, message, logger=logger, username=expected_username)
+            return {**result, "profile_url": profile_url, "username": expected_username}
+        finally:
+            try:
+                await page.close()
+            except Exception:
+                pass
 
-    async def send_private_message(self, *args, **kwargs):
-        raise TikTokPrivateMessageUnavailable(_UNAVAILABLE_MESSAGE)
+    async def send_stranger_private_message(
+        self,
+        row: Dict,
+        message: str,
+        logger: Optional[Callable[[str, str], None]] = None,
+        page: Optional[Page] = None,
+    ) -> Dict:
+        own_page = page is None
+        work_page = page or await self.open_chat_workspace_page(logger=logger)
+        try:
+            opened, reason = await self.open_chat_page_conversation(work_page, row or {})
+            if not opened:
+                raise RuntimeError(reason or "未找到目标会话")
+            result = await self.send_open_chat_message(
+                work_page,
+                message,
+                logger=logger,
+                username=str((row or {}).get("username", "") or ""),
+            )
+            return {**result, "conversation_key": str((row or {}).get("conversation_key", "") or "")}
+        finally:
+            if own_page:
+                try:
+                    await work_page.close()
+                except Exception:
+                    pass
+    # ------------------------------------------------------------------ 评论 @ 提及
+    async def _pick_mention_candidate(self, page: Page, username: str, timeout_ms: int = 6000) -> str:
+        deadline = time.monotonic() + max(1.0, timeout_ms / 1000.0)
+        wanted = _normalize_text(username).lower()
+        handle = wanted.split(" ")[0]
+        while time.monotonic() < deadline:
+            rows = await page.evaluate(
+                """
+                () => Array.from(document.querySelectorAll('[data-e2e="comment-at-list"]')).map((node, index) => {
+                  const lines = String(node.innerText || '').split(String.fromCharCode(10)).map((s) => s.trim()).filter(Boolean);
+                  return { lines: lines, index: index };
+                })
+                """
+            )
+            for row in rows or []:
+                lines = [str(item).lower() for item in (row.get("lines") or [])]
+                if not lines:
+                    continue
+                if lines[-1] == handle or handle in lines[-1] or (wanted and wanted in " ".join(lines)):
+                    clicked = await page.evaluate(
+                        """
+                        (index) => {
+                          const nodes = Array.from(document.querySelectorAll('[data-e2e="comment-at-list"]'));
+                          const node = nodes[index];
+                          if (!node) return false;
+                          node.click();
+                          return true;
+                        }
+                        """,
+                        int(row.get("index", 0) or 0),
+                    )
+                    if clicked:
+                        return str((row.get("lines") or [username])[-1] or username)
+            await page.wait_for_timeout(400)
+        raise RuntimeError(f"没有出现 @{username} 的候选")
+    async def _find_comment_input(self, page: Page):
+        selectors = [
+            '[data-e2e="comment-input"] div[contenteditable="true"]',
+            '[data-e2e="comment-input"]',
+            'div[contenteditable="true"][role="textbox"]',
+            'div[contenteditable="true"]',
+        ]
+        for selector in selectors:
+            try:
+                locator = page.locator(selector).last
+                if await locator.count() == 0:
+                    continue
+                await locator.wait_for(state="visible", timeout=4000)
+                return locator
+            except Exception:
+                continue
+        return None
 
-    async def send_stranger_private_message(self, *args, **kwargs):
-        raise TikTokPrivateMessageUnavailable(_UNAVAILABLE_MESSAGE)
+    async def send_video_comment_mentions(
+        self,
+        video_url: str,
+        mention_usernames: List[str],
+        expected_title: str = "",
+        max_mentions: int = 50,
+        logger: Optional[Callable[[str, str], None]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
+    ) -> Dict:
+        video_url = str(video_url or "").strip()
+        if not video_url:
+            raise ValueError("缺少作品地址")
+        names: List[str] = []
+        seen = set()
+        for raw in mention_usernames or []:
+            name = _normalize_text(raw)
+            if not name or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            names.append(name)
+            if len(names) >= max(1, min(int(max_mentions or 50), 50)):
+                break
+        if not names:
+            raise ValueError("至少需要一个可用的精准客户昵称")
 
-    async def collect_chat_group_members_v2(self, *args, **kwargs):
-        raise TikTokPrivateMessageUnavailable(_UNAVAILABLE_MESSAGE)
+        page = await self._new_page(logger=logger)
+        try:
+            self._emit(logger, f"[TikTok评论@客户] 打开视频：{expected_title or video_url}")
+            await page.goto(video_url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(3500)
+            await self._open_comment_panel(page, logger=logger)
+            await page.wait_for_timeout(1500)
+            input_box = await self._find_comment_input(page)
+            if input_box is None:
+                raise RuntimeError("没有找到评论输入框")
+            await input_box.click()
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Backspace")
+
+            selected: List[str] = []
+            successful: List[Dict[str, str]] = []
+            failed: List[Dict[str, str]] = []
+            for username in names:
+                if should_stop and should_stop():
+                    break
+                query = username.split(" ")[0] if " " in username else username
+                try:
+                    await input_box.click()
+                    await page.keyboard.press("Control+A")
+                    await page.keyboard.press("Backspace")
+                    await page.keyboard.type(f"@{query}", delay=45)
+                    label = await self._pick_mention_candidate(page, username, timeout_ms=7000)
+                    await page.wait_for_timeout(400)
+                    await page.keyboard.press("Space")
+                    selected.append(label)
+                    successful.append({"requested_username": username, "selected_label": label})
+                    await page.wait_for_timeout(300)
+                except Exception as exc:
+                    failed.append({"requested_username": username, "error": str(exc)})
+                    self._emit(logger, f"[TikTok评论@客户] 跳过 @{username}：{exc}", "warning")
+                    try:
+                        await page.keyboard.press("Escape")
+                        await page.keyboard.press("Control+A")
+                        await page.keyboard.press("Backspace")
+                    except Exception:
+                        pass
+
+            if not selected:
+                summary = "；".join(f"@{item['requested_username']}：{item['error']}" for item in failed[:5])
+                raise RuntimeError(f"没有可发送的 @ 用户，失败明细：{summary or '全部候选失败'}")
+
+            composed = " ".join(f"@{label}" for label in selected)
+            await page.keyboard.press("Enter")
+            await page.wait_for_timeout(2500)
+            try:
+                remainder = await input_box.evaluate("(el) => String(el.textContent || '').trim()")
+            except Exception:
+                remainder = ""
+            if remainder:
+                raise RuntimeError("评论已回车，但输入框仍有内容，可能未提交成功")
+
+            self._emit(logger, f"[TikTok评论@客户] 已发送，@ {len(selected)} 人", "success")
+            return {
+                "success": True,
+                "video_url": video_url,
+                "title": expected_title,
+                "selected_mentions": selected,
+                "successful_mentions": successful,
+                "failed_mentions": failed,
+                "comment_text": composed,
+            }
+        finally:
+            try:
+                await page.close()
+            except Exception:
+                pass
+    # ------------------------------------------------------------------ 群聊 / 群成员
+    async def _list_group_candidates(self, page: Page) -> List[Dict]:
+        rows = await page.evaluate(
+            """
+            () => {
+              const out = [];
+              const seen = new Set();
+              for (const node of document.querySelectorAll('[class*="DivChatItem"], [data-e2e="dm-conversation-item"], [class*="DivChatList"] > *')) {
+                const rect = node.getBoundingClientRect();
+                if (rect.width < 120 || rect.height < 30) continue;
+                if (rect.left > window.innerWidth * 0.6) continue;
+                const lines = String(node.innerText || '').split(String.fromCharCode(10)).map((s) => s.trim()).filter(Boolean);
+                const name = lines[0] || '';
+                if (!name) continue;
+                const hasUserLink = !!node.querySelector('a[href^="/@"]');
+                const text = lines.join(' ');
+                const isGroup = !hasUserLink || /群|group/i.test(text) || node.querySelectorAll('img').length > 1;
+                if (!isGroup) continue;
+                const key = name.toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                out.push({ name: name, preview: lines[1] || '' });
+              }
+              return out;
+            }
+            """
+        )
+        return [
+            {"name": str(row.get("name", "") or "").strip(), "preview": str(row.get("preview", "") or ""), "member_count": 0}
+            for row in (rows or [])
+            if str(row.get("name", "") or "").strip()
+        ]
+
+    async def list_chat_groups(
+        self,
+        group_keyword: str = "",
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> List[Dict]:
+        page = await self.open_chat_workspace_page(logger=logger)
+        try:
+            groups = await self._list_group_candidates(page)
+            keyword = _normalize_text(group_keyword).lower()
+            if keyword:
+                groups = [
+                    g for g in groups
+                    if keyword in g["name"].lower() or keyword in str(g.get("preview", "")).lower()
+                ]
+            return [
+                {"name": g["name"], "key": g["name"], "member_count": int(g.get("member_count", 0) or 0)}
+                for g in groups
+            ]
+        finally:
+            try:
+                await page.close()
+            except Exception:
+                pass
+    async def collect_chat_group_members_v2(
+        self,
+        group_keyword: str = "",
+        max_groups: int = 5,
+        max_members_per_group: int = 50,
+        selected_groups: Optional[List[str]] = None,
+        should_stop: Optional[Callable[[], bool]] = None,
+        logger: Optional[Callable[[str, str], None]] = None,
+    ) -> List[Dict]:
+        page = await self.open_chat_workspace_page(logger=logger)
+        rows: List[Dict] = []
+        seen = set()
+        try:
+            groups = await self._list_group_candidates(page)
+            wanted = [str(item or "").strip() for item in (selected_groups or []) if str(item or "").strip()]
+            if wanted:
+                groups = [g for g in groups if g["name"] in wanted]
+            elif group_keyword:
+                keyword = _normalize_text(group_keyword).lower()
+                groups = [g for g in groups if keyword in g["name"].lower()]
+            groups = groups[: max(1, int(max_groups or 5))]
+
+            for group in groups:
+                if should_stop and should_stop():
+                    break
+                group_name = group["name"]
+                opened = await self._open_conversation_by_username(page, group_name)
+                if not opened:
+                    continue
+                await page.wait_for_timeout(1500)
+                try:
+                    await page.evaluate(
+                        """
+                        () => {
+                          const head = document.querySelector('[class*="RightPanelHeader"], [class*="DivChatHeader"], [data-e2e="dm-conversation-header"]');
+                          if (head) head.click();
+                        }
+                        """
+                    )
+                    await page.wait_for_timeout(2000)
+                except Exception:
+                    pass
+                members = await page.evaluate(
+                    """
+                    () => {
+                      const panel = document.querySelector('[role="dialog"], [class*="DivGroupInfo"], [class*="GroupMember"], [class*="DivMemberList"]') || document.body;
+                      const out = [];
+                      const seen = new Set();
+                      for (const a of panel.querySelectorAll('a[href^="/@"]')) {
+                        const href = a.getAttribute('href') || '';
+                        const username = href.slice(2).split('/')[0].split('?')[0];
+                        if (!username || seen.has(username)) continue;
+                        seen.add(username);
+                        const row = a.closest('[class*="Member"], [class*="Item"], li') || a;
+                        const img = row.querySelector('img') || a.querySelector('img');
+                        out.push({ username: username, profile_url: 'https://www.tiktok.com' + href, avatar_url: img ? (img.currentSrc || img.src || '') : '' });
+                      }
+                      return out;
+                    }
+                    """
+                )
+                for index, member in enumerate((members or [])[: max(1, int(max_members_per_group or 50))]):
+                    username = str(member.get("username", "") or "").strip()
+                    if not username:
+                        continue
+                    key = f"{group_name}|{username}"
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    rows.append(
+                        {
+                            "group_name": group_name,
+                            "username": username,
+                            "profile_url": str(member.get("profile_url", "") or ""),
+                            "avatar_url": str(member.get("avatar_url", "") or ""),
+                            "role": "",
+                            "region": "",
+                            "tiktok_id": "",
+                            "sec_user_id": "",
+                            "member_index": index,
+                            "source": "tiktok_group",
+                        }
+                    )
+            return rows
+        finally:
+            try:
+                await page.close()
+            except Exception:
+                pass

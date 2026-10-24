@@ -285,7 +285,7 @@ class TikTokAccountNurtureScheduler:
 
     def _rules(self) -> Dict[str, str]:
         return {
-            "entry_url": "https://www.tiktok.com/jingxuan",
+            "entry_url": "https://www.tiktok.com/foryou",
             "session_label": f"{self._session_min_minutes()}-{self._session_max_minutes()} 分钟 / 次",
             "interval_label": f"{self._interval_min_minutes()}-{self._interval_max_minutes()} 分钟 / 次",
             "active_window_label": f"{self._active_start_hour():02d}:00-{self._active_end_hour():02d}:00",
@@ -569,147 +569,28 @@ if ($proc -and $proc.CommandLine) {{
         )
 
     async def _open_first_jingxuan_video(self, page: Page) -> bool:
-        for attempt in range(1, 7):
+        # TikTok 的 foryou 首屏本身就是播放中的视频，不需要再点卡片。
+        for _ in range(6):
             try:
-                click_target = await page.evaluate(
+                ready = await page.evaluate(
                     """
                     () => {
-                        const isVisible = (node) => {
-                            if (!node) return false;
-                            const rect = node.getBoundingClientRect();
-                            return rect.width > 120 && rect.height > 120 && rect.bottom > 120 && rect.right > 120;
-                        };
-                        const normalizeTarget = (node) => {
-                            if (!node) return null;
-                            const clickable = node.matches?.('[href*="/video/"]')
-                                ? node
-                                : node.querySelector?.('[href*="/video/"]') || node;
-                            if (!clickable) return null;
-                            clickable.scrollIntoView?.({ block: 'center', inline: 'center', behavior: 'instant' });
-                            const rect = clickable.getBoundingClientRect();
-                            if (!isVisible(clickable)) return null;
-                            return {
-                                x: Math.round(rect.left + rect.width / 2),
-                                y: Math.round(rect.top + rect.height / 2),
-                                top: rect.top,
-                                left: rect.left,
-                                width: rect.width,
-                                height: rect.height,
-                            };
-                        };
-                        const candidates = Array.from(
-                            document.querySelectorAll('.discover-video-card-item, .discover-video-card-item [href*="/video/"], div[href*="/video/"]')
-                        )
-                            .map(normalizeTarget)
-                            .filter(Boolean)
-                            .sort((a, b) => (Math.abs(a.top - b.top) < 6 ? a.left - b.left : a.top - b.top));
-                        return candidates[0] || null;
+                      const video = document.querySelector('video');
+                      if (!video) return false;
+                      const rect = video.getBoundingClientRect();
+                      return rect.width > 320 && rect.height > 240;
                     }
-                    """,
+                    """
                 )
-            except Exception:
-                click_target = None
-
-            if click_target and click_target.get("x") and click_target.get("y"):
-                try:
-                    await page.mouse.move(float(click_target["x"]), float(click_target["y"]))
-                    await page.mouse.click(
-                        float(click_target["x"]),
-                        float(click_target["y"]),
-                        delay=random.randint(60, 180),
-                    )
-                    await page.wait_for_function(
-                        """
-                        () => {
-                            const url = String(window.location.href || "");
-                            if (url.includes("modal_id=") || /\\/video\\/\\d+/.test(url)) {
-                                return true;
-                            }
-                            const video = document.querySelector("video");
-                            if (!video) return false;
-                            const rect = video.getBoundingClientRect();
-                            return rect.width > 320 && rect.height > 240;
-                        }
-                        """,
-                        timeout=8000,
-                    )
+                if ready:
                     return True
-                except Exception:
-                    pass
-
-            fallback_video_id = await page.evaluate(
-                """
-                () => {
-                    const isVisible = (node) => {
-                        if (!node) return false;
-                        const rect = node.getBoundingClientRect();
-                        return rect.width > 120 && rect.height > 120 && rect.bottom > 120 && rect.right > 120;
-                    };
-                    const target = Array.from(document.querySelectorAll('[data-aweme-id], .discover-video-card-item'))
-                        .find((node) => isVisible(node));
-                    if (!target) return "";
-                    return target.getAttribute("data-aweme-id") || target.id || "";
-                }
-                """
-            )
-            if fallback_video_id:
-                try:
-                    await page.wait_for_function(
-                        f"""
-                        () => {{
-                            const target = document.querySelector('[data-aweme-id="{fallback_video_id}"], [id="{fallback_video_id}"]');
-                            if (!target) return false;
-                            const rect = target.getBoundingClientRect();
-                            return rect.width > 120 && rect.height > 120;
-                        }}
-                        """,
-                        timeout=3000,
-                    )
-                    click_target = await page.evaluate(
-                        f"""
-                        () => {{
-                            const target = document.querySelector('[data-aweme-id="{fallback_video_id}"], [id="{fallback_video_id}"]');
-                            if (!target) return null;
-                            const rect = target.getBoundingClientRect();
-                            return {{
-                                x: Math.round(rect.left + rect.width / 2),
-                                y: Math.round(rect.top + rect.height / 2),
-                            }};
-                        }}
-                        """
-                    )
-                    if click_target and click_target.get("x") and click_target.get("y"):
-                        await page.mouse.move(float(click_target["x"]), float(click_target["y"]))
-                        await page.mouse.click(
-                            float(click_target["x"]),
-                            float(click_target["y"]),
-                            delay=random.randint(60, 180),
-                        )
-                        await page.wait_for_function(
-                            """
-                            () => {
-                                const url = String(window.location.href || "");
-                                return url.includes("modal_id=") || /\\/video\\/\\d+/.test(url);
-                            }
-                            """,
-                            timeout=8000,
-                        )
-                        return True
-                except Exception:
-                    pass
-
-            if attempt in (2, 4):
-                try:
-                    await page.reload(wait_until="domcontentloaded", timeout=45000)
-                except Exception:
-                    pass
-            else:
-                try:
-                    await page.mouse.wheel(0, random.randint(220, 540))
-                except Exception:
-                    pass
-            await asyncio.sleep(min(1 + attempt, 4))
-
+            except Exception:
+                pass
+            try:
+                await page.keyboard.press("ArrowDown")
+            except Exception:
+                pass
+            await asyncio.sleep(1.5)
         return False
 
     async def _focus_video_page(self, page: Page):
@@ -721,6 +602,24 @@ if ($proc -and $proc.CommandLine) {{
 
     async def _like_current_video(self, page: Page) -> bool:
         try:
+            clicked = await page.evaluate(
+                """
+                () => {
+                  const icon = document.querySelector('[data-e2e="like-icon"], [data-e2e="like-button"]');
+                  if (!icon) return false;
+                  const btn = icon.closest('button') || icon;
+                  if (btn.getAttribute('aria-pressed') === 'true') return true;
+                  btn.click();
+                  return true;
+                }
+                """
+            )
+            if clicked:
+                await page.wait_for_timeout(700)
+                return True
+        except Exception:
+            pass
+        try:
             await self._focus_video_page(page)
             await page.keyboard.press("z")
             return True
@@ -729,7 +628,11 @@ if ($proc -and $proc.CommandLine) {{
 
     async def _next_video(self, page: Page):
         await self._focus_video_page(page)
-        await page.mouse.wheel(0, random.randint(820, 1320))
+        try:
+            await page.keyboard.press("ArrowDown")
+            await page.wait_for_timeout(700)
+        except Exception:
+            await page.mouse.wheel(0, random.randint(820, 1320))
 
     async def _run_session(self, account: Dict):
         account_id = int(account.get("id", 0) or 0)
@@ -787,7 +690,7 @@ if ($proc -and $proc.CommandLine) {{
                         f"[TikTok养号][账号{account_id}] 未检测到浏览器，尝试自动拉起 {expected_account_name} profile：{profile_dir}",
                         "warning",
                     )
-                    if not client.launch_browser(start_url="https://www.tiktok.com/jingxuan"):
+                    if not client.launch_browser(start_url="https://www.tiktok.com/foryou"):
                         raise RuntimeError("TikTok浏览器启动失败")
                     browser = await self._connect_browser_with_retry(
                         playwright,
@@ -837,7 +740,7 @@ if ($proc -and $proc.CommandLine) {{
                 )
 
                 page = await context.new_page()
-                await page.goto("https://www.tiktok.com/jingxuan", wait_until="domcontentloaded", timeout=45000)
+                await page.goto("https://www.tiktok.com/foryou", wait_until="domcontentloaded", timeout=45000)
                 await _sleep_with_stop_check(random.randint(3, 8), should_continue)
                 if not should_continue():
                     return

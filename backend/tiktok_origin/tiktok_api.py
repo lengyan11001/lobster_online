@@ -2570,7 +2570,7 @@ class TikTokInboxPageWorker:
                         raise RuntimeError(reason or "未找到目标会话")
                     try:
                         await self._page.wait_for_function(
-                            """() => Boolean(document.querySelector('[data-e2e=\"msg-item-content\"]'))""",
+                            """() => Boolean(document.querySelector('[data-e2e=\"dm-message\"], [class*=\"DivMessageItem\"], [class*=\"DivMessageBubble\"], [data-e2e=\"msg-item-content\"]'))""",
                             timeout=15000,
                         )
                     except Exception:
@@ -2620,51 +2620,15 @@ class TikTokInboxPageWorker:
                     opened, reason = await self._scraper.open_chat_page_conversation(self._page, row)
                     if not opened:
                         raise RuntimeError(reason or "未找到目标会话")
-                    input_box = self._page.locator(
-                        'div[data-e2e="msg-input"] [contenteditable="true"], .public-DraftEditor-content[contenteditable="true"]'
-                    ).first
-                    await input_box.wait_for(state="visible", timeout=15000)
-                    send_button = self._page.locator(".e2e-send-msg-btn, [class*='send-msg-btn'], span.e2e-send-msg-btn").first
-                    await send_button.wait_for(state="visible", timeout=15000)
-
                     expected_username = str(row.get("username", "") or row.get("conversation_key", "") or "-").strip()
-                    sent_messages = []
-                    total_parts = len(message_parts)
-                    for index, message_part in enumerate(message_parts, start=1):
-                        await input_box.click()
-                        await self._page.keyboard.press("Control+A")
-                        await self._page.keyboard.press("Backspace")
-                        await self._page.keyboard.type(message_part, delay=35)
-                        await send_button.click(timeout=10000)
-                        await self._page.wait_for_timeout(1200)
-                        delivered = await self._page.evaluate(
-                            """
-                            (sentText) => {
-                                const needle = String(sentText || '').trim();
-                                if (!needle) return false;
-                                const texts = Array.from(document.querySelectorAll('[data-e2e="msg-item-content"]'))
-                                    .map((node) => (node.textContent || '').trim())
-                                    .filter(Boolean);
-                                if (texts.some((text) => text.includes(needle))) return true;
-                                const editor = document.querySelector(
-                                    'div[data-e2e="msg-input"] [contenteditable="true"][role="textbox"]'
-                                );
-                                const editorText = (editor?.textContent || '').trim();
-                                return editorText.length === 0;
-                            }
-                            """,
-                            message_part,
-                        )
-                        if not delivered:
-                            raise RuntimeError(f"第 {index} 条消息发送按钮已点击，但未确认消息已发出")
-                        sent_messages.append(message_part)
-                        tiktok_log(
-                            f"[TikTok私信聚合] 已发送第 {index}/{total_parts} 条：{expected_username}",
-                            "success",
-                        )
-                        if index < total_parts:
-                            await self._page.wait_for_timeout(700)
-
+                    send_result = await self._scraper.send_open_chat_message(
+                        self._page,
+                        message_text,
+                        logger=tiktok_log,
+                        username=expected_username,
+                    )
+                    sent_messages = list(send_result.get("messages", []) or message_parts)
+                    total_parts = len(sent_messages)
                     await self._page.wait_for_timeout(1200)
                     detail = await self._scraper.extract_chat_page_conversation_detail(self._page)
                     self._last_used_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -16023,12 +15987,6 @@ async def tiktok_run_account_nurture_once(request: Optional[dict] = None):
 @router.post("/account-nurture/start")
 async def tiktok_start_account_nurture(request: Optional[dict] = None):
     global tiktok_account_nurture_scheduler, tiktok_account_nurture_background_task
-
-    return {
-        "code": 501,
-        "type": "unsupported",
-        "msg": "TikTok 版暂未接入账号养护。养号会独占浏览器，当前版本请使用搜索、同行监控、评论采集、视频评论、关注评论。",
-    }
 
     target_account_ids = parse_tiktok_nurture_account_ids(request)
 
