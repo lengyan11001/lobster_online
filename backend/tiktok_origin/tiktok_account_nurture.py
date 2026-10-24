@@ -153,8 +153,8 @@ class TikTokAccountNurtureScheduler:
                     state["last_action"] = "当前未登录，不参与养号"
 
     def stop(self):
+        # 只停止养号调度，不关闭用户浏览器：浏览器里可能还有用户自己的标签页/登录态。
         self.is_running = False
-        self._close_account_browsers(self._get_account_ids(online_only=False))
 
     def _is_running(self) -> bool:
         return self.is_running
@@ -217,7 +217,7 @@ class TikTokAccountNurtureScheduler:
                 current_session_minutes=0,
                 last_action="该账号养号已暂停" if account_status == "online" else "当前未登录，不参与养号",
             )
-        self._close_account_browsers(disabled_ids)
+        # 暂停账号不关闭浏览器，避免把用户正在使用的窗口一起关掉。
         self._sync_participation_flags()
         return disabled_ids
 
