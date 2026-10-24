@@ -4644,21 +4644,6 @@ def _scheduled_douyin_task_snapshot(selected_ids: List[int]) -> Dict[str, Any]:
 
 def _scheduled_douyin_regions(params: Optional[Dict[str, Any]]) -> List[str]:
     source = params if isinstance(params, dict) else {}
-    if action == "browser_extract_page":
-        url = str(source.get("url") or "").strip()
-        if not url:
-            raise RuntimeError("请提供要打开的网址")
-        return await _post_local_api_json(
-            "/api/web/browser-extract",
-            {
-                "url": url,
-                "wait_ms": max(0, min(_safe_int(source.get("wait_ms")) or 3000, 30000)),
-                "scroll_rounds": max(0, min(_safe_int(source.get("scroll_rounds")) or 2, 10)),
-                "max_chars": max(1000, min(_safe_int(source.get("max_chars")) or 30000, 60000)),
-            },
-            headers=headers,
-            timeout_seconds=120.0,
-        )
     raw_values: List[Any] = []
     for key in ("regions", "region_list", "area_list", "region_values"):
         value = source.get(key)
@@ -12872,6 +12857,21 @@ async def _run_client_workflow_action(
     current_item: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     source = params if isinstance(params, dict) else {}
+    if action == "browser_extract_page":
+        url = str(source.get("url") or "").strip()
+        if not url:
+            raise RuntimeError("请提供要打开的网址")
+        return await _post_local_api_json(
+            "/api/web/browser-extract",
+            {
+                "url": url,
+                "wait_ms": max(0, min(_safe_int(source.get("wait_ms")) or 3000, 30000)),
+                "scroll_rounds": max(0, min(_safe_int(source.get("scroll_rounds")) or 2, 10)),
+                "max_chars": max(1000, min(_safe_int(source.get("max_chars")) or 30000, 60000)),
+            },
+            headers=headers,
+            timeout_seconds=120.0,
+        )
     native_account_id = str(source.get("account_id") or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID).strip() or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID
     if action == "image_studio_generate":
         prompt = str(source.get("prompt") or "").strip()
