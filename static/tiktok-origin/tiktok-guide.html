@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TikTok工作台使用手册</title>
+        <link rel="stylesheet" href="/static/tiktok-origin/tiktok-workbench.css">
+    <style>
+        :root {
+            --bg: #f6f8fb;
+            --panel: #ffffff;
+            --ink: #17202f;
+            --muted: #68758a;
+            --line: rgba(76, 91, 114, 0.16);
+            --accent: #e9435d;
+            --blue: #365fda;
+            --shadow: 0 18px 46px rgba(30, 45, 73, 0.1);
+        }
+        * { box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", sans-serif;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at 10% 4%, rgba(233, 67, 93, 0.1), transparent 24rem),
+                radial-gradient(circle at 92% 12%, rgba(54, 95, 218, 0.12), transparent 24rem),
+                linear-gradient(180deg, #fbfcff 0%, var(--bg) 48%, #edf2f7 100%);
+        }
+        a { color: inherit; text-decoration: none; }
+        img { display: block; max-width: 100%; }
+        .shell { display: grid; grid-template-columns: 294px minmax(0, 1fr); min-height: 100vh; }
+        .side {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow: auto;
+            display: grid;
+            align-content: start;
+            gap: 20px;
+            padding: 26px 18px 22px;
+            color: #f6f8ff;
+            background:
+                radial-gradient(circle at 12% 10%, rgba(137, 154, 255, 0.2), transparent 18rem),
+                radial-gradient(circle at 100% 0%, rgba(255, 255, 255, 0.08), transparent 14rem),
+                linear-gradient(180deg, #1d27a2 0%, #222fb9 16%, #1d2793 100%);
+            box-shadow:
+                inset -1px 0 0 rgba(255, 255, 255, 0.05),
+                18px 0 36px rgba(10, 18, 64, 0.16);
+        }
+        .side::-webkit-scrollbar { width: 0; }
+        .brand { display: grid; gap: 10px; padding: 2px 10px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.14); }
+        .brand-head { display: flex; align-items: center; gap: 14px; }
+        .brand-mark {
+            width: 52px;
+            height: 52px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 auto;
+            border-radius: 18px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(237, 241, 255, 0.94));
+            color: #222fb9;
+            font-size: 18px;
+            font-weight: 900;
+            letter-spacing: 0.08em;
+            box-shadow: 0 12px 28px rgba(7, 14, 70, 0.22);
+        }
+        .brand-copy { display: grid; gap: 2px; }
+        .brand-name {
+            font-size: 23px;
+            line-height: 1.05;
+            font-weight: 900;
+            color: #ffffff;
+        }
+        .pill {
+            width: fit-content;
+            min-height: 28px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(255, 255, 255, 0.06);
+            color: rgba(244, 247, 255, 0.92);
+            font-size: 12px;
+            font-weight: 800;
+        }
+        h1, h2, h3, h4, p { margin: 0; }
+        .brand h1 { font-size: 15px; line-height: 1.35; letter-spacing: 0; color: rgba(239, 243, 255, 0.88); }
+        .brand p { color: rgba(239, 243, 255, 0.72); font-size: 13px; line-height: 1.68; }
+        .search { display: grid; gap: 8px; }
+        .search label, .menu-label {
+            color: rgba(219, 227, 255, 0.54);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            padding: 0 10px;
+        }
+        .search input {
+            width: 100%;
+            min-height: 44px;
+            padding: 0 16px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: #fff;
+            background: rgba(255, 255, 255, 0.08);
+            outline: none;
+            font-weight: 700;
+        }
+        .search input::placeholder { color: rgba(233, 239, 255, 0.52); }
+        .nav { display: grid; gap: 2px; }
+        .nav a {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            min-height: 56px;
+            padding: 8px 12px;
+            border-radius: 32px;
+            color: rgba(233, 239, 255, 0.78);
+            text-align: left;
+            font-size: 15px;
+            font-weight: 600;
+            transition: background 220ms ease, color 220ms ease, box-shadow 220ms ease;
+        }
+        .nav-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .nav-icon {
+            width: 42px;
+            height: 42px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            flex: 0 0 auto;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(255, 255, 255, 0.78);
+            font-size: 15px;
+            font-weight: 900;
+        }
+        .nav-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .nav-index { color: rgba(255, 255, 255, 0.68); font-size: 12px; font-weight: 800; }
+        .nav a:hover, .nav a.active {
+            color: #ffffff;
+            background: rgba(255, 255, 255, 0.16);
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+        }
+        .nav a:hover .nav-icon, .nav a.active .nav-icon {
+            background: #ffffff;
+            color: #222fb9;
+            box-shadow: 0 8px 18px rgba(7, 14, 70, 0.14);
+        }
+        .side-actions { display: grid; gap: 10px; padding: 14px 10px 0; border-top: 1px solid rgba(255, 255, 255, 0.14); }
+        .side-action {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            min-height: 46px;
+            padding: 0 16px;
+            border-radius: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(255, 255, 255, 0.08);
+            color: rgba(246, 248, 255, 0.92);
+            font-size: 13px;
+            font-weight: 800;
+        }
+        .side-action:hover { background: rgba(255, 255, 255, 0.13); }
+        .main { min-width: 0; padding: 28px min(5vw, 58px) 56px; }
+        .hero, .grid, .section, .note { max-width: 1180px; margin-inline: auto; }
+        .hero { display: grid; gap: 18px; margin-bottom: 24px; }
+        .hero h2 { max-width: 920px; font-size: clamp(32px, 4vw, 56px); line-height: 1.06; letter-spacing: 0; }
+        .hero p { max-width: none; color: var(--muted); font-size: 16px; line-height: 1.8; white-space: nowrap; }
+        .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+        .button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 42px;
+            padding: 0 14px;
+            border-radius: 8px;
+            border: 1px solid var(--line);
+            background: var(--panel);
+            font-weight: 800;
+            box-shadow: 0 8px 22px rgba(37, 54, 86, 0.08);
+        }
+        .button.primary { color: #fff; border-color: rgba(233, 67, 93, 0.32); background: linear-gradient(135deg, var(--accent), var(--blue)); }
+        .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+        .card, .section, .note {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.84);
+            box-shadow: var(--shadow);
+        }
+        .card, .note { padding: 18px; }
+        .card strong { display: block; margin-bottom: 8px; font-size: 15px; }
+        .card p, .note p { color: var(--muted); font-size: 13px; line-height: 1.75; }
+        .note { display: grid; gap: 10px; margin-bottom: 22px; border-color: rgba(184, 121, 36, 0.22); background: linear-gradient(180deg, rgba(255, 250, 241, 0.94), rgba(255, 255, 255, 0.9)); }
+        .note p { color: #6d5a38; font-size: 14px; }
+        .section { margin-bottom: 22px; overflow: hidden; }
+        .section-head {
+            display: grid;
+            gap: 10px;
+            padding: 22px;
+            border-bottom: 1px solid var(--line);
+            background: radial-gradient(circle at 98% 0%, rgba(54, 95, 218, 0.1), transparent 20rem), linear-gradient(180deg, #fff, #f8fafc);
+        }
+        .label {
+            width: fit-content;
+            min-height: 28px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            border: 1px solid rgba(233, 67, 93, 0.18);
+            color: var(--accent);
+            background: rgba(233, 67, 93, 0.06);
+            font-size: 12px;
+            font-weight: 900;
+        }
+        .section-head h3 { font-size: 28px; line-height: 1.2; }
+        .section-head p { color: var(--muted); line-height: 1.8; }
+        figure { margin: 0; padding: 18px; background: #eef3f8; border-bottom: 1px solid var(--line); }
+        figure img { width: 100%; border: 1px solid rgba(76, 91, 114, 0.26); border-radius: 8px; background: #fff; box-shadow: 0 16px 38px rgba(29, 43, 67, 0.14); }
+        figcaption { margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 1.6; }
+        .section-body { display: grid; grid-template-columns: 1.1fr 1fr; gap: 18px; padding: 22px; }
+        .block { display: grid; gap: 10px; align-content: start; }
+        .block h4 { font-size: 16px; }
+        .block ol, .block ul { margin: 0; padding-left: 20px; color: var(--muted); line-height: 1.85; }
+        .block li + li { margin-top: 4px; }
+        .notice-block {
+            padding: 14px 16px;
+            border: 1px solid rgba(219, 80, 92, 0.22);
+            border-radius: 8px;
+            background: linear-gradient(180deg, rgba(255, 245, 246, 0.96), rgba(255, 255, 255, 0.92));
+        }
+        .notice-block h4 { color: #c43847; }
+        .notice-block ul { color: #b13242; }
+        .notice-block li::marker { color: #d94a5b; }
+        .tags { display: flex; flex-wrap: wrap; gap: 8px; }
+        .tag { min-height: 28px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: #f0f4f8; color: #526072; font-size: 12px; font-weight: 800; }
+        .hidden { display: none; }
+        .footer { max-width: 1180px; margin: 28px auto 0; color: var(--muted); font-size: 13px; line-height: 1.8; }
+        body.embed-mode {
+            background:
+                linear-gradient(180deg, #fbfcff 0%, var(--bg) 48%, #edf2f7 100%);
+        }
+        body.embed-mode .shell {
+            min-height: auto;
+        }
+        body.embed-mode .side {
+            height: 100vh;
+        }
+        body.embed-mode .main {
+            padding: 18px 20px 28px;
+        }
+        body.embed-mode .hero,
+        body.embed-mode .grid,
+        body.embed-mode .section,
+        body.embed-mode .note,
+        body.embed-mode .footer {
+            max-width: none;
+            margin-inline: 0;
+        }
+        @media (max-width: 980px) {
+            .shell, .grid, .section-body { grid-template-columns: 1fr; }
+            .side { position: static; height: auto; }
+        }
+        @media (max-width: 640px) {
+            .main { padding: 22px 14px 42px; }
+            .section-head, .section-body, figure { padding: 16px; }
+            .hero h2 { font-size: 34px; }
+            .hero p { white-space: normal; }
+        }
+        .guide-shell-page .workspace-content {
+            padding: 18px 22px 28px 16px;
+        }
+        .guide-main-shell {
+            display: grid;
+            gap: 22px;
+            min-width: 0;
+        }
+        .guide-toolbar {
+            display: grid;
+            gap: 16px;
+            max-width: 1180px;
+            margin-inline: auto;
+            padding: 18px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.84);
+            box-shadow: var(--shadow);
+        }
+        .guide-toolbar-head {
+            display: flex;
+            align-items: end;
+            justify-content: space-between;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+        .guide-toolbar-copy {
+            display: grid;
+            gap: 6px;
+        }
+        .guide-toolbar-copy p {
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.7;
+        }
+        .guide-searchbar {
+            display: grid;
+            gap: 8px;
+        }
+        .guide-searchbar label {
+            color: var(--muted);
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .guide-searchbar input {
+            width: 100%;
+            min-height: 46px;
+            padding: 0 16px;
+            border-radius: 14px;
+            border: 1px solid var(--line);
+            background: #ffffff;
+            color: var(--ink);
+            outline: none;
+            font-weight: 700;
+        }
+        .guide-searchbar input::placeholder {
+            color: rgba(104, 117, 138, 0.72);
+        }
+        .guide-directory {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+        }
+        .guide-directory a {
+            min-height: 62px;
+            display: grid;
+            gap: 2px;
+            align-content: center;
+            padding: 14px 16px;
+            border-radius: 8px;
+            border: 1px solid var(--line);
+            background: rgba(240, 245, 255, 0.68);
+            color: var(--ink);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+        }
+        .guide-directory a:hover,
+        .guide-directory a.active {
+            border-color: rgba(54, 95, 218, 0.24);
+            background: linear-gradient(180deg, rgba(232, 239, 255, 0.98), rgba(255, 255, 255, 0.96));
+        }
+        .guide-directory-index {
+            color: var(--accent);
+            font-size: 12px;
+            font-weight: 900;
+        }
+        .guide-directory-title {
+            font-size: 14px;
+            font-weight: 800;
+            line-height: 1.35;
+        }
+        body.embed-mode .workspace-shell {
+            grid-template-columns: minmax(0, 1fr);
+        }
+        body.embed-mode .workspace-sidebar {
+            display: none;
+        }
+        body.embed-mode .workspace-content {
+            grid-column: 1;
+            padding: 18px 20px 28px;
+        }
+        @media (max-width: 1200px) {
+            .guide-directory {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+            }
+        }
+        @media (max-width: 900px) {
+            .guide-directory {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+        @media (max-width: 640px) {
+            .guide-shell-page .workspace-content {
+                padding: 16px 12px 24px;
+            }
+            .guide-directory {
+                grid-template-columns: 1fr;
+            }
+            .guide-toolbar {
+                padding: 16px;
+            }
+        }
+    </style>
+    <script src="/static/tiktok-origin/lobster-bridge.js?v=20260826-auto-request-recovery-v1"></script>
+</head>
+<body class="guide-shell-page">
+    <div class="app">
+        <div class="workspace-shell">
+            <aside class="workspace-sidebar">
+                <div class="sidebar-brand">
+                    <div class="sidebar-brand-head">
+                        <div class="sidebar-brand-mark">AI</div>
+                        <div class="sidebar-brand-copy">
+                            <div class="brand-name">AI获客</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="sidebar-nav">
+                    <div class="sidebar-label">TikTok Menu</div>
+                    <div class="sidebar-accordion">
+                        <section class="sidebar-group" data-group="overview" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="overview" href="/static/tiktok-origin/tiktok.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5"></path><path d="M6.5 10.5V19h11v-8.5"></path><path d="M10 19v-4.5h4V19"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">数据大屏</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="scheduler" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="scheduler" href="/static/tiktok-origin/tiktok-scheduler.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><rect x="4.5" y="5" width="15" height="14" rx="2.5"></rect><path d="M8 3.5v3"></path><path d="M16 3.5v3"></path><path d="M4.5 9.5h15"></path><path d="M8.5 13h2"></path><path d="M13.5 13h2"></path><path d="M8.5 16h2"></path><path d="M13.5 16h2"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">排期中心</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="config" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="config" href="/static/tiktok-origin/tiktok-config.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M12 8.2a3.8 3.8 0 1 1 0 7.6 3.8 3.8 0 0 1 0-7.6Z"></path><path d="M4.8 13.4v-2.8l2-.7.6-1.5-1-1.9 2-2 1.9 1 .1.1 1.5-.6.7-2h2.8l.7 2 1.5.6 1.9-1 2 2-1 1.9.6 1.5 2 .7v2.8l-2 .7-.6 1.5 1 1.9-2 2-1.9-1-.1-.1-1.5.6-.7 2h-2.8l-.7-2-1.5-.6-1.9 1-2-2 1-1.9-.6-1.5-2-.7Z"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">配置中心</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="nurture" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="nurture" href="/static/tiktok-origin/tiktok-nurture.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path><path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">账号养号</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="search" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="search" href="/static/tiktok-origin/tiktok-search.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><circle cx="10" cy="10" r="5.25"></circle><path d="m13.8 13.8 5 5"></path><path d="M7.8 10h4.4"></path><path d="M10 7.8v4.4"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">搜索采集</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="monitor" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="monitor" href="/static/tiktok-origin/tiktok-monitor.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M4.5 12.5s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5Z"></path><circle cx="12" cy="12.5" r="2.4"></circle><path d="M18.5 5.5 20 4"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">监控同行</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="collect" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="collect" href="/static/tiktok-origin/tiktok-collect.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M8 6.5h8a3.5 3.5 0 0 1 3.5 3.5v1.8a3.5 3.5 0 0 1-3.5 3.5h-3.8l-3.7 3v-3H8A3.5 3.5 0 0 1 4.5 11.8V10A3.5 3.5 0 0 1 8 6.5Z"></path><path d="m10 10 3.2 2-3.2 2Z"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">视频评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="follow" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="follow" href="/static/tiktok-origin/tiktok-follow.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M16.5 18.5v-1.1a3.4 3.4 0 0 0-3.4-3.4H8.9a3.4 3.4 0 0 0-3.4 3.4v1.1"></path><circle cx="11" cy="8.6" r="3.1"></circle><path d="M17.5 8.5h3"></path><path d="M19 7v3"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">关注评论</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="mention" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="mention" href="/static/tiktok-origin/tiktok-mention.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M12 20a8 8 0 1 1 7.5-5.2"></path><path d="M15.5 12a3.5 3.5 0 1 0-1.1 2.5"></path><path d="M15.5 8.5V13a1.8 1.8 0 0 0 3.2 1"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">评论@客户</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="interaction" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="interaction" href="/static/tiktok-origin/tiktok-interaction.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M7 15.5h-.5A2.5 2.5 0 0 1 4 13V7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5V13a2.5 2.5 0 0 1-2.5 2.5H12l-4 3v-3Z"></path><path d="M8 9.5h8"></path><path d="M8 12.5h5"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信互动</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="stranger-leads" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="stranger-leads" href="/static/tiktok-origin/tiktok-stranger-leads.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v5A2.5 2.5 0 0 1 16.5 15H12l-4 3v-3h-.5A2.5 2.5 0 0 1 5 12.5Z"></path><path d="M9 9h6"></path><path d="M9 12h3.5"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">私信引流</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="self-comments" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="self-comments" href="/static/tiktok-origin/tiktok-self-comments.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M6 6.5h12a2.5 2.5 0 0 1 2.5 2.5v5.2a2.5 2.5 0 0 1-2.5 2.5h-5.4l-4.1 3.1v-3.1H6A2.5 2.5 0 0 1 3.5 14.2V9A2.5 2.5 0 0 1 6 6.5Z"></path><path d="M8 10h8"></path><path d="M8 13h5"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">我的评论区</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="all-customers" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="all-customers" href="/static/tiktok-origin/tiktok-customer-pools.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path><circle cx="10.7" cy="8.7" r="3.2"></circle><path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path><path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">全部客户</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="intent" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="intent" href="/static/tiktok-origin/tiktok-customer-pools.html#precise">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M16.5 18.5v-1.2A3.8 3.8 0 0 0 12.7 13.5H8.8A3.8 3.8 0 0 0 5 17.3v1.2"></path><circle cx="10.7" cy="8.7" r="3.2"></circle><path d="M16.2 5.8a2.8 2.8 0 0 1 0 5.4"></path><path d="M18.4 18.2v-.9a3.2 3.2 0 0 0-2.4-3.1"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">精准客户</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="groups" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="groups" href="/static/tiktok-origin/tiktok-groups.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M12 19c4-1.8 6.5-4.8 6.5-8.8V6.8L12 4.5 5.5 6.8v3.4C5.5 14.2 8 17.2 12 19Z"></path><path d="m9.5 12.2 1.7 1.7 3.4-3.8"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">群成员提取</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group" data-group="logs" data-collapsible="false">
+                            <a class="sidebar-group-header" data-sidebar="logs" href="/static/tiktok-origin/tiktok-logs.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M7 5.5h10"></path><path d="M7 10.5h10"></path><path d="M7 15.5h6"></path><path d="M5 4.5h.01"></path><path d="M5 9.5h.01"></path><path d="M5 14.5h.01"></path><path d="M4.5 19.5h15"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">执行日志</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                        <section class="sidebar-group is-active" data-group="guide" data-collapsible="false">
+                            <a class="sidebar-group-header active" data-sidebar="guide" href="/static/tiktok-origin/tiktok-guide.html">
+                                <span class="sidebar-group-main">
+                                    <span class="sidebar-group-icon" aria-hidden="true">
+                                        <svg viewBox="0 0 24 24"><path d="M6.5 5.5h9A2.5 2.5 0 0 1 18 8v10.5l-3.4-1.8-3.1 1.8-3.1-1.8L5 18.5V8a2.5 2.5 0 0 1 1.5-2.5Z"></path><path d="M8.5 9.5h6"></path><path d="M8.5 12.5h6"></path></svg>
+                                    </span>
+                                    <span class="sidebar-group-copy">
+                                        <span class="sidebar-group-title">使用说明</span>
+                                    </span>
+                                </span>
+                            </a>
+                        </section>
+                    </div>
+                </div>
+            </aside>
+            <main class="workspace-content">
+                <div class="guide-main-shell">
+                    <header class="hero">
+                        <div class="actions">
+                            <a class="button" href="#config">先看配置中心</a>
+                            <a class="button" href="#workflow">查看推荐流程</a>
+                        </div>
+                    </header>
+                    <section class="guide-toolbar">
+                        <div class="guide-toolbar-head">
+                            <div class="guide-toolbar-copy">
+                                <h3>TikTok工作台使用手册</h3>
+                                <p>手册目录和搜索放在当前内容区，左侧始终保持工作台导航，切页不会再丢菜单状态。</p>
+                            </div>
+                            <div class="pill">最后更新：2026-04-17</div>
+                        </div>
+                        <div class="guide-searchbar">
+                            <label for="guide-search">搜索手册</label>
+                            <input id="guide-search" type="search" placeholder="输入：搜索、私信、群成员、配置">
+                        </div>
+                        <nav class="guide-directory" id="guide-nav" aria-label="TikTok手册目录"></nav>
+                    </section>
+                    <section id="workflow" class="note">
+                        <h3>推荐使用流程</h3>
+                        <p>配置中心登录账号并保存规则 -> 搜索采集关键词视频或监控同行 -> 视频评论抓取客户 -> 查看全部客户和精准客户 -> 对精准客户做关注评论或私信互动 -> 需要站外线索时使用陌生人留资、提及评论或群成员提取 -> 遇到异常时查看执行日志。</p>
+                    </section>
+                    <div id="sections"></div>
+                    <section class="note"><h3>这类在线手册怎么更新</h3><p>页面内容是静态 HTML，适合直接随网站一起部署。后续如果TikTok工作台改版，只需要重新生成对应截图，并调整本页面的步骤和注意事项。用户访问 `/static/tiktok-origin/tiktok.html-guide` 时会看到最新版本，不需要单独下载文档。</p></section>
+                    <p class="footer">本手册只说明系统页面的使用方法。实际执行效果会受到账号状态、平台页面变化、网络环境、关键词质量和配置规则影响。批量执行前建议先用少量任务测试。</p>
+                </div>
+            </main>
+        </div>
+    </div>
+    <script>
+        const embedMode = window.self !== window.top || new URLSearchParams(window.location.search).get("embed") === "1";
+        if (embedMode) {
+            document.body.classList.add("embed-mode");
+        }
+
+        function toggleSidebarGroup(id) {
+            const group = document.getElementById(id)?.closest(".sidebar-group");
+            if (!group || group.dataset.collapsible !== "true") return;
+            group.classList.add("is-open");
+        }
+
+        const guideSections = [
+    ["config", "01", "配置中心", "14-config.png", "配置中心是所有TikTok工作台能力的起点，用来登录账号、设置默认执行账号、配置搜索筛选规则以及 AI 判断规则。", [
+        "先确认要使用的TikTok账号已经登录，并且状态显示在线。",
+        "设置默认执行账号，避免后续任务跑到错误账号上。",
+        "根据业务场景调整最低点赞、重复过滤、评论抓取上限等基础规则。",
+        "补充 AI 模型和精准客户判断提示词，再点击保存配置。"
+    ], [
+        "没有在线账号时，不要直接开始搜索、评论或私信任务。",
+        "修改配置后要先保存，再进入其他页面执行任务。",
+        "默认执行账号切错时，后续所有动作都会跟着跑偏。"
+    ], ["账号管理", "筛选规则", "AI 配置"]],
+    ["overview", "02", "数据大屏", "01-overview.png", "数据大屏用来快速查看当前账号、任务和客户沉淀情况，适合先判断系统是否处于可执行状态。", [
+        "先看在线账号、任务数量和客户规模是否正常。",
+        "再看地图热区和模块概览，判断数据主要来自哪里。",
+        "如果只是巡检状态，停留在大屏即可；要执行任务再进入对应模块。"
+    ], [
+        "大屏主要是结果汇总，不会主动采集新数据。",
+        "刚执行完任务时，大屏可能会有短暂延迟。",
+        "数据异常时优先去执行日志看最新状态。"
+    ], ["总览", "状态检查", "结果汇总"]],
+    ["search", "03", "搜索采集", "02-search.png", "搜索采集用于输入关键词采集TikTok视频，并把结果沉淀成关键词卡片，作为后续评论采集、客户识别和同行追踪的视频来源。", [
+        "输入关键词后点击搜索并采集，系统会生成或更新对应的关键词卡片。",
+        "如果一个关键词视频池太少，可以点击 AI拓词搜索，系统会自动扩展相关关键词并分批搜索，扩大视频池。",
+        "点开关键词卡片查看该关键词下的视频列表、历史重复数量、评论采集进度、全部客户和精准客户。",
+        "根据标题、作者、点赞、发布时间和历史重复提示筛选目标视频，再用全选当前页或手动勾选确认范围。",
+        "勾选后点击开始采集时，会先弹出采集设置弹窗；确认协议模式或脚本模式、采集数量和客户判断规则后再启动。"
+    ], [
+        "AI拓词会连续搜索多个关键词，为了降低账号掉线风险，建议不要频繁连续触发。",
+        "协议模式速度更快，但当前不支持按地区/IP 属地筛选；如果必须按地区判断，请改用脚本模式或只按提示词筛选。",
+        "历史重复只是提醒这个视频或客户以前出现过，勾选前仍要看业务相关性。",
+        "全选当前页只选择当前分页的视频；导出或开始采集前要确认勾选范围。",
+        "没有在线账号时搜索和评论采集都不会真正执行，异常时先看执行日志。"
+    ], ["关键词卡片", "AI拓词", "协议模式", "采集进度"]],
+    ["monitor", "04", "监控同行", "03-monitor.png", "监控同行适合长期盯住目标账号、同行账号或竞品账号，按最新发布时间同步对方视频，并把新评论持续沉淀为客户来源。", [
+        "粘贴同行主页链接或同行视频分享链接后点击添加同行，视频链接会自动识别作者并加入监控。",
+        "左侧选择同行，右侧查看该同行最近同步的视频列表，重点看发布时间和新视频标记。",
+        "系统会在每天固定时段自动检查新视频；新视频会自动追踪，手动勾选旧视频可以补采。",
+        "点击立即跑一轮可以手动触发同步和评论采集，评论少的视频也会采集。",
+        "采集结果会进入当前同行客户池，并同步到全部客户和精准客户，已采过的历史评论会自动去重。"
+    ], [
+        "监控不是一次性搜索，它更适合长期追踪同行新视频和新评论。",
+        "刷新当前同行只同步主页和视频，不会采集评论；要采客户请用立即跑一轮或等待定时任务。",
+        "系统默认每天 00:00 和 18:30 跑监控，执行前要保证TikTok账号在线。",
+        "如果目标主页无法访问、账号掉线或触发风控，监控结果可能为空，先看执行日志。",
+        "手动勾选的作用是补采旧视频；新视频即使没有勾选，也会按规则自动追踪。"
+    ], ["同行监控", "最新视频", "评论增量", "定时采集"]],
+    ["collect", "05", "视频评论", "04-collect.png", "视频评论模块承接搜索采集和监控同行的结果，用来创建评论采集任务、抓取评论用户并沉淀客户。", [
+        "先在搜索采集里勾选目标视频。",
+        "进入视频评论页后沿用搜索勾选或重新选择来源。",
+        "点击开始采集，等待任务完成。",
+        "采集结束后去全部客户或精准客户查看沉淀结果。"
+    ], [
+        "没有勾选时，系统可能按当前筛选范围批量执行。",
+        "评论抓取范围越大，执行时间越长。",
+        "任务失败时不要反复重试，先看日志定位原因。"
+    ], ["评论采集", "任务执行", "客户沉淀"]],
+    ["follow", "06", "关注评论", "05-follow.png", "关注评论用于对已经识别出的精准客户做公开互动，适合在私信前先建立轻互动。", [
+        "先确认精准客户列表里已经有数据。",
+        "筛选出要触达的用户后勾选范围。",
+        "选择固定文案或 AI 生成方式，再开始执行。",
+        "执行中持续观察任务状态和日志。"
+    ], [
+        "公开评论属于高频动作，节奏要保守。",
+        "不要对大批量用户使用完全相同的话术。",
+        "出现异常时先停止当前任务，再看日志。"
+    ], ["公开互动", "精准客户", "话术配置"]],
+    ["interaction", "07", "私信互动", "06-interaction.png", "私信互动用于向精准客户或人工加入名单的用户发送私信，现在是独立私信工作台，只加载私信客户、任务状态和当前账号信息。", [
+        "进入页面后先确认顶部精准客户、已勾选、来源视频和执行账号是否正常。",
+        "在私信话术区选择固定文案、AI 生成或 AI 改写；固定文案支持保存 10 个话术预设。",
+        "多个非空话术会在发送时按顺序轮换使用，空白话术会自动跳过。",
+        "在待私信客户列表里按地区、评论时间、关注评论状态或私信状态筛选，再使用全选当前页勾选本页客户。",
+        "设置私信间隔后点击开始私信，执行中观察私信任务状态区域的进度、账号状态和最近异常。"
+    ], [
+        "私信比评论更敏感，建议间隔设置保守，不要一次性勾选过多客户。",
+        "话术要先点击保存当前话术，才会写入本机历史配置；下次打开页面会自动读取。",
+        "全选当前页只勾选当前分页的客户；全选会勾选当前筛选命中的全部可用客户。",
+        "页面底部不再显示独立页面日志，异常会在任务状态和执行日志里查看。",
+        "账号异常、页面加载不完整或私信按钮不可用时，先停止任务再复核账号状态。"
+    ], ["私信触达", "10条话术", "轮换发送", "全选当前页"]],
+    ["stranger-leads", "08", "陌生人留资", "07-stranger-leads.png", "陌生人留资用于处理系统发现的站内线索和主动咨询，适合把非精准池里的潜在线索补充进后续跟进流程。", [
+        "进入页面后先看当前线索来源和状态。",
+        "通过筛选条件缩小线索范围。",
+        "人工复核线索质量，再决定是否进入后续私信或销售流程。"
+    ], [
+        "这类线索质量波动较大，不能默认全部有效。",
+        "没有数据时先检查上游任务是否真的产出了线索。",
+        "批量跟进前建议先人工抽样复核。"
+    ], ["线索补充", "人工复核", "后续跟进"]],
+    ["mention", "09", "提及评论", "08-mention.png", "提及评论用于围绕品牌词、关键词或指定话题做评论区互动，适合品牌维护和话题参与。", [
+        "先设置需要处理的关键词或目标范围。",
+        "查看待处理评论是否与业务场景相关。",
+        "选择文案方式后开始执行。"
+    ], [
+        "提及评论属于公开互动，要避免过强营销感。",
+        "品牌词和竞品词要谨慎使用。",
+        "异常时先停任务，再去日志定位。"
+    ], ["品牌维护", "公开评论", "关键词互动"]],
+    ["all-customers", "10", "全部客户", "09-all-customers.png", "全部客户展示评论采集得到的全量用户，适合做人工复盘、来源追踪和二次筛选。", [
+        "按关键词卡片、地区、时间或来源视频筛选客户。",
+        "查看用户昵称、评论内容和来源视频。",
+        "对不确定用户做人工判断，再决定是否进入精准客户或私信流程。"
+    ], [
+        "全部客户不等于全部都是高意向客户。",
+        "客户为空时通常说明上游评论采集还没完成。",
+        "不要直接对全量客户批量私信。"
+    ], ["全量线索", "人工筛选", "来源追踪"]],
+    ["intent", "11", "精准客户", "10-intent.png", "精准客户页面展示系统依据评论内容和判断规则筛选出的高意向用户，是重点触达名单。", [
+        "按关键词卡片查看不同来源下的精准客户。",
+        "重点看评论内容、主页、时间和来源视频。",
+        "确认质量后再进入关注评论或私信互动执行触达。"
+    ], [
+        "精准客户是 AI 和规则共同筛出的结果，仍建议人工抽查。",
+        "过少时可以回配置中心调整判断规则。",
+        "过多且质量低时，通常说明关键词或规则太宽。"
+    ], ["高意向", "AI 筛选", "重点名单"]],
+    ["nurture", "12", "养号任务", "11-nurture.png", "养号任务用于做账号的日常浏览和维护动作，让执行节奏更接近真实人工使用。", [
+        "先确认账号在线且当前无异常。",
+        "设置关键词、时长和执行间隔。",
+        "启动后观察任务状态，避免和高频评论、私信同时重压运行。"
+    ], [
+        "养号不是越多越好，重在稳定节奏。",
+        "账号异常或页面加载不稳时应先暂停。",
+        "执行结束后建议查看日志确认是否正常完成。"
+    ], ["账号维护", "执行节奏", "保守运行"]],
+    ["groups", "13", "群成员提取", "12-groups.png", "群成员提取用于从消息页识别群聊并提取成员信息，补充潜在客户名单。", [
+        "先确保系统账号浏览器已经登录并可正常访问消息页。",
+        "输入群名关键词并设置提取规模。",
+        "识别群聊后勾选目标群，再开始提取。",
+        "提取完成后可导出结果或加入后续互动名单。"
+    ], [
+        "建议先用小范围测试识别结构是否正常。",
+        "群成员进入私信名单后仍建议人工复核。",
+        "识别为空时先检查账号状态、消息页权限和关键词。"
+    ], ["群聊识别", "成员提取", "名单补充"]],
+    ["logs", "14", "执行日志", "13-logs.png", "执行日志是排查异常和确认任务进度的第一入口，所有模块执行问题都应该先看这里。", [
+        "任务执行中或失败后第一时间打开执行日志。",
+        "查看账号状态、接口提示、浏览器连接和任务进度。",
+        "根据日志提示回到对应页面处理问题。",
+        "日志太多时可以清空页面显示，便于继续观察。"
+    ], [
+        "清空页面日志不等于删除后端日志文件。",
+        "同一错误连续出现时，不要只是重复点击开始。",
+        "页面按钮状态和真实执行状态不一致时，以日志为准。"
+    ], ["异常排查", "进度确认", "状态诊断"]]
+];
+
+        const nav = document.getElementById("guide-nav");
+        const sectionRoot = document.getElementById("sections");
+        nav.innerHTML = guideSections.map(([id, index, title]) => `<a href="#${id}"><span class="guide-directory-index">${index}</span><span class="guide-directory-title">${title}</span></a>`).join("");
+        sectionRoot.innerHTML = guideSections.map(([id, index, title, image, desc, steps, notes, tags]) => `
+            <section id="${id}" class="section" data-keywords="${[title, ...tags].join(" ")}">
+                <div class="section-head"><div class="label">${index} / ${title}</div><h3>${title}</h3><p>${desc}</p></div>
+                <figure><div class="guide-shot-missing">（示意图缺失，按文字步骤操作）</div><figcaption>${title}页面截图。操作前先确认账号在线、筛选范围和任务状态都正常。</figcaption></figure>
+                <div class="section-body">
+                    <div class="block"><h4>怎么用</h4><ol>${steps.map((item) => `<li>${item}</li>`).join("")}</ol></div>
+                    <div class="block notice-block"><h4>注意事项</h4><ul>${notes.map((item) => `<li>${item}</li>`).join("")}</ul><div class="tags">${tags.map((item) => `<span class="tag">${item}</span>`).join("")}</div></div>
+                </div>
+            </section>
+        `).join("");
+
+        const search = document.getElementById("guide-search");
+        const sections = [...document.querySelectorAll(".section")];
+        const links = [...document.querySelectorAll("#guide-nav a")];
+        search.addEventListener("input", () => {
+            const query = search.value.trim().toLowerCase();
+            sections.forEach((section) => {
+                const text = `${section.textContent} ${section.dataset.keywords || ""}`.toLowerCase();
+                section.classList.toggle("hidden", query && !text.includes(query));
+            });
+        });
+        const observer = new IntersectionObserver((entries) => {
+            const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+            if (!visible) return;
+            links.forEach((link) => link.classList.toggle("active", link.getAttribute("href") === `#${visible.target.id}`));
+        }, { rootMargin: "-20% 0px -65% 0px", threshold: [0.1, 0.3, 0.6] });
+        sections.forEach((section) => observer.observe(section));
+    </script>
+</body>
+</html>

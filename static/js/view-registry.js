@@ -32,6 +32,11 @@
     cache: 'reload'
   });
 
+  window.registerLobsterView('tiktok-leads', {
+    html: '/static/views/tiktok-leads.html?v=20261024-tiktok-workbench-v1',
+    cache: 'reload'
+  });
+
   window.registerLobsterView('openclaw-memory', {
     html: '/static/views/openclaw-memory.html?v=20260601-memory-manager',
     cache: 'reload'

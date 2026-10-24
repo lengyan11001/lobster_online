@@ -1,0 +1,19382 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import contextvars
+import hashlib
+import json
+import os
+import random
+import re
+import sys
+import time
+import traceback
+from collections import deque
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, List, Optional, Set
+from urllib.parse import quote, urlencode, urlparse
+
+import requests
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+
+from .ai_client import AIClient
+from .console_safe import safe_print
+from .tiktok_account_nurture import TikTokAccountNurtureScheduler
+from .tiktok_client import TikTokClient, is_port_open
+from .tiktok_comment_scraper import (
+    TikTokCommentCollectionUnconfirmed,
+    TikTokCommentScraper,
+    TikTokMentionCommentStopped,
+    TikTokPrivateMessageUnavailable,
+    extract_aweme_id,
+)
+from .runtime_paths import resolve_install_dir, resolve_runtime_root
+from .state_store import RuntimeStateStore
+
+try:  # 掉线跟踪 + 登录拦截即停
+    from . import tiktok_session_health as session_health
+except ImportError:
+    from . import tiktok_session_health as session_health
+
+
+router = APIRouter(prefix="/api/tiktok", tags=["tiktok"])
+
+_tiktok_ai_auth_token_var: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "tiktok_ai_auth_token",
+    default="",
+)
+
+
+def _write_excel_sheets(filepath: Path, sheets: List[tuple[str, List[Dict]]]) -> None:
+    try:
+        import pandas as pd  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("Excel export requires pandas/openpyxl in the client runtime") from exc
+
+    with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
+        for sheet_name, rows in sheets:
+            pd.DataFrame(rows).to_excel(writer, sheet_name=sheet_name, index=False)
+
+
+BASE_DIR = resolve_runtime_root(resolve_install_dir())
+ROOT_DATA_DIR = BASE_DIR / "data"
+ROOT_DATA_DIR.mkdir(exist_ok=True)
+TIKTOK_DATA_DIR = ROOT_DATA_DIR / "tiktok"
+TIKTOK_DATA_DIR.mkdir(exist_ok=True)
+TIKTOK_DAILY_DIR = TIKTOK_DATA_DIR / "daily"
+TIKTOK_DAILY_DIR.mkdir(exist_ok=True)
+TIKTOK_COMMENT_IMAGE_DIR = TIKTOK_DATA_DIR / "comment_images"
+TIKTOK_COMMENT_IMAGE_DIR.mkdir(exist_ok=True)
+GLOBAL_CONFIG_FILE = ROOT_DATA_DIR / "config.json"
+CUSTOM_CONFIGS_FILE = BASE_DIR / "custom_configs.json"
+SEARCH_HISTORY_FILE = TIKTOK_DATA_DIR / "search_history.json"
+LATEST_RESULTS_FILE = TIKTOK_DATA_DIR / "results.xlsx"
+STATE_DB_FILE = ROOT_DATA_DIR / "app_state.db"
+
+TIKTOK_ACCOUNT_LIMIT = 3
+TIKTOK_ACCOUNT_LOGIN_CHECK_TIMEOUT_SECONDS = 25
+TIKTOK_ACCOUNT_LOGIN_CHECK_ATTEMPTS = 6
+TIKTOK_ACCOUNT_LOGIN_CHECK_RETRY_DELAY_SECONDS = 4.0
+TIKTOK_ACCOUNT_VIEW_NAVIGATION_TIMEOUT_MS = 15000
+# 单条评论采集任务（含采集 + 精准客户回评）的兜底看门狗。
+# 正常情况下单条视频几十秒到几分钟；到 900 秒说明 Playwright/CDP 调用卡住了。
+TIKTOK_COMMENT_TASK_TIMEOUT_SECONDS = 900.0
+
+
+def _tiktok_collection_interrupt_message(exc: BaseException, timed_out: bool) -> str:
+    """把“看门狗超时 cancel”和“真实异常”分开写成可读文案。
+
+    超时是看门狗主动取消当前任务，CancelledError 的栈位置随机（取决于当时卡在哪个
+    Playwright 调用上），直接展示 ``CancelledError`` 会让人误以为是代码报错。
+    """
+    if timed_out:
+        return (
+            f"TikTok评论采集单条任务超过 {int(TIKTOK_COMMENT_TASK_TIMEOUT_SECONDS)} 秒无进展，"
+            "已按超时结束（通常是浏览器/CDP 调用挂住）"
+        )
+    return f"评论采集异常中断：{type(exc).__name__}: {exc}"
+
+
+def _protocol_comment_result_confirmed(
+    payload: object,
+    comments: List[Dict],
+    *,
+    expected_total: Optional[int] = None,
+) -> bool:
+    """Distinguish an explicitly empty result from an unreadable response."""
+    if comments:
+        return True
+    if not isinstance(payload, dict):
+        return False
+    try:
+        declared = payload.get("declared_total")
+        if declared is None:
+            declared = payload.get("comment_count")
+        declared_total = int(declared) if declared is not None and str(declared).strip() else None
+    except (TypeError, ValueError):
+        declared_total = None
+    if declared_total is None:
+        return bool(payload.get("empty_confirmed"))
+    return declared_total == 0 and (
+        expected_total is None or int(expected_total or 0) <= 0
+    )
+
+DEFAULT_TIKTOK_ACCOUNTS = [
+    {"id": account_id, "status": "offline", "port": 9418 + account_id}
+    for account_id in range(1, TIKTOK_ACCOUNT_LIMIT + 1)
+]
+
+TIKTOK_MENTION_COMMENT_MAX_USERS_PER_COMMENT = 50
+TIKTOK_MENTION_COMMENT_SAFE_TEXT_LIMIT = 180
+TIKTOK_SCHEDULE_PLANS_BLOB_KEY = "tiktok_schedule_plans_v1"
+TIKTOK_LOCAL_SETTINGS_BLOB_KEY = "tiktok_local_settings_v1"
+# 「TikTok获客 → 私信互动」页面保存的 10 条话术预设（前端 localStorage 同名的 key）
+TIKTOK_INTERACTION_PRESET_KEY = "tiktok-interaction-message-presets-v1"
+TIKTOK_SCHEDULE_TYPES = {
+    "collect_precise",
+    "precise_touch",
+    "self_comment_monitor",
+    "follow_comment",
+    "interaction",
+}
+# ``reply_comments`` is handled immediately by the precise-acquisition
+# worker.  The standalone precise-touch node only owns these three actions.
+TIKTOK_PRECISE_TOUCH_ACTIONS = ("follow_comment", "mention_comment", "direct_message")
+TIKTOK_COLLECTION_REPLY_ACTION = "reply_comments"
+TIKTOK_PRECISE_TOUCH_DONE_STATUSES = {
+    "completed",
+    "unavailable",
+}
+TIKTOK_PRECISE_TOUCH_INFLIGHT_STATUSES = {
+    "queued",
+    "processing",
+}
+TIKTOK_PRECISE_TOUCH_STATE_BLOB_KEY = "tiktok_precise_touch_state_v1"
+# 加好友来源：这些取值表示"联系方式从TikTok私信内容里提取"，不需要节点预填 contact_value。
+TIKTOK_WECHAT_ADD_TARGETS_FROM_PRIVATE_MESSAGE = {
+    "tiktok_private_message_phone",
+    "tiktok_private_message_wechat",
+    "private_message_phone",
+    "private_message_contact",
+}
+TIKTOK_GROUP_NAME_PATTERN = re.compile(r"群|群聊|交流群|社群|分群")
+TIKTOK_GROUP_PREVIEW_PATTERN = re.compile(
+    r"加入了群聊|通过.+加入了群聊|新成员可查看历史消息|群聊已满员|查看和管理\s*群成员|本群|置顶公告"
+)
+TIKTOK_GROUP_SENDER_PREFIX_PATTERN = re.compile(r"^[^：:\n]{1,24}[：:]")
+
+
+tiktok_search_cache: Dict[str, List[Dict]] = {"latest": []}
+
+TIKTOK_SEARCH_MODES = {"api", "script"}
+tiktok_tasks: List[Dict] = []
+tiktok_all_customer_pool: List[Dict] = []
+tiktok_precise_customer_pool: List[Dict] = []
+tiktok_precise_touch_state: Dict[str, Dict[str, Dict[str, object]]] = {}
+tiktok_running = False
+tiktok_stop_requested = False
+tiktok_background_task: Optional[asyncio.Task] = None
+tiktok_video_comment_running = False
+tiktok_video_comment_stop_requested = False
+tiktok_video_comment_background_task: Optional[asyncio.Task] = None
+tiktok_mention_comment_running = False
+tiktok_mention_comment_stop_requested = False
+tiktok_mention_comment_background_task: Optional[asyncio.Task] = None
+tiktok_follow_comment_running = False
+tiktok_follow_comment_stop_requested = False
+tiktok_follow_comment_background_task: Optional[asyncio.Task] = None
+tiktok_interaction_running = False
+tiktok_interaction_stop_requested = False
+tiktok_interaction_background_task: Optional[asyncio.Task] = None
+tiktok_stranger_message_running = False
+tiktok_stranger_message_stop_requested = False
+tiktok_stranger_message_background_task: Optional[asyncio.Task] = None
+tiktok_stranger_message_monitor_task: Optional[asyncio.Task] = None
+tiktok_stranger_message_monitor_started = False
+tiktok_group_member_running = False
+tiktok_group_member_stop_requested = False
+tiktok_group_member_background_task: Optional[asyncio.Task] = None
+tiktok_state_store = RuntimeStateStore(STATE_DB_FILE)
+tiktok_logs = deque(maxlen=500)
+tiktok_log_counter = 0
+
+
+def _now_text() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+tiktok_interaction_state: Dict[str, object] = {
+    "running": False,
+    "message": "",
+    "total": 0,
+    "processed": 0,
+    "success": 0,
+    "failed": 0,
+    "interval_seconds": 180,
+    "interval_seconds_min": 180,
+    "interval_seconds_max": 300,
+    "account_id": None,
+    "current_user": "",
+    "current_users": [],
+    "started_at": "",
+    "finished_at": "",
+    "last_error": "",
+    "message_mode": "fixed",
+    "message_summary": "",
+    "current_message_text": "",
+    "last_message_text": "",
+    "account_ids": [],
+    "workers": [],
+}
+tiktok_stranger_message_results: List[Dict] = []
+tiktok_stranger_message_seen_records: Dict[str, Dict[str, str]] = {}
+# 循环接管：每个会话的回复尝试次数（失败要下一轮重试，但有上限，避免空转）。
+tiktok_stranger_message_takeover_attempts: Dict[str, Dict[str, Dict[str, object]]] = {}
+tiktok_stranger_message_state: Dict[str, object] = {
+    "running": False,
+    "phase": "",
+    "message": "",
+    "total": 0,
+    "processed": 0,
+    "success": 0,
+    "failed": 0,
+    "account_id": None,
+    "current_user": "",
+    "current_message_text": "",
+    "started_at": "",
+    "finished_at": "",
+    "last_error": "",
+    "last_message_text": "",
+}
+tiktok_stranger_message_monitor_states: Dict[str, Dict[str, object]] = {}
+tiktok_stranger_message_monitor_tasks_by_account: Dict[int, asyncio.Task] = {}
+tiktok_h5_stranger_message_task_lock = asyncio.Lock()
+tiktok_inbox_running = False
+tiktok_inbox_stop_requested = False
+tiktok_inbox_background_task: Optional[asyncio.Task] = None
+tiktok_inbox_results: List[Dict] = []
+tiktok_inbox_state: Dict[str, object] = {
+    "running": False,
+    "phase": "",
+    "message": "",
+    "total": 0,
+    "processed": 0,
+    "success": 0,
+    "failed": 0,
+    "account_id": None,
+    "current_user": "",
+    "started_at": "",
+    "finished_at": "",
+    "last_error": "",
+    "last_message_text": "",
+}
+tiktok_inbox_monitor_states: Dict[str, Dict[str, object]] = {}
+tiktok_inbox_monitor_tasks_by_account: Dict[int, asyncio.Task] = {}
+tiktok_inbox_page_workers: Dict[int, "TikTokInboxPageWorker"] = {}
+tiktok_self_comment_monitor_results: List[Dict] = []
+tiktok_self_comment_monitor_states: Dict[str, Dict[str, object]] = {}
+tiktok_self_comment_monitor_tasks_by_account: Dict[int, asyncio.Task] = {}
+tiktok_video_comment_state: Dict[str, object] = {
+    "running": False,
+    "message": "",
+    "total": 0,
+    "processed": 0,
+    "success": 0,
+    "failed": 0,
+    "interval_seconds": 300,
+    "interval_seconds_min": 240,
+    "interval_seconds_max": 360,
+    "account_id": None,
+    "current_task_title": "",
+    "comment_mode": "fixed",
+    "comment_summary": "",
+    "started_at": "",
+    "finished_at": "",
+    "last_error": "",
+    "current_comment_text": "",
+    "last_comment_text": "",
+    "last_task_title": "",
+    "next_interval_seconds": 0,
+}
+tiktok_mention_self_video_cache: Dict[str, object] = {
+    "account_id": 0,
+    "profile": {},
+    "videos": [],
+    "fetched_at": "",
+    "selected_video_url": "",
+}
+tiktok_mention_comment_history: Dict[str, Dict[str, object]] = {}
+tiktok_mention_comment_state: Dict[str, object] = {
+    "running": False,
+    "message": "",
+    "total": 0,
+    "processed": 0,
+    "success": 0,
+    "failed": 0,
+    "selected_total": 0,
+    "truncated": 0,
+    "account_id": None,
+    "video_url": "",
+    "video_title": "",
+    "video_cover_image": "",
+    "current_user": "",
+    "current_users": [],
+    "started_at": "",
+    "finished_at": "",
+    "last_error": "",
+    "comment_preview": "",
+}
+tiktok_follow_comment_state: Dict[str, object] = {
+    "running": False,
+    "message": "",
+    "total": 0,
+    "processed": 0,
+    "success": 0,
+    "failed": 0,
+    "commented": 0,
+    "skipped_no_posts": 0,
+    "interval_seconds": 180,
+    "interval_seconds_min": 240,
+    "interval_seconds_max": 360,
+    "account_id": None,
+    "comment_mode": "fixed",
+    "comment_summary": "",
+    "current_user": "",
+    "current_users": [],
+    "started_at": "",
+    "finished_at": "",
+    "last_error": "",
+    "current_comment_text": "",
+    "last_comment_text": "",
+    "account_ids": [],
+    "workers": [],
+}
+tiktok_group_member_results: List[Dict] = []
+tiktok_manual_interaction_users: List[Dict] = []
+tiktok_group_member_state: Dict[str, object] = {
+    "running": False,
+    "message": "",
+    "total_groups": 0,
+    "processed_groups": 0,
+    "total_members": 0,
+    "account_id": None,
+    "group_keyword": "",
+    "selected_groups": [],
+    "available_groups": [],
+    "current_group": "",
+    "started_at": "",
+    "finished_at": "",
+    "last_error": "",
+}
+TIKTOK_SEARCH_SESSIONS_BLOB_KEY = "tiktok_search_sessions"
+TIKTOK_MENTION_SELF_VIDEO_CACHE_BLOB_KEY = "tiktok_mention_self_video_cache"
+TIKTOK_MENTION_COMMENT_HISTORY_BLOB_KEY = "tiktok_mention_comment_history"
+TIKTOK_STRANGER_MESSAGE_RESULTS_BLOB_KEY = "tiktok_stranger_messages"
+TIKTOK_STRANGER_MESSAGE_MONITOR_CONFIG_BLOB_KEY = "tiktok_stranger_message_monitor_config"
+TIKTOK_STRANGER_MESSAGE_SEEN_RECORDS_BLOB_KEY = "tiktok_stranger_message_seen_records"
+TIKTOK_STRANGER_MESSAGE_SEEN_LIMIT_PER_ACCOUNT = 5000
+# 循环接管（AI 记忆接管）：单个会话最多重试几次，避免同一条会话一直空转。
+TIKTOK_STRANGER_MESSAGE_TAKEOVER_MAX_ATTEMPTS = 3
+TIKTOK_STRANGER_MESSAGE_TAKEOVER_MEMORY_MAX_CHARS = 6000
+TIKTOK_STRANGER_MESSAGE_TAKEOVER_ATTEMPTS_BLOB_KEY = "tiktok_stranger_message_takeover_attempts"
+TIKTOK_INBOX_RESULTS_BLOB_KEY = "tiktok_inbox_messages"
+TIKTOK_INBOX_MONITOR_CONFIG_BLOB_KEY = "tiktok_inbox_monitor_config"
+TIKTOK_SELF_COMMENT_MONITOR_RESULTS_BLOB_KEY = "tiktok_self_comment_monitor_results"
+TIKTOK_SELF_COMMENT_MONITOR_CONFIG_BLOB_KEY = "tiktok_self_comment_monitor_config"
+TIKTOK_INTENT_DIRECTION_DEFAULT = (
+    "请筛选评论中是否属于精准客户。这里的精准客户指：有真实需求、了解意愿、"
+    "咨询意愿、联系意愿的人。优先保留想了解、想咨询、感兴趣、想试试、想做、"
+    "想进一步沟通，以及询问价格、费用、怎么买、怎么报名、怎么合作、怎么联系、"
+    "适合我吗、新手能做吗、怎么开始这类评论。排除纯夸赞、纯围观、纯玩笑、"
+    "无明确需求、重复内容。只判断是否精准，不做分层。"
+)
+TIKTOK_LEGACY_COMMENT_DIRECTION_VALUES = {"亲切、有趣、鼓励"}
+TIKTOK_COMMENT_FILTER_STRATEGIES = {"prompt", "reverse"}
+TIKTOK_MONITOR_SLOTS = ((0, 0, "00:00"), (18, 30, "18:30"))
+tiktok_monitor_scheduler_task: Optional[asyncio.Task] = None
+tiktok_monitor_scheduler_started = False
+tiktok_schedule_scheduler_task: Optional[asyncio.Task] = None
+tiktok_schedule_scheduler_started = False
+tiktok_monitor_runtime_state: Dict[str, object] = {
+    "running": False,
+    "message": "",
+    "last_run_at": "",
+    "next_run_at": "",
+    "last_slot_key": "",
+    "last_error": "",
+}
+tiktok_schedule_plans: List[Dict[str, object]] = []
+tiktok_schedule_runtime_state: Dict[str, object] = {
+    "running": False,
+    "message": "",
+    "last_tick_at": "",
+    "last_run_at": "",
+    "next_run_at": "",
+    "active_plan_id": "",
+    "active_plan_name": "",
+    "active_phase": "",
+    "busy_reason": "",
+    "last_error": "",
+}
+tiktok_schedule_external_work: Dict[str, Dict[str, str]] = {}
+tiktok_schedule_execution_lock = asyncio.Lock()
+tiktok_account_nurture_scheduler: Optional[TikTokAccountNurtureScheduler] = None
+tiktok_account_nurture_background_task: Optional[asyncio.Task] = None
+TIKTOK_SHARE_URL_PATTERN = re.compile(r"https?://[^\s<>'\"，。；！？、]+", flags=re.I)
+
+
+def tiktok_log(message: str, level: str = "info"):
+    global tiktok_log_counter
+    tiktok_log_counter += 1
+    text = str(message or "")
+    level_text = str(level or "info")
+    tiktok_logs.append(
+        {
+            "id": tiktok_log_counter,
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "message": text,
+            "level": level_text,
+        }
+    )
+    console_text = f"[tiktok][{level_text}] {text}"
+    try:
+        safe_print(console_text, end="")
+        return
+    except UnicodeEncodeError:
+        pass
+    except Exception:
+        return
+
+    try:
+        stdout = getattr(sys, "stdout", None)
+        if stdout is None:
+            return
+        # 与 console_safe.safe_print 一致：重定向到文件时用 UTF-8 写字节，
+        # 否则中文会被 locale 编码替换成 '?'（线上任务错误文案变 ???? 的原因）。
+        try:
+            is_tty = bool(stdout.isatty())
+        except Exception:
+            is_tty = False
+        encoding = (getattr(stdout, "encoding", None) or "utf-8") if is_tty else "utf-8"
+        payload = (console_text + "\n").encode(encoding, errors="replace")
+        buffer = getattr(stdout, "buffer", None)
+        if buffer is not None:
+            buffer.write(payload)
+            buffer.flush()
+            return
+        stdout.write(payload.decode(encoding, errors="replace"))
+        stdout.flush()
+    except Exception:
+        return
+
+
+TIKTOK_FILTER_LOG_DIR = BASE_DIR / "logs"
+
+
+def _tiktok_filter_log_path() -> Path:
+    try:
+        TIKTOK_FILTER_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return TIKTOK_FILTER_LOG_DIR / f"tiktok_filter_{datetime.now().strftime('%Y%m%d')}.log"
+
+
+def _tiktok_filter_preview(value: object, limit: int = 240) -> str:
+    text = "" if value is None else str(value)
+    text = text.replace("\r", " ").replace("\n", " ⏎ ").strip()
+    if len(text) > limit:
+        text = text[:limit] + "…"
+    return text
+
+
+_TIKTOK_FILTER_LONG_FIELD_LIMITS = {
+    "prompt": 400,
+    "system_prompt": 8000,
+    "user_prompt": 20000,
+    "raw_response": 12000,
+    "direction": 400,
+    "custom_prompt": 400,
+    "title": 200,
+    "error": 600,
+}
+
+
+def log_tiktok_filter_event(event: str, **fields) -> None:
+    """记录TikTok精准客户筛选过程，写到 RUNTIME/logs/tiktok_filter_YYYYMMDD.log，每行一条 JSON。"""
+    record = {"time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "event": str(event or "")}
+    for key, value in fields.items():
+        if key in _TIKTOK_FILTER_LONG_FIELD_LIMITS and value is not None:
+            record[key] = _tiktok_filter_preview(value, _TIKTOK_FILTER_LONG_FIELD_LIMITS[key])
+        else:
+            record[key] = value
+    try:
+        with _tiktok_filter_log_path().open("a", encoding="utf-8") as fp:
+            fp.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        tiktok_log(f"[TikTok筛选日志] 写入失败: {exc}", "warning")
+
+    summary_keys = ("scope", "title", "comments_in", "precise_out", "fallback_used", "strategy", "duration_ms", "reason")
+    summary = " | ".join(f"{k}={record[k]}" for k in summary_keys if k in record)
+    level = "error" if event == "error" else ("warning" if record.get("fallback_used") else "info")
+    tiktok_log(f"[TikTok筛选] {event} {summary}".strip(), level)
+
+
+def get_tiktok_comment_direction(config: Dict) -> str:
+    value = str(config.get("tiktok_comment_direction", "") or "").strip()
+    if not value or value in TIKTOK_LEGACY_COMMENT_DIRECTION_VALUES:
+        legacy_value = str(config.get("comment_direction", "") or "").strip()
+        if legacy_value and legacy_value not in TIKTOK_LEGACY_COMMENT_DIRECTION_VALUES:
+            return legacy_value
+        return TIKTOK_INTENT_DIRECTION_DEFAULT
+    return value
+
+
+def normalize_tiktok_comment_filter_strategy(value: object) -> str:
+    normalized = str(value or "prompt").strip().lower()
+    return normalized if normalized in TIKTOK_COMMENT_FILTER_STRATEGIES else "prompt"
+
+
+def get_tiktok_comment_filter_strategy(config: Dict) -> str:
+    return normalize_tiktok_comment_filter_strategy(config.get("tiktok_comment_filter_strategy", "prompt"))
+
+
+def build_default_tiktok_stranger_message_monitor_state(account_id: int = 0) -> Dict[str, object]:
+    return {
+        "enabled": False,
+        "explicitly_started": False,
+        "running": False,
+        "interval_minutes": 30,
+        "account_id": int(account_id or 0) or None,
+        "max_conversations": 100,
+        "auto_reply_enabled": True,
+        "reply_mode": "ai_auto",
+        "reply_message": "",
+        "reply_prompt": "",
+        "contact_value": "",
+        "wechat_add_friend_enabled": False,
+        "source": "online_monitor",
+        "message": "陌生人消息监控未开启。",
+        "last_run_at": "",
+        "next_run_at": "",
+        "last_error": "",
+        "last_new_count": 0,
+        "last_total_count": 0,
+        "last_auto_reply_total": 0,
+        "last_auto_reply_success": 0,
+        "last_auto_reply_failed": 0,
+        "last_skip_reason": "",
+        "last_cycle_status": "idle",
+        "seen_message_count": 0,
+        # 循环接管只按用户选中的记忆文件回复（例如「百问百答」）。
+        "memory_doc_ids": [],
+        "memory_user_id": None,
+    }
+
+
+def normalize_tiktok_stranger_message_monitor_state(
+    state: Optional[Dict],
+    *,
+    account_id: int = 0,
+) -> Dict[str, object]:
+    base = build_default_tiktok_stranger_message_monitor_state(account_id)
+    payload = state if isinstance(state, dict) else {}
+    base.update(
+        {
+            "enabled": bool(payload.get("enabled", base["enabled"])),
+            "explicitly_started": bool(payload.get("explicitly_started", base["explicitly_started"])),
+            "running": bool(payload.get("running", base["running"])),
+            "interval_minutes": max(1, min(int(payload.get("interval_minutes", base["interval_minutes"]) or 30), 1440)),
+            "account_id": int(payload.get("account_id", account_id) or account_id or 0) or None,
+            "max_conversations": max(1, min(int(payload.get("max_conversations", base["max_conversations"]) or 100), 100)),
+            "auto_reply_enabled": bool(payload.get("auto_reply_enabled", base["auto_reply_enabled"])),
+            "reply_mode": normalize_tiktok_stranger_reply_mode(payload.get("reply_mode", base["reply_mode"])),
+            "reply_message": str(payload.get("reply_message", base["reply_message"]) or "").strip(),
+            "reply_prompt": str(payload.get("reply_prompt", base["reply_prompt"]) or "").strip(),
+            "contact_value": str(payload.get("contact_value", base["contact_value"]) or "").strip(),
+            "wechat_add_friend_enabled": bool(payload.get("wechat_add_friend_enabled", base["wechat_add_friend_enabled"])),
+            "source": str(payload.get("source", base["source"]) or "online_monitor").strip() or "online_monitor",
+            "message": normalize_tiktok_text(payload.get("message", base["message"])),
+            "last_run_at": normalize_tiktok_text(payload.get("last_run_at", base["last_run_at"])),
+            "next_run_at": normalize_tiktok_text(payload.get("next_run_at", base["next_run_at"])),
+            "last_error": normalize_tiktok_text(payload.get("last_error", base["last_error"])),
+            "last_new_count": max(0, int(payload.get("last_new_count", base["last_new_count"]) or 0)),
+            "last_total_count": max(0, int(payload.get("last_total_count", base["last_total_count"]) or 0)),
+            "last_auto_reply_total": max(0, int(payload.get("last_auto_reply_total", base["last_auto_reply_total"]) or 0)),
+            "last_auto_reply_success": max(0, int(payload.get("last_auto_reply_success", base["last_auto_reply_success"]) or 0)),
+            "last_auto_reply_failed": max(0, int(payload.get("last_auto_reply_failed", base["last_auto_reply_failed"]) or 0)),
+            "last_skip_reason": normalize_tiktok_text(payload.get("last_skip_reason", base["last_skip_reason"])),
+            "last_cycle_status": normalize_tiktok_text(payload.get("last_cycle_status", base["last_cycle_status"])) or "idle",
+            "seen_message_count": max(0, int(payload.get("seen_message_count", base["seen_message_count"]) or 0)),
+            "memory_doc_ids": list(dict.fromkeys(
+                str(item or "").strip()
+                for item in (payload.get("memory_doc_ids") or base["memory_doc_ids"] or [])
+                if str(item or "").strip()
+            ))[:3],
+            "memory_user_id": int(payload.get("memory_user_id", base["memory_user_id"]) or 0) or None,
+        }
+    )
+    # Old monitor records used fixed mode with an empty message. Treat that
+    # persisted state as AI auto-reply so workflow execution is not rejected
+    # before the first unread-message scan.
+    if base["reply_mode"] == "fixed" and not str(base.get("reply_message") or "").strip():
+        base["reply_mode"] = "ai_auto"
+    return base
+
+
+def get_tiktok_stranger_message_monitor_state(account_id: int, create: bool = False) -> Dict[str, object]:
+    key = str(int(account_id or 0) or 0)
+    if key == "0":
+        return build_default_tiktok_stranger_message_monitor_state()
+    existing = tiktok_stranger_message_monitor_states.get(key)
+    if existing is None and create:
+        existing = normalize_tiktok_stranger_message_monitor_state({}, account_id=int(key))
+        tiktok_stranger_message_monitor_states[key] = existing
+    return existing or build_default_tiktok_stranger_message_monitor_state(int(key))
+
+
+def list_tiktok_stranger_message_monitor_states() -> List[Dict[str, object]]:
+    states: List[Dict[str, object]] = []
+    for key, raw_state in tiktok_stranger_message_monitor_states.items():
+        account_id = int(key or 0) or 0
+        if account_id <= 0:
+            continue
+        states.append(normalize_tiktok_stranger_message_monitor_state(raw_state, account_id=account_id))
+    states.sort(key=lambda item: int(item.get("account_id", 0) or 0))
+    return states
+
+
+def save_tiktok_tasks_state():
+    try:
+        tiktok_state_store.save_blob_json("tiktok_tasks", tiktok_tasks or [])
+        all_rows, precise_rows = build_tiktok_customer_pools_from_tasks(tiktok_tasks)
+        apply_tiktok_precise_touch_state(all_rows)
+        apply_tiktok_precise_touch_state(precise_rows)
+        tiktok_state_store.save_tiktok_customer_pools(all_rows, precise_rows)
+        combined_all_rows, combined_precise_rows = build_combined_tiktok_customer_pools()
+        sync_tiktok_customer_pool_cache(combined_all_rows, combined_precise_rows)
+    except Exception:
+        pass
+
+
+def save_tiktok_group_member_results():
+    try:
+        tiktok_state_store.save_blob_json("tiktok_group_members", tiktok_group_member_results or [])
+    except Exception:
+        pass
+
+
+def save_tiktok_manual_interaction_users():
+    try:
+        tiktok_state_store.save_blob_json("tiktok_manual_interaction_users", tiktok_manual_interaction_users or [])
+    except Exception:
+        pass
+
+
+def save_tiktok_precise_touch_state():
+    try:
+        tiktok_state_store.save_blob_json(
+            TIKTOK_PRECISE_TOUCH_STATE_BLOB_KEY,
+            tiktok_precise_touch_state or {},
+        )
+    except Exception:
+        pass
+
+
+def save_tiktok_stranger_message_results():
+    try:
+        tiktok_state_store.save_blob_json(
+            TIKTOK_STRANGER_MESSAGE_RESULTS_BLOB_KEY,
+            tiktok_stranger_message_results or [],
+        )
+    except Exception:
+        pass
+
+
+def save_tiktok_inbox_results():
+    try:
+        tiktok_state_store.save_blob_json(
+            TIKTOK_INBOX_RESULTS_BLOB_KEY,
+            tiktok_inbox_results or [],
+        )
+    except Exception:
+        pass
+
+
+def save_tiktok_self_comment_monitor_results():
+    try:
+        tiktok_state_store.save_blob_json(
+            TIKTOK_SELF_COMMENT_MONITOR_RESULTS_BLOB_KEY,
+            tiktok_self_comment_monitor_results or [],
+        )
+    except Exception:
+        pass
+
+
+def save_tiktok_stranger_message_monitor_config():
+    try:
+        payload = []
+        for state in list_tiktok_stranger_message_monitor_states():
+            payload.append(
+                {
+                    "enabled": bool(state.get("enabled")),
+                    "explicitly_started": bool(state.get("explicitly_started")),
+                    "interval_minutes": max(1, min(int(state.get("interval_minutes", 30) or 30), 1440)),
+                    "account_id": int(state.get("account_id", 0) or 0),
+                    "max_conversations": max(1, min(int(state.get("max_conversations", 100) or 100), 100)),
+                    "auto_reply_enabled": bool(state.get("auto_reply_enabled", True)),
+                    "reply_mode": normalize_tiktok_stranger_reply_mode(state.get("reply_mode", "fixed")),
+                    "reply_message": str(state.get("reply_message", "") or "").strip(),
+                    "reply_prompt": str(state.get("reply_prompt", "") or "").strip(),
+                    "contact_value": str(state.get("contact_value", "") or "").strip(),
+                    "wechat_add_friend_enabled": bool(state.get("wechat_add_friend_enabled", False)),
+                    "memory_doc_ids": [
+                        str(item or "").strip()
+                        for item in (state.get("memory_doc_ids") or [])
+                        if str(item or "").strip()
+                    ][:3],
+                    "memory_user_id": int(state.get("memory_user_id", 0) or 0) or None,
+                    "source": str(state.get("source") or "online_monitor").strip() or "online_monitor",
+                }
+            )
+        tiktok_state_store.save_blob_json(
+            TIKTOK_STRANGER_MESSAGE_MONITOR_CONFIG_BLOB_KEY,
+            payload,
+        )
+    except Exception:
+        pass
+
+
+def save_tiktok_inbox_monitor_config():
+    try:
+        payload = []
+        for state in list_tiktok_inbox_monitor_states():
+            payload.append(
+                {
+                    "enabled": bool(state.get("enabled")),
+                    "interval_minutes": max(1, min(int(state.get("interval_minutes", 30) or 30), 1440)),
+                    "account_id": int(state.get("account_id", 0) or 0),
+                    "max_conversations": max(1, min(int(state.get("max_conversations", 100) or 100), 100)),
+                    "auto_reply_enabled": bool(state.get("auto_reply_enabled", False)),
+                    "reply_mode": normalize_tiktok_inbox_reply_mode(state.get("reply_mode", "fixed")),
+                    "reply_message": str(state.get("reply_message", "") or "").strip(),
+                    "reply_prompt": str(state.get("reply_prompt", "") or "").strip(),
+                    "contact_value": str(state.get("contact_value", "") or "").strip(),
+                }
+            )
+        tiktok_state_store.save_blob_json(
+            TIKTOK_INBOX_MONITOR_CONFIG_BLOB_KEY,
+            payload,
+        )
+    except Exception:
+        pass
+
+
+def save_tiktok_self_comment_monitor_config():
+    try:
+        payload = []
+        for state in list_tiktok_self_comment_monitor_states():
+            payload.append(
+                {
+                    "enabled": bool(state.get("enabled")),
+                    "interval_minutes": max(1, min(int(state.get("interval_minutes", 30) or 30), 1440)),
+                    "account_id": int(state.get("account_id", 0) or 0),
+                    "max_videos": max(1, min(int(state.get("max_videos", 20) or 20), 100)),
+                    "max_comments_per_video": max(5, min(int(state.get("max_comments_per_video", 80) or 80), 500)),
+                    "auto_reply_enabled": bool(state.get("auto_reply_enabled", False)),
+                    "reply_mode": normalize_tiktok_inbox_reply_mode(state.get("reply_mode", "fixed")),
+                    "reply_message": str(state.get("reply_message", "") or "").strip(),
+                    "reply_prompt": str(state.get("reply_prompt", "") or "").strip(),
+                    "contact_value": str(state.get("contact_value", "") or "").strip(),
+                    "reply_image_path": str(state.get("reply_image_path", "") or "").strip(),
+                }
+            )
+        tiktok_state_store.save_blob_json(
+            TIKTOK_SELF_COMMENT_MONITOR_CONFIG_BLOB_KEY,
+            payload,
+        )
+    except Exception:
+        pass
+
+
+def save_tiktok_stranger_message_seen_records():
+    try:
+        tiktok_state_store.save_blob_json(
+            TIKTOK_STRANGER_MESSAGE_SEEN_RECORDS_BLOB_KEY,
+            tiktok_stranger_message_seen_records or {},
+        )
+    except Exception:
+        pass
+
+
+def save_tiktok_mention_self_video_cache():
+    try:
+        tiktok_state_store.save_blob_json(
+            TIKTOK_MENTION_SELF_VIDEO_CACHE_BLOB_KEY,
+            tiktok_mention_self_video_cache or {},
+        )
+    except Exception:
+        pass
+
+
+def save_tiktok_mention_comment_history():
+    try:
+        tiktok_state_store.save_blob_json(
+            TIKTOK_MENTION_COMMENT_HISTORY_BLOB_KEY,
+            tiktok_mention_comment_history or {},
+        )
+    except Exception:
+        pass
+
+
+def ensure_tiktok_task_shape(task: Dict) -> Dict:
+    task["cover_image"] = str(task.get("cover_image", "") or "").strip()
+    task["source_session_id"] = str(task.get("source_session_id", "") or "").strip()
+    task["source_item_key"] = str(task.get("source_item_key", "") or "").strip()
+    task["source_keyword"] = str(task.get("source_keyword", "") or "").strip()
+    task["source_comment_count"] = max(
+        0,
+        int(
+            task.get("source_comment_count", task.get("comments", task.get("comment_total", 0))) or 0
+        ),
+    )
+    task["source_comment_count_text"] = str(
+        task.get("source_comment_count_text", task.get("comments_text", ""))
+        or ""
+    ).strip()
+    task.setdefault("all_comments", [])
+    task.setdefault("high_intent_users", [])
+    task.setdefault("comment_count", 0)
+    task["capture_comment_limit"] = max(0, int(task.get("capture_comment_limit", 0) or 0))
+    task["capture_target_comments"] = max(0, int(task.get("capture_target_comments", 0) or 0))
+    task["status"] = str(task.get("status", "pending") or "pending").strip() or "pending"
+    task["error"] = str(task.get("error", "") or "").strip()
+    raw_progress = task.get("collect_progress", {})
+    progress = raw_progress if isinstance(raw_progress, dict) else {}
+    progress_missing = not isinstance(raw_progress, dict) or not progress
+    inferred_phase = (
+        "completed"
+        if task.get("status") == "completed"
+        else "failed"
+        if task.get("status") == "failed"
+        else "scrolling"
+        if task.get("status") == "processing"
+        else "idle"
+    )
+    inferred_collected = max(
+        int(progress.get("collected_comments", 0) or 0),
+        int(task.get("comment_count", 0) or 0),
+        len(task.get("all_comments", []) or []),
+    )
+    inferred_target = max(
+        int(progress.get("target_comments", 0) or 0),
+        int(task.get("capture_target_comments", 0) or 0),
+        int(task.get("source_comment_count", 0) or 0),
+    )
+    if progress_missing and inferred_collected > 0 and inferred_target <= 0:
+        inferred_target = inferred_collected
+    task["collect_progress"] = {
+        "phase": str(progress.get("phase", inferred_phase) or inferred_phase).strip() or inferred_phase,
+        "account_id": int(progress.get("account_id", task.get("collect_account_id", 0)) or 0),
+        "collected_comments": max(0, inferred_collected),
+        "visible_comments": max(0, int(progress.get("visible_comments", 0) or 0)),
+        "source_comment_total": max(
+            0,
+            int(
+                progress.get(
+                    "source_comment_total",
+                    task.get("source_comment_count", inferred_collected if progress_missing else 0),
+                )
+                or 0
+            ),
+        ),
+        "target_comments": max(0, inferred_target),
+        "scroll_round": max(0, int(progress.get("scroll_round", 0) or 0)),
+        "scroll_round_limit": max(0, int(progress.get("scroll_round_limit", 0) or 0)),
+        "started_at": str(progress.get("started_at", "") or "").strip(),
+        "updated_at": str(progress.get("updated_at", "") or "").strip(),
+        "last_message": str(
+            progress.get(
+                "last_message",
+                "评论采集已完成。"
+                if progress_missing and task.get("status") == "completed"
+                else task.get("error", "")
+                if progress_missing and task.get("status") == "failed"
+                else "",
+            )
+            or ""
+        ).strip(),
+    }
+    task["video_comment_status"] = str(task.get("video_comment_status", "pending") or "pending").strip() or "pending"
+    task["video_comment_error"] = str(task.get("video_comment_error", "") or "").strip()
+    task["video_comment_mode"] = normalize_tiktok_video_comment_mode(task.get("video_comment_mode"))
+    task["video_comment_prompt"] = str(task.get("video_comment_prompt", "") or "").strip()
+    task["video_comment_seed_text"] = str(task.get("video_comment_seed_text", "") or "").strip()
+    task["video_comment_summary"] = str(task.get("video_comment_summary", "") or "").strip()
+    task["video_comment_text"] = str(task.get("video_comment_text", "") or "").strip()
+    task["video_comment_account_id"] = str(task.get("video_comment_account_id", "") or "").strip()
+    task["video_comment_started_at"] = str(task.get("video_comment_started_at", "") or "").strip()
+    task["video_comment_finished_at"] = str(task.get("video_comment_finished_at", "") or "").strip()
+    task["precise_reply_enabled"] = coerce_bool(task.get("precise_reply_enabled", task.get("reply_precise_comments", False)), False)
+    task["precise_reply_mode"] = normalize_tiktok_video_comment_mode(
+        task.get("precise_reply_mode", task.get("reply_comment_mode", "fixed"))
+    )
+    task["precise_reply_text"] = str(
+        task.get("precise_reply_text", task.get("reply_comment_text", "")) or ""
+    ).strip()
+    task["precise_reply_prompt"] = str(
+        task.get("precise_reply_prompt", task.get("reply_comment_prompt", "")) or ""
+    ).strip()
+    task["precise_reply_seed_text"] = str(
+        task.get("precise_reply_seed_text", task.get("reply_comment_seed_text", "")) or ""
+    ).strip()
+    task["precise_reply_interval_minutes_min"] = max(
+        0.0,
+        min(float(task.get("precise_reply_interval_minutes_min", task.get("reply_comment_interval_minutes_min", 0)) or 0), 1440),
+    )
+    task["precise_reply_interval_minutes_max"] = max(
+        task["precise_reply_interval_minutes_min"],
+        min(float(task.get("precise_reply_interval_minutes_max", task.get("reply_comment_interval_minutes_max", 0)) or 0), 1440),
+    )
+    return task
+
+
+def build_tiktok_task_lite_payload(task: Dict) -> Dict:
+    # 不再 dict(task) 深拷贝整任务（含几万条评论）：lite 只读字段，直接就地补全即可，
+    # 原来每个任务都复制一遍评论列表，任务多的时候光拷贝就要好几秒。
+    normalized = ensure_tiktok_task_shape(task if isinstance(task, dict) else {})
+    return {
+        "id": int(normalized.get("id", 0) or 0),
+        "title": str(normalized.get("title", "") or "").strip(),
+        "url": str(normalized.get("url", "") or "").strip(),
+        "author": str(normalized.get("author", "") or "").strip(),
+        "cover_image": str(normalized.get("cover_image", "") or "").strip(),
+        "source_session_id": str(normalized.get("source_session_id", "") or "").strip(),
+        "source_item_key": str(normalized.get("source_item_key", "") or "").strip(),
+        "source_keyword": str(normalized.get("source_keyword", "") or "").strip(),
+        "status": str(normalized.get("status", "pending") or "pending").strip() or "pending",
+        "error": str(normalized.get("error", "") or "").strip(),
+        "source_comment_count": max(int(normalized.get("source_comment_count", 0) or 0), 0),
+        "capture_comment_limit": max(int(normalized.get("capture_comment_limit", 0) or 0), 0),
+        "capture_target_comments": max(int(normalized.get("capture_target_comments", 0) or 0), 0),
+        "collect_progress": dict(normalized.get("collect_progress", {}) or {}),
+        "comment_count": max(
+            int(normalized.get("comment_count", 0) or 0),
+            len(normalized.get("all_comments", []) or []),
+        ),
+        "high_intent_count": len(normalized.get("high_intent_users", []) or []),
+        "all_comments": [],
+        "high_intent_users": [],
+    }
+
+
+def backfill_task_cover_images(tasks: List[Dict]) -> bool:
+    latest_rows = tiktok_search_cache.get("latest") or []
+    if not isinstance(latest_rows, list) or not latest_rows:
+        return False
+
+    cover_lookup: Dict[str, str] = {}
+    for row in latest_rows:
+        if not isinstance(row, dict):
+            continue
+        cover = str(row.get("cover_image", "") or "").strip()
+        if not cover:
+            continue
+        key = build_search_result_key(row)
+        if key:
+            cover_lookup[key] = cover
+
+    if not cover_lookup:
+        return False
+
+    changed = False
+    for task in tasks or []:
+        if not isinstance(task, dict):
+            continue
+        current_cover = str(task.get("cover_image", "") or "").strip()
+        if current_cover:
+            continue
+        lookup_key = build_search_result_key(
+            {
+                "url": task.get("url", ""),
+                "title": task.get("title", ""),
+                "author": task.get("author", ""),
+            }
+        )
+        cover = cover_lookup.get(lookup_key, "")
+        if cover:
+            task["cover_image"] = cover
+            changed = True
+    return changed
+
+
+def restore_tiktok_tasks_state():
+    global tiktok_tasks
+    try:
+        loaded = tiktok_state_store.load_blob_json("tiktok_tasks", default=[])
+        if isinstance(loaded, list):
+            tiktok_tasks = [ensure_tiktok_task_shape(task if isinstance(task, dict) else {}) for task in loaded]
+    except Exception:
+        tiktok_tasks = []
+
+
+def restore_tiktok_group_member_results():
+    global tiktok_group_member_results
+    try:
+        loaded = tiktok_state_store.load_blob_json("tiktok_group_members", default=[])
+        if isinstance(loaded, list):
+            tiktok_group_member_results = [row for row in loaded if isinstance(row, dict)]
+    except Exception:
+        tiktok_group_member_results = []
+
+
+def restore_tiktok_manual_interaction_users():
+    global tiktok_manual_interaction_users
+    try:
+        loaded = tiktok_state_store.load_blob_json("tiktok_manual_interaction_users", default=[])
+        if isinstance(loaded, list):
+            tiktok_manual_interaction_users = [normalize_high_intent_user(row) for row in loaded if isinstance(row, dict)]
+    except Exception:
+        tiktok_manual_interaction_users = []
+
+
+def restore_tiktok_precise_touch_state():
+    global tiktok_precise_touch_state
+    try:
+        loaded = tiktok_state_store.load_blob_json(TIKTOK_PRECISE_TOUCH_STATE_BLOB_KEY, default={})
+        next_state: Dict[str, Dict[str, Dict[str, object]]] = {}
+        if isinstance(loaded, dict):
+            for raw_key, raw_actions in loaded.items():
+                key = str(raw_key or "").strip()
+                if not key or not isinstance(raw_actions, dict):
+                    continue
+                action_state: Dict[str, Dict[str, object]] = {}
+                for raw_action, raw_value in raw_actions.items():
+                    action = str(raw_action or "").strip().lower()
+                    if not action:
+                        continue
+                    value = raw_value if isinstance(raw_value, dict) else {}
+                    action_state[action] = {
+                        "status": str(value.get("status", "") or "").strip().lower() or "pending",
+                        "error": str(value.get("error", "") or "").strip(),
+                        "result": str(value.get("result", "") or "").strip(),
+                        "account_id": str(value.get("account_id", "") or "").strip(),
+                        "started_at": str(value.get("started_at", "") or "").strip(),
+                        "finished_at": str(value.get("finished_at", "") or "").strip(),
+                        "updated_at": str(value.get("updated_at", "") or "").strip(),
+                    }
+                if action_state:
+                    next_state[key] = action_state
+        tiktok_precise_touch_state = next_state
+    except Exception:
+        tiktok_precise_touch_state = {}
+
+
+def restore_tiktok_stranger_message_results():
+    global tiktok_stranger_message_results
+    try:
+        loaded = tiktok_state_store.load_blob_json(
+            TIKTOK_STRANGER_MESSAGE_RESULTS_BLOB_KEY,
+            default=[],
+        )
+        if isinstance(loaded, list):
+            tiktok_stranger_message_results = [
+                normalize_tiktok_stranger_message_row(row)
+                for row in loaded
+                if isinstance(row, dict)
+            ]
+    except Exception:
+        tiktok_stranger_message_results = []
+
+
+def restore_tiktok_inbox_results():
+    global tiktok_inbox_results
+    try:
+        loaded = tiktok_state_store.load_blob_json(
+            TIKTOK_INBOX_RESULTS_BLOB_KEY,
+            default=[],
+        )
+        if isinstance(loaded, list):
+            tiktok_inbox_results = [
+                normalize_tiktok_inbox_row(row)
+                for row in loaded
+                if isinstance(row, dict) and not is_tiktok_group_like_stranger_message_row(row)
+            ]
+    except Exception:
+        tiktok_inbox_results = []
+
+
+def normalize_tiktok_self_comment_monitor_state(
+    payload: Optional[Dict[str, object]] = None,
+    *,
+    account_id: int = 0,
+) -> Dict[str, object]:
+    source = payload if isinstance(payload, dict) else {}
+    raw_reply_mode = str(source.get("reply_mode", "fixed") or "fixed").strip().lower()
+    reply_mode = raw_reply_mode if raw_reply_mode in {"fixed", "rewrite", "ai"} else "fixed"
+    base = {
+        "enabled": False,
+        "running": False,
+        "stop_requested": False,
+        "interval_minutes": 30,
+        "account_id": int(account_id or source.get("account_id", 0) or 0) or None,
+        "max_videos": 20,
+        "max_comments_per_video": 80,
+        "message": "",
+        "last_run_at": "",
+        "next_run_at": "",
+        "last_error": "",
+        "last_skip_reason": "",
+        "last_cycle_status": "idle",
+        "last_video_count": 0,
+        "last_comment_count": 0,
+        "last_new_comment_count": 0,
+        "last_failed_video_count": 0,
+        "last_precise_count": 0,
+        "auto_reply_enabled": False,
+        "reply_mode": "fixed",
+        "reply_message": "",
+        "reply_prompt": "",
+        "contact_value": "",
+        "reply_image_path": "",
+        "last_auto_reply_total": 0,
+        "last_auto_reply_success": 0,
+        "last_auto_reply_failed": 0,
+    }
+    base.update(
+        {
+            "enabled": bool(source.get("enabled", base["enabled"])),
+            "running": bool(source.get("running", base["running"])),
+            "stop_requested": bool(source.get("stop_requested", base["stop_requested"])),
+            "interval_minutes": max(1, min(int(source.get("interval_minutes", base["interval_minutes"]) or 30), 1440)),
+            "account_id": int(source.get("account_id", base["account_id"]) or base["account_id"] or 0) or None,
+            "max_videos": max(1, min(int(source.get("max_videos", base["max_videos"]) or 20), 100)),
+            "max_comments_per_video": max(5, min(int(source.get("max_comments_per_video", base["max_comments_per_video"]) or 80), 500)),
+            "message": normalize_tiktok_text(source.get("message", base["message"])),
+            "last_run_at": normalize_tiktok_text(source.get("last_run_at", base["last_run_at"])),
+            "next_run_at": normalize_tiktok_text(source.get("next_run_at", base["next_run_at"])),
+            "last_error": normalize_tiktok_text(source.get("last_error", base["last_error"])),
+            "last_skip_reason": normalize_tiktok_text(source.get("last_skip_reason", base["last_skip_reason"])),
+            "last_cycle_status": normalize_tiktok_text(source.get("last_cycle_status", base["last_cycle_status"])) or "idle",
+            "last_video_count": max(0, int(source.get("last_video_count", base["last_video_count"]) or 0)),
+            "last_comment_count": max(0, int(source.get("last_comment_count", base["last_comment_count"]) or 0)),
+            "last_new_comment_count": max(0, int(source.get("last_new_comment_count", base["last_new_comment_count"]) or 0)),
+            "last_failed_video_count": max(0, int(source.get("last_failed_video_count", base["last_failed_video_count"]) or 0)),
+            "last_precise_count": max(0, int(source.get("last_precise_count", base["last_precise_count"]) or 0)),
+            "auto_reply_enabled": bool(source.get("auto_reply_enabled", base["auto_reply_enabled"])),
+            "reply_mode": reply_mode,
+            "reply_message": str(source.get("reply_message", base["reply_message"]) or "").strip(),
+            "reply_prompt": str(source.get("reply_prompt", base["reply_prompt"]) or "").strip(),
+            "contact_value": str(source.get("contact_value", base["contact_value"]) or "").strip(),
+            "reply_image_path": str(source.get("reply_image_path", source.get("comment_image_path", base["reply_image_path"])) or "").strip(),
+            "last_auto_reply_total": max(0, int(source.get("last_auto_reply_total", base["last_auto_reply_total"]) or 0)),
+            "last_auto_reply_success": max(0, int(source.get("last_auto_reply_success", base["last_auto_reply_success"]) or 0)),
+            "last_auto_reply_failed": max(0, int(source.get("last_auto_reply_failed", base["last_auto_reply_failed"]) or 0)),
+        }
+    )
+    return base
+
+
+def get_tiktok_self_comment_monitor_state(account_id: int, create: bool = False) -> Dict[str, object]:
+    key = str(int(account_id or 0) or 0)
+    if key == "0":
+        return normalize_tiktok_self_comment_monitor_state({})
+    existing = tiktok_self_comment_monitor_states.get(key)
+    if existing is None and create:
+        existing = normalize_tiktok_self_comment_monitor_state({}, account_id=int(key))
+        tiktok_self_comment_monitor_states[key] = existing
+    return existing or normalize_tiktok_self_comment_monitor_state({}, account_id=int(key))
+
+
+def list_tiktok_self_comment_monitor_states() -> List[Dict[str, object]]:
+    states: List[Dict[str, object]] = []
+    for key, raw_state in tiktok_self_comment_monitor_states.items():
+        account_id = int(key or 0) or 0
+        if account_id <= 0:
+            continue
+        states.append(normalize_tiktok_self_comment_monitor_state(raw_state, account_id=account_id))
+    states.sort(key=lambda item: int(item.get("account_id", 0) or 0))
+    return states
+
+
+def normalize_tiktok_self_comment_row(row: Dict) -> Dict:
+    source = row if isinstance(row, dict) else {}
+    normalized = normalize_high_intent_user(source)
+    normalized["profile_url"] = ensure_tiktok_profile_url(normalized)
+    normalized["account_id"] = int(source.get("account_id", 0) or 0)
+    normalized["aweme_id"] = normalize_tiktok_text(source.get("aweme_id", ""))
+    normalized["video_url"] = str(source.get("video_url", "") or "").strip()
+    normalized["video_title"] = normalize_tiktok_text(source.get("video_title", "") or source.get("title", ""))
+    normalized["video_cover_image"] = str(source.get("video_cover_image", "") or source.get("cover_image", "") or "").strip()
+    normalized["comment"] = normalize_tiktok_text(source.get("comment", "") or source.get("content", ""))
+    normalized["content"] = normalized["comment"]
+    raw_comment_time = normalize_tiktok_text(source.get("comment_time", ""))
+    normalized["comment_time"] = normalize_tiktok_self_comment_time(raw_comment_time)
+    normalized["comment_key"] = normalize_tiktok_text(source.get("comment_key", "")) or build_tiktok_self_comment_comment_key(normalized)
+    normalized["row_key"] = normalize_tiktok_text(source.get("row_key", ""))
+    if not normalized["row_key"]:
+        normalized["row_key"] = build_tiktok_self_comment_row_key(normalized)
+    normalized["is_high_intent"] = bool(source.get("is_high_intent", False))
+    normalized["intent_level"] = normalize_tiktok_text(source.get("intent_level", ""))
+    normalized["score"] = source.get("score", "")
+    normalized["reason"] = normalize_tiktok_text(source.get("reason", ""))
+    normalized["first_seen_at"] = normalize_tiktok_text(source.get("first_seen_at", ""))
+    normalized["last_seen_at"] = normalize_tiktok_text(source.get("last_seen_at", ""))
+    normalized["reply_status"] = normalize_tiktok_text(source.get("reply_status", "pending")).lower() or "pending"
+    normalized["reply_error"] = normalize_tiktok_text(source.get("reply_error", ""))
+    normalized["reply_message"] = normalize_tiktok_text(source.get("reply_message", ""))
+    raw_reply_mode = str(source.get("reply_mode", "fixed") or "fixed").strip().lower()
+    normalized["reply_mode"] = raw_reply_mode if raw_reply_mode in {"fixed", "rewrite", "ai"} else "fixed"
+    normalized["reply_account_id"] = str(source.get("reply_account_id", "") or "").strip()
+    normalized["reply_started_at"] = normalize_tiktok_text(source.get("reply_started_at", ""))
+    normalized["reply_finished_at"] = normalize_tiktok_text(source.get("reply_finished_at", ""))
+    normalized["reply_updated_at"] = normalize_tiktok_text(source.get("reply_updated_at", ""))
+    normalized["source"] = "tiktok_self_comment_monitor"
+    return normalized
+
+
+def normalize_tiktok_self_comment_time(value: object) -> str:
+    text = normalize_tiktok_text(value)
+    if not text:
+        return ""
+    # Old builds stored the whole author/content/action line as the time.
+    # Keep only the recognizable relative/date token when migrating those
+    # rows, so their keys remain stable and readable.
+    match = re.search(
+        r"(?:\u521a\u521a|\d+\s*\u5206\u949f\u524d|\d+\s*\u5c0f\u65f6\u524d|\d+\s*\u5929\u524d|\d+\s*\u5468\u524d|\u6628\u5929\s*\d{0,2}:?\d{0,2}|\d{1,4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?|\d+\s*\u6708\u524d|\d+\s*\u5e74\u524d)",
+        text,
+    )
+    if match:
+        return match.group(0).strip()
+    # Old DOM parsing persisted a complete author/content/action line. It is
+    # not a usable timestamp and must not become part of a dedupe key.
+    if "..." in text or "\u2026" in text or "\u00b7" in text:
+        return ""
+    return text if len(text) <= 30 else ""
+
+
+def build_tiktok_self_comment_row_key(row: Dict) -> str:
+    if not isinstance(row, dict):
+        return ""
+    account_id = int(row.get("account_id", 0) or 0)
+    aweme_id = normalize_tiktok_text(row.get("aweme_id", ""))
+    comment_key = normalize_tiktok_text(row.get("comment_key", "")) or build_tiktok_self_comment_comment_key(row)
+    if account_id and aweme_id and comment_key:
+        return f"{account_id}|{aweme_id}|{comment_key}"
+    video_url = normalize_tiktok_text(row.get("video_url", ""))
+    username = normalize_tiktok_text(row.get("username", ""))
+    comment = normalize_tiktok_text(row.get("comment", row.get("content", "")))
+    comment_time = normalize_tiktok_text(row.get("comment_time", ""))
+    return "|".join([str(account_id), aweme_id or video_url, username, comment, comment_time])
+
+
+def build_tiktok_self_comment_comment_key(row: Dict) -> str:
+    if not isinstance(row, dict):
+        return ""
+    comment_id = normalize_tiktok_text(row.get("comment_id", ""))
+    if comment_id:
+        return f"id:{comment_id}"
+    return "|".join(
+        [
+            normalize_tiktok_text(row.get("user_id", "")),
+            normalize_tiktok_text(row.get("username", "")),
+            normalize_tiktok_text(row.get("comment", row.get("content", ""))),
+            normalize_tiktok_text(row.get("comment_time", "")),
+        ]
+    )
+
+
+def collect_tiktok_self_comment_monitor_results(account_id: int = 0) -> List[Dict]:
+    target_account_id = int(account_id or 0)
+    rows: List[Dict] = []
+    for row in tiktok_self_comment_monitor_results:
+        normalized = normalize_tiktok_self_comment_row(row if isinstance(row, dict) else {})
+        if target_account_id > 0 and int(normalized.get("account_id", 0) or 0) != target_account_id:
+            continue
+        rows.append(normalized)
+    rows.sort(key=lambda item: (str(item.get("last_seen_at", "") or ""), str(item.get("comment_time", "") or "")), reverse=True)
+    return rows
+
+
+def merge_tiktok_self_comment_monitor_results(account_id: int, rows: List[Dict]) -> int:
+    global tiktok_self_comment_monitor_results
+
+    target_account_id = int(account_id or 0)
+    if target_account_id <= 0:
+        return 0
+
+    account_rows = [
+        normalize_tiktok_self_comment_row(row)
+        for row in tiktok_self_comment_monitor_results
+        if int((row or {}).get("account_id", 0) or 0) == target_account_id
+    ]
+    other_rows = [
+        normalize_tiktok_self_comment_row(row)
+        for row in tiktok_self_comment_monitor_results
+        if int((row or {}).get("account_id", 0) or 0) != target_account_id
+    ]
+    account_map = {
+        build_tiktok_self_comment_row_key(row): row
+        for row in account_rows
+        if build_tiktok_self_comment_row_key(row)
+    }
+    def legacy_identity(row: Dict) -> str:
+        return "|".join(
+            [
+                normalize_tiktok_text(row.get("account_id", "")),
+                normalize_tiktok_text(row.get("aweme_id", "")),
+                normalize_tiktok_text(row.get("user_id", "")),
+                normalize_tiktok_text(row.get("comment", row.get("content", ""))),
+            ]
+        )
+
+    account_legacy_keys = {
+        legacy_identity(row): key
+        for key, row in account_map.items()
+        if legacy_identity(row)
+    }
+    incoming_keys: List[str] = []
+    changed = 0
+    for raw_row in rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+        normalized = normalize_tiktok_self_comment_row({**raw_row, "account_id": target_account_id})
+        key = build_tiktok_self_comment_row_key(normalized)
+        if not key:
+            continue
+        existing = account_map.get(key)
+        legacy_key = account_legacy_keys.get(legacy_identity(normalized))
+        if existing is None and legacy_key and legacy_key != key:
+            existing = account_map.pop(legacy_key, None)
+            account_legacy_keys.pop(legacy_identity(existing or {}), None)
+            if existing is not None:
+                changed += 1
+        if existing:
+            for keep_key in (
+                "reply_status",
+                "reply_error",
+                "reply_message",
+                "reply_mode",
+                "reply_account_id",
+                "reply_started_at",
+                "reply_finished_at",
+                "reply_updated_at",
+                "first_seen_at",
+            ):
+                if existing.get(keep_key):
+                    normalized[keep_key] = existing.get(keep_key)
+            if existing.get("is_high_intent"):
+                normalized["is_high_intent"] = True
+                for keep_key in ("intent_level", "score", "reason"):
+                    if existing.get(keep_key) not in (None, ""):
+                        normalized[keep_key] = existing.get(keep_key)
+            if existing != normalized:
+                changed += 1
+        else:
+            changed += 1
+        account_map[key] = normalized
+        account_legacy_keys[legacy_identity(normalized)] = key
+        if key not in incoming_keys:
+            incoming_keys.append(key)
+
+    if not changed:
+        return 0
+
+    preserved_keys = [key for key in account_map.keys() if key not in incoming_keys]
+    ordered_keys = incoming_keys + preserved_keys
+    tiktok_self_comment_monitor_results = other_rows + [account_map[key] for key in ordered_keys if key in account_map]
+    save_tiktok_self_comment_monitor_results()
+    return changed
+
+
+def update_tiktok_self_comment_monitor_rows(
+    target_rows: List[Dict],
+    *,
+    status: str,
+    error: Optional[str] = None,
+    message: Optional[str] = None,
+    reply_mode: Optional[str] = None,
+    account_id: Optional[int] = None,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+) -> int:
+    keys = {build_tiktok_self_comment_row_key(row) for row in target_rows if build_tiktok_self_comment_row_key(row)}
+    if not keys:
+        return 0
+    changed = 0
+    updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    next_rows: List[Dict] = []
+    for raw_row in tiktok_self_comment_monitor_results:
+        normalized = normalize_tiktok_self_comment_row(raw_row if isinstance(raw_row, dict) else {})
+        if build_tiktok_self_comment_row_key(normalized) in keys:
+            normalized["reply_status"] = str(status or "").strip() or normalized.get("reply_status", "pending")
+            if error is not None:
+                normalized["reply_error"] = str(error or "")
+            if message is not None:
+                normalized["reply_message"] = str(message or "")
+            if reply_mode is not None:
+                normalized["reply_mode"] = normalize_tiktok_inbox_reply_mode(reply_mode)
+            if account_id is not None:
+                normalized["reply_account_id"] = str(account_id or "")
+            if started_at is not None:
+                normalized["reply_started_at"] = str(started_at or "")
+            if finished_at is not None:
+                normalized["reply_finished_at"] = str(finished_at or "")
+            normalized["reply_updated_at"] = updated_at
+            changed += 1
+        next_rows.append(normalized)
+    if changed:
+        tiktok_self_comment_monitor_results[:] = next_rows
+        save_tiktok_self_comment_monitor_results()
+    return changed
+
+
+def restore_tiktok_self_comment_monitor_results():
+    global tiktok_self_comment_monitor_results
+    try:
+        loaded = tiktok_state_store.load_blob_json(
+            TIKTOK_SELF_COMMENT_MONITOR_RESULTS_BLOB_KEY,
+            default=[],
+        )
+        if isinstance(loaded, list):
+            cleaned_rows = []
+            migration_changed = False
+            for row in loaded:
+                if not isinstance(row, dict):
+                    migration_changed = True
+                    continue
+                normalized = normalize_tiktok_self_comment_row(row)
+                comment_text = normalize_tiktok_text(normalized.get("comment", ""))
+                if not comment_text or re.fullmatch(r"[\d.,]+", comment_text):
+                    migration_changed = True
+                    continue
+                if (
+                    normalized.get("comment") != row.get("comment", row.get("content", ""))
+                    or normalized.get("comment_time") != row.get("comment_time", "")
+                ):
+                    migration_changed = True
+                cleaned_rows.append(normalized)
+            tiktok_self_comment_monitor_results = cleaned_rows
+            if migration_changed:
+                # Persist the migration so malformed fields do not return on
+                # every restart or get reprocessed by the next scan.
+                save_tiktok_self_comment_monitor_results()
+    except Exception:
+        tiktok_self_comment_monitor_results = []
+
+
+def restore_tiktok_self_comment_monitor_config():
+    global tiktok_self_comment_monitor_states
+    try:
+        loaded = tiktok_state_store.load_blob_json(
+            TIKTOK_SELF_COMMENT_MONITOR_CONFIG_BLOB_KEY,
+            default=[],
+        )
+        next_states: Dict[str, Dict[str, object]] = {}
+        items = loaded if isinstance(loaded, list) else [loaded] if isinstance(loaded, dict) else []
+        for raw_state in items:
+            if not isinstance(raw_state, dict):
+                continue
+            account_id = int(raw_state.get("account_id", 0) or 0)
+            if account_id <= 0:
+                continue
+            next_states[str(account_id)] = normalize_tiktok_self_comment_monitor_state(
+                raw_state,
+                account_id=account_id,
+            )
+        tiktok_self_comment_monitor_states = next_states
+    except Exception:
+        tiktok_self_comment_monitor_states = {}
+
+
+def restore_tiktok_stranger_message_monitor_config():
+    global tiktok_stranger_message_monitor_states
+    try:
+        loaded = tiktok_state_store.load_blob_json(
+            TIKTOK_STRANGER_MESSAGE_MONITOR_CONFIG_BLOB_KEY,
+            default=[],
+        )
+        next_states: Dict[str, Dict[str, object]] = {}
+        migrated_legacy_state = False
+        items = loaded if isinstance(loaded, list) else [loaded] if isinstance(loaded, dict) else []
+        for raw_state in items:
+            if not isinstance(raw_state, dict):
+                continue
+            account_id = int(raw_state.get("account_id", 0) or 0)
+            if account_id <= 0:
+                continue
+            state = normalize_tiktok_stranger_message_monitor_state(
+                raw_state,
+                account_id=account_id,
+            )
+            # Before explicitly_started existed, saving a fixed reply could
+            # leave enabled=true in the persisted monitor state. Do not let
+            # that legacy flag start a background monitor after restart.
+            if bool(state.get("enabled")) and not bool(state.get("explicitly_started")):
+                state.update(
+                    {
+                        "enabled": False,
+                        "running": False,
+                        "next_run_at": "",
+                        "last_skip_reason": "legacy_monitor_state_not_explicitly_started",
+                    }
+                )
+                migrated_legacy_state = True
+            next_states[str(account_id)] = state
+        tiktok_stranger_message_monitor_states = next_states
+        if migrated_legacy_state:
+            save_tiktok_stranger_message_monitor_config()
+    except Exception:
+        tiktok_stranger_message_monitor_states = {}
+
+
+def restore_tiktok_inbox_monitor_config():
+    global tiktok_inbox_monitor_states
+    try:
+        loaded = tiktok_state_store.load_blob_json(
+            TIKTOK_INBOX_MONITOR_CONFIG_BLOB_KEY,
+            default=[],
+        )
+        next_states: Dict[str, Dict[str, object]] = {}
+        items = loaded if isinstance(loaded, list) else [loaded] if isinstance(loaded, dict) else []
+        for raw_state in items:
+            if not isinstance(raw_state, dict):
+                continue
+            account_id = int(raw_state.get("account_id", 0) or 0)
+            if account_id <= 0:
+                continue
+            next_states[str(account_id)] = normalize_tiktok_inbox_monitor_state(
+                raw_state,
+                account_id=account_id,
+            )
+        tiktok_inbox_monitor_states = next_states
+    except Exception:
+        tiktok_inbox_monitor_states = {}
+
+
+def restore_tiktok_stranger_message_seen_records():
+    global tiktok_stranger_message_seen_records
+    try:
+        loaded = tiktok_state_store.load_blob_json(
+            TIKTOK_STRANGER_MESSAGE_SEEN_RECORDS_BLOB_KEY,
+            default={},
+        )
+        next_records: Dict[str, Dict[str, str]] = {}
+        if isinstance(loaded, dict):
+            for raw_account_id, raw_bucket in loaded.items():
+                account_key = str(int(raw_account_id or 0) or 0)
+                if account_key == "0":
+                    continue
+                bucket: Dict[str, str] = {}
+                if isinstance(raw_bucket, dict):
+                    for raw_fingerprint, raw_timestamp in raw_bucket.items():
+                        fingerprint = normalize_tiktok_text(raw_fingerprint)
+                        if not fingerprint:
+                            continue
+                        bucket[fingerprint] = normalize_tiktok_text(raw_timestamp)
+                elif isinstance(raw_bucket, list):
+                    for raw_fingerprint in raw_bucket:
+                        fingerprint = normalize_tiktok_text(raw_fingerprint)
+                        if fingerprint:
+                            bucket[fingerprint] = ""
+                if bucket:
+                    next_records[account_key] = bucket
+        tiktok_stranger_message_seen_records = next_records
+    except Exception:
+        tiktok_stranger_message_seen_records = {}
+
+
+def save_tiktok_stranger_message_takeover_attempts():
+    try:
+        tiktok_state_store.save_blob_json(
+            TIKTOK_STRANGER_MESSAGE_TAKEOVER_ATTEMPTS_BLOB_KEY,
+            tiktok_stranger_message_takeover_attempts or {},
+        )
+    except Exception:
+        pass
+
+
+def restore_tiktok_stranger_message_takeover_attempts():
+    global tiktok_stranger_message_takeover_attempts
+    try:
+        loaded = tiktok_state_store.load_blob_json(
+            TIKTOK_STRANGER_MESSAGE_TAKEOVER_ATTEMPTS_BLOB_KEY,
+            default={},
+        )
+    except Exception:
+        loaded = {}
+    next_records: Dict[str, Dict[str, Dict[str, object]]] = {}
+    if isinstance(loaded, dict):
+        for raw_account_id, raw_bucket in loaded.items():
+            account_key = str(int(raw_account_id or 0) or 0)
+            if account_key == "0" or not isinstance(raw_bucket, dict):
+                continue
+            bucket: Dict[str, Dict[str, object]] = {}
+            for raw_key, raw_entry in raw_bucket.items():
+                key = normalize_tiktok_text(raw_key)
+                if not key or not isinstance(raw_entry, dict):
+                    continue
+                bucket[key] = {
+                    "attempts": max(0, int(raw_entry.get("attempts", 0) or 0)),
+                    "last_error": normalize_tiktok_text(raw_entry.get("last_error", ""))[:200],
+                    "last_at": normalize_tiktok_text(raw_entry.get("last_at", "")),
+                }
+            if bucket:
+                next_records[account_key] = bucket
+    tiktok_stranger_message_takeover_attempts = next_records
+
+
+def get_tiktok_takeover_attempt(account_id: int, row: Dict) -> Dict[str, object]:
+    account_key = str(int(account_id or 0) or 0)
+    key = stranger_message_row_key(row if isinstance(row, dict) else {})
+    bucket = tiktok_stranger_message_takeover_attempts.get(account_key) or {}
+    entry = bucket.get(key)
+    if isinstance(entry, dict):
+        return entry
+    return {"attempts": 0, "last_error": "", "last_at": ""}
+
+
+def record_tiktok_takeover_attempt(account_id: int, row: Dict, *, error: str = "") -> int:
+    """记一次失败尝试，返回累计次数（达到上限就不要再重试同一条会话）。"""
+    account_key = str(int(account_id or 0) or 0)
+    key = stranger_message_row_key(row if isinstance(row, dict) else {})
+    if account_key == "0" or not key:
+        return 0
+    bucket = dict(tiktok_stranger_message_takeover_attempts.get(account_key) or {})
+    previous = get_tiktok_takeover_attempt(account_id, row)
+    entry = {
+        "attempts": int(previous.get("attempts", 0) or 0) + 1,
+        "last_error": normalize_tiktok_text(error)[:200],
+        "last_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    bucket[key] = entry
+    if len(bucket) > TIKTOK_STRANGER_MESSAGE_SEEN_LIMIT_PER_ACCOUNT:
+        keep_items = sorted(
+            bucket.items(),
+            key=lambda item: str(item[1].get("last_at", "")),
+            reverse=True,
+        )[:TIKTOK_STRANGER_MESSAGE_SEEN_LIMIT_PER_ACCOUNT]
+        bucket = dict(keep_items)
+    tiktok_stranger_message_takeover_attempts[account_key] = bucket
+    save_tiktok_stranger_message_takeover_attempts()
+    return int(entry["attempts"])
+
+
+def clear_tiktok_takeover_attempt(account_id: int, row: Dict) -> None:
+    account_key = str(int(account_id or 0) or 0)
+    key = stranger_message_row_key(row if isinstance(row, dict) else {})
+    if account_key == "0" or not key:
+        return
+    bucket = dict(tiktok_stranger_message_takeover_attempts.get(account_key) or {})
+    if key in bucket:
+        bucket.pop(key, None)
+        tiktok_stranger_message_takeover_attempts[account_key] = bucket
+        save_tiktok_stranger_message_takeover_attempts()
+
+
+def restore_tiktok_customer_pools_state():
+    global tiktok_all_customer_pool, tiktok_precise_customer_pool
+    try:
+        all_rows, precise_rows = build_combined_tiktok_customer_pools()
+        if not all_rows and not precise_rows:
+            all_rows, precise_rows = tiktok_state_store.load_tiktok_customer_pools()
+        apply_tiktok_precise_touch_state(all_rows)
+        apply_tiktok_precise_touch_state(precise_rows)
+        tiktok_all_customer_pool = [row for row in all_rows if isinstance(row, dict)]
+        tiktok_precise_customer_pool = [row for row in precise_rows if isinstance(row, dict)]
+    except Exception:
+        tiktok_all_customer_pool = []
+        tiktok_precise_customer_pool = []
+
+
+def restore_tiktok_mention_self_video_cache():
+    global tiktok_mention_self_video_cache
+    try:
+        loaded = tiktok_state_store.load_blob_json(
+            TIKTOK_MENTION_SELF_VIDEO_CACHE_BLOB_KEY,
+            default={},
+        )
+        if isinstance(loaded, dict):
+            tiktok_mention_self_video_cache = {
+                "account_id": int(loaded.get("account_id", 0) or 0),
+                "profile": loaded.get("profile", {}) if isinstance(loaded.get("profile"), dict) else {},
+                "videos": [row for row in (loaded.get("videos", []) or []) if isinstance(row, dict)],
+                "fetched_at": str(loaded.get("fetched_at", "") or "").strip(),
+                "selected_video_url": str(loaded.get("selected_video_url", "") or "").strip(),
+            }
+    except Exception:
+        tiktok_mention_self_video_cache = {
+            "account_id": 0,
+            "profile": {},
+            "videos": [],
+            "fetched_at": "",
+            "selected_video_url": "",
+        }
+
+
+def restore_tiktok_mention_comment_history():
+    global tiktok_mention_comment_history
+    try:
+        loaded = tiktok_state_store.load_blob_json(
+            TIKTOK_MENTION_COMMENT_HISTORY_BLOB_KEY,
+            default={},
+        )
+        if isinstance(loaded, dict):
+            tiktok_mention_comment_history = {
+                str(key or "").strip(): value
+                for key, value in loaded.items()
+                if str(key or "").strip() and isinstance(value, dict)
+            }
+    except Exception:
+        tiktok_mention_comment_history = {}
+
+
+def normalize_tiktok_schedule_type(value: object) -> str:
+    normalized = str(value or "collect_precise").strip().lower()
+    return normalized if normalized in TIKTOK_SCHEDULE_TYPES else "collect_precise"
+
+
+def normalize_tiktok_precise_touch_actions(value: object) -> List[str]:
+    """Normalize touch actions to the shared H5/Online order."""
+    selected = {str(item or "").strip().lower() for item in value} if isinstance(value, list) else set()
+    return [action for action in TIKTOK_PRECISE_TOUCH_ACTIONS if action in selected]
+
+
+def coerce_bool(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on", "enabled", "active"}:
+        return True
+    if text in {"0", "false", "no", "n", "off", "disabled", "inactive", ""}:
+        return False
+    return default
+
+
+def normalize_schedule_time_text(value: object, default: str) -> str:
+    text = str(value or "").strip()
+    if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", text):
+        return text
+    return default
+
+
+def parse_schedule_datetime(value: object) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def parse_comment_timestamp(value: object) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    direct = parse_schedule_datetime(text)
+    if direct:
+        return direct.timestamp()
+    for fmt in ("%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%m-%d %H:%M:%S", "%m-%d %H:%M"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            if fmt.startswith("%m-%d"):
+                parsed = parsed.replace(year=datetime.now().year)
+            return parsed.timestamp()
+        except ValueError:
+            continue
+    return 0
+
+
+def format_schedule_datetime(value: Optional[datetime]) -> str:
+    if not value:
+        return ""
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def build_tiktok_schedule_plan_id() -> str:
+    return f"plan_{datetime.now().strftime('%Y%m%d%H%M%S')}_{random.randint(1000, 9999)}"
+
+
+def normalize_tiktok_schedule_plan(raw_plan: Optional[Dict[str, object]] = None) -> Dict[str, object]:
+    plan = raw_plan if isinstance(raw_plan, dict) else {}
+    schedule_type = normalize_tiktok_schedule_type(plan.get("type"))
+    interval_minutes = max(5, min(int(plan.get("interval_minutes", 120) or 120), 7 * 24 * 60))
+    max_results = max(5, min(int(plan.get("max_results", 50) or 50), 100))
+    max_videos_per_run = max(1, min(int(plan.get("max_videos_per_run", 50) or 50), 50))
+    max_users_per_run = max(1, min(int(plan.get("max_users_per_run", 30) or 30), 200))
+    follow_interval_minutes_min = max(
+        0,
+        min(float(plan.get("follow_interval_minutes_min", 3) or 3), 1440),
+    )
+    follow_interval_minutes_max = max(
+        follow_interval_minutes_min,
+        min(float(plan.get("follow_interval_minutes_max", follow_interval_minutes_min or 5) or follow_interval_minutes_min or 5), 1440),
+    )
+    interaction_interval_minutes_min = max(
+        0,
+        min(float(plan.get("interaction_interval_minutes_min", 3) or 3), 1440),
+    )
+    interaction_interval_minutes_max = max(
+        interaction_interval_minutes_min,
+        min(float(plan.get("interaction_interval_minutes_max", interaction_interval_minutes_min or 5) or interaction_interval_minutes_min or 5), 1440),
+    )
+    comment_scroll_rounds = max(20, min(int(plan.get("comment_scroll_rounds", 300) or 300), 300))
+    comment_max_comments = max(20, min(int(plan.get("comment_max_comments", 500) or 500), 500))
+    has_explicit_touch_actions = "touch_actions" in plan or "followup_actions" in plan
+    raw_touch_actions = plan.get("touch_actions") if "touch_actions" in plan else plan.get("followup_actions")
+    touch_actions = normalize_tiktok_precise_touch_actions(raw_touch_actions)
+    if schedule_type == "precise_touch" and not has_explicit_touch_actions:
+        touch_actions = list(TIKTOK_PRECISE_TOUCH_ACTIONS)
+    legacy_reply_actions = plan.get("followup_actions") if isinstance(plan.get("followup_actions"), list) else []
+    # Older collection plans stored the immediate-reply toggle in touch_actions.
+    # Only migrate that legacy value for collection plans; precise-touch plans
+    # must never regain reply_comments as a follow-up action.
+    if schedule_type == "collect_precise" and isinstance(plan.get("touch_actions"), list):
+        legacy_reply_actions = [*legacy_reply_actions, *plan.get("touch_actions", [])]
+    reply_precise_comments = coerce_bool(
+        plan.get("reply_precise_comments"),
+        "reply_comments" in {str(item or "").strip().lower() for item in legacy_reply_actions},
+    )
+    reply_comment_mode = normalize_tiktok_video_comment_mode(
+        plan.get("reply_comment_mode", plan.get("comment_mode"))
+    )
+    reply_comment_text = str(plan.get("reply_comment_text", plan.get("comment_text", "")) or "").strip()
+    reply_comment_prompt = str(plan.get("reply_comment_prompt", plan.get("comment_prompt", "")) or "").strip()
+    reply_comment_seed_text = str(plan.get("reply_comment_seed_text", plan.get("comment_seed_text", "")) or "").strip()
+    account_id = max(0, int(plan.get("account_id", plan.get("tiktok_account_id", 0)) or 0))
+    next_run_at = parse_schedule_datetime(plan.get("next_run_at"))
+    window_start = normalize_schedule_time_text(plan.get("window_start"), "09:00")
+    window_end = normalize_schedule_time_text(plan.get("window_end"), "23:00")
+    normalized = {
+        "id": str(plan.get("id", "") or "").strip() or build_tiktok_schedule_plan_id(),
+        "name": str(plan.get("name", "") or "").strip()
+        or {
+            "collect_precise": "采集视频精准客户",
+            "precise_touch": "精准用户触达计划",
+            "self_comment_monitor": "我的评论区计划",
+            "follow_comment": "精准互动计划",
+            "interaction": "精准私信计划",
+        }.get(schedule_type, "TikTok排期计划"),
+        "type": schedule_type,
+        "account_id": account_id,
+        "enabled": coerce_bool(plan.get("enabled", True), True),
+        "keyword": str(plan.get("keyword", "") or "").strip(),
+        "interval_minutes": interval_minutes,
+        "window_start": window_start,
+        "window_end": window_end,
+        "max_results": max_results,
+        "max_videos_per_run": max_videos_per_run,
+        "max_users_per_run": max_users_per_run,
+        "touch_actions": touch_actions,
+        "reply_precise_comments": reply_precise_comments,
+        "reply_comment_mode": reply_comment_mode,
+        "reply_comment_text": reply_comment_text,
+        "reply_comment_prompt": reply_comment_prompt,
+        "reply_comment_seed_text": reply_comment_seed_text,
+        "use_online_self_comment_config": coerce_bool(plan.get("use_online_self_comment_config", True), True),
+        "comment_scroll_rounds": comment_scroll_rounds,
+        "comment_max_comments": comment_max_comments,
+        "comment_mode": normalize_tiktok_video_comment_mode(plan.get("comment_mode")),
+        "comment_text": str(plan.get("comment_text", "") or "").strip(),
+        "comment_prompt": str(plan.get("comment_prompt", "") or "").strip(),
+        "comment_seed_text": str(plan.get("comment_seed_text", "") or "").strip(),
+        "message_mode": normalize_tiktok_video_comment_mode(plan.get("message_mode")),
+        "message": str(plan.get("message", "") or "").strip(),
+        "message_prompt": str(plan.get("message_prompt", "") or "").strip(),
+        "message_seed_text": str(plan.get("message_seed_text", "") or "").strip(),
+        "follow_interval_minutes_min": follow_interval_minutes_min,
+        "follow_interval_minutes_max": follow_interval_minutes_max,
+        "interaction_interval_minutes_min": interaction_interval_minutes_min,
+        "interaction_interval_minutes_max": interaction_interval_minutes_max,
+        "require_follow_comment_completed": coerce_bool(plan.get("require_follow_comment_completed", False), False),
+        "last_run_at": str(plan.get("last_run_at", "") or "").strip(),
+        "next_run_at": format_schedule_datetime(next_run_at) if next_run_at else "",
+        "last_status": str(plan.get("last_status", "idle") or "idle").strip() or "idle",
+        "last_message": str(plan.get("last_message", "") or "").strip(),
+        "last_error": str(plan.get("last_error", "") or "").strip(),
+        "total_runs": max(0, int(plan.get("total_runs", 0) or 0)),
+        "success_runs": max(0, int(plan.get("success_runs", 0) or 0)),
+        "failure_runs": max(0, int(plan.get("failure_runs", 0) or 0)),
+        "updated_at": str(plan.get("updated_at", "") or "").strip() or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    if normalized["enabled"] and not normalized["next_run_at"]:
+        normalized["next_run_at"] = format_schedule_datetime(
+            get_next_schedule_window_anchor(
+                datetime.now(),
+                window_start,
+                window_end,
+                include_current_if_inside=True,
+            )
+        )
+    return normalized
+
+
+def save_tiktok_schedule_plans():
+    try:
+        tiktok_state_store.save_blob_json(TIKTOK_SCHEDULE_PLANS_BLOB_KEY, tiktok_schedule_plans or [])
+    except Exception:
+        pass
+
+
+def restore_tiktok_schedule_plans():
+    global tiktok_schedule_plans
+    try:
+        loaded = tiktok_state_store.load_blob_json(TIKTOK_SCHEDULE_PLANS_BLOB_KEY, default=[])
+        if isinstance(loaded, list):
+            tiktok_schedule_plans = [
+                normalize_tiktok_schedule_plan(item)
+                for item in loaded
+                if isinstance(item, dict)
+            ]
+    except Exception:
+        tiktok_schedule_plans = []
+
+
+def is_schedule_time_window_open(
+    now: Optional[datetime],
+    start_text: object,
+    end_text: object,
+) -> bool:
+    current = now or datetime.now()
+    start_value = normalize_schedule_time_text(start_text, "09:00")
+    end_value = normalize_schedule_time_text(end_text, "23:00")
+    start_hour, start_minute = [int(item) for item in start_value.split(":")]
+    end_hour, end_minute = [int(item) for item in end_value.split(":")]
+    current_minutes = current.hour * 60 + current.minute
+    start_minutes = start_hour * 60 + start_minute
+    end_minutes = end_hour * 60 + end_minute
+    if start_minutes <= end_minutes:
+        return start_minutes <= current_minutes <= end_minutes
+    return current_minutes >= start_minutes or current_minutes <= end_minutes
+
+
+def get_next_schedule_window_anchor(
+    current: Optional[datetime],
+    start_text: object,
+    end_text: object,
+    *,
+    include_current_if_inside: bool = True,
+) -> datetime:
+    moment = current or datetime.now()
+    start_value = normalize_schedule_time_text(start_text, "09:00")
+    end_value = normalize_schedule_time_text(end_text, "23:00")
+    start_hour, start_minute = [int(item) for item in start_value.split(":")]
+    end_hour, end_minute = [int(item) for item in end_value.split(":")]
+    start_minutes = start_hour * 60 + start_minute
+    end_minutes = end_hour * 60 + end_minute
+
+    if include_current_if_inside and is_schedule_time_window_open(moment, start_value, end_value):
+        return moment
+
+    today = moment.date()
+    today_start = datetime.combine(today, datetime.min.time()).replace(hour=start_hour, minute=start_minute)
+
+    if start_minutes <= end_minutes:
+        if moment <= today_start:
+            return today_start
+        return today_start + timedelta(days=1)
+
+    current_minutes = moment.hour * 60 + moment.minute
+    if current_minutes < start_minutes and current_minutes > end_minutes:
+        return today_start
+    if current_minutes <= end_minutes:
+        return today_start
+    return today_start + timedelta(days=1)
+
+
+def get_next_tiktok_schedule_run(
+    current: Optional[datetime],
+    interval_minutes: int,
+    preferred_start: Optional[datetime] = None,
+    window_start: object = "09:00",
+    window_end: object = "23:00",
+) -> datetime:
+    base = preferred_start or current or datetime.now()
+    candidate = base + timedelta(minutes=max(5, int(interval_minutes or 5)))
+    if is_schedule_time_window_open(candidate, window_start, window_end):
+        return candidate
+    return get_next_schedule_window_anchor(
+        candidate,
+        window_start,
+        window_end,
+        include_current_if_inside=False,
+    )
+
+
+def update_tiktok_schedule_plan_runtime(
+    plan_id: str,
+    *,
+    status: Optional[str] = None,
+    message: Optional[str] = None,
+    error: Optional[str] = None,
+    bump_total: bool = False,
+    success: bool = False,
+    failed: bool = False,
+    next_run_at: Optional[datetime] = None,
+):
+    changed = False
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for index, raw_plan in enumerate(tiktok_schedule_plans):
+        plan = normalize_tiktok_schedule_plan(raw_plan)
+        if str(plan.get("id", "") or "") != str(plan_id or ""):
+            continue
+        if status is not None:
+            plan["last_status"] = status
+        if message is not None:
+            plan["last_message"] = str(message or "").strip()
+        if error is not None:
+            plan["last_error"] = str(error or "").strip()
+        if bump_total:
+            plan["total_runs"] = int(plan.get("total_runs", 0) or 0) + 1
+            plan["last_run_at"] = now_text
+        if success:
+            plan["success_runs"] = int(plan.get("success_runs", 0) or 0) + 1
+        if failed:
+            plan["failure_runs"] = int(plan.get("failure_runs", 0) or 0) + 1
+        if next_run_at is not None:
+            plan["next_run_at"] = format_schedule_datetime(next_run_at)
+        plan["updated_at"] = now_text
+        tiktok_schedule_plans[index] = plan
+        changed = True
+        break
+    if changed:
+        save_tiktok_schedule_plans()
+
+
+def reconcile_tiktok_runtime_state() -> bool:
+    """Repair stale runtime flags when the background task is already gone."""
+    global tiktok_running, tiktok_stop_requested, tiktok_background_task
+
+    has_processing_task = any(task.get("status") == "processing" for task in tiktok_tasks)
+    background_alive = bool(tiktok_background_task and not tiktok_background_task.done())
+
+    if background_alive:
+        tiktok_running = True
+        return True
+
+    state_changed = False
+    if has_processing_task:
+        for task in tiktok_tasks:
+            if task.get("status") == "processing":
+                task["status"] = "pending"
+                task["error"] = task.get("error") or "Recovered from stale running state"
+                task["collect_progress"] = {
+                    **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                    "phase": "idle",
+                    "last_message": "任务中断，已从旧的运行态恢复。",
+                    "updated_at": _now_text(),
+                }
+        state_changed = True
+
+    if tiktok_running or tiktok_background_task is not None or tiktok_stop_requested or state_changed:
+        tiktok_running = False
+        tiktok_stop_requested = False
+        tiktok_background_task = None
+        if state_changed:
+            save_tiktok_tasks_state()
+
+    return False
+
+
+def reconcile_tiktok_video_comment_runtime_state() -> bool:
+    global tiktok_video_comment_running, tiktok_video_comment_stop_requested, tiktok_video_comment_background_task
+
+    background_alive = bool(
+        tiktok_video_comment_background_task and not tiktok_video_comment_background_task.done()
+    )
+    if background_alive:
+        tiktok_video_comment_running = True
+        tiktok_video_comment_state["running"] = True
+        return True
+
+    if tiktok_video_comment_running or tiktok_video_comment_background_task is not None or tiktok_video_comment_stop_requested:
+        tiktok_video_comment_running = False
+        tiktok_video_comment_stop_requested = False
+        tiktok_video_comment_background_task = None
+        tiktok_video_comment_state.update({"running": False, "current_task_title": "", "current_comment_text": ""})
+    return False
+
+
+def reconcile_tiktok_mention_comment_runtime_state() -> bool:
+    global tiktok_mention_comment_running, tiktok_mention_comment_stop_requested, tiktok_mention_comment_background_task
+
+    background_alive = bool(
+        tiktok_mention_comment_background_task and not tiktok_mention_comment_background_task.done()
+    )
+    if background_alive:
+        tiktok_mention_comment_running = True
+        tiktok_mention_comment_state["running"] = True
+        return True
+
+    repaired = False
+    for task in tiktok_tasks:
+        for user in task.get("high_intent_users", []) or []:
+            if user.get("mention_comment_status") == "processing":
+                user["mention_comment_status"] = "queued"
+                user["mention_comment_error"] = user.get("mention_comment_error") or "Recovered from stale mention-comment state"
+                user["mention_comment_updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                repaired = True
+
+    for user in tiktok_manual_interaction_users:
+        if user.get("mention_comment_status") == "processing":
+            user["mention_comment_status"] = "queued"
+            user["mention_comment_error"] = user.get("mention_comment_error") or "Recovered from stale mention-comment state"
+            user["mention_comment_updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            repaired = True
+
+    if repaired:
+        save_tiktok_tasks_state()
+        save_tiktok_manual_interaction_users()
+
+    if tiktok_mention_comment_running or tiktok_mention_comment_background_task is not None or tiktok_mention_comment_stop_requested:
+        tiktok_mention_comment_running = False
+        tiktok_mention_comment_stop_requested = False
+        tiktok_mention_comment_background_task = None
+        tiktok_mention_comment_state.update(
+            {
+                "running": False,
+                "current_user": "",
+                "current_users": [],
+                "comment_preview": "",
+            }
+        )
+    return False
+
+
+def reconcile_tiktok_follow_comment_runtime_state() -> bool:
+    global tiktok_follow_comment_running, tiktok_follow_comment_stop_requested, tiktok_follow_comment_background_task
+
+    background_alive = bool(
+        tiktok_follow_comment_background_task and not tiktok_follow_comment_background_task.done()
+    )
+    if background_alive:
+        tiktok_follow_comment_running = True
+        tiktok_follow_comment_state["running"] = True
+        return True
+
+    repaired = False
+    for task in tiktok_tasks:
+        for user in task.get("high_intent_users", []) or []:
+            if user.get("follow_comment_status") == "processing":
+                user["follow_comment_status"] = "queued"
+                user["follow_comment_error"] = user.get("follow_comment_error") or "Recovered from stale follow-comment state"
+                user["follow_comment_updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                repaired = True
+
+    for user in tiktok_manual_interaction_users:
+        if user.get("follow_comment_status") == "processing":
+            user["follow_comment_status"] = "queued"
+            user["follow_comment_error"] = user.get("follow_comment_error") or "Recovered from stale follow-comment state"
+            user["follow_comment_updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            repaired = True
+
+    if repaired:
+        save_tiktok_tasks_state()
+        save_tiktok_manual_interaction_users()
+
+    if tiktok_follow_comment_running or tiktok_follow_comment_background_task is not None or tiktok_follow_comment_stop_requested:
+        tiktok_follow_comment_running = False
+        tiktok_follow_comment_stop_requested = False
+        tiktok_follow_comment_background_task = None
+        tiktok_follow_comment_state.update(
+            {
+                "running": False,
+                "current_user": "",
+                "current_users": [],
+                "current_comment_text": "",
+                "account_ids": [],
+                "workers": [],
+            }
+        )
+    return False
+
+
+def reconcile_tiktok_group_member_runtime_state() -> bool:
+    global tiktok_group_member_running, tiktok_group_member_stop_requested, tiktok_group_member_background_task
+
+    background_alive = bool(
+        tiktok_group_member_background_task and not tiktok_group_member_background_task.done()
+    )
+    if background_alive:
+        tiktok_group_member_running = True
+        tiktok_group_member_state["running"] = True
+        return True
+
+    if tiktok_group_member_running or tiktok_group_member_background_task is not None or tiktok_group_member_stop_requested:
+        tiktok_group_member_running = False
+        tiktok_group_member_stop_requested = False
+        tiktok_group_member_background_task = None
+        tiktok_group_member_state.update({"running": False, "current_group": ""})
+    return False
+
+
+def reconcile_tiktok_account_nurture_runtime_state() -> bool:
+    global tiktok_account_nurture_scheduler, tiktok_account_nurture_background_task
+
+    background_alive = bool(
+        tiktok_account_nurture_background_task and not tiktok_account_nurture_background_task.done()
+    )
+    if background_alive and tiktok_account_nurture_scheduler:
+        return True
+
+    if tiktok_account_nurture_scheduler and not tiktok_account_nurture_scheduler.is_running:
+        tiktok_account_nurture_scheduler = None
+    if tiktok_account_nurture_background_task is not None and not background_alive:
+        tiktok_account_nurture_background_task = None
+    return False
+
+
+def build_tiktok_account_nurture_idle_status(config: Optional[Dict] = None) -> Dict:
+    current_config = config or load_global_config()
+    accounts = _normalize_accounts(current_config.get("tiktok_accounts"))
+    session_min = max(5, int(current_config.get("tiktok_nurture_session_min_minutes", 20) or 20))
+    session_max = max(session_min, int(current_config.get("tiktok_nurture_session_max_minutes", 40) or 40))
+    interval_min = max(30, int(current_config.get("tiktok_nurture_interval_min_minutes", 120) or 120))
+    interval_max = max(interval_min, int(current_config.get("tiktok_nurture_interval_max_minutes", 180) or 180))
+    active_start_hour = max(6, min(int(current_config.get("tiktok_nurture_active_start_hour", 9) or 9), 20))
+    active_end_hour = max(active_start_hour + 1, min(int(current_config.get("tiktok_nurture_active_end_hour", 23) or 23), 23))
+    try:
+        like_probability = float(current_config.get("tiktok_nurture_like_probability", 0.10))
+    except (TypeError, ValueError):
+        like_probability = 0.10
+    like_probability = min(1.0, max(0.0, like_probability))
+    return {
+        "running": False,
+        "started_at": "",
+        "running_accounts": 0,
+        "waiting_accounts": 0,
+        "enabled_accounts": 0,
+        "online_accounts": sum(1 for account in accounts if account.get("status") == "online"),
+        "total_sessions": 0,
+        "rules": {
+            "entry_url": "https://www.tiktok.com/jingxuan",
+            "session_label": f"{session_min}-{session_max} 分钟 / 次",
+            "interval_label": f"{interval_min}-{interval_max} 分钟 / 次",
+            "active_window_label": f"{active_start_hour:02d}:00-{active_end_hour:02d}:00",
+            "like_probability_label": f"随机点赞概率 {like_probability * 100:.0f}%",
+            "daily_runs_label": "约 5-6 次 / 天",
+            "warning": "养号期间不要执行其他TikTok任务，否则浏览器会互相抢占，容易冲突。",
+        },
+        "accounts": [
+            {
+                "account_id": int(account.get("id", 0) or 0),
+                "port": int(account.get("port", 0) or 0),
+                "account_status": str(account.get("status", "offline") or "offline"),
+                "profile_dir": (
+                    TikTokClient(
+                        port=int(account.get("port", 0) or 0),
+                        account_id=int(account.get("id", 0) or 0) or None,
+                    ).resolve_profile_dir()
+                    if int(account.get("id", 0) or 0) or int(account.get("port", 0) or 0)
+                    else ""
+                ),
+                "connection_mode": "待连接",
+                "worker_status": "idle",
+                "last_action": "未启动养号",
+                "last_error": "",
+                "last_started_at": "",
+                "last_finished_at": "",
+                "next_run_at": "",
+                "completed_sessions": 0,
+                "current_session_minutes": 0,
+                "current_video_count": 0,
+                "likes_sent": 0,
+                "is_enabled": False,
+                "can_participate": str(account.get("status", "offline") or "offline") == "online",
+            }
+            for account in accounts
+        ],
+    }
+
+
+def parse_tiktok_nurture_account_ids(request: Optional[Dict]) -> List[int]:
+    source = request if isinstance(request, dict) else {}
+    return sorted({int(account_id) for account_id in (source.get("account_ids") or []) if int(account_id or 0) > 0})
+
+
+def build_tiktok_nurture_conflict(action_label: str) -> Optional[Dict]:
+    running = reconcile_tiktok_account_nurture_runtime_state()
+    if running and tiktok_account_nurture_scheduler and tiktok_account_nurture_scheduler.is_actively_blocking_other_tasks():
+        scheduler_snapshot = tiktok_account_nurture_scheduler.snapshot()
+        tiktok_log(
+            "[TikTok任务互斥] trigger=%s holder=account_nurture account_ids=%s started_at=%s "
+            "active_window=%s current_account=%s"
+            % (
+                action_label,
+                scheduler_snapshot.get("enabled_account_ids") or scheduler_snapshot.get("account_ids") or [],
+                scheduler_snapshot.get("started_at") or "",
+                scheduler_snapshot.get("active_window") or scheduler_snapshot.get("is_active_window") or "",
+                scheduler_snapshot.get("current_account_id") or scheduler_snapshot.get("account_id") or "",
+            ),
+            "warning",
+        )
+        return {
+            "code": 409,
+            "type": "account_nurture_running",
+            "msg": f"账号养号正在运行，请先暂停养号后再{action_label}。养号期间不要执行其他TikTok任务，否则可能冲突。",
+        }
+    return None
+
+
+def has_running_tiktok_task_for_account_nurture() -> bool:
+    return bool(get_running_tiktok_task_conflict_snapshot())
+
+
+def get_running_tiktok_task_conflict_snapshot() -> List[Dict[str, object]]:
+    """Return the active local TikTok workers that block an account-nurture run.
+
+    The snapshot is intentionally limited to scheduler-safe operational fields so
+    a rejection log identifies the holder without recording customer content.
+    """
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+    workers = [
+        ("comment_collect", tiktok_running, {}, tiktok_background_task),
+        ("video_comment", tiktok_video_comment_running, tiktok_video_comment_state, tiktok_video_comment_background_task),
+        ("mention_comment", tiktok_mention_comment_running, tiktok_mention_comment_state, tiktok_mention_comment_background_task),
+        ("follow_comment", tiktok_follow_comment_running, tiktok_follow_comment_state, tiktok_follow_comment_background_task),
+        ("direct_message", tiktok_interaction_running, tiktok_interaction_state, tiktok_interaction_background_task),
+        ("group_member_extract", tiktok_group_member_running, tiktok_group_member_state, tiktok_group_member_background_task),
+        ("stranger_message", tiktok_stranger_message_running, tiktok_stranger_message_state, tiktok_stranger_message_background_task),
+        ("peer_monitor", bool(tiktok_monitor_runtime_state.get("running")), tiktok_monitor_runtime_state, tiktok_monitor_scheduler_task),
+    ]
+    snapshot: List[Dict[str, object]] = []
+    for action, running, state, task in workers:
+        if not running:
+            continue
+        state_data = state if isinstance(state, dict) else {}
+        account_ids = state_data.get("account_ids") or []
+        account_id = state_data.get("account_id")
+        snapshot.append(
+            {
+                "action": action,
+                "account_id": account_id,
+                "account_ids": account_ids,
+                "started_at": state_data.get("started_at") or "",
+                "processed": state_data.get("processed") or 0,
+                "total": state_data.get("total") or 0,
+                "task_alive": bool(task and not task.done()),
+            }
+        )
+    return snapshot
+
+
+def log_tiktok_task_conflict(trigger: str, snapshot: Optional[List[Dict[str, object]]] = None) -> List[Dict[str, object]]:
+    holders = snapshot if snapshot is not None else get_running_tiktok_task_conflict_snapshot()
+    tiktok_log(
+        f"[TikTok任务互斥] trigger={trigger} holders={json.dumps(holders, ensure_ascii=False, separators=(',', ':'))}",
+        "warning",
+    )
+    return holders
+
+
+def safe_int(value, default: int) -> int:
+    try:
+        text = str(value).strip() if value is not None else ""
+        if not text:
+            return int(default)
+        return int(text)
+    except Exception:
+        return int(default)
+
+
+def _normalize_accounts(accounts: Optional[List[Dict]]) -> List[Dict]:
+    normalized_by_id: Dict[int, Dict] = {}
+    source = accounts if isinstance(accounts, list) else []
+    for fallback, row in enumerate(source, start=1):
+        item = row if isinstance(row, dict) else {}
+        account_id = safe_int(item.get("id", fallback), fallback)
+        if account_id <= 0 or account_id > TIKTOK_ACCOUNT_LIMIT:
+            continue
+        normalized_by_id[account_id] = {
+            "id": account_id,
+            "status": str(item.get("status", "offline") or "offline"),
+            "port": safe_int(item.get("port", 9418 + account_id), 9418 + account_id),
+        }
+
+    for fallback in DEFAULT_TIKTOK_ACCOUNTS:
+        fallback_id = int(fallback.get("id", 0) or 0)
+        if fallback_id <= 0 or fallback_id in normalized_by_id:
+            continue
+        normalized_by_id[fallback_id] = dict(fallback)
+
+    if not normalized_by_id:
+        normalized_by_id = {
+            int(item["id"]): dict(item)
+            for item in DEFAULT_TIKTOK_ACCOUNTS
+        }
+
+    normalized = list(normalized_by_id.values())
+    normalized.sort(key=lambda row: row["id"])
+    return normalized
+
+
+def load_global_config() -> Dict:
+    defaults = {
+        "api_url": "https://ai.comfly.chat/v1/chat/completions",
+        "api_key": "",
+        "model": "gpt-5.4",
+        "comment_direction": "亲切、有趣、鼓励",
+        "tiktok_comment_direction": TIKTOK_INTENT_DIRECTION_DEFAULT,
+        "tiktok_comment_filter_strategy": "prompt",
+        "search_min_likes": 500,
+        "search_avg_multiplier": 1.5,
+        "search_exclude_historical_duplicates": True,
+        "comment_scroll_rounds": 300,
+        "comment_max_comments": 500,
+        "tiktok_default_account_id": 1,
+        "tiktok_accounts": DEFAULT_TIKTOK_ACCOUNTS,
+        "tiktok_message_show_browser": False,
+        "tiktok_nurture_interval_min_minutes": 120,
+        "tiktok_nurture_interval_max_minutes": 180,
+        "tiktok_nurture_session_min_minutes": 20,
+        "tiktok_nurture_session_max_minutes": 40,
+        "tiktok_nurture_like_probability": 0.10,
+        "tiktok_nurture_active_start_hour": 9,
+        "tiktok_nurture_active_end_hour": 23,
+    }
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                defaults.update(loaded)
+        except Exception:
+            pass
+    defaults["tiktok_accounts"] = _normalize_accounts(defaults.get("tiktok_accounts"))
+    defaults["tiktok_default_account_id"] = safe_int(defaults.get("tiktok_default_account_id", 1), 1)
+    if defaults["tiktok_default_account_id"] <= 0 or defaults["tiktok_default_account_id"] > TIKTOK_ACCOUNT_LIMIT:
+        defaults["tiktok_default_account_id"] = 1
+    return defaults
+
+
+def save_global_config(config: Dict):
+    payload = {}
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                payload.update(loaded)
+        except Exception:
+            pass
+    payload.update(config)
+    payload["tiktok_accounts"] = _normalize_accounts(payload.get("tiktok_accounts"))
+    payload["tiktok_default_account_id"] = safe_int(payload.get("tiktok_default_account_id", 1), 1)
+    if payload["tiktok_default_account_id"] <= 0 or payload["tiktok_default_account_id"] > TIKTOK_ACCOUNT_LIMIT:
+        payload["tiktok_default_account_id"] = 1
+    with open(GLOBAL_CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def should_show_tiktok_message_browser(config: Optional[Dict] = None) -> bool:
+    return True
+
+
+def create_tiktok_message_scraper(account: Dict, config: Optional[Dict] = None) -> TikTokCommentScraper:
+    return TikTokCommentScraper(
+        headless=False,
+        account_id=account["id"],
+        cdp_port=account["port"],
+        allow_workspace_fallback=True,
+        allow_cdp_reuse=True,
+    )
+
+
+def create_tiktok_inbox_scraper(account: Dict, config: Optional[Dict] = None) -> TikTokCommentScraper:
+    return TikTokCommentScraper(
+        headless=False,
+        account_id=account["id"],
+        cdp_port=account["port"],
+        allow_workspace_fallback=True,
+        allow_cdp_reuse=True,
+    )
+
+
+class TikTokInboxPageWorker:
+    def __init__(self, account_id: int):
+        self.account_id = int(account_id or 0)
+        self._lock = asyncio.Lock()
+        self._scraper: Optional[TikTokCommentScraper] = None
+        self._page = None
+        self._started_at = ""
+        self._last_used_at = ""
+
+    @staticmethod
+    def _is_retryable_runtime_error(exc: Exception) -> bool:
+        message = str(exc or "")
+        return any(
+            marker in message
+            for marker in [
+                "Target page, context or browser has been closed",
+                "Browser has been closed",
+                "Connection closed",
+                "has been disconnected",
+                "Protocol error",
+                "Page.wait_for_timeout",
+            ]
+        )
+
+    async def _reset_runtime(self):
+        scraper = self._scraper
+        self._scraper = None
+        self._page = None
+        if scraper:
+            try:
+                await scraper.close()
+            except Exception:
+                pass
+
+    async def _ensure_runtime(self):
+        if self._page:
+            try:
+                if not self._page.is_closed():
+                    return
+            except Exception:
+                pass
+        await self._reset_runtime()
+        config = load_global_config()
+        account = get_tiktok_account_by_id(self.account_id, config)
+        if not account:
+            raise RuntimeError(f"未找到TikTok账号 {self.account_id}")
+        if str(account.get("status", "") or "").strip() != "online":
+            raise RuntimeError(f"账号 {self.account_id} 还没有登录完成")
+        scraper = create_tiktok_inbox_scraper(account, config)
+        page = await scraper.open_chat_workspace_page(logger=tiktok_log)
+        self._scraper = scraper
+        self._page = page
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if not self._started_at:
+            self._started_at = timestamp
+        self._last_used_at = timestamp
+
+    async def fetch_detail(self, row: Dict) -> Dict:
+        async with self._lock:
+            for attempt in range(2):
+                await self._ensure_runtime()
+                try:
+                    opened, reason = await self._scraper.open_chat_page_conversation(self._page, row)
+                    if not opened:
+                        raise RuntimeError(reason or "未找到目标会话")
+                    try:
+                        await self._page.wait_for_function(
+                            """() => Boolean(document.querySelector('[data-e2e=\"msg-item-content\"]'))""",
+                            timeout=15000,
+                        )
+                    except Exception:
+                        try:
+                            await self._page.wait_for_function(
+                                """() => Boolean(document.querySelector('.RightPanelHeadertitle, .RightPanelHeader'))""",
+                                timeout=5000,
+                            )
+                        except Exception:
+                            pass
+                    await self._page.wait_for_timeout(1200)
+                    detail = await self._scraper.extract_chat_page_conversation_detail(self._page)
+                    messages = detail.get("messages", []) if isinstance(detail, dict) else []
+                    if not isinstance(messages, list) or not messages:
+                        raise RuntimeError("已打开会话，但没有读取到右侧消息气泡")
+                    self._last_used_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    return {
+                        "conversation_key": str(row.get("conversation_key", "") or row.get("conversation_id", "") or "").strip(),
+                        "username": str(detail.get("username", "") or row.get("username", "") or "").strip(),
+                        "avatar_url": str(detail.get("avatar_url", "") or row.get("avatar_url", "") or row.get("avatar", "") or "").strip(),
+                        "profile_url": str(detail.get("profile_url", "") or row.get("profile_url", "") or "").strip(),
+                        "incoming_message": str(detail.get("incoming_message", "") or row.get("incoming_message", "") or row.get("preview_text", "") or "").strip(),
+                        "reply_message": str(detail.get("reply_message", "") or "").strip(),
+                        "messages": detail.get("messages", []),
+                        "fetched_at": self._last_used_at,
+                    }
+                except Exception as exc:
+                    if attempt == 0 and self._is_retryable_runtime_error(exc):
+                        await self._reset_runtime()
+                        continue
+                    raise
+
+    async def send_message(self, row: Dict, message: str) -> Dict:
+        async with self._lock:
+            for attempt in range(2):
+                await self._ensure_runtime()
+                try:
+                    message_text = str(message or "").strip()
+                    message_parts = [
+                        part.strip()
+                        for part in message_text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+                        if str(part or "").strip()
+                    ]
+                    if not message_parts:
+                        raise RuntimeError("私信内容不能为空")
+
+                    opened, reason = await self._scraper.open_chat_page_conversation(self._page, row)
+                    if not opened:
+                        raise RuntimeError(reason or "未找到目标会话")
+                    input_box = self._page.locator(
+                        'div[data-e2e="msg-input"] [contenteditable="true"], .public-DraftEditor-content[contenteditable="true"]'
+                    ).first
+                    await input_box.wait_for(state="visible", timeout=15000)
+                    send_button = self._page.locator(".e2e-send-msg-btn, [class*='send-msg-btn'], span.e2e-send-msg-btn").first
+                    await send_button.wait_for(state="visible", timeout=15000)
+
+                    expected_username = str(row.get("username", "") or row.get("conversation_key", "") or "-").strip()
+                    sent_messages = []
+                    total_parts = len(message_parts)
+                    for index, message_part in enumerate(message_parts, start=1):
+                        await input_box.click()
+                        await self._page.keyboard.press("Control+A")
+                        await self._page.keyboard.press("Backspace")
+                        await self._page.keyboard.type(message_part, delay=35)
+                        await send_button.click(timeout=10000)
+                        await self._page.wait_for_timeout(1200)
+                        delivered = await self._page.evaluate(
+                            """
+                            (sentText) => {
+                                const needle = String(sentText || '').trim();
+                                if (!needle) return false;
+                                const texts = Array.from(document.querySelectorAll('[data-e2e="msg-item-content"]'))
+                                    .map((node) => (node.textContent || '').trim())
+                                    .filter(Boolean);
+                                if (texts.some((text) => text.includes(needle))) return true;
+                                const editor = document.querySelector(
+                                    'div[data-e2e="msg-input"] [contenteditable="true"][role="textbox"]'
+                                );
+                                const editorText = (editor?.textContent || '').trim();
+                                return editorText.length === 0;
+                            }
+                            """,
+                            message_part,
+                        )
+                        if not delivered:
+                            raise RuntimeError(f"第 {index} 条消息发送按钮已点击，但未确认消息已发出")
+                        sent_messages.append(message_part)
+                        tiktok_log(
+                            f"[TikTok私信聚合] 已发送第 {index}/{total_parts} 条：{expected_username}",
+                            "success",
+                        )
+                        if index < total_parts:
+                            await self._page.wait_for_timeout(700)
+
+                    await self._page.wait_for_timeout(1200)
+                    detail = await self._scraper.extract_chat_page_conversation_detail(self._page)
+                    self._last_used_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    result = {
+                        "success": True,
+                        "conversation_key": str(row.get("conversation_key", "") or row.get("conversation_id", "") or "").strip(),
+                        "username": str(detail.get("username", "") or row.get("username", "") or "").strip(),
+                        "avatar_url": str(detail.get("avatar_url", "") or row.get("avatar_url", "") or row.get("avatar", "") or "").strip(),
+                        "profile_url": str(detail.get("profile_url", "") or row.get("profile_url", "") or "").strip(),
+                        "message": message_text,
+                        "messages_sent": sent_messages,
+                        "message_count": len(sent_messages),
+                        "detail": {
+                            "conversation_key": str(row.get("conversation_key", "") or row.get("conversation_id", "") or "").strip(),
+                            "username": str(detail.get("username", "") or row.get("username", "") or "").strip(),
+                            "avatar_url": str(detail.get("avatar_url", "") or row.get("avatar_url", "") or row.get("avatar", "") or "").strip(),
+                            "profile_url": str(detail.get("profile_url", "") or row.get("profile_url", "") or "").strip(),
+                            "incoming_message": str(detail.get("incoming_message", "") or row.get("incoming_message", "") or row.get("preview_text", "") or "").strip(),
+                            "reply_message": str(detail.get("reply_message", "") or "").strip(),
+                            "messages": detail.get("messages", []),
+                            "fetched_at": self._last_used_at,
+                        },
+                    }
+                    self._last_used_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    return result
+                except Exception as exc:
+                    if attempt == 0 and self._is_retryable_runtime_error(exc):
+                        await self._reset_runtime()
+                        continue
+                    raise
+
+
+def get_tiktok_inbox_page_worker(account_id: int) -> TikTokInboxPageWorker:
+    target_account_id = int(account_id or 0)
+    if target_account_id <= 0:
+        raise ValueError("账号 ID 无效")
+    worker = tiktok_inbox_page_workers.get(target_account_id)
+    if worker is None:
+        worker = TikTokInboxPageWorker(target_account_id)
+        tiktok_inbox_page_workers[target_account_id] = worker
+    return worker
+
+
+def load_search_history() -> Dict:
+    if not SEARCH_HISTORY_FILE.exists():
+        return {"version": 1, "items": {}}
+    try:
+        with open(SEARCH_HISTORY_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {"version": 1, "items": {}}
+        items = data.get("items", {})
+        if not isinstance(items, dict):
+            items = {}
+        return {"version": data.get("version", 1), "items": items}
+    except Exception:
+        return {"version": 1, "items": {}}
+
+
+def save_search_history(history: Dict):
+    payload = history if isinstance(history, dict) else {"version": 1, "items": {}}
+    payload.setdefault("version", 1)
+    payload.setdefault("items", {})
+    with open(SEARCH_HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def build_search_result_key(item: Dict) -> str:
+    aweme_id = str(item.get("aweme_id", "") or "").strip()
+    if aweme_id:
+        return f"aweme:{aweme_id}"
+    url = str(item.get("url", "") or "").strip().lower()
+    if url:
+        return f"url:{url}"
+    title = " ".join(str(item.get("title", "") or "").lower().split())
+    author = " ".join(str(item.get("author", "") or "").lower().split())
+    if title or author:
+        return f"text:{title}|{author}"
+    return ""
+
+
+def build_tiktok_search_session_item_key(item: Dict) -> str:
+    url = str(item.get("url", "") or item.get("task_url", "") or "").strip()
+    match = re.search(r"/video/(\d+)", url)
+    if match:
+        return f"video:{match.group(1)}"
+    if url:
+        return f"url:{url}"
+    title = normalize_tiktok_text(item.get("title", "") or item.get("task_title", ""))
+    author = normalize_tiktok_text(item.get("author", "") or item.get("task_author", ""))
+    return f"meta:{title}::{author}"
+
+
+def normalize_tiktok_search_mode(value: object) -> str:
+    normalized = normalize_tiktok_text(value).lower()
+    return normalized if normalized in TIKTOK_SEARCH_MODES else "script"
+
+
+def load_custom_configs() -> Dict:
+    if not CUSTOM_CONFIGS_FILE.exists():
+        return {"configs": {}, "custom_models": []}
+    try:
+        with open(CUSTOM_CONFIGS_FILE, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if isinstance(loaded, dict):
+            return loaded
+    except Exception:
+        pass
+    return {"configs": {}, "custom_models": []}
+
+
+def get_tikhub_runtime_config() -> Dict[str, str]:
+    custom_configs = load_custom_configs()
+    configs = custom_configs.get("configs") if isinstance(custom_configs, dict) else {}
+    if not isinstance(configs, dict):
+        configs = {}
+    api_key = str(
+        os.environ.get("TIKHUB_API_KEY")
+        or configs.get("TIKHUB_API_KEY")
+        or configs.get("tikhub_api_key")
+        or ""
+    ).strip()
+    api_base = str(
+        os.environ.get("TIKHUB_API_BASE")
+        or configs.get("TIKHUB_API_BASE")
+        or configs.get("tikhub_api_base")
+        or "https://api.tikhub.dev"
+    ).strip().rstrip("/")
+    return {
+        "api_key": api_key,
+        "api_base": api_base or "https://api.tikhub.dev",
+    }
+
+
+def format_tiktok_compact_count(value: object) -> str:
+    try:
+        count = int(float(value or 0))
+    except Exception:
+        return ""
+    if count <= 0:
+        return ""
+    if count >= 100000000:
+        text = f"{count / 100000000:.1f}".rstrip("0").rstrip(".")
+        return f"{text}亿"
+    if count >= 10000:
+        text = f"{count / 10000:.1f}".rstrip("0").rstrip(".")
+        return f"{text}w"
+    return str(count)
+
+
+def format_tiktok_duration_text(value: object) -> str:
+    try:
+        raw = int(value or 0)
+    except Exception:
+        return ""
+    if raw <= 0:
+        return ""
+    seconds = raw // 1000 if raw > 1000 else raw
+    minutes = seconds // 60
+    remain = seconds % 60
+    hours = minutes // 60
+    if hours > 0:
+        minutes = minutes % 60
+        return f"{hours:02d}:{minutes:02d}:{remain:02d}"
+    return f"{minutes:02d}:{remain:02d}"
+
+
+def format_tiktok_publish_time(value: object) -> str:
+    try:
+        ts = int(value or 0)
+    except Exception:
+        return ""
+    if ts <= 0:
+        return ""
+    try:
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return str(ts)
+
+
+def pick_tikhub_tiktok_cover(video: Dict) -> str:
+    for key in ("cover", "dynamic_cover", "origin_cover"):
+        node = video.get(key)
+        if isinstance(node, dict):
+            url_list = node.get("url_list")
+            if isinstance(url_list, list):
+                for url in url_list:
+                    if isinstance(url, str) and url.strip():
+                        return url.strip()
+    return ""
+
+
+def normalize_tikhub_tiktok_search_results(payload: Dict, keyword: str, max_results: int) -> List[Dict]:
+    rows: List[Dict] = []
+    data = payload.get("data") or {}
+    raw_items = []
+    if isinstance(data, dict):
+        if isinstance(data.get("data"), list):
+            raw_items = data.get("data") or []
+        elif isinstance(data.get("business_data"), list):
+            raw_items = data.get("business_data") or []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        aweme = raw.get("aweme_info")
+        if not isinstance(aweme, dict):
+            nested = raw.get("data")
+            aweme = nested.get("aweme_info") if isinstance(nested, dict) else None
+        if not isinstance(aweme, dict):
+            continue
+        share_info_probe = aweme.get("share_info") if isinstance(aweme.get("share_info"), dict) else {}
+        share_url = str(share_info_probe.get("share_url") or aweme.get("share_url") or "").strip()
+        if "/share/note/" in share_url:
+            continue
+        aweme_id = str(aweme.get("aweme_id") or "").strip()
+        author = aweme.get("author") if isinstance(aweme.get("author"), dict) else {}
+        stats = aweme.get("statistics") if isinstance(aweme.get("statistics"), dict) else {}
+        video = aweme.get("video") if isinstance(aweme.get("video"), dict) else {}
+        sec_uid = str(author.get("sec_uid") or "").strip()
+        row = {
+            "aweme_id": aweme_id,
+            "title": str(aweme.get("desc") or "").strip() or (f"TikTok视频 {aweme_id}" if aweme_id else ""),
+            "url": f"https://www.tiktok.com/video/{aweme_id}" if aweme_id else share_url,
+            "author": str(author.get("nickname") or "").strip(),
+            "profile_url": f"https://www.tiktok.com/user/{sec_uid}" if sec_uid else "",
+            "cover_image": pick_tikhub_tiktok_cover(video),
+            "likes": int(stats.get("digg_count") or 0),
+            "comments": int(stats.get("comment_count") or 0),
+            "likes_text": format_tiktok_compact_count(stats.get("digg_count") or 0),
+            "comments_text": format_tiktok_compact_count(stats.get("comment_count") or 0),
+            "duration": format_tiktok_duration_text(aweme.get("duration")),
+            "publish_time": format_tiktok_publish_time(aweme.get("create_time")),
+            "criteria_reason": "",
+            "is_historical_duplicate": False,
+            "export_selected": True,
+            "source_session_id": "",
+            "source_item_key": "",
+            "keyword": keyword,
+            "sec_user_id": sec_uid,
+        }
+        if not row["url"] or not row["title"]:
+            continue
+        rows.append(row)
+        if len(rows) >= max_results:
+            break
+    return rows
+
+
+def normalize_tiktok_search_session_result(
+    item: Dict,
+    *,
+    source_session_id: str = "",
+    selected_item_keys: Optional[Set[str]] = None,
+) -> Dict:
+    normalized = {
+        "title": str(item.get("title", "") or "").strip(),
+        "url": str(item.get("url", "") or "").strip(),
+        "author": str(item.get("author", "") or "").strip(),
+        "cover_image": str(item.get("cover_image", "") or "").strip(),
+        "likes": int(item.get("likes", 0) or 0),
+        "comments": int(item.get("comments", 0) or 0),
+        "duration": str(item.get("duration", "") or "").strip(),
+        "publish_time": str(item.get("publish_time", "") or "").strip(),
+        "criteria_reason": str(item.get("criteria_reason", "") or "").strip(),
+        "is_historical_duplicate": bool(item.get("is_historical_duplicate")),
+        "source_session_id": str(source_session_id or item.get("source_session_id", "") or "").strip(),
+    }
+    source_item_key = str(item.get("source_item_key", "") or "").strip() or build_tiktok_search_session_item_key(normalized)
+    normalized["source_item_key"] = source_item_key
+    export_selected = bool(item.get("export_selected", True))
+    if selected_item_keys is not None:
+        export_selected = source_item_key in selected_item_keys
+    normalized["export_selected"] = export_selected
+    return normalized
+
+
+def select_tiktok_search_result_keys(results: object, max_videos: object = 50) -> List[str]:
+    """Select a complete, de-duplicated video batch for precise collection."""
+    rows = results if isinstance(results, list) else []
+    try:
+        limit = max(1, min(int(max_videos or 50), 50))
+    except (TypeError, ValueError):
+        limit = 50
+
+    def collect(predicate) -> List[str]:
+        selected: List[str] = []
+        seen: Set[str] = set()
+        for item in rows:
+            if not isinstance(item, dict) or not predicate(item):
+                continue
+            key = str(item.get("source_item_key", "") or "").strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            selected.append(key)
+            if len(selected) >= limit:
+                break
+        return selected
+
+    selected = collect(lambda item: bool(item.get("export_selected", True)))
+    return selected or collect(lambda item: True)
+
+
+def load_tiktok_search_sessions_state() -> List[Dict]:
+    payload = tiktok_state_store.load_blob_json(TIKTOK_SEARCH_SESSIONS_BLOB_KEY, default=[])
+    sessions = payload.get("sessions", []) if isinstance(payload, dict) else payload
+    if not isinstance(sessions, list):
+        return []
+    return [dict(item) for item in sessions if isinstance(item, dict)]
+
+
+def load_tiktok_local_settings() -> Dict:
+    payload = tiktok_state_store.load_blob_json(TIKTOK_LOCAL_SETTINGS_BLOB_KEY, default={})
+    return dict(payload) if isinstance(payload, dict) else {}
+
+
+def save_tiktok_local_settings(settings: Dict) -> Dict:
+    current = load_tiktok_local_settings()
+    current.update({str(key): value for key, value in (settings or {}).items()})
+    current["updated_at"] = int(datetime.now().timestamp() * 1000)
+    tiktok_state_store.save_blob_json(TIKTOK_LOCAL_SETTINGS_BLOB_KEY, current)
+    return current
+
+
+def load_tiktok_search_sessions_saved_at() -> int:
+    payload = tiktok_state_store.load_blob_json(TIKTOK_SEARCH_SESSIONS_BLOB_KEY, default=[])
+    if isinstance(payload, dict):
+        return int(payload.get("saved_at", 0) or 0)
+    return 0
+
+
+def save_tiktok_search_sessions_state(sessions: List[Dict], *, saved_at: int = 0) -> None:
+    effective_saved_at = int(saved_at or int(datetime.now().timestamp() * 1000))
+    tiktok_state_store.save_blob_json(
+        TIKTOK_SEARCH_SESSIONS_BLOB_KEY,
+        {"saved_at": effective_saved_at, "sessions": sessions or []},
+    )
+
+
+def upsert_tiktok_search_session_state(
+    *,
+    keyword: str,
+    account_id: object,
+    results: List[Dict],
+    capture_state: Optional[Dict] = None,
+    session_id: str = "",
+    active_tab: str = "videos",
+) -> Dict:
+    sessions = load_tiktok_search_sessions_state()
+    keyword_text = str(keyword or "").strip() or "未命名关键词"
+    account_text = str(account_id or "").strip()
+    existing_index = -1
+    for index, session in enumerate(sessions):
+        if session_id and str(session.get("id", "") or "").strip() == session_id:
+            existing_index = index
+            break
+        if (
+            not session_id
+            and str(session.get("keyword", "") or "").strip().lower() == keyword_text.lower()
+            and str(session.get("account_id", "") or "").strip() == account_text
+        ):
+            existing_index = index
+            break
+
+    now_ms = int(datetime.now().timestamp() * 1000)
+    existing = sessions[existing_index] if existing_index >= 0 else {}
+    final_session_id = str(existing.get("id", "") or session_id or f"dy-search-{now_ms}-{random.randint(1000, 9999)}").strip()
+    selected_item_keys = {
+        str(item.get("source_item_key", "") or "").strip()
+        for item in results or []
+        if isinstance(item, dict) and bool(item.get("export_selected", True))
+    }
+    normalized_results = [
+        normalize_tiktok_search_session_result(
+            item,
+            source_session_id=final_session_id,
+            selected_item_keys=selected_item_keys,
+        )
+        for item in (results or [])
+        if isinstance(item, dict)
+    ]
+    selected_key = str(existing.get("selected_item_key", "") or "").strip()
+    valid_keys = {str(item.get("source_item_key", "") or "").strip() for item in normalized_results}
+    if selected_key not in valid_keys:
+        selected_key = normalized_results[0].get("source_item_key", "") if normalized_results else ""
+    next_session = {
+        **existing,
+        "id": final_session_id,
+        "keyword": keyword_text,
+        "account_id": account_text,
+        "created_at": int(existing.get("created_at", now_ms) or now_ms),
+        "updated_at": now_ms,
+        "active_tab": active_tab if active_tab in {"videos", "all", "precise"} else str(existing.get("active_tab", "videos") or "videos"),
+        "selected_item_key": selected_key,
+        "capture_state": capture_state if isinstance(capture_state, dict) else existing.get("capture_state", {}),
+        "results": normalized_results,
+    }
+    if existing_index >= 0:
+        sessions[existing_index] = next_session
+    else:
+        sessions.insert(0, next_session)
+    save_tiktok_search_sessions_state(sessions[:30])
+    return next_session
+
+
+def annotate_search_duplicates(results: List[Dict], keyword: str) -> List[Dict]:
+    if not results:
+        return []
+
+    history = load_search_history()
+    items = history.setdefault("items", {})
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    normalized_keyword = " ".join(str(keyword or "").split())
+
+    annotated = []
+    for raw_item in results:
+        item = dict(raw_item)
+        key = build_search_result_key(item)
+        previous = items.get(key) if key else None
+        previous_seen_count = int(previous.get("seen_count", 0) or 0) if previous else 0
+        previous_keywords = list(previous.get("keywords", [])) if previous else []
+        keywords = [kw for kw in previous_keywords if kw]
+        if normalized_keyword and normalized_keyword not in keywords:
+            keywords.append(normalized_keyword)
+
+        if previous:
+            first_seen_at = previous.get("first_seen_at") or now_text
+            last_seen_at = previous.get("last_seen_at") or first_seen_at
+            item["is_historical_duplicate"] = True
+            item["first_seen_at"] = first_seen_at
+            item["last_seen_at"] = last_seen_at
+            item["seen_count"] = previous_seen_count + 1
+            item["historical_duplicate_reason"] = f"首次发现于 {first_seen_at}，此前已出现 {previous_seen_count} 次"
+        else:
+            item["is_historical_duplicate"] = False
+            item["first_seen_at"] = now_text
+            item["last_seen_at"] = ""
+            item["seen_count"] = 1
+            item["historical_duplicate_reason"] = ""
+
+        item["search_history_key"] = key
+        if key:
+            items[key] = {
+                "first_seen_at": item["first_seen_at"],
+                "last_seen_at": now_text,
+                "seen_count": item["seen_count"],
+                "keywords": keywords,
+                "last_title": item.get("title", ""),
+                "last_author": item.get("author", ""),
+                "last_url": item.get("url", ""),
+            }
+        annotated.append(item)
+
+    save_search_history(history)
+    return annotated
+
+
+def mark_search_results_for_export(results: List[Dict]) -> List[Dict]:
+    if not results:
+        return []
+
+    config = load_global_config()
+    normalized = []
+    for item in results:
+        row = dict(item)
+        row["likes"] = int(row.get("likes", 0) or 0)
+        normalized.append(row)
+
+    average_likes = sum(row["likes"] for row in normalized) / len(normalized)
+    min_likes = max(0, int(config.get("search_min_likes", 500) or 0))
+    avg_multiplier = max(0, float(config.get("search_avg_multiplier", 1.5) or 0))
+    boosted_threshold = average_likes * avg_multiplier if avg_multiplier > 0 else 0
+    exclude_duplicates = bool(config.get("search_exclude_historical_duplicates", True))
+
+    for item in normalized:
+        likes = item["likes"]
+        meets_floor = min_likes <= 0 or likes >= min_likes
+        beats_average = avg_multiplier <= 0 or likes >= boosted_threshold
+        matched = meets_floor or beats_average
+
+        reasons = []
+        if min_likes > 0 and likes >= min_likes:
+            reasons.append(f"点赞至少 {min_likes}")
+        if avg_multiplier > 0 and likes >= boosted_threshold:
+            reasons.append(f"点赞达到平均值的 {avg_multiplier:g} 倍以上（均值 {average_likes:.0f}）")
+        if item.get("is_historical_duplicate"):
+            reasons.append("历史重复")
+            if item.get("historical_duplicate_reason"):
+                reasons.append(item["historical_duplicate_reason"])
+
+        item["avg_likes"] = round(average_likes, 2)
+        item["criteria_matched"] = matched
+        item["criteria_reason"] = " / ".join(reasons)
+        item["export_selected"] = matched and not (exclude_duplicates and item.get("is_historical_duplicate"))
+
+    normalized.sort(key=lambda row: row.get("likes", 0), reverse=True)
+    return normalized
+
+
+def build_tiktok_search_url(
+    keyword_text: str,
+    search_query: Optional[List[tuple[str, str]]] = None,
+) -> str:
+    """TikTok keyword-search URL with the keyword and query string encoded.
+
+    ``requests.utils`` re-exports ``quote`` but has no ``urlencode``; the query
+    string must come from ``urllib.parse`` or the whole keyword search fails with
+    "module 'requests.utils' has no attribute 'urlencode'".
+    """
+    query = urlencode(list(search_query or [("type", "video")]))
+    return f"https://www.tiktok.com/search/{quote(keyword_text)}?{query}"
+
+
+async def run_tiktok_keyword_search(
+    account: Dict,
+    keyword: str,
+    *,
+    max_results: int = 50,
+    update_latest: bool = False,
+    sort_type: Optional[str] = None,
+    publish_time: Optional[str] = None,
+) -> Dict:
+    keyword_text = normalize_tiktok_text(keyword)
+    if not keyword_text:
+        raise RuntimeError("请输入TikTok搜索关键词")
+    result_limit = max(10, min(int(max_results or 50), 100))
+    search_query = [("type", "video")]
+    if str(sort_type or "").strip() not in ("", "0"):
+        search_query.append(("sort_type", str(sort_type).strip()))
+    if str(publish_time or "").strip() not in ("", "0"):
+        search_query.append(("publish_time", str(publish_time).strip()))
+    search_url = build_tiktok_search_url(keyword_text, search_query)
+    browser_result = await ensure_tiktok_account_browser_ready_async(account, start_url=search_url)
+    if int(browser_result.get("code", 0) or 0) != 200:
+        raise RuntimeError(str(browser_result.get("msg", "") or "TikTok搜索浏览器启动失败"))
+
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    tiktok_log(f"[TikTok搜索] 开始搜索关键词：{keyword_text}", "info")
+    try:
+        results = await scraper.scrape_search_results(
+            keyword_text,
+            max_results=result_limit,
+            logger=tiktok_log,
+            sort_type=sort_type,
+            publish_time=publish_time,
+        )
+    finally:
+        await scraper.close()
+
+    results = await asyncio.to_thread(annotate_search_duplicates, results, keyword_text)
+    results = await asyncio.to_thread(mark_search_results_for_export, results)
+    session = await asyncio.to_thread(
+        upsert_tiktok_search_session_state,
+        keyword=keyword_text,
+        account_id=account.get("id", ""),
+        results=results,
+        capture_state={
+            "source": "monitor_ai_expand",
+            "searched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "max_results": result_limit,
+        },
+    )
+    if update_latest:
+        tiktok_search_cache["latest"] = results
+    tiktok_log(f"[TikTok搜索] 搜索完成：{keyword_text}，共 {len(results)} 条", "success")
+    return {
+        "keyword": keyword_text,
+        "results": results,
+        "total": len(results),
+        "session": session,
+    }
+
+
+async def run_tiktok_keyword_search_via_api(
+    keyword: str,
+    *,
+    max_results: int = 50,
+    account_id: object = "api",
+    sort_type: Optional[str] = None,
+    publish_time: Optional[str] = None,
+) -> Dict:
+    keyword_text = normalize_tiktok_text(keyword)
+    if not keyword_text:
+        raise RuntimeError("请输入TikTok搜索关键词")
+    result_limit = max(10, min(int(max_results or 50), 100))
+    tikhub_config = get_tikhub_runtime_config()
+    api_key = tikhub_config["api_key"]
+    api_base = tikhub_config["api_base"]
+    if not api_key:
+        raise RuntimeError("未配置 TIKHUB_API_KEY")
+    payload = {
+        "keyword": keyword_text,
+        "offset": "0",
+        "count": str(min(result_limit, 30)),
+        "sort_type": str(sort_type or "0") or "0",
+        "publish_time": str(publish_time or "0") or "0",
+        "filter_duration": "0",
+    }
+    response = await asyncio.to_thread(
+        requests.post,
+        f"{api_base}/api/v1/tiktok/search/fetch_general_search_v1",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+        timeout=60,
+    )
+    response.raise_for_status()
+    data = response.json()
+    if int(data.get("code") or 0) != 200:
+        raise RuntimeError(str(data.get("message_zh") or data.get("message") or "接口搜索失败"))
+    results = normalize_tikhub_tiktok_search_results(data, keyword_text, result_limit)
+    results = await asyncio.to_thread(annotate_search_duplicates, results, keyword_text)
+    results = await asyncio.to_thread(mark_search_results_for_export, results)
+    session = await asyncio.to_thread(
+        upsert_tiktok_search_session_state,
+        keyword=keyword_text,
+        account_id=account_id,
+        results=results,
+        capture_state={
+            "source": "tikhub_api",
+            "searched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "max_results": result_limit,
+            "request_id": str(data.get("request_id") or "").strip(),
+            "cache_url": str(data.get("cache_url") or "").strip(),
+        },
+    )
+    tiktok_search_cache["latest"] = results
+    tiktok_log(f"[TikTok搜索] 接口搜索完成：{keyword_text}，共 {len(results)} 条", "success")
+    return {
+        "keyword": keyword_text,
+        "results": results,
+        "total": len(results),
+        "session": session,
+        "request_id": str(data.get("request_id") or "").strip(),
+        "cache_url": str(data.get("cache_url") or "").strip(),
+    }
+
+
+def user_choice_key(row: Dict) -> str:
+    comment_id = " ".join(str(row.get("comment_id", "") or "").split())
+    if comment_id:
+        return f"id:{comment_id}"
+    return "|".join(
+        [
+            " ".join(str(row.get("user_id", "") or "").split()),
+            " ".join(str(row.get("username", "") or "").split()),
+            " ".join(str(row.get("comment", row.get("content", "")) or "").split()),
+            " ".join(str(row.get("comment_time", "") or "").split()),
+        ]
+    )
+
+
+def user_choice_loose_key(row: Dict) -> str:
+    return "|".join(
+        [
+            " ".join(str(row.get("user_id", "") or "").split()),
+            " ".join(str(row.get("username", "") or "").split()),
+            " ".join(str(row.get("comment", row.get("content", "")) or "").split()),
+        ]
+    )
+
+
+def precise_customer_pool_key(row: Dict) -> str:
+    return user_choice_key(row) or user_choice_loose_key(row)
+
+
+def precise_customer_touch_identity_key(row: Dict) -> str:
+    """Stable per-user key for the four touch actions.
+
+    The customer pool may contain multiple comments from the same person. Touch
+    state must follow the person, not an individual comment row.
+    """
+    source = row if isinstance(row, dict) else {}
+    for field in ("sec_user_id", "sec_uid", "tiktok_id", "user_id"):
+        value = " ".join(str(source.get(field, "") or "").split())
+        if value:
+            return f"user:{value}"
+    profile_url = str(source.get("profile_url", "") or source.get("target_profile_url", "") or "").strip()
+    if profile_url:
+        return f"profile:{profile_url.rstrip('/')}"
+    username = " ".join(str(source.get("username", "") or "").split())
+    if username:
+        return f"name:{username.lower()}"
+    return precise_customer_pool_key(source)
+
+
+def is_tiktok_precise_touch_unavailable_error(error: object) -> bool:
+    """Whether an error confirms that a target account cannot be contacted.
+
+    Keep this intentionally narrow. Login, browser, network, rate-limit and
+    ordinary operation failures must remain retryable on the next touch round.
+    """
+    message = str(error or "").strip().lower()
+    if not message:
+        return False
+    return any(
+        marker in message
+        for marker in (
+            "用户不存在",
+            "账号不存在",
+            "用户已注销",
+            "账号已注销",
+            "主页已失效",
+            "主页已被删除",
+            "TikTok主页已失效",
+            "TikTok主页已被删除",
+            "user not found",
+            "account not found",
+        )
+    )
+
+
+def _normalize_tiktok_precise_touch_action_state(raw_value: object) -> Dict[str, object]:
+    value = raw_value if isinstance(raw_value, dict) else {}
+    return {
+        "status": str(value.get("status", "") or "").strip().lower() or "pending",
+        "error": str(value.get("error", "") or "").strip(),
+        "result": str(value.get("result", "") or "").strip(),
+        "account_id": str(value.get("account_id", "") or "").strip(),
+        "started_at": str(value.get("started_at", "") or "").strip(),
+        "finished_at": str(value.get("finished_at", "") or "").strip(),
+        "updated_at": str(value.get("updated_at", "") or "").strip(),
+    }
+
+
+def _get_tiktok_precise_touch_action_state(row: Dict, action: str) -> Dict[str, object]:
+    key = precise_customer_touch_identity_key(row if isinstance(row, dict) else {})
+    if not key:
+        return {}
+    action_state = tiktok_precise_touch_state.get(key, {})
+    if not action_state:
+        # Read states written by the earlier comment-row key format.
+        legacy_key = precise_customer_pool_key(row if isinstance(row, dict) else {})
+        action_state = tiktok_precise_touch_state.get(legacy_key, {})
+    if not isinstance(action_state, dict):
+        return {}
+    return _normalize_tiktok_precise_touch_action_state(action_state.get(str(action or "").strip().lower(), {}))
+
+
+def _is_tiktok_precise_touch_action_done(state: object) -> bool:
+    if not isinstance(state, dict):
+        return False
+    status = str(state.get("status", "") or "").strip().lower()
+    return status in TIKTOK_PRECISE_TOUCH_DONE_STATUSES
+
+
+def _is_tiktok_precise_touch_action_inflight(state: object) -> bool:
+    if not isinstance(state, dict):
+        return False
+    status = str(state.get("status", "") or "").strip().lower()
+    return status in TIKTOK_PRECISE_TOUCH_INFLIGHT_STATUSES
+
+
+def _is_tiktok_precise_touch_user_unavailable(row: Dict) -> bool:
+    """Return true when any action has confirmed the target no longer exists."""
+    key = precise_customer_touch_identity_key(row if isinstance(row, dict) else {})
+    action_state = tiktok_precise_touch_state.get(key, {}) if key else {}
+    if not action_state and isinstance(row, dict):
+        action_state = tiktok_precise_touch_state.get(precise_customer_pool_key(row), {})
+    if isinstance(action_state, dict):
+        for state in action_state.values():
+            normalized = _normalize_tiktok_precise_touch_action_state(state)
+            if str(normalized.get("status") or "").strip().lower() == "unavailable":
+                return True
+            if is_tiktok_precise_touch_unavailable_error(normalized.get("error")):
+                return True
+
+    # Existing rows written before the dedicated touch-state store should be
+    # protected too. This prevents a historical confirmed deletion from being
+    # retried merely because the client has upgraded.
+    if isinstance(row, dict):
+        return any(
+            is_tiktok_precise_touch_unavailable_error(row.get(field))
+            for field in (
+                "interaction_error",
+                "follow_comment_error",
+                "mention_comment_error",
+                "reply_comments_error",
+            )
+        )
+    return False
+
+
+def apply_tiktok_precise_touch_state(rows: List[Dict]) -> None:
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = precise_customer_touch_identity_key(row)
+        if not key:
+            continue
+        action_state = tiktok_precise_touch_state.get(key, {})
+        if not action_state:
+            action_state = tiktok_precise_touch_state.get(precise_customer_pool_key(row), {})
+        if not isinstance(action_state, dict):
+            action_state = {}
+        normalized_state = {
+            action: _normalize_tiktok_precise_touch_action_state(state)
+            for action, state in action_state.items()
+            if str(action or "").strip().lower()
+        }
+        for action_name, action_state_value in normalized_state.items():
+            prefix = str(action_name or "").strip().lower()
+            if not prefix:
+                continue
+            row[f"{prefix}_status"] = action_state_value.get("status", "pending")
+            row[f"{prefix}_error"] = action_state_value.get("error", "")
+            row[f"{prefix}_result"] = action_state_value.get("result", "")
+            row[f"{prefix}_text"] = action_state_value.get("result", "")
+            row[f"{prefix}_account_id"] = action_state_value.get("account_id", "")
+            row[f"{prefix}_started_at"] = action_state_value.get("started_at", "")
+            row[f"{prefix}_finished_at"] = action_state_value.get("finished_at", "")
+            row[f"{prefix}_updated_at"] = action_state_value.get("updated_at", "")
+        row["precise_touch_statuses"] = normalized_state
+        row["precise_touch_unavailable"] = _is_tiktok_precise_touch_user_unavailable(row)
+        row["precise_touch_completed_actions"] = [
+            action for action, state in normalized_state.items() if str(state.get("status") or "").strip().lower() == "completed"
+        ]
+        row["precise_touch_done_actions"] = [
+            action for action, state in normalized_state.items() if _is_tiktok_precise_touch_action_done(state)
+        ]
+        row["precise_touch_inflight_actions"] = [
+            action for action, state in normalized_state.items() if _is_tiktok_precise_touch_action_inflight(state)
+        ]
+        row["precise_touch_pending_actions"] = (
+            []
+            if row["precise_touch_unavailable"]
+            else [
+                action
+                for action in TIKTOK_PRECISE_TOUCH_ACTIONS
+                if not _is_tiktok_precise_touch_action_done(normalized_state.get(action, {}))
+                and not _is_tiktok_precise_touch_action_inflight(normalized_state.get(action, {}))
+            ]
+        )
+
+
+def _sort_tiktok_precise_touch_users(row: Dict) -> tuple[int, float, str]:
+    touch_state = row.get("precise_touch_statuses", {})
+    pending_rank = 0
+    if isinstance(touch_state, dict):
+        completed_count = len([action for action, state in touch_state.items() if str((state or {}).get("status") or "").strip().lower() == "completed"])
+        pending_rank = -completed_count
+    timestamp = (
+        parse_comment_timestamp(row.get("last_seen_at", ""))
+        or parse_comment_timestamp(row.get("comment_time", ""))
+        or parse_comment_timestamp(row.get("first_seen_at", ""))
+    )
+    username = str(row.get("username", "") or "")
+    return (pending_rank, -float(timestamp or 0), username)
+
+
+def mention_comment_identity_key(row: Dict) -> str:
+    if not isinstance(row, dict):
+        return ""
+    sec_user_id = normalize_tiktok_text(row.get("sec_user_id", ""))
+    if sec_user_id:
+        return f"sec:{sec_user_id}"
+    profile_url = normalize_tiktok_text(ensure_tiktok_profile_url(row))
+    if profile_url:
+        return f"profile:{profile_url}"
+    tiktok_id = normalize_tiktok_text(row.get("tiktok_id", ""))
+    if tiktok_id:
+        return f"tiktok:{tiktok_id}"
+    user_id = normalize_tiktok_text(row.get("user_id", ""))
+    if user_id:
+        return f"user:{user_id}"
+    username = normalize_tiktok_text(row.get("username", ""))
+    if username:
+        return f"name:{username.lower()}"
+    return ""
+
+
+def get_tiktok_mention_comment_history_for_row(row: Dict) -> Dict[str, object]:
+    key = mention_comment_identity_key(row if isinstance(row, dict) else {})
+    if not key:
+        return {}
+    history = tiktok_mention_comment_history.get(key, {})
+    return history if isinstance(history, dict) else {}
+
+
+def dedupe_users(rows: List[Dict]) -> List[Dict]:
+    seen = set()
+    deduped = []
+    for row in rows or []:
+        key = user_choice_key(row)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(row)
+    return deduped
+
+
+def set_tasks_from_rows(rows: List[Dict]) -> List[Dict]:
+    global tiktok_tasks
+
+    def build_preserve_key(row: Dict) -> str:
+        session_id = str(row.get("source_session_id", "") or "").strip()
+        item_key = str(row.get("source_item_key", "") or "").strip()
+        if session_id and item_key:
+            return f"session:{session_id}|item:{item_key}"
+        url = str(row.get("url", "") or "").strip()
+        title = str(row.get("title", "") or "").strip()
+        author = str(row.get("author", "") or "").strip()
+        return f"url:{url}|title:{title}|author:{author}"
+
+    existing_lookup: Dict[str, Dict] = {}
+    used_ids = set()
+    next_id = 1
+    for task in tiktok_tasks or []:
+        if not isinstance(task, dict):
+            continue
+        normalized_task = ensure_tiktok_task_shape(task)
+        existing_lookup[build_preserve_key(normalized_task)] = normalized_task
+        task_id = int(normalized_task.get("id", 0) or 0)
+        if task_id > 0:
+            used_ids.add(task_id)
+            next_id = max(next_id, task_id + 1)
+
+    tasks = []
+    selected_keys = set()
+    for row in rows:
+        url = str(row.get("url", "")).strip()
+        if not url:
+            continue
+        row_payload = {
+            "platform": "tiktok",
+            "url": url,
+            "title": str(row.get("title", "")).strip(),
+            "author": str(row.get("author", "")).strip(),
+            "cover_image": str(row.get("cover_image", "")).strip(),
+            "source_session_id": str(row.get("source_session_id", "")).strip(),
+            "source_item_key": str(row.get("source_item_key", "")).strip(),
+            "source_keyword": str(row.get("source_keyword", "")).strip(),
+            "likes": int(row.get("likes", 0) or 0),
+            "source_comment_count": int(row.get("comments", row.get("source_comment_count", 0)) or 0),
+            "source_comment_count_text": str(
+                row.get("comments_text", row.get("source_comment_count_text", ""))
+                or ""
+            ).strip(),
+            "publish_time": str(row.get("publish_time", "")).strip(),
+        }
+        preserve_key = build_preserve_key(row_payload)
+        if preserve_key in selected_keys:
+            continue
+        selected_keys.add(preserve_key)
+        preserved = existing_lookup.get(preserve_key)
+        if preserved:
+            merged = ensure_tiktok_task_shape(
+                {
+                    **preserved,
+                    **row_payload,
+                    "id": int(preserved.get("id", 0) or 0),
+                }
+            )
+        else:
+            while next_id in used_ids:
+                next_id += 1
+            merged = ensure_tiktok_task_shape(
+                {
+                    "id": next_id,
+                    **row_payload,
+                    "all_comments": [],
+                    "high_intent_users": [],
+                    "comment_count": 0,
+                    "capture_comment_limit": 0,
+                    "capture_target_comments": 0,
+                    "collect_progress": {},
+                    "status": "pending",
+                    "error": "",
+                    "video_comment_status": "pending",
+                    "video_comment_error": "",
+                    "video_comment_mode": "fixed",
+                    "video_comment_prompt": "",
+                    "video_comment_seed_text": "",
+                    "video_comment_summary": "",
+                    "video_comment_text": "",
+                    "video_comment_account_id": "",
+                    "video_comment_started_at": "",
+                    "video_comment_finished_at": "",
+                }
+            )
+            used_ids.add(next_id)
+            next_id += 1
+        tasks.append(merged)
+
+    # Keep unrelated historical tasks so switching keywords or re-running "沿用搜索勾选"
+    # does not wipe previously collected comment users and precise customers.
+    for task in tiktok_tasks or []:
+        if not isinstance(task, dict):
+            continue
+        normalized_task = ensure_tiktok_task_shape(task)
+        preserve_key = build_preserve_key(normalized_task)
+        if preserve_key in selected_keys:
+            continue
+        tasks.append(normalized_task)
+
+    tiktok_tasks = tasks
+    save_tiktok_tasks_state()
+    return tiktok_tasks
+
+
+def configure_tiktok_collection_tasks(tasks: List[Dict], params: Optional[Dict] = None) -> int:
+    """Attach one-shot precise-comment settings to newly scheduled tasks."""
+    source = params if isinstance(params, dict) else {}
+    legacy_actions = source.get("followup_actions")
+    if not isinstance(legacy_actions, list):
+        legacy_actions = source.get("touch_actions")
+    explicit_enabled = source.get("reply_precise_comments")
+    enabled = (
+        coerce_bool(explicit_enabled, False)
+        if explicit_enabled is not None
+        else "reply_comments" in {str(item or "").strip().lower() for item in (legacy_actions or [])}
+    )
+    mode = normalize_tiktok_video_comment_mode(
+        source.get("reply_comment_mode", source.get("comment_mode", "fixed"))
+    )
+    text = str(source.get("reply_comment_text", source.get("comment_text", "")) or "").strip()
+    prompt = str(source.get("reply_comment_prompt", source.get("comment_prompt", "")) or "").strip()
+    seed = str(source.get("reply_comment_seed_text", source.get("comment_seed_text", "")) or "").strip()
+    interval_min = max(
+        0.0,
+        min(float(source.get("reply_comment_interval_minutes_min", source.get("interval_minutes_min", 0)) or 0), 1440),
+    )
+    interval_max = max(
+        interval_min,
+        min(float(source.get("reply_comment_interval_minutes_max", source.get("interval_minutes_max", 0)) or 0), 1440),
+    )
+    configured = 0
+    for task in tasks or []:
+        if not isinstance(task, dict):
+            continue
+        task["precise_reply_enabled"] = enabled
+        task["precise_reply_mode"] = mode
+        task["precise_reply_text"] = text
+        task["precise_reply_prompt"] = prompt
+        task["precise_reply_seed_text"] = seed
+        task["precise_reply_interval_minutes_min"] = interval_min
+        task["precise_reply_interval_minutes_max"] = interval_max
+        configured += 1
+    if configured:
+        save_tiktok_tasks_state()
+    return configured
+
+
+def normalize_high_intent_user(row: Dict) -> Dict:
+    normalized = {
+        "comment_index": row.get("comment_index", ""),
+        "username": row.get("username", ""),
+        "user_id": row.get("user_id", ""),
+        "user_xsec_token": row.get("user_xsec_token", ""),
+        "comment_id": row.get("comment_id", ""),
+        "comment": row.get("comment", row.get("content", "")),
+        "content": row.get("comment", row.get("content", "")),
+        "comment_time": row.get("comment_time", ""),
+        "avatar": row.get("avatar", row.get("avatar_url", "")),
+        "avatar_url": row.get("avatar_url", row.get("avatar", "")),
+        "like_count": row.get("like_count", ""),
+        "reply_count": row.get("reply_count", ""),
+        "profile_url": row.get("profile_url", ""),
+        "intent_level": row.get("intent_level", "manual"),
+        "score": row.get("score", ""),
+        "reason": row.get("reason", "手动勾选"),
+        "interaction_status": row.get("interaction_status", "pending"),
+        "interaction_error": row.get("interaction_error", ""),
+        "interaction_message": row.get("interaction_message", ""),
+        "interaction_account_id": row.get("interaction_account_id", ""),
+        "interaction_started_at": row.get("interaction_started_at", ""),
+        "interaction_finished_at": row.get("interaction_finished_at", ""),
+        "interaction_updated_at": row.get("interaction_updated_at", ""),
+        "follow_comment_status": row.get("follow_comment_status", "pending"),
+        "follow_comment_error": row.get("follow_comment_error", ""),
+        "follow_comment_text": row.get("follow_comment_text", ""),
+        "follow_comment_account_id": row.get("follow_comment_account_id", ""),
+        "follow_comment_result": row.get("follow_comment_result", ""),
+        "follow_comment_started_at": row.get("follow_comment_started_at", ""),
+        "follow_comment_finished_at": row.get("follow_comment_finished_at", ""),
+        "follow_comment_updated_at": row.get("follow_comment_updated_at", ""),
+        "mention_comment_status": row.get("mention_comment_status", "pending"),
+        "mention_comment_error": row.get("mention_comment_error", ""),
+        "mention_comment_text": row.get("mention_comment_text", ""),
+        "mention_comment_account_id": row.get("mention_comment_account_id", ""),
+        "mention_comment_result": row.get("mention_comment_result", ""),
+        "mention_comment_video_url": row.get("mention_comment_video_url", ""),
+        "mention_comment_video_title": row.get("mention_comment_video_title", ""),
+        "mention_comment_started_at": row.get("mention_comment_started_at", ""),
+        "mention_comment_finished_at": row.get("mention_comment_finished_at", ""),
+        "mention_comment_updated_at": row.get("mention_comment_updated_at", ""),
+        "group_name": row.get("group_name", ""),
+        "role": row.get("role", ""),
+        "tiktok_id": row.get("tiktok_id", ""),
+        "sec_user_id": row.get("sec_user_id", ""),
+        "region": row.get("region", ""),
+        "source_session_id": row.get("source_session_id", ""),
+        "source_item_key": row.get("source_item_key", ""),
+        "source_keyword": row.get("source_keyword", ""),
+        "source": row.get("source", ""),
+        "is_high_intent": bool(row.get("is_high_intent", False)),
+        "task_title": row.get("task_title", ""),
+        "task_url": row.get("task_url", ""),
+        "task_author": row.get("task_author", ""),
+        "task_id": int(row.get("task_id", 0) or 0),
+        "target_id": int(row.get("target_id", row.get("monitor_target_id", 0)) or 0),
+        "target_username": row.get("target_username", row.get("monitor_target_username", "")),
+        "target_profile_url": row.get("target_profile_url", row.get("monitor_target_profile_url", "")),
+        "target_avatar_url": row.get("target_avatar_url", row.get("monitor_target_avatar_url", "")),
+        "monitor_target_id": int(row.get("monitor_target_id", row.get("target_id", 0)) or 0),
+        "monitor_target_username": row.get("monitor_target_username", row.get("target_username", "")),
+        "monitor_target_profile_url": row.get("monitor_target_profile_url", row.get("target_profile_url", "")),
+        "monitor_target_avatar_url": row.get("monitor_target_avatar_url", row.get("target_avatar_url", "")),
+        "aweme_id": row.get("aweme_id", ""),
+        "comment_key": row.get("comment_key", ""),
+        "user_key": row.get("user_key", ""),
+        "latest_video_title": row.get("latest_video_title", row.get("video_title", row.get("task_title", ""))),
+        "latest_video_url": row.get("latest_video_url", row.get("video_url", row.get("task_url", ""))),
+        "video_title": row.get("video_title", row.get("latest_video_title", "")),
+        "video_url": row.get("video_url", row.get("latest_video_url", "")),
+        "video_cover_image": row.get("video_cover_image", row.get("cover_image", "")),
+        "cover_image": row.get("cover_image", row.get("video_cover_image", "")),
+        "first_seen_at": row.get("first_seen_at", ""),
+        "last_seen_at": row.get("last_seen_at", ""),
+        "seen_count": row.get("seen_count", ""),
+        "seen_count_total": row.get("seen_count_total", ""),
+        "comment_count": row.get("comment_count", ""),
+        "source_video_count": row.get("source_video_count", ""),
+    }
+    history = get_tiktok_mention_comment_history_for_row(normalized)
+    if history and str(normalized.get("mention_comment_status", "pending") or "pending").lower() in {"", "pending", "queued"}:
+        normalized["mention_comment_status"] = str(history.get("status", "completed") or "completed")
+        normalized["mention_comment_error"] = str(history.get("error", "") or "")
+        normalized["mention_comment_text"] = str(history.get("comment_text", "") or "")
+        normalized["mention_comment_account_id"] = str(history.get("account_id", "") or "")
+        normalized["mention_comment_result"] = str(history.get("result", "") or "")
+        normalized["mention_comment_video_url"] = str(history.get("video_url", "") or "")
+        normalized["mention_comment_video_title"] = str(history.get("video_title", "") or "")
+        normalized["mention_comment_started_at"] = str(history.get("started_at", "") or "")
+        normalized["mention_comment_finished_at"] = str(history.get("finished_at", "") or "")
+        normalized["mention_comment_updated_at"] = str(history.get("updated_at", "") or "")
+    normalized["mention_comment_identity_key"] = mention_comment_identity_key(normalized)
+    normalized["mention_comment_is_historical"] = bool(history)
+    return normalized
+
+
+def normalize_tiktok_collection_mode(value: Optional[str]) -> str:
+    # TikTok 协议签名未接入，默认走浏览器脚本采集。
+    normalized = str(value or "").strip().lower()
+    if normalized == "protocol":
+        return "protocol"
+    return "script"
+
+
+def tiktok_collection_mode_label(value: Optional[str]) -> str:
+    return "脚本模式" if normalize_tiktok_collection_mode(value) == "script" else "协议模式"
+
+
+def normalize_tiktok_protocol_comment_row(row: Dict, task: Optional[Dict] = None, index: int = 0) -> Dict:
+    payload = dict(row or {}) if isinstance(row, dict) else {}
+    task_payload = task if isinstance(task, dict) else {}
+    sec_user_id = str(payload.get("sec_uid", "") or payload.get("user_id", "") or "").strip()
+    profile_url = str(payload.get("profile_url", "") or "").strip()
+    if not profile_url and sec_user_id:
+        profile_url = f"https://www.tiktok.com/user/{sec_user_id}"
+    created_ts = int(payload.get("create_time", 0) or 0)
+    comment_time = ""
+    if created_ts > 0:
+        try:
+            comment_time = datetime.fromtimestamp(created_ts).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            comment_time = str(created_ts)
+    normalized = normalize_high_intent_user(
+        {
+            "comment_index": index + 1,
+            "comment_id": str(payload.get("comment_id", "") or "").strip(),
+            "username": str(payload.get("nickname", "") or "").strip(),
+            "user_id": sec_user_id,
+            "sec_user_id": sec_user_id,
+            "comment": str(payload.get("text", "") or "").strip(),
+            "content": str(payload.get("text", "") or "").strip(),
+            "comment_time": comment_time,
+            "avatar": str(payload.get("avatar_url", "") or "").strip(),
+            "avatar_url": str(payload.get("avatar_url", "") or "").strip(),
+            "like_count": int(payload.get("digg_count", 0) or 0),
+            "reply_count": int(payload.get("reply_comment_total", 0) or 0),
+            "profile_url": profile_url,
+            "region": "",
+            "source_session_id": str(task_payload.get("source_session_id", "") or "").strip(),
+            "source_item_key": str(task_payload.get("source_item_key", "") or "").strip(),
+            "source_keyword": str(task_payload.get("source_keyword", "") or "").strip(),
+            "task_title": str(task_payload.get("title", "") or "").strip(),
+            "task_url": str(task_payload.get("url", "") or "").strip(),
+            "task_author": str(task_payload.get("author", "") or task_payload.get("task_author", "") or "").strip(),
+        }
+    )
+    normalized["create_time"] = created_ts
+    normalized["aweme_id"] = str(payload.get("aweme_id", task_payload.get("aweme_id", "")) or "").strip()
+    return normalized
+
+
+def ensure_tiktok_profile_url(row: Dict) -> str:
+    profile_url = str(row.get("profile_url", "") or "").strip()
+    if profile_url:
+        return profile_url
+    sec_user_id = str(row.get("sec_user_id", "") or row.get("user_id", "") or "").strip()
+    if sec_user_id:
+        return f"https://www.tiktok.com/user/{sec_user_id}"
+    return ""
+
+
+def extract_url_from_share_text(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = TIKTOK_SHARE_URL_PATTERN.search(text)
+    if not match:
+        return text if text.startswith(("http://", "https://")) else ""
+    url = str(match.group(0) or "").strip()
+    return url.rstrip(".,;!?)】）>\"'，。；！？、")
+
+
+def resolve_tiktok_share_url(value: object) -> str:
+    raw_url = extract_url_from_share_text(value)
+    if not raw_url:
+        return ""
+
+    normalized = raw_url
+    try:
+        response = requests.get(
+            raw_url,
+            allow_redirects=True,
+            timeout=15,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/123.0.0.0 Safari/537.36"
+                )
+            },
+        )
+        final_url = str(getattr(response, "url", "") or "").strip()
+        if final_url:
+            normalized = final_url
+    except Exception:
+        pass
+
+    normalized = normalized.split("#", 1)[0].strip()
+    return normalized
+
+
+def is_tiktok_video_url(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return bool(re.search(r"/(?:video|note)/\d+", text) or re.search(r"[?&]modal_id=\d+", text))
+
+
+def normalize_tiktok_text(value: object) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def is_tiktok_group_like_stranger_message_row(row: Dict) -> bool:
+    if not isinstance(row, dict):
+        return False
+    normalized = {
+        "username": normalize_tiktok_text(row.get("username", "")),
+        "preview_text": normalize_tiktok_text(
+            row.get("preview_text", "")
+            or row.get("incoming_message", "")
+            or row.get("content", "")
+        ),
+    }
+    username = normalized["username"]
+    preview_text = normalized["preview_text"]
+    if not username and not preview_text:
+        return False
+    if TIKTOK_GROUP_NAME_PATTERN.search(username):
+        return True
+    if TIKTOK_GROUP_PREVIEW_PATTERN.search(preview_text):
+        return True
+    if TIKTOK_GROUP_SENDER_PREFIX_PATTERN.search(preview_text):
+        return True
+    return False
+
+
+def normalize_tiktok_inbox_row(row: Dict) -> Dict:
+    normalized = normalize_tiktok_stranger_message_row(row if isinstance(row, dict) else {})
+    normalized["conversation_source"] = normalize_tiktok_text(
+        row.get("conversation_source", "") or "chat_inbox"
+    )
+    messages = row.get("messages", [])
+    if isinstance(messages, list):
+        normalized["messages"] = [
+            {
+                "direction": "outgoing"
+                if normalize_tiktok_text((item or {}).get("direction", "")) == "outgoing"
+                else "incoming",
+                "text": normalize_tiktok_text((item or {}).get("text", "")),
+                "time_text": normalize_tiktok_text((item or {}).get("time_text", "")),
+                "label": normalize_tiktok_text((item or {}).get("label", "")),
+            }
+            for item in messages
+            if isinstance(item, dict) and normalize_tiktok_text(item.get("text", ""))
+        ]
+    else:
+        normalized["messages"] = []
+    normalized["fetched_at"] = normalize_tiktok_text(row.get("fetched_at", ""))
+    normalized["is_partial"] = bool(row.get("is_partial", False))
+    return normalized
+
+
+def build_tiktok_inbox_fallback_detail(row: Dict) -> Dict:
+    normalized = normalize_tiktok_inbox_row(row if isinstance(row, dict) else {})
+    messages: List[Dict[str, str]] = []
+    incoming_text = normalize_tiktok_text(
+        normalized.get("incoming_message", "") or normalized.get("preview_text", "")
+    )
+    incoming_time = normalize_tiktok_text(
+        normalized.get("time_text", "") or normalized.get("updated_at", "") or normalized.get("created_at", "")
+    )
+    if incoming_text:
+        messages.append(
+            {
+                "direction": "incoming",
+                "text": incoming_text,
+                "time_text": incoming_time or "最近",
+                "label": normalize_tiktok_text(normalized.get("username", "")) or "对方",
+            }
+        )
+    reply_text = normalize_tiktok_text(normalized.get("reply_message", ""))
+    reply_time = normalize_tiktok_text(
+        normalized.get("reply_finished_at", "")
+        or normalized.get("reply_updated_at", "")
+        or normalized.get("reply_started_at", "")
+    )
+    if reply_text:
+        messages.append(
+            {
+                "direction": "outgoing",
+                "text": reply_text,
+                "time_text": reply_time or incoming_time or "最近",
+                "label": "我",
+            }
+        )
+    return {
+        "conversation_key": normalize_tiktok_text(
+            normalized.get("conversation_key", "") or normalized.get("conversation_id", "")
+        ),
+        "username": normalize_tiktok_text(normalized.get("username", "")),
+        "avatar_url": str(normalized.get("avatar_url", "") or normalized.get("avatar", "") or "").strip(),
+        "profile_url": str(normalized.get("profile_url", "") or "").strip(),
+        "incoming_message": incoming_text,
+        "reply_message": reply_text,
+        "messages": messages,
+        "fetched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "is_partial": True,
+    }
+
+
+def normalize_tiktok_inbox_monitor_state(
+    payload: Optional[Dict[str, object]] = None,
+    *,
+    account_id: int = 0,
+) -> Dict[str, object]:
+    source = payload if isinstance(payload, dict) else {}
+    base = {
+        "enabled": False,
+        "running": False,
+        "interval_minutes": 30,
+        "account_id": int(account_id or source.get("account_id", 0) or 0) or None,
+        "max_conversations": 100,
+        "message": "",
+        "last_run_at": "",
+        "next_run_at": "",
+        "last_error": "",
+        "last_skip_reason": "",
+        "last_cycle_status": "idle",
+        "last_total_count": 0,
+        "last_unread_count": 0,
+        "auto_reply_enabled": False,
+        "reply_mode": "fixed",
+        "reply_message": "",
+        "reply_prompt": "",
+        "contact_value": "",
+        "last_auto_reply_total": 0,
+        "last_auto_reply_success": 0,
+        "last_auto_reply_failed": 0,
+    }
+    base.update(
+        {
+            "enabled": bool(source.get("enabled", base["enabled"])),
+            "running": bool(source.get("running", base["running"])),
+            "interval_minutes": max(1, min(int(source.get("interval_minutes", base["interval_minutes"]) or 30), 1440)),
+            "account_id": int(source.get("account_id", base["account_id"]) or base["account_id"] or 0) or None,
+            "max_conversations": max(1, min(int(source.get("max_conversations", base["max_conversations"]) or 100), 100)),
+            "message": normalize_tiktok_text(source.get("message", base["message"])),
+            "last_run_at": normalize_tiktok_text(source.get("last_run_at", base["last_run_at"])),
+            "next_run_at": normalize_tiktok_text(source.get("next_run_at", base["next_run_at"])),
+            "last_error": normalize_tiktok_text(source.get("last_error", base["last_error"])),
+            "last_skip_reason": normalize_tiktok_text(source.get("last_skip_reason", base["last_skip_reason"])),
+            "last_cycle_status": normalize_tiktok_text(source.get("last_cycle_status", base["last_cycle_status"])) or "idle",
+            "last_total_count": max(0, int(source.get("last_total_count", base["last_total_count"]) or 0)),
+            "last_unread_count": max(0, int(source.get("last_unread_count", base["last_unread_count"]) or 0)),
+            "auto_reply_enabled": bool(source.get("auto_reply_enabled", base["auto_reply_enabled"])),
+            "reply_mode": normalize_tiktok_inbox_reply_mode(source.get("reply_mode", base["reply_mode"])),
+            "reply_message": str(source.get("reply_message", base["reply_message"]) or "").strip(),
+            "reply_prompt": str(source.get("reply_prompt", base["reply_prompt"]) or "").strip(),
+            "contact_value": str(source.get("contact_value", base["contact_value"]) or "").strip(),
+            "last_auto_reply_total": max(0, int(source.get("last_auto_reply_total", base["last_auto_reply_total"]) or 0)),
+            "last_auto_reply_success": max(0, int(source.get("last_auto_reply_success", base["last_auto_reply_success"]) or 0)),
+            "last_auto_reply_failed": max(0, int(source.get("last_auto_reply_failed", base["last_auto_reply_failed"]) or 0)),
+        }
+    )
+    return base
+
+
+def get_tiktok_inbox_monitor_state(account_id: int, create: bool = False) -> Dict[str, object]:
+    key = str(int(account_id or 0) or 0)
+    if key == "0":
+        return normalize_tiktok_inbox_monitor_state({})
+    existing = tiktok_inbox_monitor_states.get(key)
+    if existing is None and create:
+        existing = normalize_tiktok_inbox_monitor_state({}, account_id=int(key))
+        tiktok_inbox_monitor_states[key] = existing
+    return existing or normalize_tiktok_inbox_monitor_state({}, account_id=int(key))
+
+
+def list_tiktok_inbox_monitor_states() -> List[Dict[str, object]]:
+    states: List[Dict[str, object]] = []
+    for key, raw_state in tiktok_inbox_monitor_states.items():
+        account_id = int(key or 0) or 0
+        if account_id <= 0:
+            continue
+        states.append(normalize_tiktok_inbox_monitor_state(raw_state, account_id=account_id))
+    states.sort(key=lambda item: int(item.get("account_id", 0) or 0))
+    return states
+
+
+def group_member_row_key(row: Dict) -> str:
+    if not isinstance(row, dict):
+        return ""
+    return "|".join(
+        [
+            normalize_tiktok_text(row.get("group_name", "")),
+            normalize_tiktok_text(row.get("username", "")),
+            normalize_tiktok_text(ensure_tiktok_profile_url(row)),
+            normalize_tiktok_text(row.get("sec_user_id", "")),
+            normalize_tiktok_text(row.get("tiktok_id", "")),
+        ]
+    )
+
+
+def normalize_tiktok_stranger_message_row(row: Dict) -> Dict:
+    normalized = {
+        "conversation_key": normalize_tiktok_text(
+            row.get("conversation_key", "") or row.get("conversation_id", "")
+        ),
+        "conversation_id": normalize_tiktok_text(row.get("conversation_id", "")),
+        "username": normalize_tiktok_text(row.get("username", "")),
+        "avatar": str(row.get("avatar", row.get("avatar_url", "")) or "").strip(),
+        "avatar_url": str(row.get("avatar_url", row.get("avatar", "")) or "").strip(),
+        "preview_text": normalize_tiktok_text(
+            row.get("preview_text", "")
+            or row.get("incoming_message", "")
+            or row.get("content", "")
+        ),
+        "incoming_message": normalize_tiktok_text(
+            row.get("incoming_message", "")
+            or row.get("preview_text", "")
+            or row.get("content", "")
+        ),
+        "profile_url": str(row.get("profile_url", "") or "").strip(),
+        "sec_user_id": normalize_tiktok_text(
+            row.get("sec_user_id", "") or row.get("user_id", "")
+        ),
+        "account_id": int(row.get("account_id", 0) or 0),
+        "unread_count": max(0, int(row.get("unread_count", 0) or 0)),
+        "is_unread": bool(row.get("is_unread", False)),
+        "phone_numbers": list(dict.fromkeys(
+            str(item).strip()
+            for item in (row.get("phone_numbers") or [])
+            if str(item).strip()
+        )),
+        "wechat_ids": list(dict.fromkeys(
+            str(item).strip()
+            for item in (row.get("wechat_ids") or [])
+            if str(item).strip()
+        )),
+        "ai_wechat_id": normalize_tiktok_text(row.get("ai_wechat_id", "")),
+        "ai_wechat_evidence": normalize_tiktok_text(row.get("ai_wechat_evidence", "")),
+        # 这一轮是否已经问过 AI「有没有微信号」（记忆接管在生成回复那次调用里顺带问了）
+        "ai_wechat_checked": bool(row.get("ai_wechat_checked", False)),
+        "wechat_add_status": normalize_tiktok_text(row.get("wechat_add_status", "")).lower(),
+        "time_text": normalize_tiktok_text(row.get("time_text", "")),
+        "conversation_position": max(0, int(row.get("conversation_position", 0) or 0)),
+        "stranger_index": max(0, int(row.get("stranger_index", 0) or 0)),
+        "conversation_source": normalize_tiktok_text(
+            row.get("conversation_source", "") or "stranger_messages"
+        ),
+        "collected_at": normalize_tiktok_text(row.get("collected_at", "")),
+        "reply_status": normalize_tiktok_text(row.get("reply_status", "pending")).lower() or "pending",
+        "reply_error": normalize_tiktok_text(row.get("reply_error", "")),
+        "reply_message": normalize_tiktok_text(row.get("reply_message", "")),
+        "reply_account_id": str(row.get("reply_account_id", "") or "").strip(),
+        "reply_started_at": normalize_tiktok_text(row.get("reply_started_at", "")),
+        "reply_finished_at": normalize_tiktok_text(row.get("reply_finished_at", "")),
+        "reply_updated_at": normalize_tiktok_text(row.get("reply_updated_at", "")),
+        "last_message_text": normalize_tiktok_text(row.get("last_message_text", "")),
+        "last_message_is_user": (
+            bool(row.get("last_message_is_user"))
+            if row.get("last_message_is_user") is not None
+            else None
+        ),
+        "has_user_message": bool(row.get("has_user_message")) if row.get("has_user_message") is not None else None,
+        "detail_read_status": normalize_tiktok_text(row.get("detail_read_status", "")) or "not_requested",
+        "detail_read_error": normalize_tiktok_text(row.get("detail_read_error", "")),
+        "h5_reply_fingerprint": normalize_tiktok_text(row.get("h5_reply_fingerprint", "")),
+        "h5_reply_sent_at": normalize_tiktok_text(row.get("h5_reply_sent_at", "")),
+    }
+    if normalized["phone_numbers"] and not normalized["wechat_add_status"]:
+        normalized["wechat_add_status"] = "phone_detected"
+    normalized["profile_url"] = ensure_tiktok_profile_url(normalized)
+    if not normalized["conversation_key"]:
+        normalized["conversation_key"] = normalize_tiktok_text(
+            normalized["conversation_id"]
+            or normalized["profile_url"]
+            or normalized["sec_user_id"]
+            or normalized["username"]
+        )
+    return normalized
+
+
+def stranger_message_row_key(row: Dict) -> str:
+    if not isinstance(row, dict):
+        return ""
+    normalized = normalize_tiktok_stranger_message_row(row)
+    conversation_key = normalize_tiktok_text(normalized.get("conversation_key", ""))
+    placeholder_conversation_key = conversation_key.startswith("index:")
+    if conversation_key and not placeholder_conversation_key:
+        return f"conversation:{normalize_tiktok_text(normalized['conversation_key'])}"
+    if normalized["profile_url"]:
+        return f"profile:{normalize_tiktok_text(normalized['profile_url'])}"
+    if normalized["sec_user_id"]:
+        return f"sec:{normalize_tiktok_text(normalized['sec_user_id'])}"
+    username = normalize_tiktok_text(normalized.get("username", ""))
+    account_id = int(normalized.get("account_id", 0) or 0)
+    if username and account_id > 0:
+        return f"account:{account_id}|user:{username}"
+    if conversation_key:
+        return f"conversation:{conversation_key}"
+    return username
+
+
+def collect_tiktok_stranger_message_results(account_id: int = 0) -> List[Dict]:
+    target_account_id = int(account_id or 0)
+    rows: List[Dict] = []
+    for row in tiktok_stranger_message_results:
+        normalized = normalize_tiktok_stranger_message_row(row if isinstance(row, dict) else {})
+        if target_account_id > 0 and int(normalized.get("account_id", 0) or 0) != target_account_id:
+            continue
+        if is_tiktok_group_like_stranger_message_row(normalized):
+            continue
+        rows.append(normalized)
+    return rows
+
+
+def collect_tiktok_inbox_results(account_id: int = 0) -> List[Dict]:
+    target_account_id = int(account_id or 0)
+    rows: List[Dict] = []
+    for row in tiktok_inbox_results:
+        normalized = normalize_tiktok_inbox_row(row if isinstance(row, dict) else {})
+        if target_account_id > 0 and int(normalized.get("account_id", 0) or 0) != target_account_id:
+            continue
+        if is_tiktok_group_like_stranger_message_row(normalized):
+            continue
+        rows.append(normalized)
+    return rows
+
+
+def _build_tiktok_stranger_message_reply_fields(row: Dict) -> Dict[str, object]:
+    normalized = normalize_tiktok_stranger_message_row(row if isinstance(row, dict) else {})
+    return {
+        "reply_status": normalized.get("reply_status", "pending"),
+        "reply_error": normalized.get("reply_error", ""),
+        "reply_message": normalized.get("reply_message", ""),
+        "reply_account_id": normalized.get("reply_account_id", ""),
+        "reply_started_at": normalized.get("reply_started_at", ""),
+        "reply_finished_at": normalized.get("reply_finished_at", ""),
+        "reply_updated_at": normalized.get("reply_updated_at", ""),
+        "h5_reply_fingerprint": normalized.get("h5_reply_fingerprint", ""),
+        "h5_reply_sent_at": normalized.get("h5_reply_sent_at", ""),
+        "phone_numbers": list(normalized.get("phone_numbers") or []),
+        "wechat_add_status": normalized.get("wechat_add_status", ""),
+    }
+
+
+def replace_tiktok_stranger_message_results(account_id: int, rows: List[Dict]) -> int:
+    global tiktok_stranger_message_results
+
+    target_account_id = int(account_id or 0)
+    existing_map = {
+        stranger_message_row_key(row): normalize_tiktok_stranger_message_row(row)
+        for row in tiktok_stranger_message_results
+        if int((row or {}).get("account_id", 0) or 0) == target_account_id
+    }
+    keep_rows = [
+        normalize_tiktok_stranger_message_row(row)
+        for row in tiktok_stranger_message_results
+        if int((row or {}).get("account_id", 0) or 0) != target_account_id
+    ]
+    next_rows: List[Dict] = []
+    seen = set()
+    for raw_row in rows:
+        if not isinstance(raw_row, dict):
+            continue
+        normalized = normalize_tiktok_stranger_message_row({**raw_row, "account_id": target_account_id})
+        if is_tiktok_group_like_stranger_message_row(normalized):
+            continue
+        key = stranger_message_row_key(normalized)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        existing = existing_map.get(key)
+        if existing:
+            normalized.update(_build_tiktok_stranger_message_reply_fields(existing))
+        next_rows.append(normalized)
+
+    tiktok_stranger_message_results = keep_rows + next_rows
+    save_tiktok_stranger_message_results()
+    return len(next_rows)
+
+
+def merge_tiktok_stranger_message_results(account_id: int, rows: List[Dict]) -> int:
+    global tiktok_stranger_message_results
+
+    target_account_id = int(account_id or 0)
+    if target_account_id <= 0:
+        return 0
+
+    account_rows = [
+        normalize_tiktok_stranger_message_row(row)
+        for row in tiktok_stranger_message_results
+        if int((row or {}).get("account_id", 0) or 0) == target_account_id
+    ]
+    other_rows = [
+        normalize_tiktok_stranger_message_row(row)
+        for row in tiktok_stranger_message_results
+        if int((row or {}).get("account_id", 0) or 0) != target_account_id
+    ]
+    account_map = {
+        stranger_message_row_key(row): row
+        for row in account_rows
+        if stranger_message_row_key(row)
+    }
+    incoming_keys: List[str] = []
+    changed = 0
+    for raw_row in rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+        normalized = normalize_tiktok_stranger_message_row({**raw_row, "account_id": target_account_id})
+        if is_tiktok_group_like_stranger_message_row(normalized):
+            continue
+        key = stranger_message_row_key(normalized)
+        if not key:
+            continue
+        existing = account_map.get(key)
+        if existing:
+            incoming_phone_numbers = list(normalized.get("phone_numbers") or [])
+            incoming_wechat_add_status = str(normalized.get("wechat_add_status") or "").strip().lower()
+            existing_phone_numbers = list(existing.get("phone_numbers") or [])
+            existing_wechat_add_status = str(existing.get("wechat_add_status") or "").strip().lower()
+            normalized.update(_build_tiktok_stranger_message_reply_fields(existing))
+            # Current detail data owns the latest message direction. Only
+            # persisted reply/contact markers are merged from the old row.
+            # A fresh detail snapshot is authoritative.  Unioning it with
+            # persisted numbers can keep a phone number that came from our
+            # own outgoing message and send that stale number to WeChat.
+            normalized["phone_numbers"] = list(dict.fromkeys(
+                [str(item).strip() for item in (
+                    incoming_phone_numbers or existing_phone_numbers
+                ) if str(item).strip()]
+            ))
+            normalized["wechat_add_status"] = incoming_wechat_add_status or existing_wechat_add_status
+            if existing != normalized:
+                changed += 1
+        else:
+            changed += 1
+        account_map[key] = normalized
+        if key not in incoming_keys:
+            incoming_keys.append(key)
+
+    if not changed:
+        return 0
+
+    preserved_keys = [key for key in account_map.keys() if key not in incoming_keys]
+    ordered_keys = incoming_keys + preserved_keys
+    tiktok_stranger_message_results = other_rows + [account_map[key] for key in ordered_keys if key in account_map]
+    save_tiktok_stranger_message_results()
+    return changed
+
+
+def replace_tiktok_inbox_results(account_id: int, rows: List[Dict]) -> int:
+    global tiktok_inbox_results
+
+    target_account_id = int(account_id or 0)
+    keep_rows = [
+        normalize_tiktok_inbox_row(row)
+        for row in tiktok_inbox_results
+        if int((row or {}).get("account_id", 0) or 0) != target_account_id
+    ]
+    next_rows: List[Dict] = []
+    seen = set()
+    for raw_row in rows:
+        if not isinstance(raw_row, dict):
+            continue
+        normalized = normalize_tiktok_inbox_row({**raw_row, "account_id": target_account_id})
+        if is_tiktok_group_like_stranger_message_row(normalized):
+            continue
+        key = stranger_message_row_key(normalized)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        next_rows.append(normalized)
+
+    tiktok_inbox_results = keep_rows + next_rows
+    save_tiktok_inbox_results()
+    return len(next_rows)
+
+
+def merge_tiktok_inbox_results(account_id: int, rows: List[Dict]) -> int:
+    global tiktok_inbox_results
+
+    target_account_id = int(account_id or 0)
+    if target_account_id <= 0:
+        return 0
+
+    account_rows = [
+        normalize_tiktok_inbox_row(row)
+        for row in tiktok_inbox_results
+        if int((row or {}).get("account_id", 0) or 0) == target_account_id
+    ]
+    other_rows = [
+        normalize_tiktok_inbox_row(row)
+        for row in tiktok_inbox_results
+        if int((row or {}).get("account_id", 0) or 0) != target_account_id
+    ]
+    account_map = {
+        stranger_message_row_key(row): row
+        for row in account_rows
+        if stranger_message_row_key(row)
+    }
+    incoming_keys: List[str] = []
+    changed = 0
+    for raw_row in rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+        normalized = normalize_tiktok_inbox_row({**raw_row, "account_id": target_account_id})
+        if is_tiktok_group_like_stranger_message_row(normalized):
+            continue
+        key = stranger_message_row_key(normalized)
+        if not key:
+            continue
+        existing = account_map.get(key)
+        if existing != normalized:
+            changed += 1
+        account_map[key] = normalized
+        if key not in incoming_keys:
+            incoming_keys.append(key)
+
+    if not changed:
+        return 0
+
+    preserved_keys = [key for key in account_map.keys() if key not in incoming_keys]
+    ordered_keys = incoming_keys + preserved_keys
+    tiktok_inbox_results = other_rows + [account_map[key] for key in ordered_keys if key in account_map]
+    save_tiktok_inbox_results()
+    return changed
+
+
+def update_tiktok_inbox_rows(
+    target_rows: List[Dict],
+    *,
+    status: str,
+    error: Optional[str] = None,
+    message: Optional[str] = None,
+    account_id: Optional[int] = None,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+) -> int:
+    keys = {stranger_message_row_key(row) for row in target_rows if stranger_message_row_key(row)}
+    if not keys:
+        return 0
+
+    updated = 0
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    next_rows: List[Dict] = []
+    for raw_row in tiktok_inbox_results:
+        normalized = normalize_tiktok_inbox_row(raw_row if isinstance(raw_row, dict) else {})
+        if stranger_message_row_key(normalized) in keys:
+            normalized["reply_status"] = normalize_tiktok_text(status).lower() or "pending"
+            normalized["reply_updated_at"] = timestamp
+            if error is not None:
+                normalized["reply_error"] = normalize_tiktok_text(error)
+            if message is not None:
+                normalized["reply_message"] = normalize_tiktok_text(message)
+            if account_id is not None:
+                normalized["reply_account_id"] = str(account_id)
+            if started_at is not None:
+                normalized["reply_started_at"] = normalize_tiktok_text(started_at)
+            if finished_at is not None:
+                normalized["reply_finished_at"] = normalize_tiktok_text(finished_at)
+            elif normalized["reply_status"] in {"queued", "processing"}:
+                normalized["reply_finished_at"] = ""
+            updated += 1
+        next_rows.append(normalized)
+
+    if updated:
+        tiktok_inbox_results[:] = next_rows
+        save_tiktok_inbox_results()
+    return updated
+
+
+def get_tiktok_stranger_message_seen_count(account_id: int = 0) -> int:
+    target_account_id = int(account_id or 0)
+    if target_account_id > 0:
+        return len(tiktok_stranger_message_seen_records.get(str(target_account_id), {}) or {})
+    return sum(len(bucket or {}) for bucket in tiktok_stranger_message_seen_records.values())
+
+
+def is_tiktok_stranger_message_unread_row(row: Dict) -> bool:
+    normalized = normalize_tiktok_stranger_message_row(row if isinstance(row, dict) else {})
+    unread_count = max(0, int(normalized.get("unread_count", 0) or 0))
+    return bool(normalized.get("is_unread")) or unread_count > 0
+
+
+def stranger_message_seen_fingerprints(row: Dict, account_id: Optional[int] = None) -> List[str]:
+    normalized = normalize_tiktok_stranger_message_row(row if isinstance(row, dict) else {})
+    final_account_id = int(account_id or normalized.get("account_id", 0) or 0)
+    if final_account_id <= 0:
+        return []
+    conversation_key = stranger_message_row_key(normalized)
+    preview_text = normalize_tiktok_text(
+        normalized.get("incoming_message", "")
+        or normalized.get("preview_text", "")
+    )
+    time_text = normalize_tiktok_text(normalized.get("time_text", "") or normalized.get("collected_at", ""))
+    unread_count = max(0, int(normalized.get("unread_count", 0) or 0))
+    if not conversation_key:
+        return []
+    if not preview_text and not time_text and unread_count <= 0:
+        return []
+
+    fingerprints: List[str] = []
+
+    def push_fingerprint(conversation_identity: str):
+        identity = normalize_tiktok_text(conversation_identity)
+        if not identity:
+            return
+        fingerprint = "|".join(
+            [
+                f"account:{final_account_id}",
+                identity,
+                preview_text,
+                time_text,
+                f"unread:{unread_count}",
+            ]
+        ).lower()
+        if fingerprint and fingerprint not in fingerprints:
+            fingerprints.append(fingerprint)
+
+    push_fingerprint(conversation_key)
+    raw_conversation_key = normalize_tiktok_text(
+        normalized.get("conversation_key", "")
+        or normalized.get("conversation_id", "")
+    )
+    if raw_conversation_key:
+        push_fingerprint(f"conversation:{raw_conversation_key}")
+    return fingerprints
+
+
+def split_unseen_tiktok_stranger_message_rows(account_id: int, rows: List[Dict]) -> tuple[List[Dict], List[Dict]]:
+    target_account_id = int(account_id or 0)
+    if target_account_id <= 0:
+        return ([], [row for row in (rows or []) if isinstance(row, dict)])
+
+    bucket = dict(tiktok_stranger_message_seen_records.get(str(target_account_id), {}) or {})
+    unseen_rows: List[Dict] = []
+    seen_rows: List[Dict] = []
+    for raw_row in rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+        normalized = normalize_tiktok_stranger_message_row({**raw_row, "account_id": target_account_id})
+        fingerprints = stranger_message_seen_fingerprints(normalized, target_account_id)
+        if not fingerprints or not any(fingerprint in bucket for fingerprint in fingerprints):
+            unseen_rows.append(normalized)
+        else:
+            seen_rows.append(normalized)
+    return unseen_rows, seen_rows
+
+
+def bootstrap_tiktok_stranger_message_seen_records():
+    grouped_rows: Dict[int, List[Dict]] = {}
+    for raw_row in tiktok_stranger_message_results:
+        if not isinstance(raw_row, dict):
+            continue
+        normalized = normalize_tiktok_stranger_message_row(raw_row)
+        account_id = int(normalized.get("account_id", 0) or 0)
+        if account_id <= 0:
+            continue
+        grouped_rows.setdefault(account_id, []).append(normalized)
+    for account_id, rows in grouped_rows.items():
+        if tiktok_stranger_message_seen_records.get(str(account_id)):
+            continue
+        mark_tiktok_stranger_message_rows_seen(account_id, rows)
+
+
+def mark_tiktok_stranger_message_rows_seen(account_id: int, rows: List[Dict]) -> int:
+    target_account_id = int(account_id or 0)
+    if target_account_id <= 0:
+        return 0
+
+    bucket_key = str(target_account_id)
+    bucket = dict(tiktok_stranger_message_seen_records.get(bucket_key, {}) or {})
+    changed = False
+    new_count = 0
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    for raw_row in rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+        normalized = normalize_tiktok_stranger_message_row({**raw_row, "account_id": target_account_id})
+        fingerprints = stranger_message_seen_fingerprints(normalized, target_account_id)
+        if not fingerprints:
+            continue
+        fingerprint = fingerprints[0]
+        if not any(existing in bucket for existing in fingerprints):
+            new_count += 1
+            changed = True
+        bucket[fingerprint] = normalize_tiktok_text(normalized.get("collected_at", "") or timestamp)
+
+    if len(bucket) > TIKTOK_STRANGER_MESSAGE_SEEN_LIMIT_PER_ACCOUNT:
+        keep_items = sorted(
+            bucket.items(),
+            key=lambda item: normalize_tiktok_text(item[1]),
+            reverse=True,
+        )[:TIKTOK_STRANGER_MESSAGE_SEEN_LIMIT_PER_ACCOUNT]
+        next_bucket = {key: value for key, value in reversed(keep_items)}
+        if next_bucket != bucket:
+            changed = True
+        bucket = next_bucket
+
+    if changed:
+        tiktok_stranger_message_seen_records[bucket_key] = bucket
+        save_tiktok_stranger_message_seen_records()
+
+    return new_count
+
+
+def update_tiktok_stranger_message_rows(
+    target_rows: List[Dict],
+    *,
+    status: str,
+    error: Optional[str] = None,
+    message: Optional[str] = None,
+    account_id: Optional[int] = None,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+) -> int:
+    keys = {stranger_message_row_key(row) for row in target_rows if stranger_message_row_key(row)}
+    if not keys:
+        return 0
+
+    updated = 0
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    next_rows: List[Dict] = []
+    for raw_row in tiktok_stranger_message_results:
+        normalized = normalize_tiktok_stranger_message_row(raw_row if isinstance(raw_row, dict) else {})
+        if stranger_message_row_key(normalized) in keys:
+            normalized["reply_status"] = normalize_tiktok_text(status).lower() or "pending"
+            normalized["reply_updated_at"] = timestamp
+            if error is not None:
+                normalized["reply_error"] = normalize_tiktok_text(error)
+            if message is not None:
+                normalized["reply_message"] = normalize_tiktok_text(message)
+            if account_id is not None:
+                normalized["reply_account_id"] = str(account_id)
+            if started_at is not None:
+                normalized["reply_started_at"] = normalize_tiktok_text(started_at)
+            if finished_at is not None:
+                normalized["reply_finished_at"] = normalize_tiktok_text(finished_at)
+            elif normalized["reply_status"] in {"queued", "processing"}:
+                normalized["reply_finished_at"] = ""
+            updated += 1
+        next_rows.append(normalized)
+
+    if updated:
+        tiktok_stranger_message_results[:] = next_rows
+        save_tiktok_stranger_message_results()
+    return updated
+
+
+def remove_group_members_from_results(rows: List[Dict]) -> int:
+    global tiktok_group_member_results
+
+    keys = set()
+    for row in rows:
+        key = group_member_row_key(row)
+        if key:
+            keys.add(key)
+    if not keys:
+        return 0
+
+    before = len(tiktok_group_member_results)
+    tiktok_group_member_results = [
+        row for row in tiktok_group_member_results if group_member_row_key(row) not in keys
+    ]
+    removed = before - len(tiktok_group_member_results)
+    if removed:
+        save_tiktok_group_member_results()
+    return removed
+
+
+def collect_tiktok_interaction_users(selected_task_ids: Optional[Set[int]] = None) -> List[Dict]:
+    rows: List[Dict] = []
+    seen = set()
+    wanted_task_ids = {int(task_id) for task_id in (selected_task_ids or set()) if int(task_id) > 0}
+
+    def append_user(raw_user: Dict, extra: Optional[Dict] = None):
+        if not isinstance(raw_user, dict):
+            return
+        normalized = normalize_high_intent_user(raw_user)
+        normalized["profile_url"] = ensure_tiktok_profile_url(normalized)
+        row = {**normalized, **(extra or {})}
+        key = user_choice_key(row)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        rows.append(row)
+
+    for task in tiktok_tasks:
+        task_id = int(task.get("id", 0) or 0)
+        if wanted_task_ids and task_id not in wanted_task_ids:
+            continue
+        for user in task.get("high_intent_users", []) or []:
+            normalized = normalize_high_intent_user(user)
+            append_user(
+                normalized,
+                {
+                    "task_id": task_id,
+                    "task_title": task.get("title", ""),
+                    "task_url": task.get("url", ""),
+                    "task_author": task.get("author", ""),
+                    "source_session_id": str(
+                        normalized.get("source_session_id", "") or task.get("source_session_id", "") or ""
+                    ).strip(),
+                    "source_item_key": str(
+                        normalized.get("source_item_key", "") or task.get("source_item_key", "") or ""
+                    ).strip(),
+                },
+            )
+    if not wanted_task_ids:
+        _monitor_all_rows, monitor_precise_rows = build_monitor_customer_pools(None)
+        for user in monitor_precise_rows:
+            append_user(
+                user,
+                {
+                    "source": "tiktok_monitor",
+                    "task_id": 0,
+                    "task_title": str(user.get("latest_video_title", "") or user.get("task_title", "") or "同行监控"),
+                    "task_url": str(user.get("latest_video_url", "") or user.get("task_url", "") or ""),
+                    "task_author": str(user.get("monitor_target_username", "") or user.get("target_username", "") or ""),
+                },
+            )
+        for user in tiktok_manual_interaction_users:
+            normalized = normalize_high_intent_user(user)
+            append_user(
+                normalized,
+                {
+                    "task_id": 0,
+                    "task_title": normalized.get("task_title", "") or normalized.get("group_name", "群成员导入"),
+                    "task_url": normalized.get("task_url", ""),
+                    "task_author": normalized.get("task_author", ""),
+                },
+            )
+
+    def sort_key(row: Dict) -> tuple[int, float, str]:
+        interaction_status = str(row.get("interaction_status", "pending") or "pending").strip().lower()
+        status_rank = {
+            "pending": 0,
+            "failed": 1,
+            "interrupted": 1,
+            "skipped": 2,
+            "queued": 3,
+            "processing": 4,
+            "sent": 9,
+            "completed": 9,
+        }.get(interaction_status, 0)
+        timestamp = (
+            parse_comment_timestamp(row.get("last_seen_at", ""))
+            or parse_comment_timestamp(row.get("comment_time", ""))
+            or parse_comment_timestamp(row.get("first_seen_at", ""))
+        )
+        username = str(row.get("username", "") or "")
+        return (status_rank, -float(timestamp or 0), username)
+
+    rows.sort(key=sort_key)
+    return rows
+
+
+def collect_tiktok_precise_touch_users(
+    action: Optional[str] = None,
+    limit: Optional[int] = None,
+    selected_task_ids: Optional[Set[int]] = None,
+) -> List[Dict]:
+    _all_rows, precise_rows = build_combined_tiktok_customer_pools()
+    action_key = str(action or "").strip().lower()
+    wanted_task_ids = {int(task_id) for task_id in (selected_task_ids or set()) if int(task_id) > 0}
+    rows: List[Dict] = []
+    seen = set()
+
+    for raw_row in precise_rows:
+        if not isinstance(raw_row, dict):
+            continue
+        row = normalize_combined_customer_pool_row(raw_row)
+        apply_tiktok_precise_touch_state([row])
+        task_id = int(row.get("task_id", 0) or 0)
+        if wanted_task_ids and task_id not in wanted_task_ids:
+            continue
+        key = precise_customer_touch_identity_key(row)
+        if not key or key in seen:
+            continue
+        if _is_tiktok_precise_touch_user_unavailable(row):
+            continue
+        if action_key:
+            state = _get_tiktok_precise_touch_action_state(row, action_key)
+            if _is_tiktok_precise_touch_action_done(state) or _is_tiktok_precise_touch_action_inflight(state):
+                continue
+        seen.add(key)
+        rows.append(row)
+
+    rows.sort(key=_sort_tiktok_precise_touch_users)
+    if limit is not None:
+        rows = rows[: max(0, int(limit or 0))]
+    return rows
+
+
+def update_tiktok_precise_touch_users(
+    target_rows: List[Dict],
+    *,
+    action: str,
+    status: str,
+    error: Optional[str] = None,
+    result: Optional[str] = None,
+    account_id: Optional[object] = None,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+) -> int:
+    action_key = str(action or "").strip().lower()
+    status_value = str(status or "").strip().lower() or "pending"
+    if status_value == "failed" and is_tiktok_precise_touch_unavailable_error(error):
+        status_value = "unavailable"
+    if not action_key:
+        return 0
+    keys = {
+        precise_customer_touch_identity_key(row)
+        for row in (target_rows or [])
+        if isinstance(row, dict) and precise_customer_touch_identity_key(row)
+    }
+    if not keys:
+        return 0
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for key in keys:
+        action_map = tiktok_precise_touch_state.setdefault(key, {})
+        previous = action_map.get(action_key, {})
+        next_state = _normalize_tiktok_precise_touch_action_state(previous)
+        next_state["status"] = status_value
+        next_state["updated_at"] = timestamp
+        if error is not None:
+            next_state["error"] = str(error or "").strip()
+        if result is not None:
+            next_state["result"] = str(result or "").strip()
+        if account_id is not None:
+            next_state["account_id"] = str(account_id or "").strip()
+        if started_at is not None:
+            next_state["started_at"] = str(started_at or "").strip()
+        if finished_at is not None:
+            next_state["finished_at"] = str(finished_at or "").strip()
+        elif status_value in {"queued", "processing"}:
+            next_state["finished_at"] = ""
+        action_map[action_key] = next_state
+
+    save_tiktok_precise_touch_state()
+    save_tiktok_tasks_state()
+    return len(keys)
+
+
+def delete_tiktok_precise_touch_state_for_rows(target_rows: List[Dict]) -> int:
+    keys = set()
+    for row in target_rows or []:
+        if not isinstance(row, dict):
+            continue
+        for key in (precise_customer_touch_identity_key(row), precise_customer_pool_key(row)):
+            if key:
+                keys.add(key)
+    removed = 0
+    for key in keys:
+        if key in tiktok_precise_touch_state:
+            tiktok_precise_touch_state.pop(key, None)
+            removed += 1
+    if removed:
+        save_tiktok_precise_touch_state()
+        save_tiktok_tasks_state()
+    return removed
+
+
+def update_tiktok_monitor_comment_users(
+    target_rows: List[Dict],
+    updates: Dict[str, object],
+) -> int:
+    strict_keys = {user_choice_key(row) for row in target_rows if user_choice_key(row)}
+    loose_keys = {user_choice_loose_key(row) for row in target_rows if user_choice_loose_key(row)}
+    monitor_user_keys = {
+        build_monitor_user_key(row)
+        for row in target_rows
+        if isinstance(row, dict) and build_monitor_user_key(row)
+    }
+    if not strict_keys and not loose_keys and not monitor_user_keys:
+        return 0
+
+    matched_rows: List[Dict] = []
+    for comment in tiktok_state_store.load_tiktok_monitor_comments(None):
+        if not isinstance(comment, dict):
+            continue
+        strict_key = user_choice_key(comment)
+        loose_key = user_choice_loose_key(comment)
+        monitor_user_key = build_monitor_user_key(comment)
+        if not (
+            (strict_key and strict_key in strict_keys)
+            or (loose_key and loose_key in loose_keys)
+            or (monitor_user_key and monitor_user_key in monitor_user_keys)
+        ):
+            continue
+        next_row = dict(comment)
+        next_row.update(updates)
+        if "is_high_intent" not in updates:
+            next_row["is_high_intent"] = bool(comment.get("is_high_intent", True))
+        next_row["_preserve_monitor_seen_state"] = True
+        matched_rows.append(next_row)
+
+    if matched_rows:
+        tiktok_state_store.save_tiktok_monitor_comments(matched_rows)
+    return len(matched_rows)
+
+
+def build_tiktok_interaction_user_status_payload(row: Dict, lite: bool = False) -> Dict:
+    if not isinstance(row, dict):
+        return {}
+    if not lite:
+        return dict(row)
+    return {
+        "comment_id": str(row.get("comment_id", "") or "").strip(),
+        "username": str(row.get("username", "") or "").strip(),
+        "user_id": str(row.get("user_id", "") or "").strip(),
+        "comment": str(row.get("comment", row.get("content", "")) or "").strip(),
+        "comment_time": str(row.get("comment_time", "") or "").strip(),
+        "region": str(row.get("region", row.get("location", row.get("ip_location", ""))) or "").strip(),
+        "like_count": row.get("like_count", ""),
+        "reply_count": row.get("reply_count", ""),
+        "profile_url": str(row.get("profile_url", "") or "").strip(),
+        "avatar": str(row.get("avatar", row.get("avatar_url", "")) or "").strip(),
+        "reason": str(row.get("reason", "") or "").strip(),
+        "source": str(row.get("source", "") or "").strip(),
+        "is_high_intent": bool(row.get("is_high_intent", True)),
+        "source_session_id": str(row.get("source_session_id", "") or "").strip(),
+        "source_keyword": str(row.get("source_keyword", "") or "").strip(),
+        "task_id": int(row.get("task_id", 0) or 0),
+        "task_title": str(row.get("task_title", "") or "").strip(),
+        "task_url": str(row.get("task_url", "") or "").strip(),
+        "task_author": str(row.get("task_author", "") or "").strip(),
+        "monitor_target_id": int(row.get("monitor_target_id", row.get("target_id", 0)) or 0),
+        "monitor_target_username": str(row.get("monitor_target_username", row.get("target_username", "")) or "").strip(),
+        "monitor_target_profile_url": str(row.get("monitor_target_profile_url", row.get("target_profile_url", "")) or "").strip(),
+        "last_seen_at": str(row.get("last_seen_at", "") or "").strip(),
+        "first_seen_at": str(row.get("first_seen_at", "") or "").strip(),
+        "source_video_count": int(row.get("source_video_count", 0) or 0),
+        "comment_count": int(row.get("comment_count", 0) or 0),
+        "follow_comment_status": str(row.get("follow_comment_status", "pending") or "pending").strip(),
+        "follow_comment_error": str(row.get("follow_comment_error", "") or "").strip(),
+        "follow_comment_result": str(row.get("follow_comment_result", "") or "").strip(),
+        "follow_comment_account_id": str(row.get("follow_comment_account_id", "") or "").strip(),
+        "interaction_status": str(row.get("interaction_status", "pending") or "pending").strip(),
+        "interaction_error": str(row.get("interaction_error", "") or "").strip(),
+        "interaction_account_id": str(row.get("interaction_account_id", "") or "").strip(),
+    }
+
+
+def sync_tiktok_customer_pool_cache(all_rows: List[Dict], precise_rows: List[Dict]):
+    global tiktok_all_customer_pool, tiktok_precise_customer_pool
+    tiktok_all_customer_pool = [dict(row) for row in all_rows if isinstance(row, dict)]
+    tiktok_precise_customer_pool = [dict(row) for row in precise_rows if isinstance(row, dict)]
+
+
+def build_tiktok_customer_pools_from_tasks(tasks: List[Dict]) -> tuple[List[Dict], List[Dict]]:
+    all_rows: List[Dict] = []
+    precise_rows: List[Dict] = []
+    seen_all = set()
+    seen_precise = set()
+
+    def normalize_pool_row(source: Dict, task: Dict, is_high_intent: bool) -> Dict:
+        normalized = normalize_high_intent_user(source or {})
+        normalized["profile_url"] = ensure_tiktok_profile_url(normalized)
+        normalized["task_id"] = int(task.get("id", 0) or 0)
+        normalized["task_title"] = str(task.get("title", "") or "")
+        normalized["task_url"] = str(task.get("url", "") or "")
+        normalized["task_author"] = str(task.get("author", "") or "")
+        normalized["source_session_id"] = str(
+            normalized.get("source_session_id", "") or task.get("source_session_id", "") or ""
+        ).strip()
+        normalized["source_item_key"] = str(
+            normalized.get("source_item_key", "") or task.get("source_item_key", "") or ""
+        ).strip()
+        normalized["title"] = normalized["task_title"]
+        normalized["url"] = normalized["task_url"]
+        normalized["author"] = normalized["task_author"]
+        normalized["cover_image"] = str(task.get("cover_image", "") or "")
+        normalized["is_high_intent"] = bool(is_high_intent)
+        normalized["source"] = str(normalized.get("source", "") or "tiktok_task")
+        return normalized
+
+    def append_row(bucket: List[Dict], seen: Set[str], source: Dict, task: Dict, is_high_intent: bool):
+        row = normalize_pool_row(source, task, is_high_intent)
+        key = user_choice_key(row) if normalize_tiktok_text(row.get("comment_id", "")) else user_choice_loose_key(row)
+        if not key or key in seen:
+            return
+        seen.add(key)
+        bucket.append(row)
+
+    for raw_task in tasks or []:
+        if not isinstance(raw_task, dict):
+            continue
+        task = ensure_tiktok_task_shape(dict(raw_task))
+        high_intent_rows = [normalize_high_intent_user(row) for row in (task.get("high_intent_users", []) or []) if isinstance(row, dict)]
+        all_comment_rows = [normalize_high_intent_user(row) for row in (task.get("all_comments", []) or []) if isinstance(row, dict)]
+        high_intent_strict = {user_choice_key(row) for row in high_intent_rows if user_choice_key(row)}
+        high_intent_loose = {user_choice_loose_key(row) for row in high_intent_rows if user_choice_loose_key(row)}
+        comment_lookup = {
+            user_choice_loose_key(row): row
+            for row in all_comment_rows
+            if user_choice_loose_key(row)
+        }
+
+        for comment in all_comment_rows:
+            comment_strict_key = user_choice_key(comment)
+            comment_loose_key = user_choice_loose_key(comment)
+            is_high_intent = bool(
+                (comment_strict_key and comment_strict_key in high_intent_strict)
+                or (comment_loose_key and comment_loose_key in high_intent_loose)
+            )
+            append_row(all_rows, seen_all, comment, task, is_high_intent)
+            if is_high_intent:
+                append_row(precise_rows, seen_precise, comment, task, True)
+
+        for user in high_intent_rows:
+            merged = {**comment_lookup.get(user_choice_loose_key(user), {}), **user}
+            append_row(all_rows, seen_all, merged, task, True)
+            append_row(precise_rows, seen_precise, merged, task, True)
+
+    return all_rows, precise_rows
+
+
+def normalize_combined_customer_pool_row(row: Dict) -> Dict:
+    normalized = dict(row or {})
+    source = str(normalized.get("source", "") or "").strip() or "tiktok_task"
+    normalized["source"] = source
+    normalized["profile_url"] = ensure_tiktok_profile_url(normalized)
+
+    if source == "tiktok_monitor":
+        monitor_target_id = int(
+            normalized.get("monitor_target_id", normalized.get("target_id", 0)) or 0
+        )
+        monitor_target_username = str(
+            normalized.get("monitor_target_username", normalized.get("target_username", "")) or ""
+        ).strip()
+        task_title = str(
+            normalized.get("task_title", "")
+            or normalized.get("latest_video_title", "")
+            or normalized.get("video_title", "")
+            or monitor_target_username
+            or "同行监控"
+        ).strip()
+        task_url = str(
+            normalized.get("task_url", "")
+            or normalized.get("latest_video_url", "")
+            or normalized.get("video_url", "")
+            or normalized.get("target_profile_url", "")
+            or normalized.get("profile_url", "")
+        ).strip()
+        task_author = str(
+            normalized.get("task_author", "")
+            or monitor_target_username
+            or normalized.get("author", "")
+        ).strip()
+        normalized["task_id"] = 0
+        normalized["task_title"] = task_title
+        normalized["task_url"] = task_url
+        normalized["task_author"] = task_author
+        normalized["title"] = task_title
+        normalized["url"] = task_url
+        normalized["author"] = task_author
+        normalized["cover_image"] = str(
+            normalized.get("cover_image", "")
+            or normalized.get("video_cover_image", "")
+            or normalized.get("target_avatar_url", "")
+        ).strip()
+        normalized["monitor_target_id"] = monitor_target_id
+        normalized["monitor_target_username"] = monitor_target_username
+        normalized["monitor_target_profile_url"] = str(
+            normalized.get("monitor_target_profile_url", "")
+            or normalized.get("target_profile_url", "")
+        ).strip()
+    else:
+        normalized["task_id"] = int(normalized.get("task_id", 0) or 0)
+        normalized["task_title"] = str(
+            normalized.get("task_title", "") or normalized.get("title", "")
+        ).strip()
+        normalized["task_url"] = str(
+            normalized.get("task_url", "") or normalized.get("url", "")
+        ).strip()
+        normalized["task_author"] = str(
+            normalized.get("task_author", "") or normalized.get("author", "")
+        ).strip()
+        normalized["title"] = str(
+            normalized.get("title", "") or normalized.get("task_title", "")
+        ).strip()
+        normalized["url"] = str(
+            normalized.get("url", "") or normalized.get("task_url", "")
+        ).strip()
+        normalized["author"] = str(
+            normalized.get("author", "") or normalized.get("task_author", "")
+        ).strip()
+        normalized["cover_image"] = str(
+            normalized.get("cover_image", "") or normalized.get("video_cover_image", "")
+        ).strip()
+
+    normalized["is_high_intent"] = bool(normalized.get("is_high_intent"))
+    return normalized
+
+
+def merge_combined_customer_pool_row(target: Dict, incoming: Dict) -> Dict:
+    merged = dict(target or {})
+    next_row = dict(incoming or {})
+
+    for key, value in next_row.items():
+        if key == "is_high_intent":
+            merged[key] = bool(merged.get(key)) or bool(value)
+            continue
+        if key in {"comment_count", "seen_count_total", "source_video_count"}:
+            merged[key] = max(int(merged.get(key, 0) or 0), int(value or 0))
+            continue
+        if key == "source":
+            incoming_source = str(value or "").strip()
+            existing_source = str(merged.get(key, "") or "").strip()
+            existing_task_id = int(merged.get("task_id", 0) or 0)
+            incoming_task_id = int(next_row.get("task_id", 0) or 0)
+            if incoming_task_id > 0:
+                merged[key] = incoming_source or "tiktok_task"
+            elif not existing_source or existing_task_id <= 0:
+                merged[key] = value
+            continue
+        if key in {"last_seen_at", "comment_time"}:
+            if str(value or "").strip() >= str(merged.get(key, "") or "").strip():
+                merged[key] = value
+            continue
+        if key == "cover_image" and not str(merged.get("cover_image", "") or "").strip():
+            merged[key] = value
+            continue
+        if key.startswith("monitor_target_") and not str(merged.get(key, "") or "").strip():
+            merged[key] = value
+            continue
+        if not str(merged.get(key, "") or "").strip() and value not in (None, "", [], {}):
+            merged[key] = value
+
+    return merged
+
+
+def build_combined_tiktok_customer_pools() -> tuple[List[Dict], List[Dict]]:
+    task_all_rows, _ = build_tiktok_customer_pools_from_tasks(tiktok_tasks)
+    monitor_all_rows, _ = build_monitor_customer_pools(None)
+
+    merged_rows: Dict[str, Dict] = {}
+    ordered_keys: List[str] = []
+
+    def append_row(raw_row: Dict):
+        if not isinstance(raw_row, dict):
+            return
+        row = normalize_combined_customer_pool_row(raw_row)
+        key = (
+            user_choice_key(row)
+            if normalize_tiktok_text(row.get("comment_id", ""))
+            else user_choice_loose_key(row)
+        )
+        if not key:
+            return
+        if key not in merged_rows:
+            merged_rows[key] = row
+            ordered_keys.append(key)
+            return
+        merged_rows[key] = merge_combined_customer_pool_row(merged_rows[key], row)
+
+    for row in task_all_rows:
+        append_row(row)
+    for row in monitor_all_rows:
+        append_row(row)
+
+    all_rows = [merged_rows[key] for key in ordered_keys]
+    precise_rows = [dict(row) for row in all_rows if bool(row.get("is_high_intent"))]
+    apply_tiktok_precise_touch_state(all_rows)
+    apply_tiktok_precise_touch_state(precise_rows)
+    return all_rows, precise_rows
+
+
+def delete_tiktok_customers_from_tasks(raw_rows: List[Dict]) -> Dict[str, int]:
+    strict_keys_by_task: Dict[int, Set[str]] = {}
+    loose_keys_by_task: Dict[int, Set[str]] = {}
+    global_strict_keys: Set[str] = set()
+    global_loose_keys: Set[str] = set()
+    skipped_monitor = 0
+    requested = 0
+
+    for raw_row in raw_rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+        requested += 1
+        task_id = int(raw_row.get("task_id", 0) or 0)
+        source = str(raw_row.get("source", "") or "").strip()
+        monitor_target_id = int(raw_row.get("monitor_target_id", raw_row.get("target_id", 0)) or 0)
+        if source == "tiktok_monitor" or (task_id <= 0 and monitor_target_id > 0):
+            skipped_monitor += 1
+            continue
+
+        normalized = normalize_high_intent_user(raw_row)
+        strict_key = user_choice_key(normalized)
+        loose_key = user_choice_loose_key(normalized)
+        if not strict_key and not loose_key:
+            continue
+
+        if task_id > 0:
+            if strict_key:
+                strict_keys_by_task.setdefault(task_id, set()).add(strict_key)
+            if loose_key:
+                loose_keys_by_task.setdefault(task_id, set()).add(loose_key)
+        else:
+            if strict_key:
+                global_strict_keys.add(strict_key)
+            if loose_key:
+                global_loose_keys.add(loose_key)
+
+    if not strict_keys_by_task and not loose_keys_by_task and not global_strict_keys and not global_loose_keys:
+        return {
+            "requested": requested,
+            "removed": 0,
+            "removed_precise": 0,
+            "skipped_monitor": skipped_monitor,
+            "matched_tasks": 0,
+        }
+
+    removed_customer_keys: Set[str] = set()
+    removed_precise_keys: Set[str] = set()
+    removed_precise_rows: List[Dict] = []
+    matched_task_ids: Set[int] = set()
+
+    def should_remove(task_id: int, row: Dict) -> bool:
+        normalized = normalize_high_intent_user(row)
+        strict_key = user_choice_key(normalized)
+        loose_key = user_choice_loose_key(normalized)
+        task_strict = strict_keys_by_task.get(task_id, set())
+        task_loose = loose_keys_by_task.get(task_id, set())
+        return bool(
+            (strict_key and (strict_key in task_strict or strict_key in global_strict_keys))
+            or (loose_key and (loose_key in task_loose or loose_key in global_loose_keys))
+        )
+
+    def record_removed(task_id: int, row: Dict, *, precise: bool = False):
+        normalized = normalize_high_intent_user(row)
+        strict_key = user_choice_key(normalized)
+        loose_key = user_choice_loose_key(normalized)
+        identity = f"{task_id}:{strict_key or loose_key}"
+        if strict_key or loose_key:
+            removed_customer_keys.add(identity)
+            if precise:
+                removed_precise_keys.add(identity)
+                removed_precise_rows.append(normalized)
+
+    for task in tiktok_tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = int(task.get("id", 0) or 0)
+        if task_id <= 0:
+            continue
+
+        original_comments = task.get("all_comments", []) or []
+        original_precise = task.get("high_intent_users", []) or []
+
+        next_comments = []
+        for row in original_comments:
+            if should_remove(task_id, row):
+                record_removed(task_id, row, precise=False)
+                continue
+            next_comments.append(row)
+
+        next_precise = []
+        for row in original_precise:
+            if should_remove(task_id, row):
+                record_removed(task_id, row, precise=True)
+                continue
+            next_precise.append(row)
+
+        if len(next_comments) == len(original_comments) and len(next_precise) == len(original_precise):
+            continue
+
+        task["all_comments"] = next_comments
+        task["high_intent_users"] = next_precise
+        task["comment_count"] = len(next_comments)
+        matched_task_ids.add(task_id)
+
+    if matched_task_ids:
+        save_tiktok_tasks_state()
+    if removed_precise_rows:
+        delete_tiktok_precise_touch_state_for_rows(removed_precise_rows)
+
+    return {
+        "requested": requested,
+        "removed": len(removed_customer_keys),
+        "removed_precise": len(removed_precise_keys),
+        "skipped_monitor": skipped_monitor,
+        "matched_tasks": len(matched_task_ids),
+    }
+
+
+def add_tiktok_customers_to_precise_pool(raw_rows: List[Dict]) -> Dict[str, int]:
+    task_rows_by_id: Dict[int, List[Dict]] = {}
+    monitor_rows: List[Dict] = []
+    requested = 0
+
+    for raw_row in raw_rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+        requested += 1
+        task_id = int(raw_row.get("task_id", 0) or 0)
+        source = str(raw_row.get("source", "") or "").strip()
+        monitor_target_id = int(raw_row.get("monitor_target_id", raw_row.get("target_id", 0)) or 0)
+        if source == "tiktok_monitor" or (task_id <= 0 and monitor_target_id > 0):
+            monitor_rows.append(raw_row)
+        elif task_id > 0:
+            task_rows_by_id.setdefault(task_id, []).append(raw_row)
+
+    added_task = 0
+    matched_tasks = 0
+    for task in tiktok_tasks:
+        if not isinstance(task, dict):
+            continue
+        task_id = int(task.get("id", 0) or 0)
+        if task_id not in task_rows_by_id:
+            continue
+
+        valid_pool: Dict[str, Dict] = {}
+        for row in (task.get("all_comments", []) or []) + (task.get("high_intent_users", []) or []):
+            normalized = normalize_high_intent_user(row)
+            strict_key = user_choice_key(normalized)
+            loose_key = user_choice_loose_key(normalized)
+            if strict_key:
+                valid_pool[("strict", strict_key)] = normalized
+            if loose_key:
+                valid_pool[("loose", loose_key)] = normalized
+
+        next_rows = [normalize_high_intent_user(row) for row in task.get("high_intent_users", []) or [] if isinstance(row, dict)]
+        existing_strict = {user_choice_key(row) for row in next_rows if user_choice_key(row)}
+        existing_loose = {user_choice_loose_key(row) for row in next_rows if user_choice_loose_key(row)}
+        before = len(next_rows)
+
+        for raw_row in task_rows_by_id.get(task_id, []):
+            normalized_raw = normalize_high_intent_user(raw_row)
+            strict_key = user_choice_key(normalized_raw)
+            loose_key = user_choice_loose_key(normalized_raw)
+            if (strict_key and strict_key in existing_strict) or (loose_key and loose_key in existing_loose):
+                continue
+            matched = (
+                valid_pool.get(("strict", strict_key))
+                if strict_key
+                else None
+            ) or (valid_pool.get(("loose", loose_key)) if loose_key else None)
+            if not matched:
+                continue
+            next_rows.append(matched)
+            if strict_key:
+                existing_strict.add(strict_key)
+            if loose_key:
+                existing_loose.add(loose_key)
+
+        if len(next_rows) != before:
+            task["high_intent_users"] = dedupe_users(next_rows)
+            added_task += len(task["high_intent_users"]) - before
+            matched_tasks += 1
+
+    if matched_tasks:
+        save_tiktok_tasks_state()
+
+    added_monitor = update_tiktok_monitor_comment_users(
+        monitor_rows,
+        {
+            "is_high_intent": True,
+            "intent_level": "manual",
+            "reason": "全部客户页手动加入精准",
+        },
+    ) if monitor_rows else 0
+
+    return {
+        "requested": requested,
+        "added": max(0, added_task) + int(added_monitor or 0),
+        "added_task": max(0, added_task),
+        "added_monitor": int(added_monitor or 0),
+        "matched_tasks": matched_tasks,
+        "monitor_requested": len(monitor_rows),
+    }
+
+
+def update_tiktok_interaction_users(
+    target_rows: List[Dict],
+    *,
+    status: str,
+    error: Optional[str] = None,
+    message: Optional[str] = None,
+    account_id: Optional[int] = None,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+) -> int:
+    keys = {user_choice_key(row) for row in target_rows if user_choice_key(row)}
+    monitor_keys = {
+        build_monitor_user_key(row)
+        for row in target_rows
+        if isinstance(row, dict) and build_monitor_user_key(row)
+    }
+    if not keys and not monitor_keys:
+        return 0
+
+    updated = 0
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for task in tiktok_tasks:
+        for user in task.get("high_intent_users", []) or []:
+            if user_choice_key(user) not in keys:
+                continue
+            user["interaction_status"] = status
+            user["interaction_updated_at"] = timestamp
+            if error is not None:
+                user["interaction_error"] = error
+            if message is not None:
+                user["interaction_message"] = message
+            if account_id is not None:
+                user["interaction_account_id"] = account_id
+            if started_at is not None:
+                user["interaction_started_at"] = started_at
+            if finished_at is not None:
+                user["interaction_finished_at"] = finished_at
+            elif status in {"queued", "processing"}:
+                user["interaction_finished_at"] = ""
+            updated += 1
+
+    for user in tiktok_manual_interaction_users:
+        if user_choice_key(user) not in keys:
+            continue
+        user["interaction_status"] = status
+        user["interaction_updated_at"] = timestamp
+        if error is not None:
+            user["interaction_error"] = error
+        if message is not None:
+            user["interaction_message"] = message
+        if account_id is not None:
+            user["interaction_account_id"] = account_id
+        if started_at is not None:
+            user["interaction_started_at"] = started_at
+        if finished_at is not None:
+            user["interaction_finished_at"] = finished_at
+        elif status in {"queued", "processing"}:
+            user["interaction_finished_at"] = ""
+        updated += 1
+
+    updated += update_tiktok_monitor_comment_users(
+        target_rows,
+        {
+            "interaction_status": status,
+            "interaction_updated_at": timestamp,
+            **({"interaction_error": error} if error is not None else {}),
+            **({"interaction_message": message} if message is not None else {}),
+            **({"interaction_account_id": account_id} if account_id is not None else {}),
+            **({"interaction_started_at": started_at} if started_at is not None else {}),
+            **(
+                {"interaction_finished_at": finished_at}
+                if finished_at is not None
+                else ({"interaction_finished_at": ""} if status in {"queued", "processing"} else {})
+            ),
+        },
+    )
+
+    if updated:
+        save_tiktok_tasks_state()
+        save_tiktok_manual_interaction_users()
+    return updated
+
+
+def update_tiktok_follow_comment_users(
+    target_rows: List[Dict],
+    *,
+    status: str,
+    error: Optional[str] = None,
+    comment_text: Optional[str] = None,
+    account_id: Optional[int] = None,
+    result: Optional[str] = None,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+) -> int:
+    keys = {user_choice_key(row) for row in target_rows if user_choice_key(row)}
+    monitor_keys = {
+        build_monitor_user_key(row)
+        for row in target_rows
+        if isinstance(row, dict) and build_monitor_user_key(row)
+    }
+    if not keys and not monitor_keys:
+        return 0
+
+    updated = 0
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for task in tiktok_tasks:
+        for user in task.get("high_intent_users", []) or []:
+            if user_choice_key(user) not in keys:
+                continue
+            user["follow_comment_status"] = status
+            user["follow_comment_updated_at"] = timestamp
+            if error is not None:
+                user["follow_comment_error"] = error
+            if comment_text is not None:
+                user["follow_comment_text"] = comment_text
+            if account_id is not None:
+                user["follow_comment_account_id"] = account_id
+            if result is not None:
+                user["follow_comment_result"] = result
+            if started_at is not None:
+                user["follow_comment_started_at"] = started_at
+            if finished_at is not None:
+                user["follow_comment_finished_at"] = finished_at
+            elif status in {"queued", "processing"}:
+                user["follow_comment_finished_at"] = ""
+            updated += 1
+
+    for user in tiktok_manual_interaction_users:
+        if user_choice_key(user) not in keys:
+            continue
+        user["follow_comment_status"] = status
+        user["follow_comment_updated_at"] = timestamp
+        if error is not None:
+            user["follow_comment_error"] = error
+        if comment_text is not None:
+            user["follow_comment_text"] = comment_text
+        if account_id is not None:
+            user["follow_comment_account_id"] = account_id
+        if result is not None:
+            user["follow_comment_result"] = result
+        if started_at is not None:
+            user["follow_comment_started_at"] = started_at
+        if finished_at is not None:
+            user["follow_comment_finished_at"] = finished_at
+        elif status in {"queued", "processing"}:
+            user["follow_comment_finished_at"] = ""
+        updated += 1
+
+    updated += update_tiktok_monitor_comment_users(
+        target_rows,
+        {
+            "follow_comment_status": status,
+            "follow_comment_updated_at": timestamp,
+            **({"follow_comment_error": error} if error is not None else {}),
+            **({"follow_comment_text": comment_text} if comment_text is not None else {}),
+            **({"follow_comment_account_id": account_id} if account_id is not None else {}),
+            **({"follow_comment_result": result} if result is not None else {}),
+            **({"follow_comment_started_at": started_at} if started_at is not None else {}),
+            **(
+                {"follow_comment_finished_at": finished_at}
+                if finished_at is not None
+                else ({"follow_comment_finished_at": ""} if status in {"queued", "processing"} else {})
+            ),
+        },
+    )
+
+    if updated:
+        save_tiktok_tasks_state()
+        save_tiktok_manual_interaction_users()
+    return updated
+
+
+def update_tiktok_mention_comment_users(
+    target_rows: List[Dict],
+    *,
+    status: str,
+    error: Optional[str] = None,
+    comment_text: Optional[str] = None,
+    account_id: Optional[int] = None,
+    result: Optional[str] = None,
+    video_url: Optional[str] = None,
+    video_title: Optional[str] = None,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+) -> int:
+    keys = {user_choice_key(row) for row in target_rows if user_choice_key(row)}
+    if not keys:
+        return 0
+
+    updated = 0
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for task in tiktok_tasks:
+        for user in task.get("high_intent_users", []) or []:
+            if user_choice_key(user) not in keys:
+                continue
+            user["mention_comment_status"] = status
+            user["mention_comment_updated_at"] = timestamp
+            if error is not None:
+                user["mention_comment_error"] = error
+            if comment_text is not None:
+                user["mention_comment_text"] = comment_text
+            if account_id is not None:
+                user["mention_comment_account_id"] = account_id
+            if result is not None:
+                user["mention_comment_result"] = result
+            if video_url is not None:
+                user["mention_comment_video_url"] = video_url
+            if video_title is not None:
+                user["mention_comment_video_title"] = video_title
+            if started_at is not None:
+                user["mention_comment_started_at"] = started_at
+            if finished_at is not None:
+                user["mention_comment_finished_at"] = finished_at
+            elif status in {"queued", "processing"}:
+                user["mention_comment_finished_at"] = ""
+            updated += 1
+
+    for user in tiktok_manual_interaction_users:
+        if user_choice_key(user) not in keys:
+            continue
+        user["mention_comment_status"] = status
+        user["mention_comment_updated_at"] = timestamp
+        if error is not None:
+            user["mention_comment_error"] = error
+        if comment_text is not None:
+            user["mention_comment_text"] = comment_text
+        if account_id is not None:
+            user["mention_comment_account_id"] = account_id
+        if result is not None:
+            user["mention_comment_result"] = result
+        if video_url is not None:
+            user["mention_comment_video_url"] = video_url
+        if video_title is not None:
+            user["mention_comment_video_title"] = video_title
+        if started_at is not None:
+            user["mention_comment_started_at"] = started_at
+        if finished_at is not None:
+            user["mention_comment_finished_at"] = finished_at
+        elif status in {"queued", "processing"}:
+            user["mention_comment_finished_at"] = ""
+        updated += 1
+
+    if updated:
+        save_tiktok_tasks_state()
+        save_tiktok_manual_interaction_users()
+    return updated
+
+
+def upsert_tiktok_mention_comment_history(
+    target_rows: List[Dict],
+    *,
+    status: str,
+    error: Optional[str] = None,
+    comment_text: Optional[str] = None,
+    account_id: Optional[int] = None,
+    result: Optional[str] = None,
+    video_url: Optional[str] = None,
+    video_title: Optional[str] = None,
+    started_at: Optional[str] = None,
+    finished_at: Optional[str] = None,
+) -> int:
+    updated = 0
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for row in target_rows or []:
+        key = mention_comment_identity_key(row if isinstance(row, dict) else {})
+        if not key:
+            continue
+        current = tiktok_mention_comment_history.get(key, {})
+        payload = {
+            "status": str(status or current.get("status", "") or "").strip() or "completed",
+            "username": normalize_tiktok_text(row.get("username", "") if isinstance(row, dict) else ""),
+            "profile_url": ensure_tiktok_profile_url(row if isinstance(row, dict) else {}),
+            "sec_user_id": normalize_tiktok_text(row.get("sec_user_id", "") if isinstance(row, dict) else ""),
+            "tiktok_id": normalize_tiktok_text(row.get("tiktok_id", "") if isinstance(row, dict) else ""),
+            "error": str(error if error is not None else current.get("error", "") or "").strip(),
+            "comment_text": str(comment_text if comment_text is not None else current.get("comment_text", "") or "").strip(),
+            "account_id": str(account_id if account_id is not None else current.get("account_id", "") or "").strip(),
+            "result": str(result if result is not None else current.get("result", "") or "").strip(),
+            "video_url": str(video_url if video_url is not None else current.get("video_url", "") or "").strip(),
+            "video_title": str(video_title if video_title is not None else current.get("video_title", "") or "").strip(),
+            "started_at": str(started_at if started_at is not None else current.get("started_at", "") or "").strip(),
+            "finished_at": str(finished_at if finished_at is not None else current.get("finished_at", "") or "").strip(),
+            "updated_at": timestamp,
+        }
+        tiktok_mention_comment_history[key] = payload
+        updated += 1
+    if updated:
+        save_tiktok_mention_comment_history()
+    return updated
+
+
+def filter_tiktok_mention_comment_rows_by_username(target_rows: List[Dict], usernames: List[str]) -> List[Dict]:
+    wanted = {
+        normalize_tiktok_text(name).lower()
+        for name in (usernames or [])
+        if normalize_tiktok_text(name)
+    }
+    if not wanted:
+        return []
+    matched: List[Dict] = []
+    for row in target_rows or []:
+        username = normalize_tiktok_text(row.get("username", "") if isinstance(row, dict) else "").lower()
+        if username in wanted:
+            matched.append(row)
+    return matched
+
+
+restore_tiktok_mention_comment_history()
+restore_tiktok_manual_interaction_users()
+restore_tiktok_stranger_message_results()
+restore_tiktok_inbox_results()
+restore_tiktok_self_comment_monitor_results()
+restore_tiktok_stranger_message_monitor_config()
+restore_tiktok_inbox_monitor_config()
+restore_tiktok_self_comment_monitor_config()
+restore_tiktok_stranger_message_seen_records()
+restore_tiktok_stranger_message_takeover_attempts()
+bootstrap_tiktok_stranger_message_seen_records()
+restore_tiktok_mention_self_video_cache()
+
+
+def reconcile_tiktok_stranger_message_runtime_state() -> bool:
+    global tiktok_stranger_message_running, tiktok_stranger_message_stop_requested
+    global tiktok_stranger_message_background_task
+
+    background_alive = bool(
+        tiktok_stranger_message_background_task
+        and not tiktok_stranger_message_background_task.done()
+    )
+    if background_alive:
+        tiktok_stranger_message_running = True
+        tiktok_stranger_message_state["running"] = True
+        return True
+
+    repaired = False
+    next_rows: List[Dict] = []
+    for raw_row in tiktok_stranger_message_results:
+        normalized = normalize_tiktok_stranger_message_row(raw_row if isinstance(raw_row, dict) else {})
+        if normalized.get("reply_status") == "processing":
+            normalized["reply_status"] = "queued"
+            normalized["reply_error"] = normalized.get("reply_error") or "Recovered from stale stranger-message state"
+            normalized["reply_updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            repaired = True
+        next_rows.append(normalized)
+    if repaired:
+        tiktok_stranger_message_results[:] = next_rows
+        save_tiktok_stranger_message_results()
+
+    if (
+        tiktok_stranger_message_running
+        or tiktok_stranger_message_background_task is not None
+        or tiktok_stranger_message_stop_requested
+    ):
+        tiktok_stranger_message_running = False
+        tiktok_stranger_message_stop_requested = False
+        tiktok_stranger_message_background_task = None
+        tiktok_stranger_message_state.update(
+            {
+                "running": False,
+                "current_user": "",
+                "current_message_text": "",
+            }
+        )
+    return False
+
+
+def is_tiktok_stranger_message_monitor_busy(account_id: int = 0) -> tuple[bool, str]:
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if tiktok_running:
+        return True, "评论采集任务正在执行"
+    if tiktok_video_comment_running:
+        return True, "视频评论任务正在执行"
+    if tiktok_mention_comment_running:
+        return True, "评论@精准客户任务正在执行"
+    if tiktok_follow_comment_running:
+        return True, "关注评论任务正在执行"
+    if tiktok_interaction_running:
+        return True, "精准客户私信任务正在执行"
+    if tiktok_group_member_running:
+        return True, "群成员提取任务正在执行"
+    if tiktok_stranger_message_running and int(tiktok_stranger_message_state.get("account_id", 0) or 0) == int(account_id or 0):
+        return True, "私信引流任务正在执行"
+    if bool(tiktok_monitor_runtime_state.get("running")):
+        return True, "同行监控正在执行"
+    if (
+        reconcile_tiktok_account_nurture_runtime_state()
+        and tiktok_account_nurture_scheduler
+        and tiktok_account_nurture_scheduler.is_actively_blocking_other_tasks()
+    ):
+        return True, "账号养号正在执行"
+    return False, ""
+
+
+def reconcile_tiktok_inbox_runtime_state() -> bool:
+    global tiktok_inbox_running, tiktok_inbox_stop_requested, tiktok_inbox_background_task
+
+    background_alive = bool(
+        tiktok_inbox_background_task
+        and not tiktok_inbox_background_task.done()
+    )
+    if background_alive:
+        tiktok_inbox_running = True
+        tiktok_inbox_state["running"] = True
+        return True
+
+    if tiktok_inbox_running or tiktok_inbox_background_task is not None or tiktok_inbox_stop_requested:
+        tiktok_inbox_running = False
+        tiktok_inbox_stop_requested = False
+        tiktok_inbox_background_task = None
+        tiktok_inbox_state.update(
+            {
+                "running": False,
+                "current_user": "",
+            }
+        )
+    return False
+
+
+def is_tiktok_inbox_monitor_busy(account_id: int = 0) -> tuple[bool, str]:
+    busy, reason = is_tiktok_stranger_message_monitor_busy(account_id)
+    if busy:
+        return busy, reason
+    if tiktok_inbox_running and int(tiktok_inbox_state.get("account_id", 0) or 0) == int(account_id or 0):
+        return True, "消息聚合采集任务正在执行"
+    task = tiktok_self_comment_monitor_tasks_by_account.get(int(account_id or 0))
+    if task and not task.done():
+        return True, "我的评论区监控正在执行"
+    return False, ""
+
+
+def set_tiktok_self_comment_monitor_idle_message(account_id: int, message: str = ""):
+    state = get_tiktok_self_comment_monitor_state(account_id, create=True)
+    next_run_text = normalize_tiktok_text(state.get("next_run_at", ""))
+    fallback = f"我的评论区监控已开启，下一轮检查时间 {next_run_text}。" if next_run_text else "我的评论区监控已开启，等待下一轮检查。"
+    state.update(
+        {
+            "running": False,
+            "message": normalize_tiktok_text(message) or fallback,
+        }
+    )
+
+
+def schedule_next_tiktok_self_comment_monitor_run(account_id: int, base_time: Optional[datetime] = None) -> str:
+    state = get_tiktok_self_comment_monitor_state(account_id, create=True)
+    current = base_time or datetime.now()
+    interval_minutes = max(
+        1,
+        min(int(state.get("interval_minutes", 30) or 30), 1440),
+    )
+    next_run = current + timedelta(minutes=interval_minutes)
+    next_run_text = next_run.strftime("%Y-%m-%d %H:%M:%S")
+    state["next_run_at"] = next_run_text
+    return next_run_text
+
+
+def set_tiktok_inbox_monitor_idle_message(account_id: int, message: str = ""):
+    state = get_tiktok_inbox_monitor_state(account_id, create=True)
+    next_run_text = normalize_tiktok_text(state.get("next_run_at", ""))
+    fallback = f"自动采集已开启，下一次检查时间 {next_run_text}。" if next_run_text else "自动采集已开启，等待下一轮检查。"
+    state.update(
+        {
+            "running": False,
+            "message": normalize_tiktok_text(message) or fallback,
+        }
+    )
+
+
+def schedule_next_tiktok_inbox_monitor_run(account_id: int, base_time: Optional[datetime] = None) -> str:
+    state = get_tiktok_inbox_monitor_state(account_id, create=True)
+    current = base_time or datetime.now()
+    interval_minutes = max(
+        1,
+        min(int(state.get("interval_minutes", 30) or 30), 1440),
+    )
+    next_run = current + timedelta(minutes=interval_minutes)
+    next_run_text = next_run.strftime("%Y-%m-%d %H:%M:%S")
+    state["next_run_at"] = next_run_text
+    return next_run_text
+
+
+def set_tiktok_stranger_message_monitor_idle_message(account_id: int, message: str = ""):
+    state = get_tiktok_stranger_message_monitor_state(account_id, create=True)
+    next_run_text = normalize_tiktok_text(state.get("next_run_at", ""))
+    fallback = f"监控已开启，下一次检查时间 {next_run_text}。" if next_run_text else "监控已开启，等待下一轮检查。"
+    state.update(
+        {
+            "running": False,
+            "message": normalize_tiktok_text(message) or fallback,
+        }
+    )
+
+
+def schedule_next_tiktok_stranger_message_monitor_run(account_id: int, base_time: Optional[datetime] = None) -> str:
+    state = get_tiktok_stranger_message_monitor_state(account_id, create=True)
+    current = base_time or datetime.now()
+    interval_minutes = max(
+        1,
+        min(int(state.get("interval_minutes", 30) or 30), 1440),
+    )
+    next_run = current + timedelta(minutes=interval_minutes)
+    next_run_text = next_run.strftime("%Y-%m-%d %H:%M:%S")
+    state["next_run_at"] = next_run_text
+    return next_run_text
+
+
+def reconcile_tiktok_interaction_runtime_state() -> bool:
+    global tiktok_interaction_running, tiktok_interaction_stop_requested, tiktok_interaction_background_task
+
+    background_alive = bool(
+        tiktok_interaction_background_task and not tiktok_interaction_background_task.done()
+    )
+    if background_alive:
+        tiktok_interaction_running = True
+        tiktok_interaction_state["running"] = True
+        return True
+
+    repaired = False
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    interrupted_note = "任务中断，未确认是否已发送，请在表格里手动确认后再决定是否重发。"
+    for task in tiktok_tasks:
+        for user in task.get("high_intent_users", []) or []:
+            current_status = str(user.get("interaction_status", "") or "").strip().lower()
+            if current_status == "processing":
+                user["interaction_status"] = "interrupted"
+                user["interaction_error"] = interrupted_note
+                user["interaction_updated_at"] = timestamp
+                user["interaction_finished_at"] = ""
+                repaired = True
+            elif current_status == "queued":
+                user["interaction_status"] = "pending"
+                user["interaction_updated_at"] = timestamp
+                repaired = True
+
+    for user in tiktok_manual_interaction_users:
+        current_status = str(user.get("interaction_status", "") or "").strip().lower()
+        if current_status == "processing":
+            user["interaction_status"] = "interrupted"
+            user["interaction_error"] = interrupted_note
+            user["interaction_updated_at"] = timestamp
+            user["interaction_finished_at"] = ""
+            repaired = True
+        elif current_status == "queued":
+            user["interaction_status"] = "pending"
+            user["interaction_updated_at"] = timestamp
+            repaired = True
+
+    if repaired:
+        save_tiktok_tasks_state()
+        save_tiktok_manual_interaction_users()
+
+    if tiktok_interaction_running or tiktok_interaction_background_task is not None or tiktok_interaction_stop_requested:
+        tiktok_interaction_running = False
+        tiktok_interaction_stop_requested = False
+        tiktok_interaction_background_task = None
+        tiktok_interaction_state.update(
+            {
+                "running": False,
+                "current_user": "",
+                "current_users": [],
+                "current_message_text": "",
+                "account_ids": [],
+                "workers": [],
+            }
+        )
+
+    return False
+
+
+def create_ai_client(model_override: str = "") -> AIClient:
+    config = load_global_config()
+    server_api_url, server_token = get_tiktok_server_ai_proxy_credentials()
+    if server_api_url and server_token:
+        api_url = server_api_url
+        api_key = server_token
+    else:
+        api_key = str(config.get("api_key", "") or "").strip()
+        api_url = str(config.get("api_url", "https://ai.comfly.chat/v1/chat/completions") or "").strip()
+    return AIClient(
+        api_url=api_url,
+        api_key=api_key,
+        model=str(model_override or config.get("model", "gpt-5.4") or "gpt-5.4"),
+    )
+
+
+def get_tiktok_request_bearer_token(request: Optional[Request] = None) -> str:
+    if request is None:
+        return ""
+    auth = str(request.headers.get("Authorization") or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return ""
+
+
+def set_tiktok_ai_auth_token_from_request(request: Optional[Request] = None) -> None:
+    token = get_tiktok_request_bearer_token(request)
+    if token:
+        _tiktok_ai_auth_token_var.set(token)
+
+
+def get_tiktok_server_ai_proxy_credentials() -> tuple[str, str]:
+    token = str(_tiktok_ai_auth_token_var.get("") or "").strip()
+    if not token:
+        token = str(os.environ.get("LOBSTER_COMFLY_PROXY_DEFAULT_TOKEN") or "").strip()
+    if not token:
+        try:
+            from backend.app.services.openclaw_channel_auth_store import read_channel_fallback  # type: ignore
+
+            token = str((read_channel_fallback()[0] or "")).strip()
+        except Exception:
+            token = ""
+    auth_base = get_tiktok_auth_server_base()
+    if not auth_base or not token:
+        return "", ""
+    return f"{auth_base}/api/comfly-proxy/v1/chat/completions", token
+
+
+def get_tiktok_auth_server_base() -> str:
+    auth_base = str(os.environ.get("AUTH_SERVER_BASE") or "").strip().rstrip("/")
+    if not auth_base:
+        auth_base = str(os.environ.get("LOBSTER_AUTH_SERVER_BASE") or "").strip().rstrip("/")
+    if auth_base:
+        return auth_base
+    try:
+        from backend.app.core.config import settings as app_settings  # type: ignore
+
+        return str(getattr(app_settings, "auth_server_base", "") or "").strip().rstrip("/")
+    except Exception:
+        return ""
+
+
+def tiktok_ai_available(config: Optional[Dict] = None, request: Optional[Request] = None) -> bool:
+    cfg = config if isinstance(config, dict) else load_global_config()
+    if get_tiktok_request_bearer_token(request):
+        return bool(get_tiktok_auth_server_base())
+    url, token = get_tiktok_server_ai_proxy_credentials()
+    if url and token:
+        return True
+    return bool(str(cfg.get("api_key", "") or "").strip())
+
+
+def get_tiktok_ai_service_label(api_url: str) -> str:
+    parsed = urlparse(str(api_url or "").strip())
+    host = str(parsed.netloc or "").strip()
+    return host or "AI 接口"
+
+
+def parse_json_object_from_text(text: object) -> Dict:
+    raw = str(text or "").strip()
+    if not raw:
+        return {}
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*```$", "", raw)
+    candidates = [raw]
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(raw[start : end + 1])
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            continue
+    return {}
+
+
+def normalize_ai_expanded_keywords(seed_keyword: str, keywords: object, *, limit: int = 10) -> List[str]:
+    seed = normalize_tiktok_text(seed_keyword)
+    values: List[str] = []
+    if isinstance(keywords, list):
+        values = [normalize_tiktok_text(item) for item in keywords]
+    elif isinstance(keywords, str):
+        values = [
+            normalize_tiktok_text(item)
+            for item in re.split(r"[\n,，;；、]+", keywords)
+        ]
+    seen: Set[str] = set()
+    result: List[str] = []
+    for value in values:
+        value = value.strip(" -_*#\"'“”‘’")
+        if (
+            not value
+            or len(value) > 28
+            or value in {"{}", "[]", "null", "None"}
+            or re.fullmatch(r"[\W_]+", value, flags=re.UNICODE)
+            or re.search(r"[{}\[\]]", value)
+        ):
+            continue
+        lowered = value.lower()
+        if lowered == seed.lower() or lowered in seen:
+            continue
+        seen.add(lowered)
+        result.append(value)
+        if len(result) >= max(1, int(limit or 10)):
+            break
+    return result
+
+
+def build_fallback_expanded_keywords(seed_keyword: str, *, limit: int = 10) -> List[str]:
+    seed = normalize_tiktok_text(seed_keyword)
+    if not seed:
+        return []
+    suffixes = [
+        "攻略",
+        "避坑",
+        "推荐",
+        "价格",
+        "怎么选",
+        "真实体验",
+        "测评",
+        "最新",
+        "哪里好",
+        "注意事项",
+        "性价比",
+        "案例",
+    ]
+    prefixes = ["", "本地", "附近"]
+    candidates: List[str] = []
+    for suffix in suffixes:
+        candidates.append(f"{seed}{suffix}")
+    for prefix in prefixes:
+        if prefix:
+            candidates.append(f"{prefix}{seed}")
+    return normalize_ai_expanded_keywords(seed, candidates, limit=limit)
+
+
+def expand_tiktok_keywords_with_ai(seed_keyword: str, *, limit: int = 10) -> List[str]:
+    seed = normalize_tiktok_text(seed_keyword)
+    if not seed:
+        return []
+    client = create_ai_client(model_override="openai/gpt-5.6-sol")
+    if not str(client.api_key or "").strip():
+        raise RuntimeError("AI 接口 Key 未配置，无法自动拓词。")
+    prompt = f"""
+你是TikTok获客搜索词规划助手。请基于用户给的种子关键词，生成 {limit} 个适合在TikTok搜索视频的中文关键词。
+
+种子关键词：{seed}
+
+要求：
+- 关键词要能扩充视频池，优先覆盖同城/行业/需求/痛点/产品/行为词。
+- 不要生成太泛的词，例如“买房”“生活”“赚钱”这种单独泛词。
+- 不要返回和种子关键词完全相同的词。
+- 每个关键词 2 到 18 个中文字符为主，可以包含楼盘名、地区名、行业短语。
+- 只返回 JSON，格式：{{"keywords":["关键词1","关键词2"]}}
+""".strip()
+    content = client.filter_with_prompt(prompt)
+    parsed = parse_json_object_from_text(content)
+    keywords = normalize_ai_expanded_keywords(seed, parsed.get("keywords", []), limit=limit)
+    if not keywords:
+        keywords = normalize_ai_expanded_keywords(seed, content, limit=limit)
+    if len(keywords) < max(1, int(limit or 10)):
+        fallback = build_fallback_expanded_keywords(seed, limit=limit)
+        merged = normalize_ai_expanded_keywords(seed, keywords + fallback, limit=limit)
+        if merged:
+            return merged
+    return keywords
+
+
+def is_tiktok_ai_generation_error(error: Exception | str) -> bool:
+    text = str(error or "").strip().lower()
+    return text.startswith("ai ")
+
+
+def normalize_tiktok_video_comment_mode(value: Optional[str]) -> str:
+    mode = str(value or "fixed").strip().lower()
+    if mode in {"fixed", "ai", "rewrite"}:
+        return mode
+    return "fixed"
+
+
+def tiktok_video_comment_mode_label(mode: Optional[str]) -> str:
+    normalized = normalize_tiktok_video_comment_mode(mode)
+    return {
+        "fixed": "固定文案",
+        "ai": "AI 自动生成",
+        "rewrite": "AI 同方向改编",
+    }.get(normalized, "固定文案")
+
+
+def normalize_tiktok_stranger_reply_mode(value: Optional[str]) -> str:
+    mode = str(value or "fixed").strip().lower()
+    if mode in {"fixed", "ai_lead", "ai_auto", "ai_memory"}:
+        return mode
+    return "ai_auto"
+
+
+def tiktok_stranger_reply_mode_label(mode: Optional[str]) -> str:
+    normalized = normalize_tiktok_stranger_reply_mode(mode)
+    return {
+        "fixed": "固定文案",
+        "ai_lead": "AI 引导加微信",
+        "ai_auto": "AI 自动回复",
+        "ai_memory": "AI 记忆接管",
+    }.get(normalized, "AI 自动回复")
+
+
+def normalize_tiktok_inbox_reply_mode(value: Optional[str]) -> str:
+    mode = str(value or "fixed").strip().lower()
+    if mode in {"fixed", "rewrite", "ai", "ai_auto"}:
+        return "ai" if mode == "ai_auto" else mode
+    return "fixed"
+
+
+def tiktok_inbox_reply_mode_label(mode: Optional[str]) -> str:
+    normalized = normalize_tiktok_inbox_reply_mode(mode)
+    return {
+        "fixed": "固定回复",
+        "rewrite": "AI 同方向回复",
+        "ai": "AI 自动回复",
+    }.get(normalized, "固定回复")
+
+
+def split_tiktok_contact_parts(contact_value: str) -> List[str]:
+    """把联系方式拆成两条短消息。
+
+    平台对"整串微信号/手机号"的识别比较敏感，拆成两条发更安全。
+    优先在 - _ . 这类分隔符处切（分隔符不带进消息），否则从中间切。
+    """
+    value = normalize_tiktok_text(contact_value)
+    if not value or len(value) < 4:
+        return [value] if value else []
+    for separator in ("-", "_", ".", "+"):
+        index = value.find(separator)
+        if index >= 2 and len(value) - index - 1 >= 2:
+            return [value[:index], value[index + 1 :]]
+    middle = len(value) // 2
+    return [value[:middle], value[middle:]]
+
+
+def append_tiktok_contact_lines(message: str, contact_value: str, *, split_contact: bool = False) -> str:
+    base_text = str(message or "").strip()
+    cleaned_contact = normalize_tiktok_text(contact_value)
+    if not cleaned_contact:
+        return base_text
+    if cleaned_contact in base_text:
+        return base_text
+    parts = [part.strip() for part in base_text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if part.strip()]
+    if not any("绿泡泡" in part or "微信" in part for part in parts):
+        parts.append("麻烦您绿泡泡")
+    parts.extend(split_tiktok_contact_parts(cleaned_contact) if split_contact else [cleaned_contact])
+    return "\n".join(parts)
+
+
+def clean_tiktok_video_comment_text(value: Optional[str], limit: int = 40) -> str:
+    text = " ".join(str(value or "").replace("\r", " ").replace("\n", " ").split()).strip()
+    text = text.strip("\"'“”‘’`")
+    if text.startswith("```") and text.endswith("```"):
+        text = text.strip("`").strip()
+    if len(text) > limit:
+        text = text[:limit].rstrip("，。！？,.!? ")
+    return text
+
+
+def clean_tiktok_message_line(value: Optional[str], limit: int = 18) -> str:
+    text = clean_tiktok_video_comment_text(value, limit=max(1, int(limit or 18)))
+    return text.strip("，。！？,.!? ").strip()
+
+
+def summarize_tiktok_video_comment_settings(
+    mode: Optional[str],
+    fixed_text: str = "",
+    prompt_text: str = "",
+    seed_text: str = "",
+) -> str:
+    normalized = normalize_tiktok_video_comment_mode(mode)
+    if normalized == "fixed":
+        preview = clean_tiktok_video_comment_text(fixed_text, limit=18)
+        return f"{tiktok_video_comment_mode_label(normalized)}：{preview or '未填写'}"
+    if normalized == "rewrite":
+        preview = clean_tiktok_video_comment_text(seed_text, limit=18)
+        return f"{tiktok_video_comment_mode_label(normalized)}：{preview or '未填写基准文案'}"
+    preview = clean_tiktok_video_comment_text(prompt_text, limit=18)
+    return f"{tiktok_video_comment_mode_label(normalized)}：{preview or '按视频内容自动生成'}"
+
+
+def normalize_tiktok_mention_users(raw_rows: List[Dict], max_mentions: int = 1000) -> List[Dict]:
+    normalized_rows: List[Dict] = []
+    seen_usernames = set()
+    limit = max(1, min(int(max_mentions or 1000), 5000))
+
+    for raw_row in raw_rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+        normalized = normalize_high_intent_user(raw_row)
+        username = normalize_tiktok_text(normalized.get("username", ""))
+        if not username or username in seen_usernames:
+            continue
+        normalized["username"] = username
+        normalized["profile_url"] = ensure_tiktok_profile_url(normalized)
+        seen_usernames.add(username)
+        normalized_rows.append(normalized)
+        if len(normalized_rows) >= limit:
+            break
+
+    return normalized_rows
+
+
+def build_tiktok_mention_comment_preview(rows: List[Dict], limit: int = 12) -> str:
+    usernames = [
+        f"@{normalize_tiktok_text(row.get('username', ''))}"
+        for row in rows or []
+        if normalize_tiktok_text(row.get("username", ""))
+    ]
+    if not usernames:
+        return ""
+    clipped = usernames[: max(1, int(limit or 12))]
+    preview = " ".join(clipped).strip()
+    if len(usernames) > len(clipped):
+        preview = f"{preview} ..."
+    return preview
+
+
+def split_tiktok_mention_comment_batches(
+    rows: List[Dict],
+    *,
+    max_mentions_per_comment: int = TIKTOK_MENTION_COMMENT_MAX_USERS_PER_COMMENT,
+    max_comment_chars: int = TIKTOK_MENTION_COMMENT_SAFE_TEXT_LIMIT,
+) -> List[List[Dict]]:
+    normalized_limit = max(1, min(int(max_mentions_per_comment or TIKTOK_MENTION_COMMENT_MAX_USERS_PER_COMMENT), TIKTOK_MENTION_COMMENT_MAX_USERS_PER_COMMENT))
+    safe_chars = max(40, int(max_comment_chars or TIKTOK_MENTION_COMMENT_SAFE_TEXT_LIMIT))
+    batches: List[List[Dict]] = []
+    current_batch: List[Dict] = []
+    current_length = 0
+
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        username = normalize_tiktok_text(row.get("username", ""))
+        if not username:
+            continue
+        mention_piece = f"@{username}"
+        piece_length = len(mention_piece) + (1 if current_batch else 0)
+        should_split = (
+            current_batch
+            and (
+                len(current_batch) >= normalized_limit
+                or current_length + piece_length > safe_chars
+            )
+        )
+        if should_split:
+            batches.append(current_batch)
+            current_batch = []
+            current_length = 0
+            piece_length = len(mention_piece)
+        current_batch.append(row)
+        current_length += piece_length
+
+    if current_batch:
+        batches.append(current_batch)
+    return batches
+
+
+def split_already_mentioned_users(rows: List[Dict]) -> tuple[List[Dict], List[Dict]]:
+    available: List[Dict] = []
+    skipped: List[Dict] = []
+    for row in rows or []:
+        history = get_tiktok_mention_comment_history_for_row(row if isinstance(row, dict) else {})
+        history_status = str(history.get("status", "") or "").strip().lower()
+        current_status = str((row or {}).get("mention_comment_status", "") or "").strip().lower()
+        if history_status == "completed" or current_status == "completed":
+            skipped.append(row)
+            continue
+        available.append(row)
+    return available, skipped
+
+
+def request_tiktok_ai_comment(
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int = 180,
+    response_limit: int = 40,
+) -> str:
+    """Call the AI endpoint and return its reply text.
+
+    ``response_limit`` is the reply length cap of
+    :func:`clean_tiktok_video_comment_text`. Comment copy fits in 40 chars, but
+    callers that expect a JSON payload (for example the AI keyword planner)
+    must raise it: a keyword JSON is 40+ chars, and truncating it breaks
+    ``json.loads`` so the caller silently sees "no keywords" (2026-09-21).
+    """
+    client = create_ai_client()
+    if not str(client.api_key or "").strip():
+        raise RuntimeError("当前未配置 AI 接口 Key，不能使用 AI 评论模式。")
+    service_label = get_tiktok_ai_service_label(client.api_url)
+    payload = {
+        "model": client.model,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "max_tokens": max_tokens,
+    }
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, 3):
+        try:
+            response = requests.post(
+                client.api_url,
+                json=payload,
+                headers=client.headers,
+                timeout=(10, 45),
+            )
+            if response.status_code != 200:
+                body_preview = clean_tiktok_video_comment_text(response.text or "", limit=80)
+                detail = f"AI 接口调用失败：HTTP {response.status_code}"
+                if body_preview:
+                    detail = f"{detail}，{body_preview}"
+                raise RuntimeError(detail)
+
+            result = response.json()
+            content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+            cleaned = clean_tiktok_video_comment_text(content, limit=max(1, int(response_limit or 40)))
+            if not cleaned:
+                raise RuntimeError("AI 没有返回可用私信内容。")
+            return cleaned
+        except requests.exceptions.Timeout as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(1.5)
+                continue
+            raise RuntimeError(
+                f"AI 接口请求超时（{service_label}），请稍后重试，或先切换到固定文案模式。"
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(1.5)
+                continue
+            raise RuntimeError(
+                f"AI 接口连接失败（{service_label}）：{exc.__class__.__name__}，请检查网络或接口配置。"
+            ) from exc
+        except RuntimeError as exc:
+            last_error = exc
+            if "HTTP 5" in str(exc) and attempt < 2:
+                time.sleep(1.5)
+                continue
+            raise
+
+    raise RuntimeError(str(last_error or "AI 接口调用失败。"))
+
+
+def generate_tiktok_video_comment_text(
+    task: Dict,
+    *,
+    mode: Optional[str],
+    fixed_text: str = "",
+    prompt_text: str = "",
+    seed_text: str = "",
+) -> str:
+    normalized = normalize_tiktok_video_comment_mode(mode)
+    title = str(task.get("title", "") or "").strip()
+    author = str(task.get("author", "") or "").strip()
+    url = str(task.get("url", "") or "").strip()
+
+    if normalized == "fixed":
+        final_text = clean_tiktok_video_comment_text(fixed_text, limit=120)
+        if not final_text:
+            raise RuntimeError("固定文案为空，无法执行评论。")
+        return final_text
+
+    system_prompt = (
+        "你是一个真实的TikTok普通用户，正在给短视频写一条自然评论。\n"
+        "要求：\n"
+        "1. 只输出一条可直接发送的评论，不要解释。\n"
+        "2. 语气自然，像真人，不要营销，不要客服腔。\n"
+        "3. 不要出现私信、主页、联系方式、引流、AI、机器人等词。\n"
+        "4. 控制在 10 到 32 个中文字符内，最多 36 个字符。\n"
+        "5. 不要复制标题原句，要像看完视频后的真实反馈。\n"
+        "6. 如果用户给了补充方向、核心观点或态度，那就是高优先级硬约束，必须围绕它来写，不能反向，不能跑题，不能弱化成无关的泛泛而谈。\n"
+        "7. 如果补充方向里出现了明确判断、立场、关键词或对象，输出时必须保留这些核心信息，允许换一种更自然的说法，但不能改变意思。"
+    )
+
+    if normalized == "rewrite":
+        cleaned_seed = clean_tiktok_video_comment_text(seed_text, limit=120)
+        if not cleaned_seed:
+            raise RuntimeError("请先填写用于改编的基准文案。")
+        user_prompt = (
+            f"视频标题：{title or '未知'}\n"
+            f"作者：{author or '未知'}\n"
+            f"视频链接：{url or '未知'}\n"
+            f"基准文案：{cleaned_seed}\n\n"
+            "请把这条基准文案改写成一个新的版本。\n"
+            "要求：方向、态度、情绪、核心意图保持一致，不要跑题，不要反向，不要变成营销文案。"
+        )
+        return request_tiktok_ai_comment(system_prompt, user_prompt)
+
+    direction = clean_tiktok_video_comment_text(prompt_text, limit=120)
+    user_prompt = (
+        f"视频标题：{title or '未知'}\n"
+        f"作者：{author or '未知'}\n"
+        f"视频链接：{url or '未知'}\n"
+        f"补充方向（高优先级，必须遵守）：{direction or '自然、真诚、有一点具体感受'}\n\n"
+        "请基于视频内容生成一条自然评论。\n"
+        "额外要求：\n"
+        "1. 如果补充方向里有明确观点、态度、判断或关键词，评论必须围绕这个方向展开。\n"
+        "2. 不能只因为视频标题带了别的内容，就把评论写成无关方向。\n"
+        "3. 可以结合视频场景自然表达，但核心观点必须和补充方向一致。\n"
+        "4. 不要照抄补充方向原句，可以更口语一点，但意思不能变。"
+    )
+    return request_tiktok_ai_comment(system_prompt, user_prompt)
+
+
+def generate_tiktok_video_comment_replies_batch(
+    task: Dict,
+    users: List[Dict],
+    *,
+    mode: Optional[str],
+    fixed_text: str = "",
+    prompt_text: str = "",
+    seed_text: str = "",
+) -> Dict[int, str]:
+    """Generate one reply per captured comment in a single video batch.
+
+    The indexes here belong to this immutable ``users`` snapshot, rather than
+    to the live page.  A later comment insertion therefore cannot retarget a
+    reply to another customer.
+    """
+    rows = [row for row in (users or []) if isinstance(row, dict)]
+    if not rows:
+        return {}
+    normalized_mode = normalize_tiktok_video_comment_mode(mode)
+    if normalized_mode == "fixed":
+        text = generate_tiktok_video_comment_text(
+            task,
+            mode="fixed",
+            fixed_text=fixed_text,
+            prompt_text=prompt_text,
+            seed_text=seed_text,
+        )
+        return {index: text for index, _ in enumerate(rows, start=1)}
+
+    client = create_ai_client()
+    if not str(client.api_key or "").strip():
+        raise RuntimeError("当前未配置 AI 接口 Key，不能使用 AI 评论回复模式。")
+    title = str(task.get("title", "") or "").strip() or "未知"
+    author = str(task.get("author", "") or "").strip() or "未知"
+    direction = clean_tiktok_video_comment_text(prompt_text, limit=240)
+    seed = clean_tiktok_video_comment_text(seed_text, limit=240)
+    lines = []
+    for index, row in enumerate(rows, start=1):
+        username = clean_tiktok_video_comment_text(row.get("username", ""), limit=60) or "未知用户"
+        comment = clean_tiktok_video_comment_text(
+            row.get("comment", row.get("content", "")),
+            limit=180,
+        ) or "（无文字评论）"
+        lines.append(f"{index}. 用户：{username}；客户原评论：{comment}")
+    mode_rule = (
+        f"基准文案：{seed}\n请保持基准文案的核心方向，针对每条原评论自然改写。"
+        if normalized_mode == "rewrite"
+        else f"回复方向：{direction or '结合视频和客户原评论，给出自然、具体、友好的回复。'}"
+    )
+    prompt = (
+        "你是TikTok账号的真人运营。请为下面同一条视频下的客户评论分别生成一条回复。\n"
+        "只返回 JSON，不要解释，格式必须是："
+        '{"replies":[{"comment_index":1,"reply_text":"..."}]}\n'
+        "要求：每个 comment_index 只出现一次；回复必须对应客户原评论；"
+        "不要复制原评论，不要出现私信、联系方式、AI、机器人、引流等词；"
+        "每条回复控制在 10 到 48 个中文字符。\n"
+        f"视频标题：{title}\n作者：{author}\n{mode_rule}\n评论列表：\n"
+        + "\n".join(lines)
+    )
+    content = client.filter_with_prompt(prompt)
+    parsed = parse_json_object_from_text(content)
+    raw_replies = parsed.get("replies") if isinstance(parsed, dict) else None
+    result: Dict[int, str] = {}
+    if isinstance(raw_replies, list):
+        for item in raw_replies:
+            if not isinstance(item, dict):
+                continue
+            try:
+                index = int(item.get("comment_index", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+            if index < 1 or index > len(rows) or index in result:
+                continue
+            text = clean_tiktok_video_comment_text(item.get("reply_text", ""), limit=120)
+            if text:
+                result[index] = text
+    if len(result) != len(rows):
+        raise RuntimeError("AI 批量回复未完整返回每条评论的话术。")
+    return result
+
+
+def generate_tiktok_interaction_message(
+    user: Dict,
+    *,
+    mode: Optional[str],
+    fixed_text: str = "",
+    prompt_text: str = "",
+    seed_text: str = "",
+) -> str:
+    normalized = normalize_tiktok_video_comment_mode(mode)
+    username = str(user.get("username", "") or "").strip()
+    comment_text = clean_tiktok_video_comment_text(user.get("comment", "") or user.get("content", ""), limit=120)
+    region = str(user.get("region", "") or "").strip()
+    task_title = str(
+        user.get("task_title", "")
+        or user.get("title", "")
+        or user.get("latest_video_title", "")
+        or user.get("video_title", "")
+        or ""
+    ).strip()
+    task_author = str(
+        user.get("task_author", "")
+        or user.get("author", "")
+        or user.get("monitor_target_username", "")
+        or ""
+    ).strip()
+    profile_url = str(user.get("profile_url", "") or "").strip()
+
+    if normalized == "fixed":
+        final_text = clean_tiktok_video_comment_text(
+            user.get("_interaction_fixed_message", "") or fixed_text,
+            limit=120,
+        )
+        if not final_text:
+            raise RuntimeError("固定私信文案为空，无法执行。")
+        return final_text
+
+    system_prompt = (
+        "你是一个真实的TikTok普通用户，准备给对方发第一条私信。\n"
+        "要求：\n"
+        "1. 只输出一条可直接发送的私信，不要解释。\n"
+        "2. 语气自然、友好、像真人，不要客服腔，不要群发味道。\n"
+        "3. 不要直接索要联系方式，不要硬广，不要夸张，不要连续追问。\n"
+        "4. 控制在 14 到 48 个中文字符内，最多 56 个字符。\n"
+        "5. 可以基于对方的评论和视频上下文开场，但要像真实交流，不要照抄原评论。\n"
+        "6. 如果用户给了补充方向、核心观点或基准文案，必须优先遵守，不能跑偏。"
+    )
+
+    if normalized == "rewrite":
+        cleaned_seed = clean_tiktok_video_comment_text(seed_text, limit=120)
+        if not cleaned_seed:
+            raise RuntimeError("请先填写用于改编的私信基准文案。")
+        user_prompt = (
+            f"目标昵称：{username or '未知'}\n"
+            f"对方评论：{comment_text or '未知'}\n"
+            f"地区：{region or '未知'}\n"
+            f"来源视频：{task_title or '未知'}\n"
+            f"来源作者：{task_author or '未知'}\n"
+            f"主页链接：{profile_url or '未知'}\n"
+            f"基准文案：{cleaned_seed}\n\n"
+            "请把这条私信改写成一个新的版本。\n"
+            "要求：保持原来的方向、意图和语气，不要变成营销话术，不要太冒进。"
+        )
+        return request_tiktok_ai_comment(system_prompt, user_prompt)
+
+    direction = clean_tiktok_video_comment_text(prompt_text, limit=120)
+    user_prompt = (
+        f"目标昵称：{username or '未知'}\n"
+        f"对方评论：{comment_text or '未知'}\n"
+        f"地区：{region or '未知'}\n"
+        f"来源视频：{task_title or '未知'}\n"
+        f"来源作者：{task_author or '未知'}\n"
+        f"主页链接：{profile_url or '未知'}\n"
+        f"补充方向（高优先级，必须遵守）：{direction or '自然开场、像同行交流、先从对方评论切入'}\n\n"
+        "请生成一条适合发给对方的第一句私信。\n"
+        "额外要求：\n"
+        "1. 可以轻微结合对方评论或视频场景，但不要显得像复制粘贴模板。\n"
+        "2. 如果补充方向里有明确观点、目标或语气，必须围绕它来写。\n"
+        "3. 尽量像真实聊天开场，而不是完整销售话术。"
+    )
+    return request_tiktok_ai_comment(system_prompt, user_prompt)
+
+
+def load_tiktok_local_interaction_messages() -> List[str]:
+    """取「TikTok获客 → 私信互动」里保存的本地话术预设（最多 10 条）。
+
+    页面把预设存进 localStorage 并同步到本机设置（TIKTOK_INTERACTION_PRESET_KEY），
+    这里把它读出来 —— H5 排期/工作流触发私信时 payload 不带话术，需要回落到这份本地配置，
+    否则就会退到写死的默认文案（用户反馈"所有人都在发同一句"就是这么来的）。
+    """
+    try:
+        settings = load_tiktok_local_settings() or {}
+    except Exception:
+        return []
+    blob = settings.get(TIKTOK_INTERACTION_PRESET_KEY)
+    raw = blob.get("presets") if isinstance(blob, dict) else blob
+    if not isinstance(raw, list):
+        return []
+    out: List[str] = []
+    seen: Set[str] = set()
+    for item in raw:
+        text = clean_tiktok_video_comment_text(str(item or ""), limit=120)
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+        if len(out) >= 10:
+            break
+    return out
+
+
+def normalize_tiktok_interaction_fixed_messages(payload: Dict) -> List[str]:
+    messages: List[str] = []
+    raw_messages = payload.get("messages")
+    if isinstance(raw_messages, list):
+        for item in raw_messages:
+            text = clean_tiktok_video_comment_text(str(item or ""), limit=120)
+            if text:
+                messages.append(text)
+    if not messages:
+        fallback = clean_tiktok_video_comment_text(str(payload.get("message", "") or ""), limit=120)
+        if fallback:
+            messages.append(fallback)
+    if not messages:
+        # H5 节点不配话术（设计如此）：回落到「私信互动」里保存的本地预设
+        messages = load_tiktok_local_interaction_messages()
+
+    deduped: List[str] = []
+    seen = set()
+    for message in messages:
+        if message in seen:
+            continue
+        seen.add(message)
+        deduped.append(message)
+    return deduped
+
+
+def assign_tiktok_interaction_fixed_messages(users: List[Dict], messages: List[str]) -> None:
+    if not messages:
+        return
+    for index, user in enumerate(users):
+        user["_interaction_fixed_message"] = messages[index % len(messages)]
+
+
+TIKTOK_TAKEOVER_FORBIDDEN_REPLY_FLAGS = (
+    "微信",
+    "绿泡泡",
+    "weixin",
+    "wechat",
+    "WeChat",
+    "微信号",
+    "加个微",
+    "扣扣",
+)
+
+
+def _tiktok_takeover_memory_root() -> Optional[Path]:
+    """本机个人记忆（openclaw user_memory）根目录；取不到就返回 None。"""
+    try:
+        from backend.app.api.openclaw_memory import _USER_MEMORY_DIR  # type: ignore
+    except Exception:
+        return None
+    try:
+        root = Path(_USER_MEMORY_DIR)
+    except Exception:
+        return None
+    return root if root.is_dir() else None
+
+
+def _tiktok_takeover_memory_docs(user_id: int) -> List[Dict]:
+    try:
+        from backend.app.api.openclaw_memory import _load_index  # type: ignore
+    except Exception:
+        return []
+    try:
+        docs = _load_index(int(user_id))
+    except Exception:
+        return []
+    return [doc for doc in docs if isinstance(doc, dict)]
+
+
+def _tiktok_takeover_memory_doc_id(doc: Dict) -> str:
+    payload = doc if isinstance(doc, dict) else {}
+    return normalize_tiktok_text(payload.get("id") or payload.get("doc_id") or "")
+
+
+def _tiktok_takeover_memory_user_dirs() -> List[Path]:
+    root = _tiktok_takeover_memory_root()
+    if root is None:
+        return []
+    try:
+        entries = [entry for entry in root.glob("user_*") if entry.is_dir()]
+    except Exception:
+        return []
+
+    def sort_key(entry: Path) -> float:
+        try:
+            return float((entry / "index.json").stat().st_mtime)
+        except Exception:
+            return 0.0
+
+    return sorted(entries, key=sort_key, reverse=True)
+
+
+def resolve_tiktok_takeover_memory_user_id(selected_doc_ids: Optional[List[str]] = None) -> Optional[int]:
+    """按选中的记忆文件反查它属于哪个本机账号目录。
+
+    后台循环没有请求上下文、拿不到登录态里的 user_id，所以这里扫
+    ``openclaw/user_memory/user_*``：命中选中资料的目录就是它；没给资料时
+    退回最近更新的目录。
+    """
+    wanted = [normalize_tiktok_text(item) for item in (selected_doc_ids or []) if normalize_tiktok_text(item)]
+    wanted_set = set(wanted)
+    fallback: Optional[int] = None
+    for entry in _tiktok_takeover_memory_user_dirs():
+        try:
+            user_id = int(str(entry.name).split("_", 1)[1] or 0)
+        except Exception:
+            continue
+        if user_id <= 0:
+            continue
+        if fallback is None:
+            fallback = user_id
+        if not wanted_set:
+            return user_id
+        doc_ids = {_tiktok_takeover_memory_doc_id(doc) for doc in _tiktok_takeover_memory_docs(user_id)}
+        if wanted_set & doc_ids:
+            return user_id
+    return None if wanted_set else fallback
+
+
+def load_tiktok_takeover_memory_context(
+    selected_doc_ids: Optional[List[str]] = None,
+    *,
+    user_id: Optional[int] = None,
+    max_chars: int = TIKTOK_STRANGER_MESSAGE_TAKEOVER_MEMORY_MAX_CHARS,
+) -> Dict[str, object]:
+    """读取用户选中的「百问百答」类记忆文件，拼成给 AI 的资料块。"""
+    wanted = [normalize_tiktok_text(item) for item in (selected_doc_ids or []) if normalize_tiktok_text(item)]
+    empty: Dict[str, object] = {
+        "text": "",
+        "document_count": 0,
+        "titles": [],
+        "user_id": int(user_id or 0) or None,
+    }
+    if not wanted:
+        return empty
+    resolved_user_id = int(user_id or 0) or int(resolve_tiktok_takeover_memory_user_id(wanted) or 0)
+    if resolved_user_id <= 0:
+        return empty
+    try:
+        from backend.app.api.openclaw_memory import _read_canonical_memory_content  # type: ignore
+    except Exception:
+        return empty
+    wanted_set = set(wanted)
+    docs = [
+        doc
+        for doc in _tiktok_takeover_memory_docs(resolved_user_id)
+        if _tiktok_takeover_memory_doc_id(doc) in wanted_set
+    ]
+    docs.sort(key=lambda doc: wanted.index(_tiktok_takeover_memory_doc_id(doc)))
+    parts: List[str] = []
+    titles: List[str] = []
+    used = 0
+    for doc in docs[:3]:
+        remaining = int(max_chars) - used
+        if remaining <= 0:
+            break
+        title = normalize_tiktok_text(doc.get("title") or doc.get("filename") or "记忆资料") or "记忆资料"
+        try:
+            text = str(_read_canonical_memory_content(doc, max_chars=min(5000, remaining)) or "").strip()
+        except Exception:
+            text = ""
+        if not text:
+            continue
+        block = f"## {title}\n{text}"
+        parts.append(block)
+        titles.append(title[:120])
+        used += len(block)
+    return {
+        "text": "\n\n---\n\n".join(parts).strip()[: int(max_chars)],
+        "document_count": len(titles),
+        "titles": titles,
+        "user_id": resolved_user_id,
+    }
+
+
+def build_tiktok_takeover_conversation_context(row: Dict, *, limit: int = 8) -> str:
+    """把已经打开的会话气泡拼成「对话上下文」，供记忆接管生成回复。"""
+    payload = row if isinstance(row, dict) else {}
+    lines: List[str] = []
+    messages = payload.get("messages")
+    if isinstance(messages, list):
+        for item in messages[-max(1, int(limit or 8)) :]:
+            if not isinstance(item, dict):
+                continue
+            text = clean_tiktok_video_comment_text(item.get("text") or "", limit=60)
+            if not text:
+                continue
+            direction = str(item.get("direction") or "").strip().lower()
+            if direction:
+                is_incoming = direction == "incoming"
+            else:
+                is_incoming = bool(item.get("is_incoming"))
+            lines.append(f"{'对方' if is_incoming else '我'}：{text}")
+    if not lines:
+        incoming = clean_tiktok_video_comment_text(
+            payload.get("incoming_message") or payload.get("preview_text") or "",
+            limit=120,
+        )
+        if incoming:
+            lines.append(f"对方：{incoming}")
+    return "\n".join(lines)
+
+
+def generate_tiktok_takeover_memory_reply_with_wechat(
+    row: Dict,
+    *,
+    memory_context: str = "",
+    prompt_text: str = "",
+) -> Dict[str, str]:
+    """循环接管：依据记忆文件 + 多轮对话上下文回复，同时让 AI 判断有没有可能有微信号。
+
+    返回 {"message": "回复文本（1-2 行）", "wechat_id": "", "evidence": ""}。
+    微信号必须过 looks_like_tiktok_wechat_id，AI 编的号 / TikTok号一律丢弃。
+    """
+    memory_text = str(memory_context or "").strip()
+    if not memory_text:
+        raise RuntimeError("没有可用的记忆文件内容，无法生成接管回复。")
+    payload = row if isinstance(row, dict) else {}
+    username = normalize_tiktok_text(payload.get("username", ""))
+    latest = clean_tiktok_video_comment_text(
+        payload.get("incoming_message") or payload.get("preview_text") or "",
+        limit=200,
+    )
+    conversation = build_tiktok_takeover_conversation_context(payload)
+    direction = clean_tiktok_video_comment_text(prompt_text, limit=200)
+    system_prompt = (
+        "你正在用TikTok私信和一位潜在客户聊天，你就是本人，不是客服系统。\n"
+        "回复必须遵守：\n"
+        "1. 只依据下面给出的『参考记忆资料』和『对话上下文』回答；资料里没有的信息不要编造、不要承诺。\n"
+        "2. 资料里有对应答案时，用你自己的话简短复述要点，可以保留关键数字和承诺，但不要整段照抄。\n"
+        "3. 资料里没有答案时，就自然回应当前这句，并引导对方多说一点需求，不要瞎猜。\n"
+        "4. 只输出 1 到 2 行中文，每行一条短消息，单行最多 40 个字符。\n"
+        "5. 不要提 AI、系统、机器人、模板、引流这类词，不要让人看出是机器人在回复。\n"
+        "6. 不要主动提微信、绿泡泡、微信号、QQ 等任何联系方式，也不要引导对方换平台沟通。\n"
+        "7. 语气自然、像真人打字，不要长篇大论，不要营销腔。\n"
+        "8. 如果给了补充方向，必须优先遵守。\n"
+        "9. 回复之前先判断一遍：对方在这段对话里有没有留下他自己的微信号？"
+        "客户经常不带「微信/vx/加我」这种字眼，直接甩一串号（例如 zm_kd3、jin10190922）。"
+        "只有能确定那是他本人的微信号才填进 wechat_id；"
+        "如果那串是他的TikTok号、昵称、订单号，或者你只是猜测，就留空字符串，不要自己编一个号。\n"
+        "只输出一个 JSON 对象，不要解释、不要代码块："
+        '{"replies": ["<第一行回复>", "<第二行回复，没有就省略>"], '
+        '"wechat_id": "<对方自己的微信号，没有就空字符串>", '
+        '"evidence": "<原文里能证明的片段，没有就空字符串>"}'
+    )
+    user_prompt = (
+        f"客户昵称：{username or '未知'}\n"
+        f"对方最新私信：{latest or '未知'}\n"
+        f"补充方向（高优先级）：{direction or '围绕记忆资料回答问题，自然承接对话'}\n\n"
+        f"对话上下文（越靠后越新）：\n{conversation or '（本轮刚建立联系，没有更早的上下文）'}\n\n"
+        f"参考记忆资料：\n{memory_text}\n\n"
+        "请输出规定的 JSON：replies 里放 1 到 2 行简短回复（每行一句、不超过 40 字），"
+        "并顺手判断对方有没有留下微信号填进 wechat_id。"
+    )
+    ai_text = request_tiktok_ai_comment(system_prompt, user_prompt, max_tokens=520, response_limit=900)
+    raw = str(ai_text or "").strip()
+    reply_lines: List[str] = []
+    wechat_id = ""
+    evidence = ""
+    start, end = raw.find("{"), raw.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            parsed = json.loads(raw[start:end + 1])
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict):
+            replies = parsed.get("replies")
+            if isinstance(replies, str):
+                replies = [replies]
+            if isinstance(replies, list):
+                reply_lines = [str(item) for item in replies if str(item).strip()]
+            elif parsed.get("reply"):
+                reply_lines = [str(parsed.get("reply"))]
+            candidate = normalize_tiktok_text(parsed.get("wechat_id") or "")
+            if looks_like_tiktok_wechat_id(candidate):
+                wechat_id = candidate
+                evidence = str(parsed.get("evidence") or "").strip()[:120]
+    if not reply_lines:
+        # 兼容 AI 没按 JSON 回的旧行为：整段当回复，微信号留空
+        reply_lines = [raw]
+    lines: List[str] = []
+    seen: Set[str] = set()
+    for raw_line in "\n".join(reply_lines).replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = clean_tiktok_message_line(raw_line, limit=48)
+        if not line or line in seen:
+            continue
+        if any(flag in line for flag in TIKTOK_TAKEOVER_FORBIDDEN_REPLY_FLAGS):
+            continue
+        seen.add(line)
+        lines.append(line)
+        if len(lines) >= 2:
+            break
+    if not lines:
+        raise RuntimeError("AI 生成的接管回复不可用，本轮放弃发送，等下一轮。")
+    return {"message": "\n".join(lines), "wechat_id": wechat_id, "evidence": evidence}
+
+
+def generate_tiktok_takeover_memory_reply(
+    row: Dict,
+    *,
+    memory_context: str = "",
+    prompt_text: str = "",
+) -> str:
+    """兼容旧调用：只返回回复文本（记忆接管现在走 with_wechat 版本，顺便判微信号）。"""
+    result = generate_tiktok_takeover_memory_reply_with_wechat(
+        row,
+        memory_context=memory_context,
+        prompt_text=prompt_text,
+    )
+    return str(result.get("message") or "")
+
+
+def generate_tiktok_stranger_reply_message(
+    row: Dict,
+    *,
+    mode: Optional[str],
+    fixed_text: str = "",
+    prompt_text: str = "",
+    contact_value: str = "",
+    memory_context: str = "",
+) -> str:
+    normalized = normalize_tiktok_stranger_reply_mode(mode)
+    if normalized == "fixed":
+        final_text = str(fixed_text or "").strip()
+        if not final_text:
+            raise RuntimeError("固定引流文案为空，无法执行。")
+        return final_text
+
+    if normalized == "ai_memory":
+        return generate_tiktok_takeover_memory_reply(
+            row,
+            memory_context=memory_context,
+            prompt_text=prompt_text,
+        )
+
+    if normalized == "ai_auto":
+        incoming_message = clean_tiktok_video_comment_text(
+            row.get("incoming_message", "") or row.get("preview_text", ""),
+            limit=120,
+        )
+        direction = clean_tiktok_video_comment_text(prompt_text, limit=120)
+        system_prompt = (
+            "你正在回复TikTok私信。只输出1到2句自然、简短的中文回复，"
+            "先回应对方当前消息，不要提及AI、系统、引流或固定模板。"
+        )
+        user_prompt = (
+            f"对方昵称：{row.get('username') or '未知'}\n"
+            f"对方消息：{incoming_message or '未知'}\n"
+            f"补充方向：{direction or '自然承接对话'}"
+        )
+        try:
+            ai_text = request_tiktok_ai_comment(system_prompt, user_prompt, max_tokens=100)
+        except Exception as exc:
+            tiktok_log(f"[TikTok私信接管] AI 自动回复不可用，使用短回复兜底：{exc}", "warning")
+            return "你好，看到你的消息了，我来回复你。"
+        lines: List[str] = []
+        seen_lines: Set[str] = set()
+        for raw_line in str(ai_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+            line = clean_tiktok_message_line(raw_line, limit=24)
+            if not line or line in seen_lines:
+                continue
+            if any(flag in line for flag in ("AI", "系统", "引流", "微信", "绿泡泡")):
+                continue
+            seen_lines.add(line)
+            lines.append(line)
+            if len(lines) >= 2:
+                break
+        return "\n".join(lines) or "你好，看到你的消息了，我来回复你。"
+
+    cleaned_contact = normalize_tiktok_text(contact_value)
+    if not cleaned_contact:
+        raise RuntimeError("请先填写联系方式。")
+
+    username = str(row.get("username", "") or "").strip()
+    incoming_message = clean_tiktok_video_comment_text(
+        row.get("incoming_message", "") or row.get("preview_text", ""),
+        limit=120,
+    )
+    time_text = str(row.get("time_text", "") or "").strip()
+    unread_count = max(0, int(row.get("unread_count", 0) or 0))
+    direction = clean_tiktok_video_comment_text(prompt_text, limit=120)
+
+    system_prompt = (
+        "你是一个真实的人，正在回复TikTok私信。\n"
+        "你的目标是自然地把对方引导到绿泡泡继续沟通，但不能显得像客服、机器人或模板群发。\n"
+        "要求：\n"
+        "1. 只输出前置回复内容，不要输出“麻烦您绿泡泡”，不要输出联系方式。\n"
+        "2. 只输出 1 到 2 行，每行一条短消息。\n"
+        "3. 每行尽量控制在 4 到 14 个中文字符内，最多 18 个字符。\n"
+        "4. 语气自然、简短、像真人聊天，不要长篇解释，不要营销，不要夸张。\n"
+        "5. 可以简单回应对方的问题，但不要一次讲太多细节，要为后续加绿泡泡留空间。\n"
+        "6. 不要重复用户原话，不要出现 AI、系统、机器人、引流、联系方式、微信、绿泡泡 等词。\n"
+        "7. 如果用户给了补充方向，必须优先遵守。"
+    )
+    user_prompt = (
+        f"对方昵称：{username or '未知'}\n"
+        f"对方最近私信：{incoming_message or '未知'}\n"
+        f"消息时间：{time_text or '未知'}\n"
+        f"未读数：{unread_count}\n"
+        f"补充方向（高优先级，必须遵守）：{direction or '先自然回应，再顺着把对方引到绿泡泡继续聊'}\n\n"
+        "请只输出 1 到 2 行简短回复，每行一句。"
+    )
+
+    ai_text = request_tiktok_ai_comment(system_prompt, user_prompt, max_tokens=120)
+    ai_lines: List[str] = []
+    seen = set()
+    for raw_line in str(ai_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = clean_tiktok_message_line(raw_line, limit=18)
+        if not line:
+            continue
+        if any(flag in line for flag in ("绿泡泡", "微信", cleaned_contact)):
+            continue
+        if line in seen:
+            continue
+        seen.add(line)
+        ai_lines.append(line)
+        if len(ai_lines) >= 2:
+            break
+
+    if not ai_lines:
+        ai_lines = ["有的", "我发您看看"]
+
+    return append_tiktok_contact_lines("\n".join(ai_lines), cleaned_contact, split_contact=True)
+
+
+def generate_tiktok_inbox_reply_message(
+    row: Dict,
+    *,
+    mode: Optional[str],
+    fixed_text: str = "",
+    prompt_text: str = "",
+    contact_value: str = "",
+) -> str:
+    normalized = normalize_tiktok_inbox_reply_mode(mode)
+    username = str(row.get("username", "") or "").strip()
+    incoming_message = clean_tiktok_video_comment_text(
+        row.get("incoming_message", "") or row.get("preview_text", ""),
+        limit=120,
+    )
+    prompt_seed = clean_tiktok_video_comment_text(prompt_text, limit=120)
+
+    if normalized == "fixed":
+        final_text = str(fixed_text or "").strip()
+        if not final_text:
+            raise RuntimeError("固定回复文案为空，无法执行。")
+        return append_tiktok_contact_lines(final_text, contact_value, split_contact=True)
+
+    cleaned_contact = normalize_tiktok_text(contact_value)
+    if not cleaned_contact:
+        raise RuntimeError("请先填写绿泡泡联系方式。")
+
+    system_prompt = (
+        "你是一个真实的人，正在回复TikTok私信。\n"
+        "你的目标是先自然回应对方，再把对方引导到绿泡泡继续沟通。\n"
+        "要求：\n"
+        "1. 只输出前置回复内容，不要直接输出联系方式。\n"
+        "2. 只输出 1 到 2 句，每句都要很短。\n"
+        "3. 每句尽量控制在 4 到 18 个中文字符内。\n"
+        "4. 语气自然、口语化、简短，不要客服腔，不要长篇解释。\n"
+        "5. 可以简单回应对方的问题，但不要一下子把所有内容说完。\n"
+        "6. 不要出现 AI、系统、机器人、引流、联系方式、微信、绿泡泡 等词。\n"
+        "7. 如果给了回复方向或基准意图，必须优先遵守。"
+    )
+
+    if normalized == "rewrite":
+        if not prompt_seed:
+            raise RuntimeError("请先填写 AI 同方向回复的方向或基准文案。")
+        user_prompt = (
+            f"对方昵称：{username or '未知'}\n"
+            f"对方最近私信：{incoming_message or '未知'}\n"
+            f"回复方向 / 基准意图：{prompt_seed}\n\n"
+            "请按这个方向改写成 1 到 2 句很短的私信回复。"
+        )
+    else:
+        user_prompt = (
+            f"对方昵称：{username or '未知'}\n"
+            f"对方最近私信：{incoming_message or '未知'}\n"
+            f"补充方向（可选，高优先级）：{prompt_seed or '先自然回应，再引导对方去绿泡泡继续聊'}\n\n"
+            "请生成 1 到 2 句很短的私信回复。"
+        )
+
+    ai_text = request_tiktok_ai_comment(system_prompt, user_prompt, max_tokens=120)
+    ai_lines: List[str] = []
+    seen = set()
+    for raw_line in str(ai_text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = clean_tiktok_message_line(raw_line, limit=18)
+        if not line:
+            continue
+        if any(flag in line for flag in ("绿泡泡", "微信", cleaned_contact)):
+            continue
+        if line in seen:
+            continue
+        seen.add(line)
+        ai_lines.append(line)
+        if len(ai_lines) >= 2:
+            break
+
+    if not ai_lines:
+        ai_lines = ["收到", "我发您看看"]
+
+    return append_tiktok_contact_lines("\n".join(ai_lines), cleaned_contact, split_contact=True)
+
+
+def generate_tiktok_self_comment_reply_message(
+    row: Dict,
+    *,
+    mode: Optional[str],
+    fixed_text: str = "",
+    prompt_text: str = "",
+    contact_value: str = "",
+) -> str:
+    normalized = normalize_tiktok_inbox_reply_mode(mode)
+    username = str(row.get("username", "") or "").strip()
+    comment_text = clean_tiktok_video_comment_text(
+        row.get("comment", "") or row.get("content", ""),
+        limit=120,
+    )
+    video_title = clean_tiktok_video_comment_text(row.get("video_title", "") or row.get("title", ""), limit=120)
+    prompt_seed = clean_tiktok_video_comment_text(prompt_text, limit=120)
+
+    if normalized == "fixed":
+        final_text = str(fixed_text or "").strip()
+        if not final_text:
+            raise RuntimeError("固定回复文案为空，无法回复评论。")
+        return append_tiktok_contact_lines(final_text, contact_value)
+
+    cleaned_contact = normalize_tiktok_text(contact_value)
+    if not cleaned_contact:
+        raise RuntimeError("请先填写联系方式。")
+
+    system_prompt = (
+        "你正在以TikTok作者的身份回复自己作品评论区里的潜在客户。\n"
+        "要求：\n"
+        "1. 只输出一条可直接发送的评论回复，不要解释。\n"
+        "2. 语气自然、像真人，先回应对方评论，再轻轻引导继续沟通。\n"
+        "3. 不要显得像客服或群发，不要夸张营销。\n"
+        "4. 前半段不要直接输出联系方式；系统会在末尾补充联系方式。\n"
+        "5. 控制在 1 到 2 句，尽量短。"
+    )
+    if normalized == "rewrite":
+        if not prompt_seed:
+            raise RuntimeError("请先填写 AI 同方向回复的方向或基准文案。")
+        user_prompt = (
+            f"评论用户：{username or '未知'}\n"
+            f"用户评论：{comment_text or '未知'}\n"
+            f"来源作品：{video_title or '未知'}\n"
+            f"回复方向 / 基准意图：{prompt_seed}\n\n"
+            "请按这个方向改写成一条自然的评论回复。"
+        )
+    else:
+        user_prompt = (
+            f"评论用户：{username or '未知'}\n"
+            f"用户评论：{comment_text or '未知'}\n"
+            f"来源作品：{video_title or '未知'}\n"
+            f"补充方向：{prompt_seed or '自然回应需求，引导对方继续沟通'}\n\n"
+            "请生成一条适合回复在评论区的短回复。"
+        )
+
+    ai_text = request_tiktok_ai_comment(system_prompt, user_prompt, max_tokens=120)
+    clean_text = clean_tiktok_video_comment_text(ai_text, limit=80)
+    if not clean_text:
+        clean_text = "可以的，我发你看看"
+    return append_tiktok_contact_lines(clean_text, cleaned_contact)
+
+
+def validate_tiktok_inbox_reply_settings(
+    *,
+    auto_reply_enabled: bool,
+    reply_mode: str,
+    reply_message: str = "",
+    reply_prompt: str = "",
+    contact_value: str = "",
+    reply_image_path: str = "",
+) -> Optional[str]:
+    if not auto_reply_enabled:
+        return None
+    normalized_mode = normalize_tiktok_inbox_reply_mode(reply_mode)
+    if normalized_mode == "fixed":
+        if not str(reply_message or "").strip() and not str(reply_image_path or "").strip():
+            return "开启私信聚合自动回复前，请先填写固定回复文案。"
+        return None
+    if normalized_mode == "rewrite" and not str(reply_prompt or "").strip():
+        return "开启 AI 同方向回复前，请先填写回复方向或基准文案。"
+    if not normalize_tiktok_text(contact_value):
+        return "开启 AI 自动回复前，请先填写绿泡泡联系方式。"
+    return None
+
+
+restore_tiktok_tasks_state()
+restore_tiktok_precise_touch_state()
+restore_tiktok_customer_pools_state()
+restore_tiktok_group_member_results()
+restore_tiktok_schedule_plans()
+# Do not synchronously rebuild and rewrite the complete customer-pool tables
+# during module import.  ``restore_tiktok_customer_pools_state`` already
+# reconstructs the pools in memory from the task/monitor state; the old
+# fallback made every backend startup block on a full JSON/SQLite rewrite.
+# The next real state mutation persists the current pools normally.
+
+
+def get_next_monitor_run_time(now: Optional[datetime] = None) -> datetime:
+    current = now or datetime.now()
+    candidates = []
+    for hour, minute, _label in TIKTOK_MONITOR_SLOTS:
+        slot = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if slot > current:
+            candidates.append(slot)
+    if candidates:
+        return min(candidates)
+    next_day = current + timedelta(days=1)
+    return next_day.replace(hour=TIKTOK_MONITOR_SLOTS[0][0], minute=TIKTOK_MONITOR_SLOTS[0][1], second=0, microsecond=0)
+
+
+def get_latest_due_monitor_slot(now: Optional[datetime] = None) -> tuple[Optional[str], Optional[datetime]]:
+    current = now or datetime.now()
+    due_slots: List[tuple[datetime, str]] = []
+    for hour, minute, label in TIKTOK_MONITOR_SLOTS:
+        slot_time = current.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if current >= slot_time:
+            due_slots.append((slot_time, f"{current.strftime('%Y-%m-%d')} {label}"))
+    if not due_slots:
+        return None, None
+    due_slots.sort(key=lambda item: item[0])
+    latest = due_slots[-1]
+    return latest[1], latest[0]
+
+
+def build_monitor_comment_key(row: Dict) -> str:
+    comment_id = normalize_tiktok_text(row.get("comment_id", ""))
+    if comment_id:
+        return f"id:{comment_id}"
+    return "|".join(
+        [
+            normalize_tiktok_text(row.get("user_id", "")),
+            normalize_tiktok_text(row.get("username", "")),
+            normalize_tiktok_text(row.get("comment", row.get("content", ""))),
+            normalize_tiktok_text(row.get("comment_time", "")),
+        ]
+    )
+
+
+def build_monitor_user_key(row: Dict) -> str:
+    sec_user_id = normalize_tiktok_text(row.get("sec_user_id", ""))
+    user_id = normalize_tiktok_text(row.get("user_id", ""))
+    profile_url = normalize_tiktok_text(row.get("profile_url", ""))
+    username = normalize_tiktok_text(row.get("username", ""))
+    return "|".join([sec_user_id, user_id, profile_url, username])
+
+
+def build_monitor_comment_match_keys(row: Dict) -> set[str]:
+    if not isinstance(row, dict):
+        return set()
+    normalized = normalize_high_intent_user(row)
+    normalized["profile_url"] = ensure_tiktok_profile_url(normalized)
+    keys: set[str] = set()
+
+    comment_key = build_monitor_comment_key(normalized)
+    if comment_key:
+        keys.add(f"comment:{comment_key}")
+    strict_key = user_choice_key(normalized)
+    if strict_key:
+        keys.add(f"strict:{strict_key}")
+    loose_key = user_choice_loose_key(normalized)
+    if loose_key:
+        keys.add(f"loose:{loose_key}")
+
+    comment_index = normalize_tiktok_text(normalized.get("comment_index", ""))
+    if comment_index:
+        keys.add(f"index:{comment_index}")
+    content = normalize_tiktok_text(normalized.get("comment", normalized.get("content", "")))
+    username = normalize_tiktok_text(normalized.get("username", ""))
+    user_id = normalize_tiktok_text(normalized.get("user_id", ""))
+    sec_user_id = normalize_tiktok_text(normalized.get("sec_user_id", ""))
+    profile_url = normalize_tiktok_text(normalized.get("profile_url", ""))
+    if username and content:
+        keys.add(f"username_content:{username}|{content}")
+    if user_id and content:
+        keys.add(f"user_content:{user_id}|{content}")
+    if sec_user_id and content:
+        keys.add(f"sec_content:{sec_user_id}|{content}")
+    if profile_url and content:
+        keys.add(f"profile_content:{profile_url}|{content}")
+
+    user_key = build_monitor_user_key(normalized)
+    if user_key and (user_id or sec_user_id or profile_url):
+        keys.add(f"user:{user_key}")
+    return keys
+
+
+def build_monitor_precise_user_index(precise_users: List[Dict]) -> Dict[str, Dict]:
+    index: Dict[str, Dict] = {}
+    for user in precise_users or []:
+        if not isinstance(user, dict):
+            continue
+        normalized = normalize_high_intent_user(user)
+        normalized["profile_url"] = ensure_tiktok_profile_url(normalized)
+        for key in build_monitor_comment_match_keys(normalized):
+            index.setdefault(key, normalized)
+    return index
+
+
+def find_monitor_precise_match(row: Dict, precise_index: Dict[str, Dict]) -> Optional[Dict]:
+    if not precise_index:
+        return None
+    for key in build_monitor_comment_match_keys(row):
+        match = precise_index.get(key)
+        if match:
+            return match
+    return None
+
+
+def parse_monitor_video_sort_timestamp(video: Dict) -> float:
+    for key in ("publish_timestamp", "create_time"):
+        try:
+            value = float(video.get(key, 0) or 0)
+        except Exception:
+            value = 0
+        if value > 0:
+            return value
+    for key in ("publish_time", "publish_time_text"):
+        value = str(video.get(key, "") or "").strip()
+        if not value:
+            continue
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(value, fmt).timestamp()
+            except Exception:
+                continue
+    return 0
+
+
+def parse_monitor_video_seen_timestamp(video: Dict) -> float:
+    for key in ("last_seen_at", "updated_at"):
+        value = str(video.get(key, "") or "").strip()
+        if not value:
+            continue
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(value, fmt).timestamp()
+            except Exception:
+                continue
+    return 0
+
+
+def normalize_monitor_author_name(value: object) -> str:
+    text = normalize_tiktok_text(value)
+    for suffix in ("的TikTok", "TikTok号", " - TikTok", "- TikTok", " TikTok"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+    return text
+
+
+def extract_monitor_video_author_sec_user_id(video: Dict) -> str:
+    if not isinstance(video, dict):
+        return ""
+    for key in ("author_sec_user_id", "author_sec_uid", "author_secUid", "sec_user_id", "sec_uid", "secUid"):
+        value = normalize_tiktok_text(video.get(key, ""))
+        if value:
+            return value
+    raw = video.get("raw") if isinstance(video.get("raw"), dict) else {}
+    author = raw.get("author") if isinstance(raw.get("author"), dict) else {}
+    for key in ("sec_uid", "sec_user_id"):
+        value = normalize_tiktok_text(author.get(key, ""))
+        if value:
+            return value
+    return ""
+
+
+def is_monitor_video_for_target(video: Dict, target: Dict) -> bool:
+    if not isinstance(video, dict) or not isinstance(target, dict):
+        return True
+    target_sec_user_id = normalize_tiktok_text(target.get("sec_user_id", ""))
+    video_author_sec_user_id = extract_monitor_video_author_sec_user_id(video)
+    if target_sec_user_id and video_author_sec_user_id:
+        return target_sec_user_id == video_author_sec_user_id
+
+    target_name = normalize_monitor_author_name(target.get("username", ""))
+    video_author = normalize_monitor_author_name(video.get("author", ""))
+    if target_name and video_author:
+        return target_name == video_author
+
+    # Once a target has a stable identity, an item with no matching author
+    # identity must not be silently mixed into that target's video list.
+    if target_sec_user_id:
+        return False
+
+    return True
+
+
+def filter_monitor_videos_for_target(videos: List[Dict], target: Dict) -> List[Dict]:
+    return [video for video in (videos or []) if is_monitor_video_for_target(video, target)]
+
+
+def load_monitor_targets_bundle() -> List[Dict]:
+    targets = tiktok_state_store.load_tiktok_monitor_targets()
+    videos = tiktok_state_store.load_tiktok_monitor_videos()
+    videos_by_target: Dict[int, List[Dict]] = {}
+    for video in videos:
+        target_id = int(video.get("target_id", 0) or 0)
+        if target_id <= 0:
+            continue
+        videos_by_target.setdefault(target_id, []).append(video)
+
+    result = []
+    for target in targets:
+        if str(target.get("status", "active") or "active").strip() != "active":
+            continue
+        target_id = int(target.get("target_id", 0) or 0)
+        target_videos = filter_monitor_videos_for_target(videos_by_target.get(target_id, []), target)
+        target_videos.sort(
+            key=lambda row: (
+                1 if parse_monitor_video_sort_timestamp(row) > 0 else 0,
+                parse_monitor_video_sort_timestamp(row),
+                parse_monitor_video_seen_timestamp(row),
+                -int(row.get("video_order", 9999) or 9999),
+                str(row.get("aweme_id", "") or ""),
+            ),
+            reverse=True,
+        )
+        result.append(
+            {
+                **target,
+                "videos": target_videos[:10],
+                "video_count": len(target_videos),
+                "selected_video_count": sum(1 for video in target_videos if video.get("is_selected")),
+                "new_video_count": sum(1 for video in target_videos if video.get("is_new")),
+            }
+        )
+    return result
+
+
+def distribute_monitor_video_jobs(jobs: List[Dict], accounts: List[Dict]) -> List[Dict]:
+    active_accounts = accounts[: max(1, min(len(accounts), len(jobs)))]
+    buckets = [{"account": account, "jobs": []} for account in active_accounts]
+    for index, job in enumerate(jobs):
+        buckets[index % len(buckets)]["jobs"].append(job)
+    return [bucket for bucket in buckets if bucket["jobs"]]
+
+
+def merge_monitor_videos(
+    existing_videos: List[Dict],
+    fetched_videos: List[Dict],
+    *,
+    initial_sync: bool,
+    auto_collect_new: bool,
+) -> List[Dict]:
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    existing_by_aweme = {
+        str(video.get("aweme_id", "") or "").strip(): dict(video)
+        for video in existing_videos or []
+        if isinstance(video, dict) and str(video.get("aweme_id", "") or "").strip()
+    }
+    merged = []
+    seen = set()
+    for index, raw_video in enumerate(fetched_videos or [], start=1):
+        if not isinstance(raw_video, dict):
+            continue
+        aweme_id = str(raw_video.get("aweme_id", "") or "").strip()
+        if not aweme_id or aweme_id in seen:
+            continue
+        seen.add(aweme_id)
+        existing = existing_by_aweme.get(aweme_id, {})
+        is_existing = bool(existing)
+        existing_collection_status = str(existing.get("collection_status", "") or "").strip().lower()
+        if not existing_collection_status:
+            if str(existing.get("last_collect_error", "") or "").strip():
+                existing_collection_status = "failed"
+            elif str(existing.get("last_collected_at", "") or "").strip():
+                existing_collection_status = "completed"
+            elif not is_existing and not initial_sync and auto_collect_new:
+                existing_collection_status = "pending"
+        merged.append(
+            {
+                **existing,
+                **raw_video,
+                "aweme_id": aweme_id,
+                "video_order": index,
+                "first_seen_at": str(existing.get("first_seen_at", "") or now_text),
+                "last_seen_at": now_text,
+                "last_collected_at": str(existing.get("last_collected_at", "") or ""),
+                "collection_status": existing_collection_status,
+                "last_collect_error": str(existing.get("last_collect_error", "") or "").strip(),
+                "is_selected": bool(
+                    existing.get("is_selected", False)
+                    if is_existing
+                    else (False if initial_sync else auto_collect_new)
+                ),
+                "is_new": not is_existing,
+            }
+        )
+
+    for aweme_id, existing in existing_by_aweme.items():
+        if aweme_id in seen:
+            continue
+        merged.append(
+            {
+                **existing,
+                "is_new": False,
+            }
+        )
+    merged.sort(key=lambda row: (int(row.get("video_order", 9999) or 9999), row.get("last_seen_at", "")))
+    return merged
+
+
+def select_monitor_videos_for_collection(
+    videos: List[Dict],
+    *,
+    auto_collect_new: bool = True,
+) -> List[Dict]:
+    selected: List[Dict] = []
+    seen_aweme_ids: Set[str] = set()
+    for video in videos or []:
+        if not isinstance(video, dict):
+            continue
+        aweme_id = str(video.get("aweme_id", "") or "").strip()
+        if not aweme_id or aweme_id in seen_aweme_ids:
+            continue
+        collection_status = str(video.get("collection_status", "") or "").strip().lower()
+        should_collect = bool(video.get("is_selected")) or (
+            bool(auto_collect_new)
+            and not str(video.get("last_collected_at", "") or "").strip()
+            and (
+                bool(video.get("is_new"))
+                or collection_status in {"pending", "failed", "unconfirmed", "processing"}
+            )
+        )
+        if not should_collect:
+            continue
+        selected.append(video)
+        seen_aweme_ids.add(aweme_id)
+    return selected
+
+
+def update_monitor_video_collection_state(
+    target_id: int,
+    aweme_id: str,
+    status: str,
+    *,
+    error: str = "",
+) -> None:
+    """Persist collection outcome without making an unreadable result look empty."""
+    target_id = int(target_id or 0)
+    aweme_id = str(aweme_id or "").strip()
+    if target_id <= 0 or not aweme_id:
+        return
+    normalized_status = str(status or "pending").strip().lower() or "pending"
+    videos = tiktok_state_store.load_tiktok_monitor_videos(target_id)
+    changed = False
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for item in videos:
+        if str(item.get("aweme_id", "") or "").strip() != aweme_id:
+            continue
+        item["collection_status"] = normalized_status
+        item["last_collect_error"] = str(error or "").strip()
+        item["last_collect_attempt_at"] = now_text
+        if normalized_status == "completed":
+            item["last_collected_at"] = now_text
+            item["is_new"] = False
+        else:
+            # Keep automatic new-video selection eligible for the next cycle.
+            item["last_collected_at"] = ""
+            if normalized_status in {"failed", "unconfirmed"}:
+                item["is_new"] = True
+        changed = True
+        break
+    if changed:
+        tiktok_state_store.save_tiktok_monitor_videos(target_id, videos)
+
+
+def resolve_monitor_target_profile_identity(target: Dict) -> str:
+    profile_url = str(target.get("profile_url", "") or "").strip()
+    if profile_url:
+        return profile_url
+    return str(target.get("sec_user_id", "") or "").strip()
+
+
+async def prepare_tiktok_monitor_protocol_channel(account: Dict, *, start_url: str = "https://www.tiktok.com/") -> tuple[object, object]:
+    from .tiktok_comment_api_experiment import TikTokCommentApiExperiment
+
+    browser_result = await ensure_tiktok_account_browser_ready_async(account, start_url=start_url)
+    if int(browser_result.get("code", 0) or 0) != 200:
+        raise RuntimeError(str(browser_result.get("msg", "") or "账号浏览器预热失败"))
+    protocol_client = TikTokCommentApiExperiment(
+        account_id=account["id"],
+        cdp_port=account["port"],
+    )
+    protocol_auth = await protocol_client.extract_auth()
+    return protocol_client, protocol_auth
+
+
+def build_monitor_comment_rows(
+    target: Dict,
+    video: Dict,
+    comments: List[Dict],
+    precise_users: List[Dict],
+) -> List[Dict]:
+    precise_index = build_monitor_precise_user_index(precise_users)
+    rows = []
+    for comment in comments or []:
+        if not isinstance(comment, dict):
+            continue
+        normalized = normalize_high_intent_user(comment)
+        normalized["profile_url"] = ensure_tiktok_profile_url(normalized)
+        comment_key = build_monitor_comment_key(normalized)
+        user_key = build_monitor_user_key(normalized)
+        if not comment_key:
+            continue
+        precise_match = find_monitor_precise_match(normalized, precise_index)
+        if precise_match:
+            for key in ("intent_level", "score", "reason"):
+                value = precise_match.get(key, "")
+                if value not in (None, ""):
+                    normalized[key] = value
+        rows.append(
+            {
+                **normalized,
+                "target_id": int(target.get("target_id", 0) or 0),
+                "target_username": str(target.get("username", "") or ""),
+                "target_profile_url": str(target.get("profile_url", "") or ""),
+                "target_sec_user_id": str(target.get("sec_user_id", "") or ""),
+                "aweme_id": str(video.get("aweme_id", "") or ""),
+                "video_title": str(video.get("title", "") or ""),
+                "video_url": str(video.get("url", "") or ""),
+                "video_cover_image": str(video.get("cover_image", "") or ""),
+                "comment_key": comment_key,
+                "user_key": user_key,
+                "is_high_intent": bool(precise_match),
+                "source": "tiktok_monitor",
+            }
+        )
+    return rows
+
+
+def merge_monitor_action_state(target: Dict, comment: Dict, prefix: str, extra_fields: List[str]) -> None:
+    status_key = f"{prefix}_status"
+    incoming_status = str(comment.get(status_key, "") or "").strip()
+    if not incoming_status:
+        return
+
+    current_status = str(target.get(status_key, "") or "").strip()
+    status_priority = {
+        "": 0,
+        "pending": 1,
+        "queued": 2,
+        "processing": 3,
+        "failed": 4,
+        "interrupted": 4,
+        "skipped": 4,
+        "completed": 5,
+        "sent": 5,
+    }
+    incoming_updated = str(comment.get(f"{prefix}_updated_at", "") or "")
+    current_updated = str(target.get(f"{prefix}_updated_at", "") or "")
+    should_replace = (
+        status_priority.get(incoming_status, 1) > status_priority.get(current_status, 1)
+        or (incoming_updated and incoming_updated >= current_updated)
+    )
+    if not should_replace:
+        return
+
+    target[status_key] = incoming_status
+    for field in extra_fields:
+        key = f"{prefix}_{field}"
+        if key in comment:
+            target[key] = comment.get(key, "")
+
+
+def build_monitor_customer_pools(target_id: int | None = None) -> tuple[List[Dict], List[Dict]]:
+    targets = {
+        int(item.get("target_id", 0) or 0): item
+        for item in tiktok_state_store.load_tiktok_monitor_targets()
+    }
+    videos = {
+        (int(item.get("target_id", 0) or 0), str(item.get("aweme_id", "") or "").strip()): item
+        for item in tiktok_state_store.load_tiktok_monitor_videos(target_id)
+    }
+    comments = tiktok_state_store.load_tiktok_monitor_comments(target_id)
+
+    all_rows_map: Dict[str, Dict] = {}
+    precise_rows_map: Dict[str, Dict] = {}
+
+    for comment in comments:
+        if not isinstance(comment, dict):
+            continue
+        target_ref = targets.get(int(comment.get("target_id", 0) or 0), {})
+        video_ref = videos.get(
+            (
+                int(comment.get("target_id", 0) or 0),
+                str(comment.get("aweme_id", "") or "").strip(),
+            ),
+            {},
+        )
+        user_key = build_monitor_user_key(comment)
+        if not user_key:
+            continue
+        target_bucket = all_rows_map.get(user_key)
+        last_seen_at = str(comment.get("last_seen_at", "") or "")
+        source_video_key = f"{comment.get('target_id', 0)}|{comment.get('aweme_id', '')}"
+        if not target_bucket:
+            target_bucket = {
+                "target_id": int(comment.get("target_id", 0) or 0),
+                "monitor_target_id": int(comment.get("target_id", 0) or 0),
+                "target_username": str(target_ref.get("username", comment.get("target_username", "")) or ""),
+                "monitor_target_username": str(target_ref.get("username", comment.get("target_username", "")) or ""),
+                "target_profile_url": str(target_ref.get("profile_url", comment.get("target_profile_url", "")) or ""),
+                "monitor_target_profile_url": str(target_ref.get("profile_url", comment.get("target_profile_url", "")) or ""),
+                "target_avatar_url": str(target_ref.get("avatar_url", "") or ""),
+                "monitor_target_avatar_url": str(target_ref.get("avatar_url", "") or ""),
+                "username": str(comment.get("username", "") or ""),
+                "user_id": str(comment.get("user_id", "") or ""),
+                "sec_user_id": str(comment.get("sec_user_id", "") or ""),
+                "profile_url": ensure_tiktok_profile_url(comment),
+                "avatar_url": str(comment.get("avatar_url", comment.get("avatar", "")) or ""),
+                "comment": str(comment.get("comment", comment.get("content", "")) or ""),
+                "content": str(comment.get("comment", comment.get("content", "")) or ""),
+                "comment_time": str(comment.get("comment_time", "") or ""),
+                "region": str(comment.get("region", comment.get("location", "")) or ""),
+                "last_seen_at": last_seen_at,
+                "first_seen_at": str(comment.get("first_seen_at", "") or ""),
+                "source_video_count": 0,
+                "comment_count": 0,
+                "seen_count_total": 0,
+                "is_high_intent": False,
+                "interaction_status": "pending",
+                "interaction_error": "",
+                "interaction_message": "",
+                "interaction_account_id": "",
+                "interaction_started_at": "",
+                "interaction_finished_at": "",
+                "interaction_updated_at": "",
+                "follow_comment_status": "pending",
+                "follow_comment_error": "",
+                "follow_comment_text": "",
+                "follow_comment_account_id": "",
+                "follow_comment_result": "",
+                "follow_comment_started_at": "",
+                "follow_comment_finished_at": "",
+                "follow_comment_updated_at": "",
+                "latest_video_title": str(video_ref.get("title", comment.get("video_title", "")) or ""),
+                "latest_video_url": str(video_ref.get("url", comment.get("video_url", "")) or ""),
+                "video_cover_image": str(video_ref.get("cover_image", comment.get("video_cover_image", "")) or ""),
+                "source": "tiktok_monitor",
+                "_source_videos": set(),
+            }
+            all_rows_map[user_key] = target_bucket
+        if last_seen_at >= str(target_bucket.get("last_seen_at", "") or ""):
+            target_bucket["comment"] = str(comment.get("comment", comment.get("content", "")) or "")
+            target_bucket["content"] = str(comment.get("comment", comment.get("content", "")) or "")
+            target_bucket["comment_time"] = str(comment.get("comment_time", "") or "")
+            target_bucket["region"] = str(comment.get("region", comment.get("location", "")) or "")
+            target_bucket["last_seen_at"] = last_seen_at
+            target_bucket["latest_video_title"] = str(video_ref.get("title", comment.get("video_title", "")) or "")
+            target_bucket["latest_video_url"] = str(video_ref.get("url", comment.get("video_url", "")) or "")
+            target_bucket["video_cover_image"] = str(video_ref.get("cover_image", comment.get("video_cover_image", "")) or "")
+        target_bucket["first_seen_at"] = min(
+            [value for value in [str(target_bucket.get("first_seen_at", "") or ""), str(comment.get("first_seen_at", "") or "")] if value] or [""]
+        )
+        target_bucket["comment_count"] = int(target_bucket.get("comment_count", 0) or 0) + 1
+        target_bucket["seen_count_total"] = int(target_bucket.get("seen_count_total", 0) or 0) + int(comment.get("seen_count", 0) or 0)
+        target_bucket["is_high_intent"] = bool(target_bucket.get("is_high_intent")) or bool(comment.get("is_high_intent"))
+        merge_monitor_action_state(
+            target_bucket,
+            comment,
+            "interaction",
+            ["error", "message", "account_id", "started_at", "finished_at", "updated_at"],
+        )
+        merge_monitor_action_state(
+            target_bucket,
+            comment,
+            "follow_comment",
+            ["error", "text", "account_id", "result", "started_at", "finished_at", "updated_at"],
+        )
+        target_bucket["_source_videos"].add(source_video_key)
+
+        if comment.get("is_high_intent"):
+            precise_rows_map[user_key] = target_bucket
+
+    all_rows = []
+    for row in all_rows_map.values():
+        row["source_video_count"] = len(row.pop("_source_videos", set()))
+        all_rows.append(row)
+    precise_rows = []
+    for row in precise_rows_map.values():
+        precise_rows.append(dict(row))
+
+    all_rows.sort(key=lambda row: (str(row.get("last_seen_at", "") or ""), str(row.get("comment_time", "") or "")), reverse=True)
+    precise_rows.sort(key=lambda row: (str(row.get("last_seen_at", "") or ""), str(row.get("comment_time", "") or "")), reverse=True)
+    return all_rows, precise_rows
+
+
+async def sync_monitor_target_profile_and_videos(
+    target: Dict,
+    scraper: TikTokCommentScraper,
+    *,
+    initial_sync: bool,
+    protocol_client: object = None,
+    protocol_auth: object = None,
+) -> Dict:
+    payload = {}
+    sync_method = "script"
+    protocol_error = ""
+    profile_url = str(target.get("profile_url", "") or "")
+    profile_identity = resolve_monitor_target_profile_identity(target)
+    # TikTok 协议通道未接入，同行作品同步固定走页面模式。
+    protocol_client = None
+    protocol_auth = None
+    if protocol_client is not None and protocol_auth is not None:
+        try:
+            payload = await asyncio.to_thread(
+                lambda: protocol_client.get_user_posts(
+                    protocol_auth,
+                    profile_identity,
+                    max_videos=10,
+                )
+            )
+            sync_method = "protocol"
+            tiktok_log(
+                f"[TikTok同行监控] 已通过协议同步同行最新作品：{target.get('username') or profile_url}",
+                "info",
+            )
+        except Exception as exc:
+            protocol_error = str(exc)
+            tiktok_log(
+                f"[TikTok同行监控] 协议同步同行作品失败，自动回退页面同步：{target.get('username') or profile_url}，原因：{exc}",
+                "warning",
+            )
+            payload = {}
+    if not payload:
+        payload = await scraper.scrape_profile_videos(
+            profile_url,
+            max_videos=10,
+            logger=tiktok_log,
+        )
+    profile = payload.get("profile", {}) if isinstance(payload, dict) else {}
+    fetched_videos = payload.get("videos", []) if isinstance(payload, dict) else []
+    existing_videos = tiktok_state_store.load_tiktok_monitor_videos(int(target.get("target_id", 0) or 0))
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    profile_data = profile if isinstance(profile, dict) else {}
+    merged_profile_url = str(profile_data.get("profile_url") or target.get("profile_url") or "").strip()
+    merged_sec_user_id = str(
+        profile_data.get("sec_user_id")
+        or profile_data.get("sec_uid")
+        or target.get("sec_user_id")
+        or (payload.get("sec_user_id") if isinstance(payload, dict) else "")
+        or ""
+    ).strip()
+    merged_target = tiktok_state_store.save_tiktok_monitor_target(
+        {
+            **target,
+            **profile_data,
+            "profile_url": merged_profile_url,
+            "sec_user_id": merged_sec_user_id,
+            "last_video_sync_at": now_text,
+            "next_run_at": get_next_monitor_run_time().strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "active",
+            "last_video_sync_method": sync_method,
+            "last_video_sync_error": protocol_error,
+        }
+    )
+    valid_existing_videos = filter_monitor_videos_for_target(existing_videos, merged_target)
+    valid_fetched_videos = filter_monitor_videos_for_target(fetched_videos, merged_target)
+    dropped_existing = len(existing_videos) - len(valid_existing_videos)
+    dropped_fetched = len(fetched_videos) - len(valid_fetched_videos)
+    if dropped_existing or dropped_fetched:
+        tiktok_log(
+            f"[TikTok同行监控] 已按同行身份过滤视频：{merged_target.get('username') or merged_target.get('sec_user_id') or '-'} "
+            f"历史丢弃 {dropped_existing} 条，本次丢弃 {dropped_fetched} 条",
+            "warning",
+        )
+    if dropped_existing and int(merged_target.get("target_id", 0) or 0) > 0:
+        tiktok_state_store.delete_tiktok_monitor_videos(
+            int(merged_target.get("target_id", 0) or 0),
+            [
+                str(video.get("aweme_id", "") or "").strip()
+                for video in existing_videos
+                if isinstance(video, dict)
+                and str(video.get("aweme_id", "") or "").strip()
+                and video not in valid_existing_videos
+            ],
+        )
+    merged_videos = merge_monitor_videos(
+        valid_existing_videos,
+        valid_fetched_videos,
+        initial_sync=initial_sync,
+        auto_collect_new=bool(merged_target.get("auto_collect_new", True)),
+    )
+    tiktok_state_store.save_tiktok_monitor_videos(int(merged_target.get("target_id", 0) or 0), merged_videos)
+    tiktok_state_store.append_tiktok_monitor_video_snapshots(
+        [
+            {
+                "target_id": int(merged_target.get("target_id", 0) or 0),
+                "aweme_id": str(video.get("aweme_id", "") or ""),
+                "captured_at": now_text,
+                "likes": int(video.get("likes", 0) or 0),
+                "comments": int(video.get("comments", 0) or 0),
+                "video_title": str(video.get("title", "") or ""),
+                "video_url": str(video.get("url", "") or ""),
+            }
+            for video in merged_videos
+            if str(video.get("aweme_id", "") or "").strip()
+        ]
+    )
+    visible_videos = filter_monitor_videos_for_target(merged_videos, merged_target)
+    return {
+        **merged_target,
+        "videos": visible_videos[:10],
+    }
+
+
+async def run_tiktok_monitor_comment_worker(
+    jobs: List[Dict],
+    account: Dict,
+    config: Dict,
+    state_lock: asyncio.Lock,
+    run_payload: Dict,
+):
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    ai_client = create_ai_client()
+    protocol_client = None
+    protocol_auth = None
+    try:
+        try:
+            from .tiktok_comment_api_experiment import TikTokCommentApiExperiment
+
+            warmup_url = str((jobs[0] if jobs else {}).get("video", {}).get("url", "") or "").strip()
+            if not warmup_url:
+                warmup_url = "https://www.tiktok.com/"
+            browser_result = await ensure_tiktok_account_browser_ready_async(account, start_url=warmup_url)
+            if int(browser_result.get("code", 0) or 0) == 200:
+                protocol_client = TikTokCommentApiExperiment(account_id=account["id"], cdp_port=account["port"])
+                protocol_auth = await protocol_client.extract_auth()
+                tiktok_log(
+                    f"[TikTok同行监控] 账号 {account['id']} 已准备协议评论采集通道，失败时会自动回退页面脚本。",
+                    "info",
+                )
+            else:
+                tiktok_log(
+                    f"[TikTok同行监控] 账号 {account['id']} 浏览器预热失败，评论采集将使用页面脚本：{browser_result.get('msg', '')}",
+                    "warning",
+                )
+        except Exception as exc:
+            protocol_client = None
+            protocol_auth = None
+            tiktok_log(
+                f"[TikTok同行监控] 账号 {account['id']} 协议评论采集通道不可用，将使用页面脚本：{exc}",
+                "warning",
+            )
+        tiktok_log(
+            f"[TikTok同行监控] 账号 {account['id']} 已接管 {len(jobs)} 条视频采集任务",
+            "info",
+        )
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            target = job.get("target", {}) if isinstance(job.get("target"), dict) else {}
+            video = job.get("video", {}) if isinstance(job.get("video"), dict) else {}
+            target_id = int(job.get("target_id", target.get("target_id", 0)) or 0)
+            aweme_id = str(job.get("aweme_id", video.get("aweme_id", "")) or "").strip()
+            if target_id <= 0 or not aweme_id:
+                continue
+
+            tiktok_log(
+                f"[TikTok同行监控] 账号 {account['id']} 开始采集视频：{video.get('title') or video.get('url')}",
+                "info",
+            )
+            update_monitor_video_collection_state(target_id, aweme_id, "processing")
+            max_comments = max(20, min(int(config.get("comment_max_comments", 200) or 200), 500))
+            comments = []
+            collection_method = "script"
+            if protocol_client is not None and protocol_auth is not None:
+                try:
+                    expected_value = None
+                    for expected_key in ("comments", "comment_count", "source_comment_count"):
+                        if expected_key in video and video.get(expected_key) is not None:
+                            try:
+                                expected_value = max(0, int(video.get(expected_key) or 0))
+                            except (TypeError, ValueError):
+                                expected_value = None
+                            break
+                    comments_payload = await asyncio.to_thread(
+                        lambda: protocol_client.get_all_comments(
+                            protocol_auth,
+                            str(video.get("url", "") or ""),
+                            max_comments=max_comments,
+                        )
+                    )
+                    raw_comments = comments_payload.get("comments", []) if isinstance(comments_payload, dict) else []
+                    comments = [
+                        normalize_tiktok_protocol_comment_row(row, task=video, index=index)
+                        for index, row in enumerate(raw_comments)
+                        if isinstance(row, dict)
+                    ]
+                    if not _protocol_comment_result_confirmed(
+                        comments_payload,
+                        comments,
+                        expected_total=expected_value,
+                    ):
+                        payload_keys = sorted(str(key) for key in comments_payload.keys()) if isinstance(comments_payload, dict) else []
+                        tiktok_log(
+                            f"[TikTok同行监控] 协议评论结果未确认 aweme_id={aweme_id} raw_count={len(raw_comments)} expected_total={expected_value} payload_keys={payload_keys}",
+                            "warning",
+                        )
+                        raise TikTokCommentCollectionUnconfirmed(
+                            "协议接口返回空评论但未明确确认作品无评论"
+                        )
+                    collection_method = "protocol"
+                    tiktok_log(
+                        f"[TikTok同行监控] 账号 {account['id']} 已通过协议采集视频评论 {len(comments)} 条：{video.get('title') or video.get('url')}",
+                        "info",
+                    )
+                except Exception as exc:
+                    tiktok_log(
+                        f"[TikTok同行监控] 协议采集评论失败，自动回退页面脚本：{video.get('title') or video.get('url')}，原因：{exc}",
+                        "warning",
+                    )
+                    comments = []
+                    collection_method = "script"
+            if collection_method != "protocol":
+                try:
+                    comments = await scraper.scrape_video_comments(
+                        str(video.get("url", "") or ""),
+                        max_comments=max_comments,
+                        max_scroll_rounds=max(20, min(int(config.get("comment_scroll_rounds", 120) or 120), 300)),
+                        logger=tiktok_log,
+                    )
+                except Exception as exc:
+                    failure = {
+                        "target_id": int(target_id or 0),
+                        "aweme_id": aweme_id,
+                        "video_url": str(video.get("url", "") or ""),
+                        "error": str(exc),
+                    }
+                    async with state_lock:
+                        run_payload["failed_videos"] = int(run_payload.get("failed_videos", 0) or 0) + 1
+                        run_payload.setdefault("failure_details", []).append(failure)
+                    tiktok_log(
+                        f"[TikTok同行监控] 评论采集未确认，保留视频待下轮重试：{video.get('title') or video.get('url')}，原因：{exc}",
+                        "error",
+                    )
+                    update_monitor_video_collection_state(
+                        target_id,
+                        aweme_id,
+                        "unconfirmed",
+                        error=str(exc),
+                    )
+                    continue
+            existing_comment_keys = {
+                str(item.get("comment_key", "") or "")
+                for item in tiktok_state_store.load_tiktok_monitor_comments(target_id)
+                if str(item.get("aweme_id", "") or "").strip() == aweme_id
+            }
+            fresh_comments = []
+            for comment in comments:
+                key = build_monitor_comment_key(comment)
+                if not key or key in existing_comment_keys:
+                    continue
+                fresh_comments.append(comment)
+
+            precise_users = []
+            if fresh_comments:
+                _filter_prompt = get_tiktok_comment_direction(config)
+                _filter_strategy = get_tiktok_comment_filter_strategy(config)
+                _filter_started_at = time.time()
+                log_tiktok_filter_event(
+                    "start",
+                    scope="monitor_cycle",
+                    target_id=int(target_id or 0),
+                    aweme_id=str(aweme_id or ""),
+                    title=video.get("title", ""),
+                    comments_in=len(fresh_comments),
+                    strategy=_filter_strategy,
+                    prompt=_filter_prompt,
+                )
+                try:
+                    precise_users = await asyncio.to_thread(
+                        lambda: ai_client.filter_comments(
+                            str(video.get("title", "") or ""),
+                            fresh_comments,
+                            _filter_prompt,
+                            "tiktok_transactional",
+                            "",
+                            _filter_strategy,
+                            event_logger=log_tiktok_filter_event,
+                        )
+                    )
+                except Exception as _filter_exc:
+                    log_tiktok_filter_event(
+                        "error",
+                        scope="monitor_cycle",
+                        target_id=int(target_id or 0),
+                        aweme_id=str(aweme_id or ""),
+                        title=video.get("title", ""),
+                        comments_in=len(fresh_comments),
+                        strategy=_filter_strategy,
+                        duration_ms=int((time.time() - _filter_started_at) * 1000),
+                        error=str(_filter_exc),
+                    )
+                    raise
+                log_tiktok_filter_event(
+                    "done",
+                    scope="monitor_cycle",
+                    target_id=int(target_id or 0),
+                    aweme_id=str(aweme_id or ""),
+                    title=video.get("title", ""),
+                    comments_in=len(fresh_comments),
+                    precise_out=len(precise_users or []),
+                    strategy=_filter_strategy,
+                    duration_ms=int((time.time() - _filter_started_at) * 1000),
+                )
+                comment_rows = build_monitor_comment_rows(target, video, fresh_comments, precise_users)
+                for row in comment_rows:
+                    row["collect_method"] = collection_method
+                tiktok_state_store.save_tiktok_monitor_comments(comment_rows)
+                async with state_lock:
+                    run_payload["new_comments"] = int(run_payload.get("new_comments", 0) or 0) + len(comment_rows)
+                    run_payload["new_precise"] = int(run_payload.get("new_precise", 0) or 0) + len(precise_users)
+
+            async with state_lock:
+                update_monitor_video_collection_state(target_id, aweme_id, "completed")
+    finally:
+        await scraper.close()
+
+
+async def run_tiktok_monitor_cycle(
+    *,
+    trigger_type: str = "manual",
+    target_ids: Optional[List[int]] = None,
+    slot_key: str = "",
+) -> Dict:
+    global tiktok_monitor_runtime_state
+    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    next_run_at = get_next_monitor_run_time().strftime("%Y-%m-%d %H:%M:%S")
+    tiktok_monitor_runtime_state.update(
+        {
+            "running": True,
+            "message": "同行监控执行中",
+            "last_error": "",
+            "next_run_at": next_run_at,
+        }
+    )
+
+    run_payload = {
+        "trigger_type": trigger_type,
+        "slot_key": slot_key,
+        "status": "running",
+        "started_at": started_at,
+        "finished_at": "",
+        "target_ids": target_ids or [],
+        "targets_total": 0,
+        "videos_total": 0,
+        "new_comments": 0,
+        "new_precise": 0,
+        "failed_videos": 0,
+        "failure_details": [],
+        "skipped_targets_no_selection": 0,
+        "error": "",
+        "message": "",
+    }
+
+    config = load_global_config()
+    nurture_conflict = build_tiktok_nurture_conflict("执行同行监控")
+    if nurture_conflict:
+        message = str(nurture_conflict.get("msg", "") or "账号养号正在运行，无法执行同行监控。")
+        finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tiktok_monitor_runtime_state.update(
+            {
+                "running": False,
+                "message": message,
+                "last_error": message,
+                "last_run_at": finished_at,
+                "next_run_at": next_run_at,
+            }
+        )
+        run_payload.update({"status": "failed", "finished_at": finished_at, "error": message, "message": message})
+        tiktok_state_store.save_tiktok_monitor_run(run_payload)
+        return run_payload
+    accounts = get_online_tiktok_accounts(config)
+    if not accounts:
+        message = "当前没有在线TikTok账号，无法执行同行监控。"
+        tiktok_monitor_runtime_state.update(
+            {
+                "running": False,
+                "message": message,
+                "last_error": message,
+                "last_run_at": started_at,
+                "next_run_at": next_run_at,
+            }
+        )
+        run_payload.update({"status": "failed", "finished_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "error": message})
+        tiktok_state_store.save_tiktok_monitor_run(run_payload)
+        return run_payload
+
+    sync_account = accounts[0]
+    normalized_target_ids = {int(target_id) for target_id in (target_ids or [])}
+    bundle = load_monitor_targets_bundle()
+    active_targets = [
+        item for item in bundle
+        if str(item.get("status", "active") or "active").strip() == "active"
+        and (not normalized_target_ids or int(item.get("target_id", 0) or 0) in normalized_target_ids)
+    ]
+    run_payload["targets_total"] = len(active_targets)
+
+    scraper = TikTokCommentScraper(account_id=sync_account["id"], cdp_port=sync_account["port"])
+    try:
+        sync_protocol_client = None
+        sync_protocol_auth = None
+        try:
+            sync_protocol_client, sync_protocol_auth = await prepare_tiktok_monitor_protocol_channel(sync_account)
+            tiktok_log(
+                f"[TikTok同行监控] 账号 {sync_account['id']} 已准备协议作品同步通道。",
+                "info",
+            )
+        except Exception as exc:
+            sync_protocol_client = None
+            sync_protocol_auth = None
+            tiktok_log(
+                f"[TikTok同行监控] 协议作品同步通道不可用，将使用页面方式：{exc}",
+                "warning",
+            )
+
+        synced_targets_map: Dict[int, Dict] = {}
+        jobs: List[Dict] = []
+        for target in active_targets:
+            target_id = int(target.get("target_id", 0) or 0)
+            if target_id <= 0:
+                continue
+            tiktok_log(
+                f"[TikTok同行监控] 账号 {sync_account['id']} 开始同步同行：{target.get('username') or target.get('profile_url')}",
+                "info",
+            )
+            synced = await sync_monitor_target_profile_and_videos(
+                target,
+                scraper,
+                initial_sync=False,
+                protocol_client=sync_protocol_client,
+                protocol_auth=sync_protocol_auth,
+            )
+            synced_targets_map[target_id] = synced
+            videos = synced.get("videos", []) if isinstance(synced, dict) else []
+            auto_collect_new = bool(synced.get("auto_collect_new", True))
+            candidate_videos = select_monitor_videos_for_collection(
+                videos,
+                auto_collect_new=auto_collect_new,
+            )
+            if not candidate_videos:
+                run_payload["skipped_targets_no_selection"] = int(run_payload.get("skipped_targets_no_selection", 0) or 0) + 1
+                tiktok_log(
+                    f"[TikTok同行监控] 本轮无需要采集的视频：{synced.get('username') or synced.get('profile_url')}。已同步最新作品，未发现自动采集的新视频或手动勾选视频。",
+                    "warning",
+                )
+            run_payload["videos_total"] = int(run_payload.get("videos_total", 0) or 0) + len(candidate_videos)
+            for video in candidate_videos:
+                aweme_id = str(video.get("aweme_id", "") or "").strip()
+                if not aweme_id:
+                    continue
+                jobs.append(
+                    {
+                        "target": synced,
+                        "video": video,
+                        "target_id": target_id,
+                        "aweme_id": aweme_id,
+                    }
+                )
+
+        used_account_count = 1
+        if jobs:
+            batches = distribute_monitor_video_jobs(jobs, accounts)
+            used_account_count = len(batches)
+            state_lock = asyncio.Lock()
+            tiktok_log(
+                f"[TikTok同行监控] 已启动 {used_account_count} 个账号并发，共 {len(jobs)} 条视频采集任务",
+                "info",
+            )
+            await asyncio.gather(
+                *[
+                    run_tiktok_monitor_comment_worker(
+                        item["jobs"],
+                        item["account"],
+                        config,
+                        state_lock,
+                        run_payload,
+                    )
+                    for item in batches
+                ]
+            )
+
+        finished_collect_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for synced in synced_targets_map.values():
+            tiktok_state_store.save_tiktok_monitor_target(
+                {
+                    **synced,
+                    "last_collect_at": finished_collect_at,
+                    "next_run_at": next_run_at,
+                }
+            )
+
+        finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        run_payload.update(
+            {
+                "status": "completed",
+                "finished_at": finished_at,
+            }
+        )
+        if int(run_payload.get("videos_total", 0) or 0) <= 0:
+            message = f"同行监控已完成，使用 {used_account_count} 个账号同步，本轮没有勾选任何监控视频，只同步了主页和视频列表。"
+        else:
+            message = (
+                f"同行监控已完成，使用 {used_account_count} 个账号并发，本轮新增评论 {run_payload['new_comments']} 条，新增精准客户 {run_payload['new_precise']} 人。"
+            )
+            failed_videos = int(run_payload.get("failed_videos", 0) or 0)
+            if failed_videos:
+                message += f" 另有 {failed_videos} 个视频评论未确认，未标记为已采集，将在下轮重试。"
+            skipped = int(run_payload.get("skipped_targets_no_selection", 0) or 0)
+            if skipped > 0:
+                message += f" 另有 {skipped} 个同行因未勾选视频而只做了视频同步。"
+        run_payload["message"] = message
+        if int(run_payload.get("failed_videos", 0) or 0) > 0:
+            run_payload["status"] = "partial"
+        tiktok_monitor_runtime_state.update(
+            {
+                "running": False,
+                "message": message,
+                "last_error": message if int(run_payload.get("failed_videos", 0) or 0) > 0 else "",
+                "last_run_at": finished_at,
+                "next_run_at": next_run_at,
+                "last_slot_key": slot_key,
+            }
+        )
+        tiktok_log(
+            tiktok_monitor_runtime_state["message"],
+            "warning" if int(run_payload.get("failed_videos", 0) or 0) > 0 else "success",
+        )
+        tiktok_state_store.save_tiktok_monitor_run(run_payload)
+        return run_payload
+    except Exception as exc:
+        finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tiktok_monitor_runtime_state.update(
+            {
+                "running": False,
+                "message": f"同行监控失败：{exc}",
+                "last_error": str(exc),
+                "last_run_at": finished_at,
+                "next_run_at": next_run_at,
+            }
+        )
+        run_payload.update({"status": "failed", "finished_at": finished_at, "error": str(exc), "message": str(exc)})
+        tiktok_log(f"[TikTok同行监控] 失败：{exc}", "error")
+        tiktok_state_store.save_tiktok_monitor_run(run_payload)
+        raise
+    finally:
+        await scraper.close()
+
+
+async def tiktok_monitor_scheduler_loop():
+    global tiktok_monitor_runtime_state
+    while True:
+        try:
+            now = datetime.now()
+            next_run = get_next_monitor_run_time(now)
+            latest_run = tiktok_state_store.load_latest_tiktok_monitor_run()
+            slot_key, slot_time = get_latest_due_monitor_slot(now)
+            tiktok_monitor_runtime_state["next_run_at"] = next_run.strftime("%Y-%m-%d %H:%M:%S")
+            if (
+                slot_key
+                and slot_time
+                and not tiktok_monitor_runtime_state.get("running")
+                and not tiktok_schedule_external_work
+            ):
+                if (
+                    reconcile_tiktok_account_nurture_runtime_state()
+                    and tiktok_account_nurture_scheduler
+                    and tiktok_account_nurture_scheduler.is_actively_blocking_other_tasks()
+                ):
+                    if str(tiktok_monitor_runtime_state.get("last_slot_key", "") or "") != slot_key:
+                        tiktok_monitor_runtime_state["last_slot_key"] = slot_key
+                        tiktok_log("[TikTok同行监控] 跳过本次定时执行：当前账号养号运行中。", "warning")
+                elif str(latest_run.get("slot_key", "") or "") != slot_key:
+                    await run_tiktok_monitor_cycle(trigger_type="scheduled", slot_key=slot_key)
+            await asyncio.sleep(45)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            tiktok_monitor_runtime_state.update(
+                {
+                    "running": False,
+                    "last_error": str(exc),
+                    "message": f"同行监控调度异常：{exc}",
+                }
+            )
+            tiktok_log(f"[TikTok同行监控] 调度异常：{exc}", "error")
+            await asyncio.sleep(60)
+
+
+async def ensure_tiktok_monitor_scheduler():
+    global tiktok_monitor_scheduler_task, tiktok_monitor_scheduler_started
+    if tiktok_monitor_scheduler_started and tiktok_monitor_scheduler_task and not tiktok_monitor_scheduler_task.done():
+        return
+    tiktok_monitor_scheduler_started = True
+    tiktok_monitor_runtime_state["next_run_at"] = get_next_monitor_run_time().strftime("%Y-%m-%d %H:%M:%S")
+    tiktok_monitor_scheduler_task = asyncio.create_task(tiktok_monitor_scheduler_loop())
+
+
+def set_tiktok_schedule_external_work(
+    holder_id: str,
+    *,
+    active: bool,
+    label: str = "",
+) -> None:
+    """Prevent the autonomous scheduler from racing a claimed server task."""
+    normalized_id = str(holder_id or "").strip()
+    if not normalized_id:
+        return
+    if active:
+        tiktok_schedule_external_work[normalized_id] = {
+            "label": str(label or "server scheduled task").strip(),
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    else:
+        tiktok_schedule_external_work.pop(normalized_id, None)
+
+
+def get_tiktok_schedule_external_work() -> List[Dict[str, str]]:
+    return [
+        {"holder_id": holder_id, **dict(item)}
+        for holder_id, item in tiktok_schedule_external_work.items()
+    ]
+
+
+def get_tiktok_schedule_busy_reason(*, include_external: bool = True) -> str:
+    if include_external and tiktok_schedule_external_work:
+        holder_id, holder = next(iter(tiktok_schedule_external_work.items()))
+        label = str(holder.get("label") or holder_id).strip()
+        return f"服务器任务正在执行：{label}"
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+    reconcile_tiktok_inbox_runtime_state()
+    reconcile_tiktok_account_nurture_runtime_state()
+    nurture_conflict = build_tiktok_nurture_conflict("执行排期中心")
+    if nurture_conflict:
+        return str(nurture_conflict.get("msg", "") or "养号任务正在运行")
+    if tiktok_running:
+        return "评论采集任务正在执行"
+    if tiktok_video_comment_running:
+        return "视频评论任务正在执行"
+    if tiktok_mention_comment_running:
+        return "评论@精准客户任务正在执行"
+    if tiktok_follow_comment_running:
+        return "关注评论任务正在执行"
+    if tiktok_interaction_running:
+        return "私信任务正在执行"
+    if tiktok_group_member_running:
+        return "群成员提取任务正在执行"
+    if tiktok_stranger_message_running:
+        return "私信引流任务正在执行"
+    if tiktok_inbox_running:
+        return "TikTok inbox task is running"
+    if any(task and not task.done() for task in tiktok_inbox_monitor_tasks_by_account.values()):
+        return "TikTok inbox monitor is running"
+    if any(task and not task.done() for task in tiktok_stranger_message_monitor_tasks_by_account.values()):
+        return "TikTok private-message monitor is running"
+    if any(bool(state.get("running")) for state in list_tiktok_self_comment_monitor_states()):
+        return "我的评论区任务正在执行"
+    return ""
+
+
+def match_tiktok_tasks_for_rows(rows: List[Dict]) -> List[Dict]:
+    matched: List[Dict] = []
+    seen_ids: Set[int] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        session_id = str(row.get("source_session_id", "") or "").strip()
+        item_key = str(row.get("source_item_key", "") or "").strip()
+        url = str(row.get("url", "") or "").strip()
+        title = str(row.get("title", "") or "").strip()
+        author = str(row.get("author", "") or "").strip()
+        for task in tiktok_tasks:
+            task_id = int(task.get("id", 0) or 0)
+            if task_id <= 0 or task_id in seen_ids:
+                continue
+            same_source = (
+                session_id
+                and item_key
+                and session_id == str(task.get("source_session_id", "") or "").strip()
+                and item_key == str(task.get("source_item_key", "") or "").strip()
+            )
+            same_meta = (
+                url == str(task.get("url", "") or "").strip()
+                and title == str(task.get("title", "") or "").strip()
+                and author == str(task.get("author", "") or "").strip()
+            )
+            if same_source or same_meta:
+                matched.append(task)
+                seen_ids.add(task_id)
+                break
+    return matched
+
+
+def collect_plan_follow_comment_users(plan: Dict[str, object]) -> List[Dict]:
+    rows = collect_tiktok_interaction_users()
+    max_users = max(1, int(plan.get("max_users_per_run", 30) or 30))
+    candidates = [
+        row
+        for row in rows
+        if str(row.get("follow_comment_status", "pending") or "pending").strip() != "completed"
+    ]
+    candidates.sort(
+        key=lambda row: parse_comment_timestamp(str(row.get("comment_time", "") or "")) or 0,
+        reverse=True,
+    )
+    return candidates[:max_users]
+
+
+def collect_plan_interaction_users(plan: Dict[str, object]) -> List[Dict]:
+    rows = collect_tiktok_interaction_users()
+    max_users = max(1, int(plan.get("max_users_per_run", 30) or 30))
+    require_follow_done = bool(plan.get("require_follow_comment_completed", False))
+    candidates = []
+    for row in rows:
+        if str(row.get("interaction_status", "pending") or "pending").strip() == "sent":
+            continue
+        if require_follow_done and str(row.get("follow_comment_status", "pending") or "pending").strip() != "completed":
+            continue
+        candidates.append(row)
+    candidates.sort(
+        key=lambda row: parse_comment_timestamp(str(row.get("comment_time", "") or "")) or 0,
+        reverse=True,
+    )
+    return candidates[:max_users]
+
+
+async def _await_tiktok_schedule_worker(
+    background_task: Optional[asyncio.Task],
+    *,
+    plan: Dict[str, object],
+    action: str,
+) -> Dict[str, object]:
+    """Keep a local schedule occupied until its background worker finishes.
+
+    Start endpoints intentionally return as soon as a worker is queued for
+    interactive callers.  A scheduled plan, however, owns the shared TikTok
+    browser for the whole worker lifetime; releasing the schedule lock at
+    launch time lets another plan or a cloud workflow race that worker.
+    """
+    plan_id = str(plan.get("id", "") or "").strip()
+    plan_name = str(plan.get("name", "") or "未命名计划").strip()
+    if not background_task:
+        tiktok_log(
+            f"[TikTok排期中心] worker 缺失，计划={plan_name}({plan_id}) action={action}，视为已结束",
+            "warning",
+        )
+        return {"waited": False, "elapsed_seconds": 0.0}
+
+    started = asyncio.get_running_loop().time()
+    tiktok_log(
+        f"[TikTok排期中心] 等待 worker 完成，计划={plan_name}({plan_id}) action={action}",
+        "info",
+    )
+    try:
+        # Shield the worker from scheduler shutdown cancellation.  A user
+        # stop still cancels the worker itself and is reported below.
+        await asyncio.shield(background_task)
+    except asyncio.CancelledError:
+        if background_task.cancelled():
+            tiktok_log(
+                f"[TikTok排期中心] worker 被取消，计划={plan_name}({plan_id}) action={action}",
+                "warning",
+            )
+            return {
+                "waited": True,
+                "cancelled": True,
+                "elapsed_seconds": asyncio.get_running_loop().time() - started,
+            }
+        raise
+    except Exception as exc:
+        elapsed = asyncio.get_running_loop().time() - started
+        tiktok_log(
+            f"[TikTok排期中心] worker 异常结束，计划={plan_name}({plan_id}) action={action} "
+            f"elapsed={elapsed:.1f}s error={type(exc).__name__}: {exc}",
+            "error",
+        )
+        return {"waited": True, "elapsed_seconds": elapsed, "error": str(exc)}
+
+    elapsed = asyncio.get_running_loop().time() - started
+    tiktok_log(
+        f"[TikTok排期中心] worker 已完成，计划={plan_name}({plan_id}) action={action} "
+        f"elapsed={elapsed:.1f}s",
+        "info",
+    )
+    return {"waited": True, "elapsed_seconds": elapsed}
+
+
+async def execute_tiktok_schedule_plan(plan: Dict[str, object]) -> Dict[str, object]:
+    normalized = normalize_tiktok_schedule_plan(plan)
+    plan_type = str(normalized.get("type", "") or "")
+    if plan_type == "collect_precise":
+        keyword = str(normalized.get("keyword", "") or "").strip()
+        if not keyword:
+            return {"code": 400, "msg": "采集计划缺少关键词。"}
+        search_result = await tiktok_search_collect(
+            {
+                "keyword": keyword,
+                "max_results": int(normalized.get("max_results", 50) or 50),
+            }
+        )
+        if int(search_result.get("code", 0) or 0) != 200:
+            return search_result
+        raw_results = search_result.get("data", [])
+        normalized_results = [
+            normalize_tiktok_search_session_result(item)
+            for item in (raw_results if isinstance(raw_results, list) else [])
+            if isinstance(item, dict)
+        ]
+        max_videos = max(1, int(normalized.get("max_videos_per_run", 50) or 50))
+        selected_item_keys = select_tiktok_search_result_keys(normalized_results, max_videos)
+        if not selected_item_keys:
+            return {"code": 400, "msg": f"关键词“{keyword}”本次没有可用视频。"}
+        session = upsert_tiktok_search_session_state(
+            keyword=keyword,
+            account_id=search_result.get("account_id", ""),
+            results=normalized_results,
+            capture_state={
+                "enabled": True,
+                "status": "running",
+                "region_values": ["全国"],
+                "account_id": "auto",
+                "task_ids": [],
+                "selected_item_keys": selected_item_keys,
+                "matched_users": 0,
+                "precise_users": 0,
+                "last_message": f"排期计划已启动关键词“{keyword}”，正在自动抓取评论并筛选精准客户。",
+                "updated_at": int(datetime.now().timestamp() * 1000),
+            },
+        )
+        rows = [
+            {
+                **item,
+                "source_session_id": str(session.get("id", "") or "").strip(),
+                "source_item_key": str(item.get("source_item_key", "") or "").strip(),
+                "source_keyword": keyword,
+            }
+            for item in (session.get("results", []) if isinstance(session.get("results", []), list) else [])
+            if str(item.get("source_item_key", "") or "").strip() in set(selected_item_keys)
+        ]
+        if not rows:
+            return {"code": 400, "msg": f"关键词“{keyword}”本次没有可用视频。"}
+        set_tasks_from_rows(rows)
+        matched_tasks = match_tiktok_tasks_for_rows(rows)
+        configure_tiktok_collection_tasks(matched_tasks, normalized)
+        task_ids = [int(task.get("id", 0) or 0) for task in matched_tasks if int(task.get("id", 0) or 0) > 0]
+        if not task_ids:
+            return {"code": 400, "msg": f"关键词“{keyword}”本次没有匹配到可执行任务。"}
+        upsert_tiktok_search_session_state(
+            keyword=keyword,
+            account_id=search_result.get("account_id", ""),
+            results=session.get("results", []),
+            session_id=str(session.get("id", "") or "").strip(),
+            capture_state={
+                "enabled": True,
+                "status": "running",
+                "region_values": ["全国"],
+                "account_id": "auto",
+                "task_ids": task_ids,
+                "selected_item_keys": selected_item_keys,
+                "matched_users": 0,
+                "precise_users": 0,
+                "last_message": f"排期计划已启动关键词“{keyword}”，本轮正在执行 {len(task_ids)} 条视频采集任务。",
+                "updated_at": int(datetime.now().timestamp() * 1000),
+            },
+        )
+        start_result = await tiktok_start_tasks(
+            request={
+                "selected_task_ids": task_ids,
+                "comment_scroll_rounds": normalized.get("comment_scroll_rounds", 300),
+                "comment_max_comments": normalized.get("comment_max_comments", 500),
+            }
+        )
+        if int(start_result.get("code", 0) or 0) == 200:
+            actual_started = int(start_result.get("selected_count", len(task_ids)) or 0)
+            skipped_existing = max(0, len(task_ids) - actual_started)
+            start_result["msg"] = (
+                f"计划已启动：关键词“{keyword}”，本轮命中 {len(task_ids)} 条视频，实际启动 {actual_started} 条"
+                + (f"，跳过 {skipped_existing} 条已有客户数据的历史完成任务" if skipped_existing else "")
+                + "。"
+            )
+        if int(start_result.get("code", 0) or 0) == 200:
+            await _await_tiktok_schedule_worker(
+                tiktok_background_task,
+                plan=normalized,
+                action="collect_precise",
+            )
+        return start_result
+    if plan_type == "precise_touch":
+        try:
+            # Keep Online排期与H5节点共用同一套精准用户池、动作顺序和状态落库逻辑。
+            from app.api.h5_chat_channel import _run_scheduled_tiktok_sales_action  # type: ignore
+
+            result = await _run_scheduled_tiktok_sales_action(
+                "precise_touch",
+                {
+                    "account_id": normalized.get("account_id", 0),
+                    "max_users": normalized.get("max_users_per_run", 30),
+                    "touch_actions": normalized.get("touch_actions", list(TIKTOK_PRECISE_TOUCH_ACTIONS)),
+                },
+            )
+            return result if isinstance(result, dict) else {"code": 500, "msg": "精准用户触达没有返回执行结果"}
+        except Exception as exc:
+            tiktok_log(f"[TikTok精准用户触达] 排期执行失败：{exc}", "error")
+            return {"code": 500, "msg": str(exc).strip() or exc.__class__.__name__}
+    if plan_type == "self_comment_monitor":
+        try:
+            from app.api.h5_chat_channel import _run_scheduled_tiktok_sales_action  # type: ignore
+
+            account_id = int(normalized.get("account_id", 0) or 0)
+            if account_id <= 0:
+                restore_tiktok_self_comment_monitor_config()
+                states = list_tiktok_self_comment_monitor_states()
+                default_account_id = int(load_global_config().get("tiktok_default_account_id", 0) or 0)
+                target = next(
+                    (row for row in states if default_account_id > 0 and int(row.get("account_id", 0) or 0) == default_account_id),
+                    next((row for row in states if bool(row.get("enabled"))), states[0] if states else {}),
+                )
+                account_id = int(target.get("account_id", 0) or 0) if isinstance(target, dict) else 0
+            if account_id <= 0:
+                return {"code": 400, "msg": "我的评论区计划未找到 Online 已保存的TikTok账号配置"}
+            result = await _run_scheduled_tiktok_sales_action(
+                "self_comment_monitor",
+                {"account_id": account_id},
+            )
+            return result if isinstance(result, dict) else {"code": 500, "msg": "我的评论区没有返回执行结果"}
+        except Exception as exc:
+            tiktok_log(f"[TikTok我的评论区] 排期执行失败：{exc}", "error")
+            return {"code": 500, "msg": str(exc).strip() or exc.__class__.__name__}
+    if plan_type == "follow_comment":
+        users = await asyncio.to_thread(collect_plan_follow_comment_users, normalized)
+        if not users:
+            return {"code": 400, "msg": "当前没有可执行的精准互动客户。"}
+        payload = {
+            "users": users,
+            "comment_mode": normalized.get("comment_mode"),
+            "comment_text": normalized.get("comment_text", ""),
+            "comment_prompt": normalized.get("comment_prompt", ""),
+            "comment_seed_text": normalized.get("comment_seed_text", ""),
+            "interval_minutes_min": normalized.get("follow_interval_minutes_min", 3),
+            "interval_minutes_max": normalized.get("follow_interval_minutes_max", 5),
+        }
+        result = await tiktok_start_follow_comment(request=payload)
+        if not isinstance(result, dict):
+            return {"code": 500, "msg": "关注评论排期启动没有返回结果"}
+        if int(result.get("code", 0) or 0) == 200:
+            await _await_tiktok_schedule_worker(
+                tiktok_follow_comment_background_task,
+                plan=normalized,
+                action="follow_comment",
+            )
+        return result
+    if plan_type == "interaction":
+        users = await asyncio.to_thread(collect_plan_interaction_users, normalized)
+        if not users:
+            return {"code": 400, "msg": "当前没有可执行的精准私信客户。"}
+        payload = {
+            "users": users,
+            "message_mode": normalized.get("message_mode"),
+            "message": normalized.get("message", ""),
+            "message_prompt": normalized.get("message_prompt", ""),
+            "message_seed_text": normalized.get("message_seed_text", ""),
+            "interval_minutes_min": normalized.get("interaction_interval_minutes_min", 3),
+            "interval_minutes_max": normalized.get("interaction_interval_minutes_max", 5),
+        }
+        result = await tiktok_start_interaction(request=payload)
+        if not isinstance(result, dict):
+            return {"code": 500, "msg": "私信排期启动没有返回结果"}
+        if int(result.get("code", 0) or 0) == 200:
+            await _await_tiktok_schedule_worker(
+                tiktok_interaction_background_task,
+                plan=normalized,
+                action="interaction",
+            )
+        return result
+    return {"code": 400, "msg": "未知的排期计划类型。"}
+
+
+async def tiktok_schedule_scheduler_loop():
+    global tiktok_schedule_runtime_state
+    while True:
+        try:
+            now = datetime.now()
+            tiktok_schedule_runtime_state["running"] = True
+            tiktok_schedule_runtime_state["last_tick_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+            busy_reason = get_tiktok_schedule_busy_reason()
+            tiktok_schedule_runtime_state["busy_reason"] = busy_reason
+            enabled_plans = [
+                normalize_tiktok_schedule_plan(plan)
+                for plan in tiktok_schedule_plans
+                if isinstance(plan, dict) and bool(plan.get("enabled", True))
+            ]
+            due_plans: List[Dict[str, object]] = []
+            next_due_times: List[datetime] = []
+            for plan in enabled_plans:
+                next_run = parse_schedule_datetime(plan.get("next_run_at"))
+                if not next_run:
+                    next_run = now
+                    plan["next_run_at"] = format_schedule_datetime(next_run)
+                next_due_times.append(next_run)
+                if next_run <= now:
+                    due_plans.append(plan)
+            tiktok_schedule_runtime_state["next_run_at"] = format_schedule_datetime(min(next_due_times) if next_due_times else None)
+
+            if busy_reason:
+                if tiktok_schedule_runtime_state.get("active_plan_id") and not any(
+                    str(plan.get("id", "") or "") == str(tiktok_schedule_runtime_state.get("active_plan_id", "") or "")
+                    for plan in enabled_plans
+                ):
+                    tiktok_schedule_runtime_state["active_plan_id"] = ""
+                    tiktok_schedule_runtime_state["active_plan_name"] = ""
+                    tiktok_schedule_runtime_state["active_phase"] = ""
+            else:
+                tiktok_schedule_runtime_state["active_plan_id"] = ""
+                tiktok_schedule_runtime_state["active_plan_name"] = ""
+                tiktok_schedule_runtime_state["active_phase"] = ""
+                for plan in sorted(due_plans, key=lambda item: str(item.get("next_run_at", "") or "")):
+                    if not is_schedule_time_window_open(now, plan.get("window_start"), plan.get("window_end")):
+                        update_tiktok_schedule_plan_runtime(
+                            str(plan.get("id", "") or ""),
+                            next_run_at=get_next_schedule_window_anchor(
+                                now,
+                                plan.get("window_start"),
+                                plan.get("window_end"),
+                                include_current_if_inside=False,
+                            ),
+                        )
+                        continue
+                    plan_id = str(plan.get("id", "") or "")
+                    tiktok_schedule_runtime_state["active_plan_id"] = plan_id
+                    tiktok_schedule_runtime_state["active_plan_name"] = str(plan.get("name", "") or "")
+                    tiktok_schedule_runtime_state["active_phase"] = "launching"
+                    # All local scheduled plans share the same browser and
+                    # account state. Hold one execution lock so a manually
+                    # claimed server task cannot race this plan.
+                    async with tiktok_schedule_execution_lock:
+                        result = await execute_tiktok_schedule_plan(plan)
+                    success = int(result.get("code", 0) or 0) == 200
+                    next_run = get_next_tiktok_schedule_run(
+                        now,
+                        int(plan.get("interval_minutes", 120) or 120),
+                        window_start=plan.get("window_start"),
+                        window_end=plan.get("window_end"),
+                    )
+                    update_tiktok_schedule_plan_runtime(
+                        plan_id,
+                        status="success" if success else "failed",
+                        message=str(result.get("msg", "") or ""),
+                        error="" if success else str(result.get("msg", "") or ""),
+                        bump_total=True,
+                        success=success,
+                        failed=not success,
+                        next_run_at=next_run,
+                    )
+                    tiktok_schedule_runtime_state["last_run_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+                    tiktok_schedule_runtime_state["message"] = str(result.get("msg", "") or "")
+                    tiktok_schedule_runtime_state["last_error"] = "" if success else str(result.get("msg", "") or "")
+                    tiktok_schedule_runtime_state["active_phase"] = "waiting" if success else "idle"
+                    if success:
+                        tiktok_log(
+                            f"[TikTok排期中心] 已触发计划《{plan.get('name', '未命名计划')}》：{result.get('msg', '')}",
+                            "success",
+                        )
+                    else:
+                        tiktok_log(
+                            f"[TikTok排期中心] 计划《{plan.get('name', '未命名计划')}》触发失败：{result.get('msg', '')}",
+                            "error",
+                        )
+                    break
+            await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            tiktok_schedule_runtime_state.update(
+                {
+                    "running": False,
+                    "last_error": str(exc),
+                    "message": f"排期中心调度异常：{exc}",
+                }
+            )
+            tiktok_log(f"[TikTok排期中心] 调度异常：{exc}", "error")
+            await asyncio.sleep(30)
+
+
+async def ensure_tiktok_schedule_scheduler():
+    global tiktok_schedule_scheduler_task, tiktok_schedule_scheduler_started
+    if (
+        tiktok_schedule_scheduler_started
+        and tiktok_schedule_scheduler_task
+        and not tiktok_schedule_scheduler_task.done()
+    ):
+        return
+    tiktok_schedule_scheduler_started = True
+    tiktok_schedule_runtime_state["next_run_at"] = format_schedule_datetime(datetime.now())
+    tiktok_schedule_scheduler_task = asyncio.create_task(tiktok_schedule_scheduler_loop())
+
+
+def get_active_tiktok_account(config: Optional[Dict] = None) -> Optional[Dict]:
+    current_config = config or load_global_config()
+    accounts = _normalize_accounts(current_config.get("tiktok_accounts"))
+    preferred_id = int(current_config.get("tiktok_default_account_id", 1) or 1)
+
+    preferred = next(
+        (account for account in accounts if account["id"] == preferred_id and account.get("status") == "online"),
+        None,
+    )
+    if preferred:
+        return preferred
+    return next((account for account in accounts if account.get("status") == "online"), None)
+
+
+def get_tiktok_account_by_id(account_id: int, config: Optional[Dict] = None) -> Optional[Dict]:
+    current_config = config or load_global_config()
+    accounts = _normalize_accounts(current_config.get("tiktok_accounts"))
+    target_id = int(account_id or 0)
+    return next((account for account in accounts if int(account.get("id", 0) or 0) == target_id), None)
+
+
+def get_online_tiktok_accounts(config: Optional[Dict] = None) -> List[Dict]:
+    current_config = config or load_global_config()
+    accounts = _normalize_accounts(current_config.get("tiktok_accounts"))
+    preferred_id = int(current_config.get("tiktok_default_account_id", 1) or 1)
+    online_accounts = [account for account in accounts if account.get("status") == "online"]
+    online_accounts.sort(key=lambda account: (account["id"] != preferred_id, account["id"]))
+    return online_accounts
+
+
+async def _legacy_detect_tiktok_account_login_state(account: Dict) -> bool:
+    # Compatibility wrapper: transient probe failures must not be converted
+    # into a persisted logout state by callers that still use this bool API.
+    result = await probe_tiktok_account_login_state(account)
+    return str(result.get("state") or "unknown") == "online"
+
+
+def ensure_tiktok_account_browser_ready(
+    account: Dict,
+    start_url: str = "https://www.tiktok.com/",
+) -> Dict[str, object]:
+    client = TikTokClient(account["port"], account_id=account["id"])
+    browser_already_open = is_port_open(int(account.get("port", 0) or 0))
+    if browser_already_open:
+        return {"code": 200, "reused_browser": True}
+
+    success = client.launch_browser(start_url)
+    if success:
+        return {"code": 200, "reused_browser": False}
+
+    launch_summary = str(getattr(client, "last_launch_summary", "") or "").strip()
+    return {
+        "code": 500,
+        "msg": (
+            f"账号 {account['id']} 浏览器启动失败。"
+            f" 本次尝试结果：{launch_summary or '未拿到更多细节'}。"
+            " 如果你正在使用 Chrome Dev/Canary，建议先关闭残留浏览器后重试。"
+        ),
+        "launch_summary": launch_summary,
+        "reused_browser": False,
+    }
+
+
+async def ensure_tiktok_account_browser_ready_async(
+    account: Dict,
+    start_url: str = "https://www.tiktok.com/",
+) -> Dict[str, object]:
+    return await asyncio.to_thread(ensure_tiktok_account_browser_ready, account, start_url)
+
+
+async def open_tiktok_account_homepage(account: Dict) -> Dict[str, object]:
+    target_url = "https://www.tiktok.com/"
+    browser_result = await ensure_tiktok_account_browser_ready_async(account, start_url=target_url)
+    if int(browser_result.get("code", 0) or 0) != 200:
+        return browser_result
+    browser_already_open = bool(browser_result.get("reused_browser"))
+
+    if browser_already_open:
+        scraper = TikTokCommentScraper(
+            headless=False,
+            account_id=account["id"],
+            cdp_port=account["port"],
+        )
+        page = None
+        try:
+            page = await scraper._new_page(logger=tiktok_log)
+            await page.goto(
+                target_url,
+                wait_until="domcontentloaded",
+                timeout=TIKTOK_ACCOUNT_VIEW_NAVIGATION_TIMEOUT_MS,
+            )
+            await page.bring_to_front()
+        finally:
+            await scraper.close()
+
+    return {
+        "code": 200,
+        "msg": f"账号 {account['id']} 的TikTok主页已打开，浏览器会保持打开。",
+        "reused_browser": browser_already_open,
+    }
+
+
+def get_runnable_tiktok_tasks(
+    selected_task_ids: Optional[Set[int]] = None,
+    include_completed_with_comments: bool = False,
+) -> List[Dict]:
+    normalized_ids = {int(task_id) for task_id in selected_task_ids or set()}
+    tasks = []
+    for task in tiktok_tasks:
+        task_id = int(task.get("id", 0) or 0)
+        if normalized_ids and task_id not in normalized_ids:
+            continue
+        existing_comments = task.get("all_comments", []) or []
+        existing_comment_count = max(
+            int(task.get("comment_count", 0) or 0),
+            len(existing_comments) if isinstance(existing_comments, list) else 0,
+        )
+        if (
+            not include_completed_with_comments
+            and task.get("status") == "completed"
+            and existing_comment_count > 0
+        ):
+            continue
+        tasks.append(task)
+    return tasks
+
+
+def get_commentable_tiktok_tasks(selected_task_ids: Optional[Set[int]] = None) -> List[Dict]:
+    normalized_ids = {int(task_id) for task_id in selected_task_ids or set()}
+    rows = []
+    for task in tiktok_tasks:
+        task_id = int(task.get("id", 0) or 0)
+        if normalized_ids and task_id not in normalized_ids:
+            continue
+        if not str(task.get("url", "") or "").strip():
+            continue
+        if task.get("video_comment_status") == "commented":
+            continue
+        rows.append(task)
+    return rows
+
+
+def distribute_tiktok_tasks(tasks: List[Dict], accounts: List[Dict]) -> List[Dict]:
+    active_accounts = accounts[: max(1, min(len(accounts), len(tasks)))]
+    buckets = [{"account": account, "tasks": []} for account in active_accounts]
+    for index, task in enumerate(tasks):
+        buckets[index % len(buckets)]["tasks"].append(task)
+    return [bucket for bucket in buckets if bucket["tasks"]]
+
+
+def tiktok_collection_requires_serial_reply(tasks: List[Dict]) -> bool:
+    """Whether a collection batch must finish each video's reply before the next.
+
+    Precise-comment replies are tied to the comments just filtered on the
+    current video. Running separate account buckets concurrently can therefore
+    start a later video before the previous video's reply phase has completed.
+    """
+    return any(
+        coerce_bool(task.get("precise_reply_enabled"), False)
+        for task in (tasks or [])
+        if isinstance(task, dict)
+    )
+
+
+async def run_tiktok_task_worker(
+    tasks: List[Dict],
+    account: Dict,
+    scroll_rounds: int,
+    max_comments: int,
+    config: Dict,
+    state_lock: asyncio.Lock,
+):
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    ai_client = create_ai_client()
+    try:
+        warmup_url = str((tasks[0] if tasks else {}).get("url", "") or "").strip() or "https://www.tiktok.com/"
+        browser_result = await ensure_tiktok_account_browser_ready_async(account, start_url=warmup_url)
+        if int(browser_result.get("code", 0) or 0) != 200:
+            error_message = str(browser_result.get("msg", "") or "账号浏览器启动失败")
+            async with state_lock:
+                for task in tasks:
+                    task["status"] = "failed"
+                    task["error"] = error_message
+                    task["collect_account_id"] = account["id"]
+                    task["collect_progress"] = {
+                        **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                        "phase": "failed",
+                        "account_id": int(account["id"] or 0),
+                        "updated_at": _now_text(),
+                        "last_message": error_message,
+                    }
+                save_tiktok_tasks_state()
+            tiktok_log(
+                f"[TikTok评论采集] 账号 {account['id']} 浏览器预热失败：{error_message}",
+                "error",
+            )
+            return
+
+        tiktok_log(
+            f"[TikTok评论采集] 账号 {account['id']} 已接管 {len(tasks)} 条任务",
+            "info",
+        )
+        for task in tasks:
+            if tiktok_stop_requested:
+                break
+
+            child_timeout_state = {"timed_out": False}
+            child_worker_task = asyncio.current_task()
+            child_timeout_task: Optional[asyncio.Task] = None
+
+            async def cancel_child_on_timeout() -> None:
+                try:
+                    await asyncio.sleep(TIKTOK_COMMENT_TASK_TIMEOUT_SECONDS)
+                    child_timeout_state["timed_out"] = True
+                    if child_worker_task is not None:
+                        child_worker_task.cancel()
+                except asyncio.CancelledError:
+                    return
+
+            try:
+                source_comment_total = max(
+                    0,
+                    int(task.get("source_comment_count", task.get("comments", 0)) or 0),
+                )
+                target_comment_total = min(source_comment_total, max_comments) if source_comment_total > 0 else max_comments
+                started_at_text = _now_text()
+                async with state_lock:
+                    task["status"] = "processing"
+                    task["error"] = ""
+                    task["all_comments"] = []
+                    task["high_intent_users"] = []
+                    task["comment_count"] = 0
+                    task["collect_account_id"] = account["id"]
+                    task["capture_comment_limit"] = max_comments
+                    task["capture_target_comments"] = target_comment_total
+                    task["collect_progress"] = {
+                        "phase": "opening",
+                        "account_id": int(account["id"] or 0),
+                        "collected_comments": 0,
+                        "visible_comments": 0,
+                        "source_comment_total": source_comment_total,
+                        "target_comments": target_comment_total,
+                        "scroll_round": 0,
+                        "scroll_round_limit": max(1, int(scroll_rounds or 0)),
+                        "started_at": started_at_text,
+                        "updated_at": started_at_text,
+                        "last_message": "正在打开视频并进入评论区。",
+                    }
+                    save_tiktok_tasks_state()
+                tiktok_log(
+                    f"[TikTok评论采集] 账号 {account['id']} 开始处理：{task.get('title') or task.get('url')}",
+                    "info",
+                )
+            except BaseException as init_exc:
+                if isinstance(init_exc, (asyncio.CancelledError, KeyboardInterrupt, SystemExit)):
+                    raise
+                tiktok_log(
+                    f"[TikTok评论采集] 账号 {account['id']} 初始化任务失败：{task.get('title') or task.get('url')}，{type(init_exc).__name__}: {init_exc}",
+                    "error",
+                )
+                try:
+                    traceback.print_exc()
+                except Exception:
+                    pass
+                try:
+                    task["status"] = "failed"
+                    task["error"] = f"{type(init_exc).__name__}: {init_exc}"
+                    save_tiktok_tasks_state()
+                except Exception:
+                    pass
+                continue
+
+            child_timeout_task = asyncio.create_task(cancel_child_on_timeout())
+            try:
+                def update_collect_progress(progress_patch: Dict[str, object]) -> None:
+                    progress = ensure_tiktok_task_shape(task).get("collect_progress", {})
+                    source_total = max(
+                        0,
+                        int(progress_patch.get("source_comment_total", progress.get("source_comment_total", source_comment_total)) or 0),
+                    )
+                    target_total = max(
+                        0,
+                        int(progress_patch.get("target_comments", progress.get("target_comments", target_comment_total)) or 0),
+                    )
+                    if not target_total and source_total > 0:
+                        target_total = min(source_total, max_comments)
+                    progress.update(
+                        {
+                            "phase": str(progress_patch.get("phase", progress.get("phase", "processing")) or "processing").strip() or "processing",
+                            "account_id": int(progress_patch.get("account_id", progress.get("account_id", account["id"])) or 0),
+                            "collected_comments": max(
+                                0,
+                                int(progress_patch.get("collected_comments", progress.get("collected_comments", 0)) or 0),
+                            ),
+                            "visible_comments": max(
+                                0,
+                                int(progress_patch.get("visible_comments", progress.get("visible_comments", 0)) or 0),
+                            ),
+                            "source_comment_total": source_total,
+                            "target_comments": target_total,
+                            "scroll_round": max(
+                                0,
+                                int(progress_patch.get("scroll_round", progress.get("scroll_round", 0)) or 0),
+                            ),
+                            "scroll_round_limit": max(
+                                0,
+                                int(progress_patch.get("scroll_round_limit", progress.get("scroll_round_limit", scroll_rounds)) or 0),
+                            ),
+                            "started_at": str(progress.get("started_at", started_at_text) or started_at_text),
+                            "updated_at": _now_text(),
+                            "last_message": str(progress_patch.get("last_message", progress.get("last_message", "")) or "").strip(),
+                        }
+                    )
+                    task["capture_comment_limit"] = max_comments
+                    task["capture_target_comments"] = target_total
+                    task["collect_progress"] = progress
+
+                comments = await scraper.scrape_video_comments(
+                    task["url"],
+                    max_comments=max_comments,
+                    max_scroll_rounds=scroll_rounds,
+                    logger=tiktok_log,
+                    progress_callback=update_collect_progress,
+                )
+                update_collect_progress(
+                    {
+                        "phase": "filtering",
+                        "collected_comments": len(comments),
+                        "visible_comments": len(comments),
+                        "last_message": "评论已抓取完成，正在筛选精准客户。",
+                    }
+                )
+                _filter_prompt = get_tiktok_comment_direction(config)
+                _filter_strategy = get_tiktok_comment_filter_strategy(config)
+                _filter_started_at = time.time()
+                log_tiktok_filter_event(
+                    "start",
+                    scope="task_worker",
+                    task_id=int(task.get("id", 0) or 0),
+                    title=task.get("title", ""),
+                    comments_in=len(comments),
+                    strategy=_filter_strategy,
+                    prompt=_filter_prompt,
+                )
+                try:
+                    high_intent = await asyncio.to_thread(
+                        lambda: ai_client.filter_comments(
+                            task.get("title", ""),
+                            comments,
+                            _filter_prompt,
+                            "tiktok_transactional",
+                            "",
+                            _filter_strategy,
+                            event_logger=log_tiktok_filter_event,
+                        )
+                    )
+                except Exception as _filter_exc:
+                    log_tiktok_filter_event(
+                        "error",
+                        scope="task_worker",
+                        task_id=int(task.get("id", 0) or 0),
+                        title=task.get("title", ""),
+                        comments_in=len(comments),
+                        strategy=_filter_strategy,
+                        duration_ms=int((time.time() - _filter_started_at) * 1000),
+                        error=str(_filter_exc),
+                    )
+                    raise
+                log_tiktok_filter_event(
+                    "done",
+                    scope="task_worker",
+                    task_id=int(task.get("id", 0) or 0),
+                    title=task.get("title", ""),
+                    comments_in=len(comments),
+                    precise_out=len(high_intent or []),
+                    strategy=_filter_strategy,
+                    duration_ms=int((time.time() - _filter_started_at) * 1000),
+                )
+                reply_results: List[Dict] = []
+                async with state_lock:
+                    task["all_comments"] = comments
+                    task["comment_count"] = len(comments)
+                    task["high_intent_users"] = dedupe_users(high_intent)
+                    task["status"] = "processing"
+                    task["error"] = ""
+                    task["collect_progress"] = {
+                        **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                        "phase": "replying_precise_comments" if task.get("precise_reply_enabled") and high_intent else "completed",
+                        "account_id": int(account["id"] or 0),
+                        "collected_comments": len(comments),
+                        "visible_comments": len(comments),
+                        "updated_at": _now_text(),
+                        "last_message": (
+                            f"精准客户筛选完成，共 {len(high_intent)} 人，正在逐视频回复。"
+                            if task.get("precise_reply_enabled") and high_intent
+                            else f"评论采集完成，共采集 {len(comments)} 条评论。"
+                        ),
+                    }
+                    save_tiktok_tasks_state()
+                reply_candidates = [
+                    row
+                    for row in (high_intent or [])
+                    if not _is_tiktok_precise_touch_action_done(
+                        _get_tiktok_precise_touch_action_state(row, TIKTOK_COLLECTION_REPLY_ACTION)
+                    )
+                    and not _is_tiktok_precise_touch_action_inflight(
+                        _get_tiktok_precise_touch_action_state(row, TIKTOK_COLLECTION_REPLY_ACTION)
+                    )
+                ]
+                if task.get("precise_reply_enabled") and reply_candidates:
+                    interval_min = max(0, int(float(task.get("precise_reply_interval_minutes_min", 0) or 0) * 60))
+                    interval_max = max(
+                        interval_min,
+                        int(float(task.get("precise_reply_interval_minutes_max", 0) or 0) * 60),
+                    )
+                    reply_results = await _run_tiktok_precise_customer_reply_batch_worker(
+                        task,
+                        reply_candidates,
+                        account,
+                        task.get("precise_reply_mode", "fixed"),
+                        task.get("precise_reply_text", ""),
+                        task.get("precise_reply_prompt", ""),
+                        task.get("precise_reply_seed_text", ""),
+                        interval_min,
+                        interval_max,
+                    )
+                async with state_lock:
+                    task["status"] = "completed"
+                    task["collect_progress"] = {
+                        **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                        "phase": "completed",
+                        "account_id": int(account["id"] or 0),
+                        "collected_comments": len(comments),
+                        "visible_comments": len(comments),
+                        "updated_at": _now_text(),
+                        "last_message": (
+                        f"评论采集完成，共采集 {len(comments)} 条评论，精准客户 {len(high_intent)} 人；"
+                            f"回复成功 {sum(1 for item in reply_results if item.get('status') == 'completed')} 人。"
+                            if task.get("precise_reply_enabled")
+                            else f"评论采集完成，共采集 {len(comments)} 条评论。"
+                        ),
+                    }
+                    save_tiktok_tasks_state()
+                tiktok_log(
+                    f"[TikTok评论采集] 账号 {account['id']} 完成：{task.get('title') or task.get('url')}，评论 {len(comments)} 条，高意向 {(len(task['high_intent_users']) if task.get('high_intent_users') else 0)} 人",
+                    "success",
+                )
+            except Exception as exc:
+                if child_timeout_task is not None and not child_timeout_task.done():
+                    child_timeout_task.cancel()
+                async with state_lock:
+                    task["status"] = "failed"
+                    task["error"] = str(exc)
+                    task["collect_progress"] = {
+                        **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                        "phase": "failed",
+                        "account_id": int(account["id"] or 0),
+                        "updated_at": _now_text(),
+                        "last_message": f"评论采集失败：{exc}",
+                    }
+                    save_tiktok_tasks_state()
+                tiktok_log(
+                    f"[TikTok评论采集] 账号 {account['id']} 失败：{task.get('title') or task.get('url')}，原因：{exc}",
+                    "error",
+                )
+                try:
+                    traceback.print_exc()
+                except Exception:
+                    pass
+            except BaseException as exc:
+                if child_timeout_task is not None and not child_timeout_task.done():
+                    child_timeout_task.cancel()
+                timed_out = bool(child_timeout_state["timed_out"])
+                error_message = _tiktok_collection_interrupt_message(exc, timed_out)
+                if timed_out:
+                    # 卡住的那套 context/transport 不能再留给下一条视频（现场日志里
+                    # 正是超时后继续“复用已有 BrowserContext”再次卡死）：丢弃运行时，
+                    # 下一条任务走 _ensure_browser 重新连 CDP。CDP 模式不会关掉用户浏览器。
+                    try:
+                        # 传输层已经半死时 close() 本身也可能挂住，所以同样加硬超时。
+                        await asyncio.wait_for(scraper.close(), timeout=5.0)
+                    except (Exception, asyncio.TimeoutError):
+                        pass
+                async with state_lock:
+                    task["status"] = "failed"
+                    task["error"] = error_message
+                    task["collect_progress"] = {
+                        **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                        "phase": "failed",
+                        "account_id": int(account["id"] or 0),
+                        "updated_at": _now_text(),
+                        "last_message": error_message,
+                    }
+                    save_tiktok_tasks_state()
+                tiktok_log(
+                    f"[TikTok评论采集] 账号 {account['id']} 异常中断：{task.get('title') or task.get('url')}，{error_message}",
+                    "error",
+                )
+                try:
+                    traceback.print_exc()
+                except Exception:
+                    pass
+                if isinstance(exc, asyncio.CancelledError) and not timed_out:
+                    raise
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+                # 非取消类异常（如 Playwright 内部 BaseException）：记录并继续下一个任务
+                continue
+            # 每个任务结束后短暂等待，避免 0 评论或快速完成的任务紧接着开下一个 page 时
+            # 因为浏览器资源未完全释放而触发 Playwright 内部异常
+            if child_timeout_task is not None and not child_timeout_task.done():
+                child_timeout_task.cancel()
+                try:
+                    await child_timeout_task
+                except asyncio.CancelledError:
+                    pass
+            try:
+                await asyncio.sleep(1.0)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+    finally:
+        await scraper.close()
+
+
+async def run_tiktok_task_worker_protocol(
+    tasks: List[Dict],
+    account: Dict,
+    max_comments: int,
+    state_lock: asyncio.Lock,
+):
+    try:
+        from .tiktok_comment_api_experiment import TikTokCommentApiExperiment
+    except Exception as exc:
+        error_message = f"协议模式初始化失败：{exc}"
+        async with state_lock:
+            for task in tasks:
+                task["status"] = "failed"
+                task["error"] = error_message
+                task["collect_account_id"] = account["id"]
+                task["collect_progress"] = {
+                    **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                    "phase": "failed",
+                    "account_id": int(account["id"] or 0),
+                    "updated_at": _now_text(),
+                    "last_message": error_message,
+                }
+            save_tiktok_tasks_state()
+        tiktok_log(f"[TikTok评论采集] 账号 {account['id']} 协议模式初始化失败：{exc}", "error")
+        return
+
+    client = TikTokCommentApiExperiment(account_id=account["id"], cdp_port=account["port"])
+    warmup_url = str((tasks[0] if tasks else {}).get("url", "") or "").strip() or "https://www.tiktok.com/"
+    browser_result = await ensure_tiktok_account_browser_ready_async(account, start_url=warmup_url)
+    if int(browser_result.get("code", 0) or 0) != 200:
+        error_message = str(browser_result.get("msg", "") or "账号浏览器启动失败")
+        async with state_lock:
+            for task in tasks:
+                task["status"] = "failed"
+                task["error"] = error_message
+                task["collect_account_id"] = account["id"]
+                task["collect_progress"] = {
+                    **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                    "phase": "failed",
+                    "account_id": int(account["id"] or 0),
+                    "updated_at": _now_text(),
+                    "last_message": error_message,
+                }
+            save_tiktok_tasks_state()
+        tiktok_log(f"[TikTok评论采集] 账号 {account['id']} 浏览器预热失败：{error_message}", "error")
+        return
+
+    try:
+        auth = await client.extract_auth()
+    except Exception as exc:
+        error_message = f"协议模式认证提取失败：{exc}"
+        async with state_lock:
+            for task in tasks:
+                task["status"] = "failed"
+                task["error"] = error_message
+                task["collect_account_id"] = account["id"]
+                task["collect_progress"] = {
+                    **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                    "phase": "failed",
+                    "account_id": int(account["id"] or 0),
+                    "updated_at": _now_text(),
+                    "last_message": error_message,
+                }
+            save_tiktok_tasks_state()
+        tiktok_log(f"[TikTok评论采集] 账号 {account['id']} 协议模式认证提取失败：{exc}", "error")
+        return
+
+    tiktok_log(
+        f"[TikTok评论采集] 账号 {account['id']} 已接管 {len(tasks)} 条任务，模式 {tiktok_collection_mode_label('protocol')}",
+        "info",
+    )
+    ai_client = create_ai_client()
+    for task in tasks:
+        if tiktok_stop_requested:
+            break
+        if "child_timeout_task" in locals() and child_timeout_task is not None and not child_timeout_task.done():
+            child_timeout_task.cancel()
+        child_timeout_state = {"timed_out": False}
+        child_worker_task = asyncio.current_task()
+        child_timeout_task: Optional[asyncio.Task] = None
+
+        async def cancel_child_on_timeout() -> None:
+            try:
+                await asyncio.sleep(TIKTOK_COMMENT_TASK_TIMEOUT_SECONDS)
+                child_timeout_state["timed_out"] = True
+                if child_worker_task is not None:
+                    child_worker_task.cancel()
+            except asyncio.CancelledError:
+                return
+        try:
+            work_info = await asyncio.to_thread(client.get_work_info, auth, str(task.get("url", "") or "").strip())
+            source_comment_total = max(
+                0,
+                int(
+                    work_info.get("comment_count", task.get("source_comment_count", task.get("comments", 0)))
+                    or 0
+                ),
+            )
+            target_comment_total = min(source_comment_total, max_comments) if source_comment_total > 0 else max_comments
+            started_at_text = _now_text()
+            async with state_lock:
+                task["status"] = "processing"
+                task["error"] = ""
+                task["all_comments"] = []
+                task["high_intent_users"] = []
+                task["comment_count"] = 0
+                task["collect_account_id"] = account["id"]
+                task["capture_comment_limit"] = max_comments
+                task["capture_target_comments"] = target_comment_total
+                task["collect_progress"] = {
+                    "phase": "opening",
+                    "account_id": int(account["id"] or 0),
+                    "collected_comments": 0,
+                    "visible_comments": 0,
+                    "source_comment_total": source_comment_total,
+                    "target_comments": target_comment_total,
+                    "scroll_round": 0,
+                    "scroll_round_limit": 0,
+                    "started_at": started_at_text,
+                    "updated_at": started_at_text,
+                    "last_message": "正在通过协议接口抓取评论。",
+                }
+                save_tiktok_tasks_state()
+            tiktok_log(
+                f"[TikTok评论采集] 账号 {account['id']} 开始处理：{task.get('title') or task.get('url')}",
+                "info",
+            )
+            child_timeout_task = asyncio.create_task(cancel_child_on_timeout())
+            comments_payload: object = None
+            comments: List[Dict] = []
+            for comment_attempt in range(1, 3):
+                comments_payload = await asyncio.to_thread(
+                    lambda: client.get_all_comments(
+                        auth,
+                        str(task.get("url", "") or "").strip(),
+                        max_comments=max_comments,
+                    )
+                )
+                raw_comments = comments_payload.get("comments", []) if isinstance(comments_payload, dict) else []
+                comments = [
+                    normalize_tiktok_protocol_comment_row(row, task=task, index=index)
+                    for index, row in enumerate(raw_comments)
+                    if isinstance(row, dict)
+                ]
+                if _protocol_comment_result_confirmed(
+                    comments_payload,
+                    comments,
+                    expected_total=source_comment_total,
+                ):
+                    break
+                payload_keys = sorted(str(key) for key in comments_payload.keys()) if isinstance(comments_payload, dict) else []
+                tiktok_log(
+                    f"[TikTok评论采集] 协议评论结果未确认 task_id={task.get('id')} raw_count={len(raw_comments)} expected_total={source_comment_total} payload_keys={payload_keys}",
+                    "warning",
+                )
+                if comment_attempt < 2:
+                    tiktok_log(
+                        f"[TikTok评论采集] 协议评论返回空且未确认，任务 {task.get('id')} 准备第 2 次重试。",
+                        "warning",
+                    )
+                    await asyncio.sleep(1.0)
+                else:
+                    raise TikTokCommentCollectionUnconfirmed(
+                        "协议接口连续 2 次返回空评论但未明确确认作品无评论"
+                    )
+            _filter_prompt = get_tiktok_comment_direction(load_global_config())
+            _filter_strategy = get_tiktok_comment_filter_strategy(load_global_config())
+            _filter_started_at = time.time()
+            log_tiktok_filter_event(
+                "start",
+                scope="task_worker",
+                task_id=int(task.get("id", 0) or 0),
+                title=task.get("title", ""),
+                comments_in=len(comments),
+                strategy=_filter_strategy,
+                prompt=_filter_prompt,
+            )
+            try:
+                high_intent = await asyncio.to_thread(
+                    lambda: ai_client.filter_comments(
+                        task.get("title", ""),
+                        comments,
+                        _filter_prompt,
+                        "tiktok_transactional",
+                        "",
+                        _filter_strategy,
+                        event_logger=log_tiktok_filter_event,
+                    )
+                )
+            except Exception as _filter_exc:
+                log_tiktok_filter_event(
+                    "error",
+                    scope="task_worker",
+                    task_id=int(task.get("id", 0) or 0),
+                    title=task.get("title", ""),
+                    comments_in=len(comments),
+                    strategy=_filter_strategy,
+                    duration_ms=int((time.time() - _filter_started_at) * 1000),
+                    error=str(_filter_exc),
+                )
+                raise
+            log_tiktok_filter_event(
+                "done",
+                scope="task_worker",
+                task_id=int(task.get("id", 0) or 0),
+                title=task.get("title", ""),
+                comments_in=len(comments),
+                precise_out=len(high_intent or []),
+                strategy=_filter_strategy,
+                duration_ms=int((time.time() - _filter_started_at) * 1000),
+            )
+            reply_results: List[Dict] = []
+            async with state_lock:
+                task["all_comments"] = comments
+                task["comment_count"] = len(comments)
+                task["high_intent_users"] = dedupe_users(high_intent)
+                task["status"] = "processing"
+                task["error"] = ""
+                task["collect_progress"] = {
+                    **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                    "phase": "replying_precise_comments" if task.get("precise_reply_enabled") and high_intent else "completed",
+                    "account_id": int(account["id"] or 0),
+                    "collected_comments": len(comments),
+                    "visible_comments": len(comments),
+                    "updated_at": _now_text(),
+                    "last_message": (
+                        f"精准客户筛选完成，共 {len(high_intent)} 人，正在逐视频回复。"
+                        if task.get("precise_reply_enabled") and high_intent
+                        else f"协议模式采集完成，共采集 {len(comments)} 条评论。"
+                    ),
+                }
+                save_tiktok_tasks_state()
+            reply_candidates = [
+                row
+                for row in (high_intent or [])
+                if not _is_tiktok_precise_touch_action_done(
+                    _get_tiktok_precise_touch_action_state(row, TIKTOK_COLLECTION_REPLY_ACTION)
+                )
+                and not _is_tiktok_precise_touch_action_inflight(
+                    _get_tiktok_precise_touch_action_state(row, TIKTOK_COLLECTION_REPLY_ACTION)
+                )
+            ]
+            if task.get("precise_reply_enabled") and reply_candidates:
+                interval_min = max(0, int(float(task.get("precise_reply_interval_minutes_min", 0) or 0) * 60))
+                interval_max = max(
+                    interval_min,
+                    int(float(task.get("precise_reply_interval_minutes_max", 0) or 0) * 60),
+                )
+                reply_results = await _run_tiktok_precise_customer_reply_batch_worker(
+                    task,
+                    reply_candidates,
+                    account,
+                    task.get("precise_reply_mode", "fixed"),
+                    task.get("precise_reply_text", ""),
+                    task.get("precise_reply_prompt", ""),
+                    task.get("precise_reply_seed_text", ""),
+                    interval_min,
+                    interval_max,
+                )
+            async with state_lock:
+                task["status"] = "completed"
+                task["collect_progress"] = {
+                    **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                    "phase": "completed",
+                    "account_id": int(account["id"] or 0),
+                    "collected_comments": len(comments),
+                    "visible_comments": len(comments),
+                    "updated_at": _now_text(),
+                    "last_message": (
+                        f"协议模式采集完成，共采集 {len(comments)} 条评论，精准客户 {len(high_intent)} 人；"
+                        f"回复成功 {sum(1 for item in reply_results if item.get('status') == 'completed')} 人。"
+                        if task.get("precise_reply_enabled")
+                        else f"协议模式采集完成，共采集 {len(comments)} 条评论。"
+                    ),
+                }
+                save_tiktok_tasks_state()
+            tiktok_log(
+                f"[TikTok评论采集] 账号 {account['id']} 完成：{task.get('title') or task.get('url')}，评论 {len(comments)} 条，高意向 {(len(task['high_intent_users']) if task.get('high_intent_users') else 0)} 人",
+                "success",
+            )
+        except Exception as exc:
+            async with state_lock:
+                task["status"] = "failed"
+                task["error"] = str(exc)
+                task["collect_progress"] = {
+                    **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                    "phase": "failed",
+                    "account_id": int(account["id"] or 0),
+                    "updated_at": _now_text(),
+                    "last_message": f"协议模式采集失败：{exc}",
+                }
+                save_tiktok_tasks_state()
+            tiktok_log(
+                f"[TikTok评论采集] 账号 {account['id']} 失败：{task.get('title') or task.get('url')}，原因：{exc}",
+                "error",
+            )
+            try:
+                traceback.print_exc()
+            except Exception:
+                pass
+        except BaseException as exc:
+            if child_timeout_task is not None and not child_timeout_task.done():
+                child_timeout_task.cancel()
+            timed_out = bool(child_timeout_state["timed_out"])
+            error_message = _tiktok_collection_interrupt_message(exc, timed_out)
+            async with state_lock:
+                task["status"] = "failed"
+                task["error"] = error_message
+                task["collect_progress"] = {
+                    **ensure_tiktok_task_shape(task).get("collect_progress", {}),
+                    "phase": "failed",
+                    "account_id": int(account["id"] or 0),
+                    "updated_at": _now_text(),
+                    "last_message": error_message,
+                }
+                save_tiktok_tasks_state()
+            if isinstance(exc, asyncio.CancelledError) and not timed_out:
+                raise
+        if child_timeout_task is not None and not child_timeout_task.done():
+            child_timeout_task.cancel()
+            try:
+                await child_timeout_task
+            except asyncio.CancelledError:
+                pass
+
+
+async def run_tiktok_tasks(
+    selected_task_ids: Optional[Set[int]] = None,
+    comment_scroll_rounds: Optional[int] = None,
+    comment_max_comments: Optional[int] = None,
+    collection_mode: Optional[str] = None,
+    force_recollect: bool = False,
+):
+    global tiktok_running, tiktok_stop_requested, tiktok_background_task
+
+    config = load_global_config()
+    accounts = get_online_tiktok_accounts(config)
+    runnable_tasks = get_runnable_tiktok_tasks(
+        selected_task_ids,
+        include_completed_with_comments=force_recollect,
+    )
+    if not runnable_tasks:
+        tiktok_running = False
+        tiktok_background_task = None
+        tiktok_stop_requested = False
+        save_tiktok_tasks_state()
+        return
+
+    if not accounts:
+        for task in runnable_tasks:
+            task["status"] = "failed"
+            task["error"] = "No online TikTok account is available"
+        tiktok_running = False
+        tiktok_background_task = None
+        tiktok_stop_requested = False
+        save_tiktok_tasks_state()
+        return
+
+    scroll_rounds = max(
+        20,
+        min(int(comment_scroll_rounds if comment_scroll_rounds is not None else (config.get("comment_scroll_rounds", 300) or 300)), 300),
+    )
+    comment_limit = max(
+        20,
+        min(int(comment_max_comments if comment_max_comments is not None else (config.get("comment_max_comments", 500) or 500)), 500),
+    )
+    resolved_collection_mode = normalize_tiktok_collection_mode(collection_mode)
+    max_comments = comment_limit
+    serial_reply = tiktok_collection_requires_serial_reply(runnable_tasks)
+    if serial_reply:
+        # A reply-enabled precise-acquisition run is intentionally single
+        # flight: collect -> AI filter -> reply for video N, then video N+1.
+        batches = [{"account": accounts[0], "tasks": list(runnable_tasks)}]
+    else:
+        batches = distribute_tiktok_tasks(runnable_tasks, accounts)
+    state_lock = asyncio.Lock()
+    tiktok_log(
+        f"[TikTok评论采集] 已启动 {len(batches)} 个账号{('串行' if serial_reply else '并发')}，共 {len(runnable_tasks)} 条任务，模式 {tiktok_collection_mode_label(resolved_collection_mode)}，滚动 {scroll_rounds} 轮，最多采集 {max_comments} 条评论",
+        "info",
+    )
+
+    try:
+        worker_coroutines = []
+        for item in batches:
+            if resolved_collection_mode == "script":
+                worker_coroutines.append(
+                    run_tiktok_task_worker(
+                        item["tasks"],
+                        item["account"],
+                        scroll_rounds,
+                        max_comments,
+                        config,
+                        state_lock,
+                    )
+                )
+            else:
+                worker_coroutines.append(
+                    run_tiktok_task_worker_protocol(
+                        item["tasks"],
+                        item["account"],
+                        max_comments,
+                        state_lock,
+                    )
+                )
+        await asyncio.gather(*worker_coroutines)
+    except Exception as exc:
+        tiktok_log(
+            f"[TikTok评论采集] 执行异常：{type(exc).__name__}: {exc}",
+            "error",
+        )
+        try:
+            traceback.print_exc()
+        except Exception:
+            pass
+    finally:
+        tiktok_running = False
+        tiktok_background_task = None
+        tiktok_stop_requested = False
+        save_tiktok_tasks_state()
+        tiktok_log("[TikTok评论采集] 本轮任务已结束", "info")
+
+
+async def run_tiktok_video_comments(
+    tasks: List[Dict],
+    comment_mode: str,
+    comment_text: str,
+    comment_prompt: str,
+    comment_seed_text: str,
+    account: Dict,
+    interval_seconds_min: int,
+    interval_seconds_max: int,
+    image_path: str = "",
+):
+    global tiktok_video_comment_running, tiktok_video_comment_stop_requested, tiktok_video_comment_background_task
+
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    protocol_client = None
+    protocol_auth = None
+    total = len(tasks)
+    success = 0
+    failed = 0
+    mode = normalize_tiktok_video_comment_mode(comment_mode)
+    mode_label = tiktok_video_comment_mode_label(mode)
+    image_path = str(image_path or "").strip()
+    comment_summary = summarize_tiktok_video_comment_settings(
+        mode,
+        fixed_text=comment_text,
+        prompt_text=comment_prompt,
+        seed_text=comment_seed_text,
+    )
+    if image_path:
+        comment_summary = f"{comment_summary} + 图片"
+    tiktok_video_comment_state.update(
+        {
+            "running": True,
+            "message": "视频评论任务执行中",
+            "total": total,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "interval_seconds": interval_seconds_min,
+            "interval_seconds_min": interval_seconds_min,
+            "interval_seconds_max": interval_seconds_max,
+            "account_id": account["id"],
+            "current_task_title": "",
+            "comment_mode": mode,
+            "comment_summary": comment_summary,
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": "",
+            "last_error": "",
+            "current_comment_text": "",
+            "last_comment_text": "",
+            "last_task_title": "",
+            "next_interval_seconds": 0,
+        }
+    )
+
+    interval_desc = (
+        f"{interval_seconds_min}-{interval_seconds_max} 秒"
+        if interval_seconds_min != interval_seconds_max
+        else f"{interval_seconds_min} 秒"
+    )
+
+    try:
+        try:
+            from .tiktok_comment_api_experiment import TikTokCommentApiExperiment
+
+            protocol_client = TikTokCommentApiExperiment(account_id=account["id"], cdp_port=account["port"])
+            protocol_auth = await protocol_client.extract_auth()
+            tiktok_log(
+                f"[TikTok视频评论] 账号 {account['id']} 已准备协议评论备选通道，页面发送失败时会自动尝试协议发布。",
+                "info",
+            )
+        except Exception as exc:
+            protocol_client = None
+            protocol_auth = None
+            tiktok_log(
+                f"[TikTok视频评论] 账号 {account['id']} 协议评论备选通道不可用，将只使用页面 DOM 发送：{exc}",
+                "warning",
+            )
+        tiktok_log(
+            f"[TikTok视频评论] 使用账号 {account['id']} 启动，共 {total} 个视频，间隔 {interval_desc}，模式 {mode_label}",
+            "info",
+        )
+        for index, task in enumerate(tasks, start=1):
+            if tiktok_video_comment_stop_requested:
+                break
+
+            started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            tiktok_video_comment_state["current_task_title"] = str(task.get("title", "") or task.get("url", ""))
+            tiktok_video_comment_state["current_comment_text"] = ""
+            task["video_comment_status"] = "processing"
+            task["video_comment_error"] = ""
+            task["video_comment_mode"] = mode
+            task["video_comment_prompt"] = comment_prompt
+            task["video_comment_seed_text"] = comment_seed_text
+            task["video_comment_summary"] = comment_summary
+            task["video_comment_text"] = ""
+            task["video_comment_image_path"] = image_path
+            task["video_comment_account_id"] = account["id"]
+            task["video_comment_started_at"] = started_at
+            task["video_comment_finished_at"] = ""
+            save_tiktok_tasks_state()
+            tiktok_log(f"[TikTok视频评论] 开始发送：{task.get('title') or task.get('url')}")
+
+            try:
+                final_comment_text = await asyncio.to_thread(
+                    generate_tiktok_video_comment_text,
+                    task,
+                    mode=mode,
+                    fixed_text=comment_text,
+                    prompt_text=comment_prompt,
+                    seed_text=comment_seed_text,
+                )
+                task["video_comment_text"] = final_comment_text
+                tiktok_video_comment_state["current_comment_text"] = final_comment_text
+                tiktok_video_comment_state["last_comment_text"] = final_comment_text
+                tiktok_video_comment_state["last_task_title"] = str(task.get("title", "") or task.get("url", ""))
+                tiktok_log(
+                    f"[TikTok视频评论] 已生成评论（{mode_label}）：{clean_tiktok_video_comment_text(final_comment_text, limit=30)}"
+                )
+                try:
+                    await scraper.send_video_comment(
+                        task.get("url", ""),
+                        final_comment_text,
+                        expected_title=str(task.get("title", "") or ""),
+                        image_path=image_path,
+                        use_modal_entry=bool(image_path),
+                        logger=tiktok_log,
+                    )
+                except Exception as dom_exc:
+                    if image_path or protocol_client is None or protocol_auth is None:
+                        raise
+                    tiktok_log(
+                        f"[TikTok视频评论] 页面 DOM 发送失败，尝试协议发布备选：{dom_exc}",
+                        "warning",
+                    )
+                    protocol_result = await asyncio.to_thread(
+                        protocol_client.publish_comment,
+                        protocol_auth,
+                        str(task.get("url", "") or ""),
+                        final_comment_text,
+                    )
+                    tiktok_log(
+                        f"[TikTok视频评论] 已通过协议发布备选发送，comment_id={protocol_result.get('comment_id', '')}",
+                        "success",
+                    )
+                success += 1
+                task["video_comment_status"] = "commented"
+                task["video_comment_error"] = ""
+                task["video_comment_finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                tiktok_log(f"[TikTok视频评论] 发送成功：{task.get('title') or task.get('url')}", "success")
+            except Exception as exc:
+                failed += 1
+                task["video_comment_status"] = "failed"
+                task["video_comment_error"] = str(exc)
+                task["video_comment_finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                tiktok_video_comment_state["last_error"] = str(exc)
+                tiktok_video_comment_state["current_comment_text"] = ""
+                tiktok_log(
+                    f"[TikTok视频评论] 发送失败：{task.get('title') or task.get('url')}，原因：{exc}",
+                    "error",
+                )
+            finally:
+                save_tiktok_tasks_state()
+                tiktok_video_comment_state["processed"] = success + failed
+                tiktok_video_comment_state["success"] = success
+                tiktok_video_comment_state["failed"] = failed
+
+            has_next_task = index < total
+            if has_next_task and not tiktok_video_comment_stop_requested:
+                next_interval_seconds = (
+                    random.randint(interval_seconds_min, interval_seconds_max)
+                    if interval_seconds_max > interval_seconds_min
+                    else interval_seconds_min
+                )
+                tiktok_video_comment_state["interval_seconds"] = next_interval_seconds
+                tiktok_video_comment_state["next_interval_seconds"] = next_interval_seconds
+                tiktok_video_comment_state["message"] = (
+                    f"等待 {next_interval_seconds} 秒后继续下一条视频评论"
+                )
+                remaining_seconds = next_interval_seconds
+                while remaining_seconds > 0 and not tiktok_video_comment_stop_requested:
+                    wait_seconds = min(1, remaining_seconds)
+                    await asyncio.sleep(wait_seconds)
+                    remaining_seconds -= wait_seconds
+                tiktok_video_comment_state["next_interval_seconds"] = 0
+    finally:
+        await scraper.close()
+        tiktok_video_comment_running = False
+        tiktok_video_comment_stop_requested = False
+        tiktok_video_comment_background_task = None
+        tiktok_video_comment_state["running"] = False
+        tiktok_video_comment_state["current_task_title"] = ""
+        tiktok_video_comment_state["current_comment_text"] = ""
+        tiktok_video_comment_state["next_interval_seconds"] = 0
+        tiktok_video_comment_state["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tiktok_video_comment_state["message"] = (
+            "视频评论任务已停止"
+            if tiktok_video_comment_state["processed"] < total
+            else "视频评论任务已完成"
+        )
+        tiktok_log(
+            f"[TikTok视频评论] 本轮结束，成功 {tiktok_video_comment_state['success']}，失败 {tiktok_video_comment_state['failed']}",
+            "info",
+        )
+
+
+def _sort_tiktok_comment_users(users: List[Dict]) -> List[Dict]:
+    """Keep captured comment order without using the mutable index as identity."""
+    indexed_users = list(enumerate(users or []))
+
+    def sort_key(entry: tuple[int, Dict]) -> tuple[int, int, int]:
+        original_index, user = entry
+        try:
+            comment_index = int(str(user.get("comment_index", "") or "").strip())
+        except (TypeError, ValueError):
+            return (1, original_index, original_index)
+        return (0, comment_index, original_index)
+
+    return [user for _, user in sorted(indexed_users, key=sort_key)]
+
+
+def _restore_tiktok_comment_order(users: List[Dict], source_comments: List[Dict]) -> List[Dict]:
+    """Restore the source-list index after AI filtering splits comments into batches."""
+    strict_lookup: Dict[str, Dict] = {}
+    loose_lookup: Dict[str, Dict] = {}
+    for position, source in enumerate(source_comments or [], start=1):
+        if not isinstance(source, dict):
+            continue
+        source_row = dict(source)
+        source_row["comment_index"] = source_row.get("comment_index") or position
+        strict_key = user_choice_key(source_row)
+        loose_key = user_choice_loose_key(source_row)
+        if strict_key:
+            strict_lookup.setdefault(strict_key, source_row)
+        if loose_key:
+            loose_lookup.setdefault(loose_key, source_row)
+
+    restored: List[Dict] = []
+    for user in users or []:
+        if not isinstance(user, dict):
+            continue
+        source = strict_lookup.get(user_choice_key(user)) or loose_lookup.get(user_choice_loose_key(user))
+        row = dict(user)
+        if source:
+            row["comment_index"] = source.get("comment_index", row.get("comment_index", ""))
+        restored.append(row)
+    return restored
+
+
+def _tiktok_comment_video_group_key(video_url: str) -> str:
+    normalized_url = str(video_url or "").strip()
+    aweme_id = extract_aweme_id(normalized_url)
+    return f"aweme:{aweme_id}" if aweme_id else normalized_url
+
+
+async def _close_tiktok_comment_page(page: object) -> None:
+    if page is None:
+        return
+    try:
+        await page.close()
+    except Exception:
+        pass
+
+
+async def _run_tiktok_precise_customer_reply_batch_worker(
+    task: Dict,
+    users: List[Dict],
+    account: Dict,
+    comment_mode: str,
+    comment_text: str,
+    comment_prompt: str,
+    comment_seed_text: str,
+    interval_seconds_min: int,
+    interval_seconds_max: int,
+) -> List[Dict]:
+    """Reply to one video's selected comments with batched AI generation."""
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    results: List[Dict] = []
+    rows = _sort_tiktok_comment_users(
+        _restore_tiktok_comment_order(
+            [normalize_high_intent_user(row) for row in (users or []) if isinstance(row, dict)],
+            [row for row in (task.get("all_comments", []) or []) if isinstance(row, dict)],
+        )
+    )
+    page = None
+    try:
+        fixed_reply_text = ""
+        if normalize_tiktok_video_comment_mode(comment_mode) == "fixed":
+            fixed_reply_text = await asyncio.to_thread(
+                generate_tiktok_video_comment_text,
+                task,
+                mode="fixed",
+                fixed_text=comment_text,
+                prompt_text=comment_prompt,
+                seed_text=comment_seed_text,
+            )
+        batch_size = 30
+        for batch_start in range(0, len(rows), batch_size):
+            batch = rows[batch_start : batch_start + batch_size]
+            try:
+                reply_map = (
+                    {index: fixed_reply_text for index, _ in enumerate(batch, start=1)}
+                    if fixed_reply_text
+                    else await asyncio.to_thread(
+                        generate_tiktok_video_comment_replies_batch,
+                        task,
+                        batch,
+                        mode=comment_mode,
+                        fixed_text=comment_text,
+                        prompt_text=comment_prompt,
+                        seed_text=comment_seed_text,
+                    )
+                )
+                batch_error = ""
+            except Exception as exc:
+                reply_map = {}
+                batch_error = str(exc).strip() or exc.__class__.__name__
+
+            for offset, user in enumerate(batch, start=1):
+                started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                item = {
+                    "user": user,
+                    "status": "failed",
+                    "account_id": int(account.get("id", 0) or 0),
+                    "started_at": started_at,
+                    "finished_at": "",
+                    "reply_text": str(reply_map.get(offset, "") or "").strip(),
+                    "error": batch_error,
+                }
+                try:
+                    update_tiktok_precise_touch_users(
+                        [user],
+                        action=TIKTOK_COLLECTION_REPLY_ACTION,
+                        status="processing",
+                        account_id=account.get("id"),
+                        started_at=started_at,
+                    )
+                    if batch_error:
+                        raise RuntimeError(batch_error)
+                    task_url = str(task.get("url", "") or "").strip()
+                    if not task_url:
+                        raise RuntimeError("精准客户缺少来源视频地址，无法定位评论")
+                    task_title = str(task.get("title", "") or "").strip()
+                    for attempt in range(2):
+                        try:
+                            if page is None:
+                                page = await scraper.open_video_comment_page(
+                                    task_url,
+                                    expected_title=task_title,
+                                    logger=tiktok_log,
+                                )
+                            await scraper.reply_to_loaded_video_comment(
+                                page,
+                                item["reply_text"],
+                                user,
+                                logger=tiktok_log,
+                                allow_scroll=True,
+                            )
+                            break
+                        except Exception as exc:
+                            await _close_tiktok_comment_page(page)
+                            page = None
+                            if attempt >= 1:
+                                raise
+                            tiktok_log(
+                                f"[TikTok精准获客评论回复] 当前页面处理失败，重新进入视频后重试一次：{exc}",
+                                "warning",
+                            )
+                    item["status"] = "completed"
+                    update_tiktok_precise_touch_users(
+                        [user],
+                        action=TIKTOK_COLLECTION_REPLY_ACTION,
+                        status="completed",
+                        result=item["reply_text"],
+                        account_id=account.get("id"),
+                        started_at=started_at,
+                        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                except Exception as exc:
+                    item["error"] = str(exc).strip() or exc.__class__.__name__
+                    tiktok_log(
+                        f"[TikTok精准获客评论回复] {user.get('username') or '-'} 执行失败：{item['error']}",
+                        "error",
+                    )
+                    update_tiktok_precise_touch_users(
+                        [user],
+                        action=TIKTOK_COLLECTION_REPLY_ACTION,
+                        status="failed",
+                        error=item["error"],
+                        result=item["reply_text"],
+                        account_id=account.get("id"),
+                        started_at=started_at,
+                        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                item["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                results.append(item)
+                progress = ensure_tiktok_task_shape(task).get("collect_progress", {})
+                progress.update(
+                    {
+                        "phase": "replying_precise_comments",
+                        "updated_at": _now_text(),
+                        "last_message": f"已回复精准客户评论 {len(results)}/{len(rows)} 条。",
+                    }
+                )
+                task["collect_progress"] = progress
+                save_tiktok_tasks_state()
+                if len(results) < len(rows):
+                    wait_seconds = (
+                        random.randint(interval_seconds_min, interval_seconds_max)
+                        if interval_seconds_max > interval_seconds_min
+                        else interval_seconds_min
+                    )
+                    if wait_seconds > 0:
+                        await asyncio.sleep(wait_seconds)
+    finally:
+        await _close_tiktok_comment_page(page)
+        await scraper.close()
+    return results
+
+
+async def _run_tiktok_precise_customer_reply_worker(
+    users: List[Dict],
+    account: Dict,
+    comment_mode: str,
+    comment_text: str,
+    comment_prompt: str,
+    comment_seed_text: str,
+    interval_seconds_min: int,
+    interval_seconds_max: int,
+) -> List[Dict]:
+    """Reply to exactly the selected customer comments, one row at a time."""
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    results: List[Dict] = []
+    normalized_users = [
+        normalize_high_intent_user(row if isinstance(row, dict) else {})
+        for row in (users or [])
+    ]
+    video_groups: Dict[str, Dict[str, object]] = {}
+    for user in normalized_users:
+        task_url = str(user.get("task_url") or user.get("video_url") or user.get("url") or "").strip()
+        group_key = _tiktok_comment_video_group_key(task_url) or f"missing:{len(video_groups)}"
+        group = video_groups.setdefault(group_key, {"video_url": task_url, "users": []})
+        group["users"].append(user)
+    processed_count = 0
+    try:
+        for group in video_groups.values():
+            page = None
+            task_url = str(group.get("video_url", "") or "").strip()
+            group_users = _sort_tiktok_comment_users(group.get("users", []))
+            try:
+                for user in group_users:
+                    task_title = str(
+                        user.get("task_title") or user.get("video_title") or user.get("title") or ""
+                    ).strip()
+                    task_author = str(user.get("task_author") or user.get("author") or "").strip()
+                    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    item = {
+                        "user": user,
+                        "status": "failed",
+                        "account_id": int(account.get("id", 0) or 0),
+                        "started_at": started_at,
+                        "finished_at": "",
+                        "reply_text": "",
+                        "error": "",
+                    }
+                    try:
+                        if not task_url:
+                            raise RuntimeError("精准客户缺少来源视频地址，无法定位评论")
+                        task_stub = {"title": task_title, "author": task_author, "url": task_url}
+                        final_text = await asyncio.to_thread(
+                            generate_tiktok_video_comment_text,
+                            task_stub,
+                            mode=comment_mode,
+                            fixed_text=comment_text,
+                            prompt_text=comment_prompt,
+                            seed_text=comment_seed_text,
+                        )
+                        item["reply_text"] = final_text
+                        for attempt in range(2):
+                            try:
+                                if page is None:
+                                    page = await scraper.open_video_comment_page(
+                                        task_url,
+                                        expected_title=task_title,
+                                        logger=tiktok_log,
+                                    )
+                                await scraper.reply_to_loaded_video_comment(
+                                    page,
+                                    final_text,
+                                    user,
+                                    logger=tiktok_log,
+                                    allow_scroll=True,
+                                )
+                                break
+                            except Exception as exc:
+                                await _close_tiktok_comment_page(page)
+                                page = None
+                                if attempt >= 1:
+                                    raise
+                                tiktok_log(
+                                    f"[TikTok精准客户回复] 当前页面处理失败，重新进入视频后重试一次：{exc}",
+                                    "warning",
+                                )
+                        item["status"] = "completed"
+                    except Exception as exc:
+                        item["error"] = str(exc).strip() or exc.__class__.__name__
+                        tiktok_log(
+                            f"[TikTok精准客户回复] {user.get('username') or '-'} 执行失败：{item['error']}",
+                            "error",
+                        )
+                    item["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    results.append(item)
+                    processed_count += 1
+
+                    if processed_count < len(normalized_users):
+                        wait_seconds = (
+                            random.randint(interval_seconds_min, interval_seconds_max)
+                            if interval_seconds_max > interval_seconds_min
+                            else interval_seconds_min
+                        )
+                        if wait_seconds > 0:
+                            await asyncio.sleep(wait_seconds)
+            finally:
+                await _close_tiktok_comment_page(page)
+    finally:
+        await scraper.close()
+
+    return results
+
+
+async def probe_tiktok_account_login_state(
+    account: Dict,
+    *,
+    attempts: int = TIKTOK_ACCOUNT_LOGIN_CHECK_ATTEMPTS,
+    allow_browser_launch: bool = True,
+) -> Dict[str, object]:
+    """Probe one account without turning a transient browser failure into logout.
+
+    ``allow_browser_launch`` is intentionally explicit.  Account-specific
+    actions (login/check/view) may start that account's browser, while passive
+    status reads must be able to avoid launching any browser at all.
+    """
+    account_id = int(account.get("id", 0) or 0)
+    account_port = int(account.get("port", 0) or 0)
+    if not allow_browser_launch and not is_port_open(account_port):
+        return {
+            "state": "unknown",
+            "reason": "browser_not_running",
+            "attempts": 0,
+        }
+    last: Dict[str, object] = {
+        "state": "unknown",
+        "reason": "probe_not_completed",
+        "attempts": 0,
+    }
+    total_attempts = max(1, int(attempts or 1))
+    waiting_result: Optional[Dict[str, object]] = None
+    for attempt in range(1, total_attempts + 1):
+        scraper = TikTokCommentScraper(
+            account_id=account_id,
+            cdp_port=account_port,
+            allow_workspace_fallback=allow_browser_launch,
+        )
+        try:
+            logged_in = bool(
+                await asyncio.wait_for(
+                    scraper.check_login_state(logger=tiktok_log),
+                    timeout=TIKTOK_ACCOUNT_LOGIN_CHECK_TIMEOUT_SECONDS,
+                )
+            )
+            details = getattr(scraper, "last_login_probe", {})
+            if not isinstance(details, dict):
+                details = {}
+            state = str(details.get("state") or ("online" if logged_in else "unknown")).strip().lower()
+            if logged_in:
+                state = "online"
+            if state not in {"online", "waiting", "unknown"}:
+                state = "unknown"
+            last = {**details, "state": state, "attempts": attempt}
+            if state == "online":
+                return last
+            if state == "waiting":
+                waiting_result = dict(last)
+        except asyncio.TimeoutError:
+            last = {"state": "unknown", "reason": "probe_timeout", "attempts": attempt}
+            tiktok_log(
+                f"[TikTok账号] 账号 {account_id} 登录态探测超时（第 {attempt}/{total_attempts} 次），保留原状态",
+                "warning",
+            )
+        except Exception as exc:
+            last = {
+                "state": "unknown",
+                "reason": f"{type(exc).__name__}: {exc}",
+                "attempts": attempt,
+            }
+            tiktok_log(
+                f"[TikTok账号] 账号 {account_id} 登录态探测异常（第 {attempt}/{total_attempts} 次），保留原状态：{exc}",
+                "warning",
+            )
+        finally:
+            await scraper.close()
+        if attempt < total_attempts:
+            await asyncio.sleep(TIKTOK_ACCOUNT_LOGIN_CHECK_RETRY_DELAY_SECONDS)
+    return waiting_result or last
+
+
+async def detect_tiktok_account_login_state(account: Dict) -> bool:
+    result = await probe_tiktok_account_login_state(account)
+    return str(result.get("state") or "unknown") == "online"
+
+
+async def run_tiktok_precise_customer_replies(
+    users: List[Dict],
+    *,
+    comment_mode: str = "fixed",
+    comment_text: str = "",
+    comment_prompt: str = "",
+    comment_seed_text: str = "",
+    account_id: int = 0,
+    interval_minutes_min: float = 4,
+    interval_minutes_max: float = 6,
+) -> Dict[str, object]:
+    """Run the precise-pool reply action with a strict per-user limit."""
+    source_users = [dict(row) for row in (users or []) if isinstance(row, dict)]
+    if not source_users:
+        return {"code": 400, "msg": "当前没有可回复的精准客户。", "user_results": []}
+
+    nurture_conflict = build_tiktok_nurture_conflict("执行精准客户评论回复")
+    if nurture_conflict:
+        return dict(nurture_conflict)
+    if has_running_tiktok_task_for_account_nurture():
+        log_tiktok_task_conflict("执行自动养号")
+        return {
+            "code": 409,
+            "msg": "当前有其他TikTok任务正在执行，请等待完成后再进行精准客户评论回复。",
+            "user_results": [],
+        }
+
+    config = load_global_config()
+    normalized_mode = normalize_tiktok_video_comment_mode(comment_mode)
+    if normalized_mode in {"ai", "rewrite"} and not tiktok_ai_available(config):
+        return {
+            "code": 400,
+            "msg": "当前未配置 AI 接口 Key，不能使用 AI 评论回复模式。",
+            "user_results": [],
+        }
+    accounts = get_online_tiktok_accounts(config)
+    if account_id > 0:
+        preferred = [account for account in accounts if int(account.get("id", 0) or 0) == int(account_id)]
+        if preferred:
+            accounts = preferred
+    if not accounts:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的TikTok在线账号，请先登录。",
+            "user_results": [],
+        }
+
+    interval_seconds_min = max(0, min(int(float(interval_minutes_min or 0) * 60), 24 * 60 * 60))
+    interval_seconds_max = max(
+        interval_seconds_min,
+        min(int(float(interval_minutes_max or 0) * 60), 24 * 60 * 60),
+    )
+    batches = distribute_interaction_users(source_users, accounts)
+    batch_results = await asyncio.gather(
+        *[
+            _run_tiktok_precise_customer_reply_worker(
+                batch["users"],
+                batch["account"],
+                normalized_mode,
+                comment_text,
+                comment_prompt,
+                comment_seed_text,
+                interval_seconds_min,
+                interval_seconds_max,
+            )
+            for batch in batches
+        ]
+    )
+    user_results = [item for batch in batch_results for item in batch]
+    success = sum(1 for item in user_results if item.get("status") == "completed")
+    failed = len(user_results) - success
+    status = "completed" if not failed else "partial"
+    return {
+        "code": 200,
+        "status": status,
+        "msg": f"精准客户评论回复完成：成功 {success} 人，失败 {failed} 人。",
+        "summary": f"精准客户评论回复完成：成功 {success} 人，失败 {failed} 人。",
+        "total": len(user_results),
+        "processed": len(user_results),
+        "success": success,
+        "failed": failed,
+        "account_ids": [int(batch["account"].get("id", 0) or 0) for batch in batches],
+        "interval_seconds_min": interval_seconds_min,
+        "interval_seconds_max": interval_seconds_max,
+        "user_results": user_results,
+    }
+
+
+async def run_tiktok_mention_comments(
+    *,
+    account: Dict,
+    video_url: str,
+    video_title: str,
+    video_cover_image: str,
+    selected_users: List[Dict],
+    selected_total: int,
+    truncated_count: int,
+):
+    global tiktok_mention_comment_running, tiktok_mention_comment_stop_requested, tiktok_mention_comment_background_task
+
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    comment_preview = build_tiktok_mention_comment_preview(selected_users, limit=10)
+    batches = split_tiktok_mention_comment_batches(
+        selected_users,
+        max_mentions_per_comment=TIKTOK_MENTION_COMMENT_MAX_USERS_PER_COMMENT,
+        max_comment_chars=TIKTOK_MENTION_COMMENT_SAFE_TEXT_LIMIT,
+    )
+    total_batches = len(batches)
+    accumulated_success = 0
+    accumulated_failed = 0
+
+    tiktok_mention_comment_state.update(
+        {
+            "running": True,
+            "message": "评论 @ 精准客户任务执行中",
+            "total": len(selected_users),
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "selected_total": selected_total,
+            "truncated": truncated_count,
+            "account_id": account["id"],
+            "video_url": video_url,
+            "video_title": video_title,
+            "video_cover_image": video_cover_image,
+            "current_user": "",
+            "current_users": [row.get("username", "") for row in selected_users[:8]],
+            "started_at": started_at,
+            "finished_at": "",
+            "last_error": "",
+            "comment_preview": comment_preview,
+        }
+    )
+
+    update_tiktok_mention_comment_users(
+        selected_users,
+        status="processing",
+        error="",
+        comment_text=comment_preview,
+        account_id=int(account["id"]),
+        result="准备评论中",
+        video_url=video_url,
+        video_title=video_title,
+        started_at=started_at,
+        finished_at="",
+    )
+
+    try:
+        if tiktok_mention_comment_stop_requested:
+            return
+
+        tiktok_log(
+            f"[TikTok评论@客户] 使用账号 {account['id']} 准备在作品《{video_title or video_url}》下 @ {len(selected_users)} 位精准客户"
+            + (f"，系统将按单条最多 {TIKTOK_MENTION_COMMENT_MAX_USERS_PER_COMMENT} 人、约 {TIKTOK_MENTION_COMMENT_SAFE_TEXT_LIMIT} 字自动拆成 {total_batches} 条评论" if total_batches > 1 else "")
+            + (f"，已截断 {truncated_count} 位超出上限的用户" if truncated_count else ""),
+            "info",
+        )
+
+        first_username = str((selected_users[0] or {}).get("username", "") or "").strip() if selected_users else ""
+        if first_username:
+            tiktok_mention_comment_state["current_user"] = first_username
+        await asyncio.sleep(0)
+
+        for batch_index, batch_rows in enumerate(batches, start=1):
+            if tiktok_mention_comment_stop_requested:
+                break
+            batch_preview = build_tiktok_mention_comment_preview(batch_rows, limit=8)
+            batch_first_username = str((batch_rows[0] or {}).get("username", "") or "").strip() if batch_rows else ""
+            tiktok_mention_comment_state.update(
+                {
+                    "current_user": batch_first_username,
+                    "current_users": [str(row.get("username", "") or "").strip() for row in batch_rows[:8]],
+                    "comment_preview": batch_preview,
+                    "message": f"评论 @ 精准客户任务执行中，第 {batch_index}/{total_batches} 批",
+                }
+            )
+            tiktok_log(
+                f"[TikTok评论@客户] 开始第 {batch_index}/{total_batches} 批，计划 @ {len(batch_rows)} 人：{batch_preview}",
+                "info",
+            )
+            try:
+                result = await scraper.send_video_comment_mentions(
+                    video_url=video_url,
+                    mention_usernames=[str(row.get("username", "") or "") for row in batch_rows],
+                    expected_title=video_title,
+                    max_mentions=len(batch_rows),
+                    logger=tiktok_log,
+                    should_stop=lambda: bool(tiktok_mention_comment_stop_requested),
+                )
+                finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                sent_labels = result.get("selected_mentions", []) or []
+                successful_mentions = result.get("successful_mentions", []) or []
+                failed_mentions = result.get("failed_mentions", []) or []
+                sent_text = str(result.get("comment_text", "") or batch_preview).strip()
+                success_rows = filter_tiktok_mention_comment_rows_by_username(
+                    batch_rows,
+                    [str(item.get("requested_username", "") or "") for item in successful_mentions if isinstance(item, dict)],
+                )
+                failed_rows = filter_tiktok_mention_comment_rows_by_username(
+                    batch_rows,
+                    [str(item.get("requested_username", "") or "") for item in failed_mentions if isinstance(item, dict)],
+                )
+                failed_error_lookup = {
+                    normalize_tiktok_text(item.get("requested_username", "") if isinstance(item, dict) else "").lower():
+                    str(item.get("error", "") or "").strip()
+                    for item in failed_mentions
+                    if isinstance(item, dict) and normalize_tiktok_text(item.get("requested_username", "") if isinstance(item, dict) else "")
+                }
+
+                update_tiktok_mention_comment_users(
+                    success_rows,
+                    status="completed",
+                    error="",
+                    comment_text=sent_text,
+                    account_id=int(account["id"]),
+                    result=f"第 {batch_index}/{total_batches} 批已评论并 @ {len(sent_labels) or len(success_rows)} 人",
+                    video_url=video_url,
+                    video_title=video_title,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                )
+                upsert_tiktok_mention_comment_history(
+                    success_rows,
+                    status="completed",
+                    error="",
+                    comment_text=sent_text,
+                    account_id=int(account["id"]),
+                    result=f"第 {batch_index}/{total_batches} 批已评论并 @ {len(sent_labels) or len(success_rows)} 人",
+                    video_url=video_url,
+                    video_title=video_title,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                )
+                for row in failed_rows:
+                    username_key = normalize_tiktok_text(row.get("username", "") if isinstance(row, dict) else "").lower()
+                    row_error = failed_error_lookup.get(username_key, "候选未出现或点击失败")
+                    update_tiktok_mention_comment_users(
+                        [row],
+                        status="failed",
+                        error=row_error,
+                        comment_text=sent_text,
+                        account_id=int(account["id"]),
+                        result=f"第 {batch_index}/{total_batches} 批已跳过，未写入本次评论",
+                        video_url=video_url,
+                        video_title=video_title,
+                        started_at=started_at,
+                        finished_at=finished_at,
+                    )
+                    upsert_tiktok_mention_comment_history(
+                        [row],
+                        status="failed",
+                        error=row_error,
+                        comment_text=sent_text,
+                        account_id=int(account["id"]),
+                        result=f"第 {batch_index}/{total_batches} 批已跳过，未写入本次评论",
+                        video_url=video_url,
+                        video_title=video_title,
+                        started_at=started_at,
+                        finished_at=finished_at,
+                    )
+                accumulated_success += len(success_rows)
+                accumulated_failed += len(failed_rows)
+                tiktok_mention_comment_state.update(
+                    {
+                        "processed": accumulated_success + accumulated_failed,
+                        "success": accumulated_success,
+                        "failed": accumulated_failed,
+                        "current_user": "",
+                        "current_users": sent_labels[:8] or tiktok_mention_comment_state.get("current_users", []),
+                        "comment_preview": sent_text,
+                    }
+                )
+                tiktok_log(
+                    f"[TikTok评论@客户] 第 {batch_index}/{total_batches} 批完成：成功 @ {len(sent_labels) or len(success_rows)} 人"
+                    + (f"，跳过 {len(failed_rows)} 人" if failed_rows else ""),
+                    "success" if len(success_rows) else "warning",
+                )
+            except TikTokMentionCommentStopped:
+                raise
+            except Exception as exc:
+                finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                accumulated_failed += len(batch_rows)
+                update_tiktok_mention_comment_users(
+                    batch_rows,
+                    status="failed",
+                    error=str(exc),
+                    comment_text=batch_preview,
+                    account_id=int(account["id"]),
+                    result=f"第 {batch_index}/{total_batches} 批发送失败",
+                    video_url=video_url,
+                    video_title=video_title,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                )
+                upsert_tiktok_mention_comment_history(
+                    batch_rows,
+                    status="failed",
+                    error=str(exc),
+                    comment_text=batch_preview,
+                    account_id=int(account["id"]),
+                    result=f"第 {batch_index}/{total_batches} 批发送失败",
+                    video_url=video_url,
+                    video_title=video_title,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                )
+                tiktok_mention_comment_state.update(
+                    {
+                        "processed": accumulated_success + accumulated_failed,
+                        "success": accumulated_success,
+                        "failed": accumulated_failed,
+                        "last_error": str(exc),
+                        "current_user": "",
+                    }
+                )
+                tiktok_log(
+                    f"[TikTok评论@客户] 第 {batch_index}/{total_batches} 批失败：{exc}",
+                    "error",
+                )
+
+        tiktok_log(
+            f"[TikTok评论@客户] 已完成：作品《{video_title or video_url}》累计成功 @ {accumulated_success} 人，失败 {accumulated_failed} 人，共执行 {total_batches} 批",
+            "success" if accumulated_success else "warning",
+        )
+    except TikTokMentionCommentStopped:
+        tiktok_mention_comment_state.update(
+            {
+                "current_user": "",
+                "message": "评论 @ 精准客户任务已停止",
+            }
+        )
+        tiktok_log("[TikTok评论@客户] 已按停止请求中断当前任务", "warning")
+    except Exception as exc:
+        finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        batch_failure_message = f"批量 @ 发送失败：{exc}"
+        update_tiktok_mention_comment_users(
+            selected_users,
+            status="failed",
+            error=str(exc),
+            comment_text=comment_preview,
+            account_id=int(account["id"]),
+            result="发送失败",
+            video_url=video_url,
+            video_title=video_title,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        tiktok_mention_comment_state.update(
+            {
+                "processed": len(selected_users),
+                "success": 0,
+                "failed": len(selected_users),
+                "last_error": str(exc),
+                "current_user": "",
+                "message": batch_failure_message,
+            }
+        )
+        tiktok_log(f"[TikTok评论@客户] 执行失败：{batch_failure_message}", "error")
+    finally:
+        if (
+            tiktok_mention_comment_state.get("success", 0) == 0
+            and tiktok_mention_comment_state.get("failed", 0) == 0
+        ):
+            update_tiktok_mention_comment_users(
+                selected_users,
+                status="pending",
+                error="",
+                comment_text=comment_preview,
+                account_id=int(account["id"]),
+                result="任务已停止",
+                video_url=video_url,
+                video_title=video_title,
+                started_at=started_at,
+                finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+        await scraper.close()
+        tiktok_mention_comment_running = False
+        tiktok_mention_comment_stop_requested = False
+        tiktok_mention_comment_background_task = None
+        tiktok_mention_comment_state["running"] = False
+        tiktok_mention_comment_state["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tiktok_mention_comment_state["current_user"] = ""
+        tiktok_mention_comment_state["message"] = (
+            "评论 @ 精准客户任务已停止"
+            if tiktok_mention_comment_state["success"] < len(selected_users)
+            else "评论 @ 精准客户任务已完成"
+        )
+        tiktok_log(
+            f"[TikTok评论@客户] 本轮结束，成功 {tiktok_mention_comment_state['success']}，失败 {tiktok_mention_comment_state['failed']}"
+            + (
+                "。说明：失败用户已跳过，成功用户会继续写入并发送。"
+                if tiktok_mention_comment_state.get("failed", 0) and tiktok_mention_comment_state.get("success", 0) > 0
+                else ""
+            ),
+            "info",
+        )
+
+
+def build_follow_comment_worker_state(account: Dict, assigned_total: int) -> Dict:
+    return {
+        "account_id": account["id"],
+        "status": "queued",
+        "assigned_total": assigned_total,
+        "processed": 0,
+        "success": 0,
+        "failed": 0,
+        "commented": 0,
+        "skipped_no_posts": 0,
+        "current_user": "",
+        "cooldown_remaining": 0,
+        "last_error": "",
+    }
+
+
+def get_follow_comment_assigned_total() -> int:
+    return sum(
+        int(worker.get("assigned_total", 0) or 0)
+        for worker in tiktok_follow_comment_state.get("workers", [])
+        if isinstance(worker, dict)
+    )
+
+
+def refresh_follow_comment_state_from_workers(
+    total: int,
+    interval_seconds_min: int,
+    interval_seconds_max: int,
+):
+    workers = tiktok_follow_comment_state.get("workers", [])
+    if not isinstance(workers, list):
+        workers = []
+    processed = sum(int(worker.get("processed", 0) or 0) for worker in workers if isinstance(worker, dict))
+    success = sum(int(worker.get("success", 0) or 0) for worker in workers if isinstance(worker, dict))
+    failed = sum(int(worker.get("failed", 0) or 0) for worker in workers if isinstance(worker, dict))
+    commented = sum(int(worker.get("commented", 0) or 0) for worker in workers if isinstance(worker, dict))
+    skipped_no_posts = sum(int(worker.get("skipped_no_posts", 0) or 0) for worker in workers if isinstance(worker, dict))
+    current_users = [
+        str(worker.get("current_user", "") or "")
+        for worker in workers
+        if isinstance(worker, dict) and str(worker.get("current_user", "") or "").strip()
+    ]
+    tiktok_follow_comment_state["total"] = total
+    tiktok_follow_comment_state["processed"] = processed
+    tiktok_follow_comment_state["success"] = success
+    tiktok_follow_comment_state["failed"] = failed
+    tiktok_follow_comment_state["commented"] = commented
+    tiktok_follow_comment_state["skipped_no_posts"] = skipped_no_posts
+    tiktok_follow_comment_state["interval_seconds"] = interval_seconds_min
+    tiktok_follow_comment_state["interval_seconds_min"] = interval_seconds_min
+    tiktok_follow_comment_state["interval_seconds_max"] = interval_seconds_max
+    tiktok_follow_comment_state["current_users"] = current_users
+    tiktok_follow_comment_state["current_user"] = current_users[0] if current_users else ""
+
+    if tiktok_follow_comment_stop_requested:
+        tiktok_follow_comment_state["message"] = "正在停止关注评论任务..."
+        return
+
+    worker_messages = []
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+        account_id = worker.get("account_id")
+        status = str(worker.get("status", "") or "")
+        current_user = str(worker.get("current_user", "") or "").strip()
+        cooldown_remaining = int(worker.get("cooldown_remaining", 0) or 0)
+        if status == "processing" and current_user:
+            worker_messages.append(f"账号 {account_id} 正在处理 {current_user}")
+        elif status == "cooldown":
+            worker_messages.append(f"账号 {account_id} 冷却 {cooldown_remaining} 秒")
+
+    if worker_messages:
+        tiktok_follow_comment_state["message"] = "；".join(worker_messages[:3])
+    else:
+        account_ids = tiktok_follow_comment_state.get("account_ids", [])
+        account_count = len(account_ids) if isinstance(account_ids, list) else 0
+        tiktok_follow_comment_state["message"] = (
+            f"关注评论任务执行中，{account_count} 个账号并发"
+            if account_count > 1
+            else "关注评论任务执行中"
+        )
+
+
+async def run_tiktok_follow_comment_worker(
+    users: List[Dict],
+    comment_mode: str,
+    comment_text: str,
+    comment_prompt: str,
+    comment_seed_text: str,
+    image_path: str,
+    account: Dict,
+    interval_seconds_min: int,
+    interval_seconds_max: int,
+    worker_state: Dict,
+    state_lock: asyncio.Lock,
+):
+    image_path = str(image_path or "").strip()
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    protocol_client = None
+    protocol_auth = None
+    try:
+        try:
+            from .tiktok_comment_api_experiment import TikTokCommentApiExperiment
+
+            protocol_client = TikTokCommentApiExperiment(account_id=account["id"], cdp_port=account["port"])
+            protocol_auth = await protocol_client.extract_auth()
+            tiktok_log(
+                f"[TikTok关注评论] 账号 {account['id']} 已准备协议评论备选通道，页面评论失败时会自动尝试协议发布。",
+                "info",
+            )
+        except Exception as exc:
+            protocol_client = None
+            protocol_auth = None
+            tiktok_log(
+                f"[TikTok关注评论] 账号 {account['id']} 协议评论备选通道不可用，将只使用页面 DOM 评论：{exc}",
+                "warning",
+            )
+        interval_desc = (
+            f"{interval_seconds_min}-{interval_seconds_max} 秒"
+            if interval_seconds_min != interval_seconds_max
+            else f"{interval_seconds_min} 秒"
+        )
+        tiktok_log(
+            f"[TikTok关注评论] 账号 {account['id']} 已接管 {len(users)} 位用户，间隔 {interval_desc}，模式 {tiktok_video_comment_mode_label(comment_mode)}",
+            "info",
+        )
+        for index, user in enumerate(users, start=1):
+            if tiktok_follow_comment_stop_requested:
+                break
+
+            started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            current_user = str(user.get("username", "") or user.get("profile_url", ""))
+            async with state_lock:
+                worker_state["status"] = "processing"
+                worker_state["current_user"] = current_user
+                worker_state["cooldown_remaining"] = 0
+                tiktok_follow_comment_state["current_comment_text"] = ""
+                refresh_follow_comment_state_from_workers(
+                    get_follow_comment_assigned_total(),
+                    interval_seconds_min,
+                    interval_seconds_max,
+                )
+            tiktok_log(f"[TikTok关注评论] 账号 {account['id']} 开始处理：{current_user}", "info")
+
+            final_comment_text = ""
+            try:
+                target_work = {
+                    "title": f"{str(user.get('username', '') or current_user or '该用户')}的首个作品",
+                    "author": str(user.get("username", "") or "该用户"),
+                    "url": str(user.get("profile_url", "") or ""),
+                }
+                final_comment_text = await asyncio.to_thread(
+                    generate_tiktok_video_comment_text,
+                    target_work,
+                    mode=comment_mode,
+                    fixed_text=comment_text,
+                    prompt_text=comment_prompt,
+                    seed_text=comment_seed_text,
+                )
+                tiktok_follow_comment_state["current_comment_text"] = final_comment_text
+                tiktok_follow_comment_state["last_comment_text"] = final_comment_text
+                update_tiktok_follow_comment_users(
+                    [user],
+                    status="processing",
+                    error="",
+                    comment_text=final_comment_text,
+                    account_id=account["id"],
+                    result="",
+                    started_at=started_at,
+                    finished_at="",
+                )
+                tiktok_log(
+                    f"[TikTok关注评论] 账号 {account['id']} 已生成评论（{tiktok_video_comment_mode_label(comment_mode)}）：{clean_tiktok_video_comment_text(final_comment_text, limit=30)}"
+                )
+                try:
+                    result = await scraper.follow_user_and_comment_first_post(
+                        user.get("profile_url", ""),
+                        final_comment_text,
+                        expected_username=str(user.get("username", "") or ""),
+                        image_path=image_path,
+                        logger=tiktok_log,
+                    )
+                except Exception as dom_exc:
+                    if image_path or protocol_client is None or protocol_auth is None:
+                        raise
+                    profile_result = await scraper.follow_user_and_find_first_post(
+                        user.get("profile_url", ""),
+                        expected_username=str(user.get("username", "") or ""),
+                        logger=tiktok_log,
+                    )
+                    protocol_video_url = str(profile_result.get("video_url", "") or "").strip()
+                    if not protocol_video_url:
+                        raise
+                    tiktok_log(
+                        f"[TikTok关注评论] 页面评论失败，尝试对首个作品走协议发布备选：{dom_exc}",
+                        "warning",
+                    )
+                    protocol_result = await asyncio.to_thread(
+                        protocol_client.publish_comment,
+                        protocol_auth,
+                        protocol_video_url,
+                        final_comment_text,
+                    )
+                    result = {
+                        **profile_result,
+                        "success": True,
+                        "has_posts": True,
+                        "commented": True,
+                        "summary": f"已关注并通过协议备选完成首作品评论，comment_id={protocol_result.get('comment_id', '')}",
+                    }
+                summary = str(result.get("summary", "") or "").strip() or "已完成主页关注评论"
+                has_posts = bool(result.get("has_posts"))
+                commented = bool(result.get("commented"))
+                update_tiktok_follow_comment_users(
+                    [user],
+                    status="completed",
+                    error="",
+                    comment_text=final_comment_text,
+                    account_id=account["id"],
+                    result=summary,
+                    started_at=started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                tiktok_log(f"[TikTok关注评论] 账号 {account['id']} 完成：{current_user}，{summary}", "success")
+                async with state_lock:
+                    worker_state["processed"] = int(worker_state.get("processed", 0) or 0) + 1
+                    worker_state["success"] = int(worker_state.get("success", 0) or 0) + 1
+                    if commented:
+                        worker_state["commented"] = int(worker_state.get("commented", 0) or 0) + 1
+                    if not has_posts:
+                        worker_state["skipped_no_posts"] = int(worker_state.get("skipped_no_posts", 0) or 0) + 1
+                    worker_state["last_error"] = ""
+                    refresh_follow_comment_state_from_workers(
+                        get_follow_comment_assigned_total(),
+                        interval_seconds_min,
+                        interval_seconds_max,
+                    )
+            except Exception as exc:
+                update_tiktok_follow_comment_users(
+                    [user],
+                    status="failed",
+                    error=str(exc),
+                    comment_text=final_comment_text,
+                    account_id=account["id"],
+                    result="",
+                    started_at=started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                tiktok_log(f"[TikTok关注评论] 账号 {account['id']} 失败：{current_user}，原因：{exc}", "error")
+                if session_health.is_login_wall_error(exc):
+                    session_health.mark_need_relogin(account["id"], reason=str(exc)[:200])
+                    tiktok_log(
+                        f"[TikTok关注评论] 账号 {account['id']} 判定为登录掉线，本轮剩余 {max(0, len(users) - index)} 位目标已跳过，请重新登录该TikTok账号后重试。",
+                        "error",
+                    )
+                    break
+                async with state_lock:
+                    worker_state["processed"] = int(worker_state.get("processed", 0) or 0) + 1
+                    worker_state["failed"] = int(worker_state.get("failed", 0) or 0) + 1
+                    worker_state["last_error"] = str(exc)
+                    tiktok_follow_comment_state["last_error"] = str(exc)
+                    refresh_follow_comment_state_from_workers(
+                        get_follow_comment_assigned_total(),
+                        interval_seconds_min,
+                        interval_seconds_max,
+                    )
+
+            has_next_user = index < len(users)
+            if has_next_user and not tiktok_follow_comment_stop_requested:
+                wait_interval_seconds = (
+                    random.randint(interval_seconds_min, interval_seconds_max)
+                    if interval_seconds_max > interval_seconds_min
+                    else interval_seconds_min
+                )
+                remaining_seconds = wait_interval_seconds
+                async with state_lock:
+                    worker_state["status"] = "cooldown"
+                    worker_state["cooldown_remaining"] = remaining_seconds
+                    refresh_follow_comment_state_from_workers(
+                        get_follow_comment_assigned_total(),
+                        interval_seconds_min,
+                        interval_seconds_max,
+                    )
+                while remaining_seconds > 0 and not tiktok_follow_comment_stop_requested:
+                    wait_seconds = min(1, remaining_seconds)
+                    await asyncio.sleep(wait_seconds)
+                    remaining_seconds -= wait_seconds
+                    async with state_lock:
+                        worker_state["cooldown_remaining"] = remaining_seconds
+                        refresh_follow_comment_state_from_workers(
+                            get_follow_comment_assigned_total(),
+                            interval_seconds_min,
+                            interval_seconds_max,
+                        )
+
+        async with state_lock:
+            worker_state["status"] = "stopped" if tiktok_follow_comment_stop_requested else "completed"
+            worker_state["current_user"] = ""
+            worker_state["cooldown_remaining"] = 0
+            refresh_follow_comment_state_from_workers(
+                get_follow_comment_assigned_total(),
+                interval_seconds_min,
+                interval_seconds_max,
+            )
+    except Exception as exc:
+        async with state_lock:
+            worker_state["status"] = "failed"
+            worker_state["current_user"] = ""
+            worker_state["cooldown_remaining"] = 0
+            worker_state["last_error"] = str(exc)
+            tiktok_follow_comment_state["last_error"] = str(exc)
+            refresh_follow_comment_state_from_workers(
+                get_follow_comment_assigned_total(),
+                interval_seconds_min,
+                interval_seconds_max,
+            )
+        tiktok_log(f"[TikTok关注评论] 账号 {account['id']} worker 异常退出：{exc}", "error")
+    finally:
+        await scraper.close()
+
+
+async def run_tiktok_follow_comments(
+    users: List[Dict],
+    comment_mode: str,
+    comment_text: str,
+    comment_prompt: str,
+    comment_seed_text: str,
+    accounts: List[Dict],
+    interval_seconds_min: int,
+    interval_seconds_max: int,
+    image_path: str = "",
+):
+    global tiktok_follow_comment_running, tiktok_follow_comment_stop_requested, tiktok_follow_comment_background_task
+
+    image_path = str(image_path or "").strip()
+    total = len(users)
+    batches = distribute_interaction_users(users, accounts)
+    workers = [build_follow_comment_worker_state(item["account"], len(item["users"])) for item in batches]
+    comment_summary = summarize_tiktok_video_comment_settings(
+        comment_mode,
+        fixed_text=comment_text,
+        prompt_text=comment_prompt,
+        seed_text=comment_seed_text,
+    )
+    if image_path:
+        comment_summary = f"{comment_summary} + 图片"
+    tiktok_follow_comment_state.update(
+        {
+            "running": True,
+            "message": "关注评论任务执行中",
+            "total": total,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "commented": 0,
+            "skipped_no_posts": 0,
+            "interval_seconds": interval_seconds_min,
+            "interval_seconds_min": interval_seconds_min,
+            "interval_seconds_max": interval_seconds_max,
+            "account_id": workers[0]["account_id"] if len(workers) == 1 else None,
+            "comment_mode": comment_mode,
+            "comment_summary": comment_summary,
+            "account_ids": [worker["account_id"] for worker in workers],
+            "current_user": "",
+            "current_users": [],
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": "",
+            "last_error": "",
+            "current_comment_text": "",
+            "comment_image_path": image_path,
+            "workers": workers,
+        }
+    )
+
+    state_lock = asyncio.Lock()
+    refresh_follow_comment_state_from_workers(total, interval_seconds_min, interval_seconds_max)
+    try:
+        interval_desc = (
+            f"{interval_seconds_min}-{interval_seconds_max} 秒"
+            if interval_seconds_min != interval_seconds_max
+            else f"{interval_seconds_min} 秒"
+        )
+        tiktok_log(
+            f"[TikTok关注评论] 已启动 {len(workers)} 个账号并发，共 {total} 人，间隔 {interval_desc}，模式 {tiktok_video_comment_mode_label(comment_mode)}",
+            "info",
+        )
+        await asyncio.gather(
+            *[
+                run_tiktok_follow_comment_worker(
+                    item["users"],
+                    comment_mode,
+                    comment_text,
+                    comment_prompt,
+                    comment_seed_text,
+                    image_path,
+                    item["account"],
+                    interval_seconds_min,
+                    interval_seconds_max,
+                    worker_state,
+                    state_lock,
+                )
+                for item, worker_state in zip(batches, workers)
+            ]
+        )
+    finally:
+        tiktok_follow_comment_running = False
+        tiktok_follow_comment_stop_requested = False
+        tiktok_follow_comment_background_task = None
+        tiktok_follow_comment_state["running"] = False
+        tiktok_follow_comment_state["current_user"] = ""
+        tiktok_follow_comment_state["current_users"] = []
+        tiktok_follow_comment_state["current_comment_text"] = ""
+        tiktok_follow_comment_state["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tiktok_follow_comment_state["message"] = (
+            "关注评论任务已停止"
+            if tiktok_follow_comment_state["processed"] < total
+            else "关注评论任务已完成"
+        )
+        tiktok_log(
+            f"[TikTok关注评论] 本轮结束，成功 {tiktok_follow_comment_state['success']}，评论成功 {tiktok_follow_comment_state['commented']}，无作品跳过 {tiktok_follow_comment_state['skipped_no_posts']}，失败 {tiktok_follow_comment_state['failed']}，使用 {len(workers)} 个账号",
+            "info",
+        )
+
+
+def build_interaction_worker_state(account: Dict, assigned_total: int) -> Dict:
+    return {
+        "account_id": account["id"],
+        "status": "queued",
+        "assigned_total": assigned_total,
+        "processed": 0,
+        "success": 0,
+        "failed": 0,
+        "current_user": "",
+        "current_message_text": "",
+        "cooldown_remaining": 0,
+        "last_error": "",
+    }
+
+
+def _is_invalid_tiktok_profile_error(exc: Exception) -> bool:
+    message = str(exc or "").strip()
+    return any(
+        keyword in message
+        for keyword in (
+            "用户不存在",
+            "主页链接无效",
+            "缺少用户主页地址",
+            "无效的用户主页地址",
+            "invalid tiktok profile url",
+        )
+    )
+
+
+def _should_fallback_from_tiktok_im_error(exc: Exception) -> bool:
+    if _is_invalid_tiktok_profile_error(exc):
+        return False
+    class_name = exc.__class__.__name__
+    if class_name == "TikTokImApiProfileError":
+        return False
+    if class_name == "TikTokImApiUnavailableError":
+        return True
+    message = str(exc or "").strip().lower()
+    fallback_markers = (
+        "tiktok im auth material incomplete",
+        "missing",
+        "node_modules",
+        "jsrsasign",
+        "a_bogus",
+        "execjs",
+        "query target user failed",
+        "query current user failed",
+        "create conversation failed",
+        "send im message failed",
+        "connection aborted",
+        "timeout",
+    )
+    return any(marker in message for marker in fallback_markers)
+
+
+def distribute_interaction_users(users: List[Dict], accounts: List[Dict]) -> List[Dict]:
+    active_accounts = accounts[: max(1, min(len(accounts), len(users)))]
+    buckets = [{"account": account, "users": []} for account in active_accounts]
+    for index, user in enumerate(users):
+        buckets[index % len(buckets)]["users"].append(user)
+    return [bucket for bucket in buckets if bucket["users"]]
+
+
+def get_interaction_assigned_total() -> int:
+    return sum(
+        int(worker.get("assigned_total", 0) or 0)
+        for worker in tiktok_interaction_state.get("workers", [])
+        if isinstance(worker, dict)
+    )
+
+
+def refresh_interaction_state_from_workers(
+    total: int,
+    interval_seconds_min: int,
+    interval_seconds_max: int,
+):
+    workers = tiktok_interaction_state.get("workers", [])
+    if not isinstance(workers, list):
+        workers = []
+    processed = sum(int(worker.get("processed", 0) or 0) for worker in workers if isinstance(worker, dict))
+    success = sum(int(worker.get("success", 0) or 0) for worker in workers if isinstance(worker, dict))
+    failed = sum(int(worker.get("failed", 0) or 0) for worker in workers if isinstance(worker, dict))
+    skipped = sum(int(worker.get("skipped", 0) or 0) for worker in workers if isinstance(worker, dict))
+    current_users = [
+        str(worker.get("current_user", "") or "")
+        for worker in workers
+        if isinstance(worker, dict) and str(worker.get("current_user", "") or "").strip()
+    ]
+    tiktok_interaction_state["total"] = total
+    tiktok_interaction_state["processed"] = processed
+    tiktok_interaction_state["success"] = success
+    tiktok_interaction_state["failed"] = failed
+    tiktok_interaction_state["skipped"] = skipped
+    tiktok_interaction_state["interval_seconds"] = interval_seconds_min
+    tiktok_interaction_state["interval_seconds_min"] = interval_seconds_min
+    tiktok_interaction_state["interval_seconds_max"] = interval_seconds_max
+    tiktok_interaction_state["current_users"] = current_users
+    tiktok_interaction_state["current_user"] = current_users[0] if current_users else ""
+    current_messages = [
+        str(worker.get("current_message_text", "") or "")
+        for worker in workers
+        if isinstance(worker, dict) and str(worker.get("current_message_text", "") or "").strip()
+    ]
+    tiktok_interaction_state["current_message_text"] = current_messages[0] if current_messages else ""
+
+    if tiktok_interaction_stop_requested:
+        tiktok_interaction_state["message"] = "正在停止私信任务..."
+        return
+
+    worker_messages = []
+    for worker in workers:
+        if not isinstance(worker, dict):
+            continue
+        account_id = worker.get("account_id")
+        status = str(worker.get("status", "") or "")
+        current_user = str(worker.get("current_user", "") or "").strip()
+        cooldown_remaining = int(worker.get("cooldown_remaining", 0) or 0)
+        if status == "processing" and current_user:
+            worker_messages.append(f"账号 {account_id} 正在发送 {current_user}")
+        elif status == "cooldown":
+            worker_messages.append(f"账号 {account_id} 冷却 {cooldown_remaining} 秒")
+
+    if worker_messages:
+        tiktok_interaction_state["message"] = "；".join(worker_messages[:3])
+    else:
+        account_ids = tiktok_interaction_state.get("account_ids", [])
+        account_count = len(account_ids) if isinstance(account_ids, list) else 0
+        tiktok_interaction_state["message"] = (
+            f"私信任务执行中，{account_count} 个账号并发"
+            if account_count > 1
+            else "私信任务执行中"
+        )
+
+
+async def run_tiktok_interaction_worker(
+    users: List[Dict],
+    message_mode: str,
+    fixed_message: str,
+    message_prompt: str,
+    message_seed_text: str,
+    account: Dict,
+    interval_seconds_min: int,
+    interval_seconds_max: int,
+    worker_state: Dict,
+    state_lock: asyncio.Lock,
+):
+    config = load_global_config()
+    show_browser = True
+    scraper: Optional[TikTokCommentScraper] = None
+    im_client = None
+    im_auth = None
+    im_direct_enabled = False
+    consecutive_ai_failures = 0
+    ai_failure_abort_message = "本轮已暂停：AI 接口连续超时或不可用，请稍后重试，或先切换到固定文案模式。"
+    try:
+        tiktok_log(
+            f"[TikTok私信] 账号 {account['id']} 本轮使用页面 DOM 发送，暂不调用 IM 协议直发，避免协议尝试后再页面发送触发频繁。",
+            "info",
+        )
+
+        interval_desc = (
+            f"{interval_seconds_min}-{interval_seconds_max} 秒"
+            if interval_seconds_min != interval_seconds_max
+            else f"{interval_seconds_min} 秒"
+        )
+        tiktok_log(
+            f"[TikTok私信] 账号 {account['id']} 已接管 {len(users)} 位用户，间隔 {interval_desc}，浏览器模式：{'显示窗口' if show_browser else '无头运行'}",
+            "info",
+        )
+        for index, user in enumerate(users, start=1):
+            if tiktok_interaction_stop_requested:
+                break
+
+            started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            current_user = str(user.get("username", "") or user.get("profile_url", ""))
+            final_message = ""
+            try:
+                final_message = await asyncio.to_thread(
+                    generate_tiktok_interaction_message,
+                    user,
+                    mode=message_mode,
+                    fixed_text=fixed_message,
+                    prompt_text=message_prompt,
+                    seed_text=message_seed_text,
+                )
+                async with state_lock:
+                    worker_state["status"] = "processing"
+                    worker_state["current_user"] = current_user
+                    worker_state["current_message_text"] = final_message
+                    worker_state["cooldown_remaining"] = 0
+                    tiktok_interaction_state["current_message_text"] = final_message
+                    refresh_interaction_state_from_workers(
+                        get_interaction_assigned_total(),
+                        interval_seconds_min,
+                        interval_seconds_max,
+                    )
+
+                update_tiktok_interaction_users(
+                    [user],
+                    status="processing",
+                    error="",
+                    message=final_message,
+                    account_id=account["id"],
+                    started_at=started_at,
+                    finished_at="",
+                )
+                tiktok_log(f"[TikTok私信] 账号 {account['id']} 开始处理：{current_user}", "info")
+
+                if im_direct_enabled and im_client is not None and im_auth is not None:
+                    try:
+                        im_auth = await im_client.extract_auth()
+                        protocol_result = await asyncio.to_thread(
+                            im_client.send_private_message,
+                            im_auth,
+                            user.get("profile_url", ""),
+                            final_message,
+                        )
+                        server_message_id = str(
+                            ((protocol_result or {}).get("send_result") or {}).get("server_message_id", "")
+                            or ""
+                        ).strip()
+                        tiktok_log(
+                            f"[TikTok私信] 账号 {account['id']} 已通过 IM 协议直发：{current_user}，server_message_id={server_message_id}",
+                            "info",
+                        )
+                    except Exception as im_exc:
+                        refreshed = False
+                        if _should_fallback_from_tiktok_im_error(im_exc):
+                            try:
+                                tiktok_log(
+                                    f"[TikTok私信] 账号 {account['id']} IM 协议发送失败，正在刷新TikTok前台参数后重试：{im_exc}",
+                                    "warning",
+                                )
+                                im_auth = await im_client.extract_auth()
+                                retry_protocol_result = await asyncio.to_thread(
+                                    im_client.send_private_message,
+                                    im_auth,
+                                    user.get("profile_url", ""),
+                                    final_message,
+                                )
+                                retry_server_message_id = str(
+                                    ((retry_protocol_result or {}).get("send_result") or {}).get("server_message_id", "")
+                                    or ""
+                                ).strip()
+                                refreshed = True
+                                tiktok_log(
+                                    f"[TikTok私信] 账号 {account['id']} 已刷新 IM 参数并直发成功：{current_user}，server_message_id={retry_server_message_id}",
+                                    "info",
+                                )
+                            except Exception as refresh_exc:
+                                im_exc = refresh_exc
+                        if refreshed:
+                            pass
+                        elif _should_fallback_from_tiktok_im_error(im_exc):
+                            im_direct_enabled = False
+                            tiktok_log(
+                                f"[TikTok私信] 账号 {account['id']} IM 协议发送失败，自动回退页面私信：{im_exc}",
+                                "warning",
+                            )
+                            if scraper is None:
+                                scraper = create_tiktok_message_scraper(account, config)
+                            await scraper.send_private_message(
+                                user.get("profile_url", ""),
+                                final_message,
+                                expected_username=str(user.get("username", "") or ""),
+                                logger=tiktok_log,
+                            )
+                        else:
+                            raise
+                else:
+                    if scraper is None:
+                        scraper = create_tiktok_message_scraper(account, config)
+                    await scraper.send_private_message(
+                        user.get("profile_url", ""),
+                        final_message,
+                        expected_username=str(user.get("username", "") or ""),
+                        logger=tiktok_log,
+                    )
+                update_tiktok_interaction_users(
+                    [user],
+                    status="sent",
+                    error="",
+                    message=final_message,
+                    account_id=account["id"],
+                    started_at=started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                tiktok_interaction_state["last_message_text"] = final_message
+                tiktok_log(f"[TikTok私信] 账号 {account['id']} 发送成功：{current_user}", "success")
+                consecutive_ai_failures = 0
+                async with state_lock:
+                    worker_state["processed"] = int(worker_state.get("processed", 0) or 0) + 1
+                    worker_state["success"] = int(worker_state.get("success", 0) or 0) + 1
+                    worker_state["last_error"] = ""
+                    refresh_interaction_state_from_workers(
+                        get_interaction_assigned_total(),
+                        interval_seconds_min,
+                        interval_seconds_max,
+                    )
+            except Exception as exc:
+                # 「主页没有可用的私信入口」不是失败：对方关闭了私信 / 需要互相关注，
+                # 重试也没用。按 unavailable 落库（精确池的 done 状态，下一轮不再领），
+                # 不参与失败数、也不触发 AI 连续失败暂停。
+                if isinstance(exc, TikTokPrivateMessageUnavailable):
+                    update_tiktok_interaction_users(
+                        [user],
+                        status="unavailable",
+                        error=str(exc),
+                        message=final_message,
+                        account_id=account["id"],
+                        started_at=started_at,
+                        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    tiktok_log(
+                        f"[TikTok私信] 账号 {account['id']} 跳过（不可私信）：{current_user}，原因：{exc}",
+                        "warning",
+                    )
+                    async with state_lock:
+                        worker_state["processed"] = int(worker_state.get("processed", 0) or 0) + 1
+                        worker_state["skipped"] = int(worker_state.get("skipped", 0) or 0) + 1
+                        refresh_interaction_state_from_workers(
+                            get_interaction_assigned_total(),
+                            interval_seconds_min,
+                            interval_seconds_max,
+                        )
+                else:
+                    update_tiktok_interaction_users(
+                        [user],
+                        status="failed",
+                        error=str(exc),
+                        message=final_message,
+                        account_id=account["id"],
+                        started_at=started_at,
+                        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    tiktok_log(f"[TikTok私信] 账号 {account['id']} 发送失败：{current_user}，原因：{exc}", "error")
+                    if session_health.is_login_wall_error(exc):
+                        session_health.mark_need_relogin(account["id"], reason=str(exc)[:200])
+                        tiktok_log(
+                            f"[TikTok私信] 账号 {account['id']} 判定为登录掉线，本轮剩余 {max(0, len(users) - index)} 位目标已跳过，请重新登录该TikTok账号后重试。",
+                            "error",
+                        )
+                        break
+                    if is_tiktok_ai_generation_error(exc):
+                        consecutive_ai_failures += 1
+                    else:
+                        consecutive_ai_failures = 0
+                    async with state_lock:
+                        worker_state["processed"] = int(worker_state.get("processed", 0) or 0) + 1
+                        worker_state["failed"] = int(worker_state.get("failed", 0) or 0) + 1
+                        worker_state["last_error"] = str(exc)
+                        tiktok_interaction_state["last_error"] = str(exc)
+                        refresh_interaction_state_from_workers(
+                            get_interaction_assigned_total(),
+                            interval_seconds_min,
+                            interval_seconds_max,
+                        )
+
+                    if consecutive_ai_failures >= 3:
+                        remaining_users = users[index:]
+                        if remaining_users:
+                            update_tiktok_interaction_users(
+                                remaining_users,
+                                status="pending",
+                                error=ai_failure_abort_message,
+                                message="",
+                                account_id=account["id"],
+                                started_at="",
+                                finished_at="",
+                            )
+                        tiktok_log(
+                            f"[TikTok私信] 账号 {account['id']} 连续 {consecutive_ai_failures} 次 AI 生成失败，已暂停本轮剩余私信。请稍后重试，或切换到固定文案模式。",
+                            "warning",
+                        )
+                        async with state_lock:
+                            worker_state["status"] = "failed"
+                            worker_state["last_error"] = ai_failure_abort_message
+                            tiktok_interaction_state["last_error"] = ai_failure_abort_message
+                            refresh_interaction_state_from_workers(
+                                get_interaction_assigned_total(),
+                                interval_seconds_min,
+                                interval_seconds_max,
+                            )
+                        break
+
+            has_next_user = index < len(users)
+            if has_next_user and not tiktok_interaction_stop_requested:
+                remaining_seconds = (
+                    random.randint(interval_seconds_min, interval_seconds_max)
+                    if interval_seconds_max > interval_seconds_min
+                    else interval_seconds_min
+                )
+                async with state_lock:
+                    worker_state["status"] = "cooldown"
+                    worker_state["current_message_text"] = ""
+                    worker_state["cooldown_remaining"] = remaining_seconds
+                    refresh_interaction_state_from_workers(
+                        get_interaction_assigned_total(),
+                        interval_seconds_min,
+                        interval_seconds_max,
+                    )
+                while remaining_seconds > 0 and not tiktok_interaction_stop_requested:
+                    wait_seconds = min(1, remaining_seconds)
+                    await asyncio.sleep(wait_seconds)
+                    remaining_seconds -= wait_seconds
+                    async with state_lock:
+                        worker_state["cooldown_remaining"] = remaining_seconds
+                        refresh_interaction_state_from_workers(
+                            get_interaction_assigned_total(),
+                            interval_seconds_min,
+                            interval_seconds_max,
+                        )
+
+        async with state_lock:
+            worker_state["status"] = "stopped" if tiktok_interaction_stop_requested else "completed"
+            worker_state["current_user"] = ""
+            worker_state["current_message_text"] = ""
+            worker_state["cooldown_remaining"] = 0
+            refresh_interaction_state_from_workers(
+                get_interaction_assigned_total(),
+                interval_seconds_min,
+                interval_seconds_max,
+            )
+    except Exception as exc:
+        async with state_lock:
+            worker_state["status"] = "failed"
+            worker_state["current_user"] = ""
+            worker_state["current_message_text"] = ""
+            worker_state["cooldown_remaining"] = 0
+            worker_state["last_error"] = str(exc)
+            tiktok_interaction_state["last_error"] = str(exc)
+            refresh_interaction_state_from_workers(
+                get_interaction_assigned_total(),
+                interval_seconds_min,
+                interval_seconds_max,
+            )
+        tiktok_log(f"[TikTok私信] 账号 {account['id']} worker 异常退出：{exc}", "error")
+    finally:
+        if scraper is not None:
+            await scraper.close()
+
+
+async def run_tiktok_interactions(
+    users: List[Dict],
+    message_mode: str,
+    fixed_message: str,
+    fixed_messages: Optional[List[str]],
+    message_prompt: str,
+    message_seed_text: str,
+    accounts: List[Dict],
+    interval_seconds_min: int,
+    interval_seconds_max: int,
+):
+    global tiktok_interaction_running, tiktok_interaction_stop_requested, tiktok_interaction_background_task
+
+    total = len(users)
+    fixed_messages = fixed_messages or ([fixed_message] if fixed_message else [])
+    if normalize_tiktok_video_comment_mode(message_mode) == "fixed":
+        assign_tiktok_interaction_fixed_messages(users, fixed_messages)
+    batches = distribute_interaction_users(users, accounts)
+    workers = [build_interaction_worker_state(item["account"], len(item["users"])) for item in batches]
+    tiktok_interaction_state.update(
+        {
+            "running": True,
+            "message": "私信任务执行中",
+            "total": total,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "interval_seconds": interval_seconds_min,
+            "interval_seconds_min": interval_seconds_min,
+            "interval_seconds_max": interval_seconds_max,
+            "account_id": workers[0]["account_id"] if len(workers) == 1 else None,
+            "account_ids": [worker["account_id"] for worker in workers],
+            "current_user": "",
+            "current_users": [],
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": "",
+            "last_error": "",
+            "message_mode": normalize_tiktok_video_comment_mode(message_mode),
+            "message_summary": summarize_tiktok_video_comment_settings(
+                message_mode,
+                fixed_text=(
+                    f"{len(fixed_messages)} 条固定话术轮换"
+                    if normalize_tiktok_video_comment_mode(message_mode) == "fixed" and len(fixed_messages) > 1
+                    else fixed_message
+                ),
+                prompt_text=message_prompt,
+                seed_text=message_seed_text,
+            ),
+            "current_message_text": "",
+            "last_message_text": "",
+            "workers": workers,
+        }
+    )
+
+    state_lock = asyncio.Lock()
+    refresh_interaction_state_from_workers(total, interval_seconds_min, interval_seconds_max)
+    try:
+        interval_desc = (
+            f"{interval_seconds_min}-{interval_seconds_max} 秒"
+            if interval_seconds_min != interval_seconds_max
+            else f"{interval_seconds_min} 秒"
+        )
+        tiktok_log(
+            f"[TikTok私信] 已启动 {len(workers)} 个账号并发，共 {total} 人，间隔 {interval_desc}",
+            "info",
+        )
+        await asyncio.gather(
+            *[
+                run_tiktok_interaction_worker(
+                    item["users"],
+                    message_mode,
+                    fixed_message,
+                    message_prompt,
+                    message_seed_text,
+                    item["account"],
+                    interval_seconds_min,
+                    interval_seconds_max,
+                    worker_state,
+                    state_lock,
+                )
+                for item, worker_state in zip(batches, workers)
+            ]
+        )
+    finally:
+        tiktok_interaction_running = False
+        tiktok_interaction_stop_requested = False
+        tiktok_interaction_background_task = None
+        tiktok_interaction_state["running"] = False
+        tiktok_interaction_state["current_user"] = ""
+        tiktok_interaction_state["current_users"] = []
+        tiktok_interaction_state["current_message_text"] = ""
+        tiktok_interaction_state["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tiktok_interaction_state["message"] = (
+            "私信任务已停止"
+            if tiktok_interaction_state["processed"] < total
+            else "私信任务已完成"
+        )
+        tiktok_log(
+            f"[TikTok私信] 本轮结束，成功 {tiktok_interaction_state['success']}，失败 {tiktok_interaction_state['failed']}，使用 {len(workers)} 个账号",
+            "info",
+        )
+
+
+
+def refresh_tiktok_stranger_message_progress(
+    *,
+    phase: str,
+    total: int,
+    processed: int,
+    success: int,
+    failed: int,
+    account_id: int,
+    current_user: str = "",
+    current_message_text: str = "",
+    message: str = "",
+):
+    tiktok_stranger_message_state.update(
+        {
+            "running": True,
+            "phase": normalize_tiktok_text(phase).lower(),
+            "total": max(0, int(total or 0)),
+            "processed": max(0, int(processed or 0)),
+            "success": max(0, int(success or 0)),
+            "failed": max(0, int(failed or 0)),
+            "account_id": int(account_id or 0) or None,
+            "current_user": normalize_tiktok_text(current_user),
+            "current_message_text": normalize_tiktok_text(current_message_text),
+            "message": normalize_tiktok_text(message),
+        }
+    )
+
+
+async def run_tiktok_stranger_message_collection(
+    account: Dict,
+    max_conversations: int,
+):
+    global tiktok_stranger_message_running, tiktok_stranger_message_stop_requested
+    global tiktok_stranger_message_background_task
+
+    config = load_global_config()
+    show_browser = should_show_tiktok_message_browser(config)
+    scraper = create_tiktok_message_scraper(account, config)
+    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tiktok_stranger_message_state.update(
+        {
+            "running": True,
+            "phase": "collect",
+            "message": "正在采集陌生人私信",
+            "total": max_conversations,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "account_id": account["id"],
+            "current_user": "",
+            "current_message_text": "",
+            "started_at": started_at,
+            "finished_at": "",
+            "last_error": "",
+        }
+    )
+    try:
+        tiktok_log(
+            f"[TikTok私信引流] 开始采集陌生人私信，账号 {account['id']}，最多 {max_conversations} 条，浏览器模式：{'显示窗口' if show_browser else '无头运行'}",
+            "info",
+        )
+        rows = await scraper.collect_stranger_private_messages(
+            max_conversations=max_conversations,
+            should_stop=lambda: bool(tiktok_stranger_message_stop_requested),
+            logger=tiktok_log,
+            progress_callback=lambda processed, total, username: refresh_tiktok_stranger_message_progress(
+                phase="collect",
+                total=total,
+                processed=processed,
+                success=processed,
+                failed=0,
+                account_id=account["id"],
+                current_user=username,
+                message=f"正在采集陌生人私信，已读取 {processed}/{total} 条",
+            ),
+        )
+        count = replace_tiktok_stranger_message_results(account["id"], rows)
+        mark_tiktok_stranger_message_rows_seen(account["id"], rows)
+        refresh_tiktok_stranger_message_progress(
+            phase="collect",
+            total=count,
+            processed=count,
+            success=count,
+            failed=0,
+            account_id=account["id"],
+            current_user="",
+            message="陌生人私信采集已完成" if not tiktok_stranger_message_stop_requested else "陌生人私信采集已停止",
+        )
+        tiktok_log(
+            f"[TikTok私信引流] 采集完成，账号 {account['id']} 共得到 {count} 条陌生人私信",
+            "warning" if tiktok_stranger_message_stop_requested else "success",
+        )
+    except Exception as exc:
+        tiktok_stranger_message_state["last_error"] = str(exc)
+        tiktok_stranger_message_state["message"] = "陌生人私信采集失败"
+        tiktok_log(f"[TikTok私信引流] 采集失败：{exc}", "error")
+    finally:
+        await scraper.close()
+        tiktok_stranger_message_running = False
+        tiktok_stranger_message_stop_requested = False
+        tiktok_stranger_message_background_task = None
+        tiktok_stranger_message_state["running"] = False
+        tiktok_stranger_message_state["current_user"] = ""
+        tiktok_stranger_message_state["current_message_text"] = ""
+        tiktok_stranger_message_state["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+async def run_tiktok_inbox_collection(
+    account: Dict,
+    max_conversations: int,
+    *,
+    auto_reply_enabled: bool = False,
+    reply_mode: str = "fixed",
+    reply_message: str = "",
+    reply_prompt: str = "",
+    contact_value: str = "",
+):
+    global tiktok_inbox_running, tiktok_inbox_stop_requested
+    global tiktok_inbox_background_task
+
+    config = load_global_config()
+    show_browser = should_show_tiktok_message_browser(config)
+    scraper = create_tiktok_message_scraper(account, config)
+    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tiktok_inbox_state.update(
+        {
+            "running": True,
+            "phase": "collect",
+            "message": "正在采集当前消息页会话",
+            "total": max_conversations,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "account_id": account["id"],
+            "current_user": "",
+            "started_at": started_at,
+            "finished_at": "",
+            "last_error": "",
+        }
+    )
+    try:
+        tiktok_log(
+            f"[TikTok私信聚合] 开始采集当前消息页会话，账号 {account['id']}，最多 {max_conversations} 条，浏览器模式：可见浏览器",
+            "info",
+        )
+        rows = await scraper.collect_chat_page_private_messages(
+            max_conversations=max_conversations,
+            should_stop=lambda: bool(tiktok_inbox_stop_requested),
+            logger=tiktok_log,
+            progress_callback=lambda processed, total, username: tiktok_inbox_state.update(
+                {
+                    "phase": "collect",
+                    "total": total,
+                    "processed": processed,
+                    "success": processed,
+                    "failed": 0,
+                    "account_id": account["id"],
+                    "current_user": username,
+                    "message": f"正在采集当前消息页会话，已读取 {processed}/{total} 条",
+                }
+            ),
+        )
+        count = replace_tiktok_inbox_results(account["id"], rows)
+        auto_reply_result = {
+            "total": 0,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+        }
+        if auto_reply_enabled:
+            reply_rows = collect_pending_tiktok_inbox_auto_reply_rows(account["id"], rows)
+            if reply_rows:
+                tiktok_log(
+                    f"[TikTok私信聚合] 当前消息页采集完成后，开始自动回复 {len(reply_rows)} 个会话",
+                    "info",
+                )
+                auto_reply_result = await send_tiktok_inbox_messages_for_monitor(
+                    account,
+                    reply_rows,
+                    reply_mode=reply_mode,
+                    reply_message=reply_message,
+                    reply_prompt=reply_prompt,
+                    contact_value=contact_value,
+                )
+        tiktok_inbox_state.update(
+            {
+                "phase": "collect",
+                "total": count,
+                "processed": count,
+                "success": count,
+                "failed": 0,
+                "account_id": account["id"],
+                "current_user": "",
+                "message": (
+                    f"当前消息页会话采集已完成，自动回复 {int(auto_reply_result.get('success', 0))} 个"
+                    if auto_reply_enabled and not tiktok_inbox_stop_requested
+                    else "当前消息页会话采集已完成"
+                )
+                if not tiktok_inbox_stop_requested
+                else "当前消息页会话采集已停止",
+                "last_auto_reply_total": int(auto_reply_result.get("processed", 0)),
+                "last_auto_reply_success": int(auto_reply_result.get("success", 0)),
+                "last_auto_reply_failed": int(auto_reply_result.get("failed", 0)),
+            }
+        )
+        tiktok_log(
+            f"[TikTok私信聚合] 采集完成，账号 {account['id']} 共得到 {count} 条当前消息页会话",
+            "warning" if tiktok_inbox_stop_requested else "success",
+        )
+    except Exception as exc:
+        tiktok_inbox_state["last_error"] = str(exc)
+        tiktok_inbox_state["message"] = "当前消息页会话采集失败"
+        tiktok_log(f"[TikTok私信聚合] 采集失败：{exc}", "error")
+    finally:
+        await scraper.close()
+        tiktok_inbox_running = False
+        tiktok_inbox_stop_requested = False
+        tiktok_inbox_background_task = None
+        tiktok_inbox_state["running"] = False
+        tiktok_inbox_state["current_user"] = ""
+        tiktok_inbox_state["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def collect_pending_tiktok_inbox_auto_reply_rows(account_id: int, rows: Optional[List[Dict]] = None) -> List[Dict]:
+    target_account_id = int(account_id or 0)
+    source_rows = rows if isinstance(rows, list) else collect_tiktok_inbox_results(target_account_id)
+    candidates: List[Dict] = []
+    for raw_row in source_rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+        normalized = normalize_tiktok_inbox_row({**raw_row, "account_id": target_account_id})
+        if is_tiktok_group_like_stranger_message_row(normalized):
+            continue
+        if not is_tiktok_stranger_message_unread_row(normalized):
+            continue
+        if normalize_tiktok_text(normalized.get("reply_status", "pending")) in {"sent", "queued", "processing"}:
+            continue
+        if not normalize_tiktok_text(normalized.get("username", "")):
+            continue
+        if not normalize_tiktok_text(normalized.get("incoming_message", "") or normalized.get("preview_text", "")):
+            continue
+        candidates.append(normalized)
+    return candidates
+
+
+async def send_tiktok_inbox_messages_for_monitor(
+    account: Dict,
+    rows: List[Dict],
+    *,
+    reply_mode: str = "fixed",
+    reply_message: str = "",
+    reply_prompt: str = "",
+    contact_value: str = "",
+) -> Dict[str, object]:
+    worker = get_tiktok_inbox_page_worker(int(account.get("id", 0) or 0))
+    total = len(rows)
+    success = 0
+    failed = 0
+    processed = 0
+    for row in rows:
+        current_user = str(row.get("username", "") or row.get("profile_url", "") or "-")
+        item_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            final_message = await asyncio.to_thread(
+                generate_tiktok_inbox_reply_message,
+                row,
+                mode=reply_mode,
+                fixed_text=reply_message,
+                prompt_text=reply_prompt,
+                contact_value=contact_value,
+            )
+        except Exception as exc:
+            processed += 1
+            failed += 1
+            update_tiktok_inbox_rows(
+                [row],
+                status="failed",
+                error=str(exc),
+                message="",
+                account_id=int(account.get("id", 0) or 0),
+                started_at=item_started_at,
+                finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            tiktok_log(f"[TikTok私信聚合] 自动回复生成失败：{current_user}，原因：{exc}", "error")
+            continue
+
+        update_tiktok_inbox_rows(
+            [row],
+            status="processing",
+            error="",
+            message=final_message,
+            account_id=int(account.get("id", 0) or 0),
+            started_at=item_started_at,
+            finished_at="",
+        )
+        try:
+            result = await worker.send_message(row, final_message)
+            processed += 1
+            success += 1
+            finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            detail = result.get("detail", {}) if isinstance(result, dict) else {}
+            merged_row = {
+                **row,
+                **(detail if isinstance(detail, dict) else {}),
+                "account_id": int(account.get("id", 0) or 0),
+                "reply_status": "sent",
+                "reply_error": "",
+                "reply_message": final_message,
+                "reply_account_id": str(int(account.get("id", 0) or 0)),
+                "reply_started_at": item_started_at,
+                "reply_finished_at": finished_at,
+                "reply_updated_at": finished_at,
+                "is_unread": False,
+                "unread_count": 0,
+            }
+            merge_tiktok_inbox_results(int(account.get("id", 0) or 0), [merged_row])
+            tiktok_log(f"[TikTok私信聚合] 自动回复成功：{current_user}", "success")
+        except Exception as exc:
+            processed += 1
+            failed += 1
+            update_tiktok_inbox_rows(
+                [row],
+                status="failed",
+                error=str(exc),
+                message=final_message,
+                account_id=int(account.get("id", 0) or 0),
+                started_at=item_started_at,
+                finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            tiktok_log(f"[TikTok私信聚合] 自动回复失败：{current_user}，原因：{exc}", "error")
+        if processed < total:
+            await asyncio.sleep(1.2)
+
+    return {
+        "total": total,
+        "processed": processed,
+        "success": success,
+        "failed": failed,
+        "stopped": False,
+    }
+
+
+async def run_tiktok_inbox_monitor_cycle(account_id: int, trigger_type: str = "scheduled") -> Dict[str, object]:
+    state = get_tiktok_inbox_monitor_state(account_id, create=True)
+    started_at = datetime.now()
+    started_at_text = started_at.strftime("%Y-%m-%d %H:%M:%S")
+    state["last_run_at"] = started_at_text
+    state["last_error"] = ""
+    state["last_skip_reason"] = ""
+
+    if not bool(state.get("enabled")):
+        schedule_next_tiktok_inbox_monitor_run(account_id, started_at)
+        set_tiktok_inbox_monitor_idle_message(account_id, "自动采集未开启。")
+        state["last_cycle_status"] = "disabled"
+        return {"status": "disabled", "message": "自动采集未开启。"}
+
+    max_conversations = max(
+        1,
+        min(int(state.get("max_conversations", 100) or 100), 100),
+    )
+    auto_reply_enabled = bool(state.get("auto_reply_enabled"))
+    reply_mode = normalize_tiktok_inbox_reply_mode(state.get("reply_mode", "fixed"))
+    reply_message = str(state.get("reply_message", "") or "").strip()
+    reply_prompt = str(state.get("reply_prompt", "") or "").strip()
+    contact_value = str(state.get("contact_value", "") or "").strip()
+    config = load_global_config()
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    if not account:
+        schedule_next_tiktok_inbox_monitor_run(account_id, started_at)
+        message = "本轮跳过：当前没有可用的TikTok在线账号。"
+        state.update(
+            {
+                "last_cycle_status": "skipped",
+                "last_skip_reason": "no_online_account",
+                "message": message,
+            }
+        )
+        tiktok_log(f"[TikTok私信聚合] {message}", "warning")
+        return {"status": "skipped", "message": message}
+    if str(account.get("status", "") or "").strip() != "online":
+        schedule_next_tiktok_inbox_monitor_run(account_id, started_at)
+        message = f"本轮跳过：账号 {account.get('id')} 还没有完成登录。"
+        state.update(
+            {
+                "account_id": int(account.get("id", 0) or 0) or None,
+                "last_cycle_status": "skipped",
+                "last_skip_reason": "account_waiting_login",
+                "message": message,
+            }
+        )
+        tiktok_log(f"[TikTok私信聚合] {message}", "warning")
+        return {"status": "skipped", "message": message}
+
+    busy, busy_reason = is_tiktok_inbox_monitor_busy(int(account.get("id", 0) or 0))
+    if busy:
+        schedule_next_tiktok_inbox_monitor_run(account_id, started_at)
+        message = f"本轮跳过：{busy_reason}，等待下一次。"
+        state.update(
+            {
+                "account_id": int(account.get("id", 0) or 0) or None,
+                "last_cycle_status": "skipped",
+                "last_skip_reason": normalize_tiktok_text(busy_reason),
+                "message": message,
+            }
+        )
+        tiktok_log(f"[TikTok私信聚合] {message}", "warning")
+        return {"status": "skipped", "message": message}
+
+    scraper = create_tiktok_inbox_scraper(account, config)
+    state.update(
+        {
+            "running": True,
+            "account_id": account["id"],
+            "message": f"正在检查当前消息页会话，账号 {account['id']}，最多读取 {max_conversations} 条。",
+            "last_cycle_status": "running",
+        }
+    )
+    try:
+        rows = await scraper.collect_chat_page_private_messages(
+            max_conversations=max_conversations,
+            should_stop=lambda: False,
+            logger=tiktok_log,
+            progress_callback=lambda processed, total, username: state.update(
+                {
+                    "running": True,
+                    "message": f"账号 {account['id']} 自动采集中，已读取 {processed}/{total} 条，当前 {normalize_tiktok_text(username)}",
+                }
+            ),
+        )
+        changed = merge_tiktok_inbox_results(account["id"], rows)
+        auto_reply_result = {
+            "total": 0,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+        }
+        if auto_reply_enabled:
+            reply_rows = collect_pending_tiktok_inbox_auto_reply_rows(account["id"], rows)
+            if reply_rows:
+                tiktok_log(
+                    f"[TikTok私信聚合] 本轮自动采集后，开始自动回复 {len(reply_rows)} 个会话",
+                    "info",
+                )
+                auto_reply_result = await send_tiktok_inbox_messages_for_monitor(
+                    account,
+                    reply_rows,
+                    reply_mode=reply_mode,
+                    reply_message=reply_message,
+                    reply_prompt=reply_prompt,
+                    contact_value=contact_value,
+                )
+        total_count = len([row for row in rows if isinstance(row, dict)])
+        unread_total = len(
+            [
+                row
+                for row in rows
+                if isinstance(row, dict)
+                and is_tiktok_stranger_message_unread_row({**row, "account_id": account["id"]})
+            ]
+        )
+        schedule_next_tiktok_inbox_monitor_run(account_id, started_at)
+        message = (
+            f"本轮完成：识别 {total_count} 条当前消息页会话，"
+            f"其中未读 {unread_total} 条，当前沉淀 {len(collect_tiktok_inbox_results(account['id']))} 条。"
+        )
+        if auto_reply_enabled and int(auto_reply_result.get("processed", 0) or 0) > 0:
+            message += (
+                f" 自动回复 {int(auto_reply_result.get('success', 0) or 0)} 成功，"
+                f"{int(auto_reply_result.get('failed', 0) or 0)} 失败。"
+            )
+        state.update(
+            {
+                "running": False,
+                "message": message,
+                "last_total_count": total_count,
+                "last_unread_count": unread_total,
+                "last_auto_reply_total": int(auto_reply_result.get("processed", 0) or 0),
+                "last_auto_reply_success": int(auto_reply_result.get("success", 0) or 0),
+                "last_auto_reply_failed": int(auto_reply_result.get("failed", 0) or 0),
+                "last_skip_reason": "",
+                "last_cycle_status": "completed",
+            }
+        )
+        tiktok_log(
+            (
+                f"[TikTok私信聚合] 本轮完成，账号 {account['id']} 会话 {total_count} 条，未读 {unread_total} 条，"
+                f"更新 {changed} 条，自动回复成功 {int(auto_reply_result.get('success', 0) or 0)} 条"
+            ),
+            "success",
+        )
+        return {"status": "completed", "message": message}
+    except Exception as exc:
+        schedule_next_tiktok_inbox_monitor_run(account_id, started_at)
+        state.update(
+            {
+                "running": False,
+                "last_error": str(exc),
+                "message": f"自动采集失败：{exc}",
+                "last_cycle_status": "failed",
+            }
+        )
+        tiktok_log(f"[TikTok私信聚合] 自动采集失败：{exc}", "error")
+        return {"status": "failed", "message": str(exc)}
+    finally:
+        await scraper.close()
+        state["running"] = False
+        tiktok_inbox_monitor_tasks_by_account.pop(int(account_id or 0), None)
+        if bool(state.get("enabled")):
+            set_tiktok_inbox_monitor_idle_message(account_id, state.get("message", ""))
+
+
+async def ensure_tiktok_inbox_monitor_scheduler():
+    if tiktok_schedule_external_work:
+        return
+    now = datetime.now()
+    for state in list_tiktok_inbox_monitor_states():
+        account_id = int(state.get("account_id", 0) or 0)
+        if account_id <= 0:
+            continue
+        if not bool(state.get("enabled")):
+            continue
+        next_run_text = normalize_tiktok_text(state.get("next_run_at", ""))
+        if not next_run_text:
+            schedule_next_tiktok_inbox_monitor_run(account_id, now)
+            next_run_text = normalize_tiktok_text(state.get("next_run_at", ""))
+        try:
+            next_run_at = datetime.strptime(next_run_text, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            next_run_at = now
+        if next_run_at > now:
+            continue
+        task = tiktok_inbox_monitor_tasks_by_account.get(account_id)
+        if task and not task.done():
+            continue
+        tiktok_inbox_monitor_tasks_by_account[account_id] = asyncio.create_task(
+            run_tiktok_inbox_monitor_cycle(account_id, trigger_type="scheduled")
+        )
+
+
+def build_tiktok_self_comment_rows(
+    account: Dict,
+    video: Dict,
+    comments: List[Dict],
+    precise_users: List[Dict],
+    existing_rows: Optional[List[Dict]] = None,
+) -> List[Dict]:
+    now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    account_id = int((account or {}).get("id", 0) or 0)
+    aweme_id = normalize_tiktok_text((video or {}).get("aweme_id", "")) or normalize_tiktok_text(extract_aweme_id(str((video or {}).get("url", "") or "")))
+    video_url = str((video or {}).get("url", "") or "").strip()
+    video_title = str((video or {}).get("title", "") or "").strip()
+    precise_index = build_monitor_precise_user_index(precise_users or [])
+    existing_map = {
+        build_tiktok_self_comment_row_key(row): normalize_tiktok_self_comment_row(row)
+        for row in (existing_rows or [])
+        if isinstance(row, dict) and build_tiktok_self_comment_row_key(row)
+    }
+    existing_fallback_map = {
+        "|".join(
+            [
+                normalize_tiktok_text(row.get("account_id", "")),
+                normalize_tiktok_text(row.get("aweme_id", "")),
+                normalize_tiktok_text(row.get("user_id", "")),
+                normalize_tiktok_text(row.get("comment", row.get("content", ""))),
+            ]
+        ): normalize_tiktok_self_comment_row(row)
+        for row in (existing_rows or [])
+        if isinstance(row, dict)
+    }
+    rows: List[Dict] = []
+    for comment in comments or []:
+        if not isinstance(comment, dict):
+            continue
+        normalized = normalize_high_intent_user(comment)
+        normalized["profile_url"] = ensure_tiktok_profile_url(normalized)
+        comment_key = build_tiktok_self_comment_comment_key(normalized)
+        row = normalize_tiktok_self_comment_row(
+            {
+                **normalized,
+                "account_id": account_id,
+                "aweme_id": aweme_id,
+                "video_url": video_url,
+                "video_title": video_title,
+                "video_cover_image": str((video or {}).get("cover_image", "") or ""),
+                "comment_key": comment_key,
+                "first_seen_at": now_text,
+                "last_seen_at": now_text,
+                "reply_status": "pending",
+                "source": "tiktok_self_comment_monitor",
+            }
+        )
+        precise_match = find_monitor_precise_match(row, precise_index)
+        if precise_match:
+            row["is_high_intent"] = True
+            for key in ("intent_level", "score", "reason"):
+                value = precise_match.get(key, "")
+                if value not in (None, ""):
+                    row[key] = value
+        fallback_key = "|".join(
+            [
+                normalize_tiktok_text(row.get("account_id", "")),
+                normalize_tiktok_text(row.get("aweme_id", "")),
+                normalize_tiktok_text(row.get("user_id", "")),
+                normalize_tiktok_text(row.get("comment", row.get("content", ""))),
+            ]
+        )
+        existing = existing_map.get(build_tiktok_self_comment_row_key(row)) or existing_fallback_map.get(fallback_key)
+        if existing:
+            row["first_seen_at"] = existing.get("first_seen_at") or row["first_seen_at"]
+            for key in (
+                "reply_status",
+                "reply_error",
+                "reply_message",
+                "reply_mode",
+                "reply_account_id",
+                "reply_started_at",
+                "reply_finished_at",
+                "reply_updated_at",
+            ):
+                if existing.get(key):
+                    row[key] = existing.get(key)
+            if existing.get("is_high_intent"):
+                row["is_high_intent"] = True
+                for key in ("intent_level", "score", "reason"):
+                    if existing.get(key) not in (None, ""):
+                        row[key] = existing.get(key)
+        rows.append(row)
+    return rows
+
+
+def collect_pending_tiktok_self_comment_auto_reply_rows(account_id: int, rows: Optional[List[Dict]] = None) -> List[Dict]:
+    source_rows = rows if isinstance(rows, list) else collect_tiktok_self_comment_monitor_results(account_id)
+    pending: List[Dict] = []
+    seen = set()
+    for raw_row in source_rows or []:
+        if not isinstance(raw_row, dict):
+            continue
+        row = normalize_tiktok_self_comment_row({**raw_row, "account_id": int(account_id or 0)})
+        key = build_tiktok_self_comment_row_key(row)
+        if not key or key in seen:
+            continue
+        if not row.get("is_high_intent"):
+            continue
+        if str(row.get("reply_status", "pending") or "pending").lower() in {"sent", "completed", "processing"}:
+            continue
+        pending.append(row)
+        seen.add(key)
+    return pending
+
+
+async def send_tiktok_self_comment_replies_for_monitor(
+    account: Dict,
+    rows: List[Dict],
+    *,
+    reply_mode: str = "fixed",
+    reply_message: str = "",
+    reply_prompt: str = "",
+    contact_value: str = "",
+    image_path: str = "",
+) -> Dict[str, int]:
+    account_id = int((account or {}).get("id", 0) or 0)
+    image_path = str(image_path or "").strip()
+    result = {"total": len(rows or []), "processed": 0, "success": 0, "failed": 0}
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    try:
+        for raw_row in rows or []:
+            row = normalize_tiktok_self_comment_row({**raw_row, "account_id": account_id})
+            started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            final_message = ""
+            try:
+                if normalize_tiktok_inbox_reply_mode(reply_mode) == "fixed" and not str(reply_message or "").strip() and image_path:
+                    final_message = ""
+                else:
+                    final_message = await asyncio.to_thread(
+                        generate_tiktok_self_comment_reply_message,
+                        row,
+                        mode=reply_mode,
+                        fixed_text=reply_message,
+                        prompt_text=reply_prompt,
+                        contact_value=contact_value,
+                    )
+                update_tiktok_self_comment_monitor_rows(
+                    [row],
+                    status="processing",
+                    error="",
+                    message=final_message,
+                    reply_mode=reply_mode,
+                    account_id=account_id,
+                    started_at=started_at,
+                    finished_at="",
+                )
+                await scraper.reply_to_video_comment(
+                    str(row.get("video_url", "") or ""),
+                    final_message,
+                    row,
+                    expected_title=str(row.get("video_title", "") or ""),
+                    image_path=image_path,
+                    logger=tiktok_log,
+                )
+                finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                update_tiktok_self_comment_monitor_rows(
+                    [row],
+                    status="sent",
+                    error="",
+                    message=final_message,
+                    reply_mode=reply_mode,
+                    account_id=account_id,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                )
+                result["success"] += 1
+            except Exception as exc:
+                update_tiktok_self_comment_monitor_rows(
+                    [row],
+                    status="failed",
+                    error=str(exc),
+                    message=final_message,
+                    reply_mode=reply_mode,
+                    account_id=account_id,
+                    started_at=started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                result["failed"] += 1
+                tiktok_log(f"[TikTok我的评论区] 自动回复失败：{row.get('username') or '-'}，原因：{exc}", "error")
+            finally:
+                result["processed"] += 1
+    finally:
+        await scraper.close()
+    return result
+
+
+async def send_tiktok_self_comment_replies_on_loaded_page(
+    scraper: TikTokCommentScraper,
+    page,
+    account: Dict,
+    rows: List[Dict],
+    *,
+    reply_mode: str = "fixed",
+    reply_message: str = "",
+    reply_prompt: str = "",
+    contact_value: str = "",
+    image_path: str = "",
+    allow_scroll: bool = True,
+) -> Dict[str, int]:
+    account_id = int((account or {}).get("id", 0) or 0)
+    image_path = str(image_path or "").strip()
+    result = {"total": len(rows or []), "processed": 0, "success": 0, "failed": 0, "errors": []}
+    for raw_row in rows or []:
+        row = normalize_tiktok_self_comment_row({**raw_row, "account_id": account_id})
+        started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        final_message = ""
+        try:
+            if normalize_tiktok_inbox_reply_mode(reply_mode) == "fixed" and not str(reply_message or "").strip() and image_path:
+                final_message = ""
+            else:
+                final_message = await asyncio.to_thread(
+                    generate_tiktok_self_comment_reply_message,
+                    row,
+                    mode=reply_mode,
+                    fixed_text=reply_message,
+                    prompt_text=reply_prompt,
+                    contact_value=contact_value,
+                )
+            update_tiktok_self_comment_monitor_rows(
+                [row],
+                status="processing",
+                error="",
+                message=final_message,
+                reply_mode=reply_mode,
+                account_id=account_id,
+                started_at=started_at,
+                finished_at="",
+            )
+            await scraper.reply_to_loaded_video_comment(
+                page,
+                final_message,
+                row,
+                image_path=image_path,
+                logger=tiktok_log,
+                allow_scroll=allow_scroll,
+            )
+            update_tiktok_self_comment_monitor_rows(
+                [row],
+                status="sent",
+                error="",
+                message=final_message,
+                reply_mode=reply_mode,
+                account_id=account_id,
+                started_at=started_at,
+                finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            result["success"] += 1
+        except Exception as exc:
+            update_tiktok_self_comment_monitor_rows(
+                [row],
+                status="failed",
+                error=str(exc),
+                message=final_message,
+                reply_mode=reply_mode,
+                account_id=account_id,
+                started_at=started_at,
+                finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            result["failed"] += 1
+            error_text = " ".join(str(exc).split())[:180] or type(exc).__name__
+            errors = result.setdefault("errors", [])
+            if error_text and error_text not in errors and len(errors) < 5:
+                errors.append(error_text)
+            tiktok_log(f"[TikTok我的评论区] 当前批次自动回复失败：{row.get('username') or '-'}，原因：{exc}", "error")
+        finally:
+            result["processed"] += 1
+    return result
+
+
+async def run_tiktok_self_comment_monitor_cycle(
+    account_id: int,
+    trigger_type: str = "scheduled",
+    *,
+    one_shot: bool = False,
+) -> Dict[str, object]:
+    state = get_tiktok_self_comment_monitor_state(account_id, create=True)
+    current_task = asyncio.current_task()
+    started_at = datetime.now()
+    started_at_text = started_at.strftime("%Y-%m-%d %H:%M:%S")
+    state["last_run_at"] = started_at_text
+    state["last_error"] = ""
+    state["last_skip_reason"] = ""
+    # A cycle owns its stop latch. The stop endpoint flips it asynchronously,
+    # while every browser/AI phase below checks it before starting more work.
+    state["stop_requested"] = False
+
+    if not bool(state.get("enabled")) and not one_shot:
+        schedule_next_tiktok_self_comment_monitor_run(account_id, started_at)
+        set_tiktok_self_comment_monitor_idle_message(account_id, "我的评论区监控未开启。")
+        state["last_cycle_status"] = "disabled"
+        return {"status": "disabled", "message": "我的评论区监控未开启。"}
+
+    config = load_global_config()
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    if not account:
+        if not one_shot:
+            schedule_next_tiktok_self_comment_monitor_run(account_id, started_at)
+        message = "本轮跳过：当前没有可用的TikTok在线账号。"
+        state.update({"last_cycle_status": "skipped", "last_skip_reason": "no_online_account", "message": message})
+        tiktok_log(f"[TikTok我的评论区] {message}", "warning")
+        return {"status": "skipped", "message": message}
+    if str(account.get("status", "") or "").strip() != "online":
+        if not one_shot:
+            schedule_next_tiktok_self_comment_monitor_run(account_id, started_at)
+        message = f"本轮跳过：账号 {account.get('id')} 还没有完成登录。"
+        state.update({"account_id": int(account.get("id", 0) or 0) or None, "last_cycle_status": "skipped", "last_skip_reason": "account_waiting_login", "message": message})
+        tiktok_log(f"[TikTok我的评论区] {message}", "warning")
+        return {"status": "skipped", "message": message}
+
+    busy, busy_reason = is_tiktok_stranger_message_monitor_busy(int(account.get("id", 0) or 0))
+    if not busy and tiktok_inbox_running and int(tiktok_inbox_state.get("account_id", 0) or 0) == int(account.get("id", 0) or 0):
+        busy, busy_reason = True, "消息聚合采集任务正在执行"
+    if busy:
+        if not one_shot:
+            schedule_next_tiktok_self_comment_monitor_run(account_id, started_at)
+        message = f"本轮跳过：{busy_reason}，等待下一次。"
+        state.update({"account_id": int(account.get("id", 0) or 0) or None, "last_cycle_status": "skipped", "last_skip_reason": normalize_tiktok_text(busy_reason), "message": message})
+        tiktok_log(f"[TikTok我的评论区] {message}", "warning")
+        return {"status": "skipped", "message": message}
+
+    max_videos = max(1, min(int(state.get("max_videos", 20) or 20), 100))
+    max_comments = max(5, min(int(state.get("max_comments_per_video", 80) or 80), 500))
+    # Keep the browser extraction callback and the AI request aligned.  A
+    # single-comment batch makes a normal 80-comment scan issue 80 separate
+    # model requests and can outlive the client task lease before replies run.
+    comment_batch_size = max(
+        5,
+        min(int(config.get("comment_ai_batch_size", 20) or 20), 80, max_comments),
+    )
+    auto_reply_enabled = bool(state.get("auto_reply_enabled"))
+    reply_mode = normalize_tiktok_inbox_reply_mode(state.get("reply_mode", "fixed"))
+    reply_message = str(state.get("reply_message", "") or "").strip()
+    reply_prompt = str(state.get("reply_prompt", "") or "").strip()
+    contact_value = str(state.get("contact_value", "") or "").strip()
+    reply_image_path = str(state.get("reply_image_path", "") or state.get("comment_image_path", "") or "").strip()
+    ai_client = create_ai_client()
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    if current_task is not None:
+        existing_task = tiktok_self_comment_monitor_tasks_by_account.get(int(account["id"] or 0))
+        if not existing_task or existing_task.done():
+            tiktok_self_comment_monitor_tasks_by_account[int(account["id"])] = current_task
+
+    def should_stop() -> bool:
+        # One-shot workflow invocations are not enabled in persisted monitor
+        # state, so only the explicit latch can stop them. Scheduled monitor
+        # cycles also stop when the user disables the monitor.
+        return bool(state.get("stop_requested")) or (
+            not one_shot and not bool(state.get("enabled"))
+        )
+
+    state.update(
+        {
+            "running": True,
+            "stop_requested": False,
+            "account_id": account["id"],
+            "message": (
+                f"正在检查我的评论区：账号 {account['id']}，作品 {max_videos} 个，"
+                f"每个最多 {max_comments} 条评论，AI 每批最多 {comment_batch_size} 条。"
+            ),
+            "last_cycle_status": "running",
+        }
+    )
+    tiktok_log(
+        f"[TikTok我的评论区] 开始检查账号 {account['id']} 的作品评论区，"
+        f"采集/AI 批次上限 {comment_batch_size} 条。",
+        "info",
+    )
+    try:
+        profile_payload = await scraper.scrape_self_videos(
+            max_videos=max_videos,
+            should_stop=should_stop,
+            logger=tiktok_log,
+        )
+        videos = (profile_payload.get("videos", []) if isinstance(profile_payload, dict) else []) or []
+        total_comments = 0
+        new_comments_total = 0
+        precise_total = 0
+        failed_videos = 0
+        failed_video_errors: List[str] = []
+        auto_reply_result = {"total": 0, "processed": 0, "success": 0, "failed": 0, "errors": []}
+        merged_rows_all: List[Dict] = []
+        existing_rows_all = collect_tiktok_self_comment_monitor_results(account["id"])
+        existing_keys = {build_tiktok_self_comment_row_key(row) for row in existing_rows_all if build_tiktok_self_comment_row_key(row)}
+        for video in videos[:max_videos]:
+            if should_stop():
+                tiktok_log("[TikTok我的评论区] 收到停止请求，结束剩余作品处理", "warning")
+                break
+            try:
+                if not isinstance(video, dict):
+                    continue
+                video_url = str(video.get("url", "") or "").strip()
+                if not video_url:
+                    continue
+                async def handle_self_comment_batch(page, batch_comments: List[Dict], batch_index: int):
+                    nonlocal new_comments_total, precise_total, existing_rows_all
+                    if not batch_comments or should_stop():
+                        return
+                    candidate_rows = build_tiktok_self_comment_rows(account, video, batch_comments, [], existing_rows_all)
+                    fresh_comments = [
+                        row
+                        for row in candidate_rows
+                        if build_tiktok_self_comment_row_key(row) and build_tiktok_self_comment_row_key(row) not in existing_keys
+                    ]
+                    precise_users: List[Dict] = []
+                    if fresh_comments:
+                        _filter_prompt = get_tiktok_comment_direction(config)
+                        _filter_strategy = get_tiktok_comment_filter_strategy(config)
+                        _filter_started_at = time.time()
+                        log_tiktok_filter_event(
+                            "start",
+                            scope="self_comment_monitor_batch",
+                            aweme_id=str(video.get("aweme_id", "") or ""),
+                            title=video.get("title", ""),
+                            comments_in=len(fresh_comments),
+                            strategy=_filter_strategy,
+                            prompt=_filter_prompt,
+                        )
+                        tiktok_log(
+                            f"[TikTok我的评论区] 当前作品第 {batch_index} 批采集 {len(batch_comments)} 条，新评论 {len(fresh_comments)} 条，开始 AI 筛选。",
+                            "info",
+                        )
+                        precise_users = await asyncio.to_thread(
+                            lambda: ai_client.filter_comments(
+                                str(video.get("title", "") or ""),
+                                fresh_comments,
+                                _filter_prompt,
+                                "tiktok_transactional",
+                                "",
+                                _filter_strategy,
+                                event_logger=log_tiktok_filter_event,
+                                batch_size=comment_batch_size,
+                            )
+                        )
+                        if should_stop():
+                            tiktok_log("[TikTok我的评论区] AI 筛选返回后收到停止请求，丢弃当前批次后续动作", "warning")
+                            return
+                        log_tiktok_filter_event(
+                            "done",
+                            scope="self_comment_monitor_batch",
+                            aweme_id=str(video.get("aweme_id", "") or ""),
+                            title=video.get("title", ""),
+                            comments_in=len(fresh_comments),
+                            precise_out=len(precise_users or []),
+                            strategy=_filter_strategy,
+                            duration_ms=int((time.time() - _filter_started_at) * 1000),
+                        )
+                    rows = build_tiktok_self_comment_rows(account, video, batch_comments, precise_users, existing_rows_all)
+                    merge_tiktok_self_comment_monitor_results(account["id"], rows)
+                    merged_rows_all.extend(rows)
+                    existing_rows_all = collect_tiktok_self_comment_monitor_results(account["id"])
+                    new_comments_total += len(fresh_comments)
+                    precise_total += len(precise_users or [])
+                    for row in rows:
+                        key = build_tiktok_self_comment_row_key(row)
+                        if key:
+                            existing_keys.add(key)
+
+                comments = await scraper.process_video_comment_batches(
+                    video_url,
+                    max_comments=max_comments,
+                    batch_size=comment_batch_size,
+                    max_scroll_rounds=max(10, min(int(config.get("comment_scroll_rounds", 80) or 80), 300)),
+                    logger=tiktok_log,
+                    on_batch=handle_self_comment_batch,
+                    should_stop=should_stop,
+                )
+                total_comments += len(comments or [])
+                if should_stop():
+                    break
+                if auto_reply_enabled and not should_stop():
+                    target_aweme_id = normalize_tiktok_text(video.get("aweme_id", "")) or normalize_tiktok_text(extract_aweme_id(video_url))
+                    reply_rows = [
+                        row
+                        for row in collect_pending_tiktok_self_comment_auto_reply_rows(account["id"])
+                        if (
+                            target_aweme_id
+                            and normalize_tiktok_text(row.get("aweme_id", "")) == target_aweme_id
+                        )
+                        or (
+                            not target_aweme_id
+                            and normalize_tiktok_text(row.get("video_url", "")) == normalize_tiktok_text(video_url)
+                        )
+                    ]
+                    if reply_rows:
+                        tiktok_log(
+                            f"[TikTok我的评论区] 当前作品采集和 AI 筛选完成，命中 {len(reply_rows)} 条待回复高意向评论，开始顺序回复。",
+                            "info",
+                        )
+                        reply_page = None
+                        try:
+                            reply_page = await scraper.open_video_comment_page(
+                                video_url,
+                                expected_title=str(video.get("title", "") or ""),
+                                logger=tiktok_log,
+                            )
+                            current_reply_result = await send_tiktok_self_comment_replies_on_loaded_page(
+                                scraper,
+                                reply_page,
+                                account,
+                                reply_rows,
+                                reply_mode=reply_mode,
+                                reply_message=reply_message,
+                                reply_prompt=reply_prompt,
+                                contact_value=contact_value,
+                                image_path=reply_image_path,
+                                allow_scroll=True,
+                            )
+                            for key in ("total", "processed", "success", "failed"):
+                                auto_reply_result[key] = int(auto_reply_result.get(key, 0) or 0) + int(current_reply_result.get(key, 0) or 0)
+                            for error_text in current_reply_result.get("errors") or []:
+                                reason = " ".join(str(error_text).split())[:180]
+                                errors = auto_reply_result.setdefault("errors", [])
+                                if reason and reason not in errors and len(errors) < 5:
+                                    errors.append(reason)
+                        except Exception as reply_exc:
+                            reason = " ".join(str(reply_exc).split())[:180] or type(reply_exc).__name__
+                            errors = auto_reply_result.setdefault("errors", [])
+                            if reason and reason not in errors and len(errors) < 5:
+                                errors.append(reason)
+                            tiktok_log(
+                                f"[TikTok我的评论区] 当前作品顺序回复未完成：{reply_exc}",
+                                "error",
+                            )
+                        finally:
+                            if reply_page is not None:
+                                await reply_page.close()
+            except Exception as video_exc:
+                failed_videos += 1
+                title = str(video.get("title") or "").strip() if isinstance(video, dict) else ""
+                reason = " ".join(str(video_exc).split())[:180] or type(video_exc).__name__
+                summary = f"{title}：{reason}" if title else reason
+                if summary not in failed_video_errors and len(failed_video_errors) < 3:
+                    failed_video_errors.append(summary)
+                tiktok_log(
+                    f"[TikTok我的评论区] 当前作品评论采集未确认，保留本轮失败记录：{title or '-'}，原因：{video_exc}",
+                    "error",
+                )
+                continue
+
+        stopped = should_stop()
+        if not one_shot and not stopped:
+            schedule_next_tiktok_self_comment_monitor_run(account_id, started_at)
+        message = (
+            f"本轮已停止：已检查 {len(videos)} 个作品，读取 {total_comments} 条评论，"
+            f"新增 {new_comments_total} 条，高意向 {precise_total} 条。"
+            if stopped
+            else f"本轮完成：检查 {len(videos)} 个作品，读取 {total_comments} 条评论，新增 {new_comments_total} 条，高意向 {precise_total} 条。"
+        )
+        if failed_videos:
+            message += f" 另有 {failed_videos} 个作品评论未确认，本轮未按无评论处理。"
+            if failed_video_errors:
+                message += " 未确认原因：" + "；".join(failed_video_errors) + "。"
+        reply_success = int(auto_reply_result.get("success", 0) or 0)
+        reply_failed = int(auto_reply_result.get("failed", 0) or 0)
+        reply_errors = [
+            str(item).strip()
+            for item in (auto_reply_result.get("errors") or [])
+            if str(item).strip()
+        ]
+        if auto_reply_enabled and int(auto_reply_result.get("processed", 0) or 0) > 0:
+            message += f" 自动回复 {reply_success} 成功，{reply_failed} 失败。"
+            if reply_errors:
+                message += " 回复失败原因：" + "；".join(reply_errors[:3]) + "。"
+        replies_all_failed = bool(auto_reply_enabled) and (reply_success + reply_failed) > 0 and reply_success <= 0
+        cycle_status = "stopped" if stopped else ("partial" if failed_videos else "completed")
+        last_error = ""
+        if replies_all_failed:
+            last_error = "自动回复全部失败"
+            if reply_errors:
+                last_error += "：" + "；".join(reply_errors[:3])
+        state.update(
+            {
+                "running": False,
+                "message": message,
+                "last_error": last_error,
+                "last_video_count": len(videos),
+                "last_comment_count": total_comments,
+                "last_failed_video_count": failed_videos,
+                "last_new_comment_count": new_comments_total,
+                "last_precise_count": precise_total,
+                "last_auto_reply_total": int(auto_reply_result.get("processed", 0) or 0),
+                "last_auto_reply_success": reply_success,
+                "last_auto_reply_failed": reply_failed,
+                "last_skip_reason": "",
+                "last_cycle_status": cycle_status,
+            }
+        )
+        tiktok_log(f"[TikTok我的评论区] {message}", "warning" if stopped or failed_videos else "success")
+        return {"status": cycle_status, "message": message}
+    except asyncio.CancelledError:
+        state.update(
+            {
+                "running": False,
+                "stop_requested": True,
+                "last_cycle_status": "stopped",
+                "message": "我的评论区监控已停止。",
+            }
+        )
+        tiktok_log("[TikTok我的评论区] 当前任务已取消，立即关闭评论采集页面", "warning")
+        raise
+    except Exception as exc:
+        if not one_shot:
+            schedule_next_tiktok_self_comment_monitor_run(account_id, started_at)
+        state.update(
+            {
+                "running": False,
+                "last_error": str(exc),
+                "message": f"我的评论区监控失败：{exc}",
+                "last_cycle_status": "failed",
+            }
+        )
+        tiktok_log(f"[TikTok我的评论区] 监控失败：{exc}", "error")
+        return {"status": "failed", "message": str(exc)}
+    finally:
+        await scraper.close()
+        state["running"] = False
+        if tiktok_self_comment_monitor_tasks_by_account.get(int(account_id or 0)) is current_task:
+            tiktok_self_comment_monitor_tasks_by_account.pop(int(account_id or 0), None)
+        if bool(state.get("enabled")):
+            set_tiktok_self_comment_monitor_idle_message(account_id, state.get("message", ""))
+
+
+async def ensure_tiktok_self_comment_monitor_scheduler():
+    if tiktok_schedule_external_work:
+        return
+    now = datetime.now()
+    for state in list_tiktok_self_comment_monitor_states():
+        account_id = int(state.get("account_id", 0) or 0)
+        if account_id <= 0 or not bool(state.get("enabled")):
+            continue
+        next_run_text = normalize_tiktok_text(state.get("next_run_at", ""))
+        if not next_run_text:
+            schedule_next_tiktok_self_comment_monitor_run(account_id, now)
+            next_run_text = normalize_tiktok_text(state.get("next_run_at", ""))
+        try:
+            next_run_at = datetime.strptime(next_run_text, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            next_run_at = now
+        if next_run_at > now:
+            continue
+        task = tiktok_self_comment_monitor_tasks_by_account.get(account_id)
+        if task and not task.done():
+            continue
+        tiktok_self_comment_monitor_tasks_by_account[account_id] = asyncio.create_task(
+            run_tiktok_self_comment_monitor_cycle(account_id, trigger_type="scheduled")
+        )
+
+async def run_tiktok_stranger_message_send(
+    account: Dict,
+    rows: List[Dict],
+    message: str,
+    *,
+    reply_mode: str = "fixed",
+    reply_prompt: str = "",
+    contact_value: str = "",
+):
+    global tiktok_stranger_message_running, tiktok_stranger_message_stop_requested
+    global tiktok_stranger_message_background_task
+
+    config = load_global_config()
+    show_browser = should_show_tiktok_message_browser(config)
+    scraper = create_tiktok_message_scraper(account, config)
+    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    total = len(rows)
+    tiktok_stranger_message_state.update(
+        {
+            "running": True,
+            "phase": "send",
+            "message": "陌生人私信发送中",
+            "total": total,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "account_id": account["id"],
+            "current_user": "",
+            "current_message_text": "",
+            "started_at": started_at,
+            "finished_at": "",
+            "last_error": "",
+        }
+    )
+    success = 0
+    failed = 0
+    processed = 0
+    result = {
+        "total": total,
+        "processed": 0,
+        "success": 0,
+        "failed": 0,
+        "stopped": False,
+    }
+    shared_page = None
+    try:
+        tiktok_log(
+            f"[TikTok私信引流] 开始发送引流私信，账号 {account['id']}，共 {total} 人，浏览器模式：{'显示窗口' if show_browser else '无头运行'}",
+            "info",
+        )
+        shared_page = await scraper._new_page(logger=tiktok_log)
+        for row in rows:
+            if tiktok_stranger_message_stop_requested:
+                break
+
+            current_user = str(row.get("username", "") or row.get("profile_url", ""))
+            item_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            final_message = message
+            try:
+                final_message = await asyncio.to_thread(
+                    generate_tiktok_stranger_reply_message,
+                    row,
+                    mode=reply_mode,
+                    fixed_text=message,
+                    prompt_text=reply_prompt,
+                    contact_value=contact_value,
+                )
+            except Exception as exc:
+                processed += 1
+                failed += 1
+                update_tiktok_stranger_message_rows(
+                    [row],
+                    status="failed",
+                    error=str(exc),
+                    message="",
+                    account_id=account["id"],
+                    started_at=item_started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                tiktok_stranger_message_state["last_error"] = str(exc)
+                tiktok_log(f"[TikTok私信引流] 生成回复失败：{current_user}，原因：{exc}", "error")
+                refresh_tiktok_stranger_message_progress(
+                    phase="send",
+                    total=total,
+                    processed=processed,
+                    success=success,
+                    failed=failed,
+                    account_id=account["id"],
+                    current_user=current_user,
+                    current_message_text="",
+                    message="陌生人私信发送中",
+                )
+                if processed < total and not tiktok_stranger_message_stop_requested:
+                    await asyncio.sleep(2)
+                continue
+            refresh_tiktok_stranger_message_progress(
+                phase="send",
+                total=total,
+                processed=processed,
+                success=success,
+                failed=failed,
+                account_id=account["id"],
+                current_user=current_user,
+                current_message_text=final_message,
+                message=f"正在发送引流私信，第 {processed + 1}/{total} 人",
+            )
+            update_tiktok_stranger_message_rows(
+                [row],
+                status="processing",
+                error="",
+                message=final_message,
+                account_id=account["id"],
+                started_at=item_started_at,
+                finished_at="",
+            )
+            try:
+                await scraper.send_stranger_private_message(
+                    row,
+                    final_message,
+                    logger=tiktok_log,
+                    page=shared_page,
+                )
+                processed += 1
+                success += 1
+                update_tiktok_stranger_message_rows(
+                    [row],
+                    status="sent",
+                    error="",
+                    message=final_message,
+                    account_id=account["id"],
+                    started_at=item_started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                tiktok_stranger_message_state["last_message_text"] = final_message
+                tiktok_log(f"[TikTok私信引流] 发送成功：{current_user}", "success")
+            except Exception as exc:
+                processed += 1
+                failed += 1
+                update_tiktok_stranger_message_rows(
+                    [row],
+                    status="failed",
+                    error=str(exc),
+                    message=final_message,
+                    account_id=account["id"],
+                    started_at=item_started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                tiktok_stranger_message_state["last_error"] = str(exc)
+                tiktok_log(f"[TikTok私信引流] 发送失败：{current_user}，原因：{exc}", "error")
+
+            refresh_tiktok_stranger_message_progress(
+                phase="send",
+                total=total,
+                processed=processed,
+                success=success,
+                failed=failed,
+                account_id=account["id"],
+                current_user=current_user,
+                current_message_text=final_message,
+                message="陌生人私信发送中",
+            )
+            if processed < total and not tiktok_stranger_message_stop_requested:
+                await asyncio.sleep(2)
+
+        tiktok_stranger_message_state["message"] = (
+            "陌生人私信发送已停止"
+            if tiktok_stranger_message_stop_requested and processed < total
+            else "陌生人私信发送已完成"
+        )
+        tiktok_log(
+            f"[TikTok私信引流] 本轮结束，成功 {success}，失败 {failed}，账号 {account['id']}",
+            "warning" if tiktok_stranger_message_stop_requested and processed < total else "info",
+        )
+        result = {
+            "total": total,
+            "processed": processed,
+            "success": success,
+            "failed": failed,
+            "stopped": bool(tiktok_stranger_message_stop_requested and processed < total),
+        }
+    finally:
+        if shared_page is not None:
+            try:
+                await shared_page.close()
+            except Exception:
+                pass
+        await scraper.close()
+        tiktok_stranger_message_running = False
+        tiktok_stranger_message_stop_requested = False
+        tiktok_stranger_message_background_task = None
+        tiktok_stranger_message_state["running"] = False
+        tiktok_stranger_message_state["current_user"] = ""
+        tiktok_stranger_message_state["current_message_text"] = ""
+        tiktok_stranger_message_state["processed"] = processed
+        tiktok_stranger_message_state["success"] = success
+        tiktok_stranger_message_state["failed"] = failed
+        tiktok_stranger_message_state["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return result
+
+
+async def send_tiktok_stranger_messages_for_monitor(
+    account: Dict,
+    rows: List[Dict],
+    message: str,
+    *,
+    reply_mode: str = "fixed",
+    reply_prompt: str = "",
+    contact_value: str = "",
+) -> Dict[str, object]:
+    config = load_global_config()
+    scraper = create_tiktok_message_scraper(account, config)
+    total = len(rows)
+    success = 0
+    failed = 0
+    processed = 0
+    shared_page = None
+    try:
+        shared_page = await scraper._new_page(logger=tiktok_log)
+        for row in rows:
+            if tiktok_stranger_message_stop_requested:
+                break
+            current_user = str(row.get("username", "") or row.get("profile_url", ""))
+            item_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            try:
+                final_message = await asyncio.to_thread(
+                    generate_tiktok_stranger_reply_message,
+                    row,
+                    mode=reply_mode,
+                    fixed_text=message,
+                    prompt_text=reply_prompt,
+                    contact_value=contact_value,
+                )
+            except Exception as exc:
+                processed += 1
+                failed += 1
+                update_tiktok_stranger_message_rows(
+                    [row],
+                    status="failed",
+                    error=str(exc),
+                    message="",
+                    account_id=account["id"],
+                    started_at=item_started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                tiktok_log(f"[TikTok陌生人消息监控] 自动回复生成失败：{current_user}，原因：{exc}", "error")
+                if processed < total:
+                    await asyncio.sleep(2)
+                continue
+            update_tiktok_stranger_message_rows(
+                [row],
+                status="processing",
+                error="",
+                message=final_message,
+                account_id=account["id"],
+                started_at=item_started_at,
+                finished_at="",
+            )
+            try:
+                await scraper.send_stranger_private_message(
+                    row,
+                    final_message,
+                    logger=tiktok_log,
+                    page=shared_page,
+                )
+                processed += 1
+                success += 1
+                update_tiktok_stranger_message_rows(
+                    [row],
+                    status="sent",
+                    error="",
+                    message=final_message,
+                    account_id=account["id"],
+                    started_at=item_started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                tiktok_log(f"[TikTok陌生人消息监控] 自动回复成功：{current_user}", "success")
+            except Exception as exc:
+                processed += 1
+                failed += 1
+                update_tiktok_stranger_message_rows(
+                    [row],
+                    status="failed",
+                    error=str(exc),
+                    message=final_message,
+                    account_id=account["id"],
+                    started_at=item_started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                tiktok_log(f"[TikTok陌生人消息监控] 自动回复失败：{current_user}，原因：{exc}", "error")
+            if processed < total and not tiktok_stranger_message_stop_requested:
+                await asyncio.sleep(2)
+    finally:
+        if shared_page is not None:
+            try:
+                await shared_page.close()
+            except Exception:
+                pass
+        await scraper.close()
+    return {
+        "total": total,
+        "processed": processed,
+        "success": success,
+        "failed": failed,
+        "stopped": bool(tiktok_stranger_message_stop_requested and processed < total),
+    }
+
+
+_TIKTOK_MAINLAND_MOBILE_RE = re.compile(r"(?<!\d)1[\s-]*[3-9](?:[\s-]*\d){9}(?!\d)")
+
+# 微信号没有固定格式（6-20 位、字母开头、字母数字下划线减号），单靠正则误报很高：
+# 这里用「引导词 + 就近候选 + 格式校验」的规则兜底，真正拿不准的交给 AI 判断。
+_TIKTOK_WECHAT_HINT_WORDS = (
+    "微信", "徽信", "薇信", "威信", "微心", "唯心", "微❤", "微 信",
+    "vx", "v x", "wx", "w x", "v信", "v 信", "weixin", "wechat", "we chat",
+    "加我", "加下我", "加个微", "加个好友", "扣我", "企鹅", "qq",
+)
+_TIKTOK_WECHAT_ID_RE = re.compile(r"(?<![A-Za-z0-9_-])([A-Za-z][A-Za-z0-9_-]{5,19})(?![A-Za-z0-9_-])")
+# 这些是引导词本身/常见英文词，不能当成微信号
+_TIKTOK_WECHAT_ID_STOPWORDS = {
+    "wechat", "weixin", "wechatid", "contact", "tiktok", "tiktok", "xiaohongshu",
+    "mobile", "phone", "number", "qqnumber", "whatsapp", "telegram", "vxnumber", "wxnumber",
+}
+_TIKTOK_WECHAT_MESSAGE_SPLIT_RE = re.compile(r"[\n\r，,。；;：:！!？?、\s]+")
+
+
+def looks_like_tiktok_wechat_id(value: str) -> bool:
+    """格式校验：6-20 位、字母开头、只含字母数字下划线减号，且不能是纯引导词。"""
+    text = normalize_tiktok_text(value)
+    if not text or len(text) < 6 or len(text) > 20:
+        return False
+    if not _TIKTOK_WECHAT_ID_RE.fullmatch(text):
+        return False
+    if text.lower() in _TIKTOK_WECHAT_ID_STOPWORDS:
+        return False
+    # 纯数字是手机号 / QQ，不走微信号
+    if text.isdigit():
+        return False
+    return True
+
+
+def _tiktok_wechat_candidates_in(segment: str) -> List[str]:
+    return [m.group(1) for m in _TIKTOK_WECHAT_ID_RE.finditer(segment or "")]
+
+
+def extract_tiktok_wechat_ids(rows: List[Dict]) -> List[str]:
+    """从对方消息里按「引导词 + 就近候选」抽微信号（对方没提引导词就不猜）。
+
+    - 同一段里出现「微信/vx/wx/加我…」→ 取该段里所有格式合法的候选（含写在引导词后面的）；
+    - 引导词单独成一句、微信号在下一段 → 也接受（很多人分两条发）。
+    """
+    found: List[str] = []
+    seen: Set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        source_parts: List[str] = []
+        messages = row.get("messages") if isinstance(row.get("messages"), list) else []
+        if messages:
+            source_parts.extend(
+                text for text in (_tiktok_incoming_message_text(message) for message in messages) if text
+            )
+        for key in ("incoming_message", "preview_text", "content"):
+            text = _tiktok_incoming_message_text({"text": row.get(key) or ""}) if row.get(key) else ""
+            if text:
+                source_parts.append(text)
+        segments: List[str] = []
+        for part in source_parts:
+            segments.extend(seg for seg in _TIKTOK_WECHAT_MESSAGE_SPLIT_RE.split(part) if seg)
+        pending_hint = False
+        for segment in segments:
+            lowered = segment.lower()
+            has_hint = any(word in lowered for word in _TIKTOK_WECHAT_HINT_WORDS)
+            if has_hint:
+                for candidate in _tiktok_wechat_candidates_in(segment):
+                    if looks_like_tiktok_wechat_id(candidate) and candidate not in seen:
+                        seen.add(candidate)
+                        found.append(candidate)
+                pending_hint = True
+                continue
+            if pending_hint:
+                # 引导词后面紧跟的这段如果整段就是一个合法候选，认它
+                stripped = normalize_tiktok_text(segment)
+                if looks_like_tiktok_wechat_id(stripped) and stripped not in seen:
+                    seen.add(stripped)
+                    found.append(stripped)
+                pending_hint = False
+    return found
+
+
+def _tiktok_incoming_message_text(message: object) -> str:
+    if not isinstance(message, dict):
+        return ""
+
+    direction = normalize_tiktok_text(message.get("direction") or "").lower()
+    if direction and direction not in {"incoming", "user", "customer", "received", "other"}:
+        return ""
+    is_incoming = message.get("is_incoming")
+    if isinstance(is_incoming, bool) and not is_incoming:
+        return ""
+    if str(is_incoming or "").strip().lower() in {"0", "false", "no", "outgoing", "self"}:
+        return ""
+    if message.get("is_self") is True or message.get("from_me") is True:
+        return ""
+    return normalize_tiktok_text(message.get("text") or message.get("content") or "")
+
+
+def extract_tiktok_mainland_mobile_numbers(rows: List[Dict]) -> List[str]:
+    """Extract mainland mobile numbers from the other party's messages only."""
+    numbers: List[str] = []
+    seen: Set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        messages = row.get("messages") if isinstance(row.get("messages"), list) else []
+        raw_last_message_is_user = row.get("last_message_is_user")
+        last_message_is_user = raw_last_message_is_user
+        last_message_is_user = (
+            last_message_is_user is True
+            or str(last_message_is_user or "").strip().lower()
+            in {"1", "true", "yes", "user", "incoming"}
+        )
+        last_message_is_self = (
+            raw_last_message_is_user is False
+            or str(raw_last_message_is_user or "").strip().lower()
+            in {"0", "false", "no", "self", "outgoing"}
+        )
+        explicit_incoming = normalize_tiktok_text(row.get("incoming_message") or "")
+        source_parts: List[str] = []
+
+        if messages:
+            source_parts.extend(
+                text
+                for text in (_tiktok_incoming_message_text(message) for message in messages)
+                if text
+            )
+            if explicit_incoming:
+                source_parts.append(explicit_incoming)
+        else:
+            # Legacy rows did not have directional message objects.  Their
+            # explicit incoming field is safe; content/preview are accepted
+            # only when the row is not known to end with our own message.
+            if explicit_incoming:
+                source_parts.append(explicit_incoming)
+            elif not last_message_is_self:
+                source_parts.extend(
+                    text
+                    for text in (
+                        normalize_tiktok_text(row.get("preview_text") or ""),
+                        normalize_tiktok_text(row.get("content") or ""),
+                    )
+                    if text
+                )
+
+        if last_message_is_user:
+            source_parts.append(normalize_tiktok_text(row.get("username") or ""))
+
+        source = "\n".join(part for part in source_parts if part)
+        for match in _TIKTOK_MAINLAND_MOBILE_RE.findall(source):
+            number = re.sub(r"\D", "", match)
+            if len(number) != 11 or number in seen:
+                continue
+            seen.add(number)
+            numbers.append(number)
+    return numbers
+
+
+def tiktok_wechat_contact_entries(rows: List[Dict]) -> List[Dict[str, str]]:
+    """把「客户发来的手机号」整理成可上报服务端的条目（号码 + 来源昵称/会话）。
+
+    H5 工作流的TikTok私信接管节点没勾选「自动提交好友申请」时，这些条目会上报到
+    账号级的服务端联系方式池，供同账号的其它机器执行个微自动加好友时领取。
+    """
+    entries: List[Dict[str, str]] = []
+    seen: Set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        numbers: List[str] = []
+        for number in row.get("phone_numbers") or []:
+            # 号码可能带着空格/横线写在私信里，上报前统一成纯数字，避免同一个号上报成两条
+            text = re.sub(r"[\s\-()（）]", "", normalize_tiktok_text(number))
+            if text:
+                numbers.append(text)
+        wechat_ids: List[str] = []
+        for item in [*(row.get("wechat_ids") or []), row.get("ai_wechat_id") or ""]:
+            text = normalize_tiktok_text(item)
+            if text and looks_like_tiktok_wechat_id(text):
+                wechat_ids.append(text)
+        if not numbers and not wechat_ids:
+            continue
+        username = normalize_tiktok_text(row.get("username") or "")
+        conversation = normalize_tiktok_text(row.get("conversation_source") or "")
+        for value, kind in [(number, "mobile") for number in numbers] + [(wid, "wechat_id") for wid in wechat_ids]:
+            if value in seen:
+                continue
+            seen.add(value)
+            entries.append(
+                {
+                    "value": value,
+                    "kind": kind,
+                    "username": username,
+                    "conversation_id": conversation,
+                }
+            )
+    return entries
+
+
+_TIKTOK_WECHAT_AI_CACHE: Dict[str, Dict[str, str]] = {}
+_TIKTOK_WECHAT_AI_CACHE_LIMIT = 500
+
+
+def _tiktok_wechat_ai_text(row: Dict) -> str:
+    payload = row if isinstance(row, dict) else {}
+    parts: List[str] = []
+    messages = payload.get("messages") if isinstance(payload.get("messages"), list) else []
+    for message in messages[-12:]:
+        text = _tiktok_incoming_message_text(message)
+        if text:
+            parts.append(text)
+    for key in ("incoming_message", "preview_text"):
+        text = normalize_tiktok_text(payload.get(key) or "")
+        if text and text not in parts:
+            parts.append(text)
+    return "\n".join(parts)[:1200]
+
+
+def tiktok_wechat_hint_present(row: Dict) -> bool:
+    """消息里有没有「微信/加我」这类引导词。"""
+    text = _tiktok_wechat_ai_text(row).lower()
+    return bool(text) and any(word in text for word in _TIKTOK_WECHAT_HINT_WORDS)
+
+
+def tiktok_wechat_candidate_tokens(row: Dict) -> List[str]:
+    """消息里「像微信号」的候选（不带引导词也能捞出来，交给 AI 判断）。"""
+    text = _tiktok_wechat_ai_text(row)
+    if not text:
+        return []
+    tokens: List[str] = []
+    for token in _TIKTOK_WECHAT_ID_RE.findall(text):
+        if looks_like_tiktok_wechat_id(token) and token not in tokens:
+            tokens.append(token)
+    return tokens[:8]
+
+
+def tiktok_wechat_should_ask_ai(row: Dict) -> bool:
+    """什么时候值得花 AI token 判断「对方有没有留微信号」。
+
+    以前只认「微信/vx/加我」这类引导词，客户直接甩号（“哈喽 zm_kd3 沟通吧”）永远抓不到；
+    现在只要消息里出现像微信号的候选就问 AI 一次，纯聊天（“多少钱？”“你好”）仍然不问。
+    """
+    if tiktok_wechat_hint_present(row):
+        return True
+    return bool(tiktok_wechat_candidate_tokens(row))
+
+
+def tiktok_wechat_needs_ai(row: Dict) -> bool:
+    """要不要为这条会话单独调 AI 判断微信号。
+
+    - 已经拿到手机号 → 跳过（微信里搜手机号一样能加，不用再花 token）；
+    - 已经有微信号 → 跳过；
+    - 纯聊天（没有引导词也没有像号的候选）→ 跳过。
+    """
+    payload = row if isinstance(row, dict) else {}
+    if payload.get("wechat_ids") or payload.get("ai_wechat_id"):
+        return False
+    if payload.get("phone_numbers"):
+        return False
+    if payload.get("ai_wechat_checked"):
+        # 记忆接管生成回复的那次调用已经顺带问过「有没有微信号」了，别再花一次 token
+        return False
+    return tiktok_wechat_should_ask_ai(payload)
+
+
+def extract_tiktok_wechat_id_by_ai(row: Dict) -> Dict[str, str]:
+    """让 AI 在「理解对方话术」时顺便判断有没有留微信号。
+
+    只在消息里出现引导词时才调用（省 token），且只认格式合法的结果，避免 AI 编一个号出来。
+    返回 {"wechat_id": "", "evidence": "", "source": "ai"}。
+    """
+    text = _tiktok_wechat_ai_text(row)
+    if not text:
+        return {"wechat_id": "", "evidence": "", "source": "ai"}
+    candidates = tiktok_wechat_candidate_tokens(row)
+    # 没有引导词、也没有像号的候选 = 纯聊天，不用花 token；有候选就交给 AI 判断
+    if not tiktok_wechat_hint_present(row) and not candidates:
+        return {"wechat_id": "", "evidence": "", "source": "ai"}
+    cache_key = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    cached = _TIKTOK_WECHAT_AI_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached)
+    system_prompt = (
+        "你在帮销售整理TikTok私信线索。只做信息抽取，不要闲聊。"
+        "只输出一个 JSON 对象，不要解释、不要代码块："
+        '{"wechat_id": "<对方明确留下的微信号，没有就空字符串>", '
+        '"evidence": "<原文里能证明的片段，没有就空字符串>"}'
+    )
+    candidate_line = (
+        "消息里这些片段是疑似微信号候选：" + "、".join(candidates) + "\n" if candidates else ""
+    )
+    user_prompt = (
+        f"对方发来的消息：\n{text}\n\n"
+        f"{candidate_line}"
+        "判断对方自己有没有留下微信号：可能是「微信/vx/wx/加我」后面那串，"
+        "也可能是对方直接甩出来的一串号（客户经常不带任何引导词）。"
+        "只有能确定那是他本人的微信号时才返回；拿不准、或那串其实是他TikTok号/昵称/订单号，"
+        "就返回空字符串。不要猜、不要自己编一个号。"
+    )
+    result = {"wechat_id": "", "evidence": "", "source": "ai"}
+    try:
+        raw = request_tiktok_ai_comment(system_prompt, user_prompt, max_tokens=200, response_limit=400)
+        start, end = raw.find("{"), raw.rfind("}")
+        if start >= 0 and end > start:
+            parsed = json.loads(raw[start:end + 1])
+            candidate = normalize_tiktok_text(parsed.get("wechat_id") or "")
+            if looks_like_tiktok_wechat_id(candidate):
+                result["wechat_id"] = candidate
+                result["evidence"] = str(parsed.get("evidence") or "").strip()[:120]
+    except Exception as exc:  # noqa: BLE001
+        tiktok_log(f"[TikTok私信接管] AI 判断微信号失败：{exc}", "warning")
+    if len(_TIKTOK_WECHAT_AI_CACHE) < _TIKTOK_WECHAT_AI_CACHE_LIMIT:
+        _TIKTOK_WECHAT_AI_CACHE[cache_key] = dict(result)
+    return result
+
+
+async def _queue_tiktok_wechat_friend_add(contact_values: List[str]) -> Dict[str, object]:
+    """提交本机微信加好友任务：值可以是手机号，也可以是微信号（微信搜索是同一个输入框）。"""
+    if not contact_values:
+        return {"enabled": True, "queued": False, "targets": [], "reason": "no_contact"}
+    try:
+        try:
+            from app.services import native_wechat_engine  # type: ignore
+        except ImportError:
+            from backend.app.services import native_wechat_engine  # type: ignore
+        task = await native_wechat_engine.create_add_friend_task(
+            native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID,
+            contact_values,
+        )
+        task_status = str(task.get("status") or "") if isinstance(task, dict) else ""
+        queued = task_status not in {"skipped", "failed"}
+        return {
+            "enabled": True,
+            "queued": queued,
+            "targets": contact_values,
+            "task_id": str(task.get("id") or "") if isinstance(task, dict) else "",
+            "status": task_status,
+            "skipped_targets": list(task.get("skipped_targets") or []) if isinstance(task, dict) else [],
+            "reason": str(task.get("reason") or "") if isinstance(task, dict) else "",
+        }
+    except Exception as exc:
+        tiktok_log(f"[TikTok私信接管] 识别到联系方式后提交加好友任务失败：{exc}", "error")
+        return {
+            "enabled": True,
+            "queued": False,
+            "targets": contact_values,
+            "reason": str(exc),
+        }
+
+
+def _h5_tiktok_last_message_is_user(row: Dict) -> bool:
+    value = row.get("last_message_is_user") if isinstance(row, dict) else None
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "user", "incoming"}
+
+
+def _h5_tiktok_reply_fingerprint(row: Dict) -> str:
+    normalized = normalize_tiktok_stranger_message_row(row if isinstance(row, dict) else {})
+    key = stranger_message_row_key(normalized)
+    last_text = normalize_tiktok_text(
+        normalized.get("last_message_text")
+        or normalized.get("incoming_message")
+        or normalized.get("preview_text")
+    )
+    if not key or not last_text:
+        return ""
+    return f"{key}|last:{last_text}"[:800]
+
+
+_H5_TIKTOK_WECHAT_ADD_TERMINAL_STATUSES = {
+    "added",
+    "already_added",
+    "friend_added",
+    "success",
+    "completed",
+}
+_H5_TIKTOK_WECHAT_ADD_PENDING_STATUSES = {
+    "pending",
+    "queued",
+    "processing",
+    "in_progress",
+}
+
+
+def _h5_tiktok_should_queue_wechat_add(existing_status: object) -> bool:
+    status = normalize_tiktok_text(existing_status).lower()
+    return status not in (
+        _H5_TIKTOK_WECHAT_ADD_TERMINAL_STATUSES
+        | _H5_TIKTOK_WECHAT_ADD_PENDING_STATUSES
+    )
+
+
+async def run_tiktok_h5_stranger_message_task_once(
+    account_id: int = 0,
+    *,
+    max_conversations: int = 10000,
+    fixed_message: str = "",
+    auto_reply_enabled: bool = True,
+    wechat_add_friend_enabled: bool = False,
+    reply_mode: str = "fixed",
+    reply_prompt: str = "",
+    contact_value: str = "",
+    wechat_add_friend_targets_source: str = "",
+    memory_context: str = "",
+    memory_doc_ids: Optional[List[str]] = None,
+) -> Dict[str, object]:
+    """Run the H5 TikTok private-message node once without enabling its monitor."""
+    global tiktok_stranger_message_running, tiktok_stranger_message_stop_requested
+    global tiktok_stranger_message_background_task
+
+    async with tiktok_h5_stranger_message_task_lock:
+        current_task = asyncio.current_task()
+        requested_account_id = int(account_id or 0)
+        fixed_text = normalize_tiktok_text(fixed_message)
+        normalized_reply_mode = normalize_tiktok_stranger_reply_mode(reply_mode)
+        prompt_text = normalize_tiktok_text(reply_prompt)
+        normalized_contact = normalize_tiktok_text(contact_value)
+        if auto_reply_enabled and normalized_reply_mode == "fixed" and not fixed_text:
+            return {"status": "failed", "code": 400, "message": "H5 TikTok私信接管缺少固定文案。"}
+
+        # 加好友来源选「从TikTok私信提取手机号」时，联系方式本来就来自私信内容，
+        # 此时不该再要求 H5 传 contact_value（2026-09-21：该配置连续 15 轮被判 400）。
+        contact_from_private_message = (
+            normalize_tiktok_text(wechat_add_friend_targets_source).lower()
+            in TIKTOK_WECHAT_ADD_TARGETS_FROM_PRIVATE_MESSAGE
+        )
+        if (
+            auto_reply_enabled
+            and normalized_reply_mode == "ai_lead"
+            and not normalized_contact
+            and not contact_from_private_message
+        ):
+            return {
+                "status": "failed",
+                "code": 400,
+                "message": (
+                    "AI 线索模式缺少联系方式：请在节点里填写联系方式，"
+                    "或把加好友来源改成「从TikTok私信提取手机号」。"
+                ),
+            }
+
+        # 记忆文件统一在 Online「TikTok获客 → 私信引流」里选（本机接管配置里存着 memory_doc_ids）。
+        takeover_memory_text = str(memory_context or "").strip()[:TIKTOK_STRANGER_MESSAGE_TAKEOVER_MEMORY_MAX_CHARS]
+        takeover_memory_titles: List[str] = []
+        takeover_memory_doc_ids = [str(item or "").strip() for item in (memory_doc_ids or []) if str(item or "").strip()]
+        if auto_reply_enabled and normalized_reply_mode == "ai_memory" and not takeover_memory_text:
+            if not takeover_memory_doc_ids and requested_account_id > 0:
+                online_memory_doc_ids = get_tiktok_stranger_message_monitor_state(requested_account_id).get(
+                    "memory_doc_ids"
+                )
+                takeover_memory_doc_ids = [
+                    str(item or "").strip() for item in (online_memory_doc_ids or []) if str(item or "").strip()
+                ]
+                if takeover_memory_doc_ids:
+                    tiktok_log(
+                        "[H5TikTok私信接管] 记忆文件取 Online TikTok获客-私信引流里选的那份："
+                        + "、".join(takeover_memory_doc_ids),
+                        "info",
+                    )
+            if takeover_memory_doc_ids:
+                resolved_takeover_memory = load_tiktok_takeover_memory_context(takeover_memory_doc_ids)
+                takeover_memory_text = str(resolved_takeover_memory.get("text") or "").strip()
+                takeover_memory_titles = [str(item) for item in (resolved_takeover_memory.get("titles") or [])]
+        if auto_reply_enabled and normalized_reply_mode == "ai_memory" and not takeover_memory_text:
+            return {
+                "status": "failed",
+                "code": 400,
+                "message": (
+                    "TikTok私信记忆接管缺少记忆文件：请先在 Online「TikTok获客 → 私信引流」里"
+                    "选 1 份记忆文件（例如「百问百答」）。"
+                ),
+            }
+
+        config = load_global_config()
+        account = (
+            get_tiktok_account_by_id(requested_account_id, config)
+            if requested_account_id > 0
+            else get_active_tiktok_account(config)
+        )
+        if not account:
+            return {
+                "status": "skipped",
+                "code": 400,
+                "message": "当前没有可用的TikTok在线账号，请先登录。",
+                "reason": "no_online_account",
+            }
+        if str(account.get("status", "") or "").strip().lower() != "online":
+            return {
+                "status": "skipped",
+                "code": 400,
+                "message": f"账号 {account.get('id')} 还没有完成登录，请先检查或登录。",
+                "reason": "account_waiting_login",
+                "account_id": int(account.get("id", 0) or 0),
+            }
+
+        target_account_id = int(account.get("id", 0) or 0)
+        busy, busy_reason = is_tiktok_stranger_message_monitor_busy(target_account_id)
+        if busy:
+            return {
+                "status": "skipped",
+                "code": 400,
+                "message": f"当前账号已有任务执行中：{busy_reason}。",
+                "reason": "account_busy",
+                "account_id": target_account_id,
+            }
+
+        monitor_task = tiktok_stranger_message_monitor_tasks_by_account.get(target_account_id)
+        if monitor_task and not monitor_task.done():
+            return {
+                "status": "skipped",
+                "code": 409,
+                "message": f"当前账号已有陌生人私信监控正在执行：账号 {target_account_id}",
+                "reason": "stranger_message_monitor_running",
+                "account_id": target_account_id,
+            }
+
+        # Each list traversal stops at its first prior-day item; retain only
+        # a high safety bound instead of the former 100-item cap.
+        limit = max(1, int(max_conversations or 10000))
+        tiktok_stranger_message_running = True
+        tiktok_stranger_message_stop_requested = False
+        tiktok_stranger_message_background_task = current_task
+        scraper = create_tiktok_message_scraper(account, config)
+        scraper_closed = False
+        shared_page = None
+        prepared_rows: List[Dict] = []
+        phone_numbers: List[str] = []
+        phone_numbers_to_queue: List[str] = []
+        seen_phones: Set[str] = set()
+        seen_queue_phones: Set[str] = set()
+        phone_contacts_skipped = 0
+        existing_rows = {
+            stranger_message_row_key(row): row
+            for row in collect_tiktok_stranger_message_results(target_account_id)
+            if stranger_message_row_key(row)
+        }
+        qualifying_users = 0
+        skipped_without_user_last = 0
+        skipped_duplicate_reply = 0
+        detail_failures: List[Dict[str, str]] = []
+        normal_rows: List[Dict] = []
+        stranger_rows: List[Dict] = []
+        reply_result: Dict[str, object] = {
+            "total": 0,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "stopped": False,
+        }
+        wechat_add_friend_results: List[Dict[str, object]] = []
+        started_at = _now_text()
+        tiktok_stranger_message_state.update(
+            {
+                "running": True,
+                "phase": "h5_one_shot",
+                "message": f"H5 TikTok私信接管执行中，账号 {target_account_id}",
+                "total": limit,
+                "processed": 0,
+                "success": 0,
+                "failed": 0,
+                "account_id": target_account_id,
+                "current_user": "",
+                "current_message_text": "",
+                "started_at": started_at,
+                "finished_at": "",
+                "last_error": "",
+            }
+        )
+
+        async def process_one_row(raw_row: Dict, page) -> Dict:
+            nonlocal qualifying_users, skipped_without_user_last, skipped_duplicate_reply
+            nonlocal phone_contacts_skipped
+
+            row = {**raw_row, "account_id": target_account_id}
+            key = stranger_message_row_key(row)
+            if not key:
+                return row
+            existing = existing_rows.get(key) or {}
+            current_numbers = extract_tiktok_mainland_mobile_numbers([row])
+            old_numbers = [
+                str(item).strip()
+                for item in (existing.get("phone_numbers") or [])
+                if str(item).strip()
+            ]
+            # When this scan found an inbound number, it replaces the old
+            # snapshot.  This removes numbers previously extracted from our
+            # own outgoing messages instead of carrying them forward forever.
+            merged_numbers = list(dict.fromkeys(current_numbers or old_numbers))
+            row["phone_numbers"] = merged_numbers
+            current_wechat_ids = extract_tiktok_wechat_ids([row])
+            if not current_wechat_ids and tiktok_wechat_needs_ai(row):
+                # 提到微信但规则抽不出来（用户随便起的号）→ 让 AI 顺手判断一次
+                try:
+                    ai_hit = await asyncio.to_thread(extract_tiktok_wechat_id_by_ai, row)
+                    if str(ai_hit.get("wechat_id") or "").strip():
+                        current_wechat_ids = [str(ai_hit["wechat_id"]).strip()]
+                        row["ai_wechat_id"] = current_wechat_ids[0]
+                        row["ai_wechat_evidence"] = str(ai_hit.get("evidence") or "")[:120]
+                except Exception as exc:  # noqa: BLE001
+                    tiktok_log(f"[TikTok私信接管] AI 判断微信号异常：{exc}", "warning")
+            old_wechat_ids = [
+                str(item).strip()
+                for item in (existing.get("wechat_ids") or [])
+                if str(item).strip()
+            ]
+            merged_wechat_ids = list(dict.fromkeys(current_wechat_ids or old_wechat_ids))
+            if merged_wechat_ids:
+                row["wechat_ids"] = merged_wechat_ids
+            # 微信里搜手机号 / 搜微信号是同一个输入框，所以两者走同一条路：当时加 or 上报池子
+            merged_contacts = list(dict.fromkeys([*merged_numbers, *merged_wechat_ids]))
+            existing_status = normalize_tiktok_text(existing.get("wechat_add_status") or "").lower()
+            row["wechat_add_status"] = existing_status or ("phone_detected" if merged_contacts else "")
+            prepared_rows.append(row)
+
+            def persist_row() -> None:
+                existing_rows[key] = dict(row)
+                merge_tiktok_stranger_message_results(target_account_id, [row])
+                if normalize_tiktok_text(row.get("conversation_source", "")) == "chat_inbox":
+                    merge_tiktok_inbox_results(target_account_id, [row])
+
+            async def handle_phone_numbers() -> None:
+                nonlocal phone_contacts_skipped
+
+                if wechat_add_friend_enabled and _h5_tiktok_should_queue_wechat_add(existing_status):
+                    pending_targets = [value for value in merged_contacts if value not in seen_queue_phones]
+                    if pending_targets:
+                        seen_queue_phones.update(pending_targets)
+                        phone_numbers_to_queue.extend(pending_targets)
+                        # Do not start native WeChat UI work from the
+                        # Playwright item callback.  The callback runs while
+                        # TikTok is still opening conversations.
+                        row["wechat_add_status"] = "queued_pending"
+                    else:
+                        phone_contacts_skipped += 1
+                elif existing_status in (_H5_TIKTOK_WECHAT_ADD_TERMINAL_STATUSES | _H5_TIKTOK_WECHAT_ADD_PENDING_STATUSES):
+                    phone_contacts_skipped += 1
+                else:
+                    row["wechat_add_status"] = "phone_detected"
+
+            if str(row.get("detail_read_status") or "").strip().lower() == "failed":
+                detail_failures.append(
+                    {
+                        "username": str(row.get("username") or "").strip() or "未知会话",
+                        "conversation_key": str(row.get("conversation_key") or "").strip(),
+                        "error": str(row.get("detail_read_error") or "详情读取失败").strip(),
+                    }
+                )
+                # A list preview can already contain a phone number even when
+                # the right-hand conversation bubbles fail to load. Keep the
+                # contact useful; the detail failure is still reported
+                # separately in the task result.
+                if merged_contacts:
+                    if row.get("last_message_is_user") is not False:
+                        qualifying_users += 1
+                    for phone in merged_numbers:
+                        if phone not in seen_phones:
+                            seen_phones.add(phone)
+                            phone_numbers.append(phone)
+                    await handle_phone_numbers()
+                persist_row()
+                return row
+
+            for phone in merged_numbers:
+                if phone not in seen_phones:
+                    seen_phones.add(phone)
+                    phone_numbers.append(phone)
+
+            counted_user_last = False
+            if merged_contacts:
+                if _h5_tiktok_last_message_is_user(row):
+                    qualifying_users += 1
+                await handle_phone_numbers()
+                # A phone number is a lead signal independent of who sent the
+                # latest message. The reply gate below still requires the
+                # latest message to be from the customer, but a prior inbound
+                # phone must not be lost just because the bot replied after it.
+                persist_row()
+                # 记忆接管：识别到手机号也要继续按记忆回复，不再直接结束这条会话。
+                if normalized_reply_mode != "ai_memory":
+                    return row
+                counted_user_last = True
+
+            if not _h5_tiktok_last_message_is_user(row):
+                skipped_without_user_last += 1
+                persist_row()
+                return row
+
+            if not counted_user_last:
+                qualifying_users += 1
+
+            if not auto_reply_enabled:
+                persist_row()
+                return row
+
+            fingerprint = _h5_tiktok_reply_fingerprint(row)
+            if not fingerprint:
+                persist_row()
+                return row
+            if str(existing.get("h5_reply_fingerprint") or "").strip() == fingerprint:
+                skipped_duplicate_reply += 1
+                persist_row()
+                return row
+
+            reply_result["total"] = int(reply_result.get("total", 0) or 0) + 1
+            row["reply_status"] = "processing"
+            row["reply_mode"] = normalized_reply_mode
+            row["reply_message"] = fixed_text
+            tiktok_stranger_message_state.update(
+                {
+                    "phase": "send",
+                    "current_user": normalize_tiktok_text(row.get("username", "")),
+                    "current_message_text": fixed_text,
+                    "message": f"正在回复 {normalize_tiktok_text(row.get('username', '')) or '当前会话'}",
+                }
+            )
+            try:
+                final_message = await asyncio.to_thread(
+                    generate_tiktok_stranger_reply_message,
+                    row,
+                    mode=normalized_reply_mode,
+                    fixed_text=fixed_text,
+                    prompt_text=prompt_text,
+                    contact_value=normalized_contact,
+                    memory_context=takeover_memory_text,
+                )
+                row["reply_message"] = final_message
+                tiktok_stranger_message_state["current_message_text"] = final_message
+                await scraper.send_open_chat_message(
+                    page,
+                    final_message,
+                    logger=tiktok_log,
+                    username=normalize_tiktok_text(row.get("username", "")),
+                )
+                reply_result["processed"] = int(reply_result.get("processed", 0) or 0) + 1
+                reply_result["success"] = int(reply_result.get("success", 0) or 0) + 1
+                row.update(
+                    {
+                        "reply_status": "sent",
+                        "reply_error": "",
+                        "h5_reply_fingerprint": fingerprint,
+                        "h5_reply_sent_at": _now_text(),
+                    }
+                )
+            except Exception as exc:
+                reply_result["processed"] = int(reply_result.get("processed", 0) or 0) + 1
+                reply_result["failed"] = int(reply_result.get("failed", 0) or 0) + 1
+                row.update({"reply_status": "failed", "reply_error": str(exc)})
+                tiktok_log(
+                    f"[H5TikTok私信接管] 回复失败：{row.get('username') or '-'}，原因：{exc}",
+                    "error",
+                )
+            persist_row()
+            return row
+
+        try:
+            # Both inbox and stranger-list collectors operate on the same
+            # TikTok chat workspace. Reuse one page for the round so the
+            # second collector does not launch a fresh page and redo the
+            # initial navigation before it can inspect anything.
+            if hasattr(scraper, "_new_page"):
+                try:
+                    shared_page = await scraper._new_page(logger=tiktok_log)  # type: ignore[attr-defined]
+                except Exception as exc:
+                    tiktok_log(f"[H5TikTok私信接管] 复用聊天页面失败，按独立页面继续：{exc}", "warning")
+            tiktok_log(
+                f"[H5TikTok私信接管] 开始一次性读取账号 {target_account_id}，最多 {limit} 条会话，不启用常驻监控",
+                "info",
+            )
+            try:
+                normal_rows = await scraper.collect_chat_page_private_messages(
+                    max_conversations=limit,
+                    should_stop=lambda: bool(tiktok_stranger_message_stop_requested),
+                    logger=tiktok_log,
+                    item_callback=process_one_row,
+                    page=shared_page,
+                )
+            except Exception as exc:
+                # A normal inbox cutoff or failure only ends that list. The
+                # stranger list still needs an independent scan this round.
+                tiktok_log(f"[H5TikTok私信接管] 普通好友会话读取失败，继续读取陌生人会话：{exc}", "warning")
+            if not tiktok_stranger_message_stop_requested:
+                try:
+                    stranger_rows = await scraper.collect_stranger_private_messages(
+                        max_conversations=limit,
+                        should_stop=lambda: bool(tiktok_stranger_message_stop_requested),
+                        logger=tiktok_log,
+                        include_details=True,
+                        item_callback=process_one_row,
+                        page=shared_page,
+                        progress_callback=lambda processed, total, username: tiktok_stranger_message_state.update(
+                            {
+                                "running": True,
+                                "total": total,
+                                "processed": processed,
+                                "current_user": normalize_tiktok_text(username),
+                                "message": f"H5 TikTok私信接管读取中，已读取 {processed}/{total} 条",
+                            }
+                        ),
+                    )
+                except Exception as exc:
+                    # The normal-list result remains useful even when the
+                    # stranger panel itself cannot be opened.
+                    tiktok_log(f"[H5TikTok私信接管] 陌生人会话读取失败，保留普通好友会话结果：{exc}", "warning")
+
+            rows_by_key: Dict[str, Dict] = {}
+            row_order: List[str] = []
+            for raw_row in [*(normal_rows or []), *(stranger_rows or [])]:
+                if not isinstance(raw_row, dict):
+                    continue
+                source = str(raw_row.get("conversation_source") or "").strip()
+                identity = str(
+                    raw_row.get("conversation_key")
+                    or raw_row.get("profile_url")
+                    or f"{source}:{raw_row.get('username') or ''}"
+                ).strip()
+                if not identity:
+                    continue
+                existing_row = rows_by_key.get(identity)
+                if existing_row is None:
+                    row_order.append(identity)
+                    rows_by_key[identity] = raw_row
+                    continue
+                # Prefer the row that reached a detail page successfully.
+                if (
+                    str(existing_row.get("detail_read_status") or "").lower() == "failed"
+                    and str(raw_row.get("detail_read_status") or "").lower() != "failed"
+                ):
+                    rows_by_key[identity] = raw_row
+            rows = [rows_by_key[key] for key in row_order[:limit] if key in rows_by_key]
+            tiktok_log(
+                f"[H5TikTok私信接管] 本轮合并普通好友 {len(normal_rows)} 条、陌生人 {len(stranger_rows or [])} 条，"
+                f"按顺序处理 {len(rows)}/{limit} 条会话",
+                "info",
+            )
+            merge_tiktok_stranger_message_results(target_account_id, prepared_rows)
+
+            if tiktok_stranger_message_stop_requested:
+                return {
+                    "status": "stopped",
+                    "code": 200,
+                    "message": "H5 TikTok私信接管已停止，已保留已读取结果。",
+                    "account_id": target_account_id,
+                    "mode": "h5_one_shot",
+                    "total_conversations": len(prepared_rows),
+                    "max_conversations": limit,
+                    "stopped": True,
+                }
+
+            # Close the TikTok browser before starting native WeChat work so
+            # the add-friend worker cannot steal the foreground window or
+            # mouse while the private-message scan is still running.
+            if wechat_add_friend_enabled and phone_numbers_to_queue:
+                await scraper.close()
+                scraper_closed = True
+                friend_result = await _queue_tiktok_wechat_friend_add(phone_numbers_to_queue)
+                wechat_add_friend_results.append(friend_result)
+                final_add_status = "queued" if bool(friend_result.get("queued")) else "add_failed"
+                for prepared_row in prepared_rows:
+                    row_numbers = set(prepared_row.get("phone_numbers") or [])
+                    if row_numbers.intersection(phone_numbers_to_queue):
+                        prepared_row["wechat_add_status"] = final_add_status
+                merge_tiktok_stranger_message_results(target_account_id, prepared_rows)
+                for prepared_row in prepared_rows:
+                    if normalize_tiktok_text(prepared_row.get("conversation_source", "")) == "chat_inbox":
+                        merge_tiktok_inbox_results(target_account_id, [prepared_row])
+
+            wechat_add_friend_result = {
+                "enabled": bool(wechat_add_friend_enabled),
+                "queued": any(bool(item.get("queued")) for item in wechat_add_friend_results),
+                "targets": phone_numbers_to_queue,
+                "results": wechat_add_friend_results,
+                "reason": (
+                    "no_pending_phone_number"
+                    if wechat_add_friend_enabled and not phone_numbers_to_queue
+                    else "disabled" if not wechat_add_friend_enabled else ""
+                ),
+            }
+            reply_success = int(reply_result.get("success", 0) or 0)
+            reply_failed = int(reply_result.get("failed", 0) or 0)
+            if detail_failures:
+                detail_summary = "；".join(
+                    f"{item['username']}：{item['error']}" for item in detail_failures[:5]
+                )
+                failure_message = (
+                    f"H5 TikTok私信接管失败：{len(detail_failures)} 个会话详情读取失败，未将其当作无新消息跳过。"
+                    f" {detail_summary}"
+                )
+                tiktok_log(f"[H5TikTok私信接管] {failure_message}", "error")
+                return {
+                    "status": "failed",
+                    "code": 502,
+                    "message": failure_message,
+                    "msg": failure_message,
+                    "summary": failure_message,
+                    "account_id": target_account_id,
+                    "started_at": started_at,
+                    "finished_at": _now_text(),
+                    "mode": "h5_one_shot",
+                    "total_conversations": len(prepared_rows),
+                    "max_conversations": limit,
+                    "processed_user_last": qualifying_users,
+                    "skipped_last_message_not_user": skipped_without_user_last,
+                    "skipped_duplicate_reply": skipped_duplicate_reply,
+                    "normal_conversations": len(normal_rows),
+                    "stranger_conversations": len(stranger_rows),
+                    "detail_read_failed": True,
+                    "detail_read_failed_count": len(detail_failures),
+                    "detail_failures": detail_failures,
+                    "reply": dict(reply_result),
+                    "extracted_phone_numbers": phone_numbers,
+                "extracted_wechat_ids": extract_tiktok_wechat_ids(locals().get("prepared_rows") or []),
+                    "extracted_wechat_ids": extract_tiktok_wechat_ids(locals().get("prepared_rows") or []),
+                    "wechat_add_targets": phone_numbers_to_queue,
+                    "phone_contacts_skipped": phone_contacts_skipped,
+                    "wechat_add_friend": wechat_add_friend_result,
+                    "stats": {
+                        "total": len(prepared_rows),
+                        "processed": qualifying_users,
+                        "detail_read_failed": len(detail_failures),
+                        "reply_total": int(reply_result.get("total", 0) or 0),
+                        "reply_success": reply_success,
+                        "reply_failed": reply_failed,
+                        "phone_numbers": len(phone_numbers),
+                        "phone_numbers_queued": len(phone_numbers_to_queue),
+                        "phone_contacts_skipped": phone_contacts_skipped,
+                    },
+                    "final_state": {
+                        "status": "failed",
+                        "total_conversations": len(prepared_rows),
+                        "detail_read_failed": len(detail_failures),
+                        "detail_failures": detail_failures,
+                    },
+                }
+            message = (
+                f"H5 TikTok私信接管完成：读取 {len(prepared_rows)}/{limit} 条会话，"
+                f"最后消息为用户 {qualifying_users} 条，发送固定文案成功 {reply_success} 条，失败 {reply_failed} 条，"
+                f"收集手机号 {len(phone_numbers)} 个，已加入微信加好友队列 {len(phone_numbers_to_queue)} 个。"
+            )
+            tiktok_log(f"[H5TikTok私信接管] {message}", "success")
+            return {
+                "status": "completed",
+                "code": 200,
+                "message": message,
+                "msg": message,
+                "summary": message,
+                "account_id": target_account_id,
+                "started_at": started_at,
+                "finished_at": _now_text(),
+                "mode": "h5_one_shot",
+                "reply_mode": normalized_reply_mode,
+                "memory_titles": takeover_memory_titles,
+                "total_conversations": len(prepared_rows),
+                "max_conversations": limit,
+                "processed_user_last": qualifying_users,
+                "skipped_last_message_not_user": skipped_without_user_last,
+                "skipped_duplicate_reply": skipped_duplicate_reply,
+                "normal_conversations": len(normal_rows),
+                "stranger_conversations": len(stranger_rows),
+                "reply": dict(reply_result),
+                "extracted_phone_numbers": phone_numbers,
+                "extracted_wechat_ids": extract_tiktok_wechat_ids(locals().get("prepared_rows") or []),
+                "wechat_contact_entries": tiktok_wechat_contact_entries(prepared_rows),
+                "wechat_add_targets": phone_numbers_to_queue,
+                "phone_contacts_skipped": phone_contacts_skipped,
+                "wechat_add_friend": wechat_add_friend_result,
+                "stats": {
+                    "total": len(prepared_rows),
+                    "processed": qualifying_users,
+                    "reply_total": int(reply_result.get("total", 0) or 0),
+                    "reply_success": reply_success,
+                    "reply_failed": reply_failed,
+                    "phone_numbers": len(phone_numbers),
+                    "phone_numbers_queued": len(phone_numbers_to_queue),
+                    "phone_contacts_skipped": phone_contacts_skipped,
+                },
+                "final_state": {
+                    "status": "completed",
+                    "total_conversations": len(prepared_rows),
+                    "processed_user_last": qualifying_users,
+                    "extracted_phone_numbers": phone_numbers,
+                "extracted_wechat_ids": extract_tiktok_wechat_ids(locals().get("prepared_rows") or []),
+                    "extracted_wechat_ids": extract_tiktok_wechat_ids(locals().get("prepared_rows") or []),
+                    "wechat_add_friend": wechat_add_friend_result,
+                },
+            }
+        except Exception as exc:
+            tiktok_log(f"[H5TikTok私信接管] 一次性任务失败：{exc}", "error")
+            return {
+                "status": "failed",
+                "code": 500,
+                "message": str(exc),
+                "account_id": target_account_id,
+                "mode": "h5_one_shot",
+            }
+        finally:
+            if shared_page is not None:
+                try:
+                    await shared_page.close()
+                except Exception:
+                    pass
+            if not scraper_closed:
+                await scraper.close()
+            if tiktok_stranger_message_background_task is current_task:
+                tiktok_stranger_message_background_task = None
+            tiktok_stranger_message_running = False
+            tiktok_stranger_message_stop_requested = False
+            tiktok_stranger_message_state.update(
+                {
+                    "running": False,
+                    "current_user": "",
+                    "current_message_text": "",
+                    "finished_at": _now_text(),
+                }
+            )
+
+
+async def run_tiktok_stranger_message_monitor_cycle(account_id: int, trigger_type: str = "scheduled") -> Dict[str, object]:
+    state = get_tiktok_stranger_message_monitor_state(account_id, create=True)
+    started_at = datetime.now()
+    started_at_text = started_at.strftime("%Y-%m-%d %H:%M:%S")
+    state["last_run_at"] = started_at_text
+    state["last_error"] = ""
+    state["last_skip_reason"] = ""
+
+    if not bool(state.get("enabled")):
+        schedule_next_tiktok_stranger_message_monitor_run(account_id, started_at)
+        set_tiktok_stranger_message_monitor_idle_message(account_id, "监控未开启。")
+        state["last_cycle_status"] = "disabled"
+        return {"status": "disabled", "message": "监控未开启。"}
+
+    max_conversations = max(
+        1,
+        min(int(state.get("max_conversations", 100) or 100), 100),
+    )
+    auto_reply_enabled = bool(state.get("auto_reply_enabled", True))
+    reply_mode = normalize_tiktok_stranger_reply_mode(state.get("reply_mode", "fixed"))
+    reply_message = str(state.get("reply_message", "") or "").strip()
+    reply_prompt = str(state.get("reply_prompt", "") or "").strip()
+    contact_value = str(state.get("contact_value", "") or "").strip()
+    memory_doc_ids = [
+        str(item or "").strip() for item in (state.get("memory_doc_ids") or []) if str(item or "").strip()
+    ]
+    memory_user_id = int(state.get("memory_user_id", 0) or 0) or None
+    wechat_add_friend_enabled = bool(state.get("wechat_add_friend_enabled", False))
+    config = load_global_config()
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    if not account:
+        schedule_next_tiktok_stranger_message_monitor_run(account_id, started_at)
+        message = "本轮跳过：当前没有可用的TikTok在线账号。"
+        state.update(
+            {
+                "last_cycle_status": "skipped",
+                "last_skip_reason": "no_online_account",
+                "message": message,
+            }
+        )
+        tiktok_log(f"[TikTok陌生人消息监控] {message}", "warning")
+        return {"status": "skipped", "message": message}
+    if str(account.get("status", "") or "").strip() != "online":
+        schedule_next_tiktok_stranger_message_monitor_run(account_id, started_at)
+        message = f"本轮跳过：账号 {account.get('id')} 还没有完成登录。"
+        state.update(
+            {
+                "account_id": int(account.get("id", 0) or 0) or None,
+                "last_cycle_status": "skipped",
+                "last_skip_reason": "account_waiting_login",
+                "message": message,
+            }
+        )
+        tiktok_log(f"[TikTok陌生人消息监控] {message}", "warning")
+        return {"status": "skipped", "message": message}
+
+    busy, busy_reason = is_tiktok_stranger_message_monitor_busy(int(account.get("id", 0) or 0))
+    if busy:
+        schedule_next_tiktok_stranger_message_monitor_run(account_id, started_at)
+        message = f"本轮跳过：{busy_reason}，等待下一次。"
+        state.update(
+            {
+                "account_id": int(account.get("id", 0) or 0) or None,
+                "last_cycle_status": "skipped",
+                "last_skip_reason": normalize_tiktok_text(busy_reason),
+                "message": message,
+            }
+        )
+        tiktok_log(f"[TikTok陌生人消息监控] {message}", "warning")
+        return {"status": "skipped", "message": message}
+
+    config = load_global_config()
+    show_browser = should_show_tiktok_message_browser(config)
+    scraper = create_tiktok_message_scraper(account, config)
+    state.update(
+        {
+            "running": True,
+            "account_id": account["id"],
+            "phase": "monitor_collect",
+            "last_cycle_status": "running",
+            "message": f"正在检查陌生人消息未读红点，账号 {account['id']}，最多读取 {max_conversations} 条会话。",
+            "last_auto_reply_total": 0,
+            "last_auto_reply_success": 0,
+            "last_auto_reply_failed": 0,
+            "seen_message_count": get_tiktok_stranger_message_seen_count(account["id"]),
+        }
+    )
+    try:
+        tiktok_log(
+            f"[TikTok陌生人消息监控] 开始检查，账号 {account['id']}，最多 {max_conversations} 条，浏览器模式：{'显示窗口' if show_browser else '无头运行'}",
+            "info",
+        )
+        takeover_reply = bool(reply_mode == "ai_memory" and auto_reply_enabled)
+        takeover_memory: Dict[str, object] = {
+            "text": "",
+            "document_count": 0,
+            "titles": [],
+            "user_id": memory_user_id,
+        }
+        takeover_stats: Dict[str, int] = {
+            "total": 0,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "skipped": 0,
+        }
+        takeover_retry_pending_keys: Set[str] = set()
+        takeover_ai_wechat_ids: Set[str] = set()  # 记忆接管回复时 AI 顺手判出的微信号
+        takeover_collect_kwargs: Dict[str, object] = {}
+        if takeover_reply:
+            if not memory_doc_ids:
+                schedule_next_tiktok_stranger_message_monitor_run(account_id, started_at)
+                message = "AI 记忆接管还没选记忆文件，请先在页面上选一个记忆文件再开启。"
+                state.update(
+                    {
+                        "running": False,
+                        "last_cycle_status": "skipped",
+                        "last_skip_reason": "takeover_memory_missing",
+                        "message": message,
+                    }
+                )
+                tiktok_log(f"[TikTok陌生人消息监控] {message}", "warning")
+                return {"status": "skipped", "message": message}
+            takeover_memory = await asyncio.to_thread(
+                load_tiktok_takeover_memory_context,
+                memory_doc_ids,
+                user_id=memory_user_id,
+            )
+            if not str(takeover_memory.get("text") or "").strip():
+                schedule_next_tiktok_stranger_message_monitor_run(account_id, started_at)
+                message = "AI 记忆接管选中的记忆文件读不到内容，本轮已跳过，请重新选择记忆文件。"
+                state.update(
+                    {
+                        "running": False,
+                        "last_cycle_status": "skipped",
+                        "last_skip_reason": "takeover_memory_unreadable",
+                        "message": message,
+                    }
+                )
+                tiktok_log(f"[TikTok陌生人消息监控] {message}", "warning")
+                return {"status": "skipped", "message": message}
+            resolved_memory_user_id = int(takeover_memory.get("user_id") or 0) or 0
+            if resolved_memory_user_id > 0:
+                state["memory_user_id"] = resolved_memory_user_id
+            tiktok_log(
+                "[TikTok陌生人消息监控] 记忆接管已加载记忆文件："
+                f"{'、'.join(str(item) for item in (takeover_memory.get('titles') or [])) or '未命名'}"
+                f"（{len(str(takeover_memory.get('text') or ''))} 字）",
+                "info",
+            )
+
+            def should_read_takeover_detail(candidate: Dict) -> bool:
+                """只给「真的要回复」的会话开详情页，避免每轮白开上百个会话。"""
+                probe = normalize_tiktok_stranger_message_row({**candidate, "account_id": account["id"]})
+                if not is_tiktok_stranger_message_unread_row(probe):
+                    return False
+                fingerprints = stranger_message_seen_fingerprints(probe, account["id"])
+                seen_bucket = tiktok_stranger_message_seen_records.get(str(account["id"])) or {}
+                if fingerprints and any(fingerprint in seen_bucket for fingerprint in fingerprints):
+                    return False
+                attempt = get_tiktok_takeover_attempt(account["id"], probe)
+                return int(attempt.get("attempts", 0) or 0) < TIKTOK_STRANGER_MESSAGE_TAKEOVER_MAX_ATTEMPTS
+
+            async def handle_takeover_row(candidate: Dict, page) -> Dict:
+                row = normalize_tiktok_stranger_message_row({**candidate, "account_id": account["id"]})
+                if not should_read_takeover_detail(row):
+                    return row
+                row_key = stranger_message_row_key(row)
+                username = normalize_tiktok_text(row.get("username", ""))
+                if str(row.get("detail_read_status") or "").strip().lower() == "failed":
+                    error_text = normalize_tiktok_text(row.get("detail_read_error", "")) or "会话详情读取失败"
+                    attempts = record_tiktok_takeover_attempt(account["id"], row, error=error_text)
+                    retry_pending = attempts < TIKTOK_STRANGER_MESSAGE_TAKEOVER_MAX_ATTEMPTS
+                    if retry_pending and row_key:
+                        takeover_retry_pending_keys.add(row_key)
+                    takeover_stats["processed"] += 1
+                    takeover_stats["failed"] += 1
+                    row.update({"reply_status": "failed", "reply_error": error_text})
+                    update_tiktok_stranger_message_rows(
+                        [row],
+                        status="failed",
+                        error=error_text,
+                        message="",
+                        account_id=account["id"],
+                    )
+                    tiktok_log(
+                        f"[TikTok陌生人消息监控] 记忆接管读取会话失败：{username or '未知会话'}，原因：{error_text}"
+                        f"（第 {attempts} 次{'' if retry_pending else '，已达上限不再重试'}）",
+                        "warning",
+                    )
+                    return row
+                if row.get("last_message_is_user") is False or not bool(row.get("has_user_message")):
+                    # 最后一条不是客户发的（例如红点是旧的），不回复也不重试。
+                    takeover_stats["skipped"] += 1
+                    row["reply_status"] = "skipped"
+                    update_tiktok_stranger_message_rows(
+                        [row],
+                        status="skipped",
+                        error="",
+                        message="",
+                        account_id=account["id"],
+                    )
+                    return row
+                attempt = get_tiktok_takeover_attempt(account["id"], row)
+                if int(attempt.get("attempts", 0) or 0) >= TIKTOK_STRANGER_MESSAGE_TAKEOVER_MAX_ATTEMPTS:
+                    return row
+                takeover_stats["total"] += 1
+                item_started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                state.update(
+                    {
+                        "running": True,
+                        "phase": "takeover_reply",
+                        "message": f"记忆接管正在回复 {username or '当前会话'}",
+                    }
+                )
+                try:
+                    reply_result = await asyncio.to_thread(
+                        generate_tiktok_takeover_memory_reply_with_wechat,
+                        row,
+                        prompt_text=reply_prompt,
+                        memory_context=str(takeover_memory.get("text") or ""),
+                    )
+                    final_message = str(reply_result.get("message") or "")
+                    ai_wechat_id = str(reply_result.get("wechat_id") or "").strip()
+                    # 生成回复的那一次调用已经顺便回答过「有没有微信号」，本轮不再单独再调一次
+                    row["ai_wechat_checked"] = True
+                    if ai_wechat_id:
+                        # 记忆接管生成回复时 AI 顺手判出来的微信号：记在会话上，并一起走加好友/上报
+                        takeover_ai_wechat_ids.add(ai_wechat_id)
+                        row["wechat_ids"] = list(dict.fromkeys([*(row.get("wechat_ids") or []), ai_wechat_id]))
+                        row["ai_wechat_id"] = ai_wechat_id
+                        row["ai_wechat_evidence"] = str(reply_result.get("evidence") or "")[:120]
+                        tiktok_log(
+                            f"[TikTok陌生人消息监控] 记忆接管识别到疑似微信号：{ai_wechat_id}"
+                            f"（{username or '未知会话'}）",
+                            "info",
+                        )
+                except Exception as exc:
+                    error_text = str(exc)
+                    attempts = record_tiktok_takeover_attempt(account["id"], row, error=error_text)
+                    retry_pending = attempts < TIKTOK_STRANGER_MESSAGE_TAKEOVER_MAX_ATTEMPTS
+                    if retry_pending and row_key:
+                        takeover_retry_pending_keys.add(row_key)
+                    takeover_stats["processed"] += 1
+                    takeover_stats["failed"] += 1
+                    row.update({"reply_status": "failed", "reply_error": error_text})
+                    update_tiktok_stranger_message_rows(
+                        [row],
+                        status="failed",
+                        error=error_text,
+                        message="",
+                        account_id=account["id"],
+                        started_at=item_started_at,
+                        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    tiktok_log(
+                        f"[TikTok陌生人消息监控] 记忆接管生成回复失败：{username or '未知会话'}，原因：{error_text}"
+                        f"（第 {attempts} 次{'' if retry_pending else '，已达上限不再重试'}）",
+                        "error",
+                    )
+                    return row
+                try:
+                    await scraper.send_open_chat_message(
+                        page,
+                        final_message,
+                        logger=tiktok_log,
+                        username=username,
+                    )
+                except Exception as exc:
+                    error_text = str(exc)
+                    attempts = record_tiktok_takeover_attempt(account["id"], row, error=error_text)
+                    retry_pending = attempts < TIKTOK_STRANGER_MESSAGE_TAKEOVER_MAX_ATTEMPTS
+                    if retry_pending and row_key:
+                        takeover_retry_pending_keys.add(row_key)
+                    takeover_stats["processed"] += 1
+                    takeover_stats["failed"] += 1
+                    row.update({"reply_status": "failed", "reply_error": error_text, "reply_message": final_message})
+                    update_tiktok_stranger_message_rows(
+                        [row],
+                        status="failed",
+                        error=error_text,
+                        message=final_message,
+                        account_id=account["id"],
+                        started_at=item_started_at,
+                        finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    )
+                    tiktok_log(
+                        f"[TikTok陌生人消息监控] 记忆接管发送失败：{username or '未知会话'}，原因：{error_text}"
+                        f"（第 {attempts} 次{'' if retry_pending else '，已达上限不再重试'}）",
+                        "error",
+                    )
+                    return row
+                takeover_retry_pending_keys.discard(row_key)
+                clear_tiktok_takeover_attempt(account["id"], row)
+                takeover_stats["processed"] += 1
+                takeover_stats["success"] += 1
+                row.update({"reply_status": "sent", "reply_error": "", "reply_message": final_message})
+                update_tiktok_stranger_message_rows(
+                    [row],
+                    status="sent",
+                    error="",
+                    message=final_message,
+                    account_id=account["id"],
+                    started_at=item_started_at,
+                    finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                tiktok_log(
+                    f"[TikTok陌生人消息监控] 记忆接管已回复 {username or '未知会话'}：{final_message}",
+                    "success",
+                )
+                return row
+
+            takeover_collect_kwargs = {
+                "include_details": True,
+                "should_read_detail": should_read_takeover_detail,
+                "item_callback": handle_takeover_row,
+            }
+
+        rows = await scraper.collect_stranger_private_messages(
+            max_conversations=max_conversations,
+            should_stop=lambda: False,
+            logger=tiktok_log,
+            progress_callback=lambda processed, total, username: state.update(
+                {
+                    "running": True,
+                    "message": f"账号 {account['id']} 后台检查中，已读取 {processed}/{total} 条会话，正在识别有未读红点的会话，当前 {normalize_tiktok_text(username)}",
+                }
+            ),
+            **takeover_collect_kwargs,
+        )
+        changed = merge_tiktok_stranger_message_results(account["id"], rows)
+        unread_rows = [
+            normalize_tiktok_stranger_message_row({**row, "account_id": account["id"]})
+            for row in rows
+            if isinstance(row, dict) and is_tiktok_stranger_message_unread_row({**row, "account_id": account["id"]})
+        ]
+        unseen_rows, seen_rows = split_unseen_tiktok_stranger_message_rows(account["id"], unread_rows)
+        extracted_phone_numbers = extract_tiktok_mainland_mobile_numbers(unseen_rows)
+        extracted_wechat_ids = extract_tiktok_wechat_ids(unseen_rows)
+        if takeover_ai_wechat_ids:
+            # 记忆接管回复时 AI 判出来的微信号，和规则抽出来的一起走加好友 / 联系方式池上报
+            extracted_wechat_ids = list(dict.fromkeys([*extracted_wechat_ids, *sorted(takeover_ai_wechat_ids)]))
+        for row in unseen_rows:
+            row["phone_numbers"] = extract_tiktok_mainland_mobile_numbers([row])
+            row["wechat_ids"] = extract_tiktok_wechat_ids([row])
+            if tiktok_wechat_needs_ai(row):
+                try:
+                    ai_hit = await asyncio.to_thread(extract_tiktok_wechat_id_by_ai, row)
+                    row["ai_wechat_checked"] = True
+                    if str(ai_hit.get("wechat_id") or "").strip():
+                        row["wechat_ids"] = [str(ai_hit["wechat_id"]).strip()]
+                        row["ai_wechat_id"] = row["wechat_ids"][0]
+                except Exception as exc:  # noqa: BLE001
+                    tiktok_log(f"[TikTok陌生人消息监控] AI 判断微信号异常：{exc}", "warning")
+        new_count = len(unseen_rows)
+        total_count = len([row for row in rows if isinstance(row, dict)])
+        unread_total = len(unread_rows)
+        seen_total = get_tiktok_stranger_message_seen_count(account["id"])
+        auto_reply_result = {
+            "total": 0,
+            "processed": 0,
+            "success": 0,
+            "failed": 0,
+            "stopped": False,
+        }
+        if auto_reply_enabled and unseen_rows and not takeover_reply:
+            auto_reply_total = len(unseen_rows)
+            queued_message = (
+                reply_message
+                if reply_mode == "fixed"
+                else "\n".join(
+                    ["AI 引导加绿泡泡", "麻烦您绿泡泡"]
+                    + split_tiktok_contact_parts(normalize_tiktok_text(contact_value))
+                )
+            )
+            update_tiktok_stranger_message_rows(
+                unseen_rows,
+                status="queued",
+                error="",
+                message=queued_message,
+                account_id=account["id"],
+                started_at="",
+                finished_at="",
+            )
+            state["message"] = (
+                f"本轮识别到 {new_count} 条带未读红点的新会话，正在自动回复 {auto_reply_total} 个新会话。"
+            )
+            tiktok_log(
+                f"[TikTok陌生人消息监控] 本轮识别到 {new_count} 条带未读红点的新会话，开始自动回复 {auto_reply_total} 个新会话",
+                "info",
+            )
+            auto_reply_result = await send_tiktok_stranger_messages_for_monitor(
+                account,
+                unseen_rows,
+                reply_message,
+                reply_mode=reply_mode,
+                reply_prompt=reply_prompt,
+                contact_value=contact_value,
+            )
+        wechat_add_friend_result = (
+            await _queue_tiktok_wechat_friend_add([*extracted_phone_numbers, *extracted_wechat_ids])
+            if wechat_add_friend_enabled
+            else {"enabled": False, "queued": False, "targets": [], "reason": "disabled"}
+        )
+        if takeover_reply:
+            auto_reply_result = {
+                "total": int(takeover_stats.get("total", 0)),
+                "processed": int(takeover_stats.get("processed", 0)),
+                "success": int(takeover_stats.get("success", 0)),
+                "failed": int(takeover_stats.get("failed", 0)),
+                "stopped": False,
+            }
+        # Mark the unread snapshot only after this cycle has completed its
+        # reply and optional friend-add submission. 记忆接管里生成/发送失败的会话
+        # 不记入去重指纹，下一轮继续重试，直到成功或达到重试上限。
+        rows_to_mark_seen = unread_rows
+        if takeover_reply:
+            rows_to_mark_seen = [
+                row
+                for row in unread_rows
+                if stranger_message_row_key(row) not in takeover_retry_pending_keys
+            ]
+        mark_tiktok_stranger_message_rows_seen(account["id"], rows_to_mark_seen)
+        schedule_next_tiktok_stranger_message_monitor_run(account_id, started_at)
+        auto_reply_suffix = ""
+        if auto_reply_enabled:
+            if takeover_reply:
+                success_count = int(auto_reply_result.get("success", 0))
+                failed_count = int(auto_reply_result.get("failed", 0))
+                memory_titles = "、".join(str(item) for item in (takeover_memory.get("titles") or [])) or "未命名记忆文件"
+                auto_reply_suffix = (
+                    f"，按记忆文件《{memory_titles}》回复 {success_count} 条"
+                    f"{f'，失败 {failed_count} 条' if failed_count > 0 else ''}"
+                    f"{f'，{len(takeover_retry_pending_keys)} 条下一轮重试' if takeover_retry_pending_keys else ''}"
+                )
+            elif unseen_rows:
+                success_count = int(auto_reply_result.get("success", 0))
+                failed_count = int(auto_reply_result.get("failed", 0))
+                auto_reply_suffix = (
+                    f"，已自动回复 {success_count} 个"
+                    f"{f'，失败 {failed_count} 个' if failed_count > 0 else ''}"
+                )
+            else:
+                auto_reply_suffix = "，本轮没有新的未读会话，不需要自动回复"
+        else:
+            auto_reply_suffix = "，当前只监控未读，不自动回复"
+        message = (
+            f"本轮完成：识别 {total_count} 条会话，其中带未读红点 {unread_total} 条，"
+            f"新增未读 {new_count} 条，历史去重 {len(seen_rows)} 条，"
+            f"当前沉淀 {len(collect_tiktok_stranger_message_results(account['id']))} 条"
+            f"{auto_reply_suffix}。"
+        )
+        state.update(
+            {
+                "running": False,
+                "message": message,
+                "last_new_count": new_count,
+                "last_total_count": total_count,
+                "last_auto_reply_total": int(auto_reply_result.get("processed", 0)),
+                "last_auto_reply_success": int(auto_reply_result.get("success", 0)),
+                "last_auto_reply_failed": int(auto_reply_result.get("failed", 0)),
+                "last_skip_reason": "",
+                "last_cycle_status": "completed",
+                "seen_message_count": seen_total,
+            }
+        )
+        tiktok_log(
+            f"[TikTok陌生人消息监控] 本轮完成，账号 {account['id']} 未读 {unread_total} 条，新增未读 {new_count} 条，读取 {total_count} 条，会话更新 {changed} 条",
+            "success",
+        )
+        return {
+            "status": "completed",
+            "message": message,
+            "account_id": int(account["id"]),
+            "new_count": int(new_count),
+            "total_count": int(total_count),
+            "unread_count": int(unread_total),
+            "updated_count": int(changed),
+            "auto_reply_total": int(auto_reply_result.get("processed", 0)),
+            "auto_reply_success": int(auto_reply_result.get("success", 0)),
+            "auto_reply_failed": int(auto_reply_result.get("failed", 0)),
+            "extracted_phone_numbers": extracted_phone_numbers,
+            "wechat_add_friend": wechat_add_friend_result,
+        }
+    except Exception as exc:
+        schedule_next_tiktok_stranger_message_monitor_run(account_id, started_at)
+        state.update(
+            {
+                "running": False,
+                "last_error": str(exc),
+                "last_cycle_status": "failed",
+                "message": f"监控检查失败：{exc}",
+            }
+        )
+        tiktok_log(f"[TikTok陌生人消息监控] 检查失败：{exc}", "error")
+        return {"status": "failed", "message": str(exc), "error": str(exc)}
+    finally:
+        await scraper.close()
+        state["running"] = False
+        tiktok_stranger_message_monitor_tasks_by_account.pop(int(account_id or 0), None)
+
+
+async def tiktok_stranger_message_monitor_loop():
+    while True:
+        try:
+            enabled_states = [state for state in list_tiktok_stranger_message_monitor_states() if bool(state.get("enabled"))]
+            if not enabled_states:
+                await asyncio.sleep(10)
+                continue
+
+            now = datetime.now()
+            if tiktok_schedule_external_work:
+                await asyncio.sleep(15)
+                continue
+            for state in enabled_states:
+                account_id = int(state.get("account_id", 0) or 0)
+                if account_id <= 0:
+                    continue
+                next_run_text = normalize_tiktok_text(state.get("next_run_at", ""))
+                if not next_run_text:
+                    next_run_text = schedule_next_tiktok_stranger_message_monitor_run(account_id, now)
+                    set_tiktok_stranger_message_monitor_idle_message(account_id)
+                should_run = False
+                try:
+                    should_run = now >= datetime.strptime(next_run_text, "%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    should_run = True
+                if not should_run or bool(state.get("running")):
+                    continue
+                task = tiktok_stranger_message_monitor_tasks_by_account.get(account_id)
+                if task and not task.done():
+                    continue
+                tiktok_stranger_message_monitor_tasks_by_account[account_id] = asyncio.create_task(
+                    run_tiktok_stranger_message_monitor_cycle(account_id, trigger_type="scheduled")
+                )
+
+            await asyncio.sleep(15)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            tiktok_log(f"[TikTok陌生人消息监控] 调度异常：{exc}", "error")
+            await asyncio.sleep(30)
+
+
+async def ensure_tiktok_stranger_message_monitor_scheduler():
+    global tiktok_stranger_message_monitor_task, tiktok_stranger_message_monitor_started
+    if (
+        tiktok_stranger_message_monitor_started
+        and tiktok_stranger_message_monitor_task
+        and not tiktok_stranger_message_monitor_task.done()
+    ):
+        return
+    tiktok_stranger_message_monitor_started = True
+    for state in list_tiktok_stranger_message_monitor_states():
+        account_id = int(state.get("account_id", 0) or 0)
+        if account_id <= 0:
+            continue
+        if bool(state.get("enabled")):
+            if not normalize_tiktok_text(state.get("next_run_at", "")):
+                schedule_next_tiktok_stranger_message_monitor_run(account_id, datetime.now())
+            set_tiktok_stranger_message_monitor_idle_message(account_id)
+        else:
+            state.update(
+                {
+                    "running": False,
+                    "message": "陌生人消息监控未开启。",
+                    "last_cycle_status": normalize_tiktok_text(state.get("last_cycle_status", "idle")) or "idle",
+                    "next_run_at": "",
+                }
+            )
+    tiktok_stranger_message_monitor_task = asyncio.create_task(tiktok_stranger_message_monitor_loop())
+
+
+async def run_tiktok_group_member_collection(
+    account: Dict,
+    group_keyword: str,
+    max_groups: int,
+    max_members_per_group: int,
+    selected_groups: Optional[List[str]] = None,
+):
+    global tiktok_group_member_running, tiktok_group_member_stop_requested, tiktok_group_member_background_task
+    global tiktok_group_member_results
+
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    selected_group_names = [str(item or "").strip() for item in (selected_groups or []) if str(item or "").strip()]
+    tiktok_group_member_state.update(
+        {
+            "running": True,
+            "message": "群成员提取执行中",
+            "total_groups": len(selected_group_names) if selected_group_names else max_groups,
+            "processed_groups": 0,
+            "total_members": 0,
+            "account_id": account["id"],
+            "group_keyword": group_keyword,
+            "selected_groups": selected_group_names,
+            "current_group": "",
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "finished_at": "",
+            "last_error": "",
+        }
+    )
+
+    try:
+        tiktok_log(
+            f"[TikTok群成员] 使用账号 {account['id']} 启动，群关键词：{group_keyword or '自动识别群聊'}，最多群 {max_groups}，每群最多成员 {max_members_per_group}",
+            "info",
+        )
+        rows = await scraper.collect_chat_group_members_v2(
+            group_keyword=group_keyword,
+            max_groups=max_groups,
+            max_members_per_group=max_members_per_group,
+            selected_groups=selected_group_names,
+            should_stop=lambda: bool(tiktok_group_member_stop_requested),
+            logger=tiktok_log,
+        )
+        tiktok_group_member_results = rows
+        save_tiktok_group_member_results()
+        group_names = {
+            str(row.get("group_name", "")).strip()
+            for row in rows
+            if isinstance(row, dict) and str(row.get("group_name", "")).strip()
+        }
+        tiktok_group_member_state["processed_groups"] = len(group_names)
+        tiktok_group_member_state["total_members"] = len(rows)
+        if tiktok_group_member_stop_requested:
+            tiktok_group_member_state["message"] = "群成员提取已停止"
+        else:
+            tiktok_group_member_state["message"] = "群成员提取已完成"
+        tiktok_log(
+            f"[TikTok群成员] 本轮结束，共提取 {len(group_names)} 个群、{len(rows)} 位成员",
+            "warning" if tiktok_group_member_stop_requested else "success",
+        )
+    except Exception as exc:
+        tiktok_group_member_state["last_error"] = str(exc)
+        tiktok_group_member_state["message"] = "群成员提取失败"
+        tiktok_log(f"[TikTok群成员] 提取失败：{exc}", "error")
+    finally:
+        await scraper.close()
+        tiktok_group_member_running = False
+        tiktok_group_member_stop_requested = False
+        tiktok_group_member_background_task = None
+        tiktok_group_member_state["running"] = False
+        tiktok_group_member_state["current_group"] = ""
+        tiktok_group_member_state["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def export_search_rows(data: List[Dict]) -> str:
+    rows = []
+    for item in data:
+        rows.append(
+            {
+                "标题": item.get("title", ""),
+                "作者": item.get("author", ""),
+                "视频链接": item.get("url", ""),
+                "AwemeID": item.get("aweme_id", ""),
+                "点赞数": item.get("likes", 0),
+                "发布时间": item.get("publish_time", ""),
+                "视频时长": item.get("duration", ""),
+                "默认符合条件": "是" if item.get("criteria_matched") else "否",
+                "筛选理由": item.get("criteria_reason", ""),
+                "历史重复": "是" if item.get("is_historical_duplicate") else "否",
+                "首次发现时间": item.get("first_seen_at", ""),
+                "最近发现时间": item.get("last_seen_at", ""),
+                "累计出现次数": item.get("seen_count", 1),
+                "导出勾选": "是" if item.get("export_selected") else "否",
+            }
+        )
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filepath = TIKTOK_DAILY_DIR / f"tiktok_search_results_{ts}.xlsx"
+    _write_excel_sheets(filepath, [("搜索结果", rows)])
+    return str(filepath)
+
+
+def export_task_results() -> str:
+    if not tiktok_tasks:
+        raise ValueError("No TikTok task results available for export")
+
+    comment_rows = []
+    high_intent_rows = []
+    for task in tiktok_tasks:
+        task_id = task.get("id")
+        title = task.get("title", "")
+        url = task.get("url", "")
+        author = task.get("author", "")
+
+        for comment in task.get("all_comments", []) or []:
+            comment_rows.append(
+                {
+                    "任务ID": task_id,
+                    "标题": title,
+                    "作者": author,
+                    "视频链接": url,
+                    "评论序号": comment.get("comment_index", ""),
+                    "评论ID": comment.get("comment_id", ""),
+                    "用户ID": comment.get("user_id", ""),
+                    "用户名": comment.get("username", ""),
+                    "评论内容": comment.get("comment", comment.get("content", "")),
+                    "评论时间": comment.get("comment_time", ""),
+                    "点赞数": comment.get("like_count", 0),
+                    "用户主页": comment.get("profile_url", ""),
+                }
+            )
+
+        for user in task.get("high_intent_users", []) or []:
+            high_intent_rows.append(
+                {
+                    "任务ID": task_id,
+                    "标题": title,
+                    "作者": author,
+                    "视频链接": url,
+                    "评论序号": user.get("comment_index", ""),
+                    "评论ID": user.get("comment_id", ""),
+                    "用户ID": user.get("user_id", ""),
+                    "用户名": user.get("username", ""),
+                    "评论内容": user.get("comment", user.get("content", "")),
+                    "评论时间": user.get("comment_time", ""),
+                    "点赞数": user.get("like_count", 0),
+                    "筛选级别": user.get("intent_level", ""),
+                    "筛选分数": user.get("score", ""),
+                    "筛选理由": user.get("reason", ""),
+                    "用户主页": user.get("profile_url", ""),
+                    "互动状态": user.get("interaction_status", ""),
+                    "互动错误": user.get("interaction_error", ""),
+                    "私信内容": user.get("interaction_message", ""),
+                    "互动账号": user.get("interaction_account_id", ""),
+                    "开始互动时间": user.get("interaction_started_at", ""),
+                    "完成互动时间": user.get("interaction_finished_at", ""),
+                    "关注评论状态": user.get("follow_comment_status", ""),
+                    "关注评论结果": user.get("follow_comment_result", ""),
+                    "关注评论错误": user.get("follow_comment_error", ""),
+                    "关注评论内容": user.get("follow_comment_text", ""),
+                    "关注评论账号": user.get("follow_comment_account_id", ""),
+                    "关注评论开始时间": user.get("follow_comment_started_at", ""),
+                    "关注评论完成时间": user.get("follow_comment_finished_at", ""),
+                }
+            )
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filepath = TIKTOK_DAILY_DIR / f"tiktok_comment_results_{ts}.xlsx"
+    sheets = [
+        ("全部评论用户", comment_rows),
+        ("高意向客户", high_intent_rows),
+    ]
+    _write_excel_sheets(filepath, sheets)
+    _write_excel_sheets(LATEST_RESULTS_FILE, sheets)
+    return str(filepath)
+
+
+def export_group_member_results() -> str:
+    if not tiktok_group_member_results:
+        raise ValueError("No TikTok group member results available for export")
+
+    rows = []
+    for item in tiktok_group_member_results:
+        rows.append(
+            {
+                "群名称": item.get("group_name", ""),
+                "成员昵称": item.get("username", ""),
+                "成员角色": item.get("role", ""),
+                "TikTok号": item.get("tiktok_id", ""),
+                "地区": item.get("region", ""),
+                "主页链接": ensure_tiktok_profile_url(item),
+                "SecUserID": item.get("sec_user_id", ""),
+                "群预览": item.get("group_preview", ""),
+            }
+        )
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filepath = TIKTOK_DAILY_DIR / f"tiktok_group_members_{ts}.xlsx"
+    _write_excel_sheets(filepath, [("群成员", rows)])
+    return str(filepath)
+
+
+def import_group_members_to_interaction_pool(rows: List[Dict]) -> int:
+    global tiktok_manual_interaction_users
+
+    valid_pool = {user_choice_key(row): row for row in collect_tiktok_interaction_users()}
+    for user in tiktok_manual_interaction_users:
+        key = user_choice_key(user)
+        if key:
+            valid_pool[key] = user
+
+    imported = 0
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        normalized = normalize_high_intent_user(
+            {
+                "username": item.get("username", ""),
+                "profile_url": ensure_tiktok_profile_url(item),
+                "region": item.get("region", ""),
+                "comment": f"[群成员] 来自群聊：{item.get('group_name', '')}",
+                "content": f"[群成员] 来自群聊：{item.get('group_name', '')}",
+                "comment_time": "",
+                "like_count": "",
+                "reply_count": "",
+                "intent_level": "group_member",
+                "reason": f"群成员导入：{item.get('group_name', '')}",
+                "task_title": f"[群聊] {item.get('group_name', '')}",
+                "group_name": item.get("group_name", ""),
+                "tiktok_id": item.get("tiktok_id", ""),
+                "sec_user_id": item.get("sec_user_id", ""),
+                "role": item.get("role", ""),
+            }
+        )
+        key = user_choice_key(normalized)
+        if not key or key in valid_pool:
+            continue
+        valid_pool[key] = normalized
+        tiktok_manual_interaction_users.append(normalized)
+        imported += 1
+
+    if imported:
+        tiktok_manual_interaction_users = dedupe_users(tiktok_manual_interaction_users)
+        save_tiktok_manual_interaction_users()
+    return imported
+
+
+@router.get("/monitor/targets")
+async def tiktok_get_monitor_targets():
+    latest_run = tiktok_state_store.load_latest_tiktok_monitor_run()
+    return {
+        "code": 200,
+        "targets": load_monitor_targets_bundle(),
+        "state": tiktok_monitor_runtime_state,
+        "latest_run": latest_run,
+    }
+
+
+@router.post("/monitor/keyword-expand-search")
+async def tiktok_monitor_keyword_expand_search(http_request: Request = None, request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("执行 AI 拓词搜索")
+    if nurture_conflict:
+        return nurture_conflict
+    set_tiktok_ai_auth_token_from_request(http_request)
+    payload = request if isinstance(request, dict) else {}
+    seed_keyword = normalize_tiktok_text(payload.get("keyword", ""))
+    if not seed_keyword:
+        return {"code": 400, "msg": "请输入一个种子关键词。"}
+
+    expand_count = max(1, min(int(payload.get("expand_count", 5) or 5), 5))
+    max_results_per_keyword = max(10, min(int(payload.get("max_results_per_keyword", 50) or 50), 100))
+    interval_min_seconds = max(5, min(int(payload.get("interval_min_seconds", 12) or 12), 120))
+    interval_max_seconds = max(interval_min_seconds, min(int(payload.get("interval_max_seconds", 25) or 25), 180))
+    include_seed = bool(payload.get("include_seed", True))
+
+    config = load_global_config()
+    account = get_active_tiktok_account(config)
+    if not account:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有在线TikTok账号，无法执行 AI 拓词搜索。",
+            "keywords": [],
+            "results": [],
+        }
+
+    try:
+        expanded_keywords = await asyncio.to_thread(
+            lambda: expand_tiktok_keywords_with_ai(seed_keyword, limit=expand_count)
+        )
+    except Exception as exc:
+        tiktok_log(f"[TikTok同行监控] AI 拓词失败：{seed_keyword}，原因：{exc}", "error")
+        return {"code": 500, "msg": f"AI 拓词失败：{exc}", "keywords": [], "results": []}
+
+    keywords = []
+    seen_keywords: Set[str] = set()
+    for keyword in ([seed_keyword] if include_seed else []) + expanded_keywords:
+        normalized = normalize_tiktok_text(keyword)
+        lowered = normalized.lower()
+        if not normalized or lowered in seen_keywords:
+            continue
+        seen_keywords.add(lowered)
+        keywords.append(normalized)
+
+    combined_results: List[Dict] = []
+    combined_by_key: Dict[str, Dict] = {}
+    keyword_summaries: List[Dict] = []
+    errors: List[Dict] = []
+    for index, keyword in enumerate(keywords, start=1):
+        try:
+            if index > 1:
+                wait_seconds = random.randint(interval_min_seconds, interval_max_seconds)
+                tiktok_log(
+                    f"[TikTok同行监控] AI 拓词搜索等待 {wait_seconds} 秒后继续，降低账号搜索频率。",
+                    "info",
+                )
+                await asyncio.sleep(wait_seconds)
+            tiktok_log(
+                f"[TikTok同行监控] AI 拓词搜索 {index}/{len(keywords)}：{keyword}",
+                "info",
+            )
+            search_payload = await run_tiktok_keyword_search(
+                account,
+                keyword,
+                max_results=max_results_per_keyword,
+                update_latest=False,
+            )
+            results = search_payload.get("results", []) if isinstance(search_payload, dict) else []
+            added_count = 0
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                key = build_tiktok_search_session_item_key(item)
+                if not key:
+                    continue
+                if key in combined_by_key:
+                    hit_keywords = combined_by_key[key].setdefault("expanded_hit_keywords", [])
+                    if keyword not in hit_keywords:
+                        hit_keywords.append(keyword)
+                    continue
+                row = dict(item)
+                row["expanded_seed_keyword"] = seed_keyword
+                row["expanded_hit_keywords"] = [keyword]
+                combined_by_key[key] = row
+                combined_results.append(row)
+                added_count += 1
+            keyword_summaries.append(
+                {
+                    "keyword": keyword,
+                    "total": len(results),
+                    "added": added_count,
+                }
+            )
+        except Exception as exc:
+            errors.append({"keyword": keyword, "error": str(exc)})
+            tiktok_log(f"[TikTok同行监控] 拓词搜索失败：{keyword}，原因：{exc}", "error")
+
+    combined_results.sort(
+        key=lambda row: (
+            int(row.get("comments", 0) or 0),
+            int(row.get("likes", 0) or 0),
+        ),
+        reverse=True,
+    )
+    tiktok_search_cache["latest"] = combined_results
+    pool_session = upsert_tiktok_search_session_state(
+        keyword=f"{seed_keyword} · AI拓词池",
+        account_id=account.get("id", ""),
+        results=combined_results,
+        capture_state={
+            "source": "monitor_ai_expand_pool",
+            "seed_keyword": seed_keyword,
+            "keywords": keywords,
+            "keyword_summaries": keyword_summaries,
+            "errors": errors,
+            "interval_seconds": [interval_min_seconds, interval_max_seconds],
+            "searched_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        },
+    )
+
+    message = f"AI 已拓展 {len(expanded_keywords)} 个关键词，完成 {len(keyword_summaries)} 个关键词搜索，去重后视频池 {len(combined_results)} 条。"
+    if errors:
+        message += f" 其中 {len(errors)} 个关键词失败。"
+    tiktok_log(f"[TikTok同行监控] {message}", "success" if combined_results else "warning")
+    return {
+        "code": 200,
+        "msg": message,
+        "seed_keyword": seed_keyword,
+        "expanded_keywords": expanded_keywords,
+        "keywords": keywords,
+        "keyword_summaries": keyword_summaries,
+        "errors": errors,
+        "interval_seconds": [interval_min_seconds, interval_max_seconds],
+        "results": combined_results,
+        "total": len(combined_results),
+        "session": pool_session,
+        "account_id": account.get("id"),
+    }
+
+
+@router.post("/monitor/targets")
+async def tiktok_add_monitor_target(request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("添加同行监控")
+    if nurture_conflict:
+        return nurture_conflict
+    payload = request if isinstance(request, dict) else {}
+    share_text = str(payload.get("share_url", "") or payload.get("profile_url", "") or "").strip()
+    share_url = await asyncio.to_thread(resolve_tiktok_share_url, share_text)
+    if not share_url:
+        return {"code": 400, "msg": "未识别到可用链接，请直接粘贴TikTok分享文案或主页链接。"}
+
+    config = load_global_config()
+    account = get_active_tiktok_account(config)
+    if not account:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有在线TikTok账号，请先登录后再添加同行。",
+        }
+
+    monitor_profile_url = share_url
+    seed_profile: Dict = {}
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    protocol_client = None
+    protocol_auth = None
+    try:
+        try:
+            protocol_client, protocol_auth = await prepare_tiktok_monitor_protocol_channel(account)
+            tiktok_log(
+                f"[TikTok同行监控] 账号 {account['id']} 已准备协议作品同步通道，用于添加同行。",
+                "info",
+            )
+        except Exception as exc:
+            protocol_client = None
+            protocol_auth = None
+            tiktok_log(
+                f"[TikTok同行监控] 添加同行时协议作品同步通道不可用，将使用页面方式：{exc}",
+                "warning",
+            )
+        if is_tiktok_video_url(share_url):
+            if protocol_client is None or protocol_auth is None:
+                return {
+                    "code": 400,
+                    "msg": "当前粘贴的是视频链接，需要先通过协议读取视频作者主页；请确认账号在线后重试，或直接粘贴同行主页链接。",
+                }
+            video_author_profile = await asyncio.to_thread(
+                lambda: protocol_client.get_work_author_profile(protocol_auth, share_url)
+            )
+            monitor_profile_url = str(video_author_profile.get("profile_url", "") or "").strip()
+            if not monitor_profile_url:
+                return {"code": 400, "msg": "未能从视频链接中识别作者主页，请直接粘贴同行主页链接。"}
+            seed_profile = {
+                key: value
+                for key, value in video_author_profile.items()
+                if key
+                in {
+                    "username",
+                    "tiktok_id",
+                    "sec_user_id",
+                    "profile_url",
+                    "avatar_url",
+                    "signature",
+                    "bio",
+                    "fans_count_text",
+                    "follow_count_text",
+                    "liked_count_text",
+                }
+            }
+            tiktok_log(
+                f"[TikTok同行监控] 已从视频链接识别同行作者：{seed_profile.get('username') or monitor_profile_url}",
+                "info",
+            )
+        existing_target = tiktok_state_store.find_tiktok_monitor_target(
+            profile_url=monitor_profile_url,
+            sec_user_id=str(seed_profile.get("sec_user_id", "") or "").strip(),
+        )
+        seed_target = {
+            **existing_target,
+            **seed_profile,
+            "profile_url": monitor_profile_url,
+            "status": "active",
+            "auto_collect_new": bool(existing_target.get("auto_collect_new", True)) if existing_target else True,
+        }
+        synced_target = await sync_monitor_target_profile_and_videos(
+            seed_target,
+            scraper,
+            initial_sync=not bool(existing_target),
+            protocol_client=protocol_client,
+            protocol_auth=protocol_auth,
+        )
+        tiktok_log(f"[TikTok同行监控] 已添加同行：{synced_target.get('username') or synced_target.get('profile_url')}", "success")
+        return {
+            "code": 200,
+            "msg": "同行主页已加入监控，并已自动从分享文案中提取链接、同步最近 10 条视频。",
+            "target": synced_target,
+            "targets": load_monitor_targets_bundle(),
+        }
+    except Exception as exc:
+        tiktok_log(f"[TikTok同行监控] 添加同行失败：{exc}", "error")
+        return {"code": 500, "msg": f"添加同行失败：{exc}"}
+    finally:
+        await scraper.close()
+
+
+@router.post("/monitor/targets/{target_id}/videos/select")
+async def tiktok_select_monitor_videos(target_id: int, request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    aweme_ids = payload.get("aweme_ids", [])
+    if not isinstance(aweme_ids, list):
+        return {"code": 400, "msg": "aweme_ids 必须是数组。"}
+    tiktok_state_store.set_tiktok_monitor_video_selection(target_id, aweme_ids)
+    return {
+        "code": 200,
+        "msg": f"已保存 {len([item for item in aweme_ids if str(item or '').strip()])} 条视频的监控选择。",
+        "targets": load_monitor_targets_bundle(),
+    }
+
+
+@router.post("/monitor/targets/{target_id}/refresh")
+async def tiktok_refresh_monitor_target(target_id: int):
+    nurture_conflict = build_tiktok_nurture_conflict("刷新同行主页")
+    if nurture_conflict:
+        return nurture_conflict
+    target = next(
+        (
+            item
+            for item in tiktok_state_store.load_tiktok_monitor_targets()
+            if int(item.get("target_id", 0) or 0) == int(target_id)
+            and str(item.get("status", "active") or "active").strip() == "active"
+        ),
+        None,
+    )
+    if not target:
+        return {"code": 404, "msg": "未找到对应的同行监控。"}
+    if tiktok_monitor_runtime_state.get("running"):
+        return {
+            "code": 409,
+            "msg": "同行监控正在执行中，请等待当前这一轮结束后再刷新。",
+            "state": tiktok_monitor_runtime_state,
+            "targets": load_monitor_targets_bundle(),
+        }
+
+    config = load_global_config()
+    account = get_active_tiktok_account(config)
+    if not account:
+        return {"code": 400, "msg": "当前没有在线TikTok账号，无法刷新同行主页。"}
+
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    protocol_client = None
+    protocol_auth = None
+    try:
+        try:
+            protocol_client, protocol_auth = await prepare_tiktok_monitor_protocol_channel(account)
+            tiktok_log(
+                f"[TikTok同行监控] 账号 {account['id']} 已准备协议作品同步通道，用于刷新同行。",
+                "info",
+            )
+        except Exception as exc:
+            protocol_client = None
+            protocol_auth = None
+            tiktok_log(
+                f"[TikTok同行监控] 刷新同行时协议作品同步通道不可用，将使用页面方式：{exc}",
+                "warning",
+            )
+        synced = await sync_monitor_target_profile_and_videos(
+            target,
+            scraper,
+            initial_sync=False,
+            protocol_client=protocol_client,
+            protocol_auth=protocol_auth,
+        )
+        message = f"已刷新同行“{synced.get('username') or synced.get('profile_url') or target_id}”的主页和最近 10 条视频，本次未采集评论。"
+        tiktok_log(f"[TikTok同行监控] 已刷新同行主页与视频：{synced.get('username') or synced.get('profile_url')}", "success")
+        return {
+            "code": 200,
+            "msg": message,
+            "result": {
+                "status": "completed",
+                "message": message,
+                "target_id": int(synced.get("target_id", 0) or 0),
+                "videos_total": 0,
+                "new_comments": 0,
+                "new_precise": 0,
+                "refresh_only": True,
+            },
+            "target": synced,
+            "targets": load_monitor_targets_bundle(),
+        }
+    except Exception as exc:
+        tiktok_log(f"[TikTok同行监控] 刷新同行失败：{exc}", "error")
+        return {
+            "code": 500,
+            "msg": f"刷新当前同行失败：{exc}",
+            "result": {
+                "status": "failed",
+                "message": str(exc),
+                "target_id": int(target_id or 0),
+                "refresh_only": True,
+            },
+            "targets": load_monitor_targets_bundle(),
+        }
+    finally:
+        await scraper.close()
+
+
+@router.post("/monitor/targets/{target_id}/delete")
+async def tiktok_delete_monitor_target(target_id: int):
+    target = next(
+        (item for item in tiktok_state_store.load_tiktok_monitor_targets() if int(item.get("target_id", 0) or 0) == int(target_id)),
+        None,
+    )
+    if not target:
+        return {"code": 404, "msg": "未找到对应的同行监控。"}
+    stopped = tiktok_state_store.stop_tiktok_monitor_target(target_id)
+    if not stopped:
+        return {"code": 500, "msg": "停止同行监控失败，请稍后重试。"}
+    tiktok_log(f"[TikTok同行监控] 已停止同行：{target.get('username') or target.get('profile_url')}", "warning")
+    return {
+        "code": 200,
+        "msg": f"已停止同行监控：{target.get('username') or target.get('profile_url') or target_id}，历史视频和客户沉淀已保留。",
+        "targets": load_monitor_targets_bundle(),
+    }
+
+
+@router.post("/monitor/run")
+async def tiktok_run_monitor_targets(http_request: Request = None, request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("执行同行监控")
+    if nurture_conflict:
+        return nurture_conflict
+    set_tiktok_ai_auth_token_from_request(http_request)
+    payload = request if isinstance(request, dict) else {}
+    target_ids = payload.get("target_ids", [])
+    if target_ids is not None and not isinstance(target_ids, list):
+        return {"code": 400, "msg": "target_ids 必须是数组。"}
+    if tiktok_monitor_runtime_state.get("running"):
+        return {
+            "code": 409,
+            "msg": "同行监控正在执行中，请等待当前这一轮结束后再试。",
+            "state": tiktok_monitor_runtime_state,
+            "targets": load_monitor_targets_bundle(),
+        }
+    try:
+        result = await run_tiktok_monitor_cycle(
+            trigger_type="manual",
+            target_ids=[int(item) for item in (target_ids or []) if int(item or 0)],
+        )
+    except Exception as exc:
+        return {
+            "code": 500,
+            "msg": f"同行监控执行失败：{exc}",
+            "result": {"status": "failed", "message": str(exc)},
+            "state": tiktok_monitor_runtime_state,
+            "targets": load_monitor_targets_bundle(),
+        }
+    return {
+        "code": 200 if result.get("status") == "completed" else 500,
+        "msg": result.get("error") or result.get("message") or "同行监控已执行完成。",
+        "result": result,
+        "targets": load_monitor_targets_bundle(),
+    }
+
+
+@router.get("/monitor/customer-pools")
+async def tiktok_get_monitor_customer_pools(target_id: int = 0):
+    all_rows, precise_rows = build_monitor_customer_pools(target_id if target_id > 0 else None)
+    return {
+        "code": 200,
+        "all_customers": all_rows,
+        "precise_customers": precise_rows,
+    }
+
+
+@router.post("/monitor/targets/{target_id}/videos/{aweme_id}/refilter")
+async def tiktok_refilter_monitor_video_customers(
+    target_id: int,
+    aweme_id: str,
+    http_request: Request = None,
+    request: Optional[dict] = None,
+):
+    set_tiktok_ai_auth_token_from_request(http_request)
+    payload = request if isinstance(request, dict) else {}
+    target_id = int(target_id or 0)
+    aweme_id = str(aweme_id or "").strip()
+    if target_id <= 0 or not aweme_id:
+        return {"code": 400, "msg": "缺少有效的视频标识。"}
+
+    target = next(
+        (item for item in tiktok_state_store.load_tiktok_monitor_targets() if int(item.get("target_id", 0) or 0) == target_id),
+        None,
+    )
+    if not target:
+        return {"code": 404, "msg": "未找到对应的同行监控对象。"}
+
+    video = next(
+        (
+            item
+            for item in tiktok_state_store.load_tiktok_monitor_videos(target_id)
+            if str(item.get("aweme_id", "") or "").strip() == aweme_id
+        ),
+        None,
+    )
+    if not video:
+        return {"code": 404, "msg": "未找到对应的视频。"}
+
+    comments = [
+        item
+        for item in tiktok_state_store.load_tiktok_monitor_comments(target_id)
+        if str(item.get("aweme_id", "") or "").strip() == aweme_id
+    ]
+    if not comments:
+        return {"code": 400, "msg": "这条视频还没有已采集的评论，暂时不能筛选客户。"}
+
+    prompt_text = str(payload.get("prompt", "") or "").strip()
+    config = load_global_config()
+    prompt_to_use = prompt_text or get_tiktok_comment_direction(config)
+    strategy_to_use = normalize_tiktok_comment_filter_strategy(
+        payload.get("strategy") or get_tiktok_comment_filter_strategy(config)
+    )
+    ai_client = create_ai_client()
+
+    _filter_started_at = time.time()
+    log_tiktok_filter_event(
+        "start",
+        scope="monitor_refilter",
+        target_id=int(target_id or 0),
+        aweme_id=str(aweme_id or ""),
+        title=video.get("title", ""),
+        comments_in=len(comments),
+        strategy=strategy_to_use,
+        prompt=prompt_to_use,
+    )
+    try:
+        precise_users = await asyncio.to_thread(
+            lambda: ai_client.filter_comments(
+                str(video.get("title", "") or ""),
+                comments,
+                prompt_to_use,
+                "tiktok_transactional",
+                "",
+                strategy_to_use,
+                event_logger=log_tiktok_filter_event,
+            )
+        )
+    except Exception as exc:
+        log_tiktok_filter_event(
+            "error",
+            scope="monitor_refilter",
+            target_id=int(target_id or 0),
+            aweme_id=str(aweme_id or ""),
+            title=video.get("title", ""),
+            comments_in=len(comments),
+            strategy=strategy_to_use,
+            duration_ms=int((time.time() - _filter_started_at) * 1000),
+            error=str(exc),
+        )
+        return {"code": 500, "msg": f"重新筛选失败：{exc}"}
+
+    log_tiktok_filter_event(
+        "done",
+        scope="monitor_refilter",
+        target_id=int(target_id or 0),
+        aweme_id=str(aweme_id or ""),
+        title=video.get("title", ""),
+        comments_in=len(comments),
+        precise_out=len(precise_users or []),
+        strategy=strategy_to_use,
+        duration_ms=int((time.time() - _filter_started_at) * 1000),
+    )
+    comment_rows = build_monitor_comment_rows(target, video, comments, precise_users)
+    tiktok_state_store.save_tiktok_monitor_comments(comment_rows)
+    all_rows, precise_rows = build_monitor_customer_pools(target_id)
+    tiktok_log(
+        f"[TikTok同行监控] 已重新筛选视频《{video.get('title') or aweme_id}》，评论 {len(comments)} 条，精准客户 {len(precise_users)} 人",
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": f"已完成重新筛选：评论 {len(comments)} 条，精准客户 {len(precise_users)} 人。",
+        "all_customers": all_rows,
+        "precise_customers": precise_rows,
+        "all_count": len([row for row in all_rows if str(row.get('latest_video_url', '') or '') == str(video.get('url', '') or '')]),
+        "precise_count": len([row for row in precise_rows if str(row.get('latest_video_url', '') or '') == str(video.get('url', '') or '')]),
+    }
+
+
+@router.get("/monitor/status")
+async def tiktok_get_monitor_status():
+    return {
+        "code": 200,
+        "state": tiktok_monitor_runtime_state,
+        "latest_run": tiktok_state_store.load_latest_tiktok_monitor_run(),
+    }
+
+
+@router.get("/config")
+async def tiktok_get_config(http_request: Request = None):
+    config = load_global_config()
+    accounts = _normalize_accounts(config.get("tiktok_accounts"))
+    local_api_key_configured = bool(str(config.get("api_key", "") or "").strip())
+    server_ai_proxy_available = tiktok_ai_available(config, http_request) and not local_api_key_configured
+    return {
+        "code": 200,
+        "model": config.get("model", "gpt-5.4"),
+        "api_key_configured": local_api_key_configured or server_ai_proxy_available,
+        "local_api_key_configured": local_api_key_configured,
+        "server_ai_proxy_available": server_ai_proxy_available,
+        "comment_direction": get_tiktok_comment_direction(config),
+        "comment_filter_strategy": get_tiktok_comment_filter_strategy(config),
+        "search_min_likes": config.get("search_min_likes", 500),
+        "search_avg_multiplier": config.get("search_avg_multiplier", 1.5),
+        "search_exclude_historical_duplicates": config.get("search_exclude_historical_duplicates", True),
+        "comment_scroll_rounds": config.get("comment_scroll_rounds", 300),
+        "comment_max_comments": config.get("comment_max_comments", 500),
+        "tiktok_default_account_id": config.get("tiktok_default_account_id", 1),
+        "tiktok_accounts": accounts,
+        "tiktok_message_show_browser": bool(config.get("tiktok_message_show_browser", False)),
+        "tiktok_nurture_interval_min_minutes": config.get("tiktok_nurture_interval_min_minutes", 120),
+        "tiktok_nurture_interval_max_minutes": config.get("tiktok_nurture_interval_max_minutes", 180),
+        "tiktok_nurture_session_min_minutes": config.get("tiktok_nurture_session_min_minutes", 20),
+        "tiktok_nurture_session_max_minutes": config.get("tiktok_nurture_session_max_minutes", 40),
+        "tiktok_nurture_like_probability": config.get("tiktok_nurture_like_probability", 0.10),
+        "tiktok_nurture_active_start_hour": config.get("tiktok_nurture_active_start_hour", 9),
+        "tiktok_nurture_active_end_hour": config.get("tiktok_nurture_active_end_hour", 23),
+    }
+
+
+@router.post("/config")
+async def tiktok_update_config(request: dict):
+    config = load_global_config()
+
+    if "model" in request:
+        config["model"] = str(request["model"] or "").strip()
+    if "comment_direction" in request:
+        config["tiktok_comment_direction"] = str(request["comment_direction"] or "").strip()
+    if "comment_filter_strategy" in request:
+        config["tiktok_comment_filter_strategy"] = normalize_tiktok_comment_filter_strategy(request["comment_filter_strategy"])
+    if "search_min_likes" in request:
+        config["search_min_likes"] = max(0, int(request["search_min_likes"] or 0))
+    if "search_avg_multiplier" in request:
+        config["search_avg_multiplier"] = max(0, float(request["search_avg_multiplier"] or 0))
+    if "search_exclude_historical_duplicates" in request:
+        config["search_exclude_historical_duplicates"] = bool(request["search_exclude_historical_duplicates"])
+    if "comment_scroll_rounds" in request:
+        config["comment_scroll_rounds"] = max(20, min(int(request["comment_scroll_rounds"] or 20), 300))
+    if "comment_max_comments" in request:
+        config["comment_max_comments"] = max(20, min(int(request["comment_max_comments"] or 20), 500))
+    if "tiktok_default_account_id" in request:
+        config["tiktok_default_account_id"] = int(request["tiktok_default_account_id"] or 1)
+    if "tiktok_accounts" in request:
+        config["tiktok_accounts"] = _normalize_accounts(request["tiktok_accounts"])
+    if "tiktok_message_show_browser" in request:
+        config["tiktok_message_show_browser"] = bool(request["tiktok_message_show_browser"])
+    if "tiktok_nurture_interval_min_minutes" in request:
+        config["tiktok_nurture_interval_min_minutes"] = max(30, int(request["tiktok_nurture_interval_min_minutes"] or 30))
+    if "tiktok_nurture_interval_max_minutes" in request:
+        config["tiktok_nurture_interval_max_minutes"] = max(
+            int(config.get("tiktok_nurture_interval_min_minutes", 120) or 120),
+            int(request["tiktok_nurture_interval_max_minutes"] or config.get("tiktok_nurture_interval_min_minutes", 120) or 120),
+        )
+    if "tiktok_nurture_session_min_minutes" in request:
+        config["tiktok_nurture_session_min_minutes"] = max(5, int(request["tiktok_nurture_session_min_minutes"] or 5))
+    if "tiktok_nurture_session_max_minutes" in request:
+        config["tiktok_nurture_session_max_minutes"] = max(
+            int(config.get("tiktok_nurture_session_min_minutes", 20) or 20),
+            int(request["tiktok_nurture_session_max_minutes"] or config.get("tiktok_nurture_session_min_minutes", 20) or 20),
+        )
+    if "tiktok_nurture_like_probability" in request:
+        try:
+            like_probability = float(request["tiktok_nurture_like_probability"])
+        except (TypeError, ValueError):
+            like_probability = 0.10
+        config["tiktok_nurture_like_probability"] = min(1.0, max(0.0, like_probability))
+    if "tiktok_nurture_active_start_hour" in request:
+        config["tiktok_nurture_active_start_hour"] = max(6, min(int(request["tiktok_nurture_active_start_hour"] or 9), 20))
+    if "tiktok_nurture_active_end_hour" in request:
+        config["tiktok_nurture_active_end_hour"] = max(
+            int(config.get("tiktok_nurture_active_start_hour", 9) or 9) + 1,
+            min(int(request["tiktok_nurture_active_end_hour"] or 23), 23),
+        )
+
+    save_global_config(config)
+    return {"code": 200, "msg": "TikTok配置保存成功"}
+
+
+@router.get("/stats")
+async def tiktok_get_stats():
+    reconcile_tiktok_runtime_state()
+    nurture_running = reconcile_tiktok_account_nurture_runtime_state()
+    config = load_global_config()
+    accounts = _normalize_accounts(config.get("tiktok_accounts"))
+    active_account = get_active_tiktok_account(config)
+
+    return {
+        "code": 200,
+        "total_tasks": len(tiktok_tasks),
+        "completed_tasks": sum(1 for task in tiktok_tasks if task.get("status") == "completed"),
+        "high_intent_users": sum(len(task.get("high_intent_users", []) or []) for task in tiktok_tasks),
+        "online_accounts": sum(1 for account in accounts if account.get("status") == "online"),
+        "tiktok_accounts": accounts,
+        "tiktok_default_account_id": config.get("tiktok_default_account_id", 1),
+        "active_account_id": active_account.get("id") if active_account else None,
+        "account_nurture_running": nurture_running,
+    }
+
+
+@router.get("/account-nurture/status")
+async def tiktok_get_account_nurture_status():
+    config = load_global_config()
+    if reconcile_tiktok_account_nurture_runtime_state() and tiktok_account_nurture_scheduler:
+        snapshot = tiktok_account_nurture_scheduler.snapshot()
+    else:
+        snapshot = build_tiktok_account_nurture_idle_status(config)
+    return {"code": 200, "status": snapshot}
+
+
+async def tiktok_run_account_nurture_once(request: Optional[dict] = None):
+    global tiktok_account_nurture_scheduler
+
+    source = request if isinstance(request, dict) else {}
+    target_account_ids = parse_tiktok_nurture_account_ids(source)
+    duration_minutes = safe_int(
+        source.get("duration_minutes")
+        or source.get("sales_schedule_duration_minutes")
+        or source.get("session_minutes"),
+        30,
+    )
+    duration_minutes = max(5, min(duration_minutes, 180))
+
+    if reconcile_tiktok_account_nurture_runtime_state() and tiktok_account_nurture_scheduler:
+        if tiktok_account_nurture_scheduler.is_actively_blocking_other_tasks():
+            return build_tiktok_nurture_conflict("执行自动养号")
+        if source.get("stop_waiting_scheduler", True):
+            tiktok_account_nurture_scheduler.disable_accounts(target_account_ids or None)
+            if not tiktok_account_nurture_scheduler.has_enabled_online_accounts():
+                tiktok_account_nurture_scheduler.stop()
+            tiktok_log("H5 销售工作流准备执行一次性养号，已释放等待中的常驻养号排班。", "warning")
+            await asyncio.sleep(0.2)
+
+    if has_running_tiktok_task_for_account_nurture():
+        return {
+            "code": 409,
+            "type": "tiktok_task_conflict",
+            "msg": "当前还有其他TikTok任务在执行，请稍后再执行自动养号。",
+        }
+
+    config = load_global_config()
+    accounts = _normalize_accounts(config.get("tiktok_accounts"))
+    online_accounts = [account for account in accounts if account.get("status") == "online"]
+    selected_online_accounts = (
+        [account for account in online_accounts if int(account.get("id", 0) or 0) in set(target_account_ids)]
+        if target_account_ids
+        else online_accounts
+    )
+    if not selected_online_accounts:
+        return {"code": 400, "type": "no_online_account", "msg": "当前没有在线TikTok账号，无法执行自动养号。"}
+
+    runtime_config = dict(config)
+    runtime_config["tiktok_nurture_session_min_minutes"] = duration_minutes
+    runtime_config["tiktok_nurture_session_max_minutes"] = duration_minutes
+    scheduler = TikTokAccountNurtureScheduler(
+        accounts=accounts,
+        config=runtime_config,
+        broadcast_log=tiktok_log,
+        enabled_account_ids=[int(account.get("id", 0) or 0) for account in selected_online_accounts],
+    )
+
+    errors: List[str] = []
+    completed = 0
+    try:
+        for account in selected_online_accounts:
+            account_id = int(account.get("id", 0) or 0)
+            before = int(scheduler.account_states.get(account_id, {}).get("completed_sessions", 0) or 0)
+            await scheduler._run_session(account)
+            state = scheduler.account_states.get(account_id, {})
+            after = int(state.get("completed_sessions", 0) or 0)
+            if after > before:
+                completed += after - before
+            if state.get("last_error"):
+                errors.append(f"账号 {account_id}: {state.get('last_error')}")
+    finally:
+        scheduler.stop()
+
+    snapshot = scheduler.snapshot()
+    if errors and completed <= 0:
+        return {
+            "code": 500,
+            "type": "account_nurture_once_failed",
+            "msg": "TikTok自动养号执行失败：" + "；".join(errors[:3]),
+            "status": snapshot,
+        }
+    if errors:
+        return {
+            "code": 200,
+            "msg": f"TikTok自动养号已部分完成，成功 {completed} 个账号，异常 {len(errors)} 个账号。",
+            "status": snapshot,
+            "warnings": errors[:5],
+        }
+    return {
+        "code": 200,
+        "msg": f"TikTok自动养号已完成，本次执行 {completed} 个账号，每个约 {duration_minutes} 分钟。",
+        "status": snapshot,
+    }
+
+
+@router.post("/account-nurture/start")
+async def tiktok_start_account_nurture(request: Optional[dict] = None):
+    global tiktok_account_nurture_scheduler, tiktok_account_nurture_background_task
+
+    target_account_ids = parse_tiktok_nurture_account_ids(request)
+
+    if reconcile_tiktok_account_nurture_runtime_state() and tiktok_account_nurture_scheduler:
+        enabled_ids = tiktok_account_nurture_scheduler.enable_accounts(target_account_ids or None)
+        snapshot = tiktok_account_nurture_scheduler.snapshot()
+        if target_account_ids and not enabled_ids:
+            return {"code": 400, "type": "no_online_account", "msg": "指定账号当前未登录，无法加入养号。", "status": snapshot}
+
+        if target_account_ids:
+            account_text = "、".join(str(account_id) for account_id in enabled_ids)
+            return {"code": 200, "msg": f"账号 {account_text} 已加入养号排班。", "status": snapshot}
+
+        return {
+            "code": 200,
+            "msg": "已把所有已登录账号加入养号排班。",
+            "status": snapshot,
+        }
+
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+    monitor_running = bool(tiktok_monitor_runtime_state.get("running"))
+    if (
+        tiktok_running
+        or tiktok_video_comment_running
+        or tiktok_mention_comment_running
+        or tiktok_follow_comment_running
+        or tiktok_interaction_running
+        or tiktok_group_member_running
+        or tiktok_stranger_message_running
+        or monitor_running
+    ):
+        log_tiktok_task_conflict("启动自动养号")
+        return {
+            "code": 409,
+            "type": "tiktok_task_conflict",
+            "msg": "当前还有其他TikTok任务在执行，请先停止后再启动养号。养号期间不要执行其他TikTok任务，否则可能冲突。",
+        }
+
+    config = load_global_config()
+    accounts = _normalize_accounts(config.get("tiktok_accounts"))
+    online_accounts = [account for account in accounts if account.get("status") == "online"]
+    selected_online_accounts = (
+        [account for account in online_accounts if int(account.get("id", 0) or 0) in set(target_account_ids)]
+        if target_account_ids
+        else online_accounts
+    )
+    if not selected_online_accounts:
+        return {"code": 400, "type": "no_online_account", "msg": "当前没有在线TikTok账号，无法启动养号。"}
+
+    tiktok_account_nurture_scheduler = TikTokAccountNurtureScheduler(
+        accounts=accounts,
+        config=dict(config),
+        broadcast_log=tiktok_log,
+        enabled_account_ids=[int(account.get("id", 0) or 0) for account in selected_online_accounts],
+    )
+
+    async def _run_account_nurture():
+        global tiktok_account_nurture_background_task, tiktok_account_nurture_scheduler
+        try:
+            if tiktok_account_nurture_scheduler:
+                await tiktok_account_nurture_scheduler.run()
+        finally:
+            tiktok_account_nurture_background_task = None
+
+    tiktok_account_nurture_background_task = asyncio.create_task(_run_account_nurture())
+    snapshot = tiktok_account_nurture_scheduler.snapshot()
+    if tiktok_account_nurture_scheduler.is_active_window_now():
+        message = (
+            f"TikTok养号已启动，当前使用 {len(selected_online_accounts)} 个在线账号。"
+            "养号期间请不要执行其他TikTok任务。"
+        )
+    else:
+        next_start_text = tiktok_account_nurture_scheduler.next_active_start_text()
+        message = (
+            f"TikTok养号已进入等待队列，当前时间不在养号时段内，将于 {next_start_text} 开始。"
+            f"本次计划使用 {len(selected_online_accounts)} 个已登录账号。"
+        )
+    return {
+        "code": 200,
+        "msg": message,
+        "status": snapshot,
+    }
+
+
+@router.post("/account-nurture/stop")
+async def tiktok_stop_account_nurture(request: Optional[dict] = None):
+    global tiktok_account_nurture_scheduler
+
+    target_account_ids = parse_tiktok_nurture_account_ids(request)
+
+    if not reconcile_tiktok_account_nurture_runtime_state() or not tiktok_account_nurture_scheduler:
+        return {"code": 200, "msg": "当前没有正在运行的TikTok养号任务。"}
+
+    if target_account_ids:
+        disabled_ids = tiktok_account_nurture_scheduler.disable_accounts(target_account_ids)
+        snapshot = tiktok_account_nurture_scheduler.snapshot()
+        if not disabled_ids:
+            return {"code": 200, "msg": "指定账号当前没有参与养号。", "status": snapshot}
+
+        account_text = "、".join(str(account_id) for account_id in disabled_ids)
+        if tiktok_account_nurture_scheduler.has_enabled_online_accounts():
+            tiktok_log(f"TikTok养号已暂停账号：{account_text}。", "warning")
+            return {
+                "code": 200,
+                "msg": f"已暂停账号 {account_text} 的养号，其他账号继续运行。",
+                "status": snapshot,
+            }
+
+        tiktok_account_nurture_scheduler.stop()
+        tiktok_log(f"TikTok养号最后一个账号已暂停：{account_text}。", "warning")
+        return {
+            "code": 200,
+            "msg": f"已暂停账号 {account_text}，当前没有账号继续养号，本轮任务已全部停止。",
+            "status": tiktok_account_nurture_scheduler.snapshot(),
+        }
+
+    tiktok_account_nurture_scheduler.stop()
+    tiktok_log("TikTok养号已收到暂停指令。", "warning")
+    return {"code": 200, "msg": "TikTok养号已暂停。", "status": tiktok_account_nurture_scheduler.snapshot()}
+
+
+@router.post("/account/{account_id}/login")
+async def tiktok_login_account(account_id: int):
+    try:
+        config = load_global_config()
+        accounts = _normalize_accounts(config.get("tiktok_accounts"))
+        account = next((item for item in accounts if item["id"] == account_id), None)
+        if not account:
+            raise HTTPException(status_code=400, detail="Invalid TikTok account ID")
+
+        client = TikTokClient(account["port"], account_id=account["id"])
+        profile_dir = client.resolve_profile_dir()
+        tiktok_log(f"[TikTok账号] 准备启动账号 {account_id} 浏览器，端口 {account['port']}，profile: {profile_dir}")
+        success = await asyncio.to_thread(client.launch_browser)
+        if not success:
+            msg = f"账号 {account_id} 浏览器启动失败，请确认本机已安装 Google Chrome，且端口 {account['port']} 未被占用。profile: {profile_dir}"
+            tiktok_log(f"[TikTok账号] {msg}", "error")
+            return {"code": 500, "msg": msg}
+
+        login_probe = await probe_tiktok_account_login_state(account)
+        probe_state = str(login_probe.get("state") or "unknown")
+        is_logged_in = probe_state == "online"
+        if probe_state in {"online", "waiting"}:
+            account["status"] = "online" if is_logged_in else "waiting"
+            config["tiktok_accounts"] = accounts
+            save_global_config(config)
+        if is_logged_in:
+            return {"code": 200, "status": "online", "probe_state": probe_state, "probe": login_probe, "msg": "TikTok account is already online"}
+        if probe_state == "waiting":
+            return {"code": 200, "status": "waiting", "probe_state": probe_state, "probe": login_probe, "msg": "Browser launched, please finish login in the TikTok window"}
+        return {"code": 200, "status": account.get("status") or "waiting", "probe_state": "unknown", "probe": login_probe, "msg": "登录状态暂时无法确认，浏览器已打开，请稍后重试"}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        detail = traceback.format_exc()
+        msg = f"账号 {account_id} 登录浏览器启动异常：{exc}"
+        tiktok_log(f"[TikTok账号] {msg}\n{detail}", "error")
+        return {"code": 500, "msg": msg, "detail": detail}
+
+
+@router.post("/account/{account_id}/logout")
+async def tiktok_logout_account(account_id: int):
+    config = load_global_config()
+    accounts = _normalize_accounts(config.get("tiktok_accounts"))
+    account = next((item for item in accounts if item["id"] == account_id), None)
+    if not account:
+        raise HTTPException(status_code=400, detail="Invalid TikTok account ID")
+
+    client = TikTokClient(account["port"], account_id=account["id"])
+    await asyncio.to_thread(client.close_browser)
+
+    account["status"] = "offline"
+    config["tiktok_accounts"] = accounts
+    save_global_config(config)
+    return {"code": 200, "msg": "TikTok account logged out"}
+
+
+@router.post("/account/{account_id}/check")
+async def tiktok_check_account(account_id: int):
+    config = load_global_config()
+    accounts = _normalize_accounts(config.get("tiktok_accounts"))
+    account = next((item for item in accounts if item["id"] == account_id), None)
+    if not account:
+        raise HTTPException(status_code=400, detail="Invalid TikTok account ID")
+
+    login_probe = await probe_tiktok_account_login_state(account)
+    probe_state = str(login_probe.get("state") or "unknown")
+    if probe_state in {"online", "waiting"}:
+        account["status"] = "online" if probe_state == "online" else "waiting"
+        config["tiktok_accounts"] = accounts
+        save_global_config(config)
+    return {
+        "code": 200,
+        "status": account.get("status") or "waiting",
+        "logged_in": probe_state == "online",
+        "probe_state": probe_state,
+        "probe": login_probe,
+    }
+
+
+@router.post("/account/{account_id}/view")
+async def tiktok_view_account(account_id: int):
+    try:
+        config = load_global_config()
+        accounts = _normalize_accounts(config.get("tiktok_accounts"))
+        account = next((item for item in accounts if item["id"] == account_id), None)
+        if not account:
+            raise HTTPException(status_code=400, detail="Invalid TikTok account ID")
+        return await open_tiktok_account_homepage(account)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        detail = traceback.format_exc()
+        msg = f"账号 {account_id} 打开TikTok主页异常：{exc}"
+        tiktok_log(f"[TikTok账号] {msg}\n{detail}", "error")
+        return {"code": 500, "msg": msg, "detail": detail}
+
+
+@router.post("/search/collect")
+async def tiktok_search_collect(request: dict):
+    nurture_conflict = build_tiktok_nurture_conflict("执行关键词采集")
+    if nurture_conflict:
+        return nurture_conflict
+    request = request or {}
+    keyword = str(request.get("keyword", "") or "").strip()
+    if not keyword:
+        return {"code": 400, "msg": "请先填写搜索关键词"}
+    search_mode = normalize_tiktok_search_mode(request.get("mode", "script"))
+    max_results = max(10, min(int(request.get("max_results", 50) or 50), 100))
+    sort_type = str(request.get("sort_type", "") or "").strip()
+    publish_time = str(request.get("publish_time", "") or "").strip()
+    if search_mode == "api":
+        try:
+            payload = await run_tiktok_keyword_search_via_api(
+                keyword,
+                max_results=max_results,
+                account_id="api",
+                sort_type=sort_type,
+                publish_time=publish_time,
+            )
+        except Exception as exc:
+            tiktok_log(f"[TikTok搜索] 接口模式失败，准备回退脚本模式：{keyword}，原因：{exc}", "warning")
+            search_mode = "script"
+        else:
+            return {
+                "code": 200,
+                "msg": "TikTok搜索已通过接口模式完成",
+                "data": payload["results"],
+                "total": len(payload["results"]),
+                "account_id": "api",
+                "search_mode": "api",
+                "request_id": payload.get("request_id", ""),
+                "cache_url": payload.get("cache_url", ""),
+            }
+    config = load_global_config()
+    account = get_active_tiktok_account(config)
+    if not account:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "No online TikTok account is available. Please sign in first.",
+            "data": [],
+            "total": 0,
+        }
+    try:
+        payload = await run_tiktok_keyword_search(
+            account,
+            keyword,
+            max_results=max_results,
+            update_latest=True,
+            sort_type=sort_type,
+            publish_time=publish_time,
+        )
+    except Exception as exc:
+        tiktok_log(f"[TikTok搜索] 脚本搜索失败：{keyword}，原因：{exc}", "error")
+        return {"code": 500, "msg": f"TikTok搜索失败：{exc}", "data": [], "total": 0, "search_mode": "script"}
+    return {
+        "code": 200,
+        "msg": f"TikTok搜索已通过脚本模式完成，账号 {account['id']}",
+        "data": payload["results"],
+        "total": len(payload["results"]),
+        "account_id": account["id"],
+        "search_mode": "script",
+    }
+
+
+@router.post("/search/export")
+async def tiktok_search_export(request: dict):
+    data = request.get("data", []) if isinstance(request, dict) else []
+    if not data:
+        return {"code": 400, "msg": "没有可导出的搜索结果"}
+    try:
+        file = export_search_rows(data)
+        return {"code": 200, "msg": "导出成功", "file": file}
+    except Exception as exc:
+        return {"code": 500, "msg": f"导出失败: {exc}"}
+
+
+@router.get("/search/sessions")
+async def tiktok_get_search_sessions():
+    return {
+        "code": 200,
+        "saved_at": load_tiktok_search_sessions_saved_at(),
+        "sessions": load_tiktok_search_sessions_state(),
+    }
+
+
+@router.get("/local-settings")
+async def tiktok_get_local_settings():
+    return {"code": 200, "settings": load_tiktok_local_settings()}
+
+
+@router.post("/local-settings")
+async def tiktok_save_local_settings(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    settings = payload.get("settings", payload)
+    if not isinstance(settings, dict):
+        return {"code": 400, "msg": "settings must be an object"}
+    return {"code": 200, "settings": save_tiktok_local_settings(settings)}
+
+
+@router.post("/search/sessions")
+async def tiktok_save_search_sessions(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    sessions = payload.get("sessions", [])
+    incoming_saved_at = int(payload.get("saved_at", 0) or 0)
+    if not isinstance(sessions, list):
+        return {"code": 400, "msg": "sessions 必须是数组。"}
+    current_saved_at = load_tiktok_search_sessions_saved_at()
+    if incoming_saved_at and current_saved_at and incoming_saved_at < current_saved_at:
+        return {
+            "code": 200,
+            "ignored": True,
+            "msg": "已忽略过期的关键词卡片快照。",
+            "count": len(load_tiktok_search_sessions_state()),
+            "saved_at": current_saved_at,
+        }
+    normalized_sessions = [dict(item) for item in sessions if isinstance(item, dict)]
+    save_tiktok_search_sessions_state(normalized_sessions, saved_at=incoming_saved_at)
+    return {
+        "code": 200,
+        "msg": "搜索关键词卡片已保存到本地数据库。",
+        "count": len(normalized_sessions),
+        "saved_at": int(incoming_saved_at or load_tiktok_search_sessions_saved_at() or 0),
+    }
+
+
+@router.post("/tasks/from-search")
+async def tiktok_tasks_from_search(request: dict):
+    selected = request.get("data", []) if isinstance(request, dict) else []
+    if not isinstance(selected, list) or not selected:
+        return {"code": 400, "msg": "Please select at least one search result"}
+
+    rows = []
+    for item in selected:
+        url = str(item.get("url", "")).strip()
+        if not url:
+            continue
+        rows.append(
+            {
+                "url": url,
+                "title": str(item.get("title", "")).strip(),
+                "author": str(item.get("author", "")).strip(),
+                "cover_image": str(item.get("cover_image", "")).strip(),
+                "source_session_id": str(item.get("source_session_id", "")).strip(),
+                "source_item_key": str(item.get("source_item_key", "")).strip(),
+                "comments": int(item.get("comments", 0) or 0),
+                "comments_text": str(item.get("comments_text", "") or "").strip(),
+                "likes": int(item.get("likes", 0) or 0),
+                "publish_time": str(item.get("publish_time", "")).strip(),
+            }
+        )
+
+    if not rows:
+        return {"code": 400, "msg": "No valid video URL was found in the selected search results"}
+
+    tasks = set_tasks_from_rows(rows)
+    selected_count = len(rows)
+    tiktok_log(f"[TikTok任务] 已同步搜索勾选 {selected_count} 条到任务池，当前任务池累计 {len(tasks)} 条", "success")
+    return {
+        "code": 200,
+        "msg": f"已同步 {selected_count} 条搜索视频到任务池，当前累计 {len(tasks)} 条TikTok任务",
+        "selected_total": selected_count,
+        "total": len(tasks),
+    }
+
+
+@router.get("/tasks")
+async def tiktok_get_tasks():
+    global tiktok_tasks
+    await ensure_tiktok_schedule_scheduler()
+    reconcile_tiktok_runtime_state()
+    # 只做就地归一化：ensure_tiktok_task_shape 是原地补字段，不会产生新对象，
+    # 之前这里是「先构造归一化列表再整体比较」的写法，等于把几万条评论逐条比较一次（每次请求都要几秒）。
+    for task in tiktok_tasks:
+        if isinstance(task, dict):
+            ensure_tiktok_task_shape(task)
+    if backfill_task_cover_images(tiktok_tasks):
+        save_tiktok_tasks_state()
+    return {
+        "code": 200,
+        "tasks": tiktok_tasks,
+        "total": len(tiktok_tasks),
+        "running": tiktok_running,
+        "completed": sum(1 for task in tiktok_tasks if task.get("status") == "completed"),
+    }
+
+
+@router.get("/tasks-lite")
+async def tiktok_get_tasks_lite():
+    global tiktok_tasks
+    await ensure_tiktok_schedule_scheduler()
+    reconcile_tiktok_runtime_state()
+    for task in tiktok_tasks:
+        if isinstance(task, dict):
+            ensure_tiktok_task_shape(task)
+    if backfill_task_cover_images(tiktok_tasks):
+        save_tiktok_tasks_state()
+    lite_tasks = [build_tiktok_task_lite_payload(task) for task in tiktok_tasks if isinstance(task, dict)]
+    high_intent_total = sum(int(task.get("high_intent_count", 0) or 0) for task in lite_tasks)
+    return {
+        "code": 200,
+        "tasks": lite_tasks,
+        "total": len(lite_tasks),
+        "running": tiktok_running,
+        "completed": sum(1 for task in tiktok_tasks if task.get("status") == "completed"),
+        "high_intent_users": high_intent_total,
+    }
+
+
+@router.get("/tasks/{task_id}")
+async def tiktok_get_task_detail(task_id: int):
+    """单个任务的完整数据（含评论明细）。
+
+    客户池页平时只拉 /tasks-lite（不带评论），只有需要明细的操作（例如移出精准客户）
+    才按需拉这一个任务的明细，避免整页把几万条评论一起传下来。
+    """
+    for task in tiktok_tasks:
+        if isinstance(task, dict) and int(task.get("id", 0) or 0) == int(task_id or 0):
+            detail = ensure_tiktok_task_shape(dict(task))
+            return {"code": 200, "task": detail}
+    return {"code": 404, "msg": "未找到该视频任务。"}
+
+
+@router.get("/customer-pools")
+async def tiktok_get_customer_pools():
+    all_rows, precise_rows = build_combined_tiktok_customer_pools()
+    sync_tiktok_customer_pool_cache(all_rows, precise_rows)
+    return {
+        "code": 200,
+        "all_customers": tiktok_all_customer_pool,
+        "precise_customers": tiktok_precise_customer_pool,
+        "all_total": len(tiktok_all_customer_pool),
+        "precise_total": len(tiktok_precise_customer_pool),
+    }
+
+
+@router.post("/customers/delete")
+async def tiktok_delete_customers(request: Optional[dict] = None):
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if (
+        tiktok_running
+        or tiktok_video_comment_running
+        or tiktok_mention_comment_running
+        or tiktok_follow_comment_running
+        or tiktok_interaction_running
+        or tiktok_group_member_running
+        or tiktok_stranger_message_running
+    ):
+        return {"code": 400, "msg": "当前有任务正在执行，暂时不能删除客户。"}
+
+    payload = request if isinstance(request, dict) else {}
+    raw_rows = payload.get("rows", [])
+    if not isinstance(raw_rows, list) or not raw_rows:
+        return {"code": 400, "msg": "请先勾选至少一个客户。"}
+
+    result = delete_tiktok_customers_from_tasks(raw_rows)
+    removed = int(result.get("removed", 0) or 0)
+    skipped_monitor = int(result.get("skipped_monitor", 0) or 0)
+
+    if removed <= 0:
+        if skipped_monitor > 0:
+            return {
+                "code": 400,
+                "msg": "当前勾选的客户都来自同行监控，暂不支持在这里删除，请回到监控链路处理。",
+                "skipped_monitor": skipped_monitor,
+            }
+        return {"code": 404, "msg": "未找到匹配的客户。"}
+
+    all_rows, precise_rows = build_combined_tiktok_customer_pools()
+    sync_tiktok_customer_pool_cache(all_rows, precise_rows)
+    msg = f"已删除 {removed} 位客户。"
+    if skipped_monitor > 0:
+        msg += f" 另有 {skipped_monitor} 位同行监控客户未处理。"
+    tiktok_log(f"[TikTok客户池] 已删除 {removed} 位客户", "warning")
+    return {
+        "code": 200,
+        "msg": msg,
+        "removed": removed,
+        "removed_precise": int(result.get("removed_precise", 0) or 0),
+        "skipped_monitor": skipped_monitor,
+        "all_total": len(all_rows),
+        "precise_total": len(precise_rows),
+    }
+
+
+@router.post("/customers/add-precise")
+async def tiktok_add_customers_to_precise(request: Optional[dict] = None):
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if (
+        tiktok_running
+        or tiktok_video_comment_running
+        or tiktok_mention_comment_running
+        or tiktok_follow_comment_running
+        or tiktok_interaction_running
+        or tiktok_group_member_running
+        or tiktok_stranger_message_running
+    ):
+        return {"code": 400, "msg": "当前有任务正在执行，暂时不能修改精准客户池。"}
+
+    payload = request if isinstance(request, dict) else {}
+    raw_rows = payload.get("rows", [])
+    if not isinstance(raw_rows, list) or not raw_rows:
+        return {"code": 400, "msg": "请先勾选至少一个客户。"}
+
+    candidate_rows = [row for row in raw_rows if isinstance(row, dict) and not bool(row.get("is_high_intent"))]
+    if not candidate_rows:
+        return {"code": 400, "msg": "所选客户已在精准客户池中。"}
+
+    result = add_tiktok_customers_to_precise_pool(candidate_rows)
+    added = int(result.get("added", 0) or 0)
+    if added <= 0:
+        return {"code": 404, "msg": "未找到可加入精准客户池的客户。", **result}
+
+    all_rows, precise_rows = build_combined_tiktok_customer_pools()
+    sync_tiktok_customer_pool_cache(all_rows, precise_rows)
+    tiktok_log(
+        f"[TikTok客户池] 已从全部客户页加入精准客户 {added} 位，其中同行监控 {int(result.get('added_monitor', 0) or 0)} 位",
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": f"已加入精准客户池 {added} 位。",
+        **result,
+        "all_total": len(all_rows),
+        "precise_total": len(precise_rows),
+    }
+
+
+@router.get("/scheduler/overview")
+async def tiktok_scheduler_overview():
+    await ensure_tiktok_schedule_scheduler()
+    plans = [normalize_tiktok_schedule_plan(plan) for plan in tiktok_schedule_plans if isinstance(plan, dict)]
+    plans.sort(
+        key=lambda item: (
+            not bool(item.get("enabled", True)),
+            parse_schedule_datetime(item.get("next_run_at")) or datetime.max,
+            parse_schedule_datetime(item.get("updated_at")) or datetime.min,
+        ),
+        reverse=False,
+    )
+    return {
+        "code": 200,
+        "plans": plans,
+        "state": tiktok_schedule_runtime_state,
+        "busy_reason": get_tiktok_schedule_busy_reason(),
+    }
+
+
+@router.post("/scheduler/plans")
+async def tiktok_save_scheduler_plan(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    raw_plan = payload.get("plan", payload if isinstance(payload, dict) else {})
+    if not isinstance(raw_plan, dict):
+        return {"code": 400, "msg": "计划配置格式不正确。"}
+    plan = normalize_tiktok_schedule_plan(raw_plan)
+    if plan["type"] == "collect_precise" and not str(plan.get("keyword", "") or "").strip():
+        return {"code": 400, "msg": "采集精准客户计划必须填写关键词。"}
+
+    plan["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    existing_index = next(
+        (index for index, item in enumerate(tiktok_schedule_plans) if str(item.get("id", "") or "") == str(plan["id"])),
+        -1,
+    )
+    if existing_index >= 0:
+        previous = normalize_tiktok_schedule_plan(tiktok_schedule_plans[existing_index])
+        for field in ("last_run_at", "last_status", "last_message", "last_error", "total_runs", "success_runs", "failure_runs", "next_run_at"):
+            if field not in raw_plan:
+                plan[field] = previous.get(field)
+        tiktok_schedule_plans[existing_index] = plan
+    else:
+        tiktok_schedule_plans.append(plan)
+    if plan.get("enabled", True):
+        next_run = get_next_schedule_window_anchor(
+            datetime.now(),
+            plan.get("window_start"),
+            plan.get("window_end"),
+            include_current_if_inside=True,
+        )
+        plan["next_run_at"] = format_schedule_datetime(next_run)
+        if existing_index >= 0:
+            tiktok_schedule_plans[existing_index] = plan
+        else:
+            tiktok_schedule_plans[-1] = plan
+    save_tiktok_schedule_plans()
+    await ensure_tiktok_schedule_scheduler()
+    return {"code": 200, "msg": "排期计划已保存。", "plan": plan, "plans": tiktok_schedule_plans}
+
+
+@router.post("/scheduler/plans/{plan_id}/toggle")
+async def tiktok_toggle_scheduler_plan(plan_id: str, request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    enabled = coerce_bool(payload.get("enabled", True), True)
+    for index, item in enumerate(tiktok_schedule_plans):
+        plan = normalize_tiktok_schedule_plan(item)
+        if str(plan.get("id", "") or "") != str(plan_id or ""):
+            continue
+        plan["enabled"] = enabled
+        if enabled and not str(plan.get("next_run_at", "") or "").strip():
+            plan["next_run_at"] = format_schedule_datetime(
+                get_next_schedule_window_anchor(
+                    datetime.now(),
+                    plan.get("window_start"),
+                    plan.get("window_end"),
+                    include_current_if_inside=True,
+                )
+            )
+        plan["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        tiktok_schedule_plans[index] = plan
+        save_tiktok_schedule_plans()
+        await ensure_tiktok_schedule_scheduler()
+        return {"code": 200, "msg": f"计划已{'启用' if enabled else '暂停'}。", "plan": plan}
+    return {"code": 404, "msg": "未找到对应计划。"}
+
+
+@router.post("/scheduler/plans/{plan_id}/run")
+async def tiktok_run_scheduler_plan_now(plan_id: str):
+    await ensure_tiktok_schedule_scheduler()
+    plan = next(
+        (normalize_tiktok_schedule_plan(item) for item in tiktok_schedule_plans if str(item.get("id", "") or "") == str(plan_id or "")),
+        None,
+    )
+    if not plan:
+        return {"code": 404, "msg": "未找到对应计划。"}
+    busy_reason = get_tiktok_schedule_busy_reason()
+    if busy_reason:
+        return {"code": 400, "msg": f"当前不能立即执行：{busy_reason}。"}
+    tiktok_schedule_runtime_state["active_plan_id"] = str(plan.get("id", "") or "")
+    tiktok_schedule_runtime_state["active_plan_name"] = str(plan.get("name", "") or "")
+    tiktok_schedule_runtime_state["active_phase"] = "launching"
+    async with tiktok_schedule_execution_lock:
+        result = await execute_tiktok_schedule_plan(plan)
+    success = int(result.get("code", 0) or 0) == 200
+    update_tiktok_schedule_plan_runtime(
+        str(plan.get("id", "") or ""),
+        status="success" if success else "failed",
+        message=str(result.get("msg", "") or ""),
+        error="" if success else str(result.get("msg", "") or ""),
+        bump_total=True,
+        success=success,
+        failed=not success,
+        next_run_at=get_next_tiktok_schedule_run(
+            datetime.now(),
+            int(plan.get("interval_minutes", 120) or 120),
+            window_start=plan.get("window_start"),
+            window_end=plan.get("window_end"),
+        ),
+    )
+    tiktok_schedule_runtime_state["last_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tiktok_schedule_runtime_state["message"] = str(result.get("msg", "") or "")
+    tiktok_schedule_runtime_state["last_error"] = "" if success else str(result.get("msg", "") or "")
+    tiktok_schedule_runtime_state["active_phase"] = "waiting" if success else "idle"
+    return result
+
+
+@router.post("/scheduler/plans/{plan_id}/delete")
+async def tiktok_delete_scheduler_plan(plan_id: str):
+    before_total = len(tiktok_schedule_plans)
+    tiktok_schedule_plans[:] = [
+        item for item in tiktok_schedule_plans if str(item.get("id", "") or "") != str(plan_id or "")
+    ]
+    if len(tiktok_schedule_plans) == before_total:
+        return {"code": 404, "msg": "未找到对应计划。"}
+    save_tiktok_schedule_plans()
+    if str(tiktok_schedule_runtime_state.get("active_plan_id", "") or "") == str(plan_id or ""):
+        tiktok_schedule_runtime_state["active_plan_id"] = ""
+        tiktok_schedule_runtime_state["active_plan_name"] = ""
+        tiktok_schedule_runtime_state["active_phase"] = ""
+    return {"code": 200, "msg": "排期计划已删除。", "plans": tiktok_schedule_plans}
+
+
+@router.post("/tasks/{task_id}/high-intent-users")
+async def tiktok_update_task_high_intent_users(task_id: int, request: dict):
+    selected_users = request.get("users", [])
+    if not isinstance(selected_users, list):
+        return {"code": 400, "msg": "users must be a list"}
+
+    task = next((item for item in tiktok_tasks if int(item.get("id", 0) or 0) == int(task_id)), None)
+    if not task:
+        return {"code": 404, "msg": "Task not found"}
+
+    valid_pool = {}
+    for row in task.get("all_comments", []) or []:
+        normalized = normalize_high_intent_user(row)
+        valid_pool[user_choice_key(normalized)] = normalized
+
+    for row in task.get("high_intent_users", []) or []:
+        normalized = normalize_high_intent_user(row)
+        valid_pool[user_choice_key(normalized)] = normalized
+
+    normalized_rows = []
+    for row in selected_users:
+        key = user_choice_key(row)
+        if key in valid_pool:
+            normalized_rows.append(valid_pool[key])
+
+    task["high_intent_users"] = dedupe_users(normalized_rows)
+    save_tiktok_tasks_state()
+    return {"code": 200, "msg": "High-intent users updated", "count": len(task["high_intent_users"])}
+
+
+@router.post("/tasks/{task_id}/refilter-customers")
+async def tiktok_refilter_task_customers(
+    task_id: int,
+    http_request: Request = None,
+    request: Optional[dict] = None,
+):
+    set_tiktok_ai_auth_token_from_request(http_request)
+    payload = request if isinstance(request, dict) else {}
+    task = next((item for item in tiktok_tasks if int(item.get("id", 0) or 0) == int(task_id)), None)
+    if not task:
+        return {"code": 404, "msg": "未找到对应的视频任务。"}
+
+    comments = task.get("all_comments", []) or []
+    if not comments:
+        return {"code": 400, "msg": "这条视频还没有已采集的评论，暂时不能筛选客户。"}
+
+    prompt_text = str(payload.get("prompt", "") or "").strip()
+    config = load_global_config()
+    prompt_to_use = prompt_text or get_tiktok_comment_direction(config)
+    strategy_to_use = normalize_tiktok_comment_filter_strategy(
+        payload.get("strategy") or get_tiktok_comment_filter_strategy(config)
+    )
+    ai_client = create_ai_client()
+
+    _filter_started_at = time.time()
+    log_tiktok_filter_event(
+        "start",
+        scope="task_refilter",
+        task_id=int(task.get("id", 0) or 0),
+        title=task.get("title", ""),
+        comments_in=len(comments),
+        strategy=strategy_to_use,
+        prompt=prompt_to_use,
+    )
+    try:
+        precise_users = await asyncio.to_thread(
+            lambda: ai_client.filter_comments(
+                str(task.get("title", "") or task.get("url", "") or ""),
+                comments,
+                prompt_to_use,
+                "tiktok_transactional",
+                "",
+                strategy_to_use,
+                event_logger=log_tiktok_filter_event,
+            )
+        )
+    except Exception as exc:
+        log_tiktok_filter_event(
+            "error",
+            scope="task_refilter",
+            task_id=int(task.get("id", 0) or 0),
+            title=task.get("title", ""),
+            comments_in=len(comments),
+            strategy=strategy_to_use,
+            duration_ms=int((time.time() - _filter_started_at) * 1000),
+            error=str(exc),
+        )
+        return {"code": 500, "msg": f"重新筛选失败：{exc}"}
+
+    log_tiktok_filter_event(
+        "done",
+        scope="task_refilter",
+        task_id=int(task.get("id", 0) or 0),
+        title=task.get("title", ""),
+        comments_in=len(comments),
+        precise_out=len(precise_users or []),
+        strategy=strategy_to_use,
+        duration_ms=int((time.time() - _filter_started_at) * 1000),
+    )
+
+    valid_pool = {}
+    for row in comments:
+        normalized = normalize_high_intent_user(row)
+        valid_pool[user_choice_key(normalized)] = normalized
+
+    for row in task.get("high_intent_users", []) or []:
+        normalized = normalize_high_intent_user(row)
+        valid_pool[user_choice_key(normalized)] = normalized
+
+    normalized_rows = []
+    for row in precise_users or []:
+        normalized = normalize_high_intent_user(row)
+        key = user_choice_key(normalized)
+        normalized_rows.append(valid_pool.get(key, normalized))
+
+    task["high_intent_users"] = dedupe_users(normalized_rows)
+    save_tiktok_tasks_state()
+    tiktok_log(
+        f"[TikTok搜索采集] 已重新筛选视频《{task.get('title') or task.get('url') or task_id}》，评论 {len(comments)} 条，精准客户 {len(task['high_intent_users'])} 人",
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": f"已完成重新筛选：评论 {len(comments)} 条，精准客户 {len(task['high_intent_users'])} 人。",
+        "count": len(task["high_intent_users"]),
+    }
+
+
+@router.get("/logs")
+async def tiktok_get_logs(since_id: int = 0):
+    return {
+        "code": 200,
+        "logs": [item for item in list(tiktok_logs) if int(item.get("id", 0) or 0) > int(since_id or 0)],
+        "latest_id": tiktok_log_counter,
+    }
+
+
+@router.post("/page-log")
+async def tiktok_page_log(payload: Dict):
+    message = str((payload or {}).get("message", "") or "").strip()
+    level = str((payload or {}).get("level", "info") or "info").strip().lower()
+    source = str((payload or {}).get("source", "") or "").strip()
+    if not message:
+        return {"code": 200}
+    if level not in {"info", "success", "warning", "error"}:
+        level = "info"
+    prefix = f"[TikTok页面日志]{f'[{source}]' if source else ''}"
+    tiktok_log(f"{prefix} {message}"[:1000], level)
+    return {"code": 200}
+
+
+@router.get("/group-members/status")
+async def tiktok_group_members_status():
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    return {
+        "code": 200,
+        "running": bool(tiktok_group_member_state.get("running")),
+        "state": tiktok_group_member_state,
+        "results": tiktok_group_member_results,
+    }
+
+
+@router.post("/group-members/preview")
+async def tiktok_preview_group_members(request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("识别群聊")
+    if nurture_conflict:
+        return nurture_conflict
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if tiktok_running or tiktok_video_comment_running or tiktok_mention_comment_running or tiktok_follow_comment_running or tiktok_interaction_running or tiktok_group_member_running or tiktok_stranger_message_running:
+        return {"code": 400, "msg": "当前已有任务在执行，请先停止后再识别群聊。"}
+
+    payload = request if isinstance(request, dict) else {}
+    group_keyword = str(payload.get("group_keyword", "") or "").strip()
+
+    account = get_active_tiktok_account(load_global_config())
+    if not account:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的TikTok在线账号，请先登录。",
+            "groups": [],
+        }
+
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    try:
+        groups = await scraper.list_chat_groups(group_keyword=group_keyword, logger=tiktok_log)
+    finally:
+        await scraper.close()
+
+    tiktok_group_member_state["available_groups"] = groups
+    tiktok_group_member_state["group_keyword"] = group_keyword
+    return {
+        "code": 200,
+        "msg": f"已识别 {len(groups)} 个群聊",
+        "groups": groups,
+        "account_id": account["id"],
+    }
+
+
+@router.post("/group-members/start")
+async def tiktok_start_group_members(request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("提取群成员")
+    if nurture_conflict:
+        return nurture_conflict
+    global tiktok_group_member_running, tiktok_group_member_stop_requested, tiktok_group_member_background_task
+
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if tiktok_running:
+        return {"code": 400, "msg": "评论采集任务正在执行，请先停止后再开始群成员提取。"}
+    if tiktok_video_comment_running:
+        return {"code": 400, "msg": "视频评论任务正在执行，请先停止后再开始群成员提取。"}
+    if tiktok_mention_comment_running:
+        return {"code": 400, "msg": "评论@精准客户任务正在执行，请先停止后再开始群成员提取。"}
+    if tiktok_follow_comment_running:
+        return {"code": 400, "msg": "关注评论任务正在执行，请先停止后再开始群成员提取。"}
+    if tiktok_interaction_running:
+        return {"code": 400, "msg": "私信任务正在执行，请先停止后再开始群成员提取。"}
+    if tiktok_stranger_message_running:
+        return {"code": 400, "msg": "私信引流任务正在执行，请先停止后再开始群成员提取。"}
+    if tiktok_group_member_running:
+        return {"code": 400, "msg": "群成员提取任务已在执行中。"}
+
+    payload = request if isinstance(request, dict) else {}
+    group_keyword = str(payload.get("group_keyword", "") or "").strip()
+    max_groups = max(1, min(int(payload.get("max_groups", 5) or 5), 50))
+    max_members_per_group = max(1, min(int(payload.get("max_members_per_group", 50) or 50), 500))
+    selected_groups = [
+        str(item or "").strip()
+        for item in (payload.get("selected_groups", []) if isinstance(payload.get("selected_groups", []), list) else [])
+        if str(item or "").strip()
+    ]
+    if selected_groups:
+        max_groups = max(len(selected_groups), max_groups)
+
+    account = get_active_tiktok_account(load_global_config())
+    if not account:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的TikTok在线账号，请先登录。",
+        }
+
+    tiktok_group_member_running = True
+    tiktok_group_member_stop_requested = False
+    tiktok_group_member_background_task = asyncio.create_task(
+        run_tiktok_group_member_collection(
+            account=account,
+            group_keyword=group_keyword,
+            max_groups=max_groups,
+            max_members_per_group=max_members_per_group,
+            selected_groups=selected_groups,
+        )
+    )
+    tiktok_group_member_state["selected_groups"] = selected_groups
+    tiktok_log(
+        f"[TikTok群成员] 已启动，账号 {account['id']}，群关键词：{group_keyword or '自动识别群聊'}"
+        + (f"，指定群 {len(selected_groups)} 个" if selected_groups else ""),
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": f"群成员提取任务已启动，使用账号 {account['id']}",
+        "account_id": account["id"],
+        "group_keyword": group_keyword,
+        "max_groups": max_groups,
+        "max_members_per_group": max_members_per_group,
+        "selected_groups": selected_groups,
+    }
+
+
+@router.post("/group-members/stop")
+async def tiktok_stop_group_members():
+    global tiktok_group_member_stop_requested, tiktok_group_member_background_task
+
+    reconcile_tiktok_group_member_runtime_state()
+    if not tiktok_group_member_running:
+        tiktok_group_member_stop_requested = False
+        tiktok_group_member_background_task = None
+        return {"code": 200, "msg": "当前没有正在执行的群成员提取任务。"}
+
+    tiktok_group_member_stop_requested = True
+    tiktok_log("[TikTok群成员] 已请求停止", "warning")
+    return {"code": 200, "msg": "已请求停止群成员提取任务。"}
+
+
+@router.post("/group-members/export")
+async def tiktok_export_group_members():
+    try:
+        file = export_group_member_results()
+        return {"code": 200, "msg": "群成员结果已导出", "file": file}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"导出失败: {exc}")
+
+
+@router.post("/group-members/add-to-interaction")
+async def tiktok_add_group_members_to_interaction(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    raw_rows = payload.get("rows", [])
+    if not isinstance(raw_rows, list) or not raw_rows:
+        return {"code": 400, "msg": "请先勾选至少一个群成员。"}
+
+    imported = await asyncio.to_thread(import_group_members_to_interaction_pool, raw_rows)
+    removed = await asyncio.to_thread(remove_group_members_from_results, raw_rows)
+    total = len(await asyncio.to_thread(collect_tiktok_interaction_users))
+    return {
+        "code": 200,
+        "msg": (
+            f"已加入私信列表 {imported} 人，并从当前群成员列表移除 {removed} 人"
+            if imported > 0
+            else (
+                f"本次没有新增成员，但已从当前群成员列表移除 {removed} 人"
+                if removed > 0
+                else "本次没有新增成员，可能已在私信列表中"
+            )
+        ),
+        "imported": imported,
+        "removed": removed,
+        "total": total,
+    }
+
+
+@router.post("/group-members/delete")
+async def tiktok_delete_group_members(request: Optional[dict] = None):
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if tiktok_running or tiktok_video_comment_running or tiktok_mention_comment_running or tiktok_follow_comment_running or tiktok_interaction_running or tiktok_group_member_running or tiktok_stranger_message_running:
+        return {"code": 400, "msg": "当前有任务正在执行，暂时不能删除群成员结果。"}
+
+    payload = request if isinstance(request, dict) else {}
+    raw_rows = payload.get("rows", [])
+    if not isinstance(raw_rows, list) or not raw_rows:
+        return {"code": 400, "msg": "请先勾选至少一个群成员。"}
+
+    removed = remove_group_members_from_results(raw_rows)
+    if removed <= 0:
+        return {"code": 404, "msg": "未找到匹配的群成员结果。"}
+
+    tiktok_log(f"[TikTok群成员] 已删除 {removed} 条群成员结果", "warning")
+    return {
+        "code": 200,
+        "msg": f"已删除 {removed} 条群成员结果。",
+        "removed": removed,
+        "total": len(tiktok_group_member_results),
+    }
+
+
+@router.get("/mention-comment/status")
+async def tiktok_mention_comment_status():
+    reconcile_tiktok_mention_comment_runtime_state()
+    return {
+        "code": 200,
+        "running": bool(tiktok_mention_comment_state.get("running")),
+        "state": tiktok_mention_comment_state,
+        "video_cache": tiktok_mention_self_video_cache,
+        "history_total": len(tiktok_mention_comment_history),
+    }
+
+
+@router.get("/mention-comment/videos")
+async def tiktok_get_self_videos(account_id: int = 0, max_videos: int = 12):
+    nurture_conflict = build_tiktok_nurture_conflict("采集自己的视频列表")
+    if nurture_conflict:
+        return nurture_conflict
+
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if tiktok_running or tiktok_video_comment_running or tiktok_mention_comment_running or tiktok_follow_comment_running or tiktok_interaction_running or tiktok_group_member_running:
+        return {"code": 409, "msg": "当前有TikTok任务正在执行，请先停止后再刷新自己的视频列表。"}
+
+    config = load_global_config()
+    accounts = _normalize_accounts(config.get("tiktok_accounts"))
+    target_account_id = int(account_id or 0)
+    account = next(
+        (row for row in accounts if int(row.get("id", 0) or 0) == target_account_id),
+        None,
+    ) if target_account_id > 0 else get_active_tiktok_account(config)
+
+    if not account:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的TikTok在线账号，请先登录后再采集自己的视频。",
+        }
+
+    client = TikTokClient(account["port"], account_id=account["id"])
+    if not await asyncio.to_thread(client.launch_browser, "https://www.tiktok.com/"):
+        return {"code": 500, "msg": f"账号 {account['id']} 浏览器启动失败，无法采集自己的视频列表。"}
+
+    scraper = TikTokCommentScraper(account_id=account["id"], cdp_port=account["port"])
+    result: Dict = {"profile": {}, "videos": []}
+    page_error: Optional[Exception] = None
+    try:
+        # The @-comment action immediately opens this same page to read a
+        # target video.  Do not first open another /user/self page merely to
+        # probe login: its own browser/CDP/page setup can consume the full
+        # probe deadline and incorrectly block a working account.  The real
+        # page operation checks for a visible login intercept itself.
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                result = await scraper.scrape_self_videos(
+                    max_videos=max_videos,
+                    logger=tiktok_log,
+                )
+                break
+            except RuntimeError as exc:
+                message = str(exc or "").strip()
+                if not ("登录拦截" in message or "未登录" in message or "登录态已失效" in message):
+                    page_error = exc
+                    break
+                # 浏览器刚拉起时往往先停在登录页、过一会才自动登录进来。不能凭
+                # 一次页面报错就把账号写成 waiting（会把后面所有动作卡在"没有
+                # 在线账号"），先用探活确认（探活本身会等自动登录），再决定。
+                probe = await probe_tiktok_account_login_state(account)
+                probe_state = str(probe.get("state") or "unknown").strip().lower()
+                if probe_state == "waiting":
+                    account["status"] = "waiting"
+                    config["tiktok_accounts"] = accounts
+                    save_global_config(config)
+                    return {
+                        "code": 400,
+                        "type": "account_waiting_login",
+                        "msg": f"账号 {account['id']} 浏览器已打开，但尚未完成登录，请先扫码登录后再刷新。",
+                        "account": account,
+                        "probe": probe,
+                        "videos": [],
+                        "profile": {},
+                    }
+                if probe_state == "online" and attempt == 1:
+                    tiktok_log(
+                        f"[TikTok self videos] 账号 {account['id']} 页面出现登录拦截，探活已恢复 online，重试一次抓取",
+                        "warning",
+                    )
+                    continue
+                # 探活没确认掉线：保留原账号状态，避免一次误判锁死后续动作。
+                return {
+                    "code": 400,
+                    "type": "account_login_unconfirmed",
+                    "msg": (
+                        f"账号 {account['id']} 页面出现登录拦截，但探活未确认掉线"
+                        f"（state={probe_state}），已保留原账号状态，请稍后重试或点检查刷新。"
+                    ),
+                    "account": account,
+                    "probe": probe,
+                    "videos": [],
+                    "profile": {},
+                }
+            except Exception as exc:
+                page_error = exc
+                break
+    finally:
+        await scraper.close()
+
+    if page_error is not None:
+        cached_account_id = int(tiktok_mention_self_video_cache.get("account_id", 0) or 0)
+        cached_videos = [
+            dict(row)
+            for row in (tiktok_mention_self_video_cache.get("videos", []) or [])
+            if isinstance(row, dict) and str(row.get("url") or "").strip()
+        ]
+        if cached_account_id == int(account["id"]) and cached_videos:
+            tiktok_log(
+                f"[TikTok mention] profile refresh failed; reusing verified video cache for account {account['id']}: {page_error}",
+                "warning",
+            )
+            return {
+                "code": 200,
+                "msg": f"本人主页刷新超时，已复用账号 {account['id']} 的作品缓存。",
+                "account": account,
+                "profile": dict(tiktok_mention_self_video_cache.get("profile") or {}),
+                "videos": cached_videos[:max_videos],
+                "fetched_at": str(tiktok_mention_self_video_cache.get("fetched_at") or "").strip(),
+                "cache_fallback": True,
+            }
+        return {
+            "code": 503,
+            "type": "self_video_page_unavailable",
+            "msg": f"账号 {account['id']} 的本人主页暂时无法读取，请稍后重试。",
+            "detail": str(page_error or "").strip(),
+            "account": account,
+            "videos": [],
+            "profile": {},
+        }
+
+    fetched_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tiktok_mention_self_video_cache.update(
+        {
+            "account_id": int(account["id"]),
+            "profile": result.get("profile", {}) if isinstance(result.get("profile"), dict) else {},
+            "videos": [row for row in (result.get("videos", []) or []) if isinstance(row, dict)],
+            "fetched_at": fetched_at,
+            "selected_video_url": str(
+                tiktok_mention_self_video_cache.get("selected_video_url", "") or ""
+            ).strip(),
+        }
+    )
+    save_tiktok_mention_self_video_cache()
+
+    return {
+        "code": 200,
+        "msg": f"已读取账号 {account['id']} 的个人主页作品列表。",
+        "account": account,
+        "profile": result.get("profile", {}),
+        "videos": result.get("videos", []),
+        "fetched_at": fetched_at,
+    }
+
+
+@router.post("/mention-comment/start")
+async def tiktok_start_mention_comment(request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("执行评论@精准客户")
+    if nurture_conflict:
+        return nurture_conflict
+    global tiktok_mention_comment_running, tiktok_mention_comment_stop_requested, tiktok_mention_comment_background_task
+
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if tiktok_running:
+        return {"code": 400, "msg": "评论采集任务正在执行，请先停止后再开始评论@精准客户。"}
+    if tiktok_video_comment_running:
+        return {"code": 400, "msg": "视频评论任务正在执行，请先停止后再开始评论@精准客户。"}
+    if tiktok_follow_comment_running:
+        return {"code": 400, "msg": "关注评论任务正在执行，请先停止后再开始评论@精准客户。"}
+    if tiktok_interaction_running:
+        return {"code": 400, "msg": "私信任务正在执行，请先停止后再开始评论@精准客户。"}
+    if tiktok_stranger_message_running:
+        return {"code": 400, "msg": "私信引流任务正在执行，请先停止后再开始评论@精准客户。"}
+    if tiktok_group_member_running:
+        return {"code": 400, "msg": "群成员提取任务正在执行，请先停止后再开始评论@精准客户。"}
+    if tiktok_mention_comment_running:
+        return {"code": 400, "msg": "评论@精准客户任务已在执行中。"}
+
+    payload = request if isinstance(request, dict) else {}
+    raw_users = payload.get("users", [])
+    video_url = str(payload.get("video_url", "") or "").strip()
+    video_title = str(payload.get("video_title", "") or "").strip()
+    video_cover_image = str(payload.get("video_cover_image", "") or "").strip()
+    account_id = int(payload.get("account_id", 0) or 0)
+    max_mentions = max(1, min(int(payload.get("max_mentions", TIKTOK_MENTION_COMMENT_MAX_USERS_PER_COMMENT) or TIKTOK_MENTION_COMMENT_MAX_USERS_PER_COMMENT), TIKTOK_MENTION_COMMENT_MAX_USERS_PER_COMMENT))
+
+    if not video_url:
+        return {"code": 400, "msg": "请先选择要执行的自己视频。"}
+    if not isinstance(raw_users, list) or not raw_users:
+        return {"code": 400, "msg": "请先勾选至少一个精准客户。"}
+
+    selected_total = len([row for row in raw_users if isinstance(row, dict)])
+    selected_users = normalize_tiktok_mention_users(raw_users, max_mentions=selected_total or 1)
+    if not selected_users:
+        return {"code": 400, "msg": "当前勾选里没有可用的客户昵称，无法执行 @ 评论。"}
+    available_users, skipped_history_users = split_already_mentioned_users(selected_users)
+    if not available_users:
+        return {
+            "code": 400,
+            "msg": "当前勾选客户都已经执行过 @ 评论，系统已自动拦截重复发送。",
+            "skipped_existing": len(skipped_history_users),
+        }
+    truncated_count = max(0, selected_total - len(selected_users))
+    mention_batches = split_tiktok_mention_comment_batches(
+        available_users,
+        max_mentions_per_comment=max_mentions,
+        max_comment_chars=TIKTOK_MENTION_COMMENT_SAFE_TEXT_LIMIT,
+    )
+    skipped_existing = len(skipped_history_users)
+
+    config = load_global_config()
+    accounts = _normalize_accounts(config.get("tiktok_accounts"))
+    account = next(
+        (row for row in accounts if int(row.get("id", 0) or 0) == account_id and row.get("status") == "online"),
+        None,
+    ) if account_id > 0 else get_active_tiktok_account(config)
+
+    if not account:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的TikTok在线账号，请先登录。"
+        }
+
+    comment_preview = build_tiktok_mention_comment_preview(selected_users, limit=8)
+    tiktok_log(
+        f"[TikTok评论@客户] 准备启动，账号 {account['id']}，作品《{video_title or video_url}》，共 {len(available_users)} 人"
+        + (f"，预计拆成 {len(mention_batches)} 条评论" if mention_batches else "")
+        + (f"，已截断 {truncated_count} 人" if truncated_count else ""),
+        "info",
+    )
+    if skipped_existing:
+        tiktok_log(
+            f"[TikTok评论@客户] 已跳过 {skipped_existing} 位历史执行过的客户，避免重复 @",
+        "info",
+    )
+
+    tiktok_mention_comment_running = True
+    tiktok_mention_comment_stop_requested = False
+    tiktok_mention_comment_background_task = asyncio.create_task(
+        run_tiktok_mention_comments(
+            account=account,
+            video_url=video_url,
+            video_title=video_title,
+            video_cover_image=video_cover_image,
+            selected_users=available_users,
+            selected_total=selected_total,
+            truncated_count=truncated_count,
+        )
+    )
+    tiktok_mention_self_video_cache["selected_video_url"] = video_url
+    save_tiktok_mention_self_video_cache()
+    return {
+        "code": 200,
+        "msg": f"评论@精准客户任务已启动，使用账号 {account['id']}，作品《{video_title or video_url}》，本次计划发送 {len(available_users)} 人"
+        + (f"，自动拆成 {len(mention_batches)} 条评论" if mention_batches else "")
+        + (f"，已截断 {truncated_count} 人" if truncated_count else "")
+        + (f"，已跳过 {skipped_existing} 位历史执行客户" if skipped_existing else ""),
+        "total": len(available_users),
+        "selected_total": selected_total,
+        "truncated": truncated_count,
+        "skipped_existing": skipped_existing,
+        "account_id": account["id"],
+        "comment_preview": build_tiktok_mention_comment_preview(available_users, limit=8),
+    }
+
+
+@router.post("/mention-comment/stop")
+async def tiktok_stop_mention_comment():
+    global tiktok_mention_comment_stop_requested, tiktok_mention_comment_background_task
+
+    reconcile_tiktok_mention_comment_runtime_state()
+    if not tiktok_mention_comment_running:
+        tiktok_mention_comment_stop_requested = False
+        tiktok_mention_comment_background_task = None
+        return {"code": 200, "msg": "当前没有正在执行的评论@精准客户任务。"}
+
+    tiktok_mention_comment_stop_requested = True
+    background_task = tiktok_mention_comment_background_task
+    if background_task and not background_task.done():
+        # A worker can be blocked inside Playwright/CDP and never reach its
+        # cooperative stop checks. Cancel it so its finally block releases
+        # the scraper and clears the runtime state promptly.
+        background_task.cancel()
+    tiktok_log("[TikTok评论@客户] 已请求停止", "warning")
+    return {"code": 200, "msg": "已请求停止评论@精准客户任务。"}
+
+
+@router.get("/video-comment/status")
+async def tiktok_video_comment_status():
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    return {
+        "code": 200,
+        "running": bool(tiktok_video_comment_state.get("running")),
+        "state": tiktok_video_comment_state,
+    }
+
+
+@router.post("/video-comment/upload-image")
+async def tiktok_upload_video_comment_image(request: Request, file: Optional[UploadFile] = File(None)):
+    upload = file
+    filename = ""
+    content = b""
+    content_type = str(request.headers.get("content-type") or "").lower()
+
+    if "application/json" in content_type:
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            return {"code": 400, "msg": f"读取上传 JSON 失败：{exc}"}
+        if not isinstance(payload, dict):
+            return {"code": 400, "msg": "上传图片参数格式不正确。"}
+        filename = str(payload.get("filename") or payload.get("name") or "").strip()
+        encoded = str(
+            payload.get("data_base64")
+            or payload.get("base64")
+            or payload.get("dataUrl")
+            or payload.get("data_url")
+            or ""
+        ).strip()
+        if "," in encoded and encoded.lower().startswith("data:"):
+            encoded = encoded.split(",", 1)[1]
+        if not encoded:
+            return {"code": 400, "msg": "没有收到评论图片内容，请重新选择图片后再试。"}
+        try:
+            content = base64.b64decode(encoded, validate=True)
+        except Exception as exc:
+            return {"code": 400, "msg": f"评论图片内容解析失败：{exc}"}
+
+    if not content and upload is None:
+        try:
+            form = await request.form()
+        except Exception as exc:
+            return {"code": 400, "msg": f"读取上传表单失败：{exc}"}
+        for value in form.values():
+            if hasattr(value, "filename") and hasattr(value, "read"):
+                upload = value
+                break
+    if not content and upload is None:
+        return {"code": 400, "msg": "没有收到评论图片文件，请重新选择图片后再试。"}
+
+    if not content and upload is not None:
+        filename = str(upload.filename or "").strip()
+        content = await upload.read()
+
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        return {"code": 400, "msg": "请上传 png、jpg、jpeg、webp 或 gif 图片"}
+
+    max_bytes = 15 * 1024 * 1024
+    if not content:
+        return {"code": 400, "msg": "图片文件为空"}
+    if len(content) > max_bytes:
+        return {"code": 400, "msg": "图片不能超过 15MB"}
+
+    TIKTOK_COMMENT_IMAGE_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = f"video_comment_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{random.randint(1000, 9999)}{suffix}"
+    target_path = (TIKTOK_COMMENT_IMAGE_DIR / safe_name).resolve()
+    try:
+        target_path.write_bytes(content)
+    except Exception as exc:
+        return {"code": 500, "msg": f"保存评论图片失败：{exc}"}
+
+    return {
+        "code": 200,
+        "msg": "评论图片已上传",
+        "image_path": str(target_path),
+        "filename": safe_name,
+        "size": len(content),
+    }
+
+
+@router.post("/video-comment/start")
+async def tiktok_start_video_comment(http_request: Request = None, request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("执行视频评论")
+    if nurture_conflict:
+        return nurture_conflict
+    set_tiktok_ai_auth_token_from_request(http_request)
+    global tiktok_video_comment_running, tiktok_video_comment_stop_requested, tiktok_video_comment_background_task
+
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if tiktok_running:
+        return {"code": 400, "msg": "评论采集任务正在执行，请先停止后再开始视频评论。"}
+    if tiktok_interaction_running:
+        return {"code": 400, "msg": "私信任务正在执行，请先停止后再开始视频评论。"}
+    if tiktok_follow_comment_running:
+        return {"code": 400, "msg": "关注评论任务正在执行，请先停止后再开始视频评论。"}
+    if tiktok_mention_comment_running:
+        return {"code": 400, "msg": "评论@精准客户任务正在执行，请先停止后再开始视频评论。"}
+    if tiktok_stranger_message_running:
+        return {"code": 400, "msg": "私信引流任务正在执行，请先停止后再开始视频评论。"}
+    if tiktok_group_member_running:
+        return {"code": 400, "msg": "群成员提取任务正在执行，请先停止后再开始视频评论。"}
+    if tiktok_video_comment_running:
+        return {"code": 400, "msg": "视频评论任务已在执行中。"}
+
+    payload = request if isinstance(request, dict) else {}
+    comment_mode = normalize_tiktok_video_comment_mode(payload.get("comment_mode"))
+    comment_text = str(payload.get("comment_text", "") or "").strip()
+    comment_prompt = str(payload.get("comment_prompt", "") or "").strip()
+    comment_seed_text = str(payload.get("comment_seed_text", "") or "").strip()
+    comment_image_path = str(payload.get("comment_image_path", "") or payload.get("image_path", "") or "").strip()
+    raw_selected_ids = payload.get("selected_task_ids")
+    raw_interval_min = payload.get("interval_minutes_min", payload.get("interval_minutes", 4))
+    raw_interval_max = payload.get("interval_minutes_max", payload.get("interval_minutes", 6))
+    interval_minutes_min = max(0, min(float(raw_interval_min or 4), 1440))
+    interval_minutes_max = max(0, min(float(raw_interval_max or interval_minutes_min), 1440))
+    if interval_minutes_max < interval_minutes_min:
+        interval_minutes_min, interval_minutes_max = interval_minutes_max, interval_minutes_min
+    interval_seconds_min = max(0, min(int(interval_minutes_min * 60), 24 * 60 * 60))
+    interval_seconds_max = max(interval_seconds_min, min(int(interval_minutes_max * 60), 24 * 60 * 60))
+
+    if comment_image_path and not os.path.isfile(comment_image_path):
+        return {"code": 400, "msg": f"评论图片不存在：{comment_image_path}"}
+    if comment_mode == "fixed" and not comment_text and not comment_image_path:
+        return {"code": 400, "msg": "请先填写视频评论内容。"}
+    if comment_mode == "rewrite" and not comment_seed_text:
+        return {"code": 400, "msg": "请先填写用于 AI 改编的基准文案。"}
+
+    selected_task_ids: Optional[Set[int]] = None
+    selected_total = 0
+    if raw_selected_ids is not None:
+        if not isinstance(raw_selected_ids, list):
+            return {"code": 400, "msg": "selected_task_ids must be a list"}
+        selected_task_ids = {int(task_id) for task_id in raw_selected_ids}
+        selected_total = len(selected_task_ids)
+        if not selected_task_ids:
+            return {"code": 400, "msg": "请先勾选至少一个视频任务。"}
+
+    runnable_tasks = get_commentable_tiktok_tasks(selected_task_ids)
+    if not runnable_tasks:
+        return {"code": 400, "msg": "没有可评论的视频任务，已评论过的视频会自动跳过。"}
+    skipped_commented = max(0, selected_total - len(runnable_tasks)) if selected_total else 0
+
+    config = load_global_config()
+    if comment_mode in {"ai", "rewrite"} and not tiktok_ai_available(config, http_request):
+        return {"code": 400, "msg": "当前还没有配置 AI 接口 Key，暂时不能使用 AI 评论模式。"}
+
+    account = get_active_tiktok_account(config)
+    if not account:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的TikTok在线账号，请先登录。",
+        }
+
+    mode_label = tiktok_video_comment_mode_label(comment_mode)
+    tiktok_log(
+        f"[TikTok视频评论] 准备启动，共 {len(runnable_tasks)} 个视频，间隔 {interval_minutes_min:g}-{interval_minutes_max:g} 分钟，模式 {mode_label}"
+        + (f"，跳过已评论 {skipped_commented} 条" if skipped_commented else ""),
+        "info",
+    )
+    tiktok_video_comment_running = True
+    tiktok_video_comment_stop_requested = False
+    tiktok_video_comment_background_task = asyncio.create_task(
+        run_tiktok_video_comments(
+            runnable_tasks,
+            comment_mode,
+            comment_text,
+            comment_prompt,
+            comment_seed_text,
+            account,
+            interval_seconds_min,
+            interval_seconds_max,
+            comment_image_path,
+        )
+    )
+    return {
+        "code": 200,
+        "msg": f"视频评论任务已启动，使用账号 {account['id']}，共 {len(runnable_tasks)} 条任务，模式 {mode_label}，间隔 {interval_minutes_min:g}-{interval_minutes_max:g} 分钟随机"
+        + (f"，已跳过 {skipped_commented} 条已评论视频" if skipped_commented else ""),
+        "total": len(runnable_tasks),
+        "account_id": account["id"],
+        "interval_seconds": interval_seconds_min,
+        "interval_seconds_min": interval_seconds_min,
+        "interval_seconds_max": interval_seconds_max,
+        "comment_mode": comment_mode,
+        "skipped_commented": skipped_commented,
+    }
+
+
+@router.post("/video-comment/stop")
+async def tiktok_stop_video_comment():
+    global tiktok_video_comment_stop_requested, tiktok_video_comment_background_task
+
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    if not tiktok_video_comment_running:
+        tiktok_video_comment_stop_requested = False
+        tiktok_video_comment_background_task = None
+        return {"code": 200, "msg": "当前没有正在执行的视频评论任务。"}
+
+    tiktok_video_comment_stop_requested = True
+    background_task = tiktok_video_comment_background_task
+    if background_task and not background_task.done():
+        background_task.cancel()
+    tiktok_log("[TikTok视频评论] 已请求停止", "warning")
+    return {"code": 200, "msg": "已请求停止视频评论任务。"}
+
+
+@router.get("/follow-comment/status")
+async def tiktok_follow_comment_status(lite: bool = False, include_users: bool = True):
+    reconcile_tiktok_follow_comment_runtime_state()
+    users = None
+    if include_users:
+        users = [
+            build_tiktok_interaction_user_status_payload(row, lite=lite)
+            for row in await asyncio.to_thread(collect_tiktok_interaction_users)
+        ]
+    return {
+        "code": 200,
+        "running": bool(tiktok_follow_comment_state.get("running")),
+        "state": tiktok_follow_comment_state,
+        **({"users": users} if users is not None else {}),
+    }
+
+
+@router.post("/follow-comment/start")
+async def tiktok_start_follow_comment(http_request: Request = None, request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("执行关注评论")
+    if nurture_conflict:
+        return nurture_conflict
+    set_tiktok_ai_auth_token_from_request(http_request)
+    global tiktok_follow_comment_running, tiktok_follow_comment_stop_requested, tiktok_follow_comment_background_task
+
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if tiktok_running:
+        return {"code": 400, "msg": "评论采集任务正在执行，请先停止后再开始关注评论。"}
+    if tiktok_video_comment_running:
+        return {"code": 400, "msg": "视频评论任务正在执行，请先停止后再开始关注评论。"}
+    if tiktok_mention_comment_running:
+        return {"code": 400, "msg": "评论@精准客户任务正在执行，请先停止后再开始关注评论。"}
+    if tiktok_interaction_running:
+        return {"code": 400, "msg": "私信任务正在执行，请先停止后再开始关注评论。"}
+    if tiktok_group_member_running:
+        return {"code": 400, "msg": "群成员提取任务正在执行，请先停止后再开始关注评论。"}
+    if tiktok_stranger_message_running:
+        return {"code": 400, "msg": "私信引流任务正在执行，请先停止后再开始关注评论。"}
+    if tiktok_follow_comment_running:
+        return {"code": 400, "msg": "关注评论任务已在执行中。"}
+
+    payload = request if isinstance(request, dict) else {}
+    comment_mode = normalize_tiktok_video_comment_mode(payload.get("comment_mode"))
+    comment_text = str(payload.get("comment_text", "") or "").strip()
+    comment_prompt = str(payload.get("comment_prompt", "") or "").strip()
+    comment_seed_text = str(payload.get("comment_seed_text", "") or "").strip()
+    comment_image_path = str(payload.get("comment_image_path", "") or payload.get("image_path", "") or "").strip()
+    raw_users = payload.get("users", [])
+    raw_interval_min = payload.get("interval_minutes_min", payload.get("interval_minutes", 4))
+    raw_interval_max = payload.get("interval_minutes_max", payload.get("interval_minutes", 6))
+    interval_minutes_min = max(0, min(float(raw_interval_min or 4), 1440))
+    interval_minutes_max = max(0, min(float(raw_interval_max or interval_minutes_min), 1440))
+    if interval_minutes_max < interval_minutes_min:
+        interval_minutes_min, interval_minutes_max = interval_minutes_max, interval_minutes_min
+    interval_seconds_min = max(0, min(int(interval_minutes_min * 60), 24 * 60 * 60))
+    interval_seconds_max = max(interval_seconds_min, min(int(interval_minutes_max * 60), 24 * 60 * 60))
+    if comment_image_path and not os.path.isfile(comment_image_path):
+        return {"code": 400, "msg": f"评论图片不存在：{comment_image_path}"}
+    if comment_mode == "fixed" and not comment_text and not comment_image_path:
+        return {"code": 400, "msg": "请先填写主页首作品评论内容。"}
+    if comment_mode == "rewrite" and not comment_seed_text:
+        return {"code": 400, "msg": "请先填写基准文案后再执行 AI 改编。"}
+    if not isinstance(raw_users, list) or not raw_users:
+        return {"code": 400, "msg": "请先勾选至少一个高意向用户。"}
+
+    valid_pool = {
+        user_choice_key(row): row
+        for row in await asyncio.to_thread(collect_tiktok_interaction_users)
+    }
+    selected_users: List[Dict] = []
+    skipped_completed_users: List[Dict] = []
+    seen = set()
+    for raw_user in raw_users:
+        key = user_choice_key(raw_user if isinstance(raw_user, dict) else {})
+        if not key or key in seen:
+            continue
+        candidate = valid_pool.get(key)
+        if not candidate:
+            continue
+        seen.add(key)
+        if str(candidate.get("follow_comment_status", "") or "").strip() == "completed":
+            skipped_completed_users.append(candidate)
+            continue
+        selected_users.append(candidate)
+
+    if not selected_users:
+        if skipped_completed_users:
+            return {
+                "code": 400,
+                "msg": f"所选用户都已执行过关注评论，已自动跳过 {len(skipped_completed_users)} 人。",
+                "skipped_completed": len(skipped_completed_users),
+            }
+        return {"code": 400, "msg": "当前任务列表里没有可用的高意向用户。"}
+
+    config = load_global_config()
+    if comment_mode in {"ai", "rewrite"} and not tiktok_ai_available(config, http_request):
+        return {
+            "code": 400,
+            "msg": "当前未配置 AI 接口 Key，不能使用 AI 评论模式。",
+        }
+    accounts = get_online_tiktok_accounts(config)
+    if not accounts:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的TikTok在线账号，请先登录。",
+        }
+
+    batches = distribute_interaction_users(selected_users, accounts)
+    for item in batches:
+        update_tiktok_follow_comment_users(
+            item["users"],
+            status="queued",
+            error="",
+            comment_text=comment_text if comment_mode == "fixed" else "",
+            account_id=item["account"]["id"],
+            result="",
+            started_at="",
+            finished_at="",
+        )
+
+    tiktok_follow_comment_running = True
+    tiktok_follow_comment_stop_requested = False
+    tiktok_follow_comment_background_task = asyncio.create_task(
+        run_tiktok_follow_comments(
+            selected_users,
+            comment_mode,
+            comment_text,
+            comment_prompt,
+            comment_seed_text,
+            accounts,
+            interval_seconds_min,
+            interval_seconds_max,
+            comment_image_path,
+        )
+    )
+    account_ids = [item["account"]["id"] for item in batches]
+    interval_desc = (
+        f"{interval_minutes_min:g}-{interval_minutes_max:g} 分钟随机"
+        if interval_minutes_min != interval_minutes_max
+        else f"{interval_minutes_min:g} 分钟"
+    )
+    tiktok_log(
+        f"[TikTok关注评论] 已启动，并发账号 {', '.join(str(account_id) for account_id in account_ids)}，共 {len(selected_users)} 人，间隔 {interval_desc}，模式 {tiktok_video_comment_mode_label(comment_mode)}",
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": (
+            f"关注评论任务已启动，使用 {len(account_ids)} 个账号并发，共 {len(selected_users)} 人"
+            + (
+                f"，已自动跳过 {len(skipped_completed_users)} 个已完成用户"
+                if skipped_completed_users
+                else ""
+            )
+        ),
+        "total": len(selected_users),
+        "skipped_completed": len(skipped_completed_users),
+        "account_id": account_ids[0] if len(account_ids) == 1 else None,
+        "account_ids": account_ids,
+        "interval_seconds": interval_seconds_min,
+        "interval_seconds_min": interval_seconds_min,
+        "interval_seconds_max": interval_seconds_max,
+        "comment_mode": comment_mode,
+        "comment_image_path": comment_image_path,
+    }
+
+
+@router.post("/follow-comment/stop")
+async def tiktok_stop_follow_comment():
+    global tiktok_follow_comment_stop_requested, tiktok_follow_comment_background_task
+
+    reconcile_tiktok_follow_comment_runtime_state()
+    if not tiktok_follow_comment_running:
+        tiktok_follow_comment_stop_requested = False
+        tiktok_follow_comment_background_task = None
+        return {"code": 200, "msg": "当前没有正在执行的关注评论任务。"}
+
+    tiktok_follow_comment_stop_requested = True
+    tiktok_follow_comment_state["message"] = "关注评论任务停止中"
+    background_task = tiktok_follow_comment_background_task
+    if background_task and not background_task.done():
+        background_task.cancel()
+    tiktok_log("[TikTok关注评论] 已请求停止", "warning")
+    return {"code": 200, "msg": "已请求停止关注评论任务。"}
+
+
+@router.get("/interaction/status")
+async def tiktok_interaction_status(lite: bool = False, include_users: bool = True):
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    users = None
+    if include_users:
+        users = [
+            build_tiktok_interaction_user_status_payload(row, lite=lite)
+            for row in await asyncio.to_thread(collect_tiktok_interaction_users)
+        ]
+    return {
+        "code": 200,
+        "running": bool(tiktok_interaction_state.get("running")),
+        "state": tiktok_interaction_state,
+        **({"users": users} if users is not None else {}),
+    }
+
+
+@router.post("/interaction/start")
+async def tiktok_start_interaction(http_request: Request = None, request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("执行私信互动")
+    if nurture_conflict:
+        return nurture_conflict
+    set_tiktok_ai_auth_token_from_request(http_request)
+    global tiktok_interaction_running, tiktok_interaction_stop_requested, tiktok_interaction_background_task
+
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if tiktok_running:
+        return {"code": 400, "msg": "评论采集任务正在执行，请先停止后再开始私信。"}
+    if tiktok_video_comment_running:
+        return {"code": 400, "msg": "视频评论任务正在执行，请先停止后再开始私信。"}
+    if tiktok_mention_comment_running:
+        return {"code": 400, "msg": "评论@精准客户任务正在执行，请先停止后再开始私信。"}
+    if tiktok_follow_comment_running:
+        return {"code": 400, "msg": "关注评论任务正在执行，请先停止后再开始私信。"}
+    if tiktok_group_member_running:
+        return {"code": 400, "msg": "群成员提取任务正在执行，请先停止后再开始私信。"}
+    if tiktok_stranger_message_running:
+        return {"code": 400, "msg": "私信引流任务正在执行，请先停止后再开始私信。"}
+    if tiktok_interaction_running:
+        return {"code": 400, "msg": "私信任务已在执行中。"}
+
+    payload = request if isinstance(request, dict) else {}
+    message_mode = normalize_tiktok_video_comment_mode(payload.get("message_mode"))
+    fixed_messages = normalize_tiktok_interaction_fixed_messages(payload)
+    message = fixed_messages[0] if fixed_messages else ""
+    message_prompt = str(payload.get("message_prompt", "") or "").strip()
+    message_seed_text = str(payload.get("message_seed_text", "") or "").strip()
+    raw_users = payload.get("users", [])
+    raw_interval_seconds_min = payload.get("interval_seconds_min", payload.get("interval_seconds"))
+    raw_interval_seconds_max = payload.get("interval_seconds_max", payload.get("interval_seconds"))
+    if raw_interval_seconds_min is None and raw_interval_seconds_max is None:
+        raw_interval_min = payload.get("interval_minutes_min", payload.get("interval_minutes", 4))
+        raw_interval_max = payload.get("interval_minutes_max", payload.get("interval_minutes", 6))
+        interval_minutes_min = max(0, min(float(raw_interval_min or 4), 1440))
+        interval_minutes_max = max(0, min(float(raw_interval_max or interval_minutes_min), 1440))
+        if interval_minutes_max < interval_minutes_min:
+            interval_minutes_min, interval_minutes_max = interval_minutes_max, interval_minutes_min
+        interval_seconds_min = max(0, min(int(interval_minutes_min * 60), 24 * 60 * 60))
+        interval_seconds_max = max(interval_seconds_min, min(int(interval_minutes_max * 60), 24 * 60 * 60))
+    else:
+        interval_seconds_min = max(0, min(int(float(raw_interval_seconds_min or 20)), 24 * 60 * 60))
+        interval_seconds_max = max(
+            interval_seconds_min,
+            min(int(float(raw_interval_seconds_max or interval_seconds_min)), 24 * 60 * 60),
+        )
+    if message_mode == "fixed" and not message:
+        return {"code": 400, "msg": "请先填写固定私信内容。"}
+    if message_mode == "rewrite" and not message_seed_text:
+        return {"code": 400, "msg": "请先填写私信基准文案后再执行 AI 改编。"}
+    if not isinstance(raw_users, list) or not raw_users:
+        return {"code": 400, "msg": "请先勾选至少一个高意向用户。"}
+
+    valid_pool = {
+        user_choice_key(row): row
+        for row in await asyncio.to_thread(collect_tiktok_interaction_users)
+    }
+    selected_users: List[Dict] = []
+    seen = set()
+    skipped_sent = 0
+    for raw_user in raw_users:
+        key = user_choice_key(raw_user if isinstance(raw_user, dict) else {})
+        if not key or key in seen:
+            continue
+        candidate = valid_pool.get(key)
+        if not candidate:
+            continue
+        status = str(candidate.get("interaction_status", "pending") or "pending").strip().lower()
+        if status == "sent":
+            skipped_sent += 1
+            continue
+        seen.add(key)
+        selected_users.append(candidate)
+
+    if not selected_users:
+        if skipped_sent:
+            return {"code": 400, "msg": f"当前勾选的 {skipped_sent} 位客户都已经完成私信发送，不需要重复执行。"}
+        return {"code": 400, "msg": "当前任务列表里没有可用的高意向用户。"}
+    if message_mode == "fixed":
+        assign_tiktok_interaction_fixed_messages(selected_users, fixed_messages)
+
+    config = load_global_config()
+    if message_mode in {"ai", "rewrite"} and not tiktok_ai_available(config, http_request):
+        return {
+            "code": 400,
+            "msg": "当前未配置 AI 接口 Key，不能使用 AI 私信模式。",
+        }
+    accounts = get_online_tiktok_accounts(config)
+    if not accounts:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的TikTok在线账号，请先登录。",
+        }
+
+    batches = distribute_interaction_users(selected_users, accounts)
+    for item in batches:
+        update_tiktok_interaction_users(
+            item["users"],
+            status="queued",
+            error="",
+            message="",
+            account_id=item["account"]["id"],
+            started_at="",
+            finished_at="",
+        )
+
+    tiktok_interaction_running = True
+    tiktok_interaction_stop_requested = False
+    tiktok_interaction_background_task = asyncio.create_task(
+        run_tiktok_interactions(
+            selected_users,
+            message_mode,
+            message,
+            fixed_messages,
+            message_prompt,
+            message_seed_text,
+            accounts,
+            interval_seconds_min,
+            interval_seconds_max,
+        )
+    )
+    account_ids = [item["account"]["id"] for item in batches]
+    interval_desc = (
+        f"{interval_seconds_min}-{interval_seconds_max} 秒随机"
+        if interval_seconds_min != interval_seconds_max
+        else f"{interval_seconds_min} 秒"
+    )
+    tiktok_log(
+        f"[TikTok私信] 已启动，并发账号 {', '.join(str(account_id) for account_id in account_ids)}，共 {len(selected_users)} 人，已按账号自动分配，间隔 {interval_desc}，模式 {tiktok_video_comment_mode_label(message_mode)}"
+        + (f"，固定话术 {len(fixed_messages)} 条轮换" if message_mode == "fixed" and len(fixed_messages) > 1 else ""),
+        "success",
+    )
+    launch_msg = f"私信任务已启动，使用 {len(account_ids)} 个账号并发，共 {len(selected_users)} 人，已按账号自动分配，每账号间隔 {interval_desc}"
+    if message_mode == "fixed" and len(fixed_messages) > 1:
+        launch_msg += f"，固定话术 {len(fixed_messages)} 条轮换发送"
+    if skipped_sent:
+        launch_msg += f"，已自动跳过 {skipped_sent} 位已发送客户"
+    return {
+        "code": 200,
+        "msg": launch_msg,
+        "total": len(selected_users),
+        "account_id": account_ids[0] if len(account_ids) == 1 else None,
+        "account_ids": account_ids,
+        "concurrent_accounts": len(account_ids),
+        "interval_seconds": interval_seconds_min,
+        "interval_seconds_min": interval_seconds_min,
+        "interval_seconds_max": interval_seconds_max,
+        "message_mode": message_mode,
+        "skipped_sent": skipped_sent,
+    }
+
+
+@router.post("/interaction/stop")
+async def tiktok_stop_interaction():
+    global tiktok_interaction_stop_requested, tiktok_interaction_background_task
+
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    if not tiktok_interaction_running:
+        tiktok_interaction_stop_requested = False
+        tiktok_interaction_background_task = None
+        return {"code": 200, "msg": "当前没有正在执行的私信任务。"}
+
+    tiktok_interaction_stop_requested = True
+    tiktok_interaction_state["message"] = "私信任务停止中"
+    background_task = tiktok_interaction_background_task
+    if background_task and not background_task.done():
+        background_task.cancel()
+    tiktok_log("[TikTok私信] 已请求停止", "warning")
+    return {"code": 200, "msg": "已请求停止私信任务。"}
+
+
+@router.post("/interaction/reset")
+async def tiktok_reset_interaction(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    raw_users = payload.get("users", [])
+    if not isinstance(raw_users, list) or not raw_users:
+        return {"code": 400, "msg": "请先勾选要重置的客户。"}
+
+    target_status = str(payload.get("status", "pending") or "pending").strip().lower()
+    if target_status not in {"pending", "sent"}:
+        return {"code": 400, "msg": "目标状态只能是「待发送」或「已发送」。"}
+
+    valid_pool = {
+        user_choice_key(row): row
+        for row in await asyncio.to_thread(collect_tiktok_interaction_users)
+    }
+    rows: List[Dict] = []
+    for raw_user in raw_users:
+        key = user_choice_key(raw_user if isinstance(raw_user, dict) else {})
+        if not key:
+            continue
+        candidate = valid_pool.get(key)
+        if not candidate:
+            continue
+        current = str(candidate.get("interaction_status", "") or "").strip().lower()
+        if target_status == "pending" and current != "interrupted":
+            continue
+        if target_status == "sent" and current not in {"interrupted", "failed", "pending"}:
+            continue
+        rows.append(candidate)
+
+    if not rows:
+        return {"code": 400, "msg": "没有可重置的客户，可能状态已经更新。"}
+
+    finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if target_status == "sent" else ""
+    await asyncio.to_thread(
+        update_tiktok_interaction_users,
+        rows,
+        status=target_status,
+        error="",
+        finished_at=finished_at,
+    )
+    label = "待发送" if target_status == "pending" else "已发送"
+    tiktok_log(f"[TikTok私信] 已将 {len(rows)} 位客户的私信状态重置为「{label}」", "info")
+    return {"code": 200, "msg": f"已将 {len(rows)} 位客户重置为「{label}」。", "updated": len(rows)}
+
+
+@router.get("/inbox/status")
+async def tiktok_inbox_status():
+    reconcile_tiktok_inbox_runtime_state()
+    await ensure_tiktok_inbox_monitor_scheduler()
+    await ensure_tiktok_self_comment_monitor_scheduler()
+    return {
+        "code": 200,
+        "running": bool(tiktok_inbox_state.get("running")),
+        "state": tiktok_inbox_state,
+        "results": collect_tiktok_inbox_results(),
+        "monitors": list_tiktok_inbox_monitor_states(),
+    }
+
+
+@router.get("/self-comment-monitor/status")
+async def tiktok_self_comment_monitor_status(account_id: int = 0):
+    await ensure_tiktok_self_comment_monitor_scheduler()
+    config = load_global_config()
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    target_account_id = int((account or {}).get("id", 0) or account_id or 0)
+    state = get_tiktok_self_comment_monitor_state(target_account_id) if target_account_id > 0 else normalize_tiktok_self_comment_monitor_state({})
+    return {
+        "code": 200,
+        "running": bool(state.get("running")),
+        "state": state,
+        "results": collect_tiktok_self_comment_monitor_results(target_account_id),
+        "monitors": list_tiktok_self_comment_monitor_states(),
+        "account_id": target_account_id or None,
+    }
+
+
+@router.post("/self-comment-monitor/config")
+async def tiktok_save_self_comment_monitor_config_endpoint(http_request: Request = None, request: Optional[dict] = None):
+    set_tiktok_ai_auth_token_from_request(http_request)
+    payload = request if isinstance(request, dict) else {}
+    config = load_global_config()
+    account_id = int(payload.get("account_id", 0) or 0)
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    target_account_id = int((account or {}).get("id", 0) or account_id or 0)
+    if target_account_id <= 0:
+        return {"code": 400, "msg": "请先选择要保存默认回复配置的TikTok账号。"}
+
+    interval_minutes = max(1, min(int(payload.get("interval_minutes", 30) or 30), 1440))
+    max_videos = max(1, min(int(payload.get("max_videos", 20) or 20), 100))
+    max_comments_per_video = max(5, min(int(payload.get("max_comments_per_video", 80) or 80), 500))
+    auto_reply_enabled = bool(payload.get("auto_reply_enabled", False))
+    reply_mode = normalize_tiktok_inbox_reply_mode(payload.get("reply_mode", "fixed"))
+    reply_message = str(payload.get("reply_message", "") or payload.get("message", "") or "").strip()
+    reply_prompt = str(payload.get("reply_prompt", "") or "").strip()
+    contact_value = str(payload.get("contact_value", "") or "").strip()
+    reply_image_path = str(payload.get("reply_image_path", "") or payload.get("comment_image_path", "") or payload.get("image_path", "") or "").strip()
+    if reply_image_path and not os.path.isfile(reply_image_path):
+        return {"code": 400, "msg": f"评论回复图片不存在：{reply_image_path}"}
+
+    validation_error = validate_tiktok_inbox_reply_settings(
+        auto_reply_enabled=auto_reply_enabled,
+        reply_mode=reply_mode,
+        reply_message=reply_message,
+        reply_prompt=reply_prompt,
+        contact_value=contact_value,
+        reply_image_path=reply_image_path,
+    )
+    if validation_error:
+        return {"code": 400, "msg": validation_error}
+    if auto_reply_enabled and reply_mode in {"ai", "rewrite"} and not tiktok_ai_available(config, http_request):
+        return {"code": 400, "msg": "当前还没有配置 AI 接口 Key，暂时不能保存 AI 自动回复配置。"}
+
+    existing = get_tiktok_self_comment_monitor_state(target_account_id, create=True)
+    state = normalize_tiktok_self_comment_monitor_state(
+        {
+            **existing,
+            "interval_minutes": interval_minutes,
+            "account_id": target_account_id,
+            "max_videos": max_videos,
+            "max_comments_per_video": max_comments_per_video,
+            "auto_reply_enabled": auto_reply_enabled,
+            "reply_mode": reply_mode,
+            "reply_message": reply_message,
+            "reply_prompt": reply_prompt,
+            "contact_value": contact_value,
+            "reply_image_path": reply_image_path,
+            "message": existing.get("message") or "我的评论区默认回复配置已保存。",
+        },
+        account_id=target_account_id,
+    )
+    tiktok_self_comment_monitor_states[str(target_account_id)] = state
+    save_tiktok_self_comment_monitor_config()
+    tiktok_log(f"[TikTok我的评论区] 已保存账号 {target_account_id} 默认回复配置。", "success")
+    return {
+        "code": 200,
+        "msg": f"账号 {target_account_id} 的默认回复配置已保存。",
+        "monitor": state,
+        "monitors": list_tiktok_self_comment_monitor_states(),
+    }
+
+
+@router.post("/self-comment-monitor/start")
+async def tiktok_start_self_comment_monitor(http_request: Request = None, request: Optional[dict] = None):
+    set_tiktok_ai_auth_token_from_request(http_request)
+    payload = request if isinstance(request, dict) else {}
+    config = load_global_config()
+    account_id = int(payload.get("account_id", 0) or 0)
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    if not account:
+        return {"code": 400, "type": "no_online_account", "msg": "当前没有可用的TikTok在线账号，请先登录。"}
+    if str(account.get("status", "") or "").strip() != "online":
+        return {"code": 400, "type": "account_waiting_login", "msg": f"账号 {account.get('id')} 还没有完成登录，请先检查或登录。"}
+
+    interval_minutes = max(1, min(int(payload.get("interval_minutes", 30) or 30), 1440))
+    max_videos = max(1, min(int(payload.get("max_videos", 20) or 20), 100))
+    max_comments_per_video = max(5, min(int(payload.get("max_comments_per_video", 80) or 80), 500))
+    auto_reply_enabled = bool(payload.get("auto_reply_enabled", False))
+    reply_mode = normalize_tiktok_inbox_reply_mode(payload.get("reply_mode", "fixed"))
+    reply_message = str(payload.get("reply_message", "") or payload.get("message", "") or "").strip()
+    reply_prompt = str(payload.get("reply_prompt", "") or "").strip()
+    contact_value = str(payload.get("contact_value", "") or "").strip()
+    reply_image_path = str(payload.get("reply_image_path", "") or payload.get("comment_image_path", "") or payload.get("image_path", "") or "").strip()
+    if reply_image_path and not os.path.isfile(reply_image_path):
+        return {"code": 400, "msg": f"评论回复图片不存在：{reply_image_path}"}
+    validation_error = validate_tiktok_inbox_reply_settings(
+        auto_reply_enabled=auto_reply_enabled,
+        reply_mode=reply_mode,
+        reply_message=reply_message,
+        reply_prompt=reply_prompt,
+        contact_value=contact_value,
+        reply_image_path=reply_image_path,
+    )
+    if validation_error:
+        return {"code": 400, "msg": validation_error}
+    if auto_reply_enabled and reply_mode in {"ai", "rewrite"} and not tiktok_ai_available(config, http_request):
+        return {"code": 400, "msg": "当前还没有配置 AI 接口 Key，暂时不能开启 AI 自动回复。"}
+
+    target_account_id = int(account.get("id", 0) or 0)
+    task = tiktok_self_comment_monitor_tasks_by_account.get(target_account_id)
+    if task and not task.done():
+        return {"code": 400, "msg": f"账号 {target_account_id} 的我的评论区监控正在执行中，请稍后再试。"}
+
+    state = normalize_tiktok_self_comment_monitor_state(
+        {
+            "enabled": True,
+            "running": False,
+            "interval_minutes": interval_minutes,
+            "account_id": target_account_id,
+            "max_videos": max_videos,
+            "max_comments_per_video": max_comments_per_video,
+            "auto_reply_enabled": auto_reply_enabled,
+            "reply_mode": reply_mode,
+            "reply_message": reply_message,
+            "reply_prompt": reply_prompt,
+            "contact_value": contact_value,
+            "reply_image_path": reply_image_path,
+            "last_error": "",
+            "last_skip_reason": "",
+            "message": "我的评论区监控已开启，准备立即检查一轮。",
+        },
+        account_id=target_account_id,
+    )
+    state["next_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tiktok_self_comment_monitor_states[str(target_account_id)] = state
+    save_tiktok_self_comment_monitor_config()
+    tiktok_self_comment_monitor_tasks_by_account[target_account_id] = asyncio.create_task(
+        run_tiktok_self_comment_monitor_cycle(target_account_id, trigger_type="manual")
+    )
+    tiktok_log(
+        f"[TikTok我的评论区] 已开启账号 {target_account_id} 监控：作品 {max_videos} 个，每个最多 {max_comments_per_video} 条，间隔 {interval_minutes} 分钟，自动回复={'开启' if auto_reply_enabled else '关闭'}。",
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": f"账号 {target_account_id} 的我的评论区监控已开启，并会立即检查一轮。",
+        "monitor": state,
+        "monitors": list_tiktok_self_comment_monitor_states(),
+    }
+
+
+@router.post("/self-comment-monitor/stop")
+async def tiktok_stop_self_comment_monitor(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    account_id = int(payload.get("account_id", 0) or 0)
+    config = load_global_config()
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    target_account_id = int((account or {}).get("id", 0) or account_id or 0)
+    if target_account_id <= 0:
+        return {"code": 400, "msg": "请先指定要停止监控的TikTok账号。"}
+    state = get_tiktok_self_comment_monitor_state(target_account_id)
+    task = tiktok_self_comment_monitor_tasks_by_account.get(target_account_id)
+    task_alive = bool(task and not task.done())
+    if not state.get("enabled") and not state.get("running") and not task_alive:
+        return {"code": 200, "msg": f"账号 {target_account_id} 当前没有开启我的评论区监控。", "monitor": state, "monitors": list_tiktok_self_comment_monitor_states()}
+    state["enabled"] = False
+    state["stop_requested"] = True
+    state["next_run_at"] = ""
+    state["message"] = "我的评论区监控停止中，正在结束当前任务。"
+    if task_alive:
+        task.cancel()
+    save_tiktok_self_comment_monitor_config()
+    tiktok_log(
+        f"[TikTok我的评论区] 已发出停止请求账号 {target_account_id} task_alive={'yes' if task_alive else 'no'}",
+        "warning",
+    )
+    return {
+        "code": 200,
+        "msg": f"账号 {target_account_id} 的我的评论区监控已发出停止请求。",
+        "monitor": state,
+        "monitors": list_tiktok_self_comment_monitor_states(),
+    }
+
+
+@router.post("/self-comment-monitor/run-once")
+async def tiktok_run_self_comment_monitor_once(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    config = load_global_config()
+    account_id = int(payload.get("account_id", 0) or 0)
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    if not account:
+        return {"code": 400, "type": "no_online_account", "msg": "当前没有可用的TikTok在线账号，请先登录。"}
+    target_account_id = int(account.get("id", 0) or 0)
+    state = get_tiktok_self_comment_monitor_state(target_account_id, create=True)
+    if not state.get("enabled"):
+        state["enabled"] = True
+        state["account_id"] = target_account_id
+    task = tiktok_self_comment_monitor_tasks_by_account.get(target_account_id)
+    if task and not task.done():
+        return {"code": 400, "msg": f"账号 {target_account_id} 的我的评论区监控正在执行中，请稍后再试。"}
+    current_task = asyncio.current_task()
+    if current_task is not None:
+        tiktok_self_comment_monitor_tasks_by_account[target_account_id] = current_task
+    try:
+        result = await run_tiktok_self_comment_monitor_cycle(
+            target_account_id,
+            trigger_type="manual",
+            one_shot=True,
+        )
+    finally:
+        if tiktok_self_comment_monitor_tasks_by_account.get(target_account_id) is current_task:
+            tiktok_self_comment_monitor_tasks_by_account.pop(target_account_id, None)
+    return {
+        "code": 200 if result.get("status") != "failed" else 400,
+        "msg": result.get("message", "我的评论区检查完成。"),
+        "result": result,
+        "monitor": get_tiktok_self_comment_monitor_state(target_account_id),
+        "results": collect_tiktok_self_comment_monitor_results(target_account_id),
+    }
+
+
+@router.post("/inbox/monitor/start")
+async def tiktok_start_inbox_monitor(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    config = load_global_config()
+    accounts = _normalize_accounts(config.get("tiktok_accounts"))
+    account_id = int(payload.get("account_id", 0) or 0)
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    if account_id > 0 and not account:
+        return {"code": 400, "msg": f"未找到TikTok账号 {account_id}。"}
+    if not account and not accounts:
+        return {"code": 400, "msg": "当前没有可用的TikTok账号配置。"}
+
+    interval_minutes = max(1, min(int(payload.get("interval_minutes", 30) or 30), 1440))
+    max_conversations = max(1, min(int(payload.get("max_conversations", 100) or 100), 100))
+    auto_reply_enabled = bool(payload.get("auto_reply_enabled", False))
+    reply_mode = normalize_tiktok_inbox_reply_mode(payload.get("reply_mode", "fixed"))
+    reply_message = str(payload.get("message", "") or payload.get("reply_message", "") or "").strip()
+    reply_prompt = str(payload.get("reply_prompt", "") or "").strip()
+    contact_value = str(payload.get("contact_value", "") or "").strip()
+    validation_error = validate_tiktok_inbox_reply_settings(
+        auto_reply_enabled=auto_reply_enabled,
+        reply_mode=reply_mode,
+        reply_message=reply_message,
+        reply_prompt=reply_prompt,
+        contact_value=contact_value,
+    )
+    if validation_error:
+        return {"code": 400, "msg": validation_error}
+    target_account_id = int((account or {}).get("id", 0) or account_id or config.get("tiktok_default_account_id", 1) or 1)
+    state = normalize_tiktok_inbox_monitor_state(
+        {
+            "enabled": True,
+            "running": False,
+            "interval_minutes": interval_minutes,
+            "account_id": target_account_id or None,
+            "max_conversations": max_conversations,
+            "last_error": "",
+            "last_skip_reason": "",
+            "message": "当前消息页自动采集已开启，系统会定时进入消息页刷新会话。",
+            "last_cycle_status": "idle",
+            "auto_reply_enabled": auto_reply_enabled,
+            "reply_mode": reply_mode,
+            "reply_message": reply_message,
+            "reply_prompt": reply_prompt,
+            "contact_value": contact_value,
+        },
+        account_id=target_account_id,
+    )
+    state["next_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    tiktok_inbox_monitor_states[str(target_account_id)] = state
+    save_tiktok_inbox_monitor_config()
+    await ensure_tiktok_inbox_monitor_scheduler()
+    tiktok_log(
+        (
+            f"[TikTok私信聚合] 已开启自动采集，账号 {target_account_id}，每 {interval_minutes} 分钟检查一次，"
+            f"最多读取 {max_conversations} 条，自动回复={auto_reply_enabled and tiktok_inbox_reply_mode_label(reply_mode) or '关闭'}"
+        ),
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": (
+            f"当前消息页自动采集已开启，账号 {target_account_id} 会每 {interval_minutes} 分钟自动检查一次；如果当前有其他TikTok任务，本轮会自动跳过。"
+            + (
+                f" 自动回复模式：{tiktok_inbox_reply_mode_label(reply_mode)}。"
+                if auto_reply_enabled
+                else ""
+            )
+        ),
+        "monitor": state,
+        "monitors": list_tiktok_inbox_monitor_states(),
+    }
+
+
+@router.post("/inbox/monitor/stop")
+async def tiktok_stop_inbox_monitor(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    account_id = int(payload.get("account_id", 0) or 0)
+    if account_id <= 0:
+        return {"code": 400, "msg": "请先指定要关闭自动采集的账号。"}
+    state = get_tiktok_inbox_monitor_state(account_id)
+    if int(state.get("account_id", 0) or 0) <= 0:
+        return {"code": 200, "msg": f"账号 {account_id} 当前没有开启当前消息页自动采集。", "monitor": state, "monitors": list_tiktok_inbox_monitor_states()}
+    state.update(
+        {
+            "enabled": False,
+            "running": False,
+            "message": "当前消息页自动采集已关闭。",
+            "next_run_at": "",
+            "last_cycle_status": "idle",
+        }
+    )
+    save_tiktok_inbox_monitor_config()
+    tiktok_log(f"[TikTok私信聚合] 已关闭自动采集，账号 {account_id}", "warning")
+    return {
+        "code": 200,
+        "msg": f"账号 {account_id} 的当前消息页自动采集已关闭。",
+        "monitor": state,
+        "monitors": list_tiktok_inbox_monitor_states(),
+    }
+
+
+@router.post("/inbox/collect")
+async def tiktok_collect_inbox_messages(request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("采集当前消息页会话")
+    if nurture_conflict:
+        return nurture_conflict
+    global tiktok_inbox_running, tiktok_inbox_stop_requested
+    global tiktok_inbox_background_task
+
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+    reconcile_tiktok_inbox_runtime_state()
+
+    if tiktok_running:
+        return {"code": 400, "msg": "评论采集任务正在执行，请先停止后再采集当前消息页会话。"}
+    if tiktok_video_comment_running:
+        return {"code": 400, "msg": "视频评论任务正在执行，请先停止后再采集当前消息页会话。"}
+    if tiktok_mention_comment_running:
+        return {"code": 400, "msg": "评论@精准客户任务正在执行，请先停止后再采集当前消息页会话。"}
+    if tiktok_follow_comment_running:
+        return {"code": 400, "msg": "关注评论任务正在执行，请先停止后再采集当前消息页会话。"}
+    if tiktok_interaction_running:
+        return {"code": 400, "msg": "精准客户私信任务正在执行，请先停止后再采集当前消息页会话。"}
+    if tiktok_group_member_running:
+        return {"code": 400, "msg": "群成员提取任务正在执行，请先停止后再采集当前消息页会话。"}
+    if tiktok_stranger_message_running:
+        return {"code": 400, "msg": "陌生人私信任务正在执行，请先停止后再采集当前消息页会话。"}
+    if tiktok_inbox_running:
+        return {"code": 400, "msg": "私信聚合采集任务已在执行中。"}
+
+    payload = request if isinstance(request, dict) else {}
+    account_id = int(payload.get("account_id", 0) or 0)
+    max_conversations = max(1, min(int(payload.get("max_conversations", 100) or 100), 100))
+    auto_reply_enabled = bool(payload.get("auto_reply_enabled", False))
+    reply_mode = normalize_tiktok_inbox_reply_mode(payload.get("reply_mode", "fixed"))
+    reply_message = str(payload.get("message", "") or payload.get("reply_message", "") or "").strip()
+    reply_prompt = str(payload.get("reply_prompt", "") or "").strip()
+    contact_value = str(payload.get("contact_value", "") or "").strip()
+    validation_error = validate_tiktok_inbox_reply_settings(
+        auto_reply_enabled=auto_reply_enabled,
+        reply_mode=reply_mode,
+        reply_message=reply_message,
+        reply_prompt=reply_prompt,
+        contact_value=contact_value,
+    )
+    if validation_error:
+        return {"code": 400, "msg": validation_error}
+    config = load_global_config()
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    if not account:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的TikTok在线账号，请先登录。",
+        }
+    if str(account.get("status", "") or "").strip() != "online":
+        return {
+            "code": 400,
+            "type": "account_waiting_login",
+            "msg": f"账号 {account.get('id')} 还没有登录完成，请先检查或登录。",
+        }
+
+    tiktok_inbox_running = True
+    tiktok_inbox_stop_requested = False
+    tiktok_inbox_background_task = asyncio.create_task(
+        run_tiktok_inbox_collection(
+            account,
+            max_conversations,
+            auto_reply_enabled=auto_reply_enabled,
+            reply_mode=reply_mode,
+            reply_message=reply_message,
+            reply_prompt=reply_prompt,
+            contact_value=contact_value,
+        )
+    )
+    tiktok_log(
+        (
+            f"[TikTok私信聚合] 已启动当前消息页采集，账号 {account['id']}，最多 {max_conversations} 条，"
+            f"自动回复={auto_reply_enabled and tiktok_inbox_reply_mode_label(reply_mode) or '关闭'}"
+        ),
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": (
+            f"当前消息页会话采集已启动，使用账号 {account['id']}"
+            + (
+                f"，并会按 {tiktok_inbox_reply_mode_label(reply_mode)} 自动回复符合条件的私信"
+                if auto_reply_enabled
+                else ""
+            )
+        ),
+        "account_id": account["id"],
+        "max_conversations": max_conversations,
+    }
+
+
+@router.post("/inbox/conversation/detail")
+async def tiktok_collect_inbox_conversation_detail(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    row_payload = payload.get("row") if isinstance(payload.get("row"), dict) else {}
+    account_id = int(
+        payload.get("account_id", 0)
+        or row_payload.get("account_id", 0)
+        or 0
+    )
+    if account_id <= 0:
+        return {"code": 400, "msg": "请先指定要查看详情的TikTok账号。"}
+
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+    reconcile_tiktok_inbox_runtime_state()
+
+    busy, busy_reason = is_tiktok_inbox_monitor_busy(account_id)
+    if busy:
+        return {"code": 400, "msg": f"当前无法读取会话详情：{busy_reason}。"}
+
+    config = load_global_config()
+    account = get_tiktok_account_by_id(account_id, config)
+    if not account:
+        return {"code": 400, "msg": f"未找到TikTok账号 {account_id}。"}
+    if str(account.get("status", "") or "").strip() != "online":
+        return {"code": 400, "msg": f"账号 {account_id} 还没有登录完成，请先检查或登录。"}
+
+    conversation_key = normalize_tiktok_text(
+        payload.get("conversation_key", "")
+        or row_payload.get("conversation_key", "")
+        or row_payload.get("conversation_id", "")
+    )
+    profile_url = str(payload.get("profile_url", "") or row_payload.get("profile_url", "") or "").strip()
+    username = normalize_tiktok_text(payload.get("username", "") or row_payload.get("username", ""))
+    preview_text = normalize_tiktok_text(
+        payload.get("preview_text", "")
+        or row_payload.get("preview_text", "")
+        or row_payload.get("incoming_message", "")
+    )
+
+    saved_rows = collect_tiktok_inbox_results(account_id)
+    matched_row = None
+    for existing in saved_rows:
+        existing_key = stranger_message_row_key(existing)
+        if conversation_key and normalize_tiktok_text(existing.get("conversation_key", "") or existing.get("conversation_id", "")) == conversation_key:
+            matched_row = existing
+            break
+        if profile_url and str(existing.get("profile_url", "") or "").strip() == profile_url:
+            matched_row = existing
+            break
+        if username and normalize_tiktok_text(existing.get("username", "")) == username and preview_text and normalize_tiktok_text(existing.get("preview_text", "") or existing.get("incoming_message", "")) == preview_text:
+            matched_row = existing
+            break
+        requested_key = stranger_message_row_key({**row_payload, "account_id": account_id})
+        if requested_key and existing_key == requested_key:
+            matched_row = existing
+            break
+
+    target_row = normalize_tiktok_inbox_row(
+        {
+            **(matched_row or {}),
+            **row_payload,
+            "account_id": account_id,
+            "conversation_key": conversation_key or (matched_row or {}).get("conversation_key", ""),
+            "profile_url": profile_url or (matched_row or {}).get("profile_url", ""),
+            "username": username or (matched_row or {}).get("username", ""),
+            "preview_text": preview_text or (matched_row or {}).get("preview_text", ""),
+        }
+    )
+    if not normalize_tiktok_text(target_row.get("conversation_key", "")) and not str(target_row.get("profile_url", "") or "").strip() and not normalize_tiktok_text(target_row.get("username", "")):
+        return {"code": 400, "msg": "没有找到可用于打开详情的会话标识。"}
+
+    try:
+        tiktok_log(
+            f"[TikTok私信聚合] 开始读取会话详情，账号 {account_id}，目标 {normalize_tiktok_text(target_row.get('username', '')) or '-'}",
+            "info",
+        )
+        worker = get_tiktok_inbox_page_worker(account_id)
+        detail = await worker.fetch_detail(target_row)
+        return {
+            "code": 200,
+            "msg": "会话详情已读取。",
+            "detail": detail,
+        }
+    except Exception as exc:
+        tiktok_log(f"[TikTok私信聚合] 读取会话详情失败：{exc}", "error")
+        fallback_detail = build_tiktok_inbox_fallback_detail(target_row)
+        if fallback_detail.get("messages"):
+            return {
+                "code": 200,
+                "msg": f"实时读取失败，先展示已采集消息：{exc}",
+                "detail": fallback_detail,
+            }
+        return {"code": 400, "msg": f"读取会话详情失败：{exc}"}
+
+
+@router.post("/inbox/send")
+async def tiktok_send_inbox_message(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    row_payload = payload.get("row") if isinstance(payload.get("row"), dict) else {}
+    reply_message = str(payload.get("message", "") or "").strip()
+    if not reply_message:
+        return {"code": 400, "msg": "请先输入要发送的消息。"}
+
+    account_id = int(
+        payload.get("account_id", 0)
+        or row_payload.get("account_id", 0)
+        or 0
+    )
+    if account_id <= 0:
+        return {"code": 400, "msg": "请先指定要发送消息的TikTok账号。"}
+
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+    reconcile_tiktok_inbox_runtime_state()
+
+    busy, busy_reason = is_tiktok_inbox_monitor_busy(account_id)
+    if busy:
+        return {"code": 400, "msg": f"当前无法发送消息：{busy_reason}。"}
+
+    config = load_global_config()
+    account = get_tiktok_account_by_id(account_id, config)
+    if not account:
+        return {"code": 400, "msg": f"未找到TikTok账号 {account_id}。"}
+    if str(account.get("status", "") or "").strip() != "online":
+        return {"code": 400, "msg": f"账号 {account_id} 还没有登录完成，请先检查或登录。"}
+
+    conversation_key = normalize_tiktok_text(
+        payload.get("conversation_key", "")
+        or row_payload.get("conversation_key", "")
+        or row_payload.get("conversation_id", "")
+    )
+    profile_url = str(payload.get("profile_url", "") or row_payload.get("profile_url", "") or "").strip()
+    username = normalize_tiktok_text(payload.get("username", "") or row_payload.get("username", ""))
+    preview_text = normalize_tiktok_text(
+        payload.get("preview_text", "")
+        or row_payload.get("preview_text", "")
+        or row_payload.get("incoming_message", "")
+    )
+
+    saved_rows = collect_tiktok_inbox_results(account_id)
+    matched_row = None
+    requested_key = stranger_message_row_key({**row_payload, "account_id": account_id})
+    for existing in saved_rows:
+        existing_key = stranger_message_row_key(existing)
+        if conversation_key and normalize_tiktok_text(existing.get("conversation_key", "") or existing.get("conversation_id", "")) == conversation_key:
+            matched_row = existing
+            break
+        if profile_url and str(existing.get("profile_url", "") or "").strip() == profile_url:
+            matched_row = existing
+            break
+        if username and normalize_tiktok_text(existing.get("username", "")) == username and preview_text and normalize_tiktok_text(existing.get("preview_text", "") or existing.get("incoming_message", "")) == preview_text:
+            matched_row = existing
+            break
+        if requested_key and existing_key == requested_key:
+            matched_row = existing
+            break
+
+    target_row = normalize_tiktok_inbox_row(
+        {
+            **(matched_row or {}),
+            **row_payload,
+            "account_id": account_id,
+            "conversation_key": conversation_key or (matched_row or {}).get("conversation_key", ""),
+            "profile_url": profile_url or (matched_row or {}).get("profile_url", ""),
+            "username": username or (matched_row or {}).get("username", ""),
+            "preview_text": preview_text or (matched_row or {}).get("preview_text", ""),
+        }
+    )
+    if not normalize_tiktok_text(target_row.get("conversation_key", "")) and not str(target_row.get("profile_url", "") or "").strip() and not normalize_tiktok_text(target_row.get("username", "")):
+        return {"code": 400, "msg": "没有找到可用于发送的会话标识。"}
+
+    started_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    update_tiktok_inbox_rows(
+        [target_row],
+        status="processing",
+        error="",
+        message=reply_message,
+        account_id=account_id,
+        started_at=started_at,
+        finished_at="",
+    )
+    try:
+        tiktok_log(
+            f"[TikTok私信聚合] 开始发送消息，账号 {account_id}，目标 {normalize_tiktok_text(target_row.get('username', '')) or '-'}",
+            "info",
+        )
+        worker = get_tiktok_inbox_page_worker(account_id)
+        result = await worker.send_message(target_row, reply_message)
+        finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        update_tiktok_inbox_rows(
+            [target_row],
+            status="sent",
+            error="",
+            message=reply_message,
+            account_id=account_id,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        refreshed_row = {
+            **target_row,
+            "reply_status": "sent",
+            "reply_error": "",
+            "reply_message": reply_message,
+            "reply_account_id": str(account_id),
+            "reply_started_at": started_at,
+            "reply_finished_at": finished_at,
+            "reply_updated_at": finished_at,
+        }
+        merge_tiktok_inbox_results(account_id, [refreshed_row])
+        return {
+            "code": 200,
+            "msg": "消息已发送。",
+            "detail": result.get("detail", {}),
+            "result": result,
+        }
+    except Exception as exc:
+        update_tiktok_inbox_rows(
+            [target_row],
+            status="failed",
+            error=str(exc),
+            message=reply_message,
+            account_id=account_id,
+            started_at=started_at,
+            finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        tiktok_log(f"[TikTok私信聚合] 发送消息失败：{exc}", "error")
+        return {"code": 400, "msg": f"发送消息失败：{exc}"}
+
+
+@router.get("/stranger-messages/status")
+async def tiktok_stranger_message_status():
+    reconcile_tiktok_stranger_message_runtime_state()
+    return {
+        "code": 200,
+        "running": bool(tiktok_stranger_message_state.get("running")),
+        "state": tiktok_stranger_message_state,
+        "results": collect_tiktok_stranger_message_results(),
+        "monitors": list_tiktok_stranger_message_monitor_states(),
+    }
+
+
+@router.post("/stranger-messages/monitor/config")
+async def tiktok_save_stranger_message_monitor_config(request: Optional[dict] = None):
+    """Persist the current stranger-message form without starting the monitor.
+
+    The preset button is also used by finite H5 one-shot tasks. Those tasks
+    read the Python-side monitor config, so browser-only preset storage is not
+    enough and must not be confused with enabling the background scheduler.
+    """
+    payload = request if isinstance(request, dict) else {}
+    config = load_global_config()
+    account_id = int(payload.get("account_id", 0) or 0)
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    if account_id > 0 and not account:
+        return {"code": 400, "msg": f"未找到TikTok账号 {account_id}。"}
+    if not account:
+        return {"code": 400, "msg": "当前没有可用的TikTok账号配置。"}
+
+    target_account_id = int(
+        (account or {}).get("id", 0)
+        or account_id
+        or config.get("tiktok_default_account_id", 1)
+        or 1
+    )
+    existing = get_tiktok_stranger_message_monitor_state(target_account_id)
+    reply_mode = normalize_tiktok_stranger_reply_mode(
+        payload.get("reply_mode", existing.get("reply_mode"))
+    )
+    reply_message = str(
+        payload.get("message", payload.get("reply_message", existing.get("reply_message", ""))) or ""
+    ).strip()
+    state = normalize_tiktok_stranger_message_monitor_state(
+        {
+            **existing,
+            # This endpoint only saves the form. It must not resurrect an old
+            # background monitor when H5 saves a fixed reply for a one-shot run.
+            "enabled": False,
+            "explicitly_started": False,
+            "running": False,
+            "account_id": target_account_id,
+            "interval_minutes": payload.get("interval_minutes", existing.get("interval_minutes", 30)),
+            "max_conversations": payload.get("max_conversations", existing.get("max_conversations", 100)),
+            "auto_reply_enabled": payload.get("auto_reply_enabled", existing.get("auto_reply_enabled", True)),
+            "reply_mode": reply_mode,
+            "reply_message": reply_message,
+            "reply_prompt": payload.get("reply_prompt", existing.get("reply_prompt", "")),
+            "contact_value": payload.get("contact_value", existing.get("contact_value", "")),
+            "memory_doc_ids": payload.get("memory_doc_ids", existing.get("memory_doc_ids", [])),
+            "memory_user_id": payload.get("memory_user_id", existing.get("memory_user_id")),
+            "wechat_add_friend_enabled": payload.get(
+                "wechat_add_friend_enabled",
+                existing.get("wechat_add_friend_enabled", False),
+            ),
+            "source": "online_monitor",
+            "next_run_at": "",
+        },
+        account_id=target_account_id,
+    )
+    tiktok_stranger_message_monitor_states[str(target_account_id)] = state
+    save_tiktok_stranger_message_monitor_config()
+    return {
+        "code": 200,
+        "msg": f"账号 {target_account_id} 的私信接管配置已保存。",
+        "monitor": state,
+        "monitors": list_tiktok_stranger_message_monitor_states(),
+    }
+
+
+@router.post("/stranger-messages/monitor/start")
+async def tiktok_start_stranger_message_monitor(http_request: Request = None, request: Optional[dict] = None):
+    set_tiktok_ai_auth_token_from_request(http_request)
+    payload = request if isinstance(request, dict) else {}
+    if bool(payload.get("h5_one_shot")) or str(payload.get("tiktok_execution_mode") or "").strip().lower() == "one_shot":
+        return {"code": 400, "msg": "H5 TikTok获客任务是一次性执行，不能启动常驻监控。"}
+    config = load_global_config()
+    accounts = _normalize_accounts(config.get("tiktok_accounts"))
+    account_id = int(payload.get("account_id", 0) or 0)
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    if account_id > 0 and not account:
+        return {"code": 400, "msg": f"未找到TikTok账号 {account_id}。"}
+    if not account and not accounts:
+        return {"code": 400, "msg": "当前没有可用的TikTok账号配置。"}
+
+    interval_minutes = max(1, min(int(payload.get("interval_minutes", 30) or 30), 1440))
+    max_conversations = max(1, min(int(payload.get("max_conversations", 100) or 100), 100))
+    auto_reply_enabled = bool(payload.get("auto_reply_enabled", True))
+    reply_mode = normalize_tiktok_stranger_reply_mode(payload.get("reply_mode"))
+    reply_message = str(payload.get("message", "") or "").strip()
+    reply_prompt = str(payload.get("reply_prompt", "") or "").strip()
+    contact_value = str(payload.get("contact_value", "") or "").strip()
+    wechat_add_friend_enabled = bool(payload.get("wechat_add_friend_enabled", False))
+    memory_doc_ids = [
+        str(item or "").strip() for item in (payload.get("memory_doc_ids") or []) if str(item or "").strip()
+    ][:3]
+    memory_user_id = int(payload.get("memory_user_id", 0) or 0) or None
+    if auto_reply_enabled:
+        if reply_mode == "fixed" and not reply_message:
+            reply_mode = "ai_auto"
+        if reply_mode == "ai_memory":
+            if not memory_doc_ids:
+                return {
+                    "code": 400,
+                    "msg": "开启记忆接管前，请先选择一个用于回复的记忆文件（例如「百问百答」）。",
+                }
+            if not tiktok_ai_available(config, http_request):
+                return {"code": 400, "msg": "当前还没有配置 AI 接口 Key，暂时不能开启 AI 记忆接管。"}
+            memory_preview = await asyncio.to_thread(
+                load_tiktok_takeover_memory_context,
+                memory_doc_ids,
+                user_id=memory_user_id,
+            )
+            if not str(memory_preview.get("text") or "").strip():
+                return {
+                    "code": 400,
+                    "msg": "选中的记忆文件读不到内容，请重新选择，或先在个人设置里上传这份资料。",
+                }
+            memory_user_id = int(memory_preview.get("user_id") or 0) or memory_user_id
+        if reply_mode == "ai_lead":
+            if not contact_value:
+                return {"code": 400, "msg": "开启监控自动回复前，请先填写绿泡泡联系方式。"}
+            if not tiktok_ai_available(config, http_request):
+                return {"code": 400, "msg": "当前还没有配置 AI 接口 Key，暂时不能开启 AI 自动回复监控。"}
+    target_account_id = int((account or {}).get("id", 0) or account_id or config.get("tiktok_default_account_id", 1) or 1)
+
+    state = normalize_tiktok_stranger_message_monitor_state(
+        {
+            "enabled": True,
+            "explicitly_started": True,
+            "running": False,
+            "interval_minutes": interval_minutes,
+            "account_id": target_account_id or None,
+            "max_conversations": max_conversations,
+            "auto_reply_enabled": auto_reply_enabled,
+            "reply_mode": reply_mode,
+            "reply_message": reply_message,
+            "reply_prompt": reply_prompt,
+            "contact_value": contact_value,
+            "wechat_add_friend_enabled": wechat_add_friend_enabled,
+            "memory_doc_ids": memory_doc_ids,
+            "memory_user_id": memory_user_id,
+            "source": "online_monitor",
+            "last_error": "",
+            "last_skip_reason": "",
+        },
+        account_id=target_account_id,
+    )
+    state["next_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    state["message"] = "陌生人消息监控已开启，系统会自动进入陌生人消息列表检查。"
+    state["last_cycle_status"] = "idle"
+    tiktok_stranger_message_monitor_states[str(target_account_id)] = state
+    save_tiktok_stranger_message_monitor_config()
+    await ensure_tiktok_stranger_message_monitor_scheduler()
+    tiktok_log(
+        f"[TikTok陌生人消息监控] 已开启，账号 {target_account_id}，每 {interval_minutes} 分钟检查一次，最多读取 {max_conversations} 条",
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": (
+            f"陌生人消息监控已开启，账号 {target_account_id} 会每 {interval_minutes} 分钟自动进入“陌生人消息”列表检查一次；"
+            f"如果当前有其他TikTok任务，本轮会自动跳过。"
+            f"{' 发现带未读红点的新增陌生人消息后会自动逐个回复新会话。' if auto_reply_enabled else ' 当前只监控带未读红点的新会话，不自动回复。'}"
+            f"{' AI 记忆接管只按你选的记忆文件回复：不拉群、不主动发联系方式。' if auto_reply_enabled and reply_mode == 'ai_memory' else ''}"
+        ),
+        "monitor": state,
+        "monitors": list_tiktok_stranger_message_monitor_states(),
+    }
+
+
+@router.post("/stranger-messages/monitor/stop")
+async def tiktok_stop_stranger_message_monitor(request: Optional[dict] = None):
+    payload = request if isinstance(request, dict) else {}
+    account_id = int(payload.get("account_id", 0) or 0)
+    if account_id <= 0:
+        return {"code": 400, "msg": "请先指定要关闭监控的账号。"}
+    state = get_tiktok_stranger_message_monitor_state(account_id)
+    if int(state.get("account_id", 0) or 0) <= 0:
+        return {"code": 200, "msg": f"账号 {account_id} 当前没有开启陌生人消息监控。", "monitor": state, "monitors": list_tiktok_stranger_message_monitor_states()}
+    state.update(
+        {
+            "enabled": False,
+            "explicitly_started": False,
+            "running": False,
+            "message": "陌生人消息监控已关闭。",
+            "next_run_at": "",
+            "last_cycle_status": "idle",
+        }
+    )
+    monitor_task = tiktok_stranger_message_monitor_tasks_by_account.pop(account_id, None)
+    if monitor_task and not monitor_task.done():
+        monitor_task.cancel()
+    save_tiktok_stranger_message_monitor_config()
+    tiktok_log(f"[TikTok陌生人消息监控] 已关闭，账号 {account_id}", "warning")
+    return {
+        "code": 200,
+        "msg": f"账号 {account_id} 的陌生人消息监控已关闭。",
+        "monitor": state,
+        "monitors": list_tiktok_stranger_message_monitor_states(),
+    }
+
+
+@router.post("/stranger-messages/collect")
+async def tiktok_collect_stranger_messages(request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("采集陌生人私信")
+    if nurture_conflict:
+        return nurture_conflict
+    global tiktok_stranger_message_running, tiktok_stranger_message_stop_requested
+    global tiktok_stranger_message_background_task
+
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if tiktok_running:
+        return {"code": 400, "msg": "评论采集任务正在执行，请先停止后再采集陌生人私信。"}
+    if tiktok_video_comment_running:
+        return {"code": 400, "msg": "视频评论任务正在执行，请先停止后再采集陌生人私信。"}
+    if tiktok_mention_comment_running:
+        return {"code": 400, "msg": "评论@精准客户任务正在执行，请先停止后再采集陌生人私信。"}
+    if tiktok_follow_comment_running:
+        return {"code": 400, "msg": "关注评论任务正在执行，请先停止后再采集陌生人私信。"}
+    if tiktok_interaction_running:
+        return {"code": 400, "msg": "精准客户私信任务正在执行，请先停止后再采集陌生人私信。"}
+    if tiktok_group_member_running:
+        return {"code": 400, "msg": "群成员提取任务正在执行，请先停止后再采集陌生人私信。"}
+    if tiktok_stranger_message_running:
+        return {"code": 400, "msg": "私信引流任务已在执行中。"}
+
+    payload = request if isinstance(request, dict) else {}
+    account_id = int(payload.get("account_id", 0) or 0)
+    max_conversations = max(1, min(int(payload.get("max_conversations", 100) or 100), 100))
+    config = load_global_config()
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    if not account:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的TikTok在线账号，请先登录。",
+        }
+    if str(account.get("status", "") or "").strip() != "online":
+        return {
+            "code": 400,
+            "type": "account_waiting_login",
+            "msg": f"账号 {account.get('id')} 还没有登录完成，请先检查或登录。",
+        }
+
+    tiktok_stranger_message_running = True
+    tiktok_stranger_message_stop_requested = False
+    tiktok_stranger_message_background_task = asyncio.create_task(
+        run_tiktok_stranger_message_collection(account, max_conversations)
+    )
+    tiktok_log(
+        f"[TikTok私信引流] 已启动采集，账号 {account['id']}，最多 {max_conversations} 条",
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": f"陌生人私信采集已启动，使用账号 {account['id']}",
+        "account_id": account["id"],
+        "max_conversations": max_conversations,
+    }
+
+
+@router.post("/stranger-messages/send")
+async def tiktok_send_stranger_messages(http_request: Request = None, request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("发送私信引流")
+    if nurture_conflict:
+        return nurture_conflict
+    set_tiktok_ai_auth_token_from_request(http_request)
+    global tiktok_stranger_message_running, tiktok_stranger_message_stop_requested
+    global tiktok_stranger_message_background_task
+
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    if tiktok_running:
+        return {"code": 400, "msg": "评论采集任务正在执行，请先停止后再发送私信引流。"}
+    if tiktok_video_comment_running:
+        return {"code": 400, "msg": "视频评论任务正在执行，请先停止后再发送私信引流。"}
+    if tiktok_mention_comment_running:
+        return {"code": 400, "msg": "评论@精准客户任务正在执行，请先停止后再发送私信引流。"}
+    if tiktok_follow_comment_running:
+        return {"code": 400, "msg": "关注评论任务正在执行，请先停止后再发送私信引流。"}
+    if tiktok_interaction_running:
+        return {"code": 400, "msg": "精准客户私信任务正在执行，请先停止后再发送私信引流。"}
+    if tiktok_group_member_running:
+        return {"code": 400, "msg": "群成员提取任务正在执行，请先停止后再发送私信引流。"}
+    if tiktok_stranger_message_running:
+        return {"code": 400, "msg": "私信引流任务已在执行中。"}
+
+    payload = request if isinstance(request, dict) else {}
+    account_id = int(payload.get("account_id", 0) or 0)
+    message = str(payload.get("message", "") or "").strip()
+    reply_mode = normalize_tiktok_stranger_reply_mode(payload.get("reply_mode"))
+    reply_prompt = str(payload.get("reply_prompt", "") or "").strip()
+    contact_value = str(payload.get("contact_value", "") or "").strip()
+    raw_rows = payload.get("rows", [])
+    if reply_mode == "fixed" and not message:
+        return {"code": 400, "msg": "请先填写引流私信内容。"}
+    if reply_mode == "ai_lead":
+        if not contact_value:
+            return {"code": 400, "msg": "请先填写要引导添加的联系方式。"}
+        config = load_global_config()
+        if not tiktok_ai_available(config, http_request):
+            return {"code": 400, "msg": "当前还没有配置 AI 接口 Key，暂时不能使用 AI 引导加绿泡泡模式。"}
+    if not isinstance(raw_rows, list) or not raw_rows:
+        return {"code": 400, "msg": "请先勾选至少一条陌生人私信。"}
+
+    config = load_global_config()
+    account = get_tiktok_account_by_id(account_id, config) if account_id > 0 else get_active_tiktok_account(config)
+    if not account:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的TikTok在线账号，请先登录。",
+        }
+    if str(account.get("status", "") or "").strip() != "online":
+        return {
+            "code": 400,
+            "type": "account_waiting_login",
+            "msg": f"账号 {account.get('id')} 还没有登录完成，请先检查或登录。",
+        }
+
+    valid_pool = {
+        stranger_message_row_key(row): row
+        for row in collect_tiktok_stranger_message_results(account["id"])
+    }
+    selected_rows: List[Dict] = []
+    seen = set()
+    for raw_row in raw_rows:
+        key = stranger_message_row_key(raw_row if isinstance(raw_row, dict) else {})
+        if not key or key in seen:
+            continue
+        candidate = valid_pool.get(key)
+        if not candidate:
+            continue
+        seen.add(key)
+        selected_rows.append(candidate)
+    if not selected_rows:
+        return {"code": 400, "msg": "当前账号下没有匹配的陌生人私信数据，请先重新采集。"}
+
+    update_tiktok_stranger_message_rows(
+        selected_rows,
+        status="queued",
+        error="",
+        message=(
+            message
+            if reply_mode == "fixed"
+            else "\n".join(
+                [
+                    "AI 引导加绿泡泡",
+                    "麻烦您绿泡泡",
+                    normalize_tiktok_text(contact_value),
+                ]
+            )
+        ),
+        account_id=account["id"],
+        started_at="",
+        finished_at="",
+    )
+    tiktok_stranger_message_running = True
+    tiktok_stranger_message_stop_requested = False
+    tiktok_stranger_message_background_task = asyncio.create_task(
+        run_tiktok_stranger_message_send(
+            account,
+            selected_rows,
+            message,
+            reply_mode=reply_mode,
+            reply_prompt=reply_prompt,
+            contact_value=contact_value,
+        )
+    )
+    tiktok_log(
+        f"[TikTok私信引流] 已启动发送，账号 {account['id']}，共 {len(selected_rows)} 人，模式 {tiktok_stranger_reply_mode_label(reply_mode)}",
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": f"私信引流已启动，使用账号 {account['id']}，共 {len(selected_rows)} 人，模式 {tiktok_stranger_reply_mode_label(reply_mode)}",
+        "account_id": account["id"],
+        "total": len(selected_rows),
+        "reply_mode": reply_mode,
+    }
+
+
+@router.post("/stranger-messages/stop")
+async def tiktok_stop_stranger_messages():
+    global tiktok_stranger_message_stop_requested, tiktok_stranger_message_background_task
+
+    reconcile_tiktok_stranger_message_runtime_state()
+    if not tiktok_stranger_message_running:
+        tiktok_stranger_message_stop_requested = False
+        tiktok_stranger_message_background_task = None
+        return {"code": 200, "msg": "当前没有正在执行的私信引流任务。"}
+
+    tiktok_stranger_message_stop_requested = True
+    tiktok_log("[TikTok私信引流] 已请求停止", "warning")
+    return {"code": 200, "msg": "已请求停止私信引流任务。"}
+
+
+@router.post("/start")
+async def tiktok_start_tasks(http_request: Request = None, request: Optional[dict] = None):
+    nurture_conflict = build_tiktok_nurture_conflict("执行评论采集")
+    if nurture_conflict:
+        return nurture_conflict
+    set_tiktok_ai_auth_token_from_request(http_request)
+    global tiktok_running, tiktok_stop_requested, tiktok_background_task
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+
+    if tiktok_running:
+        return {"code": 400, "msg": "评论采集任务已在执行中。"}
+    if tiktok_video_comment_running:
+        return {"code": 400, "msg": "视频评论任务正在执行，请先停止后再开始评论采集。"}
+    if tiktok_mention_comment_running:
+        return {"code": 400, "msg": "评论@精准客户任务正在执行，请先停止后再开始评论采集。"}
+    if tiktok_follow_comment_running:
+        return {"code": 400, "msg": "关注评论任务正在执行，请先停止后再开始评论采集。"}
+    if tiktok_interaction_running:
+        return {"code": 400, "msg": "私信任务正在执行，请先停止后再开始评论采集。"}
+    if tiktok_group_member_running:
+        return {"code": 400, "msg": "群成员提取任务正在执行，请先停止后再开始评论采集。"}
+    if tiktok_stranger_message_running:
+        return {"code": 400, "msg": "私信引流任务正在执行，请先停止后再开始评论采集。"}
+    if not tiktok_tasks:
+        return {"code": 400, "msg": "请先准备TikTok任务。"}
+
+    payload = request if isinstance(request, dict) else {}
+    raw_selected_ids = payload.get("selected_task_ids")
+    comment_scroll_rounds = max(20, min(int(payload.get("comment_scroll_rounds", 300) or 300), 300))
+    comment_max_comments = max(20, min(int(payload.get("comment_max_comments", 500) or 500), 500))
+    collection_mode = normalize_tiktok_collection_mode(payload.get("collection_mode"))
+    force_recollect = bool(payload.get("force_recollect"))
+    selected_task_ids: Optional[Set[int]] = None
+    if raw_selected_ids is not None:
+        if not isinstance(raw_selected_ids, list):
+            return {"code": 400, "msg": "selected_task_ids must be a list"}
+        selected_task_ids = {int(task_id) for task_id in raw_selected_ids}
+        if not selected_task_ids:
+            return {"code": 400, "msg": "请先勾选至少一个任务。"}
+
+        existing_ids = {int(task.get("id", 0) or 0) for task in tiktok_tasks}
+        missing_ids = sorted(selected_task_ids - existing_ids)
+        if missing_ids:
+            return {"code": 400, "msg": "任务不存在：" + ', '.join(str(task_id) for task_id in missing_ids)}
+
+    allow_completed_recollect = bool(force_recollect and selected_task_ids)
+    runnable_tasks = get_runnable_tiktok_tasks(
+        selected_task_ids,
+        include_completed_with_comments=allow_completed_recollect,
+    )
+    if not runnable_tasks:
+        return {"code": 400, "msg": "没有可执行的采集任务，已完成任务会自动跳过。"}
+    skipped_completed = (
+        max(0, len(selected_task_ids or set()) - len(runnable_tasks))
+        if selected_task_ids and not allow_completed_recollect
+        else 0
+    )
+    recollect_completed = 0
+    if allow_completed_recollect:
+        for task in runnable_tasks:
+            existing_comments = task.get("all_comments", []) or []
+            existing_comment_count = max(
+                int(task.get("comment_count", 0) or 0),
+                len(existing_comments) if isinstance(existing_comments, list) else 0,
+            )
+            if task.get("status") == "completed" and existing_comment_count > 0:
+                recollect_completed += 1
+
+    config = load_global_config()
+    accounts = get_online_tiktok_accounts(config)
+    if not accounts:
+        return {
+            "code": 400,
+            "type": "no_online_account",
+            "msg": "当前没有可用的TikTok在线账号，请先登录。",
+        }
+
+    tiktok_running = True
+    tiktok_stop_requested = False
+    tiktok_background_task = asyncio.create_task(
+        run_tiktok_tasks(
+            selected_task_ids,
+            comment_scroll_rounds=comment_scroll_rounds,
+            comment_max_comments=comment_max_comments,
+            collection_mode=collection_mode,
+            force_recollect=allow_completed_recollect,
+        )
+    )
+    preferred_account_id = accounts[0]["id"] if accounts else None
+    serial_reply = tiktok_collection_requires_serial_reply(runnable_tasks)
+    account_ids = (
+        [accounts[0]["id"]]
+        if serial_reply and accounts
+        else [account["id"] for account in accounts[: max(1, min(len(accounts), len(runnable_tasks)))]]
+    )
+    tiktok_log(
+        f"[TikTok评论采集] 已启动，{'串行账号' if serial_reply else '并发账号'} {', '.join(str(account_id) for account_id in account_ids)}，共 {len(runnable_tasks)} 条任务，模式 {tiktok_collection_mode_label(collection_mode)}，滚动 {comment_scroll_rounds} 轮，最多采集 {comment_max_comments} 条评论"
+        + (f"，重新采集已完成任务 {recollect_completed} 条" if recollect_completed else "")
+        + (f"，跳过已有客户数据的历史完成任务 {skipped_completed} 条" if skipped_completed else ""),
+        "success",
+    )
+    return {
+        "code": 200,
+        "msg": (
+            f"评论采集任务已启动，使用 {len(account_ids)} 个账号{'串行' if serial_reply else '并发'}，共 {len(runnable_tasks)} 条任务，模式 {tiktok_collection_mode_label(collection_mode)}"
+            + (f"，优先账号 {preferred_account_id}" if preferred_account_id else "")
+            + (f"，将重新采集 {recollect_completed} 条已完成任务" if recollect_completed else "")
+            + (f"，已跳过 {skipped_completed} 条已有客户数据的历史完成任务" if skipped_completed else "")
+        ),
+        "selected_count": len(runnable_tasks),
+        # Keep "requested" and "started" separate so the caller can report both
+        # instead of treating the selection as the run (2026-09-15 user 54).
+        "requested_count": len(selected_task_ids) if selected_task_ids else len(runnable_tasks),
+        "selected_videos_total": len(selected_task_ids) if selected_task_ids else len(runnable_tasks),
+        "skipped_completed": skipped_completed,
+        "account_id": preferred_account_id,
+        "account_ids": account_ids,
+        "comment_scroll_rounds": comment_scroll_rounds,
+        "comment_max_comments": comment_max_comments,
+        "collection_mode": collection_mode,
+    }
+
+
+@router.post("/tasks/delete")
+async def tiktok_delete_tasks(request: dict):
+    global tiktok_tasks
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_video_comment_runtime_state()
+    reconcile_tiktok_mention_comment_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    reconcile_tiktok_interaction_runtime_state()
+    reconcile_tiktok_group_member_runtime_state()
+    reconcile_tiktok_stranger_message_runtime_state()
+
+    raw_ids = request.get("task_ids", []) if isinstance(request, dict) else []
+    if not isinstance(raw_ids, list):
+        return {"code": 400, "msg": "task_ids 必须是数组。"}
+    if not raw_ids:
+        return {"code": 400, "msg": "请至少提供一个任务 ID。"}
+    if tiktok_running or tiktok_video_comment_running or tiktok_mention_comment_running or tiktok_follow_comment_running or tiktok_interaction_running or tiktok_group_member_running or tiktok_stranger_message_running:
+        return {"code": 400, "msg": "当前有任务正在执行，不能删除任务。"}
+
+    task_ids = {int(task_id) for task_id in raw_ids}
+    matched_tasks = [task for task in tiktok_tasks if int(task.get("id", 0) or 0) in task_ids]
+    if not matched_tasks:
+        return {"code": 404, "msg": "未找到匹配的任务。"}
+
+    processing_ids = [int(task.get("id", 0) or 0) for task in matched_tasks if task.get("status") == "processing"]
+    if processing_ids:
+        return {
+            "code": 400,
+            "msg": f"任务 {', '.join(str(task_id) for task_id in processing_ids)} 仍在采集中。",
+        }
+
+    before_total = len(tiktok_tasks)
+    tiktok_tasks = [task for task in tiktok_tasks if int(task.get("id", 0) or 0) not in task_ids]
+    deleted_count = before_total - len(tiktok_tasks)
+    save_tiktok_tasks_state()
+    tiktok_log(f"[TikTok任务] 已删除 {deleted_count} 条任务", "warning")
+    return {
+        "code": 200,
+        "msg": f"已删除 {deleted_count} 条TikTok任务。",
+        "deleted": deleted_count,
+        "total": len(tiktok_tasks),
+    }
+
+
+@router.post("/tasks/{task_id}/delete")
+async def tiktok_delete_task(task_id: int):
+    return await tiktok_delete_tasks({"task_ids": [task_id]})
+
+
+@router.post("/stop")
+async def tiktok_stop_tasks():
+    global tiktok_running, tiktok_stop_requested, tiktok_background_task
+    reconcile_tiktok_runtime_state()
+    reconcile_tiktok_follow_comment_runtime_state()
+    if not tiktok_running:
+        tiktok_stop_requested = False
+        tiktok_background_task = None
+        return {"code": 200, "msg": "当前没有正在执行的评论采集任务。"}
+    tiktok_stop_requested = True
+    tiktok_log("[TikTok评论采集] 已请求停止", "warning")
+    return {"code": 200, "msg": "已请求停止评论采集任务。"}
+
+
+@router.post("/export")
+async def tiktok_export_results():
+    try:
+        file = export_task_results()
+        return {"code": 200, "msg": "Export successful", "file": file}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Export failed: {exc}")

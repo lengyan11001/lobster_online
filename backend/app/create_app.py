@@ -72,6 +72,7 @@ from .api.shanjian_digital_human import router as shanjian_digital_human_router
 from .api.multi_clip_mixer import router as multi_clip_mixer_router
 from .api.media_compat import router as media_compat_router
 from .api.douyin_origin import router as douyin_origin_router
+from .api.tiktok_origin import router as tiktok_origin_router
 from .api.tiktok_browser_leads import router as tiktok_browser_leads_router
 from .api.liepin_origin import router as liepin_origin_router
 try:
@@ -1120,6 +1121,7 @@ def create_app() -> FastAPI:
     else:
         logger.info("ecommerce_publish router not found; using publish router for ecommerce account management")
     app.include_router(douyin_origin_router, prefix="")
+    app.include_router(tiktok_origin_router, prefix="")
     app.include_router(tiktok_browser_leads_router, prefix="")
     app.include_router(liepin_origin_router, prefix="")
     app.include_router(publish_router, prefix="")
@@ -1193,6 +1195,47 @@ def create_app() -> FastAPI:
             app.add_api_route(
                 route_path,
                 serve_douyin_route,
+                methods=["GET"],
+                include_in_schema=False,
+            )
+
+        tiktok_route_pages = {
+            "/tiktok": "tiktok-origin/tiktok.html",
+            "/tiktok/workbench": "tiktok-origin/tiktok.html",
+            "/tiktok/search": "tiktok-origin/tiktok-search.html",
+            "/tiktok/monitor": "tiktok-origin/tiktok-monitor.html",
+            "/tiktok/self-comments": "tiktok-origin/tiktok-self-comments.html",
+            "/tiktok/collect": "tiktok-origin/tiktok-collect.html",
+            "/tiktok/mention": "tiktok-origin/tiktok-mention.html",
+            "/tiktok/follow": "tiktok-origin/tiktok-follow.html",
+            "/tiktok/customers": "tiktok-origin/tiktok-customer-pools.html",
+            "/tiktok/intent": "tiktok-origin/tiktok-customer-pools.html",
+            "/tiktok/interaction": "tiktok-origin/tiktok-interaction.html",
+            "/tiktok/stranger-leads": "tiktok-origin/tiktok-stranger-leads.html",
+            "/tiktok/inbox": "tiktok-origin/tiktok-inbox.html",
+            "/tiktok/scheduler": "tiktok-origin/tiktok-scheduler.html",
+            "/tiktok/nurture": "tiktok-origin/tiktok-nurture.html",
+            "/tiktok/groups": "tiktok-origin/tiktok-groups.html",
+            "/tiktok/logs": "tiktok-origin/tiktok-logs.html",
+            "/tiktok/config": "tiktok-origin/tiktok-config.html",
+            "/tiktok/guide": "tiktok-origin/tiktok-guide.html",
+        }
+
+        async def serve_tiktok_route(request: Request):
+            html_file = tiktok_route_pages.get(request.url.path, "tiktok-origin/tiktok.html")
+            return FileResponse(
+                static_dir / html_file,
+                headers={
+                    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
+
+        for route_path in tiktok_route_pages:
+            app.add_api_route(
+                route_path,
+                serve_tiktok_route,
                 methods=["GET"],
                 include_in_schema=False,
             )

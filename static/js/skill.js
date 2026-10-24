@@ -1458,11 +1458,35 @@ window._openLinkedinMiningView = function() {
   try { location.hash = 'linkedin-mining'; } catch (e1) {}
 };
 
+window._openTikTokLeadsWorkbench = function() {
+  window.__socialLeadsPlatform = 'tiktok';
+  if (typeof window.registerLobsterView === 'function') {
+    window.registerLobsterView('tiktok-leads', {
+      html: '/static/views/tiktok-leads.html?v=20261024-tiktok-workbench-v1',
+      cache: 'reload'
+    });
+  }
+  if (typeof window.showLobsterView === 'function') {
+    window.showLobsterView('tiktok-leads', document.querySelector('.nav-left-item[data-view="skill-store"]'))
+      .catch(function(err) {
+        console.error('Failed to open tiktok-leads', err);
+        alert('TikTok 获客页面加载失败，请刷新页面后重试。' + (err && err.message ? '\n' + err.message : ''));
+      });
+    return;
+  }
+  _switchToHiddenView('tiktok-leads');
+  try { location.hash = 'tiktok-leads'; } catch (e1) {}
+};
+
 window._openSocialLeadsView = function(platform) {
   var nextPlatform = String(platform || window.__socialLeadsPlatform || 'reddit').toLowerCase();
   if (nextPlatform === 'twitter' || nextPlatform === 'x_leads') nextPlatform = 'x';
   if (nextPlatform === 'tiktok_leads' || nextPlatform === 'tik_tok') nextPlatform = 'tiktok';
   if (['reddit', 'x', 'tiktok'].indexOf(nextPlatform) < 0) nextPlatform = 'reddit';
+  if (nextPlatform === 'tiktok' && typeof window._openTikTokLeadsWorkbench === 'function') {
+    window._openTikTokLeadsWorkbench();
+    return;
+  }
   window.__socialLeadsPlatform = nextPlatform;
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('social-leads', {
