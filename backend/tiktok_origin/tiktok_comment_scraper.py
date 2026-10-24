@@ -252,14 +252,17 @@ class TikTokCommentScraper:
                         const href = a.href || '';
                         if (!href || seen.has(href)) continue;
                         seen.add(href);
-                        const m = href.match(/@([^/]+)\/video\/(\d+)/);
-                        if (!m) continue;
+                        const parts = href.split('/');
+                        const videoAt = parts.indexOf('video');
+                        const author = (parts[3] || '').split('@').join('');
+                        const awemeId = videoAt >= 0 ? (parts[videoAt + 1] || '').split('?')[0] : '';
+                        if (!author || !awemeId) continue;
                         const img = a.querySelector('img');
                         let title = (img && (img.alt || '')) || '';
-                        if (!title) title = (a.innerText || '').trim().split('\n')[0] || '';
+                        if (!title) title = (a.innerText || '').split(String.fromCharCode(10))[0] || '';
                         const cover = img ? (img.currentSrc || img.src || '') : '';
                         const text = (a.innerText || '').trim();
-                        out.push({url: href, author: m[1], aweme_id: m[2], title: title.slice(0, 300), cover_image: cover, text: text.slice(0, 400)});
+                        out.push({url: href, author: author, aweme_id: awemeId, title: title.slice(0, 300), cover_image: cover, text: text.slice(0, 400)});
                       }
                       return out;
                     }

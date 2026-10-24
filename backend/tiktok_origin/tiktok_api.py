@@ -16024,6 +16024,12 @@ async def tiktok_run_account_nurture_once(request: Optional[dict] = None):
 async def tiktok_start_account_nurture(request: Optional[dict] = None):
     global tiktok_account_nurture_scheduler, tiktok_account_nurture_background_task
 
+    return {
+        "code": 501,
+        "type": "unsupported",
+        "msg": "TikTok 版暂未接入账号养护。养号会独占浏览器，当前版本请使用搜索、同行监控、评论采集、视频评论、关注评论。",
+    }
+
     target_account_ids = parse_tiktok_nurture_account_ids(request)
 
     if reconcile_tiktok_account_nurture_runtime_state() and tiktok_account_nurture_scheduler:
