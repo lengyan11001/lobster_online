@@ -2382,6 +2382,13 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         # 用暖白色 #fbfaf8 会形成一条明显白边，这里跟登录页顶部同色。
         _window_background = "#eaf6fb" if _use_frameless else SHELL_BACKGROUND_COLOR
 
+        if _use_frameless:
+            try:
+                # 只让「直接命中的」拖动区域生效：点 header 空白处可以拖窗口，
+                # 点按钮/输入框/文字不会误拖。
+                webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = True
+            except Exception:
+                pass
         window = webview.create_window(
             title,
             html=desktop_loading_html(url, title),

@@ -27,6 +27,38 @@ SWP_NOMOVE = 0x0002
 SWP_NOZORDER = 0x0004
 SWP_FRAMECHANGED = 0x0020
 
+WM_GETMINMAXINFO = 0x0024
+
+MONITOR_DEFAULTTONEAREST = 2
+
+
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", wintypes.LONG), ("y", wintypes.LONG)]
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG), ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+
+
+class _MINMAXINFO(ctypes.Structure):
+    _fields_ = [
+        ("ptReserved", _POINT),
+        ("ptMaxSize", _POINT),
+        ("ptMaxPosition", _POINT),
+        ("ptMinTrackSize", _POINT),
+        ("ptMaxTrackSize", _POINT),
+    ]
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("rcMonitor", _RECT),
+        ("rcWork", _RECT),
+        ("dwFlags", wintypes.DWORD),
+    ]
+
+
 WM_NCHITTEST = 0x0084
 HTCLIENT = 1
 HTCAPTION = 2
@@ -45,13 +77,17 @@ _user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 _user32.ScreenToClient.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
 _user32.CallWindowProcW.restype = ctypes.c_ssize_t
 _user32.CallWindowProcW.argtypes = [ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+_user32.MonitorFromWindow.restype = ctypes.c_void_p
+_user32.MonitorFromWindow.argtypes = [wintypes.HWND, wintypes.DWORD]
+_user32.GetMonitorInfoW.restype = wintypes.BOOL
+_user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_MONITORINFO)]
 
 WM_NCCALCSIZE = 0x0083
 
 _state: dict[int, tuple] = {}
 
 
-def apply(hwnd: int, *, drag_height: int = 10, border: int = 6) -> bool:
+def apply(hwnd: int, *, drag_height: int = 14, border: int = 6) -> bool:
     """给已创建的窗口加无边框样式 + 拖动/缩放支持。失败返回 False。"""
     if not hwnd:
         return False
@@ -75,6 +111,25 @@ def apply(hwnd: int, *, drag_height: int = 10, border: int = 6) -> bool:
             # WS_THICKFRAME keeps native resize hit-testing, but it also adds a
             # white non-client frame. Make the client area cover the whole
             # window; WM_NCHITTEST below still returns the resize edges.
+            if msg == WM_GETMINMAXINFO:
+                try:
+                    info = ctypes.cast(lparam, ctypes.POINTER(_MINMAXINFO)).contents
+                    monitor = _user32.MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST)
+                    if monitor:
+                        mi = _MONITORINFO()
+                        mi.cbSize = ctypes.sizeof(_MONITORINFO)
+                        if _user32.GetMonitorInfoW(monitor, ctypes.byref(mi)):
+                            work = mi.rcWork
+                            mon = mi.rcMonitor
+                            info.ptMaxPosition.x = work.left - mon.left
+                            info.ptMaxPosition.y = work.top - mon.top
+                            info.ptMaxSize.x = work.right - work.left
+                            info.ptMaxSize.y = work.bottom - work.top
+                            info.ptMaxTrackSize.x = max(info.ptMaxTrackSize.x, info.ptMaxSize.x)
+                            info.ptMaxTrackSize.y = max(info.ptMaxTrackSize.y, info.ptMaxSize.y)
+                            return 0
+                except Exception:
+                    pass
             if msg == WM_NCCALCSIZE and wparam:
                 return 0
             if msg == WM_NCHITTEST:
@@ -101,7 +156,7 @@ def apply(hwnd: int, *, drag_height: int = 10, border: int = 6) -> bool:
                     return HTTOP
                 if cy >= ch - edge:
                     return HTBOTTOM
-                if 0 <= cy < drag and cx < cw - 150:
+                if edge <= cy < max(drag, edge + 1) and cx < cw - 150:
                     return HTCAPTION
                 return HTCLIENT
         except Exception:
