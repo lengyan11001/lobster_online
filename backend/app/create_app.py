@@ -74,6 +74,7 @@ from .api.media_compat import router as media_compat_router
 from .api.douyin_origin import router as douyin_origin_router
 from .api.tiktok_origin import router as tiktok_origin_router
 from .api.tiktok_browser_leads import router as tiktok_browser_leads_router
+from .api.web_browser_extract import router as web_browser_extract_router
 from .api.liepin_origin import router as liepin_origin_router
 try:
     from .api.ecommerce_publish import router as ecommerce_publish_router
@@ -1123,6 +1124,7 @@ def create_app() -> FastAPI:
     app.include_router(douyin_origin_router, prefix="")
     app.include_router(tiktok_origin_router, prefix="")
     app.include_router(tiktok_browser_leads_router, prefix="")
+    app.include_router(web_browser_extract_router, prefix="")
     app.include_router(liepin_origin_router, prefix="")
     app.include_router(publish_router, prefix="")
     app.include_router(publish_plans_router, prefix="")
