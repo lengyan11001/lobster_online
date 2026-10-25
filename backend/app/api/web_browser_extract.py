@@ -184,14 +184,15 @@ def _build_digest(title: str, description: str, site: str, text: str, links, pag
     lines = [f"标题：{title}", f"站点：{site}"]
     if description:
         lines.append(f"描述：{description}")
-    lines.append("")
-    lines.append("正文节选：")
-    lines.append(text[:2500])
     contact = _contact_lines(text, links, pages)
     if contact:
+        # 通用规则：联系方式放在摘要最前面，正文再长也不会把它挤掉。
         lines.append("")
         lines.append("联系方式线索：")
         lines.extend(contact)
+    lines.append("")
+    lines.append("正文节选：")
+    lines.append(text[:6000])
     items = links if isinstance(links, list) else []
     if items:
         def _link_rank(link) -> int:
@@ -205,7 +206,7 @@ def _build_digest(title: str, description: str, site: str, text: str, links, pag
         ranked = sorted(items, key=_link_rank)
         lines.append("")
         lines.append("主要链接：")
-        for link in ranked[:12]:
+        for link in ranked[:20]:
             label = str(link.get("text") or "").strip() or str(link.get("url") or "")
             lines.append(f"- {label[:60]} {link.get('url', '')}")
     opened = pages if isinstance(pages, list) else []
@@ -216,7 +217,7 @@ def _build_digest(title: str, description: str, site: str, text: str, links, pag
             if not isinstance(page, dict) or page.get("status") != "ok":
                 continue
             lines.append(f"--- {page.get('label', '')} | {page.get('title', '')} | {page.get('url', '')}")
-            lines.append(str(page.get("text", ""))[:1500])
+            lines.append(str(page.get("text", ""))[:3000])
     return chr(10).join(lines)
 
 
