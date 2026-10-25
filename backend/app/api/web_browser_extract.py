@@ -52,6 +52,8 @@ class BrowserExtractBody(BaseModel):
     scroll_rounds: int = Field(2, ge=0, le=10)
     max_chars: int = Field(30000, ge=1000, le=60000)
     click_texts: List[str] = Field(default_factory=list, max_length=5)
+    assist: bool = False
+    assist_timeout_seconds: int = Field(180, ge=10, le=600)
 
 
 def _normalize_text(value: str) -> str:
@@ -128,6 +130,101 @@ def _build_digest(title: str, description: str, site: str, text: str, links, pag
             lines.append(f"--- {page.get('label', '')} | {page.get('title', '')} | {page.get('url', '')}")
             lines.append(str(page.get("text", ""))[:1500])
     return chr(10).join(lines)
+
+
+_ASSIST: Dict[str, Any] = {"playwright": None, "context": None, "page": None}
+
+
+def _looks_like_login(text: str) -> bool:
+    sample = str(text or "").strip().lower()
+    if len(sample) >= 600:
+        return False
+    markers = ("log in", "sign in", "sign up", "登录", "注册", "密码", "验证码", "password", "captcha")
+    return any(marker in sample for marker in markers)
+
+
+async def _ensure_assist_page():
+    from playwright.async_api import async_playwright
+
+    context = _ASSIST.get("context")
+    page = _ASSIST.get("page")
+    if context is not None and page is not None:
+        try:
+            if not page.is_closed():
+                return page
+        except Exception:
+            pass
+    _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    playwright = await async_playwright().start()
+    try:
+        context = await playwright.chromium.launch_persistent_context(
+            str(_PROFILE_DIR),
+            headless=False,
+            channel="chrome",
+            args=["--no-first-run", "--no-default-browser-check"],
+        )
+    except Exception:
+        context = await playwright.chromium.launch_persistent_context(
+            str(_PROFILE_DIR),
+            headless=False,
+            args=["--no-first-run", "--no-default-browser-check"],
+        )
+    page = context.pages[0] if context.pages else await context.new_page()
+    _ASSIST.update({"playwright": playwright, "context": context, "page": page})
+    return page
+
+
+async def _extract_assisted(body: BrowserExtractBody) -> Dict[str, Any]:
+    page = await _ensure_assist_page()
+    await page.goto(body.url, wait_until="domcontentloaded", timeout=60000)
+    if body.wait_ms:
+        await page.wait_for_timeout(body.wait_ms)
+    await _dismiss_gates(page)
+    deadline = time.monotonic() + max(10, int(body.assist_timeout_seconds))
+    waited = 0
+    while time.monotonic() < deadline:
+        try:
+            text = await page.evaluate("() => document.body ? String(document.body.innerText || '') : ''")
+        except Exception:
+            text = ""
+        if len(text) >= 600 and not _looks_like_login(text):
+            break
+        await _dismiss_gates(page)
+        await page.wait_for_timeout(2000)
+        waited += 2
+    for _ in range(max(0, body.scroll_rounds)):
+        try:
+            await page.evaluate("() => window.scrollBy(0, Math.round(window.innerHeight * 0.85))")
+        except Exception:
+            pass
+        await page.wait_for_timeout(800)
+    raw = await page.evaluate(_EXTRACT_JS)
+    text_value = _normalize_text(raw.get("text", ""))[: body.max_chars]
+    final_url = str(raw.get("url") or body.url)
+    title = str(raw.get("title", ""))[:300]
+    description = str(raw.get("description", ""))[:600]
+    site = urlparse(final_url).netloc
+    links = raw.get("links", [])[:300]
+    needs_user = _looks_like_login(text_value) or len(text_value) < 200
+    digest = _build_digest(title, description, site, text_value, links, [])
+    return {
+        "url": body.url,
+        "final_url": final_url,
+        "site": site,
+        "status": "needs_user" if needs_user else "ok",
+        "title": title,
+        "description": description,
+        "text": text_value,
+        "word_count": len(re.findall(r"\S+", text_value)),
+        "links": links,
+        "images": raw.get("images", [])[:100],
+        "pages": [],
+        "digest": digest,
+        "assisted": True,
+        "waited_seconds": waited,
+        "user_hint": "浏览器已拉起，请在里面完成登录或年龄确认；完成后会自动继续。" if needs_user else "已自动继续完成。",
+        "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
 
 async def _extract(body: BrowserExtractBody) -> Dict[str, Any]:
@@ -230,7 +327,7 @@ async def web_browser_extract(body: BrowserExtractBody) -> Dict[str, Any]:
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return {"ok": False, "code": "invalid_url", "error": "只支持 http/https 网址"}
     try:
-        data = await _extract(body)
+        data = await (_extract_assisted(body) if body.assist else _extract(body))
     except Exception as exc:
         logger.warning("[web-browser-extract] failed url=%s err=%s", body.url, exc)
         return {"ok": False, "code": "extract_failed", "error": str(exc)}
