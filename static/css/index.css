@@ -6073,7 +6073,21 @@ body.online-mastra-chat-compose .online-mastra-chat {
   background: rgba(19, 28, 45, 0.42);
 }
 .online-mastra-modal.hidden { display: none; }
+.online-mastra-modal-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  border: 0;
+  background: transparent;
+  font-size: 20px;
+  line-height: 1;
+  padding: 2px 6px;
+  cursor: pointer;
+  color: #8a97a9;
+}
+.online-mastra-modal-close:hover { color: #1d2b44; }
 .online-mastra-modal-card {
+  position: relative;
   width: min(560px, 100%);
   max-height: min(78vh, 720px);
   display: flex;

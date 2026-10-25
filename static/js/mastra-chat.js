@@ -909,6 +909,7 @@
     box.className = 'online-mastra-modal hidden';
     box.innerHTML = [
       '<div class="online-mastra-modal-card" role="dialog" aria-modal="true" aria-labelledby="onlineMastraApprovalTitle">',
+      '<button type="button" class="online-mastra-modal-close" data-mastra-modal="reject" aria-label="关闭" title="取消这次确认">&times;</button>',
       '<div class="online-mastra-modal-head">',
       '<span class="online-mastra-modal-icon" aria-hidden="true">!</span>',
       '<div><h2 id="onlineMastraApprovalTitle">需要你确认</h2>',
@@ -922,11 +923,9 @@
       '</div>'
     ].join('');
     document.body.appendChild(box);
+    // 确认框是模态的：点遮罩/按 Esc 都不关闭，必须点“取消”或右上角关闭，避免状态卡在“等待确认”。
     box.addEventListener('click', function (event) {
-      if (event.target === box) closeApprovalModal();
-    });
-    document.addEventListener('keydown', function (event) {
-      if (event.key === 'Escape' && !box.classList.contains('hidden')) closeApprovalModal();
+      if (event.target === box) event.stopPropagation();
     });
     return box;
   }
@@ -946,18 +945,17 @@
     var task = box.querySelector('.online-mastra-modal-task');
     if (task) task.textContent = text(approval.task || approval.reason || '将执行当前任务').trim();
     var actions = box.querySelector('.online-mastra-modal-actions');
-    if (actions) {
-      actions.querySelectorAll('button').forEach(function (button) {
-        button.disabled = false;
-        if (button._mastraModalBound) return;
-        button._mastraModalBound = true;
-        button.addEventListener('click', function () {
-          if (box.classList.contains('hidden')) return;
-          actions.querySelectorAll('button').forEach(function (item) { item.disabled = true; });
-          decideApproval(box.dataset.mastraApproval, button.getAttribute('data-mastra-modal'), box, box.dataset.mastraMessage);
-        });
+    var controls = box.querySelectorAll('[data-mastra-modal]');
+    controls.forEach(function (button) {
+      button.disabled = false;
+      if (button._mastraModalBound) return;
+      button._mastraModalBound = true;
+      button.addEventListener('click', function () {
+        if (box.classList.contains('hidden')) return;
+        controls.forEach(function (item) { item.disabled = true; });
+        decideApproval(box.dataset.mastraApproval, button.getAttribute('data-mastra-modal'), box, box.dataset.mastraMessage);
       });
-    }
+    });
     box.classList.remove('hidden');
     var primary = actions ? actions.querySelector('[data-mastra-modal="approve"]') : null;
     if (primary && primary.focus) setTimeout(function () { primary.focus(); }, 30);
@@ -1843,5 +1841,6 @@
   window.openMastraLastSession = openLastSession;
   window.initMastraOnlineChat = init;
   window.refreshMastraOnlineChat = refresh;
+  window.openMastraApprovalModal = openApprovalModal;
   window.renderMastraRichBody = renderRichBody;
 })();
