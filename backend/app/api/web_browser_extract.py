@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _PROFILE_DIR = Path(__file__).resolve().parents[3] / "browser_data" / "web_extract"
+_ASSIST_PROFILE_DIR = Path(__file__).resolve().parents[3] / "browser_data" / "web_extract_assist"
 _LOCK = asyncio.Lock()
 _EXTRACT_JS = """
 () => {
@@ -80,17 +81,43 @@ _GATE_JS = """
 
 _CLICK_JS = """
 (label) => {
-  const wanted = String(label || '').trim().toLowerCase();
+  const wanted = String(label || '').trim().toLowerCase().replace(/\s+/g, ' ');
   if (!wanted) return false;
   const nodes = Array.from(document.querySelectorAll('a, button, [role="button"], [role="menuitem"]'));
+  let exact = null;
+  let best = null;
+  let bestLen = 1e9;
   for (const node of nodes) {
-    const text = String(node.innerText || '').trim().toLowerCase();
-    if (text && (text === wanted || text.includes(wanted))) {
-      node.click();
-      return true;
-    }
+    const text = String(node.innerText || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!text || text.length > 60) continue;
+    if (text === wanted) { exact = node; break; }
+    if (text.includes(wanted) && text.length < bestLen) { best = node; bestLen = text.length; }
   }
-  return false;
+  const target = exact || best;
+  if (!target) return false;
+  try { target.scrollIntoView({ block: 'center' }); } catch (e) {}
+  target.click();
+  return true;
+}
+"""
+
+
+_LINK_JS = """
+(label) => {
+  const wanted = String(label || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  if (!wanted) return '';
+  const nodes = Array.from(document.querySelectorAll('a[href]'));
+  let best = '';
+  let bestLen = 1e9;
+  for (const node of nodes) {
+    const raw = String(node.getAttribute('href') || '').trim();
+    if (!raw || raw.startsWith('#') || raw.toLowerCase().startsWith('javascript:')) continue;
+    const text = String(node.innerText || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!text || text.length > 60) continue;
+    if (text === wanted) return node.href;
+    if (text.includes(wanted) && text.length < bestLen) { best = node.href; bestLen = text.length; }
+  }
+  return best;
 }
 """
 
@@ -132,15 +159,65 @@ def _build_digest(title: str, description: str, site: str, text: str, links, pag
     return chr(10).join(lines)
 
 
-_ASSIST: Dict[str, Any] = {"playwright": None, "context": None, "page": None}
+_ASSIST: Dict[str, Any] = {"playwright": None, "context": None, "page": None, "last_used": 0.0, "reaper": None}
+_ASSIST_LOCK = asyncio.Lock()
+_ASSIST_IDLE_SECONDS = 300
 
 
-def _looks_like_login(text: str) -> bool:
+def _looks_like_gate(text: str) -> bool:
+    """True when the page still shows a login / age / captcha wall."""
     sample = str(text or "").strip().lower()
     if len(sample) >= 600:
         return False
-    markers = ("log in", "sign in", "sign up", "登录", "注册", "密码", "验证码", "password", "captcha")
+    markers = (
+        "log in", "sign in", "sign up", "登录", "注册", "密码", "验证码", "password", "captcha",
+        "18+", "adults only", "are you 18", "confirm you are 18", "age verification", "年龄确认", "是否满18",
+    )
     return any(marker in sample for marker in markers)
+
+
+_looks_like_login = _looks_like_gate
+
+
+async def _close_assist() -> None:
+    context = _ASSIST.get("context")
+    playwright = _ASSIST.get("playwright")
+    _ASSIST.update({"playwright": None, "context": None, "page": None, "last_used": 0.0})
+    try:
+        if context is not None:
+            await context.close()
+    except Exception:
+        pass
+    try:
+        if playwright is not None:
+            await playwright.stop()
+    except Exception:
+        pass
+
+
+async def _assist_reaper() -> None:
+    while True:
+        await asyncio.sleep(30)
+        if _ASSIST_LOCK.locked():
+            continue
+        last = float(_ASSIST.get("last_used") or 0.0)
+        if not last or time.monotonic() - last < _ASSIST_IDLE_SECONDS:
+            if _ASSIST.get("context") is None:
+                return
+            continue
+        logger.info("[web-browser-extract] assist browser idle, closing")
+        await _close_assist()
+        return
+
+
+def _ensure_reaper() -> None:
+    task = _ASSIST.get("reaper")
+    if task is not None and not task.done():
+        return
+    try:
+        _ASSIST["reaper"] = asyncio.create_task(_assist_reaper())
+    except RuntimeError:
+        _ASSIST["reaper"] = None
 
 
 async def _ensure_assist_page():
@@ -154,18 +231,18 @@ async def _ensure_assist_page():
                 return page
         except Exception:
             pass
-    _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    _ASSIST_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
     playwright = await async_playwright().start()
     try:
         context = await playwright.chromium.launch_persistent_context(
-            str(_PROFILE_DIR),
+            str(_ASSIST_PROFILE_DIR),
             headless=False,
             channel="chrome",
             args=["--no-first-run", "--no-default-browser-check"],
         )
     except Exception:
         context = await playwright.chromium.launch_persistent_context(
-            str(_PROFILE_DIR),
+            str(_ASSIST_PROFILE_DIR),
             headless=False,
             args=["--no-first-run", "--no-default-browser-check"],
         )
@@ -174,57 +251,159 @@ async def _ensure_assist_page():
     return page
 
 
+async def _collect_clicked_pages(page, labels: List[str], base_url: str) -> List[Dict[str, Any]]:
+    """Open nav entries (contacts / pricing / characters) and keep a short digest of each."""
+    out: List[Dict[str, Any]] = []
+    context = page.context
+    for label in labels:
+        before = set(context.pages)
+        current = ""
+        try:
+            current = str(page.url or "")
+        except Exception:
+            current = ""
+        href = ""
+        if current.rstrip("/") != base_url.rstrip("/"):
+            try:
+                await page.goto(base_url, wait_until="domcontentloaded", timeout=45000)
+                await page.wait_for_timeout(1200)
+            except Exception:
+                pass
+        try:
+            href = str(await page.evaluate(_LINK_JS, label) or "")
+        except Exception:
+            href = ""
+        target = page
+        opened_new_tab = False
+        navigated = False
+        if href and href.rstrip("/") != current.rstrip("/"):
+            try:
+                await page.goto(href, wait_until="domcontentloaded", timeout=45000)
+                await page.wait_for_timeout(2000)
+                navigated = True
+            except Exception:
+                navigated = False
+        if not navigated:
+            try:
+                clicked = await page.evaluate(_CLICK_JS, label)
+            except Exception as exc:
+                out.append({"label": label, "status": "error", "error": str(exc)[:200]})
+                continue
+            if not clicked:
+                out.append({"label": label, "status": "not_found"})
+                continue
+            await page.wait_for_timeout(2500)
+            extra = [item for item in context.pages if item not in before]
+            if extra:
+                target = extra[-1]
+                opened_new_tab = True
+                try:
+                    await target.wait_for_load_state("domcontentloaded", timeout=15000)
+                except Exception:
+                    pass
+                await target.wait_for_timeout(1200)
+        try:
+            raw_page = await target.evaluate(_EXTRACT_JS)
+            page_text = _normalize_text(raw_page.get("text", ""))
+            out.append({
+                "label": label,
+                "status": "ok",
+                "url": str(raw_page.get("url") or ""),
+                "title": str(raw_page.get("title") or "")[:200],
+                "text": page_text[:4000],
+                "links": raw_page.get("links", [])[:30],
+            })
+        except Exception as exc:
+            out.append({"label": label, "status": "error", "error": str(exc)[:200]})
+        finally:
+            if opened_new_tab:
+                try:
+                    await target.close()
+                except Exception:
+                    pass
+            try:
+                if str(page.url or "").rstrip("/") != base_url.rstrip("/"):
+                    await page.goto(base_url, wait_until="domcontentloaded", timeout=45000)
+                    await page.wait_for_timeout(1200)
+            except Exception:
+                pass
+    return out
+
+
 async def _extract_assisted(body: BrowserExtractBody) -> Dict[str, Any]:
-    page = await _ensure_assist_page()
-    await page.goto(body.url, wait_until="domcontentloaded", timeout=60000)
-    if body.wait_ms:
-        await page.wait_for_timeout(body.wait_ms)
-    await _dismiss_gates(page)
-    deadline = time.monotonic() + max(10, int(body.assist_timeout_seconds))
-    waited = 0
-    while time.monotonic() < deadline:
+    async with _ASSIST_LOCK:
+        _ensure_reaper()
+        page = await _ensure_assist_page()
+        _ASSIST["last_used"] = time.monotonic()
+        current = ""
         try:
-            text = await page.evaluate("() => document.body ? String(document.body.innerText || '') : ''")
+            current = str(page.url or "")
         except Exception:
-            text = ""
-        if len(text) >= 600 and not _looks_like_login(text):
-            break
+            current = ""
+        if current.rstrip("/") != body.url.rstrip("/"):
+            await page.goto(body.url, wait_until="domcontentloaded", timeout=60000)
+        if body.wait_ms:
+            await page.wait_for_timeout(body.wait_ms)
         await _dismiss_gates(page)
-        await page.wait_for_timeout(2000)
-        waited += 2
-    for _ in range(max(0, body.scroll_rounds)):
-        try:
-            await page.evaluate("() => window.scrollBy(0, Math.round(window.innerHeight * 0.85))")
-        except Exception:
-            pass
-        await page.wait_for_timeout(800)
-    raw = await page.evaluate(_EXTRACT_JS)
-    text_value = _normalize_text(raw.get("text", ""))[: body.max_chars]
-    final_url = str(raw.get("url") or body.url)
-    title = str(raw.get("title", ""))[:300]
-    description = str(raw.get("description", ""))[:600]
-    site = urlparse(final_url).netloc
-    links = raw.get("links", [])[:300]
-    needs_user = _looks_like_login(text_value) or len(text_value) < 200
-    digest = _build_digest(title, description, site, text_value, links, [])
-    return {
-        "url": body.url,
-        "final_url": final_url,
-        "site": site,
-        "status": "needs_user" if needs_user else "ok",
-        "title": title,
-        "description": description,
-        "text": text_value,
-        "word_count": len(re.findall(r"\S+", text_value)),
-        "links": links,
-        "images": raw.get("images", [])[:100],
-        "pages": [],
-        "digest": digest,
-        "assisted": True,
-        "waited_seconds": waited,
-        "user_hint": "浏览器已拉起，请在里面完成登录或年龄确认；完成后会自动继续。" if needs_user else "已自动继续完成。",
-        "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
+
+        deadline = time.monotonic() + max(10, int(body.assist_timeout_seconds))
+        waited = 0
+        while True:
+            try:
+                text = await page.evaluate("() => document.body ? String(document.body.innerText || '') : ''")
+            except Exception:
+                text = ""
+            if len(text) >= 400 and not _looks_like_gate(text):
+                break
+            if time.monotonic() >= deadline:
+                break
+            await _dismiss_gates(page)
+            await page.wait_for_timeout(2000)
+            waited += 2
+            _ASSIST["last_used"] = time.monotonic()
+
+        for _ in range(max(0, body.scroll_rounds)):
+            try:
+                await page.evaluate("() => window.scrollBy(0, Math.round(window.innerHeight * 0.85))")
+            except Exception:
+                pass
+            await page.wait_for_timeout(800)
+        raw = await page.evaluate(_EXTRACT_JS)
+        text_value = _normalize_text(raw.get("text", ""))[: body.max_chars]
+        final_url = str(raw.get("url") or body.url)
+        title = str(raw.get("title", ""))[:300]
+        description = str(raw.get("description", ""))[:600]
+        site = urlparse(final_url).netloc
+        links = raw.get("links", [])[:300]
+
+        labels = [str(item).strip() for item in (body.click_texts or []) if str(item).strip()][:5]
+        pages = await _collect_clicked_pages(page, labels, final_url) if labels else []
+
+        needs_user = bool(_looks_like_gate(text_value)) or len(text_value) < 200
+        _ASSIST["last_used"] = time.monotonic()
+        digest = _build_digest(title, description, site, text_value, links, pages)
+        return {
+            "url": body.url,
+            "final_url": final_url,
+            "site": site,
+            "status": "needs_user" if needs_user else "ok",
+            "title": title,
+            "description": description,
+            "text": text_value,
+            "word_count": len(re.findall(r"\S+", text_value)),
+            "links": links,
+            "images": raw.get("images", [])[:100],
+            "pages": pages,
+            "digest": digest,
+            "assisted": True,
+            "waited_seconds": waited,
+            "user_hint": (
+                "浏览器已拉起，请在里面完成登录或年龄确认；完成后会自动继续。"
+                if needs_user
+                else "已自动继续完成。"
+            ),
+            "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
 
 
 async def _extract(body: BrowserExtractBody) -> Dict[str, Any]:
@@ -262,31 +441,10 @@ async def _extract(body: BrowserExtractBody) -> Dict[str, Any]:
                 raw = await page.evaluate(_EXTRACT_JS)
                 text = _normalize_text(raw.get("text", ""))[: body.max_chars]
                 final_url = str(raw.get("url") or body.url)
+                labels = [str(item).strip() for item in (body.click_texts or []) if str(item).strip()][:5]
                 pages: List[Dict[str, Any]] = []
-                for label in [str(item).strip() for item in (body.click_texts or []) if str(item).strip()][:5]:
-                    try:
-                        clicked = await page.evaluate(_CLICK_JS, label)
-                        if not clicked:
-                            pages.append({"label": label, "status": "not_found"})
-                            continue
-                        await page.wait_for_timeout(2500)
-                        raw_page = await page.evaluate(_EXTRACT_JS)
-                        pages.append({
-                            "label": label,
-                            "status": "ok",
-                            "url": str(raw_page.get("url") or ""),
-                            "title": str(raw_page.get("title") or "")[:200],
-                            "text": _normalize_text(raw_page.get("text", ""))[:4000],
-                            "links": raw_page.get("links", [])[:30],
-                        })
-                    except Exception as exc:
-                        pages.append({"label": label, "status": "error", "error": str(exc)[:200]})
-                    finally:
-                        try:
-                            await page.goto(final_url, wait_until="domcontentloaded", timeout=45000)
-                            await page.wait_for_timeout(2000)
-                        except Exception:
-                            pass
+                if labels:
+                    pages = await _collect_clicked_pages(page, labels, final_url)
                 status = "ok"
                 if len(text) < 120:
                     low = final_url.lower()
