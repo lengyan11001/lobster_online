@@ -398,10 +398,61 @@
     try { return new URL(url).host.replace(/^www\./i, ''); } catch (error) { return '\u94fe\u63a5'; }
   }
 
-  function richLinkify(value) {
-    return escapeHtml(value).replace(RICH_URL_RE, function (raw) {
+  var RICH_INLINE_CODE_RE = /\x60([^\x60\n]{1,80})\x60/g;
+  var RICH_BOLD_RE = /\*\*([^*\n]{1,120})\*\*/g;
+
+  function richInline(value) {
+    var html = escapeHtml(value);
+    html = html.replace(RICH_INLINE_CODE_RE, '<code>$1</code>');
+    html = html.replace(RICH_BOLD_RE, '<strong>$1</strong>');
+    return html.replace(RICH_URL_RE, function (raw) {
       return '<a href="' + raw + '" target="_blank" rel="noopener noreferrer">' + raw + '</a>';
     });
+  }
+
+  function richLinkify(value) {
+    return richInline(value);
+  }
+
+  function richTableCells(line) {
+    var body = String(line).trim().replace(/^\|/, '').replace(/\|$/, '');
+    return body.split('|').map(function (cell) { return cell.trim(); });
+  }
+
+  function richTableSeparator(line) {
+    var cells = richTableCells(line);
+    if (!cells.length) return false;
+    return cells.every(function (cell) { return /^:?-{2,}:?$/.test(cell); });
+  }
+
+  function richTable(header, rows) {
+    var wrap = document.createElement('div');
+    wrap.className = 'rich-table-wrap';
+    var table = document.createElement('table');
+    table.className = 'rich-table';
+    var thead = document.createElement('thead');
+    var headRow = document.createElement('tr');
+    header.forEach(function (cell) {
+      var th = document.createElement('th');
+      th.innerHTML = richInline(cell);
+      headRow.appendChild(th);
+    });
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    var tbody = document.createElement('tbody');
+    rows.forEach(function (row) {
+      var tr = document.createElement('tr');
+      var width = Math.max(header.length, row.length);
+      for (var i = 0; i < width; i += 1) {
+        var td = document.createElement('td');
+        td.innerHTML = richInline(row[i] || '');
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+    return wrap;
   }
 
   var lightboxItems = [];
@@ -547,7 +598,7 @@
       if (!buffer.length) return;
       var block = document.createElement('div');
       block.className = 'rich-paragraph';
-      block.innerHTML = richLinkify(buffer.join('\n'));
+      block.innerHTML = richInline(buffer.join('\n'));
       host.appendChild(block);
       buffer = [];
     }
@@ -568,6 +619,27 @@
         codeEl.textContent = code.join('\n');
         pre.appendChild(codeEl);
         host.appendChild(pre);
+        continue;
+      }
+      var headingMatch = /^\*\*([^*]{1,60})\*\*[：:]?$/.exec(trimmed);
+      if (headingMatch) {
+        flush();
+        var headingEl = document.createElement('div');
+        headingEl.className = 'rich-heading';
+        headingEl.innerHTML = richInline(headingMatch[1]);
+        host.appendChild(headingEl);
+        continue;
+      }
+      if (trimmed.charAt(0) === '|' && index + 1 < lines.length && richTableSeparator(lines[index + 1])) {
+        var headerCells = richTableCells(trimmed);
+        var bodyRows = [];
+        index += 1;
+        while (index + 1 < lines.length && String(lines[index + 1]).trim().charAt(0) === '|') {
+          index += 1;
+          bodyRows.push(richTableCells(lines[index]));
+        }
+        flush();
+        host.appendChild(richTable(headerCells, bodyRows));
         continue;
       }
       var alone = /^https?:\/\/\S+$/i.test(trimmed) ? trimmed : '';
@@ -1771,4 +1843,5 @@
   window.openMastraLastSession = openLastSession;
   window.initMastraOnlineChat = init;
   window.refreshMastraOnlineChat = refresh;
+  window.renderMastraRichBody = renderRichBody;
 })();
