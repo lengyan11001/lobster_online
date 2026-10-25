@@ -12868,9 +12868,10 @@ async def _run_client_workflow_action(
                 "wait_ms": max(0, min(_safe_int(source.get("wait_ms")) or 3000, 30000)),
                 "scroll_rounds": max(0, min(_safe_int(source.get("scroll_rounds")) or 2, 10)),
                 "max_chars": max(1000, min(_safe_int(source.get("max_chars")) or 30000, 60000)),
+                "click_texts": source.get("click_texts") if isinstance(source.get("click_texts"), list) else [],
             },
             headers=headers,
-            timeout_seconds=120.0,
+            timeout_seconds=180.0,
         )
         data = result.get("data") if isinstance(result.get("data"), dict) else {}
         digest = str(data.get("digest") or "").strip()

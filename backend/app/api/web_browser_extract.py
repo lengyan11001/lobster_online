@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 from urllib.parse import urlparse
 
 from fastapi import APIRouter
@@ -51,6 +51,7 @@ class BrowserExtractBody(BaseModel):
     wait_ms: int = Field(3000, ge=0, le=30000)
     scroll_rounds: int = Field(2, ge=0, le=10)
     max_chars: int = Field(30000, ge=1000, le=60000)
+    click_texts: List[str] = Field(default_factory=list, max_length=5)
 
 
 def _normalize_text(value: str) -> str:
@@ -75,6 +76,23 @@ _GATE_JS = """
 """
 
 
+_CLICK_JS = """
+(label) => {
+  const wanted = String(label || '').trim().toLowerCase();
+  if (!wanted) return false;
+  const nodes = Array.from(document.querySelectorAll('a, button, [role="button"], [role="menuitem"]'));
+  for (const node of nodes) {
+    const text = String(node.innerText || '').trim().toLowerCase();
+    if (text && (text === wanted || text.includes(wanted))) {
+      node.click();
+      return true;
+    }
+  }
+  return false;
+}
+"""
+
+
 async def _dismiss_gates(page) -> None:
     for _ in range(3):
         try:
@@ -86,7 +104,7 @@ async def _dismiss_gates(page) -> None:
         await page.wait_for_timeout(1500)
 
 
-def _build_digest(title: str, description: str, site: str, text: str, links) -> str:
+def _build_digest(title: str, description: str, site: str, text: str, links, pages=None) -> str:
     lines = [f"标题：{title}", f"站点：{site}"]
     if description:
         lines.append(f"描述：{description}")
@@ -100,6 +118,15 @@ def _build_digest(title: str, description: str, site: str, text: str, links) -> 
         for link in items[:12]:
             label = str(link.get("text") or "").strip() or str(link.get("url") or "")
             lines.append(f"- {label[:60]} {link.get('url', '')}")
+    opened = pages if isinstance(pages, list) else []
+    if opened:
+        lines.append("")
+        lines.append("已点开的页面：")
+        for page in opened:
+            if not isinstance(page, dict) or page.get("status") != "ok":
+                continue
+            lines.append(f"--- {page.get('label', '')} | {page.get('title', '')} | {page.get('url', '')}")
+            lines.append(str(page.get("text", ""))[:1500])
     return chr(10).join(lines)
 
 
@@ -138,6 +165,31 @@ async def _extract(body: BrowserExtractBody) -> Dict[str, Any]:
                 raw = await page.evaluate(_EXTRACT_JS)
                 text = _normalize_text(raw.get("text", ""))[: body.max_chars]
                 final_url = str(raw.get("url") or body.url)
+                pages: List[Dict[str, Any]] = []
+                for label in [str(item).strip() for item in (body.click_texts or []) if str(item).strip()][:5]:
+                    try:
+                        clicked = await page.evaluate(_CLICK_JS, label)
+                        if not clicked:
+                            pages.append({"label": label, "status": "not_found"})
+                            continue
+                        await page.wait_for_timeout(2500)
+                        raw_page = await page.evaluate(_EXTRACT_JS)
+                        pages.append({
+                            "label": label,
+                            "status": "ok",
+                            "url": str(raw_page.get("url") or ""),
+                            "title": str(raw_page.get("title") or "")[:200],
+                            "text": _normalize_text(raw_page.get("text", ""))[:4000],
+                            "links": raw_page.get("links", [])[:30],
+                        })
+                    except Exception as exc:
+                        pages.append({"label": label, "status": "error", "error": str(exc)[:200]})
+                    finally:
+                        try:
+                            await page.goto(final_url, wait_until="domcontentloaded", timeout=45000)
+                            await page.wait_for_timeout(2000)
+                        except Exception:
+                            pass
                 status = "ok"
                 if len(text) < 120:
                     low = final_url.lower()
@@ -149,7 +201,7 @@ async def _extract(body: BrowserExtractBody) -> Dict[str, Any]:
                 description = str(raw.get("description", ""))[:600]
                 site = urlparse(final_url).netloc
                 links = raw.get("links", [])[:300]
-                digest = _build_digest(title, description, site, text, links)
+                digest = _build_digest(title, description, site, text, links, pages)
                 return {
                     "url": body.url,
                     "final_url": final_url,
@@ -161,6 +213,7 @@ async def _extract(body: BrowserExtractBody) -> Dict[str, Any]:
                     "word_count": len(re.findall(r"\S+", text)),
                     "links": links,
                     "images": raw.get("images", [])[:100],
+                    "pages": pages,
                     "digest": digest,
                     "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
