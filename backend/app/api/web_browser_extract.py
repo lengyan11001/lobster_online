@@ -133,6 +133,43 @@ async def _dismiss_gates(page) -> None:
         await page.wait_for_timeout(1500)
 
 
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_PHONE_RE = re.compile(r"(?:400[- ]?\d{3}[- ]?\d{4}|0\d{2,3}[- ]?\d{7,8}(?:[-转]\d{1,6})?|1[3-9]\d{9})")
+_CONTACT_PRIMARY = ("联系", "contact")
+_CONTACT_HINTS = _CONTACT_PRIMARY + ("about us", "aboutus", "关于我们", "询价", "support")
+
+
+def _contact_lines(text: str, links, pages) -> List[str]:
+    blob_parts = [str(text or "")]
+    for page in pages or []:
+        if isinstance(page, dict) and page.get("status") == "ok":
+            blob_parts.append(str(page.get("text") or ""))
+    blob = "\n".join(blob_parts)
+    found: List[str] = []
+    for email in dict.fromkeys(_EMAIL_RE.findall(blob)):
+        found.append(f"- 邮箱：{email}")
+    for phone in dict.fromkeys(_PHONE_RE.findall(blob)):
+        found.append(f"- 电话：{phone}")
+    candidates = []
+    for link in links or []:
+        if not isinstance(link, dict):
+            continue
+        label = str(link.get("text") or "")
+        url = str(link.get("url") or "")
+        low = (label + " " + url).lower()
+        if not any(hint in low for hint in _CONTACT_HINTS):
+            continue
+        tier = 0 if any(hint in low for hint in _CONTACT_PRIMARY) else 1
+        candidates.append((tier, f"- 联系入口：{label or url} {url}"))
+    seen = set()
+    for _tier, line in sorted(candidates, key=lambda item: item[0]):
+        if line in seen:
+            continue
+        seen.add(line)
+        found.append(line)
+    return found[:8]
+
+
 def _build_digest(title: str, description: str, site: str, text: str, links, pages=None) -> str:
     lines = [f"标题：{title}", f"站点：{site}"]
     if description:
@@ -140,11 +177,25 @@ def _build_digest(title: str, description: str, site: str, text: str, links, pag
     lines.append("")
     lines.append("正文节选：")
     lines.append(text[:2500])
+    contact = _contact_lines(text, links, pages)
+    if contact:
+        lines.append("")
+        lines.append("联系方式线索：")
+        lines.extend(contact)
     items = links if isinstance(links, list) else []
     if items:
+        def _link_rank(link) -> int:
+            low = (str(link.get("text") or "") + " " + str(link.get("url") or "")).lower()
+            if any(hint in low for hint in _CONTACT_PRIMARY):
+                return 0
+            if any(hint in low for hint in _CONTACT_HINTS):
+                return 1
+            return 2
+
+        ranked = sorted(items, key=_link_rank)
         lines.append("")
         lines.append("主要链接：")
-        for link in items[:12]:
+        for link in ranked[:12]:
             label = str(link.get("text") or "").strip() or str(link.get("url") or "")
             lines.append(f"- {label[:60]} {link.get('url', '')}")
     opened = pages if isinstance(pages, list) else []
