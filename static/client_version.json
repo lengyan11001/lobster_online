@@ -1,7 +1,7 @@
 {
-  "version": "2.0.185",
-  "build": 482,
-  "applied_at": "2026-10-23T12:56:37+08:00",
-  "note": "TikTok lead tabs/search history; publish modal close",
-  "bundle_sha256": "8fd2676442ce2da3162918e76bb5ad18520a44122f01830c437cdd0b73125ef5"
+  "version": "2.0.186",
+  "build": 483,
+  "applied_at": "2026-10-25T12:56:23+08:00",
+  "note": "web extract: device-first contacts, challenge assist, digest tables",
+  "bundle_sha256": "445a064e382ae251e86d2fd279d3471b87aa0badaad45bdbef00b02601dba653"
 }
