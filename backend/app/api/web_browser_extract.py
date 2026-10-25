@@ -133,7 +133,14 @@ async def _dismiss_gates(page) -> None:
         await page.wait_for_timeout(1500)
 
 
-_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_EMAIL_RE = re.compile(
+    r"(?<![A-Za-z0-9._%+\-])[A-Za-z0-9._%+\-]{1,64}@(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,24}(?![A-Za-z0-9\-])"
+)
+
+
+def _clean_email(raw: str) -> str:
+    match = re.match(r"^(.*\.[A-Za-z]{2,6})([A-Z][A-Za-z]{2,})$", raw or "")
+    return match.group(1) if match else raw
 _PHONE_RE = re.compile(
     r"(?:400[- ]?\d{3}[- ]?\d{4}"
     r"|0\d{2,3}[- ]?\d{7,8}(?:[-转]\d{1,6})?"
@@ -156,7 +163,7 @@ def _contact_lines(text: str, links, pages) -> List[str]:
             blob_parts.append(str(page.get("text") or ""))
     blob = "\n".join(blob_parts)
     found: List[str] = []
-    for email in dict.fromkeys(_EMAIL_RE.findall(blob)):
+    for email in dict.fromkeys(_clean_email(item) for item in _EMAIL_RE.findall(blob)):
         found.append(f"- 邮箱：{email}")
     for phone in dict.fromkeys(_PHONE_RE.findall(blob)):
         found.append(f"- 电话：{phone}")
