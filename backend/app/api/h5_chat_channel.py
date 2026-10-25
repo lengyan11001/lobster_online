@@ -9,6 +9,7 @@ posts progress/final events back to the cloud.
 from __future__ import annotations
 
 import asyncio
+import time
 import base64
 import hashlib
 import json
@@ -109,6 +110,9 @@ _SCHEDULED_TASK_COMPLETION_RETRY_SECONDS = 6 * 60 * 60
 _pending_task_completion_run_ids: set[str] = set()
 _pending_task_completion_tasks: set[asyncio.Task] = set()
 _scheduled_task_control_delivery: Dict[str, Dict[str, Any]] = {}
+# 每个 run 最后一次「非心跳」进度事件的本地时间，用于看门狗判断是否挂死
+_scheduled_task_activity: Dict[str, float] = {}
+_SCHEDULED_TASK_NO_PROGRESS_SECONDS = 600.0
 _MOBILE_UPLOAD_TITLE = "【手机上传素材】"
 _MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*【手机上传素材】\n(?P<body>[\s\S]*)", re.IGNORECASE)
 
@@ -1466,6 +1470,11 @@ async def _post_task_event(
     payload: Optional[Dict[str, Any]] = None,
 ) -> int:
     body = {"type": event_type, "payload": payload or {}}
+    if str(event_type or "").strip().lower() != "heartbeat":
+        try:
+            _scheduled_task_activity[run_id] = time.monotonic()
+        except Exception:
+            pass
     return await _post_task_control_request(
         client,
         f"{base}/api/scheduled-tasks/runs/{run_id}/event",
@@ -14294,6 +14303,46 @@ async def _process_item_detached(
         await _process_item(client, base, jwt_token, installation_id, item)
 
 
+async def _scheduled_inactivity_watchdog(
+    owner: "asyncio.Task[Any]",
+    run_id: str,
+    client: httpx.AsyncClient,
+    base: str,
+    headers: Dict[str, str],
+    timeout_seconds: float = _SCHEDULED_TASK_NO_PROGRESS_SECONDS,
+) -> None:
+    """claimed 之后长时间没有任何进度事件（心跳不算）就中断，别把本地队列堵死。"""
+    try:
+        while True:
+            await asyncio.sleep(60.0)
+            last = _scheduled_task_activity.get(run_id) or 0.0
+            if not last or time.monotonic() - last <= timeout_seconds:
+                continue
+            logger.warning(
+                "[SCHEDULED-TASK] no progress for %.0fs; aborting run_id=%s",
+                time.monotonic() - last,
+                run_id,
+            )
+            try:
+                await _post_task_event(
+                    client,
+                    base,
+                    headers,
+                    run_id,
+                    "failed",
+                    {
+                        "text": "执行无进展超过 10 分钟，本地已中断并释放队列",
+                        "stage": "no_progress_timeout",
+                    },
+                )
+            except Exception:
+                pass
+            owner.cancel()
+            return
+    except asyncio.CancelledError:
+        return
+
+
 async def _process_scheduled_task_detached(
     base: str,
     jwt_token: str,
@@ -14306,13 +14355,21 @@ async def _process_scheduled_task_detached(
     if run_id and not _try_mark_scheduled_run_active(run_id):
         logger.info("[SCHEDULED-TASK] skip duplicate in-flight run_id=%s", run_id)
         return
+    if run_id:
+        _scheduled_task_activity[run_id] = time.monotonic()
     douyin_lock = None
     douyin_lock_acquired = False
     douyin_marker_id = ""
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         keepalive: Optional[asyncio.Task] = None
+        watchdog: Optional[asyncio.Task] = None
         if run_id:
             keepalive = asyncio.create_task(_scheduled_task_keepalive(client, base, headers, run_id, item))
+            owner_task = asyncio.current_task()
+            if owner_task is not None:
+                watchdog = asyncio.create_task(
+                    _scheduled_inactivity_watchdog(owner_task, run_id, client, base, headers)
+                )
         try:
             if _scheduled_item_uses_douyin_runtime(item):
                 _install_douyin_origin_import_path()
@@ -14352,12 +14409,20 @@ async def _process_scheduled_task_detached(
                 item,
             )
         finally:
+            if watchdog:
+                watchdog.cancel()
+                try:
+                    await watchdog
+                except asyncio.CancelledError:
+                    pass
             if keepalive:
                 keepalive.cancel()
                 try:
                     await keepalive
                 except asyncio.CancelledError:
                     pass
+            if run_id:
+                _scheduled_task_activity.pop(run_id, None)
             if douyin_marker_id:
                 try:
                     set_douyin_schedule_external_work(douyin_marker_id, active=False)
