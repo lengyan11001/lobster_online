@@ -12861,7 +12861,7 @@ async def _run_client_workflow_action(
         url = str(source.get("url") or "").strip()
         if not url:
             raise RuntimeError("请提供要打开的网址")
-        return await _post_local_api_json(
+        result = await _post_local_api_json(
             "/api/web/browser-extract",
             {
                 "url": url,
@@ -12872,6 +12872,11 @@ async def _run_client_workflow_action(
             headers=headers,
             timeout_seconds=120.0,
         )
+        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        digest = str(data.get("digest") or "").strip()
+        if digest:
+            return {"ok": True, "digest": digest, "url": data.get("url", url), "title": data.get("title", "")}
+        return result
     native_account_id = str(source.get("account_id") or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID).strip() or native_wechat_engine.LOCAL_DEFAULT_ACCOUNT_ID
     if action == "image_studio_generate":
         prompt = str(source.get("prompt") or "").strip()
@@ -13616,6 +13621,11 @@ async def _run_client_workflow_action(
 
 
 def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
+    if action == "browser_extract_page":
+        digest = str(result.get("digest") or "").strip()
+        if digest:
+            return digest
+        return "网页已打开，但没有提取到可读正文。"
     if action == "image_studio_generate":
         images = result.get("images") if isinstance(result.get("images"), list) else []
         return f"AI设计图已生成，共 {len(images) or 1} 张。"

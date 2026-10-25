@@ -58,6 +58,51 @@ def _normalize_text(value: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
+_GATE_JS = """
+() => {
+  const wanted = ['i am 18 or older', 'yes, i am 18', 'enter', 'agree', 'accept', 'continue', '同意', '进入', '我已满18岁', '确认'];
+  const nodes = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+  for (const n of nodes) {
+    const text = String(n.innerText || '').trim().toLowerCase();
+    if (!text) continue;
+    if (wanted.some((word) => text === word || text.includes(word))) {
+      n.click();
+      return text;
+    }
+  }
+  return '';
+}
+"""
+
+
+async def _dismiss_gates(page) -> None:
+    for _ in range(3):
+        try:
+            clicked = await page.evaluate(_GATE_JS)
+        except Exception:
+            return
+        if not clicked:
+            return
+        await page.wait_for_timeout(1500)
+
+
+def _build_digest(title: str, description: str, site: str, text: str, links) -> str:
+    lines = [f"标题：{title}", f"站点：{site}"]
+    if description:
+        lines.append(f"描述：{description}")
+    lines.append("")
+    lines.append("正文节选：")
+    lines.append(text[:2500])
+    items = links if isinstance(links, list) else []
+    if items:
+        lines.append("")
+        lines.append("主要链接：")
+        for link in items[:12]:
+            label = str(link.get("text") or "").strip() or str(link.get("url") or "")
+            lines.append(f"- {label[:60]} {link.get('url', '')}")
+    return chr(10).join(lines)
+
+
 async def _extract(body: BrowserExtractBody) -> Dict[str, Any]:
     from playwright.async_api import async_playwright
 
@@ -82,6 +127,8 @@ async def _extract(body: BrowserExtractBody) -> Dict[str, Any]:
                 await page.goto(body.url, wait_until="domcontentloaded", timeout=45000)
                 if body.wait_ms:
                     await page.wait_for_timeout(body.wait_ms)
+                await _dismiss_gates(page)
+                await page.wait_for_timeout(1200)
                 for _ in range(max(0, body.scroll_rounds)):
                     try:
                         await page.evaluate("() => window.scrollBy(0, Math.round(window.innerHeight * 0.85))")
@@ -98,17 +145,23 @@ async def _extract(body: BrowserExtractBody) -> Dict[str, Any]:
                         status = "needs_login"
                     else:
                         status = "low_content"
+                title = str(raw.get("title", ""))[:300]
+                description = str(raw.get("description", ""))[:600]
+                site = urlparse(final_url).netloc
+                links = raw.get("links", [])[:300]
+                digest = _build_digest(title, description, site, text, links)
                 return {
                     "url": body.url,
                     "final_url": final_url,
-                    "site": urlparse(final_url).netloc,
+                    "site": site,
                     "status": status,
-                    "title": str(raw.get("title", ""))[:300],
-                    "description": str(raw.get("description", ""))[:600],
+                    "title": title,
+                    "description": description,
                     "text": text,
                     "word_count": len(re.findall(r"\S+", text)),
-                    "links": raw.get("links", [])[:300],
+                    "links": links,
                     "images": raw.get("images", [])[:100],
+                    "digest": digest,
                     "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 }
             finally:
