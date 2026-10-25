@@ -134,9 +134,19 @@ async def _dismiss_gates(page) -> None:
 
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-_PHONE_RE = re.compile(r"(?:400[- ]?\d{3}[- ]?\d{4}|0\d{2,3}[- ]?\d{7,8}(?:[-转]\d{1,6})?|1[3-9]\d{9})")
-_CONTACT_PRIMARY = ("联系", "contact")
-_CONTACT_HINTS = _CONTACT_PRIMARY + ("about us", "aboutus", "关于我们", "询价", "support")
+_PHONE_RE = re.compile(
+    r"(?:400[- ]?\d{3}[- ]?\d{4}"
+    r"|0\d{2,3}[- ]?\d{7,8}(?:[-转]\d{1,6})?"
+    r"|1[3-9]\d{9}"
+    r"|\+\d{1,3}[- ]\d{2,4}[- ]\d{3,8}"
+    r"|\(\d{2,4}\)\s?\d{3,8})"
+)
+# 通用规则：只按多语言的“联系/咨询”语义和职能词归类，不写死任何站点或客户。
+_CONTACT_PRIMARY = (
+    "联系", "contact", "contacto", "kontakt", "お問い合わせ", "문의",
+    "get in touch", "enquiry", "inquiry", "询价", "咨询",
+)
+_CONTACT_HINTS = _CONTACT_PRIMARY + ("about us", "aboutus", "关于我们", "关于", "sales", "销售", "客服", "support", "help")
 
 
 def _contact_lines(text: str, links, pages) -> List[str]:
