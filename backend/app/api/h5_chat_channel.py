@@ -112,7 +112,7 @@ _pending_task_completion_tasks: set[asyncio.Task] = set()
 _scheduled_task_control_delivery: Dict[str, Dict[str, Any]] = {}
 # 每个 run 最后一次「非心跳」进度事件的本地时间，用于看门狗判断是否挂死
 _scheduled_task_activity: Dict[str, float] = {}
-_SCHEDULED_TASK_NO_PROGRESS_SECONDS = 600.0
+_SCHEDULED_TASK_NO_PROGRESS_SECONDS = 2400.0
 _MOBILE_UPLOAD_TITLE = "【手机上传素材】"
 _MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*【手机上传素材】\n(?P<body>[\s\S]*)", re.IGNORECASE)
 
@@ -14331,7 +14331,7 @@ async def _scheduled_inactivity_watchdog(
                     run_id,
                     "failed",
                     {
-                        "text": "执行无进展超过 10 分钟，本地已中断并释放队列",
+                        "text": "执行无进展超过 40 分钟，本地已中断并释放队列",
                         "stage": "no_progress_timeout",
                     },
                 )
