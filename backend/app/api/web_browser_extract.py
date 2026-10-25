@@ -166,6 +166,11 @@ def _contact_lines(text: str, links, pages) -> List[str]:
     for email in dict.fromkeys(_clean_email(item) for item in _EMAIL_RE.findall(blob)):
         found.append(f"- 邮箱：{email}")
     for phone in dict.fromkeys(_PHONE_RE.findall(blob)):
+        digits = re.sub(r"\D", "", phone)
+        has_sep = bool(re.search(r"[\s\-()+]", phone))
+        # 无分隔符且超过 11 位的基本是页面 ID/时间戳，不是电话
+        if not has_sep and len(digits) > 11:
+            continue
         found.append(f"- 电话：{phone}")
     candidates = []
     for link in links or []:
@@ -176,8 +181,17 @@ def _contact_lines(text: str, links, pages) -> List[str]:
         low = (label + " " + url).lower()
         if not any(hint in low for hint in _CONTACT_HINTS):
             continue
+        # 页脚/客服中心这类不是“联系入口”，统一丢掉
+        if any(noise in low for noise in (
+            "help center", "report abuse", "after-sales", "aftersales", "refund",
+            "money-back", "on-time shipping", "trade assurance", "privacy", "terms",
+            "careers", "jobs", "download the app", "membership program",
+        )):
+            continue
         tier = 0 if any(hint in low for hint in _CONTACT_PRIMARY) else 1
-        candidates.append((tier, f"- 联系入口：{label or url} {url}"))
+        shown = label.strip() if label.strip() and label.strip() != url else url
+        line = f"- 联系入口：{shown}" + (f" {url}" if shown != url else "")
+        candidates.append((tier, line))
     seen = set()
     for _tier, line in sorted(candidates, key=lambda item: item[0]):
         if line in seen:
