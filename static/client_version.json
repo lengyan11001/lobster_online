@@ -1,7 +1,6 @@
 {
-  "version": "2.0.192",
-  "build": 489,
-  "applied_at": "2026-10-25T16:07:08+08:00",
-  "note": "2.0.192: known-good build with publisher + branding fallback",
-  "bundle_sha256": "06cc80b44882d2fc8bea136d85744b3461d8699a3960a8348dd6379fa304d02b"
+  "version": "2.0.193",
+  "build": 490,
+  "applied_at": "2026-10-25T16:13:00+08:00",
+  "note": "rollback to 2.0.185 code"
 }
