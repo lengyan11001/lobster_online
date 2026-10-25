@@ -184,6 +184,10 @@ def _build_digest(title: str, description: str, site: str, text: str, links, pag
     lines = [f"标题：{title}", f"站点：{site}"]
     if description:
         lines.append(f"描述：{description}")
+    if _looks_like_challenge(text):
+        lines.append("")
+        lines.append("提示：这是反爬/人机验证页（Cloudflare 之类），服务器或后台浏览器拿不到正文；"
+                     "需要打开可见浏览器让用户点一下验证，之后会自动继续。")
     contact = _contact_lines(text, links, pages)
     if contact:
         # 通用规则：联系方式放在摘要最前面，正文再长也不会把它挤掉。
@@ -239,6 +243,23 @@ def _looks_like_gate(text: str) -> bool:
 
 
 _looks_like_login = _looks_like_gate
+
+_CHALLENGE_MARKERS = (
+    "checking your browser", "just a moment", "verify you are human", "enable javascript",
+    "attention required", "ddos protection", "cf-chl", "cloudflare", "captcha",
+    "人机验证", "安全验证", "验证您是真人", "请稍候", "请稍等", "访问验证",
+)
+
+
+def _looks_like_challenge(text: str) -> bool:
+    """True when the page is an anti-bot / JS challenge instead of real content."""
+    sample = str(text or "").strip().lower()
+    if len(sample) >= 1200:
+        return False
+    if not sample:
+        return False
+    hits = sum(1 for marker in _CHALLENGE_MARKERS if marker in sample)
+    return hits >= 1 and len(sample) < 400
 
 
 async def _close_assist() -> None:
@@ -415,7 +436,7 @@ async def _extract_assisted(body: BrowserExtractBody) -> Dict[str, Any]:
                 text = await page.evaluate("() => document.body ? String(document.body.innerText || '') : ''")
             except Exception:
                 text = ""
-            if len(text) >= 400 and not _looks_like_gate(text):
+            if len(text) >= 400 and not _looks_like_gate(text) and not _looks_like_challenge(text):
                 break
             if time.monotonic() >= deadline:
                 break
@@ -441,7 +462,8 @@ async def _extract_assisted(body: BrowserExtractBody) -> Dict[str, Any]:
         labels = [str(item).strip() for item in (body.click_texts or []) if str(item).strip()][:5]
         pages = await _collect_clicked_pages(page, labels, final_url) if labels else []
 
-        needs_user = bool(_looks_like_gate(text_value)) or len(text_value) < 200
+        challenge = _looks_like_challenge(text_value)
+        needs_user = bool(_looks_like_gate(text_value)) or challenge or len(text_value) < 200
         _ASSIST["last_used"] = time.monotonic()
         digest = _build_digest(title, description, site, text_value, links, pages)
         return {
@@ -460,7 +482,7 @@ async def _extract_assisted(body: BrowserExtractBody) -> Dict[str, Any]:
             "assisted": True,
             "waited_seconds": waited,
             "user_hint": (
-                "浏览器已拉起，请在里面完成登录或年龄确认；完成后会自动继续。"
+                "浏览器已拉起，请在窗口里点一下人机验证（或完成登录/年龄确认），完成后会自动继续。"
                 if needs_user
                 else "已自动继续完成。"
             ),
@@ -508,7 +530,9 @@ async def _extract(body: BrowserExtractBody) -> Dict[str, Any]:
                 if labels:
                     pages = await _collect_clicked_pages(page, labels, final_url)
                 status = "ok"
-                if len(text) < 120:
+                if _looks_like_challenge(text):
+                    status = "needs_verify"
+                elif len(text) < 120:
                     low = final_url.lower()
                     if any(marker in low for marker in ("login", "signin", "passport", "captcha", "challenge")):
                         status = "needs_login"
