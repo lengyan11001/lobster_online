@@ -1,7 +1,7 @@
 {
-  "version": "2.0.187",
-  "build": 484,
-  "applied_at": "2026-10-25T15:58:12+08:00",
-  "note": "fix: ship publisher package so client can start (2.0.186 hotfix)",
-  "bundle_sha256": "c2d2c85d6ff51e7184a5f5a0b90ab55c2f30ffc78028156864f98a7103e7ebb0"
+  "version": "2.0.192",
+  "build": 489,
+  "applied_at": "2026-10-25T16:07:08+08:00",
+  "note": "2.0.192: known-good build with publisher + branding fallback",
+  "bundle_sha256": "06cc80b44882d2fc8bea136d85744b3461d8699a3960a8348dd6379fa304d02b"
 }
