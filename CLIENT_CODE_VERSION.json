@@ -1,6 +1,6 @@
 {
-  "version": "2.0.193",
-  "build": 490,
-  "applied_at": "2026-10-25T16:13:00+08:00",
-  "note": "rollback to 2.0.185 code"
+  "version": "2.0.194",
+  "build": 491,
+  "applied_at": "2026-10-25T16:30:00+08:00",
+  "note": "restore device browser_extract_page"
 }
