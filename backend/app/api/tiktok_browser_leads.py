@@ -12,7 +12,10 @@ from sqlalchemy.orm import Session
 from .auth import _ServerUser, get_current_user_for_local
 from ..db import get_db
 from ..models import PublishAccount
-from publisher.browser_pool import _ensure_tiktok_cdp_context
+try:  # 依赖缺失时只让这个路由不可用，不能让整个客户端起不来
+    from publisher.browser_pool import _ensure_tiktok_cdp_context
+except Exception:  # pragma: no cover - 打包缺依赖时走这里
+    _ensure_tiktok_cdp_context = None
 from skills.tiktok_leads.driver import TikTokLeadsDriver
 
 router = APIRouter()
@@ -53,6 +56,8 @@ def _profile_dir(account: PublishAccount) -> str:
 
 async def _page_for(account: PublishAccount):
     profile = _profile_dir(account)
+    if _ensure_tiktok_cdp_context is None:
+        raise HTTPException(status_code=503, detail="当前客户端缺少 publisher.browser_pool，请更新到最新版本后重试")
     ctx = await _ensure_tiktok_cdp_context(profile, browser_options={"tiktok_cdp": True})
     page = ctx.pages[0] if ctx.pages else await ctx.new_page()
     return page, profile

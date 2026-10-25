@@ -122,6 +122,9 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     # 目前只有 skills/ppt_master ≈58MB/1.2 万文件），其余全部包含，避免像
     # skills/comfly_seedance_tvc_video 这类管线因为不在 paths 里而永远更新不到客户端。
     "skills",
+    # backend/app/api/tiktok_browser_leads.py 依赖 publisher.browser_pool；
+    # 不随包发出会让 create_app 导入失败、客户端直接起不来（2.0.186 事故）。
+    "publisher",
     # Desktop Python runtime used by the stable OEM EXE shells. The branded
     # executables stay installed, while launcher and configurator behavior can
     # continue to receive OTA fixes.

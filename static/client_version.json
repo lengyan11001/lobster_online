@@ -1,7 +1,7 @@
 {
-  "version": "2.0.186",
-  "build": 483,
-  "applied_at": "2026-10-25T12:56:23+08:00",
-  "note": "web extract: device-first contacts, challenge assist, digest tables",
-  "bundle_sha256": "445a064e382ae251e86d2fd279d3471b87aa0badaad45bdbef00b02601dba653"
+  "version": "2.0.187",
+  "build": 484,
+  "applied_at": "2026-10-25T15:58:12+08:00",
+  "note": "fix: ship publisher package so client can start (2.0.186 hotfix)",
+  "bundle_sha256": "c2d2c85d6ff51e7184a5f5a0b90ab55c2f30ffc78028156864f98a7103e7ebb0"
 }
