@@ -420,6 +420,99 @@ async def _collect_clicked_pages(page, labels: List[str], base_url: str) -> List
     return out
 
 
+_SUBPAGE_HINTS = (
+    "product", "products", "productlist", "all products", "company", "company_profile",
+    "about", "about us", "profile", "contact", "catalog", "collection", "shop",
+)
+_SUBPAGE_JS = """
+(hints) => {
+  const host = location.host;
+  const out = [];
+  const seen = new Set();
+  document.querySelectorAll('a[href]').forEach((a) => {
+    let url;
+    try { url = new URL(a.href); } catch (e) { return; }
+    if (!url || url.host !== host) return;
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+    const text = String(a.innerText || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const path = (url.pathname || '').toLowerCase();
+    const hit = hints.some((h) => text.includes(h) || path.includes(h.replace(/ /g, '-')));
+    if (!hit) return;
+    const key = url.origin + url.pathname;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ url: url.href, text: text.slice(0, 40) });
+  });
+  return out.slice(0, 8);
+}
+"""
+
+
+async def _collect_subpages(page, base_url: str, limit: int = 3) -> List[Dict[str, Any]]:
+    """正文过薄时，自动跟进同域的内容子页（商品列表/公司介绍/联系页）。"""
+    try:
+        candidates = await page.evaluate(_SUBPAGE_JS, list(_SUBPAGE_HINTS))
+    except Exception:
+        return []
+    _NOISE = ("feedback", "trustpass", "certification", "review", "login", "register")
+
+    def _score(item):
+        low = (str(item.get("url") or "") + " " + str(item.get("text") or "")).lower()
+        if any(word in low for word in _NOISE):
+            return 9
+        if "productlist" in low or "product-list" in low:
+            return 0
+        if "product" in low or "catalog" in low or "collection" in low:
+            return 1
+        if "company_profile" in low or "company" in low or "about" in low or "profile" in low:
+            return 2
+        if "contact" in low or "shop" in low:
+            return 3
+        return 5
+
+    ranked = sorted([c for c in (candidates or []) if str(c.get("url") or "")], key=_score)
+    picked: List[Dict[str, str]] = []
+    seen = {base_url.rstrip("/")}
+    for item in ranked:
+        url = str(item.get("url") or "")
+        if not url or url.rstrip("/") in seen or _score(item) >= 9:
+            continue
+        seen.add(url.rstrip("/"))
+        picked.append({"url": url, "text": str(item.get("text") or "")})
+        if len(picked) >= limit:
+            break
+    out: List[Dict[str, Any]] = []
+    for item in picked:
+        url = item["url"]
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            await page.wait_for_timeout(2500)
+            try:
+                await page.evaluate("() => window.scrollBy(0, Math.round(window.innerHeight * 0.9))")
+                await page.wait_for_timeout(800)
+            except Exception:
+                pass
+            raw = await page.evaluate(_EXTRACT_JS)
+            out.append({
+                "label": item["text"] or url,
+                "status": "ok",
+                "url": str(raw.get("url") or url),
+                "title": str(raw.get("title") or "")[:200],
+                "text": _normalize_text(raw.get("text", ""))[:6000],
+                "links": raw.get("links", [])[:30],
+            })
+        except Exception as exc:
+            out.append({"label": item["text"] or url, "status": "error", "error": str(exc)[:200]})
+        finally:
+            try:
+                if str(page.url or "").rstrip("/") != base_url.rstrip("/"):
+                    await page.goto(base_url, wait_until="domcontentloaded", timeout=45000)
+                    await page.wait_for_timeout(1200)
+            except Exception:
+                pass
+    return out
+
+
 async def _extract_assisted(body: BrowserExtractBody) -> Dict[str, Any]:
     async with _ASSIST_LOCK:
         _ensure_reaper()
@@ -467,7 +560,12 @@ async def _extract_assisted(body: BrowserExtractBody) -> Dict[str, Any]:
         links = raw.get("links", [])[:300]
 
         labels = [str(item).strip() for item in (body.click_texts or []) if str(item).strip()][:5]
-        pages = await _collect_clicked_pages(page, labels, final_url) if labels else []
+        if labels:
+            pages = await _collect_clicked_pages(page, labels, final_url)
+        elif len(text_value) < 2500:
+            pages = await _collect_subpages(page, final_url)
+        else:
+            pages = []
 
         challenge = _looks_like_challenge(text_value)
         needs_user = bool(_looks_like_gate(text_value)) or challenge or len(text_value) < 200
@@ -536,6 +634,8 @@ async def _extract(body: BrowserExtractBody) -> Dict[str, Any]:
                 pages: List[Dict[str, Any]] = []
                 if labels:
                     pages = await _collect_clicked_pages(page, labels, final_url)
+                elif len(text) < 2500:
+                    pages = await _collect_subpages(page, final_url)
                 status = "ok"
                 if _looks_like_challenge(text):
                     status = "needs_verify"
