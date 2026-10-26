@@ -434,7 +434,10 @@
   }
   window.openCanvasItem = function (id) {
     if (!id) return;
-    location.href = '/api/canvas-local/canvas-frame#/canvas-editor/' + encodeURIComponent(String(id));
+    if (window.parent && window.parent !== window) {
+      try { window.parent.postMessage({ type: "canvas:open-editor", uuid: String(id) }, "*"); return; } catch (e) {}
+    }
+    location.href = "/api/canvas-local/canvas-frame#/canvas-editor/" + encodeURIComponent(String(id));
   };
   window.createNewCanvas = async function () {
     var name = prompt('请输入新画布项目名称：', '未命名创意画布');

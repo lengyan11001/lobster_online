@@ -131,6 +131,15 @@
   var state = { rows: [], style: "all", keyword: "", page: 1, hasMore: true, loading: false };
 
   function token() { try { return localStorage.getItem('token') || ''; } catch (e) { return ''; } }
+  function openEditor(uuid) {
+    var id = String(uuid || "");
+    if (!id) return;
+    if (window.parent && window.parent !== window) {
+      try { window.parent.postMessage({ type: "canvas:open-editor", uuid: id }, "*"); return; } catch (e) {}
+    }
+    location.href = "/api/canvas-local/canvas-frame#/canvas-editor/" + encodeURIComponent(id);
+  }
+
   function rowsOf(payload) {
     if (!payload) return [];
     if (Array.isArray(payload.items)) return payload.items;
@@ -263,7 +272,7 @@
       var btn = e.target.closest && e.target.closest('.use-template');
       if (!btn) return;
       var id = btn.getAttribute('data-uuid');
-      if (id) location.href = '/api/canvas-local/canvas-frame#/canvas-editor/' + encodeURIComponent(id);
+      openEditor(id);
     });
     gridEl.addEventListener('error', function (e) {
       var img = e.target;
