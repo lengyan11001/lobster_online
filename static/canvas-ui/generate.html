@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>生成工作台 - 必火智能</title>
+    <script src="/static/canvas-ui/tailwind.js"></script>
+    <link href="/static/canvas-ui/fa.css" rel="stylesheet">
+    <style>
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+            background: #f8fafc; 
+            color: #475569; 
+            font-weight: 400; 
+        }
+
+        .main-title { font-weight: 500 !important; letter-spacing: -0.02em; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        #app-sidebar { transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        #app-sidebar.collapsed { width: 72px; }
+        #app-sidebar.collapsed .sidebar-text,
+        #app-sidebar.collapsed .sidebar-chevron,
+        #app-sidebar.collapsed .menu-group-title { display: none; }
+        #app-sidebar.collapsed .sidebar-item-container { justify-content: center; padding-left: 0; padding-right: 0; }
+        #app-sidebar.collapsed .sidebar-item-container i.sidebar-icon { margin-right: 0; font-size: 16px; }
+        
+        .sidebar-toggle-btn {
+            position: absolute; right: -12px; top: 24px; width: 24px; height: 24px;
+            background: #fff; border: 1px solid #e2e8f0; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center; cursor: pointer;
+            z-index: 50; box-shadow: 0 2px 4px rgba(0,0,0,0.05); transition: all 0.3s; color: #94a3b8;
+        }
+        .sidebar-toggle-btn:hover { color: #3b82f6; border-color: #bfdbfe; background: #f8fafc; }
+        #app-sidebar.collapsed .sidebar-toggle-btn { transform: rotate(180deg); }
+
+        select {
+            appearance: none; -webkit-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 0.8rem center; background-size: 0.8em;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden flex flex-col text-[13px]">
+    
+    <!-- 大厂标准 64px (h-16) 高级导航栏 -->
+    <header class="h-16 bg-white/80 backdrop-blur-md border-b border-gray-100 flex items-center justify-between px-6 shrink-0 z-30 relative">
+        <div class="flex items-center space-x-2 w-[220px]">
+            <svg width="28" height="20" viewBox="0 0 100 50" fill="none" xmlns="http://www.w3.org/2000/svg" class="mr-1">
+                <path d="M30 38C18.954 38 10 29.046 10 18C10 6.954 18.954 -2 30 -2C36.924 -2 43.048 1.545 46.541 6.84L49 10.6L59.459 26.16C62.952 31.455 69.076 35 76 35C87.046 35 96 26.046 96 15C96 3.954 87.046 -5 76 -5C69.076 -5 62.952 -1.545 59.459 3.84" stroke="url(#paint0_linear)" stroke-width="14" stroke-linecap="round"/>
+                <path d="M32 36.84C28.507 42.135 22.383 45.68 15.459 45.68C4.413 45.68 -4.541 36.726 -4.541 25.68C-4.541 14.634 4.413 5.68 15.459 5.68C22.383 5.68 28.507 9.225 32 14.52L34.459 18.28L44.918 33.84C48.411 39.135 54.535 42.68 61.459 42.68C72.505 42.68 81.459 33.726 81.459 22.68C81.459 11.634 72.505 2.68 61.459 2.68C54.535 2.68 48.411 6.225 44.918 11.52" stroke="url(#paint1_linear)" stroke-width="14" stroke-linecap="round"/>
+                <text x="21" y="24" fill="#F97316" font-family="Arial, sans-serif" font-weight="900" font-size="14" transform="rotate(-18 21 24)">Ai</text>
+                <defs>
+                    <linearGradient id="paint0_linear" x1="10" y1="18" x2="96" y2="18" gradientUnits="userSpaceOnUse">
+                        <stop stop-color="#06B6D4"/><stop offset="1" stop-color="#2563EB"/>
+                    </linearGradient>
+                    <linearGradient id="paint1_linear" x1="-4" y1="25" x2="81" y2="25" gradientUnits="userSpaceOnUse">
+                        <stop stop-color="#3B82F6"/><stop offset="1" stop-color="#1D4ED8"/>
+                    </linearGradient>
+                </defs>
+            </svg>
+            <span class="text-[15px] font-medium text-gray-800 tracking-wide">必火智能</span>
+        </div>
+
+        <nav class="flex items-center space-x-7 text-[13px] text-gray-500 hidden lg:flex">
+            <a href="#" class="hover:text-gray-800 transition-colors">首页</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">技能商店</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">发布中心</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">内容记录</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">素材库</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">选品变现</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">客资线索</a>
+            <a href="#" class="text-blue-600 bg-blue-50/80 px-3.5 py-1.5 rounded-lg font-medium">AI执行台</a>
+        </nav>
+
+        <div class="flex items-center space-x-4">
+            <div class="flex items-center bg-gray-50/80 rounded-full pl-2 pr-1 py-1 border border-gray-100">
+                <div class="w-5 h-5 rounded-full bg-blue-500 text-white flex items-center justify-center text-[10px] mr-2 shadow-sm"><i class="fa-solid fa-bolt"></i></div>
+                <span class="text-gray-600 text-[12px] mr-3 font-normal">算力: 20347.97</span>
+                <button class="bg-white border border-gray-200 text-gray-600 text-[12px] px-3 py-0.5 rounded-full hover:bg-gray-50 transition-colors shadow-sm">充值</button>
+            </div>
+            <button class="flex items-center space-x-2 hover:bg-gray-50 px-2 py-1.5 rounded-xl transition-colors cursor-pointer border border-transparent">
+                <img src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80" class="w-6 h-6 rounded-full border border-gray-200" alt="Avatar">
+                <i class="fa-solid fa-caret-down text-[10px] text-gray-400"></i>
+            </button>
+        </div>
+    </header>
+
+    <div class="flex flex-1 overflow-hidden relative">
+        
+        <aside id="app-sidebar" class="w-[240px] bg-white border-r border-gray-100 flex flex-col shrink-0 z-20 shadow-[2px_0_10px_rgba(0,0,0,0.01)] relative">
+            <button id="sidebarToggle" class="sidebar-toggle-btn">
+                <i class="fa-solid fa-chevron-left text-[10px]"></i>
+            </button>
+
+            <div class="flex-1 overflow-y-auto py-5 px-3 space-y-6">
+                <!-- AI 营销创作 -->
+                <div>
+                    <div class="menu-group-title text-[11px] text-gray-400 px-3 mb-2 flex items-center cursor-pointer hover:text-gray-600">
+                        <i class="fa-solid fa-chevron-down mr-2 text-[9px] sidebar-chevron"></i> AI 营销创作
+                    </div>
+                    <ul class="space-y-1 pl-1">
+                        <li>
+                            <a href="#" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 bg-blue-50/60 text-blue-600 rounded-lg transition-colors group">
+                                <i class="sidebar-icon fa-solid fa-pen-nib w-5 text-center text-blue-500"></i>
+                                <span class="sidebar-text flex-1 text-[13px] font-medium">AI 设计图</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 text-gray-500 hover:bg-gray-50 rounded-lg transition-colors group">
+                                <i class="sidebar-icon fa-regular fa-user-circle w-5 text-center text-gray-400"></i>
+                                <span class="sidebar-text flex-1 text-[13px]">数字人口播视频</span>
+                            </a>
+                        </li>
+                        <li>
+                            <!-- 跨页面跳转到灵感画布 -->
+                            <a href="/static/canvas-ui/inspiration.html" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 text-gray-500 hover:bg-gray-50 rounded-lg transition-colors group">
+                                <i class="sidebar-icon fa-solid fa-lightbulb w-5 text-center text-gray-400"></i>
+                                <span class="sidebar-text flex-1 text-[13px]">灵感画布</span>
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 内部二级工具栏 (带真实跳转) -->
+        <div class="w-[80px] bg-gray-50/50 border-r border-gray-100 flex flex-col items-center py-6 gap-6 shrink-0 z-10">
+            <a href="/static/canvas-ui/inspiration.html" class="flex flex-col items-center justify-center w-14 h-14 rounded-2xl text-gray-400 hover:text-gray-700 hover:bg-gray-100/80 transition-colors group cursor-pointer">
+                <i class="fa-solid fa-wand-magic-sparkles text-[18px] mb-1 group-hover:scale-110 transition-transform"></i>
+                <span class="text-[11px]">灵感</span>
+            </a>
+            
+            <a href="/static/canvas-ui/generate.html" class="flex flex-col items-center justify-center w-14 h-14 rounded-2xl bg-white shadow-[0_4px_12px_rgba(59,130,246,0.15)] text-blue-600 group relative cursor-pointer">
+                <div class="absolute inset-0 rounded-2xl border-2 border-blue-500/20"></div>
+                <i class="fa-solid fa-layer-group text-[18px] mb-1 group-hover:scale-110 transition-transform"></i>
+                <span class="text-[11px] font-medium">生成</span>
+            </a>
+            
+            <a href="/static/canvas-ui/projects.html" class="flex flex-col items-center justify-center w-14 h-14 rounded-2xl text-gray-400 hover:text-gray-700 hover:bg-gray-100/80 transition-colors group cursor-pointer">
+                <i class="fa-solid fa-border-all text-[18px] mb-1 group-hover:scale-110 transition-transform"></i>
+                <span class="text-[11px]">画布</span>
+            </a>
+        </div>
+
+        <main class="flex-1 overflow-y-auto relative bg-[#faf9f8] flex p-6 z-0 gap-6">
+            <!-- 全局氛围光晕 -->
+            <div class="absolute top-0 left-[20%] w-[30rem] h-[30rem] bg-cyan-300/10 rounded-full blur-[100px] pointer-events-none -z-10"></div>
+            
+            <!-- ====== 左侧：精细化控制面板 ====== -->
+            <aside class="w-[340px] shrink-0 flex flex-col relative z-10">
+                <h2 class="text-[20px] main-title text-gray-800 mb-5 pl-1">生成工作台</h2>
+                
+                <div class="bg-white/80 backdrop-blur-md rounded-2xl border border-gray-100 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.02)] flex-1 flex flex-col p-5 overflow-y-auto no-scrollbar relative">
+                    
+                    <div class="flex bg-gray-100/80 p-1 rounded-xl mb-5 shadow-inner">
+                        <!-- 默认激活图片，修正了圆形徽章 -->
+                        <button id="tab-image-gen" onclick="switchGenMode('image')" class="flex-1 py-1.5 text-[13px] bg-blue-50 text-blue-600 border border-blue-200/60 shadow-sm rounded-lg font-medium transition-all flex items-center justify-center cursor-pointer">
+                            <i class="fa-regular fa-image mr-1.5 text-[12px]"></i> 图片 
+                            <span class="ml-1.5 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-blue-100 text-blue-600 text-[10px] font-medium leading-none">2</span>
+                        </button>
+                        <button id="tab-video-gen" onclick="switchGenMode('video')" class="flex-1 py-1.5 text-[13px] text-gray-500 hover:text-gray-700 rounded-lg transition-all flex items-center justify-center cursor-pointer">
+                            <i class="fa-solid fa-video mr-1.5 text-[11px]"></i> 视频 
+                            <span class="ml-1.5 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gray-200 text-gray-500 text-[10px] font-medium leading-none">3</span>
+                        </button>
+                    </div>
+
+                    <!-- ========================================== -->
+                    <!-- ============ 图片模式专属配置区 ============ -->
+                    <!-- ========================================== -->
+                    <div id="image-config-area" class="block animate-[fadeIn_0.3s_ease-out]">
+                        
+                        <!-- 1. 选择模型区 (带折叠交互) -->
+                        <div class="mb-5 relative">
+                            <div class="flex justify-between items-center mb-2 px-1">
+                                <span class="text-[12px] text-gray-500 font-medium">选择模型</span>
+                                <span class="text-[11px] text-gray-400 font-light">切换模型后选择适合当前任务的模型</span>
+                            </div>
+                            
+                            <button id="image-model-toggle-btn" class="w-full bg-white border border-gray-200 hover:border-blue-300 rounded-xl p-3.5 flex items-center justify-between transition-colors shadow-sm text-left">
+                                <div class="flex items-center space-x-3">
+                                    <div class="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-500 shrink-0">
+                                        <i class="fa-solid fa-wand-magic-sparkles text-[16px]"></i>
+                                    </div>
+                                    <div>
+                                        <div class="text-[14px] text-gray-800 font-medium mb-0.5">GPT 2 图像生成</div>
+                                        <div class="text-[12px] text-gray-400 font-light line-clamp-1">高精度图片生成与参考图编辑，最高 4K</div>
+                                    </div>
+                                </div>
+                                <div class="flex items-center text-gray-400 shrink-0 ml-2">
+                                    <span id="image-model-toggle-text" class="text-[12px] mr-1 whitespace-nowrap">切换</span>
+                                    <i id="image-model-toggle-icon" class="fa-solid fa-angle-down text-[12px] transition-transform duration-300"></i>
+                                </div>
+                            </button>
+
+                            <div id="image-model-dropdown" class="hidden absolute top-[calc(100%+8px)] left-0 w-full bg-white rounded-xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.1)] border border-gray-100 p-4 z-50">
+                                <div class="flex justify-between items-center mb-3">
+                                    <span class="text-[13px] text-gray-800 font-medium">选择模型</span>
+                                    <span class="text-[12px] text-gray-400">2 个可用</span>
+                                </div>
+                                <div class="space-y-3">
+                                    <div class="relative bg-blue-50/30 border border-blue-500 rounded-xl p-3.5 flex items-center justify-between cursor-pointer overflow-hidden">
+                                        <div class="absolute left-0 top-0 bottom-0 w-1 bg-blue-500"></div>
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-10 h-10 rounded-xl bg-white border border-blue-100 flex items-center justify-center text-blue-500 shrink-0 shadow-sm"><i class="fa-solid fa-wand-magic-sparkles text-[16px]"></i></div>
+                                            <div>
+                                                <div class="text-[14px] text-gray-800 font-medium mb-1">GPT 2 图像生成</div>
+                                                <div class="text-[12px] text-gray-500 font-light mb-2">高精度图片生成与参考图编辑，最高 4K</div>
+                                                <div class="flex flex-wrap gap-1.5">
+                                                    <span class="px-2 py-0.5 rounded border border-gray-200 text-[11px] text-gray-500 bg-white whitespace-nowrap">4K</span>
+                                                    <span class="px-2 py-0.5 rounded border border-gray-200 text-[11px] text-gray-500 bg-white whitespace-nowrap">文字精准</span>
+                                                    <span class="px-2 py-0.5 rounded border border-gray-200 text-[11px] text-gray-500 bg-white whitespace-nowrap">多图参考</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <i class="fa-solid fa-check text-blue-500 mr-2 shrink-0"></i>
+                                    </div>
+                                    <div class="bg-gray-50/50 border border-gray-100 hover:border-gray-300 hover:bg-white rounded-xl p-3.5 flex items-center justify-between cursor-pointer transition-all">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-10 h-10 rounded-xl bg-green-50 flex items-center justify-center text-green-500 shrink-0"><i class="fa-solid fa-bolt text-[16px]"></i></div>
+                                            <div>
+                                                <div class="text-[14px] text-gray-800 font-medium mb-1">Nano 2 图像生成</div>
+                                                <div class="text-[12px] text-gray-500 font-light mb-2">快速生成与多图参考，最高 4K</div>
+                                                <div class="flex flex-wrap gap-1.5">
+                                                    <span class="px-2 py-0.5 rounded border border-gray-100 text-[11px] text-gray-400 bg-white whitespace-nowrap">快速</span>
+                                                    <span class="px-2 py-0.5 rounded border border-gray-100 text-[11px] text-gray-400 bg-white whitespace-nowrap">14图参考</span>
+                                                    <span class="px-2 py-0.5 rounded border border-gray-100 text-[11px] text-gray-400 bg-white whitespace-nowrap">最高4K</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 2. 参考素材区 (图片专属，右边距修复) -->
+                        <div class="mb-5 relative z-0">
+                            <div class="flex justify-between items-center mb-2 px-1">
+                                <h3 class="text-[13px] font-medium text-gray-800">参考素材</h3>
+                                <span class="text-[11px] text-gray-400 font-light">0 项</span>
+                            </div>
+                            <div class="text-[11px] text-gray-400 font-light mb-3 px-1">支持最多 6 张参考图，系统将自动提取风格和主体。</div>
+                            
+                            <input type="file" id="upload-image-only" accept="image/*" multiple class="hidden">
+                            <div class="flex">
+                                <button onclick="document.getElementById('upload-image-only').click()" class="inline-flex items-center justify-center bg-white border border-gray-200 hover:border-blue-400 hover:bg-blue-50/30 hover:shadow-[0_2px_8px_rgba(59,130,246,0.1)] rounded-xl pl-3 pr-4 py-2.5 text-[12px] text-gray-600 transition-all shadow-sm group cursor-pointer">
+                                    <i class="fa-regular fa-image text-green-500 mr-2 group-hover:scale-110 transition-transform"></i>
+                                    <span class="whitespace-nowrap">参考图</span>
+                                    <span class="text-gray-400 group-hover:text-blue-500 transition-colors ml-2.5 font-medium tracking-wide">0/6</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 3. 生成参数区 (图片专属) -->
+                        <div class="mb-6 bg-white border border-gray-200 rounded-xl p-4 shadow-sm relative z-0">
+                            <div id="image-param-toggle-btn" class="flex justify-between items-center cursor-pointer group">
+                                <div class="flex items-center space-x-3">
+                                    <div class="w-9 h-9 rounded-xl bg-green-50 flex items-center justify-center text-green-600 shrink-0"><i class="fa-solid fa-sliders text-[14px]"></i></div>
+                                    <div>
+                                        <div class="text-[14px] text-gray-800 font-medium">生成参数</div>
+                                        <div class="text-[11px] text-gray-400 font-light">4:3 横向 · 1K · 快速</div>
+                                    </div>
+                                </div>
+                                <div class="flex items-center text-gray-400 group-hover:text-gray-600 transition-colors">
+                                    <span id="image-param-toggle-text" class="text-[12px] mr-1">展开</span>
+                                    <i id="image-param-toggle-icon" class="fa-solid fa-angle-down text-[12px] transition-transform duration-300"></i>
+                                </div>
+                            </div>
+
+                            <div id="image-param-content" class="hidden pt-5 mt-3 border-t border-gray-100">
+                                <div class="flex space-x-4 mb-5">
+                                    <div class="flex-1">
+                                        <label class="block text-[12px] text-gray-600 mb-1.5">画面比例</label>
+                                        <select class="w-full bg-white border border-gray-200 text-gray-700 text-[13px] rounded-lg pl-3 pr-8 py-2 focus:outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-50 cursor-pointer">
+                                            <option>4:3 横向</option>
+                                            <option>16:9 宽屏</option>
+                                            <option>1:1 正方</option>
+                                        </select>
+                                    </div>
+                                    <div class="flex-1">
+                                        <label class="block text-[12px] text-gray-600 mb-1.5">分辨率</label>
+                                        <select class="w-full bg-white border border-gray-200 text-gray-700 text-[13px] rounded-lg pl-3 pr-8 py-2 focus:outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-50 cursor-pointer">
+                                            <option>1K</option>
+                                            <option>2K</option>
+                                            <option>4K</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="mb-5">
+                                    <label class="block text-[12px] text-gray-600 mb-2">生成质量</label>
+                                    <div class="grid grid-cols-3 gap-2">
+                                        <button class="bg-green-50/30 border border-green-400 rounded-lg p-2 flex flex-col items-center justify-center cursor-pointer">
+                                            <span class="text-[13px] text-green-600 font-medium mb-0.5">快速</span>
+                                            <span class="text-[10px] text-green-500/80">响应极快</span>
+                                        </button>
+                                        <button class="bg-white border border-gray-200 hover:border-gray-300 rounded-lg p-2 flex flex-col items-center justify-center cursor-pointer transition-colors">
+                                            <span class="text-[13px] text-gray-700 font-medium mb-0.5">标准</span>
+                                            <span class="text-[10px] text-gray-400">平衡质量与速度</span>
+                                        </button>
+                                        <button class="bg-white border border-gray-200 hover:border-gray-300 rounded-lg p-2 flex flex-col items-center justify-center cursor-pointer transition-colors">
+                                            <span class="text-[13px] text-gray-700 font-medium mb-0.5">精细</span>
+                                            <span class="text-[10px] text-gray-400">细节优先</span>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="bg-gray-50/80 rounded-lg p-3 flex items-start space-x-2">
+                                    <i class="fa-solid fa-circle-info text-gray-400 text-[12px] mt-0.5"></i>
+                                    <span class="text-[12px] text-gray-500 leading-relaxed">GPT 2 默认输出 PNG，并支持高精度文字呈现。</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div> <!-- /image-config-area -->
+
+                    <!-- ========================================== -->
+                    <!-- ============ 视频模式专属配置区 ============ -->
+                    <!-- ========================================== -->
+                    <div id="video-config-area" class="hidden animate-[fadeIn_0.3s_ease-out]">
+                        
+                        <!-- 1. 选择模型区 (视频) -->
+                        <div class="mb-5 relative">
+                            <div class="flex justify-between items-center mb-2 px-1">
+                                <span class="text-[12px] text-gray-500 font-medium">选择模型</span>
+                                <span class="text-[11px] text-gray-400 font-light">切换模型后选择适合当前任务的模型</span>
+                            </div>
+                            <button id="video-model-toggle-btn" class="w-full bg-red-50/40 border border-red-300 hover:border-red-400 rounded-xl p-3.5 flex items-center justify-between transition-colors shadow-sm text-left relative z-20">
+                                <div class="flex items-center space-x-3 min-w-0">
+                                    <div class="w-10 h-10 rounded-xl bg-red-100/60 flex items-center justify-center text-red-500 shrink-0">
+                                        <i class="fa-solid fa-video text-[15px]"></i>
+                                    </div>
+                                    <div class="min-w-0 pr-2">
+                                        <div class="text-[14px] text-gray-800 font-medium mb-0.5 truncate">海螺 H3 视频生成</div>
+                                        <div class="text-[12px] text-gray-500 font-light line-clamp-1">原生图片与视频多模态参考，支持 768P 与 2K</div>
+                                    </div>
+                                </div>
+                                <div class="flex items-center text-gray-400 shrink-0 ml-2">
+                                    <span id="video-model-toggle-text" class="text-[12px] mr-1 whitespace-nowrap">切换</span>
+                                    <i id="video-model-toggle-icon" class="fa-solid fa-angle-down text-[12px] transition-transform duration-300"></i>
+                                </div>
+                            </button>
+
+                            <div id="video-model-dropdown" class="hidden absolute top-[calc(100%+8px)] left-0 w-full bg-white rounded-xl shadow-[0_10px_40px_-10px_rgba(0,0,0,0.15)] border border-gray-100 p-4 z-50">
+                                <div class="flex justify-between items-center mb-3">
+                                    <span class="text-[13px] text-gray-800 font-medium">选择模型</span>
+                                    <span class="text-[12px] text-gray-400">3 个可用</span>
+                                </div>
+                                <div class="space-y-3">
+                                    <div class="relative bg-red-50/30 border border-red-400 rounded-xl p-3.5 flex items-center justify-between cursor-pointer overflow-hidden group">
+                                        <div class="absolute left-0 top-0 bottom-0 w-1 bg-red-400"></div>
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-10 h-10 rounded-xl bg-white border border-red-100 flex items-center justify-center text-red-500 shrink-0 shadow-sm"><i class="fa-solid fa-video text-[15px]"></i></div>
+                                            <div>
+                                                <div class="text-[14px] text-gray-800 font-medium mb-1">海螺 H3 视频生成</div>
+                                                <div class="text-[12px] text-gray-500 font-light mb-2">原生图片与视频多模态参考，支持 768P 与 2K</div>
+                                                <div class="flex flex-wrap gap-1.5">
+                                                    <span class="px-2 py-0.5 rounded border border-gray-200 text-[11px] text-gray-500 bg-white whitespace-nowrap">9图+3视频+3音频</span>
+                                                    <span class="px-2 py-0.5 rounded border border-gray-200 text-[11px] text-gray-500 bg-white whitespace-nowrap">2K</span>
+                                                    <span class="px-2 py-0.5 rounded border border-gray-200 text-[11px] text-gray-500 bg-white whitespace-nowrap">4-15秒</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <i class="fa-solid fa-check text-red-500 mr-2 shrink-0"></i>
+                                    </div>
+                                    <div class="bg-gray-50/50 border border-gray-100 hover:border-gray-300 hover:bg-white rounded-xl p-3.5 flex items-center justify-between cursor-pointer transition-all">
+                                        <div class="flex items-center space-x-3">
+                                            <div class="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-500 shrink-0 border border-blue-100/50"><i class="fa-solid fa-photo-film text-[15px]"></i></div>
+                                            <div>
+                                                <div class="text-[14px] text-gray-800 font-medium mb-1">可灵 O3 视频生成</div>
+                                                <div class="text-[12px] text-gray-500 font-light mb-2">图片与视频合计最多 4 个，支持原生音频与多镜头</div>
+                                                <div class="flex flex-wrap gap-1.5">
+                                                    <span class="px-2 py-0.5 rounded border border-gray-100 text-[11px] text-gray-400 bg-white whitespace-nowrap">图/视频参考</span>
+                                                    <span class="px-2 py-0.5 rounded border border-gray-100 text-[11px] text-gray-400 bg-white whitespace-nowrap">原生音频</span>
+                                                    <span class="px-2 py-0.5 rounded border border-gray-100 text-[11px] text-gray-400 bg-white whitespace-nowrap">3-15秒</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 2. 参考素材区 (视频，右边距修复) -->
+                        <div class="mb-5 relative z-0">
+                            <div class="flex justify-between items-center mb-2 px-1">
+                                <h3 class="text-[13px] font-medium text-gray-800">参考素材</h3>
+                                <span class="text-[11px] text-gray-400 font-light">0 项</span>
+                            </div>
+                            <div class="text-[11px] text-gray-400 font-light mb-3 px-1">支持最多 9 张参考图、3 个参考视频和 3 个参考音频；音...</div>
+                            
+                            <input type="file" id="upload-image" accept="image/*" multiple class="hidden">
+                            <input type="file" id="upload-video" accept="video/*" multiple class="hidden">
+                            <input type="file" id="upload-audio" accept="audio/*" multiple class="hidden">
+                            
+                            <div class="grid grid-cols-3 gap-2">
+                                <button onclick="document.getElementById('upload-image').click()" class="flex items-center justify-between bg-white border border-gray-200 hover:border-blue-400 hover:bg-blue-50/30 hover:shadow-[0_2px_8px_rgba(59,130,246,0.1)] rounded-xl pl-2.5 pr-3.5 py-2.5 text-[11px] text-gray-600 transition-all shadow-sm group cursor-pointer">
+                                    <span class="flex items-center whitespace-nowrap"><i class="fa-regular fa-image text-green-500 mr-1.5 group-hover:scale-110 transition-transform"></i> 参考图</span>
+                                    <span class="text-gray-400 group-hover:text-blue-500 transition-colors ml-1 font-medium tracking-wide">0/9</span>
+                                </button>
+                                <button onclick="document.getElementById('upload-video').click()" class="flex items-center justify-between bg-white border border-gray-200 hover:border-blue-400 hover:bg-blue-50/30 hover:shadow-[0_2px_8px_rgba(59,130,246,0.1)] rounded-xl pl-2.5 pr-3.5 py-2.5 text-[11px] text-gray-600 transition-all shadow-sm group cursor-pointer">
+                                    <span class="flex items-center whitespace-nowrap"><i class="fa-solid fa-video text-blue-400 mr-1.5 text-[10px] group-hover:scale-110 transition-transform"></i> 参考视频</span>
+                                    <span class="text-gray-400 group-hover:text-blue-500 transition-colors ml-1 font-medium tracking-wide">0/3</span>
+                                </button>
+                                <button onclick="document.getElementById('upload-audio').click()" class="flex items-center justify-between bg-white border border-gray-200 hover:border-blue-400 hover:bg-blue-50/30 hover:shadow-[0_2px_8px_rgba(59,130,246,0.1)] rounded-xl pl-2.5 pr-3.5 py-2.5 text-[11px] text-gray-600 transition-all shadow-sm group cursor-pointer">
+                                    <span class="flex items-center whitespace-nowrap"><i class="fa-solid fa-music text-orange-400 mr-1.5 text-[10px] group-hover:scale-110 transition-transform"></i> 参考音频</span>
+                                    <span class="text-gray-400 group-hover:text-blue-500 transition-colors ml-1 font-medium tracking-wide">0/3</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 3. 生成参数区 (视频专属) -->
+                        <div class="mb-6 bg-white border border-gray-200 rounded-xl p-4 shadow-sm relative z-0">
+                            <div id="video-param-toggle-btn" class="flex justify-between items-center cursor-pointer group">
+                                <div class="flex items-center space-x-3">
+                                    <div class="w-9 h-9 rounded-xl bg-green-50 flex items-center justify-center text-green-600 shrink-0"><i class="fa-solid fa-sliders text-[14px]"></i></div>
+                                    <div>
+                                        <div class="text-[14px] text-gray-800 font-medium">生成参数</div>
+                                        <div class="text-[11px] text-gray-400 font-light">16:9 · 768P · 5秒</div>
+                                    </div>
+                                </div>
+                                <div class="flex items-center text-gray-400 group-hover:text-gray-600 transition-colors">
+                                    <span id="video-param-toggle-text" class="text-[12px] mr-1">展开</span>
+                                    <i id="video-param-toggle-icon" class="fa-solid fa-angle-down text-[12px] transition-transform duration-300"></i>
+                                </div>
+                            </div>
+
+                            <div id="video-param-content" class="hidden pt-5 mt-3 border-t border-gray-100">
+                                <div class="flex space-x-4 mb-5">
+                                    <div class="flex-1">
+                                        <label class="block text-[12px] text-gray-600 mb-1.5">画面比例</label>
+                                        <select class="w-full bg-white border border-gray-200 text-gray-700 text-[13px] rounded-lg pl-3 pr-8 py-2 focus:outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-50 cursor-pointer">
+                                            <option>16:9</option>
+                                            <option>4:3</option>
+                                            <option>9:16</option>
+                                        </select>
+                                    </div>
+                                    <div class="flex-1">
+                                        <label class="block text-[12px] text-gray-600 mb-1.5">分辨率</label>
+                                        <select class="w-full bg-white border border-gray-200 text-gray-700 text-[13px] rounded-lg pl-3 pr-8 py-2 focus:outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-50 cursor-pointer">
+                                            <option>768P</option>
+                                            <option>1080P</option>
+                                            <option>2K</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="mb-5">
+                                    <label class="block text-[12px] text-gray-600 mb-1.5">视频时长</label>
+                                    <div class="w-1/2 pr-2">
+                                        <select class="w-full bg-white border border-gray-200 text-gray-700 text-[13px] rounded-lg pl-3 pr-8 py-2 focus:outline-none focus:border-blue-300 focus:ring-2 focus:ring-blue-50 cursor-pointer">
+                                            <option>5 秒</option>
+                                            <option>10 秒</option>
+                                            <option>15 秒</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="bg-gray-50/80 rounded-lg p-3 flex items-start space-x-2">
+                                    <i class="fa-solid fa-circle-info text-gray-400 text-[12px] mt-0.5"></i>
+                                    <span class="text-[12px] text-gray-500 leading-relaxed">当前为文生视频模式，可在画布中继续补充参考素材。</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div> <!-- /video-config-area -->
+
+                    <!-- 描述画面区 (Prompt) -->
+                    <div class="mb-6 relative z-0 -mt-2">
+                        <div class="flex justify-between items-center mb-2 px-1">
+                            <h3 class="text-[13px] font-medium text-gray-800 flex items-center">描述画面 <i class="fa-solid fa-pen-fancy ml-1.5 text-red-400 text-[11px]"></i></h3>
+                            <span class="text-red-500 text-[11px] font-medium">*必填</span>
+                        </div>
+                        <div class="text-[11px] text-gray-400 font-light mb-2 px-1">描述主体、动作、环境和画面气质</div>
+                        <div class="relative w-full border border-gray-200 rounded-xl overflow-hidden focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-50 transition-all bg-gray-50/50 focus-within:bg-white shadow-sm">
+                            <textarea rows="4" class="w-full bg-transparent resize-none p-3 text-[13px] text-gray-700 outline-none placeholder-gray-400 leading-relaxed" placeholder="例如：页留海边的手持镜头，浪花拍打礁石，镜头缓慢向前推进，电影感..."></textarea>
+                            <div class="absolute bottom-2 right-3 text-[10px] text-gray-300">0 / 2000</div>
+                        </div>
+                    </div>
+
+                    <!-- 底部动作区 -->
+                    <div class="mt-auto pt-2 bg-white relative z-0">
+                        <div class="bg-green-50/50 rounded-xl p-3 mb-4 flex items-center border border-green-100/80 shadow-sm">
+                            <div class="w-6 h-6 rounded bg-green-100 flex items-center justify-center text-green-600 mr-3 shrink-0">
+                                <i class="fa-solid fa-bolt text-[11px]"></i>
+                            </div>
+                            <div>
+                                <div class="text-[12px] text-gray-800 font-medium">输入提示词后计算积分</div>
+                                <div class="text-[10px] text-gray-400 mt-0.5 font-light">生成前会再次确认</div>
+                            </div>
+                        </div>
+                        <button id="submit-gen-btn" class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-[15px] main-title rounded-xl py-3.5 shadow-lg shadow-blue-500/30 transition-all active:scale-[0.98] border-0 flex items-center justify-center">
+                            <i class="fa-regular fa-image mr-2 text-[14px]"></i> 生成图片
+                        </button>
+                    </div>
+
+                </div>
+            </aside>
+
+            <div class="flex-1 flex flex-col h-full overflow-hidden relative z-0 min-w-0">
+                <!-- 核心大画布区 -->
+                <div class="flex-1 bg-white rounded-2xl border border-gray-100 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.02)] mb-5 overflow-hidden flex flex-col relative min-h-[300px]">
+                    <div class="absolute top-5 left-6 z-10">
+                        <h3 class="text-[15px] font-medium text-gray-800">生成结果</h3>
+                    </div>
+                    
+                    <div class="flex-1 w-full bg-gray-50/50 flex flex-col items-center justify-center relative">
+                        <div id="canvas-placeholder-bg" class="w-16 h-16 rounded-2xl bg-blue-50 shadow-sm border border-blue-100/50 flex items-center justify-center mb-5 text-blue-500 transition-colors">
+                            <i id="canvas-placeholder-icon" class="fa-regular fa-image text-[24px]"></i>
+                        </div>
+                        <h4 id="canvas-placeholder-text" class="text-[16px] text-gray-800 main-title mb-2">把下一帧画面交给 AI</h4>
+                        <p class="text-[13px] text-gray-400 font-light max-w-sm text-center">左侧选择模型并写下提示词，生成后的作品会在这里展开。</p>
+                    </div>
+                </div>
+
+                <!-- 历史记录区域 -->
+                <div class="h-[280px] shrink-0 bg-white rounded-2xl border border-gray-100 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.02)] flex flex-col overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-50 flex justify-between items-center bg-[#f8fafc]/50">
+                        <h3 class="text-[14px] main-title text-gray-800 flex items-center">历史记录</h3>
+                        <span class="text-[11px] text-gray-400 font-light">共 1 条任务</span>
+                    </div>
+                    
+                    <div class="flex-1 overflow-y-auto p-6 no-scrollbar">
+                        <div class="w-full flex items-start gap-5 p-4 rounded-xl border border-gray-100 hover:border-blue-200 shadow-sm hover:shadow-md transition-all group bg-white">
+                            <div class="w-[100px] h-[100px] shrink-0 rounded-lg overflow-hidden border border-gray-200 relative cursor-pointer">
+                                <img src="https://images.unsplash.com/photo-1543332164-6e82f355badc?w=200&q=80" alt="缩略图" class="w-full h-full object-cover">
+                                <div class="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                    <i class="fa-solid fa-magnifying-glass-plus text-white text-[18px]"></i>
+                                </div>
+                            </div>
+                            
+                            <div class="flex-1 min-w-0 flex flex-col justify-between h-[100px] py-0.5">
+                                <div>
+                                    <div class="flex justify-between items-start mb-2">
+                                        <div class="flex items-center text-[13px] text-gray-700 font-medium">super-seed2-lite</div>
+                                        <span class="flex items-center text-green-500 text-[11px] bg-green-50 px-1.5 py-0.5 rounded border border-green-100">
+                                            <div class="w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5"></div> 已完成
+                                        </span>
+                                    </div>
+                                    <p class="text-[13px] text-gray-500 leading-relaxed line-clamp-2 bg-gray-50 p-2 rounded-lg border border-gray-100/80">
+                                        请画一幅“风淡云轻，落叶满地”了。文字内容也是画的不要专业美工。一分钟教会你。
+                                    </p>
+                                </div>
+                                
+                                <div class="flex items-end justify-between mt-auto">
+                                    <div class="text-[11px] text-gray-400 font-light">10/09 00:23 <span class="mx-1.5 text-gray-200">|</span> 1,560 积分</div>
+                                    <div class="flex items-center space-x-2">
+                                        <button class="text-[11px] text-blue-600 hover:text-white hover:bg-blue-500 border border-blue-200 px-3 py-1.5 rounded-lg transition-colors shadow-sm flex items-center bg-white"><i class="fa-regular fa-eye mr-1.5"></i> 预览</button>
+                                        <button class="text-[11px] text-blue-600 hover:text-white hover:bg-blue-500 border border-blue-200 px-3 py-1.5 rounded-lg transition-colors shadow-sm flex items-center bg-white"><i class="fa-solid fa-download mr-1.5"></i> 下载</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // 通用下拉交互生成器
+        function setupDropdown(btnId, dropdownId, iconId) {
+            const btn = document.getElementById(btnId);
+            const dropdown = document.getElementById(dropdownId);
+            const icon = document.getElementById(iconId);
+            if(!btn || !dropdown) return;
+
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isHidden = dropdown.classList.contains('hidden');
+                dropdown.classList.toggle('hidden');
+                
+                if (isHidden) {
+                    btn.classList.remove('border-gray-200');
+                    btn.classList.add('border-blue-500');
+                    if(icon) icon.classList.add('rotate-180');
+                } else {
+                    btn.classList.add('border-gray-200');
+                    btn.classList.remove('border-blue-500');
+                    if(icon) icon.classList.remove('rotate-180');
+                }
+            });
+
+            document.addEventListener('click', (e) => {
+                if (!btn.contains(e.target) && !dropdown.contains(e.target)) {
+                    dropdown.classList.add('hidden');
+                    btn.classList.add('border-gray-200');
+                    btn.classList.remove('border-blue-500');
+                    if(icon) icon.classList.remove('rotate-180');
+                }
+            });
+        }
+
+        // 通用手风琴交互生成器
+        function setupAccordion(btnId, contentId, textId, iconId) {
+            const btn = document.getElementById(btnId);
+            const content = document.getElementById(contentId);
+            const text = document.getElementById(textId);
+            const icon = document.getElementById(iconId);
+            if(!btn || !content) return;
+
+            btn.addEventListener('click', () => {
+                const isHidden = content.classList.contains('hidden');
+                content.classList.toggle('hidden');
+                if (isHidden) {
+                    if(text) text.textContent = '收起';
+                    if(icon) icon.classList.add('rotate-180');
+                } else {
+                    if(text) text.textContent = '展开';
+                    if(icon) icon.classList.remove('rotate-180');
+                }
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            // 左侧折叠
+            const sidebarToggleBtn = document.getElementById('sidebarToggle');
+            const sidebar = document.getElementById('app-sidebar');
+            if (sidebarToggleBtn && sidebar) {
+                sidebarToggleBtn.addEventListener('click', () => { sidebar.classList.toggle('collapsed'); });
+            }
+
+            // 初始化图片模式交互
+            setupDropdown('image-model-toggle-btn', 'image-model-dropdown', 'image-model-toggle-icon');
+            setupAccordion('image-param-toggle-btn', 'image-param-content', 'image-param-toggle-text', 'image-param-toggle-icon');
+
+            // 初始化视频模式交互
+            setupDropdown('video-model-toggle-btn', 'video-model-dropdown', 'video-model-toggle-icon');
+            setupAccordion('video-param-toggle-btn', 'video-param-content', 'video-param-toggle-text', 'video-param-toggle-icon');
+        });
+
+        // 核心：图片/视频 模式丝滑切换逻辑
+        function switchGenMode(mode) {
+            const tabImg = document.getElementById('tab-image-gen');
+            const tabVid = document.getElementById('tab-video-gen');
+            const imgArea = document.getElementById('image-config-area');
+            const vidArea = document.getElementById('video-config-area');
+            const submitBtn = document.getElementById('submit-gen-btn');
+            const canvasIcon = document.getElementById('canvas-placeholder-icon');
+            const canvasBg = document.getElementById('canvas-placeholder-bg');
+            const canvasText = document.getElementById('canvas-placeholder-text');
+            
+            if(mode === 'image') {
+                tabImg.className = "flex-1 py-1.5 text-[13px] bg-blue-50 text-blue-600 border border-blue-200/60 shadow-sm rounded-lg font-medium transition-all flex items-center justify-center cursor-pointer";
+                tabImg.innerHTML = `<i class="fa-regular fa-image mr-1.5 text-[12px]"></i> 图片 <span class="ml-1.5 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-blue-100 text-blue-600 text-[10px] font-medium leading-none">2</span>`;
+                tabVid.className = "flex-1 py-1.5 text-[13px] text-gray-500 hover:text-gray-700 rounded-lg transition-all flex items-center justify-center cursor-pointer";
+                tabVid.innerHTML = `<i class="fa-solid fa-video mr-1.5 text-[11px]"></i> 视频 <span class="ml-1.5 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gray-200 text-gray-500 text-[10px] font-medium leading-none">3</span>`;
+                
+                vidArea.classList.add('hidden');
+                vidArea.classList.remove('block');
+                imgArea.classList.remove('hidden');
+                imgArea.classList.add('block');
+
+                if(submitBtn) submitBtn.innerHTML = `<i class="fa-regular fa-image mr-2 text-[14px]"></i> 生成图片`;
+                if(canvasIcon) canvasIcon.className = "fa-regular fa-image text-[24px]";
+                if(canvasBg) {
+                    canvasBg.classList.remove('bg-green-50', 'border-green-100/50', 'text-green-500');
+                    canvasBg.classList.add('bg-blue-50', 'border-blue-100/50', 'text-blue-500');
+                }
+                if(canvasText) canvasText.innerText = "把下一帧画面交给 AI";
+
+            } else {
+                tabVid.className = "flex-1 py-1.5 text-[13px] bg-green-50 text-green-600 border border-green-200/60 shadow-sm rounded-lg font-medium transition-all flex items-center justify-center cursor-pointer";
+                tabVid.innerHTML = `<i class="fa-solid fa-video mr-1.5 text-[11px]"></i> 视频 <span class="ml-1.5 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-green-100/80 text-green-600 text-[10px] font-medium leading-none">3</span>`;
+                tabImg.className = "flex-1 py-1.5 text-[13px] text-gray-500 hover:text-gray-700 rounded-lg transition-all flex items-center justify-center cursor-pointer";
+                tabImg.innerHTML = `<i class="fa-regular fa-image mr-1.5 text-[12px]"></i> 图片 <span class="ml-1.5 flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-gray-200 text-gray-500 text-[10px] font-medium leading-none">2</span>`;
+                
+                imgArea.classList.add('hidden');
+                imgArea.classList.remove('block');
+                vidArea.classList.remove('hidden');
+                vidArea.classList.add('block');
+
+                if(submitBtn) submitBtn.innerHTML = `<i class="fa-solid fa-video mr-2 text-[14px]"></i> 生成视频`;
+                if(canvasIcon) canvasIcon.className = "fa-solid fa-video text-[24px]";
+                if(canvasBg) {
+                    canvasBg.classList.remove('bg-blue-50', 'border-blue-100/50', 'text-blue-500');
+                    canvasBg.classList.add('bg-green-50', 'border-green-100/50', 'text-green-500');
+                }
+                if(canvasText) canvasText.innerText = "把下一段镜头交给 AI";
+            }
+        }
+    </script>
+</body>
+</html>

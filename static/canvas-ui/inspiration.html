@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>灵感画布 - 必火智能</title>
+    <script src="/static/canvas-ui/tailwind.js"></script>
+    <link href="/static/canvas-ui/fa.css" rel="stylesheet">
+    <style>
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+            background: #f8fafc; 
+            color: #475569; 
+            font-weight: 400; 
+        }
+
+        .main-title { font-weight: 500 !important; letter-spacing: -0.02em; }
+        
+        /* 瀑布流容器隐藏横向溢出 */
+        .masonry-grid {
+            column-count: 2;
+            column-gap: 1.25rem; /* 稍微增加一点间距，让呼吸感更好 */
+        }
+        @media (min-width: 768px) { .masonry-grid { column-count: 3; } }
+        @media (min-width: 1024px) { .masonry-grid { column-count: 4; } }
+        /* 删除了超大屏幕显示 5 列的规则，将最大列数锁定为 4 列 */
+        
+        .masonry-item {
+            break-inside: avoid;
+            margin-bottom: 1.25rem;
+        }
+
+        /* 隐藏原生滚动条但保留功能 (针对标签栏) */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden flex flex-col text-[13px]">
+    
+    <!-- 顶部导航 (统一高度 h-16) -->
+    <header class="h-16 bg-white/80 backdrop-blur-md border-b border-gray-100 flex items-center justify-between px-6 shrink-0 z-30 relative">
+        <div class="flex items-center space-x-2 w-[220px]">
+            <svg width="28" height="20" viewBox="0 0 100 50" fill="none" xmlns="http://www.w3.org/2000/svg" class="mr-1">
+                <path d="M30 38C18.954 38 10 29.046 10 18C10 6.954 18.954 -2 30 -2C36.924 -2 43.048 1.545 46.541 6.84L49 10.6L59.459 26.16C62.952 31.455 69.076 35 76 35C87.046 35 96 26.046 96 15C96 3.954 87.046 -5 76 -5C69.076 -5 62.952 -1.545 59.459 3.84" stroke="url(#paint0_linear)" stroke-width="14" stroke-linecap="round"/>
+                <path d="M32 36.84C28.507 42.135 22.383 45.68 15.459 45.68C4.413 45.68 -4.541 36.726 -4.541 25.68C-4.541 14.634 4.413 5.68 15.459 5.68C22.383 5.68 28.507 9.225 32 14.52L34.459 18.28L44.918 33.84C48.411 39.135 54.535 42.68 61.459 42.68C72.505 42.68 81.459 33.726 81.459 22.68C81.459 11.634 72.505 2.68 61.459 2.68C54.535 2.68 48.411 6.225 44.918 11.52" stroke="url(#paint1_linear)" stroke-width="14" stroke-linecap="round"/>
+                <text x="21" y="24" fill="#F97316" font-family="Arial, sans-serif" font-weight="900" font-size="14" transform="rotate(-18 21 24)">Ai</text>
+                <defs>
+                    <linearGradient id="paint0_linear" x1="10" y1="18" x2="96" y2="18" gradientUnits="userSpaceOnUse">
+                        <stop stop-color="#06B6D4"/><stop offset="1" stop-color="#2563EB"/>
+                    </linearGradient>
+                    <linearGradient id="paint1_linear" x1="-4" y1="25" x2="81" y2="25" gradientUnits="userSpaceOnUse">
+                        <stop stop-color="#3B82F6"/><stop offset="1" stop-color="#1D4ED8"/>
+                    </linearGradient>
+                </defs>
+            </svg>
+            <span class="text-[15px] font-medium text-gray-800 tracking-wide">必火智能</span>
+        </div>
+
+        <nav class="flex items-center space-x-7 text-[13px] text-gray-500 hidden lg:flex">
+            <a href="#" class="hover:text-gray-800 transition-colors">首页</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">技能商店</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">发布中心</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">内容记录</a>
+            <a href="#" class="text-blue-600 bg-blue-50/80 px-3.5 py-1.5 rounded-lg font-medium">素材库</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">选品变现</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">客资线索</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">AI执行台</a>
+        </nav>
+
+        <div class="flex items-center space-x-4">
+            <div class="flex items-center bg-gray-50/80 rounded-full pl-2 pr-1 py-1 border border-gray-100">
+                <div class="w-5 h-5 rounded-full bg-blue-500 text-white flex items-center justify-center text-[10px] mr-2 shadow-sm"><i class="fa-solid fa-bolt"></i></div>
+                <span class="text-gray-600 text-[12px] mr-3 font-normal">算力: 20347.97</span>
+                <button class="bg-white border border-gray-200 text-gray-600 text-[12px] px-3 py-0.5 rounded-full hover:bg-gray-50 transition-colors shadow-sm">充值</button>
+            </div>
+            <button class="flex items-center space-x-2 hover:bg-gray-50 px-2 py-1.5 rounded-xl transition-colors cursor-pointer border border-transparent">
+                <img src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80" class="w-6 h-6 rounded-full border border-gray-200" alt="Avatar">
+                <i class="fa-solid fa-caret-down text-[10px] text-gray-400"></i>
+            </button>
+        </div>
+    </header>
+
+    <div class="flex flex-1 overflow-hidden relative">
+        
+        <!-- 左侧全局 Sidebar -->
+        <aside class="w-[240px] bg-white border-r border-gray-100 flex flex-col shrink-0 z-20 shadow-[2px_0_10px_rgba(0,0,0,0.01)] relative">
+            <div class="flex-1 overflow-y-auto py-5 px-3 space-y-6">
+                
+                <!-- AI 营销创作 -->
+                <div>
+                    <div class="menu-group-title text-[11px] text-gray-400 px-3 mb-2 flex items-center cursor-pointer hover:text-gray-600">
+                        <i class="fa-solid fa-chevron-down mr-2 text-[9px]"></i> AI 营销创作
+                    </div>
+                    <ul class="space-y-1 pl-1">
+                        <li>
+                            <a href="#" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 text-gray-500 hover:bg-gray-50 rounded-lg transition-colors group">
+                                <i class="sidebar-icon fa-solid fa-pen-nib w-5 text-center text-gray-400"></i>
+                                <span class="sidebar-text flex-1 text-[13px]">AI 设计图</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 text-gray-500 hover:bg-gray-50 rounded-lg transition-colors group">
+                                <i class="sidebar-icon fa-regular fa-user-circle w-5 text-center text-gray-400"></i>
+                                <span class="sidebar-text flex-1 text-[13px]">数字人口播视频</span>
+                            </a>
+                        </li>
+                        <!-- 高亮当前模块 -->
+                        <li>
+                            <a href="#" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 bg-blue-50/60 text-blue-600 rounded-lg transition-colors group">
+                                <i class="sidebar-icon fa-solid fa-lightbulb w-5 text-center text-blue-500"></i>
+                                <span class="sidebar-text flex-1 text-[13px] font-medium">灵感画布</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 text-gray-500 hover:bg-gray-50 rounded-lg transition-colors group">
+                                <i class="sidebar-icon fa-solid fa-clapperboard w-5 text-center text-gray-400"></i>
+                                <span class="sidebar-text flex-1 text-[13px]">热门视频复刻</span>
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+                
+                <!-- 简化版的其他菜单... -->
+                <div>
+                    <div class="menu-group-title text-[11px] text-gray-400 px-3 mb-2 flex items-center cursor-pointer hover:text-gray-600">
+                        <i class="fa-solid fa-chevron-right mr-2 text-[9px]"></i> AI 获客
+                    </div>
+                </div>
+            </div>
+            
+            <div class="p-3 border-t border-gray-100 bg-white">
+                <button class="w-full bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-lg py-2 flex items-center justify-center space-x-2 transition-colors text-[13px] shadow-sm">
+                    <i class="fa-solid fa-pen-to-square text-[13px] text-gray-400"></i> <span>新对话</span>
+                </button>
+            </div>
+        </aside>
+
+        <!-- 内部二级工具栏 (带真实跳转链接) -->
+        <div class="w-[80px] bg-gray-50/50 border-r border-gray-100 flex flex-col items-center py-6 gap-6 shrink-0 z-10">
+            <!-- 激活状态：灵感 -->
+            <a href="/static/canvas-ui/inspiration.html" class="flex flex-col items-center justify-center w-14 h-14 rounded-2xl bg-white shadow-[0_4px_12px_rgba(59,130,246,0.15)] text-blue-600 group relative cursor-pointer">
+                <div class="absolute inset-0 rounded-2xl border-2 border-blue-500/20"></div>
+                <i class="fa-solid fa-wand-magic-sparkles text-[18px] mb-1 group-hover:scale-110 transition-transform"></i>
+                <span class="text-[11px] font-medium">灵感</span>
+            </a>
+            
+            <!-- 未激活状态：生成 -->
+            <a href="/static/canvas-ui/generate.html" class="flex flex-col items-center justify-center w-14 h-14 rounded-2xl text-gray-400 hover:text-gray-700 hover:bg-gray-100/80 transition-colors group cursor-pointer">
+                <i class="fa-solid fa-layer-group text-[18px] mb-1 group-hover:scale-110 transition-transform"></i>
+                <span class="text-[11px]">生成</span>
+            </a>
+            
+            <!-- 未激活状态：画布 -->
+            <a href="/static/canvas-ui/projects.html" class="flex flex-col items-center justify-center w-14 h-14 rounded-2xl text-gray-400 hover:text-gray-700 hover:bg-gray-100/80 transition-colors group cursor-pointer">
+                <i class="fa-solid fa-border-all text-[18px] mb-1 group-hover:scale-110 transition-transform"></i>
+                <span class="text-[11px]">画布</span>
+            </a>
+        </div>
+
+        <!-- 核心内容区 (灵感瀑布流) -->
+        <main class="flex-1 overflow-y-auto relative bg-[#f8fafc] flex flex-col p-6 lg:p-10 z-0">
+            <!-- 高级氛围光晕 -->
+            <div class="absolute top-0 right-0 w-[40rem] h-[40rem] bg-cyan-300/15 rounded-full blur-[120px] pointer-events-none -z-10"></div>
+            <div class="absolute top-[20%] left-[-10%] w-[30rem] h-[30rem] bg-blue-400/10 rounded-full blur-[100px] pointer-events-none -z-10"></div>
+
+            <div class="max-w-[1600px] w-full mx-auto relative z-10">
+                
+                <!-- 顶部引导与筛选区 (取代原来的红色横幅) -->
+                <div class="flex flex-col mb-8">
+                    <h1 class="text-[32px] md:text-[38px] main-title text-gray-900 mb-3 tracking-tight">探索无界灵感</h1>
+                    <p class="text-[14px] text-gray-500 mb-8 font-light max-w-2xl">
+                        发现全网顶尖 AI 创作者的优秀作品。无需从零开始，一键复用爆款配方、提示词与工作流，轻松开启您的下一次创作。
+                    </p>
+
+                    <!-- SaaS 高级标签过滤器 -->
+                    <div class="flex items-center justify-between border-b border-gray-200/60 pb-4">
+                        <div class="flex space-x-2 overflow-x-auto no-scrollbar pb-1">
+                            <button class="px-5 py-2 bg-gray-900 text-white rounded-full text-[13px] font-medium whitespace-nowrap shadow-sm">全部发现</button>
+                            <button class="px-5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-full text-[13px] whitespace-nowrap transition-colors">爆款带货海报</button>
+                            <button class="px-5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-full text-[13px] whitespace-nowrap transition-colors">小红书图文</button>
+                            <button class="px-5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-full text-[13px] whitespace-nowrap transition-colors">摄影级人像</button>
+                            <button class="px-5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-full text-[13px] whitespace-nowrap transition-colors">3D 卡通 IP</button>
+                        </div>
+                        
+                        <!-- 搜索与排序 -->
+                        <div class="hidden lg:flex items-center space-x-3 shrink-0 ml-6">
+                            <div class="relative">
+                                <input type="text" placeholder="搜索风格 / 提示词..." class="w-48 bg-white border border-gray-200 text-[12px] rounded-full py-2 pl-8 pr-3 focus:outline-none focus:border-blue-300 focus:ring-1 focus:ring-blue-100 transition-all shadow-sm">
+                                <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-gray-400 text-[11px]"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 瀑布流画廊区 (Masonry Grid) -->
+                <div class="masonry-grid">
+                    
+                    <!-- 灵感卡片 1 (竖图) -->
+                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
+                        <img src="https://images.unsplash.com/photo-1594212711019-74e50eb9321e?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="果汁海报">
+                        
+                        <!-- 悬停黑透遮罩 -->
+                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
+                            <!-- 顶部互动数据 -->
+                            <div class="absolute top-4 right-4 flex space-x-2">
+                                <div class="w-8 h-8 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center text-white hover:bg-white/40 transition-colors"><i class="fa-regular fa-heart text-[14px]"></i></div>
+                            </div>
+                            
+                            <h4 class="text-white text-[15px] font-medium mb-1">清爽青苹鲜榨果汁商用海报</h4>
+                            <div class="flex items-center text-white/70 text-[11px] mb-4">
+                                <img src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80" class="w-4 h-4 rounded-full mr-1.5" alt="作者">
+                                <span>设计美学实验室</span>
+                            </div>
+                            
+                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
+                                提取咒语 / 做同款
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 灵感卡片 2 (稍微偏方) -->
+                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
+                        <img src="https://images.unsplash.com/photo-1518005020951-eccb494ad742?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="建筑风景">
+                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
+                            <h4 class="text-white text-[15px] font-medium mb-1">冬日暖阳 希腊风小镇</h4>
+                            <div class="flex items-center text-white/70 text-[11px] mb-4">
+                                <span>MJ V6 · 摄影写实风</span>
+                            </div>
+                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
+                                提取咒语 / 做同款
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 灵感卡片 3 (长竖图) -->
+                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
+                        <img src="https://images.unsplash.com/photo-1628157588553-5eeea00af15c?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="二次元排版">
+                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
+                            <h4 class="text-white text-[15px] font-medium mb-1">漫画分镜叙事拼图排版</h4>
+                            <div class="flex items-center text-white/70 text-[11px] mb-4">
+                                <span>小红书高赞图文配方</span>
+                            </div>
+                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
+                                提取咒语 / 做同款
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 灵感卡片 4 (偏方图) -->
+                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
+                        <img src="https://images.unsplash.com/photo-1543332164-6e82f355badc?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="3D卡通仓鼠">
+                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
+                            <h4 class="text-white text-[15px] font-medium mb-1">皮克斯风 厨师小仓鼠烤串</h4>
+                            <div class="flex items-center text-white/70 text-[11px] mb-4">
+                                <span>3D IP / 趣味拟人</span>
+                            </div>
+                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
+                                提取咒语 / 做同款
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 灵感卡片 5 (横图) -->
+                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
+                        <img src="https://images.unsplash.com/photo-1506812584074-4b533a84f3eb?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="中国风">
+                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
+                            <h4 class="text-white text-[15px] font-medium mb-1">古风人物电影级光影写实</h4>
+                            <div class="flex items-center text-white/70 text-[11px] mb-4">
+                                <span>影视剧解说封面配方</span>
+                            </div>
+                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
+                                提取咒语 / 做同款
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- 灵感卡片 6 (竖图) -->
+                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
+                        <img src="https://images.unsplash.com/photo-1618331835717-801e976710b2?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="赛博朋克龙">
+                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
+                            <h4 class="text-white text-[15px] font-medium mb-1">赛博机甲风 霓虹巨龙神兽</h4>
+                            <div class="flex items-center text-white/70 text-[11px] mb-4">
+                                <span>潮玩盲盒 / 强视觉冲击</span>
+                            </div>
+                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
+                                提取咒语 / 做同款
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 灵感卡片 7 (偏横图) -->
+                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
+                        <img src="https://images.unsplash.com/photo-1512413914583-1628d052dcc9?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="微缩景观">
+                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
+                            <h4 class="text-white text-[15px] font-medium mb-1">微缩世界 / 治愈系客厅内景</h4>
+                            <div class="flex items-center text-white/70 text-[11px] mb-4">
+                                <span>移轴镜头 / 暖光氛围</span>
+                            </div>
+                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
+                                提取咒语 / 做同款
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 底部加载提示 -->
+                <div class="py-12 flex flex-col items-center justify-center space-y-4">
+                    <div class="w-8 h-8 rounded-full border-2 border-gray-200 border-t-blue-500 animate-spin"></div>
+                    <span class="text-gray-400 text-[13px] font-light">正在探索更多灵感...</span>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+</body>
+</html>

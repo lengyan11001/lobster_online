@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的画布 - 必火智能</title>
+    <script src="/static/canvas-ui/tailwind.js"></script>
+    <link href="/static/canvas-ui/fa.css" rel="stylesheet">
+    <style>
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+            background: #f8fafc; 
+            color: #475569; 
+            font-weight: 400; 
+        }
+
+        .main-title { font-weight: 500 !important; letter-spacing: -0.02em; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        #app-sidebar { transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        #app-sidebar.collapsed { width: 72px; }
+        #app-sidebar.collapsed .sidebar-text,
+        #app-sidebar.collapsed .sidebar-chevron,
+        #app-sidebar.collapsed .menu-group-title { display: none; }
+        #app-sidebar.collapsed .sidebar-item-container { justify-content: center; padding-left: 0; padding-right: 0; }
+        #app-sidebar.collapsed .sidebar-item-container i.sidebar-icon { margin-right: 0; font-size: 16px; }
+        
+        .sidebar-toggle-btn {
+            position: absolute; right: -12px; top: 24px; width: 24px; height: 24px;
+            background: #fff; border: 1px solid #e2e8f0; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center; cursor: pointer;
+            z-index: 50; box-shadow: 0 2px 4px rgba(0,0,0,0.05); transition: all 0.3s; color: #94a3b8;
+        }
+        .sidebar-toggle-btn:hover { color: #3b82f6; border-color: #bfdbfe; background: #f8fafc; }
+        #app-sidebar.collapsed .sidebar-toggle-btn { transform: rotate(180deg); }
+
+        select {
+            appearance: none; -webkit-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 0.8rem center; background-size: 0.8em;
+        }
+
+        /* 拖拽交互虚线高亮 */
+        .drag-over {
+            border: 2px dashed #3b82f6 !important;
+            background-color: rgba(59, 130, 246, 0.05) !important;
+        }
+    </style>
+</head>
+<body class="h-screen w-screen overflow-hidden flex flex-col text-[13px]">
+    
+    <!-- 顶部 64px 导航栏 -->
+    <header class="h-16 bg-white/80 backdrop-blur-md border-b border-gray-100 flex items-center justify-between px-6 shrink-0 z-30 relative">
+        <div class="flex items-center space-x-2 w-[220px]">
+            <svg width="28" height="20" viewBox="0 0 100 50" fill="none" xmlns="http://www.w3.org/2000/svg" class="mr-1">
+                <path d="M30 38C18.954 38 10 29.046 10 18C10 6.954 18.954 -2 30 -2C36.924 -2 43.048 1.545 46.541 6.84L49 10.6L59.459 26.16C62.952 31.455 69.076 35 76 35C87.046 35 96 26.046 96 15C96 3.954 87.046 -5 76 -5C69.076 -5 62.952 -1.545 59.459 3.84" stroke="url(#paint0_linear)" stroke-width="14" stroke-linecap="round"/>
+                <path d="M32 36.84C28.507 42.135 22.383 45.68 15.459 45.68C4.413 45.68 -4.541 36.726 -4.541 25.68C-4.541 14.634 4.413 5.68 15.459 5.68C22.383 5.68 28.507 9.225 32 14.52L34.459 18.28L44.918 33.84C48.411 39.135 54.535 42.68 61.459 42.68C72.505 42.68 81.459 33.726 81.459 22.68C81.459 11.634 72.505 2.68 61.459 2.68C54.535 2.68 48.411 6.225 44.918 11.52" stroke="url(#paint1_linear)" stroke-width="14" stroke-linecap="round"/>
+                <text x="21" y="24" fill="#F97316" font-family="Arial, sans-serif" font-weight="900" font-size="14" transform="rotate(-18 21 24)">Ai</text>
+                <defs>
+                    <linearGradient id="paint0_linear" x1="10" y1="18" x2="96" y2="18" gradientUnits="userSpaceOnUse">
+                        <stop stop-color="#06B6D4"/><stop offset="1" stop-color="#2563EB"/>
+                    </linearGradient>
+                    <linearGradient id="paint1_linear" x1="-4" y1="25" x2="81" y2="25" gradientUnits="userSpaceOnUse">
+                        <stop stop-color="#3B82F6"/><stop offset="1" stop-color="#1D4ED8"/>
+                    </linearGradient>
+                </defs>
+            </svg>
+            <span class="text-[15px] font-medium text-gray-800 tracking-wide">必火智能</span>
+        </div>
+
+        <nav class="flex items-center space-x-7 text-[13px] text-gray-500 hidden lg:flex">
+            <a href="#" class="hover:text-gray-800 transition-colors">首页</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">技能商店</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">发布中心</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">内容记录</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">素材库</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">选品变现</a>
+            <a href="#" class="hover:text-gray-800 transition-colors">客资线索</a>
+            <a href="#" class="text-blue-600 bg-blue-50/80 px-3.5 py-1.5 rounded-lg font-medium">AI执行台</a>
+        </nav>
+
+        <div class="flex items-center space-x-4">
+            <div class="flex items-center bg-gray-50/80 rounded-full pl-2 pr-1 py-1 border border-gray-100">
+                <div class="w-5 h-5 rounded-full bg-blue-500 text-white flex items-center justify-center text-[10px] mr-2 shadow-sm"><i class="fa-solid fa-bolt"></i></div>
+                <span class="text-gray-600 text-[12px] mr-3 font-normal">算力: 20347.97</span>
+                <button class="bg-white border border-gray-200 text-gray-600 text-[12px] px-3 py-0.5 rounded-full hover:bg-gray-50 transition-colors shadow-sm">充值</button>
+            </div>
+            <button class="flex items-center space-x-2 hover:bg-gray-50 px-2 py-1.5 rounded-xl transition-colors cursor-pointer border border-transparent">
+                <img src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80" class="w-6 h-6 rounded-full border border-gray-200" alt="Avatar">
+                <i class="fa-solid fa-caret-down text-[10px] text-gray-400"></i>
+            </button>
+        </div>
+    </header>
+
+    <div class="flex flex-1 overflow-hidden relative">
+        
+        <!-- 左侧全局导航 -->
+        <aside id="app-sidebar" class="w-[240px] bg-white border-r border-gray-100 flex flex-col shrink-0 z-20 shadow-[2px_0_10px_rgba(0,0,0,0.01)] relative">
+            <button id="sidebarToggle" class="sidebar-toggle-btn">
+                <i class="fa-solid fa-chevron-left text-[10px]"></i>
+            </button>
+
+            <div class="flex-1 overflow-y-auto py-5 px-3 space-y-6">
+                <div>
+                    <div class="menu-group-title text-[11px] text-gray-400 px-3 mb-2 flex items-center cursor-pointer hover:text-gray-600">
+                        <i class="fa-solid fa-chevron-down mr-2 text-[9px] sidebar-chevron"></i> AI 营销创作
+                    </div>
+                    <ul class="space-y-1 pl-1">
+                        <li>
+                            <a href="#" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 text-gray-500 hover:bg-gray-50 rounded-lg transition-colors group">
+                                <i class="sidebar-icon fa-solid fa-pen-nib w-5 text-center text-gray-400 group-hover:text-blue-500"></i>
+                                <span class="sidebar-text flex-1 text-[13px]">AI 设计图</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 text-gray-500 hover:bg-gray-50 rounded-lg transition-colors group">
+                                <i class="sidebar-icon fa-regular fa-user-circle w-5 text-center text-gray-400 group-hover:text-blue-500"></i>
+                                <span class="sidebar-text flex-1 text-[13px]">数字人口播视频</span>
+                            </a>
+                        </li>
+                        <li>
+                            <a href="#" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 bg-blue-50/60 text-blue-600 rounded-lg transition-colors group">
+                                <i class="sidebar-icon fa-solid fa-lightbulb w-5 text-center text-blue-500"></i>
+                                <span class="sidebar-text flex-1 text-[13px] font-medium">灵感画布</span>
+                            </a>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </aside>
+
+        <!-- 内部二级工具栏 -->
+        <div class="w-[80px] bg-gray-50/50 border-r border-gray-100 flex flex-col items-center py-6 gap-6 shrink-0 z-10">
+            <a href="/static/canvas-ui/inspiration.html" class="flex flex-col items-center justify-center w-14 h-14 rounded-2xl text-gray-400 hover:text-gray-700 hover:bg-gray-100/80 transition-colors group cursor-pointer">
+                <i class="fa-solid fa-wand-magic-sparkles text-[18px] mb-1 group-hover:scale-110 transition-transform"></i>
+                <span class="text-[11px]">灵感</span>
+            </a>
+            <a href="/static/canvas-ui/generate.html" class="flex flex-col items-center justify-center w-14 h-14 rounded-2xl text-gray-400 hover:text-gray-700 hover:bg-gray-100/80 transition-colors group cursor-pointer">
+                <i class="fa-solid fa-layer-group text-[18px] mb-1 group-hover:scale-110 transition-transform"></i>
+                <span class="text-[11px]">生成</span>
+            </a>
+            <a href="/static/canvas-ui/projects.html" class="flex flex-col items-center justify-center w-14 h-14 rounded-2xl bg-white shadow-[0_4px_12px_rgba(59,130,246,0.15)] text-blue-600 group relative cursor-pointer">
+                <div class="absolute inset-0 rounded-2xl border-2 border-blue-500/20"></div>
+                <i class="fa-solid fa-border-all text-[18px] mb-1 group-hover:scale-110 transition-transform"></i>
+                <span class="text-[11px] font-medium">画布</span>
+            </a>
+        </div>
+
+        <!-- 主内容区 -->
+        <main class="flex-1 overflow-y-auto relative bg-[#faf9f8] flex flex-col z-0">
+            <div class="absolute top-0 right-0 w-[40rem] h-[40rem] bg-blue-300/10 rounded-full blur-[100px] pointer-events-none -z-10"></div>
+            
+            <div class="max-w-[1400px] w-full mx-auto px-8 py-10 relative z-10 flex flex-col h-full">
+                
+                <!-- 顶部：标题与面包屑 & 操作栏 -->
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-end mb-8 gap-4">
+                    <div>
+                        <!-- 面包屑导航 (支持在文件夹内部时显示返回) -->
+                        <div id="breadcrumb-area" class="flex items-center text-[13px] text-gray-400 mb-1">
+                            <span id="breadcrumb-root" class="text-gray-900 main-title font-medium">全部项目</span>
+                            <span id="breadcrumb-separator" class="mx-2 hidden">/</span>
+                            <span id="breadcrumb-folder" class="text-blue-600 font-medium hidden"></span>
+                        </div>
+                        <h2 id="page-main-title" class="text-[28px] main-title text-gray-900 tracking-tight flex items-center">
+                            我的项目 <span id="project-count-badge" class="ml-3 px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-[12px] font-normal">共 5 个</span>
+                        </h2>
+                    </div>
+
+                    <div class="flex items-center space-x-3 w-full md:w-auto">
+                        <div class="relative w-full md:w-56">
+                            <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 text-[12px]"></i>
+                            <input type="text" placeholder="搜索项目名称..." class="w-full pl-8 pr-3 py-2 bg-white border border-gray-200 focus:border-blue-300 focus:ring-2 focus:ring-blue-50 rounded-xl text-[13px] text-gray-700 transition-all outline-none shadow-sm">
+                        </div>
+                        
+                        <button onclick="openCreateFolderModal()" class="bg-white border border-gray-200 hover:border-blue-300 text-gray-600 hover:text-blue-600 px-4 py-2 rounded-xl text-[13px] font-medium transition-all shadow-sm flex items-center shrink-0 cursor-pointer">
+                            <i class="fa-regular fa-folder mr-1.5 text-[14px]"></i> 新建文件夹
+                        </button>
+
+                        <button onclick="createNewCanvas()" class="bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white px-5 py-2 rounded-xl text-[13px] font-medium transition-all shadow-md shadow-blue-500/20 active:scale-[0.98] flex items-center shrink-0 border-0 cursor-pointer">
+                            <i class="fa-solid fa-plus mr-1.5 text-[11px]"></i> 新建项目
+                        </button>
+                    </div>
+                </div>
+
+                <!-- 动态卡片容器 (由 JavaScript 渲染根目录或文件夹内部) -->
+                <div id="grid-container" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                    <!-- 动态内容渲染处 -->
+                </div>
+
+                <!-- 底部提示区 -->
+                <div class="mt-16 flex flex-col items-center justify-center opacity-60">
+                    <div class="w-12 h-1 bg-gray-200 rounded-full mb-4"></div>
+                    <span class="text-[12px] text-gray-400 font-light">支持将画布卡片拖拽至文件夹中进行分组</span>
+                </div>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- 新建文件夹弹窗 -->
+    <div id="folderModal" class="fixed inset-0 z-50 flex items-center justify-center hidden">
+        <div class="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onclick="closeCreateFolderModal()"></div>
+        <div class="relative bg-white rounded-2xl w-full max-w-md shadow-2xl p-6 z-10">
+            <h3 class="text-[16px] font-medium text-gray-800 mb-4">新建文件夹</h3>
+            <input type="text" id="folderNameInput" placeholder="请输入文件夹名称..." class="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-[13px] focus:outline-none focus:border-blue-500 mb-6">
+            <div class="flex justify-end space-x-3">
+                <button onclick="closeCreateFolderModal()" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-xl text-[13px]">取消</button>
+                <button onclick="submitCreateFolder()" class="px-5 py-2 bg-blue-600 text-white rounded-xl text-[13px] hover:bg-blue-500 shadow-sm">确定创建</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 模拟数据库状态 (内存数据源)
+        let appData = {
+            currentFolderId: null, // null 代表根目录，数字代表文件夹 ID
+            folders: [
+                { id: 1, name: "双十一大促物料包", count: 2 },
+                { id: 2, name: "Q4品牌营销海报", count: 0 }
+            ],
+            items: [
+                { id: 101, type: "canvas", name: "秋季上新营销海报排版", time: "更新于 2 小时前", img: "https://images.unsplash.com/photo-1542744173-8e7e53415bb0?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80", folderId: null },
+                { id: 102, type: "canvas", name: "社交媒体分发矩阵", time: "更新于 昨天 14:30", img: "https://images.unsplash.com/photo-1611162617474-5b21e879e113?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80", folderId: null },
+                { id: 103, type: "canvas", name: "必火智能AI概念图", time: "更新于 2026/10/18", img: "", folderId: 1 }, // 属于文件夹 1
+                { id: 104, type: "canvas", name: "神奇空间主视觉", time: "更新于 2026/10/12", img: "", folderId: 1 }    // 属于文件夹 1
+            ]
+        };
+
+        // 渲染主画板函数
+        function renderDashboard() {
+            const container = document.getElementById('grid-container');
+            const breadcrumbRoot = document.getElementById('breadcrumb-root');
+            const breadcrumbSep = document.getElementById('breadcrumb-separator');
+            const breadcrumbFolder = document.getElementById('breadcrumb-folder');
+            const mainTitle = document.getElementById('page-main-title');
+            const countBadge = document.getElementById('project-count-badge');
+
+            container.innerHTML = '';
+
+            if (appData.currentFolderId === null) {
+                // === 根目录视图 ===
+                breadcrumbSep.classList.add('hidden');
+                breadcrumbFolder.classList.add('hidden');
+                mainTitle.innerHTML = `我的项目 <span id="project-count-badge" class="ml-3 px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-[12px] font-normal">共 ${appData.folders.length + appData.items.filter(i => i.folderId === null).length} 个</span>`;
+
+                // 1. 新建空白画布卡片
+                container.innerHTML += `
+                    <div onclick="createNewCanvas()" class="group border-2 border-dashed border-gray-200 hover:border-blue-400 bg-gray-50/50 hover:bg-blue-50/30 rounded-2xl aspect-[4/3] flex flex-col items-center justify-center cursor-pointer transition-all duration-300 shadow-sm hover:shadow-md">
+                        <div class="w-12 h-12 rounded-full bg-white border border-gray-200 group-hover:border-blue-300 group-hover:bg-blue-50 text-gray-400 group-hover:text-blue-500 flex items-center justify-center text-[18px] mb-3 transition-colors shadow-sm">
+                            <i class="fa-solid fa-plus"></i>
+                        </div>
+                        <span class="text-[14px] text-gray-600 group-hover:text-blue-600 font-medium transition-colors">新建空白画布</span>
+                        <span class="text-[11px] text-gray-400 mt-1 font-light">从零开始你的创意</span>
+                    </div>
+                `;
+
+                // 2. 渲染文件夹卡片 (支持接收拖拽)
+                appData.folders.forEach(folder => {
+                    const subCount = appData.items.filter(i => i.folderId === folder.id).length;
+                    container.innerHTML += `
+                        <div class="group bg-white rounded-2xl border border-gray-200 hover:border-blue-300 hover:shadow-[0_8px_30px_rgb(59,130,246,0.08)] transition-all duration-300 cursor-pointer flex flex-col p-5 relative overflow-hidden aspect-[4/3]"
+                             onclick="openFolder(${folder.id})"
+                             ondragover="allowDrop(event)"
+                             ondragleave="removeDropStyle(event)"
+                             ondrop="dropItem(event, ${folder.id})"
+                             id="folder-card-${folder.id}">
+                            
+                            <div class="absolute -right-6 -top-6 w-24 h-24 bg-blue-50/50 rounded-full group-hover:scale-150 transition-transform duration-700 ease-out pointer-events-none"></div>
+                            
+                            <div class="flex justify-between items-start mb-4 relative z-10">
+                                <div class="w-12 h-12 rounded-xl bg-blue-50/80 border border-blue-100 text-blue-500 flex items-center justify-center text-[22px] group-hover:bg-blue-500 group-hover:text-white transition-colors duration-300 shadow-sm">
+                                    <i class="fa-solid fa-folder-open"></i>
+                                </div>
+                                <div class="relative">
+                                    <button onclick="toggleFolderMenu(event, ${folder.id})" class="text-gray-400 hover:text-gray-700 transition-colors w-6 h-6 rounded-md hover:bg-gray-100 flex items-center justify-center shrink-0">
+                                        <i class="fa-solid fa-ellipsis"></i>
+                                    </button>
+                                    <!-- 下拉菜单 -->
+                                    <div id="folder-menu-${folder.id}" class="absolute right-0 top-8 bg-white border border-gray-100 shadow-xl rounded-xl py-1.5 w-28 hidden z-30">
+                                        <button onclick="deleteFolder(event, ${folder.id})" class="w-full text-left px-4 py-1.5 text-red-500 hover:bg-red-50 text-[12px] flex items-center">
+                                            <i class="fa-regular fa-trash-can mr-2"></i> 删除
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="relative z-10 mt-auto">
+                                <h3 class="text-[15px] text-gray-800 main-title line-clamp-1 group-hover:text-blue-600 transition-colors mb-1.5">${folder.name}</h3>
+                                <p class="text-[12px] text-gray-400 font-light flex items-center">
+                                    <i class="fa-regular fa-file-image mr-1.5 text-[11px]"></i> ${subCount} 个项目 (可拖入)
+                                </p>
+                            </div>
+                        </div>
+                    `;
+                });
+
+                // 3. 渲染根目录下的画布项目 (支持拖拽源 draggable="true")
+                appData.items.filter(i => i.folderId === null).forEach(item => {
+                    container.innerHTML += renderCanvasCard(item);
+                });
+
+            } else {
+                // === 文件夹内部视图 ===
+                const folder = appData.folders.find(f => f.id === appData.currentFolderId);
+                breadcrumbSep.classList.remove('hidden');
+                breadcrumbFolder.classList.remove('hidden');
+                breadcrumbFolder.innerText = folder.name;
+                mainTitle.innerHTML = `${folder.name} <span class="ml-3 px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-[12px] font-normal">共 ${appData.items.filter(i => i.folderId === folder.id).length} 个项目</span>`;
+
+                // 返回根目录按钮
+                container.innerHTML += `
+                    <div onclick="backToRoot()" class="group border-2 border-dashed border-gray-200 hover:border-blue-400 bg-gray-50/50 hover:bg-blue-50/30 rounded-2xl aspect-[4/3] flex flex-col items-center justify-center cursor-pointer transition-all duration-300 shadow-sm">
+                        <div class="w-12 h-12 rounded-full bg-white border border-gray-200 group-hover:border-blue-300 group-hover:bg-blue-50 text-gray-400 group-hover:text-blue-500 flex items-center justify-center text-[18px] mb-3 transition-colors shadow-sm">
+                            <i class="fa-solid fa-arrow-left"></i>
+                        </div>
+                        <span class="text-[14px] text-gray-600 group-hover:text-blue-600 font-medium transition-colors">返回上一级</span>
+                        <span class="text-[11px] text-gray-400 mt-1 font-light">点击回到根目录</span>
+                    </div>
+                `;
+
+                // 渲染该文件夹内部的画布项目
+                appData.items.filter(i => i.folderId === folder.id).forEach(item => {
+                    container.innerHTML += renderCanvasCard(item);
+                });
+            }
+        }
+
+        // 画布卡片渲染模板
+        function renderCanvasCard(item) {
+            const thumbContent = item.img ? 
+                `<img src="${item.img}" alt="缩略图" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out">` :
+                `<div class="w-16 h-16 rounded-xl bg-white shadow-sm flex items-center justify-center text-gray-300 border border-gray-100 group-hover:text-blue-400 group-hover:border-blue-200 transition-colors"><i class="fa-regular fa-image text-[24px]"></i></div>`;
+
+            return `
+                <div class="group bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-[0_4px_20px_-4px_rgba(0,0,0,0.02)] hover:shadow-[0_12px_30px_-10px_rgba(0,0,0,0.08)] hover:-translate-y-1 hover:border-blue-200/60 transition-all duration-300 cursor-pointer flex flex-col"
+                     onclick="openCanvasItem('${item.id}')"
+                     draggable="true" ondragstart="dragItem(event, ${item.id})">
+                    <div class="w-full aspect-[4/3] ${item.img ? 'bg-gray-100' : 'bg-gray-50 flex items-center justify-center'} relative overflow-hidden">
+                        ${thumbContent}
+                        <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-[2px]">
+                            <button class="bg-white text-blue-600 rounded-full px-5 py-2 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-all duration-300 hover:bg-blue-50">
+                                进入画布
+                            </button>
+                        </div>
+                    </div>
+                    <div class="p-4 flex flex-col bg-white">
+                        <div class="flex justify-between items-start mb-1">
+                            <h3 class="text-[14px] text-gray-800 main-title line-clamp-1 group-hover:text-blue-600 transition-colors pr-2">${item.name}</h3>
+                            <button onclick="deleteItem(event, ${item.id})" class="text-gray-400 hover:text-red-500 transition-colors w-6 h-6 rounded-md hover:bg-gray-100 flex items-center justify-center shrink-0" title="删除项目">
+                                <i class="fa-regular fa-trash-can text-[11px]"></i>
+                            </button>
+                        </div>
+                        <p class="text-[11px] text-gray-400 font-light">${item.time}</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        // === 交互逻辑处理函数 ===
+        let draggedItemId = null;
+
+        function dragItem(e, id) {
+            draggedItemId = id;
+            e.dataTransfer.setData('text/plain', id);
+        }
+
+        function allowDrop(e) {
+            e.preventDefault();
+            e.currentTarget.classList.add('drag-over');
+        }
+
+        function removeDropStyle(e) {
+            e.currentTarget.classList.remove('drag-over');
+        }
+
+        function dropItem(e, targetFolderId) {
+            e.preventDefault();
+            e.currentTarget.classList.remove('drag-over');
+            if (draggedItemId !== null) {
+                const item = appData.items.find(i => i.id === draggedItemId);
+                if (item) {
+                    item.folderId = targetFolderId;
+                    draggedItemId = null;
+                    renderDashboard();
+                }
+            }
+        }
+
+        function openFolder(folderId) {
+            appData.currentFolderId = folderId;
+            renderDashboard();
+        }
+
+        function backToRoot() {
+            appData.currentFolderId = null;
+            renderDashboard();
+        }
+
+        function toggleFolderMenu(e, folderId) {
+            e.stopPropagation();
+            // 关闭所有其他菜单
+            document.querySelectorAll('[id^="folder-menu-"]').forEach(m => m.classList.add('hidden'));
+            const menu = document.getElementById(`folder-menu-${folderId}`);
+            menu.classList.toggle('hidden');
+        }
+
+        function deleteFolder(e, folderId) {
+            e.stopPropagation();
+            appData.folders = appData.folders.filter(f => f.id !== folderId);
+            // 将该文件夹内的画布移回根目录
+            appData.items.forEach(i => {
+                if (i.folderId === folderId) i.folderId = null;
+            });
+            renderDashboard();
+        }
+
+        function deleteItem(e, itemId) {
+            e.stopPropagation();
+            appData.items = appData.items.filter(i => i.id !== itemId);
+            renderDashboard();
+        }
+
+        function createNewCanvas() {
+            const nameInput = prompt("请输入新画布项目名称：", "未命名创意画布");
+            if (nameInput) {
+                const newItem = {
+                    id: Date.now(),
+                    type: "canvas",
+                    name: nameInput,
+                    time: "刚刚",
+                    img: "",
+                    folderId: appData.currentFolderId
+                };
+                appData.items.unshift(newItem);
+                renderDashboard();
+            }
+        }
+
+        function openCreateFolderModal() {
+            document.getElementById('folderModal').classList.remove('hidden');
+            document.getElementById('folderNameInput').value = '';
+        }
+
+        function closeCreateFolderModal() {
+            document.getElementById('folderModal').classList.add('hidden');
+        }
+
+        function submitCreateFolder() {
+            const val = document.getElementById('folderNameInput').value.trim();
+            if (val) {
+                appData.folders.push({
+                    id: Date.now(),
+                    name: val,
+                    count: 0
+                });
+                closeCreateFolderModal();
+                renderDashboard();
+            }
+        }
+
+        // 初始化加载
+        document.addEventListener('DOMContentLoaded', () => {
+            renderDashboard();
+
+            // 点击空白处关闭文件夹操作菜单
+            document.addEventListener('click', () => {
+                document.querySelectorAll('[id^="folder-menu-"]').forEach(m => m.classList.add('hidden'));
+            });
+
+            // 侧边栏折叠
+            const sidebarToggleBtn = document.getElementById('sidebarToggle');
+            const sidebar = document.getElementById('app-sidebar');
+            if (sidebarToggleBtn && sidebar) {
+                sidebarToggleBtn.addEventListener('click', () => { sidebar.classList.toggle('collapsed'); });
+            }
+        });
+    </script>
+
+<script>
+/* 真实数据接入：项目列表 / 新建 / 删除 / 进入画布 */
+(function () {
+  function token() {
+    try {
+      return localStorage.getItem('token') || localStorage.getItem('auth_token') || '';
+    } catch (e) { return ''; }
+  }
+  async function api(path, options) {
+    var opts = options || {};
+    var headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+    var t = token();
+    if (t) headers['Authorization'] = 'Bearer ' + t;
+    var resp = await fetch(path, Object.assign({}, opts, { headers: headers }));
+    var data = await resp.json().catch(function () { return {}; });
+    if (!resp.ok) throw new Error((data && (data.detail || data.message)) || ('HTTP ' + resp.status));
+    return data;
+  }
+  function rowsOf(payload) {
+    if (!payload) return [];
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload.items)) return payload.items;
+    var data = payload.data;
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.items)) return data.items;
+    if (data && Array.isArray(data.list)) return data.list;
+    return [];
+  }
+  function toItem(row) {
+    var stamp = String(row.updated_at || row.created_at || '').slice(0, 10);
+    return {
+      id: row.uuid || row.id,
+      type: 'canvas',
+      name: row.name || '未命名项目',
+      time: stamp ? ('更新于 ' + stamp) : '刚刚',
+      img: row.thumbnail_url || '',
+      folderId: null
+    };
+  }
+  window.canvasUiApi = api;
+  window.openCanvasItem = function (id) {
+    if (!id) return;
+    location.href = '/api/canvas-local/canvas-frame#/canvas-editor/' + encodeURIComponent(String(id));
+  };
+  window.createNewCanvas = async function () {
+    var name = prompt('请输入新画布项目名称：', '未命名创意画布');
+    if (!name) return;
+    try {
+      var payload = await api('/canvas-api/api/v1/projects/create', {
+        method: 'POST',
+        body: JSON.stringify({ name: name })
+      });
+      var row = (payload && (payload.project || payload.data)) || payload || {};
+      window.openCanvasItem(row.uuid || row.id);
+    } catch (e) {
+      alert('新建失败：' + e.message);
+    }
+  };
+  window.deleteItem = async function (event, itemId) {
+    if (event) { event.stopPropagation(); }
+    if (!itemId) return;
+    if (!confirm('确定删除这个项目？')) return;
+    try {
+      await api('/canvas-api/api/v1/projects/' + encodeURIComponent(String(itemId)) + '/delete', { method: 'POST', body: '{}' });
+    } catch (e) {
+      alert('删除失败：' + e.message);
+      return;
+    }
+    appData.items = appData.items.filter(function (i) { return String(i.id) !== String(itemId); });
+    renderDashboard();
+  };
+  window.addEventListener('load', async function () {
+    try {
+      var payload = await api('/canvas-api/api/v1/projects/my?limit=60');
+      appData.items = rowsOf(payload).map(toItem);
+      renderDashboard();
+    } catch (e) {
+      console.warn('[canvas-ui] load projects failed', e);
+    }
+  });
+})();
+</script>
+</body>
+</html>
