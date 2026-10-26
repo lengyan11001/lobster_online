@@ -64,6 +64,8 @@
   history.replaceState = function(){ var r = rs.apply(history, arguments); onChange(); return r; };
 
   // 生成结果补一个下载按钮（原生结果区只有状态和清空）
+  // 注意：这里用轮询而不是 MutationObserver —— 观察 characterData/childList 时
+  // 自己改 DOM 会再次触发回调，形成死循环把页面卡死。
   function ensureDownload(){
     var actions = document.querySelector(".GeneratePage-result-actions");
     var media = document.querySelector(".GeneratePage-current-result img, .GeneratePage-current-result video, .GeneratePage-current-result audio");
@@ -79,23 +81,14 @@
       old.rel = "noreferrer";
       actions.appendChild(old);
     }
-    old.href = url;
-    old.setAttribute("download", "");
+    if (old.getAttribute("href") !== url) old.setAttribute("href", url);
+    if (!old.hasAttribute("download")) old.setAttribute("download", "");
   }
-  // 历史头部右侧显示「共 N 条任务」（原生是 11/11 这种页码，且副标题才有总数）
-  function syncHistoryCount(){
-    var header = document.querySelector(".GeneratePage-history-header");
-    if (!header) return;
-    var badge = header.querySelector("span");
-    if (!badge) return;
-    var n = document.querySelectorAll(".GeneratePage-history-item").length;
-    if (n > 0) badge.textContent = "共 " + n + " 条任务";
-  }
-  var mo = new MutationObserver(function(){ ensureDownload(); syncHistoryCount(); });
-  document.addEventListener("DOMContentLoaded", function(){
+  function startResultWatch(){
     ensureDownload();
-    syncHistoryCount();
-    if (document.body) mo.observe(document.body, { childList: true, subtree: true, characterData: true });
-  });
+    window.setInterval(ensureDownload, 1500);
+  }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", startResultWatch);
+  else startResultWatch();
 })();
 </script></head><body><noscript>请启用 JavaScript 以使用剧查查超级工厂。</noscript><div id="root"></div></body></html>
