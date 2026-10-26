@@ -2822,11 +2822,21 @@
     var editingId = String(state.editingSurveyId || '');
     cloudJson(editingId ? '/api/ip-content/profile-surveys/' + encodeURIComponent(editingId) : '/api/ip-content/profile-surveys', { method: editingId ? 'PATCH' : 'POST', body: { name: fieldValue('psSurveyName') || '默认资料', requirements: requirements, meta: { source: 'online_personal_profile' } } })
       .then(function(data) {
-        state.surveys = [data.item].concat((state.surveys || []).filter(function(row) { return String(row.id) !== String(data.item && data.item.id); }));
-        return saveCurrentDefault({ source: 'online_personal_profile', includeProfile: true, replaceSelection: true, survey_id: data.item && data.item.id });
+        var item = data.item || {};
+        // 记录已经在云端落库：先写回本地状态并刷新列表，再同步个人默认配置。
+        // 后续同步失败时不能再表现成“没保存”，否则用户会重复点击生成多条记录。
+        state.surveys = [item].concat((state.surveys || []).filter(function(row) { return String(row.id) !== String(item.id); }));
+        state.editingSurveyId = item.id ? String(item.id) : '';
+        renderSurveyRecords();
+        closePersonalSettingsEditor('psSurveyEditorModal');
+        setMsg('资料调查已保存，正在同步到个人默认配置...');
+        return saveCurrentDefault({ source: 'online_personal_profile', includeProfile: true, replaceSelection: true, survey_id: item.id })
+          .then(function() { setMsg('资料调查已保存。'); })
+          .catch(function(err) {
+            setMsg('资料调查已保存，但同步到个人默认配置失败：' + ((err && err.message) || '请稍后重试'), true);
+          });
       })
-      .then(function() { state.editingSurveyId = ''; renderSurveyRecords(); closePersonalSettingsEditor('psSurveyEditorModal'); setMsg('资料调查已保存。'); })
-      .catch(function(err) { setMsg(err.message || '保存失败', true); })
+      .catch(function(err) { setMsg((err && err.message) || '保存失败', true); })
       .finally(function() { setBusy(btn, false); });
   }
 
@@ -3092,7 +3102,11 @@
     return cloudJson('/api/ip-content/profile-surveys', { timeoutMs: PERSONAL_SETTINGS_LOAD_TIMEOUT_MS }).then(function(data) {
       state.surveys = Array.isArray(data.items) ? data.items : [];
       renderSurveyRecords();
-    }).catch(function() { state.surveys = []; });
+    }).catch(function(err) {
+      // 超时/网络抖动时保留已有列表，不能直接清空成“暂无记录”。
+      if (!Array.isArray(state.surveys)) state.surveys = [];
+      setMsg('资料调查加载失败：' + ((err && err.message) || '网络异常') + '，请稍后刷新重试', true);
+    });
   }
 
   function addCompetitorByChannelId() {
