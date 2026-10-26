@@ -288,3 +288,63 @@ html body .GeneratePage-history-list{overflow-y:auto!important;}
 
 /* 条目内部是 grid 且行高被写死，改成按内容自适应，提示词/时间/按钮才不会被裁 */
 html body .GeneratePage-history .GeneratePage-history-item{grid-template-rows:auto!important;flex:0 0 auto!important;}
+
+/* ===== 对齐设计稿细节（2026-10-26 v16） ===== */
+/* 顶部类型切换：灰底分段控件 */
+html body .GeneratePage-model-tabs{display:flex!important;gap:4px!important;padding:4px!important;background:#f3f4f6!important;border:0!important;border-radius:12px!important;margin:0 0 18px!important;}
+html body .GeneratePage-model-tabs > button{flex:1 1 0!important;height:34px!important;border:0!important;border-radius:9px!important;background:transparent!important;color:#6b7280!important;font-size:13px!important;font-weight:400!important;box-shadow:none!important;}
+html body .GeneratePage-model-tabs > button.is-active{background:#e0edff!important;color:#2563eb!important;font-weight:500!important;box-shadow:inset 0 0 0 1px #bfdbfe!important;}
+
+/* 卡片描边更淡、阴影更柔，贴近设计稿 */
+html body .GeneratePage-controls{border:1px solid #f5f6f7!important;box-shadow:0 6px 24px -10px rgba(0,0,0,.08)!important;gap:22px!important;}
+html body .GeneratePage-results-header,
+html body .GeneratePage-current-result,
+html body .GeneratePage-history{border-color:#f5f6f7!important;box-shadow:0 6px 24px -10px rgba(0,0,0,.08)!important;}
+
+/* 标题字号贴近设计稿 */
+html body .GeneratePage-results-header h2{font-size:16px!important;font-weight:500!important;}
+html body .GeneratePage-history-header h3{font-size:15px!important;font-weight:500!important;}
+html body .GeneratePage-history-header{display:flex!important;align-items:center!important;justify-content:space-between!important;padding:16px 24px 10px!important;}
+html body .GeneratePage-history-header p{display:none!important;}
+html body .GeneratePage-history-header > span{display:inline-block!important;font-size:11px!important;color:#9ca3af!important;font-weight:300!important;}
+
+/* 提示词输入：白底、细边框、更高 */
+html body .GeneratePage-prompt-field textarea,
+html body .GeneratePage-prompt-field input{background:#fff!important;border:1px solid #e5e7eb!important;border-radius:12px!important;min-height:112px!important;padding:14px!important;font-size:13px!important;color:#374151!important;line-height:1.7!important;}
+
+/* 历史按钮：图标在上文字在下，窄按钮 */
+html body .GeneratePage-history-action{display:inline-flex!important;flex-direction:column!important;align-items:center!important;justify-content:center!important;gap:2px!important;width:58px!important;padding:6px 0!important;border-radius:8px!important;font-size:11px!important;line-height:1.2!important;}
+html body .GeneratePage-history-action i{font-size:13px!important;}
+
+/* 紧凑一点，保证提交按钮在卡片内可见（设计稿左卡整块不滚动） */
+html body .GeneratePage-controls{gap:16px!important;padding:18px!important;}
+html body .GeneratePage-model-tabs{margin-bottom:14px!important;}
+html body .GeneratePage-prompt-field textarea,
+html body .GeneratePage-prompt-field input{min-height:96px!important;}
+html body .GeneratePage-reference-section{padding:12px!important;}
+html body .GeneratePage-submit-area{padding-top:6px!important;}
+
+/* 提交按钮吸底，窗口矮时也不会被挤出去（设计稿提交区常驻卡片底部） */
+html body .GeneratePage-submit-area{position:sticky!important;bottom:0!important;background:#fff!important;padding:10px 0 2px!important;margin-top:0!important;}
+
+/* 高度收敛：左栏占满可用高度，内容超出只滚左栏，提交按钮吸底 */
+html body .GeneratePage-workspace{grid-auto-rows:minmax(0,1fr)!important;}
+html body .GeneratePage-controls{height:calc(100vh - 146px)!important;max-height:calc(100vh - 146px)!important;overflow-y:auto!important;}
+html body .GeneratePage-results{height:100%!important;max-height:100%!important;}
+
+/* 历史头部：副标题移到右上角，右侧页码隐藏（设计稿是「共 N 条任务」） */
+html body .GeneratePage-history-header{position:relative!important;}
+html body .GeneratePage-history-header p{display:block!important;position:absolute!important;right:24px!important;top:18px!important;margin:0!important;font-size:11px!important;color:#9ca3af!important;font-weight:300!important;}
+html body .GeneratePage-history-header > span{display:none!important;}
+
+/* 选择模型：说明文字放到标题右侧（设计稿） */
+html body .GeneratePage-model-section .GeneratePage-section-heading > div{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;width:100%!important;}
+html body .GeneratePage-model-section .GeneratePage-section-heading h2{white-space:nowrap!important;}
+html body .GeneratePage-model-section .GeneratePage-section-heading p{margin:0!important;text-align:right!important;}
+
+/* 状态胶囊 */
+html body .GeneratePage-history-status{display:inline-flex!important;align-items:center!important;gap:4px!important;padding:2px 6px!important;border-radius:6px!important;font-size:11px!important;font-weight:500!important;}
+html body .GeneratePage-history-status.is-completed{background:#f0fdf4!important;border:1px solid #dcfce7!important;color:#16a34a!important;}
+html body .GeneratePage-history-status.is-processing,
+html body .GeneratePage-history-status.is-pending{background:#eff6ff!important;border:1px solid #dbeafe!important;color:#2563eb!important;}
+html body .GeneratePage-history-status.is-failed{background:#fef2f2!important;border:1px solid #fee2e2!important;color:#dc2626!important;}
