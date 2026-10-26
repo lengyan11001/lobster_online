@@ -152,46 +152,68 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
       });
     });
   }
-  function modelId(m) { return String(m.id || m.name || ""); }
-  function modelName(m) { return String(m.name || m.id || ""); }
+  var CURATED = {
+    image: [
+      { type: "gptImage2", id: "openai/gpt-image-2", name: "GPT 2 图像生成", desc: "高精度图片生成与参考图编辑，最高 4K",
+        ratioKey: "image_size", ratios: ["4:3", "3:4", "1:1", "16:9", "9:16", "3:2", "2:3"], resolutions: ["1K", "2K", "4K"],
+        qualities: ["low", "medium", "high"], imageLimit: 6 },
+      { type: "nanoBanana2", id: "fal-ai/nano-banana-2", name: "Nano 2 图像生成", desc: "快速生成与多图参考，最高 4K",
+        ratioKey: "aspect_ratio", ratios: ["auto", "1:1", "16:9", "9:16", "4:3", "3:4"], resolutions: ["1K", "2K", "4K"],
+        qualities: [], imageLimit: 14 }
+    ],
+    video: [
+      { type: "minimaxH3Video", id: "minimax/h3", name: "海螺 H3 视频生成", desc: "原生图片与视频多模态参考，支持 768P 与 2K",
+        ratioKey: "aspect_ratio", ratios: ["16:9", "9:16", "1:1"], resolutions: ["768P", "1080P", "2K"],
+        durations: [4, 5, 6, 8, 10, 15], imageLimit: 9, videoLimit: 3, audioLimit: 3 },
+      { type: "klingO3ReferenceVideo", id: "fal-ai/kling-video/o3/standard/reference-to-video", name: "可灵 O3 视频生成", desc: "图片与视频合计最多 4 个，支持原生音频与多镜头",
+        ratioKey: "aspect_ratio", ratios: ["16:9", "9:16", "1:1"], resolutions: ["Standard", "Pro"],
+        durations: [3, 5, 10, 15], imageLimit: 4, videoLimit: 4, audioLimit: 0 },
+      { type: "superSeed2LiteVideo", id: "st-ai/super-seed2-lite", name: "Seedance 2.5 视频生成", desc: "Seedance 2.5 全能参考，支持图片、视频和音频素材",
+        ratioKey: "aspect_ratio", ratios: ["16:9", "9:16", "1:1"], resolutions: ["480p", "720P"],
+        durations: [6, 8, 10, 15], imageLimit: 9, videoLimit: 3, audioLimit: 3 }
+    ]
+  };
   function loadModels() {
     return api("/canvas-api/api/v3/models").then(function (d) {
       var list = (d && d.data && d.data.models) || [];
-      state.models.image = list.filter(function (m) { return (m.category || "").toLowerCase() === "image"; });
-      state.models.video = list.filter(function (m) { return (m.category || "").toLowerCase() === "video"; });
-      el("image-count-badge").textContent = String(state.models.image.length);
-      el("video-count-badge").textContent = String(state.models.video.length);
-      if (state.models.image[0]) setModel("image", state.models.image[0]);
-      if (state.models.video[0]) setModel("video", state.models.video[0]);
-      fillList("image"); fillList("video");
-      applyParams("image"); applyParams("video");
-    }).catch(function (e) {
-      el("image-model-toggle-text").textContent = "模型加载失败：" + e.message;
-      el("video-model-toggle-text").textContent = "模型加载失败：" + e.message;
+      var ids = {};
+      list.forEach(function (m) { ids[String(m.id || "")] = 1; });
+      ["image", "video"].forEach(function (mode) {
+        var picked = CURATED[mode].filter(function (c) { return !list.length || ids[c.id]; });
+        state.models[mode] = picked.length ? picked : CURATED[mode];
+        el(mode + "-count-badge").textContent = String(state.models[mode].length);
+        if (state.models[mode][0]) setModel(mode, state.models[mode][0]);
+        fillList(mode);
+        applyParams(mode);
+      });
+    }).catch(function () {
+      ["image", "video"].forEach(function (mode) {
+        state.models[mode] = CURATED[mode];
+        el(mode + "-count-badge").textContent = String(CURATED[mode].length);
+        setModel(mode, CURATED[mode][0]);
+        fillList(mode);
+        applyParams(mode);
+      });
     });
   }
-  function setModel(mode, m) {
-    state.model[mode] = { id: modelId(m), name: modelName(m), category: m.category || mode, description: m.description || "" };
-    el(mode + "-model-toggle-text").textContent = m.name || modelId(m);
-    var desc = el(mode + "-model-desc");
-    if (desc) desc.textContent = m.description || "";
-    var item = state.model[mode];
-    if (item.id) el(mode + "-model-toggle-text").setAttribute("title", item.id);
+  function setModel(mode, c) {
+    state.model[mode] = c;
+    el(mode + "-model-toggle-text").textContent = c.name;
+    el(mode + "-model-desc").textContent = c.desc;
   }
   function fillList(mode) {
-    el(mode + "-model-dropdown").innerHTML = state.models[mode].map(function (m) {
-      return '<li data-model="' + modelId(m) + '" class="px-3 py-2 text-[12px] text-gray-600 hover:bg-blue-50 rounded-lg cursor-pointer"><div class="truncate">' + (m.name || modelId(m)) + '</div><div class="text-[10px] text-gray-400 truncate">' + (m.description || "") + "</div></li>";
+    el(mode + "-model-dropdown").innerHTML = state.models[mode].map(function (c) {
+      return '<li data-model="' + c.id + '" class="px-3 py-2 text-[12px] text-gray-600 hover:bg-blue-50 rounded-lg cursor-pointer"><div class="truncate">' + c.name + '</div><div class="text-[10px] text-gray-400 truncate">' + c.desc + "</div></li>";
     }).join("");
   }
   document.addEventListener("click", function (e) {
     var li = e.target.closest && e.target.closest("li[data-model]");
     if (li) {
       var mode = li.closest("#image-model-dropdown") ? "image" : "video";
-      var id = li.getAttribute("data-model");
-      var m = state.models[mode].filter(function (x) { return modelId(x) === id; })[0];
-      if (m) setModel(mode, m);
+      var c = state.models[mode].filter(function (x) { return x.id === li.getAttribute("data-model"); })[0];
+      if (c) setModel(mode, c);
       el(mode + "-model-dropdown").classList.add("hidden");
-      loadSchema(mode);
+      applyParams(mode);
       return;
     }
     ["image", "video"].forEach(function (m) {
@@ -201,72 +223,53 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     });
   });
 
-  // 优先用服务器的 params_schema；拿不到时按 category + 描述推断
-  function loadSchema(mode) {
-    var item = state.model[mode];
-    if (!item || !item.id) { applyParams(mode); return; }
-    api("/canvas-api/api/v3/models/" + item.id).then(function (d) {
-      var schema = (d && d.data && d.data.params_schema) || (d && d.params_schema) || null;
-      state.schema[mode] = schema;
-      applyParams(mode);
-    }).catch(function () { state.schema[mode] = null; applyParams(mode); });
-  }
-  function schemaProps(mode) {
-    var s = state.schema[mode];
-    return (s && s.properties) || null;
-  }
-  function capabilities(mode) {
-    var m = state.model[mode] || {};
-    var text = (m.description || "").toLowerCase();
-    var caps = { aspect: false, resolution: false, duration: false };
-    if (mode === "video") {
-      caps.aspect = true;
-      caps.resolution = /p\b|1080|720|768|2k|4k|分辨率/.test(text) || true;
-      caps.duration = /秒|时长|duration/.test(text) || true;
-    } else {
-      caps.aspect = /宽高比|比例|aspect/.test(text);
-      caps.resolution = /1k|2k|4k|分辨率/.test(text);
-      caps.duration = false;
-    }
-    return caps;
-  }
-  function optionSet(kind, mode) {
-    if (kind === "aspect") return mode === "video" ? ["16:9", "9:16", "1:1"] : ["auto", "1:1", "16:9", "9:16", "4:3", "3:4"];
-    if (kind === "resolution") return mode === "video" ? ["720p", "1080p"] : ["1K", "2K", "4K"];
-    if (kind === "duration") return ["5", "10"];
-    return [];
-  }
+  function currentConfig(mode) { return state.model[mode] || CURATED[mode][0]; }
   function applyParams(mode) {
-    var sp = schemaProps(mode);
-    if (sp) {
-      ["ratio", "resolution", "duration"].forEach(function (kind) {
-        var sel = el(mode + "-param-" + kind), field = sel && sel.closest("[data-param-field]");
-        if (!sel || !field) return;
-        var key = (kind === "ratio" ? ["aspect_ratio", "image_size", "ratio"] : kind === "resolution" ? ["resolution"] : ["duration", "seconds"]).filter(function (k) { return sp[k]; })[0];
-        if (!key || !Array.isArray(sp[key].enum)) { field.style.display = "none"; return; }
-        sel.innerHTML = sp[key].enum.map(function (v) { return '<option value="' + v + '">' + v + "</option>"; }).join("");
-        if (sp[key].default != null) sel.value = String(sp[key].default);
-        field.style.display = "";
-      });
-      summary(mode);
-      return;
+    var c = currentConfig(mode);
+    var ratioSel = el(mode + "-param-ratio"), ratioField = ratioSel && ratioSel.closest("[data-param-field]");
+    if (ratioField) {
+      if (c.ratios && c.ratios.length) {
+        ratioSel.innerHTML = c.ratios.map(function (v) { return '<option value="' + v + '">' + v + "</option>"; }).join("");
+        ratioField.style.display = "";
+      } else ratioField.style.display = "none";
     }
-    var caps = capabilities(mode);
-    var map = { ratio: "aspect", resolution: "resolution", duration: "duration" };
-    Object.keys(map).forEach(function (kind) {
-      var sel = el(mode + "-param-" + kind), field = sel && sel.closest("[data-param-field]");
-      if (!sel || !field) return;
-      if (!caps[map[kind]]) { field.style.display = "none"; return; }
-      var vals = optionSet(map[kind], mode);
-      sel.innerHTML = vals.map(function (v) { return '<option value="' + v + '">' + v + "</option>"; }).join("");
-      field.style.display = "";
-    });
-    var qField = el(mode + "-param-quality");
-    if (qField && qField.closest("[data-param-field]")) qField.closest("[data-param-field]").style.display = "none";
-    var ex = el(mode + "-param-extra");
-    if (ex) { ex.innerHTML = ""; ex.style.display = "none"; }
+    var resSel = el(mode + "-param-resolution"), resField = resSel && resSel.closest("[data-param-field]");
+    if (resField) {
+      if (c.resolutions && c.resolutions.length) {
+        resSel.innerHTML = c.resolutions.map(function (v) { return '<option value="' + v + '">' + v + "</option>"; }).join("");
+        resField.style.display = "";
+      } else resField.style.display = "none";
+    }
+    var durSel = el(mode + "-param-duration"), durField = durSel && durSel.closest("[data-param-field]");
+    if (durField) {
+      if (c.durations && c.durations.length) {
+        durSel.innerHTML = c.durations.map(function (v) { return '<option value="' + v + '">' + v + "</option>"; }).join("");
+        durField.style.display = "";
+      } else durField.style.display = "none";
+    }
+    var qHost = el(mode + "-param-quality"), qField = qHost && qHost.closest("[data-param-field]");
+    if (qField) {
+      if (c.qualities && c.qualities.length) {
+        var labels = { low: ["快速", "响应极快"], medium: ["标准", "平衡质量与速度"], high: ["精细", "细节优先"] };
+        qHost.innerHTML = c.qualities.map(function (v, i) {
+          var pr = labels[v] || [v, ""], on = i === 0;
+          return '<button type="button" data-q="' + v + '" class="' + (on ? "bg-green-50/30 border border-green-400" : "bg-white border border-gray-200") + ' rounded-lg p-2 flex flex-col items-center justify-center cursor-pointer"><span class="text-[13px] ' + (on ? "text-green-600" : "text-gray-700") + ' font-medium mb-0.5">' + pr[0] + '</span><span class="text-[10px] ' + (on ? "text-green-500/80" : "text-gray-400") + '">' + pr[1] + "</span></button>";
+        }).join("");
+        qHost.setAttribute("data-value", c.qualities[0]);
+        qField.style.display = "";
+      } else qField.style.display = "none";
+    }
     summary(mode);
   }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("[data-q]");
+    if (!b) return;
+    var host = b.parentElement;
+    host.setAttribute("data-value", b.getAttribute("data-q"));
+    Array.prototype.forEach.call(host.querySelectorAll("button"), function (btn) {
+      btn.className = (btn === b ? "bg-green-50/30 border border-green-400" : "bg-white border border-gray-200") + " rounded-lg p-2 flex flex-col items-center justify-center cursor-pointer";
+    });
+  });
   function summary(mode) {
     var out = [];
     ["ratio", "resolution", "duration"].forEach(function (kind) {
@@ -279,32 +282,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
   document.addEventListener("change", function (e) { if (e.target.tagName === "SELECT") summary(state.mode); });
 
   function collect(mode) {
-    var sp = schemaProps(mode);
-    if (sp) {
-      var out = {};
-      var map = { ratio: ["aspect_ratio", "image_size", "ratio"], resolution: ["resolution"], duration: ["duration", "seconds"] };
-      Object.keys(map).forEach(function (kind) {
-        var key = map[kind].filter(function (k) { return sp[k]; })[0];
-        if (!key) return;
-        var sel = el(mode + "-param-" + kind);
-        if (sel && sel.value) out[key] = /^\d+$/.test(sel.value) ? Number(sel.value) : sel.value;
-      });
-      var imgs0 = state.refs.image.map(function (x) { return x.url; });
-      var vids0 = state.refs.video.map(function (x) { return x.url; });
-      var auds0 = state.refs.audio.map(function (x) { return x.url; });
-      if (imgs0.length) { if (sp.reference_image_urls) out.reference_image_urls = imgs0; else if (sp.image_urls) out.image_urls = imgs0; else if (sp.image_url) out.image_url = imgs0.length === 1 ? imgs0[0] : imgs0; }
-      if (vids0.length) { if (sp.video_url) out.video_url = vids0[0]; else if (sp.first_frame) out.first_frame = vids0[0]; }
-      if (auds0.length && sp.audio_url) out.audio_url = auds0[0];
-      return out;
-    }
-    var caps = capabilities(mode), params = {};
-    if (caps.aspect) { var a = el(mode + "-param-ratio"); if (a && a.value) params.aspect_ratio = a.value; }
-    if (caps.resolution) { var r = el(mode + "-param-resolution"); if (r && r.value) params.resolution = r.value; }
-    if (caps.duration) { var d = el(mode + "-param-duration"); if (d && d.value) params.duration = Number(d.value); }
+    var c = currentConfig(mode), params = {};
+    var r = el(mode + "-param-ratio");
+    if (r && r.closest("[data-param-field]").style.display !== "none" && r.value) params[c.ratioKey] = r.value;
+    var res = el(mode + "-param-resolution");
+    if (res && res.closest("[data-param-field]").style.display !== "none" && res.value) params.resolution = res.value;
+    var d = el(mode + "-param-duration");
+    if (d && d.closest("[data-param-field]").style.display !== "none" && d.value) params.duration = Number(d.value);
+    var q = el(mode + "-param-quality");
+    if (q && q.closest("[data-param-field]").style.display !== "none" && q.getAttribute("data-value")) params.quality = q.getAttribute("data-value");
     var imgs = state.refs.image.map(function (x) { return x.url; });
     var vids = state.refs.video.map(function (x) { return x.url; });
     var auds = state.refs.audio.map(function (x) { return x.url; });
-    if (imgs.length) params.reference_image_urls = imgs;
+    if (imgs.length) params[c.type === "gptImage2" || c.type === "nanoBanana2" ? "image_urls" : "reference_image_urls"] = imgs;
     if (vids.length) params.first_frame = vids[0];
     if (auds.length) params.audio_url = auds[0];
     return params;
@@ -361,7 +351,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     if (!input) return;
     input.addEventListener("change", function () {
       Array.prototype.forEach.call(input.files || [], function (f) {
-        if (state.refs[cfg[1]].length >= LIMITS[cfg[1]]) { alert("最多 " + LIMITS[cfg[1]] + " 个"); return; }
+        var cur = currentConfig(cfg[2]);
+        var cap = cfg[1] === "image" ? (cur.imageLimit || 9) : cfg[1] === "video" ? (cur.videoLimit || 3) : (cur.audioLimit || 3);
+        if (!cap) { alert("当前模型不支持该类型参考素材"); return; }
+        if (state.refs[cfg[1]].length >= cap) { alert("最多 " + cap + " 个"); return; }
         upload(f, cfg[1], cfg[2]);
       });
       input.value = "";
