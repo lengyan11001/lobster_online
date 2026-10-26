@@ -33,6 +33,7 @@
         .masonry-item {
             break-inside: avoid;
             margin-bottom: 1.25rem;
+            min-height: 200px;
         }
 
         /* 隐藏原生滚动条但保留功能 (针对标签栏) */
@@ -103,9 +104,10 @@
                 <div class="masonry-grid" id="inspirationGrid"></div>
 
                 <!-- 底部加载提示 -->
+                <div id="inspirationSentinel" style="height:1px"></div>
                 <div id="inspirationLoading" class="py-12 flex flex-col items-center justify-center space-y-4">
                     <div class="w-8 h-8 rounded-full border-2 border-gray-200 border-t-blue-500 animate-spin"></div>
-                    <span class="text-gray-400 text-[13px] font-light">正在探索更多灵感...</span>
+                    <span id="inspirationLoadingText" class="text-gray-400 text-[13px] font-light">正在加载更多灵感...</span>
                 </div>
 
             </div>
@@ -115,16 +117,8 @@
 
 <script>
 (function () {
+  var PAGE = 40;
   var PLACEHOLDER = "/static/canvas-ui/thumbs/t";
-  function token() { try { return localStorage.getItem('token') || ''; } catch (e) { return ''; } }
-  function rowsOf(payload) {
-    if (!payload) return [];
-    if (Array.isArray(payload.items)) return payload.items;
-    var d = payload.data;
-    if (Array.isArray(d)) return d;
-    if (d && Array.isArray(d.items)) return d.items;
-    return [];
-  }
   var STYLES = {
     all: [],
     poster: ["带货", "电商", "海报", "商品", "主图"],
@@ -132,47 +126,114 @@
     portrait: ["人像", "摄影", "写真"],
     cartoon: ["3d", "卡通", "ip", "盲盒"]
   };
-  var state = { rows: [], style: "all", keyword: "" };
+  var state = { rows: [], style: "all", keyword: "", page: 1, hasMore: true, loading: false };
+
+  function token() { try { return localStorage.getItem('token') || ''; } catch (e) { return ''; } }
+  function rowsOf(payload) {
+    if (!payload) return [];
+    if (Array.isArray(payload.items)) return payload.items;
+    if (Array.isArray(payload.list)) return payload.list;
+    var d = payload.data;
+    if (Array.isArray(d)) return d;
+    if (d && Array.isArray(d.items)) return d.items;
+    return [];
+  }
+  function esc(t) {
+    return String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function thumbOf(row, index) {
+    var url = String(row.thumbnail_url || row.cover || "").trim();
+    if (url) url = url.replace(/^http:\/\//i, "https://");
+    return url || (PLACEHOLDER + ((index % 6) + 1) + ".svg");
+  }
   function haystack(row) {
     return [row.name, row.description, row.tags, row.category, row.style].filter(Boolean).join(" ").toLowerCase();
-  }
-  function filtered() {
-    var style = state.style;
-    var keys = STYLES[style] || [];
-    var kw = state.keyword.toLowerCase();
-    return state.rows.filter(function (row) {
-      var text = haystack(row);
-      if (kw && text.indexOf(kw) < 0) return false;
-      if (style === 'all') return true;
-      var cat = String(row.category || '').toLowerCase();
-      if (cat) return cat === style;
-      return keys.some(function (k) { return text.indexOf(String(k).toLowerCase()) >= 0; });
-    });
-  }
-  function paint() {
-    render(filtered());
-    var loading = document.getElementById('inspirationLoading');
-    if (loading) loading.style.display = 'none';
   }
   function render(rows) {
     var grid = document.getElementById('inspirationGrid');
     if (!grid) return;
     if (!rows.length) {
-      var emptyText = state.rows.length ? '该风格暂无作品，换个分类看看' : '暂无公开灵感';
+      var emptyText = state.keyword || state.style !== 'all' ? '该风格暂无作品，换个分类看看' : '暂无公开灵感';
       grid.innerHTML = '<div style="column-span:all;padding:48px 0;text-align:center;color:#9ca3af;font-size:13px;">' + emptyText + '</div>';
       return;
     }
     grid.innerHTML = rows.map(function (row, i) {
-      var img = row.thumbnail_url || (PLACEHOLDER + ((i % 6) + 1) + '.svg');
+      var img = thumbOf(row, i);
       var name = String(row.name || '未命名模板').replace(/[<>&"]/g, '');
       return '<div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">'
-        + '<img src="' + img + '" class="w-full h-auto object-cover" alt="' + name + '" loading="lazy">'
+        + '<img src="' + esc(img) + '" class="w-full h-auto object-cover" alt="' + name + '">'
         + '<div class="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">'
         + '<p class="text-white text-[13px] font-medium truncate">' + name + '</p>'
         + '<div class="flex items-center gap-2 mt-2">'
-        + '<button type="button" class="use-template px-3 py-1.5 rounded-full bg-white text-gray-800 text-[12px]" data-uuid="' + (row.uuid || row.id || '') + '">做同款</button>'
+        + '<button type="button" class="use-template px-3 py-1.5 rounded-full bg-white text-gray-800 text-[12px]" data-uuid="' + esc(row.uuid || row.id || '') + '">做同款</button>'
         + '</div></div></div>';
     }).join('');
+  }
+  var autoFill = 0;
+  function setLoading(show, text) {
+    var tip = document.getElementById('inspirationLoadingText');
+    var box = document.getElementById('inspirationLoading');
+    if (tip) tip.textContent = text || '正在加载更多灵感...';
+    if (!box) return;
+    box.style.display = show ? 'flex' : 'none';
+  }
+  function updateFooter() {
+    var box = document.getElementById('inspirationLoading');
+    var tip = document.getElementById('inspirationLoadingText');
+    if (!box || !tip) return;
+    if (state.loading) { box.style.display = 'flex'; tip.textContent = '正在加载更多灵感...'; return; }
+    if (!state.hasMore && state.rows.length) { box.style.display = 'flex'; tip.textContent = '没有更多了'; return; }
+    box.style.display = 'none';
+  }
+  function requestUrl() {
+    var base = state.keyword ? '/canvas-api/api/v1/projects/search' : '/canvas-api/api/v1/projects/public';
+    var qs = '?skip=' + ((state.page - 1) * PAGE) + '&limit=' + PAGE;
+    if (state.keyword) qs += '&q=' + encodeURIComponent(state.keyword);
+    if (state.style !== 'all') qs += '&category=' + encodeURIComponent(state.style);
+    return base + qs;
+  }
+  function load(reset) {
+    if (state.loading) return Promise.resolve();
+    if (reset) {
+      state.page = 1;
+      state.hasMore = true;
+      state.rows = [];
+      autoFill = 0;
+      var grid = document.getElementById('inspirationGrid');
+      if (grid) grid.innerHTML = '';
+    }
+    if (!state.hasMore) return Promise.resolve();
+    state.loading = true;
+    setLoading(true);
+    var headers = token() ? { Authorization: 'Bearer ' + token() } : {};
+    return fetch(requestUrl(), { headers: headers })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var rows = rowsOf(d);
+        state.rows = reset ? rows : state.rows.concat(rows);
+        state.hasMore = rows.length >= PAGE;
+        state.page += 1;
+        render(state.rows);
+        state.loading = false;
+        updateFooter();
+        fillViewport();
+      })
+      .catch(function () {
+        state.loading = false;
+        setLoading(false);
+        if (!state.rows.length) render([]);
+      });
+  }
+  function fillViewport() {
+    // 首屏没撑满时最多自动补一页，之后交给滚动触发，避免一次性拉完
+    var sentinel = document.getElementById('inspirationSentinel');
+    if (!sentinel || state.loading || !state.hasMore) return;
+    if (autoFill >= 1) return;
+    var rect = sentinel.getBoundingClientRect();
+    if (rect.top < (window.innerHeight || 800)) {
+      autoFill += 1;
+      load(false);
+    }
   }
   document.querySelectorAll('[data-style]').forEach(function (btn) {
     btn.addEventListener('click', function () {
@@ -180,14 +241,18 @@
       document.querySelectorAll('[data-style]').forEach(function (item) {
         item.classList.toggle('is-active', item === btn);
       });
-      paint();
+      load(true);
     });
   });
   var searchBox = document.getElementById('inspirationSearch');
   if (searchBox) {
+    var timer = null;
     searchBox.addEventListener('input', function () {
-      state.keyword = String(searchBox.value || '').trim();
-      paint();
+      clearTimeout(timer);
+      timer = setTimeout(function () {
+        state.keyword = String(searchBox.value || '').trim();
+        load(true);
+      }, 300);
     });
   }
   var gridEl = document.getElementById('inspirationGrid');
@@ -198,11 +263,28 @@
       var id = btn.getAttribute('data-uuid');
       if (id) location.href = '/api/canvas-local/canvas-frame#/canvas-editor/' + encodeURIComponent(id);
     });
+    gridEl.addEventListener('error', function (e) {
+      var img = e.target;
+      if (!img || img.tagName !== 'IMG' || img.dataset.fallback) return;
+      img.dataset.fallback = '1';
+      img.src = '/static/canvas-ui/thumbs/t1.svg';
+    }, true);
   }
-  fetch('/canvas-api/api/v1/projects/public?limit=200', { headers: token() ? { Authorization: 'Bearer ' + token() } : {} })
-    .then(function (r) { return r.json(); })
-    .then(function (d) { state.rows = rowsOf(d); paint(); })
-    .catch(function () { state.rows = []; paint(); });
+  var mainEl = document.querySelector('main');
+  if (mainEl) {
+    mainEl.addEventListener('scroll', function () {
+      if (state.loading || !state.hasMore) return;
+      if (mainEl.scrollTop + mainEl.clientHeight >= mainEl.scrollHeight - 600) load(false);
+    }, { passive: true });
+  }
+  var sentinel = document.getElementById('inspirationSentinel');
+  if (sentinel && 'IntersectionObserver' in window) {
+    new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) { if (entry.isIntersecting) load(false); });
+    }, { rootMargin: '400px 0px' }).observe(sentinel);
+  }
+
+  load(true);
 })();
 </script>
 </body>
