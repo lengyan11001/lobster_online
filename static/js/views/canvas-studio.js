@@ -2,9 +2,11 @@
 (function () {
   "use strict";
   var SCREENS = {
-    inspiration: "/static/canvas-ui/inspiration.html?v=20261026-canvas-ui-v16",
-    generate: "/static/canvas-ui/generate.html?v=20261026-canvas-ui-v16",
-    projects: "/static/canvas-ui/projects.html?v=20261026-canvas-ui-v16"
+    inspiration: "/static/canvas-ui/inspiration.html?v=20261026-canvas-ui-v18",
+    // 生成页沿用 canvas-web 原生的 GeneratePage（模型/参数/上传/提交/历史全是原逻辑），
+    // 只由 canvas-theme.css 覆盖样式；不再用自绘的 generate.html。
+    generate: "/api/canvas-local/canvas-frame#/generate",
+    projects: "/static/canvas-ui/projects.html?v=20261026-canvas-ui-v18"
   };
   function initCanvasStudioView(mount) {
     var shell = (mount && mount.querySelector && mount.querySelector(".canvas-studio-shell"))
@@ -15,9 +17,11 @@
     if (!frame) return;
     var currentKey = "projects";
     var editorBackKey = "";
+    var editorActive = false;
     function show(key) {
       var src = SCREENS[key] || SCREENS.projects;
       currentKey = key;
+      editorActive = false;
       if (frame.getAttribute("src") !== src) frame.setAttribute("src", src);
       frame.style.display = "block";
       if (boot) boot.style.display = "none";
@@ -32,11 +36,16 @@
       var data = e.data || {};
       if (data.type === "canvas:open-editor" && data.uuid) {
         editorBackKey = currentKey;
+        editorActive = true;
         frame.setAttribute("src", "/api/canvas-local/canvas-frame#/canvas-editor/" + encodeURIComponent(data.uuid));
         frame.style.display = "block";
       } else if (data.type === "canvas:route") {
+        if (!editorActive) return;
         var hash = String(data.hash || "");
-        if (hash.indexOf("#/canvas-editor/") !== 0) show(editorBackKey || "projects");
+        if (hash.indexOf("#/canvas-editor/") !== 0) {
+          editorActive = false;
+          show(editorBackKey || "projects");
+        }
       }
     });
     Array.prototype.forEach.call(shell.querySelectorAll("[data-canvas-screen]"), function (btn) {
