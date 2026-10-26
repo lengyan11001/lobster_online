@@ -244,10 +244,10 @@ html body .GeneratePage-submit{width:100%!important;border:0!important;border-ra
 html body .GeneratePage-submit:hover{filter:brightness(1.04)!important;}
 html body .GeneratePage-submit:disabled{opacity:1!important;cursor:not-allowed!important;}
 
-html body .GeneratePage-history-item{display:flex!important;align-items:flex-start!important;gap:20px!important;padding:16px!important;border-radius:12px!important;border:1px solid #f3f4f6!important;background:#fff!important;box-shadow:0 1px 2px rgba(0,0,0,.03)!important;}
+html body .GeneratePage-history-item{display:grid!important;grid-template-columns:100px minmax(0,1fr)!important;align-items:stretch!important;height:auto!important;min-height:0!important;gap:20px!important;padding:16px!important;border-radius:12px!important;border:1px solid #f3f4f6!important;background:#fff!important;box-shadow:0 1px 2px rgba(0,0,0,.03)!important;}
 html body .GeneratePage-history-thumb{flex:0 0 100px!important;width:100px!important;height:100px!important;border-radius:10px!important;}
-html body .GeneratePage-history-item-body{display:flex!important;flex-direction:column!important;justify-content:space-between!important;min-height:100px!important;}
-html body .GeneratePage-history-item-header{display:flex!important;align-items:flex-start!important;justify-content:space-between!important;gap:8px!important;}
+html body .GeneratePage-history-item-body{display:flex!important;flex-direction:column!important;justify-content:space-between!important;min-height:100px!important;height:auto!important;overflow:visible!important;}
+html body .GeneratePage-history-item-header{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:8px!important;overflow:visible!important;}
 html body .GeneratePage-history-action{border:1px solid #bfdbfe!important;border-radius:8px!important;background:#fff!important;color:#2563eb!important;font-size:11px!important;padding:6px 12px!important;}
 html body .GeneratePage-history-action:hover{background:#2563eb!important;color:#fff!important;}
 
@@ -271,3 +271,20 @@ html body #lobster-result-download:hover{background:#2563eb!important;color:#fff
 
 /* 参考素材整块加卡片框，和设计稿一致 */
 html body .GeneratePage-reference-section{border:1px solid #e5e7eb!important;border-radius:12px!important;padding:12px!important;background:#fff!important;}
+
+/* 历史条目：提示词灰底块、时间/积分在左、预览下载在右，跟设计稿一致 */
+html body .GeneratePage-history-item-body p{display:-webkit-box!important;-webkit-line-clamp:2!important;-webkit-box-orient:vertical!important;overflow:hidden!important;background:#f9fafb!important;border:1px solid #f3f4f6!important;border-radius:8px!important;padding:8px!important;margin:6px 0 0!important;font-size:12px!important;color:#6b7280!important;line-height:1.6!important;}
+html body .GeneratePage-history-item-footer{display:flex!important;align-items:center!important;flex-wrap:wrap!important;gap:6px!important;margin-top:8px!important;font-size:11px!important;color:#9ca3af!important;}
+html body .GeneratePage-history-item-footer time,
+html body .GeneratePage-history-item-footer > span{font-size:11px!important;color:#9ca3af!important;font-weight:300!important;}
+html body .GeneratePage-history-actions{display:flex!important;align-items:center!important;gap:8px!important;margin-left:auto!important;}
+/* 头部右侧的 11/11 计数不设计稿里没有，隐藏（副标题已经显示 共 N 条任务） */
+html body .GeneratePage-history-header > span{display:none!important;}
+
+/* SPA 给历史条目写了固定高度，这里强制自适应，避免提示词/按钮被裁 */
+html body .GeneratePage-history .GeneratePage-history-item{height:auto!important;min-height:0!important;overflow:visible!important;display:grid!important;grid-template-columns:100px minmax(0,1fr)!important;}
+html body .GeneratePage-history .GeneratePage-history-item-body{min-height:0!important;height:auto!important;}
+html body .GeneratePage-history-list{overflow-y:auto!important;}
+
+/* 条目内部是 grid 且行高被写死，改成按内容自适应，提示词/时间/按钮才不会被裁 */
+html body .GeneratePage-history .GeneratePage-history-item{grid-template-rows:auto!important;flex:0 0 auto!important;}
