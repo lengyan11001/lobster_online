@@ -10,6 +10,50 @@
     } catch (e) {}
   </script>
   <script src="/static/js/ui-jump-trace.js?v=20261013-ui-jump-trace-v1"></script>
+  <script>
+    /* 自定义标题栏：用 8 个透明把手把鼠标事件转成系统缩放 */
+    (function () {
+      function installResizeHandles() {
+        if (!document.documentElement.classList.contains('is-desktop-shell')) return;
+        if (document.getElementById('lobsterResizeLayer')) return;
+        var edges = [
+          ['top', 'top:0;left:10px;right:10px;height:6px;cursor:ns-resize'],
+          ['bottom', 'bottom:0;left:10px;right:10px;height:6px;cursor:ns-resize'],
+          ['left', 'left:0;top:10px;bottom:10px;width:6px;cursor:ew-resize'],
+          ['right', 'right:0;top:10px;bottom:10px;width:6px;cursor:ew-resize'],
+          ['topleft', 'left:0;top:0;width:12px;height:12px;cursor:nwse-resize'],
+          ['topright', 'right:0;top:0;width:12px;height:12px;cursor:nesw-resize'],
+          ['bottomleft', 'left:0;bottom:0;width:12px;height:12px;cursor:nesw-resize'],
+          ['bottomright', 'right:0;bottom:0;width:12px;height:12px;cursor:nwse-resize']
+        ];
+        var layer = document.createElement('div');
+        layer.id = 'lobsterResizeLayer';
+        layer.style.cssText = 'position:fixed;inset:0;z-index:2147483000;pointer-events:none';
+        edges.forEach(function (item) {
+          var el = document.createElement('div');
+          el.dataset.edge = item[0];
+          el.style.cssText = 'position:fixed;pointer-events:auto;background:transparent;' + item[1];
+          el.addEventListener('mousedown', function (event) {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            try {
+              if (window.pywebview && window.pywebview.api && window.pywebview.api.window_start_resize) {
+                window.pywebview.api.window_start_resize(item[0]);
+              }
+            } catch (e) {}
+          });
+          layer.appendChild(el);
+        });
+        document.body.appendChild(layer);
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', installResizeHandles);
+      } else {
+        installResizeHandles();
+      }
+    })();
+  </script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <script>

@@ -1567,6 +1567,40 @@ class DesktopApi:
             log(f"DesktopApi: maximize failed: {exc}")
             return {"ok": False, "error": str(exc)}
 
+    def window_start_resize(self, edge: str = "") -> dict:
+        """自定义标题栏下，用 JS 拖边/角触发系统缩放（WM_NCLBUTTONDOWN）。"""
+        try:
+            import ctypes
+
+            import webview  # type: ignore
+
+            window = webview.active_window()
+            if window is None:
+                return {"ok": False, "error": "no window"}
+            hwnd = int(window.native.Handle.ToInt64())
+            user32 = ctypes.windll.user32
+            if user32.IsZoomed(hwnd):
+                return {"ok": False, "error": "maximized"}
+            codes = {
+                "left": 10,
+                "right": 11,
+                "top": 12,
+                "topleft": 13,
+                "topright": 14,
+                "bottom": 15,
+                "bottomleft": 16,
+                "bottomright": 17,
+            }
+            code = codes.get(str(edge or "").strip().lower())
+            if not code:
+                return {"ok": False, "error": "invalid edge"}
+            user32.ReleaseCapture()
+            user32.SendMessageW(hwnd, 0x00A1, code, 0)  # WM_NCLBUTTONDOWN
+            return {"ok": True, "edge": edge}
+        except Exception as exc:  # noqa: BLE001
+            log(f"DesktopApi: resize failed: {exc}")
+            return {"ok": False, "error": str(exc)}
+
     def window_close(self) -> dict:
         """自定义标题栏：关闭（走 WM_CLOSE，保留关闭确认流程）。"""
         try:
