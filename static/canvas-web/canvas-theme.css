@@ -351,3 +351,30 @@ html body .GeneratePage-history-status.is-failed{background:#fef2f2!important;bo
 
 /* 设计稿里「选择模型」行右侧只有说明文字，没有数量 */
 html body .GeneratePage-model-section .GeneratePage-section-count{display:none!important;}
+
+/* ===== 按设计稿实测值逐项对齐（2026-10-26 v25） ===== */
+/* 主按钮：设计稿 padding 14px 0，无投影 */
+html body .GeneratePage-submit{padding:14px 0!important;box-shadow:none!important;}
+/* 类型 tab：8 圆角、6px 0 内边距、1px rgba(191,219,254,.6) 边框 */
+html body .GeneratePage-model-tabs > button{border-radius:8px!important;padding:6px 0!important;}
+html body .GeneratePage-model-tabs > button.is-active{border:1px solid rgba(191,219,254,.6)!important;box-shadow:none!important;}
+/* 参考图按钮：设计稿 298x71、内边距 14、13px、#475569 */
+html body .GeneratePage-reference-action{width:100%!important;min-height:56px!important;padding:14px!important;font-size:13px!important;color:#475569!important;border-radius:12px!important;}
+/* 历史操作按钮：设计稿横向 66x31、6px 12px、11px */
+html body .GeneratePage-history-action{flex-direction:row!important;width:auto!important;min-width:0!important;height:31px!important;padding:6px 12px!important;gap:4px!important;font-size:11px!important;}
+/* 数字/次要文字统一 gray-400 */
+html body .GeneratePage-section-count,
+html body .GeneratePage-prompt-count,
+html body .GeneratePage-history-item-footer time,
+html body .GeneratePage-history-item-footer > span{color:#9ca3af!important;font-size:11px!important;font-weight:300!important;}
+
+/* 参考图上传按钮：设计稿是一个大块（298x71，内边距 14，13px） */
+html body .GeneratePage-reference-add{width:100%!important;min-height:56px!important;padding:14px!important;font-size:13px!important;color:#475569!important;border:1px solid #e5e7eb!important;border-radius:12px!important;background:#fff!important;}
+html body .GeneratePage-reference-add:hover{border-color:#93c5fd!important;background:#eff6ff!important;}
+
+/* 改回设计稿的滚动方式：整页滚动，左卡按内容自然高度，不做吸底覆盖 */
+html body .GeneratePage-main{overflow-y:auto!important;}
+html body .GeneratePage-workspace{grid-template-rows:auto!important;align-items:stretch!important;overflow:visible!important;}
+html body .GeneratePage-controls{height:auto!important;max-height:none!important;overflow:visible!important;}
+html body .GeneratePage-results{height:100%!important;max-height:none!important;}
+html body .GeneratePage-submit-area{position:static!important;padding:6px 0 0!important;}
