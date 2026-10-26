@@ -1,0 +1,67 @@
+/* 灵感画布主题覆盖：只改样式，不动 DOM / 交互 / 数据。
+   视觉参考：设计师稿（白底卡片、16px 圆角、蓝青渐变主按钮、浅灰分层）。 */
+:root {
+  --cv-bg: #f8fafc;
+  --cv-surface: #ffffff;
+  --cv-border: #e5e7eb;
+  --cv-border-soft: #f3f4f6;
+  --cv-text: #111827;
+  --cv-text-muted: #6b7280;
+  --cv-primary: #2563eb;
+  --cv-primary-soft: #eff6ff;
+  --cv-radius: 16px;
+  --cv-radius-sm: 12px;
+  --cv-shadow: 0 4px 20px -4px rgba(0,0,0,.04);
+  --cv-shadow-hover: 0 12px 30px -10px rgba(0,0,0,.10);
+}
+
+html, body, #root { font-family: system-ui, -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif; color: var(--cv-text); }
+body { background: var(--cv-bg); font-size: 13px; }
+
+/* 侧栏 */
+[class*="CanvasWorkspaceSidebar"] { background: var(--cv-surface); border-right: 1px solid var(--cv-border-soft); }
+[class*="CanvasWorkspaceSidebar-item"] { border-radius: var(--cv-radius-sm); color: var(--cv-text-muted); transition: background .15s, color .15s; }
+[class*="CanvasWorkspaceSidebar-item"]:hover { background: var(--cv-border-soft); color: #374151; }
+[class*="CanvasWorkspaceSidebar-item"][class*="active"],
+[class*="CanvasWorkspaceSidebar-item"][aria-current="page"] { background: var(--cv-primary-soft); color: var(--cv-primary); font-weight: 500; }
+
+/* 顶部工具栏 */
+[class*="CanvasEditor-toolbar"] { background: rgba(255,255,255,.85); backdrop-filter: blur(12px); border-bottom: 1px solid var(--cv-border-soft); }
+
+/* 按钮 */
+[class*="CanvasEditor-"] button, [class*="CanvasWorkspace"] button {
+  border-radius: 999px; border: 1px solid var(--cv-border); background: var(--cv-surface);
+  color: #4b5563; font-size: 13px; transition: all .15s; box-shadow: none;
+}
+[class*="CanvasEditor-"] button:hover, [class*="CanvasWorkspace"] button:hover { border-color: #bfdbfe; color: var(--cv-primary); background: #f8fbff; }
+[class*="CanvasEditor-save-button"], [class*="CanvasEditor-share-button"], [class*="CanvasEditor-export-button"] {
+  background: linear-gradient(90deg, #06b6d4, #2563eb) !important; border-color: transparent !important; color: #fff !important;
+  box-shadow: 0 6px 18px -6px rgba(37,99,235,.45);
+}
+[class*="CanvasEditor-back-button"] { border-radius: var(--cv-radius-sm); }
+
+/* 卡片 / 面板 */
+[class*="CanvasProject"], [class*="ProjectList"], [class*="CanvasHome"] {
+  --tw-shadow: var(--cv-shadow);
+}
+[class*="card"], [class*="Card"] {
+  border-radius: var(--cv-radius); border: 1px solid var(--cv-border-soft); background: var(--cv-surface); box-shadow: var(--cv-shadow);
+}
+[class*="card"]:hover, [class*="Card"]:hover { box-shadow: var(--cv-shadow-hover); }
+
+/* 表单 */
+input, textarea, select {
+  border-radius: var(--cv-radius-sm); border: 1px solid var(--cv-border); background: #fff; color: var(--cv-text);
+  font-size: 13px; outline: none; transition: border-color .15s, box-shadow .15s;
+}
+input:focus, textarea:focus, select:focus { border-color: #93c5fd; box-shadow: 0 0 0 3px rgba(59,130,246,.12); }
+
+/* 弹窗 */
+[class*="Modal-container"], [class*="modal-container"] { border-radius: 20px; box-shadow: 0 24px 60px -20px rgba(15,23,42,.35); }
+[class*="Modal-backdrop"], [class*="modal-backdrop"] { background: rgba(15,23,42,.45); backdrop-filter: blur(4px); }
+
+/* 滚动条 */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: #cbd5e1; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }
