@@ -46,7 +46,9 @@
             background-repeat: no-repeat; background-position: right 0.8rem center; background-size: 0.8em;
         }
     </style>
-<style>#gen-history-scroll{min-height:0;overflow-y:auto;} .hist-card{min-height:0;} aside{max-height:calc(100vh - 24px);overflow-y:auto;}</style></head>
+<style>#gen-history-scroll{min-height:0;overflow-y:auto;} .hist-card{min-height:0;}
+#gen-history-list .hist-prompt{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+#gen-history-list .hist-thumb img,#gen-history-list .hist-thumb video{width:100%;height:100%;object-fit:cover;display:block;} aside{max-height:calc(100vh - 24px);overflow-y:auto;}</style></head>
 <body class="h-screen w-screen overflow-hidden flex flex-col text-[13px]">
     
     <!-- 大厂标准 64px (h-16) 高级导航栏 -->
@@ -377,8 +379,9 @@
                             <span class="text-red-500 text-[11px] font-medium">*必填</span>
                         </div>
                         <div class="text-[11px] text-gray-400 font-light mb-2 px-1">描述主体、动作、环境和画面气质</div>
+                        <div id="gen-refs" class="flex flex-wrap gap-2 mb-2"></div>
                         <div class="relative w-full border border-gray-200 rounded-xl overflow-hidden focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-50 transition-all bg-gray-50/50 focus-within:bg-white shadow-sm">
-                            <textarea <div id="gen-refs" class="flex flex-wrap gap-2 mb-2"></div>id="gen-prompt" rows="4" class="w-full bg-transparent resize-none p-3 text-[13px] text-gray-700 outline-none placeholder-gray-400 leading-relaxed" placeholder="例如：页留海边的手持镜头，浪花拍打礁石，镜头缓慢向前推进，电影感..."></textarea>
+                            <textarea id="gen-prompt" rows="4" class="w-full bg-transparent resize-none p-3 text-[13px] text-gray-700 outline-none placeholder-gray-400 leading-relaxed" placeholder="例如：页留海边的手持镜头，浪花拍打礁石，镜头缓慢向前推进，电影感..."></textarea>
                             <div class="absolute bottom-2 right-3 text-[10px] text-gray-300">0 / 2000</div>
                         </div>
                     </div>
@@ -420,43 +423,15 @@
                 </div>
 
                 <!-- 历史记录区域 -->
-                </div><div id="gen-history" class="h-[280px] shrink-0 bg-white rounded-2xl border border-gray-100 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.02)] flex flex-col overflow-hidden" style="flex:0 0 280px;min-height:280px;margin-top:12px;">
+                <div id="gen-history" class="h-[280px] shrink-0 bg-white rounded-2xl border border-gray-100 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.02)] flex flex-col overflow-hidden" style="flex:0 0 280px;min-height:280px;margin-top:12px;">
                     <div class="px-6 py-4 border-b border-gray-50 flex justify-between items-center bg-[#f8fafc]/50">
                         <h3 class="text-[14px] main-title text-gray-800 flex items-center">历史记录</h3>
-                        <span class="text-[11px] text-gray-400 font-light">共 1 条任务</span>
+                        <span id="gen-history-count" class="text-[11px] text-gray-400 font-light">共 0 条任务</span>
                     </div>
                     
                     <div id="gen-history-scroll" class="flex-1 overflow-y-auto p-6 no-scrollbar">
-                        <div class="w-full flex items-start gap-5 p-4 rounded-xl border border-gray-100 hover:border-blue-200 shadow-sm hover:shadow-md transition-all group bg-white">
-                            <div class="w-[100px] h-[100px] shrink-0 rounded-lg overflow-hidden border border-gray-200 relative cursor-pointer">
-                                <img src="/static/canvas-ui/thumbs/t1.svg" alt="缩略图" class="w-full h-full object-cover">
-                                <div class="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                    <i class="fa-solid fa-magnifying-glass-plus text-white text-[18px]"></i>
-                                </div>
-                            </div>
-                            
-                            <div class="flex-1 min-w-0 flex flex-col justify-between h-[100px] py-0.5">
-                                <div>
-                                    <div class="flex justify-between items-start mb-2">
-                                        <div class="flex items-center text-[13px] text-gray-700 font-medium">super-seed2-lite</div>
-                                        <span class="flex items-center text-green-500 text-[11px] bg-green-50 px-1.5 py-0.5 rounded border border-green-100">
-                                            <div class="w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5"></div> 已完成
-                                        </span>
-                                    </div>
-                                    <p class="text-[13px] text-gray-500 leading-relaxed line-clamp-2 bg-gray-50 p-2 rounded-lg border border-gray-100/80">
-                                        请画一幅“风淡云轻，落叶满地”了。文字内容也是画的不要专业美工。一分钟教会你。
-                                    </p>
-                                </div>
-                                
-                                <div class="flex items-end justify-between mt-auto">
-                                    <div class="text-[11px] text-gray-400 font-light">10/09 00:23 <span class="mx-1.5 text-gray-200">|</span> 1,560 积分</div>
-                                    <div class="flex items-center space-x-2">
-                                        <button class="text-[11px] text-blue-600 hover:text-white hover:bg-blue-500 border border-blue-200 px-3 py-1.5 rounded-lg transition-colors shadow-sm flex items-center bg-white"><i class="fa-regular fa-eye mr-1.5"></i> 预览</button>
-                                        <button class="text-[11px] text-blue-600 hover:text-white hover:bg-blue-500 border border-blue-200 px-3 py-1.5 rounded-lg transition-colors shadow-sm flex items-center bg-white"><i class="fa-solid fa-download mr-1.5"></i> 下载</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                        <div id="gen-history-list" class="flex flex-col gap-4"></div>
+                        <div id="gen-history-empty" class="h-full flex items-center justify-center text-[12px] text-gray-300 font-light">还没有生成记录</div>
                     </div>
                 </div>
             </div>
@@ -691,19 +666,21 @@
     var tries = 0;
     var timer = setInterval(function () {
       tries += 1;
-      if (tries > 120) { clearInterval(timer); setStatus("等待结果超时"); return; }
+      if (tries > 120) { clearInterval(timer); setStatus("等待结果超时"); if (window.__canvasReloadHistory) window.__canvasReloadHistory(); return; }
       api("/canvas-api/api/v3/tasks/query", { method: "POST", body: JSON.stringify({ task_id: taskId }) }).then(function (d) {
         var data = (d && d.data) || d || {};
         var status = String(data.status || data.state || d.status || "").toLowerCase();
         if (/fail|error/.test(status)) {
           clearInterval(timer);
           setStatus("生成失败：" + JSON.stringify(d).slice(0, 200));
+          if (window.__canvasReloadHistory) window.__canvasReloadHistory();
           return;
         }
         var url = findMediaUrl(d);
         if (url && /succ|done|complet/.test(status)) {
           clearInterval(timer);
           renderResult(url);
+          if (window.__canvasReloadHistory) window.__canvasReloadHistory();
           return;
         }
         if (url && tries > 2) {
@@ -742,6 +719,7 @@
           var taskId = d && (d.data && (d.data.task_id || d.data.id) || d.task_id);
           if (!taskId) { setStatus("已提交：" + JSON.stringify(d).slice(0, 200)); return; }
           setStatus("已提交，任务 " + taskId + "，等待结果…");
+          if (window.__canvasReloadHistory) window.__canvasReloadHistory();
           pollTask(taskId);
         })
         .catch(function (e) { setStatus("提交失败：" + e.message); });
@@ -799,6 +777,84 @@
     });
   });
   window.__canvasRefs = function () { return refs.slice(); };
+})();
+</script>
+<script>
+(function () {
+  function stripHtml(t) {
+    return String(t || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+  }
+  function esc(t) {
+    return String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function fmtTime(ms) {
+    if (!ms) return "";
+    var d = new Date(Number(ms));
+    if (isNaN(d.getTime())) return "";
+    var p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return p(d.getMonth() + 1) + "/" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  function statusChip(status) {
+    var v = String(status || "").toLowerCase();
+    if (/fail|error/.test(v)) {
+      return '<span class="flex items-center text-red-500 text-[11px] bg-red-50 px-1.5 py-0.5 rounded border border-red-100 shrink-0"><div class="w-1.5 h-1.5 rounded-full bg-red-500 mr-1.5"></div> 失败</span>';
+    }
+    if (/complete|succe|done/.test(v)) {
+      return '<span class="flex items-center text-green-500 text-[11px] bg-green-50 px-1.5 py-0.5 rounded border border-green-100 shrink-0"><div class="w-1.5 h-1.5 rounded-full bg-green-500 mr-1.5"></div> 已完成</span>';
+    }
+    return '<span class="flex items-center text-blue-500 text-[11px] bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100 shrink-0"><div class="w-1.5 h-1.5 rounded-full bg-blue-500 mr-1.5"></div> 生成中</span>';
+  }
+  function promptOf(item) {
+    var raw = item.input_params || "";
+    if (typeof raw === "string") { try { raw = JSON.parse(raw); } catch (e) { raw = {}; } }
+    return stripHtml((raw && (raw.prompt || raw.text || raw.content)) || "");
+  }
+  function card(item) {
+    var model = item.app_name || item.model || "";
+    var url = item.url || item.image_url || item.video_url || "";
+    var isVideo = /\.(mp4|mov|webm)(\?|$)/i.test(url);
+    var thumb = url
+      ? (isVideo
+        ? '<video src="' + esc(url) + '" muted playsinline preload="metadata"></video>'
+        : '<img src="' + esc(url) + '" alt="缩略图" loading="lazy">')
+      : '<div class="w-full h-full flex items-center justify-center text-gray-300"><i class="fa-regular fa-image text-[22px]"></i></div>';
+    var prompt = promptOf(item) || "无提示词记录";
+    var money = Number(item.money || 0);
+    var actions = url
+      ? '<a href="' + esc(url) + '" target="_blank" rel="noopener" class="text-[11px] text-blue-600 hover:text-white hover:bg-blue-500 border border-blue-200 px-3 py-1.5 rounded-lg transition-colors shadow-sm flex items-center bg-white"><i class="fa-regular fa-eye mr-1.5"></i> 预览</a>'
+        + '<a href="' + esc(url) + '" download target="_blank" rel="noopener" class="text-[11px] text-blue-600 hover:text-white hover:bg-blue-500 border border-blue-200 px-3 py-1.5 rounded-lg transition-colors shadow-sm flex items-center bg-white"><i class="fa-solid fa-download mr-1.5"></i> 下载</a>'
+      : "";
+    return '<div class="hist-card w-full flex items-start gap-5 p-4 rounded-xl border border-gray-100 hover:border-blue-200 shadow-sm hover:shadow-md transition-all group bg-white">'
+      + '<div class="hist-thumb w-[100px] h-[100px] shrink-0 rounded-lg overflow-hidden border border-gray-200 relative bg-gray-50">' + thumb + '</div>'
+      + '<div class="flex-1 min-w-0 flex flex-col justify-between h-[100px] py-0.5">'
+      + '<div><div class="flex justify-between items-start mb-2 gap-2"><div class="flex items-center text-[13px] text-gray-700 font-medium truncate">' + esc(model) + '</div>' + statusChip(item.status) + '</div>'
+      + '<p class="hist-prompt text-[13px] text-gray-500 leading-relaxed bg-gray-50 p-2 rounded-lg border border-gray-100/80">' + esc(prompt) + '</p></div>'
+      + '<div class="flex items-end justify-between mt-auto gap-2">'
+      + '<div class="text-[11px] text-gray-400 font-light whitespace-nowrap">' + esc(fmtTime(item.created_at)) + ' <span class="mx-1.5 text-gray-200">|</span> ' + money.toLocaleString() + ' 积分</div>'
+      + '<div class="flex items-center space-x-2 shrink-0">' + actions + '</div>'
+      + '</div></div></div>';
+  }
+  function render(list) {
+    var host = document.getElementById("gen-history-list");
+    var empty = document.getElementById("gen-history-empty");
+    var count = document.getElementById("gen-history-count");
+    if (!host) return;
+    host.innerHTML = list.map(card).join("");
+    if (count) count.textContent = "共 " + list.length + " 条任务";
+    if (empty) empty.style.display = list.length ? "none" : "flex";
+  }
+  function load() {
+    return fetch("/canvas-api/api/tasks/list?page=1&page_size=20", { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var list = (d && (d.list || (d.data && d.data.list))) || [];
+        render(Array.isArray(list) ? list : []);
+      })
+      .catch(function () {});
+  }
+  window.__canvasReloadHistory = load;
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", load);
+  else load();
 })();
 </script>
 </body>
