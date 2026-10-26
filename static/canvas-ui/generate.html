@@ -651,6 +651,62 @@
       if (t2) t2.textContent = labelFor(id);
     }
   });
+
+  function findMediaUrl(obj) {
+    var found = "";
+    var seen = 0;
+    (function walk(v) {
+      if (found || seen > 400) return;
+      seen += 1;
+      if (typeof v === "string") {
+        if (/^https?:\/\//i.test(v) && /\.(png|jpe?g|webp|gif|mp4|mov|webm)(\?|$)/i.test(v)) found = v;
+        return;
+      }
+      if (v && typeof v === "object") {
+        Object.keys(v).forEach(function (k) { walk(v[k]); });
+      }
+    })(obj);
+    return found;
+  }
+  function renderResult(url) {
+    var el = document.getElementById("gen-status");
+    if (!el) return;
+    var isVideo = /\.(mp4|mov|webm)(\?|$)/i.test(url);
+    el.innerHTML = (isVideo
+      ? '<video src="' + url + '" controls playsinline style="max-width:100%;border-radius:12px"></video>'
+      : '<img src="' + url + '" style="max-width:100%;border-radius:12px" />')
+      + '<div style="margin-top:8px"><a href="' + url + '" target="_blank" rel="noopener">打开原文件</a></div>';
+  }
+  function pollTask(taskId) {
+    var tries = 0;
+    var timer = setInterval(function () {
+      tries += 1;
+      if (tries > 120) { clearInterval(timer); setStatus("等待结果超时"); return; }
+      api("/canvas-api/api/v3/tasks/query", { method: "POST", body: JSON.stringify({ task_id: taskId }) }).then(function (d) {
+        var data = (d && d.data) || d || {};
+        var status = String(data.status || data.state || d.status || "").toLowerCase();
+        if (/fail|error/.test(status)) {
+          clearInterval(timer);
+          setStatus("生成失败：" + JSON.stringify(d).slice(0, 200));
+          return;
+        }
+        var url = findMediaUrl(d);
+        if (url && /succ|done|complet/.test(status)) {
+          clearInterval(timer);
+          renderResult(url);
+          return;
+        }
+        if (url && tries > 2) {
+          clearInterval(timer);
+          renderResult(url);
+          return;
+        }
+        setStatus("生成中…（" + (status || "pending") + "）");
+      }).catch(function (e) {
+        if (tries >= 120) clearInterval(timer);
+      });
+    }, 5000);
+  }
   document.addEventListener("DOMContentLoaded", function () {
     loadModels();
     var btn = document.getElementById("submit-gen-btn");
@@ -671,7 +727,9 @@
         })
         .then(function (d) {
           var taskId = d && (d.data && (d.data.task_id || d.data.id) || d.task_id);
-          setStatus(taskId ? ("已提交，任务 " + taskId + "，等待结果…") : ("已提交：" + JSON.stringify(d).slice(0, 200)));
+          if (!taskId) { setStatus("已提交：" + JSON.stringify(d).slice(0, 200)); return; }
+          setStatus("已提交，任务 " + taskId + "，等待结果…");
+          pollTask(taskId);
         })
         .catch(function (e) { setStatus("提交失败：" + e.message); });
     });

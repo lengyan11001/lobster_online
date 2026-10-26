@@ -239,7 +239,7 @@
 
             return `
                 <div class="group bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-[0_4px_20px_-4px_rgba(0,0,0,0.02)] hover:shadow-[0_12px_30px_-10px_rgba(0,0,0,0.08)] hover:-translate-y-1 hover:border-blue-200/60 transition-all duration-300 cursor-pointer flex flex-col"
-                     draggable="true" ondragstart="dragItem(event, ${item.id})">
+                     onclick="openCanvasItem('${item.id}')" draggable="true" ondragstart="dragItem(event, ${item.id})">
                     <div class="w-full aspect-[4/3] ${item.img ? 'bg-gray-100' : 'bg-gray-50 flex items-center justify-center'} relative overflow-hidden">
                         ${thumbContent}
                         <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-[2px]">
@@ -380,5 +380,118 @@
             }
         });
     </script>
+
+<script>
+(function () {
+  function token() { try { return localStorage.getItem('token') || ''; } catch (e) { return ''; } }
+  async function api(path, options) {
+    var opts = options || {};
+    var headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+    var t = token();
+    if (t) headers['Authorization'] = 'Bearer ' + t;
+    var resp = await fetch(path, Object.assign({}, opts, { headers: headers }));
+    var data = await resp.json().catch(function () { return {}; });
+    if (!resp.ok) throw new Error((data && (data.detail || data.message)) || ('HTTP ' + resp.status));
+    return data;
+  }
+  function rowsOf(payload) {
+    if (!payload) return [];
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload.items)) return payload.items;
+    var d = payload.data;
+    if (Array.isArray(d)) return d;
+    if (d && Array.isArray(d.items)) return d.items;
+    return [];
+  }
+  function folderMap() { try { return JSON.parse(localStorage.getItem('canvasFolderMap') || '{}'); } catch (e) { return {}; } }
+  function saveFolderMap(id, folderId) {
+    try {
+      var map = folderMap();
+      if (folderId) map[id] = folderId; else delete map[id];
+      localStorage.setItem('canvasFolderMap', JSON.stringify(map));
+    } catch (e) {}
+  }
+  function loadFolders() {
+    try {
+      var list = JSON.parse(localStorage.getItem('canvasFolders') || '[]');
+      if (Array.isArray(list)) appData.folders = list;
+    } catch (e) {}
+  }
+  function saveFolders() {
+    try { localStorage.setItem('canvasFolders', JSON.stringify(appData.folders || [])); } catch (e) {}
+  }
+  function toItem(row) {
+    var id = row.uuid || row.id;
+    var stamp = String(row.updated_at || row.created_at || '').slice(0, 10);
+    return {
+      id: id,
+      type: 'canvas',
+      name: row.name || '未命名项目',
+      time: stamp ? ('更新于 ' + stamp) : '刚刚',
+      img: row.thumbnail_url || '',
+      folderId: folderMap()[id] || null
+    };
+  }
+  window.openCanvasItem = function (id) {
+    if (!id) return;
+    location.href = '/api/canvas-local/canvas-frame#/canvas-editor/' + encodeURIComponent(String(id));
+  };
+  window.createNewCanvas = async function () {
+    var name = prompt('请输入新画布项目名称：', '未命名创意画布');
+    if (!name) return;
+    try {
+      var payload = await api('/canvas-api/api/v1/projects/create', { method: 'POST', body: JSON.stringify({ name: name }) });
+      var row = (payload && (payload.project || payload.data)) || payload || {};
+      var id = row.uuid || row.id;
+      if (id && appData.currentFolderId) saveFolderMap(id, appData.currentFolderId);
+      window.openCanvasItem(id);
+    } catch (e) { alert('新建失败：' + e.message); }
+  };
+  window.deleteItem = async function (event, itemId) {
+    if (event) event.stopPropagation();
+    if (!itemId) return;
+    if (!confirm('确定删除这个项目？')) return;
+    try {
+      await api('/canvas-api/api/v1/projects/' + encodeURIComponent(String(itemId)) + '/delete', { method: 'POST', body: '{}' });
+    } catch (e) { alert('删除失败：' + e.message); return; }
+    appData.items = appData.items.filter(function (i) { return String(i.id) !== String(itemId); });
+    saveFolderMap(itemId, null);
+    renderDashboard();
+  };
+  window.submitCreateFolder = function () {
+    var input = document.querySelector('#folderModal input');
+    var name = input ? String(input.value || '').trim() : '';
+    if (!name) return;
+    appData.folders = (appData.folders || []).concat([{ id: Date.now(), name: name, count: 0 }]);
+    saveFolders();
+    if (input) input.value = '';
+    if (typeof closeCreateFolderModal === 'function') closeCreateFolderModal();
+    renderDashboard();
+  };
+  window.deleteFolder = function (event, folderId) {
+    if (event) event.stopPropagation();
+    appData.folders = (appData.folders || []).filter(function (f) { return String(f.id) !== String(folderId); });
+    saveFolders();
+    try {
+      var map = folderMap();
+      Object.keys(map).forEach(function (k) { if (String(map[k]) === String(folderId)) delete map[k]; });
+      localStorage.setItem('canvasFolderMap', JSON.stringify(map));
+    } catch (e) {}
+    if (String(appData.currentFolderId) === String(folderId)) appData.currentFolderId = null;
+    renderDashboard();
+  };
+  loadFolders();
+  window.addEventListener('load', async function () {
+    try {
+      var payload = await api('/canvas-api/api/v1/projects/my?limit=60');
+      appData.items = rowsOf(payload).map(toItem);
+    } catch (e) {
+      appData.items = [];
+      console.warn('[canvas-ui] load projects failed', e);
+    }
+    renderDashboard();
+  });
+})();
+</script>
 </body>
 </html>
