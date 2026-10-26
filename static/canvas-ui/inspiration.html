@@ -137,12 +137,15 @@
     return [row.name, row.description, row.tags, row.category, row.style].filter(Boolean).join(" ").toLowerCase();
   }
   function filtered() {
-    var keys = STYLES[state.style] || [];
+    var style = state.style;
+    var keys = STYLES[style] || [];
     var kw = state.keyword.toLowerCase();
     return state.rows.filter(function (row) {
       var text = haystack(row);
       if (kw && text.indexOf(kw) < 0) return false;
-      if (!keys.length) return true;
+      if (style === 'all') return true;
+      var cat = String(row.category || '').toLowerCase();
+      if (cat) return cat === style;
       return keys.some(function (k) { return text.indexOf(String(k).toLowerCase()) >= 0; });
     });
   }
@@ -196,7 +199,7 @@
       if (id) location.href = '/api/canvas-local/canvas-frame#/canvas-editor/' + encodeURIComponent(id);
     });
   }
-  fetch('/canvas-api/api/v1/projects/public?limit=24', { headers: token() ? { Authorization: 'Bearer ' + token() } : {} })
+  fetch('/canvas-api/api/v1/projects/public?limit=200', { headers: token() ? { Authorization: 'Bearer ' + token() } : {} })
     .then(function (r) { return r.json(); })
     .then(function (d) { state.rows = rowsOf(d); paint(); })
     .catch(function () { state.rows = []; paint(); });
