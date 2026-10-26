@@ -316,15 +316,33 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     ["image", "video", "audio"].forEach(function (t) { state.refs[t] = state.refs[t].filter(function (r) { return r.key !== key; }); });
     renderRefs("image"); renderRefs("video");
   });
+  function authHeaders() {
+    try {
+      var t = localStorage.getItem("token") || "";
+      if (!t) {
+        var raw = localStorage.getItem("user_info") || "{}";
+        try { t = JSON.parse(raw).token || ""; } catch (e) {}
+      }
+      return t ? { Authorization: "Bearer " + t } : {};
+    } catch (e) { return {}; }
+  }
   function upload(file, type, mode) {
     var fd = new FormData(); fd.append("file", file);
-    return fetch("/api/assets/upload", { method: "POST", body: fd }).then(function (r) { return r.json(); }).then(function (d) {
-      var a = (d && (d.asset || d.data)) || d || {};
-      var url = a.url || a.public_url || "";
-      if (!url) throw new Error("上传失败");
-      state.refs[type].push({ key: type + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7), url: url, type: type, mode: mode });
-      renderRefs(mode);
-    }).catch(function (e) { alert("上传失败：" + e.message); });
+    return fetch("/api/assets/upload", { method: "POST", body: fd, headers: authHeaders(), credentials: "same-origin" })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          if (!r.ok) throw new Error((d && (d.detail || d.message)) || ("HTTP " + r.status));
+          return d;
+        });
+      })
+      .then(function (d) {
+        var a = (d && (d.asset || d.data)) || d || {};
+        var url = a.source_url || a.open_url || a.url || a.public_url || "";
+        if (!url) throw new Error("上传接口未返回可用地址");
+        state.refs[type].push({ key: type + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7), url: url, source_url: a.source_url || "", asset_id: a.asset_id || "", type: type, mode: mode });
+        renderRefs(mode);
+      })
+      .catch(function (e) { alert("上传失败：" + e.message); });
   }
   [["upload-image-only", "image", "image"], ["upload-image", "image", "video"], ["upload-video", "video", "video"], ["upload-audio", "audio", "video"]].forEach(function (cfg) {
     var input = el(cfg[0]);
