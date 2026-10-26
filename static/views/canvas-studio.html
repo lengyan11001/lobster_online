@@ -1,17 +1,30 @@
+<link rel="stylesheet" href="/static/canvas-ui/fa.css">
 <style>
   body.canvas-studio-active #appHeader { display: none !important; }
   body.canvas-studio-active .page { padding-top: 0 !important; }
-  .canvas-dock-btn { padding:6px 14px;border-radius:999px;border:1px solid #e5e7eb;background:#ffffffd9;backdrop-filter:blur(6px);color:#4b5563;font-size:13px;cursor:pointer;transition:all .15s; }
-  .canvas-dock-btn.active { background:#111827;border-color:#111827;color:#fff; }
+  #lobsterCanvasStudioShell { display:flex; }
+  .cv-rail { width:80px;background:rgba(249,250,251,.5);border-right:1px solid #f3f4f6;display:flex;flex-direction:column;align-items:center;padding:24px 0;gap:24px;flex:0 0 auto;z-index:10; }
+  .cv-rail-item { position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;width:56px;height:56px;border-radius:16px;color:#9ca3af;text-decoration:none;cursor:pointer;border:0;background:transparent;transition:all .15s; }
+  .cv-rail-item i { font-size:18px;margin-bottom:4px; }
+  .cv-rail-item span { font-size:11px; }
+  .cv-rail-item:hover { color:#374151;background:rgba(243,244,246,.8); }
+  .cv-rail-item.active { background:#fff;color:#2563eb;box-shadow:0 4px 12px rgba(59,130,246,.15); }
+  .cv-rail-item.active::after { content:"";position:absolute;inset:0;border-radius:16px;border:2px solid rgba(59,130,246,.2); }
   .canvas-win-btn { width:30px;height:28px;border-radius:8px;border:1px solid #e5e7eb;background:#ffffffd9;backdrop-filter:blur(6px);color:#4b5563;cursor:pointer;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center; }
   .canvas-win-btn:hover { background:#f3f4f6; }
   #canvasWinClose:hover { background:#ef4444;border-color:#ef4444;color:#fff; }
 </style>
 <div class="canvas-studio-shell" id="lobsterCanvasStudioShell" style="width:100%;height:100vh;min-height:640px;position:relative;background:#fff;overflow:hidden;">
-  <div id="lobsterCanvasDock" style="position:absolute;left:12px;top:10px;z-index:22;display:flex;gap:6px;">
-    <button type="button" class="canvas-dock-btn" data-canvas-screen="inspiration">灵感</button>
-    <button type="button" class="canvas-dock-btn" data-canvas-screen="generate">生成</button>
-    <button type="button" class="canvas-dock-btn active" data-canvas-screen="projects">画布</button>
+  <div class="cv-rail">
+    <button type="button" class="cv-rail-item" data-canvas-screen="inspiration">
+      <i class="fa-solid fa-wand-magic-sparkles"></i><span>灵感</span>
+    </button>
+    <button type="button" class="cv-rail-item" data-canvas-screen="generate">
+      <i class="fa-solid fa-layer-group"></i><span>生成</span>
+    </button>
+    <button type="button" class="cv-rail-item active" data-canvas-screen="projects">
+      <i class="fa-solid fa-border-all"></i><span>画布</span>
+    </button>
   </div>
   <div id="lobsterCanvasWin" style="position:absolute;right:10px;top:8px;z-index:22;display:flex;gap:6px;">
     <button type="button" class="canvas-win-btn" id="canvasWinMin" title="最小化">−</button>
@@ -19,13 +32,13 @@
     <button type="button" class="canvas-win-btn" id="canvasWinClose" title="关闭">×</button>
   </div>
   <button type="button" id="lobsterCanvasExit" title="返回工作台"
-    style="position:absolute;left:12px;bottom:12px;z-index:22;width:32px;height:32px;border-radius:999px;border:1px solid #e5e7eb;background:#ffffffd9;backdrop-filter:blur(6px);color:#4b5563;cursor:pointer;font-size:14px;">←</button>
-  <div class="canvas-studio-boot" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:14px/1.7 system-ui,-apple-system,'Microsoft YaHei',sans-serif;color:#666;background:#fff;">正在启动灵感画布…</div>
+    style="position:absolute;left:92px;bottom:12px;z-index:22;width:32px;height:32px;border-radius:999px;border:1px solid #e5e7eb;background:#ffffffd9;backdrop-filter:blur(6px);color:#4b5563;cursor:pointer;font-size:14px;">←</button>
+  <div class="canvas-studio-boot" style="position:absolute;left:80px;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;font:14px/1.7 system-ui,-apple-system,'Microsoft YaHei',sans-serif;color:#666;background:#fff;">正在启动灵感画布…</div>
   <iframe
     id="lobster-canvas-frame"
     title="灵感画布"
-    src="/static/canvas-ui/projects.html?v=20261026-canvas-ui-v5"
-    style="width:100%;height:100%;border:0;background:#fff;display:none;"
+    src="/static/canvas-ui/projects.html?v=20261026-canvas-ui-v6"
+    style="flex:1 1 auto;height:100%;border:0;background:#fff;display:none;"
     allow="clipboard-write; fullscreen"
   ></iframe>
 </div>
