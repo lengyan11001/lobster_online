@@ -36,6 +36,14 @@
         }
 
         /* 隐藏原生滚动条但保留功能 (针对标签栏) */
+        .style-tab {
+            padding: 8px 20px; border-radius: 9999px; font-size: 13px; white-space: nowrap;
+            background: #fff; color: #475569; border: 1px solid #e5e7eb; cursor: pointer;
+            transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+        }
+        .style-tab:hover { background: #f9fafb; }
+        .style-tab.is-active { background: #111827; color: #fff; border-color: #111827; font-weight: 500; box-shadow: 0 1px 2px 0 rgba(0,0,0,.05); }
+
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
@@ -74,17 +82,17 @@
                     <!-- SaaS 高级标签过滤器 -->
                     <div class="flex items-center justify-between border-b border-gray-200/60 pb-4">
                         <div class="flex space-x-2 overflow-x-auto no-scrollbar pb-1">
-                            <button class="px-5 py-2 bg-gray-900 text-white rounded-full text-[13px] font-medium whitespace-nowrap shadow-sm">全部发现</button>
-                            <button class="px-5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-full text-[13px] whitespace-nowrap transition-colors">爆款带货海报</button>
-                            <button class="px-5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-full text-[13px] whitespace-nowrap transition-colors">小红书图文</button>
-                            <button class="px-5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-full text-[13px] whitespace-nowrap transition-colors">摄影级人像</button>
-                            <button class="px-5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-full text-[13px] whitespace-nowrap transition-colors">3D 卡通 IP</button>
+                            <button type="button" data-style="all" class="style-tab is-active">全部发现</button>
+                            <button type="button" data-style="poster" class="style-tab">爆款带货海报</button>
+                            <button type="button" data-style="xhs" class="style-tab">小红书图文</button>
+                            <button type="button" data-style="portrait" class="style-tab">摄影级人像</button>
+                            <button type="button" data-style="cartoon" class="style-tab">3D 卡通 IP</button>
                         </div>
                         
                         <!-- 搜索与排序 -->
                         <div class="hidden lg:flex items-center space-x-3 shrink-0 ml-6">
                             <div class="relative">
-                                <input type="text" placeholder="搜索风格 / 提示词..." class="w-48 bg-white border border-gray-200 text-[12px] rounded-full py-2 pl-8 pr-3 focus:outline-none focus:border-blue-300 focus:ring-1 focus:ring-blue-100 transition-all shadow-sm">
+                                <input id="inspirationSearch" type="text" placeholder="搜索风格 / 提示词..." class="w-48 bg-white border border-gray-200 text-[12px] rounded-full py-2 pl-8 pr-3 focus:outline-none focus:border-blue-300 focus:ring-1 focus:ring-blue-100 transition-all shadow-sm">
                                 <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-gray-400 text-[11px]"></i>
                             </div>
                         </div>
@@ -95,7 +103,7 @@
                 <div class="masonry-grid" id="inspirationGrid"></div>
 
                 <!-- 底部加载提示 -->
-                <div class="py-12 flex flex-col items-center justify-center space-y-4">
+                <div id="inspirationLoading" class="py-12 flex flex-col items-center justify-center space-y-4">
                     <div class="w-8 h-8 rounded-full border-2 border-gray-200 border-t-blue-500 animate-spin"></div>
                     <span class="text-gray-400 text-[13px] font-light">正在探索更多灵感...</span>
                 </div>
@@ -117,11 +125,38 @@
     if (d && Array.isArray(d.items)) return d.items;
     return [];
   }
+  var STYLES = {
+    all: [],
+    poster: ["带货", "电商", "海报", "商品", "主图"],
+    xhs: ["小红书", "图文", "笔记"],
+    portrait: ["人像", "摄影", "写真"],
+    cartoon: ["3d", "卡通", "ip", "盲盒"]
+  };
+  var state = { rows: [], style: "all", keyword: "" };
+  function haystack(row) {
+    return [row.name, row.description, row.tags, row.category, row.style].filter(Boolean).join(" ").toLowerCase();
+  }
+  function filtered() {
+    var keys = STYLES[state.style] || [];
+    var kw = state.keyword.toLowerCase();
+    return state.rows.filter(function (row) {
+      var text = haystack(row);
+      if (kw && text.indexOf(kw) < 0) return false;
+      if (!keys.length) return true;
+      return keys.some(function (k) { return text.indexOf(String(k).toLowerCase()) >= 0; });
+    });
+  }
+  function paint() {
+    render(filtered());
+    var loading = document.getElementById('inspirationLoading');
+    if (loading) loading.style.display = 'none';
+  }
   function render(rows) {
     var grid = document.getElementById('inspirationGrid');
     if (!grid) return;
     if (!rows.length) {
-      grid.innerHTML = '<div style="column-span:all;padding:48px 0;text-align:center;color:#9ca3af;font-size:13px;">暂无公开灵感</div>';
+      var emptyText = state.rows.length ? '该风格暂无作品，换个分类看看' : '暂无公开灵感';
+      grid.innerHTML = '<div style="column-span:all;padding:48px 0;text-align:center;color:#9ca3af;font-size:13px;">' + emptyText + '</div>';
       return;
     }
     grid.innerHTML = rows.map(function (row, i) {
@@ -135,7 +170,26 @@
         + '<button type="button" class="use-template px-3 py-1.5 rounded-full bg-white text-gray-800 text-[12px]" data-uuid="' + (row.uuid || row.id || '') + '">做同款</button>'
         + '</div></div></div>';
     }).join('');
-    grid.addEventListener('click', function (e) {
+  }
+  document.querySelectorAll('[data-style]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      state.style = btn.getAttribute('data-style') || 'all';
+      document.querySelectorAll('[data-style]').forEach(function (item) {
+        item.classList.toggle('is-active', item === btn);
+      });
+      paint();
+    });
+  });
+  var searchBox = document.getElementById('inspirationSearch');
+  if (searchBox) {
+    searchBox.addEventListener('input', function () {
+      state.keyword = String(searchBox.value || '').trim();
+      paint();
+    });
+  }
+  var gridEl = document.getElementById('inspirationGrid');
+  if (gridEl) {
+    gridEl.addEventListener('click', function (e) {
       var btn = e.target.closest && e.target.closest('.use-template');
       if (!btn) return;
       var id = btn.getAttribute('data-uuid');
@@ -144,8 +198,8 @@
   }
   fetch('/canvas-api/api/v1/projects/public?limit=24', { headers: token() ? { Authorization: 'Bearer ' + token() } : {} })
     .then(function (r) { return r.json(); })
-    .then(function (d) { render(rowsOf(d)); })
-    .catch(function () { render([]); });
+    .then(function (d) { state.rows = rowsOf(d); paint(); })
+    .catch(function () { state.rows = []; paint(); });
 })();
 </script>
 </body>
