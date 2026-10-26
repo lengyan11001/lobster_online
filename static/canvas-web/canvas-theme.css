@@ -296,10 +296,10 @@ html body .GeneratePage-model-tabs > button{flex:1 1 0!important;height:34px!imp
 html body .GeneratePage-model-tabs > button.is-active{background:#e0edff!important;color:#2563eb!important;font-weight:500!important;box-shadow:inset 0 0 0 1px #bfdbfe!important;}
 
 /* 卡片描边更淡、阴影更柔，贴近设计稿 */
-html body .GeneratePage-controls{border:1px solid #f5f6f7!important;box-shadow:0 6px 24px -10px rgba(0,0,0,.08)!important;gap:22px!important;}
+html body .GeneratePage-controls{border:1px solid #f3f4f6!important;box-shadow:0 4px 20px -4px rgba(0,0,0,.02)!important;gap:20px!important;}
 html body .GeneratePage-results-header,
 html body .GeneratePage-current-result,
-html body .GeneratePage-history{border-color:#f5f6f7!important;box-shadow:0 6px 24px -10px rgba(0,0,0,.08)!important;}
+html body .GeneratePage-history{border-color:#f3f4f6!important;box-shadow:0 4px 20px -4px rgba(0,0,0,.02)!important;}
 
 /* 标题字号贴近设计稿 */
 html body .GeneratePage-results-header h2{font-size:16px!important;font-weight:500!important;}
@@ -317,10 +317,10 @@ html body .GeneratePage-history-action{display:inline-flex!important;flex-direct
 html body .GeneratePage-history-action i{font-size:13px!important;}
 
 /* 紧凑一点，保证提交按钮在卡片内可见（设计稿左卡整块不滚动） */
-html body .GeneratePage-controls{gap:16px!important;padding:18px!important;}
+html body .GeneratePage-controls{gap:20px!important;padding:20px!important;}
 html body .GeneratePage-model-tabs{margin-bottom:14px!important;}
 html body .GeneratePage-prompt-field textarea,
-html body .GeneratePage-prompt-field input{min-height:96px!important;}
+html body .GeneratePage-prompt-field input{min-height:110px!important;}
 html body .GeneratePage-reference-section{padding:12px!important;}
 html body .GeneratePage-submit-area{padding-top:6px!important;}
 
