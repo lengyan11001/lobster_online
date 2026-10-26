@@ -1,7 +1,7 @@
 {
-  "version": "2.0.196",
-  "build": 493,
-  "applied_at": "2026-10-26T17:45:23+08:00",
-  "note": "canvas: inspiration paging+dedupe+tabs; editor back stays in studio; ship static/canvas-ui",
-  "bundle_sha256": "4cb45dbd0845945f98e355701bb734c78ffa7c4d88605fc492a5b0386d407b35"
+  "version": "2.0.197",
+  "build": 494,
+  "applied_at": "2026-10-26T20:33:24+08:00",
+  "note": "canvas: prototype generate page (curated 2/3 models), inspiration without tabs, upload auth fix",
+  "bundle_sha256": "1d50bec2720793e38e00d9d1a09e26e5340cfe766ef01c4348792e20d9bb20bc"
 }
