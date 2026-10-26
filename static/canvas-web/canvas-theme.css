@@ -209,7 +209,7 @@ html body .GeneratePage-workspace{display:grid!important;grid-template-columns:3
 html body .GeneratePage-controls{grid-column:1!important;grid-row:1!important;position:static!important;top:auto!important;min-height:0!important;overflow-y:auto!important;padding:20px!important;background:rgba(255,255,255,.8)!important;border:1px solid #f3f4f6!important;border-radius:16px!important;box-shadow:0 4px 20px -4px rgba(0,0,0,.02)!important;}
 html body .GeneratePage-results{grid-column:2!important;grid-row:1!important;min-height:0!important;display:flex!important;flex-direction:column!important;gap:20px!important;background:transparent!important;border:0!important;box-shadow:none!important;padding:0!important;}
 
-html body .GeneratePage-results-header{background:#fff!important;border:1px solid #f3f4f6!important;border-bottom:0!important;border-radius:16px 16px 0 0!important;margin:0!important;padding:20px 24px 14px!important;box-shadow:0 4px 20px -4px rgba(0,0,0,.02)!important;}
+html body .GeneratePage-results-header{background:#fff!important;border:1px solid #f3f4f6!important;border-bottom:0!important;border-radius:16px 16px 0 0!important;margin:0!important;padding:20px 24px 14px!important;box-shadow:none!important;}
 html body .GeneratePage-current-result{background:#fff!important;border:1px solid #f3f4f6!important;border-top:0!important;border-radius:0 0 16px 16px!important;flex:1 1 auto!important;min-height:0!important;display:flex!important;align-items:center!important;justify-content:center!important;padding:24px!important;}
 html body .GeneratePage-history{height:280px!important;min-height:280px!important;margin:0!important;padding:0!important;background:#fff!important;border:1px solid #f3f4f6!important;border-radius:16px!important;box-shadow:0 4px 20px -4px rgba(0,0,0,.02)!important;display:flex!important;flex-direction:column!important;overflow:hidden!important;}
 html body .GeneratePage-history-header{padding:16px 24px 8px!important;}
@@ -257,10 +257,17 @@ html body .GeneratePage-empty-mark svg,
 html body .GeneratePage-empty-mark i{color:#2563eb!important;fill:#2563eb!important;}
 
 /* 版块顺序按设计稿：类型 tab → 选择模型 → 参考素材 → 生成参数 → 描述画面 → 提交 */
-html body .GeneratePage-controls{display:flex!important;flex-direction:column!important;}
+html body .GeneratePage-controls{display:flex!important;flex-direction:column!important;gap:18px!important;}
 html body .GeneratePage-model-section{order:1!important;display:flex!important;flex-direction:column!important;}
 html body .GeneratePage-model-section > .GeneratePage-model-tabs{order:-1!important;margin:0 0 16px!important;}
 html body .GeneratePage-reference-section{order:2!important;}
 html body .GeneratePage-params-section{order:3!important;}
 html body .GeneratePage-prompt-section{order:4!important;}
 html body .GeneratePage-submit-area{order:5!important;margin-top:auto!important;padding-top:12px!important;}
+
+/* 生成结果右上角补下载（原生只有状态和清空） */
+html body #lobster-result-download{display:inline-flex!important;align-items:center!important;gap:4px!important;border:1px solid #bfdbfe!important;border-radius:8px!important;background:#fff!important;color:#2563eb!important;font-size:11px!important;padding:6px 12px!important;text-decoration:none!important;cursor:pointer!important;}
+html body #lobster-result-download:hover{background:#2563eb!important;color:#fff!important;}
+
+/* 参考素材整块加卡片框，和设计稿一致 */
+html body .GeneratePage-reference-section{border:1px solid #e5e7eb!important;border-radius:12px!important;padding:12px!important;background:#fff!important;}
