@@ -30,7 +30,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
 <div class="mb-5 relative">
 <div class="flex justify-between items-center mb-2 px-1"><h3 class="text-[13px] font-medium text-gray-800">选择模型</h3><span class="text-[11px] text-gray-400 font-light">切换类型后选择适合当前任务的模型</span></div>
 <div id="image-model-toggle-btn" class="p-3 bg-white border border-gray-200 rounded-xl flex items-center justify-between cursor-pointer hover:border-blue-400 transition-colors shadow-sm group">
-<div class="flex items-center space-x-3 min-w-0"><div class="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center text-blue-500 shrink-0"><i class="fa-solid fa-wand-magic-sparkles text-[14px]"></i></div><div class="min-w-0"><div id="image-model-toggle-text" class="text-[13px] text-gray-800 font-medium truncate">加载模型中…</div><div class="text-[11px] text-gray-400 font-light truncate">正在读取模型列表</div></div></div>
+<div class="flex items-center space-x-3 min-w-0"><div class="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center text-blue-500 shrink-0"><i class="fa-solid fa-wand-magic-sparkles text-[14px]"></i></div><div class="min-w-0"><div id="image-model-toggle-text" class="text-[13px] text-gray-800 font-medium truncate">加载模型中…</div><div id="image-model-desc" class="text-[11px] text-gray-400 font-light truncate">正在读取模型列表</div></div></div>
 <div class="flex items-center text-gray-400 shrink-0"><span class="text-[12px] mr-1">切换</span><i id="image-model-toggle-icon" class="fa-solid fa-angle-down text-[11px]"></i></div>
 </div>
 <ul id="image-model-dropdown" class="hidden absolute left-0 right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-xl z-30 max-h-64 overflow-y-auto p-1"></ul>
@@ -71,7 +71,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
 <div class="mb-5 relative">
 <div class="flex justify-between items-center mb-2 px-1"><h3 class="text-[13px] font-medium text-gray-800">选择模型</h3><span class="text-[11px] text-gray-400 font-light">切换类型后选择适合当前任务的模型</span></div>
 <div id="video-model-toggle-btn" class="p-3 bg-white border border-red-200 rounded-xl flex items-center justify-between cursor-pointer hover:border-red-300 transition-colors shadow-sm group">
-<div class="flex items-center space-x-3 min-w-0"><div class="w-9 h-9 rounded-xl bg-red-50 flex items-center justify-center text-red-400 shrink-0"><i class="fa-solid fa-clapperboard text-[14px]"></i></div><div class="min-w-0"><div id="video-model-toggle-text" class="text-[13px] text-gray-800 font-medium truncate">加载模型中…</div><div class="text-[11px] text-gray-400 font-light truncate">正在读取模型列表</div></div></div>
+<div class="flex items-center space-x-3 min-w-0"><div class="w-9 h-9 rounded-xl bg-red-50 flex items-center justify-center text-red-400 shrink-0"><i class="fa-solid fa-clapperboard text-[14px]"></i></div><div class="min-w-0"><div id="video-model-toggle-text" class="text-[13px] text-gray-800 font-medium truncate">加载模型中…</div><div id="video-model-desc" class="text-[11px] text-gray-400 font-light truncate">正在读取模型列表</div></div></div>
 <div class="flex items-center text-gray-400 shrink-0"><span class="text-[12px] mr-1">切换</span><i id="video-model-toggle-icon" class="fa-solid fa-angle-down text-[11px]"></i></div>
 </div>
 <ul id="video-model-dropdown" class="hidden absolute left-0 right-0 mt-2 bg-white border border-gray-200 rounded-xl shadow-xl z-30 max-h-64 overflow-y-auto p-1"></ul>
@@ -152,35 +152,46 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
       });
     });
   }
-  function isVideoModel(m) { return /video|veo|kling|hailuo|seedance|sora|wan-|runway|pika/i.test(String(m.name || m.id || "")); }
-  function modelId(m) { return String(m.name || m.id || ""); }
-
+  function modelId(m) { return String(m.id || m.name || ""); }
+  function modelName(m) { return String(m.name || m.id || ""); }
   function loadModels() {
     return api("/canvas-api/api/v3/models").then(function (d) {
       var list = (d && d.data && d.data.models) || [];
-      state.models.image = list.filter(function (m) { return !isVideoModel(m); });
-      state.models.video = list.filter(isVideoModel);
+      state.models.image = list.filter(function (m) { return (m.category || "").toLowerCase() === "image"; });
+      state.models.video = list.filter(function (m) { return (m.category || "").toLowerCase() === "video"; });
       el("image-count-badge").textContent = String(state.models.image.length);
       el("video-count-badge").textContent = String(state.models.video.length);
-      if (state.models.image[0]) { state.model.image = modelId(state.models.image[0]); el("image-model-toggle-text").textContent = state.model.image; }
-      if (state.models.video[0]) { state.model.video = modelId(state.models.video[0]); el("video-model-toggle-text").textContent = state.model.video; }
+      if (state.models.image[0]) setModel("image", state.models.image[0]);
+      if (state.models.video[0]) setModel("video", state.models.video[0]);
       fillList("image"); fillList("video");
-      loadSchema("image"); loadSchema("video");
-    }).catch(function () { el("image-model-toggle-text").textContent = "模型加载失败"; });
+      applyParams("image"); applyParams("video");
+    }).catch(function (e) {
+      el("image-model-toggle-text").textContent = "模型加载失败：" + e.message;
+      el("video-model-toggle-text").textContent = "模型加载失败：" + e.message;
+    });
+  }
+  function setModel(mode, m) {
+    state.model[mode] = { id: modelId(m), name: modelName(m), category: m.category || mode, description: m.description || "" };
+    el(mode + "-model-toggle-text").textContent = m.name || modelId(m);
+    var desc = el(mode + "-model-desc");
+    if (desc) desc.textContent = m.description || "";
+    var item = state.model[mode];
+    if (item.id) el(mode + "-model-toggle-text").setAttribute("title", item.id);
   }
   function fillList(mode) {
     el(mode + "-model-dropdown").innerHTML = state.models[mode].map(function (m) {
-      return '<li data-model="' + modelId(m) + '" class="px-3 py-2 text-[12px] text-gray-600 hover:bg-blue-50 rounded-lg cursor-pointer truncate">' + modelId(m) + '</li>';
+      return '<li data-model="' + modelId(m) + '" class="px-3 py-2 text-[12px] text-gray-600 hover:bg-blue-50 rounded-lg cursor-pointer"><div class="truncate">' + (m.name || modelId(m)) + '</div><div class="text-[10px] text-gray-400 truncate">' + (m.description || "") + "</div></li>";
     }).join("");
   }
   document.addEventListener("click", function (e) {
     var li = e.target.closest && e.target.closest("li[data-model]");
     if (li) {
       var mode = li.closest("#image-model-dropdown") ? "image" : "video";
-      state.model[mode] = li.getAttribute("data-model");
-      el(mode + "-model-toggle-text").textContent = state.model[mode];
+      var id = li.getAttribute("data-model");
+      var m = state.models[mode].filter(function (x) { return modelId(x) === id; })[0];
+      if (m) setModel(mode, m);
       el(mode + "-model-dropdown").classList.add("hidden");
-      loadSchema(mode);
+      applyParams(mode);
       return;
     }
     ["image", "video"].forEach(function (m) {
@@ -190,77 +201,43 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     });
   });
 
-  function props(mode) { var s = state.schema[mode]; return (s && s.properties) || null; }
-  function loadSchema(mode) {
-    var id = state.model[mode];
-    if (!id) return;
-    api("/canvas-api/api/v3/models/" + id).then(function (d) {
-      state.schema[mode] = (d && d.data && d.data.params_schema) || {};
-      applyParams(mode);
-    }).catch(function () { state.schema[mode] = null; applyParams(mode); });
+  // 本地接口没有 params_schema，按 category + 模型描述推断可用参数（只发模型支持的键）
+  function capabilities(mode) {
+    var m = state.model[mode] || {};
+    var text = (m.description || "").toLowerCase();
+    var caps = { aspect: false, resolution: false, duration: false };
+    if (mode === "video") {
+      caps.aspect = true;
+      caps.resolution = /p\b|1080|720|768|2k|4k|分辨率/.test(text) || true;
+      caps.duration = /秒|时长|duration/.test(text) || true;
+    } else {
+      caps.aspect = /宽高比|比例|aspect/.test(text);
+      caps.resolution = /1k|2k|4k|分辨率/.test(text);
+      caps.duration = false;
+    }
+    return caps;
   }
-  var ALIAS = { ratio: ["aspect_ratio", "image_size", "ratio", "size"], resolution: ["resolution"], quality: ["quality", "generation_mode"], duration: ["duration", "seconds"] };
-  function pick(p, kind) { var ks = ALIAS[kind] || []; for (var i = 0; i < ks.length; i++) if (p[ks[i]]) return ks[i]; return ""; }
-  function fill(mode, kind, prop) {
-    var sel = el(mode + "-param-" + kind), field = sel && sel.closest("[data-param-field]");
-    if (!sel || !field) return;
-    var vals = Array.isArray(prop.enum) ? prop.enum : null;
-    if (!vals) { field.style.display = "none"; return; }
-    sel.innerHTML = vals.map(function (v) { return '<option value="' + v + '">' + v + "</option>"; }).join("");
-    if (prop.default != null) sel.value = String(prop.default);
-    field.style.display = "";
-  }
-  function quality(mode, prop) {
-    var host = el(mode + "-param-quality"), field = host && host.closest("[data-param-field]");
-    var vals = (prop && Array.isArray(prop.enum)) ? prop.enum.slice(0, 3) : [];
-    if (!host || !field) return;
-    if (!vals.length) { field.style.display = "none"; return; }
-    var labels = { FAST: ["极速", "响应极快"], QUALITY: ["精细", "细节优先"], low: ["快速", "响应极快"], medium: ["标准", "平衡质量与速度"], high: ["精细", "细节优先"] };
-    host.innerHTML = vals.map(function (v, i) {
-      var pr = labels[v] || [v, ""], on = i === 0;
-      return '<button type="button" data-q="' + v + '" class="' + (on ? "bg-green-50/30 border border-green-400" : "bg-white border border-gray-200") + ' rounded-lg p-2 flex flex-col items-center justify-center cursor-pointer"><span class="text-[13px] ' + (on ? "text-green-600" : "text-gray-700") + ' font-medium mb-0.5">' + pr[0] + '</span><span class="text-[10px] ' + (on ? "text-green-500/80" : "text-gray-400") + '">' + pr[1] + "</span></button>";
-    }).join("");
-    field.style.display = "";
-    host.setAttribute("data-value", vals.indexOf(prop.default) >= 0 ? prop.default : vals[0]);
-  }
-  document.addEventListener("click", function (e) {
-    var b = e.target.closest && e.target.closest("[data-q]");
-    if (!b) return;
-    var host = b.parentElement;
-    host.setAttribute("data-value", b.getAttribute("data-q"));
-    Array.prototype.forEach.call(host.querySelectorAll("button"), function (btn) {
-      btn.className = (btn === b ? "bg-green-50/30 border border-green-400" : "bg-white border border-gray-200") + " rounded-lg p-2 flex flex-col items-center justify-center cursor-pointer";
-    });
-  });
-  function extras(mode, p, used) {
-    var host = el(mode + "-param-extra");
-    var skip = { prompt: 1, reference_image_urls: 1, image_url: 1, image_urls: 1, video_url: 1, first_frame: 1, last_frame: 1, audio_url: 1, content: 1 };
-    used.forEach(function (k) { skip[k] = 1; });
-    var keys = Object.keys(p).filter(function (k) { return !skip[k]; });
-    if (!keys.length) { host.innerHTML = ""; host.style.display = "none"; return; }
-    var labels = { negative_prompt: "反向提示词", seed: "随机种子", width: "宽", height: "高", output_format: "输出格式", num_images: "生成数量", audio: "生成音频" };
-    host.innerHTML = keys.map(function (k) {
-      var pr = p[k] || {}, label = pr.title || labels[k] || k, input;
-      if (Array.isArray(pr.enum)) input = '<select data-extra="' + k + '" class="w-full bg-white border border-gray-200 text-[13px] text-gray-700 rounded-lg pl-3 pr-8 py-2">' + pr.enum.map(function (v) { return '<option value="' + v + '">' + v + "</option>"; }).join("") + "</select>";
-      else if (pr.type === "integer" || pr.type === "number") input = '<input data-extra="' + k + '" type="number" value="' + (pr.default != null ? pr.default : "") + '" class="w-full bg-white border border-gray-200 text-[13px] text-gray-700 rounded-lg pl-3 pr-3 py-2">';
-      else if (pr.type === "boolean") input = '<label class="flex items-center text-[12px] text-gray-600"><input data-extra="' + k + '" type="checkbox" class="mr-2"> ' + label + "</label>";
-      else input = '<input data-extra="' + k + '" type="text" class="w-full bg-white border border-gray-200 text-[13px] text-gray-700 rounded-lg pl-3 pr-3 py-2">';
-      return '<div><label class="block text-[12px] text-gray-600 mb-1.5">' + label + "</label>" + input + "</div>";
-    }).join("");
-    host.style.display = "";
+  function optionSet(kind, mode) {
+    if (kind === "aspect") return mode === "video" ? ["16:9", "9:16", "1:1"] : ["auto", "1:1", "16:9", "9:16", "4:3", "3:4"];
+    if (kind === "resolution") return mode === "video" ? ["720p", "1080p"] : ["1K", "2K", "4K"];
+    if (kind === "duration") return ["5", "10"];
+    return [];
   }
   function applyParams(mode) {
-    var p = props(mode);
-    ["ratio", "resolution", "quality", "duration"].forEach(function (kind) {
+    var caps = capabilities(mode);
+    var map = { ratio: "aspect", resolution: "resolution", duration: "duration" };
+    Object.keys(map).forEach(function (kind) {
       var sel = el(mode + "-param-" + kind), field = sel && sel.closest("[data-param-field]");
-      if (!p || !pick(p, kind)) { if (field) field.style.display = "none"; return; }
-      if (kind === "quality") quality(mode, p[pick(p, kind)]); else fill(mode, kind, p[pick(p, kind)]);
+      if (!sel || !field) return;
+      if (!caps[map[kind]]) { field.style.display = "none"; return; }
+      var vals = optionSet(map[kind], mode);
+      sel.innerHTML = vals.map(function (v) { return '<option value="' + v + '">' + v + "</option>"; }).join("");
+      field.style.display = "";
     });
-    if (p) {
-      var used = [];
-      ["ratio", "resolution", "quality", "duration"].forEach(function (k) { var key = pick(p, k); if (key) used.push(key); });
-      extras(mode, p, used);
-    }
+    var qField = el(mode + "-param-quality");
+    if (qField && qField.closest("[data-param-field]")) qField.closest("[data-param-field]").style.display = "none";
+    var ex = el(mode + "-param-extra");
+    if (ex) { ex.innerHTML = ""; ex.style.display = "none"; }
     summary(mode);
   }
   function summary(mode) {
@@ -275,29 +252,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
   document.addEventListener("change", function (e) { if (e.target.tagName === "SELECT") summary(state.mode); });
 
   function collect(mode) {
-    var p = props(mode) || {}, params = {};
-    ["ratio", "resolution", "duration"].forEach(function (kind) {
-      var key = pick(p, kind); if (!key) return;
-      var sel = el(mode + "-param-" + kind), field = sel && sel.closest("[data-param-field]");
-      if (!sel || !field || field.style.display === "none" || !sel.value) return;
-      params[key] = /^\d+$/.test(sel.value) ? Number(sel.value) : sel.value;
-    });
-    var qk = pick(p, "quality"), qh = el(mode + "-param-quality");
-    if (qk && qh && qh.getAttribute("data-value")) params[qk] = qh.getAttribute("data-value");
-    var host = el(mode + "-param-extra");
-    if (host) Array.prototype.forEach.call(host.querySelectorAll("[data-extra]"), function (inp) {
-      var k = inp.getAttribute("data-extra");
-      if (inp.type === "checkbox") { if (inp.checked) params[k] = true; return; }
-      if (inp.value !== "") params[k] = inp.type === "number" ? Number(inp.value) : inp.value;
-    });
-    var imgs = state.refs.image.map(function (r) { return r.url; });
-    var vids = state.refs.video.map(function (r) { return r.url; });
-    var auds = state.refs.audio.map(function (r) { return r.url; });
-    if (imgs.length) { if (p.reference_image_urls) params.reference_image_urls = imgs; else if (p.image_urls) params.image_urls = imgs; else if (p.image_url) params.image_url = imgs.length === 1 ? imgs[0] : imgs; }
-    if (vids.length) { if (p.video_url) params.video_url = vids[0]; else if (p.first_frame) params.first_frame = vids[0]; }
-    if (auds.length && p.audio_url) params.audio_url = auds[0];
+    var caps = capabilities(mode), params = {};
+    if (caps.aspect) { var a = el(mode + "-param-ratio"); if (a && a.value) params.aspect_ratio = a.value; }
+    if (caps.resolution) { var r = el(mode + "-param-resolution"); if (r && r.value) params.resolution = r.value; }
+    if (caps.duration) { var d = el(mode + "-param-duration"); if (d && d.value) params.duration = Number(d.value); }
+    var imgs = state.refs.image.map(function (x) { return x.url; });
+    var vids = state.refs.video.map(function (x) { return x.url; });
+    var auds = state.refs.audio.map(function (x) { return x.url; });
+    if (imgs.length) params.reference_image_urls = imgs;
+    if (vids.length) params.first_frame = vids[0];
+    if (auds.length) params.audio_url = auds[0];
     return params;
   }
+
   function renderRefs(mode) {
     var host = el(mode + "-refs");
     var all = state.refs.image.concat(state.refs.video, state.refs.audio).filter(function (r) { return r.mode === mode; });
@@ -361,7 +328,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
   function submit(mode) {
     var pe = el("gen-prompt-" + mode), prompt = pe ? pe.value.trim() : "";
     if (!prompt) { alert("请先填写提示词"); return; }
-    var model = state.model[mode];
+    var item = state.model[mode];
+    var model = item && item.id;
     if (!model) { alert("请先选择模型"); return; }
     var params = collect(mode); params.prompt = prompt;
     setQuote(mode, "正在报价…");
