@@ -214,14 +214,19 @@ def test_material_mix_workflow_submits_oral_mix_without_digital_human(monkeypatc
     async def _fake_asset(**kwargs):
         return "local-asset-1", {"status": "ready"}
 
+    async def _fake_rehost(audio_url, *, title):
+        assert audio_url == "data:audio/mpeg;base64,AAAA"
+        return "https://tos.example.com/rehosted.mp3"
+
     monkeypatch.setattr(h5_chat_channel, "_workflow_event", _fake_event)
+    monkeypatch.setattr(h5_chat_channel, "_rehost_audio_for_shanjian", _fake_rehost)
     monkeypatch.setattr(h5_chat_channel, "_post_local_api_json", _fake_local_post)
     monkeypatch.setattr(h5_chat_channel, "_ensure_local_workflow_asset", _fake_asset)
 
     result = asyncio.run(
         h5_chat_channel._run_shanjian_material_mix_workflow(
             {
-                "audio_url": "https://cdn.example.com/voice.mp3",
+                "audio_url": "data:audio/mpeg;base64,AAAA",
                 "script": "今晚带你看看这家火锅店",
                 "style_id": "style-9",
                 "video_duration": 45,
@@ -247,6 +252,7 @@ def test_material_mix_workflow_submits_oral_mix_without_digital_human(monkeypatc
     assert select_body["script"] == "今晚带你看看这家火锅店"
     submit_body = calls[1][1]
     assert submit_body["scene"] == "oralMixCutting"
+    assert submit_body["audio_url"] == "https://tos.example.com/rehosted.mp3"
     assert submit_body["style_id"] == "style-9"
     assert submit_body["video_duration"] == 45
     assert submit_body["material_composition"] == "order"

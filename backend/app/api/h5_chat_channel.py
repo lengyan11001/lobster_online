@@ -12319,6 +12319,28 @@ async def _run_shanjian_digital_human_workflow(
     return last
 
 
+async def _rehost_audio_for_shanjian(audio_url: str, *, title: str) -> str:
+    """闪剪只能拉公网音频；短文案 TTS 返回的是 data: URI，必须转存 TOS。"""
+    from ..models import User
+    from .shanjian_digital_human import _persist_audio_for_shanjian
+
+    db = SessionLocal()
+    try:
+        uid = _safe_int(_decode_jwt_sub(_auth_context()[0]))
+        user_row = db.query(User).filter(User.id == uid).first() if uid > 0 else None
+        if user_row is None:
+            raise RuntimeError("无法确认当前登录账号")
+        public_url, _asset_id = await _persist_audio_for_shanjian(
+            audio_url=audio_url,
+            db=db,
+            current_user=user_row,
+            title=title or "素材混剪口播",
+        )
+        return public_url
+    finally:
+        db.close()
+
+
 async def _run_shanjian_material_mix_workflow(
     source: Dict[str, Any],
     *,
@@ -12442,6 +12464,14 @@ async def _run_shanjian_material_mix_workflow(
         audio_url = str(tts_data.get("audio_url") or "").strip()
         if not audio_url:
             raise RuntimeError("口播音频合成成功，但没有返回音频地址")
+
+    await _workflow_event(cloud, base, headers, run_id, "正在把口播音频转存成闪剪可下载的公网地址")
+    try:
+        audio_url = await _rehost_audio_for_shanjian(audio_url, title=title)
+    except Exception as exc:
+        raise RuntimeError(f"口播音频转存失败，已中止本次素材混剪：{exc}") from exc
+    if not audio_url.startswith(("http://", "https://")):
+        raise RuntimeError("口播音频转存后不是公网地址，已中止本次素材混剪")
 
     duration_seconds = _clamp_int(source.get("video_duration") or source.get("duration_seconds"), 30, 5, 300)
 
