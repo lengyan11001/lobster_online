@@ -692,7 +692,7 @@ async def web_browser_extract(body: BrowserExtractBody) -> Dict[str, Any]:
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return {"ok": False, "code": "invalid_url", "error": "只支持 http/https 网址"}
     # 硬超时：任何一条路径都不允许无限挂起（2026-10-26 事故：assist 任务挂了 8 小时）。
-    hard_timeout = (max(30, int(body.assist_timeout_seconds)) + 60) if body.assist else 180
+    hard_timeout = (max(60, int(body.assist_timeout_seconds) + 30)) if body.assist else 180
     try:
         data = await asyncio.wait_for(
             _extract_assisted(body) if body.assist else _extract(body),
@@ -700,6 +700,8 @@ async def web_browser_extract(body: BrowserExtractBody) -> Dict[str, Any]:
         )
     except asyncio.TimeoutError:
         logger.warning("[web-browser-extract] timeout url=%s assist=%s limit=%ss", body.url, body.assist, hard_timeout)
+        # 超时后关掉浏览器，避免窗口/进程留下继续占用，也避免任务永远停在“执行中”。
+        await _close_assist()
         return {
             "ok": True,
             "data": {
