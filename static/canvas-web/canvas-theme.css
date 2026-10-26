@@ -348,3 +348,6 @@ html body .GeneratePage-history-status.is-completed{background:#f0fdf4!important
 html body .GeneratePage-history-status.is-processing,
 html body .GeneratePage-history-status.is-pending{background:#eff6ff!important;border:1px solid #dbeafe!important;color:#2563eb!important;}
 html body .GeneratePage-history-status.is-failed{background:#fef2f2!important;border:1px solid #fee2e2!important;color:#dc2626!important;}
+
+/* 设计稿里「选择模型」行右侧只有说明文字，没有数量 */
+html body .GeneratePage-model-section .GeneratePage-section-count{display:none!important;}
