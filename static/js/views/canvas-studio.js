@@ -2,9 +2,9 @@
 (function () {
   "use strict";
   var SCREENS = {
-    inspiration: "/static/canvas-ui/inspiration.html?v=20261026-canvas-ui-v14",
-    generate: "/static/canvas-ui/generate.html?v=20261026-canvas-ui-v14",
-    projects: "/static/canvas-ui/projects.html?v=20261026-canvas-ui-v14"
+    inspiration: "/static/canvas-ui/inspiration.html?v=20261026-canvas-ui-v15",
+    generate: "/static/canvas-ui/generate.html?v=20261026-canvas-ui-v15",
+    projects: "/static/canvas-ui/projects.html?v=20261026-canvas-ui-v15"
   };
   function initCanvasStudioView(mount) {
     var shell = (mount && mount.querySelector && mount.querySelector(".canvas-studio-shell"))
