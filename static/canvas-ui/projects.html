@@ -56,47 +56,7 @@
 <body class="h-screen w-screen overflow-hidden flex flex-col text-[13px]">
     
     <!-- 顶部 64px 导航栏 -->
-    <header class="h-16 bg-white/80 backdrop-blur-md border-b border-gray-100 flex items-center justify-between px-6 shrink-0 z-30 relative">
-        <div class="flex items-center space-x-2 w-[220px]">
-            <svg width="28" height="20" viewBox="0 0 100 50" fill="none" xmlns="http://www.w3.org/2000/svg" class="mr-1">
-                <path d="M30 38C18.954 38 10 29.046 10 18C10 6.954 18.954 -2 30 -2C36.924 -2 43.048 1.545 46.541 6.84L49 10.6L59.459 26.16C62.952 31.455 69.076 35 76 35C87.046 35 96 26.046 96 15C96 3.954 87.046 -5 76 -5C69.076 -5 62.952 -1.545 59.459 3.84" stroke="url(#paint0_linear)" stroke-width="14" stroke-linecap="round"/>
-                <path d="M32 36.84C28.507 42.135 22.383 45.68 15.459 45.68C4.413 45.68 -4.541 36.726 -4.541 25.68C-4.541 14.634 4.413 5.68 15.459 5.68C22.383 5.68 28.507 9.225 32 14.52L34.459 18.28L44.918 33.84C48.411 39.135 54.535 42.68 61.459 42.68C72.505 42.68 81.459 33.726 81.459 22.68C81.459 11.634 72.505 2.68 61.459 2.68C54.535 2.68 48.411 6.225 44.918 11.52" stroke="url(#paint1_linear)" stroke-width="14" stroke-linecap="round"/>
-                <text x="21" y="24" fill="#F97316" font-family="Arial, sans-serif" font-weight="900" font-size="14" transform="rotate(-18 21 24)">Ai</text>
-                <defs>
-                    <linearGradient id="paint0_linear" x1="10" y1="18" x2="96" y2="18" gradientUnits="userSpaceOnUse">
-                        <stop stop-color="#06B6D4"/><stop offset="1" stop-color="#2563EB"/>
-                    </linearGradient>
-                    <linearGradient id="paint1_linear" x1="-4" y1="25" x2="81" y2="25" gradientUnits="userSpaceOnUse">
-                        <stop stop-color="#3B82F6"/><stop offset="1" stop-color="#1D4ED8"/>
-                    </linearGradient>
-                </defs>
-            </svg>
-            <span class="text-[15px] font-medium text-gray-800 tracking-wide">必火智能</span>
-        </div>
-
-        <nav class="flex items-center space-x-7 text-[13px] text-gray-500 hidden lg:flex">
-            <a href="#" class="hover:text-gray-800 transition-colors">首页</a>
-            <a href="#" class="hover:text-gray-800 transition-colors">技能商店</a>
-            <a href="#" class="hover:text-gray-800 transition-colors">发布中心</a>
-            <a href="#" class="hover:text-gray-800 transition-colors">内容记录</a>
-            <a href="#" class="hover:text-gray-800 transition-colors">素材库</a>
-            <a href="#" class="hover:text-gray-800 transition-colors">选品变现</a>
-            <a href="#" class="hover:text-gray-800 transition-colors">客资线索</a>
-            <a href="#" class="text-blue-600 bg-blue-50/80 px-3.5 py-1.5 rounded-lg font-medium">AI执行台</a>
-        </nav>
-
-        <div class="flex items-center space-x-4">
-            <div class="flex items-center bg-gray-50/80 rounded-full pl-2 pr-1 py-1 border border-gray-100">
-                <div class="w-5 h-5 rounded-full bg-blue-500 text-white flex items-center justify-center text-[10px] mr-2 shadow-sm"><i class="fa-solid fa-bolt"></i></div>
-                <span class="text-gray-600 text-[12px] mr-3 font-normal">算力: 20347.97</span>
-                <button class="bg-white border border-gray-200 text-gray-600 text-[12px] px-3 py-0.5 rounded-full hover:bg-gray-50 transition-colors shadow-sm">充值</button>
-            </div>
-            <button class="flex items-center space-x-2 hover:bg-gray-50 px-2 py-1.5 rounded-xl transition-colors cursor-pointer border border-transparent">
-                <img src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80" class="w-6 h-6 rounded-full border border-gray-200" alt="Avatar">
-                <i class="fa-solid fa-caret-down text-[10px] text-gray-400"></i>
-            </button>
-        </div>
-    </header>
+    
 
     <div class="flex flex-1 overflow-hidden relative">
         
@@ -287,7 +247,6 @@
 
             return `
                 <div class="group bg-white rounded-2xl border border-gray-100 overflow-hidden shadow-[0_4px_20px_-4px_rgba(0,0,0,0.02)] hover:shadow-[0_12px_30px_-10px_rgba(0,0,0,0.08)] hover:-translate-y-1 hover:border-blue-200/60 transition-all duration-300 cursor-pointer flex flex-col"
-                     onclick="openCanvasItem('${item.id}')"
                      draggable="true" ondragstart="dragItem(event, ${item.id})">
                     <div class="w-full aspect-[4/3] ${item.img ? 'bg-gray-100' : 'bg-gray-50 flex items-center justify-center'} relative overflow-hidden">
                         ${thumbContent}
@@ -429,88 +388,5 @@
             }
         });
     </script>
-
-<script>
-/* 真实数据接入：项目列表 / 新建 / 删除 / 进入画布 */
-(function () {
-  function token() {
-    try {
-      return localStorage.getItem('token') || localStorage.getItem('auth_token') || '';
-    } catch (e) { return ''; }
-  }
-  async function api(path, options) {
-    var opts = options || {};
-    var headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
-    var t = token();
-    if (t) headers['Authorization'] = 'Bearer ' + t;
-    var resp = await fetch(path, Object.assign({}, opts, { headers: headers }));
-    var data = await resp.json().catch(function () { return {}; });
-    if (!resp.ok) throw new Error((data && (data.detail || data.message)) || ('HTTP ' + resp.status));
-    return data;
-  }
-  function rowsOf(payload) {
-    if (!payload) return [];
-    if (Array.isArray(payload)) return payload;
-    if (Array.isArray(payload.items)) return payload.items;
-    var data = payload.data;
-    if (Array.isArray(data)) return data;
-    if (data && Array.isArray(data.items)) return data.items;
-    if (data && Array.isArray(data.list)) return data.list;
-    return [];
-  }
-  function toItem(row) {
-    var stamp = String(row.updated_at || row.created_at || '').slice(0, 10);
-    return {
-      id: row.uuid || row.id,
-      type: 'canvas',
-      name: row.name || '未命名项目',
-      time: stamp ? ('更新于 ' + stamp) : '刚刚',
-      img: row.thumbnail_url || '',
-      folderId: null
-    };
-  }
-  window.canvasUiApi = api;
-  window.openCanvasItem = function (id) {
-    if (!id) return;
-    location.href = '/api/canvas-local/canvas-frame#/canvas-editor/' + encodeURIComponent(String(id));
-  };
-  window.createNewCanvas = async function () {
-    var name = prompt('请输入新画布项目名称：', '未命名创意画布');
-    if (!name) return;
-    try {
-      var payload = await api('/canvas-api/api/v1/projects/create', {
-        method: 'POST',
-        body: JSON.stringify({ name: name })
-      });
-      var row = (payload && (payload.project || payload.data)) || payload || {};
-      window.openCanvasItem(row.uuid || row.id);
-    } catch (e) {
-      alert('新建失败：' + e.message);
-    }
-  };
-  window.deleteItem = async function (event, itemId) {
-    if (event) { event.stopPropagation(); }
-    if (!itemId) return;
-    if (!confirm('确定删除这个项目？')) return;
-    try {
-      await api('/canvas-api/api/v1/projects/' + encodeURIComponent(String(itemId)) + '/delete', { method: 'POST', body: '{}' });
-    } catch (e) {
-      alert('删除失败：' + e.message);
-      return;
-    }
-    appData.items = appData.items.filter(function (i) { return String(i.id) !== String(itemId); });
-    renderDashboard();
-  };
-  window.addEventListener('load', async function () {
-    try {
-      var payload = await api('/canvas-api/api/v1/projects/my?limit=60');
-      appData.items = rowsOf(payload).map(toItem);
-      renderDashboard();
-    } catch (e) {
-      console.warn('[canvas-ui] load projects failed', e);
-    }
-  });
-})();
-</script>
 </body>
 </html>

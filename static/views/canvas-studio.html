@@ -1,9 +1,16 @@
-<div class="canvas-studio-shell" style="width:100%;height:calc(100vh - 120px);min-height:640px;position:relative;background:#fff;border-radius:12px;overflow:hidden;">
+<style>
+  body.canvas-studio-active #appHeader { display: none !important; }
+  body.canvas-studio-active .page { padding-top: 0 !important; }
+  body.canvas-studio-active #lobsterCanvasStudioShell { border-radius: 0 !important; }
+</style>
+<div class="canvas-studio-shell" id="lobsterCanvasStudioShell" style="width:100%;height:100vh;min-height:640px;position:relative;background:#fff;overflow:hidden;">
+  <button type="button" id="lobsterCanvasExit" title="返回工作台"
+    style="position:absolute;left:12px;top:10px;z-index:20;width:32px;height:32px;border-radius:999px;border:1px solid #e5e7eb;background:#ffffffd9;backdrop-filter:blur(6px);color:#4b5563;cursor:pointer;font-size:14px;line-height:1;">←</button>
   <div class="canvas-studio-boot" style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font:14px/1.7 system-ui,-apple-system,'Microsoft YaHei',sans-serif;color:#666;background:#fff;">正在启动灵感画布…</div>
   <iframe
     id="lobster-canvas-frame"
     title="灵感画布"
-    src="/static/canvas-ui/projects.html?v=20261026-canvas-ui-v3"
+    src="/static/canvas-ui/projects.html?v=20261026-canvas-ui-v4"
     style="width:100%;height:100%;border:0;background:#fff;display:none;"
     allow="clipboard-write; fullscreen"
   ></iframe>
