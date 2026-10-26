@@ -191,7 +191,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
       var m = state.models[mode].filter(function (x) { return modelId(x) === id; })[0];
       if (m) setModel(mode, m);
       el(mode + "-model-dropdown").classList.add("hidden");
-      applyParams(mode);
+      loadSchema(mode);
       return;
     }
     ["image", "video"].forEach(function (m) {
@@ -201,7 +201,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     });
   });
 
-  // 本地接口没有 params_schema，按 category + 模型描述推断可用参数（只发模型支持的键）
+  // 优先用服务器的 params_schema；拿不到时按 category + 描述推断
+  function loadSchema(mode) {
+    var item = state.model[mode];
+    if (!item || !item.id) { applyParams(mode); return; }
+    api("/canvas-api/api/v3/models/" + item.id).then(function (d) {
+      var schema = (d && d.data && d.data.params_schema) || (d && d.params_schema) || null;
+      state.schema[mode] = schema;
+      applyParams(mode);
+    }).catch(function () { state.schema[mode] = null; applyParams(mode); });
+  }
+  function schemaProps(mode) {
+    var s = state.schema[mode];
+    return (s && s.properties) || null;
+  }
   function capabilities(mode) {
     var m = state.model[mode] || {};
     var text = (m.description || "").toLowerCase();
@@ -224,6 +237,20 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     return [];
   }
   function applyParams(mode) {
+    var sp = schemaProps(mode);
+    if (sp) {
+      ["ratio", "resolution", "duration"].forEach(function (kind) {
+        var sel = el(mode + "-param-" + kind), field = sel && sel.closest("[data-param-field]");
+        if (!sel || !field) return;
+        var key = (kind === "ratio" ? ["aspect_ratio", "image_size", "ratio"] : kind === "resolution" ? ["resolution"] : ["duration", "seconds"]).filter(function (k) { return sp[k]; })[0];
+        if (!key || !Array.isArray(sp[key].enum)) { field.style.display = "none"; return; }
+        sel.innerHTML = sp[key].enum.map(function (v) { return '<option value="' + v + '">' + v + "</option>"; }).join("");
+        if (sp[key].default != null) sel.value = String(sp[key].default);
+        field.style.display = "";
+      });
+      summary(mode);
+      return;
+    }
     var caps = capabilities(mode);
     var map = { ratio: "aspect", resolution: "resolution", duration: "duration" };
     Object.keys(map).forEach(function (kind) {
@@ -252,6 +279,24 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
   document.addEventListener("change", function (e) { if (e.target.tagName === "SELECT") summary(state.mode); });
 
   function collect(mode) {
+    var sp = schemaProps(mode);
+    if (sp) {
+      var out = {};
+      var map = { ratio: ["aspect_ratio", "image_size", "ratio"], resolution: ["resolution"], duration: ["duration", "seconds"] };
+      Object.keys(map).forEach(function (kind) {
+        var key = map[kind].filter(function (k) { return sp[k]; })[0];
+        if (!key) return;
+        var sel = el(mode + "-param-" + kind);
+        if (sel && sel.value) out[key] = /^\d+$/.test(sel.value) ? Number(sel.value) : sel.value;
+      });
+      var imgs0 = state.refs.image.map(function (x) { return x.url; });
+      var vids0 = state.refs.video.map(function (x) { return x.url; });
+      var auds0 = state.refs.audio.map(function (x) { return x.url; });
+      if (imgs0.length) { if (sp.reference_image_urls) out.reference_image_urls = imgs0; else if (sp.image_urls) out.image_urls = imgs0; else if (sp.image_url) out.image_url = imgs0.length === 1 ? imgs0[0] : imgs0; }
+      if (vids0.length) { if (sp.video_url) out.video_url = vids0[0]; else if (sp.first_frame) out.first_frame = vids0[0]; }
+      if (auds0.length && sp.audio_url) out.audio_url = auds0[0];
+      return out;
+    }
     var caps = capabilities(mode), params = {};
     if (caps.aspect) { var a = el(mode + "-param-ratio"); if (a && a.value) params.aspect_ratio = a.value; }
     if (caps.resolution) { var r = el(mode + "-param-resolution"); if (r && r.value) params.resolution = r.value; }
