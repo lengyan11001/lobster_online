@@ -378,7 +378,7 @@
                         </div>
                         <div class="text-[11px] text-gray-400 font-light mb-2 px-1">描述主体、动作、环境和画面气质</div>
                         <div class="relative w-full border border-gray-200 rounded-xl overflow-hidden focus-within:border-blue-300 focus-within:ring-2 focus-within:ring-blue-50 transition-all bg-gray-50/50 focus-within:bg-white shadow-sm">
-                            <textarea rows="4" class="w-full bg-transparent resize-none p-3 text-[13px] text-gray-700 outline-none placeholder-gray-400 leading-relaxed" placeholder="例如：页留海边的手持镜头，浪花拍打礁石，镜头缓慢向前推进，电影感..."></textarea>
+                            <textarea id="gen-prompt" rows="4" class="w-full bg-transparent resize-none p-3 text-[13px] text-gray-700 outline-none placeholder-gray-400 leading-relaxed" placeholder="例如：页留海边的手持镜头，浪花拍打礁石，镜头缓慢向前推进，电影感..."></textarea>
                             <div class="absolute bottom-2 right-3 text-[10px] text-gray-300">0 / 2000</div>
                         </div>
                     </div>
@@ -397,6 +397,7 @@
                         <button id="submit-gen-btn" class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-[15px] main-title rounded-xl py-3.5 shadow-lg shadow-blue-500/30 transition-all active:scale-[0.98] border-0 flex items-center justify-center">
                             <i class="fa-regular fa-image mr-2 text-[14px]"></i> 生成图片
                         </button>
+<div id="gen-status" class="mt-3 text-[12px] text-gray-500"></div>
                     </div>
 
                 </div>
@@ -585,5 +586,97 @@
             }
         }
     </script>
+
+<script>
+/* 生成页真实数据：模型列表 / 报价 / 提交 / 轮询（接口与画布 SPA 相同） */
+(function () {
+  var state = { models: [], imageModel: "", videoModel: "", mode: "image", polling: 0 };
+  function api(path, opts) {
+    var options = opts || {};
+    var headers = Object.assign({ "Content-Type": "application/json" }, options.headers || {});
+    return fetch(path, Object.assign({}, options, { headers: headers })).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (d) {
+        if (!r.ok) throw new Error((d && (d.detail || d.message)) || ("HTTP " + r.status));
+        return d;
+      });
+    });
+  }
+  function modelsOf(d) {
+    var m = d && d.data && d.data.models;
+    if (!Array.isArray(m) && d && Array.isArray(d.models)) m = d.models;
+    return Array.isArray(m) ? m : [];
+  }
+  function isVideo(model) {
+    var id = String(model.id || "").toLowerCase();
+    var tags = (model.tags || model.categories || []).join(" ").toLowerCase();
+    return /video|veo|kling|hailuo|seedance|sora|runway|pika/.test(id + " " + tags);
+  }
+  function renderOptions(container, list, kind) {
+    if (!container) return;
+    container.innerHTML = list.map(function (m) {
+      return '<li class="px-3 py-2 text-[12px] hover:bg-gray-50 cursor-pointer" data-model="' + (m.id || "") + '" data-kind="' + kind + '">'
+        + (m.name || m.id || "") + '</li>';
+    }).join("");
+  }
+  function labelFor(id) {
+    var m = state.models.filter(function (x) { return x.id === id; })[0];
+    return m ? (m.name || m.id) : id;
+  }
+  function setStatus(text) {
+    var el = document.getElementById("gen-status");
+    if (el) el.textContent = text || "";
+  }
+  function loadModels() {
+    return api("/canvas-api/api/v3/models").then(function (d) {
+      state.models = modelsOf(d);
+      var images = state.models.filter(function (m) { return !isVideo(m); });
+      var videos = state.models.filter(isVideo);
+      renderOptions(document.getElementById("image-model-dropdown"), images, "image");
+      renderOptions(document.getElementById("video-model-dropdown"), videos, "video");
+      if (images[0]) { state.imageModel = images[0].id; var t1 = document.getElementById("image-model-toggle-text"); if (t1) t1.textContent = labelFor(images[0].id); }
+      if (videos[0]) { state.videoModel = videos[0].id; var t2 = document.getElementById("video-model-toggle-text"); if (t2) t2.textContent = labelFor(videos[0].id); }
+    }).catch(function (e) { setStatus("模型加载失败：" + e.message); });
+  }
+  document.addEventListener("click", function (ev) {
+    var li = ev.target.closest && ev.target.closest("[data-model]");
+    if (!li) return;
+    var id = li.getAttribute("data-model");
+    if (li.getAttribute("data-kind") === "video") {
+      state.videoModel = id;
+      var t = document.getElementById("video-model-toggle-text");
+      if (t) t.textContent = labelFor(id);
+    } else {
+      state.imageModel = id;
+      var t2 = document.getElementById("image-model-toggle-text");
+      if (t2) t2.textContent = labelFor(id);
+    }
+  });
+  document.addEventListener("DOMContentLoaded", function () {
+    loadModels();
+    var btn = document.getElementById("submit-gen-btn");
+    if (!btn) return;
+    btn.addEventListener("click", function () {
+      var promptEl = document.getElementById("gen-prompt");
+      var prompt = promptEl ? String(promptEl.value || "").trim() : "";
+      if (!prompt) { setStatus("请先填写提示词"); return; }
+      var model = state.imageModel && document.getElementById("image-config-area") && !document.getElementById("image-config-area").classList.contains("hidden")
+        ? state.imageModel : (state.videoModel || state.imageModel);
+      if (!model) { setStatus("请先选择模型"); return; }
+      setStatus("正在提交…");
+      api("/canvas-api/api/v3/tasks/quote", { method: "POST", body: JSON.stringify({ model: model, params: { prompt: prompt } }) })
+        .then(function (q) {
+          var price = (q && (q.data && (q.data.price || q.data.credits) || q.price)) || "";
+          setStatus("报价 " + price + "，正在提交…");
+          return api("/canvas-api/api/v3/tasks/create", { method: "POST", body: JSON.stringify({ model: model, params: { prompt: prompt } }) });
+        })
+        .then(function (d) {
+          var taskId = d && (d.data && (d.data.task_id || d.data.id) || d.task_id);
+          setStatus(taskId ? ("已提交，任务 " + taskId + "，等待结果…") : ("已提交：" + JSON.stringify(d).slice(0, 200)));
+        })
+        .catch(function (e) { setStatus("提交失败：" + e.message); });
+    });
+  });
+})();
+</script>
 </body>
 </html>
