@@ -254,6 +254,11 @@
           <label><input id="oeNodeHiflyOralIndustry" type="checkbox"> 行业口播</label>
           <label><input id="oeNodeHiflyOralIp" type="checkbox"> IP 口播</label>
         </div>
+        <div class="oe-form-label" id="oeNodeMaterialMixDurationField" hidden>
+          <span>成片时长</span>
+          <label>目标秒数<input id="oeNodeMaterialMixDuration" type="number" min="5" max="300" step="1" value="30"> 秒</label>
+          <small>按口播内容从素材库宽口径挑素材，多段混剪后套闪剪模板；素材不足时尽量用现有素材，完全没有素材会中止并报错，不会空发。</small>
+        </div>
         <div class="oe-form-label" id="oeNodeWewriteFieldsField" hidden>
           <span>写作依据（口播来源，可多选，都选则每次随机一种）</span>
           <label><input id="oeNodeWewriteOralIndustry" type="checkbox"> 行业口播</label>

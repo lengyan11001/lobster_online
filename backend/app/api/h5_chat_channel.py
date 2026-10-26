@@ -12319,6 +12319,334 @@ async def _run_shanjian_digital_human_workflow(
     return last
 
 
+async def _run_shanjian_material_mix_workflow(
+    source: Dict[str, Any],
+    *,
+    headers: Dict[str, str],
+    run_id: str,
+    cloud: Optional[httpx.AsyncClient],
+    base: str,
+    current_item: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """素材混剪：口播音频 + 多段本地素材 + 闪剪模板。
+
+    与数字人节点分开：不解析、不提交任何数字人形象，只把口播音频和
+    宽口径挑出来的素材交给闪剪 oralMixCutting 混剪，再套模板成片。
+    """
+    _raise_if_server_template_invalid(source)
+    if cloud is None or not base:
+        raise RuntimeError("素材混剪缺少云端连接，无法提交生成任务")
+
+    audio_url = _workflow_text(source.get("audio_url"), 2000)
+    audio_asset_id = _workflow_text(source.get("audio_asset_id"), 128)
+    drive_mode = _workflow_text(source.get("drive_mode"), 32).lower()
+    audio_mode = drive_mode == "audio" or bool(audio_url or audio_asset_id)
+    voice = _workflow_text(source.get("voice") or source.get("speaker_id") or source.get("speakerId"), 128)
+    if not audio_mode:
+        local_day, rotation_key = _digital_human_rotation_context(source, current_item)
+        selected_voice = _resolve_workflow_voice(
+            source,
+            local_day=local_day,
+            rotation_key=rotation_key,
+            sequence_slot=None,
+        )
+        voice = _workflow_text(selected_voice.get("voice"), 128) or voice
+    missing: List[str] = []
+    if not audio_mode and not voice:
+        missing.append("声音分身（素材库 → 我的声音）")
+    if audio_mode and not audio_url and not audio_asset_id:
+        missing.append("驱动音频")
+    if missing:
+        raise RuntimeError("素材混剪缺少：" + "；".join(missing))
+
+    if not audio_url and audio_asset_id:
+        from ..models import Asset
+
+        db = SessionLocal()
+        try:
+            row = db.query(Asset).filter(Asset.asset_id == audio_asset_id).first()
+            if row is not None:
+                audio_url = str(row.source_url or "").strip()
+        finally:
+            db.close()
+        if not audio_url:
+            raise RuntimeError("素材混剪缺少：所选驱动音频已不在本机素材库，请重新选择")
+
+    language = _workflow_text(source.get("language") or source.get("target_language") or "zh-CN", 64)
+    provided_script = _provided_shanjian_workflow_script(source)
+    if provided_script:
+        generated = {
+            "title": _workflow_text(source.get("title") or "素材混剪", 80),
+            "script": provided_script,
+            "caption_hint": _workflow_text(source.get("title"), 200),
+            "language": language,
+            "ip_daily_group_id": "",
+            "ip_daily_record_id": "",
+            "ip_daily_record": {},
+        }
+    elif audio_mode:
+        generated = {
+            "title": _workflow_text(source.get("title") or "素材混剪", 80),
+            "script": "",
+            "caption_hint": _workflow_text(source.get("title"), 200),
+            "language": language,
+            "ip_daily_group_id": "",
+            "ip_daily_record_id": "",
+            "ip_daily_record": {},
+        }
+    else:
+        generated = await _generate_shanjian_workflow_script(
+            source=source,
+            cloud=cloud,
+            base=base,
+            headers=headers,
+            run_id=run_id,
+        )
+    script = str(generated.get("script") or "")
+    title = _workflow_text(source.get("title"), 80) or _workflow_digital_human_title("", script)
+    if not title or title == "数字人口播":
+        title = "素材混剪"
+    language = generated.get("language") or language or "zh-CN"
+
+    tts_data: Dict[str, Any] = {}
+    if not audio_url:
+        await _workflow_event(cloud, base, headers, run_id, "正在合成口播音频")
+        tts_payload: Dict[str, Any] = {
+            "voice": voice,
+            "text": script,
+            "rate": str(source.get("rate") or source.get("speed_ratio") or "1"),
+            "volume": str(source.get("volume") or "1"),
+            "pitch": str(source.get("pitch") if source.get("pitch") is not None else "0"),
+            "emotion": str(source.get("emotion") or "happy"),
+        }
+        instructions = _workflow_text(source.get("instructions"), 500)
+        if instructions:
+            tts_payload["instructions"] = instructions
+        provider = _workflow_text(source.get("voice_provider") or source.get("provider"), 32).lower()
+        if provider in {"minimax", "qwen"}:
+            tts_payload["voice_provider"] = provider
+        tts_resp = await cloud.post(
+            f"{base}/api/hifly/my/voice/preview-tts",
+            json=tts_payload,
+            headers=headers,
+            timeout=httpx.Timeout(1800.0, connect=10.0, read=1800.0, write=30.0, pool=10.0),
+        )
+        try:
+            tts_data = tts_resp.json() if tts_resp.content else {}
+        except Exception:
+            tts_data = {"detail": _friendly_cloud_error(tts_resp.status_code, tts_resp.text)}
+        if not isinstance(tts_data, dict):
+            tts_data = {"result": tts_data}
+        if tts_resp.status_code >= 400 or tts_data.get("ok") is False:
+            raise RuntimeError(str(tts_data.get("detail") or tts_data.get("error") or tts_data.get("message") or tts_data or tts_resp.text)[:500])
+        audio_url = str(tts_data.get("audio_url") or "").strip()
+        if not audio_url:
+            raise RuntimeError("口播音频合成成功，但没有返回音频地址")
+
+    duration_seconds = _clamp_int(source.get("video_duration") or source.get("duration_seconds"), 30, 5, 300)
+
+    style_id = _workflow_text(source.get("style_id") or source.get("template_id") or source.get("templateId"), 128)
+    if not style_id:
+        raise RuntimeError("素材混剪缺少闪剪模板：请先在『个人设置 → 数字人模板』选择一个模板后再启动工作流")
+
+    groups = _shanjian_template_group_names(source)
+    if not groups:
+        groups = await _fetch_active_personal_template_groups(cloud, base, headers)
+    await _workflow_event(
+        cloud,
+        base,
+        headers,
+        run_id,
+        "正在按口播内容挑选素材" + (f"（分组：{'、'.join(groups[:6])}）" if groups else "（全素材库）"),
+    )
+
+    def _picked(result: Dict[str, Any]) -> List[Dict[str, Any]]:
+        return [
+            item
+            for item in (result.get("materials") or [])
+            if isinstance(item, dict) and str(item.get("fileUrl") or "").strip()
+        ]
+
+    selection = await _post_local_api_json(
+        "/api/shanjian-smart-clip/materials/select",
+        {
+            "groups": groups,
+            "script": script,
+            "limit": 20,
+            "max_edge": 2000,
+        },
+        headers=headers,
+        timeout_seconds=1800.0,
+    )
+    materials = _picked(selection)
+    if not materials and groups:
+        # 分组是数字人那套精细配置；素材混剪优先保证能出片，分组内没素材时
+        # 退回整个素材库再挑一次，而不是直接中止。
+        await _workflow_event(
+            cloud,
+            base,
+            headers,
+            run_id,
+            "所选素材分组没有可用素材，改为从整个素材库挑选",
+        )
+        groups = []
+        selection = await _post_local_api_json(
+            "/api/shanjian-smart-clip/materials/select",
+            {"groups": [], "script": script, "limit": 20, "max_edge": 2000},
+            headers=headers,
+            timeout_seconds=1800.0,
+        )
+        materials = _picked(selection)
+    if not materials:
+        raise RuntimeError(
+            "素材混剪没有可用素材：当前素材库没有符合条件的视频/图片"
+            + (f"（分组：{'、'.join(groups[:6])}）" if groups else "")
+            + "。请先上传素材或调整『数字人素材分组』后再启动。"
+        )
+    await _workflow_event(
+        cloud,
+        base,
+        headers,
+        run_id,
+        f"已选中 {len(materials)} 段素材（候选 {int(selection.get('candidates') or len(materials))} 段），正在提交闪剪混剪",
+    )
+
+    submit_body: Dict[str, Any] = {
+        "scene": "oralMixCutting",
+        "style_id": style_id,
+        "title": title,
+        "audio_url": audio_url,
+        "language": language or "zh-CN",
+        "video_duration": duration_seconds,
+        "material_composition": str(source.get("material_composition") or "random"),
+        "material_sound_switch": bool(source.get("material_sound_switch")),
+        "material_match_way": str(source.get("material_match_way") or "fuzzyMatch"),
+        "header_switch": bool(source.get("header_switch", True)),
+        "material_switch": bool(source.get("material_switch", True)),
+        "subtitle_switch": bool(source.get("subtitle_switch", True)),
+        "keyword_switch": bool(source.get("keyword_switch", True)),
+        "watermark_show": bool(source.get("watermark_show", False)),
+        "materials": [
+            {"type": str(item.get("type") or "").strip(), "fileUrl": str(item.get("fileUrl") or "").strip()}
+            for item in materials[:20]
+        ],
+    }
+    submitted = await _post_local_api_json(
+        "/api/shanjian-smart-clip/submit",
+        submit_body,
+        headers=headers,
+        timeout_seconds=300.0,
+    )
+    task_id = _workflow_text(submitted.get("task_id"), 128)
+    if not task_id:
+        raise RuntimeError("素材混剪提交成功但没有返回任务ID")
+
+    poll_timeout = _clamp_int(source.get("poll_timeout_seconds"), 3600, 60, 7200)
+    interval = _clamp_int(source.get("poll_interval_seconds"), 10, 5, 60)
+    waited = 0
+    last: Dict[str, Any] = {"ok": True, "status": "processing", "task_id": task_id}
+    await _workflow_event(cloud, base, headers, run_id, "素材混剪已提交，正在等待闪剪出片")
+    while waited <= poll_timeout:
+        try:
+            last = await _post_local_api_json(
+                "/api/shanjian-smart-clip/task",
+                {"task_id": task_id},
+                headers=headers,
+                timeout_seconds=180.0,
+            )
+        except Exception as exc:
+            if not _is_transient_poll_error(exc):
+                raise
+            logger.warning(
+                "[H5-WORKFLOW] material mix status poll retry task_id=%s waited=%s err=%s",
+                task_id,
+                waited,
+                f"{type(exc).__name__}: {exc}"[:240],
+            )
+            if waited >= poll_timeout:
+                last = {**last, "status": "processing", "poll_error": f"{type(exc).__name__}: {exc}"[:240]}
+                break
+            await asyncio.sleep(interval)
+            waited += interval
+            continue
+        status = _workflow_text(last.get("status"), 64).lower()
+        if status in {"succeed", "success", "completed", "complete", "done", "finished"}:
+            video_url = _workflow_text(last.get("video_url"), 1000)
+            cover_url = _workflow_text(last.get("cover_url"), 1000)
+            if not video_url:
+                raise RuntimeError("素材混剪任务已完成，但没有返回视频链接")
+            await _workflow_event(cloud, base, headers, run_id, "正在将混剪成片转存到本机素材库")
+            local_asset_id = ""
+            local_asset: Dict[str, Any] = {"status": "pending"}
+            try:
+                local_asset_id, local_asset = await _ensure_local_workflow_asset(
+                    asset_id="",
+                    source_url=video_url,
+                    media_type="video",
+                    name=title or "素材混剪",
+                    prompt=script,
+                    headers=headers,
+                    run_id=run_id,
+                )
+            except Exception as exc:
+                local_asset = {"status": "pending", "error": str(exc)[:300]}
+                logger.warning(
+                    "[H5-WORKFLOW] material mix local materialization pending task_id=%s url=%s err=%s",
+                    task_id,
+                    video_url[:160],
+                    str(exc)[:300],
+                )
+            return {
+                "ok": True,
+                "action": "shanjian_material_mix",
+                "status": status or "succeed",
+                "task_id": task_id,
+                "title": title,
+                "script": script,
+                "language": language or "zh-CN",
+                "caption_hint": generated.get("caption_hint") or "",
+                "voice": voice,
+                "video_duration": duration_seconds,
+                "style_id": style_id,
+                "material_groups": groups,
+                "material_count": len(materials),
+                "media_type": "video",
+                "video_url": video_url,
+                "video_asset_id": local_asset_id,
+                "local_asset": local_asset,
+                "cover_url": cover_url,
+                "duration": last.get("duration"),
+                "source_media_urls": [video_url],
+                "media_urls": {"video": [video_url]},
+                "result_refs": {"asset_ids": [local_asset_id] if local_asset_id else [], "urls": [video_url]},
+                "tts": {
+                    "duration_seconds": tts_data.get("duration_seconds") if isinstance(tts_data, dict) else None,
+                    "audio_url": audio_url,
+                },
+            }
+        if status in {"failed", "fail", "error", "canceled", "cancelled"}:
+            raise RuntimeError(
+                "素材混剪生成失败："
+                + _workflow_text(last.get("message") or last.get("error_code") or last, 500)
+            )
+        if waited >= poll_timeout:
+            break
+        await asyncio.sleep(interval)
+        waited += interval
+        if waited % 60 < interval:
+            await _workflow_event(cloud, base, headers, run_id, f"素材混剪仍在生成中，已等待 {waited} 秒")
+
+    last["result_ready"] = False
+    last["action"] = "shanjian_material_mix"
+    last["title"] = title
+    last["script"] = script
+    last["language"] = language or "zh-CN"
+    last["voice"] = voice
+    last["task_id"] = task_id
+    last["media_type"] = "video"
+    return last
+
+
 def _takeover_monotonic() -> float:
     return asyncio.get_running_loop().time()
 
@@ -12947,6 +13275,15 @@ async def _run_client_workflow_action(
             await asyncio.sleep(2.5)
     if action == "shanjian_digital_human_video":
         return await _run_shanjian_digital_human_workflow(
+            source,
+            headers=headers,
+            run_id=run_id,
+            cloud=cloud,
+            base=base,
+            current_item=current_item,
+        )
+    if action == "shanjian_material_mix":
+        return await _run_shanjian_material_mix_workflow(
             source,
             headers=headers,
             run_id=run_id,
@@ -13647,6 +13984,18 @@ def _client_workflow_result_text(action: str, result: Dict[str, Any]) -> str:
             return "数字人2.0视频任务已提交，仍在生成中。" + (f" 任务ID：{task_id}" if task_id else "")
         video_url = str(result.get("video_url") or "").strip()
         return "数字人2.0视频生成完成。" + (f" 任务ID：{task_id}" if task_id else "") + (f" 视频：{video_url}" if video_url else "")
+    if action == "shanjian_material_mix":
+        task_id = str(result.get("task_id") or "").strip()
+        if result.get("result_ready") is False:
+            return "素材混剪任务已提交，仍在生成中。" + (f" 任务ID：{task_id}" if task_id else "")
+        video_url = str(result.get("video_url") or "").strip()
+        count = int(result.get("material_count") or 0)
+        return (
+            "素材混剪完成。"
+            + (f" 使用 {count} 段素材。" if count else "")
+            + (f" 任务ID：{task_id}" if task_id else "")
+            + (f" 视频：{video_url}" if video_url else "")
+        )
     if action == "local_bestseller_daily_video":
         item = result.get("item") if isinstance(result.get("item"), dict) else {}
         task_id = str(item.get("video_task_id") or item.get("video_job_id") or "").strip()

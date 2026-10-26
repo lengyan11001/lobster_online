@@ -1439,6 +1439,22 @@ def _save_asset_origin(body: SaveAssetReq) -> str:
     return _normalize_asset_origin_filter(body.asset_origin) or "generated"
 
 
+def _asset_hidden_from_library(row: Any) -> bool:
+    """素材库内部中间产物不应参与用户选材（混剪/数字人均同口径）。"""
+    meta = getattr(row, "meta", None)
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except Exception:
+            meta = None
+    if isinstance(meta, dict):
+        visibility = str(meta.get("content_visibility") or meta.get("library_visibility") or "").strip().lower()
+        origin = str(meta.get("asset_origin") or meta.get("origin") or "").strip().lower()
+        if visibility in {"hidden", "internal", "intermediate"} or origin in {"internal", "intermediate"}:
+            return True
+    return str(getattr(row, "model", "") or "").strip() == "shanjian-digital-human-template-media"
+
+
 def _creative_candidate_group(meta: Optional[dict]) -> str:
     if not isinstance(meta, dict):
         return ""

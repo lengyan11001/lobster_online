@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -69,6 +69,13 @@ class SubmitClipBody(TokenBody):
     material_composition: str = "random"
     video_duration: int = 30
     struct_layers: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class MaterialSelectBody(TokenBody):
+    groups: List[str] = Field(default_factory=list)
+    script: str = ""
+    limit: int = 20
+    max_edge: int = 2000
 
 
 class TaskBody(TokenBody):
@@ -325,6 +332,86 @@ async def common_voices(body: TokenBody):
     return {"ok": True, "results": data.get("results") or [], "raw": payload}
 
 
+@router.post("/api/shanjian-smart-clip/materials/select")
+async def select_mix_materials(
+    body: MaterialSelectBody,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    """Broad material selection for oral mix cutting.
+
+    Digital-human selection is deliberately strict (keyword gate, max 8).
+    Material mix needs enough usable footage, so this endpoint ranks every
+    matching image/video but never drops a whole group just because a tag did
+    not match.  The user chooses the output duration; Shanjian performs the
+    actual multi-clip mix with the oral audio.
+    """
+    from .assets import _asset_hidden_from_library, _creative_candidate_group, ensure_shanjian_compliant_copy
+    from ..models import Asset
+
+    wanted = {str(item or "").strip() for item in (body.groups or []) if str(item or "").strip()}
+    script = str(body.script or "").strip()
+    limit = max(1, min(int(body.limit or 20), 20))
+    rows = (
+        db.query(Asset)
+        .filter(Asset.user_id == int(current_user.id))
+        .order_by(Asset.id.desc())
+        .all()
+    )
+    candidates = []
+    for row in rows:
+        if _asset_hidden_from_library(row):
+            continue
+        kind = str(row.media_type or "").strip().lower()
+        if kind not in {"image", "video"}:
+            continue
+        group = _creative_candidate_group(row.meta)
+        if wanted and group not in wanted:
+            continue
+        text = " ".join([str(row.filename or ""), str(row.tags or "")])
+        # Broad score: more matching characters is better, but zero-score
+        # footage remains eligible so a sparse asset library still produces a
+        # video.  Videos rank before images at equal score.
+        score = 0
+        for size in (6, 5, 4, 3, 2):
+            for start in range(0, max(0, len(script) - size + 1)):
+                piece = script[start:start + size]
+                if piece and piece in text:
+                    score += size * size
+        candidates.append({"row": row, "kind": kind, "score": score, "group": group})
+    candidates.sort(key=lambda item: (-int(item["score"]), 0 if item["kind"] == "video" else 1, -int(item["row"].id)))
+    selected = candidates[:limit]
+    materials: List[Dict[str, Any]] = []
+    for item in selected:
+        row = item["row"]
+        asset_id = str(row.asset_id or "").strip()
+        url = str(row.source_url or "").strip()
+        if not asset_id or not url:
+            continue
+        try:
+            prepared = await ensure_shanjian_compliant_copy(
+                row, request=request, db=db, max_edge=max(320, min(int(body.max_edge or 2000), 4096))
+            )
+            compliant_id = str(prepared.get("compliant_asset_id") or "").strip()
+            if compliant_id and compliant_id != asset_id:
+                compliant = db.query(Asset).filter(Asset.asset_id == compliant_id, Asset.user_id == int(current_user.id)).first()
+                if compliant is not None and str(compliant.source_url or "").strip():
+                    asset_id = compliant_id
+                    url = str(compliant.source_url or "").strip()
+        except Exception:
+            pass
+        materials.append({"type": item["kind"], "fileUrl": url, "asset_id": asset_id})
+    return {
+        "ok": True,
+        "materials": materials,
+        "candidates": len(candidates),
+        "selected": len(materials),
+        "groups": sorted(wanted),
+        "limit": limit,
+    }
+
+
 @router.post("/api/shanjian-smart-clip/submit")
 async def submit_clip(
     body: SubmitClipBody,
@@ -380,6 +467,8 @@ async def submit_clip(
         )
     elif scene == "oralMixCutting":
         endpoint = "/v1/clip/video/broadcast_mixcut"
+        payload["processRules"]["materialComposition"] = _normalize_material_composition(body.material_composition)
+        payload["processRules"]["videoDuration"] = max(5, min(int(body.video_duration or 30), 300))
     elif scene == "newsMixCutting":
         endpoint = "/v1/clip/video/news_mixcut"
         payload["processRules"]["materialComposition"] = _normalize_material_composition(body.material_composition)

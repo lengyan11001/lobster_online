@@ -74,6 +74,7 @@
   var NODE_OPTION_GROUP_ORDER = ['抖音','个微','AI营销'];
   var NODE_OPTION_PACKAGE_IDS = {
     'hifly.video.create_by_tts':'hifly_digital_human_skill',
+    'shanjian_material_mix':'hifly_digital_human_skill',
     'comfly.seedance.tvc.pipeline':'comfly_seedance_tvc_skill',
     'comfly.daihuo.pipeline':'comfly_veo_skill',
     'image_composer_studio':'goal_video_pipeline_skill',
@@ -124,6 +125,7 @@
   }
   [
     ['hifly.video.create_by_tts','数字人口播视频','选择数字人和声音，生成口播视频。','AI营销'],
+    ['shanjian_material_mix','素材混剪','不提交数字人：按口播内容从素材库多段挑素材混剪，套闪剪模板并按所选秒数出片。','AI营销'],
     ['comfly.seedance.tvc.pipeline','创意分镜头视频','按连续分镜规划视频，并生成完整成片。','AI营销'],
     ['local_bestseller','同城爆款视频','围绕同城热点和门店场景生成爆款视频方案。','AI营销'],
     ['comfly.daihuo.pipeline','爆款TVC','使用素材或产品图生成广告短片。','AI营销'],
@@ -414,6 +416,11 @@
     if (row.key.indexOf('native_wechat_') === 0 || row.key === 'native_whatsapp_poll') return nativePlan(row.key, row);
     if (row.key === 'local_bestseller') return {title:'同城爆款视频',task_kind:'client_workflow',content:'H5 工作流：同城爆款视频',payload:{action:'local_bestseller_daily_video',params:baseScheduleParams(row,{note:prompt,prompt:prompt,days:30,day_mode:'workflow_elapsed'})}};
     if (row.key === 'hifly.video.create_by_tts') return {title:'数字人口播视频',task_kind:'capability',content:'H5 工作流：数字人口播视频',payload:{capability_id:'hifly.video.create_by_tts',payload:Object.assign({script:prompt,prompt:prompt},digitalHumanOralSourceParams(row.params))}};
+    if (row.key === 'shanjian_material_mix') {
+      var mixDuration=Math.max(5,Math.min(300,Number((row.params||{}).video_duration || 30)));
+      var mixParams=Object.assign({note:prompt,prompt:prompt,video_duration:mixDuration},digitalHumanOralSourceParams(row.params));
+      return {title:'素材混剪',task_kind:'client_workflow',content:'H5 工作流：素材混剪',payload:{action:'shanjian_material_mix',params:baseScheduleParams(row,mixParams)}};
+    }
     if (row.key === 'comfly.seedance.tvc.pipeline') return {title:'创意分镜头视频',task_kind:'capability',content:'H5 工作流：创意分镜头视频',payload:{capability_id:'comfly.seedance.tvc.pipeline',payload:{action:'start_pipeline',task_text:prompt,prompt:prompt,auto_save:true}}};
     if (row.key === 'comfly.daihuo.pipeline') return {title:'爆款TVC',task_kind:'capability',content:'H5 工作流：爆款TVC',payload:{capability_id:'comfly.daihuo.pipeline',payload:{action:'start_pipeline',task_text:prompt,prompt:prompt,auto_save:true}}};
     if (row.key === 'viral_video_remix') return {title:'爆款复制',task_kind:'client_workflow',content:'H5 工作流：爆款复制',payload:{action:'viral_video_remix_start',params:baseScheduleParams(row,{prompt:prompt,billing_confirmed:true,ratio:'9:16'})}};
@@ -1282,7 +1289,9 @@
     if (el('oeNodeDouyinKeywordField')) el('oeNodeDouyinKeywordField').hidden=douyinAiKeywords;
     if (el('oeNodeDouyinAiKeywordField')) el('oeNodeDouyinAiKeywordField').hidden=!douyinAiKeywords;
     if (el('oeNodeDouyinTouchField')) el('oeNodeDouyinTouchField').hidden=!douyinTouch;
-    if (el('oeNodeHiflyOralSourcesField')) el('oeNodeHiflyOralSourcesField').hidden=key !== 'hifly.video.create_by_tts';
+    var oralSourceNode=key === 'hifly.video.create_by_tts' || key === 'shanjian_material_mix';
+    if (el('oeNodeHiflyOralSourcesField')) el('oeNodeHiflyOralSourcesField').hidden=!oralSourceNode;
+    if (el('oeNodeMaterialMixDurationField')) el('oeNodeMaterialMixDurationField').hidden=key !== 'shanjian_material_mix';
     if (el('oeNodeWewriteFieldsField')) el('oeNodeWewriteFieldsField').hidden=key !== 'wewrite.article.pipeline';
     if (el('oeNodeDouyinFollowupField')) el('oeNodeDouyinFollowupField').hidden=!douyinTouch;
     var replyMode=String((el('oeNodeDouyinReplyCommentMode') || {}).value || '').toLowerCase();
@@ -1340,6 +1349,7 @@
     if (el('oeNodeWhatsappMaxUnread')) el('oeNodeWhatsappMaxUnread').value=Math.max(1,Math.min(100,Number(params.max_unread_per_round || 50)));
     if (el('oeNodeWhatsappInstruction')) el('oeNodeWhatsappInstruction').value=String(params.reply_instruction || '');
     el('oeNodeMomentAction').value=String(params.moment_action || 'like_comment');
+    if (el('oeNodeMaterialMixDuration')) el('oeNodeMaterialMixDuration').value=Math.max(5,Math.min(300,Number(params.video_duration || 30)));
     if (el('oeNodeHiflyOralIndustry') || el('oeNodeHiflyOralIp')) {
       var oralPicked=digitalHumanOralSourceParams(params).script_sources;
       if (el('oeNodeHiflyOralIndustry')) el('oeNodeHiflyOralIndustry').checked=oralPicked.indexOf('ip_daily_industry_hot_oral') >= 0;
@@ -1445,13 +1455,16 @@
       delete row.params.followup_actions;
       row.params.customer_scope='precise_pool';
     } else { delete row.params.keyword; delete row.params.regions; delete row.params.max_results; delete row.params.max_users; delete row.params.mode; delete row.params.followup_actions; delete row.params.touch_actions; delete row.params.customer_scope; delete row.params.ai_keywords; delete row.params.ai_keyword_count; delete row.params.ai_keyword_avoid_days; delete row.params.ai_keyword_publish_days; }
-    if (key === 'hifly.video.create_by_tts') {
+    if (key === 'hifly.video.create_by_tts' || key === 'shanjian_material_mix') {
       var oralSources=[];
       if (el('oeNodeHiflyOralIndustry') && el('oeNodeHiflyOralIndustry').checked) oralSources.push('ip_daily_industry_hot_oral');
       if (el('oeNodeHiflyOralIp') && el('oeNodeHiflyOralIp').checked) oralSources.push('ip_daily_professional_ip_oral');
       if (!oralSources.length) oralSources=['ip_daily_industry_hot_oral'];
       row.params.script_sources=oralSources; row.params.script_source=oralSources[0];
     } else { delete row.params.script_sources; delete row.params.script_source; }
+    if (key === 'shanjian_material_mix') {
+      row.params.video_duration=Math.max(5,Math.min(300,Number((el('oeNodeMaterialMixDuration')||{}).value||30)));
+    } else if (key !== 'hifly.video.create_by_tts') { delete row.params.video_duration; }
     if (key === 'wewrite.article.pipeline') {
       var articleSources=[];
       if (el('oeNodeWewriteOralIndustry') && el('oeNodeWewriteOralIndustry').checked) articleSources.push('ip_daily_industry_hot_oral');
