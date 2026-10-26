@@ -378,3 +378,20 @@ html body .GeneratePage-workspace{grid-template-rows:auto!important;align-items:
 html body .GeneratePage-controls{height:auto!important;max-height:none!important;overflow:visible!important;}
 html body .GeneratePage-results{height:100%!important;max-height:none!important;}
 html body .GeneratePage-submit-area{position:static!important;padding:6px 0 0!important;}
+
+/* ===== 左卡按用户给的高清截图逐项对齐（v28） ===== */
+/* 卡片：24 内边距、20 圆角、几乎无边框 */
+html body .GeneratePage-controls{padding:24px!important;border-radius:20px!important;border:1px solid #f7f8f9!important;}
+/* 类型 tab：不要灰底轨道，选中才浅蓝，高 40、圆角 10 */
+html body .GeneratePage-model-tabs{background:transparent!important;padding:0!important;gap:8px!important;border:0!important;}
+html body .GeneratePage-model-tabs > button{height:40px!important;border-radius:10px!important;background:transparent!important;color:#6b7280!important;font-size:13px!important;}
+html body .GeneratePage-model-tabs > button.is-active{background:#e0edff!important;border:1px solid #bfdbfe!important;color:#2563eb!important;}
+html body .GeneratePage-model-tabs > button:not(.is-active) span{background:#f3f4f6!important;color:#9ca3af!important;}
+html body .GeneratePage-model-tabs > button.is-active span{background:#bfdbfe!important;color:#2563eb!important;}
+/* 参考素材：不要外框，按钮是紧凑胶囊 */
+html body .GeneratePage-reference-section{border:0!important;padding:0!important;background:transparent!important;box-shadow:none!important;}
+html body .GeneratePage-reference-action,
+html body .GeneratePage-reference-add{width:auto!important;min-height:36px!important;padding:8px 12px!important;font-size:12px!important;color:#4b5563!important;border:1px solid #e5e7eb!important;border-radius:10px!important;background:#fff!important;}
+/* 数字更浅 */
+html body .GeneratePage-prompt-count{color:#d1d5db!important;font-size:11px!important;}
+html body .GeneratePage-section-count{color:#9ca3af!important;font-size:11px!important;}
