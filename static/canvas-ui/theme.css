@@ -94,3 +94,17 @@ html body ::-webkit-scrollbar{width:10px;height:10px;}
 html body ::-webkit-scrollbar-thumb{background:#e2e8f0;border-radius:999px;border:2px solid transparent;background-clip:padding-box;}
 html body ::-webkit-scrollbar-thumb:hover{background:#cbd5e1;border:2px solid transparent;background-clip:padding-box;}
 html body ::-webkit-scrollbar-track{background:transparent;}
+
+/* ================= 工作区外壳 / 侧栏 ================= */
+html body .canvas-workspace-shell{background:var(--cv-bg)!important;}
+html body .canvas-workspace-content{background:var(--cv-bg)!important;}
+html body .canvas-workspace-header{height:64px!important;background:rgba(255,255,255,.85)!important;backdrop-filter:blur(12px);border-bottom:1px solid var(--cv-border-soft)!important;}
+
+html body .CanvasWorkspaceSidebar{background:var(--cv-surface)!important;border-right:1px solid var(--cv-border-soft)!important;}
+html body .CanvasWorkspaceSidebar-nav{gap:6px!important;}
+html body .CanvasWorkspaceSidebar-item{border-radius:var(--cv-radius-sm)!important;color:var(--cv-muted)!important;transition:background .15s,color .15s!important;}
+html body .CanvasWorkspaceSidebar-item:hover{background:var(--cv-border-soft)!important;color:#374151!important;}
+html body .CanvasWorkspaceSidebar-item.is-active,
+html body .CanvasWorkspaceSidebar-item[aria-current="page"]{background:var(--cv-primary-soft)!important;color:var(--cv-primary)!important;font-weight:500!important;}
+html body .CanvasWorkspaceSidebar-item-label{font-size:13px!important;}
+html body .CanvasWorkspaceSidebar-item-icon{color:inherit!important;}
