@@ -108,3 +108,64 @@ html body .CanvasWorkspaceSidebar-item.is-active,
 html body .CanvasWorkspaceSidebar-item[aria-current="page"]{background:var(--cv-primary-soft)!important;color:var(--cv-primary)!important;font-weight:500!important;}
 html body .CanvasWorkspaceSidebar-item-label{font-size:13px!important;}
 html body .CanvasWorkspaceSidebar-item-icon{color:inherit!important;}
+
+/* ================= 编辑器 ================= */
+html body .CanvasEditor-container{background:var(--cv-bg)!important;}
+html body .CanvasEditor-canvas{
+  background-color:#f8fafc!important;
+  background-image:radial-gradient(#e2e8f0 1px,transparent 1px)!important;
+  background-size:22px 22px!important;
+}
+html body .CanvasEditor-toolbar{
+  height:56px!important;padding:0 14px!important;
+  background:rgba(255,255,255,.88)!important;backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--cv-border-soft)!important;
+  box-shadow:0 1px 2px rgba(15,23,42,.03);
+}
+html body .CanvasEditor-title{font-size:14px!important;font-weight:500!important;color:var(--cv-text)!important;}
+html body .CanvasEditor-title-input{
+  font-size:14px!important;font-weight:500!important;color:var(--cv-text)!important;
+  border-radius:10px!important;border:1px solid transparent!important;background:transparent!important;padding:4px 8px!important;
+}
+html body .CanvasEditor-title-input:hover,
+html body .CanvasEditor-title-input:focus{background:#fff!important;border-color:var(--cv-border)!important;box-shadow:0 0 0 3px rgba(59,130,246,.10)!important;}
+
+html body .CanvasEditor-toolbar-left button,
+html body .CanvasEditor-toolbar-right button{
+  border-radius:999px!important;border:1px solid var(--cv-border)!important;background:#fff!important;
+  color:#4b5563!important;font-size:13px!important;padding:6px 14px!important;transition:all .15s!important;
+}
+html body .CanvasEditor-toolbar-left button:hover,
+html body .CanvasEditor-toolbar-right button:hover{border-color:#bfdbfe!important;color:var(--cv-primary)!important;background:#f8fbff!important;}
+html body .CanvasEditor-save-button,
+html body .CanvasEditor-share-button,
+html body .CanvasEditor-export-button{
+  background:var(--cv-grad)!important;border-color:transparent!important;color:#fff!important;
+  box-shadow:0 6px 18px -6px rgba(37,99,235,.45)!important;
+}
+
+/* 节点卡片（所有 *Node-* 组件共用） */
+html body [class$="-node"], html body [class*="Node "],
+html body [class*="Node-wrapper"], html body [class*="Node-card"]{
+  border-radius:var(--cv-radius)!important;border:1px solid var(--cv-border-soft)!important;
+  background:#fff!important;box-shadow:var(--cv-shadow)!important;
+}
+html body [class*="Node-header"]{background:#fff!important;border-bottom:1px solid var(--cv-border-soft)!important;border-radius:var(--cv-radius) var(--cv-radius) 0 0!important;}
+html body [class*="Node-header"] *{font-size:13px!important;font-weight:500!important;color:var(--cv-text)!important;}
+html body [class*="Node-image"], html body [class*="Node-images"] img{border-radius:10px!important;}
+html body [class*="Node-param-label"], html body [class*="Node-metric-label"]{font-size:11px!important;color:#9ca3af!important;}
+html body [class*="Node-param-value"], html body [class*="Node-metric-value"]{font-size:12px!important;color:#374151!important;}
+html body [class*="Node-prompt"]{font-size:12px!important;color:#4b5563!important;line-height:1.6!important;}
+html body [class*="Node-charge"]{color:var(--cv-primary)!important;font-size:11px!important;}
+html body [class*="Node-button"]{
+  border-radius:999px!important;border:1px solid var(--cv-border)!important;background:#fff!important;color:#4b5563!important;font-size:12px!important;
+}
+html body [class*="Node-button"]:hover{border-color:#bfdbfe!important;color:var(--cv-primary)!important;background:#f8fbff!important;}
+html body [class*="Node-error"]{border-radius:10px!important;background:#fef2f2!important;color:#b91c1c!important;font-size:12px!important;}
+
+/* 编辑器弹窗 */
+html body .CanvasEditor-dialog{border-radius:20px!important;box-shadow:0 24px 60px -20px rgba(15,23,42,.35)!important;background:#fff!important;}
+html body .CanvasEditor-dialog-overlay{background:rgba(15,23,42,.45)!important;backdrop-filter:blur(4px);}
+html body .CanvasEditor-dialog-title{font-size:17px!important;font-weight:500!important;}
+html body .CanvasEditor-dialog-button{border-radius:999px!important;}
+html body .CanvasEditor-dialog-button-confirm{background:var(--cv-grad)!important;color:#fff!important;border:0!important;}
