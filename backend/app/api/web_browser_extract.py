@@ -691,8 +691,30 @@ async def web_browser_extract(body: BrowserExtractBody) -> Dict[str, Any]:
     parsed = urlparse(body.url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return {"ok": False, "code": "invalid_url", "error": "只支持 http/https 网址"}
+    # 硬超时：任何一条路径都不允许无限挂起（2026-10-26 事故：assist 任务挂了 8 小时）。
+    hard_timeout = (max(30, int(body.assist_timeout_seconds)) + 60) if body.assist else 180
     try:
-        data = await (_extract_assisted(body) if body.assist else _extract(body))
+        data = await asyncio.wait_for(
+            _extract_assisted(body) if body.assist else _extract(body),
+            timeout=hard_timeout,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("[web-browser-extract] timeout url=%s assist=%s limit=%ss", body.url, body.assist, hard_timeout)
+        return {
+            "ok": True,
+            "data": {
+                "url": body.url,
+                "status": "needs_user" if body.assist else "low_content",
+                "assisted": bool(body.assist),
+                "user_hint": (
+                    "浏览器窗口已保留：请在窗口里完成验证/登录，完成后让我再抓一次。"
+                    if body.assist
+                    else "抓取超时，页面可能被拦截；可以改用可见浏览器再试。"
+                ),
+                "timeout_seconds": hard_timeout,
+                "fetched_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            },
+        }
     except Exception as exc:
         logger.warning("[web-browser-extract] failed url=%s err=%s", body.url, exc)
         return {"ok": False, "code": "extract_failed", "error": str(exc)}
