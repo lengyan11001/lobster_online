@@ -38,13 +38,27 @@
   },true);
 })();
 </script><script id="lobster-canvas-embed">/* 嵌在客户端 iframe 里时：SPA 一旦离开编辑器路由（例如编辑器左上角返回会回到 #/ 的原生灵感页），
-   立刻通知宿主切回设计页，避免套娃。*/ 
+   先把自己隐藏、再通知宿主切回设计页，避免原生灵感页闪一下。*/
 (function(){
   if (window.parent === window) return;
-  function ping(){
-    try { window.parent.postMessage({ type: "canvas:route", hash: location.hash || "" }, "*"); } catch (e) {}
+  var left = false;
+  function isEditor(h){ return String(h || "").indexOf("#/canvas-editor/") === 0; }
+  function ping(h){
+    try { window.parent.postMessage({ type: "canvas:route", hash: h || "" }, "*"); } catch (e) {}
   }
-  window.addEventListener("hashchange", ping);
-  ping();
+  function leave(h){
+    if (left || !h || isEditor(h)) return;
+    left = true;
+    try { document.documentElement.style.visibility = "hidden"; } catch (e) {}
+    ping(h);
+    setTimeout(function(){
+      try { document.documentElement.style.visibility = ""; } catch (e) {}
+    }, 1500);
+  }
+  window.addEventListener("hashchange", function(){ leave(location.hash || ""); });
+  var ps = history.pushState, rs = history.replaceState;
+  history.pushState = function(){ var r = ps.apply(history, arguments); leave(location.hash || ""); return r; };
+  history.replaceState = function(){ var r = rs.apply(history, arguments); leave(location.hash || ""); return r; };
+  if (location.hash) ping(location.hash);
 })();
 </script></head><body><noscript>请启用 JavaScript 以使用剧查查超级工厂。</noscript><div id="root"></div></body></html>
