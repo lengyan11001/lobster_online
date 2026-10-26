@@ -92,115 +92,7 @@
                 </div>
 
                 <!-- 瀑布流画廊区 (Masonry Grid) -->
-                <div class="masonry-grid">
-                    
-                    <!-- 灵感卡片 1 (竖图) -->
-                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="/static/canvas-ui/thumbs/t1.svg" class="w-full h-auto object-cover" alt="果汁海报">
-                        
-                        <!-- 悬停黑透遮罩 -->
-                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
-                            <!-- 顶部互动数据 -->
-                            <div class="absolute top-4 right-4 flex space-x-2">
-                                <div class="w-8 h-8 rounded-full bg-white/20 backdrop-blur-md flex items-center justify-center text-white hover:bg-white/40 transition-colors"><i class="fa-regular fa-heart text-[14px]"></i></div>
-                            </div>
-                            
-                            <h4 class="text-white text-[15px] font-medium mb-1">清爽青苹鲜榨果汁商用海报</h4>
-                            <div class="flex items-center text-white/70 text-[11px] mb-4">
-                                <img src="/static/canvas-ui/thumbs/t2.svg" class="w-4 h-4 rounded-full mr-1.5" alt="作者">
-                                <span>设计美学实验室</span>
-                            </div>
-                            
-                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
-                                提取咒语 / 做同款
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- 灵感卡片 2 (稍微偏方) -->
-                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="/static/canvas-ui/thumbs/t3.svg" class="w-full h-auto object-cover" alt="建筑风景">
-                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
-                            <h4 class="text-white text-[15px] font-medium mb-1">冬日暖阳 希腊风小镇</h4>
-                            <div class="flex items-center text-white/70 text-[11px] mb-4">
-                                <span>MJ V6 · 摄影写实风</span>
-                            </div>
-                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
-                                提取咒语 / 做同款
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- 灵感卡片 3 (长竖图) -->
-                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="/static/canvas-ui/thumbs/t4.svg" class="w-full h-auto object-cover" alt="二次元排版">
-                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
-                            <h4 class="text-white text-[15px] font-medium mb-1">漫画分镜叙事拼图排版</h4>
-                            <div class="flex items-center text-white/70 text-[11px] mb-4">
-                                <span>小红书高赞图文配方</span>
-                            </div>
-                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
-                                提取咒语 / 做同款
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- 灵感卡片 4 (偏方图) -->
-                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="/static/canvas-ui/thumbs/t5.svg" class="w-full h-auto object-cover" alt="3D卡通仓鼠">
-                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
-                            <h4 class="text-white text-[15px] font-medium mb-1">皮克斯风 厨师小仓鼠烤串</h4>
-                            <div class="flex items-center text-white/70 text-[11px] mb-4">
-                                <span>3D IP / 趣味拟人</span>
-                            </div>
-                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
-                                提取咒语 / 做同款
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- 灵感卡片 5 (横图) -->
-                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="/static/canvas-ui/thumbs/t6.svg" class="w-full h-auto object-cover" alt="中国风">
-                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
-                            <h4 class="text-white text-[15px] font-medium mb-1">古风人物电影级光影写实</h4>
-                            <div class="flex items-center text-white/70 text-[11px] mb-4">
-                                <span>影视剧解说封面配方</span>
-                            </div>
-                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
-                                提取咒语 / 做同款
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <!-- 灵感卡片 6 (竖图) -->
-                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="/static/canvas-ui/thumbs/t1.svg" class="w-full h-auto object-cover" alt="赛博朋克龙">
-                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
-                            <h4 class="text-white text-[15px] font-medium mb-1">赛博机甲风 霓虹巨龙神兽</h4>
-                            <div class="flex items-center text-white/70 text-[11px] mb-4">
-                                <span>潮玩盲盒 / 强视觉冲击</span>
-                            </div>
-                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
-                                提取咒语 / 做同款
-                            </button>
-                        </div>
-                    </div>
-
-                    <!-- 灵感卡片 7 (偏横图) -->
-                    <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="/static/canvas-ui/thumbs/t2.svg" class="w-full h-auto object-cover" alt="微缩景观">
-                        <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
-                            <h4 class="text-white text-[15px] font-medium mb-1">微缩世界 / 治愈系客厅内景</h4>
-                            <div class="flex items-center text-white/70 text-[11px] mb-4">
-                                <span>移轴镜头 / 暖光氛围</span>
-                            </div>
-                            <button class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white rounded-xl py-2.5 text-[13px] font-medium shadow-lg transform translate-y-4 group-hover:translate-y-0 transition-transform duration-300">
-                                提取咒语 / 做同款
-                            </button>
-                        </div>
-                    </div>
-                </div>
+                <div class="masonry-grid" id="inspirationGrid"></div>
 
                 <!-- 底部加载提示 -->
                 <div class="py-12 flex flex-col items-center justify-center space-y-4">
@@ -212,5 +104,49 @@
         </main>
     </div>
 
+
+<script>
+(function () {
+  var PLACEHOLDER = "/static/canvas-ui/thumbs/t";
+  function token() { try { return localStorage.getItem('token') || ''; } catch (e) { return ''; } }
+  function rowsOf(payload) {
+    if (!payload) return [];
+    if (Array.isArray(payload.items)) return payload.items;
+    var d = payload.data;
+    if (Array.isArray(d)) return d;
+    if (d && Array.isArray(d.items)) return d.items;
+    return [];
+  }
+  function render(rows) {
+    var grid = document.getElementById('inspirationGrid');
+    if (!grid) return;
+    if (!rows.length) {
+      grid.innerHTML = '<div style="column-span:all;padding:48px 0;text-align:center;color:#9ca3af;font-size:13px;">暂无公开灵感</div>';
+      return;
+    }
+    grid.innerHTML = rows.map(function (row, i) {
+      var img = row.thumbnail_url || (PLACEHOLDER + ((i % 6) + 1) + '.svg');
+      var name = String(row.name || '未命名模板').replace(/[<>&"]/g, '');
+      return '<div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">'
+        + '<img src="' + img + '" class="w-full h-auto object-cover" alt="' + name + '" loading="lazy">'
+        + '<div class="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">'
+        + '<p class="text-white text-[13px] font-medium truncate">' + name + '</p>'
+        + '<div class="flex items-center gap-2 mt-2">'
+        + '<button type="button" class="use-template px-3 py-1.5 rounded-full bg-white text-gray-800 text-[12px]" data-uuid="' + (row.uuid || row.id || '') + '">做同款</button>'
+        + '</div></div></div>';
+    }).join('');
+    grid.addEventListener('click', function (e) {
+      var btn = e.target.closest && e.target.closest('.use-template');
+      if (!btn) return;
+      var id = btn.getAttribute('data-uuid');
+      if (id) location.href = '/api/canvas-local/canvas-frame#/canvas-editor/' + encodeURIComponent(id);
+    });
+  }
+  fetch('/canvas-api/api/v1/projects/public?limit=24', { headers: token() ? { Authorization: 'Bearer ' + token() } : {} })
+    .then(function (r) { return r.json(); })
+    .then(function (d) { render(rowsOf(d)); })
+    .catch(function () { render([]); });
+})();
+</script>
 </body>
 </html>

@@ -128,16 +128,8 @@
         // 模拟数据库状态 (内存数据源)
         let appData = {
             currentFolderId: null, // null 代表根目录，数字代表文件夹 ID
-            folders: [
-                { id: 1, name: "双十一大促物料包", count: 2 },
-                { id: 2, name: "Q4品牌营销海报", count: 0 }
-            ],
-            items: [
-                { id: 101, type: "canvas", name: "秋季上新营销海报排版", time: "更新于 2 小时前", img: "/static/canvas-ui/thumbs/t1.svg", folderId: null },
-                { id: 102, type: "canvas", name: "社交媒体分发矩阵", time: "更新于 昨天 14:30", img: "/static/canvas-ui/thumbs/t2.svg", folderId: null },
-                { id: 103, type: "canvas", name: "必火智能AI概念图", time: "更新于 2026/10/18", img: "", folderId: 1 }, // 属于文件夹 1
-                { id: 104, type: "canvas", name: "神奇空间主视觉", time: "更新于 2026/10/12", img: "", folderId: 1 }    // 属于文件夹 1
-            ]
+            folders: [],
+            items: []
         };
 
         // 渲染主画板函数
