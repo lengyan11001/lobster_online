@@ -46,7 +46,7 @@
             background-repeat: no-repeat; background-position: right 0.8rem center; background-size: 0.8em;
         }
     </style>
-</head>
+<style>#gen-history-scroll{min-height:0;overflow-y:auto;} .hist-card{min-height:0;} aside{max-height:calc(100vh - 24px);overflow-y:auto;}</style></head>
 <body class="h-screen w-screen overflow-hidden flex flex-col text-[13px]">
     
     <!-- 大厂标准 64px (h-16) 高级导航栏 -->
@@ -397,7 +397,7 @@
                         <button id="submit-gen-btn" class="w-full bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white text-[15px] main-title rounded-xl py-3.5 shadow-lg shadow-blue-500/30 transition-all active:scale-[0.98] border-0 flex items-center justify-center">
                             <i class="fa-regular fa-image mr-2 text-[14px]"></i> 生成图片
                         </button>
-<div id="gen-status" class="mt-3 text-[12px] text-gray-500"></div>
+<div id="gen-status" style="margin-top:12px;font-size:12px;color:#6b7280;max-height:260px;overflow:auto;"></div>
                     </div>
 
                 </div>
@@ -426,7 +426,7 @@
                         <span class="text-[11px] text-gray-400 font-light">共 1 条任务</span>
                     </div>
                     
-                    <div class="flex-1 overflow-y-auto p-6 no-scrollbar">
+                    <div id="gen-history-scroll" class="flex-1 overflow-y-auto p-6 no-scrollbar">
                         <div class="w-full flex items-start gap-5 p-4 rounded-xl border border-gray-100 hover:border-blue-200 shadow-sm hover:shadow-md transition-all group bg-white">
                             <div class="w-[100px] h-[100px] shrink-0 rounded-lg overflow-hidden border border-gray-200 relative cursor-pointer">
                                 <img src="/static/canvas-ui/thumbs/t1.svg" alt="缩略图" class="w-full h-full object-cover">
@@ -622,9 +622,18 @@
     var m = state.models.filter(function (x) { return x.id === id; })[0];
     return m ? (m.name || m.id) : id;
   }
+
+  function stripHtml(text) {
+    return String(text || "")
+      .replace(/<[^>]*>/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
   function setStatus(text) {
     var el = document.getElementById("gen-status");
-    if (el) el.textContent = text || "";
+    if (el) el.textContent = stripHtml(text);
   }
   function loadModels() {
     return api("/canvas-api/api/v3/models").then(function (d) {
@@ -671,11 +680,12 @@
   function renderResult(url) {
     var el = document.getElementById("gen-status");
     if (!el) return;
-    var isVideo = /\.(mp4|mov|webm)(\?|$)/i.test(url);
+    var safe = String(url || "").replace(/"/g, "%22").replace(/</g, "%3C");
+    var isVideo = /\.(mp4|mov|webm)(\?|$)/i.test(safe);
     el.innerHTML = (isVideo
-      ? '<video src="' + url + '" controls playsinline style="max-width:100%;border-radius:12px"></video>'
-      : '<img src="' + url + '" style="max-width:100%;border-radius:12px" />')
-      + '<div style="margin-top:8px"><a href="' + url + '" target="_blank" rel="noopener">打开原文件</a></div>';
+      ? '<video src="' + safe + '" controls playsinline style="max-width:100%;border-radius:12px"></video>'
+      : '<img src="' + safe + '" style="max-width:100%;border-radius:12px" />')
+      + '<div style="margin-top:8px"><a href="' + safe + '" target="_blank" rel="noopener">打开原文件</a></div>';
   }
   function pollTask(taskId) {
     var tries = 0;
