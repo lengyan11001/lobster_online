@@ -395,3 +395,29 @@ html body .GeneratePage-reference-add{width:auto!important;min-height:36px!impor
 /* 数字更浅 */
 html body .GeneratePage-prompt-count{color:#d1d5db!important;font-size:11px!important;}
 html body .GeneratePage-section-count{color:#9ca3af!important;font-size:11px!important;}
+
+/* ===== 视频模式配色（按设计稿视频截图） ===== */
+html[data-gen-mode="video"] .GeneratePage-model-tabs > button.is-active{background:#ecfdf5!important;border-color:#bbf7d0!important;color:#16a34a!important;}
+html[data-gen-mode="video"] .GeneratePage-model-tabs > button.is-active span{background:#bbf7d0!important;color:#15803d!important;}
+html[data-gen-mode="video"] .GeneratePage-model-picker,
+html[data-gen-mode="video"] .GeneratePage-model-picker-trigger{border-color:#fca5a5!important;}
+html[data-gen-mode="video"] .GeneratePage-model-mark{background:#fef2f2!important;color:#ef4444!important;}
+/* 参考素材三连按钮：同排、紧凑 */
+html body .GeneratePage-reference-actions{display:flex!important;flex-wrap:wrap!important;gap:8px!important;}
+
+/* tab 选中态由脚本打 class 决定，避免和 SPA 自带样式打架 */
+html body .GeneratePage-model-tabs > button{border:0!important;background:transparent!important;color:#6b7280!important;}
+html body .GeneratePage-model-tabs > button.lobster-active-image{background:#e0edff!important;border:1px solid #bfdbfe!important;color:#2563eb!important;}
+html body .GeneratePage-model-tabs > button.lobster-active-video{background:#ecfdf5!important;border:1px solid #bbf7d0!important;color:#16a34a!important;}
+html body .GeneratePage-model-tabs > button.lobster-active-image span{background:#bfdbfe!important;color:#2563eb!important;}
+html body .GeneratePage-model-tabs > button.lobster-active-video span{background:#bbf7d0!important;color:#15803d!important;}
+html body .GeneratePage-model-tabs > button:not(.lobster-active-image):not(.lobster-active-video) span{background:#f3f4f6!important;color:#9ca3af!important;}
+
+/* 视频模式参考素材：三个按钮排一行（设计稿） */
+html[data-gen-mode="video"] .GeneratePage-reference-actions{gap:6px!important;flex-wrap:nowrap!important;}
+html[data-gen-mode="video"] .GeneratePage-reference-action,
+html[data-gen-mode="video"] .GeneratePage-reference-add{font-size:11px!important;padding:6px 8px!important;min-height:32px!important;flex:1 1 0!important;justify-content:center!important;}
+/* 非选中 tab 彻底中性化 */
+html body .GeneratePage-model-tabs > button:not(.lobster-active-image):not(.lobster-active-video){color:#6b7280!important;background:transparent!important;border:0!important;}
+html body .GeneratePage-model-tabs > button:not(.lobster-active-image):not(.lobster-active-video) svg,
+html body .GeneratePage-model-tabs > button:not(.lobster-active-image):not(.lobster-active-video) i{color:#9ca3af!important;fill:#9ca3af!important;}
