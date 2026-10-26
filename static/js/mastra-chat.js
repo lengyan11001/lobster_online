@@ -1228,8 +1228,11 @@
     if (!message.id) return;
     var welcome = el('onlineMastraEmpty');
     if (welcome) welcome.remove();
-    var userBubble = createBubble('user', message.content || (message.attachments && message.attachments.length ? '已添加 ' + message.attachments.length + ' 个素材' : ''));
-    addAttachmentView(userBubble, message.attachments || []);
+    var internal = message.internal === true;
+    if (!internal) {
+      var userBubble = createBubble('user', message.content || (message.attachments && message.attachments.length ? '已添加 ' + message.attachments.length + ' 个素材' : ''));
+      addAttachmentView(userBubble, message.attachments || []);
+    }
     var final = ['completed', 'failed', 'cancelled'].indexOf(text(message.status)) >= 0;
     var historicalHasDelta = (item.events || []).some(function (event) { return event && text(event.type || event.event_type) === 'delta'; });
     var assistantBubble = createBubble('assistant', final ? (message.reply_text || message.error || (message.status === 'cancelled' ? '已取消' : '处理完成。')) : (historicalHasDelta ? '' : '正在处理…'));
