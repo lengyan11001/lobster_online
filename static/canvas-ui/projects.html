@@ -101,58 +101,6 @@
     <div class="flex flex-1 overflow-hidden relative">
         
         <!-- 左侧全局导航 -->
-        <aside id="app-sidebar" class="w-[240px] bg-white border-r border-gray-100 flex flex-col shrink-0 z-20 shadow-[2px_0_10px_rgba(0,0,0,0.01)] relative">
-            <button id="sidebarToggle" class="sidebar-toggle-btn">
-                <i class="fa-solid fa-chevron-left text-[10px]"></i>
-            </button>
-
-            <div class="flex-1 overflow-y-auto py-5 px-3 space-y-6">
-                <div>
-                    <div class="menu-group-title text-[11px] text-gray-400 px-3 mb-2 flex items-center cursor-pointer hover:text-gray-600">
-                        <i class="fa-solid fa-chevron-down mr-2 text-[9px] sidebar-chevron"></i> AI 营销创作
-                    </div>
-                    <ul class="space-y-1 pl-1">
-                        <li>
-                            <a href="#" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 text-gray-500 hover:bg-gray-50 rounded-lg transition-colors group">
-                                <i class="sidebar-icon fa-solid fa-pen-nib w-5 text-center text-gray-400 group-hover:text-blue-500"></i>
-                                <span class="sidebar-text flex-1 text-[13px]">AI 设计图</span>
-                            </a>
-                        </li>
-                        <li>
-                            <a href="#" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 text-gray-500 hover:bg-gray-50 rounded-lg transition-colors group">
-                                <i class="sidebar-icon fa-regular fa-user-circle w-5 text-center text-gray-400 group-hover:text-blue-500"></i>
-                                <span class="sidebar-text flex-1 text-[13px]">数字人口播视频</span>
-                            </a>
-                        </li>
-                        <li>
-                            <a href="#" class="sidebar-item-container flex items-center space-x-3 px-3 py-2 bg-blue-50/60 text-blue-600 rounded-lg transition-colors group">
-                                <i class="sidebar-icon fa-solid fa-lightbulb w-5 text-center text-blue-500"></i>
-                                <span class="sidebar-text flex-1 text-[13px] font-medium">灵感画布</span>
-                            </a>
-                        </li>
-                    </ul>
-                </div>
-            </div>
-        </aside>
-
-        <!-- 内部二级工具栏 -->
-        <div class="w-[80px] bg-gray-50/50 border-r border-gray-100 flex flex-col items-center py-6 gap-6 shrink-0 z-10">
-            <a href="/static/canvas-ui/inspiration.html" class="flex flex-col items-center justify-center w-14 h-14 rounded-2xl text-gray-400 hover:text-gray-700 hover:bg-gray-100/80 transition-colors group cursor-pointer">
-                <i class="fa-solid fa-wand-magic-sparkles text-[18px] mb-1 group-hover:scale-110 transition-transform"></i>
-                <span class="text-[11px]">灵感</span>
-            </a>
-            <a href="/static/canvas-ui/generate.html" class="flex flex-col items-center justify-center w-14 h-14 rounded-2xl text-gray-400 hover:text-gray-700 hover:bg-gray-100/80 transition-colors group cursor-pointer">
-                <i class="fa-solid fa-layer-group text-[18px] mb-1 group-hover:scale-110 transition-transform"></i>
-                <span class="text-[11px]">生成</span>
-            </a>
-            <a href="/static/canvas-ui/projects.html" class="flex flex-col items-center justify-center w-14 h-14 rounded-2xl bg-white shadow-[0_4px_12px_rgba(59,130,246,0.15)] text-blue-600 group relative cursor-pointer">
-                <div class="absolute inset-0 rounded-2xl border-2 border-blue-500/20"></div>
-                <i class="fa-solid fa-border-all text-[18px] mb-1 group-hover:scale-110 transition-transform"></i>
-                <span class="text-[11px] font-medium">画布</span>
-            </a>
-        </div>
-
-        <!-- 主内容区 -->
         <main class="flex-1 overflow-y-auto relative bg-[#faf9f8] flex flex-col z-0">
             <div class="absolute top-0 right-0 w-[40rem] h-[40rem] bg-blue-300/10 rounded-full blur-[100px] pointer-events-none -z-10"></div>
             
