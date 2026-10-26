@@ -145,6 +145,7 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     # 只放代码与功能资源；用户运行期产出目录（static/generated、static/hifly_avatars、
     # static/hifly_previews、static/uploads…）绝不能列进来：清单里的目录会按"包里没有的文件"对账删除。
     "static/canvas-web",
+    "static/canvas-ui",
     "static/douyin-origin",
     "static/vendor",
     "static/data",

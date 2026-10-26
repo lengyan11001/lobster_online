@@ -1,6 +1,7 @@
 {
-  "version": "2.0.194",
-  "build": 491,
-  "applied_at": "2026-10-25T16:30:00+08:00",
-  "note": "restore device browser_extract_page"
+  "version": "2.0.196",
+  "build": 493,
+  "applied_at": "2026-10-26T17:45:23+08:00",
+  "note": "canvas: inspiration paging+dedupe+tabs; editor back stays in studio; ship static/canvas-ui",
+  "bundle_sha256": "4cb45dbd0845945f98e355701bb734c78ffa7c4d88605fc492a5b0386d407b35"
 }
