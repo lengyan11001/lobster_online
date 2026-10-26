@@ -3,9 +3,9 @@
   "use strict";
 
   var SCREENS = {
-    inspiration: "/static/canvas-ui/inspiration.html?v=20261026-canvas-ui-v6",
-    generate: "/static/canvas-ui/generate.html?v=20261026-canvas-ui-v6",
-    projects: "/static/canvas-ui/projects.html?v=20261026-canvas-ui-v6"
+    inspiration: "/static/canvas-ui/inspiration.html?v=20261026-canvas-ui-v7",
+    generate: "/static/canvas-ui/generate.html?v=20261026-canvas-ui-v7",
+    projects: "/static/canvas-ui/projects.html?v=20261026-canvas-ui-v7"
   };
 
   function pywebviewApi() {
