@@ -185,3 +185,50 @@ html body .GeneratePage-history-item-header *{overflow-wrap:anywhere!important;w
 html body .GeneratePage-history-actions{flex:0 0 auto!important;display:flex!important;gap:6px!important;align-items:center!important;}
 html body .GeneratePage-history-action{white-space:nowrap!important;font-size:12px!important;padding:6px 10px!important;border-radius:999px!important;}
 html body .GeneratePage-history-item-footer{flex-wrap:wrap!important;gap:8px!important;}
+
+/* ===== 2026-10-26 GeneratePage：按设计稿重排（左侧 340 控制栏 + 右侧结果 / 下方历史 280） ===== */
+html body .CanvasWorkspaceSidebar{display:none!important;}
+html body .canvas-workspace-content{width:100%!important;flex:1 1 auto!important;display:flex!important;flex-direction:column!important;min-height:0!important;}
+html body,
+html body #root{height:100%!important;}
+html body .canvas-workspace{height:100%!important;overflow:hidden!important;}
+html body .canvas-workspace-content{height:100%!important;overflow:hidden!important;}
+html body .GeneratePage-root,
+html body .GeneratePage-root > main{height:100%!important;}
+html body .GeneratePage-root{background:#faf9f8!important;}
+html body .GeneratePage-main{background:#faf9f8!important;padding:24px!important;display:flex!important;flex-direction:column!important;gap:16px!important;overflow:hidden!important;height:100%!important;}
+html body .GeneratePage-header{background:transparent!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;padding:0!important;min-height:0!important;}
+html body .GeneratePage-header h1{font-size:20px!important;font-weight:500!important;color:#111827!important;letter-spacing:-.02em!important;margin:0!important;}
+html body .GeneratePage-workspace{flex:1 1 auto!important;min-height:0!important;overflow:hidden!important;display:grid!important;grid-template-columns:340px minmax(0,1fr)!important;grid-template-rows:minmax(0,1fr) 280px!important;gap:24px!important;}
+html body .GeneratePage-controls{grid-column:1!important;grid-row:1 / span 2!important;min-height:0!important;overflow-y:auto!important;padding:20px!important;}
+html body .GeneratePage-results{grid-column:2!important;grid-row:1!important;min-height:0!important;overflow:hidden!important;display:flex!important;flex-direction:column!important;}
+html body .GeneratePage-history{grid-column:2!important;grid-row:2!important;height:280px!important;min-height:280px!important;overflow:hidden!important;display:flex!important;flex-direction:column!important;}
+html body .GeneratePage-history-list{overflow-y:auto!important;padding:16px 20px!important;display:flex!important;flex-direction:column!important;gap:12px!important;}
+
+html body .GeneratePage-controls,
+html body .GeneratePage-results,
+html body .GeneratePage-history{background:#fff!important;border:1px solid #f3f4f6!important;border-radius:16px!important;box-shadow:0 4px 20px -4px rgba(0,0,0,.03)!important;}
+
+html body .GeneratePage-section-heading h2{font-size:13px!important;font-weight:500!important;color:#1f2937!important;margin:0!important;}
+html body .GeneratePage-section-heading p{font-size:11px!important;color:#9ca3af!important;font-weight:300!important;margin:2px 0 0!important;}
+html body .GeneratePage-results-header h2,
+html body .GeneratePage-history-header h3{font-size:14px!important;font-weight:500!important;color:#1f2937!important;margin:0!important;}
+html body .GeneratePage-results-header p,
+html body .GeneratePage-history-header p{font-size:11px!important;color:#9ca3af!important;font-weight:300!important;margin:2px 0 0!important;}
+
+html body .GeneratePage-prompt-field textarea,
+html body .GeneratePage-prompt-field input{border:1px solid #e5e7eb!important;border-radius:12px!important;background:#f9fafb!important;font-size:13px!important;padding:12px!important;color:#374151!important;}
+html body .GeneratePage-params-panel,
+html body .GeneratePage-params-section{border:1px solid #e5e7eb!important;border-radius:12px!important;padding:12px!important;background:#fff!important;}
+html body .GeneratePage-reference-action,
+html body .GeneratePage-reference-add{border:1px solid #e5e7eb!important;border-radius:12px!important;background:#fff!important;font-size:11px!important;padding:8px 12px!important;color:#4b5563!important;}
+html body .GeneratePage-reference-action:hover,
+html body .GeneratePage-reference-add:hover{border-color:#93c5fd!important;background:#eff6ff!important;}
+html body .GeneratePage-submit{width:100%!important;border:0!important;border-radius:12px!important;color:#fff!important;font-size:15px!important;font-weight:500!important;padding:14px 18px!important;background:linear-gradient(90deg,#06b6d4,#2563eb)!important;box-shadow:0 12px 24px -12px rgba(37,99,235,.6)!important;}
+html body .GeneratePage-submit:hover{filter:brightness(1.04)!important;}
+html body .GeneratePage-history-item{display:flex!important;align-items:flex-start!important;gap:20px!important;padding:16px!important;border-radius:12px!important;border:1px solid #f3f4f6!important;background:#fff!important;box-shadow:0 1px 2px rgba(0,0,0,.03)!important;}
+html body .GeneratePage-history-thumb{flex:0 0 100px!important;width:100px!important;height:100px!important;border-radius:10px!important;}
+html body .GeneratePage-history-item-body{display:flex!important;flex-direction:column!important;justify-content:space-between!important;min-height:100px!important;}
+html body .GeneratePage-history-item-header{display:flex!important;align-items:flex-start!important;justify-content:space-between!important;gap:8px!important;}
+html body .GeneratePage-history-action{border:1px solid #bfdbfe!important;border-radius:8px!important;background:#fff!important;color:#2563eb!important;font-size:11px!important;padding:6px 12px!important;}
+html body .GeneratePage-history-action:hover{background:#2563eb!important;color:#fff!important;}
