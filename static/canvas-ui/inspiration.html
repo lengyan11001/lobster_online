@@ -81,38 +81,14 @@
             <div class="max-w-[1600px] w-full mx-auto relative z-10">
                 
                 <!-- 顶部引导与筛选区 (取代原来的红色横幅) -->
-                <div class="flex flex-col mb-8">
-                    <h1 class="text-[32px] md:text-[38px] main-title text-gray-900 mb-3 tracking-tight">探索无界灵感</h1>
-                    <p class="text-[14px] text-gray-500 mb-8 font-light max-w-2xl">
-                        发现全网顶尖 AI 创作者的优秀作品。无需从零开始，一键复用爆款配方、提示词与工作流，轻松开启您的下一次创作。
-                    </p>
-
-                    <!-- SaaS 高级标签过滤器 -->
-                    <div class="flex items-center justify-between border-b border-gray-200/60 pb-4">
-                        <div class="flex space-x-2 overflow-x-auto no-scrollbar pb-1">
-                            <button class="px-5 py-2 bg-gray-900 text-white rounded-full text-[13px] font-medium whitespace-nowrap shadow-sm">全部发现</button>
-                            <button class="px-5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-full text-[13px] whitespace-nowrap transition-colors">爆款带货海报</button>
-                            <button class="px-5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-full text-[13px] whitespace-nowrap transition-colors">小红书图文</button>
-                            <button class="px-5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-full text-[13px] whitespace-nowrap transition-colors">摄影级人像</button>
-                            <button class="px-5 py-2 bg-white hover:bg-gray-50 border border-gray-200 text-gray-600 rounded-full text-[13px] whitespace-nowrap transition-colors">3D 卡通 IP</button>
-                        </div>
-                        
-                        <!-- 搜索与排序 -->
-                        <div class="hidden lg:flex items-center space-x-3 shrink-0 ml-6">
-                            <div class="relative">
-                                <input type="text" placeholder="搜索风格 / 提示词..." class="w-48 bg-white border border-gray-200 text-[12px] rounded-full py-2 pl-8 pr-3 focus:outline-none focus:border-blue-300 focus:ring-1 focus:ring-blue-100 transition-all shadow-sm">
-                                <i class="fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-gray-400 text-[11px]"></i>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                
 
                 <!-- 瀑布流画廊区 (Masonry Grid) -->
                 <div class="masonry-grid">
                     
                     <!-- 灵感卡片 1 (竖图) -->
                     <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="https://images.unsplash.com/photo-1594212711019-74e50eb9321e?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="果汁海报">
+                        <img src="/static/canvas-ui/thumbs/t1.svg" class="w-full h-auto object-cover" alt="果汁海报">
                         
                         <!-- 悬停黑透遮罩 -->
                         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
@@ -123,7 +99,7 @@
                             
                             <h4 class="text-white text-[15px] font-medium mb-1">清爽青苹鲜榨果汁商用海报</h4>
                             <div class="flex items-center text-white/70 text-[11px] mb-4">
-                                <img src="https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&q=80" class="w-4 h-4 rounded-full mr-1.5" alt="作者">
+                                <img src="/static/canvas-ui/thumbs/t2.svg" class="w-4 h-4 rounded-full mr-1.5" alt="作者">
                                 <span>设计美学实验室</span>
                             </div>
                             
@@ -135,7 +111,7 @@
 
                     <!-- 灵感卡片 2 (稍微偏方) -->
                     <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="https://images.unsplash.com/photo-1518005020951-eccb494ad742?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="建筑风景">
+                        <img src="/static/canvas-ui/thumbs/t3.svg" class="w-full h-auto object-cover" alt="建筑风景">
                         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
                             <h4 class="text-white text-[15px] font-medium mb-1">冬日暖阳 希腊风小镇</h4>
                             <div class="flex items-center text-white/70 text-[11px] mb-4">
@@ -149,7 +125,7 @@
 
                     <!-- 灵感卡片 3 (长竖图) -->
                     <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="https://images.unsplash.com/photo-1628157588553-5eeea00af15c?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="二次元排版">
+                        <img src="/static/canvas-ui/thumbs/t4.svg" class="w-full h-auto object-cover" alt="二次元排版">
                         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
                             <h4 class="text-white text-[15px] font-medium mb-1">漫画分镜叙事拼图排版</h4>
                             <div class="flex items-center text-white/70 text-[11px] mb-4">
@@ -163,7 +139,7 @@
 
                     <!-- 灵感卡片 4 (偏方图) -->
                     <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="https://images.unsplash.com/photo-1543332164-6e82f355badc?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="3D卡通仓鼠">
+                        <img src="/static/canvas-ui/thumbs/t5.svg" class="w-full h-auto object-cover" alt="3D卡通仓鼠">
                         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
                             <h4 class="text-white text-[15px] font-medium mb-1">皮克斯风 厨师小仓鼠烤串</h4>
                             <div class="flex items-center text-white/70 text-[11px] mb-4">
@@ -177,7 +153,7 @@
 
                     <!-- 灵感卡片 5 (横图) -->
                     <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="https://images.unsplash.com/photo-1506812584074-4b533a84f3eb?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="中国风">
+                        <img src="/static/canvas-ui/thumbs/t6.svg" class="w-full h-auto object-cover" alt="中国风">
                         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
                             <h4 class="text-white text-[15px] font-medium mb-1">古风人物电影级光影写实</h4>
                             <div class="flex items-center text-white/70 text-[11px] mb-4">
@@ -191,7 +167,7 @@
                     
                     <!-- 灵感卡片 6 (竖图) -->
                     <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="https://images.unsplash.com/photo-1618331835717-801e976710b2?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="赛博朋克龙">
+                        <img src="/static/canvas-ui/thumbs/t1.svg" class="w-full h-auto object-cover" alt="赛博朋克龙">
                         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
                             <h4 class="text-white text-[15px] font-medium mb-1">赛博机甲风 霓虹巨龙神兽</h4>
                             <div class="flex items-center text-white/70 text-[11px] mb-4">
@@ -205,7 +181,7 @@
 
                     <!-- 灵感卡片 7 (偏横图) -->
                     <div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">
-                        <img src="https://images.unsplash.com/photo-1512413914583-1628d052dcc9?ixlib=rb-4.0.3&auto=format&fit=crop&w=600&q=80" class="w-full h-auto object-cover" alt="微缩景观">
+                        <img src="/static/canvas-ui/thumbs/t2.svg" class="w-full h-auto object-cover" alt="微缩景观">
                         <div class="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-5 backdrop-blur-[1px]">
                             <h4 class="text-white text-[15px] font-medium mb-1">微缩世界 / 治愈系客厅内景</h4>
                             <div class="flex items-center text-white/70 text-[11px] mb-4">
