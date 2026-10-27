@@ -2689,12 +2689,23 @@ function _assetPublishIsOnlineAccount(account) {
   return status === 'active' || status === 'online';
 }
 
+function _assetPublishStatusRank(account) {
+  var status = String(account && account.status || '').trim().toLowerCase();
+  if (status === 'active' || status === 'online') return 0;
+  if (status === 'pending' || status === 'waiting') return 1;
+  return 2;
+}
+
 function _assetPublishAccountList(accounts) {
+  // Show logged-out accounts too: hiding them behind an empty <select> makes
+  // the modal look broken. Active accounts still sort first.
   return (accounts || []).filter(function(account) {
     var platform = String(account && account.platform || '').trim();
-    return platform && !ECOMMERCE_PLATFORMS[platform] && PUBLISH_ACCOUNT_PLATFORMS.indexOf(platform) >= 0 && _assetPublishIsOnlineAccount(account);
+    return platform && !ECOMMERCE_PLATFORMS[platform] && PUBLISH_ACCOUNT_PLATFORMS.indexOf(platform) >= 0;
   }).sort(function(a, b) {
-    return String(a.platform || '').localeCompare(String(b.platform || '')) || String(a.nickname || '').localeCompare(String(b.nickname || ''));
+    return _assetPublishStatusRank(a) - _assetPublishStatusRank(b)
+      || String(a.platform || '').localeCompare(String(b.platform || ''))
+      || String(a.nickname || '').localeCompare(String(b.nickname || ''));
   });
 }
 
@@ -2736,6 +2747,8 @@ function _assetPublishRenderAccounts(accounts, preferredAccountId) {
     select.innerHTML = '<option value="">暂无可发布账号</option>';
     select.disabled = true;
     _assetPublishUpdateAccountMeta();
+    var emptyMeta = document.getElementById('assetPublishAccountMeta');
+    if (emptyMeta) emptyMeta.textContent = '请先在「发布账号」页面添加并登录账号。';
     return;
   }
   select.disabled = false;
@@ -3168,7 +3181,7 @@ function _assetShowPublishModal(asset) {
   }
   _assetPublishMsgShow('', false);
   if (modal) {
-    modal.style.zIndex = '2147483000';
+    modal.style.zIndex = '2147483647';
     modal.style.display = 'flex';
   }
   return _assetPublishLoadAccounts().catch(function(error) {

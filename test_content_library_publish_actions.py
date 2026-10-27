@@ -75,5 +75,16 @@ def test_asset_publish_modal_closes_floating_action_menu_and_stays_above_it():
     end = publish.index("function _submitAssetPublishModal()", start)
     block = publish[start:end]
     assert "_closeFloatingAssetActionMenus(null)" in block
-    assert "modal.style.zIndex = '2147483000'" in block
+    assert "modal.style.zIndex = '2147483647'" in block
     assert "modal.style.display = 'flex'" in block
+
+def test_publish_account_select_keeps_logged_out_accounts_and_uses_top_modal_layer():
+    publish = (ROOT / "static" / "js" / "publish.js").read_text(encoding="utf-8")
+    start = publish.index("function _assetPublishAccountList(accounts)")
+    end = publish.index("function _assetPublishAccountLabel(account)", start)
+    block = publish[start:end]
+    assert "function _assetPublishStatusRank" in publish
+    assert "_assetPublishStatusRank(a) - _assetPublishStatusRank(b)" in block
+    assert "&& _assetPublishIsOnlineAccount(account)" not in block
+    assert "modal.style.zIndex = '2147483647'" in publish
+    assert "请先在「发布账号」页面添加并登录账号。" in publish
