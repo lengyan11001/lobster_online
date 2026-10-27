@@ -2402,22 +2402,44 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                 except Exception:
                     pass
 
+        _chrome_lock = threading.Lock()
+        _chrome_state = {"applied": False}
+
         def _apply_frameless_chrome() -> None:
             """去掉原生标题栏（图标+文案）；任务栏按钮/缩放/顶部拖动由 frameless_chrome 补回。"""
-            try:
-                from desktop.frameless_chrome import apply as _apply_chrome
-            except ModuleNotFoundError:
-                from frameless_chrome import apply as _apply_chrome
-            try:
-                hwnd = int(window.native.Handle.ToInt64())
-            except Exception as exc:
-                log(f"frameless chrome: no native handle ({exc})")
-                return
-            try:
-                _apply_chrome(hwnd)
-                log(f"frameless chrome applied hwnd={hwnd}")
-            except Exception as exc:
-                log(f"frameless chrome failed: {exc}")
+            with _chrome_lock:
+                if _chrome_state["applied"]:
+                    return
+                try:
+                    from desktop.frameless_chrome import apply as _apply_chrome
+                except ModuleNotFoundError:
+                    from frameless_chrome import apply as _apply_chrome
+                try:
+                    hwnd = int(window.native.Handle.ToInt64())
+                except Exception as exc:
+                    log(f"frameless chrome: no native handle ({exc})")
+                    return
+                try:
+                    _apply_chrome(hwnd)
+                    _chrome_state["applied"] = True
+                    log(f"frameless chrome applied hwnd={hwnd} mode=manual-drag")
+                except Exception as exc:
+                    log(f"frameless chrome failed: {exc}")
+
+        def _apply_frameless_chrome_when_ready() -> None:
+            """Some EdgeChromium/pywebview builds do not emit shown reliably."""
+            for _ in range(300):
+                if _chrome_state["applied"]:
+                    return
+                try:
+                    if int(window.native.Handle.ToInt64()):
+                        log("frameless chrome: applying via fallback")
+                        _apply_frameless_chrome()
+                        return
+                except Exception:
+                    pass
+                threading.Event().wait(0.05)
+            log("frameless chrome: fallback timed out waiting for native handle")
 
         # 只有必火品牌用无边框标题栏（其他 OEM 品牌保持系统原生标题栏）
         _brand_mark = str((_ACTIVE_DESKTOP_BRANDING or {}).get("mark") or "").strip().lower()
@@ -2450,6 +2472,11 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         )
         if _use_frameless:
             window.events.shown += _apply_frameless_chrome
+            threading.Thread(
+                target=_apply_frameless_chrome_when_ready,
+                name="lobster-frameless-fallback",
+                daemon=True,
+            ).start()
 
         def confirm_window_close() -> bool | None:
             if _ALLOW_WINDOW_CLOSE:

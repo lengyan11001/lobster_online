@@ -57,3 +57,12 @@ def test_resize_code_maps_all_edges_and_corners():
 def test_website_ota_ships_frameless_chrome_module():
     pack = (ROOT / "scripts" / "pack_client_code_ota.py").read_text(encoding="utf-8")
     assert '"desktop/frameless_chrome.py"' in pack
+
+def test_frameless_chrome_has_shown_event_fallback_and_is_idempotent():
+    launcher = (ROOT / "desktop" / "launcher.py").read_text(encoding="utf-8")
+    chrome = (ROOT / "desktop" / "frameless_chrome.py").read_text(encoding="utf-8")
+    assert "def _apply_frameless_chrome_when_ready" in launcher
+    assert "applying via fallback" in launcher
+    assert "lobster-frameless-fallback" in launcher
+    assert "if hwnd in _state:" in chrome
+    assert "mode=manual-drag" in launcher

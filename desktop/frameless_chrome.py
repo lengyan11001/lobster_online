@@ -237,6 +237,8 @@ def apply(hwnd: int, *, drag_height: int = 14, border: int = 6, min_width: int =
     """给已创建的窗口加无边框样式 + 拖动/缩放支持。失败返回 False。"""
     if not hwnd:
         return False
+    if hwnd in _state:
+        return True
     style = _user32.GetWindowLongPtrW(hwnd, GWL_STYLE)
     exstyle = _user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
     _user32.SetWindowLongPtrW(
