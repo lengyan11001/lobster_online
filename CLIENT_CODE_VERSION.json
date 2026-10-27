@@ -1,7 +1,7 @@
 {
-  "version": "2.0.197",
-  "build": 494,
-  "applied_at": "2026-10-26T20:33:24+08:00",
-  "note": "canvas: prototype generate page (curated 2/3 models), inspiration without tabs, upload auth fix",
-  "bundle_sha256": "1d50bec2720793e38e00d9d1a09e26e5340cfe766ef01c4348792e20d9bb20bc"
+  "version": "2.0.198",
+  "build": 495,
+  "applied_at": "2026-10-27T13:53:33+08:00",
+  "note": "canvas generate page + inspiration no tabs; ship static/tiktok-origin (fix tiktok 404)",
+  "bundle_sha256": "fd551491650710b0625116739227f65229c6d722a20a1d2ff49e1faed7f9c29c"
 }
