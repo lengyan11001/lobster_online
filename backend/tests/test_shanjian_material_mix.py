@@ -264,3 +264,35 @@ def test_material_mix_workflow_submits_oral_mix_without_digital_human(monkeypatc
     assert result["video_url"] == "https://cdn.example.com/mix.mp4"
     assert result["video_asset_id"] == "local-asset-1"
     assert result["material_count"] == 2
+
+def test_rehost_audio_uses_cloud_user_id_without_local_users_row(monkeypatch):
+    """在线版本机没有 users 行，素材混剪转存音频仍必须用云端 user_id。"""
+    from backend.app.api import shanjian_digital_human
+
+    seen = {}
+
+    async def _fake_persist_audio_for_shanjian(*, audio_url, db, current_user, title):
+        seen["uid"] = current_user.id
+        seen["audio_url"] = audio_url
+        seen["title"] = title
+        return "https://tos.example.com/rehosted.mp3", "asset-1"
+
+    class _FakeSession:
+        def close(self):
+            seen["closed"] = True
+
+    monkeypatch.setattr(h5_chat_channel, "_auth_context", lambda: ("", ""))
+    monkeypatch.setattr(h5_chat_channel, "read_channel_fallback_user_id", lambda: 31)
+    monkeypatch.setattr(h5_chat_channel, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(shanjian_digital_human, "_persist_audio_for_shanjian", _fake_persist_audio_for_shanjian)
+
+    url = asyncio.run(
+        h5_chat_channel._rehost_audio_for_shanjian(
+            "data:audio/mpeg;base64,AAAA",
+            title="素材混剪口播",
+        )
+    )
+    assert url == "https://tos.example.com/rehosted.mp3"
+    assert seen["uid"] == 31
+    assert seen["title"] == "素材混剪口播"
+    assert seen["closed"] is True

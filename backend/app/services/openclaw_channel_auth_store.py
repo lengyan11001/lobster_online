@@ -54,6 +54,22 @@ def read_channel_fallback() -> Tuple[Optional[str], Optional[str]]:
         return None, None
 
 
+def read_channel_fallback_user_id() -> Optional[int]:
+    """Return the cloud user id stored next to the persisted channel JWT."""
+    path = _channel_file()
+    if not path.is_file():
+        return None
+    try:
+        with _lock:
+            raw = path.read_text(encoding="utf-8")
+        value = json.loads(raw).get("user_id")
+        uid = int(value) if value is not None else 0
+        return uid if uid > 0 else None
+    except Exception as e:
+        logger.warning("read_channel_fallback_user_id failed: %s", e)
+        return None
+
+
 def clear_channel_fallback(reason: str = "") -> None:
     """Remove the persisted channel token so background workers stop retrying a stale JWT."""
     path = _channel_file()

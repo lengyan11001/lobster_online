@@ -47,7 +47,7 @@ from ..models import Asset, PublishAccount
 from ..services import native_wechat_engine
 from ..services.cloud_auth_retry import request_with_auth_retry
 from ..services import native_whatsapp_engine
-from ..services.openclaw_channel_auth_store import clear_channel_fallback, read_channel_fallback
+from ..services.openclaw_channel_auth_store import clear_channel_fallback, read_channel_fallback, read_channel_fallback_user_id
 from ..services.client_exit_marker import (
     mark_exit_reason_reported,
     pending_exit_reason_header,
@@ -12320,20 +12320,28 @@ async def _run_shanjian_digital_human_workflow(
 
 
 async def _rehost_audio_for_shanjian(audio_url: str, *, title: str) -> str:
-    """闪剪只能拉公网音频；短文案 TTS 返回的是 data: URI，必须转存 TOS。"""
-    from ..models import User
+    """闪剪只能拉公网音频；短文案 TTS 返回的是 data: URI，必须转存 TOS。
+
+    The online client does not have a local ``users`` row, so the cloud user id
+    from the persisted login (JWT sub, then fallback file) is the source of
+    truth here.  Only the id is needed for the asset owner.
+    """
+    from types import SimpleNamespace
+
     from .shanjian_digital_human import _persist_audio_for_shanjian
+
+    uid = _safe_int(_decode_jwt_sub(_auth_context()[0]))
+    if uid <= 0:
+        uid = _safe_int(read_channel_fallback_user_id())
+    if uid <= 0:
+        raise RuntimeError("无法确认当前登录账号")
 
     db = SessionLocal()
     try:
-        uid = _safe_int(_decode_jwt_sub(_auth_context()[0]))
-        user_row = db.query(User).filter(User.id == uid).first() if uid > 0 else None
-        if user_row is None:
-            raise RuntimeError("无法确认当前登录账号")
         public_url, _asset_id = await _persist_audio_for_shanjian(
             audio_url=audio_url,
             db=db,
-            current_user=user_row,
+            current_user=SimpleNamespace(id=uid),
             title=title or "素材混剪口播",
         )
         return public_url
