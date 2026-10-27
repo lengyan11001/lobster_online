@@ -173,28 +173,30 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
         durations: [6, 8, 10, 15], imageLimit: 9, videoLimit: 3, audioLimit: 3 }
     ]
   };
+  function applyModelCatalog(list) {
+    list = Array.isArray(list) ? list : [];
+    var ids = {};
+    list.forEach(function (m) { ids[String(m.id || "")] = 1; });
+    ["image", "video"].forEach(function (mode) {
+      var current = state.model[mode];
+      var currentId = current && current.id;
+      var picked = CURATED[mode].filter(function (c) { return !list.length || ids[c.id]; });
+      state.models[mode] = picked.length ? picked : CURATED[mode];
+      el(mode + "-count-badge").textContent = String(state.models[mode].length);
+      var keep = currentId && state.models[mode].filter(function (c) { return c.id === currentId; })[0];
+      setModel(mode, keep || state.models[mode][0]);
+      fillList(mode);
+      applyParams(mode);
+    });
+  }
   function loadModels() {
+    // Render the curated catalog immediately. The catalog API is only a
+    // background refinement; a slow upstream must never block the form.
+    applyModelCatalog([]);
     return api("/canvas-api/api/v3/models").then(function (d) {
       var list = (d && d.data && d.data.models) || [];
-      var ids = {};
-      list.forEach(function (m) { ids[String(m.id || "")] = 1; });
-      ["image", "video"].forEach(function (mode) {
-        var picked = CURATED[mode].filter(function (c) { return !list.length || ids[c.id]; });
-        state.models[mode] = picked.length ? picked : CURATED[mode];
-        el(mode + "-count-badge").textContent = String(state.models[mode].length);
-        if (state.models[mode][0]) setModel(mode, state.models[mode][0]);
-        fillList(mode);
-        applyParams(mode);
-      });
-    }).catch(function () {
-      ["image", "video"].forEach(function (mode) {
-        state.models[mode] = CURATED[mode];
-        el(mode + "-count-badge").textContent = String(CURATED[mode].length);
-        setModel(mode, CURATED[mode][0]);
-        fillList(mode);
-        applyParams(mode);
-      });
-    });
+      if (list.length) applyModelCatalog(list);
+    }).catch(function () {});
   }
   function setModel(mode, c) {
     state.model[mode] = c;
