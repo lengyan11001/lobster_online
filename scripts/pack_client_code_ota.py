@@ -147,6 +147,7 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     "static/canvas-web",
     "static/canvas-ui",
     "static/douyin-origin",
+    "static/tiktok-origin",
     "static/vendor",
     "static/data",
     "static/branding/brands.json",
