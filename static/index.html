@@ -37,11 +37,8 @@
             if (event.button !== 0) return;
             event.preventDefault();
             event.stopPropagation();
-            try {
-              if (window.pywebview && window.pywebview.api && window.pywebview.api.window_start_resize) {
-                window.pywebview.api.window_start_resize(item[0]);
-              }
-            } catch (e) {}
+            // Native resize is driven by frameless_chrome.py using the global
+            // mouse state, because WebView2 swallows child hit-test messages.
           });
           layer.appendChild(el);
         });
