@@ -129,6 +129,7 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     # executables stay installed, while launcher and configurator behavior can
     # continue to receive OTA fixes.
     "desktop/launcher.py",
+    "desktop/frameless_chrome.py",
     "desktop/oem_branding.py",
     "desktop/oem_configurator.py",
     # Optional BHZN ToDesk remote-support agent. System Config only starts

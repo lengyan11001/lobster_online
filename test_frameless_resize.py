@@ -53,3 +53,7 @@ def test_resize_code_maps_all_edges_and_corners():
     assert _resize_rect_for_drag(R, 0, -40, HTTOP, 900, 640) == (100, 60, 1000, 840)
     assert _resize_rect_for_drag(R, 0, 40, HTBOTTOM, 900, 640) == (100, 100, 1000, 840)
     assert _resize_rect_for_drag(R, 200, 0, HTLEFT, 900, 640)[0] == 200
+
+def test_website_ota_ships_frameless_chrome_module():
+    pack = (ROOT / "scripts" / "pack_client_code_ota.py").read_text(encoding="utf-8")
+    assert '"desktop/frameless_chrome.py"' in pack
