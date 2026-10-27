@@ -1,7 +1,7 @@
 {
-  "version": "2.0.199",
-  "build": 496,
-  "applied_at": "2026-10-27T18:18:52+08:00",
-  "note": "frameless manual resize; publish modal action menu; hide auto-summary prompt",
-  "bundle_sha256": "423ecc09b9d727f3868cc0e03f45f23d7b3b9fc571a336cb3783ed7c3adbc7dd"
+  "version": "2.0.200",
+  "build": 497,
+  "applied_at": "2026-10-27T18:20:09+08:00",
+  "note": "frameless manual resize; publish modal action menu; hide auto-summary prompt; OTA manifest fix",
+  "bundle_sha256": "8fc2c566ad510001b2786f37e9168ee7799f63988fe6093da6fa06ce372f92eb"
 }
