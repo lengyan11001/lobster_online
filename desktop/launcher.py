@@ -1594,8 +1594,18 @@ class DesktopApi:
             code = codes.get(str(edge or "").strip().lower())
             if not code:
                 return {"ok": False, "error": "invalid edge"}
+
+            class _POINT(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+            point = _POINT()
+            user32.GetCursorPos(ctypes.byref(point))
+            # WM_NCLBUTTONDOWN expects screen coordinates in lParam.  With 0
+            # the WebView2-backed frameless window can fall back to a no-op.
+            lparam = ((point.y & 0xFFFF) << 16) | (point.x & 0xFFFF)
+            user32.SetForegroundWindow(hwnd)
             user32.ReleaseCapture()
-            user32.SendMessageW(hwnd, 0x00A1, code, 0)  # WM_NCLBUTTONDOWN
+            user32.SendMessageW(hwnd, 0x00A1, code, lparam)
             return {"ok": True, "edge": edge}
         except Exception as exc:  # noqa: BLE001
             log(f"DesktopApi: resize failed: {exc}")
