@@ -67,3 +67,13 @@ def test_publish_draft_resolves_all_image_urls_and_asset_ids(monkeypatch):
         "https://cdn.example.test/two.jpg",
     ]
     assert len(result) == 3
+
+
+def test_asset_publish_modal_closes_floating_action_menu_and_stays_above_it():
+    publish = (ROOT / "static" / "js" / "publish.js").read_text(encoding="utf-8")
+    start = publish.index("function _assetShowPublishModal(asset)")
+    end = publish.index("function _submitAssetPublishModal()", start)
+    block = publish[start:end]
+    assert "_closeFloatingAssetActionMenus(null)" in block
+    assert "modal.style.zIndex = '2147483000'" in block
+    assert "modal.style.display = 'flex'" in block

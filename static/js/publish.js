@@ -3127,6 +3127,9 @@ function _closeAssetPublishModal(force) {
 
 function _assetShowPublishModal(asset) {
   try { if (typeof bindAssetLibraryUi === 'function') bindAssetLibraryUi(); } catch (e) {}
+  // The floating "operations" menu is attached to body with a huge z-index.
+  // Close it before opening the modal, otherwise it covers the account select.
+  try { if (typeof _closeFloatingAssetActionMenus === 'function') _closeFloatingAssetActionMenus(null); } catch (e) {}
   var existingId = _assetPublishExistingAssetId(asset);
   var candidate = existingId ? { url: '', media_type: '' } : _assetPublishUrlCandidate(asset);
   if (!existingId && !candidate.url) return Promise.reject(new Error('当前记录没有可发布的素材'));
@@ -3164,7 +3167,10 @@ function _assetShowPublishModal(asset) {
       '<div><span style="color:var(--text-muted);">提示词：</span>' + escapeHtml(promptLine) + '</div>';
   }
   _assetPublishMsgShow('', false);
-  if (modal) modal.style.display = 'flex';
+  if (modal) {
+    modal.style.zIndex = '2147483000';
+    modal.style.display = 'flex';
+  }
   return _assetPublishLoadAccounts().catch(function(error) {
     _assetPublishMsgShow('账号加载失败：' + ((error && error.message) || error), true);
   });
