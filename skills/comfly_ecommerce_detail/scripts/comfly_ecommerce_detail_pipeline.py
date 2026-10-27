@@ -125,9 +125,9 @@ class PipelineConfig:
     output_dir: str = ""
     upload_retries: int = 3
     analysis_retries: int = 2
-    image_generation_retries: int = 3
+    image_generation_retries: int = 2
     network_retry_delay_seconds: int = 3
-    image_concurrency: int = 11
+    image_concurrency: int = 4
 
 
 class PipelineError(RuntimeError):
@@ -584,6 +584,7 @@ class ComflyClient:
 
         body: Dict[str, Any] = {"model": model, "prompt": prompt, "aspect_ratio": aspect_ratio}
         if "gpt-image-2" in model or "gptimage2" in model.replace("-", ""):
+            body["n"] = 1
             body["size"] = _aspect_ratio_to_size(aspect_ratio)
             body["response_format"] = "url"
             body["aspect_ratio"] = aspect_ratio
@@ -593,7 +594,10 @@ class ComflyClient:
 
         def call() -> Dict[str, Any]:
             if local_refs or local_blobs:
-                data = {k: str(v) for k, v in body.items() if k != "response_format"}
+                # Keep URL response mode for multipart edits as well. Without it,
+                # some providers return b64_json and the pipeline cannot download
+                # the generated image for the local result file.
+                data = {k: str(v) for k, v in body.items()}
                 if remote_refs:
                     data["image"] = json.dumps(remote_refs, ensure_ascii=False)
                 files = []
@@ -1144,11 +1148,18 @@ def _selling_point_target_count(
     )
 
 
-def _download_image_rgba(url: str, retries: int = 5, timeout: int = 180) -> Image.Image:
+def _download_image_response(url: str, timeout: int) -> requests.Response:
+    """Download provider media without inheriting a broken system proxy."""
+    with requests.Session() as session:
+        session.trust_env = False
+        return session.get(url, timeout=timeout)
+
+
+def _download_image_rgba(url: str, retries: int = 3, timeout: int = 90) -> Image.Image:
     last: Optional[Exception] = None
     for attempt in range(1, max(1, retries) + 1):
         try:
-            response = requests.get(url, timeout=timeout)
+            response = _download_image_response(url, timeout)
             response.raise_for_status()
             image = Image.open(BytesIO(response.content))
             return image.convert("RGBA")
@@ -1375,9 +1386,9 @@ def _build_config(data: Input) -> PipelineConfig:
         output_dir=str(data.get("output_dir", "")).strip(),
         upload_retries=int(data.get("upload_retries", 3)),
         analysis_retries=int(data.get("analysis_retries", 2)),
-        image_generation_retries=int(data.get("image_generation_retries", 3)),
+        image_generation_retries=int(data.get("image_generation_retries", 2)),
         network_retry_delay_seconds=int(data.get("network_retry_delay_seconds", 3)),
-        image_concurrency=max(1, int(data.get("image_concurrency", 11))),
+        image_concurrency=max(1, int(data.get("image_concurrency", 4))),
     )
 
 
@@ -1957,18 +1968,6 @@ def _compose_direct_detail_page_prompt(page: Dict[str, Any], analysis: Dict[str,
     material_lines = _safe_string_list(analysis.get("materials"))[:3]
     scene_lines = _safe_string_list(analysis.get("usage_scenes"))[:3]
     trust_lines = _safe_string_list(analysis.get("trust_points"))[:3]
-    copy_blocks: List[str] = []
-    if title:
-        copy_blocks.append(f"Title: {title}")
-    if subtitle:
-        copy_blocks.append(f"Subtitle: {subtitle}")
-    if highlights:
-        copy_blocks.append("Selling points:\n- " + "\n- ".join(highlights))
-    if spec_lines:
-        copy_blocks.append("Specifications:\n- " + "\n- ".join(spec_lines))
-    if footer:
-        copy_blocks.append(f"Footer line: {footer}")
-
     layout_instruction = {
         "cover": "Create a premium ecommerce detail cover with strong hero composition, one main title block, one short subtitle block, and 2-3 small supporting benefit chips.",
         "overview": "Create a polished ecommerce detail section with one clear title, one short subtitle, and 3-4 structured supporting points.",
@@ -1989,13 +1988,12 @@ def _compose_direct_detail_page_prompt(page: Dict[str, Any], analysis: Dict[str,
         f"Visual style: {style}.",
         layout_instruction,
         subject_instruction,
-        "This must be a finished detail-page visual, not a blank background and not a poster without content.",
+        "This must be a finished detail-page visual, not a blank background.",
         "Use exactly one single product that matches the reference product. Do not create a second garment, second box, bag, scarf, model, or accessory.",
         "Keep the visible product identity highly consistent with the reference, including silhouette, collar, neckline, sleeves, buttons, seams, proportions, color, material feel, and overall shape.",
         "The product in the final image must remain the same item as the reference, not a redesigned product.",
-        f"All visible text must be clear {language_name} with good legibility.",
-        "Do not invent fake English brands, fake logos, random watermarks, or unrelated product names.",
-        "Do not add extra claims or parameters that are not provided below.",
+        "Do not render titles, subtitles, selling-point copy, specification tables, logos, watermarks, UI, or unrelated text in the image.",
+        "Do not invent fake brands, fake logos, or unrelated product claims.",
         "Do not output a collage, moodboard, UI screenshot, website mockup, or fake packaging backstory.",
         "Use premium ecommerce art direction, strong spacing, clean visual hierarchy, controlled typography area, and a high-end commercial finish.",
     ]
@@ -2005,8 +2003,6 @@ def _compose_direct_detail_page_prompt(page: Dict[str, Any], analysis: Dict[str,
         prompt_parts.append("Material cues: " + " / ".join(material_lines))
     if trust_lines:
         prompt_parts.append("Trust cues: " + " / ".join(trust_lines))
-    if copy_blocks:
-        prompt_parts.append(f"Use only these {language_name} copy blocks:\n" + "\n\n".join(copy_blocks))
     return "\n".join(part for part in prompt_parts if part)
 
 
@@ -2134,19 +2130,19 @@ def _derive_transparent_from_white_black_bg(white_image: Image.Image, black_imag
     return out
 
 
-def _download_image(url: str) -> Image.Image:
+def _download_image(url: str, retries: int = 3, timeout: int = 90) -> Image.Image:
     last: Optional[Exception] = None
-    for attempt in range(1, 4):
+    for attempt in range(1, max(1, retries) + 1):
         try:
-            response = requests.get(url, timeout=180)
+            response = _download_image_response(url, timeout)
             response.raise_for_status()
             image = Image.open(BytesIO(response.content))
             return image.convert("RGB") if image.mode != "RGB" else image
         except Exception as exc:
             last = exc
-            if attempt >= 3:
+            if attempt >= max(1, retries):
                 break
-            time.sleep(attempt * 2)
+            time.sleep(min(8, attempt * 2))
     raise PipelineError(f"Failed to download image after retries: {last}")
 
 
@@ -2916,7 +2912,7 @@ def _generate_white_bg_assets(
             "white_bg_source",
             payload={"attempts": attempts, "aspect_ratio": "1:1"},
         )
-        white_bg_source = _download_image(generated["url"], retries=5, timeout=180)
+        white_bg_source = _download_image(generated["url"], retries=2, timeout=90)
         white_bg_image = _normalize_generated_white_bg(white_bg_source, 800, 800)
         generation_mode = "remote"
         generated_url = generated["url"]
@@ -3445,11 +3441,11 @@ def _build_page_slots(analysis: Dict[str, Any], page_count: int) -> List[Dict[st
     return slots[:target_page_count]
 
 
-def _download_image(url: str, retries: int = 5, timeout: int = 180) -> Image.Image:
+def _download_image(url: str, retries: int = 3, timeout: int = 90) -> Image.Image:
     last: Optional[Exception] = None
     for attempt in range(1, max(1, retries) + 1):
         try:
-            response = requests.get(url, timeout=timeout)
+            response = _download_image_response(url, timeout)
             response.raise_for_status()
             image = Image.open(BytesIO(response.content))
             return image.convert("RGB") if image.mode != "RGB" else image
@@ -3457,7 +3453,7 @@ def _download_image(url: str, retries: int = 5, timeout: int = 180) -> Image.Ima
             last = exc
             if attempt >= max(1, retries):
                 break
-            time.sleep(min(12, attempt * 2))
+            time.sleep(min(8, attempt * 2))
     raise PipelineError(f"Failed to download image after retries: {last}")
 
 
@@ -3691,7 +3687,7 @@ def _generate_white_bg_assets(
         "white_bg_source",
         payload={"attempts": white_attempts, "aspect_ratio": "1:1"},
     )
-    white_bg_source = _download_image(white_generated["url"], retries=5, timeout=180)
+    white_bg_source = _download_image(white_generated["url"], retries=2, timeout=90)
     white_bg_image = _normalize_generated_white_bg(white_bg_source, 800, 800)
 
     black_prompt = _compose_black_bg_prompt(analysis)
@@ -3709,7 +3705,7 @@ def _generate_white_bg_assets(
         "black_bg_source",
         payload={"attempts": black_attempts, "aspect_ratio": "1:1"},
     )
-    black_bg_source = _download_image(black_generated["url"], retries=5, timeout=180)
+    black_bg_source = _download_image(black_generated["url"], retries=2, timeout=90)
     black_bg_image = _normalize_generated_black_bg(black_bg_source, 800, 800)
 
     transparent_image = _derive_transparent_from_white_black_bg(white_bg_image, black_bg_image)
@@ -3988,16 +3984,37 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
         slots = _build_page_slots(analysis, config.page_count)
         logger.step("03_page_slots", "success", attempts=1, payload={"slots": slots})
 
-        copy_raw, copy_attempts = client.analyze_json(
-            config.analysis_model,
-            _page_copy_prompt(analysis, slots, config),
-            reference_urls,
-            "04_page_copy_plan",
-            max_tokens=8000,
-        )
-        pages = _normalize_pages(copy_raw, slots, analysis)
-        logger.step("04_page_copy_plan", "success", attempts=copy_attempts, payload={"pages": pages})
-        logger.record_usage("analysis", config.analysis_model, "page_copy_plan", payload={"attempts": copy_attempts})
+        if _is_gpt_image2_direct_mode(config):
+            # GPT Image 2 receives visual direction and the aspect ratio directly;
+            # keep page metadata for the UI without spending a second LLM call on
+            # copy that will no longer be rendered into the image.
+            direct_plan = {
+                "pages": [
+                    {
+                        "title": "",
+                        "subtitle": "",
+                        "highlights": [],
+                        "badge": "",
+                        "footer": "",
+                        "image_prompt_en": "",
+                        "layout_hint": "",
+                    }
+                    for _slot in slots
+                ]
+            }
+            pages = _normalize_pages(direct_plan, slots, analysis)
+            logger.step("04_page_copy_plan", "success", attempts=0, payload={"pages": pages, "mode": "direct_gpt_image2"})
+        else:
+            copy_raw, copy_attempts = client.analyze_json(
+                config.analysis_model,
+                _page_copy_prompt(analysis, slots, config),
+                reference_urls,
+                "04_page_copy_plan",
+                max_tokens=8000,
+            )
+            pages = _normalize_pages(copy_raw, slots, analysis)
+            logger.step("04_page_copy_plan", "success", attempts=copy_attempts, payload={"pages": pages})
+            logger.record_usage("analysis", config.analysis_model, "page_copy_plan", payload={"attempts": copy_attempts})
 
         product_image_rgba = _download_image_rgba(product_image_url)
         product_local = product_image_rgba.convert("RGB")
@@ -4027,7 +4044,9 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
             generated = None
             attempts = 0
             last_page_error: Optional[Exception] = None
-            total_attempts = max(1, int(config.image_generation_retries) + int(extra_attempts))
+            # The client owns network retries. Keep only one extra page-level
+            # attempt for the fallback pass to avoid multiplicative retries.
+            total_attempts = 1 + (1 if int(extra_attempts) > 0 else 0)
             for page_attempt in range(1, total_attempts + 1):
                 try:
                     generated, attempts = client.generate_image(
@@ -4043,7 +4062,7 @@ def run_pipeline(data: Input) -> Dict[str, Any]:
                         f"{phase}_page_{idx:02d}",
                         payload={"attempts": attempts, "page_attempt": page_attempt, "phase": phase},
                     )
-                    generated_image = _download_image(generated["url"], retries=5, timeout=180)
+                    generated_image = _download_image(generated["url"], retries=2, timeout=90)
                     local_path = logger.detail_dir / f"详情_{idx:02d}.jpg"
                     background_local_path = None
                     if direct_full_page:
@@ -4654,7 +4673,7 @@ def _generate_main_image_assets(
             f"main_image_{shot['key']}",
             payload={"attempts": attempts, "aspect_ratio": "1:1", "shot_index": shot["index"]},
         )
-        source = _download_image(generated["url"], retries=5, timeout=180)
+        source = _download_image(generated["url"], retries=2, timeout=90)
         square_master = _save_master_jpeg(
             source,
             master_dir / f"main-{shot['index']:02d}-square-4096.jpg",
@@ -4893,7 +4912,7 @@ def _generate_sku_assets(
             f"sku_scene_{shot['key']}",
             payload={"attempts": attempts, "aspect_ratio": "1:1", "shot_index": shot["index"]},
         )
-        scene_source = _download_image(generated["url"], retries=5, timeout=180)
+        scene_source = _download_image(generated["url"], retries=2, timeout=90)
         scene_master = _save_master_jpeg(scene_source, master_dir / f"sku-{shot['index']:02d}-scene-3072.jpg", 3072, 3072)
         scene_image = _open_local_image(scene_master["path"]).convert("RGB")
         record = {
@@ -5491,7 +5510,7 @@ def _generate_sku_assets(
             f"sku_scene_{shot['key']}",
             payload={"attempts": attempts, "aspect_ratio": "1:1", "shot_index": shot["index"]},
         )
-        scene_source = _download_image(generated["url"], retries=5, timeout=180)
+        scene_source = _download_image(generated["url"], retries=2, timeout=90)
         scene_master = _save_master_jpeg(scene_source, master_dir / f"sku-{shot['index']:02d}-scene-3072.jpg", 3072, 3072)
         scene_image = _open_local_image(scene_master["path"]).convert("RGB")
         record = {

@@ -2102,6 +2102,37 @@
         };
       });
     });
+    if ((!out.detail_images || !out.detail_images.length) && pageRows.length) {
+      out.detail_images = pageRows.map(function(item, index) {
+        var pageIndex = Number(item && (item.index || item.page_index) || 0) || 0;
+        var previewUrl = _firstImageUrl(item);
+        var sizeLabel = item && item.width && item.height
+          ? (String(item.width) + 'x' + String(item.height))
+          : '';
+        return {
+          title: (item && item.filename) || ('详情图 ' + (pageIndex || index + 1)),
+          meta: [item && item.slot || '', item && item.generation_mode || '', sizeLabel, item && item.relative_path || ''].filter(Boolean).join(' · '),
+          local_preview_url: item && item.local_preview_url || '',
+          preview_url: previewUrl,
+          open_url: previewUrl,
+          filename: item && item.filename || '',
+          asset_id: '',
+          width: item && item.width || '',
+          height: item && item.height || '',
+          page_index: pageIndex,
+          kind: 'detail_page',
+          path: item && item.local_path || '',
+          relative_path: item && item.relative_path || '',
+          detail_title: item && item.title || '',
+          detail_subtitle: item && item.subtitle || '',
+          detail_footer: item && item.footer || '',
+          detail_highlights: Array.isArray(item && item.highlights) ? item.highlights.slice() : [],
+          detail_slot: item && item.slot || '',
+          editable: false,
+          edit_kind: ''
+        };
+      });
+    }
     return out;
   }
 
@@ -2514,7 +2545,9 @@
     if (summaryEl) {
       if (status === 'completed') summaryEl.textContent = '生成完成，可以切换不同分类查看图片。';
       else if (status === 'failed') summaryEl.textContent = _pickResponseMessage(resp, '当前任务生成失败，可以刷新状态或重新提交。');
-      else if (status === 'running') summaryEl.textContent = '高质量模型生成通常需要 5-10 分钟。你可以继续提交新任务，或先去使用其他功能；任务完成后会在右下角提醒你。';
+      else if (status === 'running') summaryEl.textContent = totalCount
+        ? ('已生成 ' + totalCount + ' 张，剩余内容继续生成中；已完成图片可以先查看。')
+        : '任务正在生成，首张图片完成后会立即显示在下方。';
       else summaryEl.textContent = '提交任务后，这里会显示生成进度和结果。';
     }
     var publishBtn = byId('ecomPublishToShopBtn');
@@ -2623,10 +2656,9 @@
         }
       })
       .catch(function(err) {
-        _stopPolling();
-        var failMessage = '刷新状态失败：' + (err && err.message ? err.message : '未知错误');
+        _schedulePoll(5000);
+        var failMessage = '状态刷新暂时失败，5 秒后自动重试：' + (err && err.message ? err.message : '未知错误');
         _setMsg(failMessage, true);
-        _notifyTaskOnce('failed', { status: 'failed', error: failMessage });
       });
   }
 

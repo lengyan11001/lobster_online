@@ -25,6 +25,7 @@ from ..services.comfly_ecommerce_detail_job_store import (
     create_job_record,
     get_job,
     read_manifest_progress,
+    read_manifest_partial_result,
     update_job,
 )
 from ..services.comfly_ecommerce_detail_pipeline_runner import (
@@ -968,8 +969,20 @@ async def _job_runner(job_id: str) -> None:
         result = await asyncio.to_thread(run_pipeline_sync, inp)
     except Exception as e:
         logger.exception("[comfly_ecommerce_detail] job %s failed", job_id[:12])
-        update_job(job_id, status="failed", error=str(e)[:2000])
-        _persist_job_to_db(job_id, user_id=user_id, status="failed", error=str(e)[:2000])
+        partial_result = getattr(e, "data", None)
+        if not isinstance(partial_result, dict) or not partial_result:
+            partial_result = read_manifest_partial_result(str(job.get("job_output_dir") or ""))
+        error_text = str(e)[:2000]
+        update_job(job_id, status="failed", error=error_text, result=partial_result)
+        partial_assets = {"partial_result": partial_result} if partial_result else None
+        _persist_job_to_db(
+            job_id,
+            user_id=user_id,
+            status="failed",
+            error=error_text,
+            result=partial_result,
+            saved_assets=partial_assets,
+        )
         return
     internal_run_dir = str(result.get("run_dir") or "").strip()
     saved_assets: Dict[str, Any] = {"pages": [], "final": None}
@@ -1108,10 +1121,18 @@ def _job_status_response(job: Dict[str, Any], *, include_full: bool, request: Re
         progress = read_manifest_progress(str(job.get("job_output_dir") or ""))
         if progress:
             out["progress"] = _redact_progress_for_client(progress)
+        if include_full:
+            partial = read_manifest_partial_result(str(job.get("job_output_dir") or ""))
+            if partial:
+                out["result"] = _enrich_result_file_urls(partial, request)
     if status == "failed":
         out["error"] = job.get("error")
-        if include_full and job.get("result") is not None:
-            out["result"] = _enrich_result_file_urls(job.get("result"), request)
+        if include_full:
+            failed_result = job.get("result")
+            if not isinstance(failed_result, dict) or not failed_result:
+                failed_result = read_manifest_partial_result(str(job.get("job_output_dir") or ""))
+            if failed_result:
+                out["result"] = _enrich_result_file_urls(failed_result, request)
     if status == "completed":
         if include_full:
             out["result"] = _enrich_result_file_urls(job.get("result"), request)
@@ -1562,6 +1583,12 @@ async def ecommerce_detail_pipeline_job_status(
         "status": db_job.status,
         "product_name": db_job.product_name,
         "saved_assets": _enrich_saved_asset_urls_for_client(db_job.saved_assets or {}, request),
+        "result": _enrich_result_file_urls(
+            (db_job.saved_assets or {}).get("partial_result")
+            if isinstance(db_job.saved_assets, dict)
+            else {},
+            request,
+        ),
         "error": db_job.error,
         "created_at": db_job.created_at.isoformat() if db_job.created_at else None,
         "source": "database",

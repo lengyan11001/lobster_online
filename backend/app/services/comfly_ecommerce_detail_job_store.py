@@ -98,3 +98,74 @@ def read_manifest_progress(job_output_dir: str) -> Optional[Dict[str, Any]]:
         "usage_summary": summary,
         "errors": (data.get("errors") or [])[-5:] if isinstance(data.get("errors"), list) else [],
     }
+
+
+def read_manifest_partial_result(job_output_dir: str) -> Optional[Dict[str, Any]]:
+    """Read page artifacts that are already available while a pipeline is running."""
+    base = Path((job_output_dir or "").strip())
+    if not base.is_dir():
+        return None
+    candidates = list(base.glob("run_*/manifest.json"))
+    if not candidates:
+        return None
+    manifest_path = max(candidates, key=lambda p: p.stat().st_mtime)
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    run_dir = Path(str(manifest.get("run_dir") or manifest_path.parent))
+    pages = manifest.get("pages") if isinstance(manifest.get("pages"), dict) else {}
+    page_results: List[Dict[str, Any]] = []
+    failed_pages: List[Dict[str, Any]] = []
+
+    for raw_index, stages in pages.items():
+        if not isinstance(stages, dict):
+            continue
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            continue
+        successful = [
+            (str(stage), meta)
+            for stage, meta in stages.items()
+            if isinstance(meta, dict) and str(meta.get("status") or "") == "success"
+        ]
+        successful.sort(key=lambda item: str(item[1].get("updated_at") or ""))
+        payload = None
+        for stage, _meta in reversed(successful):
+            payload_path = run_dir / f"page_{index:02d}_{stage}.json"
+            try:
+                candidate = json.loads(payload_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(candidate, dict):
+                payload = candidate
+                break
+        if payload is not None:
+            page_results.append(payload)
+
+        latest_stage = max(
+            ((str(stage), meta) for stage, meta in stages.items() if isinstance(meta, dict)),
+            key=lambda item: str(item[1].get("updated_at") or ""),
+            default=None,
+        )
+        if latest_stage and str(latest_stage[1].get("status") or "") == "failed":
+            failed_pages.append(
+                {
+                    "index": index,
+                    "error": str(latest_stage[1].get("error") or ""),
+                }
+            )
+
+    if not page_results and not failed_pages:
+        return None
+    page_results.sort(key=lambda item: int(item.get("index") or 0))
+    failed_pages.sort(key=lambda item: int(item.get("index") or 0))
+    return {
+        "run_dir": str(run_dir),
+        "page_results": page_results,
+        "failed_pages": failed_pages,
+        "config": manifest.get("config") if isinstance(manifest.get("config"), dict) else {},
+        "partial": True,
+    }
