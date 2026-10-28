@@ -3072,9 +3072,13 @@
     var label = document.querySelector('#content-personal-settings label[for="psCompetitorSearchInput"]');
     var input = $('psCompetitorSearchInput');
     var directBtn = $('psAddCompetitorByChannelIdBtn');
-    if (label) label.textContent = isWechatChannels ? '昵称、公开 ID 或 username' : '昵称或抖音号';
-    if (input) input.placeholder = isWechatChannels ? '输入视频号昵称、sph 开头公开 ID 或 username' : '输入昵称或抖音号';
+    var linkField = $('psCompetitorVideoLinkField');
+    var linkBtn = $('psAddCompetitorByVideoLinkBtn');
+    if (label) label.textContent = isWechatChannels ? '昵称、公开 ID、username 或作品链接' : '昵称或抖音号';
+    if (input) input.placeholder = isWechatChannels ? '输入视频号昵称、username、sph ID 或作品链接' : '输入昵称或抖音号';
     if (directBtn) directBtn.hidden = !isWechatChannels;
+    if (linkField) linkField.hidden = !isWechatChannels;
+    if (linkBtn) linkBtn.hidden = !isWechatChannels;
     state.competitorCandidates = [];
     renderCompetitorCandidates();
   }
@@ -3109,37 +3113,53 @@
     });
   }
 
-  function addCompetitorByChannelId() {
+  function submitCompetitorByChannelId(value, successText, triggerBtn) {
     var platform = (($('psCompetitorPlatform') || {}).value || 'douyin');
     if (platform !== 'wechat_channels') return;
-    var input = $('psCompetitorSearchInput');
-    var channelId = ((input && input.value) || '').trim();
     var tags = (($('psCompetitorTags') || {}).value || '').trim();
-    if (!channelId) {
-      setMsg('请先输入视频号公开 ID（sph 开头）。', true);
-      return;
-    }
-    var btn = $('psAddCompetitorByChannelIdBtn');
+    var btn = triggerBtn || $('psAddCompetitorByChannelIdBtn');
     setBusy(btn, true, '解析并添加中...');
     cloudJson('/api/ip-content/wechat-channels/competitors/by-channel-id', {
       method: 'POST',
-      body: { channel_id: channelId, industry_tags: tags }
+      body: { channel_id: value, industry_tags: tags }
     }).then(function(data) {
-      if (input) input.value = '';
+      if ($('psCompetitorSearchInput')) $('psCompetitorSearchInput').value = '';
+      if ($('psCompetitorVideoLinkInput')) $('psCompetitorVideoLinkInput').value = '';
       if ($('psCompetitorTags')) $('psCompetitorTags').value = '';
       state.competitorCandidates = [];
       renderCompetitorCandidates();
-      setMsg('视频号公开 ID 已添加。');
+      setMsg(successText);
       closePersonalSettingsEditor('psCompetitorEditorModal');
       return loadCompetitors().then(function() {
         if (data.item && data.item.id) return syncCompetitor(data.item.id);
         return null;
       });
     }).catch(function(err) {
-      setMsg(err.message || '按照视频号公开 ID 添加失败', true);
+      setMsg(err.message || '添加视频号同行失败', true);
     }).finally(function() {
       setBusy(btn, false);
     });
+  }
+  function addCompetitorByChannelId() {
+    var channelId = (($('psCompetitorSearchInput') || {}).value || '').trim();
+    var videoLink = (($('psCompetitorVideoLinkInput') || {}).value || '').trim();
+    if (!channelId && videoLink) {
+      submitCompetitorByChannelId(videoLink, '已从作品链接添加视频号账号。', $('psAddCompetitorByChannelIdBtn'));
+      return;
+    }
+    if (!channelId) {
+      setMsg('请粘贴 sph 公开 ID、v2_...@finder username，或作品分享链接。', true);
+      return;
+    }
+    submitCompetitorByChannelId(channelId, '视频号账号已添加。', $('psAddCompetitorByChannelIdBtn'));
+  }
+  function addCompetitorByVideoLink() {
+    var videoLink = (($('psCompetitorVideoLinkInput') || {}).value || '').trim();
+    if (!videoLink) {
+      setMsg('请粘贴视频号作品分享链接，例如 https://weixin.qq.com/sph/...', true);
+      return;
+    }
+    submitCompetitorByChannelId(videoLink, '已从作品链接添加视频号账号。', $('psAddCompetitorByVideoLinkBtn'));
   }
 
   function searchCompetitors() {
@@ -3788,6 +3808,7 @@
     if ($('psCompetitorPlatform')) $('psCompetitorPlatform').addEventListener('change', updateCompetitorPlatformFields);
     if ($('psSearchCompetitorBtn')) $('psSearchCompetitorBtn').addEventListener('click', searchCompetitors);
     if ($('psAddCompetitorByChannelIdBtn')) $('psAddCompetitorByChannelIdBtn').addEventListener('click', addCompetitorByChannelId);
+    if ($('psAddCompetitorByVideoLinkBtn')) $('psAddCompetitorByVideoLinkBtn').addEventListener('click', addCompetitorByVideoLink);
     if ($('psCompetitorSearchInput')) {
       $('psCompetitorSearchInput').addEventListener('keydown', function(ev) {
         if (ev.key === 'Enter') {

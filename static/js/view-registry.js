@@ -43,8 +43,8 @@
   });
 
   window.registerLobsterView('personal-settings', {
-    html: '/static/views/personal-settings.html?v=20260921-survey-modal-close-only-v1',
-    scripts: '/static/js/personal-settings.js?v=20261008-template-copy-keep-current',
+    html: '/static/views/personal-settings.html?v=20261028-video-link-control-v2',
+    scripts: '/static/js/personal-settings.js?v=20261028-video-link-control-v2',
     init: 'initPersonalSettingsView',
     cache: 'reload'
   });
@@ -121,8 +121,8 @@
   });
 
   window.registerLobsterView('ip-content-studio', {
-    html: '/static/views/ip-content-studio.html?v=20260914-ip-content-record-tree-v3',
-    scripts: '/static/js/ip-content-studio.js?v=20260914-ip-content-record-tree-v3',
+    html: '/static/views/ip-content-studio.html?v=20261028-video-link-control-v2',
+    scripts: '/static/js/ip-content-studio.js?v=20261028-video-link-control-v2',
     init: 'initIpContentStudioView',
     cache: 'reload'
   });
@@ -163,8 +163,8 @@ window.registerLobsterView('alibaba-inquiries', {
   });
 
   window.registerLobsterView('wechat-channels-transcript', {
-    html: '/static/views/wechat-channels-transcript.html?v=20261028-wct-video-control',
-    scripts: '/static/js/wechat-channels-transcript.js?v=20261028-wct-video-control',
+    html: '/static/views/wechat-channels-transcript.html?v=20261028-wct-video-control-v3',
+    scripts: '/static/js/wechat-channels-transcript.js?v=20261028-wct-video-control-v3',
     init: 'initWechatChannelsTranscriptView',
     cache: 'reload'
   });

@@ -1357,8 +1357,8 @@ window._openIpContentStudioView = function(mode) {
   window.__ipContentStudioMode = mode;
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('ip-content-studio', {
-      html: '/static/views/ip-content-studio.html?v=20260914-ip-content-record-tree-v3',
-      scripts: '/static/js/ip-content-studio.js?v=20260914-ip-content-record-tree-v3',
+      html: '/static/views/ip-content-studio.html?v=20261028-video-link-control-v2',
+      scripts: '/static/js/ip-content-studio.js?v=20261028-video-link-control-v2',
       cache: 'reload'
     });
   }
@@ -1567,8 +1567,8 @@ window._openAlibabaInquiriesView = function() {
 window._openWechatChannelsTranscriptView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('wechat-channels-transcript', {
-      html: '/static/views/wechat-channels-transcript.html?v=20261028-wct-video-control',
-      scripts: '/static/js/wechat-channels-transcript.js?v=20261028-wct-video-control',
+      html: '/static/views/wechat-channels-transcript.html?v=20261028-wct-video-control-v3',
+      scripts: '/static/js/wechat-channels-transcript.js?v=20261028-wct-video-control-v3',
       init: 'initWechatChannelsTranscriptView',
       cache: 'reload'
     });

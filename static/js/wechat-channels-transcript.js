@@ -483,7 +483,12 @@
   }
   function addByPublicId() {
     var channelId = (($('wctSearchInput') && $('wctSearchInput').value) || '').trim();
-    if (!channelId) { setMsg('请先输入视频号公开 ID（sph 开头）', true); return; }
+    var videoLink = (($('wctVideoLinkInput') && $('wctVideoLinkInput').value) || '').trim();
+    if (!channelId && videoLink) {
+      submitWechatCompetitor(videoLink, '正在从作品链接解析账号…', '已从作品链接添加视频号同行。');
+      return;
+    }
+    if (!channelId) { setMsg('请粘贴 sph 公开 ID、v2_...@finder username，或作品分享链接。', true); return; }
     submitWechatCompetitor(channelId, '正在按公开 ID 解析账号…', '已按公开 ID 添加视频号同行。');
   }
   function addByVideoLink() {

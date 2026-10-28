@@ -1655,8 +1655,8 @@
     var input = $('ipCompetitorSearchInput');
     var btn = $('ipSearchCompetitorBtn');
     var directBtn = $('ipAddCompetitorByChannelIdBtn');
-    if (label) label.textContent = isWechatChannels ? '昵称或 username' : '昵称或抖音号';
-    if (input) input.placeholder = isWechatChannels ? '输入视频号昵称、sph 开头公开 ID 或 username' : '输入昵称或抖音号';
+    if (label) label.textContent = isWechatChannels ? '昵称、公开 ID、username 或作品链接' : '昵称或抖音号';
+    if (input) input.placeholder = isWechatChannels ? '输入视频号昵称、username、sph ID 或作品链接' : '输入昵称或抖音号';
     if (btn) btn.textContent = '搜索账号';
     if (directBtn) directBtn.hidden = !isWechatChannels;
     state.competitorCandidates = [];
@@ -1670,7 +1670,7 @@
     var channelId = ((input && input.value) || '').trim();
     var tags = (($('ipCompetitorTags') && $('ipCompetitorTags').value) || '').trim();
     if (!channelId) {
-      setMsg('请先输入视频号公开 ID（sph 开头）。', true);
+      setMsg('请粘贴 sph 公开 ID、v2_...@finder username 或视频号作品链接。', true);
       return;
     }
     var btn = $('ipAddCompetitorByChannelIdBtn');
@@ -1683,13 +1683,13 @@
       if ($('ipCompetitorTags')) $('ipCompetitorTags').value = '';
       state.competitorCandidates = [];
       renderCompetitorCandidates();
-      setMsg('视频号公开 ID 已添加。');
+      setMsg('视频号账号已添加。');
       return loadCompetitors().then(function() {
         if (data.item && data.item.id) return syncCompetitor(data.item.id);
         return null;
       });
     }).catch(function(err) {
-      setMsg(err.message || '按照视频号公开 ID 添加失败', true);
+      setMsg(err.message || '添加视频号同行失败', true);
     }).finally(function() {
       setBusy(btn, false);
     });
