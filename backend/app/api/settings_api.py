@@ -8,6 +8,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -64,8 +65,36 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _CUSTOM_CONFIGS_FILE = Path(__file__).resolve().parent.parent.parent.parent / "custom_configs.json"
-_CLIENT_CODE_VERSION_FILE = Path(__file__).resolve().parent.parent.parent.parent / "CLIENT_CODE_VERSION.json"
-_CLIENT_ROOT = _CLIENT_CODE_VERSION_FILE.parent
+
+
+def _resolve_client_root() -> Path:
+    """Resolve the durable client root in both source and packaged runtimes."""
+    source_root = Path(__file__).resolve().parent.parent.parent.parent
+    starts = [source_root]
+    try:
+        starts.append(Path(sys.executable).resolve().parent)
+    except Exception:
+        pass
+    try:
+        starts.append(Path.cwd().resolve())
+    except Exception:
+        pass
+    seen: set[Path] = set()
+    for start in starts:
+        for candidate in (start, *start.parents[:4]):
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            try:
+                if (candidate / "CLIENT_CODE_VERSION.json").is_file():
+                    return candidate
+            except OSError:
+                continue
+    return source_root
+
+
+_CLIENT_ROOT = _resolve_client_root()
+_CLIENT_CODE_VERSION_FILE = _CLIENT_ROOT / "CLIENT_CODE_VERSION.json"
 _CLIENT_UPDATE_CHECK_SCRIPT = _CLIENT_ROOT / "scripts" / "check_client_code_update.py"
 _CLIENT_UPDATE_STATUS_PREFIX = "__LOBSTER_UPDATE_STATUS__="
 _client_update_status_lock = asyncio.Lock()
@@ -86,6 +115,7 @@ _TODSK_AGENT_READY = _TODSK_AGENT_VENV / ".ready"
 _TODSK_SERVER_URL = "https://todesk.bhzn.top"
 _TODSK_PROCESS = None
 _TODSK_PROCESS_LOCK = asyncio.Lock()
+_TODSK_START_LOCK = threading.Lock()
 
 
 def _todesk_agent_candidates() -> list[Path]:
@@ -286,36 +316,59 @@ def _todesk_process_alive() -> bool:
 def _start_todesk_process(exe: Path) -> None:
     """Start the agent once, writing output to a rotating-friendly log file."""
     global _TODSK_PROCESS
-    if _todesk_process_alive():
-        return
-    log_dir = _CLIENT_ROOT / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "todesk-agent.log"
-    flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
-    state = _load_todesk_state()
-    config_path = _ensure_todesk_main_server_config(exe, state)
-    handle = log_file.open("a", encoding="utf-8")
-    try:
-        _TODSK_PROCESS = subprocess.Popen(
-            _todesk_command(
-                exe,
-                *_todesk_run_args(
+    with _TODSK_START_LOCK:
+        if _todesk_process_alive():
+            return
+        log_dir = _CLIENT_ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / "todesk-agent.log"
+        flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+        state = _load_todesk_state()
+        config_path = _ensure_todesk_main_server_config(exe, state)
+        handle = log_file.open("a", encoding="utf-8")
+        try:
+            _TODSK_PROCESS = subprocess.Popen(
+                _todesk_command(
                     exe,
-                    *( [] if exe.suffix.lower() == ".py" else ["--no-update"] ),
-                    "--config",
-                    str(config_path),
+                    *_todesk_run_args(
+                        exe,
+                        *( [] if exe.suffix.lower() == ".py" else ["--no-update"] ),
+                        "--config",
+                        str(config_path),
+                    ),
                 ),
-            ),
-            cwd=str(exe.parent),
-            stdin=subprocess.DEVNULL,
-            stdout=handle,
-            stderr=subprocess.STDOUT,
-            creationflags=flags,
-        )
-        state["agent_pid"] = _TODSK_PROCESS.pid
-        _save_todesk_state(state)
-    finally:
-        handle.close()
+                cwd=str(exe.parent),
+                stdin=subprocess.DEVNULL,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                creationflags=flags,
+            )
+            state["agent_pid"] = _TODSK_PROCESS.pid
+            _save_todesk_state(state)
+        finally:
+            handle.close()
+
+
+def resume_remote_support_if_enabled(*, log_missing: bool = True) -> bool:
+    """Resume a persisted remote-support session after a client restart."""
+    state = _load_todesk_state()
+    if not bool(state.get("enabled")):
+        return False
+    exe = _todesk_agent_path()
+    if not exe:
+        if log_missing:
+            logger.warning(
+                "[remote-support] enabled but agent is missing state_file=%s",
+                _TODSK_STATE_FILE,
+            )
+        return False
+    try:
+        if not _todesk_process_alive():
+            _start_todesk_process(exe)
+        return True
+    except Exception as exc:
+        logger.warning("[remote-support] auto-resume failed: %s", exc)
+        return False
 
 
 def _load_custom_configs() -> dict[str, Any]:
@@ -886,6 +939,10 @@ def remote_support_heartbeat_snapshot() -> dict[str, Any]:
     state = _load_todesk_state()
     if not bool(state.get("enabled")):
         return {"enabled": False}
+    # The agent is a child process and does not survive a client restart.  The
+    # persisted switch is the source of truth, so resume it without waiting for
+    # the user to open System Config again.
+    resume_remote_support_if_enabled(log_missing=False)
     return {
         "enabled": True,
         "running": _todesk_process_alive(),
@@ -902,12 +959,7 @@ async def get_remote_support(
     state = _load_todesk_state()
     if not bool(state.get("enabled")):
         return await asyncio.to_thread(_remote_support_payload)
-    exe = _todesk_agent_path()
-    if bool(state.get("enabled")) and exe and not _todesk_process_alive():
-        try:
-            _start_todesk_process(exe)
-        except Exception as exc:
-            logger.warning("remote support agent auto-start failed: %s", exc)
+    await asyncio.to_thread(resume_remote_support_if_enabled)
     return await asyncio.to_thread(_remote_support_payload)
 
 
@@ -925,12 +977,27 @@ async def update_remote_support(
         if requested:
             if not exe:
                 raise HTTPException(status_code=503, detail="BHZN ToDesk Agent 未安装，请先安装客户端组件")
-            if not _todesk_process_alive():
-                _start_todesk_process(exe)
+            # Persist opt-in before spawning.  Startup/heartbeat may read this
+            # file concurrently, and the agent PID write must not overwrite the
+            # user's enabled choice with a stale pre-submit snapshot.
             state["enabled"] = True
-            _remember_todesk_identity(state, _todesk_show_id(exe))
             state["updated_at"] = int(time.time() * 1000)
             _save_todesk_state(state)
+            try:
+                if not _todesk_process_alive():
+                    _start_todesk_process(exe)
+                # Reload to retain the agent_pid written by the child starter.
+                state = _load_todesk_state()
+                _remember_todesk_identity(state, _todesk_show_id(exe))
+                state["enabled"] = True
+                state["updated_at"] = int(time.time() * 1000)
+                _save_todesk_state(state)
+            except Exception:
+                state["enabled"] = False
+                state.pop("agent_pid", None)
+                state["updated_at"] = int(time.time() * 1000)
+                _save_todesk_state(state)
+                raise
         else:
             proc = _TODSK_PROCESS
             if proc is not None and proc.poll() is None:

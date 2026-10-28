@@ -204,6 +204,16 @@ def _start_canvas_if_needed():
         _logger.warning("[启动] 灵感画布服务启动失败: %s", exc)
 
 
+def _start_remote_support_if_needed():
+    """Resume the persisted remote-support switch after a client restart."""
+    try:
+        from backend.app.api.settings_api import resume_remote_support_if_enabled
+        if resume_remote_support_if_enabled():
+            _logger.info("[启动] 远程支持已恢复（沿用上次开启状态）")
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("[启动] 远程支持恢复失败: %s", exc)
+
+
 if __name__ == "__main__":
     # 记录本次会话并判定上一轮进程是「自己重启」还是「真崩溃」；结论会随
     # X-Previous-Client-Exit-Reason 上报，供云端回收上一轮 run 时分类。
@@ -240,6 +250,7 @@ if __name__ == "__main__":
             "[startup] Import backend.app.main done elapsed_ms=%.1f",
             (time.monotonic() - _import_started) * 1000,
         )
+        _start_remote_support_if_needed()
     except Exception:
         _logger.exception(
             "[startup] Import backend.app.main failed elapsed_ms=%.1f",
