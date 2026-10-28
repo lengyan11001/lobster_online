@@ -155,7 +155,11 @@
         </div>
         <div class="wct-row">
           <input id="wctTagsInput" class="wct-input" placeholder="行业标签（可选）">
-          <button type="button" class="btn btn-ghost btn-sm" id="wctAddByIdBtn" hidden>按公开 ID / 作品链接添加</button>
+          <button type="button" class="btn btn-ghost btn-sm" id="wctAddByIdBtn" hidden>按公开 ID 添加</button>
+        </div>
+        <div class="wct-row" id="wctVideoLinkRow" hidden>
+          <input id="wctVideoLinkInput" class="wct-input" placeholder="粘贴视频号作品分享链接，例如 https://weixin.qq.com/sph/...">
+          <button type="button" class="btn btn-primary btn-sm" id="wctAddByVideoLinkBtn">从作品链接添加</button>
         </div>
         <div id="wctCandidates" class="wct-cand-list"></div>
       </div>

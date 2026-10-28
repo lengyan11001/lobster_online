@@ -393,8 +393,10 @@
     var platform = currentPlatform();
     var input = $('wctSearchInput');
     var byId = $('wctAddByIdBtn');
-    if (input) input.placeholder = platform === 'douyin' ? '输入抖音昵称或抖音号' : '输入视频号昵称、username、sph ID 或作品分享链接';
+    var videoRow = $('wctVideoLinkRow');
+    if (input) input.placeholder = platform === 'douyin' ? '输入抖音昵称或抖音号' : '输入视频号昵称、username 或 sph ID';
     if (byId) byId.hidden = platform !== 'wechat_channels';
+    if (videoRow) videoRow.hidden = platform !== 'wechat_channels';
   }
   function searchCandidates() {
     var platform = currentPlatform();
@@ -463,18 +465,31 @@
       return loadPeers();
     }).catch(function(err) { setTask('添加失败：' + (err.message || ''), true); setMsg(err.message || '添加同行失败', true); });
   }
+  function submitWechatCompetitor(value, busyText, successText) {
+    setTask(busyText);
+    return apiJson('/api/ip-content/wechat-channels/competitors/by-channel-id', {
+      method: 'POST',
+      body: { channel_id: value, industry_tags: (($('wctTagsInput') && $('wctTagsInput').value) || '').trim() }
+    }).then(function() {
+      if ($('wctSearchInput')) $('wctSearchInput').value = '';
+      if ($('wctVideoLinkInput')) $('wctVideoLinkInput').value = '';
+      setTask(successText);
+      closeAddModal();
+      return loadPeers();
+    }).catch(function(err) {
+      setTask('添加失败：' + (err.message || ''), true);
+      setMsg(err.message || '添加视频号同行失败', true);
+    });
+  }
   function addByPublicId() {
     var channelId = (($('wctSearchInput') && $('wctSearchInput').value) || '').trim();
     if (!channelId) { setMsg('请先输入视频号公开 ID（sph 开头）', true); return; }
-    setTask('正在按公开 ID / 作品链接解析账号…');
-    apiJson('/api/ip-content/wechat-channels/competitors/by-channel-id', {
-      method: 'POST',
-      body: { channel_id: channelId, industry_tags: (($('wctTagsInput') && $('wctTagsInput').value) || '').trim() }
-    }).then(function() {
-      setTask('已按公开 ID / 作品链接添加视频号同行。');
-      closeAddModal();
-      return loadPeers();
-    }).catch(function(err) { setTask('添加失败：' + (err.message || ''), true); setMsg(err.message || '按公开 ID / 作品链接添加失败', true); });
+    submitWechatCompetitor(channelId, '正在按公开 ID 解析账号…', '已按公开 ID 添加视频号同行。');
+  }
+  function addByVideoLink() {
+    var videoLink = (($('wctVideoLinkInput') && $('wctVideoLinkInput').value) || '').trim();
+    if (!videoLink) { setMsg('请先粘贴视频号作品分享链接，例如 https://weixin.qq.com/sph/...', true); return; }
+    submitWechatCompetitor(videoLink, '正在从作品链接解析账号…', '已从作品链接添加视频号同行。');
   }
 
   /* ── 二级：详情页（不是弹窗；进入不自动同步）── */
@@ -753,6 +768,7 @@
     on('wctPlatform', 'change', updatePlatformFields);
     on('wctSearchBtn', 'click', searchCandidates);
     on('wctAddByIdBtn', 'click', addByPublicId);
+    on('wctAddByVideoLinkBtn', 'click', addByVideoLink);
     on('wctSearchInput', 'keydown', function(ev) { if (ev.key === 'Enter') { ev.preventDefault(); searchCandidates(); } });
     on('wctPeerFilter', 'input', function(ev) { state.filter = (ev.target && ev.target.value) || ''; renderPeers(); });
     on('wctDetailBack', 'click', closeDetail);

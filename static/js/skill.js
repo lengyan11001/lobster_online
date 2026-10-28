@@ -1567,8 +1567,8 @@ window._openAlibabaInquiriesView = function() {
 window._openWechatChannelsTranscriptView = function() {
   if (typeof window.registerLobsterView === 'function') {
     window.registerLobsterView('wechat-channels-transcript', {
-      html: '/static/views/wechat-channels-transcript.html?v=20261028-wct-video-fallback',
-      scripts: '/static/js/wechat-channels-transcript.js?v=20261028-wct-video-fallback',
+      html: '/static/views/wechat-channels-transcript.html?v=20261028-wct-video-control',
+      scripts: '/static/js/wechat-channels-transcript.js?v=20261028-wct-video-control',
       init: 'initWechatChannelsTranscriptView',
       cache: 'reload'
     });
