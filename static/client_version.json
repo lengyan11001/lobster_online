@@ -1,7 +1,7 @@
 {
-  "version": "2.0.201",
-  "build": 498,
-  "applied_at": "2026-10-27T19:53:53+08:00",
-  "note": "canvas models render immediately; frameless resize fallback; publish accounts selectable",
-  "bundle_sha256": "eff33a9d8519c00811c50974dd979fc254e8af29b6ebad7b7bdd6d990ea67bd2"
+  "version": "2.0.202",
+  "build": 499,
+  "applied_at": "2026-10-28T19:21:58+08:00",
+  "note": "wechat channels video-link competitor add; direct finder username",
+  "bundle_sha256": "1b4625ccbd8b8773ce44afd815b3f87ae3b6b313dcb0e042c8db5d52781d178e"
 }
