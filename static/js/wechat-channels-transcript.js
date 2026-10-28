@@ -393,7 +393,7 @@
     var platform = currentPlatform();
     var input = $('wctSearchInput');
     var byId = $('wctAddByIdBtn');
-    if (input) input.placeholder = platform === 'douyin' ? '输入抖音昵称或抖音号' : '输入视频号昵称、sph 开头公开 ID 或 username';
+    if (input) input.placeholder = platform === 'douyin' ? '输入抖音昵称或抖音号' : '输入视频号昵称、username、sph ID 或作品分享链接';
     if (byId) byId.hidden = platform !== 'wechat_channels';
   }
   function searchCandidates() {
@@ -466,15 +466,15 @@
   function addByPublicId() {
     var channelId = (($('wctSearchInput') && $('wctSearchInput').value) || '').trim();
     if (!channelId) { setMsg('请先输入视频号公开 ID（sph 开头）', true); return; }
-    setTask('正在按公开 ID 添加…');
+    setTask('正在按公开 ID / 作品链接解析账号…');
     apiJson('/api/ip-content/wechat-channels/competitors/by-channel-id', {
       method: 'POST',
       body: { channel_id: channelId, industry_tags: (($('wctTagsInput') && $('wctTagsInput').value) || '').trim() }
     }).then(function() {
-      setTask('已按公开 ID 添加视频号同行。');
+      setTask('已按公开 ID / 作品链接添加视频号同行。');
       closeAddModal();
       return loadPeers();
-    }).catch(function(err) { setTask('添加失败：' + (err.message || ''), true); setMsg(err.message || '按公开 ID 添加失败', true); });
+    }).catch(function(err) { setTask('添加失败：' + (err.message || ''), true); setMsg(err.message || '按公开 ID / 作品链接添加失败', true); });
   }
 
   /* ── 二级：详情页（不是弹窗；进入不自动同步）── */
