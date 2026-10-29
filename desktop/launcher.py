@@ -1144,6 +1144,39 @@ def update_startup_status_from_code_line(line: str) -> None:
         set_startup_status("update", "正在检查更新", detail=text, percent=20)
 
 
+def warm_bytecode_cache(py: str, env: dict[str, str]) -> None:
+    """OTA 覆盖 .py 之后先编好 .pyc，别让第一次启动现场编译。
+
+    2026-10-29：build=499 覆盖 52 个文件后，首次 import backend.app.main 要
+    重新编译全部模块（tiktok_origin 等），冷启动超过 launcher 的 75s 等待，
+    窗口直接报「本地服务启动失败」。编译放在更新阶段做，那里有 30 分钟预算。
+    """
+    targets = [name for name in ("backend", "skills", "desktop", "scripts") if (ROOT / name).is_dir()]
+    if not targets:
+        return
+    set_startup_status("update_warm", "正在预热本地服务", detail="更新后首次启动较慢，先编译代码缓存…", percent=76)
+    started = time.time()
+    try:
+        proc = subprocess.run(
+            [py, "-m", "compileall", "-q", "-j", "0", *targets],
+            cwd=str(ROOT),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            timeout=600,
+            creationflags=creation_flags(),
+        )
+        log(
+            "CodeUpdate: bytecode warmup rc=%s elapsed=%.1fs"
+            % (proc.returncode, time.time() - started)
+        )
+    except Exception as exc:
+        log(f"CodeUpdate: bytecode warmup skipped: {exc}")
+
+
 def run_client_code_update(env: dict[str, str]) -> None:
     script = ROOT / "scripts" / "check_client_code_update.py"
     if not script.is_file():
@@ -1191,6 +1224,9 @@ def run_client_code_update(env: dict[str, str]) -> None:
                 raise subprocess.TimeoutExpired([py, str(script)], timeout_seconds)
             time.sleep(0.03)
         cp_returncode = proc.wait(timeout=5)
+        applied = any(
+            ("apply_done" in line.lower()) or ("已覆盖更新" in line) for line in lines
+        )
         tail = "\n".join(lines[-120:])
         if tail:
             log("CodeUpdate output:\n" + tail)
@@ -1199,6 +1235,8 @@ def run_client_code_update(env: dict[str, str]) -> None:
             set_startup_status("update_warn", "更新检查未完成，继续启动", detail=f"退出码 {cp_returncode}", percent=30)
         else:
             set_startup_status("update_done", "客户端更新检查完成", percent=34)
+        if applied:
+            warm_bytecode_cache(py, env)
     except subprocess.TimeoutExpired:
         log(f"CodeUpdate: timeout after {timeout_seconds}s; continuing startup")
         set_startup_status("update_timeout", "更新检查超时，继续启动", detail="本次先使用本地代码。", percent=30)
@@ -2525,7 +2563,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Lobster desktop launcher")
     parser.add_argument("--browser", action="store_true", help="Skip WebView and open the system browser.")
     parser.add_argument("--port", type=int, default=0, help="Backend port override.")
-    parser.add_argument("--wait", type=int, default=75, help="Seconds to wait for backend startup.")
+    parser.add_argument("--wait", type=int, default=180, help="Seconds to wait for backend startup.")
     parser.add_argument("--title", default="", help="Window title override.")
     parser.add_argument("--width", type=int, default=1440)
     parser.add_argument("--height", type=int, default=920)
