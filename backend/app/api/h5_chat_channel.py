@@ -84,6 +84,9 @@ _active_scheduled_run_ids: set[str] = set()
 _active_scheduled_douyin_actions: Dict[str, str] = {}
 _active_client_workflow_actions: Dict[str, str] = {}
 _scheduled_douyin_precise_touch_claim_lock = asyncio.Lock()
+# 精准触达是「多个子动作串行」的复合任务，停止时既要停掉正在跑的子动作，
+# 也要让外层动作循环立刻退出，否则它会接着启动下一个子动作。
+_scheduled_douyin_precise_touch_stop_requested = False
 _SCHEDULED_DOUYIN_IDLE_POLL_SECONDS = 2.0
 # 等本地抖音空闲/拿执行锁都要有上限：被取消的任务可能留下残留占用，
 # 没上限的话整台机器会一直卡着（2026-09-22 演示点不动就是这个原因）。
@@ -112,7 +115,11 @@ _pending_task_completion_tasks: set[asyncio.Task] = set()
 _scheduled_task_control_delivery: Dict[str, Dict[str, Any]] = {}
 # 每个 run 最后一次「非心跳」进度事件的本地时间，用于看门狗判断是否挂死
 _scheduled_task_activity: Dict[str, float] = {}
-_SCHEDULED_TASK_NO_PROGRESS_SECONDS = 2400.0
+# 本地看门狗：claimed 之后这么久没有任何「非心跳」进度就中断并释放队列。
+# 2400s（40 分钟）等太久，一次卡死等于整台机器半天不接活，默认改 10 分钟，可用环境变量覆盖。
+_SCHEDULED_TASK_NO_PROGRESS_SECONDS = float(
+    os.environ.get("LOBSTER_SCHEDULED_TASK_NO_PROGRESS_SECONDS", "600") or 600
+)
 _MOBILE_UPLOAD_TITLE = "【手机上传素材】"
 _MOBILE_UPLOAD_BLOCK_RE = re.compile(r"\n*【手机上传素材】\n(?P<body>[\s\S]*)", re.IGNORECASE)
 
@@ -7262,6 +7269,8 @@ async def _run_scheduled_douyin_sales_action(
         }
 
     if action == "precise_touch":
+        global _scheduled_douyin_precise_touch_stop_requested
+        _scheduled_douyin_precise_touch_stop_requested = False
         from douyin_api import (  # type: ignore
             collect_douyin_precise_touch_users,
             precise_customer_touch_identity_key,
@@ -7286,6 +7295,9 @@ async def _run_scheduled_douyin_sales_action(
         touched_user_keys: set[str] = set()
         blocked_by_unsettled_action = ""
         for touch_action in touch_actions:
+            if _scheduled_douyin_precise_touch_stop_requested:
+                logger.info("[SCHEDULED-TASK] precise touch stop requested; leaving action loop")
+                break
             if blocked_by_unsettled_action:
                 # Do not claim or mark users for actions that were never
                 # started. They remain available to the next touch round.
@@ -8248,6 +8260,33 @@ async def _stop_douyin_action(
             result = await douyin_stop_self_comment_monitor(
                 {"account_id": account_id} if account_id > 0 else None
             )
+        elif action == "precise_touch":
+            # 精准触达本身不是独立任务：它是把「关注评论 / 评论并@ / 私信互动 /
+            # 回复评论 / 私信接管」这些子动作串起来跑。停止必须逐个停子动作，
+            # 每个 stop 都是幂等的（没在跑就返回「当前没有正在执行」）。
+            from douyin_api import (  # type: ignore
+                douyin_stop_follow_comment,
+                douyin_stop_interaction,
+                douyin_stop_mention_comment,
+                douyin_stop_stranger_messages,
+                douyin_stop_video_comment,
+            )
+
+            global _scheduled_douyin_precise_touch_stop_requested
+            _scheduled_douyin_precise_touch_stop_requested = True
+            sub_results = {}
+            for sub_name, stop_call in (
+                ("follow_comment", douyin_stop_follow_comment),
+                ("mention_comment", douyin_stop_mention_comment),
+                ("direct_message", douyin_stop_interaction),
+                ("reply_comments", douyin_stop_video_comment),
+                ("stranger_message", douyin_stop_stranger_messages),
+            ):
+                try:
+                    sub_results[sub_name] = await stop_call()
+                except Exception as sub_exc:
+                    sub_results[sub_name] = {"error": str(sub_exc)[:200]}
+            result = {"code": 200, "msg": "已停止精准触达的本地子动作", "results": sub_results}
         else:
             return {"action": action, "stop_requested": False, "reason": "unsupported_action"}
     except Exception as exc:
@@ -14697,6 +14736,7 @@ async def _scheduled_inactivity_watchdog(
     base: str,
     headers: Dict[str, str],
     timeout_seconds: float = _SCHEDULED_TASK_NO_PROGRESS_SECONDS,
+    item: Optional[Dict[str, Any]] = None,
 ) -> None:
     """claimed 之后长时间没有任何进度事件（心跳不算）就中断，别把本地队列堵死。"""
     try:
@@ -14724,6 +14764,21 @@ async def _scheduled_inactivity_watchdog(
                 )
             except Exception:
                 pass
+            # douyin_api 里的浏览器任务是被 shield 保护的后台任务，光 cancel
+            # 调度协程不会让它们退出，必须显式下发本地停止，否则用户点了停止、
+            # 队列也「释放」了，私信却还在往外发。
+            if isinstance(item, dict):
+                try:
+                    await asyncio.wait_for(
+                        _stop_workflow_node_with_timeout(item, headers=headers),
+                        timeout=_WORKFLOW_NODE_STOP_TIMEOUT_SECONDS + _WORKFLOW_NODE_CANCEL_GRACE_SECONDS,
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "[SCHEDULED-TASK] watchdog local stop failed run_id=%s: %s",
+                        run_id,
+                        exc,
+                    )
             owner.cancel()
             return
     except asyncio.CancelledError:
@@ -14755,7 +14810,7 @@ async def _process_scheduled_task_detached(
             owner_task = asyncio.current_task()
             if owner_task is not None:
                 watchdog = asyncio.create_task(
-                    _scheduled_inactivity_watchdog(owner_task, run_id, client, base, headers)
+                    _scheduled_inactivity_watchdog(owner_task, run_id, client, base, headers, item=item)
                 )
         try:
             if _scheduled_item_uses_douyin_runtime(item):
@@ -14936,70 +14991,84 @@ async def h5_chat_poll_loop() -> None:
                 await _flush_task_control_outbox(client, headers)
                 now_loop = asyncio.get_event_loop().time()
                 if now_loop - last_heartbeat_at >= heartbeat_interval:
-                    heartbeat_payload = {
-                        "display_name": "local-online",
-                        "publish_accounts": _build_publish_account_snapshot(jwt_token),
-                        "capabilities": _h5_client_capabilities(),
-                        "remote_support": _remote_support_snapshot(),
-                    }
-                    contacts = _wechat_contacts_for_heartbeat()
-                    if contacts is not None:
-                        heartbeat_payload["wechat_contacts"] = contacts
-                    heartbeat_resp = await request_with_auth_retry(
-                        client,
-                        "POST",
-                        f"{base}/api/h5-chat/device-heartbeat",
-                        json=heartbeat_payload,
-                        headers=headers,
-                    )
-                    if heartbeat_resp.status_code == 401:
-                        logger.warning("[H5-CHAT] heartbeat auth rejected; clearing stale channel token")
-                        clear_channel_fallback("h5_heartbeat_401")
-                        last_heartbeat_at = 0.0
-                        await asyncio.sleep(sleep_missing_auth)
-                        continue
-                    if heartbeat_resp.status_code == 409:
-                        logger.warning("[H5-CHAT] heartbeat slot rejected; clearing stale channel token")
-                        clear_channel_fallback("h5_heartbeat_409")
-                        last_heartbeat_at = 0.0
-                        await asyncio.sleep(sleep_missing_auth)
-                        continue
-                    heartbeat_resp.raise_for_status()
-                    last_heartbeat_at = now_loop
-                    if now_loop - last_dashboard_report_at >= dashboard_report_interval:
-                        last_dashboard_report_at = now_loop
-                        try:
-                            await _report_douyin_dashboard_status(
-                                client,
-                                base,
-                                headers,
-                                jwt_token=jwt_token,
-                                installation_id=installation_id,
-                            )
-                        except Exception as exc:
-                            logger.debug("[DOUYIN-DASHBOARD] report failed: %s", exc)
+                    try:
+                        heartbeat_payload = {
+                            "display_name": "local-online",
+                            "publish_accounts": _build_publish_account_snapshot(jwt_token),
+                            "capabilities": _h5_client_capabilities(),
+                            "remote_support": _remote_support_snapshot(),
+                        }
+                        contacts = _wechat_contacts_for_heartbeat()
+                        if contacts is not None:
+                            heartbeat_payload["wechat_contacts"] = contacts
+                        heartbeat_resp = await request_with_auth_retry(
+                            client,
+                            "POST",
+                            f"{base}/api/h5-chat/device-heartbeat",
+                            json=heartbeat_payload,
+                            headers=headers,
+                        )
+                        if heartbeat_resp.status_code == 401:
+                            logger.warning("[H5-CHAT] heartbeat auth rejected; clearing stale channel token")
+                            clear_channel_fallback("h5_heartbeat_401")
+                            last_heartbeat_at = 0.0
+                            await asyncio.sleep(sleep_missing_auth)
+                            continue
+                        if heartbeat_resp.status_code == 409:
+                            logger.warning("[H5-CHAT] heartbeat slot rejected; clearing stale channel token")
+                            clear_channel_fallback("h5_heartbeat_409")
+                            last_heartbeat_at = 0.0
+                            await asyncio.sleep(sleep_missing_auth)
+                            continue
+                        heartbeat_resp.raise_for_status()
+                        last_heartbeat_at = now_loop
+                        if now_loop - last_dashboard_report_at >= dashboard_report_interval:
+                            last_dashboard_report_at = now_loop
+                            try:
+                                await _report_douyin_dashboard_status(
+                                    client,
+                                    base,
+                                    headers,
+                                    jwt_token=jwt_token,
+                                    installation_id=installation_id,
+                                )
+                            except Exception as exc:
+                                logger.debug("[DOUYIN-DASHBOARD] report failed: %s", exc)
+                    except Exception as exc:
+                        logger.warning(
+                            "[H5-CHAT] heartbeat failed: %s: %r",
+                            type(exc).__name__,
+                            exc,
+                        )
                 items: list[Dict[str, Any]] = []
                 h5_slots = max(0, max_h5_concurrency - len(active_items))
                 if h5_slots > 0 and now_loop - last_h5_poll_at >= h5_active_interval:
-                    last_h5_poll_at = now_loop
-                    resp = await request_with_auth_retry(
-                        client, "GET", f"{base}/api/h5-chat/pending", params={"limit": h5_slots}, headers=headers
-                    )
-                    if resp.status_code == 401:
-                        logger.warning("[H5-CHAT] cloud auth rejected; waiting for next login token")
-                        clear_channel_fallback("h5_pending_401")
-                        last_heartbeat_at = 0.0
-                        await asyncio.sleep(sleep_missing_auth)
-                        continue
-                    if resp.status_code == 409:
-                        logger.warning("[H5-CHAT] cloud slot rejected; clearing stale channel token")
-                        clear_channel_fallback("h5_pending_409")
-                        last_heartbeat_at = 0.0
-                        await asyncio.sleep(sleep_missing_auth)
-                        continue
-                    else:
-                        resp.raise_for_status()
-                        items = (resp.json() or {}).get("items") or []
+                    try:
+                        last_h5_poll_at = now_loop
+                        resp = await request_with_auth_retry(
+                            client, "GET", f"{base}/api/h5-chat/pending", params={"limit": h5_slots}, headers=headers
+                        )
+                        if resp.status_code == 401:
+                            logger.warning("[H5-CHAT] cloud auth rejected; waiting for next login token")
+                            clear_channel_fallback("h5_pending_401")
+                            last_heartbeat_at = 0.0
+                            await asyncio.sleep(sleep_missing_auth)
+                            continue
+                        if resp.status_code == 409:
+                            logger.warning("[H5-CHAT] cloud slot rejected; clearing stale channel token")
+                            clear_channel_fallback("h5_pending_409")
+                            last_heartbeat_at = 0.0
+                            await asyncio.sleep(sleep_missing_auth)
+                            continue
+                        else:
+                            resp.raise_for_status()
+                            items = (resp.json() or {}).get("items") or []
+                    except Exception as exc:
+                        logger.warning(
+                            "[H5-CHAT] chat pending failed: %s: %r",
+                            type(exc).__name__,
+                            exc,
+                        )
                 task_items: list[Dict[str, Any]] = []
                 # A publish follow-up uses the same local account/browser as
                 # a scheduled task. Do not poll the other queue while either
