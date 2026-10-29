@@ -1751,7 +1751,12 @@
   function apeShow() {
     var node = apeEl('agentProfileExtract');
     if (!node) return;
+    // 必须同时清 hidden 和显式给 display：只加 is-open 时，如果节点还带着
+    // hidden（首次创建），loading 分支又提前 return 没走到 apeShow，
+    // 弹窗就要等 AI 接口回来才第一次可见 —— 表现就是「点半天不弹」。
     node.hidden = false;
+    node.removeAttribute('hidden');
+    node.style.display = 'flex';
     node.classList.add('is-open');
   }
 
@@ -1817,6 +1822,7 @@
   function apeRender() {
     var host = apeEl('agentProfileExtractBody');
     if (!host) return;
+    apeShow();
     if (apeState.loading) {
       host.innerHTML = '<div class="agent-profile-extract-loading">正在读取这条记录并让 AI 提取…</div>';
       return;
@@ -1869,13 +1875,13 @@
     var source = (override && String(override.text || '').trim())
       ? { title: String(override.title || ''), text: String(override.text || '') }
       : apeRecordText(recordId);
-    var modal = apeEnsureModal();
-    modal.classList.add('is-open');
+    apeEnsureModal();
+    // 先把弹窗亮出来（loading 骨架），AI 请求在后台跑，不要让用户干等。
+    apeShow();
     apeState.recordId = String((override && override.recordId) || recordId || '');
     apeState.answers = null;
     apeState.loading = true;
     apeState.msg = '';
-    modal.classList.add('is-open');
     var sub = apeEl('agentProfileExtractSub');
     if (sub) sub.textContent = source.title ? ('来源记录：' + source.title) : '来源记录：' + apeState.recordId;
     apeRender();
@@ -1928,7 +1934,10 @@
 
   function apeClose() {
     var modal = apeEl('agentProfileExtract');
-    if (modal) modal.classList.remove('is-open');
+    if (!modal) return;
+    modal.classList.remove('is-open');
+    modal.style.display = 'none';
+    modal.hidden = true;
   }
 
   function apeSaveAll() {

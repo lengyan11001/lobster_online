@@ -584,17 +584,27 @@
     el('atDetailBack').addEventListener('click', showMain);
   }
 
-  var EXTRACT_WIDGET_SRC = '/static/js/views/agent.js?v=20261012-agent-extract-v1';
+  var EXTRACT_WIDGET_SRC = '/static/js/views/agent.js?v=20261029-ape-show-v2';
   function ensureProfileExtract() {
     if (window.LobsterProfileExtract) return Promise.resolve(true);
     if (window.__lobsterExtractLoading) return window.__lobsterExtractLoading;
     window.__lobsterExtractLoading = new Promise(function (resolve) {
+      var settled = false;
+      function finish() {
+        if (settled) return;
+        settled = true;
+        var ok = !!window.LobsterProfileExtract;
+        // 加载失败时清掉缓存的 Promise，下一次点击还能重试；
+        // 以前这里会永久缓存 false，之后每次点都只会报「组件加载失败」。
+        if (!ok) window.__lobsterExtractLoading = null;
+        resolve(ok);
+      }
       var node = document.createElement('script');
       node.src = EXTRACT_WIDGET_SRC;
-      node.onload = function () { resolve(!!window.LobsterProfileExtract); };
-      node.onerror = function () { resolve(false); };
+      node.onload = finish;
+      node.onerror = finish;
       document.head.appendChild(node);
-      setTimeout(function () { resolve(!!window.LobsterProfileExtract); }, 6000);
+      setTimeout(finish, 6000);
     });
     return window.__lobsterExtractLoading;
   }
@@ -624,6 +634,9 @@
     state.root = root || el('content-audio-transcription');
     if (!state.root) return Promise.resolve();
     bind(state.root);
+    // 提前把提取弹窗组件拉下来：点「提取资料」时就不用现下载 94KB 的
+    // agent.js，弹窗能立刻出现（第一次点也不会卡半天）。
+    ensureProfileExtract();
     renderLocalFiles();
     setResultTab('summary');
     state.root.querySelector('[data-at-screen="main"]').hidden = false;
