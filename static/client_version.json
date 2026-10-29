@@ -1,7 +1,7 @@
 {
   "version": "2.0.205",
-  "build": 502,
-  "applied_at": "2026-10-29T16:21:09+08:00",
-  "note": "douyin publish: direct video file input before file chooser",
-  "bundle_sha256": "c8a8fe028b3875391d14e64b263fb67c3567493ec6b85948b44a17aea680b624"
+  "build": 503,
+  "applied_at": "2026-10-30T01:09:07+08:00",
+  "note": "canvas generate: original buildParams (H3 content[], Kling image_urls+elements, Seedance image_files), lowercase resolution, drop empty refs; agent extract modal shows instantly",
+  "bundle_sha256": "f45d5163191cb69673eece030eae4ade8a3707694b119337c92affd7dabf172b"
 }
