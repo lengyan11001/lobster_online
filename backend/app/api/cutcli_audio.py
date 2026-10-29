@@ -21,6 +21,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _has_audio_stream(ffmpeg: str, source: Path) -> bool:
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-hide_banner", "-i", str(source)],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=120,
+        )
+    except Exception:
+        return True
+    return "Audio:" in ((proc.stderr or "") + "\n" + (proc.stdout or ""))
+
+
 @router.post("/api/assets/extract-audio", summary="Extract audio locally and upload it as an asset")
 async def extract_audio_asset(
     request: Request,
@@ -66,6 +80,8 @@ async def extract_audio_asset(
             raise HTTPException(400, detail="file or asset_id is required")
 
         ffmpeg = find_ffmpeg()
+        if not _has_audio_stream(ffmpeg, src):
+            raise HTTPException(400, detail="这个文件里没有音轨（可能是图片或无声视频），提取不了配音")
         proc = subprocess.run(
             [
                 ffmpeg,

@@ -390,7 +390,35 @@ def _human_size(size: int) -> str:
     return "%dB" % int(size or 0)
 
 
+def _probe_media_streams(ffmpeg: str, source: Path) -> Dict[str, Any]:
+    """读容器信息：没有音轨 / 其实是图片作品时，别把它当 ffmpeg 崩溃报出去。"""
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-hide_banner", "-i", str(source)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
+    except Exception:
+        return {"has_audio": True, "has_video": True, "is_image": False, "info": ""}
+    info = (proc.stderr or "") + "\n" + (proc.stdout or "")
+    is_image = ("jpeg_pipe" in info) or ("png_pipe" in info) or ("webp_pipe" in info)
+    return {
+        "has_audio": "Audio:" in info,
+        "has_video": "Video:" in info,
+        "is_image": is_image,
+        "info": info,
+    }
+
+
 def _extract_audio(ffmpeg: str, source: Path, out_path: Path) -> None:
+    probe = _probe_media_streams(ffmpeg, source)
+    if probe["is_image"]:
+        raise RuntimeError("这条作品是图文/图片，不是视频，没有音轨可以提炼文案")
+    if probe["has_video"] and not probe["has_audio"]:
+        raise RuntimeError("这条作品是无声视频，没有音轨可以提炼文案")
     proc = subprocess.run(
         [
             ffmpeg,
@@ -413,8 +441,13 @@ def _extract_audio(ffmpeg: str, source: Path, out_path: Path) -> None:
         timeout=900,
     )
     if proc.returncode != 0 or not out_path.exists() or out_path.stat().st_size <= 128:
-        msg = (proc.stderr or proc.stdout or "").strip()
-        raise RuntimeError(f"ffmpeg extract audio failed: {msg[-1800:]}")
+        raw = (proc.stderr or proc.stdout or "").strip()
+        lines = [
+            line for line in raw.splitlines()
+            if not line.strip().startswith("--") and "configuration:" not in line
+        ]
+        msg = "\n".join(lines).strip()[-600:]
+        raise RuntimeError(f"ffmpeg extract audio failed: {msg}")
 
 
 def _call_server_stt(audio_url: str, auth_headers: Dict[str, str]) -> Dict[str, Any]:
