@@ -1,7 +1,7 @@
 {
-  "version": "2.0.204",
-  "build": 501,
-  "applied_at": "2026-10-29T12:45:24+08:00",
-  "note": "start fix: parallel .pyc warmup on build change; launcher wait 180s; precise-touch stop; wct image guard",
-  "bundle_sha256": "fce6eb7f01ae2b99839773971e6f5c6a3fdcd9016c34e33ad03ece8a013f1545"
+  "version": "2.0.205",
+  "build": 502,
+  "applied_at": "2026-10-29T16:21:09+08:00",
+  "note": "douyin publish: direct video file input before file chooser",
+  "bundle_sha256": "c8a8fe028b3875391d14e64b263fb67c3567493ec6b85948b44a17aea680b624"
 }
