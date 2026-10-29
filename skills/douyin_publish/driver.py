@@ -2905,60 +2905,52 @@ class DouyinDriver(BaseDriver):
         video_uploaded = False
         attempts = []
 
-        # 策略 1：点可见的「上传视频」入口触发系统文件选择器（最贴近真实用户手势，本机实测有效）
-        chooser_done = False
-        for _mk_entry in (
-            lambda: page.get_by_text("上传视频", exact=True).first,
-            lambda: page.locator('button:has-text("上传视频")').first,
-            lambda: page.locator('[class*="container-drag"]').first,
-        ):
-            if chooser_done:
-                break
+        # 策略 1：优先直接给 accept 含 video 的 file input 注入文件。
+        # 2026-10-29 实测：新版抖音上传页上的 video input 直接 set_input_files 可立即进入
+        # /content/post/video 并开始上传；先点“上传视频”触发 FileChooser 反而可能卡 30 秒，
+        # 超时后页面已切到编辑页，只剩封面用的 image input，导致误报“视频不合法”。
+        file_input = await _douyin_find_video_file_input(page)
+        if file_input:
             try:
-                entry = _mk_entry()
-                if (await entry.count()) == 0 or not await entry.is_visible():
-                    continue
-                async with page.expect_file_chooser(timeout=_pw_ms(6000)) as fc_info:
-                    await entry.click(timeout=_pw_ms(4000))
-                fc = await fc_info.value
-                await fc.set_files(file_path)
-                chooser_done = True
-                logger.info("[DOUYIN-VIDEO] strategy1 file chooser fired, files set")
-                if await _douyin_upload_reacted():
+                await file_input.set_input_files(file_path, timeout=_pw_ms(15000))
+                logger.info("[DOUYIN-VIDEO] strategy1 set_input_files on video input")
+                if await _douyin_upload_reacted(timeout_s=12.0):
                     video_uploaded = True
-                    attempts.append("chooser=ok")
+                    attempts.append("video-input=ok")
                 else:
-                    attempts.append("chooser=no-reaction")
+                    attempts.append("video-input=no-reaction")
             except Exception as e:
-                attempts.append("chooser=" + str(e)[:60])
+                attempts.append("video-input=" + str(e)[:80])
+        else:
+            attempts.append("video-input=not-found")
 
-        # 策略 2：按 accept 选视频 input 直接 set_input_files
+        # 策略 2：找不到可注入的 video input 时，再回退到真实用户手势（上传按钮 → FileChooser）。
         if not video_uploaded:
-            file_input = await _douyin_find_video_file_input(page)
-            if file_input:
+            chooser_done = False
+            for _mk_entry in (
+                lambda: page.get_by_text("上传视频", exact=True).first,
+                lambda: page.locator('button:has-text("上传视频")').first,
+                lambda: page.locator('[class*="container-drag"]').first,
+            ):
+                if chooser_done:
+                    break
                 try:
-                    await file_input.set_input_files(file_path, timeout=_pw_ms(8000))
-                    logger.info("[DOUYIN-VIDEO] strategy2 set_input_files on video input")
-                    if await _douyin_upload_reacted():
+                    entry = _mk_entry()
+                    if (await entry.count()) == 0 or not await entry.is_visible():
+                        continue
+                    async with page.expect_file_chooser(timeout=_pw_ms(6000)) as fc_info:
+                        await entry.click(timeout=_pw_ms(4000))
+                    fc = await fc_info.value
+                    await fc.set_files(file_path)
+                    chooser_done = True
+                    logger.info("[DOUYIN-VIDEO] strategy2 file chooser fired, files set")
+                    if await _douyin_upload_reacted(timeout_s=12.0):
                         video_uploaded = True
-                        attempts.append("video-input=ok")
+                        attempts.append("chooser=ok")
                     else:
-                        attempts.append("video-input=no-reaction")
+                        attempts.append("chooser=no-reaction")
                 except Exception as e:
-                    attempts.append("video-input=" + str(e)[:80])
-
-        # 策略 3：页面级 set_input_files（自动等待，取第一个 file input）
-        if not video_uploaded:
-            try:
-                await page.set_input_files('input[type="file"]', file_path, timeout=_pw_ms(8000))
-                logger.info("[DOUYIN-VIDEO] strategy3 page.set_input_files")
-                if await _douyin_upload_reacted():
-                    video_uploaded = True
-                    attempts.append("page-input=ok")
-                else:
-                    attempts.append("page-input=no-reaction")
-            except Exception as e:
-                attempts.append("page-input=" + str(e)[:80])
+                    attempts.append("chooser=" + str(e)[:60])
 
         if not video_uploaded:
             # 失败诊断：dump file input 清单 + 截图，写进错误文案，便于下次直接定位
