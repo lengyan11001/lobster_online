@@ -1,7 +1,7 @@
 {
-  "version": "2.0.202",
-  "build": 499,
-  "applied_at": "2026-10-28T19:21:58+08:00",
-  "note": "wechat channels video-link competitor add; direct finder username",
-  "bundle_sha256": "1b4625ccbd8b8773ce44afd815b3f87ae3b6b313dcb0e042c8db5d52781d178e"
+  "version": "2.0.203",
+  "build": 500,
+  "applied_at": "2026-10-29T12:43:39+08:00",
+  "note": "ota start fix: warm pyc after apply + wait 180s; precise-touch stop; wct image guard",
+  "bundle_sha256": "44c31fefdce128f1b835be7a545f48b35049442593ced8334d7c24d1c0f39f64"
 }
