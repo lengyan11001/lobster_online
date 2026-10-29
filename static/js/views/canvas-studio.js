@@ -3,9 +3,9 @@
   "use strict";
   var SCREENS = {
     inspiration: "/static/canvas-ui/inspiration.html?v=20261026-canvas-ui-v18",
-    // 生成页沿用 canvas-web 原生的 GeneratePage（模型/参数/上传/提交/历史全是原逻辑），
-    // 只由 canvas-theme.css 覆盖样式；不再用自绘的 generate.html。
-    generate: "/static/canvas-ui/generate.html?v=20261027-canvas-ui-v34",
+    // 生成页真·沿用 canvas-web 原生 GeneratePage（模型/参数/上传/提交/历史全是原逻辑），
+    // 样式只由 canvas-theme.css 覆盖 .GeneratePage-* 类；自绘 generate.html 已停用。
+    generate: "/api/canvas-local/canvas-frame#/generate",
     projects: "/static/canvas-ui/projects.html?v=20261026-canvas-ui-v18"
   };
   function initCanvasStudioView(mount) {
