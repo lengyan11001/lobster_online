@@ -1,7 +1,7 @@
 {
-  "version": "2.0.203",
-  "build": 500,
-  "applied_at": "2026-10-29T12:43:39+08:00",
-  "note": "ota start fix: warm pyc after apply + wait 180s; precise-touch stop; wct image guard",
-  "bundle_sha256": "44c31fefdce128f1b835be7a545f48b35049442593ced8334d7c24d1c0f39f64"
+  "version": "2.0.204",
+  "build": 501,
+  "applied_at": "2026-10-29T12:45:24+08:00",
+  "note": "start fix: parallel .pyc warmup on build change; launcher wait 180s; precise-touch stop; wct image guard",
+  "bundle_sha256": "fce6eb7f01ae2b99839773971e6f5c6a3fdcd9016c34e33ad03ece8a013f1545"
 }
