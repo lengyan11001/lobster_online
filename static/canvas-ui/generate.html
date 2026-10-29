@@ -163,13 +163,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     ],
     video: [
       { type: "minimaxH3Video", id: "minimax/h3", name: "海螺 H3 视频生成", desc: "原生图片与视频多模态参考，支持 768P 与 2K",
-        ratioKey: "aspect_ratio", ratios: ["16:9", "9:16", "1:1"], resolutions: ["768P", "1080P", "2K"],
+        ratioKey: "aspect_ratio", ratios: ["16:9", "9:16", "1:1"], resolutions: ["768P", "2K"],
         durations: [4, 5, 6, 8, 10, 15], imageLimit: 9, videoLimit: 3, audioLimit: 3 },
       { type: "klingO3ReferenceVideo", id: "fal-ai/kling-video/o3/standard/reference-to-video", name: "可灵 O3 视频生成", desc: "图片与视频合计最多 4 个，支持原生音频与多镜头",
-        ratioKey: "aspect_ratio", ratios: ["16:9", "9:16", "1:1"], resolutions: ["Standard", "Pro"],
+        ratioKey: "aspect_ratio", ratios: ["16:9", "9:16", "1:1"], resolutions: ["Standard"],
         durations: [3, 5, 10, 15], imageLimit: 4, videoLimit: 4, audioLimit: 0 },
       { type: "superSeed2LiteVideo", id: "st-ai/super-seed2-lite", name: "Seedance 2.5 视频生成", desc: "Seedance 2.5 全能参考，支持图片、视频和音频素材",
-        ratioKey: "aspect_ratio", ratios: ["16:9", "9:16", "1:1"], resolutions: ["480p", "720P"],
+        ratioKey: "aspect_ratio", ratios: ["16:9", "9:16", "1:1"], resolutions: ["480p", "720p"],
         durations: [6, 8, 10, 15], imageLimit: 9, videoLimit: 3, audioLimit: 3 }
     ]
   };
@@ -283,22 +283,67 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
   }
   document.addEventListener("change", function (e) { if (e.target.tagName === "SELECT") summary(state.mode); });
 
+  // 参数结构照搬画布原生 buildParams（src/components/canvas/nodes/videoModelConfigs.js）：
+  // 海螺 H3 用 content[]，可灵 O3 用 image_urls + elements，Seedance 2.5 用 image_files。
+  function httpUrls(list) {
+    return (list || []).map(function (x) { return x && x.url ? String(x.url) : ""; })
+      .filter(function (u) { return /^https?:\/\//i.test(u); });
+  }
   function collect(mode) {
     var c = currentConfig(mode), params = {};
     var r = el(mode + "-param-ratio");
-    if (r && r.closest("[data-param-field]").style.display !== "none" && r.value) params[c.ratioKey] = r.value;
-    var res = el(mode + "-param-resolution");
-    if (res && res.closest("[data-param-field]").style.display !== "none" && res.value) params.resolution = res.value;
-    var d = el(mode + "-param-duration");
-    if (d && d.closest("[data-param-field]").style.display !== "none" && d.value) params.duration = Number(d.value);
-    var q = el(mode + "-param-quality");
-    if (q && q.closest("[data-param-field]").style.display !== "none" && q.getAttribute("data-value")) params.quality = q.getAttribute("data-value");
-    var imgs = state.refs.image.map(function (x) { return x.url; });
-    var vids = state.refs.video.map(function (x) { return x.url; });
-    var auds = state.refs.audio.map(function (x) { return x.url; });
-    if (imgs.length) params[c.type === "gptImage2" || c.type === "nanoBanana2" ? "image_urls" : "reference_image_urls"] = imgs;
-    if (vids.length) params.first_frame = vids[0];
-    if (auds.length) params.audio_url = auds[0];
+    var ratio = r && r.value ? r.value : "";
+    var resEl = el(mode + "-param-resolution");
+    var resolution = resEl && resEl.value ? resEl.value : "";
+    var dEl = el(mode + "-param-duration");
+    var duration = dEl && dEl.value ? Number(dEl.value) : 0;
+    var qEl = el(mode + "-param-quality");
+    var quality = qEl && qEl.getAttribute("data-value") ? qEl.getAttribute("data-value") : "";
+    var imgs = httpUrls(state.refs.image);
+    var vids = httpUrls(state.refs.video);
+    var auds = httpUrls(state.refs.audio);
+
+    if (mode === "image") {
+      params[c.ratioKey] = ratio;
+      params.resolution = resolution;
+      params.output_format = "png";
+      if (quality) { params.quality = quality; params.num_images = 1; }
+      if (imgs.length) params.image_urls = imgs;
+      return params;
+    }
+
+    if (c.type === "minimaxH3Video") {
+      var content = [{ type: "text", text: "" }];
+      imgs.forEach(function (u) { content.push({ type: "image_url", image_url: { url: u }, role: "reference_image" }); });
+      vids.forEach(function (u) { content.push({ type: "video_url", video_url: { url: u }, role: "reference_video" }); });
+      auds.forEach(function (u) { content.push({ type: "audio_url", audio_url: { url: u }, role: "reference_audio" }); });
+      params.content = content;
+      params.resolution = resolution;
+      params.duration = duration;
+      params.ratio = ratio;
+      params.aigc_watermark = false;
+      return params;
+    }
+
+    if (c.type === "klingO3ReferenceVideo") {
+      if (imgs.length) params.image_urls = imgs;
+      if (vids.length) params.elements = vids.map(function (u) { return { video_url: u }; });
+      params.duration = String(duration);
+      params.aspect_ratio = ratio;
+      params.generate_audio = true;
+      params.shot_type = "customize";
+      return params;
+    }
+
+    // superSeed2LiteVideo / Seedance 2.5
+    params.model = "Seedance_2.5";
+    params.functionMode = "omini";
+    if (imgs.length) params.image_files = imgs;
+    if (vids.length) params.video_files = vids;
+    if (auds.length) params.audio_files = auds;
+    params.duration = duration;
+    params.ratio = ratio;
+    params.resolution = resolution;
     return params;
   }
 
@@ -371,7 +416,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     var item = state.model[mode];
     var model = item && item.id;
     if (!model) { alert("请先选择模型"); return; }
-    var params = collect(mode); params.prompt = prompt;
+    var params = collect(mode);
+    if (params.content && params.content[0] && params.content[0].type === "text") params.content[0].text = prompt;
+    else params.prompt = prompt;
     setQuote(mode, "正在报价…");
     api("/canvas-api/api/v3/tasks/quote", { method: "POST", body: JSON.stringify({ model: model, params: params }) }).then(function (q) {
       var price = (q && q.data && q.data.price) || "";
