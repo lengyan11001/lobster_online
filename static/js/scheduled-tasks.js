@@ -983,6 +983,8 @@
       toutiao: '今日头条',
       kuaishou: '快手',
       bilibili: 'B站',
+      zhihu: '知乎',
+      wechat_channels: '视频号',
       wechat_moments: '朋友圈图文'
     };
     return names[p] || p || '-';

@@ -1043,6 +1043,7 @@ SUPPORTED_PLATFORMS = {
     "bilibili": {"name": "B站", "login_url": "https://member.bilibili.com"},
     "xiaohongshu": {"name": "小红书", "login_url": "https://creator.xiaohongshu.com"},
     "kuaishou": {"name": "快手", "login_url": "https://cp.kuaishou.com"},
+    "zhihu": {"name": "知乎", "login_url": "https://www.zhihu.com/signin"},
     "toutiao": {"name": "今日头条", "login_url": "https://mp.toutiao.com/auth/page/login?redirect_url=JTJGcHJvZmlsZV92NCUyRg=="},
     "wechat_channels": {"name": "视频号", "login_url": "https://channels.weixin.qq.com/platform"},
     "tiktok": {"name": "TikTok", "login_url": "https://www.tiktok.com/login?redirect_url=https%3A%2F%2Fwww.tiktok.com%2Ftiktokstudio%2Fupload"},

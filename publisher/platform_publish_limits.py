@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import List, Tuple
 
@@ -125,6 +126,38 @@ def normalize_publish_texts(
             room = max(0, desc_max - len(suffix))
             warnings.append(f"视频号描述+话题总长度已超过 {desc_max} 字，已缩短描述（原描述 {len(d)} 字）")
             d = d[:room]
+        return t, d, g, warnings
+
+
+    if plat == "kuaishou":
+        # 快手只有一个作品描述框：标题+描述+话题合并；话题标签上限 4 个，超出会被拒绝提交。
+        caption_max = 500
+        tag_items = [x.strip().lstrip("#") for x in re.split(r"[,\s\uFF0C]+", g or "") if x.strip()]
+        dropped = 0
+        if len(tag_items) > 4:
+            dropped = len(tag_items) - 4
+            tag_items = tag_items[:4]
+            warnings.append(f"快手话题标签上限 4 个，已丢弃多余的 {dropped} 个")
+        tag_line = " ".join(f"#{x}" for x in tag_items)
+        body = "\n".join([x for x in (t, d) if x])
+        if d and t and d.startswith(t):
+            body = d
+        combined = (body + ("\n" + tag_line if tag_line else "")).strip()
+        if len(combined) > caption_max:
+            warnings.append(
+                f"快手作品描述已超过 {caption_max} 字，已截断（原 {len(combined)} 字）"
+            )
+        return "", combined[:caption_max], ",".join(tag_items), warnings
+
+    if plat == "zhihu":
+        # 知乎专栏：标题独立输入框（上限 100 字），正文另存；正文过长发布很慢，按 8000 字保守截断。
+        title_max, body_max = 100, 8000
+        if len(t) > title_max:
+            warnings.append(f"知乎标题已超过 {title_max} 字，已截断（原 {len(t)} 字）")
+            t = t[:title_max]
+        if len(d) > body_max:
+            warnings.append(f"知乎正文已超过 {body_max} 字，已截断（原 {len(d)} 字）")
+            d = d[:body_max]
         return t, d, g, warnings
 
     return t, d, g, warnings
