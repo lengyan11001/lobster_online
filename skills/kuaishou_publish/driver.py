@@ -290,6 +290,36 @@ async def _page_text(page: Any, limit: int = 4000) -> str:
         return ""
 
 
+async def _dry_run_stop(
+    page: Any, selector: str, applied: Dict[str, Any], _step, shot_path: str
+) -> Dict[str, Any]:
+    """dry_run：停在「发布」按钮前，不提交，只回传按钮是否就绪 + 截图。"""
+    btn = await _first_visible(page, selector)
+    cls = ""
+    if btn is not None:
+        try:
+            cls = (await btn.get_attribute("class")) or ""
+        except Exception:
+            cls = ""
+    if shot_path:
+        try:
+            await page.screenshot(path=shot_path)
+        except Exception as exc:
+            logger.warning("[KUAISHOU] dry_run 截图失败: %s", exc)
+    enabled = bool(btn) and "disabled" not in cls.lower()
+    _step("dry_run 停在发布前", enabled, button_found=btn is not None, button_class=cls[:80])
+    return {
+        "ok": enabled,
+        "dry_run": True,
+        "url": getattr(page, "url", "") or "",
+        "applied": applied,
+        "publish_button_found": btn is not None,
+        "publish_button_enabled": enabled,
+        "publish_button_class": cls[:80],
+        **({} if enabled else {"error": "dry_run：发布按钮未找到或被禁用"}),
+    }
+
+
 class KuaishouDriver(BaseDriver):
     """快手创作者中心：视频 / 图文发布。"""
 
@@ -388,6 +418,8 @@ class KuaishouDriver(BaseDriver):
             return {"ok": False, "error": f"文件不存在: {file_path}", "applied": applied}
         _step("检查文件存在", True, size=os.path.getsize(file_path))
 
+        dry_run = bool(options.get("dry_run"))
+        shot_path = str(options.get("screenshot_path") or "")
         image = is_image_media(file_path)
         tags_use, tag_warnings = limit_hashtags(tags or "")
         caption = compose_caption(title or "", description or "", tags_use)
@@ -398,9 +430,11 @@ class KuaishouDriver(BaseDriver):
         try:
             if image:
                 return await self._publish_image(
-                    page, file_path, caption, applied, _step
+                    page, file_path, caption, applied, _step, dry_run=dry_run, shot_path=shot_path
                 )
-            return await self._publish_video(page, file_path, caption, applied, _step)
+            return await self._publish_video(
+                page, file_path, caption, applied, _step, dry_run=dry_run, shot_path=shot_path
+            )
         except Exception as exc:
             logger.exception("[KUAISHOU-PUBLISH] 发布异常")
             _step("异常", False, error=str(exc))
@@ -413,6 +447,9 @@ class KuaishouDriver(BaseDriver):
         caption: str,
         applied: Dict[str, Any],
         _step,
+        *,
+        dry_run: bool = False,
+        shot_path: str = "",
     ) -> Dict[str, Any]:
         # 先进作品管理页再回来，清掉上一条草稿的页面状态
         try:
@@ -480,6 +517,9 @@ class KuaishouDriver(BaseDriver):
         except Exception:
             pass
 
+        if dry_run:
+            return await _dry_run_stop(page, VIDEO_PUBLISH_BUTTON_CSS, applied, _step, shot_path)
+
         if not await _js_click_publish(page, VIDEO_PUBLISH_BUTTON_CSS):
             _step("点击发布", False)
             return {"ok": False, "error": "未找到快手发布按钮", "applied": applied}
@@ -499,6 +539,9 @@ class KuaishouDriver(BaseDriver):
         caption: str,
         applied: Dict[str, Any],
         _step,
+        *,
+        dry_run: bool = False,
+        shot_path: str = "",
     ) -> Dict[str, Any]:
         await page.goto(PUBLISH_VIDEO_URL, wait_until="domcontentloaded", timeout=_nav_ms(30000))
         await asyncio.sleep(4)
@@ -550,6 +593,9 @@ class KuaishouDriver(BaseDriver):
             return {"ok": False, "error": "未能填入快手图文描述", "applied": applied}
         _step("填写图文描述", True, chars=len(caption))
         await asyncio.sleep(1.5)
+
+        if dry_run:
+            return await _dry_run_stop(page, IMAGE_PUBLISH_BUTTON_SELECTORS, applied, _step, shot_path)
 
         clicked = await _first_visible(page, IMAGE_PUBLISH_BUTTON_SELECTORS)
         if clicked:

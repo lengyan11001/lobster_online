@@ -286,6 +286,9 @@ class ZhihuDriver(BaseDriver):
                     )
                     applied["asset_skipped"] = True
 
+            if options.get("dry_run"):
+                return await self._dry_run_stop(page, applied, _step, str(options.get("screenshot_path") or ""))
+
             if not await self._click_publish(page, _step):
                 return {"ok": False, "error": "未找到知乎「发布」按钮", "applied": applied}
 
@@ -294,6 +297,43 @@ class ZhihuDriver(BaseDriver):
             logger.exception("[ZHIHU-PUBLISH] 发布异常")
             _step("异常", False, error=str(exc))
             return {"ok": False, "error": str(exc), "applied": applied}
+
+    async def _dry_run_stop(
+        self, page: Any, applied: Dict[str, Any], _step, shot_path: str
+    ) -> Dict[str, Any]:
+        """dry_run：停在「发布」按钮前，不提交。"""
+        if shot_path:
+            try:
+                await page.screenshot(path=shot_path)
+            except Exception as exc:
+                logger.warning("[ZHIHU] dry_run 截图失败: %s", exc)
+        btn = await self._find_publish_button(page)
+        _step("dry_run 停在发布前", btn is not None)
+        return {
+            "ok": btn is not None,
+            "dry_run": True,
+            "url": getattr(page, "url", "") or "",
+            "applied": applied,
+            "publish_button_found": btn is not None,
+            **({} if btn is not None else {"error": "dry_run：未找到知乎「发布」按钮"}),
+        }
+
+    async def _find_publish_button(self, page: Any) -> Any:
+        for sel in _split_selectors(PUBLISH_BUTTON_SELECTORS):
+            try:
+                els = await page.query_selector_all(sel)
+            except Exception:
+                els = []
+            for el in els:
+                try:
+                    text = (await el.inner_text() or "").strip().replace(" ", "")
+                    if text != "发布":
+                        continue
+                    if await el.is_visible():
+                        return el
+                except Exception:
+                    continue
+        return None
 
     async def _try_insert_image(self, page: Any, file_path: str, _step) -> bool:
         try:
