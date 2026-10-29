@@ -99,6 +99,62 @@ class _SuppressHealthProbeAccessFilter(logging.Filter):
 logging.getLogger("uvicorn.access").addFilter(_SuppressHealthProbeAccessFilter())
 
 
+def _warm_bytecode_cache_if_needed() -> None:
+    """OTA 覆盖代码后的第一次启动，先把 .pyc 并行编出来。
+
+    2026-10-29 事故：build=499 覆盖 52 个文件后，``import backend.app.main``
+    串行重编译全部模块要 70s+，launcher 的启动等待（75s）直接判「本地服务
+    启动失败」。这里在 import 之前用 compileall -j 把编译并行做掉，通常
+    10-20s 完成；同一 build 只做一次，用 data/.bytecode_warm_build 记账。
+    """
+    try:
+        import compileall  # noqa: F401  (kept for clarity of intent)
+        import json
+        from pathlib import Path
+
+        root = Path(_root)
+        version_file = root / "CLIENT_CODE_VERSION.json"
+        if not version_file.is_file():
+            return
+        try:
+            build = str(json.loads(version_file.read_text(encoding="utf-8")).get("build") or "").strip()
+        except Exception:
+            build = ""
+        if not build:
+            return
+        marker = root / "data" / ".bytecode_warm_build"
+        try:
+            if marker.is_file() and marker.read_text(encoding="utf-8").strip() == build:
+                return
+        except Exception:
+            pass
+        targets = [name for name in ("backend", "skills", "publisher", "desktop", "scripts") if (root / name).is_dir()]
+        if not targets:
+            return
+        started = time.monotonic()
+        subprocess.run(
+            [sys.executable, "-m", "compileall", "-q", "-j", "0", *targets],
+            cwd=str(root),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=600,
+            check=False,
+        )
+        _logger.info(
+            "[startup] bytecode warmup done build=%s elapsed_ms=%.1f",
+            build,
+            (time.monotonic() - started) * 1000,
+        )
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(build, encoding="utf-8")
+        except Exception:
+            pass
+    except Exception as exc:
+        _logger.warning("[startup] bytecode warmup skipped: %s", exc)
+
+
 def _start_mcp_if_needed():
     """若 8001 未被占用则启动 MCP，使对话侧速推/能力可用。"""
     mcp_port = int(os.environ.get("MCP_PORT", str(getattr(settings, "mcp_port", 8001))))
@@ -231,6 +287,7 @@ if __name__ == "__main__":
     # 监听地址：与 edition 无关，统一用配置（.env 或环境变量 HOST）。start.bat 默认 HOST=0.0.0.0 以便局域网访问
     host = (getattr(settings, "host", None) or os.environ.get("HOST") or "0.0.0.0").strip() or "0.0.0.0"
     _logger.info("[启动] Backend 启动 host=%s port=%s edition=%s LOG_LEVEL=%s", host, port, edition, _log_level_name)
+    _warm_bytecode_cache_if_needed()
     _logger.info("[startup] Import backend.app.main start")
     _import_traceback_timeout = max(
         5,
