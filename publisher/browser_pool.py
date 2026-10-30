@@ -413,7 +413,9 @@ async def _connect_douyin_cdp_context(profile_dir: str, port: int) -> Any:
     browser = _douyin_cdp_browsers.get(port)
     if browser is None or not browser.is_connected():
         logger.info("[BROWSER][DOUYIN-CDP] connect_over_cdp port=%s profile=%s", port, profile_dir[-80:])
-        browser = await _pw_instance.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+        browser = await _pw_instance.chromium.connect_over_cdp(
+        f"http://127.0.0.1:{port}", timeout=15000
+    )
         _douyin_cdp_browsers[port] = browser
     contexts = list(getattr(browser, "contexts", []) or [])
     if not contexts:
@@ -488,7 +490,9 @@ async def _connect_tiktok_cdp_context(profile_dir: str, port: int):
     browser = _tiktok_cdp_browsers.get(port)
     if browser is None or not browser.is_connected():
         logger.info("[BROWSER][TIKTOK-CDP] connect_over_cdp port=%s profile=%s", port, profile_dir[-80:])
-        browser = await _pw_instance.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+        browser = await _pw_instance.chromium.connect_over_cdp(
+        f"http://127.0.0.1:{port}", timeout=15000
+    )
         _tiktok_cdp_browsers[port] = browser
     contexts = list(getattr(browser, "contexts", []) or [])
     if not contexts:
@@ -537,7 +541,7 @@ async def _connect_cdp_browser() -> Any:
     if _pw_instance is None:
         _pw_instance = await async_playwright().__aenter__()
     logger.info("[BROWSER][CDP] connect_over_cdp %s", _CDP_URL)
-    _cdp_browser = await _pw_instance.chromium.connect_over_cdp(_CDP_URL)
+    _cdp_browser = await _pw_instance.chromium.connect_over_cdp(_CDP_URL, timeout=15000)
     return _cdp_browser
 
 
