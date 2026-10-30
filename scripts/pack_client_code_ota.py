@@ -152,9 +152,6 @@ WEBSITE_OTA_PATHS: tuple[str, ...] = (
     "static/vendor",
     "static/data",
     "static/branding/brands.json",
-    # 带新图标的品牌壳：OEM 切换器会把服务器上的旧壳（龙虾图标）装成本机
-    # 必火智能AI.exe/start.exe，启动时用这份权威副本纠正回来。
-    "static/branding/shell",
     "static/index.html",
     "static/ai3d-model-preview.html",
     # Tiny first-install/manual-repair entrypoints required when a website OTA
