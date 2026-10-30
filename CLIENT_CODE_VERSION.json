@@ -1,7 +1,7 @@
 {
-  "version": "2.0.206",
-  "build": 504,
-  "applied_at": "2026-10-30T12:29:55+08:00",
-  "note": "oem logo fix (bihuo no longer skips asset download, branding fallback + absolute asset urls, login logo), startup warmup cap 45s, canvas buildParams, agent extract modal",
-  "bundle_sha256": "bc965467b44ed53265a9a17117eebbe262ed05be5284d9d918991d43a99d5cca"
+  "version": "2.0.207",
+  "build": 505,
+  "applied_at": "2026-10-30T12:59:08+08:00",
+  "note": "ota paths include static brand images (bihu_stack/bihu_mark_64 land on clients); brand shell fix; canvas buildParams; agent extract modal",
+  "bundle_sha256": "036b105dab1114aa0f7ff8f9c161b55c13fdbd56d11c28cf4e1f0d796f4c4b97"
 }
