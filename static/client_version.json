@@ -1,7 +1,7 @@
 {
   "version": "2.0.210",
-  "build": 510,
-  "applied_at": "2026-10-30T20:53:59+08:00",
-  "note": "douyin cover flow: cross-frame click + JS dispatch + graceful degrade; desktop top bar drag; UI tab error reset; oem icon timestamp refresh; kuaishou/zhihu publish drivers(dry_run)",
-  "bundle_sha256": "82b7f8f122169e57a1d8abde5576c5d1964ffc82b044332442b7b9c15cb90931"
+  "build": 511,
+  "applied_at": "2026-10-30T20:58:36+08:00",
+  "note": "douyin cover flow fix + oem icon refresh + UI fixes; exclude runtime media and unused skill-cards",
+  "bundle_sha256": "8f8419300861b68422b23f9e674134841aae6cfd3511fab35e95fc1310591a64"
 }

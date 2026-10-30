@@ -534,6 +534,10 @@ def _skip_file(rel: str) -> bool:
         return True
     if nr.startswith("static/hifly_previews/") and not nr.endswith("manifest.json"):
         return True
+    # 技能卡片大图（19 张 ~1MB，合计 18.7MB）：当前代码/注册表均无引用（grep 0 命中），
+    # 暂不随 OTA 分发。将来 skill 商店接线时，删掉这一段即可自动恢复打包。
+    if nr.startswith("static/skill-cards/"):
+        return True
     if nr.lower().startswith(_OTA_RETIRED_SKILL_DIRS):
         return True
     if any(nr == p or nr.startswith(p + "/") for p in _OTA_SKIP_SKILL_ROOTS):
