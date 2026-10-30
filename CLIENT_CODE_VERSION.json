@@ -1,7 +1,7 @@
 {
-  "version": "2.0.207",
-  "build": 505,
-  "applied_at": "2026-10-30T12:59:08+08:00",
-  "note": "ota paths include static brand images (bihu_stack/bihu_mark_64 land on clients); brand shell fix; canvas buildParams; agent extract modal",
-  "bundle_sha256": "036b105dab1114aa0f7ff8f9c161b55c13fdbd56d11c28cf4e1f0d796f4c4b97"
+  "version": "2.0.208",
+  "build": 506,
+  "applied_at": "2026-10-30T19:06:01+08:00",
+  "note": "publish: 定时发布本地目录上传不再 422 (multipart content-type); ota paths carry brand images; oem logo/shell fixes; canvas buildParams",
+  "bundle_sha256": "e39e9df275ec5d6c437381207934321163757a4bea9d98780c628afe7824bafd"
 }
