@@ -624,6 +624,74 @@ def configure_desktop_branding() -> dict[str, object]:
     return profile
 
 
+def ensure_branded_shell(branding: dict[str, object]) -> None:
+    """把本机入口 exe 纠正成 OTA 随包的权威品牌壳。
+
+    2026-10-30：OEM 切换器会从服务器装一份 client_launcher.exe（104960 字节，
+    里面嵌的是老龙虾图标）成 必火智能AI.exe / start.exe；仅升级代码不会换掉它，
+    所以桌面/任务栏图标一直是龙虾。这里以 static/branding/shell/<mark>.exe 为准。
+    """
+    if os.name != "nt":
+        return
+    mark = str(branding.get("mark") or "").strip().lower()
+    if not mark:
+        return
+    shell = ROOT / "static" / "branding" / "shell" / f"{mark}.exe"
+    if not shell.is_file() or shell.stat().st_size <= 0:
+        return
+    try:
+        payload = shell.read_bytes()
+    except OSError:
+        return
+    import hashlib
+
+    digest = hashlib.sha256(payload).hexdigest()
+    install = branding.get("install") if isinstance(branding.get("install"), dict) else {}
+    names: list[str] = []
+    for raw in (install.get("launcher_filename"), "必火智能AI.exe", "必火AI员工.exe", "start.exe"):
+        name = str(raw or "").strip()
+        if name and name.lower().endswith(".exe") and name not in names:
+            names.append(name)
+    repaired = 0
+    for name in names:
+        target = ROOT / name
+        if not target.is_file():
+            continue
+        try:
+            if hashlib.sha256(target.read_bytes()).hexdigest() == digest:
+                continue
+        except OSError:
+            continue
+        stale = target.with_name(f".{target.name}.stale.{os.getpid()}")
+        try:
+            os.replace(target, stale)
+            shutil.copy2(shell, target)
+            repaired += 1
+            log(f"brand shell repaired name={name} sha={digest[:12]}")
+        except OSError as exc:
+            log(f"brand shell repair failed name={name}: {exc}")
+            try:
+                if stale.is_file() and not target.is_file():
+                    os.replace(stale, target)
+            except OSError:
+                pass
+        finally:
+            try:
+                stale.unlink(missing_ok=True)
+            except OSError:
+                pass
+    start_entry = ROOT / "start.exe"
+    if not start_entry.is_file():
+        try:
+            shutil.copy2(shell, start_entry)
+            repaired += 1
+            log("brand shell restored start.exe")
+        except OSError as exc:
+            log(f"brand shell start.exe restore failed: {exc}")
+    if repaired:
+        log(f"brand shell repaired files={repaired}")
+
+
 def refresh_oem_desktop_shortcut(branding: dict[str, object], only_existing: bool = False) -> None:
     profile_path = str(branding.get("_cache_profile_path") or "").strip()
     if os.name != "nt":
@@ -2602,6 +2670,7 @@ def main() -> int:
     args = parser.parse_args()
 
     branding = configure_desktop_branding()
+    ensure_branded_shell(branding)
     brand_mark = str(branding.get("mark") or "")
     configure_windows_app_identity(brand_mark)
     if branding.get("_oem_code"):
