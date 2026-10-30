@@ -117,29 +117,112 @@ _DOUYIN_COVER_HORIZONTAL_LABELS = ("设置横封面", "设置横版封面")
 _DOUYIN_COVER_VERTICAL_LABELS = ("设置竖封面", "设置竖版封面")
 
 
+_JS_DOUYIN_COVER_MODAL_OPEN = r"""
+() => {
+  const roots = document.querySelectorAll('[role="dialog"], .semi-modal-wrap, .semi-modal');
+  for (const el of roots) {
+    if (!el.getClientRects().length) continue;
+    const t = (el.innerText || '').slice(0, 4000);
+    if (t.includes('设置横封面') && t.includes('设置竖封面')) return true;
+    if (t.includes('设置封面') && (t.includes('上传封面') || t.includes('封面预览'))) return true;
+  }
+  return false;
+}
+"""
+
+
 async def _douyin_wait_setting_cover_modal_open(page: Any, timeout_ms: Optional[int] = None) -> bool:
-    """设置封面弹层已出现（含 Tab 设置横封面/设置竖封面 或标题 设置封面）。"""
+    """设置封面弹层已出现（含 Tab 设置横封面/设置竖封面 或标题 设置封面）。
+
+    新版发布页可能把创作器放在 iframe 里，故主文档与所有 frame 都要查。
+    """
     tm = _pw_ms(12000) if timeout_ms is None else int(timeout_ms)
-    try:
-        await page.wait_for_function(
-            """
-            () => {
-              const roots = document.querySelectorAll('[role="dialog"], .semi-modal-wrap, .semi-modal');
-              for (const el of roots) {
-                if (!el.offsetParent) continue;
-                const t = (el.innerText || '').slice(0, 4000);
-                if (t.includes('设置横封面') && t.includes('设置竖封面')) return true;
-                if (t.includes('设置封面') && (t.includes('上传封面') || t.includes('封面预览'))) return true;
-              }
-              return false;
-            }
-            """,
-            timeout=tm,
+    deadline = asyncio.get_event_loop().time() + max(0.5, tm / 1000.0)
+    while asyncio.get_event_loop().time() < deadline:
+        for fr in [page] + list(getattr(page, "frames", []) or []):
+            try:
+                if await fr.evaluate(_JS_DOUYIN_COVER_MODAL_OPEN):
+                    return True
+            except Exception:
+                continue
+        await asyncio.sleep(0.4)
+    logger.debug("[DOUYIN-COVER] wait modal timeout %sms", tm)
+    return False
+
+
+_JS_DOUYIN_CLICK_COVER_ENTRY = r"""
+([exactTexts, regexSrc]) => {
+  const norm = (x) => (x || '').replace(/\s+/g, ' ').trim();
+  const re = regexSrc ? new RegExp(regexSrc) : null;
+  const cands = [];
+  for (const el of document.querySelectorAll('div,span,p,label,button,a,h2,h3,h4')) {
+    const t = norm(el.textContent);
+    if (!t || t.length > 40) continue;
+    const hit = exactTexts.includes(t) || (re && re.test(t));
+    if (!hit) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) continue;
+    cands.push({ el, t, area: r.width * r.height });
+  }
+  if (!cands.length) return { found: 0 };
+  cands.sort((a, b) => a.area - b.area);  // 最内层文本节点优先
+  const c = cands[0];
+  const el = c.el;
+  el.scrollIntoView({ block: 'center', inline: 'nearest' });
+  const r = el.getBoundingClientRect();
+  const x = r.left + r.width / 2;
+  const y = r.top + r.height / 2;
+  const target = el.closest('[role="button"],button,a,[class*="cover"],[class*="filter-"],[class*="card"]') || el;
+  for (const type of ['pointerover', 'pointerenter', 'pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+    try {
+      const Ctor = type.indexOf('pointer') === 0 ? PointerEvent : MouseEvent;
+      target.dispatchEvent(new Ctor(type, {
+        bubbles: true, cancelable: true, composed: true,
+        clientX: x, clientY: y, view: window,
+      }));
+    } catch (e) {}
+  }
+  try { target.click(); } catch (e) {}
+  const top = document.elementFromPoint(x, y);
+  const desc = (n) => n ? (n.tagName + '.' + (n.className || '').toString().slice(0, 60)) : '';
+  return {
+    found: cands.length,
+    text: c.t,
+    x: x,
+    y: y,
+    target: desc(target),
+    topmost: desc(top),
+    covered: desc(top) !== desc(target),
+  };
+}
+"""
+
+
+async def _douyin_click_cover_entry_via_js(page: Any) -> Optional[dict]:
+    """跨 frame 按文本定位封面入口，派发指针事件点击（绕过 Playwright 可点性判定）。
+
+    返回命中信息（含坐标、是否被遮挡的顶层元素），未命中返回 None。
+    """
+    exact = ["选择封面", "横封面4:3", "设置横封面", "横封面"]
+    regex_src = r"横封面\s*4\s*[:：]\s*3"
+    frames = [page] + list(getattr(page, "frames", []) or [])
+    for idx, fr in enumerate(frames):
+        try:
+            info = await fr.evaluate(_JS_DOUYIN_CLICK_COVER_ENTRY, [exact, regex_src])
+        except Exception as ex:
+            logger.debug("[DOUYIN-COVER] js_click frame#%s err=%s", idx, ex)
+            continue
+        if not isinstance(info, dict) or not info.get("found"):
+            continue
+        logger.info(
+            "[DOUYIN-COVER] js_click frame#%s found=%s text=%r target=%s covered=%s topmost=%s",
+            idx, info.get("found"), info.get("text"), info.get("target"),
+            info.get("covered"), info.get("topmost"),
         )
-        return True
-    except Exception as ex:
-        logger.debug("[DOUYIN-COVER] wait modal: %s", ex)
-        return False
+        info["frame_index"] = idx
+        return info
+    logger.info("[DOUYIN-COVER] js_click: no cover entry text found in %d frame(s)", len(frames))
+    return None
 
 
 async def _douyin_scroll_to_cover_block(page: Any) -> None:
@@ -219,6 +302,24 @@ async def _douyin_click_horizontal_cover_entry(page: Any) -> bool:
     （DOM 常见为 div[class*='filter-'] + div.title 文案「选择封面」），点「横封面4:3」文案往往不会出弹层。
     仅当检测到「设置封面」弹层出现后才返回 True。
     """
+    for attempt in range(2):
+        ok = await _douyin_try_open_cover_modal(page, attempt)
+        if ok:
+            return True
+        logger.info("[DOUYIN-COVER] open cover modal attempt=%d failed, retry", attempt)
+        await _douyin_scroll_to_cover_block(page)
+        await asyncio.sleep(1.2)
+    return False
+
+
+async def _douyin_try_open_cover_modal(page: Any, attempt: int = 0) -> bool:
+    """一轮尝试：文本点击 → JS 指针事件（跨 frame）→ 真鼠标坐标 → filter 容器 → 精确文案回退。"""
+    try:
+        n_sel = await page.get_by_text("选择封面", exact=True).count()
+        logger.info("[DOUYIN-COVER] attempt=%d locate 选择封面 count=%d", attempt, n_sel)
+    except Exception:
+        pass
+
     # 1) 优先：第一个可见「选择封面」（一般为横 4:3 卡片）
     try:
         loc = page.get_by_text("选择封面", exact=True)
@@ -227,7 +328,7 @@ async def _douyin_click_horizontal_cover_entry(page: Any) -> bool:
             el = loc.nth(i)
             try:
                 if await el.is_visible():
-                    await el.click(timeout=_pw_ms(8000))
+                    await el.click(timeout=_pw_ms(2500))
                     logger.info("[DOUYIN-COVER] clicked 选择封面 text #%s", i)
                     if await _douyin_wait_setting_cover_modal_open(page):
                         return True
@@ -241,7 +342,7 @@ async def _douyin_click_horizontal_cover_entry(page: Any) -> bool:
     try:
         flt = page.locator("div[class*='filter-']").filter(has_text="选择封面").first
         if await flt.is_visible():
-            await flt.click(timeout=_pw_ms(8000))
+            await flt.click(timeout=_pw_ms(2500))
             logger.info("[DOUYIN-COVER] clicked filter block 选择封面")
             if await _douyin_wait_setting_cover_modal_open(page):
                 return True
@@ -256,7 +357,7 @@ async def _douyin_click_horizontal_cover_entry(page: Any) -> bool:
             el = loc.nth(i)
             try:
                 if await el.is_visible():
-                    await el.click(timeout=_pw_ms(8000))
+                    await el.click(timeout=_pw_ms(2500))
                     logger.info("[DOUYIN-COVER] clicked 横封面4:3 (regex) #%s", i)
                     if await _douyin_wait_setting_cover_modal_open(page):
                         return True
@@ -265,17 +366,33 @@ async def _douyin_click_horizontal_cover_entry(page: Any) -> bool:
     except Exception as ex:
         logger.debug("[DOUYIN-COVER] 横封面4:3 regex: %s", ex)
 
+    # 3) JS 文本定位 + 指针事件点击（跨 frame，绕过可点性/遮挡判定）
+    info = await _douyin_click_cover_entry_via_js(page)
+    if info:
+        if await _douyin_wait_setting_cover_modal_open(page, 6000):
+            return True
+        # 4) 真鼠标坐标点击：部分 React 组件只认 trusted 事件
+        if info.get("frame_index") == 0:
+            try:
+                await page.mouse.click(float(info["x"]), float(info["y"]))
+                logger.info("[DOUYIN-COVER] mouse click at (%.0f, %.0f)", info["x"], info["y"])
+            except Exception as ex:
+                logger.info("[DOUYIN-COVER] mouse click failed: %s", ex)
+            if await _douyin_wait_setting_cover_modal_open(page, 6000):
+                return True
+
+    # 5) 回退：精确文案
     if await _douyin_click_first_visible_exact_text(page, "横封面4:3"):
-        if await _douyin_wait_setting_cover_modal_open(page):
+        if await _douyin_wait_setting_cover_modal_open(page, 6000):
             return True
     for lab in _DOUYIN_COVER_HORIZONTAL_LABELS:
         if await _douyin_click_first_visible_exact_text(page, lab):
-            if await _douyin_wait_setting_cover_modal_open(page):
+            if await _douyin_wait_setting_cover_modal_open(page, 6000):
                 return True
     try:
         loc = page.locator("text=横封面").first
         if await loc.is_visible():
-            await loc.click(timeout=_pw_ms(8000))
+            await loc.click(timeout=_pw_ms(2500))
             logger.info("[DOUYIN-COVER] clicked text 横封面")
             if await _douyin_wait_setting_cover_modal_open(page):
                 return True
@@ -287,13 +404,19 @@ async def _douyin_click_horizontal_cover_entry(page: Any) -> bool:
 async def _douyin_click_vertical_cover_in_flow(page: Any) -> bool:
     """在设置封面弹层内进入竖封面：优先点顶部 Tab「设置竖封面」，再尝试底部主按钮（避免误点底部其它入口）。"""
     await asyncio.sleep(0.5)
+    _fr = await _douyin_cover_frame(page)
+    if _fr is not None:
+        for _txt in ("设置竖封面",) + tuple(_DOUYIN_COVER_VERTICAL_LABELS):
+            if await _douyin_click_text_in_frame(_fr, _txt):
+                await asyncio.sleep(0.45)
+                return True
     # 1) Tab（新版默认先进横封面 Tab，须点 Tab 切到竖封面；先于 button 避免点到错误控件却仍返回 True）
     try:
         tab = page.get_by_role("tab", name="设置竖封面", exact=True)
         if await tab.count():
             t0 = tab.first
             if await t0.is_visible():
-                await t0.click(timeout=_pw_ms(8000))
+                await t0.click(timeout=_pw_ms(2500))
                 logger.info("[DOUYIN-COVER] clicked tab 设置竖封面")
                 await asyncio.sleep(0.45)
                 return True
@@ -307,7 +430,7 @@ async def _douyin_click_vertical_cover_in_flow(page: Any) -> bool:
             b = btn.nth(i)
             try:
                 if await b.is_visible():
-                    await b.click(timeout=_pw_ms(8000))
+                    await b.click(timeout=_pw_ms(2500))
                     logger.info("[DOUYIN-COVER] clicked button 设置竖封面 #%s", i)
                     await asyncio.sleep(0.45)
                     return True
@@ -322,7 +445,7 @@ async def _douyin_click_vertical_cover_in_flow(page: Any) -> bool:
             b = loc.nth(i)
             try:
                 if await b.is_visible():
-                    await b.click(timeout=_pw_ms(8000))
+                    await b.click(timeout=_pw_ms(2500))
                     logger.info("[DOUYIN-COVER] clicked semi-button-primary 设置竖封面 #%s", i)
                     await asyncio.sleep(0.45)
                     return True
@@ -336,7 +459,7 @@ async def _douyin_click_vertical_cover_in_flow(page: Any) -> bool:
         if await dlg.count():
             inner = dlg.get_by_text("设置竖封面", exact=True).first
             if await inner.is_visible():
-                await inner.click(timeout=_pw_ms(8000))
+                await inner.click(timeout=_pw_ms(2500))
                 logger.info("[DOUYIN-COVER] clicked in modal text 设置竖封面")
                 return True
     except Exception as ex:
@@ -347,7 +470,7 @@ async def _douyin_click_vertical_cover_in_flow(page: Any) -> bool:
     try:
         loc = page.locator("text=竖封面").first
         if await loc.is_visible():
-            await loc.click(timeout=_pw_ms(8000))
+            await loc.click(timeout=_pw_ms(2500))
             logger.info("[DOUYIN-COVER] clicked text 竖封面")
             return True
     except Exception as ex:
@@ -358,6 +481,10 @@ async def _douyin_click_vertical_cover_in_flow(page: Any) -> bool:
 async def _douyin_try_click_horizontal_cover_modal_once(page: Any) -> bool:
     """单次尝试点击弹层底部「设置横封面」。由外层重试包装，缓解弹层动画/节点晚挂载导致的偶发失败。"""
     await asyncio.sleep(0.85)
+    _fr = await _douyin_cover_frame(page)
+    if _fr is not None and await _douyin_click_text_in_frame(_fr, "设置横封面"):
+        await asyncio.sleep(0.55)
+        return True
     try:
         await page.evaluate(
             """
@@ -451,13 +578,13 @@ async def _douyin_try_click_horizontal_cover_modal_once(page: Any) -> bool:
                     if not await btn.is_visible():
                         continue
                     await btn.scroll_into_view_if_needed(timeout=_pw_ms(5000))
-                    await btn.click(timeout=_pw_ms(8000))
+                    await btn.click(timeout=_pw_ms(2500))
                     logger.info("[DOUYIN-COVER] clicked 设置横封面 (%s locator #%s)", spec, i)
                     await asyncio.sleep(0.55)
                     return True
                 except Exception as ex:
                     try:
-                        await btn.click(force=True, timeout=_pw_ms(8000))
+                        await btn.click(force=True, timeout=_pw_ms(2500))
                         logger.info("[DOUYIN-COVER] clicked 设置横封面 force (%s #%s)", spec, i)
                         await asyncio.sleep(0.55)
                         return True
@@ -476,7 +603,7 @@ async def _douyin_try_click_horizontal_cover_modal_once(page: Any) -> bool:
             try:
                 if not await btn.is_visible():
                     continue
-                await btn.click(timeout=_pw_ms(8000))
+                await btn.click(timeout=_pw_ms(2500))
                 logger.info("[DOUYIN-COVER] clicked semi-button-primary 设置横封面 #%s", i)
                 await asyncio.sleep(0.55)
                 return True
@@ -493,7 +620,7 @@ async def _douyin_try_click_horizontal_cover_modal_once(page: Any) -> bool:
                 if not await b.is_visible():
                     continue
                 await b.scroll_into_view_if_needed(timeout=_pw_ms(5000))
-                await b.click(timeout=_pw_ms(8000))
+                await b.click(timeout=_pw_ms(2500))
                 logger.info("[DOUYIN-COVER] clicked role=button 设置横封面 #%s", i)
                 await asyncio.sleep(0.55)
                 return True
@@ -520,6 +647,9 @@ async def _douyin_click_horizontal_cover_primary_in_modal(page: Any) -> bool:
 
 async def _douyin_click_complete_in_cover_modal(page: Any) -> bool:
     """弹层内点「完成」：与「设置竖封面」同系列，多为 semi-button-primary + semi-button-light + span「完成」。"""
+    _fr = await _douyin_cover_frame(page)
+    if _fr is not None and await _douyin_click_text_in_frame(_fr, "完成"):
+        return True
     modal_roots = page.locator('.semi-modal-wrap, [role="dialog"]').filter(has_text="设置封面")
     try:
         n = await modal_roots.count()
@@ -541,7 +671,7 @@ async def _douyin_click_complete_in_cover_modal(page: Any) -> bool:
                         btn = loc.nth(j)
                         try:
                             if await btn.is_visible():
-                                await btn.click(timeout=_pw_ms(8000))
+                                await btn.click(timeout=_pw_ms(2500))
                                 logger.info("[DOUYIN-COVER] clicked 完成 (%s in cover modal)", sel)
                                 return True
                         except Exception:
@@ -551,7 +681,7 @@ async def _douyin_click_complete_in_cover_modal(page: Any) -> bool:
             try:
                 btn = root.get_by_role("button", name="完成", exact=True).first
                 if await btn.is_visible():
-                    await btn.click(timeout=_pw_ms(8000))
+                    await btn.click(timeout=_pw_ms(2500))
                     logger.info("[DOUYIN-COVER] clicked 完成 (role in cover modal)")
                     return True
             except Exception:
@@ -566,13 +696,44 @@ async def _douyin_click_complete_in_cover_modal(page: Any) -> bool:
             btn = dlg.get_by_role("button", name="完成", exact=True).first
             try:
                 if await btn.is_visible():
-                    await btn.click(timeout=_pw_ms(8000))
+                    await btn.click(timeout=_pw_ms(2500))
                     return True
             except Exception:
                 continue
     except Exception:
         pass
     return await _douyin_click_first_visible_exact_text(page, "完成")
+
+
+async def _douyin_frames(page: Any) -> list:
+    return [page] + list(getattr(page, "frames", []) or [])
+
+
+async def _douyin_cover_frame(page: Any) -> Optional[Any]:
+    """返回当前真正承载「设置封面」弹层的 frame（主文档也算）；未找到返回 None。"""
+    for fr in await _douyin_frames(page):
+        try:
+            if await fr.evaluate(_JS_DOUYIN_COVER_MODAL_OPEN):
+                return fr
+        except Exception:
+            continue
+    return None
+
+
+async def _douyin_click_text_in_frame(frame: Any, text: str) -> bool:
+    """在指定 frame 内按文案点击（JS 指针事件，绕过可点性判定）。返回是否命中并派发。"""
+    try:
+        info = await frame.evaluate(_JS_DOUYIN_CLICK_COVER_ENTRY, [[text], ""])
+    except Exception as ex:
+        logger.debug("[DOUYIN-COVER] frame click %r: %s", text, ex)
+        return False
+    if not isinstance(info, dict) or not info.get("found"):
+        return False
+    logger.info(
+        "[DOUYIN-COVER] frame click %r found=%s target=%s covered=%s",
+        text, info.get("found"), info.get("target"), info.get("covered"),
+    )
+    return True
 
 
 async def _douyin_run_cover_flow(page: Any, _step, *, require: bool) -> bool:
@@ -3050,21 +3211,36 @@ class DouyinDriver(BaseDriver):
         manual_wait = int((options or {}).get("douyin_manual_cover_wait_sec") or 600)
         manual_wait = max(60, min(3600, manual_wait))
 
-        if not await _douyin_video_ensure_cover(
+        cover_ok = await _douyin_video_ensure_cover(
             page,
             cover_path,
             _step,
             cover_mode=cover_mode,
             manual_wait_sec=manual_wait,
-        ):
-            return {
-                "ok": False,
-                "error": (
-                    "视频封面未就绪：请检查 options.douyin_cover_mode（smart/upload/manual）；"
-                    "manual 请在浏览器内选封面；upload 须传 cover_asset_id"
-                ),
-                "applied": applied,
-            }
+        )
+        if not cover_ok:
+            if cover_mode == "smart":
+                # 抖音对未设置封面的视频会自己抽帧生成默认封面：别为封面把整条发布废掉
+                logger.warning(
+                    "[DOUYIN-COVER] smart 模式未点开设置封面弹层，按默认封面继续发布"
+                )
+                _step(
+                    "封面流程-降级继续",
+                    True,
+                    detail="未点开设置封面弹层，改用抖音默认封面继续发布（可在后台再改封面）",
+                )
+                applied.setdefault("warnings", []).append(
+                    "未设置自定义封面，已使用抖音默认封面发布"
+                )
+            else:
+                return {
+                    "ok": False,
+                    "error": (
+                        "视频封面未就绪：请检查 options.douyin_cover_mode（smart/upload/manual）；"
+                        "manual 请在浏览器内选封面；upload 须传 cover_asset_id"
+                    ),
+                    "applied": applied,
+                }
 
         # ── 封面完成后再滚动并填写标题、描述（避免先填文案时页面仍在传视频）──
         await _scroll_page_fully(page, "video_preload")
