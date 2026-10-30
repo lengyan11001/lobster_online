@@ -1,7 +1,7 @@
 {
-  "version": "2.0.205",
-  "build": 503,
-  "applied_at": "2026-10-30T01:09:07+08:00",
-  "note": "canvas generate: original buildParams (H3 content[], Kling image_urls+elements, Seedance image_files), lowercase resolution, drop empty refs; agent extract modal shows instantly",
-  "bundle_sha256": "f45d5163191cb69673eece030eae4ade8a3707694b119337c92affd7dabf172b"
+  "version": "2.0.206",
+  "build": 504,
+  "applied_at": "2026-10-30T12:29:55+08:00",
+  "note": "oem logo fix (bihuo no longer skips asset download, branding fallback + absolute asset urls, login logo), startup warmup cap 45s, canvas buildParams, agent extract modal",
+  "bundle_sha256": "bc965467b44ed53265a9a17117eebbe262ed05be5284d9d918991d43a99d5cca"
 }
