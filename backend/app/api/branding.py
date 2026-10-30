@@ -66,6 +66,39 @@ def _load_runtime_profile(mark: str, oem_code: str = "") -> Dict[str, Any] | Non
     return None
 
 
+def _repo_root() -> Path:
+    # backend/app/api/branding.py -> 仓库根
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
+def _local_icon_exists(value: object) -> bool:
+    raw = str(value or "").strip()
+    if not raw or not raw.startswith("/static/"):
+        return True  # 外链 / data: / 服务器地址不在这里校验
+    target = _repo_root() / raw.lstrip("/")
+    try:
+        return target.is_file() and target.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _sanitize_icons(icons: Dict[str, Any], fallback_icons: Dict[str, Any]) -> Dict[str, Any]:
+    """缓存里的图标文件缺失时，退回本地同品牌图标，别让页面出现裂图/空白。"""
+    out = dict(icons or {})
+    for key, value in list(out.items()):
+        if not isinstance(value, str) or not value.startswith("/static/"):
+            continue
+        if _local_icon_exists(value):
+            continue
+        fallback = str((fallback_icons or {}).get(key) or "").strip()
+        if fallback and _local_icon_exists(fallback):
+            out[key] = fallback
+            logger.warning("brand icon missing on disk value=%s; fallback=%s", value, fallback)
+        else:
+            out.pop(key, None)
+    return out
+
+
 def _empty_branding() -> Dict[str, Any]:
     """Return an explicitly empty state; never substitute a default brand."""
     return {"available": False, "mark": "", "_branding_unavailable": True}
@@ -91,6 +124,18 @@ def _index_branding(requested_mark: str = "") -> Dict[str, Any]:
     # An OEM profile is authoritative. If it cannot be resolved, do not leak
     # the bundled bihuo profile into the first HTML response.
     if configured_code and not runtime_profile:
+        # OEM 切换器可能还没来得及物化（bihuo 分支以前直接跳过下载，不写
+        # cache/profiles/<code>.json），这时别把品牌清空 —— 退回本地同品牌配置，
+        # 否则右上角 logo / 登录页 logo 全空、只剩旧图。
+        local_mark = configured_mark or str(registry.get("default_mark") or "bihuo")
+        local_config = marks.get(local_mark)
+        if isinstance(local_config, dict):
+            logger.warning(
+                "OEM runtime profile missing code=%s; falling back to local mark=%s",
+                configured_code,
+                local_mark,
+            )
+            return {"available": True, "mark": local_mark, **local_config}
         return _empty_branding()
 
     if requested and requested in marks:
@@ -109,6 +154,12 @@ def _index_branding(requested_mark: str = "") -> Dict[str, Any]:
 
     if not isinstance(config, dict):
         return _empty_branding()
+    local = marks.get(mark) if isinstance(marks.get(mark), dict) else {}
+    config = dict(config)
+    config["icons"] = _sanitize_icons(
+        config.get("icons") if isinstance(config.get("icons"), dict) else {},
+        local.get("icons") if isinstance(local.get("icons"), dict) else {},
+    )
     return {"available": True, "mark": mark, **config}
 
 
@@ -138,10 +189,28 @@ def _static_build_stamp():
     return stamp
 
 
+def _public_icon_url(value: object, base: str) -> str:
+    """云端 branding 给的是服务器相对路径（/client/oem/...）；本地页面加载会被解析成
+    127.0.0.1 -> 404 -> 右上角 logo 空白。非 /static、/api 的路径补成公网地址。"""
+    raw = str(value or "").strip()
+    if not raw:
+        return raw
+    low = raw.lower()
+    if raw.startswith("//") or low.startswith(("http://", "https://", "data:", "blob:")):
+        return raw
+    if not raw.startswith("/"):
+        return raw
+    if raw.startswith("/static/") or raw.startswith("/api/"):
+        return raw
+    base = str(base or "").strip().rstrip("/")
+    return (base + raw) if base else raw
+
+
 def render_index_html(template: str, requested_mark: str = "") -> str:
     """Inject branding into the index before returning it to the browser."""
     branding = _index_branding(requested_mark)
     icons = branding.get("icons") if isinstance(branding.get("icons"), dict) else {}
+    _public_base = str(getattr(settings, "auth_server_base", None) or "https://bhzn.top").strip().rstrip("/")
     available = bool(branding.get("available")) and not branding.get("_branding_unavailable")
     hero_subtitle = str(branding.get("hero_subtitle") or "") if available else ""
     subtitle_html = "".join(
@@ -163,9 +232,12 @@ def render_index_html(template: str, requested_mark: str = "") -> str:
         "__LOBSTER_IS_OVERSEAS_VALUE__": "true" if bool(getattr(settings, "lobster_is_overseas_user", False)) else "false",
         "__LOBSTER_BRAND_MARK__": str(branding.get("mark") or "").strip().lower() if available else "",
         "__LOBSTER_DOCUMENT_TITLE__": str(branding.get("document_title") or "") if available else "",
-        "__LOBSTER_FAVICON_32__": str(icons.get("favicon_32") or _EMPTY_IMAGE) if available else _EMPTY_IMAGE,
-        "__LOBSTER_APPLE_TOUCH__": str(icons.get("apple_touch") or _EMPTY_IMAGE) if available else _EMPTY_IMAGE,
-        "__LOBSTER_LOGO_MARK__": str(icons.get("logo_mark") or _EMPTY_IMAGE) if available else _EMPTY_IMAGE,
+        "__LOBSTER_FAVICON_32__": _public_icon_url(icons.get("favicon_32") or _EMPTY_IMAGE, _public_base)
+        if available else _EMPTY_IMAGE,
+        "__LOBSTER_APPLE_TOUCH__": _public_icon_url(icons.get("apple_touch") or _EMPTY_IMAGE, _public_base)
+        if available else _EMPTY_IMAGE,
+        "__LOBSTER_LOGO_MARK__": _public_icon_url(icons.get("logo_mark") or _EMPTY_IMAGE, _public_base)
+        if available else _EMPTY_IMAGE,
         "__LOBSTER_LOGO_PRIMARY__": str(branding.get("logo_primary") or "") if available else "",
         "__LOBSTER_LOGO_ACCENT__": str(branding.get("logo_accent") or "") if available else "",
         "__LOBSTER_BRAND_NAME__": (

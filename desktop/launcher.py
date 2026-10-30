@@ -568,13 +568,10 @@ def load_desktop_branding(root: Path | None = None) -> dict[str, object]:
         remote_profile = resolve_factory_oem_branding(root, configured_oem_code, server_base)
         if remote_profile:
             remote_mark = str(remote_profile.get("mark") or "").strip().lower()
-            if remote_mark == "bihuo":
-                local_config = marks.get("bihuo") if isinstance(marks.get("bihuo"), dict) else {}
-                if local_config:
-                    profile = dict(local_config)
-                    profile["mark"] = "bihuo"
-                    log("OEM profile mark=bihuo; using local bihu branding assets")
-                    return profile
+            # 2026-10-30：bihuo 以前在这里直接返回本地配置、跳过物化 —— 结果
+            # cache/profiles/<code>.json 和图标从来没下载过，网页端按 profile 读
+            # 图标就成了空/旧图。现在统一走 merge（缺的图标才用本地补）。
+            log(f"OEM profile mark={remote_mark or '-'}; merged with local assets")
             return _merge_local_branding(remote_profile, marks)
         # 2026-10-30：远程 OEM 拉不到（服务器不通/清单校验失败）时，别把整套
         # 品牌清空——之前这里直接返回空 mark，结果切 OEM 后启动图标和加载 logo

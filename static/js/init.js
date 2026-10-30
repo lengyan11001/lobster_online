@@ -564,21 +564,36 @@ function applyBrandingFromApi() {
         try { localStorage.setItem('lobster_server_api_base', routedServerBase); } catch (eServerBase) {}
       }
       if (b.document_title) document.title = b.document_title;
+      // 云端 branding 返回的是服务器相对路径（/client/oem/<mark>/icon_32.png），
+      // 页面跑在 127.0.0.1 上会被解析成本机地址 -> 404 -> 右上角 logo 空白。
+      // 非 /static、/api 的站内路径统一补成公网服务器地址。
+      function brandAssetUrl(value) {
+        var raw = String(value || '').trim();
+        if (!raw) return '';
+        if (/^(https?:)?\/\//i.test(raw) || /^(data|blob):/i.test(raw)) return raw;
+        if (raw.charAt(0) !== '/') return raw;
+        if (raw.indexOf('/static/') === 0 || raw.indexOf('/api/') === 0) return raw;
+        var base = String(
+          window.__LOBSTER_SERVER_PUBLIC__ || window.__API_BASE || ''
+        ).trim().replace(/\/+$/, '');
+        if (!base) return raw;
+        return base + raw;
+      }
       var icons = b.icons || {};
       var fav = document.getElementById('brandFavicon');
-      if (fav && icons.favicon_32) fav.setAttribute('href', icons.favicon_32);
+      if (fav && icons.favicon_32) fav.setAttribute('href', brandAssetUrl(icons.favicon_32));
       var apt = document.getElementById('brandAppleTouch');
-      if (apt && icons.apple_touch) apt.setAttribute('href', icons.apple_touch);
+      if (apt && icons.apple_touch) apt.setAttribute('href', brandAssetUrl(icons.apple_touch));
       var markImg = document.getElementById('brandLogoMark');
       if (markImg && icons.logo_mark) {
-        markImg.src = icons.logo_mark;
+        markImg.src = brandAssetUrl(icons.logo_mark);
         if (icons.logo_mark_width) markImg.width = Number(icons.logo_mark_width);
         if (icons.logo_mark_height) markImg.height = Number(icons.logo_mark_height);
       }
       var partnerLogo = document.getElementById('brandPartnerLogo');
       if (partnerLogo) {
         if (icons.header_partner_logo) {
-          partnerLogo.src = icons.header_partner_logo;
+          partnerLogo.src = brandAssetUrl(icons.header_partner_logo);
           partnerLogo.alt = icons.header_partner_logo_alt || '';
           partnerLogo.hidden = false;
         } else {
@@ -588,7 +603,7 @@ function applyBrandingFromApi() {
         }
       }
       var homeVisual = document.getElementById('brandHomeVisual');
-      if (homeVisual && icons.home_visual) homeVisual.src = icons.home_visual;
+      if (homeVisual && icons.home_visual) homeVisual.src = brandAssetUrl(icons.home_visual);
       var primary = document.getElementById('brandLogoPrimary');
       var accent = document.getElementById('brandLogoAccent');
       if (primary && b.logo_primary != null) primary.textContent = b.logo_primary;
@@ -596,7 +611,9 @@ function applyBrandingFromApi() {
       var authLoginLogo = document.getElementById('authLoginLogo');
       var authLoginLogoShell = document.getElementById('authLoginLogoShell');
       if (authLoginLogo) {
-        authLoginLogo.src = b.mark === 'bihuo' ? '/static/bihu_mark_64.png' : (icons.logo_mark || authLoginLogo.src);
+        // 登录页大图优先用品牌自己的 256 图标，最后才退回旧的本机 bihuo 图
+        authLoginLogo.src = brandAssetUrl(icons.apple_touch || icons.logo_mark)
+          || (b.mark === 'bihuo' ? '/static/bihu_mark_64.png' : authLoginLogo.src);
         if (authLoginLogoShell) {
           authLoginLogoShell.style.setProperty('--auth-logo', 'url("' + authLoginLogo.src.replace(/"/g, '%22') + '")');
         }
