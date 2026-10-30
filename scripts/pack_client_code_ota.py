@@ -526,6 +526,14 @@ def _skip_file(rel: str) -> bool:
     # 源码映射是开发调试产物，不是运行必需的代码/功能资源：只带代码与功能部分。
     if r.endswith(".map"):
         return True
+    # 运行期缓存/生成物（本机抓取的数字人头像/预览图、agent 生成媒体）：
+    # 随 OTA 分发会让单包从 ~28MB 膨胀到 150MB+，且清单对账会误删其他机器的本地缓存。
+    if nr.startswith("static/hifly_avatars/"):
+        return True
+    if nr.startswith("static/generated/"):
+        return True
+    if nr.startswith("static/hifly_previews/") and not nr.endswith("manifest.json"):
+        return True
     if nr.lower().startswith(_OTA_RETIRED_SKILL_DIRS):
         return True
     if any(nr == p or nr.startswith(p + "/") for p in _OTA_SKIP_SKILL_ROOTS):
