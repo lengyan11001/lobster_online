@@ -1,0 +1,80 @@
+name: build-wda-ipa
+
+on:
+  push:
+    branches: [ codex/wda-build ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - name: Select newest Xcode
+        run: |
+          set -eux
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          xcodebuild -version
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Clone WebDriverAgent
+        run: |
+          set -eux
+          git clone --depth 1 https://github.com/appium/WebDriverAgent.git wda
+          git -C wda rev-parse HEAD > wda/COMMIT.txt
+
+      - name: Build for testing (unsigned)
+        run: |
+          set -eux
+          cd wda
+          xcodebuild build-for-testing \
+            -project WebDriverAgent.xcodeproj \
+            -scheme WebDriverAgentRunner \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" | tail -n 80
+
+      - name: Package ipa (strip dSYM)
+        run: |
+          set -eux
+          APP=$(find wda/build/Build/Products -maxdepth 2 -name 'WebDriverAgentRunner-Runner.app' | head -1)
+          test -n "$APP"
+          rm -rf Payload dist && mkdir -p Payload dist
+          cp -R "$APP" Payload/
+          # Sideloadly/zsign chokes on DWARF files inside .xctest.dSYM (macho sign/edit failed -40)
+          find Payload -name '*.dSYM' -prune -exec rm -rf {} +
+          find Payload -name '.DS_Store' -delete
+          test "$(find Payload -name '*.dSYM' | wc -l)" = "0"
+          /usr/bin/zip -qry dist/WebDriverAgentRunner.ipa Payload
+          ls -l dist/WebDriverAgentRunner.ipa
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WebDriverAgentRunner-ipa
+          path: dist/WebDriverAgentRunner.ipa
+          if-no-files-found: error
+
+      - name: Publish ipa to branch
+        run: |
+          set -eux
+          mkdir -p ci_artifacts
+          cp dist/WebDriverAgentRunner.ipa ci_artifacts/
+          {
+            echo "built_utc=$(date -u +%FT%TZ)"
+            echo "xcode=$(xcodebuild -version | head -1)"
+            echo "wda_commit=$(cat wda/COMMIT.txt)"
+            echo "dsym_stripped=true"
+          } > ci_artifacts/BUILD_INFO.txt
+          git config user.name "wda-ci"
+          git config user.email "wda-ci@users.noreply.github.com"
+          git add ci_artifacts
+          git commit -m "ci: wda ipa $(date -u +%FT%TZ) [skip ci]"
+          git push origin HEAD:codex/wda-build
