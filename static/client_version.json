@@ -1,7 +1,7 @@
 {
-  "version": "2.0.210",
-  "build": 511,
-  "applied_at": "2026-10-30T20:58:36+08:00",
-  "note": "douyin cover flow fix + oem icon refresh + UI fixes; exclude runtime media and unused skill-cards",
-  "bundle_sha256": "8f8419300861b68422b23f9e674134841aae6cfd3511fab35e95fc1310591a64"
+  "version": "2.0.211",
+  "build": 512,
+  "applied_at": "2026-10-30T21:36:45+08:00",
+  "note": "douyin cover cross-frame click + post-click forensics; publish-plan missed slots no longer backfilled (30min grace); shanjian AI watermark default off",
+  "bundle_sha256": "f8eede426b7b05385b30b45ecf09e8bffee85375b959e97d590fe40d4a996e08"
 }
