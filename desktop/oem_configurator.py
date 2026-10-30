@@ -215,6 +215,33 @@ def install_brand_launcher(root: Path, profile: dict) -> Path:
     if cache_root not in source.parents or not source.is_file() or source.suffix.lower() != ".exe":
         raise RuntimeError("品牌启动程序没有下载完成")
     target = root / filename
+    # 2026-10-30：服务器上的品牌壳 client_launcher.exe / start.exe 里嵌的还是老
+    # 龙虾图标，直接覆盖会把本机已经带新图标的 必火智能AI.exe 换成龙虾。这里
+    # 改成：本地已有品牌壳就不覆盖；如果本地这份正好是 bundle 的旧副本，就用
+    # 本地另一份出厂壳把它们恢复回来。
+    if target.is_file() and target.stat().st_size > 0:
+        try:
+            same_as_bundle = target.read_bytes() == source.read_bytes()
+        except OSError:
+            same_as_bundle = False
+        if not same_as_bundle:
+            install_start_entry(root, target)
+            return target
+        for alt_name in ("必火AI员工.exe", "必火智能AI.exe"):
+            alt = root / alt_name
+            if not alt.is_file() or alt.resolve() == target.resolve():
+                continue
+            try:
+                if alt.read_bytes() == source.read_bytes():
+                    continue
+                shutil.copy2(alt, target)
+                install_start_entry(root, target)
+                return target
+            except OSError:
+                continue
+        install_start_entry(root, target)
+        return target
+
     partial = root / f".{filename}.{os.getpid()}.part"
     try:
         shutil.copy2(source, partial)
