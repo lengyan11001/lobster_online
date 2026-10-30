@@ -199,6 +199,7 @@
   }
 
   function switchTab(tab) {
+    setMsg('');
     var allowed = ['keywords', 'competitors', 'profile', 'upload', 'memory', 'template'];
     state.tab = allowed.indexOf(String(tab || '')) >= 0 ? String(tab || '') : 'keywords';
     document.querySelectorAll('#content-personal-settings [data-ps-tab]').forEach(function(btn) {

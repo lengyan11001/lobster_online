@@ -1442,3 +1442,40 @@ function truncate(s, len) { s = _stringifyUiValue(s).trim(); return s.length <= 
   }, true);
 })();
 
+/* 2026-10-30：切换子 tab 时清掉上一屏的错误/提示。
+   很多多 tab 页面（个人IP设置、素材库、AI秘书、抖音/TikTok 工作台…）的提示元素
+   在整个视图里共用，切到别的子 tab 后旧错误还挂着，看起来像新页面也报错。 */
+(function () {
+  "use strict";
+  var TAB_SEL = ["ad", "at", "auth", "config", "cutcli", "douyin", "gl", "ip", "li", "ps", "pwa", "sl", "ss"]
+    .map(function (k) { return "[data-" + k + "-tab]"; })
+    .join(",");
+  var MSG_SEL = '[id$="Msg"],[id$="Message"],[id$="Banner"],.ps-msg,.error-banner,.alert-error';
+  function looksLikeMessage(node) {
+    if (!node || !node.tagName) return false;
+    var id = String(node.id || "");
+    if (/(Msg|Message|Banner)$/.test(id)) return true;
+    var cls = node.classList;
+    if (!cls) return true;
+    return cls.contains("ps-msg") || cls.contains("err") || cls.contains("is-error")
+      || cls.contains("error") || cls.contains("alert-error") || cls.contains("error-banner");
+  }
+  function clearNode(node) {
+    try {
+      node.textContent = "";
+      node.style.display = "none";
+      if (node.classList) node.classList.remove("err", "is-error", "error", "alert-error");
+    } catch (e) {}
+  }
+  document.addEventListener("click", function (event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    var tab = target.closest(TAB_SEL);
+    if (!tab) return;
+    var view = tab.closest('[id^="content-"]') || document;
+    Array.prototype.forEach.call(view.querySelectorAll(MSG_SEL), function (node) {
+      if (looksLikeMessage(node)) clearNode(node);
+    });
+  }, true);
+})();
+
