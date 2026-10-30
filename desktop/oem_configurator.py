@@ -32,6 +32,42 @@ def resolve_root() -> Path:
 START_ENTRY_NAME = "start.exe"
 
 
+def _refresh_file_timestamp(path: Path) -> None:
+    """写入后把 mtime 刷成"现在"。
+
+    Windows 资源管理器按「路径 + 时间戳/大小」缓存 exe 图标；shutil.copy2 会
+    保留源文件的旧时间戳（OEM 包里那份 exe 的时间戳常年不变），系统就认为
+    文件没动过，继续显示上一个品牌的图标——start.exe 尤其明显。
+    """
+    try:
+        os.utime(path, None)
+    except OSError:
+        pass
+
+
+def _notify_shell_icon(path: Path) -> None:
+    """通知资源管理器刷新这个文件的图标。"""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        SHCNE_UPDATEITEM = 0x00002000
+        SHCNF_PATHW = 0x0005
+        ctypes.windll.shell32.SHChangeNotify(
+            SHCNE_UPDATEITEM, SHCNF_PATHW, ctypes.c_wchar_p(str(path)), None
+        )
+    except Exception:
+        pass
+
+
+def _publish_exe_bytes(source: Path, target: Path) -> None:
+    """复制 exe 并强制刷新时间戳 + 通知 shell，保证图标跟着换。"""
+    shutil.copyfile(source, target)
+    _refresh_file_timestamp(target)
+    _notify_shell_icon(target)
+
+
 def read_env(root: Path) -> dict[str, str]:
     path = root / ".env"
     result: dict[str, str] = {}
@@ -217,10 +253,12 @@ def install_brand_launcher(root: Path, profile: dict) -> Path:
     target = root / filename
     partial = root / f".{filename}.{os.getpid()}.part"
     try:
-        shutil.copy2(source, partial)
+        shutil.copyfile(source, partial)
         os.replace(partial, target)
     finally:
         partial.unlink(missing_ok=True)
+    _refresh_file_timestamp(target)
+    _notify_shell_icon(target)
     install_start_entry(root, target, source=cached_start_entry_asset(root, profile))
     return target
 
@@ -296,12 +334,14 @@ def install_start_entry(root: Path, launcher: Path, source: Path | None = None) 
     target = root / START_ENTRY_NAME
     partial = root / f".{START_ENTRY_NAME}.{os.getpid()}.part"
     try:
-        shutil.copy2(payload, partial)
+        _publish_exe_bytes(payload, partial)
     except OSError as exc:
         partial.unlink(missing_ok=True)
         raise RuntimeError(f"统一启动程序 {START_ENTRY_NAME} 写入失败：{exc}") from exc
     try:
         os.replace(partial, target)
+        _refresh_file_timestamp(target)
+        _notify_shell_icon(target)
         _assert_start_entry_written(target, payload)
         return target
     except OSError as first_error:
@@ -318,6 +358,8 @@ def install_start_entry(root: Path, launcher: Path, source: Path | None = None) 
                 f"统一启动程序 {START_ENTRY_NAME} 无法更新（请先退出客户端再切换）：{first_error} / {exc}"
             ) from exc
         stale.unlink(missing_ok=True)
+        _refresh_file_timestamp(target)
+        _notify_shell_icon(target)
         _assert_start_entry_written(target, payload)
         return target
     finally:
