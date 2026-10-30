@@ -1,7 +1,7 @@
 {
-  "version": "2.0.208",
-  "build": 506,
-  "applied_at": "2026-10-30T19:06:01+08:00",
-  "note": "publish: 定时发布本地目录上传不再 422 (multipart content-type); ota paths carry brand images; oem logo/shell fixes; canvas buildParams",
-  "bundle_sha256": "e39e9df275ec5d6c437381207934321163757a4bea9d98780c628afe7824bafd"
+  "version": "2.0.209",
+  "build": 507,
+  "applied_at": "2026-10-30T20:18:36+08:00",
+  "note": "publish plan need_login cooldown 600s; browser CDP connect timeout 15s; wechat auto-reply unavailable cooldown 600s",
+  "bundle_sha256": "1ae269fa58984e346900ec147b1205e99303b138733092e7d82d0b4ff16e07ec"
 }
