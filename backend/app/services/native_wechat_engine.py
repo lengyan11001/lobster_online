@@ -3279,6 +3279,26 @@ def ensure_auto_reply_worker(account_id: str, *, auth_context: Optional[Dict[str
     _AUTO_REPLY_WORKERS[account_id] = loop.create_task(_run_auto_reply_worker(account_id))
 
 
+# 微信没登录/主窗口不在时，UI 自动化每轮要跑 3 次重试、每次 ~80s，而调度间隔只有
+# 15s —— 结果是跑完立刻又到期，整台机器被拖死（2026-10-30 user 223：一天 895 轮
+# run_started、定时任务和「打开浏览器」全都点不动）。命中这类"环境不可用"错误时
+# 冷却一段时间再试，别原地打转。
+_AUTO_REPLY_UNAVAILABLE_COOLDOWN_SECONDS = 600.0
+_AUTO_REPLY_UNAVAILABLE_HINTS = ("客户端主窗口", "未找到已登录", "未登录", "登录后重试", "登录态")
+
+
+def _auto_reply_unavailable_error(result: Any) -> str:
+    if not isinstance(result, dict) or result.get("ok") is not False:
+        return ""
+    err = str(result.get("error") or "")
+    if not err:
+        return ""
+    for hint in _AUTO_REPLY_UNAVAILABLE_HINTS:
+        if hint in err:
+            return err
+    return ""
+
+
 async def _run_auto_reply_worker(account_id: str) -> None:
     try:
         while True:
@@ -3286,15 +3306,25 @@ async def _run_auto_reply_worker(account_id: str) -> None:
             if not cfg.get("enabled"):
                 return
             if _auto_reply_due(cfg):
+                result: Any = None
                 try:
-                    await run_auto_reply_once(
+                    result = await run_auto_reply_once(
                         account_id,
                         auth_context=_AUTO_REPLY_AUTH_CONTEXT.get(account_id),
                         force=False,
                         trigger="schedule",
                     )
                 except Exception:
-                    pass
+                    result = None
+                unavailable = _auto_reply_unavailable_error(result)
+                if unavailable:
+                    logger.warning(
+                        "[wechat-auto-reply] 微信不可用（%s），冷却 %ss 后再试",
+                        unavailable[:120],
+                        int(_AUTO_REPLY_UNAVAILABLE_COOLDOWN_SECONDS),
+                    )
+                    await asyncio.sleep(_AUTO_REPLY_UNAVAILABLE_COOLDOWN_SECONDS)
+                    continue
             interval = max(1, int(cfg.get("interval_seconds") or DEFAULT_STRATEGY["auto_reply_interval_seconds"]))
             await asyncio.sleep(min(60, max(10, interval / 10)))
     finally:
