@@ -270,6 +270,13 @@ async def _post_local(user: User, path: str, *, json_body: Optional[dict] = None
                       files: Optional[dict] = None, data: Optional[dict] = None,
                       timeout: int = _API_TIMEOUT_SEC) -> Dict[str, Any]:
     headers = _auth_headers(user)
+    if files:
+        # _auth_headers 固定带 Content-Type: application/json；上传文件时必须去掉，
+        # 否则 httpx 会把 multipart body 用 json 头发出去 -> 服务端解析不到 file
+        # -> 422 body.file Field required（2026-10-30 定时发布本地目录就是这问题）。
+        for key in list(headers):
+            if key.lower() == "content-type":
+                headers.pop(key, None)
     url = f"{_api_base_url()}{path}"
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         resp = await client.post(url, headers=headers, json=json_body, files=files, data=data)
