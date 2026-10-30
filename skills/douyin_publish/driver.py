@@ -819,6 +819,49 @@ async def _douyin_switch_publish_tab(page: Any, which: str) -> bool:
     return False
 
 
+async def _douyin_diag_after_publish_click(page: Any, tag: str) -> None:
+    """点「发布」后抓现场：URL、正文、可见弹窗、关键按钮、截图。用于定位「点了没发出去」。"""
+    try:
+        await asyncio.sleep(2.0)
+        url = getattr(page, "url", "") or ""
+        info = await page.evaluate(
+            """() => {
+                const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+                const body = (document.body && document.body.innerText) || '';
+                const dialogs = [];
+                for (const d of document.querySelectorAll('[role="dialog"], .semi-modal-wrap, .semi-modal, [class*=modal]')) {
+                    if (!vis(d)) continue;
+                    const t = (d.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+                    if (t) dialogs.push(t);
+                }
+                const btns = [];
+                for (const b of document.querySelectorAll('button, [role="button"], div[class*=button]')) {
+                    if (!vis(b)) continue;
+                    const t = (b.textContent || '').replace(/\s+/g, ' ').trim();
+                    if (t && t.length <= 8) btns.push(t);
+                }
+                return {
+                    text: body.replace(/\s+/g, ' ').slice(0, 400),
+                    dialogs: dialogs.slice(0, 4),
+                    buttons: Array.from(new Set(btns)).slice(0, 25),
+                };
+            }"""
+        )
+        logger.info(
+            "[DOUYIN-AFTER-CLICK] tag=%s url=%s dialogs=%s buttons=%s text=%s",
+            tag, url, info.get("dialogs"), info.get("buttons"), info.get("text"),
+        )
+        shot = os.path.join("logs", f"douyin_after_click_{tag}.png")
+        try:
+            os.makedirs("logs", exist_ok=True)
+            await page.screenshot(path=shot)
+            logger.info("[DOUYIN-AFTER-CLICK] screenshot=%s", os.path.abspath(shot))
+        except Exception as ex:
+            logger.warning("[DOUYIN-AFTER-CLICK] screenshot failed: %s", ex)
+    except Exception as ex:
+        logger.warning("[DOUYIN-AFTER-CLICK] capture failed: %s", ex)
+
+
 async def _douyin_video_ensure_cover(
     page: Any,
     cover_path: Optional[str],
@@ -3003,6 +3046,7 @@ class DouyinDriver(BaseDriver):
         logger.info("[DOUYIN-IMAGE] clicking publish...")
         await _click_publish_button(page, publish_btn, "image")
         _step("点击发布按钮", True)
+        await _douyin_diag_after_publish_click(page, "image")
         if not await _douyin_handle_declaration_after_publish(page, options, _step, "图文"):
             return {"ok": False, "error": "抖音自主声明未完成，发布已暂停", "applied": applied}
 
