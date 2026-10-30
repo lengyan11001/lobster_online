@@ -1863,7 +1863,7 @@
       material_switch: true,
       subtitle_switch: true,
       keyword_switch: true,
-      watermark_show: true
+      watermark_show: false
       });
     }).then(function(submitted) {
       if (!submitted.task_id) throw new Error('闪剪没有返回任务编号');

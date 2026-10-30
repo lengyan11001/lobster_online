@@ -63,7 +63,7 @@ class SubmitClipBody(TokenBody):
     material_switch: bool = True
     subtitle_switch: bool = True
     keyword_switch: bool = True
-    watermark_show: bool = True
+    watermark_show: bool = False
     material_match_way: str = "fuzzyMatch"
     resource_preprocess_method: str = "roughCut"
     material_composition: str = "random"
