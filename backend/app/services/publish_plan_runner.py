@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from types import SimpleNamespace
 from pathlib import Path
@@ -28,6 +29,20 @@ from .publish_copy_llm import PublishCopyLLMError, generate_publish_copy
 logger = logging.getLogger(__name__)
 
 _TICK_INTERVAL_SEC = 20
+# 抖音没登录时，每次发布都会触发"登录检查 -> goto jingxuan"，一个计划多个槽位/多个
+# 素材会连续把浏览器拉起来好几次（2026-10-30 user 223 就是这么被拖卡的）。
+# 一旦命中 need_login，整个调度冷却 10 分钟，等用户真的扫码登录了再试。
+_NEED_LOGIN_COOLDOWN_SECONDS = 600.0
+_need_login_until = 0.0
+
+
+def _item_needs_login(item: Any) -> bool:
+    status = str(getattr(item, "status", "") or "").strip().lower()
+    err = str(getattr(item, "error", "") or "")
+    if status in {"need_login", "login_required"}:
+        return True
+    return ("未登录" in err) or ("need_login" in err.lower())
+
 _PUBLISH_TIMEOUT_SEC = 30 * 60
 _API_TIMEOUT_SEC = 180
 _MAX_FOLDER_FILES = 2000
@@ -521,10 +536,14 @@ def _sent_today(db, plan: PublishPlan, today: str) -> int:
 
 async def run_plan_tick(db, now: Optional[datetime] = None) -> int:
     """检查所有启用的发布任务，到点则发布一条。返回本轮发布成功的条数。"""
+    global _need_login_until
+    if _need_login_until > time.time():
+        return 0
     now = now or datetime.now()
     today = now.strftime("%Y-%m-%d")
     plans = db.query(PublishPlan).filter(PublishPlan.enabled.is_(True)).all()
     fired_count = 0
+    stop_for_login = False
     for plan in plans:
         try:
             slots = _due_slots(plan, now)
@@ -550,6 +569,14 @@ async def run_plan_tick(db, now: Optional[datetime] = None) -> int:
                 if budget <= 0 or not candidates:
                     break
                 item = await _publish_candidate(db, plan, candidates.pop(0), user)
+                if _item_needs_login(item):
+                    _need_login_until = time.time() + _NEED_LOGIN_COOLDOWN_SECONDS
+                    stop_for_login = True
+                    logger.warning(
+                        "[发布任务] 抖音/视频号未登录，暂停 %.0fs 再试（避免连续拉起浏览器）",
+                        _NEED_LOGIN_COOLDOWN_SECONDS,
+                    )
+                    break
                 if item.status != "failed":
                     budget -= 1
                     fired_count += 1
@@ -558,9 +585,13 @@ async def run_plan_tick(db, now: Optional[datetime] = None) -> int:
                     {"fired_slots": fired_slots, "last_run_at": datetime.utcnow()}
                 )
                 db.commit()
+            if stop_for_login:
+                break
         except Exception:  # noqa: BLE001
             logger.exception("[发布任务] tick 异常 plan=%s", getattr(plan, "id", None))
             db.rollback()
+        if stop_for_login:
+            break
     return fired_count
 
 
