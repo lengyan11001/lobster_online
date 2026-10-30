@@ -132,20 +132,31 @@ def _warm_bytecode_cache_if_needed() -> None:
         if not targets:
             return
         started = time.monotonic()
-        subprocess.run(
-            [sys.executable, "-m", "compileall", "-q", "-j", "0", *targets],
-            cwd=str(root),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=600,
-            check=False,
-        )
-        _logger.info(
-            "[startup] bytecode warmup done build=%s elapsed_ms=%.1f",
-            build,
-            (time.monotonic() - started) * 1000,
-        )
+        # 预热只该省下一次启动的时间，不能把这一次拖死：限制 45s，
+        # 超时/失败也照样写 marker，避免每次启动都重跑编译（2026-10-30
+        # 有机器因此三次都卡在 180s 启动等待上）。
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "compileall", "-q", "-j", "0", *targets],
+                cwd=str(root),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=45,
+                check=False,
+            )
+            _logger.info(
+                "[startup] bytecode warmup done build=%s elapsed_ms=%.1f",
+                build,
+                (time.monotonic() - started) * 1000,
+            )
+        except subprocess.TimeoutExpired:
+            _logger.warning(
+                "[startup] bytecode warmup timed out after 45s build=%s; continuing startup",
+                build,
+            )
+        except Exception as exc:
+            _logger.warning("[startup] bytecode warmup failed build=%s: %s", build, exc)
         try:
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(build, encoding="utf-8")
