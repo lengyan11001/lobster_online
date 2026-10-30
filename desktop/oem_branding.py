@@ -13,6 +13,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 
 DEFAULT_OEM_SERVER = "https://bhzn.top"
@@ -147,6 +151,48 @@ def _download_asset(url: str, target: Path, expected_size: int, expected_sha256:
     raise OemBrandingError(_network_error_message(last_error or RuntimeError("unknown network error"))) from last_error
 
 
+def _download_profile_asset(
+    root: Path,
+    server_base: str,
+    relative_dir: Path,
+    url_path: str,
+    used_names: set[str],
+) -> str:
+    """profile 里引用的图标如果没写进 assets 清单（hikong 的 *_v3.png 就是这样），
+    按同源路径直接下载到缓存目录，否则启动图标/加载 logo 会整片消失。"""
+    raw = str(url_path or "").strip()
+    if not raw.startswith("/"):
+        return ""
+    filename = Path(urllib.parse.urlparse(raw).path).name
+    if not filename or Path(filename).suffix.lower() not in SAFE_ASSET_SUFFIXES:
+        return ""
+    target = root / relative_dir / filename
+    if target.is_file() and target.stat().st_size > 0:
+        used_names.add(filename)
+        return "/" + (relative_dir / filename).as_posix()
+    if filename in used_names:
+        return "/" + (relative_dir / filename).as_posix()
+    url = _validate_asset_url(server_base, raw)
+    request = urllib.request.Request(url, headers={"User-Agent": "LobsterDesktop/OEM-1.0"})
+    try:
+        with _urlopen_direct(request, timeout=20) as response:
+            data = _read_limited(response, MAX_ASSET_BYTES)
+    except Exception as exc:
+        logger.warning("[oem] profile asset download failed url=%s err=%s", raw[:120], exc)
+        return ""
+    if not data:
+        return ""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(f".{target.name}.{os.getpid()}.part")
+    try:
+        partial.write_bytes(data)
+        os.replace(partial, target)
+    finally:
+        partial.unlink(missing_ok=True)
+    used_names.add(filename)
+    return "/" + (relative_dir / filename).as_posix()
+
+
 def _cache_record_path(root: Path, code: str) -> Path:
     return root / "static" / "branding" / "cache" / "profiles" / f"{code}.json"
 
@@ -174,6 +220,8 @@ def load_cached_oem_profile(root: Path, code: str) -> tuple[dict[str, Any] | Non
     except (OSError, ValueError):
         return None, 0.0
     if not isinstance(record, dict) or record.get("oem_code") != code:
+        return None, 0.0
+    if int(record.get("schema_version") or 1) < 2:
         return None, 0.0
     mark = str(record.get("brand_mark") or "").strip().lower()
     profile = record.get("profile")
@@ -214,6 +262,7 @@ def _localize_profile_value(value: Any, browser_paths: dict[str, str]) -> Any:
 
 
 def materialize_oem_profile(root: Path, server_base: str, code: str, payload: dict[str, Any]) -> dict[str, Any]:
+    base_url = str(server_base or "").strip().rstrip("/")
     mark = str(payload.get("brand_mark") or "").strip().lower()
     version = str(payload.get("version") or "").strip()
     profile = payload.get("profile")
@@ -266,6 +315,21 @@ def materialize_oem_profile(root: Path, server_base: str, code: str, payload: di
         )
 
     localized = _localize_profile_value(copy.deepcopy(profile), browser_paths)
+    # profile 直接引用了服务器上的路径、却没写进 assets 清单时，这里补下载
+    for section in ("icons", "install"):
+        values = localized.get(section)
+        if not isinstance(values, dict):
+            continue
+        for name, value in list(values.items()):
+            if not isinstance(value, str) or not value.startswith("/"):
+                continue
+            if value.startswith("/static/branding/cache/"):
+                continue
+            cached_path = _download_profile_asset(
+                root, base_url, relative_dir, value, used_names
+            )
+            if cached_path:
+                values[name] = cached_path
     localized["mark"] = mark
     install = localized.get("install") if isinstance(localized.get("install"), dict) else {}
     desktop_ico = str(install.get("desktop_ico") or "").lstrip("/")
@@ -276,7 +340,7 @@ def materialize_oem_profile(root: Path, server_base: str, code: str, payload: di
     record_path = _cache_record_path(root, code)
     record_path.parent.mkdir(parents=True, exist_ok=True)
     record = {
-        "schema_version": int(payload.get("schema_version") or 1),
+        "schema_version": 2,
         "oem_code": code,
         "brand_mark": mark,
         "version": version,

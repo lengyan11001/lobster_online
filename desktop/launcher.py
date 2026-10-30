@@ -519,6 +519,23 @@ def resolve_factory_oem_branding(root: Path, code: str, server_base: str) -> dic
     return resolve_oem_branding(root, code, server_base)
 
 
+def _merge_local_branding(profile: dict[str, object], marks: dict[str, object]) -> dict[str, object]:
+    """远程 OEM 档案缺图标时，用本地同品牌配置补齐，别让 logo 变空。"""
+    mark = str(profile.get("mark") or "").strip().lower()
+    local = marks.get(mark) if isinstance(marks.get(mark), dict) else {}
+    if not local:
+        return profile
+    merged = dict(profile)
+    for key in ("icons", "install"):
+        base = merged.get(key) if isinstance(merged.get(key), dict) else {}
+        local_map = local.get(key) if isinstance(local.get(key), dict) else {}
+        for name, value in local_map.items():
+            if not str(base.get(name) or "").strip():
+                base[name] = value
+        merged[key] = base
+    return merged
+
+
 def load_desktop_branding(root: Path | None = None) -> dict[str, object]:
     root = root or ROOT
     registry_path = root / "static" / "branding" / "brands.json"
@@ -558,7 +575,25 @@ def load_desktop_branding(root: Path | None = None) -> dict[str, object]:
                     profile["mark"] = "bihuo"
                     log("OEM profile mark=bihuo; using local bihu branding assets")
                     return profile
-            return remote_profile
+            return _merge_local_branding(remote_profile, marks)
+        # 2026-10-30：远程 OEM 拉不到（服务器不通/清单校验失败）时，别把整套
+        # 品牌清空——之前这里直接返回空 mark，结果切 OEM 后启动图标和加载 logo
+        # 全没了。退回本地同品牌配置。
+        fallback_mark = (
+            read_env_value("LOBSTER_BRAND_MARK", "", root).strip().lower()
+            or default_mark
+        )
+        fallback = marks.get(fallback_mark) if isinstance(marks.get(fallback_mark), dict) else {}
+        if fallback:
+            profile = dict(fallback)
+            profile["mark"] = fallback_mark
+            profile["_oem_code"] = configured_oem_code
+            profile["_branding_fallback"] = True
+            log(
+                f"OEM branding unavailable code={configured_oem_code}; "
+                f"falling back to local mark={fallback_mark}"
+            )
+            return profile
         log(f"OEM branding unavailable code={configured_oem_code}; keeping desktop branding blank")
         return {"mark": "", "_branding_unavailable": True, "_oem_code": configured_oem_code}
     mark = requested_mark if requested_mark in marks else ""
