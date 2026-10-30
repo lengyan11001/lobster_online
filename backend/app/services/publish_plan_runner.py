@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime
 from types import SimpleNamespace
@@ -513,13 +514,42 @@ async def _publish_candidate(db, plan: PublishPlan, candidate: Dict[str, Any], u
     return item
 
 
-def _due_slots(plan: PublishPlan, now: datetime) -> List[str]:
+# 槽位宽容窗口：到点后超过这个时长还没发（关机/休眠/程序没开），直接作废，不再补发。
+# 典型事故：配了 09:00/12:00/18:00，程序 19:00 才启动，旧逻辑把三个槽位一次性全发出去。
+_SLOT_GRACE_SECONDS = max(60, int(os.environ.get("PUBLISH_SLOT_GRACE_SEC", "1800") or 1800))
+
+
+def _due_slots(plan: PublishPlan, now: datetime) -> Tuple[List[str], List[str]]:
+    """返回 (本轮应发的槽位, 已过期作废的槽位)。
+
+    规则：
+    - 只发「now 落在 slot 之后 _SLOT_GRACE_SECONDS 内」的槽位；错过太久的直接作废，
+      避免启动/休眠恢复后把当天错过的时段一次性补发；
+    - 每轮最多返回 1 个槽位（最早那个）；两个时段挨得很近时留给下一轮 tick，
+      不并发连发。
+    """
     times = [str(t or "").strip() for t in (plan.times or []) if str(t or "").strip()]
     times = sorted({t for t in times if len(t) == 5 and t[2] == ":"})
     fired = plan.fired_slots if isinstance(plan.fired_slots, dict) else {}
     today = now.strftime("%Y-%m-%d")
-    current = now.strftime("%H:%M")
-    return [t for t in times if t <= current and not fired.get(f"{today}|{t}")]
+    due: List[str] = []
+    expired: List[str] = []
+    for t in times:
+        if fired.get(f"{today}|{t}"):
+            continue
+        try:
+            hh, mm = int(t[:2]), int(t[3:])
+        except ValueError:
+            continue
+        slot_dt = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        late = (now - slot_dt).total_seconds()
+        if late < 0:
+            continue  # 还没到点
+        if late > _SLOT_GRACE_SECONDS:
+            expired.append(t)
+            continue
+        due.append(t)
+    return due[:1], expired
 
 
 def _sent_today(db, plan: PublishPlan, today: str) -> int:
@@ -546,7 +576,20 @@ async def run_plan_tick(db, now: Optional[datetime] = None) -> int:
     stop_for_login = False
     for plan in plans:
         try:
-            slots = _due_slots(plan, now)
+            slots, expired = _due_slots(plan, now)
+            if expired:
+                fired_now = dict(plan.fired_slots or {})
+                for t in expired:
+                    fired_now[f"{today}|{t}"] = "expired"
+                plan.fired_slots = fired_now
+                db.query(PublishPlan).filter(PublishPlan.id == int(plan.id)).update(
+                    {"fired_slots": fired_now}
+                )
+                db.commit()
+                logger.info(
+                    "[发布任务] plan=%s 错过槽位已作废 %s（超过 %ss 不补发）",
+                    plan.id, expired, _SLOT_GRACE_SECONDS,
+                )
             if not slots:
                 continue
             user = db.query(User).filter(User.id == int(plan.user_id)).first()
