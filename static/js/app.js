@@ -1417,3 +1417,28 @@ function _stringifyUiValue(s) {
 function escapeHtml(s) { return _stringifyUiValue(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
 function escapeAttr(s) { return _stringifyUiValue(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
 function truncate(s, len) { s = _stringifyUiValue(s).trim(); return s.length <= len ? s : s.slice(0, len) + '…'; }
+
+/* 2026-10-30：自定义标题栏拖动。
+   之前只有 Win32 命中测试里 6~14px 的细带返回 HTCAPTION，用户基本点不中，
+   看起来"只有左上角一点点能拖"。现在在 header 空白处按下鼠标就交给系统拖动，
+   按钮/链接/输入框等交互元素不拦截。 */
+(function () {
+  "use strict";
+  function dragApi() {
+    var api = window.pywebview && window.pywebview.api;
+    return api && typeof api.window_drag === "function" ? api : null;
+  }
+  document.addEventListener("mousedown", function (event) {
+    if (event.button !== 0) return;
+    var target = event.target;
+    if (!target || !target.closest) return;
+    var header = target.closest("#appHeader, header.header");
+    if (!header) return;
+    if (target.closest("button, a, input, select, textarea, label, [data-no-drag], [contenteditable='true']")) return;
+    var api = dragApi();
+    if (!api) return;
+    event.preventDefault();
+    try { api.window_drag(); } catch (e) {}
+  }, true);
+})();
+

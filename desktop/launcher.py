@@ -1637,6 +1637,31 @@ class DesktopApi:
             log(f"DesktopApi: maximize failed: {exc}")
             return {"ok": False, "error": str(exc)}
 
+    def window_drag(self) -> dict:
+        """自定义标题栏拖动：交给系统做 HTCAPTION 拖动。
+
+        之前只靠 WM_NCHITTEST 里 6~14px 那条薄带返回 HTCAPTION，用户几乎点不中，
+        只剩左上角极小一块能拖。页面现在在 header 空白处 mousedown 调这里。
+        """
+        try:
+            import ctypes
+
+            import webview  # type: ignore
+
+            window = webview.active_window()
+            if window is None:
+                return {"ok": False, "error": "no window"}
+            hwnd = int(window.native.Handle.ToInt64())
+            user32 = ctypes.windll.user32
+            if user32.IsZoomed(hwnd):
+                return {"ok": False, "error": "maximized"}
+            user32.ReleaseCapture()
+            user32.SendMessageW(hwnd, 0x00A1, 2, 0)  # WM_NCLBUTTONDOWN / HTCAPTION
+            return {"ok": True}
+        except Exception as exc:  # noqa: BLE001
+            log(f"DesktopApi: drag failed: {exc}")
+            return {"ok": False, "error": str(exc)}
+
     def window_start_resize(self, edge: str = "") -> dict:
         """自定义标题栏下，用 JS 拖边/角触发系统缩放（WM_NCLBUTTONDOWN）。"""
         try:
