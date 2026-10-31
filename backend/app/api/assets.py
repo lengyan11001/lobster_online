@@ -3366,6 +3366,17 @@ def list_assets(
                 "creative_candidate_use_count": _creative_candidate_group_use_count(r.meta, creative_group) if creative_group else 0,
                 "creative_candidate_last_used_at": _creative_candidate_group_last_used_at(r.meta, creative_group) if creative_group else "",
                 "asset_origin": asset_origin,
+                "publish_stats": (
+                    dict((r.meta or {}).get("publish_stats") or {})
+                    if isinstance(r.meta, dict) and isinstance((r.meta or {}).get("publish_stats"), dict)
+                    else {}
+                ),
+                "last_publish_at": (
+                    str((r.meta or {}).get("last_publish_at") or "") if isinstance(r.meta, dict) else ""
+                ),
+                "last_publish_platform": (
+                    str((r.meta or {}).get("last_publish_platform") or "") if isinstance(r.meta, dict) else ""
+                ),
                 "created_at": r.created_at.isoformat() if r.created_at else "",
             }
         )

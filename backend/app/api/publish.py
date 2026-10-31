@@ -1056,6 +1056,34 @@ SUPPORTED_PLATFORMS = {
 
 DOUYIN_WORKBENCH_URL = "https://www.douyin.com/jingxuan"
 
+def _record_asset_publish(db, asset, platform: str) -> None:
+    """发布成功后给素材累计「平台 + 次数」，内容记录里展示发布状况。"""
+    try:
+        if asset is None:
+            return
+        plat = str(platform or "").strip()
+        if not plat:
+            return
+        meta = dict(asset.meta or {}) if isinstance(asset.meta, dict) else {}
+        stats = meta.get("publish_stats") if isinstance(meta.get("publish_stats"), dict) else {}
+        stats = dict(stats)
+        stats[plat] = int(stats.get(plat) or 0) + 1
+        meta["publish_stats"] = stats
+        meta["last_publish_platform"] = plat
+        meta["last_publish_at"] = datetime.utcnow().isoformat(timespec="seconds")
+        asset.meta = meta
+        db.add(asset)
+        db.commit()
+        logger.info("[PUBLISH-API] 素材发布计数 asset=%s platform=%s total=%s",
+                    getattr(asset, "asset_id", ""), plat, stats[plat])
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning("[PUBLISH-API] 素材发布计数失败 asset=%s", getattr(asset, "asset_id", ""), exc_info=True)
+
+
 def _ensure_tiny_mp4(path: Path) -> Path:
     # A tiny MP4 (base64) for dry-run uploads.
     import base64
@@ -2618,6 +2646,9 @@ async def create_publish_task(
         task.status = "success" if result.get("ok") else "failed"
         if result.get("need_login"):
             task.status = "need_login"
+        # 真正发布成功才计数（dry_run / need_login 不算）
+        if task.status == "success" and not result.get("dry_run"):
+            _record_asset_publish(db, asset, acct.platform)
         task.result_url = result.get("url", "")
         task.error = result.get("error", "")
         task.meta = {

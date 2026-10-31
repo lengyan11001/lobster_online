@@ -4265,6 +4265,7 @@ function loadAssets(query, options) {
           '<div class="card-desc asset-card-desc-clamp" style="font-size:0.78rem;">' + escapeHtml(a.prompt || a.filename) + '</div>' +
           groupHtml + tagHtml +
           '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">ID: ' + escapeHtml(a.asset_id) + ' · ' + escapeHtml(_formatDateTimeBeijing(a.created_at)) + '</div>' +
+          _assetPublishStatusHtml(a) +
           '<div class="card-actions">' + previewBtn + ' ' + copyPromptBtn + ' ' + downloadBtn + ' ' + useAsAttachBtn + ' ' + candidateBtn + ' ' + actionMenu + ' ' + deleteBtn + '</div></div>';
       }).join('');
       _assetListCache[cacheKey].html = el.innerHTML;
@@ -5034,6 +5035,7 @@ var splitBtn = !isContentRecord && isVideo ? '<button type="button" class="btn b
       imageStrip +
       groupHtml + tagHtml +
       '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">ID: ' + escapeHtml(a.asset_id) + ' · ' + escapeHtml(_formatDateTimeBeijing(a.created_at)) + '</div>' +
+      _assetPublishStatusHtml(a) +
       '<div class="card-actions">' + previewBtn + ' ' + copyPromptBtn + ' ' + downloadBtn + ' ' + useAsAttachBtn + ' ' + splitBtn + ' ' + aiTagsBtn + ' ' + candidateBtn + ' ' + pubGroupBtn + ' ' + actionMenu + ' ' + deleteBtn + '</div></div>';
   }).join('');
 
@@ -5043,6 +5045,25 @@ var splitBtn = !isContentRecord && isVideo ? '<button type="button" class="btn b
   _bindAssetActionMenuPositioning(container);
   _wireAssetListThumbs(container);
   _updateAssetBulkUi();
+}
+
+function _assetPublishStatusHtml(a) {
+  var stats = (a && a.publish_stats) || {};
+  var names = {
+    douyin: '抖音', xiaohongshu: '小红书', wechat_channels: '视频号', tiktok: 'TikTok',
+    toutiao: '头条', kuaishou: '快手', bilibili: 'B站', zhihu: '知乎',
+    douyin_shop: '抖店', xiaohongshu_shop: '小红书店铺',
+    alibaba1688: '1688', taobao: '淘宝', pinduoduo: '拼多多'
+  };
+  var keys = Object.keys(stats).filter(function(k) { return Number(stats[k]) > 0; });
+  if (!keys.length) return '';
+  keys.sort(function(x, y) { return Number(stats[y]) - Number(stats[x]); });
+  var parts = keys.map(function(k) { return (names[k] || k) + ' ×' + Number(stats[k]); });
+  var last = a.last_publish_at
+    ? ' · 最近 ' + _formatDateTimeBeijing(a.last_publish_at)
+    : '';
+  return '<div class="card-desc" style="font-size:0.72rem;color:#34d399;">已发布：'
+    + escapeHtml(parts.join(' · ')) + escapeHtml(last) + '</div>';
 }
 
 function _cancelAssetProgressiveRender() {
