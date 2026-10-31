@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import hashlib
+import re
 import json
 import os
 import shutil
@@ -1047,6 +1048,47 @@ def _staged_manifest_paths(
     return tuple(expanded)
 
 
+def _restamp_zip_static_assets(zip_path: Path, version: str, build: int) -> int:
+    """把包内 index.html 里 /static/(js|css|views)/xxx?v=old 全部改成 ?v=<version>-<build>。
+
+    这样每一版前端资源 URL 都不同，WebView/浏览器缓存不可能再吃到旧文件；
+    不依赖任何人手工去改 index.html 的版本号。
+    """
+    tag = f"{version}-{build}"
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            items = [(info, zf.read(info.filename)) for info in zf.infolist()]
+    except Exception as exc:
+        print(f"[WARN] restamp skipped: {exc}")
+        return 0
+    pattern = re.compile(r'(/static/(?:js|css|views)/[^"\'?]+)\?v=[^"\'&]+')
+    changed = 0
+    new_items = []
+    for info, data in items:
+        if info.filename == "static/index.html":
+            try:
+                text = data.decode("utf-8")
+                new_text, n = pattern.subn(lambda m: m.group(1) + "?v=" + tag, text)
+                if n:
+                    data = new_text.encode("utf-8")
+                    changed = n
+            except Exception:
+                pass
+        new_items.append((info, data))
+    if not changed:
+        return 0
+    tmp = zip_path.with_suffix(".tmp.zip")
+    with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for info, data in new_items:
+            zi = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            zi.external_attr = info.external_attr
+            zf.writestr(zi, data)
+    tmp.replace(zip_path)
+    print(f"[cache] index.html 资源版本已改写为 ?v={tag}（{changed} 处）")
+    return changed
+
+
 def main() -> int:
     global _INCLUDE_RUNTIME_WHEEL_DIRS, _INCLUDE_PYC_FILES, _PACK_OVERSEAS, _PACK_BRAND
     ap = argparse.ArgumentParser(description="Pack client-code OTA zip")
@@ -1344,6 +1386,8 @@ def main() -> int:
             encrypted_tmp.cleanup()
         except OSError as exc:
             print(f"[WARN] encrypted staging cleanup failed: {exc}")
+
+    _restamp_zip_static_assets(out, str(bumped_version["version"]), int(bumped_version["build"]))
 
     h = hashlib.sha256()
     with out.open("rb") as f:
