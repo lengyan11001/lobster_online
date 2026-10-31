@@ -1025,7 +1025,11 @@ def _download_dir() -> Path:
 
 def _download_filename(video: Dict[str, Any]) -> str:
     base = _video_title_text(video, "video")
-    safe = "".join(ch for ch in base if ch not in '\\/:*?"<>|').strip()[:60] or "video"
+    # 标题里常带换行/制表符/首尾点号，Windows 会直接报 [Errno 22] Invalid argument，
+    # 这里统一把非法字符和所有空白收敛成单个空格，并限制长度。
+    safe = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", str(base or ""))
+    safe = re.sub(r"\s+", " ", safe).strip(" .")
+    safe = safe[:60].rstrip(" .") or "video"
     key = _video_item_key(video)
     suffix = ("_" + key[:8]) if key else ""
     return f"{safe}{suffix}.mp4"
