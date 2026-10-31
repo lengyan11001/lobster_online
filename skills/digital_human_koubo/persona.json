@@ -1,0 +1,67 @@
+{
+ "name": "白背心数字人",
+ "renoise": {
+  "reference_material": "material:329814",
+  "multiview_task": "task:357546",
+  "note": "参考图是用户自己 Grok 视频里的一帧（正脸、闭嘴、头发不挡脸）。换账号或素材过期时，用 assets/avatar_ref.jpg 重新 upload_files 拿新 material id。"
+ },
+ "look": "年轻东亚女性，黑色长发带脸侧碎发，白色罗纹背心，竖屏自拍构图，室内自然光",
+ "voice": {
+  "engine": "grok-native",
+  "desc": "young friendly female voice, clear and patient but lively, natural pace",
+  "speed_cps": 5.4,
+  "alt_clone": "MiMo mimo-v2.5-tts-voiceclone，参照用 3 段 Grok 口播拼的 ≥12 秒干声（见 references/voice.md）"
+ },
+ "model": {
+  "name": "grok-video-1.5",
+  "ratio": "9:16",
+  "full_shot_resolution": "720p",
+  "pip_shot_resolution": "480p",
+  "max_seconds": 15,
+  "price_per_second": {
+   "720p": 17,
+   "480p": 10
+  }
+ },
+ "acts": {
+  "full": "warm eye contact, expressive face, natural hand gestures",
+  "pip": "calm explaining tone, small nods, occasionally glancing down as if reading a screen, small pointing gestures",
+  "vlog": "relaxed lifestyle vlogger sharing a favorite tool, natural small head tilts and nods, one hand comes up briefly in a casual gesture",
+  "depth": "medium shot with generous headroom and plain background visible on both sides of the head and shoulders (for text-behind-subject graphics), calm confident delivery"
+ },
+ "prompt_template": "The young woman in {ref} talks straight into her phone's front camera, same selfie framing, lighting and outfit as the reference, like a friendly Chinese tech vlogger {purpose}: {act}. Handheld selfie feel with only a very slight natural sway. She speaks Mandarin Chinese, clearly lip-synced, in a {voice}:\n“{line}”\nSound: only her voice and quiet room tone, no music, no subtitles, no on-screen text.",
+ "disclosure": "内容由 AI 数字人演绎",
+ "other_hosts": {
+  "me": {
+   "name": "用户本人数字人（藏青 polo）",
+   "reference_material": "material:338484",
+   "asset": "assets/host_me_polo.jpg",
+   "ratio": "16:9",
+   "note": "用户本人照片，只给用户自己的片子用；横屏照直接出横屏口播",
+   "voice": "warm, steady, confident male voice around 35 years old, natural pace",
+   "prompt_template": "The man in {ref} talks straight to the camera, same framing, gray studio backdrop, navy polo shirt, glasses and soft lighting as the reference, like a friendly tech blogger {purpose}: {act}. Locked-off camera, no zoom. He speaks {language}, clearly lip-synced, in a {voice}:\n“{line}”\nSound: only his voice and quiet room tone, no music, no subtitles, no captions, no on-screen text of any kind."
+  },
+  "cat": {
+   "name": "橘猫店长",
+   "still_task": "task:360205",
+   "ratio": "9:16",
+   "voice": "cute, playful small high-pitched voice",
+   "note": "提示词要写 its mouth clearly opens and closes in sync with the words"
+  },
+  "dog": {
+   "name": "柴犬新闻主播",
+   "still_task": "task:360206",
+   "ratio": "16:9",
+   "voice": "deep, serious male TV news-anchor voice"
+  }
+ },
+ "languages_tested": {
+  "en": "100%",
+  "ja": "100%",
+  "ko": "94%",
+  "fr": "100%",
+  "es": "100%",
+  "ar": "99%",
+  "note": "2026-10 第三期实测 whisper 回听准确率；台词提前翻好再写进提示词"
+ }
+}

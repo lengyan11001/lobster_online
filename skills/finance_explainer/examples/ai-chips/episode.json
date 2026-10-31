@@ -1,0 +1,1011 @@
+{
+ "meta": {
+  "title": "中国买不到顶级显卡，为什么还是世界第二 AI 大国？",
+  "channel": "Berry说",
+  "theme": "v2-glass",
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "facts": "facts.md",
+  "target_minutes": 10
+ },
+ "voice": {
+  "engine": "mimo",
+  "model": "mimo-v2.5-tts",
+  "voice": "茉莉",
+  "style": "（占位音色，正式版替换为提供的音频）你在录一期科技财经科普视频，像在镜头前跟朋友聊天：语速快、口语化、语调起伏大，设问句尾上扬，轻快俏皮、有感染力，讲到关键数字稍微停一下。"
+ },
+ "lexicon": {
+  "GPU": "G P U",
+  "H20": "H 二十",
+  "H200": "H 两百",
+  "H800": "H 八百",
+  "H100": "H 一百",
+  "A100": "A 一百",
+  "A800": "A 八百",
+  "HBM": "H B M",
+  "AI": "A I",
+  "CUDA": "酷达",
+  "B300": "B 三百",
+  "Qwen": "千问"
+ },
+ "beats": [
+  {
+   "id": "c01",
+   "narration": "二〇二五年一月二十七号，[[n1]]英伟达一天之内，市值蒸发了将近六千亿美元，[[n2]]美股历史上，单家公司最大的单日跌幅。",
+   "host": "off",
+   "bg": "gen:trading_floor",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "start",
+     "text": "2025.01.27",
+     "style": "big",
+     "pos": "topleft",
+     "size": 72
+    },
+    {
+     "type": "counter",
+     "at": "n1",
+     "from": 0,
+     "to": 600000000000,
+     "prefix": "−$",
+     "pos": "center",
+     "money": true
+    },
+    {
+     "type": "kinetic",
+     "at": "n2",
+     "text": "美股史上最大单日市值损失",
+     "style": "big",
+     "pos": "lower",
+     "size": 64
+    }
+   ]
+  },
+  {
+   "id": "c02",
+   "narration": "导火索，是一家中国公司前几天发的一篇论文。[[r1]]华尔街突然发现：原来不用买那么多顶级显卡，也能做出很能打的模型。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "start",
+     "text": "一篇论文",
+     "style": "stamp",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c03",
+   "narration": "这事儿就很怪了。[[q1]]美国这几年一直卡着中国买最好的显卡，[[q2]]可斯坦福最新的 AI 报告里，中国，[[q3]]稳稳排在世界第二。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "q3",
+     "text": "世界第二？",
+     "style": "big",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c04",
+   "narration": "没有好卡，怎么还能跑这么快？[[w]]今天咱就把这件事掰开揉碎了，好好聊一聊。",
+   "host": "full",
+   "punch": 1.12,
+   "overlays": [
+    {
+     "type": "questions",
+     "at": "w",
+     "items": [
+      "卡到底卡了什么？",
+      "第二是怎么算的？",
+      "没卡靠什么追？",
+      "差距还有多大？"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c05",
+   "kind": "chapter",
+   "duration": 2.6,
+   "bg": "gen:chip_macro",
+   "title": "第一章 · 卡了什么",
+   "subtitle": "EXPORT CONTROLS",
+   "sfx": "impact"
+  },
+  {
+   "id": "c06",
+   "narration": "先说清楚，为什么偏偏是显卡。[[g1]]训练一个大模型，说白了就是做海量的乘法和加法，[[g2]]显卡天生就擅长同时算一大堆这种题，[[g3]]所以它就成了 AI 时代的发动机。",
+   "host": "off",
+   "bg": "gen:gpu_render",
+   "overlays": [
+    {
+     "type": "term",
+     "at": "g2",
+     "en": "GPU",
+     "zh": "图形处理器：擅长成千上万道题同时算",
+     "pos": "left"
+    }
+   ]
+  },
+  {
+   "id": "c07",
+   "narration": "而最好的发动机，几乎都出自一家公司，英伟达。[[v1]]更要命的是，它不光卖卡，还有一整套叫 CUDA 的软件生态，[[v2]]全世界的 AI 工程师，都是用这套工具长大的。",
+   "host": "side",
+   "overlays": [
+    {
+     "type": "term",
+     "at": "v1",
+     "en": "CUDA",
+     "zh": "英伟达的编程平台：卡好买，习惯难换",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c07b",
+   "narration": "那美国为什么非卡不可？[[w1]]因为在华盛顿看来，AI 不只是做聊天机器人，[[w2]]它会用在军事、情报、网络安全上。[[w3]]谁的算力多，谁在下一轮科技竞赛里就占先手。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "w3",
+     "text": "算力 = 先手",
+     "style": "big",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c08",
+   "narration": "所以美国要卡中国的 AI，最直接的办法，就是卡这张卡。[[d1]]二〇二二年十月，第一刀：A100、H100，不让卖了。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "datestack",
+     "items": [
+      {
+       "at": "d1",
+       "date": "2022.10",
+       "label": "A100 / H100 禁售",
+       "strike": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c09",
+   "narration": "英伟达反应也快，[[e1]]专门给中国做了降速版，叫 A800 和 H800，[[e2]]性能砍一刀，刚好卡在红线下面。[[e3]]结果二〇二三年十月，美国把这个口子也堵上了。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "datestack",
+     "items": [
+      {
+       "at": "start",
+       "date": "2022.10",
+       "label": "A100 / H100 禁售",
+       "strike": true
+      },
+      {
+       "at": "e1",
+       "date": "特供",
+       "label": "A800 / H800 上市"
+      },
+      {
+       "at": "e3",
+       "date": "2023.10",
+       "label": "特供版也禁了",
+       "strike": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c10",
+   "narration": "二〇二四年十二月，又补了一刀：[[f1]]做芯片的设备、设计软件，连显卡上用的高带宽内存，[[f2]]一起管上了，还把一百四十家实体拉进了清单。",
+   "host": "pip",
+   "stage": {
+    "type": "steps",
+    "title": "2024.12 管制升级",
+    "source": "美国商务部 BIS 公告",
+    "items": [
+     {
+      "at": "f1",
+      "text": "24 类芯片制造设备",
+      "sub": "造不出来"
+     },
+     {
+      "at": "f1",
+      "text": "3 类设计 / 制造软件",
+      "sub": "设计不了"
+     },
+     {
+      "at": "f1",
+      "text": "高带宽内存 HBM",
+      "sub": "配不齐"
+     },
+     {
+      "at": "f2",
+      "text": "140 家实体",
+      "sub": "进了实体清单"
+     }
+    ]
+   }
+  },
+  {
+   "id": "c11",
+   "narration": "到这一步，剧情开始变得魔幻了。[[h1]]英伟达又做了一款更弱的 H20 卖给中国，[[h2]]二〇二五年四月，美国说这个也得审批，[[h3]]英伟达当季直接认亏了大概五十五亿美元。",
+   "host": "pip",
+   "stage": {
+    "type": "doc",
+    "source": "据英伟达 2025-04-15 披露整理",
+    "title": "H20 Export License Requirement",
+    "lines": [
+     {
+      "at": "h2",
+      "text": "美国政府通知：H20 出口中国",
+      "hl": "须申请许可证"
+     },
+     {
+      "at": "h3",
+      "text": "公司预计当季计提相关费用约",
+      "hl": "55 亿美元"
+     }
+    ]
+   }
+  },
+  {
+   "id": "c12",
+   "narration": "三个月后，风向又变了：[[i1]]H20 可以卖，但是收入的百分之十五，要分给美国政府。[[i2]]你品品，[[i3]]这还是出口管制吗？这更像是收过路费。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "i1",
+     "text": "抽成 15%",
+     "style": "stamp",
+     "pos": "right"
+    },
+    {
+     "type": "kinetic",
+     "at": "i3",
+     "text": "过路费？",
+     "style": "big",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c13",
+   "narration": "更有意思的是中国这边的反应。[[j1]]政府开始劝企业，别买 H20 了；[[j2]]后来连英伟达另一款特供卡，也被叫停测试和采购。[[j3]]黄仁勋公开说，他很失望。",
+   "host": "side",
+   "overlays": [
+    {
+     "type": "sticker",
+     "at": "j1",
+     "src": "gen:sticker_gpu",
+     "pos": "right",
+     "bubble": [
+      {
+       "at": "j1",
+       "text": "我降价了还不行？"
+      },
+      {
+       "at": "j3",
+       "text": "有点失望…"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c13b",
+   "narration": "后来据路透报道，英伟达干脆让供应商暂停了 H20 的生产。[[p1]]你看，一款专门为中国做的卡，[[p2]]美国一会儿禁一会儿放，中国一会儿劝一会儿停，[[p3]]最后两头不讨好。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "p3",
+     "text": "两头不讨好",
+     "style": "stamp",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c14",
+   "narration": "二〇二五年底，美国又松口，更强的 H200 也能卖，抽成提到百分之二十五。[[k1]]可二〇二六年一月有报道说，中国海关一度把它拦在了门外。[[k2]]而最新一代的 Blackwell，到今天也还是禁售。",
+   "host": "pip",
+   "stage": {
+    "type": "steps",
+    "title": "一张卡的拉锯战",
+    "items": [
+     {
+      "at": "start",
+      "text": "2025.12  H200 有条件放开",
+      "sub": "美国抽成 25%"
+     },
+     {
+      "at": "k1",
+      "text": "2026.01  报道：中国海关拦截",
+      "sub": "鼓励用国产卡"
+     },
+     {
+      "at": "k2",
+      "text": "Blackwell 最新一代",
+      "sub": "至今禁售"
+     }
+    ]
+   }
+  },
+  {
+   "id": "c14b",
+   "narration": "二〇二六年五月，又有报道说，美国批准了阿里、腾讯、字节等十家中国公司采购 H200。[[u1]]那后来到底交付了多少？[[u2]]说实话，我查了一圈，没找到靠谱的数据，[[u3]]如果你有准确的消息，欢迎在评论区告诉我。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "u2",
+     "text": "没查到靠谱数据",
+     "style": "big",
+     "pos": "right",
+     "size": 72
+    }
+   ]
+  },
+  {
+   "id": "c15",
+   "narration": "所以准确地说，[[l1]]中国不是没有显卡，[[l2]]是买不到最好的那一代，[[l3]]而且越来越不想只靠买。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "l2",
+     "text": "买不到最好的",
+     "style": "stamp",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c16",
+   "kind": "chapter",
+   "duration": 2.6,
+   "bg": "gen:data_city",
+   "title": "第二章 · 第二怎么算",
+   "subtitle": "THE SCOREBOARD",
+   "sfx": "impact"
+  },
+  {
+   "id": "c17",
+   "narration": "那「世界第二」，是谁说的，又是怎么算的？[[m0]]最常被引用的，是斯坦福每年出的 AI 指数。[[m1]]二〇二五年，美国出了五十九个重要模型，[[m2]]中国三十五个，后面的国家，基本都是个位数。",
+   "host": "pip",
+   "stage": {
+    "type": "bars",
+    "title": "2025 年重要 AI 模型数量",
+    "source": "Stanford HAI《AI Index 2026》",
+    "bars": [
+     {
+      "label": "美国",
+      "value": 59,
+      "at": "m1"
+     },
+     {
+      "label": "中国",
+      "value": 35,
+      "at": "m2",
+      "hot": true
+     }
+    ]
+   }
+  },
+  {
+   "id": "c18",
+   "narration": "更值得看的，是差距的变化。[[p1]]二〇二三年底，中美最强的模型，在编程测试上还差三十多分；[[p2]]到二〇二六年三月，在大模型竞技场上，美国第一名只领先百分之二点七。",
+   "host": "pip",
+   "stage": {
+    "type": "bars",
+    "title": "中美头部模型差距",
+    "source": "AI Index 2025 / 2026",
+    "bars": [
+     {
+      "label": "2023 年底\nHumanEval",
+      "value": 31.6,
+      "at": "p1",
+      "unit": "分"
+     },
+     {
+      "label": "2026 年 3 月\n竞技场",
+      "value": 2.7,
+      "at": "p2",
+      "unit": "%",
+      "hot": true
+     }
+    ]
+   }
+  },
+  {
+   "id": "c18b",
+   "narration": "中间最戏剧性的节点，就是二〇二五年初，[[d1]]DeepSeek 的推理模型 R1 一出来，一度追平了美国最强的模型。[[d2]]后来它成了 Hugging Face 历史上点赞最多的模型。",
+   "host": "side",
+   "overlays": [
+    {
+     "type": "term",
+     "at": "d1",
+     "en": "DeepSeek-R1",
+     "zh": "2025 年 1 月发布的推理模型",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c19",
+   "narration": "论文和专利，中国的数量更是第一：[[s1]]二〇二三年全球 AI 专利授权，差不多七成在中国；[[s2]]全球被引用最多的一百篇 AI 论文里，中国占了四十一篇。",
+   "host": "side",
+   "overlays": [
+    {
+     "type": "list",
+     "items": [
+      {
+       "at": "s1",
+       "text": "AI 专利授权 69.7% 在中国",
+       "tone": "good"
+      },
+      {
+       "at": "s2",
+       "text": "高被引前 100 论文：41 篇",
+       "tone": "good"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c20",
+   "narration": "不过斯坦福自己也加了一句，[[u1]]中国是第二，但是一个「遥远的第二」：[[u2]]高影响力的专利、模型数量、投资，美国还是领先一大截。这个咱后面细说。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "u1",
+     "text": "遥远的第二",
+     "style": "brush",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c20b",
+   "narration": "斯坦福还有一个更综合的排名，叫全球 AI 活力指数，[[v1]]把研究、人才、投资、基础设施全算进去，[[v2]]结果是美国第一，中国第二，英国第三。",
+   "host": "pip",
+   "stage": {
+    "type": "steps",
+    "title": "全球 AI 活力排名",
+    "source": "Stanford HAI Global AI Vibrancy Tool",
+    "items": [
+     {
+      "at": "v2",
+      "text": "① 美国",
+      "sub": "遥遥领先"
+     },
+     {
+      "at": "v2",
+      "text": "② 中国",
+      "sub": "「遥远的第二」"
+     },
+     {
+      "at": "v2",
+      "text": "③ 英国",
+      "sub": ""
+     }
+    ]
+   }
+  },
+  {
+   "id": "c21",
+   "kind": "chapter",
+   "duration": 2.6,
+   "bg": "gen:server_hall",
+   "title": "第三章 · 没卡靠什么",
+   "subtitle": "FIVE WORKAROUNDS",
+   "sfx": "impact"
+  },
+  {
+   "id": "c22",
+   "narration": "被卡着脖子，还能追成这样，凭什么？[[r]]我总结了五条，咱一条一条说。",
+   "host": "full",
+   "punch": 1.1
+  },
+  {
+   "id": "c23",
+   "narration": "第一条，抠。[[a1]]就是开头那篇论文，DeepSeek V3。论文里写得清清楚楚：[[a2]]两千零四十八块 H800，两百七十八万 GPU 小时，[[a3]]按租金算，最后一次训练五百五十多万美元。",
+   "host": "side",
+   "overlays": [
+    {
+     "type": "term",
+     "at": "a1",
+     "en": "DeepSeek-V3",
+     "zh": "2024 年 12 月发布的开源大模型",
+     "pos": "right"
+    },
+    {
+     "type": "kinetic",
+     "at": "a3",
+     "text": "$557.6 万",
+     "sub": "最后一次训练的租金折算",
+     "style": "big",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c24",
+   "narration": "这里必须说句公道话：[[b1]]这个数，不包括前面的研究、试错，还有买集群、养团队的钱，[[b2]]论文自己就写明了。[[b3]]所以网上说「几百万做出顶级模型」，是不准确的。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "b3",
+     "text": "≠ 几百万做出顶级模型",
+     "style": "stamp-red",
+     "pos": "right",
+     "size": 76
+    }
+   ]
+  },
+  {
+   "id": "c25",
+   "narration": "但它确实证明了一件事：[[c1]]算力不够，可以拿算法来凑。卡少，就逼着工程师把每一块卡都榨干。[[c2]]说白了，穷人家的孩子，更会过日子。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "c1",
+     "text": "算力不够 算法来凑",
+     "style": "big",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c25b",
+   "narration": "具体怎么抠呢？[[m1]]打个比方：以前的大模型，回答任何问题，都要把整个大脑全部调动起来；[[m2]]现在的做法，是把大脑分成很多个小专家，[[m3]]每次只叫醒其中几个，活儿一样干，电费省一大截。",
+   "host": "off",
+   "bg": "gen:experts_metaphor",
+   "overlays": [
+    {
+     "type": "term",
+     "at": "m2",
+     "en": "Mixture of Experts",
+     "zh": "混合专家：每次只激活一部分参数",
+     "pos": "left"
+    }
+   ]
+  },
+  {
+   "id": "c26",
+   "narration": "第二条，开源。[[o1]]根据 Hugging Face 的下载数据，过去一年，全世界下载的模型里，[[o2]]中国模型占了百分之十七点一，头一回超过了美国。",
+   "host": "pip",
+   "stage": {
+    "type": "bars",
+    "title": "Hugging Face 下载份额（2024.08–2025.08）",
+    "source": "arXiv:2512.03073",
+    "bars": [
+     {
+      "label": "美国",
+      "value": 15.7,
+      "at": "o1",
+      "unit": "%"
+     },
+     {
+      "label": "中国",
+      "value": 17.1,
+      "at": "o2",
+      "unit": "%",
+      "hot": true
+     }
+    ]
+   }
+  },
+  {
+   "id": "c27",
+   "narration": "其中 DeepSeek 和千问两家，加起来就占了百分之十四。[[q1]]连以前不怎么开源的百度，二〇二五年也在上面发了一百多个模型。",
+   "host": "pip",
+   "stage": {
+    "type": "steps",
+    "title": "开源的中国军团",
+    "source": "Hugging Face 官方博客 2026-01",
+    "items": [
+     {
+      "at": "start",
+      "text": "DeepSeek + 千问",
+      "sub": "合计约 14% 下载份额"
+     },
+     {
+      "at": "q1",
+      "text": "百度",
+      "sub": "2024 年 0 个 → 2025 年 100+ 个"
+     }
+    ]
+   }
+  },
+  {
+   "id": "c28",
+   "narration": "你想啊，[[x1]]模型免费放出去，全世界的开发者帮你测、帮你改、帮你做应用，[[x2]]这相当于不花钱，雇了一支全球研发团队。[[x3]]卡不够，就用人来补。",
+   "host": "off",
+   "bg": "gen:devs_global",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "x2",
+     "text": "免费的全球研发团队",
+     "style": "big",
+     "pos": "lower"
+    }
+   ]
+  },
+  {
+   "id": "c29",
+   "narration": "第三条，单卡不行，就堆量。[[y1]]华为的昇腾 910C，据报道推理性能大概是 H100 的六成。[[y2]]那就把三百八十四颗连成一台超节点，一起干活，[[y3]]已经部署了三百多套。",
+   "host": "off",
+   "bg": "gen:server_hall",
+   "overlays": [
+    {
+     "type": "term",
+     "at": "y1",
+     "en": "Ascend 910C",
+     "zh": "推理约为 H100 的 60%（据 CSIS）",
+     "pos": "left"
+    },
+    {
+     "type": "counter",
+     "at": "y2",
+     "from": 0,
+     "to": 384,
+     "suffix": "颗/超节点",
+     "pos": "center"
+    }
+   ]
+  },
+  {
+   "id": "c30",
+   "narration": "这就跟打仗一样：[[z1]]我一个打不过你，[[z2]]那我来一群。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "meme",
+     "at": "z2",
+     "src": "gen:meme_swarm",
+     "caption": "那我来一群"
+    }
+   ]
+  },
+  {
+   "id": "c31",
+   "narration": "而且华为的路线图更激进：[[h1]]二〇二六年四季度，要推出八千一百九十二颗芯片的超节点。[[h2]]做 AI 芯片的寒武纪，二〇二五年营收涨了四倍多，[[h3]]上市以来第一次全年赚钱。",
+   "host": "pip",
+   "stage": {
+    "type": "bars",
+    "title": "寒武纪年营收（亿元）",
+    "source": "寒武纪 2025 年年报（转述）",
+    "bars": [
+     {
+      "label": "2024",
+      "value": 11.7,
+      "at": "h2"
+     },
+     {
+      "label": "2025",
+      "value": 64.97,
+      "at": "h2",
+      "hot": true
+     }
+    ],
+    "callout": {
+     "at": "h3",
+     "text": "同比 +453%，首次全年盈利"
+    }
+   }
+  },
+  {
+   "id": "c32",
+   "narration": "第四条，绕道。[[k1]]出口管制管的是卖卡，没管租卡：中国公司可以合法地租用海外云上的算力。[[k2]]当然，也有走灰色路子的，[[k3]]今年美国司法部就起诉过一起案子，指控约二十五亿美元的服务器被转运到了中国。",
+   "host": "side",
+   "overlays": [
+    {
+     "type": "list",
+     "items": [
+      {
+       "at": "k1",
+       "text": "租海外云算力：合法",
+       "tone": "good"
+      },
+      {
+       "at": "k3",
+       "text": "走私服务器：被起诉",
+       "tone": "bad"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c32b",
+   "narration": "走私的案子还不止一起。[[s1]]今年八月，台湾起诉了九个人，其中还有一名英伟达的高级经理，[[s2]]涉案的一百三十台最新的服务器里，七十四台已经运到了中国客户手上。",
+   "host": "pip",
+   "stage": {
+    "type": "doc",
+    "source": "据 Ars Technica 2026-08-24 报道整理",
+    "title": "Taiwan indicts 9 in AI server smuggling case",
+    "lines": [
+     {
+      "at": "s1",
+      "text": "被起诉者包括一名英伟达",
+      "hl": "高级经理"
+     },
+     {
+      "at": "s2",
+      "text": "130 台 B300 服务器中",
+      "hl": "74 台已运抵中国客户"
+     }
+    ]
+   }
+  },
+  {
+   "id": "c33",
+   "narration": "第五条，是显卡之外的东西。[[e1]]先说电：二〇二五年中国用电一万零五百多太瓦时，差不多是美国的两倍还多。[[e2]]AI 机房就是电老虎，电多，底气就足。",
+   "host": "off",
+   "bg": "gen:power_grid",
+   "overlays": [
+    {
+     "type": "counter",
+     "at": "e1",
+     "from": 0,
+     "to": 10573,
+     "suffix": "太瓦时",
+     "pos": "center"
+    }
+   ]
+  },
+  {
+   "id": "c34",
+   "narration": "再说人：[[t1]]顶尖 AI 研究者里，本科在中国读的，接近一半。[[t2]]最后是用：截至二〇二五年底，中国生成式 AI 的用户，已经超过六亿。",
+   "host": "pip",
+   "stage": {
+    "type": "steps",
+    "title": "显卡之外的三张牌",
+    "items": [
+     {
+      "at": "start",
+      "text": "电",
+      "sub": "2025 年用电 10,573 太瓦时（Ember）"
+     },
+     {
+      "at": "t1",
+      "text": "人",
+      "sub": "顶尖研究者 47% 本科在中国（MacroPolo 2023）"
+     },
+     {
+      "at": "t2",
+      "text": "用",
+      "sub": "生成式 AI 用户 6.02 亿（CNNIC 2025.12）"
+     }
+    ]
+   }
+  },
+  {
+   "id": "c34b",
+   "narration": "还有一个容易被忽略的数字：[[g1]]在政府主导的公共 AI 超算数量上，二〇二五年中国以八十五台排第一。[[g2]]官方的说法是，全国智能算力规模，已经超过一千五百九十 EFLOPS。",
+   "host": "pip",
+   "stage": {
+    "type": "bars",
+    "title": "公共 / 公私合营 AI 超算数量（2025）",
+    "source": "AI Index 2026；智能算力规模据人民日报 2026-03",
+    "bars": [
+     {
+      "label": "中国",
+      "value": 85,
+      "at": "g1",
+      "hot": true,
+      "unit": "台"
+     }
+    ],
+    "callout": {
+     "at": "g2",
+     "text": "全国智能算力 > 1590 EFLOPS"
+    }
+   }
+  },
+  {
+   "id": "c35",
+   "kind": "chapter",
+   "duration": 2.6,
+   "bg": "gen:chip_macro",
+   "title": "第四章 · 差距多大",
+   "subtitle": "THE REAL GAP",
+   "sfx": "impact"
+  },
+  {
+   "id": "c36",
+   "narration": "听到这儿，你可能觉得，中国是不是快追上了？[[f1]]先别急，咱也得看看不好听的数据。",
+   "host": "full",
+   "punch": 1.1
+  },
+  {
+   "id": "c37",
+   "narration": "按 AI 超级计算机的算力算，[[g1]]美国占全球大约四分之三，[[g2]]中国只有百分之十五左右。",
+   "host": "pip",
+   "stage": {
+    "type": "bars",
+    "title": "全球 AI 超算算力份额",
+    "source": "Epoch AI（覆盖约 10–20% 的超算）",
+    "bars": [
+     {
+      "label": "美国",
+      "value": 75,
+      "at": "g1",
+      "unit": "%"
+     },
+     {
+      "label": "中国",
+      "value": 15,
+      "at": "g2",
+      "unit": "%",
+      "hot": true
+     }
+    ]
+   }
+  },
+  {
+   "id": "c38",
+   "narration": "钱的差距更大：[[m1]]二〇二五年，美国私人 AI 投资两千八百多亿美元，[[m2]]中国一百二十多亿，[[m3]]差了二十三倍。当然，斯坦福也说了，这没算中国的政府引导基金。",
+   "host": "pip",
+   "stage": {
+    "type": "bars",
+    "title": "2025 年私人 AI 投资（亿美元）",
+    "source": "AI Index 2026",
+    "bars": [
+     {
+      "label": "美国",
+      "value": 2859,
+      "at": "m1"
+     },
+     {
+      "label": "中国",
+      "value": 124,
+      "at": "m2",
+      "hot": true
+     }
+    ],
+    "callout": {
+     "at": "m3",
+     "text": "≈ 23 倍（未计政府引导基金）"
+    }
+   }
+  },
+  {
+   "id": "c39",
+   "narration": "所以现在的局面是：[[n1]]模型的分数，差不多追平了；[[n2]]但是算力、资金、最先进的卡，差距还很大。",
+   "host": "side",
+   "overlays": [
+    {
+     "type": "list",
+     "items": [
+      {
+       "at": "n1",
+       "text": "模型分数：接近追平",
+       "tone": "good"
+      },
+      {
+       "at": "n2",
+       "text": "算力 / 资金 / 顶级卡：差距大",
+       "tone": "bad"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c39b",
+   "narration": "还有一个不太被注意的约束：[[c1]]中国自己也在关门。劝阻买 H20、拦截 H200，[[c2]]本质上是在逼国内企业用国产卡。[[c3]]短期会更难受，但长期，这是一场豪赌。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "c3",
+     "text": "一场豪赌",
+     "style": "stamp",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c40",
+   "narration": "说白了，[[y1]]中国这个第二名，是省出来的，[[y2]]不是堆出来的。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "y2",
+     "text": "省出来的第二",
+     "style": "brush",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c41",
+   "narration": "最后咱复个盘。[[r1]]美国卡显卡，本意是让中国的 AI 慢下来；[[r2]]结果一方面确实卡住了算力，[[r3]]另一方面，也逼出了更省的算法、更开放的生态，和一条国产芯片的路。",
+   "host": "pip",
+   "stage": {
+    "type": "steps",
+    "title": "管制的两面",
+    "items": [
+     {
+      "at": "r2",
+      "text": "卡住了",
+      "sub": "算力份额、最先进的卡"
+     },
+     {
+      "at": "r3",
+      "text": "逼出了",
+      "sub": "省算力的算法 · 开源生态 · 国产芯片"
+     }
+    ]
+   }
+  },
+  {
+   "id": "c42",
+   "narration": "那这个第二，坐不坐得稳？先说答案：[[z1]]短期稳，长期看两件事。[[z2]]第一，国产芯片能不能真正量产、追上来；[[z3]]第二，省钱这条路，会不会越走越窄。毕竟算法再巧，也有用完的一天。",
+   "host": "full",
+   "punch": 1.08,
+   "overlays": [
+    {
+     "type": "list",
+     "items": [
+      {
+       "at": "z2",
+       "text": "国产芯片能否量产追上",
+       "tone": "good"
+      },
+      {
+       "at": "z3",
+       "text": "省钱路线会不会到头",
+       "tone": "bad"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c42b",
+   "narration": "其实回头看，开头那天英伟达跌掉的六千亿，后来很快又涨回来了。[[x1]]因为市场最后想明白了：[[x2]]算法越省，用 AI 的人就越多，需要的卡，反而更多。[[x3]]这场比赛，远没有到终点。",
+   "host": "off",
+   "bg": "gen:trading_floor",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "x2",
+     "text": "越省 → 越多人用 → 要更多卡",
+     "style": "big",
+     "pos": "lower",
+     "size": 64
+    }
+   ]
+  },
+  {
+   "id": "c43",
+   "narration": "好，这期就聊到这儿。你觉得中美 AI 最后谁能赢？评论区聊聊，咱们下期见。",
+   "host": "full",
+   "end": true
+  }
+ ]
+}

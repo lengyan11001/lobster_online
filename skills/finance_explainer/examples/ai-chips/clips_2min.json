@@ -1,0 +1,11 @@
+{"c01": "clips/grok_c01.mp4",
+ "c02": {"src": "clips/grok_15s.mp4", "from": 0.0, "to": 8.9},
+ "c03": "clips/grok_c03.mp4",
+ "c04": {"src": "clips/grok_15s.mp4", "from": 8.8},
+ "c06": "clips/grok_c06.mp4",
+ "c07": "clips/grok_c07.mp4",
+ "c07b": "clips/grok_c07b.mp4",
+ "c08": "clips/grok_c08.mp4",
+ "c09": "clips/grok_c09.mp4",
+ "c10": "clips/grok_c10.mp4",
+ "c11": "clips/grok_c11.mp4"}

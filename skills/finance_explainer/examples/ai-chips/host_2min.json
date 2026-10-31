@@ -1,0 +1,22 @@
+{
+ "src": "host/anchor.jpg",
+ "kind": "image",
+ "face": [
+  0.5,
+  0.33
+ ],
+ "offset": 0.23,
+ "loop_len": 10.0,
+ "clips": {
+  "c02": "host/c02.mp4",
+  "c03": "host/c03.mp4",
+  "c04": "host/c04.mp4",
+  "c07": "host/c07.mp4",
+  "c07b": "host/c07b.mp4"
+ },
+ "loops": [
+  "host/loopA.mp4",
+  "host/loopB.mp4",
+  "host/loopC.mp4"
+ ]
+}

@@ -1,0 +1,75 @@
+{
+ "meta": {
+  "title": "Grok 数字人 15 秒演示",
+  "channel": "Berry说",
+  "theme": "v2-glass",
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "facts": "facts.md",
+  "target_minutes": 10
+ },
+ "lexicon": {
+  "GPU": "G P U",
+  "H20": "H 二十",
+  "H200": "H 两百",
+  "H800": "H 八百",
+  "H100": "H 一百",
+  "A100": "A 一百",
+  "A800": "A 八百",
+  "HBM": "H B M",
+  "AI": "A I",
+  "CUDA": "酷达",
+  "B300": "B 三百",
+  "Qwen": "千问"
+ },
+ "beats": [
+  {
+   "id": "g01",
+   "host": "full",
+   "narration": "导火索，是一家中国公司前几天发的一篇论文。[[p]]华尔街突然发现：原来不用买那么多顶级显卡，[[q]]也能做出很能打的模型。[[r]]没有好卡，怎么还能跑这么快？[[w]]今天咱就把这件事掰开揉碎了，好好聊一聊。",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "start",
+     "text": "一篇论文",
+     "style": "stamp",
+     "pos": "right",
+     "until": "p"
+    },
+    {
+     "type": "term",
+     "at": "p",
+     "en": "DeepSeek-V3",
+     "zh": "2048 块 H800 训练的开源大模型",
+     "pos": "right"
+    },
+    {
+     "type": "kinetic",
+     "at": "r",
+     "text": "没有好卡？",
+     "style": "big",
+     "pos": "right"
+    },
+    {
+     "type": "questions",
+     "at": "w",
+     "items": [
+      "卡到底卡了什么？",
+      "第二是怎么算的？",
+      "没卡靠什么追？",
+      "差距还有多大？"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "gend",
+   "kind": "chapter",
+   "duration": 2.4,
+   "bg": "gen:chip_macro",
+   "title": "算力封锁",
+   "subtitle": "THE GPU PARADOX"
+  }
+ ]
+}

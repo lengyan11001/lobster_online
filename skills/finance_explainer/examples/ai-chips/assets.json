@@ -1,0 +1,42 @@
+{
+ "trading_floor": {
+  "src": "assets/trading_floor.mp4",
+  "kind": "video"
+ },
+ "chip_macro": {
+  "src": "assets/chip_macro.mp4",
+  "kind": "video"
+ },
+ "gpu_render": {
+  "src": "assets/gpu_render.mp4",
+  "kind": "video"
+ },
+ "server_hall": {
+  "src": "assets/server_hall.mp4",
+  "kind": "video"
+ },
+ "data_city": {
+  "src": "assets/data_city.mp4",
+  "kind": "video"
+ },
+ "devs_global": {
+  "src": "assets/devs_global.mp4",
+  "kind": "video"
+ },
+ "experts_metaphor": {
+  "src": "assets/experts_metaphor.mp4",
+  "kind": "video"
+ },
+ "power_grid": {
+  "src": "assets/power_grid.mp4",
+  "kind": "video"
+ },
+ "meme_swarm": {
+  "src": "assets/meme_swarm.mp4",
+  "kind": "video"
+ },
+ "sticker_gpu": {
+  "src": "assets/sticker_gpu.png",
+  "kind": "image"
+ }
+}

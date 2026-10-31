@@ -1,0 +1,275 @@
+{
+ "meta": {
+  "title": "中国买不到顶级显卡，为什么还是世界第二 AI 大国？（2 分钟演示）",
+  "channel": "Berry说",
+  "theme": "v2-glass",
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "facts": "facts.md",
+  "target_minutes": 10
+ },
+ "voice": {
+  "engine": "mimo",
+  "model": "mimo-v2.5-tts",
+  "voice": "茉莉",
+  "style": "（占位音色，正式版替换为提供的音频）你在录一期科技财经科普视频，像在镜头前跟朋友聊天：语速快、口语化、语调起伏大，设问句尾上扬，轻快俏皮、有感染力，讲到关键数字稍微停一下。"
+ },
+ "lexicon": {
+  "GPU": "G P U",
+  "H20": "H 二十",
+  "H200": "H 两百",
+  "H800": "H 八百",
+  "H100": "H 一百",
+  "A100": "A 一百",
+  "A800": "A 八百",
+  "HBM": "H B M",
+  "AI": "A I",
+  "CUDA": "酷达",
+  "B300": "B 三百",
+  "Qwen": "千问"
+ },
+ "beats": [
+  {
+   "id": "c01",
+   "narration": "二〇二五年一月二十七号，[[n1]]英伟达一天之内，市值蒸发了将近六千亿美元，[[n2]]美股历史上，单家公司最大的单日跌幅。",
+   "host": "off",
+   "bg": "gen:trading_floor",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "start",
+     "text": "2025.01.27",
+     "style": "big",
+     "pos": "topleft",
+     "size": 72
+    },
+    {
+     "type": "counter",
+     "at": "n1",
+     "from": 0,
+     "to": 600000000000,
+     "prefix": "−$",
+     "pos": "center",
+     "money": true
+    },
+    {
+     "type": "kinetic",
+     "at": "n2",
+     "text": "美股史上最大单日市值损失",
+     "style": "big",
+     "pos": "lower",
+     "size": 64
+    }
+   ]
+  },
+  {
+   "id": "c02",
+   "narration": "导火索，是一家中国公司前几天发的一篇论文。[[r1]]华尔街突然发现：原来不用买那么多顶级显卡，也能做出很能打的模型。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "start",
+     "text": "一篇论文",
+     "style": "stamp",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c03",
+   "narration": "这事儿就很怪了。[[q1]]美国这几年一直卡着中国买最好的显卡，[[q2]]可斯坦福最新的 AI 报告里，中国，[[q3]]稳稳排在世界第二。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "q3",
+     "text": "世界第二？",
+     "style": "big",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c04",
+   "narration": "没有好卡，怎么还能跑这么快？[[w]]今天咱就把这件事掰开揉碎了，好好聊一聊。",
+   "host": "full",
+   "punch": 1.12,
+   "overlays": [
+    {
+     "type": "questions",
+     "at": "w",
+     "items": [
+      "卡到底卡了什么？",
+      "第二是怎么算的？",
+      "没卡靠什么追？",
+      "差距还有多大？"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c05",
+   "kind": "chapter",
+   "duration": 2.6,
+   "bg": "gen:chip_macro",
+   "title": "第一章 · 卡了什么",
+   "subtitle": "EXPORT CONTROLS",
+   "sfx": "impact"
+  },
+  {
+   "id": "c06",
+   "narration": "先说清楚，为什么偏偏是显卡。[[g1]]训练一个大模型，说白了就是做海量的乘法和加法，[[g2]]显卡天生就擅长同时算一大堆这种题，[[g3]]所以它就成了 AI 时代的发动机。",
+   "host": "off",
+   "bg": "gen:gpu_render",
+   "overlays": [
+    {
+     "type": "term",
+     "at": "g2",
+     "en": "GPU",
+     "zh": "图形处理器：擅长成千上万道题同时算",
+     "pos": "left"
+    }
+   ]
+  },
+  {
+   "id": "c07",
+   "narration": "而最好的发动机，几乎都出自一家公司，英伟达。[[v1]]更要命的是，它不光卖卡，还有一整套叫 CUDA 的软件生态，[[v2]]全世界的 AI 工程师，都是用这套工具长大的。",
+   "host": "side",
+   "overlays": [
+    {
+     "type": "term",
+     "at": "v1",
+     "en": "CUDA",
+     "zh": "英伟达的编程平台：卡好买，习惯难换",
+     "pos": "right"
+    }
+   ]
+  },
+  {
+   "id": "c07b",
+   "narration": "那美国为什么非卡不可？[[w1]]因为在华盛顿看来，AI 不只是做聊天机器人，[[w2]]它会用在军事、情报、网络安全上。[[w3]]谁的算力多，谁在下一轮科技竞赛里就占先手。",
+   "host": "off",
+   "overlays": [
+    {
+     "type": "kinetic",
+     "at": "w3",
+     "text": "算力 = 先手",
+     "style": "big",
+     "pos": "lower"
+    }
+   ],
+   "bg": "gen:server_hall"
+  },
+  {
+   "id": "c08",
+   "narration": "所以美国要卡中国的 AI，最直接的办法，就是卡这张卡。[[d1]]二〇二二年十月，第一刀：A100、H100，不让卖了。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "datestack",
+     "items": [
+      {
+       "at": "d1",
+       "date": "2022.10",
+       "label": "A100 / H100 禁售",
+       "strike": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c09",
+   "narration": "英伟达反应也快，[[e1]]专门给中国做了降速版，叫 A800 和 H800，[[e2]]性能砍一刀，刚好卡在红线下面。[[e3]]结果二〇二三年十月，美国把这个口子也堵上了。",
+   "host": "full",
+   "overlays": [
+    {
+     "type": "datestack",
+     "items": [
+      {
+       "at": "start",
+       "date": "2022.10",
+       "label": "A100 / H100 禁售",
+       "strike": true
+      },
+      {
+       "at": "e1",
+       "date": "特供",
+       "label": "A800 / H800 上市"
+      },
+      {
+       "at": "e3",
+       "date": "2023.10",
+       "label": "特供版也禁了",
+       "strike": true
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "c10",
+   "narration": "二〇二四年十二月，又补了一刀：[[f1]]做芯片的设备、设计软件，连显卡上用的高带宽内存，[[f2]]一起管上了，还把一百四十家实体拉进了清单。",
+   "host": "pip",
+   "stage": {
+    "type": "steps",
+    "title": "2024.12 管制升级",
+    "source": "美国商务部 BIS 公告",
+    "items": [
+     {
+      "at": "f1",
+      "text": "24 类芯片制造设备",
+      "sub": "造不出来"
+     },
+     {
+      "at": "f1",
+      "text": "3 类设计 / 制造软件",
+      "sub": "设计不了"
+     },
+     {
+      "at": "f1",
+      "text": "高带宽内存 HBM",
+      "sub": "配不齐"
+     },
+     {
+      "at": "f2",
+      "text": "140 家实体",
+      "sub": "进了实体清单"
+     }
+    ]
+   }
+  },
+  {
+   "id": "c11",
+   "narration": "到这一步，剧情开始变得魔幻了。[[h1]]英伟达又做了一款更弱的 H20 卖给中国，[[h2]]二〇二五年四月，美国说这个也得审批，[[h3]]英伟达当季直接认亏了大概五十五亿美元。",
+   "host": "pip",
+   "stage": {
+    "type": "doc",
+    "source": "据英伟达 2025-04-15 披露整理",
+    "title": "H20 Export License Requirement",
+    "lines": [
+     {
+      "at": "h2",
+      "text": "美国政府通知：H20 出口中国",
+      "hl": "须申请许可证"
+     },
+     {
+      "at": "h3",
+      "text": "公司预计当季计提相关费用约",
+      "hl": "55 亿美元"
+     }
+    ]
+   }
+  },
+  {
+   "id": "end",
+   "kind": "chapter",
+   "duration": 4.0,
+   "bg": "gen:chip_macro",
+   "title": "未完待续",
+   "subtitle": "AI DIGITAL HOST DEMO · DATA: STANFORD AI INDEX / BIS / NVIDIA / ARXIV"
+  }
+ ]
+}
