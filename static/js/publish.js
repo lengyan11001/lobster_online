@@ -4266,6 +4266,7 @@ function loadAssets(query, options) {
           groupHtml + tagHtml +
           '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">ID: ' + escapeHtml(a.asset_id) + ' · ' + escapeHtml(_formatDateTimeBeijing(a.created_at)) + '</div>' +
           _assetPublishStatusHtml(a) +
+          _assetDeviceHtml(a) +
           '<div class="card-actions">' + previewBtn + ' ' + copyPromptBtn + ' ' + downloadBtn + ' ' + useAsAttachBtn + ' ' + candidateBtn + ' ' + actionMenu + ' ' + deleteBtn + '</div></div>';
       }).join('');
       _assetListCache[cacheKey].html = el.innerHTML;
@@ -5036,6 +5037,7 @@ var splitBtn = !isContentRecord && isVideo ? '<button type="button" class="btn b
       groupHtml + tagHtml +
       '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">ID: ' + escapeHtml(a.asset_id) + ' · ' + escapeHtml(_formatDateTimeBeijing(a.created_at)) + '</div>' +
       _assetPublishStatusHtml(a) +
+      _assetDeviceHtml(a) +
       '<div class="card-actions">' + previewBtn + ' ' + copyPromptBtn + ' ' + downloadBtn + ' ' + useAsAttachBtn + ' ' + splitBtn + ' ' + aiTagsBtn + ' ' + candidateBtn + ' ' + pubGroupBtn + ' ' + actionMenu + ' ' + deleteBtn + '</div></div>';
   }).join('');
 
@@ -5045,6 +5047,19 @@ var splitBtn = !isContentRecord && isVideo ? '<button type="button" class="btn b
   _bindAssetActionMenuPositioning(container);
   _wireAssetListThumbs(container);
   _updateAssetBulkUi();
+}
+
+function _assetDeviceHtml(a) {
+  var dev = (a && a.device) || {};
+  var meta = (a && a.meta) || {};
+  var iid = String((a && a.installation_id) || dev.installation_id || meta.installation_id || '').trim();
+  var host = String(dev.device_host || (a && a.device_host) || meta.device_host || '').trim();
+  var brand = String(dev.device_brand || (a && a.device_brand) || meta.device_brand || '').trim();
+  if (!iid && !host) return '';
+  var label = host || brand || '设备';
+  var tail = iid ? (' · ' + iid.slice(-6)) : '';
+  return '<div class="card-desc" style="font-size:0.72rem;color:var(--text-muted);">来源设备：'
+    + escapeHtml(label) + escapeHtml(tail) + '</div>';
 }
 
 function _assetPublishStatusHtml(a) {

@@ -41,6 +41,18 @@ def _auth_headers(
         headers["Authorization"] = auth
     if install:
         headers["X-Installation-Id"] = install
+    # 机器 ID：服务端据此记录「素材是哪台设备生成的」
+    try:
+        from ..services.installation_identity import read_installation_identity
+        ident = read_installation_identity() or {}
+        mid = str(ident.get("machine_instance_id") or "").strip()
+        if mid:
+            headers["X-Machine-Id"] = mid
+        brand = str(ident.get("brand_mark") or "").strip()
+        if brand:
+            headers["X-Device-Brand"] = brand
+    except Exception:
+        pass
     return headers
 
 

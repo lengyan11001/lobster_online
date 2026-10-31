@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -1105,6 +1106,32 @@ def build_asset_file_url(
     return f"{base}/api/assets/file/{asset_id}?token={token}&expiry={expiry_ts}"
 
 
+def _device_meta_fields() -> Dict[str, Any]:
+    """素材是哪台设备生成的：安装 ID / 机器 ID / 品牌 / 主机名。"""
+    out: Dict[str, Any] = {}
+    try:
+        from ..services.installation_identity import read_installation_identity
+        ident = read_installation_identity() or {}
+    except Exception:
+        ident = {}
+    iid = str(ident.get("installation_id") or "").strip()
+    mid = str(ident.get("machine_instance_id") or "").strip()
+    brand = str(ident.get("brand_mark") or "").strip()
+    if iid:
+        out["installation_id"] = iid
+    if mid:
+        out["machine_instance_id"] = mid
+    if brand:
+        out["device_brand"] = brand
+    try:
+        host = socket.gethostname().strip()
+        if host:
+            out["device_host"] = host[:64]
+    except Exception:
+        pass
+    return out
+
+
 def _gen_asset_id() -> str:
     return uuid.uuid4().hex[:12]
 
@@ -2138,6 +2165,7 @@ def _sync_remote_user_upload_assets(
             source_url=source_url,
             tags=_clean_upload_tags(item.get("tags")),
             meta={
+                **_device_meta_fields(),
                 "asset_origin": "user_upload",
                 "remote_asset_id": remote_asset_id,
                 "remote_synced_at": now_iso,
@@ -2306,7 +2334,7 @@ def _sync_remote_generated_assets(
                 prompt=str(item.get("prompt") or item.get("creative_prompt") or description or "").strip() or None,
                 model=str(item.get("model") or "").strip() or None,
                 tags=str(item.get("tags") or "").strip() or None,
-                meta=meta,
+                meta={**_device_meta_fields(), **meta},
             )
             created_at = _parse_remote_asset_created_at(item.get("created_at"))
             if created_at is not None:
@@ -3012,7 +3040,7 @@ async def _save_asset_from_url_locked(
             prompt=body.prompt,
             model=body.model,
             tags=stored_tags,
-            meta=meta,
+            meta={**_device_meta_fields(), **meta},
         )
         db_ins.add(asset)
         db_ins.commit()
@@ -3177,7 +3205,7 @@ async def upload_asset(
         file_size=fsize,
         source_url=None,
         tags=upload_tags,
-        meta=upload_meta,
+        meta={**_device_meta_fields(), **(upload_meta or {})},
     )
     db.add(asset)
     db.commit()
