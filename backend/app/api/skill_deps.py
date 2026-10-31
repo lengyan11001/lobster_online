@@ -1076,6 +1076,9 @@ def _prompt_for(project: Dict[str, Any], seg: Dict[str, Any]) -> str:
             try:
                 body = template.format(ref="the reference image", purpose="explaining clearly",
                                        act=act, voice=voice, language=language, line=line)
+                # persona 模板里写死了 "Mandarin Chinese"，换语言时要显式替换
+                if language != "Mandarin Chinese":
+                    body = body.replace("Mandarin Chinese", language)
                 return scene_prefix + body
             except Exception:
                 pass
