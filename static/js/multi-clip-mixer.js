@@ -156,7 +156,9 @@
 
   function currentClipMode() {
     var checked = document.querySelector('input[name="mcmClipMode"]:checked');
-    return checked && checked.value === 'random' ? 'random' : 'fixed';
+    var mode = checked ? String(checked.value || '') : '';
+    if (mode === 'random' || mode === 'cut_only') return mode;
+    return 'fixed';
   }
 
   function currentTemplateProvider() {
@@ -289,7 +291,7 @@
 
   function syncModePanels() {
     var mode = currentClipMode();
-    if ($('mcmFixedModePanel')) $('mcmFixedModePanel').hidden = mode !== 'fixed';
+    if ($('mcmFixedModePanel')) $('mcmFixedModePanel').hidden = !(mode === 'fixed' || mode === 'cut_only');
     if ($('mcmRandomModePanel')) $('mcmRandomModePanel').hidden = mode !== 'random';
     if ($('mcmTemplateRandomRow')) $('mcmTemplateRandomRow').hidden = mode !== 'random';
     if ($('mcmMusicRandomRow')) $('mcmMusicRandomRow').hidden = mode !== 'random';
@@ -639,7 +641,9 @@
       var poster = clip.localPosterUrl || clip.posterObjectUrl || '';
       var modeLabel = currentClipMode() === 'random'
         ? '随机抽段时会重新计算'
-        : ('统一取段 ' + Number(clip.startSec || 0).toFixed(1) + ' - ' + Number(clip.endSec || 0).toFixed(1) + ' 秒');
+        : (currentClipMode() === 'cut_only'
+          ? ('只裁切 ' + Number(clip.startSec || 0).toFixed(1) + ' - ' + Number(clip.endSec || 0).toFixed(1) + ' 秒，单独出片')
+          : ('统一取段 ' + Number(clip.startSec || 0).toFixed(1) + ' - ' + Number(clip.endSec || 0).toFixed(1) + ' 秒'));
       return '<article class="mcm-clip-item' + (clip.audioMaster ? ' is-audio-master' : '') + '" data-clip-index="' + index + '">'
         + '<div class="mcm-clip-thumb">'
         + (poster ? '<img src="' + escapeHtml(poster) + '" alt="" loading="lazy">' : '<span class="mcm-clip-thumb-placeholder">VIDEO</span>')
@@ -2135,6 +2139,67 @@
     });
   }
 
+  function runCutOnlyRender() {
+    if (!state.selectedTemplate) return Promise.reject(new Error('只裁切模式要先选择一个模板'));
+    var provider = currentTemplateProvider();
+    var plan = buildClipPlan(1);
+    var total = state.clips.length;
+    var perSeg = textModePerSegment();
+    var unifiedTitle = templateTitleValue();
+    var unifiedDesc = String((($('mcmShanjianDescription') || {}).value || '').trim());
+    startHistoryBatch({ useTemplate: true, useMusic: false }, total);
+    renderBatchResults();
+    resetProgress();
+    progress('merge', 'active', '只裁切：逐段裁剪并套模板，共 ' + total + ' 段');
+    var last = null;
+    var chain = Promise.resolve();
+    state.clips.forEach(function(clip, idx) {
+      chain = chain.then(function() {
+        var segTitle = perSeg ? String(clip.segTitle || '').trim() : '';
+        if (perSeg && !segTitle) throw new Error('第 ' + (idx + 1) + ' 段还没填标题');
+        var title = segTitle || unifiedTitle;
+        setBusy(true, '第 ' + (idx + 1) + '/' + total + ' 段：裁剪并套模板');
+        progress('template', 'active', '第 ' + (idx + 1) + '/' + total + ' 段处理中');
+        return post('/api/multi-clip-mixer/render', {
+          title: title,
+          clips: [plan[idx]],
+          keep_original_audio: provider === 'local',
+          audio_asset_id: '',
+          target_duration: null,
+          audio_volume: 1,
+          clip_mode: 'fixed',
+          output_index: idx + 1,
+          output_ratio: currentOutputRatio(),
+          fill_mode: currentFillMode()
+        }).then(function(base) {
+          state.lastBaseResult = base;
+          if (provider === 'shanjian') {
+            return applyShanjianTemplate(base, {
+              title: title,
+              description: perSeg ? String(clip.segDesc || '') : unifiedDesc,
+              duration: base.duration,
+              silent: true
+            });
+          }
+          return applyLocalTemplate(base, { title: title });
+        }).then(function(res) {
+          var item = Object.assign({}, res, {
+            title: title,
+            clip_index: idx + 1,
+            completion_message: '第 ' + (idx + 1) + ' 段已生成'
+          });
+          appendBatchResult(item);
+          last = item;
+          progress('template', 'done', '第 ' + (idx + 1) + '/' + total + ' 段完成');
+        });
+      });
+    });
+    return chain.then(function() {
+      saveActiveHistoryBatch(true);
+      return last || {};
+    });
+  }
+
   function generate() {
     if (state.busy) return;
     if (!state.clips.length) return showMessage('请先添加至少一个视频。', true);
@@ -2161,6 +2226,12 @@
       renderBatchResults();
       resetProgress();
       setBusy(true, '正在裁剪并拼接...');
+      if (currentClipMode() === 'cut_only') {
+        if (!useTemplate) throw new Error('只裁切模式需要开启「套用定制模板」并选择一个模板');
+        return runCutOnlyRender().then(function(result) {
+          return { result: result, totalRuns: state.clips.length };
+        });
+      }
       if (textModePerSegment() && useTemplate) {
         return runPerSegmentRender().then(function(result) {
           return { result: result, totalRuns: 1 };
