@@ -121,7 +121,7 @@ def _probe_model() -> Dict[str, Any]:
         if mb > 500:
             return {"status": "ok", "detail": f"{mb:.0f} MB", "version": "ggml-medium-q5_0"}
         return {"status": "missing", "detail": f"文件不完整（{mb:.0f} MB）"}
-    return {"status": "missing", "detail": "约 1.5 GB，按需下载"}
+    return {"status": "missing", "detail": "约 514 MB，按需下载"}
 
 
 def _component_list() -> List[Dict[str, Any]]:
@@ -131,7 +131,7 @@ def _component_list() -> List[Dict[str, Any]]:
         ("python", "Python", "回听、对齐、声音统一", False, _probe_python, "内置"),
         ("python_pkgs", "numpy + Pillow", "声音频谱匹配、预览图", True, _probe_python_pkgs, "约 20 MB"),
         ("whisper", "whisper-cli", "逐段回听、逐字时间轴", True, _probe_whisper, "约 30 MB"),
-        ("whisper_model", "whisper 模型", "ggml-medium-q5_0", True, _probe_model, "约 1.5 GB"),
+        ("whisper_model", "whisper 模型", "ggml-medium-q5_0", True, _probe_model, "约 520 MB"),
     ]
     out: List[Dict[str, Any]] = []
     with _JOBS_LOCK:
@@ -303,7 +303,7 @@ def _install_whisper(job: Dict[str, Any]) -> None:
 
 
 def _install_model(job: Dict[str, Any]) -> None:
-    job["message"] = "下载 ggml-medium-q5_0（约 1.5 GB）"
+    job["message"] = "下载 ggml-medium-q5_0（约 514 MB）"
     _download(WHISPER_MODEL_URL, WHISPER_MODEL_PATH, job, "下载模型")
 
 
