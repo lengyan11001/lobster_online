@@ -1209,6 +1209,40 @@ def warm_bytecode_cache(py: str, env: dict[str, str]) -> None:
         log(f"CodeUpdate: bytecode warmup skipped: {exc}")
 
 
+def _read_client_build() -> int:
+    try:
+        p = ROOT / "static" / "client_version.json"
+        if not p.is_file():
+            return 0
+        return int((json.loads(p.read_text(encoding="utf-8")) or {}).get("build") or 0)
+    except Exception:
+        return 0
+
+
+def _restart_after_code_update(build_before: int, build_after: int) -> None:
+    """代码包已覆盖：重启自身让新代码真正生效。
+
+    OTA 只替换磁盘文件，正在跑的进程仍然是旧代码；不重启就会出现
+    「更新成功了但界面/接口还是老的」。
+    """
+    if build_after <= build_before:
+        return
+    if is_truthy_env_value(os.environ.get("LOBSTER_SKIP_AUTO_RESTART_AFTER_UPDATE")):
+        log("CodeUpdate: auto restart disabled by env; restart manually to apply")
+        return
+    try:
+        if getattr(sys, "frozen", False):
+            argv = [str(Path(sys.executable))] + list(sys.argv[1:])
+        else:
+            argv = [str(Path(sys.executable)), str(Path(__file__).resolve())] + list(sys.argv[1:])
+        log(f"CodeUpdate: build {build_before} -> {build_after}, restarting launcher")
+        subprocess.Popen(argv, cwd=str(ROOT), env=build_env(), close_fds=True, creationflags=creation_flags())
+    except Exception as exc:
+        log(f"CodeUpdate: restart failed: {exc}")
+        return
+    os._exit(0)
+
+
 def run_client_code_update(env: dict[str, str]) -> None:
     script = ROOT / "scripts" / "check_client_code_update.py"
     if not script.is_file():
@@ -1226,6 +1260,7 @@ def run_client_code_update(env: dict[str, str]) -> None:
     if not py:
         log("CodeUpdate: skipped because no bundled python is available in frozen launcher")
         return
+    build_before = _read_client_build()
     timeout_seconds = max(300, int(env.get("CLIENT_CODE_UPDATE_TIMEOUT_SECONDS") or 1800))
     set_startup_status("update_check", "检查客户端更新", detail="正在连接更新服务器...", percent=8)
     try:
@@ -1269,6 +1304,7 @@ def run_client_code_update(env: dict[str, str]) -> None:
             set_startup_status("update_done", "客户端更新检查完成", percent=34)
         if applied:
             warm_bytecode_cache(py, env)
+            _restart_after_code_update(build_before, _read_client_build())
     except subprocess.TimeoutExpired:
         log(f"CodeUpdate: timeout after {timeout_seconds}s; continuing startup")
         set_startup_status("update_timeout", "更新检查超时，继续启动", detail="本次先使用本地代码。", percent=30)
