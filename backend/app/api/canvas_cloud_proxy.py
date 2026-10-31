@@ -80,41 +80,6 @@ def _looks_video_model(model: str, params) -> bool:
     return False
 
 
-_IMAGE_FALLBACK = "openai/gpt-image-2"
-_VIDEO_FALLBACK = "minimax/h3"
-_IMG_HINTS = ("jimeng", "seedream", "dreamina", "gpt-image", "nano-banana", "flux", "sdxl", "ideogram", "kolors", "wanx")
-_VID_HINTS = ("seedance", "sora", "kling", "veo", "runway", "luma", "minimax", "hailuo", "h3", "pika", "video")
-
-
-def _fallback_model_name(value: str) -> str:
-    v = str(value or "").strip()
-    low = v.lower()
-    if not low or "/" not in low:
-        return v
-    if any(k in low for k in _VID_HINTS):
-        return _VIDEO_FALLBACK
-    if any(k in low for k in _IMG_HINTS):
-        return _IMAGE_FALLBACK
-    return v
-
-
-def _rewrite_model_ids(obj, depth: int = 0):
-    """把画布快照里的旧模型 id 换成我们现在支持的（图片→gpt-image-2，视频→minimax/h3）。"""
-    if depth > 12:
-        return obj
-    if isinstance(obj, dict):
-        out = {}
-        for k, v in obj.items():
-            if isinstance(v, str) and k.lower() in ("model", "model_id", "modelid", "app_name", "appname", "engine", "modelname", "model_name"):
-                out[k] = _fallback_model_name(v)
-            else:
-                out[k] = _rewrite_model_ids(v, depth + 1)
-        return out
-    if isinstance(obj, list):
-        return [_rewrite_model_ids(v, depth + 1) for v in obj]
-    return obj
-
-
 async def cloud_profile(force: bool = False) -> Dict[str, Any]:
     """当前登录态的用户资料（认证中心 /auth/me，带 60s 缓存）。
 
@@ -355,20 +320,5 @@ async def canvas_cloud_proxy(path: str, request: Request) -> Response:
     logger.info("[canvas] %s %s -> %s", request.method, normalized, upstream.status_code)
     media_type = upstream.headers.get("content-type") or "application/json"
     content = upstream.content
-
-    # 灵感模板里的旧模型（即梦4.0 / Seedream / Sora…）在快照里写死，复制后必然不可用。
-    # 载入/克隆/详情返回时统一替换成我们现在支持的模型，用户复制即用。
-    if upstream.status_code == 200 and "json" in media_type and any(
-        key in normalized for key in ("canvas/load", "/clone", "projects/public", "projects/my")
-    ):
-        try:
-            import json as _json6
-            data = _json6.loads(content.decode("utf-8"))
-            fixed = _rewrite_model_ids(data)
-            if fixed != data:
-                content = _json6.dumps(fixed, ensure_ascii=False).encode("utf-8")
-                logger.info("[canvas] 模板模型已替换为当前支持：%s", normalized)
-        except Exception:
-            logger.debug("[canvas] 模板模型替换跳过 %s", normalized, exc_info=True)
 
     return Response(content=content, status_code=upstream.status_code, media_type=media_type)
