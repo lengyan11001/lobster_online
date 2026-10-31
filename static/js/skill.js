@@ -2053,7 +2053,12 @@ function _renderShanjianSmartClipCard() {
   '</div>';
 }
 
-function _renderDigitalHumanKouboCard(pkg) {
+function _isKouboPkg(pkg) {
+    if (!pkg) return false;
+    var probe = String(pkg.id || '') + '|' + String(pkg.name || '');
+    return probe.indexOf('koubo') >= 0 || probe.indexOf('数字人3.0') >= 0;
+  }
+  function _renderDigitalHumanKouboCard(pkg) {
   pkg = pkg || {};
   var debugBadge = pkg.store_visibility === 'debug'
     ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
@@ -3541,7 +3546,7 @@ function loadSkillStore() {
           if (pkg.id === 'browser_use_skill') return '';
           if (pkg.id === 'computer_use_skill') return '';
           if (pkg.id === 'meta_social') return '';
-          if (pkg.id === 'digital_human_koubo_skill') return '';
+          if (_isKouboPkg(pkg)) return '';
           if (pkg.id === 'hifly_digital_human_skill') return _renderHiflyDigitalHumanCard(pkg);
           if (pkg.id === 'youtube_publish') {
             return _renderYoutubePublishCard({
@@ -3607,7 +3612,7 @@ function loadSkillStore() {
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wechat-article-entry-btn">\u8fdb\u5165\u5de5\u4f5c\u53f0</button></div></div>';
         }
         // 数字人3.0（koubo）：无论出现在技能商店还是已安装列表，都用带「进入工作台」的专用卡
-        if (pkg.id === 'digital_human_koubo_skill') return _renderDigitalHumanKouboCard(pkg);
+        if (_isKouboPkg(pkg)) return _renderDigitalHumanKouboCard(pkg);
         var statusBadge = '';
         var actionBtn = '';
         if (pkg.status === 'installed') {
