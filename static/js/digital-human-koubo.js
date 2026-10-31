@@ -242,7 +242,7 @@
       + '  <label class="kb-field">音色描述<input type="text" id="kbVoice" value="' + esc(f.voice || '') + '" placeholder="留空用默认"></label>'
       + '</div>'
       + '<label class="kb-field" id="kbSceneWrap" style="display:' + (isCustom ? 'flex' : 'none') + ';">场景描述<input type="text" id="kbScenePrompt" value="' + esc(f.scene_prompt || '') + '" placeholder="例如：夜晚霓虹街头，浅景深"></label>'
-      + '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#64748b;"><input type="checkbox" id="kbCompose"' + (f.compose_scene ? ' checked' : '') + '> 先合成场景图（额外 1 次图片生成，失败回退原图）</label>'
+      + '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#64748b;"><input type="checkbox" id="kbCompose"' + (f.compose_scene ? ' checked' : '') + '> 先合成场景图（只生成背景，人物用原图抠像；特写照片会像贴片，建议半身照）</label>'
       + '<div><div style="font-size:12px;font-weight:500;color:#0f172a;margin-bottom:2px;">后期包装技巧</div>'
       + Object.keys(groups).map(function (g) {
           return '<div style="margin-top:6px;font-size:11px;color:#94a3b8;">' + esc(g) + '</div><div class="kb-pack">'

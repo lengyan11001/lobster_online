@@ -1092,24 +1092,73 @@ def _prompt_for(project: Dict[str, Any], seg: Dict[str, Any]) -> str:
             + voice + ":\n\u201c" + line + "\u201d\nSound: only the voice, no music, no subtitles, no on-screen text.")
 
 
-def _compose_scene(token: str, image_url: str, scene_prompt: str, installation_id: str = "",
+def _person_rgba(photo_bytes: bytes):
+    """用 mediapipe 从原照片抠出人物，返回 RGBA。"""
+    from io import BytesIO
+    from PIL import Image
+    import numpy as np
+    import mediapipe as mp
+    from mediapipe.tasks import python as mpp
+    from mediapipe.tasks.python import vision
+
+    im = Image.open(BytesIO(photo_bytes)).convert("RGB")
+    tmp = UPLOAD_DIR / ("cut_" + uuid.uuid4().hex[:10] + ".jpg")
+    im.save(tmp, quality=95)
+    try:
+        base = mpp.BaseOptions(model_asset_path=str(CUTOUT_MODEL))
+        opts = vision.ImageSegmenterOptions(base_options=base, output_confidence_masks=True,
+                                            running_mode=vision.RunningMode.IMAGE)
+        seg = vision.ImageSegmenter.create_from_options(opts)
+        res = seg.segment(mp.Image.create_from_file(str(tmp)))
+        mask = res.confidence_masks[0].numpy_view().reshape(im.height, im.width)
+        seg.close()
+        alpha = (np.clip(mask, 0, 1) * 255).astype(np.uint8)
+        from PIL import ImageFilter
+        alpha_img = Image.fromarray(alpha).filter(ImageFilter.GaussianBlur(6))
+        rgba = im.convert("RGBA")
+        rgba.putalpha(alpha_img)
+        return rgba
+    finally:
+        try:
+            tmp.unlink()
+        except Exception:
+            pass
+
+
+def _compose_scene(token: str, photo_url: str, scene_prompt: str, installation_id: str = "",
                    ratio: str = "9:16") -> str:
-    prompt = ("Composite the person from the reference photo into " + scene_prompt +
-              ". Keep the same face, hairstyle, outfit and identity. Cinematic lighting, 2k, "
-              "clean composition, no text, no watermark.")
+    """只生成空场景，再把原照片人物抠像贴上去，保证脸不被重绘。
+
+    特写照片（人物占画面 >80%）贴上去会像一张卡片，直接报错让上层回退原图。
+    """
+    if not CUTOUT_MODEL.is_file():
+        raise RuntimeError("场景合成需要抠像包（资源与依赖里安装 cutout）")
+
+    from io import BytesIO
+    from PIL import Image
+    import numpy as np
+
+    photo_bytes = httpx.get(photo_url, timeout=120, follow_redirects=True).content
+    person = _person_rgba(photo_bytes)
+    alpha = np.array(person)[:, :, 3]
+    coverage = float((alpha > 128).mean())
+    if coverage > 0.8:
+        raise RuntimeError("照片是特写（人物占 %.0f%%），合成场景会像贴片；建议用半身照或关闭场景合成"
+                           % (coverage * 100))
+
     size = "1024x1536" if ratio == "9:16" else "1536x1024"
+    bg_prompt = ("An empty " + scene_prompt + ". No people, no person, no text, no watermark. "
+                 "Clean composition with space in the center for a presenter, cinematic lighting.")
     resp = _mcp_call(token, "invoke_capability",
                      {"capability_id": "image.generate",
-                      "payload": {"model": "openai/gpt-image-2", "prompt": prompt,
-                                  "image_url": image_url, "size": size,
-                                  "aspect_ratio": ratio}},
+                      "payload": {"model": "openai/gpt-image-2", "prompt": bg_prompt, "size": size}},
                      timeout=300.0, installation_id=installation_id)
     task_id = _deep_find(resp, ("task_id", "taskId", "request_id", "id"))
     urls = _deep_urls(resp, (".jpg", ".jpeg", ".png", ".webp"))
     if not urls and task_id:
         deadline = time.time() + 900
         while time.time() < deadline:
-            time.sleep(6)
+            time.sleep(5)
             poll = _mcp_call(token, "invoke_capability",
                              {"capability_id": "task.get_result", "payload": {"task_id": task_id}},
                              timeout=180.0, installation_id=installation_id)
@@ -1117,39 +1166,36 @@ def _compose_scene(token: str, image_url: str, scene_prompt: str, installation_i
             if urls:
                 break
     if not urls:
-        raise RuntimeError("场景合成未返回图片")
-    url = urls[0]
-    # 场景图按目标比例裁一次再入库，避免上游给方图导致成片变 1:1
-    try:
-        from PIL import Image
-        from io import BytesIO
+        raise RuntimeError("场景背景图生成失败")
 
-        raw = httpx.get(url, timeout=120, follow_redirects=True).content
-        im = Image.open(BytesIO(raw)).convert("RGB")
-        w, h = im.size
-        tw, th = (9, 16) if ratio == "9:16" else (16, 9)
-        target = tw / th
-        cur = w / h
-        if abs(cur - target) / target > 0.02:
-            if cur > target:
-                nw = max(1, int(round(h * target)))
-                left = (w - nw) // 2
-                im = im.crop((left, 0, left + nw, h))
-            else:
-                nh = max(1, int(round(w / target)))
-                top = (h - nh) // 2
-                im = im.crop((0, top, w, top + nh))
-        tmp_path = UPLOAD_DIR / ("scene_" + uuid.uuid4().hex[:10] + ".jpg")
-        im.save(tmp_path, quality=95)
-        with open(tmp_path, "rb") as fh:
-            r = httpx.post(LOCAL_BASE + "/api/assets/upload", files={"file": (tmp_path.name, fh, "image/jpeg")},
-                           headers={"Authorization": token, "X-Asset-Purpose": "profile_photo"}, timeout=180)
-        data = r.json() if r.content else {}
-        new_url = (data.get("source_url") or "").strip()
-        if new_url:
-            return new_url
+    bg_bytes = httpx.get(urls[0], timeout=120, follow_redirects=True).content
+    bg = Image.open(BytesIO(bg_bytes)).convert("RGBA")
+    ph = int(bg.height * 0.76)
+    pw = max(1, int(person.width * ph / max(1, person.height)))
+    person = person.resize((pw, ph), Image.LANCZOS)
+    x = (bg.width - pw) // 2
+    y = bg.height - ph
+    try:
+        from PIL import ImageDraw, ImageFilter
+
+        shadow = Image.new("RGBA", bg.size, (0, 0, 0, 0))
+        d = ImageDraw.Draw(shadow)
+        d.ellipse([x + pw * 0.12, y + ph - 26, x + pw * 0.88, y + ph + 22], fill=(0, 0, 0, 90))
+        bg.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(18)))
     except Exception:
         pass
+    bg.alpha_composite(person, (x, y))
+    tmp_path = UPLOAD_DIR / ("scene_" + uuid.uuid4().hex[:10] + ".jpg")
+    bg.convert("RGB").save(tmp_path, quality=95)
+    with open(tmp_path, "rb") as fh:
+        r = httpx.post(LOCAL_BASE + "/api/assets/upload",
+                       files={"file": (tmp_path.name, fh, "image/jpeg")},
+                       headers={"Authorization": token, "X-Asset-Purpose": "profile_photo"},
+                       timeout=180)
+    data = r.json() if r.content else {}
+    url = (data.get("source_url") or "").strip()
+    if not url:
+        raise RuntimeError("场景合成图入库失败")
     return url
 
 
@@ -1172,7 +1218,7 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
                                            opts["ratio"] or hd.get("ratio") or "9:16")
                 asset_id = ""
             except Exception as exc:
-                job["message"] = "场景合成失败，改用原图"
+                job["message"] = "场景合成跳过（照片是特写或失败），改用原图背景"
                 job["scene_error"] = str(exc)[:300]
         segs = project.get("segments") or []
         if only_first:
