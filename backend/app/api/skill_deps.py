@@ -8,7 +8,10 @@ from __future__ import annotations
 不触发生成、不扣算力。
 """
 
+import io
+import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -16,16 +19,21 @@ import threading
 import time
 import uuid
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 router = APIRouter()
 
 ROOT = Path(__file__).resolve().parents[3]
+DATA_DIR = ROOT / "data" / "koubo"
+UPLOAD_DIR = DATA_DIR / "uploads"
+PROJECTS_PATH = DATA_DIR / "projects.json"
 DEPS = ROOT / "deps"
 SKILL_DIR = ROOT / "skills" / "digital_human_koubo"
 FFMPEG_DIR = DEPS / "ffmpeg"
@@ -425,4 +433,228 @@ def koubo_quote(body: QuoteBody):
         "total_credits": total,
         "chars_per_second": CPS_ZH,
         "note": "按 build_tasks.py 同一算法估算；实际以 Renoise 实时报价为准。",
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# 项目 / 素材（第一阶段：本地落盘 + 任务包导出，不触发生成）
+# ─────────────────────────────────────────────────────────────
+
+_ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp"}
+_MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+_HOSTS = {"tank": "白背心数字人", "me": "用户本人数字人"}
+
+
+def _load_projects() -> List[Dict[str, Any]]:
+    if not PROJECTS_PATH.is_file():
+        return []
+    try:
+        data = json.loads(PROJECTS_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_projects(items: List[Dict[str, Any]]) -> None:
+    PROJECTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PROJECTS_PATH.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _analyze_image(path: Path) -> Dict[str, Any]:
+    """分辨率 / 清晰度 / 亮度三项体检。没有做人脸检测（客户端未带 cv2），只给可解释的提示。"""
+    info: Dict[str, Any] = {"width": 0, "height": 0, "sharpness": 0.0, "brightness": 0.0, "warnings": []}
+    try:
+        from PIL import Image
+        import numpy as np
+
+        with Image.open(path) as img:
+            img.load()
+            w, h = img.size
+            info["width"], info["height"] = int(w), int(h)
+            gray = img.convert("L")
+            scale = 320.0 / max(1, max(w, h))
+            if scale < 1:
+                gray = gray.resize((max(1, int(w * scale)), max(1, int(h * scale))))
+            arr = np.asarray(gray, dtype=np.float32)
+            info["brightness"] = round(float(arr.mean()), 1)
+            if arr.shape[0] > 2 and arr.shape[1] > 2:
+                lap = np.abs(np.diff(arr, axis=0)[:, :-1] + np.diff(arr, axis=1)[:-1, :])
+                info["sharpness"] = round(float(lap.var()), 1)
+    except Exception as exc:
+        info["warnings"].append("图片解析失败：%s" % exc)
+        return info
+
+    if min(info["width"], info["height"]) < 512:
+        info["warnings"].append("短边小于 512px，特写会糊")
+    if info["brightness"] < 60:
+        info["warnings"].append("整体偏暗，生成的脸容易发灰")
+    if info["brightness"] > 215:
+        info["warnings"].append("整体过曝，脸部细节会丢")
+    if info["sharpness"] < 25:
+        info["warnings"].append("清晰度偏低，可能有运动模糊")
+    return info
+
+
+@router.post("/api/skills/digital-human-koubo/uploads", summary="上传数字人形象照")
+async def koubo_upload(file: UploadFile = File(...)):
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in _ALLOWED_EXT:
+        raise HTTPException(status_code=400, detail="只支持 jpg / png / webp")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="文件为空")
+    if len(raw) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail="文件超过 15MB")
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    name = uuid.uuid4().hex[:16] + ext
+    path = UPLOAD_DIR / name
+    path.write_bytes(raw)
+    info = _analyze_image(path)
+    return {
+        "id": name,
+        "url": "/api/skills/digital-human-koubo/uploads/" + name,
+        "size": len(raw),
+        "checks": info,
+        "tips": [
+            "正脸、平视、光线均匀",
+            "嘴巴闭合，头发不挡脸",
+            "背景尽量干净，人物占画面 50%-70%",
+            "只用本人或已获授权的照片",
+        ],
+    }
+
+
+@router.get("/api/skills/digital-human-koubo/uploads/{name}", summary="读取已上传的形象照")
+def koubo_upload_get(name: str):
+    if "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(status_code=400, detail="非法文件名")
+    path = UPLOAD_DIR / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(str(path))
+
+
+class ProjectBody(BaseModel):
+    name: str = ""
+    script: str = Field(..., min_length=1)
+    shot: str = "full"
+    host: str = "tank"
+    photo_id: Optional[str] = None
+
+
+def _persona() -> Dict[str, Any]:
+    try:
+        return json.loads((SKILL_DIR / "persona.json").read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _build_segments(text: str, shot: str) -> List[Dict[str, Any]]:
+    chunks = _split_script(text)
+    res = "480p" if shot == "pip" else "720p"
+    out: List[Dict[str, Any]] = []
+    for i, chunk in enumerate(chunks, 1):
+        chars = len(re.sub(r"[\s，。、：；！？,.:;!?“”]", "", chunk))
+        secs = max(4, min(MAX_SEG_SECONDS, math.ceil(chars / CPS_ZH + 1.0)))
+        out.append({
+            "id": "s%d" % i,
+            "text": chunk,
+            "shot": shot,
+            "resolution": res,
+            "seconds": secs,
+            "credits": secs * CREDITS_PER_SEC[res],
+        })
+    return out
+
+
+@router.post("/api/skills/digital-human-koubo/projects", summary="保存数字人koubo 项目")
+def koubo_project_create(body: ProjectBody):
+    shot = body.shot if body.shot in {"full", "pip", "vlog", "depth"} else "full"
+    host = body.host if body.host in _HOSTS else "tank"
+    segs = _build_segments(body.script, shot)
+    if not segs:
+        raise HTTPException(status_code=400, detail="文案为空")
+    items = _load_projects()
+    pid = uuid.uuid4().hex[:8]
+    now = datetime.now().isoformat(timespec="seconds")
+    row = {
+        "id": pid,
+        "name": (body.name or "").strip() or ("口播项目 " + now[5:16].replace("T", " ")),
+        "script": body.script,
+        "shot": shot,
+        "host": host,
+        "photo_id": body.photo_id or "",
+        "segments": segs,
+        "total_seconds": sum(s["seconds"] for s in segs),
+        "total_credits": sum(s["credits"] for s in segs),
+        "status": "ready",
+        "created_at": now,
+    }
+    items.insert(0, row)
+    _save_projects(items[:200])
+    return row
+
+
+@router.get("/api/skills/digital-human-koubo/projects", summary="数字人koubo 项目列表")
+def koubo_projects():
+    return {"projects": _load_projects()}
+
+
+@router.get("/api/skills/digital-human-koubo/projects/{pid}", summary="数字人koubo 项目详情")
+def koubo_project(pid: str):
+    for row in _load_projects():
+        if row.get("id") == pid:
+            return row
+    raise HTTPException(status_code=404, detail="项目不存在")
+
+
+@router.delete("/api/skills/digital-human-koubo/projects/{pid}", summary="删除数字人koubo 项目")
+def koubo_project_delete(pid: str):
+    items = _load_projects()
+    kept = [r for r in items if r.get("id") != pid]
+    if len(kept) == len(items):
+        raise HTTPException(status_code=404, detail="项目不存在")
+    _save_projects(kept)
+    return {"ok": True}
+
+
+@router.get("/api/skills/digital-human-koubo/projects/{pid}/tasks", summary="导出 Renoise tasks.json")
+def koubo_project_tasks(pid: str):
+    row = koubo_project(pid)
+    persona = _persona()
+    host = row.get("host") or "tank"
+    if host == "me":
+        hp = (persona.get("other_hosts") or {}).get("me") or {}
+        ref = hp.get("reference_material") or ""
+        template = hp.get("prompt_template") or ""
+        ratio = hp.get("ratio") or "16:9"
+        voice = hp.get("voice") or ""
+    else:
+        ref = ((persona.get("renoise") or {}).get("reference_material") or "")
+        template = persona.get("prompt_template") or ""
+        ratio = ((persona.get("model") or {}).get("ratio") or "9:16")
+        voice = ((persona.get("voice") or {}).get("desc") or "")
+    photo_ref = ("@" + ref) if ref else ("@upload:" + (row.get("photo_id") or ""))
+    purpose = "explaining clearly"
+    tasks = []
+    for seg in row.get("segments") or []:
+        act = ((persona.get("acts") or {}).get(seg.get("shot") or "full") or "")
+        prompt = (template.format(ref=photo_ref, purpose=purpose, act=act, voice=voice,
+                                  language="Mandarin Chinese", line=seg.get("text") or "")
+                  if template else seg.get("text") or "")
+        tasks.append({
+            "model": ((persona.get("model") or {}).get("name") or "grok-video-1.5"),
+            "kind": "video",
+            "ratio": ratio,
+            "resolution": seg.get("resolution") or "720p",
+            "duration": seg.get("seconds") or 10,
+            "label": "口播 " + (seg.get("id") or ""),
+            "idempotencyKey": "dh-%s-%s-v1" % (pid, seg.get("id") or ""),
+            "references": [{"ref": photo_ref, "role": "reference_image"}],
+            "prompt": prompt,
+        })
+    return {
+        "project_id": pid,
+        "tasks": tasks,
+        "note": "第一阶段只导出任务描述，未提交生成。实际提交前需要 Renoise MCP 的 material id 与实时报价。",
     }
