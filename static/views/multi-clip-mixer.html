@@ -76,7 +76,15 @@
                 <strong>成片标题</strong>
                 <span>先填写标题，再选择随机模板或指定模板。</span>
               </div>
-              <label class="mcm-overlay-field"><span><strong>标题</strong><em>支持换行，用于模板主标题</em></span><textarea id="mcmTemplateTitle" rows="3" maxlength="80" placeholder="输入成片标题，可分多行"></textarea></label>
+              <div class="mcm-overlay-field"><span><strong>文案模式</strong><em>统一：整条一套；每段：按素材数量逐段写</em></span>
+                <label style="display:inline-flex;align-items:center;gap:.4rem;margin-right:1.2rem;"><input type="radio" name="mcmTextMode" id="mcmTextModeUnified" value="unified" checked> 统一标题/文案</label>
+                <label style="display:inline-flex;align-items:center;gap:.4rem;"><input type="radio" name="mcmTextMode" id="mcmTextModePerSegment" value="per-segment"> 每段标题/文案</label>
+              </div>
+              <div id="mcmUnifiedCopyFields">
+                <label class="mcm-overlay-field"><span><strong>标题</strong><em>支持换行，用于模板主标题</em></span><textarea id="mcmTemplateTitle" rows="3" maxlength="80" placeholder="输入成片标题，可分多行"></textarea></label>
+                <label class="mcm-overlay-field"><span><strong>介绍文案</strong><em>可空，交给模板身份栏</em></span><textarea id="mcmShanjianDescription" rows="3" maxlength="240" placeholder="填写模板身份栏要显示的介绍文案，留空则不传。"></textarea></label>
+              </div>
+              <div id="mcmSegmentTextList" class="mcm-overlay-fields" hidden></div>
             </div>
             <label id="mcmTemplateRandomRow" class="mcm-template-random-row"><span><strong>模板选择</strong><small>关闭后选择指定模板；开启后每条随机选择模板。</small></span><span class="mcm-inline-check"><input id="mcmRandomTemplateSwitch" type="checkbox" checked><span>随机模板</span></span></label>
             <div class="mcm-provider-row">
@@ -123,11 +131,7 @@
               </div>
               <div id="mcmShanjianTemplateCapabilities" class="mcm-template-capabilities" hidden></div>
               <div class="mcm-overlay-fields">
-                <div class="mcm-overlay-field"><span><strong>文案模式</strong><em>每段文案：每个片段单独套一次模板（按次消耗闪剪额度）</em></span>
-                  <label class="mcm-inline-radio"><input type="radio" name="mcmTextMode" id="mcmTextModeUnified" value="unified" checked> 统一标题/内容</label>
-                  <label class="mcm-inline-radio"><input type="radio" name="mcmTextMode" id="mcmTextModePerSegment" value="per-segment"> 每段各自写标题/内容</label>
-                </div>
-                <label class="mcm-overlay-field"><span><strong>介绍文案</strong><em>交给模板身份栏（统一模式使用）</em></span><textarea id="mcmShanjianDescription" rows="3" maxlength="240" placeholder="填写模板身份栏要显示的介绍文案，留空则不传。"></textarea></label>
+                <div class="mcm-overlay-field"><span><strong>文案在上方填写</strong><em>标题与介绍文案已移到「成片标题」面板；每段模式可逐段写</em></span></div>
               </div>
             </div>
             <div id="mcmTemplateLayoutPanel" class="mcm-layout-panel" hidden>

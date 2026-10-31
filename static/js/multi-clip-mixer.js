@@ -610,6 +610,25 @@
     try { localStorage.removeItem(PENDING_TEMPLATE_STORAGE_KEY); } catch (error) {}
   }
 
+  function renderSegmentTextInputs() {
+    var box = $('mcmSegmentTextList');
+    var unified = $('mcmUnifiedCopyFields');
+    if (!box) return;
+    var per = textModePerSegment();
+    if (unified) unified.hidden = per;
+    box.hidden = !per;
+    if (!per) return;
+    box.innerHTML = state.clips.map(function(clip, index) {
+      return '<div class="mcm-seg-text-row" data-clip-index="' + index + '" style="border-top:1px dashed rgba(255,255,255,.14);margin-top:.7rem;padding-top:.7rem;">'
+        + '<div class="mcm-seg-text-head" style="display:flex;gap:.5rem;align-items:baseline;margin-bottom:.35rem;"><strong>第 ' + (index + 1) + ' 段</strong><span style="opacity:.65;font-size:.85em;">' + escapeHtml(clip.name || '') + '</span></div>'
+        + '<label class="mcm-overlay-field"><span><strong>标题</strong><em>必填，≤60 字</em></span>'
+        + '<input type="text" data-seg-field="title" data-clip-index="' + index + '" maxlength="60" placeholder="第 ' + (index + 1) + ' 段标题" value="' + escapeHtml(clip.segTitle || '') + '"></label>'
+        + '<label class="mcm-overlay-field"><span><strong>介绍文案</strong><em>可空</em></span>'
+        + '<textarea data-seg-field="desc" data-clip-index="' + index + '" rows="2" maxlength="200" placeholder="第 ' + (index + 1) + ' 段介绍文案">' + escapeHtml(clip.segDesc || '') + '</textarea></label>'
+        + '</div>';
+    }).join('');
+  }
+
   function renderClips() {
     var list = $('mcmClipList');
     var empty = $('mcmClipEmpty');
@@ -629,10 +648,6 @@
         + '<span>' + escapeHtml(modeLabel) + '</span>'
         + '<small>本段时长 ' + escapeHtml(formatSeconds(clipDuration)) + ' · 原片 ' + escapeHtml(formatSeconds(clip.duration))
         + (clip.audioMaster ? ' · 已标记为整片原声音轨' : '') + '</small></div>'
-        + (textModePerSegment() ? '<div class="mcm-seg-text">'
-          + '<input type="text" data-seg-field="title" data-clip-index="' + index + '" maxlength="60" placeholder="第 ' + (index + 1) + ' 段标题（必填）" value="' + escapeHtml(clip.segTitle || '') + '">'
-          + '<textarea data-seg-field="desc" data-clip-index="' + index + '" rows="2" maxlength="200" placeholder="第 ' + (index + 1) + ' 段介绍文案（可空）">' + escapeHtml(clip.segDesc || '') + '</textarea>'
-          + '</div>' : '')
         + '<div class="mcm-clip-actions">'
         + '<button type="button" data-action="up" title="上移" aria-label="上移"' + (index === 0 ? ' disabled' : '') + '>↑</button>'
         + '<button type="button" data-action="down" title="下移" aria-label="下移"' + (index === state.clips.length - 1 ? ' disabled' : '') + '>↓</button>'
@@ -643,6 +658,7 @@
     }).join('');
     if (empty) empty.hidden = state.clips.length > 0;
     if ($('mcmTotalDuration')) $('mcmTotalDuration').textContent = formatSeconds(totalSelectedDuration());
+    renderSegmentTextInputs();
     renderTemplateLayout();
     hydrateClipPosters();
   }
@@ -2209,7 +2225,7 @@
       event.target.value = '';
       processNextPendingFile();
     });
-    if ($('mcmClipList')) $('mcmClipList').addEventListener('input', function(event) {
+    if ($('mcmSegmentTextList')) $('mcmSegmentTextList').addEventListener('input', function(event) {
       var target = event.target;
       if (!target || !target.getAttribute) return;
       var field = target.getAttribute('data-seg-field');
