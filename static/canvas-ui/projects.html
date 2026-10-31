@@ -450,7 +450,9 @@
     } catch (e) { alert('新建失败：' + e.message); }
   };
   window.armDelete = function (btn, itemId) {
-    // 单击即删（两段式在客户端里反馈不明显，用户以为没反应）
+    // 先打一个探测点：确认点击到底有没有进到这段代码（查 app.log 里的 delclick=）
+    try { new Image().src = '/api/health?delclick=' + encodeURIComponent(itemId) + '&t=' + Date.now(); } catch (e) {}
+    // 单击即删
     window.deleteItem(null, itemId);
   };
   window.deleteItem = async function (event, itemId) {
