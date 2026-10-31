@@ -146,12 +146,14 @@ async def _fetch_remote_store(request: Request) -> Optional[dict]:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(f"{base}/skills/store", headers=headers)
         if resp.status_code != 200:
+            print(f"[skills/store] remote returned {resp.status_code}, fallback to local registry", flush=True)
             return None
         data = resp.json()
         if not isinstance(data, dict) or not isinstance(data.get("packages"), list):
             return None
         return data
-    except Exception:
+    except Exception as exc:
+        print(f"[skills/store] remote fetch failed: {type(exc).__name__}: {exc}", flush=True)
         return None
 
 

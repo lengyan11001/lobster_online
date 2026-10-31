@@ -91,6 +91,7 @@ _state: dict[int, tuple] = {}
 
 VK_LBUTTON = 0x01
 GA_ROOT = 2
+GW_OWNER = 4
 
 _user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 _user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
@@ -109,6 +110,57 @@ _user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, cty
 _user32.SetWindowPos.restype = wintypes.BOOL
 _user32.IsZoomed.argtypes = [wintypes.HWND]
 _user32.IsZoomed.restype = wintypes.BOOL
+
+
+def find_app_window(title_hint: str = "", pid: int = 0) -> int:
+    """兜底找窗口：当前进程里面积最大的可见顶层窗口。
+
+    有些 pywebview/EdgeChromium 机器上 window.native.Handle 一直是 0，
+    导致无边框/边缘缩放整块不生效（日志：fallback timed out waiting for
+    native handle）。这里直接用 Win32 枚举本进程窗口。
+    """
+    import os
+
+    target_pid = int(pid or os.getpid())
+    hint = (title_hint or "").strip()
+    found: list[int] = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def _cb(hwnd, _lparam):
+        try:
+            if not _user32.IsWindowVisible(hwnd):
+                return True
+            pid = wintypes.DWORD()
+            _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value != target_pid:
+                return True
+            if _user32.GetWindow(hwnd, GW_OWNER):
+                return True
+            if hint:
+                n = _user32.GetWindowTextLengthW(hwnd)
+                if n:
+                    buf = ctypes.create_unicode_buffer(n + 1)
+                    _user32.GetWindowTextW(hwnd, buf, n + 1)
+                    if hint not in buf.value:
+                        return True
+            found.append(int(hwnd))
+        except Exception:
+            pass
+        return True
+
+    try:
+        _user32.EnumWindows(_cb, 0)
+    except Exception:
+        return 0
+    best, best_area = 0, 0
+    for hwnd in found:
+        rect = wintypes.RECT()
+        if not _user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+            continue
+        area = max(0, rect.right - rect.left) * max(0, rect.bottom - rect.top)
+        if area > best_area:
+            best, best_area = hwnd, area
+    return best
 
 
 def _resize_code(cx: int, cy: int, cw: int, ch: int, edge: int) -> int:

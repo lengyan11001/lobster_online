@@ -2509,10 +2509,28 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                     from desktop.frameless_chrome import apply as _apply_chrome
                 except ModuleNotFoundError:
                     from frameless_chrome import apply as _apply_chrome
+                hwnd = 0
                 try:
                     hwnd = int(window.native.Handle.ToInt64())
                 except Exception as exc:
                     log(f"frameless chrome: no native handle ({exc})")
+                    hwnd = 0
+                if not hwnd:
+                    # 有些机器 pywebview 永远拿不到 native handle，直接枚举本进程窗口兜底，
+                    # 否则无边框/边缘缩放整块都不会生效。
+                    try:
+                        from desktop.frameless_chrome import find_app_window as _find_app_window
+                    except ModuleNotFoundError:
+                        from frameless_chrome import find_app_window as _find_app_window
+                    try:
+                        hwnd = int(_find_app_window(title) or 0)
+                    except Exception as exc2:
+                        log(f"frameless chrome: enum window failed ({exc2})")
+                        hwnd = 0
+                    if hwnd:
+                        log(f"frameless chrome: resolved by enum hwnd={hwnd}")
+                if not hwnd:
+                    log("frameless chrome: no window handle available")
                     return
                 try:
                     _apply_chrome(hwnd)
@@ -2523,13 +2541,16 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
 
         def _apply_frameless_chrome_when_ready() -> None:
             """Some EdgeChromium/pywebview builds do not emit shown reliably."""
+            logged = False
             for _ in range(300):
                 if _chrome_state["applied"]:
                     return
                 try:
-                    if int(window.native.Handle.ToInt64()):
+                    if not logged:
                         log("frameless chrome: applying via fallback")
-                        _apply_frameless_chrome()
+                        logged = True
+                    _apply_frameless_chrome()
+                    if _chrome_state["applied"]:
                         return
                 except Exception:
                     pass
