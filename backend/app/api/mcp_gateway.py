@@ -272,6 +272,11 @@ def get_mcp_token_from_request(
                 return token
             with _cache_lock:
                 _mcp_token_cache.pop(agent_id, None)
+    # 2.5) 客户端（浏览器/桌面）请求一定会带 X-Installation-Id；这种请求如果没有
+    # Authorization，绝不能拿缓存里的别人 token 去扣费，直接视为未登录。
+    if (request.headers.get("X-Installation-Id") or request.headers.get("x-installation-id") or "").strip():
+        logger.warning("mcp_gateway: installation request without Authorization; refuse cached-token fallback")
+        return None
     # 3) mcp-remote 不传 Header：取缓存中最近写入且未过期的 token（兜底）
     now = time.time()
     with _cache_lock:
