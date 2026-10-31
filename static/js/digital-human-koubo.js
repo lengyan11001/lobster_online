@@ -12,6 +12,7 @@
     projects: [],
     components: [],
     job: null,
+    render: { preset: '标准', components: ['caption', 'keyword', 'cta'], job: null, packaged: false },
     timer: null
   };
 
@@ -113,6 +114,9 @@
       + '#content-digital-human-koubo th{color:#94a3b8;font-weight:400;font-size:11px;}'
       + '#content-digital-human-koubo .kb-total{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:12px;color:#64748b;}'
       + '#content-digital-human-koubo .kb-total b{color:#0f172a;font-size:14px;}'
+      + '#content-digital-human-koubo .kb-packbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:#64748b;}'
+      + '#content-digital-human-koubo .kb-packbar select{padding:5px 8px;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#334155;background:#fff;}'
+      + '#content-digital-human-koubo .kb-packbar label{display:inline-flex;align-items:center;gap:4px;font-size:11px;}'
       + '#content-digital-human-koubo .kb-proj{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 2px;border-bottom:1px solid #f1f5f9;font-size:12px;}'
       + '#content-digital-human-koubo .kb-proj:last-child{border-bottom:0;}'
       + '#content-digital-human-koubo .kb-proj b{color:#0f172a;font-weight:500;}'
@@ -164,6 +168,7 @@
       + '    <div class="kb-tools"><button type="button" class="kb-btn" id="kbSave">保存项目</button><button type="button" class="kb-btn" id="kbExport">导出 tasks.json</button><button type="button" class="kb-btn" id="kbDeps">安装依赖</button><button type="button" class="kb-btn" id="kbBack">返回商店</button></div></div>'
       + '  <div class="kb-preview" id="kbPreview"><div class="kb-empty"><b>还没有成片</b>左侧填好形象与口播稿，点击「生成第 1 段」</div></div>'
       + '  <div class="kb-meta" id="kbMeta"></div>'
+      + '  <div id="kbPack"></div>'
       + '  <div class="kb-card"><div class="kb-sec-title">分段<small id="kbSegCount">0 段</small></div><div id="kbSegments"><span style="font-size:12px;color:#94a3b8;">还没有分段，先点「只看分段报价」或直接生成。</span></div></div>'
       + '  <div class="kb-card"><div class="kb-sec-title">项目记录<small id="kbProjCount"></small></div><div id="kbProjects"></div></div>'
       + '  <div class="kb-log" id="kbLog">准备就绪</div>'
@@ -188,13 +193,17 @@
       return;
     }
     var c = state.upload.checks || {};
+    var hasChecks = !!(c && c.width);
     box.innerHTML = '<img class="kb-photo" src="' + esc(API + state.upload.url) + '" alt="形象照">'
-      + '<ul class="kb-checks">'
-      + '<li class="' + (Math.min(c.width || 0, c.height || 0) >= 512 ? 'ok' : 'warn') + '">分辨率 ' + (c.width || 0) + '×' + (c.height || 0) + '</li>'
-      + '<li class="' + ((c.sharpness || 0) >= 25 ? 'ok' : 'warn') + '">清晰度 ' + (c.sharpness || 0) + '</li>'
-      + '<li class="' + ((c.brightness || 0) >= 60 && (c.brightness || 0) <= 215 ? 'ok' : 'warn') + '">亮度 ' + (c.brightness || 0) + '</li>'
-      + (c.warnings || []).map(function (w) { return '<li class="warn">⚠ ' + esc(w) + '</li>'; }).join('')
-      + '</ul><div style="margin-top:8px;"><button type="button" class="kb-btn" id="kbReplace">换一张</button></div>';
+      + (hasChecks
+        ? '<ul class="kb-checks">'
+          + '<li class="' + (Math.min(c.width || 0, c.height || 0) >= 512 ? 'ok' : 'warn') + '">分辨率 ' + (c.width || 0) + '×' + (c.height || 0) + '</li>'
+          + '<li class="' + ((c.sharpness || 0) >= 25 ? 'ok' : 'warn') + '">清晰度 ' + (c.sharpness || 0) + '</li>'
+          + '<li class="' + ((c.brightness || 0) >= 60 && (c.brightness || 0) <= 215 ? 'ok' : 'warn') + '">亮度 ' + (c.brightness || 0) + '</li>'
+          + (c.warnings || []).map(function (w) { return '<li class="warn">⚠ ' + esc(w) + '</li>'; }).join('')
+          + '</ul>'
+        : '<ul class="kb-checks"><li>已随项目保存</li></ul>')
+      + '<div style="margin-top:8px;"><button type="button" class="kb-btn" id="kbReplace">换一张</button></div>';
     var rep = $('kbReplace');
     if (rep) rep.onclick = function () { state.upload = null; renderAvatar(); };
   }
@@ -319,6 +328,72 @@
     if ($('kbSegCount')) $('kbSegCount').textContent = q.segments.length + ' 段';
   }
 
+  function renderPack() {
+    var box = $('kbPack');
+    if (!box) return;
+    if (!state.project || state.project.status !== 'generated') { box.innerHTML = ''; return; }
+    var r = state.render;
+    var job = r.job && r.job.status === 'running' ? r.job : null;
+    box.innerHTML = '<div class="kb-card"><div class="kb-sec-title">包装<small>客户端本地渲染 · 不用 Remotion</small></div>'
+      + '<div class="kb-packbar">'
+      + '<select id="kbPreset"><option' + (r.preset === '克制' ? ' selected' : '') + '>克制</option><option' + (r.preset === '标准' ? ' selected' : '') + '>标准</option><option' + (r.preset === '热闹' ? ' selected' : '') + '>热闹</option></select>'
+      + '<label><input type="checkbox" data-comp="caption"' + (r.components.indexOf('caption') >= 0 ? ' checked' : '') + '> 逐字字幕</label>'
+      + '<label><input type="checkbox" data-comp="keyword"' + (r.components.indexOf('keyword') >= 0 ? ' checked' : '') + '> 数字钉子</label>'
+      + '<label><input type="checkbox" data-comp="cta"' + (r.components.indexOf('cta') >= 0 ? ' checked' : '') + '> 结尾 CTA</label>'
+      + '<span style="flex:1"></span>'
+      + (r.packaged ? '<a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/rendered') + '" download>下载包装成片</a>' : '')
+      + '<button type="button" class="kb-btn" id="kbRender"' + (job ? ' disabled' : '') + '>' + (job ? '渲染中 ' + (job.progress || 0) + '%' : (r.packaged ? '重新包装' : '生成包装成片')) + '</button>'
+      + '</div>'
+      + (job ? '<div style="margin-top:8px;font-size:11px;color:#64748b;">' + esc(job.message || '') + '<div style="height:4px;background:#eef2f7;border-radius:999px;overflow:hidden;margin-top:4px;"><i style="display:block;height:100%;width:' + Math.max(3, job.progress || 0) + '%;background:#3b82f6;"></i></div></div>' : '')
+      + '</div>';
+    var sel = $('kbPreset');
+    if (sel) sel.onchange = function () { state.render.preset = sel.value; };
+    box.querySelectorAll('[data-comp]').forEach(function (el) {
+      el.onchange = function () {
+        state.render.components = Array.prototype.slice.call(box.querySelectorAll('[data-comp]:checked')).map(function (x) { return x.getAttribute('data-comp'); });
+      };
+    });
+    var btn = $('kbRender');
+    if (btn) btn.onclick = function () { startRender(); };
+  }
+
+  function startRender() {
+    if (!state.project) return;
+    state.render.job = { status: 'running', progress: 0, message: '准备渲染' };
+    renderPack();
+    req('/api/skills/digital-human-koubo/projects/' + state.project.id + '/render', {
+      method: 'POST', headers: headers(),
+      body: JSON.stringify({ preset: state.render.preset, components: state.render.components })
+    }).then(function (d) {
+      log('包装任务已提交 ' + d.job_id);
+      pollRender(d.job_id);
+    }).catch(function (e) {
+      state.render.job = null;
+      renderPack();
+      log('包装失败：' + e.message);
+    });
+  }
+
+  function pollRender(jobId) {
+    var t = setInterval(function () {
+      req('/api/skills/digital-human-koubo/render/jobs/' + encodeURIComponent(jobId)).then(function (job) {
+        state.render.job = job;
+        renderPack();
+        if (job.status !== 'running') {
+          clearInterval(t);
+          if (job.status === 'done') {
+            state.render.packaged = true;
+            state.render.job = null;
+            log('包装完成');
+            req('/api/skills/digital-human-koubo/projects/' + state.project.id).then(function (p) { state.project = p; renderAll(); });
+          } else {
+            log('包装失败：' + (job.error || job.message || ''));
+          }
+        }
+      }).catch(function () {});
+    }, 1500);
+  }
+
   function renderPreview() {
     var box = $('kbPreview');
     if (!box) return;
@@ -335,8 +410,10 @@
       }
     }
     if (state.project && state.project.status === 'generated') {
-      var src = API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/video';
-      box.innerHTML = '<video controls playsinline src="' + esc(src) + '"></video>';
+      var packaged = state.render.packaged || state.project.rendered;
+      var src = API + '/api/skills/digital-human-koubo/projects/' + state.project.id + (packaged ? '/rendered' : '/video');
+      box.innerHTML = '<video controls playsinline src="' + esc(src) + '"></video>'
+        + (packaged ? '<div style="position:absolute;left:14px;top:12px;background:rgba(15,23,42,.7);color:#e2e8f0;font-size:11px;padding:4px 9px;border-radius:999px;">包装版</div><a href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/video') + '" target="_blank" style="position:absolute;right:14px;top:12px;color:#cbd5e1;font-size:11px;text-decoration:underline;">看原片</a>' : '');
       return;
     }
     box.innerHTML = '<div class="kb-empty"><b>还没有成片</b>左侧填好形象与口播稿，点击「生成第 1 段」</div>';
@@ -377,7 +454,7 @@
   }
 
   function renderAll() {
-    renderAvatar(); renderParams(); renderSegments(); renderPreview(); renderStatus(); renderMeta(); renderProjects();
+    renderAvatar(); renderParams(); renderSegments(); renderPreview(); renderStatus(); renderMeta(); renderPack(); renderProjects();
   }
 
   function updateCount() {
@@ -485,6 +562,10 @@
       state.form = Object.assign({}, state.form, p.options || {});
       state.quote = { segments: p.segments || [], total_seconds: p.total_seconds || 0, total_credits: p.total_credits || 0 };
       state.job = null;
+      state.render.packaged = !!p.rendered;
+      if (p.photo_id) {
+        state.upload = { id: p.photo_id, url: '/api/skills/digital-human-koubo/uploads/' + p.photo_id, checks: {} };
+      }
       if ($('kbText')) $('kbText').value = p.script || '';
       if ($('kbProjName')) $('kbProjName').textContent = p.name;
       renderAll(); updateCount();

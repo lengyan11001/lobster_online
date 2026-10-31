@@ -1146,6 +1146,86 @@ def koubo_generate_job(job_id: str):
     return job
 
 
+class RenderBody(BaseModel):
+    preset: str = "标准"
+    components: Optional[List[str]] = None
+
+
+_RENDER_JOBS: Dict[str, Dict[str, Any]] = {}
+_RENDER_LOCK = threading.Lock()
+
+
+def _render_job(job_id: str, project_id: str, preset: str, components: Optional[List[str]]) -> None:
+    job = _RENDER_JOBS[job_id]
+    try:
+        from ..services import koubo_renderer
+
+        project = koubo_project(project_id)
+
+        def progress(done: int, total: int, message: str) -> None:
+            job["done"] = done
+            job["total"] = total
+            job["progress"] = int(done * 100 / total) if total else 0
+            job["message"] = message
+
+        out = koubo_renderer.render(project, preset, components, progress)
+        rows = _load_projects()
+        for row in rows:
+            if row.get("id") == project_id:
+                row["render_preset"] = preset
+                row["rendered_at"] = datetime.now().isoformat(timespec="seconds")
+                row["rendered"] = True
+        _save_projects(rows)
+        job["status"] = "done"
+        job["progress"] = 100
+        job["message"] = "包装完成"
+        job["output"] = "/api/skills/digital-human-koubo/projects/%s/rendered" % project_id
+    except Exception as exc:
+        job["status"] = "error"
+        job["error"] = str(exc)[:1500]
+        job["message"] = "包装失败"
+    finally:
+        job["finished_at"] = time.time()
+
+
+@router.post("/api/skills/digital-human-koubo/projects/{pid}/render", summary="本地包装渲染（Playwright 逐帧）")
+def koubo_render(pid: str, body: RenderBody):
+    project = koubo_project(pid)
+    if project.get("status") != "generated":
+        raise HTTPException(status_code=400, detail="先生成成片，再包装")
+    src = OUTPUT_DIR / pid / "final.mp4"
+    if not src.is_file():
+        raise HTTPException(status_code=400, detail="成片文件不存在")
+    with _RENDER_LOCK:
+        running = [j for j in _RENDER_JOBS.values() if j.get("status") == "running" and j.get("project_id") == pid]
+    if running:
+        raise HTTPException(status_code=409, detail="该项目已有一个包装任务在跑")
+    job_id = uuid.uuid4().hex[:10]
+    job = {"id": job_id, "project_id": pid, "status": "running", "progress": 0, "done": 0,
+           "total": 1, "message": "准备渲染", "error": "", "started_at": time.time()}
+    with _RENDER_LOCK:
+        _RENDER_JOBS[job_id] = job
+    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components), daemon=True).start()
+    return {"ok": True, "job_id": job_id}
+
+
+@router.get("/api/skills/digital-human-koubo/render/jobs/{job_id}", summary="包装渲染进度")
+def koubo_render_job(job_id: str):
+    with _RENDER_LOCK:
+        job = _RENDER_JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return job
+
+
+@router.get("/api/skills/digital-human-koubo/projects/{pid}/rendered", summary="包装后成片")
+def koubo_rendered(pid: str):
+    path = OUTPUT_DIR / pid / "final_packaged.mp4"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="包装成片还没有生成")
+    return FileResponse(str(path), media_type="video/mp4", filename="koubo-packaged-%s.mp4" % pid)
+
+
 @router.get("/api/skills/digital-human-koubo/projects/{pid}/video", summary="成片预览/下载")
 def koubo_project_video(pid: str):
     path = OUTPUT_DIR / pid / "final.mp4"
