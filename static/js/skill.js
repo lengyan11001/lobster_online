@@ -2991,7 +2991,7 @@ var _SKILL_STORE_SIMPLE_COPY_BY_ID = {
   'shanjian_smart_clip': { title: '智能剪辑', desc: '数字人口播混剪' },
   'multi_clip_mixer_skill': { title: '多段视频混剪', desc: '选段、拼接、配乐和模板成片' },
   'comfly_ecommerce_detail_skill': { title: '电商详情页', desc: '生成商品套图' },
-  'hifly_digital_human_skill': { title: '数字人3.0', desc: '生成数字人口播' },
+  'hifly_digital_human_skill': { title: '数字人口播', desc: '生成数字人口播' },
   'personal_whatsapp_assistant': { title: '个人whatapp助手', desc: '管理本机 WhatsApp 接管' },
   'personal_telegram_assistant': { title: '个人 Telegram 助手', desc: '用个人号读通讯录与会话' },
   'openclaw_weixin_channel': { title: '微信助手', desc: '微信通道授权' },
