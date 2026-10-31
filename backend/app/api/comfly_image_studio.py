@@ -2,6 +2,7 @@ import json
 import logging
 import asyncio
 import os
+import time
 from typing import Any, Dict, List
 from urllib.parse import urlparse
 
@@ -24,6 +25,8 @@ from .assets import (
     _save_url_lock_for,
 )
 from .auth import _ServerUser, get_current_user_media_edit
+from .assets import _upload_bytes_to_auth_server
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -387,6 +390,11 @@ async def _generate_image_studio_core(
         "size": size,
         "response_format": "url",
     }
+    # 批量生成时同一提示词会并行提交多次：带上每次唯一的 request id，
+    # 让上游/代理的幂等去重按「每次提交」区分，而不是把第 2..N 张判成重复任务返回 409。
+    client_request_id = (request.headers.get("x-client-request-id") or "").strip()
+    if client_request_id:
+        body["client_request_id"] = client_request_id
     # gpt-image-2 目前会经过不同代理/渠道，部分渠道认像素 size，部分更稳定地认比例枚举。
     # 三个字段一起带，避免 9:16 在某一层被默认回退成 1:1。
     if "gpt-image-2" in model_id or "gptimage2" in model_id.replace("-", ""):
@@ -876,6 +884,68 @@ async def comfly_image_studio_generate_start(
         "job_id": job_id,
         "status": "running",
         "poll_path": f"/api/comfly-image-studio/jobs/{job_id}",
+    }
+
+
+class EnhanceImageBody(BaseModel):
+    url: str
+    saturation: float = 1.18
+    brightness: float = 1.05
+
+
+@router.post("/api/comfly-image-studio/enhance", summary="对生成结果做提饱和/提亮并回传新图")
+async def enhance_image_result(
+    body: EnhanceImageBody,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_media_edit),
+):
+    """技术方案：下载原图 -> Pillow 调饱和度/亮度 -> 上传到素材服务 -> 返回新 URL。
+
+    前端「对比弹窗」只做 CSS filter 预览（零延迟），用户点保存才走这里真正落图。
+    """
+    url = (body.url or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="url 无效")
+    saturation = max(0.5, min(2.0, float(body.saturation or 1.18)))
+    brightness = max(0.8, min(1.5, float(body.brightness or 1.05)))
+    try:
+        async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
+            resp = await client.get(url, follow_redirects=True)
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"下载原图失败: HTTP {resp.status_code}")
+        raw = resp.content
+        if not raw:
+            raise HTTPException(status_code=502, detail="下载原图失败: 空内容")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"下载原图失败: {type(exc).__name__}") from exc
+
+    try:
+        import io as _io
+
+        from PIL import Image, ImageEnhance
+
+        image = Image.open(_io.BytesIO(raw))
+        image = image.convert("RGB")
+        image = ImageEnhance.Color(image).enhance(saturation)
+        image = ImageEnhance.Brightness(image).enhance(brightness)
+        out = _io.BytesIO()
+        image.save(out, format="JPEG", quality=92, optimize=True)
+        payload = out.getvalue()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"图片处理失败: {type(exc).__name__}: {exc}") from exc
+
+    filename = f"enhanced_{int(time.time() * 1000)}.jpg"
+    new_url, info = await _upload_bytes_to_auth_server(payload, filename, "image/jpeg", request)
+    if not new_url:
+        raise HTTPException(status_code=502, detail=f"上传处理结果失败: {info}")
+    return {
+        "ok": True,
+        "url": new_url,
+        "saturation": saturation,
+        "brightness": brightness,
+        "bytes": len(payload),
     }
 
 

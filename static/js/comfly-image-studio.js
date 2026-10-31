@@ -1724,8 +1724,16 @@
         ? 'data-imglab-result-delete="' + escapeHtml(card.index) + '"'
         : 'data-imglab-job-delete="' + escapeHtml(card.jobId) + '"';
       var deleteTitle = card.type === 'result' ? '删除这条生成结果' : '删除这条任务记录';
+      var boostBtn = (card.status === 'completed' && card.image)
+        ? ('<button type="button" class="imglab-task-card-boost" data-imglab-boost="' + escapeHtml(card.image) + '"'
+          + (card.type === 'result'
+            ? ' data-imglab-boost-index="' + escapeHtml(card.index) + '"'
+            : ' data-imglab-boost-job="' + escapeHtml(card.jobId || '') + '"')
+          + ' title="提亮 / 加饱和" aria-label="提亮 / 加饱和">增</button>')
+        : '';
       return [
         '<div class="imglab-task-card' + (isActive ? ' is-active' : '') + ' is-' + escapeHtml(card.status || 'running') + '" ' + attrs + ' role="button" tabindex="0" title="' + escapeHtml(card.title || '图片任务') + '">',
+        boostBtn,
         '<button type="button" class="imglab-task-card-delete" ' + deleteAttr + ' title="' + deleteTitle + '" aria-label="' + deleteTitle + '">×</button>',
         '<div class="imglab-task-card-media">' + media + '</div>',
         '<div class="imglab-task-card-body">',
@@ -1880,6 +1888,18 @@
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         card.click();
+      });
+    });
+    document.querySelectorAll('[data-imglab-boost]').forEach(function(btn) {
+      if (btn.dataset.bound) return;
+      btn.dataset.bound = '1';
+      btn.addEventListener('click', function(event) {
+        event.preventDefault();
+        event.stopPropagation();
+        openEnhanceDialog(btn.getAttribute('data-imglab-boost'), {
+          index: btn.getAttribute('data-imglab-boost-index'),
+          jobId: btn.getAttribute('data-imglab-boost-job')
+        });
       });
     });
     document.querySelectorAll('[data-imglab-job-delete]').forEach(function(btn) {
@@ -2080,6 +2100,162 @@
       });
   }
 
+  function _ensureEnhanceStyles() {
+    if (document.getElementById('imglabEnhanceStyles')) return;
+    var style = document.createElement('style');
+    style.id = 'imglabEnhanceStyles';
+    style.textContent = [
+      '.imglab-enhance-mask{position:fixed;inset:0;background:rgba(15,23,42,.62);display:flex;align-items:center;justify-content:center;z-index:9999;}',
+      '.imglab-enhance-dialog{width:min(980px,94vw);max-height:92vh;overflow:auto;background:#fff;border-radius:14px;padding:18px 20px;box-shadow:0 24px 60px rgba(15,23,42,.35);}',
+      '.imglab-enhance-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;}',
+      '.imglab-enhance-head h3{margin:0;font-size:16px;}',
+      '.imglab-enhance-panes{display:grid;grid-template-columns:1fr 1fr;gap:14px;}',
+      '.imglab-enhance-pane{border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#f8fafc;}',
+      '.imglab-enhance-pane figcaption{font-size:12px;color:#64748b;padding:6px 10px;background:#f1f5f9;}',
+      '.imglab-enhance-pane img{display:block;width:100%;height:auto;max-height:52vh;object-fit:contain;background:#fff;}',
+      '.imglab-enhance-controls{display:flex;gap:22px;flex-wrap:wrap;margin:14px 0 4px;font-size:13px;color:#334155;}',
+      '.imglab-enhance-controls label{display:flex;align-items:center;gap:8px;}',
+      '.imglab-enhance-controls input[type=range]{width:180px;}',
+      '.imglab-enhance-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:14px;}',
+      '.imglab-task-card-boost{position:absolute;right:34px;top:6px;width:22px;height:22px;border-radius:50%;border:none;background:rgba(15,23,42,.6);color:#fff;font-size:11px;line-height:22px;cursor:pointer;padding:0;}',
+      '.imglab-task-card-boost:hover{background:#0f766e;}'
+    ].join('');
+    document.head.appendChild(style);
+  }
+
+  function openEnhanceDialog(url, meta) {
+    meta = meta || {};
+    if (!url) return;
+    _ensureEnhanceStyles();
+    var mask = document.createElement('div');
+    mask.className = 'imglab-enhance-mask';
+    mask.innerHTML = [
+      '<div class="imglab-enhance-dialog" role="dialog" aria-modal="true">',
+      '<div class="imglab-enhance-head"><h3>提亮 / 加饱和</h3><button type="button" class="btn btn-ghost btn-sm" data-enhance-close>关闭</button></div>',
+      '<div class="imglab-enhance-panes">',
+      '<figure class="imglab-enhance-pane"><figcaption>处理后（预览）</figcaption><img data-enhance-after src="' + escapeHtml(url) + '" alt="处理后"></figure>',
+      '<figure class="imglab-enhance-pane"><figcaption>原图</figcaption><img src="' + escapeHtml(url) + '" alt="原图"></figure>',
+      '</div>',
+      '<div class="imglab-enhance-controls">',
+      '<label>饱和度 <input type="range" min="1" max="1.6" step="0.02" value="1.18" data-enhance-saturation><span data-enhance-saturation-val>1.18</span></label>',
+      '<label>亮度 <input type="range" min="0.9" max="1.2" step="0.02" value="1.05" data-enhance-brightness><span data-enhance-brightness-val>1.05</span></label>',
+      '</div>',
+      '<div class="imglab-enhance-actions">',
+      '<button type="button" class="btn btn-ghost btn-sm" data-enhance-close>取消</button>',
+      '<button type="button" class="btn btn-primary btn-sm" data-enhance-save>满意，保存</button>',
+      '</div>',
+      '</div>'
+    ].join('');
+    document.body.appendChild(mask);
+
+    var afterImg = mask.querySelector('[data-enhance-after]');
+    var satInput = mask.querySelector('[data-enhance-saturation]');
+    var briInput = mask.querySelector('[data-enhance-brightness]');
+    var satVal = mask.querySelector('[data-enhance-saturation-val]');
+    var briVal = mask.querySelector('[data-enhance-brightness-val]');
+
+    function applyPreview() {
+      var sat = parseFloat(satInput.value) || 1.18;
+      var bri = parseFloat(briInput.value) || 1.05;
+      satVal.textContent = sat.toFixed(2);
+      briVal.textContent = bri.toFixed(2);
+      afterImg.style.filter = 'saturate(' + sat + ') brightness(' + bri + ')';
+    }
+    applyPreview();
+    satInput.addEventListener('input', applyPreview);
+    briInput.addEventListener('input', applyPreview);
+
+    function close() { mask.remove(); }
+    mask.querySelectorAll('[data-enhance-close]').forEach(function(btn) {
+      btn.addEventListener('click', close);
+    });
+    mask.addEventListener('click', function(event) {
+      if (event.target === mask) close();
+    });
+
+    var saveBtn = mask.querySelector('[data-enhance-save]');
+    saveBtn.addEventListener('click', async function() {
+      var sat = parseFloat(satInput.value) || 1.18;
+      var bri = parseFloat(briInput.value) || 1.05;
+      saveBtn.disabled = true;
+      saveBtn.textContent = '处理中...';
+      try {
+        var resp = await fetch(localBase() + '/api/comfly-image-studio/enhance', {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, authHeadersSafe()),
+          body: JSON.stringify({ url: url, saturation: sat, brightness: bri })
+        });
+        var data = await resp.json().catch(function() { return {}; });
+        if (!resp.ok || !data.url) {
+          throw new Error((data && (data.detail || data.error)) || '处理失败');
+        }
+        var newUrl = data.url;
+        var idx = meta.index != null && meta.index !== '' ? parseInt(meta.index, 10) : -1;
+        if (!isNaN(idx) && idx >= 0 && state.results[idx]) {
+          state.results[idx].url = newUrl;
+          state.results[idx].sourceUrl = newUrl;
+        }
+        if (meta.jobId) {
+          updateRememberedJob(meta.jobId, { image: newUrl });
+        }
+        if (state.currentJobId && !meta.jobId) {
+          updateRememberedJob(state.currentJobId, { image: newUrl });
+        }
+        renderResultSurface();
+        close();
+        showMessage('已保存处理后的图片。', false);
+      } catch (err) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = '满意，保存';
+        showMessage('处理失败：' + (err && err.message ? err.message : '未知错误'), true);
+      }
+    });
+  }
+
+  var _otherJobsPolling = false;
+
+  function refreshOtherJobs() {
+    if (_otherJobsPolling) return;
+    if (!state.recentJobs || !state.recentJobs.length) return;
+    var targets = state.recentJobs.filter(function(job) {
+      return job && job.jobId && job.status === 'running' && job.jobId !== state.currentJobId;
+    }).slice(0, 8);
+    if (!targets.length) return;
+    _otherJobsPolling = true;
+    Promise.all(targets.map(function(job) {
+      return fetch(localBase() + '/api/comfly-image-studio/jobs/' + encodeURIComponent(job.jobId), {
+        headers: authHeadersSafe()
+      })
+        .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, data: d || {} }; }); })
+        .then(function(res) {
+          if (!res.ok) return null;
+          var status = String(res.data.status || '').trim() || 'running';
+          if (status === 'completed') {
+            var imgs = Array.isArray(res.data.images) ? res.data.images : [];
+            var first = imgs[0] || {};
+            updateRememberedJob(job.jobId, {
+              status: 'completed',
+              resultCount: imgs.length,
+              image: first.url || first.sourceUrl || first.data_url || '',
+              assetId: first.asset_id || '',
+              model: first.model || '',
+              aspectRatio: first.aspect_ratio || '',
+              size: first.size || ''
+            });
+          } else if (status === 'failed') {
+            updateRememberedJob(job.jobId, { status: 'failed' });
+          } else {
+            updateRememberedJob(job.jobId, { status: status });
+          }
+          return job.jobId;
+        })
+        .catch(function() { return null; });
+    })).then(function() {
+      _otherJobsPolling = false;
+      renderResultSurface();
+    });
+  }
+
   function refreshJobStatus(showToast) {
     if (!state.currentJobId) return;
     fetch(localBase() + '/api/comfly-image-studio/jobs/' + encodeURIComponent(state.currentJobId), {
@@ -2099,6 +2275,7 @@
         updateRememberedJob(state.currentJobId, { status: status });
         if (status === 'running') {
           renderResultSurface();
+          refreshOtherJobs();
           schedulePoll(3000);
           return;
         }
@@ -2295,43 +2472,48 @@
     state.currentJobStatus = '';
     showMessage('正在提交图片生成任务...', false);
 
-    var form = new FormData();
+    var countInput = $('imglabCountInput');
+    var batchCount = Math.max(1, Math.min(8, parseInt((countInput && countInput.value) || '1', 10) || 1));
+
     var finalPrompt = buildPromptWithReferenceHints(prompt);
     var displayPrompt = cleanPromptText(finalPrompt);
-    form.append('prompt', finalPrompt);
-    form.append('model', $('imglabModelSelect').value);
-    form.append('aspect_ratio', $('imglabAspectRatioSelect').value);
-    form.append('quality', $('imglabQualitySelect').value);
-    form.append('background', $('imglabBackgroundSelect').value);
+    var refFiles = [];
     var referenceImageUrls = [];
     state.references.forEach(function(item) {
-      if (item && item.file) form.append('images', item.file);
+      if (item && item.file) refFiles.push(item.file);
       else if (item && (item.source_url || item.objectUrl)) referenceImageUrls.push(item.source_url || item.objectUrl);
     });
-    if (referenceImageUrls.length) form.append('reference_image_urls', referenceImageUrls.join(','));
 
-    try {
+    function buildSubmitForm() {
+      var fd = new FormData();
+      fd.append('prompt', finalPrompt);
+      fd.append('model', $('imglabModelSelect').value);
+      fd.append('aspect_ratio', $('imglabAspectRatioSelect').value);
+      fd.append('quality', $('imglabQualitySelect').value);
+      fd.append('background', $('imglabBackgroundSelect').value);
+      refFiles.forEach(function(file) { fd.append('images', file); });
+      if (referenceImageUrls.length) fd.append('reference_image_urls', referenceImageUrls.join(','));
+      return fd;
+    }
+
+    async function submitOne(index) {
       var resp = await fetch(localBase() + '/api/comfly-image-studio/generate/start', {
         method: 'POST',
         headers: authHeadersSafe(),
-        body: form
+        body: buildSubmitForm()
       });
       var payload = await resp.json().catch(function() { return {}; });
       if (!resp.ok) {
         throw new Error(imageTaskFailureMessage(payload));
       }
-
-      state.currentJobId = payload.job_id || '';
-      if (!state.currentJobId) {
+      var jobId = payload.job_id || '';
+      if (!jobId) {
         throw new Error(friendlyImageTaskFailureMessage());
       }
-      state.currentJobStatus = 'running';
-      state.currentJobPrompt = displayPrompt;
-      state.results = [];
       rememberJob({
-        jobId: state.currentJobId,
+        jobId: jobId,
         status: 'running',
-        title: promptTitleText(displayPrompt, prompt.slice(0, 18) || '图片任务'),
+        title: promptTitleText(displayPrompt, prompt.slice(0, 18) || '图片任务') + (batchCount > 1 ? ' #' + (index + 1) : ''),
         prompt: displayPrompt,
         requestPayload: {
           prompt: displayPrompt,
@@ -2341,10 +2523,38 @@
           background: $('imglabBackgroundSelect').value
         }
       });
+      return jobId;
+    }
+
+    try {
+      var tasks = [];
+      for (var i = 0; i < batchCount; i += 1) {
+        tasks.push(submitOne(i));
+      }
+      var settled = await Promise.allSettled(tasks);
+      var okIds = [];
+      var firstError = null;
+      settled.forEach(function(item) {
+        if (item.status === 'fulfilled') okIds.push(item.value);
+        else if (!firstError) firstError = item.reason;
+      });
+      if (!okIds.length) {
+        throw firstError || new Error(friendlyImageTaskFailureMessage());
+      }
+      state.currentJobId = okIds[0];
+      state.currentJobStatus = 'running';
+      state.currentJobPrompt = displayPrompt;
+      state.results = [];
       renderResultSurface();
       setRightView('result');
-      showMessage('图片任务已提交，可以切换页面或继续提交新任务。', false);
+      showMessage(
+        okIds.length > 1
+          ? '已提交 ' + okIds.length + ' 个图片任务，右侧会同时处理。'
+          : '图片任务已提交，可以切换页面或继续提交新任务。',
+        false
+      );
       refreshJobStatus(false);
+      refreshOtherJobs();
     } catch (err) {
       console.warn('图片任务提交失败', err);
       state.currentJobId = '';
