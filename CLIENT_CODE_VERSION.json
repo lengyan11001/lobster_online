@@ -1,7 +1,7 @@
 {
-  "version": "2.0.214",
-  "build": 515,
-  "applied_at": "2026-10-31T17:27:43+08:00",
-  "note": "skills: 技能商店卡片标题改为数字人3.0（含缓存版本刷新）",
-  "bundle_sha256": "1a230aa9b698af01f83ecebeb4213402a1465cd2e7abc998846c9666a1869d42"
+  "version": "2.0.215",
+  "build": 516,
+  "applied_at": "2026-10-31T17:33:52+08:00",
+  "note": "skills: 数字人3.0 卡片在已安装列表也带进入工作台；老口播卡还原命名",
+  "bundle_sha256": "4963142d65e083313a9141d101115bf4f25fd6a45f61b43690bece09cffaef5d"
 }
