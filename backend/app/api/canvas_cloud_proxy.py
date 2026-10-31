@@ -254,7 +254,8 @@ async def canvas_cloud_proxy(path: str, request: Request) -> Response:
                 }
                 _target = "api/v3/tasks/create"
             else:
-                _payload = {"task_id": str(_raw.get("task_id") or "").strip()}
+                _tid = str(_raw.get("task_id") or _raw.get("taskId") or _raw.get("id") or "").strip()
+                _payload = {"task_id": _tid, "taskId": _tid}
                 _target = "api/v3/tasks/query"
             body = _json2.dumps(_payload, ensure_ascii=False).encode("utf-8")
             headers["content-type"] = "application/json"
@@ -349,6 +350,24 @@ async def canvas_cloud_proxy(path: str, request: Request) -> Response:
                             )
                     except Exception:
                         logger.warning("[canvas] 兜底重试失败", exc_info=True)
+
+    if upstream.status_code == 404 and normalized == "api/v3/tasks/query":
+        try:
+            import json as _json7
+            _q = _json7.loads(body.decode("utf-8")) if body else {}
+            _tid2 = str(_q.get("task_id") or _q.get("taskId") or "").strip()
+            if _tid2:
+                async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
+                    _up2 = await client.post(
+                        f"{cloud_base()}/canvas-api/api/v2/tasks/info",
+                        json={"task_id": _tid2, "taskId": _tid2},
+                        headers=headers,
+                    )
+                if _up2.status_code == 200:
+                    logger.info("[canvas] v3 查不到，回落 v2 命中：%s", _tid2)
+                    upstream = _up2
+        except Exception:
+            logger.debug("[canvas] v2 回落失败", exc_info=True)
 
     logger.info("[canvas] %s %s -> %s", request.method, normalized, upstream.status_code)
     media_type = upstream.headers.get("content-type") or "application/json"
