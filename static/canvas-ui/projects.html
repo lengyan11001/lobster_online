@@ -450,26 +450,8 @@
     } catch (e) { alert('新建失败：' + e.message); }
   };
   window.armDelete = function (btn, itemId) {
-    if (!itemId) return;
-    if (!btn) { window.deleteItem(null, itemId); return; }
-    if (btn.getAttribute('data-armed') === '1') {
-      btn.setAttribute('data-armed', '');
-      window.deleteItem(null, itemId);
-      return;
-    }
-    btn.setAttribute('data-armed', '1');
-    try {
-      btn.setAttribute('data-orig-html', btn.innerHTML);
-      btn.innerHTML = '<span style="color:#ef4444;font-weight:600;font-size:11px;">确认?</span>';
-      btn.classList.add('bg-red-50');
-    } catch (e) {}
-    window.setTimeout(function () {
-      if (btn.getAttribute('data-armed') !== '1') return;
-      btn.setAttribute('data-armed', '');
-      var o = btn.getAttribute('data-orig-html');
-      if (o) btn.innerHTML = o;
-      try { btn.classList.remove('bg-red-50'); } catch (e) {}
-    }, 4000);
+    // 单击即删（两段式在客户端里反馈不明显，用户以为没反应）
+    window.deleteItem(null, itemId);
   };
   window.deleteItem = async function (event, itemId) {
     if (event) event.stopPropagation();
