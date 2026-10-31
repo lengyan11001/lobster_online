@@ -343,12 +343,43 @@ def _download_bgm(url: str, work_dir: Path) -> Path:
     return target
 
 
-def _extend_visual_segments_to_target(segments: List[Dict[str, Any]], target_duration: float) -> float:
+def _extend_visual_segments_to_target(
+    segments: List[Dict[str, Any]], target_duration: float, *, allow_trim: bool = False
+) -> float:
+    """把片段总时长对齐到 target_duration。
+
+    - 总时长 < 目标：延长最后一段（不够则 clone 末帧补齐）—— 旧行为；
+    - 总时长 > 目标且 allow_trim=True：按比例压缩每段，填满目标时长后丢弃多余片段。
+      用户显式填「目标时长」时才会裁剪，避免主音轨对齐时把用户素材剪短。
+    """
     if not segments:
         return 0.0
     clean_target = max(0.0, float(target_duration or 0))
     total = sum(max(0.0, float(item.get("duration") or 0)) for item in segments)
-    if clean_target <= 0 or clean_target <= total + 0.01:
+    if clean_target <= 0:
+        return round(total, 3)
+    if total > clean_target + 0.01:
+        if not allow_trim:
+            return round(total, 3)
+        ratio = clean_target / total
+        acc = 0.0
+        kept: List[Dict[str, Any]] = []
+        for item in segments:
+            remain = clean_target - acc
+            if remain <= 0.05:
+                break
+            d = max(0.0, float(item.get("duration") or 0))
+            want = max(0.5, d * ratio) if d > 0 else 0.0
+            new_d = min(remain, want)
+            if new_d < 0.3:
+                break
+            item["end_sec"] = round(float(item.get("start_sec") or 0) + new_d, 3)
+            item["duration"] = round(new_d, 3)
+            acc += new_d
+            kept.append(item)
+        segments[:] = kept
+        return round(acc, 3)
+    if clean_target <= total + 0.01:
         return round(total, 3)
 
     remaining = clean_target - total
@@ -401,7 +432,8 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
 
         audio_source_asset_id = str(body.audio_asset_id or "").strip()
         audio_source_path: Optional[Path] = None
-        target_duration = float(body.target_duration or 0)
+        user_target = float(body.target_duration or 0)
+        target_duration = user_target
         if audio_source_asset_id:
             audio_source_path, _, audio_media_type = resolve_asset_path(db, user_id, audio_source_asset_id)
             if audio_media_type != "video":
@@ -412,11 +444,14 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
             if not bool(audio_info["has_audio"]):
                 raise ValueError("标记为主音轨的视频没有可用音频")
             audio_duration = float(audio_info["duration"] or 0)
-            if target_duration <= 0 or target_duration > audio_duration:
+            if target_duration <= 0:
+                # 没填目标时长：跟随主音轨（只延长，不裁剪，保持旧行为）
                 target_duration = audio_duration
 
         if target_duration > 0:
-            _extend_visual_segments_to_target(normalized, target_duration)
+            _extend_visual_segments_to_target(
+                normalized, target_duration, allow_trim=user_target > 0
+            )
 
         target_width, target_height = _output_size(
             normalized[0]["width"], normalized[0]["height"], ratio=body.output_ratio

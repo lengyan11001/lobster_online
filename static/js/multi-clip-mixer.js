@@ -1947,12 +1947,18 @@
     var template = selectedTemplateForRun(options.useTemplate);
     if (options.useTemplate && template) selectTemplate(template);
     progress('merge', 'active', '正在处理第 ' + runIndex + '/' + totalRuns + ' 条，' + state.clips.length + ' 个视频片段');
+    var targetSeconds = 0;
+    if (currentClipMode() === 'random') {
+      targetSeconds = Number((($('mcmRandomTargetDuration') || {}).value || 0));
+      if (!Number.isFinite(targetSeconds) || targetSeconds < 0) targetSeconds = 0;
+    }
     return post('/api/multi-clip-mixer/render', {
       title: templateTitleValue() || (totalRuns > 1 ? ('多段视频混剪 ' + runIndex) : '多段视频混剪'),
       clips: buildClipPlan(runIndex),
       keep_original_audio: false,
       audio_asset_id: audioClip ? audioClip.assetId : '',
-      target_duration: audioClip ? Number(audioClip.duration || 0) : null,
+      // 目标时长：随机模式按用户填的秒数裁剪/补齐；没填则跟随主音轨（旧行为）
+      target_duration: targetSeconds > 0 ? targetSeconds : (audioClip ? Number(audioClip.duration || 0) : null),
       audio_volume: 1,
       clip_mode: currentClipMode(),
       output_index: runIndex,
