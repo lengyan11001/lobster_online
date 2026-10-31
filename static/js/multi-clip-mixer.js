@@ -622,7 +622,7 @@
       return '<div class="mcm-seg-text-row" data-clip-index="' + index + '" style="border-top:1px dashed rgba(255,255,255,.14);margin-top:.7rem;padding-top:.7rem;">'
         + '<div class="mcm-seg-text-head" style="display:flex;gap:.5rem;align-items:baseline;margin-bottom:.35rem;"><strong>第 ' + (index + 1) + ' 段</strong><span style="opacity:.65;font-size:.85em;">' + escapeHtml(clip.name || '') + '</span></div>'
         + '<label class="mcm-overlay-field"><span><strong>标题</strong><em>必填，≤60 字</em></span>'
-        + '<input type="text" data-seg-field="title" data-clip-index="' + index + '" maxlength="60" placeholder="第 ' + (index + 1) + ' 段标题" value="' + escapeHtml(clip.segTitle || '') + '"></label>'
+        + '<textarea data-seg-field="title" data-clip-index="' + index + '" rows="3" maxlength="60" placeholder="第 ' + (index + 1) + ' 段标题，可分多行">' + escapeHtml(clip.segTitle || '') + '</textarea></label>'
         + '<label class="mcm-overlay-field"><span><strong>介绍文案</strong><em>可空</em></span>'
         + '<textarea data-seg-field="desc" data-clip-index="' + index + '" rows="2" maxlength="200" placeholder="第 ' + (index + 1) + ' 段介绍文案">' + escapeHtml(clip.segDesc || '') + '</textarea></label>'
         + '</div>';

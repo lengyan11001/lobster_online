@@ -284,3 +284,14 @@
   color: #94a3b8;
   font-size: 12px;
 }
+
+/* 标题/文案输入：多行、加大（用户反馈输入框太小） */
+.mcm-template-title-panel .mcm-overlay-field textarea,
+.mcm-seg-text-row textarea {
+  min-height: 96px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.mcm-seg-text-row textarea[data-seg-field="title"] {
+  min-height: 78px;
+}
