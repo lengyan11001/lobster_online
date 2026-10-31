@@ -251,7 +251,7 @@
                     <div class="p-4 flex flex-col bg-white">
                         <div class="flex justify-between items-start mb-1">
                             <h3 class="text-[14px] text-gray-800 main-title line-clamp-1 group-hover:text-blue-600 transition-colors pr-2">${item.name}</h3>
-                            <button onclick="event.preventDefault(); event.stopPropagation(); armDelete(this, ${item.id}); return false;" class="text-gray-400 hover:text-red-500 transition-colors w-6 h-6 rounded-md hover:bg-gray-100 flex items-center justify-center shrink-0" title="删除项目">
+                            <button onclick="event.preventDefault(); event.stopPropagation(); armDelete(this, ${item.id}); return false;" class="text-gray-400 hover:text-red-500 transition-colors min-w-[34px] h-7 px-1.5 rounded-md hover:bg-red-50 flex items-center justify-center shrink-0" title="删除项目">
                                 <i class="fa-regular fa-trash-can text-[11px]"></i>
                             </button>
                         </div>
@@ -458,9 +458,18 @@
       return;
     }
     btn.setAttribute('data-armed', '1');
-    btn.setAttribute('title', '再点一次确认删除');
-    try { btn.classList.add('text-red-500'); } catch (e) {}
-    window.setTimeout(function () { try { btn.setAttribute('data-armed', ''); } catch (e) {} }, 3000);
+    try {
+      btn.setAttribute('data-orig-html', btn.innerHTML);
+      btn.innerHTML = '<span style="color:#ef4444;font-weight:600;font-size:11px;">确认?</span>';
+      btn.classList.add('bg-red-50');
+    } catch (e) {}
+    window.setTimeout(function () {
+      if (btn.getAttribute('data-armed') !== '1') return;
+      btn.setAttribute('data-armed', '');
+      var o = btn.getAttribute('data-orig-html');
+      if (o) btn.innerHTML = o;
+      try { btn.classList.remove('bg-red-50'); } catch (e) {}
+    }, 4000);
   };
   window.deleteItem = async function (event, itemId) {
     if (event) event.stopPropagation();
