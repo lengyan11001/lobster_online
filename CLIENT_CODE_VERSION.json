@@ -1,7 +1,7 @@
 {
-  "version": "2.0.211",
-  "build": 512,
-  "applied_at": "2026-10-30T21:36:45+08:00",
-  "note": "douyin cover cross-frame click + post-click forensics; publish-plan missed slots no longer backfilled (30min grace); shanjian AI watermark default off",
-  "bundle_sha256": "f8eede426b7b05385b30b45ecf09e8bffee85375b959e97d590fe40d4a996e08"
+  "version": "2.0.212",
+  "build": 513,
+  "applied_at": "2026-10-31T16:46:50+08:00",
+  "note": "canvas: template models->supported, task api unified v3, result preview from output, ref assets public url, delete button delegate, project list fixes; publish: publish-stats, device source; misc",
+  "bundle_sha256": "5611dd21d60b5c14f6387b00a35e6b2ab98dd6446bbeb58b1451f95484297b0b"
 }
