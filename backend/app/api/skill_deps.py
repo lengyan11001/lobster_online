@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+
+from ..core.config import settings
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -428,7 +430,7 @@ def koubo_quote(body: QuoteBody):
     total = 0
     for i, chunk in enumerate(chunks, 1):
         chars = len(re.sub(r"[\s，。、：；！？,.:;!?“”]", "", chunk))
-        secs = max(4, min(MAX_SEG_SECONDS, math.ceil(chars / CPS_ZH + 1.0)))
+        secs = max(6, min(MAX_SEG_SECONDS, math.ceil(chars / CPS_ZH + 1.0)))
         credits = secs * CREDITS_PER_SEC[res]
         total += credits
         segs.append({
@@ -567,7 +569,7 @@ def _build_segments(text: str, shot: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for i, chunk in enumerate(chunks, 1):
         chars = len(re.sub(r"[\s，。、：；！？,.:;!?“”]", "", chunk))
-        secs = max(4, min(MAX_SEG_SECONDS, math.ceil(chars / CPS_ZH + 1.0)))
+        secs = max(6, min(MAX_SEG_SECONDS, math.ceil(chars / CPS_ZH + 1.0)))
         out.append({
             "id": "s%d" % i,
             "text": chunk,
@@ -679,6 +681,14 @@ def koubo_project_tasks(pid: str):
 
 LOCAL_BASE = "http://127.0.0.1:8000"
 OUTPUT_DIR = DATA_DIR / "output"
+
+
+def _auth_gateway_url() -> str:
+    """所有上游能力必须经认证中心 mcp-gateway（预扣/结算/退款在服务器统一处理）。"""
+    base = (getattr(settings, "auth_server_base", None) or os.environ.get("AUTH_SERVER_BASE") or "").strip().rstrip("/")
+    if not base:
+        raise RuntimeError("未配置 AUTH_SERVER_BASE，无法经认证中心调用能力")
+    return base + "/mcp-gateway"
 _GEN: Dict[str, Dict[str, Any]] = {}
 _GEN_LOCK = threading.Lock()
 GEN_MODEL = "xai/grok-imagine-video-1.5/image-to-video"
@@ -751,12 +761,15 @@ def _parse_mcp_response(data: Any) -> Any:
     return data
 
 
-def _mcp_call(token: str, name: str, arguments: Dict[str, Any], timeout: float = 180.0) -> Any:
+def _mcp_call(token: str, name: str, arguments: Dict[str, Any], timeout: float = 180.0,
+              installation_id: str = "") -> Any:
     payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                "params": {"name": name, "arguments": arguments}}
+    headers = {"Authorization": token, "Content-Type": "application/json"}
+    if installation_id:
+        headers["X-Installation-Id"] = installation_id
     with httpx.Client(timeout=httpx.Timeout(timeout, connect=30.0), trust_env=False) as client:
-        r = client.post(LOCAL_BASE + "/mcp-gateway", json=payload,
-                        headers={"Authorization": token, "Content-Type": "application/json"})
+        r = client.post(_auth_gateway_url(), json=payload, headers=headers)
     try:
         data = r.json()
     except Exception:
@@ -768,28 +781,44 @@ def _mcp_call(token: str, name: str, arguments: Dict[str, Any], timeout: float =
     return _parse_mcp_response(data)
 
 
-def _ensure_asset(token: str, project: Dict[str, Any]) -> str:
+def _ensure_asset(token: str, project: Dict[str, Any]) -> tuple[str, str]:
+    """把本地形象照送进素材库，并拿到可公网访问的图片 URL（上游只认 URL）。"""
     asset_id = project.get("photo_asset_id") or ""
-    if asset_id:
-        return asset_id
+    image_url = project.get("photo_public_url") or ""
+    if asset_id and image_url:
+        return asset_id, image_url
     photo_id = project.get("photo_id") or ""
     src = UPLOAD_DIR / photo_id if photo_id else None
     if not src or not src.is_file():
         raise RuntimeError("请先在第一步上传人物照片")
     with open(src, "rb") as fh:
         files = {"file": (src.name, fh, "image/jpeg" if src.suffix.lower() in (".jpg", ".jpeg") else "image/png")}
-        with httpx.Client(timeout=120.0, trust_env=False) as client:
-            r = client.post(LOCAL_BASE + "/api/assets/upload", files=files,
-                            headers={"Authorization": token})
+        with httpx.Client(timeout=180.0, trust_env=False) as client:
+            r = client.post(
+                LOCAL_BASE + "/api/assets/upload",
+                files=files,
+                headers={
+                    "Authorization": token,
+                    # 触发同步镜像到认证中心，拿持久公网 URL（与用户头像上传同一路径）
+                    "X-Asset-Purpose": "profile_photo",
+                },
+            )
     if r.status_code >= 400:
         raise RuntimeError("素材入库失败 HTTP %s: %s" % (r.status_code, r.text[:400]))
     data = r.json() or {}
-    aid = (data.get("asset_id") or (data.get("asset") or {}).get("asset_id")
-           or (data.get("asset") or {}).get("id") or data.get("id") or "")
+    aid = str(data.get("asset_id") or (data.get("asset") or {}).get("asset_id")
+              or (data.get("asset") or {}).get("id") or data.get("id") or "")
     if not aid:
         raise RuntimeError("素材入库未返回 asset_id: %s" % str(data)[:400])
-    project["photo_asset_id"] = str(aid)
-    return str(aid)
+    url = str(data.get("source_url") or "").strip()
+    if not url:
+        raise RuntimeError(
+            "素材已入库（%s），但公网地址尚未就绪（public_url_status=%s）。请重试一次。"
+            % (aid, data.get("public_url_status") or "unknown")
+        )
+    project["photo_asset_id"] = aid
+    project["photo_public_url"] = url
+    return aid, url
 
 
 def _prompt_for(project: Dict[str, Any], seg: Dict[str, Any]) -> str:
@@ -815,14 +844,14 @@ def _prompt_for(project: Dict[str, Any], seg: Dict[str, Any]) -> str:
     return "The person in the reference image talks to the camera, clearly lip-synced, in a %s voice:\n\"%s\"\nSound: only the voice, no music, no subtitles, no on-screen text." % (voice, line)
 
 
-def _gen_job(job_id: str, project_id: str, token: str, only_first: bool) -> None:
+def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, installation_id: str = "") -> None:
     job = _GEN[job_id]
     try:
         items = _load_projects()
         project = next((r for r in items if r.get("id") == project_id), None)
         if not project:
             raise RuntimeError("项目不存在")
-        asset_id = _ensure_asset(token, project)
+        asset_id, image_url = _ensure_asset(token, project)
         segs = project.get("segments") or []
         if only_first:
             segs = segs[:1]
@@ -836,13 +865,15 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool) -> None
             payload = {
                 "model": GEN_MODEL,
                 "prompt": _prompt_for(project, seg),
+                "image_url": image_url,
                 "asset_id": asset_id,
-                "duration": int(seg.get("seconds") or 8),
+                "duration": max(6, min(MAX_SEG_SECONDS, int(seg.get("seconds") or 8))),
                 "ratio": "16:9" if project.get("host") == "me" else "9:16",
                 "resolution": seg.get("resolution") or "720p",
             }
             resp = _mcp_call(token, "invoke_capability",
-                             {"capability_id": "video.generate", "payload": payload}, timeout=300.0)
+                             {"capability_id": "video.generate", "payload": payload}, timeout=300.0,
+                             installation_id=installation_id)
             task_id = _deep_find(resp, ("task_id", "taskId", "request_id", "id"))
             urls = _deep_urls(resp, (".mp4", ".webm"))
             if not urls and task_id:
@@ -852,7 +883,7 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool) -> None
                     time.sleep(10)
                     poll = _mcp_call(token, "invoke_capability",
                                      {"capability_id": "task.get_result", "payload": {"task_id": task_id}},
-                                     timeout=180.0)
+                                     timeout=180.0, installation_id=installation_id)
                     urls = _deep_urls(poll, (".mp4", ".webm"))
                     if urls:
                         break
@@ -890,6 +921,7 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool) -> None
         for row in items:
             if row.get("id") == project_id:
                 row["photo_asset_id"] = asset_id
+                row["photo_public_url"] = image_url
                 row["status"] = "generated"
                 row["output"] = "/api/skills/digital-human-koubo/projects/%s/video" % project_id
                 row["generated_segments"] = generated
@@ -922,6 +954,7 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool) -> None
 @router.post("/api/skills/digital-human-koubo/projects/{pid}/generate", summary="提交真实生成")
 def koubo_generate(pid: str, body: GenerateBody, request: Request):
     headers = _auth_header(request)
+    installation_id = (request.headers.get("X-Installation-Id") or "").strip()
     project = koubo_project(pid)
     if not project.get("segments"):
         raise HTTPException(status_code=400, detail="项目没有分段")
@@ -937,7 +970,9 @@ def koubo_generate(pid: str, body: GenerateBody, request: Request):
            "current": 0, "total": 1, "error": "", "started_at": time.time()}
     with _GEN_LOCK:
         _GEN[job_id] = job
-    threading.Thread(target=_gen_job, args=(job_id, pid, headers["Authorization"], not body.all), daemon=True).start()
+    threading.Thread(target=_gen_job,
+                     args=(job_id, pid, headers["Authorization"], not body.all, installation_id),
+                     daemon=True).start()
     return {"ok": True, "job_id": job_id, "mode": "first" if not body.all else "all"}
 
 
