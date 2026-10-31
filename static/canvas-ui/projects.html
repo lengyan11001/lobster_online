@@ -251,7 +251,7 @@
                     <div class="p-4 flex flex-col bg-white">
                         <div class="flex justify-between items-start mb-1" onclick="event.stopPropagation()">
                             <h3 class="text-[14px] text-gray-800 main-title line-clamp-1 group-hover:text-blue-600 transition-colors pr-2">${item.name}</h3>
-                            <button onclick="event.preventDefault(); event.stopPropagation(); armDelete(this, ${item.id}); return false;" class="text-gray-400 hover:text-red-500 transition-colors min-w-[34px] h-7 px-1.5 rounded-md hover:bg-red-50 flex items-center justify-center shrink-0" title="删除项目">
+                            <button data-del-btn="${item.id}" onclick="event.preventDefault(); event.stopPropagation(); armDelete(this, ${item.id}); return false;" class="text-gray-400 hover:text-red-500 transition-colors min-w-[34px] h-7 px-1.5 rounded-md hover:bg-red-50 flex items-center justify-center shrink-0" title="删除项目">
                                 <i class="fa-regular fa-trash-can text-[11px]"></i>
                             </button>
                         </div>
@@ -449,6 +449,17 @@
       window.openCanvasItem(id);
     } catch (e) { alert('新建失败：' + e.message); }
   };
+  // 兜底：捕获阶段直接监听删除按钮，避免卡片 onclick / 覆盖层吃掉点击
+  document.addEventListener('click', function (ev) {
+    var el = ev.target && ev.target.closest ? ev.target.closest('[data-del-btn]') : null;
+    if (!el) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    var id = el.getAttribute('data-del-btn');
+    try { new Image().src = '/api/health?delclick=' + encodeURIComponent(id) + '&via=delegate&t=' + Date.now(); } catch (e) {}
+    window.deleteItem(null, id);
+  }, true);
+
   window.armDelete = function (btn, itemId) {
     // 先打一个探测点：确认点击到底有没有进到这段代码（查 app.log 里的 delclick=）
     try { new Image().src = '/api/health?delclick=' + encodeURIComponent(itemId) + '&t=' + Date.now(); } catch (e) {}
