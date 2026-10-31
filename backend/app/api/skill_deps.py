@@ -43,6 +43,9 @@ WHISPER_DIR = DEPS / "whisper"
 WHISPER_MODELS = WHISPER_DIR / "models"
 WHISPER_MODEL_PATH = WHISPER_MODELS / "ggml-medium-q5_0.bin"
 FONTS_DIR = DEPS / "fonts"
+CUTOUT_DIR = DEPS / "cutout"
+CUTOUT_MODEL = CUTOUT_DIR / "selfie_segmenter.tflite"
+CUTOUT_MODEL_URL = "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/client-code/deps/cutout/selfie_segmenter.tflite"
 FONT_FILES = [
     ("NotoSansSC-400.woff2", "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/client-code/deps/fonts/NotoSansSC-400.woff2"),
     ("NotoSansSC-700.woff2", "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/client-code/deps/fonts/NotoSansSC-700.woff2"),
@@ -134,6 +137,34 @@ def _probe_whisper() -> Dict[str, Any]:
     return {"status": "missing", "detail": "whisper-cli 未安装"}
 
 
+def _probe_cutout() -> Dict[str, Any]:
+    if not CUTOUT_MODEL.is_file():
+        return {"status": "missing", "detail": "抠像模型未下载"}
+    try:
+        import mediapipe  # noqa: F401
+    except Exception:
+        return {"status": "missing", "detail": "mediapipe 未安装"}
+    return {"status": "ok", "detail": "mediapipe + selfie_segmenter", "version": ""}
+
+
+def _install_cutout(job: Dict[str, Any]) -> None:
+    job["message"] = "安装 mediapipe（约 100MB）"
+    job["progress"] = 5
+    if UV_EXE.is_file():
+        cmd = [str(UV_EXE), "pip", "install", "--python", str(PY_EXE), "mediapipe"]
+    else:
+        cmd = [str(PY_EXE), "-m", "pip", "install", "--disable-pip-version-check", "mediapipe"]
+    r = _run(cmd, timeout=1800)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout or "pip install mediapipe 失败")[-1200:])
+    job["progress"] = 60
+    job["message"] = "下载抠像模型"
+    CUTOUT_DIR.mkdir(parents=True, exist_ok=True)
+    _download(CUTOUT_MODEL_URL, CUTOUT_MODEL, job, "抠像模型")
+    job["progress"] = 95
+    job["message"] = "抠像包已安装"
+
+
 def _probe_fonts() -> Dict[str, Any]:
     have = [n for n, _ in FONT_FILES if (FONTS_DIR / n).is_file()]
     if len(have) == len(FONT_FILES):
@@ -170,6 +201,7 @@ def _component_list() -> List[Dict[str, Any]]:
         ("whisper", "whisper-cli", "逐段回听、逐字时间轴", True, _probe_whisper, "约 30 MB"),
         ("whisper_model", "whisper 模型", "ggml-medium-q5_0", True, _probe_model, "约 520 MB"),
         ("fonts", "中文字体（Noto Sans SC）", "字幕/花字统一字体，不进 OTA", True, _probe_fonts, "约 3 MB"),
+        ("cutout", "抠像包（TextBehind）", "mediapipe 人像分割 + 模型", True, _probe_cutout, "约 100 MB"),
     ]
     out: List[Dict[str, Any]] = []
     with _JOBS_LOCK:
@@ -358,6 +390,7 @@ _INSTALLERS = {
     "whisper": _install_whisper,
     "whisper_model": _install_model,
     "fonts": _install_fonts,
+    "cutout": _install_cutout,
 }
 
 
@@ -521,7 +554,7 @@ _PACKAGING_OPTIONS = [
     {"id": "SlamText", "name": "大字砸屏", "group": "开场"},
     {"id": "WordStack", "name": "单词堆叠", "group": "开场"},
     {"id": "TornStrip", "name": "撕裂纸条", "group": "开场"},
-    {"id": "TextBehind", "name": "文字在人身后", "group": "开场"},
+    {"id": "TextBehind", "name": "文字在人身后（需抠像包）", "group": "开场"},
     {"id": "EvidenceCard", "name": "证据卡片", "group": "证据"},
     {"id": "DocFocus", "name": "文档特写", "group": "证据"},
     {"id": "SourceDoc", "name": "来源文件", "group": "证据"},

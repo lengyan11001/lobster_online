@@ -30,6 +30,7 @@ FFPROBE = ROOT / "deps" / "ffmpeg" / "ffprobe.exe"
 WHISPER = ROOT / "deps" / "whisper" / "whisper-cli.exe"
 WHISPER_MODEL = ROOT / "deps" / "whisper" / "models" / "ggml-medium-q5_0.bin"
 FONTS_DIR = ROOT / "deps" / "fonts"
+CUTOUT_MODEL = ROOT / "deps" / "cutout" / "selfie_segmenter.tflite"
 DATA_DIR = ROOT / "data" / "koubo"
 OUTPUT_DIR = DATA_DIR / "output"
 
@@ -59,6 +60,9 @@ html,body{margin:0;padding:0;width:__W__px;height:__H__px;background:#000;overfl
 #lt{position:absolute;left:5%;bottom:22%;padding:1.4% 2.4%;border-radius:12px;background:rgba(15,23,42,.72);
   color:#fff;font-size:__LT__px;font-weight:600;opacity:0;backdrop-filter:blur(4px);}
 #lt small{display:block;font-size:__LTS__px;font-weight:400;color:#cbd5e1;margin-top:2px;}
+#behind{position:absolute;left:0;right:0;top:20%;text-align:center;font-size:__BEHIND__px;font-weight:900;color:#fff;
+  -webkit-text-stroke:6px #000;paint-order:stroke fill;opacity:0;}
+#cut{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:contain;transform-origin:50% 50%;opacity:0;}
 #cta{position:absolute;left:12%;right:12%;bottom:24%;text-align:center;font-weight:800;color:#fff;
   font-size:__CTA__px;padding:2.2% 0;border-radius:14px;background:linear-gradient(135deg,#f97316,#ea580c);
   box-shadow:0 10px 30px rgba(234,88,12,.45);opacity:0;}
@@ -132,6 +136,8 @@ html,body{margin:0;padding:0;width:__W__px;height:__H__px;background:#000;overfl
 
 </style></head><body>
 <div id="stage"><img id="bg" alt=""></div>
+<div id="behind"></div>
+<img id="cut" alt="">
 <div id="cap"></div><div id="kw"></div>
 <div id="lt"><span id="ltName"></span><small id="ltSub"></small></div>
 <div id="cta">点个关注，下期见</div>
@@ -187,7 +193,7 @@ var FX = {
   GhostWord: function (s, t, p) { return p < 2.6 ? '<div class="fx fx-ghost">' + (s.chapter ? s.chapter.title.slice(0, 4) : '') + '</div>' : ''; }
 };
 
-window.renderAt = function (t, frameSrc) {
+window.renderAt = function (t, frameSrc, cutSrc) {
   var TL = window.TL, bg = document.getElementById('bg');
   if (bg.getAttribute('src') !== frameSrc) bg.setAttribute('src', frameSrc);
   var seg = null;
@@ -225,6 +231,18 @@ window.renderAt = function (t, frameSrc) {
     cta.style.opacity = String(q);
     cta.style.transform = 'translateY(' + (1 - q) * 14 + 'px)';
   } else { cta.style.opacity = '0'; }
+  var cut = document.getElementById('cut');
+  if (TL.textBehind && seg && cutSrc) {
+    var behind = document.getElementById('behind');
+    behind.textContent = (seg.chapter ? seg.chapter.title : '');
+    behind.style.opacity = (t - seg.start < 2.6) ? '1' : '0';
+    if (cut.getAttribute('src') !== cutSrc) cut.setAttribute('src', cutSrc);
+    cut.style.opacity = '1';
+    cut.style.transform = 'scale(' + (zoom || 1) + ')';
+  } else if (cut) {
+    cut.style.opacity = '0';
+    var bh = document.getElementById('behind'); if (bh) bh.style.opacity = '0';
+  }
   var prog = document.querySelector('#prog i');
   if (prog) prog.style.width = Math.min(100, (t / Math.max(0.01, TL.duration)) * 100) + '%';
   var ch = document.getElementById('chapter');
@@ -269,7 +287,8 @@ window.renderAt = function (t, frameSrc) {
 
 
 def _run(cmd: List[str], timeout: int = 900) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=timeout)
 
 
 def probe(path: Path) -> Dict[str, Any]:
@@ -449,9 +468,13 @@ class _QuietHandler(SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    cut_dir: Optional[Path] = None
+
     def translate_path(self, path):
         if path.startswith("/fonts/") and self.font_dir is not None:
             return str(self.font_dir / Path(path).name)
+        if path.startswith("/cut/") and self.cut_dir is not None:
+            return str(self.cut_dir / Path(path).name)
         return super().translate_path(path)
 
 
@@ -500,7 +523,39 @@ def render(
         if r.returncode != 0:
             raise RuntimeError("抽帧失败：" + (r.stderr or "")[-400:])
 
+        cut_dir = None
+        if "TextBehind" in comps and CUTOUT_MODEL.is_file():
+            try:
+                import mediapipe as mp
+                from mediapipe.tasks import python as mpp
+                from mediapipe.tasks.python import vision
+                import numpy as np
+                from PIL import Image
+
+                job_msg = "抠像（TextBehind）"
+                cut_dir = tmp / "cut"
+                cut_dir.mkdir()
+                base_opt = mpp.BaseOptions(model_asset_path=str(CUTOUT_MODEL))
+                mp_opts = vision.ImageSegmenterOptions(base_options=base_opt,
+                                                       output_confidence_masks=True,
+                                                       running_mode=vision.RunningMode.IMAGE)
+                seg = vision.ImageSegmenter.create_from_options(mp_opts)
+                src_frames = sorted(frames.glob("f*.jpg"))
+                for ci, f in enumerate(src_frames):
+                    im = Image.open(f).convert("RGB")
+                    res = seg.segment(mp.Image.create_from_file(str(f)))
+                    mask = res.confidence_masks[0].numpy_view()
+                    mask = np.clip(mask.reshape(im.height, im.width), 0, 1)
+                    rgba = np.dstack([np.array(im), (mask * 255).astype(np.uint8)])
+                    Image.fromarray(rgba).save(cut_dir / (f.stem + ".png"))
+                    if progress and (ci % 20 == 0 or ci == len(src_frames) - 1):
+                        progress(ci + 1, len(src_frames), "抠像 %d/%d" % (ci + 1, len(src_frames)))
+                seg.close()
+            except Exception:
+                cut_dir = None
+
         timeline = build_timeline(project, duration, tmp, src, lang)
+        timeline["textBehind"] = bool(cut_dir) and ("TextBehind" in comps)
         if "keyword" not in comps:
             timeline["keywords"] = []
         if "cta" not in comps:
@@ -515,6 +570,8 @@ def render(
         base_ids = {"caption", "cta", "lowerthird", "punch", "chapter", "stack", "counter", "keyword"}
         timeline["comps"] = [c for c in comps if c not in base_ids]
         timeline["keyColor"] = p["keyColor"]
+        cut_ok = ("TextBehind" in comps) and CUTOUT_MODEL.is_file()
+        timeline["textBehind"] = bool(cut_ok)
         host = (opts.get("host") or project.get("host") or "tank")
         names = {"tank": "白背心数字人", "me": "用户本人", "cat": "橘猫店长", "dog": "柴犬主播"}
         if "lowerthird" in comps:
@@ -527,6 +584,7 @@ def render(
                 seg["punch"] = 1.0 if i % 2 == 0 else (1.0 + strength)
 
         _QuietHandler.font_dir = FONTS_DIR
+        _QuietHandler.cut_dir = cut_dir
         handler = functools.partial(_QuietHandler, directory=str(frames))
         srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         port = srv.server_address[1]
@@ -557,6 +615,7 @@ def render(
                 .replace("__FXEMOJI__", str(round(H * 0.16)))
                 .replace("__FXCOUNT__", str(round(H * 0.22)))
                 .replace("__FXGHOST__", str(round(H * 0.18)))
+                .replace("__BEHIND__", str(round(H * 0.14)))
                 .replace("__KEY__", p["keyColor"])
                 .replace("__TL__", json.dumps(timeline, ensure_ascii=False)))
         html = html.replace(
@@ -574,10 +633,11 @@ def render(
             for i in range(total_frames):
                 t = i / FPS
                 frame_url = "http://127.0.0.1:%d/f%05d.jpg" % (port, i + 1)
-                page.evaluate("([t, src]) => new Promise((resolve) => { window.renderAt(t, src); "
+                cut_url = ("http://127.0.0.1:%d/cut/f%05d.png" % (port, i + 1)) if cut_dir else ""
+                page.evaluate("([t, src, cut]) => new Promise((resolve) => { window.renderAt(t, src, cut); "
                               "const img = document.getElementById('bg'); "
                               "if (img.complete) resolve(true); else { img.onload = () => resolve(true); img.onerror = () => resolve(true); } })",
-                              [t, frame_url])
+                              [t, frame_url, cut_url])
                 page.screenshot(path=str(tmp / ("o%05d.jpg" % i)), type="jpeg", quality=92)
                 if progress and (i % 10 == 0 or i == total_frames - 1):
                     progress(i + 1, total_frames, "渲染帧 %d/%d" % (i + 1, total_frames))
