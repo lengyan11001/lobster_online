@@ -3004,29 +3004,52 @@ def _run_job(
 
             current_stage = "stt"
             _update_job(db, job_id, stage="stt", response_updates={"audio_asset_id": audio_asset_id, "audio_url": audio_url})
-            stt_result = _call_server(
-                "/api/cutcli/stt/transcribe",
-                {
-                    "audio_url": audio_url,
-                    "caption_style": style,
-                    "video_duration_sec": video_duration_sec,
-                    "video_width": video_width,
-                    "return_captions": True,
-                },
-                auth_headers,
-                timeout=1200.0,
-            )
-            stt_data = stt_result.get("stt_data") if isinstance(stt_result.get("stt_data"), dict) else stt_result
-            captions = stt_result.get("captions") if isinstance(stt_result.get("captions"), list) else []
-            if not captions:
-                captions = _captions_from_stt(
-                    stt_data,
-                    video_duration_sec=video_duration_sec,
-                    style=style,
-                    video_width=video_width,
+            stt_skip_reason = ""
+            try:
+                stt_result = _call_server(
+                    "/api/cutcli/stt/transcribe",
+                    {
+                        "audio_url": audio_url,
+                        "caption_style": style,
+                        "video_duration_sec": video_duration_sec,
+                        "video_width": video_width,
+                        "return_captions": True,
+                    },
+                    auth_headers,
+                    timeout=1200.0,
                 )
-        if not captions:
-            raise RuntimeError("STT returned no usable captions")
+                stt_data = stt_result.get("stt_data") if isinstance(stt_result.get("stt_data"), dict) else stt_result
+                captions = stt_result.get("captions") if isinstance(stt_result.get("captions"), list) else []
+                if not captions:
+                    captions = _captions_from_stt(
+                        stt_data,
+                        video_duration_sec=video_duration_sec,
+                        style=style,
+                        video_width=video_width,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                err_text = str(exc)
+                low = err_text.lower()
+                # 素材没有人声（纯 BGM/环境音）时 ASR 会报 no valid speech：
+                # 不该整条任务失败，按「无字幕」继续套模板出片。
+                if "no valid speech" in low or "silence" in low:
+                    captions = []
+                    stt_skip_reason = "no_speech"
+                    logger.warning(
+                        "[cutcli-local] 未检测到人声，按无字幕出片 job_id=%s err=%s",
+                        job_id, _safe_error(exc, limit=300),
+                    )
+                    _update_job(
+                        db, job_id, stage="stt",
+                        response_updates={"captions_skipped": True, "caption_skip_reason": "no_speech"},
+                    )
+                else:
+                    raise
+        if not captions and not stt_skip_reason:
+            logger.warning(
+                "[cutcli-local] STT 未返回可用字幕，按无字幕出片 job_id=%s", job_id,
+            )
+            stt_skip_reason = "no_captions"
         (job_dir / "captions.json").write_text(json.dumps(captions, ensure_ascii=False, indent=2), encoding="utf-8")
         current_stage = "render"
         _update_job(
@@ -3037,6 +3060,8 @@ def _run_job(
                 "caption_count": len(captions),
                 "stt_model": _STT_MODEL,
                 "segment_stt_report": segment_stt_report,
+                "captions_skipped": bool(stt_skip_reason),
+                "caption_skip_reason": stt_skip_reason,
             },
         )
 

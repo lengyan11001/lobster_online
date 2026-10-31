@@ -1830,7 +1830,9 @@
       duration: baseDuration,
       completion_message: '模板成片已完成，基础成片和模板成片均已保存在素材库。'
     };
-    progress('template', 'done', task.caption_count ? ('模板处理完成，生成 ' + task.caption_count + ' 条字幕') : '模板定制处理完成');
+    var _cap = Number(task.caption_count || 0);
+    progress('template', 'done', _cap ? ('模板处理完成，生成 ' + _cap + ' 条字幕')
+      : '未检测到人声，已按无字幕出片');
     clearPendingTemplateTask();
     return setResultVideo(saved).then(function() { return saved; });
   }
