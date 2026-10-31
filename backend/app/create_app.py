@@ -19,6 +19,7 @@ from .api.chat import router as chat_router
 from .api.workbench_chat import router as workbench_chat_router
 from .api.capabilities import router as capabilities_router
 from .api.skills import router as skills_router
+from .api.skill_deps import router as skill_deps_router
 from .api.settings_api import router as settings_router
 from .api.mcp_gateway import router as mcp_gateway_router
 from .api.openclaw_memory import router as openclaw_memory_router
@@ -1076,6 +1077,7 @@ def create_app() -> FastAPI:
     app.include_router(auth_router, prefix="/auth")
     app.include_router(capabilities_router, prefix="")
     app.include_router(skills_router, prefix="")
+    app.include_router(skill_deps_router, prefix="")
     app.include_router(settings_router, prefix="")
     app.include_router(chat_router, prefix="")
     app.include_router(workbench_chat_router, prefix="")

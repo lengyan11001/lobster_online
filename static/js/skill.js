@@ -2053,6 +2053,22 @@ function _renderShanjianSmartClipCard() {
   '</div>';
 }
 
+function _renderDigitalHumanKouboCard(pkg) {
+  pkg = pkg || {};
+  var debugBadge = pkg.store_visibility === 'debug'
+    ? '<span class="badge-coming" style="background:rgba(139,92,246,0.12);color:#a78bfa;border-color:rgba(139,92,246,0.25);margin-right:0.35rem;">调试</span> '
+    : '';
+  var tags = _skillStoreTagHtml(pkg.tags || ['数字人', '口播', 'Remotion']);
+  return '<div class="skill-store-card koubo-card" data-skill-package-id="digital_human_koubo_skill" style="cursor:pointer;border-color:rgba(249,115,22,0.35);background:linear-gradient(135deg,rgba(249,115,22,0.09),rgba(139,92,246,0.06));">' +
+    '<div class="card-label">' + debugBadge + '视频 &middot; 本地工作台 <span class="badge-installed">第一阶段</span></div>' +
+    '<div class="card-value">数字人 koubo</div>' +
+    '<div class="card-desc">一张照片 + 一句台词 → 带口播、花字、包装的成片。本阶段先做运行环境自检与分段报价。</div>' +
+    '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(249,115,22,0.06);border:1px solid rgba(249,115,22,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">依赖（ffmpeg / Node / Python / whisper）在二级界面里检测，缺什么就点什么安装。</div>' +
+    '<div class="card-tags">' + tags + '</div>' +
+    '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm koubo-entry-btn">进入工作台</button></div>' +
+  '</div>';
+}
+
 function _renderCutcliTemplateCard() {
   return '<div class="skill-store-card cutcli-template-card" style="cursor:pointer;border-color:rgba(15,23,42,0.32);background:linear-gradient(135deg,rgba(15,23,42,0.08),rgba(224,176,92,0.08));">' +
     '<div class="card-label">视频包装 &middot; 平台 <span class="badge-installed">模板</span></div>' +
@@ -3402,6 +3418,7 @@ function loadSkillStore() {
       var bihuo25Pkg = pkgById('bihuo_25_video_skill');
       var viralPkg = pkgById('viral_video_remix_skill');
       var shanjianPkg = pkgById('shanjian_smart_clip');
+      var kouboPkg = pkgById('digital_human_koubo_skill');
       var multiClipPkg = pkgById('multi_clip_mixer_skill');
       var personalWhatsappPkg = pkgById('personal_whatsapp_assistant');
       // 技能商店入口一律由服务端下发的技能包决定（pkgById 筛的就是服务端 packages），本地不写死
@@ -3443,6 +3460,7 @@ function loadSkillStore() {
         if (viralPkg) html += _renderViralVideoRemixCard();
         if (cutcliPkg) html += _renderCutcliTemplateCard();
         if (shanjianPkg) html += _renderShanjianSmartClipCard();
+        if (kouboPkg) html += _renderDigitalHumanKouboCard(kouboPkg);
         if (multiClipPkg) html += _renderMultiClipMixerCard();
         if (personalWhatsappPkg) html += _renderPersonalWhatsappCard(personalWhatsappPkg);
         if (personalTelegramPkg) html += _renderPersonalTelegramCard(personalTelegramPkg);
@@ -3523,6 +3541,7 @@ function loadSkillStore() {
           if (pkg.id === 'browser_use_skill') return '';
           if (pkg.id === 'computer_use_skill') return '';
           if (pkg.id === 'meta_social') return '';
+          if (pkg.id === 'digital_human_koubo_skill') return '';
           if (pkg.id === 'hifly_digital_human_skill') return _renderHiflyDigitalHumanCard(pkg);
           if (pkg.id === 'youtube_publish') {
             return _renderYoutubePublishCard({
@@ -3623,6 +3642,7 @@ function loadSkillStore() {
         _bindCutcliTemplateCardEntry();
         _bindHiflyDigitalHumanCardEntry();
         _bindShanjianSmartClipCardEntry();
+        _bindDigitalHumanKouboCardEntry();
         _bindMultiClipMixerCardEntry();
         _bindGoalVideoPipelineCardEntry();
         _bindIpContentStudioCardEntry();
@@ -4014,6 +4034,25 @@ function _bindShanjianSmartClipCardEntry() {
     btn.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof window._openShanjianSmartClipView === 'function') window._openShanjianSmartClipView();
+    });
+  });
+}
+
+function _bindDigitalHumanKouboCardEntry() {
+  document.querySelectorAll('.koubo-card').forEach(function(card) {
+    if (card.dataset.kouboBound === '1') return;
+    card.dataset.kouboBound = '1';
+    card.addEventListener('click', function(e) {
+      if (e.target.closest('.card-actions')) return;
+      if (typeof window._openDigitalHumanKouboView === 'function') window._openDigitalHumanKouboView();
+    });
+  });
+  document.querySelectorAll('.koubo-entry-btn').forEach(function(btn) {
+    if (btn.dataset.kouboBound === '1') return;
+    btn.dataset.kouboBound = '1';
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if (typeof window._openDigitalHumanKouboView === 'function') window._openDigitalHumanKouboView();
     });
   });
 }

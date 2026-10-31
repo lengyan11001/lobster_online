@@ -1743,6 +1743,7 @@ var LOBSTER_HIDDEN_VIEWS = {
   'shanjian-digital-human': true,
   'douyin-workbench': true,
   'shanjian-smart-clip': true,
+  'digital-human-koubo': true,
   'multi-clip-mixer': true,
   'batch-creative-video': true,
   'hypit-video-studio': true,
