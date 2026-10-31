@@ -2061,7 +2061,7 @@ function _renderDigitalHumanKouboCard(pkg) {
   var tags = _skillStoreTagHtml(pkg.tags || ['数字人', '口播', 'Remotion']);
   return '<div class="skill-store-card koubo-card" data-skill-package-id="digital_human_koubo_skill" style="cursor:pointer;border-color:rgba(249,115,22,0.35);background:linear-gradient(135deg,rgba(249,115,22,0.09),rgba(139,92,246,0.06));">' +
     '<div class="card-label">' + debugBadge + '视频 &middot; 本地工作台 <span class="badge-installed">第一阶段</span></div>' +
-    '<div class="card-value">数字人 koubo</div>' +
+    '<div class="card-value">数字人 3.0</div>' +
     '<div class="card-desc">一张照片 + 一句台词 → 带口播、花字、包装的成片。本阶段先做运行环境自检与分段报价。</div>' +
     '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(249,115,22,0.06);border:1px solid rgba(249,115,22,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">依赖（ffmpeg / Node / Python / whisper）在二级界面里检测，缺什么就点什么安装。</div>' +
     '<div class="card-tags">' + tags + '</div>' +
