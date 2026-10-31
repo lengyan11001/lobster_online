@@ -163,6 +163,21 @@ def _load_optional_router(module_name: str, label: str, *, timeout_sec: float = 
 
 class NoStoreStaticFiles(StaticFiles):
     def file_response(self, full_path, stat_result, scope, status_code=200):
+        # 记录前端静态文件的真实版本：以后任何诊断包都能一眼看出这台机器
+        # 实际加载的是哪份 skill.js / index.html（mtime + size + ?v=）。
+        try:
+            name = str(full_path).replace("\\", "/").rsplit("/", 1)[-1]
+            if name.endswith((".js", ".html")):
+                qs = (scope.get("query_string") or b"").decode("latin-1", "replace")
+                logger.info(
+                    "[static-serve] %s mtime=%s size=%s qs=%s",
+                    name,
+                    int(getattr(stat_result, "st_mtime", 0) or 0),
+                    int(getattr(stat_result, "st_size", 0) or 0),
+                    qs[:120],
+                )
+        except Exception:
+            pass
         return _add_no_store_headers(
             FileResponse(full_path, status_code=status_code, stat_result=stat_result)
         )
