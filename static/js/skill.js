@@ -3606,6 +3606,8 @@ function loadSkillStore() {
             '<div class="card-tags">' + waTags + '</div>' +
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wechat-article-entry-btn">\u8fdb\u5165\u5de5\u4f5c\u53f0</button></div></div>';
         }
+        // 数字人3.0（koubo）：无论出现在技能商店还是已安装列表，都用带「进入工作台」的专用卡
+        if (pkg.id === 'digital_human_koubo_skill') return _renderDigitalHumanKouboCard(pkg);
         var statusBadge = '';
         var actionBtn = '';
         if (pkg.status === 'installed') {
