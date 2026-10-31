@@ -167,6 +167,45 @@ async def canvas_cloud_proxy(path: str, request: Request) -> Response:
             headers[name] = value
 
     body = await request.body()
+    # 画布前端把 token 放在 JSON body 里（且是占位值 "lobster-canvas"），
+    # 只替换 Authorization 头不够：上游按 body.token 鉴权会直接 401（用户看到「登录已过期」+扫码弹窗）。
+    # 这里把 body.token 换成真 token；其它字段原样透传。
+    if body and b'"token"' in body:
+        try:
+            import json as _json
+            _data = _json.loads(body.decode("utf-8"))
+            if isinstance(_data, dict) and "token" in _data:
+                _data["token"] = token
+                body = _json.dumps(_data, ensure_ascii=False).encode("utf-8")
+                headers["content-type"] = "application/json"
+                logger.info("[canvas] 注入 body.token -> %s %s", request.method, normalized)
+        except Exception:
+            logger.debug("[canvas] body.token 注入跳过 %s", normalized, exc_info=True)
+
+    # 画布编辑器里的「生成」还用旧版 fal 接口（服务器已不认它的 token），
+    # 统一翻译成我们服务器的 v3 接口：模型=app_name、参数=input_params。
+    # 这样画布所有生成都走我们服务器，不再直连任何上游。
+    if normalized in ("api/fal/tasks/create", "api/fal/tasks/info"):
+        try:
+            import json as _json2
+            _raw = _json2.loads(body.decode("utf-8")) if body else {}
+        except Exception:
+            _raw = {}
+        if isinstance(_raw, dict):
+            if normalized == "api/fal/tasks/create":
+                _payload = {
+                    "model": str(_raw.get("app_name") or _raw.get("model") or "").strip(),
+                    "params": _raw.get("input_params") if isinstance(_raw.get("input_params"), dict) else {},
+                }
+                _target = "api/v3/tasks/create"
+            else:
+                _payload = {"task_id": str(_raw.get("task_id") or "").strip()}
+                _target = "api/v3/tasks/query"
+            body = _json2.dumps(_payload, ensure_ascii=False).encode("utf-8")
+            headers["content-type"] = "application/json"
+            logger.info("[canvas] 旧 fal 接口转 v3：%s -> %s model=%s", normalized, _target, _payload.get("model", ""))
+            normalized = _target
+
     timeout = _UPLOAD_TIMEOUT if any(hint in normalized.lower() for hint in _UPLOAD_HINTS) else _DEFAULT_TIMEOUT
     url = f"{cloud_base()}/canvas-api/{normalized}"
     # 2026-10-05：画布轮询断一次就被前端判失败（用户看到「暂时无法读取任务状态」），
@@ -203,6 +242,31 @@ async def canvas_cloud_proxy(path: str, request: Request) -> Response:
         if isinstance(last_error, httpx.TimeoutException):
             raise HTTPException(status_code=504, detail=f"服务器画布接口超时：{last_error}") from last_error
         raise HTTPException(status_code=502, detail=f"连不上服务器画布接口：{last_error}") from last_error
+
+    # 上游 401（token 过期）会让画布清会话并弹自己的微信扫码登录页。
+    # 这里静默续签一次再重发，用户无感；仍失败才把 401 透给画布。
+    if upstream.status_code == 401:
+        try:
+            from ..services.cloud_session_renew import renew_cloud_token
+
+            renewed = await renew_cloud_token(force=True)
+            if renewed.get("refreshed") or renewed.get("ok"):
+                token, installation_id = auth_context()
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+                    if installation_id:
+                        headers["X-Installation-Id"] = installation_id
+                    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
+                        upstream = await client.request(
+                            request.method,
+                            url,
+                            content=body or None,
+                            headers=headers,
+                            params=dict(request.query_params),
+                        )
+                    logger.info("[canvas] %s %s 续签后重试 -> %s", request.method, normalized, upstream.status_code)
+        except Exception:
+            logger.warning("[canvas] 401 续签重试失败", exc_info=True)
 
     logger.info("[canvas] %s %s -> %s", request.method, normalized, upstream.status_code)
     media_type = upstream.headers.get("content-type") or "application/json"
