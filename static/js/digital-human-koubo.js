@@ -212,10 +212,28 @@
   function renderStep3() {
     var q = state.quote;
     if (!q) return '<div class="koubo-card"><h4>还没有分段</h4><p style="font-size:.8rem;color:var(--text-muted);">请先回到上一步生成分段。</p></div>';
-    var saved = state.project && state.project.id
-      ? '<div class="koubo-card" style="margin-top:1rem;"><h4>任务包</h4><p style="font-size:.8rem;color:var(--text-muted);">项目已保存：<b>' + esc(state.project.name) + '</b>（' + esc(state.project.id) + '）</p>'
-        + '<div class="koubo-row"><button type="button" class="btn btn-primary btn-sm" id="kouboExport">下载 tasks.json</button><button type="button" class="btn btn-ghost btn-sm" id="kouboCopyScript">复制文案</button></div></div>'
-      : '<div class="koubo-row" style="margin-top:.8rem;"><button type="button" class="btn btn-primary btn-sm" id="kouboSave">保存项目</button></div>';
+    var saved = '';
+    if (state.project && state.project.id) {
+      var isDone = state.project.status === 'generated';
+      saved = '<div class="koubo-card" style="margin-top:1rem;"><h4>生成</h4>'
+        + '<p style="font-size:.8rem;color:var(--text-muted);">项目：<b>' + esc(state.project.name) + '</b>（' + esc(state.project.id) + '）</p>';
+      if (isDone) {
+        saved += '<video controls playsinline style="width:100%;max-height:420px;border-radius:10px;background:#000;margin:.4rem 0;" src="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/video') + '"></video>'
+          + '<div class="koubo-row"><a class="btn btn-primary btn-sm" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/video') + '" download>下载成片</a>'
+          + '<button type="button" class="btn btn-ghost btn-sm" id="kouboRegen">重新生成</button>'
+          + '<button type="button" class="btn btn-ghost btn-sm" id="kouboExport">下载 tasks.json</button></div>';
+      } else {
+        saved += '<div class="koubo-row"><button type="button" class="btn btn-primary btn-sm" id="kouboGenFirst">提交生成第 1 段</button>'
+          + '<button type="button" class="btn btn-ghost btn-sm" id="kouboGenAll">全部生成（' + (state.quote ? state.quote.segments.length : 0) + ' 段）</button>'
+          + '<button type="button" class="btn btn-ghost btn-sm" id="kouboExport">下载 tasks.json</button>'
+          + '<button type="button" class="btn btn-ghost btn-sm" id="kouboCopyScript">复制文案</button></div>'
+          + '<p style="font-size:.74rem;color:var(--text-muted);margin:.45rem 0 0;">生成走本机 MCP 的 Grok 1.5 图生视频，按次扣算力（每段 1 次）。建议先出第 1 段确认口型和音色。</p>'
+          + '<div id="kouboGenStatus" style="font-size:.78rem;color:var(--text-muted);margin-top:.35rem;"></div>';
+      }
+      saved += '</div>';
+    } else {
+      saved = '<div class="koubo-row" style="margin-top:.8rem;"><button type="button" class="btn btn-primary btn-sm" id="kouboSave">保存项目</button></div>';
+    }
     return '<div class="koubo-card"><h4>分段与报价</h4>'
       + segmentsTable(q.segments, q.total_seconds, q.total_credits)
       + '<p style="font-size:.74rem;color:var(--text-muted);margin:.5rem 0 0;">' + esc(q.note || '') + '</p>'
@@ -265,6 +283,9 @@
       var p3 = $('kouboPrev3'); if (p3) p3.onclick = function () { state.step = 2; renderStep(); };
       var save = $('kouboSave'); if (save) save.onclick = saveProject;
       var exp = $('kouboExport'); if (exp) exp.onclick = exportTasks;
+      var gf = $('kouboGenFirst'); if (gf) gf.onclick = function () { submitGenerate(false); };
+      var ga = $('kouboGenAll'); if (ga) ga.onclick = function () { submitGenerate(true); };
+      var rg = $('kouboRegen'); if (rg) rg.onclick = function () { submitGenerate(false); };
       var cp = $('kouboCopyScript'); if (cp) cp.onclick = function () {
         var txt = (state.project && state.project.script) || '';
         if (navigator.clipboard) navigator.clipboard.writeText(txt).then(function () { log('文案已复制'); });
@@ -337,6 +358,50 @@
         setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
         log('已导出 tasks.json（' + (d.tasks || []).length + ' 条）');
       }).catch(function (e) { log('导出失败：' + e.message); });
+  }
+
+
+  function submitGenerate(all) {
+    if (!state.project || !state.project.id) return;
+    var status = $('kouboGenStatus');
+    if (status) status.textContent = '提交中…';
+    req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(state.project.id) + '/generate', {
+      method: 'POST', headers: headers(), body: JSON.stringify({ all: !!all })
+    }).then(function (d) {
+      log('已提交生成（' + (d.mode === 'all' ? '全部' : '仅第 1 段') + '），job=' + d.job_id);
+      pollGenerate(d.job_id);
+    }).catch(function (e) {
+      if (status) status.textContent = '提交失败：' + e.message;
+      log('提交生成失败：' + e.message);
+    });
+  }
+
+  function pollGenerate(jobId) {
+    var timer = setInterval(function () {
+      req('/api/skills/digital-human-koubo/generate/jobs/' + encodeURIComponent(jobId)).then(function (job) {
+        var el = $('kouboGenStatus');
+        if (el) {
+          var pct = job.total ? Math.round((job.done || 0) * 100 / job.total) : (job.progress || 0);
+          el.innerHTML = '<div style="margin-bottom:.25rem;">' + esc(job.message || '') + ' · ' + pct + '%</div>'
+            + '<div style="height:4px;background:rgba(255,255,255,.08);border-radius:999px;overflow:hidden;">'
+            + '<i style="display:block;height:100%;width:' + Math.max(3, pct) + '%;background:#f97316;"></i></div>';
+        }
+        if (job.status !== 'running') {
+          clearInterval(timer);
+          if (job.status === 'done') {
+            log('生成完成');
+            req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(state.project.id)).then(function (p) {
+              state.project = p;
+              renderStep();
+            });
+          } else {
+            log('生成失败：' + (job.error || job.message || '未知错误'));
+            if (el) el.innerHTML = '<span style="color:#f87171;">' + esc(job.error || '生成失败') + '</span>';
+          }
+        }
+      }).catch(function () {});
+    }, 3000);
+    state.genTimer = timer;
   }
 
   function loadProjects() {

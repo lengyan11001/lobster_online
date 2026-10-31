@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -658,3 +658,289 @@ def koubo_project_tasks(pid: str):
         "tasks": tasks,
         "note": "第一阶段只导出任务描述，未提交生成。实际提交前需要 Renoise MCP 的 material id 与实时报价。",
     }
+
+
+# ─────────────────────────────────────────────────────────────
+# 真正提交生成：走本机 MCP gateway 的 video.generate（Grok 1.5 图生视频）
+# 前提：请求带登录 token、形象照已进素材库、账号有算力。
+# ─────────────────────────────────────────────────────────────
+
+LOCAL_BASE = "http://127.0.0.1:8000"
+OUTPUT_DIR = DATA_DIR / "output"
+_GEN: Dict[str, Dict[str, Any]] = {}
+_GEN_LOCK = threading.Lock()
+GEN_MODEL = "xai/grok-imagine-video-1.5/image-to-video"
+
+
+class GenerateBody(BaseModel):
+    all: bool = False
+
+
+def _auth_header(request: Request) -> Dict[str, str]:
+    auth = (request.headers.get("Authorization") or "").strip()
+    if not auth:
+        raise HTTPException(status_code=401, detail="需要登录后才能提交生成")
+    if not auth.lower().startswith("bearer "):
+        auth = "Bearer " + auth
+    return {"Authorization": auth}
+
+
+def _deep_find(obj: Any, keys: tuple, depth: int = 0) -> Optional[str]:
+    if depth > 10:
+        return None
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in keys and isinstance(v, (str, int)) and str(v).strip():
+                return str(v)
+        for v in obj.values():
+            found = _deep_find(v, keys, depth + 1)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for v in obj:
+            found = _deep_find(v, keys, depth + 1)
+            if found:
+                return found
+    return None
+
+
+def _deep_urls(obj: Any, exts: tuple, depth: int = 0) -> List[str]:
+    out: List[str] = []
+    if depth > 12:
+        return out
+    if isinstance(obj, str):
+        low = obj.lower()
+        if low.startswith("http") and any(low.split("?")[0].endswith(e) for e in exts):
+            out.append(obj)
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            out.extend(_deep_urls(v, exts, depth + 1))
+    elif isinstance(obj, list):
+        for v in obj:
+            out.extend(_deep_urls(v, exts, depth + 1))
+    return out
+
+
+def _parse_mcp_response(data: Any) -> Any:
+    """MCP tools/call 返回 content[].text，里面常常又是一层 JSON 字符串。"""
+    if isinstance(data, dict) and "result" in data:
+        data = data["result"]
+    if isinstance(data, dict) and isinstance(data.get("content"), list):
+        chunks = []
+        for item in data["content"]:
+            if isinstance(item, dict) and isinstance(item.get("text"), str):
+                chunks.append(item["text"])
+        text = "\n".join(chunks).strip()
+        if text:
+            try:
+                return json.loads(text)
+            except Exception:
+                return {"_text": text}
+    return data
+
+
+def _mcp_call(token: str, name: str, arguments: Dict[str, Any], timeout: float = 180.0) -> Any:
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": name, "arguments": arguments}}
+    with httpx.Client(timeout=httpx.Timeout(timeout, connect=30.0), trust_env=False) as client:
+        r = client.post(LOCAL_BASE + "/mcp-gateway", json=payload,
+                        headers={"Authorization": token, "Content-Type": "application/json"})
+    try:
+        data = r.json()
+    except Exception:
+        data = {"_raw": r.text[:2000]}
+    if r.status_code >= 400:
+        raise RuntimeError("MCP %s HTTP %s: %s" % (name, r.status_code, str(data)[:500]))
+    if isinstance(data, dict) and data.get("error"):
+        raise RuntimeError("MCP %s 错误: %s" % (name, str(data["error"])[:500]))
+    return _parse_mcp_response(data)
+
+
+def _ensure_asset(token: str, project: Dict[str, Any]) -> str:
+    asset_id = project.get("photo_asset_id") or ""
+    if asset_id:
+        return asset_id
+    photo_id = project.get("photo_id") or ""
+    src = UPLOAD_DIR / photo_id if photo_id else None
+    if not src or not src.is_file():
+        raise RuntimeError("请先在第一步上传人物照片")
+    with open(src, "rb") as fh:
+        files = {"file": (src.name, fh, "image/jpeg" if src.suffix.lower() in (".jpg", ".jpeg") else "image/png")}
+        with httpx.Client(timeout=120.0, trust_env=False) as client:
+            r = client.post(LOCAL_BASE + "/api/assets/upload", files=files,
+                            headers={"Authorization": token})
+    if r.status_code >= 400:
+        raise RuntimeError("素材入库失败 HTTP %s: %s" % (r.status_code, r.text[:400]))
+    data = r.json() or {}
+    aid = (data.get("asset_id") or (data.get("asset") or {}).get("asset_id")
+           or (data.get("asset") or {}).get("id") or data.get("id") or "")
+    if not aid:
+        raise RuntimeError("素材入库未返回 asset_id: %s" % str(data)[:400])
+    project["photo_asset_id"] = str(aid)
+    return str(aid)
+
+
+def _prompt_for(project: Dict[str, Any], seg: Dict[str, Any]) -> str:
+    persona = _persona()
+    host = project.get("host") or "tank"
+    if host == "me":
+        hp = (persona.get("other_hosts") or {}).get("me") or {}
+        template = hp.get("prompt_template") or ""
+        voice = hp.get("voice") or ""
+        language = "Mandarin Chinese"
+    else:
+        template = persona.get("prompt_template") or ""
+        voice = ((persona.get("voice") or {}).get("desc") or "")
+        language = "Mandarin Chinese"
+    act = ((persona.get("acts") or {}).get(seg.get("shot") or "full") or "")
+    line = seg.get("text") or ""
+    if template:
+        try:
+            return template.format(ref="the reference image", purpose="explaining clearly",
+                                   act=act, voice=voice, language=language, line=line)
+        except Exception:
+            pass
+    return "The person in the reference image talks to the camera, clearly lip-synced, in a %s voice:\n\"%s\"\nSound: only the voice, no music, no subtitles, no on-screen text." % (voice, line)
+
+
+def _gen_job(job_id: str, project_id: str, token: str, only_first: bool) -> None:
+    job = _GEN[job_id]
+    try:
+        items = _load_projects()
+        project = next((r for r in items if r.get("id") == project_id), None)
+        if not project:
+            raise RuntimeError("项目不存在")
+        asset_id = _ensure_asset(token, project)
+        segs = project.get("segments") or []
+        if only_first:
+            segs = segs[:1]
+        out_dir = OUTPUT_DIR / project_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+        job["total"] = len(segs)
+        generated = []
+        for idx, seg in enumerate(segs, 1):
+            job["current"] = idx
+            job["message"] = "提交第 %d/%d 段" % (idx, len(segs))
+            payload = {
+                "model": GEN_MODEL,
+                "prompt": _prompt_for(project, seg),
+                "asset_id": asset_id,
+                "duration": int(seg.get("seconds") or 8),
+                "ratio": "16:9" if project.get("host") == "me" else "9:16",
+                "resolution": seg.get("resolution") or "720p",
+            }
+            resp = _mcp_call(token, "invoke_capability",
+                             {"capability_id": "video.generate", "payload": payload}, timeout=300.0)
+            task_id = _deep_find(resp, ("task_id", "taskId", "request_id", "id"))
+            urls = _deep_urls(resp, (".mp4", ".webm"))
+            if not urls and task_id:
+                job["message"] = "第 %d 段已提交，等待生成（task %s）" % (idx, task_id[:12])
+                deadline = time.time() + 1800
+                while time.time() < deadline:
+                    time.sleep(10)
+                    poll = _mcp_call(token, "invoke_capability",
+                                     {"capability_id": "task.get_result", "payload": {"task_id": task_id}},
+                                     timeout=180.0)
+                    urls = _deep_urls(poll, (".mp4", ".webm"))
+                    if urls:
+                        break
+                    status = str(_deep_find(poll, ("status", "state")) or "")
+                    if status.lower() in ("failed", "error", "cancelled", "canceled"):
+                        raise RuntimeError("第 %d 段生成失败：%s" % (idx, str(poll)[:300]))
+            if not urls:
+                raise RuntimeError("第 %d 段未拿到视频地址：%s" % (idx, str(resp)[:300]))
+            url = urls[0]
+            dest = out_dir / ("s%d.mp4" % idx)
+            job["message"] = "下载第 %d 段" % idx
+            with httpx.Client(timeout=httpx.Timeout(120.0, read=None), follow_redirects=True) as client:
+                with client.stream("GET", url) as r:
+                    r.raise_for_status()
+                    with open(dest, "wb") as fh:
+                        for chunk in r.iter_bytes(1024 * 256):
+                            fh.write(chunk)
+            generated.append({"id": seg.get("id"), "path": str(dest), "url": url, "task_id": task_id or ""})
+            job["done"] = idx
+
+        # 拼接
+        job["message"] = "拼接成片"
+        final = out_dir / "final.mp4"
+        if len(generated) == 1:
+            shutil.copyfile(generated[0]["path"], final)
+        else:
+            list_file = out_dir / "list.txt"
+            list_file.write_text("".join("file '%s'\n" % Path(g["path"]).name for g in generated), encoding="utf-8")
+            r = _run([str(FFMPEG_DIR / "ffmpeg.exe"), "-y", "-f", "concat", "-safe", "0",
+                      "-i", str(list_file), "-c", "copy", str(final)], timeout=300)
+            if r.returncode != 0:
+                raise RuntimeError("拼接失败：%s" % (r.stderr or "")[-500:])
+
+        items = _load_projects()
+        for row in items:
+            if row.get("id") == project_id:
+                row["photo_asset_id"] = asset_id
+                row["status"] = "generated"
+                row["output"] = "/api/skills/digital-human-koubo/projects/%s/video" % project_id
+                row["generated_segments"] = generated
+                row["generated_at"] = datetime.now().isoformat(timespec="seconds")
+        _save_projects(items)
+        job["status"] = "done"
+        job["progress"] = 100
+        job["message"] = "生成完成"
+        job["output"] = "/api/skills/digital-human-koubo/projects/%s/video" % project_id
+    except Exception as exc:
+        job["status"] = "error"
+        msg = str(exc)[:1200]
+        low = msg.lower()
+        if "401" in msg or "unauthorized" in low or "登录" in msg:
+            msg = "登录状态无效或已过期，请重新登录客户端后再提交（" + msg[:200] + "）"
+        job["error"] = msg
+        job["message"] = "生成失败"
+        try:
+            rows = _load_projects()
+            for row in rows:
+                if row.get("id") == project_id and row.get("status") == "generating":
+                    row["status"] = "ready"
+            _save_projects(rows)
+        except Exception:
+            pass
+    finally:
+        job["finished_at"] = time.time()
+
+
+@router.post("/api/skills/digital-human-koubo/projects/{pid}/generate", summary="提交真实生成")
+def koubo_generate(pid: str, body: GenerateBody, request: Request):
+    headers = _auth_header(request)
+    project = koubo_project(pid)
+    if not project.get("segments"):
+        raise HTTPException(status_code=400, detail="项目没有分段")
+    if project.get("status") == "generating":
+        raise HTTPException(status_code=409, detail="已有生成任务在跑")
+    items = _load_projects()
+    for row in items:
+        if row.get("id") == pid:
+            row["status"] = "generating"
+    _save_projects(items)
+    job_id = uuid.uuid4().hex[:10]
+    job = {"id": job_id, "status": "running", "progress": 0, "message": "准备提交",
+           "current": 0, "total": 1, "error": "", "started_at": time.time()}
+    with _GEN_LOCK:
+        _GEN[job_id] = job
+    threading.Thread(target=_gen_job, args=(job_id, pid, headers["Authorization"], not body.all), daemon=True).start()
+    return {"ok": True, "job_id": job_id, "mode": "first" if not body.all else "all"}
+
+
+@router.get("/api/skills/digital-human-koubo/generate/jobs/{job_id}", summary="生成进度")
+def koubo_generate_job(job_id: str):
+    with _GEN_LOCK:
+        job = _GEN.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return job
+
+
+@router.get("/api/skills/digital-human-koubo/projects/{pid}/video", summary="成片预览/下载")
+def koubo_project_video(pid: str):
+    path = OUTPUT_DIR / pid / "final.mp4"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="成片还没有生成")
+    return FileResponse(str(path), media_type="video/mp4", filename="koubo-%s.mp4" % pid)
