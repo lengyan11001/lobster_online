@@ -1,7 +1,7 @@
 {
-  "version": "2.0.224",
-  "build": 525,
-  "applied_at": "2026-10-31T18:41:30+08:00",
-  "note": "窗口枚举兜底放宽并记录失败原因；技能商店每次请求记录来源(REMOTE/LOCAL)",
-  "bundle_sha256": "17695502e2170ad26060e960d1f51d6df4b80992d780b645963154ea49fb81d8"
+  "version": "2.0.225",
+  "build": 526,
+  "applied_at": "2026-10-31T18:56:41+08:00",
+  "note": "修复 OTA 不下发 static/js|css|views|index.html（前端从未更新过的根因）",
+  "bundle_sha256": "bbf6c93094693a4ccd497a3dda7470f759af5e1c905f40d3eddeef1faca9defe"
 }
