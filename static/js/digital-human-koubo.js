@@ -3,7 +3,7 @@
 
   var VIEW_ID = 'digital-human-koubo';
   var API = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? LOCAL_API_BASE : '';
-  var state = { components: [], ready: false, polling: null, busy: false, quote: null };
+  var state = { components: [], ready: false, polling: null, busy: false };
 
   function $(id) { return document.getElementById(id); }
   function esc(v) {
@@ -25,8 +25,7 @@
     el.textContent = '[' + t + '] ' + msg + '\n' + el.textContent;
   }
   function req(path, opts) {
-    var url = API + path;
-    return fetch(url, opts || { headers: headers() }).then(function (r) {
+    return fetch(API + path, opts || { headers: headers() }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (d) {
         if (!r.ok) throw new Error((d && (d.detail || d.message)) || ('HTTP ' + r.status));
         return d;
@@ -41,29 +40,44 @@
       + '#content-digital-human-koubo .koubo-hero{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:1rem;}'
       + '#content-digital-human-koubo .koubo-hero h3{margin:0;font-size:1.15rem;}'
       + '#content-digital-human-koubo .koubo-hero p{margin:.3rem 0 0;color:var(--text-muted);font-size:.82rem;line-height:1.55;}'
-      + '#content-digital-human-koubo .koubo-grid{display:grid;grid-template-columns:minmax(340px,420px) minmax(0,1fr);gap:1rem;align-items:start;}'
+      + '#content-digital-human-koubo .koubo-grid{display:grid;grid-template-columns:minmax(320px,380px) minmax(0,1fr);gap:1rem;align-items:start;}'
       + '@media(max-width:900px){#content-digital-human-koubo .koubo-grid{grid-template-columns:1fr;}}'
       + '#content-digital-human-koubo .koubo-panel{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:.9rem 1rem;}'
       + '#content-digital-human-koubo .koubo-panel h4{margin:0 0 .6rem;font-size:.92rem;}'
-      + '#content-digital-human-koubo .koubo-dep{display:grid;grid-template-columns:1fr auto;gap:.35rem .6rem;padding:.55rem 0;border-bottom:1px dashed rgba(255,255,255,.08);}'
-      + '#content-digital-human-koubo .koubo-dep:last-child{border-bottom:0;}'
-      + '#content-digital-human-koubo .koubo-dep b{font-size:.84rem;font-weight:600;}'
-      + '#content-digital-human-koubo .koubo-dep small{display:block;color:var(--text-muted);font-size:.74rem;margin-top:.12rem;line-height:1.45;}'
-      + '#content-digital-human-koubo .koubo-dep-right{display:flex;align-items:center;gap:.45rem;}'
-      + '#content-digital-human-koubo .koubo-pill{font-size:.72rem;padding:.14rem .45rem;border-radius:999px;border:1px solid transparent;white-space:nowrap;}'
-      + '#content-digital-human-koubo .koubo-pill.ok{background:rgba(34,197,94,.12);color:#4ade80;border-color:rgba(34,197,94,.28);}'
-      + '#content-digital-human-koubo .koubo-pill.missing{background:rgba(239,68,68,.1);color:#f87171;border-color:rgba(239,68,68,.28);}'
-      + '#content-digital-human-koubo .koubo-pill.installing{background:rgba(59,130,246,.12);color:#60a5fa;border-color:rgba(59,130,246,.3);}'
-      + '#content-digital-human-koubo .koubo-bar{grid-column:1/-1;height:3px;background:rgba(255,255,255,.08);border-radius:999px;overflow:hidden;display:none;}'
-      + '#content-digital-human-koubo .koubo-bar.on{display:block;}'
-      + '#content-digital-human-koubo .koubo-bar i{display:block;height:100%;background:#3b82f6;width:0;transition:width .3s;}'
+      + '#content-digital-human-koubo .koubo-sum{font-size:.8rem;line-height:1.7;color:var(--text-muted);}'
+      + '#content-digital-human-koubo .koubo-sum b{color:var(--text);font-weight:600;}'
       + '#content-digital-human-koubo textarea{width:100%;min-height:170px;box-sizing:border-box;padding:.6rem .7rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:8px;color:var(--text);font-size:.86rem;line-height:1.6;resize:vertical;}'
       + '#content-digital-human-koubo .koubo-row{display:flex;gap:.5rem;align-items:center;margin-top:.6rem;flex-wrap:wrap;}'
       + '#content-digital-human-koubo table{width:100%;border-collapse:collapse;margin-top:.7rem;font-size:.8rem;}'
       + '#content-digital-human-koubo th,#content-digital-human-koubo td{text-align:left;padding:.35rem .4rem;border-bottom:1px solid rgba(255,255,255,.07);vertical-align:top;}'
       + '#content-digital-human-koubo th{color:var(--text-muted);font-weight:500;font-size:.74rem;}'
       + '#content-digital-human-koubo .koubo-total{margin-top:.6rem;font-size:.86rem;}'
-      + '#content-digital-human-koubo .koubo-log{margin-top:1rem;padding:.6rem .75rem;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.07);border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.72rem;color:var(--text-muted);max-height:150px;overflow:auto;white-space:pre-wrap;}';
+      + '#content-digital-human-koubo .koubo-log{margin-top:1rem;padding:.6rem .75rem;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.07);border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.72rem;color:var(--text-muted);max-height:150px;overflow:auto;white-space:pre-wrap;}'
+      + '#kouboDepsModal{position:fixed;inset:0;z-index:3200;}'
+      + '#kouboDepsModal .koubo-modal-backdrop{position:absolute;inset:0;background:rgba(15,23,42,.58);}'
+      + '#kouboDepsModal .koubo-modal-card{position:relative;width:min(92vw,560px);margin:10vh auto 0;border-radius:20px;background:#fff;color:#0f172a;box-shadow:0 32px 80px rgba(15,23,42,.32);overflow:hidden;font-family:inherit;}'
+      + '#kouboDepsModal .koubo-modal-head{display:flex;align-items:center;justify-content:space-between;padding:18px 22px 10px;}'
+      + '#kouboDepsModal .koubo-modal-head h4{margin:0;font-size:17px;}'
+      + '#kouboDepsModal .koubo-modal-close{border:none;background:transparent;font-size:22px;line-height:1;cursor:pointer;color:#6b7280;}'
+      + '#kouboDepsModal .koubo-modal-body{padding:0 22px 12px;max-height:min(66vh,600px);overflow:auto;}'
+      + '#kouboDepsModal .koubo-modal-sub{font-size:12px;color:#6b7280;margin:0 0 10px;line-height:1.6;}'
+      + '#kouboDepsModal .koubo-dep{display:grid;grid-template-columns:1fr auto;gap:3px 10px;padding:8px 0;border-bottom:1px dashed #e5e7eb;}'
+      + '#kouboDepsModal .koubo-dep:last-child{border-bottom:0;}'
+      + '#kouboDepsModal .koubo-dep b{font-size:13px;font-weight:600;}'
+      + '#kouboDepsModal .koubo-dep small{display:block;color:#6b7280;font-size:11.5px;margin-top:2px;line-height:1.5;word-break:break-all;}'
+      + '#kouboDepsModal .koubo-dep-right{display:flex;align-items:center;gap:6px;}'
+      + '#kouboDepsModal .koubo-pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid transparent;white-space:nowrap;}'
+      + '#kouboDepsModal .koubo-pill.ok{background:#ecfdf5;color:#059669;border-color:#a7f3d0;}'
+      + '#kouboDepsModal .koubo-pill.missing{background:#fef2f2;color:#dc2626;border-color:#fecaca;}'
+      + '#kouboDepsModal .koubo-pill.installing{background:#eff6ff;color:#2563eb;border-color:#bfdbfe;}'
+      + '#kouboDepsModal .koubo-bar{grid-column:1/-1;height:4px;background:#e5e7eb;border-radius:999px;overflow:hidden;display:none;}'
+      + '#kouboDepsModal .koubo-bar.on{display:block;}'
+      + '#kouboDepsModal .koubo-bar i{display:block;height:100%;background:#3b82f6;width:0;transition:width .3s;}'
+      + '#kouboDepsModal .koubo-modal-foot{display:flex;justify-content:space-between;gap:10px;padding:12px 22px 18px;border-top:1px solid #f1f5f9;}'
+      + '#kouboDepsModal .koubo-btn{font-size:13px;padding:7px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;}'
+      + '#kouboDepsModal .koubo-btn.primary{background:linear-gradient(135deg,#f97316,#ea580c);border-color:transparent;color:#fff;}'
+      + '#kouboDepsModal .koubo-btn:disabled{opacity:.55;cursor:default;}'
+      + '#kouboDepsModal .koubo-install{font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #d1d5db;background:#fff;cursor:pointer;}';
     var style = document.createElement('style');
     style.id = 'kouboStyle';
     style.textContent = css;
@@ -76,14 +90,14 @@
       + '  <div><h3>数字人koubo</h3><p>第一阶段 · 运行环境自检 + 口播稿分段报价。生成仍走现有 Renoise / Grok 链路，本页不扣算力。</p></div>'
       + '  <div style="display:flex;gap:.5rem;flex-wrap:wrap;">'
       + '    <button type="button" class="btn btn-ghost btn-sm" id="kouboBack">返回技能商店</button>'
+      + '    <button type="button" class="btn btn-ghost btn-sm" id="kouboOpenDeps">安装依赖</button>'
       + '    <button type="button" class="btn btn-ghost btn-sm" id="kouboRefresh">刷新状态</button>'
       + '  </div>'
       + '</div>'
       + '<div class="koubo-grid">'
       + '  <section class="koubo-panel">'
       + '    <h4>运行环境</h4>'
-      + '    <div id="kouboReady" style="font-size:.78rem;color:var(--text-muted);margin-bottom:.5rem;">检测中…</div>'
-      + '    <div id="kouboDeps"></div>'
+      + '    <div class="koubo-sum" id="kouboSummary">检测中…</div>'
       + '    <div class="koubo-row"><button type="button" class="btn btn-primary btn-sm" id="kouboInstallAll">一键安装缺失项</button></div>'
       + '  </section>'
       + '  <section class="koubo-panel">'
@@ -112,46 +126,90 @@
     return '<span class="koubo-pill missing">缺失</span>';
   }
 
-  function renderDeps() {
-    var box = $('kouboDeps');
+  function depRow(c, compact) {
+    var btn = '';
+    if (c.installable && c.status !== 'ok' && c.status !== 'installing') {
+      btn = '<button type="button" class="koubo-install" data-koubo-install="' + esc(c.id) + '">安装</button>';
+    }
+    var bar = c.status === 'installing'
+      ? '<div class="koubo-bar on"><i style="width:' + (c.progress || 0) + '%"></i></div>'
+      : '';
+    return '<div class="koubo-dep" data-dep="' + esc(c.id) + '">'
+      + '<div><b>' + esc(c.name) + '</b><small>' + esc(c.purpose) + ' · ' + esc(c.size) + '</small>'
+      + '<small>' + esc(c.detail || '') + '</small></div>'
+      + '<div class="koubo-dep-right">' + pill(c) + btn + '</div>'
+      + bar
+      + '</div>';
+  }
+
+  function renderSummary() {
+    var el = $('kouboSummary');
+    if (!el) return;
+    var missing = state.components.filter(function (c) { return c.status !== 'ok'; });
+    var ready = state.components.filter(function (c) { return c.status === 'ok'; }).length;
+    el.innerHTML = '<div><b>' + ready + ' / ' + state.components.length + '</b> 项就绪</div>'
+      + (missing.length
+        ? '<div>缺失：' + missing.map(function (c) { return esc(c.name); }).join('、') + '</div>'
+        : '<div>全部就绪，可以进入生成阶段（本阶段不触发）。</div>');
+  }
+
+  function renderModalRows() {
+    var box = $('kouboDepsBody');
     if (!box) return;
-    box.innerHTML = state.components.map(function (c) {
-      var btn = '';
-      if (c.installable && c.status !== 'ok' && c.status !== 'installing') {
-        btn = '<button type="button" class="btn btn-ghost btn-sm" data-koubo-install="' + esc(c.id) + '">安装</button>';
-      }
-      var bar = c.status === 'installing'
-        ? '<div class="koubo-bar on"><i style="width:' + (c.progress || 0) + '%"></i></div>'
-        : '';
-      return '<div class="koubo-dep" data-dep="' + esc(c.id) + '">'
-        + '<div><b>' + esc(c.name) + '</b><small>' + esc(c.purpose) + ' · ' + esc(c.size) + '</small>'
-        + '<small>' + esc(c.detail || '') + '</small></div>'
-        + '<div class="koubo-dep-right">' + pill(c) + btn + '</div>'
-        + bar
-        + '</div>';
-    }).join('');
+    box.innerHTML = state.components.map(function (c) { return depRow(c); }).join('');
     box.querySelectorAll('[data-koubo-install]').forEach(function (btn) {
       btn.addEventListener('click', function () { install(btn.getAttribute('data-koubo-install')); });
     });
-    var ready = $('kouboReady');
-    if (ready) {
-      var missing = state.components.filter(function (c) { return c.status !== 'ok'; });
-      ready.textContent = missing.length
-        ? '还有 ' + missing.length + ' 项缺失：' + missing.map(function (c) { return c.name; }).join('、')
-        : '全部就绪，可以进入生成阶段（本阶段不触发）。';
+    var all = $('kouboModalInstallAll');
+    if (all) {
+      var anyMissing = state.components.some(function (c) { return c.installable && c.status !== 'ok'; });
+      all.disabled = !anyMissing || !!state.busy || !!state.polling;
+      all.textContent = anyMissing ? '一键安装缺失项' : '依赖已齐';
     }
+  }
+
+  function closeDepsModal() {
+    var m = $('kouboDepsModal');
+    if (m && m.parentNode) m.parentNode.removeChild(m);
+  }
+
+  function openDepsModal() {
+    if ($('kouboDepsModal')) return;
+    var modal = document.createElement('div');
+    modal.id = 'kouboDepsModal';
+    modal.innerHTML = ''
+      + '<div class="koubo-modal-backdrop"></div>'
+      + '<div class="koubo-modal-card" role="dialog" aria-modal="true" aria-labelledby="kouboDepsTitle">'
+      + '  <div class="koubo-modal-head"><h4 id="kouboDepsTitle">运行环境与依赖</h4><button type="button" class="koubo-modal-close" aria-label="关闭">×</button></div>'
+      + '  <div class="koubo-modal-body">'
+      + '    <p class="koubo-modal-sub">ffmpeg / Node / Python 客户端已内置；whisper 只在「回听 + 逐字对齐」时用，不装也能生成，只是没有自动质检。安装会下载到客户端 deps 目录，可随时关闭弹窗，后台继续。</p>'
+      + '    <div id="kouboDepsBody">加载中…</div>'
+      + '  </div>'
+      + '  <div class="koubo-modal-foot">'
+      + '    <button type="button" class="koubo-btn" data-koubo-close>关闭</button>'
+      + '    <button type="button" class="koubo-btn primary" id="kouboModalInstallAll">一键安装缺失项</button>'
+      + '  </div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    modal.querySelector('.koubo-modal-backdrop').addEventListener('click', closeDepsModal);
+    modal.querySelector('.koubo-modal-close').addEventListener('click', closeDepsModal);
+    modal.querySelector('[data-koubo-close]').addEventListener('click', closeDepsModal);
+    modal.querySelector('#kouboModalInstallAll').addEventListener('click', installAll);
+    renderModalRows();
+    loadStatus();
   }
 
   function loadStatus() {
     return req('/api/skills/digital-human-koubo/status').then(function (d) {
       state.components = d.components || [];
       state.ready = !!d.ready;
-      renderDeps();
+      renderSummary();
+      renderModalRows();
       return d;
     }).catch(function (e) {
       log('状态读取失败：' + e.message);
-      var box = $('kouboDeps');
-      if (box) box.innerHTML = '<p style="color:#f87171;font-size:.8rem;">读取失败：' + esc(e.message) + '</p>';
+      var el = $('kouboSummary');
+      if (el) el.innerHTML = '<span style="color:#f87171;">读取失败：' + esc(e.message) + '</span>';
     });
   }
 
@@ -166,20 +224,22 @@
           c.status = job.status === 'running' ? 'installing' : (job.status === 'done' ? 'ok' : 'error');
           c.progress = job.progress || 0;
           c.detail = job.message || c.detail;
-          renderDeps();
+          renderSummary();
+          renderModalRows();
         }
         if (job.status !== 'running') {
           clearInterval(state.polling);
           state.polling = null;
+          state.busy = false;
           if (job.status === 'done') log(component + ' 安装完成');
           else log(component + ' 安装失败：' + (job.error || job.message || '未知错误'));
-          state.busy = false;
           loadStatus();
         }
       }).catch(function (e) {
         if (attempts > 5) {
           clearInterval(state.polling);
           state.polling = null;
+          state.busy = false;
           log('进度查询失败：' + e.message);
         }
       });
@@ -190,16 +250,20 @@
     if (state.busy || state.polling) return;
     state.busy = true;
     log('开始安装 ' + component + ' …');
+    renderModalRows();
     req('/api/skills/digital-human-koubo/deps/install', {
       method: 'POST', headers: headers(), body: JSON.stringify({ component: component })
     }).then(function (d) {
       if (!d.job_id) throw new Error(d.message || '未返回任务');
       var c = state.components.filter(function (x) { return x.id === component; })[0];
-      if (c) { c.status = 'installing'; c.progress = 0; renderDeps(); }
+      if (c) { c.status = 'installing'; c.progress = 0; }
+      renderSummary();
+      renderModalRows();
       poll(d.job_id, component);
     }).catch(function (e) {
       state.busy = false;
       log('安装启动失败：' + e.message);
+      renderModalRows();
     });
   }
 
@@ -208,7 +272,7 @@
     if (!next) { log('依赖已齐，无需安装'); return; }
     install(next.id);
     var timer = setInterval(function () {
-      if (state.busy || (state.polling && state.polling !== null)) return;
+      if (state.busy || state.polling) return;
       var again = state.components.filter(function (c) { return c.installable && c.status !== 'ok'; })[0];
       if (!again) { clearInterval(timer); log('缺失项已全部处理'); return; }
       install(again.id);
@@ -243,6 +307,7 @@
   function bind() {
     var back = $('kouboBack'); if (back) back.onclick = function () { if (typeof window._switchToHiddenView === 'function') window._switchToHiddenView('skill-store'); else if (typeof showLobsterView === 'function') showLobsterView('skill-store'); };
     var refresh = $('kouboRefresh'); if (refresh) refresh.onclick = function () { log('刷新状态'); loadStatus(); };
+    var deps = $('kouboOpenDeps'); if (deps) deps.onclick = openDepsModal;
     var all = $('kouboInstallAll'); if (all) all.onclick = installAll;
     var q = $('kouboQuote'); if (q) q.onclick = quote;
   }
