@@ -6,7 +6,7 @@
     // 生成页沿用 canvas-web 原生的 GeneratePage（模型/参数/上传/提交/历史全是原逻辑），
     // 只由 canvas-theme.css 覆盖样式；不再用自绘的 generate.html。
     generate: "/static/canvas-ui/generate.html?v=20261031-gen-style-v36",
-    projects: "/static/canvas-ui/projects.html?v=20261031-delete-fix"
+    projects: "/static/canvas-ui/projects.html?v=20261031-delete-2step"
   };
   function initCanvasStudioView(mount) {
     var shell = (mount && mount.querySelector && mount.querySelector(".canvas-studio-shell"))
