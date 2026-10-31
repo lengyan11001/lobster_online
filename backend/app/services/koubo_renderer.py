@@ -243,6 +243,10 @@ def build_timeline(project: Dict[str, Any], duration: float, tmp: Optional[Path]
         except Exception:
             heard = None
     segs = _align_timeline(project, heard, duration) if heard else _even_timeline(project, duration)
+    # whisper 在纯音乐/静音上会给出离谱时间（字幕整段消失），覆盖不足就回退均分
+    if heard and (not segs or segs[-1]["end"] < duration * 0.6 or segs[0]["start"] > duration * 0.2):
+        segs = _even_timeline(project, duration)
+        heard = None
 
     keywords: List[Dict[str, Any]] = []
     for seg in segs:
