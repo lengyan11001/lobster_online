@@ -209,18 +209,25 @@ def _resize_watch_loop(
             try:
                 point = wintypes.POINT()
                 _user32.GetCursorPos(ctypes.byref(point))
-                under = _user32.WindowFromPoint(point)
-                root = _user32.GetAncestor(under, GA_ROOT) if under else 0
-                if root == hwnd:
-                    rc = wintypes.RECT()
-                    origin = wintypes.POINT(0, 0)
-                    _user32.GetClientRect(hwnd, ctypes.byref(rc))
-                    _user32.ClientToScreen(hwnd, ctypes.byref(origin))
+                # WindowFromPoint 在 WebView2 / 多显示器 / 有浮动窗口遮挡时会把点击判给
+                # 其它进程的窗口，导致永远匹配不上本窗口、边缘拖动失效。这里改为：
+                # 本窗口在前台 + 光标落在本窗口矩形内即视为命中，再按矩形计算缩放边。
+                in_foreground = _user32.GetForegroundWindow() == hwnd
+                if not in_foreground:
+                    parent = _user32.GetParent(hwnd)
+                    in_foreground = bool(parent) and _user32.GetForegroundWindow() == parent
+                if in_foreground:
+                    win = wintypes.RECT()
+                    _user32.GetWindowRect(hwnd, ctypes.byref(win))
+                    if not (win.left <= point.x < win.right and win.top <= point.y < win.bottom):
+                        was_down = down
+                        time.sleep(0.012)
+                        continue
                     code = _resize_code(
-                        point.x - origin.x,
-                        point.y - origin.y,
-                        rc.right,
-                        rc.bottom,
+                        point.x - win.left,
+                        point.y - win.top,
+                        win.right - win.left,
+                        win.bottom - win.top,
                         edge,
                     )
                     if code:

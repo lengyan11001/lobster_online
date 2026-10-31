@@ -126,8 +126,44 @@ def _package_visible_in_store(pkg: dict, is_admin: bool) -> bool:
     return True
 
 
+async def _fetch_remote_store(request: Request) -> Optional[dict]:
+    """技能商店以服务器为准：登录态下直接取服务器 /skills/store（名字、入口、可见性都由服务器决定）。
+
+    只有未登录或服务器不可达时，才回落到本机 skill_registry.json，避免本机列表和服务器长期分叉。
+    """
+    settings = get_settings()
+    base = (settings.auth_server_base or "").strip().rstrip("/")
+    auth = (request.headers.get("Authorization") or "").strip()
+    if not base or not auth:
+        return None
+    bearer = auth if auth.lower().startswith("bearer ") else f"Bearer {auth}"
+    headers = {"Authorization": bearer}
+    for name in ("X-Installation-Id", "X-Lobster-Client-Overseas"):
+        value = (request.headers.get(name) or "").strip()
+        if value:
+            headers[name] = value
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{base}/skills/store", headers=headers)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if not isinstance(data, dict) or not isinstance(data.get("packages"), list):
+            return None
+        return data
+    except Exception:
+        return None
+
+
 @router.get("/skills/store", summary="技能商店列表")
 async def list_store(request: Request):
+    remote = await _fetch_remote_store(request)
+    if remote is not None:
+        # 名字/入口/可见性以服务器为准；但只保留本机安装/卸载接口认识的本机已内置包，
+        # 避免服务端新增、本机却没有安装实现的包出现「点了安装 404」。
+        local_ids = set(_load_registry().get("packages", {}) or {})
+        remote["packages"] = [p for p in remote.get("packages", []) if str(p.get("id") or "") in local_ids]
+        return remote
     registry = _load_registry()
     installed = set(_load_installed().get("installed", []))
     packages = registry.get("packages", {})
@@ -152,6 +188,7 @@ async def list_store(request: Request):
             "unlock_price_yuan": pkg.get("unlock_price_yuan"),
             "default_installed": pkg.get("default_installed"),
             "store_visibility": pkg.get("store_visibility"),
+            "entry": pkg.get("entry"),
         })
     return {"packages": out, "is_skill_store_admin": is_admin}
 
