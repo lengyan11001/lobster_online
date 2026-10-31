@@ -4,16 +4,15 @@
   var VIEW_ID = 'digital-human-koubo';
   var API = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? LOCAL_API_BASE : '';
   var state = {
-    step: 1,
     options: null,
     form: { host: 'tank', shot: 'full', ratio: '', resolution: '', language: 'Mandarin Chinese', model: '', scene: 'none', scene_prompt: '', voice: '', compose_scene: false, packaging: [] },
-    components: [],
     upload: null,
     quote: null,
     project: null,
     projects: [],
-    polling: null,
-    busy: false
+    components: [],
+    job: null,
+    timer: null
   };
 
   function $(id) { return document.getElementById(id); }
@@ -24,9 +23,7 @@
   }
   function authOnly() {
     var h = {};
-    if (typeof authHeaders === 'function') {
-      try { h = Object.assign({}, authHeaders() || {}); } catch (e) { h = {}; }
-    }
+    if (typeof authHeaders === 'function') { try { h = Object.assign({}, authHeaders() || {}); } catch (e) { h = {}; } }
     Object.keys(h).forEach(function (k) { if (k.toLowerCase() === 'content-type') delete h[k]; });
     return h;
   }
@@ -35,634 +32,565 @@
     Object.assign(h, authOnly());
     return h;
   }
-  function log(msg) {
-    var el = $('kouboLog');
-    if (!el) return;
-    var t = new Date().toTimeString().slice(0, 8);
-    el.textContent = '[' + t + '] ' + msg + '\n' + el.textContent;
-  }
   function req(path, opts) {
     return fetch(API + path, opts || { headers: headers() }).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (d) {
-        if (!r.ok) throw new Error((d && (d.detail || d.message)) || ('HTTP ' + r.status));
+        if (!r.ok) {
+          var msg = d && d.detail ? (typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail)) : ('HTTP ' + r.status);
+          throw new Error(msg);
+        }
         return d;
       });
     });
   }
+  function log(msg) {
+    var el = $('kbLog');
+    if (!el) return;
+    var t = new Date().toTimeString().slice(0, 8);
+    el.textContent = '[' + t + '] ' + msg + '\n' + el.textContent;
+  }
 
   function injectCss() {
-    if ($('kouboStyle')) return;
+    if ($('kbStyle')) return;
     var css = ''
-      + '#content-digital-human-koubo{padding:1rem 1.1rem 2rem;}'
-      + '#content-digital-human-koubo .koubo-hero{display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:.9rem;}'
-      + '#content-digital-human-koubo .koubo-hero h3{margin:0;font-size:1.15rem;}'
-      + '#content-digital-human-koubo .koubo-hero p{margin:.3rem 0 0;color:var(--text-muted);font-size:.82rem;line-height:1.55;}'
-      + '#content-digital-human-koubo .koubo-steps{display:flex;gap:.5rem;margin:0 0 1rem;flex-wrap:wrap;}'
-      + '#content-digital-human-koubo .koubo-step{flex:1 1 160px;display:flex;align-items:center;gap:.5rem;padding:.55rem .7rem;border:1px solid rgba(255,255,255,.09);border-radius:10px;background:rgba(255,255,255,.02);font-size:.8rem;color:var(--text-muted);}'
-      + '#content-digital-human-koubo .koubo-step b{width:20px;height:20px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;background:rgba(255,255,255,.08);font-size:.72rem;}'
-      + '#content-digital-human-koubo .koubo-step.on{border-color:rgba(249,115,22,.45);color:var(--text);background:rgba(249,115,22,.07);}'
-      + '#content-digital-human-koubo .koubo-step.on b{background:#f97316;color:#fff;}'
-      + '#content-digital-human-koubo .koubo-step.done b{background:rgba(34,197,94,.2);color:#4ade80;}'
-      + '#content-digital-human-koubo .koubo-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09);border-radius:12px;padding:.9rem 1rem;}'
-      + '#content-digital-human-koubo .koubo-grid{display:grid;grid-template-columns:minmax(300px,360px) minmax(0,1fr);gap:1rem;align-items:start;}'
-      + '@media(max-width:900px){#content-digital-human-koubo .koubo-grid{grid-template-columns:1fr;}}'
-      + '#content-digital-human-koubo h4{margin:0 0 .6rem;font-size:.92rem;}'
-      + '#content-digital-human-koubo .koubo-drop{border:1.5px dashed rgba(255,255,255,.18);border-radius:12px;padding:1rem;text-align:center;cursor:pointer;transition:border-color .2s,background .2s;}'
-      + '#content-digital-human-koubo .koubo-drop:hover,#content-digital-human-koubo .koubo-drop.over{border-color:#f97316;background:rgba(249,115,22,.06);}'
-      + '#content-digital-human-koubo .koubo-drop small{display:block;color:var(--text-muted);font-size:.75rem;margin-top:.3rem;}'
-      + '#content-digital-human-koubo .koubo-photo{width:100%;max-height:260px;object-fit:contain;border-radius:8px;background:rgba(0,0,0,.25);display:block;}'
-      + '#content-digital-human-koubo .koubo-checks{margin:.6rem 0 0;padding:0;list-style:none;font-size:.76rem;color:var(--text-muted);}'
-      + '#content-digital-human-koubo .koubo-checks li{padding:.12rem 0;}'
-      + '#content-digital-human-koubo .koubo-checks .ok{color:#4ade80;}'
-      + '#content-digital-human-koubo .koubo-checks .warn{color:#fbbf24;}'
-      + '#content-digital-human-koubo textarea{width:100%;min-height:180px;box-sizing:border-box;padding:.6rem .7rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:8px;color:var(--text);font-size:.86rem;line-height:1.6;resize:vertical;}'
-      + '#content-digital-human-koubo select,#content-digital-human-koubo input[type=text]{padding:.35rem .5rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:6px;color:var(--text);font-size:.82rem;}'
-      + '#content-digital-human-koubo .koubo-row{display:flex;gap:.5rem;align-items:center;margin-top:.65rem;flex-wrap:wrap;}'
-      + '#content-digital-human-koubo .koubo-params{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.5rem .7rem;margin-top:.65rem;}'
-      + '#content-digital-human-koubo .koubo-params label{display:flex;flex-direction:column;gap:.22rem;font-size:.74rem;color:var(--text-muted);}'
-      + '#content-digital-human-koubo .koubo-params select,#content-digital-human-koubo .koubo-params input{padding:.34rem .45rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:6px;color:var(--text);font-size:.8rem;}'
-      + '#content-digital-human-koubo .koubo-row .spacer{flex:1;}'
-      + '#content-digital-human-koubo table{width:100%;border-collapse:collapse;margin-top:.6rem;font-size:.8rem;}'
-      + '#content-digital-human-koubo th,#content-digital-human-koubo td{text-align:left;padding:.35rem .4rem;border-bottom:1px solid rgba(255,255,255,.07);vertical-align:top;}'
-      + '#content-digital-human-koubo th{color:var(--text-muted);font-weight:500;font-size:.74rem;}'
-      + '#content-digital-human-koubo .koubo-total{margin-top:.6rem;font-size:.88rem;}'
-      + '#content-digital-human-koubo .koubo-history{margin-top:1rem;}'
-      + '#content-digital-human-koubo .koubo-proj{display:flex;justify-content:space-between;gap:.75rem;align-items:center;padding:.5rem 0;border-bottom:1px dashed rgba(255,255,255,.08);font-size:.8rem;}'
-      + '#content-digital-human-koubo .koubo-log{margin-top:1rem;padding:.6rem .75rem;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.07);border-radius:8px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.72rem;color:var(--text-muted);max-height:130px;overflow:auto;white-space:pre-wrap;}'
-      + '#kouboDepsModal{position:fixed;inset:0;z-index:3200;}'
-      + '#kouboDepsModal .koubo-modal-backdrop{position:absolute;inset:0;background:rgba(15,23,42,.58);}'
-      + '#kouboDepsModal .koubo-modal-card{position:relative;width:min(92vw,560px);margin:10vh auto 0;border-radius:20px;background:#fff;color:#0f172a;box-shadow:0 32px 80px rgba(15,23,42,.32);overflow:hidden;}'
-      + '#kouboDepsModal .koubo-modal-head{display:flex;align-items:center;justify-content:space-between;padding:18px 22px 10px;}'
-      + '#kouboDepsModal .koubo-modal-head h4{margin:0;font-size:17px;}'
-      + '#kouboDepsModal .koubo-modal-close{border:none;background:transparent;font-size:22px;line-height:1;cursor:pointer;color:#6b7280;}'
-      + '#kouboDepsModal .koubo-modal-body{padding:0 22px 12px;max-height:min(66vh,600px);overflow:auto;}'
-      + '#kouboDepsModal .koubo-modal-sub{font-size:12px;color:#6b7280;margin:0 0 10px;line-height:1.6;}'
-      + '#kouboDepsModal .koubo-dep{display:grid;grid-template-columns:1fr auto;gap:3px 10px;padding:8px 0;border-bottom:1px dashed #e5e7eb;}'
-      + '#kouboDepsModal .koubo-dep:last-child{border-bottom:0;}'
-      + '#kouboDepsModal .koubo-dep b{font-size:13px;font-weight:600;}'
-      + '#kouboDepsModal .koubo-dep small{display:block;color:#6b7280;font-size:11.5px;margin-top:2px;line-height:1.5;word-break:break-all;}'
-      + '#kouboDepsModal .koubo-dep-right{display:flex;align-items:center;gap:6px;}'
-      + '#kouboDepsModal .koubo-pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid transparent;white-space:nowrap;}'
-      + '#kouboDepsModal .koubo-pill.ok{background:#ecfdf5;color:#059669;border-color:#a7f3d0;}'
-      + '#kouboDepsModal .koubo-pill.missing{background:#fef2f2;color:#dc2626;border-color:#fecaca;}'
-      + '#kouboDepsModal .koubo-pill.installing{background:#eff6ff;color:#2563eb;border-color:#bfdbfe;}'
-      + '#kouboDepsModal .koubo-bar{grid-column:1/-1;height:4px;background:#e5e7eb;border-radius:999px;overflow:hidden;display:none;}'
-      + '#kouboDepsModal .koubo-bar.on{display:block;}'
-      + '#kouboDepsModal .koubo-bar i{display:block;height:100%;background:#3b82f6;width:0;transition:width .3s;}'
-      + '#kouboDepsModal .koubo-modal-foot{display:flex;justify-content:space-between;gap:10px;padding:12px 22px 18px;border-top:1px solid #f1f5f9;}'
-      + '#kouboDepsModal .koubo-btn{font-size:13px;padding:7px 14px;border-radius:8px;border:1px solid #d1d5db;background:#fff;cursor:pointer;}'
-      + '#kouboDepsModal .koubo-btn.primary{background:linear-gradient(135deg,#f97316,#ea580c);border-color:transparent;color:#fff;}'
-      + '#kouboDepsModal .koubo-btn:disabled{opacity:.55;cursor:default;}'
-      + '#kouboDepsModal .koubo-install{font-size:12px;padding:4px 10px;border-radius:6px;border:1px solid #d1d5db;background:#fff;cursor:pointer;}';
+      + '#content-digital-human-koubo{background:#f8fafc;color:#334155;min-height:100%;padding:16px 20px 28px;box-sizing:border-box;font-size:13px;}'
+      + '#content-digital-human-koubo .kb-root{display:grid;grid-template-columns:340px minmax(0,1fr);gap:20px;align-items:start;max-width:1600px;margin:0 auto;}'
+      + '@media(max-width:980px){#content-digital-human-koubo .kb-root{grid-template-columns:1fr;}}'
+      + '#content-digital-human-koubo .kb-side{display:flex;flex-direction:column;gap:12px;position:sticky;top:12px;max-height:calc(100vh - 24px);overflow-y:auto;padding-right:2px;}'
+      + '#content-digital-human-koubo .kb-side-head{display:flex;align-items:center;justify-content:space-between;padding:2px 4px 6px;}'
+      + '#content-digital-human-koubo .kb-side-head h3{margin:0;font-size:20px;font-weight:500;letter-spacing:-.02em;color:#0f172a;}'
+      + '#content-digital-human-koubo .kb-pill{font-size:11px;padding:3px 9px;border-radius:999px;background:#eef2ff;color:#4f46e5;border:1px solid #e0e7ff;}'
+      + '#content-digital-human-koubo .kb-pill.ok{background:#ecfdf5;color:#059669;border-color:#a7f3d0;}'
+      + '#content-digital-human-koubo .kb-pill.warn{background:#fffbeb;color:#b45309;border-color:#fde68a;}'
+      + '#content-digital-human-koubo .kb-card{background:#fff;border:1px solid #eef2f7;border-radius:16px;padding:14px;box-shadow:0 4px 20px -4px rgba(15,23,42,.04);}'
+      + '#content-digital-human-koubo .kb-sec-title{display:flex;align-items:center;justify-content:space-between;font-size:13px;font-weight:500;color:#0f172a;margin-bottom:10px;}'
+      + '#content-digital-human-koubo .kb-sec-title small{font-weight:400;font-size:11px;color:#94a3b8;}'
+      + '#content-digital-human-koubo .kb-drop{border:1.5px dashed #dbe3ef;border-radius:14px;background:#fbfdff;padding:18px 12px;text-align:center;cursor:pointer;transition:.15s;}'
+      + '#content-digital-human-koubo .kb-drop:hover{border-color:#93c5fd;background:#f5f9ff;}'
+      + '#content-digital-human-koubo .kb-drop b{display:block;font-size:13px;color:#334155;font-weight:500;}'
+      + '#content-digital-human-koubo .kb-drop small{display:block;margin-top:4px;font-size:11px;color:#94a3b8;}'
+      + '#content-digital-human-koubo .kb-photo{width:100%;max-height:230px;object-fit:contain;border-radius:12px;background:#0f172a;display:block;}'
+      + '#content-digital-human-koubo .kb-checks{margin:8px 0 0;padding:0;list-style:none;font-size:11px;color:#64748b;line-height:1.8;}'
+      + '#content-digital-human-koubo .kb-checks .ok{color:#059669;}'
+      + '#content-digital-human-koubo .kb-checks .warn{color:#b45309;}'
+      + '#content-digital-human-koubo textarea{width:100%;min-height:120px;box-sizing:border-box;padding:10px 12px;background:#fbfdff;border:1px solid #e2e8f0;border-radius:12px;color:#0f172a;font-size:13px;line-height:1.7;resize:vertical;outline:none;}'
+      + '#content-digital-human-koubo textarea:focus{border-color:#93c5fd;background:#fff;}'
+      + '#content-digital-human-koubo select,#content-digital-human-koubo input[type=text]{width:100%;box-sizing:border-box;padding:7px 9px;background:#fff;border:1px solid #e2e8f0;border-radius:9px;color:#334155;font-size:12px;outline:none;}'
+      + '#content-digital-human-koubo select:focus,#content-digital-human-koubo input[type=text]:focus{border-color:#93c5fd;}'
+      + '#content-digital-human-koubo .kb-field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:#64748b;}'
+      + '#content-digital-human-koubo .kb-grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}'
+      + '#content-digital-human-koubo .kb-collapse{display:flex;align-items:center;justify-content:space-between;width:100%;background:none;border:0;padding:0;cursor:pointer;font-size:13px;font-weight:500;color:#0f172a;}'
+      + '#content-digital-human-koubo .kb-collapse span{font-weight:400;font-size:11px;color:#94a3b8;}'
+      + '#content-digital-human-koubo .kb-params{display:none;margin-top:12px;padding-top:12px;border-top:1px solid #f1f5f9;flex-direction:column;gap:10px;}'
+      + '#content-digital-human-koubo .kb-params.open{display:flex;}'
+      + '#content-digital-human-koubo .kb-pack{display:flex;flex-wrap:wrap;gap:6px 12px;margin-top:6px;}'
+      + '#content-digital-human-koubo .kb-pack label{display:inline-flex;align-items:center;gap:4px;font-size:11px;color:#475569;}'
+      + '#content-digital-human-koubo .kb-btn{border:1px solid #e2e8f0;background:#fff;color:#475569;border-radius:9px;padding:7px 12px;font-size:12px;cursor:pointer;transition:.15s;}'
+      + '#content-digital-human-koubo .kb-btn:hover{border-color:#93c5fd;color:#2563eb;}'
+      + '#content-digital-human-koubo .kb-btn:disabled{opacity:.5;cursor:default;}'
+      + '#content-digital-human-koubo .kb-btn-primary{width:100%;border:0;border-radius:12px;padding:11px 14px;font-size:13px;font-weight:500;color:#fff;background:linear-gradient(135deg,#3b82f6,#2563eb);cursor:pointer;box-shadow:0 6px 16px -6px rgba(37,99,235,.6);}'
+      + '#content-digital-human-koubo .kb-btn-primary:disabled{background:#cbd5e1;box-shadow:none;cursor:default;}'
+      + '#content-digital-human-koubo .kb-cta{display:flex;flex-direction:column;gap:8px;position:sticky;bottom:0;padding:10px 0 2px;background:linear-gradient(to top,#f8fafc 72%,rgba(248,250,252,0));}'
+      + '#content-digital-human-koubo .kb-cta-row{display:flex;gap:8px;}'
+      + '#content-digital-human-koubo .kb-cta-row .kb-btn{flex:1;}'
+      + '#content-digital-human-koubo .kb-hint{font-size:11px;color:#94a3b8;text-align:center;}'
+      + '#content-digital-human-koubo .kb-stage{display:flex;flex-direction:column;gap:14px;min-width:0;}'
+      + '#content-digital-human-koubo .kb-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:2px 2px 0;}'
+      + '#content-digital-human-koubo .kb-crumb{font-size:12px;color:#94a3b8;}'
+      + '#content-digital-human-koubo .kb-crumb b{color:#0f172a;font-weight:500;}'
+      + '#content-digital-human-koubo .kb-tools{display:flex;gap:8px;flex-wrap:wrap;}'
+      + '#content-digital-human-koubo .kb-preview{position:relative;background:#0f172a;border-radius:18px;min-height:380px;display:flex;align-items:center;justify-content:center;overflow:hidden;}'
+      + '#content-digital-human-koubo .kb-preview video{width:100%;height:100%;max-height:520px;object-fit:contain;background:#000;}'
+      + '#content-digital-human-koubo .kb-empty{color:#64748b;font-size:13px;text-align:center;line-height:1.9;padding:24px;}'
+      + '#content-digital-human-koubo .kb-empty b{display:block;color:#e2e8f0;font-size:15px;font-weight:500;margin-bottom:4px;}'
+      + '#content-digital-human-koubo .kb-progress{position:absolute;left:16px;right:16px;bottom:14px;background:rgba(15,23,42,.72);backdrop-filter:blur(6px);border:1px solid rgba(148,163,184,.25);border-radius:10px;padding:8px 12px;color:#e2e8f0;font-size:12px;}'
+      + '#content-digital-human-koubo .kb-progress .bar{height:4px;background:rgba(148,163,184,.25);border-radius:999px;overflow:hidden;margin-top:6px;}'
+      + '#content-digital-human-koubo .kb-progress .bar i{display:block;height:100%;background:#60a5fa;width:0;transition:width .3s;}'
+      + '#content-digital-human-koubo .kb-meta{display:flex;gap:8px;flex-wrap:wrap;font-size:11px;color:#64748b;}'
+      + '#content-digital-human-koubo .kb-chip{background:#fff;border:1px solid #eef2f7;border-radius:999px;padding:4px 10px;}'
+      + '#content-digital-human-koubo table{width:100%;border-collapse:collapse;font-size:12px;}'
+      + '#content-digital-human-koubo th,#content-digital-human-koubo td{text-align:left;padding:7px 8px;border-bottom:1px solid #f1f5f9;vertical-align:top;color:#475569;}'
+      + '#content-digital-human-koubo th{color:#94a3b8;font-weight:400;font-size:11px;}'
+      + '#content-digital-human-koubo .kb-total{display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:12px;color:#64748b;}'
+      + '#content-digital-human-koubo .kb-total b{color:#0f172a;font-size:14px;}'
+      + '#content-digital-human-koubo .kb-proj{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 2px;border-bottom:1px solid #f1f5f9;font-size:12px;}'
+      + '#content-digital-human-koubo .kb-proj:last-child{border-bottom:0;}'
+      + '#content-digital-human-koubo .kb-proj b{color:#0f172a;font-weight:500;}'
+      + '#content-digital-human-koubo .kb-proj small{color:#94a3b8;font-size:11px;}'
+      + '#content-digital-human-koubo .kb-log{margin-top:2px;padding:10px 12px;background:#fff;border:1px solid #eef2f7;border-radius:12px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#94a3b8;max-height:120px;overflow:auto;white-space:pre-wrap;}'
+      + '#kbDepsModal{position:fixed;inset:0;z-index:3200;}'
+      + '#kbDepsModal .kb-modal-backdrop{position:absolute;inset:0;background:rgba(15,23,42,.45);}'
+      + '#kbDepsModal .kb-modal-card{position:relative;width:min(92vw,560px);margin:10vh auto 0;border-radius:20px;background:#fff;color:#0f172a;box-shadow:0 32px 80px rgba(15,23,42,.28);overflow:hidden;}'
+      + '#kbDepsModal .kb-modal-head{display:flex;align-items:center;justify-content:space-between;padding:18px 22px 10px;}'
+      + '#kbDepsModal .kb-modal-head h4{margin:0;font-size:17px;font-weight:500;}'
+      + '#kbDepsModal .kb-modal-close{border:none;background:transparent;font-size:22px;line-height:1;cursor:pointer;color:#94a3b8;}'
+      + '#kbDepsModal .kb-modal-body{padding:0 22px 12px;max-height:min(66vh,600px);overflow:auto;}'
+      + '#kbDepsModal .kb-modal-sub{font-size:12px;color:#64748b;margin:0 0 10px;line-height:1.6;}'
+      + '#kbDepsModal .kb-dep{display:grid;grid-template-columns:1fr auto;gap:3px 10px;padding:8px 0;border-bottom:1px dashed #eef2f7;}'
+      + '#kbDepsModal .kb-dep:last-child{border-bottom:0;}'
+      + '#kbDepsModal .kb-dep b{font-size:13px;font-weight:500;}'
+      + '#kbDepsModal .kb-dep small{display:block;color:#94a3b8;font-size:11px;margin-top:2px;line-height:1.5;word-break:break-all;}'
+      + '#kbDepsModal .kb-dep-right{display:flex;align-items:center;gap:6px;}'
+      + '#kbDepsModal .kb-pill{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid transparent;}'
+      + '#kbDepsModal .kb-pill.ok{background:#ecfdf5;color:#059669;border-color:#a7f3d0;}'
+      + '#kbDepsModal .kb-pill.missing{background:#fef2f2;color:#dc2626;border-color:#fecaca;}'
+      + '#kbDepsModal .kb-pill.installing{background:#eff6ff;color:#2563eb;border-color:#bfdbfe;}'
+      + '#kbDepsModal .kb-bar{grid-column:1/-1;height:4px;background:#eef2f7;border-radius:999px;overflow:hidden;display:none;}'
+      + '#kbDepsModal .kb-bar.on{display:block;}'
+      + '#kbDepsModal .kb-bar i{display:block;height:100%;background:#3b82f6;width:0;transition:width .3s;}'
+      + '#kbDepsModal .kb-modal-foot{display:flex;justify-content:space-between;gap:10px;padding:12px 22px 18px;border-top:1px solid #f1f5f9;}'
+      + '#kbDepsModal .kb-btn{font-size:13px;padding:7px 14px;border-radius:9px;border:1px solid #e2e8f0;background:#fff;cursor:pointer;}'
+      + '#kbDepsModal .kb-btn.primary{background:linear-gradient(135deg,#3b82f6,#2563eb);border-color:transparent;color:#fff;}'
+      + '#kbDepsModal .kb-install{font-size:12px;padding:4px 10px;border-radius:7px;border:1px solid #e2e8f0;background:#fff;cursor:pointer;}';
     var style = document.createElement('style');
-    style.id = 'kouboStyle';
+    style.id = 'kbStyle';
     style.textContent = css;
     document.head.appendChild(style);
   }
 
   function shell() {
-    return ''
-      + '<div class="koubo-hero">'
-      + '  <div><h3>数字人koubo</h3><p>一张照片 + 一句台词 → 口播成片。第一阶段：素材、分段、任务包（生成待接入 Renoise）。</p></div>'
-      + '  <div style="display:flex;gap:.5rem;flex-wrap:wrap;">'
-      + '    <button type="button" class="btn btn-ghost btn-sm" id="kouboBack">返回技能商店</button>'
-      + '    <button type="button" class="btn btn-ghost btn-sm" id="kouboOpenDeps">安装依赖</button>'
-      + '    <button type="button" class="btn btn-ghost btn-sm" id="kouboRefresh">刷新</button>'
-      + '  </div>'
-      + '</div>'
-      + '<div class="koubo-steps" id="kouboSteps">'
-      + '  <div class="koubo-step on" data-step="1"><b>1</b><span>人物素材</span></div>'
-      + '  <div class="koubo-step" data-step="2"><b>2</b><span>口播文案</span></div>'
-      + '  <div class="koubo-step" data-step="3"><b>3</b><span>分段与任务包</span></div>'
-      + '</div>'
-      + '<div id="kouboStepBody"></div>'
-      + '<div class="koubo-card koubo-history"><h4>项目记录</h4><div id="kouboProjects"><span style="font-size:.78rem;color:var(--text-muted);">加载中…</span></div></div>'
-      + '<div class="koubo-log" id="kouboLog">等待操作…</div>';
-  }
-
-  function stepBar() {
-    var bar = $('kouboSteps');
-    if (!bar) return;
-    bar.querySelectorAll('.koubo-step').forEach(function (el) {
-      var n = Number(el.getAttribute('data-step'));
-      el.classList.toggle('on', n === state.step);
-      el.classList.toggle('done', n < state.step);
-    });
-  }
-
-  function photoBox() {
-    if (!state.upload) {
-      return '<div class="koubo-drop" id="kouboDrop">'
-        + '<div style="font-size:.86rem;">点击或拖入人物照片</div>'
-        + '<small>jpg / png / webp，≤ 15MB，建议短边 ≥ 512px</small>'
-        + '<input type="file" id="kouboFile" accept="image/jpeg,image/png,image/webp" style="display:none;">'
-        + '</div>';
-    }
-    var c = state.upload.checks || {};
-    var warns = c.warnings || [];
-    return '<img class="koubo-photo" src="' + esc(API + state.upload.url) + '" alt="形象照">'
-      + '<ul class="koubo-checks">'
-      + '<li class="' + (Math.min(c.width || 0, c.height || 0) >= 512 ? 'ok' : 'warn') + '">分辨率 ' + (c.width || 0) + '×' + (c.height || 0) + '</li>'
-      + '<li class="' + ((c.sharpness || 0) >= 25 ? 'ok' : 'warn') + '">清晰度 ' + (c.sharpness || 0) + (c.sharpness >= 25 ? ' · 合格' : ' · 偏低') + '</li>'
-      + '<li class="' + ((c.brightness || 0) >= 60 && (c.brightness || 0) <= 215 ? 'ok' : 'warn') + '">亮度 ' + (c.brightness || 0) + '</li>'
-      + warns.map(function (w) { return '<li class="warn">⚠ ' + esc(w) + '</li>'; }).join('')
-      + '</ul>'
-      + '<div class="koubo-row"><button type="button" class="btn btn-ghost btn-sm" id="kouboReplace">换一张</button></div>';
-  }
-
-  function renderStep1() {
-    return '<div class="koubo-grid">'
-      + '<section class="koubo-card"><h4>人物素材</h4>' + photoBox() + '</section>'
-      + '<section class="koubo-card"><h4>拍摄要求</h4>'
-      + '<ul class="koubo-checks">'
-      + '<li>正脸、平视，嘴巴闭合（口型从闭嘴开始最稳）</li>'
-      + '<li>头发不挡脸，光线均匀，不要逆光</li>'
-      + '<li>背景干净，人物占画面 50%–70%，头顶留白</li>'
-      + '<li>只用本人或已获授权的人像；成片会带「内容由 AI 数字人演绎」</li>'
-      + '</ul>'
-      + '<div class="koubo-row"><span class="spacer"></span><button type="button" class="btn btn-primary btn-sm" id="kouboNext1">下一步：写文案</button></div>'
+    return '<div class="kb-root">'
+      + '<aside class="kb-side">'
+      + '  <div class="kb-side-head"><h3>数字人koubo</h3><span class="kb-pill" id="kbStatus">未保存</span></div>'
+      + '  <div class="kb-card"><div class="kb-sec-title">形象<small>一张正脸照</small></div><div id="kbAvatar"></div></div>'
+      + '  <div class="kb-card"><div class="kb-sec-title">口播稿<small id="kbCount">0 字</small></div><textarea id="kbText" placeholder="粘贴口播稿。按句切分，每段不超过约 15 秒。"></textarea></div>'
+      + '  <div class="kb-card"><button type="button" class="kb-collapse" id="kbParamToggle">创作参数<span id="kbParamSummary">默认</span></button><div class="kb-params" id="kbParams"></div></div>'
+      + '  <div class="kb-cta"><button type="button" class="kb-btn-primary" id="kbGenerate">生成第 1 段</button>'
+      + '    <div class="kb-cta-row"><button type="button" class="kb-btn" id="kbQuote">只看分段报价</button><button type="button" class="kb-btn" id="kbGenerateAll">全部生成</button></div>'
+      + '    <div class="kb-hint">按次扣算力，建议先出第 1 段确认口型与音色</div></div>'
+      + '</aside>'
+      + '<section class="kb-stage">'
+      + '  <div class="kb-toolbar"><div class="kb-crumb">工作台 / <b id="kbProjName">未命名项目</b></div>'
+      + '    <div class="kb-tools"><button type="button" class="kb-btn" id="kbSave">保存项目</button><button type="button" class="kb-btn" id="kbExport">导出 tasks.json</button><button type="button" class="kb-btn" id="kbDeps">安装依赖</button><button type="button" class="kb-btn" id="kbBack">返回商店</button></div></div>'
+      + '  <div class="kb-preview" id="kbPreview"><div class="kb-empty"><b>还没有成片</b>左侧填好形象与口播稿，点击「生成第 1 段」</div></div>'
+      + '  <div class="kb-meta" id="kbMeta"></div>'
+      + '  <div class="kb-card"><div class="kb-sec-title">分段<small id="kbSegCount">0 段</small></div><div id="kbSegments"><span style="font-size:12px;color:#94a3b8;">还没有分段，先点「只看分段报价」或直接生成。</span></div></div>'
+      + '  <div class="kb-card"><div class="kb-sec-title">项目记录<small id="kbProjCount"></small></div><div id="kbProjects"></div></div>'
+      + '  <div class="kb-log" id="kbLog">准备就绪</div>'
       + '</section></div>';
   }
 
-  function _optList(key, value, labelKey) {
+  function optList(key, value) {
     var arr = (state.options && state.options[key]) || [];
     return arr.map(function (o) {
       var v = (o && o.id != null) ? o.id : o;
-      var label = labelKey ? (o[labelKey] || v) : ((o && o.name) || v);
+      var label = (o && o.name) ? o.name : v;
       return '<option value="' + esc(v) + '"' + (String(v) === String(value) ? ' selected' : '') + '>' + esc(label) + '</option>';
     }).join('');
   }
 
-  function _packHtml() {
-    var arr = (state.options && state.options.packaging) || [];
-    var cur = state.form.packaging || [];
-    var groups = {};
-    arr.forEach(function (o) { (groups[o.group] = groups[o.group] || []).push(o); });
-    return Object.keys(groups).map(function (g) {
-      return '<div style="margin-top:.4rem;"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.15rem;">' + esc(g) + '</div>'
-        + groups[g].map(function (o) {
-            return '<label style="display:inline-flex;align-items:center;gap:.25rem;margin:.18rem .7rem .18rem 0;font-size:.76rem;color:var(--text);">'
-              + '<input type="checkbox" data-pack="' + esc(o.id) + '"' + (cur.indexOf(o.id) >= 0 ? ' checked' : '') + '> ' + esc(o.name) + '</label>';
-          }).join('') + '</div>';
-    }).join('');
-  }
-
-  function renderStep2() {
-    var f = state.form || {};
-    var text = state.project ? state.project.script : (state.script || '');
-    var isCustom = f.scene === 'custom';
-    return '<div class="koubo-card"><h4>口播文案与创作参数</h4>'
-      + '<textarea id="kouboText" placeholder="粘贴口播稿。按句切分，每段不超过约 15 秒（中文 5.4 字/秒）。">' + esc(text) + '</textarea>'
-      + '<div class="koubo-params">'
-      + '  <label>主播<select id="kouboHost">' + _optList('hosts', f.host) + '</select></label>'
-      + '  <label>景别<select id="kouboShot">' + _optList('shots', f.shot) + '</select></label>'
-      + '  <label>比例<select id="kouboRatio"><option value="">跟随主播</option>' + ((state.options && state.options.ratios) || ['9:16','16:9']).map(function (r) { return '<option value="' + esc(r) + '"' + (f.ratio === r ? ' selected' : '') + '>' + esc(r) + '</option>'; }).join('') + '</select></label>'
-      + '  <label>分辨率<select id="kouboResolution"><option value="">跟随景别</option>' + ((state.options && state.options.resolutions) || ['720p','480p']).map(function (r) { return '<option value="' + esc(r) + '"' + (f.resolution === r ? ' selected' : '') + '>' + esc(r) + '</option>'; }).join('') + '</select></label>'
-      + '  <label>语言<select id="kouboLanguage">' + _optList('languages', f.language) + '</select></label>'
-      + '  <label>模型<select id="kouboModel">' + _optList('models', f.model) + '</select></label>'
-      + '  <label>场景<select id="kouboScene">' + _optList('scenes', f.scene) + '</select></label>'
-      + '  <label>音色描述<input type="text" id="kouboVoice" value="' + esc(f.voice || '') + '" placeholder="留空用主播默认音色"></label>'
-      + '</div>'
-      + '<input type="text" id="kouboScenePrompt" style="width:100%;margin-top:.45rem;box-sizing:border-box;display:' + (isCustom ? 'block' : 'none') + ';" value="' + esc(f.scene_prompt || '') + '" placeholder="自定义场景描述，例如：夜晚霓虹街头，浅景深">'
-      + '<label style="display:flex;align-items:center;gap:.4rem;margin-top:.55rem;font-size:.78rem;color:var(--text-muted);"><input type="checkbox" id="kouboCompose"' + (f.compose_scene ? ' checked' : '') + '> 先合成场景图（额外消耗 1 次图片生成，失败自动回退原图）</label>'
-      + '<div style="margin-top:.7rem;"><div style="font-size:.8rem;font-weight:600;">后期包装技巧</div><div style="font-size:.72rem;color:var(--text-muted);">选择要用的手法，随项目保存（渲染接入后生效）。</div>' + _packHtml() + '</div>'
-      + '<div class="koubo-row"><small id="kouboCount" style="color:var(--text-muted);font-size:.75rem;">0 字</small><span class="spacer"></span>'
-      + '<button type="button" class="btn btn-ghost btn-sm" id="kouboPrev2">上一步</button>'
-      + '<button type="button" class="btn btn-primary btn-sm" id="kouboQuote">生成分段与报价</button></div>'
-      + '</div>';
-  }
-
-  function _labelOf(key, id) {
-    var arr = (state.options && state.options[key]) || [];
-    for (var i = 0; i < arr.length; i++) {
-      if (String(arr[i].id) === String(id)) return arr[i].name;
+  function renderAvatar() {
+    var box = $('kbAvatar');
+    if (!box) return;
+    if (!state.upload) {
+      box.innerHTML = '<div class="kb-drop" id="kbDrop"><b>点击或拖入人物照片</b><small>jpg / png / webp，≤ 15MB，短边 ≥ 512</small><input type="file" id="kbFile" accept="image/jpeg,image/png,image/webp" style="display:none;"></div>';
+      bindUpload();
+      return;
     }
-    return id || '';
+    var c = state.upload.checks || {};
+    box.innerHTML = '<img class="kb-photo" src="' + esc(API + state.upload.url) + '" alt="形象照">'
+      + '<ul class="kb-checks">'
+      + '<li class="' + (Math.min(c.width || 0, c.height || 0) >= 512 ? 'ok' : 'warn') + '">分辨率 ' + (c.width || 0) + '×' + (c.height || 0) + '</li>'
+      + '<li class="' + ((c.sharpness || 0) >= 25 ? 'ok' : 'warn') + '">清晰度 ' + (c.sharpness || 0) + '</li>'
+      + '<li class="' + ((c.brightness || 0) >= 60 && (c.brightness || 0) <= 215 ? 'ok' : 'warn') + '">亮度 ' + (c.brightness || 0) + '</li>'
+      + (c.warnings || []).map(function (w) { return '<li class="warn">⚠ ' + esc(w) + '</li>'; }).join('')
+      + '</ul><div style="margin-top:8px;"><button type="button" class="kb-btn" id="kbReplace">换一张</button></div>';
+    var rep = $('kbReplace');
+    if (rep) rep.onclick = function () { state.upload = null; renderAvatar(); };
   }
 
-  function _optionSummary(f) {
-    f = f || {};
-    var parts = [];
-    if (f.host) parts.push('主播 ' + _labelOf('hosts', f.host));
-    if (f.shot) parts.push('景别 ' + _labelOf('shots', f.shot));
-    if (f.ratio) parts.push('比例 ' + f.ratio);
-    if (f.resolution) parts.push(f.resolution);
-    if (f.language) parts.push(f.language);
-    if (f.scene && f.scene !== 'none') parts.push('场景 ' + _labelOf('scenes', f.scene) + (f.compose_scene ? '（合成）' : ''));
-    if (f.packaging && f.packaging.length) parts.push('包装 ' + f.packaging.length + ' 项');
-    return '<div style="font-size:.74rem;color:var(--text-muted);margin-top:.5rem;">' + esc(parts.join(' · ')) + '</div>';
+  function bindUpload() {
+    var drop = $('kbDrop'), file = $('kbFile');
+    if (!drop || !file) return;
+    drop.addEventListener('click', function () { file.click(); });
+    drop.addEventListener('dragover', function (e) { e.preventDefault(); drop.style.borderColor = '#93c5fd'; });
+    drop.addEventListener('dragleave', function () { drop.style.borderColor = ''; });
+    drop.addEventListener('drop', function (e) {
+      e.preventDefault(); drop.style.borderColor = '';
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+    });
+    file.addEventListener('change', function () { if (file.files && file.files[0]) upload(file.files[0]); });
   }
 
-  function segmentsTable(segs, totalSec, totalCredits) {
-    var rows = (segs || []).map(function (s) {
+  function renderParams() {
+    var box = $('kbParams');
+    if (!box) return;
+    var f = state.form;
+    var isCustom = f.scene === 'custom';
+    var packs = (state.options && state.options.packaging) || [];
+    var groups = {};
+    packs.forEach(function (o) { (groups[o.group] = groups[o.group] || []).push(o); });
+    box.innerHTML = ''
+      + '<div class="kb-grid2">'
+      + '  <label class="kb-field">主播<select id="kbHost">' + optList('hosts', f.host) + '</select></label>'
+      + '  <label class="kb-field">景别<select id="kbShot">' + optList('shots', f.shot) + '</select></label>'
+      + '  <label class="kb-field">比例<select id="kbRatio"><option value="">跟随主播</option>' + ((state.options && state.options.ratios) || ['9:16', '16:9']).map(function (r) { return '<option value="' + esc(r) + '"' + (f.ratio === r ? ' selected' : '') + '>' + esc(r) + '</option>'; }).join('') + '</select></label>'
+      + '  <label class="kb-field">分辨率<select id="kbResolution"><option value="">跟随景别</option>' + ((state.options && state.options.resolutions) || ['720p', '480p']).map(function (r) { return '<option value="' + esc(r) + '"' + (f.resolution === r ? ' selected' : '') + '>' + esc(r) + '</option>'; }).join('') + '</select></label>'
+      + '  <label class="kb-field">语言<select id="kbLanguage">' + optList('languages', f.language) + '</select></label>'
+      + '  <label class="kb-field">模型<select id="kbModel">' + optList('models', f.model) + '</select></label>'
+      + '  <label class="kb-field">场景<select id="kbScene">' + optList('scenes', f.scene) + '</select></label>'
+      + '  <label class="kb-field">音色描述<input type="text" id="kbVoice" value="' + esc(f.voice || '') + '" placeholder="留空用默认"></label>'
+      + '</div>'
+      + '<label class="kb-field" id="kbSceneWrap" style="display:' + (isCustom ? 'flex' : 'none') + ';">场景描述<input type="text" id="kbScenePrompt" value="' + esc(f.scene_prompt || '') + '" placeholder="例如：夜晚霓虹街头，浅景深"></label>'
+      + '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#64748b;"><input type="checkbox" id="kbCompose"' + (f.compose_scene ? ' checked' : '') + '> 先合成场景图（额外 1 次图片生成，失败回退原图）</label>'
+      + '<div><div style="font-size:12px;font-weight:500;color:#0f172a;margin-bottom:2px;">后期包装技巧</div>'
+      + Object.keys(groups).map(function (g) {
+          return '<div style="margin-top:6px;font-size:11px;color:#94a3b8;">' + esc(g) + '</div><div class="kb-pack">'
+            + groups[g].map(function (o) {
+                return '<label><input type="checkbox" data-pack="' + esc(o.id) + '"' + ((state.form.packaging || []).indexOf(o.id) >= 0 ? ' checked' : '') + '> ' + esc(o.name) + '</label>';
+              }).join('') + '</div>';
+        }).join('')
+      + '</div>';
+    bindParams();
+    updateParamSummary();
+  }
+
+  function readParams() {
+    state.form = {
+      host: ($('kbHost') || {}).value || 'tank',
+      shot: ($('kbShot') || {}).value || 'full',
+      ratio: ($('kbRatio') || {}).value || '',
+      resolution: ($('kbResolution') || {}).value || '',
+      language: ($('kbLanguage') || {}).value || 'Mandarin Chinese',
+      model: ($('kbModel') || {}).value || '',
+      scene: ($('kbScene') || {}).value || 'none',
+      scene_prompt: ($('kbScenePrompt') || {}).value || '',
+      voice: ($('kbVoice') || {}).value || '',
+      compose_scene: !!($('kbCompose') && $('kbCompose').checked),
+      packaging: Array.prototype.slice.call(document.querySelectorAll('[data-pack]:checked')).map(function (el) { return el.getAttribute('data-pack'); })
+    };
+    updateParamSummary();
+  }
+
+  function bindParams() {
+    var box = $('kbParams');
+    if (!box) return;
+    box.addEventListener('change', function (ev) {
+      if (ev && ev.target && ev.target.id === 'kbHost') {
+        var h = ((state.options && state.options.hosts) || []).filter(function (x) { return x.id === ($('kbHost') || {}).value; })[0];
+        if (h && !(($('kbRatio') || {}).value)) { var sel = $('kbRatio'); if (sel) sel.value = h.ratio || ''; }
+      }
+      readParams();
+      var wrap = $('kbSceneWrap');
+      if (wrap) wrap.style.display = state.form.scene === 'custom' ? 'flex' : 'none';
+    });
+    box.addEventListener('input', function () { readParams(); });
+  }
+
+  function updateParamSummary() {
+    var el = $('kbParamSummary');
+    if (!el) return;
+    var f = state.form || {};
+    var shot = ((state.options && state.options.shots) || []).filter(function (x) { return x.id === f.shot; })[0];
+    el.textContent = (shot ? shot.name : '全屏') + (f.ratio ? ' · ' + f.ratio : '') + (f.packaging && f.packaging.length ? ' · 包装 ' + f.packaging.length : '');
+  }
+
+  function renderMeta() {
+    var el = $('kbMeta');
+    if (!el) return;
+    var q = state.quote || (state.project && state.project.segments ? state.project : null);
+    if (!q) { el.innerHTML = ''; return; }
+    var f = state.form || {};
+    var host = ((state.options && state.options.hosts) || []).filter(function (x) { return x.id === f.host; })[0];
+    var scene = ((state.options && state.options.scenes) || []).filter(function (x) { return x.id === f.scene; })[0];
+    var chips = [];
+    chips.push('<span class="kb-chip">' + esc(host ? host.name : '白背心') + '</span>');
+    chips.push('<span class="kb-chip">' + (q.total_seconds || 0) + ' 秒</span>');
+    chips.push('<span class="kb-chip">' + (q.total_credits || 0) + ' credits</span>');
+    if (f.language) chips.push('<span class="kb-chip">' + esc(f.language) + '</span>');
+    if (scene && f.scene !== 'none') chips.push('<span class="kb-chip">场景 · ' + esc(scene.name) + (f.compose_scene ? '（合成）' : '') + '</span>');
+    el.innerHTML = chips.join('');
+  }
+
+  function renderSegments() {
+    var box = $('kbSegments');
+    if (!box) return;
+    var q = state.quote || (state.project && state.project.segments ? state.project : null);
+    if (!q || !q.segments || !q.segments.length) {
+      box.innerHTML = '<span style="font-size:12px;color:#94a3b8;">还没有分段，先点「只看分段报价」或直接生成。</span>';
+      if ($('kbSegCount')) $('kbSegCount').textContent = '0 段';
+      return;
+    }
+    var rows = q.segments.map(function (s) {
       return '<tr><td>' + esc(s.id) + '</td><td>' + esc(s.text) + '</td><td>' + s.seconds + 's</td><td>' + esc(s.resolution) + '</td><td>' + s.credits + '</td></tr>';
     }).join('');
-    return '<table><thead><tr><th>段</th><th>台词</th><th>时长</th><th>分辨率</th><th>credits</th></tr></thead><tbody>' + rows + '</tbody></table>'
-      + '<div class="koubo-total">共 ' + (segs || []).length + ' 段 · ' + totalSec + ' 秒 · <b>' + totalCredits + ' credits</b></div>';
+    box.innerHTML = '<table><thead><tr><th>段</th><th>台词</th><th>时长</th><th>分辨率</th><th>credits</th></tr></thead><tbody>' + rows + '</tbody></table>'
+      + '<div class="kb-total"><span>共 ' + q.segments.length + ' 段 · ' + (q.total_seconds || 0) + ' 秒</span><b>' + (q.total_credits || 0) + ' credits</b></div>';
+    if ($('kbSegCount')) $('kbSegCount').textContent = q.segments.length + ' 段';
   }
 
-  function renderStep3() {
-    var q = state.quote;
-    if (!q) return '<div class="koubo-card"><h4>还没有分段</h4><p style="font-size:.8rem;color:var(--text-muted);">请先回到上一步生成分段。</p></div>';
-    var saved = '';
-    if (state.project && state.project.id) {
-      var isDone = state.project.status === 'generated';
-      saved = '<div class="koubo-card" style="margin-top:1rem;"><h4>生成</h4>'
-        + '<p style="font-size:.8rem;color:var(--text-muted);">项目：<b>' + esc(state.project.name) + '</b>（' + esc(state.project.id) + '）</p>';
-      if (isDone) {
-        saved += '<video controls playsinline style="width:100%;max-height:420px;border-radius:10px;background:#000;margin:.4rem 0;" src="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/video') + '"></video>'
-          + '<div class="koubo-row"><a class="btn btn-primary btn-sm" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/video') + '" download>下载成片</a>'
-          + '<button type="button" class="btn btn-ghost btn-sm" id="kouboRegen">重新生成</button>'
-          + '<button type="button" class="btn btn-ghost btn-sm" id="kouboExport">下载 tasks.json</button></div>';
-      } else {
-        saved += '<div class="koubo-row"><button type="button" class="btn btn-primary btn-sm" id="kouboGenFirst">提交生成第 1 段</button>'
-          + '<button type="button" class="btn btn-ghost btn-sm" id="kouboGenAll">全部生成（' + (state.quote ? state.quote.segments.length : 0) + ' 段）</button>'
-          + '<button type="button" class="btn btn-ghost btn-sm" id="kouboExport">下载 tasks.json</button>'
-          + '<button type="button" class="btn btn-ghost btn-sm" id="kouboCopyScript">复制文案</button></div>'
-          + '<p style="font-size:.74rem;color:var(--text-muted);margin:.45rem 0 0;">生成走本机 MCP 的 Grok 1.5 图生视频，按次扣算力（每段 1 次）。建议先出第 1 段确认口型和音色。</p>'
-          + '<div id="kouboGenStatus" style="font-size:.78rem;color:var(--text-muted);margin-top:.35rem;"></div>';
+  function renderPreview() {
+    var box = $('kbPreview');
+    if (!box) return;
+    if (state.job) {
+      var pct = state.job.total ? Math.round((state.job.done || 0) * 100 / state.job.total) : (state.job.progress || 0);
+      if (state.job.status === 'running') {
+        box.innerHTML = '<div class="kb-empty"><b>' + esc(state.job.message || '生成中') + '</b>任务在服务器排队，完成后自动出现在这里</div>'
+          + '<div class="kb-progress">' + esc(state.job.message || '') + ' · ' + pct + '%<div class="bar"><i style="width:' + Math.max(3, pct) + '%"></i></div></div>';
+        return;
       }
-      saved += '</div>';
-    } else {
-      saved = '<div class="koubo-row" style="margin-top:.8rem;"><button type="button" class="btn btn-primary btn-sm" id="kouboSave">保存项目</button></div>';
+      if (state.job.status === 'error') {
+        box.innerHTML = '<div class="kb-empty"><b>生成失败</b>' + esc(state.job.error || state.job.message || '未知错误') + '</div>';
+        return;
+      }
     }
-    return '<div class="koubo-card"><h4>分段与报价</h4>'
-      + segmentsTable(q.segments, q.total_seconds, q.total_credits)
-      + _optionSummary(state.form)
-      + '<p style="font-size:.74rem;color:var(--text-muted);margin:.5rem 0 0;">' + esc(q.note || '') + '</p>'
-      + '<div class="koubo-row"><button type="button" class="btn btn-ghost btn-sm" id="kouboPrev3">上一步</button><span class="spacer"></span>'
-      + '<span style="font-size:.76rem;color:var(--text-muted);">第一阶段只出任务包，不提交生成、不扣算力</span></div>'
-      + '</div>' + saved;
+    if (state.project && state.project.status === 'generated') {
+      var src = API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/video';
+      box.innerHTML = '<video controls playsinline src="' + esc(src) + '"></video>';
+      return;
+    }
+    box.innerHTML = '<div class="kb-empty"><b>还没有成片</b>左侧填好形象与口播稿，点击「生成第 1 段」</div>';
   }
 
-  function renderStep() {
-    var body = $('kouboStepBody');
-    if (!body) return;
-    stepBar();
-    body.innerHTML = state.step === 1 ? renderStep1() : state.step === 2 ? renderStep2() : renderStep3();
-    bindStep();
+  function renderStatus() {
+    var el = $('kbStatus');
+    if (!el) return;
+    if (state.job && state.job.status === 'running') { el.textContent = '生成中'; el.className = 'kb-pill warn'; return; }
+    if (state.project && state.project.status === 'generated') { el.textContent = '已出片'; el.className = 'kb-pill ok'; return; }
+    if (state.project && state.project.id) { el.textContent = '已保存'; el.className = 'kb-pill'; return; }
+    el.textContent = '未保存'; el.className = 'kb-pill';
   }
 
-  function bindStep() {
-    if (state.step === 1) {
-      var drop = $('kouboDrop');
-      var file = $('kouboFile');
-      if (drop && file) {
-        drop.addEventListener('click', function () { file.click(); });
-        drop.addEventListener('dragover', function (e) { e.preventDefault(); drop.classList.add('over'); });
-        drop.addEventListener('dragleave', function () { drop.classList.remove('over'); });
-        drop.addEventListener('drop', function (e) {
-          e.preventDefault(); drop.classList.remove('over');
-          if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
-        });
-        file.addEventListener('change', function () { if (file.files && file.files[0]) upload(file.files[0]); });
-      }
-      var rep = $('kouboReplace'); if (rep) rep.onclick = function () { state.upload = null; renderStep(); };
-      var next = $('kouboNext1'); if (next) next.onclick = function () { state.step = 2; renderStep(); };
+  function renderProjects() {
+    var box = $('kbProjects');
+    if (!box) return;
+    if ($('kbProjCount')) $('kbProjCount').textContent = state.projects.length ? state.projects.length + ' 个' : '';
+    if (!state.projects.length) {
+      box.innerHTML = '<span style="font-size:12px;color:#94a3b8;">还没有项目。生成或保存后会出现在这里。</span>';
+      return;
     }
-    if (state.step === 2) {
-      var ta = $('kouboText');
-      var cnt = $('kouboCount');
-      function refreshCount() {
-        if (!ta || !cnt) return;
-        var n = (ta.value || '').replace(/\s/g, '').length;
-        cnt.textContent = n + ' 字 · 约 ' + Math.max(1, Math.ceil(n / 5.4)) + ' 秒';
-      }
-      if (ta) { ta.addEventListener('input', refreshCount); refreshCount(); }
-      function readForm() {
-        state.form = {
-          host: ($('kouboHost') || {}).value || 'tank',
-          shot: ($('kouboShot') || {}).value || 'full',
-          ratio: ($('kouboRatio') || {}).value || '',
-          resolution: ($('kouboResolution') || {}).value || '',
-          language: ($('kouboLanguage') || {}).value || 'Mandarin Chinese',
-          model: ($('kouboModel') || {}).value || '',
-          scene: ($('kouboScene') || {}).value || 'none',
-          scene_prompt: ($('kouboScenePrompt') || {}).value || '',
-          voice: ($('kouboVoice') || {}).value || '',
-          compose_scene: !!($('kouboCompose') && $('kouboCompose').checked),
-          packaging: Array.prototype.slice.call(document.querySelectorAll('[data-pack]:checked')).map(function (el) { return el.getAttribute('data-pack'); })
-        };
-      }
-      var wrap = document.getElementById('kouboStepBody');
-      if (wrap) wrap.addEventListener('change', function (ev) {
-        readForm();
-        var sp = $('kouboScenePrompt');
-        if (sp) sp.style.display = state.form.scene === 'custom' ? 'block' : 'none';
-        if (ev && ev.target && ev.target.id === 'kouboHost') {
-          var h = ((state.options && state.options.hosts) || []).filter(function (x) { return x.id === state.form.host; })[0];
-          if (h && !state.form.ratio) {
-            var sel = $('kouboRatio'); if (sel) sel.value = h.ratio || '';
-          }
-        }
-      });
-      var prev = $('kouboPrev2'); if (prev) prev.onclick = function () { readForm(); state.step = 1; renderStep(); };
-      var q = $('kouboQuote'); if (q) q.onclick = function () { readForm(); quote(); };
-    }
-    if (state.step === 3) {
-      var p3 = $('kouboPrev3'); if (p3) p3.onclick = function () { state.step = 2; renderStep(); };
-      var save = $('kouboSave'); if (save) save.onclick = saveProject;
-      var exp = $('kouboExport'); if (exp) exp.onclick = exportTasks;
-      var gf = $('kouboGenFirst'); if (gf) gf.onclick = function () { submitGenerate(false); };
-      var ga = $('kouboGenAll'); if (ga) ga.onclick = function () { submitGenerate(true); };
-      var rg = $('kouboRegen'); if (rg) rg.onclick = function () { submitGenerate(false); };
-      var cp = $('kouboCopyScript'); if (cp) cp.onclick = function () {
-        var txt = (state.project && state.project.script) || '';
-        if (navigator.clipboard) navigator.clipboard.writeText(txt).then(function () { log('文案已复制'); });
+    box.innerHTML = state.projects.map(function (p) {
+      return '<div class="kb-proj"><div><b>' + esc(p.name) + '</b><br><small>' + esc(String(p.created_at || '').replace('T', ' ')) + ' · ' + (p.total_credits || 0) + ' credits · ' + esc(p.status || '') + '</small></div>'
+        + '<div style="display:flex;gap:6px;"><button type="button" class="kb-btn" data-open="' + esc(p.id) + '">打开</button><button type="button" class="kb-btn" data-del="' + esc(p.id) + '">删除</button></div></div>';
+    }).join('');
+    box.querySelectorAll('[data-open]').forEach(function (btn) {
+      btn.onclick = function () { openProject(btn.getAttribute('data-open')); };
+    });
+    box.querySelectorAll('[data-del]').forEach(function (btn) {
+      btn.onclick = function () {
+        var pid = btn.getAttribute('data-del');
+        if (!window.confirm('删除这个项目？')) return;
+        fetch(API + '/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid), { method: 'DELETE', headers: authOnly() })
+          .then(function () { log('已删除 ' + pid); if (state.project && state.project.id === pid) { state.project = null; renderAll(); } loadProjects(); });
       };
-    }
+    });
+  }
+
+  function renderAll() {
+    renderAvatar(); renderParams(); renderSegments(); renderPreview(); renderStatus(); renderMeta(); renderProjects();
+  }
+
+  function updateCount() {
+    var ta = $('kbText'), el = $('kbCount');
+    if (!ta || !el) return;
+    var n = (ta.value || '').replace(/\s/g, '').length;
+    el.textContent = n + ' 字 · 约 ' + Math.max(1, Math.ceil(n / 5.4)) + ' 秒';
   }
 
   function upload(f) {
     var fd = new FormData();
     fd.append('file', f);
-    log('上传形象照 ' + f.name + '（' + Math.round(f.size / 1024) + ' KB）');
+    log('上传形象照 ' + f.name);
     fetch(API + '/api/skills/digital-human-koubo/uploads', { method: 'POST', headers: authOnly(), body: fd })
-      .then(function (r) { return r.json().then(function (d) { if (!r.ok) { var msg = d && d.detail ? (typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail)) : ('HTTP ' + r.status); throw new Error(msg); } return d; }); })
-      .then(function (d) {
-        state.upload = d;
-        log('上传完成：' + d.checks.width + '×' + d.checks.height + '，' + (d.checks.warnings || []).length + ' 条提示');
-        renderStep();
-      })
+      .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail)); return d; }); })
+      .then(function (d) { state.upload = d; log('形象照已上传 ' + d.checks.width + '×' + d.checks.height); renderAvatar(); })
       .catch(function (e) { log('上传失败：' + e.message); });
   }
 
-  function quote() {
-    var text = ($('kouboText') || {}).value || '';
+  function quote(goNext) {
+    var text = ($('kbText') || {}).value || '';
     if (!text.trim()) { log('请先粘贴口播稿'); return; }
-    var f = state.form || {};
-    state.script = text;
-    state.shot = f.shot || 'full';
-    state.host = f.host || 'tank';
+    readParams();
     log('生成分段与报价…');
-    req('/api/skills/digital-human-koubo/quote', {
+    return req('/api/skills/digital-human-koubo/quote', {
       method: 'POST', headers: headers(),
-      body: JSON.stringify({ text: text, shot: state.shot, resolution: f.resolution || '' })
+      body: JSON.stringify({ text: text, shot: state.form.shot, resolution: state.form.resolution || '' })
     }).then(function (d) {
       state.quote = d;
-      state.project = null;
-      state.step = 3;
-      renderStep();
-      log('报价完成：' + d.segments.length + ' 段 / ' + d.total_credits + ' credits');
-    }).catch(function (e) { log('报价失败：' + e.message); });
+      state.script = text;
+      renderSegments(); renderMeta();
+      log('报价：' + d.segments.length + ' 段 / ' + d.total_credits + ' credits');
+      return d;
+    }).catch(function (e) { log('报价失败：' + e.message); throw e; });
   }
 
   function saveProject() {
-    if (!state.quote) return;
-    var body = {
-      name: '',
-      script: state.script,
-      shot: state.shot,
-      host: state.host,
-      photo_id: state.upload ? state.upload.id : '',
-      options: state.form
-    };
-    req('/api/skills/digital-human-koubo/projects', {
-      method: 'POST', headers: headers(), body: JSON.stringify(body)
+    if (!state.quote) return Promise.reject(new Error('先报价'));
+    var text = ($('kbText') || {}).value || '';
+    return req('/api/skills/digital-human-koubo/projects', {
+      method: 'POST', headers: headers(),
+      body: JSON.stringify({
+        name: '', script: text, shot: state.form.shot, host: state.form.host,
+        photo_id: state.upload ? state.upload.id : '', options: state.form
+      })
     }).then(function (p) {
       state.project = p;
-      log('项目已保存：' + p.id);
-      renderStep();
-      loadProjects();
-    }).catch(function (e) { log('保存失败：' + e.message); });
-  }
-
-  function exportTasks() {
-    if (!state.project) return;
-    req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(state.project.id) + '/tasks')
-      .then(function (d) {
-        var blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' });
-        var a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = 'koubo-tasks-' + state.project.id + '.json';
-        document.body.appendChild(a); a.click(); a.remove();
-        setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
-        log('已导出 tasks.json（' + (d.tasks || []).length + ' 条）');
-      }).catch(function (e) { log('导出失败：' + e.message); });
-  }
-
-
-  function submitGenerate(all) {
-    if (!state.project || !state.project.id) return;
-    var status = $('kouboGenStatus');
-    if (status) status.textContent = '提交中…';
-    req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(state.project.id) + '/generate', {
-      method: 'POST', headers: headers(), body: JSON.stringify({ all: !!all })
-    }).then(function (d) {
-      log('已提交生成（' + (d.mode === 'all' ? '全部' : '仅第 1 段') + '），job=' + d.job_id);
-      pollGenerate(d.job_id);
-    }).catch(function (e) {
-      var msg = e && e.message ? e.message : '提交失败';
-      if (/连接正在自动恢复/.test(msg)) msg = '本地服务刚重启，请 3 秒后重试';
-      if (status) status.textContent = '提交失败：' + msg;
-      log('提交生成失败：' + msg);
+      if ($('kbProjName')) $('kbProjName').textContent = p.name;
+      renderStatus(); renderProjects(); loadProjects();
+      log('项目已保存 ' + p.id);
+      return p;
     });
   }
 
-  function pollGenerate(jobId) {
-    var timer = setInterval(function () {
+  function generate(all) {
+    var btn = $('kbGenerate');
+    if (btn) { btn.disabled = true; }
+    var prep = state.project ? Promise.resolve(state.project) : quote(true).then(saveProject);
+    prep.then(function (p) {
+      log('提交生成（' + (all ? '全部' : '第 1 段') + '）…');
+      return req('/api/skills/digital-human-koubo/projects/' + p.id + '/generate', {
+        method: 'POST', headers: headers(), body: JSON.stringify({ all: !!all })
+      });
+    }).then(function (d) {
+      state.job = { status: 'running', message: '准备提交', progress: 0, done: 0, total: all ? (state.quote ? state.quote.segments.length : 1) : 1 };
+      renderAll();
+      log('任务已提交 ' + d.job_id);
+      pollJob(d.job_id);
+    }).catch(function (e) {
+      if (btn) btn.disabled = false;
+      var msg = e && e.message ? e.message : '提交失败';
+      if (/连接正在自动恢复/.test(msg)) msg = '本地服务刚重启，请 3 秒后重试';
+      log('提交失败：' + msg);
+      if (state.job) { state.job.status = 'error'; state.job.error = msg; }
+      renderPreview();
+    });
+  }
+
+  function pollJob(jobId) {
+    if (state.timer) clearInterval(state.timer);
+    state.timer = setInterval(function () {
       req('/api/skills/digital-human-koubo/generate/jobs/' + encodeURIComponent(jobId)).then(function (job) {
-        var el = $('kouboGenStatus');
-        if (el) {
-          var pct = job.total ? Math.round((job.done || 0) * 100 / job.total) : (job.progress || 0);
-          el.innerHTML = '<div style="margin-bottom:.25rem;">' + esc(job.message || '') + ' · ' + pct + '%</div>'
-            + '<div style="height:4px;background:rgba(255,255,255,.08);border-radius:999px;overflow:hidden;">'
-            + '<i style="display:block;height:100%;width:' + Math.max(3, pct) + '%;background:#f97316;"></i></div>';
-        }
+        state.job = job;
+        renderPreview(); renderStatus();
         if (job.status !== 'running') {
-          clearInterval(timer);
+          clearInterval(state.timer); state.timer = null;
+          var btn = $('kbGenerate'); if (btn) btn.disabled = false;
           if (job.status === 'done') {
             log('生成完成');
-            req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(state.project.id)).then(function (p) {
-              state.project = p;
-              renderStep();
+            req('/api/skills/digital-human-koubo/projects/' + state.project.id).then(function (p) {
+              state.project = p; renderAll();
             });
           } else {
-            log('生成失败：' + (job.error || job.message || '未知错误'));
-            if (el) el.innerHTML = '<span style="color:#f87171;">' + esc(job.error || '生成失败') + '</span>';
+            log('生成失败：' + (job.error || job.message || ''));
           }
         }
       }).catch(function () {});
-    }, 3000);
-    state.genTimer = timer;
+    }, 2500);
   }
 
-  function loadProjects() {
-    req('/api/skills/digital-human-koubo/projects').then(function (d) {
-      state.projects = d.projects || [];
-      renderProjects();
-    }).catch(function (e) {
-      var box = $('kouboProjects');
-      if (box) box.innerHTML = '<span style="color:#f87171;">读取失败：' + esc(e.message) + '</span>';
-    });
+  function openProject(pid) {
+    req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid)).then(function (p) {
+      state.project = p;
+      state.script = p.script || '';
+      state.form = Object.assign({}, state.form, p.options || {});
+      state.quote = { segments: p.segments || [], total_seconds: p.total_seconds || 0, total_credits: p.total_credits || 0 };
+      state.job = null;
+      if ($('kbText')) $('kbText').value = p.script || '';
+      if ($('kbProjName')) $('kbProjName').textContent = p.name;
+      renderAll(); updateCount();
+      log('打开项目 ' + p.id);
+    }).catch(function (e) { log('打开失败：' + e.message); });
   }
 
-  function renderProjects() {
-    var box = $('kouboProjects');
-    if (!box) return;
-    if (!state.projects.length) {
-      box.innerHTML = '<span style="font-size:.78rem;color:var(--text-muted);">还没有项目。完成一次分段并保存后会出现在这里。</span>';
-      return;
-    }
-    box.innerHTML = state.projects.map(function (p) {
-      return '<div class="koubo-proj" data-pid="' + esc(p.id) + '">'
-        + '<div><b>' + esc(p.name) + '</b><div style="color:var(--text-muted);font-size:.72rem;margin-top:.15rem;">'
-        + esc(p.created_at.replace('T', ' ')) + ' · ' + (p.segments || []).length + ' 段 · ' + p.total_credits + ' credits · ' + esc(p.status) + '</div></div>'
-        + '<div style="display:flex;gap:.4rem;"><button type="button" class="btn btn-ghost btn-sm" data-koubo-open="' + esc(p.id) + '">打开</button>'
-        + '<button type="button" class="btn btn-ghost btn-sm" data-koubo-del="' + esc(p.id) + '">删除</button></div>'
-        + '</div>';
-    }).join('');
-    box.querySelectorAll('[data-koubo-open]').forEach(function (btn) {
-      btn.onclick = function () {
-        var pid = btn.getAttribute('data-koubo-open');
-        req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid)).then(function (p) {
-          state.project = p;
-          state.script = p.script;
-          state.shot = p.shot;
-          state.host = p.host;
-          state.form = Object.assign({}, state.form, p.options || {});
-          state.quote = {
-            segments: p.segments,
-            total_seconds: p.total_seconds,
-            total_credits: p.total_credits,
-            note: '来自已保存项目 ' + p.id
-          };
-          state.step = 3;
-          renderStep();
-          log('打开项目 ' + p.id);
-        });
-      };
-    });
-    box.querySelectorAll('[data-koubo-del]').forEach(function (btn) {
-      btn.onclick = function () {
-        var pid = btn.getAttribute('data-koubo-del');
-        if (!window.confirm('删除这个项目？')) return;
-        fetch(API + '/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid), { method: 'DELETE', headers: authOnly() })
-          .then(function () { log('已删除 ' + pid); loadProjects(); });
-      };
-    });
-  }
-
-  function pill(c) {
-    if (c.status === 'ok') return '<span class="koubo-pill ok">就绪' + (c.version ? ' ' + esc(c.version) : '') + '</span>';
-    if (c.status === 'installing') return '<span class="koubo-pill installing">安装中 ' + (c.progress || 0) + '%</span>';
-    if (c.status === 'error') return '<span class="koubo-pill missing">异常</span>';
-    return '<span class="koubo-pill missing">缺失</span>';
-  }
-
-  function renderModalRows() {
-    var box = $('kouboDepsBody');
-    if (!box) return;
-    box.innerHTML = state.components.map(function (c) {
-      var btn = (c.installable && c.status !== 'ok' && c.status !== 'installing')
-        ? '<button type="button" class="koubo-install" data-koubo-install="' + esc(c.id) + '">安装</button>' : '';
-      var bar = c.status === 'installing'
-        ? '<div class="koubo-bar on"><i style="width:' + (c.progress || 0) + '%"></i></div>' : '';
-      return '<div class="koubo-dep"><div><b>' + esc(c.name) + '</b><small>' + esc(c.purpose) + ' · ' + esc(c.size) + '</small><small>' + esc(c.detail || '') + '</small></div>'
-        + '<div class="koubo-dep-right">' + pill(c) + btn + '</div>' + bar + '</div>';
-    }).join('');
-    box.querySelectorAll('[data-koubo-install]').forEach(function (btn) {
-      btn.onclick = function () { install(btn.getAttribute('data-koubo-install')); };
-    });
-    var all = $('kouboModalInstallAll');
-    if (all) {
-      var anyMissing = state.components.some(function (c) { return c.installable && c.status !== 'ok'; });
-      all.disabled = !anyMissing || !!state.busy || !!state.polling;
-      all.textContent = anyMissing ? '一键安装缺失项' : '依赖已齐';
-    }
-  }
-
-  function openDepsModal() {
-    if ($('kouboDepsModal')) return;
-    var m = document.createElement('div');
-    m.id = 'kouboDepsModal';
-    m.innerHTML = '<div class="koubo-modal-backdrop"></div>'
-      + '<div class="koubo-modal-card" role="dialog" aria-modal="true">'
-      + '<div class="koubo-modal-head"><h4>运行环境与依赖</h4><button type="button" class="koubo-modal-close" aria-label="关闭">×</button></div>'
-      + '<div class="koubo-modal-body"><p class="koubo-modal-sub">ffmpeg / Node / Python 客户端已内置；whisper 只在「回听 + 逐字对齐」时用，不装也能出片，只是没有自动质检。安装会下载到客户端 deps 目录，可关闭弹窗后台继续。</p><div id="kouboDepsBody">加载中…</div></div>'
-      + '<div class="koubo-modal-foot"><button type="button" class="koubo-btn" data-koubo-close>关闭</button><button type="button" class="koubo-btn primary" id="kouboModalInstallAll">一键安装缺失项</button></div>'
-      + '</div>';
-    document.body.appendChild(m);
-    m.querySelector('.koubo-modal-backdrop').onclick = closeDepsModal;
-    m.querySelector('.koubo-modal-close').onclick = closeDepsModal;
-    m.querySelector('[data-koubo-close]').onclick = closeDepsModal;
-    m.querySelector('#kouboModalInstallAll').onclick = installAll;
-    renderModalRows();
-    loadStatus();
-  }
-
-  function closeDepsModal() {
-    var m = $('kouboDepsModal');
-    if (m && m.parentNode) m.parentNode.removeChild(m);
+  function exportTasks() {
+    if (!state.project) { log('先保存项目'); return; }
+    req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(state.project.id) + '/tasks').then(function (d) {
+      var blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'koubo-tasks-' + state.project.id + '.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 2000);
+      log('已导出 tasks.json');
+    }).catch(function (e) { log('导出失败：' + e.message); });
   }
 
   function loadOptions() {
     return req('/api/skills/digital-human-koubo/options').then(function (d) {
       state.options = d;
       if (!state.form.model && d.models && d.models.length) state.form.model = d.models[0].id;
-      if (state.step === 2 || state.step === 3) renderStep();
+      renderParams(); updateParamSummary(); renderSegments(); renderMeta();
       return d;
     }).catch(function (e) { log('参数读取失败：' + e.message); });
   }
 
-  function loadStatus() {
-    return req('/api/skills/digital-human-koubo/status').then(function (d) {
-      state.components = d.components || [];
-      renderModalRows();
-      return d;
-    }).catch(function (e) { log('依赖状态读取失败：' + e.message); });
+  function loadProjects() {
+    req('/api/skills/digital-human-koubo/projects').then(function (d) {
+      state.projects = d.projects || [];
+      renderProjects();
+    }).catch(function () {});
   }
 
-  function poll(jobId, component) {
-    var attempts = 0;
-    if (state.polling) clearInterval(state.polling);
-    state.polling = setInterval(function () {
-      attempts++;
+  function loadStatus() {
+    return req('/api/skills/digital-human-koubo/status').then(function (d) { state.components = d.components || []; return d; })
+      .catch(function () {});
+  }
+
+  function pill(c) {
+    if (c.status === 'ok') return '<span class="kb-pill ok">就绪' + (c.version ? ' ' + esc(c.version) : '') + '</span>';
+    if (c.status === 'installing') return '<span class="kb-pill installing">安装中 ' + (c.progress || 0) + '%</span>';
+    if (c.status === 'error') return '<span class="kb-pill missing">异常</span>';
+    return '<span class="kb-pill missing">缺失</span>';
+  }
+
+  function renderModalRows() {
+    var box = $('kbDepsBody');
+    if (!box) return;
+    box.innerHTML = state.components.map(function (c) {
+      var btn = (c.installable && c.status !== 'ok' && c.status !== 'installing') ? '<button type="button" class="kb-install" data-dep="' + esc(c.id) + '">安装</button>' : '';
+      var bar = c.status === 'installing' ? '<div class="kb-bar on"><i style="width:' + (c.progress || 0) + '%"></i></div>' : '';
+      return '<div class="kb-dep"><div><b>' + esc(c.name) + '</b><small>' + esc(c.purpose) + ' · ' + esc(c.size) + '</small><small>' + esc(c.detail || '') + '</small></div><div class="kb-dep-right">' + pill(c) + btn + '</div>' + bar + '</div>';
+    }).join('');
+    box.querySelectorAll('[data-dep]').forEach(function (btn) {
+      btn.onclick = function () { installDep(btn.getAttribute('data-dep')); };
+    });
+  }
+
+  function openDeps() {
+    if ($('kbDepsModal')) return;
+    var m = document.createElement('div');
+    m.id = 'kbDepsModal';
+    m.innerHTML = '<div class="kb-modal-backdrop"></div><div class="kb-modal-card"><div class="kb-modal-head"><h4>运行环境与依赖</h4><button type="button" class="kb-modal-close">×</button></div>'
+      + '<div class="kb-modal-body"><p class="kb-modal-sub">ffmpeg / Node / Python 已内置；whisper 只在回听与逐字对齐时使用，不装也能出片。下载走自有 TOS。</p><div id="kbDepsBody">加载中…</div></div>'
+      + '<div class="kb-modal-foot"><button type="button" class="kb-btn" data-close>关闭</button></div></div>';
+    document.body.appendChild(m);
+    m.querySelector('.kb-modal-backdrop').onclick = closeDeps;
+    m.querySelector('.kb-modal-close').onclick = closeDeps;
+    m.querySelector('[data-close]').onclick = closeDeps;
+    loadStatus().then(renderModalRows);
+  }
+  function closeDeps() { var m = $('kbDepsModal'); if (m && m.parentNode) m.parentNode.removeChild(m); }
+
+  function installDep(id) {
+    req('/api/skills/digital-human-koubo/deps/install', { method: 'POST', headers: headers(), body: JSON.stringify({ component: id }) })
+      .then(function (d) { pollDep(d.job_id, id); })
+      .catch(function (e) { log('安装失败：' + e.message); });
+  }
+  function pollDep(jobId, id) {
+    var t = setInterval(function () {
       req('/api/skills/digital-human-koubo/deps/jobs/' + encodeURIComponent(jobId)).then(function (job) {
-        var c = state.components.filter(function (x) { return x.id === component; })[0];
-        if (c) {
-          c.status = job.status === 'running' ? 'installing' : (job.status === 'done' ? 'ok' : 'error');
-          c.progress = job.progress || 0;
-          c.detail = job.message || c.detail;
-          renderModalRows();
-        }
-        if (job.status !== 'running') {
-          clearInterval(state.polling); state.polling = null; state.busy = false;
-          if (job.status === 'done') log(component + ' 安装完成');
-          else log(component + ' 安装失败：' + (job.error || job.message || '未知错误'));
-          loadStatus();
-        }
-      }).catch(function () {
-        if (attempts > 5) { clearInterval(state.polling); state.polling = null; state.busy = false; }
-      });
+        var c = state.components.filter(function (x) { return x.id === id; })[0];
+        if (c) { c.status = job.status === 'running' ? 'installing' : (job.status === 'done' ? 'ok' : 'error'); c.progress = job.progress; c.detail = job.message; renderModalRows(); }
+        if (job.status !== 'running') { clearInterval(t); loadStatus().then(renderModalRows); }
+      }).catch(function () {});
     }, 1200);
   }
 
-  function install(component) {
-    if (state.busy || state.polling) return;
-    state.busy = true;
-    log('开始安装 ' + component + ' …');
-    req('/api/skills/digital-human-koubo/deps/install', {
-      method: 'POST', headers: headers(), body: JSON.stringify({ component: component })
-    }).then(function (d) {
-      if (!d.job_id) throw new Error(d.message || '未返回任务');
-      var c = state.components.filter(function (x) { return x.id === component; })[0];
-      if (c) { c.status = 'installing'; c.progress = 0; }
-      renderModalRows();
-      poll(d.job_id, component);
-    }).catch(function (e) { state.busy = false; log('安装启动失败：' + e.message); });
-  }
-
-  function installAll() {
-    var next = state.components.filter(function (c) { return c.installable && c.status !== 'ok'; })[0];
-    if (!next) { log('依赖已齐，无需安装'); return; }
-    install(next.id);
-    var timer = setInterval(function () {
-      if (state.busy || state.polling) return;
-      var again = state.components.filter(function (c) { return c.installable && c.status !== 'ok'; })[0];
-      if (!again) { clearInterval(timer); return; }
-      install(again.id);
-    }, 2500);
+  function bind() {
+    var ta = $('kbText');
+    if (ta) ta.addEventListener('input', updateCount);
+    var tgl = $('kbParamToggle');
+    if (tgl) tgl.onclick = function () { $('kbParams').classList.toggle('open'); };
+    var q = $('kbQuote'); if (q) q.onclick = function () { quote(false); };
+    var g = $('kbGenerate'); if (g) g.onclick = function () { generate(false); };
+    var ga = $('kbGenerateAll'); if (ga) ga.onclick = function () { generate(true); };
+    var sv = $('kbSave'); if (sv) sv.onclick = function () { quote(false).then(saveProject).catch(function () {}); };
+    var ex = $('kbExport'); if (ex) ex.onclick = exportTasks;
+    var dp = $('kbDeps'); if (dp) dp.onclick = openDeps;
+    var bk = $('kbBack'); if (bk) bk.onclick = function () {
+      if (typeof window._switchToHiddenView === 'function') window._switchToHiddenView('skill-store');
+      else if (typeof showLobsterView === 'function') showLobsterView('skill-store');
+    };
   }
 
   function ensureShell() {
@@ -672,13 +600,9 @@
       root.innerHTML = shell();
       root.dataset.kouboBuilt = '1';
       injectCss();
-      $('kouboBack').onclick = function () {
-        if (typeof window._switchToHiddenView === 'function') window._switchToHiddenView('skill-store');
-        else if (typeof showLobsterView === 'function') showLobsterView('skill-store');
-      };
-      $('kouboOpenDeps').onclick = openDepsModal;
-      $('kouboRefresh').onclick = function () { loadStatus(); loadProjects(); };
-      renderStep();
+      bind();
+      renderAll();
+      updateCount();
     }
     return root;
   }
@@ -688,7 +612,6 @@
     else if (typeof showLobsterView === 'function') showLobsterView(VIEW_ID);
     ensureShell();
     loadOptions();
-    loadStatus();
     loadProjects();
     log('进入数字人 koubo 工作台');
   };
