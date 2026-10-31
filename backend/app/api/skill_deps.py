@@ -1092,14 +1092,17 @@ def _prompt_for(project: Dict[str, Any], seg: Dict[str, Any]) -> str:
             + voice + ":\n\u201c" + line + "\u201d\nSound: only the voice, no music, no subtitles, no on-screen text.")
 
 
-def _compose_scene(token: str, image_url: str, scene_prompt: str, installation_id: str = "") -> str:
+def _compose_scene(token: str, image_url: str, scene_prompt: str, installation_id: str = "",
+                   ratio: str = "9:16") -> str:
     prompt = ("Composite the person from the reference photo into " + scene_prompt +
               ". Keep the same face, hairstyle, outfit and identity. Cinematic lighting, 2k, "
               "clean composition, no text, no watermark.")
+    size = "1024x1536" if ratio == "9:16" else "1536x1024"
     resp = _mcp_call(token, "invoke_capability",
                      {"capability_id": "image.generate",
                       "payload": {"model": "openai/gpt-image-2", "prompt": prompt,
-                                  "image_url": image_url, "size": "2k"}},
+                                  "image_url": image_url, "size": size,
+                                  "aspect_ratio": ratio}},
                      timeout=300.0, installation_id=installation_id)
     task_id = _deep_find(resp, ("task_id", "taskId", "request_id", "id"))
     urls = _deep_urls(resp, (".jpg", ".jpeg", ".png", ".webp"))
@@ -1115,7 +1118,39 @@ def _compose_scene(token: str, image_url: str, scene_prompt: str, installation_i
                 break
     if not urls:
         raise RuntimeError("场景合成未返回图片")
-    return urls[0]
+    url = urls[0]
+    # 场景图按目标比例裁一次再入库，避免上游给方图导致成片变 1:1
+    try:
+        from PIL import Image
+        from io import BytesIO
+
+        raw = httpx.get(url, timeout=120, follow_redirects=True).content
+        im = Image.open(BytesIO(raw)).convert("RGB")
+        w, h = im.size
+        tw, th = (9, 16) if ratio == "9:16" else (16, 9)
+        target = tw / th
+        cur = w / h
+        if abs(cur - target) / target > 0.02:
+            if cur > target:
+                nw = max(1, int(round(h * target)))
+                left = (w - nw) // 2
+                im = im.crop((left, 0, left + nw, h))
+            else:
+                nh = max(1, int(round(w / target)))
+                top = (h - nh) // 2
+                im = im.crop((0, top, w, top + nh))
+        tmp_path = UPLOAD_DIR / ("scene_" + uuid.uuid4().hex[:10] + ".jpg")
+        im.save(tmp_path, quality=95)
+        with open(tmp_path, "rb") as fh:
+            r = httpx.post(LOCAL_BASE + "/api/assets/upload", files={"file": (tmp_path.name, fh, "image/jpeg")},
+                           headers={"Authorization": token, "X-Asset-Purpose": "profile_photo"}, timeout=180)
+        data = r.json() if r.content else {}
+        new_url = (data.get("source_url") or "").strip()
+        if new_url:
+            return new_url
+    except Exception:
+        pass
+    return url
 
 
 def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, installation_id: str = "") -> None:
@@ -1133,7 +1168,8 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
         if opts.get("compose_scene") and scene_prompt:
             try:
                 job["message"] = "合成场景图"
-                image_url = _compose_scene(token, image_url, scene_prompt, installation_id)
+                image_url = _compose_scene(token, image_url, scene_prompt, installation_id,
+                                           opts["ratio"] or hd.get("ratio") or "9:16")
                 asset_id = ""
             except Exception as exc:
                 job["message"] = "场景合成失败，改用原图"
