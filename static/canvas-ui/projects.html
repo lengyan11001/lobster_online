@@ -458,13 +458,24 @@
   window.deleteItem = async function (event, itemId) {
     if (event) event.stopPropagation();
     if (!itemId) return;
+    // 直接调绝对地址，绕开 api() 可能存在的相对路径/基础地址问题；失败把真实原因弹出来
+    var base = "http://127.0.0.1:8000";
     try {
-      await api('/canvas-api/api/v1/projects/' + encodeURIComponent(String(itemId)) + '/delete', { method: 'POST', body: '{}' });
-    } catch (e) { alert('删除失败：' + e.message); return; }
-    appData.items = appData.items.filter(function (i) { return String(i.id) !== String(itemId); });
-    saveFolderMap(itemId, null);
-    renderDashboard();
-    if (typeof showToast === "function") showToast("已删除");
+      var tok = "";
+      try { tok = (JSON.parse(localStorage.getItem("user_info") || "{}").token) || localStorage.getItem("token") || ""; } catch (e) {}
+      var r = await fetch(base + "/api/v1/projects/" + encodeURIComponent(String(itemId)) + "/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+        body: "{}"
+      });
+      var txt = await r.text();
+      if (!r.ok) { alert("删除失败 HTTP " + r.status + "\n" + txt.slice(0, 200)); return; }
+      appData.items = appData.items.filter(function (i) { return String(i.id) !== String(itemId); });
+      saveFolderMap(itemId, null);
+      renderDashboard();
+    } catch (e) {
+      alert("删除请求异常：" + (e && e.message ? e.message : e));
+    }
   };
   window.submitCreateFolder = function () {
     var input = document.querySelector('#folderModal input');
