@@ -145,6 +145,11 @@ async def canvas_cloud_proxy(path: str, request: Request) -> Response:
 
     token, installation_id = auth_context()
     if not token:
+        # 偶发读到空（续签中/文件短暂不可读）时，画布那边收到 401 会清会话并跳自己的登录页。
+        # 这里再读一次，仍没有才 401，避免一次抖动把用户踢回登录。
+        await asyncio.sleep(0.15)
+        token, installation_id = auth_context()
+    if not token:
         raise HTTPException(status_code=401, detail="画布需要登录：本机还没有云端登录态，请先在客户端登录")
 
     # 会话类接口本机回答：画布按这套判断「已登录」，不该再去问上游（上游只认服务器 key）
