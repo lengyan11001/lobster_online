@@ -1,7 +1,7 @@
 {
-  "version": "2.0.219",
-  "build": 520,
-  "applied_at": "2026-10-31T17:50:01+08:00",
-  "note": "skills: 入口由服务端 entry 下发（不写死技能）；作品提取卡去重",
-  "bundle_sha256": "9a534cdb3192fe79e1eb8424844b48afbff423d3fbc5e8c71e1794d3b6cde1c4"
+  "version": "2.0.220",
+  "build": 521,
+  "applied_at": "2026-10-31T18:10:16+08:00",
+  "note": "技能商店入口统一由服务端下发；修复数字人3.0被显示成数字人口播；修复重复技能卡",
+  "bundle_sha256": "c93f32cbbd86b31affe7acf726c360a0738e2911dc1863c2babfa778f103c0e6"
 }
