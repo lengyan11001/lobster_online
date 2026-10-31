@@ -2028,7 +2028,10 @@ function _renderViralVideoRemixCard() {
 
 function _renderHiflyDigitalHumanCard(pkg) {
   pkg = pkg || {};
-  var title = escapeHtml(_skillStoreBrandSafeText(pkg.name || '数字人口播'));
+  // 标题按包 id 固定，避免两个技能都叫「数字人口播」
+        var _titleById = pkg.id === 'digital_human_koubo_skill' ? '数字人3.0'
+          : (pkg.id === 'hifly_digital_human_skill' ? '数字人口播' : (pkg.name || '数字人口播'));
+        var title = escapeHtml(_skillStoreBrandSafeText(_titleById));
   var desc = escapeHtml(_skillStoreBrandSafeText(pkg.description || '选择数字人和声音，输入口播文案后生成数字人口播视频。'));
   var rawTags = Array.isArray(pkg.tags) && pkg.tags.length ? pkg.tags : ['数字人', '口播', 'TTS', '平台服务'];
   var tags = _skillStoreTagHtml(rawTags);
