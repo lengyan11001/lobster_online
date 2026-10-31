@@ -1054,6 +1054,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # 生成类请求统一转发认证中心（客户端不再直连上游）
+    from .services.server_gateway_proxy import ServerGatewayProxyMiddleware
+
+    app.add_middleware(ServerGatewayProxyMiddleware)
 
     @app.middleware("http")
     async def private_network_access_header(request: Request, call_next):

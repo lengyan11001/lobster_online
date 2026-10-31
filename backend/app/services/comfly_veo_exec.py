@@ -156,12 +156,20 @@ def _join_url(api_base: str, path: str) -> str:
 
 
 def _comfly_request_url(api_base: str, path: str) -> str:
-    """path 以 / 开头时替换为与 api_base 同主机下的绝对路径（/v2/... 不与 /v1 base 错误拼接）。"""
+    """拼出上游 URL。
+
+    - 直连 Comfly（api_base=https://ai.comfly.org）时，/v2/... 需要替换成同主机绝对路径；
+    - 走服务器代理（api_base=https://<auth>/api/comfly-proxy）时，绝对路径必须保留
+      /api/comfly-proxy 前缀，否则就会打到认证中心根路径上。
+    """
     p = (path or "").strip()
+    base = api_base.rstrip("/")
     if p.startswith("/"):
-        u = urlparse(api_base.rstrip("/"))
+        if base.endswith("/api/comfly-proxy"):
+            return base + p
+        u = urlparse(base)
         return urlunparse((u.scheme, u.netloc, p, "", "", ""))
-    return _join_url(api_base, p)
+    return _join_url(base, p)
 
 
 def _comfly_key_plain(api_key: str) -> str:
