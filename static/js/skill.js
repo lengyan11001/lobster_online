@@ -2033,7 +2033,7 @@ function _renderHiflyDigitalHumanCard(pkg) {
   var rawTags = Array.isArray(pkg.tags) && pkg.tags.length ? pkg.tags : ['数字人', '口播', 'TTS', '平台服务'];
   var tags = _skillStoreTagHtml(rawTags);
   return '<div class="skill-store-card hifly-digital-human-card" data-skill-package-id="hifly_digital_human_skill" style="cursor:pointer;border-color:rgba(14,165,233,0.35);background:linear-gradient(135deg,rgba(14,165,233,0.09),rgba(20,184,166,0.06));">' +
-    '<div class="card-label">数字人 &middot; 平台 <span class="badge-installed">&#26032;&#25509;&#20837;</span></div>' +
+    '<div class="card-label">数字人3.0 &middot; 平台 <span class="badge-installed">&#26032;&#25509;&#20837;</span></div>' +
     '<div class="card-value">' + title + '</div>' +
     '<div class="card-desc">' + desc + '</div>' +
     '<div style="margin-top:0.55rem;padding:0.55rem 0.7rem;background:rgba(14,165,233,0.06);border:1px solid rgba(14,165,233,0.18);border-radius:8px;font-size:0.78rem;color:var(--text-muted);line-height:1.55;">创作服务由平台统一托管，用户无需填写 API Token。</div>' +
