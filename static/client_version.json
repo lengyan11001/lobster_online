@@ -1,7 +1,7 @@
 {
-  "version": "2.0.216",
-  "build": 517,
-  "applied_at": "2026-10-31T17:36:12+08:00",
-  "note": "skills: 商店标题按包id固定（数字人3.0 / 数字人口播）",
-  "bundle_sha256": "6f24fd0ad1fc4d9dc5c8068e68fad571e5de92a6d92189be877bf54645c71663"
+  "version": "2.0.217",
+  "build": 518,
+  "applied_at": "2026-10-31T17:39:40+08:00",
+  "note": "revert client hardcoded skill titles; names come from server; 2.0.216 superseded",
+  "bundle_sha256": "233595838469a2ec242b68c3d7ed4d319209b029ac48e3e9c8145e3235797a92"
 }
