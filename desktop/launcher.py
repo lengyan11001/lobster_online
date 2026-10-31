@@ -2578,6 +2578,7 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
         def _apply_frameless_chrome_when_ready() -> None:
             """Some EdgeChromium/pywebview builds do not emit shown reliably."""
             logged = False
+            err_logged = False
             for _ in range(300):
                 if _chrome_state["applied"]:
                     return
@@ -2588,8 +2589,10 @@ def run_window(url: str, title: str, width: int, height: int, port: int, mcp_por
                     _apply_frameless_chrome()
                     if _chrome_state["applied"]:
                         return
-                except Exception:
-                    pass
+                except Exception as exc:
+                    if not err_logged:
+                        log(f"frameless chrome: apply attempt failed: {type(exc).__name__}: {exc}")
+                        err_logged = True
                 threading.Event().wait(0.05)
             log("frameless chrome: fallback timed out waiting for native handle")
 

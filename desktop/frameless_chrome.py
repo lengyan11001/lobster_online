@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import threading
 import time
 from ctypes import wintypes
@@ -112,15 +113,7 @@ _user32.IsZoomed.argtypes = [wintypes.HWND]
 _user32.IsZoomed.restype = wintypes.BOOL
 
 
-def find_app_window(title_hint: str = "", pid: int = 0) -> int:
-    """兜底找窗口：当前进程里面积最大的可见顶层窗口。
-
-    有些 pywebview/EdgeChromium 机器上 window.native.Handle 一直是 0，
-    导致无边框/边缘缩放整块不生效（日志：fallback timed out waiting for
-    native handle）。这里直接用 Win32 枚举本进程窗口。
-    """
-    import os
-
+def _enum_best_window(title_hint: str, pid: int, strict_owner: bool) -> int:
     target_pid = int(pid or os.getpid())
     hint = (title_hint or "").strip()
     found: list[int] = []
@@ -130,11 +123,11 @@ def find_app_window(title_hint: str = "", pid: int = 0) -> int:
         try:
             if not _user32.IsWindowVisible(hwnd):
                 return True
-            pid = wintypes.DWORD()
-            _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            if pid.value != target_pid:
+            wpid = wintypes.DWORD()
+            _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(wpid))
+            if target_pid and wpid.value != target_pid:
                 return True
-            if _user32.GetWindow(hwnd, GW_OWNER):
+            if strict_owner and _user32.GetWindow(hwnd, GW_OWNER):
                 return True
             if hint:
                 n = _user32.GetWindowTextLengthW(hwnd)
@@ -148,10 +141,7 @@ def find_app_window(title_hint: str = "", pid: int = 0) -> int:
             pass
         return True
 
-    try:
-        _user32.EnumWindows(_cb, 0)
-    except Exception:
-        return 0
+    _user32.EnumWindows(_cb, 0)
     best, best_area = 0, 0
     for hwnd in found:
         rect = wintypes.RECT()
@@ -161,6 +151,22 @@ def find_app_window(title_hint: str = "", pid: int = 0) -> int:
         if area > best_area:
             best, best_area = hwnd, area
     return best
+
+
+def find_app_window(title_hint: str = "", pid: int = 0) -> int:
+    """兜底找窗口：先严格（本进程 + 无 owner），再放宽（本进程任意可见窗口）。
+
+    有些机器 pywebview 的 window.native.Handle 一直是 0，无边框/边缘缩放就整块
+    失效；这里直接用 Win32 枚举兜底。
+    """
+    for strict in (True, False):
+        try:
+            hwnd = _enum_best_window(title_hint, pid, strict)
+        except Exception:
+            hwnd = 0
+        if hwnd:
+            return hwnd
+    return 0
 
 
 def _resize_code(cx: int, cy: int, cw: int, ch: int, edge: int) -> int:

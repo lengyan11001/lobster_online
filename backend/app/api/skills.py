@@ -165,7 +165,9 @@ async def list_store(request: Request):
         # 避免服务端新增、本机却没有安装实现的包出现「点了安装 404」。
         local_ids = set(_load_registry().get("packages", {}) or {})
         remote["packages"] = [p for p in remote.get("packages", []) if str(p.get("id") or "") in local_ids]
+        print(f"[skills/store] served from REMOTE n={len(remote['packages'])}", flush=True)
         return remote
+    print("[skills/store] served from LOCAL registry", flush=True)
     registry = _load_registry()
     installed = set(_load_installed().get("installed", []))
     packages = registry.get("packages", {})
