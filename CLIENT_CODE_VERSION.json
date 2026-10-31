@@ -1,7 +1,7 @@
 {
-  "version": "2.0.215",
-  "build": 516,
-  "applied_at": "2026-10-31T17:33:52+08:00",
-  "note": "skills: 数字人3.0 卡片在已安装列表也带进入工作台；老口播卡还原命名",
-  "bundle_sha256": "4963142d65e083313a9141d101115bf4f25fd6a45f61b43690bece09cffaef5d"
+  "version": "2.0.216",
+  "build": 517,
+  "applied_at": "2026-10-31T17:36:12+08:00",
+  "note": "skills: 商店标题按包id固定（数字人3.0 / 数字人口播）",
+  "bundle_sha256": "6f24fd0ad1fc4d9dc5c8068e68fad571e5de92a6d92189be877bf54645c71663"
 }
