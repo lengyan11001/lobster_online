@@ -1904,7 +1904,8 @@
         introduce_description: description,
         completion_message: '闪剪模板成片已完成，可打开预览。'
       };
-      progress('template', 'done', '闪剪模板处理完成');
+      progress('template', 'done', override.silent ? '本段模板完成，等待拼接' : '闪剪模板处理完成');
+      if (override.silent) return Promise.resolve(saved);
       return setResultVideo(saved).then(function() { return saved; });
     });
   }
@@ -2060,6 +2061,11 @@
   function runPerSegmentRender() {
     if (!state.selectedTemplate) return Promise.reject(new Error('请先选择一个模板'));
     var provider = currentTemplateProvider();
+    var surface = $('mcmResultSurface');
+    if (surface) {
+      surface.innerHTML = '<div style="padding:28px 12px;text-align:center;opacity:.65;font-size:12px;">'
+        + '正在逐段套模板并拼接，完成后这里显示最终成片…</div>';
+    }
     var plan = buildClipPlan(1);
     var total = state.clips.length;
     var outputs = [];
@@ -2091,7 +2097,8 @@
           return applyShanjianTemplate(base, {
             title: String(clip.segTitle || ''),
             description: String(clip.segDesc || ''),
-            duration: base.duration
+            duration: base.duration,
+            silent: true
           });
         }
         return applyLocalTemplate(base, { title: String(clip.segTitle || '') });
