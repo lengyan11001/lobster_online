@@ -3462,13 +3462,9 @@ function loadSkillStore() {
         if (bihuo25Pkg) html += _renderBihuo25VideoCard(bihuo25Pkg);
         if (comflyPkg) html += _renderComflyCard();
         if (seedancePkg) html += _renderSeedanceTvcStudioCard();
-        if (viralPkg) html += _renderViralVideoRemixCard();
         if (cutcliPkg) html += _renderCutcliTemplateCard();
-        if (shanjianPkg) html += _renderShanjianSmartClipCard();
         if (personalWhatsappPkg) html += _renderPersonalWhatsappCard(personalWhatsappPkg);
-        if (personalTelegramPkg) html += _renderPersonalTelegramCard(personalTelegramPkg);
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
-        if (metaPkg) html += _renderMetaSocialCard({ pkg: metaPkg });
         if (linkedinMiningPkg) html += _renderLinkedinMiningCard(linkedinMiningPkg, !!(isSkillAdmin && linkedinMiningPkg.store_visibility === 'debug'));
         if (redditLeadsPkg) html += _renderSocialLeadsCard(redditLeadsPkg, 'reddit', !!(isSkillAdmin && redditLeadsPkg.store_visibility === 'debug'));
         if (xLeadsPkg) html += _renderSocialLeadsCard(xLeadsPkg, 'x', !!(isSkillAdmin && xLeadsPkg.store_visibility === 'debug'));
@@ -3515,10 +3511,7 @@ function loadSkillStore() {
           if (pkg.id === 'comfly_seedance_tvc_skill') return '';
           if (pkg.id === 'seedance_tvc_studio') return '';
           if (pkg.id === 'bihuo_25_video_skill') return '';
-          if (pkg.id === 'viral_video_remix_skill') return '';
-          if (pkg.id === 'shanjian_smart_clip') return '';
           if (pkg.id === 'personal_whatsapp_assistant') return '';
-          if (pkg.id === 'personal_telegram_assistant') return '';
           if (pkg.id === 'cutcli_template_skill') return '';
           if (pkg.id === 'cutcli_templates_skill') return '';
           if (pkg.id === 'cutcli_template_studio') return '';
@@ -3535,7 +3528,6 @@ function loadSkillStore() {
           if (pkg.id === 'openclaw_memory_skill') return '';
           if (pkg.id === 'browser_use_skill') return '';
           if (pkg.id === 'computer_use_skill') return '';
-          if (pkg.id === 'meta_social') return '';
 
           if (pkg.id === 'hifly_digital_human_skill') return _renderHiflyDigitalHumanCard(pkg);
           if (pkg.id === 'youtube_publish') {
