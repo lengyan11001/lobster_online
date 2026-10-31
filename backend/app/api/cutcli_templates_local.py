@@ -2943,6 +2943,9 @@ def _run_job(
         multi_clip_segments = _multi_clip_audio_segments(db, user_id, source_asset_id)
         captions: List[Dict[str, Any]] = []
         segment_stt_report: List[Dict[str, Any]] = []
+        # 说明：空字幕兜底原因。必须在分支外初始化，否则多段识别已拿到字幕时
+        # 后面引用会抛 UnboundLocalError（用户实测）。
+        stt_skip_reason = ""
         if multi_clip_segments:
             current_stage = "stt_segments"
             _update_job(
@@ -3004,7 +3007,6 @@ def _run_job(
 
             current_stage = "stt"
             _update_job(db, job_id, stage="stt", response_updates={"audio_asset_id": audio_asset_id, "audio_url": audio_url})
-            stt_skip_reason = ""
             try:
                 stt_result = _call_server(
                     "/api/cutcli/stt/transcribe",
