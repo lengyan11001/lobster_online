@@ -391,6 +391,7 @@ class QuoteBody(BaseModel):
     text: str = Field(..., min_length=1)
     shot: str = "full"
     host: str = "tank"
+    resolution: str = ""
 
 
 def _split_script(text: str) -> List[str]:
@@ -425,7 +426,7 @@ def koubo_quote(body: QuoteBody):
     if not chunks:
         raise HTTPException(status_code=400, detail="文案为空")
     shot = body.shot if body.shot in {"full", "pip", "vlog", "depth"} else "full"
-    res = "480p" if shot == "pip" else "720p"
+    res = body.resolution if body.resolution in ("720p", "480p") else ("480p" if shot == "pip" else "720p")
     segs = []
     total = 0
     for i, chunk in enumerate(chunks, 1):
@@ -456,7 +457,97 @@ def koubo_quote(body: QuoteBody):
 
 _ALLOWED_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 _MAX_UPLOAD_BYTES = 15 * 1024 * 1024
-_HOSTS = {"tank": "白背心数字人", "me": "用户本人数字人"}
+_HOSTS = {"tank": "白背心数字人", "me": "用户本人数字人", "cat": "橘猫店长", "dog": "柴犬主播"}
+
+_HOST_OPTIONS = [
+    {"id": "tank", "name": "白背心数字人", "ratio": "9:16", "voice": "young friendly female voice, clear and patient but lively, natural pace",
+     "note": "默认主播，竖屏自拍构图"},
+    {"id": "me", "name": "用户本人", "ratio": "16:9", "voice": "warm, steady, confident male voice around 35 years old, natural pace",
+     "note": "横屏，用你自己上传的形象照"},
+    {"id": "cat", "name": "橘猫店长", "ratio": "9:16", "voice": "cute, playful small high-pitched voice",
+     "note": "需要上传橘猫照片；提示词会要求嘴部开合"},
+    {"id": "dog", "name": "柴犬新闻主播", "ratio": "16:9", "voice": "deep, serious male TV news-anchor voice",
+     "note": "需要上传柴犬照片；横屏"},
+]
+_SHOT_OPTIONS = [
+    {"id": "full", "name": "全屏出镜", "resolution": "720p", "act": "warm eye contact, expressive face, natural hand gestures"},
+    {"id": "pip", "name": "画中画讲解", "resolution": "480p", "act": "calm explaining tone, small nods, occasionally glancing down as if reading a screen, small pointing gestures"},
+    {"id": "vlog", "name": "自拍口吻", "resolution": "720p", "act": "relaxed lifestyle vlogger sharing a favorite tool, natural small head tilts and nods, one hand comes up briefly in a casual gesture"},
+    {"id": "depth", "name": "中景留背景（可放景深字）", "resolution": "720p", "act": "medium shot with generous headroom and plain background visible on both sides of the head and shoulders, calm confident delivery"},
+]
+_LANGUAGE_OPTIONS = ["Mandarin Chinese", "English", "Japanese", "Korean", "French", "Spanish", "Arabic"]
+_SCENE_OPTIONS = [
+    {"id": "none", "name": "原图背景", "prompt": ""},
+    {"id": "live", "name": "直播间", "prompt": "a warm live-streaming studio with ring light, product shelves and soft bokeh"},
+    {"id": "shop", "name": "门店", "prompt": "a bright modern retail shop interior with shelves and warm lighting"},
+    {"id": "classroom", "name": "教室/白板", "prompt": "a clean classroom with a whiteboard and soft daylight"},
+    {"id": "street", "name": "城市街景", "prompt": "a lively city street at golden hour with shallow depth of field"},
+    {"id": "custom", "name": "自定义场景", "prompt": ""},
+]
+_MODEL_OPTIONS = [
+    {"id": "xai/grok-imagine-video-1.5/image-to-video", "name": "Grok Video 1.5（默认，自带中文配音）"},
+    {"id": "xai/grok-imagine-video/image-to-video", "name": "Grok Video 3"},
+]
+_PACKAGING_OPTIONS = [
+    {"id": "TeaserColdOpen", "name": "开场预告", "group": "开场"},
+    {"id": "NumberSpike", "name": "数字钉子", "group": "开场"},
+    {"id": "SlamText", "name": "大字砸屏", "group": "开场"},
+    {"id": "TextBehind", "name": "文字在人身后（景深字）", "group": "开场"},
+    {"id": "EvidenceCard", "name": "证据卡片", "group": "证据"},
+    {"id": "Counter", "name": "数字滚动", "group": "证据"},
+    {"id": "MapRoute", "name": "地图路线", "group": "证据"},
+    {"id": "BarCompare", "name": "柱状对比", "group": "证据"},
+    {"id": "Danmaku", "name": "弹幕", "group": "互动"},
+    {"id": "PollPop", "name": "投票弹窗", "group": "互动"},
+    {"id": "PunchInHost", "name": "跳切推近", "group": "节奏"},
+    {"id": "KeywordStack", "name": "关键词堆叠", "group": "节奏"},
+    {"id": "RetentionCaption", "name": "逐字字幕", "group": "节奏"},
+    {"id": "LowerThird", "name": "姓名条", "group": "人物"},
+    {"id": "CTACard", "name": "结尾号召", "group": "结尾"},
+]
+
+
+def _options_payload() -> Dict[str, Any]:
+    return {
+        "hosts": _HOST_OPTIONS,
+        "shots": _SHOT_OPTIONS,
+        "languages": _LANGUAGE_OPTIONS,
+        "scenes": _SCENE_OPTIONS,
+        "models": _MODEL_OPTIONS,
+        "packaging": _PACKAGING_OPTIONS,
+        "ratios": ["9:16", "16:9"],
+        "resolutions": ["720p", "480p"],
+        "durations": {"min": 6, "max": 15},
+    }
+
+
+def _sanitize_options(raw: Any) -> Dict[str, Any]:
+    raw = raw if isinstance(raw, dict) else {}
+    hosts = {h["id"] for h in _HOST_OPTIONS}
+    shots = {s["id"] for s in _SHOT_OPTIONS}
+    scenes = {s["id"] for s in _SCENE_OPTIONS}
+    packs = {p["id"] for p in _PACKAGING_OPTIONS}
+    out: Dict[str, Any] = {}
+    out["host"] = raw.get("host") if raw.get("host") in hosts else "tank"
+    out["shot"] = raw.get("shot") if raw.get("shot") in shots else "full"
+    out["ratio"] = raw.get("ratio") if raw.get("ratio") in ("9:16", "16:9") else ""
+    out["resolution"] = raw.get("resolution") if raw.get("resolution") in ("720p", "480p") else ""
+    out["language"] = raw.get("language") if raw.get("language") in _LANGUAGE_OPTIONS else "Mandarin Chinese"
+    out["scene"] = raw.get("scene") if raw.get("scene") in scenes else "none"
+    out["scene_prompt"] = str(raw.get("scene_prompt") or "").strip()[:300]
+    out["voice"] = str(raw.get("voice") or "").strip()[:200]
+    model_ids = {m["id"] for m in _MODEL_OPTIONS}
+    out["model"] = raw.get("model") if raw.get("model") in model_ids else _MODEL_OPTIONS[0]["id"]
+    out["packaging"] = [x for x in (raw.get("packaging") or []) if x in packs][:20]
+    out["compose_scene"] = bool(raw.get("compose_scene"))
+    return out
+
+
+def _host_defaults(host: str) -> Dict[str, Any]:
+    for h in _HOST_OPTIONS:
+        if h["id"] == host:
+            return h
+    return _HOST_OPTIONS[0]
 
 
 def _load_projects() -> List[Dict[str, Any]]:
@@ -554,6 +645,7 @@ class ProjectBody(BaseModel):
     shot: str = "full"
     host: str = "tank"
     photo_id: Optional[str] = None
+    options: Optional[Dict[str, Any]] = None
 
 
 def _persona() -> Dict[str, Any]:
@@ -581,13 +673,29 @@ def _build_segments(text: str, shot: str) -> List[Dict[str, Any]]:
     return out
 
 
+@router.get("/api/skills/digital-human-koubo/options", summary="数字人koubo 可用参数")
+def koubo_options():
+    return _options_payload()
+
+
 @router.post("/api/skills/digital-human-koubo/projects", summary="保存数字人koubo 项目")
 def koubo_project_create(body: ProjectBody):
-    shot = body.shot if body.shot in {"full", "pip", "vlog", "depth"} else "full"
-    host = body.host if body.host in _HOSTS else "tank"
+    opts = _sanitize_options(body.options)
+    if not body.options:
+        # 兼容旧调用：没有 options 时才用顶层 shot/host
+        if body.shot in {"full", "pip", "vlog", "depth"}:
+            opts["shot"] = body.shot
+        if body.host in _HOSTS:
+            opts["host"] = body.host
+    shot = opts["shot"]
+    host = opts["host"]
     segs = _build_segments(body.script, shot)
     if not segs:
         raise HTTPException(status_code=400, detail="文案为空")
+    res = opts["resolution"] or ("480p" if shot == "pip" else "720p")
+    for seg in segs:
+        seg["resolution"] = res
+        seg["credits"] = seg["seconds"] * CREDITS_PER_SEC[res]
     items = _load_projects()
     pid = uuid.uuid4().hex[:8]
     now = datetime.now().isoformat(timespec="seconds")
@@ -598,6 +706,7 @@ def koubo_project_create(body: ProjectBody):
         "shot": shot,
         "host": host,
         "photo_id": body.photo_id or "",
+        "options": opts,
         "segments": segs,
         "total_seconds": sum(s["seconds"] for s in segs),
         "total_credits": sum(s["credits"] for s in segs),
@@ -656,11 +765,12 @@ def koubo_project_tasks(pid: str):
         prompt = (template.format(ref=photo_ref, purpose=purpose, act=act, voice=voice,
                                   language="Mandarin Chinese", line=seg.get("text") or "")
                   if template else seg.get("text") or "")
+        o = _sanitize_options(row.get("options"))
         tasks.append({
-            "model": ((persona.get("model") or {}).get("name") or "grok-video-1.5"),
+            "model": o["model"],
             "kind": "video",
-            "ratio": ratio,
-            "resolution": seg.get("resolution") or "720p",
+            "ratio": o["ratio"] or ratio,
+            "resolution": o["resolution"] or seg.get("resolution") or "720p",
             "duration": seg.get("seconds") or 10,
             "label": "口播 " + (seg.get("id") or ""),
             "idempotencyKey": "dh-%s-%s-v1" % (pid, seg.get("id") or ""),
@@ -823,25 +933,63 @@ def _ensure_asset(token: str, project: Dict[str, Any]) -> tuple[str, str]:
 
 def _prompt_for(project: Dict[str, Any], seg: Dict[str, Any]) -> str:
     persona = _persona()
-    host = project.get("host") or "tank"
-    if host == "me":
-        hp = (persona.get("other_hosts") or {}).get("me") or {}
-        template = hp.get("prompt_template") or ""
-        voice = hp.get("voice") or ""
-        language = "Mandarin Chinese"
-    else:
-        template = persona.get("prompt_template") or ""
-        voice = ((persona.get("voice") or {}).get("desc") or "")
-        language = "Mandarin Chinese"
-    act = ((persona.get("acts") or {}).get(seg.get("shot") or "full") or "")
+    opts = _sanitize_options(project.get("options"))
+    host = opts["host"]
+    hd = _host_defaults(host)
+    voice = opts["voice"] or hd.get("voice") or ""
+    language = opts["language"] or "Mandarin Chinese"
+    act = next((x["act"] for x in _SHOT_OPTIONS if x["id"] == opts["shot"]),
+               "warm eye contact, expressive face, natural hand gestures")
+    scene_prompt = opts["scene_prompt"] if opts["scene"] == "custom" else next(
+        (x["prompt"] for x in _SCENE_OPTIONS if x["id"] == opts["scene"]), "")
+    scene_prefix = ("Scene: " + scene_prompt + ". ") if scene_prompt else ""
     line = seg.get("text") or ""
-    if template:
-        try:
-            return template.format(ref="the reference image", purpose="explaining clearly",
-                                   act=act, voice=voice, language=language, line=line)
-        except Exception:
-            pass
-    return "The person in the reference image talks to the camera, clearly lip-synced, in a %s voice:\n\"%s\"\nSound: only the voice, no music, no subtitles, no on-screen text." % (voice, line)
+
+    if host in ("tank", "me"):
+        hp = (persona.get("other_hosts") or {}).get(host) or {}
+        template = hp.get("prompt_template") if host == "me" else persona.get("prompt_template")
+        template = template or ""
+        if template:
+            try:
+                body = template.format(ref="the reference image", purpose="explaining clearly",
+                                       act=act, voice=voice, language=language, line=line)
+                return scene_prefix + body
+            except Exception:
+                pass
+    if host in ("cat", "dog"):
+        animal = "cat" if host == "cat" else "dog"
+        return (scene_prefix + "The " + animal + " in the reference image talks straight to the camera, "
+                "its mouth clearly opens and closes in sync with the words, like a friendly " + animal + " presenter "
+                "explaining something. It speaks " + language + ", clearly lip-synced, in a " + voice + ":\n"
+                "\u201c" + line + "\u201d\nSound: only its voice and quiet room tone, no music, no subtitles, no on-screen text.")
+    return (scene_prefix + "The person in the reference image talks to the camera, clearly lip-synced, in a "
+            + voice + ":\n\u201c" + line + "\u201d\nSound: only the voice, no music, no subtitles, no on-screen text.")
+
+
+def _compose_scene(token: str, image_url: str, scene_prompt: str, installation_id: str = "") -> str:
+    prompt = ("Composite the person from the reference photo into " + scene_prompt +
+              ". Keep the same face, hairstyle, outfit and identity. Cinematic lighting, 2k, "
+              "clean composition, no text, no watermark.")
+    resp = _mcp_call(token, "invoke_capability",
+                     {"capability_id": "image.generate",
+                      "payload": {"model": "openai/gpt-image-2", "prompt": prompt,
+                                  "image_url": image_url, "size": "2k"}},
+                     timeout=300.0, installation_id=installation_id)
+    task_id = _deep_find(resp, ("task_id", "taskId", "request_id", "id"))
+    urls = _deep_urls(resp, (".jpg", ".jpeg", ".png", ".webp"))
+    if not urls and task_id:
+        deadline = time.time() + 900
+        while time.time() < deadline:
+            time.sleep(6)
+            poll = _mcp_call(token, "invoke_capability",
+                             {"capability_id": "task.get_result", "payload": {"task_id": task_id}},
+                             timeout=180.0, installation_id=installation_id)
+            urls = _deep_urls(poll, (".jpg", ".jpeg", ".png", ".webp"))
+            if urls:
+                break
+    if not urls:
+        raise RuntimeError("场景合成未返回图片")
+    return urls[0]
 
 
 def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, installation_id: str = "") -> None:
@@ -852,6 +1000,18 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
         if not project:
             raise RuntimeError("项目不存在")
         asset_id, image_url = _ensure_asset(token, project)
+        opts = _sanitize_options(project.get("options"))
+        hd = _host_defaults(opts["host"])
+        scene_prompt = opts["scene_prompt"] if opts["scene"] == "custom" else next(
+            (x["prompt"] for x in _SCENE_OPTIONS if x["id"] == opts["scene"]), "")
+        if opts.get("compose_scene") and scene_prompt:
+            try:
+                job["message"] = "合成场景图"
+                image_url = _compose_scene(token, image_url, scene_prompt, installation_id)
+                asset_id = ""
+            except Exception as exc:
+                job["message"] = "场景合成失败，改用原图"
+                job["scene_error"] = str(exc)[:300]
         segs = project.get("segments") or []
         if only_first:
             segs = segs[:1]
@@ -863,14 +1023,15 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
             job["current"] = idx
             job["message"] = "提交第 %d/%d 段" % (idx, len(segs))
             payload = {
-                "model": GEN_MODEL,
+                "model": opts["model"] or GEN_MODEL,
                 "prompt": _prompt_for(project, seg),
                 "image_url": image_url,
-                "asset_id": asset_id,
                 "duration": max(6, min(MAX_SEG_SECONDS, int(seg.get("seconds") or 8))),
-                "ratio": "16:9" if project.get("host") == "me" else "9:16",
-                "resolution": seg.get("resolution") or "720p",
+                "ratio": opts["ratio"] or hd.get("ratio") or "9:16",
+                "resolution": opts["resolution"] or seg.get("resolution") or "720p",
             }
+            if asset_id:
+                payload["asset_id"] = asset_id
             resp = _mcp_call(token, "invoke_capability",
                              {"capability_id": "video.generate", "payload": payload}, timeout=300.0,
                              installation_id=installation_id)

@@ -5,6 +5,8 @@
   var API = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? LOCAL_API_BASE : '';
   var state = {
     step: 1,
+    options: null,
+    form: { host: 'tank', shot: 'full', ratio: '', resolution: '', language: 'Mandarin Chinese', model: '', scene: 'none', scene_prompt: '', voice: '', compose_scene: false, packaging: [] },
     components: [],
     upload: null,
     quote: null,
@@ -76,6 +78,9 @@
       + '#content-digital-human-koubo textarea{width:100%;min-height:180px;box-sizing:border-box;padding:.6rem .7rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:8px;color:var(--text);font-size:.86rem;line-height:1.6;resize:vertical;}'
       + '#content-digital-human-koubo select,#content-digital-human-koubo input[type=text]{padding:.35rem .5rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:6px;color:var(--text);font-size:.82rem;}'
       + '#content-digital-human-koubo .koubo-row{display:flex;gap:.5rem;align-items:center;margin-top:.65rem;flex-wrap:wrap;}'
+      + '#content-digital-human-koubo .koubo-params{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:.5rem .7rem;margin-top:.65rem;}'
+      + '#content-digital-human-koubo .koubo-params label{display:flex;flex-direction:column;gap:.22rem;font-size:.74rem;color:var(--text-muted);}'
+      + '#content-digital-human-koubo .koubo-params select,#content-digital-human-koubo .koubo-params input{padding:.34rem .45rem;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:6px;color:var(--text);font-size:.8rem;}'
       + '#content-digital-human-koubo .koubo-row .spacer{flex:1;}'
       + '#content-digital-human-koubo table{width:100%;border-collapse:collapse;margin-top:.6rem;font-size:.8rem;}'
       + '#content-digital-human-koubo th,#content-digital-human-koubo td{text-align:left;padding:.35rem .4rem;border-bottom:1px solid rgba(255,255,255,.07);vertical-align:top;}'
@@ -179,26 +184,73 @@
       + '</section></div>';
   }
 
+  function _optList(key, value, labelKey) {
+    var arr = (state.options && state.options[key]) || [];
+    return arr.map(function (o) {
+      var v = (o && o.id != null) ? o.id : o;
+      var label = labelKey ? (o[labelKey] || v) : ((o && o.name) || v);
+      return '<option value="' + esc(v) + '"' + (String(v) === String(value) ? ' selected' : '') + '>' + esc(label) + '</option>';
+    }).join('');
+  }
+
+  function _packHtml() {
+    var arr = (state.options && state.options.packaging) || [];
+    var cur = state.form.packaging || [];
+    var groups = {};
+    arr.forEach(function (o) { (groups[o.group] = groups[o.group] || []).push(o); });
+    return Object.keys(groups).map(function (g) {
+      return '<div style="margin-top:.4rem;"><div style="font-size:.72rem;color:var(--text-muted);margin-bottom:.15rem;">' + esc(g) + '</div>'
+        + groups[g].map(function (o) {
+            return '<label style="display:inline-flex;align-items:center;gap:.25rem;margin:.18rem .7rem .18rem 0;font-size:.76rem;color:var(--text);">'
+              + '<input type="checkbox" data-pack="' + esc(o.id) + '"' + (cur.indexOf(o.id) >= 0 ? ' checked' : '') + '> ' + esc(o.name) + '</label>';
+          }).join('') + '</div>';
+    }).join('');
+  }
+
   function renderStep2() {
+    var f = state.form || {};
     var text = state.project ? state.project.script : (state.script || '');
-    var shot = (state.project && state.project.shot) || state.shot || 'full';
-    return '<div class="koubo-card"><h4>口播文案</h4>'
-      + '<div class="koubo-row" style="margin-top:0;">'
-      + '<label style="font-size:.78rem;color:var(--text-muted);">主播</label>'
-      + '<select id="kouboHost"><option value="tank"' + (state.host === 'me' ? '' : ' selected') + '>白背心数字人（9:16）</option><option value="me"' + (state.host === 'me' ? ' selected' : '') + '>用户本人（16:9）</option></select>'
-      + '<label style="font-size:.78rem;color:var(--text-muted);">景别</label>'
-      + '<select id="kouboShot">'
-      + '<option value="full"' + (shot === 'full' ? ' selected' : '') + '>全屏出镜 720p / 17</option>'
-      + '<option value="pip"' + (shot === 'pip' ? ' selected' : '') + '>画中画 480p / 10</option>'
-      + '<option value="vlog"' + (shot === 'vlog' ? ' selected' : '') + '>自拍口吻 720p</option>'
-      + '<option value="depth"' + (shot === 'depth' ? ' selected' : '') + '>中景留背景 720p</option>'
-      + '</select>'
+    var isCustom = f.scene === 'custom';
+    return '<div class="koubo-card"><h4>口播文案与创作参数</h4>'
+      + '<textarea id="kouboText" placeholder="粘贴口播稿。按句切分，每段不超过约 15 秒（中文 5.4 字/秒）。">' + esc(text) + '</textarea>'
+      + '<div class="koubo-params">'
+      + '  <label>主播<select id="kouboHost">' + _optList('hosts', f.host) + '</select></label>'
+      + '  <label>景别<select id="kouboShot">' + _optList('shots', f.shot) + '</select></label>'
+      + '  <label>比例<select id="kouboRatio"><option value="">跟随主播</option>' + ((state.options && state.options.ratios) || ['9:16','16:9']).map(function (r) { return '<option value="' + esc(r) + '"' + (f.ratio === r ? ' selected' : '') + '>' + esc(r) + '</option>'; }).join('') + '</select></label>'
+      + '  <label>分辨率<select id="kouboResolution"><option value="">跟随景别</option>' + ((state.options && state.options.resolutions) || ['720p','480p']).map(function (r) { return '<option value="' + esc(r) + '"' + (f.resolution === r ? ' selected' : '') + '>' + esc(r) + '</option>'; }).join('') + '</select></label>'
+      + '  <label>语言<select id="kouboLanguage">' + _optList('languages', f.language) + '</select></label>'
+      + '  <label>模型<select id="kouboModel">' + _optList('models', f.model) + '</select></label>'
+      + '  <label>场景<select id="kouboScene">' + _optList('scenes', f.scene) + '</select></label>'
+      + '  <label>音色描述<input type="text" id="kouboVoice" value="' + esc(f.voice || '') + '" placeholder="留空用主播默认音色"></label>'
       + '</div>'
-      + '<textarea id="kouboText" style="margin-top:.6rem;" placeholder="粘贴口播稿。按句切分，每段不超过约 15 秒（中文 5.4 字/秒）。">' + esc(text) + '</textarea>'
+      + '<input type="text" id="kouboScenePrompt" style="width:100%;margin-top:.45rem;box-sizing:border-box;display:' + (isCustom ? 'block' : 'none') + ';" value="' + esc(f.scene_prompt || '') + '" placeholder="自定义场景描述，例如：夜晚霓虹街头，浅景深">'
+      + '<label style="display:flex;align-items:center;gap:.4rem;margin-top:.55rem;font-size:.78rem;color:var(--text-muted);"><input type="checkbox" id="kouboCompose"' + (f.compose_scene ? ' checked' : '') + '> 先合成场景图（额外消耗 1 次图片生成，失败自动回退原图）</label>'
+      + '<div style="margin-top:.7rem;"><div style="font-size:.8rem;font-weight:600;">后期包装技巧</div><div style="font-size:.72rem;color:var(--text-muted);">选择要用的手法，随项目保存（渲染接入后生效）。</div>' + _packHtml() + '</div>'
       + '<div class="koubo-row"><small id="kouboCount" style="color:var(--text-muted);font-size:.75rem;">0 字</small><span class="spacer"></span>'
       + '<button type="button" class="btn btn-ghost btn-sm" id="kouboPrev2">上一步</button>'
       + '<button type="button" class="btn btn-primary btn-sm" id="kouboQuote">生成分段与报价</button></div>'
       + '</div>';
+  }
+
+  function _labelOf(key, id) {
+    var arr = (state.options && state.options[key]) || [];
+    for (var i = 0; i < arr.length; i++) {
+      if (String(arr[i].id) === String(id)) return arr[i].name;
+    }
+    return id || '';
+  }
+
+  function _optionSummary(f) {
+    f = f || {};
+    var parts = [];
+    if (f.host) parts.push('主播 ' + _labelOf('hosts', f.host));
+    if (f.shot) parts.push('景别 ' + _labelOf('shots', f.shot));
+    if (f.ratio) parts.push('比例 ' + f.ratio);
+    if (f.resolution) parts.push(f.resolution);
+    if (f.language) parts.push(f.language);
+    if (f.scene && f.scene !== 'none') parts.push('场景 ' + _labelOf('scenes', f.scene) + (f.compose_scene ? '（合成）' : ''));
+    if (f.packaging && f.packaging.length) parts.push('包装 ' + f.packaging.length + ' 项');
+    return '<div style="font-size:.74rem;color:var(--text-muted);margin-top:.5rem;">' + esc(parts.join(' · ')) + '</div>';
   }
 
   function segmentsTable(segs, totalSec, totalCredits) {
@@ -236,6 +288,7 @@
     }
     return '<div class="koubo-card"><h4>分段与报价</h4>'
       + segmentsTable(q.segments, q.total_seconds, q.total_credits)
+      + _optionSummary(state.form)
       + '<p style="font-size:.74rem;color:var(--text-muted);margin:.5rem 0 0;">' + esc(q.note || '') + '</p>'
       + '<div class="koubo-row"><button type="button" class="btn btn-ghost btn-sm" id="kouboPrev3">上一步</button><span class="spacer"></span>'
       + '<span style="font-size:.76rem;color:var(--text-muted);">第一阶段只出任务包，不提交生成、不扣算力</span></div>'
@@ -276,8 +329,35 @@
         cnt.textContent = n + ' 字 · 约 ' + Math.max(1, Math.ceil(n / 5.4)) + ' 秒';
       }
       if (ta) { ta.addEventListener('input', refreshCount); refreshCount(); }
-      var prev = $('kouboPrev2'); if (prev) prev.onclick = function () { state.step = 1; renderStep(); };
-      var q = $('kouboQuote'); if (q) q.onclick = quote;
+      function readForm() {
+        state.form = {
+          host: ($('kouboHost') || {}).value || 'tank',
+          shot: ($('kouboShot') || {}).value || 'full',
+          ratio: ($('kouboRatio') || {}).value || '',
+          resolution: ($('kouboResolution') || {}).value || '',
+          language: ($('kouboLanguage') || {}).value || 'Mandarin Chinese',
+          model: ($('kouboModel') || {}).value || '',
+          scene: ($('kouboScene') || {}).value || 'none',
+          scene_prompt: ($('kouboScenePrompt') || {}).value || '',
+          voice: ($('kouboVoice') || {}).value || '',
+          compose_scene: !!($('kouboCompose') && $('kouboCompose').checked),
+          packaging: Array.prototype.slice.call(document.querySelectorAll('[data-pack]:checked')).map(function (el) { return el.getAttribute('data-pack'); })
+        };
+      }
+      var wrap = document.getElementById('kouboStepBody');
+      if (wrap) wrap.addEventListener('change', function (ev) {
+        readForm();
+        var sp = $('kouboScenePrompt');
+        if (sp) sp.style.display = state.form.scene === 'custom' ? 'block' : 'none';
+        if (ev && ev.target && ev.target.id === 'kouboHost') {
+          var h = ((state.options && state.options.hosts) || []).filter(function (x) { return x.id === state.form.host; })[0];
+          if (h && !state.form.ratio) {
+            var sel = $('kouboRatio'); if (sel) sel.value = h.ratio || '';
+          }
+        }
+      });
+      var prev = $('kouboPrev2'); if (prev) prev.onclick = function () { readForm(); state.step = 1; renderStep(); };
+      var q = $('kouboQuote'); if (q) q.onclick = function () { readForm(); quote(); };
     }
     if (state.step === 3) {
       var p3 = $('kouboPrev3'); if (p3) p3.onclick = function () { state.step = 2; renderStep(); };
@@ -310,14 +390,14 @@
   function quote() {
     var text = ($('kouboText') || {}).value || '';
     if (!text.trim()) { log('请先粘贴口播稿'); return; }
-    var shot = ($('kouboShot') || {}).value || 'full';
-    var host = ($('kouboHost') || {}).value || 'tank';
+    var f = state.form || {};
     state.script = text;
-    state.shot = shot;
-    state.host = host;
+    state.shot = f.shot || 'full';
+    state.host = f.host || 'tank';
     log('生成分段与报价…');
     req('/api/skills/digital-human-koubo/quote', {
-      method: 'POST', headers: headers(), body: JSON.stringify({ text: text, shot: shot })
+      method: 'POST', headers: headers(),
+      body: JSON.stringify({ text: text, shot: state.shot, resolution: f.resolution || '' })
     }).then(function (d) {
       state.quote = d;
       state.project = null;
@@ -334,7 +414,8 @@
       script: state.script,
       shot: state.shot,
       host: state.host,
-      photo_id: state.upload ? state.upload.id : ''
+      photo_id: state.upload ? state.upload.id : '',
+      options: state.form
     };
     req('/api/skills/digital-human-koubo/projects', {
       method: 'POST', headers: headers(), body: JSON.stringify(body)
@@ -439,6 +520,7 @@
           state.script = p.script;
           state.shot = p.shot;
           state.host = p.host;
+          state.form = Object.assign({}, state.form, p.options || {});
           state.quote = {
             segments: p.segments,
             total_seconds: p.total_seconds,
@@ -512,6 +594,15 @@
   function closeDepsModal() {
     var m = $('kouboDepsModal');
     if (m && m.parentNode) m.parentNode.removeChild(m);
+  }
+
+  function loadOptions() {
+    return req('/api/skills/digital-human-koubo/options').then(function (d) {
+      state.options = d;
+      if (!state.form.model && d.models && d.models.length) state.form.model = d.models[0].id;
+      if (state.step === 2 || state.step === 3) renderStep();
+      return d;
+    }).catch(function (e) { log('参数读取失败：' + e.message); });
   }
 
   function loadStatus() {
@@ -596,6 +687,7 @@
     if (typeof window._switchToHiddenView === 'function') window._switchToHiddenView(VIEW_ID);
     else if (typeof showLobsterView === 'function') showLobsterView(VIEW_ID);
     ensureShell();
+    loadOptions();
     loadStatus();
     loadProjects();
     log('进入数字人 koubo 工作台');
