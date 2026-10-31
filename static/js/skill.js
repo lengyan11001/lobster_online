@@ -3465,13 +3465,10 @@ function loadSkillStore() {
         if (viralPkg) html += _renderViralVideoRemixCard();
         if (cutcliPkg) html += _renderCutcliTemplateCard();
         if (shanjianPkg) html += _renderShanjianSmartClipCard();
-          if (multiClipPkg) html += _renderMultiClipMixerCard();
         if (personalWhatsappPkg) html += _renderPersonalWhatsappCard(personalWhatsappPkg);
         if (personalTelegramPkg) html += _renderPersonalTelegramCard(personalTelegramPkg);
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
         if (metaPkg) html += _renderMetaSocialCard({ pkg: metaPkg });
-        if (ipContentOralPkg) html += _renderIpContentStudioCard(ipContentOralPkg, !!(isSkillAdmin && ipContentOralPkg.store_visibility === 'debug'), 'oral');
-        if (ipContentMomentsPkg) html += _renderIpContentStudioCard(ipContentMomentsPkg, !!(isSkillAdmin && ipContentMomentsPkg.store_visibility === 'debug'), 'moments');
         if (linkedinMiningPkg) html += _renderLinkedinMiningCard(linkedinMiningPkg, !!(isSkillAdmin && linkedinMiningPkg.store_visibility === 'debug'));
         if (redditLeadsPkg) html += _renderSocialLeadsCard(redditLeadsPkg, 'reddit', !!(isSkillAdmin && redditLeadsPkg.store_visibility === 'debug'));
         if (xLeadsPkg) html += _renderSocialLeadsCard(xLeadsPkg, 'x', !!(isSkillAdmin && xLeadsPkg.store_visibility === 'debug'));
@@ -3480,9 +3477,6 @@ function loadSkillStore() {
         if (globalLeadsPkg) html += _renderGlobalLeadsCard(globalLeadsPkg, !!(isSkillAdmin && globalLeadsPkg.store_visibility === 'debug'));
         if (alibabaInquiriesPkg) html += _renderAlibabaInquiriesCard(alibabaInquiriesPkg, !!(isSkillAdmin && alibabaInquiriesPkg.store_visibility === 'debug'));
         if (juheWechatPkg) html += _renderJuheWechatCard(juheWechatPkg, !!(isSkillAdmin && juheWechatPkg.store_visibility === 'debug'));
-        if (liepinRecruitPkg) html += _renderLiepinRecruitCard(liepinRecruitPkg, !!(isSkillAdmin && liepinRecruitPkg.store_visibility === 'debug'));
-        if (wechatTranscriptPkg) html += _renderWechatChannelsTranscriptCard(wechatTranscriptPkg, !!(isSkillAdmin && wechatTranscriptPkg.store_visibility === 'debug'));
-        if (ai3dPkg) html += _renderAi3dModelCard(ai3dPkg, !!(isSkillAdmin && ai3dPkg.store_visibility === 'debug'));
         if (browserUsePkg) {
           html += _renderOpenclawSkillWorkspaceCard(browserUsePkg, {
             skillId: 'browser_use_skill',
@@ -3523,7 +3517,6 @@ function loadSkillStore() {
           if (pkg.id === 'bihuo_25_video_skill') return '';
           if (pkg.id === 'viral_video_remix_skill') return '';
           if (pkg.id === 'shanjian_smart_clip') return '';
-          if (pkg.id === 'multi_clip_mixer_skill') return '';
           if (pkg.id === 'personal_whatsapp_assistant') return '';
           if (pkg.id === 'personal_telegram_assistant') return '';
           if (pkg.id === 'cutcli_template_skill') return '';
@@ -3531,7 +3524,6 @@ function loadSkillStore() {
           if (pkg.id === 'cutcli_template_studio') return '';
           if (pkg.id === 'comfly_ecommerce_detail_skill') return '';
           if (pkg.id === 'ip_content_daily_skill') return '';
-          if (pkg.id === 'ip_content_oral_skill' || pkg.id === 'ip_content_moments_skill') return '';
           if (pkg.id === 'linkedin_mining_skill') return '';
           if (pkg.id === 'reddit_leads') return '';
           if (pkg.id === 'x_leads') return '';
@@ -3541,12 +3533,10 @@ function loadSkillStore() {
           if (pkg.id === 'juhe_wechat_skill') return '';
           if (pkg.id === 'openclaw_weixin_channel') return '';
           if (pkg.id === 'openclaw_memory_skill') return '';
-          if (pkg.id === 'ai_3d_model_skill') return '';
           if (pkg.id === 'browser_use_skill') return '';
           if (pkg.id === 'computer_use_skill') return '';
           if (pkg.id === 'meta_social') return '';
 
-          if (pkg.id === 'wechat_channels_transcript_skill') return '';
           if (pkg.id === 'hifly_digital_human_skill') return _renderHiflyDigitalHumanCard(pkg);
           if (pkg.id === 'youtube_publish') {
             return _renderYoutubePublishCard({
@@ -3591,12 +3581,6 @@ function loadSkillStore() {
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm ecommerce-publish-entry-btn">管理店铺账号</button></div></div>';
         }
         if (pkg.id === 'wecom_reply') {
-        if (pkg.entry && pkg.entry.target) {
-          var _lbl = escapeHtml(_skillStoreBrandSafeText(pkg.entry.label || '打开'));
-          actionBtn = '<button type="button" class="btn btn-primary btn-sm" data-skill-entry-type="'
-            + escapeAttr(String(pkg.entry.type || 'view')) + '" data-skill-entry-target="'
-            + escapeAttr(String(pkg.entry.target)) + '">' + _lbl + '</button>';
-        }
           var tags = _skillStoreTagHtml(pkg.tags || []);
           var capCount = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
           // 与 lobster 商店展示一致：仅「可配置」+ 配置按钮；算力解锁在点击时由服务器 wecom-config-eligible 判定
@@ -3617,7 +3601,7 @@ function loadSkillStore() {
             '<div class="card-tags">' + waTags + '</div>' +
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wechat-article-entry-btn">\u8fdb\u5165\u5de5\u4f5c\u53f0</button></div></div>';
         }
-        // 数字人3.0（koubo）：无论出现在技能商店还是已安装列表，都用带「进入工作台」的专用卡
+        // 通用技能卡：状态徽标/安装/卸载/解锁全部按服务端字段判断，入口按钮只在其后追加
         var statusBadge = '';
         var actionBtn = '';
         if (pkg.status === 'installed') {
@@ -3630,6 +3614,15 @@ function loadSkillStore() {
           if (pkg.unlock_price_credits && !pkg.unlocked) {
             actionBtn = '<button type="button" class="btn btn-primary btn-sm" data-unlock-credits="' + escapeAttr(pkg.id) + '">算力解锁（' + (pkg.unlock_price_credits || 0) + '）</button> ' + actionBtn;
           }
+        }
+        // 入口按钮由服务端 pkg.entry 下发，不参与安装/解锁/可见性判断
+        if (pkg.entry && pkg.entry.target) {
+          var _entryLbl = escapeHtml(_skillStoreBrandSafeText(pkg.entry.label || '打开'));
+          actionBtn = '<button type="button" class="btn btn-primary btn-sm" data-skill-entry-type="'
+            + escapeAttr(String(pkg.entry.type || 'view')) + '" data-skill-entry-target="'
+            + escapeAttr(String(pkg.entry.target)) + '"'
+            + (pkg.entry.arg ? ' data-skill-entry-arg="' + escapeAttr(String(pkg.entry.arg)) + '"' : '')
+            + '>' + _entryLbl + '</button> ' + actionBtn;
         }
         var tags = _skillStoreTagHtml(pkg.tags || []);
           var capCount = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
@@ -4050,6 +4043,17 @@ function _bindShanjianSmartClipCardEntry() {
   });
 }
 
+// 通用入口分发：按 target 推导 _openXxxView 助手（如 ip-content-studio -> _openIpContentStudioView），
+// 不针对具体技能写死；没有助手时回落到视图注册表的 showLobsterView。
+function _openSkillEntryView(target, arg) {
+  var parts = String(target || '').split(/[^a-zA-Z0-9]+/).filter(Boolean);
+  if (!parts.length) return false;
+  var name = '_open' + parts.map(function(p) { return p.charAt(0).toUpperCase() + p.slice(1); }).join('') + 'View';
+  var fn = window[name];
+  if (typeof fn !== 'function') return false;
+  try { if (arg) fn(arg); else fn(); return true; } catch (e) { console.error('Failed to open entry view: ' + target, e); return false; }
+}
+
   document.addEventListener('click', function (ev) {
     var el = ev.target && ev.target.closest ? ev.target.closest('[data-skill-entry-target]') : null;
     if (!el) return;
@@ -4058,6 +4062,7 @@ function _bindShanjianSmartClipCardEntry() {
     var target = el.getAttribute('data-skill-entry-target') || '';
     if (!target) return;
     if (t === 'url') { window.open(target, '_blank', 'noopener'); return; }
+    if (_openSkillEntryView(target, el.getAttribute('data-skill-entry-arg') || '')) return;
     try { if (typeof window.showLobsterView === 'function') { window.showLobsterView(target); return; } } catch (e) {}
     var root = document.getElementById('content-' + target);
     if (root) { document.querySelectorAll('.content-block').forEach(function (b) { b.style.display = 'none'; }); root.style.display = ''; root.classList.add('active'); }
