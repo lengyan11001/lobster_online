@@ -4897,6 +4897,16 @@ def get_asset_availability(
     }
 
 
+@router.get("/api/assets/{asset_id}/public-url", summary="取素材公网地址（本地素材会先补传 TOS）")
+def asset_public_url(
+    asset_id: str,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    url = get_asset_public_url(asset_id, current_user.id, request, db)
+    return {"ok": bool(url), "asset_id": asset_id, "url": url or ""}
+
 @router.get("/api/assets/{asset_id}", summary="获取素材详情")
 def get_asset(
     asset_id: str,

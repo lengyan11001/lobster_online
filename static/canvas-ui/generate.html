@@ -386,10 +386,21 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
       })
       .then(function (d) {
         var a = (d && (d.asset || d.data)) || d || {};
-        var url = a.source_url || a.open_url || a.url || a.public_url || "";
-        if (!url) throw new Error("上传接口未返回可用地址");
-        state.refs[type].push({ key: type + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7), url: url, source_url: a.source_url || "", asset_id: a.asset_id || "", type: type, mode: mode });
-        renderRefs(mode);
+        var url = a.source_url || a.url || a.public_url || a.open_url || "";
+        // 本地素材没有公网地址（open_url 是本机 127.0.0.1），上游拉不到：
+        // 走和发布/ComfyUI 同一个取址接口，补传 TOS 后拿公网地址再提交。
+        var needPublic = !/^https?:\/\//i.test(url) || /127\.0\.0\.1|localhost|\/api\/assets\/file\//i.test(url);
+        var ensure = needPublic && a.asset_id
+          ? fetch("/api/assets/" + encodeURIComponent(a.asset_id) + "/public-url", { headers: authHeaders(), credentials: "same-origin" })
+              .then(function (r) { return r.json().catch(function () { return {}; }); })
+              .then(function (pub) { if (pub && pub.url) url = pub.url; })
+              .catch(function () {})
+          : Promise.resolve();
+        return ensure.then(function () {
+          if (!url) throw new Error("上传接口未返回可用地址");
+          state.refs[type].push({ key: type + "-" + Date.now() + "-" + Math.random().toString(36).slice(2, 7), url: url, source_url: url, asset_id: a.asset_id || "", type: type, mode: mode });
+          renderRefs(mode);
+        });
       })
       .catch(function (e) { alert("上传失败：" + e.message); });
   }
