@@ -71,26 +71,13 @@
             <input id="mcmTemplateSwitch" type="checkbox">
           </label>
           <div id="mcmTemplatePanel" class="mcm-choice-panel" hidden>
-            <div id="mcmTemplateTitlePanel" class="mcm-overlay-panel mcm-template-title-panel">
-              <div class="mcm-overlay-head">
-                <strong>成片标题</strong>
-                <span>先填写标题，再选择随机模板或指定模板。</span>
-              </div>
-              <div class="mcm-overlay-field"><span><strong>文案模式</strong><em>统一：整条一套；每段：按素材数量逐段写</em></span>
-                <label style="display:inline-flex;align-items:center;gap:.4rem;margin-right:1.2rem;"><input type="radio" name="mcmTextMode" id="mcmTextModeUnified" value="unified" checked> 统一标题/文案</label>
-                <label style="display:inline-flex;align-items:center;gap:.4rem;"><input type="radio" name="mcmTextMode" id="mcmTextModePerSegment" value="per-segment"> 每段标题/文案</label>
-              </div>
-              <div id="mcmUnifiedCopyFields">
-                <label class="mcm-overlay-field"><span><strong>标题</strong><em>支持换行，用于模板主标题</em></span><textarea id="mcmTemplateTitle" rows="3" maxlength="80" placeholder="输入成片标题，可分多行"></textarea></label>
-                <label class="mcm-overlay-field"><span><strong>介绍文案</strong><em>可空，交给模板身份栏</em></span><textarea id="mcmShanjianDescription" rows="3" maxlength="240" placeholder="填写模板身份栏要显示的介绍文案，留空则不传。"></textarea></label>
-              </div>
-              <div id="mcmSegmentTextList" class="mcm-overlay-fields" hidden></div>
-            </div>
-            <label id="mcmTemplateRandomRow" class="mcm-template-random-row"><span><strong>模板选择</strong><small>关闭后选择指定模板；开启后每条随机选择模板。</small></span><span class="mcm-inline-check"><input id="mcmRandomTemplateSwitch" type="checkbox" checked><span>随机模板</span></span></label>
+            <div class="mcm-step-title" style="margin:10px 0 6px;font-size:12px;opacity:.72;letter-spacing:.02em;">第 1 步 · 模板来源</div>
             <div class="mcm-provider-row">
               <label><input type="radio" name="mcmTemplateProvider" value="local" checked><span>我们的模板</span></label>
               <label><input type="radio" name="mcmTemplateProvider" value="shanjian"><span>闪剪模板</span></label>
             </div>
+            <div class="mcm-step-title" style="margin:10px 0 6px;font-size:12px;opacity:.72;letter-spacing:.02em;">第 2 步 · 选择模板</div>
+            <label id="mcmTemplateRandomRow" class="mcm-template-random-row"><span><strong>模板选择</strong><small>关闭后选择指定模板；开启后每条随机选择模板。</small></span><span class="mcm-inline-check"><input id="mcmRandomTemplateSwitch" type="checkbox" checked><span>随机模板</span></span></label>
             <div id="mcmTemplateChoiceArea">
               <div class="mcm-choice-toolbar">
               <div>
@@ -116,6 +103,22 @@
               </div>
               <div id="mcmTemplateGrid" class="mcm-template-grid"></div>
               <button id="mcmTemplateMoreBtn" type="button" class="btn btn-ghost btn-sm" hidden>加载更多</button>
+            </div>
+            <div class="mcm-step-title" style="margin:14px 0 6px;font-size:12px;opacity:.72;letter-spacing:.02em;">第 3 步 · 标题与文案</div>
+            <div id="mcmTemplateTitlePanel" class="mcm-overlay-panel mcm-template-title-panel">
+              <div class="mcm-overlay-head">
+                <strong>标题与文案</strong>
+                <span>统一：整条一套；每段：按素材数量逐段写。</span>
+              </div>
+              <div class="mcm-provider-row" id="mcmTextModeRow">
+                <label><input type="radio" name="mcmTextMode" id="mcmTextModeUnified" value="unified" checked><span>统一标题/文案</span></label>
+                <label><input type="radio" name="mcmTextMode" id="mcmTextModePerSegment" value="per-segment"><span>每段标题/文案</span></label>
+              </div>
+              <div id="mcmUnifiedCopyFields">
+                <label class="mcm-overlay-field"><span><strong>标题</strong><em>支持换行，用于模板主标题</em></span><textarea id="mcmTemplateTitle" rows="3" maxlength="80" placeholder="输入成片标题，可分多行"></textarea></label>
+                <label class="mcm-overlay-field"><span><strong>介绍文案</strong><em>可空，交给模板身份栏</em></span><textarea id="mcmShanjianDescription" rows="3" maxlength="240" placeholder="填写模板身份栏要显示的介绍文案，留空则不传。"></textarea></label>
+              </div>
+              <div id="mcmSegmentTextList" hidden></div>
             </div>
             <div id="mcmTemplateOverlayPanel" class="mcm-overlay-panel" hidden>
               <div class="mcm-overlay-head">
