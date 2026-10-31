@@ -1944,7 +1944,7 @@
       "name": "数字人koubo",
       "description": "一张照片 + 一句台词 → 带数字人口播、花字、包装的成片。原样移植自开源项目 digital-human-koubo（SKILL.md + build_tasks/assemble/align 脚本 + Remotion 花字模板），第一阶段只做商店上架与本机验证，生成仍走现有 Renoise/Grok 链路。",
       "type": "builtin",
-      "store_visibility": "debug",
+      "store_visibility": "online",
       "default_installed": false,
       "status": "available",
       "package_config": {
