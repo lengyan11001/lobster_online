@@ -1,7 +1,7 @@
 {
-  "version": "2.0.225",
-  "build": 526,
-  "applied_at": "2026-10-31T18:56:41+08:00",
-  "note": "修复 OTA 不下发 static/js|css|views|index.html（前端从未更新过的根因）",
-  "bundle_sha256": "bbf6c93094693a4ccd497a3dda7470f759af5e1c905f40d3eddeef1faca9defe"
+  "version": "2.0.226",
+  "build": 527,
+  "applied_at": "2026-10-31T18:57:40+08:00",
+  "note": "新增前端静态文件版本日志（[static-serve]）；OTA 首次下发 static/js",
+  "bundle_sha256": "29f98add3b561c2c22a866067f1d77a7c86b51ad18f4a8e6c801e3b79519a5f1"
 }
