@@ -1,7 +1,7 @@
 {
-  "version": "2.0.218",
-  "build": 519,
-  "applied_at": "2026-10-31T17:41:08+08:00",
-  "note": "skills: koubo 卡按 id/名称包含匹配，已安装区带进入工作台",
-  "bundle_sha256": "bc14fca3358fc84b8c3b4af42f896329a969b1a5c3b2949920e1d70014a227c9"
+  "version": "2.0.219",
+  "build": 520,
+  "applied_at": "2026-10-31T17:50:01+08:00",
+  "note": "skills: 入口由服务端 entry 下发（不写死技能）；作品提取卡去重",
+  "bundle_sha256": "9a534cdb3192fe79e1eb8424844b48afbff423d3fbc5e8c71e1794d3b6cde1c4"
 }
