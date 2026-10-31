@@ -715,8 +715,24 @@
   }
 
   window._openDigitalHumanKouboView = function () {
-    if (typeof window._switchToHiddenView === 'function') window._switchToHiddenView(VIEW_ID);
-    else if (typeof showLobsterView === 'function') showLobsterView(VIEW_ID);
+    var switched = false;
+    try {
+      if (typeof window._switchToHiddenView === 'function') { window._switchToHiddenView(VIEW_ID); switched = true; }
+      else if (typeof showLobsterView === 'function') { showLobsterView(VIEW_ID); switched = true; }
+    } catch (e) {
+      console.warn('[koubo] 切换视图失败，改为直接显示容器:', e);
+      switched = false;
+    }
+    if (!switched) {
+      try {
+        var root = document.getElementById('content-' + VIEW_ID);
+        if (root) {
+          document.querySelectorAll('.content-block').forEach(function (el) { el.style.display = 'none'; });
+          root.style.display = '';
+          root.classList.add('active');
+        }
+      } catch (e2) {}
+    }
     ensureShell();
     loadOptions();
     loadProjects();
