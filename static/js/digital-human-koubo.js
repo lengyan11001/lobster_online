@@ -156,7 +156,7 @@
   function shell() {
     return '<div class="kb-root">'
       + '<aside class="kb-side">'
-      + '  <div class="kb-side-head"><h3>数字人 3.0</h3><span class="kb-pill" id="kbStatus">未保存</span></div>'
+      + '  <div class="kb-side-head"><h3>数字人3.0</h3><span class="kb-pill" id="kbStatus">未保存</span></div>'
       + '  <div class="kb-card"><div class="kb-sec-title">形象<small>一张正脸照</small></div><div id="kbAvatar"></div></div>'
       + '  <div class="kb-card"><div class="kb-sec-title">口播稿<small id="kbCount">0 字</small></div><textarea id="kbText" placeholder="粘贴口播稿。按句切分，每段不超过约 15 秒。"></textarea></div>'
       + '  <div class="kb-card"><button type="button" class="kb-collapse" id="kbParamToggle">创作参数<span id="kbParamSummary">默认</span></button><div class="kb-params" id="kbParams"></div></div>'
@@ -720,7 +720,7 @@
     ensureShell();
     loadOptions();
     loadProjects();
-    log('进入数字人 3.0 工作台');
+    log('进入数字人3.0 工作台');
   };
 
   document.addEventListener('DOMContentLoaded', function () {
