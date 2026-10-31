@@ -42,6 +42,11 @@ FFMPEG_DIR = DEPS / "ffmpeg"
 WHISPER_DIR = DEPS / "whisper"
 WHISPER_MODELS = WHISPER_DIR / "models"
 WHISPER_MODEL_PATH = WHISPER_MODELS / "ggml-medium-q5_0.bin"
+FONTS_DIR = DEPS / "fonts"
+FONT_FILES = [
+    ("NotoSansSC-400.woff2", "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/client-code/deps/fonts/NotoSansSC-400.woff2"),
+    ("NotoSansSC-700.woff2", "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/client-code/deps/fonts/NotoSansSC-700.woff2"),
+]
 WHISPER_MODEL_URL = (
     "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com"
     "/assets/client-code/deps/whisper/ggml-medium-q5_0.bin"
@@ -129,6 +134,24 @@ def _probe_whisper() -> Dict[str, Any]:
     return {"status": "missing", "detail": "whisper-cli 未安装"}
 
 
+def _probe_fonts() -> Dict[str, Any]:
+    have = [n for n, _ in FONT_FILES if (FONTS_DIR / n).is_file()]
+    if len(have) == len(FONT_FILES):
+        return {"status": "ok", "detail": "Noto Sans SC 400/700", "version": ""}
+    return {"status": "missing", "detail": "已安装 %d/%d" % (len(have), len(FONT_FILES))}
+
+
+def _install_fonts(job: Dict[str, Any]) -> None:
+    FONTS_DIR.mkdir(parents=True, exist_ok=True)
+    total = len(FONT_FILES)
+    for i, (name, url) in enumerate(FONT_FILES, 1):
+        job["message"] = "下载字体 %d/%d" % (i, total)
+        job["progress"] = int((i - 1) * 100 / total)
+        _download(url, FONTS_DIR / name, job, "字体 " + name)
+    job["progress"] = 95
+    job["message"] = "字体已安装"
+
+
 def _probe_model() -> Dict[str, Any]:
     if WHISPER_MODEL_PATH.is_file():
         mb = WHISPER_MODEL_PATH.stat().st_size / 1048576
@@ -146,6 +169,7 @@ def _component_list() -> List[Dict[str, Any]]:
         ("python_pkgs", "numpy + Pillow", "声音频谱匹配、预览图", True, _probe_python_pkgs, "约 20 MB"),
         ("whisper", "whisper-cli", "逐段回听、逐字时间轴", True, _probe_whisper, "约 30 MB"),
         ("whisper_model", "whisper 模型", "ggml-medium-q5_0", True, _probe_model, "约 520 MB"),
+        ("fonts", "中文字体（Noto Sans SC）", "字幕/花字统一字体，不进 OTA", True, _probe_fonts, "约 3 MB"),
     ]
     out: List[Dict[str, Any]] = []
     with _JOBS_LOCK:
@@ -333,6 +357,7 @@ _INSTALLERS = {
     "python_pkgs": _install_python_pkgs,
     "whisper": _install_whisper,
     "whisper_model": _install_model,
+    "fonts": _install_fonts,
 }
 
 
@@ -1248,6 +1273,15 @@ def koubo_render_job(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="任务不存在")
     return job
+
+
+@router.post("/api/skills/digital-human-koubo/projects/{pid}/qa", summary="逐段回听质检")
+def koubo_qa(pid: str):
+    project = koubo_project(pid)
+    if project.get("status") != "generated":
+        raise HTTPException(status_code=400, detail="先生成成片，再质检")
+    from ..services import koubo_renderer
+    return koubo_renderer.qa(project)
 
 
 @router.get("/api/skills/digital-human-koubo/projects/{pid}/rendered", summary="包装后成片")

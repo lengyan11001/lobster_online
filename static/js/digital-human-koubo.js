@@ -12,7 +12,8 @@
     projects: [],
     components: [],
     job: null,
-    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch'], job: null, packaged: false },
+    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false },
+    qa: null,
     timer: null
   };
 
@@ -328,6 +329,29 @@
     if ($('kbSegCount')) $('kbSegCount').textContent = q.segments.length + ' 段';
   }
 
+  function renderQaResult(q) {
+    if (!q.ok) return '<div style="margin-top:8px;font-size:11px;color:#dc2626;">' + esc(q.error || '质检失败') + '</div>';
+    var rows = (q.segments || []).map(function (x) {
+      return '<tr><td>' + esc(x.id) + '</td><td>' + esc(x.text) + '</td><td style="color:' + (x.warn ? '#dc2626' : '#059669') + ';">' + Math.round(x.acc * 100) + '%</td><td style="font-size:11px;color:#64748b;">' + esc(x.heard || '') + '</td></tr>';
+    }).join('');
+    return '<div style="margin-top:10px;"><div style="font-size:12px;color:#0f172a;margin-bottom:6px;">质检结果 · 平均 ' + Math.round((q.overall || 0) * 100) + '%</div>'
+      + '<table><thead><tr><th>段</th><th>文稿</th><th>准确率</th><th>听到</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }
+
+  function runQa() {
+    if (!state.project) return;
+    var btn = $('kbQa');
+    if (btn) { btn.disabled = true; btn.textContent = '质检中…'; }
+    log('开始质检（whisper 回听）…');
+    req('/api/skills/digital-human-koubo/projects/' + state.project.id + '/qa', { method: 'POST', headers: headers() })
+      .then(function (d) {
+        state.qa = d;
+        log(d.ok ? '质检完成，平均 ' + Math.round((d.overall || 0) * 100) + '%' : '质检失败：' + d.error);
+        renderPack();
+      })
+      .catch(function (e) { log('质检失败：' + e.message); if (btn) { btn.disabled = false; btn.textContent = '开始质检'; } });
+  }
+
   function renderPack() {
     var box = $('kbPack');
     if (!box) return;
@@ -342,11 +366,17 @@
       + '<label><input type="checkbox" data-comp="cta"' + (r.components.indexOf('cta') >= 0 ? ' checked' : '') + '> 结尾 CTA</label>'
       + '<label><input type="checkbox" data-comp="lowerthird"' + (r.components.indexOf('lowerthird') >= 0 ? ' checked' : '') + '> 姓名条</label>'
       + '<label><input type="checkbox" data-comp="punch"' + (r.components.indexOf('punch') >= 0 ? ' checked' : '') + '> 跳切推近</label>'
+      + '<label><input type="checkbox" data-comp="chapter"' + (r.components.indexOf('chapter') >= 0 ? ' checked' : '') + '> 章节卡</label>'
+      + '<label><input type="checkbox" data-comp="stack"' + (r.components.indexOf('stack') >= 0 ? ' checked' : '') + '> 关键词堆叠</label>'
+      + '<label><input type="checkbox" data-comp="counter"' + (r.components.indexOf('counter') >= 0 ? ' checked' : '') + '> 数字滚动</label>'
       + '<span style="flex:1"></span>'
       + (r.packaged ? '<a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/rendered') + '" download>下载包装成片</a>' : '')
       + '<button type="button" class="kb-btn" id="kbRender"' + (job ? ' disabled' : '') + '>' + (job ? '渲染中 ' + (job.progress || 0) + '%' : (r.packaged ? '重新包装' : '生成包装成片')) + '</button>'
       + '</div>'
       + (job ? '<div style="margin-top:8px;font-size:11px;color:#64748b;">' + esc(job.message || '') + '<div style="height:4px;background:#eef2f7;border-radius:999px;overflow:hidden;margin-top:4px;"><i style="display:block;height:100%;width:' + Math.max(3, job.progress || 0) + '%;background:#3b82f6;"></i></div></div>' : '')
+      + '<div class="kb-packbar" style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:10px;">'
+      + '<button type="button" class="kb-btn" id="kbQa">开始质检</button><span style="font-size:11px;color:#94a3b8;">whisper 回听，逐段比对文稿（低于 85% 建议重拍）</span></div>'
+      + (state.qa ? renderQaResult(state.qa) : '')
       + '</div>';
     var sel = $('kbPreset');
     if (sel) sel.onchange = function () { state.render.preset = sel.value; };
@@ -357,6 +387,8 @@
     });
     var btn = $('kbRender');
     if (btn) btn.onclick = function () { startRender(); };
+    var qaBtn = $('kbQa');
+    if (qaBtn) qaBtn.onclick = runQa;
   }
 
   function startRender() {

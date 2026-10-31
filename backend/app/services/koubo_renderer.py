@@ -29,6 +29,7 @@ FFMPEG = ROOT / "deps" / "ffmpeg" / "ffmpeg.exe"
 FFPROBE = ROOT / "deps" / "ffmpeg" / "ffprobe.exe"
 WHISPER = ROOT / "deps" / "whisper" / "whisper-cli.exe"
 WHISPER_MODEL = ROOT / "deps" / "whisper" / "models" / "ggml-medium-q5_0.bin"
+FONTS_DIR = ROOT / "deps" / "fonts"
 DATA_DIR = ROOT / "data" / "koubo"
 OUTPUT_DIR = DATA_DIR / "output"
 
@@ -61,11 +62,25 @@ html,body{margin:0;padding:0;width:__W__px;height:__H__px;background:#000;overfl
 #cta{position:absolute;left:12%;right:12%;bottom:24%;text-align:center;font-weight:800;color:#fff;
   font-size:__CTA__px;padding:2.2% 0;border-radius:14px;background:linear-gradient(135deg,#f97316,#ea580c);
   box-shadow:0 10px 30px rgba(234,88,12,.45);opacity:0;}
+#prog{position:absolute;left:0;top:0;height:4px;width:100%;background:rgba(255,255,255,.16);}
+#prog i{display:block;height:100%;background:__KEY__;width:0;}
+#chapter{position:absolute;left:5%;top:5.5%;display:flex;align-items:center;gap:8px;padding:4px 10px;border-radius:8px;
+  background:rgba(15,23,42,.72);color:#fff;font-size:__CH__px;font-weight:600;opacity:0;}
+#chapter b{color:__KEY__;font-weight:800;}
+#stack{position:absolute;right:5%;top:24%;width:42%;display:flex;flex-direction:column;align-items:flex-end;gap:6px;}
+#stack .chip{background:rgba(15,23,42,.72);color:#fff;font-size:__STK__px;font-weight:600;padding:3px 9px;border-radius:8px;
+  border-left:3px solid __KEY__;opacity:0;transform:translateX(10px);}
+#counter{position:absolute;left:0;right:0;top:32%;text-align:center;font-weight:900;color:__KEY__;
+  font-size:__CNT__px;-webkit-text-stroke:__KWSTROKE__px rgba(0,0,0,.8);paint-order:stroke fill;opacity:0;}
 </style></head><body>
 <div id="stage"><img id="bg" alt=""></div>
 <div id="cap"></div><div id="kw"></div>
 <div id="lt"><span id="ltName"></span><small id="ltSub"></small></div>
 <div id="cta">点个关注，下期见</div>
+<div id="prog"><i></i></div>
+<div id="chapter"><b id="chNo">01</b><span id="chTitle"></span></div>
+<div id="stack"></div>
+<div id="counter">0</div>
 <script>
 window.TL = __TL__;
 window.renderAt = function (t, frameSrc) {
@@ -106,6 +121,36 @@ window.renderAt = function (t, frameSrc) {
     cta.style.opacity = String(q);
     cta.style.transform = 'translateY(' + (1 - q) * 14 + 'px)';
   } else { cta.style.opacity = '0'; }
+  var prog = document.querySelector('#prog i');
+  if (prog) prog.style.width = Math.min(100, (t / Math.max(0.01, TL.duration)) * 100) + '%';
+  var ch = document.getElementById('chapter');
+  if (TL.showChapter && seg && t - seg.start < 1.8) {
+    document.getElementById('chNo').textContent = seg.chapter.no;
+    document.getElementById('chTitle').textContent = seg.chapter.title;
+    ch.style.opacity = '1';
+  } else { ch.style.opacity = '0'; }
+  var stack = document.getElementById('stack');
+  if (TL.showStack && seg && t >= seg.start + 0.3 && t < seg.start + 2.8 && seg.stack && seg.stack.length) {
+    if (stack.getAttribute('data-seg') !== seg.start) {
+      stack.setAttribute('data-seg', String(seg.start));
+      stack.innerHTML = seg.stack.map(function (x) { return '<div class="chip">' + x + '</div>'; }).join('');
+    }
+    var chips = stack.querySelectorAll('.chip');
+    for (var c = 0; c < chips.length; c++) {
+      var on = t >= seg.start + 0.3 + c * 0.12;
+      chips[c].style.opacity = on ? '1' : '0';
+      chips[c].style.transform = on ? 'translateX(0)' : 'translateX(10px)';
+    }
+  } else if (stack) { stack.innerHTML = ''; stack.removeAttribute('data-seg'); }
+  var counter = document.getElementById('counter');
+  if (TL.showCounter && seg && seg.numbers && seg.numbers.length) {
+    var n = seg.numbers[0];
+    if (t >= n.start && t < n.end) {
+      var rr = Math.min(1, (t - n.start) / 0.7);
+      counter.textContent = n.prefix + Math.round(n.value * rr).toLocaleString() + n.suffix;
+      counter.style.opacity = '1';
+    } else { counter.style.opacity = '0'; }
+  } else { counter.style.opacity = '0'; }
 };
 </script></body></html>"""
 
@@ -259,14 +304,41 @@ def build_timeline(project: Dict[str, Any], duration: float, tmp: Optional[Path]
                 continue
             start = max(seg["start"], hit[1])
             keywords.append({"text": tok, "start": start, "end": min(seg["end"], start + 1.4), "pop": 0.22})
+    for idx, seg in enumerate(segs, 1):
+        seg["chapter"] = {"no": "%02d" % idx, "title": (seg.get("text") or "")[:10]}
+        nums = []
+        for tok in re.findall(r"([¥$]?)(d[d,.]*)s*(%|元|块|万|亿)?", seg.get("text") or ""):
+            try:
+                val = float(tok[1].replace(",", ""))
+            except Exception:
+                continue
+            if val <= 0:
+                continue
+            hit = next((c for c in seg["chars"] if c[0] in tok[1]), None)
+            if not hit:
+                continue
+            nums.append({"prefix": tok[0], "value": val, "suffix": tok[2] or "",
+                         "start": max(seg["start"], hit[1]), "end": min(seg["end"], hit[1] + 1.6)})
+        seg["numbers"] = nums
+        words = [n["prefix"] + str(int(n["value"])) + n["suffix"] for n in nums][:3]
+        if not words:
+            words = [w for w in re.findall(r"[\u4e00-\u9fa5A-Za-z]{2,6}", seg.get("text") or "")][:2]
+        seg["stack"] = words
     cta_start = max(0.0, duration - min(3.0, max(1.6, duration * 0.28)))
     return {"segs": segs, "keywords": keywords, "cta": {"start": round(cta_start, 3)},
             "lowerThird": None, "duration": duration, "timing": "whisper" if heard else "even"}
 
 
 class _QuietHandler(SimpleHTTPRequestHandler):
+    font_dir: Optional[Path] = None
+
     def log_message(self, *args):
         pass
+
+    def translate_path(self, path):
+        if path.startswith("/fonts/") and self.font_dir is not None:
+            return str(self.font_dir / Path(path).name)
+        return super().translate_path(path)
 
 
 def render(
@@ -300,7 +372,7 @@ def render(
     H -= H % 2
     total_frames = max(1, int(math.ceil(duration * FPS)))
     p = PRESETS.get(preset) or PRESETS["标准"]
-    comps = set(components or ["caption", "keyword", "cta", "lowerthird", "punch"])
+    comps = set(components or ["caption", "keyword", "cta", "lowerthird", "punch", "chapter", "stack", "counter"])
     opts = project.get("options") or {}
     lang = LANG_MAP.get(opts.get("language") or "Mandarin Chinese", "zh")
 
@@ -323,6 +395,9 @@ def render(
             timeline["segs"] = []
         if "punch" not in comps:
             timeline["punch"] = False
+        timeline["showChapter"] = "chapter" in comps
+        timeline["showStack"] = "stack" in comps
+        timeline["showCounter"] = "counter" in comps
         host = (opts.get("host") or project.get("host") or "tank")
         names = {"tank": "白背心数字人", "me": "用户本人", "cat": "橘猫店长", "dog": "柴犬主播"}
         if "lowerthird" in comps:
@@ -334,6 +409,20 @@ def render(
             for i, seg in enumerate(timeline["segs"]):
                 seg["punch"] = 1.0 if i % 2 == 0 else (1.0 + strength)
 
+        _QuietHandler.font_dir = FONTS_DIR
+        handler = functools.partial(_QuietHandler, directory=str(frames))
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        font_css = ""
+        font_family = "\"Microsoft YaHei\",\"PingFang SC\",\"Noto Sans SC\",\"Source Han Sans SC\",sans-serif"
+        if (FONTS_DIR / "NotoSansSC-400.woff2").is_file():
+            base = "http://127.0.0.1:%d/fonts" % port
+            font_css = ("@font-face{font-family:'NotoSC';src:url('%s/NotoSansSC-400.woff2') format('woff2');font-weight:400;font-display:swap}"
+                        "@font-face{font-family:'NotoSC';src:url('%s/NotoSansSC-700.woff2') format('woff2');font-weight:700;font-display:swap}") % (base, base)
+            font_family = "'NotoSC'," + font_family
+
         html = (_HTML.replace("__W__", str(W)).replace("__H__", str(H))
                 .replace("__CAP__", str(round(H * p["cap"])))
                 .replace("__STROKE__", str(max(2, round(H * 0.004))))
@@ -342,13 +431,16 @@ def render(
                 .replace("__CTA__", str(round(H * p["cta"])))
                 .replace("__LT__", str(round(H * 0.030)))
                 .replace("__LTS__", str(round(H * 0.020)))
+                .replace("__CH__", str(round(H * 0.024)))
+                .replace("__STK__", str(round(H * 0.026)))
+                .replace("__CNT__", str(round(H * 0.11)))
                 .replace("__KEY__", p["keyColor"])
                 .replace("__TL__", json.dumps(timeline, ensure_ascii=False)))
-
-        handler = functools.partial(_QuietHandler, directory=str(frames))
-        srv = ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        port = srv.server_address[1]
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        html = html.replace(
+            'font-family:\"Microsoft YaHei\",\"PingFang SC\",\"Noto Sans SC\",\"Source Han Sans SC\",sans-serif;',
+            "font-family:" + font_family + ";")
+        if font_css:
+            html = html.replace("</style>", font_css + "</style>")
 
         from playwright.sync_api import sync_playwright
 
@@ -385,4 +477,42 @@ def render(
                 srv.shutdown()
             except Exception:
                 pass
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def qa(project: Dict[str, Any]) -> Dict[str, Any]:
+    """逐段回听：whisper 转写后与文稿比对，返回每段准确率与是否建议重拍。"""
+    pid = str(project.get("id") or "")
+    src = OUTPUT_DIR / pid / "final.mp4"
+    if not src.is_file():
+        return {"ok": False, "error": "还没有成片"}
+    if not WHISPER.is_file() or not WHISPER_MODEL.is_file():
+        return {"ok": False, "error": "whisper 未安装（请先在资源里下载模型）"}
+    info = probe(src)
+    opts = project.get("options") or {}
+    lang = LANG_MAP.get(opts.get("language") or "Mandarin Chinese", "zh")
+    tmp = Path(tempfile.mkdtemp(prefix="koubo-qa-", dir=str(DATA_DIR)))
+    try:
+        heard = _whisper_chars(src, tmp, lang)
+        if not heard:
+            return {"ok": False, "error": "没有识别到语音"}
+        segs = _align_timeline(project, heard, info["duration"])
+        results = []
+        for seg, src_seg in zip(segs, project.get("segments") or []):
+            spoken = "".join(c for c, t in heard if seg["start"] <= t <= seg["end"])
+            a = _clean(str(src_seg.get("text") or ""))
+            b = _clean(spoken)
+            acc = difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
+            results.append({
+                "id": src_seg.get("id"),
+                "text": src_seg.get("text") or "",
+                "heard": spoken,
+                "acc": round(acc, 3),
+                "warn": acc < 0.85,
+                "start": seg["start"],
+                "end": seg["end"],
+            })
+        overall = round(sum(x["acc"] for x in results) / max(1, len(results)), 3)
+        return {"ok": True, "duration": info["duration"], "overall": overall, "segments": results}
+    finally:
         shutil.rmtree(tmp, ignore_errors=True)
