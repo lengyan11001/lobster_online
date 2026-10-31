@@ -251,7 +251,7 @@
                     <div class="p-4 flex flex-col bg-white">
                         <div class="flex justify-between items-start mb-1">
                             <h3 class="text-[14px] text-gray-800 main-title line-clamp-1 group-hover:text-blue-600 transition-colors pr-2">${item.name}</h3>
-                            <button onclick="deleteItem(event, ${item.id})" class="text-gray-400 hover:text-red-500 transition-colors w-6 h-6 rounded-md hover:bg-gray-100 flex items-center justify-center shrink-0" title="删除项目">
+                            <button onclick="event.preventDefault(); event.stopPropagation(); deleteItem(event, ${item.id}); return false;" class="text-gray-400 hover:text-red-500 transition-colors w-6 h-6 rounded-md hover:bg-gray-100 flex items-center justify-center shrink-0" title="删除项目">
                                 <i class="fa-regular fa-trash-can text-[11px]"></i>
                             </button>
                         </div>
@@ -319,9 +319,8 @@
             renderDashboard();
         }
 
-        function deleteItem(e, itemId) {
-            e.stopPropagation();
-            appData.items = appData.items.filter(i => i.id !== itemId);
+        function _removeLocalItem(itemId) {
+            appData.items = appData.items.filter(i => String(i.id) !== String(itemId));
             renderDashboard();
         }
 
@@ -460,6 +459,7 @@
     appData.items = appData.items.filter(function (i) { return String(i.id) !== String(itemId); });
     saveFolderMap(itemId, null);
     renderDashboard();
+    if (typeof showToast === "function") showToast("已删除");
   };
   window.submitCreateFolder = function () {
     var input = document.querySelector('#folderModal input');
