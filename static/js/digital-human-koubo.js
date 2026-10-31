@@ -12,7 +12,7 @@
     projects: [],
     components: [],
     job: null,
-    render: { preset: '标准', components: ['caption', 'keyword', 'cta'], job: null, packaged: false },
+    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch'], job: null, packaged: false },
     timer: null
   };
 
@@ -340,6 +340,8 @@
       + '<label><input type="checkbox" data-comp="caption"' + (r.components.indexOf('caption') >= 0 ? ' checked' : '') + '> 逐字字幕</label>'
       + '<label><input type="checkbox" data-comp="keyword"' + (r.components.indexOf('keyword') >= 0 ? ' checked' : '') + '> 数字钉子</label>'
       + '<label><input type="checkbox" data-comp="cta"' + (r.components.indexOf('cta') >= 0 ? ' checked' : '') + '> 结尾 CTA</label>'
+      + '<label><input type="checkbox" data-comp="lowerthird"' + (r.components.indexOf('lowerthird') >= 0 ? ' checked' : '') + '> 姓名条</label>'
+      + '<label><input type="checkbox" data-comp="punch"' + (r.components.indexOf('punch') >= 0 ? ' checked' : '') + '> 跳切推近</label>'
       + '<span style="flex:1"></span>'
       + (r.packaged ? '<a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/rendered') + '" download>下载包装成片</a>' : '')
       + '<button type="button" class="kb-btn" id="kbRender"' + (job ? ' disabled' : '') + '>' + (job ? '渲染中 ' + (job.progress || 0) + '%' : (r.packaged ? '重新包装' : '生成包装成片')) + '</button>'

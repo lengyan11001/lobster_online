@@ -891,6 +891,35 @@ def _mcp_call(token: str, name: str, arguments: Dict[str, Any], timeout: float =
     return _parse_mcp_response(data)
 
 
+def _crop_to_ratio(src: Path, ratio: str) -> Path:
+    """把形象照居中裁到目标比例，避免上游按图片原始比例出片（横图会出横屏）。"""
+    if ratio not in ("9:16", "16:9"):
+        return src
+    tw, th = (9, 16) if ratio == "9:16" else (16, 9)
+    target = tw / th
+    try:
+        from PIL import Image
+
+        with Image.open(src) as im:
+            w, h = im.size
+            cur = w / h if h else target
+            if abs(cur - target) / target < 0.04:
+                return src
+            if cur > target:
+                nw = max(1, int(round(h * target)))
+                left = (w - nw) // 2
+                box = (left, 0, left + nw, h)
+            else:
+                nh = max(1, int(round(w / target)))
+                top = (h - nh) // 2
+                box = (0, top, w, top + nh)
+            out = src.with_name(src.stem + "_" + ratio.replace(":", "x") + src.suffix)
+            im.crop(box).save(out, quality=95)
+            return out
+    except Exception:
+        return src
+
+
 def _ensure_asset(token: str, project: Dict[str, Any]) -> tuple[str, str]:
     """把本地形象照送进素材库，并拿到可公网访问的图片 URL（上游只认 URL）。"""
     asset_id = project.get("photo_asset_id") or ""
@@ -901,6 +930,9 @@ def _ensure_asset(token: str, project: Dict[str, Any]) -> tuple[str, str]:
     src = UPLOAD_DIR / photo_id if photo_id else None
     if not src or not src.is_file():
         raise RuntimeError("请先在第一步上传人物照片")
+    opts = _sanitize_options(project.get("options"))
+    ratio = opts["ratio"] or ("16:9" if opts["host"] == "me" else "9:16")
+    src = _crop_to_ratio(src, ratio)
     with open(src, "rb") as fh:
         files = {"file": (src.name, fh, "image/jpeg" if src.suffix.lower() in (".jpg", ".jpeg") else "image/png")}
         with httpx.Client(timeout=180.0, trust_env=False) as client:
