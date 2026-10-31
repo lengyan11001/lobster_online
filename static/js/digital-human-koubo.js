@@ -371,8 +371,10 @@
       log('已提交生成（' + (d.mode === 'all' ? '全部' : '仅第 1 段') + '），job=' + d.job_id);
       pollGenerate(d.job_id);
     }).catch(function (e) {
-      if (status) status.textContent = '提交失败：' + e.message;
-      log('提交生成失败：' + e.message);
+      var msg = e && e.message ? e.message : '提交失败';
+      if (/连接正在自动恢复/.test(msg)) msg = '本地服务刚重启，请 3 秒后重试';
+      if (status) status.textContent = '提交失败：' + msg;
+      log('提交生成失败：' + msg);
     });
   }
 

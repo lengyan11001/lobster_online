@@ -40,7 +40,11 @@ FFMPEG_DIR = DEPS / "ffmpeg"
 WHISPER_DIR = DEPS / "whisper"
 WHISPER_MODELS = WHISPER_DIR / "models"
 WHISPER_MODEL_PATH = WHISPER_MODELS / "ggml-medium-q5_0.bin"
-WHISPER_MODEL_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin"
+WHISPER_MODEL_URL = (
+    "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com"
+    "/assets/client-code/deps/whisper/ggml-medium-q5_0.bin"
+)
+WHISPER_MODEL_FALLBACK = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin"
 NODE_EXE = ROOT / "nodejs" / "node.exe"
 PY_EXE = ROOT / "python" / "python.exe"
 UV_EXE = DEPS / "uv" / "uv.exe"
@@ -312,7 +316,15 @@ def _install_whisper(job: Dict[str, Any]) -> None:
 
 def _install_model(job: Dict[str, Any]) -> None:
     job["message"] = "下载 ggml-medium-q5_0（约 514 MB）"
-    _download(WHISPER_MODEL_URL, WHISPER_MODEL_PATH, job, "下载模型")
+    try:
+        _download(WHISPER_MODEL_URL, WHISPER_MODEL_PATH, job, "下载模型（TOS）")
+    except Exception as exc:
+        job["message"] = "TOS 下载失败，回退 HuggingFace"
+        job["progress"] = 0
+        try:
+            _download(WHISPER_MODEL_FALLBACK, WHISPER_MODEL_PATH, job, "下载模型（HF）")
+        except Exception:
+            raise exc
 
 
 _INSTALLERS = {
