@@ -240,14 +240,15 @@ async def canvas_cloud_proxy(path: str, request: Request) -> Response:
     # 画布编辑器里的「生成」还用旧版 fal 接口（服务器已不认它的 token），
     # 统一翻译成我们服务器的 v3 接口：模型=app_name、参数=input_params。
     # 这样画布所有生成都走我们服务器，不再直连任何上游。
-    if normalized in ("api/fal/tasks/create", "api/fal/tasks/info"):
+    if normalized in ("api/fal/tasks/create", "api/fal/tasks/info",
+                      "api/v2/tasks/create", "api/v2/tasks/info"):
         try:
             import json as _json2
             _raw = _json2.loads(body.decode("utf-8")) if body else {}
         except Exception:
             _raw = {}
         if isinstance(_raw, dict):
-            if normalized == "api/fal/tasks/create":
+            if normalized.endswith("tasks/create"):
                 _payload = {
                     "model": str(_raw.get("app_name") or _raw.get("model") or "").strip(),
                     "params": _raw.get("input_params") if isinstance(_raw.get("input_params"), dict) else {},
@@ -350,24 +351,6 @@ async def canvas_cloud_proxy(path: str, request: Request) -> Response:
                             )
                     except Exception:
                         logger.warning("[canvas] 兜底重试失败", exc_info=True)
-
-    if upstream.status_code == 404 and normalized == "api/v3/tasks/query":
-        try:
-            import json as _json7
-            _q = _json7.loads(body.decode("utf-8")) if body else {}
-            _tid2 = str(_q.get("task_id") or _q.get("taskId") or "").strip()
-            if _tid2:
-                async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, trust_env=False) as client:
-                    _up2 = await client.post(
-                        f"{cloud_base()}/canvas-api/api/v2/tasks/info",
-                        json={"task_id": _tid2, "taskId": _tid2},
-                        headers=headers,
-                    )
-                if _up2.status_code == 200:
-                    logger.info("[canvas] v3 查不到，回落 v2 命中：%s", _tid2)
-                    upstream = _up2
-        except Exception:
-            logger.debug("[canvas] v2 回落失败", exc_info=True)
 
     logger.info("[canvas] %s %s -> %s", request.method, normalized, upstream.status_code)
     media_type = upstream.headers.get("content-type") or "application/json"
