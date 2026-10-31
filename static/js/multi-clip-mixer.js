@@ -1134,10 +1134,10 @@
     return truncateChars(String(input && input.value || '').replace(/\r\n?/g, '\n').trim(), 80);
   }
 
-  function overlayTextsWithTemplateTitle(item, values) {
+  function overlayTextsWithTemplateTitle(item, values, titleOverride) {
     var result = Object.assign({}, values || {}), field = templateTitleField(item);
     if (!field) return result;
-    var title = templateTitleValue();
+    var title = titleOverride != null ? titleOverride : templateTitleValue();
     result[String(field.key || '').trim()] = truncateChars(title || String(field.default || ''), overlayFieldMaxLength(field));
     return result;
   }
@@ -1909,6 +1909,44 @@
     });
   }
 
+  function readRawOverlayTexts() {
+    var out = {};
+    Array.prototype.forEach.call(document.querySelectorAll('#mcmTemplateOverlayFields [data-overlay-key]'), function(input) {
+      var key = String(input.dataset.overlayKey || '').trim();
+      if (key) out[key] = String(input.value || '').trim();
+    });
+    return out;
+  }
+
+  function applyLocalTemplate(baseResult, override) {
+    override = override || {};
+    if (!state.selectedTemplate) return Promise.reject(new Error('请先选择模板'));
+    var modes = Array.isArray(state.selectedTemplate.render_modes) ? state.selectedTemplate.render_modes : ['ffmpeg'];
+    var renderMode = modes.indexOf('ffmpeg') >= 0 ? 'ffmpeg' : (modes[0] || 'ffmpeg');
+    var texts = overlayTextsWithTemplateTitle(state.selectedTemplate, readRawOverlayTexts(), override.title);
+    return post('/api/cutcli/local/tasks/start', {
+      template_id: state.selectedTemplate.id,
+      render_mode: renderMode,
+      asset_id: baseResult.asset_id || '',
+      video_url: baseResult.asset_id ? '' : (baseResult.source_url || ''),
+      overlay_texts: texts,
+      position_overrides: templatePositionOverridesForSubmit(),
+      external_task_id: 'multi_clip_mixer_seg_' + Date.now()
+    }).then(function(submitted) {
+      if (!submitted.job_id) throw new Error('模板定制没有返回任务编号');
+      var pending = rememberPendingTemplateTask(submitted.job_id, baseResult);
+      return pollTemplateTask(submitted.job_id, pending.createdAt).then(function(task) {
+        clearPendingTemplateTask();
+        var assetId = task.final_asset_id || task.preview_asset_id || '';
+        return {
+          asset_id: assetId,
+          source_url: resolveUrl(task.open_url || task.preview_url || '', apiBase()),
+          duration: Number((baseResult || {}).duration || 0)
+        };
+      });
+    });
+  }
+
   function applyTemplate(baseResult) {
     if (!state.selectedTemplate) return Promise.reject(new Error('请先选择剪辑模板'));
     if (!baseResult || (!baseResult.asset_id && !baseResult.source_url)) return Promise.reject(new Error('基础成片没有可用的素材记录，无法提交模板定制任务'));
@@ -1982,7 +2020,8 @@
     return post('/api/multi-clip-mixer/render', {
       title: templateTitleValue() || (totalRuns > 1 ? ('多段视频混剪 ' + runIndex) : '多段视频混剪'),
       clips: buildClipPlan(runIndex),
-      keep_original_audio: false,
+      // 套本地字幕模板时保留原声，闪剪不需要
+      keep_original_audio: !!(options.useTemplate && currentTemplateProvider() === 'local'),
       audio_asset_id: audioClip ? audioClip.assetId : '',
       // 目标时长：随机模式按用户填的秒数裁剪/补齐；没填则跟随主音轨（旧行为）
       target_duration: targetSeconds > 0 ? targetSeconds : (audioClip ? Number(audioClip.duration || 0) : null),
@@ -2019,9 +2058,8 @@
   }
 
   function runPerSegmentRender() {
-    if (currentTemplateProvider() !== 'shanjian') {
-      return Promise.reject(new Error('每段文案模式只支持闪剪模板'));
-    }
+    if (!state.selectedTemplate) return Promise.reject(new Error('请先选择一个模板'));
+    var provider = currentTemplateProvider();
     var plan = buildClipPlan(1);
     var total = state.clips.length;
     var outputs = [];
@@ -2035,7 +2073,8 @@
         return post('/api/multi-clip-mixer/render', {
           title: segTitle,
           clips: [plan[idx]],
-          keep_original_audio: false,
+          // 我们的模板是 auto_caption 类，需要原声做语音识别；闪剪不需要
+          keep_original_audio: provider === 'local',
           audio_asset_id: '',
           target_duration: null,
           audio_volume: 1,
@@ -2046,12 +2085,16 @@
         });
       }).then(function(base) {
         state.lastBaseResult = base;
-        progress('template', 'active', '第 ' + (idx + 1) + '/' + total + ' 段：套模板（消耗 1 次闪剪额度）');
-        return applyShanjianTemplate(base, {
-          title: String(clip.segTitle || ''),
-          description: String(clip.segDesc || ''),
-          duration: base.duration
-        });
+        progress('template', 'active', '第 ' + (idx + 1) + '/' + total + ' 段：套模板'
+          + (provider === 'shanjian' ? '（消耗 1 次闪剪额度）' : ''));
+        if (provider === 'shanjian') {
+          return applyShanjianTemplate(base, {
+            title: String(clip.segTitle || ''),
+            description: String(clip.segDesc || ''),
+            duration: base.duration
+          });
+        }
+        return applyLocalTemplate(base, { title: String(clip.segTitle || '') });
       }).then(function(res) {
         var url = (res && (res.source_url || res.preview_url || '')) || '';
         if (!url) throw new Error('第 ' + (idx + 1) + ' 段模板成片没有返回地址');
@@ -2239,10 +2282,6 @@
     ['mcmTextModeUnified', 'mcmTextModePerSegment'].forEach(function(id) {
       var el = $(id);
       if (el) el.addEventListener('change', function() {
-        if (textModePerSegment() && currentTemplateProvider() !== 'shanjian') {
-          showMessage('每段文案模式只支持闪剪模板，已切回统一文案。', true);
-          if ($('mcmTextModeUnified')) $('mcmTextModeUnified').checked = true;
-        }
         renderClips();
       });
     });
