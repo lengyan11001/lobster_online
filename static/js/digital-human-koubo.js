@@ -358,17 +358,11 @@
     if (!state.project || state.project.status !== 'generated') { box.innerHTML = ''; return; }
     var r = state.render;
     var job = r.job && r.job.status === 'running' ? r.job : null;
+    var nPacks = (state.form.packaging || []).length;
     box.innerHTML = '<div class="kb-card"><div class="kb-sec-title">包装<small>客户端本地渲染 · 不用 Remotion</small></div>'
       + '<div class="kb-packbar">'
       + '<select id="kbPreset"><option' + (r.preset === '克制' ? ' selected' : '') + '>克制</option><option' + (r.preset === '标准' ? ' selected' : '') + '>标准</option><option' + (r.preset === '热闹' ? ' selected' : '') + '>热闹</option></select>'
-      + '<label><input type="checkbox" data-comp="caption"' + (r.components.indexOf('caption') >= 0 ? ' checked' : '') + '> 逐字字幕</label>'
-      + '<label><input type="checkbox" data-comp="keyword"' + (r.components.indexOf('keyword') >= 0 ? ' checked' : '') + '> 数字钉子</label>'
-      + '<label><input type="checkbox" data-comp="cta"' + (r.components.indexOf('cta') >= 0 ? ' checked' : '') + '> 结尾 CTA</label>'
-      + '<label><input type="checkbox" data-comp="lowerthird"' + (r.components.indexOf('lowerthird') >= 0 ? ' checked' : '') + '> 姓名条</label>'
-      + '<label><input type="checkbox" data-comp="punch"' + (r.components.indexOf('punch') >= 0 ? ' checked' : '') + '> 跳切推近</label>'
-      + '<label><input type="checkbox" data-comp="chapter"' + (r.components.indexOf('chapter') >= 0 ? ' checked' : '') + '> 章节卡</label>'
-      + '<label><input type="checkbox" data-comp="stack"' + (r.components.indexOf('stack') >= 0 ? ' checked' : '') + '> 关键词堆叠</label>'
-      + '<label><input type="checkbox" data-comp="counter"' + (r.components.indexOf('counter') >= 0 ? ' checked' : '') + '> 数字滚动</label>'
+      + '<span style="font-size:11px;color:#64748b;">已选 ' + nPacks + ' 个包装组件（在左侧「创作参数」里改）</span>'
       + '<span style="flex:1"></span>'
       + (r.packaged ? '<a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/rendered') + '" download>下载包装成片</a>' : '')
       + '<button type="button" class="kb-btn" id="kbRender"' + (job ? ' disabled' : '') + '>' + (job ? '渲染中 ' + (job.progress || 0) + '%' : (r.packaged ? '重新包装' : '生成包装成片')) + '</button>'
@@ -380,11 +374,6 @@
       + '</div>';
     var sel = $('kbPreset');
     if (sel) sel.onchange = function () { state.render.preset = sel.value; };
-    box.querySelectorAll('[data-comp]').forEach(function (el) {
-      el.onchange = function () {
-        state.render.components = Array.prototype.slice.call(box.querySelectorAll('[data-comp]:checked')).map(function (x) { return x.getAttribute('data-comp'); });
-      };
-    });
     var btn = $('kbRender');
     if (btn) btn.onclick = function () { startRender(); };
     var qaBtn = $('kbQa');
@@ -397,7 +386,10 @@
     renderPack();
     req('/api/skills/digital-human-koubo/projects/' + state.project.id + '/render', {
       method: 'POST', headers: headers(),
-      body: JSON.stringify({ preset: state.render.preset, components: state.render.components })
+      body: JSON.stringify({
+        preset: state.render.preset,
+        components: ['caption', 'cta', 'lowerthird', 'punch'].concat(state.form.packaging || [])
+      })
     }).then(function (d) {
       log('包装任务已提交 ' + d.job_id);
       pollRender(d.job_id);

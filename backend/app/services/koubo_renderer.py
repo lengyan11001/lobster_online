@@ -72,6 +72,64 @@ html,body{margin:0;padding:0;width:__W__px;height:__H__px;background:#000;overfl
   border-left:3px solid __KEY__;opacity:0;transform:translateX(10px);}
 #counter{position:absolute;left:0;right:0;top:32%;text-align:center;font-weight:900;color:__KEY__;
   font-size:__CNT__px;-webkit-text-stroke:__KWSTROKE__px rgba(0,0,0,.8);paint-order:stroke fill;opacity:0;}
+
+.fx{position:absolute;pointer-events:none;}
+.fx-teaser{left:0;right:0;top:22%;text-align:center;font-size:__FX1__px;font-weight:900;color:#fff;-webkit-text-stroke:4px #000;paint-order:stroke fill;}
+.fx-cold{border:6px solid #fff;inset:4%;box-shadow:0 0 0 9999px rgba(0,0,0,.12) inset;}
+.fx-search{left:8%;right:8%;top:9%;background:#fff;border-radius:999px;padding:2.4% 4%;display:flex;align-items:center;gap:2%;font-size:__FX2__px;color:#0f172a;box-shadow:0 8px 24px rgba(0,0,0,.25);}
+.fx-search b{color:#2563eb;font-weight:700;}
+.fx-slam{left:0;right:0;top:26%;text-align:center;font-size:__FX1__px;font-weight:900;color:#fff;-webkit-text-stroke:5px #000;paint-order:stroke fill;}
+.fx-stack{left:6%;top:30%;display:flex;flex-direction:column;gap:8px;font-size:__FX2__px;font-weight:800;color:#fff;}
+.fx-stack span{background:rgba(15,23,42,.72);padding:3px 10px;border-left:4px solid __KEY__;}
+.fx-torn{left:-4%;right:-4%;top:40%;background:#FFE14D;color:#0f172a;font-weight:900;font-size:__FX2__px;padding:1.6% 0;text-align:center;transform:rotate(-4deg);box-shadow:0 10px 24px rgba(0,0,0,.25);}
+.fx-card{left:8%;right:8%;top:16%;background:#fff;border-radius:14px;padding:3%;color:#0f172a;box-shadow:0 16px 40px rgba(0,0,0,.35);}
+.fx-card h4{margin:0 0 6px;font-size:__FX2__px;}
+.fx-card p{margin:0;font-size:__FX3__px;color:#475569;line-height:1.5;}
+.fx-doc{left:10%;right:10%;top:14%;bottom:34%;background:#fff;border-radius:8px;border:2px solid #cbd5e1;padding:4%;}
+.fx-doc i{display:block;height:8px;background:#e2e8f0;border-radius:4px;margin:6px 0;}
+.fx-source{right:5%;bottom:20%;background:rgba(15,23,42,.78);color:#cbd5e1;font-size:__FX3__px;padding:4px 10px;border-radius:6px;}
+.fx-zoom{left:12%;right:12%;top:18%;height:30%;border:3px solid #fff;border-radius:10px;box-shadow:0 0 0 9999px rgba(0,0,0,.18);}
+.fx-glass{left:8%;right:8%;top:14%;background:rgba(255,255,255,.16);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,.35);border-radius:16px;padding:3%;color:#fff;font-size:__FX2__px;font-weight:600;}
+.fx-spec{left:8%;right:8%;top:16%;background:rgba(15,23,42,.78);border-radius:12px;padding:3%;color:#e2e8f0;font-size:__FX3__px;}
+.fx-spec div{display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.12);padding:3px 0;}
+.fx-line{left:8%;right:8%;top:20%;height:20%;}
+.fx-bars{left:10%;right:10%;top:18%;background:rgba(15,23,42,.72);border-radius:12px;padding:3%;}
+.fx-bars .row{display:flex;align-items:center;gap:8px;margin:4px 0;color:#e2e8f0;font-size:__FX3__px;}
+.fx-bars .bar{flex:1;height:10px;background:rgba(255,255,255,.18);border-radius:999px;overflow:hidden;}
+.fx-bars .bar i{display:block;height:100%;background:__KEY__;}
+.fx-review{left:8%;right:8%;top:16%;background:#fff;border-radius:14px;padding:3%;color:#0f172a;box-shadow:0 16px 40px rgba(0,0,0,.3);}
+.fx-review .stars{color:#f59e0b;font-size:__FX2__px;}
+.fx-archive{left:10%;right:10%;top:16%;height:24%;}
+.fx-archive i{position:absolute;inset:0;background:#fff;border-radius:12px;box-shadow:0 10px 24px rgba(0,0,0,.2);}
+.fx-map{left:10%;right:10%;top:14%;bottom:34%;}
+.fx-compare{left:0;right:0;top:14%;height:26%;background:rgba(15,23,42,.35);border-top:3px solid #fff;border-bottom:3px solid #fff;}
+.fx-collage i{position:absolute;background:#fff;border-radius:6px;box-shadow:0 8px 20px rgba(0,0,0,.25);}
+.fx-hand{left:8%;right:8%;top:30%;height:12%;}
+.fx-callout{left:6%;top:20%;background:#fff;color:#0f172a;font-size:__FX3__px;font-weight:700;padding:4px 10px;border-radius:999px;box-shadow:0 6px 16px rgba(0,0,0,.25);}
+.fx-leader{left:6%;top:24%;color:#fff;font-size:__FX3__px;font-weight:700;border-left:3px solid #fff;padding-left:6px;}
+.fx-typed{left:6%;top:18%;background:rgba(15,23,42,.72);color:#fff;font-size:__FX3__px;padding:3px 8px;border-radius:6px;}
+.fx-freeze{inset:0;border:8px solid #fff;box-shadow:0 0 0 9999px rgba(0,0,0,.08) inset;}
+.fx-tilt{left:-10%;right:-10%;top:26%;height:14%;background:__KEY__;transform:rotate(-7deg);opacity:.92;}
+.fx-aside{right:5%;top:30%;max-width:34%;background:#fff;color:#0f172a;font-size:__FX3__px;padding:6px 10px;border-radius:10px;box-shadow:0 8px 20px rgba(0,0,0,.25);}
+.fx-danmaku{left:0;right:0;top:10%;height:40%;overflow:hidden;color:#fff;font-size:__FX3__px;font-weight:700;}
+.fx-danmaku span{position:absolute;white-space:nowrap;background:rgba(0,0,0,.35);padding:1px 8px;border-radius:999px;}
+.fx-emoji{left:50%;top:40%;transform:translate(-50%,-50%);font-size:__FXEMOJI__px;}
+.fx-meme{left:14%;right:14%;top:18%;background:#000;border:6px solid #fff;border-radius:10px;padding:6% 0;text-align:center;font-size:__FXEMOJI__px;}
+.fx-poll{left:10%;right:10%;top:18%;background:#fff;border-radius:12px;padding:3%;color:#0f172a;font-size:__FX3__px;}
+.fx-poll .opt{display:flex;align-items:center;gap:6px;margin:4px 0;}
+.fx-poll .opt i{height:8px;background:#3b82f6;border-radius:999px;display:block;}
+.fx-glitch{inset:0;mix-blend-mode:screen;background:linear-gradient(90deg,rgba(255,0,80,.25),rgba(0,255,255,.2));}
+.fx-float{inset:0;}
+.fx-float span{position:absolute;font-size:__FX3__px;opacity:.9;}
+.fx-chapters{left:0;right:0;top:0;height:4px;background:rgba(255,255,255,.15);}
+.fx-chapters i{position:absolute;top:0;height:100%;background:__KEY__;}
+.fx-tracker{left:6%;right:6%;bottom:4%;height:6px;background:rgba(255,255,255,.18);border-radius:999px;}
+.fx-tracker i{display:block;height:100%;background:__KEY__;border-radius:999px;}
+.fx-recap{left:8%;right:8%;top:16%;background:rgba(15,23,42,.82);border-radius:12px;padding:3%;color:#e2e8f0;font-size:__FX3__px;}
+.fx-recap div{margin:3px 0;}
+.fx-count{left:0;right:0;top:34%;text-align:center;font-size:__FXCOUNT__px;font-weight:900;color:#fff;-webkit-text-stroke:6px #000;paint-order:stroke fill;}
+.fx-ghost{left:0;right:0;top:30%;text-align:center;font-size:__FXGHOST__px;font-weight:900;color:rgba(255,255,255,.18);}
+
 </style></head><body>
 <div id="stage"><img id="bg" alt=""></div>
 <div id="cap"></div><div id="kw"></div>
@@ -81,8 +139,54 @@ html,body{margin:0;padding:0;width:__W__px;height:__H__px;background:#000;overfl
 <div id="chapter"><b id="chNo">01</b><span id="chTitle"></span></div>
 <div id="stack"></div>
 <div id="counter">0</div>
+<div id="fx"></div>
 <script>
 window.TL = __TL__;
+
+var FX = {
+  TeaserColdOpen: function (s, t, p) { return p < 2.2 ? '<div class="fx fx-teaser">3 秒后告诉你</div>' : ''; },
+  ColdOpenFreeze: function (s, t, p) { return p < 1.6 ? '<div class="fx fx-cold"></div>' : ''; },
+  SearchTyping: function (s, t, p) { var q = s.text.slice(0, Math.max(1, Math.floor(p * 8))); return p < 3 ? '<div class="fx fx-search">搜索 <b>' + q + '</b></div>' : ''; },
+  SlamText: function (s, t, p) { var sc = p < 0.35 ? (1.6 - p * 1.2) : 1; return p < 1.4 ? '<div class="fx fx-slam" style="transform:scale(' + sc + ')">' + s.text.slice(0, 8) + '</div>' : ''; },
+  WordStack: function (s, t, p) { var w = (s.stack || []).slice(0, 3); return p < 2.6 ? '<div class="fx fx-stack">' + w.map(function (x, i) { return '<span style="opacity:' + (p > i * 0.25 ? 1 : 0) + '">' + x + '</span>'; }).join('') + '</div>' : ''; },
+  TornStrip: function (s, t, p) { return p < 2.4 ? '<div class="fx fx-torn">' + s.text.slice(0, 10) + '</div>' : ''; },
+  TextBehind: function (s, t, p) { return ''; },
+  EvidenceCard: function (s, t, p) { return p < 3.2 ? '<div class="fx fx-card"><h4>' + (s.chapter ? s.chapter.title : '') + '</h4><p>' + s.text.slice(0, 30) + '</p></div>' : ''; },
+  DocFocus: function (s, t, p) { return p < 3 ? '<div class="fx fx-doc"><i></i><i></i><i></i><i></i><i></i></div>' : ''; },
+  SourceDoc: function (s, t, p) { return p < 3 ? '<div class="fx fx-source">来源：公开资料</div>' : ''; },
+  ZoomFocus: function (s, t, p) { return p < 2.6 ? '<div class="fx fx-zoom"></div>' : ''; },
+  Odometer: function (s, t, p) { var n = (s.numbers || [])[0]; if (!n) return ''; var v = Math.round(n.value * Math.min(1, p / 0.8)); return p < 2.4 ? '<div class="fx fx-card"><h4>' + n.prefix + v.toLocaleString() + n.suffix + '</h4><p>数字滚动</p></div>' : ''; },
+  GlassPanel: function (s, t, p) { return p < 3 ? '<div class="fx fx-glass">' + s.text.slice(0, 16) + '</div>' : ''; },
+  SpecCard: function (s, t, p) { var n = (s.numbers || [])[0]; var rows = '<div><span>核心参数</span><b>' + (n ? n.prefix + n.value + n.suffix : '—') + '</b></div><div><span>适用场景</span><b>口播</b></div>'; return p < 3 ? '<div class="fx fx-spec">' + rows + '</div>' : ''; },
+  LineDraw: function (s, t, p) { var d = Math.min(1, p / 0.8); return p < 2.8 ? '<svg class="fx fx-line" viewBox="0 0 100 20"><path d="M0,16 Q25,2 50,12 T100,6" fill="none" stroke="' + TL.keyColor + '" stroke-width="2" stroke-dasharray="120" stroke-dashoffset="' + (120 - 120 * d) + '"/></svg>' : ''; },
+  BarCompare: function (s, t, p) { var ns = s.numbers || []; var a = ns[0] ? ns[0].value : 70, b = ns[1] ? ns[1].value : 100; var m = Math.max(a, b, 1); return p < 3 ? '<div class="fx fx-bars"><div class="row">A<div class="bar"><i style="width:' + (a / m * 100) + '%"></i></div></div><div class="row">B<div class="bar"><i style="width:' + (b / m * 100) + '%"></i></div></div></div>' : ''; },
+  ReviewCards: function (s, t, p) { return p < 3.2 ? '<div class="fx fx-review"><div class="stars">★★★★★</div><p style="margin:4px 0 0;font-size:' + 'inherit' + '">' + s.text.slice(0, 24) + '</p></div>' : ''; },
+  ArchiveCards: function (s, t, p) { return p < 3 ? '<div class="fx fx-archive"><i style="transform:rotate(-4deg)"></i><i style="transform:rotate(2deg) translateY(6px)"></i><i></i></div>' : ''; },
+  MapRoute: function (s, t, p) { var d = Math.min(1, p / 1.2); return p < 3.2 ? '<svg class="fx fx-map" viewBox="0 0 100 60"><path d="M10,50 Q30,10 50,30 T90,12" fill="none" stroke="' + TL.keyColor + '" stroke-width="2" stroke-dasharray="120" stroke-dashoffset="' + (120 - 120 * d) + '"/><circle cx="10" cy="50" r="3" fill="#fff"/><circle cx="90" cy="12" r="3" fill="#fff"/></svg>' : ''; },
+  CompareWipe: function (s, t, p) { var w = Math.min(100, p / 0.8 * 100); return p < 2.6 ? '<div class="fx fx-compare" style="clip-path:inset(0 ' + (100 - w) + '% 0 0)"></div>' : ''; },
+  PaperCollage: function (s, t, p) { return p < 3 ? '<div class="fx fx-collage" style="inset:12% 8% 40% 8%"><i style="left:0;top:0;width:45%;height:55%;transform:rotate(-6deg)"></i><i style="right:0;top:10%;width:48%;height:50%;transform:rotate(4deg)"></i><i style="left:20%;bottom:0;width:55%;height:35%;transform:rotate(-2deg)"></i></div>' : ''; },
+  HandDraw: function (s, t, p) { var d = Math.min(1, p / 0.7); return p < 2.4 ? '<svg class="fx fx-hand" viewBox="0 0 100 20"><path d="M4,14 C20,4 40,18 60,10 S90,6 96,12" fill="none" stroke="' + TL.keyColor + '" stroke-width="3" stroke-linecap="round" stroke-dasharray="100" stroke-dashoffset="' + (100 - 100 * d) + '"/></svg>' : ''; },
+  CalloutPill: function (s, t, p) { return p < 3 ? '<div class="fx fx-callout">' + s.text.slice(0, 6) + '</div>' : ''; },
+  LeaderLabel: function (s, t, p) { return p < 3 ? '<div class="fx fx-leader">' + s.text.slice(0, 8) + '</div>' : ''; },
+  TypedNameTag: function (s, t, p) { var n = Math.floor(p * 10); return p < 3 ? '<div class="fx fx-typed">' + s.text.slice(0, n) + '_</div>' : ''; },
+  NamePlate: function (s, t, p) { return p < 3 ? '<div class="fx fx-typed" style="top:auto;bottom:22%;">主播 · 数字人</div>' : ''; },
+  SourceTag: function (s, t, p) { return p < 3 ? '<div class="fx fx-source">来源：口播稿</div>' : ''; },
+  FreezeFrame: function (s, t, p) { return p < 1.2 ? '<div class="fx fx-freeze"></div>' : ''; },
+  TiltLine: function (s, t, p) { return p < 2.6 ? '<div class="fx fx-tilt"></div>' : ''; },
+  Aside: function (s, t, p) { return p < 3 ? '<div class="fx fx-aside">' + s.text.slice(0, 14) + '</div>' : ''; },
+  Danmaku: function (s, t, p) { var items = ['真的假的？', '学到了', '这也行？']; return p < 4 ? '<div class="fx fx-danmaku">' + items.map(function (x, i) { return '<span style="top:' + (i * 22) + '%;left:' + (100 - ((p * 40 + i * 25) % 140)) + '%">' + x + '</span>'; }).join('') + '</div>' : ''; },
+  ReactionPop: function (s, t, p) { return p < 1.8 ? '<div class="fx fx-emoji">🔥</div>' : ''; },
+  MemeWindow: function (s, t, p) { return p < 2.2 ? '<div class="fx fx-meme">😂</div>' : ''; },
+  PollPop: function (s, t, p) { return p < 3.2 ? '<div class="fx fx-poll"><b>你觉得呢？</b><div class="opt">A<i style="width:62%"></i></div><div class="opt">B<i style="width:38%"></i></div></div>' : ''; },
+  GlitchInterstitial: function (s, t, p) { return p < 0.4 ? '<div class="fx fx-glitch"></div>' : ''; },
+  HostFloaters: function (s, t, p) { var e = ['✨', '💡', '📈']; return p < 3 ? '<div class="fx fx-float">' + e.map(function (x, i) { return '<span style="left:' + (8 + i * 28) + '%;top:' + (18 + ((p * 20 + i * 15) % 40)) + '%">' + x + '</span>'; }).join('') + '</div>' : ''; },
+  ProgressChapters: function (s, t, p) { var n = TL.segs.length; var w = 100 / Math.max(1, n); return '<div class="fx fx-chapters">' + TL.segs.map(function (x, i) { return '<i style="left:' + (i * w) + '%;width:' + Math.max(1, w - 1) + '%;opacity:' + (s.index === i ? 1 : 0.35) + '"></i>'; }).join('') + '</div>'; },
+  ProgressTracker: function (s, t, p) { return '<div class="fx fx-tracker"><i style="width:' + Math.min(100, t / Math.max(0.01, TL.duration) * 100) + '%"></i></div>'; },
+  RecapBoard: function (s, t, p) { var last = TL.segs[TL.segs.length - 1]; if (!last || s.index !== TL.segs.length - 1) return ''; return p < 3.5 ? '<div class="fx fx-recap">✓ ' + TL.segs.slice(0, 3).map(function (x) { return x.chapter.title.slice(0, 6); }).join('<br>✓ ') + '</div>' : ''; },
+  Countdown: function (s, t, p) { if (TL.segs[0] && s.index !== 0) return ''; var n = 3 - Math.floor(p); return (n >= 1 && n <= 3) ? '<div class="fx fx-count">' + n + '</div>' : ''; },
+  GhostWord: function (s, t, p) { return p < 2.6 ? '<div class="fx fx-ghost">' + (s.chapter ? s.chapter.title.slice(0, 4) : '') + '</div>' : ''; }
+};
+
 window.renderAt = function (t, frameSrc) {
   var TL = window.TL, bg = document.getElementById('bg');
   if (bg.getAttribute('src') !== frameSrc) bg.setAttribute('src', frameSrc);
@@ -142,6 +246,15 @@ window.renderAt = function (t, frameSrc) {
       chips[c].style.transform = on ? 'translateX(0)' : 'translateX(10px)';
     }
   } else if (stack) { stack.innerHTML = ''; stack.removeAttribute('data-seg'); }
+  var fx = document.getElementById('fx');
+  if (fx) {
+    var parts = [];
+    if (seg && TL.comps) for (var q = 0; q < TL.comps.length; q++) {
+      var fn = FX[TL.comps[q]];
+      if (fn) { try { var out = fn(seg, t, t - seg.start); if (out) parts.push(out); } catch (e) {} }
+    }
+    fx.innerHTML = parts.join('');
+  }
   var counter = document.getElementById('counter');
   if (TL.showCounter && seg && seg.numbers && seg.numbers.length) {
     var n = seg.numbers[0];
@@ -305,6 +418,7 @@ def build_timeline(project: Dict[str, Any], duration: float, tmp: Optional[Path]
             start = max(seg["start"], hit[1])
             keywords.append({"text": tok, "start": start, "end": min(seg["end"], start + 1.4), "pop": 0.22})
     for idx, seg in enumerate(segs, 1):
+        seg["index"] = idx - 1
         seg["chapter"] = {"no": "%02d" % idx, "title": (seg.get("text") or "")[:10]}
         nums = []
         for tok in re.findall(r"([¥$]?)(d[d,.]*)s*(%|元|块|万|亿)?", seg.get("text") or ""):
@@ -398,6 +512,9 @@ def render(
         timeline["showChapter"] = "chapter" in comps
         timeline["showStack"] = "stack" in comps
         timeline["showCounter"] = "counter" in comps
+        base_ids = {"caption", "cta", "lowerthird", "punch", "chapter", "stack", "counter", "keyword"}
+        timeline["comps"] = [c for c in comps if c not in base_ids]
+        timeline["keyColor"] = p["keyColor"]
         host = (opts.get("host") or project.get("host") or "tank")
         names = {"tank": "白背心数字人", "me": "用户本人", "cat": "橘猫店长", "dog": "柴犬主播"}
         if "lowerthird" in comps:
@@ -434,6 +551,12 @@ def render(
                 .replace("__CH__", str(round(H * 0.024)))
                 .replace("__STK__", str(round(H * 0.026)))
                 .replace("__CNT__", str(round(H * 0.11)))
+                .replace("__FX1__", str(round(H * 0.10)))
+                .replace("__FX2__", str(round(H * 0.036)))
+                .replace("__FX3__", str(round(H * 0.024)))
+                .replace("__FXEMOJI__", str(round(H * 0.16)))
+                .replace("__FXCOUNT__", str(round(H * 0.22)))
+                .replace("__FXGHOST__", str(round(H * 0.18)))
                 .replace("__KEY__", p["keyColor"])
                 .replace("__TL__", json.dumps(timeline, ensure_ascii=False)))
         html = html.replace(
