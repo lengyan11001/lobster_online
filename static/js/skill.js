@@ -3465,8 +3465,7 @@ function loadSkillStore() {
         if (viralPkg) html += _renderViralVideoRemixCard();
         if (cutcliPkg) html += _renderCutcliTemplateCard();
         if (shanjianPkg) html += _renderShanjianSmartClipCard();
-        if (kouboPkg) html += _renderDigitalHumanKouboCard(kouboPkg);
-        if (multiClipPkg) html += _renderMultiClipMixerCard();
+          if (multiClipPkg) html += _renderMultiClipMixerCard();
         if (personalWhatsappPkg) html += _renderPersonalWhatsappCard(personalWhatsappPkg);
         if (personalTelegramPkg) html += _renderPersonalTelegramCard(personalTelegramPkg);
         if (ecommercePkg) html += _renderEcommerceDetailCard({ pkg: ecommercePkg });
@@ -3546,7 +3545,8 @@ function loadSkillStore() {
           if (pkg.id === 'browser_use_skill') return '';
           if (pkg.id === 'computer_use_skill') return '';
           if (pkg.id === 'meta_social') return '';
-          if (_isKouboPkg(pkg)) return '';
+
+          if (pkg.id === 'wechat_channels_transcript_skill') return '';
           if (pkg.id === 'hifly_digital_human_skill') return _renderHiflyDigitalHumanCard(pkg);
           if (pkg.id === 'youtube_publish') {
             return _renderYoutubePublishCard({
@@ -3591,6 +3591,12 @@ function loadSkillStore() {
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm ecommerce-publish-entry-btn">管理店铺账号</button></div></div>';
         }
         if (pkg.id === 'wecom_reply') {
+        if (pkg.entry && pkg.entry.target) {
+          var _lbl = escapeHtml(_skillStoreBrandSafeText(pkg.entry.label || '打开'));
+          actionBtn = '<button type="button" class="btn btn-primary btn-sm" data-skill-entry-type="'
+            + escapeAttr(String(pkg.entry.type || 'view')) + '" data-skill-entry-target="'
+            + escapeAttr(String(pkg.entry.target)) + '">' + _lbl + '</button>';
+        }
           var tags = _skillStoreTagHtml(pkg.tags || []);
           var capCount = pkg.capabilities_count ? ' · ' + pkg.capabilities_count + ' 个能力' : '';
           // 与 lobster 商店展示一致：仅「可配置」+ 配置按钮；算力解锁在点击时由服务器 wecom-config-eligible 判定
@@ -3612,7 +3618,6 @@ function loadSkillStore() {
             '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm wechat-article-entry-btn">\u8fdb\u5165\u5de5\u4f5c\u53f0</button></div></div>';
         }
         // 数字人3.0（koubo）：无论出现在技能商店还是已安装列表，都用带「进入工作台」的专用卡
-        if (_isKouboPkg(pkg)) return _renderDigitalHumanKouboCard(pkg);
         var statusBadge = '';
         var actionBtn = '';
         if (pkg.status === 'installed') {
@@ -4044,6 +4049,19 @@ function _bindShanjianSmartClipCardEntry() {
     });
   });
 }
+
+  document.addEventListener('click', function (ev) {
+    var el = ev.target && ev.target.closest ? ev.target.closest('[data-skill-entry-target]') : null;
+    if (!el) return;
+    ev.preventDefault(); ev.stopPropagation();
+    var t = el.getAttribute('data-skill-entry-type') || 'view';
+    var target = el.getAttribute('data-skill-entry-target') || '';
+    if (!target) return;
+    if (t === 'url') { window.open(target, '_blank', 'noopener'); return; }
+    try { if (typeof window.showLobsterView === 'function') { window.showLobsterView(target); return; } } catch (e) {}
+    var root = document.getElementById('content-' + target);
+    if (root) { document.querySelectorAll('.content-block').forEach(function (b) { b.style.display = 'none'; }); root.style.display = ''; root.classList.add('active'); }
+  }, true);
 
 function _bindDigitalHumanKouboCardEntry() {
   document.querySelectorAll('.koubo-card').forEach(function(card) {
