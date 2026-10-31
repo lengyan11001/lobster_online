@@ -5043,6 +5043,8 @@
                 <span>文件大小：小于 100MB</span>
                 <span>时长：小于 2 分钟</span>
                 <span>格式：mp4 / mov，编码 h264 / h265</span>
+                <span>画面：单人正脸，口型清晰不遮挡</span>
+                <span>声音：本人连续讲话，不要背景音乐、他人声音和杂音</span>
               </div>
             </div>
             <div class="tvc-field">
@@ -5107,6 +5109,8 @@
                 <span>文件大小：小于 100MB</span>
                 <span>时长：小于 2 分钟</span>
                 <span>格式：mp4 / mov，编码 h264 / h265</span>
+                <span>画面：单人正脸，口型清晰不遮挡</span>
+                <span>声音：本人连续讲话，不要背景音乐、他人声音和杂音</span>
               </div>
             </div>
             <div class="tvc-field">

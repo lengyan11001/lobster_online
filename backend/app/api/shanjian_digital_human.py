@@ -431,6 +431,16 @@ def _resolve_profile_for_video(
         if not row:
             raise HTTPException(status_code=404, detail="未找到对应的闪剪数字人档案")
         if row.status != "succeed" or not _clean_text(row.virtualman_id):
+            # 训练失败时带出上游原因，避免用户只看到「还未训练完成」反复重试。
+            reason = _clean_text(getattr(row, "error_message", None))
+            if str(row.status or "").lower() == "failed" and reason:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"数字人训练失败：{reason}"
+                        "（请换一段单人正脸、口型清晰、连续讲话且无背景音乐的视频重新训练）"
+                    ),
+                )
             raise HTTPException(status_code=400, detail="该闪剪数字人还未训练完成，暂时不能用于出片")
         return row, _clean_text(row.virtualman_id)
     if vmid:
