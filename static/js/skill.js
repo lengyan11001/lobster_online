@@ -3050,7 +3050,7 @@ var _SKILL_STORE_SIMPLE_COPY_PATTERNS = [
   [/智能剪辑|山涧/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.shanjian_smart_clip],
   [/多段视频混剪|片段拼接/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.multi_clip_mixer_skill],
   [/电商上架|电商详情|上架套图|详情图|SKU/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.comfly_ecommerce_detail_skill],
-  [/必火数字人|数字人/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.hifly_digital_human_skill],
+  [/必火数字人|数字人口播|hifly/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.hifly_digital_human_skill],
   [/微信助手|openclaw.*微信|weixin/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.openclaw_weixin_channel],
   [/公众号|微信文章|微信推文|wewrite/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.wewrite_official_account_skill],
   [/个人记忆|memory/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.openclaw_memory_skill],
@@ -3291,7 +3291,9 @@ function _simplifySkillStoreCards(el) {
     if (_isJuheWechatSkillCard(card)) return;
     if (_isWechatChannelsTranscriptSkillCard(card)) return;
     if (_isAlibabaInquiriesSkillCard(card)) return;
-    var copy = _skillStoreSimpleCopyFor(card) || {};
+    // 服务端下发了入口的技能卡：名字/描述/按钮文案一律用服务器下发的，客户端不再改写
+    var entryBtn = card.querySelector('[data-skill-entry-target]');
+    var copy = entryBtn ? {} : (_skillStoreSimpleCopyFor(card) || {});
     card.classList.add('is-simple-skill-card');
     Array.prototype.slice.call(card.children || []).forEach(function(child) {
       if (child.classList && (
@@ -3308,7 +3310,7 @@ function _simplifySkillStoreCards(el) {
     var labelEl = card.querySelector('.card-label');
     if (labelEl) labelEl.textContent = '';
     var titleEl = card.querySelector('.card-value');
-    if (titleEl) titleEl.textContent = copy.title || '技能工具';
+    if (titleEl && !entryBtn) titleEl.textContent = copy.title || '技能工具';
     var descEl = card.querySelector('.card-desc');
     if (!descEl) {
       descEl = document.createElement('div');
@@ -3316,10 +3318,11 @@ function _simplifySkillStoreCards(el) {
       if (titleEl && titleEl.parentNode) titleEl.parentNode.insertBefore(descEl, titleEl.nextSibling);
       else card.appendChild(descEl);
     }
-    descEl.textContent = copy.desc || '智能辅助功能';
+    if (!entryBtn) descEl.textContent = copy.desc || '智能辅助功能';
     var tagsEl = card.querySelector('.card-tags');
     if (tagsEl) tagsEl.textContent = '';
     card.querySelectorAll('.card-actions .btn').forEach(function(btn, idx) {
+      if (btn.hasAttribute('data-skill-entry-target')) return;
       if (idx > 0) {
         btn.classList.add('skill-secondary-action');
         return;
