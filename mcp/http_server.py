@@ -4080,17 +4080,12 @@ async def _call_upstream_mcp_tool(
                 if hk and hv:
                     auth_headers[hk] = hv
         else:
-            token = (sutui_token or "").strip() or _load_sutui_token()
-            if token:
-                auth_headers["Authorization"] = f"Bearer {token}"
-            else:
-                return {"error": {"message": "xskill/速推 Token 未配置。单机版请在「系统配置」中填写 Token；在线版请配置 AUTH_SERVER_BASE 以走服务器 mcp-gateway。"}}
-            # 直连 xskill MCP URL 时：generate/get_result 改走 REST（与服务器侧一致，避免 MCP -32603 Decimal）
-            if tool_name in ("generate", "get_result"):
-                api_base = os.environ.get("SUTUI_API_BASE", "https://api.xskill.ai").rstrip("/")
-                return await _call_upstream_sutui_tasks_rest(
-                    api_base, tool_name, arguments, token, lobster_capability_id
-                )
+            # 本仓库只有 online 形态：不允许任何直连速推/xskill 的分支。
+            return {
+                "error": {
+                    "message": "速推能力必须经认证中心 mcp-gateway 转发（客户端不再支持 standalone / 直连上游）。",
+                },
+            }
 
     # 上游 tools/call 读超时：与 backend chat._exec_tool 对齐。默认 120s 会导致视频/长轮询
     # 未完成即被代理/对端掐连接，httpx 报 RemoteProtocolError（Server disconnected…）。

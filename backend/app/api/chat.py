@@ -4887,20 +4887,19 @@ _MODELS_QUESTION_RE = re.compile(
 
 async def _fetch_sutui_mcp_models_compact_text() -> str:
     """GET 速推公开模型表，仅 model_id + 展示名（与 scripts/xskill_fetch_models.py 同源接口）。"""
-    base = (getattr(settings, "sutui_api_base", None) or "https://api.xskill.ai").rstrip("/")
-    url = f"{base}/api/v3/mcp/models"
+    base = (getattr(settings, "auth_server_base", None) or os.environ.get("AUTH_SERVER_BASE") or "").strip().rstrip("/")
+    if not base:
+        raise RuntimeError("未配置 AUTH_SERVER_BASE，无法从服务器获取模型列表")
+    url = f"{base}/api/sutui/models"
     async with httpx.AsyncClient(timeout=45.0, trust_env=False) as c:
         r = await c.get(url, headers={"Accept": "application/json"})
     r.raise_for_status()
     body = r.json()
     if not isinstance(body, dict):
-        raise RuntimeError("mcp/models 响应不是 JSON 对象")
-    data = body.get("data")
-    if not isinstance(data, dict):
-        raise RuntimeError("mcp/models 缺少 data 对象")
-    models = data.get("models")
+        raise RuntimeError("sutui/models 响应不是 JSON 对象")
+    models = body.get("models")
     if not isinstance(models, list):
-        raise RuntimeError("mcp/models data.models 不是数组")
+        raise RuntimeError("sutui/models models 不是数组")
     lines: List[str] = []
     for m in models:
         if not isinstance(m, dict):
