@@ -1695,7 +1695,8 @@
       var jobAssetId = String(job.assetId || job.asset_id || '').trim();
       if (job.status === 'completed' && jobAssetId && activeResultAssetIds[jobAssetId]) return;
       var displayStatus = job.status || 'running';
-      if (displayStatus === 'running') displayStatus = 'stale';
+      // 批量提交时多个任务同时 running：统一显示转圈，由后台轮询更新，
+      // 不能再把 running 降级成「刷新」。
       cards.push({
         type: 'job',
         jobId: job.jobId,
@@ -1870,15 +1871,13 @@
         if (clickedStatus === 'stale') clickedStatus = 'running';
         setRightView('result');
         state.selectedJobId = jobId;
-        if (clickedStatus === 'running' || (!clickedJob || (clickedJob.status === 'completed' && !clickedJob.image))) {
-          state.currentJobId = jobId;
-          state.currentJobStatus = clickedStatus;
-          state.currentJobPrompt = promptFromJob(clickedJob);
-          renderResultSurface();
-          refreshJobStatus(true);
-          return;
-        }
+        // 无论本地记的状态是什么，点开就拉一次真实状态：
+        // 批量提交时其它任务本地可能还停在 running/刷新，必须点开能拿到结果。
+        state.currentJobId = jobId;
+        state.currentJobStatus = clickedStatus;
+        state.currentJobPrompt = promptFromJob(clickedJob);
         renderResultSurface();
+        refreshJobStatus(true);
       });
     });
     document.querySelectorAll('.imglab-task-card').forEach(function(card) {
@@ -2212,13 +2211,36 @@
     });
   }
 
+  var _batchPollTimer = null;
+
+  function stopBatchPolling() {
+    if (_batchPollTimer) {
+      clearInterval(_batchPollTimer);
+      _batchPollTimer = null;
+    }
+  }
+
+  function startBatchPolling() {
+    stopBatchPolling();
+    _batchPollTimer = setInterval(function() {
+      var hasRunning = (state.recentJobs || []).some(function(job) {
+        return job && (job.status === 'running' || job.status === 'stale');
+      });
+      if (!hasRunning) {
+        stopBatchPolling();
+        return;
+      }
+      refreshOtherJobs();
+    }, 3000);
+  }
+
   var _otherJobsPolling = false;
 
   function refreshOtherJobs() {
     if (_otherJobsPolling) return;
     if (!state.recentJobs || !state.recentJobs.length) return;
     var targets = state.recentJobs.filter(function(job) {
-      return job && job.jobId && job.status === 'running' && job.jobId !== state.currentJobId;
+      return job && job.jobId && (job.status === 'running' || job.status === 'stale') && job.jobId !== state.currentJobId;
     }).slice(0, 8);
     if (!targets.length) return;
     _otherJobsPolling = true;
@@ -2555,6 +2577,7 @@
       );
       refreshJobStatus(false);
       refreshOtherJobs();
+      startBatchPolling();
     } catch (err) {
       console.warn('图片任务提交失败', err);
       state.currentJobId = '';
@@ -2756,6 +2779,7 @@
     if (!state.initialized) {
       state.initialized = true;
       loadRecentJobs();
+    if ((state.recentJobs || []).some(function(job) { return job && (job.status === 'running' || job.status === 'stale'); })) { startBatchPolling(); }
       loadCloudJobHistory();
       loadExamples(true);
       var now = Date.now();
