@@ -1,7 +1,7 @@
 {
-  "version": "2.0.226",
-  "build": 527,
-  "applied_at": "2026-10-31T18:57:40+08:00",
-  "note": "新增前端静态文件版本日志（[static-serve]）；OTA 首次下发 static/js",
-  "bundle_sha256": "29f98add3b561c2c22a866067f1d77a7c86b51ad18f4a8e6c801e3b79519a5f1"
+  "version": "2.0.227",
+  "build": 528,
+  "applied_at": "2026-10-31T18:58:54+08:00",
+  "note": "每版自动改写前端资源版本号；OTA 下发 static/js|css|views|index.html",
+  "bundle_sha256": "95a3407c9a4cb7d64d45d31b4fd9de21adfe0c21481f56eadbf9022fadf1d425"
 }
