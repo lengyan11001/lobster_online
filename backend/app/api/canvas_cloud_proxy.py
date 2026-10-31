@@ -60,6 +60,61 @@ _PROFILE_TTL_SECONDS = 60.0
 _profile_cache: Dict[str, Any] = {"at": 0.0, "data": {}}
 
 
+_PRIVATE_URL_HINTS = ("127.0.0.1", "localhost", "0.0.0.0", "192.168.", "10.0.0.", "::1")
+
+
+def _looks_private_url(value: str) -> bool:
+    v = (value or "").lower()
+    if not v.startswith(("http://", "https://")):
+        return False
+    return any(h in v for h in _PRIVATE_URL_HINTS) or "/api/assets/file/" in v
+
+
+async def _publicize_payload_urls(obj, request, user_id: int, depth: int = 0):
+    """把请求体里的本机素材地址换成公网地址（上游拉不到 127.0.0.1）。"""
+    if depth > 6:
+        return obj
+    if isinstance(obj, dict):
+        return {k: await _publicize_payload_urls(v, request, user_id, depth + 1) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [await _publicize_payload_urls(v, request, user_id, depth + 1) for v in obj]
+    if isinstance(obj, str) and obj[:1] in ("{", "["):
+        # 画布常把 input_params 作为 JSON 字符串发过来，必须先解出来再递归
+        try:
+            import json as _json4
+            parsed = _json4.loads(obj)
+        except Exception:
+            parsed = None
+        if parsed is not None:
+            fixed = await _publicize_payload_urls(parsed, request, user_id, depth + 1)
+            try:
+                return _json4.dumps(fixed, ensure_ascii=False)
+            except Exception:
+                return obj
+    if isinstance(obj, str) and _looks_private_url(obj):
+        try:
+            from .assets import get_asset_public_url
+            from ..db import SessionLocal
+            import re as _re
+
+            m = _re.search(r"/api/assets/(?:file/)?([A-Za-z0-9_\-]+)", obj)
+            if not m:
+                return obj
+            asset_id = m.group(1)
+            db = SessionLocal()
+            try:
+                public = await asyncio.to_thread(get_asset_public_url, asset_id, user_id, request, db)
+            finally:
+                db.close()
+            if public and public.startswith(("http://", "https://")):
+                logger.info("[canvas] 私有素材转公网：%s -> %s", obj[:60], public[:70])
+                return public
+        except Exception:
+            logger.warning("[canvas] 私有素材转公网失败：%s", obj[:80], exc_info=True)
+        return obj
+    return obj
+
+
 async def cloud_profile(force: bool = False) -> Dict[str, Any]:
     """当前登录态的用户资料（认证中心 /auth/me，带 60s 缓存）。
 
@@ -185,6 +240,21 @@ async def canvas_cloud_proxy(path: str, request: Request) -> Response:
     # 画布编辑器里的「生成」还用旧版 fal 接口（服务器已不认它的 token），
     # 统一翻译成我们服务器的 v3 接口：模型=app_name、参数=input_params。
     # 这样画布所有生成都走我们服务器，不再直连任何上游。
+    # 请求体里如果带本机素材地址（127.0.0.1），先转成公网地址，否则上游报
+    # 「media URL cannot access a private address」（minimax 视频用参考图时实测）。
+    if body and b"http://" in body and any(h.encode() in body for h in _PRIVATE_URL_HINTS):
+        try:
+            import json as _json3
+
+            _raw3 = _json3.loads(body.decode("utf-8"))
+            _profile = await cloud_profile()
+            _uid = int(_profile.get("id") or 0)
+            _fixed3 = await _publicize_payload_urls(_raw3, request, _uid)
+            body = _json3.dumps(_fixed3, ensure_ascii=False).encode("utf-8")
+            headers["content-type"] = "application/json"
+        except Exception:
+            logger.debug("[canvas] 素材地址公网化跳过", exc_info=True)
+
     if normalized in ("api/fal/tasks/create", "api/fal/tasks/info"):
         try:
             import json as _json2
