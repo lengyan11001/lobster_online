@@ -463,7 +463,19 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
     el("result-actions").innerHTML = '<button onclick="downloadCurrent()" class="text-[11px] text-blue-600 border border-blue-200 rounded-lg px-3 py-1.5">下载</button>';
     window.__currentUrl = url;
   }
-  window.downloadCurrent = function () { var u = window.__currentUrl; if (!u) return; var a = document.createElement("a"); a.href = u; a.download = ""; a.target = "_blank"; a.click(); };
+  window.downloadCurrent = function () {
+    var u = window.__currentUrl; if (!u) return;
+    var name = (u.split("?")[0].split("/").pop() || "canvas-result");
+    if (!/\.[a-z0-9]{2,5}$/i.test(name)) name += /(mp4|webm|mov)$/i.test(u) ? ".mp4" : ".png";
+    // 跨域链接上 <a download> 会被忽略（点了像没反应），走本机同源代理转 blob 再下载
+    var dl = "/api/canvas-local/proxy-download?url=" + encodeURIComponent(u);
+    fetch(dl).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.blob(); }).then(function (b) {
+      var href = URL.createObjectURL(b);
+      var a = document.createElement("a"); a.href = href; a.download = name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(function () { URL.revokeObjectURL(href); }, 4000);
+    }).catch(function () { window.open(u, "_blank", "noopener"); });
+  };
   function fmtTime(ms) { if (!ms) return ""; var d = new Date(Number(ms)); var p = function (n) { return (n < 10 ? "0" : "") + n; }; return p(d.getMonth() + 1) + "/" + p(d.getDate()) + " " + p(d.getHours()) + ":" + p(d.getMinutes()); }
   function promptOf(item) {
     var raw = item.input_params || "";
@@ -483,13 +495,32 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
       renderHistory(list, reset);
     }).catch(function () { state.history.loading = false; });
   }
+  function resultUrlOf(item) {
+    item = item || {};
+    var direct = item.url || item.video_url || item.image_url || "";
+    if (direct) return direct;
+    var out = item.output;
+    if (typeof out === "string") { try { out = JSON.parse(out); } catch (e) { out = null; } }
+    if (out && typeof out === "object") {
+      if (Array.isArray(out.images) && out.images.length) {
+        var im = out.images[0];
+        return (im && (im.url || im.image_url)) || "";
+      }
+      if (Array.isArray(out.videos) && out.videos.length) {
+        var v = out.videos[0];
+        return (v && (v.url || v.video_url)) || "";
+      }
+      return out.video_url || out.url || out.image_url || "";
+    }
+    return "";
+  }
   function renderHistory(list, reset) {
     var host = el("history-list");
     if (reset) host.innerHTML = "";
     var existing = host.querySelectorAll(".hist-item").length;
     if (!existing && !list.length) { host.innerHTML = '<div class="text-[12px] text-gray-300 text-center py-10">完成一次生成后，记录会出现在这里</div>'; return; }
     var html = list.map(function (it) {
-      var url = it.url || it.video_url || it.image_url || "";
+      var url = resultUrlOf(it);
       var isV = /\.(mp4|mov|webm)(\?|$)/i.test(url);
       var thumb = url ? (isV ? '<video src="' + url + '" muted preload="metadata" class="w-[100px] h-[100px] object-cover rounded-lg"></video>' : '<img src="' + url + '" class="w-[100px] h-[100px] object-cover rounded-lg">') : '<div class="w-[100px] h-[100px] rounded-lg bg-gray-100"></div>';
       var failed = /fail/.test(String(it.status));

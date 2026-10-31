@@ -262,6 +262,51 @@ async def canvas_local_session() -> Dict[str, Any]:
             "credits": payload.get("credits")}
 
 
+_CANVAS_DL_HOSTS = (
+    "51sux.com", "tos-cn-guangzhou.volces.com", "aliyuncs.com",
+    "lobster-online-assets", "bhzn.top", "bhos.online",
+)
+
+
+@router.get("/api/canvas-local/proxy-download", summary="画布结果同源下载（跨域 CDN 无 CORS，浏览端直接下载会失效）")
+async def canvas_proxy_download(url: str):
+    from urllib.parse import urlparse
+
+    import httpx
+    from fastapi.responses import StreamingResponse
+
+    target = (url or "").strip()
+    parsed = urlparse(target)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="仅支持 http/https 链接")
+    host = (parsed.hostname or "").lower()
+    if not any(host == h or host.endswith("." + h) or h in host for h in _CANVAS_DL_HOSTS):
+        raise HTTPException(status_code=400, detail=f"不允许的下载域名: {host}")
+    name = (parsed.path.rsplit("/", 1)[-1] or "canvas-result").split("?")[0] or "canvas-result"
+
+    client = httpx.AsyncClient(timeout=120.0, follow_redirects=True, trust_env=False)
+    try:
+        resp = await client.send(client.build_request("GET", target), stream=True)
+    except Exception as exc:  # noqa: BLE001
+        await client.aclose()
+        raise HTTPException(status_code=502, detail=f"下载失败：{exc}") from exc
+    if resp.status_code >= 400:
+        await resp.aclose()
+        await client.aclose()
+        raise HTTPException(status_code=resp.status_code, detail="上游下载失败")
+
+    async def _iter():
+        try:
+            async for chunk in resp.aiter_bytes(65536):
+                yield chunk
+        finally:
+            await resp.aclose()
+            await client.aclose()
+
+    headers = {"Content-Disposition": f'attachment; filename="{name}"'}
+    media = resp.headers.get("content-type") or "application/octet-stream"
+    return StreamingResponse(_iter(), media_type=media, headers=headers)
+
 @router.get("/api/canvas-local/canvas-frame", summary="画布入口页：写入会话后进画布（避免画布弹自己的登录/扫码）")
 async def canvas_local_canvas_frame() -> HTMLResponse:
     import json as _json
