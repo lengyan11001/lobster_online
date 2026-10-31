@@ -452,20 +452,32 @@ body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue"
         var data = (d && d.data) || d || {};
         var st = String(data.status || "").toLowerCase();
         if (/fail|error/.test(st)) { clearInterval(timer); setQuote(mode, "生成失败"); loadHistory(true); return; }
-        var url = findUrl(data);
+        var url = findUrl(data, mode);
         if (/succe|complete|done/.test(st) || url) { clearInterval(timer); setQuote(mode, "已完成"); showResult(url, mode); loadHistory(true); return; }
         setQuote(mode, "生成中…（" + (st || "pending") + "）");
       }).catch(function () {});
     }, 5000);
   }
-  function findUrl(o) {
-    var found = "";
-    (function walk(v, d) {
-      if (found || d > 6) return;
-      if (typeof v === "string") { if (/^https?:\/\/.+\.(png|jpe?g|webp|gif|mp4|mov|webm|mp3)(\?|$)/i.test(v)) found = v; return; }
-      if (v && typeof v === "object") Object.keys(v).forEach(function (k) { walk(v[k], d + 1); });
-    })(o, 0);
-    return found;
+  function findUrl(o, mode) {
+    var ANY = /^https?:\/\/.+\.(png|jpe?g|webp|gif|mp4|mov|webm|mp3)(\?|$)/i;
+    var VIDEO = /^https?:\/\/.+\.(mp4|mov|webm)(\?|$)/i;
+    var IMAGE = /^https?:\/\/.+\.(png|jpe?g|webp|gif)(\?|$)/i;
+    function scan(root, re) {
+      var found = "";
+      (function walk(v, d) {
+        if (found || d > 6) return;
+        if (typeof v === "string") { if (re.test(v)) found = v; return; }
+        if (v && typeof v === "object") Object.keys(v).forEach(function (k) { walk(v[k], d + 1); });
+      })(root, 0);
+      return found;
+    }
+    // 只看结果区，避免把 params 里的参考图当成成片（minimax 视频曾预览成参考图）
+    var out = o && (o.output || o.result || o.data);
+    if (out) {
+      var u = scan(out, mode === "video" ? VIDEO : IMAGE) || scan(out, ANY);
+      if (u) return u;
+    }
+    return scan(o, mode === "video" ? VIDEO : ANY);
   }
   function showResult(url, mode) {
     var isV = /\.(mp4|mov|webm)(\?|$)/i.test(url);
