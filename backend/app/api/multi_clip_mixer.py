@@ -676,6 +676,100 @@ def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipR
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
+class MultiClipConcatBody(BaseModel):
+    """把多段「已套好模板」的成片按顺序拼成一条。"""
+
+    asset_ids: List[str] = Field(..., min_length=1, max_length=20)
+    output_ratio: str = Field("", max_length=16)
+    fill_mode: str = Field("", max_length=16)
+    title: str = Field("多段视频混剪", max_length=80)
+
+
+@router.post("/api/multi-clip-mixer/concat")
+async def concat_multi_clip_videos(
+    body: MultiClipConcatBody,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    """每段单独套模板后，把多段成片按顺序拼接（统一比例/填充方式）。"""
+    ffmpeg = find_ffmpeg()
+    ffprobe = _find_ffprobe(ffmpeg)
+    clips: List[ClipSegment] = []
+    for index, asset_id in enumerate(body.asset_ids, start=1):
+        path, _, media_type = resolve_asset_path(db, current_user.id, asset_id)
+        if media_type != "video":
+            raise HTTPException(status_code=400, detail=f"第 {index} 段不是视频")
+        info = _probe_video(path, ffprobe)
+        duration = float(info["duration"] or 0)
+        if duration <= 0.1:
+            raise HTTPException(status_code=400, detail=f"第 {index} 段时长为 0，无法拼接")
+        clips.append(ClipSegment(asset_id=asset_id, start_sec=0, end_sec=round(duration, 3)))
+
+    render_body = MultiClipRenderBody(
+        clips=clips,
+        title=body.title,
+        keep_original_audio=False,
+        output_ratio=body.output_ratio,
+        fill_mode=body.fill_mode,
+    )
+    try:
+        rendered = await asyncio.to_thread(_render_local_video, current_user.id, clips, render_body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("[multi-clip-mixer] concat failed user_id=%s", current_user.id)
+        raise HTTPException(status_code=500, detail=f"视频拼接失败：{exc}") from exc
+
+    data = rendered.pop("data")
+    asset_id, filename, file_size, source_url = await asyncio.to_thread(
+        _save_bytes_or_tos, data, ".mp4", "video/mp4"
+    )
+    upload_diag: Dict[str, Any] = {}
+    if not source_url:
+        source_url, upload_diag = await _upload_bytes_to_auth_server(
+            data, filename, "video/mp4", request, timeout=240.0
+        )
+
+    row = Asset(
+        asset_id=asset_id,
+        user_id=current_user.id,
+        filename=filename,
+        media_type="video",
+        file_size=file_size,
+        source_url=source_url,
+        prompt="multi_clip_mixer_concat",
+        model="local:ffmpeg-multi-clip-concat",
+        tags="multi_clip_mixer,video",
+        meta={
+            "title": (body.title or "多段视频混剪").strip()[:80],
+            "segments": rendered["segments"],
+            "concat_of": list(body.asset_ids),
+            "output_ratio": body.output_ratio,
+            "fill_mode": body.fill_mode,
+        },
+    )
+    try:
+        db.add(row)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "ok": True,
+        "asset_id": asset_id,
+        "source_url": source_url or "",
+        "preview_url": f"/api/assets/{asset_id}/content",
+        "file_size": file_size,
+        "duration": rendered["duration"],
+        "width": rendered["width"],
+        "height": rendered["height"],
+        "segments": rendered["segments"],
+        "public_upload_warning": "" if source_url else str(upload_diag.get("error") or "成片已保存在本机，但暂时没有公网链接"),
+    }
+
+
 @router.post("/api/multi-clip-mixer/render")
 async def render_multi_clip_video(
     body: MultiClipRenderBody,

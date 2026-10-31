@@ -629,6 +629,10 @@
         + '<span>' + escapeHtml(modeLabel) + '</span>'
         + '<small>本段时长 ' + escapeHtml(formatSeconds(clipDuration)) + ' · 原片 ' + escapeHtml(formatSeconds(clip.duration))
         + (clip.audioMaster ? ' · 已标记为整片原声音轨' : '') + '</small></div>'
+        + (textModePerSegment() ? '<div class="mcm-seg-text">'
+          + '<input type="text" data-seg-field="title" data-clip-index="' + index + '" maxlength="60" placeholder="第 ' + (index + 1) + ' 段标题（必填）" value="' + escapeHtml(clip.segTitle || '') + '">'
+          + '<textarea data-seg-field="desc" data-clip-index="' + index + '" rows="2" maxlength="200" placeholder="第 ' + (index + 1) + ' 段介绍文案（可空）">' + escapeHtml(clip.segDesc || '') + '</textarea>'
+          + '</div>' : '')
         + '<div class="mcm-clip-actions">'
         + '<button type="button" data-action="up" title="上移" aria-label="上移"' + (index === 0 ? ' disabled' : '') + '>↑</button>'
         + '<button type="button" data-action="down" title="下移" aria-label="下移"' + (index === state.clips.length - 1 ? ' disabled' : '') + '>↓</button>'
@@ -1103,6 +1107,10 @@
       if (field) return field;
     }
     return null;
+  }
+
+  function textModePerSegment() {
+    return !!($('mcmTextModePerSegment') && $('mcmTextModePerSegment').checked);
   }
 
   function templateTitleValue() {
@@ -1834,12 +1842,15 @@
     return Array.from(title).slice(0, 80).join('');
   }
 
-  function applyShanjianTemplate(baseResult) {
+  function applyShanjianTemplate(baseResult, override) {
+    override = override || {};
     if (!state.selectedTemplate) return Promise.reject(new Error('请先选择闪剪模板'));
     var videoUrl = baseResult && (baseResult.source_url || baseResult.video_url || '');
     if (!videoUrl) return Promise.reject(new Error('基础成片没有公网链接，无法提交闪剪模板；请先保证 TOS/转存成功。'));
-    var title = normalizeShanjianTitle(templateTitleValue());
-    var description = String((($('mcmShanjianDescription') || {}).value || '').trim()).slice(0, 240);
+    var title = normalizeShanjianTitle(override.title != null ? override.title : templateTitleValue());
+    var description = String(
+      (override.description != null ? override.description : (($('mcmShanjianDescription') || {}).value || '')).trim()
+    ).slice(0, 240);
     progress('template', 'active', '正在提交闪剪模板任务');
     return loadShanjianTemplateDetail(state.selectedTemplate).then(function(detailResponse) {
       var editInfo = shanjianEditInfo(detailResponse);
@@ -1991,6 +2002,68 @@
     });
   }
 
+  function runPerSegmentRender() {
+    if (currentTemplateProvider() !== 'shanjian') {
+      return Promise.reject(new Error('每段文案模式只支持闪剪模板'));
+    }
+    var plan = buildClipPlan(1);
+    var total = state.clips.length;
+    var outputs = [];
+    var chain = Promise.resolve();
+    state.clips.forEach(function(clip, idx) {
+      chain = chain.then(function() {
+        var segTitle = String(clip.segTitle || '').trim();
+        if (!segTitle) throw new Error('第 ' + (idx + 1) + ' 段还没填标题');
+        setBusy(true, '第 ' + (idx + 1) + '/' + total + ' 段：裁剪并套模板');
+        progress('merge', 'active', '第 ' + (idx + 1) + '/' + total + ' 段：本地裁剪');
+        return post('/api/multi-clip-mixer/render', {
+          title: segTitle,
+          clips: [plan[idx]],
+          keep_original_audio: false,
+          audio_asset_id: '',
+          target_duration: null,
+          audio_volume: 1,
+          clip_mode: currentClipMode(),
+          output_index: idx + 1,
+          output_ratio: currentOutputRatio(),
+          fill_mode: currentFillMode()
+        });
+      }).then(function(base) {
+        state.lastBaseResult = base;
+        progress('template', 'active', '第 ' + (idx + 1) + '/' + total + ' 段：套模板（消耗 1 次闪剪额度）');
+        return applyShanjianTemplate(base, {
+          title: String(clip.segTitle || ''),
+          description: String(clip.segDesc || ''),
+          duration: base.duration
+        });
+      }).then(function(res) {
+        var url = (res && (res.source_url || res.preview_url || '')) || '';
+        if (!url) throw new Error('第 ' + (idx + 1) + ' 段模板成片没有返回地址');
+        return post('/api/assets/save-url', { url: url, media_type: 'video' }).then(function(saved) {
+          var aid = (saved && (saved.asset_id || (saved.asset && (saved.asset.asset_id || saved.asset.id)))) || '';
+          if (!aid) throw new Error('第 ' + (idx + 1) + ' 段成片保存到素材库失败');
+          outputs.push(aid);
+          progress('template', 'done', '第 ' + (idx + 1) + '/' + total + ' 段完成');
+        });
+      });
+    });
+    return chain.then(function() {
+      progress('merge', 'active', '正在拼接 ' + outputs.length + ' 段模板成片');
+      return post('/api/multi-clip-mixer/concat', {
+        asset_ids: outputs,
+        output_ratio: currentOutputRatio(),
+        fill_mode: currentFillMode(),
+        title: templateTitleValue() || '多段视频混剪'
+      });
+    }).then(function(final) {
+      return setResultVideo(final).then(function() {
+        return Object.assign({}, final, {
+          completion_message: '每段独立套模板后已拼接完成，共 ' + outputs.length + ' 段。'
+        });
+      });
+    });
+  }
+
   function generate() {
     if (state.busy) return;
     if (!state.clips.length) return showMessage('请先添加至少一个视频。', true);
@@ -2017,6 +2090,11 @@
       renderBatchResults();
       resetProgress();
       setBusy(true, '正在裁剪并拼接...');
+      if (textModePerSegment() && useTemplate && currentTemplateProvider() === 'shanjian') {
+        return runPerSegmentRender().then(function(result) {
+          return { result: result, totalRuns: 1 };
+        });
+      }
       var chain = Promise.resolve();
       for (var index = 1; index <= totalRuns; index += 1) {
         (function(runIndex) {
@@ -2130,6 +2208,27 @@
       state.pendingFiles = state.pendingFiles.concat(files);
       event.target.value = '';
       processNextPendingFile();
+    });
+    if ($('mcmClipList')) $('mcmClipList').addEventListener('input', function(event) {
+      var target = event.target;
+      if (!target || !target.getAttribute) return;
+      var field = target.getAttribute('data-seg-field');
+      if (!field) return;
+      var idx = Number(target.getAttribute('data-clip-index'));
+      var clip = state.clips[idx];
+      if (!clip) return;
+      if (field === 'title') clip.segTitle = target.value;
+      else if (field === 'desc') clip.segDesc = target.value;
+    });
+    ['mcmTextModeUnified', 'mcmTextModePerSegment'].forEach(function(id) {
+      var el = $(id);
+      if (el) el.addEventListener('change', function() {
+        if (textModePerSegment() && currentTemplateProvider() !== 'shanjian') {
+          showMessage('每段文案模式只支持闪剪模板，已切回统一文案。', true);
+          if ($('mcmTextModeUnified')) $('mcmTextModeUnified').checked = true;
+        }
+        renderClips();
+      });
     });
     if ($('mcmClipList')) $('mcmClipList').addEventListener('click', function(event) {
       var button = event.target.closest('[data-action]');

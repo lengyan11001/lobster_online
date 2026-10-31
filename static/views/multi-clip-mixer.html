@@ -123,7 +123,11 @@
               </div>
               <div id="mcmShanjianTemplateCapabilities" class="mcm-template-capabilities" hidden></div>
               <div class="mcm-overlay-fields">
-                <label class="mcm-overlay-field"><span><strong>介绍文案</strong><em>交给模板身份栏</em></span><textarea id="mcmShanjianDescription" rows="3" maxlength="240" placeholder="填写模板身份栏要显示的介绍文案，留空则不传。"></textarea></label>
+                <div class="mcm-overlay-field"><span><strong>文案模式</strong><em>每段文案：每个片段单独套一次模板（按次消耗闪剪额度）</em></span>
+                  <label class="mcm-inline-radio"><input type="radio" name="mcmTextMode" id="mcmTextModeUnified" value="unified" checked> 统一标题/内容</label>
+                  <label class="mcm-inline-radio"><input type="radio" name="mcmTextMode" id="mcmTextModePerSegment" value="per-segment"> 每段各自写标题/内容</label>
+                </div>
+                <label class="mcm-overlay-field"><span><strong>介绍文案</strong><em>交给模板身份栏（统一模式使用）</em></span><textarea id="mcmShanjianDescription" rows="3" maxlength="240" placeholder="填写模板身份栏要显示的介绍文案，留空则不传。"></textarea></label>
               </div>
             </div>
             <div id="mcmTemplateLayoutPanel" class="mcm-layout-panel" hidden>
