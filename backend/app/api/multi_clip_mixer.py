@@ -683,6 +683,8 @@ class MultiClipConcatBody(BaseModel):
     output_ratio: str = Field("", max_length=16)
     fill_mode: str = Field("", max_length=16)
     title: str = Field("多段视频混剪", max_length=80)
+    # 每段期望时长（与 asset_ids 对齐，可空）。给了就按它裁，防止模板把片段补齐变长
+    clip_lengths: List[float] = Field(default_factory=list, max_length=20)
 
 
 @router.post("/api/multi-clip-mixer/concat")
@@ -704,7 +706,13 @@ async def concat_multi_clip_videos(
         duration = float(info["duration"] or 0)
         if duration <= 0.1:
             raise HTTPException(status_code=400, detail=f"第 {index} 段时长为 0，无法拼接")
-        clips.append(ClipSegment(asset_id=asset_id, start_sec=0, end_sec=round(duration, 3)))
+        want = 0.0
+        if index - 1 < len(body.clip_lengths):
+            want = float(body.clip_lengths[index - 1] or 0)
+        end = duration
+        if want > 0.1:
+            end = min(duration, want)
+        clips.append(ClipSegment(asset_id=asset_id, start_sec=0, end_sec=round(end, 3)))
 
     render_body = MultiClipRenderBody(
         clips=clips,

@@ -1881,7 +1881,7 @@
       materials: [{ type: 'video', fileUrl: videoUrl, soundSwitch: true }],
       material_sound_switch: true,
       material_composition: 'order',
-      video_duration: Math.max(5, Math.round(Number(baseResult.duration || 30))),
+      video_duration: Math.max(1, Math.round(Number(baseResult.duration || 30))),
       // 闪剪 introduceCard.name 是必填元数据；页面没有单独的 name 输入，服务端会以标题兜底。
       introduce_name: supportsIpLayer && description ? title : '',
       introduce_description: supportsIpLayer ? description : '',
@@ -2113,10 +2113,15 @@
         });
       });
     });
+    var clipLengths = state.clips.map(function(clip, idx) {
+      var seg = plan[idx] || {};
+      return Math.max(0, Number(seg.end_sec || 0) - Number(seg.start_sec || 0));
+    });
     return chain.then(function() {
       progress('merge', 'active', '正在拼接 ' + outputs.length + ' 段模板成片');
       return post('/api/multi-clip-mixer/concat', {
         asset_ids: outputs,
+        clip_lengths: clipLengths,
         output_ratio: currentOutputRatio(),
         fill_mode: currentFillMode(),
         title: templateTitleValue() || '多段视频混剪'
