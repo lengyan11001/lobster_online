@@ -88,8 +88,8 @@
   });
 
   window.registerLobsterView('canvas-studio', {
-    html: '/static/views/canvas-studio.html?v=20261001-canvas-origin',
-    scripts: '/static/js/views/canvas-studio.js?v=20261001-canvas-origin',
+    html: '/static/views/canvas-studio.html?v=20261031-canvas-delete-fix',
+    scripts: '/static/js/views/canvas-studio.js?v=20261031-canvas-delete-fix',
     init: 'initCanvasStudioView',
     cache: 'reload'
   });
