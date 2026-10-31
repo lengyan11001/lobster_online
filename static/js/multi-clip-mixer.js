@@ -2156,7 +2156,7 @@
       renderBatchResults();
       resetProgress();
       setBusy(true, '正在裁剪并拼接...');
-      if (textModePerSegment() && useTemplate && currentTemplateProvider() === 'shanjian') {
+      if (textModePerSegment() && useTemplate) {
         return runPerSegmentRender().then(function(result) {
           return { result: result, totalRuns: 1 };
         });
