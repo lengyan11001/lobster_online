@@ -3637,7 +3637,9 @@ def clear_openclaw_local_provider_keys() -> tuple[bool, bool]:
 
 _SUTUI_CONFIG_PATH = _BASE_DIR / "sutui_config.json"
 _UPSTREAM_URLS_PATH = _BASE_DIR / "upstream_urls.json"
-_SUTUI_DEFAULT_URL = "https://api.xskill.ai/api/v3/mcp-http"
+def _sutui_default_url() -> str:
+    base = (os.environ.get("AUTH_SERVER_BASE") or "").strip().rstrip("/")
+    return f"{base}/mcp-gateway" if base else ""
 
 
 def _read_sutui_config() -> dict:
@@ -3675,7 +3677,7 @@ def get_sutui_config(current_user: _ServerUser = Depends(get_current_user_for_lo
     from ..core.config import settings
     edition = (getattr(settings, "lobster_edition", None) or "online").strip().lower()
     urls = _read_upstream_urls()
-    url = urls.get("sutui", _SUTUI_DEFAULT_URL)
+    url = urls.get("sutui") or _sutui_default_url()
     if edition == "online":
         token = (getattr(current_user, "sutui_token", None) or "").strip()
         return {"token": _mask_key(token) if token else "", "has_token": bool(token), "url": url, "edition": "online"}
@@ -3714,7 +3716,7 @@ def update_sutui_config(
         _write_upstream_urls(urls)
     elif not _read_upstream_urls().get("sutui"):
         urls = _read_upstream_urls()
-        urls["sutui"] = _SUTUI_DEFAULT_URL
+        urls["sutui"] = _sutui_default_url()
         _write_upstream_urls(urls)
 
     return {"ok": True, "message": "速推配置已保存"}

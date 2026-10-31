@@ -1276,13 +1276,12 @@ def _load_upstream_urls() -> Dict[str, str]:
                         urls[k.strip()] = v.strip()
         except Exception:
             pass
-    # 在线版：速推必须走认证中心 mcp-gateway（与 upstream_urls.json / 环境变量中直连 xskill 互斥时以本规则为准）
-    edition = (os.environ.get("LOBSTER_EDITION") or "standalone").strip().lower()
+    # 速推能力只允许经认证中心 mcp-gateway（预扣/结算/退款在服务器）。
+    # 无论 LOBSTER_EDITION 写的是什么，都不允许残留直连 xskill 地址。
     auth_base = (os.environ.get("AUTH_SERVER_BASE") or "").strip().rstrip("/")
-    if edition == "online" and auth_base:
+    if auth_base:
         urls["sutui"] = f"{auth_base}/mcp-gateway"
-    elif edition == "online" and not auth_base:
-        # 在线版未配 AUTH_SERVER_BASE 时禁止使用文件中的直连 xskill，避免误报「Token 未配置」
+    else:
         urls.pop("sutui", None)
     return urls
 
