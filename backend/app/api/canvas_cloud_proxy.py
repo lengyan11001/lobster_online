@@ -317,6 +317,11 @@ async def canvas_cloud_proxy(path: str, request: Request) -> Response:
                     except Exception:
                         logger.warning("[canvas] 兜底重试失败", exc_info=True)
 
+    # 任务不存在（旧 v2 任务号/已删任务）不往前端抛 404，避免画布弹「任务不存在」红条
+    if upstream.status_code == 404 and normalized in ("api/v3/tasks/query", "api/v2/tasks/info"):
+        soft = b'{"code":200,"data":{"status":"failed","message":"\u4efb\u52a1\u4e0d\u5b58\u5728"}}'
+        return Response(content=soft, status_code=200, media_type="application/json")
+
     logger.info("[canvas] %s %s -> %s", request.method, normalized, upstream.status_code)
     media_type = upstream.headers.get("content-type") or "application/json"
     content = upstream.content
