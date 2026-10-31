@@ -1877,6 +1877,7 @@
     return loadShanjianTemplateDetail(state.selectedTemplate).then(function(detailResponse) {
       var editInfo = shanjianEditInfo(detailResponse);
       var supportsIpLayer = !!editInfo.ipLayer;
+      var keepAudio = !$('mcmShanjianKeepAudio') || !!$('mcmShanjianKeepAudio').checked;
       var structLayers = [];
       if (editInfo.headerLayer) structLayers.push({ markCode: 'headerLayer', show: true });
       if (supportsIpLayer && description) structLayers.push({ markCode: 'ipLayer', show: true });
@@ -1884,8 +1885,8 @@
       title: title,
       scene: currentMixerTemplateScene(),
       style_id: state.selectedTemplate.id,
-      materials: [{ type: 'video', fileUrl: videoUrl, soundSwitch: true }],
-      material_sound_switch: true,
+      materials: [{ type: 'video', fileUrl: videoUrl, soundSwitch: keepAudio }],
+      material_sound_switch: keepAudio,
       material_composition: 'order',
       video_duration: Math.max(1, Math.round(Number(baseResult.duration || 30))),
       // 闪剪 introduceCard.name 是必填元数据；页面没有单独的 name 输入，服务端会以标题兜底。

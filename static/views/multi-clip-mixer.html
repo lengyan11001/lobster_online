@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="/static/css/multi-clip-mixer.css?v=20261031-copy-modes-v1">
+<link rel="stylesheet" href="/static/css/multi-clip-mixer.css?v=20261031-template-audio-v8">
 <div id="content-multi-clip-mixer" class="content-block">
   <div class="mcm-page">
     <header class="mcm-header">
@@ -79,6 +79,10 @@
             </div>
             <div class="mcm-step-title" style="margin:10px 0 6px;font-size:12px;opacity:.72;letter-spacing:.02em;">第 2 步 · 选择模板</div>
             <label id="mcmTemplateRandomRow" class="mcm-template-random-row"><span><strong>模板选择</strong><small>关闭后选择指定模板；开启后每条随机选择模板。</small></span><span class="mcm-inline-check"><input id="mcmRandomTemplateSwitch" type="checkbox" checked><span>随机模板</span></span></label>
+            <label class="mcm-setting-row" for="mcmShanjianKeepAudio">
+              <span><strong>模板成片保留原声</strong><small>关掉后只保留模板自带的音乐。如果成片听到两路声音（原声/背景音乐 + 模板音乐），把这个关掉。</small></span>
+              <input id="mcmShanjianKeepAudio" type="checkbox" checked>
+            </label>
             <div id="mcmTemplateChoiceArea">
               <div class="mcm-choice-toolbar">
               <div>

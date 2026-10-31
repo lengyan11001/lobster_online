@@ -397,6 +397,13 @@ def _extend_visual_segments_to_target(
 
 
 def _render_local_video(user_id: int, clips: List[ClipSegment], body: MultiClipRenderBody) -> Dict[str, Any]:
+    logger.info(
+        "[multi-clip] render user=%s clips=%d keep_original_audio=%s audio_asset=%s bgm=%s bgm_volume=%s ratio=%s fill=%s",
+        user_id, len(clips or []), bool(getattr(body, "keep_original_audio", None)),
+        str(getattr(body, "audio_asset_id", "") or ""), bool(str(getattr(body, "bgm_url", "") or "").strip()),
+        float(getattr(body, "bgm_volume", 0) or 0), str(getattr(body, "output_ratio", "") or ""),
+        str(getattr(body, "fill_mode", "") or ""),
+    )
     ffmpeg = find_ffmpeg()
     ffprobe = _find_ffprobe(ffmpeg)
     work_dir = Path(tempfile.mkdtemp(prefix="multi_clip_mixer_"))
