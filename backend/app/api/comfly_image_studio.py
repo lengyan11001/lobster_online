@@ -739,20 +739,30 @@ async def _save_image_studio_results(
     prompt: str,
     model: str,
 ) -> List[Dict[str, Any]]:
+    """把生成结果落到素材库。
+
+    上游 CDN（vip.edu888.top 之类）在部分机器上直连超时，此时先经 sutui.transfer_url
+    把图转存到 TOS，再用 TOS 地址入库；转存也失败就保留可预览的远端地址，不能整条丢。
+    """
+    from .assets import _transfer_url_via_sutui
+
     saved: List[Dict[str, Any]] = []
     for index, item in enumerate(previews):
         url = str(item.get("url") or "").strip()
         if not url:
             continue
-        body = SaveAssetReq(
-            url=url,
-            media_type="image",
-            tags="auto,comfly.image_studio",
-            prompt=prompt[:500] if prompt else None,
-            model=(model or "")[:128] or None,
-        )
-        try:
-            effective = await _resolve_v3_tasks_url_for_download(body.url, "image", current_user, request=request)
+
+        async def _attempt(target_url: str) -> Dict[str, Any]:
+            body = SaveAssetReq(
+                url=target_url,
+                media_type="image",
+                tags="auto,comfly.image_studio",
+                prompt=prompt[:500] if prompt else None,
+                model=(model or "")[:128] or None,
+            )
+            effective = await _resolve_v3_tasks_url_for_download(
+                body.url, "image", current_user, request=request
+            )
             base_dk = _compute_save_url_dedupe_key(body.url, effective, body.dedupe_hint_url)
             dk = _final_save_url_dedupe_key(
                 base_dk,
@@ -761,22 +771,17 @@ async def _save_image_studio_results(
                 body_url=body.url,
             )
             async with _save_url_lock_for(current_user.id, dk):
-                row = await _save_asset_from_url_locked(
+                return await _save_asset_from_url_locked(
                     dk,
                     body,
                     request,
                     current_user,
                     effective_url_resolved=effective,
                 )
-            item["asset_id"] = str(row.get("asset_id") or "")
-            item["source_url"] = str(row.get("source_url") or "")
-            saved.append({"index": index, "source_url": url, "asset": row})
-            logger.info(
-                "[comfly_image_studio] save-url ok user_id=%s index=%s asset_id=%s",
-                current_user.id,
-                index,
-                row.get("asset_id"),
-            )
+
+        row: Dict[str, Any] | None = None
+        try:
+            row = await _attempt(url)
         except Exception:
             logger.warning(
                 "[comfly_image_studio] save-url failed user_id=%s index=%s url=%s",
@@ -785,6 +790,43 @@ async def _save_image_studio_results(
                 url[:120],
                 exc_info=True,
             )
+            transferred: Optional[str] = None
+            try:
+                transferred = await _transfer_url_via_sutui(url, "image", current_user, request)
+            except Exception:
+                logger.warning(
+                    "[comfly_image_studio] transfer fallback failed user_id=%s index=%s",
+                    current_user.id,
+                    index,
+                    exc_info=True,
+                )
+            if transferred:
+                item["url"] = transferred
+                try:
+                    row = await _attempt(transferred)
+                except Exception:
+                    logger.warning(
+                        "[comfly_image_studio] save-url after transfer failed user_id=%s index=%s",
+                        current_user.id,
+                        index,
+                        exc_info=True,
+                    )
+            if row is None:
+                # 至少让前端能拿到可访问的地址（TOS 或原 CDN）
+                item["preview_url"] = transferred or url
+                continue
+
+        if row is None:
+            continue
+        item["asset_id"] = str(row.get("asset_id") or "")
+        item["source_url"] = str(row.get("source_url") or "")
+        saved.append({"index": index, "source_url": url, "asset": row})
+        logger.info(
+            "[comfly_image_studio] save-url ok user_id=%s index=%s asset_id=%s",
+            current_user.id,
+            index,
+            row.get("asset_id"),
+        )
     return saved
 
 
