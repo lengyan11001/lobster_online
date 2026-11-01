@@ -137,10 +137,14 @@
     });
   }
   function setMessage(message, isError) {
-    var target = el('atMessage');
-    if (!target) return;
-    target.textContent = message || '';
-    target.classList.toggle('is-error', !!isError);
+    // 列表页和详情页各有一个提示位：详情页打开时列表页被隐藏，
+    // 只写 #atMessage 的话用户在详情页看不到任何反馈（表现就是“点了没反应”）。
+    ['atMessage', 'atDetailMessage'].forEach(function (id) {
+      var target = el(id);
+      if (!target) return;
+      target.textContent = message || '';
+      target.classList.toggle('is-error', !!isError);
+    });
   }
   function setButtonBusy(button, busy, label) {
     if (!button) return;
@@ -619,11 +623,16 @@
     var title = String(row.display_name || row.source_name || row.file_name || row.filename || '秘书记录');
     if (!text.trim()) { setMessage('这条记录还没有摘要/转写内容', true); return; }
     setMessage('正在打开提取弹窗…');
+    btn.disabled = true;
+    var oldLabel = btn.textContent;
+    btn.textContent = '打开中…';
+    setTimeout(function () { btn.disabled = false; btn.textContent = oldLabel; }, 8000);
     // 「整理结果」这个视图本身不会加载 agent.js，所以提取弹窗需要按需引入
     ensureProfileExtract().then(function (ok) {
       if (!ok || !window.LobsterProfileExtract) {
+        // WebView 里 alert 常被拦掉，必须写到页面上的提示位
         setMessage('提取组件加载失败，请重试或重启客户端', true);
-        try { window.alert('提取组件加载失败，请重试'); } catch (e) {}
+        console.error('[提取资料] 组件加载失败', { ok: ok, hasApi: !!window.LobsterProfileExtract });
         return;
       }
       window.LobsterProfileExtract.open({ title: title, text: text, recordId: String(row.id || '') });
