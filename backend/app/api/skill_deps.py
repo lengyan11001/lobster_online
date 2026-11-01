@@ -1306,7 +1306,12 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
                     if status.lower() in ("failed", "error", "cancelled", "canceled"):
                         raise RuntimeError("第 %d 段生成失败：%s" % (idx, str(poll)[:300]))
             if not urls:
-                raise RuntimeError("第 %d 段未拿到视频地址：%s" % (idx, str(resp)[:300]))
+                detail = ""
+                if isinstance(resp, dict):
+                    detail = str(resp.get("_text") or resp.get("error") or "").strip()
+                if not detail:
+                    detail = str(resp)
+                raise RuntimeError("第 %d 段生成失败：%s" % (idx, detail[:500]))
             url = urls[0]
             dest = out_dir / ("s%d.mp4" % idx)
             job["message"] = "下载第 %d 段" % idx
