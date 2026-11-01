@@ -2141,11 +2141,18 @@
       document.addEventListener('click', function (event) {
         var target = event.target;
         if (!target || !target.closest) return;
-        var btn = target.closest('[data-agent-extract]');
+        var btn = target.closest('[data-agent-extract], .agent-task-card-extract');
         if (!btn) return;
         event.preventDefault();
         event.stopPropagation();
-        openProfileExtract(btn.getAttribute('data-agent-extract') || '');
+        var rid = btn.getAttribute('data-agent-extract') || btn.getAttribute('data-id') || '';
+        console.info('[提取资料] click recordId=%s', rid);
+        try {
+          openProfileExtract(rid);
+        } catch (err) {
+          console.error('[提取资料] 打开弹窗异常', err);
+          try { window.alert('提取资料失败：' + (err && err.message ? err.message : err)); } catch (e) {}
+        }
       }, true);
       document.addEventListener('keydown', function (event) {
         if (event.key !== 'Escape') return;
