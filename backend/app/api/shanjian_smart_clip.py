@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 
 import os
 import re
@@ -13,6 +14,8 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..models import ShanjianDigitalHumanProfile
 from .auth import _ServerUser, get_current_user_for_local
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -468,11 +471,19 @@ async def submit_clip(
     elif scene == "oralMixCutting":
         endpoint = "/v1/clip/video/broadcast_mixcut"
         payload["processRules"]["materialComposition"] = _normalize_material_composition(body.material_composition)
-        payload["processRules"]["videoDuration"] = max(1, min(int(body.video_duration or 30), 300))
+        _vid_dur_requested = int(body.video_duration or 30)
+        _vid_dur_final = max(1, min(_vid_dur_requested, 300))
+        if _vid_dur_final != _vid_dur_requested:
+            logger.info("[shanjian] videoDuration clamped %s -> %s", _vid_dur_requested, _vid_dur_final)
+        payload["processRules"]["videoDuration"] = _vid_dur_final
     elif scene == "newsMixCutting":
         endpoint = "/v1/clip/video/news_mixcut"
         payload["processRules"]["materialComposition"] = _normalize_material_composition(body.material_composition)
-        payload["processRules"]["videoDuration"] = max(1, min(int(body.video_duration or 30), 300))
+        _vid_dur_requested = int(body.video_duration or 30)
+        _vid_dur_final = max(1, min(_vid_dur_requested, 300))
+        if _vid_dur_final != _vid_dur_requested:
+            logger.info("[shanjian] videoDuration clamped %s -> %s", _vid_dur_requested, _vid_dur_final)
+        payload["processRules"]["videoDuration"] = _vid_dur_final
 
     if scene in {"virtualman", "oralMixCutting"}:
         if audio_url:
