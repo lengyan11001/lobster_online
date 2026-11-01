@@ -1,7 +1,7 @@
 {
-  "version": "2.0.231",
-  "build": 532,
-  "applied_at": "2026-11-01T00:24:37+08:00",
-  "note": "批量图片任务并行轮询修复：其余任务显示进度、点开可取结果",
-  "bundle_sha256": "d2a8325b1a575254b0375aa6280484f8f25943d6c0725db08e10d9d86ebe2dda"
+  "version": "2.0.232",
+  "build": 533,
+  "applied_at": "2026-11-01T10:15:24+08:00",
+  "note": "修复闪剪 videoDuration 被强制最小 5 秒（0-3s 裁切出 5s 成片）",
+  "bundle_sha256": "4063db64f13d23af1e49b93e6352eb1ac5edda258f63213c89f2285caeca3b05"
 }
