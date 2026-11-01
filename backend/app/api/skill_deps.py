@@ -518,10 +518,12 @@ _MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 _HOSTS = {"tank": "白背心数字人", "me": "用户本人数字人", "cat": "橘猫店长", "dog": "柴犬主播"}
 
 _HOST_OPTIONS = [
-    {"id": "tank", "name": "白背心数字人", "ratio": "9:16", "voice": "young friendly female voice, clear and patient but lively, natural pace",
-     "note": "默认主播，竖屏自拍构图"},
-    {"id": "me", "name": "用户本人", "ratio": "16:9", "voice": "warm, steady, confident male voice around 35 years old, natural pace",
-     "note": "横屏，用你自己上传的形象照"},
+    {"id": "photo", "name": "照片本人（自动匹配）", "ratio": "9:16", "voice": "natural voice matching the person in the reference image",
+     "note": "不限定性别和外观，按上传照片生成；推荐"},
+    {"id": "tank", "name": "白背心数字人（固定女形象）", "ratio": "9:16", "voice": "young friendly female voice, clear and patient but lively, natural pace",
+     "note": "固定女性形象；上传男性照片请选「照片本人」"},
+    {"id": "me", "name": "用户本人（16:9）", "ratio": "16:9", "voice": "natural voice matching the person in the reference image",
+     "note": "横屏，按上传照片生成"},
     {"id": "cat", "name": "橘猫店长", "ratio": "9:16", "voice": "cute, playful small high-pitched voice",
      "note": "需要上传橘猫照片；提示词会要求嘴部开合"},
     {"id": "dog", "name": "柴犬新闻主播", "ratio": "16:9", "voice": "deep, serious male TV news-anchor voice",
@@ -619,7 +621,7 @@ def _sanitize_options(raw: Any) -> Dict[str, Any]:
     scenes = {s["id"] for s in _SCENE_OPTIONS}
     packs = {p["id"] for p in _PACKAGING_OPTIONS}
     out: Dict[str, Any] = {}
-    out["host"] = raw.get("host") if raw.get("host") in hosts else "tank"
+    out["host"] = raw.get("host") if raw.get("host") in hosts else "photo"
     out["shot"] = raw.get("shot") if raw.get("shot") in shots else "full"
     out["ratio"] = raw.get("ratio") if raw.get("ratio") in ("9:16", "16:9") else ""
     out["resolution"] = raw.get("resolution") if raw.get("resolution") in ("720p", "480p") else ""
@@ -1105,20 +1107,27 @@ def _prompt_for(project: Dict[str, Any], seg: Dict[str, Any]) -> str:
     scene_prefix = ("Scene: " + scene_prompt + ". ") if scene_prompt else ""
     line = seg.get("text") or ""
 
-    if host in ("tank", "me"):
-        hp = (persona.get("other_hosts") or {}).get(host) or {}
-        template = hp.get("prompt_template") if host == "me" else persona.get("prompt_template")
-        template = template or ""
+    if host == "tank":
+        template = persona.get("prompt_template") or ""
         if template:
             try:
                 body = template.format(ref="the reference image", purpose="explaining clearly",
                                        act=act, voice=voice, language=language, line=line)
-                # persona 模板里写死了 "Mandarin Chinese"，换语言时要显式替换
                 if language != "Mandarin Chinese":
                     body = body.replace("Mandarin Chinese", language)
                 return scene_prefix + body
             except Exception:
                 pass
+    if host in ("photo", "me"):
+        # 不写死性别/年龄/外观，完全跟随参考图，避免「传男人出女人」
+        voice = voice or "natural voice matching the person in the reference image"
+        return (scene_prefix +
+                "The person in the reference image talks straight to the camera, same face, hairstyle, outfit, "
+                "framing and lighting as the reference, like a friendly tech vlogger explaining clearly: " + act + ". "
+                "Handheld selfie feel with only a very slight natural sway. "
+                "The person speaks " + language + ", clearly lip-synced, in a " + voice + ":\n"
+                "\u201c" + line + "\u201d\n"
+                "Sound: only the voice and quiet room tone, no music, no subtitles, no on-screen text.")
     if host in ("cat", "dog"):
         animal = "cat" if host == "cat" else "dog"
         return (scene_prefix + "The " + animal + " in the reference image talks straight to the camera, "

@@ -5,7 +5,7 @@
   var API = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? LOCAL_API_BASE : '';
   var state = {
     options: null,
-    form: { host: 'tank', shot: 'full', ratio: '', resolution: '', language: 'Mandarin Chinese', model: '', scene: 'none', scene_prompt: '', voice: '', compose_scene: false, packaging: [] },
+    form: { host: 'photo', shot: 'full', ratio: '', resolution: '', language: 'Mandarin Chinese', model: '', scene: 'none', scene_prompt: '', voice: '', compose_scene: false, packaging: [] },
     upload: null,
     quote: null,
     project: null,
@@ -240,8 +240,9 @@
       + '  <label class="kb-field">语言<select id="kbLanguage">' + optList('languages', f.language) + '</select></label>'
       + '  <label class="kb-field">模型<select id="kbModel">' + optList('models', f.model) + '</select></label>'
       + '  <label class="kb-field">场景<select id="kbScene">' + optList('scenes', f.scene) + '</select></label>'
-      + '  <label class="kb-field">音色描述<input type="text" id="kbVoice" value="' + esc(f.voice || '') + '" placeholder="留空用默认"></label>'
+      + '  <label class="kb-field">音色描述<input type="text" id="kbVoice" value="' + esc(f.voice || '') + '" placeholder="留空按照片自动匹配"></label>'
       + '</div>'
+      + '<div style="font-size:10.5px;color:#94a3b8;margin-top:6px;line-height:1.5;">「白背心」是固定女性形象；上传自己的照片请选「照片本人（自动匹配）」，否则提示词会按女性生成。</div>'
       + '<label class="kb-field" id="kbSceneWrap" style="display:' + (isCustom ? 'flex' : 'none') + ';">场景描述<input type="text" id="kbScenePrompt" value="' + esc(f.scene_prompt || '') + '" placeholder="例如：夜晚霓虹街头，浅景深"></label>'
       + '<label style="display:flex;align-items:center;gap:6px;font-size:11px;color:#64748b;"><input type="checkbox" id="kbCompose"' + (f.compose_scene ? ' checked' : '') + '> 先合成场景图（只生成背景，人物用原图抠像；特写照片会像贴片，建议半身照）</label>'
       + '<div><div style="font-size:12px;font-weight:500;color:#0f172a;margin-bottom:2px;">后期包装技巧</div>'
