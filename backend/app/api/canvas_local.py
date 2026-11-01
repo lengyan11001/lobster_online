@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from .auth import _ServerUser, get_current_user_for_local
+from .assets import _upload_bytes_to_auth_server
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
@@ -248,6 +250,51 @@ def canvas_local_media(name: str):
     if not target.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
     return FileResponse(str(target))
+
+
+@router.post("/api/canvas-local/voice-clone", summary="画布：上传样本克隆音色（转发认证中心 MiniMax 克隆）")
+async def canvas_local_voice_clone(
+    request: Request,
+    file: UploadFile = File(...),
+    voice_name: str = Form(""),
+    text: str = Form("这是克隆音色的试听文本。"),
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+):
+    """本机只负责把样本转成公网 URL，克隆与扣费在服务器（canvas-voice/clone）完成。"""
+    from ..core.config import get_settings
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="音频文件为空")
+    if len(raw) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="音频不能超过 20MB")
+    filename = (file.filename or "voice-sample.mp3").strip()
+    content_type = (file.content_type or "audio/mpeg").strip() or "audio/mpeg"
+    public_url, info = await _upload_bytes_to_auth_server(raw, filename, content_type, request)
+    if not public_url:
+        raise HTTPException(status_code=502, detail=f"音频上传失败：{info}")
+    settings = get_settings()
+    base = (settings.auth_server_base or "").strip().rstrip("/")
+    auth = (request.headers.get("Authorization") or "").strip()
+    if not base or not auth:
+        raise HTTPException(status_code=401, detail="缺少登录态")
+    headers = {
+        "Authorization": auth if auth.lower().startswith("bearer ") else f"Bearer {auth}",
+        "Content-Type": "application/json",
+    }
+    payload = {"audio_url": public_url, "voice_name": voice_name or filename, "text": text}
+    try:
+        async with httpx.AsyncClient(timeout=180.0, trust_env=False) as client:
+            resp = await client.post(f"{base}/canvas-api/api/canvas-voice/clone", json=payload, headers=headers)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"克隆请求失败：{type(exc).__name__}") from exc
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"detail": resp.text[:300]}
+    if resp.status_code >= 400:
+        raise HTTPException(status_code=resp.status_code, detail=(data or {}).get("detail") or "克隆失败")
+    return data
 
 
 @router.get("/api/canvas-local/session", summary="画布会话（本机登录态 -> 画布用的用户信息）")

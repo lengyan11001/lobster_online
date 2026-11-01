@@ -18,3 +18,101 @@
   <div class="canvas-studio-boot" style="position:absolute;left:80px;right:0;top:0;bottom:0;display:flex;align-items:center;justify-content:center;font:14px/1.7 system-ui,-apple-system,'Microsoft YaHei',sans-serif;color:#666;background:#fff;">正在启动灵感画布…</div>
   <iframe id="lobster-canvas-frame" title="灵感画布" src="/static/canvas-ui/projects.html?v=20261026-canvas-ui-v10" style="flex:1 1 auto;height:100%;border:0;background:#fff;display:none;" allow="clipboard-write; fullscreen"></iframe>
 </div>
+
+<script>
+/* 画布音色克隆入口：本页自带，不依赖画布 bundle（画布内的“添加音色”是死入口）。 */
+(function () {
+  function ready(fn) {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', fn);
+    else fn();
+  }
+  ready(function () {
+    var shell = document.getElementById('lobsterCanvasStudioShell');
+    if (!shell || document.getElementById('lobsterVoiceFab')) return;
+
+    var style = document.createElement('style');
+    style.textContent = [
+      '#lobsterVoiceFab{position:absolute;right:18px;bottom:18px;z-index:60;border:0;border-radius:999px;padding:10px 16px;background:#2563eb;color:#fff;font-size:13px;box-shadow:0 6px 18px rgba(37,99,235,.35);cursor:pointer;}',
+      '#lobsterVoiceFab:hover{background:#1d4ed8;}',
+      '#lobsterVoiceMask{position:absolute;inset:0;background:rgba(15,23,42,.55);z-index:70;display:none;align-items:center;justify-content:center;}',
+      '#lobsterVoiceMask.show{display:flex;}',
+      '.lobster-voice-dialog{width:min(520px,92%);background:#fff;border-radius:14px;padding:18px 20px;box-shadow:0 24px 60px rgba(15,23,42,.35);font:14px/1.6 system-ui,-apple-system,"Microsoft YaHei",sans-serif;color:#0f172a;}',
+      '.lobster-voice-dialog h3{margin:0 0 6px;font-size:16px;}',
+      '.lobster-voice-dialog p.hint{margin:0 0 12px;font-size:12px;color:#64748b;}',
+      '.lobster-voice-row{margin:10px 0;}',
+      '.lobster-voice-row label{display:block;font-size:12px;color:#475569;margin-bottom:4px;}',
+      '.lobster-voice-row input[type=text],.lobster-voice-row textarea,.lobster-voice-row input[type=file]{width:100%;border:1px solid #e2e8f0;border-radius:8px;padding:8px 10px;font-size:13px;}',
+      '.lobster-voice-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:14px;}',
+      '.lobster-voice-actions button{border:0;border-radius:8px;padding:8px 14px;font-size:13px;cursor:pointer;}',
+      '.lobster-voice-actions .cancel{background:#f1f5f9;color:#475569;}',
+      '.lobster-voice-actions .ok{background:#2563eb;color:#fff;}',
+      '.lobster-voice-msg{font-size:12px;margin-top:10px;}'
+    ].join('');
+    document.head.appendChild(style);
+
+    var fab = document.createElement('button');
+    fab.id = 'lobsterVoiceFab';
+    fab.type = 'button';
+    fab.textContent = '＋ 新增音色';
+    shell.appendChild(fab);
+
+    var mask = document.createElement('div');
+    mask.id = 'lobsterVoiceMask';
+    mask.innerHTML = [
+      '<div class="lobster-voice-dialog">',
+      '<h3>克隆专属音色</h3>',
+      '<p class="hint">上传 10 秒以上清晰说话音频（mp3/m4a/wav，≤20MB），克隆完成后回到「语音合成 + 对口型」节点的音色列表选择。</p>',
+      '<div class="lobster-voice-row"><label>音频文件</label><input type="file" accept="audio/*,.mp3,.m4a,.wav" data-voice-file></div>',
+      '<div class="lobster-voice-row"><label>音色名称</label><input type="text" data-voice-name placeholder="例如：我的声音"></div>',
+      '<div class="lobster-voice-row"><label>试听文本（可选）</label><textarea rows="2" data-voice-text>这是克隆音色的试听文本。</textarea></div>',
+      '<div class="lobster-voice-msg" data-voice-msg></div>',
+      '<div class="lobster-voice-actions">',
+      '<button type="button" class="cancel" data-voice-cancel>取消</button>',
+      '<button type="button" class="ok" data-voice-submit>开始克隆</button>',
+      '</div>','</div>'
+    ].join('');
+    shell.appendChild(mask);
+
+    function open() { mask.classList.add('show'); }
+    function close() { mask.classList.remove('show'); }
+    fab.addEventListener('click', open);
+    mask.querySelector('[data-voice-cancel]').addEventListener('click', close);
+    mask.addEventListener('click', function (e) { if (e.target === mask) close(); });
+
+    var msg = mask.querySelector('[data-voice-msg]');
+    var submit = mask.querySelector('[data-voice-submit]');
+    submit.addEventListener('click', function () {
+      var fileInput = mask.querySelector('[data-voice-file]');
+      var file = fileInput.files && fileInput.files[0];
+      if (!file) { msg.textContent = '请先选择音频文件'; msg.style.color = '#dc2626'; return; }
+      var base = (typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? LOCAL_API_BASE : '';
+      var fd = new FormData();
+      fd.append('file', file);
+      fd.append('voice_name', (mask.querySelector('[data-voice-name]').value || '').trim());
+      fd.append('text', (mask.querySelector('[data-voice-text]').value || '').trim());
+      submit.disabled = true;
+      submit.textContent = '克隆中…';
+      msg.style.color = '#475569';
+      msg.textContent = '正在上传样本并克隆，通常 10–60 秒…';
+      fetch(base + '/api/canvas-local/voice-clone', {
+        method: 'POST',
+        headers: (typeof authHeaders === 'function' ? authHeaders() : {}),
+        body: fd
+      }).then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+        .then(function (res) {
+          if (!res.ok || !res.d.ok) throw new Error((res.d && res.d.detail) || '克隆失败');
+          msg.style.color = '#059669';
+          msg.textContent = '克隆成功（音色 ID：' + res.d.voice_id + '，已扣 ' + res.d.charged + ' 积分）。回到节点打开音色列表即可选择。';
+          submit.textContent = '完成';
+          setTimeout(function () { close(); submit.disabled = false; submit.textContent = '开始克隆'; }, 1800);
+        })
+        .catch(function (err) {
+          msg.style.color = '#dc2626';
+          msg.textContent = err && err.message ? err.message : '克隆失败';
+          submit.disabled = false;
+          submit.textContent = '开始克隆';
+        });
+    });
+  });
+})();
+</script>
