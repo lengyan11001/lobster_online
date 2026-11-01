@@ -2061,7 +2061,7 @@
       var finalUrl = result.source_url || result.url || result.video_url || '';
       if (options.useTemplate && finalUrl && !result.asset_id) {
         // 最终成片（套完模板的结果）才是要进内容记录的东西
-        return post('/api/assets/save-url', { url: finalUrl, media_type: 'video' }).then(function(saved) {
+        return post('/api/assets/save-url', { url: finalUrl, media_type: 'video', tags: 'billing:multi_clip_mixer' }).then(function(saved) {
           var aid = (saved && (saved.asset_id || (saved.asset && (saved.asset.asset_id || saved.asset.id)))) || '';
           if (aid) result.asset_id = aid;
           appendBatchResult(result);
@@ -2211,7 +2211,7 @@
           var segUrl = item.source_url || item.url || item.video_url || '';
           if (segUrl && !item.asset_id) {
             // 只裁切的每一段就是最终结果：写入内容记录
-            return post('/api/assets/save-url', { url: segUrl, media_type: 'video' }).then(function(saved) {
+            return post('/api/assets/save-url', { url: segUrl, media_type: 'video', tags: 'billing:multi_clip_mixer' }).then(function(saved) {
               var aid = (saved && (saved.asset_id || (saved.asset && (saved.asset.asset_id || saved.asset.id)))) || '';
               if (aid) item.asset_id = aid;
               appendBatchResult(item);
@@ -2236,8 +2236,23 @@
     if (!state.clips.length) return showMessage('请先添加至少一个视频。', true);
     var useTemplate = !!(($('mcmTemplateSwitch') || {}).checked);
     var useMusic = !!(($('mcmMusicSwitch') || {}).checked);
-    setBusy(true, '正在准备素材...');
     Promise.resolve().then(function() {
+      // 计费预检查：每出一个最终成片 100 积分
+      if (typeof API_BASE === 'undefined' || typeof authHeaders !== 'function') return null;
+      var mode = currentClipMode();
+      var needOutputs = mode === 'cut_only'
+        ? state.clips.length
+        : (textModePerSegment() && (($('mcmTemplateSwitch') || {}).checked) ? 1 : outputCount());
+      var needCredits = Math.max(1, needOutputs) * 100;
+      return fetch(API_BASE + '/auth/me', { headers: authHeaders() })
+        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(me) {
+          var bal = me && me.credits != null ? Number(me.credits) : null;
+          if (bal !== null && bal < needCredits) {
+            throw new Error('积分不足：本次预计产出 ' + Math.max(1, needOutputs) + ' 条成片，需要 ' + needCredits + ' 积分，当前余额 ' + bal + '。');
+          }
+        });
+    }).then(function() {
       if (useTemplate && !state.templateCatalog.length) return loadTemplates(true);
       return null;
     }).then(function() {

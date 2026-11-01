@@ -56,6 +56,59 @@ class MultiClipRenderBody(BaseModel):
     intermediate: bool = False
 
 
+MULTI_CLIP_OUTPUT_CREDITS = 100.0
+
+
+async def _charge_multi_clip_output(
+    request: Request,
+    current_user: _ServerUser,
+    *,
+    ref_id: str,
+    title: str,
+) -> None:
+    """每产出一条最终成片扣 100 积分（认证中心记账，幂等键=ref_id）。"""
+    from ..core.config import get_settings
+
+    settings = get_settings()
+    base = (settings.auth_server_base or "").strip().rstrip("/")
+    auth = (request.headers.get("Authorization") or "").strip()
+    if not base or not auth or not ref_id:
+        return
+    headers = {
+        "Authorization": auth if auth.lower().startswith("bearer ") else f"Bearer {auth}",
+        "Content-Type": "application/json",
+    }
+    internal_key = (getattr(settings, "lobster_mcp_billing_internal_key", "") or "").strip()
+    if internal_key:
+        headers["X-Lobster-Mcp-Billing"] = internal_key
+    payload = {
+        "feature": "multi_clip_mixer",
+        "credits": MULTI_CLIP_OUTPUT_CREDITS,
+        "ref_id": ref_id,
+        "description": ("多段混剪成片：" + str(title or ""))[:180],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
+            resp = await client.post(f"{base}/api/billing/feature-charge", json=payload, headers=headers)
+    except Exception:
+        logger.warning("[multi-clip-mixer] charge failed ref=%s", ref_id, exc_info=True)
+        return
+    if resp.status_code == 402:
+        detail = "积分不足：本次成片需要 %d 积分" % int(MULTI_CLIP_OUTPUT_CREDITS)
+        try:
+            detail = (resp.json() or {}).get("detail") or detail
+        except Exception:
+            pass
+        raise HTTPException(status_code=402, detail=detail)
+    if resp.status_code >= 400:
+        logger.warning(
+            "[multi-clip-mixer] charge rejected ref=%s status=%s body=%s",
+            ref_id,
+            resp.status_code,
+            resp.text[:200],
+        )
+
+
 def _find_ffprobe(ffmpeg: str) -> str:
     executable = Path(ffmpeg)
     sibling = executable.with_name("ffprobe.exe" if executable.suffix.lower() == ".exe" else "ffprobe")
@@ -773,6 +826,12 @@ async def concat_multi_clip_videos(
         db.rollback()
         raise
 
+    await _charge_multi_clip_output(
+        request,
+        current_user,
+        ref_id=f"mcm:{asset_id}",
+        title=body.title or "多段视频混剪",
+    )
     return {
         "ok": True,
         "asset_id": asset_id,
@@ -852,6 +911,13 @@ async def render_multi_clip_video(
         db.rollback()
         raise
 
+    if not body.intermediate:
+        await _charge_multi_clip_output(
+            request,
+            current_user,
+            ref_id=f"mcm:{asset_id}",
+            title=body.title or "多段视频混剪",
+        )
     return {
         "ok": True,
         "asset_id": asset_id,
