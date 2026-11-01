@@ -809,16 +809,53 @@ def koubo_project_create(body: ProjectBody):
     return row
 
 
+def _running_project_ids() -> set:
+    with _GEN_LOCK:
+        return {str(j.get("project_id") or "") for j in _GEN.values() if j.get("status") == "running"}
+
+
+def _summary_row(row: Dict[str, Any], running: set) -> Dict[str, Any]:
+    pid = str(row.get("id") or "")
+    status = row.get("status") or "ready"
+    video = OUTPUT_DIR / pid / "final.mp4"
+    packaged = OUTPUT_DIR / pid / "final_packaged.mp4"
+    if status == "generating" and pid not in running:
+        status = "generated" if video.is_file() else "ready"
+    return {
+        "id": pid,
+        "name": row.get("name") or pid,
+        "status": status,
+        "created_at": row.get("created_at") or "",
+        "total_credits": row.get("total_credits") or 0,
+        "total_seconds": row.get("total_seconds") or 0,
+        "segments_count": len(row.get("segments") or []),
+        "has_video": video.is_file(),
+        "video_v": int(video.stat().st_mtime) if video.is_file() else 0,
+        "rendered": packaged.is_file(),
+        "rendered_v": int(packaged.stat().st_mtime) if packaged.is_file() else 0,
+    }
+
+
 @router.get("/api/skills/digital-human-koubo/projects", summary="数字人koubo 项目列表")
 def koubo_projects():
-    return {"projects": _load_projects()}
+    running = _running_project_ids()
+    return {"projects": [_summary_row(r, running) for r in _load_projects()]}
+
+
+@router.get("/api/skills/digital-human-koubo/projects/summary", summary="数字人koubo 项目列表（轻量）")
+def koubo_projects_summary():
+    running = _running_project_ids()
+    return {"projects": [_summary_row(r, running) for r in _load_projects()]}
 
 
 @router.get("/api/skills/digital-human-koubo/projects/{pid}", summary="数字人koubo 项目详情")
 def koubo_project(pid: str):
+    running = _running_project_ids()
     for row in _load_projects():
         if row.get("id") == pid:
-            return row
+            out = dict(row)
+            out.update(_summary_row(row, running))
+            return out
     raise HTTPException(status_code=404, detail="项目不存在")
 
 
@@ -1335,7 +1372,7 @@ def koubo_generate(pid: str, body: GenerateBody, request: Request):
             row["status"] = "generating"
     _save_projects(items)
     job_id = uuid.uuid4().hex[:10]
-    job = {"id": job_id, "status": "running", "progress": 0, "message": "准备提交",
+    job = {"id": job_id, "project_id": pid, "status": "running", "progress": 0, "message": "准备提交",
            "current": 0, "total": 1, "error": "", "started_at": time.time()}
     with _GEN_LOCK:
         _GEN[job_id] = job

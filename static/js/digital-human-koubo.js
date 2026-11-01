@@ -10,6 +10,7 @@
     quote: null,
     project: null,
     projects: [],
+    preview: null,
     components: [],
     job: null,
     render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false },
@@ -171,7 +172,7 @@
       + '  <div class="kb-meta" id="kbMeta"></div>'
       + '  <div id="kbPack"></div>'
       + '  <div class="kb-card"><div class="kb-sec-title">分段<small id="kbSegCount">0 段</small></div><div id="kbSegments"><span style="font-size:12px;color:#94a3b8;">还没有分段，先点「只看分段报价」或直接生成。</span></div></div>'
-      + '  <div class="kb-card"><div class="kb-sec-title">项目记录<small id="kbProjCount"></small></div><div id="kbProjects"></div></div>'
+      + '  <div class="kb-card"><div class="kb-sec-title">项目记录<span><small id="kbProjCount"></small> <button type="button" class="kb-btn" id="kbProjRefresh" style="margin-left:8px;">刷新</button></span></div><div id="kbProjects"></div></div>'
       + '  <div class="kb-log" id="kbLog">准备就绪</div>'
       + '</section></div>';
   }
@@ -423,7 +424,9 @@
   function renderPreview() {
     var box = $('kbPreview');
     if (!box) return;
-    if (state.job) {
+    var proj = state.preview || state.project;
+    var isPreview = !!state.preview;
+    if (state.job && !isPreview) {
       var pct = state.job.total ? Math.round((state.job.done || 0) * 100 / state.job.total) : (state.job.progress || 0);
       if (state.job.status === 'running') {
         box.innerHTML = '<div class="kb-empty"><b>' + esc(state.job.message || '生成中') + '</b>任务在服务器排队，完成后自动出现在这里</div>'
@@ -435,11 +438,26 @@
         return;
       }
     }
-    if (state.project && state.project.status === 'generated') {
-      var packaged = state.render.packaged || state.project.rendered;
-      var src = API + '/api/skills/digital-human-koubo/projects/' + state.project.id + (packaged ? '/rendered' : '/video');
-      box.innerHTML = '<video controls playsinline src="' + esc(src) + '"></video>'
-        + (packaged ? '<div style="position:absolute;left:14px;top:12px;background:rgba(15,23,42,.7);color:#e2e8f0;font-size:11px;padding:4px 9px;border-radius:999px;">包装版</div><a href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/video') + '" target="_blank" style="position:absolute;right:14px;top:12px;color:#cbd5e1;font-size:11px;text-decoration:underline;">看原片</a>' : '');
+    if (proj && proj.status === 'generated' && proj.has_video !== false) {
+      var packaged = isPreview ? !!proj.rendered : (state.render.packaged || proj.rendered);
+      var ver = packaged ? (proj.rendered_v || 0) : (proj.video_v || 0);
+      var src = API + '/api/skills/digital-human-koubo/projects/' + proj.id + (packaged ? '/rendered' : '/video') + '?v=' + (ver || Date.now());
+      box.innerHTML = '<video controls playsinline preload="metadata" src="' + esc(src) + '"></video>'
+        + '<div style="position:absolute;left:14px;top:12px;background:rgba(15,23,42,.72);color:#e2e8f0;font-size:11px;padding:4px 9px;border-radius:999px;">'
+        + (isPreview ? '历史预览：' : '当前项目：') + esc(proj.name) + '</div>'
+        + (isPreview ? '<button type="button" class="kb-btn" id="kbPreviewBack" style="position:absolute;right:14px;top:10px;">返回当前</button>' : '')
+        + (packaged ? '<div style="position:absolute;left:14px;bottom:12px;background:rgba(15,23,42,.72);color:#e2e8f0;font-size:11px;padding:4px 9px;border-radius:999px;">包装版</div><a href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + proj.id + '/video') + '" target="_blank" style="position:absolute;right:14px;bottom:12px;color:#cbd5e1;font-size:11px;text-decoration:underline;">看原片</a>' : '');
+      var vid = box.querySelector('video');
+      if (vid) { try { vid.load(); } catch (e) {} }
+      var back = $('kbPreviewBack');
+      if (back) back.onclick = function () { state.preview = null; renderPreview(); renderProjects(); };
+      return;
+    }
+    if (isPreview) {
+      box.innerHTML = '<div class="kb-empty"><b>' + esc(proj.name) + '</b>这个项目还没有成片</div>'
+        + '<button type="button" class="kb-btn" id="kbPreviewBack" style="position:absolute;right:14px;top:10px;">返回当前</button>';
+      var back2 = $('kbPreviewBack');
+      if (back2) back2.onclick = function () { state.preview = null; renderPreview(); renderProjects(); };
       return;
     }
     box.innerHTML = '<div class="kb-empty"><b>还没有成片</b>左侧填好形象与口播稿，点击「生成第 1 段」</div>';
@@ -462,10 +480,24 @@
       box.innerHTML = '<span style="font-size:12px;color:#94a3b8;">还没有项目。生成或保存后会出现在这里。</span>';
       return;
     }
+    var activeId = (state.preview && state.preview.id) || (state.project && state.project.id);
     box.innerHTML = state.projects.map(function (p) {
-      return '<div class="kb-proj"><div><b>' + esc(p.name) + '</b><br><small>' + esc(String(p.created_at || '').replace('T', ' ')) + ' · ' + (p.total_credits || 0) + ' credits · ' + esc(p.status || '') + '</small></div>'
-        + '<div style="display:flex;gap:6px;"><button type="button" class="kb-btn" data-open="' + esc(p.id) + '">打开</button><button type="button" class="kb-btn" data-del="' + esc(p.id) + '">删除</button></div></div>';
+      var st = p.status || 'ready';
+      var badge = st === 'generated' ? (p.rendered ? '已包装' : '已出片') : (st === 'generating' ? '生成中' : '未生成');
+      var cls = st === 'generated' ? 'ok' : (st === 'generating' ? 'warn' : '');
+      var active = p.id === activeId;
+      return '<div class="kb-proj" style="' + (active ? 'background:#f0f7ff;border-radius:8px;padding-left:8px;padding-right:8px;' : '') + '">'
+        + '<div><b>' + esc(p.name) + '</b> <span class="kb-pill ' + cls + '" style="margin-left:6px;">' + badge + '</span><br>'
+        + '<small>' + esc(String(p.created_at || '').replace('T', ' ')) + ' · ' + (p.segments_count || 0) + ' 段 · ' + (p.total_credits || 0) + ' credits' + (active ? ' · 当前' : '') + '</small></div>'
+        + '<div style="display:flex;gap:6px;">'
+        + (p.has_video ? '<button type="button" class="kb-btn" data-preview="' + esc(p.id) + '">预览</button>' : '')
+        + '<button type="button" class="kb-btn" data-open="' + esc(p.id) + '">打开</button>'
+        + '<button type="button" class="kb-btn" data-del="' + esc(p.id) + '">删除</button>'
+        + '</div></div>';
     }).join('');
+    box.querySelectorAll('[data-preview]').forEach(function (btn) {
+      btn.onclick = function () { previewProject(btn.getAttribute('data-preview')); };
+    });
     box.querySelectorAll('[data-open]').forEach(function (btn) {
       btn.onclick = function () { openProject(btn.getAttribute('data-open')); };
     });
@@ -474,9 +506,24 @@
         var pid = btn.getAttribute('data-del');
         if (!window.confirm('删除这个项目？')) return;
         fetch(API + '/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid), { method: 'DELETE', headers: authOnly() })
-          .then(function () { log('已删除 ' + pid); if (state.project && state.project.id === pid) { state.project = null; renderAll(); } loadProjects(); });
+          .then(function () {
+            log('已删除 ' + pid);
+            if (state.preview && state.preview.id === pid) state.preview = null;
+            if (state.project && state.project.id === pid) state.project = null;
+            state.render.packaged = false;
+            loadProjects(); renderPreview(); renderStatus();
+          });
       };
     });
+  }
+
+  function previewProject(pid) {
+    req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid)).then(function (p) {
+      state.preview = p;
+      renderPreview();
+      renderProjects();
+      log('预览历史项目 ' + p.name);
+    }).catch(function (e) { log('预览失败：' + e.message); });
   }
 
   function renderAll() {
@@ -536,6 +583,7 @@
   }
 
   function generate(all) {
+    state.preview = null;
     var btn = $('kbGenerate');
     if (btn) { btn.disabled = true; }
     var prep = state.project ? Promise.resolve(state.project) : quote(true).then(saveProject);
@@ -565,13 +613,15 @@
       req('/api/skills/digital-human-koubo/generate/jobs/' + encodeURIComponent(jobId)).then(function (job) {
         state.job = job;
         renderPreview(); renderStatus();
+        if (job.status === 'running') loadProjects();
         if (job.status !== 'running') {
           clearInterval(state.timer); state.timer = null;
           var btn = $('kbGenerate'); if (btn) btn.disabled = false;
           if (job.status === 'done') {
             log('生成完成');
+            loadProjects();
             req('/api/skills/digital-human-koubo/projects/' + state.project.id).then(function (p) {
-              state.project = p; renderAll();
+              state.project = p; state.render.packaged = !!p.rendered; renderAll();
             });
           } else {
             log('生成失败：' + (job.error || job.message || ''));
@@ -583,6 +633,7 @@
 
   function openProject(pid) {
     req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid)).then(function (p) {
+      state.preview = null;
       state.project = p;
       state.script = p.script || '';
       state.form = Object.assign({}, state.form, p.options || {});
@@ -622,8 +673,16 @@
   }
 
   function loadProjects() {
-    req('/api/skills/digital-human-koubo/projects').then(function (d) {
+    req('/api/skills/digital-human-koubo/projects/summary').then(function (d) {
       state.projects = d.projects || [];
+      if (state.project && state.project.id) {
+        var cur = state.projects.filter(function (x) { return x.id === state.project.id; })[0];
+        if (cur) Object.assign(state.project, cur);
+      }
+      if (state.preview && state.preview.id) {
+        var pv = state.projects.filter(function (x) { return x.id === state.preview.id; })[0];
+        if (pv) Object.assign(state.preview, pv);
+      }
       renderProjects();
     }).catch(function () {});
   }
@@ -694,6 +753,7 @@
     var sv = $('kbSave'); if (sv) sv.onclick = function () { quote(false).then(saveProject).catch(function () {}); };
     var ex = $('kbExport'); if (ex) ex.onclick = exportTasks;
     var dp = $('kbDeps'); if (dp) dp.onclick = openDeps;
+    var pr = $('kbProjRefresh'); if (pr) pr.onclick = function () { loadProjects(); log('已刷新项目列表'); };
     var bk = $('kbBack'); if (bk) bk.onclick = function () {
       if (typeof window._switchToHiddenView === 'function') window._switchToHiddenView('skill-store');
       else if (typeof showLobsterView === 'function') showLobsterView('skill-store');
