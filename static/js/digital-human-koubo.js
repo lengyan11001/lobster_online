@@ -13,6 +13,7 @@
     preview: null,
     components: [],
     job: null,
+    dirty: false,
     render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false },
     qa: null,
     timer: null
@@ -207,7 +208,7 @@
         : '<ul class="kb-checks"><li>已随项目保存</li></ul>')
       + '<div style="margin-top:8px;"><button type="button" class="kb-btn" id="kbReplace">换一张</button></div>';
     var rep = $('kbReplace');
-    if (rep) rep.onclick = function () { state.upload = null; renderAvatar(); };
+    if (rep) rep.onclick = function () { state.upload = null; markDirty(); renderAvatar(); };
   }
 
   function bindUpload() {
@@ -277,16 +278,17 @@
   function bindParams() {
     var box = $('kbParams');
     if (!box) return;
-    box.addEventListener('change', function (ev) {
+    box.onchange = function (ev) {
       if (ev && ev.target && ev.target.id === 'kbHost') {
         var h = ((state.options && state.options.hosts) || []).filter(function (x) { return x.id === ($('kbHost') || {}).value; })[0];
         if (h && !(($('kbRatio') || {}).value)) { var sel = $('kbRatio'); if (sel) sel.value = h.ratio || ''; }
       }
       readParams();
+      markDirty();
       var wrap = $('kbSceneWrap');
       if (wrap) wrap.style.display = state.form.scene === 'custom' ? 'flex' : 'none';
-    });
-    box.addEventListener('input', function () { readParams(); });
+    };
+    box.oninput = function () { readParams(); markDirty(); };
   }
 
   function updateParamSummary() {
@@ -468,6 +470,7 @@
     var el = $('kbStatus');
     if (!el) return;
     if (state.job && state.job.status === 'running') { el.textContent = '生成中'; el.className = 'kb-pill warn'; return; }
+    if (state.dirty) { el.textContent = '有未保存修改'; el.className = 'kb-pill warn'; return; }
     if (state.project && state.project.status === 'generated') { el.textContent = '已出片'; el.className = 'kb-pill ok'; return; }
     if (state.project && state.project.id) { el.textContent = '已保存'; el.className = 'kb-pill'; return; }
     el.textContent = '未保存'; el.className = 'kb-pill';
@@ -538,13 +541,18 @@
     el.textContent = n + ' 字 · 约 ' + Math.max(1, Math.ceil(n / 5.4)) + ' 秒';
   }
 
+  function markDirty() {
+    state.dirty = true;
+    renderStatus();
+  }
+
   function upload(f) {
     var fd = new FormData();
     fd.append('file', f);
     log('上传形象照 ' + f.name);
     fetch(API + '/api/skills/digital-human-koubo/uploads', { method: 'POST', headers: authOnly(), body: fd })
       .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail)); return d; }); })
-      .then(function (d) { state.upload = d; log('形象照已上传 ' + d.checks.width + '×' + d.checks.height); renderAvatar(); })
+      .then(function (d) { state.upload = d; markDirty(); log('形象照已上传 ' + d.checks.width + '×' + d.checks.height); renderAvatar(); })
       .catch(function (e) { log('上传失败：' + e.message); });
   }
 
@@ -576,8 +584,12 @@
       })
     }).then(function (p) {
       state.project = p;
+      state.dirty = false;
+      state.render.packaged = false;
+      state.render.job = null;
+      state.qa = null;
       if ($('kbProjName')) $('kbProjName').textContent = p.name;
-      renderStatus(); renderProjects(); loadProjects();
+      renderStatus(); renderPreview(); renderProjects(); loadProjects();
       log('项目已保存 ' + p.id);
       return p;
     });
@@ -587,7 +599,9 @@
     state.preview = null;
     var btn = $('kbGenerate');
     if (btn) { btn.disabled = true; }
-    var prep = state.project ? Promise.resolve(state.project) : quote(true).then(saveProject);
+    var needsNewProject = !state.project || state.dirty;
+    if (state.project && state.dirty) log('检测到形象/文案/参数已修改，先创建新项目…');
+    var prep = needsNewProject ? quote(true).then(saveProject) : Promise.resolve(state.project);
     prep.then(function (p) {
       log('提交生成（' + (all ? '全部' : '第 1 段') + '）…');
       return req('/api/skills/digital-human-koubo/projects/' + p.id + '/generate', {
@@ -636,6 +650,7 @@
     req('/api/skills/digital-human-koubo/projects/' + encodeURIComponent(pid)).then(function (p) {
       state.preview = null;
       state.project = p;
+      state.dirty = false;
       state.script = p.script || '';
       state.form = Object.assign({}, state.form, p.options || {});
       state.quote = { segments: p.segments || [], total_seconds: p.total_seconds || 0, total_credits: p.total_credits || 0 };
@@ -745,7 +760,7 @@
 
   function bind() {
     var ta = $('kbText');
-    if (ta) ta.addEventListener('input', updateCount);
+    if (ta) ta.addEventListener('input', function () { updateCount(); markDirty(); });
     var tgl = $('kbParamToggle');
     if (tgl) tgl.onclick = function () { $('kbParams').classList.toggle('open'); };
     var q = $('kbQuote'); if (q) q.onclick = function () { quote(false); };

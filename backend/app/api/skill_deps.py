@@ -832,9 +832,9 @@ def _summary_row(row: Dict[str, Any], running: set) -> Dict[str, Any]:
         "total_seconds": row.get("total_seconds") or 0,
         "segments_count": len(row.get("segments") or []),
         "has_video": video.is_file(),
-        "video_v": int(video.stat().st_mtime) if video.is_file() else 0,
+        "video_v": int(video.stat().st_mtime_ns // 1_000_000) if video.is_file() else 0,
         "rendered": packaged.is_file(),
-        "rendered_v": int(packaged.stat().st_mtime) if packaged.is_file() else 0,
+        "rendered_v": int(packaged.stat().st_mtime_ns // 1_000_000) if packaged.is_file() else 0,
     }
 
 
@@ -1054,9 +1054,14 @@ def _ensure_asset(token: str, project: Dict[str, Any]) -> tuple[str, str]:
     """把本地形象照送进素材库，并拿到可公网访问的图片 URL（上游只认 URL）。"""
     asset_id = project.get("photo_asset_id") or ""
     image_url = project.get("photo_public_url") or ""
-    if asset_id and image_url:
-        return asset_id, image_url
     photo_id = project.get("photo_id") or ""
+    asset_photo_id = project.get("photo_asset_source_id") or ""
+    if asset_id and image_url and asset_photo_id and asset_photo_id == photo_id:
+        return asset_id, image_url
+    if asset_id or image_url:
+        project.pop("photo_asset_id", None)
+        project.pop("photo_public_url", None)
+        project.pop("photo_asset_source_id", None)
     src = UPLOAD_DIR / photo_id if photo_id else None
     if not src or not src.is_file():
         raise RuntimeError("请先在第一步上传人物照片")
@@ -1090,6 +1095,7 @@ def _ensure_asset(token: str, project: Dict[str, Any]) -> tuple[str, str]:
         )
     project["photo_asset_id"] = aid
     project["photo_public_url"] = url
+    project["photo_asset_source_id"] = photo_id
     return aid, url
 
 
