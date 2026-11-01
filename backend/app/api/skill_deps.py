@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import math
 import os
 import re
@@ -31,6 +32,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = ROOT / "data" / "koubo"
@@ -1251,6 +1253,45 @@ def _compose_scene(token: str, photo_url: str, scene_prompt: str, installation_i
     return url
 
 
+def _download_media(url: str, dest: Path, attempts: int = 5) -> int:
+    """下载上游成片；上游 CDN 偶发 SSL EOF，做多次重试并绕开系统代理。
+
+    每次写独立 .part 文件，成功后再原子替换，避免半截 mp4 被当成成片。
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    errors: List[str] = []
+    for attempt in range(1, max(1, attempts) + 1):
+        temp = dest.with_name(f".{dest.name}.{uuid.uuid4().hex[:8]}.part")
+        written = 0
+        try:
+            with httpx.Client(
+                timeout=httpx.Timeout(180.0, connect=20.0, read=120.0),
+                follow_redirects=True,
+                trust_env=False,
+            ) as client:
+                with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    with temp.open("wb") as handle:
+                        for chunk in response.iter_bytes(chunk_size=1024 * 256):
+                            if chunk:
+                                handle.write(chunk)
+                                written += len(chunk)
+            if written <= 0:
+                raise ValueError("上游返回空文件")
+            temp.replace(dest)
+            return written
+        except Exception as exc:
+            errors.append(f"attempt {attempt}: {exc}")
+            logger.warning("[koubo] video download failed attempt=%s/%s url=%s err=%s", attempt, attempts, url[:180], exc)
+            try:
+                temp.unlink(missing_ok=True)
+            except Exception:
+                pass
+            if attempt < attempts:
+                time.sleep(min(1.5 * attempt, 6.0))
+    raise RuntimeError("视频下载失败（已重试 %s 次）：%s" % (attempts, " | ".join(errors)[-800:]))
+
+
 def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, installation_id: str = "") -> None:
     job = _GEN[job_id]
     try:
@@ -1321,12 +1362,12 @@ def _gen_job(job_id: str, project_id: str, token: str, only_first: bool, install
             url = urls[0]
             dest = out_dir / ("s%d.mp4" % idx)
             job["message"] = "下载第 %d 段" % idx
-            with httpx.Client(timeout=httpx.Timeout(120.0, read=None), follow_redirects=True) as client:
-                with client.stream("GET", url) as r:
-                    r.raise_for_status()
-                    with open(dest, "wb") as fh:
-                        for chunk in r.iter_bytes(1024 * 256):
-                            fh.write(chunk)
+            try:
+                _download_media(url, dest)
+            except Exception:
+                job["result_url"] = url
+                job["task_id"] = task_id or ""
+                raise
             generated.append({"id": seg.get("id"), "path": str(dest), "url": url, "task_id": task_id or ""})
             job["done"] = idx
 
