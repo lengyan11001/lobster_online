@@ -125,11 +125,22 @@
     var opts = options || {};
     var hs = headers();
     hs['Content-Type'] = 'application/json';
+    var timeoutMs = Number(opts.timeoutMs || 120000);
+    var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { try { ctrl.abort(); } catch (e) {} }, timeoutMs) : null;
     return fetch(base + path, {
       method: opts.method || 'POST',
       headers: hs,
-      body: JSON.stringify(opts.body || {})
-    }).then(parseJsonResponse);
+      body: JSON.stringify(opts.body || {}),
+      signal: ctrl ? ctrl.signal : undefined
+    }).then(function (resp) {
+      if (timer) clearTimeout(timer);
+      return parseJsonResponse(resp);
+    }).catch(function (err) {
+      if (timer) clearTimeout(timer);
+      if (err && err.name === 'AbortError') throw new Error('请求超时（' + Math.round(timeoutMs / 1000) + ' 秒），请稍后重试');
+      throw err;
+    });
   }
 
   function buildDashboardSnapshot(messageItems, runItems) {
@@ -1773,9 +1784,17 @@
     var pools = [].concat(state.lastRecorderItems || [], state.lastRunItems || []);
     var item = pools.filter(function (row) { return String(row && row.id) === String(recordId); })[0];
     if (!item) return { title: '', text: '' };
-    var rp = item.resultPayload && typeof item.resultPayload === 'object' ? item.resultPayload : {};
-    var text = [rp.summary_text, rp.transcript_text, item.resultText, item.content, item.progressDetail]
-      .filter(function (v) { return String(v || '').trim(); })
+    // 记录来源有两种命名：camelCase（本地整理结果）和 snake_case（/runs 接口原始返回）。
+    // 之前只认 resultPayload，snake_case 的记录取不到正文 → 点了“没反应”（其实是在弹窗前就返回了）。
+    var rp = item.resultPayload && typeof item.resultPayload === 'object'
+      ? item.resultPayload
+      : (item.result_payload && typeof item.result_payload === 'object' ? item.result_payload : {});
+    var rpMcp = (rp && rp.mcp && typeof rp.mcp === 'object') ? rp.mcp : {};
+    var text = [
+      rp.summary_text, rp.transcript_text, rp.text, rp.content,
+      rpMcp.summary_text, rpMcp.transcript_text, rpMcp.text,
+      item.resultText, item.content, item.summary, item.detail, item.progressDetail, item.output_text
+    ].filter(function (v) { return String(v || '').trim(); })
       .join('\n');
     return { title: String(item.title || ''), text: text };
   }
@@ -1889,10 +1908,12 @@
     var nameNode = apeEl('agentProfileExtractTemplateName');
     if (nameNode) nameNode.value = '';
     if (!String(source.text || '').trim()) {
+      console.warn('[提取资料] 记录没有可用文本 recordId=', recordId, source);
       apeState.loading = false; apeRender();
       apeMsg('这条记录还没有摘要/转写文本，等秘书整理完成后再试。', true);
       return;
     }
+    console.info('[提取资料] 发起提取 recordId=%s textLen=%d', recordId, String(source.text).length);
     postCloudJson('/api/ip-content/profile-extract', {
       method: 'POST',
       body: { title: source.title, text: source.text, targets: ['profile', 'keywords', 'competitors', 'memory'] }
