@@ -468,11 +468,11 @@ async def submit_clip(
     elif scene == "oralMixCutting":
         endpoint = "/v1/clip/video/broadcast_mixcut"
         payload["processRules"]["materialComposition"] = _normalize_material_composition(body.material_composition)
-        payload["processRules"]["videoDuration"] = max(5, min(int(body.video_duration or 30), 300))
+        payload["processRules"]["videoDuration"] = max(1, min(int(body.video_duration or 30), 300))
     elif scene == "newsMixCutting":
         endpoint = "/v1/clip/video/news_mixcut"
         payload["processRules"]["materialComposition"] = _normalize_material_composition(body.material_composition)
-        payload["processRules"]["videoDuration"] = max(5, min(int(body.video_duration or 30), 300))
+        payload["processRules"]["videoDuration"] = max(1, min(int(body.video_duration or 30), 300))
 
     if scene in {"virtualman", "oralMixCutting"}:
         if audio_url:
