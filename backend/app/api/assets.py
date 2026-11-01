@@ -23,7 +23,7 @@ import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import func, text
+from sqlalchemy import func, or_, text
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user_for_local, _ServerUser
@@ -3283,11 +3283,20 @@ def list_assets(
     asset_origin: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
+    include_intermediate: Optional[str] = None,
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
 ):
     origin_filter = _normalize_asset_origin_filter(origin or asset_origin)
     query = db.query(Asset).filter(Asset.user_id == current_user.id)
+    # 内容记录只展示最终产物：套模板/拼接前的中间素材带 content_visibility=intermediate，默认隐藏
+    if str(include_intermediate or "").strip().lower() not in {"1", "true", "yes"}:
+        query = query.filter(
+            or_(
+                Asset.meta["content_visibility"].as_string().is_(None),
+                Asset.meta["content_visibility"].as_string() != "intermediate",
+            )
+        )
     if media_type:
         query = query.filter(Asset.media_type == media_type)
     if q:

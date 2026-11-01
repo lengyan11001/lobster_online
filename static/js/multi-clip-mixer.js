@@ -2036,6 +2036,8 @@
       audio_volume: 1,
       clip_mode: currentClipMode(),
       output_index: runIndex,
+      // 后面还要套模板：这条基础成片属于中间产物，不写入内容记录
+      intermediate: !!options.useTemplate,
       bgm_url: music ? music.bgm_url : '',
       bgm_name: music ? music.music_name : '',
       bgm_volume: Number((($('mcmMusicVolume') || {}).value || 0.24)),
@@ -2056,6 +2058,17 @@
     }).then(function(result) {
       result = result || {};
       if (template) result.template_name = template.name || '';
+      var finalUrl = result.source_url || result.url || result.video_url || '';
+      if (options.useTemplate && finalUrl && !result.asset_id) {
+        // 最终成片（套完模板的结果）才是要进内容记录的东西
+        return post('/api/assets/save-url', { url: finalUrl, media_type: 'video' }).then(function(saved) {
+          var aid = (saved && (saved.asset_id || (saved.asset && (saved.asset.asset_id || saved.asset.id)))) || '';
+          if (aid) result.asset_id = aid;
+          appendBatchResult(result);
+          if (options.useTemplate) restoreTemplateState(templateBeforeRun);
+          return result;
+        });
+      }
       appendBatchResult(result);
       if (options.useTemplate) restoreTemplateState(templateBeforeRun);
       return result;
@@ -2094,7 +2107,9 @@
           clip_mode: currentClipMode(),
           output_index: idx + 1,
           output_ratio: currentOutputRatio(),
-          fill_mode: currentFillMode()
+          fill_mode: currentFillMode(),
+          // 逐段套模板：本段只是中间产物，最终以拼接结果入内容记录
+          intermediate: true
         });
       }).then(function(base) {
         state.lastBaseResult = base;
@@ -2112,7 +2127,7 @@
       }).then(function(res) {
         var url = (res && (res.source_url || res.preview_url || '')) || '';
         if (!url) throw new Error('第 ' + (idx + 1) + ' 段模板成片没有返回地址');
-        return post('/api/assets/save-url', { url: url, media_type: 'video' }).then(function(saved) {
+        return post('/api/assets/save-url', { url: url, media_type: 'video', content_visibility: 'intermediate' }).then(function(saved) {
           var aid = (saved && (saved.asset_id || (saved.asset && (saved.asset.asset_id || saved.asset.id)))) || '';
           if (!aid) throw new Error('第 ' + (idx + 1) + ' 段成片保存到素材库失败');
           outputs.push(aid);
@@ -2173,7 +2188,9 @@
           clip_mode: 'fixed',
           output_index: idx + 1,
           output_ratio: currentOutputRatio(),
-          fill_mode: currentFillMode()
+          fill_mode: currentFillMode(),
+          // 这一条只是套模板前的底片，最终以模板成片入内容记录
+          intermediate: true
         }).then(function(base) {
           state.lastBaseResult = base;
           if (provider === 'shanjian') {
@@ -2191,6 +2208,17 @@
             clip_index: idx + 1,
             completion_message: '第 ' + (idx + 1) + ' 段已生成'
           });
+          var segUrl = item.source_url || item.url || item.video_url || '';
+          if (segUrl && !item.asset_id) {
+            // 只裁切的每一段就是最终结果：写入内容记录
+            return post('/api/assets/save-url', { url: segUrl, media_type: 'video' }).then(function(saved) {
+              var aid = (saved && (saved.asset_id || (saved.asset && (saved.asset.asset_id || saved.asset.id)))) || '';
+              if (aid) item.asset_id = aid;
+              appendBatchResult(item);
+              last = item;
+              progress('template', 'done', '第 ' + (idx + 1) + '/' + total + ' 段完成');
+            });
+          }
           appendBatchResult(item);
           last = item;
           progress('template', 'done', '第 ' + (idx + 1) + '/' + total + ' 段完成');

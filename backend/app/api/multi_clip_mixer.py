@@ -52,6 +52,8 @@ class MultiClipRenderBody(BaseModel):
     output_ratio: str = Field("", max_length=16)
     # fill_mode: cover = 铺满（裁切） / blur = 模糊铺底 + 完整画面 / fit = 完整 + 黑边；空 = 旧行为
     fill_mode: str = Field("", max_length=16)
+    # 中间产物（后面还会套模板/拼接）：标记后不进「内容记录」，避免和最终成片混在一起
+    intermediate: bool = False
 
 
 def _find_ffprobe(ffmpeg: str) -> str:
@@ -837,6 +839,7 @@ async def render_multi_clip_video(
             "target_duration": rendered.get("target_duration"),
             "clip_mode": (body.clip_mode or "fixed").strip()[:32],
             "output_index": body.output_index,
+            "content_visibility": "intermediate" if body.intermediate else "",
             "bgm_name": (body.bgm_name or "").strip()[:120],
             "bgm_url": (body.bgm_url or "").strip()[:1000],
             "bgm_volume": body.bgm_volume,
