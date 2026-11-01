@@ -1089,6 +1089,31 @@ def _restamp_zip_static_assets(zip_path: Path, version: str, build: int) -> int:
     return changed
 
 
+_APPROVAL_DIR = str(Path(__file__).resolve().parent.parent / ".release_approvals")
+
+
+def _require_pack_approval(release_version: str, approved_version: str) -> None:
+    """打包闸门：没有用户明确批准（版本号 + 审批文件）不允许打 OTA 包。"""
+    version = str(release_version or "").strip()
+    if not version:
+        print("[BLOCKED] 必须显式指定 --release-version <version> 才能打包。", file=sys.stderr)
+        raise SystemExit(5)
+    if str(approved_version or "").strip() != version:
+        print(f"[BLOCKED] 必须显式传 --approved-version {version}（用户明确批准该版本）。", file=sys.stderr)
+        raise SystemExit(5)
+    if (os.environ.get("LOBSTER_RELEASE_APPROVED") or "").strip() != version:
+        print("[BLOCKED] 缺少用户授权：需要 LOBSTER_RELEASE_APPROVED=" + version, file=sys.stderr)
+        raise SystemExit(5)
+    approval_file = Path(_APPROVAL_DIR) / (version + ".txt")
+    if not approval_file.is_file():
+        print(
+            "[BLOCKED] 缺少审批凭据：" + str(approval_file) + "\n"
+            "  只有在用户明确说「发 " + version + "」后，才可以写入该文件。",
+            file=sys.stderr,
+        )
+        raise SystemExit(5)
+
+
 def main() -> int:
     global _INCLUDE_RUNTIME_WHEEL_DIRS, _INCLUDE_PYC_FILES, _PACK_OVERSEAS, _PACK_BRAND
     ap = argparse.ArgumentParser(description="Pack client-code OTA zip")
@@ -1190,7 +1215,9 @@ def main() -> int:
         default="",
         help="Optional semantic version to write for this release (for example 2.0.0); build still increments",
     )
+    ap.add_argument("--approved-version", default="", help="用户明确批准的版本号（必须与 --release-version 一致）")
     args = ap.parse_args()
+    _require_pack_approval(args.release_version, getattr(args, "approved_version", ""))
     include_skills: list[str] = []
     for raw_skill in args.include_skills or []:
         value = str(raw_skill or "").strip().replace("\\", "/").strip("/")
