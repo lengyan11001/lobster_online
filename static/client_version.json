@@ -1,7 +1,7 @@
 {
-  "version": "2.0.232",
-  "build": 533,
-  "applied_at": "2026-11-01T10:15:24+08:00",
-  "note": "修复闪剪 videoDuration 被强制最小 5 秒（0-3s 裁切出 5s 成片）",
-  "bundle_sha256": "4063db64f13d23af1e49b93e6352eb1ac5edda258f63213c89f2285caeca3b05"
+  "version": "2.0.233",
+  "build": 534,
+  "applied_at": "2026-11-01T10:40:53+08:00",
+  "note": "闪剪时长不再静默改写：越界会记日志；下限 1s",
+  "bundle_sha256": "c406d5c100686b538bf9a9c4aee214cc2a45f6e9431e3db02a47a888a7977c5d"
 }
