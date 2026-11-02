@@ -2050,10 +2050,11 @@
 
   function draftActionMenuHtml(rec) {
     var id = escAttr(rec.record_id || '');
-    var creationActions = isOralTask(rec.task)
+    var momentsRec = String(rec.task || '') === 'moments_candidate';
+    var creationActions = (isOralTask(rec.task) || momentsRec)
       ? '<button type="button" data-record-action="image" data-record-id="' + id + '">生成图片</button>' +
-        '<button type="button" data-record-action="video" data-record-id="' + id + '">生成视频</button>' +
-        '<button type="button" data-record-action="digital-human" data-record-id="' + id + '">数字人口播</button>'
+        (isOralTask(rec.task) ? '<button type="button" data-record-action="video" data-record-id="' + id + '">生成视频</button>' +
+          '<button type="button" data-record-action="digital-human" data-record-id="' + id + '">数字人口播</button>' : '')
       : '';
     var publishAction = rec.task === 'moments_candidate' && recordImages(rec).length
       ? '<button type="button" data-record-action="publish-moments" data-record-id="' + id + '">发布到朋友圈</button>'
@@ -3127,6 +3128,15 @@
   }
 
   window.initIpContentStudioView = function(mode, options) {
+    try {
+      if (window.LobsterHistoryDrawer && typeof window.LobsterHistoryDrawer.attach === 'function') {
+        window.LobsterHistoryDrawer.attach({
+          triggerId: 'ipHistoryBtn',
+          sourceSelector: '[data-ip-panel="records"]',
+          title: '文案生成记录'
+        });
+      }
+    } catch (eHist) {}
     // The shell re-runs the registered init every time this view is shown again.
     // Only an explicit entry into the workbench collapses the tree; a plain re-init
     // must keep whatever the user just expanded.
