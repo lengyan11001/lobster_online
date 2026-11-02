@@ -74,47 +74,5 @@
     document.addEventListener('keydown', onKey);
   }
 
-  // 自动把页面里跨域 CDN 的 img/video 换成本机同源代理，避免“看不了”。
-  // 只处理白名单域名，其它域名保持原样（避免 400 后白屏）。
-  var PROXY_HOSTS = ['51sux.com', 'volces.com', 'aliyuncs.com', 'st-video.cc', 'edu888.top'];
-  function shouldProxy(url) {
-    try {
-      var u = new URL(url, location.href);
-      if (u.hostname === location.hostname) return false;
-      return PROXY_HOSTS.some(function (h) { return u.hostname === h || u.hostname.endsWith('.' + h); });
-    } catch (e) { return false; }
-  }
-  function fixEl(el) {
-    if (!el || el.dataset.lmProxied === '1') return;
-    if (el.closest && el.closest('#lobster-canvas-frame, #content-canvas-studio, .lobster-canvas-shell')) return;
-    var raw = el.getAttribute('src') || '';
-    if (!raw || !shouldProxy(raw)) return;
-    el.dataset.lmRaw = raw;
-    el.dataset.lmProxied = '1';
-    el.src = proxyUrl(raw, true);
-    if (el.tagName === 'IMG') {
-      el.style.cursor = 'zoom-in';
-      el.addEventListener('click', function (ev) { ev.preventDefault(); open(raw); }, true);
-    }
-  }
-  function scan(root) {
-    if (!root || !root.querySelectorAll) return;
-    root.querySelectorAll('img[src], video[src], video source[src]').forEach(fixEl);
-  }
-  function autoProxy() {
-    scan(document);
-    try {
-      var mo = new MutationObserver(function (muts) {
-        muts.forEach(function (m) {
-          m.addedNodes && m.addedNodes.forEach(function (n) {
-            if (n.nodeType === 1) { if (n.tagName === 'IMG' || n.tagName === 'VIDEO') fixEl(n); scan(n); }
-          });
-        });
-      });
-      mo.observe(document.body, { childList: true, subtree: true });
-    } catch (e) {}
-  }
-  window.LobsterMedia = { view: view, download: download, open: open, proxyUrl: proxyUrl, isVideo: isVideo, autoProxy: autoProxy };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', autoProxy);
-  else setTimeout(autoProxy, 800);
+  window.LobsterMedia = { view: view, download: download, open: open, proxyUrl: proxyUrl, isVideo: isVideo };
 })();

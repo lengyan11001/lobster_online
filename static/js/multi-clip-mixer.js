@@ -2746,23 +2746,4 @@
     if (added) showMessage('已加入 ' + added + ' 个素材视频，可直接生成或点“编辑”微调片段。', false);
     return added;
   };
-
-  // 历史记录抽屉：复用页面已有的 #mcmHistoryList
-  document.addEventListener('DOMContentLoaded', function () {
-    try {
-      var btn = document.getElementById('mcmHistoryBtn');
-      if (btn && window.LobsterHistoryDrawer) {
-        var panel = document.getElementById('mcmHistoryPanel');
-        window.LobsterHistoryDrawer.attach({
-          triggerId: 'mcmHistoryBtn',
-          sourceSelector: '#mcmHistoryList',
-          title: '混剪历史记录',
-          onOpen: function () {
-            if (panel) panel.hidden = false;
-            if (typeof window._mcmLoadHistory === 'function') { try { window._mcmLoadHistory(); } catch (e) {} }
-          }
-        });
-      }
-    } catch (e) {}
-  });
 })();
