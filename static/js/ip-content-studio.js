@@ -2087,9 +2087,8 @@
       var image = images.length
         ? '<div class="ip-image-grid">' + images.slice(0, 3).map(function(img, idx) {
             var url = img.image_url || img.url || '';
-            var _viewUrl = (window.LobsterMedia ? window.LobsterMedia.view(url) : url);
-            return '<div class="ip-image-tile"><img src="' + escAttr(_viewUrl) + '" alt="生成图片 ' + escAttr(idx + 1) + '" data-lm-open="' + escAttr(url) + '" style="cursor:zoom-in">' +
-              '<button type="button" class="btn btn-ghost btn-sm" data-lm-download-src="' + escAttr(url) + '">下载</button></div>';
+            return '<div class="ip-image-tile"><img src="' + escAttr(url) + '" alt="生成图片 ' + escAttr(idx + 1) + '">' +
+              '<a class="btn btn-ghost btn-sm" href="' + escAttr(url) + '" target="_blank" rel="noopener">打开图片</a></div>';
           }).join('') + '</div>'
         : '<div class="ip-image-preview" data-image-preview="' + escAttr(rec.record_id || '') + '">' + (rec._image_status ? '<small>' + esc(rec._image_status) + '</small>' : '') + '</div>';
       return '<div class="ip-draft-card" data-record-id="' + escAttr(rec.record_id || '') + '">' +
@@ -3165,14 +3164,4 @@
       if ($('content-ip-content-studio')) window.initIpContentStudioView();
     }, 0);
   }
-
-  // 记录内图片：点击预览（同源代理，避免跨域打不开）、按钮下载
-  document.addEventListener('click', function (ev) {
-    var t2 = ev.target;
-    if (!t2 || !t2.closest) return;
-    var img = t2.closest('[data-lm-open]');
-    if (img && window.LobsterMedia) { ev.preventDefault(); window.LobsterMedia.open(img.getAttribute('data-lm-open')); return; }
-    var dl = t2.closest('[data-lm-download-src]');
-    if (dl && window.LobsterMedia) { ev.preventDefault(); window.LobsterMedia.download(dl.getAttribute('data-lm-download-src')); return; }
-  }, true);
 })();
