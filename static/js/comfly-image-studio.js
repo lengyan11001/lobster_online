@@ -1717,9 +1717,8 @@
         ? 'data-result-index="' + card.index + '"'
         : 'data-imglab-job="' + escapeHtml(card.jobId) + '"';
       var wideClass = (card.status === 'completed' && card.image) ? ' is-wide' : '';
-      var _imgView = (card.image && window.LobsterMedia) ? window.LobsterMedia.view(card.image) : card.image;
       var media = card.status === 'completed' && card.image
-        ? '<img src="' + escapeHtml(_imgView) + '" alt="' + escapeHtml(card.title) + '" data-lm-open="' + escapeHtml(card.image) + '" style="cursor:zoom-in">'
+        ? '<img src="' + escapeHtml(card.image) + '" alt="' + escapeHtml(card.title) + '">'
         : '<div class="imglab-task-card-pending">' + (card.status === 'running' ? '<span class="imglab-task-spinner" aria-hidden="true"></span>' : '<span class="imglab-task-done-mark">' + (card.status === 'stale' ? '刷新' : '完成') + '</span>') + '</div>';
       if (card.status === 'failed') media = '<div class="imglab-task-card-failed">失败</div>';
       var deleteAttr = card.type === 'result'
@@ -2822,26 +2821,4 @@
   };
 
   window.initImageComposerStudioView = init;
-
-  // 统一「历史记录」抽屉：把任务卡列表搬进右侧抽屉
-  function _bindHistoryDrawer() {
-    try {
-      if (window.LobsterHistoryDrawer && window.LobsterHistoryDrawer.attach) {
-        window.LobsterHistoryDrawer.attach({
-          triggerId: 'imglabHistoryBtn',
-          sourceSelector: '#imglabResultGallery',
-          title: '图片任务记录'
-        });
-      }
-    } catch (e) {}
-  }
-  document.addEventListener('DOMContentLoaded', _bindHistoryDrawer);
-  setTimeout(_bindHistoryDrawer, 1500);
-
-  document.addEventListener('click', function (ev) {
-    var t2 = ev.target;
-    if (!t2 || !t2.closest) return;
-    var img = t2.closest('[data-lm-open]');
-    if (img && window.LobsterMedia) { ev.preventDefault(); window.LobsterMedia.open(img.getAttribute('data-lm-open')); }
-  }, true);
 })();
