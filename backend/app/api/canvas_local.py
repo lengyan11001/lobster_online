@@ -310,13 +310,13 @@ async def canvas_local_session() -> Dict[str, Any]:
 
 
 _CANVAS_DL_HOSTS = (
-    "51sux.com", "tos-cn-guangzhou.volces.com", "aliyuncs.com",
-    "lobster-online-assets", "bhzn.top", "bhos.online",
+    "51sux.com", "volces.com", "aliyuncs.com", "st-video.cc",
+    "edu888.top", "lobster-online-assets", "bhzn.top", "bhos.online",
 )
 
 
 @router.get("/api/canvas-local/proxy-download", summary="画布结果同源下载（跨域 CDN 无 CORS，浏览端直接下载会失效）")
-async def canvas_proxy_download(url: str):
+async def canvas_proxy_download(url: str, inline: int = 0):
     from urllib.parse import urlparse
 
     import httpx
@@ -350,7 +350,12 @@ async def canvas_proxy_download(url: str):
             await resp.aclose()
             await client.aclose()
 
-    headers = {"Content-Disposition": f'attachment; filename="{name}"'}
+    # inline=1：给 <img>/<video> 预览用（不强制下载）；默认仍按附件下载
+    headers = {}
+    if inline:
+        headers["Content-Disposition"] = f'inline; filename="{name}"'
+    else:
+        headers["Content-Disposition"] = f'attachment; filename="{name}"'
     media = resp.headers.get("content-type") or "application/octet-stream"
     return StreamingResponse(_iter(), media_type=media, headers=headers)
 
