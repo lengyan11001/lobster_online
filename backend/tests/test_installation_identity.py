@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import json
 from backend.app.services import installation_identity as mod
 
 
@@ -125,3 +126,33 @@ def test_same_user_signed_switch_is_honored(tmp_path, monkeypatch):
     assert first["installation_id"] == "u260-" + "a" * 32
     assert switched["installation_id"] == "u260-" + "b" * 32
     assert mod.read_installation_identity()["installation_id"] == "u260-" + "b" * 32
+
+
+def test_placeholder_is_not_a_valid_identity():
+    assert mod.normalize_identity_value("__LOBSTER_INSTALLATION_ID__") == ""
+    assert mod.normalize_identity_value("NULL") == ""
+    assert mod.normalize_identity_value("a" * 32) == "a" * 32
+
+
+def test_placeholder_file_is_regenerated_once(tmp_path, monkeypatch):
+    path = tmp_path / "installation_identity.json"
+    monkeypatch.setattr(mod, "INSTALLATION_IDENTITY_FILE", path)
+    monkeypatch.setattr(mod, "_fallback_file", lambda: tmp_path / "fallback.json")
+    path.write_text(json.dumps({
+        "version": 1,
+        "installation_id": "__LOBSTER_INSTALLATION_ID__",
+        "device_seed": "__LOBSTER_INSTALLATION_ID__",
+        "machine_instance_id": "mw-test",
+        "brand_mark": "hikong",
+    }), encoding="utf-8")
+
+    loaded = mod.read_installation_identity()
+    assert loaded["present"] is False
+
+    created = mod.ensure_installation_identity("hikong")
+    assert created["installation_id"] != "__LOBSTER_INSTALLATION_ID__"
+    assert len(created["installation_id"]) >= 8
+    assert created["device_seed"] == created["installation_id"]
+
+    again = mod.ensure_installation_identity("hikong")
+    assert again["installation_id"] == created["installation_id"]

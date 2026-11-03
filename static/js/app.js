@@ -942,12 +942,14 @@ function readBootFileIdentitySync() {
   try {
     var injectedPresent = typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_FILE_PRESENT__ === true;
     var injectedId = String((typeof window !== 'undefined' && window.__LOBSTER_INSTALLATION_ID__) || '').trim();
-    if (injectedPresent && /^[a-zA-Z0-9_-]{8,128}$/.test(injectedId)) return null;
+    if (injectedPresent && /^[a-zA-Z0-9_-]{8,128}$/.test(injectedId) && !isPlaceholderLobsterInstallationId(injectedId)) return null;
     if (typeof XMLHttpRequest !== 'function') return null;
     var base = String((typeof LOCAL_API_BASE !== 'undefined' && LOCAL_API_BASE) ? LOCAL_API_BASE : 'http://127.0.0.1:8000').replace(/\/$/, '');
     if (!base || base === 'null') base = 'http://127.0.0.1:8000';
     var xhr = new XMLHttpRequest();
-    xhr.open('GET', base + '/api/settings/installation-identity', false);
+    var brandForIdentity = '';
+    try { brandForIdentity = (typeof getLobsterBrandMark === 'function') ? (getLobsterBrandMark() || '') : ''; } catch (eBrand) {}
+    xhr.open('GET', base + '/api/settings/installation-identity?ensure=1&brand=' + encodeURIComponent(brandForIdentity), false);
     xhr.send(null);
     if (xhr.status < 200 || xhr.status >= 300) return null;
     var data = JSON.parse(xhr.responseText || '{}');
@@ -955,7 +957,8 @@ function readBootFileIdentitySync() {
     var seed = String((data && data.device_seed) || '').trim();
     var machine = String((data && data.machine_instance_id) || '').trim();
     var legacyMachine = String((data && data.legacy_machine_instance_id) || '').trim();
-    if (data && data.present === true && /^[a-zA-Z0-9_-]{8,128}$/.test(iid) && /^[a-zA-Z0-9_-]{8,128}$/.test(seed)) {
+    if (data && data.present === true && /^[a-zA-Z0-9_-]{8,128}$/.test(iid) && !isPlaceholderLobsterInstallationId(iid)
+        && /^[a-zA-Z0-9_-]{8,128}$/.test(seed) && !isPlaceholderLobsterInstallationId(seed)) {
       return { installation_id: iid, device_seed: seed, machine_instance_id: machine, legacy_machine_instance_id: legacyMachine };
     }
   } catch (e) {}
@@ -1030,8 +1033,16 @@ function isDeprecatedInstallationId(value) {
   return !!DEPRECATED_INSTALLATION_IDS[rawInstallationId(value)];
 }
 
+function isPlaceholderLobsterInstallationId(value) {
+  var text = String(value || '').trim().toUpperCase();
+  return text.indexOf('__') === 0
+    || text.indexOf('INSTALLATION_ID') >= 0
+    || text === 'NULL' || text === 'NONE' || text === 'UNDEFINED';
+}
+
 function isValidLobsterInstallationId(value) {
-  return /^[a-zA-Z0-9_-]{8,128}$/.test(String(value || '').trim());
+  var text = String(value || '').trim();
+  return /^[a-zA-Z0-9_-]{8,128}$/.test(text) && !isPlaceholderLobsterInstallationId(text);
 }
 
 function generateLobsterInstallationId() {

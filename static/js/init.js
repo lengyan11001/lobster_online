@@ -420,8 +420,15 @@ var USE_INDEPENDENT_AUTH = true;
     var raw = text.indexOf('--') >= 0 ? text.split('--').slice(1).join('--') : text;
     return !!deprecatedInstallationIds[raw];
   }
+  function isPlaceholderInstallationId(value) {
+    var text = String(value || '').trim().toUpperCase();
+    return text.indexOf('__') === 0
+      || text.indexOf('INSTALLATION_ID') >= 0
+      || text === 'NULL' || text === 'NONE' || text === 'UNDEFINED';
+  }
   function isValidInstallationId(value) {
-    return /^[a-zA-Z0-9_-]{8,128}$/.test(String(value || '').trim());
+    var text = String(value || '').trim();
+    return /^[a-zA-Z0-9_-]{8,128}$/.test(text) && !isPlaceholderInstallationId(text);
   }
   window.generateLobsterInstallationId = window.generateLobsterInstallationId || function() {
     return (typeof crypto !== 'undefined' && crypto.randomUUID)

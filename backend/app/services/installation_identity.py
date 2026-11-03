@@ -76,8 +76,23 @@ def _prefix(value: Any, size: int = 18) -> str:
     return text[:size]
 
 
+def is_placeholder_identity_value(value: Any) -> bool:
+    """工厂包会原样带出 __LOBSTER_INSTALLATION_ID__ 这类模板变量，不能当成真实身份。"""
+    text = str(value or "").strip()
+    if not text:
+        return False
+    upper = text.upper()
+    return (
+        upper.startswith("__")
+        or "INSTALLATION_ID" in upper
+        or upper in {"NULL", "NONE", "UNDEFINED", "PLACEHOLDER"}
+    )
+
+
 def normalize_identity_value(value: Any) -> str:
     text = str(value or "").strip()
+    if is_placeholder_identity_value(text):
+        return ""
     return text if _VALID_ID.fullmatch(text) else ""
 
 
