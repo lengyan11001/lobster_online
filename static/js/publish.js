@@ -4025,60 +4025,7 @@ function _bindAssetActionMenuPositioning(container) {
   });
   if (!window.__assetActionMenuGlobalBound) {
     window.__assetActionMenuGlobalBound = true;
-    function _pubPlanRunPending(planId, btn, finishDraft, progressPrefix, resetLabel) {
-  if (!planId || !btn) return;
-  var prefix = progressPrefix || '开始中';
-  var reset = resetLabel || '开始排程';
-  btn.disabled = true;
-  btn.textContent = '准备中…';
-  function finish() {
-    if (finishDraft) {
-      _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(planId) + '/finish-start', { method: 'POST' }).then(function() {
-        _pubPlanPreviewCache = {};
-        loadPublishPlans();
-      }).catch(function(err) {
-        btn.disabled = false;
-        btn.textContent = reset;
-        alert('收尾失败：' + ((err && err.message) || err));
-        _pubPlanPreviewCache = {};
-        loadPublishPlans();
-      });
-    } else {
-      _pubPlanPreviewCache = {};
-      loadPublishPlans();
-    }
-  }
-  _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(planId) + '/items').then(function(d) {
-    var pending = ((d && d.items) || []).filter(function(it) { return it.can_trigger; });
-    if (!pending.length) { finish(); return; }
-    var idx = 0;
-    function step() {
-      if (idx >= pending.length) { finish(); return; }
-      var it = pending[idx];
-      btn.textContent = prefix + ' ' + (idx + 1) + '/' + pending.length;
-      _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(planId) + '/trigger-item', {
-        method: 'POST',
-        body: JSON.stringify({ key: it.key, publish_at: it.publish_at })
-      }).then(function() {
-        idx += 1;
-        step();
-      }).catch(function(err) {
-        btn.disabled = false;
-        btn.textContent = reset;
-        alert('第 ' + (idx + 1) + ' 条失败：' + ((err && err.message) || err));
-        _pubPlanPreviewCache = {};
-        loadPublishPlans();
-      });
-    }
-    step();
-  }).catch(function(err) {
-    btn.disabled = false;
-    btn.textContent = reset;
-    alert('读取待创建列表失败：' + ((err && err.message) || err));
-  });
-}
-
-document.addEventListener('click', function(event) {
+    document.addEventListener('click', function(event) {
       var target = event.target;
       var inside = target && target.closest ? target.closest('details.asset-content-action-menu, .asset-content-action-list') : null;
       if (!inside) _closeFloatingAssetActionMenus(null);
@@ -6203,6 +6150,64 @@ function _pubPlanFetch(path, opts) {
       if (!r.ok) throw new Error((d && d.detail) || ('HTTP ' + r.status));
       return d;
     });
+  });
+}
+
+function _pubPlanRunPending(planId, btn, finishDraft, progressPrefix, resetLabel) {
+  if (!planId || !btn) return;
+  var prefix = progressPrefix || '开始中';
+  var reset = resetLabel || '开始排程';
+  var failures = [];
+  btn.disabled = true;
+  btn.textContent = '准备中…';
+  function finish() {
+    function afterFinish() {
+      _pubPlanPreviewCache = {};
+      loadPublishPlans();
+      if (failures.length) {
+        alert('已处理 ' + (doneCount - failures.length) + ' 条，失败 ' + failures.length + ' 条。\n第一条失败：' + failures[0]);
+      }
+    }
+    if (finishDraft) {
+      _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(planId) + '/finish-start', { method: 'POST' }).then(afterFinish).catch(function(err) {
+        btn.disabled = false;
+        btn.textContent = reset;
+        alert('收尾失败：' + ((err && err.message) || err));
+        _pubPlanPreviewCache = {};
+        loadPublishPlans();
+      });
+    } else {
+      afterFinish();
+    }
+  }
+  var doneCount = 0;
+  _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(planId) + '/items').then(function(d) {
+    var pending = ((d && d.items) || []).filter(function(it) { return it.can_trigger; });
+    if (!pending.length) { finish(); return; }
+    var idx = 0;
+    function step() {
+      if (idx >= pending.length) { finish(); return; }
+      var it = pending[idx];
+      btn.textContent = prefix + ' ' + (idx + 1) + '/' + pending.length;
+      _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(planId) + '/trigger-item', {
+        method: 'POST',
+        body: JSON.stringify({ key: it.key, publish_at: it.publish_at })
+      }).then(function() {
+        doneCount += 1;
+        idx += 1;
+        step();
+      }).catch(function(err) {
+        doneCount += 1;
+        failures.push((it.name || it.key || ('第 ' + (idx + 1) + ' 条')) + '：' + ((err && err.message) || err));
+        idx += 1;
+        step();
+      });
+    }
+    step();
+  }).catch(function(err) {
+    btn.disabled = false;
+    btn.textContent = reset;
+    alert('读取待创建列表失败：' + ((err && err.message) || err));
   });
 }
 
