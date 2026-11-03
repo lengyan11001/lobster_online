@@ -8,11 +8,11 @@
       "hero_title": "必火AI执行系统",
       "hero_subtitle": "必火智能的远景：\n成为全球领先的企业AI员工解决方案服务商",
       "icons": {
-        "favicon_32": "/static/branding/cache/bihuo/2026.10.20.2/icon_32.png",
-        "apple_touch": "/static/branding/cache/bihuo/2026.10.20.2/icon_128.png",
-        "loading_mark": "/static/branding/cache/bihuo/2026.10.20.2/icon_64.png",
+        "favicon_32": "/static/icon_32.png",
+        "apple_touch": "/static/icon_128.png",
+        "loading_mark": "/static/icon_64.png",
         "home_visual": "/static/bihu_source.png",
-        "logo_mark": "/static/branding/cache/bihuo/2026.10.20.2/icon_64.png",
+        "logo_mark": "/static/icon_64.png",
         "logo_mark_width": 64,
         "logo_mark_height": 60
       },
