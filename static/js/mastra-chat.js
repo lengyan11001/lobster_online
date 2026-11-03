@@ -226,13 +226,19 @@
     box.innerHTML = '<div class="online-mastra-empty" id="onlineMastraEmpty">开始一轮新的对话</div>';
   }
 
+  function welcomeBrandName() {
+    var branding = window.__LOBSTER_BRANDING || {};
+    var name = String(branding.display_name || branding.logo_primary || branding.document_title || '').trim();
+    if (name) return name;
+    var mark = brandMark();
+    var known = { bihuo: '必火', hikong: '海康', daka: '大咖', jinghai: '鲸海' };
+    return known[mark] || '本平台';
+  }
+
+  // 所有品牌统一显示欢迎区（此前只给 bihuo 渲染，其它 OEM 新会话中间是一大块空白）
   function renderWelcome() {
     var box = el('onlineMastraMessages');
     if (!box) return;
-    if (brandMark() !== 'bihuo') {
-      clearMessages();
-      return;
-    }
     var welcomeInput = el('onlineMastraInput');
     if (welcomeInput) {
       var chatDuty = el('chatDutyModeSelect');
@@ -246,7 +252,7 @@
     }
     box.innerHTML = [
       '<div class="online-mastra-welcome" id="onlineMastraEmpty">',
-      '<div class="online-mastra-welcome-kicker"><span aria-hidden="true">✦</span> 您好，欢迎进入 必火智能AI执行系统</div>',
+      '<div class="online-mastra-welcome-kicker"><span aria-hidden="true">✦</span> 您好，欢迎进入 ' + escapeHtml(welcomeBrandName()) + ' 智能AI执行系统</div>',
       '<h2 class="online-mastra-welcome-title">告诉我，我们今天要做些什么？</h2>',
       '<p class="online-mastra-welcome-subtitle">说清目标，我按岗位把活做完。</p>',
       '<div class="online-mastra-welcome-grid">',
