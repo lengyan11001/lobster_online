@@ -146,10 +146,13 @@
               <div id="publishPlanList" style="margin-top:0.5rem;"></div>
             </div>
             <div id="pubPlanModal" class="modal-mask" style="display:none;">
-              <div class="modal" style="max-width:760px;width:min(760px,94vw);max-height:90vh;overflow:auto;">
-                <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:0.75rem;">
-                  <h4 id="pubPlanTitle" style="margin:0;font-size:1.05rem;">定时发布</h4>
-                  <button type="button" id="pubPlanCloseBtn" class="btn btn-ghost btn-sm" aria-label="关闭">×</button>
+              <div class="modal pub-plan-modal">
+                <div class="pub-plan-head">
+                  <div>
+                    <h4 id="pubPlanTitle" class="pub-plan-title">新增定时任务</h4>
+                    <div id="pubPlanSubtitle" class="pub-plan-subtitle">选择来源、账号和时间，先预览规划再创建。</div>
+                  </div>
+                  <button type="button" id="pubPlanCloseBtn" class="btn btn-ghost btn-sm pub-plan-close" aria-label="关闭">×</button>
                 </div>
                 <div class="modal-field" style="margin-top:0.9rem;">
                   <label for="pubPlanName">任务名（可选）</label>
@@ -202,7 +205,7 @@
                     <span id="pubPlanPreviewSummary" class="meta" style="font-size:0.8rem;"></span>
                   </div>
                   <div id="pubPlanPreviewBox" style="display:none;margin-top:0.6rem;padding:0.6rem 0.7rem;border:1px solid var(--border);border-radius:var(--radius-sm,8px);background:rgba(0,0,0,0.03);">
-                    <div id="pubPlanPreviewTable" style="max-height:260px;overflow:auto;font-size:0.82rem;"></div>
+                    <div id="pubPlanPreviewTable" class="pub-plan-preview-table" style="max-height:260px;overflow:auto;font-size:0.82rem;"></div>
                     <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;margin-top:0.5rem;flex-wrap:wrap;">
                       <span id="pubPlanPreviewPageInfo" class="meta" style="font-size:0.78rem;"></span>
                       <div style="display:flex;gap:0.35rem;align-items:center;">
@@ -222,10 +225,13 @@
                   <input id="pubPlanTags" type="text" placeholder="留空由 AI 生成" style="width:100%;padding:0.5rem 0.55rem;font-size:0.88rem;background:var(--select-surface,#fff);border:1px solid var(--border);border-radius:var(--radius-sm,8px);color:var(--text);">
                 </div>
                 <div class="modal-field" id="pubPlanStartNowRow">
-                  <label style="display:flex;gap:0.4rem;align-items:center;font-size:0.85rem;">
-                    <input type="checkbox" id="pubPlanStartNowChk" style="width:16px;height:16px;margin:0;padding:0;flex:0 0 auto;accent-color:var(--accent);"> 创建后立即启动
+                  <label class="pub-plan-check-row" for="pubPlanStartNowChk">
+                    <input type="checkbox" id="pubPlanStartNowChk">
+                    <span>
+                      <span class="pub-plan-check-title">创建后立即启动</span>
+                      <span class="pub-plan-check-hint">不勾选则先创建为「已暂停」，确认规划后再在列表里启动。</span>
+                    </span>
                   </label>
-                  <div class="meta" style="font-size:0.78rem;">不勾选则先创建为「已暂停」，确认规划后再在列表里启动。</div>
                 </div>
                 <div id="pubPlanDetail" style="display:none;margin-top:0.5rem;">
                   <div id="pubPlanDetailStats" style="font-size:0.85rem;color:var(--text-muted);"></div>
@@ -237,7 +243,7 @@
                   </div>
                 </div>
                 <div id="pubPlanMsg" class="msg" style="display:none;margin-top:0.5rem;"></div>
-                <div class="btns" style="justify-content:flex-end;margin-top:1rem;">
+                <div class="btns pub-plan-footer">
                   <button type="button" id="pubPlanCancelBtn" class="btn btn-ghost">取消</button>
                   <button type="button" id="pubPlanSaveBtn" class="btn btn-primary">创建（不启动）</button>
                 </div>

@@ -6213,7 +6213,7 @@ function _pubPlanPreviewTableHtml(data) {
   if (!total) {
     return '<div style="font-size:0.8rem;color:var(--text-muted);">当前没有待规划素材（可能都已排过或发过）。</div>';
   }
-  var html = '<div style="display:flex;gap:0.4rem;padding:0.25rem 0;border-bottom:1px solid var(--border);font-size:0.76rem;font-weight:600;color:var(--text-muted);">' +
+  var html = '<div class="pub-plan-preview-head" style="display:flex;gap:0.4rem;padding:0.4rem 0.2rem;border-bottom:1px solid var(--border);font-size:0.76rem;font-weight:600;color:var(--text-muted);">' +
     '<span style="width:2.8rem;">序号</span><span style="flex:1;min-width:0;">素材</span><span style="width:8.5rem;">计划时间</span></div>';
   var currentDay = '';
   rows.forEach(function(row) {
@@ -6221,9 +6221,9 @@ function _pubPlanPreviewTableHtml(data) {
     var day = when.slice(0, 10);
     if (day && day !== currentDay) {
       currentDay = day;
-      html += '<div style="margin-top:0.4rem;font-size:0.76rem;font-weight:600;color:var(--text);">' + escapeHtml(day) + '</div>';
+      html += '<div class="pub-plan-preview-day" style="margin-top:0.4rem;padding:0.15rem 0.2rem;font-size:0.76rem;font-weight:600;color:var(--text);">' + escapeHtml(day) + '</div>';
     }
-    html += '<div style="display:flex;gap:0.4rem;padding:2px 0;align-items:baseline;">' +
+    html += '<div class="pub-plan-preview-row" style="display:flex;gap:0.4rem;padding:4px 0.2rem;align-items:baseline;">' +
       '<span style="width:2.8rem;color:var(--text-muted);font-size:0.75rem;">' + escapeHtml(String(row.index || '')) + '</span>' +
       '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeAttr(row.path || row.name || '') + '">' + escapeHtml(row.name || row.path || row.asset_id || '') + '</span>' +
       '<span style="width:8.5rem;font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(when.slice(11) || when) + '</span>' +
@@ -6307,7 +6307,7 @@ function renderPublishPlans() {
             (plan.enabled ? '暂停' : '启动') + '</button>' +
         '</div>' +
       '</div>' +
-      '<div id="pubPlanPreviewBox-' + plan.id + '" data-plan-preview-box="' + plan.id + '" style="display:' + (expanded ? 'block' : 'none') + ';margin-top:0.5rem;padding:0.55rem 0.65rem;border:1px solid var(--border);border-radius:var(--radius-sm,8px);background:rgba(0,0,0,0.03);"></div>' +
+      '<div id="pubPlanPreviewBox-' + plan.id + '" data-plan-preview-box="' + plan.id + '" style="display:' + (expanded ? 'block' : 'none') + ';margin-top:0.5rem;padding:0.55rem 0.65rem;border:1px solid var(--border);border-radius:var(--radius-sm,8px);background:rgba(0,0,0,0.03);max-height:340px;overflow:auto;"></div>' +
     '</div>';
   }).join('') + '</div>';
   if (_pubPlanExpandedId) {
@@ -6445,9 +6445,9 @@ function _pubPlanPickFolder() {
 }
 
 var _pubPlanTimeRowHtml = function(value) {
-  return '<div data-plan-time-row style="display:flex;gap:0.4rem;align-items:center;margin-bottom:0.35rem;">' +
-    '<input type="time" data-plan-time value="' + escapeAttr(value || '09:00') + '" style="padding:0.4rem 0.5rem;font-size:0.88rem;background:var(--select-surface,#fff);border:1px solid var(--border);border-radius:var(--radius-sm,8px);color:var(--text);">' +
-    '<button type="button" class="btn btn-ghost btn-sm" data-plan-time-remove>删除</button></div>';
+  return '<div data-plan-time-row class="pub-plan-time-row">' +
+    '<input type="time" data-plan-time value="' + escapeAttr(value || '09:00') + '" aria-label="发布时间">' +
+    '<button type="button" class="btn btn-ghost btn-sm" data-plan-time-remove title="删除这条时间" aria-label="删除这条时间">×</button></div>';
 };
 
 function _pubPlanAddTimeRow(value) {
@@ -6515,6 +6515,8 @@ function openPublishPlanDialog(plan) {
   _pubPlanEditingId = editing ? parseInt(editing.id, 10) || 0 : 0;
   var title = document.getElementById('pubPlanTitle');
   if (title) title.textContent = editing ? '定时任务详情' : '新增定时任务';
+  var subtitle = document.getElementById('pubPlanSubtitle');
+  if (subtitle) subtitle.textContent = editing ? '查看任务状态和规划；修改后保存，不会自动启动。' : '选择来源、账号和时间，先预览规划再创建。';
   var saveBtn = document.getElementById('pubPlanSaveBtn');
   if (saveBtn) saveBtn.textContent = editing ? '保存修改' : '创建（不启动）';
   var nameInput = document.getElementById('pubPlanName');
