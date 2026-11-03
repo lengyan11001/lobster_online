@@ -17,11 +17,11 @@
         "logo_mark_height": 60
       },
       "install": {
-        "desktop_ico": "static/bihu_box.ico",
+        "desktop_ico": "static/icon_app.ico",
         "shortcut_lnk_name": "必火智能AI.lnk",
         "shortcut_description": "必火智能AI - 本地客户端",
         "install_complete_hint": "双击桌面 必火智能AI.lnk 或本目录 start.bat 启动",
-        "launcher_ico": "static/bihu_lockup.ico"
+        "launcher_ico": "static/icon_app.ico"
       }
     },
     "daka": {
