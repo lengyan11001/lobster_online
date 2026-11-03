@@ -168,9 +168,10 @@
                     <button type="button" id="pubPlanGroupsBtn" class="btn btn-ghost btn-sm" style="width:100%;display:flex;justify-content:space-between;align-items:center;gap:0.5rem;text-align:left;">
                       <span id="pubPlanGroupsBtnText">选择分组（可多选）</span><span style="font-size:0.7rem;color:var(--text-muted);">▼</span>
                     </button>
-                    <div id="pubPlanGroupsPanel" style="display:none;position:absolute;z-index:30;left:0;right:0;top:calc(100% + 4px);max-height:220px;overflow:auto;padding:0.55rem 0.65rem;background:var(--select-surface,#fff);border:1px solid var(--border);border-radius:var(--radius-sm,8px);box-shadow:0 12px 30px rgba(0,0,0,0.18);">
-                      <div style="display:flex;justify-content:flex-end;gap:0.35rem;margin-bottom:0.4rem;">
-                        <button type="button" id="pubPlanGroupsClearBtn" class="btn btn-ghost btn-sm">清空</button>
+                    <div id="pubPlanGroupsPanel" style="display:none;position:absolute;z-index:30;left:0;right:0;top:calc(100% + 4px);max-height:220px;overflow:auto;padding:0.55rem 0.65rem;background:var(--select-surface,#fff);border:1px solid var(--border);border-radius:var(--radius-sm,8px);box-shadow:0 12px 30px rgba(0,0,0,0.18);box-sizing:border-box;">
+                      <div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;margin-bottom:0.35rem;padding-bottom:0.35rem;border-bottom:1px solid var(--border);">
+                        <span style="font-size:0.78rem;color:var(--text-muted);">选择分组</span>
+                        <button type="button" id="pubPlanGroupsClearBtn" class="btn btn-ghost btn-sm" style="padding:0.15rem 0.45rem;font-size:0.75rem;">清空</button>
                       </div>
                       <div id="pubPlanGroups" style="display:flex;flex-direction:column;gap:0.35rem;font-size:0.85rem;">加载中…</div>
                     </div>
@@ -222,7 +223,7 @@
                 </div>
                 <div class="modal-field" id="pubPlanStartNowRow">
                   <label style="display:flex;gap:0.4rem;align-items:center;font-size:0.85rem;">
-                    <input type="checkbox" id="pubPlanStartNowChk"> 创建后立即启动
+                    <input type="checkbox" id="pubPlanStartNowChk" style="width:16px;height:16px;margin:0;padding:0;flex:0 0 auto;accent-color:var(--accent);"> 创建后立即启动
                   </label>
                   <div class="meta" style="font-size:0.78rem;">不勾选则先创建为「已暂停」，确认规划后再在列表里启动。</div>
                 </div>

@@ -6375,17 +6375,19 @@ function _pubPlanLoadGroups(selected) {
     var lib = (res[1] && Array.isArray(res[1].groups)) ? res[1].groups : [];
     var html = mine.map(function(g) {
       var name = String(g.name);
-      return '<label style="display:flex;gap:0.3rem;align-items:center;">' +
-        '<input type="checkbox" value="' + escapeAttr(name) + '"' + (picked.indexOf(name) >= 0 ? ' checked' : '') + '>' +
-        escapeHtml(name) + ' <span style="color:var(--text-muted);">(' + (g.count || 0) + ')</span></label>';
+      return '<label style="display:flex;gap:0.45rem;align-items:center;width:100%;padding:0.3rem 0.25rem;cursor:pointer;line-height:1.35;box-sizing:border-box;">' +
+        '<input type="checkbox" value="' + escapeAttr(name) + '" style="width:16px;height:16px;margin:0;padding:0;flex:0 0 auto;accent-color:var(--accent);"' + (picked.indexOf(name) >= 0 ? ' checked' : '') + '>' +
+        '<span style="flex:1;min-width:0;word-break:break-word;">' + escapeHtml(name) + '</span>' +
+        '<span style="color:var(--text-muted);white-space:nowrap;font-size:0.78rem;">(' + (g.count || 0) + ')</span></label>';
     }).join('');
     html += lib.map(function(g) {
       var name = typeof g === 'string' ? g : String(g.name || g.group || '');
       if (!name) return '';
       var value = 'lib:' + name;
-      return '<label style="display:flex;gap:0.3rem;align-items:center;">' +
-        '<input type="checkbox" value="' + escapeAttr(value) + '"' + (picked.indexOf(value) >= 0 ? ' checked' : '') + '>' +
-        escapeHtml(name) + ' <span style="color:var(--text-muted);">素材库</span></label>';
+      return '<label style="display:flex;gap:0.45rem;align-items:center;width:100%;padding:0.3rem 0.25rem;cursor:pointer;line-height:1.35;box-sizing:border-box;">' +
+        '<input type="checkbox" value="' + escapeAttr(value) + '" style="width:16px;height:16px;margin:0;padding:0;flex:0 0 auto;accent-color:var(--accent);"' + (picked.indexOf(value) >= 0 ? ' checked' : '') + '>' +
+        '<span style="flex:1;min-width:0;word-break:break-word;">' + escapeHtml(name) + '</span>' +
+        '<span style="color:var(--text-muted);white-space:nowrap;font-size:0.78rem;">素材库</span></label>';
     }).join('');
     if (el) el.innerHTML = html || '<span style="color:var(--text-muted);">还没有分组，可在「内容记录」卡片上点「加入分组」。</span>';
     _pubPlanGroupsUpdateLabel();
