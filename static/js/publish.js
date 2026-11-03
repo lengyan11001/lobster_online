@@ -5773,6 +5773,7 @@ function bindPublishRefreshButtons() {
 
 function initPublishView() {
   bindPublishTabs();
+  bindPublishPlanGroupDropdown();
   bindPublishAccountUi();
   bindPublishRefreshButtons();
   bindPublishAccountDetailAndSchedule();
@@ -6136,6 +6137,9 @@ function bindPublishAccountDetailAndSchedule() {
 
 var _pubPlanCache = [];
 var _pubPlanEditingId = 0;
+var _pubPlanExpandedId = 0;
+var _pubPlanPreviewCache = {};
+var _pubPlanModalPreview = { page: 1, page_size: 50, total: 0, days: 0, payload: null };
 
 function _pubPlanFetch(path, opts) {
   var options = opts || {};
@@ -6171,6 +6175,7 @@ function loadPublishPlans() {
   var el = document.getElementById('publishPlanList');
   if (!el) return;
   el.innerHTML = '<div class="page-empty-card">加载中…</div>';
+  _pubPlanPreviewCache = {};
   _pubPlanFetch('/api/publish/plans').then(function(d) {
     _pubPlanCache = (d && Array.isArray(d.plans)) ? d.plans : [];
     renderPublishPlans();
@@ -6185,6 +6190,71 @@ function _pubPlanCreatedTotal(plan) {
   return items.filter(function(it) {
     return !!(it.task_id || it.status === 'pending' || it.status === 'success');
   }).length;
+}
+
+function _pubPlanPreviewPayload(plan, page, pageSize) {
+  return {
+    platform: plan.platform,
+    account_id: plan.account_id,
+    account_nickname: plan.account_nickname || '',
+    source_folder: plan.source_folder || '',
+    source_groups: plan.source_groups || [],
+    source_records: plan.source_records || [],
+    daily_count: plan.daily_count || (plan.times || []).length || 1,
+    times: plan.times || [],
+    page: page || 1,
+    page_size: pageSize || 100
+  };
+}
+
+function _pubPlanPreviewTableHtml(data) {
+  var total = Math.max(0, parseInt(data && data.total, 10) || 0);
+  var rows = (data && data.rows) || [];
+  if (!total) {
+    return '<div style="font-size:0.8rem;color:var(--text-muted);">当前没有待规划素材（可能都已排过或发过）。</div>';
+  }
+  var html = '<div style="display:flex;gap:0.4rem;padding:0.25rem 0;border-bottom:1px solid var(--border);font-size:0.76rem;font-weight:600;color:var(--text-muted);">' +
+    '<span style="width:2.8rem;">序号</span><span style="flex:1;min-width:0;">素材</span><span style="width:8.5rem;">计划时间</span></div>';
+  var currentDay = '';
+  rows.forEach(function(row) {
+    var when = String(row.publish_at || '');
+    var day = when.slice(0, 10);
+    if (day && day !== currentDay) {
+      currentDay = day;
+      html += '<div style="margin-top:0.4rem;font-size:0.76rem;font-weight:600;color:var(--text);">' + escapeHtml(day) + '</div>';
+    }
+    html += '<div style="display:flex;gap:0.4rem;padding:2px 0;align-items:baseline;">' +
+      '<span style="width:2.8rem;color:var(--text-muted);font-size:0.75rem;">' + escapeHtml(String(row.index || '')) + '</span>' +
+      '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeAttr(row.path || row.name || '') + '">' + escapeHtml(row.name || row.path || row.asset_id || '') + '</span>' +
+      '<span style="width:8.5rem;font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(when.slice(11) || when) + '</span>' +
+      '</div>';
+  });
+  if (total > rows.length) {
+    html += '<div style="margin-top:0.35rem;font-size:0.75rem;color:var(--text-muted);">共 ' + total + ' 条，当前显示 ' + rows.length + ' 条。</div>';
+  }
+  return html;
+}
+
+function _pubPlanLoadExpanded(plan) {
+  var box = document.getElementById('pubPlanPreviewBox-' + plan.id);
+  if (!box) return;
+  if (_pubPlanPreviewCache[plan.id]) {
+    box.innerHTML = _pubPlanPreviewCache[plan.id];
+    return;
+  }
+  box.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);">正在规划…</div>';
+  _pubPlanFetch('/api/publish/plans/preview', {
+    method: 'POST',
+    body: JSON.stringify(_pubPlanPreviewPayload(plan, 1, 100))
+  }).then(function(d) {
+    var html = '<div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:0.35rem;">共 ' +
+      (parseInt(d.total, 10) || 0) + ' 条待规划素材（已排除已排/已发），跨 ' + (parseInt(d.days, 10) || 0) + ' 天</div>' +
+      _pubPlanPreviewTableHtml(d);
+    _pubPlanPreviewCache[plan.id] = html;
+    box.innerHTML = html;
+  }).catch(function(err) {
+    box.innerHTML = '<div style="font-size:0.8rem;color:var(--error);">规划加载失败：' + escapeHtml((err && err.message) || String(err)) + '</div>';
+  });
 }
 
 function renderPublishPlans() {
@@ -6202,6 +6272,7 @@ function renderPublishPlans() {
   el.innerHTML = summary + '<div class="publish-task-list">' + _pubPlanCache.map(function(plan) {
     var created = _pubPlanCreatedTotal(plan);
     var failed = Math.max(0, parseInt(plan.failed_total, 10) || 0);
+    var expanded = String(_pubPlanExpandedId) === String(plan.id);
     var items = (plan.items || []).slice(0, 3).map(function(it) {
       var statusLabel = it.status === 'success' ? '平台已发' : (it.status === 'failed' ? '失败' : '待执行');
       var color = it.status === 'success' ? 'var(--success)' : (it.status === 'failed' ? 'var(--error)' : 'var(--text-muted)');
@@ -6228,15 +6299,21 @@ function renderPublishPlans() {
             (plan.tags ? ' · 标签 ' + escapeHtml(plan.tags) : ' · 标签 AI') + '</div>' +
           items +
         '</div>' +
-        '<div style="display:flex;gap:0.35rem;align-items:flex-start;">' +
+        '<div style="display:flex;gap:0.35rem;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end;">' +
+          '<button type="button" class="btn btn-ghost btn-sm" data-plan-expand="' + plan.id + '">' + (expanded ? '收起规划' : '展开规划') + '</button>' +
           '<button type="button" class="btn btn-ghost btn-sm" data-plan-run="' + plan.id + '">立即执行</button>' +
           '<button type="button" class="btn btn-ghost btn-sm" data-plan-edit="' + plan.id + '">编辑</button>' +
           '<button type="button" class="btn ' + (plan.enabled ? 'btn-ghost' : 'btn-primary') + ' btn-sm" data-plan-toggle="' + plan.id + '">' +
             (plan.enabled ? '暂停' : '启动') + '</button>' +
         '</div>' +
       '</div>' +
+      '<div id="pubPlanPreviewBox-' + plan.id + '" data-plan-preview-box="' + plan.id + '" style="display:' + (expanded ? 'block' : 'none') + ';margin-top:0.5rem;padding:0.55rem 0.65rem;border:1px solid var(--border);border-radius:var(--radius-sm,8px);background:rgba(0,0,0,0.03);"></div>' +
     '</div>';
   }).join('') + '</div>';
+  if (_pubPlanExpandedId) {
+    var expandedPlan = _pubPlanCache.filter(function(p) { return String(p.id) === String(_pubPlanExpandedId); })[0];
+    if (expandedPlan) _pubPlanLoadExpanded(expandedPlan);
+  }
 }
 
 function _pubPlanGroupsSelected() {
@@ -6245,6 +6322,45 @@ function _pubPlanGroupsSelected() {
     if (box.value) out.push(box.value);
   });
   return out;
+}
+
+function _pubPlanGroupsUpdateLabel() {
+  var text = document.getElementById('pubPlanGroupsBtnText');
+  if (!text) return;
+  var selected = _pubPlanGroupsSelected();
+  text.textContent = selected.length ? ('已选 ' + selected.length + ' 个分组') : '选择分组（可多选）';
+  var btn = document.getElementById('pubPlanGroupsBtn');
+  if (btn) btn.title = selected.join('、');
+}
+
+var _pubPlanGroupDropdownBound = false;
+function bindPublishPlanGroupDropdown() {
+  if (_pubPlanGroupDropdownBound) return;
+  _pubPlanGroupDropdownBound = true;
+  document.addEventListener('click', function(event) {
+    var target = event.target;
+    if (!target || !target.closest) return;
+    if (target.closest('#pubPlanGroupsBtn')) {
+      var panel = document.getElementById('pubPlanGroupsPanel');
+      if (panel) panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+      return;
+    }
+    if (target.closest('#pubPlanGroupsClearBtn')) {
+      document.querySelectorAll('#pubPlanGroups input[type=checkbox]').forEach(function(box) { box.checked = false; });
+      _pubPlanGroupsUpdateLabel();
+      return;
+    }
+    var dropdown = document.getElementById('pubPlanGroupsDropdown');
+    if (dropdown && !dropdown.contains(target)) {
+      var p = document.getElementById('pubPlanGroupsPanel');
+      if (p) p.style.display = 'none';
+    }
+  });
+  document.addEventListener('change', function(event) {
+    if (event.target && event.target.closest && event.target.closest('#pubPlanGroups')) {
+      _pubPlanGroupsUpdateLabel();
+    }
+  });
 }
 
 function _pubPlanLoadGroups(selected) {
@@ -6272,6 +6388,7 @@ function _pubPlanLoadGroups(selected) {
         escapeHtml(name) + ' <span style="color:var(--text-muted);">素材库</span></label>';
     }).join('');
     if (el) el.innerHTML = html || '<span style="color:var(--text-muted);">还没有分组，可在「内容记录」卡片上点「加入分组」。</span>';
+    _pubPlanGroupsUpdateLabel();
   });
 }
 
@@ -6395,9 +6512,9 @@ function openPublishPlanDialog(plan) {
   var editing = plan || null;
   _pubPlanEditingId = editing ? parseInt(editing.id, 10) || 0 : 0;
   var title = document.getElementById('pubPlanTitle');
-  if (title) title.textContent = editing ? '定时发布详情' : '定时发布';
+  if (title) title.textContent = editing ? '定时任务详情' : '新增定时任务';
   var saveBtn = document.getElementById('pubPlanSaveBtn');
-  if (saveBtn) saveBtn.textContent = editing ? '保存修改' : '创建并启动';
+  if (saveBtn) saveBtn.textContent = editing ? '保存修改' : '创建（不启动）';
   var nameInput = document.getElementById('pubPlanName');
   if (nameInput) nameInput.value = editing ? (editing.name || '') : '';
   var folder = document.getElementById('pubPlanFolder');
@@ -6412,6 +6529,25 @@ function openPublishPlanDialog(plan) {
     var times = editing && (editing.times || []).length ? editing.times : ['09:00'];
     times.forEach(function(t) { _pubPlanAddTimeRow(t); });
   }
+  var startRow = document.getElementById('pubPlanStartNowRow');
+  if (startRow) startRow.style.display = editing ? 'none' : '';
+  var startChk = document.getElementById('pubPlanStartNowChk');
+  if (startChk) startChk.checked = false;
+  var previewBox = document.getElementById('pubPlanPreviewBox');
+  if (previewBox) previewBox.style.display = 'none';
+  var previewSummary = document.getElementById('pubPlanPreviewSummary');
+  if (previewSummary) previewSummary.textContent = '';
+  var previewTable = document.getElementById('pubPlanPreviewTable');
+  if (previewTable) previewTable.innerHTML = '';
+  var pageInfo = document.getElementById('pubPlanPreviewPageInfo');
+  if (pageInfo) pageInfo.textContent = '';
+  var sizeSelect = document.getElementById('pubPlanPreviewPageSize');
+  if (sizeSelect) sizeSelect.value = '50';
+  _pubPlanModalPreview = { page: 1, page_size: 50, total: 0, days: 0, payload: null };
+  var groupPanel = document.getElementById('pubPlanGroupsPanel');
+  if (groupPanel) groupPanel.style.display = 'none';
+  var groupText = document.getElementById('pubPlanGroupsBtnText');
+  if (groupText) groupText.textContent = '选择分组（可多选）';
   _pubPlanMsg('', false);
   _pubPlanRenderDetail(editing);
   modal.style.display = 'flex';
@@ -6422,48 +6558,100 @@ function openPublishPlanDialog(plan) {
 function closePublishPlanDialog() {
   var modal = document.getElementById('pubPlanModal');
   if (modal) modal.style.display = 'none';
+  var groupPanel = document.getElementById('pubPlanGroupsPanel');
+  if (groupPanel) groupPanel.style.display = 'none';
   _pubPlanEditingId = 0;
+  _pubPlanModalPreview = { page: 1, page_size: 50, total: 0, days: 0, payload: null };
 }
 
-function submitPublishPlan() {
+function _pubPlanCollectPayload() {
   var platform = (document.getElementById('pubPlanPlatform') || {}).value || 'douyin';
   var accountSelect = document.getElementById('pubPlanAccount');
   var accountId = accountSelect ? parseInt(accountSelect.value, 10) || 0 : 0;
-  if (!accountId) return _pubPlanMsg('请选择发布账号。', true);
+  if (!accountId) return { ok: false, error: '请选择发布账号。' };
   var accountNickname = '';
   if (accountSelect && accountSelect.selectedIndex >= 0) accountNickname = accountSelect.options[accountSelect.selectedIndex].text || '';
   var folder = String((document.getElementById('pubPlanFolder') || {}).value || '').trim();
   var groups = _pubPlanGroupsSelected();
-  if (!folder && !groups.length) return _pubPlanMsg('请至少选一个来源：本机文件夹或分组。', true);
+  if (!folder && !groups.length) return { ok: false, error: '请至少选一个来源：本机文件夹或分组。' };
   var times = _pubPlanCollectTimes();
-  if (!times.length) return _pubPlanMsg('请至少加一行发布时间。', true);
-  var payload = {
-    name: String((document.getElementById('pubPlanName') || {}).value || '').trim(),
-    platform: platform,
-    account_id: accountId,
-    account_nickname: accountNickname,
-    source_folder: folder,
-    source_groups: groups,
-    daily_count: times.length,
-    times: times,
-    tags: String((document.getElementById('pubPlanTags') || {}).value || '').trim(),
-    ai_copy: true
+  if (!times.length) return { ok: false, error: '请至少加一行发布时间。' };
+  return {
+    ok: true,
+    payload: {
+      name: String((document.getElementById('pubPlanName') || {}).value || '').trim(),
+      platform: platform,
+      account_id: accountId,
+      account_nickname: accountNickname,
+      source_folder: folder,
+      source_groups: groups,
+      daily_count: times.length,
+      times: times,
+      tags: String((document.getElementById('pubPlanTags') || {}).value || '').trim(),
+      ai_copy: true
+    }
   };
+}
+
+function _pubPlanPreviewPage(page) {
+  var collected = _pubPlanCollectPayload();
+  if (!collected.ok) return _pubPlanMsg(collected.error, true);
+  var sizeSelect = document.getElementById('pubPlanPreviewPageSize');
+  var pageSize = sizeSelect ? (parseInt(sizeSelect.value, 10) || 50) : 50;
+  var state = _pubPlanModalPreview;
+  state.payload = collected.payload;
+  state.page_size = pageSize;
+  state.page = Math.max(1, parseInt(page, 10) || 1);
+  var box = document.getElementById('pubPlanPreviewBox');
+  var table = document.getElementById('pubPlanPreviewTable');
+  var summary = document.getElementById('pubPlanPreviewSummary');
+  if (box) box.style.display = 'block';
+  if (table) table.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);">正在生成规划…</div>';
+  if (summary) summary.textContent = '';
+  var body = Object.assign({}, collected.payload, { page: state.page, page_size: state.page_size });
+  _pubPlanFetch('/api/publish/plans/preview', { method: 'POST', body: JSON.stringify(body) })
+    .then(function(d) {
+      state.total = Math.max(0, parseInt(d.total, 10) || 0);
+      state.days = Math.max(0, parseInt(d.days, 10) || 0);
+      if (summary) summary.textContent = state.total ? ('共 ' + state.total + ' 条待规划素材（已排除已排/已发），跨 ' + state.days + ' 天') : '当前没有待规划素材';
+      if (table) table.innerHTML = _pubPlanPreviewTableHtml(d);
+      var pages = Math.max(1, Math.ceil(state.total / state.page_size));
+      var info = document.getElementById('pubPlanPreviewPageInfo');
+      if (info) info.textContent = '第 ' + state.page + ' / ' + pages + ' 页';
+      var prev = document.getElementById('pubPlanPreviewPrevBtn');
+      var next = document.getElementById('pubPlanPreviewNextBtn');
+      if (prev) prev.disabled = state.page <= 1;
+      if (next) next.disabled = state.page >= pages;
+    })
+    .catch(function(err) {
+      if (table) table.innerHTML = '<div style="font-size:0.8rem;color:var(--error);">规划失败：' + escapeHtml((err && err.message) || String(err)) + '</div>';
+    });
+}
+
+function submitPublishPlan() {
+  var collected = _pubPlanCollectPayload();
+  if (!collected.ok) return _pubPlanMsg(collected.error, true);
+  var payload = collected.payload;
+  var editingId = _pubPlanEditingId;
+  if (!editingId) {
+    var startChk = document.getElementById('pubPlanStartNowChk');
+    payload.enabled = !!(startChk && startChk.checked);
+  }
   var btn = document.getElementById('pubPlanSaveBtn');
   if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
   _pubPlanMsg('正在保存…', false);
-  var editingId = _pubPlanEditingId;
   var req = editingId
     ? _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(editingId), { method: 'PATCH', body: JSON.stringify(payload) })
     : _pubPlanFetch('/api/publish/plans', { method: 'POST', body: JSON.stringify(payload) });
   req.then(function() {
-    _pubPlanMsg('已保存。', false);
+    _pubPlanPreviewCache = {};
+    _pubPlanMsg(editingId ? '已保存。' : (payload.enabled ? '已创建并启动。' : '已创建（未启动），可在列表里展开规划后点启动。'), false);
     closePublishPlanDialog();
     loadPublishPlans();
   }).catch(function(err) {
     _pubPlanMsg('保存失败：' + ((err && err.message) || err), true);
   }).then(function() {
-    if (btn) { btn.disabled = false; btn.textContent = editingId ? '保存修改' : '创建并启动'; }
+    if (btn) { btn.disabled = false; btn.textContent = editingId ? '保存修改' : '创建（不启动）'; }
   });
 }
 
@@ -6497,15 +6685,44 @@ function _pubPlanToggle(planId, nextEnabled) {
 document.addEventListener('click', function(event) {
   var target = event.target;
   if (!target || !target.closest) return;
+  if (target.closest('[data-plan-preview-box]')) return;
   if (target.closest('#pubPlanAddBtn')) { openPublishPlanDialog(null); return; }
   if (target.closest('#pubPlanCloseBtn') || target.closest('#pubPlanCancelBtn')) { closePublishPlanDialog(); return; }
   if (target.closest('#pubPlanSaveBtn')) { submitPublishPlan(); return; }
+  if (target.closest('#pubPlanPreviewBtn')) { _pubPlanPreviewPage(1); return; }
+  if (target.closest('#pubPlanPreviewPrevBtn')) { _pubPlanPreviewPage(_pubPlanModalPreview.page - 1); return; }
+  if (target.closest('#pubPlanPreviewNextBtn')) { _pubPlanPreviewPage(_pubPlanModalPreview.page + 1); return; }
   if (target.closest('#pubPlanBrowseBtn')) { _pubPlanPickFolder(); return; }
   if (target.closest('#pubPlanAddTimeBtn')) { _pubPlanAddTimeRow('09:00'); return; }
   var removeRow = target.closest('[data-plan-time-remove]');
   if (removeRow) {
     var row = removeRow.closest('[data-plan-time-row]');
     if (row) row.parentNode.removeChild(row);
+    return;
+  }
+  var expandBtn = target.closest('[data-plan-expand]');
+  if (expandBtn) {
+    event.stopPropagation();
+    var expandId = expandBtn.getAttribute('data-plan-expand');
+    var expandPlan = _pubPlanCache.filter(function(p) { return String(p.id) === String(expandId); })[0];
+    var expandBox = document.getElementById('pubPlanPreviewBox-' + expandId);
+    var opening = !expandBox || expandBox.style.display === 'none';
+    if (!opening) {
+      if (expandBox) expandBox.style.display = 'none';
+      expandBtn.textContent = '展开规划';
+      if (String(_pubPlanExpandedId) === String(expandId)) _pubPlanExpandedId = 0;
+    } else {
+      if (_pubPlanExpandedId && String(_pubPlanExpandedId) !== String(expandId)) {
+        var oldBox = document.getElementById('pubPlanPreviewBox-' + _pubPlanExpandedId);
+        if (oldBox) oldBox.style.display = 'none';
+        var oldBtn = document.querySelector('[data-plan-expand="' + _pubPlanExpandedId + '"]');
+        if (oldBtn) oldBtn.textContent = '展开规划';
+      }
+      _pubPlanExpandedId = expandId;
+      if (expandBox) expandBox.style.display = 'block';
+      expandBtn.textContent = '收起规划';
+      if (expandPlan) _pubPlanLoadExpanded(expandPlan);
+    }
     return;
   }
   var runBtn = target.closest('[data-plan-run]');
@@ -6564,6 +6781,11 @@ document.addEventListener('click', function(event) {
 
 document.addEventListener('change', function(event) {
   if (event.target && event.target.id === 'pubPlanPlatform') _pubPlanLoadAccounts(event.target.value, 0);
+  if (event.target && event.target.id === 'pubPlanPreviewPageSize') _pubPlanPreviewPage(1);
+  if (event.target && event.target.id === 'pubPlanStartNowChk' && !_pubPlanEditingId) {
+    var saveBtn = document.getElementById('pubPlanSaveBtn');
+    if (saveBtn) saveBtn.textContent = event.target.checked ? '创建并启动' : '创建（不启动）';
+  }
 });
 
 // 内容记录 → 加入发布分组（分组在「发布任务 → 分组」里直接选）
