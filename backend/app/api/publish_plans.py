@@ -646,11 +646,17 @@ def _plan_items_rows(db: Session, plan: PublishPlan, include_preview: bool = Tru
         .order_by(PublishPlanItem.id.asc())
         .all()
     )
-    task_ids = [int(r.task_id) for r in db_items if r.task_id]
+    task_ids = {int(r.task_id) for r in db_items if r.task_id}
+    task_ids.update(int(it.get("task_id")) for it in processed if it.get("task_id"))
     tasks: Dict[int, PublishTask] = {}
     if task_ids:
         for task in db.query(PublishTask).filter(PublishTask.id.in_(task_ids)).all():
             tasks[int(task.id)] = task
+    for row in rows:
+        tid = row.get("task_id")
+        task = tasks.get(int(tid)) if tid else None
+        if task is not None and str(getattr(task, "title", "") or "").strip():
+            row["name"] = str(task.title)
     db_by_key = {str(r.asset_key): r for r in db_items}
     for row in rows:
         dbrow = db_by_key.get(str(row.get("key") or ""))
@@ -676,7 +682,7 @@ def _plan_items_rows(db: Session, plan: PublishPlan, include_preview: bool = Tru
         rows.append({
             "index": idx,
             "key": key,
-            "name": str(dbrow.title or dbrow.asset_id or key),
+            "name": str((getattr(task, "title", "") if task is not None else "") or dbrow.title or dbrow.asset_id or key),
             "asset_id": str(dbrow.asset_id or ""),
             "path": str(dbrow.source_ref or ""),
             "publish_at": publish_at,
@@ -693,8 +699,24 @@ def _plan_items_rows(db: Session, plan: PublishPlan, include_preview: bool = Tru
         times = _clean_times(plan.times)
         daily = max(1, min(int(plan.daily_count or len(times) or 1), 20))
         times = times[:daily] if len(times) >= daily else times
+        # 剩余素材不能和已经创建的任务抢同一个时间点。
+        # 从已处理条目的最后一个计划时间之后继续排。
+        base_now = datetime.now()
+        for existing_row in rows:
+            raw_when = str(existing_row.get("publish_at") or "").strip()
+            if not raw_when:
+                continue
+            try:
+                existing_when = datetime.strptime(raw_when[:16], "%Y-%m-%d %H:%M")
+            except ValueError:
+                try:
+                    existing_when = datetime.strptime(raw_when[:10], "%Y-%m-%d")
+                except ValueError:
+                    continue
+            if existing_when > base_now:
+                base_now = existing_when
         slots = _assign_schedule_slots(
-            len(remaining), times, None, datetime.now(),
+            len(remaining), times, None, base_now,
             min_lead=_schedule_min_lead(plan.platform),
         )
         next_index = max([int(r.get("index") or 0) for r in rows] or [0])

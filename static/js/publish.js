@@ -6239,30 +6239,45 @@ function _pubPlanPreviewTableHtml(data) {
 function _pubPlanItemsHtml(plan, data) {
   var items = (data && data.items) || [];
   var summary = (data && data.summary) || {};
-  var head = '<div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.35rem;">已创建 <b style="color:var(--text);">' +
+  var head = '<div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.35rem;">共 ' +
+    items.length + ' 条 · 已创建 <b style="color:var(--text);">' +
     (parseInt(summary.created, 10) || 0) + '</b> 条 · 待创建 <b style="color:var(--text);">' +
     (parseInt(summary.not_created, 10) || 0) + '</b> 条 · 失败 ' + (parseInt(summary.failed, 10) || 0) +
     ' 条 · 已跳过 ' + (parseInt(summary.skipped, 10) || 0) + ' 条</div>';
   if (!items.length) return head + '<div style="font-size:0.8rem;color:var(--text-muted);">没有素材明细。</div>';
-  var html = head + '<div class="pub-plan-preview-head" style="display:flex;gap:0.4rem;padding:0.4rem 0.2rem;border-bottom:1px solid var(--border);font-size:0.76rem;font-weight:600;color:var(--text-muted);">' +
-    '<span style="width:2.8rem;">序号</span><span style="flex:1;min-width:0;">素材</span><span style="width:8.5rem;">计划时间</span><span style="width:6rem;">状态</span><span style="width:4.5rem;text-align:right;">操作</span></div>';
-  items.forEach(function(it) {
-    var status = String(it.status || '');
-    var label = status === 'success' ? '平台已发' : (status === 'pending' ? '待平台发布' : (status === 'failed' ? '失败' : (status === 'skipped' ? '已存在/跳过' : '未创建')));
-    var color = status === 'success' ? 'var(--success)' : (status === 'failed' ? 'var(--error)' : (status === 'skipped' ? 'var(--text-muted)' : 'var(--text)'));
-    var action = '';
-    if (it.can_trigger) {
-      action = '<button type="button" class="btn btn-primary btn-sm" data-plan-trigger="' + plan.id + '" data-plan-trigger-key="' + escapeAttr(it.key || '') + '" data-plan-trigger-at="' + escapeAttr(it.publish_at || '') + '" style="padding:0.2rem 0.5rem;font-size:0.75rem;">' + (status === 'failed' ? '重试' : '触发') + '</button>';
-    } else if (it.task_id) {
-      action = '<span style="font-size:0.72rem;color:var(--text-muted);">#' + escapeHtml(String(it.task_id)) + '</span>';
-    }
-    html += '<div class="pub-plan-preview-row" style="display:flex;gap:0.4rem;padding:4px 0.2rem;align-items:center;">' +
-      '<span style="width:2.8rem;color:var(--text-muted);font-size:0.75rem;">' + escapeHtml(String(it.index || '')) + '</span>' +
-      '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeAttr(it.path || it.name || '') + '">' + escapeHtml(it.name || it.asset_id || '') + '</span>' +
-      '<span style="width:8.5rem;font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(it.publish_at || '') + '</span>' +
-      '<span style="width:6rem;font-size:0.75rem;color:' + color + ';">' + escapeHtml(label) + '</span>' +
-      '<span style="width:4.5rem;text-align:right;">' + action + '</span></div>';
-  });
+
+  function rowsHtml(list) {
+    var html = '<div class="pub-plan-preview-head" style="display:flex;gap:0.4rem;padding:0.4rem 0.2rem;border-bottom:1px solid var(--border);font-size:0.76rem;font-weight:600;color:var(--text-muted);">' +
+      '<span style="width:2.8rem;">序号</span><span style="flex:1;min-width:0;">素材</span><span style="width:8.5rem;">计划时间</span><span style="width:6rem;">状态</span><span style="width:4.5rem;text-align:right;">操作</span></div>';
+    list.forEach(function(it) {
+      var status = String(it.status || '');
+      var label = status === 'success' ? '平台已发' : (status === 'pending' ? '待平台发布' : (status === 'failed' ? '失败' : (status === 'skipped' ? '已存在/跳过' : '未创建')));
+      var color = status === 'success' ? 'var(--success)' : (status === 'failed' ? 'var(--error)' : (status === 'skipped' ? 'var(--text-muted)' : 'var(--text)'));
+      var action = '';
+      if (it.can_trigger) {
+        action = '<button type="button" class="btn btn-primary btn-sm" data-plan-trigger="' + plan.id + '" data-plan-trigger-key="' + escapeAttr(it.key || '') + '" data-plan-trigger-at="' + escapeAttr(it.publish_at || '') + '" style="padding:0.2rem 0.5rem;font-size:0.75rem;">' + (status === 'failed' ? '重试' : '触发') + '</button>';
+      } else if (it.task_id) {
+        action = '<span style="font-size:0.72rem;color:var(--text-muted);">#' + escapeHtml(String(it.task_id)) + '</span>';
+      }
+      html += '<div class="pub-plan-preview-row" style="display:flex;gap:0.4rem;padding:4px 0.2rem;align-items:center;">' +
+        '<span style="width:2.8rem;color:var(--text-muted);font-size:0.75rem;">' + escapeHtml(String(it.index || '')) + '</span>' +
+        '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeAttr(it.path || it.name || '') + '">' + escapeHtml(it.name || it.asset_id || '') + '</span>' +
+        '<span style="width:8.5rem;font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(it.publish_at || '') + '</span>' +
+        '<span style="width:6rem;font-size:0.75rem;color:' + color + ';">' + escapeHtml(label) + '</span>' +
+        '<span style="width:4.5rem;text-align:right;">' + action + '</span></div>';
+    });
+    return html;
+  }
+
+  var processed = items.filter(function(it) { return String(it.status || '') !== 'not_created'; });
+  var remaining = items.filter(function(it) { return String(it.status || '') === 'not_created'; });
+  var html = head;
+  if (processed.length) {
+    html += '<div style="margin:0.45rem 0 0.2rem;font-size:0.78rem;font-weight:600;color:var(--text);">已创建的定时任务（' + processed.length + '）</div>' + rowsHtml(processed);
+  }
+  if (remaining.length) {
+    html += '<div style="margin:0.55rem 0 0.2rem;font-size:0.78rem;font-weight:600;color:var(--text);">待创建素材（' + remaining.length + '）</div>' + rowsHtml(remaining);
+  }
   return html;
 }
 
