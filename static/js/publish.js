@@ -15,14 +15,16 @@ function bindPublishTabs() {
       tab.classList.add('active');
       var accounts = document.getElementById('pubTabAccounts');
       var tasks = document.getElementById('pubTabTasks');
+      var plans = document.getElementById('pubTabPlans');
       if (accounts) accounts.style.display = (target === 'accounts') ? '' : 'none';
       if (tasks) tasks.style.display = (target === 'tasks') ? '' : 'none';
+      if (plans) plans.style.display = (target === 'plans') ? '' : 'none';
       if (target === 'accounts') {
         hideAccountDetailPanel();
         loadAccounts();
       }
       if (target === 'tasks') { loadTasks(); }
-      loadPublishPlans();
+      if (target === 'plans') { loadPublishPlans(); }
     });
   });
 }
@@ -5763,7 +5765,7 @@ function bindPublishRefreshButtons() {
         loadAccounts();
       }
       if (_currentPubTab === 'tasks') loadTasks();
-      loadPublishPlans();
+      if (_currentPubTab === 'plans') loadPublishPlans();
     });
   }
 
@@ -5776,7 +5778,6 @@ function initPublishView() {
   bindPublishAccountDetailAndSchedule();
   hideAccountDetailPanel();
   loadAccounts();
-  loadPublishPlans();
   loadCreativeCandidateGroups();
 }
 
@@ -6178,24 +6179,41 @@ function loadPublishPlans() {
   });
 }
 
+function _pubPlanCreatedTotal(plan) {
+  if (plan && plan.created_total != null) return Math.max(0, parseInt(plan.created_total, 10) || 0);
+  var items = (plan && plan.items) || [];
+  return items.filter(function(it) {
+    return !!(it.task_id || it.status === 'pending' || it.status === 'success');
+  }).length;
+}
+
 function renderPublishPlans() {
   var el = document.getElementById('publishPlanList');
   if (!el) return;
   if (!_pubPlanCache.length) {
-    el.innerHTML = '<div class="page-empty-card">还没有定时发布，点右上「＋ 定时发布」。</div>';
+    el.innerHTML = '<div class="page-empty-card">还没有定时任务，点右上「＋ 新增」。</div>';
     return;
   }
-  el.innerHTML = '<div class="publish-task-list">' + _pubPlanCache.map(function(plan) {
+  var totalCreated = _pubPlanCache.reduce(function(sum, plan) {
+    return sum + _pubPlanCreatedTotal(plan);
+  }, 0);
+  var summary = '<div style="font-size:0.82rem;color:var(--text-muted);margin:0 0 0.5rem 0;">共 ' +
+    _pubPlanCache.length + ' 个定时任务 · 已成功创建 ' + totalCreated + ' 条任务（计为发布成功）</div>';
+  el.innerHTML = summary + '<div class="publish-task-list">' + _pubPlanCache.map(function(plan) {
+    var created = _pubPlanCreatedTotal(plan);
+    var failed = Math.max(0, parseInt(plan.failed_total, 10) || 0);
     var items = (plan.items || []).slice(0, 3).map(function(it) {
+      var statusLabel = it.status === 'success' ? '平台已发' : (it.status === 'failed' ? '失败' : '待执行');
       var color = it.status === 'success' ? 'var(--success)' : (it.status === 'failed' ? 'var(--error)' : 'var(--text-muted)');
       return '<div style="font-size:0.76rem;color:' + color + ';">' +
         escapeHtml((it.used_date || '') + ' ' + (it.title || it.asset_id || '')) +
+        ' · ' + escapeHtml(statusLabel) +
         (it.error ? ' · ' + escapeHtml(String(it.error).slice(0, 80)) : '') + '</div>';
     }).join('');
     return '<div class="publish-task-item" data-plan-open="' + plan.id + '" style="cursor:pointer;">' +
       '<div class="publish-task-top">' +
         '<div style="flex:1;min-width:0;">' +
-          '<div class="publish-task-title">' + escapeHtml(plan.name || ('定时发布 #' + plan.id)) +
+          '<div class="publish-task-title">' + escapeHtml(plan.name || ('定时任务 #' + plan.id)) +
             ' <span style="font-size:0.75rem;color:' + (plan.enabled ? 'var(--success)' : 'var(--text-muted)') + ';">' +
             (plan.enabled ? '已启动' : '已暂停') + '</span></div>' +
           '<div class="publish-task-meta">' + escapeHtml(_pubPlanPlatformLabel(plan.platform)) +
@@ -6203,7 +6221,10 @@ function renderPublishPlans() {
             ' · 每天 ' + (plan.daily_count || (plan.times || []).length) + ' 条 · ' +
             escapeHtml((plan.times || []).join('、')) + '</div>' +
           '<div class="publish-task-meta">来源：' + escapeHtml(_pubPlanSourceText(plan)) + '</div>' +
-          '<div class="publish-task-meta">已发 ' + plan.sent_total + '（今天 ' + plan.sent_today + '，失败 ' + plan.failed_total + '）' +
+          '<div class="publish-task-meta" style="margin-top:0.35rem;font-weight:600;color:var(--text);">已成功创建 ' + created + ' 条任务' +
+            ' <span style="font-weight:400;color:var(--text-muted);">（创建成功即计为发布成功）</span></div>' +
+          (failed ? '<div class="publish-task-meta" style="color:var(--error);">创建失败 ' + failed + ' 条</div>' : '') +
+          '<div class="publish-task-meta">创建时间：' + escapeHtml(plan.created_at ? _formatDateTimeBeijing(plan.created_at) : '—') +
             (plan.tags ? ' · 标签 ' + escapeHtml(plan.tags) : ' · 标签 AI') + '</div>' +
           items +
         '</div>' +
@@ -6328,7 +6349,9 @@ function _pubPlanRenderDetail(plan) {
   box.style.display = 'block';
   var stats = document.getElementById('pubPlanDetailStats');
   if (stats) {
-    stats.textContent = '已发 ' + plan.sent_total + ' 条（今天 ' + plan.sent_today + ' 条，失败 ' + plan.failed_total + '）' +
+    stats.textContent = '已成功创建 ' + _pubPlanCreatedTotal(plan) + ' 条任务（创建成功即计为发布成功）' +
+      (plan.failed_total ? ' · 创建失败 ' + plan.failed_total + ' 条' : '') +
+      (plan.created_at ? ' · 创建于 ' + _formatDateTimeBeijing(plan.created_at) : '') +
       (plan.enabled ? ' · 已启动' : ' · 已暂停');
   }
   var list = document.getElementById('pubPlanDetailItems');
@@ -6338,6 +6361,7 @@ function _pubPlanRenderDetail(plan) {
       return '<div style="padding:2px 0;color:' + color + ';">' +
         escapeHtml((it.used_date || '') + ' ' + (it.title || it.asset_id || it.asset_key)) +
         ' · ' + escapeHtml(it.status) +
+        (it.task_id ? ' · 任务 #' + escapeHtml(String(it.task_id)) : '') +
         (it.error ? ' · ' + escapeHtml(String(it.error).slice(0, 120)) : '') + '</div>';
     }).join('');
     list.innerHTML = rows || '<div style="color:var(--text-muted);">还没有发布记录。</div>';

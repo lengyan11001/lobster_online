@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .auth import _ServerUser, get_current_user_for_local
@@ -293,6 +294,12 @@ def _plan_payload(db: Session, plan: PublishPlan) -> Dict[str, Any]:
         .all()
     )
     sent_today = sum(1 for row in items if row.used_date == today and row.status in ("pending", "success"))
+    base_count = db.query(func.count(PublishPlanItem.id)).filter(PublishPlanItem.plan_id == int(plan.id))
+    item_total = int(base_count.scalar() or 0)
+    created_total = int(base_count.filter(PublishPlanItem.task_id.isnot(None)).scalar() or 0)
+    success_total = int(base_count.filter(PublishPlanItem.status == "success").scalar() or 0)
+    pending_total = int(base_count.filter(PublishPlanItem.status == "pending").scalar() or 0)
+    failed_total = int(base_count.filter(PublishPlanItem.status == "failed").scalar() or 0)
     return {
         "id": plan.id,
         "user_id": plan.user_id,
@@ -309,9 +316,13 @@ def _plan_payload(db: Session, plan: PublishPlan) -> Dict[str, Any]:
         "tags": plan.tags or "",
         "ai_copy": bool(plan.ai_copy),
         "options": dict(plan.options or {}),
-        "sent_total": len(items),
+        "item_total": item_total,
+        "created_total": created_total,
+        "success_total": success_total,
+        "pending_total": pending_total,
+        "sent_total": item_total,
         "sent_today": sent_today,
-        "failed_total": sum(1 for row in items if row.status == "failed"),
+        "failed_total": failed_total,
         "last_run_at": plan.last_run_at.isoformat() if plan.last_run_at else None,
         "created_at": plan.created_at.isoformat() if plan.created_at else None,
         "items": [
