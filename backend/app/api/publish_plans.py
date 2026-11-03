@@ -1,4 +1,4 @@
-"""本地「发布任务」接口：多来源 + 每天条数/时间点 + 台账去重 + 抖音/视频号。
+"""本地「批量计划发布」接口：多来源 + 每天条数/时间点 + 台账去重 + 抖音/视频号。
 
 配套执行器见 backend/app/services/publish_plan_runner.py。
 """
@@ -115,7 +115,7 @@ def _schedule_candidates(db: Session, user_id: int, body: PublishScheduleReq) ->
     return [item for item in items if str(item.get("key")) not in done]
 
 
-@router.post("/api/publish/plans/preview", summary="预览定时发布规划")
+@router.post("/api/publish/plans/preview", summary="预览批量计划发布")
 def preview_publish_schedule(
     body: PublishScheduleReq,
     current_user: _ServerUser = Depends(get_current_user_for_local),
@@ -157,7 +157,7 @@ def preview_publish_schedule(
     }
 
 
-@router.post("/api/publish/plans/commit", summary="按规划立即创建定时发布任务")
+@router.post("/api/publish/plans/commit", summary="按批量计划创建发布任务")
 async def commit_publish_schedule(
     request: Request,
     body: PublishScheduleReq,
@@ -193,7 +193,7 @@ async def commit_publish_schedule(
     plan_options["_batch_committed"] = True
     plan = PublishPlan(
         user_id=current_user.id,
-        name=(str(body.name or "").strip() or f"定时任务 {datetime.now().strftime('%m-%d %H:%M')}")[:160],
+        name=(str(body.name or "").strip() or f"批量计划 {datetime.now().strftime('%m-%d %H:%M')}")[:160],
         enabled=False,
         platform=platform,
         account_id=int(acct.id) if acct is not None else None,
@@ -331,7 +331,7 @@ def finish_plan_start(
         .first()
     )
     if plan is None:
-        raise HTTPException(404, detail="发布任务不存在")
+        raise HTTPException(404, detail="批量计划不存在")
     opts = dict(plan.options or {})
     opts["_batch_committed"] = True
     opts.pop("_draft", None)
@@ -343,7 +343,7 @@ def finish_plan_start(
     return {"ok": True, "plan": _plan_payload(db, plan)}
 
 
-@router.get("/api/publish/plans/{plan_id}/items", summary="定时任务逐条状态（含未创建）")
+@router.get("/api/publish/plans/{plan_id}/items", summary="批量计划逐条状态（含未创建）")
 def list_plan_items(
     plan_id: int,
     current_user: _ServerUser = Depends(get_current_user_for_local),
@@ -355,12 +355,12 @@ def list_plan_items(
         .first()
     )
     if plan is None:
-        raise HTTPException(404, detail="发布任务不存在")
+        raise HTTPException(404, detail="批量计划不存在")
     rows = _plan_items_rows(db, plan, include_preview=True)
     return {"ok": True, "plan_id": plan.id, "items": rows, "summary": _plan_items_summary(rows)}
 
 
-@router.post("/api/publish/plans/{plan_id}/trigger-item", summary="触发单条未创建/失败的定时任务")
+@router.post("/api/publish/plans/{plan_id}/trigger-item", summary="触发单条未创建/失败的发布任务")
 async def trigger_plan_item(
     plan_id: int,
     body: PlanItemTriggerReq,
@@ -377,7 +377,7 @@ async def trigger_plan_item(
         .first()
     )
     if plan is None:
-        raise HTTPException(404, detail="发布任务不存在")
+        raise HTTPException(404, detail="批量计划不存在")
     plan_opts = dict(plan.options or {})
     if not (plan_opts.get("_batch_committed") or plan_opts.get("_draft")):
         raise HTTPException(400, detail="只有待开始/已排程批次支持单条触发")
@@ -869,7 +869,7 @@ def _plan_payload(db: Session, plan: PublishPlan) -> Dict[str, Any]:
     }
 
 
-@router.get("/api/publish/plans", summary="发布任务列表")
+@router.get("/api/publish/plans", summary="批量计划列表")
 def list_publish_plans(
     current_user: _ServerUser = Depends(get_current_user_for_local),
     db: Session = Depends(get_db),
@@ -883,7 +883,7 @@ def list_publish_plans(
     return {"plans": [_plan_payload(db, row) for row in rows]}
 
 
-@router.post("/api/publish/plans", summary="新建发布任务")
+@router.post("/api/publish/plans", summary="新建批量计划")
 def create_publish_plan(
     body: PublishPlanReq,
     current_user: _ServerUser = Depends(get_current_user_for_local),
@@ -907,7 +907,7 @@ def create_publish_plan(
         raise HTTPException(404, detail="发布账号不存在，请先在「发布账号」里添加")
     plan = PublishPlan(
         user_id=current_user.id,
-        name=(str(body.name or "").strip() or f"发布任务 {datetime.now().strftime('%m-%d %H:%M')}")[:160],
+        name=(str(body.name or "").strip() or f"批量计划 {datetime.now().strftime('%m-%d %H:%M')}")[:160],
         enabled=bool(body.enabled if body.enabled is not None else True),
         platform=platform,
         account_id=int(acct.id) if acct is not None else None,
@@ -938,7 +938,7 @@ def create_publish_plan(
     return {"ok": True, "plan": _plan_payload(db, plan)}
 
 
-@router.patch("/api/publish/plans/{plan_id}", summary="更新/启停发布任务")
+@router.patch("/api/publish/plans/{plan_id}", summary="更新/启停批量计划")
 def update_publish_plan(
     plan_id: int,
     body: PublishPlanReq,
@@ -951,7 +951,7 @@ def update_publish_plan(
         .first()
     )
     if plan is None:
-        raise HTTPException(404, detail="发布任务不存在")
+        raise HTTPException(404, detail="批量计划不存在")
     if body.enabled is not None:
         plan.enabled = bool(body.enabled)
     if body.name is not None:
@@ -998,7 +998,7 @@ def update_publish_plan(
     return {"ok": True, "plan": _plan_payload(db, plan)}
 
 
-@router.delete("/api/publish/plans/{plan_id}", summary="删除发布任务")
+@router.delete("/api/publish/plans/{plan_id}", summary="删除批量计划")
 def delete_publish_plan(
     plan_id: int,
     current_user: _ServerUser = Depends(get_current_user_for_local),
@@ -1010,14 +1010,14 @@ def delete_publish_plan(
         .first()
     )
     if plan is None:
-        raise HTTPException(404, detail="发布任务不存在")
+        raise HTTPException(404, detail="批量计划不存在")
     db.query(PublishPlanItem).filter(PublishPlanItem.plan_id == int(plan.id)).delete()
     db.delete(plan)
     db.commit()
     return {"ok": True}
 
 
-@router.post("/api/publish/plans/{plan_id}/run-now", summary="立即执行发布任务的一条")
+@router.post("/api/publish/plans/{plan_id}/run-now", summary="立即执行批量计划的一条")
 async def run_publish_plan_now(
     plan_id: int,
     current_user: _ServerUser = Depends(get_current_user_for_local),
@@ -1029,7 +1029,7 @@ async def run_publish_plan_now(
         .first()
     )
     if plan is None:
-        raise HTTPException(404, detail="发布任务不存在")
+        raise HTTPException(404, detail="批量计划不存在")
     from ..services.publish_plan_runner import run_plan_once
 
     result = await run_plan_once(int(plan.id))

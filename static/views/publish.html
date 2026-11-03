@@ -3,7 +3,7 @@
               <div class="store-tabs">
                 <button type="button" class="pub-tab active" data-pub-tab="accounts">账号</button>
                 <button type="button" class="pub-tab" data-pub-tab="tasks">发布记录</button>
-                <button type="button" class="pub-tab" data-pub-tab="plans">定时任务</button>
+                <button type="button" class="pub-tab" data-pub-tab="plans">批量计划发布</button>
               </div>
               <div style="display:flex;gap:0.4rem;align-items:center;">
                 <button type="button" id="refreshPublishBtn" class="btn btn-ghost btn-sm">刷新</button>
@@ -134,11 +134,11 @@
               <div id="taskList" style="margin-top:0.5rem;"></div>
             </div>
 
-            <!-- Plans Tab：定时任务 -->
+            <!-- Plans Tab：批量计划发布 -->
             <div id="pubTabPlans" class="pub-tab-panel" style="display:none;">
               <div style="margin-top:0.75rem;display:flex;justify-content:space-between;align-items:center;gap:0.5rem;flex-wrap:wrap;">
                 <div>
-                  <div style="font-weight:600;font-size:0.95rem;">定时任务</div>
+                  <div style="font-weight:600;font-size:0.95rem;">批量计划发布</div>
                   <div style="font-size:0.78rem;color:var(--text-muted);margin-top:0.2rem;">创建成功即视为发布成功；之后由抖音 / 视频号按计划执行。</div>
                 </div>
                 <button type="button" id="pubPlanAddBtn" class="btn btn-primary btn-sm">＋ 新增</button>
@@ -149,8 +149,8 @@
               <div class="modal pub-plan-modal">
                 <div class="pub-plan-head">
                   <div>
-                    <h4 id="pubPlanTitle" class="pub-plan-title">新增定时任务</h4>
-                    <div id="pubPlanSubtitle" class="pub-plan-subtitle">选择来源、账号和时间，先预览规划再批量创建定时任务。</div>
+                    <h4 id="pubPlanTitle" class="pub-plan-title">新增批量计划</h4>
+                    <div id="pubPlanSubtitle" class="pub-plan-subtitle">选择来源、账号和时间，先预览规划，再创建批量发布计划。</div>
                   </div>
                   <button type="button" id="pubPlanCloseBtn" class="btn btn-ghost btn-sm pub-plan-close" aria-label="关闭">×</button>
                 </div>
@@ -229,7 +229,7 @@
                     <span style="font-size:1rem;line-height:1;color:var(--accent);">⏱</span>
                     <span>
                       <span class="pub-plan-check-title">创建方式：上游排程</span>
-                      <span class="pub-plan-check-hint">点「创建并排程」会立即为每条素材创建发布任务，并写入平台的定时发布时间；不会马上发布。</span>
+                      <span class="pub-plan-check-hint">点「创建记录」先建计划，回列表点「开始排程」逐条创建发布任务。</span>
                     </span>
                   </div>
                 </div>

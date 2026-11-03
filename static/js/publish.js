@@ -6273,7 +6273,7 @@ function _pubPlanItemsHtml(plan, data) {
   var remaining = items.filter(function(it) { return String(it.status || '') === 'not_created'; });
   var html = head;
   if (processed.length) {
-    html += '<div style="margin:0.45rem 0 0.2rem;font-size:0.78rem;font-weight:600;color:var(--text);">已创建的定时任务（' + processed.length + '）</div>' + rowsHtml(processed);
+    html += '<div style="margin:0.45rem 0 0.2rem;font-size:0.78rem;font-weight:600;color:var(--text);">已创建的发布任务（' + processed.length + '）</div>' + rowsHtml(processed);
   }
   if (remaining.length) {
     html += '<div style="margin:0.55rem 0 0.2rem;font-size:0.78rem;font-weight:600;color:var(--text);">待创建素材（' + remaining.length + '）</div>' + rowsHtml(remaining);
@@ -6322,14 +6322,14 @@ function renderPublishPlans() {
   var el = document.getElementById('publishPlanList');
   if (!el) return;
   if (!_pubPlanCache.length) {
-    el.innerHTML = '<div class="page-empty-card">还没有定时任务，点右上「＋ 新增」。</div>';
+    el.innerHTML = '<div class="page-empty-card">还没有批量计划，点右上「＋ 新增」。</div>';
     return;
   }
   var totalCreated = _pubPlanCache.reduce(function(sum, plan) {
     return sum + _pubPlanCreatedTotal(plan);
   }, 0);
   var summary = '<div style="font-size:0.82rem;color:var(--text-muted);margin:0 0 0.5rem 0;">共 ' +
-    _pubPlanCache.length + ' 个定时任务 · 已创建 ' + totalCreated + ' 条任务</div>';
+    _pubPlanCache.length + ' 个批量计划 · 已创建 ' + totalCreated + ' 条任务</div>';
   el.innerHTML = summary + '<div class="publish-task-list">' + _pubPlanCache.map(function(plan) {
     var created = _pubPlanCreatedTotal(plan);
     var failed = Math.max(0, parseInt(plan.failed_total, 10) || 0);
@@ -6341,7 +6341,7 @@ function renderPublishPlans() {
     return '<div class="publish-task-item" data-plan-open="' + plan.id + '" style="cursor:pointer;">' +
       '<div class="publish-task-top">' +
         '<div style="flex:1;min-width:0;">' +
-          '<div class="publish-task-title">' + escapeHtml(plan.name || ('定时任务 #' + plan.id)) +
+          '<div class="publish-task-title">' + escapeHtml(plan.name || ('批量计划 #' + plan.id)) +
             ' <span style="font-size:0.75rem;color:' + stateColor + ';">' + stateLabel + '</span></div>' +
           '<div class="publish-task-meta">' + escapeHtml(_pubPlanPlatformLabel(plan.platform)) +
             (plan.account_nickname ? ' · ' + escapeHtml(plan.account_nickname) : '') +
@@ -6548,7 +6548,7 @@ function _pubPlanRenderDetail(plan) {
       var created = parseInt(summary.created, 10);
       if (isNaN(created)) created = _pubPlanCreatedTotal(plan);
       var failed = parseInt(summary.failed, 10) || 0;
-      stats.textContent = '已在上游创建 ' + created + ' 条定时任务' + (failed ? ' · 失败 ' + failed + ' 条' : '') +
+      stats.textContent = '已在上游创建 ' + created + ' 条发布任务' + (failed ? ' · 失败 ' + failed + ' 条' : '') +
         (plan.created_at ? ' · 创建于 ' + _formatDateTimeBeijing(plan.created_at) : '') +
         ' · 平台到点发布';
     } else {
@@ -6592,7 +6592,7 @@ function _pubPlanOpenById(planId) {
     _pubPlanCache = rows;
     var hit = rows.filter(function(p) { return String(p.id) === String(planId); })[0];
     if (hit) openPublishPlanDialog(hit);
-    else _pubPlanMsg('这个定时发布已经不存在了。', true);
+    else _pubPlanMsg('这个批量计划已经不存在了。', true);
   }).catch(function(err) {
     _pubPlanMsg('打开失败：' + ((err && err.message) || err), true);
   });
@@ -6606,12 +6606,12 @@ function openPublishPlanDialog(plan) {
   _pubPlanEditingCommitted = !!(editing && editing.committed);
   var title = document.getElementById('pubPlanTitle');
   if (title) {
-    title.textContent = _pubPlanEditingCommitted ? '定时任务详情（已排程）' : (editing ? '定时任务详情' : '新增定时任务');
+    title.textContent = _pubPlanEditingCommitted ? '批量计划详情（已排程）' : (editing ? '批量计划详情' : '新增批量计划');
   }
   var subtitle = document.getElementById('pubPlanSubtitle');
   if (subtitle) {
     subtitle.textContent = _pubPlanEditingCommitted
-      ? '已在上游创建定时任务；这里只能改名称/标签或删除本机记录，不会改动平台排程。'
+      ? '已在上游创建发布任务；这里只能改名称/标签或删除本机记录，不会改动平台排程。'
       : (editing ? '查看任务状态和规划；修改后保存，不会自动启动。' : '先创建一条记录，回列表点「开始排程」再逐条创建任务。');
   }
   var saveBtn = document.getElementById('pubPlanSaveBtn');
@@ -6821,7 +6821,7 @@ document.addEventListener('click', function(event) {
     var triggerId = triggerBtn.getAttribute('data-plan-trigger');
     var triggerKey = triggerBtn.getAttribute('data-plan-trigger-key');
     var triggerAt = triggerBtn.getAttribute('data-plan-trigger-at');
-    if (!confirm('立即为这条素材创建定时任务？')) return;
+    if (!confirm('立即为这条素材创建发布任务？')) return;
     triggerBtn.disabled = true;
     triggerBtn.textContent = '触发中…';
     _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(triggerId) + '/trigger-item', {
@@ -6842,7 +6842,7 @@ document.addEventListener('click', function(event) {
   if (startBtn) {
     event.stopPropagation();
     var startId = startBtn.getAttribute('data-plan-start');
-    if (!confirm('开始为这个批次逐条创建定时任务？中途可停止，再点开始会继续未创建的。')) return;
+    if (!confirm('开始为这个批次逐条创建发布任务？中途可停止，再点开始会继续未创建的。')) return;
     startBtn.disabled = true;
     startBtn.textContent = '准备中…';
     function finishStart() {
@@ -6950,7 +6950,7 @@ document.addEventListener('click', function(event) {
     event.stopPropagation();
     var tId = toggleBtn.getAttribute('data-plan-toggle');
     var tPlan = _pubPlanCache.filter(function(p) { return String(p.id) === String(tId); })[0] || {};
-    if (!tPlan.enabled && !confirm('启动后其它定时发布会自动暂停（一个设备只跑一个），继续？')) return;
+    if (!tPlan.enabled && !confirm('启动后其它批量计划会自动暂停（一个设备只跑一个），继续？')) return;
     toggleBtn.disabled = true;
     _pubPlanToggle(tId, !tPlan.enabled).catch(function(err) {
       alert('操作失败：' + ((err && err.message) || err));
@@ -6960,7 +6960,7 @@ document.addEventListener('click', function(event) {
   var tgBtn = target.closest('#pubPlanToggleBtn');
   if (tgBtn) {
     var cur = _pubPlanCache.filter(function(p) { return String(p.id) === String(_pubPlanEditingId); })[0] || {};
-    if (!cur.enabled && !confirm('启动后其它定时发布会自动暂停（一个设备只跑一个），继续？')) return;
+    if (!cur.enabled && !confirm('启动后其它批量计划会自动暂停（一个设备只跑一个），继续？')) return;
     _pubPlanToggle(_pubPlanEditingId, !cur.enabled).then(function() {
       closePublishPlanDialog();
       loadPublishPlans();
@@ -6972,13 +6972,13 @@ document.addEventListener('click', function(event) {
     var delPlan = _pubPlanCache.filter(function(p) { return String(p.id) === String(_pubPlanEditingId); })[0] || {};
     var wasCommitted = !!delPlan.committed;
     var delMsg = wasCommitted
-      ? '删除这个已排程批次的本地记录？平台已创建的定时任务不会取消，已发布内容不受影响。'
-      : '删除这个定时发布？台账记录一并删除，已发布内容不受影响。';
+      ? '删除这个已排程批次的本地记录？平台已创建的发布任务不会取消，已发布内容不受影响。'
+      : '删除这个批量计划？台账记录一并删除，已发布内容不受影响。';
     if (!confirm(delMsg)) return;
     _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(_pubPlanEditingId), { method: 'DELETE' }).then(function() {
       closePublishPlanDialog();
       loadPublishPlans();
-      if (wasCommitted) alert('本机记录已删除；平台上的定时任务仍然保留，如需取消请到平台处理。');
+      if (wasCommitted) alert('本机记录已删除；平台上的发布任务仍然保留，如需取消请到平台处理。');
     });
     return;
   }
