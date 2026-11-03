@@ -4025,7 +4025,60 @@ function _bindAssetActionMenuPositioning(container) {
   });
   if (!window.__assetActionMenuGlobalBound) {
     window.__assetActionMenuGlobalBound = true;
-    document.addEventListener('click', function(event) {
+    function _pubPlanRunPending(planId, btn, finishDraft, progressPrefix, resetLabel) {
+  if (!planId || !btn) return;
+  var prefix = progressPrefix || '开始中';
+  var reset = resetLabel || '开始排程';
+  btn.disabled = true;
+  btn.textContent = '准备中…';
+  function finish() {
+    if (finishDraft) {
+      _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(planId) + '/finish-start', { method: 'POST' }).then(function() {
+        _pubPlanPreviewCache = {};
+        loadPublishPlans();
+      }).catch(function(err) {
+        btn.disabled = false;
+        btn.textContent = reset;
+        alert('收尾失败：' + ((err && err.message) || err));
+        _pubPlanPreviewCache = {};
+        loadPublishPlans();
+      });
+    } else {
+      _pubPlanPreviewCache = {};
+      loadPublishPlans();
+    }
+  }
+  _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(planId) + '/items').then(function(d) {
+    var pending = ((d && d.items) || []).filter(function(it) { return it.can_trigger; });
+    if (!pending.length) { finish(); return; }
+    var idx = 0;
+    function step() {
+      if (idx >= pending.length) { finish(); return; }
+      var it = pending[idx];
+      btn.textContent = prefix + ' ' + (idx + 1) + '/' + pending.length;
+      _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(planId) + '/trigger-item', {
+        method: 'POST',
+        body: JSON.stringify({ key: it.key, publish_at: it.publish_at })
+      }).then(function() {
+        idx += 1;
+        step();
+      }).catch(function(err) {
+        btn.disabled = false;
+        btn.textContent = reset;
+        alert('第 ' + (idx + 1) + ' 条失败：' + ((err && err.message) || err));
+        _pubPlanPreviewCache = {};
+        loadPublishPlans();
+      });
+    }
+    step();
+  }).catch(function(err) {
+    btn.disabled = false;
+    btn.textContent = reset;
+    alert('读取待创建列表失败：' + ((err && err.message) || err));
+  });
+}
+
+document.addEventListener('click', function(event) {
       var target = event.target;
       var inside = target && target.closest ? target.closest('details.asset-content-action-menu, .asset-content-action-list') : null;
       if (!inside) _closeFloatingAssetActionMenus(null);
@@ -6239,11 +6292,14 @@ function _pubPlanPreviewTableHtml(data) {
 function _pubPlanItemsHtml(plan, data) {
   var items = (data && data.items) || [];
   var summary = (data && data.summary) || {};
-  var head = '<div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.35rem;">共 ' +
-    items.length + ' 条 · 已创建 <b style="color:var(--text);">' +
+  var retryable = items.filter(function(it) { return it.can_trigger; }).length;
+  var head = '<div style="display:flex;justify-content:space-between;align-items:center;gap:0.5rem;font-size:0.8rem;color:var(--text-muted);margin-bottom:0.35rem;">' +
+    '<span>共 ' + items.length + ' 条 · 已创建 <b style="color:var(--text);">' +
     (parseInt(summary.created, 10) || 0) + '</b> 条 · 待创建 <b style="color:var(--text);">' +
     (parseInt(summary.not_created, 10) || 0) + '</b> 条 · 失败 ' + (parseInt(summary.failed, 10) || 0) +
-    ' 条 · 已跳过 ' + (parseInt(summary.skipped, 10) || 0) + ' 条</div>';
+    ' 条 · 已跳过 ' + (parseInt(summary.skipped, 10) || 0) + ' 条</span>' +
+    (retryable ? '<button type="button" class="btn btn-ghost btn-sm" data-plan-retry-all="' + plan.id + '" style="padding:0.2rem 0.5rem;font-size:0.75rem;">全部重试（' + retryable + '）</button>' : '') +
+    '</div>';
   if (!items.length) return head + '<div style="font-size:0.8rem;color:var(--text-muted);">没有素材明细。</div>';
 
   function rowsHtml(list) {
@@ -6843,48 +6899,16 @@ document.addEventListener('click', function(event) {
     event.stopPropagation();
     var startId = startBtn.getAttribute('data-plan-start');
     if (!confirm('开始为这个批次逐条创建发布任务？中途可停止，再点开始会继续未创建的。')) return;
-    startBtn.disabled = true;
-    startBtn.textContent = '准备中…';
-    function finishStart() {
-      _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(startId) + '/finish-start', { method: 'POST' }).then(function() {
-        _pubPlanPreviewCache = {};
-        loadPublishPlans();
-      }).catch(function(err) {
-        startBtn.disabled = false;
-        startBtn.textContent = '开始排程';
-        alert('收尾失败：' + ((err && err.message) || err));
-        _pubPlanPreviewCache = {};
-        loadPublishPlans();
-      });
-    }
-    _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(startId) + '/items').then(function(d) {
-      var pending = ((d && d.items) || []).filter(function(it) { return it.can_trigger; });
-      if (!pending.length) { finishStart(); return; }
-      var idx = 0;
-      function step() {
-        if (idx >= pending.length) { finishStart(); return; }
-        var it = pending[idx];
-        startBtn.textContent = '开始中 ' + (idx + 1) + '/' + pending.length;
-        _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(startId) + '/trigger-item', {
-          method: 'POST',
-          body: JSON.stringify({ key: it.key, publish_at: it.publish_at })
-        }).then(function() {
-          idx += 1;
-          step();
-        }).catch(function(err) {
-          startBtn.disabled = false;
-          startBtn.textContent = '开始排程';
-          alert('第 ' + (idx + 1) + ' 条失败：' + ((err && err.message) || err));
-          _pubPlanPreviewCache = {};
-          loadPublishPlans();
-        });
-      }
-      step();
-    }).catch(function(err) {
-      startBtn.disabled = false;
-      startBtn.textContent = '开始排程';
-      alert('读取待创建列表失败：' + ((err && err.message) || err));
-    });
+    _pubPlanRunPending(startId, startBtn, true, '开始中', '开始排程');
+    return;
+  }
+  var retryAllBtn = target.closest('[data-plan-retry-all]');
+  if (retryAllBtn) {
+    event.stopPropagation();
+    var retryPlanId = retryAllBtn.getAttribute('data-plan-retry-all');
+    var retryPlan = _pubPlanCache.filter(function(p) { return String(p.id) === String(retryPlanId); })[0] || {};
+    if (!confirm('全部重试这个计划里未成功的素材？已成功的会自动跳过。')) return;
+    _pubPlanRunPending(retryPlanId, retryAllBtn, !!retryPlan.draft, '重试中', '全部重试');
     return;
   }
   if (target.closest('[data-plan-preview-box]')) return;
