@@ -988,6 +988,89 @@ def _parse_publish_time(value: str):
     return None
 
 
+async def _weui_apply_publish_schedule(page: Any, when: Any, value: str, _step) -> bool:
+    """新版视频号（WeUI）的定时发表：单选「定时」+ weui-desktop-picker。"""
+    import re as _re
+
+    target_date = when.strftime("%Y-%m-%d")
+    target_time = when.strftime("%H:%M")
+    try:
+        # 1) 「定时发表」现在是单选，点“定时”才会出现发表时间输入框
+        ding = page.get_by_text("定时", exact=True)
+        if await ding.count():
+            await ding.first.click(timeout=3000)
+            await _delay(0.3, 0.7)
+        inp = page.get_by_placeholder("请选择发表时间").first
+        if not await inp.count():
+            _step("设置发表时间", False, value=value, reason="选择「定时」后没有出现发表时间输入框")
+            return False
+
+        # 2) 日期面板要点 dt，不是 readonly 的 input
+        dts = page.locator("dt.weui-desktop-picker__dt")
+        if not await dts.count():
+            _step("设置发表时间", False, value=value, reason="没有找到 WeUI 日期选择器")
+            return False
+        await dts.first.click(timeout=4000)
+        await _delay(0.4, 0.8)
+
+        # 3) 切到目标月份
+        for _ in range(24):
+            labels = page.locator("dd.weui-desktop-picker__dd .weui-desktop-picker__panel__label")
+            text = " ".join([(t or "").strip() for t in await labels.all_inner_texts()])
+            if ("%d年" % when.year) in text and ("%d月" % when.month) in text:
+                break
+            ym = _re.search(r"(\d{4})年", text)
+            mm = _re.search(r"(\d{1,2})月", text)
+            cur_y = int(ym.group(1)) if ym else when.year
+            cur_m = int(mm.group(1)) if mm else when.month
+            go_next = (cur_y, cur_m) < (when.year, when.month)
+            btn = page.locator(
+                "dd.weui-desktop-picker__dd .weui-desktop-btn__icon__right" if go_next
+                else "dd.weui-desktop-picker__dd .weui-desktop-btn__icon__left"
+            ).first
+            if await btn.is_visible():
+                await btn.click(timeout=2500)
+            else:
+                await btn.evaluate("el => el.click()")
+            await _delay(0.2, 0.4)
+
+        # 4) 点日期格子（排除上下月 faded / 已过期 disabled）
+        day = page.locator("dd.weui-desktop-picker__dd").first.locator(
+            "a:not(.weui-desktop-picker__faded):not(.weui-desktop-picker__disabled)"
+        ).filter(has_text=_re.compile(r"^\s*%d\s*$" % when.day)).first
+        if not await day.count():
+            _step("设置发表时间", False, value=value, reason="日历里没找到 %s" % target_date)
+            return False
+        await day.click(timeout=4000)
+        await _delay(0.3, 0.7)
+
+        # 5) 选时/分
+        time_dd = page.locator("dd.weui-desktop-picker__dd__time").first
+        if not await time_dd.is_visible():
+            await dts.nth(1).click(timeout=4000)
+            await _delay(0.3, 0.7)
+        hour = time_dd.locator("ol.weui-desktop-picker__time__hour li").filter(
+            has_text=_re.compile(r"^\s*%02d\s*$" % when.hour)).first
+        minute = time_dd.locator("ol.weui-desktop-picker__time__minute li").filter(
+            has_text=_re.compile(r"^\s*%02d\s*$" % when.minute)).first
+        if not await hour.count() or not await minute.count():
+            _step("设置发表时间", False, value=value, reason="时间列表里没找到 %s" % target_time)
+            return False
+        await hour.click(timeout=4000)
+        await _delay(0.2, 0.4)
+        await minute.click(timeout=4000)
+        await _delay(0.4, 0.8)
+
+        readback = (await inp.input_value()).strip()
+        ok = readback == when.strftime("%Y-%m-%d %H:%M")
+        _step("设置发表时间", ok, value=value, readback=readback)
+        return ok
+    except Exception as exc:
+        _step("设置发表时间", False, value=value,
+              reason="WeUI 日期面板操作失败: %s" % str(exc)[:120])
+        return False
+
+
 async def _apply_publish_schedule(page: Any, value: str, _step) -> bool:
     """在发布页选择「发表时间」（定时）。"""
     import datetime as _dt
@@ -1001,6 +1084,18 @@ async def _apply_publish_schedule(page: Any, value: str, _step) -> bool:
         return False
     target_date = when.strftime("%Y-%m-%d")
     target_time = when.strftime("%H:%M")
+
+    # 新版视频号（WeUI）：定时发表是「不定时/定时」单选，日期面板是 weui-desktop-picker。
+    try:
+        if not await page.get_by_placeholder("请选择发表时间").count():
+            ding = page.get_by_text("定时", exact=True)
+            if await ding.count():
+                await ding.first.click(timeout=2500)
+                await _delay(0.3, 0.7)
+    except Exception as exc:
+        logger.debug("weui schedule probe skipped: %s", exc)
+    if await page.get_by_placeholder("请选择发表时间").count():
+        return await _weui_apply_publish_schedule(page, when, value, _step)
 
     # 1) 页面上如果有「定时发表」开关/复选框，先打开
     try:
