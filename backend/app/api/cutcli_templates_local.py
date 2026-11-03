@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -2530,7 +2531,8 @@ def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], wid
     return lines
 
 
-def _write_ass(path: Path, captions: List[Dict[str, Any]], style: Dict[str, Any], width: int, height: int, overlay_texts: Optional[Dict[str, Any]] = None, duration_sec: Optional[float] = None) -> None:
+def _write_ass(path: Path, captions: List[Dict[str, Any]], style: Dict[str, Any], width: int, height: int, overlay_texts: Optional[Dict[str, Any]] = None, duration_sec: Optional[float] = None, font_name: Optional[str] = None) -> None:
+    font_name = (font_name or "Microsoft YaHei").strip() or "Microsoft YaHei"
     font_size = int(style.get("ass_font_size") or 72)
     if width <= 720:
         font_size = max(34, int(font_size * 0.82))
@@ -2545,8 +2547,9 @@ def _write_ass(path: Path, captions: List[Dict[str, Any]], style: Dict[str, Any]
         "",
         "[V4+ Styles]",
         "Format: Name,Fontname,Fontsize,PrimaryColour,SecondaryColour,OutlineColour,BackColour,Bold,Italic,Underline,StrikeOut,ScaleX,ScaleY,Spacing,Angle,BorderStyle,Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding",
-        "Style: Default,Microsoft YaHei,%d,%s,&H00FFFFFF,%s,&H64000000,-1,0,0,0,100,100,0,0,1,%d,%d,%d,40,40,%d,1"
+        "Style: Default,%s,%d,%s,&H00FFFFFF,%s,&H64000000,-1,0,0,0,100,100,0,0,1,%d,%d,%d,40,40,%d,1"
         % (
+            font_name,
             font_size,
             _ass_color(style.get("ass_primary") or ""),
             _ass_color(style.get("ass_outline") or ""),
@@ -2555,11 +2558,12 @@ def _write_ass(path: Path, captions: List[Dict[str, Any]], style: Dict[str, Any]
             int(style.get("ass_alignment") or 2),
             int(style.get("ass_margin_v") or 180),
         ),
-        "Style: OverlayTitle,Microsoft YaHei,%d,&H00FFFFFF,&H00FFFFFF,&H00111827,&H64000000,-1,0,0,0,100,100,0,0,1,4,2,5,30,30,30,1"
-        % max(40, int(width * 0.07)),
-        "Style: OverlaySub,Microsoft YaHei,%d,&H00FFFFFF,&H00FFFFFF,&H00111827,&H64000000,-1,0,0,0,100,100,0,0,1,2,1,5,30,30,30,1"
-        % max(26, int(width * 0.038)),
-        "Style: OverlayBox,Microsoft YaHei,32,&H80FFFFFF,&H80FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1",
+        "Style: OverlayTitle,%s,%d,&H00FFFFFF,&H00FFFFFF,&H00111827,&H64000000,-1,0,0,0,100,100,0,0,1,4,2,5,30,30,30,1"
+        % (font_name, max(40, int(width * 0.07))),
+        "Style: OverlaySub,%s,%d,&H00FFFFFF,&H00FFFFFF,&H00111827,&H64000000,-1,0,0,0,100,100,0,0,1,2,1,5,30,30,30,1"
+        % (font_name, max(26, int(width * 0.038))),
+        "Style: OverlayBox,%s,32,&H80FFFFFF,&H80FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0,0,5,0,0,0,1"
+        % font_name,
         "",
         "[Events]",
         "Format: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text",
@@ -2612,6 +2616,7 @@ def _render_ffmpeg(
     audio_path: str = "",
     audio_volume: float = 1.0,
     source_audio_volume: float = 0.0,
+    fonts_dir: str = "",
 ) -> None:
     cmd: List[str] = [ffmpeg, "-y"]
     loop_source = bool(duration_sec and source_duration_sec and source_duration_sec < duration_sec - 0.05)
@@ -2632,7 +2637,10 @@ def _render_ffmpeg(
                 "scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d"
                 % (target_width, target_height, target_width, target_height)
             )
-    vf_parts.append("ass='%s'" % _ffmpeg_filter_path(ass_path))
+    ass_filter = "ass='%s'" % _ffmpeg_filter_path(ass_path)
+    if fonts_dir:
+        ass_filter += ":fontsdir='%s'" % _ffmpeg_filter_path(Path(fonts_dir))
+    vf_parts.append(ass_filter)
     vf = ",".join(vf_parts)
     if audio_path and source_audio_volume > 0:
         filter_complex = (
@@ -3014,6 +3022,54 @@ def _transcribe_multi_clip_segments(
     return captions, report
 
 
+def _font_cache_dir() -> Path:
+    root = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or str(Path.home())
+    return Path(root) / "lobster" / "fonts"
+
+
+def _ensure_template_font(template: Dict[str, Any], meta: Dict[str, Any]) -> Tuple[str, str]:
+    url = str(meta.get("font_url") or "").strip()
+    family = str(meta.get("font_family") or "").strip()
+    if not url:
+        return "", ""
+    if not family:
+        raise RuntimeError("template font_family is required when font_url is set")
+    filename = str(meta.get("font_filename") or "").strip() or Path(url).name
+    if not filename:
+        raise RuntimeError("template font_filename is invalid")
+    font_dir = _font_cache_dir()
+    font_dir.mkdir(parents=True, exist_ok=True)
+    path = font_dir / filename
+    expected = str(meta.get("font_sha256") or "").strip().lower()
+
+    def _valid(candidate: Path) -> bool:
+        if not candidate.is_file() or candidate.stat().st_size < 10000:
+            return False
+        if expected:
+            try:
+                return hashlib.sha256(candidate.read_bytes()).hexdigest().lower() == expected
+            except Exception:
+                return False
+        return True
+
+    if not _valid(path):
+        target = f"{_server_base()}{url}" if url.startswith("/") else url
+        tmp = path.with_name(path.name + ".part")
+        with httpx.stream("GET", target, timeout=120.0) as resp:
+            resp.raise_for_status()
+            with open(tmp, "wb") as fh:
+                for chunk in resp.iter_bytes():
+                    fh.write(chunk)
+        if not _valid(tmp):
+            try:
+                tmp.unlink()
+            except Exception:
+                pass
+            raise RuntimeError("template font download failed or sha256 mismatch")
+        tmp.replace(path)
+    return str(font_dir), family
+
+
 def _run_job(
     *,
     job_id: str,
@@ -3052,6 +3108,7 @@ def _run_job(
         target_width = int(meta.get("target_width") or video_width)
         target_height = int(meta.get("target_height") or video_height)
         fit = str(meta.get("fit") or "cover")
+        font_dir, font_family = _ensure_template_font(template, meta)
         audio_bed_path = ""
         audio_bed_url = str(meta.get("audio_bed_url") or "").strip()
         if audio_bed_url and fixed_duration_sec:
@@ -3278,6 +3335,7 @@ def _run_job(
                 target_height,
                 overlay_texts=overlay_texts or {},
                 duration_sec=render_duration_sec or 0.1,
+                font_name=font_family or None,
             )
             _render_ffmpeg(
                 ffmpeg=ffmpeg,
@@ -3292,6 +3350,7 @@ def _run_job(
                 audio_path=audio_bed_path,
                 audio_volume=float(meta.get("audio_bed_volume") or 1.0),
                 source_audio_volume=float(meta.get("source_audio_volume") or 0.0),
+                fonts_dir=font_dir,
             )
             final_asset_id, _fname, fsize, source_url, _local = _save_binary_asset(
                 db,
