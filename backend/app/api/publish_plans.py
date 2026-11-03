@@ -32,6 +32,7 @@ _MAX_TIMES = 24
 
 
 class PublishScheduleReq(BaseModel):
+    name: Optional[str] = None
     platform: str = "douyin"
     account_id: Optional[int] = None
     account_nickname: Optional[str] = None
@@ -171,14 +172,76 @@ async def commit_publish_schedule(
     if acct is not None and str(acct.platform or "").strip().lower() != platform:
         raise HTTPException(400, detail="选择的账号平台与规划平台不一致")
     time_key = "wechat_channels_publish_time" if platform == "wechat_channels" else "douyin_publish_time"
-    created, failed = [], []
-    for item, when in zip(candidates, slots):
+
+    # 这条记录是「已在上游排程」的批次台账：任务在平台侧创建好，
+    # 到点由平台发布，不靠本机 runner 到点再点发布。
+    plan_options = dict(body.options or {})
+    plan_options["_batch_committed"] = True
+    plan = PublishPlan(
+        user_id=current_user.id,
+        name=(str(body.name or "").strip() or f"定时任务 {datetime.now().strftime('%m-%d %H:%M')}")[:160],
+        enabled=False,
+        platform=platform,
+        account_id=int(acct.id) if acct is not None else None,
+        account_nickname=(acct.nickname if acct is not None else str(body.account_nickname or "")) or "",
+        source_folder=str(body.source_folder or "").strip() or None,
+        source_groups=[str(g).strip() for g in (body.source_groups or []) if str(g).strip()],
+        source_records=[r for r in (body.source_records or []) if isinstance(r, dict) and str(r.get("url") or "").strip()],
+        daily_count=len(times),
+        times=times,
+        tags=str(body.tags or "").strip() or None,
+        ai_copy=bool(body.ai_copy),
+        options=plan_options,
+        fired_slots={},
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+
+    def _save_item(item: Dict[str, Any], when: datetime, idx: int, asset_id: str,
+                   task_id: Optional[int], status: str, error: str = "") -> Dict[str, Any]:
+        key = str(item.get("key") or "")[:500]
+        row = (
+            db.query(PublishPlanItem)
+            .filter(PublishPlanItem.plan_id == int(plan.id), PublishPlanItem.asset_key == key)
+            .first()
+        )
+        if row is None:
+            row = PublishPlanItem(plan_id=int(plan.id), user_id=int(current_user.id), asset_key=key)
+            db.add(row)
+        row.source_kind = str(item.get("kind") or "")
+        row.source_ref = str(item.get("path") or item.get("url") or item.get("asset_id") or "")[:2000]
+        row.asset_id = str(asset_id or "")
+        row.title = str(item.get("name") or item.get("title") or item.get("path") or key)[:255]
+        row.task_id = int(task_id) if task_id else None
+        row.status = status
+        row.error = (str(error)[:500] if error else None)
+        row.used_date = when.strftime("%Y-%m-%d")
+        db.add(row)
+        db.commit()
+        return {
+            "index": idx,
+            "key": key,
+            "name": row.title,
+            "asset_id": row.asset_id,
+            "path": str(item.get("path") or ""),
+            "publish_at": when.strftime("%Y-%m-%d %H:%M"),
+            "task_id": row.task_id,
+            "status": row.status,
+            "error": row.error or "",
+        }
+
+    created, failed, commit_items = [], [], []
+    for idx, (item, when) in enumerate(zip(candidates, slots), start=1):
+        publish_at = when.strftime("%Y-%m-%d %H:%M")
+        asset_id = ""
+        task_id: Optional[int] = None
         try:
             asset_id = await runner._ensure_asset_id(current_user, item, str(body.tags or ""))
             if not asset_id:
                 raise RuntimeError("未能导入素材到素材库")
             options = dict(body.options or {})
-            options[time_key] = when.strftime("%Y-%m-%d %H:%M")
+            options[time_key] = publish_at
             payload = PublishReq(
                 asset_id=str(asset_id),
                 account_id=int(acct.id) if acct is not None else body.account_id,
@@ -186,11 +249,44 @@ async def commit_publish_schedule(
                 title="", description="", tags=str(body.tags or ""), options=options,
             )
             result = await create_publish_task(request, payload, current_user, db)
-            created.append({"asset_id": asset_id, "publish_at": when.strftime("%Y-%m-%d %H:%M"), "result": result})
+            raw_task_id = result.get("task_id")
+            task_id = int(raw_task_id) if raw_task_id else None
+            status = str(result.get("status") or "").strip()
+            if status not in ("success", "pending", "failed"):
+                status = "failed" if result.get("error") else "pending"
+            error = str(result.get("error") or "")
+            row = _save_item(item, when, idx, str(asset_id), task_id, status, error)
+            commit_items.append(row)
+            if status == "failed":
+                failed.append({"key": item.get("key"), "publish_at": publish_at, "error": error[:200]})
+            else:
+                created.append({"asset_id": asset_id, "publish_at": publish_at, "task_id": task_id, "status": status, "result": result})
         except Exception as exc:  # noqa: BLE001
             logger.warning("[定时规划] 创建发布任务失败 key=%s: %s", item.get("key"), exc)
-            failed.append({"key": item.get("key"), "publish_at": when.strftime("%Y-%m-%d %H:%M"), "error": str(exc)[:200]})
-    return {"ok": True, "created": len(created), "failed": len(failed), "items": created, "errors": failed}
+            row = _save_item(item, when, idx, str(asset_id or ""), None, "failed", str(exc)[:500])
+            commit_items.append(row)
+            failed.append({"key": item.get("key"), "publish_at": publish_at, "error": str(exc)[:200]})
+
+    final_options = dict(plan.options or {})
+    final_options["_commit_items"] = commit_items
+    final_options["_commit_summary"] = {
+        "total": len(candidates),
+        "created": len(created),
+        "failed": len(failed),
+    }
+    plan.options = final_options
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return {
+        "ok": True,
+        "plan_id": plan.id,
+        "plan": _plan_payload(db, plan),
+        "created": len(created),
+        "failed": len(failed),
+        "items": created,
+        "errors": failed,
+    }
 
 class PickFolderReq(BaseModel):
     initial: Optional[str] = None
@@ -327,6 +423,9 @@ def _plan_payload(db: Session, plan: PublishPlan) -> Dict[str, Any]:
         "tags": plan.tags or "",
         "ai_copy": bool(plan.ai_copy),
         "options": dict(plan.options or {}),
+        "committed": bool((plan.options or {}).get("_batch_committed")),
+        "commit_items": list((plan.options or {}).get("_commit_items") or []),
+        "commit_summary": dict((plan.options or {}).get("_commit_summary") or {}),
         "item_total": item_total,
         "created_total": created_total,
         "success_total": success_total,
