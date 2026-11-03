@@ -3186,6 +3186,11 @@ class DouyinDriver(BaseDriver):
         await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
         await asyncio.sleep(0.4)
 
+        # 图文页同样有「发布时间 / 定时发布」，不能只给视频流程加。
+        # 设置失败必须中止，绝不能悄悄变成立即发布。
+        if not await _douyin_apply_publish_time(page, options, _step):
+            return {"ok": False, "error": "抖音定时发布时间未能设置，已停止发布（避免误发成立即发布）", "applied": applied}
+
         _s = _pw_scale()
         img_btn_wait = min(int(150 * _s), max(int(45 * _s), img_wait_rounds * 2))
         if not await _douyin_wait_until_publish_clickable(page, img_btn_wait, _step, "图文"):

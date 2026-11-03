@@ -49,8 +49,13 @@ class PublishScheduleReq(BaseModel):
     page_size: int = 20
 
 
-def _assign_schedule_slots(count: int, times: List[str], start_date: Optional[str], now: datetime) -> List[datetime]:
-    """把 count 个素材按每天 len(times) 条、每条对应一个 HH:MM，从 start_date（默认今天）开始往后排。"""
+def _assign_schedule_slots(count: int, times: List[str], start_date: Optional[str], now: datetime,
+                           min_lead: Optional[timedelta] = None) -> List[datetime]:
+    """把 count 个素材按每天 len(times) 条、每条对应一个 HH:MM，从 start_date（默认今天）开始往后排。
+
+    min_lead: 平台要求的最小提前量（抖音 2 小时、视频号 5 分钟）。太近的槽位直接跳过，
+    避免创建出平台必然拒绝的定时任务。
+    """
     clean = sorted({str(x).strip() for x in (times or []) if str(x).strip() and len(str(x).strip()) == 5})
     if not clean:
         return []
@@ -71,6 +76,8 @@ def _assign_schedule_slots(count: int, times: List[str], start_date: Optional[st
                 continue
             when = datetime.combine(day, datetime.min.time()).replace(hour=hh, minute=mm)
             if when <= now:
+                continue
+            if min_lead and when < now + min_lead:
                 continue
             slots.append(when)
             if len(slots) >= count:
@@ -119,8 +126,12 @@ def preview_publish_schedule(
         raise HTTPException(400, detail="请先设置每天的发布时间（HH:MM）")
     daily = max(1, min(int(body.daily_count or len(times)), 20))
     times = times[:daily] if len(times) >= daily else times
+    platform = str(body.platform or "douyin").strip().lower()
     candidates = _schedule_candidates(db, current_user.id, body)
-    slots = _assign_schedule_slots(len(candidates), times, body.start_date, datetime.now())
+    slots = _assign_schedule_slots(
+        len(candidates), times, body.start_date, datetime.now(),
+        min_lead=_schedule_min_lead(platform),
+    )
     rows = []
     for idx, (item, when) in enumerate(zip(candidates, slots), start=1):
         rows.append({
@@ -161,11 +172,14 @@ async def commit_publish_schedule(
         raise HTTPException(400, detail="请先设置每天的发布时间（HH:MM）")
     daily = max(1, min(int(body.daily_count or len(times)), 20))
     times = times[:daily] if len(times) >= daily else times
+    platform = str(body.platform or "douyin").strip().lower()
     candidates = _schedule_candidates(db, current_user.id, body)
-    slots = _assign_schedule_slots(len(candidates), times, body.start_date, datetime.now())
+    slots = _assign_schedule_slots(
+        len(candidates), times, body.start_date, datetime.now(),
+        min_lead=_schedule_min_lead(platform),
+    )
     if not candidates or not slots:
         raise HTTPException(400, detail="没有待发布的素材（该来源下的素材都已发过）")
-    platform = str(body.platform or "douyin").strip().lower()
     acct = _resolve_plan_account(db, current_user.id, body.account_id, body.account_nickname)
     if acct is None and (body.account_id or str(body.account_nickname or "").strip()):
         raise HTTPException(404, detail="发布账号不存在，请先在「发布账号」里添加")
@@ -371,6 +385,15 @@ def _folder_is_dir(folder: str) -> bool:
         return bool(Path(text).is_dir())
     except (OSError, ValueError):
         return False
+
+
+def _schedule_min_lead(platform: str) -> Optional[timedelta]:
+    p = str(platform or "").strip().lower()
+    if p == "douyin":
+        return timedelta(hours=2, minutes=1)
+    if p == "wechat_channels":
+        return timedelta(minutes=6)
+    return None
 
 
 def _clean_times(values: Optional[List[str]]) -> List[str]:
