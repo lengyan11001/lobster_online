@@ -1,3 +1,11 @@
+@font-face {
+  font-family: 'AlibabaPuHuiTi-3-105-Heavy';
+  src: url('../fonts/AlibabaPuHuiTi-3-105-Heavy.otf') format('opentype');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+
     .model-selector { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
     .model-selector select {
       appearance: none;
@@ -11039,6 +11047,7 @@ body.online-mastra-chat-compose .online-mastra-chat {
     }
     #content-cutcli-template-studio .cutcli-template-preview-text.layout-product-case {
       z-index: 3;
+      font-family: 'AlibabaPuHuiTi-3-105-Heavy', 'Microsoft YaHei', sans-serif;
     }
     #content-cutcli-template-studio .cutcli-template-preview-text {
       position: absolute;

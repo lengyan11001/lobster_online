@@ -614,18 +614,23 @@ def _orientation_defaults_for_style(style: Dict[str, Any]) -> Dict[str, Any]:
             "caption_position": {"x": 0.0, "y": -0.95},
             "overlay_style": {
                 "layout": "product_case",
-                "top_x_ratio": 0.42,
+                "top_x_ratio": 0.428,
                 "top_y_ratio": 0.093,
-                "top_font_size": 84,
+                "top_font_size": 157,
+                "top_scale_y": 112,
                 "title_x_ratio": 0.5,
                 "title_y_ratio": 0.173,
-                "headline_font_size": 128,
+                "headline_font_size": 180,
+                "title_scale_y": 188,
                 "subheadline_x_ratio": 0.124,
-                "subheadline_y_ratio": 0.305,
-                "subtitle_font_size": 54,
+                "subheadline_y_ratio": 0.314,
+                "subtitle_font_size": 113,
+                "subtitle_scale_x": 100,
+                "subtitle_scale_y": 96,
+                "subtitle_line_gap": 0.04,
                 "badge_x_ratio": 0.5,
                 "badge_y_ratio": 0.84,
-                "badge_font_size": 72,
+                "badge_font_size": 127,
             },
         }
     if layout == "side_neon":
@@ -2257,6 +2262,13 @@ def _vertical_unit_dialogues(
     return lines
 
 
+def _fit_product_text(raw_size: int, text: str, base_units: float, min_size: int) -> int:
+    units = max(1.0, _caption_visual_units(text))
+    if units > base_units:
+        raw_size = int(round(raw_size * base_units / units))
+    return max(int(min_size), int(raw_size))
+
+
 def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], width: int, height: int, duration_sec: float) -> List[str]:
     overlay_style = style.get("overlay_style") if isinstance(style.get("overlay_style"), dict) else {}
     layout = str(overlay_style.get("layout") or "").strip()
@@ -2400,6 +2412,10 @@ def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], wid
         title_y = int(height * _float_value(overlay_style.get("title_y_ratio"), 0.173))
         sub_y = int(height * _float_value(overlay_style.get("subheadline_y_ratio"), 0.305))
         badge_y = int(height * _float_value(overlay_style.get("badge_y_ratio"), 0.84))
+        top_scale_y = max(50, min(300, int(round(_float_value(overlay_style.get("top_scale_y"), 116)))))
+        title_scale_y = max(50, min(300, int(round(_float_value(overlay_style.get("title_scale_y"), 190)))))
+        subtitle_scale_x = max(50, min(300, int(round(_float_value(overlay_style.get("subtitle_scale_x"), 132)))))
+        subtitle_scale_y = max(50, min(300, int(round(_float_value(overlay_style.get("subtitle_scale_y"), 120)))))
         for i in range(12):
             y0 = 0.36 * i / 12.0
             y1 = 0.36 * (i + 1) / 12.0
@@ -2440,16 +2456,20 @@ def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], wid
                 lines.append("Dialogue: 8,0:00:00.00,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\c&H001A1A1A&\\bord0\\shad0}%s" % (end, cx, cy - int(pill_title_fs * 0.45), pill_title_fs, _ass_text_with_newline(pill_title)))
                 lines.append("Dialogue: 8,0:00:00.00,%s,OverlaySub,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\c&H00333333&\\bord0\\shad0}%s" % (end, cx, cy + int(pill_sub_fs * 0.55), pill_sub_fs, _ass_text_with_newline(pill_sub)))
         if top_text:
-            fs = _fit_overlay_font_size(int(round(int(overlay_style.get("top_font_size") or 84) * scale)), _overlay_plain_lines(top_text), width=int(width * 0.82), height_limit=int(height * 0.065), min_size=24)
-            lines.append("Dialogue: 7,0:00:00.00,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\c&H00FFFFFF&\\3c&H00000000&\\bord4\\shad2}%s" % (end, top_x, top_y, fs, _ass_text_with_newline(top_text)))
+            fs = _fit_product_text(int(round(int(overlay_style.get("top_font_size") or 195) * scale)), top_text, 7.28, 24)
+            lines.append("Dialogue: 7,0:00:00.00,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\fscx100\\fscy%d\\c&H00FFFFFF&\\3c&H00000000&\\bord4\\shad2}%s" % (end, top_x, top_y, fs, top_scale_y, _ass_text_with_newline(top_text)))
         if title:
-            fs = _fit_overlay_font_size(int(round(int(overlay_style.get("headline_font_size") or 128) * scale)), _overlay_plain_lines(title), width=int(width * 0.86), height_limit=int(height * 0.09), min_size=42)
-            lines.append("Dialogue: 7,0:00:00.00,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\c&H00FFFFFF&\\3c&H00000000&\\bord6\\shad3}%s" % (end, title_x, title_y, fs, _ass_text_with_newline(title)))
+            fs = _fit_product_text(int(round(int(overlay_style.get("headline_font_size") or 217) * scale)), title, 6.44, 42)
+            lines.append("Dialogue: 7,0:00:00.00,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\fscx100\\fscy%d\\c&H00FFFFFF&\\3c&H00000000&\\bord6\\shad3}%s" % (end, title_x, title_y, fs, title_scale_y, _ass_text_with_newline(title)))
         if subtitle:
-            fs = _fit_overlay_font_size(int(round(int(overlay_style.get("subtitle_font_size") or 54) * scale)), _overlay_plain_lines(subtitle), width=int(width * 0.56), height_limit=int(height * 0.085), min_size=22)
-            lines.append("Dialogue: 6,0:00:00.00,%s,OverlaySub,,0,0,0,,{\\an1\\pos(%d,%d)\\fs%d\\c&H00FFFFFF&\\3c&H00000000&\\bord4\\shad2}%s" % (end, subtitle_x, sub_y, fs, _ass_text_with_newline(subtitle)))
+            fs = _fit_product_text(int(round(int(overlay_style.get("subtitle_font_size") or 113) * scale)), subtitle, 6.0, 22)
+            sub_lines = _overlay_plain_lines(subtitle)
+            line_gap = int(height * _float_value(overlay_style.get("subtitle_line_gap"), 0.04))
+            for line_idx, line_text in enumerate(sub_lines):
+                line_y = sub_y - (len(sub_lines) - 1 - line_idx) * line_gap
+                lines.append("Dialogue: 6,0:00:00.00,%s,OverlaySub,,0,0,0,,{\\an1\\pos(%d,%d)\\fs%d\\fscx%d\\fscy%d\\c&H00FFFFFF&\\3c&H00000000&\\bord4\\shad2}%s" % (end, subtitle_x, line_y, fs, subtitle_scale_x, subtitle_scale_y, _ass_text_with_newline(line_text)))
         if badge:
-            fs = _fit_overlay_font_size(int(round(int(overlay_style.get("badge_font_size") or 72) * scale)), _overlay_plain_lines(badge), width=int(width * 0.88), height_limit=int(height * 0.045), min_size=24)
+            fs = _fit_product_text(int(round(int(overlay_style.get("badge_font_size") or 200) * scale)), badge, 12.28, 24)
             lines.append("Dialogue: 7,0:00:00.00,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\c&H00FFFFFF&\\3c&H00000000&\\bord3\\shad2}%s" % (end, badge_x, badge_y, fs, _ass_text_with_newline(badge)))
         return lines
 
@@ -3027,6 +3047,22 @@ def _font_cache_dir() -> Path:
     return Path(root) / "lobster" / "fonts"
 
 
+def _bundled_font_path(filename: str) -> Optional[Path]:
+    candidates = [
+        Path(__file__).resolve().parents[3] / "static" / "fonts" / filename,
+        Path.cwd() / "static" / "fonts" / filename,
+        Path(__file__).resolve().parents[3] / "assets" / "fonts" / filename,
+        Path.cwd() / "assets" / "fonts" / filename,
+    ]
+    for candidate in candidates:
+        try:
+            if candidate.is_file() and candidate.stat().st_size > 10000:
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
 def _ensure_template_font(template: Dict[str, Any], meta: Dict[str, Any]) -> Tuple[str, str]:
     url = str(meta.get("font_url") or "").strip()
     family = str(meta.get("font_family") or "").strip()
@@ -3037,6 +3073,9 @@ def _ensure_template_font(template: Dict[str, Any], meta: Dict[str, Any]) -> Tup
     filename = str(meta.get("font_filename") or "").strip() or Path(url).name
     if not filename:
         raise RuntimeError("template font_filename is invalid")
+    bundled = _bundled_font_path(filename)
+    if bundled is not None:
+        return str(bundled.parent), family
     font_dir = _font_cache_dir()
     font_dir.mkdir(parents=True, exist_ok=True)
     path = font_dir / filename
