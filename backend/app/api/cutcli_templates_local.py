@@ -349,7 +349,7 @@ def _template_public(template: Dict[str, Any]) -> Dict[str, Any]:
     row.setdefault("preserve_source_video", True)
     row["preview_url"] = row.get("preview_url") or row.get("sample_video_url") or ""
     row["render_path"] = f"/api/cutcli/local/templates/{row.get('id')}/render"
-    row["render_modes"] = row.get("render_modes") or ["ffmpeg", "cutcli_cloud"]
+    row["render_modes"] = row.get("render_modes") or ["ffmpeg"]
     return row
 
 
@@ -3497,9 +3497,9 @@ def _start_template_job_from_values(
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     mode = (render_mode or "ffmpeg").strip().lower()
-    render_modes = template.get("render_modes") if isinstance(template.get("render_modes"), list) else ["ffmpeg", "cutcli_cloud"]
-    if mode not in {"ffmpeg", "cutcli_cloud"} or mode not in render_modes:
-        raise HTTPException(status_code=400, detail="render_mode must be ffmpeg or cutcli_cloud")
+    render_modes = template.get("render_modes") if isinstance(template.get("render_modes"), list) else ["ffmpeg"]
+    if mode != "ffmpeg" or mode not in render_modes:
+        raise HTTPException(status_code=400, detail="CutCLI has been removed; render_mode must be ffmpeg")
     aid = (asset_id or "").strip()
     url = (video_url or "").strip()
     if not aid and not url:
@@ -3647,9 +3647,9 @@ async def start_local_template_render(
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     mode = (render_mode or "ffmpeg").strip().lower()
-    render_modes = template.get("render_modes") if isinstance(template.get("render_modes"), list) else ["ffmpeg", "cutcli_cloud"]
-    if mode not in {"ffmpeg", "cutcli_cloud"} or mode not in render_modes:
-        raise HTTPException(status_code=400, detail="render_mode must be ffmpeg or cutcli_cloud")
+    render_modes = template.get("render_modes") if isinstance(template.get("render_modes"), list) else ["ffmpeg"]
+    if mode != "ffmpeg" or mode not in render_modes:
+        raise HTTPException(status_code=400, detail="CutCLI has been removed; render_mode must be ffmpeg")
     aid = (asset_id or "").strip()
     source_url = (video_url or "").strip()
     source_name = source_url or aid
