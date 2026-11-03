@@ -1490,8 +1490,6 @@ function _bindAccountButtons(el) {
         if (wcLink.trim()) options.wechat_channels_link = wcLink.trim();
         if (wcMusic.trim()) options.wechat_channels_music = wcMusic.trim();
         if (wcActivity.trim()) options.wechat_channels_activity = wcActivity.trim();
-        var wcPublishTime = prompt('视频号定时发表时间（可留空 = 立即发表；格式 2026-11-03 14:00）：', '') || '';
-        if (wcPublishTime.trim()) options.wechat_channels_publish_time = wcPublishTime.trim();
       }
       btn.disabled = true; btn.textContent = '发布中…';
       var payload = {
