@@ -9,11 +9,11 @@ import logging
 import os
 import subprocess
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -27,6 +27,169 @@ router = APIRouter()
 _PLATFORMS = {"douyin", "wechat_channels", "tiktok"}
 _MAX_TIMES = 24
 
+
+
+
+class PublishScheduleReq(BaseModel):
+    platform: str = "douyin"
+    account_id: Optional[int] = None
+    account_nickname: Optional[str] = None
+    source_folder: Optional[str] = None
+    source_groups: Optional[List[str]] = None
+    source_records: Optional[List[Dict[str, Any]]] = None
+    daily_count: int = 3
+    times: Optional[List[str]] = None
+    start_date: Optional[str] = None
+    tags: Optional[str] = None
+    ai_copy: bool = True
+    options: Optional[Dict[str, Any]] = None
+    page: int = 1
+    page_size: int = 20
+
+
+def _assign_schedule_slots(count: int, times: List[str], start_date: Optional[str], now: datetime) -> List[datetime]:
+    """把 count 个素材按每天 len(times) 条、每条对应一个 HH:MM，从 start_date（默认今天）开始往后排。"""
+    clean = sorted({str(x).strip() for x in (times or []) if str(x).strip() and len(str(x).strip()) == 5})
+    if not clean:
+        return []
+    day = now.date()
+    if start_date:
+        try:
+            day = datetime.strptime(str(start_date).strip()[:10], "%Y-%m-%d").date()
+        except ValueError:
+            day = now.date()
+    slots: List[datetime] = []
+    guard = 0
+    while len(slots) < count and guard < 3650:
+        guard += 1
+        for hhmm in clean:
+            try:
+                hh, mm = int(hhmm[:2]), int(hhmm[3:])
+            except ValueError:
+                continue
+            when = datetime.combine(day, datetime.min.time()).replace(hour=hh, minute=mm)
+            if when <= now:
+                continue
+            slots.append(when)
+            if len(slots) >= count:
+                break
+        day = day + timedelta(days=1)
+    return slots
+
+
+def _schedule_candidates(db: Session, user_id: int, body: PublishScheduleReq) -> List[Dict[str, Any]]:
+    """按来源收集素材，并剔除已经发过（同平台账号台账）的。"""
+    from types import SimpleNamespace
+    from ..services import publish_plan_runner as runner
+    from ..models import PublishPlan as _Plan, PublishPlanItem as _Item
+
+    tmp = SimpleNamespace(
+        id=0, user_id=int(user_id), platform=str(body.platform or "douyin"),
+        source_folder=str(body.source_folder or "").strip() or None,
+        source_groups=[str(g).strip() for g in (body.source_groups or []) if str(g).strip()],
+        source_records=[r for r in (body.source_records or []) if isinstance(r, dict)],
+        options=dict(body.options or {}), tags=str(body.tags or ""),
+    )
+    items = runner.collect_candidates(db, tmp)
+    if not items:
+        return []
+    done = {
+        str(row[0])
+        for row in (
+            db.query(_Item.asset_key)
+            .join(_Plan, _Plan.id == _Item.plan_id)
+            .filter(_Plan.user_id == int(user_id), _Plan.platform == tmp.platform,
+                    _Item.status.in_(("pending", "success")))
+            .all()
+        )
+    }
+    return [item for item in items if str(item.get("key")) not in done]
+
+
+@router.post("/api/publish/plans/preview", summary="预览定时发布规划")
+def preview_publish_schedule(
+    body: PublishScheduleReq,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    times = _clean_times(body.times)
+    if not times:
+        raise HTTPException(400, detail="请先设置每天的发布时间（HH:MM）")
+    daily = max(1, min(int(body.daily_count or len(times)), 20))
+    times = times[:daily] if len(times) >= daily else times
+    candidates = _schedule_candidates(db, current_user.id, body)
+    slots = _assign_schedule_slots(len(candidates), times, body.start_date, datetime.now())
+    rows = []
+    for idx, (item, when) in enumerate(zip(candidates, slots), start=1):
+        rows.append({
+            "index": idx,
+            "key": item.get("key"),
+            "name": item.get("name") or item.get("title") or item.get("path") or item.get("url") or "",
+            "asset_id": item.get("asset_id") or "",
+            "path": item.get("path") or "",
+            "media_type": item.get("media_type") or "",
+            "publish_at": when.strftime("%Y-%m-%d %H:%M"),
+        })
+    page = max(1, int(body.page or 1))
+    size = max(1, min(int(body.page_size or 20), 200))
+    start = (page - 1) * size
+    return {
+        "ok": True,
+        "total": len(rows),
+        "page": page,
+        "page_size": size,
+        "days": len({r["publish_at"][:10] for r in rows}),
+        "times": times,
+        "rows": rows[start:start + size],
+    }
+
+
+@router.post("/api/publish/plans/commit", summary="按规划立即创建定时发布任务")
+async def commit_publish_schedule(
+    request: Request,
+    body: PublishScheduleReq,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    from ..services import publish_plan_runner as runner
+    from .publish import PublishReq, create_publish_task
+
+    times = _clean_times(body.times)
+    if not times:
+        raise HTTPException(400, detail="请先设置每天的发布时间（HH:MM）")
+    daily = max(1, min(int(body.daily_count or len(times)), 20))
+    times = times[:daily] if len(times) >= daily else times
+    candidates = _schedule_candidates(db, current_user.id, body)
+    slots = _assign_schedule_slots(len(candidates), times, body.start_date, datetime.now())
+    if not candidates or not slots:
+        raise HTTPException(400, detail="没有待发布的素材（该来源下的素材都已发过）")
+    platform = str(body.platform or "douyin").strip().lower()
+    acct = _resolve_plan_account(db, current_user.id, body.account_id, body.account_nickname)
+    if acct is None and (body.account_id or str(body.account_nickname or "").strip()):
+        raise HTTPException(404, detail="发布账号不存在，请先在「发布账号」里添加")
+    if acct is not None and str(acct.platform or "").strip().lower() != platform:
+        raise HTTPException(400, detail="选择的账号平台与规划平台不一致")
+    time_key = "wechat_channels_publish_time" if platform == "wechat_channels" else "douyin_publish_time"
+    created, failed = [], []
+    for item, when in zip(candidates, slots):
+        try:
+            asset_id = await runner._ensure_asset_id(current_user, item, str(body.tags or ""))
+            if not asset_id:
+                raise RuntimeError("未能导入素材到素材库")
+            options = dict(body.options or {})
+            options[time_key] = when.strftime("%Y-%m-%d %H:%M")
+            payload = PublishReq(
+                asset_id=str(asset_id),
+                account_id=int(acct.id) if acct is not None else body.account_id,
+                account_nickname=(acct.nickname if acct is not None else str(body.account_nickname or "")),
+                title="", description="", tags=str(body.tags or ""), options=options,
+            )
+            result = await create_publish_task(request, payload, current_user, db)
+            created.append({"asset_id": asset_id, "publish_at": when.strftime("%Y-%m-%d %H:%M"), "result": result})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[定时规划] 创建发布任务失败 key=%s: %s", item.get("key"), exc)
+            failed.append({"key": item.get("key"), "publish_at": when.strftime("%Y-%m-%d %H:%M"), "error": str(exc)[:200]})
+    return {"ok": True, "created": len(created), "failed": len(failed), "items": created, "errors": failed}
 
 class PickFolderReq(BaseModel):
     initial: Optional[str] = None
