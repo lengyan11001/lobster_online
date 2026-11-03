@@ -1749,6 +1749,181 @@ async def _douyin_click_declaration_warning_button(page: Any, text: str) -> bool
     return False
 
 
+def _douyin_parse_publish_time(value: str):
+    import datetime as _dt
+    raw = str(value or "").strip().replace("T", " ")
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %H"):
+        try:
+            return _dt.datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    for fmt in ("%m-%d %H:%M", "%H:%M"):
+        try:
+            parsed = _dt.datetime.strptime(raw, fmt)
+            now = _dt.datetime.now()
+            parsed = parsed.replace(year=now.year)
+            if fmt == "%H:%M":
+                parsed = parsed.replace(month=now.month, day=now.day)
+            return parsed
+        except ValueError:
+            continue
+    return None
+
+
+async def _douyin_apply_publish_time(page: Any, options: Optional[Dict[str, Any]], _step) -> bool:
+    """抖音发布页「发布时间」：立即发布 / 定时发布（2 小时后 ~ 14 天内）。"""
+    import datetime as _dt
+    import re as _re
+    merged = _douyin_merged_options(options)
+    raw = ""
+    for key in ("douyin_publish_time", "publish_time", "schedule_time", "scheduled_time", "publish_at"):
+        value = merged.get(key)
+        if isinstance(value, str) and value.strip():
+            raw = value.strip()
+            break
+    if raw in ("", "立即", "立即发布", "now", "immediate"):
+        return True
+    when = _douyin_parse_publish_time(raw)
+    if not when:
+        _step("设置发布时间", False, value=raw, reason="时间格式需要 YYYY-MM-DD HH:MM")
+        return False
+    now = _dt.datetime.now()
+    if when < now + _dt.timedelta(hours=2) or when > now + _dt.timedelta(days=14):
+        _step("设置发布时间", False, value=raw, reason="抖音只支持 2 小时后~14 天内的定时发布")
+        return False
+    target_date = when.strftime("%Y-%m-%d")
+    target_time = when.strftime("%H:%M")
+
+    switched = False
+    try:
+        label = page.get_by_text("定时发布", exact=True)
+        if await label.count():
+            await label.first.click(timeout=4000)
+            switched = True
+    except Exception:
+        switched = False
+    if not switched:
+        try:
+            clicked = await page.evaluate("""() => {
+                for (const el of document.querySelectorAll('label,span,div')) {
+                    if ((el.textContent || '').trim() === '定时发布' && el.offsetParent) {
+                        const input = el.querySelector('input') || (el.parentElement && el.parentElement.querySelector('input'));
+                        (input || el).click(); return true;
+                    }
+                }
+                return false;
+            }""")
+            switched = bool(clicked)
+        except Exception:
+            switched = False
+    if not switched:
+        _step("设置发布时间", False, value=raw, reason="没找到「定时发布」选项")
+        return False
+    await _human_delay(0.6, 1.2)
+
+    entry = None
+    try:
+        inputs = page.locator("input")
+        for i in range(min(await inputs.count(), 80)):
+            el = inputs.nth(i)
+            try:
+                val = (await el.input_value()).strip()
+            except Exception:
+                continue
+            if _re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", val):
+                entry = el
+                break
+    except Exception:
+        entry = None
+    if entry is None:
+        try:
+            label = page.get_by_text("发布时间", exact=True).first
+            entry = label.locator("xpath=following::input[1]")
+        except Exception:
+            entry = None
+    if entry is None:
+        _step("设置发布时间", False, value=raw, reason="没找到定时时间输入框")
+        return False
+
+    readback = ""
+    try:
+        await entry.click(timeout=4000)
+        await _human_delay(0.3, 0.6)
+        await page.keyboard.press("Control+A")
+        await page.keyboard.type("%s %s" % (target_date, target_time), delay=60)
+        await page.keyboard.press("Enter")
+        await _human_delay(0.5, 1.0)
+        readback = (await entry.input_value()).strip()
+    except Exception:
+        readback = ""
+
+    if not (readback.startswith(target_date) and target_time in readback):
+        try:
+            await entry.click(timeout=4000)
+            await _human_delay(0.5, 1.0)
+            day_ok = False
+            for selector in ('td[title="%s"]' % target_date,
+                             '[data-date="%s"]' % target_date,
+                             '[data-value="%s"]' % target_date):
+                try:
+                    cell = page.locator(selector)
+                    if await cell.count():
+                        await cell.first.click(timeout=3000)
+                        day_ok = True
+                        break
+                except Exception:
+                    continue
+            if not day_ok:
+                try:
+                    clicked = await page.evaluate("""(date) => {
+                        for (const el of document.querySelectorAll('td,div,span')) {
+                            const t = (el.getAttribute('title') || el.textContent || '').trim();
+                            if (t === date && el.offsetParent) { el.click(); return true; }
+                        }
+                        return false;
+                    }""", target_date)
+                    day_ok = bool(clicked)
+                except Exception:
+                    day_ok = False
+            time_ok = False
+            try:
+                inputs = page.locator("input")
+                for i in range(min(await inputs.count(), 80)):
+                    el = inputs.nth(i)
+                    try:
+                        val = (await el.input_value()).strip()
+                    except Exception:
+                        continue
+                    if _re.fullmatch(r"\d{1,2}:\d{2}", val) and el is not entry:
+                        await el.click()
+                        await page.keyboard.press("Control+A")
+                        await page.keyboard.type(target_time, delay=60)
+                        await page.keyboard.press("Enter")
+                        time_ok = True
+                        break
+            except Exception:
+                time_ok = False
+            try:
+                ok_btn = page.get_by_text("确定", exact=True)
+                if await ok_btn.count():
+                    await ok_btn.first.click(timeout=2500)
+            except Exception:
+                pass
+            await _human_delay(0.5, 1.0)
+            try:
+                readback = (await entry.input_value()).strip()
+            except Exception:
+                readback = ""
+            _step("设置发布时间(日历)", bool(readback), value=raw, readback=readback, day=day_ok, time=time_ok)
+        except Exception as exc:
+            _step("设置发布时间(日历)", False, value=raw, error=str(exc)[:120])
+
+    ok = bool(readback) and readback.startswith(target_date) and target_time in readback
+    _step("设置发布时间", ok, value=raw, readback=readback)
+    return ok
+
 async def _douyin_apply_self_declaration(
     page: Any,
     options: Optional[Dict[str, Any]],
@@ -3359,6 +3534,8 @@ class DouyinDriver(BaseDriver):
         decl_ready = await _douyin_apply_self_declaration(page, options, _step, "视频")
         if decl_ready is False:
             return {"ok": False, "error": "无法选择抖音自主声明", "applied": applied}
+        if not await _douyin_apply_publish_time(page, options, _step):
+            return {"ok": False, "error": "抖音定时发布时间未能设置，已停止发布（避免误发成立即发布）", "applied": applied}
         await page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
         await asyncio.sleep(0.4)
 

@@ -1471,6 +1471,8 @@ function _bindAccountButtons(el) {
         if (m === '2') options.douyin_cover_mode = 'upload';
         else if (m === '3') options.douyin_cover_mode = 'manual';
         else options.douyin_cover_mode = 'smart';
+        var dyPublishTime = prompt('抖音定时发布时间（可留空 = 立即发布；格式 2026-11-03 14:00；支持 2 小时后〜14 天内）：', '') || '';
+        if (dyPublishTime.trim()) options.douyin_publish_time = dyPublishTime.trim();
         if (options.douyin_cover_mode === 'upload') {
           coverAssetId = prompt('封面图素材 ID（必填）：');
           if (!coverAssetId || !coverAssetId.trim()) {
