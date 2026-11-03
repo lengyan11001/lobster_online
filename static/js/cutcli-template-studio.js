@@ -935,16 +935,16 @@
     }
     if (layout === 'product_case') {
       if (targetKey === 'top_text') {
-        return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 4, shadow: 2, fontSize: 84, minPx: 12, maxPx: 26 }), { 'max-width': '82%', 'white-space': 'pre' }));
+        return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 4, shadow: 2, fontSize: 72, minPx: 10, maxPx: 28 }), { background: 'transparent', 'max-width': '82%', 'white-space': 'pre' }));
       }
       if (targetKey === 'title') {
-        return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 6, shadow: 3, fontSize: 128, minPx: 16, maxPx: 44 }), { 'max-width': '86%', 'white-space': 'pre' }));
+        return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 6, shadow: 3, fontSize: 108, minPx: 14, maxPx: 44 }), { background: 'transparent', 'max-width': '88%', 'white-space': 'pre' }));
       }
       if (targetKey === 'subtitle') {
-        return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 4, shadow: 2, fontSize: 54, minPx: 10, maxPx: 21, align: 'left' }), { transform: 'translate(0,-50%)', 'max-width': '56%', 'white-space': 'pre' }));
+        return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 4, shadow: 2, fontSize: 45, minPx: 9, maxPx: 20, align: 'left' }), { background: 'transparent', transform: 'translate(0,-50%)', 'max-width': '56%', 'white-space': 'pre' }));
       }
       if (targetKey === 'badge') {
-        return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 3, shadow: 2, fontSize: 72, minPx: 10, maxPx: 22 }), { background: 'transparent', 'border-radius': 0, 'box-shadow': 'none', padding: '0.12rem 0.2rem', 'max-width': '88%', 'white-space': 'pre' }));
+        return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 3, shadow: 2, fontSize: 60, minPx: 9, maxPx: 24 }), { background: 'transparent', 'border-radius': 0, 'box-shadow': 'none', padding: '0.12rem 0.2rem', 'max-width': '90%', 'white-space': 'pre' }));
       }
     }
     if (targetKey === 'title' || targetKey === 'top_text') {
@@ -1021,11 +1021,27 @@
     }
   }
 
+  function productCaseExtras(tpl) {
+    var style = templateCaptionStyle(tpl);
+    var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
+    if (String(overlay.layout || '') !== 'product_case') return '';
+    var html = '<div class="cutcli-product-scrim is-top"></div><div class="cutcli-product-scrim is-bottom"></div>';
+    if (overlay.show_pills !== false) {
+      var leftTitle = String(overlay.pill_left_title || 'GPSTest');
+      var leftSub = String(overlay.pill_left_sub || '专业测向搜星');
+      var rightTitle = String(overlay.pill_right_title || 'Windy');
+      var rightSub = String(overlay.pill_right_sub || '实时掌握天气');
+      html += '<div class="cutcli-product-pill is-left"><b>' + esc(leftTitle) + '</b><span>' + esc(leftSub) + '</span></div>';
+      html += '<div class="cutcli-product-pill is-right"><b>' + esc(rightTitle) + '</b><span>' + esc(rightSub) + '</span></div>';
+    }
+    return html;
+  }
+
   function renderPositionLayer(tpl) {
     var layer = $('cutcliTplPositionLayer');
     if (!layer) return;
     var layout = overlayLayout(tpl);
-    layer.innerHTML = positionTargets(tpl).map(function(target) {
+    layer.innerHTML = productCaseExtras(tpl) + positionTargets(tpl).map(function(target) {
       var pos = targetPosition(target.key);
       var editable = (target.key === 'caption' || (layout === 'right_vertical_card' && target.key === 'title')) ? 'false' : 'plaintext-only';
       var inline = 'left:' + (pos.x_ratio * 100).toFixed(2) + '%;top:' + (pos.y_ratio * 100).toFixed(2) + '%;' + previewInlineStyle(tpl, target.key);

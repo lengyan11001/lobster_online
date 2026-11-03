@@ -2604,31 +2604,66 @@ def _render_ffmpeg(
     source: str,
     out_path: Path,
     ass_path: Path,
+    duration_sec: float = 0.0,
+    source_duration_sec: float = 0.0,
+    target_width: int = 0,
+    target_height: int = 0,
+    fit: str = "cover",
+    audio_path: str = "",
+    audio_volume: float = 1.0,
+    source_audio_volume: float = 0.0,
 ) -> None:
-    _run_cmd(
-        [
-            ffmpeg,
-            "-y",
-            "-i",
-            source,
-            "-vf",
-            "ass='%s'" % _ffmpeg_filter_path(ass_path),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "20",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "160k",
-            "-movflags",
-            "+faststart",
-            str(out_path),
-        ],
-        timeout=1800,
-    )
+    cmd: List[str] = [ffmpeg, "-y"]
+    loop_source = bool(duration_sec and source_duration_sec and source_duration_sec < duration_sec - 0.05)
+    if loop_source:
+        cmd += ["-stream_loop", "-1"]
+    cmd += ["-i", source]
+    if audio_path:
+        cmd += ["-i", audio_path]
+    vf_parts: List[str] = []
+    if target_width and target_height:
+        if str(fit or "cover").lower() == "contain":
+            vf_parts.append(
+                "scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2"
+                % (target_width, target_height, target_width, target_height)
+            )
+        else:
+            vf_parts.append(
+                "scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d"
+                % (target_width, target_height, target_width, target_height)
+            )
+    vf_parts.append("ass='%s'" % _ffmpeg_filter_path(ass_path))
+    vf = ",".join(vf_parts)
+    if audio_path and source_audio_volume > 0:
+        filter_complex = (
+            "[0:v]%s[v];[0:a]volume=%.4f[a0];[1:a]volume=%.4f[a1];"
+            "[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[a]"
+            % (vf, source_audio_volume, audio_volume)
+        )
+        cmd += ["-filter_complex", filter_complex, "-map", "[v]", "-map", "[a]"]
+    elif audio_path:
+        filter_complex = "[0:v]%s[v]" % vf
+        cmd += ["-filter_complex", filter_complex, "-map", "[v]", "-map", "1:a:0"]
+    else:
+        cmd += ["-vf", vf, "-map", "0:v:0", "-map", "0:a?"]
+    if duration_sec:
+        cmd += ["-t", f"{duration_sec:.3f}"]
+    cmd += [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "20",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "160k",
+        "-movflags",
+        "+faststart",
+        str(out_path),
+    ]
+    _run_cmd(cmd, timeout=1800)
     if not out_path.exists() or out_path.stat().st_size <= 1024:
         raise RuntimeError("ffmpeg render output is empty")
 
@@ -3008,19 +3043,36 @@ def _run_job(
         )
         ffmpeg = find_ffmpeg()
         source_info = _probe_video(ffmpeg, source)
+        video_duration_sec = float(source_info.get("duration") or 0.1)
+        video_width = int(source_info.get("width") or 1080)
+        video_height = int(source_info.get("height") or 1920)
+        meta = template.get("meta") if isinstance(template.get("meta"), dict) else {}
+        fixed_duration_sec = max(0.0, float(meta.get("fixed_duration_ms") or 0) / 1000.0)
+        render_duration_sec = fixed_duration_sec or video_duration_sec
+        target_width = int(meta.get("target_width") or video_width)
+        target_height = int(meta.get("target_height") or video_height)
+        fit = str(meta.get("fit") or "cover")
+        audio_bed_path = ""
+        audio_bed_url = str(meta.get("audio_bed_url") or "").strip()
+        if audio_bed_url and fixed_duration_sec:
+            if audio_bed_url.startswith("/"):
+                audio_bed_url = f"{_server_base()}{audio_bed_url}"
+            audio_bed_path = str(job_dir / "template_audio.m4a")
+            with httpx.stream("GET", audio_bed_url, timeout=120.0) as resp:
+                resp.raise_for_status()
+                with open(audio_bed_path, "wb") as fh:
+                    for chunk in resp.iter_bytes():
+                        fh.write(chunk)
         style = _apply_position_overrides(
             _apply_orientation_style(
                 _template_caption_style(template),
-                width=int(source_info.get("width") or 0),
-                height=int(source_info.get("height") or 0),
+                width=target_width,
+                height=target_height,
             ),
             position_overrides or {},
         )
         if not style:
             raise RuntimeError(f"template {template.get('id') or ''} has no caption strategy")
-
-        video_duration_sec = float(source_info.get("duration") or 0.1)
-        video_width = int(source_info.get("width") or 1080)
         multi_clip_segments = _multi_clip_audio_segments(db, user_id, source_asset_id)
         captions: List[Dict[str, Any]] = []
         segment_stt_report: List[Dict[str, Any]] = []
@@ -3222,12 +3274,25 @@ def _run_job(
                 ass_path,
                 captions,
                 style,
-                int(source_info.get("width") or 1080),
-                int(source_info.get("height") or 1920),
+                target_width,
+                target_height,
                 overlay_texts=overlay_texts or {},
-                duration_sec=float(source_info.get("duration") or 0.1),
+                duration_sec=render_duration_sec or 0.1,
             )
-            _render_ffmpeg(ffmpeg=ffmpeg, source=source, out_path=out_path, ass_path=ass_path)
+            _render_ffmpeg(
+                ffmpeg=ffmpeg,
+                source=source,
+                out_path=out_path,
+                ass_path=ass_path,
+                duration_sec=render_duration_sec,
+                source_duration_sec=video_duration_sec,
+                target_width=target_width,
+                target_height=target_height,
+                fit=fit,
+                audio_path=audio_bed_path,
+                audio_volume=float(meta.get("audio_bed_volume") or 1.0),
+                source_audio_volume=float(meta.get("source_audio_volume") or 0.0),
+            )
             final_asset_id, _fname, fsize, source_url, _local = _save_binary_asset(
                 db,
                 user_id=user_id,

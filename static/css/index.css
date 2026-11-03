@@ -10983,6 +10983,63 @@ body.online-mastra-chat-compose .online-mastra-chat {
       box-shadow: 0 8px 20px rgba(0,0,0,0.22);
       backdrop-filter: blur(8px);
     }
+    #content-cutcli-template-studio .cutcli-product-scrim {
+      position: absolute;
+      left: 0;
+      right: 0;
+      pointer-events: none;
+      z-index: 1;
+    }
+    #content-cutcli-template-studio .cutcli-product-scrim.is-top {
+      top: 0;
+      height: 36%;
+      background: linear-gradient(to bottom, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.34) 35%, rgba(0,0,0,0) 100%);
+    }
+    #content-cutcli-template-studio .cutcli-product-scrim.is-bottom {
+      bottom: 0;
+      height: 30%;
+      background: linear-gradient(to top, rgba(0,0,0,0.58) 0%, rgba(0,0,0,0.22) 55%, rgba(0,0,0,0) 100%);
+    }
+    #content-cutcli-template-studio .cutcli-product-pill {
+      position: absolute;
+      top: 70.5%;
+      height: 7%;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #ffffff;
+      color: #1a1a1a;
+      border-radius: 0.5rem;
+      line-height: 1.05;
+      text-shadow: none;
+      font-weight: 900;
+      pointer-events: none;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.18);
+    }
+    #content-cutcli-template-studio .cutcli-product-pill.is-left {
+      left: 16%;
+      width: 26%;
+    }
+    #content-cutcli-template-studio .cutcli-product-pill.is-right {
+      left: 50%;
+      width: 34%;
+    }
+    #content-cutcli-template-studio .cutcli-product-pill b {
+      font-size: clamp(8px, 2.6cqw, 18px);
+      font-weight: 900;
+      line-height: 1.05;
+    }
+    #content-cutcli-template-studio .cutcli-product-pill span {
+      font-size: clamp(6px, 1.9cqw, 12px);
+      font-weight: 700;
+      color: #333333;
+      line-height: 1.1;
+    }
+    #content-cutcli-template-studio .cutcli-template-preview-text.layout-product-case {
+      z-index: 3;
+    }
     #content-cutcli-template-studio .cutcli-template-preview-text {
       position: absolute;
       transform: translate(-50%, -50%);
