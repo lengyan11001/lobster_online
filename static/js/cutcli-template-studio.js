@@ -81,6 +81,8 @@
       common = { font_size: 9, ass_font_size: 48, ass_margin_v: 96, caption_position: { x: 0, y: -0.78 }, overlay_style: { headline_y_ratio: 0.43, badge_y_ratio: 0.57, headline_font_size: 52, badge_font_size: 28 } };
     } else if (layout === 'news_brief') {
       common = { font_size: 9, ass_font_size: 46, ass_margin_v: 96, caption_position: { x: 0, y: -0.78 }, overlay_style: { headline_y_ratio: 0.16, title_x_ratio: 0.43, subheadline_x_ratio: 0.58, headline_font_size: 56 } };
+    } else if (layout === 'product_case') {
+      common = { font_size: 9, ass_font_size: 46, ass_margin_v: 40, caption_position: { x: 0, y: -0.95 }, overlay_style: { top_x_ratio: 0.42, top_y_ratio: 0.093, top_font_size: 84, title_x_ratio: 0.5, title_y_ratio: 0.173, headline_font_size: 128, subheadline_x_ratio: 0.124, subheadline_y_ratio: 0.305, subtitle_font_size: 54, badge_x_ratio: 0.5, badge_y_ratio: 0.84, badge_font_size: 72 } };
     } else if (layout === 'side_neon') {
       common = { font_size: 9, ass_font_size: 44, ass_margin_v: 96, caption_position: { x: -0.42, y: 0.24 } };
     } else if (layout === 'dramatic_hook') {
@@ -929,6 +931,20 @@
           'border-radius': 0,
           'max-width': '46%'
         }));
+      }
+    }
+    if (layout === 'product_case') {
+      if (targetKey === 'top_text') {
+        return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 4, shadow: 2, fontSize: 84, minPx: 12, maxPx: 26 }), { 'max-width': '82%', 'white-space': 'pre' }));
+      }
+      if (targetKey === 'title') {
+        return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 6, shadow: 3, fontSize: 128, minPx: 16, maxPx: 44 }), { 'max-width': '86%', 'white-space': 'pre' }));
+      }
+      if (targetKey === 'subtitle') {
+        return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 4, shadow: 2, fontSize: 54, minPx: 10, maxPx: 21, align: 'left' }), { transform: 'translate(0,-50%)', 'max-width': '56%', 'white-space': 'pre' }));
+      }
+      if (targetKey === 'badge') {
+        return cssText(Object.assign(base, assTextStyle({ color: white, outline: black, border: 3, shadow: 2, fontSize: 72, minPx: 10, maxPx: 22 }), { background: 'transparent', 'border-radius': 0, 'box-shadow': 'none', padding: '0.12rem 0.2rem', 'max-width': '88%', 'white-space': 'pre' }));
       }
     }
     if (targetKey === 'title' || targetKey === 'top_text') {

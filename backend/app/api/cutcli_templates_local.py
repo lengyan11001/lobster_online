@@ -605,6 +605,28 @@ def _orientation_defaults_for_style(style: Dict[str, Any]) -> Dict[str, Any]:
                 "headline_font_size": 56,
             },
         }
+    if layout == "product_case":
+        return {
+            "font_size": 9,
+            "ass_font_size": 46,
+            "ass_margin_v": 40,
+            "caption_position": {"x": 0.0, "y": -0.95},
+            "overlay_style": {
+                "layout": "product_case",
+                "top_x_ratio": 0.42,
+                "top_y_ratio": 0.093,
+                "top_font_size": 84,
+                "title_x_ratio": 0.5,
+                "title_y_ratio": 0.173,
+                "headline_font_size": 128,
+                "subheadline_x_ratio": 0.124,
+                "subheadline_y_ratio": 0.305,
+                "subtitle_font_size": 54,
+                "badge_x_ratio": 0.5,
+                "badge_y_ratio": 0.84,
+                "badge_font_size": 72,
+            },
+        }
     if layout == "side_neon":
         return {
             "font_size": 9,
@@ -2371,6 +2393,65 @@ def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], wid
         if subtitle:
             lines.append("Dialogue: 7,0:00:00.00,%s,OverlaySub,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\c&H00FFFFFF&\\3c&H00000000&\\bord5\\shad2}%s" % (end, int(width * _float_value(overlay_style.get("subheadline_x_ratio"), 0.58)), y, fs, _ass_text_with_newline(subtitle)))
         return lines
+    if layout == "product_case":
+        scale = max(0.5, min(2.0, width / 1280.0))
+        top_y = int(height * top_y_screen_ratio)
+        title_y = int(height * _float_value(overlay_style.get("title_y_ratio"), 0.173))
+        sub_y = int(height * _float_value(overlay_style.get("subheadline_y_ratio"), 0.305))
+        badge_y = int(height * _float_value(overlay_style.get("badge_y_ratio"), 0.84))
+        for i in range(12):
+            y0 = 0.36 * i / 12.0
+            y1 = 0.36 * (i + 1) / 12.0
+            a = max(0, min(255, int(0xAA * (1.0 - i / 11.0))))
+            y_a = int(height * y0)
+            y_b = int(height * y1)
+            lines.append(
+                "Dialogue: 1,0:00:00.00,%s,OverlayBox,,0,0,0,,{\\an7\\pos(0,%d)\\p1\\c&H000000&\\alpha&H%02X&}m 0 0 l %d 0 l %d %d l 0 %d{\\p0}"
+                % (end, y_a, a, width, width, y_b - y_a, y_b - y_a)
+            )
+        for i in range(10):
+            y0 = 0.70 + 0.30 * i / 10.0
+            y1 = 0.70 + 0.30 * (i + 1) / 10.0
+            a = max(0, min(255, int(0x10 + (0x88 - 0x10) * i / 9.0)))
+            y_a = int(height * y0)
+            y_b = int(height * y1)
+            lines.append(
+                "Dialogue: 1,0:00:00.00,%s,OverlayBox,,0,0,0,,{\\an7\\pos(0,%d)\\p1\\c&H000000&\\alpha&H%02X&}m 0 0 l %d 0 l %d %d l 0 %d{\\p0}"
+                % (end, y_a, a, width, width, y_b - y_a, y_b - y_a)
+            )
+        if overlay_style.get("show_pills", True):
+            pill_y0 = int(height * 0.705)
+            pill_y1 = int(height * 0.775)
+            pill_title_fs = max(20, int(round(44 * scale)))
+            pill_sub_fs = max(14, int(round(30 * scale)))
+            for x0, x1, pill_title, pill_sub in (
+                (0.16, 0.42, str(overlay_style.get("pill_left_title") or "GPSTest"), str(overlay_style.get("pill_left_sub") or "专业测向搜星")),
+                (0.50, 0.84, str(overlay_style.get("pill_right_title") or "Windy"), str(overlay_style.get("pill_right_sub") or "实时掌握天气")),
+            ):
+                x_a = int(width * x0)
+                x_b = int(width * x1)
+                lines.append(
+                    "Dialogue: 2,0:00:00.00,%s,OverlayBox,,0,0,0,,{\\an7\\pos(%d,%d)\\p1\\c&H00FFFFFF&\\alpha&H00&}m 0 0 l %d 0 l %d %d l 0 %d{\\p0}"
+                    % (end, x_a, pill_y0, x_b - x_a, x_b - x_a, pill_y1 - pill_y0, pill_y1 - pill_y0)
+                )
+                cx = (x_a + x_b) // 2
+                cy = (pill_y0 + pill_y1) // 2
+                lines.append("Dialogue: 8,0:00:00.00,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\c&H001A1A1A&\\bord0\\shad0}%s" % (end, cx, cy - int(pill_title_fs * 0.45), pill_title_fs, _ass_text_with_newline(pill_title)))
+                lines.append("Dialogue: 8,0:00:00.00,%s,OverlaySub,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\c&H00333333&\\bord0\\shad0}%s" % (end, cx, cy + int(pill_sub_fs * 0.55), pill_sub_fs, _ass_text_with_newline(pill_sub)))
+        if top_text:
+            fs = _fit_overlay_font_size(int(round(int(overlay_style.get("top_font_size") or 84) * scale)), _overlay_plain_lines(top_text), width=int(width * 0.82), height_limit=int(height * 0.065), min_size=24)
+            lines.append("Dialogue: 7,0:00:00.00,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\c&H00FFFFFF&\\3c&H00000000&\\bord4\\shad2}%s" % (end, top_x, top_y, fs, _ass_text_with_newline(top_text)))
+        if title:
+            fs = _fit_overlay_font_size(int(round(int(overlay_style.get("headline_font_size") or 128) * scale)), _overlay_plain_lines(title), width=int(width * 0.86), height_limit=int(height * 0.09), min_size=42)
+            lines.append("Dialogue: 7,0:00:00.00,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\c&H00FFFFFF&\\3c&H00000000&\\bord6\\shad3}%s" % (end, title_x, title_y, fs, _ass_text_with_newline(title)))
+        if subtitle:
+            fs = _fit_overlay_font_size(int(round(int(overlay_style.get("subtitle_font_size") or 54) * scale)), _overlay_plain_lines(subtitle), width=int(width * 0.56), height_limit=int(height * 0.085), min_size=22)
+            lines.append("Dialogue: 6,0:00:00.00,%s,OverlaySub,,0,0,0,,{\\an1\\pos(%d,%d)\\fs%d\\c&H00FFFFFF&\\3c&H00000000&\\bord4\\shad2}%s" % (end, subtitle_x, sub_y, fs, _ass_text_with_newline(subtitle)))
+        if badge:
+            fs = _fit_overlay_font_size(int(round(int(overlay_style.get("badge_font_size") or 72) * scale)), _overlay_plain_lines(badge), width=int(width * 0.88), height_limit=int(height * 0.045), min_size=24)
+            lines.append("Dialogue: 7,0:00:00.00,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\c&H00FFFFFF&\\3c&H00000000&\\bord3\\shad2}%s" % (end, badge_x, badge_y, fs, _ass_text_with_newline(badge)))
+        return lines
+
     if layout == "top_banner":
         top_lines = _overlay_plain_lines(top_text)
         profile_title = _overlay_text_value_any(overlay_texts, style, "title")
