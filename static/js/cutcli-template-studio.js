@@ -1086,6 +1086,20 @@
     return html;
   }
 
+  function syncDesignerPreviewTime(tpl, video) {
+    if (!video || overlayLayout(tpl) !== 'designer_timeline') return;
+    var layer = $('cutcliTplPositionLayer');
+    if (!layer) return;
+    var us = Number(video.currentTime || 0) * 1000000;
+    layer.querySelectorAll('[data-cutcli-preview-start]').forEach(function(node) {
+      var start = Number(node.dataset.cutcliPreviewStart || 0);
+      var end = Number(node.dataset.cutcliPreviewEnd || 0);
+      var visible = us >= start && (!end || us <= end);
+      node.style.visibility = visible ? '' : 'hidden';
+      node.style.pointerEvents = visible ? '' : 'none';
+    });
+  }
+
   function renderPositionLayer(tpl) {
     var layer = $('cutcliTplPositionLayer');
     if (!layer) return;
@@ -1094,13 +1108,17 @@
       var pos = targetPosition(target.key);
       var editable = (target.key === 'caption' || (layout === 'right_vertical_card' && target.key === 'title')) ? 'false' : 'plaintext-only';
       var inline = 'left:' + (pos.x_ratio * 100).toFixed(2) + '%;top:' + (pos.y_ratio * 100).toFixed(2) + '%;' + previewInlineStyle(tpl, target.key);
-      return '<div class="' + previewTextClass(tpl, target.key) + '" contenteditable="' + editable + '" spellcheck="false" data-cutcli-preview-text-target="' + esc(target.key) + '" style="' + inline + '">' +
+      var dt = layout === 'designer_timeline' ? designerTrack(tpl, target.key) : null;
+      var timeAttrs = dt ? (' data-cutcli-preview-start="' + num(dt.start_ms, 0) + '" data-cutcli-preview-end="' + num(dt.end_ms, 0) + '"') : '';
+      return '<div class="' + previewTextClass(tpl, target.key) + '" contenteditable="' + editable + '" spellcheck="false" data-cutcli-preview-text-target="' + esc(target.key) + '"' + timeAttrs + ' style="' + inline + '">' +
         '<span class="cutcli-template-preview-drag-dot" contenteditable="false" aria-hidden="true"></span>' +
         previewTextHtml(tpl, target.key) +
       '</div>';
     }).join('');
     bindPreviewTextEditing(tpl, layer);
     bindPreviewTextDrag(tpl, layer);
+    var previewVideo = document.querySelector('#cutcliTplModalPreview video');
+    if (previewVideo) syncDesignerPreviewTime(tpl, previewVideo);
   }
 
   function bindPreviewTextEditing(tpl, layer) {
@@ -1656,6 +1674,9 @@
         video.currentTime = 0;
         video.pause();
         bindSourceVideoFallback(video);
+        video.addEventListener('timeupdate', function() { syncDesignerPreviewTime(tpl, video); });
+        video.addEventListener('seeked', function() { syncDesignerPreviewTime(tpl, video); });
+        video.addEventListener('loadedmetadata', function() { syncDesignerPreviewTime(tpl, video); });
         if (!state.uploadedPreviewUrl) {
           video.addEventListener('loadedmetadata', function() {
             if (updateSourceVideoOrientation(video.videoWidth, video.videoHeight)) renderTemplateModal();
@@ -2186,7 +2207,7 @@
       renderTemplateModal();
     });
     var assetInput = $('cutcliTplModalAssetIdInput');
-    if (assetInput) assetInput.addEventListener('input', function() { renderTemplateModal(); });
+    if (assetInput) assetInput.addEventListener('change', function() { renderTemplateModal(); });
     var start = $('cutcliTplModalStartBtn');
     if (start) start.addEventListener('click', startRender);
 
