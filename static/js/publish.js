@@ -6236,29 +6236,52 @@ function _pubPlanPreviewTableHtml(data) {
   return html;
 }
 
-function _pubPlanCommittedHtml(plan) {
-  var items = plan.commit_items || [];
-  var summary = plan.commit_summary || {};
-  var created = parseInt(summary.created, 10);
-  if (isNaN(created)) created = _pubPlanCreatedTotal(plan);
-  var failed = parseInt(summary.failed, 10) || 0;
-  var head = '<div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.35rem;">已在上游创建 <b style="color:var(--text);">' +
-    created + '</b> 条定时任务' + (failed ? '，失败 ' + failed + ' 条' : '') +
-    '。平台到点发布，本机不需要再点发布。</div>';
-  if (!items.length) return head + '<div style="font-size:0.8rem;color:var(--text-muted);">没有排程明细。</div>';
-  var rows = items.map(function(it, i) {
-    return { index: it.index || (i + 1), name: it.name || it.asset_id || '', path: it.path || '', publish_at: it.publish_at || '' };
+function _pubPlanItemsHtml(plan, data) {
+  var items = (data && data.items) || [];
+  var summary = (data && data.summary) || {};
+  var head = '<div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:0.35rem;">已创建 <b style="color:var(--text);">' +
+    (parseInt(summary.created, 10) || 0) + '</b> 条 · 待创建 <b style="color:var(--text);">' +
+    (parseInt(summary.not_created, 10) || 0) + '</b> 条 · 失败 ' + (parseInt(summary.failed, 10) || 0) +
+    ' 条 · 已跳过 ' + (parseInt(summary.skipped, 10) || 0) + ' 条</div>';
+  if (!items.length) return head + '<div style="font-size:0.8rem;color:var(--text-muted);">没有素材明细。</div>';
+  var html = head + '<div class="pub-plan-preview-head" style="display:flex;gap:0.4rem;padding:0.4rem 0.2rem;border-bottom:1px solid var(--border);font-size:0.76rem;font-weight:600;color:var(--text-muted);">' +
+    '<span style="width:2.8rem;">序号</span><span style="flex:1;min-width:0;">素材</span><span style="width:8.5rem;">计划时间</span><span style="width:6rem;">状态</span><span style="width:4.5rem;text-align:right;">操作</span></div>';
+  items.forEach(function(it) {
+    var status = String(it.status || '');
+    var label = status === 'success' ? '平台已发' : (status === 'pending' ? '待平台发布' : (status === 'failed' ? '失败' : (status === 'skipped' ? '已存在/跳过' : '未创建')));
+    var color = status === 'success' ? 'var(--success)' : (status === 'failed' ? 'var(--error)' : (status === 'skipped' ? 'var(--text-muted)' : 'var(--text)'));
+    var action = '';
+    if (it.can_trigger) {
+      action = '<button type="button" class="btn btn-primary btn-sm" data-plan-trigger="' + plan.id + '" data-plan-trigger-key="' + escapeAttr(it.key || '') + '" data-plan-trigger-at="' + escapeAttr(it.publish_at || '') + '" style="padding:0.2rem 0.5rem;font-size:0.75rem;">' + (status === 'failed' ? '重试' : '触发') + '</button>';
+    } else if (it.task_id) {
+      action = '<span style="font-size:0.72rem;color:var(--text-muted);">#' + escapeHtml(String(it.task_id)) + '</span>';
+    }
+    html += '<div class="pub-plan-preview-row" style="display:flex;gap:0.4rem;padding:4px 0.2rem;align-items:center;">' +
+      '<span style="width:2.8rem;color:var(--text-muted);font-size:0.75rem;">' + escapeHtml(String(it.index || '')) + '</span>' +
+      '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeAttr(it.path || it.name || '') + '">' + escapeHtml(it.name || it.asset_id || '') + '</span>' +
+      '<span style="width:8.5rem;font-size:0.75rem;color:var(--text-muted);">' + escapeHtml(it.publish_at || '') + '</span>' +
+      '<span style="width:6rem;font-size:0.75rem;color:' + color + ';">' + escapeHtml(label) + '</span>' +
+      '<span style="width:4.5rem;text-align:right;">' + action + '</span></div>';
   });
-  return head + _pubPlanPreviewTableHtml({ total: rows.length, rows: rows });
+  return html;
 }
 
 function _pubPlanLoadExpanded(plan) {
   var box = document.getElementById('pubPlanPreviewBox-' + plan.id);
   if (!box) return;
   if (plan.committed) {
-    var committedHtml = _pubPlanCommittedHtml(plan);
-    _pubPlanPreviewCache[plan.id] = committedHtml;
-    box.innerHTML = committedHtml;
+    if (_pubPlanPreviewCache[plan.id]) {
+      box.innerHTML = _pubPlanPreviewCache[plan.id];
+      return;
+    }
+    box.innerHTML = '<div style="font-size:0.8rem;color:var(--text-muted);">正在加载逐条状态…</div>';
+    _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(plan.id) + '/items').then(function(d) {
+      var html = _pubPlanItemsHtml(plan, d);
+      _pubPlanPreviewCache[plan.id] = html;
+      box.innerHTML = html;
+    }).catch(function(err) {
+      box.innerHTML = '<div style="font-size:0.8rem;color:var(--error);">状态加载失败：' + escapeHtml((err && err.message) || String(err)) + '</div>';
+    });
     return;
   }
   if (_pubPlanPreviewCache[plan.id]) {
@@ -6784,6 +6807,29 @@ function _pubPlanToggle(planId, nextEnabled) {
 document.addEventListener('click', function(event) {
   var target = event.target;
   if (!target || !target.closest) return;
+  var triggerBtn = target.closest('[data-plan-trigger]');
+  if (triggerBtn) {
+    event.stopPropagation();
+    var triggerId = triggerBtn.getAttribute('data-plan-trigger');
+    var triggerKey = triggerBtn.getAttribute('data-plan-trigger-key');
+    var triggerAt = triggerBtn.getAttribute('data-plan-trigger-at');
+    if (!confirm('立即为这条素材创建定时任务？')) return;
+    triggerBtn.disabled = true;
+    triggerBtn.textContent = '触发中…';
+    _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(triggerId) + '/trigger-item', {
+      method: 'POST',
+      body: JSON.stringify({ key: triggerKey, publish_at: triggerAt })
+    }).then(function(d) {
+      if (d && d.created === false && d.item && d.item.error) alert(d.item.error);
+      _pubPlanPreviewCache = {};
+      loadPublishPlans();
+    }).catch(function(err) {
+      triggerBtn.disabled = false;
+      triggerBtn.textContent = '触发';
+      alert('触发失败：' + ((err && err.message) || err));
+    });
+    return;
+  }
   if (target.closest('[data-plan-preview-box]')) return;
   if (target.closest('#pubPlanAddBtn')) { openPublishPlanDialog(null); return; }
   if (target.closest('#pubPlanCloseBtn') || target.closest('#pubPlanCancelBtn')) { closePublishPlanDialog(); return; }

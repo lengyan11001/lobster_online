@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from .auth import _ServerUser, get_current_user_for_local
 from ..db import get_db
-from ..models import PublishAccount, PublishGroupItem, PublishPlan, PublishPlanItem
+from ..models import PublishAccount, PublishGroupItem, PublishPlan, PublishPlanItem, PublishTask
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -302,6 +302,175 @@ async def commit_publish_schedule(
         "errors": failed,
     }
 
+class PlanItemTriggerReq(BaseModel):
+    key: str
+    publish_at: Optional[str] = None
+
+
+def _plan_items_summary(rows: List[Dict[str, Any]]) -> Dict[str, int]:
+    return {
+        "total": len(rows),
+        "created": sum(1 for r in rows if r.get("task_id") and r.get("status") in ("pending", "success")),
+        "success": sum(1 for r in rows if r.get("status") == "success"),
+        "pending": sum(1 for r in rows if r.get("status") == "pending"),
+        "failed": sum(1 for r in rows if r.get("status") == "failed"),
+        "not_created": sum(1 for r in rows if r.get("status") == "not_created"),
+        "skipped": sum(1 for r in rows if r.get("status") == "skipped"),
+    }
+
+
+@router.get("/api/publish/plans/{plan_id}/items", summary="定时任务逐条状态（含未创建）")
+def list_plan_items(
+    plan_id: int,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    plan = (
+        db.query(PublishPlan)
+        .filter(PublishPlan.id == int(plan_id), PublishPlan.user_id == current_user.id)
+        .first()
+    )
+    if plan is None:
+        raise HTTPException(404, detail="发布任务不存在")
+    rows = _plan_items_rows(db, plan, include_preview=True)
+    return {"ok": True, "plan_id": plan.id, "items": rows, "summary": _plan_items_summary(rows)}
+
+
+@router.post("/api/publish/plans/{plan_id}/trigger-item", summary="触发单条未创建/失败的定时任务")
+async def trigger_plan_item(
+    plan_id: int,
+    body: PlanItemTriggerReq,
+    request: Request,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    from ..services import publish_plan_runner as runner
+    from .publish import PublishReq, create_publish_task
+
+    plan = (
+        db.query(PublishPlan)
+        .filter(PublishPlan.id == int(plan_id), PublishPlan.user_id == current_user.id)
+        .first()
+    )
+    if plan is None:
+        raise HTTPException(404, detail="发布任务不存在")
+    if not (plan.options or {}).get("_batch_committed"):
+        raise HTTPException(400, detail="只有已排程批次支持单条触发")
+
+    rows = _plan_items_rows(db, plan, include_preview=True)
+    row = next((r for r in rows if str(r.get("key")) == str(body.key)), None)
+    if row is None:
+        raise HTTPException(404, detail="这条素材已不在当前规划里")
+    if row.get("status") in ("pending", "success"):
+        return {"ok": True, "created": False, "item": row, "plan": _plan_payload(db, plan)}
+
+    body_req = _plan_source_body(plan)
+    candidates = _schedule_candidates(db, int(plan.user_id), body_req)
+    candidate = next((c for c in candidates if str(c.get("key")) == str(body.key)), None)
+    if candidate is None:
+        raise HTTPException(404, detail="这条素材已不在来源目录/分组里")
+
+    when: Optional[datetime] = None
+    raw_when = str(body.publish_at or row.get("publish_at") or "").strip()
+    if raw_when:
+        try:
+            when = datetime.strptime(raw_when[:16], "%Y-%m-%d %H:%M")
+        except ValueError:
+            when = None
+    now = datetime.now()
+    min_lead = _schedule_min_lead(plan.platform)
+    if when is None or when <= now or (min_lead and when < now + min_lead):
+        times = _clean_times(plan.times)
+        daily = max(1, min(int(plan.daily_count or len(times) or 1), 20))
+        times = times[:daily] if len(times) >= daily else times
+        slots = _assign_schedule_slots(1, times, None, now, min_lead=min_lead)
+        if not slots:
+            raise HTTPException(400, detail="没有可用的定时发布时间")
+        when = slots[0]
+    publish_at = when.strftime("%Y-%m-%d %H:%M")
+
+    asset_id = ""
+    task_id: Optional[int] = None
+    status = "failed"
+    error = ""
+    created_flag = False
+    result: Dict[str, Any] = {}
+    try:
+        asset_id = await runner._ensure_asset_id(current_user, candidate, str(plan.tags or ""))
+        if not asset_id:
+            raise RuntimeError("素材入库失败")
+        existing = (
+            db.query(PublishTask)
+            .filter(
+                PublishTask.user_id == current_user.id,
+                PublishTask.asset_id == str(asset_id),
+                PublishTask.status.in_(("pending", "success")),
+            )
+            .order_by(PublishTask.id.desc())
+            .first()
+        )
+        if existing is not None:
+            status = "skipped"
+            task_id = existing.id
+            error = f"同一素材已有发布任务 #{existing.id}，已跳过"
+        else:
+            acct = _resolve_plan_account(db, current_user.id, plan.account_id, plan.account_nickname)
+            if acct is None:
+                raise RuntimeError("发布账号不存在，请先在「发布账号」里添加")
+            time_key = "wechat_channels_publish_time" if plan.platform == "wechat_channels" else "douyin_publish_time"
+            options = {k: v for k, v in dict(plan.options or {}).items() if not str(k).startswith("_")}
+            options[time_key] = publish_at
+            payload = PublishReq(
+                asset_id=str(asset_id),
+                account_id=int(acct.id),
+                account_nickname=acct.nickname or "",
+                title="", description="", tags=str(plan.tags or ""), options=options,
+            )
+            result = await create_publish_task(request, payload, current_user, db)
+            raw_task_id = result.get("task_id")
+            task_id = int(raw_task_id) if raw_task_id else None
+            status = str(result.get("status") or "").strip()
+            if status not in ("success", "pending", "failed"):
+                status = "failed" if result.get("error") else "pending"
+            error = str(result.get("error") or "")
+            created_flag = status != "failed"
+    except Exception as exc:  # noqa: BLE001
+        status = "failed"
+        task_id = None
+        error = str(exc)[:500]
+        created_flag = False
+
+    updated = _save_commit_item(
+        db, plan, candidate, when,
+        int(row.get("index") or 0), str(asset_id), task_id, status, error,
+    )
+    items = [
+        it for it in (plan.options or {}).get("_commit_items") or []
+        if str(it.get("key")) != str(body.key)
+    ]
+    items.append(updated)
+    items.sort(key=lambda x: str(x.get("publish_at") or ""))
+    opts = dict(plan.options or {})
+    opts["_commit_items"] = items
+    opts["_commit_summary"] = {
+        "total": len(items),
+        "created": sum(1 for x in items if x.get("task_id") and x.get("status") in ("pending", "success")),
+        "failed": sum(1 for x in items if x.get("status") == "failed"),
+        "skipped": sum(1 for x in items if x.get("status") == "skipped"),
+    }
+    plan.options = opts
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return {
+        "ok": True,
+        "created": created_flag,
+        "item": updated,
+        "plan": _plan_payload(db, plan),
+        "result": result,
+    }
+
+
 class PickFolderReq(BaseModel):
     initial: Optional[str] = None
 
@@ -396,6 +565,110 @@ def _schedule_min_lead(platform: str) -> Optional[timedelta]:
     return None
 
 
+def _plan_source_body(plan: PublishPlan) -> PublishScheduleReq:
+    return PublishScheduleReq(
+        name=plan.name,
+        platform=plan.platform,
+        account_id=plan.account_id,
+        account_nickname=plan.account_nickname,
+        source_folder=plan.source_folder,
+        source_groups=list(plan.source_groups or []),
+        source_records=list(plan.source_records or []),
+        daily_count=int(plan.daily_count or 1),
+        times=list(plan.times or []),
+        tags=plan.tags,
+        ai_copy=bool(plan.ai_copy),
+        options=dict(plan.options or {}),
+    )
+
+
+def _save_commit_item(db: Session, plan: PublishPlan, item: Dict[str, Any], when: datetime,
+                      idx: int, asset_id: str, task_id: Optional[int], status: str,
+                      error: str = "") -> Dict[str, Any]:
+    key = str(item.get("key") or "")[:500]
+    row = (
+        db.query(PublishPlanItem)
+        .filter(PublishPlanItem.plan_id == int(plan.id), PublishPlanItem.asset_key == key)
+        .first()
+    )
+    if row is None:
+        row = PublishPlanItem(plan_id=int(plan.id), user_id=int(plan.user_id), asset_key=key)
+        db.add(row)
+    row.source_kind = str(item.get("kind") or "")
+    row.source_ref = str(item.get("path") or item.get("url") or item.get("asset_id") or "")[:2000]
+    row.asset_id = str(asset_id or "")
+    row.title = str(item.get("name") or item.get("title") or item.get("path") or key)[:255]
+    row.task_id = int(task_id) if task_id else None
+    row.status = status
+    row.error = (str(error)[:500] if error else None)
+    row.used_date = when.strftime("%Y-%m-%d")
+    db.add(row)
+    db.commit()
+    return {
+        "index": idx,
+        "key": key,
+        "name": row.title,
+        "asset_id": row.asset_id,
+        "path": str(item.get("path") or ""),
+        "publish_at": when.strftime("%Y-%m-%d %H:%M"),
+        "task_id": row.task_id,
+        "status": row.status,
+        "error": row.error or "",
+    }
+
+
+def _plan_items_rows(db: Session, plan: PublishPlan, include_preview: bool = True) -> List[Dict[str, Any]]:
+    """已处理条目 + 尚未创建任务的剩余候选，按计划时间排序。"""
+    options = dict(plan.options or {})
+    processed = list(options.get("_commit_items") or [])
+    rows: List[Dict[str, Any]] = []
+    seen: set = set()
+    for idx, it in enumerate(processed, start=1):
+        key = str(it.get("key") or "")
+        if key:
+            seen.add(key)
+        status = str(it.get("status") or "pending")
+        rows.append({
+            "index": int(it.get("index") or idx),
+            "key": key,
+            "name": str(it.get("name") or it.get("asset_id") or ""),
+            "asset_id": str(it.get("asset_id") or ""),
+            "path": str(it.get("path") or ""),
+            "publish_at": str(it.get("publish_at") or ""),
+            "task_id": it.get("task_id"),
+            "status": status,
+            "error": str(it.get("error") or ""),
+            "can_trigger": status == "failed",
+        })
+    if include_preview and bool(options.get("_batch_committed")):
+        body = _plan_source_body(plan)
+        candidates = _schedule_candidates(db, int(plan.user_id), body)
+        remaining = [c for c in candidates if str(c.get("key") or "") not in seen]
+        times = _clean_times(plan.times)
+        daily = max(1, min(int(plan.daily_count or len(times) or 1), 20))
+        times = times[:daily] if len(times) >= daily else times
+        slots = _assign_schedule_slots(
+            len(remaining), times, None, datetime.now(),
+            min_lead=_schedule_min_lead(plan.platform),
+        )
+        next_index = max([int(r.get("index") or 0) for r in rows] or [0])
+        for offset, (item, when) in enumerate(zip(remaining, slots), start=1):
+            rows.append({
+                "index": next_index + offset,
+                "key": str(item.get("key") or ""),
+                "name": str(item.get("name") or item.get("title") or item.get("path") or item.get("asset_id") or ""),
+                "asset_id": str(item.get("asset_id") or ""),
+                "path": str(item.get("path") or ""),
+                "publish_at": when.strftime("%Y-%m-%d %H:%M"),
+                "task_id": None,
+                "status": "not_created",
+                "error": "",
+                "can_trigger": True,
+            })
+    rows.sort(key=lambda r: (str(r.get("publish_at") or "9999"), int(r.get("index") or 0)))
+    return rows
+
+
 def _clean_times(values: Optional[List[str]]) -> List[str]:
     out: List[str] = []
     for raw in (values or []):
@@ -426,7 +699,7 @@ def _plan_payload(db: Session, plan: PublishPlan) -> Dict[str, Any]:
     sent_today = sum(1 for row in items if row.used_date == today and row.status in ("pending", "success"))
     base_count = db.query(func.count(PublishPlanItem.id)).filter(PublishPlanItem.plan_id == int(plan.id))
     item_total = int(base_count.scalar() or 0)
-    created_total = int(base_count.filter(PublishPlanItem.task_id.isnot(None)).scalar() or 0)
+    created_total = int(base_count.filter(PublishPlanItem.task_id.isnot(None), PublishPlanItem.status.in_(("pending", "success"))).scalar() or 0)
     success_total = int(base_count.filter(PublishPlanItem.status == "success").scalar() or 0)
     pending_total = int(base_count.filter(PublishPlanItem.status == "pending").scalar() or 0)
     failed_total = int(base_count.filter(PublishPlanItem.status == "failed").scalar() or 0)
