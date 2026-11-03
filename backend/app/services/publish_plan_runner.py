@@ -116,8 +116,13 @@ def _creative_group_of(meta: Any) -> str:
 # ── 候选素材 ─────────────────────────────────────────────────────────────
 
 def _folder_candidates(folder: str) -> List[Dict[str, Any]]:
-    root = Path(str(folder or "").strip())
-    if not str(folder or "").strip() or not root.is_dir():
+    raw = str(folder or "").strip()
+    root = Path(raw)
+    try:
+        is_dir = bool(raw) and root.is_dir()
+    except (OSError, ValueError):
+        is_dir = False
+    if not is_dir:
         return []
     out: List[Dict[str, Any]] = []
     for path in sorted(root.rglob("*")):

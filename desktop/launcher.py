@@ -1638,6 +1638,48 @@ def stop_process(proc: subprocess.Popen | None, name: str) -> None:
             pass
 
 
+def _safe_dialog_directory(initial: str = "") -> str:
+    """给系统文件夹选择框一个真实存在的起始目录。
+
+    历史目录被删除 / 移动后，pywebview 的 FOLDER_DIALOG 再收到这个路径，
+    在 Windows 上可能直接让对话框/WebView 崩掉。这里向上找到最近存在的
+    父目录，找不到就退回家目录、当前目录、C:\\。
+    """
+    candidates = []
+    raw = str(initial or "").strip()
+    if raw:
+        try:
+            path = Path(raw).expanduser()
+            try:
+                if path.is_file():
+                    path = path.parent
+            except (OSError, ValueError):
+                pass
+            candidates.append(path)
+            candidates.extend(path.parents)
+        except (OSError, ValueError):
+            pass
+    for fallback in (Path.home, Path.cwd):
+        try:
+            candidates.append(fallback())
+        except Exception:
+            pass
+    candidates.append(Path("C:\\"))
+
+    seen = set()
+    for candidate in candidates:
+        try:
+            key = str(candidate)
+            if key in seen:
+                continue
+            seen.add(key)
+            if candidate.is_dir():
+                return key
+        except (OSError, ValueError):
+            continue
+    return ""
+
+
 class DesktopApi:
     def __init__(self, recover_services=None):
         self._recover_services = recover_services
@@ -1851,19 +1893,25 @@ class DesktopApi:
             if window is None:
                 return {"ok": False, "error": "桌面窗口不可用"}
             kwargs = {}
-            if initial:
-                try:
-                    kwargs["directory"] = str(Path(str(initial)).expanduser())
-                except Exception:
-                    pass
+            safe_dir = _safe_dialog_directory(initial)
+            if safe_dir:
+                kwargs["directory"] = safe_dir
+            if initial and safe_dir and str(Path(str(initial)).expanduser()) != safe_dir:
+                log(f"pick folder: initial missing, using existing parent initial={initial!r} using={safe_dir!r}")
             result = window.create_file_dialog(webview.FOLDER_DIALOG, **kwargs)
         except Exception as exc:
-            log(f"pick folder dialog failed: {exc}")
+            log(f"pick folder dialog failed initial={initial!r}: {exc}")
             return {"ok": False, "error": f"无法打开文件夹选择窗口：{exc}"}
         if not result:
             return {"ok": False, "cancelled": True}
         picked = result[0] if isinstance(result, (list, tuple)) else result
-        return {"ok": True, "path": str(Path(str(picked)).expanduser())}
+        try:
+            picked_path = Path(str(picked)).expanduser()
+            if not picked_path.is_dir():
+                return {"ok": False, "error": "选择的文件夹不存在或不可访问"}
+        except (OSError, ValueError) as exc:
+            return {"ok": False, "error": f"选择的文件夹不可访问：{exc}"}
+        return {"ok": True, "path": str(picked_path)}
 
     def save_asset_as(self, asset_id: str, suggested_name: str = "") -> dict:
         source = asset_file_for_id(asset_id)

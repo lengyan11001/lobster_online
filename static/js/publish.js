@@ -6302,7 +6302,11 @@ function _pubPlanPickFolder() {
   var api = window.pywebview && window.pywebview.api;
   var task;
   if (api && typeof api.pick_folder === 'function') {
-    task = Promise.resolve(api.pick_folder('选择要发布的素材文件夹', initial));
+    try {
+      task = Promise.resolve(api.pick_folder('选择要发布的素材文件夹', initial));
+    } catch (err) {
+      task = Promise.reject(err);
+    }
   } else {
     // 桌面壳没有桥接时，让本地后端拉系统对话框（tkinter/WinForms），同样不依赖 exe 版本
     task = _pubPlanFetch('/api/publish/pick-folder', { method: 'POST', body: JSON.stringify({ initial: initial }) });

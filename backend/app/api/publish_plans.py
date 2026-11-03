@@ -266,6 +266,17 @@ def _pause_other_plans(db: Session, user_id: int, keep_id: Optional[int] = None)
     return stopped
 
 
+def _folder_is_dir(folder: str) -> bool:
+    """Path.is_dir() 对非法路径/断开的网络盘可能抛异常，统一当作不可用。"""
+    text = str(folder or "").strip()
+    if not text:
+        return False
+    try:
+        return bool(Path(text).is_dir())
+    except (OSError, ValueError):
+        return False
+
+
 def _clean_times(values: Optional[List[str]]) -> List[str]:
     out: List[str] = []
     for raw in (values or []):
@@ -375,7 +386,7 @@ def create_publish_plan(
     records = [r for r in (body.source_records or []) if isinstance(r, dict) and str(r.get("url") or "").strip()]
     if not folder and not groups and not records:
         raise HTTPException(400, detail="请至少指定一个素材来源：本地文件夹、素材库分组或内容记录")
-    if folder and not Path(folder).is_dir():
+    if folder and not _folder_is_dir(folder):
         raise HTTPException(400, detail=f"本地文件夹不存在或不可访问：{folder}")
     acct = _resolve_plan_account(db, current_user.id, body.account_id, body.account_nickname)
     if (body.account_id or str(body.account_nickname or "").strip()) and acct is None:
@@ -443,7 +454,7 @@ def update_publish_plan(
             plan.daily_count = len(times)
     if body.source_folder is not None:
         folder = str(body.source_folder or "").strip()
-        if folder and not Path(folder).is_dir():
+        if folder and not _folder_is_dir(folder):
             raise HTTPException(400, detail=f"本地文件夹不存在或不可访问：{folder}")
         plan.source_folder = folder or None
     if body.source_groups is not None:
