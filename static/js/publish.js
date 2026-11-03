@@ -6284,7 +6284,7 @@ function _pubPlanItemsHtml(plan, data) {
 function _pubPlanLoadExpanded(plan) {
   var box = document.getElementById('pubPlanPreviewBox-' + plan.id);
   if (!box) return;
-  if (plan.committed) {
+  if (plan.committed || plan.draft) {
     if (_pubPlanPreviewCache[plan.id]) {
       box.innerHTML = _pubPlanPreviewCache[plan.id];
       return;
@@ -6329,14 +6329,15 @@ function renderPublishPlans() {
     return sum + _pubPlanCreatedTotal(plan);
   }, 0);
   var summary = '<div style="font-size:0.82rem;color:var(--text-muted);margin:0 0 0.5rem 0;">共 ' +
-    _pubPlanCache.length + ' 个定时任务 · 已成功创建 ' + totalCreated + ' 条任务（计为发布成功）</div>';
+    _pubPlanCache.length + ' 个定时任务 · 已创建 ' + totalCreated + ' 条任务</div>';
   el.innerHTML = summary + '<div class="publish-task-list">' + _pubPlanCache.map(function(plan) {
     var created = _pubPlanCreatedTotal(plan);
     var failed = Math.max(0, parseInt(plan.failed_total, 10) || 0);
     var expanded = String(_pubPlanExpandedId) === String(plan.id);
     var committed = !!plan.committed;
-    var stateLabel = committed ? '已排程' : (plan.enabled ? '已启动' : '已暂停');
-    var stateColor = committed ? 'var(--accent)' : (plan.enabled ? 'var(--success)' : 'var(--text-muted)');
+    var draft = !!plan.draft;
+    var stateLabel = draft ? '待开始' : (committed ? '已排程' : (plan.enabled ? '已启动' : '已暂停'));
+    var stateColor = (draft || committed) ? 'var(--accent)' : (plan.enabled ? 'var(--success)' : 'var(--text-muted)');
     return '<div class="publish-task-item" data-plan-open="' + plan.id + '" style="cursor:pointer;">' +
       '<div class="publish-task-top">' +
         '<div style="flex:1;min-width:0;">' +
@@ -6347,9 +6348,11 @@ function renderPublishPlans() {
             ' · 每天 ' + (plan.daily_count || (plan.times || []).length) + ' 条 · ' +
             escapeHtml((plan.times || []).join('、')) + '</div>' +
           '<div class="publish-task-meta">来源：' + escapeHtml(_pubPlanSourceText(plan)) + '</div>' +
-          '<div class="publish-task-meta" style="margin-top:0.35rem;font-weight:600;color:var(--text);">已成功创建 ' + created + ' 条任务' +
-            ' <span style="font-weight:400;color:var(--text-muted);">（创建成功即计为发布成功）</span></div>' +
-          (failed ? '<div class="publish-task-meta" style="color:var(--error);">创建失败 ' + failed + ' 条</div>' : '') +
+          (draft
+            ? '<div class="publish-task-meta" style="margin-top:0.35rem;font-weight:600;color:var(--text);">尚未开始，点「开始排程」创建任务</div>'
+            : '<div class="publish-task-meta" style="margin-top:0.35rem;font-weight:600;color:var(--text);">已成功创建 ' + created + ' 条任务' +
+              ' <span style="font-weight:400;color:var(--text-muted);">（创建成功即计为发布成功）</span></div>' +
+              (failed ? '<div class="publish-task-meta" style="color:var(--error);">创建失败 ' + failed + ' 条</div>' : '')) +
           '<div class="publish-task-meta">创建时间：' + escapeHtml(plan.created_at ? _formatDateTimeBeijing(plan.created_at) : '—') +
             (plan.tags ? ' · 标签 ' + escapeHtml(plan.tags) : ' · 标签 AI') + '</div>' +
         '</div>' +
@@ -6357,10 +6360,13 @@ function renderPublishPlans() {
           '<button type="button" class="btn btn-ghost btn-sm" data-plan-expand="' + plan.id + '">' + (expanded ? '收起规划' : '展开规划') + '</button>' +
           (committed ?
             '<button type="button" class="btn btn-ghost btn-sm" data-plan-edit="' + plan.id + '">详情</button>' :
-            '<button type="button" class="btn btn-ghost btn-sm" data-plan-run="' + plan.id + '">立即发布</button>' +
-            '<button type="button" class="btn btn-ghost btn-sm" data-plan-edit="' + plan.id + '">编辑</button>' +
-            '<button type="button" class="btn ' + (plan.enabled ? 'btn-ghost' : 'btn-primary') + ' btn-sm" data-plan-toggle="' + plan.id + '">' +
-              (plan.enabled ? '暂停' : '启动') + '</button>') +
+            (draft ?
+              '<button type="button" class="btn btn-primary btn-sm" data-plan-start="' + plan.id + '">开始排程</button>' +
+              '<button type="button" class="btn btn-ghost btn-sm" data-plan-edit="' + plan.id + '">编辑</button>' :
+              '<button type="button" class="btn btn-ghost btn-sm" data-plan-run="' + plan.id + '">立即发布</button>' +
+              '<button type="button" class="btn btn-ghost btn-sm" data-plan-edit="' + plan.id + '">编辑</button>' +
+              '<button type="button" class="btn ' + (plan.enabled ? 'btn-ghost' : 'btn-primary') + ' btn-sm" data-plan-toggle="' + plan.id + '">' +
+                (plan.enabled ? '暂停' : '启动') + '</button>')) +
         '</div>' +
       '</div>' +
       '<div id="pubPlanPreviewBox-' + plan.id + '" data-plan-preview-box="' + plan.id + '" style="display:' + (expanded ? 'block' : 'none') + ';margin-top:0.5rem;padding:0.55rem 0.65rem;border:1px solid var(--border);border-radius:var(--radius-sm,8px);background:rgba(0,0,0,0.03);max-height:340px;overflow:auto;"></div>' +
@@ -6606,12 +6612,12 @@ function openPublishPlanDialog(plan) {
   if (subtitle) {
     subtitle.textContent = _pubPlanEditingCommitted
       ? '已在上游创建定时任务；这里只能改名称/标签或删除本机记录，不会改动平台排程。'
-      : (editing ? '查看任务状态和规划；修改后保存，不会自动启动。' : '选择来源、账号和时间，先预览规划再批量创建定时任务。');
+      : (editing ? '查看任务状态和规划；修改后保存，不会自动启动。' : '先创建一条记录，回列表点「开始排程」再逐条创建任务。');
   }
   var saveBtn = document.getElementById('pubPlanSaveBtn');
   if (saveBtn) {
     saveBtn.style.display = '';
-    saveBtn.textContent = _pubPlanEditingCommitted ? '保存名称/标签' : (editing ? '保存修改' : '创建并排程');
+    saveBtn.textContent = _pubPlanEditingCommitted ? '保存名称/标签' : (editing ? '保存修改' : '创建记录');
   }
   var nameInput = document.getElementById('pubPlanName');
   if (nameInput) { nameInput.value = editing ? (editing.name || '') : ''; nameInput.disabled = false; }
@@ -6750,32 +6756,31 @@ function submitPublishPlan() {
     if (!collected.ok) return _pubPlanMsg(collected.error, true);
     payload = collected.payload;
   }
+  if (!editingId) {
+    payload.enabled = false;
+    payload.options = Object.assign({}, payload.options || {}, { _draft: true });
+  }
   var btn = document.getElementById('pubPlanSaveBtn');
-  if (btn) { btn.disabled = true; btn.textContent = editingId ? '保存中…' : '正在排程…'; }
-  _pubPlanMsg(
-    editingPlan && editingPlan.committed ? '正在保存名称/标签…' : (editingId ? '正在保存…' : '正在上游创建定时任务（逐条写入平台发布时间，稍等）…'),
-    false
-  );
+  if (btn) { btn.disabled = true; btn.textContent = editingId ? '保存中…' : '创建中…'; }
+  _pubPlanMsg(editingId ? '正在保存…' : '正在创建记录…', false);
   var req = editingId
     ? _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(editingId), { method: 'PATCH', body: JSON.stringify(payload) })
-    : _pubPlanFetch('/api/publish/plans/commit', { method: 'POST', body: JSON.stringify(payload) });
+    : _pubPlanFetch('/api/publish/plans', { method: 'POST', body: JSON.stringify(payload) });
   req.then(function(d) {
     _pubPlanPreviewCache = {};
     if (!editingId) {
-      var created = (d && d.created) || 0;
-      var failed = (d && d.failed) || 0;
-      _pubPlanMsg('已创建 ' + created + ' 条定时任务' + (failed ? '，失败 ' + failed + ' 条' : '') + '。', failed > 0);
+      _pubPlanMsg('记录已创建，回列表点「开始排程」逐条创建任务。', false);
     } else {
       _pubPlanMsg(editingPlan && editingPlan.committed ? '名称/标签已保存；平台排程未改动。' : '已保存。', false);
     }
     closePublishPlanDialog();
     loadPublishPlans();
   }).catch(function(err) {
-    _pubPlanMsg((editingId ? '保存失败：' : '创建排程失败：') + ((err && err.message) || err), true);
+    _pubPlanMsg((editingId ? '保存失败：' : '创建记录失败：') + ((err && err.message) || err), true);
   }).then(function() {
     if (btn) {
       btn.disabled = false;
-      btn.textContent = editingPlan && editingPlan.committed ? '保存名称/标签' : (editingId ? '保存修改' : '创建并排程');
+      btn.textContent = editingPlan && editingPlan.committed ? '保存名称/标签' : (editingId ? '保存修改' : '创建记录');
     }
   });
 }
@@ -6830,6 +6835,55 @@ document.addEventListener('click', function(event) {
       triggerBtn.disabled = false;
       triggerBtn.textContent = '触发';
       alert('触发失败：' + ((err && err.message) || err));
+    });
+    return;
+  }
+  var startBtn = target.closest('[data-plan-start]');
+  if (startBtn) {
+    event.stopPropagation();
+    var startId = startBtn.getAttribute('data-plan-start');
+    if (!confirm('开始为这个批次逐条创建定时任务？中途可停止，再点开始会继续未创建的。')) return;
+    startBtn.disabled = true;
+    startBtn.textContent = '准备中…';
+    function finishStart() {
+      _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(startId) + '/finish-start', { method: 'POST' }).then(function() {
+        _pubPlanPreviewCache = {};
+        loadPublishPlans();
+      }).catch(function(err) {
+        startBtn.disabled = false;
+        startBtn.textContent = '开始排程';
+        alert('收尾失败：' + ((err && err.message) || err));
+        _pubPlanPreviewCache = {};
+        loadPublishPlans();
+      });
+    }
+    _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(startId) + '/items').then(function(d) {
+      var pending = ((d && d.items) || []).filter(function(it) { return it.can_trigger; });
+      if (!pending.length) { finishStart(); return; }
+      var idx = 0;
+      function step() {
+        if (idx >= pending.length) { finishStart(); return; }
+        var it = pending[idx];
+        startBtn.textContent = '开始中 ' + (idx + 1) + '/' + pending.length;
+        _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(startId) + '/trigger-item', {
+          method: 'POST',
+          body: JSON.stringify({ key: it.key, publish_at: it.publish_at })
+        }).then(function() {
+          idx += 1;
+          step();
+        }).catch(function(err) {
+          startBtn.disabled = false;
+          startBtn.textContent = '开始排程';
+          alert('第 ' + (idx + 1) + ' 条失败：' + ((err && err.message) || err));
+          _pubPlanPreviewCache = {};
+          loadPublishPlans();
+        });
+      }
+      step();
+    }).catch(function(err) {
+      startBtn.disabled = false;
+      startBtn.textContent = '开始排程';
+      alert('读取待创建列表失败：' + ((err && err.message) || err));
     });
     return;
   }

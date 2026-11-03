@@ -319,6 +319,30 @@ def _plan_items_summary(rows: List[Dict[str, Any]]) -> Dict[str, int]:
     }
 
 
+@router.post("/api/publish/plans/{plan_id}/finish-start", summary="结束待开始状态，转为已排程")
+def finish_plan_start(
+    plan_id: int,
+    current_user: _ServerUser = Depends(get_current_user_for_local),
+    db: Session = Depends(get_db),
+):
+    plan = (
+        db.query(PublishPlan)
+        .filter(PublishPlan.id == int(plan_id), PublishPlan.user_id == current_user.id)
+        .first()
+    )
+    if plan is None:
+        raise HTTPException(404, detail="发布任务不存在")
+    opts = dict(plan.options or {})
+    opts["_batch_committed"] = True
+    opts.pop("_draft", None)
+    plan.options = opts
+    plan.enabled = False
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return {"ok": True, "plan": _plan_payload(db, plan)}
+
+
 @router.get("/api/publish/plans/{plan_id}/items", summary="定时任务逐条状态（含未创建）")
 def list_plan_items(
     plan_id: int,
@@ -354,8 +378,9 @@ async def trigger_plan_item(
     )
     if plan is None:
         raise HTTPException(404, detail="发布任务不存在")
-    if not (plan.options or {}).get("_batch_committed"):
-        raise HTTPException(400, detail="只有已排程批次支持单条触发")
+    plan_opts = dict(plan.options or {})
+    if not (plan_opts.get("_batch_committed") or plan_opts.get("_draft")):
+        raise HTTPException(400, detail="只有待开始/已排程批次支持单条触发")
 
     rows = _plan_items_rows(db, plan, include_preview=True)
     row = next((r for r in rows if str(r.get("key")) == str(body.key)), None)
@@ -692,7 +717,7 @@ def _plan_items_rows(db: Session, plan: PublishPlan, include_preview: bool = Tru
             "can_trigger": status == "failed",
         })
         seen.add(key)
-    if include_preview and bool(options.get("_batch_committed")):
+    if include_preview and (bool(options.get("_batch_committed")) or bool(options.get("_draft"))):
         body = _plan_source_body(plan)
         candidates = _schedule_candidates(db, int(plan.user_id), body)
         remaining = [c for c in candidates if str(c.get("key") or "") not in seen]
@@ -813,6 +838,7 @@ def _plan_payload(db: Session, plan: PublishPlan) -> Dict[str, Any]:
         "ai_copy": bool(plan.ai_copy),
         "options": dict(plan.options or {}),
         "committed": bool((plan.options or {}).get("_batch_committed")),
+        "draft": bool((plan.options or {}).get("_draft")),
         "commit_items": commit_items_payload,
         "commit_summary": commit_summary_payload,
         "item_total": item_total,
