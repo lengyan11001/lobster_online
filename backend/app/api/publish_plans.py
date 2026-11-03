@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _PLATFORMS = {"douyin", "wechat_channels", "tiktok"}
+_PLATFORM_LABELS = {"douyin": "抖音", "wechat_channels": "视频号", "tiktok": "TikTok"}
 _MAX_TIMES = 24
 
 
@@ -424,7 +425,7 @@ async def trigger_plan_item(
         asset_id = await runner._ensure_asset_id(current_user, candidate, str(plan.tags or ""))
         if not asset_id:
             raise RuntimeError("素材入库失败")
-        existing = (
+        existing_rows = (
             db.query(PublishTask)
             .filter(
                 PublishTask.user_id == current_user.id,
@@ -432,12 +433,17 @@ async def trigger_plan_item(
                 PublishTask.status.in_(("pending", "success")),
             )
             .order_by(PublishTask.id.desc())
-            .first()
+            .all()
+        )
+        existing = next(
+            (t for t in existing_rows if _task_platform(t) == str(plan.platform)),
+            None,
         )
         if existing is not None:
             status = "skipped"
             task_id = existing.id
-            error = f"同一素材已有发布任务 #{existing.id}，已跳过"
+            label = _PLATFORM_LABELS.get(str(plan.platform), str(plan.platform))
+            error = f"同一素材在{label}已有任务 #{existing.id}，已跳过"
         else:
             acct = _resolve_plan_account(db, current_user.id, plan.account_id, plan.account_nickname)
             if acct is None:
@@ -642,6 +648,14 @@ def _save_commit_item(db: Session, plan: PublishPlan, item: Dict[str, Any], when
     }
 
 
+def _task_platform(task: Optional[PublishTask]) -> str:
+    if task is None:
+        return ""
+    meta = task.meta or {}
+    opts = meta.get("options") or {}
+    return str(opts.get("platform") or meta.get("platform") or "")
+
+
 def _plan_items_rows(db: Session, plan: PublishPlan, include_preview: bool = True) -> List[Dict[str, Any]]:
     """已处理条目 + 尚未创建任务的剩余候选，按计划时间排序。"""
     options = dict(plan.options or {})
@@ -717,6 +731,13 @@ def _plan_items_rows(db: Session, plan: PublishPlan, include_preview: bool = Tru
             "can_trigger": status == "failed",
         })
         seen.add(key)
+    # 去重只看同一平台：抖音已发的素材不应阻止视频号创建任务。
+    for row in rows:
+        if row.get("status") != "skipped":
+            continue
+        tid = row.get("task_id")
+        task = tasks.get(int(tid)) if tid else None
+        row["can_trigger"] = _task_platform(task) != str(plan.platform)
     if include_preview and (bool(options.get("_batch_committed")) or bool(options.get("_draft"))):
         body = _plan_source_body(plan)
         candidates = _schedule_candidates(db, int(plan.user_id), body)
