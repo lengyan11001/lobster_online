@@ -1001,7 +1001,6 @@ async def _apply_publish_schedule(page: Any, value: str, _step) -> bool:
         return False
     target_date = when.strftime("%Y-%m-%d")
     target_time = when.strftime("%H:%M")
-    target_month = when.strftime("%Y年 %-m月")
 
     # 1) 页面上如果有「定时发表」开关/复选框，先打开
     try:
