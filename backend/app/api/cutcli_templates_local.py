@@ -3284,7 +3284,7 @@ def _run_job(
                 source=source,
                 out_path=out_path,
                 ass_path=ass_path,
-                duration_sec=render_duration_sec,
+                duration_sec=fixed_duration_sec,
                 source_duration_sec=video_duration_sec,
                 target_width=target_width,
                 target_height=target_height,
