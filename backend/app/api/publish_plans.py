@@ -640,6 +640,52 @@ def _plan_items_rows(db: Session, plan: PublishPlan, include_preview: bool = Tru
             "error": str(it.get("error") or ""),
             "can_trigger": status == "failed",
         })
+    db_items = (
+        db.query(PublishPlanItem)
+        .filter(PublishPlanItem.plan_id == int(plan.id))
+        .order_by(PublishPlanItem.id.asc())
+        .all()
+    )
+    task_ids = [int(r.task_id) for r in db_items if r.task_id]
+    tasks: Dict[int, PublishTask] = {}
+    if task_ids:
+        for task in db.query(PublishTask).filter(PublishTask.id.in_(task_ids)).all():
+            tasks[int(task.id)] = task
+    db_by_key = {str(r.asset_key): r for r in db_items}
+    for row in rows:
+        dbrow = db_by_key.get(str(row.get("key") or ""))
+        if dbrow is None:
+            continue
+        row["status"] = str(dbrow.status or row.get("status") or "pending")
+        row["task_id"] = dbrow.task_id or row.get("task_id")
+        row["can_trigger"] = row["status"] == "failed"
+    for idx, dbrow in enumerate(db_items, start=1):
+        key = str(dbrow.asset_key or "")
+        if not key or key in seen:
+            continue
+        task = tasks.get(int(dbrow.task_id)) if dbrow.task_id else None
+        opts = dict((task.meta or {}).get("options") or {}) if task is not None else {}
+        publish_at = str(
+            opts.get("douyin_publish_time")
+            or opts.get("wechat_channels_publish_time")
+            or opts.get("publish_time")
+            or dbrow.used_date
+            or ""
+        )
+        status = str(dbrow.status or "pending")
+        rows.append({
+            "index": idx,
+            "key": key,
+            "name": str(dbrow.title or dbrow.asset_id or key),
+            "asset_id": str(dbrow.asset_id or ""),
+            "path": str(dbrow.source_ref or ""),
+            "publish_at": publish_at,
+            "task_id": dbrow.task_id,
+            "status": status,
+            "error": str(dbrow.error or ""),
+            "can_trigger": status == "failed",
+        })
+        seen.add(key)
     if include_preview and bool(options.get("_batch_committed")):
         body = _plan_source_body(plan)
         candidates = _schedule_candidates(db, int(plan.user_id), body)
@@ -703,6 +749,31 @@ def _plan_payload(db: Session, plan: PublishPlan) -> Dict[str, Any]:
     success_total = int(base_count.filter(PublishPlanItem.status == "success").scalar() or 0)
     pending_total = int(base_count.filter(PublishPlanItem.status == "pending").scalar() or 0)
     failed_total = int(base_count.filter(PublishPlanItem.status == "failed").scalar() or 0)
+    stored_commit_items = list((plan.options or {}).get("_commit_items") or [])
+    if not stored_commit_items:
+        stored_commit_items = [
+            {
+                "index": idx,
+                "key": row.asset_key,
+                "name": row.title or row.asset_id or row.asset_key,
+                "asset_id": row.asset_id or "",
+                "path": row.source_ref or "",
+                "publish_at": row.used_date or "",
+                "task_id": row.task_id,
+                "status": row.status,
+                "error": row.error or "",
+            }
+            for idx, row in enumerate(items[:200], start=1)
+        ]
+    commit_items_payload = stored_commit_items
+    commit_summary_payload = dict((plan.options or {}).get("_commit_summary") or {})
+    if not commit_summary_payload:
+        commit_summary_payload = {
+            "total": item_total,
+            "created": created_total,
+            "failed": failed_total,
+            "skipped": int(base_count.filter(PublishPlanItem.status == "skipped").scalar() or 0),
+        }
     return {
         "id": plan.id,
         "user_id": plan.user_id,
@@ -720,8 +791,8 @@ def _plan_payload(db: Session, plan: PublishPlan) -> Dict[str, Any]:
         "ai_copy": bool(plan.ai_copy),
         "options": dict(plan.options or {}),
         "committed": bool((plan.options or {}).get("_batch_committed")),
-        "commit_items": list((plan.options or {}).get("_commit_items") or []),
-        "commit_summary": dict((plan.options or {}).get("_commit_summary") or {}),
+        "commit_items": commit_items_payload,
+        "commit_summary": commit_summary_payload,
         "item_total": item_total,
         "created_total": created_total,
         "success_total": success_total,
