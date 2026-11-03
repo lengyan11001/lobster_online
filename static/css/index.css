@@ -10434,7 +10434,7 @@ body.online-mastra-chat-compose .online-mastra-chat {
       overflow: hidden;
     }
     #content-cutcli-template-studio .cutcli-template-card-media {
-      aspect-ratio: 16 / 9;
+      aspect-ratio: 9 / 16;
     }
     #content-cutcli-template-studio .cutcli-template-card-media video {
       width: 100%;
@@ -10765,7 +10765,7 @@ body.online-mastra-chat-compose .online-mastra-chat {
       overflow: hidden;
     }
     #content-cutcli-template-studio .cutcli-template-job-media {
-      aspect-ratio: 16 / 9;
+      aspect-ratio: 9 / 16;
     }
     #content-cutcli-template-studio .cutcli-template-job-visual {
       position: absolute;

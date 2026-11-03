@@ -390,6 +390,11 @@
     return data.source_url || data.public_url || data.url || data.open_url || data.preview_url || '';
   }
 
+  function assetContentUrl(assetId) {
+    var id = String(assetId || '').trim();
+    return id ? (apiBase() + '/api/assets/' + encodeURIComponent(id) + '/content') : '';
+  }
+
   function postLocalFile(path, file) {
     var fd = new FormData();
     fd.append('file', file, file.name || 'source.mp4');
@@ -561,7 +566,11 @@
     if (keys.indexOf('title') >= 0) add('title', layout === 'right_vertical_card' ? '\u84dd\u6761\u540d\u7247' : '\u4e3b\u6807\u9898');
     if (layout !== 'right_vertical_card' && (keys.indexOf('subtitle') >= 0 || keys.indexOf('subheadline') >= 0)) add('subtitle', '\u526f\u6807\u9898');
     if (keys.indexOf('badge') >= 0) add('badge', '\u6807\u7b7e');
-    add('caption', '\u5b57\u5e55');
+    fields.forEach(function(field) {
+      var key = String((field && field.key) || '').trim();
+      if (key) add(key, String((field && field.label) || key));
+    });
+    if (layout !== 'designer_timeline') add('caption', '\u5b57\u5e55');
     return out;
   }
 
@@ -1615,6 +1624,9 @@
     var tpl = modalTemplate();
     if (!tpl) return;
     var media = state.uploadedPreviewUrl || '';
+    var assetInputEl = $('cutcliTplModalAssetIdInput');
+    var assetId = assetInputEl ? String(assetInputEl.value || '').trim() : '';
+    if (!media && assetId) media = assetContentUrl(assetId);
     var title = $('cutcliTplModalTitle');
     var sub = $('cutcliTplModalSub');
     var preview = $('cutcliTplModalPreview');
@@ -1625,7 +1637,8 @@
     if (sub) sub.textContent = tpl.quality_label || '生成同款';
     if (preview) {
       var hasSourcePreview = !!media;
-      var orientationClass = state.sourceVideoOrientation === 'portrait' ? ' is-portrait' : ' is-landscape';
+      var portraitTemplate = String(tpl.aspect_ratio || '') === '9:16';
+      var orientationClass = portraitTemplate ? ' is-portrait' : (state.sourceVideoOrientation === 'portrait' ? ' is-portrait' : ' is-landscape');
       var posterStyle = state.uploadedPosterUrl
         ? ' style="background-image:url(' + esc(state.uploadedPosterUrl) + ');"'
         : '';
@@ -1643,6 +1656,11 @@
         video.currentTime = 0;
         video.pause();
         bindSourceVideoFallback(video);
+        if (!state.uploadedPreviewUrl) {
+          video.addEventListener('loadedmetadata', function() {
+            if (updateSourceVideoOrientation(video.videoWidth, video.videoHeight)) renderTemplateModal();
+          }, { once: true });
+        }
       }
       if (hasSourcePreview) {
         renderPositionLayer(tpl);
@@ -2167,6 +2185,8 @@
       if (name) name.textContent = '未选择本地视频。';
       renderTemplateModal();
     });
+    var assetInput = $('cutcliTplModalAssetIdInput');
+    if (assetInput) assetInput.addEventListener('input', function() { renderTemplateModal(); });
     var start = $('cutcliTplModalStartBtn');
     if (start) start.addEventListener('click', startRender);
 
