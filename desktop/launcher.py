@@ -620,6 +620,10 @@ def configure_desktop_branding() -> dict[str, object]:
         ROOT,
         icons.get("loading_mark") or icons.get("apple_touch") or icons.get("logo_mark"),
     )
+    # OEM 档案里如果误配成必火的图标文件，非必火品牌不能显示（启动页漏必火 logo 的根因）
+    _mark = str(profile.get("mark") or "").strip().lower()
+    if LOADING_MARK_PATH and _mark and _mark != "bihuo" and "bihu" in LOADING_MARK_PATH.name.lower():
+        LOADING_MARK_PATH = None
     _ACTIVE_DESKTOP_BRANDING = profile
     return profile
 
