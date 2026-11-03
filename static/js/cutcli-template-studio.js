@@ -475,6 +475,10 @@
     return resolveUrl((tpl && (tpl.preview_url || tpl.sample_video_url)) || '', apiBase());
   }
 
+  function templatePoster(tpl) {
+    return (tpl && tpl.meta && tpl.meta.preview_poster_url) || (tpl && tpl.preview_poster_url) || '';
+  }
+
   function templateById(templateId) {
     return state.templates.filter(function(tpl) { return tpl.id === templateId; })[0] || null;
   }
@@ -1498,7 +1502,7 @@
         '<article class="cutcli-template-card" data-cutcli-template-id="' + esc(tpl.id) + '">',
           '<div class="cutcli-template-card-media">',
             media
-              ? videoShellHtml(media, { card: true, muted: true, loop: true })
+              ? videoShellHtml(media, { card: true, muted: true, loop: true, poster: templatePoster(tpl) })
               : '<div class="cutcli-template-media-empty">暂无样片</div>',
             '<div class="cutcli-template-card-top">',
               '<span>模板</span>',
@@ -1628,7 +1632,7 @@
       preview.innerHTML = [
         '<div class="cutcli-template-position-editor' + orientationClass + (hasSourcePreview ? '' : ' is-empty') + (state.sourceVideoFallback ? ' use-poster-fallback' : '') + '"' + posterStyle + '>',
           media
-            ? videoShellHtml(media, { modal: true, controls: true, muted: true, loop: true, poster: state.uploadedPosterUrl || '' })
+            ? videoShellHtml(media, { modal: true, controls: true, muted: true, loop: true, poster: state.uploadedPosterUrl || templatePoster(tpl) })
             : '<div class="cutcli-template-media-empty cutcli-template-source-empty">请先上传视频</div>',
           hasSourcePreview ? '<button type="button" class="cutcli-template-position-reset" id="cutcliTplResetPositionsBtn">\u91cd\u7f6e\u4f4d\u7f6e</button>' : '',
           hasSourcePreview ? '<div id="cutcliTplPositionLayer" class="cutcli-template-position-layer" aria-label="\u62d6\u52a8\u4fee\u6539\u6587\u6848\u4f4d\u7f6e"></div>' : '',
