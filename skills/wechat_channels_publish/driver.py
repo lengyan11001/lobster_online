@@ -952,8 +952,199 @@ async def _apply_optional_publish_options(page: Any, media_kind: str, options: D
     original = _option_bool(options, "wechat_channels_original", "channels_original", "original", "is_original")
     if original is not None:
         ok = await _apply_checkbox_option(page, ("原创", "原创声明", "声明原创"), original, "原创声明", _step) and ok
+
+    publish_time = _option_value(
+        options,
+        "wechat_channels_publish_time", "channels_publish_time", "publish_time",
+        "schedule_time", "scheduled_time", "publish_at",
+    )
+    if publish_time:
+        ok = await _apply_publish_schedule(page, publish_time, _step) and ok
     return ok
 
+
+
+def _parse_publish_time(value: str):
+    """把 '2026-11-03 14:00' / '2026-11-03T14:00' / '11-03 14:00' 解析成 datetime（解析不了返回 None）。"""
+    import datetime as _dt
+    raw = str(value or "").strip().replace("T", " ")
+    if not raw:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d %H"):
+        try:
+            return _dt.datetime.strptime(raw, fmt)
+        except ValueError:
+            continue
+    for fmt in ("%m-%d %H:%M", "%H:%M"):
+        try:
+            parsed = _dt.datetime.strptime(raw, fmt)
+            now = _dt.datetime.now()
+            parsed = parsed.replace(year=now.year)
+            if fmt == "%H:%M":
+                parsed = parsed.replace(month=now.month, day=now.day)
+            return parsed
+        except ValueError:
+            continue
+    return None
+
+
+async def _apply_publish_schedule(page: Any, value: str, _step) -> bool:
+    """在发布页选择「发表时间」（定时）。"""
+    import datetime as _dt
+    import re as _re
+    when = _parse_publish_time(value)
+    if not when:
+        _step("设置发表时间", False, value=value, reason="时间格式需要 YYYY-MM-DD HH:MM")
+        return False
+    if when <= _dt.datetime.now() + _dt.timedelta(minutes=5):
+        _step("设置发表时间", False, value=value, reason="定时时间必须晚于当前时间（至少 5 分钟后）")
+        return False
+    target_date = when.strftime("%Y-%m-%d")
+    target_time = when.strftime("%H:%M")
+    target_month = when.strftime("%Y年 %-m月")
+
+    # 1) 页面上如果有「定时发表」开关/复选框，先打开
+    try:
+        for label in ("定时发表", "定时发布", "定时"):
+            box = page.get_by_text(label, exact=True)
+            if await box.count():
+                try:
+                    await box.first.click(timeout=1500)
+                    await _delay(0.4, 0.9)
+                except Exception:
+                    pass
+                break
+    except Exception:
+        pass
+
+    # 2) 找「发表时间」输入框（已有 YYYY-MM-DD HH:MM 值的那个）
+    trigger = None
+    try:
+        inputs = page.locator("input")
+        for i in range(min(await inputs.count(), 60)):
+            el = inputs.nth(i)
+            try:
+                val = (await el.input_value()).strip()
+            except Exception:
+                continue
+            if _re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", val):
+                trigger = el
+                break
+    except Exception:
+        trigger = None
+    if trigger is None:
+        try:
+            label = page.get_by_text("发表时间", exact=True).first
+            trigger = label.locator("xpath=following::input[1]")
+        except Exception:
+            trigger = None
+    if trigger is None:
+        _step("设置发表时间", False, value=value, reason="页面上没找到「发表时间」输入框")
+        return False
+    try:
+        await trigger.click(timeout=6000)
+    except Exception as exc:
+        _step("设置发表时间", False, value=value, reason="点不开日期面板: %s" % str(exc)[:80])
+        return False
+    await _delay(0.6, 1.2)
+
+    # 3) 切到目标月份（直接点 antd 的月份箭头）
+    try:
+        for _ in range(24):
+            header = page.locator(".ant-picker-dropdown .ant-picker-header-view")
+            text = (await header.first.inner_text()).strip() if await header.count() else ""
+            if not text:
+                break
+            if when.strftime("%Y") in text and ("%d月" % when.month) in text:
+                break
+            prev_btn = page.locator(".ant-picker-dropdown .ant-picker-header-prev-btn")
+            next_btn = page.locator(".ant-picker-dropdown .ant-picker-header-next-btn")
+            try:
+                hdr_year = int(_re.search(r"(\d{4})", text).group(1))
+            except Exception:
+                hdr_year = when.year
+            if hdr_year > when.year:
+                await prev_btn.first.click()
+            elif hdr_year < when.year:
+                await next_btn.first.click()
+            else:
+                try:
+                    hdr_month = int(_re.search(r"(\d{1,2})月", text).group(1))
+                except Exception:
+                    hdr_month = when.month
+                await (prev_btn if hdr_month > when.month else next_btn).first.click()
+            await _delay(0.2, 0.4)
+    except Exception:
+        pass
+
+    # 4) 点日期格子（antd 的 td 带 title=YYYY-MM-DD，不会点错上下月的同号）
+    day_ok = False
+    for selector in ('td[title="%s"]' % target_date, "[data-value=\"%s\"]" % target_date, "text=%s" % when.day):
+        try:
+            cell = page.locator(selector)
+            if await cell.count():
+                await cell.first.click(timeout=4000)
+                day_ok = True
+                break
+        except Exception:
+            continue
+    if not day_ok:
+        _step("设置发表时间", False, value=value, reason="日历里没点到 %s" % target_date)
+        return False
+    await _delay(0.4, 0.9)
+
+    # 5) 时间（优先直接填那个 HH:MM 输入框，否则用 antd 时间列表）
+    time_ok = False
+    try:
+        pops = page.locator(".ant-picker-dropdown")
+        inputs = pops.locator("input")
+        for i in range(min(await inputs.count(), 20)):
+            el = inputs.nth(i)
+            try:
+                val = (await el.input_value()).strip()
+            except Exception:
+                continue
+            if _re.fullmatch(r"\d{1,2}:\d{2}", val):
+                await el.click()
+                await page.keyboard.press("Control+A")
+                await page.keyboard.type(target_time)
+                await page.keyboard.press("Enter")
+                time_ok = True
+                break
+    except Exception:
+        time_ok = False
+    if not time_ok:
+        try:
+            cols = page.locator(".ant-picker-time-panel-column")
+            if await cols.count() >= 2:
+                await cols.nth(0).locator("li", has_text=_re.compile(r"^%d$" % when.hour)).first.click()
+                await cols.nth(1).locator("li", has_text=_re.compile(r"^%d$" % when.minute)).first.click()
+                time_ok = True
+        except Exception:
+            time_ok = False
+
+    # 6) 确定/收起面板
+    try:
+        ok_btn = page.locator(".ant-picker-dropdown .ant-btn-primary")
+        if await ok_btn.count():
+            await ok_btn.first.click(timeout=2500)
+    except Exception:
+        pass
+    try:
+        await page.keyboard.press("Escape")
+    except Exception:
+        pass
+    await _delay(0.4, 0.9)
+
+    # 7) 回读校验
+    readback = ""
+    try:
+        readback = (await trigger.input_value()).strip()
+    except Exception:
+        pass
+    ok = bool(readback) and readback.startswith(target_date) and target_time in readback
+    _step("设置发表时间", ok, value=value, readback=readback)
+    return ok
 
 async def _has_editor_fields(page: Any) -> bool:
     for selector in (*_DESC_SELECTORS, *_TITLE_SELECTORS):
