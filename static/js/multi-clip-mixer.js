@@ -1008,7 +1008,7 @@
   // 2026-10-15：卡片预览按模板自己的比例渲染（9:16 高、 16:9 宽），
   // 不再把所有模板（包括 16:9 的）都按一个竖版框显示。
   function templateRatioStyle(item) {
-    var text = String((item || {}).ratio || '').replace(/\s+/g, '');
+    var text = String((item || {}).ratio || (item || {}).aspect_ratio || '').replace(/\s+/g, '');
     if (!/^\d{1,3}:\d{1,3}$/.test(text)) return '';
     var parts = text.split(':');
     return ' style="--mcm-card-ratio: ' + Number(parts[0]) + ' / ' + Number(parts[1]) + '"';
