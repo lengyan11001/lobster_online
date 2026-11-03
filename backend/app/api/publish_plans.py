@@ -671,6 +671,7 @@ def _plan_items_rows(db: Session, plan: PublishPlan, include_preview: bool = Tru
             "index": int(it.get("index") or idx),
             "key": key,
             "name": str(it.get("name") or it.get("asset_id") or ""),
+            "_stored_name": str(it.get("name") or it.get("asset_id") or ""),
             "asset_id": str(it.get("asset_id") or ""),
             "path": str(it.get("path") or ""),
             "publish_at": str(it.get("publish_at") or ""),
@@ -722,6 +723,7 @@ def _plan_items_rows(db: Session, plan: PublishPlan, include_preview: bool = Tru
             "index": idx,
             "key": key,
             "name": str((getattr(task, "title", "") if task is not None else "") or dbrow.title or dbrow.asset_id or key),
+            "_stored_name": str(dbrow.title or dbrow.asset_id or key),
             "asset_id": str(dbrow.asset_id or ""),
             "path": str(dbrow.source_ref or ""),
             "publish_at": publish_at,
@@ -737,7 +739,15 @@ def _plan_items_rows(db: Session, plan: PublishPlan, include_preview: bool = Tru
             continue
         tid = row.get("task_id")
         task = tasks.get(int(tid)) if tid else None
-        row["can_trigger"] = _task_platform(task) != str(plan.platform)
+        if _task_platform(task) != str(plan.platform):
+            # 跨平台的历史任务不算“已跳过”，按未创建展示并允许触发
+            row["status"] = "not_created"
+            row["can_trigger"] = True
+            row["task_id"] = None
+            row["error"] = ""
+            row["name"] = str(row.get("_stored_name") or row.get("asset_id") or row.get("name") or "")
+    for row in rows:
+        row.pop("_stored_name", None)
     if include_preview and (bool(options.get("_batch_committed")) or bool(options.get("_draft"))):
         body = _plan_source_body(plan)
         candidates = _schedule_candidates(db, int(plan.user_id), body)
@@ -833,15 +843,41 @@ def _plan_payload(db: Session, plan: PublishPlan) -> Dict[str, Any]:
             }
             for idx, row in enumerate(items[:200], start=1)
         ]
-    commit_items_payload = stored_commit_items
-    commit_summary_payload = dict((plan.options or {}).get("_commit_summary") or {})
-    if not commit_summary_payload:
+    if stored_commit_items:
+        tids = {int(it.get("task_id")) for it in stored_commit_items if it.get("task_id")}
+        task_map: Dict[int, PublishTask] = {}
+        if tids:
+            for task in db.query(PublishTask).filter(PublishTask.id.in_(tids)).all():
+                task_map[int(task.id)] = task
+        effective_items = []
+        for it in stored_commit_items:
+            row = dict(it)
+            if str(row.get("status") or "") == "skipped":
+                tid = row.get("task_id")
+                task = task_map.get(int(tid)) if tid else None
+                if _task_platform(task) != str(plan.platform):
+                    row["status"] = "not_created"
+                    row["task_id"] = None
+                    row["error"] = ""
+            effective_items.append(row)
+        stored_commit_items = effective_items
         commit_summary_payload = {
-            "total": item_total,
-            "created": created_total,
-            "failed": failed_total,
-            "skipped": int(base_count.filter(PublishPlanItem.status == "skipped").scalar() or 0),
+            "total": len(stored_commit_items),
+            "created": sum(1 for x in stored_commit_items if x.get("task_id") and x.get("status") in ("pending", "success")),
+            "failed": sum(1 for x in stored_commit_items if x.get("status") == "failed"),
+            "skipped": sum(1 for x in stored_commit_items if x.get("status") == "skipped"),
+            "not_created": sum(1 for x in stored_commit_items if x.get("status") == "not_created"),
         }
+    else:
+        commit_summary_payload = dict((plan.options or {}).get("_commit_summary") or {})
+        if not commit_summary_payload:
+            commit_summary_payload = {
+                "total": item_total,
+                "created": created_total,
+                "failed": failed_total,
+                "skipped": int(base_count.filter(PublishPlanItem.status == "skipped").scalar() or 0),
+            }
+    commit_items_payload = stored_commit_items
     return {
         "id": plan.id,
         "user_id": plan.user_id,

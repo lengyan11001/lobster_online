@@ -6623,7 +6623,7 @@ function _pubPlanRenderDetail(plan) {
   if (list) {
     var rows = (committed ? (plan.commit_items || []) : (plan.items || [])).map(function(it) {
       var status = String(it.status || '');
-      var statusLabel = status === 'success' ? '平台已发' : (status === 'failed' ? '失败' : '待平台发布');
+      var statusLabel = status === 'success' ? '平台已发' : (status === 'failed' ? '失败' : (status === 'skipped' ? '已存在/跳过' : (status === 'pending' ? '待平台发布' : '未创建')));
       var color = status === 'success' ? 'var(--success)' : (status === 'failed' ? 'var(--error)' : 'var(--text-muted)');
       return '<div style="padding:2px 0;color:' + color + ';">' +
         escapeHtml((it.publish_at || it.used_date || '') + ' ' + (it.name || it.title || it.asset_id || it.asset_key || '')) +
