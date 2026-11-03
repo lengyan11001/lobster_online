@@ -1,7 +1,5 @@
 (function() {
-  // 2026-09-27 需求：信息台只保留两个榜；服务端已收敛请求集合，这里再兜一层，
-  // 即使读到历史快照（含热搜/星图/创作者中心等旧分类）也只显示这两个。
-  var ALLOWED_CATEGORIES = ['内容榜', '热点榜'];   // 内容榜排前面
+  // 2026-11-03 需求：移除热门榜/内容榜，信息台只保留关键词搜索。
 
   var state = {
     data: null,
@@ -57,42 +55,14 @@
   }
 
   function render() {
-    var fetched = document.getElementById('douyinDeskFetchedAt');
-    var tabs = document.getElementById('douyinDeskTabs');
     renderLastTask();
+    var fetched = document.getElementById('douyinDeskFetchedAt');
+    if (fetched) fetched.textContent = '输入关键词，搜索你感兴趣的抖音视频/榜单（例：火锅 探店）';
     var content = document.getElementById('douyinDeskContent');
     if (!content) return;
-    var snapshot = state.data && state.data.snapshot;
-    if (!snapshot) {
-      if (fetched) fetched.textContent = '服务器尚未生成快照，将在每天 09:00（北京时间）采集';
-      if (tabs) tabs.innerHTML = '';
-      content.innerHTML = '<div class="douyin-desk-empty">暂无平台数据</div>';
-      return;
-    }
-    var sections = (Array.isArray(snapshot.sections) ? snapshot.sections : []).filter(function(section) {
-      return ALLOWED_CATEGORIES.indexOf(String(section && section.category || '').trim()) >= 0;
-    });
-    var categories = [];
-    sections.forEach(function(section) {
-      var category = String(section && section.category || '其他').trim() || '其他';
-      if (categories.indexOf(category) < 0) categories.push(category);
-    });
-    if (categories.indexOf(state.category) < 0) state.category = categories[0] || '';
-    if (fetched) fetched.textContent = '最近采集：' + formatTime(snapshot.fetched_at);
-    if (tabs) {
-      tabs.innerHTML = categories.map(function(category) {
-        return '<button type="button" class="douyin-desk-tab' + (category === state.category ? ' active' : '') + '" data-douyin-desk-category="' + escapeHtml(category) + '">' + escapeHtml(category) + '</button>';
-      }).join('');
-    }
-    var visible = sections.filter(function(section) {
-      return String(section && section.category || '其他') === state.category;
-    });
-    content.innerHTML = visible.length ? visible.map(function(section) {
-      var items = Array.isArray(section.items) ? section.items : [];
-      var cards = items.length ? items.map(itemCard).join('') : '<div class="douyin-desk-empty">该接口暂无可展示条目' + (section.error ? '：' + escapeHtml(section.error) : '') + '</div>';
-      return '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>' + escapeHtml(section.title || section.key || '数据') + '</h3><span>' + items.length + ' 条</span></div><div class="douyin-desk-grid">' + cards + '</div></section>';
-    }).join('') : '<div class="douyin-desk-empty">该分类暂无数据</div>';
-    bindCards(content);
+    content.innerHTML = '<section class="douyin-desk-section"><div class="douyin-desk-empty">'
+      + '输入关键词，搜索你感兴趣的抖音视频或榜单。搜到作品后可以直接「做同款（换人）」。'
+      + '</div></section>';
   }
 
   function statusLabel(status) {
@@ -150,8 +120,8 @@
         }).join('');
         content.innerHTML = '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>生成历史</h3>'
           + '<span>' + items.length + ' 条</span></div>'
-          + '<div class="douyin-desk-history-actions"><button type="button" class="btn btn-ghost" id="douyinDeskHistoryBack">返回榜单</button></div>'
-          + (items.length ? rows : '<div class="douyin-desk-empty">还没有生成记录，去榜单点「做同款（换人）」试试</div>')
+          + '<div class="douyin-desk-history-actions"><button type="button" class="btn btn-ghost" id="douyinDeskHistoryBack">返回搜索</button></div>'
+          + (items.length ? rows : '<div class="douyin-desk-empty">还没有生成记录，先搜索关键词，再从结果里点「做同款（换人）」。</div>')
           + '</section>';
         var back = document.getElementById('douyinDeskHistoryBack');
         if (back) back.addEventListener('click', render);
@@ -162,7 +132,7 @@
   }
 
   function itemCard(item) {
-    var title = item.title || item.name || '热门内容';
+    var title = item.title || item.name || '抖音作品';
     var metaParts = [];
     if (item.category) metaParts.push(String(item.category));
     if (item.section_title) metaParts.push(String(item.section_title));
@@ -233,20 +203,19 @@
         if (content) {
           var searchFee = data && data.billing ? Number(data.billing.credits_charged || 0) : 0;
           var days = Number(data && data.days || 7) || 7;
-          var fallbackItems = Array.isArray(data && data.fallback_items) ? data.fallback_items : [];
           var suggestions = Array.isArray(data && data.suggestions) ? data.suggestions : [];
           var isLive = String(data && data.source || '') === 'tikhub';
           var headNote = isLive
             ? (items.length + ' 条 · 实时搜抖音' + (Number(data && data.provider_calls || 0) > 1 ? '（' + data.provider_calls + ' 次）' : '') + ' · 消耗 ' + searchFee + ' 算力')
-            : (items.length + ' 条 · 本地快照最近 ' + days + ' 天 · 消耗 ' + searchFee + ' 算力');
+            : (items.length + ' 条 · 本地历史匹配 · 消耗 ' + searchFee + ' 算力');
           var html = '<section class="douyin-desk-section"><div class="douyin-desk-section-head"><h3>搜索「'
             + escapeHtml(query) + '」</h3><span>' + headNote + '</span></div>';
           if (items.length) {
             html += '<div class="douyin-desk-grid">' + items.map(itemCard).join('') + '</div>';
           } else {
             html += '<div class="douyin-desk-empty">'
-              + escapeHtml(String(data && data.fallback_reason || ('最近 ' + days + ' 天的榜单里没搜到「' + query + '」')))
-              + '，换个词，或先看今天的热榜 ↓</div>';
+              + escapeHtml(String(data && data.fallback_reason || ('没搜到「' + query + '」')))
+              + '，换个关键词再搜一次</div>';
             if (String(data && data.notice || '').trim()) {
               html += '<div class="douyin-desk-empty">提示：' + escapeHtml(String(data.notice).trim()) + '</div>';
             }
@@ -258,9 +227,6 @@
                 return '<button type="button" class="btn btn-ghost" data-douyin-suggest="' + escapeHtml(word) + '">'
                   + escapeHtml(word) + '</button>';
               }).join('') + '</div>';
-            }
-            if (fallbackItems.length) {
-              html += '<div class="douyin-desk-grid">' + fallbackItems.map(itemCard).join('') + '</div>';
             }
           }
           html += '</section>';
@@ -838,32 +804,12 @@
   }
 
   function load() {
-    if (state.loading) return Promise.resolve();
-    state.loading = true;
-    var content = document.getElementById('douyinDeskContent');
-    if (content) content.innerHTML = '<div class="douyin-desk-empty">正在读取服务器快照...</div>';
-    return fetch(baseUrl() + '/api/douyin/platform-information-desk', {
-      headers: typeof authHeaders === 'function' ? authHeaders() : {}
-    }).then(function(response) {
-      return response.json().catch(function() { return {}; }).then(function(data) {
-        if (!response.ok) throw new Error(data.detail || data.message || ('HTTP ' + response.status));
-        state.data = data;
-        render();
-      });
-    }).catch(function(error) {
-      if (content) content.innerHTML = '<div class="douyin-desk-empty">' + escapeHtml(error && error.message || '读取平台数据失败') + '</div>';
-    }).then(function() {
-      state.loading = false;
-    });
+    state.data = null;
+    render();
+    return Promise.resolve();
   }
 
   window.initDouyinInformationDeskView = function() {
-    var refresh = document.getElementById('douyinDeskRefreshBtn');
-    var tabs = document.getElementById('douyinDeskTabs');
-    if (refresh && !refresh.dataset.bound) {
-      refresh.dataset.bound = '1';
-      refresh.addEventListener('click', load);
-    }
     var historyBtn = document.getElementById('douyinDeskHistoryBtn');
     if (historyBtn && !historyBtn.dataset.bound) {
       historyBtn.dataset.bound = '1';
@@ -884,15 +830,6 @@
           }
         });
       }
-    }
-    if (tabs && !tabs.dataset.bound) {
-      tabs.dataset.bound = '1';
-      tabs.addEventListener('click', function(event) {
-        var button = event.target.closest('[data-douyin-desk-category]');
-        if (!button) return;
-        state.category = String(button.dataset.douyinDeskCategory || '');
-        render();
-      });
     }
     try { initCopyPanel(); } catch (e) { console.warn('[douyin-desk] copy panel init failed', e); }
     return load();

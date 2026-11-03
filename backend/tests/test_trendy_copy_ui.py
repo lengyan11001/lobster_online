@@ -60,3 +60,19 @@ def test_copy_modes_default_image_and_modal_wired_in_js():
     assert "initCopyPanel" in js
     # 榜单卡片上的跟创改成先选模式
     assert "startCardCopy" in js
+
+
+def test_desk_is_search_only_without_ranking_tabs():
+    """2026-11-03 需求：移除热门榜/内容榜，只保留用户关键词搜索。"""
+    view = (ROOT / "static" / "views" / "douyin-information-desk.html").read_text(encoding="utf-8")
+    assert "douyinDeskSearchInput" in view
+    assert "douyinDeskSearchBtn" in view
+    assert "douyinDeskTabs" not in view
+    assert "douyinDeskRefreshBtn" not in view
+    assert "内容榜" not in view and "热点榜" not in view
+
+    js = (ROOT / "static" / "js" / "douyin-information-desk.js").read_text(encoding="utf-8")
+    assert "ALLOWED_CATEGORIES" not in js
+    assert "data-douyin-desk-category" not in js
+    assert "正在读取服务器快照" not in js
+    assert "/api/douyin/platform-information-desk/search" in js
