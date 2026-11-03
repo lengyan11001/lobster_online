@@ -1,3 +1,9 @@
+@font-face { font-family: '阿里巴巴普惠体 3.0 105 Heavy'; src: url('../fonts/AlibabaPuHuiTi-3-105-Heavy.otf') format('opentype'); font-weight: 900; font-display: swap; }
+@font-face { font-family: '阿里巴巴普惠体 3.0 95 ExtraBold'; src: url('../fonts/AlibabaPuHuiTi-3-95-ExtraBold.otf') format('opentype'); font-weight: 800; font-display: swap; }
+@font-face { font-family: '阿里巴巴普惠体 3.0 75 SemiBold'; src: url('../fonts/AlibabaPuHuiTi-3-75-SemiBold.otf') format('opentype'); font-weight: 600; font-display: swap; }
+@font-face { font-family: '阿里巴巴普惠体 3.0 115 Black'; src: url('../fonts/AlibabaPuHuiTi-3-115-Black.otf') format('opentype'); font-weight: 950; font-display: swap; }
+@font-face { font-family: '阿里巴巴普惠体 3.0 65 Medium'; src: url('../fonts/AlibabaPuHuiTi-3-65-Medium.otf') format('opentype'); font-weight: 500; font-display: swap; }
+
 @font-face {
   font-family: 'AlibabaPuHuiTi-3-105-Heavy';
   src: url('../fonts/AlibabaPuHuiTi-3-105-Heavy.otf') format('opentype');

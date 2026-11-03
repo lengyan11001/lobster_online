@@ -561,6 +561,16 @@
     return out;
   }
 
+  function designerTrack(tpl, key) {
+    var style = templateCaptionStyle(tpl);
+    var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
+    var tracks = Array.isArray(overlay.text_tracks) ? overlay.text_tracks : [];
+    for (var i = 0; i < tracks.length; i++) {
+      if (String(tracks[i].key || '') === String(key || '')) return tracks[i];
+    }
+    return null;
+  }
+
   function defaultPositionOverrides(tpl, orientationOverride) {
     var style = templateCaptionStyle(tpl, orientationOverride);
     var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
@@ -573,6 +583,11 @@
     };
     positionTargets(tpl, orientationOverride).forEach(function(target) {
       if (target.key === 'caption') return;
+      if (layout === 'designer_timeline') {
+        var dt = designerTrack(tpl, target.key);
+        if (dt) out.overlay[target.key] = { x_ratio: Number(dt.x || 0.5), y_ratio: Number(dt.y || 0.5) };
+        return;
+      }
       if (target.key === 'top_text') {
         var topY = overlay.top_screen_y_ratio != null ? overlay.top_screen_y_ratio : overlay.top_y_ratio;
         if (topY == null && overlay.layout === 'top_banner') {
@@ -932,6 +947,27 @@
           'max-width': '46%'
         }));
       }
+    }
+    if (layout === 'designer_timeline') {
+      var dt = designerTrack(tpl, targetKey) || {};
+      var sx = num(dt.scale_x, 100) / 100;
+      var sy = num(dt.scale_y, 100) / 100;
+      return cssText(Object.assign(base, assTextStyle({
+        color: assColorToCss(dt.color, '#ffffff'),
+        outline: 'transparent',
+        border: 0,
+        shadow: 2,
+        fontSize: num(dt.font_size, 60) * 1080 / 1280,
+        minPx: 8,
+        maxPx: 64,
+        align: 'center'
+      }), {
+        'font-family': String(dt.font_family || 'Microsoft YaHei') + ', Microsoft YaHei, sans-serif',
+        'font-weight': 900,
+        'white-space': 'pre',
+        'max-width': '96%',
+        transform: 'translate(-50%,-50%) scale(' + sx + ',' + sy + ')'
+      }));
     }
     if (layout === 'product_case') {
       if (targetKey === 'top_text') {

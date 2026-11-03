@@ -2276,7 +2276,8 @@ def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], wid
     title = _overlay_text_value_any(overlay_texts, style, "title", "headline")
     subtitle = _overlay_text_value_any(overlay_texts, style, "subtitle", "subheadline")
     badge = _overlay_text_value(overlay_texts, style, "badge")
-    if not any([top_text, title, subtitle, badge]):
+    text_tracks = overlay_style.get("text_tracks") if isinstance(overlay_style.get("text_tracks"), list) else []
+    if not any([top_text, title, subtitle, badge, text_tracks]):
         return []
     end = _ass_time(max(0.5, duration_sec))
     lines: List[str] = []
@@ -2471,6 +2472,35 @@ def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], wid
         if badge:
             fs = _fit_product_text(int(round(int(overlay_style.get("badge_font_size") or 200) * scale)), badge, 12.28, 24)
             lines.append("Dialogue: 7,0:00:00.00,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fs%d\\c&H00FFFFFF&\\3c&H00000000&\\bord3\\shad2}%s" % (end, badge_x, badge_y, fs, _ass_text_with_newline(badge)))
+        return lines
+
+    if layout == "designer_timeline":
+        track_list = overlay_style.get("text_tracks") or []
+        for tr in track_list:
+            if not isinstance(tr, dict):
+                continue
+            key = str(tr.get("key") or "").strip()
+            text = _overlay_text_value(overlay_texts, style, key) or str(tr.get("default") or "")
+            if not text.strip():
+                continue
+            try:
+                start_sec = max(0.0, min(float(duration_sec), float(tr.get("start_ms") or 0) / 1_000_000.0))
+                end_sec = max(start_sec + 0.2, min(float(duration_sec), float(tr.get("end_ms") or duration_sec * 1_000_000.0) / 1_000_000.0))
+            except Exception:
+                continue
+            if start_sec >= float(duration_sec):
+                continue
+            fs = max(10, int(round(float(tr.get("font_size") or 60) * width / 1280.0)))
+            fscx = max(10, int(round(float(tr.get("scale_x") or 100))))
+            fscy = max(10, int(round(float(tr.get("scale_y") or 100))))
+            x = int(width * float(tr.get("x") or 0.5))
+            y = int(height * float(tr.get("y") or 0.5))
+            family = str(tr.get("font_family") or "Microsoft YaHei")
+            color = str(tr.get("color") or "&H00FFFFFF")
+            lines.append(
+                "Dialogue: 7,%s,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fn%s\\fs%d\\fscx%d\\fscy%d\\q2\\c%s\\bord0\\shad2}%s"
+                % (_ass_time(start_sec), _ass_time(end_sec), x, y, family, fs, fscx, fscy, color, _ass_text_with_newline(text))
+            )
         return lines
 
     if layout == "top_banner":
@@ -3175,7 +3205,9 @@ def _run_job(
         # 说明：空字幕兜底原因。必须在分支外初始化，否则多段识别已拿到字幕时
         # 后面引用会抛 UnboundLocalError（用户实测）。
         stt_skip_reason = ""
-        if multi_clip_segments:
+        if meta.get("skip_stt"):
+            stt_skip_reason = "template_skip"
+        elif multi_clip_segments:
             current_stage = "stt_segments"
             _update_job(
                 db,
