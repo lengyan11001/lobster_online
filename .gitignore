@@ -119,3 +119,6 @@ backend/douyin_origin/douyin_protocol/node_modules/.package-lock.json
 
 # 用户自己视频的人脸/抠像产出（本机私有，不得入库/随 OTA 外带）
 static/hifly_avatars/
+
+# CutCLI template fonts: TOS/build artifacts, not Git
+static/fonts/
