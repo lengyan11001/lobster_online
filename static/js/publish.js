@@ -6335,17 +6335,6 @@ function renderPublishPlans() {
     var failed = Math.max(0, parseInt(plan.failed_total, 10) || 0);
     var expanded = String(_pubPlanExpandedId) === String(plan.id);
     var committed = !!plan.committed;
-    var sourceItems = committed ? (plan.commit_items || []) : (plan.items || []);
-    var items = sourceItems.slice(0, 3).map(function(it) {
-      var statusLabel = it.status === 'success' ? '平台已发' : (it.status === 'failed' ? '失败' : '待执行');
-      var color = it.status === 'success' ? 'var(--success)' : (it.status === 'failed' ? 'var(--error)' : 'var(--text-muted)');
-      var when = it.publish_at || it.used_date || '';
-      var name = it.name || it.title || it.asset_id || '';
-      return '<div style="font-size:0.76rem;color:' + color + ';">' +
-        escapeHtml(when + ' ' + name) +
-        ' · ' + escapeHtml(statusLabel) +
-        (it.error ? ' · ' + escapeHtml(String(it.error).slice(0, 80)) : '') + '</div>';
-    }).join('');
     var stateLabel = committed ? '已排程' : (plan.enabled ? '已启动' : '已暂停');
     var stateColor = committed ? 'var(--accent)' : (plan.enabled ? 'var(--success)' : 'var(--text-muted)');
     return '<div class="publish-task-item" data-plan-open="' + plan.id + '" style="cursor:pointer;">' +
@@ -6363,7 +6352,6 @@ function renderPublishPlans() {
           (failed ? '<div class="publish-task-meta" style="color:var(--error);">创建失败 ' + failed + ' 条</div>' : '') +
           '<div class="publish-task-meta">创建时间：' + escapeHtml(plan.created_at ? _formatDateTimeBeijing(plan.created_at) : '—') +
             (plan.tags ? ' · 标签 ' + escapeHtml(plan.tags) : ' · 标签 AI') + '</div>' +
-          items +
         '</div>' +
         '<div style="display:flex;gap:0.35rem;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end;">' +
           '<button type="button" class="btn btn-ghost btn-sm" data-plan-expand="' + plan.id + '">' + (expanded ? '收起规划' : '展开规划') + '</button>' +
