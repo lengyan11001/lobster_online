@@ -6137,6 +6137,7 @@ function bindPublishAccountDetailAndSchedule() {
 
 var _pubPlanCache = [];
 var _pubPlanEditingId = 0;
+var _pubPlanEditingCommitted = false;
 var _pubPlanExpandedId = 0;
 var _pubPlanPreviewCache = {};
 var _pubPlanModalPreview = { page: 1, page_size: 50, total: 0, days: 0, payload: null };
@@ -6309,9 +6310,7 @@ function renderPublishPlans() {
     }).join('');
     var stateLabel = committed ? '已排程' : (plan.enabled ? '已启动' : '已暂停');
     var stateColor = committed ? 'var(--accent)' : (plan.enabled ? 'var(--success)' : 'var(--text-muted)');
-    var openAttr = committed ? '' : ' data-plan-open="' + plan.id + '"';
-    var cursor = committed ? 'default' : 'pointer';
-    return '<div class="publish-task-item"' + openAttr + ' style="cursor:' + cursor + ';">' +
+    return '<div class="publish-task-item" data-plan-open="' + plan.id + '" style="cursor:pointer;">' +
       '<div class="publish-task-top">' +
         '<div style="flex:1;min-width:0;">' +
           '<div class="publish-task-title">' + escapeHtml(plan.name || ('定时任务 #' + plan.id)) +
@@ -6330,7 +6329,8 @@ function renderPublishPlans() {
         '</div>' +
         '<div style="display:flex;gap:0.35rem;align-items:flex-start;flex-wrap:wrap;justify-content:flex-end;">' +
           '<button type="button" class="btn btn-ghost btn-sm" data-plan-expand="' + plan.id + '">' + (expanded ? '收起规划' : '展开规划') + '</button>' +
-          (committed ? '' :
+          (committed ?
+            '<button type="button" class="btn btn-ghost btn-sm" data-plan-edit="' + plan.id + '">详情</button>' :
             '<button type="button" class="btn btn-ghost btn-sm" data-plan-run="' + plan.id + '">立即发布</button>' +
             '<button type="button" class="btn btn-ghost btn-sm" data-plan-edit="' + plan.id + '">编辑</button>' +
             '<button type="button" class="btn ' + (plan.enabled ? 'btn-ghost' : 'btn-primary') + ' btn-sm" data-plan-toggle="' + plan.id + '">' +
@@ -6419,7 +6419,12 @@ function _pubPlanLoadGroups(selected) {
         '<span style="flex:1;min-width:0;word-break:break-word;">' + escapeHtml(name) + '</span>' +
         '<span style="color:var(--text-muted);white-space:nowrap;font-size:0.78rem;">素材库</span></label>';
     }).join('');
-    if (el) el.innerHTML = html || '<span style="color:var(--text-muted);">还没有分组，可在「内容记录」卡片上点「加入分组」。</span>';
+    if (el) {
+      el.innerHTML = html || '<span style="color:var(--text-muted);">还没有分组，可在「内容记录」卡片上点「加入分组」。</span>';
+      if (_pubPlanEditingCommitted) {
+        el.querySelectorAll('input[type=checkbox]').forEach(function(box) { box.disabled = true; });
+      }
+    }
     _pubPlanGroupsUpdateLabel();
   });
 }
@@ -6428,18 +6433,21 @@ function _pubPlanLoadAccounts(platform, accountId) {
   var select = document.getElementById('pubPlanAccount');
   if (!select) return Promise.resolve();
   var want = platform || (document.getElementById('pubPlanPlatform') || {}).value || 'douyin';
+  select.disabled = _pubPlanEditingCommitted;
   select.innerHTML = '<option value="">加载中…</option>';
   return _pubPlanFetch('/api/accounts').then(function(d) {
     var rows = (d && (d.accounts || d.items || d.data)) || [];
     var filtered = rows.filter(function(a) { return String(a.platform || '') === want; });
     if (!filtered.length) {
       select.innerHTML = '<option value="">（该平台还没有账号）</option>';
+      select.disabled = _pubPlanEditingCommitted;
       return;
     }
     select.innerHTML = filtered.map(function(a) {
       return '<option value="' + escapeAttr(String(a.id)) + '">' + escapeHtml(a.nickname || ('账号 ' + a.id)) + '</option>';
     }).join('');
     if (accountId) select.value = String(accountId);
+    select.disabled = _pubPlanEditingCommitted;
   }).catch(function() {
     select.innerHTML = '<option value="">账号加载失败</option>';
   });
@@ -6500,27 +6508,47 @@ function _pubPlanRenderDetail(plan) {
   if (!box) return;
   if (!plan) { box.style.display = 'none'; return; }
   box.style.display = 'block';
+  var committed = !!plan.committed;
   var stats = document.getElementById('pubPlanDetailStats');
   if (stats) {
-    stats.textContent = '已成功创建 ' + _pubPlanCreatedTotal(plan) + ' 条任务（创建成功即计为发布成功）' +
-      (plan.failed_total ? ' · 创建失败 ' + plan.failed_total + ' 条' : '') +
-      (plan.created_at ? ' · 创建于 ' + _formatDateTimeBeijing(plan.created_at) : '') +
-      (plan.enabled ? ' · 已启动' : ' · 已暂停');
+    if (committed) {
+      var summary = plan.commit_summary || {};
+      var created = parseInt(summary.created, 10);
+      if (isNaN(created)) created = _pubPlanCreatedTotal(plan);
+      var failed = parseInt(summary.failed, 10) || 0;
+      stats.textContent = '已在上游创建 ' + created + ' 条定时任务' + (failed ? ' · 失败 ' + failed + ' 条' : '') +
+        (plan.created_at ? ' · 创建于 ' + _formatDateTimeBeijing(plan.created_at) : '') +
+        ' · 平台到点发布';
+    } else {
+      stats.textContent = '已成功创建 ' + _pubPlanCreatedTotal(plan) + ' 条任务（创建成功即计为发布成功）' +
+        (plan.failed_total ? ' · 创建失败 ' + plan.failed_total + ' 条' : '') +
+        (plan.created_at ? ' · 创建于 ' + _formatDateTimeBeijing(plan.created_at) : '') +
+        (plan.enabled ? ' · 已启动' : ' · 已暂停');
+    }
   }
   var list = document.getElementById('pubPlanDetailItems');
   if (list) {
-    var rows = (plan.items || []).map(function(it) {
-      var color = it.status === 'success' ? 'var(--success)' : (it.status === 'failed' ? 'var(--error)' : 'var(--text-muted)');
+    var rows = (committed ? (plan.commit_items || []) : (plan.items || [])).map(function(it) {
+      var status = String(it.status || '');
+      var statusLabel = status === 'success' ? '平台已发' : (status === 'failed' ? '失败' : '待平台发布');
+      var color = status === 'success' ? 'var(--success)' : (status === 'failed' ? 'var(--error)' : 'var(--text-muted)');
       return '<div style="padding:2px 0;color:' + color + ';">' +
-        escapeHtml((it.used_date || '') + ' ' + (it.title || it.asset_id || it.asset_key)) +
-        ' · ' + escapeHtml(it.status) +
+        escapeHtml((it.publish_at || it.used_date || '') + ' ' + (it.name || it.title || it.asset_id || it.asset_key || '')) +
+        ' · ' + escapeHtml(statusLabel) +
         (it.task_id ? ' · 任务 #' + escapeHtml(String(it.task_id)) : '') +
         (it.error ? ' · ' + escapeHtml(String(it.error).slice(0, 120)) : '') + '</div>';
     }).join('');
-    list.innerHTML = rows || '<div style="color:var(--text-muted);">还没有发布记录。</div>';
+    list.innerHTML = rows || '<div style="color:var(--text-muted);">没有排程明细。</div>';
   }
+  var runBtn = document.getElementById('pubPlanRunBtn');
+  if (runBtn) runBtn.style.display = committed ? 'none' : '';
   var toggle = document.getElementById('pubPlanToggleBtn');
-  if (toggle) toggle.textContent = plan.enabled ? '暂停' : '启动';
+  if (toggle) {
+    toggle.style.display = committed ? 'none' : '';
+    toggle.textContent = plan.enabled ? '暂停' : '启动';
+  }
+  var delBtn = document.getElementById('pubPlanDeleteBtn');
+  if (delBtn) delBtn.style.display = '';
 }
 
 function _pubPlanOpenById(planId) {
@@ -6543,29 +6571,47 @@ function openPublishPlanDialog(plan) {
   if (!modal) return;
   var editing = plan || null;
   _pubPlanEditingId = editing ? parseInt(editing.id, 10) || 0 : 0;
+  _pubPlanEditingCommitted = !!(editing && editing.committed);
   var title = document.getElementById('pubPlanTitle');
-  if (title) title.textContent = editing ? '定时任务详情' : '新增定时任务';
+  if (title) {
+    title.textContent = _pubPlanEditingCommitted ? '定时任务详情（已排程）' : (editing ? '定时任务详情' : '新增定时任务');
+  }
   var subtitle = document.getElementById('pubPlanSubtitle');
-  if (subtitle) subtitle.textContent = editing ? '查看任务状态和规划；修改后保存，不会自动启动。' : '选择来源、账号和时间，先预览规划再批量创建定时任务。';
+  if (subtitle) {
+    subtitle.textContent = _pubPlanEditingCommitted
+      ? '已在上游创建定时任务；这里只能改名称/标签或删除本机记录，不会改动平台排程。'
+      : (editing ? '查看任务状态和规划；修改后保存，不会自动启动。' : '选择来源、账号和时间，先预览规划再批量创建定时任务。');
+  }
   var saveBtn = document.getElementById('pubPlanSaveBtn');
   if (saveBtn) {
-    saveBtn.style.display = (editing && editing.committed) ? 'none' : '';
-    saveBtn.textContent = editing ? '保存修改' : '创建并排程';
+    saveBtn.style.display = '';
+    saveBtn.textContent = _pubPlanEditingCommitted ? '保存名称/标签' : (editing ? '保存修改' : '创建并排程');
   }
   var nameInput = document.getElementById('pubPlanName');
-  if (nameInput) nameInput.value = editing ? (editing.name || '') : '';
+  if (nameInput) { nameInput.value = editing ? (editing.name || '') : ''; nameInput.disabled = false; }
   var folder = document.getElementById('pubPlanFolder');
-  if (folder) folder.value = editing ? (editing.source_folder || '') : '';
+  if (folder) { folder.value = editing ? (editing.source_folder || '') : ''; folder.disabled = _pubPlanEditingCommitted; }
   var tags = document.getElementById('pubPlanTags');
   if (tags) tags.value = editing ? (editing.tags || '') : '';
   var platformSelect = document.getElementById('pubPlanPlatform');
-  if (platformSelect) platformSelect.value = editing ? (editing.platform || 'douyin') : 'douyin';
+  if (platformSelect) { platformSelect.value = editing ? (editing.platform || 'douyin') : 'douyin'; platformSelect.disabled = _pubPlanEditingCommitted; }
+  var browseBtn = document.getElementById('pubPlanBrowseBtn');
+  if (browseBtn) browseBtn.disabled = _pubPlanEditingCommitted;
+  var addTimeBtn = document.getElementById('pubPlanAddTimeBtn');
+  if (addTimeBtn) addTimeBtn.disabled = _pubPlanEditingCommitted;
+  var previewBtn = document.getElementById('pubPlanPreviewBtn');
+  if (previewBtn) previewBtn.disabled = _pubPlanEditingCommitted;
   var box = document.getElementById('pubPlanTimeRows');
   if (box) {
     box.innerHTML = '';
     var times = editing && (editing.times || []).length ? editing.times : ['09:00'];
     times.forEach(function(t) { _pubPlanAddTimeRow(t); });
   }
+  var timeInputs = box ? box.querySelectorAll('input,button') : [];
+  timeInputs.forEach(function(el) {
+    el.disabled = _pubPlanEditingCommitted;
+    if (el.hasAttribute('data-plan-time-remove')) el.style.display = _pubPlanEditingCommitted ? 'none' : '';
+  });
   var previewBox = document.getElementById('pubPlanPreviewBox');
   if (previewBox) previewBox.style.display = 'none';
   var previewSummary = document.getElementById('pubPlanPreviewSummary');
@@ -6594,6 +6640,7 @@ function closePublishPlanDialog() {
   var groupPanel = document.getElementById('pubPlanGroupsPanel');
   if (groupPanel) groupPanel.style.display = 'none';
   _pubPlanEditingId = 0;
+  _pubPlanEditingCommitted = false;
   _pubPlanModalPreview = { page: 1, page_size: 50, total: 0, days: 0, payload: null };
 }
 
@@ -6662,19 +6709,27 @@ function _pubPlanPreviewPage(page) {
 }
 
 function submitPublishPlan() {
-  var collected = _pubPlanCollectPayload();
-  if (!collected.ok) return _pubPlanMsg(collected.error, true);
-  var payload = collected.payload;
   var editingId = _pubPlanEditingId;
-  if (editingId) {
-    var editingPlan = _pubPlanCache.filter(function(p) { return String(p.id) === String(editingId); })[0];
-    if (editingPlan && editingPlan.committed) {
-      return _pubPlanMsg('已在上游排程的批次不能在这里修改；如需调整，请删除后重新创建。', true);
-    }
+  var editingPlan = editingId ? _pubPlanCache.filter(function(p) { return String(p.id) === String(editingId); })[0] : null;
+  var payload;
+  if (editingPlan && editingPlan.committed) {
+    payload = {
+      name: String((document.getElementById('pubPlanName') || {}).value || '').trim(),
+      tags: String((document.getElementById('pubPlanTags') || {}).value || '').trim(),
+      platform: editingPlan.platform || 'douyin',
+      ai_copy: !!editingPlan.ai_copy
+    };
+  } else {
+    var collected = _pubPlanCollectPayload();
+    if (!collected.ok) return _pubPlanMsg(collected.error, true);
+    payload = collected.payload;
   }
   var btn = document.getElementById('pubPlanSaveBtn');
   if (btn) { btn.disabled = true; btn.textContent = editingId ? '保存中…' : '正在排程…'; }
-  _pubPlanMsg(editingId ? '正在保存…' : '正在上游创建定时任务（逐条写入平台发布时间，稍等）…', false);
+  _pubPlanMsg(
+    editingPlan && editingPlan.committed ? '正在保存名称/标签…' : (editingId ? '正在保存…' : '正在上游创建定时任务（逐条写入平台发布时间，稍等）…'),
+    false
+  );
   var req = editingId
     ? _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(editingId), { method: 'PATCH', body: JSON.stringify(payload) })
     : _pubPlanFetch('/api/publish/plans/commit', { method: 'POST', body: JSON.stringify(payload) });
@@ -6685,14 +6740,17 @@ function submitPublishPlan() {
       var failed = (d && d.failed) || 0;
       _pubPlanMsg('已创建 ' + created + ' 条定时任务' + (failed ? '，失败 ' + failed + ' 条' : '') + '。', failed > 0);
     } else {
-      _pubPlanMsg('已保存。', true);
+      _pubPlanMsg(editingPlan && editingPlan.committed ? '名称/标签已保存；平台排程未改动。' : '已保存。', false);
     }
     closePublishPlanDialog();
     loadPublishPlans();
   }).catch(function(err) {
     _pubPlanMsg((editingId ? '保存失败：' : '创建排程失败：') + ((err && err.message) || err), true);
   }).then(function() {
-    if (btn) { btn.disabled = false; btn.textContent = editingId ? '保存修改' : '创建并排程'; }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = editingPlan && editingPlan.committed ? '保存名称/标签' : (editingId ? '保存修改' : '创建并排程');
+    }
   });
 }
 
@@ -6808,10 +6866,16 @@ document.addEventListener('click', function(event) {
   }
   var delBtn = target.closest('#pubPlanDeleteBtn');
   if (delBtn && _pubPlanEditingId) {
-    if (!confirm('删除这个定时发布？台账记录一并删除，已发布内容不受影响。')) return;
+    var delPlan = _pubPlanCache.filter(function(p) { return String(p.id) === String(_pubPlanEditingId); })[0] || {};
+    var wasCommitted = !!delPlan.committed;
+    var delMsg = wasCommitted
+      ? '删除这个已排程批次的本地记录？平台已创建的定时任务不会取消，已发布内容不受影响。'
+      : '删除这个定时发布？台账记录一并删除，已发布内容不受影响。';
+    if (!confirm(delMsg)) return;
     _pubPlanFetch('/api/publish/plans/' + encodeURIComponent(_pubPlanEditingId), { method: 'DELETE' }).then(function() {
       closePublishPlanDialog();
       loadPublishPlans();
+      if (wasCommitted) alert('本机记录已删除；平台上的定时任务仍然保留，如需取消请到平台处理。');
     });
     return;
   }
