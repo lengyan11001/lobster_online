@@ -10677,6 +10677,8 @@ def _preferred_parent_material_media_type(params: Dict[str, Any]) -> str:
     ).strip().lower().replace("-", "_")
     # H5 workflow currently defaults Moments actions to image_text. For parent
     # outputs, the generated local asset type is more reliable than that default.
+    # 例外：朋友圈图文节点（ip_content_daily/moments_candidate）在
+    # _resolve_parent_workflow_material 里被强制按图片取，绝不回退视频。
     if raw == "image_text":
         return ""
     return _normalize_parent_material_media_type(raw)
@@ -10699,6 +10701,17 @@ _PARENT_MATERIAL_SKIP_KEYS = {
     "sync_results",
     "result_snapshot",
 }
+
+def _parent_run_is_moments_image_text(payload: Any) -> bool:
+    """父节点这次跑的是"朋友圈图文"吗（只出图片，不发视频）。"""
+    data = payload if isinstance(payload, dict) else {}
+    if "ip_content_daily" in data:
+        return True
+    draft = data.get("publish_draft")
+    if isinstance(draft, dict) and str(draft.get("source_task") or "").strip() == "moments_candidate":
+        return True
+    return False
+
 
 def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Dict[str, Any]:
     video_ids: List[str] = []
@@ -10771,7 +10784,8 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
             # 参考图只给生图用，不是发布素材。reference_image_urls /
             # reference_asset_ids / resume_reference_image_urls 整段跳过，
             # 不能递归进去，否则砂锅菜这类参考图会被收进朋友圈。
-            if key in skip_keys or "reference" in key:
+            if key in skip_keys or "reference" in key or "snapshot" in key or key.startswith("sync_"):
+                # 采集/同步/参考类数据永远不是本节点产物，不能当发布素材
                 continue
             kind = "video" if key in video_id_keys or key in video_url_keys else "image" if key in image_id_keys or key in image_url_keys else item_kind
             if key in video_id_keys or key in image_id_keys or key in generic_id_keys:
@@ -10858,7 +10872,8 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
         # 这里以前会回退去取视频（user 352 拿了个 196.2 秒视频，被 30 秒上限拦下）。
         # 不再回退：没有图片就返回空，让发布侧明确报“上级节点没有图片素材”。
         if image_ids:
-            return _guard(asset_result(image_ids[0], "image", image_urls, other_urls))
+            # 只带图片自己的 URL 兜底；other_urls 里可能是采集视频，绝不能拿来当图片
+            return _guard(asset_result(image_ids[0], "image", image_urls))
         if image_urls:
             return _guard(url_result(image_urls[0], "image"))
         return {}
@@ -10980,11 +10995,16 @@ async def _resolve_parent_workflow_material(
         current_item=current_item,
     )
     candidates: List[Dict[str, Any]] = []
+    preferred_type = _preferred_parent_material_media_type(params)
     for parent in parent_runs:
         parent_result_payload = parent.get("result_payload") if isinstance(parent.get("result_payload"), dict) else {}
+        parent_preferred = preferred_type
+        if not parent_preferred and _parent_run_is_moments_image_text(parent_result_payload):
+            # 朋友圈图文：只能发图片。没有图片就报错，绝不拿采集视频/别的素材兜底。
+            parent_preferred = "image"
         material = _extract_parent_material(
             parent_result_payload,
-            preferred_media_type=_preferred_parent_material_media_type(params),
+            preferred_media_type=parent_preferred,
         )
         if not material:
             continue
