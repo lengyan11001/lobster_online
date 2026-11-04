@@ -1,7 +1,7 @@
 {
-  "version": "2.0.239",
-  "build": 540,
-  "applied_at": "2026-11-04T10:05:25+08:00",
-  "note": "模板定制 9:16 预览/TOS 资源/字体/CutCLI 移除",
-  "bundle_sha256": "b08f19282694f4da0c275b02c9aadc9ee8937c6a4f8d79f5e9bfbc52cda259bd"
+  "version": "2.0.240",
+  "build": 541,
+  "applied_at": "2026-11-04T12:36:40+08:00",
+  "note": "朋友圈发布只认父节点产物：图文只发图片，不兜底视频/采集素材",
+  "bundle_sha256": "3a38d06ea55360c4e6c983a9a421505cb1fac1b213e426318860c83d91bd1e56"
 }
