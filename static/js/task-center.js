@@ -46,11 +46,18 @@
       : '';
   }
 
+  // 服务端执行的任务（演示、日更生成、线索采集等）没有 installation_id，
+  // 但同样是当前用户的任务，弹窗必须显示，否则演示期间一直空着。
+  var SERVER_SIDE_TASK_KINDS = ['ip_content_daily', 'lead_collection_templates', 'social_leads', 'linkedin_mining', 'wechat_channels_transcript'];
+
   function belongsToCurrentDevice(row) {
     var iid = currentInstallationId();
     if (!iid) return true;
-    return String(row.installation_id || '').trim() === iid
-      || String(row.claimed_by_installation_id || '').trim() === iid;
+    if (String(row.installation_id || '').trim() === iid
+      || String(row.claimed_by_installation_id || '').trim() === iid) return true;
+    var progress = row.progress && typeof row.progress === 'object' ? row.progress : {};
+    if (progress.server_side === true || progress.server_side === 'true') return true;
+    return SERVER_SIDE_TASK_KINDS.indexOf(String(row.task_kind || '').trim()) >= 0;
   }
 
   function active(row) {
@@ -147,7 +154,7 @@
       var iid = currentInstallationId();
       // The task badge only needs the current device's newest active run.
       // Never pull historical result_payload values on this 4-second poll.
-      var query = '/api/scheduled-tasks/runs?limit=1&active_only=1&compact=1';
+      var query = '/api/scheduled-tasks/runs?limit=5&active_only=1&compact=1';
       if (iid) query += '&installation_id=' + encodeURIComponent(iid);
       var response = await fetch(base() + query, { headers: headers() });
       if (response.status === 401 || response.status === 403) {
@@ -160,7 +167,7 @@
 
       var data = await response.json();
       var rows = (Array.isArray(data.runs) ? data.runs : []).filter(belongsToCurrentDevice);
-      var running = rows.filter(active).slice(0, 1);
+      var running = rows.filter(active).slice(0, 5);
       var newActive = running.some(function (row) {
         return row.id && !state.seenActive[row.id];
       });
