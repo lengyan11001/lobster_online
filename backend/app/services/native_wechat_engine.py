@@ -23542,6 +23542,29 @@ def _probe_moments_video_duration(path: str) -> float:
         return 0.0
 
 
+def _close_local_moments_view(hwnd: int, steps: List[Dict[str, Any]]) -> None:
+    """发布完成后把朋友圈界面收掉，别把微信停在朋友圈页。"""
+    moments_hwnd = 0
+    try:
+        moments_hwnd = int(_find_visible_local_moments_hwnd() or 0)
+    except Exception:
+        moments_hwnd = 0
+    if moments_hwnd and moments_hwnd != int(hwnd or 0):
+        _activate_window(moments_hwnd)
+        _close_window_force(moments_hwnd)
+        steps.append({"step": "close_moments_view", "ok": True, "method": "window", "hwnd": moments_hwnd})
+        time.sleep(0.6)
+        return
+    # 新版微信的朋友圈是主窗口内的页面，切回「微信」标签即等于关掉朋友圈
+    try:
+        _focus_local_wechat(hwnd)
+        _ensure_local_tab(hwnd, "微信")
+        steps.append({"step": "close_moments_view", "ok": True, "method": "tab"})
+    except Exception as exc:
+        steps.append({"step": "close_moments_view", "ok": False, "error": str(exc)[:240]})
+    time.sleep(0.3)
+
+
 def _submit_moments_publish(hwnd: int, steps: List[Dict[str, Any]]) -> None:
     last_error = ""
     for attempt in range(1, 4):
@@ -23640,6 +23663,8 @@ def _publish_moments_local_once(
             _focus_moments_publish_text(publish_hwnd, steps)
             _fill_moments_publish_text(publish_hwnd, text, steps)
         _submit_moments_publish(publish_hwnd, steps)
+        # 发布成功后收掉朋友圈界面（用户要求，别把微信停在朋友圈）
+        _close_local_moments_view(int(item.get("hwnd") or 0), steps)
         return {
             "ok": True,
             "account_id": account_id,
