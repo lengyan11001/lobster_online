@@ -1,7 +1,7 @@
 {
-  "version": "2.0.238",
-  "build": 539,
-  "applied_at": "2026-11-03T15:05:23+08:00",
-  "note": "批量计划发布状态与视频号定时修复；品牌图标与启动器；其他会话改动",
-  "bundle_sha256": "0a139aa60b34da64cc05f5ddd5c7900e9280aee62d446cc56eb9ee3e482aecd2"
+  "version": "2.0.239",
+  "build": 540,
+  "applied_at": "2026-11-04T10:05:25+08:00",
+  "note": "模板定制 9:16 预览/TOS 资源/字体/CutCLI 移除",
+  "bundle_sha256": "b08f19282694f4da0c275b02c9aadc9ee8937c6a4f8d79f5e9bfbc52cda259bd"
 }
