@@ -21953,6 +21953,11 @@ def _moments_publish_rejection(root: Any) -> str:
         "不支持的文件格式",
         "不支持此文件",
         "无法添加此图片",
+        # 微信对下载损坏/超限/容器不识别时只弹「无效文件」，不认这句会白等 30 秒
+        "无效文件",
+        "无效的文件",
+        "文件无效",
+        "无法识别的文件",
     ):
         if marker in text:
             return marker

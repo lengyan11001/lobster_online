@@ -10696,6 +10696,8 @@ _PARENT_MATERIAL_SKIP_KEYS = {
     "prompt",
     "h5_context",
     "memory_docs",
+    "sync_results",
+    "result_snapshot",
 }
 
 def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Dict[str, Any]:
@@ -10722,6 +10724,10 @@ def _extract_parent_material(payload: Any, preferred_media_type: str = "") -> Di
         "basic_profile",
         "profile_photo_url",
         "memory_docs",
+        # 采集/同步回来的爆款素材（视频号 public_url 等）不是本节点产物：
+        # 朋友圈图文发布曾把 41.5MB 的采集视频当配图，微信直接弹「无效文件」。
+        "sync_results",
+        "result_snapshot",
     }
     # 只认本节点产物的字段：以前把 cover_url / *_material_* / file_url 这类
     # 也当素材，结果把模板封面、形象演示视频当成了发布素材（线上事故）。
