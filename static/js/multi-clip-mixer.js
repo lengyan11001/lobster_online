@@ -1133,19 +1133,7 @@
     closeAiTrimModal();
     renderClips();
     if (state.segmentContext && state.segmentContext.index === ctx.index) {
-      state.segmentContext.duration = duration;
-      var segVideo = $('mcmSegmentVideo');
-      if (segVideo && previewUrl) {
-        segVideo.pause();
-        segVideo.src = previewUrl + (previewUrl.indexOf('?') >= 0 ? '&' : '?') + 'v=' + Date.now();
-        segVideo.load();
-        segVideo.play().catch(function () {});
-      }
-      if ($('mcmSourceDuration')) $('mcmSourceDuration').textContent = formatSeconds(duration);
-      if ($('mcmSegmentStart')) $('mcmSegmentStart').value = 0;
-      if ($('mcmSegmentEnd')) $('mcmSegmentEnd').value = duration.toFixed(2);
-      if ($('mcmSelectedDuration')) $('mcmSelectedDuration').textContent = formatSeconds(duration);
-      syncTrimButtons();
+      openSegmentForEdit(ctx.index);
     }
     showMessage('已换成优化后的视频，点「保存片段」生效', false);
   }
