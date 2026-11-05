@@ -945,6 +945,7 @@ class AiTrimBody(BaseModel):
     asset_id: str = ""
     video_url: str = ""
     target_seconds: float = 0
+    mode: str = "smart"
 
 
 def _ai_set_status(job_id: str, **fields: Any) -> None:
@@ -1028,7 +1029,66 @@ def _render_ai_trim(ffmpeg: str, src: Path, ranges: List[tuple[float, float]], o
         raise RuntimeError("AI 优化渲染失败: " + (proc.stderr or "")[-300:])
 
 
-def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float) -> None:
+FILLER_ONLY = re.compile(r"^[\s，。,.!！?？、~～…嗯啊哦呃额那个这个就是然后呢吧嘛哈]+$")
+
+
+def _score_sentences(captions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """按信息量给每句打分；分数 <= 0 表示可以删掉。"""
+    out: List[Dict[str, Any]] = []
+    seen: List[str] = []
+    for cap in captions:
+        text = str(cap.get("text") or "").strip()
+        start = float(cap.get("start") or 0) / 1000.0
+        end = float(cap.get("end") or 0) / 1000.0
+        if end <= start:
+            continue
+        score = 1.0
+        compact = re.sub(r"\s+", "", text)
+        if len(compact) < 3 or FILLER_ONLY.match(compact):
+            score -= 3.0
+        if compact in seen:
+            score -= 2.5
+        elif any(compact and compact in prev for prev in seen[-3:]):
+            score -= 1.5
+        if re.search(r"\d", compact):
+            score += 0.5
+        if len(compact) >= 12:
+            score += 0.3
+        seen.append(compact)
+        out.append({"text": text, "start": start, "end": end, "score": round(score, 2)})
+    return out
+
+
+def _pick_sentences(scored: List[Dict[str, Any]], target: float) -> List[Dict[str, Any]]:
+    kept = [s for s in scored if s["score"] > 0]
+    if not kept:
+        kept = scored
+    kept.sort(key=lambda s: s["start"])
+    if target and target > 0:
+        limit = target * 1.3
+        total = sum(s["end"] - s["start"] for s in kept)
+        if total > limit:
+            for weak in sorted(kept, key=lambda s: s["score"]):
+                if total <= limit:
+                    break
+                kept.remove(weak)
+                total -= weak["end"] - weak["start"]
+            kept.sort(key=lambda s: s["start"])
+    return kept
+
+
+def _merge_ranges(items: List[Dict[str, Any]], gap: float = 0.35) -> List[tuple[float, float]]:
+    ranges: List[tuple[float, float]] = []
+    for item in items:
+        start, end = float(item["start"]), float(item["end"])
+        if ranges and start - ranges[-1][1] <= gap:
+            ranges[-1] = (ranges[-1][0], max(ranges[-1][1], end))
+        else:
+            ranges.append((start, end))
+    return ranges
+
+
+def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: str = 'fast', auth_headers: Optional[Dict[str, str]] = None) -> None:
     try:
         _ai_set_status(job_id, status="running", progress=5, message="正在分析音频")
         ffmpeg = find_ffmpeg()
@@ -1045,6 +1105,38 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float) -> Non
         out = job_dir / "output.mp4"
         ranges: List[tuple[float, float]] = []
         ae = _ae_bin()
+        if str(mode or "") == "smart" and auth_headers:
+            try:
+                from .cutcli_templates_local import _call_server, _upload_temp_to_server
+                _ai_set_status(job_id, progress=20, message="正在转写音频")
+                audio = job_dir / "audio.wav"
+                subprocess.run([ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", str(path),
+                                "-vn", "-ac", "1", "-ar", "16000", str(audio)], check=True)
+                audio_url = _upload_temp_to_server(
+                    data=audio.read_bytes(), filename=f"{job_id}_ai_trim.wav",
+                    content_type="audio/wav", auth_headers=auth_headers,
+                )
+                stt = _call_server("/api/cutcli/stt/transcribe", {
+                    "audio_url": audio_url,
+                    "caption_style": {"ass_layout": "plain"},
+                    "video_duration_sec": duration,
+                    "video_width": int(info.get("width") or 1080),
+                    "return_captions": True,
+                }, auth_headers, timeout=1200.0)
+                caps = stt.get("captions") if isinstance(stt.get("captions"), list) else []
+                _ai_set_status(job_id, progress=55, message="正在挑出关键句")
+                scored = _score_sentences(caps)
+                kept = _pick_sentences(scored, float(target or 0))
+                if kept:
+                    ranges = _merge_ranges(kept)
+                    _ai_set_status(job_id, progress=65, message=f"保留 {len(kept)} 句，正在裁剪")
+                    _render_ai_trim(ffmpeg, path, ranges, out, has_audio)
+                    ae = None
+            except Exception as exc:
+                logger.warning("[multi-clip][ai-trim] smart mode failed, fallback: %s", exc)
+                _ai_set_status(job_id, progress=35, message="智能选句不可用，改用静音检测")
+                ranges = []
+                ae = _ae_bin()
         if ae is not None:
             _ai_set_status(job_id, progress=25, message="正在用增强引擎剪掉停顿")
             cut = job_dir / "ae.mp4"
@@ -1111,7 +1203,7 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float) -> Non
 
 
 @router.post("/api/multi-clip-mixer/ai-trim")
-def start_ai_trim(body: AiTrimBody, user: _ServerUser = Depends(get_current_user_for_local)):
+def start_ai_trim(body: AiTrimBody, request: Request, user: _ServerUser = Depends(get_current_user_for_local)):
     db = SessionLocal()
     try:
         path, _, media_type = resolve_asset_path(db, int(user.id), body.asset_id)
@@ -1122,7 +1214,9 @@ def start_ai_trim(body: AiTrimBody, user: _ServerUser = Depends(get_current_user
     job_id = uuid.uuid4().hex[:16]
     _AI_TRIM_DIR.mkdir(parents=True, exist_ok=True)
     _ai_set_status(job_id, status="queued", progress=0, message="排队中", created_at=time.time())
-    threading.Thread(target=_ai_trim_worker, args=(job_id, int(user.id), path, float(body.target_seconds or 0)), daemon=True).start()
+    auth = request.headers.get("authorization") or ""
+    headers = {"Authorization": auth} if auth else None
+    threading.Thread(target=_ai_trim_worker, args=(job_id, int(user.id), path, float(body.target_seconds or 0), str(body.mode or "smart"), headers), daemon=True).start()
     return {"job_id": job_id}
 
 
