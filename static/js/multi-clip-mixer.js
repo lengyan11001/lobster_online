@@ -22,6 +22,7 @@
     shanjianTemplateDetailPromise: null,
     shanjianTemplateDetailError: '',
     overlayTexts: {},
+  aiTrim: null,
     positionOverrides: {},
     musicOptions: [],
     selectedMusic: null,
@@ -992,6 +993,92 @@
     } else {
       closeSegmentModal(false);
     }
+  }
+
+  function aiTrimStatus(text, isError) {
+    var el = $('mcmAiTrimStatus');
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.color = isError ? '#c52f36' : '';
+  }
+
+  function closeAiTrimModal() {
+    var modal = $('mcmAiTrimModal');
+    if (modal) modal.hidden = true;
+    var video = $('mcmAiTrimVideo');
+    if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
+  }
+
+  function refreshAiTools() {
+    request('/api/multi-clip-mixer/ai-tools').then(function (data) {
+      var btn = $('mcmAiTrimInstallBtn');
+      if (btn) btn.hidden = !!(data && data.auto_editor);
+    }).catch(function () {});
+  }
+
+  function installAiTools() {
+    aiTrimStatus('正在安装增强组件…');
+    post('/api/multi-clip-mixer/ai-tools/install', {}).then(function () {
+      (function poll() {
+        request('/api/multi-clip-mixer/ai-tools/status').then(function (d) {
+          if (d && d.status === 'done') { aiTrimStatus('增强组件已安装'); refreshAiTools(); return; }
+          if (d && d.status === 'error') { aiTrimStatus(d.message || '安装失败', true); return; }
+          aiTrimStatus((d && d.message) || '安装中…');
+          setTimeout(poll, 1500);
+        });
+      })();
+    }).catch(function (e) { aiTrimStatus(e.message || '安装失败', true); });
+  }
+
+  function startAiTrim() {
+    var ctx = state.segmentContext;
+    if (!ctx) return;
+    var clip = state.clips[ctx.index];
+    if (!clip || !clip.assetId) return aiTrimStatus('这个视频还没有素材 ID，先保存后再优化', true);
+    var target = Number((($('mcmAiTrimTarget') || {}).value || 60));
+    aiTrimStatus('正在提交…');
+    post('/api/multi-clip-mixer/ai-trim', { asset_id: clip.assetId, target_seconds: target }).then(function (d) {
+      if (!d || !d.job_id) throw new Error('提交失败');
+      pollAiTrim(d.job_id, ctx.index);
+    }).catch(function (e) { aiTrimStatus(e.message || '提交失败', true); });
+  }
+
+  function pollAiTrim(jobId, index) {
+    request('/api/multi-clip-mixer/ai-trim/' + encodeURIComponent(jobId)).then(function (d) {
+      if (d.status === 'done') { openAiTrimPreview(d, index); return; }
+      if (d.status === 'error') { aiTrimStatus(d.message || '优化失败', true); return; }
+      aiTrimStatus((d.message || '处理中') + ' ' + (d.progress || 0) + '%');
+      setTimeout(function () { pollAiTrim(jobId, index); }, 2000);
+    }).catch(function (e) { aiTrimStatus(e.message || '查询失败', true); });
+  }
+
+  function openAiTrimPreview(result, index) {
+    state.aiTrim = { index: index, result: result };
+    var video = $('mcmAiTrimVideo');
+    if (video) video.src = resolveUrl(result.preview_url || '', apiBase());
+    var modal = $('mcmAiTrimModal');
+    if (modal) modal.hidden = false;
+    aiTrimStatus('优化完成：' + formatSeconds(result.duration || 0));
+  }
+
+  function applyAiTrim() {
+    var ctx = state.aiTrim;
+    if (!ctx) return;
+    var clip = state.clips[ctx.index];
+    if (!clip) return;
+    clip.assetId = String(ctx.result.asset_id || clip.assetId);
+    clip.name = (clip.name || '视频') + '（AI优化）';
+    clip.previewUrl = resolveUrl(ctx.result.preview_url || '', apiBase());
+    clip.sourceUrl = clip.previewUrl;
+    clip.posterUrl = assetPosterUrl(clip.assetId);
+    clip.duration = Number(ctx.result.duration || clip.duration || 0);
+    clip.startSec = 0;
+    clip.endSec = clip.duration;
+    state.aiTrim = null;
+    closeAiTrimModal();
+    closeSegmentModal(false);
+    renderClips();
+    showMessage('已使用 AI 优化后的视频', false);
   }
 
   function previewSelectedSegment() {
@@ -2586,6 +2673,13 @@
     if ($('mcmSegmentStart')) $('mcmSegmentStart').addEventListener('input', syncSegmentSummary);
     if ($('mcmSegmentEnd')) $('mcmSegmentEnd').addEventListener('input', syncSegmentSummary);
     if ($('mcmPreviewSegmentBtn')) $('mcmPreviewSegmentBtn').addEventListener('click', previewSelectedSegment);
+    if ($('mcmAiTrimBtn')) $('mcmAiTrimBtn').addEventListener('click', startAiTrim);
+    if ($('mcmAiTrimInstallBtn')) $('mcmAiTrimInstallBtn').addEventListener('click', installAiTools);
+    if ($('mcmAiTrimApplyBtn')) $('mcmAiTrimApplyBtn').addEventListener('click', applyAiTrim);
+    Array.prototype.forEach.call(document.querySelectorAll('[data-mcm-close-aitrim]'), function (btn) {
+      btn.addEventListener('click', function () { state.aiTrim = null; closeAiTrimModal(); });
+    });
+    refreshAiTools();
     if ($('mcmConfirmSegmentBtn')) $('mcmConfirmSegmentBtn').addEventListener('click', confirmSegment);
     Array.prototype.forEach.call(document.querySelectorAll('input[name="mcmClipMode"]'), function(input) {
       input.addEventListener('change', syncModePanels);

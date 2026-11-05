@@ -6,6 +6,9 @@ import logging
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import re
@@ -930,3 +933,271 @@ async def render_multi_clip_video(
         "segments": rendered["segments"],
         "public_upload_warning": "" if source_url else str(upload_diag.get("error") or "成片已保存在本机，但暂时没有公网链接"),
     }
+
+
+# AI 智能优化：长视频按音频剪掉无用段
+_AI_TRIM_DIR = Path(__file__).resolve().parents[3] / "data" / "multi_clip_ai_trim"
+_AI_TRIM_JOBS: Dict[str, Dict[str, Any]] = {}
+_AI_TRIM_LOCK = threading.Lock()
+
+
+class AiTrimBody(BaseModel):
+    asset_id: str = ""
+    video_url: str = ""
+    target_seconds: float = 0
+
+
+def _ai_set_status(job_id: str, **fields: Any) -> None:
+    with _AI_TRIM_LOCK:
+        job = _AI_TRIM_JOBS.setdefault(job_id, {})
+        job.update(fields)
+
+
+def _detect_silences(ffmpeg: str, path: Path) -> List[tuple[float, float]]:
+    proc = subprocess.run(
+        [ffmpeg, "-hide_banner", "-nostdin", "-i", str(path), "-vn",
+         "-af", "silencedetect=noise=-32dB:d=0.55", "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    text = (proc.stderr or "") + (proc.stdout or "")
+    starts = [float(x) for x in re.findall(r"silence_start:\s*([0-9.]+)", text)]
+    ends = [float(x) for x in re.findall(r"silence_end:\s*([0-9.]+)", text)]
+    out: List[tuple[float, float]] = []
+    for i, start in enumerate(starts):
+        end = ends[i] if i < len(ends) else None
+        if end is not None and end > start:
+            out.append((start, end))
+    return out
+
+
+def _keep_ranges(duration: float, silences: List[tuple[float, float]], target: float) -> List[tuple[float, float]]:
+    ranges: List[tuple[float, float]] = []
+    cursor = 0.0
+    for start, end in sorted(silences):
+        if start > cursor:
+            ranges.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < duration:
+        ranges.append((cursor, duration))
+    padded: List[tuple[float, float]] = []
+    for start, end in ranges:
+        start = max(0.0, start - 0.12)
+        end = min(duration, end + 0.12)
+        if end - start >= 0.35:
+            padded.append((start, end))
+    merged: List[tuple[float, float]] = []
+    for start, end in padded:
+        if merged and start - merged[-1][1] < 0.05:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    if target <= 0:
+        return merged
+    kept: List[tuple[float, float]] = []
+    total = 0.0
+    for start, end in merged:
+        if total >= target:
+            break
+        remain = target - total
+        if end - start <= remain:
+            kept.append((start, end))
+            total += end - start
+        else:
+            kept.append((start, start + remain))
+            total = target
+            break
+    return kept or merged
+
+
+def _render_ai_trim(ffmpeg: str, src: Path, ranges: List[tuple[float, float]], out: Path, has_audio: bool) -> None:
+    parts_v: List[str] = []
+    parts_a: List[str] = []
+    for i, (start, end) in enumerate(ranges):
+        parts_v.append(f"[0:v]trim=start={start:.3f}:end={end:.3f},setpts=PTS-STARTPTS[v{i}]")
+        if has_audio:
+            parts_a.append(f"[0:a]atrim=start={start:.3f}:end={end:.3f},asetpts=PTS-STARTPTS[a{i}]")
+    concat_inputs = "".join(f"[v{i}][a{i}]" if has_audio else f"[v{i}]" for i in range(len(ranges)))
+    graph = ";".join(parts_v + parts_a)
+    graph += f";{concat_inputs}concat=n={len(ranges)}:v=1:a={1 if has_audio else 0}[vout]" + ("[aout]" if has_audio else "")
+    args = [ffmpeg, "-y", "-hide_banner", "-nostdin", "-i", str(src), "-filter_complex", graph, "-map", "[vout]"]
+    if has_audio:
+        args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "128k"]
+    args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-movflags", "+faststart", str(out)]
+    proc = subprocess.run(args, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if proc.returncode != 0 or not out.exists():
+        raise RuntimeError("AI 优化渲染失败: " + (proc.stderr or "")[-300:])
+
+
+def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float) -> None:
+    try:
+        _ai_set_status(job_id, status="running", progress=5, message="正在分析音频")
+        ffmpeg = find_ffmpeg()
+        ffprobe = _find_ffprobe(ffmpeg)
+        info = _probe_video(path, ffprobe)
+        duration = float(info.get("duration") or 0)
+        has_audio = bool(info.get("has_audio"))
+        if duration <= 0:
+            raise RuntimeError("素材时长读取失败")
+        if not has_audio:
+            raise RuntimeError("素材没有音轨，无法按音频判断无用段")
+        job_dir = _AI_TRIM_DIR / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        out = job_dir / "output.mp4"
+        ranges: List[tuple[float, float]] = []
+        ae = _ae_bin()
+        if ae is not None:
+            _ai_set_status(job_id, progress=25, message="正在用增强引擎剪掉停顿")
+            cut = job_dir / "ae.mp4"
+            proc = subprocess.run(
+                [str(ae), str(path), "--edit", "audio:threshold=0.04", "--margin", "0.12sec",
+                 "--no-open", "-o", str(cut)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+            )
+            if proc.returncode == 0 and cut.exists() and cut.stat().st_size > 10000:
+                info2 = _probe_video(cut, ffprobe)
+                dur2 = float(info2.get("duration") or 0)
+                if target and dur2 > float(target) * 1.05:
+                    _ai_set_status(job_id, progress=50, message="正在按目标时长收敛")
+                    ranges = _keep_ranges(dur2, _detect_silences(ffmpeg, cut), float(target))
+                    _render_ai_trim(ffmpeg, cut, ranges, out, bool(info2.get("has_audio")))
+                else:
+                    cut.replace(out)
+                ranges = ranges or [(0.0, round(dur2, 3))]
+            else:
+                ae = None
+        if ae is None:
+            _ai_set_status(job_id, progress=25, message="正在检测静音与停顿")
+            silences = _detect_silences(ffmpeg, path)
+            ranges = _keep_ranges(duration, silences, float(target or 0))
+            _ai_set_status(job_id, progress=45, message="正在剪掉无用片段")
+            _render_ai_trim(ffmpeg, path, ranges, out, has_audio)
+        actual = sum(end - start for start, end in ranges)
+        _ai_set_status(job_id, progress=85, message="正在保存优化后的视频")
+        data = out.read_bytes()
+        asset_id, filename, file_size, source_url = _save_bytes_or_tos(data, ".mp4", "video/mp4")
+        db = SessionLocal()
+        try:
+            db.add(Asset(
+                asset_id=asset_id,
+                user_id=user_id,
+                filename=filename,
+                media_type="video",
+                file_size=file_size,
+                source_url=source_url,
+                prompt="multi_clip_mixer_ai_trim",
+                model="local:ffmpeg-ai-trim",
+                tags="multi_clip_mixer,ai_trim",
+                meta={
+                    "title": "剪辑大师 AI 优化",
+                    "original_duration": round(duration, 3),
+                    "duration": round(actual, 3),
+                    "ranges": [[round(a, 3), round(b, 3)] for a, b in ranges],
+                },
+            ))
+            db.commit()
+        finally:
+            db.close()
+        _ai_set_status(
+            job_id, status="done", progress=100, message="优化完成",
+            asset_id=asset_id,
+            preview_url=f"/api/assets/{asset_id}/content",
+            duration=round(actual, 3), original_duration=round(duration, 3),
+            removed_seconds=round(max(0.0, duration - actual), 3),
+            ranges=[[round(a, 3), round(b, 3)] for a, b in ranges],
+        )
+    except Exception as exc:
+        logger.warning("[multi-clip][ai-trim] job=%s failed: %s", job_id, exc)
+        _ai_set_status(job_id, status="error", progress=100, message=str(exc)[:300])
+
+
+@router.post("/api/multi-clip-mixer/ai-trim")
+def start_ai_trim(body: AiTrimBody, user: _ServerUser = Depends(get_current_user_for_local)):
+    db = SessionLocal()
+    try:
+        path, _, media_type = resolve_asset_path(db, int(user.id), body.asset_id)
+    finally:
+        db.close()
+    if media_type != "video":
+        raise HTTPException(status_code=400, detail="只能优化视频素材")
+    job_id = uuid.uuid4().hex[:16]
+    _AI_TRIM_DIR.mkdir(parents=True, exist_ok=True)
+    _ai_set_status(job_id, status="queued", progress=0, message="排队中", created_at=time.time())
+    threading.Thread(target=_ai_trim_worker, args=(job_id, int(user.id), path, float(body.target_seconds or 0)), daemon=True).start()
+    return {"job_id": job_id}
+
+
+@router.get("/api/multi-clip-mixer/ai-trim/{job_id}")
+def ai_trim_status(job_id: str):
+    with _AI_TRIM_LOCK:
+        job = dict(_AI_TRIM_JOBS.get(job_id) or {})
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return job
+
+
+@router.get("/api/multi-clip-mixer/ai-trim/{job_id}/video")
+def ai_trim_video(job_id: str):
+    if not re.fullmatch(r"[0-9a-f]{16}", job_id or ""):
+        raise HTTPException(status_code=400, detail="任务编号无效")
+    path = _AI_TRIM_DIR / job_id / "output.mp4"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="优化结果不存在")
+    return FileResponse(path, media_type="video/mp4")
+
+
+# 可选增强组件 auto-editor（点击安装，不随包分发）
+_AE_DIR = Path(__file__).resolve().parents[3] / "deps" / "auto-editor"
+_AE_URL = "https://github.com/WyattBlue/auto-editor/releases/download/31.8.0/auto-editor-windows-x86_64.exe"
+
+
+def _ae_bin() -> Optional[Path]:
+    for name in ("auto-editor.exe", "auto-editor"):
+        candidate = _AE_DIR / name
+        if candidate.exists() and candidate.stat().st_size > 1000000:
+            return candidate
+    return None
+
+
+@router.get("/api/multi-clip-mixer/ai-tools")
+def ai_trim_tools():
+    bin_path = _ae_bin()
+    return {"auto_editor": bool(bin_path), "path": str(bin_path) if bin_path else ""}
+
+
+@router.post("/api/multi-clip-mixer/ai-tools/install")
+def ai_trim_install_tools():
+    if _ae_bin():
+        return {"status": "done", "message": "已安装"}
+
+    def _install() -> None:
+        try:
+            _ai_set_status("tools", status="running", progress=5, message="正在下载增强组件")
+            _AE_DIR.mkdir(parents=True, exist_ok=True)
+            target = _AE_DIR / "auto-editor.exe"
+            tmp = target.with_suffix(".part")
+            with httpx.stream("GET", _AE_URL, timeout=600.0, follow_redirects=True) as resp:
+                resp.raise_for_status()
+                total = int(resp.headers.get("Content-Length") or 0)
+                done = 0
+                with open(tmp, "wb") as fh:
+                    for chunk in resp.iter_bytes(1024 * 256):
+                        fh.write(chunk)
+                        done += len(chunk)
+                        if total:
+                            _ai_set_status("tools", progress=min(95, 5 + int(done * 90 / total)),
+                                           message=f"正在下载 {done // 1048576}/{total // 1048576} MB")
+            tmp.replace(target)
+            _ai_set_status("tools", status="done", progress=100, message="增强组件已安装")
+        except Exception as exc:
+            logger.warning("[multi-clip][ai-trim] install failed: %s", exc)
+            _ai_set_status("tools", status="error", progress=100, message=str(exc)[:200])
+
+    threading.Thread(target=_install, daemon=True).start()
+    return {"status": "running", "message": "开始下载"}
+
+
+@router.get("/api/multi-clip-mixer/ai-tools/status")
+def ai_trim_tools_status():
+    with _AI_TRIM_LOCK:
+        job = dict(_AI_TRIM_JOBS.get("tools") or {})
+    return job or {"status": "idle", "progress": 0}
