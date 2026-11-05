@@ -1120,7 +1120,7 @@
     clip.endSec = clip.duration;
     state.aiTrim = null;
     closeAiTrimModal();
-    var url = clip.previewUrl || clip.sourceUrl || '';
+    var url = assetContentUrl(clip.assetId);
     var segVideo = $('mcmSegmentVideo');
     if (segVideo && url) {
       segVideo.pause();
@@ -2756,7 +2756,13 @@
       state.aiTrimMode = '';
     });
     if ($('mcmAiTrimInstallBtn')) $('mcmAiTrimInstallBtn').addEventListener('click', installAiTools);
-    if ($('mcmAiTrimApplyBtn')) $('mcmAiTrimApplyBtn').addEventListener('click', applyAiTrim);
+    document.addEventListener('click', function (event) {
+      var btn = event.target && event.target.closest ? event.target.closest('#mcmAiTrimApplyBtn') : null;
+      if (!btn) return;
+      event.preventDefault();
+      event.stopPropagation();
+      applyAiTrim();
+    }, true);
     Array.prototype.forEach.call(document.querySelectorAll('[data-mcm-close-aitrim]'), function (btn) {
       btn.addEventListener('click', function () { state.aiTrim = null; closeAiTrimModal(); });
     });
