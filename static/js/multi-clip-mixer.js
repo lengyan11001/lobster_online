@@ -1107,6 +1107,8 @@
       clip.originalPreviewUrl = clip.previewUrl || clip.sourceUrl || '';
     }
     clip.assetId = String(ctx.result.asset_id || clip.assetId);
+    clip.playObjectUrl = '';
+    clip.playPromise = null;
     clip.trimModes = clip.trimModes || {};
     clip.trimModes[ctx.mode || 'smart'] = true;
     clip.name = (clip.name || '视频') + '（AI优化）';
@@ -2734,6 +2736,8 @@
       var clip = ctx && state.clips[ctx.index];
       if (!clip || !clip.originalAssetId) return;
       clip.assetId = clip.originalAssetId;
+      clip.playObjectUrl = '';
+      clip.playPromise = null;
       clip.previewUrl = clip.originalPreviewUrl || assetContentUrl(clip.originalAssetId);
       clip.sourceUrl = clip.previewUrl;
       clip.posterUrl = assetPosterUrl(clip.assetId);
