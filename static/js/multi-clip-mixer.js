@@ -584,6 +584,17 @@
     if ($('mcmHistoryNextBtn')) $('mcmHistoryNextBtn').disabled = state.historyPage >= pageCount - 1;
   }
 
+  function previewBatchResult(batch) {
+    var results = (batch && Array.isArray(batch.results)) ? batch.results : [];
+    for (var i = results.length - 1; i >= 0; i -= 1) {
+      var result = results[i];
+      if (!result || !resultVideoUrl(result)) continue;
+      setResultVideo(result).catch(function(error) { showMessage(error.message || '预览失败', true); });
+      return true;
+    }
+    return false;
+  }
+
   function restoreLatestResult() {
     var surface = $('mcmResultSurface');
     if (!surface || surface.querySelector('video')) return;
@@ -2832,6 +2843,8 @@
           if (actionName === 'toggle') {
             state.historyExpanded[batch.id] = state.historyExpanded[batch.id] !== true;
             renderHistory();
+            // 选中哪批记录，右侧就预览哪批的成片
+            if (state.historyExpanded[batch.id]) previewBatchResult(batch);
             return;
           }
           if (actionName === 'copy') copyVideoUrls(historySelectedUrls(batch));
