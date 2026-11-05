@@ -2589,13 +2589,23 @@ def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], wid
             shadow_distance = max(0.0, float(tr.get("shadow_distance") or 0.0)) * width / 1280.0
             shadow_px = int(round(shadow_distance)) if shadow_distance else 2
             shadow_alpha = 1.0 - max(0.0, min(1.0, float(tr.get("shadow_alpha") or 0.6)))
+            def _fit_line(line: str, base_fs: int) -> int:
+                unit = 0.0
+                for ch in line:
+                    unit += 1.0 if ord(ch) > 0x2E80 else 0.55
+                est = unit * base_fs * (fscx / 100.0)
+                limit = width * 0.92
+                if est > limit and est > 0:
+                    return max(12, int(round(base_fs * limit / est)))
+                return base_fs
             rows = [row for row in str(text).split("\n")] or [""]
             line_step = fs * 1.18 * (fscy / 100.0)
             for line_index, line_row in enumerate(rows):
                 line_y = int(round(y + (line_index - (len(rows) - 1) / 2.0) * line_step))
+                line_fs = _fit_line(line_row, fs)
                 lines.append(
                     "Dialogue: 7,%s,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fn%s\\fs%d\\fscx%d\\fscy%d\\q2\\c%s\\bord0\\shad%d\\4c%s\\4a&H%02X&}%s"
-                    % (start_ts, end_ts, x, line_y, family, fs, fscx, fscy, color, shadow_px,
+                    % (start_ts, end_ts, x, line_y, family, line_fs, fscx, fscy, color, shadow_px,
                        _hex_to_ass_rgb(tr.get("shadow_color"), "&H00000000"), int(round(shadow_alpha * 255)),
                        _ass_text_with_newline(line_row))
                 )
