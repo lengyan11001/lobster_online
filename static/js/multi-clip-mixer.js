@@ -572,7 +572,7 @@
           var resultId = historyResultId(result, index);
           return '<div class="mcm-history-result">'
             + '<label class="mcm-batch-check"><input type="checkbox" data-history-result="' + escapeHtml(resultId) + '"' + (url ? (selection[resultId] !== false ? ' checked' : '') : ' disabled') + '><span class="mcm-visually-hidden">选择历史结果</span></label>'
-            + (url ? '<button type="button" class="mcm-batch-preview" data-history-preview="' + index + '"><video src="' + escapeHtml(url) + '" muted playsinline preload="metadata"></video></button>' : '<span class="mcm-batch-preview is-empty">无预览</span>')
+            + (url ? '<button type="button" class="mcm-batch-preview" data-history-preview="' + index + '"><video src="' + escapeHtml(demoWithFrame(url)) + '" muted playsinline preload="metadata"></video></button>' : '<span class="mcm-batch-preview is-empty">无预览</span>')
             + '<span class="mcm-batch-copy">' + (index + 1) + '. ' + escapeHtml(formatSeconds(result.duration || 0)) + '</span>'
             + (url ? '<a class="btn btn-ghost btn-sm" target="_blank" rel="noopener" href="' + escapeHtml(url) + '">打开</a>' : '')
             + '</div>';
