@@ -1036,6 +1036,8 @@
     var clip = state.clips[ctx.index];
     var sourceAssetId = clip && (clip.originalAssetId || clip.assetId);
     if (!clip || !sourceAssetId) return aiTrimStatus('这个视频还没有素材 ID，先保存后再优化', true);
+    state.aiTrim = null;
+    closeAiTrimModal();
     aiTrimStatus('正在提交…');
     post('/api/multi-clip-mixer/ai-trim', { asset_id: sourceAssetId, mode: state.aiTrimMode || 'smart', color_style: String((($('mcmColorStyle') || {}).value) || '') }).then(function (d) {
       if (!d || !d.job_id) throw new Error('提交失败');
@@ -1055,7 +1057,14 @@
   function openAiTrimPreview(result, index) {
     state.aiTrim = { index: index, result: result };
     var video = $('mcmAiTrimVideo');
-    if (video) video.src = resolveUrl(result.preview_url || '', apiBase());
+    if (video) {
+      var base = resolveUrl(result.preview_url || '', apiBase());
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      video.src = base + (base.indexOf('?') >= 0 ? '&' : '?') + 'v=' + Date.now();
+      video.load();
+    }
     var modal = $('mcmAiTrimModal');
     if (modal) modal.hidden = false;
     var styleLabel = { fresh: '清新明亮', soft: '柔和', cinema: '电影感', mono: '黑白', auto: '自动调色' }[result.color_style || ''] || '不调色';
