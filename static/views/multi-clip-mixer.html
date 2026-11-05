@@ -145,7 +145,12 @@
             <div id="mcmTemplateLayoutPanel" class="mcm-layout-panel" hidden>
               <div class="mcm-layout-head">
                 <strong>版式预览</strong>
-                <span style="display:flex;gap:6px;">
+                <span style="display:flex;gap:6px;align-items:center;">
+                  <span id="mcmLayoutTrackNav" hidden style="display:flex;gap:4px;align-items:center;">
+                    <button id="mcmLayoutPrevTrack" type="button" class="btn btn-ghost btn-sm" aria-label="上一句">‹</button>
+                    <span id="mcmLayoutTrackLabel" style="font-size:11px;opacity:.7;min-width:36px;text-align:center;">1 / 1</span>
+                    <button id="mcmLayoutNextTrack" type="button" class="btn btn-ghost btn-sm" aria-label="下一句">›</button>
+                  </span>
                   <button id="mcmTemplateVideoPreviewBtn" type="button" class="btn btn-ghost btn-sm">预览样片</button>
                   <button id="mcmTemplateLayoutReset" type="button" class="btn btn-ghost btn-sm">重置位置</button>
                 </span>

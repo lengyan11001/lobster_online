@@ -1267,8 +1267,31 @@
     return result;
   }
 
+  function designerTextTracks(item) {
+    var style = templateCaptionStyle(item);
+    var overlay = style.overlay_style && typeof style.overlay_style === 'object' ? style.overlay_style : {};
+    return Array.isArray(overlay.text_tracks) ? overlay.text_tracks : [];
+  }
+
+  function isDesignerTimeline(item) {
+    return !!(window.CutcliTemplatePreview && typeof window.CutcliTemplatePreview.layout === 'function'
+      && window.CutcliTemplatePreview.layout(item) === 'designer_timeline');
+  }
+
   function layoutTargets() {
-    var targets = templateOverlayFields(state.selectedTemplate).map(function(field) {
+    var fields = templateOverlayFields(state.selectedTemplate);
+    // 设计师模板是逐句时间轴：一次只显示一句，免得 N 句叠在一起糊成一团
+    if (isDesignerTimeline(state.selectedTemplate)) {
+      var tracks = designerTextTracks(state.selectedTemplate);
+      if (tracks.length) {
+        var index = Math.max(0, Math.min(tracks.length - 1, Number(state.previewTrackIndex || 0)));
+        var track = tracks[index] || {};
+        var key = String(track.key || '').trim();
+        var field = fields.filter(function(candidate) { return String(candidate.key || '').trim() === key; })[0] || {};
+        return [{ key: key, label: String(field.label || field.default || key) }];
+      }
+    }
+    var targets = fields.map(function(field) {
       return { key: String(field.key || '').trim(), label: String(field.label || field.key || '模板文案') };
     });
     targets.push({ key: 'caption', label: '字幕预览' });
@@ -1389,7 +1412,22 @@
         ? '<video src="' + escapeHtml(source) + '" muted playsinline preload="metadata"></video>'
         : '<div class="mcm-layout-empty">版式预览</div>';
     }
+    syncLayoutTrackNav();
     renderTemplateLayoutItems();
+  }
+
+  function syncLayoutTrackNav() {
+    var nav = $('mcmLayoutTrackNav');
+    var label = $('mcmLayoutTrackLabel');
+    if (!nav || !label) return;
+    var tracks = isDesignerTimeline(state.selectedTemplate) ? designerTextTracks(state.selectedTemplate) : [];
+    if (tracks.length <= 1) {
+      nav.hidden = true;
+      return;
+    }
+    nav.hidden = false;
+    var index = Math.max(0, Math.min(tracks.length - 1, Number(state.previewTrackIndex || 0)));
+    label.textContent = (index + 1) + ' / ' + tracks.length;
   }
 
   function selectTemplate(item) {
@@ -1399,12 +1437,18 @@
     templateOverlayFields(item).forEach(function(field) {
       var key = String(field.key || '').trim();
       var maxLength = overlayFieldMaxLength(field);
-      var initial = Object.prototype.hasOwnProperty.call(previous, key) ? previous[key] : String(field.default || '');
+      // 换模板时用新模板自己的默认文案，不把上一个模板的句子带过来
+      var initial = (!sameTemplate || !Object.prototype.hasOwnProperty.call(previous, key))
+        ? String(field.default || '')
+        : previous[key];
       next[key] = truncateChars(initial, maxLength);
     });
     state.selectedTemplate = item || null;
     state.overlayTexts = next;
-    if (!sameTemplate) state.positionOverrides = {};
+    if (!sameTemplate) {
+      state.positionOverrides = {};
+      state.previewTrackIndex = 0;
+    }
     if (!item || item.provider !== 'shanjian') {
       state.shanjianTemplateDetail = null;
       state.shanjianTemplateDetailId = '';
@@ -2594,6 +2638,16 @@
       state.positionOverrides = {};
       renderTemplateLayoutItems();
     });
+    function stepPreviewTrack(delta) {
+      var tracks = isDesignerTimeline(state.selectedTemplate) ? designerTextTracks(state.selectedTemplate) : [];
+      if (tracks.length <= 1) return;
+      var index = Number(state.previewTrackIndex || 0) + delta;
+      state.previewTrackIndex = Math.max(0, Math.min(tracks.length - 1, index));
+      syncLayoutTrackNav();
+      renderTemplateLayoutItems();
+    }
+    if ($('mcmLayoutPrevTrack')) $('mcmLayoutPrevTrack').addEventListener('click', function() { stepPreviewTrack(-1); });
+    if ($('mcmLayoutNextTrack')) $('mcmLayoutNextTrack').addEventListener('click', function() { stepPreviewTrack(1); });
     if ($('mcmTemplateLayoutLayer')) $('mcmTemplateLayoutLayer').addEventListener('pointerdown', function(event) {
       var item = event.target.closest('[data-layout-key]');
       var layer = $('mcmTemplateLayoutLayer');
