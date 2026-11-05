@@ -1870,9 +1870,17 @@
     }
     var source = resolveUrl(result.source_url || result.video_url || result.open_url || '', apiBase());
     var preview = resolveUrl(result.preview_url || '', apiBase());
-    var resolveSource = source
+    // local /api 地址需要带鉴权头，<video src> 直接播会 401，统一改成 blob 再用
+    function needsAuth(url) {
+      if (!url) return false;
+      var base = String(apiBase() || '').replace(/\/$/, '');
+      return url.indexOf('/api/') === 0 || (!!base && url.indexOf(base) === 0);
+    }
+    var target = source || preview;
+    var useBlob = !source || needsAuth(source);
+    var resolveSource = !useBlob
       ? Promise.resolve(source)
-      : fetch(preview, { headers: headers(false) }).then(function(response) {
+      : fetch(target, { headers: headers(false) }).then(function(response) {
           if (!response.ok) throw new Error('成片预览读取失败');
           return response.blob();
         }).then(function(blob) {
@@ -2175,6 +2183,10 @@
       }
       appendBatchResult(result);
       if (options.useTemplate) restoreTemplateState(templateBeforeRun);
+      // 兜底：最终成片一定有画面
+      if (result && (result.source_url || result.preview_url)) {
+        setResultVideo(result).catch(function() {});
+      }
       return result;
     }).catch(function(error) {
       if (options.useTemplate) restoreTemplateState(templateBeforeRun);
