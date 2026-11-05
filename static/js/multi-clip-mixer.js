@@ -1036,7 +1036,7 @@
     var clip = state.clips[ctx.index];
     if (!clip || !clip.assetId) return aiTrimStatus('这个视频还没有素材 ID，先保存后再优化', true);
     aiTrimStatus('正在提交…');
-    post('/api/multi-clip-mixer/ai-trim', { asset_id: clip.assetId }).then(function (d) {
+    post('/api/multi-clip-mixer/ai-trim', { asset_id: clip.assetId, mode: state.aiTrimMode || 'smart' }).then(function (d) {
       if (!d || !d.job_id) throw new Error('提交失败');
       pollAiTrim(d.job_id, ctx.index);
     }).catch(function (e) { aiTrimStatus(e.message || '提交失败', true); });
@@ -2673,6 +2673,11 @@
     if ($('mcmSegmentEnd')) $('mcmSegmentEnd').addEventListener('input', syncSegmentSummary);
     if ($('mcmPreviewSegmentBtn')) $('mcmPreviewSegmentBtn').addEventListener('click', previewSelectedSegment);
     if ($('mcmAiTrimBtn')) $('mcmAiTrimBtn').addEventListener('click', startAiTrim);
+    if ($('mcmVisualTrimBtn')) $('mcmVisualTrimBtn').addEventListener('click', function () {
+      state.aiTrimMode = 'visual';
+      startAiTrim();
+      state.aiTrimMode = '';
+    });
     if ($('mcmAiTrimInstallBtn')) $('mcmAiTrimInstallBtn').addEventListener('click', installAiTools);
     if ($('mcmAiTrimApplyBtn')) $('mcmAiTrimApplyBtn').addEventListener('click', applyAiTrim);
     Array.prototype.forEach.call(document.querySelectorAll('[data-mcm-close-aitrim]'), function (btn) {

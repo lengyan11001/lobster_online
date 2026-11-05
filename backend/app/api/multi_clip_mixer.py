@@ -1173,7 +1173,7 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: 
                     for cap in caps
                 ]
                 kept: List[Dict[str, Any]] = []
-                if len(sentences) < 3:
+                if str(mode or "") == "visual" or len(sentences) < 3:
                     _ai_set_status(job_id, progress=58, message="没有有效语音，改用画面检测")
                     ranges = _visual_ranges(ffmpeg, path, duration)
                     _render_ai_trim(ffmpeg, path, ranges, out, has_audio)
