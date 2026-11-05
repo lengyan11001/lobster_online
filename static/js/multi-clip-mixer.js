@@ -1098,7 +1098,8 @@
 
   function applyAiTrim() {
     var ctx = state.aiTrim;
-    if (!ctx) return;
+    console.log('[ai-trim] apply', ctx);
+    if (!ctx) { showMessage('没有可应用的优化结果，请重新优化一次', true); return; }
     var clip = state.clips[ctx.index];
     if (!clip) return;
     if (!clip.originalAssetId) {
