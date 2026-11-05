@@ -1852,6 +1852,15 @@
     progress('done', '', '完成后自动进入素材库');
   }
 
+  function setResultPlaceholder(text) {
+    var surface = $('mcmResultSurface');
+    if (!surface) return;
+    surface.innerHTML = '<div class="mcm-result-empty"><strong>' + escapeHtml(text || '成片生成中') + '</strong>'
+      + '<span>成片完成前不预览素材画面。</span></div>';
+    var actions = $('mcmResultActions');
+    if (actions) actions.hidden = true;
+  }
+
   function setResultVideo(result) {
     var surface = $('mcmResultSurface');
     if (!surface || !result) return Promise.resolve();
@@ -2139,7 +2148,10 @@
       state.lastBaseResult = baseResult;
       progress('merge', 'done', '第 ' + runIndex + '/' + totalRuns + ' 条基础成片完成，共 ' + formatSeconds(baseResult.duration));
       progress('music', 'done', music ? ('已添加 ' + music.music_name) : (audioClip ? '已使用标记视频主音轨' : '本次未添加音乐'));
-      return setResultVideo(baseResult).then(function() {
+      // 套模板时先不把基础成片（用户素材）放到右侧预览，等最终成片出来再显示
+      var revealBase = options.useTemplate ? Promise.resolve() : setResultVideo(baseResult);
+      if (options.useTemplate) setResultPlaceholder('正在套用模板，成片完成后在这里显示');
+      return revealBase.then(function() {
         if (!options.useTemplate) {
           progress('template', 'done', '本次未套用模板');
           return baseResult;
