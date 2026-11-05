@@ -946,6 +946,7 @@ class AiTrimBody(BaseModel):
     video_url: str = ""
     target_seconds: float = 0
     mode: str = "smart"
+    auto_color: bool = True
 
 
 def _ai_set_status(job_id: str, **fields: Any) -> None:
@@ -1018,7 +1019,7 @@ def _keep_ranges(duration: float, silences: List[tuple[float, float]], target: f
     return kept or merged
 
 
-def _render_ai_trim(ffmpeg: str, src: Path, ranges: List[tuple[float, float]], out: Path, has_audio: bool) -> None:
+def _render_ai_trim(ffmpeg: str, src: Path, ranges: List[tuple[float, float]], out: Path, has_audio: bool, extra_filter: str = "") -> None:
     parts_v: List[str] = []
     parts_a: List[str] = []
     for i, (start, end) in enumerate(ranges):
@@ -1028,6 +1029,8 @@ def _render_ai_trim(ffmpeg: str, src: Path, ranges: List[tuple[float, float]], o
     concat_inputs = "".join(f"[v{i}][a{i}]" if has_audio else f"[v{i}]" for i in range(len(ranges)))
     graph = ";".join(parts_v + parts_a)
     graph += f";{concat_inputs}concat=n={len(ranges)}:v=1:a={1 if has_audio else 0}[vout]" + ("[aout]" if has_audio else "")
+    if extra_filter:
+        graph = graph.replace("[vout]", "[vpre]") + f";[vpre]{extra_filter}[vout]"
     args = [ffmpeg, "-y", "-hide_banner", "-nostdin", "-i", str(src), "-filter_complex", graph, "-map", "[vout]"]
     if has_audio:
         args += ["-map", "[aout]", "-c:a", "aac", "-b:a", "128k"]
@@ -1085,6 +1088,31 @@ def _pick_sentences(scored: List[Dict[str, Any]], target: float) -> List[Dict[st
     return kept
 
 
+def _auto_color_filter(ffmpeg: str, path: Path) -> str:
+    """按平均亮度/对比度/饱和度生成温和调色；已经够亮够艳就不动。"""
+    proc = subprocess.run(
+        [ffmpeg, "-hide_banner", "-nostdin", "-i", str(path), "-vf",
+         "select='not(mod(n,45))',signalstats,metadata=print:file=-", "-frames:v", "12", "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    text = (proc.stdout or "") + (proc.stderr or "")
+    yavg = [float(x) for x in re.findall(r"lavfi\.signalstats\.YAVG=([0-9.]+)", text)]
+    yhigh = [float(x) for x in re.findall(r"lavfi\.signalstats\.YHIGH=([0-9.]+)", text)]
+    ylow = [float(x) for x in re.findall(r"lavfi\.signalstats\.YLOW=([0-9.]+)", text)]
+    sat = [float(x) for x in re.findall(r"lavfi\.signalstats\.SATAVG=([0-9.]+)", text)]
+    if not yavg:
+        return ""
+    mean_y = sum(yavg) / len(yavg)
+    brightness = min(0.08, (90 - mean_y) / 255.0 * 0.9) if mean_y < 90 else 0.0
+    spread = (sum(yhigh) / len(yhigh) - sum(ylow) / len(ylow)) if (yhigh and ylow) else 128.0
+    contrast = min(1.12, 1.0 + (110 - spread) / 255.0) if spread < 110 else 1.0
+    mean_sat = (sum(sat) / len(sat)) if sat else 60.0
+    saturation = min(1.12, 1.0 + (55 - mean_sat) / 120.0) if mean_sat < 55 else 1.0
+    if abs(brightness) < 0.005 and abs(contrast - 1.0) < 0.005 and abs(saturation - 1.0) < 0.005:
+        return ""
+    return "eq=brightness=%.3f:contrast=%.3f:saturation=%.3f,unsharp=5:5:0.6" % (brightness, contrast, saturation)
+
+
 def _visual_ranges(ffmpeg: str, path: Path, duration: float) -> List[tuple[float, float]]:
     """没有有效语音时按画面判断：去掉黑场和冻结画面。"""
     proc = subprocess.run(
@@ -1127,7 +1155,7 @@ def _merge_ranges(items: List[Dict[str, Any]], gap: float = 0.35) -> List[tuple[
     return ranges
 
 
-def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: str = 'fast', auth_headers: Optional[Dict[str, str]] = None) -> None:
+def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: str = 'fast', auth_headers: Optional[Dict[str, str]] = None, auto_color: bool = True) -> None:
     try:
         _ai_set_status(job_id, status="running", progress=5, message="正在分析音频")
         ffmpeg = find_ffmpeg()
@@ -1176,7 +1204,8 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: 
                 if str(mode or "") == "visual" or len(sentences) < 3:
                     _ai_set_status(job_id, progress=58, message="没有有效语音，改用画面检测")
                     ranges = _visual_ranges(ffmpeg, path, duration)
-                    _render_ai_trim(ffmpeg, path, ranges, out, has_audio)
+                    color_filter = _auto_color_filter(ffmpeg, path) if auto_color else ""
+                    _render_ai_trim(ffmpeg, path, ranges, out, has_audio, color_filter)
                     ae = None
                 else:
                     try:
@@ -1283,7 +1312,7 @@ def start_ai_trim(body: AiTrimBody, request: Request, user: _ServerUser = Depend
     _ai_set_status(job_id, status="queued", progress=0, message="排队中", created_at=time.time())
     auth = request.headers.get("authorization") or ""
     headers = {"Authorization": auth} if auth else None
-    threading.Thread(target=_ai_trim_worker, args=(job_id, int(user.id), path, float(body.target_seconds or 0), str(body.mode or "smart"), headers), daemon=True).start()
+    threading.Thread(target=_ai_trim_worker, args=(job_id, int(user.id), path, float(body.target_seconds or 0), str(body.mode or "smart"), headers, bool(body.auto_color)), daemon=True).start()
     return {"job_id": job_id}
 
 
