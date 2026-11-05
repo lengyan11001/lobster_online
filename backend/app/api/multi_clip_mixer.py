@@ -1336,7 +1336,7 @@ def start_ai_trim(body: AiTrimBody, request: Request, user: _ServerUser = Depend
         raise HTTPException(status_code=400, detail="只能优化视频素材")
     job_id = uuid.uuid4().hex[:16]
     _AI_TRIM_DIR.mkdir(parents=True, exist_ok=True)
-    _ai_set_status(job_id, status="queued", progress=0, message="排队中", created_at=time.time())
+    _ai_set_status(job_id, status="queued", progress=0, message="排队中", created_at=time.time(), source_asset_id=str(body.asset_id or ""))
     auth = request.headers.get("authorization") or ""
     headers = {"Authorization": auth} if auth else None
     threading.Thread(target=_ai_trim_worker, args=(job_id, int(user.id), path, float(body.target_seconds or 0), str(body.mode or "smart"), headers, bool(body.auto_color), str(body.color_style or "")), daemon=True).start()

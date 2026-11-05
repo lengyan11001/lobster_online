@@ -1057,13 +1057,16 @@
   function openAiTrimPreview(result, index) {
     state.aiTrim = { index: index, result: result };
     var video = $('mcmAiTrimVideo');
-    if (video) {
+    if (video && video.parentNode) {
+      var fresh = document.createElement('video');
+      fresh.id = 'mcmAiTrimVideo';
+      fresh.controls = true;
+      fresh.playsInline = true;
+      fresh.preload = 'auto';
       var base = resolveUrl(result.preview_url || '', apiBase());
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
-      video.src = base + (base.indexOf('?') >= 0 ? '&' : '?') + 'v=' + Date.now();
-      video.load();
+      fresh.src = base + (base.indexOf('?') >= 0 ? '&' : '?') + 'v=' + Date.now();
+      video.parentNode.replaceChild(fresh, video);
+      fresh.load();
     }
     var modal = $('mcmAiTrimModal');
     if (modal) {
@@ -1081,7 +1084,7 @@
     if (!ctx) return;
     var clip = state.clips[ctx.index];
     if (!clip) return;
-    clip.originalAssetId = clip.originalAssetId || clip.assetId;
+    clip.originalAssetId = String(ctx.result.source_asset_id || '') || clip.originalAssetId || clip.assetId;
     clip.assetId = String(ctx.result.asset_id || clip.assetId);
     clip.name = (clip.name || '视频') + '（AI优化）';
     clip.previewUrl = resolveUrl(ctx.result.preview_url || '', apiBase());
