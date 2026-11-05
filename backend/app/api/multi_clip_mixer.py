@@ -1077,6 +1077,37 @@ def _pick_sentences(scored: List[Dict[str, Any]], target: float) -> List[Dict[st
     return kept
 
 
+def _visual_ranges(ffmpeg: str, path: Path, duration: float) -> List[tuple[float, float]]:
+    """没有有效语音时按画面判断：去掉黑场和冻结画面。"""
+    proc = subprocess.run(
+        [ffmpeg, "-hide_banner", "-nostdin", "-i", str(path),
+         "-vf", "blackdetect=d=0.3:pix_th=0.10,freezedetect=n=0.003:d=0.8", "-f", "null", "-"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    text = (proc.stderr or "") + (proc.stdout or "")
+    bad: List[tuple[float, float]] = []
+    for a, b in re.findall(r"black_start:([0-9.]+)\s+black_end:([0-9.]+)", text):
+        bad.append((float(a), float(b)))
+    for a, b in re.findall(r"freeze_start:\s*([0-9.]+)\s+freeze_end:\s*([0-9.]+)", text):
+        bad.append((float(a), float(b)))
+    ranges: List[tuple[float, float]] = []
+    cursor = 0.0
+    for start, end in sorted(bad):
+        if start > cursor:
+            ranges.append((cursor, start))
+        cursor = max(cursor, end)
+    if cursor < duration:
+        ranges.append((cursor, duration))
+    merged = [(max(0.0, a - 0.1), min(duration, b + 0.1)) for a, b in ranges if b - a >= 0.4]
+    out: List[tuple[float, float]] = []
+    for start, end in merged:
+        if out and start - out[-1][1] < 0.05:
+            out[-1] = (out[-1][0], max(out[-1][1], end))
+        else:
+            out.append((start, end))
+    return out or [(0.0, duration)]
+
+
 def _merge_ranges(items: List[Dict[str, Any]], gap: float = 0.35) -> List[tuple[float, float]]:
     ranges: List[tuple[float, float]] = []
     for item in items:
@@ -1134,21 +1165,27 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: 
                     for cap in caps
                 ]
                 kept: List[Dict[str, Any]] = []
-                try:
-                    sel = _call_server(
-                        "/api/cutcli/ai-trim/select",
-                        {"sentences": sentences, "target_seconds": float(target or 0)},
-                        auth_headers,
-                        timeout=180.0,
-                    )
-                    ids = sel.get("keep") if isinstance(sel.get("keep"), list) else []
-                    kept = [sentences[i] for i in ids if isinstance(i, int) and 0 <= i < len(sentences)]
-                    logger.info("[multi-clip][ai-trim] llm kept %s/%s reason=%s", len(kept), len(sentences), sel.get("reason"))
-                except Exception as exc:
-                    logger.warning("[multi-clip][ai-trim] llm select failed, fallback to rules: %s", exc)
-                if not kept:
-                    scored = _score_sentences(caps)
-                    kept = _pick_sentences(scored, float(target or 0))
+                if len(sentences) < 3:
+                    _ai_set_status(job_id, progress=58, message="没有有效语音，改用画面检测")
+                    ranges = _visual_ranges(ffmpeg, path, duration)
+                    _render_ai_trim(ffmpeg, path, ranges, out, has_audio)
+                    ae = None
+                else:
+                    try:
+                        sel = _call_server(
+                            "/api/cutcli/ai-trim/select",
+                            {"sentences": sentences},
+                            auth_headers,
+                            timeout=180.0,
+                        )
+                        ids = sel.get("keep") if isinstance(sel.get("keep"), list) else []
+                        kept = [sentences[i] for i in ids if isinstance(i, int) and 0 <= i < len(sentences)]
+                        logger.info("[multi-clip][ai-trim] llm kept %s/%s reason=%s", len(kept), len(sentences), sel.get("reason"))
+                    except Exception as exc:
+                        logger.warning("[multi-clip][ai-trim] llm select failed, fallback to rules: %s", exc)
+                    if not kept:
+                        scored = _score_sentences(caps)
+                        kept = _pick_sentences(scored, 0)
                 if kept:
                     ranges = _merge_ranges(kept)
                     _ai_set_status(job_id, progress=65, message=f"保留 {len(kept)} 句，正在裁剪")
