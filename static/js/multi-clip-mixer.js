@@ -1057,7 +1057,8 @@
     if (video) video.src = resolveUrl(result.preview_url || '', apiBase());
     var modal = $('mcmAiTrimModal');
     if (modal) modal.hidden = false;
-    aiTrimStatus('优化完成：' + formatSeconds(result.duration || 0));
+    var styleLabel = { fresh: '清新明亮', soft: '柔和', cinema: '电影感', mono: '黑白', auto: '自动调色' }[result.color_style || ''] || '不调色';
+    aiTrimStatus('优化完成：' + formatSeconds(result.duration || 0) + ' · 调色：' + styleLabel);
   }
 
   function applyAiTrim() {

@@ -221,9 +221,9 @@ window.registerLobsterView('alibaba-inquiries', {
   });
 
   window.registerLobsterView('multi-clip-mixer', {
-    html: '/static/views/multi-clip-mixer.html?v=20261105-aitrim-v18',
-    css: '/static/css/multi-clip-mixer.css?v=20261105-aitrim-v18',
-    scripts: '/static/js/multi-clip-mixer.js?v=20261105-aitrim-v18',
+    html: '/static/views/multi-clip-mixer.html?v=20261105-aitrim-v19',
+    css: '/static/css/multi-clip-mixer.css?v=20261105-aitrim-v19',
+    scripts: '/static/js/multi-clip-mixer.js?v=20261105-aitrim-v19',
     init: 'initMultiClipMixerView',
     cache: 'reload'
   });

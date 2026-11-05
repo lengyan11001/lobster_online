@@ -1216,10 +1216,11 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: 
                     style = str(color_style or "").strip().lower()
                     if style in _COLOR_PRESETS:
                         color_filter = _COLOR_PRESETS[style]
-                    elif style == "auto" or (not style and auto_color):
+                    elif style == "auto":
                         color_filter = _auto_color_filter(ffmpeg, path)
                     else:
                         color_filter = ""
+                    _ai_set_status(job_id, color_style=style, color_filter=color_filter)
                     _render_ai_trim(ffmpeg, path, ranges, out, has_audio, color_filter)
                     ae = None
                 else:
