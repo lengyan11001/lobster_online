@@ -2269,6 +2269,57 @@ def _fit_product_text(raw_size: int, text: str, base_units: float, min_size: int
     return max(int(min_size), int(raw_size))
 
 
+def _hex_to_ass_rgb(value: Any, default: str = "&H00FFFFFF") -> str:
+    text = str(value or "").strip()
+    if len(text) == 7 and text[0] == "#":
+        try:
+            r = int(text[1:3], 16)
+            g = int(text[3:5], 16)
+            b = int(text[5:7], 16)
+            return "&H%02X%02X%02X" % (b, g, r)
+        except Exception:
+            return default
+    return default
+
+
+def _ass_round_rect(width: int, height: int, radius: int) -> str:
+    radius = max(0, min(int(radius), width // 2, height // 2))
+    if radius <= 1:
+        return "m 0 0 l %d 0 l %d %d l 0 %d" % (width, width, height, height)
+    parts = ["m %d 0" % radius, "l %d 0" % (width - radius)]
+    corners = (
+        (width - radius, radius, -90, 0),
+        (width - radius, height - radius, 0, 90),
+        (radius, height - radius, 90, 180),
+        (radius, radius, 180, 270),
+    )
+    for cx, cy, a0, a1 in corners:
+        steps = 6
+        for i in range(1, steps + 1):
+            angle = math.radians(a0 + (a1 - a0) * i / steps)
+            parts.append("l %d %d" % (round(cx + radius * math.cos(angle)), round(cy + radius * math.sin(angle))))
+    return " ".join(parts)
+
+
+def _designer_track_box(track: Dict[str, Any], text: str, width: int) -> Tuple[int, int, int]:
+    font_size = max(10.0, float(track.get("font_size") or 60) * width / 1280.0)
+    scale_x = max(0.1, float(track.get("scale_x") or 100) / 100.0)
+    rows = str(text or "").split("\n") or [""]
+
+    def _char_width(ch: str) -> float:
+        return 1.0 if ord(ch) > 0x2E80 else 0.55
+
+    text_width = max(sum(_char_width(ch) for ch in row) for row in rows) * font_size * scale_x
+    line_height = font_size * 1.12
+    pad_x = font_size * 0.34
+    pad_y = font_size * 0.26
+    return (
+        int(round(text_width + pad_x * 2)),
+        int(round(line_height * len(rows) + pad_y * 2)),
+        max(0, int(round(float(track.get("bg_radius") or 0) * font_size))),
+    )
+
+
 def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], width: int, height: int, duration_sec: float) -> List[str]:
     overlay_style = style.get("overlay_style") if isinstance(style.get("overlay_style"), dict) else {}
     layout = str(overlay_style.get("layout") or "").strip()
@@ -2497,9 +2548,26 @@ def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], wid
             y = int(height * float(tr.get("y") or 0.5))
             family = str(tr.get("font_family") or "Microsoft YaHei")
             color = str(tr.get("color") or "&H00FFFFFF")
+            start_ts = _ass_time(start_sec)
+            end_ts = _ass_time(end_sec)
+            if int(float(tr.get("bg_style") or 0)) and str(tr.get("bg_color") or "").strip():
+                box_w, box_h, box_radius = _designer_track_box(tr, text, width)
+                box_x = int(round(x - box_w / 2.0))
+                box_y = int(round(y - box_h / 2.0))
+                bg_alpha = 1.0 - max(0.0, min(1.0, float(tr.get("bg_alpha") or 1.0)))
+                lines.append(
+                    "Dialogue: 6,%s,%s,OverlayBox,,0,0,0,,{\\an7\\pos(%d,%d)\\p1\\bord0\\shad0\\1c%s\\1a&H%02X&}%s{\\p0}"
+                    % (start_ts, end_ts, box_x, box_y, _hex_to_ass_rgb(tr.get("bg_color")), int(round(bg_alpha * 255)),
+                       _ass_round_rect(box_w, box_h, box_radius))
+                )
+            shadow_distance = max(0.0, float(tr.get("shadow_distance") or 0.0)) * width / 1280.0
+            shadow_px = int(round(shadow_distance)) if shadow_distance else 2
+            shadow_alpha = 1.0 - max(0.0, min(1.0, float(tr.get("shadow_alpha") or 0.6)))
             lines.append(
-                "Dialogue: 7,%s,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fn%s\\fs%d\\fscx%d\\fscy%d\\q2\\c%s\\bord0\\shad2}%s"
-                % (_ass_time(start_sec), _ass_time(end_sec), x, y, family, fs, fscx, fscy, color, _ass_text_with_newline(text))
+                "Dialogue: 7,%s,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fn%s\\fs%d\\fscx%d\\fscy%d\\q2\\c%s\\bord0\\shad%d\\4c%s\\4a&H%02X&}%s"
+                % (start_ts, end_ts, x, y, family, fs, fscx, fscy, color, shadow_px,
+                   _hex_to_ass_rgb(tr.get("shadow_color"), "&H00000000"), int(round(shadow_alpha * 255)),
+                   _ass_text_with_newline(text))
             )
         return lines
 
