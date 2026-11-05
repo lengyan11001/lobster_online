@@ -1124,9 +1124,31 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: 
                     "return_captions": True,
                 }, auth_headers, timeout=1200.0)
                 caps = stt.get("captions") if isinstance(stt.get("captions"), list) else []
-                _ai_set_status(job_id, progress=55, message="正在挑出关键句")
-                scored = _score_sentences(caps)
-                kept = _pick_sentences(scored, float(target or 0))
+                _ai_set_status(job_id, progress=55, message="正在让模型挑出关键句")
+                sentences = [
+                    {
+                        "text": str(cap.get("text") or ""),
+                        "start": float(cap.get("start") or 0) / 1000.0,
+                        "end": float(cap.get("end") or 0) / 1000.0,
+                    }
+                    for cap in caps
+                ]
+                kept: List[Dict[str, Any]] = []
+                try:
+                    sel = _call_server(
+                        "/api/cutcli/ai-trim/select",
+                        {"sentences": sentences, "target_seconds": float(target or 0)},
+                        auth_headers,
+                        timeout=180.0,
+                    )
+                    ids = sel.get("keep") if isinstance(sel.get("keep"), list) else []
+                    kept = [sentences[i] for i in ids if isinstance(i, int) and 0 <= i < len(sentences)]
+                    logger.info("[multi-clip][ai-trim] llm kept %s/%s reason=%s", len(kept), len(sentences), sel.get("reason"))
+                except Exception as exc:
+                    logger.warning("[multi-clip][ai-trim] llm select failed, fallback to rules: %s", exc)
+                if not kept:
+                    scored = _score_sentences(caps)
+                    kept = _pick_sentences(scored, float(target or 0))
                 if kept:
                     ranges = _merge_ranges(kept)
                     _ai_set_status(job_id, progress=65, message=f"保留 {len(kept)} 句，正在裁剪")
