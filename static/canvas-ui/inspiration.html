@@ -272,8 +272,12 @@
     var cardRows = {};
     var previewCache = {};
     function snapshotUrlOf(row) {
-      var u = String((row && (row.source_url || row.sourceUrl)) || '').trim();
+      var u = String((row && (row.source_url || row.sourceUrl || row.canvas_url || row.canvasUrl)) || '').trim();
       return /^https?:\/\//i.test(u) ? u : '';
+    }
+    function relativeCanvasUrlOf(row) {
+      var u = String((row && (row.canvas_url || row.canvasUrl)) || '').trim();
+      return u.charAt(0) === '/' ? u : '';
     }
     function videoFromSnapshot(data) {
       var found = '';
@@ -321,12 +325,20 @@
       if (cached) return Promise.resolve(cached);
       previewCache[uuid] = { url: '' };
       var direct = snapshotUrlOf(row);
-      var step = direct
-        ? fetchSnapshot(direct)
-        : fetchProjectDetail(uuid).then(function (d) {
-            var src = d && (d.source_url || (d.project && d.project.source_url));
-            return src ? fetchSnapshot(src) : null;
-          });
+      var relative = relativeCanvasUrlOf(row);
+      var step;
+      if (direct) {
+        step = fetchSnapshot(direct);
+      } else if (relative) {
+        step = fetch(relative, { credentials: 'omit' })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (d) { return d && (d.snapshot || d.canvas) ? (d.snapshot || d.canvas) : null; });
+      } else {
+        step = fetchProjectDetail(uuid).then(function (d) {
+          var src = d && (d.source_url || (d.project && d.project.source_url));
+          return src ? fetchSnapshot(src) : null;
+        });
+      }
       return step.then(function (snap) {
         var url = snap ? videoFromSnapshot(snap) : '';
         previewCache[uuid] = { url: url };
