@@ -1147,7 +1147,10 @@ def ai_trim_video(job_id: str):
 
 # 可选增强组件 auto-editor（点击安装，不随包分发）
 _AE_DIR = Path(__file__).resolve().parents[3] / "deps" / "auto-editor"
-_AE_URL = "https://github.com/WyattBlue/auto-editor/releases/download/31.8.0/auto-editor-windows-x86_64.exe"
+_AE_URLS = (
+    "https://lobster-online-assets-2103871705.tos-cn-guangzhou.volces.com/assets/cutcli_templates/tools/auto-editor-windows-x86_64.exe",
+    "https://github.com/WyattBlue/auto-editor/releases/download/31.8.0/auto-editor-windows-x86_64.exe",
+)
 
 
 def _ae_bin() -> Optional[Path]:
@@ -1175,19 +1178,31 @@ def ai_trim_install_tools():
             _AE_DIR.mkdir(parents=True, exist_ok=True)
             target = _AE_DIR / "auto-editor.exe"
             tmp = target.with_suffix(".part")
-            with httpx.stream("GET", _AE_URL, timeout=600.0, follow_redirects=True) as resp:
-                resp.raise_for_status()
-                total = int(resp.headers.get("Content-Length") or 0)
-                done = 0
-                with open(tmp, "wb") as fh:
-                    for chunk in resp.iter_bytes(1024 * 256):
-                        fh.write(chunk)
-                        done += len(chunk)
-                        if total:
-                            _ai_set_status("tools", progress=min(95, 5 + int(done * 90 / total)),
-                                           message=f"正在下载 {done // 1048576}/{total // 1048576} MB")
-            tmp.replace(target)
-            _ai_set_status("tools", status="done", progress=100, message="增强组件已安装")
+            last_error = ""
+            for url in _AE_URLS:
+                try:
+                    with httpx.stream("GET", url, timeout=600.0, follow_redirects=True) as resp:
+                        resp.raise_for_status()
+                        total = int(resp.headers.get("Content-Length") or 0)
+                        done = 0
+                        with open(tmp, "wb") as fh:
+                            for chunk in resp.iter_bytes(1024 * 256):
+                                fh.write(chunk)
+                                done += len(chunk)
+                                if total:
+                                    _ai_set_status("tools", progress=min(95, 5 + int(done * 90 / total)),
+                                                   message=f"正在下载 {done // 1048576}/{total // 1048576} MB")
+                    if tmp.exists() and tmp.stat().st_size > 1000000:
+                        tmp.replace(target)
+                        _ai_set_status("tools", status="done", progress=100, message="增强组件已安装")
+                        return
+                except Exception as exc:
+                    last_error = str(exc)[:160]
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+            raise RuntimeError("增强组件下载失败: " + last_error)
         except Exception as exc:
             logger.warning("[multi-clip][ai-trim] install failed: %s", exc)
             _ai_set_status("tools", status="error", progress=100, message=str(exc)[:200])
