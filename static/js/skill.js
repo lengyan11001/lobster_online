@@ -3412,6 +3412,8 @@ function loadSkillStore() {
       var d = results[0] || { packages: [] };
       var isSkillAdmin = !!(d && d.is_skill_store_admin);
       var packages = (d && Array.isArray(d.packages)) ? d.packages : [];
+      // 供页面标题等复用：显示名以服务端技能包为准
+      window.__lobsterSkillPackages = packages;
       function pkgById(id) {
         return packages.filter(function(p) { return p && p.id === id; })[0] || null;
       }
@@ -4058,7 +4060,13 @@ function _openSkillEntryView(target, arg) {
     if (!target) return;
     if (t === 'url') { window.open(target, '_blank', 'noopener'); return; }
     if (_openSkillEntryView(target, el.getAttribute('data-skill-entry-arg') || '')) return;
-    try { if (typeof window.showLobsterView === 'function') { window.showLobsterView(target); return; } } catch (e) {}
+    try {
+      if (typeof window.showLobsterView === 'function') {
+        window.showLobsterView(target);
+        if (target === 'multi-clip-mixer') setTimeout(_syncMultiClipMixerTitle, 60);
+        return;
+      }
+    } catch (e) {}
     var root = document.getElementById('content-' + target);
     if (root) { document.querySelectorAll('.content-block').forEach(function (b) { b.style.display = 'none'; }); root.style.display = ''; root.classList.add('active'); }
   }, true);
@@ -4082,6 +4090,16 @@ function _bindDigitalHumanKouboCardEntry() {
   });
 }
 
+function _syncMultiClipMixerTitle() {
+  var list = window.__lobsterSkillPackages || [];
+  var pkg = list.filter(function(p) { return p && p.id === 'multi_clip_mixer_skill'; })[0] || null;
+  var name = pkg && pkg.name ? String(pkg.name).trim() : '';
+  if (!name) return;
+  var view = document.getElementById('content-multi-clip-mixer');
+  var heading = view && view.querySelector('.mcm-header h2');
+  if (heading) heading.textContent = name;
+}
+
 function _bindMultiClipMixerCardEntry() {
   document.querySelectorAll('.multi-clip-mixer-card, .multi-clip-mixer-entry-btn').forEach(function(element) {
     if (element.dataset.multiClipMixerBound === '1') return;
@@ -4090,7 +4108,7 @@ function _bindMultiClipMixerCardEntry() {
       event.preventDefault();
       event.stopPropagation();
       if (typeof window.showLobsterView === 'function') {
-        window.showLobsterView('multi-clip-mixer').catch(function(error) {
+        window.showLobsterView('multi-clip-mixer').then(_syncMultiClipMixerTitle).catch(function(error) {
           console.error('Failed to open multi clip mixer:', error);
         });
       }
