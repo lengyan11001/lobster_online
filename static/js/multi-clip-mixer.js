@@ -584,6 +584,21 @@
     if ($('mcmHistoryNextBtn')) $('mcmHistoryNextBtn').disabled = state.historyPage >= pageCount - 1;
   }
 
+  function restoreLatestResult() {
+    var surface = $('mcmResultSurface');
+    if (!surface || surface.querySelector('video')) return;
+    for (var i = 0; i < state.history.length; i += 1) {
+      var batch = state.history[i] || {};
+      var results = Array.isArray(batch.results) ? batch.results : [];
+      for (var j = results.length - 1; j >= 0; j -= 1) {
+        var result = results[j];
+        if (!result || !resultVideoUrl(result)) continue;
+        setResultVideo(result).catch(function() {});
+        return;
+      }
+    }
+  }
+
   function rememberPendingTemplateTask(taskId, baseResult) {
     var pending = {
       taskId: String(taskId || ''),
@@ -2848,6 +2863,7 @@
     renderClips();
     renderBatchResults();
     renderHistory();
+    restoreLatestResult();
     resetProgress();
     resumePendingTemplateTask();
   };
