@@ -37,7 +37,7 @@ class ClipSegment(BaseModel):
 
 class MultiClipRenderBody(BaseModel):
     clips: List[ClipSegment] = Field(..., min_length=1, max_length=20)
-    title: str = Field("多段视频混剪", max_length=80)
+    title: str = Field("剪辑大师", max_length=80)
     keep_original_audio: bool = True
     audio_asset_id: Optional[str] = Field(default=None, max_length=64)
     target_duration: Optional[float] = Field(default=None, ge=0.1, le=3600)
@@ -85,7 +85,7 @@ async def _charge_multi_clip_output(
         "feature": "multi_clip_mixer",
         "credits": MULTI_CLIP_OUTPUT_CREDITS,
         "ref_id": ref_id,
-        "description": ("多段混剪成片：" + str(title or ""))[:180],
+        "description": ("剪辑大师成片：" + str(title or ""))[:180],
     }
     try:
         async with httpx.AsyncClient(timeout=15.0, trust_env=False) as client:
@@ -744,7 +744,7 @@ class MultiClipConcatBody(BaseModel):
     asset_ids: List[str] = Field(..., min_length=1, max_length=20)
     output_ratio: str = Field("", max_length=16)
     fill_mode: str = Field("", max_length=16)
-    title: str = Field("多段视频混剪", max_length=80)
+    title: str = Field("剪辑大师", max_length=80)
     # 每段期望时长（与 asset_ids 对齐，可空）。给了就按它裁，防止模板把片段补齐变长
     clip_lengths: List[float] = Field(default_factory=list, max_length=20)
 
@@ -812,7 +812,7 @@ async def concat_multi_clip_videos(
         model="local:ffmpeg-multi-clip-concat",
         tags="multi_clip_mixer,video",
         meta={
-            "title": (body.title or "多段视频混剪").strip()[:80],
+            "title": (body.title or "剪辑大师").strip()[:80],
             "segments": rendered["segments"],
             "concat_of": list(body.asset_ids),
             "output_ratio": body.output_ratio,
@@ -830,7 +830,7 @@ async def concat_multi_clip_videos(
         request,
         current_user,
         ref_id=f"mcm:{asset_id}",
-        title=body.title or "多段视频混剪",
+        title=body.title or "剪辑大师",
     )
     return {
         "ok": True,
@@ -890,7 +890,7 @@ async def render_multi_clip_video(
         model="local:ffmpeg-multi-clip",
         tags="multi_clip_mixer,video",
         meta={
-            "title": (body.title or "多段视频混剪").strip()[:80],
+            "title": (body.title or "剪辑大师").strip()[:80],
             "segments": rendered["segments"],
             "keep_original_audio": body.keep_original_audio,
             "audio_source_asset_id": rendered.get("audio_source_asset_id") or "",
@@ -916,7 +916,7 @@ async def render_multi_clip_video(
             request,
             current_user,
             ref_id=f"mcm:{asset_id}",
-            title=body.title or "多段视频混剪",
+            title=body.title or "剪辑大师",
         )
     return {
         "ok": True,

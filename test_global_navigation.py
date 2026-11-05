@@ -57,7 +57,7 @@ def test_global_navigation_matches_workbench_layout():
         "公众号文章",
     ]
     assert [marketing_nav.index(label) for label in expected_marketing_labels] == sorted(marketing_nav.index(label) for label in expected_marketing_labels)
-    for hidden_label in ("创意视频", "爆款TVC", "爆款复刻", "多段视频混剪", "PPT制作", "电商详情页"):
+    for hidden_label in ("创意视频", "爆款TVC", "爆款复刻", "剪辑大师", "PPT制作", "电商详情页"):
         assert hidden_label not in marketing_nav
 
 

@@ -1,7 +1,7 @@
 {
   "packages": {
     "multi_clip_mixer_skill": {
-      "name": "多段视频混剪",
+      "name": "剪辑大师",
       "description": "上传多个视频，逐个选择使用片段并按顺序拼接；可选同城爆款音乐和剪辑模板。",
       "type": "builtin",
       "store_visibility": "online",

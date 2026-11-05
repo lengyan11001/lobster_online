@@ -358,7 +358,7 @@
       id: String(raw.id || makeHistoryId('batch')),
       created_at: Number(raw.created_at || Date.now()),
       completed_at: Number(raw.completed_at || 0),
-      title: String(raw.title || '多段视频混剪'),
+      title: String(raw.title || '剪辑大师'),
       clip_mode: raw.clip_mode === 'random' ? 'random' : 'fixed',
       total_runs: Math.max(1, Number(raw.total_runs || results.length || 1)),
       clip_count: Math.max(0, Number(raw.clip_count || 0)),
@@ -407,7 +407,7 @@
       id: makeHistoryId('batch'),
       created_at: Date.now(),
       completed_at: 0,
-      title: String(title || templateTitleValue() || '多段视频混剪'),
+      title: String(title || templateTitleValue() || '剪辑大师'),
       clip_mode: currentClipMode(),
       total_runs: Math.max(1, Number(totalRuns || 1)),
       clip_count: state.clips.length,
@@ -496,7 +496,7 @@
   }
 
   function batchLabel(batch) {
-    var parts = [String(batch.title || '多段视频混剪')];
+    var parts = [String(batch.title || '剪辑大师')];
     if (batch.clip_mode === 'random') parts.push('随机');
     if (batch.template_name) parts.push(batch.template_name);
     return parts.join(' · ');
@@ -2026,7 +2026,7 @@
       if (!Number.isFinite(targetSeconds) || targetSeconds < 0) targetSeconds = 0;
     }
     return post('/api/multi-clip-mixer/render', {
-      title: templateTitleValue() || (totalRuns > 1 ? ('多段视频混剪 ' + runIndex) : '多段视频混剪'),
+      title: templateTitleValue() || (totalRuns > 1 ? ('剪辑大师 ' + runIndex) : '剪辑大师'),
       clips: buildClipPlan(runIndex),
       // 套本地字幕模板时保留原声，闪剪不需要
       keep_original_audio: !!(options.useTemplate && currentTemplateProvider() === 'local'),
@@ -2146,7 +2146,7 @@
         clip_lengths: clipLengths,
         output_ratio: currentOutputRatio(),
         fill_mode: currentFillMode(),
-        title: templateTitleValue() || '多段视频混剪'
+        title: templateTitleValue() || '剪辑大师'
       });
     }).then(function(final) {
       return setResultVideo(final).then(function() {
@@ -2327,7 +2327,7 @@
     state.lastBaseResult = pending.baseResult;
     state.batchResults = [];
     state.batchSelection = {};
-    startHistoryBatch({ useTemplate: true, useMusic: false }, 1, '恢复的多段视频混剪');
+    startHistoryBatch({ useTemplate: true, useMusic: false }, 1, '恢复的剪辑大师');
     renderBatchResults();
     resetProgress();
     progress('merge', 'done', '基础混剪成片已完成，共 ' + formatSeconds(pending.baseResult.duration));
@@ -2367,7 +2367,7 @@
     if (!state.lastBaseResult) return;
     state.batchResults = [];
     state.batchSelection = {};
-    startHistoryBatch({ useTemplate: true, useMusic: false }, 1, '多段视频混剪模板重试');
+    startHistoryBatch({ useTemplate: true, useMusic: false }, 1, '剪辑大师模板重试');
     renderBatchResults();
     setBusy(true, '正在重试模板定制...');
     showMessage('', false);

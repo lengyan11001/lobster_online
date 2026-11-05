@@ -2200,7 +2200,7 @@ function _renderAlibabaInquiriesCard(pkg, showDebug) {
 function _renderMultiClipMixerCard() {
   return '<div class="skill-store-card multi-clip-mixer-card" data-skill-package-id="multi_clip_mixer_skill" style="cursor:pointer;border-color:rgba(229,72,77,0.3);background:#fff;">' +
     '<div class="card-label">视频创作 <span class="badge-installed">本机处理</span></div>' +
-    '<div class="card-value">多段视频混剪</div>' +
+    '<div class="card-value">剪辑大师</div>' +
     '<div class="card-desc">逐个选择视频片段，按顺序拼接成片；可选同城爆款音乐和剪辑模板。</div>' +
     '<div class="card-tags"><span class="tag">多视频</span><span class="tag">选段</span><span class="tag">配乐</span><span class="tag">模板</span></div>' +
     '<div class="card-actions"><button type="button" class="btn btn-primary btn-sm multi-clip-mixer-entry-btn">进入工作台</button></div>' +
@@ -2994,7 +2994,7 @@ var _SKILL_STORE_SIMPLE_COPY_BY_ID = {
   'seedance_tvc_studio': { title: '创意分镜头视频', desc: '生成分镜视频' },
   'viral_video_remix_skill': { title: '爆款视频复刻', desc: '复刻视频风格' },
   'shanjian_smart_clip': { title: '智能剪辑', desc: '数字人口播混剪' },
-  'multi_clip_mixer_skill': { title: '多段视频混剪', desc: '选段、拼接、配乐和模板成片' },
+  'multi_clip_mixer_skill': { title: '剪辑大师', desc: '选段、拼接、配乐和模板成片' },
   'comfly_ecommerce_detail_skill': { title: '电商详情页', desc: '生成商品套图' },
   'hifly_digital_human_skill': { title: '数字人口播', desc: '生成数字人口播' },
   'personal_whatsapp_assistant': { title: '个人whatapp助手', desc: '管理本机 WhatsApp 接管' },
@@ -3048,7 +3048,7 @@ var _SKILL_STORE_SIMPLE_COPY_PATTERNS = [
   [/创意分镜|seedance|分镜头/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.seedance_tvc_studio],
   [/爆款视频复刻|复刻/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.viral_video_remix_skill],
   [/智能剪辑|山涧/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.shanjian_smart_clip],
-  [/多段视频混剪|片段拼接/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.multi_clip_mixer_skill],
+  [/剪辑大师|片段拼接/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.multi_clip_mixer_skill],
   [/电商上架|电商详情|上架套图|详情图|SKU/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.comfly_ecommerce_detail_skill],
   [/必火数字人|数字人口播|hifly/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.hifly_digital_human_skill],
   [/微信助手|openclaw.*微信|weixin/i, _SKILL_STORE_SIMPLE_COPY_BY_ID.openclaw_weixin_channel],

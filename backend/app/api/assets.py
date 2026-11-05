@@ -3144,7 +3144,7 @@ async def save_asset_from_url(
         row = await _save_asset_from_url_locked(
             dk, body, request, current_user, effective_url_resolved=effective_for_dedupe
         )
-    # 多段混剪的最终成片走 save-url 入库时，在这里按条计费（100 积分/条）
+    # 剪辑大师的最终成片走 save-url 入库时，在这里按条计费（100 积分/条）
     if "billing:multi_clip_mixer" in (body.tags or ""):
         try:
             from .multi_clip_mixer import _charge_multi_clip_output
@@ -3155,10 +3155,10 @@ async def save_asset_from_url(
                     request,
                     current_user,
                     ref_id=f"mcm:{aid}",
-                    title=body.name or "多段混剪成片",
+                    title=body.name or "剪辑大师成片",
                 )
         except Exception:
-            logger.warning("[素材] 多段混剪计费失败 asset=%s", (row or {}).get("asset_id"), exc_info=True)
+            logger.warning("[素材] 剪辑大师计费失败 asset=%s", (row or {}).get("asset_id"), exc_info=True)
     return row
 
 

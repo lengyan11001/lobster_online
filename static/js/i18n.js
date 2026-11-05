@@ -292,7 +292,7 @@
     '一键生成爆款视频': 'Generate viral videos in one click', '创意分镜头视频': 'Creative Storyboard Video',
     '生成分镜视频': 'Generate storyboard videos', '模板定制': 'Template Studio', '爆款视频复刻': 'Viral Video Remix',
     '复刻视频风格': 'Recreate a video style', '智能剪辑': 'Smart Editing', '数字人口播混剪': 'Digital human video editing',
-    '多段视频混剪': 'Multi-clip Video Mixer', '选段、拼接、配乐和模板成片': 'Select, combine, score and apply templates',
+    '剪辑大师': 'Master Editor', '选段、拼接、配乐和模板成片': 'Select, combine, score and apply templates',
     '选段、拼接、配乐和模板成片': 'Select, combine, score and apply templates', '电商详情页': 'E-commerce Detail Page',
     '生成商品套图': 'Generate product image sets', '数字人口播': 'Digital Human Narration', '生成数字人口播': 'Generate digital human narration',
     '微信助手': 'WeChat Assistant', '微信通道授权': 'Authorize the WeChat channel', '写文、配图、推草稿': 'Write, illustrate and publish drafts',
