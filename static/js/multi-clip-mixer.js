@@ -1093,6 +1093,8 @@
       var head = modal.querySelector('h3');
       var label = { fresh: '清新明亮', soft: '柔和', cinema: '电影感', mono: '黑白', auto: '自动调色' }[result.color_style || ''] || '不调色';
       if (head) head.textContent = 'AI 优化结果 · ' + label + ' · ' + String(result.asset_id || '').slice(-6);
+      var applyBtn = document.getElementById('mcmAiTrimApplyBtn');
+      if (applyBtn) applyBtn.onclick = function (ev) { if (ev) { ev.preventDefault(); ev.stopPropagation(); } applyAiTrim(); };
     }
     var styleLabel = { fresh: '清新明亮', soft: '柔和', cinema: '电影感', mono: '黑白', auto: '自动调色' }[result.color_style || ''] || '不调色';
     aiTrimStatus('优化完成：' + formatSeconds(result.duration || 0) + ' · 调色：' + styleLabel);
