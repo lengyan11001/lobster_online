@@ -947,6 +947,7 @@ class AiTrimBody(BaseModel):
     target_seconds: float = 0
     mode: str = "smart"
     auto_color: bool = True
+    color_style: str = ""
 
 
 def _ai_set_status(job_id: str, **fields: Any) -> None:
@@ -1088,6 +1089,14 @@ def _pick_sentences(scored: List[Dict[str, Any]], target: float) -> List[Dict[st
     return kept
 
 
+_COLOR_PRESETS = {
+    "fresh": "eq=brightness=0.045:contrast=1.05:saturation=1.10,unsharp=5:5:0.6",
+    "soft": "eq=brightness=0.035:contrast=0.96:saturation=1.02,gblur=sigma=0.4,unsharp=5:5:0.4",
+    "cinema": "eq=contrast=1.10:saturation=0.94:gamma=0.98,colorbalance=rs=0.03:bs=0.04:rh=0.02:bh=-0.02",
+    "mono": "hue=s=0,eq=contrast=1.06",
+}
+
+
 def _auto_color_filter(ffmpeg: str, path: Path) -> str:
     """按平均亮度/对比度/饱和度生成温和调色；已经够亮够艳就不动。"""
     proc = subprocess.run(
@@ -1155,7 +1164,7 @@ def _merge_ranges(items: List[Dict[str, Any]], gap: float = 0.35) -> List[tuple[
     return ranges
 
 
-def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: str = 'fast', auth_headers: Optional[Dict[str, str]] = None, auto_color: bool = True) -> None:
+def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: str = 'fast', auth_headers: Optional[Dict[str, str]] = None, auto_color: bool = True, color_style: str = "") -> None:
     try:
         _ai_set_status(job_id, status="running", progress=5, message="正在分析音频")
         ffmpeg = find_ffmpeg()
@@ -1204,7 +1213,13 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: 
                 if str(mode or "") == "visual" or len(sentences) < 3:
                     _ai_set_status(job_id, progress=58, message="没有有效语音，改用画面检测")
                     ranges = _visual_ranges(ffmpeg, path, duration)
-                    color_filter = _auto_color_filter(ffmpeg, path) if auto_color else ""
+                    style = str(color_style or "").strip().lower()
+                    if style in _COLOR_PRESETS:
+                        color_filter = _COLOR_PRESETS[style]
+                    elif style == "auto" or (not style and auto_color):
+                        color_filter = _auto_color_filter(ffmpeg, path)
+                    else:
+                        color_filter = ""
                     _render_ai_trim(ffmpeg, path, ranges, out, has_audio, color_filter)
                     ae = None
                 else:
@@ -1312,7 +1327,7 @@ def start_ai_trim(body: AiTrimBody, request: Request, user: _ServerUser = Depend
     _ai_set_status(job_id, status="queued", progress=0, message="排队中", created_at=time.time())
     auth = request.headers.get("authorization") or ""
     headers = {"Authorization": auth} if auth else None
-    threading.Thread(target=_ai_trim_worker, args=(job_id, int(user.id), path, float(body.target_seconds or 0), str(body.mode or "smart"), headers, bool(body.auto_color)), daemon=True).start()
+    threading.Thread(target=_ai_trim_worker, args=(job_id, int(user.id), path, float(body.target_seconds or 0), str(body.mode or "smart"), headers, bool(body.auto_color), str(body.color_style or "")), daemon=True).start()
     return {"job_id": job_id}
 
 

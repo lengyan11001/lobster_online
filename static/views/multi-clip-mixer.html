@@ -227,7 +227,14 @@
       <div class="mcm-segment-ai">
         <button id="mcmAiTrimBtn" type="button" class="btn btn-ghost">AI 优化</button>
         <button id="mcmVisualTrimBtn" type="button" class="btn btn-ghost">画面优化</button>
-        <label class="mcm-check-label"><input id="mcmAutoColor" type="checkbox" checked>自动调色</label>
+        <select id="mcmColorStyle" class="btn btn-ghost" style="height:32px;">
+          <option value="">调色风格：不调色</option>
+          <option value="auto">自动（按素材）</option>
+          <option value="fresh">清新明亮</option>
+          <option value="soft">柔和</option>
+          <option value="cinema">电影感</option>
+          <option value="mono">黑白</option>
+        </select>
         <button id="mcmAiTrimInstallBtn" type="button" class="btn btn-ghost" hidden>安装增强组件</button>
         <span id="mcmAiTrimStatus" class="mcm-field-hint"></span>
       </div>
