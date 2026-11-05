@@ -1093,6 +1093,10 @@
       var head = modal.querySelector('h3');
       var label = { fresh: '清新明亮', soft: '柔和', cinema: '电影感', mono: '黑白', auto: '自动调色' }[result.color_style || ''] || '不调色';
       if (head) head.textContent = 'AI 优化结果 · ' + label + ' · ' + String(result.asset_id || '').slice(-6);
+      var inlineApply = $('mcmAiApplyInline');
+      var inlineDiscard = $('mcmAiDiscardInline');
+      if (inlineApply) { inlineApply.hidden = false; inlineApply.onclick = function () { applyAiTrim(); }; }
+      if (inlineDiscard) { inlineDiscard.hidden = false; inlineDiscard.onclick = function () { state.aiTrim = null; inlineApply.hidden = true; inlineDiscard.hidden = true; closeAiTrimModal(); }; }
       var applyBtn = document.getElementById('mcmAiTrimApplyBtn');
       if (applyBtn) applyBtn.onclick = function (ev) { if (ev) { ev.preventDefault(); ev.stopPropagation(); } applyAiTrim(); };
     }
