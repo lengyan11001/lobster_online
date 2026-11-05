@@ -1034,9 +1034,10 @@
     var ctx = state.segmentContext;
     if (!ctx) return;
     var clip = state.clips[ctx.index];
-    if (!clip || !clip.assetId) return aiTrimStatus('这个视频还没有素材 ID，先保存后再优化', true);
+    var sourceAssetId = clip && (clip.originalAssetId || clip.assetId);
+    if (!clip || !sourceAssetId) return aiTrimStatus('这个视频还没有素材 ID，先保存后再优化', true);
     aiTrimStatus('正在提交…');
-    post('/api/multi-clip-mixer/ai-trim', { asset_id: clip.assetId, mode: state.aiTrimMode || 'smart', color_style: String((($('mcmColorStyle') || {}).value) || '') }).then(function (d) {
+    post('/api/multi-clip-mixer/ai-trim', { asset_id: sourceAssetId, mode: state.aiTrimMode || 'smart', color_style: String((($('mcmColorStyle') || {}).value) || '') }).then(function (d) {
       if (!d || !d.job_id) throw new Error('提交失败');
       pollAiTrim(d.job_id, ctx.index);
     }).catch(function (e) { aiTrimStatus(e.message || '提交失败', true); });
@@ -1066,6 +1067,7 @@
     if (!ctx) return;
     var clip = state.clips[ctx.index];
     if (!clip) return;
+    clip.originalAssetId = clip.originalAssetId || clip.assetId;
     clip.assetId = String(ctx.result.asset_id || clip.assetId);
     clip.name = (clip.name || '视频') + '（AI优化）';
     clip.previewUrl = resolveUrl(ctx.result.preview_url || '', apiBase());
