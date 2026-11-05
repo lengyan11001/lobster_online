@@ -1174,13 +1174,24 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: 
         has_audio = bool(info.get("has_audio"))
         if duration <= 0:
             raise RuntimeError("素材时长读取失败")
-        if not has_audio:
+        if str(mode or "") == "visual":
+            job_dir = _AI_TRIM_DIR / job_id
+            job_dir.mkdir(parents=True, exist_ok=True)
+            out = job_dir / "output.mp4"
+            _ai_set_status(job_id, progress=40, message="正在检测画面并分析色调")
+            ranges = _visual_ranges(ffmpeg, path, duration)
+            style = str(color_style or "").strip().lower()
+            color_filter = _COLOR_PRESETS.get(style, "")
+            if style == "auto":
+                color_filter = _auto_color_filter(ffmpeg, path)
+            _ai_set_status(job_id, color_style=style, color_filter=color_filter)
+            _render_ai_trim(ffmpeg, path, ranges, out, has_audio, color_filter)
+            ae = "visual"
+        if not has_audio and str(mode or "") != "visual":
             raise RuntimeError("素材没有音轨，无法按音频判断无用段")
-        job_dir = _AI_TRIM_DIR / job_id
-        job_dir.mkdir(parents=True, exist_ok=True)
-        out = job_dir / "output.mp4"
-        ranges: List[tuple[float, float]] = []
-        ae = _ae_bin()
+        if str(mode or "") != "visual":
+            ranges = []
+            ae = _ae_bin()
         if str(mode or "") == "smart" and auth_headers:
             try:
                 from .cutcli_templates_local import _call_server, _upload_temp_to_server
@@ -1249,7 +1260,7 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: 
                 _ai_set_status(job_id, progress=35, message="智能选句不可用，改用静音检测")
                 ranges = []
                 ae = _ae_bin()
-        if ae is not None:
+        if ae is not None and not ranges:
             _ai_set_status(job_id, progress=25, message="正在用增强引擎剪掉停顿")
             cut = job_dir / "ae.mp4"
             proc = subprocess.run(
@@ -1269,7 +1280,7 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: 
                 ranges = ranges or [(0.0, round(dur2, 3))]
             else:
                 ae = None
-        if ae is None:
+        if ae is None and not ranges:
             _ai_set_status(job_id, progress=25, message="正在检测静音与停顿")
             silences = _detect_silences(ffmpeg, path)
             ranges = _keep_ranges(duration, silences, float(target or 0))
