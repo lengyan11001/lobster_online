@@ -1398,6 +1398,8 @@
   }
 
   function renderTemplateLayout() {
+    // 时间轴模板不做静态版式预览：位置/字号按句子变化，静态画出来必然误导，
+    // 只保留「预览样片」看设计师自己的成片效果。
     var panel = $('mcmTemplateLayoutPanel');
     var editor = $('mcmTemplateLayoutEditor');
     var media = $('mcmTemplateLayoutMedia');
@@ -2058,7 +2060,8 @@
       asset_id: baseResult.asset_id || '',
       video_url: baseResult.asset_id ? '' : (baseResult.source_url || ''),
       overlay_texts: readTemplateOverlayTexts(),
-      position_overrides: templatePositionOverridesForSubmit(),
+      // 位置一律用模板自带的，前端不再传覆盖值，保证成片跟设计稿一致
+      position_overrides: {},
       external_task_id: 'multi_clip_mixer_' + Date.now()
     }).then(function(submitted) {
       if (!submitted.job_id) throw new Error('模板定制没有返回任务编号');
