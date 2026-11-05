@@ -95,7 +95,7 @@
 .mcm-layout-editor { position: relative; width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border: 1px solid #dfe3e9; border-radius: 7px; background: #111827; container-type: inline-size; }
 .mcm-layout-editor.is-portrait { width: min(100%, 260px); aspect-ratio: 9 / 16; margin-inline: auto; }
 .mcm-layout-media, .mcm-layout-media video, .mcm-layout-empty { width: 100%; height: 100%; }
-.mcm-layout-media video { display: block; object-fit: contain; pointer-events: none; }
+.mcm-layout-media video { display: block; object-fit: cover; pointer-events: none; }
 .mcm-layout-empty { display: grid; place-items: center; color: #7f8998; font-size: 11px; }
 .mcm-layout-layer { position: absolute; inset: 0; z-index: 2; }
 .mcm-layout-item { position: absolute; max-width: 82%; min-width: 38px; transform: translate(-50%, -50%); padding: 3px 6px; border-radius: 5px; color: #fff; cursor: grab; font-size: clamp(10px, 3.2cqw, 22px); font-weight: 700; line-height: 1.15; text-align: center; text-shadow: 0 1px 2px #111827, 0 0 3px #111827; white-space: pre-wrap; touch-action: none; user-select: none; }

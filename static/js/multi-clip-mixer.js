@@ -1286,9 +1286,17 @@
       if (tracks.length) {
         var index = Math.max(0, Math.min(tracks.length - 1, Number(state.previewTrackIndex || 0)));
         var track = tracks[index] || {};
-        var key = String(track.key || '').trim();
-        var field = fields.filter(function(candidate) { return String(candidate.key || '').trim() === key; })[0] || {};
-        return [{ key: key, label: String(field.label || field.default || key) }];
+        var cursor = Number(track.start_ms || 0) + 1;
+        // 同一时刻可能有多句同时出现（标题两行 / 标题+字幕），按时间窗口一起画
+        var active = tracks.filter(function(candidate) {
+          return Number(candidate.start_ms || 0) <= cursor && cursor < Number(candidate.end_ms || 0);
+        });
+        if (!active.length) active = [track];
+        return active.map(function(candidate) {
+          var key = String(candidate.key || '').trim();
+          var field = fields.filter(function(item) { return String(item.key || '').trim() === key; })[0] || {};
+          return { key: key, label: String(field.label || field.default || key) };
+        });
       }
     }
     var targets = fields.map(function(field) {
