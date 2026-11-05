@@ -109,7 +109,7 @@
               <div id="mcmTemplateGrid" class="mcm-template-grid"></div>
               <button id="mcmTemplateMoreBtn" type="button" class="btn btn-ghost btn-sm" hidden>加载更多</button>
             </div>
-            <div class="mcm-step-title" style="margin:14px 0 6px;font-size:12px;opacity:.72;letter-spacing:.02em;">第 3 步 · 标题与文案</div>
+            <div id="mcmTitleStepLabel" class="mcm-step-title" style="margin:14px 0 6px;font-size:12px;opacity:.72;letter-spacing:.02em;">第 3 步 · 标题与文案</div>
             <div id="mcmTemplateTitlePanel" class="mcm-overlay-panel mcm-template-title-panel">
               <div class="mcm-overlay-head">
                 <strong>标题与文案</strong>
@@ -145,7 +145,10 @@
             <div id="mcmTemplateLayoutPanel" class="mcm-layout-panel" hidden>
               <div class="mcm-layout-head">
                 <strong>版式预览</strong>
-                <button id="mcmTemplateLayoutReset" type="button" class="btn btn-ghost btn-sm">重置位置</button>
+                <span style="display:flex;gap:6px;">
+                  <button id="mcmTemplateVideoPreviewBtn" type="button" class="btn btn-ghost btn-sm">预览样片</button>
+                  <button id="mcmTemplateLayoutReset" type="button" class="btn btn-ghost btn-sm">重置位置</button>
+                </span>
               </div>
               <div id="mcmTemplateLayoutEditor" class="mcm-layout-editor">
                 <div id="mcmTemplateLayoutMedia" class="mcm-layout-media"></div>

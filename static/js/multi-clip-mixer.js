@@ -985,15 +985,31 @@
     video.addEventListener('timeupdate', stopAtEnd);
   }
 
+  function templateMeta(item) {
+    return item && item.meta && typeof item.meta === 'object' ? item.meta : {};
+  }
+
   function templateImage(item) {
-    return resolveUrl(item.coverUrl || item.cover_url || '', cloudBaseUrl());
+    var meta = templateMeta(item);
+    return resolveUrl(
+      item.coverUrl || item.cover_url || meta.preview_poster_url || meta.cover_url || meta.poster_url || '',
+      cloudBaseUrl()
+    );
   }
 
   function templateDemo(item) {
+    var meta = templateMeta(item);
     return resolveUrl(
-      item.preview_url || item.sample_video_url || item.demoUrl || item.demo_url || item.videoUrl || item.video_url || '',
+      item.preview_url || item.sample_video_url || meta.preview_url || meta.sample_video_url
+        || item.demoUrl || item.demo_url || item.videoUrl || item.video_url || '',
       cloudBaseUrl()
     );
+  }
+
+  function demoWithFrame(url) {
+    var text = String(url || '');
+    if (!text || text.indexOf('#') >= 0) return text;
+    return text + '#t=0.1';
   }
 
   function resolveUrl(value, base) {
@@ -1014,6 +1030,15 @@
     return ' style="--mcm-card-ratio: ' + Number(parts[0]) + ' / ' + Number(parts[1]) + '"';
   }
 
+  function openTemplatePreview(item) {
+    if (!item) return showMessage('先选一个模板，再预览样片。', true);
+    var url = templateDemo(item);
+    if (!url) return showMessage('这个模板没有提供样片。', true);
+    if ($('mcmPreviewTitle')) $('mcmPreviewTitle').textContent = item.name || '模板预览';
+    if ($('mcmTemplatePreviewVideo')) $('mcmTemplatePreviewVideo').src = url;
+    if ($('mcmTemplatePreviewModal')) $('mcmTemplatePreviewModal').hidden = false;
+  }
+
   function renderTemplates() {
     var grid = $('mcmTemplateGrid');
     if (!grid) return;
@@ -1030,7 +1055,7 @@
       var media = cover
         ? '<img src="' + escapeHtml(cover) + '" alt="' + escapeHtml(item.name || '剪辑模板') + '" loading="lazy" referrerpolicy="no-referrer">'
         : (demo
-          ? '<video src="' + escapeHtml(demo) + '" muted playsinline preload="metadata"></video>'
+          ? '<video src="' + escapeHtml(demoWithFrame(demo)) + '" muted playsinline preload="metadata"></video>'
           : '<span class="mcm-template-placeholder">暂无样片</span>');
       return '<button type="button" class="mcm-template-card' + (selected ? ' is-selected' : '') + '" data-template-id="' + escapeHtml(item.id) + '"' + templateRatioStyle(item) + ' title="双击预览模板">'
         + media + '<span>' + escapeHtml(item.name || '未命名模板') + '</span></button>';
@@ -1353,8 +1378,9 @@
     panel.hidden = !state.selectedTemplate;
     if (!state.selectedTemplate) return;
     var clip = state.clips[0] || {};
-    var portrait = Number(clip.height || 0) > Number(clip.width || 0)
-      || (!clip.width && String(state.selectedTemplate.aspect_ratio || '').indexOf('9:16') >= 0);
+    // 模板本身是 9:16 时，预览一律按 9:16，不看原素材方向
+    var templateRatio = String(state.selectedTemplate.aspect_ratio || '').replace(/\s+/g, '');
+    var portrait = templateRatio === '9:16' || Number(clip.height || 0) > Number(clip.width || 0);
     editor.classList.toggle('is-portrait', portrait);
     var source = layoutPreviewSource();
     if (editor.dataset.previewSource !== source) {
@@ -1409,10 +1435,19 @@
       panel.hidden = true;
       fieldsRoot.innerHTML = '';
       if (shanjianPanel) shanjianPanel.hidden = !state.selectedTemplate;
+      var shanjianTitlePanel = $('mcmTemplateTitlePanel');
+      var shanjianTitleStep = $('mcmTitleStepLabel');
+      if (shanjianTitlePanel) shanjianTitlePanel.hidden = false;
+      if (shanjianTitleStep) shanjianTitleStep.hidden = false;
       renderShanjianTemplateCapabilities();
       return;
     }
     if (shanjianPanel) shanjianPanel.hidden = true;
+    // 我们的模板：不再用「标题/文案」，只按模板的每个文字位置单独编辑
+    var titlePanel = $('mcmTemplateTitlePanel');
+    var titleStep = $('mcmTitleStepLabel');
+    if (titlePanel) titlePanel.hidden = true;
+    if (titleStep) titleStep.hidden = true;
     var titleField = templateTitleField(state.selectedTemplate);
     var titleKey = titleField ? String(titleField.key || '').trim() : '';
     var fields = templateOverlayFields(state.selectedTemplate).filter(function(field) {
@@ -1423,6 +1458,8 @@
     fieldsRoot.innerHTML = fields.map(function(field) {
       var key = String(field.key || '').trim();
       var label = String(field.label || key);
+      var slot = /^text_(\d+)$/.exec(key);
+      if (slot) label = '位置 ' + slot[1] + ' · ' + label;
       var maxLength = overlayFieldMaxLength(field);
       var value = truncateChars(Object.prototype.hasOwnProperty.call(state.overlayTexts, key) ? state.overlayTexts[key] : (field.default || ''), maxLength);
       state.overlayTexts[key] = value;
@@ -2588,11 +2625,10 @@
       var card = event.target.closest('[data-template-id]');
       if (!card) return;
       var item = state.templates.find(function(row) { return String(row.id) === String(card.getAttribute('data-template-id')); });
-      var url = item ? templateDemo(item) : '';
-      if (!url) return showMessage('这个模板没有提供样片。', true);
-      if ($('mcmPreviewTitle')) $('mcmPreviewTitle').textContent = item.name || '模板预览';
-      if ($('mcmTemplatePreviewVideo')) $('mcmTemplatePreviewVideo').src = url;
-      if ($('mcmTemplatePreviewModal')) $('mcmTemplatePreviewModal').hidden = false;
+      openTemplatePreview(item);
+    });
+    if ($('mcmTemplateVideoPreviewBtn')) $('mcmTemplateVideoPreviewBtn').addEventListener('click', function() {
+      openTemplatePreview(state.selectedTemplate);
     });
     Array.prototype.forEach.call(document.querySelectorAll('[data-mcm-close-preview]'), function(button) {
       button.addEventListener('click', function() {
