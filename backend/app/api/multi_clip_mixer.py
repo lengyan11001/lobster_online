@@ -1252,8 +1252,13 @@ def _ai_trim_worker(job_id: str, user_id: int, path: Path, target: float, mode: 
                         kept = _pick_sentences(scored, 0)
                 if kept:
                     ranges = _merge_ranges(kept)
+                    style = str(color_style or "").strip().lower()
+                    color_filter = _COLOR_PRESETS.get(style, "")
+                    if style == "auto":
+                        color_filter = _auto_color_filter(ffmpeg, path)
+                    _ai_set_status(job_id, color_style=style, color_filter=color_filter)
                     _ai_set_status(job_id, progress=65, message=f"保留 {len(kept)} 句，正在裁剪")
-                    _render_ai_trim(ffmpeg, path, ranges, out, has_audio)
+                    _render_ai_trim(ffmpeg, path, ranges, out, has_audio, color_filter)
                     ae = None
             except Exception as exc:
                 logger.warning("[multi-clip][ai-trim] smart mode failed, fallback: %s", exc)

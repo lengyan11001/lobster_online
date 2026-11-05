@@ -924,6 +924,7 @@
     if ($('mcmSegmentIndex')) $('mcmSegmentIndex').textContent = '视频 ' + (index + 1);
     if ($('mcmSourceDuration')) $('mcmSourceDuration').textContent = formatSeconds(clip.duration);
     if ($('mcmConfirmSegmentBtn')) $('mcmConfirmSegmentBtn').textContent = '保存片段';
+    if ($('mcmRestoreClipBtn')) $('mcmRestoreClipBtn').style.display = (state.clips[index] && state.clips[index].originalAssetId) ? '' : 'none';
     var video = $('mcmSegmentVideo');
     var poster = clip.localPosterUrl || clip.posterObjectUrl || '';
     configureSegmentVideo(video, '', poster);
@@ -1034,7 +1035,7 @@
     var ctx = state.segmentContext;
     if (!ctx) return;
     var clip = state.clips[ctx.index];
-    var sourceAssetId = clip && (clip.originalAssetId || clip.assetId);
+    var sourceAssetId = clip && clip.assetId;
     if (!clip || !sourceAssetId) return aiTrimStatus('这个视频还没有素材 ID，先保存后再优化', true);
     state.aiTrim = null;
     closeAiTrimModal();
@@ -1084,7 +1085,11 @@
     if (!ctx) return;
     var clip = state.clips[ctx.index];
     if (!clip) return;
-    clip.originalAssetId = String(ctx.result.source_asset_id || '') || clip.originalAssetId || clip.assetId;
+    if (!clip.originalAssetId) {
+      clip.originalAssetId = String(ctx.result.source_asset_id || '') || clip.assetId;
+      clip.originalDuration = Number(clip.duration || 0);
+      clip.originalPreviewUrl = clip.previewUrl || clip.sourceUrl || '';
+    }
     clip.assetId = String(ctx.result.asset_id || clip.assetId);
     clip.name = (clip.name || '视频') + '（AI优化）';
     clip.previewUrl = resolveUrl(ctx.result.preview_url || '', apiBase());
@@ -2693,6 +2698,22 @@
     if ($('mcmSegmentEnd')) $('mcmSegmentEnd').addEventListener('input', syncSegmentSummary);
     if ($('mcmPreviewSegmentBtn')) $('mcmPreviewSegmentBtn').addEventListener('click', previewSelectedSegment);
     if ($('mcmAiTrimBtn')) $('mcmAiTrimBtn').addEventListener('click', startAiTrim);
+    if ($('mcmRestoreClipBtn')) $('mcmRestoreClipBtn').addEventListener('click', function () {
+      var ctx = state.segmentContext;
+      var clip = ctx && state.clips[ctx.index];
+      if (!clip || !clip.originalAssetId) return;
+      clip.assetId = clip.originalAssetId;
+      clip.previewUrl = clip.originalPreviewUrl || assetContentUrl(clip.originalAssetId);
+      clip.sourceUrl = clip.previewUrl;
+      clip.posterUrl = assetPosterUrl(clip.assetId);
+      clip.duration = Number(clip.originalDuration || clip.duration || 0);
+      clip.startSec = 0;
+      clip.endSec = clip.duration;
+      clip.originalAssetId = '';
+      closeSegmentModal(false);
+      renderClips();
+      showMessage('已还原到最初视频', false);
+    });
     if ($('mcmVisualTrimBtn')) $('mcmVisualTrimBtn').addEventListener('click', function () {
       state.aiTrimMode = 'visual';
       startAiTrim();
