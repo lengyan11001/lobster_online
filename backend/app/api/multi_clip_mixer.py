@@ -952,6 +952,14 @@ def _ai_set_status(job_id: str, **fields: Any) -> None:
     with _AI_TRIM_LOCK:
         job = _AI_TRIM_JOBS.setdefault(job_id, {})
         job.update(fields)
+        snapshot = dict(job)
+    try:
+        if job_id != "tools":
+            job_dir = _AI_TRIM_DIR / job_id
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / "status.json").write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _detect_silences(ffmpeg: str, path: Path) -> List[tuple[float, float]]:
@@ -1284,7 +1292,14 @@ def ai_trim_status(job_id: str):
     with _AI_TRIM_LOCK:
         job = dict(_AI_TRIM_JOBS.get(job_id) or {})
     if not job:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        status_file = _AI_TRIM_DIR / job_id / "status.json"
+        if status_file.exists():
+            try:
+                job = json.loads(status_file.read_text(encoding="utf-8"))
+            except Exception:
+                job = {}
+    if not job:
+        raise HTTPException(status_code=404, detail="任务不存在（可能服务重启过，请重新点一次 AI 优化）")
     return job
 
 
