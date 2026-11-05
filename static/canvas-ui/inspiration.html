@@ -134,10 +134,12 @@
 
   function rowsOf(payload) {
     if (!payload) return [];
+    if (Array.isArray(payload.projects)) return payload.projects;
     if (Array.isArray(payload.items)) return payload.items;
     if (Array.isArray(payload.list)) return payload.list;
     var d = payload.data;
     if (Array.isArray(d)) return d;
+    if (d && Array.isArray(d.projects)) return d.projects;
     if (d && Array.isArray(d.items)) return d.items;
     return [];
   }
@@ -163,14 +165,20 @@
     grid.innerHTML = rows.map(function (row, i) {
       var img = thumbOf(row, i);
       var name = String(row.name || '未命名模板').replace(/[<>&"]/g, '');
-      return '<div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300">'
+      var uuid = String(row.uuid || row.id || '');
+      return '<div class="masonry-item relative group rounded-2xl overflow-hidden bg-gray-100 cursor-pointer shadow-sm hover:shadow-[0_8px_30px_rgb(0,0,0,0.08)] transition-all duration-300" data-uuid="' + esc(uuid) + '">'
         + '<img src="' + esc(img) + '" class="w-full h-auto object-cover" alt="' + name + '">'
+        + '<video data-role="preview" muted loop playsinline preload="none" poster="' + esc(img) + '" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .2s;pointer-events:none;"></video>'
         + '<div class="absolute inset-0 bg-gradient-to-t from-black/60 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">'
         + '<p class="text-white text-[13px] font-medium truncate">' + name + '</p>'
         + '<div class="flex items-center gap-2 mt-2">'
         + '<button type="button" class="use-template px-3 py-1.5 rounded-full bg-white text-gray-800 text-[12px]" data-uuid="' + esc(row.uuid || row.id || '') + '">做同款</button>'
         + '</div></div></div>';
     }).join('');
+    rows.forEach(function (row) {
+      var key = String(row.uuid || row.id || '');
+      if (key) cardRows[key] = row;
+    });
   }
   var autoFill = 0;
   function setLoading(show, text) {
@@ -260,11 +268,101 @@
   }
   var gridEl = document.getElementById('inspirationGrid');
   if (gridEl) {
+    // 悬停播放：项目快照（source_url JSON）里第一段成片视频
+    var cardRows = {};
+    var previewCache = {};
+    function snapshotUrlOf(row) {
+      var u = String((row && (row.source_url || row.sourceUrl)) || '').trim();
+      return /^https?:\/\//i.test(u) ? u : '';
+    }
+    function videoFromSnapshot(data) {
+      var found = '';
+      function walk(value, depth) {
+        if (found || depth > 8 || !value) return;
+        if (typeof value === 'string') {
+          if (/\.(mp4|mov|webm)(\?|$)/i.test(value)) found = value;
+          return;
+        }
+        if (Array.isArray(value)) {
+          for (var i = 0; i < value.length && i < 80 && !found; i += 1) walk(value[i], depth + 1);
+          return;
+        }
+        if (typeof value !== 'object') return;
+        Object.keys(value).forEach(function (key) {
+          if (found) return;
+          var item = value[key];
+          if (typeof item === 'string') {
+            if (/\.(mp4|mov|webm)(\?|$)/i.test(item)) found = item;
+          } else if (item && typeof item === 'object') {
+            walk(item, depth + 1);
+          }
+        });
+      }
+      walk(data, 0);
+      return found;
+    }
+    function fetchSnapshot(url) {
+      return fetch(url, { credentials: 'omit' }).then(function (r) { return r.ok ? r.json() : null; });
+    }
+    function fetchProjectDetail(uuid) {
+      var headers = token() ? { Authorization: 'Bearer ' + token() } : {};
+      var url = '/canvas-api/api/v1/projects/' + encodeURIComponent(uuid);
+      return fetch(url, { headers: headers }).then(function (r) {
+        if (r.ok) return r.json();
+        return fetch(url, {
+          method: 'POST',
+          headers: Object.assign({ 'Content-Type': 'application/json' }, headers),
+          body: '{}'
+        }).then(function (r2) { return r2.ok ? r2.json() : null; });
+      });
+    }
+    function resolvePreview(row, uuid) {
+      var cached = previewCache[uuid];
+      if (cached) return Promise.resolve(cached);
+      previewCache[uuid] = { url: '' };
+      var direct = snapshotUrlOf(row);
+      var step = direct
+        ? fetchSnapshot(direct)
+        : fetchProjectDetail(uuid).then(function (d) {
+            var src = d && (d.source_url || (d.project && d.project.source_url));
+            return src ? fetchSnapshot(src) : null;
+          });
+      return step.then(function (snap) {
+        var url = snap ? videoFromSnapshot(snap) : '';
+        previewCache[uuid] = { url: url };
+        return previewCache[uuid];
+      }).catch(function () {
+        previewCache[uuid] = { url: '' };
+        return previewCache[uuid];
+      });
+    }
+    gridEl.addEventListener('mouseover', function (e) {
+      var card = e.target.closest && e.target.closest('.masonry-item');
+      if (!card) return;
+      var uuid = card.getAttribute('data-uuid');
+      var video = card.querySelector('video[data-role=preview]');
+      if (!uuid || !video) return;
+      resolvePreview(cardRows[uuid] || {}, uuid).then(function (hit) {
+        if (!hit.url || !video.isConnected) return;
+        if (video.getAttribute('src') !== hit.url) video.src = hit.url;
+        video.style.opacity = '1';
+        var played = video.play();
+        if (played && played.catch) played.catch(function () {});
+      });
+    });
+    gridEl.addEventListener('mouseout', function (e) {
+      var card = e.target.closest && e.target.closest('.masonry-item');
+      if (!card || (e.relatedTarget && card.contains(e.relatedTarget))) return;
+      var video = card.querySelector('video[data-role=preview]');
+      if (!video) return;
+      video.pause();
+      video.style.opacity = '0';
+    });
     gridEl.addEventListener('click', function (e) {
       var btn = e.target.closest && e.target.closest('.use-template');
-      if (!btn) return;
-      var id = btn.getAttribute('data-uuid');
-      openEditor(id);
+      if (btn) { openEditor(btn.getAttribute('data-uuid')); return; }
+      var card = e.target.closest && e.target.closest('.masonry-item');
+      if (card) openEditor(card.getAttribute('data-uuid'));
     });
     gridEl.addEventListener('error', function (e) {
       var img = e.target;
