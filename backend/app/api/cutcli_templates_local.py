@@ -1720,6 +1720,7 @@ def _wrap_caption_text(
     wrap_limit = max(4.0, min(float(max_chars), max(visual_limit, balanced_limit)))
     tokens = _caption_tokens(clean)
     lines: List[str] = []
+
     cur = ""
     for tok in tokens:
         candidate = _join_caption_fragments([cur, tok])
@@ -2332,6 +2333,31 @@ def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], wid
         return []
     end = _ass_time(max(0.5, duration_sec))
     lines: List[str] = []
+    for deco in overlay_style.get("decorations") or []:
+        if not isinstance(deco, dict):
+            continue
+        try:
+            dw = int(float(deco.get("w") or 0) * width / 1280.0)
+            dh = int(float(deco.get("h") or 0) * height / 2276.0)
+            if dw <= 1 or dh <= 1:
+                continue
+            dx = int(round(float(deco.get("x") or 0.5) * width - dw / 2.0))
+            dy = int(round(float(deco.get("y") or 0.5) * height - dh / 2.0))
+            radius = int(float(deco.get("radius") or 0) * width / 1280.0)
+            start_ms = max(0, int(deco.get("start_ms") or 0))
+            end_ms = int(deco.get("end_ms") or 0) or int(duration_sec * 1000)
+            de_start = max(0.0, min(float(duration_sec), start_ms / 1000.0))
+            de_end = max(de_start + 0.2, min(float(duration_sec), end_ms / 1000.0))
+            alpha = 1.0 - max(0.0, min(1.0, float(deco.get("alpha") if deco.get("alpha") is not None else 1.0)))
+            lines.append(
+                "Dialogue: 5,%s,%s,OverlayBox,,0,0,0,,{\\an7\\pos(%d,%d)\\p1\\bord0\\shad0\\1c%s\\1a&H%02X&}%s{\\p0}"
+                % (_ass_time(de_start), _ass_time(de_end), dx, dy,
+                   _hex_to_ass_rgb(deco.get("color")), int(round(alpha * 255)),
+                   _ass_round_rect(dw, dh, radius))
+            )
+        except Exception:
+            continue
+
     title_x_ratio = _float_value(overlay_style.get("headline_x_ratio"), _float_value(overlay_style.get("title_x_ratio"), 0.5))
     title_x = int(width * title_x_ratio)
     subtitle_x = int(width * _float_value(overlay_style.get("subheadline_x_ratio"), title_x_ratio))
