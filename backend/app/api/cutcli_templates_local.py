@@ -2612,6 +2612,15 @@ def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], wid
                         cy = int(round(y + (char_index - (count - 1) / 2.0) * char_step))
                         _emit(cx, cy, ch)
             else:
+                def _est(row_text: str) -> float:
+                    unit = 0.0
+                    for ch in row_text:
+                        unit += 1.0 if ord(ch) > 0x2E80 else 0.55
+                    return unit * fs * (fscx / 100.0)
+                max_w = max((_est(r) for r in rows), default=0.0)
+                if max_w > width * 0.92 and max_w > 0:
+                    fs = max(10, int(fs * width * 0.92 / max_w))
+                    fsp = int(round(fs * letter_sp))
                 block_h = len(rows) * fs * (1.0 + line_sp) * (fscy / 100.0)
                 limit_h = height * 0.92
                 if block_h > limit_h:
