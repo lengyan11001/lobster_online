@@ -2589,33 +2589,38 @@ def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], wid
             shadow_distance = max(0.0, float(tr.get("shadow_distance") or 0.0)) * width / 1280.0
             shadow_px = int(round(shadow_distance)) if shadow_distance else 2
             shadow_alpha = 1.0 - max(0.0, min(1.0, float(tr.get("shadow_alpha") or 0.6)))
-            def _fit_line(line: str, base_fs: int) -> int:
-                unit = 0.0
-                for ch in line:
-                    unit += 1.0 if ord(ch) > 0x2E80 else 0.55
-                est = unit * base_fs * (fscx / 100.0)
-                limit = width * 0.92
-                if est > limit and est > 0:
-                    return max(12, int(round(base_fs * limit / est)))
-                return base_fs
-            if tr.get("vertical_text"):
-                text = "\n".join(ch for ch in re.sub(r"\s+", "", str(text)))
             rows = [row for row in str(text).split("\n")] or [""]
-            if tr.get("vertical_text") and rows:
-                block_h = len(rows) * fs * 1.18 * (fscy / 100.0)
-                limit_h = height * 0.9
+            line_sp = float(tr.get("line_spacing") or 0.0)
+            letter_sp = float(tr.get("letter_spacing") or 0.0)
+            fsp = int(round(fs * letter_sp))
+            def _emit(cx: int, cy: int, body: str) -> None:
+                lines.append(
+                    "Dialogue: 7,%s,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fn%s\\fs%d\\fscx%d\\fscy%d\\fsp%d\\q2\\c%s\\bord0\\shad%d\\4c%s\\4a&H%02X&}%s"
+                    % (start_ts, end_ts, cx, cy, family, fs, fscx, fscy, fsp, color, shadow_px,
+                       _hex_to_ass_rgb(tr.get("shadow_color"), "&H00000000"), int(round(shadow_alpha * 255)),
+                       _ass_text_with_newline(body))
+                )
+            if tr.get("vertical_text"):
+                col_step = fs * (1.0 + line_sp) * (fscy / 100.0)
+                char_step = fs * (1.0 + letter_sp) * (fscy / 100.0)
+                total_cols = len(rows)
+                for col_index, col_text in enumerate(rows):
+                    cx = int(round(x + ((total_cols - 1) / 2.0 - col_index) * col_step))
+                    chars = [ch for ch in col_text if not ch.isspace()]
+                    count = len(chars)
+                    for char_index, ch in enumerate(chars):
+                        cy = int(round(y + (char_index - (count - 1) / 2.0) * char_step))
+                        _emit(cx, cy, ch)
+            else:
+                block_h = len(rows) * fs * (1.0 + line_sp) * (fscy / 100.0)
+                limit_h = height * 0.92
                 if block_h > limit_h:
                     fs = max(10, int(fs * limit_h / block_h))
-            line_step = fs * 1.18 * (fscy / 100.0)
-            for line_index, line_row in enumerate(rows):
-                line_y = int(round(y + (line_index - (len(rows) - 1) / 2.0) * line_step))
-                line_fs = _fit_line(line_row, fs)
-                lines.append(
-                    "Dialogue: 7,%s,%s,OverlayTitle,,0,0,0,,{\\an5\\pos(%d,%d)\\fn%s\\fs%d\\fscx%d\\fscy%d\\q2\\c%s\\bord0\\shad%d\\4c%s\\4a&H%02X&}%s"
-                    % (start_ts, end_ts, x, line_y, family, line_fs, fscx, fscy, color, shadow_px,
-                       _hex_to_ass_rgb(tr.get("shadow_color"), "&H00000000"), int(round(shadow_alpha * 255)),
-                       _ass_text_with_newline(line_row))
-                )
+                    fsp = int(round(fs * letter_sp))
+                line_step = fs * (1.0 + line_sp) * (fscy / 100.0)
+                for line_index, row in enumerate(rows):
+                    line_y = int(round(y + (line_index - (len(rows) - 1) / 2.0) * line_step))
+                    _emit(x, line_y, row)
         return lines
 
     if layout == "top_banner":
