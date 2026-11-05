@@ -221,9 +221,9 @@ window.registerLobsterView('alibaba-inquiries', {
   });
 
   window.registerLobsterView('multi-clip-mixer', {
-    html: '/static/views/multi-clip-mixer.html?v=20261031-template-audio-v8',
-    css: '/static/css/multi-clip-mixer.css?v=20261031-template-audio-v8',
-    scripts: '/static/js/multi-clip-mixer.js?v=20261031-template-audio-v8',
+    html: '/static/views/multi-clip-mixer.html?v=20261105-designer-v9',
+    css: '/static/css/multi-clip-mixer.css?v=20261105-designer-v9',
+    scripts: '/static/js/multi-clip-mixer.js?v=20261105-designer-v9',
     init: 'initMultiClipMixerView',
     cache: 'reload'
   });
