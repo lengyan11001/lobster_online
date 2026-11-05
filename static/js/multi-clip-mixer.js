@@ -1118,9 +1118,22 @@
     clip.endSec = clip.duration;
     state.aiTrim = null;
     closeAiTrimModal();
-    closeSegmentModal(false);
+    var url = clip.previewUrl || clip.sourceUrl || '';
+    var segVideo = $('mcmSegmentVideo');
+    if (segVideo && url) {
+      segVideo.pause();
+      segVideo.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 'v=' + Date.now();
+      segVideo.load();
+      segVideo.play().catch(function () {});
+    }
+    if ($('mcmSourceDuration')) $('mcmSourceDuration').textContent = formatSeconds(clip.duration);
+    if ($('mcmSegmentStart')) $('mcmSegmentStart').value = 0;
+    if ($('mcmSegmentEnd')) $('mcmSegmentEnd').value = Number(clip.duration || 0).toFixed(2);
+    if ($('mcmSelectedDuration')) $('mcmSelectedDuration').textContent = formatSeconds(clip.duration);
+    if (state.segmentContext) state.segmentContext.duration = clip.duration;
     renderClips();
-    showMessage('已使用 AI 优化后的视频', false);
+    syncTrimButtons();
+    showMessage('已使用优化后的视频，点「保存片段」才会生效', false);
   }
 
   function previewSelectedSegment() {
