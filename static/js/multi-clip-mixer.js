@@ -1102,6 +1102,7 @@
     }
     var styleLabel = { fresh: '清新明亮', soft: '柔和', cinema: '电影感', mono: '黑白', auto: '自动调色' }[result.color_style || ''] || '不调色';
     aiTrimStatus('优化完成：' + formatSeconds(result.duration || 0) + ' · 调色：' + styleLabel);
+    try { applyAiTrim(); } catch (err) { console.error('[ai-trim] auto apply failed', err); }
   }
 
   function applyAiTrim() {
