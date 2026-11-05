@@ -2598,7 +2598,14 @@ def _overlay_dialogues(style: Dict[str, Any], overlay_texts: Dict[str, Any], wid
                 if est > limit and est > 0:
                     return max(12, int(round(base_fs * limit / est)))
                 return base_fs
+            if tr.get("vertical_text"):
+                text = "\n".join(ch for ch in re.sub(r"\s+", "", str(text)))
             rows = [row for row in str(text).split("\n")] or [""]
+            if tr.get("vertical_text") and rows:
+                block_h = len(rows) * fs * 1.18 * (fscy / 100.0)
+                limit_h = height * 0.9
+                if block_h > limit_h:
+                    fs = max(10, int(fs * limit_h / block_h))
             line_step = fs * 1.18 * (fscy / 100.0)
             for line_index, line_row in enumerate(rows):
                 line_y = int(round(y + (line_index - (len(rows) - 1) / 2.0) * line_step))
