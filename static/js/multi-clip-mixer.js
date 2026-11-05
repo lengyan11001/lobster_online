@@ -1025,6 +1025,8 @@
     });
   }
 
+  window.__applyAiTrim = function () { applyAiTrim(); };
+
   function refreshAiTools() {
     request('/api/multi-clip-mixer/ai-tools').then(function (data) {
       var btn = $('mcmAiTrimInstallBtn');
