@@ -925,6 +925,7 @@
     if ($('mcmSourceDuration')) $('mcmSourceDuration').textContent = formatSeconds(clip.duration);
     if ($('mcmConfirmSegmentBtn')) $('mcmConfirmSegmentBtn').textContent = '保存片段';
     if ($('mcmRestoreClipBtn')) $('mcmRestoreClipBtn').style.display = (state.clips[index] && state.clips[index].originalAssetId) ? '' : 'none';
+    syncTrimButtons();
     var video = $('mcmSegmentVideo');
     var poster = clip.localPosterUrl || clip.posterObjectUrl || '';
     configureSegmentVideo(video, '', poster);
@@ -1010,6 +1011,20 @@
     if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
   }
 
+  function syncTrimButtons() {
+    var ctx = state.segmentContext;
+    var clip = ctx && state.clips[ctx.index];
+    var modes = (clip && clip.trimModes) || {};
+    [['mcmAiTrimBtn', '根据口播优化', 'smart'], ['mcmVisualTrimBtn', '画面优化', 'visual']].forEach(function (item) {
+      var btn = $(item[0]);
+      if (!btn) return;
+      var done = !!modes[item[2]];
+      btn.textContent = item[1] + (done ? ' · 已应用' : '');
+      btn.style.borderColor = done ? '#2f9e44' : '';
+      btn.style.color = done ? '#2f9e44' : '';
+    });
+  }
+
   function refreshAiTools() {
     request('/api/multi-clip-mixer/ai-tools').then(function (data) {
       var btn = $('mcmAiTrimInstallBtn');
@@ -1038,6 +1053,7 @@
     var sourceAssetId = clip && clip.assetId;
     if (!clip || !sourceAssetId) return aiTrimStatus('这个视频还没有素材 ID，先保存后再优化', true);
     state.aiTrim = null;
+    state.aiTrimRunMode = state.aiTrimMode || 'smart';
     closeAiTrimModal();
     aiTrimStatus('正在提交…');
     post('/api/multi-clip-mixer/ai-trim', { asset_id: sourceAssetId, mode: state.aiTrimMode || 'smart', color_style: String((($('mcmColorStyle') || {}).value) || '') }).then(function (d) {
@@ -1056,7 +1072,7 @@
   }
 
   function openAiTrimPreview(result, index) {
-    state.aiTrim = { index: index, result: result };
+    state.aiTrim = { index: index, result: result, mode: state.aiTrimRunMode || 'smart' };
     var video = $('mcmAiTrimVideo');
     if (video && video.parentNode) {
       var fresh = document.createElement('video');
@@ -1091,6 +1107,8 @@
       clip.originalPreviewUrl = clip.previewUrl || clip.sourceUrl || '';
     }
     clip.assetId = String(ctx.result.asset_id || clip.assetId);
+    clip.trimModes = clip.trimModes || {};
+    clip.trimModes[ctx.mode || 'smart'] = true;
     clip.name = (clip.name || '视频') + '（AI优化）';
     clip.previewUrl = resolveUrl(ctx.result.preview_url || '', apiBase());
     clip.sourceUrl = clip.previewUrl;
@@ -2710,6 +2728,7 @@
       clip.startSec = 0;
       clip.endSec = clip.duration;
       clip.originalAssetId = '';
+      clip.trimModes = {};
       closeSegmentModal(false);
       renderClips();
       showMessage('已还原到最初视频', false);
