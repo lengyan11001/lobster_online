@@ -148,3 +148,93 @@ def test_every_template_has_cover_and_sample_url():
     for tpl in e.public_templates():
         assert tpl["cover"], tpl["id"]
         assert tpl["sample_video_url"], tpl["id"]
+
+
+def _synthetic_segment(text, start=0.0, end=4.0):
+    chars = [[c, round(start + i * (end - start) / len(text), 3)] for i, c in enumerate(text)]
+    return {"start": start, "end": end, "text": text, "chars": chars}
+
+
+def test_caption_fit_splits_long_segment_and_keeps_timing():
+    from backend.app.services import koubo_caption_fit as f
+
+    text = "今天给大家介绍一款性价比特别高的降噪耳机，原价三百九十九，现在只要一百九十九"
+    out = f.fit_segments([_synthetic_segment(text)], width=270, height=480, caption_size=0.05, max_chars=22)
+    assert len(out) >= 4
+    assert out[0]["start"] == 0.0
+    assert out[-1]["end"] == 4.0
+    for left, right in zip(out, out[1:]):
+        assert left["end"] <= right["start"] + 0.001
+    for seg in out:
+        assert seg["chars"]
+        assert len(seg["text"].replace(" ", "")) <= 22
+
+
+def test_caption_keywords_prioritize_numbers():
+    from backend.app.services import koubo_caption_fit as f
+
+    text = "今天给大家介绍一款性价比特别高的降噪耳机，原价三百九十九，现在只要一百九十九"
+    seg = _synthetic_segment(text)
+    kw = f.extract_keywords([seg])
+    words = [x["text"] for x in kw]
+    assert any("三百九十九" in w for w in words)
+    assert any("一百九十九" in w for w in words)
+    assert all(x["start"] < x["end"] for x in kw)
+
+
+def test_batch_cancel_marks_pending_items():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    job_id = "batch-cancel-test"
+    with s._RENDER_LOCK:
+        s._BATCH_JOBS[job_id] = {
+            "id": job_id, "status": "running", "progress": 10, "done": 1, "total": 3,
+            "message": "running", "items": [
+                {"project_id": "p1", "status": "done"},
+                {"project_id": "p2", "status": "pending"},
+                {"project_id": "p3", "status": "pending"},
+            ], "template_id": "premium_kinetic_v1", "title": "", "quality": "preview",
+        }
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    r = client.post("/api/skills/digital-human-koubo/batch-render/jobs/%s/cancel" % job_id)
+    assert r.status_code == 200
+    with s._RENDER_LOCK:
+        job = s._BATCH_JOBS[job_id]
+        assert job["cancel"] is True
+        assert [x["status"] for x in job["items"]] == ["done", "skipped", "skipped"]
+
+
+def test_batch_retry_restarts_only_failed_items(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from backend.app.api import skill_deps as s
+
+    job_id = "batch-retry-test"
+    with s._RENDER_LOCK:
+        s._BATCH_JOBS[job_id] = {
+            "id": job_id, "status": "done", "progress": 100, "done": 2, "total": 2,
+            "message": "done", "items": [
+                {"project_id": "ok1", "status": "done"},
+                {"project_id": "bad1", "status": "error"},
+            ], "template_id": "clean_docu_v1", "title": "t", "quality": "final",
+        }
+    captured = {}
+
+    def fake_start(ids, template_id, title, quality):
+        captured.update({"ids": ids, "template_id": template_id, "title": title, "quality": quality})
+        return {"ok": True, "job_id": "new-job", "total": len(ids)}
+
+    monkeypatch.setattr(s, "_start_batch_render", fake_start)
+    app = FastAPI()
+    app.include_router(s.router)
+    client = TestClient(app)
+    r = client.post("/api/skills/digital-human-koubo/batch-render/jobs/%s/retry" % job_id)
+    assert r.status_code == 200
+    assert r.json()["job_id"] == "new-job"
+    assert captured == {"ids": ["bad1"], "template_id": "clean_docu_v1", "title": "t", "quality": "final"}

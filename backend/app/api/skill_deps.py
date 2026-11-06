@@ -1762,18 +1762,12 @@ def _batch_render_job(batch_id: str, project_ids: List[str], template_id: Option
         batch["finished_at"] = time.time()
 
 
-@router.post("/api/skills/digital-human-koubo/batch-render", summary="批量套模板出片")
-def koubo_batch_render(body: BatchRenderBody):
-    ids: List[str] = []
-    for raw in body.project_ids or []:
-        pid = str(raw or "").strip()
-        if pid and pid not in ids:
-            ids.append(pid)
+def _start_batch_render(ids: List[str], template_id: Optional[str], title: str, quality: str) -> Dict[str, Any]:
     if not ids:
         raise HTTPException(status_code=400, detail="请选择要出片的项目")
     if len(ids) > 20:
         raise HTTPException(status_code=400, detail="一次最多 20 个项目")
-    quality = "preview" if str(body.quality or "preview") == "preview" else "final"
+    quality = "preview" if str(quality or "preview") == "preview" else "final"
     rows = {str(r.get("id")): r for r in _load_projects()}
     items: List[Dict[str, Any]] = []
     skipped: List[Dict[str, Any]] = []
@@ -1794,15 +1788,58 @@ def koubo_batch_render(body: BatchRenderBody):
     batch_id = uuid.uuid4().hex[:10]
     batch = {"id": batch_id, "status": "running", "progress": 0, "done": 0,
              "total": len(items), "current": 0, "message": "准备批量出片",
-             "template_id": body.template_id or "", "quality": quality,
+             "template_id": template_id or "", "title": title or "", "quality": quality,
              "items": items, "skipped": skipped, "error": "", "started_at": time.time()}
     with _RENDER_LOCK:
         _BATCH_JOBS[batch_id] = batch
     threading.Thread(target=_batch_render_job,
-                     args=(batch_id, [x["project_id"] for x in items], body.template_id,
-                           body.title or "", quality),
+                     args=(batch_id, [x["project_id"] for x in items], template_id,
+                           title or "", quality),
                      daemon=True).start()
     return {"ok": True, "job_id": batch_id, "items": items, "skipped": skipped, "total": len(items)}
+
+
+@router.post("/api/skills/digital-human-koubo/batch-render", summary="批量套模板出片")
+def koubo_batch_render(body: BatchRenderBody):
+    ids: List[str] = []
+    for raw in body.project_ids or []:
+        pid = str(raw or "").strip()
+        if pid and pid not in ids:
+            ids.append(pid)
+    return _start_batch_render(ids, body.template_id, body.title or "", str(body.quality or "preview"))
+
+
+@router.post("/api/skills/digital-human-koubo/batch-render/jobs/{job_id}/cancel", summary="取消批量出片")
+def koubo_batch_render_cancel(job_id: str):
+    with _RENDER_LOCK:
+        job = _BATCH_JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        if job.get("status") != "running":
+            return {"ok": True, "status": job.get("status"), "message": job.get("message") or ""}
+        job["cancel"] = True
+        for item in job.get("items") or []:
+            if item.get("status") == "pending":
+                item["status"] = "skipped"
+                item["message"] = "已取消"
+        job["message"] = "正在取消：当前这条完成后停止"
+    return {"ok": True, "status": "cancelling", "message": "正在取消"}
+
+
+@router.post("/api/skills/digital-human-koubo/batch-render/jobs/{job_id}/retry", summary="重试批量出片失败项")
+def koubo_batch_render_retry(job_id: str):
+    with _RENDER_LOCK:
+        job = _BATCH_JOBS.get(job_id)
+        if not job:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        failed = [str(x.get("project_id")) for x in job.get("items") or []
+                  if x.get("status") in ("error", "skipped") and x.get("project_id")]
+        template_id = job.get("template_id") or None
+        title = job.get("title") or ""
+        quality = job.get("quality") or "preview"
+    if not failed:
+        raise HTTPException(status_code=400, detail="没有失败项可重试")
+    return _start_batch_render(failed, template_id, title, quality)
 
 
 @router.get("/api/skills/digital-human-koubo/batch-render/jobs/{job_id}", summary="批量出片进度")

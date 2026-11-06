@@ -137,6 +137,9 @@ def template_detail(template_id: str) -> Optional[Dict[str, Any]]:
         'features': features,
         'copy': spec.get('copy') or {},
         'rules': spec.get('rules') or {},
+        'caption_size': float((spec.get('style') or {}).get('captionSize') or 0.05),
+        'sample_script': spec.get('sample_script') or '全身，边走边介绍apec',
+        'sample_seconds': float(spec.get('sample_seconds') or 8.0),
     })
     return data
 
@@ -220,10 +223,25 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
     srv = None
     try:
         timeline = kr.build_timeline(project, duration, tmp, src, lang)
-        _ensure_keywords(timeline)
         style = spec.get('style') or {}
+        rules = spec.get('rules') or {}
+        try:
+            from . import koubo_caption_fit
+            original_segs = timeline.get('segs') or []
+            kw = koubo_caption_fit.extract_keywords(original_segs)
+            timeline['segs'] = koubo_caption_fit.fit_segments(
+                original_segs, width=W, height=H,
+                caption_size=float(style.get('captionSize') or 0.05),
+                max_chars=int(rules.get('captionMaxChars') or 22))
+            cta_start = float((timeline.get('cta') or {}).get('start') or duration)
+            timeline['keywords'] = [x for x in kw if float(x.get('start') or 0) < cta_start - 0.3] or kw[:1]
+        except Exception:
+            pass
+        _ensure_keywords(timeline)
         copy = spec.get('copy') or {}
         title = _title_for(project, spec, title_override)
+        base_title_px = max(14, round(H * float(style.get('titleSize') or .07)))
+        title_px = int(min(base_title_px, max(13, (W * 0.78) / max(1, len(title)))))
         _FontHandler.font_dir = FONTS_DIR
         srv = ThreadingHTTPServer(('127.0.0.1', 0), functools.partial(_FontHandler, directory=str(FONTS_DIR)))
         port = srv.server_address[1]
@@ -246,7 +264,7 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
                 .replace('__LOWER_TITLE__', str(copy.get('lowerTitle') or '数字人 3.0'))
                 .replace('__LOWER_SUB__', str(copy.get('lowerSub') or 'AI 口播'))
                 .replace('__CTA__', str(copy.get('cta') or '关注我，继续聊'))
-                .replace('__TITLE_SIZE__', str(round(H * float(style.get('titleSize') or .07))))
+                .replace('__TITLE_SIZE__', str(title_px))
                 .replace('__CAPTION_SIZE__', str(round(H * float(style.get('captionSize') or .05))))
                 .replace('__KEYWORD_SIZE__', str(round(H * float(style.get('keywordSize') or .12))))
                 .replace('__BADGE_SIZE__', str(max(10, round(H * .020))))

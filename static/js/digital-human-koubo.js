@@ -170,6 +170,10 @@
       + '#kbTplModal .kb-detail-actions{display:flex;align-items:center;gap:8px;margin-top:18px;position:sticky;bottom:-18px;background:#fff;padding:10px 0 0;border-top:1px solid #f1f5f9;}'
       + '#kbTplModal .kb-detail-actions .kb-btn{width:auto;}'
       + '#kbTplModal .kb-detail-actions .kb-btn-primary{width:auto;min-width:150px;margin:0;}'
+      + '#kbTplModal .kb-fit{display:flex;gap:6px;flex-wrap:wrap;}'
+      + '#kbTplModal .kb-fit-pill{font-size:10.5px;padding:3px 8px;border-radius:999px;background:#f1f5f9;color:#475569;}'
+      + '#kbTplModal .kb-fit-pill.ok{background:#ecfdf5;color:#047857;}'
+      + '#kbTplModal .kb-fit-pill.warn{background:#fffbeb;color:#b45309;}'
       + '@media (max-width:760px){#kbTplModal .kb-detail{grid-template-columns:1fr;}#kbTplModal .kb-detail-media{border-radius:18px 18px 0 0;}}'
       + '#content-digital-human-koubo .kb-tpl-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;}'
       + '#content-digital-human-koubo .kb-tpl-detail{border:0;background:transparent;color:#2563eb;font-size:10.5px;cursor:pointer;padding:2px 0;white-space:nowrap;}'
@@ -560,6 +564,37 @@
     modal.querySelector('.kb-sample-close').onclick = close;
   }
 
+  function fitBlock(t) {
+    var script = String((state.project && state.project.script) || '').trim();
+    var rules = t.rules || {};
+    var maxChars = Number(rules.captionMaxChars || 22);
+    var capFraction = Number(t.caption_size || 0.05);
+    var capacity = Math.max(6, Math.min(maxChars, (720 * 0.94 - 36) / (1280 * capFraction)));
+    var titleMax = Number(rules.titleChars || 14);
+    var sample = String(t.sample_script || '');
+    var sampleLine = '样片文案' + (sample ? '「' + sample + '」' : '') + ' · ' + (t.sample_seconds || 8) + ' 秒';
+    if (!script) {
+      return '<div class="kb-detail-sec"><b>适配你的口播稿</b><div class="kb-detail-note">' + esc(sampleLine) + '。生成底片后，这里会按当前模板的字幕上限给出适配结果。</div></div>';
+    }
+    var segs = (state.project && state.project.segments) || [];
+    var total = script.replace(/\s/g, '').length;
+    var over = 0, screens = 0, longest = 0;
+    segs.forEach(function (s) {
+      var n = String(s.text || '').replace(/\s/g, '').length;
+      longest = Math.max(longest, n);
+      if (n > capacity) over++;
+      screens += Math.max(1, Math.ceil(n / capacity));
+    });
+    var title = String(state.render.title || '').trim() || script.replace(/\s/g, '').slice(0, titleMax);
+    var titleOver = title.length > titleMax;
+    var pills = [];
+    pills.push('<span class="kb-fit-pill ' + (over ? 'warn' : 'ok') + '">' + (over ? ('有 ' + over + ' 段偏长，自动拆屏') : '字幕适配') + '</span>');
+    pills.push('<span class="kb-fit-pill">共 ' + screens + ' 屏</span>');
+    pills.push('<span class="kb-fit-pill ' + (titleOver ? 'warn' : 'ok') + '">标题 ' + title.length + '/' + titleMax + ' 字' + (titleOver ? '，会截断' : '') + '</span>');
+    return '<div class="kb-detail-sec"><b>适配你的口播稿</b><div class="kb-fit">' + pills.join('') + '</div>'
+      + '<div class="kb-detail-note" style="margin-top:6px;">' + esc(sampleLine) + '；你的稿 ' + total + ' 字 / ' + segs.length + ' 段，单段最长 ' + longest + ' 字，模板单屏约 ' + Math.floor(capacity) + ' 字（竖屏成片估算）。</div></div>';
+  }
+
   function openTemplateDetail(id) {
     if (!id) return;
     var old = document.getElementById('kbTplModal');
@@ -611,6 +646,7 @@
         + '<div class="kb-detail-body">'
         + '<div class="kb-detail-head"><div><h3>' + esc(current.name || id) + '</h3><div class="kb-detail-sub">' + esc(current.category || '') + (current.layout_label ? ' · ' + esc(current.layout_label) : '') + '</div></div><button type="button" class="kb-sample-close" data-detail-close>关闭</button></div>'
         + '<div class="kb-detail-desc">' + esc(current.description || '') + '</div>'
+        + fitBlock(current)
         + (chips ? '<div class="kb-detail-sec"><b>适用场景</b><div class="kb-detail-chips">' + chips + '</div></div>' : '')
         + '<div class="kb-detail-sec"><b>画面设置</b><div class="kb-detail-kv">' + kv + '</div></div>'
         + (notes.length ? '<div class="kb-detail-sec"><b>这版会怎么排</b><div class="kb-detail-note">' + esc(notes.join(' · ')) + '</div></div>' : '')
@@ -717,6 +753,8 @@
 
     function paintJob(d) {
       var items = d.items || [];
+      var failed = items.filter(function (x) { return x.status === 'error'; }).length;
+      var retryable = items.filter(function (x) { return x.status === 'error' || x.status === 'skipped'; }).length;
       var rows = items.map(function (x) {
         var extra = x.status === 'done'
           ? (x.score != null ? '<span style="font-size:10.5px;color:#15803d;">质检 ' + x.score + ' 分</span>' : '')
@@ -732,9 +770,25 @@
         + '<div class="kb-batch-sub">' + esc(d.message || '') + ' · ' + (d.done || 0) + '/' + (d.total || items.length) + '</div>'
         + '<div class="kb-batch-bar"><i style="width:' + Math.max(2, d.progress || 0) + '%"></i></div>'
         + '<div class="kb-batch-list">' + (rows + skipped || '<span style="font-size:12px;color:#94a3b8;">没有任务</span>') + '</div>'
-        + '<div class="kb-batch-actions"><span style="font-size:11px;color:#94a3b8;">' + (d.status === 'running' ? '后台渲染中，可以关闭窗口，任务会继续。' : '已完成，可逐条下载或到项目记录查看。') + '</span></div>'
-        + '</div>';
+        + '<div class="kb-batch-actions"><span style="font-size:11px;color:#94a3b8;">' + (d.status === 'running' ? '后台渲染中，可以关闭窗口，任务会继续。' : (d.status === 'cancelled' ? '已取消，可重试未完成的项。' : '已完成，可逐条下载或到项目记录查看。')) + '</span><span style="flex:1"></span>'
+        + (d.status === 'running' ? '<button type="button" class="kb-btn" data-cancel>取消剩余</button>' : '')
+        + (retryable ? '<button type="button" class="kb-btn-primary" data-retry>重试失败/未完成（' + retryable + '）</button>' : '')
+        + '</div></div>';
       modal.querySelector('[data-close]').onclick = close;
+      var cancelBtn = modal.querySelector('[data-cancel]');
+      if (cancelBtn) cancelBtn.onclick = function () {
+        cancelBtn.disabled = true; cancelBtn.textContent = '正在取消…';
+        req('/api/skills/digital-human-koubo/batch-render/jobs/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST', headers: headers() })
+          .then(function () { log('已请求取消，当前这条完成后停止'); poll(); })
+          .catch(function (e) { cancelBtn.disabled = false; cancelBtn.textContent = '取消剩余'; log('取消失败：' + e.message); });
+      };
+      var retryBtn = modal.querySelector('[data-retry]');
+      if (retryBtn) retryBtn.onclick = function () {
+        retryBtn.disabled = true; retryBtn.textContent = '正在重试…';
+        req('/api/skills/digital-human-koubo/batch-render/jobs/' + encodeURIComponent(jobId) + '/retry', { method: 'POST', headers: headers() })
+          .then(function (r) { jobId = r.job_id; paintJob(r); if (timer) clearInterval(timer); timer = setInterval(poll, 1500); poll(); })
+          .catch(function (e) { retryBtn.disabled = false; retryBtn.textContent = '重试失败项'; log('重试失败：' + e.message); });
+      };
     }
 
     function poll() {
