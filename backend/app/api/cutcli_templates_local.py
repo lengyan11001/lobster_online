@@ -2752,6 +2752,7 @@ def _write_ass(path: Path, captions: List[Dict[str, Any]], style: Dict[str, Any]
         for cap in captions:
             duration_sec = max(duration_sec, float(cap.get("end") or 0) / 1_000_000.0)
     lines.extend(_overlay_dialogues(style, overlay_texts or {}, width, height, max(duration_sec or 0.5, 0.5)))
+    last_caption_render = None
     for cap in captions:
         start = max(0.0, float(cap.get("start") or 0) / 1_000_000.0)
         end = max(start + 0.2, float(cap.get("end") or 0) / 1_000_000.0)
@@ -2759,6 +2760,17 @@ def _write_ass(path: Path, captions: List[Dict[str, Any]], style: Dict[str, Any]
         text = _caption_ass_text(style, cap, width, height)
         override = "{\\an%d\\pos(%d,%d)}" % (align, x, y)
         lines.append("Dialogue: 0,%s,%s,Default,,0,0,0,,%s%s" % (_ass_time(start), _ass_time(end), override, text))
+        last_caption_render = (end, align, x, y, text)
+    # 视频比模板/配音长时，最后一屏字幕保持到结尾，避免尾部只剩没有样式的空画面
+    if last_caption_render and duration_sec:
+        hold_start, hold_align, hold_x, hold_y, hold_text = last_caption_render
+        hold_end = max(0.0, float(duration_sec))
+        if hold_end - hold_start > 0.2 and hold_text:
+            hold_override = "{\\an%d\\pos(%d,%d)}" % (hold_align, hold_x, hold_y)
+            lines.append(
+                "Dialogue: 0,%s,%s,Default,,0,0,0,,%s%s"
+                % (_ass_time(hold_start), _ass_time(hold_end), hold_override, hold_text)
+            )
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
