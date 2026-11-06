@@ -43,3 +43,23 @@ def test_canvas_keeps_source_even_and_supports_ratios():
     assert e._canvas({"ratio": "9:16"}, {"w": 400, "h": 736}) == (720, 1280)
     assert e._canvas({"ratio": "16:9"}, {"w": 400, "h": 736}) == (1280, 720)
     assert e._canvas({"ratio": "source"}, {"w": 401, "h": 737}) == (400, 736)
+
+
+def test_recommend_templates_matches_script_keywords():
+    from backend.app.api.skill_deps import RecommendBody, koubo_recommend_templates
+
+    commerce = koubo_recommend_templates(RecommendBody(text="秒杀价 99 元 限时优惠 下单", limit=3))
+    assert commerce["matched_categories"][:1] == ["带货转化"]
+    assert len(commerce["items"]) == 3
+    assert commerce["items"][0]["category"] == "带货转化"
+    assert len({x["template_id"] for x in commerce["items"]}) == 3
+
+    howto = koubo_recommend_templates(RecommendBody(text="一分钟学会操作步骤", limit=3))
+    assert howto["matched_categories"][:1] == ["知识教程"]
+    assert howto["items"][0]["category"] == "知识教程"
+
+    generic = koubo_recommend_templates(RecommendBody(text="今天天气不错", limit=3))
+    assert generic["matched_categories"] == []
+    assert len(generic["items"]) == 3
+    assert generic["items"][0]["reason"] == "通用口播模板"
+    assert koubo_recommend_templates(RecommendBody(text="", limit=99))["items"]

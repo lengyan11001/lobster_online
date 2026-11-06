@@ -1521,6 +1521,67 @@ def koubo_templates():
     return {"templates": koubo_template_engine.public_templates()}
 
 
+class RecommendBody(BaseModel):
+    text: str = ""
+    limit: int = 3
+
+
+_RECOMMEND_RULES = (
+    ("带货转化", ("价格", "多少钱", "优惠", "秒杀", "限时", "下单", "购买", "链接", "券", "折扣", "便宜", "贵", "预算", "闭眼入", "促销")),
+    ("知识教程", ("教程", "步骤", "怎么", "如何", "学会", "方法", "技巧", "干货", "清单", "避坑", "新手", "一分钟", "操作")),
+    ("新闻资讯", ("刚刚", "消息", "新闻", "发布", "宣布", "行业", "政策", "市场", "趋势", "快讯", "确认")),
+    ("测评对比", ("测评", "对比", "开箱", "实测", "推荐", "好用", "值得", "排名", "前三", "区别", "参数", "vs")),
+    ("访谈纪实", ("故事", "经历", "创业", "人物", "访谈", "采访", "大厂", "老板", "选择这条路")),
+    ("情绪剧情", ("反转", "没想到", "居然", "竟然", "崩溃", "后悔", "气死", "离谱", "真相", "你以为")),
+    ("口播观点", ("观点", "认为", "其实", "我觉得", "不同意", "争议", "热点", "锐评", "看法", "说法")),
+    ("矩阵批量", ("矩阵", "批量", "日更", "每天", "连续", "账号")),
+)
+
+
+@router.post("/api/skills/digital-human-koubo/recommend-templates", summary="按口播稿推荐模板")
+def koubo_recommend_templates(body: RecommendBody):
+    from ..services import koubo_template_engine
+    text = (body.text or "").strip().lower()
+    limit = max(1, min(6, int(body.limit or 3)))
+    templates = koubo_template_engine.public_templates()
+    matched = []
+    for category, words in _RECOMMEND_RULES:
+        hits = [w for w in words if w.lower() in text]
+        if hits:
+            matched.append((category, hits[:3]))
+    scores = {}
+    reasons = {}
+    for t in templates:
+        tid = t["id"]
+        score = 0.0
+        reason = ""
+        if t.get("featured"):
+            score += 0.4
+        for category, hits in matched:
+            if t.get("category") == category:
+                score += 4.0
+                if not reason:
+                    reason = "命中「%s」等%s关键词" % (" / ".join(hits), category)
+        hay = " ".join([t.get("name") or "", t.get("description") or "", " ".join(t.get("tags") or [])]).lower()
+        for _, words in matched:
+            for w in words:
+                if w.lower() in hay:
+                    score += 0.6
+        scores[tid] = score
+        reasons[tid] = reason
+    ranked = sorted(templates, key=lambda t: (-scores.get(t["id"], 0.0), int(t.get("order") or 999)))
+    out = []
+    for t in ranked[:limit]:
+        out.append({
+            "template_id": t["id"],
+            "name": t.get("name") or t["id"],
+            "category": t.get("category") or "",
+            "score": round(scores.get(t["id"], 0.0), 2),
+            "reason": reasons.get(t["id"]) or "通用口播模板",
+        })
+    return {"items": out, "matched_categories": [x[0] for x in matched]}
+
+
 def _render_job(job_id: str, project_id: str, preset: str, components: Optional[List[str]],
                 template_id: Optional[str] = None, title: str = "", quality: str = "final",
                 broll: Optional[Dict[str, Any]] = None) -> None:

@@ -14,7 +14,7 @@
     components: [],
     job: null,
     dirty: false,
-    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, previewReady: false, showPreview: false, runningMode: '', qa: null, templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false, featuredPage: 0, recentTemplateIds: [], favoriteTemplateIds: [], broll: null, brollOpen: false },
+    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, previewReady: false, showPreview: false, runningMode: '', qa: null, templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false, featuredPage: 0, recentTemplateIds: [], favoriteTemplateIds: [], recommendations: [], recommendFor: '', broll: null, brollOpen: false },
     qa: null,
     timer: null
   };
@@ -166,6 +166,10 @@
       + '#content-digital-human-koubo .kb-title-input label{font-size:12px;color:#334155;white-space:nowrap;}'
       + '#content-digital-human-koubo .kb-title-input input{flex:1;min-width:0;border:1px solid #e2e8f0;border-radius:9px;padding:8px 10px;font-size:12px;color:#0f172a;background:#fff;}'
       + '#content-digital-human-koubo .kb-title-input small{font-size:10px;color:#94a3b8;white-space:nowrap;}'
+      + '#content-digital-human-koubo .kb-recommend{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 10px;padding:8px 10px;background:#f8fbff;border:1px solid #e0f2fe;border-radius:10px;}'
+      + '#content-digital-human-koubo .kb-recommend b{font-size:11px;color:#0369a1;white-space:nowrap;}'
+      + '#content-digital-human-koubo .kb-rec-chip{border:1px solid #bae6fd;background:#fff;color:#0c4a6e;border-radius:999px;padding:4px 9px;font-size:10.5px;cursor:pointer;}'
+      + '#content-digital-human-koubo .kb-rec-chip:hover{background:#e0f2fe;}'
       + '#content-digital-human-koubo #kbQuote,#content-digital-human-koubo #kbSave,#content-digital-human-koubo #kbExport{display:none;}'
       + '#content-digital-human-koubo .kb-log{max-height:52px;overflow:auto;}'
       + '#content-digital-human-koubo .kb-proj{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:9px 2px;border-bottom:1px solid #f1f5f9;font-size:12px;}'
@@ -506,6 +510,36 @@
     modal.querySelector('.kb-sample-close').onclick = close;
   }
 
+  function selectTemplate(id) {
+    if (!id) return;
+    state.render.templateId = id;
+    touchTemplate(id);
+    state.render.packaged = false;
+    state.render.previewReady = false;
+    state.render.showPreview = false;
+    state.render.qa = null;
+    state.render.job = null;
+    if (state.project) { state.project.rendered = false; state.project.preview_rendered = false; }
+    renderPack(); renderPreview();
+    var found = (state.render.templates || []).filter(function (t) { return t.id === id; })[0];
+    log('已选模板：' + ((found && found.name) || id));
+  }
+
+  function loadRecommendations() {
+    var text = (state.project && state.project.script) || '';
+    text = String(text).trim();
+    if (!text) { state.render.recommendations = []; state.render.recommendFor = ''; return; }
+    var key = text.slice(0, 1200);
+    if (state.render.recommendFor === key) return;
+    state.render.recommendFor = key;
+    req('/api/skills/digital-human-koubo/recommend-templates', {
+      method: 'POST', headers: headers(), body: JSON.stringify({ text: text, limit: 3 })
+    }).then(function (d) {
+      state.render.recommendations = (d && d.items) || [];
+      renderPack();
+    }).catch(function () { state.render.recommendations = []; });
+  }
+
   function templateCardHtml(t) {
     var r = state.render;
     var on = t.id === r.templateId;
@@ -562,18 +596,7 @@
     var emptyText = cat === 'recent' ? '最近还没有用过模板' : (cat === 'favorites' ? '还没有收藏模板' : '没有匹配的模板');
     grid.innerHTML = list.map(templateCardHtml).join('') || '<span style="font-size:12px;color:#94a3b8;padding:10px 0;">' + emptyText + '</span>';
     grid.querySelectorAll('[data-tpl]').forEach(function (card) {
-      card.onclick = function () {
-        state.render.templateId = card.getAttribute('data-tpl');
-        touchTemplate(state.render.templateId);
-        state.render.packaged = false;
-        state.render.previewReady = false;
-        state.render.showPreview = false;
-        state.render.qa = null;
-        state.render.job = null;
-        if (state.project) { state.project.rendered = false; state.project.preview_rendered = false; }
-        renderPack(); renderPreview();
-        log('已选模板：' + (card.querySelector('b') ? card.querySelector('b').textContent : ''));
-      };
+      card.onclick = function () { selectTemplate(card.getAttribute('data-tpl')); };
     });
     grid.querySelectorAll('[data-sample]').forEach(function (btn) {
       btn.onclick = function (e) {
@@ -609,6 +632,7 @@
       + cats.map(function (c) { return '<button type="button" class="kb-tpl-chip' + (r.templateCategory === c ? ' on' : '') + '" data-cat="' + esc(c) + '">' + esc(c) + '</button>'; }).join('');
     box.innerHTML = '<div class="kb-card"><div class="kb-sec-title">选个模板，直接出片<small>' + (tpls.length || 0) + ' 个模板</small></div>'
       + '<div class="kb-title-input"><label>标题</label><input id="kbTemplateTitle" maxlength="24" placeholder="留空自动从口播稿提取" value="' + esc(r.title || '') + '"><small>可选</small></div>'
+      + ((r.recommendations && r.recommendations.length) ? '<div class="kb-recommend"><b>推荐</b>' + r.recommendations.map(function (x) { return '<button type="button" class="kb-rec-chip" data-rec="' + esc(x.template_id) + '" title="' + esc(x.reason || '') + '">' + esc(x.name) + '</button>'; }).join('') + '</div>' : '')
       + '<div class="kb-packbar" style="margin-top:2px;">'
       + (hasFinal ? '<a class="kb-btn" href="' + esc(API + '/api/skills/digital-human-koubo/projects/' + state.project.id + '/rendered') + '" download>下载成片</a>' : '')
       + '<span style="flex:1"></span>'
@@ -647,9 +671,13 @@
     if (btn) btn.onclick = function () { startRender(btn.getAttribute('data-mode') || 'preview'); };
     var again = $('kbPreviewAgain');
     if (again) again.onclick = function () { startRender('preview'); };
+    box.querySelectorAll('[data-rec]').forEach(function (chip) {
+      chip.onclick = function () { selectTemplate(chip.getAttribute('data-rec')); };
+    });
     var qaBtn = $('kbQa');
     if (qaBtn) qaBtn.onclick = runQa;
     bindBrollHandlers();
+    loadRecommendations();
   }
 
   function startRender(mode) {
@@ -938,6 +966,8 @@
       state.render.qa = p.rendered ? (p.qa_final || null) : (p.qa_preview || null);
       state.render.broll = (p.broll && p.broll.asset_id) ? p.broll : null;
       state.render.brollOpen = !!state.render.broll;
+      state.render.recommendFor = '';
+      state.render.recommendations = [];
       if (p.photo_id) {
         state.upload = { id: p.photo_id, url: '/api/skills/digital-human-koubo/uploads/' + p.photo_id, checks: {} };
       }
