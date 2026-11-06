@@ -1521,6 +1521,15 @@ def koubo_templates():
     return {"templates": koubo_template_engine.public_templates()}
 
 
+@router.get("/api/skills/digital-human-koubo/templates/{template_id}", summary="模板详情")
+def koubo_template_detail(template_id: str):
+    from ..services import koubo_template_engine
+    detail = koubo_template_engine.template_detail(template_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="模板不存在")
+    return detail
+
+
 class RecommendBody(BaseModel):
     text: str = ""
     limit: int = 3

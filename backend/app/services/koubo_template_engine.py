@@ -61,26 +61,84 @@ def get_template(template_id: str) -> Optional[Dict[str, Any]]:
     return load_templates().get(template_id)
 
 
+_LAYOUT_LABELS = {
+    'kinetic': '大字快节奏', 'clean': '干净字幕', 'commercial': '带货转化', 'news': '新闻播报',
+    'tutorial': '步骤教程', 'review': '测评对比', 'story': '故事叙事', 'interview': '访谈纪实',
+    'matrix': '矩阵批量', 'knowledge': '知识卡片', 'minimal': '极简留白', 'quote': '金句大字',
+    'banner': '横幅强调', 'magazine': '杂志排版',
+}
+
+_CATEGORY_SCENES = {
+    '口播观点': ['观点输出', '热点锐评', '知识分享'],
+    '访谈纪实': ['人物访谈', '创业故事', '经历复盘'],
+    '带货转化': ['直播切片', '商品种草', '促销转化'],
+    '知识教程': ['教程讲解', '步骤拆解', '干货清单'],
+    '新闻资讯': ['快讯播报', '行业解读', '政策说明'],
+    '测评对比': ['开箱测评', '参数对比', '选购建议'],
+    '情绪剧情': ['剧情反转', '情绪表达', '故事讲述'],
+    '矩阵批量': ['账号矩阵', '日更口播', '批量起号'],
+}
+
+_RATIO_LABELS = {'source': '跟随底片', '9:16': '竖屏 9:16', '16:9': '横屏 16:9'}
+_MOTION_LABELS = {'push': '镜头缓推', 'pull': '镜头缓拉', 'none': '固定机位'}
+
+
+def _public(spec: Dict[str, Any]) -> Dict[str, Any]:
+    style = spec.get('style') or {}
+    return {
+        'id': spec.get('id'),
+        'name': spec.get('name'),
+        'description': spec.get('description'),
+        'category': spec.get('category') or '其他',
+        'featured': bool(spec.get('featured')),
+        'order': int(spec.get('order') or 999),
+        'tags': spec.get('tags') or [],
+        'ratio': spec.get('ratio') or 'source',
+        'variant': spec.get('variant') or 'kinetic',
+        'colors': [style.get('accent'), style.get('accent2'), style.get('accent3')],
+        'cover': spec.get('cover') or '',
+        'sample_video_url': spec.get('sample_video_url') or '',
+        'default': bool(spec.get('default')),
+    }
+
+
 def public_templates() -> List[Dict[str, Any]]:
-    out = []
-    for spec in sorted(load_templates().values(), key=lambda x: (int(x.get('order') or 999), str(x.get('id') or ''))):
-        style = spec.get('style') or {}
-        out.append({
-            'id': spec.get('id'),
-            'name': spec.get('name'),
-            'description': spec.get('description'),
-            'category': spec.get('category') or '其他',
-            'featured': bool(spec.get('featured')),
-            'order': int(spec.get('order') or 999),
-            'tags': spec.get('tags') or [],
-            'ratio': spec.get('ratio') or 'source',
-            'variant': spec.get('variant') or 'kinetic',
-            'colors': [style.get('accent'), style.get('accent2'), style.get('accent3')],
-            'cover': spec.get('cover') or '',
-            'sample_video_url': spec.get('sample_video_url') or '',
-            'default': bool(spec.get('default')),
-        })
-    return out
+    ordered = sorted(load_templates().values(), key=lambda x: (int(x.get('order') or 999), str(x.get('id') or '')))
+    return [_public(spec) for spec in ordered]
+
+
+def template_detail(template_id: str) -> Optional[Dict[str, Any]]:
+    spec = load_templates().get(str(template_id or '').strip())
+    if not spec:
+        return None
+    data = _public(spec)
+    category = str(data.get('category') or '')
+    motion = spec.get('motion') or {}
+    cut = str((spec.get('transitions') or {}).get('cut') or 'none')
+    features = []
+    motion_label = _MOTION_LABELS.get(str(motion.get('type') or 'none'), '固定机位')
+    if motion.get('type'):
+        features.append(motion_label)
+    if cut == 'flash':
+        features.append('闪白转场')
+    if (spec.get('chapter') or {}).get('show'):
+        features.append('章节进度')
+    if float((spec.get('rules') or {}).get('safeArea') or 0) > 0:
+        features.append('字幕安全区')
+    data.update({
+        'layout': spec.get('layout') or data['variant'],
+        'layout_label': _LAYOUT_LABELS.get(str(spec.get('layout') or data['variant']), '标准排版'),
+        'motion': motion,
+        'motion_label': motion_label,
+        'transition': cut,
+        'transition_label': '闪白转场' if cut == 'flash' else '硬切',
+        'ratio_label': _RATIO_LABELS.get(str(data.get('ratio')), str(data.get('ratio'))),
+        'scenes': _CATEGORY_SCENES.get(category) or ['通用口播'],
+        'features': features,
+        'copy': spec.get('copy') or {},
+        'rules': spec.get('rules') or {},
+    })
+    return data
 
 
 def _even(value: int) -> int:

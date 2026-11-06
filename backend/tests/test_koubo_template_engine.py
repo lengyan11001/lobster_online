@@ -63,3 +63,15 @@ def test_recommend_templates_matches_script_keywords():
     assert len(generic["items"]) == 3
     assert generic["items"][0]["reason"] == "通用口播模板"
     assert koubo_recommend_templates(RecommendBody(text="", limit=99))["items"]
+
+
+def test_template_detail_exposes_scenes_and_motion():
+    from backend.app.services import koubo_template_engine as e
+
+    d = e.template_detail("premium_kinetic_v1")
+    assert d and d["id"] == "premium_kinetic_v1"
+    assert d["layout"] == "kinetic"
+    assert d["scenes"] and d["motion_label"] == "镜头缓推"
+    assert d["transition_label"] == "闪白转场"
+    assert "字幕安全区" in d["features"]
+    assert e.template_detail("does_not_exist") is None

@@ -148,6 +148,32 @@
       + '#kbSampleModal .kb-sample-head{display:flex;align-items:center;justify-content:space-between;color:#e2e8f0;font-size:12px;margin-bottom:8px;}'
       + '#kbSampleModal video{width:100%;max-height:78vh;border-radius:12px;background:#000;}'
       + '#kbSampleModal .kb-sample-close{border:1px solid rgba(255,255,255,.2);background:transparent;color:#e2e8f0;border-radius:999px;padding:4px 9px;font-size:11px;cursor:pointer;}'
+      + '#kbTplModal{position:fixed;inset:0;z-index:10060;background:rgba(5,9,18,.78);display:flex;align-items:center;justify-content:center;padding:20px;}'
+      + '#kbTplModal .kb-detail{width:min(94vw,880px);max-height:92vh;overflow:auto;background:#fff;border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.45);display:grid;grid-template-columns:minmax(240px,42%) 1fr;}'
+      + '#kbTplModal .kb-detail-media{background:#0b1220;padding:14px;border-radius:18px 0 0 18px;display:flex;flex-direction:column;gap:10px;justify-content:center;}'
+      + '#kbTplModal .kb-detail-media img{display:block;width:100%;border-radius:12px;object-fit:cover;background:#111827;}'
+      + '#kbTplModal .kb-detail-media video{display:block;width:100%;border-radius:12px;background:#000;}'
+      + '#kbTplModal .kb-detail-nosample{border:1px dashed rgba(255,255,255,.24);border-radius:12px;padding:26px 12px;text-align:center;color:#cbd5e1;font-size:12px;line-height:1.7;}'
+      + '#kbTplModal .kb-detail-nosample small{color:#64748b;font-size:10.5px;}'
+      + '#kbTplModal .kb-detail-body{padding:18px 20px 18px;min-width:0;}'
+      + '#kbTplModal .kb-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}'
+      + '#kbTplModal .kb-detail-head h3{margin:0;font-size:19px;color:#0f172a;letter-spacing:-.01em;}'
+      + '#kbTplModal .kb-detail-sub{font-size:11px;color:#94a3b8;margin-top:4px;}'
+      + '#kbTplModal .kb-detail-desc{font-size:12.5px;line-height:1.7;color:#475569;margin-top:10px;}'
+      + '#kbTplModal .kb-detail-sec{margin-top:14px;}'
+      + '#kbTplModal .kb-detail-sec>b{display:block;font-size:11.5px;color:#0f172a;margin-bottom:6px;}'
+      + '#kbTplModal .kb-detail-chips{display:flex;flex-wrap:wrap;gap:6px;}'
+      + '#kbTplModal .kb-detail-chip{border:1px solid #e2e8f0;background:#f8fafc;color:#475569;border-radius:999px;padding:4px 9px;font-size:10.5px;}'
+      + '#kbTplModal .kb-detail-kv{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;}'
+      + '#kbTplModal .kb-detail-kv span{background:#f8fafc;border-radius:8px;padding:6px 8px;font-size:11px;color:#475569;}'
+      + '#kbTplModal .kb-detail-note{font-size:11px;line-height:1.7;color:#64748b;background:#f8fafc;border-radius:8px;padding:8px 10px;}'
+      + '#kbTplModal .kb-detail-actions{display:flex;align-items:center;gap:8px;margin-top:18px;position:sticky;bottom:-18px;background:#fff;padding:10px 0 0;border-top:1px solid #f1f5f9;}'
+      + '#kbTplModal .kb-detail-actions .kb-btn{width:auto;}'
+      + '#kbTplModal .kb-detail-actions .kb-btn-primary{width:auto;min-width:150px;margin:0;}'
+      + '@media (max-width:760px){#kbTplModal .kb-detail{grid-template-columns:1fr;}#kbTplModal .kb-detail-media{border-radius:18px 18px 0 0;}}'
+      + '#content-digital-human-koubo .kb-tpl-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;}'
+      + '#content-digital-human-koubo .kb-tpl-detail{border:0;background:transparent;color:#2563eb;font-size:10.5px;cursor:pointer;padding:2px 0;white-space:nowrap;}'
+      + '#content-digital-human-koubo .kb-tpl-detail:hover{text-decoration:underline;}'
       + '#content-digital-human-koubo .kb-tpl-preview:after{content:"";position:absolute;left:10%;right:10%;top:20%;height:12px;border-radius:6px;background:rgba(255,255,255,.82);box-shadow:0 10px 0 -2px rgba(255,255,255,.32);}'
       + '#content-digital-human-koubo .kb-tpl b{display:block;font-size:12px;color:#0f172a;margin-bottom:3px;}'
       + '#content-digital-human-koubo .kb-tpl p{font-size:11px;line-height:1.45;color:#64748b;margin:0 0 5px;min-height:31px;}'
@@ -510,6 +536,89 @@
     modal.querySelector('.kb-sample-close').onclick = close;
   }
 
+  function openTemplateDetail(id) {
+    if (!id) return;
+    var old = document.getElementById('kbTplModal');
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+    var local = (state.render.templates || []).filter(function (t) { return t.id === id; })[0] || null;
+    var modal = document.createElement('div');
+    modal.id = 'kbTplModal';
+    document.body.appendChild(modal);
+    var current = local || { id: id, name: id };
+    var alive = true;
+
+    function videoHtml(t) {
+      var sample = t.sample_video_url || '';
+      if (!sample) return '<div class="kb-detail-nosample">样片制作中<br><small>可直接套用，用你的口播稿出片</small></div>';
+      var src = String(sample).indexOf('http') === 0 ? sample : API + sample;
+      return '<video controls playsinline preload="metadata" src="' + esc(src) + '"></video>';
+    }
+
+    function paint(t) {
+      if (!alive) return;
+      current = t || current;
+      var colors = current.colors || ['#FFD84D', '#FF4D8D', '#4DE1FF'];
+      var cover = current.cover ? (String(current.cover).indexOf('http') === 0 ? current.cover : API + current.cover) : '';
+      var media = cover
+        ? '<img src="' + esc(cover) + '" alt="">'
+        : '<span class="kb-tpl-preview" style="height:180px;margin:0;background:linear-gradient(135deg,' + esc(colors[0]) + ',' + esc(colors[1]) + ',' + esc(colors[2]) + ')"></span>';
+      var scenes = current.scenes || [];
+      var tags = current.tags || [];
+      var chips = scenes.concat(tags.filter(function (x) { return scenes.indexOf(x) < 0; })).map(function (x) {
+        return '<span class="kb-detail-chip">' + esc(x) + '</span>';
+      }).join('');
+      var kv = [
+        ['画幅', current.ratio_label || current.ratio || '跟随底片'],
+        ['排版', current.layout_label || current.variant || '标准排版'],
+        ['镜头', current.motion_label || '固定机位'],
+        ['转场', current.transition_label || '硬切'],
+        ['字幕', '安全区内自动断句'],
+        ['节奏', '跟随口播停顿']
+      ].map(function (row) { return '<span>' + esc(row[0]) + '：' + esc(row[1]) + '</span>'; }).join('');
+      var copy = current.copy || {};
+      var notes = [];
+      if (copy.badge) notes.push('角标「' + copy.badge + '」');
+      if (copy.lowerTitle) notes.push('落版「' + copy.lowerTitle + (copy.lowerSub ? ' / ' + copy.lowerSub : '') + '」');
+      if (copy.cta) notes.push('结尾「' + copy.cta + '」');
+      var fav = (state.render.favoriteTemplateIds || []).indexOf(current.id) >= 0;
+      modal.innerHTML = '<div class="kb-detail">'
+        + '<div class="kb-detail-media">' + media + videoHtml(current) + '</div>'
+        + '<div class="kb-detail-body">'
+        + '<div class="kb-detail-head"><div><h3>' + esc(current.name || id) + '</h3><div class="kb-detail-sub">' + esc(current.category || '') + (current.layout_label ? ' · ' + esc(current.layout_label) : '') + '</div></div><button type="button" class="kb-sample-close" data-detail-close>关闭</button></div>'
+        + '<div class="kb-detail-desc">' + esc(current.description || '') + '</div>'
+        + (chips ? '<div class="kb-detail-sec"><b>适用场景</b><div class="kb-detail-chips">' + chips + '</div></div>' : '')
+        + '<div class="kb-detail-sec"><b>画面设置</b><div class="kb-detail-kv">' + kv + '</div></div>'
+        + (notes.length ? '<div class="kb-detail-sec"><b>这版会怎么排</b><div class="kb-detail-note">' + esc(notes.join(' · ')) + '</div></div>' : '')
+        + '<div class="kb-detail-actions"><button type="button" class="kb-btn" data-detail-fav>' + (fav ? '★ 已收藏' : '☆ 收藏') + '</button><span style="flex:1"></span><button type="button" class="kb-btn-primary" data-detail-apply>套用这个模板</button></div>'
+        + '</div></div>';
+      modal.querySelector('[data-detail-close]').onclick = close;
+      modal.querySelector('[data-detail-apply]').onclick = function () {
+        selectTemplate(current.id);
+        close();
+        var card = document.querySelector('#kbTplGrid [data-tpl="' + current.id + '"]');
+        if (card) { try { card.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch (e) {} }
+      };
+      modal.querySelector('[data-detail-fav]').onclick = function () {
+        toggleFavoriteTemplate(current.id);
+        renderPack();
+        paint(current);
+      };
+    }
+
+    function close() {
+      alive = false;
+      var v = modal.querySelector('video');
+      if (v) { try { v.pause(); } catch (e) {} }
+      if (modal.parentNode) modal.parentNode.removeChild(modal);
+    }
+
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    paint(current);
+    req('/api/skills/digital-human-koubo/templates/' + encodeURIComponent(id), { headers: headers() })
+      .then(function (d) { if (d && d.id) paint(d); })
+      .catch(function () {});
+  }
+
   function selectTemplate(id) {
     if (!id) return;
     state.render.templateId = id;
@@ -556,7 +665,7 @@
       + '<div class="kb-tpl-coverwrap">' + visual + favBtn + play + '</div>'
       + '<b>' + esc(t.name || t.id) + '</b>'
       + '<p>' + esc(t.description || '') + '</p>'
-      + '<small>' + esc(t.category || '') + (t.tags && t.tags.length ? ' · ' + esc((t.tags || []).slice(0, 2).join(' · ')) : '') + '</small>'
+      + '<div class="kb-tpl-foot"><small>' + esc(t.category || '') + (t.tags && t.tags.length ? ' · ' + esc((t.tags || []).slice(0, 2).join(' · ')) : '') + '</small><button type="button" class="kb-tpl-detail" data-detail="' + esc(t.id) + '">详情</button></div>'
       + '</div>';
   }
 
@@ -609,6 +718,12 @@
         e.stopPropagation();
         toggleFavoriteTemplate(btn.getAttribute('data-fav'));
         renderPack();
+      };
+    });
+    grid.querySelectorAll('[data-detail]').forEach(function (btn) {
+      btn.onclick = function (e) {
+        e.stopPropagation();
+        openTemplateDetail(btn.getAttribute('data-detail'));
       };
     });
   }
