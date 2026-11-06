@@ -152,7 +152,7 @@
       + '#kbTplModal .kb-detail{width:min(94vw,880px);max-height:92vh;overflow:auto;background:#fff;border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.45);display:grid;grid-template-columns:minmax(240px,42%) 1fr;}'
       + '#kbTplModal .kb-detail-media{background:#0b1220;padding:14px;border-radius:18px 0 0 18px;display:flex;flex-direction:column;gap:10px;justify-content:center;}'
       + '#kbTplModal .kb-detail-media img{display:block;width:100%;border-radius:12px;object-fit:cover;background:#111827;}'
-      + '#kbTplModal .kb-detail-media video{display:block;width:100%;border-radius:12px;background:#000;}'
+      + '#kbTplModal .kb-detail-media video{display:block;width:100%;max-height:52vh;object-fit:contain;border-radius:12px;background:#000;}'
       + '#kbTplModal .kb-detail-nosample{border:1px dashed rgba(255,255,255,.24);border-radius:12px;padding:26px 12px;text-align:center;color:#cbd5e1;font-size:12px;line-height:1.7;}'
       + '#kbTplModal .kb-detail-nosample small{color:#64748b;font-size:10.5px;}'
       + '#kbTplModal .kb-detail-body{padding:18px 20px 18px;min-width:0;}'
@@ -575,7 +575,8 @@
       var sample = t.sample_video_url || '';
       if (!sample) return '<div class="kb-detail-nosample">样片制作中<br><small>可直接套用，用你的口播稿出片</small></div>';
       var src = String(sample).indexOf('http') === 0 ? sample : API + sample;
-      return '<video controls playsinline preload="metadata" src="' + esc(src) + '"></video>';
+      var poster = t.cover ? (String(t.cover).indexOf('http') === 0 ? t.cover : API + t.cover) : '';
+      return '<video controls playsinline preload="metadata"' + (poster ? ' poster="' + esc(poster) + '"' : '') + ' src="' + esc(src) + '"></video>';
     }
 
     function paint(t) {
@@ -864,10 +865,55 @@
     });
   }
 
+  function renderGallery() {
+    var r = state.render;
+    var tpls = r.templates || [];
+    var cats = [];
+    tpls.forEach(function (t) { if (t.category && cats.indexOf(t.category) < 0) cats.push(t.category); });
+    var chips = '<button type="button" class="kb-tpl-chip' + ((r.templateCategory || 'all') === 'all' ? ' on' : '') + '" data-cat="all">全部</button>'
+      + cats.map(function (c) { return '<button type="button" class="kb-tpl-chip' + (r.templateCategory === c ? ' on' : '') + '" data-cat="' + esc(c) + '">' + esc(c) + '</button>'; }).join('')
+      + '<button type="button" class="kb-tpl-chip' + (r.templateCategory === 'favorites' ? ' on' : '') + '" data-cat="favorites">收藏</button>'
+      + '<button type="button" class="kb-tpl-chip' + (r.templateCategory === 'recent' ? ' on' : '') + '" data-cat="recent">最近</button>';
+    return '<div class="kb-card"><div class="kb-sec-title">模板库<small>' + tpls.length + ' 个模板 · 先看风格，生成后一键套用</small></div>'
+      + '<div class="kb-hint" style="margin:0 0 10px;">先在左侧上传形象照、写口播稿并生成底片。模板可以先看样片；底片出来后同一段素材可反复换模板，不重复扣算力。</div>'
+      + '<div class="kb-tpl-tools"><input id="kbTplSearch" class="kb-tpl-search" placeholder="搜模板、场景、标签" value="' + esc(r.templateQuery || '') + '">' + chips + '</div>'
+      + '<div class="kb-templates" id="kbTplGrid"></div>'
+      + '<div class="kb-tpl-bottom-actions">'
+      + ((r.templateCategory || 'all') === 'all' && !(r.templateQuery || '').trim() ? '<button type="button" class="kb-tpl-more" id="kbTplRefresh">换一批</button>' : '')
+      + '<button type="button" class="kb-tpl-more" id="kbTplMore">' + (r.showAllTemplates ? '收起，只看推荐' : '全部模板（' + tpls.length + '）') + '</button>'
+      + '</div></div>';
+  }
+
+  function bindTemplateTools() {
+    var box = $('kbPack');
+    if (!box) return;
+    box.querySelectorAll('[data-cat]').forEach(function (chip) {
+      chip.onclick = function () {
+        state.render.templateCategory = chip.getAttribute('data-cat') || 'all';
+        state.render.featuredPage = 0;
+        renderPack();
+      };
+    });
+    var search = $('kbTplSearch');
+    if (search) search.oninput = function () { state.render.templateQuery = search.value || ''; state.render.featuredPage = 0; paintTemplateGrid(); };
+    var more = $('kbTplMore');
+    if (more) more.onclick = function () { state.render.showAllTemplates = !state.render.showAllTemplates; if (!state.render.showAllTemplates) { state.render.templateCategory = 'all'; state.render.templateQuery = ''; state.render.featuredPage = 0; } renderPack(); };
+    var refresh = $('kbTplRefresh');
+    if (refresh) refresh.onclick = function () { state.render.featuredPage = (state.render.featuredPage || 0) + 1; renderPack(); };
+    var batchOpen = $('kbBatchOpen');
+    if (batchOpen) batchOpen.onclick = openBatchModal;
+  }
+
   function renderPack() {
     var box = $('kbPack');
     if (!box) return;
-    if (!state.project || state.project.status !== 'generated') { box.innerHTML = ''; return; }
+    if (!state.project || state.project.status !== 'generated') {
+      box.innerHTML = (state.render.templates || []).length ? renderGallery() : '';
+      if (!box.innerHTML) return;
+      paintTemplateGrid();
+      bindTemplateTools();
+      return;
+    }
     var r = state.render;
     var job = r.job && r.job.status === 'running' ? r.job : null;
     var tpls = r.templates || [];
