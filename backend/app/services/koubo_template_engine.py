@@ -19,6 +19,8 @@ SPEC_DIR = ROOT / "skills" / "digital_human_koubo" / "templates" / "specs"
 OVERLAY_HTML = Path(__file__).with_name("koubo_template_overlay.html")
 OUTPUT_DIR = kr.OUTPUT_DIR
 DATA_DIR = kr.DATA_DIR
+BROLL_DIR = DATA_DIR / 'broll'
+BROLL_VIDEO_EXT = {'.mp4', '.mov', '.webm', '.m4v'}
 FONTS_DIR = kr.FONTS_DIR
 FFMPEG = kr.FFMPEG
 FPS = 30
@@ -125,7 +127,8 @@ def _ensure_keywords(timeline: Dict[str, Any]) -> None:
 
 def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
            progress: Optional[Callable[[int, int, str], None]] = None,
-           title_override: str = '', quality: str = 'final') -> Path:
+           title_override: str = '', quality: str = 'final',
+           broll: Optional[Dict[str, Any]] = None) -> Path:
     spec = get_template(template_id) or get_template('premium_kinetic_v1')
     if not spec:
         raise RuntimeError('模板不存在')
@@ -242,6 +245,25 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
                     progress(i + 1, total_frames, ('预览渲染' if preview_mode else '模板渲染') + ' %d/%d' % (i + 1, total_frames))
             browser.close()
         out = OUTPUT_DIR / pid / ('final_preview.mp4' if preview_mode else 'final_packaged.mp4')
+        broll_path = None
+        broll_mode = 'pip'
+        broll_start = 0.0
+        broll_dur = 0.0
+        if isinstance(broll, dict) and str(broll.get('asset_id') or '').strip():
+            candidate = BROLL_DIR / Path(str(broll.get('asset_id'))).name
+            if candidate.is_file():
+                broll_path = candidate
+                broll_mode = 'full' if str(broll.get('mode') or '').strip().lower() == 'full' else 'pip'
+                try:
+                    broll_start = max(0.0, float(broll.get('start') or 0.0))
+                except (TypeError, ValueError):
+                    broll_start = 0.0
+                broll_start = min(max(0.0, duration - 0.6), broll_start)
+                try:
+                    broll_dur = max(0.8, float(broll.get('duration') or 2.5))
+                except (TypeError, ValueError):
+                    broll_dur = 2.5
+                broll_dur = min(max(0.8, duration - broll_start), broll_dur)
         motion = spec.get('motion') or {}
         motion_type = str(motion.get('type') or 'none').strip().lower()
         motion_strength = float(motion.get('strength') or 0.0)
@@ -259,10 +281,30 @@ def render(project: Dict[str, Any], template_id: str = 'premium_kinetic_v1',
         else:
             base_filter = ("[0:v]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1[bg]") % (
                 W, H, W, H)
-        fg = base_filter + ';[bg][1:v]overlay=0:0:format=auto[v]'
+        if broll_path is not None:
+            if broll_mode == 'full':
+                bfilter = ('[2:v]scale=%d:%d:force_original_aspect_ratio=increase,crop=%d:%d,setsar=1') % (W, H, W, H)
+                ox, oy = 0, 0
+            else:
+                pw = _even(int(round(W * 0.38)))
+                bfilter = ('[2:v]scale=%d:-2,setsar=1,drawbox=x=0:y=0:w=iw:h=ih:color=white@0.9:t=4') % pw
+                ox, oy = max(0, W - pw - 18), int(H * 0.62)
+            if broll_path.suffix.lower() in BROLL_VIDEO_EXT:
+                bfilter += ',trim=duration=%.3f,setpts=PTS-STARTPTS+%.3f/TB' % (broll_dur, broll_start)
+            else:
+                bfilter += ',setpts=PTS-STARTPTS+%.3f/TB' % broll_start
+            fg = (base_filter + ';' + bfilter + "[br];[bg][br]overlay=%d:%d:enable='between(t,%.3f,%.3f)':eof_action=pass[scene];[scene][1:v]overlay=0:0:format=auto[v]") % (
+                ox, oy, broll_start, broll_start + broll_dur)
+        else:
+            fg = base_filter + ';[bg][1:v]overlay=0:0:format=auto[v]'
         cmd = [str(FFMPEG), '-y', '-loglevel', 'error', '-i', str(src),
-               '-framerate', str(fps), '-start_number', '1', '-i', str(tmp / 'o%05d.png'),
-               '-filter_complex', fg, '-map', '[v]', '-map', '0:a?',
+               '-framerate', str(fps), '-start_number', '1', '-i', str(tmp / 'o%05d.png')]
+        if broll_path is not None:
+            if broll_path.suffix.lower() in BROLL_VIDEO_EXT:
+                cmd += ['-i', str(broll_path)]
+            else:
+                cmd += ['-loop', '1', '-framerate', str(fps), '-t', '%.3f' % broll_dur, '-i', str(broll_path)]
+        cmd += ['-filter_complex', fg, '-map', '[v]', '-map', '0:a?',
                '-r', str(fps), '-c:v', 'libx264', '-crf', '18', '-preset', 'medium', '-pix_fmt', 'yuv420p',
                '-c:a', 'aac', '-b:a', '192k', '-shortest', '-movflags', '+faststart', str(out)]
         r = kr._run(cmd, timeout=1800)

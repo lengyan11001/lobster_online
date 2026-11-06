@@ -14,7 +14,7 @@
     components: [],
     job: null,
     dirty: false,
-    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, previewReady: false, showPreview: false, runningMode: '', qa: null, templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false, featuredPage: 0, recentTemplateIds: [], favoriteTemplateIds: [] },
+    render: { preset: '标准', components: ['caption', 'keyword', 'cta', 'lowerthird', 'punch', 'chapter', 'stack', 'counter'], job: null, packaged: false, previewReady: false, showPreview: false, runningMode: '', qa: null, templateId: 'premium_kinetic_v1', templates: [], title: '', templateCategory: 'all', templateQuery: '', showAllTemplates: false, featuredPage: 0, recentTemplateIds: [], favoriteTemplateIds: [], broll: null, brollOpen: false },
     qa: null,
     timer: null
   };
@@ -132,6 +132,15 @@
       + '#content-digital-human-koubo .kb-tpl-play:hover{background:rgba(37,99,235,.9);}'
       + '#content-digital-human-koubo .kb-tpl-fav{position:absolute;right:6px;top:6px;width:22px;height:22px;border:1px solid rgba(255,255,255,.2);border-radius:50%;background:rgba(5,9,18,.58);color:#fff;font-size:13px;line-height:1;cursor:pointer;backdrop-filter:blur(6px);padding:0;}'
       + '#content-digital-human-koubo .kb-tpl-fav.on{color:#FFD84D;background:rgba(5,9,18,.8);}'
+      + '#content-digital-human-koubo .kb-broll{border-top:1px solid #f1f5f9;margin-top:10px;padding-top:10px;}'
+      + '#content-digital-human-koubo .kb-broll-head{display:flex;align-items:center;gap:8px;font-size:12px;color:#334155;}'
+      + '#content-digital-human-koubo .kb-broll-head small{font-size:10px;color:#94a3b8;}'
+      + '#content-digital-human-koubo .kb-broll-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;font-size:11px;color:#475569;}'
+      + '#content-digital-human-koubo .kb-broll-row label{display:inline-flex;align-items:center;gap:5px;}'
+      + '#content-digital-human-koubo .kb-broll-row select,#content-digital-human-koubo .kb-broll-row input[type=number]{border:1px solid #e2e8f0;border-radius:7px;padding:5px 7px;font-size:11px;color:#334155;background:#fff;}'
+      + '#content-digital-human-koubo .kb-broll-row input[type=number]{width:58px;}'
+      + '#content-digital-human-koubo .kb-broll-name{font-size:11px;color:#64748b;max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}'
+      + '#content-digital-human-koubo .kb-broll-note{font-size:10px;color:#94a3b8;margin-top:6px;}'
       + '#content-digital-human-koubo .kb-tpl-bottom-actions{display:flex;gap:8px;margin-top:10px;}'
       + '#content-digital-human-koubo .kb-tpl-bottom-actions .kb-tpl-more{flex:1;margin-top:0;}'
       + '#kbSampleModal{position:fixed;inset:0;z-index:10050;background:rgba(5,9,18,.76);display:flex;align-items:center;justify-content:center;padding:24px;}'
@@ -436,6 +445,50 @@
     saveTemplatePrefs();
   }
 
+  function renderBrollBlock() {
+    var b = state.render.broll;
+    var open = !!state.render.brollOpen;
+    return '<div class="kb-broll"><div class="kb-broll-head"><b>插入素材</b><small>可选 · B-roll / 画中画</small><span style="flex:1"></span><button type="button" class="kb-btn" id="kbBrollToggle">' + (open ? '收起' : '展开') + '</button></div>'
+      + '<div id="kbBrollBody" style="display:' + (open ? 'block' : 'none') + ';">'
+      + '<div class="kb-broll-row"><button type="button" class="kb-btn" id="kbBrollPick">上传图片/视频</button><span class="kb-broll-name" id="kbBrollName">' + esc(b ? (b.name || b.asset_id || '已选素材') : '未选择素材') + '</span>' + (b ? '<button type="button" class="kb-btn" id="kbBrollRemove">移除</button>' : '') + '</div>'
+      + '<div class="kb-broll-row"><label>方式<select id="kbBrollMode"><option value="pip"' + (b && b.mode === 'pip' ? ' selected' : '') + '>画中画</option><option value="full"' + (b && b.mode === 'full' ? ' selected' : '') + '>全屏插入</option></select></label><label>开始<input id="kbBrollStart" type="number" min="0" step="0.5" value="' + esc(b ? (b.start || 2) : 2) + '"> 秒</label><label>时长<input id="kbBrollDuration" type="number" min="0.8" step="0.5" value="' + esc(b ? (b.duration || 2.5) : 2.5) + '"> 秒</label></div>'
+      + '<input type="file" id="kbBrollFile" accept="video/mp4,video/quicktime,video/webm,image/jpeg,image/png,image/webp" style="display:none;">'
+      + '<div class="kb-broll-note">素材插在底片上，原口播声音不变；画中画放在右下角，全屏插入会暂时盖住人物。</div>'
+      + '</div></div>';
+  }
+
+  function bindBrollHandlers() {
+    var toggle = $('kbBrollToggle');
+    if (toggle) toggle.onclick = function () { state.render.brollOpen = !state.render.brollOpen; renderPack(); };
+    var pick = $('kbBrollPick');
+    var file = $('kbBrollFile');
+    if (pick && file) pick.onclick = function () { file.click(); };
+    if (file) file.onchange = function () { if (file.files && file.files[0]) uploadBroll(file.files[0]); };
+    var mode = $('kbBrollMode');
+    if (mode) mode.onchange = function () { if (state.render.broll) state.render.broll.mode = mode.value; };
+    var start = $('kbBrollStart');
+    if (start) start.oninput = function () { if (state.render.broll) state.render.broll.start = Number(start.value || 2); };
+    var dur = $('kbBrollDuration');
+    if (dur) dur.oninput = function () { if (state.render.broll) state.render.broll.duration = Number(dur.value || 2.5); };
+    var remove = $('kbBrollRemove');
+    if (remove) remove.onclick = function () { state.render.broll = null; state.render.brollOpen = true; renderPack(); };
+  }
+
+  function uploadBroll(f) {
+    var fd = new FormData();
+    fd.append('file', f);
+    log('上传插入素材 ' + f.name + '…');
+    fetch(API + '/api/skills/digital-human-koubo/broll-uploads', { method: 'POST', headers: authOnly(), body: fd })
+      .then(function (r) { return r.json().then(function (d) { if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : JSON.stringify(d.detail)); return d; }); })
+      .then(function (d) {
+        state.render.broll = { asset_id: d.id, url: d.url, name: d.name || d.id, kind: d.kind || 'image', mode: 'pip', start: 2, duration: 2.5 };
+        state.render.brollOpen = true;
+        renderPack();
+        log('插入素材已上传 ' + (d.name || d.id));
+      })
+      .catch(function (e) { log('上传插入素材失败：' + e.message); });
+  }
+
   function openTemplateSample(url, name) {
     if (!url) return;
     var old = document.getElementById('kbSampleModal');
@@ -570,6 +623,7 @@
       + (tpls.length > 6 ? '<div class="kb-tpl-bottom-actions">'
           + (!r.showAllTemplates && (r.templateCategory || 'all') === 'all' && !(r.templateQuery || '').trim() ? '<button type="button" class="kb-tpl-more" id="kbTplRefresh">换一批</button>' : '')
           + '<button type="button" class="kb-tpl-more" id="kbTplMore">' + (r.showAllTemplates ? '收起，只看推荐' : '全部模板（' + tpls.length + '）') + '</button></div>' : '')
+      + renderBrollBlock()
       + '<div class="kb-packbar" style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:10px;"><button type="button" class="kb-btn" id="kbQa">口播质检</button><span style="font-size:11px;color:#94a3b8;">回听比对文稿，低于 85% 建议重拍底片</span></div>'
       + (state.qa ? renderQaResult(state.qa) : '')
       + '</div>';
@@ -595,6 +649,7 @@
     if (again) again.onclick = function () { startRender('preview'); };
     var qaBtn = $('kbQa');
     if (qaBtn) qaBtn.onclick = runQa;
+    bindBrollHandlers();
   }
 
   function startRender(mode) {
@@ -604,7 +659,7 @@
     renderPack();
     req('/api/skills/digital-human-koubo/projects/' + state.project.id + '/render', {
       method: 'POST', headers: headers(),
-      body: JSON.stringify({ template_id: state.render.templateId, title: state.render.title || '', quality: state.render.runningMode })
+      body: JSON.stringify({ template_id: state.render.templateId, title: state.render.title || '', quality: state.render.runningMode, broll: state.render.broll ? { asset_id: state.render.broll.asset_id, mode: state.render.broll.mode || 'pip', start: Number(state.render.broll.start || 2), duration: Number(state.render.broll.duration || 2.5) } : null })
     }).then(function (d) {
       log((state.render.runningMode === 'preview' ? '预览任务已提交 ' : '高清任务已提交 ') + d.job_id);
       pollRender(d.job_id);
@@ -881,6 +936,8 @@
       state.render.previewReady = !!p.preview_rendered;
       state.render.showPreview = !!p.preview_rendered && !p.rendered;
       state.render.qa = p.rendered ? (p.qa_final || null) : (p.qa_preview || null);
+      state.render.broll = (p.broll && p.broll.asset_id) ? p.broll : null;
+      state.render.brollOpen = !!state.render.broll;
       if (p.photo_id) {
         state.upload = { id: p.photo_id, url: '/api/skills/digital-human-koubo/uploads/' + p.photo_id, checks: {} };
       }

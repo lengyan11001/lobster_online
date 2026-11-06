@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[3]
 DATA_DIR = ROOT / "data" / "koubo"
 UPLOAD_DIR = DATA_DIR / "uploads"
+BROLL_DIR = DATA_DIR / "broll"
 PROJECTS_PATH = DATA_DIR / "projects.json"
 DEPS = ROOT / "deps"
 SKILL_DIR = ROOT / "skills" / "digital_human_koubo"
@@ -729,6 +730,43 @@ def koubo_upload_get(name: str):
     if "/" in name or "\\" in name or ".." in name:
         raise HTTPException(status_code=400, detail="非法文件名")
     path = UPLOAD_DIR / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(str(path))
+
+
+_BROLL_EXT = {".mp4", ".mov", ".webm", ".m4v", ".jpg", ".jpeg", ".png", ".webp"}
+_BROLL_VIDEO_EXT = {".mp4", ".mov", ".webm", ".m4v"}
+
+
+@router.post("/api/skills/digital-human-koubo/broll-uploads", summary="上传 B-roll / 画中画素材")
+async def koubo_broll_upload(file: UploadFile = File(...)):
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in _BROLL_EXT:
+        raise HTTPException(status_code=400, detail="只支持 mp4 / mov / webm / jpg / png / webp")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="文件为空")
+    if len(raw) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件超过 100MB")
+    BROLL_DIR.mkdir(parents=True, exist_ok=True)
+    name = uuid.uuid4().hex[:16] + ext
+    path = BROLL_DIR / name
+    path.write_bytes(raw)
+    return {
+        "id": name,
+        "url": "/api/skills/digital-human-koubo/broll-uploads/" + name,
+        "name": file.filename or name,
+        "kind": "video" if ext in _BROLL_VIDEO_EXT else "image",
+        "size": len(raw),
+    }
+
+
+@router.get("/api/skills/digital-human-koubo/broll-uploads/{name}", summary="读取 B-roll / 画中画素材")
+def koubo_broll_get(name: str):
+    if "/" in name or "\\" in name or ".." in name:
+        raise HTTPException(status_code=400, detail="非法文件名")
+    path = BROLL_DIR / name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="文件不存在")
     return FileResponse(str(path))
@@ -1457,10 +1495,18 @@ def koubo_generate_job(job_id: str):
     return job
 
 
+class BrollConfig(BaseModel):
+    asset_id: str = ""
+    mode: str = "pip"
+    start: float = 2.0
+    duration: float = 2.5
+
+
 class RenderBody(BaseModel):
     template_id: Optional[str] = None
     title: Optional[str] = None
     quality: str = "final"
+    broll: Optional[BrollConfig] = None
     preset: str = "标准"
     components: Optional[List[str]] = None
 
@@ -1476,7 +1522,8 @@ def koubo_templates():
 
 
 def _render_job(job_id: str, project_id: str, preset: str, components: Optional[List[str]],
-                template_id: Optional[str] = None, title: str = "", quality: str = "final") -> None:
+                template_id: Optional[str] = None, title: str = "", quality: str = "final",
+                broll: Optional[Dict[str, Any]] = None) -> None:
     job = _RENDER_JOBS[job_id]
     try:
         project = koubo_project(project_id)
@@ -1492,7 +1539,7 @@ def _render_job(job_id: str, project_id: str, preset: str, components: Optional[
             from ..services import koubo_template_engine
             spec = koubo_template_engine.get_template(template_id) or {}
             template_name = str(spec.get("name") or "")
-            out = koubo_template_engine.render(project, template_id, progress, title_override=title, quality=quality)
+            out = koubo_template_engine.render(project, template_id, progress, title_override=title, quality=quality, broll=broll)
         else:
             from ..services import koubo_renderer
             out = koubo_renderer.render(project, preset, components, progress)
@@ -1505,6 +1552,7 @@ def _render_job(job_id: str, project_id: str, preset: str, components: Optional[
         for row in rows:
             if row.get("id") == project_id:
                 row["render_preset"] = preset
+                row["broll"] = broll or {}
                 if quality == "preview":
                     row["preview_template_id"] = template_id or ""
                     row["preview_template_name"] = template_name
@@ -1550,7 +1598,7 @@ def koubo_render(pid: str, body: RenderBody):
            "total": 1, "message": "准备渲染", "error": "", "started_at": time.time()}
     with _RENDER_LOCK:
         _RENDER_JOBS[job_id] = job
-    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components, body.template_id, body.title or "", body.quality or "final"), daemon=True).start()
+    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components, body.template_id, body.title or "", body.quality or "final", body.broll.model_dump() if body.broll else None), daemon=True).start()
     return {"ok": True, "job_id": job_id}
 
 
