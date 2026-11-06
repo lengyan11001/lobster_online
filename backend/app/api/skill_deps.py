@@ -1453,6 +1453,7 @@ def koubo_generate_job(job_id: str):
 
 
 class RenderBody(BaseModel):
+    template_id: Optional[str] = None
     preset: str = "标准"
     components: Optional[List[str]] = None
 
@@ -1461,11 +1462,16 @@ _RENDER_JOBS: Dict[str, Dict[str, Any]] = {}
 _RENDER_LOCK = threading.Lock()
 
 
-def _render_job(job_id: str, project_id: str, preset: str, components: Optional[List[str]]) -> None:
+@router.get("/api/skills/digital-human-koubo/templates", summary="可用成片模板")
+def koubo_templates():
+    from ..services import koubo_template_engine
+    return {"templates": koubo_template_engine.public_templates()}
+
+
+def _render_job(job_id: str, project_id: str, preset: str, components: Optional[List[str]],
+                template_id: Optional[str] = None) -> None:
     job = _RENDER_JOBS[job_id]
     try:
-        from ..services import koubo_renderer
-
         project = koubo_project(project_id)
 
         def progress(done: int, total: int, message: str) -> None:
@@ -1474,17 +1480,27 @@ def _render_job(job_id: str, project_id: str, preset: str, components: Optional[
             job["progress"] = int(done * 100 / total) if total else 0
             job["message"] = message
 
-        out = koubo_renderer.render(project, preset, components, progress)
+        template_name = ""
+        if template_id:
+            from ..services import koubo_template_engine
+            spec = koubo_template_engine.get_template(template_id) or {}
+            template_name = str(spec.get("name") or "")
+            out = koubo_template_engine.render(project, template_id, progress)
+        else:
+            from ..services import koubo_renderer
+            out = koubo_renderer.render(project, preset, components, progress)
         rows = _load_projects()
         for row in rows:
             if row.get("id") == project_id:
                 row["render_preset"] = preset
+                row["template_id"] = template_id or ""
+                row["template_name"] = template_name
                 row["rendered_at"] = datetime.now().isoformat(timespec="seconds")
                 row["rendered"] = True
         _save_projects(rows)
         job["status"] = "done"
         job["progress"] = 100
-        job["message"] = "包装完成"
+        job["message"] = "成片完成"
         job["output"] = "/api/skills/digital-human-koubo/projects/%s/rendered" % project_id
     except Exception as exc:
         job["status"] = "error"
@@ -1511,7 +1527,7 @@ def koubo_render(pid: str, body: RenderBody):
            "total": 1, "message": "准备渲染", "error": "", "started_at": time.time()}
     with _RENDER_LOCK:
         _RENDER_JOBS[job_id] = job
-    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components), daemon=True).start()
+    threading.Thread(target=_render_job, args=(job_id, pid, body.preset, body.components, body.template_id), daemon=True).start()
     return {"ok": True, "job_id": job_id}
 
 

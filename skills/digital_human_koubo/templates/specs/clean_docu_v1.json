@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "clean_docu_v1",
+  "name": "质感访谈",
+  "description": "克制留白、细描边字幕、低干扰信息条，适合访谈和知识内容。",
+  "tags": [
+    "访谈",
+    "知识",
+    "克制"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "clean",
+  "style": {
+    "accent": "#D9F4FF",
+    "accent2": "#7AA2FF",
+    "accent3": "#FFFFFF",
+    "ink": "#071018",
+    "paper": "#FFFFFF",
+    "titleSize": 0.04,
+    "captionSize": 0.042,
+    "keywordSize": 0.07
+  },
+  "copy": {
+    "badge": "AI 解读",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "观点 · 解读",
+    "cta": "收藏，慢慢看"
+  },
+  "rules": {
+    "titleChars": 16,
+    "captionMaxChars": 26,
+    "safeArea": 0.07
+  }
+}

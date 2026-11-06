@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "id": "premium_kinetic_v1",
+  "name": "爆点口播",
+  "description": "大字标题、关键词弹出、强节奏字幕，适合观点和爆点内容。",
+  "tags": [
+    "口播",
+    "爆点",
+    "强节奏"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "kinetic",
+  "style": {
+    "accent": "#FFD84D",
+    "accent2": "#FF4D8D",
+    "accent3": "#4DE1FF",
+    "ink": "#080B14",
+    "paper": "#FFFFFF",
+    "titleSize": 0.05,
+    "captionSize": 0.048,
+    "keywordSize": 0.105
+  },
+  "copy": {
+    "badge": "AI 数字人",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "AI 口播",
+    "cta": "关注我，继续聊"
+  },
+  "rules": {
+    "titleChars": 14,
+    "captionMaxChars": 22,
+    "safeArea": 0.06
+  },
+  "default": true
+}

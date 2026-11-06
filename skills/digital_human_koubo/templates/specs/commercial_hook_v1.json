@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "id": "commercial_hook_v1",
+  "name": "带货强钩子",
+  "description": "高对比红黄配色、价格数字放大、结尾强 CTA，适合带货和转化。",
+  "tags": [
+    "带货",
+    "转化",
+    "高对比"
+  ],
+  "ratio": "source",
+  "fps": 30,
+  "variant": "commercial",
+  "style": {
+    "accent": "#FF3D2E",
+    "accent2": "#FFD84D",
+    "accent3": "#FF8A00",
+    "ink": "#120507",
+    "paper": "#FFFFFF",
+    "titleSize": 0.055,
+    "captionSize": 0.05,
+    "keywordSize": 0.115
+  },
+  "copy": {
+    "badge": "限时重点",
+    "lowerTitle": "数字人 3.0",
+    "lowerSub": "带货 · 口播",
+    "cta": "点这里，直接看"
+  },
+  "rules": {
+    "titleChars": 12,
+    "captionMaxChars": 20,
+    "safeArea": 0.06
+  }
+}
