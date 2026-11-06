@@ -2041,8 +2041,10 @@ def _run_batch_item(batch: Dict[str, Any], item: Dict[str, Any], pid: str,
            "total": 1, "message": "准备渲染", "error": "", "started_at": time.time()}
     with _RENDER_LOCK:
         _RENDER_JOBS[sub_id] = sub
+    row = next((x for x in _load_projects() if str(x.get("id")) == pid), None)
+    project_shots = (row or {}).get("shots") or None
     threading.Thread(target=_render_job,
-                     args=(sub_id, pid, "标准", None, template_id, title, quality, None, None, None),
+                     args=(sub_id, pid, "标准", None, template_id, title, quality, None, None, project_shots),
                      daemon=True).start()
     deadline = time.time() + 3600
     while True:
